@@ -12,7 +12,7 @@
 namespace quader {
 namespace {
 
-constexpr std::array<ToolDescriptor, 18> kViewportToolDescriptors{{
+constexpr std::array<ToolDescriptor, 19> kViewportToolDescriptors{{
     {
         .tool = ViewportToolId::Select,
         .modeling_tool = ModelingViewportTool::Select,
@@ -210,6 +210,17 @@ constexpr std::array<ToolDescriptor, 18> kViewportToolDescriptors{{
         .menu_group = ToolMenuGroup::Modeling,
         .owns_viewport = true,
         .blocks_viewport_focus_shortcuts = true,
+        .editor_owned_native_lifecycle = true,
+    },
+    {
+        .tool = ViewportToolId::Align,
+        .modeling_tool = ModelingViewportTool::Select,
+        .id = "align",
+        .label = "Align Tool",
+        .kind = ToolKind::Modal,
+        .menu_group = ToolMenuGroup::Modeling,
+        .blocks_viewport_focus_shortcuts = true,
+        .allows_selection_fallback = true,
         .editor_owned_native_lifecycle = true,
     },
 }};

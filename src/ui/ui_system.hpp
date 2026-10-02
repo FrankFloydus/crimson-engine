@@ -241,7 +241,7 @@ private:
   void toggle_asset_browser();
   void configure_asset_browser();
   void refresh_asset_browser_labels();
-  void refresh_asset_browser(bool force = false);
+  void refresh_asset_browser(bool force = false, bool prepare_reveal = false);
   void refresh_asset_thumbnails();
   void retain_visible_asset_thumbnails();
   [[nodiscard]] QtAssetBrowserSnapshot asset_browser_snapshot(bool refresh_files);
@@ -311,6 +311,7 @@ private:
   std::uint64_t runtime_binding_generation_ = 0;
   QtMaterialBrowserWindow *material_browser_window_ = nullptr;
   QtAssetBrowser *asset_browser_ = nullptr;
+  bool asset_browser_discovery_pending_ = false;
   std::unique_ptr<QtAssetThumbnailCache> asset_thumbnails_;
   QPointer<QtAssetBrowser> asset_thumbnail_picker_;
   std::function<bool()> asset_thumbnail_picker_current_;

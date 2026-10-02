@@ -177,7 +177,8 @@ viewport_tool_input_hints(std::string_view tool_id, const ModelingOperationHintS
                        "operation.hints.extrude.normals", "Along Normals"});
     }
   } else if (tool_id == "insert_edge_loop") {
-    grid_snap(hints, context);
+    hints.push_back(gesture(Gesture::Control,
+        "operation.hints.insert_edge_loop.grid_snap", "Grid Snap", context.control, 80));
     hints.push_back(binding("viewport.cancel_active_tool", "operation.hints.exit_tool", "Exit Tool", 90));
   } else if (tool_id == "knife" || tool_id == "poly") {
     completion(hints, state.can_apply && !state.dragging, "operation.hints.cancel", "Cancel");

@@ -657,11 +657,21 @@ TEST(PrimitiveCubeOverlayTests,
   controls.visible = true;
   inputs.interaction_pane = false;
   const auto other_pane = stamp();
-  ++controls.revision;
-  camera.eye.z += 1.0f;
   EXPECT_EQ(stamp(), other_pane);
-  EXPECT_TRUE(ViewportToolOverlaySource(inputs)
-                  .build_dynamic_tool_overlay_frame().triangles.empty());
+  controls.controls[0].world_position.y += 1.0f;
+  controls.hovered = 2;
+  EXPECT_EQ(stamp(), other_pane)
+      << "Shared pane geometry and feedback still use the owner's revision";
+  ++controls.revision;
+  const auto other_pane_revised = stamp();
+  EXPECT_NE(other_pane_revised, other_pane);
+  camera.eye.z += 1.0f;
+  EXPECT_NE(stamp(), other_pane_revised)
+      << "Shared controls are reprojected using each visible pane's camera";
+  const auto other_pane_moved = stamp();
+  for (int frame = 0; frame < 12; ++frame) EXPECT_EQ(stamp(), other_pane_moved);
+  EXPECT_EQ(ViewportToolOverlaySource(inputs)
+                .build_dynamic_tool_overlay_frame().triangles.size(), kAllTriangles);
   inputs.interaction_pane = true;
   inputs.overlay_camera = nullptr;
   EXPECT_TRUE(ViewportToolOverlaySource(inputs)

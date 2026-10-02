@@ -1373,69 +1373,74 @@ TEST(QtCommandEventFilterTests,
 }
 
 TEST(QtCommandEventFilterTests,
-     PassivePaneSettingsCannotFinalizeAnotherPanesPreview) {
+     StickySettingsLifecycleKeysCompleteTheSharedPreviewAfterFocusTransfer) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char executable[] = "quader-pane-settings-lifecycle-tests";
   char *argv[] = {executable, nullptr};
   QApplication application(argc, argv);
   application.setQuitOnLastWindowClosed(false);
-  quader::SceneSession session;
-  quader::QuaderEditorApi editor(
-      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
-  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
-  const auto box = editor.modeling().create_box(
-      {.min = {-1, -1, -1}, .max = {1, 1, 1}});
-  ASSERT_TRUE(box.ok());
-  ASSERT_TRUE(editor.selection().select_face(box.value(), 1).ok());
-  ASSERT_TRUE(editor.viewports().set_layout(
-      quader::ViewportLayoutId::TwoVertical).ok());
-  ASSERT_TRUE(editor.viewports().record_selected_tool(
-      quader::ViewportPaneId::Top, quader::ViewportToolId::Move).ok());
-  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Extrude).ok());
-  ASSERT_TRUE(editor.tools().set_setting("extrude", "extrude.amount", 1.0).ok());
-  ASSERT_TRUE(editor.tools().active_settings().preview_active);
-  const auto history_count = session.history().undo_count();
-  ASSERT_TRUE(editor.viewports().focus_pane(quader::ViewportPaneId::Top).ok());
+  for (const int key : {Qt::Key_Escape, Qt::Key_Space}) {
+    SCOPED_TRACE(key);
+    quader::SceneSession session;
+    quader::QuaderEditorApi editor(
+        quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+    const auto box = editor.modeling().create_box(
+        {.min = {-1, -1, -1}, .max = {1, 1, 1}});
+    ASSERT_TRUE(box.ok());
+    ASSERT_TRUE(editor.selection().select_face(box.value(), 1).ok());
+    const auto source = editor.query().compiled_object_mesh(box.value());
+    ASSERT_TRUE(source.has_value());
+    ASSERT_TRUE(editor.viewports().set_layout(
+        quader::ViewportLayoutId::TwoVertical).ok());
+    ASSERT_TRUE(editor.viewports().record_selected_tool(
+        quader::ViewportPaneId::Top, quader::ViewportToolId::Move).ok());
+    ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Extrude).ok());
+    ASSERT_TRUE(editor.tools().set_setting("extrude", "extrude.amount", 1.0).ok());
+    ASSERT_TRUE(editor.tools().active_settings().preview_active);
+    const auto origin = editor.tools().active_settings_presentation_origin();
+    const auto history_count = session.history().undo_count();
+    ASSERT_TRUE(editor.viewports().focus_pane(quader::ViewportPaneId::Top).ok());
 
-  quader::QtCommandEventFilter filter(editor, [&editor] {
-    return quader::ViewportToolState{
-        .active_tool = editor.viewports().selected_tool(),
-        .selection_mode = quader::ViewportSelectionMode::Face};
-  });
-  application.installEventFilter(&filter);
-  quader::QtToolSettingsPanel panel;
-  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
-  panel.bind(editor);
-  ASSERT_EQ(panel.target_id(), "move");
-  auto *title = panel.findChild<QAbstractButton *>(
-      QStringLiteral("tool_settings.target_title"));
-  ASSERT_NE(title, nullptr);
-  panel.show();
-  panel.activateWindow();
-  title->setFocus(Qt::OtherFocusReason);
-  QCoreApplication::processEvents();
-  ASSERT_EQ(QApplication::focusWidget(), title);
-  send_key_press(*title, Qt::Key_Escape, Qt::NoModifier);
-  send_key_press(*title, Qt::Key_Space, Qt::NoModifier);
-  for (const auto intent : {quader::QuaderNativeToolSettingsIntent::Apply,
-                             quader::QuaderNativeToolSettingsIntent::Cancel}) {
-    const auto result = editor.commands().execute_native_tool_settings_intent(intent);
-    EXPECT_TRUE(result.ok());
-    EXPECT_FALSE(result.changed());
+    quader::QtCommandEventFilter filter(editor, [&editor] {
+      return quader::ViewportToolState{
+          .active_tool = editor.viewports().selected_tool(),
+          .selection_mode = quader::ViewportSelectionMode::Face};
+    });
+    application.installEventFilter(&filter);
+    quader::QtToolSettingsPanel panel;
+    panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+    panel.bind(editor);
+    ASSERT_EQ(panel.target_id(), "extrude");
+    EXPECT_EQ(editor.tools().active_settings_presentation_origin(), origin);
+    EXPECT_EQ(editor.viewports().selected_tool(quader::ViewportPaneId::Top),
+              quader::ViewportToolId::Extrude);
+    auto *title = panel.findChild<QAbstractButton *>(
+        QStringLiteral("tool_settings.target_title"));
+    ASSERT_NE(title, nullptr);
+    panel.show();
+    panel.activateWindow();
+    title->setFocus(Qt::OtherFocusReason);
+    QCoreApplication::processEvents();
+    ASSERT_EQ(QApplication::focusWidget(), title);
+    send_key_press(*title, key, Qt::NoModifier);
+    QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier);
+    QCoreApplication::sendEvent(title, &release);
+    EXPECT_FALSE(editor.tools().active_settings().preview_active);
+    EXPECT_EQ(editor.viewports().focused_pane(), quader::ViewportPaneId::Top);
+    EXPECT_EQ(session.history().undo_count(),
+              history_count + (key == Qt::Key_Space ? 1U : 0U));
+    if (key == Qt::Key_Space) {
+      ASSERT_TRUE(editor.history().undo().ok());
+    }
+    const auto restored = editor.query().compiled_object_mesh(box.value());
+    ASSERT_TRUE(restored.has_value());
+    EXPECT_EQ(restored->indices, source->indices);
+    EXPECT_EQ(restored->vertices.size(), source->vertices.size());
+    application.removeEventFilter(&filter);
+    panel.unbind();
   }
-  EXPECT_TRUE(editor.tools().active_settings().preview_active);
-  EXPECT_EQ(editor.tools().active_tool(), "extrude");
-  EXPECT_EQ(session.history().undo_count(), history_count);
-
-  ASSERT_TRUE(editor.viewports().focus_pane(
-      quader::ViewportPaneId::Perspective).ok());
-  panel.refresh();
-  ASSERT_TRUE(editor.commands().execute_native_tool_settings_intent(
-      quader::QuaderNativeToolSettingsIntent::Cancel).ok());
-  EXPECT_FALSE(editor.tools().active_settings().preview_active);
-  EXPECT_EQ(editor.viewports().selected_tool(quader::ViewportPaneId::Top),
-            quader::ViewportToolId::Move);
 }
 
 TEST(QtCommandEventFilterTests,

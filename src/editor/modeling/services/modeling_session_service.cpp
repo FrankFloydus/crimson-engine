@@ -4826,6 +4826,12 @@ public:
         quader_editor_core::EditorOperationId::AssignMaterial, settings);
   }
 
+  [[nodiscard]] ModelingViewportTool active_viewport_tool() const {
+    const ToolDescriptor *tool = find_viewport_tool_descriptor(
+        quader_editor_core::viewport_interaction_tool_id(runtime_.active_tool()));
+    return tool == nullptr ? ModelingViewportTool::Select : tool->modeling_tool;
+  }
+
   [[nodiscard]] ModelingToolStatus tool_status() const {
     return overlay_service_.tool_status(runtime_, modal_tool_owns_viewport());
   }
@@ -12066,6 +12072,10 @@ bool ModelingSessionService::pending_operation_active() const {
 ModelingCommandResult
 ModelingSessionService::cancel_competing_state_for_native_tool_activation() {
   return impl_->cancel_competing_state_for_native_tool_activation();
+}
+
+ModelingViewportTool ModelingSessionService::active_viewport_tool() const {
+  return impl_->active_viewport_tool();
 }
 
 ModelingToolStatus ModelingSessionService::tool_status() const {

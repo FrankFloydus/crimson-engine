@@ -24,6 +24,7 @@
 
 #include <backend/PixelBufferDescriptor.h>
 #include <filament/Camera.h>
+#include <filament/IndirectLight.h>
 #include <filament/LightManager.h>
 #include <filament/Renderer.h>
 #include <filament/RenderTarget.h>
@@ -60,6 +61,10 @@ struct SurfaceGridOptions final {
   bool textured = false;
   bool lit = true;
   bool oblique = false;
+  bool smooth_normals = false;
+  bool rotated_world_basis = false;
+  QVec3 normal{0.0f, 0.0f, 1.0f};
+  QVec3 world_offset;
   float albedo = 1.0f;
   float minor_alpha = 1.0f;
   float major_alpha = 1.0f;
@@ -87,7 +92,7 @@ struct SurfaceGridImage final {
     for (int y = 0; y < static_cast<int>(kGridTargetSize); ++y) {
       for (int x = 0; x < static_cast<int>(kGridTargetSize); ++x) {
         const QVec3 color = pixel(x, y);
-        image.setPixel(x, static_cast<int>(kGridTargetSize) - 1 - y,
+        image.setPixel(x, y,
                        qRgb(encoded(color.x), encoded(color.y),
                             encoded(color.z)));
       }
@@ -147,6 +152,10 @@ public:
     if (grid_light_) {
       engine_->destroy(grid_light_);
       utils::EntityManager::get().destroy(grid_light_);
+    }
+    if (grid_world_basis_) {
+      scene_->setIndirectLight(nullptr);
+      engine_->destroy(grid_world_basis_);
     }
     if (renderer_) {
       engine_->destroy(renderer_);
@@ -274,6 +283,16 @@ public:
     if (target_size_ != kGridTargetSize) {
       return std::nullopt;
     }
+    if (grid.rotated_world_basis && grid_world_basis_ == nullptr) {
+      constexpr filament::math::float3 kZeroIrradiance{};
+      grid_world_basis_ = filament::IndirectLight::Builder()
+          .irradiance(1u, &kZeroIrradiance)
+          .rotation(filament::math::mat3f::rotation(
+              0.7f, filament::math::float3{0.0f, 1.0f, 0.0f}))
+          .build(*engine_);
+      if (grid_world_basis_ == nullptr) return std::nullopt;
+    }
+    scene_->setIndirectLight(grid.rotated_world_basis ? grid_world_basis_ : nullptr);
     if (!grid_light_) {
       grid_light_ = utils::EntityManager::get().create();
       filament::LightManager::Builder(filament::LightManager::Type::DIRECTIONAL)
@@ -327,7 +346,11 @@ public:
       material_.primary_material.textures.push_back(std::move(texture));
     }
     SurfaceGridImage image;
-    if (!render_surface({0.0f, 0.0f, 1.0f}, false, {}, {}, shaded,
+    QMat4 world_transform;
+    world_transform.values[12u] = grid.world_offset.x;
+    world_transform.values[13u] = grid.world_offset.y;
+    world_transform.values[14u] = grid.world_offset.z;
+    if (!render_surface(grid.normal, false, {}, world_transform, shaded,
                         0.0f, 1.0f, 0.0f, &grid, &image)) {
       return std::nullopt;
     }
@@ -474,7 +497,65 @@ public:
         filament::math::double4{world_position.x, world_position.y,
                                 world_position.z, 1.0};
     return {static_cast<float>((clip.x / clip.w * 0.5 + 0.5) * kGridTargetSize),
-            static_cast<float>((clip.y / clip.w * 0.5 + 0.5) * kGridTargetSize)};
+            // Vulkan readback rows retain the top-down render-target order.
+            static_cast<float>((0.5 - clip.y / clip.w * 0.5) * kGridTargetSize)};
+  }
+
+  std::pair<std::size_t, float> measure_grid_cell_interiors(
+      const SurfaceGridImage &off, const SurfaceGridImage &on,
+      const SurfaceGridOptions &grid) const {
+    constexpr double kGridSpacing = 0.25;
+    constexpr double kCellLineMargin = 0.08;
+    constexpr double kFaceInteriorExtent = 0.85;
+    constexpr double kProjectionEpsilon = 0.000000000001;
+    const auto inverse_view_projection = inverse(
+        camera_->getProjectionMatrix() * camera_->getViewMatrix());
+    const filament::math::double3 normal{grid.normal.x, grid.normal.y, grid.normal.z};
+    const filament::math::double3 origin{
+        grid.world_offset.x, grid.world_offset.y, grid.world_offset.z};
+    const filament::math::double3 u = grid.normal.x != 0.0f
+        ? filament::math::double3{0.0, 1.0, 0.0}
+        : filament::math::double3{1.0, 0.0, 0.0};
+    const auto v = cross(normal, u);
+    std::size_t pixel_count = 0u;
+    float strongest_tint = 0.0f;
+    for (int y = 0; y < static_cast<int>(kGridTargetSize); ++y) {
+      for (int x = 0; x < static_cast<int>(kGridTargetSize); ++x) {
+        const double clip_x = (x + 0.5) * 2.0 / kGridTargetSize - 1.0;
+        const double clip_y = 1.0 - (y + 0.5) * 2.0 / kGridTargetSize;
+        // The public camera returns the user projection with GL [-1, 1]
+        // depth. Keep both ray points finite; z = 1 is perspective infinity.
+        const auto near_homogeneous = inverse_view_projection *
+            filament::math::double4{clip_x, clip_y, -1.0, 1.0};
+        const auto farther_homogeneous = inverse_view_projection *
+            filament::math::double4{clip_x, clip_y, 0.0, 1.0};
+        const filament::math::double3 ray_origin =
+            near_homogeneous.xyz / near_homogeneous.w;
+        const filament::math::double3 ray_direction =
+            farther_homogeneous.xyz / farther_homogeneous.w - ray_origin;
+        const double incidence = dot(ray_direction, normal);
+        if (std::abs(incidence) <= kProjectionEpsilon) continue;
+        const double distance = dot(origin - ray_origin, normal) / incidence;
+        if (distance < 0.0) continue;
+        const auto world_position = ray_origin + ray_direction * distance;
+        const auto relative_position = world_position - origin;
+        if (std::abs(dot(relative_position, u)) > kFaceInteriorExtent ||
+            std::abs(dot(relative_position, v)) > kFaceInteriorExtent) continue;
+        const double coord_u = dot(world_position, u);
+        const double coord_v = dot(world_position, v);
+        const double line_distance_u = std::abs(
+            coord_u - std::round(coord_u / kGridSpacing) * kGridSpacing);
+        const double line_distance_v = std::abs(
+            coord_v - std::round(coord_v / kGridSpacing) * kGridSpacing);
+        // Stay well outside legitimate line feathers. Scan all retained
+        // interior pixels so sparse false major-line fragments cannot hide
+        // between a small set of cell-center witnesses.
+        if (line_distance_u <= kCellLineMargin || line_distance_v <= kCellLineMargin) continue;
+        ++pixel_count;
+        strongest_tint = std::max(strongest_tint, length(on.pixel(x, y) - off.pixel(x, y)));
+      }
+    }
+    return {pixel_count, strongest_tint};
   }
 
   std::optional<SurfaceGridImage> render_current_grid_view(bool visible) {
@@ -540,14 +621,22 @@ private:
       const QVec2 uv = corners[index];
       vertices_[index] = {
           .position = u * (uv.x * 2.0f - 1.0f) + v * (uv.y * 2.0f - 1.0f),
-          .normal = normal,
+          .normal = grid != nullptr && grid->smooth_normals
+              ? normalize(normal + u * ((uv.x * 2.0f - 1.0f) * 0.75f)
+                                 + v * ((uv.y * 2.0f - 1.0f) * 0.75f))
+              : normal,
           .uv = {mirror_authored_u ? 1.0f - uv.x : uv.x, uv.y},
           .uv_geometric_normal = normal};
     }
+    const std::array<MeshPrimitiveSpan, 1u> grid_primitives{{{
+        .index_count = static_cast<std::uint32_t>(indices_.size())}}};
     const RenderMeshAssetSnapshot mesh{.mesh_id = 1u,
                                        .mesh_revision = ++mesh_revision_,
                                        .vertices = vertices_,
                                        .indices = indices_,
+                                       .primitives = grid != nullptr && !grid->smooth_normals
+                                           ? std::span<const MeshPrimitiveSpan>(grid_primitives)
+                                           : std::span<const MeshPrimitiveSpan>{},
                                        .present = true};
     material_.primary_material.texture_transform = transform;
     material_.primary_material.normal_strength = normal_strength;
@@ -579,13 +668,23 @@ private:
     const QVec3 world_normal = normalize(cross(world_u, world_v)) *
                                orientation_sign(world_transform);
     const QVec3 world_up = normalize(world_v);
+    const QVec3 world_center{world_transform.values[12u],
+                            world_transform.values[13u],
+                            world_transform.values[14u]};
     camera_->lookAt(
-        {world_normal.x * 4.0, world_normal.y * 4.0, world_normal.z * 4.0},
-        {0.0, 0.0, 0.0}, {world_up.x, world_up.y, world_up.z});
+        {world_center.x + world_normal.x * 4.0,
+         world_center.y + world_normal.y * 4.0,
+         world_center.z + world_normal.z * 4.0},
+        {world_center.x, world_center.y, world_center.z},
+        {world_up.x, world_up.y, world_up.z});
     if (grid != nullptr) {
       if (grid->oblique) {
         camera_->setProjection(45.0, 1.0, 0.1, 20.0);
-        camera_->lookAt({0.8, -1.4, 2.0}, {0.0, 0.0, 0.0}, {0.0, 1.0, 0.0});
+        const QVec3 eye = world_center + world_u * 0.8f - world_v * 1.4f
+                         + world_normal * 2.0f;
+        camera_->lookAt({eye.x, eye.y, eye.z},
+                        {world_center.x, world_center.y, world_center.z},
+                        {world_up.x, world_up.y, world_up.z});
       } else {
         camera_->setProjection(filament::Camera::Projection::ORTHO,
                                 -1.0, 1.0, -1.0, 1.0, 0.1, 20.0);
@@ -651,6 +750,7 @@ private:
   filament::Texture *color_ = nullptr;
   filament::Texture *depth_ = nullptr;
   filament::Texture *neutral_ = nullptr;
+  filament::IndirectLight *grid_world_basis_ = nullptr;
   utils::Entity camera_entity_;
   utils::Entity grid_light_;
   std::uint32_t target_size_ = kTargetSize;
@@ -1749,6 +1849,150 @@ TEST(RenderSurfaceGridRuntimeTests,
     EXPECT_GT(grid_neighborhood_contrast(*hidden_view, *visible, 64, 48), 0.04f);
     EXPECT_LT(image_maximum_difference(*disabled_material, *hidden_view), 0.0001f);
     EXPECT_LT(image_maximum_difference(*visible, *restored_view), 0.0001f);
+  }
+}
+
+TEST(RenderSurfaceGridRuntimeTests,
+     TranslatedFacesKeepCellInteriorsUntintedAcrossEveryWorldAxis) {
+  if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_GRID_TESTS") != 1) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_GRID_TESTS=1 for windowless Vulkan "
+                   "translated surface-grid readback coverage";
+  }
+  NormalMappingHarness harness;
+  ASSERT_TRUE(harness.initialize(kGridTargetSize));
+  const std::array<QVec3, 6u> normals{
+      QVec3{1.0f, 0.0f, 0.0f}, QVec3{-1.0f, 0.0f, 0.0f},
+      QVec3{0.0f, 1.0f, 0.0f}, QVec3{0.0f, -1.0f, 0.0f},
+      QVec3{0.0f, 0.0f, 1.0f}, QVec3{0.0f, 0.0f, -1.0f}};
+  const std::array<QVec3, 3u> offsets{
+      QVec3{}, QVec3{256.0f, -512.0f, 1024.0f},
+      QVec3{-8192.0f, 4096.0f, 8192.0f}};
+  for (const bool shaded : {true, false}) {
+    SCOPED_TRACE(shaded ? "shaded" : "rendered");
+    for (std::size_t face = 0u; face < normals.size(); ++face) {
+      SCOPED_TRACE(face);
+      for (const bool rotated_world_basis : {false, true}) {
+        for (std::size_t offset = 0u; offset < offsets.size(); ++offset) {
+          SCOPED_TRACE(offset);
+          SCOPED_TRACE(rotated_world_basis);
+          SurfaceGridOptions grid;
+          grid.normal = normals[face];
+          grid.world_offset = offsets[offset];
+          grid.rotated_world_basis = rotated_world_basis;
+          grid.albedo = 0.02f;
+          grid.enabled = false;
+          const auto off = harness.render_grid(shaded, grid);
+          grid.enabled = true;
+          const auto on = harness.render_grid(shaded, grid);
+          ASSERT_TRUE(off.has_value());
+          ASSERT_TRUE(on.has_value());
+          const auto [cell_pixel_count, strongest_cell_tint] =
+              harness.measure_grid_cell_interiors(*off, *on, grid);
+          float weakest_line_contrast = 1.0f;
+          for (const int x : {32, 64, 96, 160, 192, 224}) {
+            for (const int y : {16, 48, 80, 112, 144, 176, 208, 240}) {
+              weakest_line_contrast = std::min(weakest_line_contrast,
+                  grid_neighborhood_contrast(*off, *on, x, y));
+            }
+          }
+          EXPECT_GT(cell_pixel_count, 1000u);
+          EXPECT_LT(strongest_cell_tint, 0.001f)
+              << "Mesh-grid coverage must not become a shadow across a whole face";
+          EXPECT_GT(weakest_line_contrast, 0.02f)
+              << "World translation must retain individually resolved grid lines";
+          const QString label = QString("translated-grid-%1-axis-%2-offset-%3-basis-%4")
+              .arg(shaded ? "shaded" : "rendered").arg(face).arg(offset)
+              .arg(rotated_world_basis ? "rotated" : "identity");
+          save_grid_capture(*off, label + "-off");
+          save_grid_capture(*on, label + "-on");
+          RecordProperty((label + "-cell-tint").toStdString(),
+                         std::to_string(strongest_cell_tint));
+          RecordProperty((label + "-cell-pixels").toStdString(),
+                         std::to_string(cell_pixel_count));
+        }
+      }
+    }
+  }
+}
+
+TEST(RenderSurfaceGridRuntimeTests,
+     SmoothPlanarFacesKeepConstantCoordinateLinesFromTintingTheirCells) {
+  if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_GRID_TESTS") != 1) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_GRID_TESTS=1 for windowless Vulkan "
+                   "smooth surface-grid readback coverage";
+  }
+  NormalMappingHarness harness;
+  ASSERT_TRUE(harness.initialize(kGridTargetSize));
+  const std::array<QVec3, 6u> normals{
+      QVec3{1.0f, 0.0f, 0.0f}, QVec3{-1.0f, 0.0f, 0.0f},
+      QVec3{0.0f, 1.0f, 0.0f}, QVec3{0.0f, -1.0f, 0.0f},
+      QVec3{0.0f, 0.0f, 1.0f}, QVec3{0.0f, 0.0f, -1.0f}};
+  for (const bool shaded : {true, false}) {
+    for (std::size_t face = 0u; face < normals.size(); ++face) {
+      for (const bool oblique : {false, true}) {
+        for (const QVec3 offset : {QVec3{}, QVec3{16.0f, -32.0f, 64.0f}}) {
+          for (const bool rotated_world_basis : {false, true}) {
+            SCOPED_TRACE(shaded ? "shaded" : "rendered");
+            SCOPED_TRACE(face);
+            SCOPED_TRACE(oblique ? "perspective" : "orthographic");
+            SCOPED_TRACE(offset.x);
+            SCOPED_TRACE(rotated_world_basis);
+            SurfaceGridOptions grid;
+            grid.normal = normals[face];
+            grid.smooth_normals = true;
+            grid.oblique = oblique;
+            grid.world_offset = offset;
+            grid.rotated_world_basis = rotated_world_basis;
+            grid.albedo = 0.02f;
+            grid.enabled = false;
+            const auto off = harness.render_grid(shaded, grid);
+            grid.enabled = true;
+            const auto on = harness.render_grid(shaded, grid);
+            ASSERT_TRUE(off.has_value());
+            ASSERT_TRUE(on.has_value());
+            const auto [cell_pixel_count, strongest_cell_tint] =
+                harness.measure_grid_cell_interiors(*off, *on, grid);
+            float strongest_line_contrast = 0.0f;
+            std::size_t visible_segments = 0u;
+            const QVec3 u = grid.normal.x != 0.0f ? QVec3{0.0f, 1.0f, 0.0f}
+                                                : QVec3{1.0f, 0.0f, 0.0f};
+            const QVec3 v = cross(grid.normal, u);
+            for (const float x : {-0.5f, -0.25f, 0.25f, 0.5f}) {
+              for (const float y : {-0.625f, -0.375f, -0.125f, 0.125f, 0.375f, 0.625f}) {
+                const QVec2 pixel = harness.project_grid_position(offset + u * x + v * y);
+                const int pixel_x = static_cast<int>(std::floor(pixel.x));
+                const int pixel_y = static_cast<int>(std::floor(pixel.y));
+                ASSERT_GE(pixel_x, 3);
+                ASSERT_GE(pixel_y, 0);
+                ASSERT_LT(pixel_x + 3, static_cast<int>(kGridTargetSize));
+                ASSERT_LT(pixel_y, static_cast<int>(kGridTargetSize));
+                const float contrast = grid_neighborhood_contrast(
+                    *off, *on, pixel_x, pixel_y);
+                strongest_line_contrast = std::max(strongest_line_contrast, contrast);
+                visible_segments += contrast > 0.02f ? 1u : 0u;
+              }
+            }
+            EXPECT_GT(cell_pixel_count, 1000u);
+            EXPECT_LT(strongest_cell_tint, 0.001f)
+                << "A constant face-depth coordinate must not paint a major line across its interior";
+            // Fixed grid gray can match an individual shaded sample. It must
+            // still draw resolved lines across multiple other surface regions.
+            EXPECT_GE(visible_segments, 8u);
+            EXPECT_GT(strongest_line_contrast, 0.03f);
+            const QString label = QString("smooth-grid-%1-axis-%2-%3-offset-%4-basis-%5")
+                .arg(shaded ? "shaded" : "rendered").arg(face)
+                .arg(oblique ? "perspective" : "orthographic").arg(offset.x)
+                .arg(rotated_world_basis ? "rotated" : "identity");
+            save_grid_capture(*off, label + "-off");
+            save_grid_capture(*on, label + "-on");
+            RecordProperty((label + "-cell-tint").toStdString(),
+                           std::to_string(strongest_cell_tint));
+            RecordProperty((label + "-cell-pixels").toStdString(),
+                           std::to_string(cell_pixel_count));
+          }
+        }
+      }
+    }
   }
 }
 

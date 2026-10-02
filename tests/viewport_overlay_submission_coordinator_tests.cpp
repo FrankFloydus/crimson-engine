@@ -24,6 +24,8 @@
 #include "editor/viewport/viewport_selection_interaction.hpp"
 #include "editor/viewport/viewport_modeling_tool_commit_adapter.hpp"
 #include "editor/interactions/transform_gizmo.hpp"
+#include "editor/tools/extrude_tool_service.hpp"
+#include "editor/tools/primitive_creation_interaction.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
 
 #include "viewport/viewport_settings.hpp"
@@ -1362,6 +1364,14 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
   marquee.end = {200.0f, 180.0f};
   const ViewportToolOverlaySource other_gesture_changed{inputs};
   EXPECT_EQ(other_gesture_changed.source_stamp(), passive.source_stamp());
+  gizmo_input.orientation.x_axis = {0.0f, 1.0f, 0.0f};
+  gizmo_input.orientation.y_axis = {-1.0f, 0.0f, 0.0f};
+  gizmo = quader_editor_core::build_transform_gizmo_frame(gizmo_input);
+  const ViewportToolOverlaySource oriented{inputs};
+  EXPECT_NE(oriented.source_stamp(), passive.source_stamp());
+  request.dynamic_tool_source = oriented.source_stamp();
+  request.dynamic_tool_frame_provider = &oriented;
+  EXPECT_TRUE(coordinator.submit(request, settings, target).dynamic_submitted);
   gizmo_input.tool = quader_editor_core::ViewportInteractionTool::Rotate;
   gizmo = quader_editor_core::build_transform_gizmo_frame(gizmo_input);
   const ViewportToolOverlaySource rotated{inputs};
@@ -1386,6 +1396,187 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
   const auto hidden_frame = hidden.build_dynamic_tool_overlay_frame();
   EXPECT_TRUE(hidden_frame.lines.empty());
   EXPECT_TRUE(hidden_frame.triangles.empty());
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     SharedPrimitivePreviewAndControlsPublishInEveryPaneWithoutPointerFeedbackLeakage) {
+  std::array<ViewportCameraController, 2> cameras;
+  std::array<ViewportOverlayCamera, 2> overlay_cameras;
+  for (std::size_t pane = 0; pane < cameras.size(); ++pane) {
+    cameras[pane].set_viewport_size(800.0f, 600.0f);
+    cameras[pane].focus_origin(12.0f);
+    if (pane == 1u) cameras[pane].view_axis(ViewportViewAxis::Z, 1);
+    overlay_cameras[pane] = ViewportCameraAdapter::overlay_camera(
+        cameras[pane], cameras[pane].viewport_size());
+  }
+  ModelingBoxPreview preview{
+      .ok = true, .valid = true, .drag_state = ModelingBoxDragState::Footprint,
+      .footprint = {QVec3{-1.0f, -1.0f, 0.0f}, QVec3{1.0f, -1.0f, 0.0f},
+                    QVec3{1.0f, 1.0f, 0.0f}, QVec3{-1.0f, 1.0f, 0.0f}},
+      .footprint_count = 4u};
+  ViewportPrimitiveCreationState primitive{
+      .object_id = 1, .local_min = {-1.0f, -1.0f, -1.0f},
+      .local_max = {1.0f, 1.0f, 1.0f}, .world_x = {1.0f, 0.0f, 0.0f},
+      .world_y = {0.0f, 1.0f, 0.0f}, .world_z = {0.0f, 0.0f, 1.0f}, .revision = 1u};
+  ViewportSelectionMarquee marquee{
+      .active = true, .start = {20.0f, 30.0f}, .end = {100.0f, 130.0f}};
+  const std::vector<quader_editor_core::SelectionOverlayPoint> snap_points{{
+      .layer = quader_editor_core::SelectionOverlayLayer::SnapTargetVertex,
+      .position = {1.0f, 1.0f, 0.0f}}};
+  PrimitiveCreationInteraction interaction;
+  interaction.project(primitive, cameras[0], 1.0f);
+  interaction.hover(0);
+  std::array<PrimitiveCreationInteraction, 2> presentations;
+  ViewportOverlaySubmissionCoordinator coordinator;
+  std::array<RecordingOverlayTarget, 2> targets;
+  StaticSelectionFrameProvider selection{{}};
+  RenderOverlaySelectionSnapshot scene;
+  ViewportOverlayFrame volatile_modeling;
+  CurveToolPreviewState curve;
+  const auto settings = ViewportSettings::defaults();
+  bool tool_visible = true;
+  bool primitive_visible = true;
+  const auto submit = [&](std::size_t pane) {
+    const auto &controls = presentations[pane].project_presentation(
+        primitive_visible ? std::optional{primitive} : std::nullopt,
+        cameras[pane], 1.0f, interaction.frame());
+    const ViewportToolOverlaySource source{{
+        .source_identity = reinterpret_cast<std::uintptr_t>(&presentations[pane]),
+        .overlay_camera = &overlay_cameras[pane], .viewport_camera = &cameras[pane],
+        .box_preview = &preview, .primitive_creation_controls = &controls,
+        .transform_snap_points = &snap_points, .selection_marquee = &marquee,
+        .interaction_pane = pane == 0u, .tool_overlay_visible = tool_visible,
+        .overlays_visible = true}};
+    auto request = submission_request(selection, scene, volatile_modeling, curve);
+    request.viewport_index = pane;
+    request.camera = overlay_cameras[pane];
+    request.dynamic_tool_source = source.source_stamp();
+    request.dynamic_tool_frame_provider = &source;
+    return coordinator.submit(request, settings, targets[pane]);
+  };
+  for (std::size_t pane = 0; pane < targets.size(); ++pane) {
+    ASSERT_TRUE(submit(pane).dynamic_submitted);
+    EXPECT_TRUE(std::ranges::any_of(targets[pane].dynamic_frame.lines, [](const auto &line) {
+      return line.color == kOverlayToolBoxPreviewLineColor;
+    }));
+    EXPECT_TRUE(std::ranges::any_of(targets[pane].dynamic_frame.triangles, [](const auto &triangle) {
+      return triangle.layer == ViewportOverlayLayer::ToolHandle;
+    }));
+    EXPECT_EQ(std::ranges::count_if(targets[pane].dynamic_frame.points, [](const auto &point) {
+      return point.layer == ViewportOverlayLayer::SnapTargetVertex;
+    }), pane == 0u ? 1 : 0);
+    EXPECT_EQ(std::ranges::count_if(targets[pane].dynamic_frame.lines, [](const auto &line) {
+      return line.color == kOverlaySelectionMarqueeLineColor;
+    }), pane == 0u ? 4 : 0);
+  }
+  const auto compose_count = coordinator.work_counters().dynamic_source_compose_count;
+  const std::array projection_counts{
+      presentations[0].projection_count(), presentations[1].projection_count()};
+  for (int frame = 0; frame < 12; ++frame) {
+    for (std::size_t pane = 0; pane < targets.size(); ++pane) EXPECT_TRUE(submit(pane).camera_only);
+  }
+  EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count, compose_count);
+  for (std::size_t pane = 0; pane < presentations.size(); ++pane) {
+    EXPECT_EQ(presentations[pane].projection_count(), projection_counts[pane]);
+  }
+  marquee.end = {200.0f, 180.0f};
+  EXPECT_TRUE(submit(0u).dynamic_submitted);
+  EXPECT_TRUE(submit(1u).camera_only);
+  for (auto &point : preview.footprint) point.x += 2.0f;
+  primitive.local_max.x += 2.0f;
+  ++primitive.revision;
+  interaction.project(primitive, cameras[0], 1.0f);
+  for (std::size_t pane = 0; pane < targets.size(); ++pane) {
+    EXPECT_TRUE(submit(pane).dynamic_submitted);
+    EXPECT_TRUE(std::ranges::any_of(targets[pane].dynamic_frame.lines, [](const auto &line) {
+      return line.color == kOverlayToolBoxPreviewLineColor && line.start.x > 2.0f;
+    }));
+  }
+  tool_visible = false;
+  primitive_visible = false;
+  for (std::size_t pane = 0; pane < targets.size(); ++pane) {
+    EXPECT_TRUE(submit(pane).dynamic_submitted);
+    EXPECT_FALSE(std::ranges::any_of(targets[pane].dynamic_frame.lines, [](const auto &line) {
+      return line.color == kOverlayToolBoxPreviewLineColor;
+    }));
+    EXPECT_FALSE(std::ranges::any_of(targets[pane].dynamic_frame.triangles, [](const auto &triangle) {
+      return triangle.layer == ViewportOverlayLayer::ToolHandle;
+    }));
+  }
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     SharedExtrusionOwnerUpdatesAndRetiresHandlesInPerspectiveAndOrthographicPanes) {
+  SceneSession session;
+  QuaderEditorApi editor{QuaderApiSessionInternalAccess::from_scene_session(session)};
+  const auto object = editor.modeling().create_box({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Shared extrusion"});
+  ASSERT_TRUE(object.ok()) << object.error_message();
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_faces(object.value(), {1}).ok());
+  ASSERT_TRUE(session.extrude().activate().ok);
+  std::array<ViewportCameraController, 2> cameras;
+  std::array<ViewportOverlayCamera, 2> overlay_cameras;
+  for (std::size_t pane = 0; pane < cameras.size(); ++pane) {
+    cameras[pane].set_viewport_size(800.0f, 600.0f);
+    cameras[pane].focus_origin(16.0f);
+    if (pane == 1u) cameras[pane].view_axis(ViewportViewAxis::Z, 1);
+    overlay_cameras[pane] = ViewportCameraAdapter::overlay_camera(
+        cameras[pane], cameras[pane].viewport_size());
+  }
+  ViewportOverlaySubmissionCoordinator coordinator;
+  std::array<RecordingOverlayTarget, 2> targets;
+  StaticSelectionFrameProvider selection{{}};
+  RenderOverlaySelectionSnapshot scene;
+  ViewportOverlayFrame volatile_modeling;
+  CurveToolPreviewState curve;
+  const auto settings = ViewportSettings::defaults();
+  const auto submit = [&](std::size_t pane) {
+    const auto &handle = session.extrude().handle_state();
+    const ViewportToolOverlaySource source{{
+        .source_identity = reinterpret_cast<std::uintptr_t>(&session.extrude()),
+        .overlay_camera = &overlay_cameras[pane], .viewport_camera = &cameras[pane],
+        .extrusion_handle = &handle, .interaction_pane = pane == 0u}};
+    auto request = submission_request(selection, scene, volatile_modeling, curve);
+    request.viewport_index = pane;
+    request.camera = overlay_cameras[pane];
+    request.dynamic_tool_source = source.source_stamp();
+    request.dynamic_tool_frame_provider = &source;
+    return coordinator.submit(request, settings, targets[pane]);
+  };
+  const auto expect_handles = [&] {
+    for (const auto &target : targets) {
+      ASSERT_EQ(target.dynamic_frame.lines.size(), 1u);
+      EXPECT_LT(length(target.dynamic_frame.lines.front().start -
+                       session.extrude().handle_state().world_position), 0.0001f);
+      ASSERT_EQ(target.dynamic_frame.triangles.size(), 32u);
+      EXPECT_EQ(target.dynamic_frame.lines.front().layer, ViewportOverlayLayer::ToolHandle);
+    }
+  };
+  for (std::size_t pane = 0; pane < targets.size(); ++pane) ASSERT_TRUE(submit(pane).dynamic_submitted);
+  expect_handles();
+  const auto compose_count = coordinator.work_counters().dynamic_source_compose_count;
+  for (int frame = 0; frame < 12; ++frame) {
+    for (std::size_t pane = 0; pane < targets.size(); ++pane) EXPECT_TRUE(submit(pane).camera_only);
+  }
+  EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count, compose_count);
+  const QVec3 original_position = session.extrude().handle_state().world_position;
+  for (const double amount : {8.0, 16.0, 0.0}) {
+    ASSERT_TRUE(session.extrude().set_amount(amount).ok);
+    for (std::size_t pane = 0; pane < targets.size(); ++pane) EXPECT_TRUE(submit(pane).dynamic_submitted);
+    expect_handles();
+    const QVec3 position = session.extrude().handle_state().world_position;
+    if (amount == 0.0) EXPECT_LT(length(position - original_position), 0.0001f);
+    else EXPECT_GT(length(position - original_position), 0.1f);
+  }
+  ASSERT_TRUE(session.extrude().cancel().ok);
+  for (std::size_t pane = 0; pane < targets.size(); ++pane) {
+    EXPECT_TRUE(submit(pane).dynamic_submitted);
+    EXPECT_TRUE(targets[pane].dynamic_frame.lines.empty());
+    EXPECT_TRUE(targets[pane].dynamic_frame.triangles.empty());
+    EXPECT_TRUE(submit(pane).camera_only);
+  }
 }
 
 TEST(ViewportOverlaySubmissionCoordinatorTests,
@@ -2781,6 +2972,10 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
   ViewportSettings settings = ViewportSettings::defaults();
   ASSERT_TRUE(settings.set_color(ViewportColorSettingId::BoundingBoxWire,
       {0.2f, 0.4f, 0.6f, 0.4f}));
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::ActiveSelection,
+      {17.0f / 255.0f, 187.0f / 255.0f, 221.0f / 255.0f, 1.0f}));
+  ASSERT_TRUE(settings.set_float_value(ViewportFloatSettingId::BoundingBoxWireThickness, 2.0f));
+  ASSERT_TRUE(settings.set_float_value(ViewportFloatSettingId::ActiveSelectionLineSize, 3.0f));
   const auto submit = [&](float scale) {
     const auto &scene = snapshots.selection_snapshot(document, assets);
     auto request = submission_request(provider, scene, volatile_frame, curve);
@@ -2790,7 +2985,9 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
     request.raster_scale = scale;
     return coordinator.submit(request, settings, target);
   };
-  const auto expect_active_side = [&](bool right, std::uint32_t color) {
+  const auto expect_active_side = [&](bool right, std::uint32_t color,
+                                     float active_width, float ordinary_width,
+                                     std::uint32_t ordinary_color) {
     std::size_t active = 0u;
     std::size_t ordinary = 0u;
     for (const auto &line : target.persistent_frame.lines) {
@@ -2798,29 +2995,37 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
       if (line.style_role == ViewportOverlayStyleRole::ActiveGroupBounds) {
         ++active;
         EXPECT_EQ(line.color, color);
+        EXPECT_FLOAT_EQ(line.width_pixels, active_width);
         EXPECT_EQ(line.start.x >= 4.0f, right);
       } else {
         ++ordinary;
         EXPECT_EQ(line.style_role, ViewportOverlayStyleRole::GroupBounds);
+        EXPECT_EQ(line.color, ordinary_color);
+        EXPECT_FLOAT_EQ(line.width_pixels, ordinary_width);
       }
     }
     EXPECT_EQ(active, 12u);
     EXPECT_EQ(ordinary, 12u);
   };
   ASSERT_TRUE(submit(1.0f).persistent_submitted);
-  expect_active_side(true, rgba8(102, 140, 179, 102));
+  expect_active_side(true, rgba8(17, 187, 221, 102), 3.0f, 2.0f, rgba8(51, 102, 153, 102));
   const auto builds = snapshots.stats().selection_build_count;
   EXPECT_FALSE(submit(1.0f).persistent_submitted);
   EXPECT_EQ(snapshots.stats().selection_build_count, builds);
   ASSERT_TRUE(document.set_active_selection(first));
   ASSERT_TRUE(submit(1.0f).persistent_submitted);
-  expect_active_side(false, rgba8(102, 140, 179, 102));
+  expect_active_side(false, rgba8(17, 187, 221, 102), 3.0f, 2.0f, rgba8(51, 102, 153, 102));
   EXPECT_EQ(document.selected_entities().size(), 2u);
   const auto active_builds = snapshots.stats().selection_build_count;
   ASSERT_TRUE(settings.set_color(ViewportColorSettingId::BoundingBoxWire,
       {1, 1, 1, 0.4f}));
   ASSERT_TRUE(submit(2.0f).persistent_submitted);
-  expect_active_side(false, rgba8(255, 255, 255, 102));
+  expect_active_side(false, rgba8(17, 187, 221, 102), 6.0f, 4.0f, rgba8(255, 255, 255, 102));
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::ActiveSelection,
+      {26.0f / 255.0f, 204.0f / 255.0f, 153.0f / 255.0f, 1.0f}));
+  ASSERT_TRUE(settings.set_float_value(ViewportFloatSettingId::ActiveSelectionLineSize, 3.5f));
+  ASSERT_TRUE(submit(2.0f).persistent_submitted);
+  expect_active_side(false, rgba8(26, 204, 153, 102), 7.0f, 4.0f, rgba8(255, 255, 255, 102));
   EXPECT_EQ(snapshots.stats().selection_build_count, active_builds);
   EXPECT_FALSE(submit(2.0f).persistent_submitted);
   EXPECT_EQ(snapshots.stats().selection_build_count, active_builds);

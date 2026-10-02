@@ -20,6 +20,11 @@ public:
   const PrimitiveCreationControlsFrame &project(
       const std::optional<ViewportPrimitiveCreationState> &cube,
       const ViewportCameraController &camera, float raster_scale);
+  /// Retains pane-local projection while presenting the input owner's feedback.
+  const PrimitiveCreationControlsFrame &project_presentation(
+      const std::optional<ViewportPrimitiveCreationState> &cube,
+      const ViewportCameraController &camera, float raster_scale,
+      const PrimitiveCreationControlsFrame &interaction_frame);
   [[nodiscard]] int hit_test(QVec2 point) const;
   void hover(int control);
   void set_subdivision_decrement(bool decrement);

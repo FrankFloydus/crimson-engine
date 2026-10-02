@@ -154,12 +154,15 @@ constexpr std::uint32_t rgba8(std::uint8_t r, std::uint8_t g, std::uint8_t b, st
             (static_cast<std::uint32_t>(a) << 24u);
 }
 
-/// Blends display RGB 25 percent toward white while retaining the original alpha.
-[[nodiscard]] constexpr std::uint32_t viewport_active_selection_color(std::uint32_t color) {
-    const auto brighten = [](std::uint32_t channel) { return (3u * channel + 257u) / 4u; };
-    return (color & 0xff000000u) | brighten(color & 0xffu) |
-           (brighten((color >> 8u) & 0xffu) << 8u) |
-           (brighten((color >> 16u) & 0xffu) << 16u);
+inline constexpr std::uint32_t kDefaultViewportActiveSelectionColor =
+    rgba8(255, 105, 180);
+
+/// Resolves the primary element tint while retaining the stream's authored opacity.
+[[nodiscard]] constexpr std::uint32_t viewport_active_selection_color(
+    std::uint32_t color,
+    std::uint32_t active_color = kDefaultViewportActiveSelectionColor) {
+    const auto alpha = ((color >> 24u) * (active_color >> 24u) + 127u) / 255u;
+    return (active_color & 0x00ffffffu) | (alpha << 24u);
 }
 
 /**

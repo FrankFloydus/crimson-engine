@@ -859,6 +859,7 @@ void QtViewportPanel::shutdown() {
 
 void QtViewportPanel::reset_interactions(QuaderEditorApi *editor,
     NativeViewportToolCoordinator *native_tools) {
+  pending_marking_menu_gesture_.reset();
   operation_input_context_ = {.viewport_available = false};
   hide_primitive_feedback();
   for (Pane &pane_state : panes_) {
@@ -877,6 +878,7 @@ void QtViewportPanel::reset_interactions(QuaderEditorApi *editor,
 }
 
 void QtViewportPanel::abandon_interactions() {
+  pending_marking_menu_gesture_.reset();
   operation_input_context_ = {.viewport_available = false};
   if (environment_popup_ != nullptr) {
     environment_popup_->abandon_runtime();
@@ -928,6 +930,7 @@ void QtViewportPanel::attach_workspace(ViewportWorkspaceService &workspace) {
   interaction_controller_.cancel_pending_material_interaction();
   interaction_controller_.cancel_pending_selection_click();
   if (workspace_ != &workspace) {
+    pending_marking_menu_gesture_.reset();
     for (Pane &pane_state : panes_) {
       pane_state.camera_settings_popup->close();
       pane_state.layout_menu->close();
@@ -1224,7 +1227,7 @@ void QtViewportPanel::update_settings_overlay_geometry() {
     return;
   }
 
-  ViewportPaneId host_id = workspace_->focused_pane();
+  ViewportPaneId host_id = *settings_origin_pane_;
   if (!pane(host_id).frame_presented) {
     host_id = workspace_->focused_pane();
   }
@@ -1593,15 +1596,10 @@ void QtViewportPanel::prepare_viewports(
   const bool instance_edit_context_active =
       editor.modeling().instance_edit_state().active;
   const ViewportPaneId focused_pane = workspace_->focused_pane();
-  const auto &operation_origin = editor.tools().active_settings_presentation_origin();
-  const ViewportPaneId operation_pane = operation_origin.serial != 0u
-      ? operation_origin.pane : interaction_pane_id_;
   const std::optional<bool> array_dimensions =
       editor.tools().active_array_bounding_box_dimensions();
-  const auto pane_dimensions_visible = [&](ViewportPaneId pane_id) {
-    return pane_id == operation_pane && array_dimensions.has_value()
-               ? *array_dimensions : selection_dimensions_visible;
-  };
+  const bool pane_dimensions_visible =
+      array_dimensions.value_or(selection_dimensions_visible);
   for (Pane &pane_state : panes_) {
     const bool overlays_visible = workspace_->effective_settings(pane_state.id)
         .bool_value(ViewportBoolSettingId::ShowOverlays);
@@ -1613,14 +1611,13 @@ void QtViewportPanel::prepare_viewports(
         overlays_visible && pane_state.frame->isVisible() &&
         active_box_preview_.ok &&
         active_box_preview_.drag_state == ModelingBoxDragState::Footprint &&
-        active_box_preview_.footprint_count >= 2U &&
-        pane_state.id == operation_pane;
+        active_box_preview_.footprint_count >= 2U;
     if ((!edge_length_hud_enabled_ || !hover_dimensions_visible ||
          !overlays_visible ||
          pane_state.id != interaction_pane_id_ ||
          !pane_state.frame->isVisible()) &&
         !footprint_dimensions_visible &&
-        !(pane_dimensions_visible(pane_state.id) && overlays_visible &&
+        !(pane_dimensions_visible && overlays_visible &&
           pane_state.frame->isVisible())) {
       pane_state.edge_length_hud->hide();
     }
@@ -1766,6 +1763,18 @@ void QtViewportPanel::prepare_viewports(
   };
   const ViewportOverlayFrame empty_edge_hud_frame;
 
+  Pane &primitive_input_pane = pane(interaction_pane_id_);
+  primitive_input_pane.surface->synchronize_render_size();
+  workspace_->set_pane_render_size(interaction_pane_id_,
+      primitive_input_pane.surface->render_size_pixels());
+  workspace_->camera(interaction_pane_id_).set_clip_planes(
+      document.scene_settings().camera.near_plane,
+      document.scene_settings().camera.far_plane);
+  const PrimitiveCreationControlsFrame &shared_primitive_controls =
+      interaction_controller_.primitive_creation_controls(
+          live_primitive_creation, workspace_->camera(interaction_pane_id_),
+          viewport_raster_scale(interaction_pane_id_));
+
   workspace_->clear_pane_visibility();
   for (const ViewportPanePlacement &placement : active_placements) {
     Pane &pane_state = pane(placement.pane_id);
@@ -1818,16 +1827,14 @@ void QtViewportPanel::prepare_viewports(
         viewport_shading_uses_scene_lighting(shading));
     renderer.set_scene_visible(shading != ViewportShadingMode::Wireframe);
     const bool tool_overlay_visible =
-        pane_state.id == operation_pane &&
         active_box_preview_.ok &&
         active_box_preview_.footprint_count >= 2U &&
         active_box_preview_.drag_state == ModelingBoxDragState::Footprint;
     const bool radial_array_center_visible =
         should_show_point_placement_overlay(
             radial_array_center.visible, radial_array_center.locked,
-            pane_state.id == operation_pane);
-    const bool primitive_creation_visible = gizmos_visible && live_primitive_creation &&
-        pane_state.id == operation_pane;
+            true);
+    const bool primitive_creation_visible = gizmos_visible && live_primitive_creation.has_value();
     renderer.set_overlay_visible(should_enable_viewport_overlay_pass({
         .overlays_visible = overlays_visible,
         .gizmos_visible = gizmos_visible,
@@ -1853,8 +1860,7 @@ void QtViewportPanel::prepare_viewports(
     const float pane_viewport_pixel_scale =
         viewport_raster_scale(pane_state.id);
     const ViewportToolId pane_tool = workspace_->selected_tool(pane_state.id);
-    const bool uses_interaction_gizmo = pane_state.id == operation_pane &&
-        pane_state.id == interaction_pane_id_ &&
+    const bool uses_interaction_gizmo = pane_state.id == interaction_pane_id_ &&
         (gizmo_input_pane_ == pane_state.id ||
          interaction_controller_.transform_gizmo_pointer_active()) &&
         editor.tools().pane_owns_executing_tool(pane_state.id) &&
@@ -1873,18 +1879,22 @@ void QtViewportPanel::prepare_viewports(
             .source_identity = reinterpret_cast<std::uintptr_t>(&document),
             .curve_tool = &native_tools.curve_interaction(),
             .curve_control_route_available = native_presentation.curve_controls_editable,
+            .shared_interaction_frame = interaction_gizmo,
         });
     ViewportToolOverlaySourceRevisions pane_tool_revisions = dynamic_tool_revisions;
     pane_tool_revisions.active_tool = workspace_->control_revision(pane_state.id);
     pane_tool_revisions.transform_space = workspace_->transform_space_revision(pane_state.id);
     const PrimitiveCreationControlsFrame *primitive_creation_controls = nullptr;
-    if (pane_state.id == operation_pane) {
-      primitive_creation_controls = &interaction_controller_.primitive_creation_controls(
-          gizmos_visible ? live_primitive_creation : std::nullopt,
-          pane_workspace.camera, pane_viewport_pixel_scale);
-      if (primitive_feedback_input_eligible_) {
-        present_primitive_feedback(pane_state, *primitive_creation_controls);
-      }
+    if (gizmos_visible) {
+      primitive_creation_controls = pane_state.id == interaction_pane_id_
+          ? &shared_primitive_controls
+          : &pane_state.primitive_presentation.project_presentation(
+              ViewportPrimitiveCreationApiAdapter::from_api(live_primitive_creation),
+              pane_workspace.camera, pane_viewport_pixel_scale,
+              shared_primitive_controls);
+    }
+    if (primitive_feedback_input_eligible_ && primitive_creation_controls != nullptr) {
+      present_primitive_feedback(pane_state, *primitive_creation_controls);
     }
     const ViewportToolOverlaySource dynamic_tool_frame_provider{
         ViewportToolOverlaySourceInputs{
@@ -1899,14 +1909,14 @@ void QtViewportPanel::prepare_viewports(
             .transform_snap_points = uses_interaction_gizmo ? &transform_snap_points : nullptr,
             .selection_marquee = &selection_marquee,
             .pivot_handle = &pivot_handle,
-            .linear_array_handle = pane_state.id == operation_pane ? &linear_array_handle : nullptr,
-            .extrusion_handle = pane_state.id == operation_pane ? &extrusion_handle : nullptr,
+            .linear_array_handle = &linear_array_handle,
+            .extrusion_handle = &extrusion_handle,
             .radial_array_center = &radial_array_center,
             .revisions = pane_tool_revisions,
-            .interaction_pane = pane_state.id == operation_pane,
+            .interaction_pane = pane_state.id == interaction_pane_id_,
             .tool_overlay_visible = tool_overlay_visible,
             .gizmos_visible = gizmos_visible,
-            .pivot_handle_editing = pane_state.id == operation_pane && pivot_handle_editing,
+            .pivot_handle_editing = pivot_handle_editing,
             .overlays_visible = overlays_visible,
             .radial_array_center_visible = radial_array_center_visible,
         }};
@@ -1965,7 +1975,7 @@ void QtViewportPanel::prepare_viewports(
                     shading == ViewportShadingMode::Wireframe,
                 .point_light_gizmos_visible = point_light_gizmos_visible,
                 .selection_dimensions_visible = selection_dimensions_visible,
-                .array_dimensions_mode = pane_state.id != operation_pane || !array_dimensions
+                .array_dimensions_mode = !array_dimensions
                     ? ViewportArrayDimensionsMode::Inactive
                     : *array_dimensions ? ViewportArrayDimensionsMode::Visible
                                         : ViewportArrayDimensionsMode::Hidden,
@@ -1987,7 +1997,7 @@ void QtViewportPanel::prepare_viewports(
         overlay_submission.selection_dimension_bounds
             ? &*overlay_submission.selection_dimension_bounds : nullptr,
         overlay_submission.selection_dimension_signature,
-        pane_dimensions_visible(pane_state.id) && overlays_visible);
+        pane_dimensions_visible && overlays_visible);
     sync_pane_control_selection(pane_state);
   }
   if (diagnostics_enabled) {
@@ -3413,6 +3423,110 @@ void QtViewportPanel::update_split_handles() {
   }
 }
 
+std::optional<QPoint> QtViewportPanel::resolve_marking_menu_gesture(
+    QuaderEditorApi &editor, Pane &pane_state, ViewportInputFrame &input,
+    bool interaction_locked) {
+  std::optional<QuaderInputChord> initiating_chord;
+  std::erase_if(input.resolved_shortcuts, [&](const ViewportShortcut &shortcut) {
+    if (shortcut.kind != ViewportShortcutKind::MarkingMenu ||
+        !shortcut.initiating_chord.has_value() ||
+        shortcut.initiating_chord->device != QuaderInputDevice::Keyboard) {
+      return false;
+    }
+    initiating_chord = shortcut.initiating_chord;
+    return true;
+  });
+  if (!initiating_chord.has_value() &&
+      !pending_marking_menu_gesture_.has_value()) {
+    return std::nullopt;
+  }
+  if (!input.viewport_focused || !input.viewport_hovered ||
+      input.text_input_active || input.navigation_active || interaction_locked ||
+      input.pointer_interaction_canceled ||
+      viewport_navigation_press(input.navigation_bindings).action !=
+          ViewportInputActionKind::None) {
+    pending_marking_menu_gesture_.reset();
+    return std::nullopt;
+  }
+  const auto matches_physical_input = [](const QuaderInputChord &a,
+                                        const QuaderInputChord &b) {
+    return a.device == b.device && a.key == b.key &&
+           a.mouse_button == b.mouse_button;
+  };
+  if (initiating_chord.has_value() &&
+      !pending_marking_menu_gesture_.has_value()) {
+    const float scale = static_cast<float>(
+        std::max<qreal>(pane_state.surface->devicePixelRatio(), 1.0));
+    const QPoint local_point(
+        static_cast<int>(std::lround(input.mouse_local.x / scale)),
+        static_cast<int>(std::lround(input.mouse_local.y / scale)));
+    pending_marking_menu_gesture_ = PendingMarkingMenuGesture{
+        .pane_id = pane_state.id,
+        .initiating_chord = *initiating_chord,
+        .global_origin = pane_state.surface->mapToGlobal(local_point),
+        .started = std::chrono::steady_clock::now(),
+        .tool_revision = editor.tools().active_tool_revision(),
+        .keybindings_revision = editor.commands().keybindings_revision(),
+    };
+  }
+  const PendingMarkingMenuGesture &gesture = *pending_marking_menu_gesture_;
+  const auto matches_gesture = [&](const QuaderInputChord &chord) {
+    return matches_physical_input(chord, gesture.initiating_chord);
+  };
+  auto remaining_press = input.pressed_input_chords.begin();
+  if (initiating_chord.has_value()) {
+    const auto launch_press = std::find(input.pressed_input_chords.begin(),
+                                       input.pressed_input_chords.end(),
+                                       *initiating_chord);
+    if (launch_press != input.pressed_input_chords.end()) {
+      // Prefix presses already belong to the canonical sequence dispatcher.
+      // Only input arriving after its completing chord abandons this launch.
+      remaining_press = launch_press + 1;
+    }
+  }
+  if (gesture.pane_id != pane_state.id ||
+      gesture.tool_revision != editor.tools().active_tool_revision() ||
+      gesture.keybindings_revision != editor.commands().keybindings_revision() ||
+      !input.wheel_input_edges.empty() ||
+      std::any_of(remaining_press, input.pressed_input_chords.end(),
+                  [&](const QuaderInputChord &chord) {
+                    return !matches_gesture(chord);
+                  })) {
+    pending_marking_menu_gesture_.reset();
+    return std::nullopt;
+  }
+  if (std::any_of(input.released_input_chords.begin(),
+                  input.released_input_chords.end(), matches_gesture)) {
+    // A tap remains a normal tool activation, including draft settlement and
+    // shared-pane publication. No popup is constructed before the hold resolves.
+    input.resolved_shortcuts.push_back({
+        .kind = ViewportShortcutKind::ActivateTool,
+        .tool = ViewportToolId::Select,
+    });
+    pending_marking_menu_gesture_.reset();
+    return std::nullopt;
+  }
+  if (!std::any_of(input.active_input_chords.begin(),
+                   input.active_input_chords.end(), matches_gesture)) {
+    pending_marking_menu_gesture_.reset();
+    return std::nullopt;
+  }
+  constexpr auto kMarkingMenuHoldThreshold = std::chrono::milliseconds(200);
+  if (std::chrono::steady_clock::now() - gesture.started <
+          kMarkingMenuHoldThreshold ||
+      localization_ == nullptr || input.active_tool_owns_viewport ||
+      input.modal_tool_active || input.active_tool_blocks_focus_shortcuts) {
+    return std::nullopt;
+  }
+  const QPoint global_origin = gesture.global_origin;
+  input.resolved_shortcuts.push_back({
+      .kind = ViewportShortcutKind::MarkingMenu,
+      .initiating_chord = gesture.initiating_chord,
+  });
+  pending_marking_menu_gesture_.reset();
+  return global_origin;
+}
+
 void QtViewportPanel::process_viewport_input(
     QuaderEditorApi &editor, SceneDocument &document, AssetRegistry &assets,
     ModelingSessionService &modeling, AssetId default_material,
@@ -3517,6 +3631,7 @@ void QtViewportPanel::process_viewport_input(
       .focused_pane = workspace_->focused_pane(),
   });
   if (!input_pane.has_value()) {
+    pending_marking_menu_gesture_.reset();
     interaction_controller_.cancel_pending_material_interaction();
     interaction_controller_.cancel_pending_selection_click();
     interaction_controller_.cancel_context_menu_pointer();
@@ -3636,6 +3751,8 @@ void QtViewportPanel::process_viewport_input(
     radial_array_wheel_remainder_ = 0.0;
     return;
   }
+  const std::optional<QPoint> marking_menu_global_origin =
+      resolve_marking_menu_gesture(editor, pane_state, input, interaction_locked);
   const bool active_tool_changed =
       keybinding_edge_can_change_tool &&
       sync_active_tool_from_editor(
@@ -4087,6 +4204,9 @@ void QtViewportPanel::process_viewport_input(
         static_cast<int>(std::lround(input.mouse_local.y /
                                      static_cast<float>(scale))));
     shortcut_popup_global_point = pane_state.surface->mapToGlobal(local_point);
+    if (show_marking_menu && marking_menu_global_origin.has_value()) {
+      shortcut_popup_global_point = *marking_menu_global_origin;
+    }
   }
 
   if (show_marking_menu) {

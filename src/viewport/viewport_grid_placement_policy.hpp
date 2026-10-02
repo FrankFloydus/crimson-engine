@@ -71,11 +71,11 @@ public:
                                          std::uint32_t viewport_height) {
     const ViewportCameraPose pose = camera.pose();
     const ViewportGridPlane resolved_plane = plane(camera, pose);
-    QVec3 plane_origin = origin(resolved_plane, pose);
-    if (camera.state().projection == ViewportProjection::Perspective) {
-      // The construction grid is a bounded world plane. Its perimeter must
-      // not move with the camera; coplanar depth bias belongs to the material.
-      plane_origin = {};
+    // Perspective retains its bounded world plane; only orthographic
+    // presentation follows the visible rectangle and depth range.
+    QVec3 plane_origin = {};
+    if (camera.state().projection == ViewportProjection::Orthographic) {
+      plane_origin = origin(resolved_plane, pose, camera.state());
     }
     return {
         .plane = resolved_plane,
@@ -177,7 +177,8 @@ public:
         return {};
     }
 
-    static QVec3 origin(ViewportGridPlane plane, const ViewportCameraPose& pose) {
+    static QVec3 origin(ViewportGridPlane plane, const ViewportCameraPose& pose,
+                        const ViewportCameraState& state) {
         const ViewportGridAxes plane_axes = axes(plane);
         const QVec3 normal = cross(plane_axes.u_axis, plane_axes.v_axis);
         const QVec3 forward = normalize(pose.target - pose.eye);
@@ -189,8 +190,26 @@ public:
         }
         const float incidence = dot(forward, normal);
         if (std::fabs(incidence) > 0.000001f) {
-          QVec3 center =
-              pose.eye + forward * (dot(point - pose.eye, normal) / incidence);
+          const float world_plane_depth = dot(point - pose.eye, normal) / incidence;
+          if (world_plane_depth <= state.near_plane ||
+              world_plane_depth >= state.far_plane) {
+            // Orthographic grid coordinates are world aligned in the plane.
+            // Moving its normal depth keeps the same lines visible after a
+            // translated axis snap, without changing the construction plane.
+            const float clip_margin =
+                std::min(0.01f, (state.far_plane - state.near_plane) * 0.25f);
+            const float minimum_depth = std::max(
+                state.near_plane + clip_margin,
+                std::nextafter(state.near_plane, state.far_plane));
+            const float maximum_depth = std::min(
+                state.far_plane - clip_margin,
+                std::nextafter(state.far_plane, state.near_plane));
+            const float visible_depth = std::clamp(
+                dot(pose.target - pose.eye, forward),
+                minimum_depth, maximum_depth);
+            return pose.eye + forward * visible_depth;
+          }
+          QVec3 center = pose.eye + forward * world_plane_depth;
           if (plane == ViewportGridPlane::YZ) {
             center.x = kViewportGridPlaneOffset;
           } else if (plane == ViewportGridPlane::XY) {

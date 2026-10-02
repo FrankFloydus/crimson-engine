@@ -823,13 +823,9 @@ MeshArrangementSelectionContext
 mesh_arrangement_selection_context(SceneSession &session) {
   const ModelingSelectionMode mode = session.modeling().selection_mode();
   const EntityId active = session.scene().primary_selection();
-  const bool active_is_mesh =
-      active != kInvalidEntityId &&
-      session.scene().modeling_object(active) != nullptr &&
-      session.scene().mesh(active) != nullptr;
   return {
-      .object_mode = mode == ModelingSelectionMode::Object,
-      .active_mesh = active_is_mesh ? active : kInvalidEntityId,
+      .object_mode = mode == ModelingSelectionMode::Object || mode == ModelingSelectionMode::Group,
+      .active_object = active,
   };
 }
 

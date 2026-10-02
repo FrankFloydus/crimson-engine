@@ -51,6 +51,35 @@ void bind_native_toolbar_separators(QToolBar &toolbar, QStyle &presentation) {
   }
 }
 
+bool refresh_toolbar_button_minimum_size(
+    QToolButton &button, const QtUiScaleMetrics &metrics) {
+  constexpr QSize kButtonMinimumSize(40, 40);
+  QSize minimum = metrics.size(kButtonMinimumSize);
+  if (button.toolButtonStyle() == Qt::ToolButtonTextOnly) {
+    QStyleOptionToolButton option;
+    option.initFrom(&button);
+    option.text = button.defaultAction() != nullptr
+                      ? button.defaultAction()->text()
+                      : button.text();
+    option.toolButtonStyle = Qt::ToolButtonTextOnly;
+    option.features.setFlag(QStyleOptionToolButton::HasMenu,
+                            button.menu() != nullptr);
+    const QSize contents =
+        option.fontMetrics.size(Qt::TextShowMnemonic, option.text);
+    minimum = minimum.expandedTo(button.style()->sizeFromContents(
+        QStyle::CT_ToolButton, &option, contents, &button));
+  }
+  // Compact hosts own their fixed button extent. Retained action/style updates
+  // must not expand that maximum back to the ordinary toolbar hit target.
+  minimum = minimum.boundedTo(button.maximumSize());
+  if (button.minimumSize() == minimum) {
+    return false;
+  }
+  button.setMinimumSize(minimum);
+  button.updateGeometry();
+  return true;
+}
+
 /**
  * Adapts toolbar faces and native group dividers; the scale-aware Fusion base
  * retains button labels, focus rectangles, disabled state, and press behavior.
@@ -88,6 +117,12 @@ public:
                         });
     }
     auto *button = qobject_cast<QToolButton *>(watched);
+    if (button != nullptr &&
+        (event->type() == QEvent::FontChange ||
+         event->type() == QEvent::StyleChange)) {
+      refresh_toolbar_button_minimum_size(
+          *button, scaled_metrics_style_.metrics());
+    }
     if (button != nullptr && button->isCheckable() &&
         (event->type() == QEvent::MouseButtonPress ||
          event->type() == QEvent::KeyPress)) {
@@ -110,6 +145,10 @@ public:
       bind_native_toolbar_separators(*toolbar, *this);
     }
     return true;
+  }
+
+  [[nodiscard]] const QtUiScaleMetrics &metrics() const {
+    return scaled_metrics_style_.metrics();
   }
 
   int pixelMetric(PixelMetric metric, const QStyleOption *option,
@@ -323,10 +362,19 @@ void configure_native_toolbar_button_face(QToolButton &button, QAction &action,
   button.setAttribute(Qt::WA_Hover, true);
   button.setMouseTracking(true);
   button.setFocusPolicy(Qt::StrongFocus);
-  button.setMinimumSize(40, 40);
+  const auto *toolbar_presentation =
+      dynamic_cast<const QtToolbarButtonPresentationStyle *>(&presentation);
+  refresh_toolbar_button_minimum_size(
+      button, toolbar_presentation != nullptr ? toolbar_presentation->metrics()
+                                             : QtUiScaleMetrics{});
   synchronize_accessibility(button, action);
   QObject::connect(&action, &QAction::changed, &button, [&button, &action]() {
     synchronize_accessibility(button, action);
+    const auto *presentation =
+        dynamic_cast<const QtToolbarButtonPresentationStyle *>(button.style());
+    refresh_toolbar_button_minimum_size(
+        button, presentation != nullptr ? presentation->metrics()
+                                        : QtUiScaleMetrics{});
     button.update();
   });
 }
@@ -351,13 +399,8 @@ void apply_native_toolbar_button_face_ui_scale(
     presentation_changed = presentation->set_ui_scale(metrics);
   }
 
-  constexpr QSize kButtonMinimumSize(40, 40);
-  const QSize scaled_minimum = metrics.size(kButtonMinimumSize);
-  bool minimum_changed = false;
-  if (button.minimumSize() != scaled_minimum) {
-    button.setMinimumSize(scaled_minimum);
-    minimum_changed = true;
-  }
+  const bool minimum_changed =
+      refresh_toolbar_button_minimum_size(button, metrics);
   if (presentation_changed || minimum_changed) {
     button.updateGeometry();
     button.update();

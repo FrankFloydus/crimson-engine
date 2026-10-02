@@ -138,6 +138,89 @@ struct PrimitiveCubeInteractionHarness {
   }
 };
 
+TEST(PrimitiveCubeInteractionTests, PanePresentationRetainsProjectionAndMirrorsSharedFeedback) {
+  for (const auto shape : {ViewportPrimitiveCreationShape::Box,
+                          ViewportPrimitiveCreationShape::Cylinder,
+                          ViewportPrimitiveCreationShape::Cone,
+                          ViewportPrimitiveCreationShape::Sphere,
+                          ViewportPrimitiveCreationShape::Torus}) {
+    SCOPED_TRACE(static_cast<int>(shape));
+    PrimitiveCubeInteractionHarness h(shape);
+    auto &interaction = h.modal.primitive_creation;
+    ViewportCameraController other_camera;
+    other_camera.set_viewport_size(640, 480);
+    other_camera.focus_origin(12);
+    other_camera.view_axis(ViewportViewAxis::Z, 1);
+    PrimitiveCreationInteraction presentation;
+    const auto present = [&]() -> const PrimitiveCreationControlsFrame & {
+      return presentation.project_presentation(
+          h.box.live_primitive(), other_camera, 2.0f, interaction.frame());
+    };
+    interaction.hover(6);
+    interaction.set_subdivision_decrement(true);
+    const auto &frame = present();
+    ASSERT_TRUE(frame.visible);
+    EXPECT_EQ(frame.hovered, 6);
+    EXPECT_EQ(frame.active, -1);
+    EXPECT_TRUE(frame.controls[6].subdivision_decrement);
+    EXPECT_EQ(frame.controls[6].enabled, interaction.frame().controls[6].enabled);
+    EXPECT_EQ(frame.label_key, interaction.frame().label_key);
+    EXPECT_DOUBLE_EQ(frame.label_value, interaction.frame().label_value);
+    EXPECT_EQ(frame.highlight_point_count, interaction.frame().highlight_point_count);
+    const auto projected = other_camera.project_world_point(frame.controls[6].world_position);
+    EXPECT_FLOAT_EQ(frame.controls[6].screen_position.x, projected.position.x);
+    EXPECT_FLOAT_EQ(frame.controls[6].screen_position.y, projected.position.y);
+    EXPECT_FLOAT_EQ(frame.label_position.x,
+                    frame.controls[6].screen_position.x + frame.controls[6].radius_pixels + 16.0f);
+    const auto projections = presentation.projection_count();
+    const auto revision = frame.revision;
+    const auto owner_projections = interaction.projection_count();
+    for (int index = 0; index < 12; ++index) {
+      interaction.project(h.box.live_primitive(), h.camera, 1.0f);
+      EXPECT_EQ(present().revision, revision);
+    }
+    EXPECT_EQ(presentation.projection_count(), projections);
+    EXPECT_EQ(interaction.projection_count(), owner_projections);
+
+    interaction.hover(0);
+    EXPECT_EQ(present().hovered, 0);
+    EXPECT_GT(presentation.frame().revision, revision);
+    EXPECT_EQ(presentation.projection_count(), projections);
+    EXPECT_EQ(presentation.frame().label_key, interaction.frame().label_key);
+    const auto primitive = h.box.live_primitive();
+    ASSERT_TRUE(primitive);
+    interaction.begin(0, *primitive, h.camera, interaction.frame().controls[0].screen_position);
+    const auto &active_frame = present();
+    EXPECT_EQ(active_frame.active, 0);
+    EXPECT_LT(length(active_frame.controls[0].world_position -
+                     interaction.frame().controls[0].world_position), 0.0001f);
+    EXPECT_LT(length(active_frame.controls[0].resize_axis -
+                     interaction.frame().controls[0].resize_axis), 0.0001f);
+    interaction.end();
+    EXPECT_EQ(present().active, -1);
+
+    interaction.begin(6, *primitive, h.camera,
+                      interaction.frame().controls[6].screen_position, true);
+    const auto &button_frame = present();
+    EXPECT_EQ(button_frame.active, 6);
+    EXPECT_TRUE(button_frame.controls[6].subdivision_decrement);
+    EXPECT_LT(length(button_frame.controls[6].world_position -
+                     interaction.frame().controls[6].world_position), 0.0001f);
+    const auto button_projections = presentation.projection_count();
+    const auto button_revision = button_frame.revision;
+    for (int index = 0; index < 12; ++index) EXPECT_EQ(present().revision, button_revision);
+    EXPECT_EQ(presentation.projection_count(), button_projections);
+    EXPECT_EQ(interaction.active(), 6);
+    const auto &cleared = presentation.project_presentation(
+        std::nullopt, other_camera, 2.0f, interaction.frame());
+    EXPECT_FALSE(cleared.visible);
+    EXPECT_EQ(cleared.active, -1);
+    EXPECT_TRUE(cleared.label_key.empty());
+    EXPECT_EQ(cleared.highlight_point_count, 0u);
+    EXPECT_EQ(interaction.active(), 6);
+  }
+}
+
 TEST(PrimitiveCubeInteractionTests, EveryShapeUsesHandForHandlesAndGrabsOnlyConfirmedResizeDrags) {
   for (const auto shape : {ViewportPrimitiveCreationShape::Box,
                           ViewportPrimitiveCreationShape::Cylinder,

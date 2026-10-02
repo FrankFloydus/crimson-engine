@@ -15,10 +15,13 @@ file except through prior written authorization from Francesco Di Blasi.
   Preference defaults feed one revision-gated projection. Explicit session overrides survive
   layout/tab changes and later default changes; pane-local strip controls do not save preferences.
   Backface Selection retains its existing shared preference and selection policy.
-  A pane's remembered tool is separate from the scene's single executing operation. Focus alone
-  never acquires or settles it. Actual editing acquires through `QuaderToolsApi`; capture retains
-  the initiating pane and its effective snapping through release. Passive gizmos use retained
-  presentation frames and must not run interactive tool lifecycle code.
+  Tool activation projects the scene's single executing operation into every pane, including
+  panes revealed by later layout changes. Each pane retains its own last Box/Lasso choice.
+  Focus and same-operation acquisition never accept, cancel or restart a draft. Every visible
+  pane can edit the shared operation; capture retains the actual editing pane and its effective
+  snapping through release. Tool Settings stays in the operation's initiating pane independently
+  of focus and pointer capture. Passive gizmos use retained presentation frames and must not run
+  interactive tool lifecycle code.
 - Read [INPUT_KEYBINDINGS.md](../../INPUT_KEYBINDINGS.md) for input changes. `ViewportInputRouter`
   consumes semantic navigation and resolved shortcuts; raw Qt/Win32 events stay in host adapters.
   Preserve explicit text-focus, navigation-capture, tool, viewport, and global shortcut contexts.

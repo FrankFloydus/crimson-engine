@@ -168,7 +168,7 @@ enum class QuaderToolSettingNumberPresentation {
 };
 
 /**
- * Represents a selectable value for a tool setting choice control.
+ * Represents a selectable value or a button in a grouped tool action.
  */
 struct QuaderToolSettingChoiceOption {
   std::string id;
@@ -220,6 +220,7 @@ struct QuaderToolSettingControl {
   QuaderToolSettingNumberPresentation number_presentation =
       QuaderToolSettingNumberPresentation::SliderSpinBox;
   std::string choice_value;
+  // Choice values, or plain Action buttons dispatched as id + "." + option.id.
   std::vector<QuaderToolSettingChoiceOption> choices;
   QuaderToolSettingChoicePresentation choice_presentation =
       QuaderToolSettingChoicePresentation::Radio;
@@ -287,6 +288,8 @@ struct QuaderToolsRuntimeHooks {
     std::function<QuaderApiVoidResult()> commit_active_tool_preview;
     std::function<QuaderApiVoidResult()> cancel_active_tool_preview;
     std::function<double()> grid_world_size;
+    /// Presents owner feedback through the editor's existing status notifications.
+    std::function<void(QuaderNotification)> notify;
 };
 
 /**

@@ -25,6 +25,7 @@
 namespace quader {
 
 class AssetCommandService;
+class AlignToolService;
 class CurveToolService;
 class EditorSelectionService;
 class ExtrudeToolService;
@@ -141,6 +142,8 @@ public:
   const MeshTransformBakeService &mesh_transform_bake() const {
     return *mesh_transform_bake_;
   }
+  AlignToolService &align_tool() { return *align_tool_; }
+  const AlignToolService &align_tool() const { return *align_tool_; }
   LinearArrayToolService &linear_array() { return *linear_array_; }
   const LinearArrayToolService &linear_array() const { return *linear_array_; }
   RadialArrayToolService &radial_array() { return *radial_array_; }
@@ -269,6 +272,7 @@ private:
   std::unique_ptr<SceneInstanceService> instances_;
   std::unique_ptr<PivotToolService> pivot_;
   std::unique_ptr<MeshTransformBakeService> mesh_transform_bake_;
+  std::unique_ptr<AlignToolService> align_tool_;
   std::unique_ptr<LinearArrayToolService> linear_array_;
   std::unique_ptr<RadialArrayToolService> radial_array_;
   std::shared_ptr<PathArraySessionDefaults> path_array_defaults_;

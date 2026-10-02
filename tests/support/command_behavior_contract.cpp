@@ -468,52 +468,6 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
                Fixture::SingleEdgeSelection, kTopologyDomains,
                Outcome::SuccessRequired, UndoRepeat::UndoableAndRepeatable),
 
-      contract(quader_command::kModelingAlignXMin,
-               Fixture::ObjectPairSelection, kTransformDomains,
-               Outcome::SuccessRequired, UndoRepeat::Undoable),
-      contract(quader_command::kModelingAlignXCenter,
-               Fixture::ObjectPairSelection, kTransformDomains,
-               Outcome::SuccessRequired, UndoRepeat::Undoable),
-      contract(quader_command::kModelingAlignXMax,
-               Fixture::ObjectPairSelection, kTransformDomains,
-               Outcome::SuccessRequired, UndoRepeat::Undoable),
-      contract(quader_command::kModelingAlignYMin,
-               Fixture::ObjectPairSelection, kTransformDomains,
-               Outcome::SuccessRequired, UndoRepeat::Undoable),
-      contract(quader_command::kModelingAlignYCenter,
-               Fixture::ObjectPairSelection, kTransformDomains,
-               Outcome::SuccessRequired, UndoRepeat::Undoable),
-      contract(quader_command::kModelingAlignYMax,
-               Fixture::ObjectPairSelection, kTransformDomains,
-               Outcome::SuccessRequired, UndoRepeat::Undoable),
-      contract(quader_command::kModelingAlignZMin,
-               Fixture::ObjectPairSelection, kTransformDomains,
-               Outcome::SuccessRequired, UndoRepeat::Undoable),
-      contract(quader_command::kModelingAlignZCenter,
-               Fixture::ObjectPairSelection, kTransformDomains,
-               Outcome::SuccessRequired, UndoRepeat::Undoable),
-      contract(quader_command::kModelingAlignZMax,
-               Fixture::ObjectPairSelection, kTransformDomains,
-               Outcome::SuccessRequired, UndoRepeat::Undoable),
-      contract(quader_command::kModelingDistributeCentersX,
-               Fixture::ObjectSetSelection, kTransformDomains,
-               Outcome::SuccessRequired, UndoRepeat::Undoable),
-      contract(quader_command::kModelingDistributeCentersY,
-               Fixture::ObjectSetSelection, kTransformDomains,
-               Outcome::SuccessRequired, UndoRepeat::Undoable),
-      contract(quader_command::kModelingDistributeCentersZ,
-               Fixture::ObjectSetSelection, kTransformDomains,
-               Outcome::SuccessRequired, UndoRepeat::Undoable),
-      contract(quader_command::kModelingDistributeGapsX,
-               Fixture::ObjectSetSelection, kTransformDomains,
-               Outcome::SuccessRequired, UndoRepeat::Undoable),
-      contract(quader_command::kModelingDistributeGapsY,
-               Fixture::ObjectSetSelection, kTransformDomains,
-               Outcome::SuccessRequired, UndoRepeat::Undoable),
-      contract(quader_command::kModelingDistributeGapsZ,
-               Fixture::ObjectSetSelection, kTransformDomains,
-               Outcome::SuccessRequired, UndoRepeat::Undoable),
-
       contract(quader_command::kModelingMirrorSelectionX,
                Fixture::ObjectSelection, kTopologySceneDomains,
                Outcome::ChangeRequired, UndoRepeat::UndoableAndRepeatable),
@@ -799,6 +753,9 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
       contract(quader_command::kToolsActivatePivot,
                Fixture::ObjectSelection, kToolDomains,
                Outcome::SuccessRequired, UndoRepeat::None),
+      contract(quader_command::kToolsActivateAlign,
+               Fixture::ObjectPairSelection, kToolDomains,
+               Outcome::ChangeRequired, UndoRepeat::None),
       contract(quader_command::kToolsActivateLinearArray,
                Fixture::ObjectSelection, kToolDomains,
                Outcome::SuccessRequired, UndoRepeat::None),
@@ -814,9 +771,9 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
   };
 
 #ifndef NDEBUG
-  static_assert(std::size(kContracts) == 225U);
+  static_assert(std::size(kContracts) == 211U);
 #else
-  static_assert(std::size(kContracts) == 224U);
+  static_assert(std::size(kContracts) == 210U);
 #endif
   return std::span<const CommandBehaviorContract>{kContracts};
 }

@@ -9,36 +9,51 @@ float surfaceGridFloor(float spacing) {
     return exp2(floor(log2(max(spacing, 0.0001))));
 }
 
-float surfaceGridLineCoverage(float coord, float spacing, float thicknessValue) {
+float surfaceGridLineCoverage(
+        float coord, float spacing, float thicknessValue,
+        float coordinatePixelWidth, float worldPixelWidth) {
     float safeSpacing = max(spacing, 0.0001);
     float wrapped = abs(fract(coord / safeSpacing + 0.5) - 0.5) * safeSpacing;
     float thickness = clamp(thicknessValue, 0.05, 8.0);
-    float derivativeWidth = fwidth(coord);
+    float derivativeWidth = coordinatePixelWidth;
+    // A constant coordinate cannot form a surface line. In smooth projection
+    // blends, treating its grid multiple as covered would tint the whole face.
+    // Ignore perspective interpolation noise relative to the surface footprint.
+    if (derivativeWidth <= worldPixelWidth * 0.001) {
+        return 0.0;
+    }
     float antialias = clamp(derivativeWidth, safeSpacing * 0.0005, safeSpacing * 0.125);
     float lineWidth = min(antialias * 0.75 * thickness, safeSpacing * 0.125);
     float feather = min(antialias, safeSpacing * 0.125);
     return 1.0 - smoothstep(lineWidth, lineWidth + feather, wrapped);
 }
 
-float surfaceGridLine(float coord, float spacing, float thicknessValue, float worldPixelWidth) {
+float surfaceGridLine(
+        float coord, float spacing, float thicknessValue,
+        float worldPixelWidth, float coordinatePixelWidth) {
     float safeSpacing = max(spacing, 0.0001);
     float minRenderableSpacing = max(worldPixelWidth, 0.0) * 4.0;
     float lodSpacing = max(surfaceGridFloor(max(minRenderableSpacing, safeSpacing)), safeSpacing);
     float nextSpacing = max(lodSpacing * 2.0, lodSpacing + 0.0001);
     float blend = smoothstep(lodSpacing, nextSpacing, minRenderableSpacing);
-    float currentCoverage = surfaceGridLineCoverage(coord, lodSpacing, thicknessValue);
-    float nextCoverage = surfaceGridLineCoverage(coord, nextSpacing, thicknessValue);
+    float currentCoverage = surfaceGridLineCoverage(
+            coord, lodSpacing, thicknessValue, coordinatePixelWidth, worldPixelWidth);
+    float nextCoverage = surfaceGridLineCoverage(
+            coord, nextSpacing, thicknessValue, coordinatePixelWidth, worldPixelWidth);
     return mix(currentCoverage, nextCoverage, blend);
 }
 
 float surfaceGridLineSlotCoverage(
-        float coord, float spacing, float thicknessValue, float worldPixelWidth) {
+        float coord, float spacing, float thicknessValue,
+        float worldPixelWidth, float coordinatePixelWidth) {
     float safeSpacing = max(spacing, 0.0001);
     float minRenderableSpacing = max(worldPixelWidth, 0.0) * 4.0;
     float lodSpacing = max(surfaceGridFloor(max(minRenderableSpacing, safeSpacing)), safeSpacing);
     float nextSpacing = max(lodSpacing * 2.0, lodSpacing + 0.0001);
-    float currentCoverage = surfaceGridLineCoverage(coord, lodSpacing, thicknessValue);
-    float nextCoverage = surfaceGridLineCoverage(coord, nextSpacing, thicknessValue);
+    float currentCoverage = surfaceGridLineCoverage(
+            coord, lodSpacing, thicknessValue, coordinatePixelWidth, worldPixelWidth);
+    float nextCoverage = surfaceGridLineCoverage(
+            coord, nextSpacing, thicknessValue, coordinatePixelWidth, worldPixelWidth);
     return max(currentCoverage, nextCoverage);
 }
 
@@ -72,11 +87,15 @@ vec3 surfaceGridPlaneLineCoverages(
         highp vec3 worldPosition,
         float spacing,
         float thicknessValue,
-        float worldPixelWidth) {
+        float worldPixelWidth,
+        vec3 coordinatePixelWidths) {
     vec3 axisCoverages = vec3(
-            surfaceGridLine(worldPosition.x, spacing, thicknessValue, worldPixelWidth),
-            surfaceGridLine(worldPosition.y, spacing, thicknessValue, worldPixelWidth),
-            surfaceGridLine(worldPosition.z, spacing, thicknessValue, worldPixelWidth));
+            surfaceGridLine(worldPosition.x, spacing, thicknessValue,
+                           worldPixelWidth, coordinatePixelWidths.x),
+            surfaceGridLine(worldPosition.y, spacing, thicknessValue,
+                           worldPixelWidth, coordinatePixelWidths.y),
+            surfaceGridLine(worldPosition.z, spacing, thicknessValue,
+                           worldPixelWidth, coordinatePixelWidths.z));
     return vec3(
             max(axisCoverages.y, axisCoverages.z),
             max(axisCoverages.x, axisCoverages.z),
@@ -87,11 +106,15 @@ vec3 surfaceGridPlaneSlotCoverages(
         highp vec3 worldPosition,
         float spacing,
         float thicknessValue,
-        float worldPixelWidth) {
+        float worldPixelWidth,
+        vec3 coordinatePixelWidths) {
     vec3 axisCoverages = vec3(
-            surfaceGridLineSlotCoverage(worldPosition.x, spacing, thicknessValue, worldPixelWidth),
-            surfaceGridLineSlotCoverage(worldPosition.y, spacing, thicknessValue, worldPixelWidth),
-            surfaceGridLineSlotCoverage(worldPosition.z, spacing, thicknessValue, worldPixelWidth));
+            surfaceGridLineSlotCoverage(worldPosition.x, spacing, thicknessValue,
+                                       worldPixelWidth, coordinatePixelWidths.x),
+            surfaceGridLineSlotCoverage(worldPosition.y, spacing, thicknessValue,
+                                       worldPixelWidth, coordinatePixelWidths.y),
+            surfaceGridLineSlotCoverage(worldPosition.z, spacing, thicknessValue,
+                                       worldPixelWidth, coordinatePixelWidths.z));
     return vec3(
             max(axisCoverages.y, axisCoverages.z),
             max(axisCoverages.x, axisCoverages.z),
@@ -109,28 +132,38 @@ vec4 surfaceGridOverlay() {
     float worldPixelWidth = max(
             length(dFdx(rasterWorldPosition)),
             length(dFdy(rasterWorldPosition)));
+    // Camera-relative derivatives retain small surface footprints when the
+    // world position includes a distant uniform translation.
+    highp mat3 userWorldFromWorld = mat3(getUserWorldFromWorldMatrix());
+    highp vec3 userWorldDx = userWorldFromWorld * dFdx(rasterWorldPosition);
+    highp vec3 userWorldDy = userWorldFromWorld * dFdy(rasterWorldPosition);
+    vec3 coordinatePixelWidths = abs(userWorldDx) + abs(userWorldDy);
     float baseSpacing = max(materialParams.surfaceGridSize, 0.0001);
     float majorSpacing = max(materialParams.surfaceGridMajorSize, baseSpacing);
     vec4 faceProjection = variable_surfaceGridProjection;
+    // Coarse face normals are authored in user world by their CPU owner;
+    // ordinary normals include Filament's internal environment rotation.
+    vec3 faceNormal = materialParams.coarseGeometryEnabled > 0.5
+            ? faceProjection.xyz : userWorldFromWorld * faceProjection.xyz;
     vec3 projectionWeights = faceProjection.w > 0.5
-            ? surfaceGridFaceProjectionWeights(faceProjection.xyz)
+            ? surfaceGridFaceProjectionWeights(faceNormal)
             : surfaceGridProjectionWeights(
-                    getWorldGeometricNormalVector());
+                    userWorldFromWorld * getWorldGeometricNormalVector());
     vec3 minorPlaneCoverages = surfaceGridPlaneLineCoverages(
             worldPosition, baseSpacing,
             materialParams.surfaceGridMinorLineThickness,
-            worldPixelWidth);
+            worldPixelWidth, coordinatePixelWidths);
     vec3 majorPlaneCoverages = surfaceGridPlaneLineCoverages(
             worldPosition, majorSpacing,
             materialParams.surfaceGridMajorLineThickness,
-            worldPixelWidth);
+            worldPixelWidth, coordinatePixelWidths);
 
     float majorSlotThickness = max(
             materialParams.surfaceGridMinorLineThickness,
             materialParams.surfaceGridMajorLineThickness);
     vec3 majorSlotCoverages = surfaceGridPlaneSlotCoverages(
             worldPosition, majorSpacing, majorSlotThickness,
-            worldPixelWidth);
+            worldPixelWidth, coordinatePixelWidths);
     vec3 majorSlotMask = step(vec3(0.000001), majorSlotCoverages);
     float minorLine = dot(
             minorPlaneCoverages * (vec3(1.0) - majorSlotMask),

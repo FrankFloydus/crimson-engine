@@ -33,15 +33,21 @@ public:
   /// Publish only after a successful start, while the captured scene is current.
   void publish() const {
     if (current()) {
-      QuaderToolsApi(session_).record_active_settings_origin(pane_);
+      QuaderToolsApi tools(session_);
+      tools.synchronize_pane_tool_after_execution(pane_);
+      tools.record_active_settings_origin(pane_, true);
     }
   }
 
-  /// Records the accepted pane choice only while its captured scene is current.
+  /// Projects the accepted tool to every pane while its captured scene is current.
   bool record_selected_tool(ViewportToolId tool) const {
-    return current() &&
-        QuaderApiSessionInternalAccess::scene_session(session_)
-            .viewport_workspace().record_selected_tool(pane_, tool);
+    if (!current()) {
+      return false;
+    }
+    auto &workspace = QuaderApiSessionInternalAccess::scene_session(session_)
+                          .viewport_workspace();
+    const bool pane_changed = workspace.record_selected_tool(pane_, tool);
+    return workspace.record_shared_selected_tool(tool) || pane_changed;
   }
 
 private:

@@ -17,6 +17,7 @@
 #include "editor/render/standard_material_render_snapshot_adapter.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/tools/extrude_tool_service.hpp"
+#include "editor/tools/extrude_handle_layout.hpp"
 #include "editor/viewport/viewport_tool_overlay_projection.hpp"
 #include "render/filament_material_library.hpp"
 #include "render/overlay/selected_mesh_outline_mask_cache.hpp"
@@ -90,6 +91,24 @@ public:
   ViewportOverlayFrame frame;
 };
 
+/** Counts production tool-frame construction behind the retained pane gate. */
+class SelectionRuntimeToolFrame final
+    : public ViewportOverlayDynamicToolFrameProvider {
+public:
+  SelectionRuntimeToolFrame(const ViewportToolOverlaySource &source,
+                            std::uint64_t &builds)
+      : source_(source), builds_(builds) {}
+
+  ViewportOverlayFrame build_dynamic_tool_overlay_frame() const override {
+    ++builds_;
+    return source_.build_dynamic_tool_overlay_frame();
+  }
+
+private:
+  const ViewportToolOverlaySource &source_;
+  std::uint64_t &builds_;
+};
+
 /** Runs the production scene and overlay passes on a readable Vulkan surface. */
 class SelectionOverlayRuntimeHarness final
     : public ViewportOverlaySelectionFrameProvider {
@@ -103,6 +122,9 @@ public:
     if (engine_ == nullptr) return;
     (void)engine_->flushAndWait(5'000'000'000ULL);
     engine_->pumpMessageQueues();
+    for (auto &pane : sibling_views_) {
+      if (pane) pane->shutdown();
+    }
     view_.shutdown();
     mesh_outline_masks_.shutdown();
     point_audit_cache_.shutdown();
@@ -633,6 +655,107 @@ public:
   ExtrudeToolService &extrusion() { return session_.extrude(); }
   std::size_t undo_count() const { return session_.history().undo_count(); }
 
+  void initialize_extrusion_panes() {
+    // Identical cameras expose any accidental active-pane styling difference.
+    // The modest oblique angle keeps the complete disk on the 200% surface.
+    camera_.set_view_direction({0.0f, 0.5f, -1.0f});
+    view_.update_camera(camera_);
+    for (std::size_t pane = 1u; pane <= sibling_views_.size(); ++pane) {
+      auto &view = sibling_views_[pane - 1u];
+      view = std::make_unique<ViewportRenderer>();
+      view->initialize(*engine_, *scene_, registry_, materials_.ground_grid(),
+          materials_.overlay_stencil_reset(),
+          viewport_grid_layer_mask(static_cast<std::uint8_t>(pane)), surface_);
+      sibling_cameras_[pane - 1u] = camera_;
+      view->resize(kWidth, kHeight);
+      view->update_camera(sibling_cameras_[pane - 1u]);
+      view->set_overlay_visible(true);
+      view->set_scene_layer_mask(kViewportRenderedSceneLayerMask);
+      view->set_shadowing_enabled(false);
+      view->set_material_debug_mode(ViewportMaterialDebugMode::Albedo);
+      SceneSettings settings;
+      settings.environment.enabled = false;
+      settings.environment.show_background = false;
+      settings.environment.clear_color = {};
+      settings.post_process.anti_aliasing = false;
+      settings.post_process.dithering = false;
+      settings.post_process.ambient_occlusion = false;
+      settings.post_process.bloom = false;
+      settings.post_process.tone_mapping = SceneToneMapping::Linear;
+      view->apply_scene_settings(settings, true, ViewportSettings::defaults());
+      view->update_ground_grid(sibling_cameras_[pane - 1u], 1.0f,
+                              ViewportSettings::defaults(), false);
+    }
+  }
+
+  bool present_extrusion_pane(std::size_t pane, bool interaction_pane,
+                             bool handle_visible, float scale) {
+    capture_pane_ = pane;
+    auto &camera = extrusion_pane_camera(pane);
+    auto &view = extrusion_pane_view(pane);
+    auto &editor = array_editor();
+    if (!QuaderRenderApiRuntimeAccess::sync_scene(editor.render(), bridge_).ok() ||
+        !QuaderRenderApiRuntimeAccess::sync_tool_previews(editor.render(), bridge_).ok()) {
+      return false;
+    }
+    const auto overlay_camera = ViewportCameraAdapter::overlay_camera(
+        camera, {static_cast<float>(view.width()),
+                 static_cast<float>(view.height())});
+    const auto &handle = session_.extrude().handle_state();
+    const ViewportToolOverlaySource source({
+        .source_identity = reinterpret_cast<std::uintptr_t>(&session_.extrude()),
+        .raster_scale = scale,
+        .overlay_camera = &overlay_camera,
+        .viewport_camera = &camera,
+        .extrusion_handle = handle_visible ? &handle : nullptr,
+        .interaction_pane = interaction_pane,
+        .gizmos_visible = true,
+        .overlays_visible = true});
+    const SelectionRuntimeToolFrame provider(source, tool_frame_builds_);
+    const auto &modeling = session_.modeling();
+    last_submission_ = bridge_.submit_viewport_overlay(
+        {.viewport_index = pane,
+         .layer_mask = viewport_grid_layer_mask(static_cast<std::uint8_t>(pane)),
+         .raster_scale = scale,
+         .camera = overlay_camera,
+         .selection_source = {
+             .source_identity = reinterpret_cast<std::uintptr_t>(&modeling),
+             .content_revision = modeling.content_revision(),
+             .selection_revision = modeling.selection_revision(),
+             .scene_revision = session_.scene().revision(),
+             .asset_revision = session_.assets().revision(),
+             .overlay_signature = modeling.selection_overlay_signature(),
+             .selection_context = ViewportOverlaySelectionContext::Face},
+         .selection_frame_provider = this,
+         .dynamic_tool_source = source.source_stamp(),
+         .dynamic_tool_frame_provider = &provider,
+         .scene_selection_mode = RenderOverlaySelectionMode::Component,
+         .style_selection_context = ViewportOverlaySelectionContext::Face,
+         .overlays_visible = true,
+         .selection_dimensions_visible = false}, ViewportSettings::defaults());
+    return true;
+  }
+
+  std::uint64_t tool_frame_builds() const { return tool_frame_builds_; }
+
+  std::optional<QVec2> extrusion_handle_pixel(std::size_t pane, float scale) {
+    const auto layout = build_extrude_handle_layout(
+        extrusion_pane_camera(pane), session_.extrude().handle_state(), scale);
+    if (!layout.valid) return std::nullopt;
+    auto pixel = layout.button_center_screen;
+    pixel.y = static_cast<float>(extrusion_pane_view(pane).height() - 1u) - pixel.y;
+    return pixel;
+  }
+
+  void resize_extrusion_pane(std::size_t pane, std::uint32_t width,
+                             std::uint32_t height) {
+    auto &camera = extrusion_pane_camera(pane);
+    auto &view = extrusion_pane_view(pane);
+    camera.set_viewport_size(width, height);
+    view.resize(width, height);
+    view.update_camera(camera);
+  }
+
   bool create_edge_loop_sample() {
     QuaderEditorApi editor(
         QuaderApiSessionInternalAccess::from_scene_session(session_));
@@ -814,7 +937,8 @@ public:
       (void)quader_poly::add_face(document, vertices);
     };
     // Back-facing source surfaces leave both overlays visible at the shared
-    // pixels. Face 3 keeps faces 1 and 2 non-active without entering the image.
+    // pixels. Offscreen face 3 controls semantic selection count and primary
+    // identity without adding coverage to the fill probe.
     quad(-1.0f, 0.3f, -0.65f, 0.65f, 0.0f, false);
     quad(-0.3f, 1.0f, -0.65f, 0.65f, 0.0f, false);
     quad(10.0f, 11.0f, 0.0f, 0.5f, 0.0f, false);
@@ -1294,14 +1418,18 @@ public:
   }
 
   bool present_active_selection_sample(bool groups, std::size_t active, float scale,
-                                       bool selected = true) {
+                                       bool selected = true,
+                                       const ViewportSettings *appearance = nullptr,
+                                       bool singleton = false) {
     QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session_));
     const auto selection = selected
-        ? editor.selection().select_objects(active_entities_, active_entities_[active])
+        ? (singleton
+               ? editor.selection().select_objects({active_entities_[active]}, active_entities_[active])
+               : editor.selection().select_objects(active_entities_, active_entities_[active]))
         : editor.selection().clear();
     if (!selection.ok() ||
         !QuaderRenderApiRuntimeAccess::sync_scene(editor.render(), bridge_).ok()) return false;
-    const auto settings = ViewportSettings::defaults();
+    const auto settings = appearance != nullptr ? *appearance : ViewportSettings::defaults();
     const auto style = ViewportOverlayStyleResolver::persistent_style_snapshot(settings, scale);
     // Use the viewport's runtime adapters so scene and overlay publications share
     // the live editor binding and unchanged snapshots remain retained.
@@ -1343,8 +1471,9 @@ public:
 
   bool present_mesh_outline_snapshot(const RenderOverlaySelectedObjectSnapshot &snapshot,
                                      float scale = 1.0f, bool gpu = true,
-                                     bool visible = true) {
-    const auto settings = ViewportSettings::defaults();
+                                     bool visible = true,
+                                     const ViewportSettings *appearance = nullptr) {
+    const auto settings = appearance != nullptr ? *appearance : ViewportSettings::defaults();
     const auto style = ViewportOverlayStyleResolver::persistent_style_snapshot(settings, scale);
     if (!view_.update_selected_mesh_outlines(&snapshot, nullptr, style, gpu && visible)) return false;
     last_submission_ = bridge_.submit_viewport_overlay(
@@ -1423,13 +1552,14 @@ public:
   }
 
   QImage capture(bool warm_up = true) {
+    auto &view = extrusion_pane_view(capture_pane_);
     const auto destroy_target = [this](filament::RenderTarget *target) {
       if (target != nullptr) engine_->destroy(target);
     };
     std::unique_ptr<filament::RenderTarget, decltype(destroy_target)>
         texture_read_target(nullptr, destroy_target);
     if (surface_ == ViewportRenderSurface::Texture) {
-      auto *texture = registry_.texture(view_.overlay_texture_handle());
+      auto *texture = registry_.texture(view.overlay_texture_handle());
       if (texture == nullptr) return {};
       texture_read_target.reset(filament::RenderTarget::Builder()
                                     .texture(filament::RenderTarget::AttachmentPoint::COLOR, texture)
@@ -1438,14 +1568,14 @@ public:
     }
     for (int frame = 0; frame < (warm_up ? 5 : 0); ++frame) {
       if (!begin_frame()) return {};
-      view_.render(*renderer_);
+      view.render(*renderer_);
       renderer_->endFrame();
     }
     if (!begin_frame()) return {};
-    view_.render(*renderer_);
+    view.render(*renderer_);
     auto readback = std::make_shared<Readback>();
-    const auto width = view_.width();
-    const auto height = view_.height();
+    const auto width = view.width();
+    const auto height = view.height();
     readback->bytes.resize(static_cast<std::size_t>(width) * height * 4u);
     auto *owner = new std::shared_ptr<Readback>(readback);
     filament::backend::PixelBufferDescriptor descriptor(
@@ -1475,6 +1605,14 @@ public:
   }
 
 private:
+  ViewportRenderer &extrusion_pane_view(std::size_t pane) {
+    return pane == 0u ? view_ : *sibling_views_[pane - 1u];
+  }
+
+  ViewportCameraController &extrusion_pane_camera(std::size_t pane) {
+    return pane == 0u ? camera_ : sibling_cameras_[pane - 1u];
+  }
+
   void initialize_point_audit() {
     if (point_audit_factory_.initialized()) return;
     point_audit_factory_.initialize(
@@ -1573,6 +1711,10 @@ private:
   SelectedMeshOutlineMaskCache mesh_outline_masks_;
   ViewportRenderer view_;
   ViewportCameraController camera_;
+  std::array<std::unique_ptr<ViewportRenderer>, 3> sibling_views_;
+  std::array<ViewportCameraController, 3> sibling_cameras_;
+  std::size_t capture_pane_ = 0u;
+  std::uint64_t tool_frame_builds_ = 0u;
   SelectionRuntimeFrame selected_vertex_frame_;
   SelectionRuntimeFrame overlay_audit_frame_;
   ViewportOverlaySubmissionResult last_submission_;
@@ -1721,9 +1863,9 @@ TEST(SelectionOverlayRuntimeTests,
         EXPECT_LT(hidden, visible) << "Occluded silhouettes use reduced alpha.";
         const QColor ordinary_boundary = image.pixelColor(70, 180);
         const QColor active_boundary = image.pixelColor(400, 180);
-        EXPECT_GT(active_boundary.red() + active_boundary.green() + active_boundary.blue(),
-                  ordinary_boundary.red() + ordinary_boundary.green() + ordinary_boundary.blue())
-            << "The active selected boundary remains brighter over the same backdrop.";
+        EXPECT_GT(active_boundary.blue(), active_boundary.green())
+            << "The active selected boundary uses pink over the same backdrop.";
+        EXPECT_GT(ordinary_boundary.green(), ordinary_boundary.blue());
         for (const int offset : {-1, 0, 1}) {
           const QColor ordinary = image.pixelColor(70 + offset, 180);
           const QColor ordinary_over_active = image.pixelColor(400 + offset, 360);
@@ -3772,6 +3914,20 @@ int yellow_pixels(const QImage &image, QVec2 center) {
   return count;
 }
 
+int pink_pixels(const QImage &image, QVec2 center) {
+  int count = 0;
+  for (int y = int(center.y) - 3; y <= int(center.y) + 3; ++y) {
+    for (int x = int(center.x) - 3; x <= int(center.x) + 3; ++x) {
+      if (!image.rect().contains(x, y)) continue;
+      const QColor pixel = image.pixelColor(x, y);
+      if (pixel.red() > 130 && pixel.green() > 30 &&
+          pixel.blue() > pixel.green() + 20 &&
+          pixel.red() > pixel.blue() + 20) ++count;
+    }
+  }
+  return count;
+}
+
 TEST(SelectionOverlayRuntimeTests,
      VulkanComponentPositionStreamsMoveRetainedPointsEdgesFacesAndDepth) {
   if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
@@ -3831,8 +3987,12 @@ TEST(SelectionOverlayRuntimeTests,
       EXPECT_TRUE(image.save(path));
       return image;
     };
+    const auto selected_pixels = [&](const QImage &image, QVec2 pixel) {
+      return context == ViewportOverlaySelectionContext::Face
+          ? yellow_pixels(image, pixel) : pink_pixels(image, pixel);
+    };
     const auto expect_current = [&](const QImage &image, float delta) {
-      EXPECT_GE(yellow_pixels(image, selected_pixel(delta)), 3)
+      EXPECT_GE(selected_pixels(image, selected_pixel(delta)), 3)
           << "The selected point or edge must follow the current packed positions.";
       EXPECT_EQ(cyan_pixels(image, rear_pixel(delta)), 0)
           << "The moved source surface must occlude the stationary rear wire.";
@@ -3878,7 +4038,7 @@ TEST(SelectionOverlayRuntimeTests,
       previous_uploads = overlay_stats.uploads;
       const QImage image = capture(delta < 1.0f ? "first" : "second");
       ASSERT_NO_FATAL_FAILURE(expect_current(image, delta));
-      EXPECT_EQ(yellow_pixels(image, selected_pixel(previous_delta)), 0);
+      EXPECT_EQ(selected_pixels(image, selected_pixel(previous_delta)), 0);
       EXPECT_GE(cyan_pixels(image, rear_pixel(previous_delta)), 3)
           << "The old source surface must no longer occlude the rear wire.";
       if (context == ViewportOverlaySelectionContext::Face) {
@@ -3906,7 +4066,7 @@ TEST(SelectionOverlayRuntimeTests,
     EXPECT_GT(harness.selection_frame_builds(), retained_builds);
     const QImage restored = capture("cancel");
     ASSERT_NO_FATAL_FAILURE(expect_current(restored, 0.0f));
-    EXPECT_EQ(yellow_pixels(restored, selected_pixel(previous_delta)), 0);
+    EXPECT_EQ(selected_pixels(restored, selected_pixel(previous_delta)), 0);
     EXPECT_EQ(harness.component_overlay_stats().shared_position_proxy_count, 0u);
     // A second gesture must rebind retained indices after cancel restored CPU positions.
     ASSERT_TRUE(modeling.begin_transform_preview(false).ok);
@@ -3950,7 +4110,7 @@ TEST(SelectionOverlayRuntimeTests,
     ASSERT_TRUE(modeling.commit_transform_preview().ok);
     ASSERT_TRUE(present());
     ASSERT_NO_FATAL_FAILURE(expect_current(capture("unsubmitted_commit"), 1.8f));
-    EXPECT_EQ(yellow_pixels(harness.capture(), selected_pixel(1.2f)), 0);
+    EXPECT_EQ(selected_pixels(harness.capture(), selected_pixel(1.2f)), 0);
     ASSERT_TRUE(modeling.begin_transform_preview(false).ok);
     ASSERT_TRUE(modeling.update_transform_translate_preview({0.3f, 0.0f, 0.0f}).ok);
     ASSERT_TRUE(present());
@@ -4546,15 +4706,16 @@ TEST(SelectionOverlayRuntimeTests,
     bool hover;
     std::optional<std::size_t> single_fill_reference;
   };
-  const std::array<FaceFillCase, 8> cases{{
+  const std::array<FaceFillCase, 9> cases{{
       {"clear", {3}, 3, false, std::nullopt},
       {"ordinary_single", {1, 3}, 3, false, std::nullopt},
       {"ordinary_overlap", {1, 2, 3}, 3, false, 1u},
-      {"active_single", {1}, 1, false, std::nullopt},
+      {"active_single", {1, 3}, 1, false, std::nullopt},
       {"active_overlap", {1, 2}, 1, false, 3u},
+      {"singleton", {1}, 1, false, std::nullopt},
       {"hover_single", {1, 3}, 3, true, std::nullopt},
-      {"hover_overlap", {1, 2, 3}, 3, true, 5u},
-      {"hover_active_overlap", {1, 2}, 1, true, 5u},
+      {"hover_overlap", {1, 2, 3}, 3, true, 6u},
+      {"hover_active_overlap", {1, 2}, 1, true, 6u},
   }};
   constexpr std::array<std::pair<float, const char *>, 3> kScales{{
       {1.0f, "100"}, {2.0f, "200"}, {1.0f, "scale_down_100"}}};
@@ -4579,7 +4740,7 @@ TEST(SelectionOverlayRuntimeTests,
         ASSERT_TRUE(settings.set_color(ViewportColorSettingId::SelectionFace, selection));
         ASSERT_TRUE(settings.set_color(ViewportColorSettingId::HoverFace, hover));
       }
-      std::array<QImage, 8> at_100_percent;
+      std::array<QImage, 9> at_100_percent;
       for (const auto &[scale, scale_label] : kScales) {
         SCOPED_TRACE(scale_label);
         if (texture_surface) {
@@ -4589,7 +4750,7 @@ TEST(SelectionOverlayRuntimeTests,
         }
         const auto tint_pixel = harness.overlapping_face_fill_probe_pixel(false);
         const auto occluded_pixel = harness.overlapping_face_fill_probe_pixel(true);
-        std::array<QImage, 8> samples;
+        std::array<QImage, 9> samples;
         for (std::size_t index = 0; index < cases.size(); ++index) {
           const auto &sample = cases[index];
           SCOPED_TRACE(sample.label);
@@ -4646,11 +4807,15 @@ TEST(SelectionOverlayRuntimeTests,
             << "The ordinary-selection reference must contain a visible fill.";
         EXPECT_NE(patch(samples[3], tint_pixel), patch(samples[1], tint_pixel))
             << "Active selection must retain its distinct fill color.";
-        EXPECT_NE(patch(samples[5], tint_pixel), patch(samples[1], tint_pixel))
+        EXPECT_EQ(patch(samples[5], tint_pixel), patch(samples[1], tint_pixel))
+            << "A singleton face uses the ordinary authored-alpha selection fill.";
+        EXPECT_NE(patch(samples[5], tint_pixel), patch(samples[3], tint_pixel))
+            << "A second semantic selection enables the distinct primary fill.";
+        EXPECT_NE(patch(samples[6], tint_pixel), patch(samples[1], tint_pixel))
             << "The hover reference must retain its own fill color and alpha.";
         if (!custom_alpha && scale == 1.0f && default_active_overlap.isNull()) {
           default_active_overlap = samples[4];
-          default_hover_overlap = samples[7];
+          default_hover_overlap = samples[8];
         }
         if (default_ordinary_patch.isNull()) {
           default_ordinary_patch = patch(samples[1], tint_pixel);
@@ -4907,6 +5072,103 @@ TEST(SelectionOverlayRuntimeTests,
 }
 
 TEST(SelectionOverlayRuntimeTests,
+     VulkanSharedExtrusionHandleUsesEveryPaneLayerAndRetainsPreviewUpdates) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-shared-extrusion-pane-test";
+  char *argv[] = {application_name, nullptr};
+  QCoreApplication application(argc, argv);
+  QString directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (directory.isEmpty()) {
+    directory = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(
+        QStringLiteral("../selection_features_visual"));
+  }
+  ASSERT_TRUE(QDir().mkpath(directory));
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0f, false));
+  ASSERT_TRUE(harness.create_extrusion_sample(modeling::FaceExtrudeMode::Region));
+  harness.initialize_extrusion_panes();
+  const auto initial_undo = harness.undo_count();
+
+  for (const float scale : {1.0f, 2.0f}) {
+    SCOPED_TRACE(scale);
+    std::array<QImage, 4> initial_images;
+    const auto capture_panes = [&](const char *phase, bool remember_initial) {
+      QImage first;
+      for (std::size_t pane = 0u; pane < initial_images.size(); ++pane) {
+        SCOPED_TRACE(pane);
+        // Only pane zero owns input. All four layer slots borrow the same
+        // operation, including its accepted preview position.
+        ASSERT_TRUE(harness.present_extrusion_pane(pane, pane == 0u, true, scale));
+        const auto pixel = harness.extrusion_handle_pixel(pane, scale);
+        ASSERT_TRUE(pixel.has_value());
+        const QImage image = harness.capture(false);
+        ASSERT_FALSE(image.isNull());
+        ASSERT_GE(pixel->x, 4.0f);
+        ASSERT_LT(pixel->x, image.width() - 4.0f);
+        ASSERT_GE(pixel->y, 4.0f);
+        ASSERT_LT(pixel->y, image.height() - 4.0f);
+        EXPECT_GE(yellow_pixels(image, *pixel), 35)
+            << "The filled Extrude disk must reach every pane's GPU surface.";
+        if (pane == 0u) first = image;
+        else EXPECT_EQ(image, first) << "Passive panes must have the same tool presentation.";
+        if (remember_initial) initial_images[pane] = image;
+        const auto builds = harness.tool_frame_builds();
+        const auto selection_builds = harness.selection_frame_builds();
+        ASSERT_TRUE(harness.present_extrusion_pane(pane, pane == 0u, true, scale));
+        EXPECT_EQ(harness.tool_frame_builds(), builds);
+        EXPECT_EQ(harness.selection_frame_builds(), selection_builds);
+        EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+        EXPECT_FALSE(harness.last_submission().persistent_submitted);
+        EXPECT_EQ(harness.capture(false), image);
+        const QString path = QDir(directory).filePath(
+            QStringLiteral("shared_extrude_%1_pane_%2_%3.png")
+                .arg(static_cast<int>(scale * 100.0f)).arg(pane)
+                .arg(QString::fromLatin1(phase)));
+        EXPECT_TRUE(image.save(path));
+        std::cout << "Shared extrusion GPU png=" << path.toStdString() << '\n';
+      }
+    };
+    ASSERT_NO_FATAL_FAILURE(capture_panes("initial", true));
+    ASSERT_TRUE(harness.extrusion().begin_drag().ok);
+    ASSERT_TRUE(harness.extrusion().update_drag_world_amount(0.35).ok);
+    ASSERT_NO_FATAL_FAILURE(capture_panes("preview_first", false));
+    ASSERT_TRUE(harness.extrusion().update_drag_world_amount(0.9).ok);
+    ASSERT_NO_FATAL_FAILURE(capture_panes("preview_moved", false));
+    ASSERT_TRUE(harness.extrusion().update_drag_world_amount(0.0).ok);
+    ASSERT_NO_FATAL_FAILURE(capture_panes("zero", false));
+    ASSERT_TRUE(harness.extrusion().cancel_drag().ok);
+    ASSERT_NO_FATAL_FAILURE(capture_panes("canceled", false));
+    EXPECT_EQ(harness.undo_count(), initial_undo);
+
+    // A dock-sized resize invalidates this pane's retained projection even
+    // when the operation's revision does not change.
+    constexpr std::size_t kResizedPane = 2u;
+    harness.resize_extrusion_pane(kResizedPane, 520u, 430u);
+    ASSERT_TRUE(harness.present_extrusion_pane(kResizedPane, false, false, scale));
+    const QImage hidden = harness.capture(false);
+    ASSERT_FALSE(hidden.isNull());
+    ASSERT_TRUE(harness.present_extrusion_pane(kResizedPane, false, true, scale));
+    const auto resized_pixel = harness.extrusion_handle_pixel(kResizedPane, scale);
+    ASSERT_TRUE(resized_pixel.has_value());
+    const QImage resized = harness.capture(false);
+    ASSERT_FALSE(resized.isNull());
+    EXPECT_NE(resized, hidden);
+    EXPECT_GE(yellow_pixels(resized, *resized_pixel), 35);
+    ASSERT_TRUE(harness.present_extrusion_pane(kResizedPane, false, false, scale));
+    EXPECT_EQ(harness.capture(false), hidden) << "Hiding retires the entire retained handle.";
+    harness.resize_extrusion_pane(kResizedPane,
+        SelectionOverlayRuntimeHarness::kWidth, SelectionOverlayRuntimeHarness::kHeight);
+    ASSERT_TRUE(harness.present_extrusion_pane(kResizedPane, false, true, scale));
+    EXPECT_EQ(harness.capture(false), initial_images[kResizedPane]);
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests,
      VulkanSelectionDimensionsDrawBoxOrRectangleAndToggleWithoutStaleLines) {
   if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
       QStringLiteral("1")) {
@@ -5000,7 +5262,92 @@ TEST(SelectionOverlayRuntimeTests,
   }
 }
 
-TEST(SelectionOverlayRuntimeTests, VulkanActiveObjectsGroupsAndInstancesSwitchBrightnessAt100And200Percent) {
+TEST(SelectionOverlayRuntimeTests,
+     VulkanActiveOutlinePreferencesChangeOnlyPrimaryPixelsAndRetainGeometry) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-active-outline-preference-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  const auto changed_pixels = [](const QImage &image, const QImage &base, QRect region) {
+    int count = 0;
+    for (int y = region.top(); y <= region.bottom(); ++y) {
+      for (int x = region.left(); x <= region.right(); ++x) {
+        if (image.pixelColor(x, y) != base.pixelColor(x, y)) ++count;
+      }
+    }
+    return count;
+  };
+  const QString output = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (!output.isEmpty()) ASSERT_TRUE(QDir().mkpath(output));
+  for (const auto surface : {ViewportRenderSurface::Swapchain, ViewportRenderSurface::Texture}) {
+    SelectionOverlayRuntimeHarness harness;
+    ASSERT_TRUE(harness.initialize(-0.02f, true, surface));
+    ASSERT_TRUE(harness.prepare_overlay_audit_camera(5.0f, ViewportProjection::Orthographic));
+    RenderOverlaySelectedObjectSnapshot snapshot;
+    snapshot.selection_revision = 1u;
+    snapshot.selected_mesh_outline_only = true;
+    ASSERT_TRUE(harness.present_mesh_outline_snapshot(snapshot));
+    const QImage background = harness.capture(false);
+    ASSERT_FALSE(background.isNull());
+    std::array<std::array<MeshVertex, 4u>, 2u> vertices;
+    const std::array<std::uint32_t, 6u> indices{0u, 1u, 2u, 0u, 2u, 3u};
+    for (std::size_t index = 0u; index < vertices.size(); ++index) {
+      const float left = index == 0u ? 70.0f : 400.0f;
+      const std::array<QVec2, 4u> corners{{{left, 120.0f}, {left + 100.0f, 120.0f},
+                                         {left + 100.0f, 240.0f}, {left, 240.0f}}};
+      for (std::size_t corner = 0u; corner < corners.size(); ++corner) {
+        vertices[index][corner].position = harness.overlay_audit_world_point(corners[corner], 0.1f);
+      }
+      snapshot.meshes.push_back({.entity = static_cast<EntityId>(index + 1u),
+          .mesh_id = static_cast<AssetId>(index + 1u), .mesh_revision = 1u,
+          .selected = true, .active_selected = index == 1u,
+          .vertices = vertices[index], .indices = indices});
+    }
+    ++snapshot.selection_revision;
+    for (const float scale : {1.0f, 2.0f, 1.0f}) {
+      ViewportSettings narrow = ViewportSettings::defaults();
+      ASSERT_TRUE(narrow.set_float_value(ViewportFloatSettingId::ActiveSelectionLineSize, 1.0f));
+      ASSERT_TRUE(harness.present_mesh_outline_snapshot(snapshot, scale, true, true, &narrow));
+      const QImage narrow_image = harness.capture(false);
+      const auto work = harness.mesh_outline_work();
+      ViewportSettings wide = narrow;
+      ASSERT_TRUE(wide.set_float_value(ViewportFloatSettingId::ActiveSelectionLineSize, 7.0f));
+      ASSERT_TRUE(harness.present_mesh_outline_snapshot(snapshot, scale, true, true, &wide));
+      const QImage wide_image = harness.capture(false);
+      const QRect ordinary_region(58, 155, 25, 50);
+      const QRect active_region(382, 155, 37, 50);
+      EXPECT_EQ(narrow_image.copy(ordinary_region), wide_image.copy(ordinary_region));
+      EXPECT_GT(changed_pixels(wide_image, background, active_region),
+                changed_pixels(narrow_image, background, active_region));
+      EXPECT_EQ(harness.mesh_outline_work().geometry_builds, work.geometry_builds);
+      EXPECT_EQ(harness.mesh_outline_work().uploaded_vertices, work.uploaded_vertices);
+      ASSERT_TRUE(wide.set_color(ViewportColorSettingId::ActiveSelection, {0.0f, 1.0f, 1.0f, 1.0f}));
+      ASSERT_TRUE(harness.present_mesh_outline_snapshot(snapshot, scale, true, true, &wide));
+      const QImage cyan_image = harness.capture(false);
+      EXPECT_EQ(wide_image.copy(ordinary_region), cyan_image.copy(ordinary_region));
+      EXPECT_NE(wide_image.copy(active_region), cyan_image.copy(active_region));
+      EXPECT_GT(cyan_image.pixelColor(400, 180).green(), cyan_image.pixelColor(400, 180).red());
+      EXPECT_EQ(harness.mesh_outline_work().geometry_builds, work.geometry_builds);
+      EXPECT_EQ(harness.mesh_outline_work().uploaded_vertices, work.uploaded_vertices);
+      ASSERT_TRUE(harness.present_mesh_outline_snapshot(snapshot, scale, true, true, &wide));
+      EXPECT_FALSE(harness.last_submission().persistent_submitted);
+      EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+      EXPECT_EQ(harness.capture(false), cyan_image);
+      if (!output.isEmpty()) {
+        ASSERT_TRUE(wide_image.save(QDir(output).filePath(QStringLiteral("active-width-%1-%2.png")
+            .arg(static_cast<int>(surface)).arg(static_cast<int>(100.0f * scale)))));
+        ASSERT_TRUE(cyan_image.save(QDir(output).filePath(QStringLiteral("active-custom-color-%1-%2.png")
+            .arg(static_cast<int>(surface)).arg(static_cast<int>(100.0f * scale)))));
+      }
+    }
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests, VulkanActiveObjectsGroupsAndInstancesSwitchPinkAt100And200Percent) {
   if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
     GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
   }
@@ -5033,6 +5380,17 @@ TEST(SelectionOverlayRuntimeTests, VulkanActiveObjectsGroupsAndInstancesSwitchBr
         ASSERT_FALSE(unselected.isNull());
         ASSERT_TRUE(unselected.save(QDir(directory).filePath(stem + QStringLiteral("-unselected.png"))));
       }
+      ASSERT_TRUE(harness.present_active_selection_sample(groups, 0u, scale, true, nullptr, true));
+      const QImage singleton = harness.capture();
+      ASSERT_FALSE(singleton.isNull());
+      ASSERT_TRUE(singleton.save(QDir(directory).filePath(stem + QStringLiteral("-singleton.png"))));
+      ViewportSettings singleton_custom = ViewportSettings::defaults();
+      ASSERT_TRUE(singleton_custom.set_color(ViewportColorSettingId::ActiveSelection,
+                                             {0.0f, 1.0f, 1.0f, 1.0f}));
+      ASSERT_TRUE(singleton_custom.set_float_value(ViewportFloatSettingId::ActiveSelectionLineSize, 7.0f));
+      ASSERT_TRUE(harness.present_active_selection_sample(groups, 0u, scale, true, &singleton_custom, true));
+      EXPECT_EQ(harness.capture(), singleton)
+          << "One selected object, group or occurrence keeps ordinary color and width.";
       ASSERT_TRUE(harness.present_active_selection_sample(groups, 0u, scale));
       const QImage left_active = harness.capture();
       ASSERT_FALSE(left_active.isNull());
@@ -5041,7 +5399,7 @@ TEST(SelectionOverlayRuntimeTests, VulkanActiveObjectsGroupsAndInstancesSwitchBr
       const QImage right_active = harness.capture();
       ASSERT_FALSE(right_active.isNull());
       ASSERT_TRUE(right_active.save(QDir(directory).filePath(stem + QStringLiteral("-right.png"))));
-      std::array<long long, 2> brightness_delta{};
+      std::array<long long, 2> pink_delta{};
       std::array<int, 2> changed{};
       for (int y = 0; y < left_active.height(); ++y) {
         for (int x = 0; x < left_active.width(); ++x) {
@@ -5049,43 +5407,88 @@ TEST(SelectionOverlayRuntimeTests, VulkanActiveObjectsGroupsAndInstancesSwitchBr
           const QColor after = right_active.pixelColor(x, y);
           const std::size_t side = x < left_active.width() / 2 ? 0u : 1u;
           if (before != after) ++changed[side];
-          brightness_delta[side] += after.red() + after.green() + after.blue() -
-                                    before.red() - before.green() - before.blue();
+          pink_delta[side] += after.blue() - after.green() -
+                              before.blue() + before.green();
         }
       }
       EXPECT_GT(changed[0], 8);
       EXPECT_GT(changed[1], 8);
-      EXPECT_LT(brightness_delta[0], 0) << "The previous active boundary must dim.";
-      EXPECT_GT(brightness_delta[1], 0) << "The new active boundary must brighten.";
+      EXPECT_LT(pink_delta[0], 0) << "The previous active boundary must lose its pink tint.";
+      EXPECT_GT(pink_delta[1], 0) << "The new active boundary must gain its pink tint.";
+      long long singleton_to_active_pink_delta = 0;
+      for (int y = 0; y < left_active.height(); ++y) {
+        for (int x = 0; x < left_active.width() / 2; ++x) {
+          const QColor before = singleton.pixelColor(x, y);
+          const QColor after = left_active.pixelColor(x, y);
+          singleton_to_active_pink_delta += after.blue() - after.green() -
+                                             before.blue() + before.green();
+        }
+      }
+      EXPECT_GT(singleton_to_active_pink_delta, 0)
+          << "Adding another semantic selection enables the primary pink appearance.";
       if (instances) {
         const auto pixels = harness.active_face_pixels();
-        const auto face_brightness = [](const QImage &image, QVec2 pixel) {
+        const auto face_tint = [](const QImage &image, QVec2 pixel) {
           int total = 0;
           for (int y = int(pixel.y) - 2; y <= int(pixel.y) + 2; ++y) {
             for (int x = int(pixel.x) - 2; x <= int(pixel.x) + 2; ++x) {
               const QColor color = image.pixelColor(x, y);
-              total += color.red() + color.green() + color.blue();
+              total += color.blue() - color.green();
             }
           }
           return total;
         };
         for (const auto pixel : pixels) {
-          EXPECT_NE(face_brightness(left_active, pixel), face_brightness(unselected, pixel))
+          EXPECT_NE(face_tint(left_active, pixel), face_tint(unselected, pixel))
               << "Selected instance faces must contain an actual fill away from their outlines.";
-          EXPECT_NE(face_brightness(right_active, pixel), face_brightness(unselected, pixel));
+          EXPECT_NE(face_tint(right_active, pixel), face_tint(unselected, pixel));
         }
-        EXPECT_GT(face_brightness(left_active, pixels[0]), face_brightness(right_active, pixels[0]))
-            << "The previous active instance face interior must dim.";
-        EXPECT_LT(face_brightness(left_active, pixels[1]), face_brightness(right_active, pixels[1]))
-            << "The new active instance face interior must brighten.";
+        EXPECT_GT(face_tint(left_active, pixels[0]), face_tint(right_active, pixels[0]))
+            << "The previous active instance face interior must lose its pink tint.";
+        EXPECT_LT(face_tint(left_active, pixels[1]), face_tint(right_active, pixels[1]))
+            << "The new active instance face interior must gain its pink tint.";
       }
       ASSERT_TRUE(harness.present_active_selection_sample(groups, 1u, scale));
       EXPECT_FALSE(harness.last_submission().persistent_submitted);
       EXPECT_FALSE(harness.last_submission().dynamic_submitted);
       EXPECT_EQ(harness.capture(), right_active);
+      ViewportSettings custom = ViewportSettings::defaults();
+      ASSERT_TRUE(custom.set_color(ViewportColorSettingId::ActiveSelection,
+                                  {0.0f, 1.0f, 1.0f, 1.0f}));
+      ASSERT_TRUE(custom.set_float_value(ViewportFloatSettingId::ActiveSelectionLineSize, 7.0f));
+      const auto retained_work = harness.mesh_outline_work();
+      const auto retained_renderables = harness.renderable_count();
+      ASSERT_TRUE(harness.present_active_selection_sample(groups, 1u, scale, true, &custom));
+      const QImage customized = harness.capture();
+      EXPECT_NE(customized, right_active);
+      EXPECT_EQ(harness.mesh_outline_work().geometry_builds, retained_work.geometry_builds);
+      EXPECT_EQ(harness.mesh_outline_work().uploaded_vertices, retained_work.uploaded_vertices);
+      EXPECT_EQ(harness.renderable_count(), retained_renderables);
+      if (instances) {
+        const auto pixels = harness.active_face_pixels();
+        const auto patch = [](const QImage &image, QVec2 pixel) {
+          return image.copy(QRect(int(pixel.x) - 2, int(pixel.y) - 2, 5, 5));
+        };
+        EXPECT_EQ(patch(customized, pixels[0]), patch(right_active, pixels[0]));
+        EXPECT_NE(patch(customized, pixels[1]), patch(right_active, pixels[1]));
+        ASSERT_TRUE(custom.set_color(ViewportColorSettingId::ActiveSelection,
+                                    {0.0f, 1.0f, 1.0f, 0.0f}));
+        ASSERT_TRUE(harness.present_active_selection_sample(groups, 1u, scale, true, &custom));
+        const QImage transparent = harness.capture();
+        EXPECT_EQ(patch(transparent, pixels[0]), patch(right_active, pixels[0]));
+        EXPECT_EQ(patch(transparent, pixels[1]), patch(unselected, pixels[1]));
+      }
+      ASSERT_TRUE(harness.present_active_selection_sample(groups, 1u, scale));
+      EXPECT_EQ(harness.capture(), right_active);
+      ASSERT_TRUE(harness.present_active_selection_sample(groups, 0u, scale, true, nullptr, true));
+      EXPECT_EQ(harness.capture(), singleton);
+      ASSERT_TRUE(harness.present_active_selection_sample(groups, 0u, scale, true, nullptr, true));
+      EXPECT_FALSE(harness.last_submission().persistent_submitted);
+      EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+      EXPECT_EQ(harness.capture(), singleton);
       std::cout << "Active selection GPU " << stem.toStdString() << " changed="
-                << changed[0] << ',' << changed[1] << " brightness="
-                << brightness_delta[0] << ',' << brightness_delta[1] << '\n';
+                << changed[0] << ',' << changed[1] << " pink_delta="
+                << pink_delta[0] << ',' << pink_delta[1] << '\n';
     }
   }
 }

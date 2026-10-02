@@ -909,56 +909,67 @@ TEST(LocalizationResourceTests,
   const std::vector<QuaderKeybindingCatalogEntry> entries =
       editor.commands().keybinding_catalog();
   const auto catalogs = load_resource_locale_catalogs();
-  /// Describes the expected keybinding labels for one resource locale.
+  const auto align_entry = std::find_if(
+      entries.begin(), entries.end(), [](const auto &candidate) {
+        return std::find(candidate.target_ids.begin(), candidate.target_ids.end(),
+                         quader_command::kToolsActivateAlign.string()) !=
+               candidate.target_ids.end();
+      });
+  ASSERT_NE(align_entry, entries.end());
+  EXPECT_EQ(align_entry->label, "Activate Align Tool");
+  EXPECT_EQ(align_entry->localization_key,
+            "keybindings.target.tools.activate.align.label");
+  for (const auto &arrangement : quader_mesh_arrangement_catalog()) {
+    EXPECT_TRUE(std::none_of(
+        entries.begin(), entries.end(), [&](const auto &candidate) {
+          return std::find(candidate.target_ids.begin(), candidate.target_ids.end(),
+                           arrangement.command_id.string()) !=
+                 candidate.target_ids.end();
+        })) << arrangement.command_id.string();
+  }
+  const auto first = editor.modeling().create_box(
+      {.min = {0.0F, 0.0F, 0.0F}, .max = {1.0F, 1.0F, 1.0F}});
+  const auto second = editor.modeling().create_box(
+      {.min = {3.0F, 3.0F, 3.0F}, .max = {4.0F, 4.0F, 4.0F}});
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  ASSERT_TRUE(editor.selection()
+                  .select_objects({first.value().entity, second.value().entity},
+                                  second.value().entity)
+                  .ok());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::Align).ok());
+  const auto target = editor.tools().active_settings();
+  ASSERT_TRUE(target.active);
+  ASSERT_EQ(target.tool_id, "align");
+  ASSERT_EQ(target.controls.size(), 5u);
+
+  /// Describes the visible Align activation and contextual action labels.
   struct LocaleExpectation {
     std::string_view locale;
-    std::array<std::string_view, 15> labels;
+    std::string_view tool_label;
+    std::array<std::string_view, 4> row_labels;
+    std::array<std::string_view, 3> alignment_labels;
   };
   const std::array<LocaleExpectation, 2> expectations{{
       {
           "en-US",
-          {
-              "Align X Minimum",
-              "Align X Center",
-              "Align X Maximum",
-              "Align Y Minimum",
-              "Align Y Center",
-              "Align Y Maximum",
-              "Align Z Minimum",
-              "Align Z Center",
-              "Align Z Maximum",
-              "Distribute Centers Along X",
-              "Distribute Centers Along Y",
-              "Distribute Centers Along Z",
-              "Distribute Gaps Along X",
-              "Distribute Gaps Along Y",
-              "Distribute Gaps Along Z",
-          },
+          "Activate Align Tool",
+          {"Align X", "Align Y", "Align Z", "Distribute"},
+          {"Min", "Center", "Max"},
       },
       {
           "it-IT",
-          {
-              "Allinea X al minimo",
-              "Allinea X al centro",
-              "Allinea X al massimo",
-              "Allinea Y al minimo",
-              "Allinea Y al centro",
-              "Allinea Y al massimo",
-              "Allinea Z al minimo",
-              "Allinea Z al centro",
-              "Allinea Z al massimo",
-              "Distribuisci centri lungo X",
-              "Distribuisci centri lungo Y",
-              "Distribuisci centri lungo Z",
-              "Distribuisci spazi lungo X",
-              "Distribuisci spazi lungo Y",
-              "Distribuisci spazi lungo Z",
-          },
+          "Attiva strumento Allinea",
+          {"Allinea X", "Allinea Y", "Allinea Z", "Distribuisci"},
+          {"Min", "Centro", "Max"},
       },
   }};
-
-  const auto arrangements = quader_mesh_arrangement_catalog();
-  ASSERT_EQ(arrangements.size(), expectations.front().labels.size());
+  constexpr std::array<std::string_view, 4> kActionRowIds{
+      "align.x", "align.y", "align.z", "align.distribute"};
+  constexpr std::array<std::string_view, 3> kAlignmentOptionIds{
+      "min", "center", "max"};
+  constexpr std::array<std::string_view, 3> kDistributionOptionIds{"x", "y", "z"};
+  constexpr std::array<std::string_view, 3> kDistributionLabels{"X", "Y", "Z"};
   for (const LocaleExpectation &expectation : expectations) {
     const auto locale = std::find_if(
         catalogs.begin(), catalogs.end(), [&](const auto &candidate) {
@@ -966,31 +977,44 @@ TEST(LocalizationResourceTests,
         });
     ASSERT_NE(locale, catalogs.end()) << expectation.locale;
 
-    std::set<std::string> localized_labels;
-    std::set<std::string> fallback_labels;
-    for (std::size_t index = 0; index < arrangements.size(); ++index) {
-      const QuaderMeshArrangementDescriptor &arrangement = arrangements[index];
-      const auto entry = std::find_if(
-          entries.begin(), entries.end(), [&](const auto &candidate) {
-            return std::find(candidate.target_ids.begin(),
-                             candidate.target_ids.end(),
-                             arrangement.command_id.string()) !=
-                   candidate.target_ids.end();
+    const auto activation = locale->second.find(align_entry->localization_key);
+    ASSERT_NE(activation, locale->second.end()) << align_entry->localization_key;
+    EXPECT_EQ(activation->second, expectation.tool_label);
+    std::set<std::string> localized_labels{activation->second};
+    for (std::size_t index = 0; index < kActionRowIds.size(); ++index) {
+      const auto control = std::find_if(
+          target.controls.begin(), target.controls.end(), [&](const auto &candidate) {
+            return candidate.id == kActionRowIds[index];
           });
-      ASSERT_NE(entry, entries.end()) << arrangement.command_id.string();
-      EXPECT_EQ(entry->localization_key,
-                arrangement.keybinding_localization_key);
-      if (expectation.locale == "en-US") {
-        EXPECT_EQ(entry->label, expectation.labels[index]);
+      ASSERT_NE(control, target.controls.end()) << kActionRowIds[index];
+      EXPECT_EQ(control->kind, QuaderToolSettingControlKind::Action);
+      EXPECT_EQ(control->label, expectations.front().row_labels[index]);
+      ASSERT_EQ(control->choices.size(), 3u);
+      const auto row_label = locale->second.find(control->label_key);
+      ASSERT_NE(row_label, locale->second.end()) << control->label_key;
+      EXPECT_EQ(row_label->second, expectation.row_labels[index]);
+      const bool distribution = control->id == "align.distribute";
+      const auto &option_ids =
+          distribution ? kDistributionOptionIds : kAlignmentOptionIds;
+      const auto &option_labels =
+          distribution ? kDistributionLabels : expectation.alignment_labels;
+      const auto &fallback_labels =
+          distribution ? kDistributionLabels : expectations.front().alignment_labels;
+      for (std::size_t option_index = 0; option_index < control->choices.size();
+           ++option_index) {
+        const auto &option = control->choices[option_index];
+        EXPECT_EQ(option.id, option_ids[option_index]);
+        EXPECT_EQ(option.label, fallback_labels[option_index]);
+        const std::string key = control->label_key + "." + option.id;
+        const auto localized = locale->second.find(key);
+        ASSERT_NE(localized, locale->second.end()) << key;
+        EXPECT_EQ(localized->second, option_labels[option_index]);
+        const std::string full_label = row_label->second + " " + localized->second;
+        EXPECT_TRUE(localized_labels.insert(full_label).second)
+            << expectation.locale << " duplicates " << full_label;
       }
-      EXPECT_TRUE(fallback_labels.insert(entry->label).second) << entry->label;
-
-      const auto localized = locale->second.find(entry->localization_key);
-      ASSERT_NE(localized, locale->second.end()) << entry->localization_key;
-      EXPECT_EQ(localized->second, expectation.labels[index]);
-      EXPECT_TRUE(localized_labels.insert(localized->second).second)
-          << expectation.locale << " duplicates " << localized->second;
     }
+    EXPECT_EQ(localized_labels.size(), 13u);
   }
   std::filesystem::remove(keybindings, ignored);
 }

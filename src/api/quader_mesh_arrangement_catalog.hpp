@@ -15,13 +15,14 @@
 
 namespace quader {
 
-/// Classifies one native mesh arrangement command for shared routing.
+/// Classifies a compatibility arrangement command for stable script routing.
 enum class QuaderMeshArrangementKind {
   Alignment,
   Distribution,
 };
 
-/// Describes one typed arrangement action shared by commands and menus.
+/// Retains immediate arrangement IDs for scripts and stored shortcuts. The
+/// native Align Tool owns visible arrangement activation and settings.
 struct QuaderMeshArrangementDescriptor {
   QuaderCommandId command_id;
   QuaderMeshArrangementKind kind = QuaderMeshArrangementKind::Alignment;

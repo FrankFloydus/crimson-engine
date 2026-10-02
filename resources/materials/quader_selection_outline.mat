@@ -13,7 +13,8 @@ material {
         { type : sampler2d, name : activeDepth, precision : high },
         { type : float4, name : ordinaryColor },
         { type : float4, name : activeColor },
-        { type : float, name : lineWidth },
+        { type : float, name : ordinaryLineWidth },
+        { type : float, name : activeLineWidth },
         { type : float, name : featherPixels },
         { type : float, name : guardPixels },
         { type : float, name : alphaScale }
@@ -33,9 +34,10 @@ fragment {
         prepareMaterial(material);
         ivec2 center = ivec2(gl_FragCoord.xy) + ivec2(int(materialParams.guardPixels));
         vec2 inside = step(vec2(0.5), occupancy(center));
-        float halfWidth = max(1.0, materialParams.lineWidth) * 0.5;
+        vec2 halfWidth = max(vec2(1.0), vec2(materialParams.ordinaryLineWidth,
+                                           materialParams.activeLineWidth)) * 0.5;
         float feather = max(0.0, materialParams.featherPixels);
-        int radius = int(ceil(halfWidth + feather * 0.5 + 1.0));
+        int radius = int(ceil(max(halfWidth.x, halfWidth.y) + feather * 0.5 + 1.0));
         vec2 nearestDistance = vec2(float(radius) + 1.0);
         ivec2 ordinaryPixel = center;
         ivec2 activePixel = center;
@@ -43,7 +45,7 @@ fragment {
             for (int x = -radius; x <= radius; ++x) {
                 if (x == 0 && y == 0) continue;
                 float distance = length(vec2(x, y)) - 0.5;
-                if (distance > halfWidth + feather * 0.5) continue;
+                if (distance > max(halfWidth.x, halfWidth.y) + feather * 0.5) continue;
                 if (distance >= nearestDistance.x && distance >= nearestDistance.y) continue;
                 ivec2 pixel = center + ivec2(x, y);
                 vec2 sampleInside = step(vec2(0.5), occupancy(pixel));
@@ -59,7 +61,7 @@ fragment {
         }
         vec2 coverage = feather > 0.0001 ?
             clamp(vec2(0.5) - (nearestDistance - halfWidth) / feather, 0.0, 1.0) :
-            step(nearestDistance, vec2(halfWidth));
+            step(nearestDistance, halfWidth);
         highp float ordinaryDepth = coverage.x > 0.0 ?
             texelFetch(materialParams_ordinaryDepth, ordinaryPixel, 0).r : 0.0;
         highp float activeDepth = coverage.y > 0.0 ?

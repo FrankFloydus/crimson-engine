@@ -118,6 +118,13 @@ dispatcher. The viewport adapter captures the initiating pane and pointer positi
 presenter uses stack-local popup menus and revalidates the runtime, scene session, revisions, pane,
 and selected command after the nested popup loop returns. Menu actions do not own private shortcuts.
 
+The marking-menu launcher's accepted keyboard chord has a tap/hold gesture: release before
+opening activates Select through the ordinary tool lifecycle, while a 200 ms hold opens the
+menu. Capture the initiating pane and pointer origin once; auto-repeat never restarts the hold.
+Focus/context loss, runtime replacement, navigation or another input abandons a pending hold
+without selecting or opening. Remapping `viewport.marking_menu` preserves both gestures;
+separately assigned Select shortcuts keep their canonical command behavior.
+
 `Z` defaults to the canonical `viewport.shading.toggle_wireframe_shaded` command. It toggles the
 focused pane's active perspective/orthographic shading slot: Wireframe becomes Shaded, and every
 other mode becomes Wireframe. The pane strip's Shading menu retains its existing commands. The
@@ -182,6 +189,9 @@ Repeated E retains the current pending operation instead of accepting it implici
 Insert Edge Loop and Knife activation enter Edge mode from any selection mode, including through
 Shift+R and C respectively; Edge mode is an activation result, not a shortcut precondition.
 Insert Edge Loop reserves canonical Cancel while active, including idle and hover-only states.
+Its preview and insertion move continuously by default. Hold Ctrl to snap the loop to the
+current grid size, independently of the global snapping toggles; releasing Ctrl restores
+continuous positioning. The contextual hint advertises Grid Snap and highlights the held gesture.
 Escape exits to Select, discards transient loop previews, and keeps accepted loops and their history.
 Dragging follows the visible gizmo axis in every extrusion mode. When the axis points
 directly into the view and has no visible direction, dragging upward increases Amount.

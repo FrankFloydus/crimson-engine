@@ -318,7 +318,7 @@ TEST_F(QtFileMenuTests, FileAndEditMenusFollowDocumentAndHistoryOrder) {
   EXPECT_EQ(quit_requests_, 1);
 }
 
-TEST_F(QtFileMenuTests, ObjectArrangementsAreNestedAndInstancesLeadMesh) {
+TEST_F(QtFileMenuTests, AlignToolIsTheSingleArrangementLauncherAndInstancesLeadMesh) {
   menu_->refresh();
   auto *object = menu_bar_->findChild<QMenu *>(QStringLiteral("menu_object"));
   auto *mesh = menu_bar_->findChild<QMenu *>(QStringLiteral("menu_mesh"));
@@ -330,48 +330,25 @@ TEST_F(QtFileMenuTests, ObjectArrangementsAreNestedAndInstancesLeadMesh) {
       QStringLiteral("command_edit_parent_to_active"),
       QStringLiteral("command_edit_unparent"),
       QStringLiteral("--"),
-      QStringLiteral("menu_object_align"),
-      QStringLiteral("menu_object_distribute_centers"),
-      QStringLiteral("menu_object_distribute_gaps"),
+      QStringLiteral("tool_align"),
       QStringLiteral("--"),
       QStringLiteral("command_edit_duplicate"),
       QStringLiteral("--"),
       QStringLiteral("menu_object_cleanup"),
   }));
-  auto *align = object->findChild<QMenu *>(QStringLiteral("menu_object_align"));
+  auto *align = object->findChild<QAction *>(
+      QStringLiteral("tool_align"));
   ASSERT_NE(align, nullptr);
-  EXPECT_EQ(align->title(), QStringLiteral("Align"));
-  ASSERT_EQ(align->actions().size(), 3);
-  for (const QString &axis : {QStringLiteral("x"), QStringLiteral("y"),
-                             QStringLiteral("z")}) {
-    auto *axis_menu = align->findChild<QMenu *>(
-        QStringLiteral("menu_object_align_") + axis);
-    ASSERT_NE(axis_menu, nullptr);
-    EXPECT_EQ(axis_menu->title(), axis.toUpper());
-    ASSERT_EQ(axis_menu->actions().size(), 3);
-    for (qsizetype index = 0; index < 3; ++index) {
-      const QString option = QStringList{QStringLiteral("min"),
-          QStringLiteral("center"), QStringLiteral("max")}[index];
-      const QString label = QStringList{QStringLiteral("Min"),
-          QStringLiteral("Center"), QStringLiteral("Max")}[index];
-      EXPECT_EQ(axis_menu->actions()[index]->property("quaderCommandId").toString(),
-                QStringLiteral("modeling.align.") + axis + '.' + option);
-      EXPECT_EQ(axis_menu->actions()[index]->text(), label);
-    }
-  }
-  for (const QString &kind : {QStringLiteral("centers"), QStringLiteral("gaps")}) {
-    auto *distribution = object->findChild<QMenu *>(
-        QStringLiteral("menu_object_distribute_") + kind);
-    ASSERT_NE(distribution, nullptr);
-    ASSERT_EQ(distribution->actions().size(), 3);
-    for (qsizetype index = 0; index < 3; ++index) {
-      const QString axis = QStringList{QStringLiteral("x"),
-          QStringLiteral("y"), QStringLiteral("z")}[index];
-      EXPECT_EQ(distribution->actions()[index]->text(), axis.toUpper());
-      EXPECT_EQ(distribution->actions()[index]->property("quaderCommandId").toString(),
-                QStringLiteral("modeling.distribute.") + kind + '.' + axis);
-    }
-  }
+  EXPECT_EQ(align->text(), QStringLiteral("Align Tool"));
+  EXPECT_FALSE(align->icon().isNull());
+  EXPECT_EQ(align->property("quaderCommandId").toString(),
+            QStringLiteral("tools.activate.align"));
+  EXPECT_EQ(align->menu(), nullptr);
+  EXPECT_EQ(object->findChild<QMenu *>(QStringLiteral("menu_object_align")), nullptr);
+  EXPECT_EQ(object->findChild<QMenu *>(
+      QStringLiteral("menu_object_distribute_centers")), nullptr);
+  EXPECT_EQ(object->findChild<QMenu *>(
+      QStringLiteral("menu_object_distribute_gaps")), nullptr);
   ASSERT_GE(mesh->actions().size(), 3);
   EXPECT_EQ(mesh->actions()[0]->objectName(),
             QStringLiteral("command_edit_create_instance"));
@@ -479,10 +456,7 @@ TEST_F(QtFileMenuTests, ReorganizedMenusPreserveNativeGeometryAndPresentation) {
                                QStringLiteral("edit_undo_history"),
                                QStringLiteral("mesh"),
                                QStringLiteral("uv"),
-                               QStringLiteral("object_cleanup"),
-                               QStringLiteral("object_align"),
-                               QStringLiteral("object_align_x"),
-                               QStringLiteral("object_distribute_centers")}) {
+                               QStringLiteral("object_cleanup")}) {
       auto *reviewed = menu_bar_->findChild<QMenu *>(QStringLiteral("menu_") + name);
       ASSERT_NE(reviewed, nullptr);
       review_menu(*reviewed, name + QStringLiteral("-menu-full-") + suffix + ".png",

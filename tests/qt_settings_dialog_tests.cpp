@@ -872,6 +872,10 @@ TEST(QtSettingsDialogTests,
                 "settingsPage_appearance");
   expect_group("viewportSetting_SelectionFaceColor", "settingsGroup_selection",
                 "settingsPage_appearance");
+  expect_group("viewportSetting_ActiveSelectionColor", "settingsGroup_selection",
+                "settingsPage_appearance");
+  expect_group("viewportSetting_ActiveSelectionLineSize", "settingsGroup_selection",
+                "settingsPage_appearance");
   expect_group("viewportSetting_PickVertexRadius", "settingsGroup_picking",
                 "settingsPage_viewport");
   expect_group("viewportSetting_GizmoSize", "settingsGroup_gizmo",
@@ -1468,6 +1472,128 @@ TEST(QtSettingsDialogTests,
   EXPECT_EQ(ui_settings.session_settings().undo_steps, 0);
   ASSERT_EQ(changes.size(), 1u);
   EXPECT_EQ(changes.back().kind, QtSettingsChangeKind::SessionCommit);
+  dialog.reject();
+}
+
+TEST(QtSettingsDialogTests,
+     ActiveSelectionAppearanceStagesColorAndWidthUntilApply) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-settings-active-selection-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  const ViewportSettingColor initial_color =
+      viewport_settings.color(ViewportColorSettingId::ActiveSelection);
+  const float initial_width = viewport_settings.float_value(
+      ViewportFloatSettingId::ActiveSelectionLineSize);
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      initial_color, setting_color(QColor(255, 105, 180, 255))));
+  EXPECT_FLOAT_EQ(initial_width, 2.5f);
+
+  const auto color_descriptors = viewport_color_settings();
+  const auto color_descriptor = std::find_if(
+      color_descriptors.begin(), color_descriptors.end(), [](const auto &entry) {
+        return entry.id == ViewportColorSettingId::ActiveSelection;
+      });
+  ASSERT_NE(color_descriptor, color_descriptors.end());
+  EXPECT_EQ(color_descriptor->key, "ActiveSelectionColor");
+  EXPECT_EQ(color_descriptor->section, ViewportSettingsSectionId::Selection);
+  const auto &width_descriptors = viewport_float_settings();
+  const auto width_descriptor = std::find_if(
+      width_descriptors.begin(), width_descriptors.end(), [](const auto &entry) {
+        return entry.id == ViewportFloatSettingId::ActiveSelectionLineSize;
+      });
+  ASSERT_NE(width_descriptor, width_descriptors.end());
+  EXPECT_EQ(width_descriptor->key, "ActiveSelectionLineSize");
+  EXPECT_EQ(width_descriptor->section, ViewportSettingsSectionId::Selection);
+
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  std::vector<QtSettingsChange> changes;
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  dialog.set_context(
+      ui_settings, viewport_settings, localization, editor.commands(),
+      [&](const QtSettingsChange &change) { changes.push_back(change); });
+  auto *swatch = dialog.findChild<QPushButton *>(
+      QStringLiteral("viewportSetting_ActiveSelectionColor"));
+  auto *width = dialog.findChild<QDoubleSpinBox *>(
+      QStringLiteral("viewportSetting_ActiveSelectionLineSize"));
+  auto *apply = dialog.findChild<QPushButton *>(QStringLiteral("settingsApply"));
+  auto *cancel = dialog.findChild<QPushButton *>(QStringLiteral("settingsCancel"));
+  ASSERT_NE(swatch, nullptr);
+  ASSERT_NE(width, nullptr);
+  ASSERT_NE(apply, nullptr);
+  ASSERT_NE(cancel, nullptr);
+  EXPECT_EQ(swatch->accessibleName(), QStringLiteral("Active Selection Color"));
+  EXPECT_EQ(width->accessibleName(), QStringLiteral("Active Selection Width"));
+  EXPECT_DOUBLE_EQ(width->minimum(), 0.25);
+  EXPECT_DOUBLE_EQ(width->maximum(), 8.0);
+  EXPECT_DOUBLE_EQ(width->value(), initial_width);
+  EXPECT_EQ(width->parentWidget(), swatch->parentWidget());
+  auto *section = dynamic_cast<qt_settings_detail::QtSettingsSection *>(
+      swatch->parentWidget()->parentWidget());
+  ASSERT_NE(section, nullptr);
+  EXPECT_EQ(settings_section_title(*section), QStringLiteral("Selection Appearance"));
+  auto *categories = dialog.findChild<QListWidget *>(
+      QStringLiteral("settingsCategories"));
+  ASSERT_NE(categories, nullptr);
+  int appearance_row = -1;
+  for (int row = 0; row < categories->count(); ++row) {
+    if (categories->item(row)->data(Qt::UserRole).toString() ==
+        QStringLiteral("appearance")) {
+      appearance_row = row;
+      break;
+    }
+  }
+  ASSERT_GE(appearance_row, 0);
+  categories->setCurrentRow(appearance_row);
+  section->set_expanded(true);
+
+  const QString picker_name =
+      QStringLiteral("viewportSetting_ActiveSelectionColor_dialog");
+  const QColor applied_color(51, 102, 204, 230);
+  dialog.show();
+  QCoreApplication::processEvents();
+  EXPECT_TRUE(swatch->isVisible());
+  EXPECT_TRUE(width->isVisible());
+  ASSERT_TRUE(accept_color_picker(dialog, *swatch, picker_name, applied_color));
+  width->setValue(5.0);
+  EXPECT_TRUE(apply->isEnabled());
+  EXPECT_TRUE(changes.empty());
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      viewport_settings.color(ViewportColorSettingId::ActiveSelection), initial_color));
+  EXPECT_FLOAT_EQ(viewport_settings.float_value(
+      ViewportFloatSettingId::ActiveSelectionLineSize), initial_width);
+  cancel->click();
+  EXPECT_FALSE(dialog.isVisible());
+  EXPECT_TRUE(changes.empty());
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      viewport_settings.color(ViewportColorSettingId::ActiveSelection), initial_color));
+  EXPECT_FLOAT_EQ(viewport_settings.float_value(
+      ViewportFloatSettingId::ActiveSelectionLineSize), initial_width);
+
+  dialog.show();
+  QCoreApplication::processEvents();
+  EXPECT_DOUBLE_EQ(width->value(), initial_width);
+  ASSERT_TRUE(accept_color_picker(dialog, *swatch, picker_name, applied_color));
+  width->setValue(5.0);
+  apply->click();
+  EXPECT_TRUE(dialog.isVisible());
+  EXPECT_FALSE(apply->isEnabled());
+  ASSERT_EQ(changes.size(), 1u);
+  EXPECT_EQ(changes.front().kind, QtSettingsChangeKind::ViewportCommit);
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      viewport_settings.color(ViewportColorSettingId::ActiveSelection),
+      setting_color(applied_color)));
+  EXPECT_FLOAT_EQ(viewport_settings.float_value(
+      ViewportFloatSettingId::ActiveSelectionLineSize), 5.0f);
   dialog.reject();
 }
 
@@ -5999,7 +6125,7 @@ TEST(QtMainMenuTests,
 }
 
 TEST(QtMainMenuTests,
-     NestedArrangementCommandsRemainModeScoped) {
+     AlignToolLauncherRemainsModeScopedAndUsesAuthoredIcon) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-align-menu-tests";
@@ -6020,9 +6146,15 @@ TEST(QtMainMenuTests,
           "Align Menu Second");
   ASSERT_TRUE(first.ok()) << first.error_message();
   ASSERT_TRUE(second.ok()) << second.error_message();
+  ASSERT_TRUE(editor.selection().select_object(first.value()).ok());
+  const auto first_group = editor.scene().group_selection("Align Menu First Group");
+  ASSERT_TRUE(first_group.ok()) << first_group.error_message();
+  ASSERT_TRUE(editor.selection().select_object(second.value()).ok());
+  const auto second_group = editor.scene().group_selection("Align Menu Second Group");
+  ASSERT_TRUE(second_group.ok()) << second_group.error_message();
   ASSERT_TRUE(editor.selection()
-                  .select_objects({first.value().entity, second.value().entity},
-                                  first.value().entity)
+                  .select_objects({first_group.value().id, second_group.value().id},
+                                  first_group.value().id)
                   .ok());
 
   ViewportSettings viewport_settings = ViewportSettings::defaults();
@@ -6039,33 +6171,32 @@ TEST(QtMainMenuTests,
   auto *edit_menu = menu_bar.findChild<QMenu *>(QStringLiteral("menu_edit"));
   auto *object_menu =
       menu_bar.findChild<QMenu *>(QStringLiteral("menu_object"));
-  auto *arrange_menu =
-      menu_bar.findChild<QMenu *>(QStringLiteral("menu_object_arrange"));
-  auto *snapping_menu =
-      menu_bar.findChild<QMenu *>(QStringLiteral("menu_object_snapping"));
-  auto *align_menu =
-      menu_bar.findChild<QMenu *>(QStringLiteral("menu_object_align"));
-  auto *align_x_menu =
-      menu_bar.findChild<QMenu *>(QStringLiteral("menu_object_align_x"));
-  auto *distribute_centers_menu = menu_bar.findChild<QMenu *>(
-      QStringLiteral("menu_object_distribute_centers"));
-  auto *align_x_min = menu_bar.findChild<QAction *>(
-      QStringLiteral("command_modeling_align_x_min"));
+  auto *align = object_menu != nullptr
+      ? object_menu->findChild<QAction *>(QStringLiteral("tool_align"))
+      : nullptr;
   auto *grid_snap =
       menu_bar.findChild<QAction *>(QStringLiteral("action_grid_snap"));
   ASSERT_NE(edit_menu, nullptr);
   ASSERT_NE(object_menu, nullptr);
-  EXPECT_EQ(arrange_menu, nullptr);
-  EXPECT_EQ(snapping_menu, nullptr);
-  ASSERT_NE(align_menu, nullptr);
-  ASSERT_NE(align_x_menu, nullptr);
-  ASSERT_NE(distribute_centers_menu, nullptr);
-  ASSERT_NE(align_x_min, nullptr);
+  ASSERT_NE(align, nullptr);
+  EXPECT_EQ(object_menu->findChildren<QAction *>(QStringLiteral("tool_align")).size(), 1);
+  EXPECT_EQ(align->property("quaderCommandId").toString(),
+            QStringLiteral("tools.activate.align"));
+  EXPECT_FALSE(align->icon().isNull());
+  EXPECT_FALSE(align->icon().pixmap(QSize(32, 32), 1.0).isNull());
+  EXPECT_EQ(align->menu(), nullptr);
+  for (const auto *name : {
+           "menu_object_arrange", "menu_object_snapping", "menu_object_align",
+           "menu_object_align_x", "menu_object_align_y", "menu_object_align_z",
+           "menu_object_distribute_centers", "menu_object_distribute_gaps"}) {
+    EXPECT_EQ(menu_bar.findChild<QMenu *>(QString::fromUtf8(name)), nullptr);
+  }
+  for (const auto *action : object_menu->findChildren<QAction *>()) {
+    EXPECT_FALSE(action->objectName().startsWith(QStringLiteral("command_modeling_align_")));
+    EXPECT_FALSE(action->objectName().startsWith(QStringLiteral("command_modeling_distribute_")));
+  }
   EXPECT_EQ(grid_snap, nullptr);
-  EXPECT_TRUE(object_menu->actions().contains(align_menu->menuAction()));
-  EXPECT_TRUE(align_menu->actions().contains(align_x_menu->menuAction()));
-  EXPECT_TRUE(align_x_menu->actions().contains(align_x_min));
-  EXPECT_FALSE(object_menu->actions().contains(align_x_min));
+  EXPECT_TRUE(object_menu->actions().contains(align));
   EXPECT_EQ(menu_bar.findChild<QAction *>(
                 QStringLiteral("action_align_snap_to_grid")),
             nullptr);
@@ -6075,6 +6206,13 @@ TEST(QtMainMenuTests,
         QuaderSelectionMode::Face, QuaderSelectionMode::Vertex,
         QuaderSelectionMode::Group}) {
     ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    const bool arrangement_mode = mode == QuaderSelectionMode::Object ||
+                                  mode == QuaderSelectionMode::Group;
+    if (arrangement_mode) {
+      ASSERT_TRUE(editor.selection().select_objects(
+          {first_group.value().id, second_group.value().id},
+          first_group.value().id).ok());
+    }
 
     // Reproduce the regression through the same path as opening an unrelated
     // top-level menu after changing selection mode.
@@ -6084,26 +6222,19 @@ TEST(QtMainMenuTests,
 
     ASSERT_TRUE(QMetaObject::invokeMethod(object_menu, "aboutToShow",
                                           Qt::DirectConnection));
-    EXPECT_EQ(align_x_min->isEnabled(), mode == QuaderSelectionMode::Object);
+    EXPECT_EQ(align->isEnabled(), arrangement_mode);
   }
 
-
   ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.selection().select_objects(
+      {first_group.value().id, second_group.value().id}, first_group.value().id).ok());
   ASSERT_TRUE(QMetaObject::invokeMethod(object_menu, "aboutToShow",
                                         Qt::DirectConnection));
-  EXPECT_EQ(align_menu->title(), QStringLiteral("Align"));
-  EXPECT_EQ(align_x_menu->title(), QStringLiteral("X"));
-  EXPECT_EQ(align_x_min->text(), QStringLiteral("Min"));
-  auto *distribute_centers = menu_bar.findChild<QAction *>(
-      QStringLiteral("command_modeling_distribute_centers_x"));
-  ASSERT_NE(distribute_centers, nullptr);
-  EXPECT_TRUE(object_menu->actions().contains(
-      distribute_centers_menu->menuAction()));
-  EXPECT_TRUE(distribute_centers_menu->actions().contains(distribute_centers));
-  EXPECT_FALSE(object_menu->actions().contains(distribute_centers));
-  EXPECT_EQ(distribute_centers_menu->title(), QStringLiteral("Distribute Center"));
-  EXPECT_EQ(distribute_centers->text(), QStringLiteral("X"));
-
+  EXPECT_EQ(align->text(), QStringLiteral("Align Tool"));
+  ASSERT_TRUE(localization.select_locale("it-IT"));
+  ASSERT_TRUE(QMetaObject::invokeMethod(object_menu, "aboutToShow",
+                                        Qt::DirectConnection));
+  EXPECT_EQ(align->text(), QStringLiteral("Strumento Allinea"));
 }
 
 TEST(QtMainMenuTests, ToolActionsUseEffectiveKeybindingsAndCommandRouting) {

@@ -27,6 +27,7 @@
 namespace quader {
 
 class EditorSelectionService;
+class AlignToolService;
 class CurveToolService;
 class LinearArrayToolService;
 class MaterialReference;
@@ -72,6 +73,7 @@ public:
                                 CurveToolService &curve,
                                 UvPeelToolService &uv_peel,
                                 ExtrudeToolService &extrude,
+                                AlignToolService &align,
                                 std::function<CommandResult(MaterialReference)> settle_modeling);
   NativeViewportToolCoordinator(const NativeViewportToolCoordinator &) = delete;
   NativeViewportToolCoordinator &
@@ -146,7 +148,7 @@ public:
   CommandResult
   complete_active_light_creation(LightCreationOperation operation);
   CommandResult cancel_competing_state_for_tool_activation();
-  /// Accepts pending work before an implicit tool transition.
+  /// Accepts pending work and retires outgoing owners before a different tool starts.
   CommandResult settle_competing_state_for_tool_activation();
   /// Accepts pending authored work; failed acceptance leaves the operation active.
   CommandResult settle_transient_state();
@@ -175,6 +177,7 @@ private:
   CurveToolService &curve_;
   UvPeelToolService &uv_peel_;
   ExtrudeToolService &extrude_;
+  AlignToolService &align_;
   std::function<CommandResult(MaterialReference)> settle_modeling_;
   bool settling_transient_state_ = false;
   MaterialReference creation_material_;

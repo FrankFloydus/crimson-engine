@@ -43,9 +43,10 @@ struct ToolIconSpec {
   bool separator_before = false;
 };
 
-constexpr std::array<ToolIconSpec, 18> kToolIconSpecs{{
+constexpr std::array<ToolIconSpec, 19> kToolIconSpecs{{
     {ViewportToolId::CreatePrimitive, ":/quader/icons/tool_create_box.png"},
     {ViewportToolId::Pivot, ":/quader/icons/tool_pivot.png"},
+    {ViewportToolId::Align, ":/quader/icons/tool_align.png"},
     {ViewportToolId::Extrude, ":/quader/icons/tool_extrude.png"},
     {ViewportToolId::InsertEdgeLoop,
      ":/quader/icons/tool_insert_edge_loop.png"},
@@ -163,7 +164,9 @@ QtToolToolbar::QtToolToolbar(QWidget *parent) : QToolBar(parent) {
     const QIcon icon =
         spec.tool == ViewportToolId::Curve
             ? curve_tool_icon(palette())
-            : qt_multiresolution_icon(QString::fromUtf8(spec.icon_path));
+            : spec.icon_path != nullptr
+                ? qt_multiresolution_icon(QString::fromUtf8(spec.icon_path))
+                : QIcon{};
     QAction *action = new QAction(icon, QString::fromUtf8(fallback.data()), this);
     if (spec.toolbar_visible) {
       if (separator_pending && !actions().empty()) {
@@ -248,6 +251,11 @@ QtToolToolbar::QtToolToolbar(QWidget *parent) : QToolBar(parent) {
   for (const ToolAction &entry : tool_actions_) {
     if (entry.action == nullptr) {
       continue;
+    }
+    if (entry.action->icon().isNull()) {
+      if (auto *button = qobject_cast<QToolButton *>(widgetForAction(entry.action))) {
+        button->setToolButtonStyle(Qt::ToolButtonTextOnly);
+      }
     }
     configure_native_toolbar_button_face(*this, *entry.action,
                                          button_presentation);

@@ -27,6 +27,63 @@ Pivot rebasing and baking compensate descendants through their offsets rather
 than decomposing inherited affine transforms. All before/after comparisons and
 history snapshots include the offset.
 
+## Object arrangement
+
+[`MeshArrangementService`](mesh_arrangement_service.hpp) owns Align and Distribute
+in Object and Group modes. The existing `QuaderModelingApi::align_selected_meshes` and
+`distribute_selected_meshes` entry points also accept instances and native spatial
+objects, including lights, in mixed selections. They publish placement through
+`DocumentCommandService::set_transforms`; they do not edit instance definitions or
+modeling geometry.
+
+Mesh and instance bounds come from displayed world geometry. Spatial leaves without
+geometry use their world origins, while native containers combine descendant geometry
+and spatial leaf origins without including container pivots. Selected descendants move
+only through their topmost selected ancestor.
+
+Alignment targets the minimum, center or maximum of the original aggregate selection
+bounds on each requested world axis. The active object and selection order do not
+change that reference. Distribution places equal signed gaps within the original
+selection extent, retaining boundary-owning objects. It uses original center ordering
+with entity IDs to break ties. Reject overlapping arrangements that cannot preserve
+both equal spacing and the original outer boundaries; never expand the selection to
+make them fit. Legacy center/gap request modes resolve to the same distribution. Use Snapping is
+off by default. When enabled, the planner searches every supported world-unit grid
+spacing from coarse to fine, independently of the current viewport preset. Quantized
+movement must retain exact alignment, equal gaps and fixed outer boundaries; if no
+candidate fits, the exact plan remains valid and reports that grid alignment was not
+used. The tool presents that fallback as a status-bar warning.
+
+`capture_baseline()` projects eligible current roots into immutable original bounds,
+transforms and compensated-parent inverse bases. The pure `plan()` method combines
+X/Y/Z intent against that baseline without querying or mutating live scene state.
+The Align panel and immediate API operations share this planner; their existing
+document command owner publishes texture-lock changes and one history entry per action.
+Preflight locks, visibility, bounds and representable translations before publication.
+Command availability remains a revision-gated structural query; exact bounds belong
+to baseline capture and operation planning.
+
+Observable regression contracts live in
+[mesh_arrangement_tests.cpp](../../../tests/mesh_arrangement_tests.cpp).
+
+[`AlignToolService`](align_tool_service.hpp) keeps one native panel active while every
+Align or Distribute click acts immediately on the current selection and its current
+bounds. Each changed action records one history entry. Undo, valid selection changes
+and document saves retain the panel. Leaving Object/Group mode, losing two eligible
+selection roots, or encountering hidden, locked, missing or unrepresentable targets
+retires the owner and clears its settings and snapping result without changing history.
+Its session publication resets the shared pane tool choice to Select, so the next
+pointer gesture cannot reacquire the retired Align tool or reopen it when context recovers.
+Eligibility and exact active-context validation run only when scene, selection, layer,
+asset or mode revisions change; invalidation publishes once through native refresh.
+Switching tools or Escape closes the panel without reverting authored actions.
+No alignment or distribution choice is retained between clicks.
+Use Snapping is the only remembered option and affects the next action without
+changing existing placement. Settings remain in the originating viewport while the
+shared scene publication updates every visible viewport.
+The retained presentation contract is exercised by
+[align_tool_tests.cpp](../../../tests/align_tool_tests.cpp).
+
 ## Mesh transform baking
 
 [`MeshTransformBakeService`](mesh_transform_bake_service.hpp)

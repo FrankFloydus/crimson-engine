@@ -312,6 +312,63 @@ TEST(QtViewportMarkingMenuTests, ReleaseDispatchesBakeLocationAndUndoRestoresIt)
   EXPECT_EQ(restored->transform.position.z, 5.0F);
 }
 
+TEST(QtViewportMarkingMenuTests, MixedInstancesAndLightsExposeOneAlignToolLauncher) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader_marking_menu_align_test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  quader::ViewportInputRouter input_router;
+  auto localization = loaded_localization();
+  QWidget owner;
+  prepare_owner(owner);
+  const auto source = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Q Align Instance");
+  ASSERT_TRUE(source.ok()) << source.error_message();
+  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+  const auto instance = editor.modeling().create_instance_from_selection();
+  ASSERT_TRUE(instance.ok()) << instance.error_message();
+  const auto light = editor.scene().create_point_light({.name = "Q Align Light"});
+  ASSERT_TRUE(light.ok()) << light.error_message();
+  ASSERT_TRUE(editor.selection().select_objects(
+      {instance.value().occurrence.root.id, light.value().id}).ok());
+  bool presented_align = false;
+  EXPECT_FALSE(show_and_interact(owner, editor, input_router, localization,
+                                [&](QWidget &popup) {
+    const auto align_actions = popup.findChildren<QAction *>(
+        QStringLiteral("tools.activate.align"));
+    ASSERT_EQ(align_actions.size(), 1);
+    EXPECT_EQ(align_actions.front()->text(), QStringLiteral("Align Tool"));
+    EXPECT_TRUE(align_actions.front()->isEnabled());
+    EXPECT_FALSE(align_actions.front()->icon().isNull());
+    auto *overflow = popup.findChild<QListWidget *>(
+        QStringLiteral("markingMenu.overflow"));
+    ASSERT_NE(overflow, nullptr);
+    const auto align_items = overflow->findItems(
+        QStringLiteral("Align Tool"), Qt::MatchExactly);
+    ASSERT_EQ(align_items.size(), 1);
+    EXPECT_FALSE(align_items.front()->icon().isNull());
+    for (const auto *action : popup.findChildren<QAction *>()) {
+      EXPECT_FALSE(action->objectName().startsWith(QStringLiteral("modeling.align.")));
+      EXPECT_FALSE(action->objectName().startsWith(QStringLiteral("modeling.distribute.")));
+    }
+    presented_align = true;
+    popup.close();
+  }));
+  EXPECT_TRUE(presented_align);
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
+  EXPECT_FALSE(show_and_interact(owner, editor, input_router, localization,
+                                [&](QWidget &popup) {
+    EXPECT_EQ(popup.findChild<QAction *>(QStringLiteral("tools.activate.align")), nullptr);
+    popup.close();
+  }));
+}
+
 TEST(QtViewportMarkingMenuTests, ChangedSelectionPaneAndRuntimeRejectStaleIntent) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;

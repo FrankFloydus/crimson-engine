@@ -51,6 +51,7 @@ constexpr auto kActionRequirements = std::to_array<FeatureRequirement>({
 });
 
 constexpr auto kToolRequirements = std::to_array<FeatureRequirement>({
+    {"align", ReleaseFeature::Arrangement},
     {"create_cone", ReleaseFeature::ConePrimitive},
     {"create_torus", ReleaseFeature::TorusPrimitive},
     {"extrude", ReleaseFeature::ExtrudeTool},

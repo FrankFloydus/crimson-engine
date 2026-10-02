@@ -46,7 +46,8 @@ ViewportOverlayLayer wire_layer(const RenderOverlayMeshSnapshot &mesh) {
 float wire_width(const RenderOverlayMeshSnapshot &mesh,
                  const ViewportPersistentOverlayStyleSnapshot &style) {
   return mesh.selected
-             ? style.selection_edge_line_width_pixels
+             ? (mesh.active_selected ? style.active_selection_line_width_pixels
+                                     : style.selection_edge_line_width_pixels)
              : viewport_overlay_line_width_pixels(wire_layer(mesh), 0.0f) *
                    style.raster_scale;
 }
@@ -477,7 +478,9 @@ void SceneWireframeOverlayCache::sync(
       !has_synced_ || synced_wire_style_.raster_scale !=
                           snapshot.style.raster_scale ||
       synced_wire_style_.selection_edge_line_width_pixels !=
-          snapshot.style.selection_edge_line_width_pixels;
+          snapshot.style.selection_edge_line_width_pixels ||
+      synced_wire_style_.active_selection_line_width_pixels !=
+          snapshot.style.active_selection_line_width_pixels;
   const bool style_changed = style_signature_changed || wire_color_changed ||
                              line_width_changed;
   const bool line_width_only_style_changed =

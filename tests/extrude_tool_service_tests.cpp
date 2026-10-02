@@ -482,6 +482,139 @@ TEST_F(ExtrudeToolServiceTests, PaneFocusRetainsPendingWorkUntilAnotherPaneAcqui
   expect_mesh(strip, pending);
 }
 
+TEST_F(ExtrudeToolServiceTests,
+       ActivationSharesPendingOperationAcrossAllVisiblePanes) {
+  const auto strip = create_strip();
+  select_strip(strip);
+  auto &workspace = session_.viewport_workspace();
+  ASSERT_EQ(workspace.layout(), ViewportLayoutId::Single);
+  ASSERT_EQ(workspace.focused_pane(), ViewportPaneId::Perspective);
+  ASSERT_TRUE(editor_.tools().activate(ViewportToolId::Extrude).ok());
+  ASSERT_TRUE(editor_.tools().set_setting("extrude", "extrude.amount", 16.0).ok());
+  const auto pending = mesh(strip);
+  const auto origin = editor_.tools().active_settings_presentation_origin();
+  const auto steps = session_.history().undo_count();
+  const auto history_revision = session_.history().revision();
+  const auto tool_revision = session_.extrude().tool_settings_revision();
+  const auto work = session_.extrude().work_stats_for_tests();
+  ASSERT_NE(origin.serial, 0U);
+  EXPECT_EQ(origin.pane, ViewportPaneId::Perspective);
+  ASSERT_TRUE(workspace.set_layout(ViewportLayoutId::FourQuad));
+
+  for (const auto pane : {ViewportPaneId::Perspective, ViewportPaneId::Top,
+                          ViewportPaneId::Front, ViewportPaneId::Side}) {
+    SCOPED_TRACE(static_cast<int>(pane));
+    EXPECT_EQ(workspace.selected_tool(pane), ViewportToolId::Extrude);
+    EXPECT_TRUE(editor_.tools().pane_owns_executing_tool(pane));
+    (void)workspace.focus_pane(pane);
+    const auto acquired = editor_.tools().acquire_pane_tool(pane);
+    ASSERT_TRUE(acquired.ok()) << acquired.error_message();
+    EXPECT_FALSE(acquired.changed());
+    EXPECT_EQ(editor_.tools().active_settings_presentation_origin(), origin);
+    EXPECT_EQ(editor_.tools().settings_presentation_serial(pane),
+              pane == origin.pane ? origin.serial : 0U);
+    EXPECT_TRUE(session_.extrude().preview_active());
+    EXPECT_DOUBLE_EQ(session_.extrude().amount(), 16.0);
+    EXPECT_EQ(session_.history().undo_count(), steps);
+    EXPECT_EQ(session_.history().revision(), history_revision);
+    EXPECT_EQ(session_.extrude().tool_settings_revision(), tool_revision);
+    expect_mesh(strip, pending);
+  }
+
+  const auto reactivated = editor_.tools().activate(ViewportToolId::Extrude);
+  ASSERT_TRUE(reactivated.ok()) << reactivated.error_message();
+  EXPECT_FALSE(reactivated.changed());
+  EXPECT_EQ(editor_.tools().active_settings_presentation_origin(), origin);
+  EXPECT_EQ(session_.extrude().work_stats_for_tests().source_capture_count,
+            work.source_capture_count);
+  EXPECT_EQ(session_.extrude().work_stats_for_tests().geometry_update_count,
+            work.geometry_update_count);
+  EXPECT_EQ(session_.history().undo_count(), steps);
+  expect_mesh(strip, pending);
+
+  const auto mode_reactivated = editor_.tools().activate_extrude(QuaderExtrudeMode::Region);
+  ASSERT_TRUE(mode_reactivated.ok()) << mode_reactivated.error_message();
+  EXPECT_FALSE(mode_reactivated.changed());
+  EXPECT_TRUE(session_.extrude().preview_active());
+  EXPECT_EQ(editor_.tools().active_settings_presentation_origin(), origin);
+  EXPECT_EQ(session_.extrude().work_stats_for_tests().source_capture_count,
+            work.source_capture_count);
+  EXPECT_EQ(session_.extrude().work_stats_for_tests().geometry_update_count,
+            work.geometry_update_count);
+  EXPECT_EQ(session_.history().undo_count(), steps);
+  EXPECT_EQ(session_.history().revision(), history_revision);
+  expect_mesh(strip, pending);
+}
+
+TEST_F(ExtrudeToolServiceTests,
+       AnotherPaneEditsAndAppliesTheSamePendingOperationOnce) {
+  const auto strip = create_strip();
+  select_strip(strip);
+  const auto original = mesh(strip);
+  auto &workspace = session_.viewport_workspace();
+  ASSERT_TRUE(workspace.set_layout(ViewportLayoutId::FourQuad));
+  ASSERT_TRUE(editor_.tools().activate(ViewportToolId::Extrude).ok());
+  ASSERT_TRUE(editor_.tools().set_setting("extrude", "extrude.amount", 16.0).ok());
+  const auto origin = editor_.tools().active_settings_presentation_origin();
+  const auto steps = session_.history().undo_count();
+
+  ASSERT_TRUE(workspace.focus_pane(ViewportPaneId::Top));
+  const auto acquired = editor_.tools().acquire_pane_tool(ViewportPaneId::Top);
+  ASSERT_TRUE(acquired.ok()) << acquired.error_message();
+  EXPECT_FALSE(acquired.changed());
+  ASSERT_TRUE(editor_.tools()
+                  .set_setting(ViewportPaneId::Top, "extrude", "extrude.amount", 24.0)
+                  .ok());
+  const auto pending = mesh(strip);
+  EXPECT_NEAR(maximum_height(strip), 24.0 / 32.0, 0.00001);
+  EXPECT_TRUE(session_.extrude().preview_active());
+  EXPECT_EQ(editor_.tools().active_settings_presentation_origin(), origin);
+  EXPECT_EQ(session_.history().undo_count(), steps);
+
+  ASSERT_TRUE(editor_.tools().commit_active_tool_preview().ok());
+  EXPECT_FALSE(session_.extrude().preview_active());
+  EXPECT_EQ(session_.history().undo_count(), steps + 1U);
+  expect_mesh(strip, pending);
+  ASSERT_TRUE(editor_.tools().commit_active_tool_preview().ok());
+  EXPECT_EQ(session_.history().undo_count(), steps + 1U);
+  ASSERT_TRUE(editor_.history().undo().ok());
+  expect_mesh(strip, original);
+  ASSERT_TRUE(editor_.history().redo().ok());
+  expect_mesh(strip, pending);
+}
+
+TEST_F(ExtrudeToolServiceTests, CancelFromAnyVisiblePaneRestoresTheSharedSource) {
+  const auto strip = create_strip();
+  select_strip(strip);
+  const auto original = mesh(strip);
+  auto &workspace = session_.viewport_workspace();
+  ASSERT_TRUE(workspace.set_layout(ViewportLayoutId::FourQuad));
+  const auto steps = session_.history().undo_count();
+  const auto history_revision = session_.history().revision();
+
+  for (const auto pane : {ViewportPaneId::Perspective, ViewportPaneId::Top,
+                          ViewportPaneId::Front, ViewportPaneId::Side}) {
+    SCOPED_TRACE(static_cast<int>(pane));
+    (void)workspace.focus_pane(ViewportPaneId::Perspective);
+    ASSERT_TRUE(editor_.tools().activate(ViewportToolId::Extrude).ok());
+    ASSERT_TRUE(editor_.tools().set_setting("extrude", "extrude.amount", 16.0).ok());
+    const auto origin = editor_.tools().active_settings_presentation_origin();
+    (void)workspace.focus_pane(pane);
+    const auto acquired = editor_.tools().acquire_pane_tool(pane);
+    ASSERT_TRUE(acquired.ok()) << acquired.error_message();
+    EXPECT_FALSE(acquired.changed());
+    EXPECT_EQ(editor_.tools().active_settings_presentation_origin(), origin);
+    ASSERT_TRUE(editor_.tools().cancel_active_tool_preview().ok());
+    EXPECT_FALSE(session_.extrude().active());
+    EXPECT_FALSE(session_.extrude().preview_active());
+    EXPECT_TRUE(session_.modeling().tool_preview_meshes().empty());
+    EXPECT_EQ(session_.modeling().selection_summary().selected_face_count, 2U);
+    EXPECT_EQ(session_.history().undo_count(), steps);
+    EXPECT_EQ(session_.history().revision(), history_revision);
+    expect_mesh(strip, original);
+  }
+}
+
 TEST_F(ExtrudeToolServiceTests, UnavailableActivationDoesNotAcceptPendingExtrusion) {
   const auto strip = create_strip();
   select_strip(strip);

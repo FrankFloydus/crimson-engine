@@ -220,6 +220,7 @@ public:
   static constexpr ViewportToolId kLinearArray = ViewportToolId::LinearArray;
   static constexpr ViewportToolId kRadialArray = ViewportToolId::RadialArray;
   static constexpr ViewportToolId kPathArray = ViewportToolId::PathArray;
+  static constexpr ViewportToolId kAlign = ViewportToolId::Align;
 
   explicit ViewportTool(ToolDescriptor descriptor);
   ViewportTool(ViewportToolId tool);

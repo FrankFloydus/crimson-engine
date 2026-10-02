@@ -393,12 +393,24 @@ public:
   }
 
   bool create_empty_axis_grid_sample(int sign, bool orbit_snap,
-                                    float roll_radians = 0.0f) {
+                                    float roll_radians = 0.0f,
+                                    ViewportViewAxis axis = ViewportViewAxis::Y,
+                                    QVec3 target = {},
+                                    float far_plane = 1000.0f) {
     destroy_patch();
+    QVec3 normal = {0.0f, 1.0f, 0.0f};
+    QVec3 up = {std::sin(roll_radians), 0.0f, -std::cos(roll_radians)};
+    if (axis == ViewportViewAxis::X) {
+      normal = {1.0f, 0.0f, 0.0f};
+      up = {0.0f, std::cos(roll_radians), std::sin(roll_radians)};
+    } else if (axis == ViewportViewAxis::Z) {
+      normal = {0.0f, 0.0f, 1.0f};
+      up = {std::sin(roll_radians), std::cos(roll_radians), 0.0f};
+    }
     if (!camera_.restore_perspective_pose(
-            {.eye = {0.0f, static_cast<float>(sign) * 16.0f, 0.0f},
-             .target = {},
-             .up = {std::sin(roll_radians), 0.0f, -std::cos(roll_radians)}})) {
+            {.eye = target + normal * (static_cast<float>(sign) * 16.0f),
+             .target = target,
+             .up = up})) {
       return false;
     }
     if (orbit_snap) {
@@ -406,9 +418,9 @@ public:
       camera_.update_drag({100.0f, 100.0f}, ViewportDragMode::OrbitSnap);
       camera_.end_drag();
     } else {
-      camera_.view_axis(ViewportViewAxis::Y, sign);
+      camera_.view_axis(axis, sign);
     }
-    camera_.set_clip_planes(0.05f, 1000.0f);
+    camera_.set_clip_planes(0.05f, far_plane);
     viewport_.update_camera(camera_);
     viewport_.set_scene_layer_mask(kViewportShadedSceneLayerMask);
     viewport_.set_scene_visible(true);
@@ -416,8 +428,10 @@ public:
     const QVec3 direction = normalize(camera_.pose().target - camera_.pose().eye);
     return camera_.state().projection == ViewportProjection::Orthographic &&
            camera_.orbit_snap_orthographic_projection() == orbit_snap &&
-           direction.y * static_cast<float>(sign) < -0.999f;
+           dot(direction, normal) * static_cast<float>(sign) < -0.999f;
   }
+
+  ViewportCameraController &grid_camera() { return camera_; }
 
   QImage capture_grid(bool rendered, bool visible, bool axes_visible = true,
                       const ViewportSettings *authored_settings = nullptr) {
@@ -447,6 +461,7 @@ public:
       }
     }
     presentation_settings = viewport_settings;
+    viewport_.update_camera(camera_);
     viewport_.update_ground_grid(camera_, 1.0f, viewport_settings, visible);
     return capture_image(rendered, 0u, 0u, width_, height_);
   }
@@ -1302,6 +1317,163 @@ TEST(RenderGroundGridRuntimeTests,
               "orthographic_grid_corners_" + name + ".png")));
         }
       }
+    }
+  }
+}
+
+TEST(RenderGroundGridRuntimeTests,
+     TranslatedOrthographicGridSurvivesEveryAxisAndRepeatedOrbitSnap) {
+  if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_GRID_TESTS") != 1) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_GRID_TESTS=1 for translated "
+                   "orthographic grid and Alt-orbit snap coverage";
+  }
+  FogRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(256u, true, 192u));
+  const QString output_directory =
+      qEnvironmentVariable("QUADER_VULKAN_GRID_OUTPUT_DIR");
+  if (!output_directory.isEmpty()) ASSERT_TRUE(QDir().mkpath(output_directory));
+  ViewportSettings authored = ViewportSettings::defaults();
+  authored.set_float_value(ViewportFloatSettingId::Grid3DIntensity, 0.0f);
+  for (const auto color : {ViewportColorSettingId::GridMinor,
+                           ViewportColorSettingId::GridMajor}) {
+    authored.set_color(color, {0.5f, 0.5f, 0.5f, 1.0f});
+  }
+  const auto visible_pixels = [](const QImage &off, const QImage &on) {
+    std::size_t count = 0u;
+    for (int y = 0; y < on.height(); ++y) {
+      for (int x = 0; x < on.width(); ++x) {
+        count += std::abs(qRed(on.pixel(x, y)) - qRed(off.pixel(x, y))) >= 12
+                     ? 1u : 0u;
+      }
+    }
+    return count;
+  };
+  for (const auto axis : {ViewportViewAxis::X, ViewportViewAxis::Y,
+                          ViewportViewAxis::Z}) {
+    const QVec3 normal = axis == ViewportViewAxis::X ? QVec3{1.0f, 0.0f, 0.0f}
+        : axis == ViewportViewAxis::Y ? QVec3{0.0f, 1.0f, 0.0f}
+                                    : QVec3{0.0f, 0.0f, 1.0f};
+    for (const int sign : {-1, 1}) {
+      for (const float offset : {-100.0f, 100.0f}) {
+        const QVec3 target = normal * offset;
+        const QString name = QString("axis_%1_sign_%2_target_%3")
+            .arg(static_cast<int>(axis)).arg(sign).arg(offset);
+        SCOPED_TRACE(name.toStdString());
+        // The origin plane is behind this eye or farther than the 64-unit
+        // far clip. A translated construction plane must still draw in 2D.
+        ASSERT_TRUE(harness.create_empty_axis_grid_sample(
+            sign, false, 0.0f, axis, target, 64.0f));
+        const QImage off = harness.capture_grid(false, false, false, &authored);
+        const QImage manual = harness.capture_grid(false, true, false, &authored);
+        ASSERT_FALSE(off.isNull());
+        ASSERT_FALSE(manual.isNull());
+        EXPECT_GE(visible_pixels(off, manual), 200u)
+            << "Explicit axis selection must show a grid around a translated target";
+        ASSERT_TRUE(harness.create_empty_axis_grid_sample(
+            sign, true, 0.0f, axis, target, 64.0f));
+        const QImage initial_snap =
+            harness.capture_grid(false, true, false, &authored);
+        ASSERT_FALSE(initial_snap.isNull());
+        EXPECT_GE(visible_pixels(off, initial_snap), 200u);
+
+        auto &camera = harness.grid_camera();
+        for (int cycle = 0; cycle < 3; ++cycle) {
+          SCOPED_TRACE(cycle);
+          camera.begin_drag({100.0f, 100.0f}, ViewportDragMode::Orbit);
+          camera.update_drag_delta({2.0f, 1.0f}, ViewportDragMode::Orbit);
+          ASSERT_EQ(camera.state().projection, ViewportProjection::Perspective);
+          EXPECT_FALSE(camera.orbit_snap_orthographic_projection());
+          const QImage unsnapped =
+              harness.capture_grid(false, true, false, &authored);
+          ASSERT_FALSE(unsnapped.isNull());
+          EXPECT_EQ(visible_pixels(off, unsnapped), 0u)
+              << "The orthographic grid must respect independent 3D intensity";
+
+          camera.update_drag_delta({}, ViewportDragMode::OrbitSnap);
+          ASSERT_EQ(camera.state().projection, ViewportProjection::Orthographic);
+          ASSERT_TRUE(camera.orbit_snap_orthographic_projection());
+          const QImage snapped =
+              harness.capture_grid(false, true, false, &authored);
+          ASSERT_FALSE(snapped.isNull());
+          EXPECT_GE(visible_pixels(off, snapped), 200u)
+              << "Entering Alt-orbit snap must restore the visible 2D grid";
+          camera.end_drag();
+          const QImage released =
+              harness.capture_grid(false, true, false, &authored);
+          ASSERT_FALSE(released.isNull());
+          EXPECT_EQ(released, snapped)
+              << "Releasing the orbit gesture must retain the accepted grid presentation";
+          if (!output_directory.isEmpty() && cycle == 2) {
+            ASSERT_TRUE(released.save(QDir(output_directory).filePath(
+                "translated_orthographic_grid_" + name + "_snap.png")));
+          }
+        }
+        if (!output_directory.isEmpty()) {
+          ASSERT_TRUE(manual.save(QDir(output_directory).filePath(
+              "translated_orthographic_grid_" + name + "_manual.png")));
+        }
+      }
+    }
+  }
+}
+
+TEST(RenderGroundGridRuntimeTests,
+     ClipOnlyChangesRelocateRetainedOrthographicGridBeforeRendering) {
+  if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_GRID_TESTS") != 1) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_GRID_TESTS=1 for orthographic "
+                   "grid clip-only invalidation coverage";
+  }
+  FogRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(256u, true, 192u));
+  ASSERT_TRUE(harness.create_empty_axis_grid_sample(
+      1, false, 0.0f, ViewportViewAxis::Y, {0.0f, 100.0f, 0.0f}, 192.0f));
+  ViewportSettings authored = ViewportSettings::defaults();
+  for (const auto color : {ViewportColorSettingId::GridMinor,
+                           ViewportColorSettingId::GridMajor}) {
+    authored.set_color(color, {0.5f, 0.5f, 0.5f, 1.0f});
+  }
+  const QImage off = harness.capture_grid(false, false, false, &authored);
+  const QImage initial = harness.capture_grid(false, true, false, &authored);
+  ASSERT_FALSE(off.isNull());
+  ASSERT_FALSE(initial.isNull());
+  ASSERT_NE(initial, off);
+  auto &camera = harness.grid_camera();
+  const ViewportCameraPose pose = camera.pose();
+  const float orthographic_size = camera.state().orthographic_size;
+  const QString output_directory =
+      qEnvironmentVariable("QUADER_VULKAN_GRID_OUTPUT_DIR");
+  if (!output_directory.isEmpty()) ASSERT_TRUE(QDir().mkpath(output_directory));
+  for (const auto clips : {QVec2{0.05f, 64.0f}, QVec2{32.0f, 64.0f},
+                           QVec2{0.05f, 192.0f}}) {
+    SCOPED_TRACE(clips.x);
+    SCOPED_TRACE(clips.y);
+    // Keep visibility true throughout: toggling off would reset the retained
+    // signature and hide the missing clip-plane invalidation regression.
+    camera.set_clip_planes(clips.x, clips.y);
+    for (const auto &[actual, expected] :
+         std::array<std::pair<QVec3, QVec3>, 3u>{{
+             {camera.pose().eye, pose.eye},
+             {camera.pose().target, pose.target},
+             {camera.pose().up, pose.up}}}) {
+      EXPECT_FLOAT_EQ(actual.x, expected.x);
+      EXPECT_FLOAT_EQ(actual.y, expected.y);
+      EXPECT_FLOAT_EQ(actual.z, expected.z);
+    }
+    EXPECT_FLOAT_EQ(camera.state().orthographic_size, orthographic_size);
+    const QImage clipped = harness.capture_grid(false, true, false, &authored);
+    ASSERT_FALSE(clipped.isNull());
+    EXPECT_EQ(clipped, initial)
+        << "Changing only near/far clips must keep the orthographic grid visible with the same world alignment";
+    for (int frame = 0; frame < 3; ++frame) {
+      const QImage unchanged =
+          harness.capture_grid(false, true, false, &authored);
+      ASSERT_FALSE(unchanged.isNull());
+      EXPECT_EQ(unchanged, clipped);
+    }
+    if (!output_directory.isEmpty()) {
+      ASSERT_TRUE(clipped.save(QDir(output_directory).filePath(
+          QString("orthographic_grid_clip_near_%1_far_%2.png")
+              .arg(clips.x).arg(clips.y))));
     }
   }
 }

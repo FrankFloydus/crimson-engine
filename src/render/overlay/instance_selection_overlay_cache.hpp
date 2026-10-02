@@ -147,6 +147,7 @@ private:
   void prune_unused_wire_geometry();
   void refresh_wire_resource_stats();
   void update_wire_clip_planes(ViewportCameraClipPlanes clip_planes);
+  bool update_fill_colors(const ViewportPersistentOverlayStyleSnapshot &style);
 
   InstancedWireRenderBackend wire_backend_;
   MeshRenderableFactory *mesh_factory_ = nullptr;
@@ -160,6 +161,7 @@ private:
   ViewportCameraClipPlanes clip_planes_;
   RenderSourceStamp synced_source_stamp_;
   std::uint64_t synced_wire_style_signature_ = 0u;
+  std::uint32_t synced_active_color_ = 0u;
   bool synced_selected_mesh_outline_only_ = false;
   bool has_synced_ = false;
   InstanceSelectionOverlayCacheStats stats_;

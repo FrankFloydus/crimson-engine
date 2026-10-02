@@ -908,6 +908,8 @@ TEST(SelectedMeshOutlineCacheTests, SubmissionUsesRasterWidthForOffscreenRibbonP
   request.style_selection_context = ViewportOverlaySelectionContext::Object;
   auto settings = ViewportSettings::defaults();
   ASSERT_TRUE(settings.set_float_value(ViewportFloatSettingId::SelectionEdgeLineSize, 2));
+  (void)settings.set_float_value(ViewportFloatSettingId::ActiveSelectionLineSize, 2.5f);
+  ASSERT_FLOAT_EQ(settings.float_value(ViewportFloatSettingId::ActiveSelectionLineSize), 2.5f);
   OutlineRecordingTarget target;
   ViewportOverlaySubmissionCoordinator coordinator;
   (void)coordinator.submit(request, settings, target);
@@ -916,7 +918,7 @@ TEST(SelectedMeshOutlineCacheTests, SubmissionUsesRasterWidthForOffscreenRibbonP
   EXPECT_TRUE(coordinator.submit(request, settings, target).dynamic_submitted);
   ASSERT_EQ(target.dynamic.lines.size(), 4u);
   for (const auto &line : target.dynamic.lines) {
-    EXPECT_FLOAT_EQ(line.width_pixels, 8);
+    EXPECT_FLOAT_EQ(line.width_pixels, 10);
     EXPECT_EQ(line.style_role, ViewportOverlayStyleRole::ActiveSelectionWire);
   }
   EXPECT_TRUE(coordinator.submit(request, settings, target).camera_only);

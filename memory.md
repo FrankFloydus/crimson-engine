@@ -177,15 +177,17 @@ Tests: [settings transactions/categories](tests/qt_settings_dialog_tests.cpp),
   its existing owner before changing the target state. Only explicit Cancel discards an authored
   draft. Invalid meaningful work rejects the transition with the draft and its ownership intact;
   an untouched starter exits without phantom geometry or history. Preflight unavailable targets
-  before accepting anything. Same-tool activation in the same pane preserves pending work, and
-  pane focus alone is nonmutating; acquiring another pane's tool settles the previous operation.
+  before accepting anything. Same-tool activation and acquisition from another pane preserve
+  pending work and the original Tool Settings pane. Tool activation projects one operation to
+  every workspace pane; its handles can edit that same draft from any visible pane. Focus alone
+  is nonmutating. A genuinely different tool accepts the previous operation before switching.
   Undo accepts valid pending work, then undoes it so Redo can restore it. Native tool-local history
   keeps its established gesture/session semantics. Selection edits that leave the operation settle
   it; compatible same-mode selection edits for Bevel/Slice Quads still update their live preview.
   API and viewport acceptance must share the
   existing commit/publication owners, never synthesize an Apply binding or silently fall back to
   Cancel. Coverage includes `ExtrudeToolServiceTests.SwitchingToolsAcceptsPendingExtrusionAsOneUndoStep`,
-  `PaneFocusRetainsPendingWorkUntilAnotherPaneAcquiresItsTool`, and
+  the shared-pane activation/acquisition tests in `tests/extrude_tool_service_tests.cpp`, and
   `UnavailableActivationDoesNotAcceptPendingExtrusion` in `tests/extrude_tool_service_tests.cpp`.
 - Rejected component-transform samples (for example a box face collapsing onto its opposite)
   retain the last accepted preview and active drag. Restore all transient participants through
@@ -736,6 +738,10 @@ Tests: [transform/texture workflows](tests/editor_api_tests.cpp),
   Top/Bottom Alt-orbit snaps can retain a quarter-turn roll, exchanging the visible width and height;
   using only the named axis clips wide viewports. The ground-grid intensity follows the actual
   projection, including temporary snaps, while the perspective rectangle and Mesh Grid stay separate.
+  Its orthographic presentation plane must also remain inside the camera's near/far range: keep
+  the world-origin plane when visible, otherwise move only its normal depth into that range.
+  Preserve world-aligned line coordinates and the independent construction/point-placement plane;
+  include both clip planes in the retained grid signature so clip-only edits relocate it.
   See [placement policy](src/viewport/viewport_grid_placement_policy.hpp) and
   `ViewportGridPlacementPolicyTests` / `RenderGroundGridRuntimeTests`.
 
@@ -790,6 +796,14 @@ Tests: [occurrences](tests/scene_mesh_occurrence_projection_tests.cpp),
   independent world directions and near-identity UV continuity, not only Shaded/Rendered parity.
   Coverage: [tangent precision](tests/render_tangent_frame_tests.cpp),
   [windowless Vulkan normals](tests/render_normal_mapping_runtime_tests.cpp).
+- Mesh Grid coverage must reject effectively constant world coordinates before applying its antialias
+  width floor. Smooth face normals can blend secondary projections whose constant depth is
+  exactly a major grid multiple; counting it as a line tints the entire face. Derive footprints
+  from camera-relative position, then convert derivative vectors and shader-world normals into
+  authored world axes: Filament's internal world basis can include IBL rotation. CPU coarse face
+  normals already use authored world. Preserve the shared projection, spacing and opacity rules in
+  [surface-grid shader](resources/materials/mesh_surface_grid.glsl); verify untinted cell interiors
+  as well as lines for smooth planar faces in `RenderSurfaceGridRuntimeTests`.
 
 Owners: [render binding](src/render/render_scene_binding.hpp),
 [preview cache](src/render/tool_preview_renderable_cache.cpp), [lit material](resources/materials/quader_mesh_lit.mat).
@@ -953,7 +967,9 @@ Tests: [render source stamps](tests/render_source_stamp_tests.cpp),
   must clear its image first; default uninitialized pixmaps produce random opaque glyph tiles.
 - Dimension HUDs above Vulkan use non-layered masked child windows. Raster and region share a cached
   binary glyph mask/DPI revision; position changes do not rebuild masks. Keep edge-face context so
-  labels choose the exterior. Window restoration accounts for native frame margins before reveal.
+  labels choose the exterior. Retire their accepted native projection synchronously on parent
+  Resize/Hide; reveal it only after presentation has projected current camera/content bounds.
+  Window restoration accounts for native frame margins before reveal.
 
 Owners: [theme](src/ui/qt_application_theme.cpp), [scale metrics](src/ui/qt_ui_scale_metrics.cpp),
 [first-paint gate](src/app/app_frame_presentation.hpp).

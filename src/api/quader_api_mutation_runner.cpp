@@ -11,6 +11,7 @@
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_settings_presentation_internal.hpp"
 #include "diagnostics/profile.hpp"
+#include "editor/commands/modeling_command_tool_catalog.hpp"
 #include "editor/commands/scene_structural_lifecycle_service.hpp"
 #include "editor/history/editor_history_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
@@ -293,7 +294,17 @@ QuaderApiMutationRunner::run_tracked_modeling_tool(std::string_view tool_id) {
   if (!available.enabled) {
     return quader_api_failure_status(session, available.disabled_reason);
   }
-  const CommandResult settled = settle_pending_operations();
+  const auto *tool = find_modeling_command_tool(tool_id);
+  const bool activates_preview =
+      tool != nullptr && tool->descriptor().kind == CommandToolKind::Preview;
+  const bool same_preview = activates_preview &&
+      session.modeling().operation_preview_active() &&
+      session.modeling().tool_settings_target().action_id == tool_id;
+  if (same_preview) {
+    return status_from(command_unchanged_result(), QuaderMutationKind::None);
+  }
+  const CommandResult settled = activates_preview
+      ? settle_tool_transition() : settle_pending_operations();
   if (!settled.ok) return status_from(settled, QuaderMutationKind::Modeling, tool_id);
   const QuaderSettingsOperationOriginCapture origin(session_);
   ModelingCommandResult result = modeling_commands_.execute(
@@ -321,8 +332,11 @@ QuaderApiVoidResult QuaderApiMutationRunner::begin_tracked_modeling_preview(
   }
   const bool same_preview = session.modeling().operation_preview_active() &&
       session.modeling().tool_settings_target().action_id == action_id;
-  const CommandResult settled = same_preview
-      ? command_unchanged_result() : settle_pending_operations();
+  const auto *tool = find_modeling_command_tool(action_id);
+  const bool activates_preview =
+      tool != nullptr && tool->descriptor().kind == CommandToolKind::Preview;
+  const CommandResult settled = same_preview ? command_unchanged_result()
+      : activates_preview ? settle_tool_transition() : settle_pending_operations();
   if (!settled.ok) return status_from(settled, QuaderMutationKind::Modeling, action_id);
   const QuaderSettingsOperationOriginCapture origin(session_);
   ModelingCommandResult result = modeling_commands_.begin_preview(
@@ -740,6 +754,17 @@ CommandResult QuaderApiMutationRunner::settle_pending_operations() {
       session.document_commands().accept_active_property_edit();
   if (!property.ok) return property;
   CommandResult result = session.native_tools().settle_transient_state();
+  result.changed = result.changed || property.changed;
+  return result;
+}
+
+CommandResult QuaderApiMutationRunner::settle_tool_transition() {
+  SceneSession &session = scene_session();
+  const CommandResult property =
+      session.document_commands().accept_active_property_edit();
+  if (!property.ok) return property;
+  CommandResult result =
+      session.native_tools().settle_competing_state_for_tool_activation();
   result.changed = result.changed || property.changed;
   return result;
 }

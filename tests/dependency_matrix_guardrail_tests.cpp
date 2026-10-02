@@ -166,7 +166,7 @@ const std::vector<SourceModulePolicy> &source_module_policies() {
         "editor_pivot", "editor_material",
         "editor_curve",
         "editor_placement", "editor_selection", "editor_session",
-        "editor_tools", "editor_transform_bake", "io_project", "io_qdr", "scene", "viewport",
+        "editor_tools", "editor_transform", "editor_transform_bake", "io_project", "io_qdr", "scene", "viewport",
         "release_features"}},
       // Project asset transactions coordinate existing scene/material owners;
       // OS recycling remains an injected port implemented by platform.
@@ -227,7 +227,7 @@ const std::vector<SourceModulePolicy> &source_module_policies() {
        {"src/editor/tools/"},
        {"assets", "core", "diagnostics", "editor_array", "editor_curve",
         "editor_interactions", "editor_modeling", "editor_pivot",
-        "editor_placement", "editor_selection", "editor_tools", "math",
+        "editor_placement", "editor_selection", "editor_tools", "editor_transform", "math",
         "scene", "viewport",
         "release_features", "editor_release_policy", "editor_tool_descriptors"}},
       // Baking coordinates native history across authored geometry and scene
@@ -239,10 +239,12 @@ const std::vector<SourceModulePolicy> &source_module_policies() {
         "editor_modeling", "editor_projection", "editor_selection",
         "editor_transform_bake", "math", "mesh_polygon", "scene",
         "release_features"}},
+      // Align consumes the existing modeling selection context and stateless
+      // grid catalogs; document commands remain the authored mutation owner.
       {"editor_transform",
        {"src/editor/transform/"},
-       {"api", "assets", "diagnostics", "editor_commands", "editor_history",
-        "editor_transform", "math", "scene",
+       {"api", "assets", "core", "diagnostics", "editor_commands", "editor_history",
+        "editor_metadata", "editor_modeling", "editor_transform", "math", "scene", "viewport",
         "release_features"}},
       {"editor_viewport",
        {"src/editor/viewport/"},

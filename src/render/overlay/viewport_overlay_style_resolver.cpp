@@ -36,6 +36,10 @@ ViewportOverlayStyleResolver::persistent_style_snapshot(
       viewport_overlay_line_width_pixels(
           ViewportOverlayLayer::SelectedEdge,
           settings.float_value(ViewportFloatSettingId::SelectionEdgeLineSize));
+  const float active_selection_logical_width_pixels =
+      viewport_overlay_line_width_pixels(
+          ViewportOverlayLayer::SelectedEdge,
+          settings.float_value(ViewportFloatSettingId::ActiveSelectionLineSize));
   ViewportPersistentOverlayStyleSnapshot snapshot{
       .raster_scale = resolved_raster_scale,
       .selection_face_color =
@@ -47,10 +51,16 @@ ViewportOverlayStyleResolver::persistent_style_snapshot(
       .selection_edge_line_width_pixels =
           selection_edge_logical_width_pixels *
           resolved_raster_scale,
+      .active_selection_logical_width_pixels =
+          active_selection_logical_width_pixels,
+      .active_selection_line_width_pixels =
+          active_selection_logical_width_pixels * resolved_raster_scale,
       .instance_edit_style = InstanceEditStyle::from_settings(settings),
   };
-  snapshot.active_selection_face_color = active_selection_color(snapshot.selection_face_color);
-  snapshot.active_selection_wire_color = active_selection_color(snapshot.selection_wire_color);
+  const auto active_color = setting_color(settings, ViewportColorSettingId::ActiveSelection);
+  snapshot.active_selection_face_color =
+      viewport_active_selection_color(snapshot.selection_face_color, active_color);
+  snapshot.active_selection_wire_color = active_color;
   RenderSignatureBuilder face_signature;
   face_signature.add_value(snapshot.selection_face_color)
       .add_value(snapshot.active_selection_face_color);
@@ -61,6 +71,8 @@ ViewportOverlayStyleResolver::persistent_style_snapshot(
       .add_value(snapshot.active_selection_wire_color)
       .add_float(snapshot.selection_edge_logical_width_pixels)
       .add_float(snapshot.selection_edge_line_width_pixels)
+      .add_float(snapshot.active_selection_logical_width_pixels)
+      .add_float(snapshot.active_selection_line_width_pixels)
       .add_float(snapshot.raster_scale);
   snapshot.wire_signature = wire_signature.value();
 
@@ -366,13 +378,19 @@ ViewportOverlayStyleResolver::color_for(ViewportOverlayStyleRole role,
                                         const ViewportSettings &settings) {
   switch (role) {
   case ViewportOverlayStyleRole::ActiveSelectionFace:
-    return active_selection_color(setting_color(settings, ViewportColorSettingId::SelectionFace));
+    return viewport_active_selection_color(
+        setting_color(settings, ViewportColorSettingId::SelectionFace),
+        setting_color(settings, ViewportColorSettingId::ActiveSelection));
   case ViewportOverlayStyleRole::ActiveSelectionWire:
-    return active_selection_color(setting_color(settings, ViewportColorSettingId::SelectionWire));
+    return setting_color(settings, ViewportColorSettingId::ActiveSelection);
   case ViewportOverlayStyleRole::ActiveSelectedVertex:
-    return active_selection_color(setting_color(settings, ViewportColorSettingId::SelectedVertex));
+    return viewport_active_selection_color(
+        setting_color(settings, ViewportColorSettingId::SelectedVertex),
+        setting_color(settings, ViewportColorSettingId::ActiveSelection));
   case ViewportOverlayStyleRole::ActiveGroupBounds:
-    return active_selection_color(setting_color(settings, ViewportColorSettingId::BoundingBoxWire));
+    return viewport_active_selection_color(
+        setting_color(settings, ViewportColorSettingId::BoundingBoxWire),
+        setting_color(settings, ViewportColorSettingId::ActiveSelection));
   case ViewportOverlayStyleRole::SelectionFace:
     return setting_color(settings, ViewportColorSettingId::SelectionFace);
   case ViewportOverlayStyleRole::SelectionWire:
@@ -447,6 +465,8 @@ float ViewportOverlayStyleResolver::line_width_for(
     return settings.float_value(
         ViewportFloatSettingId::SelectionFaceWireLineSize);
   case ViewportOverlayStyleRole::ActiveSelectionWire:
+  case ViewportOverlayStyleRole::ActiveGroupBounds:
+    return settings.float_value(ViewportFloatSettingId::ActiveSelectionLineSize);
   case ViewportOverlayStyleRole::SelectionWire:
     return layer == ViewportOverlayLayer::SelectedFaceEdge
                ? settings.float_value(
@@ -461,7 +481,6 @@ float ViewportOverlayStyleResolver::line_width_for(
     return settings.float_value(ViewportFloatSettingId::OpenEdgeLineSize);
   case ViewportOverlayStyleRole::DiagnosticEdge:
     return settings.float_value(ViewportFloatSettingId::DiagnosticEdgeLineSize);
-  case ViewportOverlayStyleRole::ActiveGroupBounds:
   case ViewportOverlayStyleRole::GroupBounds:
     return settings.float_value(
         ViewportFloatSettingId::BoundingBoxWireThickness);

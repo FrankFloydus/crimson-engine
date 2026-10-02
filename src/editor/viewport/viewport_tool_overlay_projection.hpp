@@ -56,7 +56,7 @@ struct ViewportToolOverlaySourceInputs final {
   const ModelingBoxPreview *box_preview = nullptr;
   /// Borrows the picking owner's physical-pixel layout and publication revision.
   const PrimitiveCreationControlsFrame *primitive_creation_controls = nullptr;
-  /// Pane-derived idle frame, or the input owner's frame in its initiating pane.
+  /// Pane-derived frame using the shared operation's semantic gizmo state.
   const quader_editor_core::TransformGizmoFrame *transform_gizmo = nullptr;
   const std::vector<quader_editor_core::SelectionOverlayPoint> *
       transform_snap_points = nullptr;
@@ -66,6 +66,7 @@ struct ViewportToolOverlaySourceInputs final {
   const ExtrudeHandleState *extrusion_handle = nullptr;
   const RadialArrayCenterState *radial_array_center = nullptr;
   ViewportToolOverlaySourceRevisions revisions;
+  /// Restricts pointer-local snap feedback and selection marquee to their pane.
   bool interaction_pane = false;
   bool tool_overlay_visible = false;
   bool gizmos_visible = false;

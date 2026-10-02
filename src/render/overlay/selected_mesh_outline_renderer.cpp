@@ -346,14 +346,17 @@ void SelectedMeshOutlineRenderer::set_style(const ViewportPersistentOverlayStyle
   if (state.has_style && viewport_persistent_overlay_wire_styles_match(state.style, style)) return;
   state.style = style;
   state.has_style = true;
-  const float width = std::max(1.0f, style.selection_edge_line_width_pixels);
+  const float ordinary_width = std::max(1.0f, style.selection_edge_line_width_pixels);
+  const float active_width = std::max(1.0f, style.active_selection_line_width_pixels);
   const float feather = kOverlayLineFeatherPixels * std::max(0.01f, style.raster_scale);
-  const auto guard = static_cast<std::uint32_t>(std::ceil((width + feather) * 0.5f + 2.0f));
+  const auto guard = static_cast<std::uint32_t>(
+      std::ceil((std::max(ordinary_width, active_width) + feather) * 0.5f + 2.0f));
   for (auto *material : state.materials) {
     if (!material) continue;
     material->setParameter("ordinaryColor", outline_color(style.selection_wire_color));
     material->setParameter("activeColor", outline_color(style.active_selection_wire_color));
-    material->setParameter("lineWidth", width);
+    material->setParameter("ordinaryLineWidth", ordinary_width);
+    material->setParameter("activeLineWidth", active_width);
     material->setParameter("featherPixels", feather);
   }
   if (guard != state.guard_pixels) {

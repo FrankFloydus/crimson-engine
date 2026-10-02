@@ -769,8 +769,7 @@ TEST(PublicReleasePresentation, MenusAndToolbarsContainOnlyPublishedControls) {
       continue;
     }
     EXPECT_FALSE(actions.front()->isSeparator()) << submenu->objectName().toStdString();
-    EXPECT_EQ(actions.back()->isSeparator(),
-              submenu->objectName() == QStringLiteral("menu_object"))
+    EXPECT_FALSE(actions.back()->isSeparator())
         << submenu->objectName().toStdString();
     for (qsizetype index = 1; index < actions.size(); ++index) {
       EXPECT_FALSE(actions[index]->isSeparator() && actions[index - 1]->isSeparator())

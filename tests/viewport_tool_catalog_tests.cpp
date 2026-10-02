@@ -22,8 +22,10 @@
 #include "editor/tools/viewport_tool_catalog.hpp"
 #include "editor/tools/viewport_tool_ports.hpp"
 #include "editor/tools/viewport_tool_runtime.hpp"
+#include "editor/transform/align_tool_service.hpp"
 #include "editor/viewport/viewport_modeling_tool_commit_adapter.hpp"
 #include "support/viewport_overlay_test_helpers.hpp"
+#include "render/overlay/viewport_overlay_submission_coordinator.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 #include "viewport/viewport_host_interaction_policy.hpp"
 #include "viewport/viewport_input_router.hpp"
@@ -502,7 +504,8 @@ TEST(ViewportToolCatalogTests,
     const auto dispatch = editor.commands().dispatch_viewport_input_binding(
         chords->front(), state, true, false);
     if (descriptor.tool == ViewportToolId::UvPeel ||
-        descriptor.tool == ViewportToolId::Extrude) {
+        descriptor.tool == ViewportToolId::Extrude ||
+        descriptor.tool == ViewportToolId::Align) {
       EXPECT_EQ(dispatch.kind,
                 QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
       EXPECT_EQ(dispatch.shortcut.kind, ViewportShortcutKind::CancelActiveTool);
@@ -891,7 +894,18 @@ TEST(ViewportToolRuntimeTests,
                            .max = {1.0f, 1.0f, 1.0f}},
               "Native lifecycle matrix box");
       ASSERT_TRUE(created.ok()) << created.error_message();
-      ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+      if (descriptor.tool == ViewportToolId::Align) {
+        const auto companion = editor.modeling().create_box(
+            {.min = {3.0f, -1.0f, -1.0f}, .max = {5.0f, 1.0f, 1.0f}},
+            "Native lifecycle matrix alignment target");
+        ASSERT_TRUE(companion.ok()) << companion.error_message();
+        ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Object).ok());
+        ASSERT_TRUE(editor.selection().select_objects(
+            {created.value().entity, companion.value().entity},
+            created.value().entity).ok());
+      } else {
+        ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+      }
     }
 
     NativeViewportToolCoordinator &coordinator = session.native_tools();
@@ -904,10 +918,21 @@ TEST(ViewportToolRuntimeTests,
     ASSERT_TRUE(activated.ok()) << activated.error_message();
     EXPECT_TRUE(activated.changed());
     EXPECT_EQ(coordinator.active_tool_id(), descriptor.id);
-    EXPECT_TRUE(coordinator.has_pending_tool());
+    const bool has_pending_operation = descriptor.tool != ViewportToolId::Align;
+    EXPECT_EQ(coordinator.has_pending_tool(), has_pending_operation);
     EXPECT_EQ(coordinator.has_pending_history_preview(),
               descriptor.tool != ViewportToolId::Curve &&
-                  descriptor.tool != ViewportToolId::Extrude);
+                  descriptor.tool != ViewportToolId::Extrude &&
+                  has_pending_operation);
+    if (descriptor.tool == ViewportToolId::Align) {
+      const auto settings = editor.tools().active_settings();
+      EXPECT_TRUE(settings.active);
+      EXPECT_EQ(settings.tool_id, "align");
+      EXPECT_FALSE(settings.preview_active);
+      EXPECT_FALSE(settings.apply_visible);
+      EXPECT_FALSE(settings.can_apply);
+      EXPECT_FALSE(settings.can_cancel);
+    }
     const auto local_history = coordinator.active_history_state();
     EXPECT_EQ(local_history.has_value(),
               descriptor.tool == ViewportToolId::CreatePrimitive);
@@ -927,17 +952,20 @@ TEST(ViewportToolRuntimeTests,
       }
       const bool expected = candidate.tool == descriptor.tool;
       EXPECT_EQ(coordinator.active(candidate.id), expected) << candidate.id;
-      EXPECT_EQ(coordinator.pending(candidate.id), expected) << candidate.id;
+      EXPECT_EQ(coordinator.pending(candidate.id),
+                expected && has_pending_operation) << candidate.id;
     }
 
     const auto metadata = coordinator.active_commit_metadata();
-    ASSERT_TRUE(metadata.has_value());
-    EXPECT_FALSE(metadata->label.empty());
-    EXPECT_EQ(metadata->domain,
-              (descriptor.tool == ViewportToolId::Pivot ||
-               descriptor.tool == ViewportToolId::PathArray)
-                  ? ViewportNativeToolCommitDomain::Document
-                  : ViewportNativeToolCommitDomain::Modeling);
+    ASSERT_EQ(metadata.has_value(), has_pending_operation);
+    if (metadata) {
+      EXPECT_FALSE(metadata->label.empty());
+      EXPECT_EQ(metadata->domain,
+                (descriptor.tool == ViewportToolId::Pivot ||
+                 descriptor.tool == ViewportToolId::PathArray)
+                    ? ViewportNativeToolCommitDomain::Document
+                    : ViewportNativeToolCommitDomain::Modeling);
+    }
 
     const QuaderApiVoidResult repeated =
         editor.tools().activate(descriptor.tool);
@@ -958,6 +986,109 @@ TEST(ViewportToolRuntimeTests,
       }
       EXPECT_FALSE(coordinator.active(candidate.id)) << candidate.id;
       EXPECT_FALSE(coordinator.pending(candidate.id)) << candidate.id;
+    }
+  }
+}
+
+TEST(ViewportToolRuntimeTests,
+     CatalogToolTransitionsRetireOutgoingOwnersAcrossSelectionAndTransforms) {
+  const std::array incoming_tools{
+      ViewportToolId::Select, ViewportToolId::LassoSelect,
+      ViewportToolId::Move, ViewportToolId::Rotate, ViewportToolId::Scale};
+  for (const ToolDescriptor &outgoing : viewport_tool_descriptors()) {
+    for (const ViewportToolId incoming_id : incoming_tools) {
+      SCOPED_TRACE(std::string(outgoing.id));
+      SCOPED_TRACE(viewport_tool_id(incoming_id));
+      SceneSession session;
+      QuaderEditorApi editor(
+          QuaderApiSessionInternalAccess::from_scene_session(session));
+      ASSERT_TRUE(editor.viewports().set_layout(ViewportLayoutId::FourQuad).ok());
+      if (outgoing.tool == ViewportToolId::PathArray) {
+        const auto curve = editor.modeling().create_curve({
+            .points = {{.position = {}}, {.position = {4.0f, 0.0f, 0.0f}}},
+            .name = "Tool transition path"});
+        ASSERT_TRUE(curve.ok()) << curve.error_message();
+        ASSERT_TRUE(editor.selection().select_object(curve.value()).ok());
+      } else {
+        const auto box = editor.modeling().create_box(
+            {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+            "Tool transition source");
+        ASSERT_TRUE(box.ok()) << box.error_message();
+        if (outgoing.tool == ViewportToolId::Align) {
+          const auto companion = editor.modeling().create_box(
+              {.min = {3.0f, -1.0f, -1.0f}, .max = {5.0f, 1.0f, 1.0f}},
+              "Tool transition companion");
+          ASSERT_TRUE(companion.ok()) << companion.error_message();
+          ASSERT_TRUE(editor.selection().select_objects(
+              {box.value().entity, companion.value().entity},
+              box.value().entity).ok());
+        } else {
+          ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+        }
+      }
+      session.history().clear();
+      const auto entity_count_before = editor.query().entities().size();
+      ASSERT_TRUE(editor.tools().activate(ViewportToolId::Rotate).ok());
+      const auto activated = editor.commands().execute(
+          editor.commands().command_id_for_tool_activation(outgoing.id));
+      ASSERT_TRUE(activated.ok()) << activated.error_message();
+      ASSERT_EQ(editor.tools().active_tool(), outgoing.id);
+      EXPECT_EQ(editor.tools().active_native_tool_lifecycle(outgoing.tool),
+                outgoing.editor_owned_native_lifecycle);
+      EXPECT_EQ(session.modeling().tool_status().active_tool,
+                outgoing.editor_owned_native_lifecycle
+                    ? ModelingViewportTool::Select : outgoing.modeling_tool);
+      const auto origin = editor.tools().active_settings_presentation_origin();
+      const auto repeated = editor.tools().activate(outgoing.tool);
+      ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+      EXPECT_FALSE(repeated.changed());
+      EXPECT_EQ(editor.tools().active_settings_presentation_origin(), origin);
+      EXPECT_EQ(session.history().undo_count(), 0u);
+
+      const auto switched = editor.commands().execute(
+          editor.commands().command_id_for_tool_activation(
+              viewport_tool_id(incoming_id)));
+      ASSERT_TRUE(switched.ok()) << switched.error_message();
+      EXPECT_EQ(editor.tools().active_tool(), viewport_tool_id(incoming_id));
+      const ToolDescriptor *incoming = find_viewport_tool_descriptor(incoming_id);
+      ASSERT_NE(incoming, nullptr);
+      EXPECT_EQ(session.modeling().tool_status().active_tool,
+                incoming->modeling_tool);
+      const auto settings = editor.tools().active_settings();
+      if (incoming_id == ViewportToolId::Move ||
+          incoming_id == ViewportToolId::LassoSelect) {
+        EXPECT_TRUE(settings.active);
+        EXPECT_EQ(settings.tool_id, incoming->id);
+        EXPECT_FALSE(settings.preview_active);
+      } else if (incoming_id == ViewportToolId::Rotate ||
+                 incoming_id == ViewportToolId::Scale) {
+        EXPECT_FALSE(settings.active);
+        EXPECT_TRUE(settings.controls.empty());
+      }
+      EXPECT_FALSE(session.native_tools().has_pending_tool());
+      EXPECT_TRUE(session.native_tools().active_tool_id().empty());
+      for (const ToolDescriptor &candidate : viewport_tool_descriptors()) {
+        if (candidate.editor_owned_native_lifecycle) {
+          EXPECT_FALSE(session.native_tools().active(candidate.id))
+              << candidate.id;
+          EXPECT_FALSE(session.native_tools().pending(candidate.id))
+              << candidate.id;
+        }
+      }
+      for (const ViewportPaneId pane :
+           {ViewportPaneId::Perspective, ViewportPaneId::Top,
+            ViewportPaneId::Front, ViewportPaneId::Side}) {
+        EXPECT_EQ(editor.viewports().selected_tool(pane), incoming_id);
+      }
+      if (outgoing.tool == ViewportToolId::LinearArray) {
+        EXPECT_GT(editor.query().entities().size(), entity_count_before);
+        EXPECT_EQ(session.history().undo_count(), 1u);
+        EXPECT_EQ(editor.history().snapshot().undo_label, "Linear Array");
+        EXPECT_TRUE(editor.render().tool_preview_meshes().empty());
+      } else {
+        EXPECT_EQ(editor.query().entities().size(), entity_count_before);
+        EXPECT_EQ(session.history().undo_count(), 0u);
+      }
     }
   }
 }
@@ -1011,12 +1142,40 @@ TEST(ViewportToolRuntimeTests,
                              .max = {1.0f, 1.0f, 1.0f}},
                 "Native interruption matrix box");
         ASSERT_TRUE(created.ok()) << created.error_message();
-        ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+        if (descriptor.tool == ViewportToolId::Align) {
+          const auto companion = editor.modeling().create_box(
+              {.min = {3.0f, -1.0f, -1.0f}, .max = {5.0f, 1.0f, 1.0f}},
+              "Native interruption matrix alignment target");
+          ASSERT_TRUE(companion.ok()) << companion.error_message();
+          ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Object).ok());
+          ASSERT_TRUE(editor.selection().select_objects(
+              {created.value().entity, companion.value().entity},
+              created.value().entity).ok());
+        } else {
+          ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+        }
       }
       ASSERT_TRUE(editor.tools().activate(descriptor.tool).ok());
 
       NativeViewportToolCoordinator &coordinator = session.native_tools();
       ASSERT_TRUE(coordinator.active(descriptor.id));
+      std::vector<std::pair<EntityId, TransformComponent>> committed_align_transforms;
+      if (descriptor.tool == ViewportToolId::Align) {
+        session.history().clear();
+        const auto aligned = session.align_tool().set_alignment(
+            MeshArrangementAxis::X, MeshAlignmentMode::Minimum);
+        ASSERT_TRUE(aligned.ok) << aligned.message;
+        ASSERT_TRUE(aligned.changed);
+        EXPECT_EQ(session.history().undo_count(), 1u);
+        EXPECT_FALSE(coordinator.has_pending_tool());
+        EXPECT_FALSE(coordinator.has_pending_history_preview());
+        EXPECT_FALSE(coordinator.active_commit_metadata().has_value());
+        for (const EntityId entity : session.scene().selected_entities()) {
+          const auto *transform = session.scene().transform(entity);
+          ASSERT_NE(transform, nullptr);
+          committed_align_transforms.emplace_back(entity, *transform);
+        }
+      }
       ViewportInputFrame input;
       input.viewport_hovered = true;
       input.viewport_focused = true;
@@ -1153,7 +1312,8 @@ TEST(ViewportToolRuntimeTests,
       }
       if (scenario.interruption == Interruption::Escape &&
           descriptor.tool != ViewportToolId::UvPeel &&
-          descriptor.tool != ViewportToolId::Extrude) {
+          descriptor.tool != ViewportToolId::Extrude &&
+          descriptor.tool != ViewportToolId::Align) {
         const QuaderApiVoidResult canceled =
             editor.tools().cancel_active_tool_preview();
         ASSERT_TRUE(canceled.ok()) << canceled.error_message();
@@ -1162,11 +1322,22 @@ TEST(ViewportToolRuntimeTests,
 
       EXPECT_EQ(coordinator.active(descriptor.id),
                 !scenario.cancels_lifecycle);
+      const bool retains_pending_operation =
+          !scenario.cancels_lifecycle && descriptor.tool != ViewportToolId::Align;
       EXPECT_EQ(coordinator.pending(descriptor.id),
-                !scenario.cancels_lifecycle);
+                retains_pending_operation);
       EXPECT_EQ(coordinator.has_pending_tool(),
-                !scenario.cancels_lifecycle);
+                retains_pending_operation);
       EXPECT_FALSE(coordinator.pointer_dragging());
+      if (descriptor.tool == ViewportToolId::Align) {
+        EXPECT_EQ(session.history().undo_count(), 1u);
+        EXPECT_FALSE(coordinator.has_pending_history_preview());
+        for (const auto &[entity, transform] : committed_align_transforms) {
+          const auto *actual = session.scene().transform(entity);
+          ASSERT_NE(actual, nullptr);
+          EXPECT_TRUE(document_command_same_transform(*actual, transform));
+        }
+      }
 
       if (exercises_pointer_gesture && !scenario.cancels_lifecycle) {
         const NativeViewportToolPresentationSnapshot after =
@@ -2825,6 +2996,109 @@ public:
   ViewportToolId tool_id = ViewportToolId::Select;
   QuaderModelingObjectRef source;
 };
+
+TEST(ViewportToolRuntimeTests,
+     InsertEdgeLoopUsesCtrlOnlySnapAndPublishesEveryPreviewTransition) {
+  /// Records the actual retained stream produced by the viewport coordinator.
+  class LoopPreviewSubmissionTarget final : public ViewportOverlaySubmissionTarget {
+  public:
+    ViewportOverlayCameraUpdate update_overlay_cameras(
+        std::size_t, std::uint8_t, ViewportOverlayCamera) override {
+      return {true, true};
+    }
+    void submit_persistent_overlay(std::size_t, std::uint8_t,
+                                  ViewportOverlayFrame, ViewportOverlayCamera) override {}
+    void submit_dynamic_overlay(std::size_t, std::uint8_t,
+                                ViewportOverlayFrame submitted,
+                                ViewportOverlayCamera) override {
+      ++submissions;
+      frame = std::move(submitted);
+    }
+    int submissions = 0;
+    ViewportOverlayFrame frame;
+  };
+  for (const bool global_snap : {false, true}) {
+    SCOPED_TRACE(global_snap);
+    ModelingPointerHistoryHarness harness;
+    harness.initialize(ViewportToolId::InsertEdgeLoop);
+    const auto before = harness.documents();
+    const auto producer = harness.point.make_event_at;
+    harness.point.make_event_at = [=](QVec2 local, bool dragging) {
+      auto event = producer(local, dragging);
+      event.snap_enabled = global_snap;
+      return event;
+    };
+    ViewportOverlaySubmissionCoordinator coordinator;
+    LoopPreviewSubmissionTarget target;
+    const auto settings = ViewportSettings::defaults();
+    const auto submit = [&] {
+      const auto snapshot = harness.session.modeling().volatile_overlay_snapshot();
+      return coordinator.submit({
+          .volatile_modeling_overlay_frame = snapshot.frame.get(),
+          .volatile_modeling_source = {
+              .source_identity = snapshot.source.source_identity,
+              .publication_revision = snapshot.source.publication_revision},
+          .scene_selection_mode = RenderOverlaySelectionMode::Component,
+          .style_selection_context = ViewportOverlaySelectionContext::Edge,
+          .overlays_visible = true,
+          .selection_dimensions_visible = false,
+      }, settings, target);
+    };
+    const auto expect_submitted_height = [&](float y) {
+      ASSERT_EQ(target.frame.points.size(), 4u);
+      for (const auto &point : target.frame.points) {
+        EXPECT_NEAR(point.position.y, y, 0.0001f);
+      }
+      const int submitted = target.submissions;
+      for (int frame = 0; frame < 8; ++frame) {
+        EXPECT_FALSE(submit().dynamic_submitted);
+      }
+      EXPECT_EQ(target.submissions, submitted);
+    };
+    for (const bool control : {false, true, false}) {
+      ASSERT_TRUE(harness.dispatch({.can_interact = true,
+          .mouse_local = {0.37f, 0.0f}, .modifiers = {.primary = control}}).handled);
+      ASSERT_TRUE(harness.session.modeling().tool_status().insert_edge_loop_has_preview);
+      ASSERT_TRUE(submit().dynamic_submitted);
+      expect_submitted_height(control ? 0.5f : 0.37f);
+      harness.expect_documents(before);
+      EXPECT_EQ(harness.session.history().undo_count(), 0u);
+    }
+    harness.begin_preview({0.37f, 0.0f});
+    for (const bool control : {false, true, false}) {
+      ASSERT_TRUE(harness.dispatch({.left_down = true, .can_interact = true,
+          .mouse_local = {0.43f, 0.0f}, .modifiers = {.primary = control}}).handled);
+      ASSERT_TRUE(submit().dynamic_submitted);
+      expect_submitted_height(control ? 0.5f : 0.43f);
+    }
+    ASSERT_TRUE(harness.dispatch({.left_released = true,
+                                 .can_interact = true}).handled);
+    ASSERT_TRUE(submit().dynamic_submitted);
+    EXPECT_TRUE(target.frame.points.empty());
+    EXPECT_EQ(harness.session.history().undo_count(), 1u);
+    const auto after = harness.documents();
+    const auto &inserted = after.front().second.vertices;
+    for (std::size_t index = before.front().second.vertices.size();
+         index < inserted.size(); ++index) {
+      EXPECT_NEAR(inserted[index].position.y, 0.43f, 0.0001f);
+    }
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    harness.expect_documents(before);
+    ASSERT_TRUE(harness.editor.history().redo().ok());
+    harness.expect_documents(after);
+    harness.begin_preview({0.2f, 0.0f});
+    ASSERT_TRUE(harness.dispatch({.left_down = true, .can_interact = true,
+        .mouse_local = {0.2f, 0.0f}, .modifiers = {.primary = true}}).handled);
+    ASSERT_TRUE(submit().dynamic_submitted);
+    ASSERT_TRUE(harness.runtime.handle_active_tool_event(harness.state,
+        harness.context, {.kind = ViewportToolEventKind::Cancel,
+                          .tool = ViewportToolId::InsertEdgeLoop}).handled);
+    ASSERT_TRUE(submit().dynamic_submitted);
+    EXPECT_TRUE(target.frame.points.empty());
+    EXPECT_EQ(harness.session.history().undo_count(), 1u);
+    harness.expect_documents(after);
+  }
+}
 
 TEST(ViewportToolRuntimeTests,
      CutAndInsertEdgeLoopPointerCommitsHaveOneUndoStepAndExactRedo) {

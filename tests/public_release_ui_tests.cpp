@@ -584,6 +584,10 @@ TEST_F(PublicReleaseUiTests, ObjectMenuKeepsPublicGroupsAndNestedCleanUp) {
                            "menu_object_materials"}) {
     EXPECT_EQ(object->findChild<QMenu *>(QString::fromLatin1(name)), nullptr);
   }
+  EXPECT_EQ(object->findChild<QAction *>(
+                QStringLiteral("command_tools_activate_align")), nullptr);
+  EXPECT_FALSE(editor.commands().descriptor(
+      quader_command::kToolsActivateAlign).has_value());
   EXPECT_TRUE(editor.commands().descriptor(quader_command::kDeleteSelection)
                   .has_value());
 

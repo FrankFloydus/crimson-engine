@@ -3571,13 +3571,22 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
       asset_browser_source, "void UISystem::refresh_asset_browser(",
       "void UISystem::toggle_asset_browser(");
   const auto asset_revision = browser_refresh.find("asset_revision()");
+  const auto asset_first_paint = browser_refresh.find(
+      "asset_browser_->has_completed_visible_paint()");
+  const auto asset_discovery_gate = browser_refresh.find(
+      "const bool refresh_files = force || reveal_ready");
   const auto asset_gate = browser_refresh.find("if (changed)");
-  const auto asset_snapshot = browser_refresh.find("asset_browser_snapshot(force)");
+  const auto asset_snapshot = browser_refresh.find("asset_browser_snapshot(refresh_files)");
   ASSERT_NE(asset_revision, std::string::npos);
+  ASSERT_NE(asset_first_paint, std::string::npos);
+  ASSERT_NE(asset_discovery_gate, std::string::npos);
   ASSERT_NE(asset_gate, std::string::npos);
   ASSERT_NE(asset_snapshot, std::string::npos);
-  EXPECT_LT(asset_revision, asset_gate);
+  EXPECT_LT(asset_revision, asset_first_paint);
+  EXPECT_LT(asset_first_paint, asset_discovery_gate);
+  EXPECT_LT(asset_discovery_gate, asset_gate);
   EXPECT_LT(asset_gate, asset_snapshot);
+  expect_contains(browser_refresh, "asset_browser_discovery_pending_");
   expect_contains(browser_refresh, "panel_presented(UIPanelId::AssetBrowser)");
   expect_missing(browser_refresh, ".assets(");
   expect_missing(browser_refresh, "commands().available()");

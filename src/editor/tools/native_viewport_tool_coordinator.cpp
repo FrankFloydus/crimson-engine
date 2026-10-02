@@ -7,6 +7,7 @@
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "api/quader_operation_input_context.hpp"
 #include "editor/tools/uv_peel_tool_service.hpp"
+#include "editor/transform/align_tool_service.hpp"
 #include "core/release_features.hpp"
 
 #include "editor/array/linear_array_tool_service.hpp"
@@ -91,11 +92,13 @@ NativeViewportToolCoordinator::NativeViewportToolCoordinator(
     EditorSelectionService &selection, ModelingSessionService &modeling,
     CurveToolService &curve, UvPeelToolService &uv_peel,
     ExtrudeToolService &extrude,
+    AlignToolService &align,
     std::function<CommandResult(MaterialReference)> settle_modeling)
     : pivot_(pivot), linear_array_(linear_array), radial_array_(radial_array),
       path_array_(path_array), primitives_(primitives),
       light_creation_(light_creation), selection_(selection),
       modeling_(modeling), curve_(curve), uv_peel_(uv_peel), extrude_(extrude),
+      align_(align),
       settle_modeling_(std::move(settle_modeling)),
       curve_interaction_(
           std::make_unique<CurveViewportInteractionAdapter>(curve_)) {
@@ -324,6 +327,22 @@ NativeViewportToolCoordinator::NativeViewportToolCoordinator(
       .cancel = [&] { return extrude_.cancel(); },
       .reset = [&] { (void)extrude_.cancel(); },
   });
+  (void)runtime_.register_native_lifecycle({
+      .tool = ViewportToolId::Align,
+      .active_priority = 8,
+      .unavailable_message =
+          "Select at least two visible, unlocked objects in object mode.",
+      .commit_label = "Align Tool",
+      .commit_domain = ViewportNativeToolCommitDomain::Document,
+      .can_activate = [&] { return align_.can_activate(); },
+      .active = [&] { return align_.active(); },
+      .pending = [] { return false; },
+      .pending_history_preview = [] { return false; },
+      .activate = [&](double) { return align_.activate(); },
+      .commit = [] { return command_invalid_result("Align Tool has no pending operation."); },
+      .cancel = [&] { return align_.deactivate(); },
+      .reset = [&] { (void)align_.deactivate(); },
+  });
   assert(runtime_.native_lifecycle_catalog_complete());
 }
 
@@ -373,6 +392,7 @@ CommandResult NativeViewportToolCoordinator::refresh() {
   const CommandResult curve = curve_.refresh();
   const CommandResult uv_peel = uv_peel_.refresh();
   const CommandResult extrude = extrude_.refresh();
+  const CommandResult align = align_.refresh();
 
   if (linear.changed || path.changed ||
       (curve.changed && !curve_.dragging())) {
@@ -381,7 +401,7 @@ CommandResult NativeViewportToolCoordinator::refresh() {
 
   const auto first_failure = [&]() -> const CommandResult * {
     for (const CommandResult *candidate : {&linear, &radial, &path, &curve,
-                                           &uv_peel, &extrude}) {
+                                           &uv_peel, &extrude, &align}) {
       if (!candidate->ok) {
         return candidate;
       }
@@ -392,7 +412,7 @@ CommandResult NativeViewportToolCoordinator::refresh() {
       .ok = first_failure == nullptr,
       .changed =
           linear.changed || radial.changed || path.changed || curve.changed ||
-          uv_peel.changed || extrude.changed,
+          uv_peel.changed || extrude.changed || align.changed,
       .message = first_failure != nullptr ? first_failure->message
                                           : std::string{},
   };
@@ -454,6 +474,18 @@ NativeViewportToolCoordinator::handle_pointer_frame(
   if (extrude_.active() || extrude_interaction_.dragging() ||
       extrude_interaction_.suppressing_release()) {
     return extrude_interaction_.handle_frame(extrude_, camera, frame, &modeling_);
+  }
+  if (align_.active()) {
+    if (frame.input_result.cancel_requested) {
+      const CommandResult canceled = align_.deactivate();
+      return {.consumed = true,
+              .sync_active_tool = canceled.ok,
+              .invalidate_hover = canceled.changed,
+              .mark_overlay_dirty = canceled.changed,
+              .command_attempted = true,
+              .command_result = canceled};
+    }
+    return {};
   }
   if (uv_peel_.active()) {
     if (frame.input_result.cancel_requested) {
@@ -528,6 +560,12 @@ CommandResult NativeViewportToolCoordinator::activate(
   if (tool_id == kExtrudeToolId && extrude_.active()) {
     return extrude_.activate_preview();
   }
+  if (tool_id == kAlignToolId && !align_.active()) {
+    const CommandResult preflight = align_.preflight_activation();
+    if (!preflight.ok) {
+      return preflight;
+    }
+  }
   if (tool_id == kExtrudeToolId) {
     const CommandResult preflight = extrude_.preflight_activation(extrude_.mode());
     if (!preflight.ok) {
@@ -591,7 +629,25 @@ NativeViewportToolCoordinator::cancel_competing_state_for_tool_activation() {
 
 CommandResult
 NativeViewportToolCoordinator::settle_competing_state_for_tool_activation() {
-  return settle_transient_state();
+  CommandResult result = settle_transient_state();
+  if (!result.ok) {
+    return result;
+  }
+
+  // Accepted previews are already published. Retire idle panels and successful
+  // no-change owners before starting another tool, without rolling back edits.
+  const CommandResult retired = runtime_.cancel_native_lifecycles();
+  result.changed = result.changed || retired.changed;
+  if (!retired.ok) {
+    return {.ok = false, .changed = result.changed, .message = retired.message};
+  }
+  const ModelingCommandResult selected =
+      modeling_.activate_viewport_tool(ModelingViewportTool::Select);
+  result.changed = result.changed || selected.changed;
+  if (!selected.ok) {
+    return {.ok = false, .changed = result.changed, .message = selected.message};
+  }
+  return result;
 }
 
 CommandResult NativeViewportToolCoordinator::settle_transient_state() {

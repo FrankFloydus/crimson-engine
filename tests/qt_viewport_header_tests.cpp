@@ -247,6 +247,16 @@ TEST(QtViewportChromeLayoutTests,
   const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
   if (!review_directory.isEmpty()) ASSERT_TRUE(QDir().mkpath(review_directory));
   const auto review = [&](const QString &suffix) {
+    for (QToolButton *button : panel.findChildren<QToolButton *>()) {
+      if (button->defaultAction() == nullptr) {
+        continue;
+      }
+      button->defaultAction()->setToolTip(suffix);
+      QEvent font_change(QEvent::FontChange);
+      QCoreApplication::sendEvent(button, &font_change);
+      QEvent style_change(QEvent::StyleChange);
+      QCoreApplication::sendEvent(button, &style_change);
+    }
     for (int pass = 0; pass < 4; ++pass) {
       panel.refresh_workspace_layout();
       QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
@@ -294,6 +304,19 @@ TEST(QtViewportChromeLayoutTests,
       EXPECT_FALSE(camera->geometry().intersects(display->geometry()));
       EXPECT_GE(camera->width(), camera->minimumSizeHint().width());
       EXPECT_GE(display->width(), display->minimumSizeHint().width());
+      for (QToolButton *button : header->findChildren<QToolButton *>(
+               QString(), Qt::FindDirectChildrenOnly)) {
+        EXPECT_EQ(button->minimumSize(), metrics.size(QSize(28, 28)));
+        EXPECT_EQ(button->maximumSize(), metrics.size(QSize(28, 28)));
+        if (!button->isVisible()) {
+          continue;
+        }
+        EXPECT_EQ(button->size(), metrics.size(QSize(28, 28)));
+        EXPECT_EQ(button->geometry().top(), metrics.px(4));
+        EXPECT_EQ(header->height() - button->geometry().bottom() - 1,
+                  metrics.px(4));
+        EXPECT_TRUE(header->rect().contains(button->geometry()));
+      }
       for (auto *button : {layout, camera_settings}) {
         EXPECT_EQ(button->parentWidget(), header);
         EXPECT_EQ(button->toolButtonStyle(), Qt::ToolButtonIconOnly);

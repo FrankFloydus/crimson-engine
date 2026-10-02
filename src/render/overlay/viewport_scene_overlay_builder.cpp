@@ -506,7 +506,10 @@ void append_scene_wireframe_overlay(ViewportOverlayFrame &frame,
                      normalized_to_byte(context_color.a));
     }
     const float width_pixels =
-        mesh.selected ? snapshot.style.selection_edge_line_width_pixels : 0.0f;
+        mesh.selected ? (mesh.active_selected
+                             ? snapshot.style.active_selection_line_width_pixels
+                             : snapshot.style.selection_edge_line_width_pixels)
+                      : 0.0f;
     const ViewportOverlayStyleRole style_role =
         mesh.selected ? (mesh.active_selected ? ViewportOverlayStyleRole::ActiveSelectionWire
                                             : ViewportOverlayStyleRole::SelectionWire)

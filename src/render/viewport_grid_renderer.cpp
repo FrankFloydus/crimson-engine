@@ -93,6 +93,8 @@ std::uint64_t ground_grid_presentation_signature(
       .add_vec3(pose.up)
       .add_value(static_cast<std::uint32_t>(state.projection))
       .add_float(state.orthographic_size)
+      .add_float(state.near_plane)
+      .add_float(state.far_plane)
       .add_float(settings.float_value(
           state.projection == ViewportProjection::Orthographic
               ? ViewportFloatSettingId::Grid2DIntensity

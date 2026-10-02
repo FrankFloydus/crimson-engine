@@ -46,6 +46,7 @@ public:
   [[nodiscard]] bool expanded() const;
   void set_expanded(bool expanded);
   [[nodiscard]] QSize sizeHint() const override;
+  [[nodiscard]] QSize minimumSizeHint() const override;
 
   /// Requests host placement after presence or preferred geometry changes.
   std::function<void()> presentation_changed;

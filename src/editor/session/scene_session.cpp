@@ -21,6 +21,7 @@
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
 #include "editor/transform/mesh_transform_bake_service.hpp"
+#include "editor/transform/align_tool_service.hpp"
 #include "editor/placement/scene_surface_query.hpp"
 #include "editor/placement/snap_to_floor_service.hpp"
 #include "editor/placement/viewport_point_placement_service.hpp"
@@ -204,6 +205,16 @@ void SceneSession::rebuild_services() {
       &tool_defaults_->pivot);
   mesh_transform_bake_ = std::make_unique<MeshTransformBakeService>(
       document_.scene(), document_.assets(), *history_, *modeling_);
+  align_tool_ = std::make_unique<AlignToolService>(
+      document_.scene(), document_.assets(), *document_commands_,
+      *modeling_, &tool_defaults_->align, [this] {
+        (void)viewport_workspace_.record_shared_selected_tool(
+            ViewportToolId::Select, false);
+        if (settings_presentation_origin_.target_id == kAlignToolId) {
+          record_settings_presentation_origin(
+              "select", settings_presentation_origin_.pane);
+        }
+      });
   linear_array_ = std::make_unique<LinearArrayToolService>(
       document_.scene(), document_.assets(), *history_, *modeling_,
       *selection_, *instances_, &tool_defaults_->linear_array);
@@ -280,7 +291,7 @@ void SceneSession::rebuild_services() {
   native_tools_ = std::make_unique<NativeViewportToolCoordinator>(
       *pivot_, *linear_array_, *radial_array_, *path_array_,
       *primitive_creation_, *light_creation_,
-      *selection_, *modeling_, *curve_, *uv_peel_, *extrude_,
+      *selection_, *modeling_, *curve_, *uv_peel_, *extrude_, *align_tool_,
       [this](MaterialReference material) {
         ModelingCommandExecutionService execution;
         const ModelingCommandResult settled = execution.settle_pending_operations(

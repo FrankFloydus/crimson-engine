@@ -106,6 +106,7 @@ private:
   status_from(ModelingCommandResult result, QuaderMutationKind kind,
               std::string_view fallback_message = {});
   [[nodiscard]] CommandResult settle_pending_operations();
+  [[nodiscard]] CommandResult settle_tool_transition();
   [[nodiscard]] SceneSession &scene_session() const;
   [[nodiscard]] EditorHistoryService &history() const;
   [[nodiscard]] EditorCommandService editor_commands() const;

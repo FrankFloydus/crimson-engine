@@ -1291,7 +1291,7 @@ TEST(SelectedMeshOutlinePresentationTests,
 }
 
 TEST(SelectedMeshOutlinePresentationTests,
-     ActiveOnlyComponentChangesReachRetainedSubmissionWithoutRebuildingTopology) {
+     CurrentModeSelectionCountAndPrimaryChangesReachRetainedSubmission) {
   for (const auto mode : {QuaderSelectionMode::Vertex, QuaderSelectionMode::Edge,
                           QuaderSelectionMode::Face}) {
     SCOPED_TRACE(static_cast<int>(mode));
@@ -1314,14 +1314,26 @@ TEST(SelectedMeshOutlinePresentationTests,
         return editor.selection().select_faces(object, {1, 2}, QuaderSelectionEdit::Add);
       }
     };
-    ASSERT_TRUE(select(first.value()).ok());
-    ASSERT_TRUE(select(second.value()).ok());
+    const auto select_single = [&](QuaderModelingObjectRef object) {
+      switch (mode) {
+      case QuaderSelectionMode::Vertex:
+        return editor.selection().select_vertex(object, 1);
+      case QuaderSelectionMode::Edge:
+        return editor.selection().select_edge(object, 1, 2);
+      default:
+        return editor.selection().select_face(object, 1);
+      }
+    };
+    ASSERT_TRUE(select_single(first.value()).ok());
     auto &modeling = session.modeling();
     ExtrudeOutlineProvider provider{session};
     ExtrudeOutlineTarget target;
     ViewportOverlaySubmissionCoordinator coordinator;
     auto settings = ViewportSettings::defaults();
     (void)settings.set_color(ViewportColorSettingId::SelectionWire, {0.3f, 0.5f, 0.7f, 0.65f});
+    ASSERT_TRUE(settings.set_float_value(ViewportFloatSettingId::SelectionEdgeLineSize, 3.0f));
+    ASSERT_TRUE(settings.set_float_value(ViewportFloatSettingId::SelectionFaceWireLineSize, 4.0f));
+    ASSERT_TRUE(settings.set_float_value(ViewportFloatSettingId::ActiveSelectionLineSize, 6.0f));
     const auto context = mode == QuaderSelectionMode::Vertex
         ? ViewportOverlaySelectionContext::Vertex
         : mode == QuaderSelectionMode::Edge ? ViewportOverlaySelectionContext::Edge
@@ -1357,6 +1369,7 @@ TEST(SelectedMeshOutlinePresentationTests,
         if (line.style_role == ViewportOverlayStyleRole::ActiveSelectionWire) {
           ++active_count;
           EXPECT_EQ(line.element.object_id, active_id);
+          EXPECT_FLOAT_EQ(line.width_pixels, 6.0f);
         }
       }
       if (mode == QuaderSelectionMode::Face) {
@@ -1371,6 +1384,48 @@ TEST(SelectedMeshOutlinePresentationTests,
       }
       EXPECT_GT(active_count, 0u);
     };
+    const auto expect_singleton = [&] {
+      EXPECT_FALSE(std::ranges::any_of(target.persistent.points, [](const auto &point) {
+        return point.style_role == ViewportOverlayStyleRole::ActiveSelectedVertex;
+      }));
+      EXPECT_FALSE(std::ranges::any_of(target.persistent.lines, [](const auto &line) {
+        return line.style_role == ViewportOverlayStyleRole::ActiveSelectionWire;
+      }));
+      EXPECT_FALSE(std::ranges::any_of(target.persistent.triangles, [](const auto &triangle) {
+        return triangle.style_role == ViewportOverlayStyleRole::ActiveSelectionFace;
+      }));
+      if (mode != QuaderSelectionMode::Vertex) {
+        ASSERT_TRUE(std::ranges::any_of(target.persistent.lines, [](const auto &line) {
+          return line.style_role == ViewportOverlayStyleRole::SelectionWire;
+        }));
+        for (const auto &line : target.persistent.lines) {
+          if (line.style_role == ViewportOverlayStyleRole::SelectionWire) {
+            EXPECT_FLOAT_EQ(line.width_pixels,
+                            line.layer == ViewportOverlayLayer::SelectedFaceEdge
+                                ? 4.0f : 3.0f);
+          }
+        }
+      }
+    };
+    ASSERT_TRUE(submit().persistent_submitted);
+    ASSERT_NO_FATAL_FAILURE(expect_singleton());
+    const auto singleton_builds = provider.builds;
+    const auto singleton_submissions = target.submissions;
+    EXPECT_FALSE(submit().persistent_submitted);
+    EXPECT_EQ(provider.builds, singleton_builds);
+    EXPECT_EQ(target.submissions, singleton_submissions);
+    if (mode == QuaderSelectionMode::Edge) {
+      ASSERT_TRUE(editor.selection().select_edge(first.value(), 1, 4,
+                                                QuaderSelectionEdit::Add).ok());
+    } else {
+      ASSERT_TRUE(select(first.value()).ok());
+    }
+    ASSERT_TRUE(submit().persistent_submitted);
+    expect_active(first.value().modeling_object_id);
+    ASSERT_TRUE(select_single(first.value()).ok());
+    ASSERT_TRUE(submit().persistent_submitted);
+    ASSERT_NO_FATAL_FAILURE(expect_singleton());
+    ASSERT_TRUE(select(second.value()).ok());
     ASSERT_TRUE(submit().persistent_submitted);
     expect_active(second.value().modeling_object_id);
     const auto before = modeling.modeling_sdk_projection_stats_for_tests();
@@ -1513,6 +1568,8 @@ TEST(SelectedMeshOutlinePresentationTests,
       // contains every authored edge, including the shared interior edge.
       (void)harness.settings.set_color(ViewportColorSettingId::SelectionWire,
                                        {1, 1, 0, 0.5F});
+      (void)harness.settings.set_color(ViewportColorSettingId::ActiveSelection,
+                                       {1.0F, 105.0F / 255.0F, 180.0F / 255.0F, 0.5F});
       ASSERT_TRUE(harness.editor.selection().select_edge(first, 1, 2).ok());
       ASSERT_TRUE(harness.submit().persistent_submitted);
       const auto selected_wires = harness.wires(first.modeling_object_id);

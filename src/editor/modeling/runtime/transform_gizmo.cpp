@@ -438,6 +438,7 @@ TransformGizmoFrame build_transform_gizmo_frame(const TransformGizmoFrameInput& 
 	frame.info.tool = input.tool;
 	frame.info.hover_axis = input.hover_axis;
 	frame.info.active_axis = input.active_axis;
+	frame.info.orientation = input.orientation;
 	frame.info.gizmo_scale = clamped_gizmo_scale(input.gizmo_scale);
 	frame.info.move_center_radius_pixels =
 		std::max(1.0, input.move_center_radius_pixels) *

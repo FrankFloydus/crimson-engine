@@ -204,6 +204,9 @@ public:
   // Implicit execution fallback retains the user's last selection-tool choice.
   bool record_selected_tool(ViewportPaneId pane, ViewportToolId tool,
                             bool remember_selection = true);
+  /// Projects the single executing tool to every pane, including hidden panes.
+  bool record_shared_selected_tool(ViewportToolId tool,
+                                   bool remember_selection = false);
   [[nodiscard]] bool control(ViewportPaneId pane,
                              QuaderViewportControl control) const;
   bool set_control(ViewportPaneId pane, QuaderViewportControl control,

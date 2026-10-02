@@ -13,10 +13,11 @@
 #include "editor/modeling/services/modeling_interaction_settings_service.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "editor/pivot/pivot_tool_service.hpp"
+#include "editor/transform/align_tool_service.hpp"
 
 namespace quader {
 
-/// Application-lifetime options, separate from scene content and live previews.
+/// Application-lifetime options, separate from scene content and active tools.
 /// Path Array and Extrude retain their existing independently supplied defaults.
 struct ToolSessionDefaults final {
   ModelingInteractionSettingsService modeling;
@@ -26,6 +27,7 @@ struct ToolSessionDefaults final {
   CurveSessionDefaults curve;
   PivotSessionDefaults pivot;
   PrimitiveCreationSessionDefaults primitive;
+  AlignToolSessionDefaults align;
 };
 
 } // namespace quader

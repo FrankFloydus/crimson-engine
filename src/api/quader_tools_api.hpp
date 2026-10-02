@@ -53,8 +53,9 @@ public:
     /// A genuine tool transition accepts pending work; explicit Cancel rolls it back.
     QuaderApiVoidResult activate(std::string_view tool_id);
     QuaderApiVoidResult activate(ViewportToolId tool);
-    /// Acquires the single editing runtime only when a pane starts an edit.
+    /// Joins the single editing runtime without restarting its shared operation.
     QuaderApiVoidResult acquire_pane_tool(ViewportPaneId pane);
+    /// Editing eligibility is independent of the pane hosting Tool Settings.
     [[nodiscard]] bool pane_owns_executing_tool(ViewportPaneId pane) const;
     /// Called after an accepted tool lifecycle ends, never from frame refresh.
     void synchronize_pane_tool_after_execution(ViewportPaneId pane);
@@ -75,7 +76,7 @@ public:
     /// Array-only presentation choice; no preview/layout evaluation. No value
     /// means ordinary selection dimensions own the viewport presentation.
     [[nodiscard]] std::optional<bool> active_array_bounding_box_dimensions() const;
-    /// Pure presentation of a pane's choice; never starts or settles a tool.
+    /// Active lifecycle settings stay with the origin; other panes read parameters.
     [[nodiscard]] QuaderToolSettingsTarget settings_for_pane(ViewportPaneId pane) const;
     [[nodiscard]] std::uint64_t settings_revision(ViewportPaneId pane) const;
     [[nodiscard]] std::uint64_t settings_presentation_serial(ViewportPaneId pane) const;
@@ -83,8 +84,9 @@ public:
     /// Borrowed until the next operation start or session replacement; no descriptor work.
     [[nodiscard]] const QuaderSettingsPresentationOrigin &
     active_settings_presentation_origin() const;
-    /// Records the input pane after a successful semantic settings-operation start.
-    void record_active_settings_origin(ViewportPaneId pane);
+    /// Keeps an existing operation's origin unless an accepted start replaces it.
+    void record_active_settings_origin(ViewportPaneId pane,
+                                        bool new_operation = false);
     [[nodiscard]] std::uint64_t active_tool_revision() const;
     /// Scalar tool/preview gate for command availability; no settings or overlay projection.
     [[nodiscard]] std::uint64_t availability_revision() const;
@@ -170,6 +172,7 @@ public:
     void rebind_session(QuaderApiSession session);
 
   private:
+    QuaderApiVoidResult with_align_feedback(QuaderApiVoidResult result) const;
     QuaderApiVoidResult acquire_pane_settings(ViewportPaneId pane,
                                              std::string_view tool_id);
     /** Retains the pane's selected-tool settings projection without activating it. */
@@ -190,9 +193,9 @@ public:
     mutable std::string active_tool_id_;
     mutable std::uint64_t active_tool_revision_ = 0;
     mutable bool active_tool_valid_ = false;
-    mutable std::optional<std::array<std::uint64_t, 13>> availability_source_;
+    mutable std::optional<std::array<std::uint64_t, 14>> availability_source_;
     mutable std::uint64_t availability_revision_ = 0;
-    mutable std::array<std::uint64_t, 20> input_hints_source_ = {};
+    mutable std::array<std::uint64_t, 21> input_hints_source_ = {};
     mutable QuaderOperationInputContext input_hints_context_;
     mutable std::string input_hints_native_tool_id_;
     mutable std::uint64_t input_hints_revision_ = 0;

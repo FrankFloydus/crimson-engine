@@ -1942,7 +1942,8 @@ TEST(QtToolSettingsPanelTests,
   panel.unbind();
 }
 
-TEST(QtToolSettingsPanelTests, PassivePaneSettingsCannotAcceptOrCancelAnotherPanesOperation) {
+TEST(QtToolSettingsPanelTests,
+     FocusTransferKeepsSettingsLifecycleBoundToTheSharedOperation) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char executable[] = "quader-pane-settings-lifecycle-tests";
@@ -1959,15 +1960,22 @@ TEST(QtToolSettingsPanelTests, PassivePaneSettingsCannotAcceptOrCancelAnotherPan
   quader::QtToolSettingsPanel panel;
   panel.setAttribute(Qt::WA_DontShowOnScreen, true);
   panel.bind(editor);
-  ASSERT_EQ(panel.target_id(), "move");
-  EXPECT_FALSE(panel.prepare_lifecycle_intent(editor, quader::QuaderNativeToolSettingsIntent::Apply));
-  EXPECT_FALSE(panel.prepare_lifecycle_intent(editor, quader::QuaderNativeToolSettingsIntent::Cancel));
+  ASSERT_EQ(panel.target_id(), "uv_peel");
+  EXPECT_TRUE(panel.prepare_lifecycle_intent(
+      editor, quader::QuaderNativeToolSettingsIntent::Apply));
+  EXPECT_TRUE(panel.prepare_lifecycle_intent(
+      editor, quader::QuaderNativeToolSettingsIntent::Cancel));
   EXPECT_EQ(editor.tools().active_tool(), "uv_peel");
   EXPECT_EQ(editor.tools().active_settings_presentation_origin().serial, serial);
+  EXPECT_EQ(editor.viewports().selected_tool(quader::ViewportPaneId::Top),
+            quader::ViewportToolId::UvPeel);
+  EXPECT_EQ(editor.viewports().selected_tool(quader::ViewportPaneId::Perspective),
+            quader::ViewportToolId::UvPeel);
   panel.unbind();
 }
 
-TEST(QtToolSettingsPanelTests, FocusTransferDiscardsQueuedValuesWithoutAcquiringAnotherTool) {
+TEST(QtToolSettingsPanelTests,
+     FocusTransferRetainsQueuedValuesForTheOriginOperation) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char executable[] = "quader-pane-settings-draft-tests";
@@ -1983,24 +1991,30 @@ TEST(QtToolSettingsPanelTests, FocusTransferDiscardsQueuedValuesWithoutAcquiring
   auto *repeat = panel.findChild<QDoubleSpinBox *>(
       QStringLiteral("tool_settings.control.uv_peel.u_repeat"));
   ASSERT_NE(repeat, nullptr);
+  const QPointer<QDoubleSpinBox> origin_repeat(repeat);
+  const auto history_before = editor.history().snapshot();
   repeat->setValue(7.0);
   ASSERT_TRUE(panel.numeric_interaction_active());
   const auto origin = editor.tools().active_settings_presentation_origin();
   const auto active_revision = editor.tools().active_tool_revision();
   ASSERT_TRUE(editor.viewports().focus_pane(quader::ViewportPaneId::Top).ok());
-  // Timers can fire before the outer frame has moved/rebuilt the panel.
+  // Focus does not replace the settings operation, even before its next refresh.
   process_events_for(75);
-  EXPECT_DOUBLE_EQ(editor.modeling().uv_peel_settings().options.u_repeat, 1.0);
+  EXPECT_DOUBLE_EQ(editor.modeling().uv_peel_settings().options.u_repeat, 7.0);
   EXPECT_EQ(editor.tools().active_tool(), "uv_peel");
   EXPECT_EQ(editor.tools().active_tool_revision(), active_revision);
-  EXPECT_EQ(editor.tools().active_settings_presentation_origin().serial, origin.serial);
+  EXPECT_EQ(editor.tools().active_settings_presentation_origin(), origin);
   panel.refresh();
-  EXPECT_FALSE(panel.has_settings());
+  EXPECT_TRUE(panel.has_settings());
+  EXPECT_EQ(panel.target_id(), "uv_peel");
+  EXPECT_EQ(panel.findChild<QDoubleSpinBox *>(
+      QStringLiteral("tool_settings.control.uv_peel.u_repeat")), origin_repeat.data());
   EXPECT_FALSE(panel.numeric_interaction_active());
   ASSERT_TRUE(editor.viewports().focus_pane(quader::ViewportPaneId::Perspective).ok());
   panel.refresh();
   EXPECT_EQ(panel.target_id(), "uv_peel");
-  EXPECT_DOUBLE_EQ(editor.modeling().uv_peel_settings().options.u_repeat, 1.0);
+  EXPECT_DOUBLE_EQ(editor.modeling().uv_peel_settings().options.u_repeat, 7.0);
+  EXPECT_EQ(editor.history().snapshot().undo_label, history_before.undo_label);
   panel.unbind();
 }
 

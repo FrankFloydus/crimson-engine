@@ -1090,7 +1090,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(tool, "number_dispatch_lifecycle_is_current(");
   expect_contains(tool, "settings_revision(target_pane_)");
   expect_contains(tool, "selected_tool_revision(target_pane_)");
-  expect_contains(tool, "editor_->viewports().focused_pane() == target_pane_");
+  expect_contains(tool, "settings_pane() == target_pane_");
   const std::string apply = source_slice(
       tool, "QObject::connect(apply_button_, &QPushButton::clicked",
       "QObject::connect(cancel_button_, &QPushButton::clicked");
@@ -1761,7 +1761,11 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(button_presentation, "return QPalette::Disabled");
   expect_missing(button_presentation, "kToolbarAccentRgb");
   expect_contains(button_presentation, "face.state.setFlag(State_On, false)");
-  expect_contains(button_presentation, "button.setMinimumSize(40, 40)");
+  expect_contains(button_presentation, "kButtonMinimumSize(40, 40)");
+  expect_contains(button_presentation, "metrics.size(kButtonMinimumSize)");
+  expect_contains(button_presentation,
+                  "QStyle::CT_ToolButton, &option, contents, &button");
+  expect_contains(button_presentation, "button.setMinimumSize(minimum)");
   expect_contains(button_presentation, "button.setFocusPolicy(Qt::StrongFocus)");
   expect_contains(button_presentation, "setAccessibleDescription");
   expect_missing(button_presentation, "setDown(");

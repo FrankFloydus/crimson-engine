@@ -43,7 +43,11 @@ presentation and rendering integration.
 - Both mesh shaders share `mesh_surface_grid.glsl`. It blends fixed configured colors with
   coverage-scaled alpha; transparent major slots exclude minor lines. Shaded applies it after
   modeling lighting, Rendered through post-lighting composition with instance context/opacity
-  preserved. Material diagnostics remain independent of the grid.
+  preserved. Constant surface coordinates contribute no grid-line coverage, including smooth
+  projection blends; camera-relative footprints reject perspective interpolation noise before
+  the antialias minimum. Grid normals and footprints use authored world axes even when Filament
+  rotates its internal world for the environment; coarse face normals already use authored axes.
+  Material diagnostics remain independent of the grid.
 - Perspective ground-grid colors are sRGB palette values decoded before ordinary alpha blending.
   Keep palette intensity separate from coverage: the default small/64-unit shades are 76/114,
   with full authored opacity. Verify the blend over black and textured beige in Shaded mode;

@@ -155,6 +155,8 @@ public:
   bool handle_action(QtAssetBrowserAction action);
   void focus_browser();
   [[nodiscard]] bool owns_browser_focus() const;
+  /** Discovery work may start only after the current exposure has painted. */
+  [[nodiscard]] bool has_completed_visible_paint() const;
   void apply_ui_scale(const QtUiScaleMetrics &metrics);
   void restore_presentation_state(QtAssetBrowserViewMode view_mode, int tile_size,
                                   bool sidebar_visible = true,

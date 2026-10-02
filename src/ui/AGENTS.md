@@ -32,6 +32,9 @@ file except through prior written authorization from Francesco Di Blasi.
   `QtAssetThumbnailCache` bounds queued requests and retains generation/revision/DPI fences.
   Ctrl+wheel within a focused browser adjusts its existing thumbnail-size setting;
   ordinary wheel scrolling and input outside that browser retain their ownership.
+  Reveal reuses retained rows and defers one owner discovery until the current exposure's
+  first item-view paint. Closing before that paint abandons pending discovery; unchanged
+  frames never repeat it. Retain no filesystem-watch handles that block folder replacement.
 - `QtFaceTexturePanel` owns the single-face canvas and retained texture controls.
   Texture Settings keeps Scale U/V on one row, Shift U/V on the next, then Rotation,
   leaving vertical space for the canvas and material browser.
@@ -61,13 +64,16 @@ file except through prior written authorization from Francesco Di Blasi.
   Object selection does not own or interrupt these edits. Gate retained refresh on the document
   settings revision before copying values; runtime replacement abandons dialogs and numeric
   gestures without accessing the old owners. See `tests/qt_environment_settings_popup_tests.cpp`.
-- Its single retained settings overlay follows the focused pane and queries that pane's selected
-  tool without activating it. It shows only actual settings controls and their actions, with the
+- Its single retained settings overlay stays in the pane that initiated the shared operation and
+  queries that origin's settings without activating it. If that pane is hidden by the layout,
+  temporarily host it in a visible pane and restore its anchor when the origin returns.
+  It shows only actual settings controls and their actions, with the
   operation title in the disclosure header. No descriptions or empty shell are shown. Expansion
   starts expanded for each activation; an explicit collapse lasts for that activation. Scene-owned
-  origin metadata protects the executing operation but does not pin the overlay's visual position.
-  Focus changes neither settle nor acquire a tool; settings mutations acquire the pane's tool using
-  the same settlement rules as viewport editing. Drafts retain their originating pane/session fence.
+  origin metadata pins the overlay's visual position and fences its controls. Visible panes project
+  the same active operation and handles; each camera owns only its projected presentation.
+  Focus changes neither settle nor acquire a tool; editing from another pane preserves the operation
+  and its settings origin. Drafts retain their originating operation/session fence.
   Collapse settles field drafts without terminating the operation. See
   `tests/qt_viewport_settings_overlay_tests.cpp` and the settings-control tests.
   Each value uses one label-left, field-right row. Measure localized labels with the active font

@@ -565,14 +565,37 @@ TEST(QuaderMeshMaterialTests,
     const std::string material = read_source_file(path);
     EXPECT_NE(material.find("#include \"mesh_normal_mapping.glsl\""),
               std::string::npos);
-    const std::size_t sample = material.find("sampleTextureNormal(uv)");
-    const std::size_t assignment = material.find("material.normal =");
-    const std::size_t prepare = material.find("prepareMaterial(material)");
+    const std::size_t fragment_start =
+        material.find("void material(inout MaterialInputs material)");
+    ASSERT_NE(fragment_start, std::string::npos);
+    const std::string fragment = material.substr(fragment_start);
+    const std::size_t sample = fragment.find("sampleTextureNormal(uv)");
     ASSERT_NE(sample, std::string::npos);
+    std::size_t assignment =
+        fragment.find("material.normal = sampleTextureNormal(uv)");
+    if (assignment == std::string::npos) {
+      assignment = fragment.find("material.normal = normalSample");
+    }
+    const std::size_t prepare =
+        fragment.find("prepareMaterial(material)", sample);
     ASSERT_NE(assignment, std::string::npos);
     ASSERT_NE(prepare, std::string::npos);
     EXPECT_LT(sample, prepare);
     EXPECT_LT(assignment, prepare);
+    const std::string before_sample = fragment.substr(0u, sample);
+    if (before_sample.find("prepareMaterial(material)") != std::string::npos) {
+      // The UV diagnostic terminates with a neutral normal before textured PBR.
+      const std::string diagnostic = source_slice(
+          fragment, "if (debugMode == 7.0) {",
+          "vec3 normalSample = sampleTextureNormal(uv);");
+      EXPECT_EQ(count_occurrences(before_sample, "prepareMaterial(material)"),
+                1u);
+      EXPECT_EQ(count_occurrences(diagnostic, "prepareMaterial(material)"), 1u);
+      EXPECT_TRUE(source_contains_compact(
+          diagnostic, "material.normal = vec3(0.0, 0.0, 1.0); "
+                      "prepareMaterial(material);"));
+      EXPECT_TRUE(source_contains_compact(diagnostic, "return; }"));
+    }
   }
   EXPECT_NE(source.find("return normalForTextureUv(normalSample, uv)"),
             std::string::npos);
@@ -882,9 +905,9 @@ TEST(QuaderMeshMaterialTests, SupportsOptionalWorldSpaceSurfaceGrid) {
             2u);
   EXPECT_TRUE(source_contains_compact(
       source, "vec3 projectionWeights = faceProjection.w > 0.5 ? "
-              "surfaceGridFaceProjectionWeights(faceProjection.xyz) : "
+              "surfaceGridFaceProjectionWeights(faceNormal) : "
               "surfaceGridProjectionWeights("
-              "getWorldGeometricNormalVector())"));
+              "userWorldFromWorld * getWorldGeometricNormalVector())"));
   EXPECT_NE(source.find(
                 "float minorLine = dot("),
             std::string::npos);
@@ -907,7 +930,9 @@ TEST(QuaderMeshMaterialTests, SupportsOptionalWorldSpaceSurfaceGrid) {
               "length(dFdy(rasterWorldPosition)))"));
   EXPECT_NE(source.find("surfaceGridMinorLineThickness"), std::string::npos);
   EXPECT_NE(source.find("surfaceGridMajorLineThickness"), std::string::npos);
-  EXPECT_NE(source.find("float derivativeWidth = fwidth(coord)"),
+  EXPECT_NE(source.find("float derivativeWidth = coordinatePixelWidth"),
+            std::string::npos);
+  EXPECT_NE(source.find("vec3 coordinatePixelWidths = abs(userWorldDx) + abs(userWorldDy)"),
             std::string::npos);
   EXPECT_NE(source.find("float lodSpacing = max(surfaceGridFloor"),
             std::string::npos);
@@ -1026,17 +1051,42 @@ TEST(QuaderMeshMaterialTests,
   EXPECT_NE(factory_source.find("AttributeType::FLOAT4"),
             std::string::npos);
 
-  EXPECT_NE(projection_source.find("primitive_reference_counts"),
-            std::string::npos);
-  EXPECT_NE(projection_source.find("candidate.vertices.size() != 3u && "
-                                   "!candidate.flat"),
-            std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
+  const std::string projection_plan_source = source_slice(
       projection_source,
-      "primitive_reference_counts[vertex_index] == 1u"));
-  EXPECT_NE(projection_source.find("candidate.local_normal = "
-                                   "normalize(area_normal)"),
-            std::string::npos);
+      "MeshSurfaceGridProjectionPlan prepare_mesh_surface_grid_projection(",
+      "std::vector<MeshSurfaceGridVertexProjection>");
+  const std::string projection_build_source = source_slice(
+      projection_source,
+      "std::span<const MeshVertex> vertices, const MeshSurfaceGridProjectionPlan &plan,",
+      "std::span<const MeshVertex> vertices, std::span<const std::uint32_t> indices,");
+  EXPECT_TRUE(source_contains_compact(
+      projection_plan_source,
+      "if (vertex < vertex_count && stamps[vertex] != face) { "
+      "stamps[vertex] = face; ++references[vertex]; }"));
+  EXPECT_TRUE(source_contains_compact(
+      projection_plan_source,
+      "binding.exclusive = std::ranges::all_of(binding.vertices, "
+      "[&](auto vertex) { return references[vertex] == 1u; });"));
+  EXPECT_TRUE(source_contains_compact(
+      projection_build_source,
+      "if (face.vertices.size() < 3u || !face.exclusive) continue;"));
+  EXPECT_TRUE(source_contains_compact(
+      projection_build_source,
+      "area_normal += cross(position(triangle[1]) - position(triangle[0]), "
+      "position(triangle[2]) - position(triangle[0]));"));
+  EXPECT_TRUE(source_contains_compact(
+      projection_build_source,
+      "const auto normal = normalize(area_normal); "
+      "if (face.vertices.size() != 3u && !std::ranges::all_of(face.vertices, "
+      "[&](auto index) { const auto vertex_normal = normalize(vertices[index].normal); "
+      "return length_squared(vertex_normal) > kNormalEpsilonSquared && "
+      "dot(vertex_normal, normal) >= kFlatNormalAlignment; })) continue;"));
+  EXPECT_TRUE(source_contains_compact(
+      projection_build_source,
+      "for (const auto vertex : face.vertices) projections[vertex] = {normal, true};"));
+  EXPECT_TRUE(source_contains_compact(
+      projection_build_source,
+      "return positions.empty() ? vertices[index].position : positions[index];"));
   EXPECT_EQ(projection_source.find(
                 "coalesced_render_mesh_primitive_spans"),
             std::string::npos);
@@ -1772,8 +1822,8 @@ TEST(ViewportOverlayPolicyTests,
   EXPECT_TRUE(source_contains_compact(
       selection_source.substr(selection_sync,
                               selection_prepare - selection_sync),
-      "!wire_style_changed && !raster_groups_changed && !clip_changed) { "
-      "return false; }"));
+      "!wire_style_changed && !fill_style_changed && "
+      "!raster_groups_changed && !clip_changed) { return false; }"));
 
   EXPECT_NE(wireframe_source.find(
                 "kRenderOverlaySceneWireframeCacheNoWorkDependencies"),
@@ -3864,10 +3914,10 @@ TEST(ViewportRendererTests,
       "renderer.set_overlay_visible(should_enable_viewport_overlay_pass({"));
   EXPECT_TRUE(source_contains_compact(
       viewport_panel_source,
-      "const bool tool_overlay_visible = pane_state.id == "
-      "operation_pane && active_box_preview_.ok && "
+      "const bool tool_overlay_visible = active_box_preview_.ok && "
       "active_box_preview_.footprint_count >= 2U && "
-      "active_box_preview_.drag_state == ModelingBoxDragState::Footprint"));
+      "active_box_preview_.drag_state == ModelingBoxDragState::Footprint"))
+      << "the shared primitive footprint must remain visible in every pane";
   EXPECT_NE(viewport_panel_source.find(
                 ".tool_overlay_visible = tool_overlay_visible"),
             std::string::npos);
@@ -4121,7 +4171,37 @@ TEST(RenderProxyLifecycleTests,
             1u);
   EXPECT_EQ(
       count_occurrences(overlay_factory_source, "scene.addEntity(entity)"), 1u);
-  EXPECT_EQ(overlay_factory_source.find("scene_->addEntity(entity)"),
+  // Retained face arenas return a guarded proxy directly to the cache owner.
+  // All other factory publication still goes through the move-only helper.
+  const std::string retained_face_source = source_slice(
+      overlay_factory_source,
+      "OverlayRenderableProxy OverlayProxyFactory::create_retained_face_proxy(",
+      "bool OverlayProxyFactory::update_retained_face_proxy(");
+  EXPECT_EQ(count_occurrences(overlay_factory_source,
+                              "scene_->addEntity(entity)"),
+            1u);
+  EXPECT_EQ(count_occurrences(retained_face_source,
+                              "scene_->addEntity(entity)"),
+            1u);
+  const std::size_t retained_guard = retained_face_source.find(
+      "OverlayProxyCreationGuard guard(*engine_, *scene_, proxy)");
+  const std::size_t retained_allocation = retained_face_source.find(
+      "proxy.vertex_buffer = filament::VertexBuffer::Builder()");
+  ASSERT_NE(retained_guard, std::string::npos);
+  ASSERT_NE(retained_allocation, std::string::npos);
+  EXPECT_LT(retained_guard, retained_allocation);
+  EXPECT_TRUE(source_contains_compact(
+      retained_face_source,
+      "scene_->addEntity(entity); guard.mark_scene_added(); guard.release();"));
+  const std::string creation_guard_source = source_slice(
+      overlay_factory_source, "class OverlayProxyCreationGuard",
+      "void publish_overlay_proxy(");
+  EXPECT_TRUE(source_contains_compact(
+      creation_guard_source,
+      "if (active_) { destroy_overlay_proxy_resources(engine_, &scene_, proxy_, "
+      "scene_added_); }"));
+  EXPECT_NE(overlay_proxy_header.find(
+                "face_fill_materials(std::move(other.face_fill_materials))"),
             std::string::npos);
   EXPECT_EQ(count_occurrences(overlay_factory_source,
                               "proxies.push_back(std::move(proxy))"),

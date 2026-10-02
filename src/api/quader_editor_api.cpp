@@ -176,6 +176,9 @@ public:
             return static_cast<double>(viewport_grid_world_size_from_contract(
                 viewports.grid_preset()));
           },
+          .notify = [this](QuaderNotification notification) {
+            (void)ui.notify(std::move(notification));
+          },
       });
     }
 

@@ -102,6 +102,14 @@ file except through prior written authorization from Francesco Di Blasi.
   color winning equal-depth ribbons; preserve complementary visible/occluded depth passes.
   Mask targets include a raster-width/feather guardband. Retire pane views before their shared
   mask scene and materials. Source-replacing tool previews retain the existing projected CPU path.
+  Primary selection has its own persisted pink color and logical line width, used only when more
+  than one semantic element is selected in the current Object/Group/Vertex/Edge/Face mode. Count
+  explicit objects/groups or selected components, before hierarchy/instance or primitive expansion;
+  singleton selections use ordinary appearance. Resolve both classes
+  independently, include active width in retained style keys and size mask guards for the wider
+  class. Instance-fill color changes patch uniforms and stencil eligibility without rebuilding
+  geometry; unchanged styles submit no updates. Component primaries, light markers and group cages
+  consume the same active style roles instead of deriving a brighter ordinary-selection color.
   The CPU fallback still shares ribbons between depth passes and conservatively culls occurrences
   using resolved width, cap and feather extent. Pixel and camera-retention regressions live in
   `tests/selection_overlay_runtime_tests.cpp` and `tests/selected_mesh_outline_mask_cache_tests.cpp`.

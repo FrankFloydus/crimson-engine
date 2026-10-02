@@ -464,6 +464,7 @@ QtViewportEdgeLengthHud::QtViewportEdgeLengthHud(
     label->installEventFilter(this);
     label->hide();
   }
+  parent.installEventFilter(this);
 }
 
 void QtViewportEdgeLengthHud::apply_ui_scale(
@@ -854,6 +855,14 @@ void QtViewportEdgeLengthHud::raise() {
 }
 
 bool QtViewportEdgeLengthHud::eventFilter(QObject *watched, QEvent *event) {
+  if (watched == parent() && event != nullptr &&
+      (event->type() == QEvent::Resize || event->type() == QEvent::Hide)) {
+    // Native glyph windows keep their accepted pixels across their parent's
+    // geometry and exposure changes. Retire that projection before Qt can
+    // reveal it over a resized or reactivated viewport; the next presentation
+    // supplies the current camera and content bounds before showing it again.
+    hide();
+  }
   const bool watches_dimension_label =
       std::find(labels_.begin(), labels_.end(), watched) != labels_.end();
   if (watches_dimension_label && event != nullptr &&

@@ -544,11 +544,11 @@ struct QtToolSettingsPanel::Impl {
     }
 
     const std::uint64_t generation = binding_generation_;
-    const auto pane = editor_->viewports().focused_pane();
+    const auto pane = settings_pane();
     const bool pane_changed = pane != target_pane_;
     if (pane_changed) {
-      // A queued edit belongs to its original presentation. Focus transfer must
-      // not activate that tool or deliver its delayed draft to the next pane.
+      // A queued edit belongs to its original operation presentation. A new
+      // origin must not receive a delayed draft from the previous operation.
       discard_pending_number_dispatches();
     }
     target_pane_ = pane;
@@ -559,7 +559,8 @@ struct QtToolSettingsPanel::Impl {
     if (!target.active ||
         std::none_of(target.controls.begin(), target.controls.end(),
                      [](const QuaderToolSettingControl &control) {
-                       return control.kind != QuaderToolSettingControlKind::Action;
+                       return control.kind != QuaderToolSettingControlKind::Action ||
+                              !control.choices.empty();
                      })) {
       if (!inactive_presented_) {
         present_inactive_target();
@@ -726,9 +727,14 @@ struct QtToolSettingsPanel::Impl {
   }
 
 private:
+  [[nodiscard]] ViewportPaneId settings_pane() const {
+    const auto &origin = editor_->tools().active_settings_presentation_origin();
+    return origin.serial != 0u ? origin.pane : editor_->viewports().focused_pane();
+  }
+
   [[nodiscard]] bool presentation_is_current() const {
     return editor_ != nullptr && has_active_target() &&
-           editor_->viewports().focused_pane() == target_pane_ &&
+           settings_pane() == target_pane_ &&
            editor_->tools().selected_tool_revision(target_pane_) == target_tool_revision_ &&
            editor_->tools().settings_presentation_serial(target_pane_) ==
                target_presentation_serial_;
@@ -742,7 +748,7 @@ private:
                                  ViewportPaneId pane) {
     if (!result.ok() || editor_ == nullptr || generation != binding_generation_ ||
         controls_generation != control_generation_ || pane != target_pane_ ||
-        editor_->viewports().focused_pane() != pane) {
+        settings_pane() != pane) {
       return;
     }
     target_presentation_serial_ = editor_->tools().settings_presentation_serial(pane);
@@ -1212,7 +1218,7 @@ private:
     }
     const NumberDispatchLifecycle &lifecycle =
         *binding.pending_number_lifecycle;
-    if (editor_->viewports().focused_pane() != target_pane_ ||
+    if (settings_pane() != target_pane_ ||
         binding_generation_ != lifecycle.binding_generation ||
         editor_->tools().settings_revision(target_pane_) !=
             lifecycle.settings_revision ||
@@ -1251,7 +1257,7 @@ private:
     }
     const NumberDispatchLifecycle &lifecycle =
         *component.pending_lifecycle;
-    if (editor_->viewports().focused_pane() != target_pane_ ||
+    if (settings_pane() != target_pane_ ||
         binding_generation_ != lifecycle.binding_generation ||
         editor_->tools().settings_revision(target_pane_) !=
             lifecycle.settings_revision ||
@@ -1634,7 +1640,8 @@ private:
     row_layout->setColumnMinimumWidth(
         0, ui_scale_metrics_.px(kMinimumControlLabelWidth));
     QLabel *field_label = nullptr;
-    if (control.kind != QuaderToolSettingControlKind::Action) {
+    if (control.kind != QuaderToolSettingControlKind::Action ||
+        !control.choices.empty()) {
       auto *setting_label = new QtToolSettingLabel(label, row);
       setting_label->metrics_changed = [this]() {
         control_label_width_dirty_ = true;
@@ -2162,12 +2169,11 @@ private:
       break;
     }
     case QuaderToolSettingControlKind::Action: {
-      auto *button = new QPushButton(label, row);
-      button->setObjectName(object_name);
-      button->setAccessibleName(label);
-      QObject::connect(button, &QPushButton::clicked, &panel_,
-                       [this, tool_id = target.tool_id,
-                        action_id = control.id]() {
+      const auto connect_action =
+          [this, tool_id = target.tool_id](QPushButton &button,
+                                          std::string action_id) {
+        QObject::connect(&button, &QPushButton::clicked, &panel_,
+                       [this, tool_id, action_id = std::move(action_id)]() {
                          if (!presentation_is_current()) {
                            discard_pending_number_dispatches();
                            return;
@@ -2187,6 +2193,43 @@ private:
                          present_failure(editor_, "Tool settings action", result);
                          schedule_refresh();
                        });
+      };
+      if (!control.choices.empty()) {
+        auto *buttons = new QWidget(row);
+        buttons->setObjectName(object_name);
+        auto *buttons_layout = new QHBoxLayout(buttons);
+        set_scalable_margins(*buttons_layout, QMargins(0, 0, 0, 0));
+        set_scalable_spacing(*buttons_layout, 4);
+        row_layout->addWidget(buttons, 0, 1);
+        for (std::size_t option_index = 0;
+             option_index < control.choices.size(); ++option_index) {
+          const auto &option = control.choices[option_index];
+          const std::string action_id = control.id + "." + option.id;
+          const std::string option_key = control.label_key.empty()
+                                             ? action_id
+                                             : control.label_key + "." + option.id;
+          const QString option_label = localized_descriptor_label(
+              localization_, option_key, option.label);
+          auto *button = new QPushButton(option_label, buttons);
+          button->setObjectName(
+              option_object_name(object_name, option.id, option_index));
+          button->setAccessibleName(option_label);
+          if (!option.tooltip.empty()) {
+            button->setToolTip(localized_descriptor_label(
+                localization_, option_key + ".tooltip", option.tooltip));
+          }
+          buttons_layout->addWidget(button, 1);
+          connect_action(*button, action_id);
+          if (option_index == 0) {
+            field_label->setBuddy(button);
+          }
+        }
+        break;
+      }
+      auto *button = new QPushButton(label, row);
+      button->setObjectName(object_name);
+      button->setAccessibleName(label);
+      connect_action(*button, control.id);
       row_layout->addWidget(button, 0, 1);
       binding.label_button = button;
       break;
@@ -2485,6 +2528,9 @@ private:
       }
       if (!binding.choices.empty() &&
           binding.presented_choice_value != control.choice_value) {
+        QButtonGroup *group = binding.choices.front().button->group();
+        const bool exclusive = group != nullptr && group->exclusive();
+        if (exclusive) group->setExclusive(false);
         for (std::size_t option_index = 0;
              option_index < binding.choices.size() &&
              option_index < control.choices.size();
@@ -2497,6 +2543,7 @@ private:
             choice.button->setChecked(checked);
           }
         }
+        if (exclusive) group->setExclusive(true);
         binding.presented_choice_value = control.choice_value;
       }
     }
@@ -2580,6 +2627,11 @@ void QtToolSettingsPanel::set_expanded(bool expanded) {
 }
 
 QSize QtToolSettingsPanel::sizeHint() const { return impl_->preferred_size(); }
+
+QSize QtToolSettingsPanel::minimumSizeHint() const {
+  const QSize preferred = impl_->preferred_size();
+  return {preferred.width(), QWidget::minimumSizeHint().height()};
+}
 
 bool QtToolSettingsPanel::numeric_interaction_active() const {
   return impl_->numeric_interaction_active();

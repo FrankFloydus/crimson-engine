@@ -8,7 +8,6 @@
 
 #include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
-#include "api/quader_mesh_arrangement_catalog.hpp"
 #include "core/localization_service.hpp"
 #include "core/release_features.hpp"
 #include "editor/metadata/release_feature_requirements.hpp"
@@ -16,6 +15,7 @@
 #include "editor/metadata/command_presentation_catalog.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
+#include "ui/qt_multiresolution_icon.hpp"
 
 #include <QAction>
 #include <QActionGroup>
@@ -80,17 +80,6 @@ std::string tool_localization_key(const Tool &tool) {
   key.append(tool.id());
   key.append(".label");
   return key;
-}
-
-const QuaderMeshArrangementDescriptor *
-arrangement_descriptor(QuaderCommandId command_id) {
-  for (const QuaderMeshArrangementDescriptor &descriptor :
-       quader_mesh_arrangement_catalog()) {
-    if (same_command(descriptor.command_id, command_id)) {
-      return &descriptor;
-    }
-  }
-  return nullptr;
 }
 
 std::string command_localization_key(QuaderCommandId command_id) {
@@ -714,6 +703,10 @@ struct QtMainMenu::Impl {
                           static_cast<qsizetype>(command_id.string().size())));
     action->setCheckable(true);
     const ViewportToolId tool_id = tool.viewport_tool();
+    if (tool_id == ViewportToolId::Align) {
+      action->setIcon(qt_multiresolution_icon(
+          QStringLiteral(":/quader/icons/tool_align.png")));
+    }
     const std::string stable_command_id(command_id.string());
     QObject::connect(action, &QAction::triggered, connection_context.get(),
                      [this, stable_command_id]() {
@@ -910,27 +903,6 @@ struct QtMainMenu::Impl {
     }
     (void)add_presented_family(parent, key, fallback, object_name, domain,
                                group);
-  }
-
-  template <typename Matches>
-  void add_arrangement_actions(QMenu &menu, Matches matches) {
-    for (const CommandPresentationDescriptor &presentation :
-         command_presentation_catalog()) {
-      if (presentation.domain != CommandPresentationDomain::Object ||
-          presentation.group != CommandPresentationGroup::Arrangement ||
-          !has_command_presentation_surface(
-              presentation, CommandPresentationSurface::MainMenu)) {
-        continue;
-      }
-      const QuaderMeshArrangementDescriptor *descriptor =
-          arrangement_descriptor(presentation.command_id);
-      if (descriptor == nullptr || !matches(*descriptor)) {
-        continue;
-      }
-      add_command_action(menu, presentation.command_id,
-                         std::string(descriptor->localization_key),
-                         std::string(descriptor->fallback_label));
-    }
   }
 
   void show_no_recent_scenes(QMenu &menu) {
@@ -1163,59 +1135,6 @@ struct QtMainMenu::Impl {
     }
   }
 
-  void append_arrangement_groups(QMenu &menu) {
-    if (!release_has_feature(ReleaseFeature::Arrangement)) {
-      return;
-    }
-    menu.addSeparator();
-    QMenu *align = menu.addMenu(
-        qtext(context.localization, "ui.menu.object.align", "Align"));
-    align->setObjectName(QStringLiteral("menu_object_align"));
-    struct AxisMenu final {
-      QuaderTransformAxis axis;
-      std::string_view localization_key;
-      std::string_view fallback;
-    };
-    constexpr std::array<AxisMenu, 3> kAxisMenus{{
-        {QuaderTransformAxis::X, "ui.menu.align.axis_x", "X"},
-        {QuaderTransformAxis::Y, "ui.menu.align.axis_y", "Y"},
-        {QuaderTransformAxis::Z, "ui.menu.align.axis_z", "Z"},
-    }};
-    for (const AxisMenu &entry : kAxisMenus) {
-      QMenu *axis_menu = align->addMenu(
-          qtext(context.localization, entry.localization_key, entry.fallback));
-      axis_menu->setObjectName(QStringLiteral("menu_object_align_%1")
-                                  .arg(QString::fromUtf8(
-                                           entry.fallback.data(),
-                                           static_cast<qsizetype>(entry.fallback.size()))
-                                           .toLower()));
-      add_arrangement_actions(
-          *axis_menu,
-          [axis = entry.axis](const QuaderMeshArrangementDescriptor &descriptor) {
-            return descriptor.kind == QuaderMeshArrangementKind::Alignment &&
-                   descriptor.axis == axis;
-          });
-    }
-    for (const auto distribution : {QuaderMeshDistribution::Centers,
-                                    QuaderMeshDistribution::Gaps}) {
-      const bool centers = distribution == QuaderMeshDistribution::Centers;
-      QMenu *distribution_menu = menu.addMenu(qtext(
-          context.localization,
-          centers ? "ui.menu.align.distribute_centers"
-                  : "ui.menu.align.distribute_gaps",
-          centers ? "Distribute Center" : "Distribute Gaps"));
-      distribution_menu->setObjectName(
-          centers ? QStringLiteral("menu_object_distribute_centers")
-                  : QStringLiteral("menu_object_distribute_gaps"));
-      add_arrangement_actions(
-          *distribution_menu,
-          [distribution](const QuaderMeshArrangementDescriptor &entry) {
-            return entry.kind == QuaderMeshArrangementKind::Distribution &&
-                   entry.distribution == distribution;
-          });
-    }
-  }
-
   void build_create_menu() {
     if (presented_group_size(CommandPresentationDomain::Create,
                              CommandPresentationGroup::Creation) == 0u) {
@@ -1235,7 +1154,8 @@ struct QtMainMenu::Impl {
              quader_command::kParentToActive, quader_command::kUnparentSelection}) {
       add_presented_command(*menu, command_id);
     }
-    append_arrangement_groups(*menu);
+    (void)append_presented_group(*menu, CommandPresentationDomain::Object,
+                                 CommandPresentationGroup::Arrangement);
     menu->addSeparator();
     add_presented_command(*menu, quader_command::kDuplicateSelection);
     menu->addSeparator();

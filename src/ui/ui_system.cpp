@@ -19,6 +19,7 @@
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/placement/viewport_point_placement_service.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
+#include "editor/transform/mesh_arrangement_service.hpp"
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 #include "platform/platform_file_dialog.hpp"
 #include "platform/platform_shell.hpp"
@@ -308,6 +309,10 @@ std::string status_bar_message(
   if (notification.level == QuaderNotificationLevel::Error &&
       notification.message.empty()) {
     return localization.text("ui.status.command_failed", "Command failed.");
+  }
+  if (notification.message == mesh_arrangement_grid_alignment_warning()) {
+    return localization.text("tool_settings.align.snap_unavailable",
+                             notification.message);
   }
   return localized_release_message(localization, notification.message);
 }
@@ -3131,6 +3136,7 @@ void UISystem::shutdown() {
   layer_panel_ = nullptr;
   console_panel_ = nullptr;
   asset_browser_ = nullptr;
+  asset_browser_discovery_pending_ = false;
   asset_thumbnails_.reset();
   asset_thumbnail_picker_.clear();
   asset_thumbnail_picker_current_ = {};
@@ -4333,10 +4339,14 @@ void UISystem::refresh_status_bar() {
     QuaderNotification notification;
     if (status_notification_.has_value()) {
       notification = *status_notification_;
-    } else if (auto result = editor_->commands().last_status();
-               result.has_value() && !result->ok()) {
-      notification = {.level = QuaderNotificationLevel::Error,
-                      .message = std::move(result->message)};
+    } else if (auto result = editor_->commands().last_status(); result.has_value()) {
+      if (!result->ok()) {
+        notification = {.level = QuaderNotificationLevel::Error,
+                        .message = std::move(result->message)};
+      } else if (result->message == mesh_arrangement_grid_alignment_warning()) {
+        notification = {.level = QuaderNotificationLevel::Warning,
+                        .message = std::move(result->message)};
+      }
     }
     const bool error = notification.level == QuaderNotificationLevel::Error;
     const QString message = QString::fromStdString(
@@ -6550,10 +6560,13 @@ void UISystem::set_panel_visible(UIPanelId id, bool visible) {
     return;
   }
   if (visible) {
-    // Prepare the retained model before exposing the dock. A synchronous
-    // catalog refresh between show and raise leaves native viewport geometry
-    // half-way through Qt's animated dock transition.
-    refresh_asset_browser(!panel_presented(id));
+    // Retained rows are ready before exposure. Physical discovery waits for
+    // the dock's first paint, keeping the shortcut and native layout immediate.
+    const bool revealing = !panel_presented(id);
+    refresh_asset_browser(false, true);
+    if (revealing) asset_browser_discovery_pending_ = true;
+  } else {
+    asset_browser_discovery_pending_ = false;
   }
   const bool animated = main_window_->isAnimated();
   main_window_->setAnimated(false);

@@ -142,7 +142,8 @@ const ViewportOverlayFrame &CurveToolOverlayCache::frame(
                               : kOverlayToolHandleColor),
           .size_pixels = kOverlayDrawnPlanePointSizePixels,
           .style_role = selected
-              ? (preview.control_selection.active == CurveControlTarget{point.id, kind}
+              ? (preview.control_selection.controls.size() > 1u &&
+                     preview.control_selection.active == CurveControlTarget{point.id, kind}
                      ? ViewportOverlayStyleRole::ActiveSelectedVertex
                      : ViewportOverlayStyleRole::SelectedVertex)
               : ViewportOverlayStyleRole::ExplicitColor,

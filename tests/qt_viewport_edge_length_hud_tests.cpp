@@ -985,6 +985,71 @@ TEST_F(QtViewportEdgeLengthHudTests,
 }
 
 TEST_F(QtViewportEdgeLengthHudTests,
+       PaneResizeRetiresNativeDimensionsBeforeFreshProjection) {
+  ASSERT_TRUE(camera_.restore_perspective_pose(
+      {.eye = {8, 6, 10}, .target = {}, .up = {0, 1, 0}}));
+  const quader::ViewportSelectionDimensionBounds bounds{
+      .min = {-2, -1, -3}, .max = {2, 3, 1}};
+  const std::array pane_sizes{QSize{640, 420}, QSize{260, 300},
+                              QSize{400, 300}};
+  const std::array scales{1.0F, 2.0F, 1.0F};
+  for (std::size_t scale_index = 0U; scale_index < scales.size(); ++scale_index) {
+    hud_->apply_ui_scale(quader::QtUiScaleMetrics{
+        scales[scale_index], scale_index + 1U});
+    present_selection(bounds);
+    ASSERT_TRUE(std::any_of(
+        selection_labels_.begin(), selection_labels_.end(),
+        [](const QLabel *label) { return !label->isHidden(); }));
+    for (const QSize &pane_size : pane_sizes) {
+      parent_->resize(pane_size);
+      for (const QLabel *label : selection_labels_) {
+        EXPECT_TRUE(label->isHidden())
+            << "A resized pane must not expose its previous native projection.";
+      }
+      QCoreApplication::processEvents();
+      for (const QLabel *label : selection_labels_) {
+        EXPECT_TRUE(label->isHidden());
+      }
+      camera_.set_viewport_size(static_cast<float>(pane_size.width() * 2),
+                                 static_cast<float>(pane_size.height() * 2));
+      present_selection(bounds);
+      for (const QLabel *label : selection_labels_) {
+        ASSERT_FALSE(label->isHidden());
+        EXPECT_TRUE(parent_->rect().contains(label->geometry()));
+        EXPECT_EQ(label->text(), QStringLiteral("128"));
+        EXPECT_FALSE(label->mask().isEmpty());
+        EXPECT_FALSE(label->mask() == QRegion(label->rect()));
+      }
+    }
+  }
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
+       PaneReactivationWaitsForFreshDimensionPresentation) {
+  const auto frame = hover_edge_frame({-2, 0, 0}, {2, 0, 0});
+  present(frame);
+  ASSERT_FALSE(label_->isHidden());
+  const QRect accepted_geometry = label_->geometry();
+  const QRegion accepted_mask = label_->mask();
+  const int accepted_mask_revision =
+      label_->property("quaderDimensionMaskRevision").toInt();
+  for (int repetition = 0; repetition < 4; ++repetition) {
+    parent_->hide();
+    EXPECT_TRUE(label_->isHidden());
+    parent_->show();
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(label_->isHidden())
+        << "Showing a pane must not reveal dimensions from its prior exposure.";
+    present(frame);
+    EXPECT_FALSE(label_->isHidden());
+    EXPECT_EQ(label_->geometry(), accepted_geometry);
+    EXPECT_EQ(label_->mask(), accepted_mask);
+    EXPECT_EQ(label_->property("quaderDimensionMaskRevision").toInt(),
+              accepted_mask_revision);
+  }
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
        SelectionDimensionsUseAxisColorsAndClosestVisibleCornerInPerspective) {
   ASSERT_TRUE(camera_.restore_perspective_pose(
       {.eye = {8, 6, 10}, .target = {}, .up = {0, 1, 0}}));

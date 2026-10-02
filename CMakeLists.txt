@@ -405,6 +405,7 @@ add_library(quader_editor_services STATIC
     src/editor/tools/extrude_viewport_interaction.cpp
     src/editor/tools/extrude_handle_layout.cpp
     src/editor/transform/mesh_arrangement_service.cpp
+    src/editor/transform/align_tool_service.cpp
     src/editor/transform/mesh_transform_bake_service.cpp
     src/editor/transform/scene_transform_drag_service.cpp
     src/editor/commands/document/scene_texture_mapping_plan.cpp
@@ -1083,6 +1084,12 @@ qt_add_resources(quader_ui "quader_material_browser_icons"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
     FILES ${QUADER_MATERIAL_BROWSER_ICON_FILES})
 
+qt_add_resources(quader_ui "quader_align_tool_icon"
+    PREFIX "/quader/icons"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
+    FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_align.png")
+
 qt_add_resources(quader_ui "quader_outliner_icons"
     PREFIX "/quader/icons"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
@@ -1715,6 +1722,8 @@ if(QUADER_BUILD_TESTS)
         tests/path_array_ui_catalog_tests.cpp
         tests/math_types_tests.cpp
         tests/mesh_arrangement_tests.cpp
+        tests/align_tool_tests.cpp
+        tests/qt_align_tool_settings_tests.cpp
         tests/snap_to_floor_tests.cpp
         tests/scene_surface_query_tests.cpp
         tests/copy_pivot_from_active_tests.cpp

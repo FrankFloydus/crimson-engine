@@ -39,6 +39,13 @@ ViewportToolResult DragCommitTool::handle_event(
   ViewportToolPreviewPort &preview_port = *context.ports.preview;
   ViewportToolCommitPort &commit_port = *context.ports.commit;
   const ViewportPointerToolEvent &pointer = event.pointer;
+  const auto make_loop_event_at = [&](QVec2 local, bool dragging) {
+    auto loop_event = point_context.make_event_at(local, dragging);
+    // Edge Loop is continuous unless its own semantic Ctrl gesture is held.
+    // Global snapping defaults belong to the other tools' event producers.
+    loop_event.snap_enabled = pointer.modifiers.primary;
+    return loop_event;
+  };
   const ModelingToolStatus status = preview_port.tool_status();
   const bool dragging =
       context.modal_state->insert_edge_loop_drag_active ||
@@ -101,13 +108,13 @@ ViewportToolResult DragCommitTool::handle_event(
       hover_port.claim(ModelingBoxDragState::Idle)) {
     handle_result(context, "Insert edge loop hover",
                   hover_port.update_insert_edge_loop_hover(
-                      point_context.make_event_at(pointer.mouse_local, false)));
+                      make_loop_event_at(pointer.mouse_local, false)));
   }
 
   if (pointer.can_interact && pointer.left_clicked) {
     const ModelingCommandResult begin_command =
         preview_port.begin_insert_edge_loop_drag(
-            point_context.make_event_at(pointer.left_click_local, true));
+            make_loop_event_at(pointer.left_click_local, true));
     handle_result(context, "Insert edge loop begin", begin_command, true);
     const bool can_commit =
         begin_command.ok &&
@@ -122,7 +129,7 @@ ViewportToolResult DragCommitTool::handle_event(
   } else if (pointer.can_interact && pointer.left_down && dragging) {
     handle_result(context, "Insert edge loop drag update",
                   preview_port.update_insert_edge_loop_drag(
-                      point_context.make_event_at(pointer.mouse_local, true)));
+                      make_loop_event_at(pointer.mouse_local, true)));
   }
 
   if (dragging && (pointer.left_released ||

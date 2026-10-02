@@ -32,6 +32,7 @@
 #include "viewport/viewport_workspace_service.hpp"
 
 #include <QPointer>
+#include <QPoint>
 #include <QWidget>
 
 #include <array>
@@ -226,6 +227,7 @@ private:
     std::uint64_t controls_revision = 0u;
     bool controls_valid = false;
     TransformGizmoPresentation idle_gizmo;
+    PrimitiveCreationInteraction primitive_presentation;
   };
 
   void create_pane(Pane &pane);
@@ -266,6 +268,9 @@ private:
   void update_split_handles();
   void set_pane_view(Pane &pane, ViewportView view);
   void set_pane_shading(Pane &pane, ViewportShadingMode shading);
+  [[nodiscard]] std::optional<QPoint> resolve_marking_menu_gesture(
+      QuaderEditorApi &editor, Pane &pane, ViewportInputFrame &input,
+      bool interaction_locked);
   void process_viewport_input(QuaderEditorApi &editor, SceneDocument &document,
                               AssetRegistry &assets,
                               ModelingSessionService &modeling,
@@ -319,6 +324,16 @@ private:
   QtViewportDeletePopupPresenter delete_popup_presenter_;
   QtViewportQuickMenuPresenter quick_menu_presenter_;
   QtViewportMarkingMenuPresenter marking_menu_presenter_;
+  /// Freezes the semantic launcher's pane and origin until tap or hold resolves.
+  struct PendingMarkingMenuGesture {
+    ViewportPaneId pane_id = ViewportPaneId::Perspective;
+    QuaderInputChord initiating_chord;
+    QPoint global_origin;
+    std::chrono::steady_clock::time_point started;
+    std::uint64_t tool_revision = 0;
+    std::uint64_t keybindings_revision = 0;
+  };
+  std::optional<PendingMarkingMenuGesture> pending_marking_menu_gesture_;
   const SceneDocument *point_light_pick_cached_document_ = nullptr;
   std::uint64_t point_light_pick_cached_scene_revision_ = 0u;
   std::uint64_t point_light_pick_cached_selection_revision_ = 0u;

@@ -3360,7 +3360,7 @@ TEST(CurveToolOverlayCacheTests, ActiveAnchorAndHandleUseConfiguredColorsAndKeep
   preview.document = *asset.document;
   const CurveControlTarget anchor{preview.document->points().front().id, CurveControlKind::Anchor};
   const CurveControlTarget handle{preview.document->points().back().id, CurveControlKind::IncomingHandle};
-  preview.control_selection.controls = {anchor, handle};
+  preview.control_selection.controls = {handle};
   preview.control_selection.active = handle;
   CurveToolOverlayCache cache;
   ViewportSettings settings = ViewportSettings::defaults();
@@ -3368,18 +3368,39 @@ TEST(CurveToolOverlayCacheTests, ActiveAnchorAndHandleUseConfiguredColorsAndKeep
       {40.0f / 255.0f, 80.0f / 255.0f, 120.0f / 255.0f, 0.4f}));
   auto frame = ViewportOverlayStyleResolver::resolve(cache.frame(preview), settings);
   ASSERT_EQ(frame.points.size(), 4u);
-  EXPECT_EQ(frame.points[0].color, rgba8(40, 80, 120, 102));
-  EXPECT_EQ(frame.points[3].color, viewport_active_selection_color(rgba8(40, 80, 120, 102)));
+  EXPECT_EQ(frame.points[0].color, kOverlayVertexColor);
+  EXPECT_EQ(frame.points[3].color, rgba8(40, 80, 120, 102));
+  EXPECT_EQ(frame.points[3].style_role, ViewportOverlayStyleRole::SelectedVertex);
   EXPECT_EQ(frame.points[3].size_pixels, kOverlayDrawnPlanePointSizePixels);
   const auto builds = cache.build_count();
   (void)cache.frame(preview);
   EXPECT_EQ(cache.build_count(), builds);
+  preview.control_selection.controls = {anchor, handle};
+  ++preview.revision;
+  frame = ViewportOverlayStyleResolver::resolve(cache.frame(preview), settings);
+  EXPECT_EQ(frame.points[0].color, rgba8(40, 80, 120, 102));
+  EXPECT_EQ(frame.points[3].color, viewport_active_selection_color(rgba8(40, 80, 120, 102)));
+  EXPECT_EQ(frame.points[3].style_role, ViewportOverlayStyleRole::ActiveSelectedVertex);
+  EXPECT_EQ(frame.points[3].size_pixels, kOverlayDrawnPlanePointSizePixels);
+  EXPECT_EQ(cache.build_count(), builds + 1u);
   preview.control_selection.active = anchor;
   ++preview.revision;
   frame = ViewportOverlayStyleResolver::resolve(cache.frame(preview), settings);
   EXPECT_EQ(frame.points[0].style_role, ViewportOverlayStyleRole::ActiveSelectedVertex);
   EXPECT_EQ(frame.points[3].style_role, ViewportOverlayStyleRole::SelectedVertex);
-  EXPECT_EQ(cache.build_count(), builds + 1u);
+  EXPECT_EQ(cache.build_count(), builds + 2u);
+  preview.control_selection.controls = {anchor};
+  ++preview.revision;
+  frame = ViewportOverlayStyleResolver::resolve(cache.frame(preview), settings);
+  EXPECT_EQ(frame.points[0].style_role, ViewportOverlayStyleRole::SelectedVertex);
+  EXPECT_EQ(frame.points[0].color, rgba8(40, 80, 120, 102));
+  EXPECT_EQ(frame.points[0].size_pixels, kOverlayDrawnPlanePointSizePixels);
+  EXPECT_TRUE(std::ranges::none_of(frame.points, [](const auto &point) {
+    return point.style_role == ViewportOverlayStyleRole::ActiveSelectedVertex;
+  }));
+  EXPECT_EQ(cache.build_count(), builds + 3u);
+  (void)cache.frame(preview);
+  EXPECT_EQ(cache.build_count(), builds + 3u);
 }
 
 TEST(CurveToolOverlayCacheTests,
@@ -4022,11 +4043,11 @@ TEST(RenderOverlaySnapshotTests,
       selected_wire_frame.lines.begin(), selected_wire_frame.lines.end(),
       [&style](const ViewportOverlayLine &line) {
         return line.layer != ViewportOverlayLayer::SelectedEdge ||
-               (line.color == style.active_selection_wire_color &&
+               (line.color == style.selection_wire_color &&
                 line.width_pixels ==
                     style.selection_edge_line_width_pixels &&
                 line.style_role ==
-                    ViewportOverlayStyleRole::ActiveSelectionWire);
+                    ViewportOverlayStyleRole::SelectionWire);
       }));
 
   const std::uint64_t visible_revision = document.visibility_revision();
@@ -5816,7 +5837,7 @@ TEST(RenderSelectionDimensionIntegrationTests,
   expect_dimension_extents(canceled, {0.0f, 0.0f, 0.0f}, {2.0f, 1.0f, 0.0f});
 }
 
-TEST(ViewportSceneOverlayBuilderTests, ActiveStylesBlendConfiguredRgbAndPreserveAlphaAndGeometry) {
+TEST(ViewportSceneOverlayBuilderTests, ActiveStylesUseIndependentPinkAndPreserveFillOpacityAndGeometry) {
   ViewportSettings settings = ViewportSettings::defaults();
   const ViewportSettingColor configured{0.2f, 0.4f, 0.6f, 0.4f};
   ASSERT_TRUE(settings.set_color(ViewportColorSettingId::SelectionFace, configured));
@@ -5832,13 +5853,13 @@ TEST(ViewportSceneOverlayBuilderTests, ActiveStylesBlendConfiguredRgbAndPreserve
   frame.points.push_back({.layer = ViewportOverlayLayer::SelectedVertex,
       .style_role = ViewportOverlayStyleRole::ActiveSelectedVertex});
   ViewportOverlayStyleResolver::apply(frame, settings);
-  const auto expected = rgba8(102, 140, 179, 102);
+  const auto expected = rgba8(255, 105, 180, 102);
   EXPECT_EQ(frame.triangles.front().color, expected);
-  EXPECT_EQ(frame.lines.front().color, expected);
+  EXPECT_EQ(frame.lines.front().color, rgba8(255, 105, 180));
   EXPECT_EQ(frame.lines.back().color, expected);
   EXPECT_EQ(frame.points.front().color, expected);
-  EXPECT_EQ(viewport_active_selection_color(rgba8(255, 255, 255, 73)), rgba8(255, 255, 255, 73));
-  EXPECT_EQ(viewport_active_selection_color(rgba8(0, 0, 0, 0)), rgba8(64, 64, 64, 0));
+  EXPECT_EQ(viewport_active_selection_color(rgba8(255, 255, 255, 73)), rgba8(255, 105, 180, 73));
+  EXPECT_EQ(viewport_active_selection_color(rgba8(0, 0, 0, 0)), rgba8(255, 105, 180, 0));
 }
 
 TEST(ViewportSceneOverlayBuilderTests, HierarchyFeedbackUsesNearestExplicitSelection) {
@@ -5878,24 +5899,151 @@ TEST(ViewportSceneOverlayBuilderTests, HierarchyFeedbackUsesNearestExplicitSelec
   }));
 }
 
+TEST(ViewportSceneOverlayBuilderTests,
+     HierarchyExpansionKeepsSingletonOrdinaryAcrossObjectAndGroupModes) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId group = document.create_empty("Group");
+  for (int index = 0; index < 2; ++index) {
+    const EntityId child = document.create_entity(
+        "Child " + std::to_string(index), EntityKind::Mesh);
+    ASSERT_TRUE(document.set_mesh(child, {.mesh = mesh}));
+    ASSERT_TRUE(document.set_parent(child, group));
+  }
+  const EntityId peer = document.create_entity("Peer", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(peer, {.mesh = mesh}));
+  ASSERT_TRUE(document.set_selected(group, true));
+  ViewportSettings settings = ViewportSettings::defaults();
+  ASSERT_TRUE(settings.set_float_value(
+      ViewportFloatSettingId::SelectionEdgeLineSize, 2.0f));
+  ASSERT_TRUE(settings.set_float_value(
+      ViewportFloatSettingId::ActiveSelectionLineSize, 6.0f));
+
+  for (const bool multiple : {false, true, false}) {
+    ASSERT_TRUE(document.set_selected(peer, multiple));
+    ASSERT_TRUE(document.set_active_selection(group));
+    const auto snapshot = build_render_overlay_selection_snapshot(document, assets);
+    EXPECT_EQ(snapshot.selected_element_count, multiple ? 2u : 1u);
+    ASSERT_EQ(snapshot.hierarchy_selection_wires.size(), 2u);
+    ASSERT_EQ(snapshot.group_bounds.size(), 1u);
+    EXPECT_EQ(snapshot.group_bounds.front().active_selected, multiple);
+    EXPECT_TRUE(std::ranges::all_of(snapshot.hierarchy_selection_wires,
+        [multiple](const auto &record) { return record.active_selected == multiple; }));
+    const auto objects = build_render_overlay_selected_object_snapshot(document, assets, true);
+    EXPECT_EQ(objects.meshes.size(), multiple ? 1u : 0u);
+    EXPECT_TRUE(std::ranges::none_of(objects.meshes,
+        [](const auto &record) { return record.active_selected; }));
+
+    for (const auto mode : {RenderOverlaySelectionMode::Object,
+                            RenderOverlaySelectionMode::Group}) {
+      SCOPED_TRACE(static_cast<int>(mode));
+      auto frame = ViewportSceneOverlayBuilder::build_selection_frame(
+          {}, snapshot, false, mode);
+      ViewportOverlayStyleResolver::apply(frame, settings);
+      EXPECT_EQ(line_source_count_for(frame, ViewportOverlaySource::HierarchySelection), 6u);
+      EXPECT_TRUE(std::ranges::all_of(frame.lines, [multiple](const auto &line) {
+        return line.source != ViewportOverlaySource::HierarchySelection ||
+               (line.style_role == (multiple ? ViewportOverlayStyleRole::ActiveSelectionWire
+                                             : ViewportOverlayStyleRole::SelectionWire) &&
+                line.color == (multiple ? viewport_active_selection_color(kOverlaySelectionWireColor)
+                                        : kOverlaySelectionWireColor) &&
+                line.width_pixels == (multiple ? 6.0f : 2.0f));
+      }));
+      EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::GroupBounds), 12u);
+      EXPECT_TRUE(std::ranges::all_of(frame.lines, [multiple](const auto &line) {
+        return line.layer != ViewportOverlayLayer::GroupBounds ||
+               line.style_role == (multiple ? ViewportOverlayStyleRole::ActiveGroupBounds
+                                            : ViewportOverlayStyleRole::GroupBounds);
+      }));
+    }
+  }
+}
+
+TEST(ViewportSceneOverlayBuilderTests,
+     LightSingletonMultiSelectionAndReturnUseSemanticSelectionCount) {
+  AssetRegistry assets;
+  ViewportSettings settings = ViewportSettings::defaults();
+  ASSERT_TRUE(settings.set_float_value(
+      ViewportFloatSettingId::SelectionEdgeLineSize, 2.0f));
+  ASSERT_TRUE(settings.set_float_value(
+      ViewportFloatSettingId::ActiveSelectionLineSize, 6.0f));
+  for (const auto type : {LightType::Point, LightType::Directional}) {
+    SCOPED_TRACE(static_cast<int>(type));
+    SceneDocument document;
+    const EntityId light = document.create_entity("Light", EntityKind::Light);
+    const EntityId peer = document.create_empty("Peer");
+    ASSERT_TRUE(document.set_light(light, {.type = type}));
+    ASSERT_TRUE(document.set_selected(light, true));
+    for (const bool multiple : {false, true, false}) {
+      ASSERT_TRUE(document.set_selected(peer, multiple));
+      ASSERT_TRUE(document.set_active_selection(light));
+      const auto snapshot = build_render_overlay_selection_snapshot(document, assets);
+      EXPECT_EQ(snapshot.selected_element_count, multiple ? 2u : 1u);
+      auto frame = ViewportSceneOverlayBuilder::build_selection_frame({}, snapshot, true);
+      ViewportOverlayStyleResolver::apply(frame, settings);
+      if (type == LightType::Point) {
+        ASSERT_EQ(snapshot.point_light_gizmos.size(), 1u);
+        EXPECT_EQ(snapshot.point_light_gizmos.front().active_selected, multiple);
+        ASSERT_EQ(frame.icons.size(), 1u);
+        EXPECT_EQ(frame.icons.front().style_role,
+            multiple ? ViewportOverlayStyleRole::ActiveSelectionWire
+                     : ViewportOverlayStyleRole::SelectionWire);
+        EXPECT_EQ(frame.icons.front().color,
+            multiple ? viewport_active_selection_color(kOverlaySelectionWireColor)
+                     : kOverlaySelectionWireColor);
+      } else {
+        ASSERT_EQ(snapshot.selected_lights.size(), 1u);
+        EXPECT_EQ(snapshot.selected_lights.front().active_selected, multiple);
+        ASSERT_EQ(frame.points.size(), 1u);
+        EXPECT_EQ(frame.points.front().style_role,
+            multiple ? ViewportOverlayStyleRole::ActiveSelectedVertex
+                     : ViewportOverlayStyleRole::SelectedVertex);
+        EXPECT_EQ(frame.points.front().color,
+            multiple ? viewport_active_selection_color(kOverlaySelectedVertexColor)
+                     : kOverlaySelectedVertexColor);
+        ASSERT_EQ(frame.lines.size(), 2u);
+        EXPECT_TRUE(std::ranges::all_of(frame.lines, [multiple](const auto &line) {
+          return line.style_role == (multiple ? ViewportOverlayStyleRole::ActiveSelectionWire
+                                              : ViewportOverlayStyleRole::SelectionWire) &&
+                 line.width_pixels == (multiple ? 6.0f : 2.0f);
+        }));
+      }
+    }
+  }
+}
+
 TEST(ViewportSceneOverlayBuilderTests, ActiveLightUsesExistingMarkersWithoutChangingRadius) {
-  RenderOverlaySelectionSnapshot snapshot;
-  snapshot.selected_lights.push_back({.entity = 1, .type = LightType::Directional,
-      .selected = true, .active_selected = true});
-  snapshot.point_light_gizmos.push_back({.entity = 2, .type = LightType::Point,
-      .selected = true, .active_selected = true});
+  SceneDocument document;
+  AssetRegistry assets;
+  const EntityId directional = document.create_entity("Directional", EntityKind::Light);
+  const EntityId point = document.create_entity("Point", EntityKind::Light);
+  ASSERT_TRUE(document.set_light(directional, {.type = LightType::Directional}));
+  ASSERT_TRUE(document.set_light(point, {.type = LightType::Point}));
+  ASSERT_TRUE(document.set_selected(directional, true));
+  ASSERT_TRUE(document.set_selected(point, true));
+  ASSERT_TRUE(document.set_active_selection(directional));
+  auto snapshot = build_render_overlay_selection_snapshot(document, assets);
   ViewportSettings settings = ViewportSettings::defaults();
   ASSERT_TRUE(settings.set_color(ViewportColorSettingId::SelectionWire,
       {0.2f, 0.4f, 0.6f, 0.4f}));
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::ActiveSelection,
+      {17.0f / 255.0f, 187.0f / 255.0f, 221.0f / 255.0f, 1.0f}));
   auto frame = ViewportSceneOverlayBuilder::build_selection_frame({}, snapshot, true);
   ViewportOverlayStyleResolver::apply(frame, settings);
   ASSERT_EQ(frame.icons.size(), 1u);
-  EXPECT_EQ(frame.icons.front().color, rgba8(102, 140, 179, 102));
+  EXPECT_EQ(frame.icons.front().color, rgba8(51, 102, 153, 102));
   EXPECT_EQ(frame.points.front().style_role, ViewportOverlayStyleRole::ActiveSelectedVertex);
   EXPECT_TRUE(std::ranges::all_of(frame.lines, [](const auto &line) {
     return line.source != ViewportOverlaySource::Gizmo ||
            line.color == kOverlayPointLightRadiusWireColor;
   }));
+  ASSERT_TRUE(document.set_active_selection(point));
+  snapshot = build_render_overlay_selection_snapshot(document, assets);
+  frame = ViewportSceneOverlayBuilder::build_selection_frame({}, snapshot, true);
+  ViewportOverlayStyleResolver::apply(frame, settings);
+  EXPECT_EQ(frame.icons.front().color, rgba8(17, 187, 221));
+  EXPECT_EQ(frame.points.front().style_role, ViewportOverlayStyleRole::SelectedVertex);
   frame = ViewportSceneOverlayBuilder::build_selection_frame(
       {}, snapshot, true, RenderOverlaySelectionMode::Component);
   EXPECT_EQ(frame.icons.front().style_role, ViewportOverlayStyleRole::SelectionWire);
@@ -5929,6 +6077,8 @@ TEST(ViewportSceneOverlayBuilderTests, AddsHierarchySelectionWiresAndGroupBounds
     ASSERT_TRUE(settings.set_float_value(
         ViewportFloatSettingId::SelectionEdgeLineSize, 2.0f));
     ASSERT_TRUE(settings.set_float_value(
+        ViewportFloatSettingId::ActiveSelectionLineSize, 6.0f));
+    ASSERT_TRUE(settings.set_float_value(
         ViewportFloatSettingId::SelectionFaceWireLineSize, 7.0f));
     ViewportOverlayStyleResolver::apply(frame, settings);
 
@@ -5941,7 +6091,7 @@ TEST(ViewportSceneOverlayBuilderTests, AddsHierarchySelectionWiresAndGroupBounds
         [](const ViewportOverlayLine &line) {
           return line.source != ViewportOverlaySource::HierarchySelection ||
                  (line.style_role ==
-                      ViewportOverlayStyleRole::ActiveSelectionWire &&
+                      ViewportOverlayStyleRole::SelectionWire &&
                    line.width_pixels == 2.0f);
         }));
     EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::GroupBounds), 12u);
@@ -5949,8 +6099,8 @@ TEST(ViewportSceneOverlayBuilderTests, AddsHierarchySelectionWiresAndGroupBounds
         frame.lines.begin(), frame.lines.end(),
         [](const ViewportOverlayLine &line) {
           return line.layer != ViewportOverlayLayer::GroupBounds ||
-                 (line.color == viewport_active_selection_color(kOverlayGroupBoundsColor) &&
-                  line.style_role == ViewportOverlayStyleRole::ActiveGroupBounds &&
+                 (line.color == kOverlayGroupBoundsColor &&
+                  line.style_role == ViewportOverlayStyleRole::GroupBounds &&
                   line.source == ViewportOverlaySource::GroupBounds);
         }));
 }
@@ -5979,6 +6129,8 @@ TEST(ViewportSceneOverlayBuilderTests,
   ASSERT_TRUE(settings.set_float_value(
       ViewportFloatSettingId::SelectionEdgeLineSize, 2.0f));
   ASSERT_TRUE(settings.set_float_value(
+      ViewportFloatSettingId::ActiveSelectionLineSize, 6.0f));
+  ASSERT_TRUE(settings.set_float_value(
       ViewportFloatSettingId::SelectionFaceWireLineSize, 7.0f));
   ViewportOverlayStyleResolver::apply(frame, settings);
 
@@ -5991,7 +6143,7 @@ TEST(ViewportSceneOverlayBuilderTests,
         return line.source != ViewportOverlaySource::HierarchySelection ||
                (line.layer == ViewportOverlayLayer::SelectedEdge &&
                 line.style_role ==
-                    ViewportOverlayStyleRole::ActiveSelectionWire &&
+                    ViewportOverlayStyleRole::SelectionWire &&
                 line.width_pixels == 2.0f);
       }));
 }
@@ -6029,6 +6181,8 @@ TEST(ViewportSceneOverlayBuilderTests,
   ViewportSettings settings = ViewportSettings::defaults();
   ASSERT_TRUE(settings.set_float_value(
       ViewportFloatSettingId::SelectionEdgeLineSize, 2.0f));
+  ASSERT_TRUE(settings.set_float_value(
+      ViewportFloatSettingId::ActiveSelectionLineSize, 6.0f));
   ViewportOverlayStyleResolver::apply(frame, settings);
 
   EXPECT_EQ(
@@ -6040,7 +6194,7 @@ TEST(ViewportSceneOverlayBuilderTests,
         return line.source != ViewportOverlaySource::HierarchySelection ||
                (line.layer == ViewportOverlayLayer::SelectedEdge &&
                 line.style_role ==
-                    ViewportOverlayStyleRole::ActiveSelectionWire &&
+                    ViewportOverlayStyleRole::SelectionWire &&
                 line.width_pixels == 2.0f);
       }));
 }
@@ -6080,12 +6234,17 @@ TEST(ViewportSceneOverlayBuilderTests,
       ViewportFloatSettingId::SelectionEdgeLineSize, 2.25f));
   ASSERT_TRUE(settings.set_float_value(
       ViewportFloatSettingId::BoundingBoxWireThickness, 4.5f));
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::ActiveSelection,
+                                {26.0f / 255.0f, 204.0f / 255.0f, 153.0f / 255.0f, 1.0f}));
+  ASSERT_TRUE(settings.set_float_value(
+      ViewportFloatSettingId::ActiveSelectionLineSize, 6.0f));
 
   ViewportOverlayFrame frame =
       ViewportSceneOverlayBuilder::build_selection_frame({}, snapshot);
   ViewportOverlayStyleResolver::apply(frame, settings);
   const std::uint32_t selection_color = rgba8(40, 80, 120);
   const std::uint32_t bounds_color = rgba8(20, 60, 100);
+  const std::uint32_t active_color = rgba8(26, 204, 153);
   EXPECT_EQ(std::ranges::count_if(
                 frame.lines, [&](const ViewportOverlayLine &line) {
                   return line.source ==
@@ -6107,13 +6266,13 @@ TEST(ViewportSceneOverlayBuilderTests,
             12u);
   EXPECT_EQ(std::ranges::count_if(frame.lines, [&](const auto &line) {
     return line.style_role == ViewportOverlayStyleRole::ActiveSelectionWire &&
-           line.color == viewport_active_selection_color(selection_color) &&
-           line.width_pixels == 2.25f;
+           line.color == active_color &&
+           line.width_pixels == 6.0f;
   }), 3u);
   EXPECT_EQ(std::ranges::count_if(frame.lines, [&](const auto &line) {
     return line.style_role == ViewportOverlayStyleRole::ActiveGroupBounds &&
-           line.color == viewport_active_selection_color(bounds_color) &&
-           line.width_pixels == 4.5f;
+           line.color == active_color &&
+           line.width_pixels == 6.0f;
   }), 12u);
 }
 
@@ -9418,6 +9577,8 @@ TEST(RenderSceneWireframeBatchPlannerTests,
       .active_selection_wire_color = viewport_active_selection_color(normal_color),
       .selection_edge_logical_width_pixels = 3.5f,
       .selection_edge_line_width_pixels = 3.5f,
+      .active_selection_logical_width_pixels = 6.0f,
+      .active_selection_line_width_pixels = 6.0f,
       .wire_signature = 17u,
   };
   const RenderOverlaySceneWireframeSnapshot snapshot =
@@ -9446,7 +9607,7 @@ TEST(RenderSceneWireframeBatchPlannerTests,
   }), 3);
   EXPECT_EQ(std::ranges::count_if(frame.lines, [&](const auto &line) {
     return line.style_role == ViewportOverlayStyleRole::ActiveSelectionWire &&
-           line.color == viewport_active_selection_color(normal_color) && line.width_pixels == 3.5f;
+           line.color == viewport_active_selection_color(normal_color) && line.width_pixels == 6.0f;
   }), 3);
 }
 
@@ -9951,9 +10112,85 @@ TEST(RenderInstanceEditPresentationTests,
   EXPECT_EQ(wire.geometry_content_id, fill.geometry_content_id);
   EXPECT_FALSE(wire.wire_segments.empty());
   EXPECT_FLOAT_EQ(wire.world_transform.values[12], 12.0f);
-  EXPECT_EQ(wire.wire_color, viewport_active_selection_color(kOverlaySelectionWireColor));
+  EXPECT_FALSE(fill.active_selected);
+  EXPECT_FALSE(wire.active_selected);
+  EXPECT_EQ(wire.wire_color, kOverlaySelectionWireColor);
   EXPECT_FLOAT_EQ(wire.wire_width_pixels,
                   kOverlaySelectionWireLineWidthPixels);
+
+  ViewportSettings settings = ViewportSettings::defaults();
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::ActiveSelection,
+                                {0.2f, 0.4f, 0.6f, 1.0f}));
+  ASSERT_TRUE(settings.set_float_value(ViewportFloatSettingId::ActiveSelectionLineSize, 6.0f));
+  const auto styled = build_render_overlay_selected_object_snapshot(document, assets, true,
+      ViewportOverlayStyleResolver::persistent_style_snapshot(settings, 2.0f));
+  ASSERT_EQ(styled.instance_selection_wires.size(), 1u);
+  EXPECT_EQ(styled.instance_selection_wires.front().wire_color, kOverlaySelectionWireColor);
+  EXPECT_FLOAT_EQ(styled.instance_selection_wires.front().logical_wire_width_pixels,
+                  kOverlaySelectionWireLineWidthPixels);
+  EXPECT_FLOAT_EQ(styled.instance_selection_wires.front().wire_width_pixels,
+                  kOverlaySelectionWireLineWidthPixels * 2.0f);
+  EXPECT_EQ(styled.instance_selection_wires.front().geometry_payload, wire.geometry_payload);
+  EXPECT_EQ(styled.instance_selection_wires.front().world_transform.values, wire.world_transform.values);
+}
+
+TEST(RenderInstanceEditPresentationTests,
+     MultipleDefinitionMembersKeepOneOccurrenceSemanticallySingleton) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const EntityId definition = document.create_empty("Definition");
+  ASSERT_TRUE(document.set_instance_definition(definition));
+  ASSERT_TRUE(document.set_visible(definition, false));
+  for (int index = 0; index < 2; ++index) {
+    const EntityId member = document.create_entity(
+        "Member " + std::to_string(index), EntityKind::Mesh);
+    ASSERT_TRUE(document.set_mesh(member, {.mesh = mesh}));
+    ASSERT_TRUE(document.set_parent(member, definition, false));
+    ASSERT_TRUE(document.set_transform(member, {
+        .position = {static_cast<float>(index) * 2.0f, 0.0f, 0.0f}}));
+  }
+  const EntityId occurrence = document.create_entity("Occurrence", EntityKind::Instance);
+  ASSERT_TRUE(document.set_instance_occurrence(occurrence, {.definition = definition}));
+  const EntityId peer = document.create_empty("Peer");
+  ASSERT_TRUE(document.set_selected(occurrence, true));
+  ViewportSettings settings = ViewportSettings::defaults();
+  ASSERT_TRUE(settings.set_float_value(
+      ViewportFloatSettingId::SelectionEdgeLineSize, 2.0f));
+  ASSERT_TRUE(settings.set_float_value(
+      ViewportFloatSettingId::ActiveSelectionLineSize, 6.0f));
+  const auto style = ViewportOverlayStyleResolver::persistent_style_snapshot(settings, 2.0f);
+  for (const bool multiple : {false, true, false}) {
+    ASSERT_TRUE(document.set_selected(peer, multiple));
+    ASSERT_TRUE(document.set_active_selection(occurrence));
+    EXPECT_EQ(document.selected_entities().size(), multiple ? 2u : 1u);
+    const auto snapshot = build_render_overlay_selected_object_snapshot(
+        document, assets, true, style);
+    ASSERT_EQ(snapshot.instance_selection_fills.size(), 2u);
+    ASSERT_EQ(snapshot.instance_selection_wires.size(), 2u);
+    EXPECT_TRUE(std::ranges::all_of(snapshot.instance_selection_fills,
+        [multiple](const auto &record) { return record.active_selected == multiple; }));
+    EXPECT_TRUE(std::ranges::all_of(snapshot.instance_selection_wires,
+        [multiple](const auto &record) {
+          return record.active_selected == multiple &&
+                 record.wire_color == (multiple ? viewport_active_selection_color(kOverlaySelectionWireColor)
+                                                : kOverlaySelectionWireColor) &&
+                 record.logical_wire_width_pixels == (multiple ? 6.0f : 2.0f) &&
+                 record.wire_width_pixels == (multiple ? 12.0f : 4.0f);
+        }));
+    const auto scene = build_render_overlay_scene_wireframe_snapshot(document, assets, 1u, style);
+    ASSERT_EQ(scene.meshes.size(), 2u);
+    EXPECT_TRUE(std::ranges::all_of(scene.meshes,
+        [multiple](const auto &record) { return record.active_selected == multiple; }));
+    const auto frame = ViewportSceneOverlayBuilder::build_wireframe_frame(
+        {}, RenderOverlaySelectionMode::Object, scene);
+    EXPECT_EQ(line_count_for(frame, ViewportOverlayLayer::SelectedEdge), 6u);
+    EXPECT_TRUE(std::ranges::all_of(frame.lines, [multiple](const auto &line) {
+      return line.style_role == (multiple ? ViewportOverlayStyleRole::ActiveSelectionWire
+                                          : ViewportOverlayStyleRole::SelectionWire) &&
+             line.width_pixels == (multiple ? 12.0f : 4.0f);
+    }));
+  }
 }
 
 TEST(RenderInstanceEditPresentationTests,

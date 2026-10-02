@@ -1,0 +1,8 @@
+[plugins."quader-manager@quader-local"]
+enabled = true
+
+[plugins."quader-project-manager@quader-local"]
+enabled = false
+
+[plugins."quader-editor-project-manager@quader-local"]
+enabled = false

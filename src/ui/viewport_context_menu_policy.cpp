@@ -27,7 +27,8 @@ struct CommandScope {
 
 // Explicit operand scope is independent of command activation and presentation
 // categories. New catalog entries must choose their RMB placement deliberately.
-// Viewport tool launchers belong to the toolbar, not the operations menu.
+// Tool launchers normally belong to the toolbar. Align also starts from the
+// object/group Q menu and accepts ordinary scene selections.
 // Bridge uses the editable preview once, rather than two identical labels.
 constexpr CommandScope kCommandScopes[]{
     {quader_command::kDuplicateSelection, kObject | kGroup, Operand::Selection},
@@ -60,21 +61,7 @@ constexpr CommandScope kCommandScopes[]{
     {quader_command::kModelingShadeSmoothMesh, kObject, Operand::Polygon},
     {quader_command::kModelingShadeFlatMesh, kObject, Operand::Polygon},
     {quader_command::kModelingRemoveDoubles, kObject, Operand::Polygon},
-    {quader_command::kModelingAlignXMin, kObject, Operand::Polygon},
-    {quader_command::kModelingAlignXCenter, kObject, Operand::Polygon},
-    {quader_command::kModelingAlignXMax, kObject, Operand::Polygon},
-    {quader_command::kModelingAlignYMin, kObject, Operand::Polygon},
-    {quader_command::kModelingAlignYCenter, kObject, Operand::Polygon},
-    {quader_command::kModelingAlignYMax, kObject, Operand::Polygon},
-    {quader_command::kModelingAlignZMin, kObject, Operand::Polygon},
-    {quader_command::kModelingAlignZCenter, kObject, Operand::Polygon},
-    {quader_command::kModelingAlignZMax, kObject, Operand::Polygon},
-    {quader_command::kModelingDistributeCentersX, kObject, Operand::Polygon},
-    {quader_command::kModelingDistributeCentersY, kObject, Operand::Polygon},
-    {quader_command::kModelingDistributeCentersZ, kObject, Operand::Polygon},
-    {quader_command::kModelingDistributeGapsX, kObject, Operand::Polygon},
-    {quader_command::kModelingDistributeGapsY, kObject, Operand::Polygon},
-    {quader_command::kModelingDistributeGapsZ, kObject, Operand::Polygon},
+    {quader_command::kToolsActivateAlign, kObject | kGroup, Operand::Selection},
     {quader_command::kModelingRecalculateFaceNormals, kObject | kFace, Operand::Polygon},
     {quader_command::kModelingConnectVertices, kVertex, Operand::Selection},
     {quader_command::kModelingBevelVertices, kVertex, Operand::Selection},

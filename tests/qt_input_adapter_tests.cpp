@@ -46,6 +46,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QEnterEvent>
+#include <QEventLoop>
 #include <QFocusEvent>
 #include <QKeyEvent>
 #include <QLabel>
@@ -2680,6 +2681,251 @@ TEST(QtViewportSurfaceInputTests,
 }
 
 TEST(QtViewportSurfaceInputTests,
+     MarkingMenuTapSelectsWithoutPopupForCoalescedAndRemappedKeys) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-marking-menu-tap-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  for (const int mapping : {0, 1, 2}) {
+    const bool remapped = mapping != 0;
+    for (const bool coalesced : {false, true}) {
+      SCOPED_TRACE(mapping);
+      SCOPED_TRACE(coalesced);
+      NavigationPanelTestContext context;
+      ASSERT_NE(context.surface, nullptr);
+      ASSERT_TRUE(context.editor.viewports().set_layout(
+          quader::ViewportLayoutId::FourQuad).ok());
+      context.panel.refresh_workspace_layout();
+      ASSERT_TRUE(context.editor.tools().activate(
+          quader::ViewportToolId::Move).ok());
+      if (remapped) {
+        ASSERT_TRUE(context.editor.preferences().set_shortcut(
+            "viewport.marking_menu", mapping == 1
+                ? "Ctrl+Alt+F20" : "Ctrl+K Alt+F20").ok());
+        context.key(Qt::Key_Q);
+        EXPECT_EQ(context.editor.tools().active_tool(), "move");
+      }
+      context.process();
+      const auto history_before = context.editor.history().snapshot();
+      const int key = remapped ? Qt::Key_F20 : Qt::Key_Q;
+      const Qt::KeyboardModifiers modifiers = mapping == 1
+          ? Qt::ControlModifier | Qt::AltModifier
+          : (mapping == 2 ? Qt::AltModifier : Qt::NoModifier);
+      QTimer unexpected_popup;
+      unexpected_popup.setSingleShot(true);
+      QObject::connect(&unexpected_popup, &QTimer::timeout,
+                       &unexpected_popup, [] {
+        ADD_FAILURE() << "A tap constructed the marking popup before its hold.";
+        if (QWidget *popup = QApplication::activePopupWidget()) popup->close();
+      });
+      const auto process_without_popup = [&] {
+        unexpected_popup.start(1000);
+        context.process();
+        unexpected_popup.stop();
+        EXPECT_EQ(QApplication::activePopupWidget(), nullptr);
+      };
+      if (mapping == 2) {
+        QKeyEvent prefix(QEvent::KeyPress, Qt::Key_K, Qt::ControlModifier);
+        QKeyEvent prefix_release(QEvent::KeyRelease, Qt::Key_K, Qt::NoModifier);
+        QApplication::sendEvent(context.surface, &prefix);
+        QApplication::sendEvent(context.surface, &prefix_release);
+        if (!coalesced) process_without_popup();
+      }
+      QKeyEvent press(QEvent::KeyPress, key, modifiers);
+      QApplication::sendEvent(context.surface, &press);
+      if (!coalesced) {
+        process_without_popup();
+        EXPECT_EQ(context.editor.tools().active_tool(), "move");
+        QKeyEvent repeat(QEvent::KeyPress, key, modifiers, {}, true);
+        QKeyEvent repeated_release(QEvent::KeyRelease, key, modifiers, {}, true);
+        QApplication::sendEvent(context.surface, &repeat);
+        QApplication::sendEvent(context.surface, &repeated_release);
+        process_without_popup();
+        EXPECT_EQ(context.editor.tools().active_tool(), "move");
+      }
+      // Releasing a modifier first does not change the accepted launcher's key.
+      QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier);
+      QApplication::sendEvent(context.surface, &release);
+      process_without_popup();
+      EXPECT_EQ(context.editor.tools().active_tool(), "select");
+      for (const auto pane_id : {quader::ViewportPaneId::Perspective,
+                                quader::ViewportPaneId::Top,
+                                quader::ViewportPaneId::Front,
+                                quader::ViewportPaneId::Side}) {
+        EXPECT_EQ(context.editor.viewports().selected_tool(pane_id),
+                  quader::ViewportToolId::Select);
+      }
+      expect_history_unchanged(context.editor.history().snapshot(), history_before);
+      process_without_popup();
+      if (remapped) {
+        ASSERT_TRUE(context.editor.preferences().set_shortcut(
+            quader::quader_command::kToolsActivateSelect, "Q").ok());
+        ASSERT_TRUE(context.editor.tools().activate(
+            quader::ViewportToolId::Move).ok());
+        context.key(Qt::Key_Q);
+        EXPECT_EQ(context.editor.tools().active_tool(), "select");
+        EXPECT_EQ(QApplication::activePopupWidget(), nullptr);
+      }
+    }
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     MarkingMenuTapAcceptsPendingExtrusionThroughTheNormalToolLifecycle) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-marking-menu-tap-settlement-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  NavigationPanelTestContext context;
+  ASSERT_NE(context.surface, nullptr);
+  const auto box = context.editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}});
+  ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(context.editor.selection().select_face(box.value(), 1).ok());
+  context.session.history().clear();
+  ASSERT_TRUE(context.editor.tools().activate(quader::ViewportToolId::Extrude).ok());
+  ASSERT_TRUE(context.editor.tools().set_setting(
+      "extrude", "extrude.amount", 2.15).ok());
+  ASSERT_TRUE(context.session.extrude().preview_active());
+  const auto preview = context.editor.query().compiled_object_mesh(box.value());
+  ASSERT_TRUE(preview.has_value());
+  context.process();
+  context.key(Qt::Key_Q);
+  EXPECT_EQ(context.editor.tools().active_tool(), "select");
+  EXPECT_FALSE(context.session.extrude().preview_active());
+  EXPECT_EQ(QApplication::activePopupWidget(), nullptr);
+  EXPECT_EQ(context.session.history().undo_count(), 1u);
+  const auto accepted = context.editor.query().compiled_object_mesh(box.value());
+  ASSERT_TRUE(accepted.has_value());
+  expect_compiled_mesh_equal(*accepted, *preview);
+  ASSERT_TRUE(context.editor.history().undo().ok());
+  ASSERT_TRUE(context.editor.history().redo().ok());
+  const auto replayed = context.editor.query().compiled_object_mesh(box.value());
+  ASSERT_TRUE(replayed.has_value());
+  expect_compiled_mesh_equal(*replayed, *preview);
+}
+
+TEST(QtViewportSurfaceInputTests,
+     MarkingMenuHoldOpensOnlyAfterThresholdAndConsumesItsRelease) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-marking-menu-hold-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  NavigationPanelTestContext context;
+  ASSERT_NE(context.surface, nullptr);
+  quader::LocalizationService localization;
+  ASSERT_TRUE(localization.load(std::filesystem::path(QUADER_SOURCE_DIR) /
+                                    "resources" / "locales", "en-US"));
+  context.panel.set_localization(localization);
+  ASSERT_TRUE(context.editor.tools().activate(quader::ViewportToolId::Move).ok());
+  context.process();
+  QTimer watchdog;
+  watchdog.setSingleShot(true);
+  QObject::connect(&watchdog, &QTimer::timeout, &watchdog, [] {
+    ADD_FAILURE() << "The marking gesture opened early or failed to consume release.";
+    if (QWidget *popup = QApplication::activePopupWidget()) popup->close();
+  });
+  QKeyEvent press(QEvent::KeyPress, Qt::Key_Q, Qt::NoModifier);
+  QApplication::sendEvent(context.surface, &press);
+  watchdog.start(1000);
+  context.process();
+  watchdog.stop();
+  EXPECT_EQ(QApplication::activePopupWidget(), nullptr);
+  EXPECT_EQ(context.editor.tools().active_tool(), "move");
+  // Event-loop time, rather than synthesized frame deltas, defines the hold.
+  QEventLoop before_threshold;
+  QTimer::singleShot(80, &before_threshold, &QEventLoop::quit);
+  before_threshold.exec();
+  watchdog.start(1000);
+  context.process();
+  watchdog.stop();
+  EXPECT_EQ(QApplication::activePopupWidget(), nullptr);
+  EXPECT_EQ(context.editor.tools().active_tool(), "move");
+  QEventLoop hold;
+  QTimer::singleShot(150, &hold, &QEventLoop::quit);
+  hold.exec();
+  bool popup_opened = false;
+  QTimer interaction;
+  interaction.setSingleShot(true);
+  QObject::connect(&interaction, &QTimer::timeout, &interaction, [&] {
+    QWidget *popup = QApplication::activePopupWidget();
+    if (popup == nullptr) return;
+    popup_opened = popup->objectName() == QStringLiteral("viewport_marking_menu");
+    QKeyEvent release(QEvent::KeyRelease, Qt::Key_Q, Qt::NoModifier);
+    QApplication::sendEvent(popup, &release);
+  });
+  interaction.start(0);
+  watchdog.start(1000);
+  context.process();
+  interaction.stop();
+  watchdog.stop();
+  EXPECT_TRUE(popup_opened);
+  EXPECT_EQ(QApplication::activePopupWidget(), nullptr);
+  EXPECT_EQ(context.editor.tools().active_tool(), "move");
+  QKeyEvent trailing_release(QEvent::KeyRelease, Qt::Key_Q, Qt::NoModifier);
+  QApplication::sendEvent(context.surface, &trailing_release);
+  context.process();
+  EXPECT_EQ(context.editor.tools().active_tool(), "move");
+  EXPECT_EQ(QApplication::activePopupWidget(), nullptr);
+}
+
+TEST(QtViewportSurfaceInputTests,
+     MarkingMenuPendingHoldAbandonsOnFocusRuntimeAndOtherInput) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-marking-menu-cancel-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  for (const int interruption : {0, 1, 2, 3}) {
+    SCOPED_TRACE(interruption);
+    NavigationPanelTestContext context;
+    ASSERT_NE(context.surface, nullptr);
+    ASSERT_TRUE(context.editor.tools().activate(quader::ViewportToolId::Scale).ok());
+    context.process();
+    QKeyEvent press(QEvent::KeyPress, Qt::Key_Q, Qt::NoModifier);
+    QApplication::sendEvent(context.surface, &press);
+    context.process();
+    if (interruption == 0) {
+      QFocusEvent lost_focus(QEvent::FocusOut);
+      QApplication::sendEvent(context.surface, &lost_focus);
+      context.process();
+      QFocusEvent focus(QEvent::FocusIn);
+      QApplication::sendEvent(context.surface, &focus);
+    } else if (interruption == 1) {
+      context.panel.abandon_interactions();
+      context.panel.attach_workspace(context.session.viewport_workspace());
+    } else if (interruption == 2) {
+      context.key(Qt::Key_W);
+      EXPECT_EQ(context.editor.tools().active_tool(), "move");
+    } else {
+      context.mouse(QEvent::MouseButtonPress, {400, 300},
+                    Qt::MiddleButton, Qt::MiddleButton);
+      context.process();
+    }
+    QKeyEvent release(QEvent::KeyRelease, Qt::Key_Q, Qt::NoModifier);
+    QApplication::sendEvent(context.surface, &release);
+    context.process();
+    EXPECT_EQ(context.editor.tools().active_tool(),
+              interruption == 2 ? "move" : "scale");
+    EXPECT_EQ(QApplication::activePopupWidget(), nullptr);
+    if (interruption == 3) {
+      context.mouse(QEvent::MouseButtonRelease, {400, 300},
+                    Qt::MiddleButton, Qt::NoButton);
+      context.process();
+    }
+    context.process();
+    EXPECT_EQ(context.editor.tools().active_tool(),
+              interruption == 2 ? "move" : "scale");
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
      ZPressReleaseTogglesFocusedPaneBetweenShadedAndWireframeWithoutPopup) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
@@ -2982,7 +3228,7 @@ TEST(QtViewportSurfaceInputTests,
 }
 
 TEST(QtViewportSurfaceInputTests,
-     PerspectiveEdgeLoopTracksSurfacePixelsAndPaneSnappingAcrossHeaderScales) {
+     PerspectiveEdgeLoopTracksSurfacePixelsAndCtrlSnappingAcrossHeaderScales) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-perspective-edge-loop-input-tests";
@@ -3062,17 +3308,18 @@ TEST(QtViewportSurfaceInputTests,
       ASSERT_GT(edge_length, 1.0f);
       const quader::QVec2 perpendicular{-edge_delta.y / edge_length,
                                         edge_delta.x / edge_length};
-      const auto mouse = [&](QEvent::Type type, float offset, Qt::MouseButtons held) {
+      const auto mouse = [&](QEvent::Type type, float offset, Qt::MouseButtons held,
+                             Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
         const auto pixels = target.position + perpendicular *
             (offset * ui_scale * static_cast<float>(surface->devicePixelRatio()));
         const QPointF local{pixels.x / surface->devicePixelRatio(),
                             pixels.y / surface->devicePixelRatio()};
         QMouseEvent event(type, local, QPointF(surface->mapToGlobal(local.toPoint())),
                          type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
-                         held, Qt::NoModifier);
+                         held, modifiers);
         QApplication::sendEvent(surface, &event);
       };
-      const float expected_z = snap_enabled ? 0.5f : 0.37f;
+      float expected_z = 0.37f;
       const auto expect_preview = [&] {
         ASSERT_TRUE(session.modeling().tool_status().insert_edge_loop_has_preview);
         const auto frame = session.modeling().volatile_overlay_frame();
@@ -3096,11 +3343,37 @@ TEST(QtViewportSurfaceInputTests,
         process();
         expect_preview();
       }
+      const auto control = [&](bool held) {
+        expected_z = held ? 0.5f : 0.37f;
+        QKeyEvent event(held ? QEvent::KeyPress : QEvent::KeyRelease,
+                        Qt::Key_Control, held ? Qt::ControlModifier : Qt::NoModifier);
+        QApplication::sendEvent(surface, &event);
+        process();
+        expect_preview();
+        EXPECT_EQ(panel.operation_input_context().control, held);
+        const auto hints = editor.tools().active_input_hints(panel.operation_input_context());
+        const auto snap_hint = std::find_if(hints.begin(), hints.end(), [](const auto &hint) {
+          return hint.gesture == quader::QuaderOperationInputGesture::Control;
+        });
+        ASSERT_NE(snap_hint, hints.end());
+        EXPECT_EQ(snap_hint->label_fallback, "Grid Snap");
+        EXPECT_EQ(snap_hint->active, held);
+      };
+      // Modifier edges alone must reproject a stationary cursor's preview.
+      control(true);
+      control(false);
+      ASSERT_TRUE(editor.viewports().set_control(
+          kPaneId, quader::QuaderViewportControl::SnappingEnabled, false).ok());
+      control(true);
+      EXPECT_FALSE(panel.operation_input_context().grid_snap_available);
+      control(false);
       EXPECT_EQ(session.history().undo_count(), 0u);
-      mouse(QEvent::MouseButtonPress, 6.0f, Qt::LeftButton);
+      if (snap_enabled) control(true);
+      const auto commit_modifiers = snap_enabled ? Qt::ControlModifier : Qt::NoModifier;
+      mouse(QEvent::MouseButtonPress, 6.0f, Qt::LeftButton, commit_modifiers);
       process();
       EXPECT_EQ(session.history().undo_count(), 1u);
-      mouse(QEvent::MouseButtonRelease, 6.0f, Qt::NoButton);
+      mouse(QEvent::MouseButtonRelease, 6.0f, Qt::NoButton, commit_modifiers);
       process();
       EXPECT_FALSE(session.modeling().tool_status().insert_edge_loop_dragging);
       EXPECT_EQ(session.history().undo_count(), 1u);
@@ -5027,7 +5300,7 @@ TEST(QtViewportSurfaceInputTests,
       auto &camera = workspace.camera(pane);
       camera.focus_origin(64.0f);
       if (active_box && pane == quader::ViewportPaneId::Top) {
-        ASSERT_FALSE(context.editor.tools().pane_owns_executing_tool(pane));
+        ASSERT_TRUE(context.editor.tools().pane_owns_executing_tool(pane));
       }
 
       for (const auto modifiers : {Qt::NoModifier, Qt::ControlModifier}) {
@@ -5051,7 +5324,7 @@ TEST(QtViewportSurfaceInputTests,
           EXPECT_EQ(std::ranges::any_of(native_hints, [](const auto &hint) {
                       return hint.label_key == "operation.hints.cancel_creation";
                     }),
-                    pane == quader::ViewportPaneId::Perspective);
+                    true);
         }
         const auto expect_stable = [&]() {
           EXPECT_EQ(row.hints(), expected_hints);

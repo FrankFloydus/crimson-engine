@@ -1,0 +1,8 @@
+---------------
+Parent file: C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Global Offensive\game\core\shaders_vulkan_dir.vpk
+File: shaders\vfx\tools_wireframe_vulkan_50_features.vcs
+Exception: ValveResourceFormat.Utils.UnexpectedMagicException: Only VCS file versions 59 through 71 are supported for variable 'vcsFileVersion': 72 (0x48)
+   at ValveResourceFormat.CompiledShader.VfxProgramData.ThrowIfNotSupported(Int32 vcsFileVersion) in /_/ValveResourceFormat/CompiledShader/VfxProgramData.cs:line 580
+   at ValveResourceFormat.CompiledShader.VfxProgramData.VfxCreateFromResource(Resource resource) in /_/ValveResourceFormat/CompiledShader/VfxProgramData.cs:line 466
+   at ValveResourceFormat.CompiledShader.ShaderCollection.GetShaderCollection(String targetFilename, Package vrfPackage) in /_/ValveResourceFormat/CompiledShader/ShaderCollection.cs:line 77
+   at CLI.Decompiler.ProcessVPKEntries(String parentPath, Package package, IFileLoader fileLoader, String type, Dictionary`2 manifestData, Boolean useOutputAsDirectory) in /_/CLI/Decompiler.cs:line 1340

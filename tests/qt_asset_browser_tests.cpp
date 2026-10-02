@@ -392,6 +392,22 @@ TEST_F(QtAssetBrowserTests, ModelLayoutDoesNotRequestThumbnailsAndPaintingDoes) 
   EXPECT_GT(requested, 0);
 }
 
+TEST_F(QtAssetBrowserTests, DiscoveryReadinessRequiresPaintForEveryExposure) {
+  EXPECT_FALSE(browser_->has_completed_visible_paint());
+  browser_->show();
+  EXPECT_FALSE(browser_->has_completed_visible_paint());
+  QCoreApplication::processEvents();
+  EXPECT_TRUE(browser_->has_completed_visible_paint());
+  browser_->hide();
+  EXPECT_FALSE(browser_->has_completed_visible_paint());
+  browser_->show();
+  EXPECT_FALSE(browser_->has_completed_visible_paint());
+  QCoreApplication::processEvents();
+  EXPECT_TRUE(browser_->has_completed_visible_paint());
+  EXPECT_FALSE(browser_->set_snapshot(browser_snapshot()));
+  EXPECT_TRUE(browser_->has_completed_visible_paint());
+}
+
 TEST_F(QtAssetBrowserTests, InlineEscapeKeepsCreatedNameWithoutRenameRequest) {
   show();
   ASSERT_TRUE(browser_->begin_rename(QStringLiteral("scene")));

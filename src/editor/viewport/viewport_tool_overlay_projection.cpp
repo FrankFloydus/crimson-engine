@@ -343,7 +343,11 @@ void add_gizmo_info(
       .add_value(static_cast<std::uint64_t>(info.hover_axis))
       .add_value(static_cast<std::uint64_t>(info.active_axis))
       .add_vec3(info.pivot)
-      .add_vec2(info.screen_pivot);
+      .add_vec2(info.screen_pivot)
+      .add_vec3(info.orientation.x_axis)
+      .add_vec3(info.orientation.y_axis)
+      .add_vec3(info.orientation.z_axis)
+      .add_vec3(info.orientation.origin);
   add_double(signature, info.gizmo_scale);
   add_double(signature, info.move_center_radius_pixels);
   signature.add_bool(info.rotate_indicator.active)
@@ -466,7 +470,7 @@ std::uint64_t tool_overlay_publication_revision(
   const bool pivot_visible =
       inputs.pivot_handle != nullptr && inputs.pivot_handle->visible;
   const bool primitive_creation_visible =
-      inputs.interaction_pane && inputs.primitive_creation_controls != nullptr &&
+      inputs.primitive_creation_controls != nullptr &&
       inputs.primitive_creation_controls->visible;
   signature.add_bool(primitive_creation_visible);
   if (primitive_creation_visible) {
@@ -475,7 +479,7 @@ std::uint64_t tool_overlay_publication_revision(
     signature.add_value(inputs.primitive_creation_controls->revision);
   }
   const bool camera_affects_frame =
-      (inputs.interaction_pane && inputs.tool_overlay_visible) ||
+      inputs.tool_overlay_visible ||
       transform_gizmo_visible || marquee_visible || pivot_visible ||
       primitive_creation_visible ||
       (inputs.linear_array_handle != nullptr && inputs.linear_array_handle->visible &&
@@ -485,11 +489,13 @@ std::uint64_t tool_overlay_publication_revision(
   if (camera_affects_frame) {
     add_camera(signature, inputs.overlay_camera);
   }
-  if (inputs.interaction_pane) {
+  if (inputs.interaction_pane || inputs.tool_overlay_visible) {
     signature.add_value(revisions.active_tool);
-    if (inputs.tool_overlay_visible) {
-      add_box_preview(signature, inputs.box_preview);
-    }
+  }
+  if (inputs.tool_overlay_visible) {
+    add_box_preview(signature, inputs.box_preview);
+  }
+  if (inputs.interaction_pane) {
     if (inputs.overlays_visible) {
       add_snap_points(signature, inputs.transform_snap_points);
       add_selection_marquee(signature, inputs.selection_marquee);
@@ -540,16 +546,16 @@ ViewportToolOverlaySource::build_dynamic_tool_overlay_frame() const {
   if (inputs_.overlay_camera == nullptr) {
     return frame;
   }
+  if (inputs_.tool_overlay_visible && inputs_.box_preview != nullptr) {
+    ViewportToolOverlayProjection::append_box(
+        frame, *inputs_.overlay_camera, *inputs_.box_preview,
+        inputs_.raster_scale);
+  }
+  if (inputs_.primitive_creation_controls != nullptr) {
+    ViewportToolOverlayProjection::append_primitive_creation_controls(
+        frame, *inputs_.overlay_camera, *inputs_.primitive_creation_controls);
+  }
   if (inputs_.interaction_pane) {
-    if (inputs_.tool_overlay_visible && inputs_.box_preview != nullptr) {
-      ViewportToolOverlayProjection::append_box(
-          frame, *inputs_.overlay_camera, *inputs_.box_preview,
-          inputs_.raster_scale);
-    }
-    if (inputs_.primitive_creation_controls != nullptr) {
-      ViewportToolOverlayProjection::append_primitive_creation_controls(
-          frame, *inputs_.overlay_camera, *inputs_.primitive_creation_controls);
-    }
     if (inputs_.overlays_visible) {
       if (inputs_.transform_snap_points != nullptr) {
         SelectionOverlayProjection::append_world_space_overlay_points(

@@ -253,6 +253,56 @@ const PrimitiveCreationControlsFrame &PrimitiveCreationInteraction::project(
   return frame_;
 }
 
+const PrimitiveCreationControlsFrame &
+PrimitiveCreationInteraction::project_presentation(
+    const std::optional<ViewportPrimitiveCreationState> &cube,
+    const ViewportCameraController &camera, float raster_scale,
+    const PrimitiveCreationControlsFrame &interaction_frame) {
+  const auto valid_control = [](int control) {
+    return control >= 0 && control < 9 ? control : -1;
+  };
+  const int active = cube ? valid_control(interaction_frame.active) : -1;
+  const int hovered = cube ? valid_control(interaction_frame.hovered) : -1;
+  const bool decrement =
+      interaction_frame.controls[active == 6 ? 7 : 6].subdivision_decrement;
+  const bool active_decrement = active >= 6 &&
+      interaction_frame.controls[active].subdivision_decrement;
+  const bool feedback_changed = frame_.active != active ||
+      frame_.hovered != hovered || subdivision_decrement_ != decrement ||
+      active_subdivision_decrement_ != active_decrement;
+  if (frame_.active != active) cache_valid_ = false;
+  frame_.active = active;
+  frame_.hovered = hovered;
+  subdivision_decrement_ = decrement;
+  active_subdivision_decrement_ = active_decrement;
+  if (active >= 6) {
+    // Segment buttons retain the captured world anchor in every pane.
+    const QVec3 anchor = interaction_frame.controls[active].world_position;
+    if (!same(frame_.controls[active].world_position, anchor)) {
+      frame_.controls[active].world_position = anchor;
+      cache_valid_ = false;
+    }
+  } else if (cube && cube->shape != ViewportPrimitiveCreationShape::Box &&
+             (active == 0 ||
+              (cube->shape == ViewportPrimitiveCreationShape::Torus && active == 1))) {
+    // A radial drag keeps the source pane's chosen local axis. Idle controls
+    // remain camera-derived so they retain a useful hit target in each pane.
+    const QVec3 axis = interaction_frame.controls[active].resize_axis;
+    if (!same(frame_.controls[active].resize_axis, axis)) {
+      frame_.controls[active].resize_axis = axis;
+      cache_valid_ = false;
+    }
+  }
+  const std::uint64_t revision = frame_.revision;
+  project(cube, camera, raster_scale);
+  if (feedback_changed) {
+    update_subdivision_controls();
+    update_feedback();
+    if (frame_.revision == revision) ++frame_.revision;
+  }
+  return frame_;
+}
+
 int PrimitiveCreationInteraction::hit_test(QVec2 point) const {
   if (!frame_.visible) return -1;
   int best = -1;

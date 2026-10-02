@@ -2562,6 +2562,32 @@ MeshRenderableProxy MeshRenderableFactory::create_instance_selection_fill(
   return proxy;
 }
 
+void MeshRenderableFactory::update_instance_selection_fill_color(
+    const MeshRenderableProxy &proxy, std::uint32_t color,
+    bool active_selected) {
+  constexpr float kInverseByte = 1.0f / 255.0f;
+  const filament::math::float4 fill_color{
+      srgb_to_linear(static_cast<float>(color & 0xffu) * kInverseByte),
+      srgb_to_linear(static_cast<float>((color >> 8u) & 0xffu) * kInverseByte),
+      srgb_to_linear(static_cast<float>((color >> 16u) & 0xffu) * kInverseByte),
+      static_cast<float>(color >> 24u) * kInverseByte,
+  };
+  const auto fill_class = visible_overlay_face_fill_class(
+      active_selected ? OverlayFaceFillClass::ActiveSelection
+                      : OverlayFaceFillClass::Selection, color);
+  const bool stencil_enabled =
+      engine_->getBackend() == filament::Engine::Backend::VULKAN;
+  constexpr std::array kPasses{OverlayFaceFillPass::Mask, OverlayFaceFillPass::Color};
+  for (std::size_t index = 0u; index < proxy.material_instances.size(); ++index) {
+    auto *material = proxy.material_instances[index];
+    if (material != nullptr && index < kPasses.size()) {
+      material->setParameter("fillColor", fill_color);
+      apply_overlay_face_fill_stencil(*material, fill_class, kPasses[index],
+                                    stencil_enabled);
+    }
+  }
+}
+
 MeshRenderableProxy MeshRenderableFactory::create_collision_shape_fill(
     std::shared_ptr<const MeshCollisionGeometryPayload> geometry,
     filament::Material &material, std::span<const QMat4> world_transforms,

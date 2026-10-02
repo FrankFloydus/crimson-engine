@@ -36,7 +36,7 @@ struct TransformGizmoSelectionCacheStats {
   std::uint64_t curve_control_cache_hit_count = 0;
 };
 
-/** Read-only inputs for one pane's idle transform-gizmo presentation. */
+/** Read-only inputs for one pane's transform-gizmo presentation. */
 struct TransformGizmoPresentationInput final {
   const ViewportCameraController &camera;
   const ViewportSettings &settings;
@@ -50,6 +50,8 @@ struct TransformGizmoPresentationInput final {
   std::uintptr_t source_identity = 0;
   const ViewportCurveInteractionPort *curve_tool = nullptr;
   bool curve_control_route_available = false;
+  const quader_editor_core::TransformGizmoFrame *shared_interaction_frame =
+      nullptr;
 };
 
 /** Retains a pane's derived gizmo without owning input or a modeling operation. */

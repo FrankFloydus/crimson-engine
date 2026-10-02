@@ -227,6 +227,8 @@ struct RenderOverlayCollisionSnapshot : RenderSourceStamp {
  * frame before style resolution.
  */
 struct RenderOverlaySelectionSnapshot : RenderSourceStamp {
+  /// Counts explicit scene selection, before hierarchy/instance expansion.
+  std::size_t selected_element_count = 0u;
   std::vector<RenderOverlayMeshSnapshot> hierarchy_selection_wires;
   std::vector<RenderOverlayBoundsSnapshot> group_bounds;
   /// One tight world bound for each selected direct mesh or formal occurrence.

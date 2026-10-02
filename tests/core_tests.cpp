@@ -1655,8 +1655,8 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
       15.0f);
   EXPECT_FLOAT_EQ(
       settings.float_value(ViewportFloatSettingId::DimensionFontSize), 12.0f);
-  ASSERT_EQ(viewport_color_settings().size(), 25u);
-  ASSERT_EQ(viewport_float_settings().size(), 34u);
+  ASSERT_EQ(viewport_color_settings().size(), 26u);
+  ASSERT_EQ(viewport_float_settings().size(), 35u);
   ASSERT_EQ(viewport_bool_settings().size(), 15u);
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowGrid));
   EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::ShowMeshGrid));
@@ -2047,6 +2047,12 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
   std::filesystem::remove(path);
 
   ViewportSettings settings = ViewportSettings::defaults();
+  expect_color_near(settings.color(ViewportColorSettingId::ActiveSelection),
+                    {1.0f, 105.0f / 255.0f, 180.0f / 255.0f, 1.0f});
+  EXPECT_TRUE(settings.set_color(ViewportColorSettingId::ActiveSelection,
+                                 {0.2f, 0.4f, 0.6f, 0.8f}));
+  EXPECT_TRUE(settings.set_float_value(
+      ViewportFloatSettingId::ActiveSelectionLineSize, 20.0f));
   EXPECT_TRUE(settings.set_color(ViewportColorSettingId::Background,
                                  {0.2f, 0.4f, 0.6f, 0.3f}));
   EXPECT_TRUE(settings.set_color(ViewportColorSettingId::GridMinor,
@@ -2085,6 +2091,9 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
   ASSERT_TRUE(settings.save(path));
 
   const ViewportSettings loaded = ViewportSettings::load(path);
+  expect_color_near(loaded.color(ViewportColorSettingId::ActiveSelection),
+                    {0.2f, 0.4f, 0.6f, 0.8f});
+  EXPECT_FLOAT_EQ(loaded.float_value(ViewportFloatSettingId::ActiveSelectionLineSize), 8.0f);
   expect_color_near(loaded.color(ViewportColorSettingId::Background),
                     {0.2f, 0.4f, 0.6f, 1.0f});
   expect_color_near(loaded.color(ViewportColorSettingId::GridMinor),
@@ -3440,6 +3449,60 @@ TEST(ViewportPersistentOverlayStyleSnapshotTests,
             defaults.instance_edit_context_signature);
 }
 
+TEST(ViewportPersistentOverlayStyleSnapshotTests,
+     ActivePreferencesKeepOrdinaryAppearanceAndInvalidateOnlyRelevantStyles) {
+  const auto baseline = ViewportOverlayStyleResolver::persistent_style_snapshot(
+      ViewportSettings::defaults(), 2.0f);
+  ViewportSettings settings = ViewportSettings::defaults();
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::ActiveSelection,
+                                {0.2f, 0.4f, 0.6f, 1.0f}));
+  const auto color = ViewportOverlayStyleResolver::persistent_style_snapshot(settings, 2.0f);
+  EXPECT_EQ(color.selection_wire_color, baseline.selection_wire_color);
+  EXPECT_EQ(color.selection_face_color, baseline.selection_face_color);
+  EXPECT_EQ(color.active_selection_wire_color, rgba8(51, 102, 153));
+  EXPECT_EQ(color.active_selection_face_color & 0x00ffffffu, rgba8(51, 102, 153) & 0x00ffffffu);
+  EXPECT_NE(color.wire_signature, baseline.wire_signature);
+  EXPECT_NE(color.face_signature, baseline.face_signature);
+  EXPECT_EQ(color.instance_edit_context_signature, baseline.instance_edit_context_signature);
+  ASSERT_TRUE(settings.set_float_value(ViewportFloatSettingId::ActiveSelectionLineSize, 6.0f));
+  const auto width = ViewportOverlayStyleResolver::persistent_style_snapshot(settings, 2.0f);
+  EXPECT_FLOAT_EQ(width.selection_edge_line_width_pixels, baseline.selection_edge_line_width_pixels);
+  EXPECT_FLOAT_EQ(width.active_selection_logical_width_pixels, 6.0f);
+  EXPECT_FLOAT_EQ(width.active_selection_line_width_pixels, 12.0f);
+  EXPECT_NE(width.wire_signature, color.wire_signature);
+  EXPECT_EQ(width.face_signature, color.face_signature);
+  EXPECT_FALSE(viewport_persistent_overlay_wire_styles_match(color, width));
+  EXPECT_TRUE(viewport_persistent_overlay_wire_styles_match(width,
+      ViewportOverlayStyleResolver::persistent_style_snapshot(settings, 2.0f)));
+}
+
+TEST(ViewportOverlayStyleResolverTests,
+     ActiveColorAndWidthReachPrimaryComponentsAndSpatialMarkers) {
+  ViewportSettings settings = ViewportSettings::defaults();
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::ActiveSelection,
+                                {0.2f, 0.4f, 0.6f, 1.0f}));
+  ASSERT_TRUE(settings.set_float_value(ViewportFloatSettingId::ActiveSelectionLineSize, 6.0f));
+  ViewportOverlayFrame frame;
+  for (const auto role : {ViewportOverlayStyleRole::SelectionWire,
+                          ViewportOverlayStyleRole::ActiveSelectionWire,
+                          ViewportOverlayStyleRole::ActiveGroupBounds}) {
+    frame.lines.push_back({.layer = ViewportOverlayLayer::SelectedEdge, .style_role = role});
+  }
+  frame.points.push_back({.layer = ViewportOverlayLayer::SelectedVertex,
+                         .style_role = ViewportOverlayStyleRole::ActiveSelectedVertex});
+  frame.icons.push_back({.layer = ViewportOverlayLayer::PointLightGizmo,
+                        .style_role = ViewportOverlayStyleRole::ActiveSelectedVertex});
+  ViewportOverlayStyleResolver::apply(frame, settings, {.raster_scale = 2.0f});
+  EXPECT_EQ(frame.lines[0].color, kOverlaySelectionWireColor);
+  EXPECT_FLOAT_EQ(frame.lines[0].width_pixels, 5.0f);
+  for (std::size_t index = 1u; index < frame.lines.size(); ++index) {
+    EXPECT_EQ(frame.lines[index].color & 0x00ffffffu, rgba8(51, 102, 153) & 0x00ffffffu);
+    EXPECT_FLOAT_EQ(frame.lines[index].width_pixels, 12.0f);
+  }
+  EXPECT_EQ(frame.points.front().color & 0x00ffffffu, rgba8(51, 102, 153) & 0x00ffffffu);
+  EXPECT_EQ(frame.icons.front().color & 0x00ffffffu, rgba8(51, 102, 153) & 0x00ffffffu);
+}
+
 
 TEST(ViewportOverlayStyleResolverTests, SupportsSelectionModeScopedOverrides) {
   ViewportSettings settings = ViewportSettings::defaults();
@@ -3650,6 +3713,68 @@ TEST(ViewportGridPlacementPolicyTests,
                       grid.plane_size.x * 0.401f);
             EXPECT_LE(std::fabs(hit.z - grid.origin.z),
                       grid.plane_size.y * 0.401f);
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(ViewportGridPlacementPolicyTests,
+     TranslatedAxisViewsKeepTheirWorldAlignedGridInsideCameraClips) {
+  for (const ViewportViewAxis axis :
+       {ViewportViewAxis::X, ViewportViewAxis::Y, ViewportViewAxis::Z}) {
+    const QVec3 axis_vector = axis == ViewportViewAxis::X
+                                 ? QVec3{1.0f, 0.0f, 0.0f}
+                             : axis == ViewportViewAxis::Y
+                                 ? QVec3{0.0f, 1.0f, 0.0f}
+                                 : QVec3{0.0f, 0.0f, 1.0f};
+    for (const int sign : {-1, 1}) {
+      for (const float translation : {-100.0f, 100.0f}) {
+        for (const bool snapped : {false, true}) {
+          SCOPED_TRACE(::testing::Message()
+                       << "axis " << static_cast<int>(axis) << " sign " << sign
+                       << " translation " << translation << " snap " << snapped);
+          ViewportCameraController camera;
+          camera.set_viewport_size(1200.0f, 600.0f);
+          const QVec3 target = axis_vector * translation;
+          ASSERT_TRUE(camera.restore_perspective_pose({
+              .eye = target + axis_vector * (24.0f * sign),
+              .target = target,
+              .up = axis == ViewportViewAxis::Y ? QVec3{0.0f, 0.0f, 1.0f}
+                                               : QVec3{0.0f, 1.0f, 0.0f},
+          }));
+          if (snapped) {
+            camera.begin_drag({100.0f, 100.0f}, ViewportDragMode::Orbit);
+            camera.update_drag({100.0f, 100.0f}, ViewportDragMode::OrbitSnap);
+            camera.end_drag();
+            ASSERT_TRUE(camera.orbit_snap_orthographic_projection());
+          } else {
+            camera.view_axis(axis, sign);
+          }
+          ASSERT_EQ(camera.state().projection, ViewportProjection::Orthographic);
+          const ViewportCameraPose pose = camera.pose();
+          const QVec3 forward = normalize(pose.target - pose.eye);
+          for (const QVec2 clips : {QVec2{0.05f, 64.0f}, QVec2{32.0f, 64.0f},
+                                   QVec2{0.05f, 192.0f},
+                                   QVec2{32.0f, 32.001f},
+                                   QVec2{999999.0f, 1000000.0f}}) {
+            camera.set_clip_planes(clips.x, clips.y);
+            const auto grid =
+                ViewportGridPlacementPolicy::placement(camera, 1200u, 600u);
+            const float grid_depth = dot(grid.origin - pose.eye, forward);
+            EXPECT_GT(grid_depth, camera.state().near_plane);
+            EXPECT_LT(grid_depth, camera.state().far_plane);
+            // Relocating only the plane's normal preserves world grid positions.
+            EXPECT_NEAR(dot(grid.origin - pose.target, grid.axes.u_axis),
+                        0.0f, 0.001f);
+            EXPECT_NEAR(dot(grid.origin - pose.target, grid.axes.v_axis),
+                        0.0f, 0.001f);
+            expect_vec3_near(camera.pose().eye, pose.eye);
+            expect_vec3_near(camera.pose().target, pose.target);
+            expect_vec3_near(camera.pose().up, pose.up);
+            EXPECT_FLOAT_EQ(camera.state().near_plane, clips.x);
+            EXPECT_FLOAT_EQ(camera.state().far_plane, clips.y);
           }
         }
       }

@@ -812,6 +812,9 @@ std::string explicit_keybinding_label(std::string_view command_id,
   if (is(quader_command::kToolsActivateExtrudeAlongNormals)) {
     return "Activate Extrude Along Normals";
   }
+  if (is(quader_command::kToolsActivateAlign)) {
+    return "Activate Align Tool";
+  }
   if (const std::optional<std::string_view> tool_id =
           quader_tool_id_from_activation_command_target(command_id)) {
     if (*tool_id == "create_primitive") {
@@ -2203,7 +2206,8 @@ QuaderCommandsApi::Impl::resolve_immediate_global_command(
 std::optional<QuaderKeybindingContext>
 QuaderCommandsApi::Impl::tool_settings_keybinding_context(
     const ViewportToolState &state) const {
-  const auto pane = viewports_.focused_pane();
+  const auto &origin = tools_.active_settings_presentation_origin();
+  const auto pane = origin.serial != 0u ? origin.pane : viewports_.focused_pane();
   const bool owns_operation = tools_.pane_owns_executing_tool(pane);
   const auto settings = owns_operation ? tools_.settings_for_pane(pane)
                                       : tools_.active_settings();
@@ -2212,9 +2216,8 @@ QuaderCommandsApi::Impl::tool_settings_keybinding_context(
   }
   auto lifecycle_state = state;
   if (!owns_operation) {
-    // Reserve the executing operation's lifecycle keys in a passive pane's
-    // settings panel too. Otherwise Escape can fall through to Select and
-    // implicitly accept another pane's draft. Execution still checks ownership.
+    // Reserve the executing operation's lifecycle keys when its presented
+    // pane state differs. Execution still checks operation ownership.
     const auto *descriptor = find_viewport_tool_descriptor(tools_.active_tool());
     if (descriptor == nullptr) return std::nullopt;
     lifecycle_state.active_tool = descriptor->tool;
@@ -2386,7 +2389,8 @@ void QuaderCommandsApi::Impl::reset_pending_modal_lifecycle_input_binding() {
 QuaderApiVoidResult
 QuaderCommandsApi::Impl::execute_native_tool_settings_intent(
     QuaderNativeToolSettingsIntent intent) {
-  const auto pane = viewports_.focused_pane();
+  const auto &origin = tools_.active_settings_presentation_origin();
+  const auto pane = origin.serial != 0u ? origin.pane : viewports_.focused_pane();
   const auto settings = tools_.settings_for_pane(pane);
   if (intent != QuaderNativeToolSettingsIntent::None &&
       (!tools_.pane_owns_executing_tool(pane) || !settings.active ||
@@ -2416,9 +2420,14 @@ QuaderApiVoidResult QuaderCommandsApi::Impl::execute_modeling_preview_intent(
   const auto origin = tools_.active_settings_presentation_origin();
   const auto pane = origin.serial != 0u ? origin.pane : viewports_.focused_pane();
   const auto previous_tool = tools_.active_tool();
+  const auto *descriptor = find_viewport_tool_descriptor(previous_tool);
+  const bool native = descriptor != nullptr &&
+      tools_.active_native_tool_lifecycle(descriptor->tool);
   auto result = intent == QuaderNativeToolSettingsIntent::Apply
-      ? api_.modeling().commit_preview()
-      : api_.modeling().cancel_preview();
+      ? native ? tools_.commit_active_tool_preview()
+               : api_.modeling().commit_preview()
+      : native ? tools_.cancel_active_tool_preview()
+               : api_.modeling().cancel_preview();
   // A lifecycle callback may synchronously replace the document or start a
   // different operation. Only synchronize the owner that actually completed.
   if (result.ok() && api_.query().document_binding() == binding &&
@@ -3330,23 +3339,17 @@ void QuaderCommandsApi::Impl::register_commands() {
     register_command(
         descriptor.command_id, arrangement_command_label(descriptor),
         [this, descriptor] {
-          const QuaderMeshArrangementOptions options{
-              .snap_to_grid =
-                  viewports_.control(QuaderViewportControl::GridSnap),
-              .grid_size = viewport_grid_world_size_for_preset(
-                  viewports_.grid_preset()),
-          };
           return descriptor.kind == QuaderMeshArrangementKind::Alignment
                      ? api_.modeling().align_selected_meshes(
-                           descriptor.axis, descriptor.alignment, options)
+                           descriptor.axis, descriptor.alignment)
                      : api_.modeling().distribute_selected_meshes(
-                           descriptor.axis, descriptor.distribution, options);
+                           descriptor.axis, descriptor.distribution);
         },
         {}, [this, kind = descriptor.kind] {
           return kind == QuaderMeshArrangementKind::Alignment
                      ? api_.modeling().can_align_selected_meshes()
                      : api_.modeling().can_distribute_selected_meshes();
-        });
+        }, false);
   }
 
   for (const CommandTool *tool : modeling_command_tools()) {
@@ -3403,6 +3406,11 @@ void QuaderCommandsApi::Impl::register_commands() {
       // Loop insertion and Peel enter Edge mode through their activation owner;
       // Knife accepts every mode. Keep their launch shortcuts equally available.
       set_keybinding_selection_modes(activation_command, kSelectionModeAny);
+    } else if (tool->viewport_tool() == ViewportToolId::Align) {
+      // Arrangement is one deliberately unassigned object/group tool. Its
+      // owner accepts meshes, instances and lights through scene selection.
+      set_keybinding_selection_modes(
+          activation_command, kSelectionModeObject | kSelectionModeGroup);
     } else if (tool->viewport_tool() == ViewportToolId::PathArray) {
       // Path Array starts from one selected Curve, which is exposed through
       // the Mesh/Object selection scope. The command remains user-bindable
@@ -3974,7 +3982,15 @@ std::vector<QuaderKeybindingCatalogEntry>
 QuaderCommandsApi::keybinding_catalog() const {
   auto catalog = impl_->keybinding_catalog();
   std::erase_if(catalog, [](const QuaderKeybindingCatalogEntry &entry) {
-    return !release_allows_input_target(entry.target_id);
+    // Retain legacy arrangement metadata inside the resolver so stored
+    // assignments still dispatch and normalize without exposing duplicate
+    // immediate actions alongside the single Align Tool in Settings.
+    return !release_allows_input_target(entry.target_id) ||
+           std::any_of(quader_mesh_arrangement_catalog().begin(),
+                       quader_mesh_arrangement_catalog().end(),
+                       [&](const QuaderMeshArrangementDescriptor &descriptor) {
+                         return descriptor.command_id.string() == entry.target_id;
+                       });
   });
   return catalog;
 }

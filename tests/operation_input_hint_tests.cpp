@@ -12,7 +12,9 @@
 #include "editor/tools/extrude_tool_service.hpp"
 #include "editor/input/quader_input_binding.hpp"
 #include "editor/metadata/operation_input_hint_catalog.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/session/project_session.hpp"
+#include "editor/session/scene_session.hpp"
 #include "support/command_behavior_fixture.hpp"
 #include "ui/qt_operation_input_hints.hpp"
 #include "ui/qt_application_theme.hpp"
@@ -187,6 +189,81 @@ TEST(OperationInputHintTests, OwnerRevisionTracksPrimitiveKindFootprintAndCancel
   EXPECT_GT(tools.active_input_hints_revision(context), flying);
 }
 
+TEST(OperationInputHintTests,
+     PrimitiveHintRevisionRetainsSemanticPhaseAcrossFootprintGeometryUpdates) {
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+  auto &tools = editor.tools();
+  auto &modeling = session.modeling();
+  ASSERT_TRUE(tools.begin_primitive_creation(QuaderPrimitiveCreationShape::Box).ok());
+  const ModelingBoxToolEvent start{
+      .screen_position = {400.0f, 300.0f},
+      .ray = {.origin = {0.0f, 4.0f, 0.0f},
+              .direction = {0.0f, -1.0f, 0.0f}},
+      .grid_size = 1.0,
+  };
+  const auto begun = modeling.begin_box_footprint(start);
+  ASSERT_TRUE(begun.ok) << begun.message;
+  ASSERT_EQ(begun.drag_state, ModelingBoxDragState::Footprint);
+  QuaderOperationInputContext context;
+  const auto footprint_revision = tools.active_input_hints_revision(context);
+  const auto footprint_hints = tools.active_input_hints(context);
+  ASSERT_FALSE(footprint_hints.empty());
+  EXPECT_FALSE(contains_command(footprint_hints, quader_command::kToolsApplyPrimitiveCreation));
+  const auto same_hint = [](const QuaderOperationInputHint &left,
+                            const QuaderOperationInputHint &right) {
+    return left.gesture == right.gesture &&
+           left.command.string() == right.command.string() &&
+           left.label_key == right.label_key &&
+           left.label_fallback == right.label_fallback &&
+           left.priority == right.priority && left.active == right.active &&
+           left.related_command_count == right.related_command_count &&
+           left.detail == right.detail &&
+           std::ranges::equal(left.related_commands, right.related_commands,
+                              [](QuaderCommandId left_command, QuaderCommandId right_command) {
+                                return left_command.string() == right_command.string();
+                              });
+  };
+
+  auto finish = start;
+  for (const float extent : {2.0f, 3.0f, 4.0f, 5.0f}) {
+    SCOPED_TRACE(extent);
+    const auto preview_revision = modeling.tool_preview_source_revision();
+    finish.ray.origin.x = extent;
+    finish.ray.origin.z = extent + 1.0f;
+    const auto preview = modeling.update_box_footprint(finish);
+    ASSERT_TRUE(preview.ok) << preview.message;
+    ASSERT_TRUE(preview.valid);
+    EXPECT_EQ(preview.drag_state, ModelingBoxDragState::Footprint);
+    EXPECT_FLOAT_EQ(preview.footprint_size.x, extent);
+    EXPECT_FLOAT_EQ(preview.footprint_size.y, extent + 1.0f);
+    EXPECT_GT(modeling.tool_preview_source_revision(), preview_revision);
+    EXPECT_EQ(tools.active_input_hints_revision(context), footprint_revision);
+    EXPECT_TRUE(std::ranges::equal(tools.active_input_hints(context),
+                                  footprint_hints, same_hint));
+  }
+
+  context.control = true;
+  const auto modified_revision = tools.active_input_hints_revision(context);
+  EXPECT_GT(modified_revision, footprint_revision);
+  EXPECT_EQ(tools.active_input_hints_revision(context), modified_revision);
+  context.control = false;
+  const auto unmodified_revision = tools.active_input_hints_revision(context);
+  EXPECT_GT(unmodified_revision, modified_revision);
+  ASSERT_TRUE(modeling.begin_box_height(finish).valid);
+  ASSERT_TRUE(tools.accept_active_primitive("Hint phase box").ok());
+  ASSERT_TRUE(tools.active_settings().can_apply);
+  const auto accepted_revision = tools.active_input_hints_revision(context);
+  EXPECT_GT(accepted_revision, unmodified_revision);
+  EXPECT_TRUE(contains_command(tools.active_input_hints(context),
+                               quader_command::kToolsApplyPrimitiveCreation));
+
+  ASSERT_TRUE(tools.set_setting("create_primitive", "primitive.type", "sphere").ok());
+  EXPECT_GT(tools.active_input_hints_revision(context), accepted_revision);
+  EXPECT_TRUE(contains_command(tools.active_input_hints(context),
+                               quader_command::kToolsTogglePrimitiveHemisphere));
+}
+
 TEST(OperationInputHintTests, UvPeelOnlyAdvertisesApplyForValidPreview) {
   auto standalone = create_standalone_editor();
   auto &editor = standalone.editor();
@@ -289,12 +366,43 @@ TEST(OperationInputHintTests, ModelingPhasesDoNotAdvertiseUnavailableApplyOrWron
   EXPECT_FALSE(contains_gesture(viewport_tool_input_hints("insert_edge_loop"), QuaderOperationInputGesture::PrimaryDrag));
   QuaderOperationInputContext context;
   context.grid_snap_available = false;
-  EXPECT_FALSE(contains_gesture(viewport_tool_input_hints("insert_edge_loop", {}, context), QuaderOperationInputGesture::Control));
+  EXPECT_TRUE(contains_gesture(viewport_tool_input_hints("insert_edge_loop", {}, context), QuaderOperationInputGesture::Control));
   EXPECT_TRUE(contains_gesture(viewport_tool_input_hints("extrude", {.dragging = true}, context), QuaderOperationInputGesture::Control));
   const auto preview = viewport_tool_input_hints("operation", {.can_apply = true});
   EXPECT_TRUE(contains_command(preview, quader_command::kModelingApplyActivePreview));
   EXPECT_TRUE(contains_command(preview, quader_command::kModelingCancelActivePreview));
   EXPECT_FALSE(contains_command(preview, finalize));
+}
+
+TEST(OperationInputHintTests, InsertEdgeLoopAdvertisesCtrlSnapIndependentlyOfGlobalToggles) {
+  auto standalone = create_standalone_editor();
+  auto &tools = standalone.editor().tools();
+  ASSERT_TRUE(tools.activate(ViewportToolId::InsertEdgeLoop).ok());
+  for (const bool available : {false, true}) {
+    for (const bool enabled : {false, true}) {
+      QuaderOperationInputContext context;
+      context.grid_snap_available = available;
+      context.grid_snap_enabled = enabled;
+      for (const bool control : {false, true, false}) {
+        context.control = control;
+        const auto hints = tools.active_input_hints(context);
+        const auto snap = std::ranges::find_if(hints, [](const auto &hint) {
+          return hint.gesture == QuaderOperationInputGesture::Control;
+        });
+        ASSERT_NE(snap, hints.end());
+        EXPECT_EQ(snap->label_key, "operation.hints.insert_edge_loop.grid_snap");
+        EXPECT_EQ(snap->label_fallback, "Grid Snap");
+        EXPECT_EQ(snap->active, control);
+        for (const char *locale : {"en-US", "it-IT"}) {
+          EXPECT_NE(localization_for(locale).text(snap->label_key, "missing"), "missing");
+        }
+        const auto revision = tools.active_input_hints_revision(context);
+        for (int frame = 0; frame < 12; ++frame) {
+          EXPECT_EQ(tools.active_input_hints_revision(context), revision);
+        }
+      }
+    }
+  }
 }
 
 TEST(OperationInputHintTests, AuxiliaryContextReplacesIdleWithoutInventingModifiers) {
@@ -449,6 +557,38 @@ TEST_F(QtOperationInputHintTests, IdleAndNavigationReplaceRatherThanAppendHints)
   context.navigation = QuaderInputNavigation::Orbit;
   widget.refresh(editor.tools(), editor.commands(), localization, context);
   EXPECT_FALSE(contains_badge(widget, QStringLiteral("Esc")));
+}
+
+TEST_F(QtOperationInputHintTests, InsertEdgeLoopRowShowsAvailableAndHeldCtrlSnap) {
+  auto standalone = create_standalone_editor();
+  auto &editor = standalone.editor();
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::InsertEdgeLoop).ok());
+  auto localization = localization_for();
+  QtOperationInputHints widget;
+  QuaderOperationInputContext context;
+  context.grid_snap_available = false;
+  for (const bool control : {false, true, false}) {
+    context.control = control;
+    widget.refresh(editor.tools(), editor.commands(), localization, context);
+    const auto snap = std::ranges::find_if(widget.hints(), [](const auto &hint) {
+      return hint.badge == QStringLiteral("Ctrl");
+    });
+    ASSERT_NE(snap, widget.hints().end());
+    EXPECT_EQ(snap->label, QStringLiteral("Grid Snap"));
+    EXPECT_EQ(snap->active, control);
+    const auto revision = widget.projection_revision();
+    for (int frame = 0; frame < 20; ++frame) {
+      widget.refresh(editor.tools(), editor.commands(), localization, context);
+    }
+    EXPECT_EQ(widget.projection_revision(), revision);
+  }
+  ASSERT_TRUE(localization.select_locale("it-IT"));
+  widget.refresh(editor.tools(), editor.commands(), localization, context);
+  EXPECT_TRUE(std::ranges::any_of(widget.hints(), [](const auto &hint) {
+    return hint.badge == QStringLiteral("Ctrl") &&
+           hint.label == QStringLiteral("Snap alla griglia") && !hint.active;
+  }));
 }
 
 TEST_F(QtOperationInputHintTests, LocalOverridesSuppressFallbackAndRetainTheirSourceRevision) {

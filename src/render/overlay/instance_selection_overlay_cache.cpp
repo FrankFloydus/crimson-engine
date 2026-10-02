@@ -375,6 +375,7 @@ void InstanceSelectionOverlayCache::shutdown() {
   clip_planes_ = {};
   synced_source_stamp_ = {};
   synced_wire_style_signature_ = 0u;
+  synced_active_color_ = 0u;
   synced_raster_groups_ = {};
   has_synced_ = false;
   stats_ = {};
@@ -390,6 +391,7 @@ void InstanceSelectionOverlayCache::clear(bool release_geometry_resources) {
   fill_proxies_.clear();
   wire_proxy_groups_.clear();
   fill_plan_ = {};
+  synced_active_color_ = 0u;
   wire_plan_ = {};
   synced_raster_groups_ = {};
   has_synced_ = false;
@@ -442,6 +444,8 @@ bool InstanceSelectionOverlayCache::sync(
   const bool wire_style_changed =
       !has_synced_ ||
       synced_wire_style_signature_ != snapshot.style.wire_signature;
+  const bool fill_style_changed =
+      !has_synced_ || synced_active_color_ != snapshot.style.active_selection_wire_color;
   const bool raster_groups_changed =
       !has_synced_ || !viewport_persistent_overlay_raster_groups_match(
                           synced_raster_groups_, raster_groups);
@@ -450,7 +454,7 @@ bool InstanceSelectionOverlayCache::sync(
           synced_source_stamp_, snapshot,
           kRenderOverlayInstanceSelectionCacheNoWorkDependencies) &&
       synced_selected_mesh_outline_only_ == snapshot.selected_mesh_outline_only &&
-      !wire_style_changed && !raster_groups_changed && !clip_changed) {
+      !wire_style_changed && !fill_style_changed && !raster_groups_changed && !clip_changed) {
     return false;
   }
   const bool local_visibility_changed =
@@ -474,6 +478,7 @@ bool InstanceSelectionOverlayCache::sync(
       }
       return rebuilt;
     }
+    const bool fill_colors_updated = update_fill_colors(snapshot.style);
     const bool line_width_updated =
         wire_backend_.stats().line_width_update_count !=
         prior_line_width_updates;
@@ -485,7 +490,7 @@ bool InstanceSelectionOverlayCache::sync(
     synced_raster_groups_ = raster_groups;
     synced_selected_mesh_outline_only_ = snapshot.selected_mesh_outline_only;
     has_synced_ = true;
-    return raster_groups_changed || line_width_updated || clip_changed ||
+    return fill_colors_updated || raster_groups_changed || line_width_updated || clip_changed ||
            local_visibility_changed;
   }
   if (fill_update != RenderInstanceBatchUpdateKind::Rebuild &&
@@ -493,6 +498,7 @@ bool InstanceSelectionOverlayCache::sync(
       update_transforms(prepared) &&
       reconcile_wire_raster_groups(prepared, raster_groups,
                                    snapshot.clip_planes)) {
+    update_fill_colors(snapshot.style);
     fill_plan_ = prepared.plans.fills;
     wire_plan_ = prepared.plans.wires;
     ++stats_.transform_update_count;
@@ -533,7 +539,8 @@ bool InstanceSelectionOverlayCache::rebuild(
     MeshRenderableProxy proxy = mesh_factory_->create_instance_selection_fill(
         fill_mesh_snapshot(*record), *fill_material_, chunk.world_transforms,
         chunk.world_bounds, record->active_selected
-            ? viewport_active_selection_color(kOverlayInstanceSelectionFillColor)
+            ? viewport_active_selection_color(kOverlayInstanceSelectionFillColor,
+                                               snapshot.style.active_selection_wire_color)
             : kOverlayInstanceSelectionFillColor,
         static_cast<std::uint16_t>(viewport_overlay_draw_order(
             ViewportOverlayLayer::SelectedVisibleFace) * 64),
@@ -581,6 +588,7 @@ bool InstanceSelectionOverlayCache::rebuild(
   clip_planes_ = snapshot.clip_planes;
   synced_source_stamp_ = snapshot;
   synced_wire_style_signature_ = snapshot.style.wire_signature;
+  synced_active_color_ = snapshot.style.active_selection_wire_color;
   synced_raster_groups_ = raster_groups;
   synced_selected_mesh_outline_only_ = snapshot.selected_mesh_outline_only;
   has_synced_ = true;
@@ -853,6 +861,25 @@ void InstanceSelectionOverlayCache::update_wire_clip_planes(
     wire_backend_.update_clip_plane(proxy_group.proxies,
                                     clip_planes.near_plane);
   }
+}
+
+bool InstanceSelectionOverlayCache::update_fill_colors(
+    const ViewportPersistentOverlayStyleSnapshot &style) {
+  if (synced_active_color_ == style.active_selection_wire_color) {
+    return false;
+  }
+  for (std::size_t index = 0u; index < fill_proxies_.size(); ++index) {
+    const bool active_selected =
+        fill_plan_.chunks[index].key.material_payload == kFillMaterialPayload + 1u;
+    if (active_selected) {
+      mesh_factory_->update_instance_selection_fill_color(
+          fill_proxies_[index],
+          viewport_active_selection_color(kOverlayInstanceSelectionFillColor,
+                                           style.active_selection_wire_color), true);
+    }
+  }
+  synced_active_color_ = style.active_selection_wire_color;
+  return true;
 }
 
 } // namespace quader

@@ -136,16 +136,18 @@ TEST(SelectionToolSettingsTests, InvalidBooleanSettingsPreserveValuesAndRevision
   EXPECT_EQ(tools.active_settings_revision(), revision);
 }
 
-TEST(SelectionToolSettingsTests, PaneChoicesAndSettingsDoNotActivateOnFocus) {
+TEST(SelectionToolSettingsTests, SharedToolSettingsRemainPinnedAndEditableAcrossFocus) {
   auto standalone = create_standalone_editor();
   auto &editor = standalone.editor();
   auto &tools = editor.tools();
   ASSERT_TRUE(tools.activate(ViewportToolId::Move).ok());
   ASSERT_TRUE(editor.viewports().focus_pane(ViewportPaneId::Top).ok());
   ASSERT_TRUE(tools.activate(ViewportToolId::Rotate).ok());
-  EXPECT_EQ(editor.viewports().selected_tool(ViewportPaneId::Perspective), ViewportToolId::Move);
+  EXPECT_EQ(editor.viewports().selected_tool(ViewportPaneId::Perspective), ViewportToolId::Rotate);
   EXPECT_EQ(editor.viewports().selected_tool(ViewportPaneId::Top), ViewportToolId::Rotate);
+  ASSERT_TRUE(tools.activate(ViewportToolId::Move).ok());
   const auto origin = tools.active_settings_presentation_origin();
+  ASSERT_EQ(origin.pane, ViewportPaneId::Top);
   const auto move_revision = tools.settings_revision(ViewportPaneId::Perspective);
   const auto tool_revision = tools.active_tool_revision();
   const auto history = editor.history().can_undo();
@@ -156,8 +158,8 @@ TEST(SelectionToolSettingsTests, PaneChoicesAndSettingsDoNotActivateOnFocus) {
   ASSERT_EQ(move.controls.size(), 1U);
   EXPECT_EQ(move.controls.front().id, "auto_merge_vertices");
   EXPECT_FALSE(move.apply_visible);
-  EXPECT_TRUE(tools.settings_for_pane(ViewportPaneId::Top).controls.empty());
-  EXPECT_EQ(tools.active_tool(), "rotate");
+  EXPECT_EQ(tools.settings_for_pane(ViewportPaneId::Top).tool_id, "move");
+  EXPECT_EQ(tools.active_tool(), "move");
   EXPECT_EQ(tools.active_tool_revision(), tool_revision);
   EXPECT_EQ(tools.active_settings_presentation_origin().serial, origin.serial);
   EXPECT_EQ(tools.active_settings_presentation_origin().pane, origin.pane);
@@ -166,38 +168,45 @@ TEST(SelectionToolSettingsTests, PaneChoicesAndSettingsDoNotActivateOnFocus) {
     EXPECT_EQ(tools.settings_revision(ViewportPaneId::Perspective), move_revision);
   }
 
-  ASSERT_TRUE(tools.set_setting(ViewportPaneId::Perspective, "move",
+  ASSERT_TRUE(tools.set_setting(ViewportPaneId::Top, "move",
                                 "auto_merge_vertices", false).ok());
   EXPECT_EQ(tools.active_tool(), "move");
   EXPECT_TRUE(tools.pane_owns_executing_tool(ViewportPaneId::Perspective));
-  EXPECT_EQ(editor.viewports().selected_tool(ViewportPaneId::Top), ViewportToolId::Rotate);
+  EXPECT_EQ(editor.viewports().selected_tool(ViewportPaneId::Top), ViewportToolId::Move);
+  EXPECT_EQ(tools.active_settings_presentation_origin(), origin);
   EXPECT_FALSE(tools.settings_for_pane(ViewportPaneId::Perspective).controls.front().bool_value);
   EXPECT_GT(tools.settings_revision(ViewportPaneId::Perspective), move_revision);
   EXPECT_FALSE(editor.history().can_undo());
 }
 
-TEST(SelectionToolSettingsTests, PaneAcquisitionRejectsStaleTargetsAndTransfersIdleOwnership) {
+TEST(SelectionToolSettingsTests, PaneAcquisitionRejectsStaleTargetsAndPreservesSharedOrigin) {
   auto standalone = create_standalone_editor();
   auto &editor = standalone.editor();
   auto &tools = editor.tools();
   ASSERT_TRUE(tools.activate(ViewportToolId::Move).ok());
   ASSERT_TRUE(editor.viewports().focus_pane(ViewportPaneId::Top).ok());
-  ASSERT_TRUE(tools.activate(ViewportToolId::Move).ok());
   const auto origin = tools.active_settings_presentation_origin();
+  EXPECT_FALSE(tools.activate(ViewportToolId::Move).changed());
   EXPECT_FALSE(tools.acquire_pane_tool(static_cast<ViewportPaneId>(99)).ok());
-  EXPECT_FALSE(tools.set_setting(ViewportPaneId::Perspective, "move",
+  EXPECT_FALSE(tools.set_setting(ViewportPaneId::Top, "lasso_select",
+                                 "select_partial_intersection", true).ok());
+  EXPECT_FALSE(tools.set_setting(ViewportPaneId::Side, "move",
                                  "auto_merge_vertices", false).ok());
   EXPECT_EQ(tools.active_settings_presentation_origin().serial, origin.serial);
   EXPECT_TRUE(tools.settings_for_pane(ViewportPaneId::Perspective).controls.front().bool_value);
-  ASSERT_TRUE(editor.viewports().focus_pane(ViewportPaneId::Perspective).ok());
-  ASSERT_TRUE(tools.acquire_pane_tool(ViewportPaneId::Perspective).ok());
-  EXPECT_TRUE(tools.pane_owns_executing_tool(ViewportPaneId::Perspective));
-  const auto acquired_origin = tools.active_settings_presentation_origin().serial;
-  EXPECT_FALSE(tools.acquire_pane_tool(ViewportPaneId::Perspective).changed());
-  EXPECT_EQ(tools.active_settings_presentation_origin().serial, acquired_origin);
+  EXPECT_FALSE(tools.acquire_pane_tool(ViewportPaneId::Perspective).ok());
+  const auto acquired = tools.acquire_pane_tool(ViewportPaneId::Top);
+  ASSERT_TRUE(acquired.ok());
+  EXPECT_FALSE(acquired.changed());
+  constexpr std::array kPanes{ViewportPaneId::Perspective, ViewportPaneId::Top,
+                              ViewportPaneId::Front, ViewportPaneId::Side};
+  for (const auto pane : kPanes) {
+    EXPECT_TRUE(tools.pane_owns_executing_tool(pane));
+  }
+  EXPECT_EQ(tools.active_settings_presentation_origin(), origin);
 }
 
-TEST(SelectionToolSettingsTests, OtherPaneAcceptsPendingExtrusionWhenAcquiringItsTool) {
+TEST(SelectionToolSettingsTests, OtherPaneKeepsPendingExtrusionUntilExplicitToolChange) {
   auto standalone = create_standalone_editor();
   auto &editor = standalone.editor();
   auto &tools = editor.tools();
@@ -218,11 +227,24 @@ TEST(SelectionToolSettingsTests, OtherPaneAcceptsPendingExtrusionWhenAcquiringIt
   const auto before = editor.query().compiled_object_mesh(created.value());
   ASSERT_TRUE(before.has_value());
   ASSERT_TRUE(editor.viewports().focus_pane(ViewportPaneId::Top).ok());
-  EXPECT_EQ(tools.settings_for_pane(ViewportPaneId::Top).tool_id, "move");
+  const auto passive = tools.settings_for_pane(ViewportPaneId::Top);
+  EXPECT_EQ(passive.tool_id, "extrude");
+  EXPECT_FALSE(passive.preview_active);
+  EXPECT_FALSE(passive.apply_visible);
+  EXPECT_FALSE(passive.can_apply);
+  EXPECT_FALSE(passive.can_cancel);
+  EXPECT_TRUE(tools.settings_for_pane(ViewportPaneId::Perspective).preview_active);
   EXPECT_EQ(tools.active_tool(), "extrude");
   EXPECT_EQ(tools.active_settings_revision(), revision);
   EXPECT_EQ(tools.active_settings_presentation_origin().serial, origin.serial);
-  ASSERT_TRUE(tools.acquire_pane_tool(ViewportPaneId::Top).ok());
+  const auto acquired = tools.acquire_pane_tool(ViewportPaneId::Top);
+  ASSERT_TRUE(acquired.ok());
+  EXPECT_FALSE(acquired.changed());
+  EXPECT_EQ(tools.active_tool(), "extrude");
+  EXPECT_TRUE(tools.active_settings().preview_active);
+  EXPECT_EQ(tools.active_settings_revision(), revision);
+  EXPECT_EQ(tools.active_settings_presentation_origin(), origin);
+  ASSERT_TRUE(tools.activate(ViewportToolId::Move).ok());
   EXPECT_TRUE(tools.set_setting(ViewportPaneId::Top, "move", "auto_merge_vertices", false).ok());
   EXPECT_EQ(tools.active_tool(), "move");
   EXPECT_FALSE(tools.active_settings().preview_active);
@@ -249,7 +271,7 @@ TEST(SelectionToolSettingsTests, OtherPaneAcceptsPendingExtrusionWhenAcquiringIt
   EXPECT_EQ(redone->indices, before->indices);
 }
 
-TEST(SelectionToolSettingsTests, CompletingOrCancelingOnlyUpdatesTheExecutingPaneChoice) {
+TEST(SelectionToolSettingsTests, CompletingOrCancelingUpdatesEveryPaneChoice) {
   auto standalone = create_standalone_editor();
   auto &editor = standalone.editor();
   auto &tools = editor.tools();
@@ -260,11 +282,45 @@ TEST(SelectionToolSettingsTests, CompletingOrCancelingOnlyUpdatesTheExecutingPan
   EXPECT_EQ(editor.viewports().selected_tool(ViewportPaneId::Perspective), ViewportToolId::CreatePrimitive);
   ASSERT_TRUE(editor.viewports().focus_pane(ViewportPaneId::Top).ok());
   ASSERT_TRUE(tools.cancel_modal_tool().ok());
-  EXPECT_EQ(editor.viewports().selected_tool(ViewportPaneId::Top), ViewportToolId::Rotate);
   const auto *finished_tool = find_viewport_tool(tools.active_tool());
   ASSERT_NE(finished_tool, nullptr);
-  EXPECT_EQ(editor.viewports().selected_tool(ViewportPaneId::Perspective), finished_tool->viewport_tool());
-  EXPECT_NE(editor.viewports().selected_tool(ViewportPaneId::Perspective), ViewportToolId::CreatePrimitive);
+  EXPECT_NE(finished_tool->viewport_tool(), ViewportToolId::CreatePrimitive);
+  constexpr std::array kPanes{ViewportPaneId::Perspective, ViewportPaneId::Top,
+                              ViewportPaneId::Front, ViewportPaneId::Side};
+  for (const auto pane : kPanes) {
+    EXPECT_EQ(editor.viewports().selected_tool(pane), finished_tool->viewport_tool());
+    EXPECT_TRUE(tools.pane_owns_executing_tool(pane));
+  }
+}
+
+TEST(SelectionToolSettingsTests, ActivationSharesToolWithoutReplacingOtherPaneSelectionMemory) {
+  auto standalone = create_standalone_editor();
+  auto &editor = standalone.editor();
+  auto &viewports = editor.viewports();
+  ASSERT_TRUE(viewports.set_layout(ViewportLayoutId::FourQuad).ok());
+  ASSERT_TRUE(viewports.record_selected_tool(ViewportPaneId::Top,
+                                             ViewportToolId::LassoSelect).ok());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::Move).ok());
+  ASSERT_TRUE(viewports.focus_pane(ViewportPaneId::Front).ok());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::LassoSelect).ok());
+  constexpr std::array kPanes{ViewportPaneId::Perspective, ViewportPaneId::Top,
+                              ViewportPaneId::Front, ViewportPaneId::Side};
+  for (const auto pane : kPanes) {
+    EXPECT_EQ(viewports.selected_tool(pane), ViewportToolId::LassoSelect);
+  }
+  EXPECT_EQ(viewports.preferred_selection_tool(ViewportPaneId::Perspective),
+            ViewportToolId::Select);
+  EXPECT_EQ(viewports.preferred_selection_tool(ViewportPaneId::Top),
+            ViewportToolId::LassoSelect);
+  EXPECT_EQ(viewports.preferred_selection_tool(ViewportPaneId::Front),
+            ViewportToolId::LassoSelect);
+  EXPECT_EQ(viewports.preferred_selection_tool(ViewportPaneId::Side),
+            ViewportToolId::Select);
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::Select).ok());
+  EXPECT_EQ(viewports.preferred_selection_tool(ViewportPaneId::Front),
+            ViewportToolId::Select);
+  EXPECT_EQ(viewports.preferred_selection_tool(ViewportPaneId::Top),
+            ViewportToolId::LassoSelect);
 }
 
 TEST(SelectionToolSettingsTests, LassoSettingsTakePriorityOverPassiveSelectedCurve) {
@@ -293,6 +349,14 @@ TEST(SelectionToolSettingsTests, LassoSettingsTakePriorityOverPassiveSelectedCur
   ASSERT_TRUE(editor.tools().reset_active_settings().ok());
   EXPECT_FALSE(editor.tools().active_settings().controls[0].bool_value);
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::Move).ok());
+  target = editor.tools().active_settings();
+  ASSERT_EQ(target.tool_id, "move");
+  ASSERT_EQ(target.controls.size(), 1u);
+  EXPECT_EQ(target.controls[0].id, "auto_merge_vertices");
+  EXPECT_FALSE(target.preview_active);
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::Select).ok());
+  EXPECT_EQ(editor.tools().active_tool(), "select");
+  EXPECT_FALSE(editor.tools().active_native_tool_lifecycle(ViewportToolId::Curve));
   EXPECT_EQ(editor.tools().active_settings().tool_id, "curve");
 }
 

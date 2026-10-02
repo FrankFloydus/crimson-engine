@@ -850,7 +850,8 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
       uses_mesh_outlines(request) && !request.gpu_mesh_outlines && request.scene_overlay_requested
           ? request.scene_overlay_snapshot : nullptr,
       viewport_overlay_line_width_pixels(ViewportOverlayLayer::SelectedEdge,
-          settings.float_value(ViewportFloatSettingId::SelectionEdgeLineSize)) * request.raster_scale);
+          std::max(settings.float_value(ViewportFloatSettingId::SelectionEdgeLineSize),
+                   settings.float_value(ViewportFloatSettingId::ActiveSelectionLineSize))) * request.raster_scale);
   const bool selection_overlay_visible =
       request.overlays_visible && request.selection_frame_provider != nullptr;
   if (selection_overlay_visible) {

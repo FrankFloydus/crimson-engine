@@ -727,6 +727,7 @@ struct QtAssetBrowser::Impl final {
   bool paste_available = false;
   bool has_snapshot = false;
   bool rebuilding = false;
+  bool completed_visible_paint = false;
   int sidebar_width = 200;
   int wheel_remainder = 0;
 
@@ -1136,6 +1137,7 @@ QtAssetBrowser::QtAssetBrowser(QWidget *parent)
     }
   };
   const auto after_paint = [&s] {
+    s.completed_visible_paint = true;
     if (s.painted_ids != s.previous_visible_ids) {
       s.previous_visible_ids = s.painted_ids;
       if (s.visible_items_changed) {
@@ -1528,6 +1530,9 @@ bool QtAssetBrowser::owns_browser_focus() const {
   const auto *focused = QApplication::focusWidget();
   return focused != nullptr && (focused == this || isAncestorOf(focused));
 }
+bool QtAssetBrowser::has_completed_visible_paint() const {
+  return isVisible() && impl_->completed_visible_paint;
+}
 void QtAssetBrowser::apply_ui_scale(const QtUiScaleMetrics &metrics) {
   auto &s = *impl_;
   s.metrics = metrics;
@@ -1577,6 +1582,9 @@ bool QtAssetBrowser::sidebar_visible() const { return impl_->folders_button->isC
 int QtAssetBrowser::sidebar_width() const { return impl_->sidebar_width; }
 
 bool QtAssetBrowser::event(QEvent *event) {
+  if (impl_ && (event->type() == QEvent::Show || event->type() == QEvent::Hide)) {
+    impl_->completed_visible_paint = false;
+  }
   const bool result = QWidget::event(event);
   if (impl_ && impl_->model != nullptr) {
     if (event->type() == QEvent::PaletteChange || event->type() == QEvent::StyleChange) {

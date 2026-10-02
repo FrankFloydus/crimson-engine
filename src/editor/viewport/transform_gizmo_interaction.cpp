@@ -28,6 +28,7 @@
 #include <editor/interactions/selection_box.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <optional>
 #include <utility>
@@ -408,6 +409,12 @@ TransformGizmoPresentation::prepare(
   const auto &camera = input.camera.state();
   const auto pose = input.camera.pose();
   const ViewportToolId tool = curve_controls_ ? ViewportToolId::Move : input.tool;
+  const auto *shared_frame = input.shared_interaction_frame;
+  const auto *shared_info =
+      shared_frame != nullptr && shared_frame->info.ok &&
+              shared_frame->info.tool == viewport_tool_interaction_tool(tool)
+          ? &shared_frame->info
+          : nullptr;
   RenderSignatureBuilder frame_signature;
   frame_signature.add_value(*selection_signature_)
       .add_value(static_cast<std::uint64_t>(tool))
@@ -423,17 +430,43 @@ TransformGizmoPresentation::prepare(
       .add_float(camera.orthographic_size)
       .add_float(camera.fov_degrees)
       .add_float(camera.near_plane)
-      .add_float(camera.far_plane);
+      .add_float(camera.far_plane)
+      .add_bool(shared_info != nullptr);
+  if (shared_info != nullptr) {
+    frame_signature
+        .add_value(static_cast<std::uint64_t>(shared_info->active_axis))
+        .add_value(static_cast<std::uint64_t>(shared_info->hover_axis))
+        .add_vec3(shared_info->pivot)
+        .add_vec3(shared_info->orientation.x_axis)
+        .add_vec3(shared_info->orientation.y_axis)
+        .add_vec3(shared_info->orientation.z_axis)
+        .add_vec3(shared_info->orientation.origin)
+        .add_bool(shared_info->rotate_indicator.active)
+        .add_value(static_cast<std::uint64_t>(shared_info->rotate_indicator.axis))
+        .add_vec3(shared_info->rotate_indicator.world_axis)
+        .add_vec3(shared_info->rotate_indicator.start_direction)
+        .add_bool(shared_info->rotate_indicator.has_mouse_position)
+        .add_vec3(shared_info->rotate_indicator.mouse_position)
+        .add_value(std::bit_cast<std::uint64_t>(
+            shared_info->rotate_indicator.angle_degrees));
+  }
   if (frame_signature_ != frame_signature.value()) {
     frame_signature_ = frame_signature.value();
     ++frame_build_count_;
     const auto gizmo_input = make_gizmo_input(
         input.camera, input.settings, input.camera.viewport_size(),
-        input.grid_preset, input.raster_scale, tool, *pivot_,
-        runtime_orientation(orientation_),
-        quader_editor_core::TransformAxis::None,
-        quader_editor_core::TransformAxis::None);
+        input.grid_preset, input.raster_scale, tool,
+        shared_info != nullptr ? shared_info->pivot : *pivot_,
+        shared_info != nullptr ? shared_info->orientation
+                               : runtime_orientation(orientation_),
+        shared_info != nullptr ? shared_info->active_axis
+                               : quader_editor_core::TransformAxis::None,
+        shared_info != nullptr ? shared_info->hover_axis
+                               : quader_editor_core::TransformAxis::None);
     frame_ = quader_editor_core::build_transform_gizmo_frame(gizmo_input);
+    if (shared_info != nullptr) {
+      frame_->info.rotate_indicator = shared_info->rotate_indicator;
+    }
   }
   return frame_.has_value() && frame_->info.ok ? &*frame_ : nullptr;
 }

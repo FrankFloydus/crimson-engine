@@ -34,6 +34,10 @@ struct ViewportPersistentOverlayStyleSnapshot {
       kOverlaySelectionWireLineWidthPixels;
   float selection_edge_line_width_pixels =
       kOverlaySelectionWireLineWidthPixels;
+  float active_selection_logical_width_pixels =
+      kOverlaySelectionWireLineWidthPixels;
+  float active_selection_line_width_pixels =
+      kOverlaySelectionWireLineWidthPixels;
   std::uint64_t face_signature = 0u;
   std::uint64_t wire_signature = 0u;
   InstanceEditStyle instance_edit_style;
@@ -59,6 +63,10 @@ struct ViewportPersistentOverlayRasterGroup final {
              right.selection_edge_logical_width_pixels &&
          left.selection_edge_line_width_pixels ==
              right.selection_edge_line_width_pixels &&
+         left.active_selection_logical_width_pixels ==
+             right.active_selection_logical_width_pixels &&
+         left.active_selection_line_width_pixels ==
+             right.active_selection_line_width_pixels &&
          left.wire_signature == right.wire_signature &&
          left.instance_edit_context_signature ==
              right.instance_edit_context_signature;

@@ -421,6 +421,8 @@ public:
   /// Authored drafts/gestures requiring acceptance; excludes idle tool hover.
   [[nodiscard]] bool pending_operation_active() const;
   ModelingCommandResult cancel_competing_state_for_native_tool_activation();
+  /// Scalar tool identity for input/presentation gates; does not project overlays.
+  [[nodiscard]] ModelingViewportTool active_viewport_tool() const;
   [[nodiscard]] ModelingToolStatus tool_status() const;
   [[nodiscard]] ModelingLiveStatus live_status() const;
   [[nodiscard]] bool operation_preview_active() const;

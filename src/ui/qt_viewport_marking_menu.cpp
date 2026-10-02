@@ -15,6 +15,7 @@
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "ui/qt_marking_menu.hpp"
 #include "ui/qt_modeling_operation_catalog.hpp"
+#include "ui/qt_multiresolution_icon.hpp"
 #include "ui/qt_viewport_context_menu.hpp"
 #include "viewport/viewport_input_router.hpp"
 
@@ -126,6 +127,10 @@ bool QtViewportMarkingMenuPresenter::show(
     }
     previous_section = entry.section;
     auto *action = new QAction(entry.label, &menu);
+    if (entry.command_id == quader_command::kToolsActivateAlign.string()) {
+      action->setIcon(qt_multiresolution_icon(
+          QStringLiteral(":/quader/icons/tool_align.png")));
+    }
     action->setObjectName(QString::fromStdString(entry.command_id));
     commands.push_back({action, entry.command_id});
     overflow_actions.push_back(action);

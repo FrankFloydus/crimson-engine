@@ -70,7 +70,7 @@ private:
     QString label;
   };
 
-  std::array<ToolAction, 18> tool_actions_{};
+  std::array<ToolAction, 19> tool_actions_{};
   std::array<PrimitiveAction, 5> primitive_actions_{};
   QAction *primitive_action_ = nullptr;
   QAction *curve_action_ = nullptr;

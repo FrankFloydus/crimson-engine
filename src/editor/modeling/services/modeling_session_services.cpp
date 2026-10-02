@@ -3621,6 +3621,31 @@ ModelingOverlayService::selection_overlay_base_frame(
     return overlay_base_cache_.frame;
   }
 
+  std::size_t selected_element_count = 0u;
+  for (const quader_editor_core::PolygonObject &object : session.objects()) {
+    if (!object.selected) {
+      continue;
+    }
+    switch (selection_mode) {
+    case quader_editor_core::SelectionMode::Object:
+      ++selected_element_count;
+      break;
+    case quader_editor_core::SelectionMode::Vertex:
+      selected_element_count += object.selection.vertices.size();
+      break;
+    case quader_editor_core::SelectionMode::Edge:
+      selected_element_count += object.selection.edges.size();
+      break;
+    case quader_editor_core::SelectionMode::Face:
+      selected_element_count += object.selection.faces.size();
+      break;
+    }
+    if (selected_element_count > 1u) {
+      break;
+    }
+  }
+  const bool active_selection_visible = selected_element_count > 1u;
+
   const bool previous_suppressed_persistent_object_selection =
       overlay_base_cache_.suppress_persistent_object_selection;
   const bool previous_suppressed_persistent_selection =
@@ -3698,7 +3723,8 @@ ModelingOverlayService::selection_overlay_base_frame(
           object.id > 0 &&
           object.id == options.persistent_source_wire_object_id;
       const bool active_component_object =
-          object.id > 0 && object.id == active_object_id;
+          active_selection_visible && object.id > 0 &&
+          object.id == active_object_id;
 
       const bool same_previous_presentation =
           reusable != previous_entry_by_object_id.end() &&

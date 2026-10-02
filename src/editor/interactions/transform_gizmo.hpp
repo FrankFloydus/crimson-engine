@@ -132,6 +132,7 @@ struct TransformGizmoFrameInfo {
         TransformAxis active_axis = TransformAxis::None;
         quader::QVec3 pivot;
 	quader::QVec2 screen_pivot;
+	quader_poly::Transform3 orientation;
 	double gizmo_scale = 1.0;
 	double move_center_radius_pixels = 7.0;
 	TransformGizmoRotateIndicator rotate_indicator;

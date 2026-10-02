@@ -366,7 +366,7 @@ bool ViewportWorkspaceService::record_selected_tool(ViewportPaneId pane_id,
                                                     ViewportToolId tool,
                                                     bool remember_selection) {
   if (!valid_pane(pane_id) ||
-      static_cast<unsigned>(tool) > static_cast<unsigned>(ViewportToolId::UvPeel)) {
+      static_cast<unsigned>(tool) > static_cast<unsigned>(ViewportToolId::Align)) {
     return false;
   }
   auto &state = pane(pane_id);
@@ -382,6 +382,16 @@ bool ViewportWorkspaceService::record_selected_tool(ViewportPaneId pane_id,
   }
   ++state.control_revision;
   return true;
+}
+
+bool ViewportWorkspaceService::record_shared_selected_tool(
+    ViewportToolId tool, bool remember_selection) {
+  bool changed = false;
+  for (const auto &pane_state : panes_) {
+    changed = record_selected_tool(pane_state.id, tool, remember_selection) ||
+              changed;
+  }
+  return changed;
 }
 
 bool ViewportWorkspaceService::control(ViewportPaneId pane_id,

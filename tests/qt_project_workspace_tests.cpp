@@ -9,15 +9,19 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
+#include "app/app_frame_schedule.hpp"
 #include "assets/default_material_catalog.hpp"
 #include "core/localization_service.hpp"
+#include "editor/assets/project_asset_service.hpp"
 #include "editor/material/project_material_usage_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
+#include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/session/quader_editor_api_session_access.hpp"
 #include "editor/session/scene_session.hpp"
 #include "render/render_system.hpp"
+#include "render/scene_render_bridge.hpp"
 #include "quader/modeling/neutral/polygon/document_model.hpp"
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_application_style.hpp"
@@ -98,6 +102,7 @@
 #include <QPushButton>
 #include <QPropertyAnimation>
 #include <QPixmap>
+#include <QRegion>
 #include <QScreen>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -116,6 +121,7 @@
 #include <QTreeWidgetItemIterator>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -123,6 +129,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <iostream>
 #include <memory>
 #include <optional>
 #include <string>
@@ -644,6 +651,30 @@ TEST(QtProjectWorkspaceTests,
     send_key(*menu, Qt::Key_Escape);
     EXPECT_FALSE(menu->isVisible());
   };
+  const auto expect_compact_vertical_toolbar = [&]() {
+    int widest_button = scale_controller.metrics().px(40);
+    for (QAction *action : toolbar.actions()) {
+      auto *visible_button =
+          qobject_cast<QToolButton *>(toolbar.widgetForAction(action));
+      if (visible_button == nullptr || !visible_button->isVisible()) {
+        continue;
+      }
+      widest_button = std::max(widest_button, visible_button->sizeHint().width());
+      EXPECT_TRUE(toolbar.rect().contains(visible_button->geometry()));
+    }
+    const QMargins outer_margins = toolbar.contentsMargins();
+    const QMargins layout_margins = toolbar.layout()->contentsMargins();
+    const int native_chrome =
+        toolbar.style()->pixelMetric(QStyle::PM_ToolBarHandleExtent, nullptr, &toolbar) +
+        2 * toolbar.style()->pixelMetric(QStyle::PM_ToolBarFrameWidth, nullptr, &toolbar) +
+        2 * toolbar.style()->pixelMetric(QStyle::PM_ToolBarItemMargin, nullptr, &toolbar);
+    const int compact_width = widest_button + native_chrome +
+        outer_margins.left() + outer_margins.right() +
+        layout_margins.left() + layout_margins.right();
+    // Text-only launchers retain their native font width in a vertical dock;
+    // the toolbar adds only its own measured margins and native chrome.
+    EXPECT_LE(toolbar.width(), compact_width);
+  };
   int cycle = 0;
   for (const float factor : {1.0F, 2.0F, 1.0F}) {
     scale_controller.apply_factor(factor);
@@ -662,7 +693,7 @@ TEST(QtProjectWorkspaceTests,
   host.resize(360, 880);
   settle_layout();
   EXPECT_EQ(toolbar.orientation(), Qt::Vertical);
-  EXPECT_LE(toolbar.width(), 70);
+  expect_compact_vertical_toolbar();
   EXPECT_TRUE(button->isVisible());
   review(QStringLiteral("narrow-dock"));
   for (const float factor : {2.0F, 1.0F}) {
@@ -671,7 +702,7 @@ TEST(QtProjectWorkspaceTests,
     toolbar.apply_ui_scale(metrics);
     host.resize(metrics.size(QSize(360, 880)));
     settle_layout();
-    EXPECT_LE(toolbar.width(), metrics.px(70));
+    expect_compact_vertical_toolbar();
     review(QStringLiteral("narrow-dock-%1").arg(qRound(factor * 100.0F)));
   }
   toolbar.setLayoutDirection(Qt::RightToLeft);
@@ -731,7 +762,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 5);
-  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 13);
+  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 14);
   QToolButton *scale_metric_probe = nullptr;
   for (QToolButton *candidate :
        selection_toolbar.findChildren<QToolButton *>()) {
@@ -751,7 +782,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(64, 64));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(64, 64));
   EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 60), 5);
-  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 80), 13);
+  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 80), 14);
   EXPECT_EQ(scale_metric_probe->style()->pixelMetric(
                 QStyle::PM_ButtonMargin, nullptr, scale_metric_probe),
             baseline_button_margin * 2);
@@ -762,7 +793,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 5);
-  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 13);
+  EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 14);
   EXPECT_EQ(scale_metric_probe->style()->pixelMetric(
                 QStyle::PM_ButtonMargin, nullptr, scale_metric_probe),
             baseline_button_margin);
@@ -1736,6 +1767,8 @@ TEST(QtProjectWorkspaceTests,
       EXPECT_TRUE(button->testAttribute(Qt::WA_Hover));
       EXPECT_EQ(button->accessibleName(), button->defaultAction()->text());
       EXPECT_EQ(button->size(), metrics.size(QSize(28, 28)));
+      EXPECT_EQ(button->minimumSize(), metrics.size(QSize(28, 28)));
+      EXPECT_EQ(button->maximumSize(), metrics.size(QSize(28, 28)));
       EXPECT_EQ(button->iconSize(), metrics.size(QSize(24, 24)));
       if (button->isVisible()) {
         EXPECT_EQ(button->geometry().top(), metrics.px(4));
@@ -1749,6 +1782,11 @@ TEST(QtProjectWorkspaceTests,
     for (std::size_t index = 1; index < buttons.size(); ++index) {
       if (buttons[index - 1]->isVisible() && buttons[index]->isVisible()) {
         EXPECT_FALSE(buttons[index - 1]->geometry().intersects(buttons[index]->geometry()));
+        const QRect previous = buttons[index - 1]->geometry();
+        const QRect current = buttons[index]->geometry();
+        const int gap = std::max(previous.left(), current.left()) -
+                        std::min(previous.right(), current.right()) - 1;
+        EXPECT_EQ(gap, metrics.px(index == 5 || index == 9 ? 12 : 2));
       }
     }
     EXPECT_TRUE(camera->isVisible());
@@ -1759,6 +1797,10 @@ TEST(QtProjectWorkspaceTests,
     if (auto *overflow = strip.findChild<QToolButton *>(QStringLiteral("viewportStripOverflow"));
         overflow != nullptr && overflow->isVisible()) {
       SCOPED_TRACE(suffix.toStdString());
+      EXPECT_EQ(overflow->size(), metrics.size(QSize(28, 28)));
+      EXPECT_EQ(overflow->minimumSize(), metrics.size(QSize(28, 28)));
+      EXPECT_EQ(overflow->maximumSize(), metrics.size(QSize(28, 28)));
+      EXPECT_EQ(overflow->geometry().top(), metrics.px(4));
       QStyleOption option;
       option.initFrom(&strip);
       const auto active_group = option.state.testFlag(QStyle::State_Active)
@@ -1882,6 +1924,14 @@ TEST(QtProjectWorkspaceTests,
     const auto &metrics = scale_controller.metrics();
     workspace.apply_ui_scale(metrics);
     strip.apply_ui_scale(metrics);
+    for (QToolButton *button : buttons) {
+      button->defaultAction()->setToolTip(
+          QStringLiteral("Scale cycle %1").arg(cycle));
+      QEvent font_change(QEvent::FontChange);
+      QCoreApplication::sendEvent(button, &font_change);
+      QEvent style_change(QEvent::StyleChange);
+      QCoreApplication::sendEvent(button, &style_change);
+    }
     settle_layout();
     workspace.resize(metrics.px(480), metrics.px(180));
     review(QStringLiteral("%1-%2-narrow").arg(qRound(factor * 100)).arg(cycle));
@@ -2206,7 +2256,8 @@ TEST(QtProjectWorkspaceTests,
   synchronize();
   EXPECT_EQ(lasso_dispatches, 2);
   EXPECT_EQ(editor.viewports().selected_tool(kPaneIds[1]), quader::ViewportToolId::LassoSelect);
-  EXPECT_EQ(editor.viewports().selected_tool(kPaneIds[0]), quader::ViewportToolId::Select);
+  EXPECT_EQ(editor.viewports().selected_tool(kPaneIds[0]), quader::ViewportToolId::LassoSelect);
+  EXPECT_EQ(editor.viewports().preferred_selection_tool(kPaneIds[0]), quader::ViewportToolId::Select);
 
   const bool backfaces = editor.preferences().backface_selection_enabled();
   click_widget(*button(1, "backfaceSelection"), button(1, "backfaceSelection")->rect().center());
@@ -2289,11 +2340,11 @@ TEST(QtProjectWorkspaceTests,
   button(0, "tool_move")->click();
   button(1, "tool_rotate")->click();
   synchronize();
-  EXPECT_EQ(editor.viewports().selected_tool(kPaneIds[0]), quader::ViewportToolId::Move);
-  EXPECT_EQ(editor.viewports().selected_tool(kPaneIds[1]), quader::ViewportToolId::Rotate);
-  EXPECT_EQ(editor.viewports().selected_tool(kPaneIds[2]), quader::ViewportToolId::Select);
-  EXPECT_TRUE(button(0, "tool_move")->isChecked());
-  EXPECT_TRUE(button(1, "tool_rotate")->isChecked());
+  for (std::size_t pane = 0; pane < kPaneIds.size(); ++pane) {
+    EXPECT_EQ(editor.viewports().selected_tool(kPaneIds[pane]), quader::ViewportToolId::Rotate);
+    EXPECT_FALSE(button(pane, "tool_move")->isChecked());
+    EXPECT_TRUE(button(pane, "tool_rotate")->isChecked());
+  }
   EXPECT_TRUE(tools->tool_action(quader::ViewportToolId::Rotate)->isChecked());
 
   const bool base_snapping = editor.preferences().snapping_enabled();
@@ -2314,7 +2365,7 @@ TEST(QtProjectWorkspaceTests,
   tools->tool_action(quader::ViewportToolId::Scale)->trigger();
   synchronize();
   EXPECT_EQ(editor.viewports().selected_tool(kPaneIds[1]), quader::ViewportToolId::Scale);
-  EXPECT_EQ(editor.viewports().selected_tool(kPaneIds[0]), quader::ViewportToolId::Move);
+  EXPECT_EQ(editor.viewports().selected_tool(kPaneIds[0]), quader::ViewportToolId::Scale);
 
   ASSERT_TRUE(editor.preferences().set_shortcut(
       quader::quader_command::kToolsActivateMove, "Ctrl+Alt+F23").ok());
@@ -2342,7 +2393,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(editor.tools().active_tool(), executing_tool);
   EXPECT_EQ(editor.tools().active_tool_revision(), active_tool_revision);
   EXPECT_EQ(scene.history().undo_count(), undo_count);
-  EXPECT_TRUE(tools->tool_action(quader::ViewportToolId::Move)->isChecked());
+  EXPECT_TRUE(tools->tool_action(quader::ViewportToolId::Scale)->isChecked());
 
   window->resize(1000, 700);
   synchronize();
@@ -2393,8 +2444,9 @@ TEST(QtProjectWorkspaceTests,
   synchronize();
   EXPECT_EQ(window->toolBarArea(display), Qt::NoToolBarArea);
   EXPECT_TRUE(display->isHidden());
-  EXPECT_EQ(editor.viewports().selected_tool(kPaneIds[0]), quader::ViewportToolId::Move);
-  EXPECT_EQ(editor.viewports().selected_tool(kPaneIds[1]), quader::ViewportToolId::Scale);
+  for (const auto pane : kPaneIds) {
+    EXPECT_EQ(editor.viewports().selected_tool(pane), quader::ViewportToolId::Scale);
+  }
   EXPECT_NE(snapping->findChild<QComboBox *>(QStringLiteral("snappingGridSizeCombo")), nullptr);
   EXPECT_NE(snapping->findChild<QComboBox *>(QStringLiteral("snappingAngleCombo")), nullptr);
   ui.shutdown();
@@ -4499,6 +4551,95 @@ TEST(QtProjectWorkspaceTests,
 }
 
 TEST(QtProjectWorkspaceTests,
+     AlignImmediateActionWarnsOnlyOnAttemptAndLocalizesUntilNextSuccess) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const auto isolated_profile = std::filesystem::temp_directory_path() /
+      ("quader-align-status-warning-" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+  ScopedIsolatedLocalAppData scoped_profile(isolated_profile);
+  ASSERT_TRUE(scoped_profile.active());
+
+  int argc = 1;
+  char application_name[] = "quader-align-status-warning-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  const auto resource_root = std::filesystem::path(QUADER_SOURCE_DIR) / "resources";
+  const auto project_root = scoped_profile.profile() / "Align Status Project";
+  ASSERT_TRUE(std::filesystem::create_directory(project_root));
+  quader::RenderSystem render_system;
+  quader::ProjectSession project;
+  project.set_resource_root(resource_root / "modeling_assets");
+  quader::QuaderEditorApi editor(project);
+  quader::UISystem ui;
+  ASSERT_TRUE(ui.initialize(render_system, resource_root));
+  ASSERT_NE(ui.main_window(), nullptr);
+  ui.main_window()->setAttribute(Qt::WA_DontShowOnScreen, true);
+  ASSERT_TRUE(editor.project().create(project_root).ok());
+  ASSERT_NE(project.active_scene(), nullptr);
+  auto &scene = *project.active_scene()->session;
+  ui.install_runtime_hooks(editor, scene.scene(), scene.assets(), scene.modeling(),
+      scene.selection(), scene.native_tools(), scene.point_placement(),
+      quader::kInvalidAssetId);
+  auto *message = dynamic_cast<quader::QtStatusMessage *>(
+      ui.main_window()->findChild<QLabel *>(QStringLiteral("statusMessage")));
+  ASSERT_NE(message, nullptr);
+  message->set_error_sound_callback([] {});
+
+  constexpr std::array<float, 3> kPositions{0.0f, 1.0f, 7.1f};
+  std::array<quader::EntityId, 3> entities;
+  for (std::size_t index = 0; index < entities.size(); ++index) {
+    const auto created = editor.modeling().create_box(
+        {.min = {-1, -1, -1}, .max = {1, 1, 1}},
+        "Align warning source " + std::to_string(index));
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    entities[index] = created.value().entity;
+    ASSERT_TRUE(editor.scene().set_transform(entities[index],
+        {.position = {kPositions[index], 0, 0}}).ok());
+  }
+  ASSERT_TRUE(editor.selection().select_objects(entities, entities[1]).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Align).ok());
+  ASSERT_TRUE(editor.tools().set_setting("align", "align.use_snapping", true).ok());
+  ui.refresh({}, {});
+  EXPECT_TRUE(message->isHidden());
+  ASSERT_TRUE(editor.tools().execute_action("align", "align.distribute.x").ok());
+  ui.refresh({}, {});
+  ASSERT_FALSE(message->isHidden());
+  EXPECT_FALSE(message->is_error());
+  const QString english_warning = message->text();
+  ASSERT_EQ(english_warning,
+            QStringLiteral("No suitable grid size was found. Grid alignment was not used."));
+
+  EXPECT_TRUE(scene.native_tools().active("align"));
+  for (int frame = 0; frame < 3; ++frame) {
+    ui.refresh({}, {});
+    EXPECT_FALSE(message->isHidden());
+    EXPECT_FALSE(message->is_error());
+    EXPECT_EQ(message->text(), english_warning);
+  }
+
+  ASSERT_TRUE(editor.preferences().set_locale("it-IT").ok());
+  quader::LocalizationService italian;
+  ASSERT_TRUE(italian.load(resource_root / "locales", "it-IT"));
+  const QString italian_warning = QString::fromStdString(
+      italian.text("tool_settings.align.snap_unavailable", "Missing warning translation"));
+  ASSERT_NE(italian_warning, english_warning);
+  ui.refresh({}, {});
+  EXPECT_FALSE(message->isHidden());
+  EXPECT_FALSE(message->is_error());
+  EXPECT_EQ(message->text(), italian_warning);
+
+  ASSERT_TRUE(editor.commands().execute(
+      quader::quader_command::kViewportToggleGrid).ok());
+  ui.refresh({}, {});
+  EXPECT_TRUE(message->text().isEmpty());
+  EXPECT_TRUE(message->isHidden());
+  EXPECT_FALSE(message->is_error());
+  ASSERT_TRUE(editor.preferences().set_locale("en-US").ok());
+  ui.shutdown();
+}
+
+TEST(QtProjectWorkspaceTests,
      StatusHintsKeepBarAndWorkspaceGeometryStableAcrossContextsAndScale) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   const auto isolated_profile = std::filesystem::temp_directory_path() /
@@ -6275,14 +6416,12 @@ struct NativePaneInputHarness {
 } // namespace
 
 TEST(QtProjectWorkspaceTests,
-     SameToolKeyboardShortcutAcquiresTheReceivingPane) {
+     SameToolKeyboardShortcutPreservesSharedOperationAndOrigin) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   NativePaneInputHarness harness;
   ASSERT_NO_FATAL_FAILURE(harness.initialize());
   constexpr auto kPerspective = quader::ViewportPaneId::Perspective;
   constexpr auto kTop = quader::ViewportPaneId::Top;
-  harness.focus(kTop);
-  ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
   harness.focus(kPerspective);
   ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
   harness.process();
@@ -6301,16 +6440,16 @@ TEST(QtProjectWorkspaceTests,
   QCoreApplication::sendEvent(harness.panel.surface(kTop), &release);
   harness.process();
   EXPECT_TRUE(harness.editor.tools().pane_owns_executing_tool(kTop));
-  EXPECT_FALSE(harness.editor.tools().pane_owns_executing_tool(kPerspective));
-  EXPECT_EQ(harness.editor.tools().active_settings_presentation_origin().pane, kTop);
-  EXPECT_GT(harness.editor.tools().active_settings_presentation_origin().serial, origin.serial);
+  EXPECT_TRUE(harness.editor.tools().pane_owns_executing_tool(kPerspective));
+  EXPECT_EQ(harness.editor.tools().active_settings_presentation_origin(), origin);
+  EXPECT_EQ(origin.pane, kPerspective);
   EXPECT_EQ(harness.editor.viewports().selected_tool(kPerspective), quader::ViewportToolId::Move);
   EXPECT_EQ(harness.editor.viewports().selected_tool(kTop), quader::ViewportToolId::Move);
   EXPECT_EQ(harness.scene.history().undo_count(), undo_count);
 }
 
 TEST(QtProjectWorkspaceTests,
-     PassiveOtherPaneRightClickPreservesPendingExtrusionWithoutQOperations) {
+     OtherPaneRightClickPreservesSharedPendingExtrusionWithoutQOperations) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   NativePaneInputHarness harness;
   ASSERT_NO_FATAL_FAILURE(harness.initialize());
@@ -6356,8 +6495,9 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(QApplication::activePopupWidget(), nullptr);
   EXPECT_TRUE(harness.editor.tools().active_settings().preview_active);
   EXPECT_TRUE(harness.editor.tools().pane_owns_executing_tool(kPerspective));
+  EXPECT_TRUE(harness.editor.tools().pane_owns_executing_tool(kTop));
   EXPECT_EQ(harness.editor.tools().active_settings_presentation_origin(), origin);
-  EXPECT_EQ(harness.editor.viewports().selected_tool(kTop), quader::ViewportToolId::Move);
+  EXPECT_EQ(harness.editor.viewports().selected_tool(kTop), quader::ViewportToolId::Extrude);
   EXPECT_EQ(harness.editor.viewports().selected_tool(kPerspective), quader::ViewportToolId::Extrude);
   EXPECT_EQ(harness.scene.history().undo_count(), undo_count);
   EXPECT_EQ(harness.scene.history().redo_count(), redo_count);
@@ -6436,7 +6576,7 @@ TEST(QtProjectWorkspaceTests, AssetBrowserNativeCtrlSpaceHasNoIntermediateDockAn
   QApplication::setStyle(QStringLiteral("Fusion"));
   quader::apply_qt_obsidian_application_theme(QApplication::palette());
   const auto resources = std::filesystem::path(
-      qEnvironmentVariable("QT_PLUGIN_PATH").toStdWString());
+      QCoreApplication::applicationDirPath().toStdWString());
   const auto root = scoped_profile.profile() / "Project";
   ASSERT_TRUE(std::filesystem::create_directory(root));
   quader::RenderSystem renderer;
@@ -6454,6 +6594,24 @@ TEST(QtProjectWorkspaceTests, AssetBrowserNativeCtrlSpaceHasNoIntermediateDockAn
   ui.install_runtime_hooks(editor, scene.scene(), scene.assets(), scene.modeling(),
       scene.selection(), scene.native_tools(), scene.point_placement(), quader::kInvalidAssetId);
   auto *window = ui.main_window();
+  auto *viewport = dynamic_cast<quader::QtViewportPanel *>(
+      window->findChild<QWidget *>(QStringLiteral("viewportWorkspace")));
+  ASSERT_NE(viewport, nullptr);
+  const auto object = editor.modeling().create_box(
+      {.min = {-2, -1, -3}, .max = {2, 3, 1}}, "Native transition dimensions");
+  ASSERT_TRUE(object.ok()) << object.error_message();
+  ASSERT_TRUE(editor.selection().select_object(object.value()).ok());
+  ASSERT_TRUE(editor.viewports().set_layout(quader::ViewportLayoutId::Single).ok());
+  constexpr std::array kPaneIds{quader::ViewportPaneId::Perspective,
+                                quader::ViewportPaneId::Top,
+                                quader::ViewportPaneId::Front,
+                                quader::ViewportPaneId::Side};
+  for (const auto pane : kPaneIds) {
+    ASSERT_TRUE(editor.viewports().frame_selection(pane).ok());
+  }
+  quader::SceneRenderBridge bridge;
+  renderer.initialize_scene_render_bridge(bridge, resources);
+  quader::RenderOverlaySnapshotCache overlay_cache;
   window->resize(1600, 1000);
   ui.show();
   window->activateWindow();
@@ -6475,6 +6633,118 @@ TEST(QtProjectWorkspaceTests, AssetBrowserNativeCtrlSpaceHasNoIntermediateDockAn
   auto *browser = dynamic_cast<quader::QtAssetBrowser *>(dock->widget());
   ASSERT_NE(browser, nullptr);
   ASSERT_TRUE(editor.ui().hide_panel("asset_browser").ok());
+  const auto present_viewports = [&] {
+    ui.refresh({.delta_seconds = 1.0 / 60.0}, renderer.frame_performance_stats());
+    const auto synchronized = quader::QuaderRenderApiRuntimeAccess::sync_scene(
+        editor.render(), bridge);
+    EXPECT_TRUE(synchronized.ok()) << synchronized.error_message();
+    ui.prepare_viewports(bridge, overlay_cache);
+    return ui.render_viewports();
+  };
+  const auto settle_viewports = [&](const char *stage, int frame_count,
+                                     const auto &verify_frame) {
+    SCOPED_TRACE(stage);
+    quader::AppFrameSchedule schedule;
+    QEventLoop loop;
+    QTimer frame_timer;
+    frame_timer.setTimerType(Qt::PreciseTimer);
+    QTimer timeout;
+    timeout.setSingleShot(true);
+    QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+    const int display_interval_ms = std::max(
+        1, static_cast<int>(std::lround(1000.0 / renderer.display_refresh_rate_hz())));
+    std::size_t submitted = 0U;
+    int accepted_frames = 0;
+    QObject::connect(&frame_timer, &QTimer::timeout, &loop, [&] {
+      submitted = 0U;
+      if (renderer.presentation_is_synchronized() || renderer.ready_for_next_frame()) {
+        submitted = present_viewports();
+      }
+      verify_frame();
+      if (submitted == editor.viewports().active_pane_count()) ++accepted_frames;
+      if (accepted_frames == frame_count) {
+        frame_timer.stop();
+        loop.quit();
+        return;
+      }
+      frame_timer.setInterval(schedule.next_interval_ms(
+          true, renderer.presentation_is_synchronized(), display_interval_ms,
+          submitted != 0U));
+    });
+    timeout.start(3000);
+    frame_timer.start(0);
+    loop.exec();
+    EXPECT_EQ(accepted_frames, frame_count)
+        << "Last accepted pane count: " << submitted;
+    if (accepted_frames != frame_count) {
+      for (const auto pane : kPaneIds) {
+        const auto *surface = viewport->surface(pane);
+        std::cout << "Native pane " << static_cast<int>(pane)
+                  << " visible=" << surface->isVisible()
+                  << " exposed=" << surface->isExposed()
+                  << " ready=" << surface->ready_to_render() << '\n';
+      }
+    }
+  };
+  const auto no_frame_check = [] {};
+  const auto expect_dimensions_hidden = [&] {
+    for (const auto pane : kPaneIds) {
+      const QString pane_name = QString::fromUtf8(
+          quader::viewport_pane_stable_id(pane).data());
+      for (const QString &axis : {QStringLiteral("X"), QStringLiteral("Y"),
+                                 QStringLiteral("Z")}) {
+        auto *label = viewport->findChild<QLabel *>(
+            QStringLiteral("viewportSelectionDimension%1_%2").arg(axis, pane_name));
+        ASSERT_NE(label, nullptr);
+        EXPECT_TRUE(label->isHidden())
+            << label->objectName().toStdString()
+            << " must retire synchronously before the viewport changes.";
+      }
+    }
+  };
+  const auto expect_current_dimensions = [&] {
+    for (const auto pane : kPaneIds) {
+      const QString pane_name = QString::fromUtf8(
+          quader::viewport_pane_stable_id(pane).data());
+      auto *frame = viewport->findChild<QFrame *>(
+          QStringLiteral("viewportPane_%1").arg(pane_name));
+      auto *content = viewport->findChild<QWidget *>(
+          QStringLiteral("viewportSurfaceContainer_%1").arg(pane_name));
+      ASSERT_NE(frame, nullptr);
+      ASSERT_NE(content, nullptr);
+      int visible_dimensions = 0;
+      for (const QString &axis : {QStringLiteral("X"), QStringLiteral("Y"),
+                                 QStringLiteral("Z")}) {
+        auto *label = viewport->findChild<QLabel *>(
+            QStringLiteral("viewportSelectionDimension%1_%2").arg(axis, pane_name));
+        ASSERT_NE(label, nullptr);
+        if (!frame->isVisible()) {
+          EXPECT_TRUE(label->isHidden());
+          continue;
+        }
+        if (label->isHidden()) continue;
+        ++visible_dimensions;
+        EXPECT_TRUE(content->geometry().contains(label->geometry()));
+        EXPECT_EQ(label->text(), QStringLiteral("128"));
+        EXPECT_FALSE(label->mask().isEmpty());
+        EXPECT_FALSE(label->mask() == QRegion(label->rect()));
+      }
+      if (frame->isVisible()) EXPECT_GE(visible_dimensions, 2);
+    }
+  };
+  const QString review = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  const auto capture_native_window = [&](const QString &name) {
+    if (review.isEmpty()) return;
+    ASSERT_TRUE(QDir().mkpath(review));
+    ASSERT_NE(window->screen(), nullptr);
+    const QPoint origin = window->mapToGlobal(QPoint{});
+    const QPixmap capture = window->screen()->grabWindow(
+        0, origin.x(), origin.y(), window->width(), window->height());
+    ASSERT_FALSE(capture.isNull());
+    EXPECT_TRUE(capture.save(QDir(review).filePath(name)));
+  };
+  settle_viewports("initial selected box", 4, no_frame_check);
+  expect_current_dimensions();
   const auto send_toggle = [&](QWidget &target) {
     QKeyEvent press(QEvent::KeyPress, Qt::Key_Space, Qt::ControlModifier);
     QCoreApplication::sendEvent(&target, &press);
@@ -6482,6 +6752,7 @@ TEST(QtProjectWorkspaceTests, AssetBrowserNativeCtrlSpaceHasNoIntermediateDockAn
     QCoreApplication::sendEvent(&target, &release);
   };
   for (int transition = 0; transition < 3; ++transition) {
+    SCOPED_TRACE(transition);
     // Closing the browser activates the native viewport QWindow. Settle that
     // activation before sending the next physical chord from a Qt panel.
     window->activateWindow();
@@ -6494,32 +6765,50 @@ TEST(QtProjectWorkspaceTests, AssetBrowserNativeCtrlSpaceHasNoIntermediateDockAn
     send_toggle(*outliner_tree);
     ASSERT_TRUE(editor.ui().panel_visible("asset_browser"));
     EXPECT_TRUE(browser->owns_browser_focus());
+    expect_dimensions_hidden();
+    capture_native_window(
+        QStringLiteral("asset-browser-native-before-projection-%1.png").arg(transition));
     const QRect opening = dock->geometry();
     // Native toolbars sit outside the dock area; the browser spans both side
     // docks, rather than only the viewport between them.
     EXPECT_NEAR(opening.left(), outliner->geometry().left(), 2);
     EXPECT_NEAR(opening.right(), inspector->geometry().right(), 2);
-    for (int frame = 0; frame < 8; ++frame) {
-      application.processEvents();
-      ui.refresh({}, {});
+    settle_viewports("browser opening", 8, [&] {
       EXPECT_EQ(dock->geometry(), opening);
       for (auto *animation : window->findChildren<QPropertyAnimation *>()) {
         EXPECT_FALSE(animation->state() == QAbstractAnimation::Running &&
                      animation->propertyName() == QByteArrayLiteral("geometry"));
       }
-    }
-    const QString review = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+    });
+    expect_current_dimensions();
+    capture_native_window(
+        QStringLiteral("asset-browser-native-desktop-open-%1.png").arg(transition));
     if (!review.isEmpty()) {
       ASSERT_TRUE(QDir().mkpath(review));
       EXPECT_TRUE(window->grab().save(QDir(review).filePath(
           QStringLiteral("asset-browser-native-open-%1.png").arg(transition))));
+    }
+    for (const auto layout : {quader::ViewportLayoutId::FourQuad,
+                              quader::ViewportLayoutId::TwoVertical,
+                              quader::ViewportLayoutId::Single}) {
+      SCOPED_TRACE(static_cast<int>(layout));
+      ASSERT_TRUE(editor.viewports().set_layout(layout).ok());
+      viewport->refresh_workspace_layout();
+      expect_dimensions_hidden();
+      settle_viewports("layout transition", 4, no_frame_check);
+      expect_current_dimensions();
+      capture_native_window(QStringLiteral("viewport-layout-native-%1-%2.png")
+          .arg(transition).arg(static_cast<int>(layout)));
     }
     QWidget *focus = QApplication::focusWidget();
     ASSERT_NE(focus, nullptr);
     EXPECT_TRUE(browser->owns_browser_focus());
     send_toggle(*focus);
     EXPECT_FALSE(editor.ui().panel_visible("asset_browser"));
+    expect_dimensions_hidden();
     application.processEvents();
+    settle_viewports("browser closing", 4, no_frame_check);
+    expect_current_dimensions();
   }
   ui.shutdown();
 }
@@ -6607,6 +6896,159 @@ TEST(QtProjectWorkspaceTests, SavingWithUnregisteredSceneCopiesRetainsDistinctBr
   ASSERT_NE(grid, nullptr);
   EXPECT_EQ(grid->model()->rowCount(), 2);
   EXPECT_TRUE(std::filesystem::exists(root / "Working.qdr"));
+  ui.shutdown();
+}
+
+TEST(QtProjectWorkspaceTests, AssetBrowserRetainsRevealsAndDiscoversHiddenDirectoryReplacements) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const auto profile = std::filesystem::temp_directory_path() /
+      ("quader-asset-reveal-" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+  ScopedIsolatedLocalAppData scoped_profile(profile);
+  ASSERT_TRUE(scoped_profile.active());
+  int argc = 1;
+  char application_name[] = "quader-asset-reveal-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  const auto resources = std::filesystem::path(QUADER_SOURCE_DIR) / "resources";
+  const auto root = scoped_profile.profile() / "Project";
+  ASSERT_TRUE(std::filesystem::create_directory(root));
+  quader::ProjectSession project;
+  project.set_resource_root(resources / "modeling_assets");
+  quader::QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.project().create(root).ok());
+  const auto baseline = editor.project_assets().create_scene_asset("", "Baseline");
+  ASSERT_TRUE(baseline.ok()) << baseline.error_message();
+  quader::RenderSystem renderer;
+  quader::UISystem ui;
+  ASSERT_TRUE(ui.initialize(renderer, resources));
+  auto &scene = *project.active_scene()->session;
+  ui.install_runtime_hooks(editor, scene.scene(), scene.assets(), scene.modeling(),
+      scene.selection(), scene.native_tools(), scene.point_placement(), quader::kInvalidAssetId);
+  auto *window = ui.main_window();
+  window->setAttribute(Qt::WA_DontShowOnScreen, true);
+  window->resize(1600, 1000);
+  window->show();
+  auto *dock = window->findChild<QDockWidget *>(QStringLiteral("dock_asset_browser"));
+  ASSERT_NE(dock, nullptr);
+  auto *browser = dynamic_cast<quader::QtAssetBrowser *>(dock->widget());
+  ASSERT_NE(browser, nullptr);
+  const auto settle_until = [&](const auto &condition) {
+    QElapsedTimer timeout;
+    timeout.start();
+    while (!condition() && timeout.elapsed() < 3000) {
+      application.processEvents(QEventLoop::AllEvents, 10);
+      ui.refresh({}, {});
+    }
+    return condition();
+  };
+  ASSERT_TRUE(editor.ui().show_panel("asset_browser").ok());
+  ASSERT_TRUE(settle_until([&] { return browser->has_completed_visible_paint(); }));
+  for (int frame = 0; frame < 8; ++frame) {
+    application.processEvents();
+    ui.refresh({}, {});
+  }
+  const bool measure = qEnvironmentVariableIntValue("QUADER_MEASURE_ASSET_BROWSER_REVEAL") == 1;
+  for (int sample = 0; sample < 3; ++sample) {
+    ASSERT_TRUE(editor.ui().hide_panel("asset_browser").ok());
+    application.processEvents();
+    qint64 forced_nanoseconds = 0;
+    if (measure) {
+      // Both samples use this build, document, catalog and final dock geometry.
+      // The reference retains the former synchronous discovery before reveal.
+      QElapsedTimer forced_timer;
+      forced_timer.start();
+      ASSERT_TRUE(editor.project_assets().assets(true).ok());
+      ASSERT_TRUE(editor.ui().show_panel("asset_browser").ok());
+      forced_nanoseconds = forced_timer.nsecsElapsed();
+      application.processEvents();
+      ui.refresh({}, {});
+      ASSERT_TRUE(editor.ui().hide_panel("asset_browser").ok());
+      application.processEvents();
+    }
+    const auto before_reveal_work = project.project_assets().work_stats();
+    QElapsedTimer retained_timer;
+    retained_timer.start();
+    ASSERT_TRUE(editor.ui().show_panel("asset_browser").ok());
+    const qint64 retained_nanoseconds = retained_timer.nsecsElapsed();
+    if (measure) {
+      std::cout << "ASSET_BROWSER_REVEAL sample=" << sample
+                << " forced_catalog_then_reveal_ms=" << forced_nanoseconds / 1000000.0
+                << " retained_reveal_ms=" << retained_nanoseconds / 1000000.0 << std::endl;
+    }
+    EXPECT_EQ(project.project_assets().work_stats().scans, before_reveal_work.scans);
+    EXPECT_FALSE(browser->has_completed_visible_paint());
+    ui.refresh({}, {});
+    EXPECT_EQ(project.project_assets().work_stats().scans, before_reveal_work.scans);
+    ASSERT_TRUE(settle_until([&] {
+      return project.project_assets().work_stats().scans == before_reveal_work.scans + 1u;
+    }));
+    const auto retained_work = project.project_assets().work_stats();
+    for (int frame = 0; frame < 8; ++frame) {
+      application.processEvents();
+      ui.refresh({}, {});
+    }
+    EXPECT_EQ(project.project_assets().work_stats().scans, retained_work.scans);
+    EXPECT_EQ(project.project_assets().work_stats().inspected_entries, retained_work.inspected_entries);
+  }
+  ASSERT_TRUE(editor.ui().hide_panel("asset_browser").ok());
+  application.processEvents();
+  const auto quick_toggle_work = project.project_assets().work_stats();
+  ASSERT_TRUE(editor.ui().show_panel("asset_browser").ok());
+  ASSERT_FALSE(browser->has_completed_visible_paint());
+  ASSERT_TRUE(editor.ui().hide_panel("asset_browser").ok());
+  for (int frame = 0; frame < 8; ++frame) {
+    application.processEvents();
+    ui.refresh({}, {});
+  }
+  EXPECT_EQ(project.project_assets().work_stats().scans, quick_toggle_work.scans);
+  ASSERT_TRUE(editor.ui().show_panel("asset_browser").ok());
+  ASSERT_TRUE(settle_until([&] {
+    return project.project_assets().work_stats().scans == quick_toggle_work.scans + 1u;
+  }));
+  ASSERT_TRUE(editor.project_assets().create_folder("", "Authored").ok());
+  const auto authored_work = project.project_assets().work_stats();
+  for (int frame = 0; frame < 8; ++frame) {
+    application.processEvents();
+    ui.refresh({}, {});
+  }
+  EXPECT_EQ(project.project_assets().work_stats().scans, authored_work.scans);
+  const auto reveal_external = [&](const std::string &relative_path, const auto &mutation) {
+    EXPECT_TRUE(editor.ui().hide_panel("asset_browser").ok());
+    application.processEvents();
+    const auto hidden_work = project.project_assets().work_stats();
+    mutation();
+    for (int frame = 0; frame < 4; ++frame) {
+      application.processEvents();
+      ui.refresh({}, {});
+    }
+    EXPECT_EQ(project.project_assets().work_stats().scans, hidden_work.scans);
+    EXPECT_TRUE(editor.ui().show_panel("asset_browser").ok());
+    EXPECT_FALSE(browser->has_completed_visible_paint());
+    ui.refresh({}, {});
+    EXPECT_EQ(project.project_assets().work_stats().scans, hidden_work.scans);
+    EXPECT_TRUE(settle_until([&] {
+      return std::ranges::any_of(browser->snapshot().items, [&](const auto &item) {
+        return item.relative_path.toStdString() == relative_path;
+      });
+    }));
+    EXPECT_GT(project.project_assets().work_stats().scans, hidden_work.scans);
+  };
+  const auto source = root / baseline.value().project_relative_path;
+  reveal_external("External/Deep/First.qdr", [&] {
+    ASSERT_TRUE(std::filesystem::create_directories(root / "External/Deep"));
+    ASSERT_TRUE(std::filesystem::copy_file(source, root / "External/Deep/First.qdr"));
+  });
+  // Discovery must retain no Windows handles that prevent replacing folders.
+  reveal_external("External/Deep/Replacement.qdr", [&] {
+    std::filesystem::rename(root / "External", root / "Moved");
+    ASSERT_TRUE(std::filesystem::create_directories(root / "External/Deep"));
+    ASSERT_TRUE(std::filesystem::copy_file(source, root / "External/Deep/Replacement.qdr"));
+  });
+  reveal_external("External/Deep/AfterReplacement.qdr", [&] {
+    ASSERT_TRUE(std::filesystem::copy_file(source, root / "External/Deep/AfterReplacement.qdr"));
+  });
   ui.shutdown();
 }
 

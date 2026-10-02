@@ -285,7 +285,7 @@ QtAssetBrowserSnapshot UISystem::asset_browser_snapshot(bool refresh_files) {
   return snapshot;
 }
 
-void UISystem::refresh_asset_browser(bool force) {
+void UISystem::refresh_asset_browser(bool force, bool prepare_reveal) {
   if (asset_browser_ == nullptr) {
     return;
   }
@@ -296,23 +296,30 @@ void UISystem::refresh_asset_browser(bool force) {
       asset_browser_->clear();
       asset_browser_revision_ = 0u;
       asset_browser_generation_ = 0u;
+      asset_browser_discovery_pending_ = false;
       asset_clipboard_paths_.clear();
       asset_browser_->set_paste_available(false);
       if (asset_thumbnails_) asset_thumbnails_->set_project_generation(0u);
     }
     return;
   }
-  if (!visible && !force) {
+  if (!visible && !force && !prepare_reveal) {
     return;
   }
   const auto revision = editor_->project_assets().asset_revision();
   if (!revision.ok()) {
     return;
   }
-  const bool changed = force || asset_browser_revision_ != revision.value().revision ||
+  const bool reveal_ready = !prepare_reveal && visible &&
+      asset_browser_discovery_pending_ && asset_browser_->has_completed_visible_paint();
+  const bool refresh_files = force || reveal_ready;
+  if (reveal_ready) asset_browser_discovery_pending_ = false;
+  const bool changed = refresh_files || asset_browser_revision_ != revision.value().revision ||
       asset_browser_generation_ != revision.value().project_generation;
   if (changed) {
-    auto snapshot = asset_browser_snapshot(force);
+    // The pending reveal was consumed before discovery, including failed
+    // attempts. Unchanged frames never repeat physical catalog work.
+    auto snapshot = asset_browser_snapshot(refresh_files);
     if (snapshot.generation == 0u) return;
     if (asset_browser_generation_ != snapshot.generation) {
       asset_clipboard_paths_.clear();
