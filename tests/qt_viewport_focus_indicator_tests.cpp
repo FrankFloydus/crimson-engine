@@ -11,6 +11,7 @@
 #include "editor/session/scene_session.hpp"
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_viewport_panel.hpp"
+#include "support/qt_viewport_input_test_helpers.hpp"
 #include "viewport/viewport_workspace_service.hpp"
 
 #include <QApplication>
@@ -104,10 +105,10 @@ TEST(QtViewportFocusIndicatorTests, OneOrangeInsetBorderFollowsActivePaneInEvery
       ASSERT_NE(container, nullptr);
       container->show();
       container->setFocus();
-      ASSERT_EQ(QApplication::focusWidget(), container);
+      ASSERT_EQ(QApplication::focusWidget(), container->focusProxy());
       const QPointF point(40, 50);
       QEnterEvent hover(point, point, surface->mapToGlobal(point));
-      QApplication::sendEvent(surface, &hover);
+      quader::test_support::send_visible_viewport_event(surface, &hover);
       EXPECT_EQ(workspace.focused_pane(), placement.pane_id);
       EXPECT_FALSE(border->isHidden());
       auto *pane = panel.findChild<QWidget *>(
@@ -139,7 +140,7 @@ TEST(QtViewportFocusIndicatorTests, OneOrangeInsetBorderFollowsActivePaneInEvery
   const QPointF hover_point(40, 50);
   QEnterEvent editor_hover(hover_point, hover_point,
                            hover_surface->mapToGlobal(hover_point));
-  QApplication::sendEvent(hover_surface, &editor_hover);
+  quader::test_support::send_visible_viewport_event(hover_surface, &editor_hover);
   EXPECT_TRUE(field.hasFocus());
   EXPECT_TRUE(border->isHidden());
   ASSERT_TRUE(panel.focus_active_pane());
@@ -147,7 +148,7 @@ TEST(QtViewportFocusIndicatorTests, OneOrangeInsetBorderFollowsActivePaneInEvery
   hover_surface = panel.surface(quader::ViewportPaneId::Top);
   QEnterEvent pane_hover(hover_point, hover_point,
                          hover_surface->mapToGlobal(hover_point));
-  QApplication::sendEvent(hover_surface, &pane_hover);
+  quader::test_support::send_visible_viewport_event(hover_surface, &pane_hover);
   EXPECT_EQ(workspace.focused_pane(), quader::ViewportPaneId::Top);
   auto *top = panel.findChild<QWidget *>(QStringLiteral("viewportPane_top"));
   ASSERT_NE(top, nullptr);
@@ -278,12 +279,12 @@ TEST(QtViewportFocusIndicatorTests,
   container->show();
   QCoreApplication::processEvents();
   ASSERT_TRUE(panel.focus_active_pane());
-  ASSERT_EQ(QApplication::focusWidget(), container);
+  ASSERT_EQ(QApplication::focusWidget(), container->focusProxy());
   QFocusEvent surface_focus(QEvent::FocusIn, Qt::OtherFocusReason);
   QApplication::sendEvent(surface, &surface_focus);
   const QPointF hover_point(40, 50);
   QEnterEvent hover(hover_point, hover_point, surface->mapToGlobal(hover_point));
-  QApplication::sendEvent(surface, &hover);
+  quader::test_support::send_visible_viewport_event(surface, &hover);
   const auto process_input = [&]() {
     panel.process_input(editor, session.scene(), session.assets(),
                         session.modeling(), {}, session.native_tools(),
@@ -391,6 +392,13 @@ TEST(QtViewportFocusIndicatorTests,
   EXPECT_TRUE(top_button->hasFocus());
 
   field.setFocus(Qt::TabFocusReason);
+  // This headless host supplies native focus transitions explicitly, including
+  // the child revealed while testing the second pane's toolbar.
+  auto *top_surface = panel.surface(quader::ViewportPaneId::Top);
+  ASSERT_NE(top_surface, nullptr);
+  QFocusEvent top_blur(QEvent::FocusOut, Qt::TabFocusReason);
+  QApplication::sendEvent(top_surface, &top_blur);
+  QApplication::sendEvent(top_surface, &leave);
   process_input();
   EXPECT_TRUE(field.hasFocus());
   EXPECT_TRUE(border->isHidden());

@@ -2578,8 +2578,8 @@ TEST(UiLayoutGuardrailTests,
   EXPECT_LT(readiness, begin_frame);
 
   expect_contains(surface_header, "void synchronize_render_size()");
-  expect_contains(surface, "renderer_.width() == width");
-  expect_contains(surface, "renderer_.height() == height");
+  expect_contains(surface, "renderer_.width() != width");
+  expect_contains(surface, "renderer_.height() != height");
 }
 
 TEST(UiLayoutGuardrailTests,

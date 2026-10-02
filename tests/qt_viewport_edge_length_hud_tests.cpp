@@ -18,6 +18,7 @@
 #include "ui/qt_viewport_edge_length_hud.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/qt_viewport_surface.hpp"
+#include "support/qt_viewport_input_test_helpers.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 #include "viewport/viewport_camera_controller.hpp"
 
@@ -391,15 +392,15 @@ TEST_F(QtViewportEdgeLengthHudTests,
   auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
   ASSERT_NE(surface, nullptr);
   // Native-child exposure is intentionally disabled in this headless host.
-  // Give its QWindow the geometry normally applied by the startup renderer.
-  surface->resize(800, 600);
+  // Give its visible host the client extent normally applied by the renderer.
+  quader::test_support::resize_viewport_surface(panel, *surface, {800, 600});
   auto *label = panel.findChild<QLabel *>(QStringLiteral("viewportEdgeLength_perspective"));
   ASSERT_NE(label, nullptr);
   auto &camera = session.viewport_workspace().camera(quader::ViewportPaneId::Perspective);
   camera.focus_origin(8);
   QEnterEvent enter({400, 300}, {400, 300}, {500, 400});
   QFocusEvent focus(QEvent::FocusIn);
-  QApplication::sendEvent(surface, &enter);
+  quader::test_support::send_visible_viewport_event(surface, &enter);
   QApplication::sendEvent(surface, &focus);
   quader::SceneRenderBridge bridge;
   quader::RenderOverlaySnapshotCache cache;
@@ -418,7 +419,7 @@ TEST_F(QtViewportEdgeLengthHudTests,
     QMouseEvent event(QEvent::MouseMove, local,
                       QPointF(surface->mapToGlobal(local.toPoint())),
                       Qt::NoButton, Qt::NoButton, Qt::NoModifier);
-    QApplication::sendEvent(surface, &event);
+    quader::test_support::send_visible_viewport_event(surface, &event);
     frame();
   };
   // The selected edge spans the Move pivot; its positive half is beneath X.

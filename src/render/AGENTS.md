@@ -130,6 +130,13 @@ file except through prior written authorization from Francesco Di Blasi.
   and backend-confirmed presentation modes. Retire pending GPU work before swapchain replacement;
   callback publication must stay thread-safe. Preview surfaces honor `needs_initial_frame()` after
   recreation even when their content is unchanged.
+- Native viewport backing may exceed its clipped visible pane. Keep camera/input and selection
+  readback dimensions visible-sized; rasterize the main/overlay views over the backing with the
+  measured crop projection. View material global 1 carries visible-to-backing NDC scale/translation;
+  global 2 carries the visible crop in physical pixels for visible-sized outline masks. Their
+  unset defaults preserve standalone views. Extend orthographic grid coverage over hidden backing
+  pixels without changing semantic grid spacing or line widths. Retain semantic bloom options
+  and compensate its vertical buffer resolution for backing height to preserve visible blur scale.
 - Bulk resource creation and retirement, including mesh, instance and wire teardown, must submit
   bounded command batches before `beginFrame`; large scenes can exhaust Filament's command arena
   even during shutdown.

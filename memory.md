@@ -813,13 +813,46 @@ Tests: [render extraction](tests/render_extraction_tests.cpp),
 
 ## VSync and accepted presentation
 
-- The pinned Filament main snapshot `aab101b4c038` with quader-vsync6 supplies opt-in Immediate
+- The pinned Filament main snapshot `aab101b4c038` with quader-vsync9 supplies opt-in Immediate
   presentation and a backend-confirmed mode callback. FIFO is the default/unsupported-mode fallback. Rebuild matching
   headers/libraries together; CMake verifies provenance/hashes. Keep the maintained patch through
   upgrades; the installer consumes compiled artifacts, not a compiler or end-user SDK download.
   Revision 6 preserves upstream's `VulkanSync` constructor and `setFrameRate` during the rebase.
   Recompile all materials with the matching rebuilt `matc`: the main snapshot retains material
   format 76 from v1.76.1 but changes material variants and shaders.
+- Bottom-dock toggles retain the Vulkan scene HWND's extent and origin. The native backing is
+  anchored at `(0, 0)` inside a growing/shrinking clip host; centering it moves the previously
+  displayed image. Gate reserved pixels through render's Vulkan capability and use `clipped=false`
+  in the maintained swapchain patch. Render the hidden region and extend the ground grid before
+  reveal. Visible camera/input/picking/HUD dimensions remain independent of backing raster bounds.
+  Scene/overlay projections scale and shift into the backing; SSAO depth reconstruction must use
+  that translated projection center, including odd physical-pixel extents. Preserve semantic bloom
+  options and compensate only its vertical resolution for backing/visible height, within Filament's
+  limits. Retained camera/presentation gates skip redundant Filament setters; cache native geometry
+  queries until their layout/DPI/handle inputs change.
+- Asset Browser visibility holds Qt painting through the synchronous native clip/layout change,
+  preserving the prior `updatesEnabled()` and animation flags. This prevents painting the uncovered
+  dock footprint across the expanded scene. On reveal, activate the dock's layout after visibility
+  and before raise/main-window layout so its immediate minimum uses current child metrics. Focus,
+  shortcut override and key events from both visible clip host and inner native backing container
+  use the existing surface adapter; otherwise Qt focus can land on the unobserved inner container
+  and lose viewport key intent.
+- Settled dock dimensions, faster frame requests and synchronous GPU submission do not establish
+  composed image continuity. Native acceptance requires an unchanged old scene intersection until
+  one current projection arrives and valid newly revealed pixels. Window-targeted captures pass
+  selected/unselected menu/Ctrl+Space show/close cases in Shaded/VSync off, Rendered/VSync on and
+  DPR 2/VSync on, with no eligible captured frames dropped by the retention limit. Browser chrome
+  can still stage outside the scene; viewport evidence does not establish whole-window continuity.
+  Screen-fit the native fixture and settle accepted baseline frames before transitions. First-reveal
+  DPR 2 metrics and repeated/interrupted resize with minimize/restore pass the native fixture.
+  The native AO contact/crop oracle passes the shifted helper and rejects the restored old helper
+  in perspective and orthographic views; noise-aligned and tiled-noise comparisons stay separate.
+- Revision 7 retains old swapchain handles and present-wait semaphore owners through replacement.
+  A replacement image's signaled reacquisition advances the persistent retirement watermark;
+  suboptimal acquisition remains usable. Ordinary frames avoid retirement fence waits after
+  completion. Repeated resize carries pending generations, while final teardown retains upstream's
+  queue-idle limitation. Revision 8's optional STRETCH negotiation preserves unsupported/shared-
+  device fallback; it did not eliminate the captured dock-resize interval by itself.
 - Dependency patch commands must stop parent Git discovery: source or TEMP inside Quader can
   otherwise make Git silently skip every patch path. Keep archive-plus-patch byte verification;
   [nested staging regression](tools/test_filament_patch.ps1) protects this boundary.
@@ -836,9 +869,12 @@ Tests: [render extraction](tests/render_extraction_tests.cpp),
   baseline remains compatible while detecting preference side effects.
 
 Owners: [RenderSystem](src/render/render_system.cpp), [frame schedule](src/app/app_frame_schedule.hpp),
-[Filament patch](thirdparty/filament/filament-main-aab101b4c038-quader-vsync6.patch).
+[Filament patch](thirdparty/filament/README.md), [native clip host](src/ui/qt_viewport_panel.cpp),
+[visible input mapping](src/ui/qt_viewport_surface.cpp), [backing projection](src/render/viewport_renderer.cpp).
 Tests: [presentation](tests/render_presentation_tests.cpp),
-[opt-in native Vulkan runtime](tests/render_vsync_runtime_tests.cpp).
+[opt-in native Vulkan runtime](tests/render_vsync_runtime_tests.cpp),
+[native browser transitions](tests/qt_project_workspace_tests.cpp),
+[crop input and unchanged geometry queries](tests/qt_input_adapter_tests.cpp).
 
 ## Dense-scene performance traps
 

@@ -95,6 +95,8 @@ public:
                     RenderConfig config = {});
     void shutdown();
     [[nodiscard]] bool initialized() const { return engine_ != nullptr; }
+    /** Whether native swapchains preserve pixels outside their visible window clip. */
+    [[nodiscard]] bool supports_hidden_native_pixels() const;
 
     bool begin_frame();
     bool begin_frame(filament::SwapChain *swap_chain);

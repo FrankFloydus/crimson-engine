@@ -1827,7 +1827,7 @@ TEST(BuildGuardrailTests, NativeDependencyToolsValidateSourceAndDeployment) {
   const std::string third_party_manifest =
       read_source_file("thirdparty/THIRD_PARTY_MANIFEST.md");
   const std::string filament_pin = read_source_file(
-      "thirdparty/filament/filament-main-aab101b4c038-quader-vsync6.json");
+      "thirdparty/filament/filament-main-aab101b4c038-quader-vsync9.json");
   const std::string filament_builder = read_source_file("tools/build_filament_sdk.ps1");
   const std::string tracy_pin = read_source_file("thirdparty/tracy-0.13.1.json");
   const std::string native_verifier = read_source_file("tools/verify_native_build.ps1");
@@ -1886,11 +1886,11 @@ TEST(BuildGuardrailTests, FilamentPatchAppliesInsideAncestorWorktree) {
 
 TEST(BuildGuardrailTests, FilamentPresentationPatchPreservesDitheringAndTargetRouting) {
   const std::string pin = read_source_file(
-      "thirdparty/filament/filament-main-aab101b4c038-quader-vsync6.json");
+      "thirdparty/filament/filament-main-aab101b4c038-quader-vsync9.json");
   const std::string patch = read_source_file(
-      "thirdparty/filament/filament-main-aab101b4c038-quader-vsync6.patch");
-  expect_contains(pin, "\"patch_version\": 6");
-  expect_contains(patch, "#define FILAMENT_QUADER_VSYNC_PATCH_VERSION 6");
+      "thirdparty/filament/filament-main-aab101b4c038-quader-vsync9.patch");
+  expect_contains(pin, "\"patch_version\": 9");
+  expect_contains(patch, "#define FILAMENT_QUADER_VSYNC_PATCH_VERSION 9");
   // Preserve upstream dither amplitude. Native GPU tests verify the resulting pixels;
   // this contract prevents a dependency update from replacing the presentation fix
   // with noise suppression or applying its decode to an unrelated render target.
@@ -2167,7 +2167,7 @@ TEST(BuildGuardrailTests, LocalMachinePathsUseEnvironmentBackedDefaults) {
 
   expect_contains(root_c_make, "ENV{FILAMENT_SDK_ROOT}");
   expect_contains(root_c_make,
-                  "../_SOURCES/filament-main-aab101b4c038-quader-vsync6-windows");
+                  "../_SOURCES/filament-main-aab101b4c038-quader-vsync9-windows");
   expect_contains(options, "QUADER_OPENMESH_SOURCE_DIR");
   expect_contains(options, "ENV{${env_var}}");
   expect_contains(options, "ENV{USERPROFILE}");
@@ -4169,7 +4169,9 @@ TEST(BuildGuardrailTests, QtViewportKeepsMultiPaneLayoutWorkspace) {
   expect_contains(viewport_panel_source,
                   "workspace_->active_pane_placements()");
   expect_contains(viewport_panel_source,
-                  "QWidget::createWindowContainer(pane_state.surface");
+                  "QWidget::createWindowContainer(");
+  expect_contains(viewport_panel_source,
+                  "pane_state.surface, pane_state.surface_container");
   expect_contains(viewport_surface_header,
                   "class QtViewportSurface final : public QWindow");
   expect_contains(viewport_surface_source, "(void)winId()");

@@ -28,6 +28,7 @@
 #include "ui/qt_spin_box.hpp"
 #include "ui/qt_tool_settings_panel.hpp"
 #include "ui/qt_viewport_panel.hpp"
+#include "support/qt_viewport_input_test_helpers.hpp"
 #include "support/command_behavior_contract.hpp"
 #include "support/command_behavior_fixture.hpp"
 #include "support/modeling_test_events.hpp"
@@ -497,7 +498,7 @@ TEST(SelectedMeshOutlinePresentationTests,
   const QPointF pointer{400, 300};
   QEnterEvent enter(pointer, pointer, surface->mapToGlobal(pointer.toPoint()));
   QFocusEvent focus(QEvent::FocusIn);
-  QCoreApplication::sendEvent(surface, &enter);
+  quader::test_support::send_visible_viewport_event(surface, &enter);
   QCoreApplication::sendEvent(surface, &focus);
   const auto process_frame = [&] {
     viewport.process_input(editor, session.scene(), session.assets(),

@@ -26,6 +26,7 @@
 #include <utils/EntityManager.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 
@@ -35,6 +36,9 @@ namespace {
 constexpr float kViewportOverlayCameraAperture = 16.0f;
 constexpr float kViewportOverlayCameraShutterSpeed = 1.0f / 125.0f;
 constexpr float kViewportOverlayCameraSensitivity = 100.0f;
+// Filament's FView::setBloomOptions applies these resolution limits.
+constexpr std::uint32_t kMinimumBloomPresentationResolution = 2u;
+constexpr std::uint32_t kMaximumBloomPresentationResolution = 2048u;
 
 class ScopedDiagnosticSkyboxMask {
 public:
@@ -113,7 +117,9 @@ add_setting_color(RenderSignatureBuilder &signature,
 
 std::uint64_t viewport_camera_presentation_signature(
     const ViewportCameraController &controller, std::uint32_t width,
-    std::uint32_t height) {
+    std::uint32_t height, std::uint32_t backing_width,
+    std::uint32_t backing_height, std::uint32_t crop_left,
+    std::uint32_t crop_top) {
   const ViewportCameraPose pose = controller.pose();
   const ViewportCameraState &state = controller.state();
   return RenderSignatureBuilder{}
@@ -127,6 +133,10 @@ std::uint64_t viewport_camera_presentation_signature(
       .add_float(state.far_plane)
       .add_value(width)
       .add_value(height)
+      .add_value(backing_width)
+      .add_value(backing_height)
+      .add_value(crop_left)
+      .add_value(crop_top)
       .value();
 }
 
@@ -186,6 +196,7 @@ void ViewportRenderer::initialize(filament::Engine &engine,
   scene_ = &scene;
   texture_registry_ = &texture_registry;
   surface_ = surface;
+  has_presentation_bounds_ = false;
   const std::uint8_t resolved_grid_layer_mask =
       grid_layer_mask == 0u ? viewport_grid_layer_mask(0) : grid_layer_mask;
   render_pass_coordinator_.initialize(resolved_grid_layer_mask);
@@ -334,17 +345,102 @@ void ViewportRenderer::resize(std::uint32_t width, std::uint32_t height) {
       overlay_render_target_.resize(
           width_, height_, overlay_view_,
           TextureSampleColorSpace::DisplaySrgbPremultipliedAlpha);
+      backing_width_ = width_;
+      backing_height_ = height_;
+      crop_left_ = crop_top_ = 0u;
+      update_presentation_bounds();
       return;
     }
 
-    if (view_) {
-        view_->setRenderTarget(nullptr);
-        view_->setViewport({0, 0, width_, height_});
+    if (!has_presentation_bounds_) {
+      backing_width_ = width_;
+      backing_height_ = height_;
     }
-    if (overlay_view_) {
-      overlay_view_->setRenderTarget(nullptr);
-      overlay_view_->setViewport({0, 0, width_, height_});
+    backing_width_ = std::max(backing_width_, width_);
+    backing_height_ = std::max(backing_height_, height_);
+    crop_left_ = std::min(crop_left_, backing_width_ - width_);
+    crop_top_ = std::min(crop_top_, backing_height_ - height_);
+    update_presentation_bounds();
+}
+
+void ViewportRenderer::set_presentation_bounds(
+    std::uint32_t backing_width, std::uint32_t backing_height,
+    std::uint32_t crop_left, std::uint32_t crop_top) {
+  if (surface_ == ViewportRenderSurface::Texture) {
+    return;
+  }
+  backing_width = std::max(backing_width, width_);
+  backing_height = std::max(backing_height, height_);
+  crop_left = std::min(crop_left, backing_width - width_);
+  crop_top = std::min(crop_top, backing_height - height_);
+  has_presentation_bounds_ = true;
+  if (backing_width_ == backing_width && backing_height_ == backing_height &&
+      crop_left_ == crop_left && crop_top_ == crop_top) {
+    return;
+  }
+  backing_width_ = backing_width;
+  backing_height_ = backing_height;
+  crop_left_ = crop_left;
+  crop_top_ = crop_top;
+  update_presentation_bounds();
+}
+
+void ViewportRenderer::update_presentation_bounds() {
+  const auto signature = RenderSignatureBuilder{}
+      .add_value(width_).add_value(height_)
+      .add_value(backing_width_).add_value(backing_height_)
+      .add_value(crop_left_).add_value(crop_top_).value();
+  if (presentation_bounds_signature_ == signature) {
+    return;
+  }
+  const float scale_x = static_cast<float>(width_) / backing_width_;
+  const float scale_y = static_cast<float>(height_) / backing_height_;
+  const float shift_x = (2.0f * crop_left_ + width_) / backing_width_ - 1.0f;
+  const float shift_y = 1.0f - (2.0f * crop_top_ + height_) / backing_height_;
+  for (auto *view : {view_, overlay_view_}) {
+    if (!view) {
+      continue;
     }
+    if (surface_ != ViewportRenderSurface::Texture) {
+      view->setRenderTarget(nullptr);
+      view->setViewport({0, 0, backing_width_, backing_height_});
+    }
+    // Global 1 maps device-domain icons from visible NDC into the backing
+    // raster. Global 2 maps outline fragments into visible occupancy masks.
+    view->setMaterialGlobal(1u, {scale_x, scale_y, shift_x, shift_y});
+    const filament::math::float4 outline_crop =
+        surface_ == ViewportRenderSurface::Texture
+            ? filament::math::float4{0.0f}
+            : filament::math::float4{static_cast<float>(crop_left_),
+                                      static_cast<float>(crop_top_),
+                                      static_cast<float>(width_),
+                                      static_cast<float>(height_)};
+    view->setMaterialGlobal(2u, outline_crop);
+  }
+  presentation_bounds_signature_ = signature;
+  camera_presentation_signature_.reset();
+  update_bloom_presentation(false);
+}
+
+void ViewportRenderer::update_bloom_presentation(bool force) {
+  if (!view_ || !semantic_bloom_options_) {
+    return;
+  }
+  auto bloom = *semantic_bloom_options_;
+  if (bloom.enabled) {
+    // Filament fixes its bloom buffer's vertical resolution. Compensate the
+    // larger raster so each blur texel retains its visible-viewport pixel size.
+    const double resolution = std::round(
+        static_cast<double>(bloom.resolution) * backing_height_ / height_);
+    bloom.resolution = static_cast<std::uint32_t>(std::clamp(
+        resolution, static_cast<double>(kMinimumBloomPresentationResolution),
+        static_cast<double>(kMaximumBloomPresentationResolution)));
+  }
+  if (!force && bloom_presentation_resolution_ == bloom.resolution) {
+    return;
+  }
+  view_->setBloomOptions(bloom);
+  bloom_presentation_resolution_ = bloom.resolution;
 }
 
 float ViewportRenderer::texture_max_u() const {
@@ -375,7 +471,9 @@ void ViewportRenderer::update_camera(
     return;
   }
   const std::uint64_t presentation_signature =
-      viewport_camera_presentation_signature(controller, width(), height());
+      viewport_camera_presentation_signature(controller, width(), height(),
+                                              backing_width_, backing_height_,
+                                              crop_left_, crop_top_);
   if (camera_presentation_signature_ == presentation_signature) {
     return;
   }
@@ -409,6 +507,16 @@ void ViewportRenderer::update_camera(
                             controller.state().near_plane,
                             controller.state().far_plane);
     }
+    const double scale_x = static_cast<double>(width_) / backing_width_;
+    const double scale_y = static_cast<double>(height_) / backing_height_;
+    const double shift_x =
+        (2.0 * crop_left_ + width_) / backing_width_ - 1.0;
+    const double shift_y =
+        1.0 - (2.0 * crop_top_ + height_) / backing_height_;
+    camera->setScaling({scale_x, scale_y});
+    // Filament's public shift is half the clip-space translation. The crop
+    // can differ from the ideal center by one physical pixel after DPI rounding.
+    camera->setShift({shift_x * 0.5, shift_y * 0.5});
   };
   apply_projection(camera_);
   apply_projection(overlay_camera_);
@@ -488,7 +596,8 @@ void ViewportRenderer::apply_scene_settings(
   filament::View::BloomOptions bloom;
   bloom.enabled = post_processing_enabled && settings.post_process.bloom;
   bloom.strength = std::clamp(settings.post_process.bloom_strength, 0.0f, 1.0f);
-  view_->setBloomOptions(bloom);
+  semantic_bloom_options_ = bloom;
+  update_bloom_presentation(true);
 
   // Fog is evaluated by Filament's surface materials and remains available
   // when the scene's post-processing section is disabled.
@@ -569,8 +678,17 @@ void ViewportRenderer::update_ground_grid(
   if (render_pass_coordinator_.set_grid_visible(visible)) {
     update_visible_layers();
   }
+  // The fixed backing need not be centered on the visible camera. Cover the
+  // farther edge in each direction while keeping the grid centered on that camera.
+  const float grid_extent_x = std::max(
+      1.0f + 2.0f * crop_left_ / width_,
+      2.0f * (backing_width_ - crop_left_) / width_ - 1.0f);
+  const float grid_extent_y = std::max(
+      1.0f + 2.0f * crop_top_ / height_,
+      2.0f * (backing_height_ - crop_top_) / height_ - 1.0f);
   grid_renderer_.update(controller, width(), height(), grid_world_spacing,
-                        settings, visible, instance_edit_context_active_);
+                        settings, visible, instance_edit_context_active_,
+                        {grid_extent_x, grid_extent_y});
 }
 
 void ViewportRenderer::set_instance_edit_context_active(
@@ -671,6 +789,9 @@ void ViewportRenderer::update_visible_layers() {
 
 void ViewportRenderer::reset_presentation_cache() {
   camera_presentation_signature_.reset();
+  presentation_bounds_signature_.reset();
+  semantic_bloom_options_.reset();
+  bloom_presentation_resolution_.reset();
   scene_settings_presentation_signature_.reset();
   scene_settings_apply_count_ = 0u;
   shadowing_enabled_.reset();

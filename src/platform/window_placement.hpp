@@ -41,6 +41,14 @@ struct PlatformWindowClientExtent {
   int height = 0;
 };
 
+/// Physical client rectangle expressed in another native window's client coordinates.
+struct PlatformWindowClientBounds {
+  int x = 0;
+  int y = 0;
+  int width = 0;
+  int height = 0;
+};
+
 /**
  * Clamps a persisted client rectangle and its native frame to desktop work areas.
  * The returned rectangle remains client geometry; zero margins preserve callers
@@ -60,5 +68,9 @@ platform_window_recover_frame_to_display_work_area(
 /** Returns the native client-area extent in physical pixels, or an empty extent. */
 [[nodiscard]] PlatformWindowClientExtent
 platform_window_client_extent(void *native_window_handle);
+
+/** Maps an existing native client rectangle without changing either window. */
+[[nodiscard]] PlatformWindowClientBounds platform_window_client_bounds_in_window(
+    void *native_window_handle, void *reference_window_handle);
 
 } // namespace quader

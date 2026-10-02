@@ -6581,13 +6581,21 @@ void UISystem::set_panel_visible(UIPanelId id, bool visible) {
     asset_browser_discovery_pending_ = false;
   }
   const bool animated = main_window_->isAnimated();
+  const bool updates_enabled = main_window_->updatesEnabled();
+  // Paint the uncovered dock footprint after native pane clips receive layout.
+  if (updates_enabled) main_window_->setUpdatesEnabled(false);
   main_window_->setAnimated(false);
   (void)panels_.set_visible(id, visible);
   if (visible) {
-    if (QDockWidget *dock = panels_.dock(id)) dock->raise();
+    if (QDockWidget *dock = panels_.dock(id)) {
+      // Show settles child metrics before the dock's explicit minimum is read.
+      if (QLayout *layout = dock->layout()) (void)layout->activate();
+      dock->raise();
+    }
   }
   if (QLayout *layout = main_window_->layout()) (void)layout->activate();
   main_window_->setAnimated(animated);
+  if (updates_enabled) main_window_->setUpdatesEnabled(true);
   refresh_asset_thumbnails();
 }
 

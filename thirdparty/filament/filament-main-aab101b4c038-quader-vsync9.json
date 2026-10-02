@@ -1,9 +1,9 @@
 {
-  "artifact": "filament-main-aab101b4c038-quader-vsync6-windows",
+  "artifact": "filament-main-aab101b4c038-quader-vsync9-windows",
   "upstream_version": "1.76.1",
   "upstream_ref": "main",
   "upstream_commit": "aab101b4c038da83f71a16accb8279516a0247b9",
   "source_sha256": "7c464ef115a048ab77eb8e1898f1f79721a21b8364a4fda3e44a7e0e5f447c68",
-  "patch_version": 6,
-  "patch_file": "filament-main-aab101b4c038-quader-vsync6.patch"
+  "patch_version": 9,
+  "patch_file": "filament-main-aab101b4c038-quader-vsync9.patch"
 }

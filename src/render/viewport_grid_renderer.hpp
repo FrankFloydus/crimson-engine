@@ -42,7 +42,8 @@ public:
     void update(const ViewportCameraController &controller,
                 std::uint32_t viewport_width, std::uint32_t viewport_height,
                 float grid_world_spacing, const ViewportSettings &settings,
-                bool visible, bool instance_edit_context = false);
+                bool visible, bool instance_edit_context = false,
+                QVec2 raster_extent_scale = {1.0f, 1.0f});
 
     bool visible() const {
         return visible_;

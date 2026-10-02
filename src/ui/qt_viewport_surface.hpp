@@ -13,12 +13,15 @@
 #include "ui/qt_relative_pointer_input.hpp"
 #include "viewport/viewport_input_types.hpp"
 
+#include <QPointer>
 #include <QWindow>
 
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <utility>
+
+class QWidget;
 
 namespace quader {
 
@@ -93,6 +96,11 @@ public:
   [[nodiscard]] ViewportPaneId pane_id() const { return pane_id_; }
   [[nodiscard]] ViewportRenderer &renderer() { return renderer_; }
   [[nodiscard]] const ViewportRenderer &renderer() const { return renderer_; }
+  /// Uses this native clip host for camera and input dimensions.
+  void set_visible_host(QWidget &host);
+  [[nodiscard]] QPoint visible_local_to_global(QPoint local) const;
+  /// Increments only when changed geometry requires a native rectangle query.
+  [[nodiscard]] std::uint64_t presentation_geometry_query_count() const;
   [[nodiscard]] QVec2 render_size_pixels() const;
   void synchronize_render_size();
 
@@ -154,14 +162,21 @@ private:
   [[nodiscard]] bool apply_native_mouse_grab(bool captured);
   void recenter_captured_pointer();
   void synchronize_interaction_cursor();
+  [[nodiscard]] QPointF visible_local_position(QPointF surface_local) const;
+  [[nodiscard]] QVec2 visible_position_pixels(QPointF surface_local) const;
+  [[nodiscard]] bool visible_position_contains(QPointF surface_local) const;
 
   struct InputAccumulator;
+  struct PresentationGeometry;
+  [[nodiscard]] const PresentationGeometry &presentation_geometry() const;
 
   ViewportPaneId pane_id_ = ViewportPaneId::Perspective;
   RenderSystem *render_system_ = nullptr;
   RenderAdditionalSwapChain swap_chain_;
   ViewportRenderer renderer_;
   std::unique_ptr<InputAccumulator> input_;
+  QPointer<QWidget> visible_host_;
+  std::unique_ptr<PresentationGeometry> presentation_geometry_;
   std::function<void()> surface_changed_callback_;
   std::function<void(ViewportPaneId, ViewportPaneFocusTrigger)>
       focus_request_callback_;

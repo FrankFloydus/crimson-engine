@@ -18,6 +18,20 @@ material {
     ]
 }
 
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        // ViewportRenderer supplies visible-to-backing NDC in global 1. Other
+        // views retain Filament's default global, which means identity here.
+        vec4 presentation = getMaterialGlobal1();
+        if (presentation.x > 0.0 && presentation.y > 0.0) {
+            material.clipSpaceTransform = mat4(1.0);
+            material.clipSpaceTransform[0][0] = presentation.x;
+            material.clipSpaceTransform[1][1] = presentation.y;
+            material.clipSpaceTransform[3].xy = presentation.zw;
+        }
+    }
+}
+
 fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);

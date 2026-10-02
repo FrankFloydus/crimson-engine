@@ -47,7 +47,10 @@ Filament evidence: [unit conversion](C:/Users/Drako/Desktop/quader-windows/_SOUR
 ## Current Filament source: checked 2026-09-14
 
 Quader now pins the unreleased `main` snapshot at commit
-`aab101b4c038da83f71a16accb8279516a0247b9`, with `quader-vsync6`.
+`aab101b4c038da83f71a16accb8279516a0247b9`, with `quader-vsync9`.
+Patch revisions 7 through 9 change Vulkan presentation lifetimes, optional Windows scaling,
+occluded-image pixel ownership and shifted AO reconstruction while preserving the light extensions
+and the upstream source identity checked here.
 Its [light-unit conversion](https://github.com/google/filament/blob/aab101b4c038da83f71a16accb8279516a0247b9/filament/src/components/LightManager.cpp),
 [photographic exposure](https://github.com/google/filament/blob/aab101b4c038da83f71a16accb8279516a0247b9/filament/src/Exposure.cpp),
 and [directional-light exposure multiplication](https://github.com/google/filament/blob/aab101b4c038da83f71a16accb8279516a0247b9/filament/src/ds/ColorPassDescriptorSet.cpp)

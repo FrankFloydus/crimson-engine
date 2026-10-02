@@ -3788,7 +3788,7 @@ TEST(ViewportRendererTests,
   EXPECT_TRUE(source_contains_compact(
       renderer_source, "grid_renderer_.update(controller, width(), height(), "
                        "grid_world_spacing, settings, visible, "
-                       "instance_edit_context_active_)"));
+                       "instance_edit_context_active_,"));
   EXPECT_TRUE(source_contains_compact(
       grid_renderer_source,
       ".layerMask(kViewportAllLayerMask, grid_layer_mask_)"));

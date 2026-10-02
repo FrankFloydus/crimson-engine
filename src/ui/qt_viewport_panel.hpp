@@ -211,6 +211,7 @@ private:
     QtViewportFlyNavigationHud *fly_navigation_hud = nullptr;
     QtViewportSurface *surface = nullptr;
     QWidget *surface_container = nullptr;
+    QWidget *surface_backing_container = nullptr;
     ViewportView presented_view = ViewportView::Perspective;
     ViewportShadingMode presented_shading = ViewportShadingMode::Shaded;
     ViewportLayoutId presented_layout = ViewportLayoutId::Single;

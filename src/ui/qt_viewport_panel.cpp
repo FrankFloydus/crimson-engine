@@ -2063,10 +2063,10 @@ QtViewportPanel::render_viewports(bool account_presentation_frame) {
     for (Pane &pane_state : panes_) {
       if (!pane_state.surface_presented) {
         pane_state.surface_container->show();
-        // QWidget::createWindowContainer can expose its native child with the
-        // rect cached while startup presentation was blocked. Reassert the
-        // frame rect once after reveal, before yielding the exposure turn.
+        // Reassert both native hosts before yielding the exposure turn.
         pane_state.surface_container->setGeometry(pane_content_rect(pane_state));
+        pane_state.surface_backing_container->setGeometry(
+            pane_state.surface_backing_container->geometry());
         pane_state.surface_presented = true;
         pane_state.overlay_stack_valid = false;
       }
@@ -2314,8 +2314,8 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
 
   pane_state.surface = new QtViewportSurface(pane_state.id);
   pane_state.surface->installEventFilter(this);
-  pane_state.surface_container =
-      QWidget::createWindowContainer(pane_state.surface, pane_state.frame);
+  pane_state.surface_container = new QWidget(pane_state.frame);
+  pane_state.surface_container->setAttribute(Qt::WA_NativeWindow);
   pane_state.surface_container->setObjectName(
       QStringLiteral("viewportSurfaceContainer_%1")
           .arg(QString::fromUtf8(
@@ -2325,7 +2325,13 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
                                               QSizePolicy::Expanding);
   pane_state.surface_container->setGeometry(pane_state.frame->rect());
   pane_state.surface_container->hide();
-  pane_state.surface_container->installEventFilter(pane_state.surface);
+  pane_state.surface_backing_container = QWidget::createWindowContainer(
+      pane_state.surface, pane_state.surface_container);
+  pane_state.surface_backing_container->setAttribute(Qt::WA_NativeWindow);
+  pane_state.surface_backing_container->setFocusPolicy(Qt::StrongFocus);
+  pane_state.surface_backing_container->installEventFilter(pane_state.surface);
+  pane_state.surface_container->setFocusProxy(pane_state.surface_backing_container);
+  pane_state.surface->set_visible_host(*pane_state.surface_container);
   pane_state.surface->set_focus_request_callback(
       [this](ViewportPaneId pane_id, ViewportPaneFocusTrigger trigger) {
         request_pane_focus(pane_id, trigger);
@@ -2930,6 +2936,34 @@ void QtViewportPanel::update_pane_overlay_geometry(Pane &pane_state) {
   if (pane_state.surface_container->geometry() != pane_bounds) {
     pane_state.surface_container->setGeometry(pane_bounds);
   }
+  // Reserve vertical pixels before a bottom dock is revealed. Changing the
+  // visible clip then preserves the native surface extent and its last image.
+  const auto placement = std::find_if(
+      displayed_placements_.begin(), displayed_placements_.end(),
+      [&pane_state](const ViewportPanePlacement &candidate) {
+        return candidate.pane_id == pane_state.id;
+      });
+  const QWidget *host_window = window();
+  const int host_height = host_window != nullptr
+                              ? host_window->contentsRect().height()
+                              : height();
+  const float pane_height_fraction = placement != displayed_placements_.end()
+                                         ? placement->normalized_rect.height
+                                         : 1.0f;
+  const bool retain_hidden_pixels =
+      render_system_ != nullptr && render_system_->supports_hidden_native_pixels();
+  const int backing_height = retain_hidden_pixels
+      ? std::max(pane_bounds.height(),
+                 static_cast<int>(std::ceil(pane_height_fraction * host_height)) -
+                     pane_bounds.top())
+      : pane_bounds.height();
+  const QRect backing_bounds{
+      0, 0,
+      pane_bounds.width(), backing_height};
+  if (pane_state.surface_backing_container->geometry() != backing_bounds) {
+    pane_state.surface_backing_container->setGeometry(backing_bounds);
+    pane_state.surface->synchronize_render_size();
+  }
   const int overlay_inset = ui_scale_metrics_.px(6);
   const QRect toolbar_geometry{0, 0, pane_state.frame->width(), pane_bounds.top()};
   if (pane_state.toolbar->geometry() != toolbar_geometry) {
@@ -3477,7 +3511,7 @@ std::optional<QPoint> QtViewportPanel::resolve_marking_menu_gesture(
     pending_marking_menu_gesture_ = PendingMarkingMenuGesture{
         .pane_id = pane_state.id,
         .initiating_chord = *initiating_chord,
-        .global_origin = pane_state.surface->mapToGlobal(local_point),
+        .global_origin = pane_state.surface->visible_local_to_global(local_point),
         .started = std::chrono::steady_clock::now(),
         .tool_revision = editor.tools().active_tool_revision(),
         .keybindings_revision = editor.commands().keybindings_revision(),
@@ -4217,7 +4251,7 @@ void QtViewportPanel::process_viewport_input(
                                      static_cast<float>(scale))),
         static_cast<int>(std::lround(input.mouse_local.y /
                                      static_cast<float>(scale))));
-    shortcut_popup_global_point = pane_state.surface->mapToGlobal(local_point);
+    shortcut_popup_global_point = pane_state.surface->visible_local_to_global(local_point);
     if (show_marking_menu && marking_menu_global_origin.has_value()) {
       shortcut_popup_global_point = *marking_menu_global_origin;
     }
@@ -4394,7 +4428,7 @@ void QtViewportPanel::process_viewport_input(
       const QPoint local(static_cast<int>(std::lround(pending_context_menu_local_mouse.x / dpr)),
                          static_cast<int>(std::lround(pending_context_menu_local_mouse.y / dpr)));
       context_menu_presenter_.show(
-          *pane_state.surface_container, pane_state.surface->mapToGlobal(local),
+          *pane_state.surface_container, pane_state.surface->visible_local_to_global(local),
           editor, input_router_, *localization_, actions, selection,
           selection.has_selection, std::nullopt,
           {.current_generation = &runtime_binding_generation_,
@@ -5035,7 +5069,7 @@ void QtViewportPanel::process_viewport_input(
                                        static_cast<float>(scale))),
           static_cast<int>(std::lround(pending_context_menu_local_mouse.y /
                                        static_cast<float>(scale))));
-      context_menu_global_point = pane_state.surface->mapToGlobal(local_point);
+      context_menu_global_point = pane_state.surface->visible_local_to_global(local_point);
     }
     hover_controller_.invalidate();
   }

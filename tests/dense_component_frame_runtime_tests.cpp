@@ -20,6 +20,7 @@
 #include "render/scene_render_bridge.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/qt_viewport_surface.hpp"
+#include "support/qt_viewport_input_test_helpers.hpp"
 #include "ui/ui_system.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
 
@@ -676,14 +677,14 @@ public:
     last_pointer_ = local;
     QMouseEvent event(type, local, QPointF(target.mapToGlobal(local.toPoint())),
                       button, held, Qt::NoModifier);
-    QApplication::sendEvent(&target, &event);
+    quader::test_support::send_visible_viewport_event(&target, &event);
   }
 
   void focus_pointer(QPointF point) {
     auto &target = surface();
     target.requestActivate();
     QEnterEvent enter(point, point, QPointF(target.mapToGlobal(point.toPoint())));
-    QApplication::sendEvent(&target, &enter);
+    quader::test_support::send_visible_viewport_event(&target, &enter);
     QFocusEvent focus(QEvent::FocusIn);
     QApplication::sendEvent(&target, &focus);
   }
@@ -1082,6 +1083,8 @@ TEST(DenseComponentFrameRuntimeTests, ClonedProjectFullEditorMixedComponentWorkf
   ASSERT_TRUE(harness.stage("warmup", 12u, idle));
   auto &surface = harness.surface();
   const auto raster = surface.render_size_pixels();
+  const QPointF logical_size{raster.x / surface.devicePixelRatio(),
+                             raster.y / surface.devicePixelRatio()};
   ASSERT_NEAR(raster.x, 1280.0f, 1.0f);
   ASSERT_NEAR(raster.y, 720.0f, 1.0f);
   auto &camera = session.viewport_workspace().camera(ViewportPaneId::Perspective);
@@ -1095,7 +1098,7 @@ TEST(DenseComponentFrameRuntimeTests, ClonedProjectFullEditorMixedComponentWorkf
             << std::endl;
 
   const auto navigation = [&](std::string label) {
-    const QPointF origin{surface.width() * 0.5, surface.height() * 0.5};
+    const QPointF origin{logical_size.x() * 0.5, logical_size.y() * 0.5};
     harness.focus_pointer(origin);
     const auto signature = viewport_camera_pose_persistence_signature(camera.pose());
     auto result = harness.stage(label + "_press", 1u, [&](std::size_t) {
@@ -1142,7 +1145,7 @@ TEST(DenseComponentFrameRuntimeTests, ClonedProjectFullEditorMixedComponentWorkf
     result = harness.drag_axis(tool, axis, press, direction);
     if (!result) return result;
     if (press.x() < 0.0 || press.y() < 0.0 ||
-        press.x() >= surface.width() || press.y() >= surface.height()) {
+        press.x() >= logical_size.x() || press.y() >= logical_size.y()) {
       return testing::AssertionFailure() << label << " gizmo press is outside the native viewport: "
           << press.x() << ',' << press.y();
     }
@@ -1296,7 +1299,7 @@ TEST(DenseComponentFrameRuntimeTests, ClonedProjectFullEditorMixedComponentWorkf
 
   ASSERT_TRUE(camera.restore_perspective_pose(saved_pose));
   ASSERT_TRUE(dense_frame_checked(editor.selection().set_mode(QuaderSelectionMode::Vertex)));
-  const QPointF keyboard_focus{surface.width() * 0.5, surface.height() * 0.5};
+  const QPointF keyboard_focus{logical_size.x() * 0.5, logical_size.y() * 0.5};
   harness.focus_pointer(keyboard_focus);
   ASSERT_TRUE(harness.stage("all_vertices_native_ctrl_a", 1u, [&](std::size_t) {
     harness.select_all_key();
@@ -1357,7 +1360,7 @@ TEST(DenseComponentFrameRuntimeTests, ClonedProjectFullEditorMixedComponentWorkf
     ASSERT_TRUE(dense_frame_checked(editor.selection().set_mode(mode)));
     ASSERT_TRUE(dense_frame_checked(editor.selection().clear()));
     ASSERT_TRUE(harness.stage(label + "_camera_settle", 12u, idle));
-    const QPointF start{static_cast<double>(surface.width() - 6), static_cast<double>(surface.height() - 6)};
+    const QPointF start{static_cast<double>(logical_size.x() - 6), static_cast<double>(logical_size.y() - 6)};
     const QPointF end{6.0, 6.0};
     harness.focus_pointer(start);
     ASSERT_TRUE(harness.stage(label + "_press", 1u, [&](std::size_t) {
@@ -1400,7 +1403,7 @@ TEST(DenseComponentFrameRuntimeTests, ClonedProjectFullEditorMixedComponentWorkf
       ASSERT_TRUE(harness.stage(label + "_camera_settle", 12u, idle));
       const auto selection_before = session.scene_surface_query().stats().selection_depth;
       const auto renderer_before = surface.renderer().component_selection().stats();
-      const QPointF start{static_cast<double>(surface.width() - 6), static_cast<double>(surface.height() - 6)};
+      const QPointF start{static_cast<double>(logical_size.x() - 6), static_cast<double>(logical_size.y() - 6)};
       const QPointF end{6.0, 6.0};
       harness.focus_pointer(start);
       ASSERT_TRUE(harness.stage(label + "_press", 1u, [&](std::size_t) {

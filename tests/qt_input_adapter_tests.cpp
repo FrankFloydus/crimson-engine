@@ -38,6 +38,7 @@
 #include "ui/qt_tool_settings_panel.hpp"
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/qt_viewport_surface.hpp"
+#include "support/qt_viewport_input_test_helpers.hpp"
 #include "viewport/viewport_input_router.hpp"
 #include "viewport/viewport_pointer_gesture.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
@@ -111,6 +112,9 @@ QWheelEvent wheel_event(QPoint pixel_delta, QPoint angle_delta,
                      Qt::NoScrollPhase, inverted);
 }
 
+using quader::test_support::resize_viewport_surface;
+using quader::test_support::send_visible_viewport_event;
+
 void expect_mouse_chord(const QuaderInputChord &chord,
                         QuaderMouseButton button,
                         QuaderInputGesture gesture) {
@@ -160,11 +164,11 @@ struct NavigationPanelTestContext {
     if (surface == nullptr) {
       return;
     }
-    surface->resize(800, 600);
+    resize_viewport_surface(panel, *surface, {800, 600});
     QEnterEvent enter({400, 300}, {400, 300}, {500, 400});
     QFocusEvent focus(QEvent::FocusIn);
-    QApplication::sendEvent(surface, &enter);
-    QApplication::sendEvent(surface, &focus);
+    send_visible_viewport_event(surface, &enter);
+    send_visible_viewport_event(surface, &focus);
   }
 
   void process(double delta_seconds = 1.0 / 60.0) {
@@ -176,8 +180,8 @@ struct NavigationPanelTestContext {
   void key(int key) {
     QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier);
     QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier);
-    QApplication::sendEvent(surface, &press);
-    QApplication::sendEvent(surface, &release);
+    send_visible_viewport_event(surface, &press);
+    send_visible_viewport_event(surface, &release);
     process();
   }
 
@@ -186,7 +190,7 @@ struct NavigationPanelTestContext {
     QWheelEvent event(local, local + QPointF{100, 100}, {},
                       QPoint{0, angle_delta}, Qt::NoButton, modifiers,
                       Qt::NoScrollPhase, false);
-    QApplication::sendEvent(surface, &event);
+    send_visible_viewport_event(surface, &event);
   }
 
   void mouse(QEvent::Type type, QPointF local, Qt::MouseButton button,
@@ -194,7 +198,7 @@ struct NavigationPanelTestContext {
              Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
     QMouseEvent event(type, local, local + QPointF{100, 100}, button,
                       buttons, modifiers);
-    QApplication::sendEvent(surface, &event);
+    send_visible_viewport_event(surface, &event);
   }
 };
 
@@ -536,6 +540,7 @@ TEST(QtViewportSurfaceInputTests,
 
   quader::RenderSystem render_system;
   quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  surface.resize(800, 600);
 
   ASSERT_FALSE(render_system.initialized());
   EXPECT_FALSE(surface.initialize(render_system, 0x01u));
@@ -591,6 +596,122 @@ TEST(QtViewportSurfaceCursorPolicyTests,
 }
 
 TEST(QtViewportSurfaceInputTests,
+     FixedBackingCropRetainsVisibleInputAndPopupCoordinates) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-fixed-backing-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  QWidget root;
+  root.setAttribute(Qt::WA_DontShowOnScreen);
+  root.resize(1000, 900);
+  QWidget visible_host(&root);
+  visible_host.setAttribute(Qt::WA_NativeWindow);
+  visible_host.setGeometry(40, 60, 640, 480);
+  auto *surface = new quader::QtViewportSurface(quader::ViewportPaneId::Perspective);
+  auto *backing = QWidget::createWindowContainer(surface, &visible_host);
+  backing->setAttribute(Qt::WA_NativeWindow);
+  backing->setGeometry(-160, -160, 960, 800);
+  surface->set_visible_host(visible_host);
+  root.show();
+  QApplication::processEvents();
+  ASSERT_EQ(surface->size(), QSize(960, 800));
+  const auto native_id = surface->winId();
+  (void)surface->take_input_frame(1.0f / 60.0f, false);
+  const auto settled_queries = surface->presentation_geometry_query_count();
+  ASSERT_GT(settled_queries, 0u);
+  for (int frame = 0; frame < 32; ++frame) {
+    (void)surface->render_size_pixels();
+    surface->synchronize_render_size();
+    (void)surface->take_input_frame(1.0f / 60.0f, false);
+  }
+  EXPECT_EQ(surface->presentation_geometry_query_count(), settled_queries);
+  const float scale = static_cast<float>(visible_host.devicePixelRatioF());
+  const QPointF visible{80, 90};
+  const QPoint global = visible_host.mapToGlobal(visible.toPoint());
+  const QPoint raw = surface->mapFromGlobal(global);
+  ASSERT_NE(raw, visible.toPoint());
+  EXPECT_EQ(surface->visible_local_to_global(visible.toPoint()), global);
+  EXPECT_NE(surface->mapToGlobal(visible.toPoint()), global);
+
+  QEnterEvent enter(visible, visible, global);
+  send_visible_viewport_event(surface, &enter);
+  const auto entered = surface->take_input_frame(1.0f / 60.0f, false);
+  EXPECT_TRUE(entered.input.viewport_hovered);
+  EXPECT_FLOAT_EQ(entered.input.viewport_size.x, 640 * scale);
+  EXPECT_FLOAT_EQ(entered.input.viewport_size.y, 480 * scale);
+  EXPECT_FLOAT_EQ(entered.input.mouse_local.x, 80 * scale);
+  EXPECT_FLOAT_EQ(entered.input.mouse_local.y, 90 * scale);
+  EXPECT_FLOAT_EQ(entered.input.mouse_screen.x, global.x() * scale);
+  EXPECT_FLOAT_EQ(entered.input.mouse_screen.y, global.y() * scale);
+
+  QWheelEvent wheel(visible, global, {}, {0, 120}, Qt::NoButton,
+                    Qt::NoModifier, Qt::NoScrollPhase, false);
+  send_visible_viewport_event(surface, &wheel);
+  const auto wheeled = surface->take_input_frame(1.0f / 60.0f, false);
+  ASSERT_EQ(wheeled.input.wheel_input_edges.size(), 2u);
+  for (const auto &edge : wheeled.input.wheel_input_edges) {
+    EXPECT_TRUE(edge.has_local_position);
+    EXPECT_FLOAT_EQ(edge.local.x, 80 * scale);
+    EXPECT_FLOAT_EQ(edge.local.y, 90 * scale);
+  }
+
+  QMouseEvent press(QEvent::MouseButtonPress, visible, global,
+                    Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+  send_visible_viewport_event(surface, &press);
+  const auto pressed = surface->take_input_frame(1.0f / 60.0f, false);
+  ASSERT_EQ(pressed.input.pointer_pressed_edges.size(), 1u);
+  EXPECT_FLOAT_EQ(pressed.left_click_local.x, 80 * scale);
+  EXPECT_FLOAT_EQ(pressed.left_click_local.y, 90 * scale);
+
+  // Growing the clip moves its centered backing without moving the pointer.
+  visible_host.resize(700, 540);
+  backing->move(-130, -130);
+  surface->synchronize_render_size();
+  EXPECT_EQ(surface->size(), QSize(960, 800));
+  EXPECT_EQ(surface->winId(), native_id);
+  (void)surface->render_size_pixels();
+  EXPECT_GT(surface->presentation_geometry_query_count(), settled_queries);
+  EXPECT_NE(surface->mapFromGlobal(global), raw);
+  QMouseEvent move(QEvent::MouseMove, visible, global,
+                   Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+  send_visible_viewport_event(surface, &move);
+  const auto moved = surface->take_input_frame(1.0f / 60.0f, false);
+  EXPECT_FLOAT_EQ(moved.input.viewport_size.x, 700 * scale);
+  EXPECT_FLOAT_EQ(moved.input.viewport_size.y, 540 * scale);
+  EXPECT_FLOAT_EQ(moved.input.mouse_delta.x, 0.0f);
+  EXPECT_FLOAT_EQ(moved.input.mouse_delta.y, 0.0f);
+  EXPECT_TRUE(moved.input.pointer_drag_started_edges.empty());
+  EXPECT_FLOAT_EQ(moved.input.mouse_local.x, 80 * scale);
+  EXPECT_FLOAT_EQ(moved.input.mouse_local.y, 90 * scale);
+  EXPECT_EQ(surface->visible_local_to_global(visible.toPoint()), global);
+
+  QMouseEvent release(QEvent::MouseButtonRelease, visible, global,
+                      Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+  send_visible_viewport_event(surface, &release);
+  const auto released = surface->take_input_frame(1.0f / 60.0f, false);
+  ASSERT_EQ(released.input.pointer_released_edges.size(), 1u);
+  ASSERT_EQ(released.input.pressed_input_chords.size(), 1u);
+  EXPECT_EQ(released.input.pressed_input_chords.front().gesture,
+            quader::QuaderInputGesture::Click);
+  EXPECT_FLOAT_EQ(released.input.pointer_released_edges.front().local.x, 80 * scale);
+  EXPECT_FLOAT_EQ(released.input.pointer_released_edges.front().local.y, 90 * scale);
+
+  // Hidden backing pixels beyond the client edge cannot hover the viewport.
+  for (const QPointF outside : {QPointF{-1, 90}, QPointF{700, 90},
+                                QPointF{80, -1}, QPointF{80, 540}}) {
+    SCOPED_TRACE(::testing::Message() << outside.x() << "," << outside.y());
+    QMouseEvent outside_move(QEvent::MouseMove, outside, {}, Qt::NoButton,
+                             Qt::NoButton, Qt::NoModifier);
+    send_visible_viewport_event(surface, &outside_move);
+    EXPECT_FALSE(surface->take_input_frame(1.0f / 60.0f, false)
+                     .input.viewport_hovered);
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
      SelectionCursorsUsePixelExactAuthoredAssetsAndTipAlignedHotspots) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
@@ -599,6 +720,7 @@ TEST(QtViewportSurfaceInputTests,
   QApplication application(argc, argv);
   application.setQuitOnLastWindowClosed(false);
   quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  surface.resize(800, 600);
   QEnterEvent enter(QPointF{40, 40}, QPointF{40, 40}, QPointF{40, 40});
   QFocusEvent focus_in(QEvent::FocusIn);
   QApplication::sendEvent(&surface, &enter);
@@ -666,6 +788,7 @@ TEST(QtViewportSurfaceInputTests,
   QApplication application(argc, argv);
   application.setQuitOnLastWindowClosed(false);
   quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  surface.resize(800, 600);
   QEnterEvent enter(QPointF{40, 40}, QPointF{40, 40}, QPointF{40, 40});
   QFocusEvent focus(QEvent::FocusIn);
   QApplication::sendEvent(&surface, &enter);
@@ -814,15 +937,15 @@ TEST(QtViewportSurfaceInputTests,
       for (std::size_t index = 0; index < pane_count; ++index) {
         auto *surface = panel.surface(panes[index]);
         ASSERT_NE(surface, nullptr);
-        surface->resize(800, 600);
+        resize_viewport_surface(panel, *surface, {800, 600});
         if (previous != nullptr) {
           QEvent leave(QEvent::Leave);
-          QApplication::sendEvent(previous, &leave);
+          send_visible_viewport_event(previous, &leave);
         }
         const QPointF local{300, 300};
         const QPointF global(surface->mapToGlobal(local.toPoint()));
         QEnterEvent enter(local, local, global);
-        QApplication::sendEvent(surface, &enter);
+        send_visible_viewport_event(surface, &enter);
         process_input();
         EXPECT_EQ(workspace.focused_pane(), panes[index]);
         EXPECT_EQ(QApplication::focusWidget(), &field);
@@ -853,7 +976,7 @@ TEST(QtViewportSurfaceInputTests,
         QMouseEvent event(type, local,
                          QPointF(surface->mapToGlobal(local.toPoint())),
                          button, held, Qt::NoModifier);
-        QApplication::sendEvent(surface, &event);
+        send_visible_viewport_event(surface, &event);
       };
       send_mouse(QEvent::MouseButtonPress, {300, 300}, Qt::LeftButton,
                  Qt::LeftButton);
@@ -896,14 +1019,14 @@ TEST(QtViewportSurfaceInputTests,
   quader::QtViewportSurface *surface =
       panel.surface(quader::ViewportPaneId::Perspective);
   ASSERT_NE(surface, nullptr);
-  surface->resize(800, 600);
+  resize_viewport_surface(panel, *surface, {800, 600});
 
   const QPointF local{400.0, 300.0};
   const QPointF global{500.0, 400.0};
   QEnterEvent enter(local, local, global);
-  QApplication::sendEvent(surface, &enter);
+  send_visible_viewport_event(surface, &enter);
   QFocusEvent focus(QEvent::FocusIn);
-  QApplication::sendEvent(surface, &focus);
+  send_visible_viewport_event(surface, &focus);
   const auto process_input = [&]() {
     panel.process_input(
         editor, session.scene(), session.assets(), session.modeling(), {},
@@ -919,13 +1042,13 @@ TEST(QtViewportSurfaceInputTests,
   auto *inactive_surface = panel.surface(quader::ViewportPaneId::Top);
   ASSERT_NE(inactive_surface, nullptr);
   QEnterEvent inactive_enter(local, local, global);
-  QApplication::sendEvent(inactive_surface, &inactive_enter);
-  QApplication::sendEvent(inactive_surface, &focus);
+  send_visible_viewport_event(inactive_surface, &inactive_enter);
+  send_visible_viewport_event(inactive_surface, &focus);
   EXPECT_EQ(inactive_surface->cursor().shape(), Qt::ArrowCursor);
   QEvent inactive_leave(QEvent::Leave);
   QFocusEvent inactive_focus_out(QEvent::FocusOut);
-  QApplication::sendEvent(inactive_surface, &inactive_leave);
-  QApplication::sendEvent(inactive_surface, &inactive_focus_out);
+  send_visible_viewport_event(inactive_surface, &inactive_leave);
+  send_visible_viewport_event(inactive_surface, &inactive_focus_out);
   const std::uint64_t stable_revision =
       surface->pointer_cursor_presentation_revision();
   process_input();
@@ -934,14 +1057,14 @@ TEST(QtViewportSurfaceInputTests,
   QMouseEvent orbit_press(QEvent::MouseButtonPress, local, global,
                           Qt::MiddleButton, Qt::MiddleButton,
                           Qt::NoModifier);
-  QApplication::sendEvent(surface, &orbit_press);
+  send_visible_viewport_event(surface, &orbit_press);
   process_input();
   EXPECT_EQ(surface->cursor().shape(), Qt::ArrowCursor);
 
   QMouseEvent orbit_release(QEvent::MouseButtonRelease, local, global,
                             Qt::MiddleButton, Qt::NoButton,
                             Qt::NoModifier);
-  QApplication::sendEvent(surface, &orbit_release);
+  send_visible_viewport_event(surface, &orbit_release);
   process_input();
   EXPECT_EQ(surface->cursor().shape(), Qt::CrossCursor);
 
@@ -994,11 +1117,11 @@ TEST(QtViewportSurfaceInputTests,
   panel.attach_workspace(session.viewport_workspace());
   auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
   ASSERT_NE(surface, nullptr);
-  surface->resize(800, 600);
+  resize_viewport_surface(panel, *surface, {800, 600});
   session.viewport_workspace().camera(quader::ViewportPaneId::Perspective)
       .focus_origin(8.0f);
   QFocusEvent focus(QEvent::FocusIn);
-  QApplication::sendEvent(surface, &focus);
+  send_visible_viewport_event(surface, &focus);
   const auto process_input = [&] {
     panel.process_input(
         editor, session.scene(), session.assets(), session.modeling(), {},
@@ -1010,7 +1133,7 @@ TEST(QtViewportSurfaceInputTests,
     QMouseEvent event(type, local,
                      QPointF(surface->mapToGlobal(local.toPoint())),
                      button, held, modifiers);
-    QApplication::sendEvent(surface, &event);
+    send_visible_viewport_event(surface, &event);
     process_input();
   };
   const auto expect_cursor = [&](quader::QtApplicationCursorVariant variant) {
@@ -1026,7 +1149,7 @@ TEST(QtViewportSurfaceInputTests,
   send_mouse(QEvent::MouseMove, {700, 500}, Qt::NoButton,
              Qt::LeftButton, Qt::ShiftModifier);
   QKeyEvent release_shift(QEvent::KeyRelease, Qt::Key_Shift, Qt::ShiftModifier);
-  QApplication::sendEvent(surface, &release_shift);
+  send_visible_viewport_event(surface, &release_shift);
   process_input();
   expect_cursor(quader::QtApplicationCursorVariant::SelectionAdd);
 
@@ -1172,15 +1295,15 @@ TEST(QtViewportSurfaceInputTests,
     panel.attach_workspace(session.viewport_workspace());
     auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
     ASSERT_NE(surface, nullptr);
-    surface->resize(800, 600);
+    resize_viewport_surface(panel, *surface, {800, 600});
     session.viewport_workspace().camera(quader::ViewportPaneId::Perspective)
         .focus_origin(12.0f);
     const QPointF local{400.0, 300.0};
     const QPointF global{500.0, 400.0};
     QEnterEvent enter(local, local, global);
     QFocusEvent focus(QEvent::FocusIn);
-    QApplication::sendEvent(surface, &enter);
-    QApplication::sendEvent(surface, &focus);
+    send_visible_viewport_event(surface, &enter);
+    send_visible_viewport_event(surface, &focus);
     const auto process_input = [&] {
       panel.process_input(
           editor, session.scene(), session.assets(), session.modeling(), {},
@@ -1189,18 +1312,18 @@ TEST(QtViewportSurfaceInputTests,
     const auto press_extrude = [&] {
       QKeyEvent press(QEvent::KeyPress, Qt::Key_E, Qt::NoModifier);
       QKeyEvent release(QEvent::KeyRelease, Qt::Key_E, Qt::NoModifier);
-      QApplication::sendEvent(surface, &press);
+      send_visible_viewport_event(surface, &press);
       if (!coalesced) {
         process_input();
       }
-      QApplication::sendEvent(surface, &release);
+      send_visible_viewport_event(surface, &release);
       process_input();
     };
     const auto press_key = [&](int key) {
       QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier);
       QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier);
-      QApplication::sendEvent(surface, &press);
-      QApplication::sendEvent(surface, &release);
+      send_visible_viewport_event(surface, &press);
+      send_visible_viewport_event(surface, &release);
       process_input();
     };
     const auto click = [&](QPointF position,
@@ -1210,9 +1333,9 @@ TEST(QtViewportSurfaceInputTests,
                         Qt::LeftButton, Qt::LeftButton, modifiers);
       QMouseEvent release(QEvent::MouseButtonRelease, position, screen,
                           Qt::LeftButton, Qt::NoButton, modifiers);
-      QApplication::sendEvent(surface, &press);
+      send_visible_viewport_event(surface, &press);
       if (!coalesced) process_input();
-      QApplication::sendEvent(surface, &release);
+      send_visible_viewport_event(surface, &release);
       process_input();
     };
     process_input();
@@ -1230,11 +1353,11 @@ TEST(QtViewportSurfaceInputTests,
                              Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
     QMouseEvent select_release(QEvent::MouseButtonRelease, local, global,
                                Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
-    QApplication::sendEvent(surface, &select_press);
+    send_visible_viewport_event(surface, &select_press);
     if (!coalesced) {
       process_input();
     }
-    QApplication::sendEvent(surface, &select_release);
+    send_visible_viewport_event(surface, &select_release);
     process_input();
     ASSERT_EQ(editor.selection().summary().selected_face_count, 1u);
     ASSERT_EQ(editor.selection().summary().active_object_id,
@@ -1586,13 +1709,13 @@ TEST(QtViewportSurfaceInputTests,
   panel.attach_workspace(session.viewport_workspace());
   auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
   ASSERT_NE(surface, nullptr);
-  surface->resize(800, 600);
+  resize_viewport_surface(panel, *surface, {800, 600});
   const QPointF local{400.0, 300.0};
   const QPointF global{500.0, 400.0};
   QEnterEvent enter(local, local, global);
-  QApplication::sendEvent(surface, &enter);
+  send_visible_viewport_event(surface, &enter);
   QFocusEvent focus(QEvent::FocusIn);
-  QApplication::sendEvent(surface, &focus);
+  send_visible_viewport_event(surface, &focus);
   const auto process_input = [&] {
     panel.process_input(
         editor, session.scene(), session.assets(), session.modeling(), {},
@@ -1601,7 +1724,7 @@ TEST(QtViewportSurfaceInputTests,
   const auto key = [&](QEvent::Type type, int code,
                        Qt::KeyboardModifiers previous_modifiers) {
     QKeyEvent event(type, code, previous_modifiers);
-    QApplication::sendEvent(surface, &event);
+    send_visible_viewport_event(surface, &event);
     process_input();
   };
   const auto expect_selection_cursor =
@@ -1657,7 +1780,7 @@ TEST(QtViewportSurfaceInputTests,
   QMouseEvent press(QEvent::MouseButtonPress, local, global,
                     Qt::LeftButton, Qt::LeftButton,
                     Qt::ControlModifier | Qt::AltModifier);
-  QApplication::sendEvent(surface, &press);
+  send_visible_viewport_event(surface, &press);
   process_input();
   process_input();
   EXPECT_EQ(surface->cursor().shape(), Qt::ArrowCursor);
@@ -1668,7 +1791,7 @@ TEST(QtViewportSurfaceInputTests,
   EXPECT_EQ(surface->cursor().shape(), Qt::ArrowCursor);
   QMouseEvent release(QEvent::MouseButtonRelease, local, global,
                       Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
-  QApplication::sendEvent(surface, &release);
+  send_visible_viewport_event(surface, &release);
   process_input();
   process_input();
   expect_selection_cursor(Variant::Default);
@@ -1682,6 +1805,7 @@ TEST(QtViewportSurfaceInputTests,
   char *argv[] = {application_name, nullptr};
   QApplication application(argc, argv);
   quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  surface.resize(800, 600);
   QFocusEvent focus(QEvent::FocusIn);
   QApplication::sendEvent(&surface, &focus);
 
@@ -1745,6 +1869,7 @@ TEST(QtViewportSurfaceInputTests,
   char *argv[] = {application_name, nullptr};
   QApplication application(argc, argv);
   quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  surface.resize(800, 600);
   const QPointF point{40, 50};
   QKeyEvent ctrl_down(QEvent::KeyPress, Qt::Key_Control, Qt::ControlModifier);
   QMouseEvent press(QEvent::MouseButtonPress, point, point,
@@ -1786,6 +1911,7 @@ TEST(QtViewportSurfaceInputTests,
   char *argv[] = {application_name, nullptr};
   QApplication application(argc, argv);
   quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  surface.resize(800, 600);
   const std::array<QPointF, 5> loop{{{40, 50}, {90, 50}, {90, 100},
                                    {40, 100}, {40, 50}}};
   const auto send = [&](QEvent::Type type, QPointF local) {
@@ -1844,6 +1970,7 @@ TEST(QtViewportSurfaceInputTests,
   char *argv[] = {application_name, nullptr};
   QApplication application(argc, argv);
   quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  surface.resize(800, 600);
   const QPointF origin{40, 50};
   QMouseEvent press(QEvent::MouseButtonPress, origin, origin,
                     Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
@@ -1887,6 +2014,7 @@ TEST(QtViewportSurfaceInputTests,
   char *argv[] = {application_name, nullptr};
   QApplication application(argc, argv);
   quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  surface.resize(800, 600);
   for (const auto button : {Qt::NoButton, Qt::MiddleButton, Qt::RightButton}) {
     if (button != Qt::NoButton) {
       auto press = mouse_event(QEvent::MouseButtonPress, button);
@@ -1958,11 +2086,11 @@ TEST(QtViewportSurfaceInputTests,
   panel.set_localization(localization);
   auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
   ASSERT_NE(surface, nullptr);
-  surface->resize(800, 600);
+  resize_viewport_surface(panel, *surface, {800, 600});
   QEnterEvent enter({400, 300}, {400, 300}, {500, 400});
-  QApplication::sendEvent(surface, &enter);
+  send_visible_viewport_event(surface, &enter);
   QFocusEvent focus(QEvent::FocusIn);
-  QApplication::sendEvent(surface, &focus);
+  send_visible_viewport_event(surface, &focus);
   const auto process_input = [&]() {
     panel.process_input(
         editor, session.scene(), session.assets(), session.modeling(), {},
@@ -1991,12 +2119,12 @@ TEST(QtViewportSurfaceInputTests,
                       type == QEvent::MouseButtonRelease ? Qt::NoButton
                                                         : Qt::LeftButton,
                       modifiers);
-    QApplication::sendEvent(surface, &event);
+    send_visible_viewport_event(surface, &event);
   };
   const auto send_ctrl = [&](bool down) {
     QKeyEvent event(down ? QEvent::KeyPress : QEvent::KeyRelease,
                     Qt::Key_Control, down ? Qt::ControlModifier : Qt::NoModifier);
-    QApplication::sendEvent(surface, &event);
+    send_visible_viewport_event(surface, &event);
   };
   constexpr auto kFlip = quader::quader_command::kToolsFlipPrimitiveFaces;
   // Keep the button above its decrement limit so an unreserved command click
@@ -2050,8 +2178,8 @@ TEST(QtViewportSurfaceInputTests,
             before_sequence->flip_faces);
   QKeyEvent sequence_finish(QEvent::KeyPress, Qt::Key_F, Qt::NoModifier);
   QKeyEvent sequence_release(QEvent::KeyRelease, Qt::Key_F, Qt::NoModifier);
-  QApplication::sendEvent(surface, &sequence_finish);
-  QApplication::sendEvent(surface, &sequence_release);
+  send_visible_viewport_event(surface, &sequence_finish);
+  send_visible_viewport_event(surface, &sequence_release);
   process_input();
   EXPECT_NE(editor.tools().live_primitive_cube()->flip_faces,
             before_sequence->flip_faces);
@@ -2064,8 +2192,8 @@ TEST(QtViewportSurfaceInputTests,
   ASSERT_TRUE(before_click);
   QKeyEvent flip_press(QEvent::KeyPress, Qt::Key_F, Qt::ShiftModifier);
   QKeyEvent flip_release(QEvent::KeyRelease, Qt::Key_F, Qt::ShiftModifier);
-  QApplication::sendEvent(surface, &flip_press);
-  QApplication::sendEvent(surface, &flip_release);
+  send_visible_viewport_event(surface, &flip_press);
+  send_visible_viewport_event(surface, &flip_release);
   send_ctrl(true);
   send_mouse(QEvent::MouseButtonPress, plus, Qt::ControlModifier);
   send_ctrl(false);
@@ -2136,7 +2264,7 @@ TEST(QtViewportSurfaceInputTests,
     QMouseEvent hover_height(QEvent::MouseMove, height_control,
                              height_control + QPointF{100, 100},
                              Qt::NoButton, Qt::NoButton, Qt::NoModifier);
-    QApplication::sendEvent(surface, &hover_height);
+    send_visible_viewport_event(surface, &hover_height);
     process_input();
     ASSERT_FALSE(dimension_label->isHidden());
     EXPECT_EQ(dimension_label->text(), QStringLiteral("Height: 32"));
@@ -2144,7 +2272,7 @@ TEST(QtViewportSurfaceInputTests,
   const QPointF width_button = control_point(6);
   QMouseEvent hover_width(QEvent::MouseMove, width_button, width_button + QPointF{100, 100},
                           Qt::NoButton, Qt::NoButton, Qt::NoModifier);
-  QApplication::sendEvent(surface, &hover_width);
+  send_visible_viewport_event(surface, &hover_width);
   process_input();
   ASSERT_FALSE(dimension_label->isHidden());
   EXPECT_EQ(dimension_label->text(), QStringLiteral("Width: 68.25"));
@@ -2158,7 +2286,7 @@ TEST(QtViewportSurfaceInputTests,
   const QPointF dot = control_point(0);
   QMouseEvent hover_handle(QEvent::MouseMove, dot, dot + QPointF{100, 100},
                            Qt::NoButton, Qt::NoButton, Qt::NoModifier);
-  QApplication::sendEvent(surface, &hover_handle);
+  send_visible_viewport_event(surface, &hover_handle);
   process_input();
   EXPECT_EQ(surface->cursor().shape(), Qt::OpenHandCursor);
   EXPECT_EQ(dimension_label->text(), QStringLiteral("Width: 68.25"));
@@ -2170,8 +2298,8 @@ TEST(QtViewportSurfaceInputTests,
   QKeyEvent drag_flip_press(QEvent::KeyPress, Qt::Key_F, Qt::ShiftModifier);
   QKeyEvent drag_flip_release(QEvent::KeyRelease, Qt::Key_F,
                               Qt::ShiftModifier);
-  QApplication::sendEvent(surface, &drag_flip_press);
-  QApplication::sendEvent(surface, &drag_flip_release);
+  send_visible_viewport_event(surface, &drag_flip_press);
+  send_visible_viewport_event(surface, &drag_flip_release);
   process_input();
   EXPECT_TRUE(editor.tools().live_primitive_cube()->resizing);
   EXPECT_NE(editor.tools().live_primitive_cube()->flip_faces, before_resize->flip_faces);
@@ -2219,11 +2347,11 @@ TEST(QtViewportSurfaceInputTests, CylinderCapsFlipRadiusAndCtrlSegmentsShareNati
   panel.attach_workspace(session.viewport_workspace());
   auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
   ASSERT_NE(surface, nullptr);
-  surface->resize(800, 600);
+  resize_viewport_surface(panel, *surface, {800, 600});
   QEnterEvent enter({400, 300}, {400, 300}, {500, 400});
-  QApplication::sendEvent(surface, &enter);
+  send_visible_viewport_event(surface, &enter);
   QFocusEvent focus(QEvent::FocusIn);
-  QApplication::sendEvent(surface, &focus);
+  send_visible_viewport_event(surface, &focus);
   auto &camera = session.viewport_workspace().camera(quader::ViewportPaneId::Perspective);
   camera.focus_origin(10);
   const auto process = [&] {
@@ -2235,14 +2363,14 @@ TEST(QtViewportSurfaceInputTests, CylinderCapsFlipRadiusAndCtrlSegmentsShareNati
     QMouseEvent event(type, local, QPointF(surface->mapToGlobal(local.toPoint())),
                      type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
                      type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton, modifiers);
-    QApplication::sendEvent(surface, &event);
+    send_visible_viewport_event(surface, &event);
   };
   const auto key = [&](int code,
                        Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
     QKeyEvent press(QEvent::KeyPress, code, modifiers);
     QKeyEvent release(QEvent::KeyRelease, code, modifiers);
-    QApplication::sendEvent(surface, &press);
-    QApplication::sendEvent(surface, &release);
+    send_visible_viewport_event(surface, &press);
+    send_visible_viewport_event(surface, &release);
   };
   process();
   quader::PrimitiveCreationInteraction projection;
@@ -2339,14 +2467,14 @@ TEST(QtViewportSurfaceInputTests,
     panel.apply_ui_scale(quader::QtUiScaleMetrics{1.5f, 1u});
     auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
     ASSERT_NE(surface, nullptr);
-    surface->resize(800, 600);
+    resize_viewport_surface(panel, *surface, {800, 600});
     auto *label = panel.findChild<QLabel *>(QStringLiteral("viewportPrimitiveFeedback_perspective"));
     ASSERT_NE(label, nullptr);
     ASSERT_TRUE(label->isHidden());
     QEnterEvent enter({400, 300}, {400, 300}, {500, 400});
     QFocusEvent focus(QEvent::FocusIn);
-    QApplication::sendEvent(surface, &enter);
-    QApplication::sendEvent(surface, &focus);
+    send_visible_viewport_event(surface, &enter);
+    send_visible_viewport_event(surface, &focus);
     auto &camera = session.viewport_workspace().camera(quader::ViewportPaneId::Perspective);
     ASSERT_TRUE(camera.restore_perspective_pose(
         {.eye = {8, 7, 11}, .target = {}, .up = {0, 1, 0}}));
@@ -2362,7 +2490,7 @@ TEST(QtViewportSurfaceInputTests,
                        type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
                        type == QEvent::MouseButtonPress ? Qt::LeftButton : Qt::NoButton,
                        modifiers);
-      QApplication::sendEvent(surface, &event);
+      send_visible_viewport_event(surface, &event);
     };
     quader::PrimitiveCreationInteraction projection;
     const auto project = [&]() -> const quader::PrimitiveCreationControlsFrame & {
@@ -2449,20 +2577,20 @@ TEST(QtViewportSurfaceInputTests,
     process();
     ASSERT_FALSE(label->isHidden());
     QEvent leave(QEvent::Leave);
-    QApplication::sendEvent(surface, &leave);
+    send_visible_viewport_event(surface, &leave);
     EXPECT_TRUE(label->isHidden());
     process();
     EXPECT_TRUE(label->isHidden());
-    QApplication::sendEvent(surface, &enter);
+    send_visible_viewport_event(surface, &enter);
     mouse(QEvent::MouseMove, project().controls[6].screen_position);
     process();
     ASSERT_FALSE(label->isHidden());
     QFocusEvent blur(QEvent::FocusOut);
-    QApplication::sendEvent(surface, &blur);
+    send_visible_viewport_event(surface, &blur);
     EXPECT_TRUE(label->isHidden());
     process();
     EXPECT_FALSE(label->isHidden());
-    QApplication::sendEvent(surface, &focus);
+    send_visible_viewport_event(surface, &focus);
     mouse(QEvent::MouseMove, project().controls[6].screen_position);
     process();
     ASSERT_FALSE(label->isHidden());
@@ -2622,17 +2750,17 @@ TEST(QtViewportSurfaceInputTests,
           kPaneId, quader::ViewportToolId::InsertEdgeLoop).ok());
       QEvent leave(QEvent::Leave);
       QFocusEvent blur(QEvent::FocusOut);
-      QApplication::sendEvent(context.surface, &leave);
-      QApplication::sendEvent(context.surface, &blur);
+      send_visible_viewport_event(context.surface, &leave);
+      send_visible_viewport_event(context.surface, &blur);
       context.surface = context.panel.surface(kPaneId);
       ASSERT_NE(context.surface, nullptr);
-      context.surface->resize(800, 600);
+      resize_viewport_surface(context.panel, *context.surface, {800, 600});
       ASSERT_TRUE(editor.viewports().focus_pane(kPaneId).ok());
       ASSERT_FALSE(editor.tools().pane_owns_executing_tool(kPaneId));
       QEnterEvent enter({400, 300}, {400, 300}, {500, 400});
       QFocusEvent focus(QEvent::FocusIn);
-      QApplication::sendEvent(context.surface, &enter);
-      QApplication::sendEvent(context.surface, &focus);
+      send_visible_viewport_event(context.surface, &enter);
+      send_visible_viewport_event(context.surface, &focus);
       context.process();
       if (editor_focus) {
         QWidget panel;
@@ -2729,25 +2857,25 @@ TEST(QtViewportSurfaceInputTests,
       if (mapping == 2) {
         QKeyEvent prefix(QEvent::KeyPress, Qt::Key_K, Qt::ControlModifier);
         QKeyEvent prefix_release(QEvent::KeyRelease, Qt::Key_K, Qt::NoModifier);
-        QApplication::sendEvent(context.surface, &prefix);
-        QApplication::sendEvent(context.surface, &prefix_release);
+        send_visible_viewport_event(context.surface, &prefix);
+        send_visible_viewport_event(context.surface, &prefix_release);
         if (!coalesced) process_without_popup();
       }
       QKeyEvent press(QEvent::KeyPress, key, modifiers);
-      QApplication::sendEvent(context.surface, &press);
+      send_visible_viewport_event(context.surface, &press);
       if (!coalesced) {
         process_without_popup();
         EXPECT_EQ(context.editor.tools().active_tool(), "move");
         QKeyEvent repeat(QEvent::KeyPress, key, modifiers, {}, true);
         QKeyEvent repeated_release(QEvent::KeyRelease, key, modifiers, {}, true);
-        QApplication::sendEvent(context.surface, &repeat);
-        QApplication::sendEvent(context.surface, &repeated_release);
+        send_visible_viewport_event(context.surface, &repeat);
+        send_visible_viewport_event(context.surface, &repeated_release);
         process_without_popup();
         EXPECT_EQ(context.editor.tools().active_tool(), "move");
       }
       // Releasing a modifier first does not change the accepted launcher's key.
       QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier);
-      QApplication::sendEvent(context.surface, &release);
+      send_visible_viewport_event(context.surface, &release);
       process_without_popup();
       EXPECT_EQ(context.editor.tools().active_tool(), "select");
       for (const auto pane_id : {quader::ViewportPaneId::Perspective,
@@ -2831,7 +2959,7 @@ TEST(QtViewportSurfaceInputTests,
     if (QWidget *popup = QApplication::activePopupWidget()) popup->close();
   });
   QKeyEvent press(QEvent::KeyPress, Qt::Key_Q, Qt::NoModifier);
-  QApplication::sendEvent(context.surface, &press);
+  send_visible_viewport_event(context.surface, &press);
   watchdog.start(1000);
   context.process();
   watchdog.stop();
@@ -2868,7 +2996,7 @@ TEST(QtViewportSurfaceInputTests,
   EXPECT_EQ(QApplication::activePopupWidget(), nullptr);
   EXPECT_EQ(context.editor.tools().active_tool(), "move");
   QKeyEvent trailing_release(QEvent::KeyRelease, Qt::Key_Q, Qt::NoModifier);
-  QApplication::sendEvent(context.surface, &trailing_release);
+  send_visible_viewport_event(context.surface, &trailing_release);
   context.process();
   EXPECT_EQ(context.editor.tools().active_tool(), "move");
   EXPECT_EQ(QApplication::activePopupWidget(), nullptr);
@@ -2889,14 +3017,14 @@ TEST(QtViewportSurfaceInputTests,
     ASSERT_TRUE(context.editor.tools().activate(quader::ViewportToolId::Scale).ok());
     context.process();
     QKeyEvent press(QEvent::KeyPress, Qt::Key_Q, Qt::NoModifier);
-    QApplication::sendEvent(context.surface, &press);
+    send_visible_viewport_event(context.surface, &press);
     context.process();
     if (interruption == 0) {
       QFocusEvent lost_focus(QEvent::FocusOut);
-      QApplication::sendEvent(context.surface, &lost_focus);
+      send_visible_viewport_event(context.surface, &lost_focus);
       context.process();
       QFocusEvent focus(QEvent::FocusIn);
-      QApplication::sendEvent(context.surface, &focus);
+      send_visible_viewport_event(context.surface, &focus);
     } else if (interruption == 1) {
       context.panel.abandon_interactions();
       context.panel.attach_workspace(context.session.viewport_workspace());
@@ -2909,7 +3037,7 @@ TEST(QtViewportSurfaceInputTests,
       context.process();
     }
     QKeyEvent release(QEvent::KeyRelease, Qt::Key_Q, Qt::NoModifier);
-    QApplication::sendEvent(context.surface, &release);
+    send_visible_viewport_event(context.surface, &release);
     context.process();
     EXPECT_EQ(context.editor.tools().active_tool(),
               interruption == 2 ? "move" : "scale");
@@ -2981,13 +3109,13 @@ TEST(QtViewportSurfaceInputTests,
   panel.attach_workspace(session.viewport_workspace());
   auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
   ASSERT_NE(surface, nullptr);
-  surface->resize(800, 600);
+  resize_viewport_surface(panel, *surface, {800, 600});
   auto &camera = session.viewport_workspace().camera(quader::ViewportPaneId::Perspective);
   camera.focus_origin(5);
   QEnterEvent enter({400, 300}, {400, 300}, {500, 400});
   QFocusEvent focus(QEvent::FocusIn);
-  QApplication::sendEvent(surface, &enter);
-  QApplication::sendEvent(surface, &focus);
+  send_visible_viewport_event(surface, &enter);
+  send_visible_viewport_event(surface, &focus);
   const auto process = [&] {
     panel.process_input(editor, session.scene(), session.assets(), session.modeling(), {},
                         session.native_tools(), &session.point_placement(), 1.0 / 60.0);
@@ -3003,7 +3131,7 @@ TEST(QtViewportSurfaceInputTests,
                      type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
                      type == QEvent::MouseButtonPress ? Qt::LeftButton : Qt::NoButton,
                      Qt::NoModifier);
-    QApplication::sendEvent(surface, &event);
+    send_visible_viewport_event(surface, &event);
   };
   const auto expect_active = [&] {
     EXPECT_EQ(panel.tool_state().active_tool, quader::ViewportToolId::InsertEdgeLoop);
@@ -3043,7 +3171,7 @@ TEST(QtViewportSurfaceInputTests,
   };
   hover();
   QFocusEvent blur(QEvent::FocusOut);
-  QApplication::sendEvent(surface, &blur);
+  send_visible_viewport_event(surface, &blur);
   process();
   expect_active();
   EXPECT_FALSE(session.modeling().tool_status().insert_edge_loop_dragging);
@@ -3051,10 +3179,10 @@ TEST(QtViewportSurfaceInputTests,
   EXPECT_TRUE(quader_poly::has_same_geometry(document(), inserted));
   expect_history_unchanged(editor.history().snapshot(),
                            history_before_interruptions);
-  QApplication::sendEvent(surface, &focus);
+  send_visible_viewport_event(surface, &focus);
   hover();
   QEvent leave(QEvent::Leave);
-  QApplication::sendEvent(surface, &leave);
+  send_visible_viewport_event(surface, &leave);
   QWidget outside;
   QMouseEvent outside_press(QEvent::MouseButtonPress, {10, 10}, {-100, -100},
                            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
@@ -3071,13 +3199,13 @@ TEST(QtViewportSurfaceInputTests,
   expect_history_unchanged(editor.history().snapshot(),
                            history_before_interruptions);
 
-  QApplication::sendEvent(surface, &enter);
-  QApplication::sendEvent(surface, &focus);
+  send_visible_viewport_event(surface, &enter);
+  send_visible_viewport_event(surface, &focus);
   for (const int delta : {120, -120}) {
     const auto before_size = camera.state().orthographic_size;
     QWheelEvent wheel({400, 300}, {500, 400}, {}, {0, delta}, Qt::NoButton,
                       Qt::NoModifier, Qt::NoScrollPhase, false);
-    QApplication::sendEvent(surface, &wheel);
+    send_visible_viewport_event(surface, &wheel);
     process();
     if (delta > 0) EXPECT_LT(camera.state().orthographic_size, before_size);
     else EXPECT_GT(camera.state().orthographic_size, before_size);
@@ -3091,8 +3219,8 @@ TEST(QtViewportSurfaceInputTests,
   hover();
   QKeyEvent escape_press(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
   QKeyEvent escape_release(QEvent::KeyRelease, Qt::Key_Escape, Qt::NoModifier);
-  QApplication::sendEvent(surface, &escape_press);
-  QApplication::sendEvent(surface, &escape_release);
+  send_visible_viewport_event(surface, &escape_press);
+  send_visible_viewport_event(surface, &escape_release);
   process();
   EXPECT_EQ(panel.tool_state().active_tool, quader::ViewportToolId::Select);
   EXPECT_EQ(session.modeling().tool_status().active_tool,
@@ -3179,7 +3307,7 @@ TEST(QtViewportSurfaceInputTests,
         ASSERT_TRUE(context.editor.selection().clear().ok());
         ASSERT_TRUE(context.editor.selection().clear_hover().ok());
         context.panel.apply_ui_scale(quader::QtUiScaleMetrics{ui_scale, 1u});
-        context.surface->resize(800, 600);
+        resize_viewport_surface(context.panel, *context.surface, {800, 600});
         ASSERT_TRUE(context.camera.restore_perspective_pose(
             {.eye = {0, 0, distance}, .target = {}, .up = {0, 1, 0}}));
         context.process();
@@ -3287,8 +3415,8 @@ TEST(QtViewportSurfaceInputTests,
       const QPointF center{surface->width() * 0.5, surface->height() * 0.5};
       QEnterEvent enter(center, center, QPointF(surface->mapToGlobal(center.toPoint())));
       QFocusEvent focus(QEvent::FocusIn);
-      QApplication::sendEvent(surface, &enter);
-      QApplication::sendEvent(surface, &focus);
+      send_visible_viewport_event(surface, &enter);
+      send_visible_viewport_event(surface, &focus);
       const auto process = [&] {
         panel.process_input(editor, session.scene(), session.assets(), session.modeling(), {},
                             session.native_tools(), &session.point_placement(), 1.0 / 60.0);
@@ -3317,7 +3445,7 @@ TEST(QtViewportSurfaceInputTests,
         QMouseEvent event(type, local, QPointF(surface->mapToGlobal(local.toPoint())),
                          type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
                          held, modifiers);
-        QApplication::sendEvent(surface, &event);
+        send_visible_viewport_event(surface, &event);
       };
       float expected_z = 0.37f;
       const auto expect_preview = [&] {
@@ -3347,7 +3475,7 @@ TEST(QtViewportSurfaceInputTests,
         expected_z = held ? 0.5f : 0.37f;
         QKeyEvent event(held ? QEvent::KeyPress : QEvent::KeyRelease,
                         Qt::Key_Control, held ? Qt::ControlModifier : Qt::NoModifier);
-        QApplication::sendEvent(surface, &event);
+        send_visible_viewport_event(surface, &event);
         process();
         expect_preview();
         EXPECT_EQ(panel.operation_input_context().control, held);
@@ -3435,7 +3563,7 @@ TEST(QtViewportSurfaceInputTests,
     ASSERT_TRUE(editor.tools().set_setting("radial_array", "radial_array.copies", 3.0).ok());
     auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
     ASSERT_NE(surface, nullptr);
-    surface->resize(800, 600);
+    resize_viewport_surface(panel, *surface, {800, 600});
     auto &camera = session.viewport_workspace().camera(quader::ViewportPaneId::Perspective);
     camera.focus_origin(16);
     const auto render_size = surface->render_size_pixels();
@@ -3455,11 +3583,11 @@ TEST(QtViewportSurfaceInputTests,
                             Qt::MouseButtons held) {
       QMouseEvent event(type, local, QPointF(surface->mapToGlobal(local.toPoint())),
                        button, held, Qt::NoModifier);
-      QApplication::sendEvent(surface, &event);
+      send_visible_viewport_event(surface, &event);
     };
     const auto origin = local_at({});
     QEnterEvent enter(origin, origin, QPointF(surface->mapToGlobal(origin.toPoint())));
-    QApplication::sendEvent(surface, &enter);
+    send_visible_viewport_event(surface, &enter);
     mouse(QEvent::MouseMove, origin, Qt::NoButton, Qt::NoButton);
     frame();
     auto &tool = session.radial_array();
@@ -3478,7 +3606,7 @@ TEST(QtViewportSurfaceInputTests,
 
     // Settings and temporarily ineligible pointer frames retain the last preview.
     QEvent leave(QEvent::Leave);
-    QApplication::sendEvent(surface, &leave);
+    send_visible_viewport_event(surface, &leave);
     activate.setFocus();
     ASSERT_TRUE(editor.tools().set_setting("radial_array", "radial_array.copies", 4.0).ok());
     frame();
@@ -3486,9 +3614,9 @@ TEST(QtViewportSurfaceInputTests,
     EXPECT_EQ(tool.preview_state().sources.front().generated_world_transforms.size(), 3u);
     EXPECT_FLOAT_EQ(quader::length_squared(tool.center_state().world_position -
                                           candidate.world_position), 0.0f);
-    QApplication::sendEvent(surface, &enter);
+    send_visible_viewport_event(surface, &enter);
     QFocusEvent focus(QEvent::FocusIn);
-    QApplication::sendEvent(surface, &focus);
+    send_visible_viewport_event(surface, &focus);
     frame();
     for (const int delta : {120, -120}) {
       const auto copies_before = tool.copies();
@@ -3496,7 +3624,7 @@ TEST(QtViewportSurfaceInputTests,
       QWheelEvent wheel(origin, QPointF(surface->mapToGlobal(origin.toPoint())),
                         {}, {0, delta}, Qt::NoButton, Qt::ShiftModifier,
                         Qt::NoScrollPhase, false);
-      QApplication::sendEvent(surface, &wheel);
+      send_visible_viewport_event(surface, &wheel);
       frame();
       EXPECT_EQ(tool.copies(), delta > 0 ? copies_before + 1u : copies_before - 1u);
       EXPECT_FLOAT_EQ(camera.state().orthographic_size, zoom_before);
@@ -3509,7 +3637,7 @@ TEST(QtViewportSurfaceInputTests,
       QWheelEvent wheel(origin, QPointF(surface->mapToGlobal(origin.toPoint())),
                         {}, {0, delta}, Qt::NoButton, Qt::ControlModifier,
                         Qt::NoScrollPhase, false);
-      QApplication::sendEvent(surface, &wheel);
+      send_visible_viewport_event(surface, &wheel);
       frame();
       EXPECT_EQ(tool.repeats(), delta > 0 ? repeats_before + 1u : repeats_before - 1u);
       EXPECT_EQ(tool.copies(), copies_before);
@@ -3522,7 +3650,7 @@ TEST(QtViewportSurfaceInputTests,
     QWheelEvent plain_wheel(origin, QPointF(surface->mapToGlobal(origin.toPoint())),
                             {}, {0, 120}, Qt::NoButton, Qt::NoModifier,
                             Qt::NoScrollPhase, false);
-    QApplication::sendEvent(surface, &plain_wheel);
+    send_visible_viewport_event(surface, &plain_wheel);
     frame();
     EXPECT_LT(camera.state().orthographic_size, zoom_before_plain_wheel);
     EXPECT_EQ(tool.copies(), 4u);
@@ -3532,8 +3660,8 @@ TEST(QtViewportSurfaceInputTests,
     for (const bool expected_instances : {true, false}) {
       QKeyEvent press(QEvent::KeyPress, Qt::Key_I, Qt::NoModifier);
       QKeyEvent release(QEvent::KeyRelease, Qt::Key_I, Qt::NoModifier);
-      QApplication::sendEvent(surface, &press);
-      QApplication::sendEvent(surface, &release);
+      send_visible_viewport_event(surface, &press);
+      send_visible_viewport_event(surface, &release);
       frame();
       EXPECT_EQ(tool.create_instances(), expected_instances);
       EXPECT_TRUE(tool.preview_state().active);
@@ -3636,6 +3764,7 @@ TEST(QtViewportSurfaceInputTests,
   application.setQuitOnLastWindowClosed(false);
 
   quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  surface.resize(800, 600);
   const QPointF press_local{24.0, 32.0};
   const QPointF press_global{124.0, 232.0};
   const Qt::KeyboardModifiers modifiers = Qt::AltModifier;
@@ -3912,6 +4041,7 @@ TEST(QtViewportSurfaceInputTests,
        }) {
     SCOPED_TRACE(modifiers == Qt::ControlModifier ? "Ctrl RMB" : "Shift RMB");
     quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+    surface.resize(800, 600);
     const QPointF press_local{24.0, 32.0};
     const QPointF press_global{124.0, 232.0};
     const auto has_right_gesture = [&](const quader::QtViewportInputFrame &frame,
@@ -4051,7 +4181,7 @@ TEST(QtViewportSurfaceInputTests,
     panel.set_localization(localization);
     auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
     ASSERT_NE(surface, nullptr);
-    surface->resize(800, 600);
+    resize_viewport_surface(panel, *surface, {800, 600});
     auto &camera = session.viewport_workspace().camera(
         quader::ViewportPaneId::Perspective);
     ASSERT_TRUE(camera.restore_perspective_pose(
@@ -4061,9 +4191,9 @@ TEST(QtViewportSurfaceInputTests,
     const QPointF local{400, 300};
     const QPointF global{500, 400};
     QEnterEvent enter(local, local, global);
-    QApplication::sendEvent(surface, &enter);
+    send_visible_viewport_event(surface, &enter);
     QFocusEvent focus(QEvent::FocusIn);
-    QApplication::sendEvent(surface, &focus);
+    send_visible_viewport_event(surface, &focus);
     const auto process_input = [&]() {
       panel.process_input(editor, session.scene(), session.assets(),
                           session.modeling(), {}, session.native_tools(),
@@ -4074,11 +4204,11 @@ TEST(QtViewportSurfaceInputTests,
                        type == QEvent::MouseButtonPress ? Qt::RightButton
                                                        : Qt::NoButton,
                        Qt::NoModifier);
-      QApplication::sendEvent(surface, &event);
+      send_visible_viewport_event(surface, &event);
     };
     const auto movement_key = [&](QEvent::Type type) {
       QKeyEvent event(type, Qt::Key_W, Qt::NoModifier);
-      QApplication::sendEvent(surface, &event);
+      send_visible_viewport_event(surface, &event);
     };
     // Observe the actual presenter and close its nested event loop if a menu
     // opens. A subsequent plain click proves that the presenter is enabled.
@@ -4138,8 +4268,8 @@ TEST(QtViewportSurfaceInputTests,
     expect_history_unchanged(editor.history().snapshot(), history_before);
     EXPECT_EQ(session.history().undo_count(), 0u);
 
-    QApplication::sendEvent(surface, &enter);
-    QApplication::sendEvent(surface, &focus);
+    send_visible_viewport_event(surface, &enter);
+    send_visible_viewport_event(surface, &focus);
     right_button(QEvent::MouseButtonPress);
     process_input();
     EXPECT_EQ(release_and_count_menus(), 1);
@@ -4177,7 +4307,7 @@ TEST(QtViewportSurfaceInputTests,
     panel.attach_workspace(session.viewport_workspace());
     auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
     ASSERT_NE(surface, nullptr);
-    surface->resize(800, 600);
+    resize_viewport_surface(panel, *surface, {800, 600});
     auto &camera = session.viewport_workspace().camera(
         quader::ViewportPaneId::Perspective);
     const quader::QVec3 target =
@@ -4194,11 +4324,11 @@ TEST(QtViewportSurfaceInputTests,
                            Qt::MouseButton button, Qt::MouseButtons held) {
       QMouseEvent event(type, local, local + QPointF{100, 100}, button, held,
                        Qt::NoModifier);
-      QApplication::sendEvent(surface, &event);
+      send_visible_viewport_event(surface, &event);
     };
     const auto movement_key = [&](QEvent::Type type) {
       QKeyEvent event(type, Qt::Key_W, Qt::NoModifier);
-      QApplication::sendEvent(surface, &event);
+      send_visible_viewport_event(surface, &event);
     };
     const auto process_input = [&]() {
       panel.process_input(editor, session.scene(), session.assets(),
@@ -4216,9 +4346,9 @@ TEST(QtViewportSurfaceInputTests,
     };
     QEnterEvent enter(original_local, original_local,
                       original_local + QPointF{100, 100});
-    QApplication::sendEvent(surface, &enter);
+    send_visible_viewport_event(surface, &enter);
     QFocusEvent focus(QEvent::FocusIn);
-    QApplication::sendEvent(surface, &focus);
+    send_visible_viewport_event(surface, &focus);
     mouse(QEvent::MouseMove, original_local, Qt::NoButton, Qt::NoButton);
     process_input();
     expect_empty_hover();
@@ -4316,13 +4446,13 @@ TEST(QtViewportSurfaceInputTests,
   panel.attach_workspace(session.viewport_workspace());
   auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
   ASSERT_NE(surface, nullptr);
-  surface->resize(800, 600);
+  resize_viewport_surface(panel, *surface, {800, 600});
   const QPointF local{400.0, 300.0};
   const QPointF global{500.0, 400.0};
   QEnterEvent enter(local, local, global);
-  QApplication::sendEvent(surface, &enter);
+  send_visible_viewport_event(surface, &enter);
   QFocusEvent focus(QEvent::FocusIn);
-  QApplication::sendEvent(surface, &focus);
+  send_visible_viewport_event(surface, &focus);
 
   const auto process_input = [&]() {
     panel.process_input(
@@ -4332,7 +4462,7 @@ TEST(QtViewportSurfaceInputTests,
   const auto send_mouse = [&](QEvent::Type type, Qt::MouseButtons buttons) {
     QMouseEvent event(type, local, global, Qt::LeftButton, buttons,
                        Qt::NoModifier);
-    QApplication::sendEvent(surface, &event);
+    send_visible_viewport_event(surface, &event);
     process_input();
   };
   process_input();
@@ -4429,11 +4559,11 @@ TEST(QtViewportSurfaceInputTests,
       panel.attach_workspace(session.viewport_workspace());
       auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
       ASSERT_NE(surface, nullptr);
-      surface->resize(800, 600);
+      resize_viewport_surface(panel, *surface, {800, 600});
       const QPointF local{400.0, 300.0};
       const QPointF global{500.0, 400.0};
       QEnterEvent enter(local, local, global);
-      QApplication::sendEvent(surface, &enter);
+      send_visible_viewport_event(surface, &enter);
       const auto process_input = [&]() {
         panel.process_input(
             editor, session.scene(), session.assets(), session.modeling(), {},
@@ -4442,7 +4572,7 @@ TEST(QtViewportSurfaceInputTests,
       const auto send_mouse = [&](QEvent::Type type, Qt::MouseButtons buttons) {
         QMouseEvent event(type, local, global, Qt::LeftButton, buttons,
                            Qt::NoModifier);
-        QApplication::sendEvent(surface, &event);
+        send_visible_viewport_event(surface, &event);
         if (!coalesced) {
           process_input();
         }
@@ -4540,13 +4670,13 @@ TEST(QtViewportSurfaceInputTests,
       panel.attach_workspace(session.viewport_workspace());
       auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
       ASSERT_NE(surface, nullptr);
-      surface->resize(800, 600);
+      resize_viewport_surface(panel, *surface, {800, 600});
       const QPointF local{400.0, 300.0};
       const QPointF global{500.0, 400.0};
       QEnterEvent enter(local, local, global);
-      QApplication::sendEvent(surface, &enter);
+      send_visible_viewport_event(surface, &enter);
       QFocusEvent focus(QEvent::FocusIn);
-      QApplication::sendEvent(surface, &focus);
+      send_visible_viewport_event(surface, &focus);
       const auto process_input = [&]() {
         panel.process_input(
             editor, session.scene(), session.assets(), session.modeling(), {},
@@ -4580,7 +4710,7 @@ TEST(QtViewportSurfaceInputTests,
           QMouseEvent event(kEventTypes[index], local, global, Qt::LeftButton,
                             release ? Qt::NoButton : Qt::LeftButton,
                             release ? Qt::NoModifier : modifiers);
-          QApplication::sendEvent(surface, &event);
+          send_visible_viewport_event(surface, &event);
           if (frame_schedules[schedule][index]) {
             process_input();
           }
@@ -4714,13 +4844,13 @@ TEST(QtViewportSurfaceInputTests,
   // than the idealized vertical delta used by adapter-only tests.
   QWheelEvent wheel_up(local, global, {}, QPoint{120, 0}, Qt::NoButton,
                        Qt::AltModifier, Qt::NoScrollPhase, false);
-  QApplication::sendEvent(surface, &wheel_up);
+  send_visible_viewport_event(surface, &wheel_up);
   process_input();
   EXPECT_EQ(session.viewport_workspace().grid_preset(), default_preset + 1);
 
   QWheelEvent wheel_down(local, global, {}, QPoint{-120, 0}, Qt::NoButton,
                          Qt::AltModifier, Qt::NoScrollPhase, false);
-  QApplication::sendEvent(surface, &wheel_down);
+  send_visible_viewport_event(surface, &wheel_down);
   process_input();
   EXPECT_EQ(session.viewport_workspace().grid_preset(), default_preset);
 
@@ -4733,13 +4863,13 @@ TEST(QtViewportSurfaceInputTests,
   QMouseEvent middle_press(QEvent::MouseButtonPress, local, global,
                            Qt::MiddleButton, Qt::MiddleButton,
                            Qt::AltModifier);
-  QApplication::sendEvent(surface, &middle_press);
+  send_visible_viewport_event(surface, &middle_press);
   process_input();
 
   QMouseEvent middle_release(QEvent::MouseButtonRelease, local, global,
                              Qt::MiddleButton, Qt::NoButton,
                              Qt::AltModifier);
-  QApplication::sendEvent(surface, &middle_release);
+  send_visible_viewport_event(surface, &middle_release);
   process_input();
   EXPECT_EQ(session.viewport_workspace().grid_preset(), 2);
   const quader::ViewportCameraPose camera_after_click =
@@ -4775,13 +4905,13 @@ TEST(QtViewportSurfaceInputTests,
   quader::QtViewportSurface *surface =
       panel.surface(quader::ViewportPaneId::Perspective);
   ASSERT_NE(surface, nullptr);
-  surface->resize(800, 600);
+  resize_viewport_surface(panel, *surface, {800, 600});
   const QPointF center{400.0, 300.0};
   const QPointF center_global{500.0, 400.0};
   QEnterEvent enter(center, center, center_global);
-  QApplication::sendEvent(surface, &enter);
+  send_visible_viewport_event(surface, &enter);
   QFocusEvent focus(QEvent::FocusIn);
-  QApplication::sendEvent(surface, &focus);
+  send_visible_viewport_event(surface, &focus);
 
   const auto process_input = [&]() {
     panel.process_input(
@@ -4804,7 +4934,7 @@ TEST(QtViewportSurfaceInputTests,
   // scene-root origin and the stale target 158 units away.
   QWheelEvent wheel_in(center, center_global, {}, QPoint{0, 120}, Qt::NoButton,
                        Qt::NoModifier, Qt::NoScrollPhase, false);
-  QApplication::sendEvent(surface, &wheel_in);
+  send_visible_viewport_event(surface, &wheel_in);
   process_input();
   EXPECT_NEAR(camera.state().distance, 4.0f / 1.18f, 0.01f);
 
@@ -4816,7 +4946,7 @@ TEST(QtViewportSurfaceInputTests,
   QMouseEvent middle_press(QEvent::MouseButtonPress, center, center_global,
                            Qt::MiddleButton, Qt::MiddleButton,
                            Qt::NoModifier);
-  QApplication::sendEvent(surface, &middle_press);
+  send_visible_viewport_event(surface, &middle_press);
   process_input();
   const quader::ViewportCameraPose before_orbit = camera.pose();
   EXPECT_NEAR(camera.state().distance, 158.0f, 0.01f);
@@ -4825,7 +4955,7 @@ TEST(QtViewportSurfaceInputTests,
   const QPointF moved_global{505.0, 400.0};
   QMouseEvent middle_move(QEvent::MouseMove, moved, moved_global, Qt::NoButton,
                           Qt::MiddleButton, Qt::NoModifier);
-  QApplication::sendEvent(surface, &middle_move);
+  send_visible_viewport_event(surface, &middle_move);
   process_input();
 
   EXPECT_TRUE(panel.command_input_context().navigation_active);
@@ -4837,17 +4967,17 @@ TEST(QtViewportSurfaceInputTests,
   QMouseEvent middle_move_again(QEvent::MouseMove, moved_again,
                                 moved_again_global, Qt::NoButton,
                                 Qt::MiddleButton, Qt::NoModifier);
-  QApplication::sendEvent(surface, &middle_move_again);
+  send_visible_viewport_event(surface, &middle_move_again);
   QMouseEvent middle_release(QEvent::MouseButtonRelease, moved_again,
                              moved_again_global, Qt::MiddleButton,
                              Qt::NoButton, Qt::NoModifier);
-  QApplication::sendEvent(surface, &middle_release);
+  send_visible_viewport_event(surface, &middle_release);
   const QPointF post_release{700.0, 300.0};
   const QPointF post_release_global{800.0, 400.0};
   QMouseEvent post_release_move(QEvent::MouseMove, post_release,
                                 post_release_global, Qt::NoButton,
                                 Qt::NoButton, Qt::NoModifier);
-  QApplication::sendEvent(surface, &post_release_move);
+  send_visible_viewport_event(surface, &post_release_move);
   process_input();
 
   const quader::ViewportCameraPose after_orbit = camera.pose();
@@ -4887,13 +5017,13 @@ TEST(QtViewportSurfaceInputTests,
   QMouseEvent pan_press(QEvent::MouseButtonPress, center, center_global,
                         Qt::MiddleButton, Qt::MiddleButton,
                         Qt::ShiftModifier);
-  QApplication::sendEvent(surface, &pan_press);
+  send_visible_viewport_event(surface, &pan_press);
   process_input();
   const QPointF panned{430.0, 310.0};
   const QPointF panned_global{530.0, 410.0};
   QMouseEvent pan_move(QEvent::MouseMove, panned, panned_global, Qt::NoButton,
                        Qt::MiddleButton, Qt::ShiftModifier);
-  QApplication::sendEvent(surface, &pan_move);
+  send_visible_viewport_event(surface, &pan_move);
   process_input();
   EXPECT_TRUE(panel.command_input_context().navigation_active);
   EXPECT_TRUE(panel.command_input_context().pan_navigation_active);
@@ -4901,7 +5031,7 @@ TEST(QtViewportSurfaceInputTests,
   QMouseEvent pan_release(QEvent::MouseButtonRelease, panned, panned_global,
                           Qt::MiddleButton, Qt::NoButton,
                           Qt::ShiftModifier);
-  QApplication::sendEvent(surface, &pan_release);
+  send_visible_viewport_event(surface, &pan_release);
   process_input();
   const quader::ViewportCameraPose after_pan = camera.pose();
   EXPECT_FALSE(panel.command_input_context().navigation_active);
@@ -4912,14 +5042,14 @@ TEST(QtViewportSurfaceInputTests,
   QWheelEvent wheel_out(panned, panned_global, {}, QPoint{0, -120},
                         Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase,
                         false);
-  QApplication::sendEvent(surface, &wheel_out);
+  send_visible_viewport_event(surface, &wheel_out);
   process_input();
   EXPECT_NEAR(camera.state().distance, distance_before_wheel * 1.18f,
               0.001f);
   QWheelEvent wheel_back_in(panned, panned_global, {}, QPoint{0, 120},
                             Qt::NoButton, Qt::NoModifier,
                             Qt::NoScrollPhase, false);
-  QApplication::sendEvent(surface, &wheel_back_in);
+  send_visible_viewport_event(surface, &wheel_back_in);
   process_input();
   EXPECT_NEAR(camera.state().distance, distance_before_wheel, 0.001f);
   EXPECT_NEAR(quader::length(camera.state().target - target_before_wheel),
@@ -4936,7 +5066,7 @@ TEST(QtViewportSurfaceInputTests,
   QMouseEvent fresh_orbit_press(
       QEvent::MouseButtonPress, orbit_press_local, orbit_press_global,
       Qt::MiddleButton, Qt::MiddleButton, Qt::NoModifier);
-  QApplication::sendEvent(surface, &fresh_orbit_press);
+  send_visible_viewport_event(surface, &fresh_orbit_press);
   process_input();
   const quader::ViewportCameraPose pan_zoom_pose = camera.pose();
   const QPointF fresh_orbit_moved{orbit_press_local.x() + 5.0,
@@ -4946,13 +5076,13 @@ TEST(QtViewportSurfaceInputTests,
   QMouseEvent fresh_orbit_move(
       QEvent::MouseMove, fresh_orbit_moved, fresh_orbit_moved_global,
       Qt::NoButton, Qt::MiddleButton, Qt::NoModifier);
-  QApplication::sendEvent(surface, &fresh_orbit_move);
+  send_visible_viewport_event(surface, &fresh_orbit_move);
   process_input();
   QMouseEvent fresh_orbit_release(
       QEvent::MouseButtonRelease, fresh_orbit_moved,
       fresh_orbit_moved_global, Qt::MiddleButton, Qt::NoButton,
       Qt::NoModifier);
-  QApplication::sendEvent(surface, &fresh_orbit_release);
+  send_visible_viewport_event(surface, &fresh_orbit_release);
   process_input();
   const quader::ViewportCameraPose pan_zoom_orbit_pose = camera.pose();
   const float fresh_orbit_angle = std::acos(std::clamp(
@@ -5000,11 +5130,11 @@ TEST(QtViewportSurfaceInputTests,
   QMouseEvent fallback_press(QEvent::MouseButtonPress, center, center_global,
                              Qt::MiddleButton, Qt::MiddleButton,
                              Qt::NoModifier);
-  QApplication::sendEvent(surface, &fallback_press);
+  send_visible_viewport_event(surface, &fallback_press);
   process_input();
   QMouseEvent fallback_move(QEvent::MouseMove, moved, moved_global,
                             Qt::NoButton, Qt::MiddleButton, Qt::NoModifier);
-  QApplication::sendEvent(surface, &fallback_move);
+  send_visible_viewport_event(surface, &fallback_move);
   process_input();
 
   EXPECT_NEAR(camera.state().distance, 4.0f, 0.01f);
@@ -5017,7 +5147,7 @@ TEST(QtViewportSurfaceInputTests,
   QMouseEvent fallback_release(QEvent::MouseButtonRelease, moved,
                                moved_global, Qt::MiddleButton, Qt::NoButton,
                                Qt::NoModifier);
-  QApplication::sendEvent(surface, &fallback_release);
+  send_visible_viewport_event(surface, &fallback_release);
   process_input();
 
   // A locally isolated selected object can still exist in scene selection.
@@ -5050,11 +5180,11 @@ TEST(QtViewportSurfaceInputTests,
   QMouseEvent isolated_press(QEvent::MouseButtonPress, center, center_global,
                              Qt::MiddleButton, Qt::MiddleButton,
                              Qt::NoModifier);
-  QApplication::sendEvent(surface, &isolated_press);
+  send_visible_viewport_event(surface, &isolated_press);
   process_input();
   QMouseEvent isolated_move(QEvent::MouseMove, moved, moved_global,
                             Qt::NoButton, Qt::MiddleButton, Qt::NoModifier);
-  QApplication::sendEvent(surface, &isolated_move);
+  send_visible_viewport_event(surface, &isolated_move);
   process_input();
 
   EXPECT_NEAR(camera.state().distance, 4.0f, 0.01f);
@@ -5067,7 +5197,7 @@ TEST(QtViewportSurfaceInputTests,
   QMouseEvent isolated_release(QEvent::MouseButtonRelease, moved, moved_global,
                                Qt::MiddleButton, Qt::NoButton,
                                Qt::NoModifier);
-  QApplication::sendEvent(surface, &isolated_release);
+  send_visible_viewport_event(surface, &isolated_release);
   process_input();
   ASSERT_TRUE(session.viewport_workspace().exit_local_visibility());
   process_input();
@@ -5094,11 +5224,11 @@ TEST(QtViewportSurfaceInputTests,
   QMouseEvent occluded_press(QEvent::MouseButtonPress, center, center_global,
                              Qt::MiddleButton, Qt::MiddleButton,
                              Qt::NoModifier);
-  QApplication::sendEvent(surface, &occluded_press);
+  send_visible_viewport_event(surface, &occluded_press);
   process_input();
   QMouseEvent occluded_move(QEvent::MouseMove, moved, moved_global,
                             Qt::NoButton, Qt::MiddleButton, Qt::NoModifier);
-  QApplication::sendEvent(surface, &occluded_move);
+  send_visible_viewport_event(surface, &occluded_move);
   process_input();
 
   EXPECT_NEAR(camera.state().distance, 4.0f, 0.01f);
@@ -5113,7 +5243,7 @@ TEST(QtViewportSurfaceInputTests,
   QMouseEvent occluded_release(QEvent::MouseButtonRelease, moved,
                                moved_global, Qt::MiddleButton, Qt::NoButton,
                                Qt::NoModifier);
-  QApplication::sendEvent(surface, &occluded_release);
+  send_visible_viewport_event(surface, &occluded_release);
   process_input();
 
   // An on-screen selection is not an unconditional global pivot. When MMB is
@@ -5130,7 +5260,7 @@ TEST(QtViewportSurfaceInputTests,
       QEvent::MouseButtonPress, far_selection_blank,
       far_selection_blank_global, Qt::MiddleButton, Qt::MiddleButton,
       Qt::NoModifier);
-  QApplication::sendEvent(surface, &far_selection_press);
+  send_visible_viewport_event(surface, &far_selection_press);
   process_input();
   const QPointF far_selection_moved{25.0, 20.0};
   const QPointF far_selection_moved_global{125.0, 120.0};
@@ -5138,14 +5268,14 @@ TEST(QtViewportSurfaceInputTests,
       QEvent::MouseMove, far_selection_moved,
       far_selection_moved_global, Qt::NoButton, Qt::MiddleButton,
       Qt::NoModifier);
-  QApplication::sendEvent(surface, &far_selection_move);
+  send_visible_viewport_event(surface, &far_selection_move);
   process_input();
   EXPECT_NEAR(camera.state().distance, 4.0f, 0.0001f);
   QMouseEvent far_selection_release(
       QEvent::MouseButtonRelease, far_selection_moved,
       far_selection_moved_global, Qt::MiddleButton, Qt::NoButton,
       Qt::NoModifier);
-  QApplication::sendEvent(surface, &far_selection_release);
+  send_visible_viewport_event(surface, &far_selection_release);
   process_input();
 
   // A selected child whose own visibility flag is enabled is still absent
@@ -5180,11 +5310,11 @@ TEST(QtViewportSurfaceInputTests,
   QMouseEvent hierarchy_press(QEvent::MouseButtonPress, center, center_global,
                               Qt::MiddleButton, Qt::MiddleButton,
                               Qt::NoModifier);
-  QApplication::sendEvent(surface, &hierarchy_press);
+  send_visible_viewport_event(surface, &hierarchy_press);
   process_input();
   QMouseEvent hierarchy_move(QEvent::MouseMove, moved, moved_global,
                              Qt::NoButton, Qt::MiddleButton, Qt::NoModifier);
-  QApplication::sendEvent(surface, &hierarchy_move);
+  send_visible_viewport_event(surface, &hierarchy_move);
   process_input();
 
   EXPECT_NEAR(camera.state().distance, 4.0f, 0.01f);
@@ -5199,7 +5329,7 @@ TEST(QtViewportSurfaceInputTests,
   QMouseEvent hierarchy_release(QEvent::MouseButtonRelease, moved,
                                 moved_global, Qt::MiddleButton, Qt::NoButton,
                                 Qt::NoModifier);
-  QApplication::sendEvent(surface, &hierarchy_release);
+  send_visible_viewport_event(surface, &hierarchy_release);
   process_input();
 
   // Empty-background orbit falls back to the visible center surface. The
@@ -5215,7 +5345,7 @@ TEST(QtViewportSurfaceInputTests,
   QMouseEvent blank_press(QEvent::MouseButtonPress, blank, blank_global,
                           Qt::MiddleButton, Qt::MiddleButton,
                           Qt::NoModifier);
-  QApplication::sendEvent(surface, &blank_press);
+  send_visible_viewport_event(surface, &blank_press);
   process_input();
   EXPECT_EQ(quader::viewport_camera_pose_persistence_signature(camera.pose()),
             quader::viewport_camera_pose_persistence_signature(blank_before));
@@ -5224,7 +5354,7 @@ TEST(QtViewportSurfaceInputTests,
   const QPointF blank_moved_global{125.0, 120.0};
   QMouseEvent blank_move(QEvent::MouseMove, blank_moved, blank_moved_global,
                          Qt::NoButton, Qt::MiddleButton, Qt::NoModifier);
-  QApplication::sendEvent(surface, &blank_move);
+  send_visible_viewport_event(surface, &blank_move);
   process_input();
 
   EXPECT_NEAR(camera.state().distance, 4.0f, 0.0001f);
@@ -5241,7 +5371,7 @@ TEST(QtViewportSurfaceInputTests,
   QMouseEvent blank_release(QEvent::MouseButtonRelease, blank_moved,
                             blank_moved_global, Qt::MiddleButton,
                             Qt::NoButton, Qt::NoModifier);
-  QApplication::sendEvent(surface, &blank_release);
+  send_visible_viewport_event(surface, &blank_release);
   process_input();
 }
 
@@ -5287,16 +5417,16 @@ TEST(QtViewportSurfaceInputTests,
       SCOPED_TRACE(static_cast<int>(pane));
       QEvent leave(QEvent::Leave);
       QFocusEvent blur(QEvent::FocusOut);
-      QApplication::sendEvent(context.surface, &leave);
-      QApplication::sendEvent(context.surface, &blur);
+      send_visible_viewport_event(context.surface, &leave);
+      send_visible_viewport_event(context.surface, &blur);
       context.surface = context.panel.surface(pane);
       ASSERT_NE(context.surface, nullptr);
-      context.surface->resize(800, 600);
+      resize_viewport_surface(context.panel, *context.surface, {800, 600});
       ASSERT_TRUE(context.editor.viewports().focus_pane(pane).ok());
       QEnterEvent enter({20, 20}, {20, 20}, {120, 120});
       QFocusEvent focus(QEvent::FocusIn);
-      QApplication::sendEvent(context.surface, &enter);
-      QApplication::sendEvent(context.surface, &focus);
+      send_visible_viewport_event(context.surface, &enter);
+      send_visible_viewport_event(context.surface, &focus);
       auto &camera = workspace.camera(pane);
       camera.focus_origin(64.0f);
       if (active_box && pane == quader::ViewportPaneId::Top) {
@@ -5538,12 +5668,12 @@ TEST(QtViewportSurfaceInputTests,
                 Qt::RightButton);
   context.process();
   QKeyEvent forward_press(QEvent::KeyPress, Qt::Key_W, Qt::NoModifier);
-  QApplication::sendEvent(context.surface, &forward_press);
+  send_visible_viewport_event(context.surface, &forward_press);
   for (int frame = 0; frame < 10; ++frame) {
     context.process(0.1);
   }
   QKeyEvent forward_release(QEvent::KeyRelease, Qt::Key_W, Qt::NoModifier);
-  QApplication::sendEvent(context.surface, &forward_release);
+  send_visible_viewport_event(context.surface, &forward_release);
   context.mouse(QEvent::MouseButtonRelease, {400, 300}, Qt::RightButton,
                 Qt::NoButton);
   context.process();
@@ -5628,6 +5758,7 @@ TEST(QtViewportSurfaceInputTests,
   application.setQuitOnLastWindowClosed(false);
 
   quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  surface.resize(800, 600);
   const QPointF local{24.0, 32.0};
   const QPointF global{124.0, 232.0};
   QEnterEvent enter(local, local, global);
@@ -5707,13 +5838,13 @@ TEST(QtViewportSurfaceInputTests,
   quader::QtViewportSurface *top_surface =
       panel.surface(quader::ViewportPaneId::Top);
   ASSERT_NE(top_surface, nullptr);
-  top_surface->resize(800, 600);
+  resize_viewport_surface(panel, *top_surface, {800, 600});
   const QPointF center{400.0, 300.0};
   const QPointF center_global{500.0, 400.0};
   QEnterEvent top_enter(center, center, center_global);
-  QApplication::sendEvent(top_surface, &top_enter);
+  send_visible_viewport_event(top_surface, &top_enter);
   QFocusEvent top_focus(QEvent::FocusIn);
-  QApplication::sendEvent(top_surface, &top_focus);
+  send_visible_viewport_event(top_surface, &top_focus);
 
   const auto process_first = [&]() {
     panel.process_input(
@@ -5724,7 +5855,7 @@ TEST(QtViewportSurfaceInputTests,
   process_first();
   QMouseEvent top_press(QEvent::MouseButtonPress, center, center_global,
                         Qt::MiddleButton, Qt::MiddleButton, Qt::NoModifier);
-  QApplication::sendEvent(top_surface, &top_press);
+  send_visible_viewport_event(top_surface, &top_press);
   process_first();
   ASSERT_TRUE(first_session.viewport_workspace()
                   .camera(quader::ViewportPaneId::Top)
@@ -5740,16 +5871,16 @@ TEST(QtViewportSurfaceInputTests,
   quader::QtViewportSurface *perspective_surface =
       panel.surface(quader::ViewportPaneId::Perspective);
   ASSERT_NE(perspective_surface, nullptr);
-  perspective_surface->resize(800, 600);
+  resize_viewport_surface(panel, *perspective_surface, {800, 600});
   QEnterEvent perspective_enter(center, center, center_global);
-  QApplication::sendEvent(perspective_surface, &perspective_enter);
+  send_visible_viewport_event(perspective_surface, &perspective_enter);
   QFocusEvent perspective_focus(QEvent::FocusIn);
-  QApplication::sendEvent(perspective_surface, &perspective_focus);
+  send_visible_viewport_event(perspective_surface, &perspective_focus);
   process_first();
   QMouseEvent perspective_press(
       QEvent::MouseButtonPress, center, center_global, Qt::MiddleButton,
       Qt::MiddleButton, Qt::NoModifier);
-  QApplication::sendEvent(perspective_surface, &perspective_press);
+  send_visible_viewport_event(perspective_surface, &perspective_press);
   process_first();
   ASSERT_TRUE(first_session.viewport_workspace()
                   .camera(quader::ViewportPaneId::Perspective)
@@ -5818,13 +5949,13 @@ TEST(QtViewportSurfaceInputTests,
   quader::QtViewportSurface *surface =
       panel.surface(quader::ViewportPaneId::Perspective);
   ASSERT_NE(surface, nullptr);
-  surface->resize(800, 600);
+  resize_viewport_surface(panel, *surface, {800, 600});
   const QPointF local{400.0, 300.0};
   const QPointF global{500.0, 400.0};
   QEnterEvent enter(local, local, global);
-  QApplication::sendEvent(surface, &enter);
+  send_visible_viewport_event(surface, &enter);
   QFocusEvent focus(QEvent::FocusIn);
-  QApplication::sendEvent(surface, &focus);
+  send_visible_viewport_event(surface, &focus);
 
   const auto process_bound_scene = [&]() {
     panel.process_input(
@@ -5836,10 +5967,10 @@ TEST(QtViewportSurfaceInputTests,
 
   QKeyEvent close_press(QEvent::KeyPress, Qt::Key_W, Qt::ControlModifier,
                         QStringLiteral("w"));
-  QApplication::sendEvent(surface, &close_press);
+  send_visible_viewport_event(surface, &close_press);
   QKeyEvent select_all_press(QEvent::KeyPress, Qt::Key_A,
                              Qt::ControlModifier, QStringLiteral("a"));
-  QApplication::sendEvent(surface, &select_all_press);
+  send_visible_viewport_event(surface, &select_all_press);
   // Capture the outgoing references exactly as App/UISystem do. The Ctrl+W
   // dispatch destroys this SceneSession and synchronously installs the next
   // one before process_input returns.
@@ -5857,10 +5988,10 @@ TEST(QtViewportSurfaceInputTests,
 
   QKeyEvent close_release(QEvent::KeyRelease, Qt::Key_W,
                           Qt::ControlModifier, QStringLiteral("w"));
-  QApplication::sendEvent(surface, &close_release);
+  send_visible_viewport_event(surface, &close_release);
   QKeyEvent select_all_release(QEvent::KeyRelease, Qt::Key_A,
                                Qt::ControlModifier, QStringLiteral("a"));
-  QApplication::sendEvent(surface, &select_all_release);
+  send_visible_viewport_event(surface, &select_all_release);
   process_bound_scene();
   EXPECT_EQ(rebind_count, 1);
   EXPECT_EQ(project.active_scene_id(), *surviving_scene_id);
@@ -6104,6 +6235,7 @@ TEST(QtViewportSurfaceInputTests,
   application.setQuitOnLastWindowClosed(false);
 
   quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  surface.resize(800, 600);
   QWheelEvent half_up = wheel_event({}, QPoint{0, 60});
   QApplication::sendEvent(&surface, &half_up);
   const quader::QtViewportInputFrame pending =
@@ -6256,13 +6388,13 @@ TEST(QtViewportSurfaceInputTests,
   quader::QtViewportSurface *surface =
       panel.surface(quader::ViewportPaneId::Perspective);
   ASSERT_NE(surface, nullptr);
-  surface->resize(800, 600);
+  resize_viewport_surface(panel, *surface, {800, 600});
   const QPointF local{400.0, 300.0};
   const QPointF global{500.0, 400.0};
   QEnterEvent enter(local, local, global);
-  QApplication::sendEvent(surface, &enter);
+  send_visible_viewport_event(surface, &enter);
   QFocusEvent focus(QEvent::FocusIn);
-  QApplication::sendEvent(surface, &focus);
+  send_visible_viewport_event(surface, &focus);
 
   const auto process_input = [&]() {
     panel.process_input(
@@ -6279,8 +6411,8 @@ TEST(QtViewportSurfaceInputTests,
                           Qt::NoModifier, Qt::NoScrollPhase, false);
   QWheelEvent reverse_in(local, global, {}, QPoint{0, 120}, Qt::NoButton,
                          Qt::NoModifier, Qt::NoScrollPhase, false);
-  QApplication::sendEvent(surface, &blocked_out);
-  QApplication::sendEvent(surface, &reverse_in);
+  send_visible_viewport_event(surface, &blocked_out);
+  send_visible_viewport_event(surface, &reverse_in);
   process_input();
   EXPECT_NEAR(
       camera.state().distance,
@@ -6294,8 +6426,8 @@ TEST(QtViewportSurfaceInputTests,
                          Qt::NoModifier, Qt::NoScrollPhase, false);
   QWheelEvent reverse_out(local, global, {}, QPoint{0, -120}, Qt::NoButton,
                           Qt::NoModifier, Qt::NoScrollPhase, false);
-  QApplication::sendEvent(surface, &blocked_in);
-  QApplication::sendEvent(surface, &reverse_out);
+  send_visible_viewport_event(surface, &blocked_in);
+  send_visible_viewport_event(surface, &reverse_out);
   process_input();
   EXPECT_NEAR(
       camera.state().distance,
@@ -6330,9 +6462,9 @@ TEST(QtViewportSurfaceInputTests,
   panel.attach_workspace(session.viewport_workspace());
   auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
   ASSERT_NE(surface, nullptr);
-  surface->resize(800, 600);
+  resize_viewport_surface(panel, *surface, {800, 600});
   QFocusEvent focus(QEvent::FocusIn);
-  QApplication::sendEvent(surface, &focus);
+  send_visible_viewport_event(surface, &focus);
   auto &camera = session.viewport_workspace().camera(quader::ViewportPaneId::Perspective);
   camera.focus_origin(10);
   const auto process = [&] {
@@ -6354,7 +6486,7 @@ TEST(QtViewportSurfaceInputTests,
     QWheelEvent event(point, point, pixel ? QPoint{0, delta} : QPoint{},
                       pixel ? QPoint{} : QPoint{0, delta}, Qt::NoButton,
                       modifiers, Qt::NoScrollPhase, false);
-    QApplication::sendEvent(surface, &event);
+    send_visible_viewport_event(surface, &event);
   };
   const auto count = [&] { return editor.tools().live_primitive_creation()->subdivisions[0]; };
   ASSERT_TRUE(editor.tools().set_setting(quader::kCreatePrimitiveToolId,
@@ -6366,7 +6498,7 @@ TEST(QtViewportSurfaceInputTests,
   // A later mouse packet must not replace the two wheel hit-test positions.
   QMouseEvent move(QEvent::MouseMove, {12, 12}, {12, 12},
                     Qt::NoButton, Qt::NoButton, Qt::NoModifier);
-  QApplication::sendEvent(surface, &move);
+  send_visible_viewport_event(surface, &move);
   process();
   EXPECT_EQ(count(), 127);
   EXPECT_FLOAT_EQ(camera.state().distance, distance);
@@ -6392,7 +6524,7 @@ TEST(QtViewportSurfaceInputTests,
     const bool before = editor.tools().live_primitive_creation()->flip_faces;
     if (sequence) {
       QKeyEvent prefix(QEvent::KeyPress, Qt::Key_K, Qt::NoModifier);
-      QApplication::sendEvent(surface, &prefix);
+      send_visible_viewport_event(surface, &prefix);
       process();
       ASSERT_TRUE(editor.commands().has_pending_keybinding_chord());
     }
@@ -6440,9 +6572,9 @@ TEST(QtViewportSurfaceInputTests,
   panel.attach_workspace(session.viewport_workspace());
   auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
   ASSERT_NE(surface, nullptr);
-  surface->resize(800, 600);
+  resize_viewport_surface(panel, *surface, {800, 600});
   QFocusEvent focus(QEvent::FocusIn);
-  QApplication::sendEvent(surface, &focus);
+  send_visible_viewport_event(surface, &focus);
   auto &camera = session.viewport_workspace().camera(quader::ViewportPaneId::Perspective);
   ASSERT_TRUE(camera.restore_perspective_pose(
       {.eye = {8, 7, 11}, .target = {}, .up = {0, 1, 0}}));
@@ -6466,7 +6598,7 @@ TEST(QtViewportSurfaceInputTests,
     QWheelEvent event(point, point, pixel ? QPoint{0, delta} : QPoint{},
                       pixel ? QPoint{} : QPoint{0, delta}, Qt::NoButton,
                       modifiers, Qt::NoScrollPhase, false);
-    QApplication::sendEvent(surface, &event);
+    send_visible_viewport_event(surface, &event);
   };
   const auto subdivision = [&] {
     return editor.tools().live_primitive_creation()->sphere_subdivision;
@@ -6478,7 +6610,7 @@ TEST(QtViewportSurfaceInputTests,
   // Wheel hit tests retain each event's button position even after the pointer leaves it.
   QMouseEvent move(QEvent::MouseMove, {12, 12}, {12, 12},
                     Qt::NoButton, Qt::NoButton, Qt::NoModifier);
-  QApplication::sendEvent(surface, &move);
+  send_visible_viewport_event(surface, &move);
   process();
   EXPECT_EQ(subdivision(), 2);
 
@@ -6536,11 +6668,11 @@ TEST(QtViewportSurfaceInputTests,
   panel.attach_workspace(session.viewport_workspace());
   auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
   ASSERT_NE(surface, nullptr);
-  surface->resize(800, 600);
+  resize_viewport_surface(panel, *surface, {800, 600});
   QEnterEvent enter({400, 300}, {400, 300}, {500, 400});
   QFocusEvent focus(QEvent::FocusIn);
-  QApplication::sendEvent(surface, &enter);
-  QApplication::sendEvent(surface, &focus);
+  send_visible_viewport_event(surface, &enter);
+  send_visible_viewport_event(surface, &focus);
   auto &camera = session.viewport_workspace().camera(
       quader::ViewportPaneId::Perspective);
   camera.focus_origin(5.0f);
@@ -6573,7 +6705,7 @@ TEST(QtViewportSurfaceInputTests,
 
   QMouseEvent move(QEvent::MouseMove, local, global, Qt::NoButton,
                    Qt::NoButton, Qt::NoModifier);
-  QApplication::sendEvent(surface, &move);
+  send_visible_viewport_event(surface, &move);
   process();
   ASSERT_TRUE(session.modeling().tool_status().knife_has_current)
       << "The production 0.1 pick radius must retain an eight-logical-pixel "
@@ -6581,22 +6713,22 @@ TEST(QtViewportSurfaceInputTests,
 
   QMouseEvent press(QEvent::MouseButtonPress, local, global, Qt::LeftButton,
                     Qt::LeftButton, Qt::NoModifier);
-  QApplication::sendEvent(surface, &press);
+  send_visible_viewport_event(surface, &press);
   process();
   EXPECT_TRUE(session.modeling().tool_status().knife_active);
   EXPECT_TRUE(session.modeling().tool_status().knife_has_active_stroke);
 
   QMouseEvent release(QEvent::MouseButtonRelease, local, global,
                       Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
-  QApplication::sendEvent(surface, &release);
+  send_visible_viewport_event(surface, &release);
   process();
   EXPECT_TRUE(session.modeling().tool_status().knife_active);
 
   const auto history_before_outside = editor.history().snapshot();
   QEvent leave(QEvent::Leave);
   QFocusEvent blur(QEvent::FocusOut);
-  QApplication::sendEvent(surface, &leave);
-  QApplication::sendEvent(surface, &blur);
+  send_visible_viewport_event(surface, &leave);
+  send_visible_viewport_event(surface, &blur);
   QWidget outside;
   QMouseEvent outside_press(QEvent::MouseButtonPress, {10, 10}, {-100, -100},
                            Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
@@ -6632,9 +6764,9 @@ TEST(QtViewportSurfaceInputTests, RoundPrimitiveFootprintUsesNaturalHeightThroug
     panel.attach_workspace(session.viewport_workspace());
     auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
     ASSERT_NE(surface, nullptr);
-    surface->resize(800, 600);
+    resize_viewport_surface(panel, *surface, {800, 600});
     QFocusEvent focus(QEvent::FocusIn);
-    QApplication::sendEvent(surface, &focus);
+    send_visible_viewport_event(surface, &focus);
     auto &camera = session.viewport_workspace().camera(quader::ViewportPaneId::Perspective);
     ASSERT_TRUE(camera.restore_perspective_pose(
         {.eye = {8, 7, 11}, .target = {}, .up = {0, 1, 0}}));
@@ -6645,11 +6777,11 @@ TEST(QtViewportSurfaceInputTests, RoundPrimitiveFootprintUsesNaturalHeightThroug
     process();
     QMouseEvent press(QEvent::MouseButtonPress, {300, 300}, {300, 300},
                        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-    QApplication::sendEvent(surface, &press);
+    send_visible_viewport_event(surface, &press);
     process();
     QMouseEvent release(QEvent::MouseButtonRelease, {500, 430}, {500, 430},
                          Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
-    QApplication::sendEvent(surface, &release);
+    send_visible_viewport_event(surface, &release);
     process();
     const auto primitive = editor.tools().live_primitive_creation();
     ASSERT_TRUE(primitive);
@@ -6695,9 +6827,9 @@ TEST(QtViewportSurfaceInputTests,
       panel.attach_workspace(session.viewport_workspace());
       auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
       ASSERT_NE(surface, nullptr);
-      surface->resize(800, 600);
+      resize_viewport_surface(panel, *surface, {800, 600});
       QFocusEvent focus(QEvent::FocusIn);
-      QApplication::sendEvent(surface, &focus);
+      send_visible_viewport_event(surface, &focus);
       auto &camera = session.viewport_workspace().camera(
           quader::ViewportPaneId::Perspective);
       ASSERT_TRUE(camera.restore_perspective_pose(
@@ -6720,7 +6852,7 @@ TEST(QtViewportSurfaceInputTests,
       EXPECT_EQ(material_queries, 0);
       QMouseEvent press(QEvent::MouseButtonPress, {300, 300}, {300, 300},
                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-      QApplication::sendEvent(surface, &press);
+      send_visible_viewport_event(surface, &press);
       process();
       EXPECT_EQ(material_queries, 0);
 
@@ -6730,7 +6862,7 @@ TEST(QtViewportSurfaceInputTests,
           : quader::QuaderMaterialReference{};
       QMouseEvent release(QEvent::MouseButtonRelease, {500, 430}, {500, 430},
                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
-      QApplication::sendEvent(surface, &release);
+      send_visible_viewport_event(surface, &release);
       process();
       ASSERT_TRUE(editor.tools().live_primitive_creation());
       ASSERT_EQ(material_queries, 1);
@@ -6778,9 +6910,9 @@ TEST(QtViewportSurfaceInputTests,
   panel.attach_workspace(session.viewport_workspace());
   auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
   ASSERT_NE(surface, nullptr);
-  surface->resize(800, 600);
+  resize_viewport_surface(panel, *surface, {800, 600});
   QFocusEvent focus(QEvent::FocusIn);
-  QApplication::sendEvent(surface, &focus);
+  send_visible_viewport_event(surface, &focus);
   auto &camera = session.viewport_workspace().camera(
       quader::ViewportPaneId::Perspective);
   ASSERT_TRUE(camera.restore_perspective_pose(
@@ -6799,11 +6931,11 @@ TEST(QtViewportSurfaceInputTests,
   process();
   QMouseEvent press(QEvent::MouseButtonPress, {300, 300}, {300, 300},
                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-  QApplication::sendEvent(surface, &press);
+  send_visible_viewport_event(surface, &press);
   process();
   QMouseEvent release(QEvent::MouseButtonRelease, {500, 430}, {500, 430},
                        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
-  QApplication::sendEvent(surface, &release);
+  send_visible_viewport_event(surface, &release);
   process();
   EXPECT_EQ(material_queries, 1);
   EXPECT_TRUE(session.modeling().objects().empty());

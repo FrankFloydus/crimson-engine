@@ -32,7 +32,7 @@
 #include <unordered_map>
 #include <utility>
 
-static_assert(FILAMENT_QUADER_VSYNC_PATCH_VERSION == 6,
+static_assert(FILAMENT_QUADER_VSYNC_PATCH_VERSION == 9,
               "Quader requires the matching Filament patch revision");
 
 namespace quader {
@@ -405,6 +405,11 @@ void RenderSystem::complete_presentation_frame(
                        frame_performance_stats_.gpu_frame_ms);
     }
   }
+}
+
+bool RenderSystem::supports_hidden_native_pixels() const {
+  return engine_ != nullptr &&
+         engine_->getBackend() == filament::Engine::Backend::VULKAN;
 }
 
 void RenderSystem::set_display_refresh_rate_hz(float refresh_rate_hz) {

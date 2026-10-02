@@ -46,7 +46,7 @@ include(cmake/QuaderBuildOptions.cmake)
 # participate in the final executable's link-time optimization pass.
 set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
 
-set(_QUADER_DEFAULT_FILAMENT_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../_SOURCES/filament-main-aab101b4c038-quader-vsync6-windows")
+set(_QUADER_DEFAULT_FILAMENT_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../_SOURCES/filament-main-aab101b4c038-quader-vsync9-windows")
 if(DEFINED ENV{FILAMENT_SDK_ROOT} AND NOT "$ENV{FILAMENT_SDK_ROOT}" STREQUAL "")
     file(TO_CMAKE_PATH "$ENV{FILAMENT_SDK_ROOT}" _QUADER_DEFAULT_FILAMENT_SDK_ROOT)
 endif()
@@ -734,7 +734,9 @@ file(MAKE_DIRECTORY "${QUADER_MATERIAL_OUTPUT_DIR}")
 
 function(quader_compile_material target_name input_file output_name)
     set(output_file "${QUADER_MATERIAL_OUTPUT_DIR}/${output_name}.filamat")
-    set(input_dependencies "${CMAKE_CURRENT_SOURCE_DIR}/${input_file}")
+    get_filename_component(input_path "${input_file}" ABSOLUTE
+        BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+    set(input_dependencies "${input_path}")
     foreach(shared_file IN LISTS ARGN)
         list(APPEND input_dependencies "${CMAKE_CURRENT_SOURCE_DIR}/${shared_file}")
     endforeach()
@@ -744,7 +746,7 @@ function(quader_compile_material target_name input_file output_name)
                 --api all
                 --platform all
                 --output "${output_file}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/${input_file}"
+                "${input_path}"
         DEPENDS ${input_dependencies} "${FILAMENT_SDK_ROOT}/bin/matc.exe"
         VERBATIM)
     add_custom_target("${target_name}" DEPENDS "${output_file}")
@@ -1880,6 +1882,33 @@ if(QUADER_BUILD_TESTS)
         quader_deploy_windows_qt_runtime(quader_tests)
     endif()
     add_dependencies(quader_tests quader_runtime_resources quader_fatal_diagnostics)
+    # Production's blended lit variant bypasses SSAO. Probe reconstruction with
+    # the same shader compiled opaque, without deploying a test package to apps.
+    set(ao_fixture_directory "${CMAKE_CURRENT_BINARY_DIR}/generated/test_materials")
+    file(MAKE_DIRECTORY "${ao_fixture_directory}")
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/resources/materials/quader_mesh_lit.mat"
+        ao_fixture_source)
+    string(REPLACE "blending : transparent" "blending : opaque"
+        ao_fixture_source "${ao_fixture_source}")
+    string(REPLACE "#include \"" "#include \"${CMAKE_CURRENT_SOURCE_DIR}/resources/materials/"
+        ao_fixture_source "${ao_fixture_source}")
+    file(CONFIGURE OUTPUT "${ao_fixture_directory}/quader_mesh_lit_ao_fixture.mat"
+        CONTENT "${ao_fixture_source}" @ONLY)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/materials/quader_mesh_lit.mat")
+    set(ao_fixture_previous_output_directory "${QUADER_MATERIAL_OUTPUT_DIR}")
+    set(QUADER_MATERIAL_OUTPUT_DIR "${ao_fixture_directory}")
+    quader_compile_material(quader_ao_fixture_material
+        "${ao_fixture_directory}/quader_mesh_lit_ao_fixture.mat"
+        quader_mesh_lit_ao_fixture resources/materials/mesh_quad_uv.glsl
+        resources/materials/mesh_normal_mapping.glsl
+        resources/materials/mesh_vertex_normal_mapping.glsl
+        resources/materials/instance_edit.glsl resources/materials/mesh_surface_grid.glsl)
+    set(QUADER_MATERIAL_OUTPUT_DIR "${ao_fixture_previous_output_directory}")
+    add_dependencies(quader_tests quader_ao_fixture_material)
+    set_property(SOURCE tests/render_vsync_runtime_tests.cpp APPEND PROPERTY
+        COMPILE_DEFINITIONS
+        QUADER_TEST_OPAQUE_LIT_MATERIAL_PATH="${quader_ao_fixture_material_OUTPUT}")
     add_test(NAME quader_tests COMMAND quader_tests)
 
     add_executable(quader_public_release_tests

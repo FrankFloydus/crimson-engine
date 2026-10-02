@@ -26,13 +26,33 @@ fragment {
     // Sampling native framebuffer coordinates preserves the backend's texture
     // orientation for both a swapchain and an offscreen viewport attachment.
     vec2 occupancy(ivec2 pixel) {
+        ivec2 extent = textureSize(materialParams_ordinaryMask, 0);
+        if (any(lessThan(pixel, ivec2(0))) || any(greaterThanEqual(pixel, extent))) {
+            return vec2(0.0);
+        }
         return vec2(texelFetch(materialParams_ordinaryMask, pixel, 0).r,
                     texelFetch(materialParams_activeMask, pixel, 0).r);
     }
 
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
-        ivec2 center = ivec2(gl_FragCoord.xy) + ivec2(int(materialParams.guardPixels));
+        vec4 crop = getMaterialGlobal2();
+        ivec2 visiblePixel = ivec2(gl_FragCoord.xy);
+        // An explicit crop belongs to native backing presentation. Texture
+        // targets retain their existing attachment-coordinate sampling path.
+        if (crop.z > 0.0 && crop.w > 0.0) {
+            // Native Vulkan fragments and occupancy texels use top-left Y.
+            // Retain the lower-left offset for other material targets.
+#if !defined(TARGET_VULKAN_ENVIRONMENT) && !defined(TARGET_METAL_ENVIRONMENT) && !defined(TARGET_WEBGPU_ENVIRONMENT)
+            crop.y = getResolution().y - crop.y - crop.w;
+#endif
+            visiblePixel -= ivec2(crop.xy);
+            if (any(lessThan(visiblePixel, ivec2(0))) ||
+                    any(greaterThanEqual(visiblePixel, ivec2(crop.zw)))) {
+                discard;
+            }
+        }
+        ivec2 center = visiblePixel + ivec2(int(materialParams.guardPixels));
         vec2 inside = step(vec2(0.5), occupancy(center));
         vec2 halfWidth = max(vec2(1.0), vec2(materialParams.ordinaryLineWidth,
                                            materialParams.activeLineWidth)) * 0.5;
@@ -63,9 +83,11 @@ fragment {
             clamp(vec2(0.5) - (nearestDistance - halfWidth) / feather, 0.0, 1.0) :
             step(nearestDistance, halfWidth);
         highp float ordinaryDepth = coverage.x > 0.0 ?
-            texelFetch(materialParams_ordinaryDepth, ordinaryPixel, 0).r : 0.0;
+            texelFetch(materialParams_ordinaryDepth,
+                       clamp(ordinaryPixel, ivec2(0), textureSize(materialParams_ordinaryDepth, 0) - 1), 0).r : 0.0;
         highp float activeDepth = coverage.y > 0.0 ?
-            texelFetch(materialParams_activeDepth, activePixel, 0).r : 0.0;
+            texelFetch(materialParams_activeDepth,
+                       clamp(activePixel, ivec2(0), textureSize(materialParams_activeDepth, 0) - 1), 0).r : 0.0;
         // A nearer ordinary ribbon must not be replaced by a hidden active
         // ribbon. Equal-depth coincident coverage keeps active precedence.
         bool activeOutline = coverage.y > 0.0 &&

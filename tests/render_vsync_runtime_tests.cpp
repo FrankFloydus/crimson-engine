@@ -10,6 +10,7 @@
 #include "api/quader_api_type_conversions.hpp"
 #include "editor/commands/asset_command_service.hpp"
 #include "render/filament_material_library.hpp"
+#include "render/material_compiler_service.hpp"
 #include "render/png_texture_loader.hpp"
 #include "render/render_layers.hpp"
 #include "render/render_system.hpp"
@@ -20,6 +21,7 @@
 #include <gtest/gtest.h>
 
 #include <backend/PixelBufferDescriptor.h>
+#include <filament/IndirectLight.h>
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -49,6 +51,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace quader {
 namespace {
@@ -472,6 +475,11 @@ public:
     bridge_.shutdown();
     registry_.clear();
     materials_.shutdown();
+    if (opaque_lit_material_) engine_->destroy(opaque_lit_material_);
+    if (indirect_light_) {
+      scene_->setIndirectLight(nullptr);
+      engine_->destroy(indirect_light_);
+    }
     if (solid_color_texture_) engine_->destroy(solid_color_texture_);
     if (swapchain_) engine_->destroy(swapchain_);
     if (renderer_) engine_->destroy(renderer_);
@@ -479,24 +487,40 @@ public:
     filament::Engine::destroy(&engine_);
   }
 
-  bool initialize() {
+  bool initialize(std::uint32_t backing_width = kWidth,
+                  std::uint32_t backing_height = kHeight,
+                  bool opaque_ao_fixture = false) {
     const std::filesystem::path resources(
         QCoreApplication::applicationDirPath().toStdWString());
     engine_ = filament::Engine::create(filament::Engine::Backend::VULKAN);
     if (engine_ == nullptr) return false;
     scene_ = engine_->createScene();
     renderer_ = engine_->createRenderer();
+    backing_width_ = std::max(backing_width, kWidth);
+    backing_height_ = std::max(backing_height, kHeight);
     swapchain_ = engine_->createSwapChain(
-        kWidth, kHeight, filament::SwapChain::CONFIG_READABLE |
+        backing_width_, backing_height_, filament::SwapChain::CONFIG_READABLE |
                             filament::SwapChain::CONFIG_HAS_STENCIL_BUFFER);
     if (!scene_ || !renderer_ || !swapchain_ ||
         !materials_.initialize(*engine_, resources)) return false;
+    filament::Material *lit_material = &materials_.quader_mesh_lit();
+    if (opaque_ao_fixture) {
+      // Production's transparent blend mode deliberately bypasses Filament
+      // SSAO. This opaque test package retains the production surface shader.
+      const auto package = MaterialCompilerService::load_package(
+          std::filesystem::path(QUADER_TEST_OPAQUE_LIT_MATERIAL_PATH));
+      opaque_lit_material_ = filament::Material::Builder()
+                                 .package(package.data(), package.size())
+                                 .build(*engine_);
+      if (opaque_lit_material_ == nullptr) return false;
+      lit_material = opaque_lit_material_;
+    }
     solid_color_texture_ = create_test_solid_color_texture(*engine_);
     if (solid_color_texture_ == nullptr) return false;
     renderer_->setClearOptions({.clearColor = {0, 0, 0, 1}, .clear = true});
     bridge_.initialize(
         *engine_, *scene_, materials_.quader_mesh(),
-        materials_.quader_mesh_lit(), materials_.vertex_color_overlay(),
+        *lit_material, materials_.vertex_color_overlay(),
         materials_.instance_selection_fill(), materials_.overlay_line(),
         materials_.selected_object_line(), materials_.edit_wire_line(),
         materials_.overlay_point(), materials_.overlay_icon(),
@@ -510,6 +534,7 @@ public:
     camera_.focus_origin(6.0f);
     camera_.set_clip_planes(0.05f, 60.0f);
     view_.resize(kWidth, kHeight);
+    view_.set_presentation_bounds(backing_width_, backing_height_, 0u, 0u);
     view_.update_camera(camera_);
     view_.update_ground_grid(camera_, 1.0f, ViewportSettings::defaults(), false);
     view_.set_overlay_visible(false);
@@ -585,7 +610,56 @@ public:
     return true;
   }
 
-  QImage capture(SceneToneMapping tone, SceneCameraSettings camera = {}) {
+  bool prepare_ambient_occlusion_scene() {
+    if (!set_sample(LightType::Point, 0.0f, 1u)) return false;
+    QuaderApi api(QuaderApiSessionInternalAccess::from_scene_session(session_));
+    if (!api.scene().set_transform(patch_, {.scale = {5.0f, 1.0f, 3.0f}}).ok()) {
+      return false;
+    }
+    const auto occluder = api.modeling().create_box(
+        QuaderBounds{.min = {-0.65f, 0.0f, -0.65f},
+                     .max = {0.65f, 1.4f, 0.65f}}, "AO contact occluder");
+    if (!occluder.ok() ||
+        !api.assets().assign_material_to_entity(
+            occluder.value().entity, patch_materials_[0u]).ok()) return false;
+    // SSAO attenuates indirect diffuse light. Direct-only calibration lighting
+    // would make crop parity pass without exercising ambient occlusion.
+    const filament::math::float3 irradiance{1.0f, 1.0f, 1.0f};
+    indirect_light_ = filament::IndirectLight::Builder()
+                          .irradiance(1u, &irradiance).intensity(30000.0f)
+                          .build(*engine_);
+    if (indirect_light_ == nullptr) return false;
+    scene_->setIndirectLight(indirect_light_);
+    settings_.post_process.enabled = true;
+    settings_.post_process.ambient_occlusion_intensity = 2.0f;
+    settings_.post_process.ambient_occlusion_radius = 0.8f;
+    bridge_.sync(session_.scene(), session_.assets());
+    return true;
+  }
+
+  void use_ambient_occlusion_view(ViewportProjection projection) {
+    camera_.view_axis(ViewportViewAxis::Y, 1);
+    camera_.focus_origin(6.0f);
+    if (projection == ViewportProjection::Perspective) {
+      camera_.unlock_orthographic_view();
+    }
+    camera_.set_view_direction({-0.45f, -0.65f, -0.6f});
+    view_.update_camera(camera_);
+  }
+
+  QImage capture_ambient_occlusion(bool enabled) {
+    settings_.post_process.ambient_occlusion = enabled;
+    return capture(SceneToneMapping::Linear, {}, true);
+  }
+
+  void set_ambient_occlusion_crop(std::uint32_t crop_top) {
+    crop_top_ = std::min(crop_top, backing_height_ - kHeight);
+    view_.set_presentation_bounds(backing_width_, backing_height_, 0u, crop_top_);
+    view_.update_camera(camera_);
+  }
+
+  QImage capture(SceneToneMapping tone, SceneCameraSettings camera = {},
+                 bool screen_order = false) {
     settings_.camera = camera;
     settings_.post_process.tone_mapping = tone;
     view_.apply_scene_settings(settings_, true, ViewportSettings::defaults());
@@ -596,10 +670,10 @@ public:
     }
     if (!begin_frame()) return {};
     view_.render(*renderer_);
-    auto readback = std::make_shared<Readback>();
+    auto readback = std::make_shared<Readback>(backing_width_, backing_height_);
     auto *owner = new std::shared_ptr<Readback>(readback);
     renderer_->readPixels(
-        0, 0, kWidth, kHeight,
+        0, 0, backing_width_, backing_height_,
         filament::backend::PixelBufferDescriptor(
             readback->bytes.data(), readback->bytes.size(),
             filament::backend::PixelDataFormat::RGBA,
@@ -616,9 +690,13 @@ public:
       engine_->pumpMessageQueues();
     }
     if (!readback->complete.load(std::memory_order_acquire)) return {};
-    // Filament's readPixels uses a lower-left origin; JSON and PNGs are top-down.
-    return QImage(readback->bytes.data(), kWidth, kHeight,
-                  QImage::Format_RGBA8888).mirrored(false, true);
+    const QImage image(readback->bytes.data(), backing_width_, backing_height_,
+                       QImage::Format_RGBA8888);
+    // Vulkan's windowless readback rows are in camera-screen order even though
+    // readPixels addresses rectangles from the lower left. Retain the existing
+    // calibration export orientation; crop AO images in physical screen order.
+    if (screen_order) return image.copy(0, crop_top_, kWidth, kHeight);
+    return image.mirrored(false, true);
   }
 
   const ViewportCameraController &camera() const { return camera_; }
@@ -632,7 +710,9 @@ public:
 
 private:
   struct Readback {
-    std::array<unsigned char, kWidth * kHeight * 4> bytes{};
+    Readback(std::uint32_t width, std::uint32_t height)
+        : bytes(static_cast<std::size_t>(width) * height * 4u) {}
+    std::vector<unsigned char> bytes;
     std::atomic<bool> complete = false;
   };
 
@@ -655,6 +735,11 @@ private:
   filament::Renderer *renderer_ = nullptr;
   filament::SwapChain *swapchain_ = nullptr;
   filament::Texture *solid_color_texture_ = nullptr;
+  filament::Material *opaque_lit_material_ = nullptr;
+  filament::IndirectLight *indirect_light_ = nullptr;
+  std::uint32_t backing_width_ = kWidth;
+  std::uint32_t backing_height_ = kHeight;
+  std::uint32_t crop_top_ = 0u;
   FilamentMaterialLibrary materials_;
   TextureRegistry registry_;
   SceneRenderBridge bridge_;
@@ -931,6 +1016,154 @@ TEST(RenderColorRuntimeTests, NativeVulkanDarkDitheringStaysWithinDisplayCodes) 
       << "The UNORM reference must exercise dithering rather than bypass it";
   EXPECT_TRUE(changed_by_dithering[1])
       << "The production native sRGB path must keep dithering active";
+}
+
+TEST(RenderColorRuntimeTests,
+     NativeVulkanReservedBackingCropPreservesAmbientOcclusion) {
+  if (qEnvironmentVariable("QUADER_RUN_VULKAN_LIGHTING_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_LIGHTING_TESTS=1 for the opt-in "
+                    "test reading production offscreen Vulkan lighting.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-vulkan-ao-crop-test";
+  char *argv[] = {application_name, nullptr};
+  QCoreApplication application(argc, argv);
+  LightCalibrationRuntimeHarness centered;
+  LightCalibrationRuntimeHarness cropped;
+  ASSERT_TRUE(centered.initialize(384u, 256u, true));
+  ASSERT_TRUE(cropped.initialize(384u, 384u, true));
+  ASSERT_TRUE(centered.prepare_ambient_occlusion_scene());
+  ASSERT_TRUE(cropped.prepare_ambient_occlusion_scene());
+  // Keep the sampled contacts farther from the crop boundary than the AO disk.
+  const QRect region(64, 64, 256, 128);
+  const QString output_directory =
+      qEnvironmentVariable("QUADER_VULKAN_COLOR_OUTPUT_DIR");
+  if (!output_directory.isEmpty()) {
+    ASSERT_TRUE(QDir().mkpath(output_directory));
+  }
+  constexpr std::array<ViewportProjection, 2u> kProjections = {
+      ViewportProjection::Perspective, ViewportProjection::Orthographic};
+  for (const auto projection : kProjections) {
+    const QString label = projection == ViewportProjection::Perspective
+                              ? QStringLiteral("perspective")
+                              : QStringLiteral("orthographic");
+    SCOPED_TRACE(label.toStdString());
+    centered.use_ambient_occlusion_view(projection);
+    cropped.use_ambient_occlusion_view(projection);
+    cropped.set_ambient_occlusion_crop(0u);
+    const QImage centered_off = centered.capture_ambient_occlusion(false);
+    const QImage cropped_off = cropped.capture_ambient_occlusion(false);
+    const QImage centered_on = centered.capture_ambient_occlusion(true);
+    const QImage cropped_on = cropped.capture_ambient_occlusion(true);
+    cropped.set_ambient_occlusion_crop(128u);
+    const QImage bottom_off = cropped.capture_ambient_occlusion(false);
+    const QImage bottom_on = cropped.capture_ambient_occlusion(true);
+    for (const auto *image :
+         {&centered_off, &cropped_off, &centered_on, &cropped_on,
+          &bottom_off, &bottom_on}) {
+      ASSERT_FALSE(image->isNull());
+      ASSERT_EQ(image->size(), QSize(384, 256));
+    }
+    if (!output_directory.isEmpty()) {
+      const QString prefix = output_directory + "/ao_crop_" + label;
+      ASSERT_TRUE(centered_off.save(prefix + "_centered_off.png"));
+      ASSERT_TRUE(cropped_off.save(prefix + "_cropped_off.png"));
+      ASSERT_TRUE(centered_on.save(prefix + "_centered_on.png"));
+      ASSERT_TRUE(cropped_on.save(prefix + "_cropped_on.png"));
+      ASSERT_TRUE(bottom_off.save(prefix + "_bottom_off.png"));
+      ASSERT_TRUE(bottom_on.save(prefix + "_bottom_on.png"));
+    }
+    std::size_t darkened_pixels = 0u;
+    double raw_top_difference = 0.0;
+    const auto brightness = [](QRgb pixel) {
+      return (qRed(pixel) + qGreen(pixel) + qBlue(pixel)) / 3.0;
+    };
+    for (int y = region.top(); y <= region.bottom(); ++y) {
+      for (int x = region.left(); x <= region.right(); ++x) {
+        const double off = brightness(centered_off.pixel(x, y));
+        const double on = brightness(centered_on.pixel(x, y));
+        raw_top_difference +=
+            std::abs(on - brightness(cropped_on.pixel(x, y)));
+        if (off >= 16.0 && off <= 240.0 && off - on >= 4.0) {
+          ++darkened_pixels;
+        }
+      }
+    }
+    // AO-off parity independently proves the larger backing's camera framing
+    // and both readback crops before any SSAO comparison can pass.
+    EXPECT_LE(color_patch_maximum_difference(centered_off, cropped_off, region),
+              2);
+    EXPECT_LE(color_patch_maximum_difference(centered_off, bottom_off, region),
+              2);
+    ASSERT_GE(darkened_pixels, 80u)
+        << "The lit contact fixture must visibly darken when AO is enabled";
+    std::cout << "Vulkan AO crop " << label.toStdString()
+              << " darkened_pixels=" << darkened_pixels
+              << " raw_top_mean_difference="
+              << raw_top_difference /
+                     static_cast<double>(region.width() * region.height())
+              << std::endl;
+    const auto sample_mean = [&](const QImage &image, int x, int y, int size) {
+      double sum = 0.0;
+      for (int row = y; row < y + size; ++row) {
+        for (int column = x; column < x + size; ++column) {
+          sum += brightness(image.pixel(column, row));
+        }
+      }
+      return sum / static_cast<double>(size * size);
+    };
+    const auto compare_crop = [&](const QImage &image, const char *crop_name,
+                                  int sample_size) {
+      SCOPED_TRACE(crop_name);
+      std::size_t sample_count = 0u;
+      std::size_t contact_count = 0u;
+      std::size_t contact_mismatches = 0u;
+      double total_difference = 0.0;
+      double contact_difference = 0.0;
+      for (int y = region.top(); y <= region.bottom(); y += sample_size) {
+        for (int x = region.left(); x <= region.right(); x += sample_size) {
+          const double off = sample_mean(centered_off, x, y, sample_size);
+          const double on = sample_mean(centered_on, x, y, sample_size);
+          const double difference =
+              std::abs(on - sample_mean(image, x, y, sample_size));
+          ++sample_count;
+          total_difference += difference;
+          if (off >= 16.0 && off <= 240.0 && off - on >= 4.0) {
+            ++contact_count;
+            contact_difference += difference;
+            if (difference > 4.0) ++contact_mismatches;
+          }
+        }
+      }
+      ASSERT_GT(contact_count, 0u);
+      const double mean_difference = total_difference / sample_count;
+      const double mean_contact_difference = contact_difference / contact_count;
+      const double contact_mismatch_fraction =
+          static_cast<double>(contact_mismatches) / contact_count;
+      std::cout << "Vulkan AO crop " << label.toStdString() << ' ' << crop_name
+                << " sample_size=" << sample_size
+                << " contact_count=" << contact_count
+                << " mean_difference=" << mean_difference
+                << " mean_contact_difference=" << mean_contact_difference
+                << " contact_mismatch_fraction=" << contact_mismatch_fraction
+                << std::endl;
+      // Compare actual AO contacts separately so unchanged background cannot
+      // conceal an incorrect projection-dependent reconstruction.
+      EXPECT_LE(mean_difference, 0.75);
+      EXPECT_LE(mean_contact_difference, 1.0);
+      EXPECT_LE(contact_mismatch_fraction, 0.02);
+    };
+    // SAO seeds its spiral from lower-left fragment coordinates. The bottom
+    // crop aligns those coordinates with the ordinary visible-sized raster,
+    // testing the opposite shift without changing the spiral sampling phase.
+    compare_crop(bottom_on, "bottom_noise_aligned", 1);
+    // The production top crop changes that phase by 64 half-resolution rows.
+    // Compare local means at a smaller scale than the box/contact footprint,
+    // retaining the same display-code bounds while cancelling sampling noise.
+    compare_crop(cropped_on, "top_anchored_tiles", 16);
+  }
 }
 
 TEST(RenderColorRuntimeTests,

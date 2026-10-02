@@ -9,6 +9,7 @@
 #include "viewport/viewport_host_interaction_policy.hpp"
 
 #include "core/logger.hpp"
+#include "platform/window_placement.hpp"
 #include "ui/qt_application_cursor.hpp"
 #include "ui/qt_input_adapter.hpp"
 #include "viewport/viewport_layout.hpp"
@@ -27,6 +28,7 @@
 #include <QResizeEvent>
 #include <QStyleHints>
 #include <QWheelEvent>
+#include <QWidget>
 
 #include <algorithm>
 #include <chrono>
@@ -168,7 +170,7 @@ struct QtViewportSurface::InputAccumulator {
   bool pointer_interaction_canceled = false;
   bool suppress_warp_event = false;
   bool warp_motion_overtook_target = false;
-  QPoint warp_target_local;
+  QPoint warp_target_global;
   QPoint capture_restore_global;
   bool left_pressed = false;
   bool left_down = false;
@@ -207,6 +209,22 @@ struct QtViewportSurface::InputAccumulator {
   std::optional<QuaderInputChord> middle_drag;
   std::optional<QuaderInputChord> right_drag;
   std::unordered_map<int, ClickCandidate> click_candidates;
+};
+
+/// Caches native pixel mapping until its Qt geometry and DPI inputs change.
+struct QtViewportSurface::PresentationGeometry {
+  QRect surface_geometry;
+  QRect parent_geometry;
+  QRect host_geometry;
+  QSize visible_size;
+  const QWindow *surface_parent = nullptr;
+  qreal device_pixel_ratio = 0.0;
+  WId host_id = 0u;
+  WId surface_id = 0u;
+  QRect visible_pixel_bounds;
+  QSize backing_pixel_size;
+  std::uint64_t native_query_count = 0u;
+  bool valid = false;
 };
 
 void QtViewportSurface::synchronize_interaction_cursor() {
@@ -260,7 +278,8 @@ void QtViewportSurface::set_interaction_cursor(
 }
 
 QtViewportSurface::QtViewportSurface(ViewportPaneId pane_id)
-    : pane_id_(pane_id), input_(std::make_unique<InputAccumulator>()) {
+    : pane_id_(pane_id), input_(std::make_unique<InputAccumulator>()),
+      presentation_geometry_(std::make_unique<PresentationGeometry>()) {
   setObjectName(QStringLiteral("viewportSurface_%1")
                     .arg(QString::fromUtf8(viewport_pane_stable_id(pane_id_)
                                                .data())));
@@ -386,15 +405,137 @@ bool QtViewportSurface::ready_to_render() const {
   return initialized_ && render_system_ != nullptr &&
          render_system_->initialized() && static_cast<bool>(swap_chain_) &&
          native_surface_available_ && isExposed() && isVisible() &&
+         (visible_host_ == nullptr || visible_host_->isVisible()) &&
          size.x >= 1.0f && size.y >= 1.0f;
 }
 
-QVec2 QtViewportSurface::render_size_pixels() const {
-  const qreal scale = devicePixelRatio();
-  return {
-      static_cast<float>(std::max<qreal>(1.0, std::round(width() * scale))),
-      static_cast<float>(std::max<qreal>(1.0, std::round(height() * scale))),
+void QtViewportSurface::set_visible_host(QWidget &host) {
+  if (visible_host_ == &host) {
+    return;
+  }
+  if (visible_host_ != nullptr) {
+    visible_host_->removeEventFilter(this);
+  }
+  visible_host_ = &host;
+  visible_host_->installEventFilter(this);
+  presentation_geometry_->valid = false;
+  synchronize_render_size();
+}
+
+QPoint QtViewportSurface::visible_local_to_global(QPoint local) const {
+  return visible_host_ != nullptr ? visible_host_->mapToGlobal(local)
+                                  : mapToGlobal(local);
+}
+
+std::uint64_t QtViewportSurface::presentation_geometry_query_count() const {
+  return presentation_geometry_->native_query_count;
+}
+
+const QtViewportSurface::PresentationGeometry &
+QtViewportSurface::presentation_geometry() const {
+  auto &presentation = *presentation_geometry_;
+  const QWindow *surface_parent = parent();
+  const QRect parent_geometry =
+      surface_parent != nullptr ? surface_parent->geometry() : QRect{};
+  const QRect host_geometry =
+      visible_host_ != nullptr ? visible_host_->geometry() : QRect{};
+  const QSize visible_size =
+      visible_host_ != nullptr ? visible_host_->size() : size();
+  const qreal scale = visible_host_ != nullptr
+                          ? visible_host_->devicePixelRatioF()
+                          : devicePixelRatio();
+  const WId host_id =
+      visible_host_ != nullptr ? visible_host_->internalWinId() : 0u;
+  const WId surface_id = handle() != nullptr
+                             ? const_cast<QtViewportSurface *>(this)->winId()
+                             : 0u;
+  if (presentation.valid && presentation.surface_geometry == geometry() &&
+      presentation.parent_geometry == parent_geometry &&
+      presentation.host_geometry == host_geometry &&
+      presentation.visible_size == visible_size &&
+      presentation.surface_parent == surface_parent &&
+      presentation.device_pixel_ratio == scale &&
+      presentation.host_id == host_id && presentation.surface_id == surface_id) {
+    return presentation;
+  }
+  presentation.surface_geometry = geometry();
+  presentation.parent_geometry = parent_geometry;
+  presentation.host_geometry = host_geometry;
+  presentation.visible_size = visible_size;
+  presentation.surface_parent = surface_parent;
+  presentation.device_pixel_ratio = scale;
+  presentation.host_id = host_id;
+  presentation.surface_id = surface_id;
+  presentation.backing_pixel_size = {
+      std::max(1, qRound(width() * scale)),
+      std::max(1, qRound(height() * scale)),
   };
+  const auto surface_handle =
+      reinterpret_cast<void *>(static_cast<std::uintptr_t>(surface_id));
+  PlatformWindowClientExtent native_extent;
+  if (surface_id != 0u) {
+    ++presentation.native_query_count;
+    native_extent = platform_window_client_extent(surface_handle);
+  }
+  if (native_extent.width > 0 && native_extent.height > 0) {
+    presentation.backing_pixel_size = {native_extent.width, native_extent.height};
+  }
+  PlatformWindowClientBounds native_bounds;
+  if (host_id != 0u && surface_id != 0u) {
+    ++presentation.native_query_count;
+    native_bounds = platform_window_client_bounds_in_window(
+        reinterpret_cast<void *>(static_cast<std::uintptr_t>(host_id)),
+        surface_handle);
+  }
+  if (native_bounds.width > 0 && native_bounds.height > 0) {
+    presentation.visible_pixel_bounds =
+        {native_bounds.x, native_bounds.y, native_bounds.width, native_bounds.height};
+  } else {
+    const QPoint origin = visible_host_ != nullptr
+                              ? mapFromGlobal(
+                                    visible_host_->mapToGlobal(QPoint{0, 0}))
+                              : QPoint{};
+    presentation.visible_pixel_bounds = {
+        qRound(origin.x() * scale), qRound(origin.y() * scale),
+        std::max(1, qRound(visible_size.width() * scale)),
+        std::max(1, qRound(visible_size.height() * scale)),
+    };
+  }
+  presentation.valid = true;
+  return presentation;
+}
+
+QVec2 QtViewportSurface::render_size_pixels() const {
+  const QRect bounds = presentation_geometry().visible_pixel_bounds;
+  return {
+      static_cast<float>(std::max(1, bounds.width())),
+      static_cast<float>(std::max(1, bounds.height())),
+  };
+}
+
+QPointF QtViewportSurface::visible_local_position(QPointF surface_local) const {
+  const auto &presentation = presentation_geometry();
+  const qreal scale = std::max<qreal>(0.01, presentation.device_pixel_ratio);
+  return surface_local -
+         QPointF(presentation.visible_pixel_bounds.x() / scale,
+                 presentation.visible_pixel_bounds.y() / scale);
+}
+
+QVec2 QtViewportSurface::visible_position_pixels(QPointF surface_local) const {
+  const auto &presentation = presentation_geometry();
+  return {
+      static_cast<float>(surface_local.x() * presentation.device_pixel_ratio -
+                         presentation.visible_pixel_bounds.x()),
+      static_cast<float>(surface_local.y() * presentation.device_pixel_ratio -
+                         presentation.visible_pixel_bounds.y()),
+  };
+}
+
+bool QtViewportSurface::visible_position_contains(QPointF surface_local) const {
+  const QVec2 local = visible_position_pixels(surface_local);
+  const QVec2 visible_size = render_size_pixels();
+  return local.x >= 0.0f && local.y >= 0.0f && local.x < visible_size.x &&
+         local.y < visible_size.y;
 }
 
 QtViewportInputFrame
@@ -436,7 +577,8 @@ QtViewportSurface::take_input_frame(float delta_seconds,
   frame.input.mouse_local = input_->mouse_local;
   frame.input.viewport_size = render_size_pixels();
   frame.input.device_pixel_ratio =
-      static_cast<float>(std::max<qreal>(devicePixelRatio(), 0.01));
+      static_cast<float>(std::max<qreal>(
+          presentation_geometry().device_pixel_ratio, 0.01));
   frame.input.modifiers = input_->modifiers;
   frame.input.pressed_input_chords = std::move(input_->pressed);
   frame.input.released_input_chords = std::move(input_->released);
@@ -527,7 +669,7 @@ void QtViewportSurface::abandon_input() {
   replacement.suppress_warp_event = input_->suppress_warp_event;
   replacement.warp_motion_overtook_target =
       input_->warp_motion_overtook_target;
-  replacement.warp_target_local = input_->warp_target_local;
+  replacement.warp_target_global = input_->warp_target_global;
   replacement.mouse_screen = input_->mouse_screen;
   replacement.mouse_local = input_->mouse_local;
   replacement.has_mouse_position = input_->has_mouse_position;
@@ -634,22 +776,17 @@ void QtViewportSurface::set_pointer_capture(bool captured) {
     const QPoint restore = input_->capture_restore_global;
     const QPoint local = mapFromGlobal(restore);
     const qreal scale = devicePixelRatio();
-    input_->warp_target_local = local;
+    input_->warp_target_global = restore;
     input_->suppress_warp_event = true;
     input_->warp_motion_overtook_target = false;
-    input_->mouse_local = {
-        static_cast<float>(local.x() * scale),
-        static_cast<float>(local.y() * scale),
-    };
+    input_->mouse_local = visible_position_pixels(local);
     input_->mouse_screen = {
         static_cast<float>(restore.x() * scale),
         static_cast<float>(restore.y() * scale),
     };
     input_->has_mouse_position = true;
     QCursor::setPos(restore);
-    input_->hovered =
-        local.x() >= 0 && local.y() >= 0 && local.x() < width() &&
-        local.y() < height();
+    input_->hovered = visible_position_contains(local);
   }
 }
 
@@ -662,6 +799,7 @@ bool QtViewportSurface::event(QEvent *event) {
     return true;
   }
   if (event != nullptr && event->type() == QEvent::PlatformSurface) {
+    presentation_geometry_->valid = false;
     auto *surface_event = static_cast<QPlatformSurfaceEvent *>(event);
     if (surface_event->surfaceEventType() ==
         QPlatformSurfaceEvent::SurfaceAboutToBeDestroyed) {
@@ -679,6 +817,7 @@ bool QtViewportSurface::event(QEvent *event) {
              (event->type() == QEvent::DevicePixelRatioChange ||
               event->type() == QEvent::ScreenChangeInternal ||
               event->type() == QEvent::WinIdChange)) {
+    presentation_geometry_->valid = false;
     if (event->type() == QEvent::WinIdChange) {
       recreate_swap_chain(true);
     }
@@ -690,10 +829,7 @@ bool QtViewportSurface::event(QEvent *event) {
       const QPoint global = QCursor::pos();
       const QPoint local = mapFromGlobal(global);
       const qreal scale = devicePixelRatio();
-      input_->mouse_local = {
-          static_cast<float>(local.x() * scale),
-          static_cast<float>(local.y() * scale),
-      };
+      input_->mouse_local = visible_position_pixels(local);
       input_->mouse_screen = {
           static_cast<float>(global.x() * scale),
           static_cast<float>(global.y() * scale),
@@ -714,19 +850,23 @@ bool QtViewportSurface::event(QEvent *event) {
       relative_pointer_input_.clear();
     }
     synchronize_render_size();
+  } else if (event != nullptr && event->type() == QEvent::Move) {
+    presentation_geometry_->valid = false;
+    synchronize_render_size();
+    if (surface_changed_callback_) {
+      surface_changed_callback_();
+    }
   } else if (event != nullptr && event->type() == QEvent::Enter) {
     const auto *enter_event = static_cast<QEnterEvent *>(event);
     const qreal scale = devicePixelRatio();
-    input_->mouse_local = {
-        static_cast<float>(enter_event->position().x() * scale),
-        static_cast<float>(enter_event->position().y() * scale),
-    };
+    input_->mouse_local = visible_position_pixels(enter_event->position());
     input_->mouse_screen = {
         static_cast<float>(enter_event->globalPosition().x() * scale),
         static_cast<float>(enter_event->globalPosition().y() * scale),
     };
     input_->has_mouse_position = true;
-    input_->hovered = true;
+    input_->hovered = pointer_captured() || visible_host_ == nullptr ||
+                      visible_position_contains(enter_event->position());
     if (!input_->has_event_modifiers) {
       input_->modifiers = viewport_modifiers(QGuiApplication::keyboardModifiers());
       input_->has_event_modifiers = true;
@@ -743,6 +883,18 @@ bool QtViewportSurface::event(QEvent *event) {
 }
 
 bool QtViewportSurface::eventFilter(QObject *watched, QEvent *event) {
+  if (watched == visible_host_.data() && event != nullptr &&
+      (event->type() == QEvent::Resize || event->type() == QEvent::Move ||
+       event->type() == QEvent::Show ||
+       event->type() == QEvent::DevicePixelRatioChange ||
+       event->type() == QEvent::ScreenChangeInternal ||
+       event->type() == QEvent::WinIdChange)) {
+    presentation_geometry_->valid = false;
+    synchronize_render_size();
+    if (surface_changed_callback_) {
+      surface_changed_callback_();
+    }
+  }
   if (watched != this && event != nullptr) {
     switch (event->type()) {
     case QEvent::FocusIn:
@@ -791,6 +943,7 @@ void QtViewportSurface::exposeEvent(QExposeEvent *event) {
 
 void QtViewportSurface::resizeEvent(QResizeEvent *event) {
   QWindow::resizeEvent(event);
+  presentation_geometry_->valid = false;
   synchronize_render_size();
   if (surface_changed_callback_) {
     surface_changed_callback_();
@@ -1004,8 +1157,8 @@ void QtViewportSurface::record_mouse_press(QMouseEvent &event,
           static_cast<int>(*button),
           InputAccumulator::ClickCandidate{
               .chord = click,
-              .press_local = event.position(),
-              .last_local = event.position(),
+              .press_local = visible_local_position(event.position()),
+              .last_local = visible_local_position(event.position()),
           });
     }
   }
@@ -1129,32 +1282,28 @@ void QtViewportSurface::record_mouse_move(QMouseEvent &event) {
     ++input_->mouse_move_events;
   }
   const qreal scale = devicePixelRatio();
-  const QVec2 local{
-      static_cast<float>(event.position().x() * scale),
-      static_cast<float>(event.position().y() * scale),
-  };
+  const QVec2 local = visible_position_pixels(event.position());
+  const QPointF visible_local = visible_local_position(event.position());
   const QVec2 screen{
       static_cast<float>(event.globalPosition().x() * scale),
       static_cast<float>(event.globalPosition().y() * scale),
   };
   if (input_->suppress_warp_event) {
-    const QPoint event_local = event.position().toPoint();
-    const QPoint delta = event_local - input_->warp_target_local;
+    const QPoint delta = event.globalPosition().toPoint() -
+                         input_->warp_target_global;
     if (std::abs(delta.x()) <= 2 && std::abs(delta.y()) <= 2) {
       if (!input_->warp_motion_overtook_target) {
         input_->mouse_local = local;
         input_->mouse_screen = screen;
         input_->has_mouse_position = true;
-        input_->hovered = pointer_captured() ||
-                          (event_local.x() >= 0 && event_local.y() >= 0 &&
-                           event_local.x() < width() &&
-                           event_local.y() < height());
+        input_->hovered = pointer_captured() || visible_host_ == nullptr ||
+                          visible_position_contains(event.position());
         synchronize_interaction_cursor();
       }
       input_->modifiers = viewport_modifiers(event.modifiers());
       for (auto &[button, candidate] : input_->click_candidates) {
         (void)button;
-        candidate.last_local = event.position();
+        candidate.last_local = visible_local;
       }
       input_->suppress_warp_event = false;
       input_->warp_motion_overtook_target = false;
@@ -1174,12 +1323,12 @@ void QtViewportSurface::record_mouse_move(QMouseEvent &event) {
     if (candidate.eligible) {
       qreal displacement = 0.0;
       if (pointer_captured()) {
-        const QPointF delta = event.position() - candidate.last_local;
+        const QPointF delta = visible_local - candidate.last_local;
         candidate.captured_distance +=
             std::abs(delta.x()) + std::abs(delta.y());
         displacement = candidate.captured_distance;
       } else {
-        const QPointF delta = event.position() - candidate.press_local;
+        const QPointF delta = visible_local - candidate.press_local;
         displacement = std::abs(delta.x()) + std::abs(delta.y());
       }
       if (displacement >= static_cast<qreal>(start_drag_distance)) {
@@ -1191,7 +1340,7 @@ void QtViewportSurface::record_mouse_move(QMouseEvent &event) {
         });
       }
     }
-    candidate.last_local = event.position();
+    candidate.last_local = visible_local;
   }
   if (input_->has_mouse_position) {
     const QVec2 absolute_delta = local - input_->mouse_local;
@@ -1216,7 +1365,8 @@ void QtViewportSurface::record_mouse_move(QMouseEvent &event) {
         .press_sequence = input_->left_pointer_press_sequence,
     });
   }
-  input_->hovered = true;
+  input_->hovered = pointer_captured() || visible_host_ == nullptr ||
+                    visible_position_contains(event.position());
   input_->modifiers = viewport_modifiers(event.modifiers());
   synchronize_interaction_cursor();
 }
@@ -1291,8 +1441,11 @@ bool QtViewportSurface::apply_native_mouse_grab(bool captured) {
 }
 
 void QtViewportSurface::recenter_captured_pointer() {
-  if (input_ == nullptr || !pointer_captured() || width() <= 0 ||
-      height() <= 0 || !relative_pointer_input_.capture_requires_recenter()) {
+  const QSize visible_size = visible_host_ != nullptr ? visible_host_->size()
+                                                      : size();
+  if (input_ == nullptr || !pointer_captured() || visible_size.width() <= 0 ||
+      visible_size.height() <= 0 ||
+      !relative_pointer_input_.capture_requires_recenter()) {
     return;
   }
   if (input_->suppress_warp_event) {
@@ -1300,16 +1453,14 @@ void QtViewportSurface::recenter_captured_pointer() {
     // one can still arrive after genuine physical motion.
     return;
   }
-  const QPoint local(width() / 2, height() / 2);
-  const QPoint global = mapToGlobal(local);
+  const QPoint visible_local(visible_size.width() / 2, visible_size.height() / 2);
+  const QPoint global = visible_local_to_global(visible_local);
+  const QPoint local = mapFromGlobal(global);
   const qreal scale = devicePixelRatio();
   // SetCursorPos changes the platform cursor before Qt necessarily delivers
   // the translated center event. Use the target as the fallback baseline now
   // so a physical move that overtakes that event contributes only its delta.
-  input_->mouse_local = {
-      static_cast<float>(local.x() * scale),
-      static_cast<float>(local.y() * scale),
-  };
+  input_->mouse_local = visible_position_pixels(local);
   input_->mouse_screen = {
       static_cast<float>(global.x() * scale),
       static_cast<float>(global.y() * scale),
@@ -1318,7 +1469,7 @@ void QtViewportSurface::recenter_captured_pointer() {
   if (QCursor::pos() == global) {
     return;
   }
-  input_->warp_target_local = local;
+  input_->warp_target_global = global;
   input_->suppress_warp_event = true;
   input_->warp_motion_overtook_target = false;
   QCursor::setPos(global);
@@ -1327,21 +1478,24 @@ void QtViewportSurface::recenter_captured_pointer() {
 void QtViewportSurface::record_wheel(QWheelEvent &event) {
   input_->has_event_modifiers = true;
   const qreal scale = devicePixelRatio();
-  input_->mouse_local = {
-      static_cast<float>(event.position().x() * scale),
-      static_cast<float>(event.position().y() * scale),
-  };
+  input_->mouse_local = visible_position_pixels(event.position());
   input_->mouse_screen = {
       static_cast<float>(event.globalPosition().x() * scale),
       static_cast<float>(event.globalPosition().y() * scale),
   };
   input_->has_mouse_position = true;
-  input_->hovered = true;
+  input_->hovered = pointer_captured() || visible_host_ == nullptr ||
+                    visible_position_contains(event.position());
   input_->modifiers = viewport_modifiers(event.modifiers());
   synchronize_interaction_cursor();
-  const QtWheelInputTranslation translation =
+  QtWheelInputTranslation translation =
       quader_wheel_input_from_qt_event(
           event, input_->wheel_accumulator, static_cast<double>(scale));
+  for (QuaderWheelInputEdge &edge : translation.wheel_input_edges) {
+    if (edge.has_local_position) {
+      edge.local = {input_->mouse_local.x, input_->mouse_local.y};
+    }
+  }
   input_->mouse_wheel += translation.mouse_wheel;
   input_->wheel.insert(input_->wheel.end(), translation.wheel_input_edges.begin(),
                        translation.wheel_input_edges.end());
@@ -1389,10 +1543,15 @@ void QtViewportSurface::synchronize_render_size() {
       static_cast<std::uint32_t>(std::max(1.0f, size.x));
   const std::uint32_t height =
       static_cast<std::uint32_t>(std::max(1.0f, size.y));
-  if (renderer_.width() == width && renderer_.height() == height) {
-    return;
+  if (renderer_.width() != width || renderer_.height() != height) {
+    renderer_.resize(width, height);
   }
-  renderer_.resize(width, height);
+  const auto &presentation = presentation_geometry();
+  renderer_.set_presentation_bounds(
+      static_cast<std::uint32_t>(presentation.backing_pixel_size.width()),
+      static_cast<std::uint32_t>(presentation.backing_pixel_size.height()),
+      static_cast<std::uint32_t>(std::max(0, presentation.visible_pixel_bounds.x())),
+      static_cast<std::uint32_t>(std::max(0, presentation.visible_pixel_bounds.y())));
 }
 
 void *QtViewportSurface::native_window_handle() const {

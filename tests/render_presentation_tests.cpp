@@ -19,6 +19,7 @@ TEST(RenderPresentationTests, DefaultsToSynchronizedPresentation) {
   EXPECT_TRUE(renderer.vsync_enabled());
   EXPECT_TRUE(renderer.presentation_is_synchronized());
   EXPECT_TRUE(renderer.ready_for_next_frame());
+  EXPECT_FALSE(renderer.supports_hidden_native_pixels());
 }
 
 TEST(RenderPresentationTests, RequestedOffIsRetainedBeforeBackendInitialization) {

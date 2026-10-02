@@ -35,6 +35,11 @@ file except through prior written authorization from Francesco Di Blasi.
   Reveal reuses retained rows and defers one owner discovery until the current exposure's
   first item-view paint. Closing before that paint abandons pending discovery; unchanged
   frames never repeat it. Retain no filesystem-watch handles that block folder replacement.
+  Preserve the prior `updatesEnabled()` and animation state while settling visibility and native
+  pane clip layout. Hold Qt painting only across that synchronous change, so uncovered dock pixels
+  are painted after the expanded native scene clip is valid. On reveal, activate the dock's layout
+  immediately after setting visibility, before raising it or activating the main-window layout;
+  its minimum must reflect current child metrics before the first paint.
 - `QtFaceTexturePanel` owns the single-face canvas and retained texture controls.
   Texture Settings keeps Scale U/V on one row, Shift U/V on the next, then Rotation,
   leaving vertical space for the canvas and material browser.
@@ -50,8 +55,18 @@ file except through prior written authorization from Francesco Di Blasi.
   the corresponding owner revisions are unchanged.
 - `QtViewportPanel` hosts one to four native-child `QtViewportSurface` panes. Workspace state and
   cameras belong to `ViewportWorkspaceService`; Filament resources belong to render.
-  Each pane reserves a fixed control strip above its native render surface. Convert input and
-  overlay coordinates against that surface, not the full pane frame. Strip actions have independent
+  Each pane reserves a fixed control strip above its visible render area. A native clip host
+  contains a vertically reserved backing container only when render advertises hidden native pixels
+  (Vulkan). Anchor it at `(0, 0)` so bottom-dock toggles change the visible clip without resizing or
+  moving the scene HWND. Render the reserved region with the shifted/scaled scene and overlay
+  projections and extended grid; Filament must preserve occluded image pixels. `QtViewportSurface`
+  maps backing events to visible physical pixels and caches native geometry queries until
+  layout/DPI/handle inputs change. Convert input, picking, popup and HUD coordinates against the
+  visible host. Filter focus, shortcut override and key events from both the visible host and its
+  inner native backing container through the surface's existing input adapter; the focused Qt
+  widget can be the inner container. Verify composed transition frames as well as settled bounds; see
+  [presentation contract](../../thirdparty/filament/README.md#hidden-backing-surface-pixels).
+  Strip actions have independent
   checked-state presentation and dispatch through the focused pane's public API; never share
   checkable QActions between panes. Camera and Shading stay visible when icons overflow.
   Hover presents tool feedback without taking keyboard focus from panel editors. The first pointer

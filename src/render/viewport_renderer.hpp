@@ -89,6 +89,11 @@ public:
         const ViewportPersistentOverlayStyleSnapshot &style, bool visible);
 
     void resize(std::uint32_t width, std::uint32_t height);
+    /** Native raster bounds; width()/height() remain the visible camera extent. */
+    void set_presentation_bounds(std::uint32_t backing_width,
+                                 std::uint32_t backing_height,
+                                 std::uint32_t crop_left,
+                                 std::uint32_t crop_top);
     void update_camera(const ViewportCameraController &controller);
     void apply_scene_settings(const SceneSettings &settings,
                               bool rendered_mode,
@@ -132,6 +137,8 @@ public:
     void apply_tone_mapping(SceneToneMapping tone_mapping, bool enabled);
     void destroy_color_grading();
     void reset_presentation_cache();
+    void update_presentation_bounds();
+    void update_bloom_presentation(bool force);
 
     filament::Engine* engine_ = nullptr;
     filament::Scene* scene_ = nullptr;
@@ -156,6 +163,11 @@ public:
     ViewportRenderSurface surface_ = ViewportRenderSurface::Texture;
     std::uint32_t width_ = 1u;
     std::uint32_t height_ = 1u;
+    std::uint32_t backing_width_ = 1u;
+    std::uint32_t backing_height_ = 1u;
+    std::uint32_t crop_left_ = 0u;
+    std::uint32_t crop_top_ = 0u;
+    bool has_presentation_bounds_ = false;
     SceneToneMapping color_grading_tone_mapping_ = SceneToneMapping::Aces;
     bool has_color_grading_tone_mapping_ = false;
     bool instance_edit_context_active_ = false;
@@ -166,6 +178,9 @@ public:
     bool has_material_presentation_ = false;
     InstanceEditStyle instance_edit_style_;
     std::optional<std::uint64_t> camera_presentation_signature_;
+    std::optional<std::uint64_t> presentation_bounds_signature_;
+    std::optional<filament::View::BloomOptions> semantic_bloom_options_;
+    std::optional<std::uint32_t> bloom_presentation_resolution_;
     std::optional<std::uint64_t> scene_settings_presentation_signature_;
     std::uint64_t scene_settings_apply_count_ = 0u;
     std::optional<bool> shadowing_enabled_;

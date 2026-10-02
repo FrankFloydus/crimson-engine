@@ -84,7 +84,8 @@ add_setting_color(RenderSignatureBuilder &signature,
 std::uint64_t ground_grid_presentation_signature(
     const ViewportCameraController &controller, std::uint32_t viewport_width,
     std::uint32_t viewport_height, float grid_world_spacing,
-    const ViewportSettings &settings, bool instance_edit_context) {
+    const ViewportSettings &settings, bool instance_edit_context,
+    QVec2 raster_extent_scale) {
   const ViewportCameraPose pose = controller.pose();
   const ViewportCameraState &state = controller.state();
   RenderSignatureBuilder signature;
@@ -101,6 +102,7 @@ std::uint64_t ground_grid_presentation_signature(
               : ViewportFloatSettingId::Grid3DIntensity))
       .add_value(viewport_width)
       .add_value(viewport_height)
+      .add_vec2(raster_extent_scale)
       .add_float(std::max(grid_world_spacing, 0.0001f))
       .add_bool(instance_edit_context)
       .add_float(instance_edit_context
@@ -230,7 +232,8 @@ void ViewportGridRenderer::update(const ViewportCameraController &controller,
                                   std::uint32_t viewport_height,
                                   float grid_world_spacing,
                                   const ViewportSettings &settings,
-                                  bool visible, bool instance_edit_context) {
+                                  bool visible, bool instance_edit_context,
+                                  QVec2 raster_extent_scale) {
   if (!engine_ || !scene_ || !ground_grid_entity_) {
     return;
   }
@@ -245,14 +248,22 @@ void ViewportGridRenderer::update(const ViewportCameraController &controller,
       ground_grid_presentation_signature(
           controller, std::max(1u, viewport_width),
           std::max(1u, viewport_height), grid_world_spacing, settings,
-          instance_edit_context);
+          instance_edit_context, raster_extent_scale);
   if (presentation_signature_ == presentation_signature) {
     return;
   }
 
   const ViewportCameraPose pose = controller.pose();
-  const ViewportGridPlacement grid = ViewportGridPlacementPolicy::placement(
+  ViewportGridPlacement grid = ViewportGridPlacementPolicy::placement(
       controller, std::max(1u, viewport_width), std::max(1u, viewport_height));
+  if (controller.state().projection == ViewportProjection::Orthographic) {
+    // The native crop can reveal pixels outside the visible camera rectangle.
+    // Expand the retained plane in both axes to cover rolled grid projections.
+    const float extent_scale = std::max(
+        {1.0f, raster_extent_scale.x, raster_extent_scale.y});
+    grid.plane_size.x *= extent_scale;
+    grid.plane_size.y *= extent_scale;
+  }
   update_ground_grid_mesh(grid.plane_size.x, grid.plane_size.y);
 
   auto &transform_manager = engine_->getTransformManager();

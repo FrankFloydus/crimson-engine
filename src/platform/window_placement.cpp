@@ -127,4 +127,35 @@ platform_window_client_extent(void *native_window_handle) {
 #endif
 }
 
+PlatformWindowClientBounds platform_window_client_bounds_in_window(
+    void *native_window_handle, void *reference_window_handle) {
+#if defined(_WIN32)
+  if (native_window_handle == nullptr || reference_window_handle == nullptr) {
+    return {};
+  }
+  RECT client{};
+  const HWND window = static_cast<HWND>(native_window_handle);
+  if (GetClientRect(window, &client) == FALSE) {
+    return {};
+  }
+  // Zero is a valid mapping when the client origins already coincide.
+  SetLastError(ERROR_SUCCESS);
+  if (MapWindowPoints(window, static_cast<HWND>(reference_window_handle),
+                      reinterpret_cast<POINT *>(&client), 2) == 0 &&
+      GetLastError() != ERROR_SUCCESS) {
+    return {};
+  }
+  return {
+      .x = static_cast<int>(client.left),
+      .y = static_cast<int>(client.top),
+      .width = static_cast<int>(std::max<LONG>(0, client.right - client.left)),
+      .height = static_cast<int>(std::max<LONG>(0, client.bottom - client.top)),
+  };
+#else
+  (void)native_window_handle;
+  (void)reference_window_handle;
+  return {};
+#endif
+}
+
 } // namespace quader

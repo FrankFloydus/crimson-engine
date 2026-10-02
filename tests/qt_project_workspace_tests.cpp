@@ -23,6 +23,7 @@
 #include "platform/window_placement.hpp"
 #include "render/render_system.hpp"
 #include "render/scene_render_bridge.hpp"
+#include "support/qt_viewport_input_test_helpers.hpp"
 #include "quader/modeling/neutral/polygon/document_model.hpp"
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_application_style.hpp"
@@ -6190,7 +6191,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(project.material_usage().work_stats(), usage_after_deselect);
   auto *surface = viewport->surface(quader::ViewportPaneId::Perspective);
   ASSERT_NE(surface, nullptr);
-  surface->resize(800, 600);
+  quader::test_support::resize_viewport_surface(*viewport, *surface, {800, 600});
   auto &camera = scene.viewport_workspace().camera(quader::ViewportPaneId::Perspective);
   ASSERT_TRUE(camera.restore_perspective_pose(
       {.eye = {8, 7, 11}, .target = {}, .up = {0, 1, 0}}));
@@ -6221,11 +6222,11 @@ TEST(QtProjectWorkspaceTests,
     process();
     QMouseEvent press(QEvent::MouseButtonPress, {300, 300}, {300, 300},
                        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-    QApplication::sendEvent(surface, &press);
+    quader::test_support::send_visible_viewport_event(surface, &press);
     process();
     QMouseEvent release(QEvent::MouseButtonRelease, {500, 430}, {500, 430},
                          Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
-    QApplication::sendEvent(surface, &release);
+    quader::test_support::send_visible_viewport_event(surface, &release);
     process();
     ASSERT_TRUE(editor.tools().live_primitive_creation());
     const auto entity = scene.scene().primary_selection();
@@ -6610,6 +6611,24 @@ TEST(QtProjectWorkspaceTests, AssetBrowserNativeCtrlSpaceHasNoIntermediateDockAn
   };
   quader::QuaderEditorApiSessionAccess::set_scene_binding_changed_callback(editor, bind_scene);
   bind_scene(scene);
+  const QString native_vsync = qEnvironmentVariable("QUADER_NATIVE_BROWSER_VSYNC");
+  if (qEnvironmentVariableIsSet("QUADER_NATIVE_BROWSER_VSYNC")) {
+    ASSERT_TRUE(native_vsync == QStringLiteral("0") ||
+                native_vsync == QStringLiteral("1"))
+        << "QUADER_NATIVE_BROWSER_VSYNC must be 0 or 1";
+    const bool enabled = native_vsync == QStringLiteral("1");
+    const auto changed = editor.preferences().set_vsync_enabled(enabled);
+    ASSERT_TRUE(changed.ok()) << changed.error_message();
+    EXPECT_EQ(editor.preferences().vsync_enabled(), enabled);
+    EXPECT_EQ(renderer.vsync_enabled(), enabled);
+  }
+  const QString interrupted_resize =
+      qEnvironmentVariable("QUADER_NATIVE_BROWSER_INTERRUPTED_RESIZE");
+  if (qEnvironmentVariableIsSet("QUADER_NATIVE_BROWSER_INTERRUPTED_RESIZE")) {
+    ASSERT_TRUE(interrupted_resize == QStringLiteral("0") ||
+                interrupted_resize == QStringLiteral("1"))
+        << "QUADER_NATIVE_BROWSER_INTERRUPTED_RESIZE must be 0 or 1";
+  }
   auto *window = ui.main_window();
   auto *viewport = dynamic_cast<quader::QtViewportPanel *>(
       window->findChild<QWidget *>(QStringLiteral("viewportWorkspace")));
@@ -6619,8 +6638,15 @@ TEST(QtProjectWorkspaceTests, AssetBrowserNativeCtrlSpaceHasNoIntermediateDockAn
   ASSERT_TRUE(object.ok()) << object.error_message();
   ASSERT_TRUE(editor.selection().select_object(object.value()).ok());
   ASSERT_TRUE(editor.viewports().set_layout(quader::ViewportLayoutId::Single).ok());
+  const QString native_shading = qEnvironmentVariable(
+      "QUADER_NATIVE_BROWSER_SHADING", QStringLiteral("shaded"));
+  ASSERT_TRUE(native_shading == QStringLiteral("shaded") ||
+              native_shading == QStringLiteral("rendered"))
+      << "QUADER_NATIVE_BROWSER_SHADING must be shaded or rendered";
   ASSERT_TRUE(editor.viewports().set_shading_mode(
-      quader::ViewportPaneId::Perspective, quader::QuaderShadingMode::Shaded).ok());
+      quader::ViewportPaneId::Perspective,
+      native_shading == QStringLiteral("rendered")
+          ? quader::QuaderShadingMode::Rendered : quader::QuaderShadingMode::Shaded).ok());
   constexpr std::array kPaneIds{quader::ViewportPaneId::Perspective,
                                 quader::ViewportPaneId::Top,
                                 quader::ViewportPaneId::Front,
@@ -6631,8 +6657,18 @@ TEST(QtProjectWorkspaceTests, AssetBrowserNativeCtrlSpaceHasNoIntermediateDockAn
   quader::SceneRenderBridge bridge;
   renderer.initialize_scene_render_bridge(bridge, resources);
   quader::RenderOverlaySnapshotCache overlay_cache;
-  window->resize(1600, 1000);
   ui.show();
+  ASSERT_NE(window->screen(), nullptr);
+  ASSERT_NE(window->windowHandle(), nullptr);
+  const QRect available_geometry = window->screen()->availableGeometry();
+  const QSize available_client_size = available_geometry.marginsRemoved(
+      window->windowHandle()->frameMargins()).size();
+  ASSERT_GT(available_client_size.width(), 0);
+  ASSERT_GT(available_client_size.height(), 0);
+  window->resize(QSize(1600, 1000).boundedTo(available_client_size));
+  if (!available_geometry.contains(window->frameGeometry())) {
+    window->move(available_geometry.topLeft());
+  }
   window->activateWindow();
   QElapsedTimer startup;
   startup.start();
@@ -6653,6 +6689,7 @@ TEST(QtProjectWorkspaceTests, AssetBrowserNativeCtrlSpaceHasNoIntermediateDockAn
   ASSERT_NE(browser, nullptr);
   ASSERT_TRUE(editor.ui().hide_panel("asset_browser").ok());
   std::function<void()> viewport_prepared;
+  std::function<void()> viewport_accepted;
   const auto present_viewports = [&] {
     ui.refresh({.delta_seconds = 1.0 / 60.0}, renderer.frame_performance_stats());
     const auto synchronized = quader::QuaderRenderApiRuntimeAccess::sync_scene(
@@ -6663,7 +6700,8 @@ TEST(QtProjectWorkspaceTests, AssetBrowserNativeCtrlSpaceHasNoIntermediateDockAn
     return ui.render_viewports();
   };
   const auto settle_viewports = [&](const char *stage, int frame_count,
-                                     const auto &verify_frame) {
+                                     const auto &verify_frame,
+                                     int minimum_elapsed_ms = 0) {
     SCOPED_TRACE(stage);
     quader::AppFrameSchedule schedule;
     QEventLoop loop;
@@ -6676,14 +6714,22 @@ TEST(QtProjectWorkspaceTests, AssetBrowserNativeCtrlSpaceHasNoIntermediateDockAn
         1, static_cast<int>(std::lround(1000.0 / renderer.display_refresh_rate_hz())));
     std::size_t submitted = 0U;
     int accepted_frames = 0;
+    QElapsedTimer presentation_settle_timer;
+    qint64 first_accepted_ms = -1;
+    presentation_settle_timer.start();
     QObject::connect(&frame_timer, &QTimer::timeout, &loop, [&] {
       submitted = 0U;
       if (renderer.presentation_is_synchronized() || renderer.ready_for_next_frame()) {
         submitted = present_viewports();
       }
       verify_frame();
-      if (submitted == editor.viewports().active_pane_count()) ++accepted_frames;
-      if (accepted_frames == frame_count) {
+      if (submitted == editor.viewports().active_pane_count()) {
+        if (first_accepted_ms < 0) first_accepted_ms = presentation_settle_timer.elapsed();
+        if (viewport_accepted) viewport_accepted();
+        ++accepted_frames;
+      }
+      if (accepted_frames >= frame_count &&
+          presentation_settle_timer.elapsed() - first_accepted_ms >= minimum_elapsed_ms) {
         frame_timer.stop();
         loop.quit();
         return;
@@ -6695,9 +6741,14 @@ TEST(QtProjectWorkspaceTests, AssetBrowserNativeCtrlSpaceHasNoIntermediateDockAn
     timeout.start(3000);
     frame_timer.start(0);
     loop.exec();
-    EXPECT_EQ(accepted_frames, frame_count)
-        << "Last accepted pane count: " << submitted;
-    if (accepted_frames != frame_count) {
+    if (minimum_elapsed_ms == 0) {
+      EXPECT_EQ(accepted_frames, frame_count)
+          << "Last accepted pane count: " << submitted;
+    } else {
+      EXPECT_GE(accepted_frames, frame_count);
+      EXPECT_GE(presentation_settle_timer.elapsed() - first_accepted_ms, minimum_elapsed_ms);
+    }
+    if (accepted_frames < frame_count) {
       for (const auto pane : kPaneIds) {
         const auto *surface = viewport->surface(pane);
         std::cout << "Native pane " << static_cast<int>(pane)
@@ -6750,6 +6801,29 @@ TEST(QtProjectWorkspaceTests, AssetBrowserNativeCtrlSpaceHasNoIntermediateDockAn
         EXPECT_FALSE(label->mask().isEmpty());
         EXPECT_FALSE(label->mask() == QRegion(label->rect()));
       }
+      if (frame->isVisible() && visible_dimensions < 2) {
+        const auto selection = editor.selection().summary();
+        const auto &pane_settings = bound_scene->viewport_workspace().effective_settings(pane);
+        std::cout << "NATIVE_DIMENSIONS_MISSING pane=" << pane_name.toStdString()
+                  << " root_mapped=" << window->testAttribute(Qt::WA_Mapped)
+                  << " root_updates=" << window->updatesEnabled()
+                  << " pane_updates=" << frame->updatesEnabled()
+                  << " pane_mapped=" << frame->testAttribute(Qt::WA_Mapped)
+                  << " shading=" << static_cast<int>(editor.viewports().shading_mode(pane))
+                  << " selection_mode=" << static_cast<int>(selection.mode)
+                  << " selected_objects=" << selection.selected_object_count
+                  << " show_dimensions=" << pane_settings.bool_value(
+                         quader::ViewportBoolSettingId::ShowDimensions)
+                  << " show_overlays=" << pane_settings.bool_value(
+                         quader::ViewportBoolSettingId::ShowOverlays);
+        for (const QString &axis : {QStringLiteral("X"), QStringLiteral("Y"),
+                                   QStringLiteral("Z")}) {
+          auto *label = viewport->findChild<QLabel *>(
+              QStringLiteral("viewportSelectionDimension%1_%2").arg(axis, pane_name));
+          std::cout << ' ' << axis.toStdString() << "_hidden=" << label->isHidden();
+        }
+        std::cout << '\n';
+      }
       if (frame->isVisible()) EXPECT_GE(visible_dimensions, 2);
     }
   };
@@ -6764,7 +6838,12 @@ TEST(QtProjectWorkspaceTests, AssetBrowserNativeCtrlSpaceHasNoIntermediateDockAn
     ASSERT_FALSE(capture.isNull());
     EXPECT_TRUE(capture.save(QDir(review).filePath(name)));
   };
-  settle_viewports("initial selected box", 4, no_frame_check);
+  settle_viewports("initial selected box", 4, no_frame_check, 250);
+  std::cout << "NATIVE_BROWSER_PRESENTATION requested_vsync="
+            << editor.preferences().vsync_enabled()
+            << " resolved_synchronized=" << renderer.presentation_is_synchronized()
+            << " shading=" << native_shading.toStdString()
+            << '\n';
   application.processEvents();
   QApplication::setActiveWindow(window);
   expect_current_dimensions();
@@ -6912,21 +6991,71 @@ TEST(QtProjectWorkspaceTests, AssetBrowserNativeCtrlSpaceHasNoIntermediateDockAn
   }
   // Keep the normal frame timer running while the maximized Shaded viewport
   // grows, so the request is tested against an already pending regular frame.
+  auto *panel_action = window->findChild<QAction *>(QStringLiteral("panel_asset_browser"));
+  auto *window_menu = window->findChild<QMenu *>(QStringLiteral("menu_window"));
+  ASSERT_NE(panel_action, nullptr);
+  ASSERT_NE(window_menu, nullptr);
+  const auto trigger_panel_menu = [&] {
+    ASSERT_TRUE(QMetaObject::invokeMethod(window_menu, "aboutToShow", Qt::DirectConnection));
+    panel_action->trigger();
+  };
   for (const bool selected : {true, false}) {
     ASSERT_TRUE((selected ? editor.selection().select_object(object.value())
                           : editor.selection().clear()).ok());
     for (const bool immediate : {false, true}) {
       SCOPED_TRACE(selected);
       SCOPED_TRACE(immediate);
+      const bool menu_trigger = !immediate;
+      SCOPED_TRACE(menu_trigger ? "panel_menu" : "ctrl_space");
       window->showMaximized();
       application.processEvents();
       QApplication::setActiveWindow(window);
       ASSERT_FALSE(window->isMinimized());
-      ASSERT_TRUE(editor.ui().show_panel("asset_browser").ok());
+      auto *native_surface = viewport->surface(quader::ViewportPaneId::Perspective);
+      auto *visible_content = viewport->findChild<QWidget *>(
+          QStringLiteral("viewportSurfaceContainer_perspective"));
+      ASSERT_NE(native_surface, nullptr);
+      ASSERT_NE(visible_content, nullptr);
+      viewport_accepted = [&] {
+        const auto render_extent = native_surface->render_size_pixels();
+        const auto camera_extent = bound_scene->viewport_workspace().camera(
+            quader::ViewportPaneId::Perspective).viewport_size();
+        EXPECT_NEAR(visible_content->width() * visible_content->devicePixelRatioF(),
+                    render_extent.x, 1.0);
+        EXPECT_NEAR(visible_content->height() * visible_content->devicePixelRatioF(),
+                    render_extent.y, 1.0);
+        EXPECT_FLOAT_EQ(camera_extent.x, render_extent.x);
+        EXPECT_FLOAT_EQ(camera_extent.y, render_extent.y);
+        EXPECT_EQ(native_surface->renderer().width(),
+                  static_cast<std::uint32_t>(render_extent.x));
+        EXPECT_EQ(native_surface->renderer().height(),
+                  static_cast<std::uint32_t>(render_extent.y));
+      };
+      settle_viewports("maximized viewport before browser command", 4, no_frame_check, 250);
+      viewport_accepted = {};
+      const WId native_window = native_surface->winId();
+      const QSize backing_size = native_surface->size();
+      const auto backing_extent = quader::platform_window_client_extent(
+          reinterpret_cast<void *>(static_cast<std::uintptr_t>(native_window)));
+      const auto expect_stable_backing = [&] {
+        EXPECT_EQ(native_surface->winId(), native_window);
+        EXPECT_EQ(native_surface->size(), backing_size);
+        const auto actual_extent = quader::platform_window_client_extent(
+            reinterpret_cast<void *>(static_cast<std::uintptr_t>(native_surface->winId())));
+        EXPECT_EQ(actual_extent.width, backing_extent.width);
+        EXPECT_EQ(actual_extent.height, backing_extent.height);
+      };
+      ASSERT_FALSE(editor.ui().panel_visible("asset_browser"));
+      if (menu_trigger) {
+        trigger_panel_menu();
+      } else {
+        ASSERT_TRUE(viewport->focus_active_pane());
+        send_toggle(*native_surface);
+      }
+      ASSERT_TRUE(editor.ui().panel_visible("asset_browser"));
       settle_viewports("maximized browser before close", 4, no_frame_check);
       ASSERT_FALSE(window->isMinimized());
-      auto *native_surface = viewport->surface(quader::ViewportPaneId::Perspective);
-      ASSERT_NE(native_surface, nullptr);
+      expect_stable_backing();
       const auto old_extent = native_surface->render_size_pixels();
       quader::AppFrameSchedule schedule;
       quader::AppFramePresentationRequest presentation_request;
@@ -6975,12 +7104,13 @@ TEST(QtProjectWorkspaceTests, AssetBrowserNativeCtrlSpaceHasNoIntermediateDockAn
         }
         if (closing && submitted == editor.viewports().active_pane_count()) {
           if (first_accepted_ns < 0) first_accepted_ns = transition_timer.nsecsElapsed();
-          const auto actual_extent = quader::platform_window_client_extent(
-              reinterpret_cast<void *>(static_cast<std::uintptr_t>(native_surface->winId())));
+          expect_stable_backing();
           EXPECT_FLOAT_EQ(native_surface->render_size_pixels().x, final_extent.x);
           EXPECT_FLOAT_EQ(native_surface->render_size_pixels().y, final_extent.y);
-          EXPECT_FLOAT_EQ(static_cast<float>(actual_extent.width), final_extent.x);
-          EXPECT_FLOAT_EQ(static_cast<float>(actual_extent.height), final_extent.y);
+          EXPECT_NEAR(visible_content->width() * visible_content->devicePixelRatioF(),
+                      final_extent.x, 1.0);
+          EXPECT_NEAR(visible_content->height() * visible_content->devicePixelRatioF(),
+                      final_extent.y, 1.0);
           const auto camera_extent = bound_scene->viewport_workspace().camera(
               quader::ViewportPaneId::Perspective).viewport_size();
           EXPECT_FLOAT_EQ(camera_extent.x, final_extent.x);
@@ -7003,11 +7133,19 @@ TEST(QtProjectWorkspaceTests, AssetBrowserNativeCtrlSpaceHasNoIntermediateDockAn
       QTimer::singleShot(0, &loop, [&] {
         transition_timer.start();
         closing = true;
-        EXPECT_TRUE(editor.ui().hide_panel("asset_browser").ok());
+        if (menu_trigger) {
+          trigger_panel_menu();
+        } else {
+          QWidget *focus = QApplication::focusWidget();
+          ASSERT_NE(focus, nullptr);
+          EXPECT_TRUE(browser->owns_browser_focus());
+          send_toggle(*focus);
+        }
         EXPECT_FALSE(editor.ui().panel_visible("asset_browser"));
         final_extent = native_surface->render_size_pixels();
         EXPECT_FLOAT_EQ(final_extent.x, old_extent.x);
         EXPECT_GT(final_extent.y, old_extent.y);
+        expect_stable_backing();
       });
       timeout.start(3000);
       loop.exec();
@@ -7033,10 +7171,63 @@ TEST(QtProjectWorkspaceTests, AssetBrowserNativeCtrlSpaceHasNoIntermediateDockAn
                 << " requests=" << requests
                 << " restarts=" << immediate_restarts
                 << " first_prepare_ms=" << first_prepare_ns / 1000000.0
-                << " first_accepted_ms=" << first_accepted_ns / 1000000.0 << '\n';
+                << " first_accepted_ms=" << first_accepted_ns / 1000000.0
+                << " trigger=" << (menu_trigger ? "panel_menu" : "ctrl_space") << '\n';
     }
   }
+  settle_viewports("last maximized browser close presentation", 4, no_frame_check, 250);
   ASSERT_TRUE(editor.selection().select_object(object.value()).ok());
+  if (interrupted_resize == QStringLiteral("1")) {
+    auto *resizing_surface = viewport->surface(quader::ViewportPaneId::Perspective);
+    auto *visible_content = viewport->findChild<QWidget *>(
+        QStringLiteral("viewportSurfaceContainer_perspective"));
+    ASSERT_NE(resizing_surface, nullptr);
+    ASSERT_NE(visible_content, nullptr);
+    ASSERT_TRUE(editor.ui().show_panel("asset_browser").ok());
+    settle_viewports("interrupted resize browser baseline", 4, no_frame_check);
+    expect_current_dimensions();
+    ASSERT_TRUE(editor.ui().hide_panel("asset_browser").ok());
+    expect_dimensions_hidden();
+    settle_viewports("interrupted resize first replacement", 1, no_frame_check);
+    const auto first_replacement_extent = resizing_surface->render_size_pixels();
+    // Interrupt a just-submitted replacement without waiting for GPU completion.
+    window->showMinimized();
+    application.processEvents();
+    ASSERT_TRUE(window->isMinimized());
+    ASSERT_FALSE(ui.can_render_viewports());
+    ASSERT_TRUE(editor.ui().show_panel("asset_browser").ok());
+    application.processEvents();
+    expect_dimensions_hidden();
+    EXPECT_LT(resizing_surface->render_size_pixels().y, first_replacement_extent.y);
+    EXPECT_EQ(ui.render_surfaces(ui.can_render_viewports()), 0U);
+    window->showMaximized();
+    application.processEvents();
+    ASSERT_FALSE(window->isMinimized());
+    ASSERT_TRUE(ui.can_render_viewports());
+    viewport_accepted = [&] {
+      const auto final_extent = resizing_surface->render_size_pixels();
+      const auto native_extent = quader::platform_window_client_extent(
+          reinterpret_cast<void *>(static_cast<std::uintptr_t>(resizing_surface->winId())));
+      const auto camera_extent = bound_scene->viewport_workspace().camera(
+          quader::ViewportPaneId::Perspective).viewport_size();
+      EXPECT_FLOAT_EQ(camera_extent.x, final_extent.x);
+      EXPECT_FLOAT_EQ(camera_extent.y, final_extent.y);
+      EXPECT_GE(static_cast<float>(native_extent.width), final_extent.x);
+      EXPECT_GE(static_cast<float>(native_extent.height), final_extent.y);
+      EXPECT_NEAR(visible_content->width() * visible_content->devicePixelRatioF(),
+                  final_extent.x, 1.0);
+      EXPECT_NEAR(visible_content->height() * visible_content->devicePixelRatioF(),
+                  final_extent.y, 1.0);
+      EXPECT_EQ(resizing_surface->renderer().width(),
+                static_cast<std::uint32_t>(final_extent.x));
+      EXPECT_EQ(resizing_surface->renderer().height(),
+                static_cast<std::uint32_t>(final_extent.y));
+      expect_current_dimensions();
+    };
+    settle_viewports("interrupted resize restored replacement", 4, no_frame_check);
+    viewport_accepted = {};
+    std::cout << "NATIVE_BROWSER_INTERRUPTED_RESIZE restored=1\n";
+  }
   window->showNormal();
   application.processEvents();
   settle_viewports("selected dimensions restored", 4, no_frame_check);

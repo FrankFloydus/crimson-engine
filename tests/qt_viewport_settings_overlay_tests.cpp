@@ -17,6 +17,7 @@
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/qt_viewport_panel.hpp"
+#include "support/qt_viewport_input_test_helpers.hpp"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -48,6 +49,9 @@
 #include <utility>
 
 namespace {
+
+using quader::test_support::resize_viewport_surface;
+using quader::test_support::send_visible_viewport_event;
 
 /// Hosts actual settings and native pane widgets without initializing a renderer.
 class QtViewportSettingsOverlayTests : public testing::Test {
@@ -401,10 +405,12 @@ TEST_F(QtViewportSettingsOverlayTests,
     auto *surface = host_->surface(pane);
     ASSERT_NE(surface, nullptr);
     ASSERT_NO_FATAL_FAILURE(focus_surface(pane));
-    const QPointF position(surface->width() * 0.6, surface->height() * 0.4);
+    const auto visible_size = surface->render_size_pixels();
+    const QPointF position(visible_size.x / surface->devicePixelRatio() * 0.6,
+                           visible_size.y / surface->devicePixelRatio() * 0.4);
     QMouseEvent hover(QEvent::MouseMove, position, position,
                       Qt::NoButton, Qt::NoButton, Qt::NoModifier);
-    QApplication::sendEvent(surface, &hover);
+    send_visible_viewport_event(surface, &hover);
     process_input();
     refresh();
     EXPECT_EQ(session_->viewport_workspace().focused_pane(), pane);
@@ -585,20 +591,20 @@ TEST_F(QtViewportSettingsOverlayTests,
        PrimitiveSwitchRejectsHeldFootprintThenAcceptsItsCompletedShape) {
   auto *surface = host_->surface(quader::ViewportPaneId::Perspective);
   ASSERT_NE(surface, nullptr);
-  surface->resize(800, 600);
+  resize_viewport_surface(*host_, *surface, {800, 600});
   QFocusEvent focus(QEvent::FocusIn);
-  QApplication::sendEvent(surface, &focus);
+  send_visible_viewport_event(surface, &focus);
   ASSERT_TRUE(session_->viewport_workspace().camera(quader::ViewportPaneId::Perspective)
       .restore_perspective_pose({.eye = {8, 7, 11}, .target = {}, .up = {0, 1, 0}}));
   ASSERT_TRUE(editor_->tools().begin_primitive_creation(quader::QuaderPrimitiveCreationShape::Box).ok());
   process_input();
   QMouseEvent press(QEvent::MouseButtonPress, {300, 300}, {300, 300},
                    Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-  QApplication::sendEvent(surface, &press);
+  send_visible_viewport_event(surface, &press);
   process_input();
   QMouseEvent drag(QEvent::MouseMove, {500, 430}, {500, 430},
                   Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
-  QApplication::sendEvent(surface, &drag);
+  send_visible_viewport_event(surface, &drag);
   process_input();
   ASSERT_EQ(session_->modeling().box_drag_state(), quader::ModelingBoxDragState::Footprint);
   const auto authored = session_->modeling().box_preview();
@@ -621,7 +627,7 @@ TEST_F(QtViewportSettingsOverlayTests,
   process_input();
   QMouseEvent release(QEvent::MouseButtonRelease, {500, 430}, {500, 430},
                      Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
-  QApplication::sendEvent(surface, &release);
+  send_visible_viewport_event(surface, &release);
   process_input();
   ASSERT_EQ(session_->modeling().objects().size(), 1U);
   EXPECT_EQ(session_->primitive_creation().shape_count(), 1U);
@@ -633,9 +639,9 @@ TEST_F(QtViewportSettingsOverlayTests,
   EXPECT_EQ(session_->history().undo_count(), 1U);
   EXPECT_EQ(session_->primitive_creation().shape_count(), 0U);
   EXPECT_FALSE(editor_->tools().live_primitive_creation().has_value());
-  QApplication::sendEvent(surface, &press);
+  send_visible_viewport_event(surface, &press);
   process_input();
-  QApplication::sendEvent(surface, &release);
+  send_visible_viewport_event(surface, &release);
   process_input();
   ASSERT_EQ(session_->primitive_creation().shape_count(), 1u);
   EXPECT_EQ(session_->modeling().objects().size(), 2U);
@@ -721,7 +727,7 @@ TEST_F(QtViewportSettingsOverlayTests,
   ASSERT_EQ(settings_->parentWidget(), frame(quader::ViewportPaneId::Top));
   auto *surface = host_->surface(quader::ViewportPaneId::Perspective);
   ASSERT_NE(surface, nullptr);
-  surface->resize(800, 600);
+  resize_viewport_surface(*host_, *surface, {800, 600});
   ASSERT_NO_FATAL_FAILURE(focus_surface(quader::ViewportPaneId::Perspective));
   refresh();
   EXPECT_FALSE(settings_->isHidden());
@@ -732,11 +738,11 @@ TEST_F(QtViewportSettingsOverlayTests,
   process_input();
   QMouseEvent press(QEvent::MouseButtonPress, {300, 300}, {300, 300},
                    Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-  QApplication::sendEvent(surface, &press);
+  send_visible_viewport_event(surface, &press);
   process_input();
   QMouseEvent release(QEvent::MouseButtonRelease, {500, 430}, {500, 430},
                      Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
-  QApplication::sendEvent(surface, &release);
+  send_visible_viewport_event(surface, &release);
   process_input();
   ASSERT_TRUE(editor_->tools().live_primitive_creation().has_value());
   EXPECT_EQ(session_->primitive_creation().shape_count(), 1);
@@ -788,16 +794,16 @@ TEST_F(QtViewportSettingsOverlayTests,
 
   auto *surface = host_->surface(quader::ViewportPaneId::Perspective);
   ASSERT_NE(surface, nullptr);
-  surface->resize(800, 600);
+  resize_viewport_surface(*host_, *surface, {800, 600});
   QFocusEvent focus(QEvent::FocusIn);
-  QApplication::sendEvent(surface, &focus);
+  send_visible_viewport_event(surface, &focus);
   ASSERT_TRUE(session_->viewport_workspace().camera(quader::ViewportPaneId::Perspective)
       .restore_perspective_pose({.eye = {8, 7, 11}, .target = {}, .up = {0, 1, 0}}));
   process_input();
   const auto origin_before = editor_->tools().active_settings_presentation_origin();
   QMouseEvent press(QEvent::MouseButtonPress, {300, 300}, {300, 300},
                    Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-  QApplication::sendEvent(surface, &press);
+  send_visible_viewport_event(surface, &press);
   process_input();
   EXPECT_EQ(editor_->tools().active_settings_presentation_origin(), origin_before);
   refresh();
@@ -805,7 +811,7 @@ TEST_F(QtViewportSettingsOverlayTests,
 
   QMouseEvent drag(QEvent::MouseMove, {500, 430}, {500, 430},
                   Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
-  QApplication::sendEvent(surface, &drag);
+  send_visible_viewport_event(surface, &drag);
   process_input();
   refresh();
   ASSERT_NO_FATAL_FAILURE(expect_settings_fit_without_scrolling());
