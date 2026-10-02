@@ -82,12 +82,15 @@ selection state. Compatible in-tool selection edits retain the owner's live-prev
 viewport pointer, navigation, and popup targets retain their semantic router. Explicit focused-control
 keys such as item-view Ctrl+A, arrows, and activation retain local ownership; item-view type-ahead
 search runs only when no editor command matches. Text/delegate editors retain editing input except
-for document Save commands, which settle a focused main-editor field before serializing. Popups and
+for the Asset Browser command and document Save commands, which settle a focused main-editor field
+before serializing. Popups and
 auxiliary tool windows retain input ownership. Idle viewport frames clear only viewport-owned
 prefixes; they must preserve another editor panel's multi-key sequence.
 
 The Asset Browser uses the canonical `ui.asset_browser` command (Ctrl+Space by default), including
-from its search and rename editors. A focused widget below `quaderAssetBrowserInput` supplies
+from main-editor text fields and its search and rename editors. Canonical browser shortcuts are
+reserved before Qt shortcut activation; foreign top-level windows retain input ownership.
+A focused widget below `quaderAssetBrowserInput` supplies
 `assetBrowserFocus`: Cut, Copy, Paste, Duplicate and Delete retain their canonical mappings and
 user overrides, but dispatch to the browser's asset owner independently of scene selection modes,
 tools and clipboard availability. Project/scene document lifecycle and command search remain available;

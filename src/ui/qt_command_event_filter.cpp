@@ -24,6 +24,7 @@
 #include <QAbstractSpinBox>
 #include <QApplication>
 #include <QComboBox>
+#include <QDockWidget>
 #include <QEvent>
 #include <QGuiApplication>
 #include <QKeyEvent>
@@ -312,6 +313,23 @@ bool is_asset_browser_edit_command(std::string_view command_id) {
          command_id == quader_command::kDeleteSelection.string();
 }
 
+void normalize_command_input_context(
+    QuaderEditorApi &editor, ViewportToolState &state,
+    QuaderViewportKeybindingContext &input_context,
+    bool viewport_focused, bool text_input_active, bool asset_browser_focused) {
+  if (state.active_tool == ViewportToolId::InsertEdgeLoop &&
+      !editor.tools().pane_owns_executing_tool(editor.viewports().focused_pane())) {
+    input_context.operation_preview_active = false;
+    input_context.active_transform_drag = false;
+    input_context.modal_tool_active = false;
+  }
+  if (!viewport_focused && !text_input_active && !asset_browser_focused) {
+    // Panels can publish selection before the next viewport frame samples it.
+    state.selection_mode = app_selection_mode_to_viewport(
+        to_modeling_selection_mode(editor.selection().summary().mode));
+  }
+}
+
 struct SettledEditorFocus final {
   QPointer<QWidget> editor;
   QPointer<QWidget> window;
@@ -423,6 +441,44 @@ bool qt_window_owns_command_input(const QWidget *window) {
           (focus_widget == window || window->isAncestorOf(focus_widget)));
 }
 
+bool qt_foreign_window_owns_command_input(const QWidget *editor_window) {
+  if (editor_window == nullptr) {
+    return false;
+  }
+  const auto foreign_widget_window = [editor_window](const QWidget *window) {
+    return window != nullptr && window->isVisible() &&
+           window != editor_window &&
+           !(dynamic_cast<const QDockWidget *>(window) != nullptr &&
+             editor_window->isAncestorOf(window));
+  };
+  if (const QWidget *focus_widget = QApplication::focusWidget();
+      focus_widget != nullptr &&
+      foreign_widget_window(focus_widget->window())) {
+    // QWidget focus can arrive before the native activation notification.
+    return true;
+  }
+  if (const QWindow *focus_window = QGuiApplication::focusWindow()) {
+    // A createWindowContainer child is a QWindow input owner with the main
+    // editor's native window in its parent chain. Do not require QWidget focus.
+    for (const QWindow *current = focus_window; current != nullptr;
+         current = current->parent()) {
+      if (current == editor_window->windowHandle()) {
+        return false;
+      }
+      if (current->handle() != nullptr) {
+        if (const QWidget *widget = QWidget::find(current->winId())) {
+          return foreign_widget_window(widget->window());
+        }
+      }
+    }
+    return true;
+  }
+  if (const QWidget *focus_widget = QApplication::focusWidget()) {
+    return foreign_widget_window(focus_widget->window());
+  }
+  return foreign_widget_window(QApplication::activeWindow());
+}
+
 QtCommandEventFilter::QtCommandEventFilter(
     QuaderEditorApi &editor, QtViewportToolStateProvider tool_state_provider,
     QObject *parent)
@@ -433,6 +489,7 @@ void QtCommandEventFilter::rebind_editor(QuaderEditorApi &editor) noexcept {
   ++binding_generation_;
   editor_ = &editor;
   text_input_sequence_pending_ = false;
+  asset_browser_sequence_pending_ = false;
   editor_->commands().reset_pending_keybinding_chord();
 }
 
@@ -497,10 +554,10 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
       break;
     }
     QWidget *focus = QApplication::focusWidget();
+    const auto &key = *static_cast<QKeyEvent *>(event);
+    const auto chord =
+        quader_input_chord_from_qt_key(key.key(), key.modifiers());
     if (asset_browser_owns_input(focus)) {
-      const auto &key = *static_cast<QKeyEvent *>(event);
-      const auto chord =
-          quader_input_chord_from_qt_key(key.key(), key.modifiers());
       if (!chord.empty() &&
           editor_->commands().resolve_asset_browser_input_binding(
               chord, text_input_has_focus()).kind !=
@@ -514,20 +571,38 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
         qt_object_belongs_to_tool_settings_panel(focus) ||
         (qt_object_belongs_to_face_texture_panel(focus) &&
          (text_input_has_focus() || focused_combo_box(focus) != nullptr));
-    if (!tool_settings_focused) {
-      break;
-    }
-    const auto &key = *static_cast<QKeyEvent *>(event);
-    const QuaderInputChord chord =
-        quader_input_chord_from_qt_key(key.key(), key.modifiers());
-    if ((!chord.empty() &&
+    auto state = qt_command_dispatch_tool_state(
+        tool_state_provider_, editor_->viewports().grid_preset());
+    if (tool_settings_focused &&
+        ((!chord.empty() &&
          editor_->commands().resolve_native_tool_settings_input_binding(
-            chord, qt_command_dispatch_tool_state(
-                       tool_state_provider_, editor_->viewports().grid_preset()))
+            chord, state)
                  .kind != QuaderNativeToolSettingsDispatch::Kind::NoMatch) ||
-        suppress_settings_button_space(*editor_, focus, key)) {
+         suppress_settings_button_space(*editor_, focus, key))) {
       // Reserve the canonical mapping before Qt activates a shortcut/mnemonic;
       // only KeyPress advances the owner's sequence and executes the intent.
+      event->accept();
+      return true;
+    }
+    const bool text_input_active = text_input_has_focus();
+    const bool outliner_focused = !text_input_active &&
+        qt_application_command_input_owner_active(outliner_input_owner_provider_);
+    const bool viewport_focused = !tool_settings_focused && !outliner_focused &&
+        !text_input_active && viewport_surface_has_focus(watched);
+    auto input_context = input_context_provider_ ? input_context_provider_()
+        : QuaderViewportKeybindingContext{};
+    input_context.outliner_focused = outliner_focused;
+    input_context.editor_focused = !viewport_focused && !outliner_focused;
+    input_context.asset_browser_focused = false;
+    normalize_command_input_context(*editor_, state, input_context,
+                                    viewport_focused, text_input_active, false);
+    const bool continue_pending = text_input_active
+        ? text_input_sequence_pending_ : !text_input_sequence_pending_;
+    if (!chord.empty() &&
+        editor_->commands().resolve_asset_browser_toggle_input_binding(
+             chord, state, viewport_focused, text_input_active, input_context,
+             continue_pending, asset_browser_sequence_pending_).kind !=
+             QuaderViewportKeybindingDispatch::Kind::NoMatch) {
       event->accept();
       return true;
     }
@@ -584,18 +659,9 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
     input_context.outliner_focused = outliner_focused;
     input_context.editor_focused = !viewport_focused && !outliner_focused;
     input_context.asset_browser_focused = asset_browser_focused;
-    if (state.active_tool == ViewportToolId::InsertEdgeLoop &&
-        !editor_->tools().pane_owns_executing_tool(
-            editor_->viewports().focused_pane())) {
-      input_context.operation_preview_active = false;
-      input_context.active_transform_drag = false;
-      input_context.modal_tool_active = false;
-    }
-    if (!viewport_focused && !text_input_active && !asset_browser_focused) {
-      // A panel can publish selection before the next viewport frame samples it.
-      state.selection_mode = app_selection_mode_to_viewport(
-          to_modeling_selection_mode(editor_->selection().summary().mode));
-    }
+    normalize_command_input_context(*editor_, state, input_context,
+                                    viewport_focused, text_input_active,
+                                    asset_browser_focused);
     if (viewport_focused) {
       const std::optional<std::string> immediate_command =
           editor_->commands().resolve_immediate_global_command(
@@ -609,6 +675,9 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
       // effects such as a completed save. Consuming the edge also prevents the
       // viewport router from executing the same command a second time.
       reset_pending_chord();
+      if (*immediate_command == quader_command::kUiAssetBrowser.string()) {
+        consumed_settings_keys_.insert(static_cast<QKeyEvent *>(event)->key());
+      }
       const QuaderApiVoidResult result = [&]() {
         QDR_PROFILE_SCOPE("Qt viewport global command execute");
         return editor_->commands().execute(*immediate_command);
@@ -712,6 +781,10 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
     }
     const bool panel_sequence_pending =
         !text_input_active && editor_->commands().has_pending_keybinding_chord();
+    const bool asset_browser_toggle_prefix =
+        editor_->commands().resolve_asset_browser_toggle_input_binding(
+            *chord, state, false, text_input_active, input_context).kind ==
+            QuaderViewportKeybindingDispatch::Kind::PendingChord;
     QuaderViewportKeybindingDispatch dispatch = [&]() {
       QDR_PROFILE_SCOPE("Qt command resolve keybinding");
       return editor_->commands().dispatch_viewport_input_binding(
@@ -722,6 +795,8 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
         text_input_active &&
         dispatch.kind ==
             QuaderViewportKeybindingDispatch::Kind::PendingChord;
+    asset_browser_sequence_pending_ = asset_browser_toggle_prefix &&
+        dispatch.kind == QuaderViewportKeybindingDispatch::Kind::PendingChord;
     if (text_input_sequence_was_pending &&
         dispatch.kind == QuaderViewportKeybindingDispatch::Kind::NoMatch) {
       // The prefix already consumed the sequence. Do not replay a mismatched
@@ -742,7 +817,7 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
         dispatch.kind == QuaderViewportKeybindingDispatch::Kind::Command &&
         dispatch.command_id == quader_command::kUiAssetBrowser.string();
     const bool asset_browser_prefix =
-        asset_browser_focused &&
+        (asset_browser_focused || asset_browser_toggle_prefix) &&
         dispatch.kind == QuaderViewportKeybindingDispatch::Kind::PendingChord;
     if (!asset_browser_toggle && !asset_browser_prefix &&
         focused_widget_owns_key_press(
@@ -916,6 +991,7 @@ bool QtCommandEventFilter::is_text_input_widget(const QWidget *widget) {
 
 void QtCommandEventFilter::reset_pending_chord() {
   text_input_sequence_pending_ = false;
+  asset_browser_sequence_pending_ = false;
   if (editor_ != nullptr && editor_->commands().has_pending_keybinding_chord()) {
     // Dialog/popup adapters own their own scope loss. Yielding the application
     // filter must not erase a prefix before that adapter receives its suffix.

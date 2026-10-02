@@ -5705,6 +5705,12 @@ TEST(EditorApiTests,
   const auto chord = single_input_chord("Ctrl+Space");
   EXPECT_FALSE(editor.commands().resolve_immediate_global_command(
       chord, {}, false).has_value());
+  EXPECT_EQ(editor.commands().resolve_asset_browser_toggle_input_binding(
+                chord, {}, true, false).kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  EXPECT_EQ(editor.commands().resolve_asset_browser_toggle_input_binding(
+                chord, {}, false, false, {.editor_focused = true}).kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
   const auto selection = editor.commands().dispatch_viewport_input_binding(
       chord, {}, true, false);
   ASSERT_EQ(selection.kind,
@@ -5715,6 +5721,9 @@ TEST(EditorApiTests,
 
   load(R"([{"command":"viewport.selection_mode.face","key":"Ctrl+Space Ctrl+S"},{"command":"-edit.undo"}])");
   ASSERT_FALSE(HasFatalFailure());
+  EXPECT_EQ(editor.commands().resolve_asset_browser_toggle_input_binding(
+                chord, {}, true, false).kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
   EXPECT_FALSE(editor.commands().resolve_immediate_global_command(
       chord, {}, false).has_value());
   EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
@@ -5744,6 +5753,79 @@ TEST(EditorApiTests,
       quader::quader_command::kUiAssetBrowser).empty());
   EXPECT_EQ(editor.commands().shortcut_for(quader::quader_command::kEditUndo),
             "Ctrl+Space");
+}
+
+TEST(EditorApiTests,
+     AssetBrowserToggleProbePreservesEditorSequencesAndAvailability) {
+  struct TemporaryProject {
+    std::filesystem::path root = std::filesystem::temp_directory_path() /
+        ("quader-browser-toggle-probe-" + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()));
+    ~TemporaryProject() {
+      std::error_code ignored;
+      std::filesystem::remove_all(root, ignored);
+    }
+  } temporary;
+  ASSERT_TRUE(std::filesystem::create_directories(temporary.root));
+  quader::ProjectSession project;
+  quader::QuaderEditorApi editor(project);
+  auto &commands = editor.commands();
+  ASSERT_TRUE(commands.set_keybinding_storage_path({}).ok());
+  ASSERT_TRUE(editor.project().create(temporary.root).ok());
+  const quader::QuaderViewportKeybindingContext context{.editor_focused = true};
+  const auto probe = [&](std::string_view mapping, bool text_input_active) {
+    return commands.resolve_asset_browser_toggle_input_binding(
+        single_input_chord(mapping), {}, false, text_input_active, context);
+  };
+  EXPECT_EQ(probe("Ctrl+Space", false).kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  editor.ui().set_runtime_hooks({.toggle_asset_browser = [] {
+    return quader::QuaderApiVoidResult{.ok = true, .changed = true};
+  }});
+  for (const bool text_input_active : {false, true}) {
+    const auto exact = probe("Ctrl+Space", text_input_active);
+    EXPECT_EQ(exact.kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::Command);
+    EXPECT_EQ(exact.command_id, "ui.asset_browser");
+  }
+  EXPECT_EQ(probe("Ctrl+S", true).kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  ASSERT_TRUE(commands.set_shortcut(
+      quader::quader_command::kUiAssetBrowser, "Ctrl+Space Ctrl+B").ok());
+  EXPECT_EQ(probe("Ctrl+Space", true).kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::PendingChord);
+  EXPECT_FALSE(commands.has_pending_keybinding_chord());
+  EXPECT_EQ(commands.dispatch_viewport_input_binding(
+                single_input_chord("Ctrl+Space"), {}, false, true, context).kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::PendingChord);
+  const auto suffix = probe("Ctrl+B", true);
+  EXPECT_EQ(suffix.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  EXPECT_EQ(suffix.command_id, "ui.asset_browser");
+  EXPECT_TRUE(commands.has_pending_keybinding_chord());
+  EXPECT_EQ(commands.resolve_asset_browser_toggle_input_binding(
+                single_input_chord("Ctrl+F12"), {}, false, true, context,
+                true, true).kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::PendingChord);
+  EXPECT_EQ(commands.resolve_asset_browser_toggle_input_binding(
+                single_input_chord("Ctrl+F12"), {}, false, false,
+                {.outliner_focused = true}, true, true).kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  EXPECT_TRUE(commands.has_pending_keybinding_chord());
+  EXPECT_EQ(commands.resolve_asset_browser_toggle_input_binding(
+                single_input_chord("Ctrl+B"), {}, false, true, context, false).kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  EXPECT_TRUE(commands.has_pending_keybinding_chord());
+  EXPECT_EQ(commands.resolve_asset_browser_toggle_input_binding(
+                single_input_chord("Ctrl+B"), {}, true, false).kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  EXPECT_EQ(commands.dispatch_viewport_input_binding(
+                single_input_chord("Ctrl+B"), {}, false, true, context).command_id,
+            "ui.asset_browser");
+  EXPECT_FALSE(commands.has_pending_keybinding_chord());
+  ASSERT_TRUE(commands.remove_shortcut(quader::quader_command::kUiAssetBrowser).ok());
+  EXPECT_EQ(probe("Ctrl+Space", false).kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
 }
 
 TEST(EditorApiTests,

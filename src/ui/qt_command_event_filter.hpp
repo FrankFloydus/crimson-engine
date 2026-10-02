@@ -43,6 +43,10 @@ qt_command_dispatch_tool_state(const QtViewportToolStateProvider &provider,
  */
 [[nodiscard]] bool qt_window_owns_command_input(const QWidget *window);
 
+/** Fences independent windows while retaining native viewport and dock input. */
+[[nodiscard]] bool
+qt_foreign_window_owns_command_input(const QWidget *editor_window);
+
 /** Reports hover or focus ownership of the retained scene hierarchy panel. */
 [[nodiscard]] bool qt_outliner_owns_command_input(const QWidget *outliner);
 
@@ -89,6 +93,7 @@ private:
   QtCommandInputContextProvider input_context_provider_;
   QtAssetBrowserActionHandler asset_browser_action_handler_;
   bool text_input_sequence_pending_ = false;
+  bool asset_browser_sequence_pending_ = false;
   std::uint64_t binding_generation_ = 0;
   // Scoped command presses retain their release across focus/runtime changes.
   std::unordered_set<int> consumed_settings_keys_;

@@ -39,6 +39,7 @@
 #include <QDoubleSpinBox>
 #include <QMainWindow>
 #include <QScrollArea>
+#include <QShortcut>
 #include <QWindow>
 #include <QEnterEvent>
 #include <QEventLoop>
@@ -380,6 +381,211 @@ TEST(QtCommandEventFilterTests,
   send_key_press(tree, Qt::Key_K, Qt::ControlModifier);
   EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
   EXPECT_EQ(toggles, 3);
+  application.removeEventFilter(&filter);
+}
+
+TEST(QtCommandEventFilterTests,
+     MainEditorControlsReserveBrowserToggleAgainstQtShortcuts) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-main-editor-browser-shortcut-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  quader::ProjectSession project;
+  quader::QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto root = std::filesystem::path(temporary.path().toStdWString()) / "Project";
+  ASSERT_TRUE(std::filesystem::create_directory(root));
+  ASSERT_TRUE(editor.project().create(root).ok());
+  int toggles = 0;
+  editor.ui().set_runtime_hooks({.toggle_asset_browser = [&toggles] {
+    ++toggles;
+    return quader::QuaderApiVoidResult{.ok = true, .changed = true};
+  }});
+  QWidget window;
+  window.resize(400, 250);
+  QLineEdit line(QStringLiteral("Retained draft"), &window);
+  line.setGeometry(0, 0, 400, 32);
+  QPushButton button(QStringLiteral("Main editor action"), &window);
+  button.setGeometry(0, 40, 400, 32);
+  QTreeWidget tree(&window);
+  tree.setGeometry(0, 80, 400, 110);
+  tree.addTopLevelItem(new QTreeWidgetItem({QStringLiteral("One")}));
+  QComboBox combo(&window);
+  combo.setGeometry(0, 200, 400, 32);
+  combo.addItems({QStringLiteral("One"), QStringLiteral("Two")});
+  quader::QtCommandEventFilter filter(editor, {});
+  filter.set_command_input_owner_provider([&window] {
+    return quader::qt_foreign_window_owns_command_input(&window);
+  });
+  bool outliner_hovered = false;
+  filter.set_outliner_input_owner_provider([&outliner_hovered] {
+    return outliner_hovered;
+  });
+  application.installEventFilter(&filter);
+  int qt_shortcut_activations = 0;
+  QShortcut conflicting_shortcut(QKeySequence(QStringLiteral("Ctrl+Space")), &window);
+  QObject::connect(&conflicting_shortcut, &QShortcut::activated,
+                   [&qt_shortcut_activations] { ++qt_shortcut_activations; });
+  window.show();
+  window.activateWindow();
+  const auto key_edge = [&](QWidget &target, int key,
+                            Qt::KeyboardModifiers modifiers) {
+    QKeyEvent override_event(QEvent::ShortcutOverride, key, modifiers);
+    override_event.ignore();
+    QCoreApplication::sendEvent(&target, &override_event);
+    EXPECT_TRUE(override_event.isAccepted());
+    send_key_press(target, key, modifiers);
+    QKeyEvent release(QEvent::KeyRelease, key, modifiers);
+    QCoreApplication::sendEvent(&target, &release);
+  };
+  int expected_toggles = 0;
+  for (QWidget *control : std::vector<QWidget *>{&line, &button, &tree, &combo}) {
+    control->setFocus(Qt::OtherFocusReason);
+    QCoreApplication::processEvents();
+    ASSERT_EQ(QApplication::focusWidget(), control);
+    EXPECT_FALSE(quader::qt_foreign_window_owns_command_input(&window));
+    key_edge(*control, Qt::Key_Space, Qt::ControlModifier);
+    EXPECT_EQ(toggles, ++expected_toggles);
+    EXPECT_EQ(qt_shortcut_activations, 0);
+  }
+  ASSERT_TRUE(editor.commands().set_shortcut(
+      quader::quader_command::kUiAssetBrowser, "Ctrl+Alt+Space").ok());
+  conflicting_shortcut.setKey(QKeySequence(QStringLiteral("Ctrl+Alt+Space")));
+  line.setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  key_edge(line, Qt::Key_Space, Qt::ControlModifier | Qt::AltModifier);
+  EXPECT_EQ(toggles, ++expected_toggles);
+  EXPECT_EQ(line.text(), QStringLiteral("Retained draft"));
+  ASSERT_TRUE(editor.commands().set_shortcut(
+      quader::quader_command::kUiAssetBrowser, "Ctrl+Space Ctrl+B").ok());
+  conflicting_shortcut.setKey(QKeySequence(QStringLiteral("Ctrl+Space, Ctrl+B")));
+  for (QWidget *control : std::vector<QWidget *>{&line, &button, &tree, &combo}) {
+    control->setFocus(Qt::OtherFocusReason);
+    QCoreApplication::processEvents();
+    key_edge(*control, Qt::Key_Space, Qt::ControlModifier);
+    ASSERT_TRUE(editor.commands().has_pending_keybinding_chord());
+    EXPECT_EQ(toggles, expected_toggles);
+    key_edge(*control, Qt::Key_B, Qt::ControlModifier);
+    EXPECT_EQ(toggles, ++expected_toggles);
+    EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+  }
+  EXPECT_EQ(qt_shortcut_activations, 0);
+  line.setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  send_key_press(line, Qt::Key_A, Qt::ControlModifier);
+  EXPECT_EQ(line.selectedText(), QStringLiteral("Retained draft"));
+  send_key_press(line, Qt::Key_X, Qt::NoModifier, QStringLiteral("x"));
+  EXPECT_EQ(line.text(), QStringLiteral("x"));
+  EXPECT_EQ(toggles, expected_toggles);
+  button.setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  key_edge(button, Qt::Key_Space, Qt::ControlModifier);
+  ASSERT_TRUE(editor.commands().has_pending_keybinding_chord());
+  // Outliner hover changes the canonical owner without a Qt focus event.
+  outliner_hovered = true;
+  QKeyEvent foreign_owner_override(QEvent::ShortcutOverride, Qt::Key_F12,
+                                   Qt::ControlModifier);
+  foreign_owner_override.ignore();
+  QCoreApplication::sendEvent(&button, &foreign_owner_override);
+  EXPECT_FALSE(foreign_owner_override.isAccepted());
+  int unrelated_activations = 0;
+  QShortcut unrelated_shortcut(QKeySequence(QStringLiteral("Ctrl+F12")), &window);
+  QObject::connect(&unrelated_shortcut, &QShortcut::activated,
+                   [&unrelated_activations] { ++unrelated_activations; });
+  send_key_press(button, Qt::Key_F12, Qt::ControlModifier);
+  EXPECT_EQ(unrelated_activations, 1);
+  EXPECT_EQ(toggles, expected_toggles);
+  EXPECT_EQ(QApplication::focusWidget(), &button);
+  outliner_hovered = false;
+  editor.commands().reset_pending_keybinding_chord();
+  ASSERT_TRUE(editor.commands().remove_shortcut(
+      quader::quader_command::kUiAssetBrowser).ok());
+  button.setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  conflicting_shortcut.setKey(QKeySequence(QStringLiteral("Ctrl+Space")));
+  send_key_press(button, Qt::Key_Space, Qt::ControlModifier);
+  EXPECT_EQ(qt_shortcut_activations, 1)
+      << "Qt shortcuts retain input once the canonical browser mapping is removed";
+  EXPECT_EQ(toggles, expected_toggles);
+  application.removeEventFilter(&filter);
+}
+
+TEST(QtCommandEventFilterTests,
+     ForeignTopLevelFocusKeepsItsShortcutsWhileNativeEditorWindowsRouteCommands) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-foreign-top-level-command-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  quader::ProjectSession project;
+  quader::QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto root = std::filesystem::path(temporary.path().toStdWString()) / "Project";
+  ASSERT_TRUE(std::filesystem::create_directory(root));
+  ASSERT_TRUE(editor.project().create(root).ok());
+  int toggles = 0;
+  editor.ui().set_runtime_hooks({.toggle_asset_browser = [&toggles] {
+    ++toggles;
+    return quader::QuaderApiVoidResult{.ok = true, .changed = true};
+  }});
+  QMainWindow window;
+  window.resize(400, 280);
+  auto *surface = new quader::QtViewportSurface(quader::ViewportPaneId::Perspective);
+  window.setCentralWidget(QWidget::createWindowContainer(surface, &window));
+  quader::QtCommandEventFilter filter(editor, {});
+  filter.set_command_input_owner_provider([&window] {
+    return quader::qt_foreign_window_owns_command_input(&window);
+  });
+  application.installEventFilter(&filter);
+  window.show();
+  window.activateWindow();
+  surface->requestActivate();
+  QCoreApplication::processEvents();
+  ASSERT_FALSE(quader::qt_foreign_window_owns_command_input(&window));
+  QKeyEvent native_override(QEvent::ShortcutOverride, Qt::Key_Space,
+                            Qt::ControlModifier);
+  native_override.ignore();
+  QCoreApplication::sendEvent(surface, &native_override);
+  EXPECT_TRUE(native_override.isAccepted());
+  QKeyEvent native_press(QEvent::KeyPress, Qt::Key_Space, Qt::ControlModifier);
+  QCoreApplication::sendEvent(surface, &native_press);
+  EXPECT_EQ(toggles, 1);
+
+  QWidget independent_window;
+  independent_window.resize(300, 100);
+  QPushButton independent_button(QStringLiteral("Independent action"), &independent_window);
+  independent_button.setGeometry(0, 0, 300, 32);
+  int independent_activations = 0;
+  QShortcut independent_shortcut(QKeySequence(QStringLiteral("Ctrl+Space")),
+                                 &independent_window);
+  QObject::connect(&independent_shortcut, &QShortcut::activated,
+                   [&independent_activations] { ++independent_activations; });
+  independent_window.setAttribute(Qt::WA_ShowWithoutActivating, true);
+  independent_window.show();
+  const QWindow *native_owner = QGuiApplication::focusWindow();
+  ASSERT_NE(native_owner, nullptr);
+  QApplication::setActiveWindow(&independent_window);
+  independent_button.setFocus(Qt::OtherFocusReason);
+  ASSERT_EQ(QApplication::focusWidget(), &independent_button);
+  ASSERT_EQ(QGuiApplication::focusWindow(), native_owner)
+      << "the QWidget focus boundary precedes native activation delivery";
+  EXPECT_TRUE(quader::qt_foreign_window_owns_command_input(&window));
+  independent_window.activateWindow();
+  independent_button.setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  ASSERT_EQ(QApplication::focusWidget(), &independent_button);
+  ASSERT_TRUE(quader::qt_foreign_window_owns_command_input(&window));
+  send_key_press(independent_button, Qt::Key_Space, Qt::ControlModifier);
+  EXPECT_EQ(independent_activations, 1);
+  EXPECT_EQ(toggles, 1);
+  EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
   application.removeEventFilter(&filter);
 }
 

@@ -205,6 +205,18 @@ public:
     resolve_asset_browser_input_binding(const QuaderInputChord &chord,
                                         bool text_input_active) const;
     /**
+     * Probes browser toggling across editor owners without advancing a sequence.
+     * Other eligible targets retain their canonical precedence.
+     * Known browser prefixes may reserve mismatches only within their owner.
+     */
+    [[nodiscard]] QuaderViewportKeybindingDispatch
+    resolve_asset_browser_toggle_input_binding(
+        const QuaderInputChord &chord, const ViewportToolState &state,
+        bool viewport_focused, bool text_input_active,
+        QuaderViewportKeybindingContext input_context = {},
+        bool continue_pending = true,
+        bool reserve_pending_mismatch = false) const;
+    /**
      * Probes one edge without consuming sequence state and returns an enabled
      * global command when it is an exact match. Native hosts use this to run
      * global commands synchronously before a viewport queues the same edge.

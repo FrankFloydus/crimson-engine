@@ -6745,26 +6745,91 @@ TEST(QtProjectWorkspaceTests, AssetBrowserNativeCtrlSpaceHasNoIntermediateDockAn
   };
   settle_viewports("initial selected box", 4, no_frame_check);
   expect_current_dimensions();
-  const auto send_toggle = [&](QWidget &target) {
+  const auto send_toggle = [&](QObject &target) {
+    QKeyEvent shortcut_override(
+        QEvent::ShortcutOverride, Qt::Key_Space, Qt::ControlModifier);
+    QCoreApplication::sendEvent(&target, &shortcut_override);
+    EXPECT_TRUE(shortcut_override.isAccepted());
     QKeyEvent press(QEvent::KeyPress, Qt::Key_Space, Qt::ControlModifier);
     QCoreApplication::sendEvent(&target, &press);
     QKeyEvent release(QEvent::KeyRelease, Qt::Key_Space, Qt::ControlModifier);
     QCoreApplication::sendEvent(&target, &release);
   };
-  for (int transition = 0; transition < 3; ++transition) {
-    SCOPED_TRACE(transition);
-    // Closing the browser activates the native viewport QWindow. Settle that
-    // activation before sending the next physical chord from a Qt panel.
+  enum class InputOrigin { Outliner, NativeViewport, TextEditor, NumericEditor };
+  constexpr std::array kInputOrigins{
+      InputOrigin::Outliner, InputOrigin::NativeViewport,
+      InputOrigin::TextEditor, InputOrigin::NumericEditor};
+  const auto focus_input_origin = [&](InputOrigin origin) -> QObject * {
     window->activateWindow();
     QApplication::setActiveWindow(window);
-    ASSERT_TRUE(editor.ui().focus_panel("outliner").ok());
-    outliner_tree->setFocus(Qt::OtherFocusReason);
-    application.processEvents();
-    outliner_tree->setFocus(Qt::OtherFocusReason);
-    ASSERT_EQ(QApplication::focusWidget(), outliner_tree);
-    send_toggle(*outliner_tree);
+    if (origin == InputOrigin::NativeViewport) {
+      EXPECT_TRUE(viewport->focus_active_pane());
+      application.processEvents();
+      auto *surface = viewport->surface(editor.viewports().focused_pane());
+      EXPECT_NE(surface, nullptr);
+      if (surface != nullptr) {
+        surface->requestActivate();
+        application.processEvents();
+        EXPECT_EQ(QGuiApplication::focusWindow(), surface);
+      }
+      return surface;
+    }
+    QWidget *target = nullptr;
+    QDoubleSpinBox *numeric_target = nullptr;
+    if (origin == InputOrigin::Outliner) {
+      EXPECT_TRUE(editor.ui().focus_panel("outliner").ok());
+      target = outliner_tree;
+    } else {
+      EXPECT_TRUE(editor.ui().focus_panel("inspector").ok());
+      if (origin == InputOrigin::TextEditor) {
+        target = inspector->findChild<QLineEdit *>(
+            QStringLiteral("inspector.general.name"));
+      } else {
+        numeric_target = inspector->findChild<QDoubleSpinBox *>(
+            QStringLiteral("inspector.transform.position.x"));
+        EXPECT_NE(numeric_target, nullptr);
+        target = numeric_target;
+      }
+    }
+    EXPECT_NE(target, nullptr);
+    if (target != nullptr) {
+      const Qt::FocusReason focus_reason = numeric_target != nullptr
+          ? Qt::TabFocusReason : Qt::OtherFocusReason;
+      target->setFocus(focus_reason);
+      application.processEvents();
+      target->setFocus(focus_reason);
+      if (numeric_target != nullptr) {
+        auto *numeric_editor = numeric_target->findChild<QLineEdit *>();
+        EXPECT_NE(numeric_editor, nullptr);
+        QWidget *focus = QApplication::focusWidget();
+        const bool numeric_owns_focus = focus == numeric_target ||
+            (numeric_editor != nullptr && focus == numeric_editor);
+        EXPECT_TRUE(numeric_owns_focus);
+        EXPECT_TRUE(quader::qt_install_numeric_spin_box(
+            *numeric_target).is_editing());
+        return numeric_owns_focus ? focus : nullptr;
+      }
+      EXPECT_EQ(QApplication::focusWidget(), target);
+    }
+    return target;
+  };
+  const auto expect_no_queued_toggle = [&] {
+    auto *surface = viewport->surface(editor.viewports().focused_pane());
+    ASSERT_NE(surface, nullptr);
+    const auto queued = surface->take_input_frame(1.0f / 60.0f, false);
+    EXPECT_TRUE(queued.input.pressed_input_chords.empty());
+    EXPECT_TRUE(queued.input.released_input_chords.empty());
+    EXPECT_TRUE(queued.input.active_input_chords.empty());
+  };
+  for (int transition = 0;
+       transition < static_cast<int>(kInputOrigins.size()); ++transition) {
+    SCOPED_TRACE(transition);
+    QObject *toggle_target = focus_input_origin(kInputOrigins[transition]);
+    ASSERT_NE(toggle_target, nullptr);
+    send_toggle(*toggle_target);
     ASSERT_TRUE(editor.ui().panel_visible("asset_browser"));
     EXPECT_TRUE(browser->owns_browser_focus());
+    expect_no_queued_toggle();
     expect_dimensions_hidden();
     capture_native_window(
         QStringLiteral("asset-browser-native-before-projection-%1.png").arg(transition));
@@ -6774,6 +6839,8 @@ TEST(QtProjectWorkspaceTests, AssetBrowserNativeCtrlSpaceHasNoIntermediateDockAn
     EXPECT_NEAR(opening.left(), outliner->geometry().left(), 2);
     EXPECT_NEAR(opening.right(), inspector->geometry().right(), 2);
     settle_viewports("browser opening", 8, [&] {
+      EXPECT_TRUE(editor.ui().panel_visible("asset_browser"));
+      EXPECT_TRUE(browser->owns_browser_focus());
       EXPECT_EQ(dock->geometry(), opening);
       for (auto *animation : window->findChildren<QPropertyAnimation *>()) {
         EXPECT_FALSE(animation->state() == QAbstractAnimation::Running &&
@@ -6781,6 +6848,21 @@ TEST(QtProjectWorkspaceTests, AssetBrowserNativeCtrlSpaceHasNoIntermediateDockAn
       }
     });
     expect_current_dimensions();
+    // An already visible browser acquires focus from each main-editor input
+    // owner; it hides only when the next chord originates inside the browser.
+    toggle_target = focus_input_origin(kInputOrigins[transition]);
+    ASSERT_NE(toggle_target, nullptr);
+    ASSERT_FALSE(browser->owns_browser_focus());
+    send_toggle(*toggle_target);
+    ASSERT_TRUE(editor.ui().panel_visible("asset_browser"));
+    EXPECT_TRUE(browser->owns_browser_focus());
+    EXPECT_EQ(dock->geometry(), opening);
+    expect_no_queued_toggle();
+    settle_viewports("visible browser refocus", 2, [&] {
+      EXPECT_TRUE(editor.ui().panel_visible("asset_browser"));
+      EXPECT_TRUE(browser->owns_browser_focus());
+      EXPECT_EQ(dock->geometry(), opening);
+    });
     capture_native_window(
         QStringLiteral("asset-browser-native-desktop-open-%1.png").arg(transition));
     if (!review.isEmpty()) {

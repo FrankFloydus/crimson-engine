@@ -1871,6 +1871,7 @@ void UISystem::install_runtime_hooks(
         });
     command_event_filter_->set_command_input_owner_provider([this]() {
       return command_palette_open_pending_ ||
+             qt_foreign_window_owns_command_input(main_window_.get()) ||
              qt_window_owns_command_input(command_palette_) ||
              qt_window_owns_command_input(settings_dialog_) ||
              qt_window_owns_command_input(material_browser_window_) ||

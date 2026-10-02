@@ -1161,6 +1161,15 @@ public:
     [[nodiscard]] QuaderViewportKeybindingDispatch
     resolve_asset_browser_input_binding(const QuaderInputChord &chord,
                                         bool text_input_active) const;
+    [[nodiscard]] QuaderViewportKeybindingDispatch
+    resolve_asset_browser_toggle_input_binding(
+        const QuaderInputChord &chord, const ViewportToolState &state,
+        bool viewport_focused, bool text_input_active,
+        QuaderViewportKeybindingContext input_context,
+        bool continue_pending, bool reserve_pending_mismatch) const;
+    [[nodiscard]] bool viewport_input_target_available(
+        std::string_view target_id, const ViewportToolState &state,
+        QuaderViewportKeybindingContext input_context) const;
     [[nodiscard]] std::optional<std::string>
     resolve_immediate_global_command(
         const QuaderInputChord &chord, const ViewportToolState &state,
@@ -2045,44 +2054,9 @@ QuaderCommandsApi::Impl::dispatch_viewport_input_binding(
   const QuaderKeybindingContext context = viewport_keybinding_context(
       state, viewport_focused, text_input_active, input_context,
       api_.history().can_undo(), api_.history().can_redo(), tools_);
-  const auto target_available = [this, &state, panel_owns_input, input_owner](
+  const auto target_available = [this, &state, input_context](
                                     std::string_view target_id) {
-    if (input_owner == KeybindingInputOwner::AssetBrowser) {
-      if (is_asset_browser_edit_command(target_id)) {
-        // The focused browser owns availability and execution. Scene
-        // selection, active tools and the scene clipboard are unrelated.
-        return true;
-      }
-      return is_asset_browser_global_command(target_id) &&
-             registry_.enabled(target_id);
-    }
-    if (!release_allows_input_target(target_id)) {
-      return false;
-    }
-    const bool registered = registry_.contains(target_id);
-    // Editor panels execute commands and scoped mode/grid/tool-cancel intents.
-    // Pointer, navigation, and popup targets need the viewport's semantic router.
-    // Exclude those before resolving a sequence so they cannot take a prefix.
-    if (panel_owns_input && !registered &&
-        !editor_panel_can_apply_shortcut(target_id)) {
-      return false;
-    }
-    if (registered && !registry_.enabled(target_id)) {
-      return false;
-    }
-    ViewportInputActionKind action = ViewportInputActionKind::None;
-    if (viewport_input_action_for_target_id(target_id, action)) {
-      return true;
-    }
-    if (registered && !viewport_target_requires_router_dispatch(target_id)) {
-      return true;
-    }
-    ViewportShortcut shortcut;
-    if (viewport_router_shortcut_for_target_id(target_id, state.grid_preset,
-                                               shortcut)) {
-      return true;
-    }
-    return registered;
+    return viewport_input_target_available(target_id, state, input_context);
   };
   const QuaderKeybindingDispatch dispatch =
       keybindings_.dispatch(chord, context, target_available);
@@ -2131,6 +2105,94 @@ QuaderCommandsApi::Impl::dispatch_viewport_input_binding(
   }
 
   return {};
+}
+
+bool QuaderCommandsApi::Impl::viewport_input_target_available(
+    std::string_view target_id, const ViewportToolState &state,
+    QuaderViewportKeybindingContext input_context) const {
+  if (input_context.asset_browser_focused) {
+    if (is_asset_browser_edit_command(target_id)) {
+      // The focused browser owns availability and execution. Scene
+      // selection, active tools and the scene clipboard are unrelated.
+      return true;
+    }
+    return is_asset_browser_global_command(target_id) &&
+           registry_.enabled(target_id);
+  }
+  if (!release_allows_input_target(target_id)) {
+    return false;
+  }
+  const bool registered = registry_.contains(target_id);
+  // Exclude viewport-only targets before resolving panel sequences.
+  if ((input_context.editor_focused || input_context.outliner_focused) &&
+      !registered && !editor_panel_can_apply_shortcut(target_id)) {
+    return false;
+  }
+  if (registered && !registry_.enabled(target_id)) {
+    return false;
+  }
+  ViewportInputActionKind action = ViewportInputActionKind::None;
+  if (viewport_input_action_for_target_id(target_id, action)) {
+    return true;
+  }
+  if (registered && !viewport_target_requires_router_dispatch(target_id)) {
+    return true;
+  }
+  ViewportShortcut shortcut;
+  return viewport_router_shortcut_for_target_id(target_id, state.grid_preset,
+                                                shortcut) || registered;
+}
+
+QuaderViewportKeybindingDispatch
+QuaderCommandsApi::Impl::resolve_asset_browser_toggle_input_binding(
+    const QuaderInputChord &chord, const ViewportToolState &state,
+    bool viewport_focused, bool text_input_active,
+    QuaderViewportKeybindingContext input_context,
+    bool continue_pending, bool reserve_pending_mismatch) const {
+  if (chord.empty()) {
+    return {};
+  }
+  const KeybindingInputOwner input_owner = input_context.asset_browser_focused
+      ? KeybindingInputOwner::AssetBrowser
+      : input_context.outliner_focused
+      ? KeybindingInputOwner::Outliner
+      : input_context.editor_focused ? KeybindingInputOwner::Editor
+                                     : KeybindingInputOwner::Viewport;
+  const bool owner_sequence_pending =
+      continue_pending && pending_keybinding_owner_ == input_owner;
+  const QuaderKeybindingContext context = viewport_keybinding_context(
+      state, viewport_focused, text_input_active, input_context,
+      api_.history().can_undo(), api_.history().can_redo(), tools_);
+  const auto target_available = [this, &state, input_context](
+                                    std::string_view target_id) {
+    return viewport_input_target_available(target_id, state, input_context);
+  };
+  const auto dispatch = keybindings_.resolve_next_chord(
+      chord, context, target_available, owner_sequence_pending);
+  if (dispatch.kind == QuaderKeybindingDispatch::Kind::ExactMatch) {
+    return dispatch.target_id == quader_command::kUiAssetBrowser.string()
+        ? QuaderViewportKeybindingDispatch{
+              .kind = QuaderViewportKeybindingDispatch::Kind::Command,
+              .command_id = dispatch.target_id}
+        : QuaderViewportKeybindingDispatch{};
+  }
+  if (dispatch.kind != QuaderKeybindingDispatch::Kind::PendingChord) {
+    return reserve_pending_mismatch && owner_sequence_pending &&
+                   keybindings_.has_pending_chord()
+        ? QuaderViewportKeybindingDispatch{
+              .kind = QuaderViewportKeybindingDispatch::Kind::PendingChord}
+        : QuaderViewportKeybindingDispatch{};
+  }
+  const auto browser_dispatch = keybindings_.resolve_next_chord(
+      chord, context,
+      [&target_available](std::string_view target_id) {
+        return target_id == quader_command::kUiAssetBrowser.string() &&
+               target_available(target_id);
+      }, owner_sequence_pending);
+  return browser_dispatch.kind == QuaderKeybindingDispatch::Kind::PendingChord
+      ? QuaderViewportKeybindingDispatch{
+            .kind = QuaderViewportKeybindingDispatch::Kind::PendingChord}
+      : QuaderViewportKeybindingDispatch{};
 }
 
 QuaderViewportKeybindingDispatch
@@ -4064,6 +4126,17 @@ QuaderViewportKeybindingDispatch
 QuaderCommandsApi::resolve_asset_browser_input_binding(
     const QuaderInputChord &chord, bool text_input_active) const {
   return impl_->resolve_asset_browser_input_binding(chord, text_input_active);
+}
+
+QuaderViewportKeybindingDispatch
+QuaderCommandsApi::resolve_asset_browser_toggle_input_binding(
+    const QuaderInputChord &chord, const ViewportToolState &state,
+    bool viewport_focused, bool text_input_active,
+    QuaderViewportKeybindingContext input_context, bool continue_pending,
+    bool reserve_pending_mismatch) const {
+  return impl_->resolve_asset_browser_toggle_input_binding(
+      chord, state, viewport_focused, text_input_active, input_context,
+      continue_pending, reserve_pending_mismatch);
 }
 
 std::optional<std::string>
