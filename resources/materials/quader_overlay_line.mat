@@ -10,14 +10,20 @@ material {
         color,
         custom0,
         custom1,
-        custom2
+        custom2,
+        custom3,
+        custom4
     ],
     variables : [
-        lineDistancePixels
+        lineDistancePixels,
+        lineSurfaceDepths
     ],
     parameters : [
         { type : bool, name : sharedPositionsEnabled },
         { type : sampler2d, name : sharedPositions, precision : high },
+        { type : bool, name : surfaceDepthEnabled },
+        { type : float, name : dashPeriodPixels },
+        { type : float, name : dashFactor },
         {
             type : float,
             name : lineWidth
@@ -71,6 +77,28 @@ vertex {
             }
         }
         return true;
+    }
+
+    highp float surfaceDepth(highp vec4 first, highp vec4 second,
+            highp vec4 support, highp vec2 devicePosition, highp float fallbackDepth) {
+        // A source face has affine device depth. Homogeneous XYW also handles
+        // support points behind the camera; degenerate planes keep line depth.
+        first /= max(max(abs(first.x), abs(first.y)), max(abs(first.w), 0.000001));
+        second /= max(max(abs(second.x), abs(second.y)), max(abs(second.w), 0.000001));
+        support /= max(max(abs(support.x), abs(support.y)), max(abs(support.w), 0.000001));
+        highp vec3 firstPoint = first.xyw;
+        highp vec3 secondPoint = second.xyw;
+        highp vec3 supportPoint = support.xyw;
+        highp vec3 secondCrossSupport = cross(secondPoint, supportPoint);
+        highp float determinant = dot(firstPoint, secondCrossSupport);
+        highp float determinantScale = length(firstPoint) * length(secondPoint) * length(supportPoint);
+        if (abs(determinant) <= 0.0000001 * determinantScale) {
+            return fallbackDepth;
+        }
+        highp vec3 plane = (first.z * secondCrossSupport +
+                second.z * cross(supportPoint, firstPoint) +
+                support.z * cross(firstPoint, secondPoint)) / determinant;
+        return dot(plane, vec3(devicePosition, 1.0));
     }
 
     void materialVertex(inout MaterialVertexInputs material) {
@@ -142,7 +170,19 @@ vertex {
         material.clipSpaceTransform[3] = finalDevice;
         float halfLengthPixels = directionLength * 0.5;
         material.lineDistancePixels = vec4(side * sideDistance,
-                cap * (halfLengthPixels + sideDistance), halfLengthPixels, 0.0);
+                cap * (halfLengthPixels + sideDistance), halfLengthPixels,
+                ribbonDepth + deviceOffset * 0.5);
+        material.lineSurfaceDepths = vec4(0.0);
+        if (materialParams.surfaceDepthEnabled) {
+            highp vec4 support0World = getWorldFromModelMatrix() * vec4(overlayPosition(getCustom3().xyz), 1.0);
+            highp vec4 support1World = getWorldFromModelMatrix() * vec4(overlayPosition(getCustom4().xyz), 1.0);
+            highp vec4 support0Clip = getClipFromViewMatrix() * getViewFromWorldMatrix() * support0World;
+            highp vec4 support1Clip = getClipFromViewMatrix() * getViewFromWorldMatrix() * support1World;
+            material.lineSurfaceDepths = vec4(
+                    surfaceDepth(clipStart, clipEnd, support0Clip, finalDevice.xy, ribbonDepth) + deviceOffset * 0.5,
+                    surfaceDepth(clipStart, clipEnd, support1Clip, finalDevice.xy, ribbonDepth) + deviceOffset * 0.5,
+                    0.0, 0.0);
+        }
     }
 }
 
@@ -154,6 +194,25 @@ fragment {
 
         float alphaScale = overlayLineCoverage(variable_lineDistancePixels.xyz,
                 materialParams.lineWidth, materialParams.featherPixels);
+
+        if (materialParams.dashPeriodPixels > 0.0) {
+            // DEVICE ribbons have W=1, so this coordinate stays linear in
+            // physical pixels across perspective depth changes and caps.
+            // Center the first dash at the near-clipped start for short spans.
+            float distancePixels = variable_lineDistancePixels.y + variable_lineDistancePixels.z;
+            float period = materialParams.dashPeriodPixels;
+            float phase = mod(distancePixels + period * 0.5, period) - period * 0.5;
+            float dashDistance = abs(phase) - period * saturate(materialParams.dashFactor) * 0.5;
+            float feather = max(fwidth(distancePixels), 0.0001);
+            alphaScale *= saturate(0.5 - dashDistance / feather);
+        }
+
+        // Explicit depth preserves reverse-Z precision and a source face's
+        // full solid ribbon width. The default path retains rasterized depth.
+        gl_FragDepth = materialParams.surfaceDepthEnabled
+                ? max(variable_lineDistancePixels.w,
+                        max(variable_lineSurfaceDepths.x, variable_lineSurfaceDepths.y))
+                : gl_FragCoord.z;
 
         vec4 color = getColor();
         color.a *= alphaScale * saturate(materialParams.alphaMultiplier);

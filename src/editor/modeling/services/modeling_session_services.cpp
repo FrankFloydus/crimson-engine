@@ -4151,11 +4151,19 @@ ViewportOverlayFrame ModelingOverlayService::volatile_overlay_frame(
 
   const quader_editor_core::InsertEdgeLoopToolState &insert_loop =
       runtime.insert_edge_loop_state();
-  SelectionOverlayProjection::append_projected_overlay_lines(
-      frame, insert_loop.preview_lines, object_registry, scene,
-      ViewportOverlayLayer::HoverEdge,
-      ViewportOverlayStyleRole::HoverWire, ViewportOverlaySource::Tool,
-      instance_edit_scope, entity_visible);
+  if (!insert_loop.preview_lines.empty()) {
+    const auto *loop_object = session != nullptr
+        ? find_polygon_object_by_id(session->objects(), insert_loop.object_id)
+        : nullptr;
+    const auto loop_document = loop_object != nullptr
+        ? loop_object->document.read_view() : quader_poly::DocumentReadView{};
+    SelectionOverlayProjection::append_projected_overlay_lines(
+        frame, insert_loop.preview_lines, object_registry, scene,
+        ViewportOverlayLayer::HoverEdge,
+        ViewportOverlayStyleRole::HoverWire, ViewportOverlaySource::Tool,
+        instance_edit_scope, entity_visible,
+        ViewportOverlayLineOcclusionStyle::Dashed, loop_document);
+  }
   SelectionOverlayProjection::append_projected_overlay_points(
       frame, insert_loop.preview_points, object_registry, scene,
       ViewportOverlayLayer::HoverVertex,

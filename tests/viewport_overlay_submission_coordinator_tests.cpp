@@ -16,6 +16,7 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "editor/array/linear_array_tool_service.hpp"
+#include "editor/instances/scene_instance_service.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/runtime/selection_types.hpp"
@@ -31,6 +32,7 @@
 #include "viewport/viewport_settings.hpp"
 #include "assets/asset_registry.hpp"
 #include "scene/scene_document.hpp"
+#include "math/glm_bridge.hpp"
 
 #include <quader/modeling/neutral/polygon/document_topology.hpp>
 
@@ -377,7 +379,7 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
 }
 
 TEST(ViewportOverlaySubmissionCoordinatorTests,
-     InsertEdgeLoopVerticesReachRetainedSubmissionAndClearWithoutStaleGeometry) {
+     InsertEdgeLoopConnectorsAndVerticesRetainStyleAndRetireWithoutStaleGeometry) {
   SceneDocument document;
   AssetRegistry assets;
   ModelingSessionService modeling(document, assets);
@@ -403,6 +405,9 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
   ASSERT_TRUE(settings.set_float_value(ViewportFloatSettingId::VertexOutlineSize, 1.5f));
   ASSERT_TRUE(settings.set_color(ViewportColorSettingId::HoverVertex,
                                 {0.2f, 0.8f, 0.4f, 0.75f}));
+  ViewportOverlayCamera camera{
+      .eye = {0, 0, 5}, .forward = {0, 0, -1},
+      .right = {1, 0, 0}, .up = {0, 1, 0}, .viewport_size = {800, 600}};
   const auto submit = [&](float scale = 1.0f) {
     const auto snapshot = modeling.volatile_overlay_snapshot();
     auto request = submission_request(selection, scene, *snapshot.frame, curve);
@@ -414,6 +419,7 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
         .source_identity = reinterpret_cast<std::uintptr_t>(&tools),
         .publication_revision = 1u};
     request.raster_scale = scale;
+    request.camera = camera;
     return coordinator.submit(request, settings, target);
   };
   const auto expect_loop = [&](float y, float scale) {
@@ -431,6 +437,19 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
     }
     EXPECT_EQ(std::ranges::count_if(target.dynamic_frame.lines,
         [](const auto &line) { return line.source == ViewportOverlaySource::Tool; }), 4);
+    for (const auto &line : target.dynamic_frame.lines) {
+      if (line.source == ViewportOverlaySource::Tool) {
+        EXPECT_EQ(line.layer, ViewportOverlayLayer::HoverEdge);
+        EXPECT_EQ(line.style_role, ViewportOverlayStyleRole::HoverWire);
+        EXPECT_EQ(line.occlusion_style, ViewportOverlayLineOcclusionStyle::Dashed);
+        EXPECT_GE(line.element.face_id, 0);
+        EXPECT_GE(line.surface_support[0].vertex_id, 0);
+        EXPECT_NEAR(line.start.y, y, 0.0001f);
+        EXPECT_NEAR(line.end.y, y, 0.0001f);
+      } else {
+        EXPECT_EQ(line.occlusion_style, ViewportOverlayLineOcclusionStyle::Default);
+      }
+    }
     const auto plan = OverlayRenderableBuilder::build_layer(
         target.dynamic_frame,
         {.eye = {0, 0, 5}, .forward = {0, 0, -1},
@@ -459,7 +478,20 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
   const auto cache = modeling.volatile_overlay_cache_stats();
   const auto work = coordinator.work_counters();
   const int submissions = target.dynamic_submit_count;
+  const auto selection_builds = selection.build_count;
+  const auto tool_builds = tools.build_count;
   for (int frame = 0; frame < 8; ++frame) EXPECT_TRUE(submit().camera_only);
+  for (const float eye_x : {-1.0f, 0.0f, 1.0f}) {
+    camera.eye.x = eye_x;
+    const auto result = submit();
+    EXPECT_TRUE(result.camera_only);
+    EXPECT_FALSE(result.selection_source_refreshed);
+    EXPECT_FALSE(result.dynamic_submitted);
+    expect_loop(0.0f, 1.0f);
+  }
+  EXPECT_EQ(target.last_camera.eye.x, camera.eye.x);
+  EXPECT_EQ(selection.build_count, selection_builds);
+  EXPECT_EQ(tools.build_count, tool_builds);
   EXPECT_EQ(modeling.volatile_overlay_cache_stats().build_count, cache.build_count);
   EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
             work.dynamic_source_compose_count);
@@ -470,10 +502,17 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
   expect_loop(0.0f, 1.0f);
   EXPECT_EQ(modeling.volatile_overlay_cache_stats().build_count, cache.build_count);
 
-  event.ray.origin.y = 0.5f;
-  ASSERT_TRUE(modeling.update_insert_edge_loop_drag(event).ok);
-  ASSERT_TRUE(submit().dynamic_submitted);
-  expect_loop(0.5f, 1.0f);
+  const auto content_revision = modeling.content_revision();
+  const auto asset_revision = assets.revision();
+  for (const float y : {0.5f, -0.5f, 0.0f}) {
+    event.ray.origin.y = y;
+    ASSERT_TRUE(modeling.update_insert_edge_loop_drag(event).ok);
+    ASSERT_TRUE(submit().dynamic_submitted);
+    expect_loop(y, 1.0f);
+    EXPECT_EQ(modeling.content_revision(), content_revision);
+    EXPECT_EQ(assets.revision(), asset_revision);
+    EXPECT_TRUE(submit().camera_only);
+  }
   event.ray.origin.y = 0.95f;
   ASSERT_TRUE(modeling.update_insert_edge_loop_drag(event).ok);
   ASSERT_TRUE(submit().dynamic_submitted);
@@ -486,12 +525,136 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
   ASSERT_TRUE(modeling.update_insert_edge_loop_drag(event).ok);
   ASSERT_TRUE(submit().dynamic_submitted);
   expect_loop(0.0f, 1.0f);
+  ASSERT_TRUE(modeling.cancel_active_modal_tool().ok);
+  ASSERT_TRUE(submit().dynamic_submitted);
+  EXPECT_TRUE(target.dynamic_frame.points.empty());
+  EXPECT_FALSE(std::ranges::any_of(target.dynamic_frame.lines,
+      [](const auto &line) { return line.source == ViewportOverlaySource::Tool; }));
+  EXPECT_TRUE(submit().camera_only);
+
+  ASSERT_TRUE(modeling.activate_viewport_tool(ModelingViewportTool::InsertEdgeLoop).ok);
+  ASSERT_TRUE(modeling.update_insert_edge_loop_hover(event).ok);
+  ASSERT_TRUE(submit().dynamic_submitted);
+  expect_loop(0.0f, 1.0f);
+  ASSERT_TRUE(modeling.clear_selection_hover().ok);
+  (void)submit();
+  expect_loop(0.0f, 1.0f);
+  ASSERT_TRUE(modeling.activate_viewport_tool(ModelingViewportTool::Select).ok);
+  ASSERT_TRUE(submit().dynamic_submitted);
+  EXPECT_TRUE(target.dynamic_frame.points.empty());
+  EXPECT_FALSE(std::ranges::any_of(target.dynamic_frame.lines,
+      [](const auto &line) { return line.source == ViewportOverlaySource::Tool; }));
+  EXPECT_TRUE(submit().camera_only);
+
+  ASSERT_TRUE(modeling.activate_viewport_tool(ModelingViewportTool::InsertEdgeLoop).ok);
+  ASSERT_TRUE(modeling.begin_insert_edge_loop_drag(event).ok);
+  ASSERT_TRUE(submit().dynamic_submitted);
+  expect_loop(0.0f, 1.0f);
   ASSERT_TRUE(modeling.commit_insert_edge_loop_drag().ok);
   ASSERT_TRUE(submit().dynamic_submitted);
   EXPECT_TRUE(target.dynamic_frame.points.empty());
   EXPECT_FALSE(std::ranges::any_of(target.dynamic_frame.lines,
       [](const auto &line) { return line.source == ViewportOverlaySource::Tool; }));
   EXPECT_TRUE(submit().camera_only);
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     InsertEdgeLoopIncidentSupportUsesNonuniformOccurrenceTransform) {
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto created = editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Instance loop support");
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  const auto object = created.value();
+  ASSERT_TRUE(editor.selection().select_object(object).ok());
+  const auto instance = editor.modeling().create_instance_from_selection();
+  ASSERT_TRUE(instance.ok()) << instance.error_message();
+  const auto occurrence = instance.value().occurrence.root.id;
+  ASSERT_TRUE(editor.scene().set_transform(occurrence, {
+      .position = {3, 2, 1}, .rotation_euler = {0.3f, 0.4f, 0.1f},
+      .scale = {2, 3, 0.5f}}).ok());
+  ASSERT_TRUE(editor.modeling().enter_instance_edit(occurrence).ok());
+  ASSERT_TRUE(editor.selection().select_object(object).ok());
+  const auto world = session.instances().effective_member_world_transform(
+      object.entity, occurrence);
+  ASSERT_TRUE(world.has_value());
+  const auto *binding = session.scene().mesh(object.entity);
+  ASSERT_NE(binding, nullptr);
+  const auto *mesh = session.assets().mesh(binding->mesh);
+  ASSERT_NE(mesh, nullptr);
+  const auto authored = mesh->authored_polygon_document;
+  ASSERT_NE(authored, nullptr);
+
+  auto &modeling = session.modeling();
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::InsertEdgeLoop).ok());
+  const auto origin = transform_point(*world, {1, 0, 5});
+  const auto destination = transform_point(*world, {1, 0, 1});
+  ASSERT_TRUE(modeling.begin_insert_edge_loop_drag({
+      .ray = {.origin = origin, .direction = normalize(destination - origin)},
+      .grid_size = 0.5, .edge_radius = 0.2, .snap_enabled = false}).ok);
+  ASSERT_TRUE(modeling.tool_status().insert_edge_loop_has_preview);
+
+  ViewportOverlaySubmissionCoordinator coordinator;
+  RecordingOverlayTarget target;
+  StaticSelectionFrameProvider selection({});
+  StaticDynamicToolFrameProvider tools({});
+  RenderOverlaySelectionSnapshot scene;
+  CurveToolPreviewState curve;
+  const auto settings = ViewportSettings::defaults();
+  const auto submit = [&] {
+    const auto snapshot = modeling.volatile_overlay_snapshot();
+    auto request = submission_request(selection, scene, *snapshot.frame, curve);
+    request.volatile_modeling_source = {
+        .source_identity = snapshot.source.source_identity,
+        .publication_revision = snapshot.source.publication_revision};
+    request.dynamic_tool_frame_provider = &tools;
+    request.dynamic_tool_source = {
+        .source_identity = reinterpret_cast<std::uintptr_t>(&tools),
+        .publication_revision = 1u};
+    return coordinator.submit(request, settings, target);
+  };
+  ASSERT_TRUE(submit().dynamic_submitted);
+  const auto connector_count = std::ranges::count_if(target.dynamic_frame.lines,
+      [](const auto &line) {
+        return line.occlusion_style == ViewportOverlayLineOcclusionStyle::Dashed;
+      });
+  ASSERT_EQ(connector_count, 4);
+  for (const auto &line : target.dynamic_frame.lines) {
+    if (line.occlusion_style != ViewportOverlayLineOcclusionStyle::Dashed) {
+      continue;
+    }
+    EXPECT_EQ(line.element.object_id, object.modeling_object_id);
+    const auto *face = quader_poly::find_face(*authored, line.element.face_id);
+    ASSERT_NE(face, nullptr);
+    const auto &support = line.surface_support[0];
+    ASSERT_GE(support.vertex_id, 0);
+    const auto support_vertex_id = static_cast<quader_poly::ElementId>(support.vertex_id);
+    EXPECT_NE(std::ranges::find(face->vertices, support_vertex_id), face->vertices.end());
+    const auto *vertex = quader_poly::find_vertex(*authored, support_vertex_id);
+    ASSERT_NE(vertex, nullptr);
+    const auto expected = transform_point(*world, vertex->position);
+    EXPECT_NEAR(support.position.x, expected.x, 0.0001f);
+    EXPECT_NEAR(support.position.y, expected.y, 0.0001f);
+    EXPECT_NEAR(support.position.z, expected.z, 0.0001f);
+    const auto normal = cross(line.end - line.start, support.position - line.start);
+    EXPECT_GT(length(normal), 0.1f);
+    for (const auto vertex_id : face->vertices) {
+      const auto *face_vertex = quader_poly::find_vertex(*authored, vertex_id);
+      ASSERT_NE(face_vertex, nullptr);
+      EXPECT_NEAR(dot(normalize(normal),
+          transform_point(*world, face_vertex->position) - line.start), 0.0f, 0.0001f);
+    }
+  }
+  const auto cache = modeling.volatile_overlay_cache_stats();
+  const auto work = coordinator.work_counters();
+  const auto submissions = target.dynamic_submit_count;
+  for (int frame = 0; frame < 8; ++frame) {
+    EXPECT_TRUE(submit().camera_only);
+  }
+  EXPECT_EQ(modeling.volatile_overlay_cache_stats().build_count, cache.build_count);
+  EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
+            work.dynamic_source_compose_count);
+  EXPECT_EQ(target.dynamic_submit_count, submissions);
 }
 
 TEST(ViewportOverlaySubmissionCoordinatorTests,
@@ -579,6 +742,9 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
           return is_knife_line(line) && same_position(line.start, points[segment]) &&
                  same_position(line.end, points[segment + 1u]);
         }), 1);
+      }
+      for (const auto &line : target.dynamic_frame.lines) {
+        EXPECT_EQ(line.occlusion_style, ViewportOverlayLineOcclusionStyle::Default);
       }
       for (std::size_t point = 0; point <= index; ++point) {
         EXPECT_EQ(std::ranges::count_if(target.dynamic_frame.points, [&](const auto &value) {

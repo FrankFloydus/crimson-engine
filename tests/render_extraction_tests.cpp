@@ -747,6 +747,49 @@ TEST(RenderSignatureBuilderTests, BuildsOverlayFrameLayerSignaturesInOnePass) {
 
 }
 
+TEST(RenderSignatureBuilderTests,
+     LineOcclusionStyleInvalidatesItsLayerWithoutCameraPoseOrGeometryChanges) {
+  ViewportOverlayFrame frame;
+  frame.lines.push_back({
+      .layer = ViewportOverlayLayer::HoverEdge,
+      .start = {-0.5f, 0.0f, -1.0f},
+      .end = {0.5f, 0.0f, -4.0f},
+      .source = ViewportOverlaySource::Tool,
+  });
+  frame.points.push_back({.layer = ViewportOverlayLayer::ToolHandle});
+  const auto ordinary = OverlayRenderableBuilder::frame_signatures(frame);
+  frame.lines.front().occlusion_style = ViewportOverlayLineOcclusionStyle::Dashed;
+  const auto dashed = OverlayRenderableBuilder::frame_signatures(frame);
+  const auto repeated = OverlayRenderableBuilder::frame_signatures(frame);
+  EXPECT_NE(dashed.frame_signature, ordinary.frame_signature);
+  EXPECT_EQ(dashed.frame_signature, repeated.frame_signature);
+  for (std::size_t index = 0u; index < kViewportOverlayLayerCount; ++index) {
+    if (index == static_cast<std::size_t>(ViewportOverlayLayer::HoverEdge)) {
+      EXPECT_NE(dashed.layer_signatures[index], ordinary.layer_signatures[index]);
+    } else {
+      EXPECT_EQ(dashed.layer_signatures[index], ordinary.layer_signatures[index]);
+    }
+  }
+  frame.lines.front().occluded_dash_period_pixels = 16.0f;
+  const auto scaled = OverlayRenderableBuilder::frame_signatures(frame);
+  EXPECT_NE(scaled.frame_signature, dashed.frame_signature);
+  EXPECT_NE(OverlayRenderableBuilder::layer_signature(scaled, ViewportOverlayLayer::HoverEdge),
+            OverlayRenderableBuilder::layer_signature(dashed, ViewportOverlayLayer::HoverEdge));
+  EXPECT_EQ(OverlayRenderableBuilder::layer_signature(scaled, ViewportOverlayLayer::ToolHandle),
+            OverlayRenderableBuilder::layer_signature(dashed, ViewportOverlayLayer::ToolHandle));
+
+  auto camera = test_perspective_overlay_camera();
+  const auto signature = OverlayRenderableBuilder::layer_build_signature(
+      dashed, camera, ViewportOverlayLayer::HoverEdge);
+  camera.eye = {3.0f, -2.0f, 1.0f};
+  camera.forward = {-0.2f, 0.1f, -1.0f};
+  EXPECT_EQ(signature, OverlayRenderableBuilder::layer_build_signature(
+                           dashed, camera, ViewportOverlayLayer::HoverEdge));
+  camera.near_plane *= 2.0f;
+  EXPECT_NE(signature, OverlayRenderableBuilder::layer_build_signature(
+                           dashed, camera, ViewportOverlayLayer::HoverEdge));
+}
+
 TEST(MeshAssetTests, CoalescesContiguousPrimitiveSpansByMaterialSlotForRenderSubmission) {
     MeshAsset mesh;
     MeshGeometryPayload &geometry = mesh.edit_geometry();
@@ -7029,6 +7072,138 @@ TEST(OverlayLineMeshBuilderTests,
   EXPECT_EQ(draw_on_top.state.depth_func, OverlayDepthFunc::Always);
   EXPECT_FLOAT_EQ(draw_on_top.depth_bias, 0.0f);
   EXPECT_FALSE(draw_on_top.state.depth_culling);
+}
+
+TEST(OverlayLineMeshBuilderTests,
+     DashedPreviewSharesOneWorldRibbonWithComplementaryFullOpacityPasses) {
+  for (const std::uint8_t alpha : {std::uint8_t{255}, std::uint8_t{93},
+                                  std::uint8_t{0}}) {
+    SCOPED_TRACE(static_cast<int>(alpha));
+    ViewportOverlayFrame frame;
+    const auto color = rgba8(51, 102, 153, alpha);
+    frame.lines.push_back({
+        .layer = ViewportOverlayLayer::HoverEdge,
+        .start = {-0.5f, 0.0f, -1.0f},
+        .end = {0.5f, 0.0f, -4.0f},
+        .color = color,
+        .width_pixels = kOverlayToolPreviewLineWidthPixels,
+        .style_role = ViewportOverlayStyleRole::ToolPreviewLine,
+        .source = ViewportOverlaySource::Tool,
+        .surface_support = {ViewportOverlaySurfaceSupport{{0.0f, 1.0f, -2.5f}, 7}},
+        .occlusion_style = ViewportOverlayLineOcclusionStyle::Dashed,
+    });
+    const auto camera = test_perspective_overlay_camera();
+    const auto plan = OverlayRenderableBuilder::build_layer(
+        frame, camera, ViewportOverlayLayer::HoverEdge);
+    ASSERT_EQ(plan.line_batches.size(), 1u);
+    EXPECT_TRUE(plan.edit_wire_batches.empty());
+    const auto &batch = plan.line_batches.front();
+    ASSERT_TRUE(batch.occluded_state.has_value());
+    EXPECT_EQ(batch.mesh.vertices.size(), 4u);
+    EXPECT_EQ(batch.mesh.indices.size(), 6u);
+    EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::GreaterOrEqual);
+    EXPECT_EQ(batch.occluded_state->depth_func, OverlayDepthFunc::Less);
+    EXPECT_TRUE(batch.state.depth_culling);
+    EXPECT_TRUE(batch.occluded_state->depth_culling);
+    EXPECT_FALSE(batch.state.depth_write);
+    EXPECT_FALSE(batch.occluded_state->depth_write);
+    EXPECT_EQ(batch.state.silhouette_pass, OverlaySilhouettePass::None);
+    EXPECT_EQ(batch.occluded_state->silhouette_pass, OverlaySilhouettePass::None);
+    EXPECT_EQ(batch.state.face_fill_class, OverlayFaceFillClass::None);
+    EXPECT_EQ(batch.occluded_state->face_fill_class, OverlayFaceFillClass::None);
+    EXPECT_FLOAT_EQ(batch.occluded_alpha_multiplier, 1.0f);
+    EXPECT_FLOAT_EQ(batch.width_pixels, kOverlayToolPreviewLineWidthPixels);
+    EXPECT_EQ(batch.occlusion_style, ViewportOverlayLineOcclusionStyle::Dashed);
+    for (const auto &vertex : batch.mesh.vertices) {
+      EXPECT_EQ(vertex.color, rgba8_srgb_to_linear(color));
+      EXPECT_FLOAT_EQ(vertex.support0.x, 0.0f);
+      EXPECT_FLOAT_EQ(vertex.support0.y, 1.0f);
+      EXPECT_FLOAT_EQ(vertex.support0.z, -2.5f);
+    }
+    auto moved_camera = camera;
+    moved_camera.eye = {3.0f, 2.0f, 1.0f};
+    const auto moved = OverlayRenderableBuilder::build_layer(
+        frame, moved_camera, ViewportOverlayLayer::HoverEdge);
+    ASSERT_EQ(moved.line_batches.size(), 1u);
+    EXPECT_EQ(moved.line_batches.front().mesh.indices, batch.mesh.indices);
+    ASSERT_EQ(moved.line_batches.front().mesh.vertices.size(), 4u);
+    for (std::size_t index = 0u; index < 4u; ++index) {
+      const auto &before = batch.mesh.vertices[index];
+      const auto &after = moved.line_batches.front().mesh.vertices[index];
+      EXPECT_FLOAT_EQ(before.start.x, after.start.x);
+      EXPECT_FLOAT_EQ(before.start.z, after.start.z);
+      EXPECT_FLOAT_EQ(before.end.x, after.end.x);
+      EXPECT_FLOAT_EQ(before.end.z, after.end.z);
+      EXPECT_FLOAT_EQ(before.control.y, after.control.y);
+    }
+  }
+}
+
+TEST(OverlayLineMeshBuilderTests,
+     DashPeriodsPartitionBatchesAndInvalidPeriodsUseThePolicyDefault) {
+  ViewportOverlayFrame frame;
+  for (const float period : {0.0f, -1.0f,
+                            std::numeric_limits<float>::quiet_NaN(),
+                            std::numeric_limits<float>::infinity(), 16.0f}) {
+    frame.lines.push_back({
+        .layer = ViewportOverlayLayer::HoverEdge,
+        .start = {-0.5f, 0.0f, -4.0f},
+        .end = {0.5f, 0.0f, -4.0f},
+        .width_pixels = 2.0f,
+        .source = ViewportOverlaySource::Tool,
+        .occlusion_style = ViewportOverlayLineOcclusionStyle::Dashed,
+        .occluded_dash_period_pixels = period,
+    });
+  }
+  const auto plan = OverlayRenderableBuilder::build_layer(
+      frame, test_perspective_overlay_camera(), ViewportOverlayLayer::HoverEdge);
+  ASSERT_EQ(plan.line_batches.size(), 2u);
+  EXPECT_FLOAT_EQ(plan.line_batches[0].occluded_dash_period_pixels,
+                  kOverlayOccludedLineDashPeriodPixels);
+  EXPECT_EQ(plan.line_batches[0].mesh.vertices.size(), 16u);
+  EXPECT_FLOAT_EQ(plan.line_batches[1].occluded_dash_period_pixels, 16.0f);
+  EXPECT_EQ(plan.line_batches[1].mesh.vertices.size(), 4u);
+}
+
+TEST(OverlayLineMeshBuilderTests,
+     DashedPreviewDoesNotMergeWithDefaultOrSelectionSilhouetteBatches) {
+  ViewportOverlayFrame frame;
+  const ViewportOverlayLine ordinary{
+      .layer = ViewportOverlayLayer::HoverEdge,
+      .start = {-0.5f, 0.0f, -4.0f},
+      .end = {0.5f, 0.0f, -4.0f},
+      .width_pixels = 2.0f,
+      .source = ViewportOverlaySource::Tool,
+  };
+  frame.lines.push_back(ordinary);
+  auto dashed = ordinary;
+  dashed.occlusion_style = ViewportOverlayLineOcclusionStyle::Dashed;
+  frame.lines.push_back(dashed);
+  auto silhouette = ordinary;
+  silhouette.source = ViewportOverlaySource::MeshOutline;
+  frame.lines.push_back(silhouette);
+  auto component = ordinary;
+  component.source = ViewportOverlaySource::ComponentHover;
+  frame.lines.push_back(component);
+
+  const auto plan = OverlayRenderableBuilder::build_layer(
+      frame, test_perspective_overlay_camera(), ViewportOverlayLayer::HoverEdge);
+  ASSERT_EQ(plan.line_batches.size(), 3u);
+  ASSERT_EQ(plan.edit_wire_batches.size(), 1u);
+  for (const auto &batch : plan.line_batches) {
+    EXPECT_EQ(batch.mesh.vertices.size(), 4u);
+    if (batch.occlusion_style == ViewportOverlayLineOcclusionStyle::Dashed) {
+      ASSERT_TRUE(batch.occluded_state.has_value());
+      EXPECT_FLOAT_EQ(batch.occluded_alpha_multiplier, 1.0f);
+      EXPECT_EQ(batch.state.silhouette_pass, OverlaySilhouettePass::None);
+    } else if (batch.occluded_state) {
+      EXPECT_FLOAT_EQ(batch.occluded_alpha_multiplier,
+                      kOverlayOccludedSilhouetteAlphaMultiplier);
+      EXPECT_EQ(batch.state.silhouette_pass, OverlaySilhouettePass::Visible);
+    } else {
+      EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::Always);
+    }
+  }
 }
 
 TEST(OverlayLineMeshBuilderTests,

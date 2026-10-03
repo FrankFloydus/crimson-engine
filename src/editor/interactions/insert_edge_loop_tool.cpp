@@ -65,6 +65,7 @@ InsertEdgeLoopPreview build_preview(const std::vector<PolygonObject>& objects, i
               line.color,
               line.width_pixels,
               object_id,
+              line.face_id,
           });
         }
 	const SelectionOverlayStyle style;

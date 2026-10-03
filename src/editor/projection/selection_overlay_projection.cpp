@@ -566,11 +566,45 @@ void SelectionOverlayProjection::append_projected_overlay_lines(
     ViewportOverlayLayer layer, ViewportOverlayStyleRole style_role,
     ViewportOverlaySource source,
     ModelingInstanceEditScope instance_edit_scope,
-    const std::function<bool(EntityId)> &entity_visible) {
+    const std::function<bool(EntityId)> &entity_visible,
+    ViewportOverlayLineOcclusionStyle occlusion_style,
+    quader_poly::DocumentReadView surface_document) {
   QDR_PROFILE_FUNCTION();
   frame.lines.reserve(frame.lines.size() + lines.size());
   ProjectionObjectStateCache object_state_cache(instance_edit_scope,
                                                  entity_visible);
+  std::unordered_map<quader_poly::ElementId, const quader_poly::Face *> surface_faces;
+  std::unordered_map<quader_poly::ElementId, const quader_poly::Vertex *> surface_vertices;
+  if (occlusion_style == ViewportOverlayLineOcclusionStyle::Dashed &&
+      !lines.empty() && !surface_document.faces.empty()) {
+    surface_faces.reserve(lines.size());
+    for (const auto &line : lines) {
+      if (line.face_id != quader_poly::kInvalidElementId) {
+        surface_faces.try_emplace(line.face_id, nullptr);
+      }
+    }
+    for (const auto &face : surface_document.faces) {
+      const auto found = surface_faces.find(face.id);
+      if (found != surface_faces.end()) {
+        found->second = &face;
+      }
+    }
+    for (const auto &entry : surface_faces) {
+      const auto *face = entry.second;
+      if (face == nullptr) {
+        continue;
+      }
+      for (const auto vertex_id : face->vertices) {
+        surface_vertices.try_emplace(vertex_id, nullptr);
+      }
+    }
+    for (const auto &vertex : surface_document.vertices) {
+      const auto found = surface_vertices.find(vertex.id);
+      if (found != surface_vertices.end()) {
+        found->second = &vertex;
+      }
+    }
+  }
   for (const quader_editor_core::SelectionOverlayLine &line : lines) {
     const ProjectionObjectState &object_state =
         object_state_cache.state_for(line.object_id, object_registry, scene);
@@ -588,7 +622,35 @@ void SelectionOverlayProjection::append_projected_overlay_lines(
         .element =
             runtime_element_ref(line.object_id, quader_poly::kInvalidElementId,
                                 line.edge, line.face_id),
+        .occlusion_style = occlusion_style,
     });
+    if (occlusion_style != ViewportOverlayLineOcclusionStyle::Dashed) {
+      continue;
+    }
+    const auto face = surface_faces.find(line.face_id);
+    if (face == surface_faces.end() || face->second == nullptr) {
+      continue;
+    }
+    // The connector endpoints are interpolated along opposing authored edges.
+    // One off-line face vertex defines the same depth plane across its ribbon.
+    float support_area_squared = 0.0f;
+    for (const auto vertex_id : face->second->vertices) {
+      const auto vertex = surface_vertices.find(vertex_id);
+      if (vertex == surface_vertices.end() || vertex->second == nullptr) {
+        continue;
+      }
+      const auto area = cross(line.end - line.start,
+                              vertex->second->position - line.start);
+      const auto area_squared = dot(area, area);
+      if (area_squared <= support_area_squared) {
+        continue;
+      }
+      support_area_squared = area_squared;
+      frame.lines.back().surface_support[0] = {
+          .position = transform_object_point(object_state, vertex->second->position),
+          .vertex_id = static_cast<int>(vertex_id),
+      };
+    }
   }
 }
 

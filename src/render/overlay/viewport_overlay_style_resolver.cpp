@@ -212,6 +212,10 @@ void ViewportOverlayStyleResolver::apply_from(
           viewport_overlay_line_width_pixels(line.layer,
                                              resolved_width_pixels) *
           raster_scale;
+      if (line.occlusion_style == ViewportOverlayLineOcclusionStyle::Dashed) {
+        line.occluded_dash_period_pixels =
+            kOverlayOccludedLineDashPeriodPixels * raster_scale;
+      }
       if (context.construction_object_id >= 0 &&
           line.element.object_id == context.construction_object_id &&
           (role == ViewportOverlayStyleRole::SelectionWire ||

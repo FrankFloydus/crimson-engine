@@ -38,7 +38,10 @@ public:
       const SceneDocument &scene, ViewportOverlayLayer layer,
       ViewportOverlayStyleRole style_role, ViewportOverlaySource source,
       ModelingInstanceEditScope instance_edit_scope = {},
-      const std::function<bool(EntityId)> &entity_visible = {});
+      const std::function<bool(EntityId)> &entity_visible = {},
+      ViewportOverlayLineOcclusionStyle occlusion_style =
+          ViewportOverlayLineOcclusionStyle::Default,
+      quader_poly::DocumentReadView surface_document = {});
   static void append_projected_overlay_points(
       ViewportOverlayFrame &frame,
       const std::vector<quader_editor_core::SelectionOverlayPoint> &points,

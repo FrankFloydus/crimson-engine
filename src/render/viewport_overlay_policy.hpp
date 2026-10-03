@@ -150,6 +150,8 @@ inline constexpr std::uint32_t kOverlayCutPreviewSeamColor = rgba8(255, 122, 5, 
 
 inline constexpr float kOverlayLineDepthBias = 1.0f;
 inline constexpr float kOverlayOccludedSilhouetteAlphaMultiplier = 0.5f;
+inline constexpr float kOverlayOccludedLineDashPeriodPixels = 8.0f;
+inline constexpr float kOverlayOccludedLineDashFactor = 0.5f;
 inline constexpr float kOverlayPointDepthBias = 1.5f;
 inline constexpr float kOverlayFillDepthBias = 0.035f;
 inline constexpr float kOverlayDeviceDepthBiasPerNearPlane = 0.0025f;

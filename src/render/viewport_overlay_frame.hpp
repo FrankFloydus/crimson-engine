@@ -174,6 +174,12 @@ struct ViewportOverlaySurfaceSupport {
     int vertex_id = -1;
 };
 
+/// Selects an explicit hidden-span presentation without changing layer defaults.
+enum class ViewportOverlayLineOcclusionStyle {
+    Default,
+    Dashed,
+};
+
 /**
  * Represents a Viewport Overlay Line value used by the render extraction and Filament resource layer.
  */
@@ -188,6 +194,10 @@ struct ViewportOverlayLine {
     ViewportOverlaySource source = ViewportOverlaySource::Unknown;
     ViewportOverlayElementRef element;
     std::array<ViewportOverlaySurfaceSupport, 2u> surface_support{};
+    ViewportOverlayLineOcclusionStyle occlusion_style =
+        ViewportOverlayLineOcclusionStyle::Default;
+    /// Resolved physical period; zero uses the render policy's logical default.
+    float occluded_dash_period_pixels = 0.0f;
 };
 
 /**

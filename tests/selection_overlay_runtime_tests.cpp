@@ -778,6 +778,26 @@ public:
     return true;
   }
 
+  bool create_closed_edge_loop_sample() {
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session_));
+    const auto object = editor.modeling().create_box(
+        {.min = {-1.0f, -0.75f, -0.75f}, .max = {1.0f, 0.75f, 0.75f}},
+        "Self-occluded edge loop pixel regression");
+    return object.ok() && editor.tools().activate(ViewportToolId::InsertEdgeLoop).ok();
+  }
+
+  bool edge_loop_point_is_scene_visible(QVec3 world) {
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session_));
+    const auto projected = camera_.project_world_point(world);
+    const auto ray = camera_.ray_from_viewport_point(projected.position);
+    const auto surface = editor.query().mesh_surface_distance(
+        {.origin = ray.origin, .direction = ray.direction});
+    const float distance = dot(world - ray.origin, ray.direction);
+    return !surface || *surface >= distance - 0.001f;
+  }
+
   ModelingSessionService &modeling() { return session_.modeling(); }
 
   bool create_tool_topology_sample(ViewportToolId tool) {
@@ -4133,6 +4153,380 @@ int loop_preview_green_pixels(const QImage &image, QVec2 center,
     }
   }
   return count;
+}
+
+struct LoopLinePixelCoverage {
+  int samples = 0;
+  int colored = 0;
+  int transitions = 0;
+  int longest_color_run = 0;
+  int longest_gap_run = 0;
+};
+
+LoopLinePixelCoverage loop_line_pixel_coverage(
+    const QImage &image, QVec2 start, QVec2 end, float inset = 0.0f,
+    float normal_offset = 0.0f, bool search_normal = true) {
+  const float length = std::hypot(end.x - start.x, end.y - start.y);
+  if (length <= 2.0f * inset) return {};
+  const QVec2 tangent{(end.x - start.x) / length, (end.y - start.y) / length};
+  const QVec2 normal{-tangent.y, tangent.x};
+  LoopLinePixelCoverage result;
+  bool previous = false;
+  int run = 0;
+  for (float distance = inset; distance <= length - inset; distance += 1.0f) {
+    bool colored = false;
+    const int search_radius = search_normal ? 1 : 0;
+    for (int offset = -search_radius; offset <= search_radius; ++offset) {
+      const float side = normal_offset + static_cast<float>(offset);
+      const int x = static_cast<int>(std::lround(start.x + tangent.x * distance + normal.x * side));
+      const int y = static_cast<int>(std::lround(start.y + tangent.y * distance + normal.y * side));
+      if (x < 0 || y < 0 || x >= image.width() || y >= image.height()) continue;
+      const QColor pixel = image.pixelColor(x, y);
+      colored = colored || (pixel.green() > 140 && pixel.green() > pixel.red() + 80 &&
+                            pixel.green() > pixel.blue() + 80);
+    }
+    if (result.samples != 0 && colored != previous) {
+      ++result.transitions;
+      run = 0;
+    }
+    ++run;
+    ++result.samples;
+    if (colored) {
+      ++result.colored;
+      result.longest_color_run = std::max(result.longest_color_run, run);
+    } else {
+      result.longest_gap_run = std::max(result.longest_gap_run, run);
+    }
+    previous = colored;
+  }
+  return result;
+}
+
+void expect_solid_loop_coverage(const LoopLinePixelCoverage &coverage) {
+  ASSERT_GE(coverage.samples, 20);
+  EXPECT_GE(coverage.colored, static_cast<int>(0.97f * coverage.samples))
+      << "A visible connector must stay solid across its projected span.";
+  EXPECT_LE(coverage.longest_gap_run, 1);
+}
+
+void expect_dashed_loop_coverage(const LoopLinePixelCoverage &coverage) {
+  ASSERT_GE(coverage.samples, 30);
+  EXPECT_GE(coverage.colored, static_cast<int>(0.2f * coverage.samples));
+  EXPECT_LE(coverage.colored, static_cast<int>(0.8f * coverage.samples));
+  EXPECT_GE(coverage.transitions, 6)
+      << "A hidden connector must contain repeated visible dashes and empty gaps.";
+  EXPECT_GE(coverage.longest_color_run, 2);
+  EXPECT_GE(coverage.longest_gap_run, 2);
+}
+
+void save_loop_occlusion_capture(const QImage &image, const QString &stem) {
+  const QString directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (directory.isEmpty()) return;
+  ASSERT_TRUE(QDir().mkpath(directory));
+  const QString path = QDir(directory).filePath(stem + QStringLiteral(".png"));
+  EXPECT_TRUE(image.save(path));
+  std::cout << "Edge loop occlusion GPU png=" << path.toStdString() << '\n';
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanEdgeLoopPreviewWallOcclusionChangesOnlyHiddenSpansAt100And200Percent) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-edge-loop-wall-occlusion-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  for (const auto projection : {ViewportProjection::Perspective, ViewportProjection::Orthographic}) {
+    SCOPED_TRACE(projection == ViewportProjection::Perspective ? "perspective" : "orthographic");
+    SelectionOverlayRuntimeHarness harness;
+    ASSERT_TRUE(harness.initialize(0.0f, false));
+    ASSERT_TRUE(harness.create_edge_loop_sample());
+    ASSERT_TRUE(harness.prepare_overlay_audit_camera(3.0f, projection));
+    const auto pixels = harness.edge_loop_pixels(-0.25f);
+    const float split_x = pixels[2].x;
+    const auto add_wall = [&](float left, float right, float z) {
+      const std::array<QVec2, 4u> corners{{
+          {left, pixels[2].y - 35.0f}, {right, pixels[2].y - 35.0f},
+          {right, pixels[2].y + 35.0f}, {left, pixels[2].y + 35.0f}}};
+      std::array<MeshVertex, 4u> vertices;
+      for (std::size_t index = 0u; index < corners.size(); ++index) {
+        vertices[index].position = harness.overlay_audit_world_point(corners[index], z);
+      }
+      return harness.create_outline_depth_quad(vertices);
+    };
+    ASSERT_TRUE(add_wall(pixels[0].x - 20.0f, split_x, 0.5f));
+    ASSERT_TRUE(harness.modeling().activate_viewport_tool(ModelingViewportTool::InsertEdgeLoop).ok);
+    ASSERT_TRUE(harness.modeling().update_insert_edge_loop_hover(harness.edge_loop_event(-0.25f)).ok);
+    ASSERT_TRUE(harness.modeling().tool_status().insert_edge_loop_has_preview);
+    QImage at_100_percent;
+    LoopLinePixelCoverage hidden_at_100;
+    for (const auto &[scale, label] : std::array<std::pair<float, const char *>, 3>{{
+             {1.0f, "100"}, {2.0f, "200"}, {1.0f, "down"}}}) {
+      SCOPED_TRACE(label);
+      ASSERT_TRUE(harness.present_edge_loop_sample(scale));
+      const QImage image = harness.capture();
+      ASSERT_FALSE(image.isNull());
+      save_loop_occlusion_capture(image, QStringLiteral("loop-wall-%1-%2")
+          .arg(projection == ViewportProjection::Perspective ? "perspective" : "orthographic")
+          .arg(QString::fromLatin1(label)));
+      expect_solid_loop_coverage(loop_line_pixel_coverage(image,
+          {split_x + 12.0f, pixels[2].y}, {pixels[1].x - 20.0f, pixels[2].y}));
+      const auto hidden = loop_line_pixel_coverage(image,
+          {pixels[0].x + 20.0f, pixels[2].y}, {split_x - 12.0f, pixels[2].y});
+      expect_dashed_loop_coverage(hidden);
+      if (at_100_percent.isNull()) {
+        at_100_percent = image;
+        hidden_at_100 = hidden;
+      } else if (scale == 2.0f) {
+        EXPECT_GE(hidden.longest_gap_run, hidden_at_100.longest_gap_run * 1.5f);
+        EXPECT_LT(hidden.transitions, hidden_at_100.transitions);
+      } else {
+        EXPECT_EQ(image, at_100_percent);
+      }
+      const auto uploads = harness.component_overlay_stats().uploads;
+      ASSERT_TRUE(harness.present_edge_loop_sample(scale));
+      EXPECT_FALSE(harness.last_submission().persistent_submitted);
+      EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+      EXPECT_EQ(harness.component_overlay_stats().uploads.geometry_creation_count,
+                uploads.geometry_creation_count);
+      EXPECT_EQ(harness.capture(false), image);
+    }
+    ASSERT_TRUE(harness.modeling().cancel_active_modal_tool(false).ok);
+    ASSERT_TRUE(harness.present_edge_loop_sample());
+    EXPECT_EQ(loop_line_pixel_coverage(harness.capture(), pixels[0], pixels[1], 20.0f).colored, 0);
+
+    SelectionOverlayRuntimeHarness fully_hidden;
+    ASSERT_TRUE(fully_hidden.initialize(0.0f, false));
+    ASSERT_TRUE(fully_hidden.create_edge_loop_sample());
+    ASSERT_TRUE(fully_hidden.prepare_overlay_audit_camera(3.0f, projection));
+    const auto hidden_pixels = fully_hidden.edge_loop_pixels(-0.25f);
+    const std::array<QVec2, 4u> full_wall_corners{{
+        {hidden_pixels[0].x - 20.0f, hidden_pixels[2].y - 35.0f},
+        {hidden_pixels[1].x + 20.0f, hidden_pixels[2].y - 35.0f},
+        {hidden_pixels[1].x + 20.0f, hidden_pixels[2].y + 35.0f},
+        {hidden_pixels[0].x - 20.0f, hidden_pixels[2].y + 35.0f}}};
+    std::array<MeshVertex, 4u> full_wall;
+    for (std::size_t index = 0u; index < full_wall_corners.size(); ++index) {
+      full_wall[index].position = fully_hidden.overlay_audit_world_point(full_wall_corners[index], 0.5f);
+    }
+    ASSERT_TRUE(fully_hidden.create_outline_depth_quad(full_wall));
+    ASSERT_TRUE(fully_hidden.modeling().activate_viewport_tool(ModelingViewportTool::InsertEdgeLoop).ok);
+    // Start on the uncovered seed edge, then drag its locked factor behind the
+    // wall. Scene creation is complete before the retained preview exists.
+    ASSERT_TRUE(fully_hidden.modeling().begin_insert_edge_loop_drag(fully_hidden.edge_loop_event(0.5f)).ok);
+    ASSERT_TRUE(fully_hidden.modeling().update_insert_edge_loop_drag(fully_hidden.edge_loop_event(-0.25f)).ok);
+    ASSERT_TRUE(fully_hidden.modeling().tool_status().insert_edge_loop_has_preview);
+    ASSERT_TRUE(fully_hidden.present_edge_loop_sample());
+    const QImage hidden = fully_hidden.capture();
+    ASSERT_FALSE(hidden.isNull());
+    expect_dashed_loop_coverage(loop_line_pixel_coverage(hidden, hidden_pixels[0], hidden_pixels[1], 20.0f));
+    save_loop_occlusion_capture(hidden, QStringLiteral("loop-wall-%1-fully-hidden")
+        .arg(projection == ViewportProjection::Perspective ? "perspective" : "orthographic"));
+    ASSERT_TRUE(fully_hidden.modeling().cancel_active_modal_tool(false).ok);
+    ASSERT_TRUE(fully_hidden.present_edge_loop_sample());
+    const QImage canceled = fully_hidden.capture();
+    EXPECT_EQ(loop_line_pixel_coverage(canceled, hidden_pixels[0], hidden_pixels[1], 20.0f).colored, 0)
+        << "Cancellation must also retire the occluded companion.";
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanEdgeLoopSelfOcclusionFollowsCameraWithoutRebuildingWorldGeometry) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-edge-loop-self-occlusion-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0f, false));
+  ASSERT_TRUE(harness.create_closed_edge_loop_sample());
+  ViewportCameraController camera;
+  camera.set_viewport_size(SelectionOverlayRuntimeHarness::kWidth, SelectionOverlayRuntimeHarness::kHeight);
+  camera.set_clip_planes(0.01f, 200.0f);
+  ASSERT_TRUE(camera.restore_perspective_pose({
+      .eye = {3.0f, 1.5f, 4.0f}, .target = {}, .up = {0.0f, 1.0f, 0.0f}}));
+  harness.set_sample_camera(camera);
+  ASSERT_TRUE(harness.modeling().update_insert_edge_loop_hover(
+      harness.tool_topology_event({1.0f, -0.25f, 0.75f})).ok);
+  ASSERT_TRUE(harness.modeling().tool_status().insert_edge_loop_has_preview);
+  ASSERT_TRUE(harness.present_edge_loop_sample());
+  const auto frozen = harness.modeling().volatile_overlay_snapshot();
+  ASSERT_NE(frozen.frame, nullptr);
+  std::vector<const ViewportOverlayLine *> connectors;
+  int ordinary_hover_lines = 0;
+  for (const auto &line : frozen.frame->lines) {
+    if (line.occlusion_style == ViewportOverlayLineOcclusionStyle::Dashed) {
+      connectors.push_back(&line);
+      EXPECT_EQ(line.source, ViewportOverlaySource::Tool);
+    } else {
+      EXPECT_EQ(line.occlusion_style, ViewportOverlayLineOcclusionStyle::Default);
+      EXPECT_EQ(line.layer, ViewportOverlayLayer::HoverEdge);
+      ++ordinary_hover_lines;
+    }
+  }
+  ASSERT_EQ(connectors.size(), 4u);
+  EXPECT_EQ(ordinary_hover_lines, 1)
+      << "The authored seed-edge hover remains outside the connector dash policy.";
+  const auto uploads = harness.component_overlay_stats().uploads;
+  const auto selection_builds = harness.selection_frame_builds();
+  const auto volatile_builds = harness.modeling().volatile_overlay_cache_stats().build_count;
+  QImage initial;
+  std::array<bool, 4u> initial_visibility{};
+  int changed_classifications = 0;
+  for (const auto &[eye_x, label] : std::array<std::pair<float, const char *>, 3>{{
+           {3.0f, "right"}, {-3.0f, "left"}, {3.0f, "restored"}}}) {
+    SCOPED_TRACE(label);
+    ASSERT_TRUE(camera.restore_perspective_pose({
+        .eye = {eye_x, 1.5f, 4.0f}, .target = {}, .up = {0.0f, 1.0f, 0.0f}}));
+    harness.set_sample_camera(camera);
+    ASSERT_TRUE(harness.present_edge_loop_sample());
+    const QImage image = harness.capture();
+    ASSERT_FALSE(image.isNull());
+    int visible_segments = 0;
+    int hidden_segments = 0;
+    for (std::size_t index = 0u; index < connectors.size(); ++index) {
+      const auto &line = *connectors[index];
+      const bool visible = harness.edge_loop_point_is_scene_visible((line.start + line.end) * 0.5f);
+      const auto coverage = loop_line_pixel_coverage(image,
+          harness.overlay_audit_image_point(line.start), harness.overlay_audit_image_point(line.end), 8.0f);
+      if (visible) {
+        ++visible_segments;
+        expect_solid_loop_coverage(coverage);
+      } else {
+        ++hidden_segments;
+        expect_dashed_loop_coverage(coverage);
+      }
+      if (initial.isNull()) initial_visibility[index] = visible;
+      else if (eye_x < 0.0f && initial_visibility[index] != visible) ++changed_classifications;
+    }
+    EXPECT_GE(visible_segments, 1);
+    EXPECT_GE(hidden_segments, 1);
+    if (initial.isNull()) initial = image;
+    else if (eye_x > 0.0f) EXPECT_EQ(image, initial);
+    else EXPECT_NE(image, initial);
+    save_loop_occlusion_capture(image, QStringLiteral("loop-self-occlusion-%1").arg(QString::fromLatin1(label)));
+    const auto retained = harness.modeling().volatile_overlay_snapshot();
+    EXPECT_EQ(retained.frame, frozen.frame);
+    EXPECT_EQ(retained.source.publication_revision, frozen.source.publication_revision);
+    EXPECT_EQ(harness.modeling().volatile_overlay_cache_stats().build_count, volatile_builds);
+    EXPECT_EQ(harness.selection_frame_builds(), selection_builds);
+    EXPECT_FALSE(harness.last_submission().persistent_submitted);
+    EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+    const auto retained_uploads = harness.component_overlay_stats().uploads;
+    EXPECT_EQ(retained_uploads.geometry_creation_count, uploads.geometry_creation_count);
+    EXPECT_EQ(retained_uploads.position_upload_count, uploads.position_upload_count);
+    EXPECT_EQ(retained_uploads.static_upload_count, uploads.static_upload_count);
+  }
+  EXPECT_GE(changed_classifications, 2)
+      << "Orbit must reveal the previous hidden side and hide the previous visible side.";
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanDashedLoopStyleKeepsSlopedCoplanarWidthSolidAndClipsHiddenShortSpans) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-edge-loop-slope-clipping-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  for (const auto projection : {ViewportProjection::Perspective, ViewportProjection::Orthographic}) {
+    SCOPED_TRACE(projection == ViewportProjection::Perspective ? "perspective" : "orthographic");
+    SelectionOverlayRuntimeHarness harness;
+    ASSERT_TRUE(harness.initialize(0.0f, false));
+    ASSERT_TRUE(harness.prepare_overlay_audit_camera(5.0f, projection));
+    const std::array<QVec2, 4u> corners{{{70.0f, 100.0f}, {570.0f, 100.0f},
+                                       {570.0f, 380.0f}, {70.0f, 380.0f}}};
+    std::array<MeshVertex, 4u> vertices;
+    for (std::size_t index = 0u; index < corners.size(); ++index) {
+      vertices[index].position = harness.overlay_audit_world_point(corners[index], index < 2u ? 4.0f : -20.0f);
+    }
+    ASSERT_TRUE(harness.create_outline_depth_quad(vertices));
+    // Each cross-section is on the authored plane. Perspective screen-space
+    // midpoints interpolate reciprocal depth; orthographic ones interpolate Z.
+    const float connector_z = projection == ViewportProjection::Perspective
+        ? 5.0f - 1.0f / (0.5f / 1.0f + 0.5f / 25.0f) : -8.0f;
+    ViewportOverlayFrame frame;
+    frame.lines = {{
+        .layer = ViewportOverlayLayer::HoverEdge,
+        .start = harness.overlay_audit_world_point({100.0f, 240.0f}, connector_z),
+        .end = harness.overlay_audit_world_point({540.0f, 240.0f}, connector_z),
+        .color = rgba8(30, 245, 55), .width_pixels = 6.0f,
+        .style_role = ViewportOverlayStyleRole::ExplicitColor,
+        .source = ViewportOverlaySource::Tool,
+        .surface_support = {{{vertices[0].position, 0}}},
+        .occlusion_style = ViewportOverlayLineOcclusionStyle::Dashed}};
+    harness.set_overlay_audit_frame(frame);
+    QImage at_100_percent;
+    for (const auto &[scale, label] : std::array<std::pair<float, const char *>, 3>{{
+             {1.0f, "100"}, {2.0f, "200"}, {1.0f, "down"}}}) {
+      SCOPED_TRACE(label);
+      harness.present_overlay_audit_frame(scale, ViewportOverlaySelectionContext::Edge);
+      const QImage image = harness.capture();
+      ASSERT_FALSE(image.isNull());
+      for (const float offset : {-2.0f * scale, 0.0f, 2.0f * scale}) {
+        SCOPED_TRACE(offset);
+        expect_solid_loop_coverage(loop_line_pixel_coverage(
+            image, {100.0f, 240.0f}, {540.0f, 240.0f}, 20.0f, offset, false));
+      }
+      if (at_100_percent.isNull()) at_100_percent = image;
+      else if (scale == 1.0f) EXPECT_EQ(image, at_100_percent);
+      save_loop_occlusion_capture(image, QStringLiteral("loop-coplanar-slope-%1-%2")
+          .arg(projection == ViewportProjection::Perspective ? "perspective" : "orthographic")
+          .arg(QString::fromLatin1(label)));
+    }
+  }
+
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0f, false));
+  ASSERT_TRUE(harness.prepare_overlay_audit_camera(5.0f, ViewportProjection::Perspective, 1.0f));
+  const std::array<QVec2, 4u> wall_corners{{{320.0f, 210.0f}, {600.0f, 210.0f},
+                                         {600.0f, 420.0f}, {320.0f, 420.0f}}};
+  std::array<MeshVertex, 4u> wall;
+  for (std::size_t index = 0u; index < wall_corners.size(); ++index) {
+    wall[index].position = harness.overlay_audit_world_point(wall_corners[index], 2.0f);
+  }
+  ASSERT_TRUE(harness.create_outline_depth_quad(wall));
+  ViewportOverlayFrame frame;
+  const auto line = [&](QVec2 start, float start_z, QVec2 end, float end_z,
+                        ViewportOverlayLineOcclusionStyle style) {
+    return ViewportOverlayLine{
+        .layer = ViewportOverlayLayer::HoverEdge,
+        .start = harness.overlay_audit_world_point(start, start_z),
+        .end = harness.overlay_audit_world_point(end, end_z),
+        .color = rgba8(30, 245, 55), .width_pixels = 3.0f,
+        .style_role = ViewportOverlayStyleRole::ExplicitColor,
+        .source = ViewportOverlaySource::Tool, .occlusion_style = style};
+  };
+  frame.lines = {
+      line({100.0f, 260.0f}, 4.5f, {560.0f, 260.0f}, -20.0f,
+           ViewportOverlayLineOcclusionStyle::Dashed),
+      line({350.0f, 320.0f}, 0.0f, {570.0f, 320.0f}, 0.0f,
+           ViewportOverlayLineOcclusionStyle::Default),
+      line({400.0f, 370.0f}, 0.0f, {401.0f, 370.0f}, 0.0f,
+           ViewportOverlayLineOcclusionStyle::Dashed)};
+  harness.set_overlay_audit_frame(frame);
+  for (const float scale : {1.0f, 2.0f}) {
+    harness.present_overlay_audit_frame(scale, ViewportOverlaySelectionContext::Edge);
+    const QImage image = harness.capture();
+    ASSERT_FALSE(image.isNull());
+    expect_solid_loop_coverage(loop_line_pixel_coverage(image, {355.0f, 260.0f}, {470.0f, 260.0f}));
+    expect_dashed_loop_coverage(loop_line_pixel_coverage(image, {500.0f, 260.0f}, {555.0f, 260.0f}));
+    EXPECT_EQ(loop_line_pixel_coverage(image, {105.0f, 260.0f}, {195.0f, 260.0f}).colored, 0)
+        << "The near-clipped endpoint must not leave an extrapolated ribbon.";
+    // Ordinary Tool/HoverEdge keeps its established draw-on-top behavior even
+    // beside a tagged connector in the same layer and source partition.
+    expect_solid_loop_coverage(loop_line_pixel_coverage(image, {360.0f, 320.0f}, {560.0f, 320.0f}));
+    EXPECT_GE(loop_preview_green_pixels(image, {400.0f, 370.0f}, false), 3)
+        << "A hidden connector shorter than one dash must retain its rounded start cap.";
+    save_loop_occlusion_capture(image, QStringLiteral("loop-near-clip-short-%1").arg(static_cast<int>(scale * 100.0f)));
+  }
 }
 
 TEST(SelectionOverlayRuntimeTests,

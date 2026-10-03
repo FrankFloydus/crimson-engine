@@ -956,6 +956,8 @@ OverlayData build_edge_loop_preview(const Document& document, Edge edge, float f
             *opposite_position,
             style.loop_preview_color,
             style.loop_preview_width_pixels,
+            {},
+            split.face_id,
         });
         append_split_point(entry, *entry_position);
         append_split_point(opposite, *opposite_position);

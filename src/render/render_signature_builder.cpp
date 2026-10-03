@@ -74,6 +74,10 @@ void add_line_signature(RenderSignatureBuilder &signature,
     signature.add_value(static_cast<std::uint64_t>(static_cast<std::int64_t>(support.vertex_id)));
     if (support.vertex_id >= 0) signature.add_vec3(support.position);
   }
+  if (line.occlusion_style != ViewportOverlayLineOcclusionStyle::Default) {
+    signature.add_value(static_cast<std::uint32_t>(line.occlusion_style))
+        .add_float(line.occluded_dash_period_pixels);
+  }
 }
 
 void add_point_signature(RenderSignatureBuilder &signature,

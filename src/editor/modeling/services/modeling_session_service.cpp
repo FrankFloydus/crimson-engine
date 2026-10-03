@@ -3692,7 +3692,8 @@ public:
     const auto &hover = runtime_.hover();
     const bool needs_geometry =
         hover.kind != quader_editor_core::SelectionHoverKind::None ||
-        hover.candidate_object_id > 0;
+        hover.candidate_object_id > 0 ||
+        !runtime_.insert_edge_loop_state().preview_lines.empty();
     const auto *projected = needs_geometry ? &selection_projection_snapshot() : nullptr;
     ViewportOverlayFrame frame = overlay_service_.volatile_overlay_frame(
         projected, app_selection_mode_to_runtime(selection_mode()),

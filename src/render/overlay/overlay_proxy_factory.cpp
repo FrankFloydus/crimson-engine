@@ -353,7 +353,8 @@ line_blend_orders(const OverlayLineBatch &batch, bool visible_mask_supported) {
   // Without stencil, draw visible contours last so hidden contours cannot
   // cover an opaque active outline. Translucent overlap remains a fallback
   // limitation; Vulkan instead excludes hidden coverage through stencil.
-  return !visible_mask_supported && batch.occluded_state
+  return !visible_mask_supported && batch.occluded_state &&
+                 batch.state.silhouette_pass == OverlaySilhouettePass::Visible
              ? std::pair{occluded, visible}
              : std::pair{visible, occluded};
 }
@@ -1937,6 +1938,10 @@ void OverlayProxyFactory::create_line_proxy(
         material.setParameter("nearPlane", batch.near_plane);
         material.setParameter("depthBias", batch.depth_bias);
         material.setParameter("alphaMultiplier", 1.0f);
+        material.setParameter("surfaceDepthEnabled",
+            batch.occlusion_style == ViewportOverlayLineOcclusionStyle::Dashed);
+        material.setParameter("dashPeriodPixels", 0.0f);
+        material.setParameter("dashFactor", kOverlayOccludedLineDashFactor);
       },
       occluded_state ? &*occluded_state : nullptr,
       [this, &batch](filament::MaterialInstance &material) {
@@ -1947,6 +1952,12 @@ void OverlayProxyFactory::create_line_proxy(
         material.setParameter("depthBias", batch.depth_bias);
         material.setParameter("alphaMultiplier",
                               batch.occluded_alpha_multiplier);
+        material.setParameter("surfaceDepthEnabled",
+            batch.occlusion_style == ViewportOverlayLineOcclusionStyle::Dashed);
+        material.setParameter("dashPeriodPixels",
+            batch.occlusion_style == ViewportOverlayLineOcclusionStyle::Dashed
+                ? batch.occluded_dash_period_pixels : 0.0f);
+        material.setParameter("dashFactor", kOverlayOccludedLineDashFactor);
       });
 }
 
@@ -2096,6 +2107,10 @@ void OverlayProxyFactory::update_line_proxy(OverlayRenderableProxy &proxy,
   proxy.material_instance->setParameter("nearPlane", batch.near_plane);
   proxy.material_instance->setParameter("depthBias", batch.depth_bias);
   proxy.material_instance->setParameter("alphaMultiplier", 1.0f);
+  proxy.material_instance->setParameter("surfaceDepthEnabled",
+      batch.occlusion_style == ViewportOverlayLineOcclusionStyle::Dashed);
+  proxy.material_instance->setParameter("dashPeriodPixels", 0.0f);
+  proxy.material_instance->setParameter("dashFactor", kOverlayOccludedLineDashFactor);
   if (proxy.occluded_material_instance != nullptr && batch.occluded_state) {
     filament::MaterialInstance &material = *proxy.occluded_material_instance;
     configure_overlay_material(material, *batch.occluded_state);
@@ -2104,6 +2119,12 @@ void OverlayProxyFactory::update_line_proxy(OverlayRenderableProxy &proxy,
     material.setParameter("nearPlane", batch.near_plane);
     material.setParameter("depthBias", batch.depth_bias);
     material.setParameter("alphaMultiplier", batch.occluded_alpha_multiplier);
+    material.setParameter("surfaceDepthEnabled",
+        batch.occlusion_style == ViewportOverlayLineOcclusionStyle::Dashed);
+    material.setParameter("dashPeriodPixels",
+        batch.occlusion_style == ViewportOverlayLineOcclusionStyle::Dashed
+            ? batch.occluded_dash_period_pixels : 0.0f);
+    material.setParameter("dashFactor", kOverlayOccludedLineDashFactor);
   }
   filament::RenderableManager &renderables = engine_->getRenderableManager();
   const filament::RenderableManager::Instance instance =

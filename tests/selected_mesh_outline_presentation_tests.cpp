@@ -809,8 +809,12 @@ TEST(SelectedMeshOutlinePresentationTests,
               position = transform_point(
                   preview.transform, (*preview.dynamic_position_payload)[index]);
             }
-            positions.push_back({static_cast<float>(layer), position.x,
-                                 position.y, position.z});
+            // Incident-face supports drive ribbon depth but are not endpoints.
+            if (binding.stream == OverlayPositionStream::Primary ||
+                binding.stream == OverlayPositionStream::Secondary) {
+              positions.push_back({static_cast<float>(layer), position.x,
+                                   position.y, position.z});
+            }
           }
         }
       }
@@ -1520,7 +1524,8 @@ struct CuttingToolOutlineHarness {
   }
 
   using Wire = std::tuple<std::array<float, 6>, std::uint32_t, float,
-                          ViewportOverlayStyleRole>;
+                          ViewportOverlayStyleRole,
+                          ViewportOverlayLineOcclusionStyle>;
   std::vector<Wire> wires(int object_id) const {
     std::vector<Wire> result;
     for (const auto &line : target.persistent.lines) {
@@ -1531,7 +1536,8 @@ struct CuttingToolOutlineHarness {
       if (end < start) std::swap(start, end);
       result.emplace_back(std::array{start[0], start[1], start[2],
                                      end[0], end[1], end[2]},
-                          line.color, line.width_pixels, line.style_role);
+                          line.color, line.width_pixels, line.style_role,
+                          line.occlusion_style);
     }
     std::ranges::sort(result);
     return result;
@@ -1610,6 +1616,7 @@ TEST(SelectedMeshOutlinePresentationTests,
         if (line.layer == ViewportOverlayLayer::SourceWire &&
             line.element.object_id == first.modeling_object_id) {
           EXPECT_EQ(line.source, ViewportOverlaySource::ComponentSelection);
+          EXPECT_EQ(line.occlusion_style, ViewportOverlayLineOcclusionStyle::Default);
         }
       }
       for (const auto &triangle : harness.target.persistent.triangles) {
@@ -1685,6 +1692,9 @@ TEST(SelectedMeshOutlinePresentationTests,
     ASSERT_TRUE(harness.submit().persistent_submitted);
     const auto locked_wires = harness.wires(first.modeling_object_id);
     ASSERT_EQ(locked_wires.size(), 7u);
+    for (const auto &wire : locked_wires) {
+      EXPECT_EQ(std::get<4>(wire), ViewportOverlayLineOcclusionStyle::Default);
+    }
     for (const float x : {4.5F, 20.0F}) {
       const auto moved = tool == ViewportToolId::InsertEdgeLoop
           ? modeling.update_insert_edge_loop_drag(

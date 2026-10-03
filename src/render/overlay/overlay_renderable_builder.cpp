@@ -126,9 +126,18 @@ bool edit_wire_layer(ViewportOverlayLayer layer) {
 }
 
 bool line_uses_edit_wire_batch(const ViewportOverlayLine &line) {
-  return edit_wire_layer(line.layer) &&
+  return line.occlusion_style == ViewportOverlayLineOcclusionStyle::Default &&
+      edit_wire_layer(line.layer) &&
       (line.source == ViewportOverlaySource::ComponentSelection ||
        line.source == ViewportOverlaySource::ComponentHover);
+}
+
+float resolved_occluded_dash_period(const ViewportOverlayLine &line) {
+  return line.occlusion_style == ViewportOverlayLineOcclusionStyle::Dashed &&
+                 std::isfinite(line.occluded_dash_period_pixels) &&
+                 line.occluded_dash_period_pixels > 0.0f
+             ? line.occluded_dash_period_pixels
+             : kOverlayOccludedLineDashPeriodPixels;
 }
 
 quader_geometry::QVec3f neutral_point(QVec3 value) {
@@ -914,7 +923,8 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
     blend_order = static_cast<std::uint16_t>(
         occluded_blend_order + std::count_if(
             line_keys.begin(), line_keys.end(), [](const LineBatchKey &key) {
-              return key.object_silhouette;
+              return key.object_silhouette ||
+                     key.occlusion_style == ViewportOverlayLineOcclusionStyle::Dashed;
             }));
     for (const LineBatchKey &key : line_keys) {
       QDR_PROFILE_SCOPE("Overlay build line batch");
@@ -925,7 +935,9 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
                 key.width_pixels ||
             viewport_overlay_depth_mode(*line) != key.depth_mode ||
             (line->source == ViewportOverlaySource::MeshOutline) !=
-                key.object_silhouette) {
+                key.object_silhouette ||
+            line->occlusion_style != key.occlusion_style ||
+            resolved_occluded_dash_period(*line) != key.occluded_dash_period_pixels) {
           continue;
         }
         batch_lines.push_back(line);
@@ -941,20 +953,30 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
           layer, ViewportOverlayGeometryKind::Lines, visible_blend_order++,
           key.depth_mode);
       std::optional<OverlayRenderState> occluded_state;
-      if (key.object_silhouette) {
+      const bool dashed_occlusion =
+          key.occlusion_style == ViewportOverlayLineOcclusionStyle::Dashed;
+      if (key.object_silhouette && !dashed_occlusion) {
         state.silhouette_pass = OverlaySilhouettePass::Visible;
         occluded_state = state;
         occluded_state->depth_func = OverlayDepthFunc::Less;
         occluded_state->silhouette_pass = OverlaySilhouettePass::Occluded;
+        occluded_state->blend_order = occluded_blend_order++;
+      } else if (dashed_occlusion) {
+        occluded_state = state;
+        occluded_state->depth_func = OverlayDepthFunc::Less;
         occluded_state->blend_order = occluded_blend_order++;
       }
       plan.line_batches.push_back({
           .mesh = std::move(mesh),
           .state = state,
           .occluded_state = occluded_state,
+          .occluded_alpha_multiplier = dashed_occlusion
+              ? 1.0f : kOverlayOccludedSilhouetteAlphaMultiplier,
           .width_pixels = key.width_pixels,
           .depth_bias = depth_bias,
           .near_plane = sanitized_camera.near_plane,
+          .occlusion_style = key.occlusion_style,
+          .occluded_dash_period_pixels = key.occluded_dash_period_pixels,
       });
     }
   }
@@ -1050,12 +1072,16 @@ OverlayRenderableBuilder::line_batch_keys(
         .depth_mode = viewport_overlay_depth_mode(*line),
         .object_silhouette =
             line->source == ViewportOverlaySource::MeshOutline,
+        .occlusion_style = line->occlusion_style,
+        .occluded_dash_period_pixels = resolved_occluded_dash_period(*line),
     };
     const auto existing = std::find_if(
         keys.begin(), keys.end(), [&](const LineBatchKey &candidate) {
           return candidate.width_pixels == key.width_pixels &&
                  candidate.depth_mode == key.depth_mode &&
-                 candidate.object_silhouette == key.object_silhouette;
+                 candidate.object_silhouette == key.object_silhouette &&
+                 candidate.occlusion_style == key.occlusion_style &&
+                 candidate.occluded_dash_period_pixels == key.occluded_dash_period_pixels;
         });
     if (existing == keys.end()) {
       keys.push_back(key);

@@ -164,14 +164,17 @@ struct OverlayFaceFillBatch {
 struct OverlayLineBatch {
     OverlayLineMesh mesh;
     OverlayRenderState state;
-    // Object silhouettes share their geometry with a subdued, complementary
-    // depth pass. Component wires never acquire this companion.
+    // Object silhouettes and explicitly styled preview lines share geometry
+    // with a complementary hidden pass. Default component wires have none.
     std::optional<OverlayRenderState> occluded_state;
     float occluded_alpha_multiplier =
         kOverlayOccludedSilhouetteAlphaMultiplier;
     float width_pixels = 1.0f;
     float depth_bias = 0.0f;
     float near_plane = 0.05f;
+    ViewportOverlayLineOcclusionStyle occlusion_style =
+        ViewportOverlayLineOcclusionStyle::Default;
+    float occluded_dash_period_pixels = kOverlayOccludedLineDashPeriodPixels;
 };
 
 /**
@@ -275,6 +278,9 @@ private:
       ViewportOverlayDepthMode depth_mode =
           ViewportOverlayDepthMode::DepthTested;
       bool object_silhouette = false;
+      ViewportOverlayLineOcclusionStyle occlusion_style =
+          ViewportOverlayLineOcclusionStyle::Default;
+      float occluded_dash_period_pixels = kOverlayOccludedLineDashPeriodPixels;
     };
 
     /**

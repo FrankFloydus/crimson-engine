@@ -2548,6 +2548,29 @@ TEST(ViewportOverlayPolicyTests,
             ViewportOverlayDepthMode::DepthTested);
 }
 
+TEST(ViewportOverlayPolicyTests,
+     DashedLineOcclusionIsExplicitAndLeavesLayerAndPointDefaultsUnchanged) {
+  for (const auto layer : {ViewportOverlayLayer::HoverEdge,
+                          ViewportOverlayLayer::ToolPreviewLine,
+                          ViewportOverlayLayer::ToolPreviewSeam}) {
+    SCOPED_TRACE(static_cast<int>(layer));
+    ViewportOverlayLine line{.layer = layer,
+                             .source = ViewportOverlaySource::Tool};
+    EXPECT_EQ(line.occlusion_style, ViewportOverlayLineOcclusionStyle::Default);
+    EXPECT_EQ(viewport_overlay_depth_mode(line),
+              ViewportOverlayDepthMode::DrawOnTop);
+    line.occlusion_style = ViewportOverlayLineOcclusionStyle::Dashed;
+    EXPECT_EQ(viewport_overlay_depth_mode(line),
+              ViewportOverlayDepthMode::DepthTested);
+    EXPECT_EQ(viewport_overlay_depth_mode(layer, ViewportOverlayGeometryKind::Lines),
+              ViewportOverlayDepthMode::DrawOnTop);
+  }
+  const ViewportOverlayPoint point{.layer = ViewportOverlayLayer::ToolHandle,
+                                    .source = ViewportOverlaySource::Tool};
+  EXPECT_EQ(viewport_overlay_depth_mode(point),
+            ViewportOverlayDepthMode::DrawOnTop);
+}
+
 TEST(ViewportOverlayPolicyTests, MatchesNativeColorsAndRuntimePointSizes) {
   EXPECT_EQ(
       viewport_overlay_color_for(ViewportOverlayLayer::SelectedVisibleFace,
@@ -2920,6 +2943,7 @@ TEST(ViewportOverlayStyleResolverTests,
       .layer = ViewportOverlayLayer::ToolPreviewLine,
       .width_pixels = 0.0f,
       .style_role = ViewportOverlayStyleRole::ExplicitColor,
+      .occlusion_style = ViewportOverlayLineOcclusionStyle::Dashed,
   });
   frame.points.push_back({
       .layer = ViewportOverlayLayer::SelectedVertex,
@@ -2938,6 +2962,9 @@ TEST(ViewportOverlayStyleResolverTests,
   EXPECT_FLOAT_EQ(frame.lines[0].width_pixels, 5.0f);
   EXPECT_FLOAT_EQ(frame.lines[1].width_pixels,
                   kOverlayToolPreviewLineWidthPixels * 2.5f);
+  EXPECT_FLOAT_EQ(frame.lines[0].occluded_dash_period_pixels, 0.0f);
+  EXPECT_FLOAT_EQ(frame.lines[1].occluded_dash_period_pixels,
+                  kOverlayOccludedLineDashPeriodPixels * 2.5f);
   ASSERT_EQ(frame.points.size(), 1u);
   EXPECT_FLOAT_EQ(frame.points[0].size_pixels, 22.5f);
   ASSERT_TRUE(frame.points[0].outline_growth_pixels.has_value());
@@ -2951,6 +2978,26 @@ TEST(ViewportOverlayStyleResolverTests,
       viewport_overlay_depth_bias(ViewportOverlayLayer::SourceWire,
                                   ViewportOverlayGeometryKind::Lines),
       0.0f);
+}
+
+TEST(ViewportOverlayStyleResolverTests,
+     DashPeriodScalesIndependentlyOfAuthoredLineWidthAndScalesDown) {
+  const auto settings = ViewportSettings::defaults();
+  ViewportOverlayFrame frame;
+  frame.lines.push_back({
+      .layer = ViewportOverlayLayer::HoverEdge,
+      .width_pixels = 7.0f,
+      .style_role = ViewportOverlayStyleRole::ExplicitColor,
+      .source = ViewportOverlaySource::Tool,
+      .occlusion_style = ViewportOverlayLineOcclusionStyle::Dashed,
+  });
+  ViewportOverlayStyleResolver::apply(frame, settings, {.raster_scale = 2.0f});
+  EXPECT_FLOAT_EQ(frame.lines.front().width_pixels, 14.0f);
+  EXPECT_FLOAT_EQ(frame.lines.front().occluded_dash_period_pixels,
+                  kOverlayOccludedLineDashPeriodPixels * 2.0f);
+  ViewportOverlayStyleResolver::apply(frame, settings, {.raster_scale = 1.0f});
+  EXPECT_FLOAT_EQ(frame.lines.front().occluded_dash_period_pixels,
+                  kOverlayOccludedLineDashPeriodPixels);
 }
 
 TEST(ViewportOverlayStyleResolverTests,
