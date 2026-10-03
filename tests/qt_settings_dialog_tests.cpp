@@ -76,6 +76,8 @@
 #include <QTreeWidget>
 #include <QVariant>
 #include <QWheelEvent>
+#include <QWindow>
+#include <qpa/qwindowsysteminterface_p.h>
 
 #include <algorithm>
 #include <array>
@@ -115,6 +117,36 @@ public:
 
 private:
   QLocale previous_;
+};
+
+/// Records actual backing-store paints and consumes test-local QPA key presses.
+class MainWindowInputPaintObserver final : public QObject {
+public:
+  MainWindowInputPaintObserver(QWindow &key_source, QWidget &paint_source)
+      : key_source_(key_source), paint_source_(paint_source) {
+    key_source_.installEventFilter(this);
+    paint_source_.installEventFilter(this);
+  }
+
+  const std::vector<QEvent::Type> &events() const { return events_; }
+  void clear() { events_.clear(); }
+
+protected:
+  bool eventFilter(QObject *watched, QEvent *event) override {
+    if (watched == &key_source_ && event->type() == QEvent::KeyPress) {
+      events_.push_back(QEvent::KeyPress);
+      return true;
+    }
+    if (watched == &paint_source_ && event->type() == QEvent::Paint) {
+      events_.push_back(QEvent::Paint);
+    }
+    return QObject::eventFilter(watched, event);
+  }
+
+private:
+  QWindow &key_source_;
+  QWidget &paint_source_;
+  std::vector<QEvent::Type> events_;
 };
 
 int expected_natural_numeric_compare(const QString &left,
@@ -6696,6 +6728,87 @@ TEST(QtMainWindowTests, MenuExitAndNativeCloseShareOneRequestBoundary) {
   EXPECT_TRUE(main_window.close());
   EXPECT_EQ(close_requests, 3);
   EXPECT_FALSE(main_window.isVisible());
+}
+
+TEST(QtMainWindowTests, PendingQpaKeyPrecedesPaintWithoutStarvingExcludedInput) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-main-window-input-paint-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  QtMainWindow main_window;
+  main_window.setAttribute(Qt::WA_DontShowOnScreen, true);
+  main_window.resize(400, 300);
+  auto *content = new QWidget(&main_window);
+  main_window.setCentralWidget(content);
+  main_window.show();
+  QCoreApplication::processEvents();
+  ASSERT_NE(main_window.windowHandle(), nullptr);
+  ASSERT_TRUE(main_window.testAttribute(Qt::WA_Mapped));
+  ASSERT_EQ(QWindowSystemInterfacePrivate::peekWindowSystemEvent(
+                QWindowSystemInterfacePrivate::Key),
+            nullptr);
+  MainWindowInputPaintObserver observer(*main_window.windowHandle(), *content);
+
+  // An ordinary dirty root still paints in its first posted update pass.
+  content->update();
+  QCoreApplication::sendPostedEvents(&main_window, QEvent::UpdateRequest);
+  ASSERT_EQ(observer.events(), std::vector<QEvent::Type>{QEvent::Paint});
+  observer.clear();
+
+  const Qt::KeyboardModifiers modifiers = QGuiApplication::keyboardModifiers();
+  QWindowSystemInterface::handleKeyEvent<
+      QWindowSystemInterface::AsynchronousDelivery>(
+      main_window.windowHandle(), QEvent::KeyPress, Qt::Key_F35, modifiers);
+  auto *queued_key = QWindowSystemInterfacePrivate::peekWindowSystemEvent(
+      QWindowSystemInterfacePrivate::Key);
+  ASSERT_NE(queued_key, nullptr);
+  content->update();
+  QCoreApplication::sendPostedEvents(&main_window, QEvent::UpdateRequest);
+  EXPECT_TRUE(observer.events().empty());
+  EXPECT_EQ(QWindowSystemInterfacePrivate::peekWindowSystemEvent(
+                QWindowSystemInterfacePrivate::Key),
+            queued_key);
+  EXPECT_EQ(QGuiApplication::keyboardModifiers(), modifiers);
+
+  QWindowSystemInterface::sendWindowSystemEvents(QEventLoop::AllEvents);
+  QCoreApplication::sendPostedEvents(&main_window, QEvent::UpdateRequest);
+  ASSERT_EQ(observer.events(),
+            (std::vector<QEvent::Type>{QEvent::KeyPress, QEvent::Paint}));
+  observer.clear();
+
+  // Excluded input must remain queued while the bounded retry permits painting.
+  QWindowSystemInterface::handleKeyEvent<
+      QWindowSystemInterface::AsynchronousDelivery>(
+      main_window.windowHandle(), QEvent::KeyPress, Qt::Key_F35, modifiers);
+  queued_key = QWindowSystemInterfacePrivate::peekWindowSystemEvent(
+      QWindowSystemInterfacePrivate::Key);
+  ASSERT_NE(queued_key, nullptr);
+  content->update();
+  for (int pass = 0; pass < 2; ++pass) {
+    QCoreApplication::sendPostedEvents(&main_window, QEvent::UpdateRequest);
+    QWindowSystemInterface::sendWindowSystemEvents(
+        QEventLoop::ExcludeUserInputEvents);
+    EXPECT_TRUE(observer.events().empty());
+    EXPECT_EQ(QWindowSystemInterfacePrivate::peekWindowSystemEvent(
+                  QWindowSystemInterfacePrivate::Key),
+              queued_key);
+    EXPECT_EQ(QGuiApplication::keyboardModifiers(), modifiers);
+  }
+  QCoreApplication::sendPostedEvents(&main_window, QEvent::UpdateRequest);
+  EXPECT_EQ(observer.events(), std::vector<QEvent::Type>{QEvent::Paint});
+  EXPECT_EQ(QWindowSystemInterfacePrivate::peekWindowSystemEvent(
+                QWindowSystemInterfacePrivate::Key),
+            queued_key);
+  QWindowSystemInterface::sendWindowSystemEvents(QEventLoop::AllEvents);
+  EXPECT_EQ(observer.events(),
+            (std::vector<QEvent::Type>{QEvent::Paint, QEvent::KeyPress}));
+
+  // Once input drains, the next dirty frame paints without another deferral.
+  observer.clear();
+  content->update();
+  QCoreApplication::sendPostedEvents(&main_window, QEvent::UpdateRequest);
+  EXPECT_EQ(observer.events(), std::vector<QEvent::Type>{QEvent::Paint});
 }
 
 TEST(QtSettingsDialogTests, DefaultMaterialStagesThenPublishesOnlyAfterPersistence) {

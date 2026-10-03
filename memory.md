@@ -869,6 +869,12 @@ Tests: [render extraction](tests/render_extraction_tests.cpp),
   shortcut override and key events from both legacy visible clip host and inner native backing container
   use the existing surface adapter; otherwise Qt focus can land on the unobserved inner container
   and lose viewport key intent.
+- Qt can flush posted root repaints ahead of queued key delivery. [QtMainWindow](src/ui/qt_main_window.cpp)
+  reposts at most two `UpdateRequest`s while native `QS_KEY` or QPA keys are pending, covering both
+  delivery stages without pumping events or removing input. After that bound, painting proceeds even
+  under `ExcludeUserInputEvents`; no-key updates paint immediately. Retain normal shortcut/input
+  ownership and matching layout/projection. Protect this with
+  [PendingQpaKeyPrecedesPaintWithoutStarvingExcludedInput](tests/qt_settings_dialog_tests.cpp).
 - Native clips and scene presentation proceed independently. Once visible pane bounds change,
   the composed pane must display the matching current projection; an old crop followed by a later
   projection snap fails, even when newly exposed pixels are valid. Exercise menu/Ctrl+Space

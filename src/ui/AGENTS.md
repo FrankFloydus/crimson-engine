@@ -13,6 +13,11 @@ file except through prior written authorization from Francesco Di Blasi.
 - `UISystem` composes `QMainWindow`, docks, tool windows, localization, and retained presentation.
   `UIPanelManager` maps public panels to docks. Widgets dispatch editor intent through public APIs
   and commands; they own only presentation state.
+- [QtMainWindow](qt_main_window.cpp) may repost a root `UpdateRequest` at most twice when native
+  `QS_KEY` or QPA keys are pending, covering native-to-QPA delivery without pumping events or taking
+  input ownership. The next pass must paint even when user input is excluded; no-key updates paint
+  immediately. Preserve matching layout/projection and the
+  [input-before-paint regression](../../tests/qt_settings_dialog_tests.cpp).
 - Immutable product releases filter controls at construction through the shared release feature
   requirements. Omit excluded docks and tool windows so restored layouts cannot reopen them;
   keep null action slots safe in retained toolbar/pane synchronization. Camera settings, mesh

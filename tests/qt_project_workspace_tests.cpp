@@ -133,6 +133,8 @@
 #include <QTreeWidgetItemIterator>
 #include <QVBoxLayout>
 #include <QWheelEvent>
+#include <QScopedValueRollback>
+#include <qpa/qwindowsysteminterface.h>
 
 #include <algorithm>
 #include <array>
@@ -6641,6 +6643,19 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
       << "QUADER_NATIVE_BROWSER_APP_CLOSE_ORIGIN must be viewport or browser";
   const bool composition_smoke = qEnvironmentVariableIntValue(
       "QUADER_NATIVE_BROWSER_APP_COMPOSITION_SMOKE") == 1;
+  bool manual_seconds_valid = false;
+  const int manual_seconds = qEnvironmentVariable(
+      "QUADER_NATIVE_BROWSER_APP_MANUAL_SECONDS", QStringLiteral("0"))
+                                 .toInt(&manual_seconds_valid);
+  ASSERT_TRUE(manual_seconds_valid &&
+              (manual_seconds == 0 || manual_seconds == 60 || manual_seconds == 120));
+  bool phase_toggles_valid = false;
+  const int phase_toggles = qEnvironmentVariable(
+      "QUADER_NATIVE_BROWSER_APP_PHASE_TOGGLES", QStringLiteral("0"))
+                               .toInt(&phase_toggles_valid);
+  ASSERT_TRUE(phase_toggles_valid && (phase_toggles == 0 || phase_toggles == 24));
+  ASSERT_FALSE(manual_seconds > 0 && (phase_toggles > 0 || composition_smoke));
+  ASSERT_FALSE(phase_toggles > 0 && composition_smoke);
   ASSERT_FALSE(composition_smoke && empty_scene == QStringLiteral("1"))
       << "Composition smoke requires the selected box fixture";
   const auto profile = std::filesystem::temp_directory_path() /
@@ -6652,7 +6667,24 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
   char application_name[] = "quader-asset-browser-real-app-test";
   char *argv[] = {application_name, nullptr};
   QLocale::setDefault(QLocale::c());
-  QApplication application(argc, argv);
+  /** Observes widget key delivery before and after the ordinary Qt dispatch. */
+  class BrowserInputApplication final : public QApplication {
+  public:
+    BrowserInputApplication(int &argc, char **argv) : QApplication(argc, argv) {}
+    std::function<void(QObject *, const QKeyEvent &, bool)> key_delivery;
+    bool notify(QObject *target, QEvent *event) override {
+      const bool relevant = key_delivery && !key_delivery_active_ &&
+          (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease) &&
+          static_cast<QKeyEvent *>(event)->key() == Qt::Key_Space;
+      const QScopedValueRollback delivery_guard(key_delivery_active_, key_delivery_active_ || relevant);
+      if (relevant) key_delivery(target, *static_cast<QKeyEvent *>(event), true);
+      const bool result = QApplication::notify(target, event);
+      if (relevant) key_delivery(target, *static_cast<QKeyEvent *>(event), false);
+      return result;
+    }
+  private:
+    bool key_delivery_active_ = false;
+  } application(argc, argv);
   application.setQuitOnLastWindowClosed(false);
   application.setApplicationName(QStringLiteral("Quader"));
   application.setOrganizationName(QStringLiteral("Quader"));
@@ -6761,11 +6793,19 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
     std::int64_t queued_qpc = -1;
     std::int64_t received_qpc = -1;
     qint64 started_ns = -1;
+    qint64 qt_started_ns = -1;
     qint64 published_ns = -1;
+    std::int64_t visibility_qpc = -1;
+    std::int64_t submitted_qpc = -1;
+    bool showing = false;
     QSize expected;
   };
-  std::array<ToggleObservation, 4> observations;
+  const int synthetic_toggles = manual_seconds > 0 ? 0 : phase_toggles > 0 ? phase_toggles : 4;
+  std::vector<ToggleObservation> observations(static_cast<std::size_t>(synthetic_toggles));
   int current_toggle = -1;
+  std::vector<int> queued_qpa_toggles;
+  std::size_t next_qpa_toggle = 0;
+  std::atomic<std::int64_t> last_submitted_qpc = 0;
   std::uint64_t frame_attempts = 0U;
   class AppTimerObserver final : public QObject {
   public:
@@ -6803,6 +6843,9 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
     }
     if (current_toggle >= 0) {
       auto &observation = observations[static_cast<std::size_t>(current_toggle)];
+      if (manual_seconds > 0 && observation.visibility_qpc >= 0 && observation.expected.isEmpty()) {
+        observation.expected = QSize(static_cast<int>(native_extent.x), static_cast<int>(native_extent.y));
+      }
       if (observation.published_ns < 0 && renderer_size == observation.expected) {
         observation.published_ns = clock.nsecsElapsed();
         std::cout << "APP_BROWSER_RENDERER_EXTENT qpc=" << qpc_ticks()
@@ -6859,14 +6902,16 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
               << " queue_ms=" << (received_qpc - queued_qpc) * 1000.0 / qpc_frequency
               << std::endl;
     const bool showing = index % 2 == 0;
-    const bool browser_origin = index == 3 && close_origin == QStringLiteral("browser");
+    const bool browser_origin = !showing && (phase_toggles > 0 || index >= 3) &&
+        close_origin == QStringLiteral("browser");
+    observation.showing = showing;
     current_toggle = index;
     observation.started_ns = clock.nsecsElapsed();
     std::cout << "APP_BROWSER_TOGGLE_BEGIN qpc=" << qpc_ticks()
               << " toggle=" << index << " action=" << (showing ? "show" : "hide")
-              << " trigger=" << (index < 2 ? "panel_menu" : "ctrl_space")
+              << " trigger=" << (phase_toggles > 0 ? "qpa_ctrl_space" : index < 2 ? "panel_menu" : "synthetic_ctrl_space")
               << " close_origin=" << close_origin.toStdString() << std::endl;
-    if (index >= 2) {
+    if (phase_toggles > 0 || index >= 2) {
       if (browser_origin) {
         browser->focus_browser();
         ASSERT_TRUE(browser->owns_browser_focus());
@@ -6875,14 +6920,19 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
         ASSERT_FALSE(browser->owns_browser_focus());
       }
     }
-    if (index < 2) {
+    if (phase_toggles == 0 && index < 2) {
       action->trigger();
     } else {
       QObject *target = browser_origin ? QApplication::focusWidget() : clip;
       ASSERT_NE(target, nullptr);
-      QKeyEvent shortcut_override(QEvent::ShortcutOverride, Qt::Key_Space, Qt::ControlModifier);
-      QCoreApplication::sendEvent(target, &shortcut_override);
-      EXPECT_TRUE(shortcut_override.isAccepted());
+      if (phase_toggles > 0) {
+        queued_qpa_toggles.push_back(index);
+        QWindowSystemInterface::handleKeyEvent<QWindowSystemInterface::AsynchronousDelivery>(window->windowHandle(),
+            QEvent::KeyPress, Qt::Key_Space, Qt::ControlModifier);
+        QWindowSystemInterface::handleKeyEvent<QWindowSystemInterface::AsynchronousDelivery>(window->windowHandle(),
+            QEvent::KeyRelease, Qt::Key_Space, Qt::ControlModifier);
+        return;
+      }
       QKeyEvent press(QEvent::KeyPress, Qt::Key_Space, Qt::ControlModifier);
       QCoreApplication::sendEvent(target, &press);
       QKeyEvent release(QEvent::KeyRelease, Qt::Key_Space, Qt::ControlModifier);
@@ -6896,6 +6946,41 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
               << " dispatch_ms=" << (clock.nsecsElapsed() - observation.started_ns) / 1000000.0
               << " final_clip=" << final_extent.x << 'x' << final_extent.y << std::endl;
   };
+  QObject::connect(dock, &QDockWidget::visibilityChanged, &application, [&](bool visible) {
+    if (manual_seconds > 0 &&
+        (current_toggle < 0 || observations[static_cast<std::size_t>(current_toggle)].submitted_qpc >= 0)) {
+      current_toggle = static_cast<int>(observations.size());
+      observations.emplace_back();
+      observations.back().started_ns = clock.nsecsElapsed();
+    }
+    if (current_toggle < 0) return;
+    auto &observation = observations[static_cast<std::size_t>(current_toggle)];
+    observation.visibility_qpc = qpc_ticks();
+    if (manual_seconds > 0) observation.showing = visible;
+    std::cout << "APP_BROWSER_VISIBILITY qpc=" << observation.visibility_qpc
+              << " toggle=" << current_toggle << " visible=" << visible
+              << " clip=" << surface->render_size_pixels().x << 'x'
+              << surface->render_size_pixels().y << std::endl;
+  });
+  auto *observed_host = dynamic_cast<quader::QtVulkanCompositionWidget *>(clip);
+  ASSERT_NE(observed_host, nullptr);
+  QObject::connect(observed_host, &QRhiWidget::frameSubmitted, &application, [&] {
+    const auto submitted_qpc = qpc_ticks();
+    last_submitted_qpc.store(submitted_qpc, std::memory_order_relaxed);
+    if (current_toggle < 0) return;
+    auto &observation = observations[static_cast<std::size_t>(current_toggle)];
+    if (observation.submitted_qpc >= 0 || observation.visibility_qpc < 0) return;
+    const auto extent = surface->render_size_pixels();
+    const QSize size(static_cast<int>(extent.x), static_cast<int>(extent.y));
+    if (manual_seconds > 0 && observation.expected.isEmpty()) observation.expected = size;
+    if (observation.expected != size || surface->renderer().width() != extent.x ||
+        surface->renderer().height() != extent.y) return;
+    observation.submitted_qpc = submitted_qpc;
+    std::cout << "APP_BROWSER_FRAME_SUBMITTED qpc=" << submitted_qpc
+              << " toggle=" << current_toggle << " clip=" << extent.x << 'x' << extent.y
+              << " latency_ms=" << (clock.nsecsElapsed() - observation.started_ns) / 1000000.0
+              << std::endl;
+  });
   constexpr std::array kCompositionPaneIds{
       quader::ViewportPaneId::Perspective, quader::ViewportPaneId::Top,
       quader::ViewportPaneId::Front, quader::ViewportPaneId::Side};
@@ -7077,7 +7162,8 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
       ++composition_phases;
     });
   }
-  QTimer::singleShot(composition_smoke ? 27000 : 18000,
+  QTimer::singleShot(manual_seconds > 0 ? manual_seconds * 1000 :
+      composition_smoke || phase_toggles > 0 ? 27000 : 18000,
       &application, &QCoreApplication::quit);
 #if defined(_WIN32)
   class AppBrowserNativeInputObserver final : public QAbstractNativeEventFilter {
@@ -7085,9 +7171,15 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
     HWND window_handle = nullptr;
     UINT input_message = 0U;
     std::function<void(int, std::int64_t)> toggle;
+    std::function<void(const MSG &)> key_received;
 
     bool nativeEventFilter(const QByteArray &, void *message, qintptr *result) override {
       const auto &native_message = *static_cast<MSG *>(message);
+      if (native_message.hwnd == window_handle && key_received &&
+          (native_message.message == WM_KEYDOWN || native_message.message == WM_KEYUP) &&
+          (native_message.wParam == VK_SPACE || native_message.wParam == VK_CONTROL)) {
+        key_received(native_message);
+      }
       if (native_message.hwnd != window_handle || native_message.message != input_message) {
         return false;
       }
@@ -7102,16 +7194,79 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
       L"Quader.AssetBrowserRealAppFrameLoopAfterSettledToggle.Input");
   ASSERT_NE(native_input_observer.input_message, 0U);
   native_input_observer.toggle = toggle;
+  if (manual_seconds > 0) {
+    native_input_observer.key_received = [&](const MSG &message) {
+      std::cout << "APP_BROWSER_NATIVE_KEY qpc=" << qpc_ticks()
+                << " message=" << message.message << " key=" << message.wParam
+                << " msg_time=" << message.time
+                << " queue_age_ms=" << static_cast<DWORD>(GetTickCount() - message.time)
+                << " repeat=" << ((message.lParam >> 30) & 1)
+                << " visible=" << dock->isVisible() << std::endl;
+    };
+  }
   application.installNativeEventFilter(&native_input_observer);
 #endif
+  if (manual_seconds > 0 || phase_toggles > 0) {
+    application.key_delivery = [&](QObject *target, const QKeyEvent &key, bool before) {
+      if (key.type() != QEvent::KeyPress || key.isAutoRepeat() ||
+          !key.modifiers().testFlag(Qt::ControlModifier)) return;
+      const auto delivery_qpc = qpc_ticks();
+      if (before) {
+        if (manual_seconds > 0) {
+          current_toggle = static_cast<int>(observations.size());
+          observations.emplace_back();
+          auto &observation = observations.back();
+          observation.received_qpc = delivery_qpc;
+          observation.started_ns = clock.nsecsElapsed();
+          observation.showing = !dock->isVisible();
+          std::cout << "APP_BROWSER_TOGGLE_BEGIN qpc=" << delivery_qpc
+                    << " toggle=" << current_toggle
+                    << " action=" << (observation.showing ? "show" : "hide")
+                    << " trigger=native_qt_ctrl_space" << std::endl;
+        } else if (next_qpa_toggle < queued_qpa_toggles.size()) {
+          current_toggle = queued_qpa_toggles[next_qpa_toggle++];
+        }
+        if (current_toggle >= 0) {
+          observations[static_cast<std::size_t>(current_toggle)].qt_started_ns = clock.nsecsElapsed();
+        }
+      }
+      std::cout << "APP_BROWSER_QT_KEY qpc=" << delivery_qpc
+                << " phase=" << (before ? "before" : "after")
+                << " toggle=" << current_toggle << " timestamp=" << key.timestamp()
+                << " target=" << target->objectName().toStdString()
+                << " visible=" << dock->isVisible();
+#if defined(_WIN32)
+      if (manual_seconds > 0 && key.timestamp() != 0) {
+        std::cout << " queue_age_ms=" << static_cast<DWORD>(
+            GetTickCount() - static_cast<DWORD>(key.timestamp()));
+      }
+#endif
+      std::cout << std::endl;
+      if (!before && current_toggle >= 0) {
+        auto &observation = observations[static_cast<std::size_t>(current_toggle)];
+        if (phase_toggles > 0) EXPECT_EQ(dock->isVisible(), observation.showing);
+        if (observation.visibility_qpc < 0) return;
+        const auto extent = surface->render_size_pixels();
+        observation.expected = QSize(static_cast<int>(extent.x), static_cast<int>(extent.y));
+        std::cout << "APP_BROWSER_TOGGLE_END qpc=" << qpc_ticks()
+                  << " toggle=" << current_toggle << " dispatch_ms="
+                  << (clock.nsecsElapsed() - observation.qt_started_ns) / 1000000.0
+                  << " final_clip=" << extent.x << 'x' << extent.y << std::endl;
+      }
+    };
+  }
   std::atomic<bool> input_enqueue_failed = false;
   std::jthread input_producer([&](std::stop_token stop) {
     std::condition_variable_any input_condition;
     std::mutex input_mutex;
     std::unique_lock input_lock(input_mutex);
-    for (int index = 0; index < 4; ++index) {
+    constexpr std::array kPhaseOffsets{0, 3, 7, 11, 1, 5, 9, 13};
+    for (int index = 0; index < synthetic_toggles; ++index) {
+      const int delay_ms = phase_toggles > 0
+          ? 5000 + index * 800 + kPhaseOffsets[static_cast<std::size_t>(index) % kPhaseOffsets.size()]
+          : 5000 + index * 3000;
       input_condition.wait_until(input_lock, stop,
-          input_schedule_started + std::chrono::milliseconds(5000 + index * 3000),
+          input_schedule_started + std::chrono::milliseconds(delay_ms),
           [] { return false; });
       if (stop.stop_requested()) return;
       const auto queued_qpc = qpc_ticks();
@@ -7127,8 +7282,9 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
         input_enqueue_failed.store(true, std::memory_order_relaxed);
       }
 #endif
-      std::printf("APP_BROWSER_INPUT_QUEUED qpc=%lld toggle=%d\n",
-                  static_cast<long long>(queued_qpc), index);
+      std::printf("APP_BROWSER_INPUT_QUEUED qpc=%lld toggle=%d last_frame_qpc=%lld\n",
+                  static_cast<long long>(queued_qpc), index,
+                  static_cast<long long>(last_submitted_qpc.load(std::memory_order_relaxed)));
       std::fflush(stdout);
     }
   });
@@ -7142,11 +7298,15 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
   EXPECT_FALSE(input_enqueue_failed.load(std::memory_order_relaxed));
   observer.stop();
   application.removeEventFilter(&timer_observer);
-  for (const auto &observation : observations) {
-    EXPECT_GE(observation.queued_qpc, 0);
-    EXPECT_GE(observation.received_qpc, observation.queued_qpc);
-    EXPECT_GE(observation.started_ns, 0);
-    EXPECT_GE(observation.published_ns, observation.started_ns);
+  application.key_delivery = {};
+  if (manual_seconds == 0) {
+    for (const auto &observation : observations) {
+      EXPECT_GE(observation.queued_qpc, 0);
+      EXPECT_GE(observation.received_qpc, observation.queued_qpc);
+      EXPECT_GE(observation.started_ns, 0);
+      EXPECT_GE(observation.published_ns, observation.started_ns);
+      EXPECT_GE(observation.submitted_qpc, observation.received_qpc);
+    }
   }
   EXPECT_GT(frame_attempts, 4U);
   if (composition_smoke) {

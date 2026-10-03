@@ -33,6 +33,8 @@ public:
   }
 
 protected:
+  bool event(QEvent *event) override;
+
   void paintEvent(QPaintEvent *event) override {
     QMainWindow::paintEvent(event);
     const QWidget *content = centralWidget();
@@ -58,6 +60,7 @@ protected:
 
 private:
   CloseRequestHandler close_request_handler_;
+  unsigned int deferred_input_update_requests_ = 0u;
 };
 
 } // namespace quader

@@ -1064,6 +1064,7 @@ add_library(quader_ui STATIC
     src/ui/qt_viewport_panel.cpp
     src/ui/qt_viewport_surface.cpp
     src/ui/qt_vulkan_composition_widget.cpp
+    src/ui/qt_main_window.cpp
     src/ui/ui_panel_manager.cpp
     src/ui/ui_system.cpp
     src/ui/ui_system_asset_browser.cpp
@@ -1880,7 +1881,7 @@ if(QUADER_BUILD_TESTS)
     target_compile_definitions(quader_tests
         PRIVATE
             QUADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-    target_link_libraries(quader_tests PRIVATE quader_runtime GTest::gtest quader_release_profile_full)
+    target_link_libraries(quader_tests PRIVATE quader_runtime GTest::gtest quader_release_profile_full Qt6::GuiPrivate)
     target_link_libraries(quader_tests PRIVATE quader_bridge_reader)
     target_link_libraries(quader_tests PRIVATE quader_modeling_sdk_qdr_document)
     quader_deploy_test_runtime_dlls(quader_tests)
