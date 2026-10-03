@@ -511,6 +511,91 @@ struct CylinderEdgeSelectionScenario final {
   }
 };
 
+/// A regular quad patch gives the clicked edge two independent traversal axes.
+struct GridComponentSelectionScenario final {
+  ViewportInteractionHarness harness;
+  std::array<std::array<quader::QuaderElementId, 4>, 4> vertices{};
+  std::array<std::array<quader::QuaderElementId, 3>, 3> faces{};
+  quader::QuaderModelingObjectRef object;
+  quader::QuaderSelectionMode mode = quader::QuaderSelectionMode::Vertex;
+
+  void initialize(quader::QuaderSelectionMode selection_mode) {
+    mode = selection_mode;
+    quader_poly::Document document;
+    for (std::size_t row = 0; row < vertices.size(); ++row) {
+      for (std::size_t column = 0; column < vertices[row].size(); ++column) {
+        vertices[row][column] = quader_poly::add_vertex(document,
+            {static_cast<float>(column) - 1.5f,
+             static_cast<float>(row) - 1.5f, 0.0f});
+      }
+    }
+    for (std::size_t row = 0; row < faces.size(); ++row) {
+      for (std::size_t column = 0; column < faces[row].size(); ++column) {
+        const std::array<quader_poly::ElementId, 4> boundary{
+            static_cast<quader_poly::ElementId>(vertices[row][column]),
+            static_cast<quader_poly::ElementId>(vertices[row][column + 1u]),
+            static_cast<quader_poly::ElementId>(vertices[row + 1u][column + 1u]),
+            static_cast<quader_poly::ElementId>(vertices[row + 1u][column])};
+        faces[row][column] = quader_poly::add_face(document, boundary);
+      }
+    }
+    const auto created = harness.editor.modeling().create_mesh(
+        quader::QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+        {.name = "Directional component selection patch"});
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    object = created.value();
+    ASSERT_TRUE(harness.editor.selection().set_mode(mode).ok());
+    ASSERT_TRUE(harness.editor.selection().clear().ok());
+    harness.router.set_selection_mode(mode == quader::QuaderSelectionMode::Vertex
+        ? quader::ViewportSelectionMode::Vertex
+        : quader::ViewportSelectionMode::Face);
+    harness.session.history().clear();
+  }
+
+  [[nodiscard]] quader::QVec2 hit() const {
+    const auto projected = harness.camera.project_world_point({0.0f, -0.5f, 0.0f});
+    EXPECT_TRUE(projected.visible);
+    return projected.position;
+  }
+
+  [[nodiscard]] std::vector<quader::QuaderElementId> traversal() const {
+    std::vector<quader::QuaderElementId> result;
+    if (mode == quader::QuaderSelectionMode::Vertex) {
+      result.assign(vertices[1].begin(), vertices[1].end());
+    } else {
+      for (const auto &row : faces) result.push_back(row[1]);
+    }
+    std::sort(result.begin(), result.end());
+    return result;
+  }
+
+  [[nodiscard]] quader::QuaderElementId unrelated_component() const {
+    return mode == quader::QuaderSelectionMode::Vertex
+        ? vertices[3][0] : faces[2][0];
+  }
+
+  void select_unrelated_component() {
+    const auto result = mode == quader::QuaderSelectionMode::Vertex
+        ? harness.editor.selection().select_vertex(object, unrelated_component())
+        : harness.editor.selection().select_face(object, unrelated_component());
+    ASSERT_TRUE(result.ok()) << result.error_message();
+  }
+
+  [[nodiscard]] std::vector<quader::QuaderElementId> selected_components() const {
+    std::vector<quader::QuaderElementId> result;
+    for (const auto &selected : harness.session.modeling().export_selection().objects) {
+      if (selected.modeling_object_id != object.modeling_object_id) continue;
+      if (mode == quader::QuaderSelectionMode::Vertex) {
+        for (const auto &vertex : selected.selected_vertices) result.push_back(vertex.id);
+      } else {
+        for (const auto &face : selected.selected_faces) result.push_back(face.id);
+      }
+    }
+    std::sort(result.begin(), result.end());
+    return result;
+  }
+};
+
 quader::QuaderModelingObjectRef
 create_box_at(ViewportInteractionHarness &harness, quader::QVec3 center) {
   const quader::QVec3 half{1.0f, 1.0f, 1.0f};
@@ -6140,6 +6225,381 @@ TEST(ViewportInteractionControllerTests, ShortMoveGizmoClickKeepsEdgeSelection) 
     EXPECT_EQ(selection.selected_edge_count, 1u);
     EXPECT_EQ(selection.active_kind, quader::QuaderActiveSelectionKind::Edge);
     EXPECT_FALSE(harness.controller.dragging());
+}
+
+TEST(ViewportInteractionControllerTests,
+     AltComponentClickUsesTheGeometricEdgeWithoutPreselectionOrPriorDirection) {
+  for (const auto mode : {quader::QuaderSelectionMode::Vertex,
+                          quader::QuaderSelectionMode::Face}) {
+    for (const bool prior_selection : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(mode));
+      SCOPED_TRACE(prior_selection);
+      GridComponentSelectionScenario scenario;
+      scenario.initialize(mode);
+      auto &harness = scenario.harness;
+      if (prior_selection) scenario.select_unrelated_component();
+      const auto content_revision = harness.editor.selection().summary().content_revision;
+      harness.session.history().clear();
+      harness.input.modifiers = {.alt = true};
+      harness.click_selection(scenario.hit());
+
+      EXPECT_EQ(scenario.selected_components(), scenario.traversal());
+      const auto summary = harness.editor.selection().summary();
+      EXPECT_EQ(summary.mode, mode);
+      EXPECT_EQ(summary.active_object_id, scenario.object.modeling_object_id);
+      EXPECT_EQ(summary.active_kind, mode == quader::QuaderSelectionMode::Vertex
+          ? quader::QuaderActiveSelectionKind::Vertex
+          : quader::QuaderActiveSelectionKind::Face);
+      EXPECT_EQ(summary.content_revision, content_revision);
+      EXPECT_EQ(harness.session.history().undo_count(), 0u);
+      harness.click_selection(scenario.hit());
+      EXPECT_EQ(scenario.selected_components(), scenario.traversal());
+      EXPECT_EQ(harness.editor.selection().summary().selection_revision,
+                summary.selection_revision);
+      EXPECT_EQ(harness.session.history().undo_count(), 0u);
+      EXPECT_FALSE(harness.editor.history().can_undo());
+    }
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     RepeatedOrInvalidAltTraversalKeepsMeaningfulTransformPreviewPending) {
+  for (const auto mode : {quader::QuaderSelectionMode::Vertex,
+                          quader::QuaderSelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    GridComponentSelectionScenario scenario;
+    scenario.initialize(mode);
+    auto &harness = scenario.harness;
+    quader::QuaderPickSelectRequest request{
+        .ray = {.origin = {-0.1f, -0.5f, 5.0f}, .direction = {0.0f, 0.0f, -1.0f}},
+        .alt_pressed = true, .vertex_radius = 0.03, .edge_radius = 0.03};
+    ASSERT_TRUE(harness.editor.selection().pick_select(request).ok());
+    ASSERT_EQ(scenario.selected_components(), scenario.traversal());
+    if (mode == quader::QuaderSelectionMode::Vertex) {
+      ASSERT_EQ(harness.editor.selection().summary().active_vertex_id,
+                scenario.vertices[1][1]);
+    }
+    harness.session.history().clear();
+    ASSERT_TRUE(harness.editor.modeling().begin_transform_preview().ok());
+    ASSERT_TRUE(harness.editor.modeling()
+        .update_transform_matrix({.origin = {0.125f, 0.0f, 0.0f}}, {}).ok());
+    auto &modeling = harness.session.modeling();
+    ASSERT_TRUE(modeling.pending_operation_active());
+    const auto selection = harness.editor.selection().summary();
+    const auto preview_signature = modeling.tool_preview_signature();
+    const auto overlay_signature = modeling.selection_overlay_signature();
+    const auto history_revision = harness.session.history().revision();
+    const auto asset_revision = harness.session.assets().revision();
+
+    const auto expect_pending_unchanged = [&] {
+      EXPECT_TRUE(modeling.pending_operation_active());
+      EXPECT_EQ(scenario.selected_components(), scenario.traversal());
+      const auto current = harness.editor.selection().summary();
+      EXPECT_EQ(current.selection_revision, selection.selection_revision);
+      EXPECT_EQ(current.content_revision, selection.content_revision);
+      EXPECT_EQ(current.active_vertex_id, selection.active_vertex_id);
+      if (mode == quader::QuaderSelectionMode::Vertex) {
+        EXPECT_EQ(current.active_vertex_id, scenario.vertices[1][1]);
+      }
+      EXPECT_EQ(current.active_face_id, selection.active_face_id);
+      EXPECT_EQ(modeling.tool_preview_signature(), preview_signature);
+      EXPECT_EQ(modeling.selection_overlay_signature(), overlay_signature);
+      EXPECT_EQ(harness.session.history().revision(), history_revision);
+      EXPECT_EQ(harness.session.assets().revision(), asset_revision);
+      EXPECT_EQ(harness.session.history().undo_count(), 0u);
+    };
+    const auto repeated = harness.editor.selection().pick_select(request);
+    ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+    EXPECT_FALSE(repeated.changed());
+    expect_pending_unchanged();
+
+    quader::ResolvedSelectionClickRequest invalid{
+        .winner = quader::ResolvedSelectionTarget{
+            .domain = quader::ResolvedSelectionDomain::ModelingComponent,
+            .entity = scenario.object.entity,
+            .modeling_object_id = scenario.object.modeling_object_id,
+            .component_kind = quader::ModelingActiveSelectionKind::Edge,
+            .edge_a = 999999,
+            .edge_b = 1000000,
+            .face = scenario.faces[0][1]},
+        .policy = {.alt_pressed = true}};
+    const auto stale = harness.session.selection().apply_resolved_click(invalid);
+    EXPECT_FALSE(stale.command.ok);
+    EXPECT_FALSE(stale.command.changed);
+    expect_pending_unchanged();
+    if (mode == quader::QuaderSelectionMode::Face) {
+      invalid.winner->edge_a = scenario.vertices[1][1];
+      invalid.winner->edge_b = scenario.vertices[1][2];
+      invalid.winner->face = scenario.faces[2][0];
+      const auto ineligible = harness.session.selection().apply_resolved_click(invalid);
+      EXPECT_FALSE(ineligible.command.ok);
+      EXPECT_FALSE(ineligible.command.changed);
+      expect_pending_unchanged();
+    }
+    ASSERT_TRUE(harness.editor.modeling().cancel_transform_preview().ok());
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     RepeatedAltFaceStripPreservesPendingPreviewWithDormantOtherMeshSelection) {
+  GridComponentSelectionScenario scenario;
+  scenario.initialize(quader::QuaderSelectionMode::Face);
+  auto &harness = scenario.harness;
+  const auto other = create_box_at(harness, {5.0f, 5.0f, 0.0f});
+  ASSERT_TRUE(harness.editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(harness.editor.selection().select_face(other, 1).ok());
+  quader::QuaderPickSelectRequest request{
+      .ray = {.origin = {-0.1f, -0.5f, 5.0f}, .direction = {0.0f, 0.0f, -1.0f}},
+      .alt_pressed = true, .vertex_radius = 0.03, .edge_radius = 0.03};
+  ASSERT_TRUE(harness.editor.selection().pick_select(request).ok());
+  ASSERT_EQ(scenario.selected_components(), scenario.traversal());
+  ASSERT_EQ(harness.editor.selection().summary().selected_face_count, 3u);
+  harness.session.history().clear();
+  ASSERT_TRUE(harness.editor.modeling().begin_transform_preview().ok());
+  ASSERT_TRUE(harness.editor.modeling()
+      .update_transform_matrix({.origin = {0.125f, 0.0f, 0.0f}}, {}).ok());
+  auto &modeling = harness.session.modeling();
+  ASSERT_TRUE(modeling.pending_operation_active());
+  const auto selection = harness.editor.selection().summary();
+  const auto preview_signature = modeling.tool_preview_signature();
+  const auto overlay_signature = modeling.selection_overlay_signature();
+  const auto scene_revision = harness.session.scene().revision();
+  const auto asset_revision = harness.session.assets().revision();
+  const auto history_revision = harness.session.history().revision();
+
+  const auto repeated = harness.editor.selection().pick_select(request);
+  ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+  EXPECT_FALSE(repeated.changed());
+  EXPECT_TRUE(modeling.pending_operation_active());
+  EXPECT_EQ(scenario.selected_components(), scenario.traversal());
+  const auto current = harness.editor.selection().summary();
+  EXPECT_EQ(current.selection_revision, selection.selection_revision);
+  EXPECT_EQ(current.content_revision, selection.content_revision);
+  EXPECT_EQ(current.active_face_id, selection.active_face_id);
+  EXPECT_EQ(modeling.tool_preview_signature(), preview_signature);
+  EXPECT_EQ(modeling.selection_overlay_signature(), overlay_signature);
+  EXPECT_EQ(harness.session.scene().revision(), scene_revision);
+  EXPECT_EQ(harness.session.assets().revision(), asset_revision);
+  EXPECT_EQ(harness.session.history().revision(), history_revision);
+  EXPECT_EQ(harness.session.history().undo_count(), 0u);
+  ASSERT_TRUE(harness.editor.modeling().cancel_transform_preview().ok());
+}
+
+TEST(ViewportInteractionControllerTests,
+     AltFaceStripReplacementDropsSceneCompanionBeforeRepeatedNoOp) {
+  for (const bool light_active : {false, true}) {
+    SCOPED_TRACE(light_active);
+    GridComponentSelectionScenario scenario;
+    scenario.initialize(quader::QuaderSelectionMode::Face);
+    auto &harness = scenario.harness;
+    const auto light = harness.editor.scene().create_point_light({
+        .name = "Alt Strip Companion Light"});
+    ASSERT_TRUE(light.ok());
+    quader::QuaderPickSelectRequest request{
+        .ray = {.origin = {-0.1f, -0.5f, 5.0f}, .direction = {0.0f, 0.0f, -1.0f}},
+        .alt_pressed = true, .vertex_radius = 0.03, .edge_radius = 0.03};
+    ASSERT_TRUE(harness.editor.selection().pick_select(request).ok());
+    ASSERT_EQ(scenario.selected_components(), scenario.traversal());
+    harness.session.history().clear();
+    ASSERT_TRUE(harness.editor.modeling().begin_transform_preview().ok());
+    ASSERT_TRUE(harness.editor.modeling()
+        .update_transform_matrix({.origin = {0.125f, 0.0f, 0.0f}}, {}).ok());
+    ASSERT_TRUE(harness.session.modeling().pending_operation_active());
+    // A scene-only companion must participate in replacement even when the
+    // target mesh already has the requested component payload.
+    ASSERT_TRUE(harness.session.scene().set_selected(light.value().id, true));
+    if (light_active) {
+      ASSERT_TRUE(harness.session.scene().set_active_selection(light.value().id));
+    }
+    const auto before = harness.editor.selection().summary();
+    const auto replaced = harness.editor.selection().pick_select(request);
+    ASSERT_TRUE(replaced.ok()) << replaced.error_message();
+    EXPECT_TRUE(replaced.changed());
+    EXPECT_FALSE(harness.session.modeling().pending_operation_active());
+    EXPECT_EQ(selected_entities(harness),
+              (std::vector<quader::EntityId>{scenario.object.entity}));
+    EXPECT_EQ(scenario.selected_components(), scenario.traversal());
+    const auto selection = harness.editor.selection().summary();
+    EXPECT_GT(selection.selection_revision, before.selection_revision);
+    EXPECT_EQ(selection.mode, quader::QuaderSelectionMode::Face);
+    EXPECT_EQ(harness.session.history().undo_count(), 1u);
+    const auto history_revision = harness.session.history().revision();
+    const auto repeated = harness.editor.selection().pick_select(request);
+    ASSERT_TRUE(repeated.ok());
+    EXPECT_FALSE(repeated.changed());
+    EXPECT_EQ(harness.editor.selection().summary().selection_revision,
+              selection.selection_revision);
+    EXPECT_EQ(harness.session.history().revision(), history_revision);
+    EXPECT_EQ(harness.session.history().undo_count(), 1u);
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     AltComponentReplacementClearsOtherMeshesWithoutSpuriousHistory) {
+  for (const auto mode : {quader::QuaderSelectionMode::Vertex,
+                          quader::QuaderSelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    GridComponentSelectionScenario scenario;
+    scenario.initialize(mode);
+    auto &harness = scenario.harness;
+    const auto other = create_box_at(harness, {5.0f, 5.0f, 0.0f});
+    ASSERT_TRUE(harness.editor.selection().set_mode(mode).ok());
+    const auto selected = mode == quader::QuaderSelectionMode::Vertex
+        ? harness.editor.selection().select_vertex(other, 1)
+        : harness.editor.selection().select_face(other, 1);
+    ASSERT_TRUE(selected.ok());
+    harness.session.history().clear();
+    harness.input.modifiers = {.alt = true};
+    harness.click_selection(scenario.hit());
+    EXPECT_EQ(scenario.selected_components(), scenario.traversal());
+    const auto summary = harness.editor.selection().summary();
+    EXPECT_EQ(summary.selected_vertex_count,
+              mode == quader::QuaderSelectionMode::Vertex ? 4u : 0u);
+    EXPECT_EQ(summary.selected_face_count,
+              mode == quader::QuaderSelectionMode::Face ? 3u : 0u);
+    EXPECT_EQ(harness.session.history().undo_count(), 0u);
+    EXPECT_FALSE(harness.editor.history().can_undo());
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     ShiftAltComponentClickTogglesTheWholeTraversalAndKeepsUnrelatedSelection) {
+  for (const auto mode : {quader::QuaderSelectionMode::Vertex,
+                          quader::QuaderSelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    GridComponentSelectionScenario scenario;
+    scenario.initialize(mode);
+    scenario.select_unrelated_component();
+    auto &harness = scenario.harness;
+    harness.session.history().clear();
+    harness.input.modifiers = {.shift = true, .alt = true};
+    harness.click_selection(scenario.hit());
+    auto added = scenario.traversal();
+    added.push_back(scenario.unrelated_component());
+    std::sort(added.begin(), added.end());
+    EXPECT_EQ(scenario.selected_components(), added);
+
+    harness.click_selection(scenario.hit());
+    EXPECT_EQ(scenario.selected_components(),
+              (std::vector<quader::QuaderElementId>{scenario.unrelated_component()}));
+    EXPECT_EQ(harness.session.history().undo_count(), 0u);
+    EXPECT_FALSE(harness.editor.history().can_undo());
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     ShiftAltVertexLoopAddsWhenOnlyOneClickedEdgeEndpointIsSelected) {
+  GridComponentSelectionScenario scenario;
+  scenario.initialize(quader::QuaderSelectionMode::Vertex);
+  auto &harness = scenario.harness;
+  ASSERT_TRUE(harness.editor.selection()
+      .select_vertex(scenario.object, scenario.vertices[1][1]).ok());
+  harness.input.modifiers = {.shift = true, .alt = true};
+  harness.click_selection(scenario.hit());
+  EXPECT_EQ(scenario.selected_components(), scenario.traversal());
+  harness.click_selection(scenario.hit());
+  EXPECT_TRUE(scenario.selected_components().empty());
+}
+
+TEST(ViewportInteractionControllerTests,
+     HeldAltComponentClickKeepsPressModifiersAndPublishesOnlyOnRelease) {
+  for (const auto mode : {quader::QuaderSelectionMode::Vertex,
+                          quader::QuaderSelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    GridComponentSelectionScenario scenario;
+    scenario.initialize(mode);
+    scenario.select_unrelated_component();
+    auto &harness = scenario.harness;
+    harness.session.history().clear();
+    const auto hit = scenario.hit();
+    harness.input.mouse_local = hit;
+    harness.input.mouse_screen = hit;
+    harness.input.modifiers = {.shift = true, .alt = true};
+    (void)harness.dispatch_frame(harness.frame(true, true, false, hit));
+    harness.input.modifiers = {.primary = true};
+    (void)harness.dispatch_frame(harness.frame(false, true, false, hit));
+    EXPECT_EQ(scenario.selected_components(),
+              (std::vector<quader::QuaderElementId>{scenario.unrelated_component()}));
+    EXPECT_FALSE(harness.editor.history().can_undo());
+    (void)harness.dispatch_frame(harness.frame(false, false, true, hit));
+    auto expected = scenario.traversal();
+    expected.push_back(scenario.unrelated_component());
+    std::sort(expected.begin(), expected.end());
+    EXPECT_EQ(scenario.selected_components(), expected);
+    const auto selection_revision = harness.editor.selection().summary().selection_revision;
+    for (int idle_frame = 0; idle_frame < 3; ++idle_frame) {
+      (void)harness.dispatch_frame(harness.frame());
+      EXPECT_EQ(scenario.selected_components(), expected);
+      EXPECT_EQ(harness.editor.selection().summary().selection_revision, selection_revision);
+    }
+    EXPECT_EQ(harness.session.history().undo_count(), 0u);
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     AltComponentClickMissPreservesSelectionAndDoesNotCreateHistory) {
+  for (const auto mode : {quader::QuaderSelectionMode::Vertex,
+                          quader::QuaderSelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    GridComponentSelectionScenario scenario;
+    scenario.initialize(mode);
+    scenario.select_unrelated_component();
+    auto &harness = scenario.harness;
+    harness.session.history().clear();
+    const auto summary = harness.editor.selection().summary();
+    harness.input.modifiers = {.alt = true};
+    harness.click_selection({20.0f, 20.0f});
+    EXPECT_EQ(scenario.selected_components(),
+              (std::vector<quader::QuaderElementId>{scenario.unrelated_component()}));
+    EXPECT_EQ(harness.editor.selection().summary().selection_revision, summary.selection_revision);
+    EXPECT_EQ(harness.editor.selection().summary().content_revision, summary.content_revision);
+    EXPECT_FALSE(harness.editor.history().can_undo());
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     AltComponentClickRetiresOnCancellationOrNavigationBeforeRelease) {
+  for (const auto mode : {quader::QuaderSelectionMode::Vertex,
+                          quader::QuaderSelectionMode::Face}) {
+    for (const bool navigation : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(mode));
+      SCOPED_TRACE(navigation);
+      GridComponentSelectionScenario scenario;
+      scenario.initialize(mode);
+      scenario.select_unrelated_component();
+      auto &harness = scenario.harness;
+      harness.session.history().clear();
+      const auto hit = scenario.hit();
+      harness.input.mouse_local = hit;
+      harness.input.mouse_screen = hit;
+      harness.input.modifiers = {.alt = true};
+      (void)harness.dispatch_frame(harness.frame(true, true, false, hit));
+      if (navigation) {
+        harness.input.navigation_bindings.fly_pressed = true;
+        harness.input.navigation_bindings.fly_down = true;
+        harness.input_result = harness.router.handle_frame(harness.input, harness.camera);
+        ASSERT_TRUE(harness.input_result.navigation_active);
+      } else {
+        harness.input.pointer_interaction_canceled = true;
+      }
+      (void)harness.dispatch_frame(harness.frame(false, true, false, hit));
+      harness.input.pointer_interaction_canceled = false;
+      (void)harness.dispatch_frame(harness.frame(false, false, true, hit));
+      EXPECT_EQ(scenario.selected_components(),
+                (std::vector<quader::QuaderElementId>{scenario.unrelated_component()}));
+      EXPECT_FALSE(harness.editor.history().can_undo());
+      if (navigation) {
+        harness.input.navigation_bindings = {};
+        harness.input.navigation_bindings.fly_released = true;
+        harness.input_result = harness.router.handle_frame(harness.input, harness.camera);
+        harness.input.navigation_bindings = {};
+        ASSERT_FALSE(harness.input_result.navigation_active);
+      }
+      // The canceled release must not poison the next complete press/release.
+      harness.click_selection(hit);
+      EXPECT_EQ(scenario.selected_components(), scenario.traversal());
+    }
+  }
 }
 
 TEST(ViewportInteractionControllerTests,

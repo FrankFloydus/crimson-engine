@@ -15,6 +15,7 @@
 #include "render/viewport_overlay_policy.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
+#include "api/quader_polygon_document_internal_access.hpp"
 #include "editor/array/linear_array_tool_service.hpp"
 #include "editor/instances/scene_instance_service.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
@@ -129,6 +130,24 @@ private:
   ViewportOverlayFrame frame_;
 };
 
+/// Publishes the real modeling owner's semantic selection after its stamp changes.
+class ModelingSelectionFrameProvider final
+    : public ViewportOverlaySelectionFrameProvider {
+public:
+  explicit ModelingSelectionFrameProvider(const ModelingSessionService &modeling)
+      : modeling_(modeling) {}
+
+  [[nodiscard]] ViewportOverlayFrame build_selection_overlay_frame() const override {
+    ++build_count;
+    return modeling_.selection_overlay_render_frame();
+  }
+
+  mutable int build_count = 0;
+
+private:
+  const ModelingSessionService &modeling_;
+};
+
 class StaticDynamicToolFrameProvider final
     : public ViewportOverlayDynamicToolFrameProvider {
 public:
@@ -196,6 +215,156 @@ ViewportOverlaySubmissionRequest submission_request(
       .scene_overlay_requested = true,
       .selection_dimensions_visible = false,
   };
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     AltComponentTraversalRefreshesSubmittedSelectionAndRetainsUnchangedFrames) {
+  for (const auto mode : {QuaderSelectionMode::Vertex, QuaderSelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    SceneSession session;
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+    quader_poly::Document document;
+    std::array<std::array<QuaderElementId, 4>, 4> vertices{};
+    std::array<std::array<QuaderElementId, 3>, 3> faces{};
+    for (std::size_t row = 0; row < vertices.size(); ++row) {
+      for (std::size_t column = 0; column < vertices[row].size(); ++column) {
+        vertices[row][column] = quader_poly::add_vertex(document,
+            {static_cast<float>(column) - 1.5f,
+             static_cast<float>(row) - 1.5f, 0.0f});
+      }
+    }
+    for (std::size_t row = 0; row < faces.size(); ++row) {
+      for (std::size_t column = 0; column < faces[row].size(); ++column) {
+        const std::array<quader_poly::ElementId, 4> boundary{
+            static_cast<quader_poly::ElementId>(vertices[row][column]),
+            static_cast<quader_poly::ElementId>(vertices[row][column + 1u]),
+            static_cast<quader_poly::ElementId>(vertices[row + 1u][column + 1u]),
+            static_cast<quader_poly::ElementId>(vertices[row + 1u][column])};
+        faces[row][column] = quader_poly::add_face(document, boundary);
+      }
+    }
+    const auto patch = editor.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+        {.name = "Retained component traversal patch"});
+    ASSERT_TRUE(patch.ok()) << patch.error_message();
+    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    const auto unrelated = mode == QuaderSelectionMode::Vertex
+        ? vertices[3][0] : faces[2][0];
+    const auto selected = mode == QuaderSelectionMode::Vertex
+        ? editor.selection().select_vertex(patch.value(), unrelated)
+        : editor.selection().select_face(patch.value(), unrelated);
+    ASSERT_TRUE(selected.ok());
+    session.history().clear();
+
+    auto &modeling = session.modeling();
+    ModelingSelectionFrameProvider provider(modeling);
+    ViewportOverlaySubmissionCoordinator coordinator;
+    RecordingOverlayTarget target;
+    const auto settings = ViewportSettings::defaults();
+    const auto context = mode == QuaderSelectionMode::Vertex
+        ? ViewportOverlaySelectionContext::Vertex
+        : ViewportOverlaySelectionContext::Face;
+    const auto submit = [&] {
+      return coordinator.submit({
+          .viewport_index = 0u,
+          .layer_mask = 1u,
+          .camera = {.eye = {0.0f, 0.0f, 5.0f}, .forward = {0.0f, 0.0f, -1.0f},
+              .right = {1.0f, 0.0f, 0.0f}, .up = {0.0f, 1.0f, 0.0f},
+              .viewport_size = {800.0f, 600.0f}},
+          .selection_source = {
+              .source_identity = reinterpret_cast<std::uintptr_t>(&modeling),
+              .content_revision = modeling.content_revision(),
+              .selection_revision = modeling.selection_revision(),
+              .scene_revision = session.scene().revision(),
+              .asset_revision = session.assets().revision(),
+              .overlay_signature = modeling.selection_overlay_signature(),
+              .selection_context = context},
+          .selection_frame_provider = &provider,
+          .scene_selection_mode = RenderOverlaySelectionMode::Component,
+          .style_selection_context = context,
+          .overlays_visible = true,
+          .selection_dimensions_visible = false}, settings, target);
+    };
+    const auto submitted_ids = [&] {
+      std::vector<QuaderElementId> ids;
+      if (mode == QuaderSelectionMode::Vertex) {
+        for (const auto &point : target.persistent_frame.points) {
+          if (point.layer == ViewportOverlayLayer::SelectedVertex &&
+              point.element.object_id == patch.value().modeling_object_id) {
+            ids.push_back(point.element.vertex_id);
+          }
+        }
+      } else {
+        for (const auto &triangle : target.persistent_frame.triangles) {
+          if ((triangle.layer == ViewportOverlayLayer::SelectedVisibleFace ||
+               triangle.layer == ViewportOverlayLayer::SelectedXrayFace) &&
+              triangle.element.object_id == patch.value().modeling_object_id) {
+            ids.push_back(triangle.element.face_id);
+          }
+        }
+      }
+      std::sort(ids.begin(), ids.end());
+      ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+      return ids;
+    };
+    std::vector<QuaderElementId> expected;
+    if (mode == QuaderSelectionMode::Vertex) {
+      expected.assign(vertices[1].begin(), vertices[1].end());
+    } else {
+      for (const auto &row : faces) expected.push_back(row[1]);
+    }
+    std::sort(expected.begin(), expected.end());
+    ASSERT_TRUE(submit().persistent_submitted);
+    EXPECT_EQ(submitted_ids(), (std::vector<QuaderElementId>{unrelated}));
+    const auto content_revision = modeling.content_revision();
+    const auto asset_revision = session.assets().revision();
+    const auto selection_revision = modeling.selection_revision();
+    QuaderPickSelectRequest request{
+        .ray = {.origin = {0.0f, -0.5f, 5.0f}, .direction = {0.0f, 0.0f, -1.0f}},
+        .alt_pressed = true, .vertex_radius = 0.03, .edge_radius = 0.03};
+    ASSERT_TRUE(editor.selection().pick_select(request).ok());
+    EXPECT_GT(modeling.selection_revision(), selection_revision);
+    const auto applied = submit();
+    EXPECT_TRUE(applied.selection_source_refreshed);
+    EXPECT_TRUE(applied.persistent_submitted);
+    EXPECT_EQ(submitted_ids(), expected);
+    EXPECT_EQ(modeling.content_revision(), content_revision);
+    EXPECT_EQ(session.assets().revision(), asset_revision);
+
+    const auto expect_retained = [&] {
+      const auto builds = provider.build_count;
+      const auto submissions = target.persistent_submit_count;
+      const auto work = modeling.selection_overlay_geometry_work_counters();
+      for (int frame = 0; frame < 8; ++frame) {
+        const auto unchanged = submit();
+        EXPECT_TRUE(unchanged.camera_only);
+        EXPECT_FALSE(unchanged.selection_source_refreshed);
+        EXPECT_FALSE(unchanged.persistent_submitted);
+      }
+      EXPECT_EQ(provider.build_count, builds);
+      EXPECT_EQ(target.persistent_submit_count, submissions);
+      EXPECT_EQ(modeling.selection_overlay_geometry_work_counters().geometry_build_count,
+                work.geometry_build_count);
+      EXPECT_EQ(modeling.selection_overlay_geometry_work_counters().semantic_aggregate_build_count,
+                work.semantic_aggregate_build_count);
+      EXPECT_EQ(modeling.selection_overlay_geometry_work_counters().world_projection_build_count,
+                work.world_projection_build_count);
+    };
+    expect_retained();
+    request.shift_pressed = true;
+    ASSERT_TRUE(editor.selection().pick_select(request).ok());
+    EXPECT_TRUE(submit().persistent_submitted);
+    EXPECT_TRUE(submitted_ids().empty());
+    expect_retained();
+    ASSERT_TRUE(editor.selection().pick_select(request).ok());
+    EXPECT_TRUE(submit().persistent_submitted);
+    EXPECT_EQ(submitted_ids(), expected);
+    ASSERT_TRUE(editor.selection().pick_select(request).ok());
+    EXPECT_TRUE(submit().persistent_submitted);
+    EXPECT_TRUE(submitted_ids().empty());
+    expect_retained();
+    EXPECT_EQ(session.history().undo_count(), 0u);
+  }
 }
 
 TEST(ViewportOverlaySubmissionCoordinatorTests,

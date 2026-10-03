@@ -405,6 +405,13 @@ enum class ModelingEdgeSelectionTraversal {
   Ring,
 };
 
+/** Preserves component mode while walking from one directional edge seed. */
+enum class ModelingComponentSelectionTraversal {
+  None,
+  VertexLoop,
+  FaceLoop,
+};
+
 /**
  * Enumerates ModelingBoxSelectionRule values used by the modeling layer.
  */
@@ -459,8 +466,16 @@ struct ModelingResolvedComponentSelectionRequest {
   int click_count = 1;
   ModelingEdgeSelectionTraversal edge_traversal =
       ModelingEdgeSelectionTraversal::None;
+  ModelingComponentSelectionTraversal component_traversal =
+      ModelingComponentSelectionTraversal::None;
   bool preserve_selection_on_selected_hit = false;
   bool preserve_existing_component_selection_on_hit = false;
+};
+
+/** Validates a traversal and resolves its selection before settling a draft. */
+struct ModelingComponentTraversalSelectionPreparation {
+  ModelingCommandResult command;
+  ModelingComponentSelectionRequest selection;
 };
 
 /** Applies component-mode policy to a mesh body hit with no component hit. */
@@ -527,6 +542,19 @@ struct ModelingPickSelectRequest {
     return control_pressed || command_pressed
                ? ModelingEdgeSelectionTraversal::Ring
                : ModelingEdgeSelectionTraversal::Loop;
+  }
+
+  [[nodiscard]] ModelingComponentSelectionTraversal
+  component_traversal_requested(ModelingSelectionMode mode) const noexcept {
+    if (!alt_pressed || control_pressed || command_pressed || click_count == 0) {
+      return ModelingComponentSelectionTraversal::None;
+    }
+    if (mode == ModelingSelectionMode::Vertex) {
+      return ModelingComponentSelectionTraversal::VertexLoop;
+    }
+    return mode == ModelingSelectionMode::Face
+               ? ModelingComponentSelectionTraversal::FaceLoop
+               : ModelingComponentSelectionTraversal::None;
   }
 
   [[nodiscard]] bool depth_cycle_requested(ModelingSelectionMode mode) const noexcept {

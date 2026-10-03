@@ -282,6 +282,7 @@ struct PickRequest {
   int target_object_id = -1;
   std::optional<PickScreenContext> screen_context;
   PickScreenWorkCounters *screen_work_counters = nullptr;
+  bool resolve_edge_seed_vertex = false;
 };
 
 struct PickCycleState;
@@ -291,6 +292,13 @@ enum class EdgeSelectionTraversal {
   None,
   Loop,
   Ring,
+};
+
+/** Preserves component mode while walking from a directional edge pick. */
+enum class ComponentSelectionTraversal {
+  None,
+  VertexLoop,
+  FaceLoop,
 };
 
 /**
@@ -303,6 +311,8 @@ struct ApplyPickSelectionRequest {
   quader_poly::PickOptions pick_options;
   int click_count = 1;
   EdgeSelectionTraversal edge_traversal = EdgeSelectionTraversal::None;
+  ComponentSelectionTraversal component_traversal =
+      ComponentSelectionTraversal::None;
   bool preserve_existing_component_selection_on_hit = false;
   bool preserve_selection_on_selected_hit = false;
   bool preserve_selection_on_miss = false;

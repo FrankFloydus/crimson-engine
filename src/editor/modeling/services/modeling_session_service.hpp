@@ -605,6 +605,9 @@ public:
   /// Read-only preflight used only when a selection change would settle a draft.
   [[nodiscard]] ModelingCommandResult validate_component_selection(
       const ModelingComponentSelectionRequest &request) const;
+  [[nodiscard]] ModelingComponentTraversalSelectionPreparation
+  prepare_component_traversal_selection(
+      const ModelingResolvedComponentSelectionRequest &request) const;
   ModelingCommandResult apply_resolved_component_selection(
       const ModelingResolvedComponentSelectionRequest &request);
   [[nodiscard]] bool resolved_component_body_target_eligible(

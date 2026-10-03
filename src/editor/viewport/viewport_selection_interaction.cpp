@@ -905,9 +905,15 @@ void ViewportSelectionInteraction::populate_operation_input_context(
     if (request) {
       const auto traversal = request->edge_traversal_requested(
           to_modeling_selection_mode(frame.selection_state.summary.mode));
+      const auto component_traversal = request->component_traversal_requested(
+          to_modeling_selection_mode(frame.selection_state.summary.mode));
       if (traversal != ModelingEdgeSelectionTraversal::None) {
         context.selection_gesture = traversal == ModelingEdgeSelectionTraversal::Loop
                                        ? Gesture::EdgeLoop : Gesture::EdgeRing;
+        context.selection_toggle = request->shift_pressed;
+      } else if (component_traversal !=
+                 ModelingComponentSelectionTraversal::None) {
+        context.selection_gesture = Gesture::EdgeLoop;
         context.selection_toggle = request->shift_pressed;
       } else if (request->depth_cycle_requested(
                      to_modeling_selection_mode(frame.selection_state.summary.mode))) {
@@ -948,9 +954,12 @@ ViewportSelectionInteraction::pointer_edit_operation(
           .shift_pressed = box_pointer_->modifiers.shift,
           .alt_pressed = box_pointer_->modifiers.alt,
       };
-      if (request.edge_traversal_requested(
-              to_modeling_selection_mode(frame.selection_state.summary.mode)) !=
-          ModelingEdgeSelectionTraversal::None) {
+      const ModelingSelectionMode mode =
+          to_modeling_selection_mode(frame.selection_state.summary.mode);
+      if (request.edge_traversal_requested(mode) !=
+              ModelingEdgeSelectionTraversal::None ||
+          request.component_traversal_requested(mode) !=
+              ModelingComponentSelectionTraversal::None) {
         return std::nullopt;
       }
     }

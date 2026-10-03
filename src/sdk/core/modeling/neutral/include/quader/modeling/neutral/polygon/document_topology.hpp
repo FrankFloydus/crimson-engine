@@ -43,6 +43,18 @@ struct FacePerimeterInfo {
 [[nodiscard]] std::optional<float> edge_factor_from_ray(const Document& document, Edge edge, const Ray& ray);
 [[nodiscard]] std::vector<Edge> edge_loop_edges(const Document& document, Edge seed_edge);
 [[nodiscard]] std::vector<Edge> edge_loop_edges(const Document& document, Edge seed_edge, ElementId face_id);
+/// Returns unique live endpoints in the existing edge-loop traversal order.
+[[nodiscard]] std::vector<ElementId> vertex_loop_vertices(
+    const Document& document, Edge seed_edge,
+    ElementId face_id = kInvalidElementId);
+/// Checks incident quad eligibility without building adjacency or walking a strip.
+[[nodiscard]] bool face_loop_seed_eligible(
+    const Document& document, Edge seed_edge, ElementId face_id);
+/// Walks the quad strip perpendicular to a seed edge on both incident sides.
+/// The incident picked face determines ordering; stale context returns empty.
+/// Boundaries, non-quads, malformed faces and nonmanifold crossings stop a walk.
+[[nodiscard]] std::vector<ElementId> face_loop_faces(
+    const Document& document, Edge seed_edge, ElementId face_id);
 [[nodiscard]] std::vector<Edge> edge_boundary_component_edges(const Document& document, Edge seed_edge);
 [[nodiscard]] std::vector<Edge> edge_ring_edges(const Document& document, Edge seed_edge);
 [[nodiscard]] bool has_same_geometry(const Document& left, const Document& right);

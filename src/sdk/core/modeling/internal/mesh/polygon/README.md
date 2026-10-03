@@ -57,6 +57,13 @@ Keep backend-neutral topology query/mutation declarations in
 `quader_poly_document_topology_backend.hpp`; OpenMesh implementation types stay in
 `quader_poly_document_openmesh_helpers.cpp`. OpenMesh-named shims support focused backend tests.
 
+Component loop queries stay with `quader_poly_document_selection_api.cpp` and the neutral
+`document_topology.hpp` surface. Vertex loops return the live unique endpoints of the existing
+edge traversal. Face loops cross opposite edges of eligible quads on both sides of the seed;
+picked-face context chooses deterministic ordering without limiting the strip. Boundaries,
+non-quads, malformed identities/corners and nonmanifold crossings stop traversal. Coverage lives
+in `QdrDocumentLoopSelectionQueryTests` beside the existing edge-loop compatibility tests.
+
 Use normal `.cpp` files and narrow helper headers; do not add permanent `.inc` implementation
 shards. Document overlay APIs emit primitive geometry only. Semantic host projection belongs in
 `src/editor`; styling, layers, draw policy, and render resources belong in `src/render`.

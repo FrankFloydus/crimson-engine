@@ -1152,3 +1152,295 @@ TEST(QdrDocumentOperationInsertEdgeLoopTests,
 	                { kInvalidElementId, kInvalidElementId })
 	                .empty());
 }
+
+TEST(QdrDocumentLoopSelectionQueryTests,
+     VertexLoopsFollowBothGridAxesWithUniqueOrderedEndpoints) {
+	const QuadGridFixture fixture = make_quad_grid(3U, 3U);
+	const Edge vertical_seed = make_edge(fixture.vertex(1U, 1U),
+	                                     fixture.vertex(1U, 2U));
+	const std::vector<ElementId> vertical_expected {
+		fixture.vertex(1U, 1U), fixture.vertex(1U, 2U),
+		fixture.vertex(1U, 0U), fixture.vertex(1U, 3U),
+	};
+	EXPECT_EQ(vertex_loop_vertices(fixture.document, vertical_seed),
+	          vertical_expected);
+	EXPECT_EQ(vertex_loop_vertices(fixture.document,
+	                               { vertical_seed.b, vertical_seed.a },
+	                               fixture.document.faces.front().id),
+	          vertical_expected);
+	const Edge horizontal_seed = make_edge(fixture.vertex(1U, 1U),
+	                                       fixture.vertex(2U, 1U));
+	const std::vector<ElementId> horizontal_expected {
+		fixture.vertex(1U, 1U), fixture.vertex(2U, 1U),
+		fixture.vertex(0U, 1U), fixture.vertex(3U, 1U),
+	};
+	EXPECT_EQ(vertex_loop_vertices(fixture.document, horizontal_seed),
+	          horizontal_expected);
+}
+
+TEST(QdrDocumentLoopSelectionQueryTests,
+     VertexLoopsDeduplicateClosedCylinderCapEndpoints) {
+	for (const bool flip_faces : { false, true }) {
+		const Document document = make_cylinder({
+			.side_count = 8, .flip_faces = flip_faces });
+		for (const Face& cap : document.faces) {
+			if (cap.vertices.size() != 8U) {
+				continue;
+			}
+			const Edge seed = make_edge(cap.vertices[0], cap.vertices[1]);
+			std::vector<ElementId> expected = cap.vertices;
+			std::vector<ElementId> actual =
+				vertex_loop_vertices(document, seed, cap.id);
+			ASSERT_EQ(actual.size(), 8U);
+			std::ranges::sort(expected);
+			std::ranges::sort(actual);
+			EXPECT_EQ(actual, expected);
+		}
+	}
+}
+
+TEST(QdrDocumentLoopSelectionQueryTests,
+     VertexLoopsPreserveIsolatedSeedsAndRejectMissingEdges) {
+	const qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
+	const std::vector<ElementId> expected {
+		fixture.bottom_left, fixture.bottom_right,
+	};
+	EXPECT_EQ(vertex_loop_vertices(
+	              fixture.document,
+	              make_edge(fixture.bottom_left, fixture.bottom_right)),
+	          expected);
+	EXPECT_TRUE(vertex_loop_vertices(
+	                fixture.document,
+	                make_edge(fixture.bottom_left, fixture.top_right)).empty());
+	EXPECT_TRUE(vertex_loop_vertices(fixture.document, {}).empty());
+}
+
+TEST(QdrDocumentLoopSelectionQueryTests,
+     FaceLoopsCrossBothGridAxesPerpendicularToTheSeed) {
+	const QuadGridFixture fixture = make_quad_grid(3U, 3U);
+	const ElementId picked = fixture.document.faces[4].id;
+	const Edge vertical_seed = make_edge(fixture.vertex(1U, 1U),
+	                                     fixture.vertex(1U, 2U));
+	const std::vector<ElementId> across_columns {
+		picked, fixture.document.faces[5].id, fixture.document.faces[3].id,
+	};
+	EXPECT_EQ(face_loop_faces(fixture.document, vertical_seed, picked),
+	          across_columns);
+	EXPECT_TRUE(face_loop_seed_eligible(fixture.document, vertical_seed, picked));
+	EXPECT_EQ(face_loop_faces(fixture.document,
+	                         { vertical_seed.b, vertical_seed.a }, picked),
+	          across_columns);
+	const std::vector<ElementId> opposite_context {
+		fixture.document.faces[3].id, picked, fixture.document.faces[5].id,
+	};
+	EXPECT_EQ(face_loop_faces(fixture.document, vertical_seed,
+	                         fixture.document.faces[3].id),
+	          opposite_context);
+	const Edge horizontal_seed = make_edge(fixture.vertex(1U, 1U),
+	                                       fixture.vertex(2U, 1U));
+	const std::vector<ElementId> across_rows {
+		picked, fixture.document.faces[7].id, fixture.document.faces[1].id,
+	};
+	EXPECT_EQ(face_loop_faces(fixture.document, horizontal_seed, picked),
+	          across_rows);
+	const Edge boundary_seed = make_edge(fixture.vertex(0U, 1U),
+	                                     fixture.vertex(0U, 2U));
+	EXPECT_EQ(face_loop_faces(fixture.document, boundary_seed,
+	                         fixture.document.faces[3].id),
+	          opposite_context);
+	EXPECT_TRUE(face_loop_seed_eligible(fixture.document, boundary_seed,
+	                                    fixture.document.faces[3].id));
+}
+
+TEST(QdrDocumentLoopSelectionQueryTests,
+     VertexLoopsNeverReturnMissingAuthoredEndpoints) {
+	Document document = make_cube({});
+	const Face& face = document.faces.front();
+	ASSERT_EQ(face.vertices.size(), 4U);
+	const Edge seed = make_edge(face.vertices[0], face.vertices[1]);
+	const ElementId missing = face.vertices[2];
+	std::erase_if(document.vertices, [&](const Vertex& vertex) {
+		return vertex.id == missing;
+	});
+	const std::vector<ElementId> actual = vertex_loop_vertices(document, seed);
+	EXPECT_FALSE(actual.empty());
+	EXPECT_EQ(std::ranges::count(actual, missing), 0);
+	for (const ElementId vertex : actual) {
+		EXPECT_NE(vertex, kInvalidElementId);
+		EXPECT_NE(find_vertex(document, vertex), nullptr);
+	}
+	EXPECT_TRUE(vertex_loop_vertices(
+	                document, make_edge(face.vertices[1], missing)).empty());
+}
+
+TEST(QdrDocumentLoopSelectionQueryTests,
+     BothTorusAxesCloseVertexCyclesAndPerpendicularFaceStrips) {
+	const Document document = make_torus({
+		.major_segments = 8, .minor_segments = 4 });
+	ASSERT_EQ(document.faces.size(), 32U);
+	ASSERT_EQ(document.vertices.size(), 32U);
+	const ElementId picked = document.faces.front().id;
+	const Edge minor_seed = make_edge(document.vertices[0].id,
+	                                  document.vertices[1].id);
+	const Edge major_seed = make_edge(document.vertices[0].id,
+	                                  document.vertices[4].id);
+	std::vector<ElementId> major_faces;
+	std::vector<ElementId> major_vertices;
+	for (std::size_t index = 0U; index < 32U; index += 4U) {
+		major_faces.push_back(document.faces[index].id);
+		major_vertices.push_back(document.vertices[index].id);
+	}
+	EXPECT_EQ(face_loop_faces(document, minor_seed, picked), major_faces);
+	std::vector<ElementId> minor_faces;
+	std::vector<ElementId> minor_vertices;
+	for (std::size_t index = 0U; index < 4U; ++index) {
+		minor_faces.push_back(document.faces[index].id);
+		minor_vertices.push_back(document.vertices[index].id);
+	}
+	EXPECT_EQ(face_loop_faces(document, major_seed, picked), minor_faces);
+	std::vector<ElementId> actual_minor =
+		vertex_loop_vertices(document, minor_seed);
+	std::vector<ElementId> actual_major =
+		vertex_loop_vertices(document, major_seed);
+	std::ranges::sort(actual_minor);
+	std::ranges::sort(actual_major);
+	EXPECT_EQ(actual_minor, minor_vertices);
+	EXPECT_EQ(actual_major, major_vertices);
+}
+
+TEST(QdrDocumentLoopSelectionQueryTests,
+     FaceLoopsDeduplicateClosedCylinderStripsAndExcludeCaps) {
+	for (const bool flip_faces : { false, true }) {
+		const Document document = make_cylinder({
+			.side_count = 8, .flip_faces = flip_faces });
+		const Face& side = document.faces.front();
+		ASSERT_EQ(side.vertices.size(), 4U);
+		const std::vector<Edge> boundary = qdr_test::face_edges_for_test(side);
+		const auto seed = std::ranges::find_if(boundary, [&](Edge edge) {
+			return find_vertex(document, edge.a)->position.y !=
+			       find_vertex(document, edge.b)->position.y;
+		});
+		ASSERT_NE(seed, boundary.end());
+		const std::vector<ElementId> actual =
+			face_loop_faces(document, *seed, side.id);
+		ASSERT_EQ(actual.size(), 8U);
+		EXPECT_EQ(actual.front(), side.id);
+		for (const Face& face : document.faces) {
+			EXPECT_EQ(std::ranges::count(actual, face.id),
+			          face.vertices.size() == 4U ? 1 : 0);
+		}
+		EXPECT_EQ(face_loop_faces(document, { seed->b, seed->a }, side.id),
+		          actual);
+	}
+}
+
+TEST(QdrDocumentLoopSelectionQueryTests,
+     FaceLoopsStopAtTrianglesAndNgonsFromEitherPickedSide) {
+	for (const std::size_t side_count : { 3U, 5U }) {
+		const NonQuadLoopPathFixture fixture =
+			make_nonquad_loop_path_fixture(side_count);
+		const ElementId quad = fixture.document.faces.front().id;
+		const std::vector<ElementId> expected { quad };
+		EXPECT_EQ(face_loop_faces(fixture.document, fixture.seed, quad),
+		          expected);
+		EXPECT_EQ(face_loop_faces(fixture.document, fixture.shared_edge, quad),
+		          expected);
+		EXPECT_EQ(face_loop_faces(fixture.document, fixture.shared_edge,
+		                         fixture.non_quad_face), expected);
+		EXPECT_TRUE(face_loop_seed_eligible(fixture.document, fixture.shared_edge,
+		                                    fixture.non_quad_face));
+		const Face* non_quad = find_face(fixture.document, fixture.non_quad_face);
+		ASSERT_NE(non_quad, nullptr);
+		const Edge outer_seed = make_edge(non_quad->vertices[1],
+		                                  non_quad->vertices[2]);
+		EXPECT_TRUE(face_loop_faces(fixture.document, outer_seed,
+		                           non_quad->id).empty());
+		EXPECT_FALSE(face_loop_seed_eligible(fixture.document, outer_seed,
+		                                     non_quad->id));
+	}
+}
+
+TEST(QdrDocumentLoopSelectionQueryTests,
+     FaceLoopsStopBeforeNonmanifoldCrossingsAndRejectNonmanifoldSeeds) {
+	QuadGridFixture fixture = make_quad_grid(3U, 1U);
+	const ElementId low = add_vertex(fixture.document, { 1.0F, 0.0F, 1.0F });
+	const ElementId high = add_vertex(fixture.document, { 1.0F, 1.0F, 1.0F });
+	ASSERT_NE(add_face(fixture.document, std::array<ElementId, 4> {
+	              fixture.vertex(1U, 1U), high, low, fixture.vertex(1U, 0U) }),
+	          kInvalidElementId);
+	const Edge seed = make_edge(fixture.vertex(0U, 0U),
+	                            fixture.vertex(0U, 1U));
+	const Edge crossing = make_edge(fixture.vertex(1U, 0U),
+	                                fixture.vertex(1U, 1U));
+	const ElementId picked = fixture.document.faces.front().id;
+	EXPECT_EQ(face_loop_faces(fixture.document, seed, picked),
+	          std::vector<ElementId> { picked });
+	EXPECT_TRUE(face_loop_faces(fixture.document, crossing, picked).empty());
+	EXPECT_FALSE(face_loop_seed_eligible(fixture.document, crossing, picked));
+}
+
+TEST(QdrDocumentLoopSelectionQueryTests,
+     FaceLoopsRejectMalformedQuadsWithoutCrossingThem) {
+	for (const int malformed_kind : { 0, 1, 2, 3 }) {
+		SCOPED_TRACE(malformed_kind);
+		QuadGridFixture fixture = make_quad_grid(3U, 1U);
+		Face& malformed = fixture.document.faces[1];
+		if (malformed_kind == 0) {
+			malformed.vertices[2] = malformed.vertices[1];
+		} else if (malformed_kind == 1) {
+			malformed.vertices[2] = fixture.document.next_vertex_id;
+		} else if (malformed_kind == 2) {
+			malformed.id = kInvalidElementId;
+		} else {
+			malformed.id = fixture.document.faces[2].id;
+		}
+		const Edge seed = make_edge(fixture.vertex(0U, 0U),
+		                            fixture.vertex(0U, 1U));
+		const ElementId picked = fixture.document.faces.front().id;
+		EXPECT_EQ(face_loop_faces(fixture.document, seed, picked),
+		          std::vector<ElementId> { picked });
+	}
+}
+
+TEST(QdrDocumentLoopSelectionQueryTests,
+     FaceLoopsRejectStaleContextAndMissingSeeds) {
+	const QuadGridFixture fixture = make_quad_grid(2U, 1U);
+	const ElementId picked = fixture.document.faces.front().id;
+	const Edge seed = make_edge(fixture.vertex(0U, 0U),
+	                            fixture.vertex(0U, 1U));
+	EXPECT_TRUE(face_loop_faces(fixture.document, seed,
+	                           fixture.document.next_face_id).empty());
+	EXPECT_TRUE(face_loop_faces(fixture.document, seed,
+	                           fixture.document.faces[1].id).empty());
+	EXPECT_FALSE(face_loop_seed_eligible(fixture.document, seed,
+	                                     fixture.document.faces[1].id));
+	EXPECT_TRUE(face_loop_faces(fixture.document, seed,
+	                           kInvalidElementId).empty());
+	EXPECT_TRUE(face_loop_faces(fixture.document, {}, picked).empty());
+	EXPECT_FALSE(face_loop_seed_eligible(fixture.document, {}, picked));
+	EXPECT_TRUE(face_loop_faces(fixture.document,
+	                           make_edge(fixture.vertex(0U, 0U),
+	                                     fixture.vertex(1U, 1U)), picked).empty());
+}
+
+TEST(QdrDocumentLoopSelectionQueryTests,
+     FaceSeedEligibilityRejectsMalformedIncidentQuadsAndDuplicateVertices) {
+	for (const int malformed_kind : { 0, 1, 2, 3 }) {
+		SCOPED_TRACE(malformed_kind);
+		QuadGridFixture fixture = make_quad_grid(1U, 1U);
+		Face& face = fixture.document.faces.front();
+		const ElementId picked = face.id;
+		const Edge seed = make_edge(face.vertices[0], face.vertices[1]);
+		if (malformed_kind == 0) {
+			face.vertices[2] = face.vertices[1];
+		} else if (malformed_kind == 1) {
+			face.vertices[2] = fixture.document.next_vertex_id;
+		} else if (malformed_kind == 2) {
+			fixture.document.vertices.push_back(fixture.document.vertices.front());
+		} else {
+			fixture.document.faces.push_back(face);
+		}
+		EXPECT_FALSE(face_loop_seed_eligible(fixture.document, seed, picked));
+		EXPECT_TRUE(face_loop_faces(fixture.document, seed, picked).empty());
+	}
+}

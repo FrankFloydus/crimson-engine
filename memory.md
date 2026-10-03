@@ -520,6 +520,12 @@ Tests: [viewport workflows](tests/viewport_interaction_controller_tests.cpp),
   Repeated plain loop selection on an open-boundary seed can cycle to its boundary component;
   ring and toggle behavior stay deterministic. Coverage: `EdgeLoopSelection*` in
   [loop tests](tests/modeling_domain/operation/qdr_document_operation_insert_edge_loop_tests.cpp).
+- Vertex and Face Alt-click resolve a geometric edge while preserving the component mode.
+  Vertex output uses the existing loop endpoints; Face output walks the perpendicular quad strip.
+  Prior selection never supplies direction. Shift toggles the whole walk; a Vertex seed is selected
+  only when both endpoints are selected. Traversal misses preserve selection and pending work.
+  Keep press-time modifiers and revision-gated retained submissions; see the component traversal
+  cases in [viewport workflows](tests/viewport_interaction_controller_tests.cpp).
 - Orthographic mesh-depth traversal shares the canonical occurrence collector and stable ordering.
   Selection changes do not reset its cursor; geometry, scope, visibility, ray direction, and policy
   changes do. Its edge-on fallback is specific to mesh depth cycling, not all-component picking.

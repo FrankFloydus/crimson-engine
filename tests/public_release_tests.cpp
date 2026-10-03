@@ -7,6 +7,7 @@
 #include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
 #include "api/quader_api_session_internal_access.hpp"
+#include "api/quader_polygon_document_internal_access.hpp"
 #include "core/localization_service.hpp"
 #include "core/release_features.hpp"
 #include "core/user_config_paths.hpp"
@@ -22,6 +23,8 @@
 #include "ui/qt_snapping_toolbar.hpp"
 #include "ui/qt_tool_toolbar.hpp"
 #include "viewport/viewport_settings.hpp"
+
+#include <quader/modeling/neutral/polygon/document_topology.hpp>
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -41,6 +44,7 @@
 #include <map>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace quader::test {
@@ -262,6 +266,102 @@ TEST(PublicReleaseCommands, LassoSelectionIsAvailableThroughCommandsAndTools) {
   ASSERT_TRUE(editor.commands().execute(quader_command::kToolsActivateSelect).ok());
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::LassoSelect).ok());
   EXPECT_EQ(editor.tools().active_tool(), "lasso_select");
+}
+
+TEST(PublicReleaseSelection, AltClickUsesTheClickedEdgeForVertexLoopsAndFaceStrips) {
+  for (const auto mode : {QuaderSelectionMode::Vertex, QuaderSelectionMode::Face}) {
+    for (const bool prior_selection : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(mode));
+      SCOPED_TRACE(prior_selection);
+      SceneSession session;
+      QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+      quader_poly::Document document;
+      std::array<std::array<QuaderElementId, 4>, 4> vertices{};
+      std::array<std::array<QuaderElementId, 3>, 3> faces{};
+      for (std::size_t row = 0; row < vertices.size(); ++row) {
+        for (std::size_t column = 0; column < vertices[row].size(); ++column) {
+          vertices[row][column] = quader_poly::add_vertex(document,
+              {static_cast<float>(column) - 1.5f,
+               static_cast<float>(row) - 1.5f, 0.0f});
+        }
+      }
+      for (std::size_t row = 0; row < faces.size(); ++row) {
+        for (std::size_t column = 0; column < faces[row].size(); ++column) {
+          const std::array<quader_poly::ElementId, 4> boundary{
+              static_cast<quader_poly::ElementId>(vertices[row][column]),
+              static_cast<quader_poly::ElementId>(vertices[row][column + 1u]),
+              static_cast<quader_poly::ElementId>(vertices[row + 1u][column + 1u]),
+              static_cast<quader_poly::ElementId>(vertices[row + 1u][column])};
+          faces[row][column] = quader_poly::add_face(document, boundary);
+        }
+      }
+      const auto patch = editor.modeling().create_mesh(
+          QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+          {.name = "Public directional component patch"});
+      ASSERT_TRUE(patch.ok()) << patch.error_message();
+      ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+      ASSERT_TRUE(editor.selection().clear().ok());
+      const auto unrelated = mode == QuaderSelectionMode::Vertex
+          ? vertices[3][0] : faces[2][0];
+      if (prior_selection) {
+        const auto selected = mode == QuaderSelectionMode::Vertex
+            ? editor.selection().select_vertex(patch.value(), unrelated)
+            : editor.selection().select_face(patch.value(), unrelated);
+        ASSERT_TRUE(selected.ok());
+      }
+      const auto selected_ids = [&] {
+        std::vector<QuaderElementId> ids;
+        const auto overlay = editor.query().selection_overlay();
+        if (mode == QuaderSelectionMode::Vertex) {
+          for (const auto &point : overlay.points) {
+            if (point.layer == QuaderOverlayLayer::SelectedVertex &&
+                point.element.object_id == patch.value().modeling_object_id) {
+              ids.push_back(point.element.vertex_id);
+            }
+          }
+        } else {
+          for (const auto &triangle : overlay.triangles) {
+            if ((triangle.layer == QuaderOverlayLayer::SelectedVisibleFace ||
+                 triangle.layer == QuaderOverlayLayer::SelectedXrayFace) &&
+                triangle.element.object_id == patch.value().modeling_object_id) {
+              ids.push_back(triangle.element.face_id);
+            }
+          }
+        }
+        std::sort(ids.begin(), ids.end());
+        ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+        return ids;
+      };
+      std::vector<QuaderElementId> expected;
+      if (mode == QuaderSelectionMode::Vertex) {
+        expected.assign(vertices[1].begin(), vertices[1].end());
+      } else {
+        for (const auto &row : faces) expected.push_back(row[1]);
+      }
+      std::sort(expected.begin(), expected.end());
+      session.history().clear();
+      const auto content_revision = editor.selection().summary().content_revision;
+      QuaderPickSelectRequest request{
+          .ray = {.origin = {0.0f, -0.5f, 5.0f}, .direction = {0.0f, 0.0f, -1.0f}},
+          .alt_pressed = true, .vertex_radius = 0.03, .edge_radius = 0.03};
+      const auto picked = editor.selection().pick_select(request);
+      ASSERT_TRUE(picked.ok()) << picked.error_message();
+      EXPECT_TRUE(picked.changed());
+      EXPECT_EQ(selected_ids(), expected);
+      EXPECT_EQ(picked.value().mode, mode);
+      EXPECT_EQ(picked.value().content_revision, content_revision);
+      EXPECT_EQ(session.history().undo_count(), 0u);
+      const auto repeated = editor.selection().pick_select(request);
+      ASSERT_TRUE(repeated.ok());
+      EXPECT_FALSE(repeated.changed());
+      EXPECT_EQ(repeated.value().selection_revision, picked.value().selection_revision);
+      EXPECT_EQ(session.history().undo_count(), 0u);
+      EXPECT_FALSE(editor.history().can_undo());
+      request.shift_pressed = true;
+      ASSERT_TRUE(editor.selection().pick_select(request).ok());
+      EXPECT_TRUE(selected_ids().empty());
+    }
+  }
 }
 
 TEST(PublicReleaseCommands, ParentingCommandsArePublicAndSupportMeshesAndGroups) {

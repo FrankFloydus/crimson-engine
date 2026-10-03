@@ -1326,6 +1326,11 @@ ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_click(
   const ModelingSelectionMode selection_mode = modeling_.selection_mode();
   const ModelingEdgeSelectionTraversal edge_traversal =
       request.policy.edge_traversal_requested(selection_mode);
+  const ModelingComponentSelectionTraversal component_traversal =
+      request.policy.component_traversal_requested(selection_mode);
+  const bool traversal_requested =
+      edge_traversal != ModelingEdgeSelectionTraversal::None ||
+      component_traversal != ModelingComponentSelectionTraversal::None;
   if (request.baseline.has_value() &&
       request.baseline->mode != selection_mode) {
     return {
@@ -1422,8 +1427,8 @@ ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_click(
                                          request.gesture_merge_key,
                                          request.expected_history_revision);
     }
-    // Blender-style edge loop/ring gestures are inert when the pointer misses.
-    if (edge_traversal != ModelingEdgeSelectionTraversal::None) {
+    // A traversal miss must not clear existing selection or settle a draft.
+    if (traversal_requested) {
       return {.command = {.ok = true}, .selection = summary()};
     }
     if (request.component_body_target.has_value()) {
@@ -1530,13 +1535,17 @@ ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_click(
     return apply_sub_selection(winner.sub_selection_kind, &winner);
   }
 
+  const bool directional_edge_seed =
+      component_traversal != ModelingComponentSelectionTraversal::None &&
+      winner.component_kind == ModelingActiveSelectionKind::Edge;
   if (winner.modeling_object_id == kInvalidModelingObjectId ||
-      (selection_mode == ModelingSelectionMode::Vertex &&
-       winner.component_kind != ModelingActiveSelectionKind::Vertex) ||
-      (selection_mode == ModelingSelectionMode::Edge &&
-       winner.component_kind != ModelingActiveSelectionKind::Edge) ||
-      (selection_mode == ModelingSelectionMode::Face &&
-       winner.component_kind != ModelingActiveSelectionKind::Face)) {
+      (!directional_edge_seed &&
+       ((selection_mode == ModelingSelectionMode::Vertex &&
+         winner.component_kind != ModelingActiveSelectionKind::Vertex) ||
+        (selection_mode == ModelingSelectionMode::Edge &&
+         winner.component_kind != ModelingActiveSelectionKind::Edge) ||
+        (selection_mode == ModelingSelectionMode::Face &&
+         winner.component_kind != ModelingActiveSelectionKind::Face)))) {
     return {
         .command = {.ok = false,
                     .message = "Resolved component selection target is invalid."},
@@ -1550,19 +1559,31 @@ ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_click(
       .vertex = winner.vertex,
       .edge = {winner.edge_a, winner.edge_b},
       .face = winner.face,
-      .edit = edge_traversal != ModelingEdgeSelectionTraversal::None
+      .edit = traversal_requested
                   ? (request.policy.shift_pressed
                          ? ModelingSelectionEdit::Toggle
                          : ModelingSelectionEdit::Replace)
                   : click_selection_edit(request.policy),
       .click_count = request.policy.click_count,
       .edge_traversal = edge_traversal,
+      .component_traversal = component_traversal,
       .preserve_selection_on_selected_hit =
           request.policy.preserve_selection_on_selected_hit,
       .preserve_existing_component_selection_on_hit =
           request.policy.preserve_existing_component_selection_on_hit,
   };
-  if (requires_selection_settlement()) {
+  std::optional<ModelingComponentTraversalSelectionPreparation>
+      traversal_preparation;
+  const std::uint64_t content_revision = modeling_.content_revision();
+  const std::uint64_t selection_revision = modeling_.selection_revision();
+  if (directional_edge_seed) {
+    traversal_preparation =
+        modeling_.prepare_component_traversal_selection(component);
+    if (!traversal_preparation->command.ok ||
+        !traversal_preparation->command.changed) {
+      return {.command = traversal_preparation->command, .selection = summary()};
+    }
+  } else if (requires_selection_settlement()) {
     ModelingComponentSelectionRequest validation{
         .modeling_object_id = winner.modeling_object_id,
         .mode = selection_mode,
@@ -1582,7 +1603,11 @@ ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_click(
   const auto settled = begin_selection_edit();
   if (!settled.ok) return {.command = settled, .selection = summary()};
   ModelingCommandResult command =
-      modeling_.apply_resolved_component_selection(component);
+      traversal_preparation.has_value() &&
+              modeling_.content_revision() == content_revision &&
+              modeling_.selection_revision() == selection_revision
+          ? modeling_.set_component_selection(traversal_preparation->selection)
+          : modeling_.apply_resolved_component_selection(component);
   command = include_settlement_change(
       finish_selection_edit(std::move(command)), settled);
   return {.command = std::move(command), .selection = summary()};

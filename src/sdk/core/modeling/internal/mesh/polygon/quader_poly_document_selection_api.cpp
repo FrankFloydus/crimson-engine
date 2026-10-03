@@ -11,6 +11,7 @@
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_uv_helpers.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -171,6 +172,85 @@ const Face* opposite_face_across_edge(const Document& document,
         }
     }
     return nullptr;
+}
+
+std::optional<Edge> opposite_quad_edge(const Face& face, Edge entry_edge)
+{
+    if (face.vertices.size() != 4U || face.id == kInvalidElementId) {
+        return std::nullopt;
+    }
+    for (std::size_t index = 0U; index < 4U; ++index) {
+        const ElementId vertex = face.vertices[index];
+        if (vertex == kInvalidElementId) {
+            return std::nullopt;
+        }
+        for (std::size_t earlier = 0U; earlier < index; ++earlier) {
+            if (face.vertices[earlier] == vertex) {
+                return std::nullopt;
+            }
+        }
+    }
+
+    for (std::size_t index = 0U; index < 4U; ++index) {
+        if (make_edge(face.vertices[index],
+                      face.vertices[(index + 1U) % 4U]) == entry_edge) {
+            return make_edge(face.vertices[(index + 2U) % 4U],
+                             face.vertices[(index + 3U) % 4U]);
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<Edge> opposite_valid_quad_edge(
+    const Face& face,
+    Edge entry_edge,
+    const std::unordered_set<ElementId>& live_vertex_ids,
+    const std::unordered_set<ElementId>& unique_face_ids)
+{
+    if (!unique_face_ids.contains(face.id) ||
+        !std::ranges::all_of(face.vertices, [&](ElementId vertex) {
+            return live_vertex_ids.contains(vertex);
+        })) {
+        return std::nullopt;
+    }
+    return opposite_quad_edge(face, entry_edge);
+}
+
+void append_face_loop_direction(
+    const Document& document,
+    const FaceIndicesByEdge& faces_by_edge,
+    const std::unordered_set<ElementId>& live_vertex_ids,
+    const std::unordered_set<ElementId>& unique_face_ids,
+    Edge entry_edge,
+    std::size_t face_index,
+    std::unordered_set<ElementId>& visited_faces,
+    std::vector<ElementId>& faces)
+{
+    while (const Face* face = face_at_index(document, face_index)) {
+        const std::optional<Edge> exit_edge = opposite_valid_quad_edge(
+            *face, entry_edge, live_vertex_ids, unique_face_ids);
+        if (!exit_edge.has_value() ||
+            !visited_faces.insert(face->id).second) {
+            return;
+        }
+        faces.push_back(face->id);
+
+        const auto adjacent = faces_by_edge.find(edge_key(*exit_edge));
+        if (adjacent == faces_by_edge.end() ||
+            adjacent->second.size() != 2U) {
+            return;
+        }
+        const std::vector<std::size_t>& neighbors = adjacent->second;
+        if (neighbors[0] == face_index && neighbors[1] != face_index) {
+            face_index = neighbors[1];
+        } else if (neighbors[1] == face_index &&
+                   neighbors[0] != face_index) {
+            face_index = neighbors[0];
+        } else {
+            return;
+        }
+        entry_edge = *exit_edge;
+    }
 }
 
 std::optional<Edge> next_boundary_loop_edge(
@@ -1356,6 +1436,148 @@ std::vector<Edge> edge_loop_edges(const Document& document, Edge seed_edge, Elem
         }
     }
     return edges;
+}
+
+std::vector<ElementId> vertex_loop_vertices(const Document& document,
+                                          Edge seed_edge,
+                                          ElementId face_id)
+{
+    if (find_vertex(document, seed_edge.a) == nullptr ||
+        find_vertex(document, seed_edge.b) == nullptr) {
+        return {};
+    }
+    const std::vector<Edge> edges = edge_loop_edges(document, seed_edge, face_id);
+    std::unordered_set<ElementId> live_vertex_ids;
+    live_vertex_ids.reserve(document.vertices.size());
+    for (const Vertex& vertex : document.vertices) {
+        if (vertex.id != kInvalidElementId) {
+            live_vertex_ids.insert(vertex.id);
+        }
+    }
+    std::vector<ElementId> vertices;
+    vertices.reserve(edges.size() + 1U);
+    std::unordered_set<ElementId> visited;
+    visited.reserve(edges.size() + 1U);
+    for (const Edge edge : edges) {
+        for (const ElementId vertex : { edge.a, edge.b }) {
+            if (live_vertex_ids.contains(vertex) &&
+                visited.insert(vertex).second) {
+                vertices.push_back(vertex);
+            }
+        }
+    }
+    return vertices;
+}
+
+bool face_loop_seed_eligible(const Document& document,
+                            Edge seed_edge,
+                            ElementId face_id)
+{
+    const Edge seed = make_edge(seed_edge.a, seed_edge.b);
+    if (seed.a == kInvalidElementId || seed.b == kInvalidElementId ||
+        seed.a == seed.b || face_id == kInvalidElementId) {
+        return false;
+    }
+
+    std::array<const Face*, 2> incident_faces {};
+    std::size_t incidence = 0U;
+    bool picked_incident = false;
+    for (const Face& face : document.faces) {
+        if (face.vertices.size() < 2U) {
+            continue;
+        }
+        for (std::size_t index = 0U; index < face.vertices.size(); ++index) {
+            if (make_edge(face.vertices[index],
+                          face.vertices[(index + 1U) % face.vertices.size()]) !=
+                seed) {
+                continue;
+            }
+            if (incidence == incident_faces.size()) {
+                return false;
+            }
+            incident_faces[incidence++] = &face;
+            picked_incident = picked_incident || face.id == face_id;
+        }
+    }
+    if (!picked_incident) {
+        return false;
+    }
+    for (std::size_t index = 0U; index < incidence; ++index) {
+        const Face& face = *incident_faces[index];
+        if (!opposite_quad_edge(face, seed).has_value() ||
+            std::ranges::count(document.faces, face.id, &Face::id) != 1) {
+            continue;
+        }
+        if (std::ranges::all_of(face.vertices, [&](ElementId vertex) {
+                return std::ranges::count(document.vertices, vertex,
+                                          &Vertex::id) == 1;
+            })) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::vector<ElementId> face_loop_faces(const Document& document,
+                                      Edge seed_edge,
+                                      ElementId face_id)
+{
+    const Edge seed = make_edge(seed_edge.a, seed_edge.b);
+    if (seed.a == kInvalidElementId || seed.b == kInvalidElementId ||
+        seed.a == seed.b || face_id == kInvalidElementId) {
+        return {};
+    }
+
+    const FaceIndicesByEdge faces_by_edge = face_indices_by_edge(document);
+    const auto seed_faces = faces_by_edge.find(edge_key(seed));
+    if (seed_faces == faces_by_edge.end() || seed_faces->second.empty() ||
+        seed_faces->second.size() > 2U) {
+        return {};
+    }
+    std::vector<std::size_t> directions = seed_faces->second;
+    const auto picked = std::ranges::find_if(
+        directions, [&](std::size_t index) {
+            const Face* face = face_at_index(document, index);
+            return face != nullptr && face->id == face_id;
+        });
+    if (picked == directions.end()) {
+        return {};
+    }
+    std::iter_swap(directions.begin(), picked);
+
+    std::unordered_set<ElementId> live_vertex_ids;
+    live_vertex_ids.reserve(document.vertices.size());
+    std::unordered_set<ElementId> duplicate_vertex_ids;
+    for (const Vertex& vertex : document.vertices) {
+        if (!live_vertex_ids.insert(vertex.id).second) {
+            duplicate_vertex_ids.insert(vertex.id);
+        }
+    }
+    live_vertex_ids.erase(kInvalidElementId);
+    for (const ElementId duplicate : duplicate_vertex_ids) {
+        live_vertex_ids.erase(duplicate);
+    }
+    std::unordered_set<ElementId> unique_face_ids;
+    unique_face_ids.reserve(document.faces.size());
+    std::unordered_set<ElementId> duplicate_face_ids;
+    for (const Face& face : document.faces) {
+        if (!unique_face_ids.insert(face.id).second) {
+            duplicate_face_ids.insert(face.id);
+        }
+    }
+    unique_face_ids.erase(kInvalidElementId);
+    for (const ElementId duplicate : duplicate_face_ids) {
+        unique_face_ids.erase(duplicate);
+    }
+
+    std::vector<ElementId> faces;
+    std::unordered_set<ElementId> visited_faces;
+    for (const std::size_t face_index : directions) {
+        append_face_loop_direction(
+            document, faces_by_edge, live_vertex_ids, unique_face_ids,
+            seed, face_index, visited_faces, faces);
+    }
+    return faces;
 }
 
 std::vector<Edge> edge_boundary_component_edges(const Document& document,

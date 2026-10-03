@@ -574,6 +574,19 @@ quader_editor_core::EdgeSelectionTraversal to_runtime_edge_traversal(
   return quader_editor_core::EdgeSelectionTraversal::None;
 }
 
+quader_editor_core::ComponentSelectionTraversal to_runtime_component_traversal(
+    ModelingComponentSelectionTraversal traversal) {
+  switch (traversal) {
+  case ModelingComponentSelectionTraversal::VertexLoop:
+    return quader_editor_core::ComponentSelectionTraversal::VertexLoop;
+  case ModelingComponentSelectionTraversal::FaceLoop:
+    return quader_editor_core::ComponentSelectionTraversal::FaceLoop;
+  case ModelingComponentSelectionTraversal::None:
+    return quader_editor_core::ComponentSelectionTraversal::None;
+  }
+  return quader_editor_core::ComponentSelectionTraversal::None;
+}
+
 ModelingActiveSelectionKind
 modeling_active_selection_kind_from_runtime(
     quader_editor_core::ActiveSelectionKind kind) {
@@ -1533,8 +1546,12 @@ ModelingSelectionService::apply_pick_selection(
   const ModelingEdgeSelectionTraversal edge_traversal =
       request.edge_traversal_requested(
           runtime_selection_mode_to_app(session.selection_mode()));
+  const ModelingComponentSelectionTraversal component_traversal =
+      request.component_traversal_requested(
+          runtime_selection_mode_to_app(session.selection_mode()));
   const quader_editor_core::SelectionEditOperation selection_edit =
-      edge_traversal != ModelingEdgeSelectionTraversal::None
+      edge_traversal != ModelingEdgeSelectionTraversal::None ||
+              component_traversal != ModelingComponentSelectionTraversal::None
           ? (request.shift_pressed
                  ? quader_editor_core::SelectionEditOperation::Toggle
                  : quader_editor_core::SelectionEditOperation::Replace)
@@ -1553,6 +1570,8 @@ ModelingSelectionService::apply_pick_selection(
               .pick_options = pick_options,
               .click_count = request.click_count,
               .edge_traversal = to_runtime_edge_traversal(edge_traversal),
+              .component_traversal =
+                  to_runtime_component_traversal(component_traversal),
               .preserve_existing_component_selection_on_hit =
                   request.preserve_existing_component_selection_on_hit,
               .preserve_selection_on_selected_hit =
@@ -1621,15 +1640,34 @@ ModelingSelectionService::pick_selection_hit(
     pick_options.mode = quader_poly::SelectionMode::Vertex;
     break;
   }
-  return quader_editor_core::pick_nearest(
-      cached_local_picking_objects(session, scene, object_registry),
+  const ModelingComponentSelectionTraversal traversal =
+      request.component_traversal_requested(
+          runtime_selection_mode_to_app(session.selection_mode()));
+  if (traversal != ModelingComponentSelectionTraversal::None) {
+    pick_options.mode = quader_poly::SelectionMode::Edge;
+  }
+  const auto &objects =
+      cached_local_picking_objects(session, scene, object_registry);
+  const auto hit = quader_editor_core::pick_nearest(
+      objects,
       {.ray = to_runtime_ray(request.ray),
        .options = pick_options,
-       .screen_context = pick_screen_context_from_request(request)},
+       .screen_context = pick_screen_context_from_request(request),
+       .resolve_edge_seed_vertex =
+           traversal == ModelingComponentSelectionTraversal::VertexLoop},
       cached_pick_object_bounds(session, scene, object_registry),
       cached_local_pick_face_geometry(session, scene, object_registry,
                                       pick_options),
       cached_local_picking_transforms(session, scene, object_registry));
+  if (!hit.has_value() ||
+      traversal == ModelingComponentSelectionTraversal::None) {
+    return hit;
+  }
+  const auto &document = objects[hit->object_index].document;
+  const bool eligible =
+      traversal == ModelingComponentSelectionTraversal::VertexLoop ||
+      quader_poly::face_loop_seed_eligible(document, hit->edge, hit->face_id);
+  return eligible ? hit : std::nullopt;
 }
 
 std::vector<quader_editor_core::PickHitRecord>
