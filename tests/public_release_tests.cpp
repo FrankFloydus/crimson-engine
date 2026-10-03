@@ -364,6 +364,48 @@ TEST(PublicReleaseSelection, AltClickUsesTheClickedEdgeForVertexLoopsAndFaceStri
   }
 }
 
+TEST(PublicReleaseSelection, ComponentModeConversionIgnoresDormantMeshPayload) {
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+  const QuaderBounds bounds{.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}};
+  const auto first = editor.modeling().create_box(bounds, "Public Conversion First");
+  const auto second = editor.modeling().create_box(bounds, "Public Conversion Second");
+  ASSERT_TRUE(first.ok());
+  ASSERT_TRUE(second.ok());
+  const auto ids = [&](QuaderModelingObjectRef target, bool vertices) {
+    std::vector<int> selected;
+    const auto overlay = editor.query().selection_overlay();
+    for (const auto &point : overlay.points) {
+      if (vertices && point.layer == QuaderOverlayLayer::SelectedVertex &&
+          point.element.object_id == target.modeling_object_id) {
+        selected.push_back(point.element.vertex_id);
+      }
+    }
+    for (const auto &triangle : overlay.triangles) {
+      if (!vertices && triangle.element.object_id == target.modeling_object_id &&
+          (triangle.layer == QuaderOverlayLayer::SelectedVisibleFace ||
+           triangle.layer == QuaderOverlayLayer::SelectedXrayFace)) {
+        selected.push_back(triangle.element.face_id);
+      }
+    }
+    std::sort(selected.begin(), selected.end());
+    selected.erase(std::unique(selected.begin(), selected.end()), selected.end());
+    return selected;
+  };
+  session.history().clear();
+  ASSERT_TRUE(editor.selection().select_vertices(first.value(), {1, 2, 3, 4}).ok());
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+  EXPECT_EQ(ids(first.value(), false), (std::vector<int>{1}));
+  ASSERT_TRUE(editor.selection().select_face(second.value(), 1).ok());
+  ASSERT_TRUE(editor.selection().select_face(first.value(), 1).ok());
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Vertex).ok());
+  ASSERT_TRUE(editor.selection().select_vertex(second.value(), 5, QuaderSelectionEdit::Add).ok());
+  EXPECT_EQ(ids(first.value(), true), (std::vector<int>{1, 2, 3, 4}));
+  EXPECT_EQ(ids(second.value(), true), (std::vector<int>{5}));
+  EXPECT_EQ(editor.selection().summary().selected_vertex_count, 5u);
+  EXPECT_EQ(session.history().undo_count(), 0u);
+}
+
 TEST(PublicReleaseCommands, ParentingCommandsArePublicAndSupportMeshesAndGroups) {
   SceneSession session;
   QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));

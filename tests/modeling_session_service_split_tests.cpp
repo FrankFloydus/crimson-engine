@@ -6973,6 +6973,76 @@ protected:
 };
 
 TEST_F(ModelingSelectionProjectionRollbackTests,
+       ComponentModeFailureRestoresLightPrimaryAndWarmSelectionOverlay) {
+  const auto box = create_box(editor_);
+  const auto light = editor_.scene().create_point_light({.name = "Conversion Light"});
+  ASSERT_TRUE(light.ok());
+  const auto selected_vertices = [&] {
+    std::vector<std::pair<int, int>> ids;
+    for (const auto &object : session_.modeling().export_selection().objects) {
+      for (const auto &vertex : object.selected_vertices) {
+        ids.emplace_back(object.modeling_object_id, vertex.id);
+      }
+    }
+    std::ranges::sort(ids);
+    return ids;
+  };
+  for (const auto failure : {ModelingSdkProjectionFailurePoint::AfterSdkMutation,
+                            ModelingSdkProjectionFailurePoint::SelectionScenePublication}) {
+    SCOPED_TRACE(static_cast<int>(failure));
+    ASSERT_TRUE(editor_.selection().select_vertices(box, {1, 2, 3, 4}).ok());
+    ASSERT_EQ(session_.modeling().export_selection().summary.selected_vertex_count, 4u);
+    ASSERT_TRUE(session_.scene().set_selected(light.value().id, true));
+    ASSERT_TRUE(session_.scene().set_active_selection(light.value().id));
+    ASSERT_EQ(session_.modeling().export_selection().summary.selected_vertex_count, 4u);
+    ASSERT_EQ(session_.modeling().export_selection().summary.mode, ModelingSelectionMode::Vertex);
+    ASSERT_EQ(session_.scene().primary_selection(), light.value().id);
+    const auto selection = session_.modeling().export_selection().summary;
+    const auto vertices = selected_vertices();
+    ASSERT_EQ(vertices, (std::vector<std::pair<int, int>>{
+        {box.modeling_object_id, 1}, {box.modeling_object_id, 2},
+        {box.modeling_object_id, 3}, {box.modeling_object_id, 4}}));
+    const auto scene_selection = session_.scene().selected_entities();
+    const auto components = session_.modeling().selected_component_entities();
+    const std::vector<EntityId> component_entities(components.begin(), components.end());
+    const auto revisions = editor_.revisions();
+    const auto scene_selection_revision = session_.scene().selection_revision();
+    const auto history = editor_.query().history();
+    const auto history_revision = session_.history().revision();
+    const auto signature = session_.modeling().selection_overlay_signature();
+    const auto fingerprint = overlay_frame_fingerprint(
+        session_.modeling().selection_overlay_frame());
+    inject(failure);
+    const auto failed = editor_.selection().set_mode(QuaderSelectionMode::Face);
+    inject(ModelingSdkProjectionFailurePoint::None);
+    EXPECT_FALSE(failed.ok());
+    EXPECT_FALSE(failed.changed());
+    const auto restored = session_.modeling().export_selection().summary;
+    EXPECT_EQ(restored.mode, ModelingSelectionMode::Vertex);
+    EXPECT_EQ(restored.active_kind, selection.active_kind);
+    EXPECT_EQ(restored.active_object_id, selection.active_object_id);
+    EXPECT_EQ(restored.active_vertex_id, selection.active_vertex_id);
+    EXPECT_EQ(restored.selected_vertex_count, 4u);
+    EXPECT_EQ(selected_vertices(), vertices);
+    EXPECT_EQ(session_.scene().selected_entities(), scene_selection);
+    EXPECT_EQ(session_.scene().primary_selection(), light.value().id);
+    const auto restored_components = session_.modeling().selected_component_entities();
+    EXPECT_EQ(std::vector<EntityId>(restored_components.begin(), restored_components.end()),
+              component_entities);
+    expect_same_revisions(editor_.revisions(), revisions);
+    EXPECT_EQ(session_.scene().selection_revision(), scene_selection_revision);
+    expect_same_history(editor_.query().history(), history);
+    EXPECT_EQ(session_.history().revision(), history_revision);
+    EXPECT_EQ(session_.modeling().selection_overlay_signature(), signature);
+    EXPECT_EQ(overlay_frame_fingerprint(session_.modeling().selection_overlay_frame()),
+              fingerprint);
+    ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Face).ok());
+    EXPECT_EQ(session_.modeling().export_selection().summary.mode, ModelingSelectionMode::Face);
+    EXPECT_EQ(session_.modeling().export_selection().summary.selected_face_count, 1u);
+  }
+}
+
+TEST_F(ModelingSelectionProjectionRollbackTests,
        ComponentInverseFailureBoundariesRestoreExactSelectionAndOverlay) {
   const QuaderModelingObjectRef first = create_box(editor_);
   const QuaderModelingObjectRef second = create_box(editor_);

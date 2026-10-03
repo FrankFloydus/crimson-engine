@@ -5124,6 +5124,8 @@ public:
 
       const std::size_t staged_index =
           staged_index_by_native.at(request.modeling_object_id);
+      const bool target_was_selected =
+          selected_by_index[session_index->second];
       PolygonSelectionSnapshot selection;
       selection.kind = to_sdk_selection_kind(request.mode);
       selection.vertices.reserve(request.vertices.size());
@@ -5204,6 +5206,17 @@ public:
         staged.selection = std::move(selection);
       } else {
         PolygonDocument &document = *staged.document;
+        // Native Add enrolls a fresh component participant. An inactive SDK
+        // document can retain an earlier selection through object workflows;
+        // that dormant payload must not become input to mode conversion.
+        if (request.edit == ModelingSelectionEdit::Add &&
+            !target_was_selected) {
+          Result<OperationResult> cleared = document.clear_selection();
+          if (!cleared.ok()) {
+            return finish_operation_preview_selection_edit(
+                preview_edit, failure(cleared.error_message()));
+          }
+        }
         std::string mode_message;
         if (request.edit != ModelingSelectionEdit::Replace) {
           Result<OperationResult> mode = document.set_selection_mode(
@@ -5234,8 +5247,6 @@ public:
           !effective_selection.vertices.empty() ||
           !effective_selection.edges.empty() ||
           !effective_selection.faces.empty();
-      const bool target_was_selected =
-          selected_by_index[session_index->second];
       if (request_index == 0U &&
           request.edit == ModelingSelectionEdit::Replace) {
         std::fill(selected_by_index.begin(), selected_by_index.end(), false);

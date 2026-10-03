@@ -4370,19 +4370,43 @@ public:
             ? scene_.primary_selection()
             : kInvalidEntityId;
     if (!scene_only_selection.empty()) {
-      ModelingCommandResult synchronized = sync_object_selection_from_scene();
-      if (!synchronized.ok) {
-        synchronized.changed = synchronized.changed || retired_idle_tool;
-        return synchronized;
+      bool current_component_scope = false;
+      if (is_component_selection_mode(mode) &&
+          is_component_selection_mode(
+              sdk_projection_adapter_.selection_mode())) {
+        const std::vector<EntityId> sdk_selected =
+            sdk_projection_adapter_.selected_entities();
+        const std::size_t scene_sdk_selected_count =
+            static_cast<std::size_t>(std::ranges::count_if(
+                scene_.selected_entities(), [&](EntityId entity) {
+                  return sdk_projection_adapter_.owns_entity(entity);
+                }));
+        current_component_scope =
+            scene_sdk_selected_count == sdk_selected.size() &&
+            std::ranges::all_of(sdk_selected, [&](EntityId entity) {
+              const SelectionComponent *selection = scene_.selection(entity);
+              return selection != nullptr && selection->selected;
+            });
+      }
+      // A scene-only companion can own the primary selection while the SDK
+      // component participants remain current. Keep their conversion inside
+      // the adapter checkpoint instead of first forcing an Object transition.
+      if (!current_component_scope) {
+        ModelingCommandResult synchronized = sync_object_selection_from_scene();
+        if (!synchronized.ok) {
+          synchronized.changed = synchronized.changed || retired_idle_tool;
+          return synchronized;
+        }
       }
     }
 
     ModelingCommandResult result =
         sdk_projection_adapter_.set_selection_mode(mode);
-    if (result.ok) {
-      app_selection_mode_ = mode;
-    }
     result.changed = result.changed || retired_idle_tool;
+    if (!result.ok) {
+      return result;
+    }
+    app_selection_mode_ = mode;
     invalidate_selection_overlay_caches();
     if (mode == ModelingSelectionMode::Object &&
         !scene_only_selection.empty()) {

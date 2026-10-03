@@ -261,7 +261,7 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
     ViewportOverlaySubmissionCoordinator coordinator;
     RecordingOverlayTarget target;
     const auto settings = ViewportSettings::defaults();
-    const auto context = mode == QuaderSelectionMode::Vertex
+    auto context = mode == QuaderSelectionMode::Vertex
         ? ViewportOverlaySelectionContext::Vertex
         : ViewportOverlaySelectionContext::Face;
     const auto submit = [&] {
@@ -363,6 +363,61 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
     EXPECT_TRUE(submit().persistent_submitted);
     EXPECT_TRUE(submitted_ids().empty());
     expect_retained();
+    ASSERT_TRUE(editor.selection().select_vertices(patch.value(),
+        {vertices[0][0], vertices[0][1], vertices[1][0], vertices[1][1]}).ok());
+    context = ViewportOverlaySelectionContext::Vertex;
+    ASSERT_TRUE(submit().persistent_submitted);
+    const auto submitted_vertices = [&] {
+      std::vector<int> ids;
+      for (const auto &point : target.persistent_frame.points) {
+        if (point.layer == ViewportOverlayLayer::SelectedVertex) {
+          ids.push_back(point.element.vertex_id);
+        }
+      }
+      std::sort(ids.begin(), ids.end());
+      return ids;
+    };
+    EXPECT_EQ(submitted_vertices(), (std::vector<int>{1, 2, 5, 6}));
+    ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+    context = ViewportOverlaySelectionContext::Face;
+    EXPECT_TRUE(submit().persistent_submitted);
+    std::vector<int> submitted_faces;
+    for (const auto &triangle : target.persistent_frame.triangles) {
+      if (triangle.layer == ViewportOverlayLayer::SelectedVisibleFace ||
+          triangle.layer == ViewportOverlayLayer::SelectedXrayFace) {
+        submitted_faces.push_back(triangle.element.face_id);
+      }
+    }
+    std::sort(submitted_faces.begin(), submitted_faces.end());
+    submitted_faces.erase(std::unique(submitted_faces.begin(), submitted_faces.end()),
+                          submitted_faces.end());
+    EXPECT_EQ(submitted_faces, (std::vector<int>{faces[0][0]}));
+    expect_retained();
+    ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Edge).ok());
+    context = ViewportOverlaySelectionContext::Edge;
+    EXPECT_TRUE(submit().persistent_submitted);
+    std::vector<std::pair<int, int>> submitted_edges;
+    for (const auto &line : target.persistent_frame.lines) {
+      if (line.layer == ViewportOverlayLayer::SelectedEdge) {
+        submitted_edges.emplace_back(std::min(line.element.edge_a, line.element.edge_b),
+                                     std::max(line.element.edge_a, line.element.edge_b));
+      }
+    }
+    std::sort(submitted_edges.begin(), submitted_edges.end());
+    submitted_edges.erase(std::unique(submitted_edges.begin(), submitted_edges.end()),
+                          submitted_edges.end());
+    EXPECT_EQ(submitted_edges,
+              (std::vector<std::pair<int, int>>{{1, 2}, {1, 5}, {2, 6}, {5, 6}}));
+    ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Vertex).ok());
+    context = ViewportOverlaySelectionContext::Vertex;
+    EXPECT_TRUE(submit().persistent_submitted);
+    EXPECT_EQ(submitted_vertices(), (std::vector<int>{1, 2, 5, 6}));
+    const auto unchanged_mode = editor.selection().set_mode(QuaderSelectionMode::Vertex);
+    ASSERT_TRUE(unchanged_mode.ok());
+    EXPECT_FALSE(unchanged_mode.changed());
+    expect_retained();
+    EXPECT_EQ(modeling.content_revision(), content_revision);
+    EXPECT_EQ(session.assets().revision(), asset_revision);
     EXPECT_EQ(session.history().undo_count(), 0u);
   }
 }

@@ -2683,6 +2683,101 @@ TEST(EditorApiTests, UvProjectionAvailabilitySharesAtomicTargetValidation) {
   expect_availability(false);
 }
 
+TEST(EditorApiTests, ComponentModeConversionIgnoresDormantMeshSelection) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto first = create_selected_box(editor, "Conversion First");
+  const auto second = create_selected_box(editor, "Conversion Second");
+  const auto selected_ids = [&](quader::QuaderModelingObjectRef object,
+                                bool vertices) {
+    std::vector<quader::QuaderElementId> ids;
+    const auto overlay = editor.query().selection_overlay();
+    for (const auto &point : overlay.points) {
+      if (vertices && point.layer == quader::QuaderOverlayLayer::SelectedVertex &&
+          point.element.object_id == object.modeling_object_id) {
+        ids.push_back(point.element.vertex_id);
+      }
+    }
+    for (const auto &triangle : overlay.triangles) {
+      if (!vertices && triangle.element.object_id == object.modeling_object_id &&
+          (triangle.layer == quader::QuaderOverlayLayer::SelectedVisibleFace ||
+           triangle.layer == quader::QuaderOverlayLayer::SelectedXrayFace)) {
+        ids.push_back(triangle.element.face_id);
+      }
+    }
+    std::sort(ids.begin(), ids.end());
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+    return ids;
+  };
+  ASSERT_TRUE(editor.selection().select_vertices(first, {1, 2, 3, 4}).ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  EXPECT_EQ(selected_ids(first, false), (std::vector<quader::QuaderElementId>{1}));
+  const auto selected_edges = [&] {
+    std::vector<std::pair<int, int>> edges;
+    for (const auto &line : editor.query().selection_overlay().lines) {
+      if (line.layer == quader::QuaderOverlayLayer::SelectedEdge &&
+          line.element.object_id == first.modeling_object_id) {
+        edges.emplace_back(std::min(line.element.edge_a, line.element.edge_b),
+                           std::max(line.element.edge_a, line.element.edge_b));
+      }
+    }
+    std::sort(edges.begin(), edges.end());
+    edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+    return edges;
+  };
+  for (const auto mode : {quader::QuaderSelectionMode::Vertex,
+                         quader::QuaderSelectionMode::Edge,
+                         quader::QuaderSelectionMode::Face,
+                         quader::QuaderSelectionMode::Edge,
+                         quader::QuaderSelectionMode::Vertex,
+                         quader::QuaderSelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    if (mode == quader::QuaderSelectionMode::Edge) {
+      EXPECT_EQ(selected_edges(),
+                (std::vector<std::pair<int, int>>{{1, 2}, {1, 4}, {2, 3}, {3, 4}}));
+    } else {
+      EXPECT_EQ(selected_ids(first, mode == quader::QuaderSelectionMode::Vertex),
+          mode == quader::QuaderSelectionMode::Vertex
+              ? (std::vector<quader::QuaderElementId>{1, 2, 3, 4})
+              : (std::vector<quader::QuaderElementId>{1}));
+    }
+  }
+  ASSERT_TRUE(editor.selection().select_vertices(first, {1, 2, 3}).ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  EXPECT_TRUE(selected_ids(first, false).empty());
+  ASSERT_TRUE(editor.selection().select_vertices(first, {1, 2}).ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  EXPECT_EQ(selected_edges(), (std::vector<std::pair<int, int>>{{1, 2}}));
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  EXPECT_TRUE(selected_ids(first, false).empty());
+  ASSERT_TRUE(editor.selection().select_face(second, 1).ok());
+  ASSERT_TRUE(editor.selection().select_face(first, 1).ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
+  ASSERT_TRUE(editor.selection().select_vertex(second, 5,
+      quader::QuaderSelectionEdit::Add).ok());
+  EXPECT_EQ(selected_ids(first, true),
+            (std::vector<quader::QuaderElementId>{1, 2, 3, 4}));
+  EXPECT_EQ(selected_ids(second, true), (std::vector<quader::QuaderElementId>{5}));
+  EXPECT_EQ(editor.selection().summary().selected_vertex_count, 5u);
+  ASSERT_TRUE(editor.selection().select_face(first, 1).ok());
+  ASSERT_TRUE(editor.selection().select_face(second, 1,
+      quader::QuaderSelectionEdit::Add).ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
+  EXPECT_EQ(selected_ids(second, true),
+            (std::vector<quader::QuaderElementId>{1, 2, 3, 4}));
+  EXPECT_EQ(editor.selection().summary().selected_vertex_count, 8u);
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  EXPECT_EQ(selected_ids(first, false), (std::vector<quader::QuaderElementId>{1}));
+  EXPECT_EQ(selected_ids(second, false), (std::vector<quader::QuaderElementId>{1}));
+  const auto before = editor.selection().summary();
+  const auto unchanged = editor.selection().set_mode(quader::QuaderSelectionMode::Face);
+  ASSERT_TRUE(unchanged.ok());
+  EXPECT_FALSE(unchanged.changed());
+  EXPECT_EQ(editor.selection().summary().selection_revision, before.selection_revision);
+  EXPECT_EQ(editor.selection().summary().content_revision, before.content_revision);
+}
+
 TEST(EditorApiTests,
      TextureScaleCommandEndpointsPreserveRevisionsAndUndoRedoForBothAxes) {
   CommandTestHarness harness;

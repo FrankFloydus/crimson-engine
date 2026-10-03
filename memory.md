@@ -484,6 +484,17 @@ Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
 - Inversion is XOR over the host-resolved eligible universe. Excluded components keep their state,
   an empty universe is an exact no-op, and emptied participants remain enrolled for a second inverse.
   Preserve scene-only selection companions and valid explicit active components.
+- Component selections remain document-local across explicit object scope changes so deliberate
+  object re-enrollment can recover their snapshots. A fresh component Add clears dormant payload
+  before converting a mesh outside the current selected scope. Component mode conversion keeps
+  current SDK participants when a scene-only companion owns the primary selection; avoid an
+  Object presynchronization outside the conversion checkpoint. Failed conversion must skip
+  successful scene reconciliation so exact rollback retains mode, primary selection and selection
+  revisions. Owners:
+  [SDK projection adapter](src/editor/modeling/services/modeling_sdk_projection_adapter.cpp) and
+  [modeling session service](src/editor/modeling/services/modeling_session_service.cpp). Coverage:
+  [component conversion](tests/editor_api_tests.cpp) and
+  [publication rollback](tests/modeling_session_service_split_tests.cpp).
 - Coplanar selection builds rebased face planes and affine comparisons in double precision, with
   distance and angular roundoff derived from float-authored geometry. Double epsilon applied to
   float normals silently discarded tilted seeds. Compare anchored distances so world translation
