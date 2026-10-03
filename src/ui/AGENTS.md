@@ -37,9 +37,14 @@ file except through prior written authorization from Francesco Di Blasi.
   `QtAssetThumbnailCache` bounds queued requests and retains generation/revision/DPI fences.
   Ctrl+wheel within a focused browser adjusts its existing thumbnail-size setting;
   ordinary wheel scrolling and input outside that browser retain their ownership.
-  Reveal reuses retained rows and defers one owner discovery until the current exposure's
-  first item-view paint. Closing before that paint abandons pending discovery; unchanged
-  frames never repeat it. Retain no filesystem-watch handles that block folder replacement.
+  Project-workspace publication primes retained rows before first reveal. Each exposure defers one
+  passive `QuaderProjectAssetsApi::assets_if_changed()` call until its first item-view paint.
+  [ProjectAssetService](../editor/assets/project_asset_service.cpp) compares path/kind/size/mtime
+  hints: unchanged data must neither parse QDR/QMAT content nor invalidate texture caches. Changed
+  or unavailable hints fall back to authoritative discovery and validation; `assets(true)` retains
+  force-refresh behavior. Closing before paint abandons the pending check; unchanged frames never
+  repeat it. Retain no filesystem-watch handles that block folder replacement. Protect this with
+  the [retained-reveal regression](../../tests/qt_project_workspace_tests.cpp).
   Composed viewport layout keeps the main window's existing update state; do not globally disable
   and re-enable updates around browser visibility. Coalesce viewport resize painting until the
   final layout so the next common composition uses the matching pane projection. The native-child

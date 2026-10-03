@@ -3616,7 +3616,7 @@ TEST(BuildGuardrailTests, QtFrameRefreshKeepsExpensiveChromeEventDriven) {
   const auto asset_discovery_gate = browser_refresh.find(
       "const bool refresh_files = force || reveal_ready");
   const auto asset_gate = browser_refresh.find("if (changed)");
-  const auto asset_snapshot = browser_refresh.find("asset_browser_snapshot(refresh_files)");
+  const auto asset_snapshot = browser_refresh.find("asset_browser_snapshot(");
   ASSERT_NE(asset_revision, std::string::npos);
   ASSERT_NE(asset_first_paint, std::string::npos);
   ASSERT_NE(asset_discovery_gate, std::string::npos);

@@ -50,6 +50,7 @@ struct ProjectAssetOperationResult final {
 struct ProjectAssetDiscoveryWorkStats final {
   std::uint64_t scans = 0u;
   std::uint64_t inspected_entries = 0u;
+  std::uint64_t metadata_checks = 0u;
 };
 
 /// Owns mixed project folder discovery and transactional organization.
@@ -60,6 +61,8 @@ public:
   /// A retained read: physical IO occurs only after invalidation or refresh.
   [[nodiscard]] const ProjectIoResult<ProjectAssetSnapshot> &snapshot() const;
   [[nodiscard]] const ProjectIoResult<ProjectAssetSnapshot> &refresh() const;
+  /// Discovers external changes without reparsing unchanged files or images.
+  [[nodiscard]] const ProjectIoResult<ProjectAssetSnapshot> &refresh_if_changed() const;
   /// Freshly validates only selected roots and their descendants for deletion.
   [[nodiscard]] ProjectIoResult<ProjectAssetSnapshot>
   inspect(std::span<const ProjectRelativePath> roots) const;
@@ -99,6 +102,18 @@ public:
 
 private:
   friend class ProjectAssetDeletionService;
+  friend class ProjectSession;
+  /// Metadata hints fence passive discovery; explicit refresh still reads bytes.
+  struct SourceStamp final {
+    std::uint64_t entries = 0u;
+    std::uint64_t folders = 0u;
+    std::uint64_t materials = 0u;
+    std::uint64_t textures = 0u;
+    friend bool operator==(const SourceStamp &, const SourceStamp &) = default;
+  };
+  [[nodiscard]] std::optional<SourceStamp> inspect_source_stamp() const;
+  /// Certifies only a catalog scan whose surrounding metadata stayed stable.
+  void retain_refreshed_catalog_stamp(std::optional<SourceStamp> before) const;
   [[nodiscard]] ProjectIoResult<ProjectAssetSnapshot>
   scan(std::span<const ProjectRelativePath> roots = {}) const;
   [[nodiscard]] ProjectIoResult<ProjectAssetSnapshot> preflight(
@@ -116,6 +131,10 @@ private:
   mutable ProjectId cached_project_;
   mutable std::uint64_t cached_material_revision_ = 0u;
   mutable std::uint64_t cached_project_generation_ = 0u;
+  mutable std::optional<SourceStamp> cached_source_stamp_;
+  mutable std::optional<SourceStamp> verified_source_stamp_;
+  mutable ProjectId verified_project_;
+  mutable std::uint64_t verified_project_generation_ = 0u;
   mutable ProjectAssetDiscoveryWorkStats work_;
 };
 

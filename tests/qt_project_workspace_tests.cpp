@@ -6636,6 +6636,10 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
   const QString empty_scene = qEnvironmentVariable(
       "QUADER_NATIVE_BROWSER_APP_EMPTY", QStringLiteral("0"));
   ASSERT_TRUE(empty_scene == QStringLiteral("0") || empty_scene == QStringLiteral("1"));
+  const QString project_source = qEnvironmentVariable("QUADER_NATIVE_BROWSER_APP_PROJECT");
+  const QString settings_source = qEnvironmentVariable("QUADER_NATIVE_BROWSER_APP_SETTINGS_SOURCE");
+  ASSERT_FALSE(!project_source.isEmpty() && empty_scene == QStringLiteral("1"))
+      << "A copied project cannot use the generated empty-scene fixture";
   const QString close_origin = qEnvironmentVariable(
       "QUADER_NATIVE_BROWSER_APP_CLOSE_ORIGIN", QStringLiteral("viewport"));
   ASSERT_TRUE(close_origin == QStringLiteral("viewport") ||
@@ -6656,7 +6660,8 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
   ASSERT_TRUE(phase_toggles_valid && (phase_toggles == 0 || phase_toggles == 24));
   ASSERT_FALSE(manual_seconds > 0 && (phase_toggles > 0 || composition_smoke));
   ASSERT_FALSE(phase_toggles > 0 && composition_smoke);
-  ASSERT_FALSE(composition_smoke && empty_scene == QStringLiteral("1"))
+  ASSERT_FALSE(composition_smoke &&
+      (empty_scene == QStringLiteral("1") || !project_source.isEmpty()))
       << "Composition smoke requires the selected box fixture";
   const auto profile = std::filesystem::temp_directory_path() /
       ("quader-browser-app-" + std::to_string(
@@ -6688,12 +6693,22 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
   application.setQuitOnLastWindowClosed(false);
   application.setApplicationName(QStringLiteral("Quader"));
   application.setOrganizationName(QStringLiteral("Quader"));
+  const auto screens = QGuiApplication::screens();
+  for (qsizetype index = 0; index < screens.size(); ++index) {
+    const auto *screen = screens[index];
+    const QRect geometry = screen->geometry();
+    std::cout << "APP_BROWSER_SCREEN index=" << index
+              << " name=" << screen->name().toStdString()
+              << " geometry=" << geometry.x() << ',' << geometry.y() << ','
+              << geometry.width() << 'x' << geometry.height()
+              << " dpr=" << screen->devicePixelRatio()
+              << " refresh=" << screen->refreshRate() << std::endl;
+  }
   QScreen *requested_screen = nullptr;
   if (qEnvironmentVariableIsSet("QUADER_NATIVE_BROWSER_APP_SCREEN")) {
     bool screen_valid = false;
     const int screen_index = qEnvironmentVariable("QUADER_NATIVE_BROWSER_APP_SCREEN")
                                  .toInt(&screen_valid);
-    const auto screens = QGuiApplication::screens();
     ASSERT_TRUE(screen_valid && screen_index >= 0 && screen_index < screens.size())
         << "QUADER_NATIVE_BROWSER_APP_SCREEN must identify an available screen";
     requested_screen = screens[screen_index];
@@ -6710,36 +6725,142 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
   const auto executable = std::filesystem::path(
       QCoreApplication::applicationFilePath().toStdWString());
   const auto resources = executable.parent_path();
-  const auto root = profile / "Observed Project";
+  const auto root = profile / (project_source.isEmpty()
+      ? std::filesystem::path("Observed Project")
+      : std::filesystem::path(project_source.toStdWString()).stem());
   ASSERT_TRUE(std::filesystem::create_directory(root));
+  // Only ordinary files/directories may enter the isolated writable fixture.
+  const auto is_plain_path = [](const std::filesystem::path &path) {
+    std::error_code error;
+    const auto status = std::filesystem::symlink_status(path, error);
+    if (error || std::filesystem::is_symlink(status) ||
+        (!std::filesystem::is_directory(status) &&
+         !std::filesystem::is_regular_file(status))) {
+      return false;
+    }
+#if defined(_WIN32)
+    const DWORD attributes = GetFileAttributesW(path.c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES &&
+        (attributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0;
+#else
+    return true;
+#endif
+  };
+  std::filesystem::path copied_manifest;
+  if (!project_source.isEmpty()) {
+    const std::filesystem::path source_manifest(project_source.toStdWString());
+    ASSERT_TRUE(source_manifest.is_absolute());
+    ASSERT_TRUE(is_plain_path(source_manifest));
+    ASSERT_TRUE(std::filesystem::is_regular_file(source_manifest));
+    ASSERT_EQ(source_manifest.extension(), std::filesystem::path(".qproj"));
+    ASSERT_TRUE(is_plain_path(source_manifest.parent_path()));
+    const auto source_root = std::filesystem::canonical(source_manifest.parent_path());
+    const auto target_root = std::filesystem::canonical(root);
+    // Native equivalence also catches Windows case differences and path aliases.
+    for (auto ancestor = target_root;; ancestor = ancestor.parent_path()) {
+      ASSERT_FALSE(std::filesystem::equivalent(ancestor, source_root))
+          << "The fixture destination must be outside the source project";
+      if (ancestor == ancestor.parent_path()) break;
+    }
+    std::vector<std::filesystem::path> source_entries;
+    for (const auto &entry : std::filesystem::recursive_directory_iterator(source_root)) {
+      ASSERT_TRUE(is_plain_path(entry.path()))
+          << "Project copies reject links/reparse points: " << entry.path().string();
+      source_entries.push_back(entry.path());
+    }
+    std::uintmax_t copied_bytes = 0;
+    std::size_t copied_files = 0;
+    for (const auto &source : source_entries) {
+      ASSERT_TRUE(is_plain_path(source));
+      const auto destination = target_root / source.lexically_relative(source_root);
+      if (std::filesystem::is_directory(source)) {
+        (void)std::filesystem::create_directories(destination);
+      } else {
+        (void)std::filesystem::create_directories(destination.parent_path());
+        ASSERT_TRUE(std::filesystem::copy_file(source, destination));
+        copied_bytes += std::filesystem::file_size(destination);
+        ++copied_files;
+      }
+    }
+    copied_manifest = target_root / source_manifest.filename();
+    ASSERT_TRUE(std::filesystem::is_regular_file(copied_manifest));
+    std::cout << "APP_BROWSER_PROJECT_COPY source=" << source_manifest.string()
+              << " destination=" << copied_manifest.string()
+              << " files=" << copied_files << " bytes=" << copied_bytes << std::endl;
+  }
   {
     quader::ProjectSession project;
     project.set_resource_root(resources);
     quader::QuaderEditorApi editor(project);
-    ASSERT_TRUE(editor.project().create(root).ok());
-    ASSERT_TRUE(editor.viewports().set_layout(quader::ViewportLayoutId::Single).ok());
-    ASSERT_TRUE(editor.viewports().set_shading_mode(
-        quader::ViewportPaneId::Perspective, quader::QuaderShadingMode::Shaded).ok());
-    if (empty_scene == QStringLiteral("0")) {
-      const auto box = editor.modeling().create_box(
-          {.min = {-2, -1, -3}, .max = {2, 3, 1}}, "Observed box");
-      ASSERT_TRUE(box.ok()) << box.error_message();
-      ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+    if (!copied_manifest.empty()) {
+      const auto opened = editor.project().open(copied_manifest);
+      ASSERT_TRUE(opened.ok()) << opened.error_message();
+      EXPECT_TRUE(std::filesystem::equivalent(editor.project().manifest_path(), copied_manifest));
+      const auto active_scene = editor.scene_documents().active_scene();
+      ASSERT_TRUE(active_scene.has_value());
+      std::cout << "APP_BROWSER_PROJECT_OPEN active_scene="
+                << (active_scene->path.has_value()
+                    ? active_scene->path->portable_string() : active_scene->name)
+                << " open_scenes=" << editor.scene_documents().open_scenes().size()
+                << " entities=" << editor.query().entities().size() << std::endl;
+    } else {
+      ASSERT_TRUE(editor.project().create(root).ok());
+      ASSERT_TRUE(editor.viewports().set_layout(quader::ViewportLayoutId::Single).ok());
+      ASSERT_TRUE(editor.viewports().set_shading_mode(
+          quader::ViewportPaneId::Perspective, quader::QuaderShadingMode::Shaded).ok());
+      if (empty_scene == QStringLiteral("0")) {
+        const auto box = editor.modeling().create_box(
+            {.min = {-2, -1, -3}, .max = {2, 3, 1}}, "Observed box");
+        ASSERT_TRUE(box.ok()) << box.error_message();
+        ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+      }
+      const auto scene_id = editor.scene_documents().active_scene_id();
+      ASSERT_TRUE(scene_id.has_value());
+      const auto path = quader::ProjectRelativePath::parse_portable("Observed.qdr");
+      ASSERT_TRUE(path.ok());
+      const auto saved = editor.scene_documents().save_as(*scene_id, path.value());
+      ASSERT_TRUE(saved.ok()) << saved.error_message();
     }
-    const auto scene_id = editor.scene_documents().active_scene_id();
-    ASSERT_TRUE(scene_id.has_value());
-    const auto path = quader::ProjectRelativePath::parse_portable("Observed.qdr");
-    ASSERT_TRUE(path.ok());
-    const auto saved = editor.scene_documents().save_as(*scene_id, path.value());
-    ASSERT_TRUE(saved.ok()) << saved.error_message();
   }
-  auto settings = quader::UISettings::defaults();
-  settings.set_interface_scale(1.0f);
+  const auto settings_paths = quader::UISettings::resolve_paths(resources);
+  if (!settings_source.isEmpty()) {
+    const std::filesystem::path source_directory(settings_source.toStdWString());
+    ASSERT_TRUE(source_directory.is_absolute());
+    ASSERT_TRUE(is_plain_path(source_directory));
+    ASSERT_TRUE(std::filesystem::is_directory(source_directory));
+    (void)std::filesystem::create_directories(settings_paths.directory);
+    constexpr std::array kCopiedSettingsFiles{
+        "ui_settings.ini", "viewport_settings.ini", "qt_window_state.bin",
+        "qt_auxiliary_windows.ini", "window_settings.ini"};
+    for (const auto *name : kCopiedSettingsFiles) {
+      const auto source = source_directory / name;
+      if (!std::filesystem::exists(source)) continue;
+      ASSERT_TRUE(is_plain_path(source));
+      ASSERT_TRUE(std::filesystem::is_regular_file(source));
+      ASSERT_TRUE(std::filesystem::copy_file(source, settings_paths.directory / name));
+      std::cout << "APP_BROWSER_SETTINGS_COPY file=" << name << std::endl;
+    }
+    std::cout << "APP_BROWSER_SETTINGS_SOURCE source=" << source_directory.string()
+              << " destination=" << settings_paths.directory.string() << std::endl;
+  }
+  auto settings = settings_source.isEmpty()
+      ? quader::UISettings::defaults() : quader::UISettings::load(settings_paths.settings_file);
+  if (settings_source.isEmpty()) settings.set_interface_scale(1.0f);
+  if (qEnvironmentVariableIsSet("QUADER_NATIVE_BROWSER_APP_SCALE")) {
+    bool scale_valid = false;
+    const float scale = qEnvironmentVariable("QUADER_NATIVE_BROWSER_APP_SCALE").toFloat(&scale_valid);
+    ASSERT_TRUE(scale_valid && scale >= quader::UISettings::kMinimumInterfaceScale &&
+        scale <= quader::UISettings::kMaximumInterfaceScale);
+    settings.set_interface_scale(scale);
+  }
   settings.set_panel_visible(quader::UIPanelId::AssetBrowser, false);
-  const auto vsync = qEnvironmentVariable("QUADER_NATIVE_BROWSER_VSYNC", QStringLiteral("1"));
+  const auto vsync = qEnvironmentVariable("QUADER_NATIVE_BROWSER_VSYNC",
+      settings.vsync_enabled() ? QStringLiteral("1") : QStringLiteral("0"));
   ASSERT_TRUE(vsync == QStringLiteral("0") || vsync == QStringLiteral("1"));
   settings.set_vsync_enabled(vsync == QStringLiteral("1"));
-  ASSERT_TRUE(settings.save(quader::UISettings::resolve_paths(resources).settings_file));
+  ASSERT_TRUE(settings.save(settings_paths.settings_file));
+  std::cout << "APP_BROWSER_SETTINGS scale=" << settings.interface_scale()
+            << " vsync=" << settings.vsync_enabled() << std::endl;
   quader::App app;
   ASSERT_TRUE(app.initialize(application, executable));
   QMainWindow *window = nullptr;
@@ -6856,17 +6977,27 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
     }
   });
   QTimer::singleShot(500, &application, [&] {
-    ASSERT_EQ(recent->model()->rowCount(), 1);
-    ASSERT_TRUE(QMetaObject::invokeMethod(recent, "activated", Qt::DirectConnection,
-        Q_ARG(QModelIndex, recent->model()->index(0, 0))));
+    // Settle the requested placement before workspace startup latches its
+    // native maximized/client-geometry requirements and suppresses painting.
     if (requested_screen != nullptr) {
+      window->showNormal();
       window->windowHandle()->setScreen(requested_screen);
       window->setGeometry(requested_screen->availableGeometry());
     }
     window->showMaximized();
     QApplication::setActiveWindow(window);
+    ASSERT_EQ(recent->model()->rowCount(), 1);
+    ASSERT_TRUE(QMetaObject::invokeMethod(recent, "activated", Qt::DirectConnection,
+        Q_ARG(QModelIndex, recent->model()->index(0, 0))));
+    auto *selected_screen = window->windowHandle()->screen();
+    std::cout << "APP_BROWSER_SELECTED_SCREEN name="
+              << (selected_screen != nullptr ? selected_screen->name().toStdString() : "none")
+              << " index=" << screens.indexOf(selected_screen)
+              << " dpr=" << (selected_screen != nullptr ? selected_screen->devicePixelRatio() : 0.0)
+              << " refresh=" << (selected_screen != nullptr ? selected_screen->refreshRate() : 0.0)
+              << std::endl;
   });
-  if (empty_scene == QStringLiteral("0")) {
+  if (project_source.isEmpty() && empty_scene == QStringLiteral("0")) {
     QTimer::singleShot(2000, &application, [&] {
       auto *tree = window->findChild<QTreeView *>(QStringLiteral("outliner.tree"));
       ASSERT_NE(tree, nullptr);
@@ -8367,6 +8498,7 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRetainsRevealsAndDiscoversHiddenDirect
       application.processEvents();
     }
     const auto before_reveal_work = project.project_assets().work_stats();
+    const auto before_reveal_textures = project.material_texture_revision();
     QElapsedTimer retained_timer;
     retained_timer.start();
     ASSERT_TRUE(editor.ui().show_panel("asset_browser").ok());
@@ -8381,8 +8513,11 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRetainsRevealsAndDiscoversHiddenDirect
     ui.refresh({}, {});
     EXPECT_EQ(project.project_assets().work_stats().scans, before_reveal_work.scans);
     ASSERT_TRUE(settle_until([&] {
-      return project.project_assets().work_stats().scans == before_reveal_work.scans + 1u;
+      return project.project_assets().work_stats().metadata_checks ==
+          before_reveal_work.metadata_checks + 1u;
     }));
+    EXPECT_EQ(project.project_assets().work_stats().scans, before_reveal_work.scans);
+    EXPECT_EQ(project.material_texture_revision(), before_reveal_textures);
     const auto retained_work = project.project_assets().work_stats();
     for (int frame = 0; frame < 8; ++frame) {
       application.processEvents();
@@ -8390,6 +8525,7 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRetainsRevealsAndDiscoversHiddenDirect
     }
     EXPECT_EQ(project.project_assets().work_stats().scans, retained_work.scans);
     EXPECT_EQ(project.project_assets().work_stats().inspected_entries, retained_work.inspected_entries);
+    EXPECT_EQ(project.project_assets().work_stats().metadata_checks, retained_work.metadata_checks);
   }
   ASSERT_TRUE(editor.ui().hide_panel("asset_browser").ok());
   application.processEvents();
@@ -8402,10 +8538,13 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRetainsRevealsAndDiscoversHiddenDirect
     ui.refresh({}, {});
   }
   EXPECT_EQ(project.project_assets().work_stats().scans, quick_toggle_work.scans);
+  EXPECT_EQ(project.project_assets().work_stats().metadata_checks, quick_toggle_work.metadata_checks);
   ASSERT_TRUE(editor.ui().show_panel("asset_browser").ok());
   ASSERT_TRUE(settle_until([&] {
-    return project.project_assets().work_stats().scans == quick_toggle_work.scans + 1u;
+    return project.project_assets().work_stats().metadata_checks ==
+        quick_toggle_work.metadata_checks + 1u;
   }));
+  EXPECT_EQ(project.project_assets().work_stats().scans, quick_toggle_work.scans);
   ASSERT_TRUE(editor.project_assets().create_folder("", "Authored").ok());
   const auto authored_work = project.project_assets().work_stats();
   for (int frame = 0; frame < 8; ++frame) {

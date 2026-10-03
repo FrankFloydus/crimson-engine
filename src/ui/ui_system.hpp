@@ -255,7 +255,8 @@ private:
   void refresh_asset_browser(bool force = false, bool prepare_reveal = false);
   void refresh_asset_thumbnails();
   void retain_visible_asset_thumbnails();
-  [[nodiscard]] QtAssetBrowserSnapshot asset_browser_snapshot(bool refresh_files);
+  [[nodiscard]] QtAssetBrowserSnapshot asset_browser_snapshot(
+      bool refresh_files, bool passive_refresh = false);
   void handle_asset_browser_action(QtAssetBrowserActionRequest request);
   void show_asset_texture_info(ProjectAssetId texture_id, bool activate = true);
   void select_project_material_texture(QtStandardMaterialTextureSlot slot);

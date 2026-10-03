@@ -70,6 +70,20 @@ TEST(ProjectAssetLatencyTests, ClonedProjectOperations) {
     auto &assets = project.project_assets();
     ASSERT_TRUE(measured("browse", [&] { return assets.snapshot(); }).ok());
     ASSERT_TRUE(measured("cached_browse", [&] { return assets.snapshot(); }).ok());
+    QuaderEditorApi browser_editor(project);
+    ASSERT_TRUE(measured("forced_reveal", [&] {
+      return browser_editor.project_assets().assets(true);
+    }).ok());
+    const auto retained_work = assets.work_stats();
+    const auto texture_revision = project.material_texture_revision();
+    for (int reveal = 0; reveal < 5; ++reveal) {
+      ASSERT_TRUE(measured("unchanged_reveal", [&] {
+        return browser_editor.project_assets().assets_if_changed();
+      }).ok());
+    }
+    EXPECT_EQ(assets.work_stats().scans, retained_work.scans);
+    EXPECT_EQ(assets.work_stats().metadata_checks, retained_work.metadata_checks + 5u);
+    EXPECT_EQ(project.material_texture_revision(), texture_revision);
     const auto folder = measured("create_folder", [&] {
       return assets.create_folder({}, "LatencyTarget");
     });
@@ -394,6 +408,195 @@ TEST_F(ProjectAssetServiceTests, SceneAndFolderOrganizationRetainsMaterialImages
   ASSERT_TRUE(assets().rename(path("Target"), "Renamed").ok);
   EXPECT_EQ(project_.material_texture_revision(), revision);
   EXPECT_EQ(project_.material_texture_image(material, StandardMaterialTextureSlot::Albedo), image);
+}
+
+TEST_F(ProjectAssetServiceTests, PassiveRefreshRetainsCatalogAndDecodedImages) {
+  QuaderEditorApi editor(project_);
+  const auto baseline = editor.project_assets().assets_if_changed();
+  ASSERT_TRUE(baseline.ok()) << baseline.error_message();
+  const auto material = *ProjectAssetId::parse(kDefaultProjectMaterialId);
+  const auto image = project_.material_texture_image(material, StandardMaterialTextureSlot::Albedo);
+  ASSERT_NE(image, nullptr);
+  const auto texture_revision = project_.material_texture_revision();
+  const auto work = assets().work_stats();
+  for (int reveal = 0; reveal < 8; ++reveal) {
+    const auto refreshed = editor.project_assets().assets_if_changed();
+    ASSERT_TRUE(refreshed.ok()) << refreshed.error_message();
+    EXPECT_EQ(refreshed.value().revision, baseline.value().revision);
+    EXPECT_EQ(refreshed.value().project_generation, baseline.value().project_generation);
+    EXPECT_EQ(refreshed.value().assets.size(), baseline.value().assets.size());
+  }
+  EXPECT_EQ(assets().work_stats().scans, work.scans);
+  EXPECT_EQ(assets().work_stats().inspected_entries, work.inspected_entries);
+  EXPECT_EQ(assets().work_stats().metadata_checks, work.metadata_checks + 8u);
+  EXPECT_EQ(project_.material_texture_revision(), texture_revision);
+  EXPECT_EQ(project_.material_texture_image(material, StandardMaterialTextureSlot::Albedo), image);
+  ASSERT_TRUE(assets().create_folder({}, "Authored").ok);
+  const auto authored_work = assets().work_stats();
+  ASSERT_TRUE(editor.project_assets().assets_if_changed().ok());
+  EXPECT_EQ(assets().work_stats().scans, authored_work.scans);
+  EXPECT_EQ(project_.material_texture_revision(), texture_revision);
+}
+
+TEST_F(ProjectAssetServiceTests, PassiveDiscoveryTracksExternalFoldersAndScenesWithoutReloadingImages) {
+  const auto scene = assets().create_scene({}, "Original");
+  ASSERT_TRUE(scene.ok) << scene.message;
+  ASSERT_TRUE(assets().refresh_if_changed().ok());
+  const auto material = *ProjectAssetId::parse(kDefaultProjectMaterialId);
+  const auto image = project_.material_texture_image(material, StandardMaterialTextureSlot::Albedo);
+  ASSERT_NE(image, nullptr);
+  const auto texture_revision = project_.material_texture_revision();
+  const auto original = root() / scene.paths.front().native_path();
+  ASSERT_TRUE(std::filesystem::create_directories(root() / "External/Deep"));
+  ASSERT_TRUE(std::filesystem::copy_file(original, root() / "External/Deep/Copy.qdr"));
+  const auto contains = [&](std::string_view relative) {
+    const auto &current = assets().refresh_if_changed();
+    EXPECT_TRUE(current.ok()) << current.error().message;
+    return current.ok() && std::ranges::any_of(current.value().entries, [&](const auto &entry) {
+      return entry.path.portable_string() == relative;
+    });
+  };
+  EXPECT_TRUE(contains("External/Deep/Copy.qdr"));
+  std::filesystem::rename(root() / "External", root() / "Moved");
+  EXPECT_TRUE(contains("Moved/Deep/Copy.qdr"));
+  EXPECT_FALSE(contains("External/Deep/Copy.qdr"));
+  ASSERT_TRUE(std::filesystem::create_directories(root() / "External/Deep"));
+  ASSERT_TRUE(std::filesystem::copy_file(original, root() / "External/Deep/Replacement.qdr"));
+  EXPECT_TRUE(contains("External/Deep/Replacement.qdr"));
+  ASSERT_TRUE(std::filesystem::remove(root() / "External/Deep/Replacement.qdr"));
+  EXPECT_FALSE(contains("External/Deep/Replacement.qdr"));
+  EXPECT_EQ(project_.material_texture_revision(), texture_revision);
+  EXPECT_EQ(project_.material_texture_image(material, StandardMaterialTextureSlot::Albedo), image);
+}
+
+TEST_F(ProjectAssetServiceTests, PassiveDiscoveryTracksMaterialChangesAndExplicitRefreshReadsBytes) {
+  const auto created = assets().create_material({}, "Paint1");
+  ASSERT_TRUE(created.ok) << created.message;
+  ASSERT_TRUE(assets().snapshot().ok());
+  const auto relative = created.paths.front();
+  const auto absolute = root() / relative.native_path();
+  const auto read = QmatCodec::read(project_.workspace()->file_system, relative);
+  ASSERT_TRUE(read.ok()) << read.error().message;
+  auto document = read.value().material;
+  const auto texture_revision = project_.material_texture_revision();
+  document.name = "Changed Paint";
+  ASSERT_TRUE(QmatCodec::write_atomic(project_.workspace()->file_system, relative, document).ok());
+  ASSERT_TRUE(assets().refresh_if_changed().ok());
+  ASSERT_NE(project_.material_catalog().find(document.id), nullptr);
+  EXPECT_EQ(project_.material_catalog().find(document.id)->material.name, "Changed Paint");
+  EXPECT_GT(project_.material_texture_revision(), texture_revision);
+  const auto retained_revision = project_.material_texture_revision();
+  const auto retained_work = assets().work_stats();
+  ASSERT_TRUE(assets().refresh_if_changed().ok());
+  EXPECT_EQ(assets().work_stats().scans, retained_work.scans);
+  EXPECT_EQ(project_.material_texture_revision(), retained_revision);
+
+  // File metadata is a passive cache hint. An explicit refresh must still
+  // notice an equal-length edit whose modification time was restored.
+  const auto modified = std::filesystem::last_write_time(absolute);
+  const auto byte_count = std::filesystem::file_size(absolute);
+  document.name = "Changed Other";
+  ASSERT_TRUE(QmatCodec::write_atomic(project_.workspace()->file_system, relative, document).ok());
+  ASSERT_EQ(std::filesystem::file_size(absolute), byte_count);
+  std::filesystem::last_write_time(absolute, modified);
+  QuaderEditorApi editor(project_);
+  const auto forced = editor.project_assets().assets(true);
+  ASSERT_TRUE(forced.ok()) << forced.error_message();
+  EXPECT_EQ(project_.material_catalog().find(document.id)->material.name, "Changed Other");
+  EXPECT_GT(project_.material_texture_revision(), retained_revision);
+  const auto forced_work = assets().work_stats();
+  ASSERT_TRUE(editor.project_assets().assets_if_changed().ok());
+  EXPECT_EQ(assets().work_stats().scans, forced_work.scans);
+}
+
+TEST_F(ProjectAssetServiceTests, PassiveDiscoveryTracksTextureEditsAndRepairsMissingImages) {
+  ASSERT_TRUE(assets().refresh_if_changed().ok());
+  const auto material = *ProjectAssetId::parse(kDefaultProjectMaterialId);
+  const auto image = project_.material_texture_image(material, StandardMaterialTextureSlot::Albedo);
+  ASSERT_NE(image, nullptr);
+  const auto absolute = root() / path(image->project_relative_path).native_path();
+  const auto texture_revision = project_.material_texture_revision();
+  {
+    std::ofstream output(absolute, std::ios::binary | std::ios::app);
+    ASSERT_TRUE(output.good());
+    output.put('\0');
+  }
+  assets().invalidate();
+  ASSERT_TRUE(assets().snapshot().ok());
+  EXPECT_EQ(project_.material_texture_image(material, StandardMaterialTextureSlot::Albedo), image);
+  ASSERT_TRUE(assets().refresh_if_changed().ok());
+  const auto changed = project_.material_texture_image(material, StandardMaterialTextureSlot::Albedo);
+  ASSERT_NE(changed, nullptr);
+  EXPECT_NE(changed->content_revision, image->content_revision);
+  EXPECT_GT(project_.material_texture_revision(), texture_revision);
+  {
+    std::ofstream output(absolute, std::ios::binary | std::ios::app);
+    ASSERT_TRUE(output.good());
+    output.put('\1');
+  }
+  ASSERT_TRUE(assets().create_folder({}, "Unrelated").ok);
+  EXPECT_EQ(project_.material_texture_image(material, StandardMaterialTextureSlot::Albedo), changed);
+  ASSERT_TRUE(assets().refresh_if_changed().ok());
+  EXPECT_NE(project_.material_texture_image(material, StandardMaterialTextureSlot::Albedo)->content_revision,
+            changed->content_revision);
+  ASSERT_TRUE(std::filesystem::remove(absolute));
+  ASSERT_TRUE(assets().refresh_if_changed().ok());
+  EXPECT_EQ(project_.material_texture_image(material, StandardMaterialTextureSlot::Albedo), nullptr);
+  ASSERT_TRUE(std::filesystem::copy_file(image_source(), absolute));
+  ASSERT_TRUE(assets().refresh_if_changed().ok());
+  EXPECT_NE(project_.material_texture_image(material, StandardMaterialTextureSlot::Albedo), nullptr);
+}
+
+TEST_F(ProjectAssetServiceTests, PassiveDiscoveryRefreshesUninstalledFilesSeenByRetainedRead) {
+  const auto created = assets().create_material({}, "Before");
+  ASSERT_TRUE(created.ok) << created.message;
+  const auto relative = created.paths.front();
+  const auto read = QmatCodec::read(project_.workspace()->file_system, relative);
+  ASSERT_TRUE(read.ok());
+  auto document = read.value().material;
+  document.name = "External change";
+  ASSERT_TRUE(QmatCodec::write_atomic(project_.workspace()->file_system, relative, document).ok());
+  assets().invalidate();
+  ASSERT_TRUE(assets().snapshot().ok());
+  EXPECT_EQ(project_.material_catalog().find(document.id)->material.name, "Before");
+  ASSERT_TRUE(assets().refresh_if_changed().ok());
+  EXPECT_EQ(project_.material_catalog().find(document.id)->material.name, "External change");
+}
+
+TEST_F(ProjectAssetServiceTests, PassiveDiscoveryDoesNotReuseFailedOrReplacedProjectHints) {
+  ASSERT_TRUE(assets().create_folder({}, "OnlyFirstProject").ok);
+  const auto original = assets().snapshot();
+  ASSERT_TRUE(original.ok());
+  const auto unavailable = temporary_ / "TemporarilyUnavailable";
+  std::filesystem::rename(root(), unavailable);
+  EXPECT_FALSE(assets().refresh_if_changed().ok());
+  std::filesystem::rename(unavailable, root());
+  ASSERT_TRUE(assets().refresh_if_changed().ok());
+  ASSERT_TRUE(project_.close(true).ok);
+  const auto replacement = temporary_ / "Replacement";
+  ASSERT_TRUE(std::filesystem::create_directory(replacement));
+  ASSERT_TRUE(project_.create(replacement).ok);
+  const auto refreshed = assets().refresh_if_changed();
+  ASSERT_TRUE(refreshed.ok()) << refreshed.error().message;
+  EXPECT_NE(refreshed.value().project_id, original.value().project_id);
+  EXPECT_FALSE(std::ranges::any_of(refreshed.value().entries, [](const auto &entry) {
+    return entry.path.portable_string() == "OnlyFirstProject";
+  }));
+}
+
+TEST_F(ProjectAssetServiceTests, PassiveDiscoveryValidatesExternallyReplacedFolderAliases) {
+  ASSERT_TRUE(assets().create_folder({}, "External").ok);
+  ASSERT_TRUE(assets().snapshot().ok());
+  const auto outside = temporary_ / "Outside";
+  ASSERT_TRUE(std::filesystem::create_directory(outside));
+  ASSERT_TRUE(std::filesystem::remove(root() / "External"));
+  std::error_code error;
+  std::filesystem::create_directory_symlink(outside, root() / "External", error);
+  if (error) {
+    GTEST_SKIP() << "Directory symlink creation is unavailable: " << error.message();
+  }
+  EXPECT_FALSE(assets().refresh_if_changed().ok());
+  EXPECT_TRUE(std::filesystem::is_directory(outside));
 }
 
 TEST_F(ProjectAssetServiceTests, MixedMoveRetainsAssetsAlreadyAtDestination) {

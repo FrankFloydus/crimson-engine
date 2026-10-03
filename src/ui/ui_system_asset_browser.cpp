@@ -229,12 +229,15 @@ void UISystem::refresh_asset_browser_labels() {
   if (asset_browser_ != nullptr) asset_browser_->set_labels(asset_labels(localization_));
 }
 
-QtAssetBrowserSnapshot UISystem::asset_browser_snapshot(bool refresh_files) {
+QtAssetBrowserSnapshot UISystem::asset_browser_snapshot(
+    bool refresh_files, bool passive_refresh) {
   QtAssetBrowserSnapshot snapshot;
   if (editor_ == nullptr || !editor_->project().has_project()) {
     return snapshot;
   }
-  const auto catalog = editor_->project_assets().assets(refresh_files);
+  const auto catalog = passive_refresh
+      ? editor_->project_assets().assets_if_changed()
+      : editor_->project_assets().assets(refresh_files);
   if (!catalog.ok()) {
     present_status_result(catalog);
     return snapshot;
@@ -319,7 +322,10 @@ void UISystem::refresh_asset_browser(bool force, bool prepare_reveal) {
   if (changed) {
     // The pending reveal was consumed before discovery, including failed
     // attempts. Unchanged frames never repeat physical catalog work.
-    auto snapshot = asset_browser_snapshot(refresh_files);
+    const bool initialize_catalog = prepare_reveal &&
+        asset_browser_generation_ != revision.value().project_generation;
+    auto snapshot = asset_browser_snapshot(
+        refresh_files, !force && (reveal_ready || initialize_catalog));
     if (snapshot.generation == 0u) return;
     if (asset_browser_generation_ != snapshot.generation) {
       asset_clipboard_paths_.clear();

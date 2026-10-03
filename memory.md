@@ -90,8 +90,16 @@ Retention tests: [editor limits](tests/editor_history_limit_tests.cpp),
   Creation and organization publish incremental browser snapshots without rescanning unrelated assets.
   Retain unchanged thumbnail pixels and Qt row identities; folder-only changes must not invalidate
   material images. A mixed move retains roots already at the destination, and registering a scene
-  updates the identities of unchanged physical copies too. See
-  [asset service regressions](tests/project_asset_service_tests.cpp).
+  updates the identities of unchanged physical copies too. Prime retained rows during workspace
+  publication, before first reveal. After the first item-view paint, passive
+  `QuaderProjectAssetsApi::assets_if_changed()` checks path/kind/size/mtime hints in the asset owner;
+  unchanged hints preserve QDR/QMAT content and texture caches without a rescan. External creates,
+  deletes, renames and modifications that change the hint, or unavailable hints, return to
+  authoritative discovery/validation. Metadata is only a reuse hint; `assets(true)` still forces
+  refresh. Closing before paint abandons the check; unchanged frames do not repeat it. Keep no
+  filesystem-watch handles that prevent folder replacement. See
+  [asset service regressions](tests/project_asset_service_tests.cpp) and
+  [retained reveal and external replacement](tests/qt_project_workspace_tests.cpp).
 - Manifest v5 owns texture identities and legacy aliases. Legacy discovery remains in memory
   until an authored save. Slot color interpretation is separate from shared decoded pixels.
   Texture deletion clears saved and draft references separately, retaining unrelated draft edits.

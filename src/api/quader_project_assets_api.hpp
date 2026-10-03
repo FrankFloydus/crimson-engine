@@ -305,6 +305,9 @@ public:
   asset_revision() const;
   [[nodiscard]] QuaderApiResult<QuaderProjectAssetSnapshot>
   assets(bool refresh_files = false) const;
+  /// Discovers ordinary external changes while retaining unchanged asset content.
+  [[nodiscard]] QuaderApiResult<QuaderProjectAssetSnapshot>
+  assets_if_changed() const;
   [[nodiscard]] QuaderApiResult<QuaderProjectAssetInfo> create_scene_asset(
       std::string_view folder, std::string_view name = "New Scene");
   [[nodiscard]] QuaderApiResult<QuaderProjectAssetInfo> create_material_asset(

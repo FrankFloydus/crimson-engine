@@ -151,7 +151,8 @@ public:
   void publish_material_catalog(ProjectMaterialCatalog material_catalog,
                                 bool invalidate_texture_content = true);
   /// Refreshes disk-backed assets and decoded-image consumers without saving.
-  [[nodiscard]] ProjectSessionResult refresh_asset_catalog();
+  [[nodiscard]] ProjectSessionResult refresh_asset_catalog(
+      bool invalidate_texture_content = true);
 
   void set_resource_root(std::filesystem::path resource_root);
   // Applies the user policy to every resident scene and future scene sessions.

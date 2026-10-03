@@ -2012,6 +2012,9 @@ void ProjectSession::publish_material_catalog(ProjectMaterialCatalog material_ca
   material_catalog_ = std::move(material_catalog);
   if (invalidate_texture_content) invalidate_material_textures();
   if (project_asset_service_) project_asset_service_->invalidate();
+  if (project_asset_service_ && invalidate_texture_content) {
+    project_asset_service_->verified_source_stamp_.reset();
+  }
 }
 
 void ProjectSession::set_resource_root(
@@ -2116,10 +2119,18 @@ void ProjectSession::invalidate_material_textures() {
   }
 }
 
-ProjectSessionResult ProjectSession::refresh_asset_catalog() {
+ProjectSessionResult ProjectSession::refresh_asset_catalog(
+    bool invalidate_texture_content) {
   if (!workspace_) {
     return failure("Open a project before refreshing assets.");
   }
+  auto &assets = project_assets();
+  const auto before = assets.inspect_source_stamp();
+  // A passive observation may race a physical edit before these scans start.
+  // Preserve images only when the actual scan input still matches their proof.
+  invalidate_texture_content |= !before.has_value() || !assets.verified_source_stamp_.has_value() ||
+      before->materials != assets.verified_source_stamp_->materials ||
+      before->textures != assets.verified_source_stamp_->textures;
   auto scanned = ProjectMaterialCatalog::scan(
       workspace_->file_system, nullptr, &workspace_->manifest);
   if (!scanned.ok()) {
@@ -2141,10 +2152,11 @@ ProjectSessionResult ProjectSession::refresh_asset_catalog() {
     return failure(canonical.error().message);
   }
   // Discovery remains in memory until an authored operation persists metadata.
-  // Invalidate decoded bytes even when QMAT content did not change: explicit
-  // refresh also observes image edits and repairs cached missing-image failures.
+  // Explicit refresh also observes image edits and repairs missing-image
+  // failures. Passive folder discovery preserves unchanged image consumers.
   workspace_->manifest = std::move(candidate);
-  publish_material_catalog(canonical.take_value());
+  publish_material_catalog(canonical.take_value(), invalidate_texture_content);
+  assets.retain_refreshed_catalog_stamp(before);
   return success(true, "Project assets refreshed.");
 }
 

@@ -1881,7 +1881,8 @@ if(QUADER_BUILD_TESTS)
     target_compile_definitions(quader_tests
         PRIVATE
             QUADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-    target_link_libraries(quader_tests PRIVATE quader_runtime GTest::gtest quader_release_profile_full Qt6::GuiPrivate)
+    target_link_libraries(quader_tests PRIVATE quader_runtime GTest::gtest quader_release_profile_full)
+    target_link_libraries(quader_tests PRIVATE Qt6::GuiPrivate)
     target_link_libraries(quader_tests PRIVATE quader_bridge_reader)
     target_link_libraries(quader_tests PRIVATE quader_modeling_sdk_qdr_document)
     quader_deploy_test_runtime_dlls(quader_tests)

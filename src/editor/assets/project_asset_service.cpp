@@ -9,7 +9,9 @@
 #include "assets/default_material_catalog.hpp"
 #include "core/release_features.hpp"
 #include "editor/material/project_image_decoder.hpp"
+#include "editor/material/project_asset_dependency_service.hpp"
 #include "editor/material/project_material_persistence.hpp"
+#include "editor/material/project_material_usage_service.hpp"
 #include "editor/material/standard_material_edit_session_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "io/project/project_bridge_notifications.hpp"
@@ -34,6 +36,13 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace quader {
 namespace {
@@ -707,12 +716,162 @@ const ProjectIoResult<ProjectAssetSnapshot> &ProjectAssetService::snapshot() con
 }
 
 const ProjectIoResult<ProjectAssetSnapshot> &ProjectAssetService::refresh() const {
+  const auto before = inspect_source_stamp();
   cached_ = scan();
   cached_project_ = project_->manifest() == nullptr ? ProjectId{}
                                                    : project_->manifest()->id();
   cached_material_revision_ = project_->material_catalog().content_revision();
   cached_project_generation_ = project_->project_generation();
+  const auto after = cached_->ok() ? inspect_source_stamp() : std::nullopt;
+  // A retained browser read can observe external files before the material
+  // owner does. Such a read must not certify that owner's catalog as current.
+  const bool catalog_matches = cached_->ok() &&
+      std::ranges::all_of(cached_->value().entries, [&](const auto &entry) {
+        if (entry.kind == ProjectAssetKind::Material) {
+          const auto *material = project_->material_catalog().find(entry.asset_id);
+          return material != nullptr && material->path == entry.path &&
+              material->content_revision == entry.content_revision;
+        }
+        if (entry.kind == ProjectAssetKind::Texture) {
+          return project_->manifest()->find_texture(entry.path) != nullptr;
+        }
+        if (entry.kind == ProjectAssetKind::Folder) {
+          return std::ranges::find(project_->material_catalog().folders(), entry.path) !=
+              project_->material_catalog().folders().end();
+        }
+        return true;
+      });
+  cached_source_stamp_ = catalog_matches && before == after ? after : std::nullopt;
   return *cached_;
+}
+
+const ProjectIoResult<ProjectAssetSnapshot> &ProjectAssetService::refresh_if_changed() const {
+  if (project_ == nullptr || project_->workspace() == nullptr) return refresh();
+  const auto observed = inspect_source_stamp();
+  const bool retained = cached_.has_value() && cached_->ok() &&
+      cached_project_ == project_->manifest()->id() &&
+      cached_material_revision_ == project_->material_catalog().content_revision() &&
+      cached_project_generation_ == project_->project_generation();
+  const bool verified = verified_source_stamp_.has_value() &&
+      verified_project_ == project_->manifest()->id() &&
+      verified_project_generation_ == project_->project_generation();
+  const bool content_changed = !verified || !observed.has_value() ||
+      observed->materials != verified_source_stamp_->materials ||
+      observed->textures != verified_source_stamp_->textures;
+  const bool files_changed = !verified || !observed.has_value() ||
+      observed != verified_source_stamp_;
+  if (files_changed) {
+    // Saved scene changes invalidate their derived usage/dependency reads
+    // without retiring unchanged scene texture resources.
+    project_->material_usage().invalidate();
+    project_->dependencies().invalidate();
+  }
+  if (!content_changed && retained && observed.has_value() && observed == cached_source_stamp_) {
+    verified_source_stamp_ = observed;
+    return *cached_;
+  }
+  const bool folders_changed = !observed.has_value() || !cached_source_stamp_.has_value() ||
+      observed->folders != cached_source_stamp_->folders;
+  if (content_changed || folders_changed) {
+    const auto refreshed = project_->refresh_asset_catalog(content_changed);
+    if (!refreshed.ok) {
+      cached_source_stamp_.reset();
+      cached_ = ProjectIoResult<ProjectAssetSnapshot>::failure(
+          ProjectIoErrorCode::IoFailure, refreshed.message);
+      return *cached_;
+    }
+  }
+  const auto &result = refresh();
+  if (result.ok() && cached_source_stamp_.has_value() && verified_source_stamp_.has_value() &&
+      cached_source_stamp_->materials == verified_source_stamp_->materials &&
+      cached_source_stamp_->textures == verified_source_stamp_->textures) {
+    verified_source_stamp_ = cached_source_stamp_;
+    verified_project_ = project_->manifest()->id();
+    verified_project_generation_ = project_->project_generation();
+  }
+  return result;
+}
+
+void ProjectAssetService::retain_refreshed_catalog_stamp(std::optional<SourceStamp> before) const {
+  const auto observed = inspect_source_stamp();
+  verified_source_stamp_ = before == observed ? observed : std::nullopt;
+  verified_project_ = project_->manifest()->id();
+  verified_project_generation_ = project_->project_generation();
+}
+
+std::optional<ProjectAssetService::SourceStamp> ProjectAssetService::inspect_source_stamp() const {
+  if (project_ == nullptr || project_->workspace() == nullptr) return std::nullopt;
+  ++work_.metadata_checks;
+  /// One directory-enumeration record, without opening or decoding asset files.
+  struct SourceEntry final {
+    std::string path;
+    ProjectAssetKind kind = ProjectAssetKind::Unknown;
+    std::uintmax_t size = 0u;
+    std::filesystem::file_time_type modified;
+  };
+  std::vector<SourceEntry> entries;
+  const auto &root = project_->workspace()->file_system.root();
+  std::error_code error;
+  std::filesystem::recursive_directory_iterator iterator(root, error);
+  const std::filesystem::recursive_directory_iterator end;
+  for (; !error && iterator != end; iterator.increment(error)) {
+    const auto &source = *iterator;
+    const auto relative = ProjectRelativePath::parse(source.path().lexically_relative(root));
+    if (!relative.ok()) return std::nullopt;
+    if (is_project_asset_reserved_path(relative.value())) {
+      iterator.disable_recursion_pending();
+      continue;
+    }
+#ifdef _WIN32
+    const DWORD attributes = GetFileAttributesW(source.path().c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES ||
+        (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0u) return std::nullopt;
+#endif
+    const auto status = source.symlink_status(error);
+    // Metadata is only a reuse hint. Unusual entries and failed inspection
+    // always return to the existing physical containment/alias validation.
+    if (error || std::filesystem::is_symlink(status)) return std::nullopt;
+    SourceEntry entry{.path = relative.value().portable_string()};
+    if (std::filesystem::is_directory(status)) {
+      entry.kind = ProjectAssetKind::Folder;
+    } else if (std::filesystem::is_regular_file(status)) {
+      const auto extension = QString::fromStdWString(source.path().extension().wstring()).toLower();
+      if (extension == QStringLiteral(".qdr")) {
+        entry.kind = ProjectAssetKind::Scene;
+      } else if (extension == QStringLiteral(".qmat")) {
+        entry.kind = ProjectAssetKind::Material;
+      } else if (is_texture_extension(source.path())) {
+        entry.kind = ProjectAssetKind::Texture;
+      } else {
+        continue;
+      }
+      entry.size = source.file_size(error);
+      if (error) return std::nullopt;
+      entry.modified = source.last_write_time(error);
+      if (error) return std::nullopt;
+    } else {
+      return std::nullopt;
+    }
+    entries.push_back(std::move(entry));
+  }
+  if (error) return std::nullopt;
+  std::ranges::sort(entries, {}, &SourceEntry::path);
+  SourceStamp stamp{kHashOffset, kHashOffset, kHashOffset, kHashOffset};
+  for (const auto &entry : entries) {
+    const auto append_entry = [&](std::uint64_t &hash) {
+      hash_text(hash, entry.path);
+      hash_text(hash, std::to_string(static_cast<unsigned>(entry.kind)));
+      if (entry.kind != ProjectAssetKind::Folder) {
+        hash_text(hash, std::to_string(entry.size));
+        hash_text(hash, std::to_string(entry.modified.time_since_epoch().count()));
+      }
+    };
+    append_entry(stamp.entries);
+    if (entry.kind == ProjectAssetKind::Folder) append_entry(stamp.folders);
+    if (entry.kind == ProjectAssetKind::Material) append_entry(stamp.materials);
+    if (entry.kind == ProjectAssetKind::Texture) append_entry(stamp.textures);
+  }
+  return stamp;
 }
 
 ProjectIoResult<ProjectAssetSnapshot> ProjectAssetService::inspect(
@@ -728,7 +887,10 @@ std::uint64_t ProjectAssetService::revision() const noexcept {
   return cached_.has_value() && cached_->ok() ? cached_->value().revision : 0u;
 }
 
-void ProjectAssetService::invalidate() noexcept { cached_.reset(); }
+void ProjectAssetService::invalidate() noexcept {
+  cached_.reset();
+  cached_source_stamp_.reset();
+}
 
 void ProjectAssetService::retain_committed_changes(
     ProjectAssetSnapshot previous, std::span<const ProjectRelativePath> removed,
@@ -771,6 +933,9 @@ void ProjectAssetService::retain_committed_changes(
   cached_project_ = project_->manifest()->id();
   cached_material_revision_ = project_->material_catalog().content_revision();
   cached_project_generation_ = project_->project_generation();
+  // Authored operations already validated and published their changed roots.
+  // Retain the resulting metadata hint without parsing unrelated asset files.
+  cached_source_stamp_ = inspect_source_stamp();
 }
 
 ProjectIoResult<void> ProjectAssetService::recover_pending_operations(

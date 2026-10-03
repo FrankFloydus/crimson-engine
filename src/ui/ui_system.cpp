@@ -1997,6 +1997,9 @@ void UISystem::refresh_project_workspace(bool force) {
     const bool has_project = editor_->project().has_project();
     if (has_project) {
       show_workspace();
+      // Prime retained browser rows as the project enters the workspace, so
+      // the first reveal does not parse its catalog inside keyboard dispatch.
+      refresh_asset_browser(false, true);
     } else {
       show_home();
     }

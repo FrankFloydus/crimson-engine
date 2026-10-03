@@ -152,6 +152,51 @@ TEST_F(ProjectMaterialUsageTests, LiveAndUnsavedScenesReplaceSavedAssignments) {
   EXPECT_TRUE(closed.issues.empty());
 }
 
+TEST_F(ProjectMaterialUsageTests, PassiveAssetDiscoveryUpdatesExternallyEditedClosedSceneUsage) {
+  const auto first = add_material("First");
+  const auto second = add_material("Second");
+  const auto object = box(first);
+  ASSERT_TRUE(editor_->scene_documents().save_as(object.scene_session_id,
+                                                usage_path("Scenes/Closed.qdr")).ok());
+  assign_all(object, second);
+  ASSERT_TRUE(editor_->scene_documents().save(object.scene_session_id).ok());
+  const auto file_path = project_.root() / "Scenes" / "Closed.qdr";
+  std::ifstream replacement(file_path, std::ios::binary);
+  ASSERT_TRUE(replacement.is_open());
+  const std::string replacement_bytes((std::istreambuf_iterator<char>(replacement)), {});
+  replacement.close();
+  ASSERT_FALSE(replacement_bytes.empty());
+  assign_all(object, first);
+  ASSERT_TRUE(editor_->scene_documents().save(object.scene_session_id).ok());
+  ASSERT_TRUE(editor_->scene_documents().new_scene().ok());
+  ASSERT_TRUE(project_.close_scene(object.scene_session_id).ok);
+  ASSERT_TRUE(editor_->project_assets().assets_if_changed().ok());
+  ASSERT_EQ(project_ids(usage()), (std::set<ProjectAssetId>{first}));
+
+  const auto default_material = *ProjectAssetId::parse(kDefaultProjectMaterialId);
+  const auto image = project_.material_texture_image(
+      default_material, StandardMaterialTextureSlot::Albedo);
+  ASSERT_NE(image, nullptr);
+  const auto texture_revision = project_.material_texture_revision();
+  const auto before_edit = std::filesystem::last_write_time(file_path);
+  {
+    std::ofstream changed(file_path, std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(changed.is_open());
+    changed.write(replacement_bytes.data(),
+                  static_cast<std::streamsize>(replacement_bytes.size()));
+    ASSERT_TRUE(changed.good());
+  }
+  std::filesystem::last_write_time(file_path, before_edit + std::chrono::seconds(2));
+
+  ASSERT_TRUE(editor_->project_assets().assets_if_changed().ok());
+  const auto changed_usage = usage();
+  EXPECT_TRUE(changed_usage.complete);
+  EXPECT_EQ(project_ids(changed_usage), (std::set<ProjectAssetId>{second}));
+  EXPECT_EQ(project_.material_texture_revision(), texture_revision);
+  EXPECT_EQ(project_.material_texture_image(
+      default_material, StandardMaterialTextureSlot::Albedo), image);
+}
+
 TEST_F(ProjectMaterialUsageTests, LastFaceAssignmentNoOpUndoAndRedoUpdateActualUsage) {
   const auto first = add_material("First");
   const auto second = add_material("Second");

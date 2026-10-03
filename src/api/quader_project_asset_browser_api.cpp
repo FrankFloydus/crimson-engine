@@ -172,6 +172,17 @@ QuaderProjectAssetsApi::assets(bool refresh_files) const {
                                        std::move(result));
 }
 
+QuaderApiResult<QuaderProjectAssetSnapshot>
+QuaderProjectAssetsApi::assets_if_changed() const {
+  auto *project = open_project(session_);
+  if (project == nullptr) return browser_failure<QuaderProjectAssetSnapshot>(
+      session_, "Open a project before browsing assets.");
+  const auto &source = project->project_assets().refresh_if_changed();
+  if (!source.ok()) return browser_failure<QuaderProjectAssetSnapshot>(
+      session_, source.error().message);
+  return assets();
+}
+
 QuaderApiResult<QuaderProjectAssetInfo>
 QuaderProjectAssetsApi::create_scene_asset(std::string_view folder,
                                            std::string_view name) {
