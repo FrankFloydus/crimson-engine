@@ -9,6 +9,7 @@
 #include <QObject>
 #include <QPointer>
 
+#include <cstdint>
 #include <functional>
 #include <unordered_set>
 
@@ -52,7 +53,7 @@ private:
   CommandsProvider commands_provider_;
   InputReservation input_reservation_;
   QuaderCommandsApi *observed_commands_ = nullptr;
-  std::unordered_set<int> consumed_keys_;
+  std::unordered_set<std::uint64_t> consumed_keys_;
   bool sequence_pending_ = false;
 };
 

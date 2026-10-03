@@ -11,6 +11,9 @@
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "viewport/viewport_runtime_binding_token.hpp"
 
+#include <cstdint>
+#include <optional>
+
 class QPoint;
 class QWidget;
 
@@ -29,7 +32,8 @@ public:
       QuaderEditorApi &editor, ViewportInputRouter &input_router,
       LocalizationService &localization,
       const QtUiScaleMetrics &metrics = QtUiScaleMetrics{},
-      ViewportRuntimeBindingToken runtime_binding = {}) const;
+      ViewportRuntimeBindingToken runtime_binding = {},
+      std::optional<std::uint64_t> initiating_key_identity = std::nullopt) const;
 };
 
 } // namespace quader

@@ -17,6 +17,11 @@
 namespace quader {
 namespace {
 
+constexpr std::uint64_t kNativeScanKeyIdentityTag = std::uint64_t{1} << 32;
+constexpr std::uint64_t kNativeVirtualKeyIdentityTag = std::uint64_t{2} << 32;
+constexpr std::uint64_t kQtKeyIdentityTag = std::uint64_t{3} << 32;
+constexpr std::uint64_t kKeyIdentityTagMask = std::uint64_t{0xffffffff} << 32;
+
 struct WheelDelta {
   QPoint value;
   QtWheelDeltaSource source = QtWheelDeltaSource::None;
@@ -26,6 +31,85 @@ bool has_modifier(Qt::KeyboardModifiers modifiers,
                   Qt::KeyboardModifier modifier) {
   return modifiers.testFlag(modifier);
 }
+
+#ifdef Q_OS_WIN
+std::optional<QuaderKeyCode>
+native_key_code_from_qt_event(const QKeyEvent &event) {
+  const quint32 native_key = event.nativeVirtualKey();
+  constexpr quint32 kLetterAVirtualKey = 0x41;
+  constexpr quint32 kLetterZVirtualKey = 0x5a;
+  constexpr quint32 kDigit0VirtualKey = 0x30;
+  constexpr quint32 kDigit9VirtualKey = 0x39;
+  constexpr quint32 kFunction1VirtualKey = 0x70;
+  constexpr quint32 kFunction24VirtualKey = 0x87;
+  constexpr quint32 kNumpad0VirtualKey = 0x60;
+  constexpr quint32 kNumpad9VirtualKey = 0x69;
+  if (native_key >= kLetterAVirtualKey && native_key <= kLetterZVirtualKey) {
+    return static_cast<QuaderKeyCode>(
+        static_cast<int>(QuaderKeyCode::A) +
+        static_cast<int>(native_key - kLetterAVirtualKey));
+  }
+  if (!has_modifier(event.modifiers(), Qt::KeypadModifier) &&
+      native_key >= kDigit0VirtualKey && native_key <= kDigit9VirtualKey) {
+    return static_cast<QuaderKeyCode>(
+        static_cast<int>(QuaderKeyCode::Digit0) +
+        static_cast<int>(native_key - kDigit0VirtualKey));
+  }
+  if (native_key >= kFunction1VirtualKey &&
+      native_key <= kFunction24VirtualKey) {
+    return static_cast<QuaderKeyCode>(
+        static_cast<int>(QuaderKeyCode::F1) +
+        static_cast<int>(native_key - kFunction1VirtualKey));
+  }
+  if (native_key >= kNumpad0VirtualKey && native_key <= kNumpad9VirtualKey) {
+    return static_cast<QuaderKeyCode>(
+        static_cast<int>(QuaderKeyCode::Numpad0) +
+        static_cast<int>(native_key - kNumpad0VirtualKey));
+  }
+  switch (native_key) {
+  case 0x08: return QuaderKeyCode::Backspace;
+  case 0x09: return QuaderKeyCode::Tab;
+  case 0x0d:
+    return event.key() == Qt::Key_Enter ||
+                   has_modifier(event.modifiers(), Qt::KeypadModifier) ||
+                   event.nativeScanCode() == 0xe01c
+               ? QuaderKeyCode::NumpadEnter
+               : QuaderKeyCode::Enter;
+  case 0x1b: return QuaderKeyCode::Escape;
+  case 0x20: return QuaderKeyCode::Space;
+  case 0x21: return QuaderKeyCode::PageUp;
+  case 0x22: return QuaderKeyCode::PageDown;
+  case 0x23: return QuaderKeyCode::End;
+  case 0x24: return QuaderKeyCode::Home;
+  case 0x25: return QuaderKeyCode::Left;
+  case 0x26: return QuaderKeyCode::Up;
+  case 0x27: return QuaderKeyCode::Right;
+  case 0x28: return QuaderKeyCode::Down;
+  case 0x2d: return QuaderKeyCode::Insert;
+  case 0x2e: return QuaderKeyCode::Delete;
+  case 0x6a: return QuaderKeyCode::NumpadMultiply;
+  case 0x6b: return QuaderKeyCode::NumpadAdd;
+  case 0x6d: return QuaderKeyCode::NumpadSubtract;
+  case 0x6e: return QuaderKeyCode::NumpadDecimal;
+  case 0x6f: return QuaderKeyCode::NumpadDivide;
+  // These canonical OEM tokens name stable virtual-key slots, rather than
+  // assuming that their emitted punctuation is the same in every layout.
+  case 0xba: return QuaderKeyCode::Semicolon;
+  case 0xbb: return QuaderKeyCode::Equal;
+  case 0xbc: return QuaderKeyCode::Comma;
+  case 0xbd: return QuaderKeyCode::Minus;
+  case 0xbe: return QuaderKeyCode::Period;
+  case 0xbf: return QuaderKeyCode::Slash;
+  case 0xc0: return QuaderKeyCode::Grave;
+  case 0xdb: return QuaderKeyCode::LeftBracket;
+  case 0xdc: return QuaderKeyCode::Backslash;
+  case 0xdd: return QuaderKeyCode::RightBracket;
+  case 0xde: return QuaderKeyCode::Apostrophe;
+  case 0xe2: return QuaderKeyCode::IntlBackslash;
+  default: return std::nullopt;
+  }
+}
+#endif
 
 QuaderInputChord keyboard_chord(QuaderKeyCode key,
                                 Qt::KeyboardModifiers modifiers) {
@@ -167,6 +251,9 @@ QtWheelInputAccumulator::Axis wheel_axis(QuaderInputGesture gesture) {
 
 std::optional<QuaderKeyCode>
 quader_key_code_from_qt_key(int key, Qt::KeyboardModifiers modifiers) {
+  if (has_modifier(modifiers, Qt::GroupSwitchModifier)) {
+    return std::nullopt;
+  }
   if (key >= Qt::Key_A && key <= Qt::Key_Z) {
     return static_cast<QuaderKeyCode>(
         static_cast<int>(QuaderKeyCode::A) + (key - Qt::Key_A));
@@ -321,14 +408,42 @@ quader_input_chord_from_qt_key(int key, Qt::KeyboardModifiers modifiers) {
                               : QuaderInputChord{};
 }
 
+QuaderInputChord quader_input_chord_from_qt_event(const QKeyEvent &event) {
+  // AltGr has no representation in the existing binding vocabulary. Dropping
+  // its GroupSwitch modifier would incorrectly activate an ordinary binding.
+  if (has_modifier(event.modifiers(), Qt::GroupSwitchModifier)) {
+    return {};
+  }
+#ifdef Q_OS_WIN
+  if (const auto key = native_key_code_from_qt_event(event)) {
+    return keyboard_chord(*key, event.modifiers());
+  }
+#endif
+  return quader_input_chord_from_qt_key(event.key(), event.modifiers());
+}
+
+std::uint64_t quader_keyboard_event_key_identity(const QKeyEvent &event) {
+  if (event.nativeScanCode() != 0) {
+    return kNativeScanKeyIdentityTag | event.nativeScanCode();
+  }
+  if (event.nativeVirtualKey() != 0) {
+    return kNativeVirtualKeyIdentityTag | event.nativeVirtualKey();
+  }
+  return kQtKeyIdentityTag | static_cast<std::uint32_t>(event.key());
+}
+
+bool quader_keyboard_key_identity_has_native_data(std::uint64_t identity) {
+  const auto tag = identity & kKeyIdentityTagMask;
+  return tag == kNativeScanKeyIdentityTag || tag == kNativeVirtualKeyIdentityTag;
+}
+
 std::optional<QuaderInputChord>
 quader_pressed_input_chord_from_qt_event(const QKeyEvent &event) {
   if (event.type() != QEvent::KeyPress || event.isAutoRepeat()) {
     return std::nullopt;
   }
 
-  QuaderInputChord chord =
-      quader_input_chord_from_qt_key(event.key(), event.modifiers());
+  QuaderInputChord chord = quader_input_chord_from_qt_event(event);
   return chord.empty() ? std::nullopt
                        : std::optional<QuaderInputChord>(chord);
 }
@@ -360,6 +475,9 @@ quader_mouse_button_from_qt_button(Qt::MouseButton button) {
 std::optional<QuaderInputChord>
 quader_mouse_input_chord_from_qt_event(const QMouseEvent &event,
                                        QuaderInputGesture gesture) {
+  if (has_modifier(event.modifiers(), Qt::GroupSwitchModifier)) {
+    return std::nullopt;
+  }
   if (!mouse_event_matches_gesture(event.type(), gesture)) {
     return std::nullopt;
   }
@@ -373,6 +491,9 @@ quader_mouse_input_chord_from_qt_event(const QMouseEvent &event,
 
 std::optional<QuaderInputChord>
 quader_wheel_input_chord_from_qt_event(const QWheelEvent &event) {
+  if (has_modifier(event.modifiers(), Qt::GroupSwitchModifier)) {
+    return std::nullopt;
+  }
   const std::optional<QuaderInputGesture> gesture =
       directional_wheel_gesture(wheel_delta(event).value);
   if (!gesture.has_value()) {

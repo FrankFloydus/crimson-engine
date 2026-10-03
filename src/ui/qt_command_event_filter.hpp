@@ -95,8 +95,8 @@ private:
   bool text_input_sequence_pending_ = false;
   bool asset_browser_sequence_pending_ = false;
   std::uint64_t binding_generation_ = 0;
-  // Scoped command presses retain their release across focus/runtime changes.
-  std::unordered_set<int> consumed_settings_keys_;
+  // Scoped and native command presses retain physical releases across owners.
+  std::unordered_set<std::uint64_t> consumed_settings_keys_;
 };
 
 } // namespace quader

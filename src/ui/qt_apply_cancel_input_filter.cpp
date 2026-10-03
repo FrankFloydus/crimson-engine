@@ -126,11 +126,13 @@ bool QtApplyCancelInputFilter::eventFilter(QObject *watched, QEvent *event) {
       event->type() == QEvent::KeyRelease ||
       event->type() == QEvent::KeyPress) {
     const auto &key = *static_cast<QKeyEvent *>(event);
-    if (consumed_keys_.contains(key.key()) &&
+    const auto key_identity = quader_keyboard_event_key_identity(key);
+    if (consumed_keys_.contains(key_identity) &&
         (event->type() == QEvent::ShortcutOverride ||
-         event->type() == QEvent::KeyRelease || key.isAutoRepeat())) {
+         event->type() == QEvent::KeyRelease || key.isAutoRepeat() ||
+         key.nativeScanCode() != 0u || key.nativeVirtualKey() != 0u)) {
       if (event->type() == QEvent::KeyRelease && !key.isAutoRepeat()) {
-        consumed_keys_.erase(key.key());
+        consumed_keys_.erase(key_identity);
         retire_if_unused();
       }
       event->accept();
@@ -185,7 +187,7 @@ bool QtApplyCancelInputFilter::eventFilter(QObject *watched, QEvent *event) {
     reset_pending();
     return false;
   }
-  const auto chord = quader_input_chord_from_qt_key(key.key(), key.modifiers());
+  const auto chord = quader_input_chord_from_qt_event(key);
   const auto resolved = commands->resolve_modal_lifecycle_input_binding(chord);
   if (resolved.kind == QuaderNativeToolSettingsDispatch::Kind::NoMatch) {
     reset_pending();
@@ -197,7 +199,7 @@ bool QtApplyCancelInputFilter::eventFilter(QObject *watched, QEvent *event) {
         key.modifiers() == Qt::NoModifier;
     if (key.matches(QKeySequence::Cancel) || lifecycle_button_space) {
       if (event->type() == QEvent::KeyPress && !key.isAutoRepeat()) {
-        consumed_keys_.insert(key.key());
+        consumed_keys_.insert(quader_keyboard_event_key_identity(key));
       }
       event->accept();
       return true;
@@ -212,7 +214,7 @@ bool QtApplyCancelInputFilter::eventFilter(QObject *watched, QEvent *event) {
   if (dispatch.kind == QuaderNativeToolSettingsDispatch::Kind::NoMatch) {
     return false;
   }
-  consumed_keys_.insert(key.key());
+  consumed_keys_.insert(quader_keyboard_event_key_identity(key));
   sequence_pending_ =
       dispatch.kind == QuaderNativeToolSettingsDispatch::Kind::PendingChord;
   if (sequence_pending_) {

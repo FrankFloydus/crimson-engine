@@ -67,7 +67,21 @@ command behavior record and baseline requirements.
 
 ## Context and dispatch
 
-A chord is physical input, not an action. Rules select a target through app-owned boolean contexts;
+A chord is physical input, not an action. Windows event conversion uses native virtual-key
+identity rather than the produced text. Letter
+tokens retain the native named letter on AZERTY/QWERTZ and non-Latin layouts; digit-row, keypad,
+function, editing and canonical punctuation tokens likewise do not depend on shifted glyphs.
+Punctuation names describe the canonical native key slots, and `IntlBackslash` identifies the
+separate ISO key. Shortcut recording and execution use the same converter, so capture an input
+when the printed national key legend differs from its canonical token. Existing binding strings,
+overrides and unassignments retain their identities. Text controls keep their native text input.
+AltGr's explicit Qt `GroupSwitchModifier` has no canonical shortcut representation and must not
+be dropped into an unmodified keyboard, mouse or wheel chord. Ordinary Ctrl+Alt stays Ctrl+Alt.
+Held/consumed event tracking uses native scan identity (virtual-key or Qt identity fallback),
+retaining the accepted press chord until release even if modifiers or the keyboard layout change.
+All canonical press, shortcut-reservation, recorder and release paths use `qt_input_adapter.*`;
+intrinsic Qt editing and navigation checks remain with their controls.
+Rules select a target through app-owned boolean contexts;
 `when` supports identifiers, `!`, `&&`, `||`, and parentheses. Important context families include
 `viewportFocus`, `outlinerFocus`, `editorFocus`, `assetBrowserFocus`, `viewport.hovered`, `viewport.orthographic`, `textInputActive`, `editorTextFocus`,
 `navigation.*`, `activeTool.*`, `modalTool.active`, `transformDrag.active`, and `selectionMode.*`.

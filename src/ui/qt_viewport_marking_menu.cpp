@@ -69,7 +69,8 @@ bool QtViewportMarkingMenuPresenter::show(
     ViewportPaneId initiating_pane, const QuaderInputChord &initiating_chord,
     QuaderEditorApi &editor, ViewportInputRouter &input_router,
     LocalizationService &localization, const QtUiScaleMetrics &metrics,
-    ViewportRuntimeBindingToken runtime_binding) const {
+    ViewportRuntimeBindingToken runtime_binding,
+    std::optional<std::uint64_t> initiating_key_identity) const {
   QDR_PROFILE_SCOPE("Qt viewport marking menu");
   if (!runtime_binding.current() || initiating_chord.empty() ||
       editor.viewports().focused_pane() != initiating_pane) {
@@ -138,7 +139,8 @@ bool QtViewportMarkingMenuPresenter::show(
   const QString title = QString::fromStdString(localization.text(
       "ui.viewport.marking_menu.title", "Modeling"));
   QAction *selected_action = menu.exec(global_point, initiating_chord, slot_actions,
-                                       overflow_actions, title);
+                                       overflow_actions, title,
+                                       initiating_key_identity);
 
   if (guarded_parent == nullptr || !runtime_binding.current() ||
       editor.scene_documents().active_scene_id() != presented_session ||

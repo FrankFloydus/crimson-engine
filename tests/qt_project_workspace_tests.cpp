@@ -6444,6 +6444,90 @@ struct NativePaneInputHarness {
 } // namespace
 
 TEST(QtProjectWorkspaceTests,
+     ItalianShiftDigitsSwitchSingleSelectionModeThroughNativeViewportEvents) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  NativePaneInputHarness harness;
+  ASSERT_NO_FATAL_FAILURE(harness.initialize());
+  for (const auto mode : {quader::QuaderSelectionMode::Edge,
+                         quader::QuaderSelectionMode::Face}) {
+    ASSERT_TRUE(harness.editor.commands().set_shortcut(
+        harness.editor.commands().keybinding_target_id_for_selection_mode(mode),
+        mode == quader::QuaderSelectionMode::Edge ? "Shift+2" : "Shift+3").ok());
+  }
+  auto *surface = harness.panel.surface(quader::ViewportPaneId::Perspective);
+  ASSERT_NE(surface, nullptr);
+  const auto box = harness.editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Italian selection shortcut box");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  const auto selected_ids = [&] {
+    std::vector<std::array<int, 3>> ids;
+    for (const auto &object : harness.scene.modeling().export_selection().objects) {
+      if (object.modeling_object_id != box.value().modeling_object_id) continue;
+      for (const auto &edge : object.selected_edges) {
+        ids.push_back({1, static_cast<int>(std::min(edge.a, edge.b)),
+                         static_cast<int>(std::max(edge.a, edge.b))});
+      }
+      for (const auto &face : object.selected_faces) {
+        ids.push_back({2, static_cast<int>(face.id), 0});
+      }
+    }
+    std::sort(ids.begin(), ids.end());
+    return ids;
+  };
+  for (const auto mode : {quader::QuaderSelectionMode::Edge,
+                          quader::QuaderSelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    ASSERT_TRUE(harness.editor.selection().set_mode(mode).ok());
+    const bool edge_mode = mode == quader::QuaderSelectionMode::Edge;
+    const auto target_mode = edge_mode ? quader::QuaderSelectionMode::Face
+                                       : quader::QuaderSelectionMode::Edge;
+    const auto target_viewport_mode = edge_mode
+        ? quader::ViewportSelectionMode::Face
+        : quader::ViewportSelectionMode::Edge;
+    const auto selected = edge_mode
+        ? harness.editor.selection().select_edge(box.value(), 1, 2)
+        : harness.editor.selection().select_face(box.value(), 1);
+    ASSERT_TRUE(selected.ok()) << selected.error_message();
+    const std::vector<std::array<int, 3>> expected{
+        edge_mode ? std::array<int, 3>{1, 1, 2} : std::array<int, 3>{2, 1, 0}};
+    ASSERT_EQ(selected_ids(), expected);
+    const auto before = harness.editor.selection().summary();
+    const int key = edge_mode ? 0x00a3 : Qt::Key_QuoteDbl;
+    const std::uint32_t native_scan_code = edge_mode ? 4u : 3u;
+    const std::uint32_t native_virtual_key = edge_mode ? 0x33u : 0x32u;
+    const QString text = edge_mode ? QStringLiteral("\u00a3") : QStringLiteral("\"");
+    QKeyEvent shortcut_override(QEvent::ShortcutOverride, key, Qt::ShiftModifier,
+                                native_scan_code, native_virtual_key, 0u, text);
+    shortcut_override.setAccepted(false);
+    QCoreApplication::sendEvent(surface, &shortcut_override);
+    EXPECT_TRUE(shortcut_override.isAccepted());
+    harness.process();
+    EXPECT_EQ(harness.editor.selection().summary().mode, mode);
+    EXPECT_EQ(harness.editor.selection().summary().selection_revision,
+              before.selection_revision);
+    EXPECT_EQ(selected_ids(), expected);
+    QKeyEvent press(QEvent::KeyPress, key, Qt::ShiftModifier,
+                    native_scan_code, native_virtual_key, 0u, text);
+    QCoreApplication::sendEvent(surface, &press);
+    harness.process();
+    EXPECT_EQ(harness.editor.selection().summary().mode, target_mode);
+    EXPECT_EQ(harness.panel.tool_state().selection_mode, target_viewport_mode);
+    const auto switched = harness.editor.selection().summary();
+    const auto switched_ids = selected_ids();
+    QKeyEvent release(QEvent::KeyRelease, key, Qt::ShiftModifier,
+                      native_scan_code, native_virtual_key, 0u, text);
+    QCoreApplication::sendEvent(surface, &release);
+    harness.process();
+    EXPECT_EQ(harness.editor.selection().summary().mode, target_mode);
+    EXPECT_EQ(harness.panel.tool_state().selection_mode, target_viewport_mode);
+    EXPECT_EQ(selected_ids(), switched_ids);
+    EXPECT_EQ(harness.editor.selection().summary().selection_revision,
+              switched.selection_revision);
+  }
+}
+
+TEST(QtProjectWorkspaceTests,
      SameToolKeyboardShortcutPreservesSharedOperationAndOrigin) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   NativePaneInputHarness harness;

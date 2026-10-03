@@ -82,6 +82,30 @@ quader_key_code_from_qt_key(int key, Qt::KeyboardModifiers modifiers);
 quader_input_chord_from_qt_key(int key, Qt::KeyboardModifiers modifiers);
 
 /**
+ * Builds one canonical keyboard chord from Qt's event-time key information.
+ * Windows native virtual keys retain canonical letter, digit and punctuation
+ * identities independently of the keyboard layout's emitted glyphs. Events
+ * without supported native key data retain the Qt-key conversion above.
+ */
+[[nodiscard]] QuaderInputChord
+quader_input_chord_from_qt_event(const QKeyEvent &event);
+
+/**
+ * Identifies one held key across layout and modifier changes. Native scan codes
+ * retain extended-key information; virtual keys and Qt keys provide separately
+ * tagged fallbacks for events that omit that physical identity.
+ */
+[[nodiscard]] std::uint64_t
+quader_keyboard_event_key_identity(const QKeyEvent &event);
+
+/**
+ * Reports whether a held-key identity came from native scan or virtual-key
+ * metadata rather than the Qt-only fallback.
+ */
+[[nodiscard]] bool
+quader_keyboard_key_identity_has_native_data(std::uint64_t identity);
+
+/**
  * Converts a non-repeating Qt key-press event into a canonical input chord.
  */
 [[nodiscard]] std::optional<QuaderInputChord>

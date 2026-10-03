@@ -82,9 +82,11 @@ using quader::QuaderKeyCode;
 using quader::QuaderMouseButton;
 using quader::QtWheelDeltaSource;
 using quader::QtWheelInputAccumulator;
+using quader::quader_input_chord_from_qt_event;
 using quader::quader_input_chord_from_qt_key;
 using quader::quader_input_format_chord;
 using quader::quader_input_parse_chord;
+using quader::quader_keyboard_event_key_identity;
 using quader::quader_key_code_from_qt_key;
 using quader::quader_mouse_button_from_qt_button;
 using quader::quader_mouse_input_chord_from_qt_event;
@@ -339,6 +341,342 @@ TEST(QtInputAdapterTests, NormalizesShiftedDigitsAndPunctuationToBaseKeys) {
     EXPECT_TRUE(chord.shift);
   }
 }
+
+TEST(QtInputAdapterTests,
+     KeyboardEventsWithoutNativeKeysRetainShiftedSymbolFallback) {
+  constexpr std::array kMappings{
+      KeyMapping{Qt::Key_At, QuaderKeyCode::Digit2},
+      KeyMapping{Qt::Key_NumberSign, QuaderKeyCode::Digit3},
+      KeyMapping{Qt::Key_QuoteDbl, QuaderKeyCode::Apostrophe},
+  };
+  for (const KeyMapping &mapping : kMappings) {
+    SCOPED_TRACE(mapping.qt_key);
+    const QKeyEvent event(QEvent::KeyPress, mapping.qt_key,
+                          Qt::ShiftModifier);
+    const auto chord = quader_input_chord_from_qt_event(event);
+    EXPECT_EQ(chord.key, mapping.quader_key);
+    EXPECT_TRUE(chord.shift);
+    EXPECT_EQ(event.nativeVirtualKey(), 0u);
+  }
+  const QKeyEvent unsupported(QEvent::KeyPress, Qt::Key_sterling,
+                              Qt::ShiftModifier);
+  EXPECT_TRUE(quader_input_chord_from_qt_event(unsupported).empty());
+}
+
+TEST(QtInputAdapterTests, AltGrDoesNotDowngradeToAnOrdinaryBinding) {
+  const Qt::KeyboardModifiers modifiers =
+      Qt::GroupSwitchModifier | Qt::ControlModifier | Qt::AltModifier;
+  const QKeyEvent native(QEvent::KeyPress, Qt::Key_E, modifiers,
+                         0x12, 0x45, 0, QStringLiteral("e"));
+  EXPECT_TRUE(quader_input_chord_from_qt_event(native).empty());
+  EXPECT_FALSE(quader_pressed_input_chord_from_qt_event(native).has_value());
+  EXPECT_TRUE(quader_input_chord_from_qt_key(Qt::Key_E, modifiers).empty());
+  EXPECT_FALSE(quader_key_code_from_qt_key(Qt::Key_E, modifiers).has_value());
+  for (const auto type : {QEvent::MouseButtonPress,
+                          QEvent::MouseButtonRelease,
+                          QEvent::MouseButtonDblClick}) {
+    const auto mouse = mouse_event(type, Qt::LeftButton, modifiers);
+    for (const auto gesture : {QuaderInputGesture::Press,
+                               QuaderInputGesture::Click,
+                               QuaderInputGesture::DoubleClick}) {
+      EXPECT_FALSE(quader_mouse_input_chord_from_qt_event(mouse, gesture)
+                       .has_value());
+    }
+  }
+  const auto wheel = wheel_event({}, {0, 120}, modifiers);
+  EXPECT_FALSE(quader_wheel_input_chord_from_qt_event(wheel).has_value());
+  EXPECT_TRUE(quader_wheel_input_from_qt_event(wheel).wheel_input_edges.empty());
+  QtWheelInputAccumulator accumulator;
+  const auto accumulated = quader_wheel_input_from_qt_event(wheel, accumulator);
+  EXPECT_TRUE(accumulated.wheel_input_edges.empty());
+  EXPECT_EQ(accumulated.mouse_wheel, 0.0f);
+  EXPECT_EQ(accumulator.angle_delta_remainder, 0);
+
+  const QKeyEvent ordinary(QEvent::KeyPress, Qt::Key_E,
+                           Qt::ControlModifier | Qt::AltModifier);
+  const auto chord = quader_input_chord_from_qt_event(ordinary);
+  EXPECT_EQ(chord.key, QuaderKeyCode::E);
+  EXPECT_TRUE(chord.primary);
+  EXPECT_TRUE(chord.alt);
+}
+
+TEST(QtInputAdapterTests, KeyboardIdentitySurvivesGlyphAndModifierChanges) {
+  const QKeyEvent press(QEvent::KeyPress, Qt::Key_sterling,
+                        Qt::ShiftModifier, 0x04, 0x33, 0);
+  const QKeyEvent release(QEvent::KeyRelease, Qt::Key_3,
+                          Qt::NoModifier, 0x04, 0x33, 0);
+  const QKeyEvent layout_change(QEvent::KeyRelease, Qt::Key_NumberSign,
+                                Qt::AltModifier, 0x04, 0xbf, 0);
+  EXPECT_EQ(quader_keyboard_event_key_identity(press),
+            quader_keyboard_event_key_identity(release));
+  EXPECT_EQ(quader_keyboard_event_key_identity(press),
+            quader_keyboard_event_key_identity(layout_change));
+  const QKeyEvent main_enter(QEvent::KeyPress, Qt::Key_Return,
+                             Qt::NoModifier, 0x1c, 0x0d, 0);
+  const QKeyEvent keypad_enter(QEvent::KeyPress, Qt::Key_Enter,
+                               Qt::KeypadModifier, 0xe01c, 0x0d, 0);
+  EXPECT_NE(quader_keyboard_event_key_identity(main_enter),
+            quader_keyboard_event_key_identity(keypad_enter));
+}
+
+TEST(QtInputAdapterTests, KeyboardIdentityKeepsNativeAndQtFallbacksDistinct) {
+  const QKeyEvent scan(QEvent::KeyPress, Qt::Key_unknown,
+                       Qt::NoModifier, 0x33, 0, 0);
+  const QKeyEvent virtual_key(QEvent::KeyPress, Qt::Key_sterling,
+                              Qt::ShiftModifier, 0, 0x33, 0);
+  const QKeyEvent virtual_release(QEvent::KeyRelease, Qt::Key_3,
+                                  Qt::NoModifier, 0, 0x33, 0);
+  const QKeyEvent qt_key(QEvent::KeyPress, Qt::Key_3, Qt::NoModifier);
+  const QKeyEvent qt_release(QEvent::KeyRelease, Qt::Key_3,
+                             Qt::ShiftModifier);
+  EXPECT_EQ(quader_keyboard_event_key_identity(virtual_key),
+            quader_keyboard_event_key_identity(virtual_release));
+  EXPECT_EQ(quader_keyboard_event_key_identity(qt_key),
+            quader_keyboard_event_key_identity(qt_release));
+  EXPECT_NE(quader_keyboard_event_key_identity(scan),
+            quader_keyboard_event_key_identity(virtual_key));
+  EXPECT_NE(quader_keyboard_event_key_identity(scan),
+            quader_keyboard_event_key_identity(qt_key));
+  EXPECT_NE(quader_keyboard_event_key_identity(virtual_key),
+            quader_keyboard_event_key_identity(qt_key));
+}
+
+TEST(QtInputAdapterTests, InternationalBackslashHasAnIndependentBindingToken) {
+  const auto international = quader_input_parse_chord("Ctrl+IntlBackslash");
+  const auto backslash = quader_input_parse_chord("Ctrl+Backslash");
+  ASSERT_TRUE(international.has_value());
+  ASSERT_TRUE(backslash.has_value());
+  EXPECT_EQ(international->key, QuaderKeyCode::IntlBackslash);
+  EXPECT_NE(international->key, backslash->key);
+  const auto formatted = quader_input_format_chord(*international);
+  EXPECT_EQ(formatted, "Ctrl+IntlBackslash");
+  const auto restored = quader_input_parse_chord(formatted);
+  ASSERT_TRUE(restored.has_value());
+  EXPECT_EQ(restored->key, international->key);
+  EXPECT_EQ(restored->primary, international->primary);
+}
+
+#ifdef Q_OS_WIN
+TEST(QtInputAdapterTests, WindowsNativeLettersRetainLogicalLayoutIdentity) {
+  const QKeyEvent azerty_a(QEvent::KeyPress, Qt::Key_A,
+                           Qt::NoModifier, 0x10, 0x41, 0,
+                           QStringLiteral("a"));
+  const QKeyEvent azerty_q(QEvent::KeyPress, Qt::Key_Q,
+                           Qt::NoModifier, 0x1e, 0x51, 0,
+                           QStringLiteral("q"));
+  EXPECT_EQ(quader_input_chord_from_qt_event(azerty_a).key, QuaderKeyCode::A);
+  EXPECT_EQ(quader_input_chord_from_qt_event(azerty_q).key, QuaderKeyCode::Q);
+  for (const int glyph : {0x0423, 0x0395}) {
+    SCOPED_TRACE(glyph);
+    const QKeyEvent event(QEvent::KeyPress, glyph,
+                          Qt::ControlModifier | Qt::AltModifier |
+                              Qt::ShiftModifier,
+                          0x12, 0x45, 0,
+                          QString(QChar(static_cast<quint16>(glyph))));
+    const auto chord = quader_input_chord_from_qt_event(event);
+    EXPECT_EQ(chord.key, QuaderKeyCode::E);
+    EXPECT_TRUE(chord.primary);
+    EXPECT_TRUE(chord.alt);
+    EXPECT_TRUE(chord.shift);
+    EXPECT_EQ(event.key(), glyph);
+  }
+  for (int offset = 0; offset < 26; ++offset) {
+    SCOPED_TRACE(offset);
+    const QKeyEvent event(QEvent::KeyPress, 0x042f, Qt::NoModifier,
+                          0, 0x41 + static_cast<quint32>(offset), 0,
+                          QStringLiteral("\u042f"));
+    const auto chord = quader_input_chord_from_qt_event(event);
+    EXPECT_EQ(chord.key, static_cast<QuaderKeyCode>(
+                             static_cast<int>(QuaderKeyCode::A) + offset));
+  }
+}
+
+TEST(QtInputAdapterTests, WindowsNativeFunctionAndNumpadKeysIgnoreEmittedGlyph) {
+  for (int offset = 0; offset < 24; ++offset) {
+    SCOPED_TRACE(offset);
+    const QKeyEvent event(QEvent::KeyPress, Qt::Key_unknown,
+                          Qt::ShiftModifier, 0,
+                          0x70 + static_cast<quint32>(offset), 0);
+    const auto chord = quader_input_chord_from_qt_event(event);
+    EXPECT_EQ(chord.key, static_cast<QuaderKeyCode>(
+                             static_cast<int>(QuaderKeyCode::F1) + offset));
+    EXPECT_TRUE(chord.shift);
+  }
+  for (int offset = 0; offset < 10; ++offset) {
+    SCOPED_TRACE(offset);
+    const QKeyEvent event(QEvent::KeyPress, 0x0660 + offset,
+                          Qt::KeypadModifier | Qt::AltModifier, 0,
+                          0x60 + static_cast<quint32>(offset), 0);
+    const auto chord = quader_input_chord_from_qt_event(event);
+    EXPECT_EQ(chord.key, static_cast<QuaderKeyCode>(
+                             static_cast<int>(QuaderKeyCode::Numpad0) + offset));
+    EXPECT_TRUE(chord.alt);
+  }
+  for (const auto qt_key : {Qt::Key_Enter, Qt::Key_Return}) {
+    const QKeyEvent keypad(QEvent::KeyPress, qt_key, Qt::KeypadModifier,
+                           0xe01c, 0x0d, 0);
+    EXPECT_EQ(quader_input_chord_from_qt_event(keypad).key,
+              QuaderKeyCode::NumpadEnter);
+  }
+  const QKeyEvent main(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier,
+                       0x1c, 0x0d, 0);
+  EXPECT_EQ(quader_input_chord_from_qt_event(main).key, QuaderKeyCode::Enter);
+}
+
+TEST(QtInputAdapterTests, WindowsNativeControlAndPunctuationSlotsAreCanonical) {
+  constexpr std::array kMappings{
+      std::pair{quint32{0x08}, QuaderKeyCode::Backspace},
+      std::pair{quint32{0x09}, QuaderKeyCode::Tab},
+      std::pair{quint32{0x1b}, QuaderKeyCode::Escape},
+      std::pair{quint32{0x20}, QuaderKeyCode::Space},
+      std::pair{quint32{0x21}, QuaderKeyCode::PageUp},
+      std::pair{quint32{0x22}, QuaderKeyCode::PageDown},
+      std::pair{quint32{0x23}, QuaderKeyCode::End},
+      std::pair{quint32{0x24}, QuaderKeyCode::Home},
+      std::pair{quint32{0x25}, QuaderKeyCode::Left},
+      std::pair{quint32{0x26}, QuaderKeyCode::Up},
+      std::pair{quint32{0x27}, QuaderKeyCode::Right},
+      std::pair{quint32{0x28}, QuaderKeyCode::Down},
+      std::pair{quint32{0x2d}, QuaderKeyCode::Insert},
+      std::pair{quint32{0x2e}, QuaderKeyCode::Delete},
+      std::pair{quint32{0x6a}, QuaderKeyCode::NumpadMultiply},
+      std::pair{quint32{0x6b}, QuaderKeyCode::NumpadAdd},
+      std::pair{quint32{0x6d}, QuaderKeyCode::NumpadSubtract},
+      std::pair{quint32{0x6e}, QuaderKeyCode::NumpadDecimal},
+      std::pair{quint32{0x6f}, QuaderKeyCode::NumpadDivide},
+      std::pair{quint32{0xba}, QuaderKeyCode::Semicolon},
+      std::pair{quint32{0xbb}, QuaderKeyCode::Equal},
+      std::pair{quint32{0xbc}, QuaderKeyCode::Comma},
+      std::pair{quint32{0xbd}, QuaderKeyCode::Minus},
+      std::pair{quint32{0xbe}, QuaderKeyCode::Period},
+      std::pair{quint32{0xbf}, QuaderKeyCode::Slash},
+      std::pair{quint32{0xc0}, QuaderKeyCode::Grave},
+      std::pair{quint32{0xdb}, QuaderKeyCode::LeftBracket},
+      std::pair{quint32{0xdc}, QuaderKeyCode::Backslash},
+      std::pair{quint32{0xdd}, QuaderKeyCode::RightBracket},
+      std::pair{quint32{0xde}, QuaderKeyCode::Apostrophe},
+      std::pair{quint32{0xe2}, QuaderKeyCode::IntlBackslash},
+  };
+  for (const auto &[native_key, expected] : kMappings) {
+    for (const int glyph : {0x00e8, static_cast<int>(Qt::Key_Dead_Acute),
+                            static_cast<int>(Qt::Key_BraceLeft)}) {
+      SCOPED_TRACE(native_key);
+      SCOPED_TRACE(glyph);
+      const QKeyEvent event(QEvent::KeyPress, glyph,
+                            Qt::ControlModifier | Qt::ShiftModifier, 0,
+                            native_key, 0, QStringLiteral("\u00e8"));
+      const auto chord = quader_input_chord_from_qt_event(event);
+      EXPECT_EQ(chord.key, expected);
+      EXPECT_TRUE(chord.primary);
+      EXPECT_TRUE(chord.shift);
+      EXPECT_EQ(event.text(), QStringLiteral("\u00e8"));
+    }
+  }
+  const QKeyEvent azerty_digit(QEvent::KeyPress, Qt::Key_Ampersand,
+                               Qt::NoModifier, 0x02, 0x31, 0,
+                               QStringLiteral("&"));
+  EXPECT_EQ(quader_input_chord_from_qt_event(azerty_digit).key,
+            QuaderKeyCode::Digit1);
+  const QKeyEvent international(QEvent::KeyPress, Qt::Key_Less,
+                                Qt::NoModifier, 0x56, 0xe2, 0,
+                                QStringLiteral("<"));
+  const auto captured = quader_input_chord_from_qt_event(international);
+  EXPECT_EQ(quader_input_format_chord(captured), "IntlBackslash");
+  const auto restored =
+      quader_input_parse_chord(quader_input_format_chord(captured));
+  ASSERT_TRUE(restored.has_value());
+  EXPECT_EQ(restored->key, captured.key);
+}
+
+TEST(QtInputAdapterTests,
+     WindowsNativeTopRowDigitsNormalizeItalianShiftedSymbols) {
+  constexpr std::array kMappings{
+      KeyMapping{Qt::Key_Equal, QuaderKeyCode::Digit0},
+      KeyMapping{Qt::Key_Exclam, QuaderKeyCode::Digit1},
+      KeyMapping{Qt::Key_QuoteDbl, QuaderKeyCode::Digit2},
+      KeyMapping{Qt::Key_sterling, QuaderKeyCode::Digit3},
+      KeyMapping{Qt::Key_Dollar, QuaderKeyCode::Digit4},
+      KeyMapping{Qt::Key_Percent, QuaderKeyCode::Digit5},
+      KeyMapping{Qt::Key_Ampersand, QuaderKeyCode::Digit6},
+      KeyMapping{Qt::Key_Slash, QuaderKeyCode::Digit7},
+      KeyMapping{Qt::Key_ParenLeft, QuaderKeyCode::Digit8},
+      KeyMapping{Qt::Key_ParenRight, QuaderKeyCode::Digit9},
+  };
+  constexpr quint32 kWindowsDigit0VirtualKey = 0x30;
+  const Qt::KeyboardModifiers modifiers =
+      Qt::ControlModifier | Qt::ShiftModifier | Qt::AltModifier;
+  for (std::size_t index = 0; index < kMappings.size(); ++index) {
+    const KeyMapping &mapping = kMappings[index];
+    const quint32 native_key =
+        kWindowsDigit0VirtualKey + static_cast<quint32>(index);
+    const QString text(QChar(static_cast<quint16>(mapping.qt_key)));
+    for (const auto type : {QEvent::KeyPress, QEvent::ShortcutOverride,
+                            QEvent::KeyRelease}) {
+      SCOPED_TRACE(index);
+      SCOPED_TRACE(type);
+      const QKeyEvent event(type, mapping.qt_key, modifiers, 0, native_key,
+                            0, text);
+      const auto chord = quader_input_chord_from_qt_event(event);
+      EXPECT_EQ(chord.key, mapping.quader_key);
+      EXPECT_TRUE(chord.primary);
+      EXPECT_TRUE(chord.shift);
+      EXPECT_TRUE(chord.alt);
+      EXPECT_EQ(event.key(), mapping.qt_key);
+      EXPECT_EQ(event.text(), text);
+      EXPECT_EQ(event.nativeVirtualKey(), native_key);
+      const auto pressed = quader_pressed_input_chord_from_qt_event(event);
+      if (type == QEvent::KeyPress) {
+        ASSERT_TRUE(pressed.has_value());
+        EXPECT_EQ(pressed->key, mapping.quader_key);
+      } else {
+        EXPECT_FALSE(pressed.has_value());
+      }
+    }
+    const QKeyEvent unshifted(QEvent::KeyPress,
+                              Qt::Key_0 + static_cast<int>(index),
+                              Qt::NoModifier, 0, native_key, 0);
+    const auto chord = quader_input_chord_from_qt_event(unshifted);
+    EXPECT_EQ(chord.key, mapping.quader_key);
+    EXPECT_FALSE(chord.shift);
+  }
+  const QKeyEvent repeat(QEvent::KeyPress, Qt::Key_sterling,
+                         Qt::ShiftModifier, 0, 0x33, 0,
+                         QStringLiteral("\u00a3"), true);
+  EXPECT_FALSE(quader_pressed_input_chord_from_qt_event(repeat).has_value());
+}
+
+TEST(QtInputAdapterTests,
+     WindowsNativeDigitsPreserveQuoteAndKeypadKeyIdentity) {
+  constexpr quint32 kWindowsQuoteVirtualKey = 0xde;
+  constexpr quint32 kWindowsNumpad2VirtualKey = 0x62;
+  constexpr quint32 kWindowsDigit2VirtualKey = 0x32;
+  const QKeyEvent quote(QEvent::KeyPress, Qt::Key_QuoteDbl,
+                        Qt::ShiftModifier, 0, kWindowsQuoteVirtualKey, 0,
+                        QStringLiteral("\""));
+  const auto quote_chord = quader_input_chord_from_qt_event(quote);
+  EXPECT_EQ(quote_chord.key, QuaderKeyCode::Apostrophe);
+  EXPECT_TRUE(quote_chord.shift);
+  for (const auto native_key : {kWindowsNumpad2VirtualKey,
+                                kWindowsDigit2VirtualKey}) {
+    SCOPED_TRACE(native_key);
+    const QKeyEvent keypad(QEvent::KeyPress, Qt::Key_2,
+                           Qt::KeypadModifier | Qt::ShiftModifier,
+                           0, native_key, 0, QStringLiteral("2"));
+    const auto chord = quader_input_chord_from_qt_event(keypad);
+    EXPECT_EQ(chord.key, QuaderKeyCode::Numpad2);
+    EXPECT_TRUE(chord.shift);
+  }
+}
+#else
+TEST(QtInputAdapterTests, NonWindowsNativeKeysRetainQtKeyMapping) {
+  const QKeyEvent quote(QEvent::KeyPress, Qt::Key_QuoteDbl,
+                        Qt::ShiftModifier, 0, 0x32, 0,
+                        QStringLiteral("\""));
+  const auto chord = quader_input_chord_from_qt_event(quote);
+  EXPECT_EQ(chord.key, QuaderKeyCode::Apostrophe);
+  EXPECT_TRUE(chord.shift);
+}
+#endif
 
 TEST(QtInputAdapterTests, MapsEveryFunctionKeyThroughF24) {
   for (int offset = 0; offset < 24; ++offset) {
@@ -5845,6 +6183,169 @@ TEST(QtViewportSurfaceInputTests,
               0.0f, 0.01f);
   EXPECT_NEAR(quader::length(context.camera.pose().target - expected.pose().target),
               0.0f, 0.01f);
+}
+
+TEST(QtViewportSurfaceInputTests,
+     HeldKeyboardOriginRequiresOneNativePhysicalKey) {
+#ifndef Q_OS_WIN
+  GTEST_SKIP() << "Windows native key metadata supplies physical key identity.";
+#else
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-held-key-origin-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  QKeyEvent first_press(QEvent::KeyPress, Qt::Key_Q, Qt::ShiftModifier,
+                        0x10U, 0x51U, 0U, QStringLiteral("Q"));
+  QApplication::sendEvent(&surface, &first_press);
+  const auto frame = surface.take_input_frame(0.0F, true);
+  ASSERT_EQ(frame.input.pressed_input_chords.size(), 1U);
+  const auto chord = frame.input.pressed_input_chords.front();
+  EXPECT_EQ(surface.held_keyboard_key_identity(chord),
+            quader::quader_keyboard_event_key_identity(first_press));
+  QKeyEvent second_press(QEvent::KeyPress, Qt::Key_Q, Qt::ShiftModifier,
+                         0x20U, 0x51U, 0U, QStringLiteral("Q"));
+  QApplication::sendEvent(&surface, &second_press);
+  EXPECT_FALSE(surface.held_keyboard_key_identity(chord).has_value());
+  surface.abandon_input();
+  QKeyEvent synthetic_press(QEvent::KeyPress, Qt::Key_Q, Qt::ShiftModifier,
+                            QStringLiteral("Q"));
+  QApplication::sendEvent(&surface, &synthetic_press);
+  EXPECT_FALSE(surface.held_keyboard_key_identity(chord).has_value());
+#endif
+}
+
+TEST(QtViewportSurfaceInputTests,
+     NativeShiftedKeysRetainTheirAcceptedChordUntilPhysicalRelease) {
+#ifndef Q_OS_WIN
+  GTEST_SKIP() << "Windows native key metadata supplies layout-independent keys.";
+#else
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-native-key-lifecycle-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  QKeyEvent override_event(QEvent::ShortcutOverride, Qt::Key_sterling,
+                           Qt::ShiftModifier, 0x04U, 0x33U, 0U,
+                           QString(QChar(0x00a3)));
+  override_event.ignore();
+  QApplication::sendEvent(&surface, &override_event);
+  EXPECT_TRUE(override_event.isAccepted());
+  QKeyEvent press(QEvent::KeyPress, Qt::Key_sterling, Qt::ShiftModifier,
+                  0x04U, 0x33U, 0U, QString(QChar(0x00a3)));
+  QApplication::sendEvent(&surface, &press);
+  auto frame = surface.take_input_frame(0.0F, true);
+  ASSERT_EQ(frame.input.pressed_input_chords.size(), 1U);
+  const auto accepted_chord = frame.input.pressed_input_chords.front();
+  EXPECT_EQ(accepted_chord.key, QuaderKeyCode::Digit3);
+  EXPECT_TRUE(accepted_chord.shift);
+  ASSERT_EQ(frame.input.active_input_chords.size(), 1U);
+  EXPECT_EQ(frame.input.active_input_chords.front(), accepted_chord);
+
+  QKeyEvent shift_release(QEvent::KeyRelease, Qt::Key_Shift, Qt::NoModifier,
+                          0x2aU, 0x10U, 0U);
+  QApplication::sendEvent(&surface, &shift_release);
+  QKeyEvent changed_repeat(QEvent::KeyPress, Qt::Key_3, Qt::NoModifier,
+                           0x04U, 0x33U, 0U, QStringLiteral("3"));
+  QApplication::sendEvent(&surface, &changed_repeat);
+  frame = surface.take_input_frame(0.0F, true);
+  EXPECT_TRUE(frame.input.pressed_input_chords.empty());
+  EXPECT_TRUE(frame.input.released_input_chords.empty());
+  ASSERT_EQ(frame.input.active_input_chords.size(), 1U);
+  EXPECT_EQ(frame.input.active_input_chords.front(), accepted_chord);
+  QKeyEvent release(QEvent::KeyRelease, Qt::Key_3, Qt::NoModifier,
+                    0x04U, 0x33U, 0U, QStringLiteral("3"));
+  QApplication::sendEvent(&surface, &release);
+  frame = surface.take_input_frame(0.0F, true);
+  ASSERT_EQ(frame.input.released_input_chords.size(), 1U);
+  EXPECT_EQ(frame.input.released_input_chords.front(), accepted_chord);
+  EXPECT_TRUE(frame.input.active_input_chords.empty());
+#endif
+}
+
+TEST(QtViewportSurfaceInputTests,
+     NativeKeyReleaseRemainsAbandonedAfterGlyphAndFocusChanges) {
+#ifndef Q_OS_WIN
+  GTEST_SKIP() << "Windows native key metadata supplies layout-independent keys.";
+#else
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-abandoned-native-key-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  for (const bool focus_loss : {false, true}) {
+    SCOPED_TRACE(focus_loss);
+    QFocusEvent focus(QEvent::FocusIn);
+    QApplication::sendEvent(&surface, &focus);
+    QKeyEvent press(QEvent::KeyPress, Qt::Key_sterling, Qt::ShiftModifier,
+                    0x04U, 0x33U, 0U, QString(QChar(0x00a3)));
+    QApplication::sendEvent(&surface, &press);
+    const auto pressed = surface.take_input_frame(0.0F, true);
+    ASSERT_EQ(pressed.input.pressed_input_chords.size(), 1U);
+    if (focus_loss) {
+      QFocusEvent lost(QEvent::FocusOut);
+      QApplication::sendEvent(&surface, &lost);
+      const auto interrupted = surface.take_input_frame(0.0F, false);
+      ASSERT_EQ(interrupted.input.released_input_chords.size(), 1U);
+      EXPECT_EQ(interrupted.input.released_input_chords.front(),
+                pressed.input.pressed_input_chords.front());
+    } else {
+      surface.abandon_input();
+    }
+    QKeyEvent release(QEvent::KeyRelease, Qt::Key_3, Qt::NoModifier,
+                      0x04U, 0x33U, 0U, QStringLiteral("3"));
+    QApplication::sendEvent(&surface, &release);
+    const auto trailing = surface.take_input_frame(0.0F, true);
+    EXPECT_TRUE(trailing.input.pressed_input_chords.empty());
+    EXPECT_TRUE(trailing.input.released_input_chords.empty());
+    EXPECT_TRUE(trailing.input.active_input_chords.empty());
+    QKeyEvent fresh_press(QEvent::KeyPress, Qt::Key_3, Qt::NoModifier,
+                          0x04U, 0x33U, 0U, QStringLiteral("3"));
+    QApplication::sendEvent(&surface, &fresh_press);
+    QApplication::sendEvent(&surface, &release);
+    const auto fresh = surface.take_input_frame(0.0F, true);
+    ASSERT_EQ(fresh.input.pressed_input_chords.size(), 1U);
+    ASSERT_EQ(fresh.input.released_input_chords.size(), 1U);
+    EXPECT_FALSE(fresh.input.pressed_input_chords.front().shift);
+    EXPECT_EQ(fresh.input.pressed_input_chords.front(),
+              fresh.input.released_input_chords.front());
+  }
+#endif
+}
+
+TEST(QtViewportSurfaceInputTests,
+     NativeKeypadReleaseMatchesItsPressAfterNumLockChanges) {
+#ifndef Q_OS_WIN
+  GTEST_SKIP() << "Windows native key metadata supplies keypad scan identities.";
+#else
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-keypad-numlock-lifecycle-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  QKeyEvent press(QEvent::KeyPress, Qt::Key_1, Qt::KeypadModifier,
+                  0x4fU, 0x61U, 0U, QStringLiteral("1"));
+  QApplication::sendEvent(&surface, &press);
+  const auto held = surface.take_input_frame(0.0F, true);
+  ASSERT_EQ(held.input.pressed_input_chords.size(), 1U);
+  EXPECT_EQ(held.input.pressed_input_chords.front().key, QuaderKeyCode::Numpad1);
+  QKeyEvent release(QEvent::KeyRelease, Qt::Key_End, Qt::NoModifier,
+                    0x4fU, 0x23U, 0U);
+  QApplication::sendEvent(&surface, &release);
+  const auto released = surface.take_input_frame(0.0F, true);
+  ASSERT_EQ(released.input.released_input_chords.size(), 1U);
+  EXPECT_EQ(released.input.released_input_chords.front(),
+            held.input.pressed_input_chords.front());
+  EXPECT_TRUE(released.input.active_input_chords.empty());
+#endif
 }
 
 TEST(QtViewportSurfaceInputTests,

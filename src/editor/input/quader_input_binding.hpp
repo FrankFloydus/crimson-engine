@@ -267,6 +267,7 @@ key_code_from_token(std::string_view token) {
       {"dot", QuaderKeyCode::Period},
       {"slash", QuaderKeyCode::Slash},
       {"backslash", QuaderKeyCode::Backslash},
+      {"intlbackslash", QuaderKeyCode::IntlBackslash},
       {"semicolon", QuaderKeyCode::Semicolon},
       {"apostrophe", QuaderKeyCode::Apostrophe},
       {"quote", QuaderKeyCode::Apostrophe},
@@ -654,6 +655,8 @@ inline const char *key_code_display_name(QuaderKeyCode key) {
     return "KeypadDecimal";
   case QuaderKeyCode::NumpadEnter:
     return "KeypadEnter";
+  case QuaderKeyCode::IntlBackslash:
+    return "IntlBackslash";
   case QuaderKeyCode::None:
     return "";
   }

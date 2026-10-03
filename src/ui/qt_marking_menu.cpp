@@ -252,11 +252,13 @@ struct QtMarkingMenu::Impl {
                const QuaderInputChord &initiating_chord,
                const std::array<QAction *, 8> &slot_actions,
                const std::vector<QAction *> &overflow_actions,
-               const QString &title) {
+               const QString &title,
+               std::optional<std::uint64_t> initiating_key_identity) {
     global_anchor_ = global_anchor;
     radial_center_ = global_anchor;
     last_pointer_ = global_anchor;
     initiating_chord_ = initiating_chord;
+    initiating_key_identity_ = initiating_key_identity;
     selected_action_ = nullptr;
     active_slot_ = -1;
     mouse_pressed_ = false;
@@ -596,6 +598,7 @@ private:
   QtMarkingMenu &menu_;
   QtUiScaleMetrics metrics_;
   QuaderInputChord initiating_chord_;
+  std::optional<std::uint64_t> initiating_key_identity_;
   std::array<QPointer<QAction>, kSlotCount> actions_{};
   std::array<MarkingMenuButton *, kSlotCount> buttons_{};
   std::array<QRect, kSlotCount> button_geometry_{};
@@ -630,12 +633,13 @@ QAction *QtMarkingMenu::exec(const QPoint &global_anchor,
                              const QuaderInputChord &initiating_chord,
                              const std::array<QAction *, 8> &slot_actions,
                              const std::vector<QAction *> &overflow_actions,
-                             const QString &title) {
+                             const QString &title,
+                             std::optional<std::uint64_t> initiating_key_identity) {
   if (impl_->running_) {
     return nullptr;
   }
   impl_->prepare(global_anchor, initiating_chord, slot_actions,
-                 overflow_actions, title);
+                 overflow_actions, title, initiating_key_identity);
   QEventLoop loop;
   impl_->loop_ = &loop;
   impl_->running_ = true;
@@ -668,11 +672,16 @@ bool QtMarkingMenu::eventFilter(QObject *watched, QEvent *event) {
       return true;
     }
     if (event->type() == QEvent::KeyRelease) {
-      const auto code =
-          quader_key_code_from_qt_key(key->key(), key->modifiers());
-      if (impl_->initiating_chord_.device == QuaderInputDevice::Keyboard &&
-          code.has_value() && *code == impl_->initiating_chord_.key) {
-        impl_->finish(impl_->selection());
+      if (impl_->initiating_chord_.device == QuaderInputDevice::Keyboard) {
+        const auto chord = quader_input_chord_from_qt_event(*key);
+        const bool initiating_key_released =
+            impl_->initiating_key_identity_.has_value()
+                ? quader_keyboard_event_key_identity(*key) ==
+                      *impl_->initiating_key_identity_
+                : !chord.empty() && chord.key == impl_->initiating_chord_.key;
+        if (initiating_key_released) {
+          impl_->finish(impl_->selection());
+        }
       }
       return true;
     }

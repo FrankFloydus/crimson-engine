@@ -12,12 +12,14 @@
 #include "editor/session/scene_session.hpp"
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_viewport_marking_menu.hpp"
+#include "ui/qt_viewport_surface.hpp"
 #include "viewport/viewport_input_router.hpp"
 
 #include <QAction>
 #include <QApplication>
 #include <QDir>
 #include <QFont>
+#include <QFocusEvent>
 #include <QImage>
 #include <QKeyEvent>
 #include <QListWidget>
@@ -65,7 +67,11 @@ bool show_and_interact(QWidget &owner, quader::QuaderEditorApi &editor,
                        const std::function<void(QWidget &)> &interact,
                        quader::ViewportRuntimeBindingToken binding = {},
                        const quader::QtUiScaleMetrics &metrics =
-                           quader::QtUiScaleMetrics{}) {
+                           quader::QtUiScaleMetrics{},
+                       const quader::QuaderInputChord &initiating_chord =
+                           kInitiatingChord,
+                       std::optional<std::uint64_t> initiating_key_identity =
+                           std::nullopt) {
   quader::QtViewportMarkingMenuPresenter presenter;
   QTimer interaction;
   interaction.setSingleShot(true);
@@ -93,8 +99,8 @@ bool show_and_interact(QWidget &owner, quader::QuaderEditorApi &editor,
   watchdog.start(3000);
   const bool result = presenter.show(
       owner, owner.mapToGlobal(owner.rect().center()),
-      editor.viewports().focused_pane(), kInitiatingChord, editor,
-      input_router, localization, metrics, binding);
+      editor.viewports().focused_pane(), initiating_chord, editor,
+      input_router, localization, metrics, binding, initiating_key_identity);
   interaction.stop();
   watchdog.stop();
   return result;
@@ -119,6 +125,150 @@ void choose_bake_location(QWidget &popup) {
 }
 
 } // namespace
+
+TEST(QtViewportMarkingMenuTests,
+     NativePhysicalOpeningKeySurvivesLayoutAndPopupFocusChanges) {
+#ifndef Q_OS_WIN
+  GTEST_SKIP() << "Windows native key metadata supplies physical key identity.";
+#else
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-marking-menu-physical-opening-key-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  quader::ViewportInputRouter input_router;
+  auto localization = loaded_localization();
+  QWidget owner;
+  prepare_owner(owner);
+  const auto box = editor.modeling().create_box(
+      {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}},
+      "Physical Marking Release");
+  ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.scene().set_transform(
+      box.value().entity, {.position = {3.0F, 4.0F, 5.0F}}).ok());
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  QKeyEvent press(QEvent::KeyPress, Qt::Key_Q, Qt::ShiftModifier,
+                  0x10U, 0x51U, 0U, QStringLiteral("Q"));
+  QCoreApplication::sendEvent(&surface, &press);
+  const auto input = surface.take_input_frame(0.0F, true);
+  ASSERT_EQ(input.input.pressed_input_chords.size(), 1U);
+  const auto initiating_chord = input.input.pressed_input_chords.front();
+  const auto initiating_key_identity =
+      surface.held_keyboard_key_identity(initiating_chord);
+  ASSERT_TRUE(initiating_key_identity.has_value());
+  EXPECT_TRUE(show_and_interact(owner, editor, input_router, localization,
+                               [&](QWidget &popup) {
+    QFocusEvent focus_loss(QEvent::FocusOut);
+    QCoreApplication::sendEvent(&surface, &focus_loss);
+    EXPECT_FALSE(surface.held_keyboard_key_identity(initiating_chord).has_value());
+    auto *button = popup.findChild<QToolButton *>(
+        QStringLiteral("markingMenu.slot.2"));
+    ASSERT_NE(button, nullptr);
+    ASSERT_TRUE(button->isEnabled());
+    const QPoint point = button->mapTo(&popup, button->rect().center());
+    const QPoint global_point = popup.mapToGlobal(point);
+    QMouseEvent hover(QEvent::MouseMove, QPointF(point), QPointF(global_point),
+                      Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(&popup, &hover);
+    QKeyEvent unrelated_release(QEvent::KeyRelease, Qt::Key_Q, Qt::NoModifier,
+                                0x20U, 0x51U, 0U, QStringLiteral("q"));
+    QCoreApplication::sendEvent(&popup, &unrelated_release);
+    EXPECT_TRUE(popup.isVisible())
+        << "An unrelated scan must not close the menu even for the same chord.";
+    QKeyEvent changed_layout_release(QEvent::KeyRelease, Qt::Key_A,
+                                     Qt::NoModifier, 0x10U, 0x41U, 0U,
+                                     QStringLiteral("a"));
+    QCoreApplication::sendEvent(&popup, &changed_layout_release);
+  }, {}, quader::QtUiScaleMetrics{}, initiating_chord, initiating_key_identity));
+  const auto entity = editor.query().entity(box.value().entity);
+  ASSERT_TRUE(entity.has_value());
+  EXPECT_FLOAT_EQ(entity->transform.position.x, 0.0F);
+  EXPECT_FLOAT_EQ(entity->transform.position.y, 0.0F);
+  EXPECT_FLOAT_EQ(entity->transform.position.z, 0.0F);
+#endif
+}
+
+TEST(QtViewportMarkingMenuTests,
+     NativeNationalGlyphReleaseCompletesTheCanonicalCustomOpeningChord) {
+#ifndef Q_OS_WIN
+  GTEST_SKIP() << "Windows native key metadata supplies layout-independent keys.";
+#else
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-national-marking-menu-release-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  quader::ViewportInputRouter input_router;
+  auto localization = loaded_localization();
+  QWidget owner;
+  prepare_owner(owner);
+  const auto box = editor.modeling().create_box(
+      {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}},
+      "National Marking Release");
+  ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  /// Supplies native national glyphs and the stable canonical opening key.
+  struct ReleaseCase {
+    int qt_key;
+    Qt::KeyboardModifiers modifiers;
+    std::uint32_t scan_code;
+    std::uint32_t virtual_key;
+    quader::QuaderKeyCode canonical_key;
+    QString text;
+  };
+  const std::array cases{
+      ReleaseCase{Qt::Key_sterling, Qt::ShiftModifier, 0x04U, 0x33U,
+                  quader::QuaderKeyCode::Digit3, QString(QChar(0x00a3))},
+      ReleaseCase{Qt::Key_QuoteDbl, Qt::NoModifier, 0x04U, 0x33U,
+                  quader::QuaderKeyCode::Digit3, QStringLiteral("\"")},
+      ReleaseCase{Qt::Key_3, Qt::NoModifier, 0x04U, 0x33U,
+                  quader::QuaderKeyCode::Digit3, QStringLiteral("3")},
+      ReleaseCase{Qt::Key_Question, Qt::ShiftModifier, 0x0cU, 0xbdU,
+                  quader::QuaderKeyCode::Minus, QStringLiteral("?")},
+  };
+  for (const auto &case_data : cases) {
+    SCOPED_TRACE(case_data.qt_key);
+    ASSERT_TRUE(editor.scene().set_transform(
+        box.value().entity, {.position = {3.0F, 4.0F, 5.0F}}).ok());
+    ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+    const quader::QuaderInputChord initiating_chord{
+        .shift = true,
+        .device = quader::QuaderInputDevice::Keyboard,
+        .key = case_data.canonical_key};
+    EXPECT_TRUE(show_and_interact(owner, editor, input_router, localization,
+                                 [&](QWidget &popup) {
+      auto *button = popup.findChild<QToolButton *>(
+          QStringLiteral("markingMenu.slot.2"));
+      ASSERT_NE(button, nullptr);
+      ASSERT_TRUE(button->isEnabled());
+      const QPoint point = button->mapTo(&popup, button->rect().center());
+      const QPoint global_point = popup.mapToGlobal(point);
+      QMouseEvent hover(QEvent::MouseMove, QPointF(point), QPointF(global_point),
+                        Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+      QCoreApplication::sendEvent(&popup, &hover);
+      QKeyEvent release(QEvent::KeyRelease, case_data.qt_key,
+                        case_data.modifiers, case_data.scan_code,
+                        case_data.virtual_key, 0U, case_data.text);
+      QCoreApplication::sendEvent(&popup, &release);
+    }, {}, quader::QtUiScaleMetrics{}, initiating_chord));
+    const auto entity = editor.query().entity(box.value().entity);
+    ASSERT_TRUE(entity.has_value());
+    EXPECT_FLOAT_EQ(entity->transform.position.x, 0.0F);
+    EXPECT_FLOAT_EQ(entity->transform.position.y, 0.0F);
+    EXPECT_FLOAT_EQ(entity->transform.position.z, 0.0F);
+  }
+#endif
+}
 
 TEST(QtViewportMarkingMenuTests, FixedDirectionsShareRelevantContextCommands) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);

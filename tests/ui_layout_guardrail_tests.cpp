@@ -2975,7 +2975,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(abandon_input, "InputAccumulator replacement;");
   expect_contains(abandon_input, "replacement.hovered = input_->hovered;");
   expect_contains(abandon_input, "replacement.focused = input_->focused;");
-  expect_contains(surface, "abandoned_key_releases.erase(event.key())");
+  expect_contains(surface, "abandoned_key_releases.erase(key_identity)");
   expect_contains(surface, "abandoned_pointer_releases.erase(");
 
   const std::string install = source_slice(

@@ -4435,13 +4435,16 @@ void QtViewportPanel::process_viewport_input(
                  released.mouse_button == initiating_chord.mouse_button;
         });
     if (!already_released) {
+      const auto initiating_key_identity =
+          pane_state.surface->held_keyboard_key_identity(initiating_chord);
       (void)workspace_->focus_pane(*input_pane);
       update_focused_pane_indicator();
       const bool changed = marking_menu_presenter_.show(
           *pane_state.surface_container, shortcut_popup_global_point, *input_pane,
           initiating_chord, editor, input_router_, *localization_, ui_scale_metrics_,
           {.current_generation = &runtime_binding_generation_,
-           .expected_generation = input_binding_generation});
+           .expected_generation = input_binding_generation},
+          initiating_key_identity);
       if (runtime_binding_generation_ != input_binding_generation) {
         return;
       }

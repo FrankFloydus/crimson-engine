@@ -124,6 +124,8 @@ enum class QuaderKeyCode {
     NumpadDivide,
     NumpadDecimal,
     NumpadEnter,
+    /// Keeps the additional ISO keyboard key distinct from Backslash.
+    IntlBackslash,
 };
 
 /**

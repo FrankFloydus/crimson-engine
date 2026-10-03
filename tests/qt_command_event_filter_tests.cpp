@@ -558,6 +558,9 @@ TEST(QtCommandEventFilterTests,
   QCoreApplication::sendEvent(surface, &native_press);
   EXPECT_EQ(toggles, 1);
 
+  QKeyEvent native_release(QEvent::KeyRelease, Qt::Key_Space, Qt::ControlModifier);
+  QCoreApplication::sendEvent(surface, &native_release);
+
   QWidget independent_window;
   independent_window.resize(300, 100);
   QPushButton independent_button(QStringLiteral("Independent action"), &independent_window);
@@ -1356,6 +1359,147 @@ TEST(QtCommandEventFilterTests,
 
   application.removeEventFilter(&command_filter);
   editor_surface.hide();
+}
+
+TEST(QtCommandEventFilterTests,
+     NativeHeldShortcutKeepsItsPressOwnershipAcrossModifierChanges) {
+#ifndef Q_OS_WIN
+  GTEST_SKIP() << "Windows native key metadata supplies layout-independent keys.";
+#else
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-global-held-native-shortcut-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  auto standalone = quader::create_standalone_editor();
+  auto &editor = standalone.editor();
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  ASSERT_TRUE(editor.commands().set_shortcut(
+      editor.commands().keybinding_target_id_for_selection_mode(
+          quader::QuaderSelectionMode::Edge), "Shift+3").ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  quader::QtCommandEventFilter filter(editor, {});
+  application.installEventFilter(&filter);
+  QWidget surface;
+  surface.setAttribute(Qt::WA_DontShowOnScreen, true);
+  surface.setFocusPolicy(Qt::StrongFocus);
+  surface.show();
+  surface.activateWindow();
+  QApplication::setActiveWindow(&surface);
+  surface.setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  ASSERT_EQ(QApplication::focusWidget(), &surface);
+  QKeyEvent press(QEvent::KeyPress, Qt::Key_sterling, Qt::ShiftModifier,
+                  0x04U, 0x33U, 0U, QString(QChar(0x00a3)));
+  QCoreApplication::sendEvent(&surface, &press);
+  ASSERT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Edge);
+  QKeyEvent changed_repeat(QEvent::KeyPress, Qt::Key_3, Qt::NoModifier,
+                           0x04U, 0x33U, 0U, QStringLiteral("3"));
+  QCoreApplication::sendEvent(&surface, &changed_repeat);
+  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Edge);
+  QKeyEvent changed_override(QEvent::ShortcutOverride, Qt::Key_3, Qt::NoModifier,
+                             0x04U, 0x33U, 0U, QStringLiteral("3"));
+  changed_override.ignore();
+  QCoreApplication::sendEvent(&surface, &changed_override);
+  EXPECT_TRUE(changed_override.isAccepted());
+  QKeyEvent release(QEvent::KeyRelease, Qt::Key_3, Qt::NoModifier,
+                    0x04U, 0x33U, 0U, QStringLiteral("3"));
+  QCoreApplication::sendEvent(&surface, &release);
+  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Edge);
+  QCoreApplication::sendEvent(&surface, &changed_repeat);
+  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Face);
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  QEvent deactivation(QEvent::ApplicationDeactivate);
+  QCoreApplication::sendEvent(&surface, &deactivation);
+  // The previous key can be released while another application owns input.
+  // Its next physical press must acquire a fresh command after return.
+  QCoreApplication::sendEvent(&surface, &press);
+  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Edge);
+  QCoreApplication::sendEvent(&surface, &release);
+  application.removeEventFilter(&filter);
+#endif
+}
+
+TEST(QtCommandEventFilterTests,
+     ScopedNativeLifecycleConsumesChangedGlyphReleaseAfterSurfaceCloses) {
+#ifndef Q_OS_WIN
+  GTEST_SKIP() << "Windows native key metadata supplies layout-independent keys.";
+#else
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-scoped-native-release-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  for (const bool cancel_intent : {false, true}) {
+    SCOPED_TRACE(cancel_intent);
+    auto standalone = quader::create_standalone_editor();
+    auto &editor = standalone.editor();
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+    const auto catalog = editor.commands().keybinding_catalog();
+    const auto entry = std::ranges::find_if(catalog, [&](const auto &item) {
+      return item.key.action_id ==
+             (cancel_intent ? "tools.cancel" : "tools.finalize");
+    });
+    ASSERT_NE(entry, catalog.end());
+    ASSERT_TRUE(editor.commands().set_action_shortcut(
+        entry->key, "Shift+3",
+        quader::QuaderKeybindingConflictPolicy::Replace).ok());
+    QWidget surface(nullptr, Qt::Tool);
+    surface.setAttribute(Qt::WA_DontShowOnScreen, true);
+    QPushButton apply(QStringLiteral("Apply"), &surface);
+    QPushButton cancel(QStringLiteral("Cancel"), &surface);
+    cancel.move(0, 40);
+    int applies = 0;
+    int cancels = 0;
+    QObject::connect(&apply, &QPushButton::clicked, &surface, [&] {
+      ++applies;
+      surface.hide();
+    });
+    QObject::connect(&cancel, &QPushButton::clicked, &surface, [&] {
+      ++cancels;
+      surface.hide();
+    });
+    quader::QtApplyCancelInputFilter filter(
+        surface, apply, cancel, [&] { return &editor.commands(); });
+    surface.show();
+    surface.activateWindow();
+    QApplication::setActiveWindow(&surface);
+    cancel.setFocus(Qt::OtherFocusReason);
+    QCoreApplication::processEvents();
+    QKeyEvent override_event(QEvent::ShortcutOverride, Qt::Key_sterling,
+                             Qt::ShiftModifier, 0x04U, 0x33U, 0U,
+                             QString(QChar(0x00a3)));
+    override_event.ignore();
+    QCoreApplication::sendEvent(&cancel, &override_event);
+    EXPECT_TRUE(override_event.isAccepted());
+    QKeyEvent press(QEvent::KeyPress, Qt::Key_sterling, Qt::ShiftModifier,
+                    0x04U, 0x33U, 0U, QString(QChar(0x00a3)));
+    QCoreApplication::sendEvent(&cancel, &press);
+    EXPECT_EQ(applies, cancel_intent ? 0 : 1);
+    EXPECT_EQ(cancels, cancel_intent ? 1 : 0);
+    ASSERT_FALSE(surface.isVisible());
+    QWidget other_surface;
+    QKeyEvent changed_repeat(QEvent::KeyPress, Qt::Key_3, Qt::NoModifier,
+                             0x04U, 0x33U, 0U, QStringLiteral("3"));
+    changed_repeat.ignore();
+    QCoreApplication::sendEvent(&other_surface, &changed_repeat);
+    EXPECT_TRUE(changed_repeat.isAccepted());
+    QKeyEvent release(QEvent::KeyRelease, Qt::Key_3, Qt::NoModifier,
+                      0x04U, 0x33U, 0U, QStringLiteral("3"));
+    release.ignore();
+    QCoreApplication::sendEvent(&other_surface, &release);
+    EXPECT_TRUE(release.isAccepted());
+    QKeyEvent fresh_release(QEvent::KeyRelease, Qt::Key_3, Qt::NoModifier,
+                            0x04U, 0x33U, 0U, QStringLiteral("3"));
+    fresh_release.ignore();
+    QCoreApplication::sendEvent(&other_surface, &fresh_release);
+    EXPECT_FALSE(fresh_release.isAccepted());
+    EXPECT_EQ(applies, cancel_intent ? 0 : 1);
+    EXPECT_EQ(cancels, cancel_intent ? 1 : 0);
+  }
+#endif
 }
 
 TEST(QtCommandEventFilterTests,
@@ -2221,6 +2365,101 @@ TEST(QtCommandEventFilterTests,
   }
   panel->unbind();
   application.removeEventFilter(&filter);
+}
+
+TEST(QtCommandEventFilterTests,
+     ItalianShiftDigitsSwitchSingleSelectionModeAndPreserveTextInput) {
+#ifndef Q_OS_WIN
+  GTEST_SKIP() << "Windows native virtual keys identify the Italian digit row.";
+#else
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-italian-selection-mode-shortcut-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  auto standalone = quader::create_standalone_editor();
+  auto &editor = standalone.editor();
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  for (const auto mode : {quader::QuaderSelectionMode::Edge,
+                         quader::QuaderSelectionMode::Face}) {
+    ASSERT_TRUE(editor.commands().set_shortcut(
+        editor.commands().keybinding_target_id_for_selection_mode(mode),
+        mode == quader::QuaderSelectionMode::Edge ? "Shift+2" : "Shift+3").ok());
+  }
+  const auto box = editor.modeling().create_box(
+      {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}});
+  ASSERT_TRUE(box.ok());
+  QWidget window;
+  window.resize(340, 280);
+  QTreeWidget panel(&window);
+  panel.setGeometry(0, 0, 340, 220);
+  panel.addTopLevelItem(new QTreeWidgetItem({QStringLiteral("Selected item")}));
+  panel.setCurrentItem(panel.topLevelItem(0));
+  QLineEdit text_editor(&window);
+  text_editor.setGeometry(0, 230, 340, 32);
+  bool outliner_input = false;
+  quader::QtCommandEventFilter filter(editor, {});
+  filter.set_outliner_input_owner_provider([&outliner_input] {
+    return outliner_input;
+  });
+  application.installEventFilter(&filter);
+  window.show();
+  window.activateWindow();
+
+  for (const bool outliner : {false, true}) {
+    outliner_input = outliner;
+    for (const auto mode : {quader::QuaderSelectionMode::Edge,
+                           quader::QuaderSelectionMode::Face}) {
+      SCOPED_TRACE(outliner);
+      SCOPED_TRACE(static_cast<int>(mode));
+      const bool edge = mode == quader::QuaderSelectionMode::Edge;
+      ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+      ASSERT_TRUE(editor.selection().clear().ok());
+      ASSERT_TRUE((edge ? editor.selection().select_edge(box.value(), 1, 2)
+                        : editor.selection().select_face(box.value(), 1)).ok());
+      const auto target_mode = edge ? quader::QuaderSelectionMode::Face
+                                    : quader::QuaderSelectionMode::Edge;
+      const auto before = editor.selection().summary();
+      const int key = edge ? 0x00A3 : Qt::Key_QuoteDbl;
+      const quint32 native_scan_code = edge ? 4U : 3U;
+      const quint32 native_virtual_key = edge ? 0x33U : 0x32U;
+      const QString text = edge ? QString(QChar(0x00A3)) : QStringLiteral("\"");
+      panel.setFocus(Qt::OtherFocusReason);
+      QCoreApplication::processEvents();
+      ASSERT_EQ(QApplication::focusWidget(), &panel);
+      QKeyEvent shortcut_override(QEvent::ShortcutOverride, key, Qt::ShiftModifier,
+                                  native_scan_code, native_virtual_key, 0U, text);
+      shortcut_override.ignore();
+      QCoreApplication::sendEvent(&panel, &shortcut_override);
+      EXPECT_EQ(editor.selection().summary().mode, mode);
+      EXPECT_EQ(editor.selection().summary().selection_revision,
+                before.selection_revision);
+      QKeyEvent press(QEvent::KeyPress, key, Qt::ShiftModifier,
+                      native_scan_code, native_virtual_key, 0U, text);
+      QCoreApplication::sendEvent(&panel, &press);
+      EXPECT_EQ(editor.selection().summary().mode, target_mode);
+      const auto after = editor.selection().summary();
+      EXPECT_EQ(panel.currentItem(), panel.topLevelItem(0));
+      QKeyEvent release(QEvent::KeyRelease, key, Qt::ShiftModifier,
+                        native_scan_code, native_virtual_key, 0U, text);
+      QCoreApplication::sendEvent(&panel, &release);
+      EXPECT_EQ(editor.selection().summary().mode, target_mode);
+      EXPECT_EQ(editor.selection().summary().selection_revision,
+                after.selection_revision);
+      text_editor.clear();
+      text_editor.setFocus(Qt::OtherFocusReason);
+      QCoreApplication::processEvents();
+      ASSERT_EQ(QApplication::focusWidget(), &text_editor);
+      QCoreApplication::sendEvent(&text_editor, &press);
+      EXPECT_EQ(text_editor.text(), text);
+      EXPECT_EQ(editor.selection().summary().mode, target_mode);
+      EXPECT_EQ(editor.selection().summary().selection_revision,
+                after.selection_revision);
+    }
+  }
+  application.removeEventFilter(&filter);
+#endif
 }
 
 TEST(QtCommandEventFilterTests,

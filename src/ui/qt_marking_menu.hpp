@@ -9,7 +9,9 @@
 #include <QWidget>
 
 #include <array>
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
 class QAction;
@@ -38,7 +40,9 @@ public:
                               const QuaderInputChord &initiating_chord,
                               const std::array<QAction *, 8> &slot_actions,
                               const std::vector<QAction *> &overflow_actions,
-                              const QString &title);
+                              const QString &title,
+                              std::optional<std::uint64_t> initiating_key_identity =
+                                  std::nullopt);
 
 protected:
   bool eventFilter(QObject *watched, QEvent *event) override;

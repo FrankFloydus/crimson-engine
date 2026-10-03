@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <utility>
 
 class QEnterEvent;
@@ -117,6 +118,9 @@ public:
    */
   [[nodiscard]] QtViewportInputFrame
   take_input_frame(float delta_seconds, bool route_active_navigation);
+  /// Returns a unique held native key before popup focus retires surface input.
+  [[nodiscard]] std::optional<std::uint64_t>
+  held_keyboard_key_identity(const QuaderInputChord &chord) const;
   // Discards queued and held input from a released runtime binding. Focus,
   // hover, and the last pointer position remain available to the next owner.
   void abandon_input();

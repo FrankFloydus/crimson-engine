@@ -3520,6 +3520,128 @@ TEST(QtSettingsDialogTests,
 }
 
 TEST(QtSettingsDialogTests,
+     KeybindingRecorderNormalizesNativeLayoutsAndReloadsOverrides) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-settings-native-keybinding-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  const ScopedDefaultLocale force_c_locale(QLocale::c());
+  QTemporaryDir storage;
+  ASSERT_TRUE(storage.isValid());
+  const std::filesystem::path keybindings =
+      std::filesystem::path(storage.path().toStdWString()) / "keybindings.json";
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(keybindings).ok());
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  LocalizationService localization = loaded_localization();
+  std::vector<QtSettingsChange> changes;
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  dialog.set_context(ui_settings, viewport_settings, localization, editor.commands(),
+                     [&](const QtSettingsChange &change) { changes.push_back(change); });
+  dialog.show();
+  QCoreApplication::processEvents();
+  auto *table = dialog.findChild<QTableView *>(QStringLiteral("settingsKeybindingsTable"));
+  ASSERT_NE(table, nullptr);
+  ASSERT_NE(table->model(), nullptr);
+  const auto select_undo = [&] {
+    const QString target = QString::fromUtf8(quader_command::kEditUndo.string().data(),
+        static_cast<qsizetype>(quader_command::kEditUndo.string().size()));
+    for (int row = 0; row < table->model()->rowCount(); ++row) {
+      if (table->model()->index(row, 0).data(Qt::UserRole).toString() == target) {
+        table->selectRow(row);
+        QCoreApplication::processEvents();
+        return true;
+      }
+    }
+    return false;
+  };
+  ASSERT_TRUE(select_undo());
+  QTimer::singleShot(0, &dialog, [] {
+    QWidget *capture = QApplication::activeModalWidget();
+    ASSERT_NE(capture, nullptr);
+    auto *recorder = capture->findChild<QLineEdit *>(
+        QStringLiteral("settingsKeybindingCaptureRecorder"));
+    auto *use = capture->findChild<QPushButton *>(QStringLiteral("settingsKeybindingCaptureUse"));
+    auto *clear = capture->findChild<QPushButton *>(QStringLiteral("settingsKeybindingCaptureClear"));
+    ASSERT_NE(recorder, nullptr);
+    ASSERT_NE(use, nullptr);
+    ASSERT_NE(clear, nullptr);
+    const auto send_native_key = [&](int key, Qt::KeyboardModifiers modifiers,
+                                     quint32 scan, quint32 virtual_key, const QString &text) {
+      QKeyEvent press(QEvent::KeyPress, key, modifiers, scan, virtual_key, 0u, text);
+      QCoreApplication::sendEvent(recorder, &press);
+      QKeyEvent release(QEvent::KeyRelease, key, modifiers, scan, virtual_key, 0u, text);
+      QCoreApplication::sendEvent(recorder, &release);
+    };
+    send_native_key(Qt::Key_E, Qt::GroupSwitchModifier | Qt::ControlModifier | Qt::AltModifier,
+                    0x12u, 0x45u, QStringLiteral("\u20ac"));
+    EXPECT_TRUE(recorder->text().isEmpty());
+    EXPECT_FALSE(use->isEnabled());
+    clear->click();
+    send_native_key(0x0423, Qt::ControlModifier | Qt::AltModifier | Qt::ShiftModifier,
+                    0x12u, 0x45u, QStringLiteral("\u0443"));
+    EXPECT_EQ(recorder->text(), QStringLiteral("Ctrl+Shift+Alt+E"));
+    send_native_key(Qt::Key_Ampersand, Qt::NoModifier, 2u, 0x31u, QStringLiteral("&"));
+    send_native_key(Qt::Key_QuoteDbl, Qt::ShiftModifier, 3u, 0x32u, QStringLiteral("\""));
+    send_native_key(0x00a3, Qt::ShiftModifier, 4u, 0x33u, QStringLiteral("\u00a3"));
+    send_native_key(0x00c8, Qt::NoModifier, 0x27u, 0xbau, QStringLiteral("\u00e8"));
+    send_native_key(Qt::Key_Dead_Acute, Qt::NoModifier, 0x27u, 0xbau, QString{});
+    send_native_key(Qt::Key_Less, Qt::NoModifier, 0x56u, 0xe2u, QStringLiteral("<"));
+    EXPECT_EQ(recorder->text(),
+              QStringLiteral("Ctrl+Shift+Alt+E 1 Shift+2 Shift+3 Semicolon Semicolon IntlBackslash"));
+    EXPECT_TRUE(use->isEnabled());
+    use->click();
+  });
+  send_key(*table, Qt::Key_Return);
+  constexpr std::string_view kCaptured =
+      "Ctrl+Shift+Alt+E 1 Shift+2 Shift+3 Semicolon Semicolon IntlBackslash";
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto *undo = find_keybinding_catalog_entry(catalog, quader_command::kEditUndo.string());
+  ASSERT_NE(undo, nullptr);
+  EXPECT_EQ(undo->shortcut, kCaptured);
+  EXPECT_TRUE(undo->customized);
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::KeybindingsCommit), 1u);
+  EXPECT_NE(read_text_file(keybindings).find(kCaptured), std::string::npos);
+  const auto reload_catalog = [&] {
+    SceneSession reloaded_session;
+    QuaderEditorApi reloaded(QuaderApiSessionInternalAccess::from_scene_session(reloaded_session));
+    EXPECT_TRUE(reloaded.commands().set_keybinding_storage_path(keybindings).ok());
+    return reloaded.commands().keybinding_catalog();
+  };
+  const auto reloaded_catalog = reload_catalog();
+  const auto *reloaded_undo = find_keybinding_catalog_entry(
+      reloaded_catalog, quader_command::kEditUndo.string());
+  ASSERT_NE(reloaded_undo, nullptr);
+  EXPECT_EQ(reloaded_undo->shortcut, kCaptured);
+  EXPECT_TRUE(reloaded_undo->customized);
+  ASSERT_TRUE(select_undo());
+  QTimer::singleShot(0, &dialog, [] {
+    QWidget *capture = QApplication::activeModalWidget();
+    ASSERT_NE(capture, nullptr);
+    auto *unassign = capture->findChild<QPushButton *>(
+        QStringLiteral("settingsKeybindingCaptureUnassign"));
+    ASSERT_NE(unassign, nullptr);
+    EXPECT_TRUE(unassign->isEnabled());
+    unassign->click();
+  });
+  send_key(*table, Qt::Key_Return);
+  const auto unassigned_catalog = reload_catalog();
+  const auto *unassigned = find_keybinding_catalog_entry(
+      unassigned_catalog, quader_command::kEditUndo.string());
+  ASSERT_NE(unassigned, nullptr);
+  EXPECT_TRUE(unassigned->shortcut.empty());
+  EXPECT_TRUE(unassigned->customized);
+  EXPECT_TRUE(unassigned->unassigned);
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::KeybindingsCommit), 2u);
+  dialog.reject();
+}
+
+TEST(QtSettingsDialogTests,
      KeybindingEditorCapturesMixedSequenceAndPersistsImmediately) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;

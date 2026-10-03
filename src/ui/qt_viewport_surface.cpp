@@ -77,7 +77,7 @@ bool accept_viewport_shortcut_override(QEvent *event) {
   }
   auto &key = *static_cast<QKeyEvent *>(event);
   if (is_native_window_close_shortcut(key) ||
-      !quader_key_code_from_qt_key(key.key(), key.modifiers()).has_value()) {
+      quader_input_chord_from_qt_event(key).empty()) {
     return false;
   }
   // Native QWindow focus and its QWidget container must reserve the same
@@ -204,8 +204,8 @@ struct QtViewportSurface::InputAccumulator {
   std::vector<ViewportPointerMotionSample> pointer_motion_samples;
   std::vector<QuaderWheelInputEdge> wheel;
   QtWheelInputAccumulator wheel_accumulator;
-  std::unordered_map<int, QuaderInputChord> active_keys;
-  std::unordered_set<int> abandoned_key_releases;
+  std::unordered_map<std::uint64_t, QuaderInputChord> active_keys;
+  std::unordered_set<std::uint64_t> abandoned_key_releases;
   std::unordered_set<int> abandoned_pointer_releases;
   std::optional<QuaderInputChord> middle_drag;
   std::optional<QuaderInputChord> right_drag;
@@ -763,12 +763,31 @@ QtViewportSurface::take_input_frame(float delta_seconds,
   return frame;
 }
 
+std::optional<std::uint64_t> QtViewportSurface::held_keyboard_key_identity(
+    const QuaderInputChord &chord) const {
+  if (input_ == nullptr || chord.device != QuaderInputDevice::Keyboard) {
+    return std::nullopt;
+  }
+  std::optional<std::uint64_t> identity;
+  for (const auto &[key_identity, accepted_chord] : input_->active_keys) {
+    if (accepted_chord != chord) {
+      continue;
+    }
+    if (identity.has_value() ||
+        !quader_keyboard_key_identity_has_native_data(key_identity)) {
+      return std::nullopt;
+    }
+    identity = key_identity;
+  }
+  return identity;
+}
+
 void QtViewportSurface::abandon_input() {
   if (input_ == nullptr) {
     return;
   }
 
-  std::unordered_set<int> abandoned_key_releases =
+  std::unordered_set<std::uint64_t> abandoned_key_releases =
       std::move(input_->abandoned_key_releases);
   for (const auto &[key, chord] : input_->active_keys) {
     (void)chord;
@@ -1226,7 +1245,7 @@ void QtViewportSurface::record_focus_out() {
   const bool capture_was_stolen = native_capture_loss_pending_;
   set_pointer_capture(false);
   for (const auto &[key, chord] : input_->active_keys) {
-    (void)key;
+    input_->abandoned_key_releases.insert(key);
     input_->released.push_back(chord);
   }
   input_->active_keys.clear();
@@ -1268,9 +1287,16 @@ void QtViewportSurface::record_key_press(QKeyEvent &event) {
   if (!chord.has_value()) {
     return;
   }
-  input_->abandoned_key_releases.erase(event.key());
+  const auto key_identity = quader_keyboard_event_key_identity(event);
+  // Native repeats can become ordinary Qt presses after modifiers change.
+  // Retain the first accepted chord until its physical key is released.
+  if ((event.nativeScanCode() != 0u || event.nativeVirtualKey() != 0u) &&
+      input_->active_keys.contains(key_identity)) {
+    return;
+  }
+  input_->abandoned_key_releases.erase(key_identity);
   input_->pressed.push_back(*chord);
-  input_->active_keys.insert_or_assign(event.key(), *chord);
+  input_->active_keys.insert_or_assign(key_identity, *chord);
 }
 
 void QtViewportSurface::record_key_release(QKeyEvent &event) {
@@ -1279,17 +1305,17 @@ void QtViewportSurface::record_key_release(QKeyEvent &event) {
   }
   input_->modifiers = viewport_modifiers(event);
   input_->has_event_modifiers = true;
-  if (input_->abandoned_key_releases.erase(event.key()) > 0u) {
+  const auto key_identity = quader_keyboard_event_key_identity(event);
+  if (input_->abandoned_key_releases.erase(key_identity) > 0u) {
     return;
   }
-  const auto found = input_->active_keys.find(event.key());
+  const auto found = input_->active_keys.find(key_identity);
   if (found != input_->active_keys.end()) {
     input_->released.push_back(found->second);
     input_->active_keys.erase(found);
     return;
   }
-  const QuaderInputChord chord =
-      quader_input_chord_from_qt_key(event.key(), event.modifiers());
+  const QuaderInputChord chord = quader_input_chord_from_qt_event(event);
   if (!chord.empty()) {
     input_->released.push_back(chord);
   }

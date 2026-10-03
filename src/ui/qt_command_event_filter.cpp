@@ -536,10 +536,13 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
       event->type() == QEvent::KeyRelease ||
       event->type() == QEvent::KeyPress) {
     const auto &key = *static_cast<QKeyEvent *>(event);
-    if (consumed_settings_keys_.contains(key.key()) &&
-        (event->type() == QEvent::KeyRelease || key.isAutoRepeat())) {
+    const auto key_identity = quader_keyboard_event_key_identity(key);
+    if (consumed_settings_keys_.contains(key_identity) &&
+        (event->type() == QEvent::ShortcutOverride ||
+         event->type() == QEvent::KeyRelease || key.isAutoRepeat() ||
+         key.nativeScanCode() != 0u || key.nativeVirtualKey() != 0u)) {
       if (event->type() == QEvent::KeyRelease && !key.isAutoRepeat()) {
-        consumed_settings_keys_.erase(key.key());
+        consumed_settings_keys_.erase(key_identity);
       }
       event->accept();
       return true;
@@ -555,8 +558,7 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
     }
     QWidget *focus = QApplication::focusWidget();
     const auto &key = *static_cast<QKeyEvent *>(event);
-    const auto chord =
-        quader_input_chord_from_qt_key(key.key(), key.modifiers());
+    const auto chord = quader_input_chord_from_qt_event(key);
     if (asset_browser_owns_input(focus)) {
       if (!chord.empty() &&
           editor_->commands().resolve_asset_browser_input_binding(
@@ -609,6 +611,10 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
     break;
   }
   case QEvent::ApplicationDeactivate:
+    // Releases outside the application are not delivered to its adapters.
+    consumed_settings_keys_.clear();
+    reset_pending_chord();
+    break;
   case QEvent::WindowDeactivate:
   case QEvent::FocusOut:
     reset_pending_chord();
@@ -650,6 +656,14 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
     if (!chord.has_value()) {
       return QObject::eventFilter(watched, event);
     }
+    const auto &key_event = *static_cast<QKeyEvent *>(event);
+    const auto reserve_native_release = [&]() {
+      if (key_event.nativeScanCode() != 0u ||
+          key_event.nativeVirtualKey() != 0u) {
+        consumed_settings_keys_.insert(
+            quader_keyboard_event_key_identity(key_event));
+      }
+    };
 
     ViewportToolState state = qt_command_dispatch_tool_state(
         tool_state_provider_, editor_->viewports().grid_preset());
@@ -675,8 +689,10 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
       // effects such as a completed save. Consuming the edge also prevents the
       // viewport router from executing the same command a second time.
       reset_pending_chord();
+      reserve_native_release();
       if (*immediate_command == quader_command::kUiAssetBrowser.string()) {
-        consumed_settings_keys_.insert(static_cast<QKeyEvent *>(event)->key());
+        consumed_settings_keys_.insert(quader_keyboard_event_key_identity(
+            *static_cast<QKeyEvent *>(event)));
       }
       const QuaderApiVoidResult result = [&]() {
         QDR_PROFILE_SCOPE("Qt viewport global command execute");
@@ -699,7 +715,8 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
       }();
       if (tool_settings_dispatch.kind ==
           QuaderNativeToolSettingsDispatch::Kind::Intent) {
-        consumed_settings_keys_.insert(static_cast<QKeyEvent *>(event)->key());
+        consumed_settings_keys_.insert(quader_keyboard_event_key_identity(
+            *static_cast<QKeyEvent *>(event)));
         QuaderEditorApi *const command_editor = editor_;
         const auto command_binding_generation = binding_generation_;
         if (QtToolSettingsPanel *panel =
@@ -751,13 +768,15 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
                      QuaderNativeToolSettingsDispatch::Kind::PendingChord ||
                  tool_settings_dispatch.kind ==
                      QuaderNativeToolSettingsDispatch::Kind::Consumed) {
-        consumed_settings_keys_.insert(static_cast<QKeyEvent *>(event)->key());
+        consumed_settings_keys_.insert(quader_keyboard_event_key_identity(
+            *static_cast<QKeyEvent *>(event)));
         event->accept();
         return true;
       }
       if (suppress_settings_button_space(
               *editor_, focus_widget, *static_cast<QKeyEvent *>(event))) {
-        consumed_settings_keys_.insert(static_cast<QKeyEvent *>(event)->key());
+        consumed_settings_keys_.insert(quader_keyboard_event_key_identity(
+            *static_cast<QKeyEvent *>(event)));
         event->accept();
         return true;
       }
@@ -801,6 +820,7 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
         dispatch.kind == QuaderViewportKeybindingDispatch::Kind::NoMatch) {
       // The prefix already consumed the sequence. Do not replay a mismatched
       // continuation into the editor as unrelated text.
+      reserve_native_release();
       event->accept();
       return true;
     }
@@ -809,6 +829,7 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
       // A mismatched continuation belongs to the sequence that consumed its
       // prefix. Do not replay it as a fresh command through a parent widget or
       // the still-focused viewport's deferred input queue.
+      reserve_native_release();
       event->accept();
       return true;
     }
@@ -829,12 +850,15 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
     }
     switch (dispatch.kind) {
     case QuaderViewportKeybindingDispatch::Kind::PendingChord:
+      reserve_native_release();
       if (asset_browser_focused) {
-        consumed_settings_keys_.insert(static_cast<QKeyEvent *>(event)->key());
+        consumed_settings_keys_.insert(quader_keyboard_event_key_identity(
+            *static_cast<QKeyEvent *>(event)));
       }
       event->accept();
       return true;
     case QuaderViewportKeybindingDispatch::Kind::Command: {
+      reserve_native_release();
       if (asset_browser_focused &&
           is_asset_browser_edit_command(dispatch.command_id)) {
         // Asset commands share the canonical mappings but have independent
@@ -844,12 +868,14 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
           (void)asset_browser_action_handler_(
               QuaderCommandId{dispatch.command_id});
         }
-        consumed_settings_keys_.insert(static_cast<QKeyEvent *>(event)->key());
+        consumed_settings_keys_.insert(quader_keyboard_event_key_identity(
+            *static_cast<QKeyEvent *>(event)));
         event->accept();
         return true;
       }
       if (asset_browser_toggle) {
-        consumed_settings_keys_.insert(static_cast<QKeyEvent *>(event)->key());
+        consumed_settings_keys_.insert(quader_keyboard_event_key_identity(
+            *static_cast<QKeyEvent *>(event)));
       }
       const std::optional<SettledEditorFocus> settled_focus =
           text_input_active &&
@@ -883,7 +909,8 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
           return command_editor->viewports().set_grid_preset(
               dispatch.shortcut.grid_preset);
         case ViewportShortcutKind::CancelActiveTool: {
-          consumed_settings_keys_.insert(static_cast<QKeyEvent *>(event)->key());
+          consumed_settings_keys_.insert(quader_keyboard_event_key_identity(
+              *static_cast<QKeyEvent *>(event)));
           const auto pane = command_editor->viewports().focused_pane();
           if (!command_editor->tools().pane_owns_executing_tool(pane)) {
             return command_editor->viewports().record_selected_tool(
@@ -898,6 +925,7 @@ bool QtCommandEventFilter::eventFilter(QObject *watched, QEvent *event) {
       if (!result.has_value()) {
         break;
       }
+      reserve_native_release();
       if (!result->ok()) {
         LOG_ERROR("Qt editor keybinding intent failed: {}",
                   result->error_message());
