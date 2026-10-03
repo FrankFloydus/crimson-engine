@@ -854,8 +854,10 @@ Tests: [render extraction](tests/render_extraction_tests.cpp),
   Swapping lateral dock widths requires actual OS clip bounds to agree with logical Qt geometry even
   while pane-local dimensions remain unchanged.
 - Asset Browser visibility holds Qt painting through the synchronous layout change, preserving the
-  prior `updatesEnabled()` and animation flags. The following composition needs the matching current
-  scene projection. On reveal, activate the dock's layout after visibility
+  prior `updatesEnabled()` and animation flags. Ctrl+Space closes a presented browser when another
+  editor control owns focus; do not pre-focus the browser in the close regression, which concealed
+  the former focus-only first press. Opening still focuses the browser. The following composition
+  needs the matching current scene projection. On reveal, activate the dock's layout after visibility
   and before raise/main-window layout so its immediate minimum uses current child metrics. Focus,
   shortcut override and key events from both legacy visible clip host and inner native backing container
   use the existing surface adapter; otherwise Qt focus can land on the unobserved inner container

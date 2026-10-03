@@ -6744,6 +6744,7 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
     ASSERT_TRUE(QMetaObject::invokeMethod(recent, "activated", Qt::DirectConnection,
         Q_ARG(QModelIndex, recent->model()->index(0, 0))));
     window->showMaximized();
+    QApplication::setActiveWindow(window);
   });
   if (empty_scene == QStringLiteral("0")) {
     QTimer::singleShot(2000, &application, [&] {
@@ -6773,10 +6774,9 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
   }
   const auto toggle = [&](int index) {
     const bool showing = index % 2 == 0;
-    if (index >= 2 && showing) EXPECT_TRUE(viewport->focus_active_pane());
-    if (index >= 2 && !showing) {
-      browser->focus_browser();
-      ASSERT_TRUE(browser->owns_browser_focus());
+    if (index >= 2) {
+      EXPECT_TRUE(viewport->focus_active_pane());
+      ASSERT_FALSE(browser->owns_browser_focus());
     }
     auto &observation = observations[static_cast<std::size_t>(index)];
     current_toggle = index;
@@ -6787,9 +6787,7 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
     if (index < 2) {
       action->trigger();
     } else {
-      QObject *target = showing ? (composition_smoke ? static_cast<QObject *>(clip)
-                                                    : static_cast<QObject *>(surface))
-                                : static_cast<QObject *>(QApplication::focusWidget());
+      QObject *target = clip;
       ASSERT_NE(target, nullptr);
       QKeyEvent shortcut_override(QEvent::ShortcutOverride, Qt::Key_Space, Qt::ControlModifier);
       QCoreApplication::sendEvent(target, &shortcut_override);
@@ -7467,21 +7465,21 @@ TEST(QtProjectWorkspaceTests, AssetBrowserNativeCtrlSpaceHasNoIntermediateDockAn
       }
     });
     expect_current_dimensions();
-    // An already visible browser acquires focus from each main-editor input
-    // owner; it hides only when the next chord originates inside the browser.
+    // A visible browser closes on the first chord from every main-editor
+    // input owner, without spending a press on acquiring browser focus.
     toggle_target = focus_input_origin(kInputOrigins[transition]);
     ASSERT_NE(toggle_target, nullptr);
     ASSERT_FALSE(browser->owns_browser_focus());
     send_toggle(*toggle_target);
+    ASSERT_FALSE(editor.ui().panel_visible("asset_browser"));
+    expect_no_queued_toggle();
+    settle_viewports("unfocused browser close", 2, no_frame_check);
+    toggle_target = focus_input_origin(kInputOrigins[transition]);
+    ASSERT_NE(toggle_target, nullptr);
+    send_toggle(*toggle_target);
     ASSERT_TRUE(editor.ui().panel_visible("asset_browser"));
     EXPECT_TRUE(browser->owns_browser_focus());
-    EXPECT_EQ(dock->geometry(), opening);
-    expect_no_queued_toggle();
-    settle_viewports("visible browser refocus", 2, [&] {
-      EXPECT_TRUE(editor.ui().panel_visible("asset_browser"));
-      EXPECT_TRUE(browser->owns_browser_focus());
-      EXPECT_EQ(dock->geometry(), opening);
-    });
+    settle_viewports("browser reopen", 2, no_frame_check);
     capture_native_window(
         QStringLiteral("asset-browser-native-desktop-open-%1.png").arg(transition));
     for (const auto layout : {quader::ViewportLayoutId::FourQuad,

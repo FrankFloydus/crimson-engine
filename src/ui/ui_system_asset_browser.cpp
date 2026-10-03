@@ -340,7 +340,7 @@ void UISystem::toggle_asset_browser() {
       !editor_->project().has_project()) {
     return;
   }
-  if (panel_presented(UIPanelId::AssetBrowser) && asset_browser_->owns_browser_focus()) {
+  if (panel_presented(UIPanelId::AssetBrowser)) {
     set_panel_visible(UIPanelId::AssetBrowser, false);
     if (viewport_panel_ != nullptr) (void)viewport_panel_->focus_active_pane();
     return;
