@@ -35,9 +35,11 @@ file except through prior written authorization from Francesco Di Blasi.
   Reveal reuses retained rows and defers one owner discovery until the current exposure's
   first item-view paint. Closing before that paint abandons pending discovery; unchanged
   frames never repeat it. Retain no filesystem-watch handles that block folder replacement.
-  Preserve the prior `updatesEnabled()` and animation state while settling visibility and pane
-  layout. Hold Qt painting only across that synchronous change; the next composed frame must use
-  the current pane projection. On reveal, activate the dock's layout
+  Composed viewport layout keeps the main window's existing update state; do not globally disable
+  and re-enable updates around browser visibility. Coalesce viewport resize painting until the
+  final layout so the next common composition uses the matching pane projection. The native-child
+  fallback retains synchronous update suppression and restores the prior update/animation flags.
+  Preserve the animation setting in either route. On reveal, activate the dock's layout
   immediately after setting visibility, before raising it or activating the main-window layout;
   its minimum must reflect current child metrics before the first paint.
 - `QtFaceTexturePanel` owns the single-face canvas and retained texture controls.
@@ -62,8 +64,11 @@ file except through prior written authorization from Francesco Di Blasi.
   QWindow object has no native handle or window container: widget events feed the same input
   accumulator, and focus, grabs, cursor, picking, popup and HUD coordinates use the visible widget.
   Do not introduce a second input state or accidentally call `winId()` on that adapter.
-  Changed geometry prepares the current projection before the widget paint, gated by the panel's
-  geometry revision; unchanged paints must not repeat scene preparation. The widget lends its current
+  A widget resize updates empty-size state and queues painting; it must not trigger immediate GPU
+  work. After the resize burst settles, the queued paint prepares the current projection, then Qt
+  ensures/initializes the texture and draws once at the final geometry before common composition.
+  Gate preparation by the panel's geometry revision; unchanged paints must not repeat scene work.
+  Preserve this ordering when reviewing the pinned Qt resize handler. The widget lends its current
   Qt texture to render for the GPU copy. The pinned Qt private adapter
   drains external command producers before offscreen painting and root `beginCompose`, including
   nested event loops. Review those hooks when changing Qt versions. Qt owns composed-window VSync;
@@ -76,7 +81,10 @@ file except through prior written authorization from Francesco Di Blasi.
   inside the visible clip; input from both clip and inner container uses the same surface adapter.
   Verify actual composed transition pixels: changed bounds with an old crop followed by a new
   projection is a failure. See the [presentation contract](../../thirdparty/filament/README.md#qt-composed-viewport-presentation)
-  and [real App/legacy geometry fixtures](../../tests/qt_project_workspace_tests.cpp).
+  and [queued resize, real App and legacy geometry fixtures](../../tests/qt_project_workspace_tests.cpp).
+  Protect resize deferral with the GPU-free `ComposedViewportResizeDefersPreparationUntilEnabledPaint`
+  test, then measure actual App native-message delivery and coherent captured frames. Dispatch or renderer
+  extent timings alone cannot establish input-to-display latency.
   Strip actions have independent
   checked-state presentation and dispatch through the focused pane's public API; never share
   checkable QActions between panes. Camera and Shading stay visible when icons overflow.

@@ -15,6 +15,7 @@
 #include <QColor>
 #include <QPaintEvent>
 #include <QPalette>
+#include <QResizeEvent>
 #include <QScopedValueRollback>
 #include <QSurfaceFormat>
 #include <QVulkanInstance>
@@ -141,7 +142,22 @@ VkPresentModeKHR QtVulkanCompositionWidget::resolved_present_mode() const {
   return resolved_present_mode_;
 }
 
+void QtVulkanCompositionWidget::resizeEvent(QResizeEvent *event) {
+  // Qt 6.10.3's resize handler only sets noSize and paints synchronously.
+  // Queue the paint after layout settles; the normal QRhiWidget paint still
+  // resizes textures and initializes resources before rendering.
+  auto *widget_private =
+      static_cast<QRhiWidgetPrivate *>(QWidgetPrivate::get(this));
+  widget_private->noSize = event->size().isEmpty();
+  if (!widget_private->noSize) {
+    update();
+  }
+}
+
 void QtVulkanCompositionWidget::paintEvent(QPaintEvent *event) {
+  if (!updatesEnabled()) {
+    return;
+  }
   if (prepare_callback_active_ ||
       (initialized_rhi_ != nullptr && initialized_rhi_->isRecordingFrame())) {
     // Layout may request a paint while preparation is still updating camera

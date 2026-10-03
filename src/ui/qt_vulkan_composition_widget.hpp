@@ -15,6 +15,7 @@
 #include <optional>
 
 class QPaintEvent;
+class QResizeEvent;
 class QRhi;
 class QRhiCommandBuffer;
 class QRhiRenderPassDescriptor;
@@ -48,6 +49,7 @@ public:
   [[nodiscard]] VkPresentModeKHR resolved_present_mode() const;
 
 protected:
+  void resizeEvent(QResizeEvent *event) override;
   void paintEvent(QPaintEvent *event) override;
   void initialize(QRhiCommandBuffer *command_buffer) override;
   void render(QRhiCommandBuffer *command_buffer) override;

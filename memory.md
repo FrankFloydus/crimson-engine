@@ -853,8 +853,15 @@ Tests: [render extraction](tests/render_extraction_tests.cpp),
   creates a HWND.
   Swapping lateral dock widths requires actual OS clip bounds to agree with logical Qt geometry even
   while pane-local dimensions remain unchanged.
-- Asset Browser visibility holds Qt painting through the synchronous layout change, preserving the
-  prior `updatesEnabled()` and animation flags. Ctrl+Space closes a presented browser when another
+- Composed Asset Browser layout leaves the main window's update state alone: globally disabling
+  and re-enabling updates invalidates every retained widget and forces a full-window repaint.
+  Coalesce viewport resize painting instead. `QtVulkanCompositionWidget::resizeEvent()` updates
+  empty-size state and queues a paint, with no immediate GPU work. That paint prepares the final
+  geometry's projection before Qt ensures/initializes the texture and draws for common composition.
+  Preserve this ordering when
+  upgrading the pinned Qt handler. The native-child fallback retains update suppression and restores
+  prior update/animation flags; composed layout also preserves the animation setting.
+  Ctrl+Space closes a presented browser when another
   editor control owns focus; do not pre-focus the browser in the close regression, which concealed
   the former focus-only first press. Opening still focuses the browser. The following composition
   needs the matching current scene projection. On reveal, activate the dock's layout after visibility
@@ -868,6 +875,10 @@ Tests: [render extraction](tests/render_extraction_tests.cpp),
   show/close through `AssetBrowserRealAppFrameLoopAfterSettledToggle` and inspect actual composed
   pixels. Settled dock dimensions, renderer getters, faster requests and successful submissions
   do not establish this result. Viewport evidence does not establish whole-window continuity.
+  Keep a GPU-free resize regression for queued rather than synchronous painting. Use the real App
+  native-message queue probe to separate request delivery from command dispatch and captured image
+  arrival; its measured scene/display conditions bound timing claims. Coalescing must retain the
+  matching layout/projection capture criterion, not merely shorten the command callback.
   Screen-fit the native fixture and settle accepted baseline frames before transitions. First-reveal
   DPR 2 metrics and repeated/interrupted resize with minimize/restore pass the native fixture.
   The native AO contact/crop oracle passes the shifted helper and rejects the restored old helper
@@ -902,7 +913,7 @@ Owners: [RenderSystem](src/render/render_system.cpp), [frame schedule](src/app/a
 [hidden dialog creation](src/ui/qt_retained_message_box.cpp), [HUD ancestor lifetime](src/ui/qt_viewport_edge_length_hud.cpp).
 Tests: [presentation](tests/render_presentation_tests.cpp),
 [opt-in native Vulkan runtime](tests/render_vsync_runtime_tests.cpp),
-[real App browser transitions and OS clip geometry](tests/qt_project_workspace_tests.cpp),
+[queued resize, real App browser transitions and OS clip geometry](tests/qt_project_workspace_tests.cpp),
 [crop input and unchanged geometry queries](tests/qt_input_adapter_tests.cpp),
 [dialog native ownership](tests/qt_retained_message_box_tests.cpp),
 [non-native ancestor retirement](tests/qt_viewport_edge_length_hud_tests.cpp).
@@ -1030,8 +1041,9 @@ Tests: [render source stamps](tests/render_source_stamp_tests.cpp),
   the pending request before its normal rescheduling. Preserve transient first-paint and GPU
   readiness gates. Qt native size can already be final before the deferred resize event or camera
   preparation, so settled dock bounds alone do not prove current image presentation. Composed panes
-  additionally prepare a changed geometry revision before Qt paints; this narrow callback neither
-  repeats input nor recursively refreshes UI. The composed-pixel acceptance rule above still applies.
+  additionally queue resize painting, then prepare a changed geometry revision before texture
+  initialization/drawing; the resize callback itself does no GPU work. Preparation neither repeats
+  input nor recursively refreshes UI. The composed-pixel acceptance rule above still applies.
 - Fusion remains the style; qt_application_theme owns the Obsidian palette. Windows High Contrast
   removes the forced scheme and uses unresolved system palette roles. Theme transitions are events.
 - User interface scale multiplies immutable logical baselines; Qt owns monitor DPR. Raster overlay

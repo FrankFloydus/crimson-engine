@@ -6669,8 +6669,13 @@ void UISystem::set_panel_visible(UIPanelId id, bool visible) {
   }
   const bool animated = main_window_->isAnimated();
   const bool updates_enabled = main_window_->updatesEnabled();
-  // Paint the uncovered dock footprint after native pane clips receive layout.
-  if (updates_enabled) main_window_->setUpdatesEnabled(false);
+  const bool composed_deferred_layout = render_system_ != nullptr &&
+      render_system_->uses_composited_vulkan();
+  const bool suspend_updates = updates_enabled && !composed_deferred_layout;
+  // Native child panes need the uncovered footprint held until their clips
+  // settle. Composed panes queue one paint after layout; disabling the entire
+  // window would invalidate every retained widget when updates resume.
+  if (suspend_updates) main_window_->setUpdatesEnabled(false);
   main_window_->setAnimated(false);
   (void)panels_.set_visible(id, visible);
   if (visible) {
@@ -6682,7 +6687,7 @@ void UISystem::set_panel_visible(UIPanelId id, bool visible) {
   }
   if (QLayout *layout = main_window_->layout()) (void)layout->activate();
   main_window_->setAnimated(animated);
-  if (updates_enabled) main_window_->setUpdatesEnabled(true);
+  if (suspend_updates) main_window_->setUpdatesEnabled(true);
   refresh_asset_thumbnails();
 }
 

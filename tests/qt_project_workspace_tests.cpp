@@ -61,6 +61,7 @@
 #include "viewport/viewport_settings.hpp"
 
 #include <QAction>
+#include <QAbstractNativeEventFilter>
 #include <QAbstractAnimation>
 #include <QAbstractItemModel>
 #include <QAbstractItemDelegate>
@@ -104,6 +105,7 @@
 #include <QImage>
 #include <QLayout>
 #include <QMouseEvent>
+#include <QPaintEvent>
 #include <QPainter>
 #include <QPalette>
 #include <QPointer>
@@ -111,6 +113,7 @@
 #include <QPropertyAnimation>
 #include <QPixmap>
 #include <QRegion>
+#include <QResizeEvent>
 #include <QScreen>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -133,18 +136,23 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -6576,6 +6584,48 @@ TEST(QtProjectWorkspaceTests,
   }
 }
 
+TEST(QtProjectWorkspaceTests,
+     ComposedViewportResizeDefersPreparationUntilEnabledPaint) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-composed-viewport-paint-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  int preparations = 0;
+  int renders = 0;
+  QWidget parent;
+  quader::QtVulkanCompositionWidget widget(&parent);
+  widget.resize(320, 240);
+  widget.set_prepare_callback([&] {
+    ++preparations;
+    return false;
+  });
+  widget.set_render_callback([&](const quader::RenderVulkanCompositionTarget &) {
+    ++renders;
+    return false;
+  });
+
+  QResizeEvent resize_event(widget.size(), QSize(160, 120));
+  QCoreApplication::sendEvent(&widget, &resize_event);
+  EXPECT_EQ(preparations, 0);
+  EXPECT_EQ(renders, 0);
+
+  QPaintEvent paint_event(widget.rect());
+  QCoreApplication::sendEvent(&widget, &paint_event);
+  EXPECT_EQ(preparations, 1);
+  EXPECT_EQ(renders, 0);
+
+  parent.setUpdatesEnabled(false);
+  ASSERT_FALSE(widget.updatesEnabled());
+  QResizeEvent disabled_resize(widget.size(), QSize(160, 120));
+  QCoreApplication::sendEvent(&widget, &disabled_resize);
+  QPaintEvent disabled_paint(widget.rect());
+  QCoreApplication::sendEvent(&widget, &disabled_paint);
+  EXPECT_EQ(preparations, 1);
+  EXPECT_EQ(renders, 0);
+}
+
 TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
   if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_ASSET_BROWSER_APP_TESTS") != 1) {
     GTEST_SKIP() << "Set QUADER_RUN_VULKAN_ASSET_BROWSER_APP_TESTS=1 for the real App frame loop";
@@ -6584,6 +6634,11 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
   const QString empty_scene = qEnvironmentVariable(
       "QUADER_NATIVE_BROWSER_APP_EMPTY", QStringLiteral("0"));
   ASSERT_TRUE(empty_scene == QStringLiteral("0") || empty_scene == QStringLiteral("1"));
+  const QString close_origin = qEnvironmentVariable(
+      "QUADER_NATIVE_BROWSER_APP_CLOSE_ORIGIN", QStringLiteral("viewport"));
+  ASSERT_TRUE(close_origin == QStringLiteral("viewport") ||
+              close_origin == QStringLiteral("browser"))
+      << "QUADER_NATIVE_BROWSER_APP_CLOSE_ORIGIN must be viewport or browser";
   const bool composition_smoke = qEnvironmentVariableIntValue(
       "QUADER_NATIVE_BROWSER_APP_COMPOSITION_SMOKE") == 1;
   ASSERT_FALSE(composition_smoke && empty_scene == QStringLiteral("1"))
@@ -6601,6 +6656,16 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
   application.setQuitOnLastWindowClosed(false);
   application.setApplicationName(QStringLiteral("Quader"));
   application.setOrganizationName(QStringLiteral("Quader"));
+  QScreen *requested_screen = nullptr;
+  if (qEnvironmentVariableIsSet("QUADER_NATIVE_BROWSER_APP_SCREEN")) {
+    bool screen_valid = false;
+    const int screen_index = qEnvironmentVariable("QUADER_NATIVE_BROWSER_APP_SCREEN")
+                                 .toInt(&screen_valid);
+    const auto screens = QGuiApplication::screens();
+    ASSERT_TRUE(screen_valid && screen_index >= 0 && screen_index < screens.size())
+        << "QUADER_NATIVE_BROWSER_APP_SCREEN must identify an available screen";
+    requested_screen = screens[screen_index];
+  }
   QStyle *fusion_style = QStyleFactory::create(QStringLiteral("Fusion"));
   ASSERT_NE(fusion_style, nullptr);
   QApplication::setStyle(fusion_style);
@@ -6680,13 +6745,21 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
   LARGE_INTEGER frequency{};
   ASSERT_NE(QueryPerformanceFrequency(&frequency), FALSE);
   std::cout << "APP_BROWSER_CLOCK frequency=" << frequency.QuadPart << '\n';
+  const double qpc_frequency = static_cast<double>(frequency.QuadPart);
+#else
+  const double qpc_frequency =
+      static_cast<double>(std::chrono::steady_clock::period::den) /
+      std::chrono::steady_clock::period::num;
 #endif
   std::cout << "APP_BROWSER_WINDOW hwnd=" << window->internalWinId()
             << " qpc=" << qpc_ticks() << " empty=" << empty_scene.toStdString()
             << " vsync=" << vsync.toStdString() << std::endl;
   QElapsedTimer clock;
   clock.start();
+  const auto input_schedule_started = std::chrono::steady_clock::now();
   struct ToggleObservation {
+    std::int64_t queued_qpc = -1;
+    std::int64_t received_qpc = -1;
     qint64 started_ns = -1;
     qint64 published_ns = -1;
     QSize expected;
@@ -6743,6 +6816,10 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
     ASSERT_EQ(recent->model()->rowCount(), 1);
     ASSERT_TRUE(QMetaObject::invokeMethod(recent, "activated", Qt::DirectConnection,
         Q_ARG(QModelIndex, recent->model()->index(0, 0))));
+    if (requested_screen != nullptr) {
+      window->windowHandle()->setScreen(requested_screen);
+      window->setGeometry(requested_screen->availableGeometry());
+    }
     window->showMaximized();
     QApplication::setActiveWindow(window);
   });
@@ -6772,22 +6849,36 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
       std::cout << "APP_BROWSER_FRAMED qpc=" << qpc_ticks() << std::endl;
     });
   }
-  const auto toggle = [&](int index) {
-    const bool showing = index % 2 == 0;
-    if (index >= 2) {
-      EXPECT_TRUE(viewport->focus_active_pane());
-      ASSERT_FALSE(browser->owns_browser_focus());
-    }
+  const auto toggle = [&](int index, std::int64_t queued_qpc) {
+    const auto received_qpc = qpc_ticks();
     auto &observation = observations[static_cast<std::size_t>(index)];
+    observation.queued_qpc = queued_qpc;
+    observation.received_qpc = received_qpc;
+    std::cout << "APP_BROWSER_INPUT_RECEIVED qpc=" << received_qpc
+              << " toggle=" << index << " queued_qpc=" << queued_qpc
+              << " queue_ms=" << (received_qpc - queued_qpc) * 1000.0 / qpc_frequency
+              << std::endl;
+    const bool showing = index % 2 == 0;
+    const bool browser_origin = index == 3 && close_origin == QStringLiteral("browser");
     current_toggle = index;
     observation.started_ns = clock.nsecsElapsed();
     std::cout << "APP_BROWSER_TOGGLE_BEGIN qpc=" << qpc_ticks()
               << " toggle=" << index << " action=" << (showing ? "show" : "hide")
-              << " trigger=" << (index < 2 ? "panel_menu" : "ctrl_space") << std::endl;
+              << " trigger=" << (index < 2 ? "panel_menu" : "ctrl_space")
+              << " close_origin=" << close_origin.toStdString() << std::endl;
+    if (index >= 2) {
+      if (browser_origin) {
+        browser->focus_browser();
+        ASSERT_TRUE(browser->owns_browser_focus());
+      } else {
+        EXPECT_TRUE(viewport->focus_active_pane());
+        ASSERT_FALSE(browser->owns_browser_focus());
+      }
+    }
     if (index < 2) {
       action->trigger();
     } else {
-      QObject *target = clip;
+      QObject *target = browser_origin ? QApplication::focusWidget() : clip;
       ASSERT_NE(target, nullptr);
       QKeyEvent shortcut_override(QEvent::ShortcutOverride, Qt::Key_Space, Qt::ControlModifier);
       QCoreApplication::sendEvent(target, &shortcut_override);
@@ -6805,9 +6896,6 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
               << " dispatch_ms=" << (clock.nsecsElapsed() - observation.started_ns) / 1000000.0
               << " final_clip=" << final_extent.x << 'x' << final_extent.y << std::endl;
   };
-  for (int index = 0; index < 4; ++index) {
-    QTimer::singleShot(5000 + index * 3000, &application, [&, index] { toggle(index); });
-  }
   constexpr std::array kCompositionPaneIds{
       quader::ViewportPaneId::Perspective, quader::ViewportPaneId::Top,
       quader::ViewportPaneId::Front, quader::ViewportPaneId::Side};
@@ -6991,11 +7079,72 @@ TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
   }
   QTimer::singleShot(composition_smoke ? 27000 : 18000,
       &application, &QCoreApplication::quit);
+#if defined(_WIN32)
+  class AppBrowserNativeInputObserver final : public QAbstractNativeEventFilter {
+  public:
+    HWND window_handle = nullptr;
+    UINT input_message = 0U;
+    std::function<void(int, std::int64_t)> toggle;
+
+    bool nativeEventFilter(const QByteArray &, void *message, qintptr *result) override {
+      const auto &native_message = *static_cast<MSG *>(message);
+      if (native_message.hwnd != window_handle || native_message.message != input_message) {
+        return false;
+      }
+      toggle(static_cast<int>(native_message.wParam),
+             static_cast<std::int64_t>(native_message.lParam));
+      if (result != nullptr) *result = 0;
+      return true;
+    }
+  } native_input_observer;
+  native_input_observer.window_handle = reinterpret_cast<HWND>(window->internalWinId());
+  native_input_observer.input_message = RegisterWindowMessageW(
+      L"Quader.AssetBrowserRealAppFrameLoopAfterSettledToggle.Input");
+  ASSERT_NE(native_input_observer.input_message, 0U);
+  native_input_observer.toggle = toggle;
+  application.installNativeEventFilter(&native_input_observer);
+#endif
+  std::atomic<bool> input_enqueue_failed = false;
+  std::jthread input_producer([&](std::stop_token stop) {
+    std::condition_variable_any input_condition;
+    std::mutex input_mutex;
+    std::unique_lock input_lock(input_mutex);
+    for (int index = 0; index < 4; ++index) {
+      input_condition.wait_until(input_lock, stop,
+          input_schedule_started + std::chrono::milliseconds(5000 + index * 3000),
+          [] { return false; });
+      if (stop.stop_requested()) return;
+      const auto queued_qpc = qpc_ticks();
+#if defined(_WIN32)
+      if (!PostMessageW(native_input_observer.window_handle,
+              native_input_observer.input_message, static_cast<WPARAM>(index),
+              static_cast<LPARAM>(queued_qpc))) {
+        input_enqueue_failed.store(true, std::memory_order_relaxed);
+      }
+#else
+      if (!QMetaObject::invokeMethod(&application,
+              [&, index, queued_qpc] { toggle(index, queued_qpc); }, Qt::QueuedConnection)) {
+        input_enqueue_failed.store(true, std::memory_order_relaxed);
+      }
+#endif
+      std::printf("APP_BROWSER_INPUT_QUEUED qpc=%lld toggle=%d\n",
+                  static_cast<long long>(queued_qpc), index);
+      std::fflush(stdout);
+    }
+  });
   observer.start();
   EXPECT_EQ(app.run(), 0);
+  input_producer.request_stop();
+  input_producer.join();
+#if defined(_WIN32)
+  application.removeNativeEventFilter(&native_input_observer);
+#endif
+  EXPECT_FALSE(input_enqueue_failed.load(std::memory_order_relaxed));
   observer.stop();
   application.removeEventFilter(&timer_observer);
   for (const auto &observation : observations) {
+    EXPECT_GE(observation.queued_qpc, 0);
+    EXPECT_GE(observation.received_qpc, observation.queued_qpc);
     EXPECT_GE(observation.started_ns, 0);
     EXPECT_GE(observation.published_ns, observation.started_ns);
   }
