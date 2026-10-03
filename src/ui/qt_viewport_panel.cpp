@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/qt_viewport_panel.hpp"
+#include "ui/qt_vulkan_composition_widget.hpp"
 
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_command_ids.hpp"
@@ -78,6 +79,7 @@
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QScreen>
+#include <QScopedValueRollback>
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QSizePolicy>
@@ -314,8 +316,8 @@ private:
 /** Paints only a masked native border above the viewport's child window. */
 class QtViewportFocusFrame final : public QWidget {
 public:
-  explicit QtViewportFocusFrame(QWidget *parent) : QWidget(parent) {
-    setAttribute(Qt::WA_NativeWindow);
+  QtViewportFocusFrame(QWidget *parent, bool native_widget) : QWidget(parent) {
+    setAttribute(Qt::WA_NativeWindow, native_widget);
     setAttribute(Qt::WA_TransparentForMouseEvents);
     setFocusPolicy(Qt::NoFocus);
   }
@@ -724,8 +726,8 @@ bool qt_event_target_belongs_to_tool_settings(
          qt_object_belongs_to_face_texture_panel(target, global_position);
 }
 
-QtViewportPanel::QtViewportPanel(QWidget *parent)
-    : QWidget(parent), delete_popup_presenter_(*this) {
+QtViewportPanel::QtViewportPanel(QWidget *parent, bool composed)
+    : QWidget(parent), composed_(composed), delete_popup_presenter_(*this) {
   // Native panes retain their clipping hierarchy without promoting workspace
   // and central-stack widgets into additional windows resized with every dock.
   setAttribute(Qt::WA_DontCreateNativeAncestors);
@@ -746,7 +748,7 @@ QtViewportPanel::QtViewportPanel(QWidget *parent)
   for (Pane &pane_state : panes_) {
     create_pane(pane_state);
   }
-  focused_pane_frame_ = new QtViewportFocusFrame(this);
+  focused_pane_frame_ = new QtViewportFocusFrame(this, !composed_);
   focused_pane_frame_->setObjectName(
       QStringLiteral("viewportFocusedPaneFrame"));
   focused_pane_frame_->hide();
@@ -766,7 +768,7 @@ QtViewportPanel::QtViewportPanel(QWidget *parent)
     handle.widget->setObjectName(
         QStringLiteral("viewportSplitHandle_%1").arg(index));
     handle.widget->setMouseTracking(true);
-    handle.widget->setAttribute(Qt::WA_NativeWindow);
+    handle.widget->setAttribute(Qt::WA_NativeWindow, !composed_);
     handle.widget->installEventFilter(this);
     handle.widget->hide();
   }
@@ -780,6 +782,15 @@ QtViewportPanel::~QtViewportPanel() {
   native_geometry_ancestors_.clear();
   set_settings_panel(nullptr);
   shutdown();
+  if (composed_) {
+    for (Pane &pane_state : panes_) {
+      auto *host = static_cast<QtVulkanCompositionWidget *>(
+          pane_state.surface_container);
+      host->set_prepare_callback({});
+      host->set_render_callback({});
+      host->set_release_callback({});
+    }
+  }
 }
 
 bool QtViewportPanel::initialize(RenderSystem &render_system) {
@@ -791,10 +802,15 @@ bool QtViewportPanel::initialize(RenderSystem &render_system) {
   bool success = true;
   for (Pane &pane_state : panes_) {
     pane_state.surface->set_surface_changed_callback([this]() {
+      ++composed_geometry_revision_;
       if (presentation_requested_) {
         presentation_requested_();
       }
     });
+    if (composed_) {
+      auto *host = static_cast<QtVulkanCompositionWidget *>(pane_state.surface_container);
+      host->set_render_system(&render_system);
+    }
     pane_state.surface_container->hide();
     pane_state.surface_presented = false;
     success =
@@ -810,8 +826,13 @@ bool QtViewportPanel::initialize(RenderSystem &render_system) {
 
 void QtViewportPanel::shutdown() {
   presentation_requested_ = {};
+  composed_frame_prepare_ = {};
   for (Pane &pane_state : panes_) {
     pane_state.surface->set_surface_changed_callback({});
+    if (composed_) {
+      auto *host = static_cast<QtVulkanCompositionWidget *>(pane_state.surface_container);
+      host->set_render_system(nullptr);
+    }
   }
   if (environment_popup_ != nullptr) {
     environment_popup_->abandon_runtime();
@@ -1120,6 +1141,26 @@ void QtViewportPanel::set_presentation_requested_callback(
   presentation_requested_ = std::move(callback);
 }
 
+void QtViewportPanel::set_composed_frame_prepare_callback(
+    std::function<void()> callback) {
+  composed_frame_prepare_ = std::move(callback);
+  composed_prepared_geometry_revision_ = 0u;
+}
+
+bool QtViewportPanel::prepare_composed_frame() {
+  if (!composed_ || composed_preparing_ || workspace_ == nullptr ||
+      startup_presentation_blocked_ || !composed_frame_prepare_) {
+    return false;
+  }
+  if (composed_prepared_geometry_revision_ == composed_geometry_revision_) {
+    return true;
+  }
+  const QScopedValueRollback preparing_guard(composed_preparing_, true);
+  composed_frame_prepare_();
+  composed_prepared_geometry_revision_ = composed_geometry_revision_;
+  return true;
+}
+
 void QtViewportPanel::refresh_control_actions(QuaderEditorApi &editor) {
   if (interaction_editor_ != &editor) {
     refresh_keybinding_presentation(editor);
@@ -1195,7 +1236,7 @@ void QtViewportPanel::set_settings_panel(QtToolSettingsPanel *panel) {
     return;
   }
   panel->setParent(this);
-  panel->setAttribute(Qt::WA_NativeWindow);
+  panel->setAttribute(Qt::WA_NativeWindow, !composed_);
   panel->hide();
   panel->presentation_changed = [this]() {
     settings_overlay_geometry_dirty_ = true;
@@ -1328,7 +1369,7 @@ void QtViewportPanel::apply_ui_scale(const QtUiScaleMetrics &metrics) {
 float QtViewportPanel::viewport_raster_scale(ViewportPaneId pane_id) const {
   const QtViewportSurface *pane_surface = surface(pane_id);
   const qreal device_pixel_ratio =
-      pane_surface != nullptr ? pane_surface->devicePixelRatio() : 1.0;
+      pane_surface != nullptr ? pane_surface->input_device_pixel_ratio() : 1.0;
   const qreal safe_device_pixel_ratio =
       std::isfinite(device_pixel_ratio) && device_pixel_ratio > 0.0
           ? device_pixel_ratio
@@ -1472,7 +1513,7 @@ void QtViewportPanel::present_primitive_feedback(
   }
   const auto locale_revision = localization_ != nullptr ? localization_->revision() : 0u;
   const QRect bounds = pane_state.surface_container->geometry();
-  const qreal raw_dpr = pane_state.surface->devicePixelRatio();
+  const qreal raw_dpr = pane_state.surface->input_device_pixel_ratio();
   const qreal dpr = std::isfinite(raw_dpr) && raw_dpr > 0.0 ? raw_dpr : 1.0;
   if (pane_state.primitive_feedback_valid &&
       pane_state.primitive_feedback_revision == controls.revision &&
@@ -1551,6 +1592,7 @@ void QtViewportPanel::prepare_viewports(
     ModelingSessionService &modeling,
     NativeViewportToolCoordinator &native_tools) {
   QDR_PROFILE_FUNCTION();
+  const QScopedValueRollback preparing_guard(composed_preparing_, true);
   if (environment_popup_ != nullptr) {
     environment_popup_->refresh(editor, document, localization_);
   }
@@ -2022,6 +2064,7 @@ void QtViewportPanel::prepare_viewports(
         pane_dimensions_visible && overlays_visible);
     sync_pane_control_selection(pane_state);
   }
+  composed_prepared_geometry_revision_ = composed_geometry_revision_;
   if (diagnostics_enabled) {
     g_viewport_probe.prepare_ms +=
         elapsed_milliseconds(prepare_start, ViewportProbeClock::now());
@@ -2038,6 +2081,24 @@ QtViewportPanel::render_viewports(bool account_presentation_frame) {
                           : ViewportProbeClock::time_point{};
   if (!initialized_ || startup_presentation_blocked_ || workspace_ == nullptr ||
       render_system_ == nullptr) {
+    return 0u;
+  }
+  if (composed_) {
+    for (const ViewportPanePlacement &placement :
+         workspace_->active_pane_placements()) {
+      Pane &pane_state = pane(placement.pane_id);
+      if (!workspace_->pane_visible(pane_state.id)) {
+        continue;
+      }
+      update_pane_overlay_geometry(pane_state);
+      if (!pane_state.surface_presented) {
+        pane_state.surface_presented = true;
+        pane_state.surface_container->show();
+        pane_state.overlay_stack_valid = false;
+      }
+      (void)pane_state.surface->render_frame();
+    }
+    // The common Qt flush accounts submissions after the widget paints.
     return 0u;
   }
   const qreal pixel_scale = devicePixelRatioF();
@@ -2233,6 +2294,9 @@ void QtViewportPanel::refresh_native_geometry_ancestors() {
 }
 
 void QtViewportPanel::synchronize_native_ancestor_position() {
+  if (composed_) {
+    return;
+  }
   QWindow *native_window = windowHandle();
   QWidget *native_parent = nativeParentWidget();
   if (native_window == nullptr || native_window->handle() == nullptr ||
@@ -2272,7 +2336,9 @@ bool QtViewportPanel::eventFilter(QObject *watched, QEvent *event) {
   }
   if (event != nullptr) {
     for (const Pane &candidate : panes_) {
-      if (watched == candidate.surface && candidate.id == interaction_pane_id_ &&
+      if ((watched == candidate.surface ||
+           (composed_ && watched == candidate.surface_container)) &&
+          candidate.id == interaction_pane_id_ &&
           (event->type() == QEvent::FocusOut ||
            event->type() == QEvent::Hide ||
            (event->type() == QEvent::Leave &&
@@ -2370,10 +2436,27 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
                                   QSizePolicy::Expanding);
   pane_state.frame->hide();
 
-  pane_state.surface = new QtViewportSurface(pane_state.id);
+  pane_state.surface = new QtViewportSurface(pane_state.id, composed_);
   pane_state.surface->installEventFilter(this);
-  pane_state.surface_container = new QWidget(pane_state.frame);
-  pane_state.surface_container->setAttribute(Qt::WA_NativeWindow);
+  if (composed_) {
+    pane_state.surface->QObject::setParent(pane_state.frame);
+    auto *host = new QtVulkanCompositionWidget(pane_state.frame);
+    pane_state.surface_container = host;
+    const QPointer<QtViewportSurface> surface = pane_state.surface;
+    host->set_prepare_callback([this]() { return prepare_composed_frame(); });
+    host->set_render_callback([surface](const RenderVulkanCompositionTarget &target) {
+      return surface != nullptr && surface->render_composed_frame(target);
+    });
+    host->set_release_callback([surface]() {
+      if (surface != nullptr) {
+        surface->release_composed_surface();
+      }
+    });
+    host->setMouseTracking(true);
+  } else {
+    pane_state.surface_container = new QWidget(pane_state.frame);
+    pane_state.surface_container->setAttribute(Qt::WA_NativeWindow);
+  }
   pane_state.surface_container->setObjectName(
       QStringLiteral("viewportSurfaceContainer_%1")
           .arg(QString::fromUtf8(
@@ -2383,13 +2466,18 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
                                               QSizePolicy::Expanding);
   pane_state.surface_container->setGeometry(pane_state.frame->rect());
   pane_state.surface_container->hide();
-  pane_state.surface_backing_container = QWidget::createWindowContainer(
-      pane_state.surface, pane_state.surface_container);
-  pane_state.surface_backing_container->setAttribute(Qt::WA_NativeWindow);
-  pane_state.surface_backing_container->setFocusPolicy(Qt::StrongFocus);
-  pane_state.surface_backing_container->installEventFilter(pane_state.surface);
-  pane_state.surface_container->setFocusProxy(pane_state.surface_backing_container);
+  if (!composed_) {
+    pane_state.surface_backing_container = QWidget::createWindowContainer(
+        pane_state.surface, pane_state.surface_container);
+    pane_state.surface_backing_container->setAttribute(Qt::WA_NativeWindow);
+    pane_state.surface_backing_container->setFocusPolicy(Qt::StrongFocus);
+    pane_state.surface_backing_container->installEventFilter(pane_state.surface);
+    pane_state.surface_container->setFocusProxy(pane_state.surface_backing_container);
+  }
   pane_state.surface->set_visible_host(*pane_state.surface_container);
+  if (composed_) {
+    pane_state.surface_container->installEventFilter(this);
+  }
   pane_state.surface->set_focus_request_callback(
       [this](ViewportPaneId pane_id, ViewportPaneFocusTrigger trigger) {
         request_pane_focus(pane_id, trigger);
@@ -2400,7 +2488,7 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
       QStringLiteral("viewportToolbar_%1")
           .arg(QString::fromUtf8(
               viewport_pane_stable_id(pane_state.id).data())));
-  pane_state.toolbar->setAttribute(Qt::WA_NativeWindow);
+  pane_state.toolbar->setAttribute(Qt::WA_NativeWindow, !composed_);
 
   if (environment_popup_ != nullptr) {
     pane_state.environment_button =
@@ -2617,7 +2705,7 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
   pane_state.info_overlay->setAlignment(Qt::AlignLeft | Qt::AlignTop);
   pane_state.info_overlay->setSizePolicy(QSizePolicy::Fixed,
                                          QSizePolicy::Fixed);
-  pane_state.info_overlay->setAttribute(Qt::WA_NativeWindow);
+  pane_state.info_overlay->setAttribute(Qt::WA_NativeWindow, !composed_);
   pane_state.info_overlay->setAttribute(Qt::WA_TransparentForMouseEvents);
   pane_state.info_overlay->hide();
 
@@ -2626,7 +2714,7 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
       QStringLiteral("viewportPrimitiveFeedback_%1")
           .arg(QString::fromUtf8(viewport_pane_stable_id(pane_state.id).data())));
   pane_state.primitive_feedback->setTextFormat(Qt::PlainText);
-  pane_state.primitive_feedback->setAttribute(Qt::WA_NativeWindow);
+  pane_state.primitive_feedback->setAttribute(Qt::WA_NativeWindow, !composed_);
   pane_state.primitive_feedback->setAttribute(Qt::WA_TransparentForMouseEvents);
   pane_state.primitive_feedback->setFocusPolicy(Qt::NoFocus);
   pane_state.primitive_feedback->setBackgroundRole(QPalette::ToolTipBase);
@@ -2635,9 +2723,9 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
   pane_state.primitive_feedback->hide();
 
   pane_state.fly_navigation_hud =
-      new QtViewportFlyNavigationHud(*pane_state.frame, pane_state.id);
+      new QtViewportFlyNavigationHud(*pane_state.frame, pane_state.id, !composed_);
   pane_state.edge_length_hud =
-      new QtViewportEdgeLengthHud(*pane_state.frame, pane_state.id);
+      new QtViewportEdgeLengthHud(*pane_state.frame, pane_state.id, !composed_);
 
   update_pane_overlay_geometry(pane_state);
 
@@ -3018,7 +3106,8 @@ void QtViewportPanel::update_pane_overlay_geometry(Pane &pane_state) {
   const QRect backing_bounds{
       0, 0,
       pane_bounds.width(), backing_height};
-  if (pane_state.surface_backing_container->geometry() != backing_bounds) {
+  if (pane_state.surface_backing_container != nullptr &&
+      pane_state.surface_backing_container->geometry() != backing_bounds) {
     pane_state.surface_backing_container->setGeometry(backing_bounds);
     pane_state.surface->synchronize_render_size();
   }
@@ -3147,7 +3236,9 @@ void QtViewportPanel::request_pane_focus(
           ? Qt::OtherFocusReason
           : Qt::MouseFocusReason;
   pane_state.surface_container->setFocus(reason);
-  pane_state.surface->requestActivate();
+  if (!composed_) {
+    pane_state.surface->requestActivate();
+  }
   update_focused_pane_indicator();
 }
 
@@ -3258,6 +3349,23 @@ bool QtViewportPanel::pane_interaction_locked() const {
     return true;
   }
   return false;
+}
+
+void QtViewportPanel::synchronize_pointer_capture(
+    std::optional<ViewportPaneId> owner) {
+  if (composed_) {
+    // Release the previous logical widget before registering the new raw
+    // mouse owner on their shared native ancestor.
+    for (Pane &candidate : panes_) {
+      if (!owner.has_value() || candidate.id != *owner) {
+        candidate.surface->set_pointer_capture(false);
+      }
+    }
+  }
+  for (Pane &candidate : panes_) {
+    candidate.surface->set_pointer_capture(owner.has_value() &&
+                                           candidate.id == *owner);
+  }
 }
 
 void QtViewportPanel::cancel_navigation() {
@@ -3562,7 +3670,7 @@ std::optional<QPoint> QtViewportPanel::resolve_marking_menu_gesture(
   if (initiating_chord.has_value() &&
       !pending_marking_menu_gesture_.has_value()) {
     const float scale = static_cast<float>(
-        std::max<qreal>(pane_state.surface->devicePixelRatio(), 1.0));
+        std::max<qreal>(pane_state.surface->input_device_pixel_ratio(), 1.0));
     const QPoint local_point(
         static_cast<int>(std::lround(input.mouse_local.x / scale)),
         static_cast<int>(std::lround(input.mouse_local.y / scale)));
@@ -4303,7 +4411,7 @@ void QtViewportPanel::process_viewport_input(
   QPoint shortcut_popup_global_point;
   if (show_delete_popup || show_quick_menu || show_marking_menu) {
     const qreal scale =
-        std::max<qreal>(pane_state.surface->devicePixelRatio(), 1.0);
+        std::max<qreal>(pane_state.surface->input_device_pixel_ratio(), 1.0);
     const QPoint local_point(
         static_cast<int>(std::lround(input.mouse_local.x /
                                      static_cast<float>(scale))),
@@ -4455,10 +4563,8 @@ void QtViewportPanel::process_viewport_input(
     // Another pane owns the sole modeling session. Camera motion and commands
     // above remain available; passive focus/hover must not update its preview.
     last_fly_navigation_active_ = result.fly_cursor_capture_active;
-    for (Pane &candidate : panes_) {
-      candidate.surface->set_pointer_capture(
-          result.fly_cursor_capture_active && candidate.id == *input_pane);
-    }
+    synchronize_pointer_capture(result.fly_cursor_capture_active
+                                    ? input_pane : std::nullopt);
     auto &context = operation_input_context_;
     context.viewport_available = !input.text_input_active;
     context.orthographic = input.orthographic_view;
@@ -4482,7 +4588,7 @@ void QtViewportPanel::process_viewport_input(
           .include_disabled = true,
           .include_hidden = false,
       });
-      const qreal dpr = std::max<qreal>(pane_state.surface->devicePixelRatio(), 1.0);
+      const qreal dpr = std::max<qreal>(pane_state.surface->input_device_pixel_ratio(), 1.0);
       const QPoint local(static_cast<int>(std::lround(pending_context_menu_local_mouse.x / dpr)),
                          static_cast<int>(std::lround(pending_context_menu_local_mouse.y / dpr)));
       context_menu_presenter_.show(
@@ -5121,7 +5227,7 @@ void QtViewportPanel::process_viewport_input(
         localization_ != nullptr;
     if (show_context_menu) {
       const qreal scale =
-          std::max<qreal>(pane_state.surface->devicePixelRatio(), 1.0);
+          std::max<qreal>(pane_state.surface->input_device_pixel_ratio(), 1.0);
       const QPoint local_point(
           static_cast<int>(std::lround(pending_context_menu_local_mouse.x /
                                        static_cast<float>(scale))),
@@ -5140,10 +5246,8 @@ void QtViewportPanel::process_viewport_input(
   }
 
   last_fly_navigation_active_ = result.fly_cursor_capture_active;
-  for (Pane &candidate : panes_) {
-    candidate.surface->set_pointer_capture(result.fly_cursor_capture_active &&
-                                           candidate.id == *input_pane);
-  }
+  synchronize_pointer_capture(result.fly_cursor_capture_active
+                                  ? input_pane : std::nullopt);
   if (show_context_menu) {
     context_menu_presenter_.show(
         *pane_state.surface_container, context_menu_global_point, editor,

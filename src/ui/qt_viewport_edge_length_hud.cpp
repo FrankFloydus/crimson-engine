@@ -426,8 +426,8 @@ void present_label_geometry(QLabel &label, const QRect &geometry) {
 } // namespace
 
 QtViewportEdgeLengthHud::QtViewportEdgeLengthHud(
-    QWidget &parent, ViewportPaneId pane_id)
-    : QObject(&parent) {
+    QWidget &parent, ViewportPaneId pane_id, bool native_labels)
+    : QObject(&parent), native_labels_(native_labels) {
   const std::string_view pane_name = viewport_pane_stable_id(pane_id);
   const QString pane = QString::fromUtf8(
       pane_name.data(), static_cast<qsizetype>(pane_name.size()));
@@ -458,7 +458,7 @@ QtViewportEdgeLengthHud::QtViewportEdgeLengthHud(
     label->setPalette(palette);
     label->setForegroundRole(QPalette::WindowText);
     label->setFocusPolicy(Qt::NoFocus);
-    label->setAttribute(Qt::WA_NativeWindow);
+    label->setAttribute(Qt::WA_NativeWindow, native_labels_);
     // This Qt attribute handles widget routing; the label's native hit-test
     // override also passes input to the sibling viewport QWindow on Windows.
     label->setAttribute(Qt::WA_TransparentForMouseEvents);
@@ -466,7 +466,8 @@ QtViewportEdgeLengthHud::QtViewportEdgeLengthHud(
     label->hide();
   }
   refresh_geometry_ancestors();
-  if (QCoreApplication *application = QCoreApplication::instance()) {
+  if (QCoreApplication *application = QCoreApplication::instance();
+      application != nullptr && native_labels_) {
     application->installNativeEventFilter(this);
   }
 }
@@ -867,6 +868,9 @@ void QtViewportEdgeLengthHud::hide() {
 }
 
 void QtViewportEdgeLengthHud::retain_native_footprint(const QLabel &label) {
+  if (!native_labels_) {
+    return;
+  }
   QWidget *owner = label.window();
   const QRect footprint{label.mapTo(owner, QPoint{}), label.size()};
   native_footprint_owner_ = owner;

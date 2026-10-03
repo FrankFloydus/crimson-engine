@@ -118,6 +118,7 @@ void QtMaterialPreviewSurface::shutdown() {
   drag_mode_ = DragMode::None;
   swap_chain_.reset();
   swap_chain_native_id_ = 0u;
+  mark_shared_commands_pending();
   renderer_.shutdown();
   render_system_ = nullptr;
   initialized_ = false;
@@ -170,6 +171,7 @@ void QtMaterialPreviewSurface::synchronize_render_size() {
   const std::uint32_t pixel_height = static_cast<std::uint32_t>(
       std::max<qreal>(1.0, std::round(height() * scale)));
   if (renderer_.width() != pixel_width || renderer_.height() != pixel_height) {
+    mark_shared_commands_pending();
     renderer_.resize(pixel_width, pixel_height);
     mark_render_pending();
   }
@@ -177,7 +179,9 @@ void QtMaterialPreviewSurface::synchronize_render_size() {
 
 void QtMaterialPreviewSurface::set_material(
     StandardMaterialPreviewSnapshot snapshot) {
-  renderer_.set_material(std::move(snapshot));
+  if (renderer_.set_material(std::move(snapshot))) {
+    mark_shared_commands_pending();
+  }
   mark_render_pending();
   if (surface_changed_callback_) {
     surface_changed_callback_();
@@ -389,10 +393,17 @@ void QtMaterialPreviewSurface::apply_interaction(
 }
 
 void QtMaterialPreviewSurface::publish_state_change() {
+  mark_shared_commands_pending();
   renderer_.set_preview_state(preview_state_);
   mark_render_pending();
   if (surface_changed_callback_) {
     surface_changed_callback_();
+  }
+}
+
+void QtMaterialPreviewSurface::mark_shared_commands_pending() {
+  if (render_system_ != nullptr && renderer_.initialized()) {
+    render_system_->mark_shared_commands_pending();
   }
 }
 

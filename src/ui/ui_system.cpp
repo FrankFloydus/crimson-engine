@@ -63,6 +63,7 @@
 #include "ui/qt_unsaved_confirmation_dialog.hpp"
 #include "ui/qt_viewport_display_toolbar.hpp"
 #include "ui/qt_viewport_panel.hpp"
+#include "ui/qt_vulkan_composition_widget.hpp"
 #include "ui/ui_context.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 
@@ -443,12 +444,14 @@ void UISystem::clear_editor_runtime_hooks() {
 }
 
 bool UISystem::initialize(RenderSystem &render_system,
-                          const std::filesystem::path &executable_dir) {
+                          const std::filesystem::path &executable_dir,
+                          bool composed_viewports) {
   if (initialized_) {
     return true;
   }
 
   render_system_ = &render_system;
+  render_resources_detached_ = false;
   settings_paths_ = UISettings::resolve_paths(executable_dir);
   std::error_code error;
   std::filesystem::create_directories(settings_paths_.directory, error);
@@ -531,6 +534,34 @@ bool UISystem::initialize(RenderSystem &render_system,
 
   central_stack_ = new QStackedWidget(main_window_.get());
   central_stack_->setObjectName(QStringLiteral("mainCentralStack"));
+  if (composed_viewports) {
+    // Keep the real window's device alive through Home/Workspace switches.
+    // This child is not a stack page and never takes focus or pointer input.
+    composition_anchor_ = new QtVulkanCompositionWidget(central_stack_);
+    composition_anchor_->setObjectName(QStringLiteral("viewportCompositionAnchor"));
+    composition_anchor_->setFocusPolicy(Qt::NoFocus);
+    composition_anchor_->setAttribute(Qt::WA_TransparentForMouseEvents);
+    composition_anchor_->setFixedSize(1, 1);
+    composition_anchor_->setFixedColorBufferSize(QSize(1, 1));
+    composition_anchor_->set_render_system(render_system_);
+    composition_anchor_->set_release_callback([this]() {
+      if (render_system_ != nullptr && render_system_->initialized()) {
+        // The shell owns the borrowed device. Ordinary shutdown detaches this
+        // callback before destroying it; an unexpected device replacement
+        // cannot safely resume the existing Filament resource graph.
+        qFatal("Qt replaced the active Quader Vulkan composition device");
+      }
+    });
+    composition_anchor_->set_vsync_enabled(settings_.vsync_enabled());
+    QObject::connect(composition_anchor_, &QRhiWidget::frameSubmitted,
+                     composition_anchor_, [this]() {
+      if (render_system_ != nullptr && render_system_->initialized()) {
+        render_system_->complete_composited_presentation_frame();
+      }
+    });
+    composition_anchor_->show();
+    composition_anchor_->lower();
+  }
   project_home_page_ = new QtProjectHomePage(central_stack_);
   scene_workspace_ = new QtSceneWorkspace(central_stack_);
   auto *viewport_container = new QWidget(scene_workspace_);
@@ -572,7 +603,7 @@ bool UISystem::initialize(RenderSystem &render_system,
       viewport_actions.push_back(action);
     }
   }
-  viewport_panel_ = new QtViewportPanel(viewport_container);
+  viewport_panel_ = new QtViewportPanel(viewport_container, composed_viewports);
   viewport_panel_->set_presentation_requested_callback([this]() {
     if (viewport_presentation_requested_) {
       viewport_presentation_requested_();
@@ -847,7 +878,8 @@ bool UISystem::initialize(RenderSystem &render_system,
         QStringLiteral("standardMaterialEditor.previewSurfaceContainer"));
     preview_container->setFocusPolicy(Qt::StrongFocus);
     standard_material_editor_window_->install_preview_widget(preview_container);
-    if (!material_preview_surface_->initialize(render_system)) {
+    if (!composed_viewports &&
+        !material_preview_surface_->initialize(render_system)) {
       LOG_ERROR("Unable to initialize the Standard Material preview surface");
       standard_material_editor_window_->install_preview_widget(nullptr);
       material_preview_surface_ = nullptr;
@@ -1581,10 +1613,10 @@ void UISystem::install_runtime_hooks(
                                  previous_presented != enabled;
             if (changed) {
               settings_.set_vsync_enabled(enabled);
-              render_system_->set_vsync_enabled(enabled);
+              set_presentation_vsync(enabled);
               if (!save_settings()) {
                 settings_.set_vsync_enabled(previous_persisted);
-                render_system_->set_vsync_enabled(previous_presented);
+                set_presentation_vsync(previous_presented);
                 return runtime_failure(localization_.text(
                     "ui.runtime.preferences_save_failed",
                     "Preferences could not be saved."));
@@ -3082,10 +3114,48 @@ void UISystem::schedule_retained_message_box_prewarm() {
   });
 }
 
-void UISystem::shutdown() {
+const RenderVulkanSharedContext *UISystem::composition_context() const {
+  return composition_anchor_ != nullptr ? composition_anchor_->shared_context()
+                                        : nullptr;
+}
+
+bool UISystem::initialize_render_resources() {
+  if (render_system_ == nullptr || !render_system_->initialized()) {
+    return false;
+  }
+  if (material_preview_surface_ != nullptr &&
+      !material_preview_surface_->initialize(*render_system_)) {
+    LOG_ERROR("Unable to initialize the Standard Material preview surface");
+    return false;
+  }
+  return true;
+}
+
+void UISystem::set_composed_frame_prepare_callback(std::function<void()> callback) {
+  if (viewport_panel_ != nullptr) {
+    viewport_panel_->set_composed_frame_prepare_callback(std::move(callback));
+  }
+}
+
+void UISystem::set_presentation_vsync(bool enabled) {
+  if (render_system_ != nullptr) {
+    render_system_->set_vsync_enabled(enabled);
+  }
+  if (composition_anchor_ != nullptr) {
+    composition_anchor_->set_vsync_enabled(enabled);
+  }
+}
+
+void UISystem::detach_render_resources() {
   viewport_presentation_requested_ = {};
-  if (main_window_ == nullptr && render_system_ == nullptr) {
+  if (render_resources_detached_ ||
+      (main_window_ == nullptr && render_system_ == nullptr)) {
     return;
+  }
+  render_resources_detached_ = true;
+  set_composed_frame_prepare_callback({});
+  if (composition_anchor_ != nullptr) {
+    composition_anchor_->set_release_callback({});
   }
   if (face_texture_panel_ != nullptr) {
     face_texture_panel_->unbind();
@@ -3124,6 +3194,13 @@ void UISystem::shutdown() {
   if (command_palette_ != nullptr) {
     command_palette_->hide();
   }
+  if (composition_anchor_ != nullptr) {
+    composition_anchor_->set_render_system(nullptr);
+  }
+}
+
+void UISystem::shutdown() {
+  detach_render_resources();
   main_menu_.reset();
   main_window_.reset();
   command_palette_ = nullptr;
@@ -3133,6 +3210,7 @@ void UISystem::shutdown() {
   startup_expected_maximized_ = false;
   viewport_panel_ = nullptr;
   central_stack_ = nullptr;
+  composition_anchor_ = nullptr;
   project_home_page_ = nullptr;
   scene_workspace_ = nullptr;
   selection_toolbar_ = nullptr;
@@ -3562,7 +3640,11 @@ std::size_t UISystem::render_surfaces(bool render_scene_viewports) {
   if (render_system_ == nullptr) {
     return 0u;
   }
-  render_system_->begin_presentation_frame();
+  const bool composed_scene = render_scene_viewports && !home_visible_ &&
+                              render_system_->uses_composited_vulkan();
+  if (!composed_scene) {
+    render_system_->begin_presentation_frame();
+  }
   std::size_t submitted = 0u;
   if (render_scene_viewports && !home_visible_ && viewport_panel_ != nullptr) {
     submitted += viewport_panel_->render_viewports(false);
@@ -3573,7 +3655,9 @@ std::size_t UISystem::render_surfaces(bool render_scene_viewports) {
       material_preview_surface_->render_frame()) {
     ++submitted;
   }
-  render_system_->complete_presentation_frame(submitted);
+  if (!composed_scene) {
+    render_system_->complete_presentation_frame(submitted);
+  }
   return submitted;
 }
 
@@ -5424,7 +5508,7 @@ void UISystem::handle_settings_dialog_change(const QtSettingsChange &change) {
   case QtSettingsChangeKind::RenderingPreview:
   case QtSettingsChangeKind::RenderingCommit:
     if (render_system_ != nullptr && change.vsync_enabled.has_value()) {
-      render_system_->set_vsync_enabled(*change.vsync_enabled);
+      set_presentation_vsync(*change.vsync_enabled);
     }
     return;
   case QtSettingsChangeKind::KeybindingsCommit:

@@ -596,6 +596,105 @@ TEST(QtViewportSurfaceCursorPolicyTests,
 }
 
 TEST(QtViewportSurfaceInputTests,
+     ComposedWidgetForwardsInputOnceWithoutCreatingASurfaceWindow) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-composed-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  QWidget root;
+  root.resize(900, 700);
+  QWidget host(&root);
+  host.setGeometry(30, 40, 640, 480);
+  quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective, true);
+  surface.set_visible_host(host);
+  surface.set_interaction_cursor(quader::ViewportPointerCursor::PrecisionCross);
+  const QPointF local{80, 90};
+  const QPoint global = host.mapToGlobal(local.toPoint());
+  const float scale = static_cast<float>(host.devicePixelRatioF());
+
+  QEnterEvent enter(local, local, global);
+  QApplication::sendEvent(&host, &enter);
+  QFocusEvent focus(QEvent::FocusIn);
+  QApplication::sendEvent(&host, &focus);
+  QKeyEvent key_press(QEvent::KeyPress, Qt::Key_W, Qt::NoModifier);
+  QApplication::sendEvent(&host, &key_press);
+  QMouseEvent press(QEvent::MouseButtonPress, local, global,
+                    Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+  QApplication::sendEvent(&host, &press);
+  const QPointF moved_local = local + QPointF{8, 4};
+  const QPoint moved_global = global + QPoint{8, 4};
+  QMouseEvent move(QEvent::MouseMove, moved_local, moved_global,
+                   Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+  QApplication::sendEvent(&host, &move);
+  QWheelEvent wheel(moved_local, moved_global, {}, {0, 120}, Qt::NoButton,
+                    Qt::NoModifier, Qt::NoScrollPhase, false);
+  QApplication::sendEvent(&host, &wheel);
+
+  const auto first = surface.take_input_frame(1.0f / 60.0f, false);
+  EXPECT_TRUE(first.input.viewport_hovered);
+  EXPECT_TRUE(first.input.viewport_focused);
+  EXPECT_TRUE(first.left_pressed);
+  EXPECT_TRUE(first.left_down);
+  ASSERT_EQ(first.input.pointer_pressed_edges.size(), 1u);
+  ASSERT_EQ(first.input.pressed_input_chords.size(), 2u);
+  EXPECT_EQ(std::count_if(first.input.pressed_input_chords.begin(),
+                          first.input.pressed_input_chords.end(),
+                          [](const QuaderInputChord &chord) {
+                            return chord.key == QuaderKeyCode::W;
+                          }), 1);
+  EXPECT_EQ(std::count_if(first.input.pressed_input_chords.begin(),
+                          first.input.pressed_input_chords.end(),
+                          [](const QuaderInputChord &chord) {
+                            return chord.device == QuaderInputDevice::Mouse &&
+                                   chord.mouse_button == QuaderMouseButton::Left &&
+                                   chord.gesture == QuaderInputGesture::Press;
+                          }), 1);
+  EXPECT_EQ(first.input.wheel_input_edges.size(), 2u);
+  EXPECT_FLOAT_EQ(first.input.mouse_local.x, 88 * scale);
+  EXPECT_FLOAT_EQ(first.input.mouse_local.y, 94 * scale);
+  EXPECT_FLOAT_EQ(first.input.mouse_delta.x, 8 * scale);
+  EXPECT_FLOAT_EQ(first.input.mouse_delta.y, 4 * scale);
+  EXPECT_FLOAT_EQ(first.input.viewport_size.x, 640 * scale);
+  EXPECT_FLOAT_EQ(first.input.viewport_size.y, 480 * scale);
+  EXPECT_EQ(surface.visible_local_to_global(local.toPoint()), global);
+  EXPECT_EQ(host.cursor().shape(), Qt::CrossCursor);
+  EXPECT_EQ(surface.handle(), nullptr);
+  EXPECT_EQ(host.internalWinId(), 0u);
+  EXPECT_EQ(surface.presentation_geometry_query_count(), 0u);
+
+  const auto unchanged = surface.take_input_frame(1.0f / 60.0f, false);
+  EXPECT_TRUE(unchanged.left_down);
+  EXPECT_FALSE(unchanged.left_pressed);
+  EXPECT_EQ(unchanged.mouse_move_events, 0u);
+  EXPECT_TRUE(unchanged.input.pointer_pressed_edges.empty());
+  EXPECT_TRUE(unchanged.input.pressed_input_chords.empty());
+  EXPECT_TRUE(unchanged.input.wheel_input_edges.empty());
+
+  QMouseEvent release(QEvent::MouseButtonRelease, local, global,
+                      Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+  QApplication::sendEvent(&host, &release);
+  QKeyEvent key_release(QEvent::KeyRelease, Qt::Key_W, Qt::NoModifier);
+  QApplication::sendEvent(&host, &key_release);
+  const auto released = surface.take_input_frame(1.0f / 60.0f, false);
+  EXPECT_TRUE(released.left_released);
+  EXPECT_FALSE(released.left_down);
+  EXPECT_EQ(released.input.pointer_released_edges.size(), 1u);
+  EXPECT_EQ(released.input.released_input_chords.size(), 1u);
+  QFocusEvent blur(QEvent::FocusOut);
+  QApplication::sendEvent(&host, &blur);
+  QEvent leave(QEvent::Leave);
+  QApplication::sendEvent(&host, &leave);
+  const auto abandoned = surface.take_input_frame(1.0f / 60.0f, false);
+  EXPECT_FALSE(abandoned.input.viewport_focused);
+  EXPECT_FALSE(abandoned.input.viewport_hovered);
+  EXPECT_EQ(host.cursor().shape(), Qt::ArrowCursor);
+  EXPECT_EQ(surface.handle(), nullptr);
+}
+
+TEST(QtViewportSurfaceInputTests,
      FixedBackingCropRetainsVisibleInputAndPopupCoordinates) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;

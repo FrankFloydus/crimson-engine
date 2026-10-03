@@ -61,7 +61,8 @@ qt_viewport_fly_navigation_hud_presentation(
  */
 class QtViewportFlyNavigationHud final : public QObject {
 public:
-  QtViewportFlyNavigationHud(QWidget &parent, ViewportPaneId pane_id);
+  QtViewportFlyNavigationHud(QWidget &parent, ViewportPaneId pane_id,
+                            bool native_widgets = true);
 
   QtViewportFlyNavigationHud(const QtViewportFlyNavigationHud &) = delete;
   QtViewportFlyNavigationHud &

@@ -79,6 +79,7 @@ class QtOperationInputHints;
 class QtStatusMessage;
 class QtUnsavedConfirmationDialog;
 class QtViewportPanel;
+class QtVulkanCompositionWidget;
 class QtProjectHomePage;
 class QtSceneWorkspace;
 class QtSelectionToolbar;
@@ -103,6 +104,7 @@ class QuaderEditorApi;
 struct QuaderApiStatus;
 class RenderOverlaySnapshotCache;
 class RenderSystem;
+struct RenderVulkanSharedContext;
 class SceneDocument;
 class SceneRenderBridge;
 enum class QuaderDirtyProjectDecision;
@@ -123,7 +125,11 @@ public:
   UISystem &operator=(const UISystem &) = delete;
 
   bool initialize(RenderSystem &render_system,
-                  const std::filesystem::path &executable_dir);
+                  const std::filesystem::path &executable_dir,
+                  bool composed_viewports = false);
+  /// Returns the real top-level Qt device after the shell has been shown.
+  [[nodiscard]] const RenderVulkanSharedContext *composition_context() const;
+  bool initialize_render_resources();
   void install_runtime_hooks(QuaderEditorApi &editor,
                              SceneDocument &document, AssetRegistry &assets,
                              ModelingSessionService &modeling,
@@ -148,6 +154,8 @@ public:
   void show_home();
   void show_workspace();
   void show();
+  /// Releases renderer borrowers while preserving the Qt-owned device.
+  void detach_render_resources();
   void shutdown();
 
   void refresh(const FrameTiming &frame_timing,
@@ -159,6 +167,7 @@ public:
   [[nodiscard]] std::size_t render_surfaces(bool render_scene_viewports);
   [[nodiscard]] bool needs_continuous_rendering() const;
   void set_viewport_presentation_requested_callback(std::function<void()> callback);
+  void set_composed_frame_prepare_callback(std::function<void()> callback);
   /// Counts complete material projections for retained-presentation diagnostics.
   [[nodiscard]] std::uint64_t material_presentation_snapshot_build_count() const {
     return material_presentation_snapshot_build_count_;
@@ -183,6 +192,7 @@ public:
   void save_window_state();
 
 private:
+  void set_presentation_vsync(bool enabled);
   void create_docks();
   QDockWidget &create_dock(UIPanelId id, QWidget &content,
                            int default_area);
@@ -296,6 +306,7 @@ private:
   QtCommandPalette *command_palette_ = nullptr;
   bool command_palette_open_pending_ = false;
   QStackedWidget *central_stack_ = nullptr;
+  QtVulkanCompositionWidget *composition_anchor_ = nullptr;
   QtProjectHomePage *project_home_page_ = nullptr;
   QtSceneWorkspace *scene_workspace_ = nullptr;
   QtSelectionToolbar *selection_toolbar_ = nullptr;
@@ -374,6 +385,7 @@ private:
   bool startup_expected_maximized_ = false;
   bool retained_message_box_prewarm_scheduled_ = false;
   bool initialized_ = false;
+  bool render_resources_detached_ = false;
   bool ui_settings_changed_ = false;
   std::string localized_locale_;
   std::uint64_t localized_revision_ = 0u;

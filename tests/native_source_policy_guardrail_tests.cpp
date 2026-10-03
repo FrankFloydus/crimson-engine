@@ -772,9 +772,13 @@ TEST(QtViewportDeletePopupTests,
   EXPECT_EQ(popup_source.find("QMessageBox confirmation("),
             std::string::npos);
   EXPECT_NE(popup_source.find("QMenu menu(&parent)"), std::string::npos);
-  EXPECT_TRUE(source_contains_compact(
-      panel_source,
-      ": QWidget(parent), delete_popup_presenter_(*this)"));
+  const auto constructor = panel_source.find("QtViewportPanel::QtViewportPanel(");
+  ASSERT_NE(constructor, std::string::npos);
+  const auto constructor_body = panel_source.find('{', constructor);
+  const auto popup_owner = panel_source.find("delete_popup_presenter_(*this)", constructor);
+  ASSERT_NE(constructor_body, std::string::npos);
+  ASSERT_NE(popup_owner, std::string::npos);
+  EXPECT_LT(popup_owner, constructor_body);
   EXPECT_NE(panel_source.find("delete_popup_presenter_.prewarm()"),
             std::string::npos);
 }

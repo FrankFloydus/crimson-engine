@@ -58,6 +58,7 @@ private:
   void save_window_settings();
   void bind_active_scene(SceneSession &scene);
   bool render_frame(const FrameTiming &frame_timing);
+  void prepare_composed_frame();
   void request_viewport_presentation();
   void schedule_next_frame(bool submitted = false);
   void poll_autosave();
@@ -86,6 +87,7 @@ private:
   bool running_ = false;
   bool shutdown_complete_ = false;
   bool rendering_frame_ = false;
+  bool preparing_composition_ = false;
 };
 
 } // namespace quader

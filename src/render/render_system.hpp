@@ -10,6 +10,7 @@
 #include "render/filament_environment_library.hpp"
 #include "render/filament_material_library.hpp"
 #include "render/render_performance_stats.hpp"
+#include "render/render_vulkan_composition.hpp"
 #include "render/material_evaluation_snapshot.hpp"
 #include "render/texture_registry.hpp"
 
@@ -68,6 +69,7 @@ public:
     [[nodiscard]] explicit operator bool() const;
     // Recreated swapchains have no retained pixels, even if their view is clean.
     [[nodiscard]] bool needs_initial_frame() const;
+    [[nodiscard]] RenderVulkanCompositionCapacity capacity() const;
     void reset();
 
 private:
@@ -92,11 +94,29 @@ public:
 
     bool initialize(void *native_window,
                     const std::filesystem::path &executable_dir,
-                    RenderConfig config = {});
+                    RenderConfig config = {},
+                    const RenderVulkanSharedContext *shared_context = nullptr);
     void shutdown();
     [[nodiscard]] bool initialized() const { return engine_ != nullptr; }
     /** Whether native swapchains preserve pixels outside their visible window clip. */
     [[nodiscard]] bool supports_hidden_native_pixels() const;
+    [[nodiscard]] bool uses_composited_vulkan() const;
+    RenderAdditionalSwapChain create_composited_swap_chain(
+        std::uint32_t capacity_width, std::uint32_t capacity_height);
+    bool render_composited_viewport(
+        ViewportRenderer &viewport_renderer, RenderAdditionalSwapChain &surface,
+        const RenderVulkanCompositionTarget &target);
+    // Completes Filament's CPU command stream before another owner submits to
+    // the shared Vulkan queue. This does not wait for GPU completion.
+    bool finish_external_queue_submission();
+    void begin_shared_command_batch();
+    void end_shared_command_batch();
+    void mark_shared_commands_pending();
+    [[nodiscard]] std::uint64_t external_queue_submission_count() const {
+      return shared_queue_submission_state_.handoff_count();
+    }
+    void set_composited_present_mode(VkPresentModeKHR present_mode);
+    void complete_composited_presentation_frame();
 
     bool begin_frame();
     bool begin_frame(filament::SwapChain *swap_chain);
@@ -180,6 +200,10 @@ public:
     std::array<double, 4> renderer_clear_color_ = {};
     float display_refresh_rate_hz_ = 60.0f;
     bool vsync_enabled_ = true;
+    VkPresentModeKHR composited_present_mode_ = VK_PRESENT_MODE_FIFO_KHR;
+    RenderSharedQueueSubmissionState shared_queue_submission_state_;
+    std::size_t composited_frame_submissions_ = 0;
+    bool composited_presentation_frame_open_ = false;
     std::filesystem::path resource_root_;
 };
 

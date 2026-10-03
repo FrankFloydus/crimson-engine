@@ -26,6 +26,7 @@
 #include <QPlatformSurfaceEvent>
 #include <QPointF>
 #include <QResizeEvent>
+#include <QScreen>
 #include <QStyleHints>
 #include <QWheelEvent>
 #include <QWidget>
@@ -236,34 +237,45 @@ void QtViewportSurface::synchronize_interaction_cursor() {
       next == QtViewportCursorPresentation::SelectionAdd ||
       next == QtViewportCursorPresentation::SelectionSubtract;
   const qreal next_device_pixel_ratio =
-      custom_selection_cursor ? std::max<qreal>(1.0, devicePixelRatio()) : 0.0;
+      custom_selection_cursor ? std::max<qreal>(1.0, input_device_pixel_ratio()) : 0.0;
   if (presented_cursor_ == next &&
       qFuzzyCompare(presented_cursor_device_pixel_ratio_ + 1.0,
                     next_device_pixel_ratio + 1.0)) {
     return;
   }
 
+  const auto apply_cursor = [this](const QCursor &cursor) {
+    if (composed_ && visible_host_ != nullptr) {
+      visible_host_->setCursor(cursor);
+    } else {
+      setCursor(cursor);
+    }
+  };
   switch (next) {
   case QtViewportCursorPresentation::Default:
-    unsetCursor();
+    if (composed_ && visible_host_ != nullptr) {
+      visible_host_->unsetCursor();
+    } else {
+      unsetCursor();
+    }
     break;
   case QtViewportCursorPresentation::SelectionDefault:
   case QtViewportCursorPresentation::SelectionAdd:
   case QtViewportCursorPresentation::SelectionSubtract:
-    setCursor(qt_application_cursor(application_cursor_variant(next),
+    apply_cursor(qt_application_cursor(application_cursor_variant(next),
                                     next_device_pixel_ratio));
     break;
   case QtViewportCursorPresentation::PrecisionCross:
-    setCursor(QCursor(Qt::CrossCursor));
+    apply_cursor(QCursor(Qt::CrossCursor));
     break;
   case QtViewportCursorPresentation::OpenHand:
-    setCursor(QCursor(Qt::OpenHandCursor));
+    apply_cursor(QCursor(Qt::OpenHandCursor));
     break;
   case QtViewportCursorPresentation::ClosedHand:
-    setCursor(QCursor(Qt::ClosedHandCursor));
+    apply_cursor(QCursor(Qt::ClosedHandCursor));
     break;
   case QtViewportCursorPresentation::Hidden:
-    setCursor(QCursor(Qt::BlankCursor));
+    apply_cursor(QCursor(Qt::BlankCursor));
     break;
   }
   presented_cursor_ = next;
@@ -277,9 +289,10 @@ void QtViewportSurface::set_interaction_cursor(
   synchronize_interaction_cursor();
 }
 
-QtViewportSurface::QtViewportSurface(ViewportPaneId pane_id)
+QtViewportSurface::QtViewportSurface(ViewportPaneId pane_id, bool composed)
     : pane_id_(pane_id), input_(std::make_unique<InputAccumulator>()),
-      presentation_geometry_(std::make_unique<PresentationGeometry>()) {
+      presentation_geometry_(std::make_unique<PresentationGeometry>()),
+      composed_(composed) {
   setObjectName(QStringLiteral("viewportSurface_%1")
                     .arg(QString::fromUtf8(viewport_pane_stable_id(pane_id_)
                                                .data())));
@@ -305,7 +318,15 @@ bool QtViewportSurface::initialize(RenderSystem &render_system,
   if (!render_system.initialized()) {
     return false;
   }
+  if (composed_ && !render_system.uses_composited_vulkan()) {
+    return false;
+  }
   if (initialized_) {
+    if (composed_) {
+      create_composed_surface();
+      synchronize_render_size();
+      return static_cast<bool>(swap_chain_);
+    }
     native_surface_available_ = handle() != nullptr;
     if (!swap_chain_) {
       recreate_swap_chain(true);
@@ -318,6 +339,12 @@ bool QtViewportSurface::initialize(RenderSystem &render_system,
   render_system_->initialize_viewport_renderer(
       renderer_, grid_layer_mask, ViewportRenderSurface::SrgbSwapchain);
   initialized_ = true;
+
+  if (composed_) {
+    create_composed_surface();
+    synchronize_render_size();
+    return static_cast<bool>(swap_chain_);
+  }
 
   // winId() deliberately creates a stable native child before Filament creates
   // its swapchain. The QWindow remains parented through createWindowContainer.
@@ -335,6 +362,9 @@ void QtViewportSurface::shutdown() {
   if (input_ != nullptr) {
     input_->wheel_accumulator = {};
   }
+  if (composed_) {
+    set_pointer_capture(false);
+  }
   if (!initialized_) {
     return;
   }
@@ -351,6 +381,13 @@ void QtViewportSurface::shutdown() {
 
 bool QtViewportSurface::render_frame() {
   synchronize_render_size();
+  if (composed_) {
+    if (ready_to_render()) {
+      visible_host_->update();
+    }
+    // QWidget::update requests a paint; it has not submitted a GPU frame.
+    return false;
+  }
   if (!swap_chain_ && native_surface_available_ && isVisible() &&
       isExposed()) {
     recreate_swap_chain();
@@ -400,8 +437,54 @@ bool QtViewportSurface::render_frame() {
   return true;
 }
 
+bool QtViewportSurface::render_composed_frame(
+    const RenderVulkanCompositionTarget &target) {
+  if (!composed_ || !ready_to_render()) {
+    return false;
+  }
+  // Geometry and camera preparation precede the Qt paint callback. Changing
+  // the backing extent here would invalidate that accepted projection.
+  return render_system_->render_composited_viewport(renderer_, swap_chain_, target);
+}
+
+void QtViewportSurface::release_composed_surface() {
+  if (composed_) {
+    swap_chain_.reset();
+    presentation_geometry_->valid = false;
+  }
+}
+
+void QtViewportSurface::create_composed_surface() {
+  if (!composed_ || !initialized_ || render_system_ == nullptr ||
+      !render_system_->initialized() || visible_host_ == nullptr) {
+    return;
+  }
+  const qreal scale = input_device_pixel_ratio();
+  QSize extent = visible_host_->size();
+  if (const QScreen *screen = visible_host_->screen()) {
+    extent = extent.expandedTo(screen->geometry().size());
+  }
+  const auto capacity = swap_chain_.capacity();
+  const auto width = static_cast<std::uint32_t>(
+      std::max(1, qRound(extent.width() * scale)));
+  const auto height = static_cast<std::uint32_t>(
+      std::max(1, qRound(extent.height() * scale)));
+  if (swap_chain_ && capacity.width >= width && capacity.height >= height) {
+    return;
+  }
+  swap_chain_ = render_system_->create_composited_swap_chain(
+      std::max(width, capacity.width), std::max(height, capacity.height));
+  presentation_geometry_->valid = false;
+}
+
 bool QtViewportSurface::ready_to_render() const {
   const QVec2 size = render_size_pixels();
+  if (composed_) {
+    return initialized_ && render_system_ != nullptr &&
+           render_system_->initialized() && static_cast<bool>(swap_chain_) &&
+           visible_host_ != nullptr && visible_host_->isVisible() &&
+           input_host_exposed() && size.x >= 1.0f && size.y >= 1.0f;
+  }
   return initialized_ && render_system_ != nullptr &&
          render_system_->initialized() && static_cast<bool>(swap_chain_) &&
          native_surface_available_ && isExposed() && isVisible() &&
@@ -427,6 +510,29 @@ QPoint QtViewportSurface::visible_local_to_global(QPoint local) const {
                                   : mapToGlobal(local);
 }
 
+qreal QtViewportSurface::input_device_pixel_ratio() const {
+  return composed_ && visible_host_ != nullptr
+             ? visible_host_->devicePixelRatioF()
+             : devicePixelRatio();
+}
+
+QPoint QtViewportSurface::input_local_from_global(QPoint global) const {
+  return composed_ && visible_host_ != nullptr
+             ? visible_host_->mapFromGlobal(global)
+             : mapFromGlobal(global);
+}
+
+bool QtViewportSurface::input_host_exposed() const {
+  if (!composed_) {
+    return isExposed();
+  }
+  const QWidget *host_window =
+      visible_host_ != nullptr ? visible_host_->window() : nullptr;
+  const QWindow *native_window =
+      host_window != nullptr ? host_window->windowHandle() : nullptr;
+  return native_window != nullptr && native_window->isExposed();
+}
+
 std::uint64_t QtViewportSurface::presentation_geometry_query_count() const {
   return presentation_geometry_->native_query_count;
 }
@@ -434,6 +540,23 @@ std::uint64_t QtViewportSurface::presentation_geometry_query_count() const {
 const QtViewportSurface::PresentationGeometry &
 QtViewportSurface::presentation_geometry() const {
   auto &presentation = *presentation_geometry_;
+  if (composed_) {
+    const QSize visible_size = visible_host_ != nullptr
+                                   ? visible_host_->size() : QSize{1, 1};
+    const qreal scale = input_device_pixel_ratio();
+    const QSize visible_pixels{
+        std::max(1, qRound(visible_size.width() * scale)),
+        std::max(1, qRound(visible_size.height() * scale))};
+    const auto capacity = swap_chain_.capacity();
+    presentation.visible_pixel_bounds = QRect(QPoint{}, visible_pixels);
+    presentation.backing_pixel_size = {
+        std::max(visible_pixels.width(), static_cast<int>(capacity.width)),
+        std::max(visible_pixels.height(), static_cast<int>(capacity.height))};
+    presentation.device_pixel_ratio = scale;
+    presentation.visible_size = visible_size;
+    presentation.valid = true;
+    return presentation;
+  }
   const QWindow *surface_parent = parent();
   const QRect parent_geometry =
       surface_parent != nullptr ? surface_parent->geometry() : QRect{};
@@ -545,12 +668,17 @@ QtViewportSurface::take_input_frame(float delta_seconds,
   if (input_ == nullptr) {
     return frame;
   }
+  if (composed_ && pointer_captured() &&
+      QWidget::mouseGrabber() != visible_host_) {
+    native_capture_loss_pending_ = true;
+    record_native_pointer_capture_lost();
+  }
 
   // Exposed native surfaces need the current held state even when the key
   // event went to another widget. Hidden/synthetic hosts retain their last
   // explicit snapshot rather than replacing a held key on every idle frame.
-  if (isExposed() || !input_->has_event_modifiers) {
-    input_->modifiers = viewport_modifiers(isExposed()
+  if (input_host_exposed() || !input_->has_event_modifiers) {
+    input_->modifiers = viewport_modifiers(input_host_exposed()
         ? QGuiApplication::queryKeyboardModifiers()
         : QGuiApplication::keyboardModifiers());
     input_->has_event_modifiers = true;
@@ -756,6 +884,8 @@ void QtViewportSurface::set_pointer_capture(bool captured) {
     synchronize_interaction_cursor();
     recenter_captured_pointer();
   } else {
+    const bool restore_pointer =
+        !composed_ || QWidget::mouseGrabber() == visible_host_;
     (void)relative_pointer_input_.stop_raw_input();
     const bool release_succeeded = apply_native_mouse_grab(false);
     const QtPointerCaptureTransition transition =
@@ -773,9 +903,14 @@ void QtViewportSurface::set_pointer_capture(bool captured) {
           QtPointerCaptureFailure::Disable);
     }
     synchronize_interaction_cursor();
+    if (!restore_pointer) {
+      input_->suppress_warp_event = false;
+      input_->warp_motion_overtook_target = false;
+      return;
+    }
     const QPoint restore = input_->capture_restore_global;
-    const QPoint local = mapFromGlobal(restore);
-    const qreal scale = devicePixelRatio();
+    const QPoint local = input_local_from_global(restore);
+    const qreal scale = input_device_pixel_ratio();
     input_->warp_target_global = restore;
     input_->suppress_warp_event = true;
     input_->warp_motion_overtook_target = false;
@@ -798,7 +933,7 @@ bool QtViewportSurface::event(QEvent *event) {
   if (accept_viewport_shortcut_override(event)) {
     return true;
   }
-  if (event != nullptr && event->type() == QEvent::PlatformSurface) {
+  if (!composed_ && event != nullptr && event->type() == QEvent::PlatformSurface) {
     presentation_geometry_->valid = false;
     auto *surface_event = static_cast<QPlatformSurfaceEvent *>(event);
     if (surface_event->surfaceEventType() ==
@@ -823,31 +958,7 @@ bool QtViewportSurface::event(QEvent *event) {
     }
     if (event->type() == QEvent::DevicePixelRatioChange ||
         event->type() == QEvent::ScreenChangeInternal) {
-      // Physical local coordinates change units with the screen DPR. Rebase
-      // the accumulator at the current cursor so the next MMB event cannot
-      // turn that unit change into a screen-sized navigation delta.
-      const QPoint global = QCursor::pos();
-      const QPoint local = mapFromGlobal(global);
-      const qreal scale = devicePixelRatio();
-      input_->mouse_local = visible_position_pixels(local);
-      input_->mouse_screen = {
-          static_cast<float>(global.x() * scale),
-          static_cast<float>(global.y() * scale),
-      };
-      input_->mouse_delta = {};
-      input_->has_mouse_position = true;
-      // Queued edge coordinates were sampled in the previous DPR units. Do
-      // not let a delayed press/release subtraction mix those units with the
-      // newly rebased pointer. Held navigation resumes from the next motion.
-      input_->pointer_pressed_edges.clear();
-      input_->pointer_released_edges.clear();
-      input_->pointer_drag_started_edges.clear();
-      input_->pointer_motion_samples.clear();
-      if (input_->left_pointer_press_sequence != 0u) {
-        input_->pointer_interaction_canceled = true;
-        input_->left_pointer_press_sequence = 0u;
-      }
-      relative_pointer_input_.clear();
+      rebase_pointer_after_scale_change();
     }
     synchronize_render_size();
   } else if (event != nullptr && event->type() == QEvent::Move) {
@@ -857,24 +968,7 @@ bool QtViewportSurface::event(QEvent *event) {
       surface_changed_callback_();
     }
   } else if (event != nullptr && event->type() == QEvent::Enter) {
-    const auto *enter_event = static_cast<QEnterEvent *>(event);
-    const qreal scale = devicePixelRatio();
-    input_->mouse_local = visible_position_pixels(enter_event->position());
-    input_->mouse_screen = {
-        static_cast<float>(enter_event->globalPosition().x() * scale),
-        static_cast<float>(enter_event->globalPosition().y() * scale),
-    };
-    input_->has_mouse_position = true;
-    input_->hovered = pointer_captured() || visible_host_ == nullptr ||
-                      visible_position_contains(enter_event->position());
-    if (!input_->has_event_modifiers) {
-      input_->modifiers = viewport_modifiers(QGuiApplication::keyboardModifiers());
-      input_->has_event_modifiers = true;
-    }
-    if (focus_request_callback_) {
-      focus_request_callback_(pane_id_, ViewportPaneFocusTrigger::Hover);
-    }
-    synchronize_interaction_cursor();
+    record_pointer_enter(*static_cast<QEnterEvent *>(event));
   } else if (event != nullptr && event->type() == QEvent::Leave) {
     input_->hovered = pointer_captured();
     synchronize_interaction_cursor();
@@ -882,7 +976,90 @@ bool QtViewportSurface::event(QEvent *event) {
   return QWindow::event(event);
 }
 
+void QtViewportSurface::rebase_pointer_after_scale_change() {
+  // Physical local coordinates change units with the screen DPR. Rebase
+  // the accumulator at the current cursor so the next MMB event cannot
+  // turn that unit change into a screen-sized navigation delta.
+  const QPoint global = QCursor::pos();
+  const QPoint local = input_local_from_global(global);
+  const qreal scale = input_device_pixel_ratio();
+  input_->mouse_local = visible_position_pixels(local);
+  input_->mouse_screen = {
+      static_cast<float>(global.x() * scale),
+      static_cast<float>(global.y() * scale),
+  };
+  input_->mouse_delta = {};
+  input_->has_mouse_position = true;
+  // Queued edge coordinates were sampled in the previous DPR units. Do
+  // not let a delayed press/release subtraction mix those units with the
+  // newly rebased pointer. Held navigation resumes from the next motion.
+  input_->pointer_pressed_edges.clear();
+  input_->pointer_released_edges.clear();
+  input_->pointer_drag_started_edges.clear();
+  input_->pointer_motion_samples.clear();
+  if (input_->left_pointer_press_sequence != 0u) {
+    input_->pointer_interaction_canceled = true;
+    input_->left_pointer_press_sequence = 0u;
+  }
+  relative_pointer_input_.clear();
+}
+
+void QtViewportSurface::record_pointer_enter(QEnterEvent &event) {
+  const qreal scale = input_device_pixel_ratio();
+  input_->mouse_local = visible_position_pixels(event.position());
+  input_->mouse_screen = {
+      static_cast<float>(event.globalPosition().x() * scale),
+      static_cast<float>(event.globalPosition().y() * scale),
+  };
+  input_->has_mouse_position = true;
+  input_->hovered = pointer_captured() || visible_host_ == nullptr ||
+                    visible_position_contains(event.position());
+  if (!input_->has_event_modifiers) {
+    input_->modifiers = viewport_modifiers(QGuiApplication::keyboardModifiers());
+    input_->has_event_modifiers = true;
+  }
+  if (focus_request_callback_) {
+    focus_request_callback_(pane_id_, ViewportPaneFocusTrigger::Hover);
+  }
+  synchronize_interaction_cursor();
+}
+
 bool QtViewportSurface::eventFilter(QObject *watched, QEvent *event) {
+  if (composed_ && watched == visible_host_.data() && event != nullptr) {
+    switch (event->type()) {
+    case QEvent::MouseButtonPress:
+      mousePressEvent(static_cast<QMouseEvent *>(event));
+      return true;
+    case QEvent::MouseButtonRelease:
+      mouseReleaseEvent(static_cast<QMouseEvent *>(event));
+      return true;
+    case QEvent::MouseButtonDblClick:
+      mouseDoubleClickEvent(static_cast<QMouseEvent *>(event));
+      return true;
+    case QEvent::MouseMove:
+      mouseMoveEvent(static_cast<QMouseEvent *>(event));
+      return true;
+    case QEvent::Wheel:
+      wheelEvent(static_cast<QWheelEvent *>(event));
+      return true;
+    case QEvent::Enter:
+      record_pointer_enter(*static_cast<QEnterEvent *>(event));
+      break;
+    case QEvent::Leave:
+      input_->hovered = pointer_captured();
+      synchronize_interaction_cursor();
+      break;
+    case QEvent::Hide:
+      record_focus_out();
+      break;
+    case QEvent::DevicePixelRatioChange:
+    case QEvent::ScreenChangeInternal:
+      rebase_pointer_after_scale_change();
+      break;
+    default:
+      break;
+    }
+  }
   if (watched == visible_host_.data() && event != nullptr &&
       (event->type() == QEvent::Resize || event->type() == QEvent::Move ||
        event->type() == QEvent::Show ||
@@ -1281,7 +1458,7 @@ void QtViewportSurface::record_mouse_move(QMouseEvent &event) {
   if (viewport_surface_diagnostics_enabled()) {
     ++input_->mouse_move_events;
   }
-  const qreal scale = devicePixelRatio();
+  const qreal scale = input_device_pixel_ratio();
   const QVec2 local = visible_position_pixels(event.position());
   const QPointF visible_local = visible_local_position(event.position());
   const QVec2 screen{
@@ -1433,6 +1610,24 @@ void QtViewportSurface::record_native_pointer_capture_lost() {
 }
 
 bool QtViewportSurface::apply_native_mouse_grab(bool captured) {
+  if (composed_) {
+    if (visible_host_ == nullptr) {
+      return !captured;
+    }
+    if (!captured) {
+      if (QWidget::mouseGrabber() == visible_host_) {
+        visible_host_->releaseMouse();
+      }
+      // Another pane can retain capture through the same native ancestor.
+      return QWidget::mouseGrabber() != visible_host_;
+    }
+    visible_host_->grabMouse();
+    const bool widget_grabbed = QWidget::mouseGrabber() == visible_host_;
+    const auto postcondition =
+        platform_pointer_capture_postcondition(native_window_handle(), true);
+    return widget_grabbed && platform_pointer_capture_transition_achieved(
+                                 widget_grabbed, postcondition);
+  }
   const bool qt_result = setMouseGrabEnabled(captured);
   const PlatformPointerCapturePostcondition postcondition =
       platform_pointer_capture_postcondition(native_window_handle(), captured);
@@ -1455,8 +1650,8 @@ void QtViewportSurface::recenter_captured_pointer() {
   }
   const QPoint visible_local(visible_size.width() / 2, visible_size.height() / 2);
   const QPoint global = visible_local_to_global(visible_local);
-  const QPoint local = mapFromGlobal(global);
-  const qreal scale = devicePixelRatio();
+  const QPoint local = input_local_from_global(global);
+  const qreal scale = input_device_pixel_ratio();
   // SetCursorPos changes the platform cursor before Qt necessarily delivers
   // the translated center event. Use the target as the fallback baseline now
   // so a physical move that overtakes that event contributes only its delta.
@@ -1477,7 +1672,7 @@ void QtViewportSurface::recenter_captured_pointer() {
 
 void QtViewportSurface::record_wheel(QWheelEvent &event) {
   input_->has_event_modifiers = true;
-  const qreal scale = devicePixelRatio();
+  const qreal scale = input_device_pixel_ratio();
   input_->mouse_local = visible_position_pixels(event.position());
   input_->mouse_screen = {
       static_cast<float>(event.globalPosition().x() * scale),
@@ -1502,7 +1697,7 @@ void QtViewportSurface::record_wheel(QWheelEvent &event) {
 }
 
 void QtViewportSurface::recreate_swap_chain(bool force_retry) {
-  if (!initialized_ || render_system_ == nullptr ||
+  if (composed_ || !initialized_ || render_system_ == nullptr ||
       !render_system_->initialized() || !native_surface_available_) {
     return;
   }
@@ -1538,12 +1733,16 @@ void QtViewportSurface::synchronize_render_size() {
   if (!initialized_) {
     return;
   }
+  create_composed_surface();
   const QVec2 size = render_size_pixels();
   const std::uint32_t width =
       static_cast<std::uint32_t>(std::max(1.0f, size.x));
   const std::uint32_t height =
       static_cast<std::uint32_t>(std::max(1.0f, size.y));
   if (renderer_.width() != width || renderer_.height() != height) {
+    if (composed_) {
+      render_system_->mark_shared_commands_pending();
+    }
     renderer_.resize(width, height);
   }
   const auto &presentation = presentation_geometry();
@@ -1555,6 +1754,10 @@ void QtViewportSurface::synchronize_render_size() {
 }
 
 void *QtViewportSurface::native_window_handle() const {
+  if (composed_) {
+    const WId id = visible_host_ != nullptr ? visible_host_->effectiveWinId() : 0u;
+    return reinterpret_cast<void *>(static_cast<std::uintptr_t>(id));
+  }
   const WId id = const_cast<QtViewportSurface *>(this)->winId();
   return reinterpret_cast<void *>(static_cast<std::uintptr_t>(id));
 }

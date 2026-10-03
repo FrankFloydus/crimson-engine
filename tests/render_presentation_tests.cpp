@@ -80,5 +80,54 @@ TEST(RenderPresentationTests, EmptySurfaceHandlesRemainSafeAcrossMovesAndReset) 
   EXPECT_FALSE(assigned.needs_initial_frame());
 }
 
+TEST(RenderPresentationTests, UnchangedCompositionDoesNotRepeatQueueHandoff) {
+  RenderSharedQueueSubmissionState submission;
+  const auto compose = [&submission]() {
+    if (submission.needs_handoff()) {
+      submission.complete_handoff();
+    }
+  };
+
+  submission.mark_pending();
+  compose();
+  for (int frame = 0; frame < 120; ++frame) {
+    compose();
+  }
+  EXPECT_EQ(submission.handoff_count(), 1u);
+  EXPECT_FALSE(submission.needs_handoff());
+
+  submission.mark_pending();
+  compose();
+  EXPECT_EQ(submission.handoff_count(), 2u);
+}
+
+TEST(RenderPresentationTests, NestedPaintingDoesNotConsumeActiveProducerScope) {
+  RenderSharedQueueSubmissionState submission;
+  submission.begin_batch();
+  submission.complete_handoff();
+  // A modal/nested paint may return into the producer, which can enqueue more
+  // commands before the next Qt composition boundary.
+  EXPECT_TRUE(submission.needs_handoff());
+  submission.begin_batch();
+  submission.complete_handoff();
+  submission.end_batch();
+  submission.complete_handoff();
+  EXPECT_TRUE(submission.needs_handoff());
+
+  submission.end_batch();
+  EXPECT_TRUE(submission.needs_handoff());
+  submission.complete_handoff();
+  EXPECT_FALSE(submission.needs_handoff());
+}
+
+TEST(RenderPresentationTests, MissingDeviceDoesNotIssueExternalQueueFences) {
+  RenderSystem renderer;
+  renderer.begin_shared_command_batch();
+  EXPECT_TRUE(renderer.finish_external_queue_submission());
+  renderer.end_shared_command_batch();
+  EXPECT_TRUE(renderer.finish_external_queue_submission());
+  EXPECT_EQ(renderer.external_queue_submission_count(), 0u);
+}
+
 } // namespace
 } // namespace quader

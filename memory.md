@@ -813,18 +813,30 @@ Tests: [render extraction](tests/render_extraction_tests.cpp),
 
 ## VSync and accepted presentation
 
-- The pinned Filament main snapshot `aab101b4c038` with quader-vsync9 supplies opt-in Immediate
-  presentation and a backend-confirmed mode callback. FIFO is the default/unsupported-mode fallback. Rebuild matching
+- The pinned Filament main snapshot `aab101b4c038` with quader-vsync9 supplies native-surface opt-in
+  Immediate presentation and a backend-confirmed mode callback. FIFO is the default/unsupported-mode fallback. Rebuild matching
   headers/libraries together; CMake verifies provenance/hashes. Keep the maintained patch through
   upgrades; the installer consumes compiled artifacts, not a compiler or end-user SDK download.
   Revision 6 preserves upstream's `VulkanSync` constructor and `setFrameRate` during the rebase.
   Recompile all materials with the matching rebuilt `matc`: the main snapshot retains material
   format 76 from v1.76.1 but changes material variants and shaders.
-- Bottom-dock toggles retain the Vulkan scene HWND's extent and origin. The native backing is
-  anchored at `(0, 0)` inside a growing/shrinking clip host; centering it moves the previously
-  displayed image. Gate reserved pixels through render's Vulkan capability and use `clipped=false`
-  in the maintained swapchain patch. Render the hidden region and extend the ground grid before
-  reveal. Visible camera/input/picking/HUD dimensions remain independent of backing raster bounds.
+- Production Vulkan panes join Qt's window composition through `QtVulkanCompositionWidget`.
+  Qt owns the device/queue and root swapchain; render owns retained offscreen backing and copies the
+  current visible image into Qt's current-frame texture on the GPU. Geometry changes prepare the
+  matching projection before paint, even before the next App timer. Gate this work by the panel's
+  geometry revision and never consume input or refresh the retained UI again from the paint hook.
+  `QtViewportSurface` keeps the single input accumulator as a non-native QWindow adapter; route
+  widget input, focus and grabs through it without creating a scene HWND or a parallel input owner.
+- Shared-queue CPU handoff must cover both widget offscreen paints and root `beginCompose`, including
+  work enqueued during nested event loops. A producer batch remains pending after a nested handoff;
+  closing it marks later work pending again. The GPU copy consumes Filament's finished-drawing
+  semaphore; a CPU drain alone does not complete GPU use. Keep the Qt bootstrap anchor/device alive
+  through UI render-resource detachment, bridge teardown and Filament destruction. Review the pinned
+  Qt private hooks on upgrades. See the [composition contract](thirdparty/filament/README.md#qt-composed-viewport-presentation).
+- Native-child renderer/tests retain a scene HWND and backing anchored at `(0, 0)` inside a
+  growing/shrinking clip host. Gate reserved pixels through render's Vulkan capability and retain
+  the patch's `clipped=false`; render the hidden region and extend the grid before reveal.
+  In either route, visible camera/input/picking/HUD dimensions remain independent of backing bounds.
   Scene/overlay projections scale and shift into the backing; SSAO depth reconstruction must use
   that translated projection center, including odd physical-pixel extents. Preserve semantic bloom
   options and compensate only its vertical resolution for backing/visible height, within Filament's
@@ -836,23 +848,24 @@ Tests: [render extraction](tests/render_extraction_tests.cpp),
   Dimension HUDs watch the bounded QWidget ancestor chain through the window,
   including non-native containers, and rebuild it on reparenting. Geometry/hide events retire the
   accepted projection even when the pane's local bounds are unchanged.
-  The panel also observes bounded ancestors and maps its existing QWindow position into the nearest
-  native parent's coordinates, setting it only when different; this never resizes or creates a HWND.
+  In the native-child route, the panel also observes bounded ancestors and maps its existing QWindow
+  position into the nearest native parent's coordinates only when different; this never resizes or
+  creates a HWND.
   Swapping lateral dock widths requires actual OS clip bounds to agree with logical Qt geometry even
   while pane-local dimensions remain unchanged.
-- Asset Browser visibility holds Qt painting through the synchronous native clip/layout change,
-  preserving the prior `updatesEnabled()` and animation flags. This prevents painting the uncovered
-  dock footprint across the expanded scene. On reveal, activate the dock's layout after visibility
+- Asset Browser visibility holds Qt painting through the synchronous layout change, preserving the
+  prior `updatesEnabled()` and animation flags. The following composition needs the matching current
+  scene projection. On reveal, activate the dock's layout after visibility
   and before raise/main-window layout so its immediate minimum uses current child metrics. Focus,
-  shortcut override and key events from both visible clip host and inner native backing container
+  shortcut override and key events from both legacy visible clip host and inner native backing container
   use the existing surface adapter; otherwise Qt focus can land on the unobserved inner container
   and lose viewport key intent.
-- Settled dock dimensions, faster frame requests and synchronous GPU submission do not establish
-  composed image continuity. Native acceptance requires an unchanged old scene intersection until
-  one current projection arrives and valid newly revealed pixels. Window-targeted captures pass
-  selected/unselected menu/Ctrl+Space show/close cases in Shaded/VSync off, Rendered/VSync on and
-  DPR 2/VSync on, with no eligible captured frames dropped by the retention limit. Browser chrome
-  can still stage outside the scene; viewport evidence does not establish whole-window continuity.
+- Native clips and scene presentation proceed independently. Once visible pane bounds change,
+  the composed pane must display the matching current projection; an old crop followed by a later
+  projection snap fails, even when newly exposed pixels are valid. Exercise menu/Ctrl+Space
+  show/close through `AssetBrowserRealAppFrameLoopAfterSettledToggle` and inspect actual composed
+  pixels. Settled dock dimensions, renderer getters, faster requests and successful submissions
+  do not establish this result. Viewport evidence does not establish whole-window continuity.
   Screen-fit the native fixture and settle accepted baseline frames before transitions. First-reveal
   DPR 2 metrics and repeated/interrupted resize with minimize/restore pass the native fixture.
   The native AO contact/crop oracle passes the shifted helper and rejects the restored old helper
@@ -867,24 +880,27 @@ Tests: [render extraction](tests/render_extraction_tests.cpp),
   otherwise make Git silently skip every patch path. Keep archive-plus-patch byte verification;
   [nested staging regression](tools/test_filament_patch.ps1) protects this boundary.
 - UISettings owns enabled-by-default VSync. Live Settings preview, Apply/Cancel, and public changes
-  share the preference transaction. RenderSystem owns surface recreation, effective modes, stable
-  renderer records, and GPU retirement. The backend callback publishes atomic state only.
+  share the preference transaction. Qt controls the composed window's swapchain and reports its
+  resolved mode; its uncapped policy can prefer Mailbox before Immediate, with FIFO fallback.
+  RenderSystem owns native-surface recreation, stable renderer records and GPU retirement. Its
+  native backend callback publishes atomic state only.
 - Demand-rendered material previews honor needs_initial_frame after swapchain recreation. Synchronized
   frames keep display cadence. Uncapped scheduling checks GPU capacity before UI/input/modeling/scene
   work; successful submissions may continue immediately, while busy/rejected attempts back off
   1/2/4 ms and idle work uses 16 ms. Never restore an unconditional 0/1 ms spin loop.
-- FPS counts accepted presentations, without a 60 FPS clamp. Active-screen refresh metadata changes
+- FPS counts accepted presentations, without a 60 FPS clamp. Composed panes are accounted after the
+  common Qt flush, not when an App timer requests their paint. Active-screen refresh metadata changes
   through screen signals, not per-frame queries. A timer-only edit does not disable Vulkan VSync.
 - Command fingerprints include VSync; sparse encoding omits default true and records false so the
   baseline remains compatible while detecting preference side effects.
 
 Owners: [RenderSystem](src/render/render_system.cpp), [frame schedule](src/app/app_frame_schedule.hpp),
-[Filament patch](thirdparty/filament/README.md), [native clip host](src/ui/qt_viewport_panel.cpp),
+[Filament patch/composition contract](thirdparty/filament/README.md), [pane host](src/ui/qt_viewport_panel.cpp),
 [visible input mapping](src/ui/qt_viewport_surface.cpp), [backing projection](src/render/viewport_renderer.cpp),
 [hidden dialog creation](src/ui/qt_retained_message_box.cpp), [HUD ancestor lifetime](src/ui/qt_viewport_edge_length_hud.cpp).
 Tests: [presentation](tests/render_presentation_tests.cpp),
 [opt-in native Vulkan runtime](tests/render_vsync_runtime_tests.cpp),
-[native browser transitions and OS clip geometry](tests/qt_project_workspace_tests.cpp),
+[real App browser transitions and OS clip geometry](tests/qt_project_workspace_tests.cpp),
 [crop input and unchanged geometry queries](tests/qt_input_adapter_tests.cpp),
 [dialog native ownership](tests/qt_retained_message_box_tests.cpp),
 [non-native ancestor retirement](tests/qt_viewport_edge_length_hud_tests.cpp).
@@ -1007,11 +1023,13 @@ Tests: [render source stamps](tests/render_source_stamp_tests.cpp),
 - Native transient windows yield viewport submission until first Paint completes, then resume while
   still open; pausing for the entire modal lifetime breaks live previews. Retain generation/QPointer
   guards across nested, hidden, destroyed, and re-shown windows.
-- Native viewport resize/exposure requests a current full App frame through the existing timer.
+- Viewport resize/exposure requests a current full App frame through the existing timer.
   Coalesce requests after the geometry/command stack unwinds; an active frame must not consume
   the pending request before its normal rescheduling. Preserve transient first-paint and GPU
   readiness gates. Qt native size can already be final before the deferred resize event or camera
-  preparation, so settled dock bounds alone do not prove current image presentation.
+  preparation, so settled dock bounds alone do not prove current image presentation. Composed panes
+  additionally prepare a changed geometry revision before Qt paints; this narrow callback neither
+  repeats input nor recursively refreshes UI. The composed-pixel acceptance rule above still applies.
 - Fusion remains the style; qt_application_theme owns the Obsidian palette. Windows High Contrast
   removes the forced scheme and uses unresolved system palette roles. Theme transitions are events.
 - User interface scale multiplies immutable logical baselines; Qt owns monitor DPR. Raster overlay
@@ -1019,7 +1037,8 @@ Tests: [render source stamps](tests/render_source_stamp_tests.cpp),
   Never rescale world geometry, pointer coordinates, saved window geometry, timers, or navigation.
 - Fusion generatedIconPixmap needs a real QStyleOption/palette. Custom stroke QIconEngine::pixmap
   must clear its image first; default uninitialized pixmaps produce random opaque glyph tiles.
-- Dimension HUDs above Vulkan use non-layered masked child windows. Raster and region share a cached
+- Dimension HUDs use ordinary widgets in composed panes and non-layered masked child windows above
+  native-child Vulkan panes. Raster and region share a cached
   binary glyph mask/DPI revision; position changes do not rebuild masks. Keep edge-face context so
   labels choose the exterior. Retire their accepted native projection before a native ancestor
   moves or resizes; ordinary Qt Move/Resize notifications arrive after native geometry changes.

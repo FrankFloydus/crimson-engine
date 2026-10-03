@@ -258,6 +258,24 @@ obj_export_file_dialog_options(void *owner_window_handle,
   return options;
 }
 
+/// Bounds application-owned Filament writes, including nested Qt paint turns.
+class SharedRenderCommandBatch final {
+public:
+  explicit SharedRenderCommandBatch(RenderSystem &render_system)
+      : render_system_(render_system) {
+    render_system_.begin_shared_command_batch();
+  }
+  SharedRenderCommandBatch(const SharedRenderCommandBatch &) = delete;
+  SharedRenderCommandBatch &operator=(const SharedRenderCommandBatch &) = delete;
+  ~SharedRenderCommandBatch() {
+    render_system_.end_shared_command_batch();
+    (void)render_system_.finish_external_queue_submission();
+  }
+
+private:
+  RenderSystem &render_system_;
+};
+
 } // namespace
 
 App::App() = default;
@@ -276,9 +294,26 @@ bool App::initialize(QApplication &application,
   window_settings_path_ = AppWindowSettings::resolve_path(executable_dir);
   window_settings_ = AppWindowSettings::load(window_settings_path_);
 
+  const bool composed_viewports = options.render_backend == RendererBackend::Vulkan;
+  if (composed_viewports) {
+    if (!ui_.initialize(render_system_, executable_dir, true)) {
+      LOG_ERROR("Qt composition shell initialization failed");
+      shutdown();
+      return false;
+    }
+    apply_window_settings();
+    ui_.show();
+    if (ui_.composition_context() == nullptr) {
+      LOG_ERROR("Qt did not initialize the viewport composition device");
+      shutdown();
+      return false;
+    }
+  }
+
   if (!render_system_.initialize(
           nullptr, executable_dir,
-          RenderConfig{.backend = options.render_backend})) {
+          RenderConfig{.backend = options.render_backend},
+          ui_.composition_context())) {
     LOG_ERROR("Renderer initialization failed");
     shutdown();
     return false;
@@ -291,7 +326,9 @@ bool App::initialize(QApplication &application,
   render_bridge_.set_project_material_resolver(
       project_material_resolver_.get());
 
-  if (!ui_.initialize(render_system_, executable_dir)) {
+  if ((!composed_viewports &&
+       !ui_.initialize(render_system_, executable_dir)) ||
+      (composed_viewports && !ui_.initialize_render_resources())) {
     LOG_ERROR("Qt Widgets UI initialization failed");
     shutdown();
     return false;
@@ -371,8 +408,11 @@ bool App::initialize(QApplication &application,
               },
       });
 
-  apply_window_settings();
+  if (!composed_viewports) {
+    apply_window_settings();
+  }
   ui_.show();
+  ui_.set_composed_frame_prepare_callback([this]() { prepare_composed_frame(); });
   install_display_refresh_rate_sync();
   frame_timer_ = std::make_unique<QTimer>();
   frame_timer_->setTimerType(Qt::PreciseTimer);
@@ -468,7 +508,7 @@ void App::shutdown() {
   QObject::disconnect(screen_refresh_rate_changed_connection_);
   display_refresh_screen_ = nullptr;
   save_window_settings();
-  ui_.shutdown();
+  ui_.detach_render_resources();
   frame_timer_.reset();
   autosave_timer_.reset();
   render_overlay_snapshot_cache_.reset();
@@ -476,6 +516,7 @@ void App::shutdown() {
   render_bridge_.shutdown();
   project_material_resolver_.reset();
   render_system_.shutdown();
+  ui_.shutdown();
   application_ = nullptr;
 }
 
@@ -637,6 +678,21 @@ void App::save_window_settings() {
   }
 }
 
+void App::prepare_composed_frame() {
+  if (shutdown_complete_ || preparing_composition_ || editor_ == nullptr ||
+      project_session_.active_scene() == nullptr) {
+    return;
+  }
+  // A dock layout can paint before the next application timer. Publish the
+  // current scene/camera to that same composed frame, without consuming input
+  // again or recursively refreshing the retained UI.
+  preparing_composition_ = true;
+  const SharedRenderCommandBatch command_batch(render_system_);
+  (void)QuaderRenderApiRuntimeAccess::sync_scene(editor_->render(), render_bridge_);
+  ui_.prepare_viewports(render_bridge_, render_overlay_snapshot_cache_);
+  preparing_composition_ = false;
+}
+
 bool App::render_frame(const FrameTiming &frame_timing) {
   QDR_PROFILE_FUNCTION();
   if (rendering_frame_ || !editor_) {
@@ -644,6 +700,7 @@ bool App::render_frame(const FrameTiming &frame_timing) {
   }
   const auto frame_begin = std::chrono::steady_clock::now();
   rendering_frame_ = true;
+  const SharedRenderCommandBatch command_batch(render_system_);
 
   {
     QDR_PROFILE_SCOPE("UI retained refresh");
@@ -763,7 +820,10 @@ bool App::render_frame(const FrameTiming &frame_timing) {
   }
   rendering_frame_ = false;
   QDR_PROFILE_FRAME_MARK();
-  return submitted > 0u;
+  // Composed panes submit during Qt painting. Keep scheduling their requested
+  // work here; their accepted-frame accounting happens after root composition.
+  return submitted > 0u ||
+         (render_scene_viewports && render_system_.uses_composited_vulkan());
 }
 
 void App::request_viewport_presentation() {

@@ -13,10 +13,10 @@
 #include "render/material_thumbnail_renderer.hpp"
 #include "render/overlay/selected_mesh_outline_mask_cache.hpp"
 #include "render/png_texture_loader.hpp"
+#include "render/render_vulkan_composition_platform.hpp"
 #include "render/scene_render_bridge.hpp"
 #include "render/viewport_renderer.hpp"
 
-#include <backend/platforms/VulkanPlatformWindows.h>
 #include <filament/Renderer.h>
 #include <filament/Texture.h>
 #include <math/vec4.h>
@@ -52,13 +52,16 @@ struct RenderSurfaceState {
   bool submitted_this_frame = false;
   bool submitted_last_frame = false;
   bool initial_frame_pending = false;
+  bool composited = false;
 };
 
 // Filament owns Vulkan surface creation and recreation. This hook only publishes
 // the mode it actually selected; the backend thread never enters Qt or app code.
 class RenderVulkanPlatform final
-    : public filament::backend::VulkanPlatformWindows {
+    : public RenderVulkanCompositionPlatform {
 public:
+  using RenderVulkanCompositionPlatform::RenderVulkanCompositionPlatform;
+
   void register_surface(const std::shared_ptr<RenderSurfaceState> &surface) {
     std::lock_guard lock(mutex_);
     surfaces_[surface->native_window] = surface;
@@ -191,6 +194,14 @@ bool RenderAdditionalSwapChain::needs_initial_frame() const {
   return static_cast<bool>(*this) && state_->initial_frame_pending;
 }
 
+RenderVulkanCompositionCapacity RenderAdditionalSwapChain::capacity() const {
+  if (state_ == nullptr || state_->owner == nullptr || !state_->composited ||
+      state_->owner->vulkan_platform_ == nullptr) {
+    return {};
+  }
+  return state_->owner->vulkan_platform_->capacity(state_->native_window);
+}
+
 RenderSystem::RenderSystem() = default;
 
 RenderSystem::~RenderSystem() {
@@ -199,7 +210,8 @@ RenderSystem::~RenderSystem() {
 
 bool RenderSystem::initialize(void *native_window,
                               const std::filesystem::path &executable_dir,
-                              RenderConfig config) {
+                              RenderConfig config,
+                              const RenderVulkanSharedContext *shared_context) {
   shutdown();
   const auto fail = [&](std::string_view message) {
     LOG_ERROR("{}", message);
@@ -207,18 +219,31 @@ bool RenderSystem::initialize(void *native_window,
     return false;
   };
 
+  if (shared_context != nullptr &&
+      (config.backend != RendererBackend::Vulkan ||
+       shared_context->instance == VK_NULL_HANDLE ||
+       shared_context->physical_device == VK_NULL_HANDLE ||
+       shared_context->device == VK_NULL_HANDLE ||
+       shared_context->graphics_queue == VK_NULL_HANDLE)) {
+    return fail("Invalid shared Vulkan compositor context");
+  }
+
   if (config.backend == RendererBackend::Vulkan) {
-    vulkan_platform_ = std::make_unique<RenderVulkanPlatform>();
+    vulkan_platform_ = std::make_unique<RenderVulkanPlatform>(shared_context);
   }
   engine_ = filament::Engine::create(to_filament_backend(config.backend),
-                                    vulkan_platform_.get());
+                                    vulkan_platform_.get(),
+                                    vulkan_platform_ != nullptr
+                                        ? vulkan_platform_->shared_context()
+                                        : nullptr);
   if (!engine_) {
     return fail("Unable to create Filament engine");
   }
+  mark_shared_commands_pending();
   // The display-latency heuristic assumes a refresh-cadenced application loop.
   // GPU frame fences remain enabled independently when VSync is disabled.
   engine_->setFeatureFlag("engine.skip_frame_when_cpu_ahead_of_display",
-                          vsync_enabled_);
+                          vsync_enabled_ && !uses_composited_vulkan());
   resource_root_ = executable_dir;
 
   if (native_window != nullptr) {
@@ -331,6 +356,10 @@ void RenderSystem::shutdown() {
     resource_root_.clear();
     filament::Engine::destroy(&engine_);
     vulkan_platform_.reset();
+    shared_queue_submission_state_ = {};
+    composited_present_mode_ = VK_PRESENT_MODE_FIFO_KHR;
+    composited_frame_submissions_ = 0;
+    composited_presentation_frame_open_ = false;
 }
 
 bool RenderSystem::begin_frame() {
@@ -412,6 +441,64 @@ bool RenderSystem::supports_hidden_native_pixels() const {
          engine_->getBackend() == filament::Engine::Backend::VULKAN;
 }
 
+bool RenderSystem::uses_composited_vulkan() const {
+  return engine_ != nullptr && vulkan_platform_ != nullptr &&
+         vulkan_platform_->has_shared_context();
+}
+
+void RenderSystem::mark_shared_commands_pending() {
+  if (uses_composited_vulkan()) {
+    shared_queue_submission_state_.mark_pending();
+  }
+}
+
+void RenderSystem::begin_shared_command_batch() {
+  shared_queue_submission_state_.begin_batch();
+}
+
+void RenderSystem::end_shared_command_batch() {
+  // A nested paint may have handed off the earlier commands while the producer
+  // still had later scene/view mutations to enqueue.
+  shared_queue_submission_state_.end_batch();
+}
+
+bool RenderSystem::finish_external_queue_submission() {
+  if (!uses_composited_vulkan() ||
+      !shared_queue_submission_state_.needs_handoff()) {
+    return true;
+  }
+  if (!RenderVulkanCompositionPlatform::finish_cpu_commands(*engine_)) {
+    LOG_ERROR("Unable to complete Filament's shared-queue CPU handoff");
+    return false;
+  }
+  shared_queue_submission_state_.complete_handoff();
+  return true;
+}
+
+void RenderSystem::set_composited_present_mode(VkPresentModeKHR present_mode) {
+  if (composited_present_mode_ == present_mode) {
+    return;
+  }
+  composited_present_mode_ = present_mode;
+  const bool unsynchronized = present_mode == VK_PRESENT_MODE_IMMEDIATE_KHR ||
+                              present_mode == VK_PRESENT_MODE_MAILBOX_KHR;
+  for (const auto &surface : additional_surfaces_) {
+    if (surface->composited) {
+      surface->unsynchronized.store(unsynchronized, std::memory_order_relaxed);
+      synchronize_surface_presentation(*surface);
+    }
+  }
+}
+
+void RenderSystem::complete_composited_presentation_frame() {
+  if (!composited_presentation_frame_open_) {
+    return;
+  }
+  complete_presentation_frame(composited_frame_submissions_);
+  composited_frame_submissions_ = 0;
+  composited_presentation_frame_open_ = false;
+}
+
 void RenderSystem::set_display_refresh_rate_hz(float refresh_rate_hz) {
   const float normalized =
       normalized_display_refresh_rate_hz(refresh_rate_hz);
@@ -421,6 +508,7 @@ void RenderSystem::set_display_refresh_rate_hz(float refresh_rate_hz) {
   }
 
   display_refresh_rate_hz_ = normalized;
+  mark_shared_commands_pending();
   const filament::Renderer::DisplayInfo display_info{
       .refreshRate = display_refresh_rate_hz_};
   if (renderer_ != nullptr &&
@@ -444,7 +532,8 @@ void RenderSystem::set_vsync_enabled(bool enabled) {
     return;
   }
   engine_->setFeatureFlag("engine.skip_frame_when_cpu_ahead_of_display",
-                          enabled);
+                          enabled && !uses_composited_vulkan());
+  mark_shared_commands_pending();
 
   // Vulkan permits only one live swapchain per native window. Finish queued
   // frames and retire every old swapchain before creating its replacement.
@@ -454,7 +543,9 @@ void RenderSystem::set_vsync_enabled(bool enabled) {
     destroy_surface_swap_chain(*primary_surface_);
   }
   for (const auto &surface : additional_surfaces_) {
-    destroy_surface_swap_chain(*surface);
+    if (!surface->composited) {
+      destroy_surface_swap_chain(*surface);
+    }
   }
   engine_->flushAndWait();
   if (primary_surface_ != nullptr) {
@@ -464,6 +555,9 @@ void RenderSystem::set_vsync_enabled(bool enabled) {
     create_surface_swap_chain(*primary_surface_);
   }
   for (const auto &surface : additional_surfaces_) {
+    if (surface->composited) {
+      continue;
+    }
     if (vulkan_platform_ != nullptr) {
       vulkan_platform_->register_surface(surface);
     }
@@ -480,7 +574,7 @@ void RenderSystem::set_vsync_enabled(bool enabled) {
 }
 
 bool RenderSystem::presentation_is_synchronized() const {
-  if (vsync_enabled_) {
+  if (vsync_enabled_ && !uses_composited_vulkan()) {
     return true;
   }
   const bool has_recent_submission =
@@ -508,7 +602,8 @@ bool RenderSystem::presentation_is_synchronized() const {
 
 bool RenderSystem::ready_for_next_frame() const {
   const auto ready = [](const std::shared_ptr<RenderSurfaceState> &surface) {
-    return surface == nullptr || !surface->submitted_last_frame ||
+    return surface == nullptr || surface->composited ||
+           !surface->submitted_last_frame ||
            surface->renderer == nullptr ||
            surface->renderer->shouldRenderFrame();
   };
@@ -530,6 +625,7 @@ bool RenderSystem::begin_frame_with_renderer(
   if (renderer == nullptr || swap_chain == nullptr) {
     return false;
   }
+  mark_shared_commands_pending();
   if (surface != nullptr) {
     synchronize_surface_presentation(*surface);
   }
@@ -545,6 +641,7 @@ bool RenderSystem::begin_frame_with_renderer(
 
 void RenderSystem::end_frame_with_renderer(filament::Renderer *renderer) {
   if (renderer != nullptr) {
+    mark_shared_commands_pending();
     renderer->endFrame();
   }
 }
@@ -595,6 +692,7 @@ RenderAdditionalSwapChain RenderSystem::create_additional_swap_chain(
   if (!engine_ || native_window == nullptr) {
     return {};
   }
+  mark_shared_commands_pending();
 
   filament::Renderer *renderer = engine_->createRenderer();
   if (renderer == nullptr) {
@@ -625,7 +723,49 @@ RenderAdditionalSwapChain RenderSystem::create_additional_swap_chain(
   return RenderAdditionalSwapChain(std::move(surface));
 }
 
+RenderAdditionalSwapChain RenderSystem::create_composited_swap_chain(
+    std::uint32_t capacity_width, std::uint32_t capacity_height) {
+  if (!uses_composited_vulkan() || capacity_width == 0 || capacity_height == 0) {
+    return {};
+  }
+  mark_shared_commands_pending();
+  void *token = vulkan_platform_->create_composited_surface(capacity_width,
+                                                            capacity_height);
+  if (token == nullptr) {
+    return {};
+  }
+  auto surface = std::make_shared<RenderSurfaceState>();
+  surface->owner = this;
+  surface->native_window = token;
+  surface->composited = true;
+  surface->color_space = SwapChainPresentationColorSpace::Srgb;
+  surface->renderer = engine_->createRenderer();
+  if (surface->renderer == nullptr) {
+    vulkan_platform_->destroy(
+        static_cast<filament::backend::Platform::SwapChain *>(token));
+    return {};
+  }
+  configure_renderer(*surface->renderer);
+  surface->swap_chain =
+      vulkan_platform_->create_composited_swap_chain(*engine_, token);
+  if (surface->swap_chain == nullptr) {
+    engine_->destroy(surface->renderer);
+    vulkan_platform_->destroy(
+        static_cast<filament::backend::Platform::SwapChain *>(token));
+    return {};
+  }
+  surface->initial_frame_pending = true;
+  surface->unsynchronized.store(
+      composited_present_mode_ == VK_PRESENT_MODE_IMMEDIATE_KHR ||
+          composited_present_mode_ == VK_PRESENT_MODE_MAILBOX_KHR,
+      std::memory_order_relaxed);
+  synchronize_surface_presentation(*surface);
+  additional_surfaces_.push_back(surface);
+  return RenderAdditionalSwapChain(std::move(surface));
+}
+
 void RenderSystem::create_surface_swap_chain(RenderSurfaceState &surface) {
+  mark_shared_commands_pending();
   surface.unsynchronized.store(false, std::memory_order_relaxed);
   surface.unsynchronized_requested.store(!vsync_enabled_,
                                           std::memory_order_relaxed);
@@ -642,10 +782,11 @@ void RenderSystem::create_surface_swap_chain(RenderSurfaceState &surface) {
 }
 
 void RenderSystem::destroy_surface_swap_chain(RenderSurfaceState &surface) {
-  if (vulkan_platform_ != nullptr) {
+  if (vulkan_platform_ != nullptr && !surface.composited) {
     vulkan_platform_->unregister_surface(surface.native_window);
   }
   if (engine_ != nullptr && surface.swap_chain != nullptr) {
+    mark_shared_commands_pending();
     engine_->destroy(surface.swap_chain);
   }
   surface.swap_chain = nullptr;
@@ -657,22 +798,37 @@ void RenderSystem::destroy_surface_swap_chain(RenderSurfaceState &surface) {
 
 void RenderSystem::synchronize_surface_presentation(RenderSurfaceState &surface) {
   const bool synchronized =
-      vsync_enabled_ || !surface.unsynchronized.load(std::memory_order_relaxed);
+      (!surface.composited && vsync_enabled_) ||
+      !surface.unsynchronized.load(std::memory_order_relaxed);
   if (surface.renderer == nullptr ||
       surface.renderer_synchronized == synchronized) {
     return;
   }
   surface.renderer_synchronized = synchronized;
+  mark_shared_commands_pending();
   surface.renderer->setDisplayInfo(filament::Renderer::DisplayInfo{
       .refreshRate = synchronized ? display_refresh_rate_hz_ : 0.0f});
 }
 
 void RenderSystem::destroy_additional_surface(RenderSurfaceState &surface) {
+  if (surface.composited && engine_ != nullptr) {
+    // This rare release also covers the compositor's external GPU copy. The
+    // steady-state frame path only hands off CPU command submission.
+    engine_->flushAndWait();
+  }
   destroy_surface_swap_chain(surface);
+  if (surface.composited && engine_ != nullptr) {
+    if (RenderVulkanCompositionPlatform::finish_cpu_commands(*engine_)) {
+      // No future command can reference this surface. Vulkan allows cached
+      // image views to retire later after all submitted uses have completed.
+      vulkan_platform_->retire_composited_images(surface.native_window);
+    }
+  }
   if (performance_renderer_ == surface.renderer) {
     performance_renderer_ = renderer_;
   }
   if (engine_ != nullptr && surface.renderer != nullptr) {
+    mark_shared_commands_pending();
     engine_->destroy(surface.renderer);
   }
   surface.owner = nullptr;
@@ -690,6 +846,7 @@ void RenderSystem::initialize_scene_render_bridge(
     return;
   }
 
+  mark_shared_commands_pending();
   render_bridge.initialize(*engine_, *scene_, material_library_.quader_mesh(),
                            material_library_.quader_mesh_lit(),
                            material_library_.vertex_color_overlay(),
@@ -714,6 +871,7 @@ bool RenderSystem::initialize_material_preview_renderer(
       solid_color_texture_ == nullptr) {
     return false;
   }
+  mark_shared_commands_pending();
   return preview_renderer.initialize(
       *engine_, material_library_.quader_mesh(),
       material_library_.quader_mesh_lit(), *solid_color_texture_,
@@ -727,6 +885,7 @@ RenderSystem::submit_material_thumbnail(RenderMaterialEvaluationSnapshot snapsho
       solid_color_texture_ == nullptr) {
     return {};
   }
+  mark_shared_commands_pending();
   if (material_thumbnail_renderer_ == nullptr) {
     auto renderer = std::make_unique<MaterialThumbnailRenderer>();
     if (!renderer->initialize(*engine_, material_library_.quader_mesh(),
@@ -741,6 +900,7 @@ RenderSystem::submit_material_thumbnail(RenderMaterialEvaluationSnapshot snapsho
 
 void RenderSystem::poll_material_thumbnails() {
   if (material_thumbnail_renderer_ != nullptr) {
+    mark_shared_commands_pending();
     material_thumbnail_renderer_->poll();
   }
 }
@@ -752,6 +912,7 @@ void RenderSystem::initialize_viewport_renderer(
     return;
   }
 
+  mark_shared_commands_pending();
   viewport_renderer.initialize(*engine_, *scene_, texture_registry_,
                                material_library_.ground_grid(),
                                material_library_.overlay_stencil_reset(),
@@ -771,6 +932,7 @@ void RenderSystem::render_viewport(ViewportRenderer &viewport_renderer) {
     return;
   }
 
+  mark_shared_commands_pending();
   viewport_renderer.render(*renderer_);
 }
 
@@ -779,7 +941,47 @@ void RenderSystem::render_viewport(ViewportRenderer &viewport_renderer,
   if (!surface || surface.state_->owner != this) {
     return;
   }
+  mark_shared_commands_pending();
   viewport_renderer.render(*surface.state_->renderer);
+}
+
+bool RenderSystem::render_composited_viewport(
+    ViewportRenderer &viewport_renderer, RenderAdditionalSwapChain &surface,
+    const RenderVulkanCompositionTarget &target) {
+  if (!uses_composited_vulkan() || !surface ||
+      surface.state_->owner != this || !surface.state_->composited ||
+      target.image == VK_NULL_HANDLE || target.width == 0 || target.height == 0) {
+    return false;
+  }
+  const auto capacity = surface.capacity();
+  if (target.width > capacity.width || target.height > capacity.height ||
+      viewport_renderer.width() != target.width ||
+      viewport_renderer.height() != target.height) {
+    return false;
+  }
+  if (!composited_presentation_frame_open_) {
+    begin_presentation_frame();
+    composited_frame_submissions_ = 0;
+    composited_presentation_frame_open_ = true;
+  }
+  mark_shared_commands_pending();
+  RenderSurfaceState &state = *surface.state_;
+  synchronize_surface_presentation(state);
+  vulkan_platform_->begin_composited_frame(state.native_window);
+  // Renderer::beginFrame explicitly permits proceeding after false. Qt owns
+  // pacing here, and its composition must contain this layout's current image.
+  (void)state.renderer->beginFrame(state.swap_chain);
+  viewport_renderer.render(*state.renderer);
+  state.renderer->endFrame();
+  performance_renderer_ = state.renderer;
+  if (!finish_external_queue_submission() ||
+      !vulkan_platform_->copy_composited_frame(state.native_window, target)) {
+    return false;
+  }
+  state.submitted_this_frame = true;
+  state.initial_frame_pending = false;
+  ++composited_frame_submissions_;
+  return true;
 }
 
 void RenderSystem::render_material_preview(
@@ -789,6 +991,7 @@ void RenderSystem::render_material_preview(
       !preview_renderer.initialized()) {
     return;
   }
+  mark_shared_commands_pending();
   preview_renderer.render(*surface.state_->renderer);
 }
 
@@ -797,6 +1000,7 @@ void RenderSystem::apply_scene_settings(
   if (!engine_ || !scene_) {
     return;
   }
+  mark_shared_commands_pending();
   static const SceneEnvironmentSettings kDefaultEnvironment;
   environment_library_.apply(release_has_feature(ReleaseFeature::Environment)
                                  ? settings.environment

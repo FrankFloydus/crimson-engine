@@ -58,7 +58,7 @@ public:
 
   void resize(std::uint32_t width, std::uint32_t height);
   void set_preview_state(const MaterialPreviewState &state);
-  void set_material(StandardMaterialPreviewSnapshot snapshot);
+  bool set_material(StandardMaterialPreviewSnapshot snapshot);
   void render(filament::Renderer &renderer);
   void render_offscreen(filament::Renderer &renderer,
                         filament::RenderTarget &target);

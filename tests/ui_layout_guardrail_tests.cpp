@@ -2363,7 +2363,12 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(hud, "colors.shadow().color()");
   expect_contains(hud, "colors.brightText().color()");
   expect_missing(hud, "colors.highlightedText().color()");
-  expect_contains(hud, "setAttribute(Qt::WA_NativeWindow)");
+  expect_contains(hud, "setAttribute(Qt::WA_NativeWindow, native_widget)");
+  expect_contains(hud,
+                  "speed_label_->setAttribute(Qt::WA_NativeWindow, native_widgets)");
+  expect_contains(panel,
+                  "new QtViewportFlyNavigationHud(*pane_state.frame, "
+                  "pane_state.id, !composed_)");
   const std::size_t raw_input_gate =
       hud.find("if (input_valid_ && input_fly_hud_active_");
   const std::size_t localized_presentation =
@@ -2437,7 +2442,7 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
-     EveryQtViewportPaneOwnsADirectNativeFilamentSurface) {
+     EveryQtViewportPaneOwnsOneFilamentSurfaceForItsPresentationBackend) {
   const std::string panel =
       read_source_file("src/ui/qt_viewport_panel.cpp");
   const std::string surface_header =
@@ -2448,8 +2453,40 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(surface_header,
                   "class QtViewportSurface final : public QWindow");
   expect_contains(surface_header, "RenderAdditionalSwapChain swap_chain_");
-  expect_contains(panel, "new QtViewportSurface(pane_state.id)");
-  expect_contains(panel, "QWidget::createWindowContainer(");
+  const std::string create_pane = source_slice(
+      panel, "void QtViewportPanel::create_pane(",
+      "void QtViewportPanel::refresh_keybinding_presentation(");
+  expect_contains(create_pane,
+                  "new QtViewportSurface(pane_state.id, composed_)");
+  const std::string composed_host = source_slice(
+      create_pane,
+      "if (composed_) {\n    pane_state.surface->QObject::setParent",
+      "} else {");
+  expect_contains(composed_host, "new QtVulkanCompositionWidget(pane_state.frame)");
+  expect_contains(composed_host, "host->set_prepare_callback(");
+  expect_contains(composed_host, "prepare_composed_frame()");
+  expect_contains(composed_host, "host->set_render_callback(");
+  expect_contains(composed_host, "surface->render_composed_frame(target)");
+  expect_contains(composed_host, "host->set_release_callback(");
+  expect_contains(composed_host, "surface->release_composed_surface()");
+  expect_missing(composed_host, "createWindowContainer(");
+  expect_missing(composed_host, "WA_NativeWindow");
+  const std::string native_host = source_slice(
+      create_pane, "if (!composed_) {",
+      "pane_state.surface->set_visible_host(");
+  expect_contains(native_host, "QWidget::createWindowContainer(");
+  expect_contains(native_host,
+                  "pane_state.surface_backing_container->setAttribute(Qt::WA_NativeWindow)");
+  expect_contains(create_pane,
+                  "pane_state.surface->set_visible_host(*pane_state.surface_container)");
+  const std::string initialize = source_slice(
+      surface, "bool QtViewportSurface::initialize(",
+      "void QtViewportSurface::shutdown()");
+  const std::string composed_initialize = source_slice(
+      initialize, "if (composed_) {\n    create_composed_surface();", "\n  }");
+  expect_contains(composed_initialize, "return static_cast<bool>(swap_chain_)");
+  expect_missing(composed_initialize, "winId()");
+  expect_missing(composed_initialize, "native_window_handle()");
   expect_contains(surface, "(void)winId()");
   expect_contains(surface, "native_window_handle()");
   expect_contains(surface, "create_additional_swap_chain(");
@@ -2462,6 +2499,16 @@ TEST(UiLayoutGuardrailTests,
                   "QPlatformSurfaceEvent::SurfaceAboutToBeDestroyed");
   expect_contains(surface, "QEvent::DevicePixelRatioChange");
   expect_contains(surface, "swap_chain_.reset()");
+  expect_contains(surface,
+                  "render_system_->render_composited_viewport(renderer_, swap_chain_, target)");
+  const std::string native_swap_chain = source_slice(
+      surface, "void QtViewportSurface::recreate_swap_chain(",
+      "void QtViewportSurface::synchronize_render_size()");
+  const std::size_t native_guard = native_swap_chain.find("if (composed_");
+  const std::size_t native_handle = native_swap_chain.find("native_window_handle()");
+  ASSERT_NE(native_guard, std::string::npos);
+  ASSERT_NE(native_handle, std::string::npos);
+  EXPECT_LT(native_guard, native_handle);
   expect_missing(surface, "ImGui");
   expect_missing(surface, "SDL");
 }
@@ -2956,11 +3003,17 @@ TEST(UiLayoutGuardrailTests,
       "bool QtViewportPanel::initialize(");
   expect_contains(destructor, "shutdown();");
 
-  const std::string shutdown = source_slice(
-      ui_system, "void UISystem::shutdown()", "void UISystem::refresh(");
-  expect_contains(shutdown,
+  const std::string detach = source_slice(
+      ui_system, "void UISystem::detach_render_resources()",
+      "void UISystem::shutdown()");
+  expect_contains(detach,
                   "viewport_panel_->reset_interactions(editor_, "
                   "native_tools_)");
+  const std::size_t reset_interactions = detach.find("reset_interactions(");
+  const std::size_t shutdown_panel = detach.find("viewport_panel_->shutdown()");
+  ASSERT_NE(reset_interactions, std::string::npos);
+  ASSERT_NE(shutdown_panel, std::string::npos);
+  EXPECT_LT(reset_interactions, shutdown_panel);
 
   const std::string input = source_slice(
       panel, "void QtViewportPanel::process_viewport_input(",
@@ -3243,11 +3296,15 @@ TEST(UiLayoutGuardrailTests,
                   "void rebind_editor(QuaderEditorApi &editor) noexcept;");
   expect_contains(filter_source, "editor_ = &editor;");
 
-  const std::string shutdown = source_slice(
-      ui_system, "void UISystem::shutdown()", "void UISystem::refresh(");
-  expect_contains(shutdown,
-                  "removeEventFilter(command_event_filter_.get())");
-  expect_contains(shutdown, "command_event_filter_.reset()");
+  const std::string detach = source_slice(
+      ui_system, "void UISystem::detach_render_resources()",
+      "void UISystem::shutdown()");
+  const std::size_t remove_filter =
+      detach.find("removeEventFilter(command_event_filter_.get())");
+  const std::size_t destroy_filter = detach.find("command_event_filter_.reset()");
+  ASSERT_NE(remove_filter, std::string::npos);
+  ASSERT_NE(destroy_filter, std::string::npos);
+  EXPECT_LT(remove_filter, destroy_filter);
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -3375,21 +3432,43 @@ TEST(UiLayoutGuardrailTests,
       clear_hooks,
       "set_runtime_hooks(QuaderPreferencesRuntimeHooks{})");
 
+  const std::string detach = source_slice(
+      ui_system, "void UISystem::detach_render_resources()",
+      "void UISystem::shutdown()");
+  const std::size_t clear = detach.find("clear_editor_runtime_hooks();");
+  const std::size_t destroy_filter = detach.find("command_event_filter_.reset()");
+  const std::size_t shutdown_panel = detach.find("viewport_panel_->shutdown()");
+  const std::size_t clear_prepare =
+      detach.find("set_composed_frame_prepare_callback({})");
+  const std::size_t clear_release =
+      detach.find("composition_anchor_->set_release_callback({})");
+  ASSERT_NE(clear, std::string::npos);
+  ASSERT_NE(destroy_filter, std::string::npos);
+  ASSERT_NE(shutdown_panel, std::string::npos);
+  ASSERT_NE(clear_prepare, std::string::npos);
+  ASSERT_NE(clear_release, std::string::npos);
+  EXPECT_LT(clear, destroy_filter);
+  EXPECT_LT(clear, shutdown_panel);
+  EXPECT_LT(clear_prepare, shutdown_panel);
+  EXPECT_LT(clear_release, shutdown_panel);
+  expect_contains(detach, "abandon_scene_backed_panels();");
+  expect_missing(detach, "main_menu_.reset()");
+  expect_missing(detach, "main_window_.reset()");
+  expect_missing(detach, "editor_ = nullptr");
+
   const std::string shutdown = source_slice(
       ui_system, "void UISystem::shutdown()", "void UISystem::refresh(");
-  const std::size_t clear =
-      shutdown.find("clear_editor_runtime_hooks();");
+  const std::size_t detach_resources = shutdown.find("detach_render_resources();");
   const std::size_t destroy_menu = shutdown.find("main_menu_.reset()");
   const std::size_t destroy_window = shutdown.find("main_window_.reset()");
   const std::size_t forget_editor = shutdown.find("editor_ = nullptr");
-  ASSERT_NE(clear, std::string::npos);
+  ASSERT_NE(detach_resources, std::string::npos);
   ASSERT_NE(destroy_menu, std::string::npos);
   ASSERT_NE(destroy_window, std::string::npos);
   ASSERT_NE(forget_editor, std::string::npos);
-  EXPECT_LT(clear, destroy_menu);
-  EXPECT_LT(clear, destroy_window);
-  EXPECT_LT(clear, forget_editor);
-  expect_contains(shutdown, "abandon_scene_backed_panels();");
+  EXPECT_LT(detach_resources, destroy_menu);
+  EXPECT_LT(detach_resources, destroy_window);
+  EXPECT_LT(detach_resources, forget_editor);
 }
 
 TEST(UiLayoutGuardrailTests,
@@ -3558,7 +3637,8 @@ TEST(UiLayoutGuardrailTests,
       panel.find("interaction_controller_.pick_context_menu_target(",
                  after_tool);
   const std::size_t release_capture =
-      panel.find("candidate.surface->set_pointer_capture(", pick);
+      panel.find("synchronize_pointer_capture(result.fly_cursor_capture_active",
+                 pick);
   const std::size_t show =
       panel.find("context_menu_presenter_.show(", release_capture);
   ASSERT_NE(process, std::string::npos);
@@ -3571,6 +3651,14 @@ TEST(UiLayoutGuardrailTests,
   EXPECT_LT(material_pick, pick);
   EXPECT_LT(pick, release_capture);
   EXPECT_LT(release_capture, show);
+  const std::string synchronize_capture = source_slice(
+      panel, "void QtViewportPanel::synchronize_pointer_capture(",
+      "void QtViewportPanel::cancel_navigation()");
+  expect_contains(synchronize_capture,
+                  "candidate.surface->set_pointer_capture(owner.has_value() &&");
+  expect_contains(synchronize_capture, "candidate.id == *owner");
+  expect_contains(synchronize_capture,
+                  "candidate.surface->set_pointer_capture(false)");
 
   expect_missing(presenter, "available_actions(");
   const std::size_t presenter_show =

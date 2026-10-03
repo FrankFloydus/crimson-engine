@@ -67,8 +67,8 @@ QBitmap crosshair_window_mask(QSize size, const QtUiScaleMetrics &metrics) {
 /// Draws the fly-navigation crosshair exclusively from the active Qt palette.
 class QtViewportFlyCrosshair final : public QWidget {
 public:
-  explicit QtViewportFlyCrosshair(QWidget *parent) : QWidget(parent) {
-    setAttribute(Qt::WA_NativeWindow);
+  QtViewportFlyCrosshair(QWidget *parent, bool native_widget) : QWidget(parent) {
+    setAttribute(Qt::WA_NativeWindow, native_widget);
     setAttribute(Qt::WA_NoSystemBackground);
     setAttribute(Qt::WA_TransparentForMouseEvents);
     // Native child widgets are opaque on Windows even when their background is
@@ -163,8 +163,8 @@ qt_viewport_fly_navigation_hud_presentation(
 }
 
 QtViewportFlyNavigationHud::QtViewportFlyNavigationHud(
-    QWidget &parent, ViewportPaneId pane_id)
-    : QObject(&parent), crosshair_(new QtViewportFlyCrosshair(&parent)),
+    QWidget &parent, ViewportPaneId pane_id, bool native_widgets)
+    : QObject(&parent), crosshair_(new QtViewportFlyCrosshair(&parent, native_widgets)),
       speed_label_(new QLabel(&parent)), bounds_(parent.rect()) {
   const QString suffix = pane_suffix(pane_id);
   crosshair_->setObjectName(
@@ -178,7 +178,7 @@ QtViewportFlyNavigationHud::QtViewportFlyNavigationHud(
   speed_label_->setFrameStyle(QFrame::StyledPanel | QFrame::Sunken);
   speed_label_->setMargin(ui_scale_metrics_.px(6));
   speed_label_->setAutoFillBackground(true);
-  speed_label_->setAttribute(Qt::WA_NativeWindow);
+  speed_label_->setAttribute(Qt::WA_NativeWindow, native_widgets);
   speed_label_->setAttribute(Qt::WA_TransparentForMouseEvents);
   speed_label_->hide();
   set_bounds(bounds_);

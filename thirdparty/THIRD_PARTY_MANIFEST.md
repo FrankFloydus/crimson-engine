@@ -15,7 +15,9 @@ Quader native app dependencies must remain compatible with proprietary/non-free 
 | EnTT | https://github.com/skypjack/entt | vcpkg `3.16.0` | MIT, see `licenses/entt-MIT.txt` | Entity-component storage for scene/runtime data. |
 | OpenGL Mathematics (GLM) | https://glm.g-truc.net | vcpkg `1.0.3` | MIT or Happy Bunny License (Modified MIT), see `licenses/glm-MIT.txt` | Vector, matrix, and transform math. |
 | Filament SDK and bundled IBL assets | https://github.com/google/filament | Unreleased `main` commit `aab101b4c038da83f71a16accb8279516a0247b9` (upstream version label `1.76.1`), source SHA-256 `7c464ef115a048ab77eb8e1898f1f79721a21b8364a4fda3e44a7e0e5f447c68`, Quader patch `quader-vsync9` | Apache-2.0, see `licenses/filament-Apache-2.0.txt` and `filament/README.md` | Vulkan renderer with explicit VSync, retained swapchain presentation lifetimes, optional Windows presentation scaling, unclipped presentable images, shifted AO reconstruction, light distance attenuation, opt-in Burley/Lambert diffuse shading, and correct sRGB presentation after dithering, materials, KTX IBL loading, and default `lightroom_14b` viewport environment. |
-| Qt Base | https://code.qt.io/cgit/qt/qtbase.git | vcpkg `6.10.3` | LGPL-3.0-only for the dynamically linked distribution path, see `licenses/qtbase-LGPL-3.0-only.txt` | Qt Core, GUI, and Widgets support for the retained-mode editor shell. |
+| Qt Base | https://code.qt.io/cgit/qt/qtbase.git | vcpkg `6.10.3` | LGPL-3.0-only for the dynamically linked distribution path, see `licenses/qtbase-LGPL-3.0-only.txt` | Qt Core, GUI, and Widgets support for the retained-mode editor shell, including Vulkan composition support. |
+| Vulkan Headers | https://github.com/KhronosGroup/Vulkan-Headers | vcpkg `1.4.341.0`, upstream tag `vulkan-sdk-1.4.341.0` | Apache-2.0 OR MIT, with the MIT-only `parse_dependency.py` exception; see `licenses/vulkan-headers-Apache-2.0-OR-MIT.txt` | Vulkan API declarations required by Qt Base's Vulkan feature. |
+| Vulkan Loader | https://github.com/KhronosGroup/Vulkan-Loader | vcpkg `1.4.341.0`, upstream tag `vulkan-sdk-1.4.341.0` | Apache-2.0 with MIT-licensed JSON components; see `licenses/vulkan-loader-Apache-2.0.txt` and `licenses/vulkan-loader-MIT-notices.txt` | Vulkan loader required by Qt Base's Vulkan feature on Windows. |
 | Qt Image Formats | https://code.qt.io/cgit/qt/qtimageformats.git | vcpkg `6.10.3` | LGPL-3.0-only for the dynamically loaded plugin distribution path, see `licenses/qtimageformats-LGPL-3.0-only.txt` | TGA, TIFF, and WebP image plugins used by project texture import; Jasper/JP2 support is deliberately disabled. |
 | libjpeg-turbo | https://github.com/libjpeg-turbo/libjpeg-turbo | vcpkg `3.1.4.1` | IJG and BSD-3-Clause, see `licenses/libjpeg-turbo-BSD-3-Clause-IJG.txt` | JPEG decoding through Qt's dynamically loaded `qjpeg` image plugin. |
 | LibTIFF | https://gitlab.com/libtiff/libtiff | vcpkg `4.7.1` | libtiff, see `licenses/libtiff-libtiff.txt` | Minimal TIFF decoding through Qt's dynamically loaded `qtiff` image plugin; optional JPEG, LZMA, and Deflate TIFF features remain disabled. |
@@ -28,6 +30,28 @@ Quader native app dependencies must remain compatible with proprietary/non-free 
 | {fmt} | https://github.com/fmtlib/fmt | vcpkg `12.1.0` | MIT, see `licenses/fmt-MIT.txt` | spdlog default formatting backend. |
 | stduuid | https://github.com/mariusbancila/stduuid | vcpkg `1.2.3` | MIT, see `licenses/stduuid-MIT.txt` | Stable UUID generation and parsing for scene entity identity. |
 | Tracy Profiler | https://github.com/wolfpld/tracy | `0.13.1`, commit `05cceee0df3b8d7c6fa87e9638af311dbabc63cb`; pin in `tracy-0.13.1.json` | BSD 3-Clause, exact upstream text in `licenses/tracy-BSD-3-Clause.txt` | Required Debug/Profile on-demand instrumentation; absent from Release. |
+
+## Qt Vulkan Source Policy
+
+The native manifest enables `qtbase[vulkan]` at the existing vcpkg baseline
+`d0c191d142b7bc048141ddfb618aa9ae5dba0233`. Its Windows dependency chain is the
+empty `vulkan` detection package (`2023-12-17`), `vulkan-headers`, and
+`vulkan-loader`; it does not request the full Vulkan SDK or validation layers.
+Qt remains dynamically linked at version `6.10.3`.
+
+The following source archives were verified locally against their pinned vcpkg
+port SHA-512 values. Their SHA-256 identities are:
+
+| Archive | SHA-256 |
+| --- | --- |
+| `KhronosGroup-Vulkan-Headers-vulkan-sdk-1.4.341.0.tar.gz` | `d73bc5036b6556b741f6985ff600ca720308c5f2850e4a43ceb498bd3de069e7` |
+| `KhronosGroup-Vulkan-Loader-vulkan-sdk-1.4.341.0.tar.gz` | `fe982697c780a950641bfcf94707135c26c501352242d285fa95d087d691292e` |
+
+The retained header license evidence contains the unchanged upstream
+`LICENSE.md`, `LICENSES/Apache-2.0.txt`, and `LICENSES/MIT.txt` texts. Loader
+evidence retains its unchanged `LICENSE.txt` and the complete MIT notices from
+`loader/cJSON.c` and `loader/loader_json.c`; their corresponding headers carry
+the same notices. Preserve these notices with any distributed loader binaries.
 
 ## OpenMesh Source Policy
 

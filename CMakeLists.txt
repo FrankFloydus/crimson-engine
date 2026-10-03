@@ -138,6 +138,8 @@ if(QUADER_BUILD_NATIVE_APP)
     find_package(flatbuffers CONFIG REQUIRED)
     find_package(zstd CONFIG REQUIRED)
     find_package(Qt6 CONFIG REQUIRED COMPONENTS Core Gui Widgets)
+    # The composition boundary uses the private API of this pinned Qt release.
+    find_package(Qt6 6.10.3 EXACT CONFIG REQUIRED COMPONENTS GuiPrivate WidgetsPrivate)
     if(WIN32)
         set(QUADER_REQUIRED_QT_IMAGE_FORMAT_PLUGIN_TARGETS
             Qt6::QGifPlugin
@@ -890,6 +892,7 @@ add_library(quader_render STATIC
     src/render/overlay/viewport_overlay_submission_coordinator.cpp
     src/render/overlay/viewport_overlay_style_resolver.cpp
     src/render/render_system.cpp
+    src/render/render_vulkan_composition_platform.cpp
     src/render/render_signature_builder.cpp
     src/render/render_source_stamp.cpp
     src/render/scene_render_extraction.cpp
@@ -1060,6 +1063,7 @@ add_library(quader_ui STATIC
     src/ui/qt_viewport_render_submission_policy.hpp
     src/ui/qt_viewport_panel.cpp
     src/ui/qt_viewport_surface.cpp
+    src/ui/qt_vulkan_composition_widget.cpp
     src/ui/ui_panel_manager.cpp
     src/ui/ui_system.cpp
     src/ui/ui_system_asset_browser.cpp
@@ -1120,6 +1124,8 @@ target_link_libraries(quader_ui
         quader_render
         Qt6::Widgets
     PRIVATE
+        Qt6::GuiPrivate
+        Qt6::WidgetsPrivate
         quader_editor_metadata
         quader_platform
         quader_modeling_profile)

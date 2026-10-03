@@ -38,7 +38,8 @@ struct ModelingBoxPreview;
 class QtViewportEdgeLengthHud final : public QObject,
                                     public QAbstractNativeEventFilter {
 public:
-  QtViewportEdgeLengthHud(QWidget &parent, ViewportPaneId pane_id);
+  QtViewportEdgeLengthHud(QWidget &parent, ViewportPaneId pane_id,
+                         bool native_labels = true);
   ~QtViewportEdgeLengthHud() override;
 
   QtViewportEdgeLengthHud(const QtViewportEdgeLengthHud &) = delete;
@@ -99,6 +100,7 @@ private:
   bool view_valid_ = false;
   bool native_cleanup_pending_ = false;
   bool native_cleanup_active_ = false;
+  bool native_labels_ = true;
 };
 
 } // namespace quader

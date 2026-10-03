@@ -847,13 +847,14 @@ void MaterialPreviewRenderer::set_preview_state(
   impl_->apply_state();
 }
 
-void MaterialPreviewRenderer::set_material(
+bool MaterialPreviewRenderer::set_material(
     StandardMaterialPreviewSnapshot snapshot) {
   if (impl_->material == snapshot) {
-    return;
+    return false;
   }
   impl_->material = std::move(snapshot);
   impl_->apply_material();
+  return true;
 }
 
 void MaterialPreviewRenderer::render(filament::Renderer &renderer) {

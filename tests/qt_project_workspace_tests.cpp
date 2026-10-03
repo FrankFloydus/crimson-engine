@@ -9,6 +9,7 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
+#include "app/app.hpp"
 #include "app/app_frame_schedule.hpp"
 #include "assets/default_material_catalog.hpp"
 #include "core/localization_service.hpp"
@@ -25,6 +26,7 @@
 #include "render/scene_render_bridge.hpp"
 #include "support/qt_viewport_input_test_helpers.hpp"
 #include "quader/modeling/neutral/polygon/document_model.hpp"
+#include "ui/qt_application_cursor.hpp"
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_application_style.hpp"
 #include "ui/qt_asset_browser.hpp"
@@ -35,6 +37,7 @@
 #include "ui/qt_multiresolution_icon.hpp"
 #include "ui/qt_numeric_spin_box.hpp"
 #include "ui/qt_material_browser_window.hpp"
+#include "ui/qt_material_preview_surface.hpp"
 #include "ui/qt_operation_input_hints.hpp"
 #include "ui/qt_project_asset_dialog.hpp"
 #include "ui/qt_project_home_page.hpp"
@@ -51,6 +54,7 @@
 #include "ui/qt_viewport_panel.hpp"
 #include "ui/qt_viewport_surface.hpp"
 #include "ui/qt_viewport_display_toolbar.hpp"
+#include "ui/qt_vulkan_composition_widget.hpp"
 #include "ui/ui_system.hpp"
 #include "ui/ui_settings.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
@@ -87,6 +91,7 @@
 #include <QKeyEvent>
 #include <QMainWindow>
 #include <QListView>
+#include <QLocale>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
@@ -113,6 +118,7 @@
 #include <QStackedWidget>
 #include <QStatusBar>
 #include <QStyleOption>
+#include <QStyleFactory>
 #include <QStyleOptionViewItem>
 #include <QTableView>
 #include <QTabBar>
@@ -123,6 +129,7 @@
 #include <QTreeView>
 #include <QTreeWidgetItemIterator>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <array>
@@ -140,6 +147,13 @@
 #include <system_error>
 #include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#endif
 
 #ifndef QUADER_SOURCE_DIR
 #define QUADER_SOURCE_DIR "."
@@ -6560,6 +6574,439 @@ TEST(QtProjectWorkspaceTests,
     EXPECT_EQ(harness.editor.viewports().focused_pane(), kTop);
     EXPECT_FALSE(harness.panel.operation_input_context().pointer_dragging);
   }
+}
+
+TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
+  if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_ASSET_BROWSER_APP_TESTS") != 1) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_ASSET_BROWSER_APP_TESTS=1 for the real App frame loop";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const QString empty_scene = qEnvironmentVariable(
+      "QUADER_NATIVE_BROWSER_APP_EMPTY", QStringLiteral("0"));
+  ASSERT_TRUE(empty_scene == QStringLiteral("0") || empty_scene == QStringLiteral("1"));
+  const bool composition_smoke = qEnvironmentVariableIntValue(
+      "QUADER_NATIVE_BROWSER_APP_COMPOSITION_SMOKE") == 1;
+  ASSERT_FALSE(composition_smoke && empty_scene == QStringLiteral("1"))
+      << "Composition smoke requires the selected box fixture";
+  const auto profile = std::filesystem::temp_directory_path() /
+      ("quader-browser-app-" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+  ScopedIsolatedLocalAppData scoped_profile(profile);
+  ASSERT_TRUE(scoped_profile.active());
+  int argc = 1;
+  char application_name[] = "quader-asset-browser-real-app-test";
+  char *argv[] = {application_name, nullptr};
+  QLocale::setDefault(QLocale::c());
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  application.setApplicationName(QStringLiteral("Quader"));
+  application.setOrganizationName(QStringLiteral("Quader"));
+  QStyle *fusion_style = QStyleFactory::create(QStringLiteral("Fusion"));
+  ASSERT_NE(fusion_style, nullptr);
+  QApplication::setStyle(fusion_style);
+  quader::apply_qt_obsidian_application_theme(fusion_style->standardPalette());
+  quader::install_qt_application_default_cursor(application);
+  quader::qt_install_default_numeric_spin_boxes(application);
+  const QIcon application_icon(QStringLiteral(QUADER_SOURCE_DIR "/resources/icons/quader.ico"));
+  ASSERT_FALSE(application_icon.isNull());
+  application.setWindowIcon(application_icon);
+  const auto executable = std::filesystem::path(
+      QCoreApplication::applicationFilePath().toStdWString());
+  const auto resources = executable.parent_path();
+  const auto root = profile / "Observed Project";
+  ASSERT_TRUE(std::filesystem::create_directory(root));
+  {
+    quader::ProjectSession project;
+    project.set_resource_root(resources);
+    quader::QuaderEditorApi editor(project);
+    ASSERT_TRUE(editor.project().create(root).ok());
+    ASSERT_TRUE(editor.viewports().set_layout(quader::ViewportLayoutId::Single).ok());
+    ASSERT_TRUE(editor.viewports().set_shading_mode(
+        quader::ViewportPaneId::Perspective, quader::QuaderShadingMode::Shaded).ok());
+    if (empty_scene == QStringLiteral("0")) {
+      const auto box = editor.modeling().create_box(
+          {.min = {-2, -1, -3}, .max = {2, 3, 1}}, "Observed box");
+      ASSERT_TRUE(box.ok()) << box.error_message();
+      ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+    }
+    const auto scene_id = editor.scene_documents().active_scene_id();
+    ASSERT_TRUE(scene_id.has_value());
+    const auto path = quader::ProjectRelativePath::parse_portable("Observed.qdr");
+    ASSERT_TRUE(path.ok());
+    const auto saved = editor.scene_documents().save_as(*scene_id, path.value());
+    ASSERT_TRUE(saved.ok()) << saved.error_message();
+  }
+  auto settings = quader::UISettings::defaults();
+  settings.set_interface_scale(1.0f);
+  settings.set_panel_visible(quader::UIPanelId::AssetBrowser, false);
+  const auto vsync = qEnvironmentVariable("QUADER_NATIVE_BROWSER_VSYNC", QStringLiteral("1"));
+  ASSERT_TRUE(vsync == QStringLiteral("0") || vsync == QStringLiteral("1"));
+  settings.set_vsync_enabled(vsync == QStringLiteral("1"));
+  ASSERT_TRUE(settings.save(quader::UISettings::resolve_paths(resources).settings_file));
+  quader::App app;
+  ASSERT_TRUE(app.initialize(application, executable));
+  QMainWindow *window = nullptr;
+  for (auto *widget : QApplication::topLevelWidgets()) {
+    if (widget->objectName() == QStringLiteral("quaderMainWindow")) {
+      window = qobject_cast<QMainWindow *>(widget);
+    }
+  }
+  ASSERT_NE(window, nullptr);
+  auto *recent = window->findChild<QTableView *>(QStringLiteral("projectHome.recentProjects.view"));
+  auto *viewport = dynamic_cast<quader::QtViewportPanel *>(
+      window->findChild<QWidget *>(QStringLiteral("viewportWorkspace")));
+  auto *dock = window->findChild<QDockWidget *>(QStringLiteral("dock_asset_browser"));
+  auto *action = window->findChild<QAction *>(QStringLiteral("panel_asset_browser"));
+  auto *clip = window->findChild<QWidget *>(QStringLiteral("viewportSurfaceContainer_perspective"));
+  ASSERT_NE(recent, nullptr);
+  ASSERT_NE(viewport, nullptr);
+  ASSERT_NE(dock, nullptr);
+  ASSERT_NE(action, nullptr);
+  ASSERT_NE(clip, nullptr);
+  auto *surface = viewport->surface(quader::ViewportPaneId::Perspective);
+  auto *browser = dynamic_cast<quader::QtAssetBrowser *>(dock->widget());
+  ASSERT_NE(surface, nullptr);
+  ASSERT_NE(browser, nullptr);
+  const auto qpc_ticks = []() -> std::int64_t {
+#if defined(_WIN32)
+    LARGE_INTEGER value{};
+    QueryPerformanceCounter(&value);
+    return value.QuadPart;
+#else
+    return std::chrono::steady_clock::now().time_since_epoch().count();
+#endif
+  };
+#if defined(_WIN32)
+  LARGE_INTEGER frequency{};
+  ASSERT_NE(QueryPerformanceFrequency(&frequency), FALSE);
+  std::cout << "APP_BROWSER_CLOCK frequency=" << frequency.QuadPart << '\n';
+#endif
+  std::cout << "APP_BROWSER_WINDOW hwnd=" << window->internalWinId()
+            << " qpc=" << qpc_ticks() << " empty=" << empty_scene.toStdString()
+            << " vsync=" << vsync.toStdString() << std::endl;
+  QElapsedTimer clock;
+  clock.start();
+  struct ToggleObservation {
+    qint64 started_ns = -1;
+    qint64 published_ns = -1;
+    QSize expected;
+  };
+  std::array<ToggleObservation, 4> observations;
+  int current_toggle = -1;
+  std::uint64_t frame_attempts = 0U;
+  class AppTimerObserver final : public QObject {
+  public:
+    std::uint64_t *frame_attempts = nullptr;
+  protected:
+    bool eventFilter(QObject *watched, QEvent *event) override {
+      auto *timer = qobject_cast<QTimer *>(watched);
+      if (event->type() == QEvent::Timer && timer != nullptr &&
+          timer->parent() == nullptr && timer->timerType() == Qt::PreciseTimer) {
+        ++*frame_attempts;
+      }
+      return QObject::eventFilter(watched, event);
+    }
+  } timer_observer;
+  timer_observer.frame_attempts = &frame_attempts;
+  application.installEventFilter(&timer_observer);
+  QTimer observer(&application);
+  observer.setInterval(5);
+  QSize last_renderer_size;
+  qint64 last_heartbeat_ms = -1000;
+  QObject::connect(&observer, &QTimer::timeout, &application, [&] {
+    const QSize renderer_size(static_cast<int>(surface->renderer().width()),
+                              static_cast<int>(surface->renderer().height()));
+    const auto native_extent = surface->render_size_pixels();
+    if (renderer_size != last_renderer_size || clock.elapsed() - last_heartbeat_ms >= 1000) {
+      std::cout << "APP_BROWSER_OBSERVE qpc=" << qpc_ticks()
+                << " elapsed_ms=" << clock.elapsed() << " toggle=" << current_toggle
+                << " clip=" << native_extent.x << 'x' << native_extent.y
+                << " renderer=" << renderer_size.width() << 'x' << renderer_size.height()
+                << " frame_attempts=" << frame_attempts
+                << " settings_apply=" << surface->renderer().scene_settings_apply_count()
+                << " exposed=" << surface->isExposed() << std::endl;
+      last_renderer_size = renderer_size;
+      last_heartbeat_ms = clock.elapsed();
+    }
+    if (current_toggle >= 0) {
+      auto &observation = observations[static_cast<std::size_t>(current_toggle)];
+      if (observation.published_ns < 0 && renderer_size == observation.expected) {
+        observation.published_ns = clock.nsecsElapsed();
+        std::cout << "APP_BROWSER_RENDERER_EXTENT qpc=" << qpc_ticks()
+                  << " toggle=" << current_toggle << " latency_ms="
+                  << (observation.published_ns - observation.started_ns) / 1000000.0
+                  << std::endl;
+      }
+    }
+  });
+  QTimer::singleShot(500, &application, [&] {
+    ASSERT_EQ(recent->model()->rowCount(), 1);
+    ASSERT_TRUE(QMetaObject::invokeMethod(recent, "activated", Qt::DirectConnection,
+        Q_ARG(QModelIndex, recent->model()->index(0, 0))));
+    window->showMaximized();
+  });
+  if (empty_scene == QStringLiteral("0")) {
+    QTimer::singleShot(2000, &application, [&] {
+      auto *tree = window->findChild<QTreeView *>(QStringLiteral("outliner.tree"));
+      ASSERT_NE(tree, nullptr);
+      ASSERT_EQ(tree->model()->rowCount(), 1);
+      tree->selectionModel()->setCurrentIndex(tree->model()->index(0, 0),
+          QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+      ASSERT_TRUE(viewport->focus_active_pane());
+      QAction *frame_action = nullptr;
+      const auto command_id = quader::quader_command::kViewportFrameSelection.string();
+      for (auto *candidate : window->findChildren<QAction *>()) {
+        if (candidate->property("quaderCommandId").toString() ==
+            QString::fromUtf8(command_id.data(), static_cast<qsizetype>(command_id.size()))) {
+          frame_action = candidate;
+          break;
+        }
+      }
+      ASSERT_NE(frame_action, nullptr);
+      auto *menu = qobject_cast<QMenu *>(frame_action->parent());
+      ASSERT_NE(menu, nullptr);
+      ASSERT_TRUE(QMetaObject::invokeMethod(menu, "aboutToShow", Qt::DirectConnection));
+      ASSERT_TRUE(frame_action->isEnabled());
+      frame_action->trigger();
+      std::cout << "APP_BROWSER_FRAMED qpc=" << qpc_ticks() << std::endl;
+    });
+  }
+  const auto toggle = [&](int index) {
+    const bool showing = index % 2 == 0;
+    if (index >= 2 && showing) EXPECT_TRUE(viewport->focus_active_pane());
+    if (index >= 2 && !showing) {
+      browser->focus_browser();
+      ASSERT_TRUE(browser->owns_browser_focus());
+    }
+    auto &observation = observations[static_cast<std::size_t>(index)];
+    current_toggle = index;
+    observation.started_ns = clock.nsecsElapsed();
+    std::cout << "APP_BROWSER_TOGGLE_BEGIN qpc=" << qpc_ticks()
+              << " toggle=" << index << " action=" << (showing ? "show" : "hide")
+              << " trigger=" << (index < 2 ? "panel_menu" : "ctrl_space") << std::endl;
+    if (index < 2) {
+      action->trigger();
+    } else {
+      QObject *target = showing ? (composition_smoke ? static_cast<QObject *>(clip)
+                                                    : static_cast<QObject *>(surface))
+                                : static_cast<QObject *>(QApplication::focusWidget());
+      ASSERT_NE(target, nullptr);
+      QKeyEvent shortcut_override(QEvent::ShortcutOverride, Qt::Key_Space, Qt::ControlModifier);
+      QCoreApplication::sendEvent(target, &shortcut_override);
+      EXPECT_TRUE(shortcut_override.isAccepted());
+      QKeyEvent press(QEvent::KeyPress, Qt::Key_Space, Qt::ControlModifier);
+      QCoreApplication::sendEvent(target, &press);
+      QKeyEvent release(QEvent::KeyRelease, Qt::Key_Space, Qt::ControlModifier);
+      QCoreApplication::sendEvent(target, &release);
+    }
+    EXPECT_EQ(dock->isVisible(), showing);
+    if (showing && index >= 2) EXPECT_TRUE(browser->owns_browser_focus());
+    const auto final_extent = surface->render_size_pixels();
+    observation.expected = QSize(static_cast<int>(final_extent.x), static_cast<int>(final_extent.y));
+    std::cout << "APP_BROWSER_TOGGLE_END qpc=" << qpc_ticks() << " toggle=" << index
+              << " dispatch_ms=" << (clock.nsecsElapsed() - observation.started_ns) / 1000000.0
+              << " final_clip=" << final_extent.x << 'x' << final_extent.y << std::endl;
+  };
+  for (int index = 0; index < 4; ++index) {
+    QTimer::singleShot(5000 + index * 3000, &application, [&, index] { toggle(index); });
+  }
+  constexpr std::array kCompositionPaneIds{
+      quader::ViewportPaneId::Perspective, quader::ViewportPaneId::Top,
+      quader::ViewportPaneId::Front, quader::ViewportPaneId::Side};
+  std::array<quader::QtVulkanCompositionWidget *, 4> composed_hosts{};
+  std::array<std::uint64_t, 4> composed_submissions{};
+  std::array<std::uint64_t, 4> split_submissions{};
+  std::uint64_t composed_failures = 0;
+  int composition_phases = 0;
+  quader::QtVulkanCompositionWidget *composition_anchor = nullptr;
+  std::optional<quader::RenderVulkanSharedContext> composition_context;
+  QImage before_navigation;
+  quader::QtMaterialPreviewSurface *preview_surface = nullptr;
+  QWidget *preview_window = nullptr;
+  QWidget *settings_dialog = nullptr;
+  QCheckBox *vsync_checkbox = nullptr;
+  const auto expect_composed_panes = [&] {
+    ASSERT_TRUE(composition_context.has_value());
+    ASSERT_NE(composition_anchor, nullptr);
+    ASSERT_NE(composition_anchor->shared_context(), nullptr);
+    EXPECT_EQ(composition_anchor->shared_context()->device, composition_context->device);
+    for (std::size_t index = 0; index < composed_hosts.size(); ++index) {
+      SCOPED_TRACE(index);
+      auto *host = composed_hosts[index];
+      ASSERT_NE(host, nullptr);
+      ASSERT_TRUE(host->isVisible());
+      ASSERT_NE(host->shared_context(), nullptr);
+      EXPECT_EQ(host->shared_context()->device, composition_context->device);
+      EXPECT_EQ(host->shared_context()->graphics_queue, composition_context->graphics_queue);
+      EXPECT_EQ(host->internalWinId(), 0U);
+      auto *pane_surface = viewport->surface(kCompositionPaneIds[index]);
+      ASSERT_NE(pane_surface, nullptr);
+      EXPECT_EQ(pane_surface->handle(), nullptr);
+      EXPECT_TRUE(pane_surface->ready_to_render());
+      const auto extent = pane_surface->render_size_pixels();
+      EXPECT_EQ(pane_surface->renderer().width(), static_cast<std::uint32_t>(extent.x));
+      EXPECT_EQ(pane_surface->renderer().height(), static_cast<std::uint32_t>(extent.y));
+      EXPECT_GT(composed_submissions[index], 0U);
+    }
+    EXPECT_EQ(composed_failures, 0U);
+  };
+  if (composition_smoke) {
+    composition_anchor = dynamic_cast<quader::QtVulkanCompositionWidget *>(
+        window->findChild<QWidget *>(QStringLiteral("viewportCompositionAnchor")));
+    ASSERT_NE(composition_anchor, nullptr);
+    ASSERT_NE(composition_anchor->shared_context(), nullptr);
+    composition_context = *composition_anchor->shared_context();
+    for (std::size_t index = 0; index < composed_hosts.size(); ++index) {
+      const auto pane_name = quader::viewport_pane_stable_id(kCompositionPaneIds[index]);
+      composed_hosts[index] = dynamic_cast<quader::QtVulkanCompositionWidget *>(
+          window->findChild<QWidget *>(QStringLiteral("viewportSurfaceContainer_%1")
+              .arg(QString::fromUtf8(pane_name.data(), static_cast<qsizetype>(pane_name.size())))));
+      ASSERT_NE(composed_hosts[index], nullptr);
+      QObject::connect(composed_hosts[index], &QRhiWidget::frameSubmitted,
+          &application, [&, index] { ++composed_submissions[index]; });
+      QObject::connect(composed_hosts[index], &QRhiWidget::renderFailed,
+          &application, [&] { ++composed_failures; });
+    }
+    QTimer::singleShot(18500, &application, [&] {
+      auto *menu = viewport->findChild<QMenu *>(QStringLiteral("viewportLayoutMenu_perspective"));
+      ASSERT_NE(menu, nullptr);
+      ASSERT_TRUE(QMetaObject::invokeMethod(menu, "aboutToShow", Qt::DirectConnection));
+      const auto layout_name = quader::viewport_layout_stable_id(quader::ViewportLayoutId::FourQuad);
+      auto *layout_action = menu->findChild<QAction *>(QStringLiteral("layout_%1")
+          .arg(QString::fromUtf8(layout_name.data(), static_cast<qsizetype>(layout_name.size()))));
+      ASSERT_NE(layout_action, nullptr);
+      ASSERT_TRUE(layout_action->isEnabled());
+      layout_action->trigger();
+      ++composition_phases;
+    });
+    QTimer::singleShot(20000, &application, [&] {
+      expect_composed_panes();
+      split_submissions = composed_submissions;
+      int visible_dimensions = 0;
+      for (auto *label : viewport->findChildren<QLabel *>()) {
+        if (label->objectName().startsWith(QStringLiteral("viewportSelectionDimension")) &&
+            label->isVisible()) {
+          ++visible_dimensions;
+          EXPECT_FALSE(label->text().isEmpty());
+          EXPECT_EQ(label->internalWinId(), 0U);
+        }
+      }
+      EXPECT_GT(visible_dimensions, 0);
+      before_navigation = composed_hosts[0]->grabFramebuffer();
+      ASSERT_FALSE(before_navigation.isNull());
+      composed_hosts[0]->setFocus(Qt::OtherFocusReason);
+      const QPoint center = composed_hosts[0]->rect().center();
+      QWheelEvent wheel(QPointF(center), QPointF(composed_hosts[0]->mapToGlobal(center)),
+          QPoint{}, QPoint{0, 240}, Qt::NoButton, Qt::NoModifier,
+          Qt::NoScrollPhase, false);
+      QCoreApplication::sendEvent(composed_hosts[0], &wheel);
+      ++composition_phases;
+    });
+    QTimer::singleShot(21000, &application, [&] {
+      const QImage after_navigation = composed_hosts[0]->grabFramebuffer();
+      ASSERT_FALSE(after_navigation.isNull());
+      EXPECT_EQ(after_navigation.size(), before_navigation.size());
+      EXPECT_NE(after_navigation, before_navigation);
+      auto *face_mode = window->findChild<QAction *>(QStringLiteral("selectionModeFace"));
+      ASSERT_NE(face_mode, nullptr);
+      face_mode->trigger();
+      EXPECT_TRUE(face_mode->isChecked());
+      click_widget(*composed_hosts[0], composed_hosts[0]->rect().center());
+      ++composition_phases;
+    });
+    QTimer::singleShot(22000, &application, [&] {
+      auto *status = window->findChild<QLabel *>(QStringLiteral("statusSelection"));
+      ASSERT_NE(status, nullptr);
+      EXPECT_EQ(status->text(), QStringLiteral("1 Face Selected"));
+      const QImage selected_face = composed_hosts[0]->grabFramebuffer();
+      ASSERT_FALSE(selected_face.isNull());
+      const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+      if (!review_directory.isEmpty()) {
+        ASSERT_TRUE(QDir().mkpath(review_directory));
+        ASSERT_TRUE(selected_face.save(QDir(review_directory).filePath(
+            QStringLiteral("composed-app-selected-face.png"))));
+      }
+      preview_window = window->findChild<QWidget *>(QStringLiteral("standardMaterialEditor.window"));
+      ASSERT_NE(preview_window, nullptr);
+      auto *new_material = preview_window->findChild<QAction *>(
+          QStringLiteral("standardMaterialEditor.file.new"));
+      ASSERT_NE(new_material, nullptr);
+      new_material->trigger();
+      EXPECT_TRUE(preview_window->isVisible());
+      for (auto *candidate : QGuiApplication::allWindows()) {
+        if (auto *preview = dynamic_cast<quader::QtMaterialPreviewSurface *>(candidate)) {
+          ASSERT_EQ(preview_surface, nullptr);
+          preview_surface = preview;
+        }
+      }
+      ASSERT_NE(preview_surface, nullptr);
+      ++composition_phases;
+    });
+    QTimer::singleShot(23000, &application, [&] {
+      ASSERT_NE(preview_surface, nullptr);
+      EXPECT_TRUE(preview_surface->ready_to_render());
+      EXPECT_FALSE(preview_surface->needs_rendering());
+      auto *rounded_box = preview_window->findChild<QAction *>(
+          QStringLiteral("standardMaterialEditor.previewMesh.roundedBox"));
+      ASSERT_NE(rounded_box, nullptr);
+      rounded_box->trigger();
+      EXPECT_EQ(preview_surface->preview_state().mesh_kind(),
+          quader::MaterialPreviewMeshKind::RoundedBox);
+      ++composition_phases;
+    });
+    QTimer::singleShot(24000, &application, [&] {
+      ASSERT_NE(preview_surface, nullptr);
+      EXPECT_FALSE(preview_surface->needs_rendering());
+      preview_window->hide();
+      EXPECT_FALSE(preview_window->isVisible());
+      auto *settings_action = window->findChild<QAction *>(QStringLiteral("action_settings"));
+      ASSERT_NE(settings_action, nullptr);
+      settings_action->trigger();
+      settings_dialog = window->findChild<QWidget *>(QStringLiteral("settingsDialog"));
+      ASSERT_NE(settings_dialog, nullptr);
+      vsync_checkbox = settings_dialog->findChild<QCheckBox *>(QStringLiteral("settingsVSync"));
+      ASSERT_NE(vsync_checkbox, nullptr);
+      vsync_checkbox->setChecked(false);
+      ++composition_phases;
+    });
+    QTimer::singleShot(25000, &application, [&] {
+      expect_composed_panes();
+      EXPECT_FALSE(composition_anchor->presentation_is_synchronized());
+      EXPECT_TRUE(composition_anchor->resolved_present_mode() == VK_PRESENT_MODE_MAILBOX_KHR ||
+          composition_anchor->resolved_present_mode() == VK_PRESENT_MODE_IMMEDIATE_KHR);
+      ASSERT_NE(vsync_checkbox, nullptr);
+      vsync_checkbox->setChecked(true);
+      ++composition_phases;
+    });
+    QTimer::singleShot(26000, &application, [&] {
+      expect_composed_panes();
+      EXPECT_TRUE(composition_anchor->presentation_is_synchronized());
+      ASSERT_NE(settings_dialog, nullptr);
+      settings_dialog->close();
+      for (std::size_t index = 0; index < composed_submissions.size(); ++index) {
+        EXPECT_GT(composed_submissions[index], split_submissions[index]);
+        std::cout << "APP_COMPOSITION_PANE index=" << index
+                  << " submitted=" << composed_submissions[index] << std::endl;
+      }
+      ++composition_phases;
+    });
+  }
+  QTimer::singleShot(composition_smoke ? 27000 : 18000,
+      &application, &QCoreApplication::quit);
+  observer.start();
+  EXPECT_EQ(app.run(), 0);
+  observer.stop();
+  application.removeEventFilter(&timer_observer);
+  for (const auto &observation : observations) {
+    EXPECT_GE(observation.started_ns, 0);
+    EXPECT_GE(observation.published_ns, observation.started_ns);
+  }
+  EXPECT_GT(frame_attempts, 4U);
+  if (composition_smoke) {
+    EXPECT_EQ(composition_phases, 8);
+    EXPECT_EQ(composed_failures, 0U);
+  }
+  app.shutdown();
 }
 
 TEST(QtProjectWorkspaceTests, AssetBrowserNativeCtrlSpaceHasNoIntermediateDockAnimation) {

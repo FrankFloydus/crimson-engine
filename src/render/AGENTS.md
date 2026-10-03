@@ -126,11 +126,23 @@ file except through prior written authorization from Francesco Di Blasi.
   or upload collision geometry; tint changes update uniforms only.
   Godot editor parity uses deduplicated triangle wires, selected/unselected opacity factors
   of 1.6/0.4, and a backface-culled fill at 0.0625 times the configured opacity.
-- `RenderSystem` owns native surface records, swapchains, per-surface renderers, requested VSync,
-  and backend-confirmed presentation modes. Retire pending GPU work before swapchain replacement;
-  callback publication must stay thread-safe. Preview surfaces honor `needs_initial_frame()` after
-  recreation even when their content is unchanged.
-- Native viewport backing may exceed its clipped visible pane. Keep camera/input and selection
+- `RenderSystem` owns surface records, Filament swapchains and per-surface renderers. Production
+  Vulkan scene panes borrow Qt's device/graphics queue through `RenderVulkanSharedContext`;
+  `RenderVulkanCompositionPlatform` owns their retained offscreen color/depth images and GPU copy.
+  Qt owns the window swapchain and lends only its current-frame destination image. Copy the current
+  visible crop in that Qt frame, returning the destination in shader-read layout. No CPU pixel
+  readback or independently presented scene HWND belongs in this path.
+- Shared-queue handoff has two obligations: drain Filament's CPU command producer before Qt or the
+  copy submits to the same queue, and consume Filament's finished-drawing semaphore before copying.
+  `RenderSharedQueueSubmissionState` tracks pending work and nested producer batches; ending an
+  outer batch must mark pending again after a nested paint. Unchanged, closed batches add no drain.
+  Retire images only after both Filament and external-copy GPU use completes. The borrowed Qt device
+  must outlive all these resources and the Engine; ordinary handoff is not a GPU-idle wait.
+- Native preview/standalone surfaces retain their platform swapchains, requested VSync and
+  backend-confirmed modes. Qt's composition adapter reports the composed window's resolved mode
+  to render. Retire pending GPU work before replacement; backend callback publication stays
+  thread-safe. Previews honor `needs_initial_frame()` after recreation even when content is unchanged.
+- Retained offscreen or native viewport backing may exceed its visible pane. Keep camera/input and selection
   readback dimensions visible-sized; rasterize the main/overlay views over the backing with the
   measured crop projection. View material global 1 carries visible-to-backing NDC scale/translation;
   global 2 carries the visible crop in physical pixels for visible-sized outline masks. Their
@@ -158,8 +170,9 @@ file except through prior written authorization from Francesco Di Blasi.
   excess chunks from earlier splits. Rebuild through the existing planner when the current exact
   keys require fewer chunks; keep compatible full-capacity layouts retained. Planner regressions
   in `tests/render_extraction_tests.cpp` cover repeated split/restore cycles.
-- VSync requires the maintained Filament patch and matching headers/libraries. Dependency upgrades
-  must preserve provenance checks and test actual presentation modes, not only timer intervals.
+- Native-surface VSync requires the maintained Filament patch and matching headers/libraries.
+  Composed-window VSync belongs to Qt. Dependency upgrades must preserve provenance checks and
+  test actual presentation modes for both routes, not only timer intervals.
 
 Verification pointers: `tests/render_extraction_tests.cpp`, `tests/render_source_stamp_tests.cpp`,
 `tests/render_presentation_tests.cpp`, and `tests/render_source_policy_guardrail_tests.cpp`.

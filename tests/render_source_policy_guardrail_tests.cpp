@@ -2736,6 +2736,8 @@ TEST(RenderSystemTests, PropagatesDisplayRefreshRateToEveryRenderer) {
 
 TEST(RenderSystemTests, VsyncUsesBackendModeAndNonblockingGpuReadiness) {
   const std::string source = read_source_file("src/render/render_system.cpp");
+  const std::string platform_header =
+      read_source_file("src/render/render_vulkan_composition_platform.hpp");
   const std::string synchronize = source_slice(
       source, "void RenderSystem::synchronize_surface_presentation(",
       "void RenderSystem::destroy_additional_surface(");
@@ -2745,7 +2747,12 @@ TEST(RenderSystemTests, VsyncUsesBackendModeAndNonblockingGpuReadiness) {
   const std::string toggle = source_slice(
       source, "void RenderSystem::set_vsync_enabled(",
       "bool RenderSystem::presentation_is_synchronized()");
-  EXPECT_NE(source.find("VulkanPlatformWindows"), std::string::npos);
+  EXPECT_NE(source.find("#include \"render/render_vulkan_composition_platform.hpp\""),
+            std::string::npos);
+  EXPECT_NE(source.find(": public RenderVulkanCompositionPlatform"),
+            std::string::npos);
+  EXPECT_NE(platform_header.find(": public filament::backend::VulkanPlatformWindows"),
+            std::string::npos);
   EXPECT_NE(source.find("onSwapChainPresentModeSelected("), std::string::npos);
   EXPECT_NE(source.find("CONFIG_UNSYNCHRONIZED"), std::string::npos);
   EXPECT_NE(readiness.find("shouldRenderFrame()"), std::string::npos);
@@ -3818,15 +3825,20 @@ TEST(ViewportRendererTests,
   EXPECT_NE(coordinator_source.find("renderer.setClearOptions(clear);"),
             std::string::npos);
 
+  const auto app_frame_start = app_source.find("bool App::render_frame(");
+  const auto app_frame_end = app_source.find("void App::request_viewport_presentation(", app_frame_start);
+  ASSERT_NE(app_frame_start, std::string::npos);
+  ASSERT_NE(app_frame_end, std::string::npos);
+  const auto app_frame = app_source.substr(app_frame_start, app_frame_end - app_frame_start);
   const std::size_t process_input =
-      app_source.find("ui_.process_viewport_input()");
+      app_frame.find("ui_.process_viewport_input()");
   const std::size_t sync_scene =
-      app_source.find("QuaderRenderApiRuntimeAccess::sync_scene(");
+      app_frame.find("QuaderRenderApiRuntimeAccess::sync_scene(");
   const std::size_t prepare_viewports =
-      app_source.find("ui_.prepare_viewports(render_bridge_, "
+      app_frame.find("ui_.prepare_viewports(render_bridge_, "
                       "render_overlay_snapshot_cache_)");
   const std::size_t render_viewports =
-      app_source.find("ui_.render_surfaces(render_scene_viewports)");
+      app_frame.find("ui_.render_surfaces(render_scene_viewports)");
   ASSERT_NE(process_input, std::string::npos);
   ASSERT_NE(sync_scene, std::string::npos);
   ASSERT_NE(prepare_viewports, std::string::npos);

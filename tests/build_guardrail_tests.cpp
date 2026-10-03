@@ -143,6 +143,25 @@ std::vector<std::string> retired_modeling_test_framework_needles() {
   };
 }
 
+std::size_t find_retired_framework_reference(std::string_view source,
+                                           std::string_view needle) {
+  if (!needle.ends_with('(')) {
+    return source.find(needle);
+  }
+  std::size_t offset = source.find(needle);
+  while (offset != std::string_view::npos) {
+    const bool continues_identifier =
+        offset != 0u &&
+        (std::isalnum(static_cast<unsigned char>(source[offset - 1u])) != 0 ||
+         source[offset - 1u] == '_');
+    if (!continues_identifier) {
+      return offset;
+    }
+    offset = source.find(needle, offset + needle.size());
+  }
+  return std::string_view::npos;
+}
+
 bool is_comment_capable_project_file(
     const std::filesystem::path &relative_path) {
   const std::string path = relative_path.generic_string();
@@ -1332,10 +1351,30 @@ TEST(BuildGuardrailTests,
     const std::string source = read_source_file(relative_path);
     for (const std::string &needle :
          retired_modeling_test_framework_needles()) {
-      EXPECT_EQ(source.find(needle), std::string::npos)
+      EXPECT_EQ(find_retired_framework_reference(source, needle),
+                std::string::npos)
           << relative_path.generic_string() << " contains " << needle;
     }
   }
+}
+
+TEST(BuildGuardrailTests, RetiredFrameworkMacrosRequireAnIdentifierBoundary) {
+  const std::string macro = joined("CHECK", "(");
+  EXPECT_EQ(find_retired_framework_reference("QT_VERSION_" + macro + "6, 8, 0)",
+                                             macro),
+            std::string::npos);
+  EXPECT_EQ(find_retired_framework_reference("PRE" + macro + "value)", macro),
+            std::string::npos);
+  EXPECT_EQ(find_retired_framework_reference("1" + macro + "value)", macro),
+            std::string::npos);
+  EXPECT_NE(find_retired_framework_reference(macro + "value)", macro),
+            std::string::npos);
+  EXPECT_NE(find_retired_framework_reference("\n" + macro + "value)", macro),
+            std::string::npos);
+  EXPECT_NE(find_retired_framework_reference("QT_VERSION_" + macro +
+                                                 "6, 8, 0);\n" + macro + "value)",
+                                             macro),
+            std::string::npos);
 }
 
 TEST(BuildGuardrailTests, CatalogGuardrailTestsDoNotMirrorProductionCatalogs) {
@@ -3350,7 +3389,8 @@ TEST(BuildGuardrailTests, QtShellUsesMainWindowDocksAndStableNames) {
   expect_contains(ui_system_source,
                   "scene_workspace_->set_viewport_widget(viewport_container)");
   expect_contains(ui_system_source,
-                  "viewport_panel_ = new QtViewportPanel(viewport_container)");
+                  "viewport_panel_ = new QtViewportPanel(viewport_container, "
+                  "composed_viewports)");
   expect_contains(ui_system_source,
                   "viewport_layout->addWidget(viewport_panel_, 1)");
   expect_contains(ui_system_source,

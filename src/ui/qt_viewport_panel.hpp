@@ -87,7 +87,7 @@ qt_event_target_belongs_to_tool_settings(const QObject *target);
  */
 class QtViewportPanel final : public QWidget {
 public:
-  explicit QtViewportPanel(QWidget *parent = nullptr);
+  explicit QtViewportPanel(QWidget *parent = nullptr, bool composed = false);
   ~QtViewportPanel() override;
 
   QtViewportPanel(const QtViewportPanel &) = delete;
@@ -110,6 +110,10 @@ public:
       std::function<void(ViewportPaneId, QAction &)> callback);
   /// Requests the owning app's frame flow after native pane geometry/exposure changes.
   void set_presentation_requested_callback(std::function<void()> callback);
+  /// Prepares the existing scene projection before a resized composed paint.
+  void set_composed_frame_prepare_callback(std::function<void()> callback);
+  /// Returns false while a nested paint must wait for the shared projection.
+  [[nodiscard]] bool prepare_composed_frame();
   void refresh_control_actions(QuaderEditorApi &editor);
   /// Adopts one retained settings overlay; null detaches the host callbacks.
   void set_settings_panel(QtToolSettingsPanel *panel);
@@ -250,6 +254,7 @@ private:
   void abandon_settings_overlay();
   void update_focused_pane_indicator();
   void cancel_navigation();
+  void synchronize_pointer_capture(std::optional<ViewportPaneId> owner);
   void request_pane_focus(ViewportPaneId pane_id,
                           ViewportPaneFocusTrigger trigger);
   [[nodiscard]] bool viewport_surface_has_keyboard_focus() const;
@@ -316,6 +321,11 @@ private:
   std::function<QuaderMaterialReference()> primitive_creation_material_provider_;
   std::function<void(ViewportPaneId, QAction &)> control_action_requested_;
   std::function<void()> presentation_requested_;
+  std::function<void()> composed_frame_prepare_;
+  std::uint64_t composed_geometry_revision_ = 1u;
+  std::uint64_t composed_prepared_geometry_revision_ = 0u;
+  bool composed_preparing_ = false;
+  bool composed_ = false;
   RenderFramePerformanceStats render_performance_ = {};
   ViewportSettings fallback_settings_ = ViewportSettings::defaults();
   ViewportLayoutId displayed_layout_ = ViewportLayoutId::Single;

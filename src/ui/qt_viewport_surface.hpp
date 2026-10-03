@@ -21,9 +21,12 @@
 #include <memory>
 #include <utility>
 
+class QEnterEvent;
 class QWidget;
 
 namespace quader {
+
+struct RenderVulkanCompositionTarget;
 
 enum class ViewportPaneFocusTrigger;
 
@@ -77,12 +80,12 @@ struct QtViewportInputFrame {
 };
 
 /**
- * Owns one Qt-native child surface and the Filament swapchain that presents
- * into it. Qt owns window composition; Filament owns only the child surface.
+ * Owns one pane's semantic input and Filament presentation resources. Native
+ * hosts use this QWindow; composed hosts retain it without creating a window.
  */
 class QtViewportSurface final : public QWindow {
 public:
-  explicit QtViewportSurface(ViewportPaneId pane_id);
+  explicit QtViewportSurface(ViewportPaneId pane_id, bool composed = false);
   ~QtViewportSurface() override;
 
   QtViewportSurface(const QtViewportSurface &) = delete;
@@ -92,13 +95,17 @@ public:
   void shutdown();
 
   [[nodiscard]] bool render_frame();
+  [[nodiscard]] bool
+  render_composed_frame(const RenderVulkanCompositionTarget &target);
+  void release_composed_surface();
   [[nodiscard]] bool ready_to_render() const;
   [[nodiscard]] ViewportPaneId pane_id() const { return pane_id_; }
   [[nodiscard]] ViewportRenderer &renderer() { return renderer_; }
   [[nodiscard]] const ViewportRenderer &renderer() const { return renderer_; }
-  /// Uses this native clip host for camera and input dimensions.
+  /// Uses the visible QWidget host for camera and input dimensions.
   void set_visible_host(QWidget &host);
   [[nodiscard]] QPoint visible_local_to_global(QPoint local) const;
+  [[nodiscard]] qreal input_device_pixel_ratio() const;
   /// Increments only when changed geometry requires a native rectangle query.
   [[nodiscard]] std::uint64_t presentation_geometry_query_count() const;
   [[nodiscard]] QVec2 render_size_pixels() const;
@@ -149,7 +156,10 @@ protected:
 
 private:
   void recreate_swap_chain(bool force_retry = false);
+  void create_composed_surface();
   [[nodiscard]] void *native_window_handle() const;
+  [[nodiscard]] QPoint input_local_from_global(QPoint global) const;
+  [[nodiscard]] bool input_host_exposed() const;
   void record_focus_in();
   void record_focus_out();
   void record_key_press(QKeyEvent &event);
@@ -158,6 +168,8 @@ private:
   void record_mouse_release(QMouseEvent &event);
   void record_mouse_move(QMouseEvent &event);
   void record_wheel(QWheelEvent &event);
+  void rebase_pointer_after_scale_change();
+  void record_pointer_enter(QEnterEvent &event);
   void record_native_pointer_capture_lost();
   [[nodiscard]] bool apply_native_mouse_grab(bool captured);
   void recenter_captured_pointer();
@@ -193,6 +205,7 @@ private:
   qreal presented_cursor_device_pixel_ratio_ = 0.0;
   std::uint64_t pointer_cursor_presentation_revision_ = 0u;
   bool initialized_ = false;
+  bool composed_ = false;
   bool native_surface_available_ = false;
   bool swap_chain_creation_failed_ = false;
   std::uintptr_t swap_chain_native_id_ = 0u;

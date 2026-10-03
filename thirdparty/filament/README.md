@@ -74,7 +74,8 @@ Filament and changes to these upstream source files are licensed under Apache-2.
 [`../licenses/filament-Apache-2.0.txt`](../licenses/filament-Apache-2.0.txt). The patch modifies files
 carrying the upstream license notices. This directory contains the patch and provenance only.
 
-`SwapChain::CONFIG_UNSYNCHRONIZED` requests `VK_PRESENT_MODE_IMMEDIATE_KHR`. Each native Vulkan
+For Filament-owned native swapchains, `SwapChain::CONFIG_UNSYNCHRONIZED` requests
+`VK_PRESENT_MODE_IMMEDIATE_KHR`. Each native Vulkan
 surface selects Immediate only when advertised by that surface; otherwise it retains FIFO.
 Omitting the flag preserves upstream FIFO presentation. Mailbox is deliberately not a hidden
 fallback. Headless swapchains and other backends retain their existing behavior.
@@ -94,6 +95,36 @@ AO projections. These revisions keep the same upstream source and the four exist
 The patch retains upstream's `VulkanSync` constructor and swapchain `setFrameRate` implementation.
 All upstream changes through the pinned SHA are included; no backport selection is needed for
 that snapshot. Future upstream commits remain separate updates detected by the daily checker.
+
+### Qt-composed viewport presentation
+
+Production Vulkan scene panes use Qt's window composition. A retained `QRhiWidget` anchor
+initializes Qt's device before Filament starts; [App](../../src/app/app.cpp) lends that device and
+graphics queue through `RenderVulkanSharedContext`. Qt retains ownership until after Filament
+and all borrowed resources have shut down. The pinned SDK is unchanged by this integration.
+
+[RenderVulkanCompositionPlatform](../../src/render/render_vulkan_composition_platform.cpp)
+supplies retained offscreen color/depth images through Filament's custom swapchain hooks. The
+visible camera projection is prepared for the current widget dimensions, then the visible image
+is copied on the GPU into the current Qt texture before Qt composes the window. Image capacity
+can exceed the pane without exposing a separately resized scene HWND or reading pixels to the CPU.
+Native previews and standalone renderer tests retain Filament's native platform swapchains.
+
+The shared graphics queue requires exclusive host submission. Producer batches mark pending
+Filament work, including commands enqueued after a nested paint. Before Qt's offscreen paint and
+root composition boundary, the [Qt adapter](../../src/ui/qt_vulkan_composition_widget.cpp) drains
+Filament's CPU command stream. This handoff does not wait for GPU idle. The copy waits on Filament's
+finished-drawing semaphore, restores the source attachment layout, and leaves Qt's destination
+in shader-read layout. Retiring images must also wait for external-copy GPU use. Keep Qt's private
+composition hooks version-pinned and review them with any Qt upgrade.
+
+Qt owns the composed window's VSync and reports its resolved mode to `RenderSystem`. With VSync
+off, Qt can select Mailbox before Immediate, with FIFO fallback; the native Filament mode policy
+above remains separate. Root composition accounts accepted pane submissions. Timer requests,
+offscreen rendering and successful copies alone are not proof of a displayed frame.
+
+The transition acceptance criterion below also applies to this route. Validate the integrated App
+with composed-window captures; isolated adapter proofs do not establish production behavior.
 
 ### Vulkan swapchain replacement lifetime
 
@@ -142,18 +173,20 @@ visible parent clip must remain owned and rendered before reveal. `VK_TRUE` perm
 occluded contents and discarded fragment work. See the
 [Vulkan clipping contract](https://docs.vulkan.org/refpages/latest/refpages/source/VkSwapchainCreateInfoKHR.html).
 
-`RenderSystem::supports_hidden_native_pixels()` enables retained vertical backing only on Vulkan.
-The [viewport panel](../../src/ui/qt_viewport_panel.cpp) anchors it at `(0, 0)` within a native clip
+For the retained native-child route, `RenderSystem::supports_hidden_native_pixels()` enables
+vertical backing only on Vulkan. The [viewport panel](../../src/ui/qt_viewport_panel.cpp)
+anchors it at `(0, 0)` within a native clip
 host. Bottom-dock toggles change the visible clip while preserving the scene HWND's extent and
 origin; centering the backing would move its previous image. Visible camera/input/HUD dimensions
 remain separate from the backing raster. Scene and overlay projections scale/shift into that
 raster, and the ground grid covers the reserved region. Bloom retains its semantic options and
 compensates only vertical resolution by backing/visible height, within Filament's resolution limits.
 Retained signatures gate redundant projection/bloom setters, and native geometry queries are cached.
-The Asset Browser visibility change preserves `updatesEnabled()` while holding Qt painting until
-layout has updated native pane clips, preventing an uncovered dock footprint from being painted
-over the expanded scene. Reveal activates the dock's layout before raising it and settling the
-main-window layout, so its first minimum already reflects current child metrics.
+The projection and bloom contracts also apply to larger offscreen backing in the composed route;
+its visible image is copied into Qt's current texture instead of exposed through a native clip.
+Asset Browser visibility preserves `updatesEnabled()` across synchronous layout changes. Reveal
+activates the dock's layout before raising it and settling the main-window layout, so its first
+minimum already reflects current child metrics.
 
 SSAO's `computeViewSpacePositionFromDepth()` uses projection translation to derive its UV center
 instead of assuming `(0.5, 0.5)`. This keeps depth-derived positions/normals aligned with the shifted
@@ -161,15 +194,19 @@ camera; centered projection retains the original calculation. The native AO crop
 perspective and orthographic contacts, with strict noise-aligned and tiled-noise comparisons. It
 passes with the correction and fails when only the old depth helper is restored.
 
-Shorter scheduling, STRETCH and synchronous GPU submission did not preserve the composed image
-when the HWND changed size. Acceptance therefore examines actual window-capture frames: the old
-scene intersection stays fixed until one current projection replaces it, with valid grid pixels
-in the newly exposed region. Window-targeted captures pass selected/unselected menu/Ctrl+Space
-show/close cases in Shaded with VSync off, Rendered with VSync on and DPR 2 with VSync on; no eligible
-captured frames were dropped by the retention limit. The native fixture also passes first-reveal
-metrics at DPR 2 and repeated/interrupted resize with minimize/restore. Qt browser chrome can still
-repaint in stages outside the scene; verified continuity applies to the viewport image. Settled
-dimensions or successful submission alone do not prove compositor continuity.
+Native clip changes and scene presentation proceed independently. Once the visible pane bounds
+change, the composed pane must display the projection for those bounds. An old crop followed by
+a later projection snap fails this requirement, even with valid newly exposed pixels. Exercise
+menu/Ctrl+Space show/close through the real App frame loop in
+[AssetBrowserRealAppFrameLoopAfterSettledToggle](../../tests/qt_project_workspace_tests.cpp)
+and inspect actual composed pixels; settled dimensions, renderer getters and successful submission
+alone do not establish this result. Enable `QUADER_RUN_VULKAN_ASSET_BROWSER_APP_TESTS=1` for that
+fixture. Its optional `QUADER_NATIVE_BROWSER_APP_COMPOSITION_SMOKE=1` phase also exercises four
+composed panes, widget input and selection, the native material preview, and live VSync changes
+on the same device. Retention, STRETCH and shorter scheduling require independent
+composed-pixel validation. The native fixture separately
+passes first-reveal metrics at DPR 2 and repeated/interrupted resize with minimize/restore.
+Browser chrome outside the scene requires its own composed-window evidence.
 
 ### Preserved color and lighting extensions
 

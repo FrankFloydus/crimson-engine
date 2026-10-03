@@ -35,9 +35,9 @@ file except through prior written authorization from Francesco Di Blasi.
   Reveal reuses retained rows and defers one owner discovery until the current exposure's
   first item-view paint. Closing before that paint abandons pending discovery; unchanged
   frames never repeat it. Retain no filesystem-watch handles that block folder replacement.
-  Preserve the prior `updatesEnabled()` and animation state while settling visibility and native
-  pane clip layout. Hold Qt painting only across that synchronous change, so uncovered dock pixels
-  are painted after the expanded native scene clip is valid. On reveal, activate the dock's layout
+  Preserve the prior `updatesEnabled()` and animation state while settling visibility and pane
+  layout. Hold Qt painting only across that synchronous change; the next composed frame must use
+  the current pane projection. On reveal, activate the dock's layout
   immediately after setting visibility, before raising it or activating the main-window layout;
   its minimum must reflect current child metrics before the first paint.
 - `QtFaceTexturePanel` owns the single-face canvas and retained texture controls.
@@ -53,32 +53,37 @@ file except through prior written authorization from Francesco Di Blasi.
   even after workspace events were consumed while hidden or the scene was already dirty.
   A browser generation change invalidates its usage/dependency presentation stamps even when
   the corresponding owner revisions are unchanged.
-- `QtViewportPanel` hosts one to four native-child `QtViewportSurface` panes. Workspace state and
-  cameras belong to `ViewportWorkspaceService`; Filament resources belong to render.
-  Establish `Qt::AA_DontCreateNativeWidgetSiblings` before constructing Quader widgets and set
-  `Qt::WA_DontCreateNativeAncestors` on the panel before its native children are created. Keep HWND
-  creation explicit so retained pane children do not promote surrounding dock/sibling widgets.
-  Observe the panel's bounded QWidget ancestor chain and refresh it on reparenting. Synchronize
-  its existing QWindow position in the nearest native parent's coordinates only when it differs, without
-  resizing or creating a HWND. The [native workspace geometry oracle](../../tests/qt_project_workspace_tests.cpp)
-  compares OS clip bounds with logical Qt geometry after lateral dock widths are swapped.
-  Each pane reserves a fixed control strip above its visible render area. A native clip host
-  contains a vertically reserved backing container only when render advertises hidden native pixels
-  (Vulkan). Anchor it at `(0, 0)` so bottom-dock toggles change the visible clip without resizing or
-  moving the scene HWND. Render the reserved region with the shifted/scaled scene and overlay
-  projections and extended grid; Filament must preserve occluded image pixels. `QtViewportSurface`
-  maps backing events to visible physical pixels and caches native geometry queries until
-  layout/DPI/handle inputs change. Convert input, picking, popup and HUD coordinates against the
-  visible host. Filter focus, shortcut override and key events from both the visible host and its
-  inner native backing container through the surface's existing input adapter; the focused Qt
-  widget can be the inner container. Verify composed transition frames as well as settled bounds; see
-  [presentation contract](../../thirdparty/filament/README.md#hidden-backing-surface-pixels).
+- `QtViewportPanel` hosts one to four panes. Production Vulkan panes use
+  `QtVulkanCompositionWidget` (`QRhiWidget`) so scene textures, dock layout and ordinary overlays
+  reach one Qt window composition. Workspace state/cameras remain in `ViewportWorkspaceService`;
+  Filament resources and retained offscreen backing belong to render. Each pane retains its fixed
+  control strip above the visible render area.
+  `QtViewportSurface` remains the single input adapter and renderer owner. In composed mode its
+  QWindow object has no native handle or window container: widget events feed the same input
+  accumulator, and focus, grabs, cursor, picking, popup and HUD coordinates use the visible widget.
+  Do not introduce a second input state or accidentally call `winId()` on that adapter.
+  Changed geometry prepares the current projection before the widget paint, gated by the panel's
+  geometry revision; unchanged paints must not repeat scene preparation. The widget lends its current
+  Qt texture to render for the GPU copy. The pinned Qt private adapter
+  drains external command producers before offscreen painting and root `beginCompose`, including
+  nested event loops. Review those hooks when changing Qt versions. Qt owns composed-window VSync;
+  native previews retain render's native presentation path.
+  The retained bootstrap anchor keeps Qt's device alive across home/workspace changes and until
+  render teardown. Disconnect callbacks and release render resources before destroying that device.
+  Native-child panes remain available for standalone render/tests and other backends. Preserve
+  `Qt::AA_DontCreateNativeWidgetSiblings`, `Qt::WA_DontCreateNativeAncestors`, bounded ancestor
+  observation and cached OS geometry queries for that route. Its reserved backing stays at `(0, 0)`
+  inside the visible clip; input from both clip and inner container uses the same surface adapter.
+  Verify actual composed transition pixels: changed bounds with an old crop followed by a new
+  projection is a failure. See the [presentation contract](../../thirdparty/filament/README.md#qt-composed-viewport-presentation)
+  and [real App/legacy geometry fixtures](../../tests/qt_project_workspace_tests.cpp).
   Strip actions have independent
   checked-state presentation and dispatch through the focused pane's public API; never share
   checkable QActions between panes. Camera and Shading stay visible when icons overflow.
   Hover presents tool feedback without taking keyboard focus from panel editors. The first pointer
-  press acquires focus and performs its action in the same gesture. One masked native orange border
-  marks the focused pane, including single/maximized layouts; panel focus clears it. It shares the
+  press acquires focus and performs its action in the same gesture. One orange border marks the
+  focused pane, including single/maximized layouts; panel focus clears it. It is an ordinary widget
+  in composed mode and a masked native child over native panes. It shares the
   current-material outline color and gates geometry/mask/stacking updates before widget work.
   Dimension HUDs observe the bounded QWidget ancestor chain through the top-level window,
   including non-native containers. Rebuild that chain on reparenting; geometry/hide transitions

@@ -662,6 +662,10 @@ TEST(QtViewportChromeLayoutTests,
   container->show();
   QFocusEvent surface_focus(QEvent::FocusIn, Qt::OtherFocusReason);
   QApplication::sendEvent(panel.surface(ViewportPaneId::Top), &surface_focus);
+  // Complete the shown native pane's activation before opening another window.
+  // A synthetic FocusIn alone leaves that activation queued behind the popup.
+  application.processEvents();
+  ASSERT_EQ(QApplication::focusWindow(), panel.surface(ViewportPaneId::Top));
 
   click_native_widget(*camera_settings);
   ASSERT_TRUE(popup->isVisible());

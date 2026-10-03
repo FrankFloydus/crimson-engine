@@ -33,6 +33,8 @@
 #include <QLineEdit>
 #include <QLocale>
 #include <QMouseEvent>
+#include <QMoveEvent>
+#include <QWindow>
 #include <QPushButton>
 #include <QPixmap>
 #include <QScrollArea>
@@ -1050,3 +1052,107 @@ TEST_F(QtViewportSettingsOverlayTests,
 }
 
 } // namespace
+
+
+TEST(QtViewportComposedPresentationTests,
+     PreparationRunsOncePerGeometryAndRejectsNestedOrBlockedPaints) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-composed-prepare-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  quader::SceneSession session;
+  quader::RenderSystem renderer;
+  quader::QtViewportPanel panel(nullptr, true);
+  panel.resize(900, 700);
+  panel.attach_workspace(session.viewport_workspace());
+  panel.set_startup_presentation_blocked(false);
+  // Install the production host callbacks without creating a GPU renderer.
+  EXPECT_FALSE(panel.initialize(renderer));
+  std::uint64_t preparations = 0u;
+  panel.set_composed_frame_prepare_callback([&]() {
+    ++preparations;
+    EXPECT_FALSE(panel.prepare_composed_frame());
+  });
+
+  EXPECT_TRUE(panel.prepare_composed_frame());
+  EXPECT_EQ(preparations, 1u);
+  for (int frame = 0; frame < 32; ++frame) {
+    EXPECT_TRUE(panel.prepare_composed_frame());
+  }
+  EXPECT_EQ(preparations, 1u);
+  auto *host = panel.findChild<QWidget *>(
+      QStringLiteral("viewportSurfaceContainer_perspective"));
+  ASSERT_NE(host, nullptr);
+  const QPoint old_position = host->pos();
+  host->move(old_position + QPoint{0, 8});
+  QMoveEvent moved(host->pos(), old_position);
+  QApplication::sendEvent(host, &moved);
+  panel.set_startup_presentation_blocked(true);
+  EXPECT_FALSE(panel.prepare_composed_frame());
+  EXPECT_FALSE(panel.prepare_composed_frame());
+  EXPECT_EQ(preparations, 1u);
+  panel.set_startup_presentation_blocked(false);
+  EXPECT_TRUE(panel.prepare_composed_frame());
+  EXPECT_EQ(preparations, 2u);
+  EXPECT_TRUE(panel.prepare_composed_frame());
+  EXPECT_EQ(preparations, 2u);
+  panel.shutdown();
+}
+
+TEST(QtViewportComposedPresentationTests,
+     PaneChromeAndSettingsRetainWidgetCompositionWithoutNativeChildren) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-composed-widget-tree-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  quader::SceneSession session;
+  ASSERT_TRUE(session.viewport_workspace().set_layout(
+      quader::ViewportLayoutId::FourQuad));
+  quader::QtViewportPanel panel(nullptr, true);
+  panel.resize(1000, 800);
+  panel.attach_workspace(session.viewport_workspace());
+  panel.set_startup_presentation_blocked(false);
+  auto *settings = new quader::QtToolSettingsPanel;
+  panel.set_settings_panel(settings);
+
+  std::size_t composed_hosts = 0u;
+  std::size_t dimension_labels = 0u;
+  std::size_t fly_widgets = 0u;
+  for (QWidget *widget : panel.findChildren<QWidget *>()) {
+    // Real popups keep their independent top-level window contract.
+    if (widget->window() != &panel) {
+      continue;
+    }
+    SCOPED_TRACE(widget->objectName().toStdString());
+    EXPECT_FALSE(widget->testAttribute(Qt::WA_NativeWindow));
+    EXPECT_EQ(widget->internalWinId(), 0u);
+    const QString name = widget->objectName();
+    if (name.startsWith(QStringLiteral("viewportSurfaceContainer_"))) {
+      ++composed_hosts;
+    }
+    if (name.startsWith(QStringLiteral("viewportEdgeLength_")) ||
+        name.startsWith(QStringLiteral("viewportFootprintDimension")) ||
+        name.startsWith(QStringLiteral("viewportSelectionDimension"))) {
+      ++dimension_labels;
+    }
+    if (name.startsWith(QStringLiteral("viewportFlyCrosshair_")) ||
+        name.startsWith(QStringLiteral("viewportFlySpeed_"))) {
+      ++fly_widgets;
+    }
+  }
+  EXPECT_EQ(composed_hosts, 4u);
+  EXPECT_EQ(dimension_labels, 24u);
+  EXPECT_EQ(fly_widgets, 8u);
+  EXPECT_FALSE(settings->testAttribute(Qt::WA_NativeWindow));
+  for (const auto pane : {quader::ViewportPaneId::Perspective,
+                          quader::ViewportPaneId::Top,
+                          quader::ViewportPaneId::Front,
+                          quader::ViewportPaneId::Side}) {
+    ASSERT_NE(panel.surface(pane), nullptr);
+    EXPECT_EQ(panel.surface(pane)->handle(), nullptr);
+  }
+}

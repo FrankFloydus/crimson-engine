@@ -81,6 +81,7 @@ private:
 
   void apply_interaction(const MaterialPreviewInteractionFrame &input);
   void publish_state_change();
+  void mark_shared_commands_pending();
   void mark_render_pending();
   void recreate_swap_chain(bool force_retry = false);
   [[nodiscard]] void *native_window_handle() const;
