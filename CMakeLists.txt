@@ -1097,6 +1097,14 @@ qt_add_resources(quader_ui "quader_align_tool_icon"
     FILES
         "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_align.png")
 
+qt_add_resources(quader_ui "quader_mouse_hint_icons"
+    PREFIX "/quader/icons"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
+    FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/ph_mouse-left-click-fill.png"
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/ph_mouse-middle-click-fill.png"
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/ph_mouse-right-click-fill.png")
+
 qt_add_resources(quader_ui "quader_outliner_icons"
     PREFIX "/quader/icons"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"

@@ -27,6 +27,7 @@
 #include <QImage>
 #include <QLabel>
 #include <QStatusBar>
+#include <QStyle>
 #include <QTemporaryDir>
 
 #include <algorithm>
@@ -753,8 +754,16 @@ TEST_F(QtOperationInputHintTests, NativeRowRespectsRtlPaletteAndReversibleScalin
       QuaderOperationInputHint{Gesture::Shift, {}, "test.precision", "Precision", 90, true},
       QuaderOperationInputHint{Gesture::Control, {}, "test.snap", "Snap", 80},
       QuaderOperationInputHint{Gesture::ControlShift, {}, "test.fine", "Fine Snap", 60},
-      QuaderOperationInputHint{Gesture::EscapeOrRightClick, {}, "test.cancel", "Cancel Value", 95}};
+      QuaderOperationInputHint{Gesture::EscapeOrRightClick, {}, "test.cancel", "Cancel Value", 95},
+      QuaderOperationInputHint{Gesture::ControlPrimaryDrag, {}, "test.drag", "Move", 70},
+      QuaderOperationInputHint{Gesture::MiddleDoubleClick, {}, "test.middle", "Frame", 65},
+      QuaderOperationInputHint{Gesture::Wheel, {}, "test.wheel", "Zoom", 50}};
   QtOperationInputHints widget;
+  for (const auto *path : {":/quader/icons/ph_mouse-left-click-fill.png",
+                           ":/quader/icons/ph_mouse-middle-click-fill.png",
+                           ":/quader/icons/ph_mouse-right-click-fill.png"}) {
+    ASSERT_FALSE(QImage(QString::fromLatin1(path)).isNull());
+  }
   widget.setPalette(qt_obsidian_application_palette(application_->palette()));
   widget.refresh_snapshot(hints, 1, &hints, editor.commands(), localization);
   prepare_widget(widget);
@@ -809,6 +818,19 @@ TEST_F(QtOperationInputHintTests, NativeRowRespectsRtlPaletteAndReversibleScalin
   }
   EXPECT_GT(highlighted_pixels, 20);
   capture(widget, QStringLiteral("input-hints-high-contrast"));
+  widget.setEnabled(false);
+  capture(widget, QStringLiteral("input-hints-disabled"));
+  widget.setEnabled(true);
+  QPalette light = QApplication::style()->standardPalette();
+  for (const auto group : {QPalette::Active, QPalette::Inactive, QPalette::Disabled}) {
+    light.setColor(group, QPalette::Window, Qt::white);
+    light.setColor(group, QPalette::WindowText, Qt::black);
+    light.setColor(group, QPalette::Button, Qt::white);
+    light.setColor(group, QPalette::ButtonText, Qt::black);
+    light.setColor(group, QPalette::Text, Qt::black);
+  }
+  widget.setPalette(light);
+  capture(widget, QStringLiteral("input-hints-native-light"));
 }
 
 TEST_F(QtOperationInputHintTests, SameFacadeSceneRebindRetiresPreviousHints) {

@@ -9,9 +9,11 @@
 #include "api/quader_commands_api.hpp"
 #include "api/quader_tools_api.hpp"
 #include "core/localization_service.hpp"
+#include "ui/qt_multiresolution_icon.hpp"
 
 #include <QEvent>
 #include <QFontMetrics>
+#include <QImage>
 #include <QPainter>
 #include <QPalette>
 #include <QResizeEvent>
@@ -22,6 +24,10 @@
 #include <array>
 #include <numeric>
 #include <utility>
+
+static void initialize_quader_mouse_hint_resources() {
+  Q_INIT_RESOURCE(quader_mouse_hint_icons);
+}
 
 namespace quader {
 namespace {
@@ -169,10 +175,12 @@ QString intrinsic_badge(QuaderOperationInputGesture gesture,
 } // namespace
 
 QtOperationInputHints::QtOperationInputHints(QWidget *parent) : QWidget(parent) {
+  initialize_quader_mouse_hint_resources();
   setObjectName(QStringLiteral("operationInputHints"));
   setFocusPolicy(Qt::NoFocus);
   setAttribute(Qt::WA_TransparentForMouseEvents);
   setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+  refresh_mouse_icons();
   refresh_geometry();
   hide();
 }
@@ -227,8 +235,14 @@ void QtOperationInputHints::present(std::span<const QuaderOperationInputHint> so
     hints.push_back({std::move(badge), std::move(label), hint.priority, hint.active});
   }
   ++projection_revision_;
-  if (hints_ != hints) {
+  const std::array<QString, 4> mouse_tokens{
+      QString::fromStdString(localization.text("operation.hints.key.primary_click", "LMB")),
+      QString::fromStdString(localization.text("operation.hints.key.middle_click", "MMB")),
+      QString::fromStdString(localization.text("operation.hints.key.right_click", "RMB")),
+      QString::fromStdString(localization.text("operation.hints.key.wheel", "Wheel"))};
+  if (hints_ != hints || mouse_tokens_ != mouse_tokens) {
     hints_ = std::move(hints);
+    mouse_tokens_ = mouse_tokens;
     QStringList description;
     for (const auto &hint : hints_) {
       description.push_back(hint.badge.isEmpty() ? hint.label
@@ -246,6 +260,7 @@ void QtOperationInputHints::present(std::span<const QuaderOperationInputHint> so
 void QtOperationInputHints::invalidate() {
   presenter_.invalidate();
   hints_.clear();
+  badges_.clear();
   geometry_.clear();
   visible_hint_indices_.clear();
   setAccessibleName({});
@@ -264,26 +279,75 @@ void QtOperationInputHints::apply_ui_scale(const QtUiScaleMetrics &metrics) {
 int QtOperationInputHints::row_height() const {
   // QStatusBar uses hidden children's minima for its row strut. Keep that
   // reservation stable while content changes, including before the first hint.
-  return fontMetrics().height() + metrics_.px(6);
+  return std::max(fontMetrics().height(), metrics_.px(16)) + metrics_.px(6);
 }
 
-int QtOperationInputHints::item_width(const QtOperationInputHint &hint) const {
+int QtOperationInputHints::item_width(std::size_t hint_index) const {
+  const auto &hint = hints_[hint_index];
   const QFontMetrics fm(font());
   return fm.horizontalAdvance(hint.label) + (hint.badge.isEmpty() ? 0 :
-      fm.horizontalAdvance(hint.badge) + metrics_.px(6) + metrics_.px(4));
+      badges_[hint_index].width + metrics_.px(6) + metrics_.px(4));
 }
 
 QSize QtOperationInputHints::sizeHint() const {
   int width = 0;
-  for (const auto &hint : hints_) {
-    width += item_width(hint) + metrics_.px(12);
+  for (std::size_t index = 0; index < hints_.size(); ++index) {
+    width += item_width(index) + metrics_.px(12);
   }
   return {std::max(0, width - metrics_.px(12)), row_height()};
 }
 
 QSize QtOperationInputHints::minimumSizeHint() const { return {0, row_height()}; }
 
+void QtOperationInputHints::refresh_mouse_icons() {
+  static const std::array<QImage, 3> kMouseSources{
+      QImage(QStringLiteral(":/quader/icons/ph_mouse-left-click-fill.png")),
+      QImage(QStringLiteral(":/quader/icons/ph_mouse-middle-click-fill.png")),
+      QImage(QStringLiteral(":/quader/icons/ph_mouse-right-click-fill.png"))};
+  constexpr std::array kGroups{QPalette::Active, QPalette::Inactive, QPalette::Disabled};
+  for (std::size_t mouse = 0; mouse < kMouseSources.size(); ++mouse) {
+    for (std::size_t group = 0; group < kGroups.size(); ++group) {
+      for (std::size_t active = 0; active < 2; ++active) {
+        mouse_icons_[mouse][group * 2 + active] = qt_multiresolution_icon(
+            kMouseSources[mouse], palette().color(kGroups[group],
+                active != 0 ? QPalette::HighlightedText : QPalette::ButtonText));
+      }
+    }
+  }
+}
+
 void QtOperationInputHints::refresh_geometry() {
+  badges_.clear();
+  badges_.reserve(hints_.size());
+  for (const auto &hint : hints_) {
+    BadgePresentation badge;
+    qsizetype offset = 0;
+    while (offset < hint.badge.size()) {
+      qsizetype next = hint.badge.size();
+      int token = -1;
+      for (std::size_t index = 0; index < mouse_tokens_.size(); ++index) {
+        if (mouse_tokens_[index].isEmpty()) continue;
+        const auto found = hint.badge.indexOf(mouse_tokens_[index], offset);
+        if (found >= 0 && found < next) {
+          next = found;
+          token = static_cast<int>(index);
+        }
+      }
+      if (next > offset) {
+        const auto text = hint.badge.mid(offset, next - offset);
+        const int extent = fontMetrics().horizontalAdvance(text);
+        badge.parts.push_back({text, -1, extent});
+        badge.width += extent;
+      }
+      if (token < 0) break;
+      const int mouse = token == 3 ? 1 : token;
+      const int extent = metrics_.px(16);
+      badge.parts.push_back({{}, mouse, extent});
+      badge.width += extent;
+      offset = next + mouse_tokens_[static_cast<std::size_t>(token)].size();
+    }
+    badges_.push_back(std::move(badge));
+  }
   geometry_.clear();
   visible_hint_indices_.clear();
   std::vector<std::size_t> candidates(hints_.size());
@@ -296,7 +360,7 @@ void QtOperationInputHints::refresh_geometry() {
   });
   int occupied = 0;
   for (const auto index : candidates) {
-    const int extent = item_width(hints_[index]) +
+    const int extent = item_width(index) +
                        (visible_hint_indices_.empty() ? 0 : metrics_.px(12));
     if (extent <= width() - occupied) {
       visible_hint_indices_.push_back(index);
@@ -305,14 +369,14 @@ void QtOperationInputHints::refresh_geometry() {
   }
   std::ranges::sort(visible_hint_indices_);
   const int height = row_height();
-  const int badge_height = fontMetrics().height() + metrics_.px(2);
+  const int badge_height = std::max(fontMetrics().height(), metrics_.px(16)) + metrics_.px(2);
   const int y = (height - badge_height) / 2;
   int x = 0;
   const QRect row(0, 0, width(), height);
   for (const auto index : visible_hint_indices_) {
     const auto &hint = hints_[index];
     const int badge_width = hint.badge.isEmpty() ? 0 :
-        fontMetrics().horizontalAdvance(hint.badge) + metrics_.px(6);
+        badges_[index].width + metrics_.px(6);
     const int gap = hint.badge.isEmpty() ? 0 : metrics_.px(4);
     const int label_width = fontMetrics().horizontalAdvance(hint.label);
     geometry_.push_back({QStyle::visualRect(layoutDirection(), row,
@@ -343,6 +407,7 @@ void QtOperationInputHints::changeEvent(QEvent *event) {
     refresh_geometry();
   } else if (event->type() == QEvent::PaletteChange || event->type() == QEvent::EnabledChange ||
              event->type() == QEvent::ActivationChange) {
+    if (event->type() == QEvent::PaletteChange) refresh_mouse_icons();
     update();
   }
 }
@@ -365,7 +430,24 @@ void QtOperationInputHints::paintEvent(QPaintEvent *) {
       painter.drawRoundedRect(QRectF(item.badge).adjusted(inset, inset, -inset, -inset),
                               metrics_.px(3), metrics_.px(3));
       painter.setPen(palette().color(group, hint.active ? QPalette::HighlightedText : QPalette::ButtonText));
-      painter.drawText(item.badge.adjusted(padding, 0, -padding, 0), Qt::AlignCenter, hint.badge);
+      const QRect content = item.badge.adjusted(padding, 0, -padding, 0);
+      int x = 0;
+      const std::size_t color = (group == QPalette::Active ? 0u :
+                                group == QPalette::Inactive ? 2u : 4u) +
+                               (hint.active ? 1u : 0u);
+      for (const auto &part : badges_[item.hint_index].parts) {
+        const QRect bounds = QStyle::visualRect(layoutDirection(),
+            QRect(0, 0, content.width(), content.height()),
+            QRect(x, 0, part.width, content.height())).translated(content.topLeft());
+        if (part.mouse >= 0) {
+          mouse_icons_[static_cast<std::size_t>(part.mouse)][color].paint(
+              &painter, bounds, Qt::AlignCenter);
+        } else {
+          painter.drawText(bounds, Qt::AlignVCenter |
+              (isRightToLeft() ? Qt::AlignRight : Qt::AlignLeft), part.text);
+        }
+        x += part.width;
+      }
     }
     painter.setPen(palette().color(group, hint.active ? QPalette::Text : QPalette::WindowText));
     painter.drawText(item.label, Qt::AlignVCenter |

@@ -11,10 +11,12 @@
 #include "ui/retained_ui_presenter.hpp"
 
 #include <QRect>
+#include <QIcon>
 #include <QString>
 #include <QWidget>
 
 #include <cstdint>
+#include <array>
 #include <span>
 #include <vector>
 
@@ -78,16 +80,24 @@ private:
   };
   /// Retains logical-pixel badge and label rectangles within the status row.
   struct ItemGeometry { QRect badge; QRect label; std::size_t hint_index = 0; };
+  /// One retained text run or mouse pictogram within a localized input badge.
+  struct BadgePart { QString text; int mouse = -1; int width = 0; };
+  /// Measured badge contents shared by layout and painting.
+  struct BadgePresentation { std::vector<BadgePart> parts; int width = 0; };
   void present(std::span<const QuaderOperationInputHint> hints, const Stamp &stamp,
                const QuaderCommandsApi &commands,
                const LocalizationService &localization);
   [[nodiscard]] int row_height() const;
-  [[nodiscard]] int item_width(const QtOperationInputHint &hint) const;
+  [[nodiscard]] int item_width(std::size_t hint_index) const;
+  void refresh_mouse_icons();
   void refresh_geometry();
 
   RetainedUiPresenter<Stamp> presenter_;
   QtUiScaleMetrics metrics_;
   std::vector<QtOperationInputHint> hints_;
+  std::array<QString, 4> mouse_tokens_;
+  std::array<std::array<QIcon, 6>, 3> mouse_icons_;
+  std::vector<BadgePresentation> badges_;
   std::vector<ItemGeometry> geometry_;
   std::vector<std::size_t> visible_hint_indices_;
   std::uint64_t projection_revision_ = 0;
