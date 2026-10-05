@@ -32,7 +32,8 @@ bool same_slot(const ViewportOverlayLine &left, const ViewportOverlayLine &right
         (after.vertex_id >= 0 && !same_endpoint(before.position, after.position))) return false;
   }
   return same_endpoint(left.start, right.start) && same_endpoint(left.end, right.end) &&
-      left.color == right.color && left.element.object_id == right.element.object_id &&
+      left.color == right.color && left.style_role == right.style_role &&
+      left.element.object_id == right.element.object_id &&
       left.element.edge_a == right.element.edge_a && left.element.edge_b == right.element.edge_b;
 }
 

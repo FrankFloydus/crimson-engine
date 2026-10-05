@@ -469,6 +469,14 @@ public:
     captured_project_scene_ = active->session.get();
     const auto objects = array_editor_->query().modeling_objects();
     if (objects.empty()) return false;
+    const auto saved_selection = array_editor_->query().selection();
+    std::cout << "PROJECT_OVERLAY_SAVED_SELECTION mode=" << static_cast<int>(saved_selection.mode)
+              << " object=" << saved_selection.active_object_id << " active_face=" << saved_selection.active_face_id
+              << " selected_faces=" << saved_selection.selected_face_count << std::endl;
+    for (const auto &record : objects) {
+      std::cout << "PROJECT_OVERLAY_OBJECT id=" << record.modeling_object_id
+                << " entity=" << record.entity << " name=" << record.name << std::endl;
+    }
     const auto object = array_editor_->query().modeling_object_for_id(objects.front().modeling_object_id);
     if (!object || !array_editor_->selection().select_object(*object).ok() ||
         !array_editor_->selection().set_mode(QuaderSelectionMode::Edge).ok()) return false;
@@ -496,22 +504,51 @@ public:
     return QuaderRenderApiRuntimeAccess::sync_scene(array_editor_->render(), bridge_).ok();
   }
 
-  bool present_native_project_sample(float scale = 1.0f, bool overlays_visible = true) {
+  bool select_native_project_faces(int object_id, const std::vector<QuaderElementId> &faces,
+                                   QuaderElementId active_face) {
+    if (captured_project_scene_ == nullptr) return false;
+    const auto object = array_editor_->query().modeling_object_for_id(object_id);
+    return object && array_editor_->selection().set_mode(QuaderSelectionMode::Face).ok() &&
+        array_editor_->selection().select_components({
+            .object = *object, .kind = QuaderComponentKind::Face, .faces = faces,
+            .active = {.object = *object, .kind = QuaderComponentKind::Face, .face = active_face}}).ok();
+  }
+
+  ViewportCameraPose native_project_camera_pose() const { return camera_.pose(); }
+
+  bool set_native_project_camera_pose(const ViewportCameraPose &pose) {
+    if (!camera_.restore_perspective_pose(pose)) return false;
+    view_.update_camera(camera_);
+    return true;
+  }
+
+  bool present_native_project_sample(float scale = 1.0f, bool overlays_visible = true,
+                                     bool dimensions_visible = false,
+                                     const ViewportOverlaySelectionFrameProvider *reference = nullptr) {
     if (captured_project_scene_ == nullptr ||
-        !QuaderRenderApiRuntimeAccess::sync_scene(array_editor_->render(), bridge_).ok()) return false;
+        !QuaderRenderApiRuntimeAccess::sync_scene(array_editor_->render(), bridge_).ok() ||
+        !QuaderRenderApiRuntimeAccess::sync_tool_previews(array_editor_->render(), bridge_).ok()) return false;
     const auto &modeling = captured_project_scene_->modeling();
+    const auto volatile_overlay = modeling.volatile_overlay_snapshot();
+    const auto context = array_editor_->query().selection().mode == QuaderSelectionMode::Face
+        ? ViewportOverlaySelectionContext::Face : ViewportOverlaySelectionContext::Edge;
     last_submission_ = bridge_.submit_viewport_overlay(
         {.layer_mask = viewport_grid_layer_mask(0u), .raster_scale = scale,
          .camera = ViewportCameraAdapter::overlay_camera(camera_, {kWidth, kHeight}),
-         .selection_source = {.source_identity = reinterpret_cast<std::uintptr_t>(&modeling),
+         .selection_source = {.source_identity = reference != nullptr
+                 ? reinterpret_cast<std::uintptr_t>(reference) : reinterpret_cast<std::uintptr_t>(&modeling),
              .content_revision = modeling.content_revision(), .selection_revision = modeling.selection_revision(),
              .scene_revision = captured_project_scene_->scene().revision(),
              .asset_revision = captured_project_scene_->assets().revision(),
              .overlay_signature = modeling.selection_overlay_signature(),
-             .selection_context = ViewportOverlaySelectionContext::Edge},
-         .selection_frame_provider = this, .scene_selection_mode = RenderOverlaySelectionMode::Component,
-         .style_selection_context = ViewportOverlaySelectionContext::Edge,
-         .overlays_visible = overlays_visible, .selection_dimensions_visible = false},
+             .selection_context = context},
+         .selection_frame_provider = reference != nullptr ? reference : this,
+         .volatile_modeling_overlay_frame = volatile_overlay.frame.get(),
+         .volatile_modeling_source = {.source_identity = volatile_overlay.source.source_identity,
+                                     .publication_revision = volatile_overlay.source.publication_revision},
+         .scene_selection_mode = RenderOverlaySelectionMode::Component,
+         .style_selection_context = context,
+         .overlays_visible = overlays_visible, .selection_dimensions_visible = dimensions_visible},
         ViewportSettings::defaults());
     return true;
   }
@@ -529,6 +566,37 @@ public:
       if (!surface || std::abs(*surface - expected_distance) > 0.0001 * std::max(1.0f, expected_distance)) return false;
     }
     return true;
+  }
+
+  std::optional<ViewportOverlayLine> native_project_visible_line_segment(
+      const ViewportOverlayLine &line) const {
+    if (captured_project_scene_ == nullptr) return std::nullopt;
+    constexpr int kSamples = 128;
+    int run_start = 0;
+    int best_start = 0;
+    int best_end = 0;
+    for (int index = 0; index <= kSamples; ++index) {
+      const auto point = line.start + (line.end - line.start) * (static_cast<float>(index) / kSamples);
+      const auto projected = camera_.project_world_point(point);
+      bool visible = projected.visible && projected.position.x >= 8.0f && projected.position.x < kWidth - 8.0f &&
+          projected.position.y >= 8.0f && projected.position.y < kHeight - 8.0f;
+      if (visible) {
+        const auto ray = camera_.ray_from_viewport_point(projected.position);
+        const auto surface = array_editor_->query().mesh_surface_distance({.origin = ray.origin, .direction = ray.direction});
+        const float distance = dot(point - ray.origin, ray.direction);
+        visible = surface && std::abs(*surface - distance) <= 0.0001 * std::max(1.0f, distance);
+      }
+      if (!visible) run_start = index + 1;
+      else if (index - run_start > best_end - best_start) {
+        best_start = run_start;
+        best_end = index;
+      }
+    }
+    if (best_end <= best_start) return std::nullopt;
+    auto result = line;
+    result.start = line.start + (line.end - line.start) * (static_cast<float>(best_start) / kSamples);
+    result.end = line.start + (line.end - line.start) * (static_cast<float>(best_end) / kSamples);
+    return result;
   }
 
   bool begin_inside_corner_support_preview() {
@@ -980,6 +1048,58 @@ public:
     return true;
   }
 
+  bool create_shared_face_edge_sample(bool partial_overlap) {
+    auto &editor = array_editor();
+    const std::array<QVec3, 2u> edge{{{-1.0f, -2.0f, 0.0f}, {1.0f, 2.0f, -20.0f}}};
+    const float normal_length = std::sqrt(420.0f);
+    const QVec3 inward{20.0f / normal_length, 40.0f / normal_length, 10.0f / normal_length};
+    std::array<QuaderModelingObjectRef, 2u> objects;
+    std::array<QuaderElementId, 2u> faces;
+    // Separate modeling objects deliberately keep distinct edge identities at
+    // the coincident world-space boundary. The two planes meet in an inward
+    // corner, so their actual source surfaces also exercise wire depth tests.
+    for (std::size_t index = 0u; index < 2u; ++index) {
+      const bool active = index == 1u;
+      const float begin = !active && partial_overlap ? 0.2f : 0.0f;
+      const float end = !active && partial_overlap ? 0.8f : 1.0f;
+      const QVec3 a = edge[0] + (edge[1] - edge[0]) * begin;
+      const QVec3 b = edge[0] + (edge[1] - edge[0]) * end;
+      const QVec3 outward = inward + (active ? QVec3{2.0f, -1.0f, 0.0f}
+                                           : QVec3{-2.0f, 1.0f, 0.0f});
+      const std::array points = active ? std::array{b, a, a + outward, b + outward}
+                                      : std::array{a, b, b + outward, a + outward};
+      quader_poly::Document document;
+      std::array<quader_poly::ElementId, 4u> vertices;
+      for (std::size_t vertex = 0u; vertex < points.size(); ++vertex) {
+        vertices[vertex] = quader_poly::add_vertex(document, points[vertex]);
+      }
+      const auto face = quader_poly::add_face(document, vertices);
+      const auto object = editor.modeling().create_mesh(
+          QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+          {.name = active ? "Active shared face edge" : "Ordinary shared face edge"});
+      if (!object.ok()) return false;
+      objects[index] = object.value();
+      faces[index] = static_cast<QuaderElementId>(face);
+    }
+    for (std::size_t index = 0u; index < objects.size(); ++index) {
+      if (!editor.selection().select_components({
+              .object = objects[index], .kind = QuaderComponentKind::Face,
+              .faces = {faces[index]},
+              .active = {.object = objects[index], .kind = QuaderComponentKind::Face,
+                         .face = faces[index]},
+              .edit = index == 0u ? QuaderSelectionEdit::Replace : QuaderSelectionEdit::Add}).ok()) {
+        return false;
+      }
+    }
+    return editor.selection().set_mode(QuaderSelectionMode::Face).ok();
+  }
+
+  bool create_shared_face_edge_occluder() {
+    return array_editor().modeling().create_box(
+        {.min = {-0.4f, -0.4f, 1.0f}, .max = {0.4f, 0.4f, 1.2f}},
+        "Shared face edge genuine occluder").ok();
+  }
+
   bool set_overlapping_face_selection(const std::vector<QuaderElementId> &faces,
                                       QuaderElementId active, bool hover_first = false) {
     QuaderEditorApi editor(
@@ -1103,7 +1223,9 @@ public:
   bool present_component_sample(ViewportOverlaySelectionContext context,
                                 float scale = 1.0f,
                                 const ViewportSettings &settings = ViewportSettings::defaults(),
-                                bool sync_preview = false) {
+                                bool sync_preview = false,
+                                const ViewportOverlaySelectionFrameProvider *reference = nullptr,
+                                bool dimensions_visible = false) {
     QuaderEditorApi editor(
         QuaderApiSessionInternalAccess::from_scene_session(session_));
     if (!QuaderRenderApiRuntimeAccess::sync_scene(editor.render(), bridge_).ok()) {
@@ -1121,14 +1243,16 @@ public:
          .camera = ViewportCameraAdapter::overlay_camera(
              camera_, {static_cast<float>(view_.width()), static_cast<float>(view_.height())}),
          .selection_source = {
-             .source_identity = reinterpret_cast<std::uintptr_t>(&modeling),
+             .source_identity = reference != nullptr
+                 ? reinterpret_cast<std::uintptr_t>(reference)
+                 : reinterpret_cast<std::uintptr_t>(&modeling),
              .content_revision = modeling.content_revision(),
              .selection_revision = modeling.selection_revision(),
              .scene_revision = session_.scene().revision(),
              .asset_revision = session_.assets().revision(),
              .overlay_signature = modeling.selection_overlay_signature(),
              .selection_context = context},
-         .selection_frame_provider = this,
+         .selection_frame_provider = reference != nullptr ? reference : this,
          .volatile_modeling_overlay_frame = volatile_overlay.frame.get(),
          .volatile_modeling_source = {
              .source_identity = volatile_overlay.source.source_identity,
@@ -1136,7 +1260,7 @@ public:
          .scene_selection_mode = RenderOverlaySelectionMode::Component,
          .style_selection_context = context,
          .overlays_visible = true,
-         .selection_dimensions_visible = false},
+         .selection_dimensions_visible = dimensions_visible},
         settings);
     return true;
   }
@@ -1754,6 +1878,25 @@ int cyan_pixels(const QImage &image, QVec2 center) {
   return count;
 }
 
+QImage strongest_single_wire_coverage(const QImage &first, const QImage &second,
+                                     const QImage &background) {
+  QImage result = first.copy();
+  const auto color_delta = [](QColor color, QColor base) {
+    return std::max({std::abs(color.red() - base.red()),
+        std::abs(color.green() - base.green()), std::abs(color.blue() - base.blue())});
+  };
+  for (int y = 0; y < result.height(); ++y) {
+    for (int x = 0; x < result.width(); ++x) {
+      const auto base = background.pixelColor(x, y);
+      const auto alternate = second.pixelColor(x, y);
+      if (color_delta(alternate, base) > color_delta(first.pixelColor(x, y), base)) {
+        result.setPixelColor(x, y, alternate);
+      }
+    }
+  }
+  return result;
+}
+
 void expect_native_wire_coverage(const QImage &actual, const QImage &reference,
     const QImage &backdrop, QVec2 start, QVec2 end, float scale, const char *label) {
   ASSERT_FALSE(actual.isNull());
@@ -1768,6 +1911,8 @@ void expect_native_wire_coverage(const QImage &actual, const QImage &reference,
   int missing_pixels = 0;
   int feather_pixels = 0;
   int maximum_error = 0;
+  int maximum_reference_delta = 0;
+  std::array<int, 256u> reference_delta_counts{};
   for (int y = 0; y < reference.height(); ++y) {
     for (int x = 0; x < reference.width(); ++x) {
       const float px = x + 0.5f - start.x;
@@ -1785,12 +1930,18 @@ void expect_native_wire_coverage(const QImage &actual, const QImage &reference,
           std::abs(observed.green() - base.green()), std::abs(observed.blue() - base.blue())});
       ++expected_pixels;
       missing_pixels += actual_delta * 2 < expected_delta ? 1 : 0;
-      feather_pixels += expected_delta < 100 ? 1 : 0;
+      ++reference_delta_counts[static_cast<std::size_t>(expected_delta)];
+      maximum_reference_delta = std::max(maximum_reference_delta, expected_delta);
       expected_bins[static_cast<std::size_t>(along)] += expected_delta;
       actual_bins[static_cast<std::size_t>(along)] += actual_delta;
       maximum_error = std::max({maximum_error, std::abs(expected.red() - observed.red()),
           std::abs(expected.green() - observed.green()), std::abs(expected.blue() - observed.blue())});
     }
+  }
+  // Feather is partial coverage relative to this stroke's strongest coverage.
+  // An absolute RGB cutoff misclassifies saturated strokes over a bright surface.
+  for (int delta = 4; delta + 3 < maximum_reference_delta; ++delta) {
+    feather_pixels += reference_delta_counts[static_cast<std::size_t>(delta)];
   }
   int gap = 0;
   int longest_gap = 0;
@@ -1802,7 +1953,8 @@ void expect_native_wire_coverage(const QImage &actual, const QImage &reference,
             << " expected_pixels=" << expected_pixels << " missing_pixels=" << missing_pixels
             << " feather_pixels=" << feather_pixels << " longest_gap=" << longest_gap
             << " maximum_error=" << maximum_error << std::endl;
-  EXPECT_GT(expected_pixels, static_cast<int>(length * 0.8f));
+  // Endpoint guards exclude sixteen pixels of length from the sampled strip.
+  EXPECT_GT(expected_pixels, static_cast<int>((length - 16.0f) * 0.8f));
   EXPECT_GT(feather_pixels, 0);
   EXPECT_EQ(missing_pixels, 0);
   EXPECT_EQ(longest_gap, 0) << "Native traversal must preserve continuous diagonal coverage.";
@@ -3278,6 +3430,130 @@ TEST(SelectionOverlayRuntimeTests, VulkanSavedProjectNativeSourceWireKeepsContin
     EXPECT_EQ(harness.component_overlay_stats().uploads.geometry_creation_count, uploads.geometry_creation_count);
     EXPECT_EQ(harness.component_overlay_stats().uploads.position_upload_count, uploads.position_upload_count);
     EXPECT_EQ(harness.capture(false), actual);
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests, VulkanHallwaySelectionDimensionsPreserveActiveFaceEdges) {
+  const auto source_path = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_HALLWAY_PROJECT");
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1") || source_path.isEmpty()) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 and QUADER_SELECTION_OVERLAY_HALLWAY_PROJECT to inspect a copied hallway project.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-hallway-active-face-dimensions-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  const std::filesystem::path source_manifest(source_path.toStdWString());
+  ASSERT_TRUE(std::filesystem::is_regular_file(source_manifest));
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const auto copy_root = std::filesystem::path(temporary.path().toStdWString()) / source_manifest.stem();
+  std::error_code error;
+  ASSERT_TRUE(std::filesystem::create_directories(copy_root, error));
+  ASSERT_FALSE(error) << error.message();
+  // Opening a project can restore/provision local state. Only this disposable
+  // copy is opened; the user's authored project and scenes remain read-only.
+  for (const auto &entry : std::filesystem::directory_iterator(source_manifest.parent_path())) {
+    if (entry.path().filename() == ".quader" || entry.path().filename() == ".git") continue;
+    std::filesystem::copy(entry.path(), copy_root / entry.path().filename(),
+        std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_symlinks, error);
+    ASSERT_FALSE(error) << error.message();
+  }
+  const auto output = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (!output.isEmpty()) ASSERT_TRUE(QDir().mkpath(output));
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0f, false, ViewportRenderSurface::SrgbSwapchain));
+  ASSERT_TRUE(harness.open_native_project_sample(copy_root / source_manifest.filename()));
+  // The reported hallway is one Box. These three actual authored faces form
+  // bounds 57 units long and 17 units high: the reported 1824 / 544 dimensions.
+  // The lower/upper left-wall faces share the end wall at z=-82.
+  constexpr int kHallwayObject = 3;
+  const std::vector<QuaderElementId> faces{226, 227, 240};
+  struct HallwayCameraSample {
+    const char *label;
+    ViewportCameraPose pose;
+    bool center_active_height = false;
+  };
+  const std::array<HallwayCameraSample, 3u> cameras{{
+      {"far", {.eye = {-12.0f, 9.0f, -18.0f}, .target = {-20.0f, 10.0f, -65.0f}, .up = {0.0f, 1.0f, 0.0f}}},
+      {"near", {.eye = {-12.0f, 9.0f, -58.0f}, .target = {-20.0f, 10.0f, -82.0f}, .up = {0.0f, 1.0f, 0.0f}}, true},
+      {"oblique", {.eye = {-13.0f, 10.0f, -45.0f}, .target = {-20.0f, 10.0f, -65.0f}, .up = {0.0f, 1.0f, 0.0f}}}}};
+  for (const QuaderElementId active_face : {226, 227}) {
+    SCOPED_TRACE(active_face);
+    ASSERT_TRUE(harness.select_native_project_faces(kHallwayObject, faces, active_face));
+    const auto native = harness.build_selection_overlay_frame();
+    float active_height_sum = 0.0f;
+    std::size_t active_edge_count = 0u;
+    for (const auto &line : native.lines) {
+      if (line.style_role != ViewportOverlayStyleRole::ActiveSelectionWire) continue;
+      active_height_sum += (line.start.y + line.end.y) * 0.5f;
+      ++active_edge_count;
+      std::cout << "HALLWAY_AUTHORED_ACTIVE_EDGE face=" << active_face
+                << " edge=" << line.element.edge_a << ',' << line.element.edge_b
+                << " start=" << line.start.x << ',' << line.start.y << ',' << line.start.z
+                << " end=" << line.end.x << ',' << line.end.y << ',' << line.end.z << std::endl;
+    }
+    ASSERT_GT(active_edge_count, 0u);
+    SelectionRuntimeFrame backdrop_frame;
+    backdrop_frame.frame = native;
+    std::erase_if(backdrop_frame.frame.lines, [](const ViewportOverlayLine &line) {
+      return line.style_role == ViewportOverlayStyleRole::ActiveSelectionWire;
+    });
+    for (const auto &sample : cameras) {
+      SCOPED_TRACE(sample.label);
+      auto pose = sample.pose;
+      if (sample.center_active_height) {
+        pose.eye.y = pose.target.y = active_height_sum / static_cast<float>(active_edge_count);
+      }
+      ASSERT_TRUE(harness.set_native_project_camera_pose(pose));
+      std::vector<ViewportOverlayLine> visible_edges;
+      for (const auto &line : native.lines) {
+        if (line.style_role != ViewportOverlayStyleRole::ActiveSelectionWire) continue;
+        // Clip only the measurement segment. Production still receives the
+        // complete authored edge, including parts extending outside the pane.
+        const auto segment = harness.native_project_visible_line_segment(line);
+        if (!segment) continue;
+        const auto start = harness.overlay_audit_image_point(segment->start);
+        const auto end = harness.overlay_audit_image_point(segment->end);
+        if (std::hypot(end.x - start.x, end.y - start.y) > 25.0f) visible_edges.push_back(*segment);
+      }
+      ASSERT_FALSE(visible_edges.empty()) << "The real hallway camera must expose an active face boundary.";
+      for (const float scale : {1.0f, 2.0f}) {
+        SCOPED_TRACE(scale);
+        ASSERT_TRUE(harness.present_native_project_sample(scale, true, false, &backdrop_frame));
+        const auto backdrop = harness.capture();
+        ASSERT_TRUE(harness.present_native_project_sample(scale, true, false));
+        const auto reference = harness.capture();
+        ASSERT_TRUE(harness.present_native_project_sample(scale, true, true));
+        ASSERT_TRUE(harness.last_submission().selection_dimension_bounds.has_value());
+        const auto actual = harness.capture();
+        ASSERT_FALSE(actual.isNull());
+        ASSERT_FALSE(reference.isNull());
+        EXPECT_NE(actual, reference) << "Dimension guides must actually be present in this capture.";
+        if (!output.isEmpty()) {
+          const auto stem = QStringLiteral("hallway-active-face-%1-%2-%3")
+              .arg(active_face).arg(QString::fromLatin1(sample.label)).arg(static_cast<int>(scale * 100.0f));
+          ASSERT_TRUE(actual.save(QDir(output).filePath(stem + QStringLiteral("-dimensions.png"))));
+          ASSERT_TRUE(reference.save(QDir(output).filePath(stem + QStringLiteral("-reference.png"))));
+          ASSERT_TRUE(backdrop.save(QDir(output).filePath(stem + QStringLiteral("-backdrop.png"))));
+        }
+        for (const auto &line : visible_edges) {
+          const auto start = harness.overlay_audit_image_point(line.start);
+          const auto end = harness.overlay_audit_image_point(line.end);
+          std::cout << "HALLWAY_ACTIVE_DIMENSIONS active_face=" << active_face
+                    << " camera=" << sample.label << " scale=" << scale
+                    << " edge=" << line.element.edge_a << ',' << line.element.edge_b
+                    << " start=" << start.x << ',' << start.y << " end=" << end.x << ',' << end.y << std::endl;
+          expect_native_wire_coverage(actual, reference, backdrop, start, end, scale, "hallway-active-dimensions");
+        }
+        ASSERT_TRUE(harness.present_native_project_sample(scale, true, true));
+        EXPECT_FALSE(harness.last_submission().persistent_submitted);
+        EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+        EXPECT_EQ(harness.capture(), actual);
+        ASSERT_TRUE(harness.present_native_project_sample(scale, true, false));
+        EXPECT_EQ(harness.capture(), reference);
+      }
+    }
   }
 }
 
@@ -5071,6 +5347,341 @@ TEST(SelectionOverlayRuntimeTests,
       else if (scale == 1.0f) EXPECT_EQ(selected, selected_at_100);
     }
   }
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanSharedComponentFaceEdgesKeepOneActiveColorNearAndFar) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-shared-active-face-edge-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  const QString output = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (!output.isEmpty()) ASSERT_TRUE(QDir().mkpath(output));
+  auto settings = ViewportSettings::defaults();
+  auto fill = settings.color(ViewportColorSettingId::SelectionFace);
+  fill.a = 0.0f;
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::SelectionFace, fill));
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::SelectionWire, {1.0f, 0.5f, 0.05f, 1.0f}));
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::ActiveSelection, {1.0f, 0.3f, 0.7f, 1.0f}));
+  constexpr std::array<float, 3u> kDistances{5.0f, 65.0f, 5.0f};
+  for (const auto surface : {ViewportRenderSurface::Swapchain, ViewportRenderSurface::Texture}) {
+    for (const bool partial_overlap : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(surface));
+      SCOPED_TRACE(partial_overlap);
+      SelectionOverlayRuntimeHarness harness;
+      ASSERT_TRUE(harness.initialize(0.0f, false, surface));
+      ASSERT_TRUE(harness.create_shared_face_edge_sample(partial_overlap));
+      SelectionRuntimeFrame selected;
+      selected.frame = harness.modeling().selection_overlay_render_frame();
+      SelectionRuntimeFrame reference;
+      reference.frame = selected.frame;
+      std::erase_if(reference.frame.lines, [](const ViewportOverlayLine &line) {
+        return line.style_role != ViewportOverlayStyleRole::ActiveSelectionWire;
+      });
+      ASSERT_EQ(reference.frame.lines.size(), 4u);
+      SelectionRuntimeFrame neighbor_reference;
+      neighbor_reference.frame = selected.frame;
+      const auto on_shared_edge = [](QVec3 point) {
+        const QVec3 direction{2.0f, 4.0f, -20.0f};
+        const QVec3 offset = point - QVec3{-1.0f, -2.0f, 0.0f};
+        const QVec3 residual = offset - direction * (dot(offset, direction) / dot(direction, direction));
+        return dot(residual, residual) < 0.000001f;
+      };
+      std::erase_if(neighbor_reference.frame.lines, [&](const ViewportOverlayLine &line) {
+        return line.style_role != ViewportOverlayStyleRole::SelectionWire ||
+            !on_shared_edge(line.start) || !on_shared_edge(line.end);
+      });
+      ASSERT_EQ(neighbor_reference.frame.lines.size(), 1u);
+      neighbor_reference.frame.lines.front().style_role = ViewportOverlayStyleRole::ActiveSelectionWire;
+      SelectionRuntimeFrame backdrop;
+      backdrop.frame = reference.frame;
+      backdrop.frame.lines.clear();
+      for (const float scale : {1.0f, 2.0f}) {
+        SCOPED_TRACE(scale);
+        std::array<QImage, kDistances.size()> actual;
+        OverlayProxyUploadStats retained_uploads;
+        std::uint64_t retained_builds = 0u;
+        std::uint64_t retained_coincident_rebuilds = 0u;
+        for (std::size_t sample = 0u; sample < kDistances.size(); ++sample) {
+          SCOPED_TRACE(kDistances[sample]);
+          ASSERT_TRUE(harness.prepare_overlay_audit_camera(kDistances[sample], ViewportProjection::Perspective));
+          ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Face, scale, settings));
+          actual[sample] = harness.capture();
+          ASSERT_FALSE(actual[sample].isNull());
+          EXPECT_EQ(harness.capture(), actual[sample]);
+          const auto uploads = harness.component_overlay_stats().uploads;
+          if (sample == 0u) {
+            retained_uploads = uploads;
+            retained_builds = harness.selection_frame_builds();
+            retained_coincident_rebuilds = harness.component_overlay_stats().coincident_wire_rebuild_count;
+          } else {
+            EXPECT_EQ(uploads.geometry_creation_count, retained_uploads.geometry_creation_count);
+            EXPECT_EQ(uploads.position_upload_count, retained_uploads.position_upload_count);
+            EXPECT_EQ(uploads.index_upload_count, retained_uploads.index_upload_count);
+            EXPECT_EQ(uploads.static_upload_count, retained_uploads.static_upload_count);
+            EXPECT_EQ(harness.selection_frame_builds(), retained_builds);
+            EXPECT_EQ(harness.component_overlay_stats().coincident_wire_rebuild_count, retained_coincident_rebuilds);
+            EXPECT_FALSE(harness.last_submission().persistent_submitted);
+          }
+        }
+        EXPECT_EQ(actual.front(), actual.back()) << "Returning the camera restores identical shared-edge pixels.";
+        for (std::size_t sample = 0u; sample < 2u; ++sample) {
+          SCOPED_TRACE(kDistances[sample]);
+          ASSERT_TRUE(harness.prepare_overlay_audit_camera(kDistances[sample], ViewportProjection::Perspective));
+          ASSERT_TRUE(harness.present_component_sample(
+              ViewportOverlaySelectionContext::Face, scale, settings, false, &reference));
+          const QImage active_only = harness.capture();
+          ASSERT_TRUE(harness.present_component_sample(
+              ViewportOverlaySelectionContext::Face, scale, settings, false, &neighbor_reference));
+          const QImage neighbor_only = harness.capture();
+          ASSERT_TRUE(harness.present_component_sample(
+              ViewportOverlaySelectionContext::Face, scale, settings, false, &backdrop));
+          const QImage background = harness.capture();
+          ASSERT_FALSE(active_only.isNull());
+          ASSERT_FALSE(neighbor_only.isNull());
+          ASSERT_FALSE(background.isNull());
+          // Each face can support a different half of the ribbon at an inward
+          // corner. Render each support independently in pink, then retain the
+          // stronger single-stroke coverage. Rendering both pink references
+          // together would accept an incorrect double-alpha blend as the oracle.
+          const QImage expected = strongest_single_wire_coverage(active_only, neighbor_only, background);
+          const auto color_delta = [](QColor color, QColor base) {
+            return std::max({std::abs(color.red() - base.red()),
+                std::abs(color.green() - base.green()), std::abs(color.blue() - base.blue())});
+          };
+          const QVec2 start = harness.overlay_audit_image_point({-1.0f, -2.0f, 0.0f});
+          const QVec2 end = harness.overlay_audit_image_point({1.0f, 2.0f, -20.0f});
+          expect_native_wire_coverage(actual[sample], expected, background,
+              start, end, scale, partial_overlap ? "partial-active-face" : "shared-active-face");
+          const float length = std::hypot(end.x - start.x, end.y - start.y);
+          const QVec2 direction{(end.x - start.x) / length, (end.y - start.y) / length};
+          int orange_pixels = 0;
+          for (int y = 0; y < expected.height(); ++y) {
+            for (int x = 0; x < expected.width(); ++x) {
+              const float px = x + 0.5f - start.x;
+              const float py = y + 0.5f - start.y;
+              const float along = px * direction.x + py * direction.y;
+              const float across = -px * direction.y + py * direction.x;
+              if (along < 8.0f || along > length - 8.0f || std::abs(across) > 3.0f * scale ||
+                  color_delta(expected.pixelColor(x, y), background.pixelColor(x, y)) < 4) continue;
+              const auto color = actual[sample].pixelColor(x, y);
+              orange_pixels += color.green() > color.blue() + 4 && color.red() > color.blue() + 8 ? 1 : 0;
+            }
+          }
+          EXPECT_EQ(orange_pixels, 0) << "Both depth-supported halves of the shared edge must use active pink.";
+          int missing_samples = 0;
+          for (float along = 8.0f; along < length - 8.0f; along += 1.0f) {
+            bool pink = false;
+            for (float across = -2.0f * scale; across <= 2.0f * scale; across += 0.5f) {
+              const int x = static_cast<int>(std::lround(start.x + direction.x * along - direction.y * across));
+              const int y = static_cast<int>(std::lround(start.y + direction.y * along + direction.x * across));
+              const QColor color = actual[sample].pixelColor(x, y);
+              pink = pink || (color.red() > color.green() + 45 && color.blue() > color.green() + 20);
+            }
+            missing_samples += pink ? 0 : 1;
+          }
+          EXPECT_EQ(missing_samples, 0) << "The active edge must remain continuous when the camera moves away.";
+          if (surface == ViewportRenderSurface::Texture && !partial_overlap && sample == 0u && scale == 1.0f) {
+            // Keep dimension-stream interaction in the self-contained fixture
+            // as well as the opt-in real hallway regression above.
+            ASSERT_TRUE(harness.present_component_sample(
+                ViewportOverlaySelectionContext::Face, scale, settings, false, nullptr, true));
+            ASSERT_TRUE(harness.last_submission().selection_dimension_bounds.has_value());
+            const auto dimensions = harness.capture();
+            ASSERT_FALSE(dimensions.isNull());
+            EXPECT_NE(dimensions, actual[sample]) << "The separate dimension stream must be visible.";
+            expect_native_wire_coverage(dimensions, expected, background,
+                start, end, scale, "shared-active-face-with-dimensions");
+          }
+          if (!output.isEmpty()) {
+            ASSERT_TRUE(actual[sample].save(QDir(output).filePath(
+                QStringLiteral("shared_face_edge_%1_%2_%3_%4.png")
+                    .arg(static_cast<int>(surface)).arg(partial_overlap ? "partial" : "full")
+                    .arg(static_cast<int>(scale * 100.0f)).arg(sample == 0u ? "near" : "far"))));
+            ASSERT_TRUE(expected.save(QDir(output).filePath(
+                QStringLiteral("shared_face_edge_expected_%1_%2_%3_%4.png")
+                    .arg(static_cast<int>(surface)).arg(partial_overlap ? "partial" : "full")
+                    .arg(static_cast<int>(scale * 100.0f)).arg(sample == 0u ? "near" : "far"))));
+          }
+        }
+      }
+      if (surface == ViewportRenderSurface::Texture && !partial_overlap) {
+        ASSERT_TRUE(harness.prepare_overlay_audit_camera(5.0f, ViewportProjection::Perspective));
+        const QVec2 start = harness.overlay_audit_image_point({-1.0f, -2.0f, 0.0f});
+        const QVec2 end = harness.overlay_audit_image_point({1.0f, 2.0f, -20.0f});
+        for (const auto &[ordinary_width, active_width] :
+             std::array<std::pair<float, float>, 2u>{{{3.0f, 0.75f}, {0.75f, 3.0f}}}) {
+          SCOPED_TRACE(ordinary_width);
+          SCOPED_TRACE(active_width);
+          auto widths = settings;
+          ASSERT_TRUE(widths.set_float_value(ViewportFloatSettingId::SelectionFaceWireLineSize, ordinary_width));
+          ASSERT_TRUE(widths.set_float_value(ViewportFloatSettingId::ActiveSelectionLineSize, active_width));
+          ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Face, 1.0f, widths));
+          const QImage actual_width = harness.capture();
+          ASSERT_TRUE(harness.present_component_sample(
+              ViewportOverlaySelectionContext::Face, 1.0f, widths, false, &reference));
+          const QImage active_width_image = harness.capture();
+          ASSERT_TRUE(harness.present_component_sample(
+              ViewportOverlaySelectionContext::Face, 1.0f, widths, false, &neighbor_reference));
+          const QImage neighbor_width_image = harness.capture();
+          ASSERT_TRUE(harness.present_component_sample(
+              ViewportOverlaySelectionContext::Face, 1.0f, widths, false, &backdrop));
+          const QImage width_background = harness.capture();
+          ASSERT_FALSE(actual_width.isNull());
+          ASSERT_FALSE(active_width_image.isNull());
+          ASSERT_FALSE(neighbor_width_image.isNull());
+          ASSERT_FALSE(width_background.isNull());
+          expect_native_wire_coverage(actual_width,
+              strongest_single_wire_coverage(active_width_image, neighbor_width_image, width_background),
+              width_background, start, end, 1.0f, "unequal-active-face-width");
+          if (!output.isEmpty()) {
+            ASSERT_TRUE(actual_width.save(QDir(output).filePath(
+                QStringLiteral("shared_face_edge_width_%1_%2.png").arg(ordinary_width).arg(active_width))));
+          }
+        }
+        auto transparent = settings;
+        auto active_color = transparent.color(ViewportColorSettingId::ActiveSelection);
+        active_color.a = 0.0f;
+        ASSERT_TRUE(transparent.set_color(ViewportColorSettingId::ActiveSelection, active_color));
+        ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Face, 1.0f, transparent));
+        const QImage transparent_active = harness.capture();
+        SelectionRuntimeFrame ordinary_only;
+        ordinary_only.frame = selected.frame;
+        std::erase_if(ordinary_only.frame.lines, [](const ViewportOverlayLine &line) {
+          return line.style_role == ViewportOverlayStyleRole::ActiveSelectionWire;
+        });
+        ASSERT_TRUE(harness.present_component_sample(
+            ViewportOverlaySelectionContext::Face, 1.0f, transparent, false, &ordinary_only));
+        EXPECT_EQ(transparent_active, harness.capture())
+            << "A transparent active edge must neither tint nor mask the ordinary selection.";
+      }
+      // Priority must never promote a genuinely hidden edge over scene depth.
+      ASSERT_TRUE(harness.prepare_overlay_audit_camera(5.0f, ViewportProjection::Perspective));
+      ASSERT_TRUE(harness.create_shared_face_edge_occluder());
+      ASSERT_TRUE(harness.present_component_sample(
+          ViewportOverlaySelectionContext::Face, 1.0f, settings, false, &selected));
+      const QImage occluded = harness.capture();
+      ASSERT_TRUE(harness.present_component_sample(
+          ViewportOverlaySelectionContext::Face, 1.0f, settings, false, &backdrop));
+      const QImage occluded_background = harness.capture();
+      ASSERT_FALSE(occluded.isNull());
+      ASSERT_FALSE(occluded_background.isNull());
+      EXPECT_EQ(occluded.copy(317, 236, 7, 7), occluded_background.copy(317, 236, 7, 7));
+    }
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanSharedComponentFaceEdgePriorityFollowsExtrusionPreviewAndCancel) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-shared-face-edge-preview-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  const QString output = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (!output.isEmpty()) ASSERT_TRUE(QDir().mkpath(output));
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0f, false, ViewportRenderSurface::Texture));
+  ASSERT_TRUE(harness.create_shared_face_edge_sample(false));
+  ASSERT_TRUE(harness.prepare_overlay_audit_camera(5.0f, ViewportProjection::Perspective));
+  auto settings = ViewportSettings::defaults();
+  auto fill = settings.color(ViewportColorSettingId::SelectionFace);
+  fill.a = 0.0f;
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::SelectionFace, fill));
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::SelectionWire, {1.0f, 0.5f, 0.05f, 1.0f}));
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::ActiveSelection, {1.0f, 0.3f, 0.7f, 1.0f}));
+  ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Face, 2.0f, settings, true));
+  const QImage joined = harness.capture();
+  ASSERT_FALSE(joined.isNull());
+  const auto initial_undo = harness.undo_count();
+  ASSERT_TRUE(harness.extrusion().activate(modeling::FaceExtrudeMode::Individual).ok);
+  ASSERT_TRUE(harness.extrusion().begin_drag().ok);
+  for (const double amount : {-0.35, -0.8}) {
+    SCOPED_TRACE(amount);
+    ASSERT_TRUE(harness.extrusion().update_drag_world_amount(amount).ok);
+    ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Face, 2.0f, settings, true));
+    const QImage separated = harness.capture();
+    ASSERT_FALSE(separated.isNull());
+    EXPECT_NE(separated, joined);
+    const auto rebuilds = harness.component_overlay_stats().coincident_wire_rebuild_count;
+    ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Face, 2.0f, settings, true));
+    EXPECT_EQ(harness.component_overlay_stats().coincident_wire_rebuild_count, rebuilds);
+    EXPECT_EQ(harness.capture(), separated);
+
+    // Individual extrusion moves these two caps along different face normals.
+    // The former shared ordinary edge must regain its own orange appearance;
+    // retaining a supplemental active ribbon would incorrectly follow it pink.
+    std::optional<ViewportOverlayLine> ordinary_edge;
+    float nearest_distance = 100.0f;
+    for (const auto &line : harness.modeling().selection_overlay_frame().lines) {
+      if (line.style_role != ViewportOverlayStyleRole::SelectionWire ||
+          line.layer != ViewportOverlayLayer::SelectedFaceEdge) continue;
+      const QVec3 direction = line.end - line.start;
+      const QVec3 original_direction{2.0f, 4.0f, -20.0f};
+      const QVec3 residual = direction - original_direction *
+          (dot(direction, original_direction) / dot(original_direction, original_direction));
+      if (dot(residual, residual) > 0.000001f) continue;
+      const QVec3 offset = (line.start + line.end) * 0.5f - QVec3{0.0f, 0.0f, -10.0f};
+      const float distance = dot(offset, offset);
+      if (distance < nearest_distance) {
+        nearest_distance = distance;
+        ordinary_edge = line;
+      }
+    }
+    ASSERT_TRUE(ordinary_edge.has_value());
+    SelectionRuntimeFrame ordinary_reference;
+    ordinary_reference.frame = harness.modeling().selection_overlay_render_frame();
+    const auto is_ordinary_edge = [&](const ViewportOverlayLine &line) {
+      return line.layer == ordinary_edge->layer &&
+          line.element.object_id == ordinary_edge->element.object_id &&
+          line.element.edge_a == ordinary_edge->element.edge_a &&
+          line.element.edge_b == ordinary_edge->element.edge_b;
+    };
+    // Preserve cyan source wires and ordinary joins behind the target stroke's
+    // feather. An isolated orange line on black is not a valid reference where
+    // another legitimate source edge crosses it in projection.
+    std::erase_if(ordinary_reference.frame.lines, [](const ViewportOverlayLine &line) {
+      return line.style_role == ViewportOverlayStyleRole::ActiveSelectionWire;
+    });
+    ASSERT_EQ(std::count_if(ordinary_reference.frame.lines.begin(),
+        ordinary_reference.frame.lines.end(), is_ordinary_edge), 1);
+    ASSERT_TRUE(harness.present_component_sample(
+        ViewportOverlaySelectionContext::Face, 2.0f, settings, true, &ordinary_reference));
+    const QImage orange_only = harness.capture();
+    SelectionRuntimeFrame backdrop;
+    backdrop.frame = ordinary_reference.frame;
+    std::erase_if(backdrop.frame.lines, is_ordinary_edge);
+    ASSERT_TRUE(harness.present_component_sample(
+        ViewportOverlaySelectionContext::Face, 2.0f, settings, true, &backdrop));
+    const QImage background = harness.capture();
+    if (!output.isEmpty()) {
+      const auto amount_label = static_cast<int>(std::abs(amount) * 100.0);
+      ASSERT_TRUE(separated.save(QDir(output).filePath(
+          QStringLiteral("shared_face_edge_preview_%1_actual.png").arg(amount_label))));
+      ASSERT_TRUE(orange_only.save(QDir(output).filePath(
+          QStringLiteral("shared_face_edge_preview_%1_reference.png").arg(amount_label))));
+      ASSERT_TRUE(background.save(QDir(output).filePath(
+          QStringLiteral("shared_face_edge_preview_%1_background.png").arg(amount_label))));
+    }
+    expect_native_wire_coverage(separated, orange_only, background,
+        harness.overlay_audit_image_point(ordinary_edge->start),
+        harness.overlay_audit_image_point(ordinary_edge->end), 2.0f, "separated-ordinary-face-preview");
+  }
+  ASSERT_TRUE(harness.extrusion().update_drag_world_amount(0.0).ok);
+  ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Face, 2.0f, settings, true));
+  EXPECT_EQ(harness.capture(), joined) << "Returning preview caps to coincidence restores the complete pink seam.";
+  ASSERT_TRUE(harness.extrusion().cancel_drag().ok);
+  ASSERT_TRUE(harness.extrusion().cancel().ok);
+  ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Face, 2.0f, settings, true));
+  EXPECT_EQ(harness.capture(), joined) << "Cancel must restore both shared-edge appearance and original source geometry.";
+  EXPECT_EQ(harness.undo_count(), initial_undo);
 }
 
 TEST(SelectionOverlayRuntimeTests,

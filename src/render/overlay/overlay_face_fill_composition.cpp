@@ -99,4 +99,27 @@ void apply_overlay_silhouette_stencil(filament::MaterialInstance &material,
                                                : Operation::KEEP);
 }
 
+void apply_overlay_edit_wire_stencil(filament::MaterialInstance &material,
+                                     OverlayEditWirePass pass) {
+  using Compare = filament::MaterialInstance::StencilCompareFunc;
+  using Operation = filament::MaterialInstance::StencilOperation;
+  const bool mask = pass == OverlayEditWirePass::ActiveMask;
+  const bool ordinary = pass == OverlayEditWirePass::Ordinary;
+  const bool active = pass == OverlayEditWirePass::Active;
+  const bool supplement = pass == OverlayEditWirePass::ActiveSupplement;
+  material.setColorWrite(!mask);
+  material.setStencilWrite(mask || active || supplement);
+  material.setStencilCompareFunction(ordinary || supplement ? Compare::E : Compare::A);
+  material.setStencilReferenceValue(mask ? kOverlayActiveWireStencilMask :
+      active ? kOverlayActiveWireConsumedStencilMask : 0u);
+  material.setStencilReadMask(ordinary ? kOverlayActiveWireStencilMask :
+      supplement ? kOverlayActiveWireConsumedStencilMask : 0u);
+  material.setStencilWriteMask(mask ? kOverlayActiveWireStencilMask :
+      active || supplement ? kOverlayActiveWireConsumedStencilMask : 0u);
+  material.setStencilOpStencilFail(Operation::KEEP);
+  material.setStencilOpDepthFail(Operation::KEEP);
+  material.setStencilOpDepthStencilPass(mask || active ? Operation::REPLACE :
+      supplement ? Operation::INVERT : Operation::KEEP);
+}
+
 } // namespace quader

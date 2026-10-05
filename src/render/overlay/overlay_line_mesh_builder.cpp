@@ -36,6 +36,8 @@ void OverlayLineMeshBuilder::append_line_quad(
   const OverlayFloat4 origin{0.0f, 0.0f, 0.0f, 1.0f};
   const OverlayFloat4 start{line.start.x, line.start.y, line.start.z, 1.0f};
   const OverlayFloat4 end{line.end.x, line.end.y, line.end.z, 1.0f};
+  const float active = line.style_role == ViewportOverlayStyleRole::ActiveSelectionWire
+                           ? 1.0f : 0.0f;
   const auto support_position = [&line, start](std::size_t index) {
     const auto &support = line.surface_support[index];
     return support.vertex_id >= 0
@@ -46,13 +48,13 @@ void OverlayLineMeshBuilder::append_line_quad(
   const auto support0 = support_position(0u);
   const auto support1 = support_position(1u);
   mesh.vertices.push_back(
-      {origin, start, end, {-1.0f, -1.0f, 0.0f, 0.0f}, support0, support1, linear_color});
+      {origin, start, end, {-1.0f, -1.0f, 0.0f, active}, support0, support1, linear_color});
   mesh.vertices.push_back(
-      {origin, start, end, {-1.0f, 1.0f, 1.0f, 0.0f}, support0, support1, linear_color});
+      {origin, start, end, {-1.0f, 1.0f, 1.0f, active}, support0, support1, linear_color});
   mesh.vertices.push_back(
-      {origin, start, end, {1.0f, 1.0f, 1.0f, 0.0f}, support0, support1, linear_color});
+      {origin, start, end, {1.0f, 1.0f, 1.0f, active}, support0, support1, linear_color});
   mesh.vertices.push_back(
-      {origin, start, end, {1.0f, -1.0f, 0.0f, 0.0f}, support0, support1, linear_color});
+      {origin, start, end, {1.0f, -1.0f, 0.0f, active}, support0, support1, linear_color});
   if (line.element.object_id >= 0 && line.element.edge_a >= 0) {
     mesh.position_stream_bindings.push_back({
         .object_id = line.element.object_id,

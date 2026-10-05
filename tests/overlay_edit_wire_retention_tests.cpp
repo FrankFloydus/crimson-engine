@@ -84,6 +84,38 @@ TEST(OverlayEditWireRetentionTests, GeometryColorAndReversedOrientationRefreshEx
   EXPECT_EQ(retention.width_pixels(), 4.0f);
 }
 
+TEST(OverlayEditWireRetentionTests, ActiveWirePriorityChangesRefreshOnlyTheirRetainedSlot) {
+  OverlayEditWireRetention retention;
+  std::vector lines{source_edge(1, 1, 2), source_edge(2, 3, 4)};
+  for (auto &line : lines) {
+    line.layer = ViewportOverlayLayer::SelectedFaceEdge;
+    line.style_role = ViewportOverlayStyleRole::SelectionWire;
+  }
+  ASSERT_TRUE(retention.prepare(lines, ViewportOverlayLayer::SelectedFaceEdge));
+  const auto indices = retention.active_indices();
+  const std::vector<std::uint32_t> original_indices(indices.begin(), indices.end());
+  const auto original_color = lines[1].color;
+
+  // Equal user colors still carry different priority at shared edge pixels.
+  for (const auto role : {ViewportOverlayStyleRole::ActiveSelectionWire,
+                          ViewportOverlayStyleRole::SelectionWire}) {
+    lines[1].style_role = role;
+    ASSERT_TRUE(retention.prepare(lines, ViewportOverlayLayer::SelectedFaceEdge));
+    EXPECT_FALSE(retention.requires_recreation());
+    EXPECT_FALSE(retention.indices_changed());
+    ASSERT_EQ(retention.dirty_slots().size(), 1u);
+    const auto &changed = retention.edge_slots()[retention.dirty_slots().front()];
+    EXPECT_EQ(changed.element.object_id, 2);
+    EXPECT_EQ(changed.style_role, role);
+    EXPECT_EQ(changed.color, original_color);
+    EXPECT_TRUE(std::equal(original_indices.begin(), original_indices.end(),
+                           retention.active_indices().begin(), retention.active_indices().end()));
+    ASSERT_TRUE(retention.prepare(lines, ViewportOverlayLayer::SelectedFaceEdge));
+    EXPECT_TRUE(retention.dirty_slots().empty());
+    EXPECT_FALSE(retention.indices_changed());
+  }
+}
+
 TEST(OverlayEditWireRetentionTests, OrderedPositionUpdatesMatchFreshOutputAcrossSparseSlots) {
   OverlayEditWireRetention retention;
   const std::vector population{source_edge(1, 0, 1), source_edge(1, 1, 2),

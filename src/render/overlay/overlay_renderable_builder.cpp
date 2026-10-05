@@ -771,7 +771,12 @@ OverlayEditWireBatch OverlayRenderableBuilder::edit_wire_presentation(
           .width_pixels = width_pixels,
           .near_plane = sanitized.near_plane,
           .far_plane = sanitized.far_plane,
-          .orthographic_projection = sanitized.projection == ViewportOverlayProjection::Orthographic};
+          .orthographic_projection = sanitized.projection == ViewportOverlayProjection::Orthographic,
+          .active_selection_composition = layer == ViewportOverlayLayer::SourceWire ||
+              layer == ViewportOverlayLayer::SelectedFaceEdge ||
+              layer == ViewportOverlayLayer::SelectedEdge,
+          .active_selection_mask = layer == ViewportOverlayLayer::SelectedFaceEdge ||
+              layer == ViewportOverlayLayer::SelectedEdge};
 }
 
 OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
@@ -936,6 +941,8 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
             viewport_overlay_depth_mode(*line) != key.depth_mode ||
             (line->source == ViewportOverlaySource::MeshOutline) !=
                 key.object_silhouette ||
+            (line->source == ViewportOverlaySource::SelectionDimensions) !=
+                key.suppressed_by_active_wire ||
             line->occlusion_style != key.occlusion_style ||
             resolved_occluded_dash_period(*line) != key.occluded_dash_period_pixels) {
           continue;
@@ -952,6 +959,7 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::build_layer(
       OverlayRenderState state = make_state_with_depth_mode(
           layer, ViewportOverlayGeometryKind::Lines, visible_blend_order++,
           key.depth_mode);
+      state.suppressed_by_active_wire = key.suppressed_by_active_wire;
       std::optional<OverlayRenderState> occluded_state;
       const bool dashed_occlusion =
           key.occlusion_style == ViewportOverlayLineOcclusionStyle::Dashed;
@@ -1072,6 +1080,8 @@ OverlayRenderableBuilder::line_batch_keys(
         .depth_mode = viewport_overlay_depth_mode(*line),
         .object_silhouette =
             line->source == ViewportOverlaySource::MeshOutline,
+        .suppressed_by_active_wire =
+            line->source == ViewportOverlaySource::SelectionDimensions,
         .occlusion_style = line->occlusion_style,
         .occluded_dash_period_pixels = resolved_occluded_dash_period(*line),
     };
@@ -1080,6 +1090,7 @@ OverlayRenderableBuilder::line_batch_keys(
           return candidate.width_pixels == key.width_pixels &&
                  candidate.depth_mode == key.depth_mode &&
                  candidate.object_silhouette == key.object_silhouette &&
+                 candidate.suppressed_by_active_wire == key.suppressed_by_active_wire &&
                  candidate.occlusion_style == key.occlusion_style &&
                  candidate.occluded_dash_period_pixels == key.occluded_dash_period_pixels;
         });

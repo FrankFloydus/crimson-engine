@@ -55,7 +55,8 @@ std::vector<filament::MaterialInstance *> proxy_materials(
   std::vector<filament::MaterialInstance *> materials{
           proxy.material_instance, proxy.occluded_material_instance,
           proxy.component_point_materials[0u], proxy.component_point_materials[1u],
-          proxy.component_point_materials[2u]};
+          proxy.component_point_materials[2u], proxy.edit_wire_materials[0u],
+          proxy.edit_wire_materials[1u]};
   materials.insert(materials.end(), proxy.face_fill_materials.begin(),
                    proxy.face_fill_materials.end());
   return materials;
@@ -384,6 +385,12 @@ void destroy_overlay_proxy_resources(filament::Engine &engine,
       material = nullptr;
     }
   }
+  for (auto *&material : proxy.edit_wire_materials) {
+    if (material != nullptr) {
+      engine.destroy(material);
+      material = nullptr;
+    }
+  }
   for (auto *material : proxy.face_fill_materials) {
     if (material != nullptr) engine.destroy(material);
   }
@@ -421,7 +428,9 @@ void append_overlay_proxy(filament::Engine &engine, filament::Scene &scene,
                           ConfigureMaterial configure_material,
                           const OverlayRenderState *occluded_state = nullptr,
                           ConfigureOccludedMaterial configure_occluded_material =
-                              nullptr) {
+                              nullptr,
+                          bool compose_edit_wires = false,
+                          bool supplemental_edit_wires = false) {
   if (mesh.vertices.empty() || mesh.indices.empty()) {
     return;
   }
@@ -459,6 +468,21 @@ void append_overlay_proxy(filament::Engine &engine, filament::Scene &scene,
   OverlayProxyCreationGuard creation_guard(engine, scene, proxy);
   proxy.material_instance = material.createInstance();
   configure_material(*proxy.material_instance);
+  if (compose_edit_wires) {
+    proxy.material_instance->setParameter("selectionPass", static_cast<float>(OverlayEditWirePass::Ordinary));
+    apply_overlay_edit_wire_stencil(*proxy.material_instance, OverlayEditWirePass::Ordinary);
+    for (std::size_t index = 0u; index < proxy.edit_wire_materials.size(); ++index) {
+      auto *&instance = proxy.edit_wire_materials[index];
+      instance = material.createInstance();
+      if (instance == nullptr) return;
+      configure_material(*instance);
+      const auto pass = index == 0u
+          ? (supplemental_edit_wires ? OverlayEditWirePass::ActiveSupplement : OverlayEditWirePass::Active)
+          : OverlayEditWirePass::ActiveMask;
+      instance->setParameter("selectionPass", static_cast<float>(pass));
+      apply_overlay_edit_wire_stencil(*instance, pass);
+    }
+  }
   if constexpr (!std::is_same_v<ConfigureOccludedMaterial, std::nullptr_t>) {
     if (occluded_state != nullptr) {
       proxy.occluded_material_instance = material.createInstance();
@@ -519,7 +543,7 @@ void append_overlay_proxy(filament::Engine &engine, filament::Scene &scene,
       engine, FilamentBufferDescriptorFactory::vector(mesh.indices));
 
   filament::RenderableManager::Builder renderable_builder(
-      proxy.occluded_material_instance != nullptr ? 2u : 1u);
+      compose_edit_wires ? 3u : proxy.occluded_material_instance != nullptr ? 2u : 1u);
   renderable_builder
       .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
                 proxy.vertex_buffer, proxy.index_buffer)
@@ -538,6 +562,17 @@ void append_overlay_proxy(filament::Engine &engine, filament::Scene &scene,
         .material(1u, proxy.occluded_material_instance)
         .blendOrder(1u, occluded_state->blend_order)
         .globalBlendOrderEnabled(1u, true);
+  }
+  if (compose_edit_wires) {
+    for (std::size_t index = 0u; index < proxy.edit_wire_materials.size(); ++index) {
+      const auto pass = index + 1u;
+      renderable_builder
+          .geometry(pass, filament::RenderableManager::PrimitiveType::TRIANGLES,
+                    proxy.vertex_buffer, proxy.index_buffer)
+          .material(pass, proxy.edit_wire_materials[index])
+          .blendOrder(pass, index == 0u ? state.blend_order : kOverlayActiveWireMaskBlendOrder)
+          .globalBlendOrderEnabled(pass, true);
+    }
   }
   renderable_builder.build(engine, entity);
   publish_overlay_proxy(scene, proxy, proxies, creation_guard);
@@ -848,7 +883,9 @@ OverlayProxyFactory::prepare_retained_edit_wire_update(
                            (dirty != dirty_slots.end() && *dirty == slot);
       if (dirty != dirty_slots.end() && *dirty == slot) ++dirty;
       for (std::size_t corner = 0u; corner < kControls.size(); ++corner) {
-        vertices.push_back({{0.0f, 0.0f, 0.0f, 1.0f}, kControls[corner], color});
+        auto control = kControls[corner];
+        control.w = line.style_role == ViewportOverlayStyleRole::ActiveSelectionWire ? 1.0f : 0.0f;
+        vertices.push_back({{0.0f, 0.0f, 0.0f, 1.0f}, control, color});
         const std::size_t vertex = static_cast<std::size_t>(slot) * 4u + corner;
         // A consolidated gap may currently carry preview positions. Keep its
         // exact accepted endpoints rather than resetting it to the frame base.
@@ -926,7 +963,15 @@ OverlayRenderableProxy OverlayProxyFactory::create_retained_edit_wire_proxy(
   proxy.edit_wire_update_revision = 1u;
   proxy.material_instance = edit_wire_line_material_->createInstance();
   if (proxy.material_instance == nullptr) return {};
-  configure_edit_wire_material(*proxy.material_instance, presentation);
+  const bool compose = presentation.active_selection_mask &&
+      engine_->getBackend() == filament::Engine::Backend::VULKAN;
+  if (compose) {
+    for (auto *&material : proxy.edit_wire_materials) {
+      material = edit_wire_line_material_->createInstance();
+      if (material == nullptr) return {};
+    }
+  }
+  configure_edit_wire_proxy_materials(proxy, presentation);
   proxy.vertex_buffer = filament::VertexBuffer::Builder()
       .vertexCount(proxy.vertex_count).bufferCount(5u)
       .attribute(filament::VertexAttribute::POSITION, 0u, AttributeType::FLOAT4,
@@ -957,7 +1002,8 @@ OverlayRenderableProxy OverlayProxyFactory::create_retained_edit_wire_proxy(
   proxy.vertex_buffer->setBufferAt(*engine_, 4u, std::move(range.support1_upload));
   proxy.index_buffer->setBuffer(*engine_, std::move(prepared->index_upload));
   prepared->consumed = true;
-  const auto built = filament::RenderableManager::Builder(1u)
+  filament::RenderableManager::Builder renderable_builder(compose ? 3u : 1u);
+  renderable_builder
       .geometry(0u, filament::RenderableManager::PrimitiveType::TRIANGLES,
                 proxy.vertex_buffer, proxy.index_buffer, 0u, proxy.index_count)
       .material(0u, proxy.material_instance)
@@ -965,7 +1011,19 @@ OverlayRenderableProxy OverlayProxyFactory::create_retained_edit_wire_proxy(
       .globalBlendOrderEnabled(0u, true)
       .layerMask(kViewportAllLayerMask, layer_mask)
       .boundingBox(overlay_mesh_bounds()).culling(false)
-      .castShadows(false).receiveShadows(false).build(*engine_, entity);
+      .castShadows(false).receiveShadows(false);
+  if (compose) {
+    for (std::size_t index = 0u; index < proxy.edit_wire_materials.size(); ++index) {
+      const auto pass = index + 1u;
+      renderable_builder
+          .geometry(pass, filament::RenderableManager::PrimitiveType::TRIANGLES,
+                    proxy.vertex_buffer, proxy.index_buffer, 0u, proxy.index_count)
+          .material(pass, proxy.edit_wire_materials[index])
+          .blendOrder(pass, index == 0u ? presentation.state.blend_order : kOverlayActiveWireMaskBlendOrder)
+          .globalBlendOrderEnabled(pass, true);
+    }
+  }
+  const auto built = renderable_builder.build(*engine_, entity);
   if (built != filament::RenderableManager::Builder::Success) return {};
   proxy.primary_position_stream4 = std::move(range.starts);
   proxy.secondary_position_stream4 = std::move(range.ends);
@@ -1001,7 +1059,9 @@ bool OverlayProxyFactory::update_retained_edit_wire_proxy(
   }
   auto &renderables = engine_->getRenderableManager();
   const auto instance = renderables.getInstance(to_filament_entity(proxy.entity_id));
-  if (!instance || renderables.getPrimitiveCount(instance) != 1u) return false;
+  const bool compose = proxy.edit_wire_materials.front() != nullptr;
+  const std::size_t pass_count = compose ? 3u : 1u;
+  if (!instance || renderables.getPrimitiveCount(instance) != pass_count) return false;
   if (!clear_shared_positions(proxy)) return false;
   prepared->consumed = true;
   for (auto &range : prepared->ranges) {
@@ -1030,20 +1090,27 @@ bool OverlayProxyFactory::update_retained_edit_wire_proxy(
     ++upload_stats_.index_upload_count;
   }
   if (proxy.index_count != prepared->index_count) {
-    renderables.setGeometryAt(instance, 0u,
-        filament::RenderableManager::PrimitiveType::TRIANGLES,
-        proxy.vertex_buffer, proxy.index_buffer, 0u, prepared->index_count);
+    for (std::size_t pass = 0u; pass < pass_count; ++pass) {
+      renderables.setGeometryAt(instance, pass,
+          filament::RenderableManager::PrimitiveType::TRIANGLES,
+          proxy.vertex_buffer, proxy.index_buffer, 0u, prepared->index_count);
+    }
     proxy.index_count = prepared->index_count;
   }
   proxy.position_stream_bindings = std::move(prepared->bindings);
   ++proxy.edit_wire_update_revision;
-  configure_edit_wire_material(*proxy.material_instance, presentation);
+  configure_edit_wire_proxy_materials(proxy, presentation);
   renderables.setBlendOrderAt(instance, 0u, presentation.state.blend_order);
+  if (compose) renderables.setBlendOrderAt(instance, 1u, presentation.state.blend_order);
   renderables.setLayerMask(instance, kViewportAllLayerMask, layer_mask);
   upload_stats_.static_upload_count += prepared->ranges.size();
   upload_stats_.position_upload_count += prepared->ranges.size() * 4u;
   upload_stats_.retained_edit_wire_consolidated_upload_count += prepared->consolidated ? 1u : 0u;
   return true;
+}
+
+bool OverlayProxyFactory::supports_edit_wire_composition() const {
+  return initialized() && engine_->getBackend() == filament::Engine::Backend::VULKAN;
 }
 
 void OverlayProxyFactory::initialize(
@@ -1182,6 +1249,8 @@ bool OverlayProxyFactory::update_layer_proxies(
       continue;
     }
     if (index >= proxies.size() ||
+        (proxies[index].edit_wire_materials.front() != nullptr) !=
+            (batch.active_selection_mask && engine_->getBackend() == filament::Engine::Backend::VULKAN) ||
         !proxy_can_update_mesh(proxies[index++],
                                OverlayRenderableProxyKind::EditWire,
                                batch.mesh)) {
@@ -1510,7 +1579,7 @@ bool OverlayProxyFactory::bind_shared_positions(
   // rebind every pass without retaining pointers to movable proxy wrappers.
   if (!proxy.shared_positions_bound) {
     shared_position_materials_.reserve(shared_position_materials_.size() +
-                                       5u + proxy.face_fill_materials.size());
+                                       7u + proxy.face_fill_materials.size());
     for (auto *material : proxy_materials(proxy)) {
       if (material != nullptr) shared_position_materials_.push_back(material);
     }
@@ -1795,12 +1864,14 @@ void OverlayProxyFactory::update_camera_state(
       }
       break;
     case OverlayRenderableProxyKind::EditWire:
-      material->setParameter("nearPlane", camera.near_plane);
-      material->setParameter("farPlane", camera.far_plane);
-      material->setParameter(
-          "orthographicProjection",
-          camera.projection == ViewportOverlayProjection::Orthographic ? 1.0f
-                                                                      : 0.0f);
+      for (auto *wire_material : {material, proxy.edit_wire_materials[0u], proxy.edit_wire_materials[1u]}) {
+        if (wire_material == nullptr) continue;
+        wire_material->setParameter("nearPlane", camera.near_plane);
+        wire_material->setParameter("farPlane", camera.far_plane);
+        wire_material->setParameter(
+            "orthographicProjection",
+            camera.projection == ViewportOverlayProjection::Orthographic ? 1.0f : 0.0f);
+      }
       break;
     case OverlayRenderableProxyKind::Unknown:
     case OverlayRenderableProxyKind::Triangle:
@@ -1998,8 +2069,12 @@ void OverlayProxyFactory::create_edit_wire_proxy(
             .normalized(filament::VertexAttribute::COLOR);
       },
       [this, &batch](filament::MaterialInstance &material) {
-        configure_edit_wire_material(material, batch);
-      });
+        configure_edit_wire_material(material, batch,
+            batch.active_selection_composition && engine_->getBackend() == filament::Engine::Backend::VULKAN
+                ? OverlayEditWirePass::Ordinary : OverlayEditWirePass::Legacy);
+      }, nullptr, nullptr, batch.active_selection_mask &&
+          engine_->getBackend() == filament::Engine::Backend::VULKAN,
+          batch.supplemental_active_selection);
 }
 
 void OverlayProxyFactory::create_point_proxy(
@@ -2144,18 +2219,34 @@ void OverlayProxyFactory::update_edit_wire_proxy(
     std::uint8_t layer_mask) {
   update_canonical_quad_proxy_vertices(*engine_, proxy, batch.mesh,
                                        layer_mask);
-  configure_edit_wire_material(*proxy.material_instance, batch);
+  configure_edit_wire_proxy_materials(proxy, batch);
 }
 
 void OverlayProxyFactory::configure_edit_wire_material(
-    filament::MaterialInstance &material, const OverlayEditWireBatch &batch) const {
+    filament::MaterialInstance &material, const OverlayEditWireBatch &batch,
+    OverlayEditWirePass pass) const {
   configure_overlay_material(material, batch.state);
+  material.setParameter("selectionPass", static_cast<float>(pass));
+  apply_overlay_edit_wire_stencil(material, pass);
   material.setParameter("lineWidth", batch.width_pixels);
   material.setParameter("featherPixels", kOverlayLineFeatherPixels);
   material.setParameter("nearPlane", batch.near_plane);
   material.setParameter("farPlane", batch.far_plane);
   material.setParameter("orthographicProjection",
                         batch.orthographic_projection ? 1.0f : 0.0f);
+}
+
+void OverlayProxyFactory::configure_edit_wire_proxy_materials(
+    OverlayRenderableProxy &proxy, const OverlayEditWireBatch &batch) const {
+  const bool compose = proxy.edit_wire_materials.front() != nullptr;
+  configure_edit_wire_material(*proxy.material_instance, batch,
+      batch.active_selection_composition && engine_->getBackend() == filament::Engine::Backend::VULKAN
+          ? OverlayEditWirePass::Ordinary : OverlayEditWirePass::Legacy);
+  if (compose) {
+    configure_edit_wire_material(*proxy.edit_wire_materials[0u], batch,
+        batch.supplemental_active_selection ? OverlayEditWirePass::ActiveSupplement : OverlayEditWirePass::Active);
+    configure_edit_wire_material(*proxy.edit_wire_materials[1u], batch, OverlayEditWirePass::ActiveMask);
+  }
 }
 
 void OverlayProxyFactory::update_point_proxy(OverlayRenderableProxy &proxy,
@@ -2216,6 +2307,11 @@ void OverlayProxyFactory::configure_overlay_material(
     apply_overlay_silhouette_stencil(
         material, state.silhouette_pass,
         engine_->getBackend() == filament::Engine::Backend::VULKAN);
+  }
+  if (state.suppressed_by_active_wire && supports_edit_wire_composition()) {
+    // Dimension cages share the overlay stencil with retained component
+    // strokes. Their later dashed/axis lines must not recolor active pixels.
+    apply_overlay_edit_wire_stencil(material, OverlayEditWirePass::Ordinary);
   }
 }
 

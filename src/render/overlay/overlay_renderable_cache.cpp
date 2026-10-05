@@ -14,6 +14,8 @@
 #include "render/render_scene_snapshot.hpp"
 #include "render/render_signature_builder.hpp"
 
+#include <quader/modeling/neutral/geometry/bvh.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -133,6 +135,24 @@ std::uint64_t point_frame_order_signature(const ViewportOverlayFrame &frame) {
 
 } // namespace
 
+/// Borrowed face planes extend active coverage only along current collinear overlaps.
+/// The base proxy groups keep their original element identities and preview bindings.
+struct OverlayRenderableCache::CoincidentWireCache {
+  std::uint64_t signature = 0u;
+  std::uint64_t source_signature = 0u;
+  std::uint64_t build_count = 0u;
+  std::uint8_t layer_mask = 0u;
+  std::vector<ViewportOverlayLine> source_lines;
+  std::vector<ViewportOverlayLine> selected_lines;
+  std::vector<quader_geometry::QAabb3<double>> bounds;
+  std::vector<quader_geometry::QVec3d> centers;
+  std::vector<std::size_t> indices;
+  quader_geometry::QBoundsBvh<double> bvh;
+  quader_geometry::QBvhTraversalScratch scratch;
+  ViewportOverlayFrame frame;
+  std::array<OverlayProxyGroup, 2u> groups;
+};
+
 OverlayRenderableCache::~OverlayRenderableCache() {
     shutdown();
 }
@@ -157,6 +177,7 @@ void OverlayRenderableCache::shutdown() {
     shared_transform_positions_ready_ = false;
     transform_layout_signature_ = 0u;
     transform_position_signature_ = 0u;
+    transform_coordinate_generation_ = 0u;
     transform_stream_active_ = false;
     transform_coordinates_accepted_ = false;
     blend_order_bias_ = 0u;
@@ -212,7 +233,7 @@ bool OverlayRenderableCache::set_overlay_frame(std::size_t viewport_index,
     }
     if (factory_ && factory_->initialized()) {
       rebuild_slot(slot, layer_changed);
-      if (camera_material_state_changed && !layer_changed) {
+      if (camera_material_state_changed) {
         update_retained_camera_state(slot);
       }
     }
@@ -338,7 +359,7 @@ bool OverlayRenderableCache::update_overlay_camera(
   }
   if (factory_ && factory_->initialized()) {
     rebuild_slot(slot, layer_changed);
-    if (camera_material_state_changed && !layer_changed) {
+    if (camera_material_state_changed) {
       update_retained_camera_state(slot);
     }
   }
@@ -523,6 +544,10 @@ bool OverlayRenderableCache::set_transform_position_streams(
   }
   transform_layout_signature_ = next_layout;
   transform_position_signature_ = next_position;
+  // Payload ownership can change while the producer keeps its revision.
+  // Supplemental geometry must observe the same exact coordinate proof as
+  // retained position streams, rather than trusting the revision hash alone.
+  ++transform_coordinate_generation_;
   transform_stream_active_ = true;
   if (layout_changed) {
     // Release old index bindings before a different layout can grow the texture.
@@ -957,6 +982,7 @@ void OverlayRenderableCache::apply_transform_stream(
           .value();
   slot.signatures.frame_signature = slot.frame_signature;
   slot.transform_position_signature = position_signature;
+  update_coincident_wires(slot);
 }
 
 void OverlayRenderableCache::restore_transform_base(OverlaySlot &slot,
@@ -1034,6 +1060,7 @@ void OverlayRenderableCache::restore_transform_base(OverlaySlot &slot,
                   slot.transform_base_signatures, slot.camera, layer, true);
   }
   (void)rebuild;
+  update_coincident_wires(slot);
 }
 
 std::uint8_t OverlayRenderableCache::effective_layer_mask(
@@ -1085,6 +1112,7 @@ OverlayRenderableCache::stats(std::size_t viewport_index) const {
       .retained_source_wire_edges = slot.source_wire_retention.active_edge_count(),
       .retained_source_wire_capacity = slot.source_wire_retention.edge_slots().size(),
       .shared_position_proxy_count = shared_position_proxy_count,
+      .coincident_wire_rebuild_count = slot.coincident_wires ? slot.coincident_wires->build_count : 0u,
   };
 }
 
@@ -1098,6 +1126,9 @@ OverlayRenderableCache::active_proxy_count(std::size_t viewport_index) const {
   for (const OverlayProxyGroup &group : slots_[viewport_index].proxy_groups) {
     count += group.proxies.size();
   }
+  if (const auto &cache = slots_[viewport_index].coincident_wires) {
+    for (const auto &group : cache->groups) count += group.proxies.size();
+  }
   return count;
 }
 
@@ -1109,6 +1140,161 @@ void OverlayRenderableCache::update_retained_camera_state(OverlaySlot &slot) {
   for (const OverlayProxyGroup &group : slot.proxy_groups) {
     factory_->update_camera_state(group.proxies, slot.camera);
   }
+  if (slot.coincident_wires) {
+    for (const auto &group : slot.coincident_wires->groups) {
+      factory_->update_camera_state(group.proxies, slot.camera);
+    }
+  }
+}
+
+void OverlayRenderableCache::update_coincident_wires(OverlaySlot &slot) {
+  if (!factory_ || !factory_->supports_edit_wire_composition() || !slot.has_frame) return;
+  const auto source_signature = RenderSignatureBuilder()
+      .add_value(slot.signatures.layer_signatures[overlay_layer_index(ViewportOverlayLayer::SelectedFaceEdge)])
+      .add_value(slot.signatures.layer_signatures[overlay_layer_index(ViewportOverlayLayer::SelectedEdge)])
+      .add_value(slot.signatures.layer_signatures[overlay_layer_index(ViewportOverlayLayer::SourceWireDepthStamp)])
+      .value();
+  const auto signature = RenderSignatureBuilder(source_signature)
+      .add_value(slot.transform_active ? transform_coordinate_generation_ : 0u)
+      .value();
+  if (!slot.coincident_wires) slot.coincident_wires = std::make_shared<CoincidentWireCache>();
+  auto &cache = *slot.coincident_wires;
+  if (cache.layer_mask != slot.layer_mask) {
+    for (const auto &group : cache.groups) factory_->set_layer_mask(group.proxies, slot.layer_mask);
+    cache.layer_mask = slot.layer_mask;
+  }
+  // Camera moves and unchanged publications do no collinearity queries, mesh
+  // packing or uploads. Only selected/source geometry and accepted positions
+  // participate in this key; source-wire populations stay out of the query.
+  if (cache.signature == signature) return;
+  QDR_PROFILE_SCOPE("Overlay reconcile coincident active wires");
+  ++cache.build_count;
+  cache.selected_lines.clear();
+  cache.frame.lines.clear();
+  cache.bounds.clear();
+  cache.centers.clear();
+  cache.indices.clear();
+  const auto selected = [](const ViewportOverlayLine &line) {
+    return retained_selection_wire_layer(line.layer) &&
+        line.source == ViewportOverlaySource::ComponentSelection &&
+        line.occlusion_style == ViewportOverlayLineOcclusionStyle::Default;
+  };
+  const auto active = [](const ViewportOverlayLine &line) {
+    return line.style_role == ViewportOverlayStyleRole::ActiveSelectionWire &&
+        (line.color >> 24u) != 0u;
+  };
+  if (cache.source_signature != source_signature) {
+    cache.source_lines.clear();
+    for (const auto &line : slot.frame.lines) {
+      if (selected(line)) cache.source_lines.push_back(line);
+    }
+    cache.source_signature = source_signature;
+  }
+  const bool has_active = std::any_of(cache.source_lines.begin(), cache.source_lines.end(), active);
+  if (has_active) {
+    std::unordered_map<int, const TransformPositionSource *> sources;
+    if (slot.transform_active) {
+      sources.reserve(transform_sources_.size());
+      for (const auto &source : transform_sources_) sources.emplace(source.object_id, &source);
+    }
+    const auto position = [&sources](int object_id, int vertex_id, QVec3 baseline) {
+      const auto source = sources.find(object_id);
+      if (source == sources.end() || vertex_id < 0 || !source->second->source_vertex_to_position) return baseline;
+      const auto found = source->second->source_vertex_to_position->find(static_cast<std::uint32_t>(vertex_id));
+      if (found == source->second->source_vertex_to_position->end() ||
+          found->second >= source->second->world_positions.size()) return baseline;
+      return source->second->world_positions[found->second];
+    };
+    double tolerance = 1e-7;
+    for (const auto &line : cache.source_lines) {
+      auto effective = line;
+      effective.start = position(line.element.object_id, line.element.edge_a, line.start);
+      effective.end = position(line.element.object_id, line.element.edge_b, line.end);
+      for (auto &support : effective.surface_support) {
+        if (support.vertex_id >= 0) support.position = position(line.element.object_id, support.vertex_id, support.position);
+      }
+      const glm::dvec3 start(to_glm(effective.start)), end(to_glm(effective.end));
+      if (!std::isfinite(glm::length(end - start))) continue;
+      tolerance = std::max(tolerance, glm::length(end - start) * 1e-7);
+      cache.selected_lines.push_back(effective);
+    }
+    for (std::size_t index = 0u; index < cache.selected_lines.size(); ++index) {
+      const auto &line = cache.selected_lines[index];
+      if (!active(line)) continue;
+      const glm::dvec3 start(to_glm(line.start)), end(to_glm(line.end));
+      if (glm::dot(end - start, end - start) <= 0.0) continue;
+      const auto low = glm::min(start, end) - tolerance;
+      const auto high = glm::max(start, end) + tolerance;
+      const auto center = (start + end) * 0.5;
+      cache.bounds.push_back({{low.x, low.y, low.z}, {high.x, high.y, high.z}});
+      cache.centers.push_back({center.x, center.y, center.z});
+      cache.indices.push_back(index);
+    }
+    if (!cache.indices.empty() && cache.bvh.build(cache.bounds, cache.centers, cache.indices)) {
+      for (const auto &line : cache.selected_lines) {
+        if (active(line) || (line.surface_support[0u].vertex_id < 0 && line.surface_support[1u].vertex_id < 0)) continue;
+        const glm::dvec3 start(to_glm(line.start)), end(to_glm(line.end));
+        const auto direction = end - start;
+        const double squared_length = glm::dot(direction, direction);
+        if (squared_length <= 0.0) continue;
+        (void)cache.bvh.for_each_ray_candidate(
+            {{start.x, start.y, start.z}, {direction.x, direction.y, direction.z}},
+            {.min_distance = 0.0, .max_distance = 1.0, .intersection_epsilon = 1e-14}, cache.scratch,
+            [&](std::size_t index, std::size_t, const auto &, double &) {
+              const auto &primary = cache.selected_lines[index];
+              const glm::dvec3 primary_start(to_glm(primary.start)), primary_end(to_glm(primary.end));
+              const auto primary_direction = primary_end - primary_start;
+              const double primary_squared_length = glm::dot(primary_direction, primary_direction);
+              const double from = glm::dot(start - primary_start, primary_direction) / primary_squared_length;
+              const double to = glm::dot(end - primary_start, primary_direction) / primary_squared_length;
+              const double pair_tolerance = std::max({1.0, std::sqrt(squared_length), std::sqrt(primary_squared_length)}) * 1e-7;
+              if (glm::length(start - primary_start - from * primary_direction) > pair_tolerance ||
+                  glm::length(end - primary_start - to * primary_direction) > pair_tolerance) return true;
+              const double begin = std::max(0.0, std::min(from, to));
+              const double finish = std::min(1.0, std::max(from, to));
+              if (finish <= begin + 1e-9) return true;
+              auto supplement = primary;
+              const auto point = [&](double parameter) {
+                if (parameter == 0.0) return primary.start;
+                if (parameter == 1.0) return primary.end;
+                const auto value = primary_start + primary_direction * parameter;
+                return QVec3{static_cast<float>(value.x), static_cast<float>(value.y), static_cast<float>(value.z)};
+              };
+              supplement.start = point(begin);
+              supplement.end = point(finish);
+              supplement.surface_support = line.surface_support;
+              // These are already the effective world coordinates. Removing
+              // element bindings prevents a second preview displacement; the
+              // next position publication recomputes the geometric overlap.
+              supplement.element = {};
+              cache.frame.lines.push_back(supplement);
+              return true;
+            });
+      }
+    }
+  }
+  const auto signatures = OverlayRenderableBuilder::frame_signatures(cache.frame);
+  constexpr std::array kLayers{ViewportOverlayLayer::SelectedFaceEdge, ViewportOverlayLayer::SelectedEdge};
+  for (std::size_t index = 0u; index < kLayers.size(); ++index) {
+    const auto layer = kLayers[index];
+    auto &group = cache.groups[index];
+    const auto geometry_signature = signatures.layer_signatures[overlay_layer_index(layer)];
+    if (group.signature == geometry_signature) continue;
+    auto plan = OverlayRenderableBuilder::build_layer(cache.frame, slot.camera, layer, &signatures, blend_order_bias_);
+    for (auto &batch : plan.edit_wire_batches) {
+      batch.supplemental_active_selection = true;
+      // All authored active strokes retain their existing joins first. Extra
+      // support ribbons may fill only pixels those strokes could not reach.
+      batch.state.blend_order = static_cast<std::uint16_t>(
+          viewport_overlay_draw_order(ViewportOverlayLayer::GroupBounds) * 64u - 1u + blend_order_bias_);
+    }
+    if (!factory_->update_layer_proxies(group.proxies, plan, slot.layer_mask)) {
+      destroy_group(group);
+      group.proxies = factory_->create_layer_proxies(plan, slot.layer_mask);
+    }
+    group.signature = geometry_signature;
+  }
+  cache.signature = signature;
 }
 
 void OverlayRenderableCache::rebuild_slot(
@@ -1255,6 +1441,7 @@ void OverlayRenderableCache::rebuild_slot(
     apply_transform_stream(slot, transform_position_signature_);
   }
   update_point_visibility(slot);
+  update_coincident_wires(slot);
 }
 
 bool OverlayRenderableCache::rebuild_retained_source_wire(
@@ -1524,6 +1711,10 @@ void OverlayRenderableCache::update_point_visibility(OverlaySlot &slot) {
 void OverlayRenderableCache::destroy_slot(OverlaySlot &slot) {
   for (OverlayProxyGroup &group : slot.proxy_groups) {
     destroy_group(group);
+  }
+  if (slot.coincident_wires) {
+    for (auto &group : slot.coincident_wires->groups) destroy_group(group);
+    slot.coincident_wires.reset();
   }
   slot.frame = {};
   slot.accepted_visibility_frame = {};

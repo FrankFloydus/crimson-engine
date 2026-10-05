@@ -19,6 +19,7 @@ material {
         lineSurfaceDepths
     ],
     parameters : [
+        { type : float, name : selectionPass },
         { type : bool, name : sharedPositionsEnabled },
         { type : sampler2d, name : sharedPositions, precision : high },
         {
@@ -177,7 +178,7 @@ vertex {
         material.lineSurfaceDepths = vec4(
                 surfaceDepth(clipStart, clipEnd, support0Clip, finalDevice.xy, ribbonDepth) - deviceOffset * 0.5,
                 surfaceDepth(clipStart, clipEnd, support1Clip, finalDevice.xy, ribbonDepth) - deviceOffset * 0.5,
-                0.0, 0.0);
+                control.w, 0.0);
     }
 }
 
@@ -199,6 +200,15 @@ fragment {
 
         vec4 color = getColor();
         color.a *= alphaScale;
+        // Mask exactly the authored active ribbon, including its feather, so
+        // ordinary/source wires cannot alter that color through alpha blending.
+        bool activeWire = variable_lineSurfaceDepths.z > 0.5;
+        if (color.a <= 0.0 ||
+                (materialParams.selectionPass > 0.5 &&
+                 materialParams.selectionPass < 1.5 && activeWire) ||
+                (materialParams.selectionPass > 1.5 && !activeWire)) {
+            discard;
+        }
         material.baseColor = vec4(color.rgb * color.a, color.a);
     }
 }

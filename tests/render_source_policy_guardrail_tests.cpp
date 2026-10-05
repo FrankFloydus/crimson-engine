@@ -4178,9 +4178,10 @@ TEST(RenderProxyLifecycleTests,
             std::string::npos);
   EXPECT_NE(overlay_factory_source.find("void append_overlay_proxy("),
             std::string::npos);
+  // Generic and retained edit-wire builders both attach shared material passes.
   EXPECT_EQ(count_occurrences(overlay_factory_source,
                               "filament::RenderableManager::Builder renderable_builder("),
-            1u);
+            2u);
   EXPECT_EQ(
       count_occurrences(overlay_factory_source, "scene.addEntity(entity)"), 1u);
   // Retained face arenas return a guarded proxy directly to the cache owner.

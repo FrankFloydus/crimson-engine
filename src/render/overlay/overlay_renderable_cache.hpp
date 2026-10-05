@@ -40,6 +40,7 @@ struct OverlayRenderableCacheStats {
   std::size_t retained_source_wire_edges = 0u;
   std::size_t retained_source_wire_capacity = 0u;
   std::size_t shared_position_proxy_count = 0u;
+  std::uint64_t coincident_wire_rebuild_count = 0u;
 };
 
 /**
@@ -114,6 +115,9 @@ public:
       bool valid = false;
     };
 
+    /// Retains geometric overlap queries and independently updated support ribbons.
+    struct CoincidentWireCache;
+
     /// Pins one object's stable vertex mapping and reusable world-position
     /// storage for retained transform-overlay uploads.
     struct TransformPositionSource {
@@ -161,6 +165,7 @@ public:
         std::array<OverlayEditWireRetention, 2u> selection_wire_retention;
         RetainedFaceSource face_source;
         OverlayWireSurfaceSupportCache wire_surface_support;
+        std::shared_ptr<CoincidentWireCache> coincident_wires;
         std::array<OverlayProxyGroup, kViewportOverlayLayerCount> proxy_groups;
         OverlayFrameSignatures transform_base_signatures;
         std::uint64_t transform_base_frame_signature = 0u;
@@ -192,6 +197,7 @@ public:
     bool rebuild_retained_faces(OverlaySlot &slot, OverlayProxyGroup &group,
                                ViewportOverlayLayer layer);
     void update_retained_camera_state(OverlaySlot &slot);
+    void update_coincident_wires(OverlaySlot &slot);
     void update_point_visibility(OverlaySlot &slot);
     void begin_transform_stream(OverlaySlot &slot,
                                 std::uint64_t layout_signature);
@@ -216,6 +222,7 @@ public:
     bool shared_transform_positions_ready_ = false;
     std::uint64_t transform_layout_signature_ = 0u;
     std::uint64_t transform_position_signature_ = 0u;
+    std::uint64_t transform_coordinate_generation_ = 0u;
     bool transform_stream_active_ = false;
     bool transform_coordinates_accepted_ = false;
 };

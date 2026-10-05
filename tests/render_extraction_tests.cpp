@@ -7009,6 +7009,67 @@ TEST(OverlayLineMeshBuilderTests, EmitsCanonicalShaderRibbonControls) {
     EXPECT_FLOAT_EQ(mesh.vertices[3].control.y, -1.0f);
 }
 
+TEST(OverlayLineMeshBuilderTests, ActiveComponentWirePrioritySurvivesEqualColorsAndCameraMotion) {
+  for (const auto layer : {ViewportOverlayLayer::SelectedEdge,
+                           ViewportOverlayLayer::SelectedFaceEdge}) {
+    ViewportOverlayFrame frame;
+    frame.lines.push_back({.layer = layer,
+        .start = {-0.5f, -0.5f, -1.0f}, .end = {0.5f, 0.5f, -1.0f},
+        .color = rgba8(255, 128, 192), .width_pixels = 2.0f,
+        .style_role = ViewportOverlayStyleRole::SelectionWire,
+        .source = ViewportOverlaySource::ComponentSelection,
+        .element = {.object_id = 1, .edge_a = 1, .edge_b = 2}});
+    frame.lines.push_back(frame.lines.front());
+    frame.lines.back().element.object_id = 2;
+    frame.lines.back().style_role = ViewportOverlayStyleRole::ActiveSelectionWire;
+    const auto camera = test_overlay_camera();
+    const auto plan = OverlayRenderableBuilder::build_layer(frame, camera, layer);
+    ASSERT_EQ(plan.edit_wire_batches.size(), 1u);
+    const auto &mesh = plan.edit_wire_batches.front().mesh;
+    ASSERT_EQ(mesh.vertices.size(), 8u);
+    for (std::size_t index = 0u; index < 4u; ++index) {
+      EXPECT_FLOAT_EQ(mesh.vertices[index].control.w, 0.0f);
+      EXPECT_FLOAT_EQ(mesh.vertices[index + 4u].control.w, 1.0f);
+      EXPECT_EQ(mesh.vertices[index].color, mesh.vertices[index + 4u].color);
+    }
+    EXPECT_FALSE(plan.edit_wire_batches.front().state.depth_write);
+    EXPECT_TRUE(plan.edit_wire_batches.front().state.depth_culling);
+    const auto signature = OverlayRenderableBuilder::layer_build_signature(frame, camera, layer);
+    auto distant_camera = camera;
+    distant_camera.eye.z += 2048.0f;
+    EXPECT_EQ(signature, OverlayRenderableBuilder::layer_build_signature(frame, distant_camera, layer));
+    frame.lines.back().style_role = ViewportOverlayStyleRole::SelectionWire;
+    EXPECT_NE(signature, OverlayRenderableBuilder::layer_build_signature(frame, camera, layer));
+  }
+}
+
+TEST(OverlayLineMeshBuilderTests, SelectionDimensionsKeepActiveWireExclusionSeparateFromGroupCages) {
+  for (const auto occlusion : {ViewportOverlayLineOcclusionStyle::Default,
+                               ViewportOverlayLineOcclusionStyle::Dashed}) {
+    ViewportOverlayFrame frame;
+    frame.lines.push_back({.layer = ViewportOverlayLayer::GroupBounds,
+        .start = {-0.5f, 0.0f, -1.0f}, .end = {0.5f, 0.0f, -1.0f},
+        .color = rgba8(255, 211, 31), .width_pixels = 2.0f,
+        .source = ViewportOverlaySource::GroupBounds, .occlusion_style = occlusion});
+    frame.lines.push_back(frame.lines.front());
+    frame.lines.back().source = ViewportOverlaySource::SelectionDimensions;
+    const auto plan = OverlayRenderableBuilder::build_layer(
+        frame, test_overlay_camera(), ViewportOverlayLayer::GroupBounds);
+    ASSERT_EQ(plan.line_batches.size(), 2u);
+    for (std::size_t index = 0u; index < plan.line_batches.size(); ++index) {
+      const auto &batch = plan.line_batches[index];
+      EXPECT_EQ(batch.mesh.vertices.size(), 4u);
+      EXPECT_EQ(batch.state.suppressed_by_active_wire, index == 1u);
+      EXPECT_FALSE(batch.state.depth_write);
+      EXPECT_EQ(batch.occluded_state.has_value(),
+          occlusion == ViewportOverlayLineOcclusionStyle::Dashed);
+      if (batch.occluded_state) {
+        EXPECT_EQ(batch.occluded_state->suppressed_by_active_wire, index == 1u);
+      }
+    }
+  }
+}
+
 TEST(OverlayLineMeshBuilderTests, BatchesSameWidthLinesWithDifferentColors) {
     ViewportOverlayFrame frame;
     frame.lines.push_back({

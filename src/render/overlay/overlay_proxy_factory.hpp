@@ -78,6 +78,8 @@ public:
              overlay_icon_material_ != nullptr;
     }
 
+    [[nodiscard]] bool supports_edit_wire_composition() const;
+
     std::vector<OverlayRenderableProxy>
     create_layer_proxies(const OverlayLayerBuildPlan &plan,
                          std::uint8_t layer_mask);
@@ -171,7 +173,10 @@ public:
 
   private:
     void configure_edit_wire_material(filament::MaterialInstance &material,
-                                      const OverlayEditWireBatch &batch) const;
+                                      const OverlayEditWireBatch &batch,
+                                      OverlayEditWirePass pass = OverlayEditWirePass::Legacy) const;
+    void configure_edit_wire_proxy_materials(OverlayRenderableProxy &proxy,
+                                             const OverlayEditWireBatch &batch) const;
     void create_triangle_proxy(const OverlayFaceFillBatch &batch,
                                std::uint8_t layer_mask,
                                std::vector<OverlayRenderableProxy> &proxies);

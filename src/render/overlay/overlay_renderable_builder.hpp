@@ -145,6 +145,7 @@ struct OverlayRenderState {
   OverlayFaceFillClass face_fill_class = OverlayFaceFillClass::None;
   OverlayFaceFillPass face_fill_pass = OverlayFaceFillPass::Color;
   OverlaySilhouettePass silhouette_pass = OverlaySilhouettePass::None;
+  bool suppressed_by_active_wire = false;
   float polygon_offset_scale = 0.0f;
   float polygon_offset_constant = 0.0f;
   std::uint16_t blend_order = 0;
@@ -187,6 +188,10 @@ struct OverlayEditWireBatch {
     float near_plane = 0.05f;
     float far_plane = 1000.0f;
     bool orthographic_projection = false;
+    // Source wires only consume the mask; selected wires also produce it.
+    bool active_selection_composition = false;
+    bool active_selection_mask = false;
+    bool supplemental_active_selection = false;
 };
 
 /**
@@ -278,6 +283,7 @@ private:
       ViewportOverlayDepthMode depth_mode =
           ViewportOverlayDepthMode::DepthTested;
       bool object_silhouette = false;
+      bool suppressed_by_active_wire = false;
       ViewportOverlayLineOcclusionStyle occlusion_style =
           ViewportOverlayLineOcclusionStyle::Default;
       float occluded_dash_period_pixels = kOverlayOccludedLineDashPeriodPixels;

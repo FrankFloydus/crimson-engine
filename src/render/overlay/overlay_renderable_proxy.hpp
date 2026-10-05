@@ -55,6 +55,7 @@ struct OverlayRenderableProxy {
           occluded_material_instance(
               std::exchange(other.occluded_material_instance, nullptr)),
           component_point_materials(std::exchange(other.component_point_materials, {})),
+          edit_wire_materials(std::exchange(other.edit_wire_materials, {})),
           face_fill_materials(std::move(other.face_fill_materials)),
           face_fill_colors(std::move(other.face_fill_colors)),
           face_fill_triangle_colors(std::move(other.face_fill_triangle_colors)),
@@ -88,6 +89,8 @@ struct OverlayRenderableProxy {
     filament::MaterialInstance *occluded_material_instance = nullptr;
     // The first component pass uses material_instance; all four share one VB/IB.
     std::array<filament::MaterialInstance *, 3u> component_point_materials{};
+    // Active color and coverage share the ordinary edit-wire pass's VB/IB.
+    std::array<filament::MaterialInstance *, 2u> edit_wire_materials{};
     // Additional face composition passes share the primary pass's VB/IB.
     std::vector<filament::MaterialInstance *> face_fill_materials;
     std::vector<std::uint32_t> face_fill_colors;

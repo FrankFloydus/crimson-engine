@@ -39,13 +39,28 @@ enum class OverlaySilhouettePass : std::uint8_t {
   Occluded,
 };
 
+/// Active component ribbons reserve coverage before ordinary wire colors blend.
+enum class OverlayEditWirePass : std::uint8_t {
+  Legacy,
+  Ordinary,
+  Active,
+  ActiveMask,
+  ActiveSupplement,
+};
+
 inline constexpr std::uint8_t kOverlayFaceFillPriorityMask = 0x07u;
 inline constexpr std::uint8_t kOverlayFaceFillConsumedMask = 0x08u;
 inline constexpr std::uint8_t kOverlayFaceFillStencilMask =
     kOverlayFaceFillPriorityMask | kOverlayFaceFillConsumedMask;
 inline constexpr std::uint8_t kOverlaySilhouetteVisibleStencilMask = 0x10u;
+inline constexpr std::uint8_t kOverlayActiveWireStencilMask = 0x20u;
+inline constexpr std::uint8_t kOverlayActiveWireConsumedStencilMask = 0x40u;
 inline constexpr std::uint8_t kOverlayCompositionStencilMask =
-    kOverlayFaceFillStencilMask | kOverlaySilhouetteVisibleStencilMask;
+    kOverlayFaceFillStencilMask | kOverlaySilhouetteVisibleStencilMask |
+    kOverlayActiveWireStencilMask | kOverlayActiveWireConsumedStencilMask;
+
+/// Runs after stencil reset and before the first component wire color layer.
+inline constexpr std::uint16_t kOverlayActiveWireMaskBlendOrder = 32u;
 
 /// Fully transparent tints neither claim nor consume stencil coverage.
 [[nodiscard]] constexpr OverlayFaceFillClass visible_overlay_face_fill_class(
@@ -75,5 +90,9 @@ void apply_overlay_face_fill_stencil(filament::MaterialInstance &material,
 void apply_overlay_silhouette_stencil(filament::MaterialInstance &material,
                                      OverlaySilhouettePass pass,
                                      bool enabled = true);
+
+/// Changes only the independent active-wire stencil bit and color writes.
+void apply_overlay_edit_wire_stencil(filament::MaterialInstance &material,
+                                     OverlayEditWirePass pass);
 
 } // namespace quader

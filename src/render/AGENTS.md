@@ -121,6 +121,19 @@ file except through prior written authorization from Francesco Di Blasi.
   component outlines and real occlusion. The pinned SDK cannot attach custom-target stencil
   on OpenGL, so non-Vulkan backends retain the previous fill path. Native and offscreen pixel
   regressions live in `tests/selection_overlay_runtime_tests.cpp`.
+- Vulkan component wires reserve active ribbon coverage before drawing source and ordinary
+  selection wires. Shared edges keep one active color, including antialiased pixels, without
+  removing either object's preview geometry. The mask shares the active ribbon's scene-depth
+  test, width and live position streams; zero-alpha active wires claim no coverage. Reset its
+  independent stencil bit per pane/pass. Hover retains its existing later presentation.
+  At a corner shared by separate objects, supplemental active ribbons borrow the other
+  selected edge's incident surfaces only over collinear overlap. Reconcile those spans on
+  source or preview-position changes; camera-only and unchanged frames reuse them. Consume
+  active coverage once so the supplemental depth support cannot add a second alpha blend.
+  Selection-dimension dashes and axis spans consume that same active coverage even though
+  they arrive through the dynamic generic-line cache. Keep their batches separate from
+  ordinary group cages; dimension labels and non-overlapping guides retain their presentation.
+  See the shared-edge pixel regressions in `tests/selection_overlay_runtime_tests.cpp`.
 - Collision display has an independent retained snapshot/cache; it follows mesh collision metadata,
   visibility, and precise tool-preview suppression. Selection and camera changes must not derive
   or upload collision geometry; tint changes update uniforms only.
