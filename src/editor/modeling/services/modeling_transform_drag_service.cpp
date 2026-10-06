@@ -509,6 +509,7 @@ ModelingTransformDragService::begin_transform_drag(
         preview_routing.scene_transform_preview_eligible;
     drag.move_auto_merge_vertices =
         tool == quader_editor_core::ViewportInteractionTool::Move &&
+        drag_selection_mode == quader_editor_core::SelectionMode::Vertex &&
         portable_modeling_selection && context.move_auto_merge_vertices;
     context.runtime.set_transform_drag_state(drag);
   }

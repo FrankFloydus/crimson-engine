@@ -166,6 +166,7 @@ private:
       bool tool_source_wire_object = false;
       quader_poly::Selection selection;
       quader_editor_core::SelectionOverlayFrame frame;
+      quader_editor_core::SelectionOverlayFrame diagnostic_frame;
     };
 
     /**

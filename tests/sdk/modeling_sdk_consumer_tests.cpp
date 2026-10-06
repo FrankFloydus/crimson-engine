@@ -5545,7 +5545,7 @@ TEST(ModelingSdkConsumerTests,
 }
 
 TEST(ModelingSdkConsumerTests,
-     PolyToolFaceElementExtrudeKeepsTheStartingFaceClosed) {
+     PolyToolFaceElementExtrudeReplacesTheStartingFaceAndLeavesItsBaseOpen) {
   ModelingApi quader = ModelingApi::create();
 
   OperationReceipt created =
@@ -5571,6 +5571,7 @@ TEST(ModelingSdkConsumerTests,
   PolygonDocument document =
       std::move(decoded).value().objects.front().document;
   const std::vector<FaceId> source_faces = document.face_ids();
+  const std::vector<VertexId> source_vertices = document.vertex_ids();
   ASSERT_EQ(source_faces.size(), 1U);
   Result<OperationResult> face_selected =
       document.select_face(source_faces.front());
@@ -5584,8 +5585,23 @@ TEST(ModelingSdkConsumerTests,
   Result<AuthoredPolygonPayload> payload = document.authored_payload();
   ASSERT_TRUE(payload.ok()) << payload.error_message();
   EXPECT_EQ(payload.value().vertices.size(), 8U);
-  EXPECT_EQ(payload.value().faces.size(), 6U);
-  EXPECT_EQ(authored_open_edge_count(payload.value()), 0U);
+  EXPECT_EQ(payload.value().faces.size(), 5U);
+  EXPECT_EQ(authored_open_edge_count(payload.value()), 4U);
+  EXPECT_EQ(document.selection().faces, source_faces);
+  EXPECT_EQ(document.selection().active_face, source_faces.front());
+  for (const auto& face : payload.value().faces) {
+    EXPECT_TRUE(std::ranges::any_of(face.vertices, [&](VertexId vertex) {
+      return std::ranges::find(source_vertices, vertex) == source_vertices.end();
+    }));
+    if (face.id == source_faces.front()) {
+      for (const auto vertex : face.vertices) {
+        const auto found = std::ranges::find(payload.value().vertices, vertex);
+        ASSERT_NE(found, payload.value().vertices.end());
+        const auto index = static_cast<std::size_t>(found - payload.value().vertices.begin());
+        EXPECT_FLOAT_EQ(payload.value().positions[index].y, 1.0F);
+      }
+    }
+  }
 }
 
 TEST(ModelingSdkConsumerTests, ModelingApiPlaneCutKeepsBothHalves) {

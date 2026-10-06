@@ -4791,6 +4791,61 @@ TEST(ViewportInteractionControllerTests,
 }
 
 TEST(ViewportInteractionControllerTests,
+     MovingLooseFacesOrEdgesOntoAnotherPartDoesNotAutoMergeThem) {
+  for (const auto mode : {quader::QuaderSelectionMode::Face,
+                          quader::QuaderSelectionMode::Edge}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    LoosePartSelectionScenario scenario;
+    scenario.initialize(mode, 1.5f);
+    auto &harness = scenario.harness;
+    harness.settings.set_bool_value(quader::ViewportBoolSettingId::GridSnap, false);
+    harness.settings.set_bool_value(quader::ViewportBoolSettingId::VertexSnap, false);
+    ASSERT_TRUE(harness.session.modeling().interaction_settings().move_auto_merge_vertices);
+    harness.click_selection(scenario.hit(0), 2);
+    ASSERT_EQ(scenario.selected_components(), scenario.components(0));
+    ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
+    harness.router.set_active_tool(quader::ViewportToolId::Move);
+    harness.session.history().clear();
+    (void)harness.controller.handle_before_active_tool(harness.editor, harness.frame());
+    const auto *gizmo = harness.controller.transform_gizmo_frame();
+    ASSERT_NE(gizmo, nullptr);
+    const auto *axis = find_axis(*gizmo, quader_editor_core::TransformAxis::X);
+    ASSERT_NE(axis, nullptr);
+    const auto start = axis->screen_tip;
+    const auto one_unit = harness.camera.project_world_point({1, 0, 0}).position -
+                          harness.camera.project_world_point({0, 0, 0}).position;
+    press_update_release_gizmo(harness, start, start + one_unit);
+
+    const auto expect_separate_parts = [&](float offset) {
+      const auto *binding = harness.session.scene().mesh(scenario.object.entity);
+      ASSERT_NE(binding, nullptr);
+      const auto *mesh = harness.session.assets().mesh(binding->mesh);
+      ASSERT_NE(mesh, nullptr);
+      ASSERT_NE(mesh->authored_polygon_document, nullptr);
+      const auto &document = *mesh->authored_polygon_document;
+      ASSERT_EQ(document.vertices.size(), 16u);
+      ASSERT_EQ(document.faces.size(), 12u);
+      for (const auto &before : scenario.document.vertices) {
+        const auto *after = quader_poly::find_vertex(document, before.id);
+        ASSERT_NE(after, nullptr);
+        const bool moved = std::find(scenario.vertices[0].begin(),
+            scenario.vertices[0].end(), before.id) != scenario.vertices[0].end();
+        expect_vec3_near(after->position,
+                        before.position + quader::QVec3{moved ? offset : 0.0f, 0, 0});
+      }
+      EXPECT_EQ(scenario.selected_components(), scenario.components(0));
+      EXPECT_EQ(scenario.overlay_components(), scenario.components(0));
+    };
+    expect_separate_parts(1.0f);
+    EXPECT_EQ(harness.session.history().undo_count(), 1u);
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    expect_separate_parts(0.0f);
+    ASSERT_TRUE(harness.editor.history().redo().ok());
+    expect_separate_parts(1.0f);
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
      OrthographicModifiedDoubleClicksSelectAndRemoveTheConnectedEdgeShell) {
   ViewportInteractionHarness harness;
   const auto box = create_unit_box(harness);

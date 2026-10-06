@@ -22243,7 +22243,7 @@
         }
       },
       "before": "231654fbc9b5895eef6958b7d66261ca",
-      "after": "0afca17faa5362e0d77933ec4041e6b8",
+      "after": "12a1cbb2e04c67b76f4e7e6f2838458b",
       "before_domains": {
         "documents": "c203aebd33ef43901b5476e66d66fde9",
         "scene": "57621cb4a3f8fe1ace5bbdac9858c0d8",
@@ -22265,7 +22265,7 @@
         "overlay": "2d247ba4c61215e52c530ea381f7cc32",
         "assets": "fed964b26c70d7b8147ff43a1abb220f",
         "history": "4404c6ffdacf87205e55c2eaa73f0bec",
-        "tools": "6961ac409cef8e389543be8c802661f2",
+        "tools": "c01a9f47e1e785501b98380d836b00e0",
         "viewports": "3ad023dfc325fa4869c77bd4e9e144a5",
         "preferences": "a3f9c2bfe206ab1d4d73378f41401288",
         "revisions": "cb81ce5cd4daadc3c53f831b3c2742b0"
@@ -23564,5 +23564,5 @@
       "lifecycle": {}
     }
   },
-  "approved_change_reason": "Active selection styling now requires multiple selected elements in the current mode; successful tool replacement retires every outgoing tool, Align retires invalid contexts and pane choices, and generic preview startup follows the same transition boundary."
+  "approved_change_reason": "Auto Merge Vertices is available only for Move in Vertex selection mode; activating Move in other modes no longer exposes that control."
 }

@@ -91,6 +91,7 @@ public:
   }
 
 private:
+  /// Pins an immutable SDK snapshot and materializes its legacy document once.
   struct SnapshotStorage final {
     explicit SnapshotStorage(modeling::PolygonDocumentReadSnapshot value)
         : snapshot(std::move(value)) {}

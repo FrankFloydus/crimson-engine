@@ -1121,7 +1121,11 @@ EdgeKey edge_key(PointKey first, PointKey second) {
 }
 
 bool shared_triangle_edges_have_opposite_winding(
-    const quader::QuaderMeshAsset &mesh, bool require_closed = false) {
+    const quader::QuaderMeshAsset &mesh, bool require_closed = false,
+    std::size_t* open_edge_count = nullptr) {
+  if (open_edge_count != nullptr) {
+    *open_edge_count = 0U;
+  }
   if (mesh.indices.size() % 3U != 0U) {
     return false;
   }
@@ -1150,6 +1154,9 @@ bool shared_triangle_edges_have_opposite_winding(
   for (const auto &[edge, uses] : uses_by_edge) {
     (void)edge;
     if (uses.size() == 1U) {
+      if (open_edge_count != nullptr) {
+        ++*open_edge_count;
+      }
       if (require_closed) {
         return false;
       }
@@ -1173,12 +1180,23 @@ void expect_compiled_mesh_winding_coherent(quader::test::BehaviorScenario &s,
   EXPECT_TRUE(shared_triangle_edges_have_opposite_winding(*mesh));
 }
 
-void expect_compiled_mesh_closed_and_winding_coherent(
+void expect_compiled_mesh_open_base_and_winding_coherent(
     quader::test::BehaviorScenario &s, std::string_view alias) {
   const std::optional<quader::QuaderMeshAsset> mesh =
       s.api().query().compiled_object_mesh(s.object(alias));
   ASSERT_TRUE(mesh.has_value());
-  EXPECT_TRUE(shared_triangle_edges_have_opposite_winding(*mesh, true));
+  std::size_t open_edge_count = 0U;
+  ASSERT_TRUE(shared_triangle_edges_have_opposite_winding(*mesh, false, &open_edge_count));
+  EXPECT_EQ(open_edge_count, 4U);
+  for (std::size_t triangle = 0; triangle < mesh->indices.size(); triangle += 3U) {
+    bool has_moved_vertex = false;
+    for (std::size_t corner = 0; corner < 3U; ++corner) {
+      const auto index = mesh->indices[triangle + corner];
+      ASSERT_LT(index, mesh->vertices.size());
+      has_moved_vertex = has_moved_vertex || mesh->vertices[index].position.y > 0.0F;
+    }
+    EXPECT_TRUE(has_moved_vertex) << "Extrusion retained a triangle on its source base";
+  }
 }
 
 void run_shift_rotate_extrude_stability_case(
@@ -3508,7 +3526,7 @@ TEST(ProgrammaticBehaviorScenarioTests, ShiftFaceMoveAndRotateExtrudeAndShiftFac
 }
 
 TEST(ProgrammaticBehaviorScenarioTests,
-     ShiftMoveExtrudesPolyToolFaceIntoClosedPrismAndUndoRedoPreservesIt) {
+     ShiftMoveExtrudesPolyToolFaceWithOpenBaseAndUndoRedoPreservesIt) {
   quader_poly::Document document;
   const std::array vertices{
       quader_poly::add_vertex(document, {-1.0f, 0.0f, -1.0f}),
@@ -3555,7 +3573,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
       .active_face(static_cast<int>(face));
   s.then()
       .mesh("poly")
-      .index_count(36u)
+      .index_count(30u)
       .bounds_min_near({-1.0f, 0.0f, -1.0f});
   const quader::test::BehaviorSnapshot after_extrude =
       s.snapshot("after poly shift extrude");
@@ -3563,7 +3581,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
       mesh_snapshot_for_alias(after_extrude, "poly");
   ASSERT_NE(extruded_mesh, nullptr);
   EXPECT_GT(extruded_mesh->bounds.max.y, 0.0f);
-  expect_compiled_mesh_closed_and_winding_coherent(s, "poly");
+  expect_compiled_mesh_open_base_and_winding_coherent(s, "poly");
 
   s.when().undo();
 
@@ -3591,8 +3609,8 @@ TEST(ProgrammaticBehaviorScenarioTests,
       .face_count(1)
       .active_alias("poly")
       .active_face(static_cast<int>(face));
-  s.then().mesh("poly").index_count(36u);
-  expect_compiled_mesh_closed_and_winding_coherent(s, "poly");
+  s.then().mesh("poly").index_count(30u);
+  expect_compiled_mesh_open_base_and_winding_coherent(s, "poly");
 }
 
 TEST(ProgrammaticBehaviorScenarioTests, ShiftRotateExtrudeUsesWorldPivotForTransformedComponentSelection) {

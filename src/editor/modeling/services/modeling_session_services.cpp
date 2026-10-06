@@ -3896,6 +3896,16 @@ ModelingOverlayService::selection_overlay_base_frame(
                 empty_hover, {});
           }
         }
+        if (template_entry == nullptr) {
+          // Geometry identity, not selection or hover, owns diagnostic work.
+          // Selected objects already retain their canonical triangulation.
+          entry.diagnostic_frame = same_previous_geometry
+              ? previous_entries[reusable->second].diagnostic_frame
+              : quader_editor_core::build_diagnostic_edge_overlay_frame(
+                    object, {}, entry.geometry.get(), &geometry_work_);
+        } else {
+          set_overlay_frame_object_id(entry.diagnostic_frame, object.id);
+        }
         if (selection_mode != quader_editor_core::SelectionMode::Object &&
             !active_source_wire_object && !tool_source_wire_object) {
           remove_source_wire_for_object(entry.frame, object.id);
@@ -3916,7 +3926,8 @@ ModelingOverlayService::selection_overlay_base_frame(
         remove_persistent_object_face_fill_triangles(entry.frame);
       }
       aggregate_triangle_count += entry.frame.triangles.size();
-      aggregate_line_count += entry.frame.lines.size();
+      aggregate_line_count += entry.frame.lines.size() +
+                              entry.diagnostic_frame.lines.size();
       aggregate_point_count += entry.frame.points.size();
       const std::size_t current_entry_index = next.object_entries.size();
       next.object_entries.push_back(std::move(entry));
@@ -3937,6 +3948,7 @@ ModelingOverlayService::selection_overlay_base_frame(
     next.frame.points.reserve(aggregate_point_count);
     for (const OverlayBaseObjectCacheEntry &entry : next.object_entries) {
       append_overlay_frame(next.frame, entry.frame);
+      append_overlay_frame(next.frame, entry.diagnostic_frame);
     }
   }
   {

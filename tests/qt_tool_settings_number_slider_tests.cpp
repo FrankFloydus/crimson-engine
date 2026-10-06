@@ -1793,6 +1793,7 @@ TEST(QtToolSettingsPanelTests,
   EXPECT_EQ(panel.findChild<QDoubleSpinBox *>(
                 QStringLiteral("tool_settings.control.uv_peel.u_repeat")), nullptr);
 
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Move).ok());
   panel.refresh();
   EXPECT_TRUE(panel.has_settings());
@@ -1834,6 +1835,7 @@ TEST(QtToolSettingsPanelTests, ActiveToolWithoutSettingsHidesTheEntireOverlay) {
       "Settings visibility");
   ASSERT_TRUE(created.ok());
   ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Move).ok());
   quader::QtToolSettingsPanel panel;
   panel.setAttribute(Qt::WA_DontShowOnScreen, true);
@@ -1841,6 +1843,7 @@ TEST(QtToolSettingsPanelTests, ActiveToolWithoutSettingsHidesTheEntireOverlay) {
   panel.show();
   ASSERT_TRUE(panel.has_settings());
   ASSERT_TRUE(panel.expanded());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Mirror).ok());
   const auto mirror_target = editor.tools().active_settings();
   ASSERT_EQ(editor.tools().active_tool(), "mirror");
@@ -1855,6 +1858,73 @@ TEST(QtToolSettingsPanelTests, ActiveToolWithoutSettingsHidesTheEntireOverlay) {
       QStringLiteral("tool_settings.target_title"));
   ASSERT_NE(header, nullptr);
   EXPECT_TRUE(header->text().isEmpty());
+  panel.unbind();
+}
+
+TEST(QtToolSettingsPanelTests,
+     AutoMergeVisibilityTracksSelectionModeAndUnchangedRefreshRetainsTheControl) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-auto-merge-settings-visibility-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  auto standalone = quader::create_standalone_editor();
+  auto &editor = standalone.editor();
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Move).ok());
+  int changes = 0;
+  quader::QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.bind(editor);
+  EXPECT_FALSE(panel.has_settings());
+  EXPECT_TRUE(panel.isHidden());
+
+  for (const auto mode : {quader::QuaderSelectionMode::Edge,
+                          quader::QuaderSelectionMode::Face,
+                          quader::QuaderSelectionMode::Object,
+                          quader::QuaderSelectionMode::Group}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
+    panel.refresh();
+    ASSERT_TRUE(panel.has_settings());
+    panel.show();
+    auto *toggle = panel.findChild<QCheckBox *>(
+        QStringLiteral("tool_settings.control.auto_merge_vertices"));
+    ASSERT_NE(toggle, nullptr);
+    toggle->setChecked(false);
+    panel.refresh();
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(toggle->isChecked());
+    const QPointer<QCheckBox> retained(toggle);
+    TexturePresentationEvents events;
+    toggle->installEventFilter(&events);
+    panel.presentation_changed = [&] { ++changes; };
+    changes = 0;
+    const auto revision = editor.tools().active_settings_revision();
+    for (int frame = 0; frame < 20; ++frame) panel.refresh();
+    EXPECT_EQ(editor.tools().active_settings_revision(), revision);
+    EXPECT_EQ(panel.findChild<QCheckBox *>(
+        QStringLiteral("tool_settings.control.auto_merge_vertices")), retained.data());
+    EXPECT_EQ(events.changes, 0);
+    EXPECT_EQ(changes, 0);
+
+    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    panel.refresh();
+    EXPECT_FALSE(panel.has_settings());
+    EXPECT_TRUE(panel.isHidden());
+    EXPECT_TRUE(retained.isNull());
+    EXPECT_EQ(panel.findChild<QCheckBox *>(
+        QStringLiteral("tool_settings.control.auto_merge_vertices")), nullptr);
+    const auto hidden_changes = changes;
+    for (int frame = 0; frame < 20; ++frame) panel.refresh();
+    EXPECT_EQ(changes, hidden_changes);
+    ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
+    panel.refresh();
+    toggle = panel.findChild<QCheckBox *>(
+        QStringLiteral("tool_settings.control.auto_merge_vertices"));
+    ASSERT_NE(toggle, nullptr);
+    EXPECT_FALSE(toggle->isChecked());
+  }
+  panel.presentation_changed = {};
   panel.unbind();
 }
 
@@ -6028,6 +6098,9 @@ TEST(QtToolSettingsPanelTests,
               "Settings Row Box");
     ASSERT_TRUE(object.ok()) << object.error_message();
     ASSERT_TRUE(editor.selection().select_object(object.value()).ok());
+    if (tool == quader::ViewportToolId::Move) {
+      ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
+    }
     ASSERT_TRUE(editor.tools().activate(tool).ok());
     quader::QtToolSettingsPanel panel;
     panel.setAttribute(Qt::WA_DontShowOnScreen, true);

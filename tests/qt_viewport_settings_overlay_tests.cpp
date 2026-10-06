@@ -264,6 +264,7 @@ TEST_F(QtViewportSettingsOverlayTests,
 TEST_F(QtViewportSettingsOverlayTests,
        FocusKeepsTheActiveSettingsTargetWithoutSettlingTheSharedOperation) {
   ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Top));
+  ASSERT_TRUE(editor_->selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(editor_->tools().activate(quader::ViewportToolId::Move).ok());
   ASSERT_TRUE(editor_->tools().set_setting("move", "auto_merge_vertices", false).ok());
   refresh();
@@ -317,6 +318,64 @@ TEST_F(QtViewportSettingsOverlayTests,
     EXPECT_FALSE(settings_->isHidden());
     EXPECT_EQ(settings_->parentWidget(), frame(quader::ViewportPaneId::Perspective));
   }
+}
+
+TEST_F(QtViewportSettingsOverlayTests,
+       AutoMergeOverlayHidesOutsideVertexModeAndReturnsToItsOriginWithoutIdleWork) {
+  ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Top));
+  ASSERT_TRUE(editor_->tools().activate(quader::ViewportToolId::Move).ok());
+  refresh();
+  EXPECT_FALSE(settings_->has_settings());
+  EXPECT_TRUE(settings_->isHidden());
+  ASSERT_TRUE(editor_->selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
+  ASSERT_TRUE(editor_->tools().set_setting("move", "auto_merge_vertices", false).ok());
+  const auto origin = editor_->tools().active_settings_presentation_origin();
+
+  const auto expect_unchanged_refresh = [&] {
+    refresh();
+    OverlayPresentationEvents events;
+    settings_->installEventFilter(&events);
+    const auto updates = host_->settings_overlay_update_count();
+    const auto revision = editor_->tools().active_settings_revision();
+    const auto geometry = settings_->geometry();
+    for (int frame_index = 0; frame_index < 12; ++frame_index) refresh();
+    EXPECT_EQ(host_->settings_overlay_update_count(), updates);
+    EXPECT_EQ(editor_->tools().active_settings_revision(), revision);
+    EXPECT_EQ(settings_->geometry(), geometry);
+    EXPECT_EQ(events.mutations, 0);
+    settings_->removeEventFilter(&events);
+  };
+
+  for (const auto mode : {quader::QuaderSelectionMode::Edge,
+                          quader::QuaderSelectionMode::Face,
+                          quader::QuaderSelectionMode::Object,
+                          quader::QuaderSelectionMode::Group}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    refresh();
+    ASSERT_TRUE(settings_->has_settings());
+    EXPECT_FALSE(settings_->isHidden());
+    EXPECT_EQ(settings_->parentWidget(), frame(quader::ViewportPaneId::Top));
+    auto *toggle = settings_->findChild<QCheckBox *>(
+        QStringLiteral("tool_settings.control.auto_merge_vertices"));
+    ASSERT_NE(toggle, nullptr);
+    EXPECT_FALSE(toggle->isChecked());
+    expect_unchanged_refresh();
+
+    ASSERT_TRUE(editor_->selection().set_mode(mode).ok());
+    refresh();
+    EXPECT_FALSE(settings_->has_settings());
+    EXPECT_TRUE(settings_->isHidden());
+    EXPECT_EQ(settings_->findChild<QCheckBox *>(
+        QStringLiteral("tool_settings.control.auto_merge_vertices")), nullptr);
+    expect_unchanged_refresh();
+    EXPECT_EQ(editor_->tools().active_settings_presentation_origin(), origin);
+    ASSERT_TRUE(editor_->selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
+  }
+  refresh();
+  EXPECT_TRUE(settings_->has_settings());
+  EXPECT_FALSE(settings_->isHidden());
+  EXPECT_EQ(settings_->parentWidget(), frame(quader::ViewportPaneId::Top));
+  EXPECT_FALSE(editor_->history().can_undo());
 }
 
 TEST_F(QtViewportSettingsOverlayTests,

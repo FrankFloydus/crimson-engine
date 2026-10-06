@@ -599,33 +599,122 @@ TEST_F(MoveAutoMergeTests, GenericTranslationsDoNotApplyTheMoveToolOption) {
                   1.0F);
 }
 
-TEST_F(MoveAutoMergeTests, EdgeModeWeldsDerivedVerticesAndPreservesSelectionMode) {
-  create(0.0F, ModelingSelectionMode::Edge);
+TEST_F(MoveAutoMergeTests, EdgeModeMoveKeepsCoincidentVerticesSeparate) {
+  create(1.0F, ModelingSelectionMode::Edge);
   begin();
+  move_one_unit();
   const auto committed = modeling_.commit_transform_drag(history_);
   ASSERT_TRUE(committed.ok) << committed.message;
-  EXPECT_EQ(document().vertices.size(), 5U);
+  EXPECT_TRUE(committed.changed);
+  EXPECT_EQ(document().vertices.size(), 6U);
   EXPECT_EQ(modeling_.selection_summary().selected_edge_count, 1U);
   EXPECT_EQ(modeling_.selection_mode(), ModelingSelectionMode::Edge);
+  const auto moved = document();
+  ASSERT_NE(quader_poly::find_vertex(moved, source_), nullptr);
+  EXPECT_FLOAT_EQ(quader_poly::find_vertex(moved, source_)->position.x, 1.0F);
+  EXPECT_EQ(history_.undo_count(), 1U);
   ASSERT_TRUE(history_.undo().ok);
   EXPECT_EQ(document().vertices.size(), 6U);
   EXPECT_EQ(modeling_.selection_summary().selected_edge_count, 1U);
+  ASSERT_TRUE(history_.redo().ok);
+  EXPECT_EQ(document().vertices.size(), 6U);
 }
 
-TEST_F(MoveAutoMergeTests, FaceModeWeldsDerivedVerticesAndPreservesSelectionMode) {
-  create(0.0F, ModelingSelectionMode::Face);
+TEST_F(MoveAutoMergeTests, FaceModeMoveKeepsCoincidentVerticesSeparate) {
+  create(1.0F, ModelingSelectionMode::Face);
   begin();
+  move_one_unit();
   const auto committed = modeling_.commit_transform_drag(history_);
   ASSERT_TRUE(committed.ok) << committed.message;
-  EXPECT_EQ(document().vertices.size(), 5U);
+  EXPECT_TRUE(committed.changed);
+  EXPECT_EQ(document().vertices.size(), 6U);
   EXPECT_EQ(modeling_.selection_summary().selected_face_count, 1U);
   EXPECT_EQ(modeling_.selection_mode(), ModelingSelectionMode::Face);
+  const auto moved = document();
+  ASSERT_NE(quader_poly::find_vertex(moved, source_), nullptr);
+  EXPECT_FLOAT_EQ(quader_poly::find_vertex(moved, source_)->position.x, 1.0F);
+  EXPECT_EQ(history_.undo_count(), 1U);
   ASSERT_TRUE(history_.undo().ok);
   EXPECT_EQ(document().vertices.size(), 6U);
   EXPECT_EQ(modeling_.selection_summary().selected_face_count, 1U);
+  ASSERT_TRUE(history_.redo().ok);
+  EXPECT_EQ(document().vertices.size(), 6U);
 }
 
-TEST_F(MoveAutoMergeTests, ExtrudedCapSelectionSurvivesWeldIntoDuplicateSidewall) {
+TEST_F(MoveAutoMergeTests, NonVertexZeroDistanceAcceptanceDoesNotWeldOrRecordHistory) {
+  for (const auto mode : {ModelingSelectionMode::Edge, ModelingSelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    create(0.0F, mode);
+    begin();
+    const auto committed = modeling_.commit_transform_drag(history_);
+    ASSERT_TRUE(committed.ok) << committed.message;
+    EXPECT_FALSE(committed.changed);
+    EXPECT_EQ(document().vertices.size(), 6U);
+    EXPECT_EQ(modeling_.selection_mode(), mode);
+    EXPECT_EQ(history_.undo_count(), 0U);
+  }
+}
+
+TEST_F(MoveAutoMergeTests, NonVertexExtrudeGestureAcceptedAtPressDoesNotWeld) {
+  for (const auto mode : {ModelingSelectionMode::Edge, ModelingSelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    create(0.0F, mode);
+    auto request = test::x_move_drag_begin({
+        .operation = ModelingTransformOperation::Extrude,
+    });
+    request.grid_snap_enabled = false;
+    const auto begun = modeling_.begin_transform_drag(request);
+    ASSERT_TRUE(begun.ok) << begun.message;
+    const auto committed = modeling_.commit_transform_drag(history_);
+    ASSERT_TRUE(committed.ok) << committed.message;
+    EXPECT_FALSE(committed.changed);
+    EXPECT_EQ(document().vertices.size(), 6U);
+    EXPECT_EQ(document().faces.size(), 2U);
+    EXPECT_EQ(modeling_.selection_mode(), mode);
+    EXPECT_EQ(history_.undo_count(), 0U);
+  }
+}
+
+TEST_F(MoveAutoMergeTests, FaceMoveRepeatDoesNotEnableVertexMergingAfterModeChange) {
+  create(1.0F, ModelingSelectionMode::Face);
+  begin();
+  move_one_unit();
+  const auto committed = modeling_.commit_transform_drag(history_);
+  ASSERT_TRUE(committed.ok) << committed.message;
+  ASSERT_TRUE(history_.undo().ok);
+  ASSERT_TRUE(modeling_.set_component_selection({
+      .modeling_object_id = object_.modeling_object_id,
+      .mode = ModelingSelectionMode::Vertex,
+      .vertices = {static_cast<int>(source_)},
+  }).ok);
+  const auto repeated = modeling_.repeat_last_action();
+  ASSERT_TRUE(repeated.ok) << repeated.message;
+  EXPECT_TRUE(repeated.changed);
+  EXPECT_EQ(document().vertices.size(), 6U);
+  EXPECT_EQ(modeling_.selection_mode(), ModelingSelectionMode::Vertex);
+}
+
+TEST_F(MoveAutoMergeTests, VertexMoveRepeatDoesNotMergeFaceSelection) {
+  create(1.0F);
+  begin();
+  move_one_unit();
+  const auto committed = modeling_.commit_transform_drag(history_);
+  ASSERT_TRUE(committed.ok) << committed.message;
+  ASSERT_EQ(document().vertices.size(), 5U);
+  ASSERT_TRUE(history_.undo().ok);
+  ASSERT_TRUE(modeling_.set_component_selection({
+      .modeling_object_id = object_.modeling_object_id,
+      .mode = ModelingSelectionMode::Face,
+      .faces = {static_cast<int>(face_)},
+  }).ok);
+  const auto repeated = modeling_.repeat_last_action();
+  ASSERT_TRUE(repeated.ok) << repeated.message;
+  EXPECT_TRUE(repeated.changed);
+  EXPECT_EQ(document().vertices.size(), 6U);
+  EXPECT_EQ(modeling_.selection_mode(), ModelingSelectionMode::Face);
+}
+
+TEST_F(MoveAutoMergeTests, ExtrudedCapSelectionSurvivesMoveWithoutVertexMerging) {
   const auto box = modeling_.create_box_from_bounds({
       .bounds = {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}},
       .name = "Extruded Cap Auto Merge",
@@ -651,13 +740,98 @@ TEST_F(MoveAutoMergeTests, ExtrudedCapSelectionSurvivesWeldIntoDuplicateSidewall
   ASSERT_TRUE(committed.ok) << committed.message;
   EXPECT_EQ(modeling_.selection_summary().selected_face_count, 1U);
   EXPECT_EQ(history_.undo_count(), 1U);
-  EXPECT_GT(document().vertices.size(), 8U);
+  EXPECT_EQ(document().vertices.size(), 12U);
   ASSERT_TRUE(history_.undo().ok);
   EXPECT_EQ(modeling_.selection_summary().selected_face_count, 1U);
   EXPECT_EQ(document().vertices.size(), 8U);
   ASSERT_TRUE(history_.redo().ok);
   EXPECT_EQ(modeling_.selection_summary().selected_face_count, 1U);
-  EXPECT_GT(document().vertices.size(), 8U);
+  EXPECT_EQ(document().vertices.size(), 12U);
+}
+
+TEST_F(MoveAutoMergeTests, FaceExtrusionOntoIndependentFaceKeepsDestinationDisconnected) {
+  quader_poly::Document source;
+  constexpr std::array<quader::QVec3, 4> kCorners{{
+      {0.0F, -1.0F, -1.0F}, {0.0F, 1.0F, -1.0F},
+      {0.0F, 1.0F, 1.0F}, {0.0F, -1.0F, 1.0F},
+  }};
+  std::array<quader_poly::ElementId, 4> source_vertices;
+  std::array<quader_poly::ElementId, 4> destination_vertices;
+  for (std::size_t index = 0; index < kCorners.size(); ++index) {
+    source_vertices[index] = quader_poly::add_vertex(source, kCorners[index]);
+    destination_vertices[index] = quader_poly::add_vertex(
+        source, kCorners[index] + quader::QVec3{1.0F, 0.0F, 0.0F});
+  }
+  const auto source_face = quader_poly::add_face(source, source_vertices);
+  const auto destination_face = quader_poly::add_face(source, destination_vertices);
+  ASSERT_NE(source_face, quader_poly::kInvalidElementId);
+  ASSERT_NE(destination_face, quader_poly::kInvalidElementId);
+  const auto created = modeling_.create_mesh({
+      .document = std::move(source), .name = "Extrusion coincident with loose face"});
+  ASSERT_TRUE(created.ok) << created.message;
+  object_ = created.object;
+  ASSERT_TRUE(modeling_.set_component_selection({
+      .modeling_object_id = object_.modeling_object_id,
+      .mode = ModelingSelectionMode::Face,
+      .faces = {static_cast<int>(source_face)},
+      .active_kind = ModelingActiveSelectionKind::Face,
+      .active_face = static_cast<int>(source_face),
+  }).ok);
+  ASSERT_TRUE(modeling_.interaction_settings().move_auto_merge_vertices);
+  auto request = test::x_move_drag_begin({
+      .operation = ModelingTransformOperation::Extrude,
+  });
+  request.grid_snap_enabled = false;
+  ASSERT_TRUE(modeling_.begin_transform_drag(request).ok);
+  move_one_unit();
+
+  const auto expect_separate_destination = [&](const quader_poly::Document &candidate) {
+    ASSERT_EQ(candidate.vertices.size(), 12U);
+    ASSERT_EQ(candidate.faces.size(), 6U);
+    const auto *cap = quader_poly::find_face(candidate, source_face);
+    const auto *destination = quader_poly::find_face(candidate, destination_face);
+    ASSERT_NE(cap, nullptr);
+    ASSERT_NE(destination, nullptr);
+    ASSERT_EQ(cap->vertices.size(), 4U);
+    EXPECT_EQ(destination->vertices,
+              (std::vector<quader_poly::ElementId>{destination_vertices.begin(),
+                                                  destination_vertices.end()}));
+    for (std::size_t index = 0; index < kCorners.size(); ++index) {
+      EXPECT_TRUE(std::ranges::find(source_vertices, cap->vertices[index]) ==
+                  source_vertices.end());
+      EXPECT_TRUE(std::ranges::find(destination_vertices, cap->vertices[index]) ==
+                  destination_vertices.end());
+      const auto *cap_vertex = quader_poly::find_vertex(candidate, cap->vertices[index]);
+      const auto *destination_vertex =
+          quader_poly::find_vertex(candidate, destination_vertices[index]);
+      ASSERT_NE(cap_vertex, nullptr);
+      ASSERT_NE(destination_vertex, nullptr);
+      EXPECT_FLOAT_EQ(cap_vertex->position.x, 1.0F);
+      EXPECT_FLOAT_EQ(cap_vertex->position.x, destination_vertex->position.x);
+      EXPECT_FLOAT_EQ(cap_vertex->position.y, destination_vertex->position.y);
+      EXPECT_FLOAT_EQ(cap_vertex->position.z, destination_vertex->position.z);
+    }
+    const auto cap_part = quader_poly::connected_component_selection(
+        candidate, {.hit = true, .kind = quader_poly::ElementKind::Face,
+                    .face_id = source_face});
+    EXPECT_EQ(cap_part.faces.size(), 5U);
+    EXPECT_FALSE(quader_poly::selection_contains_face(cap_part, destination_face));
+    const auto destination_part = quader_poly::connected_component_selection(
+        candidate, {.hit = true, .kind = quader_poly::ElementKind::Face,
+                    .face_id = destination_face});
+    EXPECT_EQ(destination_part.faces,
+              (std::vector<quader_poly::ElementId>{destination_face}));
+  };
+  // Shift extrusion publishes its candidate through the topology-changing
+  // scene projection rather than the transient position-only preview stream.
+  ASSERT_TRUE(modeling_.transform_drag_active());
+  ASSERT_NO_FATAL_FAILURE(expect_separate_destination(document()));
+
+  const auto committed = modeling_.commit_transform_drag(history_);
+  ASSERT_TRUE(committed.ok) << committed.message;
+  ASSERT_TRUE(committed.changed);
+  ASSERT_NO_FATAL_FAILURE(expect_separate_destination(document()));
+  EXPECT_EQ(history_.undo_count(), 1U);
 }
 
 TEST_F(MoveAutoMergeTests, FailedPublicationRetainsPreviewForRetryWithoutPublishing) {

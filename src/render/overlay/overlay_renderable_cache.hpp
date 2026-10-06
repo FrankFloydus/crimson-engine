@@ -101,13 +101,16 @@ public:
         std::vector<std::uint32_t> face_colors;
     };
 
+    /// Identifies an authored overlay triangle within retained face geometry.
     struct FaceTriangleKey {
       std::array<int, 5u> values{};
       bool operator==(const FaceTriangleKey &) const = default;
     };
+    /// Hashes the stable identity used to reuse face triangle slots.
     struct FaceTriangleKeyHash {
       std::size_t operator()(const FaceTriangleKey &key) const;
     };
+    /// Retains face triangle storage and slot identities across overlay updates.
     struct RetainedFaceSource {
       std::uint64_t signature = 0u;
       std::vector<ViewportOverlayTriangle> triangles;

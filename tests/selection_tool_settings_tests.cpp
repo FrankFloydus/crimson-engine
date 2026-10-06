@@ -85,6 +85,7 @@ TEST(SelectionToolSettingsTests, MoveAndLassoCheckboxesRetainValuesAndResetIndep
   auto standalone = create_standalone_editor();
   auto &editor = standalone.editor();
   auto &tools = editor.tools();
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(tools.activate(ViewportToolId::Move).ok());
   auto target = tools.active_settings();
   ASSERT_TRUE(target.active);
@@ -122,9 +123,65 @@ TEST(SelectionToolSettingsTests, MoveAndLassoCheckboxesRetainValuesAndResetIndep
   EXPECT_FALSE(editor.history().can_undo());
 }
 
+TEST(SelectionToolSettingsTests,
+     AutoMergeControlOnlyAppearsForVertexMoveAndPreservesItsStoredValue) {
+  auto standalone = create_standalone_editor();
+  auto &editor = standalone.editor();
+  auto &tools = editor.tools();
+  ASSERT_TRUE(tools.activate(ViewportToolId::Move).ok());
+  EXPECT_TRUE(tools.active_settings().controls.empty());
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Vertex).ok());
+  ASSERT_TRUE(tools.set_setting("move", "auto_merge_vertices", false).ok());
+  const auto origin = tools.active_settings_presentation_origin();
+  constexpr std::array kPanes{ViewportPaneId::Perspective, ViewportPaneId::Top,
+                              ViewportPaneId::Front, ViewportPaneId::Side};
+
+  for (const auto mode : {QuaderSelectionMode::Edge, QuaderSelectionMode::Face,
+                          QuaderSelectionMode::Object, QuaderSelectionMode::Group}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    const auto visible_revision = tools.active_settings_revision();
+    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    EXPECT_GT(tools.active_settings_revision(), visible_revision);
+    EXPECT_TRUE(tools.active_settings().controls.empty());
+    for (const auto pane : kPanes) {
+      EXPECT_TRUE(tools.settings_for_pane(pane).controls.empty());
+      const auto hidden_revision = tools.settings_revision(pane);
+      for (int frame = 0; frame < 8; ++frame)
+        EXPECT_EQ(tools.settings_revision(pane), hidden_revision);
+    }
+    const auto hidden_revision = tools.active_settings_revision();
+    for (int frame = 0; frame < 8; ++frame)
+      EXPECT_EQ(tools.active_settings_revision(), hidden_revision);
+    ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Vertex).ok());
+    EXPECT_GT(tools.active_settings_revision(), hidden_revision);
+    for (const auto pane : kPanes) {
+      const auto target = tools.settings_for_pane(pane);
+      ASSERT_EQ(target.controls.size(), 1u);
+      EXPECT_EQ(target.controls.front().id, "auto_merge_vertices");
+      EXPECT_FALSE(target.controls.front().bool_value);
+    }
+    EXPECT_EQ(tools.active_settings_presentation_origin(), origin);
+  }
+
+  for (const auto tool : {ViewportToolId::Rotate, ViewportToolId::Scale,
+                          ViewportToolId::Select}) {
+    SCOPED_TRACE(static_cast<int>(tool));
+    ASSERT_TRUE(tools.activate(tool).ok());
+    EXPECT_TRUE(tools.active_settings().controls.empty());
+    for (const auto pane : kPanes)
+      EXPECT_TRUE(tools.settings_for_pane(pane).controls.empty());
+  }
+  ASSERT_TRUE(tools.activate(ViewportToolId::Move).ok());
+  const auto restored = tools.active_settings();
+  ASSERT_EQ(restored.controls.size(), 1u);
+  EXPECT_FALSE(restored.controls.front().bool_value);
+  EXPECT_FALSE(editor.history().can_undo());
+}
+
 TEST(SelectionToolSettingsTests, InvalidBooleanSettingsPreserveValuesAndRevision) {
   auto standalone = create_standalone_editor();
   auto &tools = standalone.editor().tools();
+  ASSERT_TRUE(standalone.editor().selection().set_mode(QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(tools.activate(ViewportToolId::Move).ok());
   const auto revision = tools.active_settings_revision();
   for (const double value : {-1.0, 0.5, 2.0,
@@ -140,6 +197,7 @@ TEST(SelectionToolSettingsTests, SharedToolSettingsRemainPinnedAndEditableAcross
   auto standalone = create_standalone_editor();
   auto &editor = standalone.editor();
   auto &tools = editor.tools();
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(tools.activate(ViewportToolId::Move).ok());
   ASSERT_TRUE(editor.viewports().focus_pane(ViewportPaneId::Top).ok());
   ASSERT_TRUE(tools.activate(ViewportToolId::Rotate).ok());
@@ -183,6 +241,7 @@ TEST(SelectionToolSettingsTests, PaneAcquisitionRejectsStaleTargetsAndPreservesS
   auto standalone = create_standalone_editor();
   auto &editor = standalone.editor();
   auto &tools = editor.tools();
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(tools.activate(ViewportToolId::Move).ok());
   ASSERT_TRUE(editor.viewports().focus_pane(ViewportPaneId::Top).ok());
   const auto origin = tools.active_settings_presentation_origin();
@@ -351,8 +410,7 @@ TEST(SelectionToolSettingsTests, LassoSettingsTakePriorityOverPassiveSelectedCur
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::Move).ok());
   target = editor.tools().active_settings();
   ASSERT_EQ(target.tool_id, "move");
-  ASSERT_EQ(target.controls.size(), 1u);
-  EXPECT_EQ(target.controls[0].id, "auto_merge_vertices");
+  EXPECT_TRUE(target.controls.empty());
   EXPECT_FALSE(target.preview_active);
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::Select).ok());
   EXPECT_EQ(editor.tools().active_tool(), "select");
@@ -369,6 +427,7 @@ TEST(SelectionToolSettingsTests, NewSceneSessionUsesDefaultCheckboxValues) {
   ASSERT_TRUE(first_tools.set_setting("lasso_select", "select_partial_intersection", true).ok());
   auto next_session = create_standalone_editor();
   auto &next_tools = next_session.editor().tools();
+  ASSERT_TRUE(next_session.editor().selection().set_mode(QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(next_tools.activate(ViewportToolId::Move).ok());
   EXPECT_TRUE(next_tools.active_settings().controls[0].bool_value);
   ASSERT_TRUE(next_tools.activate(ViewportToolId::LassoSelect).ok());

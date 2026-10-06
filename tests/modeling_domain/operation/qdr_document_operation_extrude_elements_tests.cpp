@@ -125,7 +125,7 @@ TEST(QdrDocumentOperationExtrudeElementsTests, TransformExtrudeSelectedFaceCopie
 	EXPECT_TRUE(selection.faces.size() == 1U);
 	EXPECT_TRUE(selection.faces.front() == fixture.face);
 	EXPECT_TRUE(fixture.document.vertices.size() == 8U);
-	EXPECT_TRUE(fixture.document.faces.size() == 6U);
+	EXPECT_TRUE(fixture.document.faces.size() == 5U);
 	const Face* cap = find_face(fixture.document, fixture.face);
 	ASSERT_NE(cap, nullptr);
 	ASSERT_EQ(cap->vertices.size(), 4U);
@@ -139,7 +139,7 @@ TEST(QdrDocumentOperationExtrudeElementsTests, TransformExtrudeSelectedFaceCopie
 	EXPECT_TRUE(qdr_test::vec_nearly_equal(find_vertex(fixture.document, cap->vertices[2])->position, { -1.0F, 1.0F, 1.0F }));
 	EXPECT_TRUE(qdr_test::vec_nearly_equal(find_vertex(fixture.document, cap->vertices[3])->position, { -1.0F, -1.0F, 1.0F }));
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
-	EXPECT_TRUE(qdr_test::every_edge_is_closed(fixture.document));
+	EXPECT_EQ(qdr_test::open_edge_count(fixture.document), 4U);
 	EXPECT_TRUE(qdr_test::shared_edges_have_opposite_winding(fixture.document));
 }
 
@@ -228,7 +228,7 @@ TEST(QdrDocumentOperationExtrudeElementsTests, ClosedEdgeLedgeCopiesSelectedAndC
 	qdr_test::expect_valid_polygon_document_after_success(document, result);
 }
 
-TEST(QdrDocumentOperationExtrudeElementsTests, ExtrudeSelectedStandaloneFaceRetainsSourceCapAndClosesVolume) {
+TEST(QdrDocumentOperationExtrudeElementsTests, ExtrudeSelectedStandaloneFaceReplacesSourceAndLeavesBaseOpen) {
 	qdr_test::QuadFixture fixture = qdr_test::make_quad_document(7U);
 	Face* original_face = find_face(fixture.document, fixture.face);
 	ASSERT_NE(original_face, nullptr);
@@ -253,13 +253,15 @@ TEST(QdrDocumentOperationExtrudeElementsTests, ExtrudeSelectedStandaloneFaceReta
 	EXPECT_TRUE(selection.mode == SelectionMode::Face);
 	EXPECT_TRUE(selection.faces == std::vector<ElementId> { fixture.face });
 	EXPECT_TRUE(fixture.document.vertices.size() == 8U);
-	EXPECT_TRUE(fixture.document.faces.size() == 6U);
-	EXPECT_TRUE(qdr_test::every_edge_is_closed(fixture.document));
+	EXPECT_TRUE(fixture.document.faces.size() == 5U);
+	EXPECT_EQ(qdr_test::open_edge_count(fixture.document), 4U);
 	EXPECT_TRUE(qdr_test::shared_edges_have_opposite_winding(fixture.document));
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
 
 	const Face* moved_cap = find_face(fixture.document, fixture.face);
 	ASSERT_NE(moved_cap, nullptr);
+	EXPECT_EQ(moved_cap->material_slot, 7U);
+	EXPECT_EQ(moved_cap->normal_shading, SurfaceShading::Smooth);
 	EXPECT_EQ(
 		qdr_test::edge_normal_mode(
 			fixture.document,
@@ -289,14 +291,7 @@ TEST(QdrDocumentOperationExtrudeElementsTests, ExtrudeSelectedStandaloneFaceReta
 			fixture.bottom_left,
 		};
 	});
-	ASSERT_NE(source_cap, fixture.document.faces.end());
-	EXPECT_TRUE(source_cap->material_slot == 7U);
-	EXPECT_TRUE(source_cap->normal_shading == SurfaceShading::Smooth);
-	ASSERT_EQ(source_cap->uvs.size(), 4U);
-	EXPECT_TRUE(qdr_test::vec2_nearly_equal(source_cap->uvs[0], { 0.0F, 1.0F }));
-	EXPECT_TRUE(qdr_test::vec2_nearly_equal(source_cap->uvs[1], { 1.0F, 1.0F }));
-	EXPECT_TRUE(qdr_test::vec2_nearly_equal(source_cap->uvs[2], { 1.0F, 0.0F }));
-	EXPECT_TRUE(qdr_test::vec2_nearly_equal(source_cap->uvs[3], { 0.0F, 0.0F }));
+	EXPECT_EQ(source_cap, fixture.document.faces.end());
 }
 
 TEST(QdrDocumentOperationExtrudeElementsTests, ExtrudeSelectedClosedMeshFaceDoesNotAddOverlappingSourceCap) {
@@ -315,6 +310,101 @@ TEST(QdrDocumentOperationExtrudeElementsTests, ExtrudeSelectedClosedMeshFaceDoes
 	EXPECT_TRUE(document.faces.size() == 10U);
 	EXPECT_TRUE(qdr_test::every_edge_is_closed(document));
 	EXPECT_TRUE(qdr_test::shared_edges_have_opposite_winding(document));
+}
+
+TEST(QdrDocumentOperationExtrudeElementsTests, OpenInsetPanelExtrusionReplacesSourceAndKeepsOnlyBoundaryRoots) {
+    for (const bool use_transform : {false, true}) {
+        SCOPED_TRACE(use_transform);
+        Document document;
+        const std::array outer{
+            add_vertex(document, {0.0F, -5.5F, -5.5F}),
+            add_vertex(document, {0.0F, -5.5F, 5.5F}),
+            add_vertex(document, {0.0F, 5.5F, 5.5F}),
+            add_vertex(document, {0.0F, 5.5F, -5.5F}),
+        };
+        const std::array inner{
+            add_vertex(document, {-0.5F, -4.5F, -4.5F}),
+            add_vertex(document, {-0.5F, -4.5F, 4.5F}),
+            add_vertex(document, {-0.5F, 4.5F, 4.5F}),
+            add_vertex(document, {-0.5F, 4.5F, -4.5F}),
+        };
+        Selection selection;
+        selection.mode = SelectionMode::Face;
+        selection.faces.push_back(add_face(document, inner));
+        for (std::size_t index = 0; index < outer.size(); ++index) {
+            const auto next = (index + 1U) % outer.size();
+            selection.faces.push_back(add_face(document,
+                std::array{outer[index], outer[next], inner[next], inner[index]}));
+        }
+        selection.has_active = true;
+        selection.active_kind = ElementKind::Face;
+        selection.active_face = selection.faces.front();
+        const auto selected_faces = selection.faces;
+        const auto loose_vertex = add_vertex(document, {100.0F, 200.0F, 300.0F});
+        const Document before = document;
+        Transform3 transform;
+        transform.x_axis = {0.0F, 0.0F, -1.0F};
+        transform.z_axis = {1.0F, 0.0F, 0.0F};
+        transform.origin = {0.0F, 0.0F, 11.0F};
+
+        const auto result = use_transform
+            ? transform_extrude_selected_elements(document, selection, transform, {})
+            : extrude_selected_elements(document, selection, {0.0F, 0.0F, 11.0F});
+
+        ASSERT_TRUE(result.success) << result.message;
+        ASSERT_TRUE(result.changed);
+        EXPECT_EQ(document.vertices.size(), 13U);
+        EXPECT_EQ(document.faces.size(), 9U);
+        EXPECT_EQ(selection.faces, selected_faces);
+        EXPECT_EQ(selection.active_face, selected_faces.front());
+        EXPECT_NE(find_vertex(document, loose_vertex), nullptr);
+        for (const auto id : outer) {
+            EXPECT_NE(find_vertex(document, id), nullptr);
+        }
+        for (const auto id : inner) {
+            EXPECT_EQ(find_vertex(document, id), nullptr);
+        }
+        for (const auto id : selected_faces) {
+            const Face* source = find_face(before, id);
+            const Face* cap = find_face(document, id);
+            ASSERT_NE(source, nullptr);
+            ASSERT_NE(cap, nullptr);
+            ASSERT_EQ(cap->vertices.size(), source->vertices.size());
+            for (std::size_t corner = 0; corner < cap->vertices.size(); ++corner) {
+                const auto source_position = find_vertex(before, source->vertices[corner])->position;
+                const auto expected = use_transform
+                    ? quader::QVec3{source_position.z, source_position.y, 11.0F - source_position.x}
+                    : source_position + quader::QVec3{0.0F, 0.0F, 11.0F};
+                const Vertex* moved = find_vertex(document, cap->vertices[corner]);
+                ASSERT_NE(moved, nullptr);
+                EXPECT_TRUE(qdr_test::vec_nearly_equal(moved->position, expected));
+                EXPECT_EQ(find_vertex(before, moved->id), nullptr);
+            }
+        }
+        for (const Face& face : document.faces) {
+            EXPECT_FALSE(std::ranges::all_of(face.vertices, [&](ElementId id) {
+                return find_vertex(before, id) != nullptr;
+            }));
+        }
+        EXPECT_EQ(qdr_test::open_edge_count(document), 4U);
+        EXPECT_TRUE(qdr_test::shared_edges_have_opposite_winding(document));
+        const auto connected = connected_component_selection(document,
+            PickResult{.hit = true, .kind = ElementKind::Face, .face_id = selected_faces.front()});
+        EXPECT_EQ(connected.faces.size(), 9U);
+        EXPECT_TRUE(validate_polygon_document(
+            document, PolygonDocumentValidationPolicy::AuthoredTopology).ok());
+        if (!use_transform) {
+            // Sideways movement leaves two collapsed walls in authored topology for diagnostics.
+            std::size_t collapsed_walls = 0U;
+            for (const auto& diagnostic : validate_polygon_document(document).diagnostics) {
+                if (diagnostic.code == PolygonDocumentDiagnosticCode::TriangulationFailure) {
+                    EXPECT_EQ(std::ranges::find(selected_faces, diagnostic.face_id), selected_faces.end());
+                    ++collapsed_walls;
+                }
+            }
+            EXPECT_EQ(collapsed_walls, 2U);
+        }
+    }
 }
 
 TEST(QdrDocumentOperationExtrudeElementsTests, ExtrudeSelectedCircularBoundaryEdgesKeepsWallNormalsAndWindingCoherent) {

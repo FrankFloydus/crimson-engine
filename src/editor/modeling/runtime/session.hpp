@@ -1222,6 +1222,7 @@ class SelectionOverlayGeometry;
 struct SelectionOverlayGeometryWorkCounters {
   std::uint64_t geometry_build_count = 0;
   std::uint64_t face_triangulation_count = 0;
+  std::uint64_t diagnostic_face_triangulation_count = 0;
   std::uint64_t geometry_position_refresh_count = 0;
   std::uint64_t frame_position_refresh_count = 0;
   std::uint64_t semantic_aggregate_build_count = 0;
@@ -1274,6 +1275,11 @@ SelectionOverlayFrame build_selection_hover_overlay_frame(
 SelectionOverlayFrame build_selection_hover_overlay_frame(
     const std::vector<PolygonObject> &objects, SelectionMode mode,
     const SelectionHoverState &hover, const SelectionOverlayStyle &style = {});
+/// Emits authored boundaries only for faces rejected by surface triangulation.
+SelectionOverlayFrame build_diagnostic_edge_overlay_frame(
+    const PolygonObject &object, const SelectionOverlayStyle &style = {},
+    const SelectionOverlayGeometry *geometry = nullptr,
+    SelectionOverlayGeometryWorkCounters *work = nullptr);
 SelectionOverlayFrame
 build_diagnostic_edge_overlay_frame(std::span<const PolygonObject> objects,
                                     const SelectionOverlayStyle &style = {});

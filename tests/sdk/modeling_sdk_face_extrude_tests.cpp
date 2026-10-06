@@ -113,6 +113,45 @@ PolygonDocument make_extrude_corner(float scale = 1.0F, bool reverse = false) {
   return document;
 }
 
+/** Builds an open inset panel whose outer boundary lies in the YZ plane. */
+PolygonDocument make_extrude_inset_panel(bool include_loose_vertex = false) {
+  AuthoredTopology topology;
+  topology.vertices = {
+      {make_id<VertexTag>(1U), {0.0F, -5.5F, -5.5F}},
+      {make_id<VertexTag>(2U), {0.0F, 5.5F, -5.5F}},
+      {make_id<VertexTag>(3U), {0.0F, 5.5F, 5.5F}},
+      {make_id<VertexTag>(4U), {0.0F, -5.5F, 5.5F}},
+      {make_id<VertexTag>(5U), {-0.5F, -4.5F, -4.5F}},
+      {make_id<VertexTag>(6U), {-0.5F, 4.5F, -4.5F}},
+      {make_id<VertexTag>(7U), {-0.5F, 4.5F, 4.5F}},
+      {make_id<VertexTag>(8U), {-0.5F, -4.5F, 4.5F}},
+  };
+  const std::array<std::array<std::uint32_t, 4>, 5> face_vertices{{
+      {5U, 6U, 7U, 8U}, {1U, 2U, 6U, 5U}, {2U, 3U, 7U, 6U},
+      {3U, 4U, 8U, 7U}, {4U, 1U, 5U, 8U}}};
+  for (std::size_t index = 0; index < face_vertices.size(); ++index) {
+    AuthoredTopologyFace face;
+    face.id = make_id<FaceTag>(static_cast<std::uint32_t>(11U + index));
+    for (const auto vertex_id : face_vertices[index]) {
+      face.vertices.push_back(make_id<VertexTag>(vertex_id));
+    }
+    topology.faces.push_back(face);
+  }
+  topology.next_vertex_id = 9U;
+  topology.next_face_id = 16U;
+  if (include_loose_vertex) {
+    topology.vertices.push_back({make_id<VertexTag>(9U), {20.0F, 30.0F, 40.0F}});
+    topology.next_vertex_id = 10U;
+  }
+  auto document = PolygonDocument::from_authored_topology(topology).or_throw();
+  static_cast<void>(document.apply_selection({
+      .kind = SelectionKind::Face,
+      .faces = document.face_ids(),
+      .has_active = true,
+      .active_face = make_id<FaceTag>(11U)}).or_throw());
+  return document;
+}
+
 /** Compares authored output while allowing normal floating-point rounding. */
 void expect_extrude_equivalent(const PolygonDocument& expected,
                               const PolygonDocument& actual) {
@@ -186,7 +225,7 @@ TEST(ModelingSdkFaceExtrudeTests, DefaultOptionsCreateOneUnitRegionWithSelectedC
   EXPECT_TRUE(result.value().dirty.topology);
   EXPECT_TRUE(result.value().dirty.geometry);
   EXPECT_EQ(document.vertex_count(), 8U);
-  EXPECT_EQ(document.face_count(), 6U);
+  EXPECT_EQ(document.face_count(), 5U);
   EXPECT_FALSE(document.shares_topology_with(before));
   EXPECT_EQ(document.selection().kind, SelectionKind::Face);
   EXPECT_EQ(document.selection().faces, (std::vector<FaceId>{make_id<FaceTag>(11U)}));
@@ -594,7 +633,7 @@ TEST(ModelingSdkFaceExtrudeTests, SelectionOperationsAndCheckedFacadesForwardTyp
       ASSERT_TRUE(receipt.changed);
       const auto payload = mesh.payloads().authored_polygon();
       EXPECT_EQ(payload.vertices.size(), 8U);
-      EXPECT_EQ(payload.faces.size(), mode == FaceExtrudeMode::Individual ? 5U : 6U);
+      EXPECT_EQ(payload.faces.size(), 5U);
       const auto cap = std::ranges::find(payload.faces, make_id<FaceTag>(11U),
                                         &AuthoredPolygonFacePayload::id);
       ASSERT_NE(cap, payload.faces.end());
@@ -655,9 +694,9 @@ TEST(ModelingSdkFaceExtrudeTests, SmallSignedAmountsKeepEveryWallAtSmallAndDista
           continue;
         }
         EXPECT_EQ(document.vertex_count(), 8U);
-        EXPECT_EQ(document.face_count(), mode == FaceExtrudeMode::Individual ? 5U : 6U);
+        EXPECT_EQ(document.face_count(), 5U);
         EXPECT_EQ(result.value().created.vertices.size(), 4U);
-        EXPECT_EQ(result.value().created.faces.size(), mode == FaceExtrudeMode::Individual ? 4U : 5U);
+        EXPECT_EQ(result.value().created.faces.size(), 4U);
         EXPECT_EQ(document.selection().faces, (std::vector<FaceId>{make_id<FaceTag>(11U)}));
         EXPECT_EQ(document.selection().active_face, make_id<FaceTag>(11U));
         const auto after = document.authored_topology().or_throw();
@@ -708,7 +747,7 @@ TEST(ModelingSdkFaceExtrudeTests, DistantUnitQuadExtrudesWithoutGlobalAreaCancel
     ASSERT_TRUE(result.ok()) << result.error_message();
     ASSERT_TRUE(result.value().changed);
     const auto after = document.authored_topology().or_throw();
-    EXPECT_EQ(after.faces.size(), mode == FaceExtrudeMode::Individual ? 5U : 6U);
+    EXPECT_EQ(after.faces.size(), 5U);
     const auto cap = std::ranges::find(after.faces, make_id<FaceTag>(11U),
                                       &AuthoredTopologyFace::id);
     ASSERT_NE(cap, after.faces.end());
@@ -785,10 +824,147 @@ TEST(ModelingSdkFaceExtrudeTests, UnselectedCollapsedFaceAndItsAttributesSurvive
     EXPECT_NE(std::ranges::find(after.hard_normal_edges, hard), after.hard_normal_edges.end());
     EXPECT_NE(std::ranges::find(after.soft_normal_edges, soft), after.soft_normal_edges.end());
     EXPECT_EQ(document.selection().faces, (std::vector<FaceId>{make_id<FaceTag>(11U)}));
-    EXPECT_EQ(document.face_count(), mode == FaceExtrudeMode::Individual ? 6U : 7U);
+    EXPECT_EQ(document.face_count(), 6U);
     EXPECT_TRUE(PolygonDocument::from_authored_topology(after).ok());
     EXPECT_FALSE(document.validate().ok());
   }
+}
+
+TEST(ModelingSdkFaceExtrudeTests, OpenInsetPanelExtrusionReplacesSourceAndOnlyRemovesOrphanedSourceVertices) {
+  for (const bool include_loose_vertex : {false, true}) {
+    SCOPED_TRACE(include_loose_vertex);
+    const auto source = make_extrude_inset_panel(include_loose_vertex);
+    const auto source_topology = source.authored_topology().or_throw();
+    const auto prepared = source.prepare_face_extrusion(FaceExtrudeMode::Region).or_throw();
+    auto document = source;
+
+    const auto result = document.extrude_selected_faces({
+        .mode = FaceExtrudeMode::Region, .amount = 11.0F,
+        .region_direction = Vec3{0.0F, 0.0F, 1.0F}});
+
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    ASSERT_TRUE(result.value().changed);
+    EXPECT_EQ(document.face_count(), 9U);
+    EXPECT_EQ(document.vertex_count(), include_loose_vertex ? 13U : 12U);
+    EXPECT_EQ(document.selection().faces, source.selection().faces);
+    EXPECT_EQ(document.selection().active_face, source.selection().active_face);
+    EXPECT_EQ(result.value().created.vertices.size(), 8U);
+    EXPECT_EQ(result.value().created.faces.size(), 4U);
+    EXPECT_TRUE(result.value().deleted.faces.empty());
+    EXPECT_EQ(result.value().deleted.vertices,
+              (std::vector<VertexId>{make_id<VertexTag>(5U), make_id<VertexTag>(6U),
+                                     make_id<VertexTag>(7U), make_id<VertexTag>(8U)}));
+    const auto topology = document.authored_topology().or_throw();
+    for (const auto& face : topology.faces) {
+      // Every surviving face uses at least one new vertex: no source panel remains.
+      EXPECT_TRUE(std::ranges::any_of(face.vertices, [&](const auto vertex_id) {
+        return std::ranges::find(result.value().created.vertices, vertex_id) !=
+               result.value().created.vertices.end();
+      }));
+    }
+    for (const auto& source_face : source_topology.faces) {
+      const auto cap = std::ranges::find(topology.faces, source_face.id,
+                                         &AuthoredTopologyFace::id);
+      ASSERT_NE(cap, topology.faces.end());
+      ASSERT_EQ(cap->vertices.size(), source_face.vertices.size());
+      for (std::size_t index = 0; index < cap->vertices.size(); ++index) {
+        const auto source_vertex = std::ranges::find(
+            source_topology.vertices, source_face.vertices[index], &AuthoredTopologyVertex::id);
+        const auto cap_vertex = std::ranges::find(
+            topology.vertices, cap->vertices[index], &AuthoredTopologyVertex::id);
+        ASSERT_NE(source_vertex, source_topology.vertices.end());
+        ASSERT_NE(cap_vertex, topology.vertices.end());
+        EXPECT_FLOAT_EQ(cap_vertex->position.x, source_vertex->position.x);
+        EXPECT_FLOAT_EQ(cap_vertex->position.y, source_vertex->position.y);
+        EXPECT_FLOAT_EQ(cap_vertex->position.z, source_vertex->position.z + 11.0F);
+      }
+    }
+    if (include_loose_vertex) {
+      const auto loose = std::ranges::find(topology.vertices, make_id<VertexTag>(9U),
+                                           &AuthoredTopologyVertex::id);
+      ASSERT_NE(loose, topology.vertices.end());
+      EXPECT_FLOAT_EQ(loose->position.x, 20.0F);
+      EXPECT_FLOAT_EQ(loose->position.y, 30.0F);
+      EXPECT_FLOAT_EQ(loose->position.z, 40.0F);
+    }
+    const auto evaluated = prepared.evaluate(11.0F, Vec3{0.0F, 0.0F, 1.0F});
+    ASSERT_TRUE(evaluated.ok()) << evaluated.error_message();
+    expect_extrude_equivalent(document, evaluated.value().document);
+    expect_extrude_receipt(result.value(), evaluated.value().receipt);
+  }
+}
+
+TEST(ModelingSdkFaceExtrudeTests, PreparedInsetPanelSamplesKeepSourceRelativeReceiptsAndRestoreZero) {
+  const auto source = make_extrude_inset_panel();
+  const auto before = source;
+  const auto prepared = source.prepare_face_extrusion(FaceExtrudeMode::Region).or_throw();
+  const Vec3 direction{0.0F, 0.0F, 1.0F};
+  const auto first = prepared.evaluate(11.0F, direction).or_throw();
+  for (const float amount : {5.5F, -11.0F, 0.0F, 11.0F}) {
+    SCOPED_TRACE(amount);
+    auto expected = source;
+    const auto fresh = expected.extrude_selected_faces({
+        .mode = FaceExtrudeMode::Region, .amount = amount,
+        .region_direction = direction}).or_throw();
+    const auto sample = prepared.evaluate(amount, direction).or_throw();
+    expect_extrude_equivalent(expected, sample.document);
+    expect_extrude_receipt(fresh, sample.receipt);
+    if (amount == 0.0F) {
+      expect_extrude_unchanged(before, sample.document);
+      EXPECT_FALSE(sample.receipt.changed);
+      EXPECT_TRUE(sample.receipt.created.empty());
+      EXPECT_TRUE(sample.receipt.deleted.empty());
+    } else {
+      EXPECT_EQ(sample.document.vertex_ids(), first.document.vertex_ids());
+      EXPECT_EQ(sample.document.face_ids(), first.document.face_ids());
+      EXPECT_EQ(sample.receipt.created.vertices, first.receipt.created.vertices);
+      EXPECT_EQ(sample.receipt.created.faces, first.receipt.created.faces);
+      EXPECT_EQ(sample.receipt.deleted.vertices, first.receipt.deleted.vertices);
+    }
+    expect_extrude_unchanged(before, source);
+  }
+}
+
+TEST(ModelingSdkFaceExtrudeTests, InsetPanelExtrusionUndoRedoRestoresSourceAndGeneratedTopology) {
+  auto api = ModelingApi::create();
+  auto mesh = api.add_document(make_extrude_inset_panel(), "Inset panel");
+  ASSERT_TRUE(mesh.valid());
+  ASSERT_TRUE(mesh.faces().all().replace().success);
+  const auto source = mesh.payloads().authored_polygon();
+  const auto selected_region = mesh.faces().selected();
+  const std::vector<FaceId> selected(selected_region.faces().begin(), selected_region.faces().end());
+
+  const auto result = api.operations().extrude({
+      .mode = FaceExtrudeMode::Region, .amount = 11.0F,
+      .region_direction = Vec3{0.0F, 0.0F, 1.0F}});
+
+  ASSERT_TRUE(result.success) << result.error.message;
+  ASSERT_TRUE(result.changed);
+  const auto extruded = mesh.payloads().authored_polygon();
+  EXPECT_EQ(extruded.faces.size(), 9U);
+  EXPECT_EQ(extruded.vertices.size(), 12U);
+  EXPECT_TRUE(std::ranges::equal(mesh.faces().selected().faces(), selected));
+  const auto expect_payload = [](const AuthoredPolygonPayload& expected,
+                                 const AuthoredPolygonPayload& actual) {
+    EXPECT_EQ(actual.vertices, expected.vertices);
+    ASSERT_EQ(actual.positions.size(), expected.positions.size());
+    for (std::size_t index = 0; index < expected.positions.size(); ++index) {
+      EXPECT_FLOAT_EQ(actual.positions[index].x, expected.positions[index].x);
+      EXPECT_FLOAT_EQ(actual.positions[index].y, expected.positions[index].y);
+      EXPECT_FLOAT_EQ(actual.positions[index].z, expected.positions[index].z);
+    }
+    ASSERT_EQ(actual.faces.size(), expected.faces.size());
+    for (std::size_t index = 0; index < expected.faces.size(); ++index) {
+      EXPECT_EQ(actual.faces[index].id, expected.faces[index].id);
+      EXPECT_EQ(actual.faces[index].vertices, expected.faces[index].vertices);
+    }
+  };
+  ASSERT_TRUE(api.undo().success);
+  expect_payload(source, mesh.payloads().authored_polygon());
+  EXPECT_TRUE(std::ranges::equal(mesh.faces().selected().faces(), selected));
+  ASSERT_TRUE(api.redo().success);
+  expect_payload(extruded, mesh.payloads().authored_polygon());
+  EXPECT_TRUE(std::ranges::equal(mesh.faces().selected().faces(), selected));
 }
 
 TEST(ModelingSdkFaceExtrudeTests, PreparedEvaluationsMatchFreshOperationsAcrossModesAndAffineFrames) {

@@ -79,8 +79,10 @@ Dedicated face extrusion uses the typed `FaceExtrudeOptions` contract and the sh
 builder in `quader_poly_document_surface_operations.cpp`. Its affine operation space owns both
 the amount metric and geometric winding, including mirrored transforms. Region displacement
 uses equal unit-face weights; Along Normals uses selected corner-angle weights with unit-length
-vertex displacement. Region modes retain fully open source regions; Individual keeps independent
-caps attached to their original base edges. The options path validates authored connectivity,
+vertex displacement. Region modes replace selected source faces with moved caps and boundary
+walls, leaving an open source boundary open. Only abandoned vertices from the selected source
+are removed; unrelated loose vertices remain authored. Individual keeps independent caps attached
+to their original base edges. The options path validates authored connectivity,
 identities and finite attributes atomically. Selected source/result caps must triangulate in an
 anchored, normalized face metric; document location and uniform scale do not change this check.
 Finite thin or tangent side walls remain authored faces, and unchanged unselected geometric

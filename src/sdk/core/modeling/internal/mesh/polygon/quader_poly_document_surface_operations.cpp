@@ -28,14 +28,6 @@ using namespace document_internal;
 
 namespace {
 
-/**
- * Controls whether copied-face extrusion retains an open source region as a closing cap.
- */
-enum class FaceExtrudeSourcePolicy {
-    Discard,
-    RetainFullyOpenRegion,
-};
-
 /** Controls face shading for the side region generated around a copied cap. */
 enum class FaceSideShadingPolicy {
     Default,
@@ -671,8 +663,8 @@ OperationResult extrude_selected_faces_with_copied_vertices(
     Document& document,
     Selection& selection,
     CopyVertex&& copy_vertex,
-    FaceExtrudeSourcePolicy source_policy,
     FaceSideShadingPolicy side_shading_policy,
+    bool prune_source_vertices,
     std::string_view empty_message,
     std::string_view missing_message,
     std::string_view unchanged_message,
@@ -694,28 +686,6 @@ OperationResult extrude_selected_faces_with_copied_vertices(
         for (const Edge& edge : face_edges(face)) {
             ++selected_edge_counts[{ edge.a, edge.b }];
         }
-    }
-
-    bool retain_source_region = false;
-    if (source_policy == FaceExtrudeSourcePolicy::RetainFullyOpenRegion) {
-        // A free surface has no surrounding shell to close the extrusion at its source. Retain
-        // that region only when every selected boundary edge was open before topology mutation.
-        const auto document_faces_by_edge = face_indices_by_edge(document);
-        bool has_boundary = false;
-        retain_source_region = true;
-        for (const auto& [edge, selected_count] : selected_edge_counts) {
-            if (selected_count != 1) {
-                continue;
-            }
-
-            has_boundary = true;
-            const auto document_edge = document_faces_by_edge.find(edge);
-            if (document_edge == document_faces_by_edge.end() || document_edge->second.size() != 1U) {
-                retain_source_region = false;
-                break;
-            }
-        }
-        retain_source_region = retain_source_region && has_boundary;
     }
 
     std::map<ElementId, ElementId> copied_vertices;
@@ -795,28 +765,6 @@ OperationResult extrude_selected_faces_with_copied_vertices(
         }
     }
 
-    if (retain_source_region) {
-        for (const Face& original_face : faces) {
-            if (!contains_id(selected_faces, original_face.id)) {
-                continue;
-            }
-
-            std::vector<ElementId> source_vertices(
-                original_face.vertices.rbegin(), original_face.vertices.rend());
-            const ElementId source_face_id = add_face(document, source_vertices, original_face.material_slot);
-            Face* source_face = find_face(document, source_face_id);
-            if (source_face == nullptr) {
-                continue;
-            }
-
-            source_face->normal_shading = original_face.normal_shading;
-            source_face->texture_transform = original_face.texture_transform;
-            if (original_face.uvs.size() == original_face.vertices.size()) {
-                source_face->uvs.assign(original_face.uvs.rbegin(), original_face.uvs.rend());
-            }
-        }
-    }
-
     std::vector<EdgeNormalModeCopy> normal_mode_copies;
     for (const Face& original_face : faces) {
         for (const Edge source_edge : face_edges(original_face)) {
@@ -837,6 +785,22 @@ OperationResult extrude_selected_faces_with_copied_vertices(
 
     if (!preserve_authored_faces) {
         prune_invalid_faces(document);
+    }
+    // The cap replaces the selected surface, including a fully open region. Remove only
+    // its abandoned interior vertices; unrelated authored loose vertices remain intact.
+    if (prune_source_vertices) {
+        std::set<ElementId> abandoned_source_vertices;
+        for (const auto& copied_vertex : copied_vertices) {
+            abandoned_source_vertices.insert(copied_vertex.first);
+        }
+        for (const Face& face : document.faces) {
+            for (const ElementId id : face.vertices) {
+                abandoned_source_vertices.erase(id);
+            }
+        }
+        std::erase_if(document.vertices, [&](const Vertex& vertex) {
+            return abandoned_source_vertices.contains(vertex.id);
+        });
     }
     prune_normal_edge_states(document);
     selection.clear();
@@ -962,6 +926,7 @@ OperationResult extrude_selected_edges_with_copied_vertices(
 /** Stores one immutable topology generation and its absolute displacement inputs. */
 struct FaceExtrusionPreparationData {
     struct MovingVertex {
+        ElementId id = kInvalidElementId;
         std::size_t index = 0;
         ExtrudeVector source_position;
         ExtrudeVector direction;
@@ -1118,7 +1083,6 @@ OperationResult extrude_selected_faces(
 
     Document candidate = document;
     Selection candidate_selection = selection;
-    const std::size_t source_vertex_count = candidate.vertices.size();
     const std::size_t source_face_count = candidate.faces.size();
     bool valid_positions = true;
     const auto copy_vertex = [&](std::map<ElementId, ElementId>& copied_vertices, ElementId id) {
@@ -1142,9 +1106,9 @@ OperationResult extrude_selected_faces(
         return copied_id;
     };
     std::vector<ElementId> generated_side_faces;
-    const auto apply_region = [&](Selection& target, FaceExtrudeSourcePolicy policy) {
+    const auto apply_region = [&](Selection& target) {
         return extrude_selected_faces_with_copied_vertices(
-            candidate, target, copy_vertex, policy, FaceSideShadingPolicy::InheritSource,
+            candidate, target, copy_vertex, FaceSideShadingPolicy::InheritSource, true,
             "Select one or more faces to extrude.", "No selected faces were found.",
             "No selected faces were extruded.", true, &generated_side_faces);
     };
@@ -1159,7 +1123,7 @@ OperationResult extrude_selected_faces(
             face_selection.mode = SelectionMode::Face;
             face_selection.faces = {source.face.id};
             face_selection.active_face = source.face.id;
-            const auto result = apply_region(face_selection, FaceExtrudeSourcePolicy::Discard);
+            const auto result = apply_region(face_selection);
             if (!result.success || !valid_positions) {
                 return OperationResult::failure("Could not prepare individual extrusion geometry.");
             }
@@ -1171,7 +1135,7 @@ OperationResult extrude_selected_faces(
         }
         activate_face_or_last_selection(candidate_selection, active_face_or_invalid(selection));
     } else {
-        const auto result = apply_region(candidate_selection, FaceExtrudeSourcePolicy::RetainFullyOpenRegion);
+        const auto result = apply_region(candidate_selection);
         if (!result.success || !valid_positions) {
             return OperationResult::failure("Could not prepare extrusion geometry.");
         }
@@ -1198,8 +1162,15 @@ OperationResult extrude_selected_faces(
     OperationResult result;
     result.changed = true;
     result.affected.faces = candidate_selection.faces;
-    for (std::size_t index = source_vertex_count; index < candidate.vertices.size(); ++index) {
-        result.created.vertices.push_back(candidate.vertices[index].id);
+    for (const Vertex& vertex : candidate.vertices) {
+        if (source_vertices.find(vertex.id) == nullptr) {
+            result.created.vertices.push_back(vertex.id);
+        }
+    }
+    for (const Vertex& vertex : document.vertices) {
+        if (candidate_vertices.find(vertex.id) == nullptr) {
+            result.deleted.vertices.push_back(vertex.id);
+        }
     }
     for (std::size_t index = source_face_count; index < candidate.faces.size(); ++index) {
         result.created.faces.push_back(candidate.faces[index].id);
@@ -1285,17 +1256,16 @@ OperationResult prepare_face_extrusion(
         if (source == nullptr || direction == directions.end()) {
             return kInvalidElementId;
         }
-        const auto index = data->topology.vertices.size();
         const ElementId copied_id = add_vertex(data->topology, source->position);
-        data->moving_vertices.push_back({index, extrusion_vector(source->position),
+        data->moving_vertices.push_back({copied_id, 0U, extrusion_vector(source->position),
                                         direction->second});
         copied.emplace(id, copied_id);
         return copied_id;
     };
     std::vector<ElementId> side_faces;
-    const auto build_region = [&](Selection& target, FaceExtrudeSourcePolicy policy) {
+    const auto build_region = [&](Selection& target) {
         return extrude_selected_faces_with_copied_vertices(
-            data->topology, target, copy_vertex, policy, FaceSideShadingPolicy::InheritSource,
+            data->topology, target, copy_vertex, FaceSideShadingPolicy::InheritSource, true,
             "Select one or more faces to extrude.", "No selected faces were found.",
             "No selected faces were extruded.", true, &side_faces);
     };
@@ -1309,7 +1279,7 @@ OperationResult prepare_face_extrusion(
             target.mode = SelectionMode::Face;
             target.faces = {source.face.id};
             target.active_face = source.face.id;
-            const auto result = build_region(target, FaceExtrudeSourcePolicy::Discard);
+            const auto result = build_region(target);
             if (!result.success) {
                 return defer_nonzero_failure(result);
             }
@@ -1321,8 +1291,7 @@ OperationResult prepare_face_extrusion(
         }
         activate_face_or_last_selection(data->cap_selection, active_face_or_invalid(selection));
     } else {
-        const auto result = build_region(data->cap_selection,
-                                         FaceExtrudeSourcePolicy::RetainFullyOpenRegion);
+        const auto result = build_region(data->cap_selection);
         if (!result.success) {
             return defer_nonzero_failure(result);
         }
@@ -1360,10 +1329,20 @@ OperationResult prepare_face_extrusion(
     for (std::size_t index = 0; index < data->topology.vertices.size(); ++index) {
         data->vertex_indices.emplace(data->topology.vertices[index].id, index);
     }
+    for (auto& moving : data->moving_vertices) {
+        moving.index = data->vertex_indices.at(moving.id);
+    }
     data->receipt.changed = true;
     data->receipt.affected.faces = data->cap_selection.faces;
-    for (std::size_t index = document.vertices.size(); index < data->topology.vertices.size(); ++index) {
-        data->receipt.created.vertices.push_back(data->topology.vertices[index].id);
+    for (const Vertex& vertex : data->topology.vertices) {
+        if (source_vertices.find(vertex.id) == nullptr) {
+            data->receipt.created.vertices.push_back(vertex.id);
+        }
+    }
+    for (const Vertex& vertex : document.vertices) {
+        if (!data->vertex_indices.contains(vertex.id)) {
+            data->receipt.deleted.vertices.push_back(vertex.id);
+        }
     }
     for (std::size_t index = document.faces.size(); index < data->topology.faces.size(); ++index) {
         data->receipt.created.faces.push_back(data->topology.faces[index].id);
@@ -1464,8 +1443,8 @@ OperationResult extrude_selected_elements_impl(Document& document, Selection& se
             return copied_vertex_with_offset(document, copied_vertices,
                                              source_id, offset);
           },
-          FaceExtrudeSourcePolicy::RetainFullyOpenRegion,
           FaceSideShadingPolicy::Default,
+          true,
           "Select one or more faces to extrude.",
           "No selected faces were found.", "No selected faces were extruded.");
     }
@@ -1498,8 +1477,8 @@ OperationResult transform_extrude_selected_elements_impl(Document& document, Sel
             return copied_vertex_with_transform(document, copied_vertices,
                                                 source_id, transform, pivot);
           },
-          FaceExtrudeSourcePolicy::RetainFullyOpenRegion,
           FaceSideShadingPolicy::Default,
+          true,
           "Select one or more faces to extrude.",
           "No selected faces were found.", "No selected faces were extruded.");
     }
@@ -1533,8 +1512,8 @@ OperationResult inset_selected_elements_impl(Document& document, Selection& sele
             return copied_vertex_with_transform(document, copied_vertices,
                                                 source_id, transform, pivot);
           },
-          FaceExtrudeSourcePolicy::Discard,
           FaceSideShadingPolicy::InheritSource,
+          false,
           "Select one or more faces to inset.", "No selected faces were found.",
           "No selected faces were inset.");
     }

@@ -248,26 +248,6 @@ void select_first_component_for_overlay_mode(
   }
 }
 
-void diagnostic_single_edge_object(
-	int object_id,
-	quader::QVec3 start,
-	quader::QVec3 end,
-	quader_editor_core::PolygonObject& object)
-{
-	object.id = object_id;
-	object.selected = false;
-	const quader_poly::ElementId start_id = quader_poly::add_vertex(object.document, start);
-	const quader_poly::ElementId end_id = quader_poly::add_vertex(object.document, end);
-	const std::array face_vertices { start_id, end_id, end_id };
-        ASSERT_TRUE(require_test(quader_poly::add_face(object.document, face_vertices) !=
-                         quader_poly::kInvalidElementId,
-                     "diagnostic edge fixture should create a degenerate "
-                     "edge-only face"));
-        ASSERT_TRUE(require_test(
-		quader_poly::document_edges(object.document).size() == 1U,
-		"diagnostic edge fixture should expose exactly one document edge"));
-}
-
 void diagnostic_triangle_object(
 	int object_id,
 	quader::QVec3 a,
@@ -1570,38 +1550,20 @@ void top_loop_bevel_overlay_emits_selected_strip_topology()
 	}
 }
 
-void diagnostic_edges_mark_overlapping_edges_across_unselected_objects()
+void diagnostic_edges_ignore_overlapping_valid_faces_across_unselected_objects()
 {
-	quader_editor_core::PolygonObject first;
-	ASSERT_NO_FATAL_FAILURE(diagnostic_single_edge_object(
-		1, { 0.0F, 0.0F, 0.0F }, { 3.0F, 0.0F, 0.0F }, first));
-	quader_editor_core::PolygonObject second;
-	ASSERT_NO_FATAL_FAILURE(diagnostic_single_edge_object(
-		2, { 1.0F, 0.0F, 0.0F }, { 2.0F, 0.0F, 0.0F }, second));
-	const std::vector<quader_editor_core::PolygonObject> objects { first, second };
-	const quader_editor_core::SelectionOverlayStyle style;
-
-	const quader_editor_core::SelectionOverlayFrame frame =
-		quader_editor_core::build_diagnostic_edge_overlay_frame(objects, style);
-
-        ASSERT_TRUE(require_test(
-            line_count_for_layer(
-                frame,
-                quader_editor_core::SelectionOverlayLayer::DiagnosticEdge) ==
-                2U,
-            "overlapping cross-object edges should mark both whole edges"));
-        ASSERT_TRUE(require_test(diagnostic_line_exists_for_object(frame, 1) && diagnostic_line_exists_for_object(frame, 2),
-		"diagnostic overlap lines should preserve the owning object ids"));
-	for (const quader_editor_core::SelectionOverlayLine& line : frame.lines) {
-          if (line.layer !=
-              quader_editor_core::SelectionOverlayLayer::DiagnosticEdge) {
-            continue;
-          }
-                ASSERT_TRUE(require_test(line.color_abgr == style.diagnostic_edge_color_abgr,
-			"diagnostic edges should use the diagnostic red style color"));
-		ASSERT_TRUE(require_test(nearly_equal(line.width_pixels, style.diagnostic_edge_line_width_pixels),
-			"diagnostic edges should carry the diagnostic line width"));
-	}
+  quader_editor_core::PolygonObject first;
+  ASSERT_NO_FATAL_FAILURE(diagnostic_triangle_object(
+      1, {0.0F, 0.0F, 0.0F}, {3.0F, 0.0F, 0.0F},
+      {0.0F, 3.0F, 0.0F}, first));
+  quader_editor_core::PolygonObject second;
+  ASSERT_NO_FATAL_FAILURE(diagnostic_triangle_object(
+      2, {1.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F},
+      {1.0F, 1.0F, 0.0F}, second));
+  const std::vector<quader_editor_core::PolygonObject> objects {first, second};
+  const auto frame =
+      quader_editor_core::build_diagnostic_edge_overlay_frame(objects);
+  EXPECT_TRUE(frame.lines.empty());
 }
 
 void diagnostic_edges_ignore_ordinary_non_overlapping_meshes()
@@ -1656,27 +1618,20 @@ void diagnostic_edges_ignore_same_object_adjacent_endpoint_contact()
             "not be diagnostics"));
 }
 
-void diagnostic_edges_mark_crossing_edges()
+void diagnostic_edges_ignore_crossing_valid_faces()
 {
-	quader_editor_core::PolygonObject first;
-	ASSERT_NO_FATAL_FAILURE(diagnostic_single_edge_object(
-		1, { -1.0F, 0.0F, 0.0F }, { 1.0F, 0.0F, 0.0F }, first));
-	quader_editor_core::PolygonObject second;
-	ASSERT_NO_FATAL_FAILURE(diagnostic_single_edge_object(
-		2, { 0.0F, -1.0F, 0.0F }, { 0.0F, 1.0F, 0.0F }, second));
-	const std::vector<quader_editor_core::PolygonObject> objects { first, second };
-
-	const quader_editor_core::SelectionOverlayFrame frame =
-		quader_editor_core::build_diagnostic_edge_overlay_frame(objects);
-
-        ASSERT_TRUE(require_test(
-            line_count_for_layer(
-                frame,
-                quader_editor_core::SelectionOverlayLayer::DiagnosticEdge) ==
-                2U,
-            "crossing edges should mark both whole edge segments"));
-        ASSERT_TRUE(require_test(diagnostic_line_exists_for_object(frame, 1) && diagnostic_line_exists_for_object(frame, 2),
-		"diagnostic crossing lines should preserve the owning object ids"));
+  quader_editor_core::PolygonObject first;
+  ASSERT_NO_FATAL_FAILURE(diagnostic_triangle_object(
+      1, {-1.0F, 0.0F, 0.0F}, {1.0F, 0.0F, 0.0F},
+      {0.0F, 1.0F, 0.0F}, first));
+  quader_editor_core::PolygonObject second;
+  ASSERT_NO_FATAL_FAILURE(diagnostic_triangle_object(
+      2, {0.0F, -1.0F, 0.0F}, {0.0F, 1.0F, 0.0F},
+      {1.0F, 0.0F, 0.0F}, second));
+  const std::vector<quader_editor_core::PolygonObject> objects {first, second};
+  const auto frame =
+      quader_editor_core::build_diagnostic_edge_overlay_frame(objects);
+  EXPECT_TRUE(frame.lines.empty());
 }
 
 void overlay_visibility_occluder_preserves_front_face_filtering()
@@ -1928,8 +1883,8 @@ TEST(QdrModelingRuntimeOverlayTests,
 }
 
 TEST(QdrModelingRuntimeOverlayTests,
-	DiagnosticEdgesMarkOverlappingEdgesAcrossUnselectedObjects) {
-	diagnostic_edges_mark_overlapping_edges_across_unselected_objects();
+	DiagnosticEdgesIgnoreOverlappingValidFacesAcrossUnselectedObjects) {
+	diagnostic_edges_ignore_overlapping_valid_faces_across_unselected_objects();
 }
 
 TEST(QdrModelingRuntimeOverlayTests,
@@ -1942,8 +1897,8 @@ TEST(QdrModelingRuntimeOverlayTests,
 	diagnostic_edges_ignore_same_object_adjacent_endpoint_contact();
 }
 
-TEST(QdrModelingRuntimeOverlayTests, DiagnosticEdgesMarkCrossingEdges) {
-	diagnostic_edges_mark_crossing_edges();
+TEST(QdrModelingRuntimeOverlayTests, DiagnosticEdgesIgnoreCrossingValidFaces) {
+	diagnostic_edges_ignore_crossing_valid_faces();
 }
 
 TEST(QdrModelingRuntimeOverlayTests,
@@ -2044,4 +1999,96 @@ TEST(QdrModelingRuntimeOverlayTests,
               2.5F, 0.0001F);
   EXPECT_NEAR(reversed_frame.hover_edge_dimension_context->inside_reference.z,
               0.0F, 0.0001F);
+}
+
+TEST(QdrModelingRuntimeOverlayTests,
+     DiagnosticEdgesMarkFailedFaceBoundariesWithAuthoredIdentity) {
+  using namespace quader_editor_core;
+  PolygonObject object;
+  object.id = 17;
+  const std::array failed_vertices {
+      quader_poly::add_vertex(object.document, {0.0F, 0.0F, 0.0F}),
+      quader_poly::add_vertex(object.document, {2.0F, 0.0F, 0.0F}),
+      quader_poly::add_vertex(object.document, {3.0F, 0.0F, 0.0F}),
+      quader_poly::add_vertex(object.document, {1.0F, 0.0F, 0.0F}),
+  };
+  const auto failed_face = quader_poly::add_face(object.document, failed_vertices);
+  ASSERT_NE(failed_face, quader_poly::kInvalidElementId);
+  const std::array valid_vertices {
+      failed_vertices[0], failed_vertices[1],
+      quader_poly::add_vertex(object.document, {0.0F, 2.0F, 0.0F}),
+  };
+  ASSERT_NE(quader_poly::add_face(object.document, valid_vertices),
+            quader_poly::kInvalidElementId);
+  SelectionOverlayGeometryWorkCounters work;
+  const SelectionOverlayStyle style;
+  const auto frame = build_diagnostic_edge_overlay_frame(
+      object, style, nullptr, &work);
+  ASSERT_EQ(frame.lines.size(), 4U);
+  EXPECT_EQ(work.diagnostic_face_triangulation_count, 2U);
+  EXPECT_TRUE(diagnostic_line_exists_for_object(frame, object.id));
+  for (const auto &line : frame.lines) {
+    EXPECT_EQ(line.layer, SelectionOverlayLayer::DiagnosticEdge);
+    EXPECT_EQ(line.object_id, object.id);
+    EXPECT_EQ(line.face_id, failed_face);
+    EXPECT_EQ(line.color_abgr, style.diagnostic_edge_color_abgr);
+    EXPECT_FLOAT_EQ(line.width_pixels, style.diagnostic_edge_line_width_pixels);
+  }
+
+  const auto geometry = build_selection_overlay_geometry(object.document, work);
+  const auto triangulations = work.face_triangulation_count;
+  const auto diagnostic_triangulations = work.diagnostic_face_triangulation_count;
+  const auto retained_frame = build_diagnostic_edge_overlay_frame(
+      object, style, geometry.get(), &work);
+  EXPECT_EQ(retained_frame.lines.size(), frame.lines.size());
+  EXPECT_EQ(work.face_triangulation_count, triangulations);
+  EXPECT_EQ(work.diagnostic_face_triangulation_count, diagnostic_triangulations);
+  object.selected = true;
+  const auto selection_frame = build_selection_overlay_frame(
+      object, SelectionMode::Object, object.id, {}, {}, *geometry);
+  EXPECT_TRUE(std::ranges::none_of(selection_frame.triangles,
+      [failed_face](const auto &triangle) {
+        return triangle.face_id == failed_face;
+      }));
+}
+
+TEST(QdrModelingRuntimeOverlayTests,
+     DiagnosticEdgesDeduplicateSharedFailedBoundaries) {
+  using namespace quader_editor_core;
+  PolygonObject object;
+  object.id = 23;
+  std::array<quader_poly::ElementId, 6> vertices;
+  for (std::size_t index = 0U; index < vertices.size(); ++index) {
+    vertices[index] = quader_poly::add_vertex(
+        object.document, {static_cast<float>(index), 0.0F, 0.0F});
+  }
+  const std::array first {vertices[0], vertices[1], vertices[2], vertices[3]};
+  const std::array second {vertices[1], vertices[0], vertices[4], vertices[5]};
+  ASSERT_NE(quader_poly::add_face(object.document, first),
+            quader_poly::kInvalidElementId);
+  ASSERT_NE(quader_poly::add_face(object.document, second),
+            quader_poly::kInvalidElementId);
+  const auto frame = build_diagnostic_edge_overlay_frame(object);
+  EXPECT_EQ(frame.lines.size(), 7U);
+  const auto shared_edge = quader_poly::make_edge(vertices[0], vertices[1]);
+  EXPECT_EQ(std::ranges::count_if(frame.lines, [&](const auto &line) {
+    return line.edge == shared_edge;
+  }), 1);
+}
+
+TEST(QdrModelingRuntimeOverlayTests,
+     DiagnosticEdgesIgnoreValidCollinearBoundaryCorners) {
+  using namespace quader_editor_core;
+  PolygonObject object;
+  object.id = 31;
+  const std::array vertices {
+      quader_poly::add_vertex(object.document, {0.0F, 0.0F, 0.0F}),
+      quader_poly::add_vertex(object.document, {1.0F, 0.0F, 0.0F}),
+      quader_poly::add_vertex(object.document, {2.0F, 0.0F, 0.0F}),
+      quader_poly::add_vertex(object.document, {2.0F, 2.0F, 0.0F}),
+      quader_poly::add_vertex(object.document, {0.0F, 2.0F, 0.0F}),
+  };
+  ASSERT_NE(quader_poly::add_face(object.document, vertices),
+            quader_poly::kInvalidElementId);
+  EXPECT_TRUE(build_diagnostic_edge_overlay_frame(object).lines.empty());
 }

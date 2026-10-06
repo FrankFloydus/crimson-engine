@@ -82,6 +82,7 @@ private:
  */
 class CowPolygonDocument final {
 private:
+  /// Shares a pinned snapshot and its lazily materialized immutable document.
   struct SnapshotStorage final {
     explicit SnapshotStorage(quader::modeling::PolygonDocumentReadSnapshot value)
         : snapshot(std::move(value)) {}

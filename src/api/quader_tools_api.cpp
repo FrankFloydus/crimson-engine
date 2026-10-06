@@ -280,6 +280,10 @@ active_tool_settings_source(const SceneSession &session) {
   return {
       .identity = &modeling,
       .revision = modeling.tool_settings_revision(),
+      .dependent_revision =
+          modeling.active_viewport_tool() == ModelingViewportTool::Move &&
+                  modeling.selection_mode() == ModelingSelectionMode::Vertex
+              ? 1u : 0u,
       .kind = ActiveToolSettingsSourceKind::Modeling,
   };
 }
@@ -1275,7 +1279,8 @@ const char *fallback_tool_settings_description(
 
 QuaderToolSettingsTarget modeling_tool_settings_target(
     const ModelingToolSettingsTarget &target,
-    const ModelingInteractionSettings &settings) {
+    const ModelingInteractionSettings &settings,
+    ModelingSelectionMode selection_mode) {
   QuaderToolSettingsTarget result;
   if (!target.active) {
     return result;
@@ -1306,9 +1311,11 @@ QuaderToolSettingsTarget modeling_tool_settings_target(
 
   switch (target.kind) {
   case ModelingToolSettingsTargetKind::Move:
-    result.controls.push_back(toggle_control(
-        "auto_merge_vertices", "Auto Merge Vertices",
-        settings.move_auto_merge_vertices));
+    if (selection_mode == ModelingSelectionMode::Vertex) {
+      result.controls.push_back(toggle_control(
+          "auto_merge_vertices", "Auto Merge Vertices",
+          settings.move_auto_merge_vertices));
+    }
     break;
   case ModelingToolSettingsTargetKind::LassoSelect:
     result.controls.push_back(toggle_control(
@@ -1921,7 +1928,8 @@ QuaderToolSettingsTarget QuaderToolsApi::active_settings() const {
   }
   const ModelingSessionService &modeling = session.modeling();
   return modeling_tool_settings_target(modeling.tool_settings_target(),
-                                       modeling.interaction_settings());
+                                       modeling.interaction_settings(),
+                                       modeling.selection_mode());
 }
 
 std::optional<bool> QuaderToolsApi::active_array_bounding_box_dimensions() const {
@@ -1985,7 +1993,8 @@ QuaderToolsApi::settings_for_pane(ViewportPaneId pane) const {
     target = modeling_tool_settings_target(
         ModelingToolSettingsService{}.selected_runtime_tool_target(
             viewport_tool_interaction_tool(selected)),
-        session.modeling().interaction_settings());
+        session.modeling().interaction_settings(),
+        session.modeling().selection_mode());
     break;
   }
   // The shared parameter owners are readable without owning their operation.

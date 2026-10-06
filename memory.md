@@ -203,6 +203,9 @@ Tests: [settings transactions/categories](tests/qt_settings_dialog_tests.cpp),
   the baseline. Cache the rejected pointer signature so idle frames do not retry it. Protect both
   geometry/history and submitted wires in [move tests](tests/move_auto_merge_tests.cpp) and
   [retained presentation tests](tests/selected_mesh_outline_presentation_tests.cpp).
+  Moving a wall after tangential extrusion can restore triangles on already-collapsed faces.
+  Accept that larger compiled layout and refresh its mappings; authored topology remains unchanged.
+  Returning to zero must restore the gesture's original compiled layout.
 - Dedicated Extrusion activation starts a pending preview; releasing a viewport drag ends
   pointer input but retains that preview with Apply enabled. Apply accepts it, while
   Escape/Cancel restores its source and preserves existing undo/redo.
@@ -235,7 +238,12 @@ Tests: [settings transactions/categories](tests/qt_settings_dialog_tests.cpp),
   Region adjustment handles follow the saved axis.
   Extrusion validation permits structurally valid thin/tangent side walls and unchanged
   authored defects, but rejects properly crossing new wall boundaries and validates
-  affected caps in anchored, scale-normalized coordinates. Every extrusion mode maps
+  affected caps in anchored, scale-normalized coordinates. Face region extrusion replaces
+  source faces even for standalone open surfaces; it adds boundary walls without a back cap.
+  Remove only abandoned source vertices, preserve unrelated loose vertices, and resolve prepared
+  preview storage indices after cleanup. Failed surface triangulation emits red diagnostic
+  boundaries through the cached native overlay projection; valid spatial overlaps alone do not.
+  Every extrusion mode maps
   pointer motion along the visible handle axis in the press-time camera frame; fixed
   upward-positive motion reverses Individual/Along Normals when the handle projects down.
   Near the view axis, retain the projected direction with bounded sensitivity; only a
@@ -617,9 +625,11 @@ Bindings and scope rules: [INPUT_KEYBINDINGS.md](INPUT_KEYBINDINGS.md).
 - The visible/custom pivot is not necessarily the raw scene origin. Repeat records the original
   world affine and pivot; component replay applies W^-1 * A * W. Shift-duplicate has one placement
   owner, and repeat is recorded only after duplicate plus transform commits.
-- Move auto-merge runs only at accepted component-move completion, including zero-distance
-  acceptance, within the same publication and undo transaction. Capture the setting for repeat;
-  retain sparse position history unless a mesh actually welds, then retain its topology and selection.
+- Move auto-merge is available only in Vertex selection mode and runs only at accepted vertex-move
+  completion, including zero-distance acceptance, within the same publication and undo transaction.
+  Capture the effective setting for repeat and require Vertex mode again when replaying it;
+  Edge/Face moves and duplicates must retain separate coincident vertices.
+  Retain sparse position history unless a mesh actually welds, then retain its topology and selection.
   Duplicate-face cleanup must transfer selected/active cap identity to its surviving face. Undo/redo
   preserves allocator high-water without strict topology reimport, including nonmanifold welds.
   Contracts: [Move regressions](tests/move_auto_merge_tests.cpp).

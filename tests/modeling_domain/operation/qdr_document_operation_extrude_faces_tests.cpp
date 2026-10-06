@@ -279,7 +279,8 @@ TEST(QdrDocumentOperationExtrudeFacesTests, CoplanarCapsStayConnectedOnlyForRegi
       }
     }
     if (mode != FaceExtrudeMode::Individual) {
-      EXPECT_TRUE(qdr_test::every_edge_is_closed(fixture.document));
+      EXPECT_EQ(fixture.document.faces.size(), 8U);
+      EXPECT_EQ(qdr_test::open_edge_count(fixture.document), 6U);
       EXPECT_TRUE(qdr_test::shared_edges_have_opposite_winding(fixture.document));
     }
     qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);

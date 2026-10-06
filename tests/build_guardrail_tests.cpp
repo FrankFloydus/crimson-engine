@@ -1077,7 +1077,8 @@ TEST(BuildGuardrailTests,
                   "cmake --build --preset vs2026-debug --target quader");
   expect_contains(root_agents,
                   "cmake --build --preset vs2026-release --target quader");
-  expect_contains(root_agents, "shipping artifact");
+  expect_contains(root_agents,
+                  "Public distribution ships `quader-0.1.exe`");
 }
 
 TEST(BuildGuardrailTests,

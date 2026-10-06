@@ -532,7 +532,9 @@ TEST_F(QtAlignToolSettingsTests,
   EXPECT_EQ(harness_->editor.tools().active_tool(), "move");
   const auto incoming = harness_->editor.tools().active_settings();
   EXPECT_EQ(incoming.tool_id, "move");
-  EXPECT_EQ(panel_->target_id(), incoming.tool_id);
+  EXPECT_TRUE(incoming.controls.empty());
+  EXPECT_TRUE(panel_->target_id().empty());
+  EXPECT_FALSE(panel_->has_settings());
   EXPECT_TRUE(outgoing.isNull());
   EXPECT_EQ(action_button("x", "min"), nullptr);
   EXPECT_EQ(toggle("use_snapping"), nullptr);

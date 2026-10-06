@@ -5,7 +5,6 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include <editor/modeling/runtime/session.hpp>
-#include <quader/modeling/neutral/geometry/geometry.hpp>
 #include <quader/modeling/neutral/polygon/document.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_mesh_internal.hpp>
 
@@ -31,108 +30,6 @@ std::vector<quader_poly::document_internal::Triangle> overlay_face_triangles(
   return quader_poly::document_internal::triangulate_face_local_indices(
       face, lookup,
       quader_poly::document_internal::face_normal_from_vertex_lookup(face, lookup));
-}
-
-constexpr double kDiagnosticEdgeEpsilon = 0.00001;
-constexpr double kDiagnosticEdgeFactorEpsilon = 0.00001;
-/**
- * Represents a Diagnostic Edge Ref value used by the modeling runtime domain.
- */
-struct DiagnosticEdgeRef {
-	int object_id = -1;
-	quader_poly::Edge edge;
-	quader::QVec3 start;
-	quader::QVec3 end;
-	quader_geometry::QSegment3<double> segment;
-	quader_geometry::QAabb3<double> bounds;
-};
-
-quader_geometry::QVec3d to_diagnostic_vec3(quader::QVec3 value)
-{
-	return {
-		static_cast<double>(value.x),
-		static_cast<double>(value.y),
-		static_cast<double>(value.z),
-	};
-}
-
-quader_geometry::QAabb3<double> diagnostic_edge_bounds(
-		quader_geometry::QVec3d start,
-		quader_geometry::QVec3d end)
-{
-  return {
-      {
-          std::min(start.x, end.x) - kDiagnosticEdgeEpsilon,
-          std::min(start.y, end.y) - kDiagnosticEdgeEpsilon,
-          std::min(start.z, end.z) - kDiagnosticEdgeEpsilon,
-      },
-      {
-          std::max(start.x, end.x) + kDiagnosticEdgeEpsilon,
-          std::max(start.y, end.y) + kDiagnosticEdgeEpsilon,
-          std::max(start.z, end.z) + kDiagnosticEdgeEpsilon,
-      },
-  };
-}
-
-bool diagnostic_factor_is_interior(double factor)
-{
-  return factor > kDiagnosticEdgeFactorEpsilon &&
-         factor < 1.0 - kDiagnosticEdgeFactorEpsilon;
-}
-
-bool diagnostic_edges_overlap_colinearly(const DiagnosticEdgeRef& first, const DiagnosticEdgeRef& second)
-{
-	const quader_geometry::QVec3d first_direction = first.segment.b - first.segment.a;
-	const quader_geometry::QVec3d second_direction = second.segment.b - second.segment.a;
-	const double first_length_squared = quader_geometry::length_squared(first_direction);
-	const double second_length_squared = quader_geometry::length_squared(second_direction);
-        const double epsilon_squared =
-            kDiagnosticEdgeEpsilon * kDiagnosticEdgeEpsilon;
-        if (first_length_squared <= epsilon_squared || second_length_squared <= epsilon_squared) {
-		return false;
-	}
-
-	const double parallel_limit = epsilon_squared * first_length_squared * second_length_squared;
-	if (quader_geometry::length_squared(quader_geometry::cross(first_direction, second_direction)) > parallel_limit) {
-		return false;
-	}
-
-	const double line_limit = epsilon_squared * first_length_squared;
-	if (quader_geometry::length_squared(quader_geometry::cross(second.segment.a - first.segment.a, first_direction)) > line_limit ||
-			quader_geometry::length_squared(quader_geometry::cross(second.segment.b - first.segment.a, first_direction)) > line_limit) {
-		return false;
-	}
-
-	const double second_start_on_first =
-		quader_geometry::dot(second.segment.a - first.segment.a, first_direction) / first_length_squared;
-	const double second_end_on_first =
-		quader_geometry::dot(second.segment.b - first.segment.a, first_direction) / first_length_squared;
-	const double overlap_start = std::max(0.0, std::min(second_start_on_first, second_end_on_first));
-	const double overlap_end = std::min(1.0, std::max(second_start_on_first, second_end_on_first));
-        return (overlap_end - overlap_start) * std::sqrt(first_length_squared) >
-               kDiagnosticEdgeEpsilon;
-}
-
-bool diagnostic_edges_point_intersect(const DiagnosticEdgeRef& first, const DiagnosticEdgeRef& second)
-{
-  const quader_geometry::QSegmentSegmentClosestPoints<double> closest =
-      quader_geometry::closest_points_segment_segment(
-          first.segment, second.segment, kDiagnosticEdgeEpsilon);
-  if (!closest.valid || !closest.intersects) {
-    return false;
-  }
-
-	return diagnostic_factor_is_interior(closest.first_factor) ||
-		diagnostic_factor_is_interior(closest.second_factor);
-}
-
-bool diagnostic_edges_conflict(const DiagnosticEdgeRef& first, const DiagnosticEdgeRef& second)
-{
-	if (!quader_geometry::aabb_overlaps(first.bounds, second.bounds)) {
-		return false;
-	}
-	return diagnostic_edges_overlap_colinearly(first, second) ||
-		diagnostic_edges_point_intersect(first, second);
 }
 
 quader_poly::Selection overlay_all_face_selection(const quader_poly::DocumentReadView& document)
@@ -1666,66 +1563,70 @@ SelectionOverlayFrame build_selection_hover_overlay_frame(
 }
 
 SelectionOverlayFrame build_diagnostic_edge_overlay_frame(
-		std::span<const PolygonObject> objects,
-		const SelectionOverlayStyle& style)
-{
-	QDR_PROFILE_SCOPE("qdr_editor_core.build_diagnostic_edge_overlay_frame");
-	std::vector<DiagnosticEdgeRef> edges;
-	for (const PolygonObject& object : objects) {
-		const SelectionOverlayDocumentLookup lookup(object.document.read_view(), false);
-		for (const quader_poly::Edge edge : quader_poly::document_edges(object.document.read_view())) {
-			const quader_poly::Vertex* start_vertex = lookup.vertex(edge.a);
-			const quader_poly::Vertex* end_vertex = lookup.vertex(edge.b);
-			if (start_vertex == nullptr || end_vertex == nullptr) {
-				continue;
-			}
-			const quader_geometry::QVec3d start = to_diagnostic_vec3(start_vertex->position);
-			const quader_geometry::QVec3d end = to_diagnostic_vec3(end_vertex->position);
-                        if (quader_geometry::length_squared(end - start) <=
-                            kDiagnosticEdgeEpsilon * kDiagnosticEdgeEpsilon) {
-                          continue;
-                        }
-                        edges.push_back({
-				object.id,
-				edge,
-				start_vertex->position,
-				end_vertex->position,
-				{ start, end },
-				diagnostic_edge_bounds(start, end),
-			});
-		}
-	}
+    const PolygonObject &object, const SelectionOverlayStyle &style,
+    const SelectionOverlayGeometry *geometry,
+    SelectionOverlayGeometryWorkCounters *work) {
+  QDR_PROFILE_SCOPE("qdr_editor_core.build_diagnostic_edge_overlay_frame");
+  const auto document = object.document.read_view();
+  std::optional<quader_poly::document_internal::VertexLookupIndex> lookup;
+  if (geometry == nullptr) {
+    lookup.emplace(document);
+  }
+  SelectionOverlayFrame frame;
+  std::unordered_set<std::uint64_t> emitted_edges;
+  for (const auto &face : document.faces) {
+    bool triangulation_failed = false;
+    if (geometry != nullptr) {
+      triangulation_failed = geometry->face_triangles.at(face.id).empty();
+    } else {
+      if (work != nullptr) {
+        ++work->diagnostic_face_triangulation_count;
+      }
+      triangulation_failed =
+          quader_poly::document_internal::triangulate_face_local_indices(
+              face, *lookup,
+              quader_poly::document_internal::face_normal_from_vertex_lookup(
+                  face, *lookup)).empty();
+    }
+    if (!triangulation_failed) {
+      continue;
+    }
+    for (std::size_t index = 0U; index < face.vertices.size(); ++index) {
+      const auto a_id = face.vertices[index];
+      const auto b_id = face.vertices[(index + 1U) % face.vertices.size()];
+      if (a_id == b_id ||
+          !emitted_edges.insert(overlay_face_edge_key(a_id, b_id)).second) {
+        continue;
+      }
+      const auto *a = geometry != nullptr ? geometry->lookup.vertex(a_id)
+                                          : lookup->find(a_id);
+      const auto *b = geometry != nullptr ? geometry->lookup.vertex(b_id)
+                                          : lookup->find(b_id);
+      if (a == nullptr || b == nullptr ||
+          same_overlay_position(a->position, b->position)) {
+        continue;
+      }
+      frame.lines.push_back({SelectionOverlayLayer::DiagnosticEdge,
+                             a->position, b->position,
+                             style.diagnostic_edge_color_abgr,
+                             style.diagnostic_edge_line_width_pixels,
+                             object.id, face.id,
+                             quader_poly::make_edge(a_id, b_id)});
+    }
+  }
+  return frame;
+}
 
-	std::vector<bool> marked_edges(edges.size(), false);
-	for (std::size_t first_index = 0; first_index < edges.size(); ++first_index) {
-		for (std::size_t second_index = first_index + 1U; second_index < edges.size(); ++second_index) {
-			if (!diagnostic_edges_conflict(edges[first_index], edges[second_index])) {
-				continue;
-			}
-			marked_edges[first_index] = true;
-			marked_edges[second_index] = true;
-		}
-	}
-
-	SelectionOverlayFrame frame;
-	frame.lines.reserve(edges.size());
-	for (std::size_t index = 0; index < edges.size(); ++index) {
-		if (!marked_edges[index]) {
-			continue;
-		}
-		const DiagnosticEdgeRef& edge = edges[index];
-                frame.lines.push_back({
-                    SelectionOverlayLayer::DiagnosticEdge,
-                    edge.start,
-                    edge.end,
-                    style.diagnostic_edge_color_abgr,
-                    style.diagnostic_edge_line_width_pixels,
-                    edge.object_id,
-                    quader_poly::kInvalidElementId,
-                    edge.edge,
-                });
-        }
-	return frame;
+SelectionOverlayFrame build_diagnostic_edge_overlay_frame(
+    std::span<const PolygonObject> objects,
+    const SelectionOverlayStyle &style) {
+  SelectionOverlayFrame frame;
+  for (const auto &object : objects) {
+    auto object_frame = build_diagnostic_edge_overlay_frame(object, style);
+    frame.lines.insert(frame.lines.end(), object_frame.lines.begin(),
+                       object_frame.lines.end());
+  }
+  return frame;
 }
 
 SelectionOverlayFrame build_diagnostic_edge_overlay_frame(

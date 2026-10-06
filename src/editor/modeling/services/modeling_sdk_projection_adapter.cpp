@@ -7721,8 +7721,10 @@ public:
         entry.mesh = MeshProjectionService::update_polygon_document_mesh_positions(
             std::move(*authored), entry.current_mesh,
             participant.position_update_plan.get());
+        // Collapsed authored faces can regain triangles as their neighbors move.
+        // Permit that larger render layout while retaining collapse rejection.
         if (!entry.mesh.has_value() ||
-            entry.mesh->geometry().vertices.size() !=
+            entry.mesh->geometry().vertices.size() <
                 participant.base_mesh_positions.size()) {
           entry.error = "Could not derive the transient transform mesh attributes.";
           return;
@@ -9217,6 +9219,8 @@ public:
     if (!preview_active()) {
       return failure("No active SDK translate preview.");
     }
+    auto_merge_vertices = auto_merge_vertices &&
+                          selection_mode_ == ModelingSelectionMode::Vertex;
     if (!preview_changed_ && !auto_merge_vertices) {
       const bool curve_preview = curve_document_preview_active();
       ModelingCommandResult canceled = cancel_translate_preview();
