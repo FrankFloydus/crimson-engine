@@ -10450,21 +10450,51 @@ public:
                                        : ModelingSelectionEdit::Add)
                     : request.edit,
     };
-    if (request.kind == ModelingActiveSelectionKind::Vertex) {
-      if (request.click_count > 1) {
-        component.vertices.reserve(document.vertices.size());
-        for (const quader_poly::Vertex &vertex : document.vertices) {
-          component.vertices.push_back(vertex.id);
-        }
-      } else {
-        component.vertices.push_back(request.vertex);
+    if (request.click_count > 1 && !edge_traversal) {
+      const quader_poly::PickResult seed{
+          .hit = true,
+          .kind = request.kind == ModelingActiveSelectionKind::Vertex
+                      ? quader_poly::ElementKind::Vertex
+                      : (request.kind == ModelingActiveSelectionKind::Edge
+                             ? quader_poly::ElementKind::Edge
+                             : quader_poly::ElementKind::Face),
+          .vertex_id = static_cast<quader_poly::ElementId>(request.vertex),
+          .edge = quader_poly::make_edge(request.edge.first,
+                                         request.edge.second),
+          .face_id = static_cast<quader_poly::ElementId>(request.face),
+      };
+      const quader_poly::Selection connected =
+          quader_poly::connected_component_selection(document, seed);
+      if (connected.empty()) {
+        return {.ok = false,
+                .message = "Resolved component has no selectable connected elements."};
       }
+      component.vertices.reserve(connected.vertices.size());
+      for (const quader_poly::ElementId vertex : connected.vertices) {
+        component.vertices.push_back(static_cast<int>(vertex));
+      }
+      component.faces.reserve(connected.faces.size());
+      for (const quader_poly::ElementId face : connected.faces) {
+        component.faces.push_back(static_cast<int>(face));
+      }
+      component.edges.reserve(connected.edges.size());
+      for (const quader_poly::Edge edge : connected.edges) {
+        component.edges.emplace_back(static_cast<int>(edge.a),
+                                     static_cast<int>(edge.b));
+      }
+      component.active_kind = request.kind;
+      component.active_vertex = static_cast<int>(connected.active_vertex);
+      component.active_edge = {static_cast<int>(connected.active_edge.a),
+                               static_cast<int>(connected.active_edge.b)};
+      component.active_face = static_cast<int>(connected.active_face);
+      return set_component_selection(component);
+    }
+    if (request.kind == ModelingActiveSelectionKind::Vertex) {
+      component.vertices.push_back(request.vertex);
       component.active_kind = ModelingActiveSelectionKind::Vertex;
-      component.active_vertex = component.vertices.empty()
-                                    ? request.vertex
-                                    : component.vertices.back();
+      component.active_vertex = request.vertex;
     } else if (request.kind == ModelingActiveSelectionKind::Edge) {
-      if (expands_hit) {
+      if (edge_traversal) {
         const quader_poly::Edge seed = quader_poly::make_edge(
             request.edge.first, request.edge.second);
         std::vector<quader_poly::Edge> edges =
@@ -10501,18 +10531,9 @@ public:
       component.active_kind = ModelingActiveSelectionKind::Edge;
       component.active_edge = request.edge;
     } else {
-      if (request.click_count > 1) {
-        component.faces.reserve(document.faces.size());
-        for (const quader_poly::Face &face : document.faces) {
-          component.faces.push_back(face.id);
-        }
-      } else {
-        component.faces.push_back(request.face);
-      }
+      component.faces.push_back(request.face);
       component.active_kind = ModelingActiveSelectionKind::Face;
-      component.active_face = component.faces.empty()
-                                  ? request.face
-                                  : component.faces.back();
+      component.active_face = request.face;
     }
     return set_component_selection(component);
   }

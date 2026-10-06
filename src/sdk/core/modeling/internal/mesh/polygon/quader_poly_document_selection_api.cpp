@@ -1187,6 +1187,115 @@ void select_only(Selection& selection, const PickResult& pick)
     }
 }
 
+Selection connected_component_selection(const Document& document,
+                                        const PickResult& pick)
+{
+    Selection selection;
+    selection.mode = selection_mode_for_kind(pick.kind);
+    if (!pick.hit) {
+        return selection;
+    }
+
+    ElementIdIndex live_vertices;
+    live_vertices.reserve(document.vertices.size());
+    for (const Vertex& vertex : document.vertices) {
+        if (vertex.id != kInvalidElementId) {
+            live_vertices.insert(vertex.id);
+        }
+    }
+
+    const std::vector<Edge> all_edges = document_edges(document);
+    ElementId seed_vertex = kInvalidElementId;
+    switch (pick.kind) {
+    case ElementKind::Vertex:
+      if (!live_vertices.contains(pick.vertex_id)) {
+          return selection;
+      }
+      seed_vertex = pick.vertex_id;
+      break;
+    case ElementKind::Edge:
+      if (!live_vertices.contains(pick.edge.a) ||
+          !live_vertices.contains(pick.edge.b) ||
+          !contains_edge(all_edges, pick.edge)) {
+          return selection;
+      }
+      seed_vertex = pick.edge.a;
+      break;
+    case ElementKind::Face: {
+      const Face* face = find_face(document, pick.face_id);
+      if (face == nullptr || face->id == kInvalidElementId ||
+          face->vertices.size() < 3U ||
+          !std::ranges::all_of(face->vertices, [&](ElementId vertex_id) {
+              return live_vertices.contains(vertex_id);
+          })) {
+          return selection;
+      }
+      seed_vertex = face->vertices.front();
+      break;
+    }
+    }
+    if (seed_vertex == kInvalidElementId) {
+        return selection;
+    }
+
+    std::unordered_map<ElementId, std::vector<ElementId>> adjacent_vertices;
+    adjacent_vertices.reserve(live_vertices.size());
+    for (const Edge edge : all_edges) {
+        if (live_vertices.contains(edge.a) &&
+            live_vertices.contains(edge.b)) {
+            adjacent_vertices[edge.a].push_back(edge.b);
+            adjacent_vertices[edge.b].push_back(edge.a);
+        }
+    }
+
+    ElementIdIndex connected_vertices;
+    connected_vertices.reserve(live_vertices.size());
+    connected_vertices.insert(seed_vertex);
+    std::vector<ElementId> pending_vertices { seed_vertex };
+    for (std::size_t index = 0U; index < pending_vertices.size(); ++index) {
+        const auto adjacent = adjacent_vertices.find(pending_vertices[index]);
+        if (adjacent == adjacent_vertices.end()) {
+            continue;
+        }
+        for (const ElementId vertex_id : adjacent->second) {
+            if (connected_vertices.insert(vertex_id).second) {
+                pending_vertices.push_back(vertex_id);
+            }
+        }
+    }
+
+    switch (selection.mode) {
+    case SelectionMode::Vertex:
+      selection.vertices.reserve(connected_vertices.size());
+      for (const Vertex& vertex : document.vertices) {
+          if (connected_vertices.contains(vertex.id)) {
+              selection.vertices.push_back(vertex.id);
+          }
+      }
+      break;
+    case SelectionMode::Edge:
+      for (const Edge edge : all_edges) {
+          if (connected_vertices.contains(edge.a) &&
+              connected_vertices.contains(edge.b)) {
+              selection.edges.push_back(edge);
+          }
+      }
+      break;
+    case SelectionMode::Face:
+      for (const Face& face : document.faces) {
+          if (face.id != kInvalidElementId && face.vertices.size() >= 3U &&
+              std::ranges::all_of(face.vertices, [&](ElementId vertex_id) {
+                  return connected_vertices.contains(vertex_id);
+              })) {
+              selection.faces.push_back(face.id);
+          }
+      }
+      break;
+    }
+    activate_pick_selection(selection, pick);
+    return selection;
+}
+
 void add_selection(Selection& selection, const PickResult& pick)
 {
     if (!pick.hit) {

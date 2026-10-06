@@ -123,6 +123,75 @@ quader_editor_core::PolygonObject adjacent_face_object()
         return object;
 }
 
+struct LoosePartFixture {
+  quader_editor_core::PolygonObject object;
+  std::array<std::array<quader_poly::ElementId, 6>, 2> vertices;
+  std::array<std::array<quader_poly::Edge, 7>, 2> edges;
+  std::array<std::array<quader_poly::ElementId, 2>, 2> faces;
+};
+
+LoosePartFixture loose_part_fixture() {
+  LoosePartFixture fixture;
+  fixture.object.id = 7;
+  const std::array positions{
+      quader::QVec3{-1.0F, -1.0F, 0.0F},
+      quader::QVec3{0.0F, -1.0F, 0.0F},
+      quader::QVec3{0.0F, 1.0F, 0.0F},
+      quader::QVec3{-1.0F, 1.0F, 0.0F},
+      quader::QVec3{1.0F, -1.0F, 0.0F},
+      quader::QVec3{1.0F, 1.0F, 0.0F},
+  };
+  for (std::size_t part = 0; part < fixture.vertices.size(); ++part) {
+    auto &vertices = fixture.vertices[part];
+    for (std::size_t index = 0; index < positions.size(); ++index) {
+      auto position = positions[index];
+      position.x += 4.0F * static_cast<float>(part);
+      vertices[index] = quader_poly::add_vertex(fixture.object.document, position);
+    }
+    fixture.faces[part] = {
+        quader_poly::add_face(fixture.object.document,
+                             std::array{vertices[0], vertices[1], vertices[2],
+                                        vertices[3]}),
+        quader_poly::add_face(fixture.object.document,
+                             std::array{vertices[1], vertices[4], vertices[5],
+                                        vertices[2]}),
+    };
+    fixture.edges[part] = {
+        quader_poly::make_edge(vertices[0], vertices[1]),
+        quader_poly::make_edge(vertices[1], vertices[2]),
+        quader_poly::make_edge(vertices[2], vertices[3]),
+        quader_poly::make_edge(vertices[3], vertices[0]),
+        quader_poly::make_edge(vertices[1], vertices[4]),
+        quader_poly::make_edge(vertices[4], vertices[5]),
+        quader_poly::make_edge(vertices[5], vertices[2]),
+    };
+  }
+  return fixture;
+}
+
+quader_poly::Ray loose_part_ray(quader_editor_core::SelectionMode mode,
+                                std::size_t part = 0) {
+  const float x = mode == quader_editor_core::SelectionMode::Vertex ? -1.0F : -0.5F;
+  const float y = mode == quader_editor_core::SelectionMode::Face ? 0.0F : -1.0F;
+  return {{x + 4.0F * static_cast<float>(part), y, 5.0F}, {0.0F, 0.0F, -1.0F}};
+}
+
+void expect_loose_part_selection(const quader_poly::Selection &selection,
+                                quader_editor_core::SelectionMode mode,
+                                const LoosePartFixture &fixture,
+                                std::size_t part) {
+  if (mode == quader_editor_core::SelectionMode::Vertex) {
+    EXPECT_TRUE(std::is_permutation(selection.vertices.begin(), selection.vertices.end(),
+                                    fixture.vertices[part].begin(), fixture.vertices[part].end()));
+  } else if (mode == quader_editor_core::SelectionMode::Edge) {
+    EXPECT_TRUE(std::is_permutation(selection.edges.begin(), selection.edges.end(),
+                                    fixture.edges[part].begin(), fixture.edges[part].end()));
+  } else {
+    EXPECT_TRUE(std::is_permutation(selection.faces.begin(), selection.faces.end(),
+                                    fixture.faces[part].begin(), fixture.faces[part].end()));
+  }
+}
+
 quader_editor_core::PolygonObject single_quad_object(int id, bool backfacing)
 {
 	quader_editor_core::PolygonObject object;
@@ -1633,6 +1702,158 @@ TEST(QdrModelingRuntimePickingTests,
 }
 
 TEST(QdrModelingRuntimePickingTests,
+     ComponentDoubleClickSelectsOnlyClickedLoosePartAndKeepsSeedActive) {
+  const auto fixture = loose_part_fixture();
+  for (const auto mode : std::array{quader_editor_core::SelectionMode::Vertex,
+                                    quader_editor_core::SelectionMode::Edge,
+                                    quader_editor_core::SelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    quader_editor_core::EditorSession session({fixture.object});
+    session.set_selection_mode(mode);
+    quader_editor_core::ApplyPickSelectionRequest request{
+        .ray = loose_part_ray(mode),
+        .pick_options = quader_editor_core::selection_pick_options_from_radii(
+            0.05, 0.05, false),
+    };
+    ASSERT_TRUE(quader_editor_core::apply_pick_selection(
+                    session, session.objects(), request).hit);
+    const auto seed_selection = session.objects().front().selection;
+    request.click_count = 2;
+    request.preserve_existing_component_selection_on_hit = true;
+    request.preserve_selection_on_selected_hit = true;
+    ASSERT_TRUE(quader_editor_core::apply_pick_selection(
+                    session, session.objects(), request).changed);
+    const auto &selection = session.objects().front().selection;
+    expect_loose_part_selection(selection, mode, fixture, 0);
+    EXPECT_TRUE(selection.has_active);
+    EXPECT_EQ(selection.active_kind, seed_selection.active_kind);
+    if (mode == quader_editor_core::SelectionMode::Vertex) {
+      EXPECT_EQ(selection.active_vertex, seed_selection.active_vertex);
+    } else if (mode == quader_editor_core::SelectionMode::Edge) {
+      EXPECT_EQ(selection.active_edge, seed_selection.active_edge);
+    } else {
+      EXPECT_EQ(selection.active_face, seed_selection.active_face);
+    }
+    EXPECT_TRUE(session.objects().front().component_edit_target);
+    EXPECT_EQ(session.active_object_id(), fixture.object.id);
+
+    const auto revision = session.state().selection_revision;
+    const auto repeated = quader_editor_core::apply_pick_selection(
+        session, session.objects(), request);
+    EXPECT_TRUE(repeated.hit);
+    EXPECT_FALSE(repeated.changed);
+    EXPECT_EQ(session.state().selection_revision, revision);
+  }
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     ComponentDoubleClickAddsAndRemovesOnlyClickedLoosePart) {
+  const auto fixture = loose_part_fixture();
+  for (const auto mode : std::array{quader_editor_core::SelectionMode::Vertex,
+                                    quader_editor_core::SelectionMode::Edge,
+                                    quader_editor_core::SelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    quader_editor_core::EditorSession session({fixture.object});
+    session.set_selection_mode(mode);
+    quader_editor_core::ApplyPickSelectionRequest request{
+        .ray = loose_part_ray(mode),
+        .pick_options = quader_editor_core::selection_pick_options_from_radii(
+            0.05, 0.05, false),
+        .click_count = 2,
+    };
+    ASSERT_TRUE(quader_editor_core::apply_pick_selection(
+                    session, session.objects(), request).hit);
+    request.operation = quader_editor_core::SelectionEditOperation::Add;
+    request.ray = loose_part_ray(mode, 1);
+    ASSERT_TRUE(quader_editor_core::apply_pick_selection(
+                    session, session.objects(), request).changed);
+    const auto &selection = session.objects().front().selection;
+    if (mode == quader_editor_core::SelectionMode::Vertex) {
+      EXPECT_EQ(selection.vertices.size(), 12U);
+    } else if (mode == quader_editor_core::SelectionMode::Edge) {
+      EXPECT_EQ(selection.edges.size(), 14U);
+    } else {
+      EXPECT_EQ(selection.faces.size(), 4U);
+    }
+    request.operation = quader_editor_core::SelectionEditOperation::Remove;
+    request.ray = loose_part_ray(mode);
+    ASSERT_TRUE(quader_editor_core::apply_pick_selection(
+                    session, session.objects(), request).changed);
+    expect_loose_part_selection(session.objects().front().selection, mode, fixture, 1);
+    request.ray = loose_part_ray(mode, 1);
+    ASSERT_TRUE(quader_editor_core::apply_pick_selection(
+                    session, session.objects(), request).changed);
+    EXPECT_TRUE(session.objects().front().selection.empty());
+    EXPECT_FALSE(session.objects().front().selection.has_active);
+    EXPECT_TRUE(session.objects().front().component_edit_target);
+    EXPECT_EQ(session.active_object_id(), fixture.object.id);
+  }
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     ComponentDoubleClickPreservesHiddenMaterialFiltering) {
+  for (const auto mode : std::array{quader_editor_core::SelectionMode::Vertex,
+                                    quader_editor_core::SelectionMode::Edge,
+                                    quader_editor_core::SelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    quader_editor_core::EditorSession session({adjacent_face_object()});
+    session.set_selection_mode(mode);
+    auto options = hidden_slot_pick_options(quader_poly::SelectionMode::Vertex);
+    options.vertex_radius = 0.05F;
+    options.edge_radius = 0.05F;
+    ASSERT_TRUE(quader_editor_core::apply_pick_selection(
+                    session, session.objects(),
+                    {.ray = loose_part_ray(mode),
+                     .pick_options = options,
+                     .click_count = 2}).hit);
+    const auto &selection = session.objects().front().selection;
+    if (mode == quader_editor_core::SelectionMode::Vertex) {
+      EXPECT_EQ(selection.vertices.size(), 4U);
+    } else if (mode == quader_editor_core::SelectionMode::Edge) {
+      EXPECT_EQ(selection.edges.size(), 4U);
+    } else {
+      EXPECT_EQ(selection.faces.size(), 1U);
+    }
+  }
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     ComponentDoubleClickMissRespectsPreservationAndModifierPolicy) {
+  const auto fixture = loose_part_fixture();
+  for (const auto mode : std::array{quader_editor_core::SelectionMode::Vertex,
+                                    quader_editor_core::SelectionMode::Edge,
+                                    quader_editor_core::SelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    quader_editor_core::EditorSession session({fixture.object});
+    session.set_selection_mode(mode);
+    quader_editor_core::ApplyPickSelectionRequest request{
+        .ray = loose_part_ray(mode),
+        .click_count = 2,
+    };
+    ASSERT_TRUE(quader_editor_core::apply_pick_selection(
+                    session, session.objects(), request).hit);
+    request.ray = miss_ray();
+    request.preserve_selection_on_miss = true;
+    const auto revision = session.state().selection_revision;
+    const auto preserved = quader_editor_core::apply_pick_selection(
+        session, session.objects(), request);
+    EXPECT_FALSE(preserved.hit);
+    EXPECT_FALSE(preserved.changed);
+    expect_loose_part_selection(session.objects().front().selection, mode, fixture, 0);
+    request.preserve_selection_on_miss = false;
+    for (const auto operation : std::array{quader_editor_core::SelectionEditOperation::Add,
+                                          quader_editor_core::SelectionEditOperation::Remove}) {
+      request.operation = operation;
+      const auto missed = quader_editor_core::apply_pick_selection(
+          session, session.objects(), request);
+      EXPECT_FALSE(missed.hit);
+      EXPECT_FALSE(missed.changed);
+    }
+    EXPECT_EQ(session.state().selection_revision, revision);
+  }
+}
+
+TEST(QdrModelingRuntimePickingTests,
      DepthFlagDoesNotReplaceOrdinaryFaceDoubleClick) {
   quader_editor_core::EditorSession session({cube_object(7)});
   session.set_selection_mode(quader_editor_core::SelectionMode::Face);
@@ -1659,6 +1880,7 @@ TEST(QdrModelingRuntimePickingTests,
       session, session.objects(),
       {.ray = {{0.0F, -1.0F, 5.0F}, {0.0F, 0.0F, -1.0F}},
        .pick_options = options,
+       .click_count = 2,
        .edge_traversal = quader_editor_core::EdgeSelectionTraversal::Ring});
 
   ASSERT_TRUE(selected.hit);

@@ -3734,6 +3734,156 @@ bool pick_select_component_traversal(
   return true;
 }
 
+bool pick_select_connected_component(
+    std::vector<PolygonObject> &objects, SelectionMode mode,
+    int &active_object_id, const ApplyPickSelectionRequest &request) {
+  const bool replace_selection =
+      request.operation == SelectionEditOperation::Replace;
+  const bool remove_selection =
+      request.operation == SelectionEditOperation::Remove;
+  const bool toggle_selection =
+      request.operation == SelectionEditOperation::Toggle;
+  quader_poly::PickOptions options = request.pick_options;
+  options.mode = component_selection_mode(mode);
+  apply_editor_surface_pick_policy(options);
+  int hit_index = -1;
+  quader_poly::PickResult hit;
+  bool component_hit = false;
+  if (const auto source_wire_hit = pick_active_source_wire_component(
+          objects, mode, request.ray, options, -1,
+          remove_selection || toggle_selection, request.object_bounds,
+          request.face_geometry, request.object_transforms)) {
+    hit_index = source_wire_hit->object_index;
+    hit = source_wire_hit->hit;
+    component_hit = true;
+  }
+  if (!component_hit) {
+    component_hit = pick_nearest_object(
+        objects, request.ray, options, hit_index, hit, request.object_bounds,
+        request.face_geometry, -1, request.object_transforms);
+  }
+  const quader_poly::ElementKind expected_kind =
+      mode == SelectionMode::Vertex
+          ? quader_poly::ElementKind::Vertex
+          : (mode == SelectionMode::Edge ? quader_poly::ElementKind::Edge
+                                         : quader_poly::ElementKind::Face);
+  if (!component_hit || hit.kind != expected_kind) {
+    if (replace_selection && mode != SelectionMode::Edge) {
+      clear_selection(objects, active_object_id);
+    }
+    return false;
+  }
+  PolygonObject &object = objects[hit_index];
+  quader_poly::Selection connected =
+      quader_poly::connected_component_selection(object.document, hit);
+  if (options.has_hidden_material_slot) {
+    if (mode == SelectionMode::Face) {
+      std::unordered_set<quader_poly::ElementId> hidden_faces;
+      for (const quader_poly::Face &face : object.document.faces) {
+        if (options.hides_material_slot(face.material_slot)) {
+          hidden_faces.insert(face.id);
+        }
+      }
+      std::erase_if(connected.faces, [&](quader_poly::ElementId face) {
+        return hidden_faces.contains(face);
+      });
+    } else {
+      const quader_poly::document_internal::DocumentPickFacts pick_facts(
+          object.document, options);
+      std::erase_if(connected.vertices, [&](quader_poly::ElementId vertex) {
+        return !pick_facts.vertex_can_be_picked(vertex);
+      });
+      std::erase_if(connected.edges, [&](quader_poly::Edge edge) {
+        return !pick_facts.edge_can_be_picked(edge);
+      });
+    }
+  }
+  if (connected.empty()) {
+    return false;
+  }
+  const bool was_edit_target = object.selected || object.id == active_object_id;
+  if (replace_selection) {
+    clear_selection(objects, active_object_id);
+    object.selection = std::move(connected);
+  } else {
+    object.selection.mode = connected.mode;
+    const auto edit_components = [&](auto &selected, const auto &components,
+                                     const auto &key) {
+      std::unordered_set<std::uint64_t> existing;
+      existing.reserve(selected.size());
+      for (const auto component : selected) {
+        existing.insert(key(component));
+      }
+      if (remove_selection || toggle_selection) {
+        std::unordered_set<std::uint64_t> affected;
+        affected.reserve(components.size());
+        for (const auto component : components) {
+          affected.insert(key(component));
+        }
+        std::erase_if(selected, [&](const auto component) {
+          return affected.contains(key(component));
+        });
+      }
+      if (!remove_selection) {
+        for (const auto component : components) {
+          if (existing.insert(key(component)).second) {
+            selected.push_back(component);
+          }
+        }
+      }
+    };
+    const auto element_key = [](quader_poly::ElementId element) {
+      return static_cast<std::uint64_t>(element);
+    };
+    edit_components(object.selection.vertices, connected.vertices, element_key);
+    edit_components(object.selection.edges, connected.edges, component_edge_key);
+    edit_components(object.selection.faces, connected.faces, element_key);
+    object.selection.has_active = !object.selection.empty();
+    object.selection.active_kind = hit.kind;
+    if (!object.selection.vertices.empty()) {
+      object.selection.active_vertex =
+          !remove_selection &&
+                  quader_poly::selection_contains(object.selection, hit.vertex_id)
+              ? hit.vertex_id
+              : object.selection.vertices.back();
+    }
+    if (!object.selection.edges.empty()) {
+      object.selection.active_edge =
+          !remove_selection &&
+                  quader_poly::selection_contains(object.selection, hit.edge)
+              ? quader_poly::make_edge(hit.edge.a, hit.edge.b)
+              : object.selection.edges.back();
+    }
+    if (!object.selection.faces.empty()) {
+      object.selection.active_face =
+          !remove_selection &&
+                  quader_poly::selection_contains_face(object.selection, hit.face_id)
+              ? hit.face_id
+              : object.selection.faces.back();
+    }
+  }
+  if (object.selection.empty()) {
+    object.selection.clear();
+    object.selection.mode = options.mode;
+    if ((remove_selection || toggle_selection) && was_edit_target) {
+      keep_component_edit_target(object, active_object_id);
+    } else {
+      object.selected = false;
+      object.component_edit_target = false;
+      normalize_active_object_id(objects, active_object_id);
+    }
+  } else {
+    object.selected = true;
+    object.component_edit_target = true;
+    if (remove_selection) {
+      normalize_active_object_id(objects, active_object_id);
+    } else {
+      active_object_id = object.id;
+    }
+  }
+  return true;
+}
+
 bool apply_picked_selection_to_projection(
 		std::vector<PolygonObject>& selection_objects,
 		SelectionMode& selection_mode,
@@ -3917,14 +4067,7 @@ ApplyPickSelectionProjectionResult apply_pick_selection(
         if (component_traversal_select) {
           result.hit = pick_select_component_traversal(
               picking_objects, mode, resolved_active_object_id, request);
-        } else if (multi_click && mode == SelectionMode::Face) {
-          result.hit = pick_select_all_faces(
-              picking_objects, mode, operation, request.ray,
-              resolved_active_object_id,
-              request.pick_options, request.object_bounds,
-              request.face_geometry, request.object_transforms);
-        } else if ((multi_click || edge_traversal_select) &&
-                   mode == SelectionMode::Edge) {
+        } else if (edge_traversal_select) {
           result.hit =
               request.edge_traversal == EdgeSelectionTraversal::Ring
                   ? pick_select_edge_ring(
@@ -3937,12 +4080,9 @@ ApplyPickSelectionProjectionResult apply_pick_selection(
                         resolved_active_object_id, request.pick_options,
                         request.object_bounds, request.face_geometry,
                         request.object_transforms);
-        } else if (multi_click && mode == SelectionMode::Vertex) {
-          result.hit = pick_select_all_vertices(
-              picking_objects, mode, operation, request.ray,
-              resolved_active_object_id,
-              request.pick_options, request.object_bounds,
-              request.face_geometry, request.object_transforms);
+        } else if (multi_click && mode != SelectionMode::Object) {
+          result.hit = pick_select_connected_component(
+              picking_objects, mode, resolved_active_object_id, request);
         } else {
           result.hit =
               pick_select(picking_objects, mode, operation, request.ray,

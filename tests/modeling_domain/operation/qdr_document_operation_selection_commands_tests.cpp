@@ -104,6 +104,178 @@ BulkFaceShrinkFixture make_bulk_face_shrink_fixture(
 }
 
 TEST(QdrDocumentOperationSelectionCommandsTests,
+     ConnectedPartSelectionKeepsDisconnectedPartsSeparateInEveryMode)
+{
+    Document document;
+    const AddedFace first = add_quad(document, 0.0F);
+    const AddedFace second = add_quad(document, 3.0F);
+    const ElementId isolated = add_vertex(document, { 8.0F, 0.0F, 0.0F });
+
+    const Selection vertices = connected_component_selection(
+        document, PickResult { .hit = true,
+                               .kind = ElementKind::Vertex,
+                               .vertex_id = first.vertices.back() });
+    EXPECT_EQ(vertices.mode, SelectionMode::Vertex);
+    EXPECT_EQ(vertices.vertices, first.vertices);
+    EXPECT_TRUE(vertices.edges.empty());
+    EXPECT_TRUE(vertices.faces.empty());
+    EXPECT_TRUE(vertices.has_active);
+    EXPECT_EQ(vertices.active_kind, ElementKind::Vertex);
+    EXPECT_EQ(vertices.active_vertex, first.vertices.back());
+    EXPECT_FALSE(selection_contains(vertices, isolated));
+
+    const Edge reversed_seed { first.vertices[1], first.vertices[0] };
+    const Selection edges = connected_component_selection(
+        document, PickResult { .hit = true,
+                               .kind = ElementKind::Edge,
+                               .edge = reversed_seed });
+    EXPECT_EQ(edges.mode, SelectionMode::Edge);
+    EXPECT_TRUE(edges.vertices.empty());
+    ASSERT_EQ(edges.edges.size(), 4U);
+    EXPECT_TRUE(edges.faces.empty());
+    EXPECT_TRUE(edges.has_active);
+    EXPECT_EQ(edges.active_kind, ElementKind::Edge);
+    EXPECT_EQ(edges.active_edge,
+              make_edge(reversed_seed.a, reversed_seed.b));
+    for (std::size_t index = 0U; index < first.vertices.size(); ++index) {
+        EXPECT_TRUE(selection_contains(
+            edges, make_edge(first.vertices[index],
+                             first.vertices[(index + 1U) % 4U])));
+    }
+
+    const Selection faces = connected_component_selection(
+        document, PickResult { .hit = true,
+                               .kind = ElementKind::Face,
+                               .face_id = second.id });
+    EXPECT_EQ(faces.mode, SelectionMode::Face);
+    EXPECT_TRUE(faces.vertices.empty());
+    EXPECT_TRUE(faces.edges.empty());
+    EXPECT_EQ(faces.faces, (std::vector<ElementId> { second.id }));
+    EXPECT_TRUE(faces.has_active);
+    EXPECT_EQ(faces.active_kind, ElementKind::Face);
+    EXPECT_EQ(faces.active_face, second.id);
+}
+
+TEST(QdrDocumentOperationSelectionCommandsTests,
+     ConnectedPartSelectionDoesNotJoinCoincidentVertexPositions)
+{
+    Document document;
+    const AddedFace first = add_quad(document, 0.0F);
+    const AddedFace coincident = add_quad(document, 0.0F);
+
+    const Selection vertices = connected_component_selection(
+        document, PickResult { .hit = true,
+                               .kind = ElementKind::Vertex,
+                               .vertex_id = coincident.vertices.front() });
+    EXPECT_EQ(vertices.vertices, coincident.vertices);
+    const Selection edges = connected_component_selection(
+        document, PickResult {
+                      .hit = true,
+                      .kind = ElementKind::Edge,
+                      .edge = make_edge(coincident.vertices[0],
+                                        coincident.vertices[1]) });
+    EXPECT_EQ(edges.edges.size(), 4U);
+    EXPECT_TRUE(std::ranges::all_of(edges.edges, [&](Edge edge) {
+        return std::ranges::find(coincident.vertices, edge.a) !=
+                   coincident.vertices.end() &&
+               std::ranges::find(coincident.vertices, edge.b) !=
+                   coincident.vertices.end();
+    }));
+    const Selection faces = connected_component_selection(
+        document, PickResult { .hit = true,
+                               .kind = ElementKind::Face,
+                               .face_id = first.id });
+    EXPECT_EQ(faces.faces, (std::vector<ElementId> { first.id }));
+}
+
+TEST(QdrDocumentOperationSelectionCommandsTests,
+     ConnectedPartSelectionTraversesSharedVertexChainsInEveryMode)
+{
+    Document document;
+    const AddedFace first = add_quad(document, 0.0F);
+    const ElementId second_b = add_vertex(document, { 2.0F, 1.0F, 0.0F });
+    const ElementId second_c = add_vertex(document, { 1.0F, 2.0F, 0.0F });
+    const ElementId second = add_face(
+        document, std::array<ElementId, 3> {
+                      first.vertices[2], second_b, second_c });
+    const ElementId third_b = add_vertex(document, { 1.0F, 3.0F, 0.0F });
+    const ElementId third_c = add_vertex(document, { 0.0F, 3.0F, 0.0F });
+    const ElementId third = add_face(
+        document, std::array<ElementId, 3> {
+                      second_c, third_b, third_c });
+    const AddedFace disconnected = add_quad(document, 4.0F);
+    ASSERT_NE(second, kInvalidElementId);
+    ASSERT_NE(third, kInvalidElementId);
+
+    const Selection vertices = connected_component_selection(
+        document, PickResult { .hit = true,
+                               .kind = ElementKind::Vertex,
+                               .vertex_id = first.vertices.front() });
+    EXPECT_EQ(vertices.vertices,
+              (std::vector<ElementId> {
+                  first.vertices[0], first.vertices[1], first.vertices[2],
+                  first.vertices[3], second_b, second_c, third_b, third_c }));
+
+    const Selection edges = connected_component_selection(
+        document, PickResult {
+                      .hit = true,
+                      .kind = ElementKind::Edge,
+                      .edge = make_edge(first.vertices[0], first.vertices[1]) });
+    EXPECT_EQ(edges.edges.size(), 10U);
+    EXPECT_TRUE(selection_contains(edges, make_edge(third_b, third_c)));
+    EXPECT_FALSE(selection_contains(
+        edges, make_edge(disconnected.vertices[0], disconnected.vertices[1])));
+
+    const Selection faces = connected_component_selection(
+        document, PickResult { .hit = true,
+                               .kind = ElementKind::Face,
+                               .face_id = first.id });
+    EXPECT_EQ(faces.faces,
+              (std::vector<ElementId> { first.id, second, third }));
+    EXPECT_EQ(faces.active_face, first.id);
+}
+
+TEST(QdrDocumentOperationSelectionCommandsTests,
+     ConnectedPartSelectionSupportsIsolatedVerticesAndRejectsInvalidSeeds)
+{
+    Document document;
+    const AddedFace face = add_quad(document, 0.0F);
+    const ElementId isolated = add_vertex(document, { 3.0F, 0.0F, 0.0F });
+    const Selection isolated_selection = connected_component_selection(
+        document, PickResult { .hit = true,
+                               .kind = ElementKind::Vertex,
+                               .vertex_id = isolated });
+    EXPECT_EQ(isolated_selection.vertices,
+              (std::vector<ElementId> { isolated }));
+    EXPECT_EQ(isolated_selection.active_vertex, isolated);
+    EXPECT_TRUE(isolated_selection.has_active);
+
+    const std::array<PickResult, 8> invalid_picks {{
+        { .kind = ElementKind::Face, .face_id = face.id },
+        { .hit = true, .kind = ElementKind::Vertex },
+        { .hit = true, .kind = ElementKind::Vertex,
+          .vertex_id = document.next_vertex_id },
+        { .hit = true, .kind = ElementKind::Edge,
+          .edge = make_edge(face.vertices[0], face.vertices[2]) },
+        { .hit = true, .kind = ElementKind::Edge,
+          .edge = make_edge(face.vertices[0], isolated) },
+        { .hit = true, .kind = ElementKind::Edge,
+          .edge = { face.vertices[0], face.vertices[0] } },
+        { .hit = true, .kind = ElementKind::Face },
+        { .hit = true, .kind = ElementKind::Face,
+          .face_id = document.next_face_id },
+    }};
+    for (const PickResult& pick : invalid_picks) {
+        const Selection selection = connected_component_selection(document, pick);
+        EXPECT_TRUE(selection.empty());
+        EXPECT_FALSE(selection.has_active);
+    }
+    EXPECT_TRUE(connected_component_selection(
+                    Document {}, PickResult { .hit = true,
+                                               .vertex_id = isolated }).empty());
+}
+
+TEST(QdrDocumentOperationSelectionCommandsTests,
      SelectAllAndInversePreserveActiveAndReportNoOps)
 {
     const QuadFixture fixture = make_quad_document();

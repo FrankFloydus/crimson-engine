@@ -524,6 +524,13 @@ Tests: [viewport workflows](tests/viewport_interaction_controller_tests.cpp),
   [Vulkan previews](tests/selection_overlay_runtime_tests.cpp).
 - Freeze the resolved physical chord and semantic action at press through deferred release, gizmo
   handoff, and click/double-click disambiguation. A modifier release must not reinterpret the gesture.
+- Component double-click selects the picked loose part through shared authored vertex identities
+  in Vertex, Edge and Face modes. Coincident unwelded vertices stay separate; Shift adds and Ctrl
+  removes only that part. Explicit Alt loop/ring traversal takes precedence. Both native resolved
+  picking and runtime picking use the neutral `connected_component_selection` query; preserve
+  publication through the existing selection owner. Coverage: the loose-part cases in
+  [viewport workflows](tests/viewport_interaction_controller_tests.cpp) and
+  [selection queries](tests/modeling_domain/operation/qdr_document_operation_selection_commands_tests.cpp).
 - Edge loops use topological continuation; rings cross opposite quad edges. Picked-face context does
   not choose a loop side. If an interior loop stays at its seed, use the perimeter of its adjacent
   face with the most corners (ties keep authored adjacency order): cylinder rims select their cap,

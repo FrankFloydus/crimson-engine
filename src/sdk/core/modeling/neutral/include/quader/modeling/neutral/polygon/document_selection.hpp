@@ -151,6 +151,14 @@ struct PolygonDocumentLiveness {
 };
 
 void select_only(Selection& selection, const PickResult& pick);
+/**
+ * Selects the picked loose part through shared authored vertex identities.
+ * Only the picked component kind is returned, with the seed active. Coincident
+ * positions do not connect parts; a missing or invalid seed returns no selection.
+ */
+[[nodiscard]] Selection connected_component_selection(
+    const Document& document,
+    const PickResult& pick);
 void add_selection(Selection& selection, const PickResult& pick);
 void remove_selection(Selection& selection, const PickResult& pick);
 void set_selection_mode(Selection& selection, SelectionMode mode);

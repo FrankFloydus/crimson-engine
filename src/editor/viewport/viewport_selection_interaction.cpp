@@ -920,6 +920,7 @@ void ViewportSelectionInteraction::populate_operation_input_context(
         context.selection_gesture = Gesture::DepthCycle;
       } else if (request->click_count > 1 &&
                  (frame.selection_state.summary.mode == QuaderSelectionMode::Vertex ||
+                  frame.selection_state.summary.mode == QuaderSelectionMode::Edge ||
                   frame.selection_state.summary.mode == QuaderSelectionMode::Face)) {
         context.selection_gesture = Gesture::ExpandComponent;
       }
