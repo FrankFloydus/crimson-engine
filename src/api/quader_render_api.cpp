@@ -19,6 +19,7 @@
 #include "editor/modeling/modeling_tool_preview_scene_adapter.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/modes/editor_mode_service.hpp"
 #include "editor/session/viewport_local_visibility_service.hpp"
 #include "render/overlay/render_overlay_snapshot.hpp"
 #include "render/render_signature_builder.hpp"
@@ -233,6 +234,7 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(
           .add_value(project_material_revision)
           .add_value(project.scene().render_component_revision())
           .add_value(project.scene().texture_mapping_revision())
+          .add_value(project.scene().layer_revision())
           .value();
   if (path_preview.active) {
     native_array_kind = 3u;
@@ -393,6 +395,16 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(
   RenderToolPreviewSceneSnapshot preview_snapshot =
       bridge.build_tool_preview_scene_snapshot(
           std::move(neutral_preview), session.assets, &local_visibility);
+  for (RenderToolPreviewMeshRecord &mesh : preview_snapshot.meshes) {
+    const MeshComponent *component = session.scene.mesh(mesh.source_entity);
+    mesh.wireframe_on_shaded =
+        (component == nullptr || component->wireframe_on_shaded) &&
+        !project.editor_mode().contains(mesh.source_entity);
+    mesh.wireframe_on_shaded_color = component != nullptr
+        ? component->wireframe_on_shaded_color : std::nullopt;
+    mesh.wireframe_tint = resolved_scene_wireframe_tint(session.scene,
+        mesh.visibility_entity != kInvalidEntityId ? mesh.visibility_entity : mesh.source_entity);
+  }
   if (native_array_kind == 0u && !transform_preview_active) {
     if (const auto coordinates = project.modeling().accepted_overlay_coordinates()) {
       QDR_PROFILE_SCOPE("Render extract accepted overlay coordinates");
@@ -517,7 +529,7 @@ QuaderApiVoidResult QuaderRenderApiRuntimeAccess::sync_scene_asset_overlays(
           &local_visibility, request.selected_scene_wire_visible,
           instance_edit_render_scope(scene_session), request.raster_groups,
           request.selected_mesh_outline_only, request.collision_visible,
-          request.collision_color);
+          request.collision_color, request.wireframe_on_shaded_layer_mask);
   if (update.changed() || bridge.scene_asset_overlay_sync_pending()) {
     bridge.sync_scene_asset_overlays(*update.selected_object,
                                      *update.scene_wireframe, *update.collision);

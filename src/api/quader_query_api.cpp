@@ -140,6 +140,8 @@ QuaderEntitySnapshot entity_snapshot_for(const SceneSession &session,
   if (const MeshComponent *mesh = scene.mesh(entity)) {
     snapshot.has_mesh = true;
     snapshot.mesh = mesh->mesh;
+    snapshot.wireframe_on_shaded = mesh->wireframe_on_shaded;
+    snapshot.wireframe_on_shaded_color = mesh->wireframe_on_shaded_color;
   }
   if (const CurveComponent *curve = scene.curve(entity)) {
     snapshot.has_curve = true;

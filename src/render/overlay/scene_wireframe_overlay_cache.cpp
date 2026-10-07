@@ -7,6 +7,7 @@
 #include "render/overlay/scene_wireframe_overlay_cache.hpp"
 
 #include "core/color_space.hpp"
+#include "assets/mesh_geometry_projection.hpp"
 #include "diagnostics/profile.hpp"
 #include "render/overlay/overlay_renderable_builder.hpp"
 #include "render/render_layers.hpp"
@@ -15,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <span>
 #include <unordered_map>
@@ -22,11 +24,27 @@
 #include <utility>
 
 namespace quader {
+
+ViewportSettingColor scene_wireframe_shaded_color(
+    const RenderOverlayMeshSnapshot &mesh,
+    const ViewportPersistentOverlayStyleSnapshot &style) {
+  ViewportSettingColor color = style.wireframe_on_shaded_color;
+  if (mesh.wireframe_on_shaded_color) {
+    color.r = mesh.wireframe_on_shaded_color->x;
+    color.g = mesh.wireframe_on_shaded_color->y;
+    color.b = mesh.wireframe_on_shaded_color->z;
+  }
+  return color;
+}
+
 namespace {
 
 std::uint32_t wire_color(
     const RenderOverlayMeshSnapshot &mesh,
     const ViewportPersistentOverlayStyleSnapshot &style) {
+  // Shaded ribbons carry neutral vertices. Per-pane colors and per-mesh
+  // overrides are uniforms, so recoloring never uploads authored edges.
+  if (mesh.shaded_wire) return rgba8(255u, 255u, 255u, 255u);
   if (mesh.selected) {
     return mesh.active_selected ? style.active_selection_wire_color
                                 : style.selection_wire_color;
@@ -39,8 +57,16 @@ std::uint32_t wire_color(
 }
 
 ViewportOverlayLayer wire_layer(const RenderOverlayMeshSnapshot &mesh) {
+  if (mesh.shaded_wire) return ViewportOverlayLayer::WireframeBase;
   return mesh.selected ? ViewportOverlayLayer::SelectedEdge
                        : ViewportOverlayLayer::WireframeXray;
+}
+
+std::uint8_t wire_layer_mask(
+    const RenderOverlayMeshSnapshot &mesh,
+    const RenderOverlaySceneWireframeSnapshot &snapshot) {
+  return mesh.shaded_wire ? snapshot.wireframe_on_shaded_layer_mask
+                          : snapshot.layer_mask;
 }
 
 float wire_width(const RenderOverlayMeshSnapshot &mesh,
@@ -76,7 +102,7 @@ RenderInstancePrimitiveKey wire_key(
     const RenderOverlayMeshSnapshot &mesh,
     const ViewportPersistentOverlayStyleSnapshot &style,
     const RenderInstanceEditScope &instance_edit_scope) {
-  return {
+  RenderInstancePrimitiveKey key{
       // These exact runtime tokens deliberately avoid grouping on a content
       // hash. Baked color and geometry stay in identity; mutable material line
       // width deliberately does not.
@@ -94,6 +120,24 @@ RenderInstancePrimitiveKey wire_key(
       .double_sided = true,
       .editor_unlit = true,
   };
+  if (mesh.shaded_wire) {
+    // Exact RGB bit patterns partition tint uniforms without coloring the
+    // shared geometry. Inheritance stays distinct from an equal override.
+    key.material_payload = 0u;
+    key.index_offset = 0u;
+    if (mesh.wireframe_on_shaded_color) {
+      const QVec3 color = *mesh.wireframe_on_shaded_color;
+      const auto bits = [](float value) {
+        return value == 0.0f ? 0u : std::bit_cast<std::uint32_t>(value);
+      };
+      key.material_payload = (static_cast<std::uint64_t>(bits(color.x)) << 32u) |
+          bits(color.y);
+      key.index_offset = bits(color.z);
+      key.presentation_flags |= static_cast<std::uint8_t>(
+          RenderInstancePresentationFlag::ShadedWireColorOverride);
+    }
+  }
+  return key;
 }
 
 /// Hashes every exact field used to group one derived wire primitive.
@@ -117,21 +161,26 @@ struct PrimitiveKeyHash final {
 };
 
 RenderInstanceBounds compute_local_bounds(
-    std::span<const MeshVertex> vertices) {
+    const RenderOverlayMeshSnapshot &mesh) {
   RenderInstanceBounds bounds;
-  for (const MeshVertex &vertex : vertices) {
+  const auto positions = mesh.geometry_projection && mesh.geometry_projection->positions
+      ? std::span<const QVec3>(*mesh.geometry_projection->positions)
+      : std::span<const QVec3>{};
+  for (std::size_t index = 0u; index < mesh.vertices.size(); ++index) {
+    const QVec3 position = positions.size() == mesh.vertices.size()
+        ? positions[index] : mesh.vertices[index].position;
     if (!bounds.present) {
-      bounds.min = vertex.position;
-      bounds.max = vertex.position;
+      bounds.min = position;
+      bounds.max = position;
       bounds.present = true;
       continue;
     }
-    bounds.min.x = std::min(bounds.min.x, vertex.position.x);
-    bounds.min.y = std::min(bounds.min.y, vertex.position.y);
-    bounds.min.z = std::min(bounds.min.z, vertex.position.z);
-    bounds.max.x = std::max(bounds.max.x, vertex.position.x);
-    bounds.max.y = std::max(bounds.max.y, vertex.position.y);
-    bounds.max.z = std::max(bounds.max.z, vertex.position.z);
+    bounds.min.x = std::min(bounds.min.x, position.x);
+    bounds.min.y = std::min(bounds.min.y, position.y);
+    bounds.min.z = std::min(bounds.min.z, position.z);
+    bounds.max.x = std::max(bounds.max.x, position.x);
+    bounds.max.y = std::max(bounds.max.y, position.y);
+    bounds.max.z = std::max(bounds.max.z, position.z);
   }
   return bounds;
 }
@@ -157,12 +206,12 @@ SceneWireframeOccurrencePreparation prepare_wire_occurrences(
   prepared.record_by_key.reserve(snapshot.meshes.size());
   std::unordered_set<RenderInstancePrimitiveKey, PrimitiveKeyHash> unique_keys;
   unique_keys.reserve(snapshot.meshes.size());
-  std::unordered_map<const MeshGeometryPayload *, RenderInstanceBounds>
+  std::unordered_map<const void *, RenderInstanceBounds>
       local_bounds_by_geometry;
   local_bounds_by_geometry.reserve(snapshot.meshes.size());
   for (const RenderOverlayMeshSnapshot &mesh : snapshot.meshes) {
     if (!mesh.has_wire_geometry() ||
-        (!mesh.selected && snapshot.layer_mask == 0u)) {
+        (!mesh.selected && wire_layer_mask(mesh, snapshot) == 0u)) {
       continue;
     }
     const RenderInstancePrimitiveKey key =
@@ -174,7 +223,9 @@ SceneWireframeOccurrencePreparation prepare_wire_occurrences(
     }
 
     RenderInstanceBounds bounds;
-    const MeshGeometryPayload *geometry = mesh.geometry_payload.get();
+    const void *geometry = mesh.geometry_projection
+        ? static_cast<const void *>(mesh.geometry_projection.get())
+        : static_cast<const void *>(mesh.geometry_payload.get());
     const auto cached = geometry != nullptr
                             ? local_bounds_by_geometry.find(geometry)
                             : local_bounds_by_geometry.end();
@@ -182,7 +233,7 @@ SceneWireframeOccurrencePreparation prepare_wire_occurrences(
       bounds = cached->second;
       ++prepared.work.local_bounds_cache_hit_count;
     } else {
-      bounds = compute_local_bounds(mesh.vertices);
+      bounds = compute_local_bounds(mesh);
       prepared.work.local_bounds_vertex_visit_count +=
           static_cast<std::uint64_t>(mesh.vertices.size());
       if (geometry != nullptr) {
@@ -194,6 +245,10 @@ SceneWireframeOccurrencePreparation prepare_wire_occurrences(
     RenderInstancePrimitiveKey geometry_key = key;
     geometry_key.presentation_flags =
         static_cast<std::uint8_t>(RenderInstancePresentationFlag::None);
+    if (mesh.shaded_wire) {
+      geometry_key.material_payload = wire_geometry_identity(mesh);
+      geometry_key.index_offset = wire_color(mesh, snapshot.style);
+    }
     unique_keys.insert(geometry_key);
     prepared.occurrences.push_back({
         .key = key,
@@ -259,16 +314,20 @@ InstancedWireBatchStyle wire_batch_style(
       viewport_overlay_draw_order(layer) * 64u);
   const bool dimmed =
       (chunk.key.presentation_flags &
-       static_cast<std::uint8_t>(RenderInstancePresentationFlag::Dimmed)) != 0u;
+              static_cast<std::uint8_t>(RenderInstancePresentationFlag::Dimmed)) != 0u;
+  OverlayRenderState render_state = OverlayRenderableBuilder::make_state(
+      layer, ViewportOverlayGeometryKind::Lines, blend_order);
   return {
-      .render_state = OverlayRenderableBuilder::make_state(
-          layer, ViewportOverlayGeometryKind::Lines, blend_order),
+      .render_state = render_state,
       .instance_edit_style = style.instance_edit_style,
       .line_width_pixels = wire_width(mesh, style),
       .near_plane = clip_planes.near_plane,
       .instance_edit_dim = dimmed ? 1.0f : 0.0f,
       .layer_mask = layer_mask,
       .channel = kViewportDefaultRenderableChannel,
+      .surface_depth_enabled = mesh.shaded_wire,
+      .line_tint = mesh.shaded_wire ? scene_wireframe_shaded_color(mesh, style)
+                                   : ViewportSettingColor{1.0f, 1.0f, 1.0f, 1.0f},
   };
 }
 
@@ -286,7 +345,8 @@ ViewportPersistentOverlayRasterGroupSet scene_wire_raster_groups(
   const bool selected_wire_present = has_selected_scene_wire(snapshot);
   ViewportPersistentOverlayRasterGroupSet result;
   if (snapshot.raster_groups.empty()) {
-    if (selected_wire_present || snapshot.layer_mask != 0u) {
+    if (selected_wire_present || snapshot.layer_mask != 0u ||
+        snapshot.wireframe_on_shaded_layer_mask != 0u) {
       const bool added =
           result.add(kViewportOverlayLayerMask, snapshot.style);
       (void)added;
@@ -296,7 +356,8 @@ ViewportPersistentOverlayRasterGroupSet scene_wire_raster_groups(
   for (const ViewportPersistentOverlayRasterGroup &raster_group :
        snapshot.raster_groups.groups()) {
     if (selected_wire_present ||
-        (raster_group.layer_mask & snapshot.layer_mask) != 0u) {
+        (raster_group.layer_mask & (snapshot.layer_mask |
+            snapshot.wireframe_on_shaded_layer_mask)) != 0u) {
       const bool added = result.add(raster_group.layer_mask,
                                     raster_group.style);
       (void)added;
@@ -310,12 +371,12 @@ std::uint8_t scene_wire_batch_layer_mask(
     const RenderOverlaySceneWireframeSnapshot &snapshot,
     const ViewportPersistentOverlayRasterGroup &raster_group) {
   if (snapshot.raster_groups.empty()) {
-    return mesh.selected ? kViewportOverlayLayerMask : snapshot.layer_mask;
+    return mesh.selected ? kViewportOverlayLayerMask : wire_layer_mask(mesh, snapshot);
   }
   return mesh.selected
              ? raster_group.layer_mask
              : static_cast<std::uint8_t>(raster_group.layer_mask &
-                                         snapshot.layer_mask);
+                                         wire_layer_mask(mesh, snapshot));
 }
 
 } // namespace
@@ -346,12 +407,21 @@ bool scene_wireframe_overlay_mesh_inputs_match(
   for (std::size_t index = 0u; index < previous.size(); ++index) {
     const RenderOverlayMeshSnapshot &before = previous[index];
     const RenderOverlayMeshSnapshot &after = next[index];
+    const bool pinned_projection = before.geometry_projection &&
+        before.vertices.data() == before.geometry_projection->vertices().data() &&
+        before.indices.data() == before.geometry_projection->indices().data();
+    const auto &before_color = before.wireframe_on_shaded_color;
+    const auto &after_color = after.wireframe_on_shaded_color;
+    const bool color_matches = before_color.has_value() == after_color.has_value() &&
+        (!before_color || (before_color->x == after_color->x &&
+                           before_color->y == after_color->y &&
+                           before_color->z == after_color->z));
     // Pointer equality only proves unchanged content for immutable, pinned
     // storage. Ownerless legacy spans may have been mutated in place.
-    if ((!before.vertices.empty() &&
+    if ((!before.vertices.empty() && !pinned_projection &&
          (before.geometry_payload == nullptr ||
           before.vertices.data() != before.geometry_payload->vertices.data())) ||
-        (!before.indices.empty() &&
+        (!before.indices.empty() && !pinned_projection &&
          (before.geometry_payload == nullptr ||
           before.indices.data() != before.geometry_payload->indices.data())) ||
         (!before.wire_segments.empty() &&
@@ -366,11 +436,14 @@ bool scene_wireframe_overlay_mesh_inputs_match(
         before.mesh_id != after.mesh_id ||
         before.mesh_revision != after.mesh_revision ||
         before.geometry_payload != after.geometry_payload ||
+        before.geometry_projection != after.geometry_projection ||
         before.geometry_content_id != after.geometry_content_id ||
         before.wire_geometry_payload != after.wire_geometry_payload ||
         before.world_transform.values != after.world_transform.values ||
         before.selected != after.selected ||
         before.active_selected != after.active_selected ||
+        before.shaded_wire != after.shaded_wire ||
+        !color_matches ||
         before.wireframe_tint.x != after.wireframe_tint.x ||
         before.wireframe_tint.y != after.wireframe_tint.y ||
         before.wireframe_tint.z != after.wireframe_tint.z ||
@@ -412,6 +485,7 @@ void SceneWireframeOverlayCache::shutdown() {
   synced_selected_mesh_outline_only_ = false;
   synced_clip_planes_ = {};
   synced_layer_mask_ = 0u;
+  synced_wireframe_on_shaded_layer_mask_ = 0u;
   layer_masks_forced_hidden_ = false;
   has_synced_ = false;
   stats_ = {};
@@ -457,9 +531,11 @@ void SceneWireframeOverlayCache::sync(
   }
 
   const bool selected_wire_present = has_selected_scene_wire(snapshot);
-  if (snapshot.layer_mask == 0u && !selected_wire_present) {
+  if (snapshot.layer_mask == 0u && snapshot.wireframe_on_shaded_layer_mask == 0u &&
+      !selected_wire_present) {
     set_all_layer_masks(0u);
     synced_layer_mask_ = 0u;
+    synced_wireframe_on_shaded_layer_mask_ = 0u;
     return;
   }
   const ViewportPersistentOverlayRasterGroupSet raster_groups =
@@ -492,7 +568,8 @@ void SceneWireframeOverlayCache::sync(
       !has_synced_ || !viewport_persistent_overlay_raster_groups_match(
                           synced_raster_groups_, raster_groups);
   const bool layer_mask_changed =
-      !has_synced_ || synced_layer_mask_ != snapshot.layer_mask;
+      !has_synced_ || synced_layer_mask_ != snapshot.layer_mask ||
+      synced_wireframe_on_shaded_layer_mask_ != snapshot.wireframe_on_shaded_layer_mask;
   const bool context_style_changed =
       !has_synced_ || synced_instance_edit_context_signature_ !=
                           snapshot.style.instance_edit_context_signature;
@@ -594,6 +671,7 @@ void SceneWireframeOverlayCache::sync(
   synced_selected_mesh_outline_only_ = snapshot.selected_mesh_outline_only;
   synced_clip_planes_ = snapshot.clip_planes;
   synced_layer_mask_ = snapshot.layer_mask;
+  synced_wireframe_on_shaded_layer_mask_ = snapshot.wireframe_on_shaded_layer_mask;
   layer_masks_forced_hidden_ = false;
   has_synced_ = true;
 }
@@ -834,6 +912,11 @@ bool SceneWireframeOverlayCache::update_raster_group(
     if (!wire_backend_.update_line_width(proxy_group.proxies[index],
                                          line_width_pixels)) {
       return false;
+    }
+    if (record.shaded_wire) {
+      wire_backend_.update_line_tint(
+          std::span<WireBatchProxy>(&proxy_group.proxies[index], 1u),
+          scene_wireframe_shaded_color(record, raster_group.style));
     }
     const std::uint8_t layer_mask =
         scene_wire_batch_layer_mask(record, snapshot, raster_group);

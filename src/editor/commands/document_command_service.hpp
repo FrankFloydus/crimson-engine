@@ -53,6 +53,13 @@ public:
     DocumentCommandService(SceneDocument& scene, EditorHistoryService& history, const AssetRegistry* assets = nullptr);
     void set_entity_mutation_blocker(EntityMutationBlocker blocker);
     void set_selection_publication(CheckedSelectionPublication publication);
+    /** Native sessions restrict whole-object authoring to Object Mode. */
+    void set_object_mode_provider(std::function<bool()> provider) {
+      object_mode_provider_ = std::move(provider);
+    }
+    [[nodiscard]] bool object_mode_active() const {
+      return !object_mode_provider_ || object_mode_provider_();
+    }
     void set_texture_lock_settings_provider(
         std::function<TextureLockSettings()> provider);
     [[nodiscard]] TextureLockSettings texture_lock_settings() const;
@@ -200,6 +207,7 @@ public:
     const AssetRegistry* assets_ = nullptr;
     EntityMutationBlocker entity_mutation_blocker_;
     CheckedSelectionPublication selection_publication_;
+    std::function<bool()> object_mode_provider_;
     std::function<TextureLockSettings()> texture_lock_settings_provider_;
     /// Each preview owns only its named fields; unrelated edits remain intact.
     struct PointLightRangeEdit {

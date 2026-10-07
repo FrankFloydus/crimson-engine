@@ -410,6 +410,9 @@ valid_semantic_when_context(const QuaderKeybindingContext &context) {
   if (!at_most_one_prefix_true(context, "selectionMode.")) {
     return false;
   }
+  if (!at_most_one_prefix_true(context, "editorMode.")) {
+    return false;
+  }
 
   const bool fly = context.get("navigation.flyActive");
   const bool orbit = context.get("navigation.orbitActive");

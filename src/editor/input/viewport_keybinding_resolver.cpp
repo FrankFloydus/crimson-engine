@@ -743,6 +743,7 @@ void ViewportKeybindingResolver::resolve(
 
   bool wheel_event_resolved_linear_array_action = false;
   bool wheel_event_resolved_radial_array_action = false;
+  const std::uint64_t edit_generation = editor.mode().generation();
   std::size_t wheel_input_edge_offset = 0u;
   bool dispatch_continues = runtime_binding.current();
   PointerEdgeProvenanceCursor pointer_edge_cursor;
@@ -751,6 +752,12 @@ void ViewportKeybindingResolver::resolve(
       [&](const QuaderInputChord &chord, ViewportInputEdgeKind kind,
           double wheel_step_delta) {
         if (!dispatch_continues) {
+          return true;
+        }
+        if (chord.device == QuaderInputDevice::Mouse &&
+            editor.mode().generation() != edit_generation) {
+          // These packets were captured before the preceding mode command.
+          // A remapped mouse command must not bypass the host's gesture fence.
           return true;
         }
         // Consume provenance before suppression or action lookup so an

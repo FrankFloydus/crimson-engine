@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
+#include "editor/modes/editor_mode_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/session/project_session.hpp"
@@ -318,6 +319,9 @@ TEST(ModelingSelectionPerformanceTests,
         {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}}, "Retained Picking Box");
     ASSERT_TRUE(created.ok()) << created.error_message();
     ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+    if (mode != QuaderSelectionMode::Object) {
+      ASSERT_TRUE(session.editor_mode().set_mode(EditorMode::Edit).ok);
+    }
     ASSERT_TRUE(editor.selection().set_mode(mode).ok());
     ASSERT_TRUE(editor.selection().clear().ok());
     ModelingBoxSelectRequest query{
@@ -406,6 +410,10 @@ TEST(ModelingSelectionPerformanceTests,
     ASSERT_TRUE(front.ok());
     ASSERT_TRUE(crossing.ok());
     ASSERT_TRUE(rear.ok());
+    ASSERT_TRUE(editor.selection().select_objects(
+        {front.value().entity, crossing.value().entity, rear.value().entity},
+        front.value().entity).ok());
+    ASSERT_TRUE(session.editor_mode().set_mode(EditorMode::Edit).ok);
     ASSERT_TRUE(editor.selection().set_mode(mode).ok());
     ASSERT_TRUE(editor.selection().clear().ok());
     for (const auto rule : {ModelingBoxSelectionRule::Contain,
@@ -461,6 +469,8 @@ TEST(ModelingSelectionPerformanceTests,
         {.min = {-3, -2, -1}, .max = {0, 2, 1}}, "Through Selection Left").ok());
     ASSERT_TRUE(editor.modeling().create_box(
         {.min = {1, -2, -4}, .max = {4, 2, -2}}, "Through Selection Right").ok());
+    ASSERT_TRUE(editor.selection().select_all().ok());
+    ASSERT_TRUE(session.editor_mode().set_mode(EditorMode::Edit).ok);
     ASSERT_TRUE(editor.selection().set_mode(mode).ok());
     for (const bool orthographic : {true, false}) {
       SCOPED_TRACE(orthographic);
@@ -586,6 +596,9 @@ TEST(ModelingSelectionPerformanceTests, CopiedLargeSceneMarqueeStageBenchmark) {
   const std::string_view extent_name = extent_source != nullptr ? extent_source : "full";
   ASSERT_TRUE(extent_name == "full" || extent_name == "central");
   const bool full_extent = extent_name == "full";
+  if (!scene_mode) {
+    ASSERT_TRUE(session.editor_mode().set_mode(EditorMode::Edit).ok);
+  }
   ASSERT_TRUE(editor.selection().set_mode(mode).ok());
   ASSERT_TRUE(editor.selection().select_all().ok());
   ASSERT_TRUE(editor.selection().clear().ok());

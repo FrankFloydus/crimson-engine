@@ -11,6 +11,7 @@
 #include "core/localization_service.hpp"
 #include "editor/session/scene_session.hpp"
 #include "ui/qt_application_theme.hpp"
+#include "ui/qt_viewport_context_menu.hpp"
 #include "ui/qt_viewport_marking_menu.hpp"
 #include "ui/qt_viewport_surface.hpp"
 #include "viewport/viewport_input_router.hpp"
@@ -29,6 +30,7 @@
 #include <QToolButton>
 #include <QWidget>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <filesystem>
@@ -287,6 +289,12 @@ TEST(QtViewportMarkingMenuTests, FixedDirectionsShareRelevantContextCommands) {
   QWidget owner;
   prepare_owner(owner);
 
+  const auto box = editor.modeling().create_box(
+      {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}},
+      "Marking Availability");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+
   struct ModeCase final {
     quader::QuaderSelectionMode mode;
     qsizetype command_count;
@@ -306,6 +314,10 @@ TEST(QtViewportMarkingMenuTests, FixedDirectionsShareRelevantContextCommands) {
   };
   for (const ModeCase &mode_case : cases) {
     SCOPED_TRACE(static_cast<int>(mode_case.mode));
+    const bool object_mode = mode_case.mode == quader::QuaderSelectionMode::Object ||
+                             mode_case.mode == quader::QuaderSelectionMode::Group;
+    ASSERT_TRUE(editor.mode().set(object_mode ? quader::QuaderEditorMode::Object
+                                              : quader::QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(editor.selection().set_mode(mode_case.mode).ok());
     ASSERT_TRUE(editor.selection().clear().ok());
     bool opened = false;
@@ -333,10 +345,8 @@ TEST(QtViewportMarkingMenuTests, FixedDirectionsShareRelevantContextCommands) {
     EXPECT_TRUE(opened);
   }
 
-  const auto box = editor.modeling().create_box(
-      {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}},
-      "Marking Availability");
-  ASSERT_TRUE(box.ok()) << box.error_message();
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(box.value(), 1).ok());
   const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
@@ -493,14 +503,20 @@ TEST(QtViewportMarkingMenuTests, MixedInstancesAndLightsExposeOneAlignToolLaunch
     const auto align_actions = popup.findChildren<QAction *>(
         QStringLiteral("tools.activate.align"));
     ASSERT_EQ(align_actions.size(), 1);
-    EXPECT_EQ(align_actions.front()->text(), QStringLiteral("Align Tool"));
+    const auto context_commands = quader::qt_viewport_context_commands(
+        editor, editor.selection().summary(), localization);
+    const auto align_command = std::ranges::find(
+        context_commands, quader::quader_command::kToolsActivateAlign.string(),
+        &quader::QtViewportContextCommand::command_id);
+    ASSERT_NE(align_command, context_commands.end());
+    EXPECT_EQ(align_actions.front()->text(), align_command->label);
     EXPECT_TRUE(align_actions.front()->isEnabled());
     EXPECT_FALSE(align_actions.front()->icon().isNull());
     auto *overflow = popup.findChild<QListWidget *>(
         QStringLiteral("markingMenu.overflow"));
     ASSERT_NE(overflow, nullptr);
     const auto align_items = overflow->findItems(
-        QStringLiteral("Align Tool"), Qt::MatchExactly);
+        align_actions.front()->text(), Qt::MatchExactly);
     ASSERT_EQ(align_items.size(), 1);
     EXPECT_FALSE(align_items.front()->icon().isNull());
     for (const auto *action : popup.findChildren<QAction *>()) {
@@ -511,6 +527,9 @@ TEST(QtViewportMarkingMenuTests, MixedInstancesAndLightsExposeOneAlignToolLaunch
     popup.close();
   }));
   EXPECT_TRUE(presented_align);
+  ASSERT_TRUE(editor.modeling().enter_instance_edit(instance.value().occurrence.root.id).ok());
+  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
   EXPECT_FALSE(show_and_interact(owner, editor, input_router, localization,
                                 [&](QWidget &popup) {

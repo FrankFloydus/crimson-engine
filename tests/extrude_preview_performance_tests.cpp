@@ -362,7 +362,8 @@ private:
         {.name = "Extrusion performance patch"});
     if (!created.ok()) return false;
     object_ = created.value();
-    return editor_.selection().set_mode(QuaderSelectionMode::Face).ok() &&
+    return editor_.mode().set(QuaderEditorMode::Edit).ok() &&
+           editor_.selection().set_mode(QuaderSelectionMode::Face).ok() &&
            editor_.selection().select_components(
                {.object = object_, .kind = QuaderComponentKind::Face,
                 .faces = selected}).ok() &&

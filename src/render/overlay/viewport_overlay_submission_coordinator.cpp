@@ -33,12 +33,20 @@ bool uses_mesh_outlines(const ViewportOverlaySubmissionRequest &request) {
          request.construction_object_id < 0 && request.selected_mesh_outline_snapshot != nullptr;
 }
 
-void strip_wireframe_point_occluders(ViewportOverlayFrame &frame) {
+void strip_wireframe_component_sources(ViewportOverlayFrame &frame) {
   // Wireframe panes hide mesh surfaces, so those surfaces must not CPU-cull
   // vertex markers either. Keep marker depth testing and its distance-safe
   // shader bias intact; only remove the hidden-surface visibility metadata.
   std::erase_if(frame.triangles, [](const ViewportOverlayTriangle &triangle) {
     return triangle.layer == ViewportOverlayLayer::SourceWireDepthStamp;
+  });
+  // Ordinary scene/preview topology owns Wireframe panes. Remove only the
+  // redundant editing base; selected edges, hover, removal and markers retain
+  // their semantic layers and the shared source frames remain unchanged.
+  std::erase_if(frame.lines, [](const ViewportOverlayLine &line) {
+    return line.layer == ViewportOverlayLayer::SourceWire &&
+           (line.source == ViewportOverlaySource::ComponentSelection ||
+            line.source == ViewportOverlaySource::ComponentHover);
   });
 }
 
@@ -677,7 +685,7 @@ ViewportOverlayFrame build_persistent_frame(
       },
       scene_style_range);
   if (uses_mesh_outlines(request)) strip_mesh_selection_wires(frame);
-  if (request.wireframe_pane) strip_wireframe_point_occluders(frame);
+  if (request.wireframe_pane) strip_wireframe_component_sources(frame);
   strip_component_source_wires_under_selection(frame);
   if (dimension_box_visible)
     strip_replaced_selection_cages(frame, request.scene_selection_mode == RenderOverlaySelectionMode::Group);
@@ -1173,7 +1181,7 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
             .raster_scale = request.raster_scale,
             .construction_object_id = request.construction_object_id,
         });
-    if (request.wireframe_pane) strip_wireframe_point_occluders(dynamic_frame);
+    if (request.wireframe_pane) strip_wireframe_component_sources(dynamic_frame);
     target.submit_dynamic_overlay(request.viewport_index, request.layer_mask,
                                   std::move(dynamic_frame), request.camera);
     pane.dynamic = dynamic_stamp;

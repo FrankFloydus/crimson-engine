@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_preferences_api.hpp"
+#include "api/quader_api_type_conversions.hpp"
 #include "api/quader_viewport_api.hpp"
 #include "assets/asset_registry.hpp"
 #include "assets/default_material_catalog.hpp"
@@ -14,6 +15,9 @@
 #include "editor/render/standard_material_render_snapshot_adapter.hpp"
 #include "editor/session/project_session.hpp"
 #include "render/scene_render_extraction.hpp"
+#include "render/overlay/scene_wireframe_overlay_cache.hpp"
+#include "render/overlay/viewport_overlay_style_resolver.hpp"
+#include "render/render_layers.hpp"
 #include "scene/scene_document.hpp"
 #include "support/behavior_scenario.hpp"
 #include "support/texture_lifetime_harness.hpp"
@@ -320,6 +324,88 @@ TEST(PublicReleaseRenderTests, PreferencesRejectBeforeCallingRuntimeHooks) {
   EXPECT_FALSE(preferences.mesh_grid_visible());
   EXPECT_TRUE(preferences.texture_lock_enabled());
   EXPECT_FALSE(preferences.texture_lock_scale_enabled());
+}
+
+TEST(PublicReleaseRenderTests, ShadedWireColorSettingsAndMeshOverridesRemainPublic) {
+  ASSERT_EQ(current_product_release(), kPublicRelease01);
+  EXPECT_TRUE(std::ranges::any_of(viewport_color_settings(), [](const auto &descriptor) {
+    return descriptor.id == ViewportColorSettingId::WireframeOnShaded &&
+           descriptor.key == "WireframeOnShadedColor";
+  }));
+  SceneSession session;
+  QuaderEditorApi editor{QuaderApiSessionInternalAccess::from_scene_session(session)};
+  const auto created = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Public Wire Color");
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  ASSERT_TRUE(editor.selection().clear().ok());
+  constexpr auto kControl = QuaderViewportControl::WireframeOnShaded;
+  ASSERT_TRUE(editor.viewports().set_control(kControl, true).ok());
+  ViewportSettings settings;
+  const auto snapshot = [&](std::uint8_t ordinary_wire_mask = 0u) {
+    const auto mask = editor.viewports().control(kControl)
+                          ? viewport_grid_layer_mask(0u) : std::uint8_t{0u};
+    return build_render_overlay_scene_wireframe_snapshot(
+        session.scene(), session.assets(), ordinary_wire_mask,
+        ViewportOverlayStyleResolver::persistent_style_snapshot(settings),
+        {}, nullptr, false, {}, true, mask);
+  };
+  const auto expect_color = [&](ViewportSettingColor expected) {
+    const auto shown = snapshot();
+    ASSERT_EQ(shown.meshes.size(), 2u);
+    const auto shaded = std::ranges::find_if(shown.meshes,
+        [](const auto &record) { return record.shaded_wire; });
+    const auto ordinary = std::ranges::find_if(shown.meshes,
+        [](const auto &record) { return !record.shaded_wire; });
+    ASSERT_NE(shaded, shown.meshes.end());
+    ASSERT_NE(ordinary, shown.meshes.end());
+    EXPECT_EQ(ordinary->entity, created.value().entity);
+    EXPECT_FALSE(ordinary->selected);
+    EXPECT_FALSE(ordinary->active_selected);
+    EXPECT_EQ(ordinary->wire_geometry_payload, shaded->wire_geometry_payload);
+    EXPECT_EQ(shown.layer_mask, 0u);
+    EXPECT_EQ(shown.wireframe_on_shaded_layer_mask, viewport_grid_layer_mask(0u));
+    const auto &mesh = *shaded;
+    EXPECT_EQ(mesh.entity, created.value().entity);
+    EXPECT_TRUE(mesh.shaded_wire);
+    EXPECT_FALSE(mesh.selected);
+    EXPECT_FALSE(mesh.active_selected);
+    EXPECT_TRUE(mesh.has_authored_polygon_geometry());
+    EXPECT_TRUE(mesh.has_wire_geometry());
+    const auto color = scene_wireframe_shaded_color(mesh, shown.style);
+    EXPECT_FLOAT_EQ(color.r, expected.r);
+    EXPECT_FLOAT_EQ(color.g, expected.g);
+    EXPECT_FLOAT_EQ(color.b, expected.b);
+    EXPECT_FLOAT_EQ(color.a, expected.a);
+  };
+  expect_color({0.0f, 0.0f, 0.0f, 1.0f});
+  constexpr ViewportSettingColor kGlobal{0.2f, 0.3f, 0.4f, 0.6f};
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::WireframeOnShaded, kGlobal));
+  expect_color(kGlobal);
+  auto mesh = to_api_mesh_component(*session.scene().mesh(created.value().entity));
+  mesh.wireframe_on_shaded_color = QVec3{1.0f, 0.5f, 0.25f};
+  const auto changed = editor.scene().set_mesh_component(created.value().entity, mesh);
+  ASSERT_TRUE(changed.ok()) << changed.error_message();
+  ASSERT_TRUE(changed.changed());
+  expect_color({1.0f, 0.5f, 0.25f, kGlobal.a});
+  ASSERT_TRUE(editor.history().undo().ok());
+  expect_color(kGlobal);
+  ASSERT_TRUE(editor.history().redo().ok());
+  expect_color({1.0f, 0.5f, 0.25f, kGlobal.a});
+  mesh.wireframe_on_shaded_color.reset();
+  ASSERT_TRUE(editor.scene().set_mesh_component(created.value().entity, mesh).changed());
+  expect_color(kGlobal);
+  ASSERT_TRUE(editor.viewports().set_control(kControl, false).ok());
+  EXPECT_TRUE(snapshot().meshes.empty());
+  const auto ordinary_only = snapshot(viewport_grid_layer_mask(1u));
+  ASSERT_EQ(ordinary_only.meshes.size(), 1u);
+  EXPECT_EQ(ordinary_only.layer_mask, viewport_grid_layer_mask(1u));
+  EXPECT_EQ(ordinary_only.wireframe_on_shaded_layer_mask, 0u);
+  EXPECT_EQ(ordinary_only.meshes.front().entity, created.value().entity);
+  EXPECT_FALSE(ordinary_only.meshes.front().shaded_wire);
+  EXPECT_FALSE(ordinary_only.meshes.front().selected);
+  EXPECT_TRUE(ordinary_only.meshes.front().has_authored_polygon_geometry());
+  EXPECT_TRUE(ordinary_only.meshes.front().has_wire_geometry());
 }
 
 TEST(PublicReleaseRenderTests, HiddenSettingsStayInactiveAndPreserveStoredOverrides) {

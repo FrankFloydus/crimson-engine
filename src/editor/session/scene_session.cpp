@@ -33,6 +33,7 @@
 #include "editor/session/viewport_local_visibility_service.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
 
+#include <algorithm>
 #include <utility>
 
 namespace quader {
@@ -164,6 +165,12 @@ void SceneSession::rebuild_services() {
       }, &tool_defaults_->modeling, &tool_defaults_->uv_peel);
   selection_ = std::make_unique<EditorSelectionService>(
       document_.scene(), *document_commands_, *modeling_);
+  editor_mode_ = std::make_unique<EditorModeService>(*this);
+  modeling_->set_editor_mode_service(editor_mode_.get());
+  selection_->set_editor_mode_service(editor_mode_.get());
+  document_commands_->set_object_mode_provider([this] {
+    return editor_mode_->mode() == EditorMode::Object;
+  });
   structural_lifecycle_ =
       std::make_unique<SceneStructuralLifecycleService>(
           document_.scene(), *history_, *document_commands_, *modeling_,
@@ -300,9 +307,12 @@ void SceneSession::rebuild_services() {
                              .message = settled.message};
       });
   native_tools_->set_creation_material(creation_material_);
+  native_tools_->set_editor_mode_provider([this] {
+    return editor_mode_->mode();
+  });
   viewport_local_visibility_ =
       std::make_unique<ViewportLocalVisibilityService>(
-          document_.scene(), document_.assets(), *modeling_, *instances_,
+          document_.scene(), document_.assets(), *modeling_, *editor_mode_, *instances_,
           *native_tools_, viewport_workspace_,
           [this]() { (void)selection_->clear_hover(); });
   scene_surface_query_ = std::make_unique<SceneSurfaceQuery>(
@@ -320,8 +330,36 @@ void SceneSession::rebuild_services() {
     if (viewport_local_visibility_) {
       viewport_local_visibility_->synchronize_scene_lifecycle();
     }
+    if (editor_mode_) {
+      const std::uint64_t previous_revision = editor_mode_->revision();
+      const EditorMode previous_mode = editor_mode_->mode();
+      editor_mode_->reconcile_scene_lifecycle();
+      const EditorModeSnapshot &context = editor_mode_->snapshot();
+      bool projection_mismatch = false;
+      if (context.mode == EditorMode::Edit) {
+        // A historical Object/Group command may publish its scene selection
+        // after the modeling memento has restored the current edit context.
+        // Unchanged membership still requires that projection to be repaired.
+        const auto selected = scene().selected_entities();
+        projection_mismatch = selected.size() != context.participants.size() ||
+            scene().primary_selection() != context.active_entity ||
+            modeling_->selection_mode() != context.component_kind ||
+            std::ranges::any_of(selected, [&](EntityId entity) {
+              return !context.contains(entity);
+            });
+      }
+      const bool edit_context_changed =
+          previous_revision != editor_mode_->revision() &&
+          (previous_mode == EditorMode::Edit || context.mode == EditorMode::Edit);
+      if (edit_context_changed || projection_mismatch) {
+        (void)modeling_->apply_editor_mode_context(context, {});
+      }
+    }
   });
   history_->set_content_settled_observer([this](bool committed) {
+    if (committed && editor_mode_) {
+      editor_mode_->synchronize_tools_after_publication();
+    }
     if (!preview_content_checkpoint_.has_value() && content_settled_observer_) {
       content_settled_observer_(committed);
     }
@@ -342,6 +380,7 @@ void SceneSession::rebuild_services() {
   // modeling session.
   upgrade_legacy_modeling_local_frames(document_);
   modeling_->reset_from_scene();
+  (void)modeling_->apply_editor_mode_context(editor_mode_->snapshot(), {});
 }
 
 SceneSessionReadView SceneSession::read_view() const {
@@ -460,6 +499,7 @@ void SceneSession::replace_document_impl(
   preview_content_checkpoint_.reset();
   document_commands_->abandon_property_edit();
   document_ = std::move(document);
+  editor_mode_->reset_for_document_replacement();
   minimum_product_release_ = current_product_release();
   invalidate_document_binding();
   scene_surface_query_->invalidate();
@@ -481,6 +521,7 @@ void SceneSession::replace_document_impl(
     QDR_PROFILE_SCOPE("SceneSession replace reset modeling from scene");
     upgrade_legacy_modeling_local_frames(document_);
     modeling_->reset_from_scene();
+    (void)modeling_->apply_editor_mode_context(editor_mode_->snapshot(), {});
   }
   if (document_replacement_finalizer_) {
     QDR_PROFILE_SCOPE("SceneSession replace finalize native document");

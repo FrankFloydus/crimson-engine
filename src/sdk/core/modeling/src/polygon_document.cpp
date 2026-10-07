@@ -3338,7 +3338,14 @@ Result<OperationResult> PolygonDocument::delete_selection() {
   return apply_operation(
       *impl_,
       [](quader_poly::Document &document, quader_poly::Selection &selection) {
-        return quader_poly::delete_selection(document, selection);
+        auto result = quader_poly::delete_selection(document, selection);
+        if (result.success && result.changed) {
+          // Delete removes every selected operand of the active kind. The
+          // geometry helper borrows selection, so publish its cleared state
+          // here with the topology and the selection dirty receipt.
+          selection.clear();
+        }
+        return result;
       });
 }
 

@@ -29,6 +29,14 @@ namespace quader {
 
 struct RenderVulkanCompositionTarget;
 
+/// Identifies the scene binding and editing context that received native input.
+struct QtViewportInputContext {
+  std::uint64_t binding_generation = 0u;
+  std::uint64_t edit_generation = 0u;
+
+  bool operator==(const QtViewportInputContext &) const = default;
+};
+
 enum class ViewportPaneFocusTrigger;
 
 /** Resolved Qt presentation after hover and navigation-capture precedence. */
@@ -55,6 +63,7 @@ qt_viewport_cursor_presentation(ViewportPointerCursor requested,
  */
 struct QtViewportInputFrame {
   ViewportInputFrame input;
+  std::optional<QtViewportInputContext> context;
   bool left_pressed = false;
   bool left_down = false;
   bool left_released = false;
@@ -124,6 +133,12 @@ public:
   // Discards queued and held input from a released runtime binding. Focus,
   // hover, and the last pointer position remain available to the next owner.
   void abandon_input();
+  /// Drops pointer packets captured by a previous editing context, retaining keys.
+  void synchronize_input_context();
+  void set_input_context_provider(
+      std::function<std::optional<QtViewportInputContext>()> provider) {
+    input_context_provider_ = std::move(provider);
+  }
   void set_pointer_capture(bool captured);
   [[nodiscard]] bool pointer_captured() const;
   void set_interaction_cursor(ViewportPointerCursor cursor);
@@ -159,6 +174,7 @@ protected:
   void wheelEvent(QWheelEvent *event) override;
 
 private:
+  void abandon_input(bool preserve_keyboard);
   void recreate_swap_chain(bool force_retry = false);
   void create_composed_surface();
   [[nodiscard]] void *native_window_handle() const;
@@ -194,6 +210,8 @@ private:
   QPointer<QWidget> visible_host_;
   std::unique_ptr<PresentationGeometry> presentation_geometry_;
   std::function<void()> surface_changed_callback_;
+  std::function<std::optional<QtViewportInputContext>()> input_context_provider_;
+  std::optional<QtViewportInputContext> input_context_;
   std::function<void(ViewportPaneId, ViewportPaneFocusTrigger)>
       focus_request_callback_;
   QtPointerCapturePolicy pointer_capture_policy_;

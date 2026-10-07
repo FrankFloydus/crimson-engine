@@ -10,6 +10,7 @@
 #include "editor/commands/modeling_command_execution_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/modes/editor_mode_service.hpp"
 #include "support/curve_modeling_test_support.hpp"
 
 #include <quader/modeling/modeling.hpp>
@@ -163,6 +164,7 @@ TEST_F(EditorModelingHistoryRetentionTests,
   const auto created = create_unpublished_history_box();
   ASSERT_TRUE(created.ok) << created.message;
   auto &service = session_.modeling();
+  ASSERT_TRUE(session_.editor_mode().set_mode(EditorMode::Edit).ok);
   ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Face).ok);
   ASSERT_TRUE(service.set_component_selection({
       .modeling_object_id = created.object.modeling_object_id,
@@ -263,6 +265,7 @@ TEST_F(EditorModelingHistoryRetentionTests,
   const auto created = create_box();
   ASSERT_TRUE(created.ok());
   auto &service = session_.modeling();
+  ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(service.set_component_selection({
       .modeling_object_id = created.value().modeling_object_id,
       .mode = ModelingSelectionMode::Face,
@@ -313,6 +316,7 @@ TEST_F(EditorModelingHistoryRetentionTests,
   const auto created = create_box();
   ASSERT_TRUE(created.ok());
   auto &service = session_.modeling();
+  ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(service.set_component_selection({
       .modeling_object_id = created.value().modeling_object_id,
       .mode = ModelingSelectionMode::Face,
@@ -360,6 +364,7 @@ TEST_F(EditorModelingHistoryRetentionTests,
     event.snap_enabled = false;
     return event;
   };
+  ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(service.activate_viewport_tool(ModelingViewportTool::Knife).ok);
   ASSERT_TRUE(service.accept_knife_point(event_at(-1.0F)).ok);
   ASSERT_TRUE(service.tool_status().knife_has_active_stroke);
@@ -399,6 +404,7 @@ TEST_F(EditorModelingHistoryRetentionTests,
   event.camera = {.orthographic = true, .origin = {0.0F, 0.0F, 5.0F},
                   .viewport_size = {800.0F, 600.0F}, .orthographic_size = 4.0};
   event.snap_enabled = false;
+  ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(service.activate_viewport_tool(ModelingViewportTool::InsertEdgeLoop).ok);
   ASSERT_TRUE(service.update_insert_edge_loop_hover(event).ok);
   ASSERT_TRUE(service.tool_status().insert_edge_loop_has_preview);
@@ -426,7 +432,7 @@ TEST_F(EditorModelingHistoryRetentionTests,
 }
 
 TEST_F(EditorModelingHistoryRetentionTests,
-       PolySelectionModeTransitionAcceptsValidFaceAndRetainsIncompleteDraft) {
+       PolyEditorModeTransitionAcceptsValidFaceAndRetainsIncompleteDraft) {
   ASSERT_TRUE(create_box().ok());
   auto &service = session_.modeling();
   const auto history_before = session_.history().undo_count();
@@ -440,13 +446,13 @@ TEST_F(EditorModelingHistoryRetentionTests,
     return event;
   };
   ASSERT_TRUE(service.accept_poly_point(event_at(-0.5F, -0.5F)).ok);
-  EXPECT_FALSE(editor_.selection().set_mode(QuaderSelectionMode::Edge).ok());
+  EXPECT_FALSE(editor_.mode().set(QuaderEditorMode::Edit).ok());
   EXPECT_EQ(service.tool_status().poly_point_count, 1);
   EXPECT_EQ(session_.history().undo_count(), history_before);
   ASSERT_TRUE(service.accept_poly_point(event_at(0.5F, -0.5F)).ok);
   ASSERT_TRUE(service.accept_poly_point(event_at(0.5F, 0.5F)).ok);
   ASSERT_EQ(service.tool_status().poly_point_count, 3);
-  const auto accepted = editor_.selection().set_mode(QuaderSelectionMode::Edge);
+  const auto accepted = editor_.mode().set(QuaderEditorMode::Edit);
   ASSERT_TRUE(accepted.ok()) << accepted.error_message();
   EXPECT_EQ(editor_.query().modeling_objects().size(), 2U);
   EXPECT_EQ(session_.history().undo_count(), history_before + 1U);

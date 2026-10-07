@@ -603,7 +603,7 @@ TEST(QdrBinarySceneCodecTests, EmptyScenePersistsDocumentSettingsAndExplicitEmpt
   ASSERT_TRUE(parsed.ok) << parsed.message;
   ASSERT_EQ(parsed.chunks.size(), 1u);
   const auto &metadata = parsed.chunks.front();
-  EXPECT_EQ(metadata.schema_version, 17u);
+  EXPECT_EQ(metadata.schema_version, 19u);
   const auto *payload = qdr_fb::GetScenePayload(metadata.bytes().data());
   ASSERT_NE(payload->root_entities(), nullptr);
   EXPECT_EQ(payload->root_entities()->size(), 0u);
@@ -823,7 +823,7 @@ TEST(QdrBinarySceneCodecTests, AbsentParentingOffsetsDefaultToIdentityForOldAndN
   ASSERT_TRUE(document.scene().set_transform(100u, transform));
   const auto parsed = parse_written_scene(document);
   ASSERT_TRUE(parsed.ok) << parsed.message;
-  for (const std::uint16_t version : {16u, 17u}) {
+  for (const std::uint16_t version : {16u, 17u, 18u, 19u}) {
     SCOPED_TRACE(version);
     auto chunks = copy_chunks(parsed);
     auto &metadata = chunks.front();
@@ -1089,6 +1089,148 @@ TEST(QdrBinarySceneCodecTests,
 }
 
 TEST(QdrBinarySceneCodecTests,
+     WireframeOnShadedPersistsDisabledAndDefaultsEnabledWhenFieldIsAbsent) {
+  for (const bool enabled : {false, true}) {
+    SCOPED_TRACE(enabled);
+    SceneContentDocument document = simple_scene();
+    MeshComponent mesh = *document.scene().mesh(100u);
+    mesh.wireframe_on_shaded = enabled;
+    ASSERT_TRUE(document.scene().set_mesh(100u, mesh));
+    const auto container = parse_written_scene(document);
+    ASSERT_TRUE(container.ok) << container.message;
+    const auto metadata = std::ranges::find_if(
+        container.chunks, [](const quader_io::QdrBinaryChunk &chunk) {
+          return chunk.type == static_cast<std::uint32_t>(
+                                   quader_io::QdrBinaryChunkType::SceneMetadata);
+        });
+    ASSERT_NE(metadata, container.chunks.end());
+    const auto *payload = qdr_fb::GetScenePayload(metadata->bytes().data());
+    ASSERT_NE(payload->entities(), nullptr);
+    const qdr_fb::MeshComponent *serialized_mesh = nullptr;
+    for (const auto *entity : *payload->entities()) {
+      if (entity->mesh() != nullptr) {
+        serialized_mesh = entity->mesh();
+        break;
+      }
+    }
+    ASSERT_NE(serialized_mesh, nullptr);
+    EXPECT_EQ(serialized_mesh->wireframe_on_shaded(), enabled);
+    // The enabled default has exactly the legacy representation: no field.
+    EXPECT_EQ(flatbuffers::IsFieldPresent(
+                  serialized_mesh,
+                  qdr_fb::MeshComponent::VT_WIREFRAME_ON_SHADED),
+              !enabled);
+    const auto read = QdrDocumentReader::deserialize_project_document(
+        quader_io::build_qdr_binary_container(
+            container.scene_uuid, copy_chunks(container)));
+    ASSERT_TRUE(read.ok) << read.message;
+    ASSERT_NE(read.document.scene().mesh(100u), nullptr);
+    EXPECT_EQ(*read.document.scene().mesh(100u), mesh);
+  }
+}
+
+TEST(QdrBinarySceneCodecTests,
+     OlderSceneSchemasDefaultWireframeOnShadedEnabled) {
+  SceneContentDocument document = simple_scene();
+  MeshComponent mesh = *document.scene().mesh(100u);
+  mesh.wireframe_on_shaded = false;
+  mesh.wireframe_on_shaded_color = QVec3{0.25f, 0.5f, 0.75f};
+  ASSERT_TRUE(document.scene().set_mesh(100u, mesh));
+  const auto parsed = parse_written_scene(document);
+  ASSERT_TRUE(parsed.ok) << parsed.message;
+  for (std::uint16_t version = 1u; version <= 19u; ++version) {
+    SCOPED_TRACE(version);
+    auto chunks = copy_chunks(parsed);
+    auto &metadata = chunks.front();
+    if (version < 16u) {
+      make_legacy_scene_metadata(metadata, version);
+    }
+    metadata.schema_version = version;
+    metadata.content_hash = 0u;
+    const auto bytes = quader_io::build_qdr_binary_container(
+        parsed.scene_uuid, std::move(chunks));
+    const auto read = QdrDocumentReader::deserialize_project_document(bytes);
+    ASSERT_TRUE(read.ok) << read.message;
+    ASSERT_NE(read.document.scene().mesh(100u), nullptr);
+    EXPECT_EQ(read.document.scene().mesh(100u)->wireframe_on_shaded,
+              version < 18u);
+    const auto &color = read.document.scene().mesh(100u)->wireframe_on_shaded_color;
+    EXPECT_EQ(color.has_value(), version >= 19u);
+    if (color.has_value()) {
+      EXPECT_EQ(color->x, 0.25f);
+      EXPECT_EQ(color->y, 0.5f);
+      EXPECT_EQ(color->z, 0.75f);
+    }
+    EXPECT_TRUE(QdrDocumentReader::deserialize_project_dependencies(bytes).ok);
+    EXPECT_TRUE(QdrDocumentReader::deserialize_project_material_usage(bytes).ok);
+  }
+}
+
+TEST(QdrBinarySceneCodecTests,
+     WireframeColorRoundTripsInheritedBlackAndColoredOverrides) {
+  for (const auto color : {std::optional<QVec3>{}, std::optional{QVec3{}},
+                          std::optional{QVec3{0.25f, 0.5f, 0.75f}}}) {
+    SceneContentDocument document = simple_scene();
+    auto mesh = *document.scene().mesh(100u);
+    mesh.wireframe_on_shaded_color = color;
+    ASSERT_TRUE(document.scene().set_mesh(100u, mesh));
+    const auto parsed = parse_written_scene(document);
+    ASSERT_TRUE(parsed.ok) << parsed.message;
+    const auto *payload = qdr_fb::GetScenePayload(parsed.chunks.front().bytes().data());
+    const auto *stored_mesh = payload->entities()->Get(0u)->mesh();
+    ASSERT_NE(stored_mesh, nullptr);
+    EXPECT_EQ(stored_mesh->wireframe_on_shaded_color() != nullptr, color.has_value());
+    const auto bytes = quader_io::build_qdr_binary_container(
+        parsed.scene_uuid, copy_chunks(parsed));
+    const auto read = QdrDocumentReader::deserialize_project_document(bytes);
+    ASSERT_TRUE(read.ok) << read.message;
+    ASSERT_NE(read.document.scene().mesh(100u), nullptr);
+    EXPECT_EQ(*read.document.scene().mesh(100u), mesh);
+    EXPECT_TRUE(QdrDocumentReader::deserialize_project_dependencies(bytes).ok);
+    EXPECT_TRUE(QdrDocumentReader::deserialize_project_material_usage(bytes).ok);
+  }
+}
+
+TEST(QdrBinarySceneCodecTests, InvalidWireframeColorsRejectReadAndWriteBeforePublication) {
+  auto document = simple_scene();
+  auto mesh = *document.scene().mesh(100u);
+  mesh.wireframe_on_shaded_color = QVec3{0.25f, 0.5f, 0.75f};
+  ASSERT_TRUE(document.scene().set_mesh(100u, mesh));
+  const auto parsed = parse_written_scene(document);
+  ASSERT_TRUE(parsed.ok) << parsed.message;
+  for (const float invalid : {-0.01f, 1.01f,
+                             std::numeric_limits<float>::quiet_NaN(),
+                             std::numeric_limits<float>::infinity()}) {
+    for (const std::size_t axis : {0u, 1u, 2u}) {
+      SCOPED_TRACE(axis);
+      SCOPED_TRACE(invalid);
+      auto chunks = copy_chunks(parsed);
+      auto &metadata = chunks.front();
+      const auto *stored = qdr_fb::GetScenePayload(metadata.bytes.data())
+                               ->entities()->Get(0u)->mesh()->wireframe_on_shaded_color();
+      ASSERT_NE(stored, nullptr);
+      const auto offset = static_cast<std::size_t>(
+          reinterpret_cast<const std::byte *>(stored) - metadata.bytes.data());
+      const float stored_invalid = flatbuffers::EndianScalar(invalid);
+      std::memcpy(metadata.bytes.data() + offset + axis * sizeof(float),
+                  &stored_invalid, sizeof(float));
+      metadata.content_hash = 0u;
+      const auto bytes = quader_io::build_qdr_binary_container(parsed.scene_uuid, std::move(chunks));
+      const auto read = QdrDocumentReader::deserialize_project_document(bytes);
+      EXPECT_FALSE(read.ok);
+      EXPECT_NE(read.message.find("invalid mesh wireframe color"), std::string::npos);
+      EXPECT_FALSE(QdrDocumentReader::deserialize_project_dependencies(bytes).ok);
+      EXPECT_FALSE(QdrDocumentReader::deserialize_project_material_usage(bytes).ok);
+    }
+    auto snapshot = required_write_snapshot(document);
+    ASSERT_TRUE(snapshot.entities.front().mesh.has_value());
+    snapshot.entities.front().mesh->wireframe_on_shaded_color = QVec3{invalid, 0.0f, 0.0f};
+    EXPECT_THROW(QdrDocumentWriter::serialize_project_document_bytes(snapshot, test_uuid()),
+                 std::runtime_error);
+  }
+}
+
+TEST(QdrBinarySceneCodecTests,
      RichEntityStateRoundTripPreservesEveryDurableComponent) {
   SceneContentDocument document = simple_scene();
   const EntityId entity = 100u;
@@ -1124,6 +1266,8 @@ TEST(QdrBinarySceneCodecTests,
       .collision_type = MeshCollisionType::ConvexHull,
       .display_collision = true,
       .body_type = MeshPhysicsBodyType::RigidBody,
+      .wireframe_on_shaded = false,
+      .wireframe_on_shaded_color = QVec3{0.2f, 0.4f, 0.6f},
   };
   ASSERT_TRUE(document.scene().set_mesh(entity, mesh));
   const MaterialComponent materials{
@@ -1600,7 +1744,7 @@ TEST(QdrBinarySceneCodecTests,
                           quader_io::QdrBinaryChunkType::SceneMetadata)) {
       continue;
     }
-    EXPECT_EQ(chunk.schema_version, 17u);
+    EXPECT_EQ(chunk.schema_version, 19u);
     flatbuffers::Verifier verifier(
         reinterpret_cast<const std::uint8_t *>(chunk.bytes().data()),
         chunk.bytes().size());
@@ -1933,7 +2077,7 @@ TEST(QdrBinarySceneCodecTests, EmbeddedDiffuseModelsRoundTripWithBurleyWireDefau
       return chunk.type == static_cast<std::uint32_t>(quader_io::QdrBinaryChunkType::SceneMetadata);
     });
     ASSERT_NE(metadata, parsed.chunks.end());
-    EXPECT_EQ(metadata->schema_version, 17u);
+    EXPECT_EQ(metadata->schema_version, 19u);
     const auto *payload = qdr_fb::GetScenePayload(metadata->bytes().data());
     ASSERT_NE(payload->materials(), nullptr);
     ASSERT_EQ(payload->materials()->size(), 1u);
@@ -2025,7 +2169,7 @@ TEST(QdrBinarySceneCodecTests,
                                    quader_io::QdrBinaryChunkType::SceneMetadata);
         });
     ASSERT_NE(metadata, parsed.chunks.end());
-    EXPECT_EQ(metadata->schema_version, 17u);
+    EXPECT_EQ(metadata->schema_version, 19u);
 
     const auto read = QdrDocumentReader::deserialize_project_document(
         quader_io::build_qdr_binary_container(parsed.scene_uuid,
@@ -2232,7 +2376,7 @@ TEST(QdrBinarySceneCodecTests, FogSettingsRoundTripWithAuthoredValues) {
                                quader_io::QdrBinaryChunkType::SceneMetadata);
     });
     ASSERT_NE(metadata, parsed.chunks.end());
-    EXPECT_EQ(metadata->schema_version, 17u);
+    EXPECT_EQ(metadata->schema_version, 19u);
     const auto *stored = stored_scene_settings(metadata->bytes());
     ASSERT_NE(stored, nullptr);
     ASSERT_NE(stored->fog(), nullptr);
@@ -2249,7 +2393,7 @@ TEST(QdrBinarySceneCodecTests, FogSettingsRoundTripWithAuthoredValues) {
 TEST(QdrBinarySceneCodecTests, AbsentFogDefaultsDisabledInEverySupportedSchema) {
   const auto parsed = parse_written_scene(scene_with_fog(authored_fog_settings()));
   ASSERT_TRUE(parsed.ok) << parsed.message;
-  for (std::uint16_t version = 1u; version <= 17u; ++version) {
+  for (std::uint16_t version = 1u; version <= 19u; ++version) {
     SCOPED_TRACE(version);
     auto chunks = copy_chunks(parsed);
     const auto metadata = std::ranges::find_if(chunks, [](const auto &chunk) {
@@ -2421,7 +2565,7 @@ TEST(QdrBinarySceneCodecTests,
           return chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata;
         });
     ASSERT_NE(metadata, chunks.end());
-    ASSERT_EQ(metadata->schema_version, 17u);
+    ASSERT_EQ(metadata->schema_version, 19u);
     make_legacy_scene_metadata(*metadata, 12u);
     const qdr_fb::ScenePayload *payload =
         qdr_fb::GetScenePayload(metadata->bytes.data());
@@ -2523,7 +2667,7 @@ TEST(QdrBinarySceneCodecTests,
         return chunk.type == quader_io::QdrBinaryChunkType::SceneMetadata;
       });
   ASSERT_NE(metadata, chunks.end());
-  ASSERT_EQ(metadata->schema_version, 17u);
+  ASSERT_EQ(metadata->schema_version, 19u);
   make_legacy_scene_metadata(*metadata, 10u);
 
   const QdrProjectReadResult read =
@@ -2591,7 +2735,7 @@ TEST(QdrBinarySceneCodecTests,
                                  quader_io::QdrBinaryChunkType::SceneMetadata);
       });
   ASSERT_NE(metadata, parsed.chunks.end());
-  EXPECT_EQ(metadata->schema_version, 17u);
+  EXPECT_EQ(metadata->schema_version, 19u);
 
   const QdrProjectReadResult read =
       QdrDocumentReader::deserialize_project_document(
@@ -3594,7 +3738,7 @@ TEST(QdrBinarySceneCodecTests, RejectsUnsupportedMetadataSchema) {
   ASSERT_TRUE(parsed.ok) << parsed.message;
   std::vector<quader_io::QdrBinaryChunkInput> chunks = copy_chunks(parsed);
   ASSERT_FALSE(chunks.empty());
-  chunks.front().schema_version = 18u;
+  chunks.front().schema_version = 20u;
 
   const QdrProjectReadResult read =
       QdrDocumentReader::deserialize_project_document(

@@ -14,6 +14,7 @@
 #include "api/quader_standard_material_documents_api_internal_access.hpp"
 #include "editor/commands/document_command_service.hpp"
 #include "editor/material/project_material_texture_snapshot.hpp"
+#include "editor/modes/editor_mode_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/session/scene_session.hpp"
@@ -48,10 +49,13 @@ public:
     /// Weakly held by scene services, so they remain safe after facade teardown.
     struct TextureRuntimeBinding final {
       QuaderPreferencesApi *preferences = nullptr;
+      QuaderUIApi *ui = nullptr;
+      const SceneSession *active_scene = nullptr;
     };
 
     explicit Impl(QuaderApiSession session)
         : api(session)
+        , mode(session, api.mutations())
         , materials(session, api.mutations())
         , project(session)
         , project_assets(session)
@@ -63,12 +67,12 @@ public:
         , dev_tools(session)
         , preferences()
         , ui()
-        , commands(api, project, scene_documents, viewports, tools,
+        , commands(api, project, scene_documents, viewports, tools, mode,
                    preferences, ui, selection_diagnostics, dev_tools)
 #else
         , preferences()
         , ui()
-        , commands(api, project, scene_documents, viewports, tools,
+        , commands(api, project, scene_documents, viewports, tools, mode,
                    preferences, ui, selection_diagnostics)
 #endif
         , render(session, api) {
@@ -80,6 +84,7 @@ public:
     explicit Impl(ProjectSession &project_session)
         : project_session_owner(&project_session)
         , api(project_api_session(project_session))
+        , mode(project_api_session(project_session), api.mutations())
         , materials(project_api_session(project_session), api.mutations())
         , project(project_session)
         , project_assets(project_api_session(project_session))
@@ -91,12 +96,12 @@ public:
         , dev_tools(project_api_session(project_session))
         , preferences()
         , ui()
-        , commands(api, project, scene_documents, viewports, tools,
+        , commands(api, project, scene_documents, viewports, tools, mode,
                    preferences, ui, selection_diagnostics, dev_tools)
 #else
         , preferences()
         , ui()
-        , commands(api, project, scene_documents, viewports, tools,
+        , commands(api, project, scene_documents, viewports, tools, mode,
                    preferences, ui, selection_diagnostics)
 #endif
         , render(project_api_session(project_session), api) {
@@ -111,8 +116,21 @@ public:
       scene.modeling().invalidate_face_texture_edit_state();
       scene.modeling().invalidate_uv_peel_selection();
       texture_runtime_binding->preferences = &preferences;
+      texture_runtime_binding->ui = &ui;
+      texture_runtime_binding->active_scene = &scene;
       const std::weak_ptr<TextureRuntimeBinding> lifetime =
           texture_runtime_binding;
+      scene.editor_mode().set_transition_settlement([lifetime, owner = &scene] {
+        const auto binding = lifetime.lock();
+        if (binding == nullptr || binding->ui == nullptr ||
+            binding->active_scene != owner) {
+          return command_unchanged_result();
+        }
+        const QuaderApiVoidResult result =
+            binding->ui->settle_pending_property_edits();
+        return CommandResult{.ok = result.ok(), .changed = result.changed(),
+                             .message = result.error_message()};
+      });
       const auto texture_locks = [lifetime] {
         if (const auto binding = lifetime.lock(); binding != nullptr) {
           return TextureLockSettings{
@@ -238,6 +256,7 @@ public:
         }
       }
       api.rebind(session, binding_identity);
+      mode.rebind_session(session);
       install_texture_hooks(scene, session);
       materials.rebind_session(session);
       project.rebind_session(session);
@@ -261,6 +280,7 @@ public:
 
     ProjectSession *project_session_owner = nullptr;
     QuaderApi api;
+    QuaderEditorModeApi mode;
     QuaderMaterialsApi materials;
     QuaderProjectApi project;
     QuaderProjectAssetsApi project_assets;
@@ -394,6 +414,12 @@ QuaderSelectionApi& QuaderEditorApi::selection() {
 
 const QuaderSelectionApi& QuaderEditorApi::selection() const {
     return impl_->api.selection();
+}
+
+QuaderEditorModeApi &QuaderEditorApi::mode() { return impl_->mode; }
+
+const QuaderEditorModeApi &QuaderEditorApi::mode() const {
+  return impl_->mode;
 }
 
 QuaderSelectionDiagnosticsApi &QuaderEditorApi::selection_diagnostics() {

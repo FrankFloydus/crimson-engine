@@ -54,6 +54,18 @@
 
 namespace quader {
 namespace {
+/// Makes native fixture mode transitions explicit before changing selection kind.
+quader::QuaderApiVoidResult enter_selection_context(
+    quader::QuaderEditorApi &editor, quader::QuaderSelectionMode kind) {
+  const bool component = kind == quader::QuaderSelectionMode::Vertex ||
+      kind == quader::QuaderSelectionMode::Edge ||
+      kind == quader::QuaderSelectionMode::Face;
+  const auto transition = editor.mode().set(component
+      ? quader::QuaderEditorMode::Edit : quader::QuaderEditorMode::Object);
+  if (!transition.ok()) return transition;
+  return editor.selection().set_mode(kind);
+}
+
 
 using DenseFrameClock = std::chrono::steady_clock;
 
@@ -371,7 +383,8 @@ TEST(DenseComponentFrameRuntimeTests, ClonedProjectNativeViewportFrameStages) {
   else if (mode_name == "face") mode = QuaderSelectionMode::Face;
   else if (mode_name == "object") mode = QuaderSelectionMode::Object;
   else ASSERT_EQ(mode_name, "vertex");
-  ASSERT_TRUE(dense_frame_checked(editor.selection().set_mode(mode)));
+  ASSERT_TRUE(dense_frame_checked(editor.selection().select_all()));
+  ASSERT_TRUE(dense_frame_checked(enter_selection_context(editor, mode)));
   ASSERT_TRUE(dense_frame_checked(editor.selection().clear()));
   DenseFrameHarness harness(editor, session, project);
   ASSERT_TRUE(harness.initialize());
@@ -1203,7 +1216,7 @@ TEST(DenseComponentFrameRuntimeTests, ClonedProjectFullEditorMixedComponentWorkf
   // Frame the complete project for selection only; rendered/edit frames retain
   // its saved perspective. Fill genuinely occluded objects explicitly so this
   // cannot silently become a favorable 5,438-of-6,274 benchmark again.
-  ASSERT_TRUE(dense_frame_checked(editor.selection().set_mode(QuaderSelectionMode::Object)));
+  ASSERT_TRUE(dense_frame_checked(enter_selection_context(editor, QuaderSelectionMode::Object)));
   ASSERT_TRUE(dense_frame_checked(editor.selection().select_all()));
   const auto bounds = session.modeling().selection_bounds();
   ASSERT_TRUE(bounds.has_value());
@@ -1222,7 +1235,7 @@ TEST(DenseComponentFrameRuntimeTests, ClonedProjectFullEditorMixedComponentWorkf
       const std::string label = "cycle" + std::to_string(cycle) + "_" + names[mode_index];
       ASSERT_TRUE(camera.restore_perspective_pose(saved_pose));
       ASSERT_TRUE(harness.stage(label + "_selection", 1u, [&](std::size_t) {
-        auto result = editor.selection().set_mode(mode);
+        auto result = enter_selection_context(editor, mode);
         if (!result.ok()) return dense_frame_checked(result);
         result = editor.selection().clear();
         if (!result.ok()) return dense_frame_checked(result);
@@ -1298,7 +1311,7 @@ TEST(DenseComponentFrameRuntimeTests, ClonedProjectFullEditorMixedComponentWorkf
   }
 
   ASSERT_TRUE(camera.restore_perspective_pose(saved_pose));
-  ASSERT_TRUE(dense_frame_checked(editor.selection().set_mode(QuaderSelectionMode::Vertex)));
+  ASSERT_TRUE(dense_frame_checked(enter_selection_context(editor, QuaderSelectionMode::Vertex)));
   const QPointF keyboard_focus{logical_size.x() * 0.5, logical_size.y() * 0.5};
   harness.focus_pointer(keyboard_focus);
   ASSERT_TRUE(harness.stage("all_vertices_native_ctrl_a", 1u, [&](std::size_t) {
@@ -1357,7 +1370,7 @@ TEST(DenseComponentFrameRuntimeTests, ClonedProjectFullEditorMixedComponentWorkf
   ASSERT_TRUE(dense_frame_checked(editor.tools().activate(ViewportToolId::Select)));
   for (const auto mode : {QuaderSelectionMode::Vertex, QuaderSelectionMode::Face}) {
     const std::string label = mode == QuaderSelectionMode::Vertex ? "native_vertex_marquee" : "native_face_marquee";
-    ASSERT_TRUE(dense_frame_checked(editor.selection().set_mode(mode)));
+    ASSERT_TRUE(dense_frame_checked(enter_selection_context(editor, mode)));
     ASSERT_TRUE(dense_frame_checked(editor.selection().clear()));
     ASSERT_TRUE(harness.stage(label + "_camera_settle", 12u, idle));
     const QPointF start{static_cast<double>(logical_size.x() - 6), static_cast<double>(logical_size.y() - 6)};
@@ -1397,7 +1410,7 @@ TEST(DenseComponentFrameRuntimeTests, ClonedProjectFullEditorMixedComponentWorkf
     for (const bool cpu_oracle : {true, false}) {
       const std::string label = "supplement_visible_" + mode_name + (cpu_oracle ? "_cpu" : "_gpu");
       ASSERT_TRUE(camera.restore_perspective_pose(saved_pose));
-      ASSERT_TRUE(dense_frame_checked(editor.selection().set_mode(mode)));
+      ASSERT_TRUE(dense_frame_checked(enter_selection_context(editor, mode)));
       ASSERT_TRUE(dense_frame_checked(editor.selection().clear()));
       harness.force_cpu_selection(cpu_oracle);
       ASSERT_TRUE(harness.stage(label + "_camera_settle", 12u, idle));

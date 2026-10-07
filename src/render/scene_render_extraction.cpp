@@ -251,13 +251,20 @@ void add_render_material_asset_signature(
 
 bool same_mesh_component(const MeshComponent &left,
                          const MeshComponent &right) {
+  const auto &left_color = left.wireframe_on_shaded_color;
+  const auto &right_color = right.wireframe_on_shaded_color;
+  const bool same_wire_color = left_color.has_value() == right_color.has_value() &&
+      (!left_color || (left_color->x == right_color->x &&
+                      left_color->y == right_color->y &&
+                      left_color->z == right_color->z));
   return left.mesh == right.mesh && left.editor_only == right.editor_only &&
          left.cast_shadows == right.cast_shadows &&
          left.double_sided == right.double_sided &&
          left.generate_collisions == right.generate_collisions &&
          left.collision_type == right.collision_type &&
          left.display_collision == right.display_collision &&
-         left.body_type == right.body_type;
+         left.body_type == right.body_type &&
+         left.wireframe_on_shaded == right.wireframe_on_shaded && same_wire_color;
 }
 
 RenderSceneSnapshotDirtyState scene_snapshot_dirty_state(
@@ -2170,19 +2177,37 @@ RenderToolPreviewSceneSnapshot build_render_tool_preview_scene_snapshot(
 }
 
 RenderOverlaySceneWireframeSnapshot build_render_tool_preview_wireframe_snapshot(
-    std::span<const RenderToolPreviewMeshRecord> meshes) {
+    std::span<const RenderToolPreviewMeshRecord> meshes,
+    bool include_shaded_wires, bool include_ordinary_wires) {
   RenderOverlaySceneWireframeSnapshot snapshot;
   snapshot.selected_mesh_wire_visible = false;
-  // Array previews are immutable geometry with explicit placements. Deforming
-  // modeling previews already publish their own position-aware semantic wires.
+  if (!include_ordinary_wires && !include_shaded_wires) return snapshot;
   for (std::size_t source_index = 0u; source_index < meshes.size(); ++source_index) {
     const auto &mesh = meshes[source_index];
-    if (mesh.dynamic_positions || mesh.instance_transforms.empty()) continue;
-    const auto geometry = mesh.mesh.geometry_payload();
-    const auto wire = build_mesh_wire_geometry_payload(mesh.mesh);
+    // Pane policy replaces the editing base with ordinary topology in
+    // Wireframe panes, including single-mesh and deforming previews.
+    const bool ordinary_wire = include_ordinary_wires;
+    const bool shaded_wire = include_shaded_wires && mesh.wireframe_on_shaded;
+    if (!ordinary_wire && !shaded_wire) continue;
+    MeshAsset effective_mesh = mesh.mesh;
+    std::shared_ptr<const MeshGeometryProjection> projection = mesh.geometry_projection;
+    if (!projection) projection = effective_mesh.geometry_projection();
+    if (!projection && mesh.dynamic_position_payload) {
+      auto positions = std::make_shared<MeshGeometryProjection>();
+      positions->source_geometry = effective_mesh.geometry_payload();
+      positions->positions = mesh.dynamic_position_payload;
+      projection = std::move(positions);
+    }
+    if (projection) effective_mesh.share_geometry_projection(projection);
+    const auto geometry = projection ? projection->source_geometry
+                                    : effective_mesh.geometry_payload();
+    const auto wire = build_mesh_wire_geometry_payload(effective_mesh);
     if (wire == nullptr || wire->segments.empty()) continue;
-    for (std::size_t placement = 0u; placement < mesh.instance_transforms.size(); ++placement) {
-      snapshot.meshes.push_back({
+    const std::span<const QMat4> placements = mesh.instance_transforms.empty()
+        ? std::span<const QMat4>(&mesh.transform, 1u)
+        : std::span<const QMat4>(mesh.instance_transforms);
+    for (std::size_t placement = 0u; placement < placements.size(); ++placement) {
+      RenderOverlayMeshSnapshot record{
           .entity = mesh.source_entity,
           .participant_token = RenderSignatureBuilder{}
                                    .add_size(source_index)
@@ -2190,13 +2215,21 @@ RenderOverlaySceneWireframeSnapshot build_render_tool_preview_wireframe_snapshot
                                    .value(),
           .mesh_revision = mesh.mesh.revision.value,
           .geometry_payload = geometry,
-          .geometry_content_id = mesh.mesh.geometry_content_id(),
+          .geometry_projection = projection,
+          .geometry_content_id = effective_mesh.geometry_content_id(),
           .wire_geometry_payload = wire,
-          .world_transform = mesh.instance_transforms[placement],
-          .vertices = geometry->vertices,
-          .indices = geometry->indices,
+          .world_transform = placements[placement],
+          .wireframe_on_shaded_color = mesh.wireframe_on_shaded_color,
+          .wireframe_tint = mesh.wireframe_tint,
+          .vertices = effective_mesh.geometry_vertices(),
+          .indices = effective_mesh.geometry_indices(),
           .wire_segments = wire->segments,
-      });
+      };
+      if (ordinary_wire) snapshot.meshes.push_back(record);
+      if (shaded_wire) {
+        record.shaded_wire = true;
+        snapshot.meshes.push_back(std::move(record));
+      }
     }
   }
   return snapshot;

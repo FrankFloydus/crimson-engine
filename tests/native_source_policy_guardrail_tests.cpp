@@ -373,8 +373,11 @@ TEST(ModelingSessionServiceTests,
       split_source, "selection_mode, overlay_signature, hover"));
   EXPECT_TRUE(source_contains_compact(
       source, "return overlay_service_.selection_overlay_signature(runtime_, "
-              "options, suppressed_fallback_source_wire_object_id(options)) ^ "
+              "options) ^ selection_service_.editor_mode_revision() ^ "
               "sdk_projection_adapter_.selection_overlay_preview_signature();"));
+  EXPECT_TRUE(source_contains_compact(
+      split_source, "mix_overlay_signature_hash(overlay_signature, "
+                    "selection_service.editor_mode_revision());"));
   EXPECT_EQ(source.find("selectionOverlayToolSignature()"), std::string::npos);
   EXPECT_NE(
       split_source.find("ModelingOverlayService::selection_overlay_signature("),
@@ -498,13 +501,13 @@ TEST(ModelingSessionServiceTests,
       source.find(
           "transform_drag_has_stationary_vertex_snap_target(context.session)"),
       std::string::npos);
-  EXPECT_NE(source.find("context.port.cached_pick_object_bounds()"),
+  EXPECT_NE(source.find("context.port.cached_pick_object_bounds(true)"),
             std::string::npos);
-  EXPECT_NE(source.find("context.port.cached_local_pick_face_geometry()"),
+  EXPECT_NE(source.find("context.port.cached_local_pick_face_geometry({}, true)"),
             std::string::npos);
-  EXPECT_NE(source.find("context.port.cached_local_picking_transforms()"),
+  EXPECT_NE(source.find("context.port.cached_local_picking_transforms(true)"),
             std::string::npos);
-  EXPECT_NE(source.find("context.port.cached_local_objects_for_picking()"),
+  EXPECT_NE(source.find("context.port.cached_local_objects_for_picking(true)"),
             std::string::npos);
   EXPECT_EQ(source.find("context.port.cached_pick_face_geometry()"),
             std::string::npos);

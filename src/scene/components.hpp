@@ -13,6 +13,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -266,9 +267,31 @@ struct MeshComponent {
   MeshCollisionType collision_type = MeshCollisionType::Mesh;
   bool display_collision = true;
   MeshPhysicsBodyType body_type = MeshPhysicsBodyType::StaticBody;
+  bool wireframe_on_shaded = true;
+  /// Null inherits the viewport's shaded-wire color; stored RGB is normalized sRGB.
+  std::optional<QVec3> wireframe_on_shaded_color;
 
-  [[nodiscard]] bool operator==(const MeshComponent &) const = default;
+  [[nodiscard]] bool operator==(const MeshComponent &other) const {
+    return mesh == other.mesh && editor_only == other.editor_only &&
+           cast_shadows == other.cast_shadows && double_sided == other.double_sided &&
+           generate_collisions == other.generate_collisions &&
+           collision_type == other.collision_type && display_collision == other.display_collision &&
+           body_type == other.body_type && wireframe_on_shaded == other.wireframe_on_shaded &&
+           wireframe_on_shaded_color.has_value() == other.wireframe_on_shaded_color.has_value() &&
+           (!wireframe_on_shaded_color.has_value() ||
+            (wireframe_on_shaded_color->x == other.wireframe_on_shaded_color->x &&
+             wireframe_on_shaded_color->y == other.wireframe_on_shaded_color->y &&
+             wireframe_on_shaded_color->z == other.wireframe_on_shaded_color->z));
+  }
 };
+
+[[nodiscard]] inline bool
+mesh_wireframe_color_is_valid(const std::optional<QVec3> &color) noexcept {
+  return !color.has_value() ||
+         (std::isfinite(color->x) && std::isfinite(color->y) && std::isfinite(color->z) &&
+          color->x >= 0.0f && color->x <= 1.0f && color->y >= 0.0f && color->y <= 1.0f &&
+          color->z >= 0.0f && color->z <= 1.0f);
+}
 
 /// Generation currently supports triangle mesh collisions on static bodies.
 [[nodiscard]] inline constexpr bool

@@ -119,6 +119,8 @@ public:
     selected_aliases(std::initializer_list<std::string_view> aliases,
                      std::string_view active_alias);
     BehaviorGiven& selected(std::string_view alias);
+    BehaviorGiven &edit_mode();
+    BehaviorGiven &object_mode();
     BehaviorGiven &selection_mode(QuaderSelectionMode mode);
     BehaviorGiven &vertex_selected(std::string_view alias, int vertex);
     BehaviorGiven &edge_selected(std::string_view alias, int a, int b);

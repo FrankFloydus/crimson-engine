@@ -36,6 +36,7 @@ class DocumentPickQuery;
 namespace quader {
 
 class SceneDocument;
+class EditorModeService;
 
 /**
  * Reports whether a runtime selection application was attempted and changed
@@ -74,6 +75,8 @@ public:
                     const SceneDocument &scene,
                     ModelingSelectionMode app_selection_mode) const;
 
+  void set_editor_mode_service(EditorModeService *service);
+  [[nodiscard]] std::uint64_t editor_mode_revision() const;
   void set_instance_edit_scope_provider(
       std::function<ModelingInstanceEditScope()> provider);
   void set_app_selection_mode_provider(
@@ -91,8 +94,7 @@ public:
   select_all_in_constrained_component_scope(
       const ModelingSelectionProjectionSnapshot &session,
       const SceneDocument &scene,
-      const ModelingObjectRuntimeMap &object_map,
-      int sticky_component_object_id) const;
+      const ModelingObjectRuntimeMap &object_map) const;
   /**
    * Builds the directly pickable component universes for the current editing
    * scope. This is a read-only host query; inversion policy stays in the
@@ -144,7 +146,8 @@ public:
   cached_pick_object_bounds(
                             const ModelingSelectionProjectionSnapshot &session,
                             const SceneDocument &scene,
-                            const ModelingObjectRuntimeMap &object_map) const;
+                            const ModelingObjectRuntimeMap &object_map,
+      bool include_nonparticipants = false) const;
   [[nodiscard]] const std::vector<quader_editor_core::PickObjectFaceGeometry> &
   cached_pick_face_geometry(
                             const ModelingSelectionProjectionSnapshot &session,
@@ -155,18 +158,21 @@ public:
   cached_local_picking_objects(
       const ModelingSelectionProjectionSnapshot &session,
       const SceneDocument &scene,
-      const ModelingObjectRuntimeMap &object_map) const;
+      const ModelingObjectRuntimeMap &object_map,
+      bool include_nonparticipants = false) const;
   [[nodiscard]] std::span<const quader_editor_core::PickObjectTransform>
   cached_local_picking_transforms(
       const ModelingSelectionProjectionSnapshot &session,
       const SceneDocument &scene,
-      const ModelingObjectRuntimeMap &object_map) const;
+      const ModelingObjectRuntimeMap &object_map,
+      bool include_nonparticipants = false) const;
   [[nodiscard]] const std::vector<quader_editor_core::PickObjectFaceGeometry> &
   cached_local_pick_face_geometry(
       const ModelingSelectionProjectionSnapshot &session,
       const SceneDocument &scene,
       const ModelingObjectRuntimeMap &object_map,
-      quader_poly::PickOptions pick_options = {}) const;
+      quader_poly::PickOptions pick_options = {},
+      bool include_nonparticipants = false) const;
   [[nodiscard]] ModelingSelectionProjectionApplyResult
   apply_pick_selection(const ModelingSelectionProjectionSnapshot &session,
                        const SceneDocument &scene,
@@ -286,6 +292,7 @@ private:
     std::uint64_t scene_layer_revision = 0;
     std::uint64_t scene_mesh_binding_revision = 0;
     std::uint64_t viewport_visibility_revision = 0;
+    std::uint64_t editor_mode_revision = 0;
     std::uint64_t object_map_revision = 0;
     ModelingInstanceEditScope instance_edit_scope;
     ModelingSelectionMode app_selection_mode = ModelingSelectionMode::Object;
@@ -309,6 +316,7 @@ private:
     std::uint64_t scene_mesh_binding_revision = 0;
     std::uint64_t object_map_revision = 0;
     std::uint64_t viewport_visibility_revision = 0;
+    std::uint64_t editor_mode_revision = 0;
     ModelingInstanceEditScope instance_edit_scope;
     quader_editor_core::SelectionMode selection_mode =
         quader_editor_core::SelectionMode::Object;
@@ -357,6 +365,7 @@ private:
       quader_editor_core::SelectionMode selection_mode) const;
 
   mutable ModelingPickingCache picking_cache_;
+  mutable ModelingPickingCache scene_snap_picking_cache_;
   mutable std::unordered_map<std::uintptr_t, RectanglePickFactsCacheEntry>
       rectangle_pick_facts_cache_;
   mutable std::uint64_t rectangle_pick_facts_generation_ = 0u;
@@ -373,6 +382,7 @@ private:
   mutable std::uint64_t rectangle_selection_resolution_build_count_ = 0;
   mutable std::uint64_t local_face_geometry_build_count_ = 0;
   mutable std::uint64_t world_pick_bounds_build_count_ = 0;
+  EditorModeService *editor_mode_service_ = nullptr;
   std::function<ModelingInstanceEditScope()> instance_edit_scope_provider_;
   std::function<ModelingSelectionMode()> app_selection_mode_provider_;
   std::function<bool(EntityId)> viewport_visibility_filter_;

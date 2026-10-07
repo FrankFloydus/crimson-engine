@@ -65,11 +65,17 @@ struct RenderOverlayMeshSnapshot {
   AssetId mesh_id = kInvalidAssetId;
   std::uint64_t mesh_revision = 0;
   std::shared_ptr<const MeshGeometryPayload> geometry_payload;
+  /// Pins effective preview attributes, indices and positions independently.
+  std::shared_ptr<const MeshGeometryProjection> geometry_projection;
   MeshGeometryContentId geometry_content_id;
   std::shared_ptr<const MeshWireGeometryPayload> wire_geometry_payload;
   QMat4 world_transform;
   bool selected = false;
   bool active_selected = false;
+  /// Depth-tested topology overlay, independent of selection and Wireframe mode.
+  bool shaded_wire = false;
+  /// Absent RGB inherits the consuming pane's global shaded-wire color.
+  std::optional<QVec3> wireframe_on_shaded_color;
   /** Scene-owned layer tint; render policy resolves alpha and packing. */
   QVec3 wireframe_tint = kDefaultSceneLayerWireframeColor;
   std::span<const MeshVertex> vertices;
@@ -195,6 +201,7 @@ struct RenderOverlaySceneWireframeSnapshot : RenderSourceStamp {
   ViewportPersistentOverlayRasterGroupSet raster_groups;
   ViewportCameraClipPlanes clip_planes;
   std::uint8_t layer_mask = 0u;
+  std::uint8_t wireframe_on_shaded_layer_mask = 0u;
   /** Whole-mesh selected wire is an Object-mode presentation only. */
   bool selected_mesh_wire_visible = true;
   /// Selected placements are omitted; unselected wireframe records remain.
@@ -298,7 +305,8 @@ public:
       const ViewportPersistentOverlayRasterGroupSet &raster_groups = {},
       bool selected_mesh_outline_only = false,
       bool collision_visible = false,
-      ViewportSettingColor collision_color = {0.0f, 0.6f, 0.7f, 0.42f});
+      ViewportSettingColor collision_color = {0.0f, 0.6f, 0.7f, 0.42f},
+      std::uint8_t wireframe_on_shaded_layer_mask = 0u);
   /// Null before update_persistent or after reset. Borrowed data is current only
   /// until the next update/reset; immutable geometry payloads pin mesh storage.
   [[nodiscard]] const RenderOverlaySelectedObjectSnapshot *
@@ -389,6 +397,10 @@ private:
   RenderOverlaySnapshotCacheStats stats_;
 };
 
+/** Resolves the scene layer tint for an ordinary mesh or displayed occurrence. */
+[[nodiscard]] QVec3 resolved_scene_wireframe_tint(
+    const SceneDocument &document, EntityId entity);
+
 [[nodiscard]] RenderOverlayCollisionSnapshot
 build_render_overlay_collision_snapshot(
     const SceneDocument &document, const AssetRegistry &assets, bool visible,
@@ -435,7 +447,8 @@ build_render_overlay_scene_wireframe_snapshot(
     const ViewportLocalVisibilitySnapshot *local_visibility = nullptr,
     bool selected_mesh_wire_visible = true,
     RenderInstanceEditScope instance_edit_scope = {},
-    bool selected_mesh_outline_only = false);
+    bool selected_mesh_outline_only = false,
+    std::uint8_t wireframe_on_shaded_layer_mask = 0u);
 
 [[nodiscard]] RenderOverlaySelectionSnapshot
 build_render_overlay_selection_snapshot(

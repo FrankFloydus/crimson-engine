@@ -37,6 +37,7 @@
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/modes/editor_mode_service.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "editor/transform/mesh_arrangement_service.hpp"
 #include "editor/transform/mesh_transform_bake_service.hpp"
@@ -293,6 +294,18 @@ QuaderApiVoidResult invalid_api_status(
   result.changed = false;
   result.message = std::move(message);
   return result;
+}
+
+/// Validates editing scope before the mutation runner can settle pending work.
+bool material_mutation_target_is_available(SceneSession &session,
+                                            QuaderModelingObjectId object_id,
+                                            bool whole_mesh) {
+  const auto entity = session.modeling().entity_for_modeling_object(object_id);
+  if (!entity.has_value() || !session.scene().exists(*entity)) {
+    return false;
+  }
+  return (whole_mesh && session.editor_mode().mode() == EditorMode::Object) ||
+         session.modeling().component_target_is_editable(*entity);
 }
 
 QuaderPreviewSettings preview_settings(QuaderEdgeBevelArgs args) {
@@ -1724,6 +1737,10 @@ QuaderApiVoidResult QuaderModelingApi::replace_curve(
   if (!current.ok()) {
     return quader_api_status_from_result(current);
   }
+  if (!scene_session(session_).modeling().curve_target_is_editable(
+          object.modeling_object_id)) {
+    return invalid_api_status(session_, "Curve is not editable in the current context.");
+  }
   if (!mutations_.can_mutate_modeling_content()) {
     return mutations_.modeling_content_blocked_status("editing a curve.");
   }
@@ -1790,6 +1807,10 @@ QuaderApiVoidResult QuaderModelingApi::begin_curve_preview(QuaderModelingObjectR
   const auto current = curve_snapshot(object, false);
   if (!current.ok()) {
     return quader_api_status_from_result(current);
+  }
+  if (!scene_session(session_).modeling().curve_target_is_editable(
+          object.modeling_object_id)) {
+    return invalid_api_status(session_, "Curve is not editable in the current context.");
   }
   if (!mutations_.can_mutate_modeling_content()) {
     return mutations_.modeling_content_blocked_status("starting a curve preview.");
@@ -2046,6 +2067,10 @@ QuaderModelingApi::set_selection_mode(QuaderSelectionMode mode) {
 }
 
 bool QuaderModelingApi::can_execute_tool(std::string_view tool_id) const {
+  if ((tool_id == "copy_selection" || tool_id == "paste_selection") &&
+      (!mutations_.available() || scene_session(session_).editor_mode().mode() != EditorMode::Object)) {
+    return false;
+  }
   if (!release_allows_action(tool_id) || !release_allows_operation(tool_id) ||
       !release_allows_tool(tool_id)) {
     return false;
@@ -2109,6 +2134,9 @@ QuaderApiVoidResult QuaderModelingApi::cut_selection() {
 }
 
 QuaderApiVoidResult QuaderModelingApi::copy_selection() {
+  if (!mutations_.available() || scene_session(session_).editor_mode().mode() != EditorMode::Object) {
+    return invalid_api_status(session_, "Whole-object clipboard actions require Object Mode.");
+  }
   ProjectSession *project =
       QuaderApiSessionInternalAccess::project_session(session_);
   if (project != nullptr &&
@@ -2127,6 +2155,9 @@ QuaderApiVoidResult QuaderModelingApi::copy_selection() {
 }
 
 QuaderApiVoidResult QuaderModelingApi::paste_selection() {
+  if (!mutations_.available() || scene_session(session_).editor_mode().mode() != EditorMode::Object) {
+    return invalid_api_status(session_, "Whole-object clipboard actions require Object Mode.");
+  }
   if (ProjectSession *project =
           QuaderApiSessionInternalAccess::project_session(session_)) {
     if (project->clipboard().has_instance_payload()) {
@@ -2835,6 +2866,11 @@ QuaderApiVoidResult QuaderModelingApi::apply_material_to_mesh(
   if (!mutations_.available() || !assignment_material_exists(session_, material)) {
     return invalid_api_status(session_, "The requested material is unavailable.");
   }
+  if (!material_mutation_target_is_available(scene_session(session_), object_id,
+                                             true)) {
+    return invalid_api_status(session_,
+                              "The material target is outside the editable mesh context.");
+  }
   return mutations_.run_modeling_command(
       std::make_unique<ApplyMaterialToTargetHistoryCommand>(
           scene_session(session_).modeling(), object_id, face_id,
@@ -2852,6 +2888,11 @@ QuaderApiVoidResult QuaderModelingApi::apply_material_to_face(
   if (!mutations_.available() || !assignment_material_exists(session_, material)) {
     return invalid_api_status(session_, "The requested material is unavailable.");
   }
+  if (!material_mutation_target_is_available(scene_session(session_), object_id,
+                                             false)) {
+    return invalid_api_status(session_,
+                              "The material target is outside the editable mesh context.");
+  }
   return mutations_.run_modeling_command(
       std::make_unique<ApplyMaterialToTargetHistoryCommand>(
           scene_session(session_).modeling(), object_id, face_id,
@@ -2867,6 +2908,11 @@ QuaderApiVoidResult QuaderModelingApi::apply_selected_face_material_to_face(
   }
   if (!mutations_.available()) {
     return invalid_api_status(session_, "No scene is active.");
+  }
+  if (!material_mutation_target_is_available(scene_session(session_), object_id,
+                                             false)) {
+    return invalid_api_status(session_,
+                              "The material target is outside the editable mesh context.");
   }
   SceneSession &session = scene_session(session_);
   if (session.native_tools().has_pending_tool()) {
@@ -2889,6 +2935,11 @@ QuaderApiVoidResult QuaderModelingApi::apply_selected_face_material_to_mesh(
   if (!mutations_.available()) {
     return invalid_api_status(session_, "No scene is active.");
   }
+  if (!material_mutation_target_is_available(scene_session(session_), object_id,
+                                             false)) {
+    return invalid_api_status(session_,
+                              "The material target is outside the editable mesh context.");
+  }
   SceneSession &session = scene_session(session_);
   if (session.native_tools().has_pending_tool()) {
     return mutations_.modeling_content_blocked_status("copying face materials.");
@@ -2909,6 +2960,11 @@ QuaderApiVoidResult QuaderModelingApi::apply_face_material_to_selected_faces(
   }
   if (!mutations_.available()) {
     return invalid_api_status(session_, "No scene is active.");
+  }
+  if (!material_mutation_target_is_available(scene_session(session_), object_id,
+                                             false)) {
+    return invalid_api_status(session_,
+                              "The material target is outside the editable mesh context.");
   }
   SceneSession &session = scene_session(session_);
   if (session.native_tools().has_pending_tool()) {
@@ -2946,6 +3002,14 @@ QuaderApiVoidResult QuaderModelingApi::apply_face_material_to_mesh(
     QuaderModelingObjectId object_id, QuaderElementId face_id) {
   if (!release_has_feature(ReleaseFeature::Materials)) {
     return invalid_api_status(session_, release_feature_unavailable_message());
+  }
+  if (!mutations_.available()) {
+    return invalid_api_status(session_, "No scene is active.");
+  }
+  if (!material_mutation_target_is_available(scene_session(session_), object_id,
+                                             true)) {
+    return invalid_api_status(session_,
+                              "The material target is outside the editable mesh context.");
   }
   const ProjectSession *project =
       QuaderApiSessionInternalAccess::project_session(session_);
@@ -3231,6 +3295,11 @@ QuaderApiVoidResult QuaderModelingApi::transfer_face_texture_to_face(
   }
   if (!mutations_.available()) {
     return invalid_api_status(session_, "No scene is active.");
+  }
+  if (!material_mutation_target_is_available(scene_session(session_), object_id,
+                                             false)) {
+    return invalid_api_status(session_,
+                              "The material target is outside the editable mesh context.");
   }
   SceneSession &session = scene_session(session_);
   if (session.native_tools().has_pending_tool()) {

@@ -417,6 +417,9 @@ SceneStructuralLifecycleService::selected_roots() const {
 }
 
 bool SceneStructuralLifecycleService::can_duplicate_selected_hierarchy() const {
+  if (!document_commands_.object_mode_active()) {
+    return false;
+  }
   const std::vector<EntityId> roots = selected_roots();
   return !roots.empty() &&
          document_command_hierarchy_available_in_release(scene_, roots);
@@ -440,6 +443,9 @@ bool SceneStructuralLifecycleService::hierarchy_contains_modeling_content(
 SceneStructuralLifecycleService::NormalizedRoots
 SceneStructuralLifecycleService::normalize_explicit_roots(
     std::span<const EntityId> roots) const {
+  if (!document_commands_.object_mode_active()) {
+    return {.status = command_invalid_result("Hierarchy editing requires Object Mode.")};
+  }
   if (roots.empty()) {
     return {
         .status = command_invalid_result("No entity hierarchy was provided."),

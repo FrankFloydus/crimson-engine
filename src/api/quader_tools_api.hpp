@@ -193,7 +193,7 @@ public:
     mutable std::string active_tool_id_;
     mutable std::uint64_t active_tool_revision_ = 0;
     mutable bool active_tool_valid_ = false;
-    mutable std::optional<std::array<std::uint64_t, 14>> availability_source_;
+    mutable std::optional<std::array<std::uint64_t, 15>> availability_source_;
     mutable std::uint64_t availability_revision_ = 0;
     mutable std::array<std::uint64_t, 21> input_hints_source_ = {};
     mutable QuaderOperationInputContext input_hints_context_;

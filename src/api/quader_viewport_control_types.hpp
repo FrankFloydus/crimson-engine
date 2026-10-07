@@ -22,6 +22,7 @@ enum class QuaderViewportControl {
   ShowGizmos,
   ShowOverlays,
   ShowMeshGrid,
+  WireframeOnShaded,
   Count,
 };
 

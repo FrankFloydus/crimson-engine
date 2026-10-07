@@ -1233,6 +1233,7 @@ TEST(InspectorMaterialTests,
   EXPECT_NE(find_top_level_item(*tree, QStringLiteral("general")), nullptr);
   EXPECT_NE(find_top_level_item(*tree, QStringLiteral("material")), nullptr);
 
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(first.value(), 1u).ok());
   ASSERT_EQ(editor.selection().summary().selected_face_count, 1u);

@@ -11,12 +11,21 @@ material {
         color,
         custom0,
         custom1,
-        custom2
+        custom2,
+        custom3,
+        custom4
     ],
     variables : [
-        lineDistancePixels
+        lineDistancePixels,
+        lineSurfaceDepths,
+        lineSurfaceCoordinates0,
+        lineSurfaceCoordinates1
     ],
     parameters : [
+        {
+            type : bool,
+            name : surfaceDepthEnabled
+        },
         {
             type : float4,
             name : lineTint
@@ -57,7 +66,10 @@ material {
 }
 
 vertex {
-    highp vec4 clippedEndpoint(highp vec4 startView, highp vec4 endView, bool startEndpoint, float nearZ) {
+    #include "overlay_wire_surface_depth.glsl"
+
+    highp vec4 clippedEndpoint(highp vec4 startWorld, highp vec4 endWorld,
+            highp vec4 startView, highp vec4 endView, bool startEndpoint, float nearZ) {
         bool startBehind = startView.z > nearZ;
         bool endBehind = endView.z > nearZ;
         if (startBehind && endBehind) {
@@ -68,13 +80,48 @@ vertex {
             float t = abs(denominator) > 0.000001 ? (nearZ - startView.z) / denominator : 0.0;
             t = clamp(t, 0.0, 1.0);
             highp vec4 clipped = mix(startView, endView, t);
+            highp vec4 clippedWorld = mix(startWorld, endWorld, t);
             if (startBehind) {
                 startView = clipped;
+                startWorld = clippedWorld;
             } else {
                 endView = clipped;
+                endWorld = clippedWorld;
             }
         }
+        // The scene surface uses this same combined matrix. Recomputing clip
+        // depth through view space can put a coplanar ribbon behind its face.
+        if (materialParams.surfaceDepthEnabled) {
+            return getClipFromWorldMatrix() * (startEndpoint ? startWorld : endWorld);
+        }
         return getClipFromViewMatrix() * (startEndpoint ? startView : endView);
+    }
+
+    highp vec4 shadedSurfaceCoordinates(highp vec4 first, highp vec4 second,
+            highp vec4 support, highp vec2 devicePosition) {
+        // Positive homogeneous triangle coordinates identify the finite face
+        // domain even when its third point crosses the camera/near plane.
+        // No perspective divide of a behind-camera support point is needed.
+        highp float maximumDepth = max(first.z / first.w, second.z / second.w);
+        maximumDepth = support.w > 0.000001 ?
+                max(maximumDepth, support.z / support.w) : 1.0;
+        first /= max(max(abs(first.x), abs(first.y)), max(abs(first.w), 0.000001));
+        second /= max(max(abs(second.x), abs(second.y)), max(abs(second.w), 0.000001));
+        support /= max(max(abs(support.x), abs(support.y)), max(abs(support.w), 0.000001));
+        highp vec3 firstPoint = first.xyw;
+        highp vec3 secondPoint = second.xyw;
+        highp vec3 supportPoint = support.xyw;
+        highp vec3 secondCrossSupport = cross(secondPoint, supportPoint);
+        highp float determinant = dot(firstPoint, secondCrossSupport);
+        highp float determinantScale = length(firstPoint) * length(secondPoint) * length(supportPoint);
+        if (abs(determinant) <= 0.0000001 * determinantScale) {
+            return vec4(-1.0);
+        }
+        highp vec3 pixel = vec3(devicePosition, 1.0);
+        return vec4(sign(determinant) * vec3(
+                dot(secondCrossSupport, pixel),
+                dot(cross(supportPoint, firstPoint), pixel),
+                dot(cross(firstPoint, secondPoint), pixel)), clamp(maximumDepth, 0.0, 1.0));
     }
 
     void materialVertex(inout MaterialVertexInputs material) {
@@ -88,8 +135,8 @@ vertex {
         float cap = control.y;
         bool startEndpoint = control.z < 0.5;
         float nearZ = -max(materialParams.nearPlane, 0.0001);
-        highp vec4 clipStart = clippedEndpoint(startView, endView, true, nearZ);
-        highp vec4 clipEnd = clippedEndpoint(startView, endView, false, nearZ);
+        highp vec4 clipStart = clippedEndpoint(startWorld, endWorld, startView, endView, true, nearZ);
+        highp vec4 clipEnd = clippedEndpoint(startWorld, endWorld, startView, endView, false, nearZ);
         highp vec4 baseClip = startEndpoint ? clipStart : clipEnd;
 
         vec2 resolution = max(getResolution().xy, vec2(1.0));
@@ -105,7 +152,24 @@ vertex {
         vec2 offsetDevice = offsetPixels * getResolution().zw * 2.0;
         float reciprocalW = 1.0 / max(abs(baseClip.w), 0.000001);
         highp vec3 baseDevice = baseClip.xyz * reciprocalW;
-        float deviceDepth = 1.0 - 2.0 * baseDevice.z;
+        float ribbonDepth = baseDevice.z;
+        if (materialParams.surfaceDepthEnabled) {
+            float startDepth = clipStart.z / max(abs(clipStart.w), 0.000001);
+            float endDepth = clipEnd.z / max(abs(clipEnd.w), 0.000001);
+            // Square caps extend the projected edge, including its depth plane.
+            ribbonDepth = directionLength > 0.0001 ?
+                    ribbonDepth + cap * sideDistance * (endDepth - startDepth) / directionLength :
+                    max(startDepth, endDepth);
+        }
+        // Raster clipping happens before fragment depth correction. Keep
+        // end-on square caps inside the clipped edge's actual depth interval.
+        highp float positionDepth = ribbonDepth;
+        if (materialParams.surfaceDepthEnabled) {
+            highp float startDepth = clipStart.z / max(abs(clipStart.w), 0.000001);
+            highp float endDepth = clipEnd.z / max(abs(clipEnd.w), 0.000001);
+            positionDepth = clamp(positionDepth, min(startDepth, endDepth), max(startDepth, endDepth));
+        }
+        float deviceDepth = 1.0 - 2.0 * positionDepth;
         highp vec4 finalDevice = vec4(baseDevice.xy + offsetDevice,
                                      deviceDepth, 1.0);
 
@@ -113,7 +177,35 @@ vertex {
         material.clipSpaceTransform[3] = finalDevice;
         float halfLengthPixels = directionLength * 0.5;
         material.lineDistancePixels = vec4(side * sideDistance,
-                cap * (halfLengthPixels + sideDistance), halfLengthPixels, 0.0);
+                cap * (halfLengthPixels + sideDistance), halfLengthPixels, ribbonDepth);
+        highp float clippedStartDepth = clipStart.z / max(abs(clipStart.w), 0.000001);
+        highp float clippedEndDepth = clipEnd.z / max(abs(clipEnd.w), 0.000001);
+        material.lineSurfaceDepths = vec4(ribbonDepth, ribbonDepth,
+                min(clippedStartDepth, clippedEndDepth), max(clippedStartDepth, clippedEndDepth));
+        material.lineSurfaceCoordinates0 = vec4(-1.0);
+        material.lineSurfaceCoordinates1 = vec4(-1.0);
+        if (materialParams.surfaceDepthEnabled) {
+            // Expand depth on the incident surfaces as well as expanding XY.
+            // Evaluating the two planes separately preserves their crease.
+            // Match the scene surface and endpoint matrix-vector evaluation.
+            highp vec4 support0World = getWorldFromModelMatrix() * vec4(getCustom3().xyz, 1.0);
+            highp vec4 support1World = getWorldFromModelMatrix() * vec4(getCustom4().xyz, 1.0);
+            highp vec4 support0Clip = getClipFromWorldMatrix() * support0World;
+            highp vec4 support1Clip = getClipFromWorldMatrix() * support1World;
+            if (control.w > 0.5) {
+                material.lineSurfaceCoordinates0 = shadedSurfaceCoordinates(
+                        clipStart, clipEnd, support0Clip, finalDevice.xy);
+            }
+            if (control.w > 1.5) {
+                material.lineSurfaceCoordinates1 = shadedSurfaceCoordinates(
+                        clipStart, clipEnd, support1Clip, finalDevice.xy);
+            }
+            material.lineSurfaceDepths.xy = vec2(
+                    control.w > 0.5 ? overlayWireSurfaceDepth(clipStart, clipEnd,
+                            support0Clip, finalDevice.xy, ribbonDepth) : ribbonDepth,
+                    control.w > 1.5 ? overlayWireSurfaceDepth(clipStart, clipEnd,
+                            support1Clip, finalDevice.xy, ribbonDepth) : ribbonDepth);
+        }
     }
 }
 
@@ -126,6 +218,37 @@ fragment {
 
         float alphaScale = overlayLineCoverage(variable_lineDistancePixels.xyz,
                 materialParams.lineWidth, materialParams.featherPixels);
+
+        // Keep reversed depth out of the DEVICE-domain 1 - 2*z round trip.
+        // A relative rounding allowance separates coplanar fragments without
+        // a world-space pull that could expose genuinely occluded edges.
+        // Square caps may extend XY beyond an almost end-on segment, but
+        // cannot pull its depth beyond the actual clipped endpoint range.
+        highp float surfaceDepth = clamp(variable_lineDistancePixels.w,
+                variable_lineSurfaceDepths.z, variable_lineSurfaceDepths.w);
+        // Triangle setup snaps XY to subpixels before interpolating these
+        // vertex-evaluated planes. Vulkan guarantees at least four fractional
+        // bits: one 1/16-pixel step bounds the two primitives' rounding error.
+        // Scale only valid face depths by that footprint, never the whole
+        // ribbon; the finite source depth bound still limits every correction.
+        const highp float rasterSubpixelStep = 1.0 / 16.0;
+        highp vec2 rasterDepthAllowance = fwidth(variable_lineSurfaceDepths.xy) * rasterSubpixelStep;
+        // A supporting plane is only valid inside its finite incident face.
+        // Extending a grazing sliver's plane across the opposite ribbon side
+        // can otherwise pull a fully hidden wire in front of an occluder.
+        if (all(greaterThanEqual(variable_lineSurfaceCoordinates0.xyz, vec3(0.0))) &&
+                variable_lineSurfaceDepths.x >= 0.0 && variable_lineSurfaceDepths.x <= 1.0) {
+            surfaceDepth = max(surfaceDepth, min(variable_lineSurfaceDepths.x + rasterDepthAllowance.x,
+                    variable_lineSurfaceCoordinates0.w));
+        }
+        if (all(greaterThanEqual(variable_lineSurfaceCoordinates1.xyz, vec3(0.0))) &&
+                variable_lineSurfaceDepths.y >= 0.0 && variable_lineSurfaceDepths.y <= 1.0) {
+            surfaceDepth = max(surfaceDepth, min(variable_lineSurfaceDepths.y + rasterDepthAllowance.y,
+                    variable_lineSurfaceCoordinates1.w));
+        }
+        highp float roundingAllowance = abs(surfaceDepth) * 0.000002;
+        gl_FragDepth = materialParams.surfaceDepthEnabled ?
+                surfaceDepth + roundingAllowance : gl_FragCoord.z;
 
         vec4 color = applyInstanceEditContext(
             getColor() * materialParams.lineTint,

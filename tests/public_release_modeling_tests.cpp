@@ -64,9 +64,10 @@ protected:
 };
 
 TEST_F(PublicReleaseModelingTests,
-       CuttingToolsActivateFromObjectModeAndEnterEdgeMode) {
+       CuttingToolsRequireEditModeAndSwitchToEdgeWithinIt) {
   for (const bool knife : {false, true}) {
     SCOPED_TRACE(knife);
+    ASSERT_TRUE(editor().mode().set(QuaderEditorMode::Object).ok());
     ASSERT_TRUE(editor().tools().activate(ViewportToolId::Select).ok());
     ASSERT_TRUE(editor().selection().set_mode(QuaderSelectionMode::Object).ok());
     const auto command_id = knife ? quader_command::kToolsActivateKnife
@@ -74,7 +75,16 @@ TEST_F(PublicReleaseModelingTests,
     const auto tool = knife ? ViewportToolId::Knife : ViewportToolId::InsertEdgeLoop;
     const auto command = editor().commands().descriptor(command_id);
     ASSERT_TRUE(command.has_value());
-    ASSERT_TRUE(command->enabled);
+    EXPECT_FALSE(command->enabled);
+    const auto before_rejected = test::capture_command_observable_state(editor());
+    const auto rejected = editor().commands().execute(command_id);
+    EXPECT_FALSE(rejected.ok());
+    EXPECT_FALSE(rejected.changed());
+    const auto rejected_difference = test::diff_command_observable_state(
+        before_rejected, test::capture_command_observable_state(editor()));
+    EXPECT_TRUE(rejected_difference.empty()) << rejected_difference.summary;
+    ASSERT_TRUE(editor().mode().set(QuaderEditorMode::Edit).ok());
+    ASSERT_TRUE(editor().commands().descriptor(command_id)->enabled);
     const auto history_before = editor().history().snapshot();
     const auto content_before = editor().selection().summary().content_revision;
     const auto result = editor().commands().execute(command_id);
@@ -84,8 +94,10 @@ TEST_F(PublicReleaseModelingTests,
     EXPECT_EQ(editor().viewports().selected_tool(), tool);
     EXPECT_EQ(editor().selection().summary().content_revision, content_before);
     EXPECT_EQ(editor().history().snapshot().undo_label, history_before.undo_label);
+    ASSERT_TRUE(editor().mode().set(QuaderEditorMode::Object).ok());
     ASSERT_TRUE(first_.select().replace().ok());
     ASSERT_EQ(editor().selection().summary().mode, QuaderSelectionMode::Object);
+    ASSERT_TRUE(editor().mode().set(QuaderEditorMode::Edit).ok());
     const auto history_after_selection = editor().history().snapshot();
     const auto reactivated = editor().commands().execute(command_id);
     ASSERT_TRUE(reactivated.ok()) << reactivated.error_message();
@@ -340,6 +352,7 @@ TEST(PublicReleaseQuickExtrusionTests, NativeFaceExtrusionPreservesActivePreview
       QuaderBounds{.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
       "Native extrusion target");
   ASSERT_TRUE(created.ok()) << created.error_message();
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(created.value().faces().only({1}).replace().ok());
   ASSERT_EQ(editor.selection().summary().selected_face_count, 1u);
   auto &native = session.modeling();
@@ -384,6 +397,7 @@ TEST(PublicReleaseQuickExtrusionTests, NativeFaceExtrusionPreservesActivePreview
 TEST(PublicReleaseQuickExtrusionTests, SemanticShiftMoveDragKeepsGeometryAndHistory) {
   auto scenario = test::BehaviorScenario::new_project();
   scenario.given().unit_box("box", "Quick extrusion")
+      .edit_mode()
       .selection_mode(QuaderSelectionMode::Face);
   scenario.when().pick({0.0f, 0.0f, 5.0f});
   ASSERT_EQ(scenario.editor().selection().summary().selected_face_count, 1u);

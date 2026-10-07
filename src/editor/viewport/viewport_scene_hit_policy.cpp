@@ -337,7 +337,7 @@ struct SceneHitRayInterval final {
           .world_direction = ray.direction,
           .min_distance = interval.minimum,
           .max_distance = interval.maximum,
-          .include_backfaces = false,
+          .respect_render_sidedness = true,
           .eligibility = SceneSurfaceEligibility::RenderVisible,
           .excluded_entities = excluded_entities,
           .excluded_occurrences = excluded_occurrences,
@@ -385,6 +385,7 @@ struct SceneHitRayInterval final {
           {
               .world_origin = ray.origin,
               .world_direction = ray.direction,
+              .respect_render_sidedness = true,
               .eligibility = SceneSurfaceEligibility::RenderVisible,
           },
           *scratch);
@@ -468,6 +469,7 @@ public:
       const auto surface = surfaces.nearest_hit(
           {.world_origin = ray.origin,
            .world_direction = ray.direction,
+           .respect_render_sidedness = true,
            .eligibility = SceneSurfaceEligibility::RenderVisible}, scratch);
       if (surface.has_value()) {
         entry->second = surface->distance;

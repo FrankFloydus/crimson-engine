@@ -2997,6 +2997,9 @@ bool SceneDocument::clear_instance_occurrence(EntityId id) {
 }
 
 bool SceneDocument::set_mesh(EntityId id, MeshComponent mesh) {
+  if (!mesh_wireframe_color_is_valid(mesh.wireframe_on_shaded_color)) {
+    return false;
+  }
   const entt::entity entity = require_entity(id);
   if (entity == entt::null || instance_occurrence(id) != nullptr ||
       is_instance_definition_entity(id) || curve(id) != nullptr) {

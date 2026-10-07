@@ -9,14 +9,18 @@
 #include "api/quader_polygon_document_internal_access.hpp"
 #include "assets/asset_registry.hpp"
 #include "assets/mesh_asset_payload.hpp"
+#include "assets/mesh_geometry_projection.hpp"
 #include "assets/texture_asset.hpp"
 #include "editor/instances/scene_instance_service.hpp"
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
 #include "editor/modeling/services/modeling_mesh_sync_service.hpp"
 #include "editor/modeling/services/modeling_sdk_projection_adapter.hpp"
 #include "editor/projection/mesh_projection_service.hpp"
+#include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/session/scene_session.hpp"
 #include "render/mesh_quad_uv_interpolation.hpp"
+#include "render/scene_render_bridge.hpp"
+#include "render/tool_preview_renderable_cache.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/scene_texture_mapping.hpp"
 #include "scene/scene_transform.hpp"
@@ -142,6 +146,67 @@ quader_poly::Document uv_test_wall(float x, bool authored = true) {
   return document;
 }
 
+/// The two wall faces incident to vertex 13 in selection dump SEL-20261007-FD0D8D87.
+quader_poly::Document hallway_deformation_wall() {
+  quader_poly::Document document;
+  document.vertices = {
+      {.id = 19U, .position = {-12.5F, -0.5F, -3.5F}},
+      {.id = 13U, .position = {-12.5F, -0.5F, -14.5F}},
+      {.id = 84U, .position = {-12.5F, 0.5F, -13.5F}},
+      {.id = 60U, .position = {-12.5F, 0.5F, -3.5F}},
+      {.id = 34U, .position = {-12.5F, -0.5F, -71.5F}},
+      {.id = 61U, .position = {-12.5F, 0.5F, -71.5F}}};
+  document.faces = {
+      {.id = 44U, .vertices = {19U, 13U, 84U, 60U},
+       .uvs = {{1.75F, 0.25F}, {7.25F, 0.25F}, {6.75F, -0.25F}, {1.75F, -0.25F}}},
+      {.id = 46U, .vertices = {34U, 61U, 84U, 13U},
+       .uvs = {{35.75F, 0.25F}, {35.75F, -0.25F}, {6.75F, -0.25F}, {7.25F, 0.25F}}}};
+  document.next_vertex_id = 85U;
+  document.next_face_id = 47U;
+  return document;
+}
+
+void expect_hallway_deformation_mapping(MeshAsset mesh, const QMat4 &placement,
+                                         const QMat4 &sampling, float delta,
+                                         bool move_edge) {
+  const auto source = hallway_deformation_wall();
+  ASSERT_EQ(mesh.geometry().vertices.size(), 8U);
+  for (const auto &corner : mesh.geometry().vertices) {
+    const auto original = std::ranges::find(source.vertices, corner.source_vertex_id,
+                                           &quader_poly::Vertex::id);
+    ASSERT_NE(original, source.vertices.end());
+    auto expected = original->position;
+    if (original->id == 13U || (move_edge && original->id == 84U)) expected.z += delta;
+    EXPECT_EQ(corner.position.x, expected.x);
+    EXPECT_EQ(corner.position.y, expected.y);
+    EXPECT_EQ(corner.position.z, expected.z);
+    EXPECT_NEAR(corner.uv.x, -expected.z * 0.5F, 0.00002F);
+    EXPECT_NEAR(corner.uv.y, -expected.y * 0.5F, 0.00002F);
+    EXPECT_NEAR(corner.uv_carrier[0], 1.0F, 0.00002F);
+    EXPECT_NEAR(corner.uv_carrier[1], 0.0F, 0.00002F);
+    EXPECT_NEAR(corner.uv_carrier[2], 0.0F, 0.00002F);
+    EXPECT_NEAR(corner.uv_carrier[3], 1.0F, 0.00002F);
+  }
+  MeshProjectionService::apply_mesh_texture_mapping(mesh, sampling);
+  const auto &geometry = mesh.geometry();
+  for (const auto &corner : geometry.vertices) {
+    const auto world = transform_point(placement, corner.position);
+    EXPECT_NEAR(corner.uv.x, -world.z * 0.5F, 0.00004F) << corner.source_vertex_id;
+    EXPECT_NEAR(corner.uv.y, -world.y * 0.5F, 0.00004F) << corner.source_vertex_id;
+  }
+  // Interior texture samples must remain planar across either triangulation.
+  for (std::size_t triangle = 0U; triangle + 2U < geometry.indices.size(); triangle += 3U) {
+    const auto &a = geometry.vertices[geometry.indices[triangle]];
+    const auto &b = geometry.vertices[geometry.indices[triangle + 1U]];
+    const auto &c = geometry.vertices[geometry.indices[triangle + 2U]];
+    const auto world = transform_point(placement,
+        a.position * 0.2F + b.position * 0.3F + c.position * 0.5F);
+    const auto uv = a.uv * 0.2F + b.uv * 0.3F + c.uv * 0.5F;
+    EXPECT_NEAR(uv.x, -world.z * 0.5F, 0.00004F);
+    EXPECT_NEAR(uv.y, -world.y * 0.5F, 0.00004F);
+  }
+}
+
 void expect_uv_matrix(const QMat4 &actual, const QMat4 &expected) {
   for (std::size_t index = 0; index < actual.values.size(); ++index) {
     EXPECT_NEAR(actual.values[index], expected.values[index], 0.0003f) << index;
@@ -180,6 +245,48 @@ protected:
             uv_test_wall(x, authored)), {.name = std::move(name)});
     EXPECT_TRUE(created.ok()) << created.error_message();
     return created.ok() ? created.value() : QuaderModelingObjectRef{};
+  }
+
+  void create_hallway_wall(bool translated, bool move_edge,
+                           QuaderModelingObjectRef &object, QMat4 &placement) {
+    ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Object).ok());
+    const auto created = editor_.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(hallway_deformation_wall()),
+        {.name = "Hallway deformation wall"});
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    object = created.value();
+    const QVec3 position = translated ? QVec3{-7.5F, 0.5F, -10.5F} : QVec3{};
+    ASSERT_TRUE(editor_.scene().set_transform(object.entity, {.position = position}).ok());
+    placement = session_.scene().world_transform_matrix(object.entity);
+    ASSERT_TRUE(session_.scene().set_texture_mapping(object.entity, {placement}));
+    ASSERT_TRUE(editor_.selection().select_object(object).ok());
+    ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
+    ASSERT_TRUE(editor_.selection().set_mode(
+        move_edge ? QuaderSelectionMode::Edge : QuaderSelectionMode::Vertex).ok());
+    if (move_edge) {
+      ASSERT_TRUE(editor_.selection().select_edge(object, 13U, 84U).ok());
+    } else {
+      ASSERT_TRUE(editor_.selection().select_vertex(object, 13U).ok());
+    }
+    session_.history().clear();
+  }
+
+  void expect_hallway_mesh(QuaderModelingObjectRef object, const QMat4 &placement,
+                            float delta, bool move_edge) {
+    const auto mesh = session_.modeling().compile_object_mesh(object.modeling_object_id);
+    ASSERT_TRUE(mesh.has_value());
+    expect_hallway_deformation_mapping(*mesh, placement, placement, delta, move_edge);
+    ASSERT_NE(mesh->authored_polygon_document, nullptr);
+    const auto &document = *mesh->authored_polygon_document;
+    for (const auto &face : document.faces) {
+      ASSERT_EQ(face.vertices.size(), face.uvs.size());
+      for (std::size_t corner = 0U; corner < face.vertices.size(); ++corner) {
+        const auto *vertex = quader_poly::find_vertex(document, face.vertices[corner]);
+        ASSERT_NE(vertex, nullptr);
+        EXPECT_NEAR(face.uvs[corner].x, -vertex->position.z * 0.5F, 0.00002F);
+        EXPECT_NEAR(face.uvs[corner].y, -vertex->position.y * 0.5F, 0.00002F);
+      }
+    }
   }
 
   std::vector<DisplayedUvCorner> displayed(EntityId entity,
@@ -287,6 +394,142 @@ protected:
   QuaderEditorApi editor_;
 };
 
+TEST_F(UvNativeSamplingTests, HallwayVertexAndEdgeMovesKeepPlanarGridAndHistory) {
+  for (const bool translated : {false, true}) {
+    for (const bool move_edge : {false, true}) {
+      for (const float delta : {-1.0F, 1.0F}) {
+        SCOPED_TRACE(::testing::Message() << translated << '/' << move_edge << '/' << delta);
+        QuaderModelingObjectRef object;
+        QMat4 placement;
+        create_hallway_wall(translated, move_edge, object, placement);
+        ASSERT_FALSE(HasFatalFailure());
+        expect_hallway_mesh(object, placement, 0, move_edge);
+        const auto moved = editor_.modeling().transform_selection({.origin = {0, 0, delta}});
+        ASSERT_TRUE(moved.ok()) << moved.error_message();
+        ASSERT_TRUE(moved.changed());
+        expect_hallway_mesh(object, placement, delta, move_edge);
+        EXPECT_EQ(session_.history().undo_count(), 1U);
+        ASSERT_TRUE(editor_.history().undo().ok());
+        expect_hallway_mesh(object, placement, 0, move_edge);
+        ASSERT_TRUE(editor_.history().redo().ok());
+        expect_hallway_mesh(object, placement, delta, move_edge);
+      }
+    }
+  }
+}
+
+TEST_F(UvNativeSamplingTests, HallwayPlanarGridMatchesRetainedPreviewCommitCancelAndHistory) {
+  for (const bool translated : {false, true}) {
+    for (const bool move_edge : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << translated << '/' << move_edge);
+      QuaderModelingObjectRef object;
+      QMat4 placement;
+      create_hallway_wall(translated, move_edge, object, placement);
+      ASSERT_FALSE(HasFatalFailure());
+      SceneRenderBridge bridge;
+      std::vector<RenderToolPreviewMeshRecord> published;
+      std::size_t publication_count = 0U;
+      const QuaderRenderApiRuntimeAccess::ToolPreviewScenePublisher publisher =
+          [&](RenderToolPreviewSceneSnapshot records) {
+            published = std::move(records.meshes);
+            ++publication_count;
+            return ToolPreviewSubmissionResult::Published;
+          };
+      const auto expect_preview = [&](const RenderToolPreviewMeshRecord &preview, float delta) {
+        ASSERT_EQ(preview.source_entity, object.entity);
+        ASSERT_TRUE(preview.dynamic_positions);
+        ASSERT_NE(preview.geometry_projection, nullptr);
+        MeshAsset mesh = preview.mesh;
+        mesh.share_geometry(preview.geometry_projection->materialized_geometry());
+        expect_hallway_deformation_mapping(mesh, preview.transform,
+                                            preview.sampling_from_local, delta, move_edge);
+      };
+      const auto scene_revision = session_.scene().revision();
+      const auto asset_revision = session_.assets().revision();
+      ASSERT_TRUE(editor_.modeling().begin_transform_preview().ok());
+      ASSERT_TRUE(editor_.modeling().update_transform_translate({0, 0, 1}).ok());
+      ASSERT_TRUE(QuaderRenderApiRuntimeAccess::sync_tool_previews(
+          editor_.render(), bridge, {}, publisher).ok());
+      ASSERT_EQ(published.size(), 1U);
+      const auto positive_frame = published.front();
+      expect_preview(positive_frame, 1);
+      expect_hallway_mesh(object, placement, 0, move_edge);
+      EXPECT_EQ(session_.scene().revision(), scene_revision);
+      EXPECT_EQ(session_.assets().revision(), asset_revision);
+      EXPECT_EQ(session_.history().undo_count(), 0U);
+      const auto before_repeated = MeshProjectionService::position_update_stats();
+      const auto published_before_repeated = publication_count;
+      for (int frame = 0; frame < 3; ++frame) {
+        const auto unchanged = editor_.modeling().update_transform_translate({0, 0, 1});
+        ASSERT_TRUE(unchanged.ok());
+        EXPECT_FALSE(unchanged.changed());
+        ASSERT_TRUE(QuaderRenderApiRuntimeAccess::sync_tool_previews(
+            editor_.render(), bridge, {}, publisher).ok());
+      }
+      EXPECT_EQ(publication_count, published_before_repeated);
+      EXPECT_EQ(MeshProjectionService::position_update_stats().retained_stream_projection_count,
+                before_repeated.retained_stream_projection_count);
+      ASSERT_TRUE(editor_.modeling().update_transform_translate({0, 0, -1}).ok());
+      ASSERT_TRUE(QuaderRenderApiRuntimeAccess::sync_tool_previews(
+          editor_.render(), bridge, {}, publisher).ok());
+      ASSERT_EQ(published.size(), 1U);
+      expect_preview(published.front(), -1);
+      expect_preview(positive_frame, 1);
+      // A sample outside the original plane must not overwrite the cached source
+      // chart subsequently used when the cursor returns to a planar deformation.
+      ASSERT_TRUE(editor_.modeling().update_transform_translate({1, 0, 0}).ok());
+      ASSERT_TRUE(QuaderRenderApiRuntimeAccess::sync_tool_previews(
+          editor_.render(), bridge, {}, publisher).ok());
+      ASSERT_EQ(published.size(), 1U);
+      ASSERT_NE(published.front().geometry_projection, nullptr);
+      const auto nonplanar = published.front().geometry_projection->materialized_geometry();
+      for (const auto &corner : nonplanar->vertices) {
+        const auto source = hallway_deformation_wall();
+        const auto original = std::ranges::find(source.vertices, corner.source_vertex_id,
+                                               &quader_poly::Vertex::id);
+        ASSERT_NE(original, source.vertices.end());
+        EXPECT_EQ(corner.uv.x, -original->position.z * 0.5F);
+        EXPECT_EQ(corner.uv.y, -original->position.y * 0.5F);
+      }
+      ASSERT_TRUE(editor_.modeling().update_transform_translate({0, 0, 1}).ok());
+      ASSERT_TRUE(QuaderRenderApiRuntimeAccess::sync_tool_previews(
+          editor_.render(), bridge, {}, publisher).ok());
+      ASSERT_EQ(published.size(), 1U);
+      expect_preview(published.front(), 1);
+      ASSERT_TRUE(editor_.modeling().update_transform_translate({0, 0, 0}).ok());
+      ASSERT_TRUE(QuaderRenderApiRuntimeAccess::sync_tool_previews(
+          editor_.render(), bridge, {}, publisher).ok());
+      ASSERT_EQ(published.size(), 1U);
+      expect_preview(published.front(), 0);
+      expect_preview(positive_frame, 1);
+      ASSERT_TRUE(editor_.modeling().cancel_transform_preview().ok());
+      expect_hallway_mesh(object, placement, 0, move_edge);
+      EXPECT_EQ(session_.history().undo_count(), 0U);
+      ASSERT_TRUE(QuaderRenderApiRuntimeAccess::sync_tool_previews(
+          editor_.render(), bridge, {}, publisher).ok());
+      EXPECT_TRUE(published.empty());
+      for (const float delta : {-1.0F, 1.0F}) {
+        SCOPED_TRACE(delta);
+        ASSERT_TRUE(editor_.modeling().begin_transform_preview().ok());
+        ASSERT_TRUE(editor_.modeling().update_transform_translate({0, 0, delta}).ok());
+        ASSERT_TRUE(QuaderRenderApiRuntimeAccess::sync_tool_previews(
+            editor_.render(), bridge, {}, publisher).ok());
+        ASSERT_EQ(published.size(), 1U);
+        expect_preview(published.front(), delta);
+        ASSERT_TRUE(editor_.modeling().commit_transform_preview("Move hallway components").ok());
+        expect_hallway_mesh(object, placement, delta, move_edge);
+        EXPECT_EQ(session_.history().undo_count(), 1U);
+        ASSERT_TRUE(editor_.history().undo().ok());
+        expect_hallway_mesh(object, placement, 0, move_edge);
+        ASSERT_TRUE(editor_.history().redo().ok());
+        expect_hallway_mesh(object, placement, delta, move_edge);
+        ASSERT_TRUE(editor_.history().undo().ok());
+        expect_hallway_mesh(object, placement, 0, move_edge);
+      }
+    }
+  }
+}
+
 TEST_F(UvNativeSamplingTests, CombineIdentityRetainsNonAffineAuthoredChartsAndUndo) {
   const auto source = wall("Source", 0);
   const auto survivor = wall("Survivor", 5);
@@ -339,6 +582,8 @@ TEST_F(UvNativeSamplingTests, CombinePerpendicularCubeFacesKeepsCompleteBoundary
       {.name = "Perpendicular face charts"});
   ASSERT_TRUE(created.ok()) << created.error_message();
   const auto object = created.value();
+  ASSERT_TRUE(editor_.selection().select_object(object).ok());
+  ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor_.modeling().set_selection_mode(QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor_.selection().select_face(object, top).ok());
   ASSERT_TRUE(editor_.selection().select_face(object, side, QuaderSelectionEdit::Add).ok());
@@ -448,6 +693,8 @@ TEST_F(UvNativeSamplingTests, CombineCoplanarFacesRemovesUvSeamAndPreservesUndoR
       {.name = "Coplanar faces with a UV seam"});
   ASSERT_TRUE(created.ok()) << created.error_message();
   const auto object = created.value();
+  ASSERT_TRUE(editor_.selection().select_object(object).ok());
+  ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor_.modeling().set_selection_mode(QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor_.selection().select_faces(
       object, {static_cast<QuaderElementId>(first), static_cast<QuaderElementId>(second)}).ok());
@@ -948,6 +1195,8 @@ TEST_F(UvNativeSamplingTests, RectangularNumericRotationMatchesActionAndContinuo
   ASSERT_TRUE(session_.scene().set_texture_mapping(source.entity,
       {compose_transform(QTransform{.position = {0.4f, -0.3f, 0},
                                     .scale = {0.8f, 1.2f, 1}})}));
+  ASSERT_TRUE(editor_.selection().select_object(source).ok());
+  ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor_.selection().select_face(source, 1).ok());
   const auto before = displayed(source.entity);
@@ -1000,6 +1249,8 @@ TEST_F(UvNativeSamplingTests, MixedMaterialNumericRotationKeepsDimensionsAndPrio
   const auto tall = wall("Tall UV Image", 6);
   texture_extent(wide.entity, 512, 128);
   texture_extent(tall.entity, 128, 512);
+  ASSERT_TRUE(editor_.selection().select_objects({wide, tall}).ok());
+  ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor_.selection().select_face(wide, 1).ok());
   ASSERT_TRUE(editor_.selection().select_face(tall, 1, QuaderSelectionEdit::Add).ok());

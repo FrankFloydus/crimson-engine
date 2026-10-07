@@ -1337,12 +1337,14 @@ ModelingTransformDragService::apply_transform_drag_preview(
     QDR_PROFILE_SCOPE("Modeling transform drag build snap caches");
     input.vertex_snap_enabled = true;
     input.vertex_snap_radius = request.vertex_snap_radius;
-    input.snap_object_bounds = context.port.cached_pick_object_bounds();
+    // Snap receivers need not be editing participants; only the transformed
+    // operands are restricted to the fixed edit set.
+    input.snap_object_bounds = context.port.cached_pick_object_bounds(true);
     input.snap_face_geometry =
-        context.port.cached_local_pick_face_geometry();
+        context.port.cached_local_pick_face_geometry({}, true);
     input.snap_object_transforms =
-        context.port.cached_local_picking_transforms();
-    input.snap_objects = &context.port.cached_local_objects_for_picking();
+        context.port.cached_local_picking_transforms(true);
+    input.snap_objects = &context.port.cached_local_objects_for_picking(true);
   }
 
   const quader_editor_core::CommandResult result = [&]() {

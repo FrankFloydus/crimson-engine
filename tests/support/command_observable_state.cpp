@@ -849,6 +849,13 @@ std::string capture_scene(const CaptureData &data) {
     writer.line(prefix + ".layer", data.layer_label(entity->layer_id));
     writer.line(prefix + ".has_mesh", bool_text(entity->has_mesh));
     writer.line(prefix + ".mesh", data.mesh_label(entity->mesh));
+    if (entity->has_mesh) {
+      writer.line(prefix + ".wireframe_on_shaded", bool_text(entity->wireframe_on_shaded));
+      writer.line(prefix + ".wireframe_on_shaded_color",
+                  entity->wireframe_on_shaded_color.has_value()
+                      ? vec3_text(*entity->wireframe_on_shaded_color)
+                      : "inherit");
+    }
     if (entity->has_curve) {
       writer.line(prefix + ".curve", data.curve_label(entity->curve));
       writer.line(prefix + ".curve_solidify",
@@ -1063,6 +1070,28 @@ std::string overlay_element_text(const CaptureData &data,
 
 std::string capture_selection(const CaptureData &data) {
   CanonicalWriter writer;
+  const auto mode = data.editor.mode().state();
+  writer.line("editor_mode.mode", enum_text(mode.mode));
+  writer.line("editor_mode.component_kind", enum_text(mode.component_kind));
+  writer.line("editor_mode.active", data.semantic_entity_label(mode.active_entity.id));
+  std::vector<std::string> edit_participants;
+  for (const auto &participant : mode.participants) {
+    edit_participants.push_back(data.semantic_entity_label(participant.id));
+  }
+  std::sort(edit_participants.begin(), edit_participants.end());
+  for (std::size_t index = 0; index < edit_participants.size(); ++index) {
+    writer.line("editor_mode.participant[" + std::to_string(index) + "]",
+                edit_participants[index]);
+  }
+  std::vector<std::string> object_results;
+  for (const auto &result : mode.object_results) {
+    object_results.push_back(data.semantic_entity_label(result.id));
+  }
+  std::sort(object_results.begin(), object_results.end());
+  for (std::size_t index = 0; index < object_results.size(); ++index) {
+    writer.line("editor_mode.object_result[" + std::to_string(index) + "]",
+                object_results[index]);
+  }
   const QuaderSelectionSummary &selection = data.snapshot.selection;
   writer.line("selection.mode", enum_text(selection.mode));
   writer.line("selection.has_selection", bool_text(selection.has_selection));
@@ -1599,7 +1628,7 @@ std::string capture_viewports(const CaptureData &data) {
   // Missing pane-control fields encode these fixed baseline defaults. Record
   // explicit overrides even when their effective value equals the default:
   // they change how later application-default edits affect the pane.
-  constexpr std::array<QuaderViewportControl, 8> kPaneControls{
+  constexpr std::array<QuaderViewportControl, 9> kPaneControls{
       QuaderViewportControl::SnappingEnabled,
       QuaderViewportControl::GridSnap,
       QuaderViewportControl::VertexSnap,
@@ -1608,6 +1637,7 @@ std::string capture_viewports(const CaptureData &data) {
       QuaderViewportControl::ShowGizmos,
       QuaderViewportControl::ShowOverlays,
       QuaderViewportControl::ShowMeshGrid,
+      QuaderViewportControl::WireframeOnShaded,
   };
   for (ViewportPaneId pane : kPanes) {
     const std::string prefix = "viewport.pane[" + enum_text(pane) + "]";
@@ -1624,7 +1654,8 @@ std::string capture_viewports(const CaptureData &data) {
                   enum_text(viewports.transform_space(pane)));
     }
     for (const auto control : kPaneControls) {
-      const bool baseline = control != QuaderViewportControl::ShowMeshGrid;
+      const bool baseline = control != QuaderViewportControl::ShowMeshGrid &&
+                            control != QuaderViewportControl::WireframeOnShaded;
       const bool value = viewports.control(pane, control);
       const bool overridden = viewports.control_overridden(pane, control);
       if (value == baseline && !overridden) {
@@ -1795,6 +1826,8 @@ void write_revision_stamp(CanonicalWriter &writer, std::string_view prefix,
 
 std::string capture_revisions(const CaptureData &data) {
   CanonicalWriter writer;
+  writer.line("revisions.editor_mode", std::to_string(data.editor.mode().revision()));
+  writer.line("revisions.editor_mode_generation", std::to_string(data.editor.mode().generation()));
   write_revision_stamp(writer, "revisions", data.snapshot.revisions);
   writer.line("revisions.asset_snapshot",
               std::to_string(data.snapshot.assets.revision));

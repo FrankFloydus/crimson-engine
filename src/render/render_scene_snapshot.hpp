@@ -288,6 +288,11 @@ struct RenderToolPreviewMeshRecord {
   bool cast_shadows = false;
   bool dynamic_positions = false;
   bool suppress_source = false;
+  /// Resolved source preference; component editing wires remain independent.
+  bool wireframe_on_shaded = true;
+  std::optional<QVec3> wireframe_on_shaded_color;
+  /// Ordinary Wireframe color resolved from the displayed source occurrence.
+  QVec3 wireframe_tint = kDefaultSceneLayerWireframeColor;
   std::uint64_t layout_key = 0u;
   // Participant-local token. Equal identity, revision, and payload ownership
   // mean the retained render group does not need a position upload.

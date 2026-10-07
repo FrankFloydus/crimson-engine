@@ -543,6 +543,12 @@ TEST(ViewportToolCatalogTests,
   EXPECT_EQ(tool->modeling_tool(), ModelingViewportTool::Select);
   EXPECT_TRUE(tool->shortcut().empty());
 
+  const auto mesh = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "UV Peel participant");
+  ASSERT_TRUE(mesh.ok()) << mesh.error_message();
+  ASSERT_TRUE(editor.selection().select_object(mesh.value()).ok());
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::UvPeel).ok());
   EXPECT_EQ(session.modeling().selection_mode(), ModelingSelectionMode::Edge);
   EXPECT_EQ(session.modeling().tool_status().active_tool,
@@ -908,6 +914,9 @@ TEST(ViewportToolRuntimeTests,
       }
     }
 
+    if (descriptor.supported_editor_modes == EditorModeSupport::Edit) {
+      ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
+    }
     NativeViewportToolCoordinator &coordinator = session.native_tools();
     ASSERT_TRUE(coordinator.handles(descriptor.id));
     EXPECT_TRUE(coordinator.can_activate(descriptor.id));
@@ -1025,6 +1034,9 @@ TEST(ViewportToolRuntimeTests,
         } else {
           ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
         }
+      }
+      if (outgoing.supported_editor_modes == EditorModeSupport::Edit) {
+        ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
       }
       session.history().clear();
       const auto entity_count_before = editor.query().entities().size();
@@ -1154,6 +1166,9 @@ TEST(ViewportToolRuntimeTests,
         } else {
           ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
         }
+      }
+      if (descriptor.supported_editor_modes == EditorModeSupport::Edit) {
+        ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
       }
       ASSERT_TRUE(editor.tools().activate(descriptor.tool).ok());
 
@@ -1446,6 +1461,9 @@ TEST(ViewportToolRuntimeTests,
           "Empty lifecycle source");
       ASSERT_TRUE(box.ok()) << box.error_message();
       ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+    }
+    if (tool == ViewportToolId::UvPeel || tool == ViewportToolId::Extrude) {
+      ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
     }
     session.history().clear();
     const auto entities_before = session.scene().entities().size();
@@ -2609,6 +2627,9 @@ TEST(ViewportToolRuntimeTests,
         "Tool Error Target");
     ASSERT_TRUE(mesh.ok()) << mesh.error_message();
     ASSERT_TRUE(editor.selection().select_object(mesh.value()).ok());
+    if (tool_id == ViewportToolId::InsertEdgeLoop) {
+      ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
+    }
 
     struct ReportedResult {
       ModelingCommandResult command;
@@ -2881,6 +2902,10 @@ public:
     ASSERT_TRUE(created.ok()) << created.error_message();
     source = created.value();
     ASSERT_TRUE(editor.selection().select_object(source).ok());
+    if (tool_id == ViewportToolId::Knife ||
+        tool_id == ViewportToolId::InsertEdgeLoop) {
+      ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
+    }
     ASSERT_TRUE(editor.tools().activate(tool_id).ok());
     ASSERT_TRUE(runtime.set_active_tool(state, tool_id));
     session.history().clear();

@@ -35,7 +35,7 @@ enum class CanonicalCommandFixture : std::uint8_t {
   ObjectSetSelection,
   /// Two exact-geometry sibling meshes in Object mode with only one selected.
   IdenticalObjectsOneSelected,
-  /// One selected Object-mode mesh containing at least one face with >4 sides.
+  /// One Edit participant containing at least one face with >4 sides.
   NgonObjectSelection,
   /// One visible, unlocked group containing mesh members selected in Group mode.
   GroupSelection,

@@ -414,6 +414,7 @@ TEST_F(QtAlignToolSettingsTests,
     SCOPED_TRACE(static_cast<int>(mode));
     QPointer<QPushButton> outgoing = action_button("x", "min");
     ASSERT_NE(outgoing, nullptr);
+    ASSERT_TRUE(harness_->editor.mode().set(quader::QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(harness_->editor.selection().set_mode(mode).ok());
     const auto history_count = harness_->session.history().undo_count();
     const auto acquired = harness_->editor.tools().acquire_pane_tool(
@@ -448,9 +449,7 @@ TEST_F(QtAlignToolSettingsTests,
               availability_queries);
     EXPECT_EQ(harness_->session.align_tool().work_counters().context_validation_count,
               context_validations);
-    ASSERT_TRUE(harness_->editor.selection()
-                    .set_mode(QuaderSelectionMode::Object)
-                    .ok());
+    ASSERT_TRUE(harness_->editor.mode().set(quader::QuaderEditorMode::Object).ok());
     refresh();
     EXPECT_TRUE(panel_->target_id().empty());
     EXPECT_FALSE(harness_->session.align_tool().active());

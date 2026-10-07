@@ -8,6 +8,7 @@
 #include "core/user_config_paths.hpp"
 
 #include "api/quader_api.hpp"
+#include "api/quader_editor_mode_api.hpp"
 #include "api/quader_mesh_arrangement_catalog.hpp"
 #ifndef NDEBUG
 #include "api/quader_dev_tools_api.hpp"
@@ -261,6 +262,12 @@ constexpr std::string_view editor_command_keybinding_context() {
          "!navigation.active";
 }
 
+std::string selection_kind_keybinding_context(std::string_view kind) {
+  return std::string(editor_command_keybinding_context()) +
+         ((kind == "object" || kind == "group") ? " && editorMode.object"
+                                                : " && editorMode.edit");
+}
+
 bool editor_panel_can_apply_shortcut(std::string_view target_id) {
   ViewportShortcut shortcut;
   return viewport_shortcut_for_command_target_id(target_id, shortcut) &&
@@ -402,6 +409,9 @@ bool command_semantically_requires_viewport(std::string_view command_id) {
 
 std::string_view
 default_keybinding_context_for_command(std::string_view command_id) {
+  if (command_id.starts_with("editor.mode.")) {
+    return viewport_command_keybinding_context();
+  }
   if (command_id ==
       quader_command::kViewportShadingToggleWireframeShaded.string()) {
     return viewport_command_keybinding_context();
@@ -561,7 +571,8 @@ viewport_keybinding_context(const ViewportToolState &state,
                             bool viewport_focused, bool text_input_active,
                             QuaderViewportKeybindingContext input_context,
                             bool can_undo, bool can_redo,
-                            const QuaderToolsApi &tools) {
+                            const QuaderToolsApi &tools,
+                            const QuaderEditorModeApi &mode) {
   QuaderKeybindingContext context;
   context.set("viewportFocus", viewport_focused);
   context.set("outlinerFocus", input_context.outliner_focused);
@@ -570,6 +581,8 @@ viewport_keybinding_context(const ViewportToolState &state,
   context.set("viewport.hovered", input_context.viewport_hovered);
   context.set("viewport.orthographic", input_context.orthographic_view);
   context.set("textInputActive", text_input_active);
+  context.set("editorMode.object", mode.current() == QuaderEditorMode::Object);
+  context.set("editorMode.edit", mode.current() == QuaderEditorMode::Edit);
   context.set("editorTextFocus", text_input_active);
   context.set("canUndo", can_undo);
   context.set("canRedo", can_redo);
@@ -725,6 +738,9 @@ std::string explicit_keybinding_label(std::string_view command_id,
   if (is(quader_command::kViewportToggleGrid)) {
     return "Toggle Viewport Grid";
   }
+  if (is(quader_command::kViewportToggleWireframeOnShaded)) {
+    return "Wireframe on Shaded";
+  }
   if (is(quader_command::kViewportToggleGizmos)) {
     return "Toggle Transform Gizmos";
   }
@@ -829,6 +845,9 @@ std::string explicit_keybinding_label(std::string_view command_id,
 }
 
 std::string command_keybinding_localization_key(std::string_view command_id) {
+  if (command_id.starts_with("editor.mode.")) {
+    return "command." + std::string(command_id);
+  }
   const auto stable = [&] {
     return stable_keybinding_localization_key(command_id);
   };
@@ -955,6 +974,9 @@ std::string command_keybinding_localization_key(std::string_view command_id) {
     return stable();
   }
   if (command_id == quader_command::kViewportToggleGrid.string()) {
+    return stable();
+  }
+  if (command_id == quader_command::kViewportToggleWireframeOnShaded.string()) {
     return stable();
   }
   if (command_id == quader_command::kViewportToggleGizmos.string()) {
@@ -1093,6 +1115,7 @@ public:
     Impl(QuaderApi& api, QuaderProjectApi& project,
          QuaderSceneDocumentsApi &scene_documents,
          QuaderViewportApi& viewports, QuaderToolsApi& tools,
+                      QuaderEditorModeApi &mode,
          QuaderPreferencesApi& preferences, QuaderUIApi &ui,
          QuaderSelectionDiagnosticsApi &selection_diagnostics,
          QuaderDevToolsApi& dev_tools);
@@ -1100,6 +1123,7 @@ public:
     Impl(QuaderApi& api, QuaderProjectApi& project,
          QuaderSceneDocumentsApi &scene_documents,
          QuaderViewportApi& viewports, QuaderToolsApi& tools,
+                      QuaderEditorModeApi &mode,
          QuaderPreferencesApi& preferences, QuaderUIApi &ui,
          QuaderSelectionDiagnosticsApi &selection_diagnostics);
 #endif
@@ -1270,6 +1294,7 @@ public:
     QuaderSceneDocumentsApi &scene_documents_;
     QuaderViewportApi& viewports_;
     QuaderToolsApi& tools_;
+    QuaderEditorModeApi &mode_;
     QuaderPreferencesApi& preferences_;
     QuaderUIApi &ui_;
     QuaderSelectionDiagnosticsApi &selection_diagnostics_;
@@ -1292,7 +1317,8 @@ public:
 QuaderCommandsApi::Impl::Impl(
     QuaderApi &api, QuaderProjectApi &project,
     QuaderSceneDocumentsApi &scene_documents, QuaderViewportApi &viewports,
-    QuaderToolsApi &tools, QuaderPreferencesApi &preferences, QuaderUIApi &ui,
+    QuaderToolsApi &tools, QuaderEditorModeApi &mode,
+    QuaderPreferencesApi &preferences, QuaderUIApi &ui,
     QuaderSelectionDiagnosticsApi &selection_diagnostics
 #ifndef NDEBUG
     ,
@@ -1304,6 +1330,7 @@ QuaderCommandsApi::Impl::Impl(
     , scene_documents_(scene_documents)
     , viewports_(viewports)
     , tools_(tools)
+    , mode_(mode)
     , preferences_(preferences)
     , ui_(ui)
     , selection_diagnostics_(selection_diagnostics)
@@ -2002,7 +2029,7 @@ bool QuaderCommandsApi::Impl::resolve_viewport_input_action(
 
   const QuaderKeybindingContext context = viewport_keybinding_context(
       state, viewport_focused, text_input_active, input_context,
-      api_.history().can_undo(), api_.history().can_redo(), tools_);
+      api_.history().can_undo(), api_.history().can_redo(), tools_, mode_);
   const QuaderKeybindingDispatch dispatch =
       keybindings_.resolve_sequence(
           {chord}, context, [](std::string_view target_id) {
@@ -2053,7 +2080,7 @@ QuaderCommandsApi::Impl::dispatch_viewport_input_binding(
 
   const QuaderKeybindingContext context = viewport_keybinding_context(
       state, viewport_focused, text_input_active, input_context,
-      api_.history().can_undo(), api_.history().can_redo(), tools_);
+      api_.history().can_undo(), api_.history().can_redo(), tools_, mode_);
   const auto target_available = [this, &state, input_context](
                                     std::string_view target_id) {
     return viewport_input_target_available(target_id, state, input_context);
@@ -2139,8 +2166,17 @@ bool QuaderCommandsApi::Impl::viewport_input_target_available(
     return true;
   }
   ViewportShortcut shortcut;
-  return viewport_router_shortcut_for_target_id(target_id, state.grid_preset,
-                                                shortcut) || registered;
+  if (!viewport_router_shortcut_for_target_id(target_id, state.grid_preset,
+                                             shortcut)) {
+    return registered;
+  }
+  if (shortcut.kind == ViewportShortcutKind::SetSelectionMode) {
+    const bool component = shortcut.selection_mode == ViewportSelectionMode::Vertex ||
+                           shortcut.selection_mode == ViewportSelectionMode::Edge ||
+                           shortcut.selection_mode == ViewportSelectionMode::Face;
+    return component == (mode_.current() == QuaderEditorMode::Edit);
+  }
+  return true;
 }
 
 QuaderViewportKeybindingDispatch
@@ -2162,7 +2198,7 @@ QuaderCommandsApi::Impl::resolve_asset_browser_toggle_input_binding(
       continue_pending && pending_keybinding_owner_ == input_owner;
   const QuaderKeybindingContext context = viewport_keybinding_context(
       state, viewport_focused, text_input_active, input_context,
-      api_.history().can_undo(), api_.history().can_redo(), tools_);
+      api_.history().can_undo(), api_.history().can_redo(), tools_, mode_);
   const auto target_available = [this, &state, input_context](
                                     std::string_view target_id) {
     return viewport_input_target_available(target_id, state, input_context);
@@ -2236,7 +2272,7 @@ QuaderCommandsApi::Impl::resolve_immediate_global_command(
 
   const QuaderKeybindingContext context = viewport_keybinding_context(
       state, true, text_input_active, input_context,
-      api_.history().can_undo(), api_.history().can_redo(), tools_);
+      api_.history().can_undo(), api_.history().can_redo(), tools_, mode_);
   const QuaderKeybindingDispatch dispatch = keybindings_.resolve_next_chord(
       chord, context, [this, &state](std::string_view target_id) {
         if (!release_allows_input_target(target_id)) {
@@ -2291,7 +2327,7 @@ QuaderCommandsApi::Impl::tool_settings_keybinding_context(
       {.modal_tool_active = native,
        .active_tool_owns_viewport = native,
        .operation_preview_active = !native && settings.preview_active},
-      api_.history().can_undo(), api_.history().can_redo(), tools_);
+      api_.history().can_undo(), api_.history().can_redo(), tools_, mode_);
 }
 
 QuaderNativeToolSettingsIntent
@@ -2609,6 +2645,16 @@ QuaderApiVoidResult QuaderCommandsApi::Impl::set_keybinding_storage_path(
 }
 
 void QuaderCommandsApi::Impl::register_commands() {
+  register_command(quader_command::kEditorModeObject, "Object Mode",
+                   [this] { return mode_.set(QuaderEditorMode::Object); }, {},
+                   [this] { return mode_.can_set(QuaderEditorMode::Object); });
+  register_command(quader_command::kEditorModeEdit, "Edit Mode",
+                   [this] { return mode_.set(QuaderEditorMode::Edit); }, {},
+                   [this] { return mode_.can_set(QuaderEditorMode::Object); });
+  register_command(quader_command::kEditorModeToggleEdit, "Toggle Edit Mode",
+                   [this] { return mode_.toggle_edit(); }, "Tab", [this] {
+                     return mode_.can_set(QuaderEditorMode::Object);
+                   });
   auto register_modeling_tool_public_command =
       [this](QuaderCommandId command_id, std::string_view tool_id,
              std::string fallback_label, std::string shortcut = {}) {
@@ -2740,12 +2786,10 @@ void QuaderCommandsApi::Impl::register_commands() {
   register_command(
       quader_command::kSelectMeshNGons, "Select N-Gons",
       [this] { return api_.selection().select_mesh_ngons(); }, {}, [this] {
-        const QuaderSelectionSummary summary = api_.selection().summary();
-        return summary.mode == QuaderSelectionMode::Object &&
-               summary.selected_object_count > 0u;
+        return mode_.current() == QuaderEditorMode::Edit;
       });
   set_keybinding_selection_modes(
-      quader_command::kSelectMeshNGons.string(), kSelectionModeObject);
+      quader_command::kSelectMeshNGons.string(), kSelectionModeComponent);
   register_command(
       quader_command::kSelectSimilarMeshes, "Select Similar Meshes",
       [this] { return api_.selection().select_similar_meshes(); }, {},
@@ -3333,6 +3377,14 @@ void QuaderCommandsApi::Impl::register_commands() {
                          QuaderViewportControl::ShowGrid,
                          !viewports_.control(QuaderViewportControl::ShowGrid));
                    });
+  // Discoverable and remappable; deliberately has no default shortcut.
+  register_command(quader_command::kViewportToggleWireframeOnShaded,
+                   "Wireframe on Shaded", [this] {
+                     return viewports_.set_control(
+                         QuaderViewportControl::WireframeOnShaded,
+                         !viewports_.control(
+                             QuaderViewportControl::WireframeOnShaded));
+                   });
   register_command(quader_command::kViewportToggleGizmos, "Toggle Gizmos",
                    [this] {
                      return viewports_.set_control(
@@ -3652,7 +3704,7 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
         target_id, std::string(mode.label),
         stable_keybinding_localization_key(target_id),
         QuaderKeybindingContextKind::Viewport,
-        std::string(editor_command_keybinding_context()));
+        selection_kind_keybinding_context(mode.id));
   }
 
   for (const ViewportGridPresetDescriptor &preset :
@@ -3734,19 +3786,19 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
 
   keybindings_.add_default_keybinding(
       viewport_selection_mode_target_id("vertex"), "1",
-      std::string(editor_command_keybinding_context()), 5);
+      selection_kind_keybinding_context("vertex"), 5);
   keybindings_.add_default_keybinding(
       viewport_selection_mode_target_id("edge"), "2",
-      std::string(editor_command_keybinding_context()), 5);
+      selection_kind_keybinding_context("edge"), 5);
   keybindings_.add_default_keybinding(
       viewport_selection_mode_target_id("face"), "3",
-      std::string(editor_command_keybinding_context()), 5);
+      selection_kind_keybinding_context("face"), 5);
   keybindings_.add_default_keybinding(
       viewport_selection_mode_target_id("object"), "4",
-      std::string(editor_command_keybinding_context()), 5);
+      selection_kind_keybinding_context("object"), 5);
   keybindings_.add_default_keybinding(
       viewport_selection_mode_target_id("group"), "5",
-      std::string(editor_command_keybinding_context()), 5);
+      selection_kind_keybinding_context("group"), 5);
 
   const std::vector<ViewportGridShortcutBindingDescriptor> presets =
       viewport_grid_shortcut_binding_catalog();
@@ -3952,12 +4004,13 @@ QuaderCommandsApi::QuaderCommandsApi(QuaderApi &api,
                                      QuaderSceneDocumentsApi &scene_documents,
                                      QuaderViewportApi &viewports,
                                      QuaderToolsApi &tools,
+                                     QuaderEditorModeApi &mode,
                                      QuaderPreferencesApi &preferences,
                                      QuaderUIApi &ui,
                                      QuaderSelectionDiagnosticsApi &selection_diagnostics,
                                      QuaderDevToolsApi &dev_tools)
     : impl_(std::make_unique<Impl>(api, project, scene_documents, viewports,
-                                   tools, preferences, ui, selection_diagnostics,
+                                   tools, mode, preferences, ui, selection_diagnostics,
                                    dev_tools)) {}
 #else
 QuaderCommandsApi::QuaderCommandsApi(QuaderApi &api,
@@ -3965,11 +4018,12 @@ QuaderCommandsApi::QuaderCommandsApi(QuaderApi &api,
                                      QuaderSceneDocumentsApi &scene_documents,
                                      QuaderViewportApi &viewports,
                                      QuaderToolsApi &tools,
+                                     QuaderEditorModeApi &mode,
                                      QuaderPreferencesApi &preferences,
                                      QuaderUIApi &ui,
                                      QuaderSelectionDiagnosticsApi &selection_diagnostics)
     : impl_(std::make_unique<Impl>(api, project, scene_documents, viewports,
-                                   tools, preferences, ui, selection_diagnostics)) {}
+                                   tools, mode, preferences, ui, selection_diagnostics)) {}
 #endif
 
 QuaderCommandsApi::~QuaderCommandsApi() = default;

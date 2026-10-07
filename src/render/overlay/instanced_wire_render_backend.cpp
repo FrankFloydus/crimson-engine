@@ -52,6 +52,8 @@ struct InstancedWireVertex final {
   OverlayFloat4 start;
   OverlayFloat4 end;
   OverlayFloat4 control;
+  OverlayFloat4 surface_support0;
+  OverlayFloat4 surface_support1;
   std::uint32_t color = 0u;
 };
 
@@ -129,17 +131,24 @@ void configure_overlay_material(filament::MaterialInstance &material,
 }
 
 void append_line_quad(std::vector<InstancedWireVertex> &vertices,
-                      std::vector<std::uint32_t> &indices, QVec3 start,
-                      QVec3 end, std::uint32_t color_rgba) {
+                      std::vector<std::uint32_t> &indices,
+                      const MeshWireSegment &segment, std::uint32_t color_rgba) {
   const std::uint32_t color = rgba8_srgb_to_linear(color_rgba);
   const std::uint32_t offset = static_cast<std::uint32_t>(vertices.size());
   const OverlayFloat4 origin{0.0f, 0.0f, 0.0f, 1.0f};
-  const OverlayFloat4 a{start.x, start.y, start.z, 1.0f};
-  const OverlayFloat4 b{end.x, end.y, end.z, 1.0f};
-  vertices.push_back({origin, a, b, {-1.0f, -1.0f, 0.0f, 0.0f}, color});
-  vertices.push_back({origin, a, b, {-1.0f, 1.0f, 1.0f, 0.0f}, color});
-  vertices.push_back({origin, a, b, {1.0f, 1.0f, 1.0f, 0.0f}, color});
-  vertices.push_back({origin, a, b, {1.0f, -1.0f, 0.0f, 0.0f}, color});
+  const OverlayFloat4 a{segment.start.x, segment.start.y, segment.start.z, 1.0f};
+  const OverlayFloat4 b{segment.end.x, segment.end.y, segment.end.z, 1.0f};
+  const QVec3 support0 = segment.surface_support_count > 0u
+      ? segment.surface_support[0] : segment.start;
+  const QVec3 support1 = segment.surface_support_count > 1u
+      ? segment.surface_support[1] : segment.start;
+  const OverlayFloat4 first_support{support0.x, support0.y, support0.z, 1.0f};
+  const OverlayFloat4 second_support{support1.x, support1.y, support1.z, 1.0f};
+  const float support_count = static_cast<float>(segment.surface_support_count);
+  vertices.push_back({origin, a, b, {-1.0f, -1.0f, 0.0f, support_count}, first_support, second_support, color});
+  vertices.push_back({origin, a, b, {-1.0f, 1.0f, 1.0f, support_count}, first_support, second_support, color});
+  vertices.push_back({origin, a, b, {1.0f, 1.0f, 1.0f, support_count}, first_support, second_support, color});
+  vertices.push_back({origin, a, b, {1.0f, -1.0f, 0.0f, support_count}, first_support, second_support, color});
   indices.insert(indices.end(), {offset, offset + 1u, offset + 2u, offset,
                                  offset + 2u, offset + 3u});
 }
@@ -215,8 +224,7 @@ InstancedWireRenderBackend::acquire_geometry(
   vertices.reserve(input.segments.size() * 4u);
   indices.reserve(input.segments.size() * 6u);
   for (const MeshWireSegment &segment : input.segments) {
-    append_line_quad(vertices, indices, segment.start, segment.end,
-                     input.color);
+    append_line_quad(vertices, indices, segment, input.color);
   }
   if (vertices.empty() || indices.empty()) {
     return nullptr;
@@ -248,6 +256,14 @@ InstancedWireRenderBackend::acquire_geometry(
           .attribute(filament::VertexAttribute::CUSTOM2, 0u,
                      AttributeType::FLOAT4,
                      offsetof(InstancedWireVertex, control),
+                     sizeof(InstancedWireVertex))
+          .attribute(filament::VertexAttribute::CUSTOM3, 0u,
+                     AttributeType::FLOAT4,
+                     offsetof(InstancedWireVertex, surface_support0),
+                     sizeof(InstancedWireVertex))
+          .attribute(filament::VertexAttribute::CUSTOM4, 0u,
+                     AttributeType::FLOAT4,
+                     offsetof(InstancedWireVertex, surface_support1),
                      sizeof(InstancedWireVertex))
           .attribute(filament::VertexAttribute::COLOR, 0u,
                      AttributeType::UBYTE4,
@@ -294,6 +310,7 @@ InstancedWireRenderBackend::create_batch(
     return proxy;
   }
   configure_overlay_material(*proxy.material_instance_, style.render_state);
+  proxy.material_instance_->setParameter("surfaceDepthEnabled", style.surface_depth_enabled);
   proxy.dimmed_ = style.instance_edit_dim != 0.0f;
   proxy.material_instance_->setParameter("instanceEditDim",
                                          style.instance_edit_dim);

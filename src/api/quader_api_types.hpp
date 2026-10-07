@@ -1345,6 +1345,9 @@ struct QuaderMeshComponent {
   QuaderMeshCollisionType collision_type = QuaderMeshCollisionType::Mesh;
   bool display_collision = true;
   QuaderMeshPhysicsBodyType body_type = QuaderMeshPhysicsBodyType::StaticBody;
+  bool wireframe_on_shaded = true;
+  /// Null inherits the global color. Override RGB uses normalized sRGB channels.
+  std::optional<QVec3> wireframe_on_shaded_color;
 };
 
 /**

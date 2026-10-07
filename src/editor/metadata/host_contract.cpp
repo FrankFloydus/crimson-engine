@@ -145,6 +145,10 @@ operation_action(std::string_view id, std::string_view label,
   return {
       id, label,        HostActionKind::Operation, operation_id,
       {}, preview_kind, show_in_operations_panel,  availability,
+      availability.selection_mode == HostSelectionMode::Object ||
+              availability.selection_mode == HostSelectionMode::Group
+          ? quader::EditorModeSupport::Object
+          : quader::EditorModeSupport::Edit,
   };
 }
 
@@ -164,6 +168,10 @@ HostActionDescriptor tool_action(
       HostPreviewKind::None,
       show_in_operations_panel,
       availability,
+      availability.selection_mode == HostSelectionMode::Object ||
+              availability.selection_mode == HostSelectionMode::Group
+          ? quader::EditorModeSupport::Object
+          : quader::EditorModeSupport::Edit,
   };
 }
 

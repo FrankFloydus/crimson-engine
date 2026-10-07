@@ -373,9 +373,11 @@ TEST(ObjExportTests, NonObjectMeshSelectionsDisableCommandAndDoNotWriteFiles) {
 
   const quader::QuaderModelingObjectRef component_box =
       create_selected_box(editor, "Component Box");
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().select_face(component_box, 0).ok());
   expect_disabled_export("component");
 
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
   const quader::QuaderModelingObjectRef first =
       create_selected_box(editor, "Grouped A");
   const quader::QuaderModelingObjectRef second =

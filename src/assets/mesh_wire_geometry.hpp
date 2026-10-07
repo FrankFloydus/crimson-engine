@@ -8,6 +8,7 @@
 
 #include "math/types.hpp"
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -20,6 +21,9 @@ struct MeshAsset;
 struct MeshWireSegment final {
   QVec3 start;
   QVec3 end;
+  /// Local-space third points on up to two incident rendered surfaces.
+  std::array<QVec3, 2> surface_support{};
+  std::uint8_t surface_support_count = 0u;
 };
 
 /**

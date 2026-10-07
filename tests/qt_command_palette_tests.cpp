@@ -241,6 +241,8 @@ TEST(QtCommandPaletteTests,
       {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
       "Palette Failure");
   ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(box.value(), 1).ok());
   editor.preferences().set_runtime_hooks({

@@ -32,6 +32,24 @@ file except through prior written authorization from Francesco Di Blasi.
 - Overlay order, colors, depth, widths, and points belong to overlay policy/style resolvers. Keep
   persistent and volatile overlay streams separate; do not restore UI wire fallbacks or raw
   Filament line/point shortcuts.
+- Wireframe panes retain complete authored topology for selected objects, group members and Edit
+  participants. Object silhouettes do not suppress this pane's ordinary wire records. Filter cyan
+  component source wires only from Wireframe submission copies; keep component highlights and
+  markers, and keep the shared semantic source intact for shaded siblings. Accepted previews
+  supply their effective authored topology and displayed layer tint through the ordinary wire
+  owner. Prepare preview wires only when a Wireframe or Wireframe on Shaded pane needs them,
+  and retain unchanged work.
+- Shaded topology ribbons evaluate their cached incident face support planes across the full
+  antialiased width. Preserve reversed depth through a screen-linear varying and `gl_FragDepth`;
+  the DEVICE-domain `1 - 2*z` conversion loses precision on distant coplanar walls. Use the shared
+  `overlay_wire_surface_depth.glsl` math only inside the incident triangle's finite projected
+  domain and depth interval. A face-depth-gradient allowance of one guaranteed raster subpixel
+  accounts for triangle setup rounding; keep it inside those same bounds. Clamp shaded
+  square-cap depth to the clipped endpoint interval
+  before raster clipping and again per fragment; a subpixel grazing face or end-on edge cannot
+  extrapolate in front of unrelated geometry. Leave ordinary Wireframe/selection passes
+  unchanged. Coverage: `VulkanShadedWireRemainsContinuousOnObliqueSurfaces` and
+  `VulkanGrazingShadedWireCannotCrossForegroundDepth` in `tests/selection_overlay_runtime_tests.cpp`.
 - Camera-only point classification retains geometry and uploads visibility flags only. Worker
   queries pin immutable geometry and private scratch; Filament calls stay on the render owner.
   Packed preview begin must resolve viewport-skipped points before positions move. Refresh clip

@@ -169,6 +169,12 @@ constexpr CommandPresentationDescriptor kCatalog[]{
                  Group::Clipboard, 120u, kMenuViewportPalette),
 
     // Select: one stable menu, with the command owner deciding availability.
+    presentation(quader_command::kEditorModeObject, Domain::Select,
+                 Group::Selection, 1u, kToolbarPalette),
+    presentation(quader_command::kEditorModeEdit, Domain::Select,
+                 Group::Selection, 2u, kToolbarPalette),
+    presentation(quader_command::kEditorModeToggleEdit, Domain::Select,
+                 Group::Selection, 3u, kPalette),
     presentation(quader_command::kToolsActivateSelect, Domain::Select,
                  Group::Tools, 10u, kToolbarPalette,
                  Palette::Searchable, Activation::InteractiveTool),
@@ -759,6 +765,9 @@ constexpr CommandPresentationDescriptor kCatalog[]{
     presentation(quader_command::kViewportToggleTransformSpace,
                  Domain::View, Group::Display, 210u, kPalette,
                  Palette::Searchable, Activation::Toggle),
+    presentation(quader_command::kViewportToggleWireframeOnShaded, Domain::View,
+                 Group::Display, 215u, kMenuPalette, Palette::Searchable,
+                 Activation::Toggle),
     presentation(quader_command::kViewportToggleGrid, Domain::View,
                  Group::Display, 220u, kMenuPalette, Palette::Searchable,
                  Activation::Toggle),

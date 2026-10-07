@@ -3525,7 +3525,7 @@ TEST(PrimitiveCreationToolServiceTests,
 }
 
 TEST(PrimitiveCreationToolServiceTests,
-     PublicComponentSelectionAcceptsCubeResizeAndKeepsItsActiveElement) {
+     ExplicitEditEntryAcceptsCubeResizeBeforeComponentSelection) {
   for (const auto kind : {QuaderComponentKind::Vertex, QuaderComponentKind::Edge,
                           QuaderComponentKind::Face}) {
     SCOPED_TRACE(static_cast<int>(kind));
@@ -3546,6 +3546,14 @@ TEST(PrimitiveCreationToolServiceTests,
     ASSERT_TRUE(editor.tools().update_primitive_cube_resize(1.0).ok());
     const auto resized = editor.tools().live_primitive_cube();
     ASSERT_TRUE(resized.has_value());
+    const auto history_before_entry = editor.history().snapshot();
+    const auto rejected = editor.selection().select_vertices(*object, {1, 2});
+    EXPECT_FALSE(rejected.ok());
+    EXPECT_FALSE(rejected.changed());
+    EXPECT_EQ(editor.mode().current(), QuaderEditorMode::Object);
+    EXPECT_TRUE(editor.tools().live_primitive_cube().has_value());
+    EXPECT_EQ(editor.history().snapshot().undo_label, history_before_entry.undo_label);
+    ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
     if (kind == QuaderComponentKind::Vertex) {
       ASSERT_TRUE(editor.selection().select_vertices(*object, {1, 2}).ok());
     } else if (kind == QuaderComponentKind::Edge) {

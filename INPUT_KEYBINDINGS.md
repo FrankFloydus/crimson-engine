@@ -84,7 +84,7 @@ intrinsic Qt editing and navigation checks remain with their controls.
 Rules select a target through app-owned boolean contexts;
 `when` supports identifiers, `!`, `&&`, `||`, and parentheses. Important context families include
 `viewportFocus`, `outlinerFocus`, `editorFocus`, `assetBrowserFocus`, `viewport.hovered`, `viewport.orthographic`, `textInputActive`, `editorTextFocus`,
-`navigation.*`, `activeTool.*`, `modalTool.active`, `transformDrag.active`, and `selectionMode.*`.
+`navigation.*`, `activeTool.*`, `modalTool.active`, `transformDrag.active`, `editorMode.*`, and `selectionMode.*`.
 Read `viewport_keybinding_context()` and the registration context helpers before adding another key.
 
 Ordinary editor panels supply `editorFocus`; the Outliner supplies `outlinerFocus` while hovered
@@ -203,8 +203,15 @@ The yellow disk stays visible during dragging. The disk, selected-face dragging 
 Amount edit only the pending operation. After Apply, the next amount edit or drag
 starts a new operation from the selected caps; accepted geometry is never adjusted.
 Repeated E retains the current pending operation instead of accepting it implicitly.
-Insert Edge Loop and Knife activation enter Edge mode from any selection mode, including through
-Shift+R and C respectively; Edge mode is an activation result, not a shortcut precondition.
+Object/Edit Mode is a scene-owned context separate from selection kind. The remappable Tab
+command toggles it from a focused viewport; panel/text-field Tab traversal and Ctrl+Tab scene
+switching retain their owners. Vertex/Edge/Face selection commands require Edit Mode; Mesh/Group
+commands require Object Mode. Changing selection kind never implicitly enters or exits Edit.
+When Object selection is empty, Edit entry may use the retained active mesh if it is eligible;
+selected objects take precedence, and a retained group does not expand. No eligible target leaves
+the mode unchanged without settling pending work or showing a disabled-command error.
+Insert Edge Loop and Knife activation require Edit Mode and enter Edge selection within its
+fixed participant set, including through Shift+R and C respectively.
 Insert Edge Loop reserves canonical Cancel while active, including idle and hover-only states.
 Its preview and insertion move continuously by default. Hold Ctrl to snap the loop to the
 current grid size, independently of the global snapping toggles; releasing Ctrl restores

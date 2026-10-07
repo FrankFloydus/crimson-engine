@@ -47,11 +47,24 @@
 #include <set>
 #include <cmath>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 namespace quader {
 namespace {
+/// Makes native fixture mode transitions explicit before changing selection kind.
+quader::QuaderApiVoidResult enter_selection_context(
+    quader::QuaderEditorApi &editor, quader::QuaderSelectionMode kind) {
+  const bool component = kind == quader::QuaderSelectionMode::Vertex ||
+      kind == quader::QuaderSelectionMode::Edge ||
+      kind == quader::QuaderSelectionMode::Face;
+  const auto transition = editor.mode().set(component
+      ? quader::QuaderEditorMode::Edit : quader::QuaderEditorMode::Object);
+  if (!transition.ok()) return transition;
+  return editor.selection().set_mode(kind);
+}
+
 
 float circular_handle_width_pixels(const ViewportOverlayFrame &frame,
                                    const ViewportOverlayCamera &camera) {
@@ -247,7 +260,7 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
         QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
         {.name = "Retained component traversal patch"});
     ASSERT_TRUE(patch.ok()) << patch.error_message();
-    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    ASSERT_TRUE(enter_selection_context(editor, mode).ok());
     const auto unrelated = mode == QuaderSelectionMode::Vertex
         ? vertices[3][0] : faces[2][0];
     const auto selected = mode == QuaderSelectionMode::Vertex
@@ -378,7 +391,7 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
       return ids;
     };
     EXPECT_EQ(submitted_vertices(), (std::vector<int>{1, 2, 5, 6}));
-    ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+    ASSERT_TRUE(enter_selection_context(editor, QuaderSelectionMode::Face).ok());
     context = ViewportOverlaySelectionContext::Face;
     EXPECT_TRUE(submit().persistent_submitted);
     std::vector<int> submitted_faces;
@@ -393,7 +406,7 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
                           submitted_faces.end());
     EXPECT_EQ(submitted_faces, (std::vector<int>{faces[0][0]}));
     expect_retained();
-    ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Edge).ok());
+    ASSERT_TRUE(enter_selection_context(editor, QuaderSelectionMode::Edge).ok());
     context = ViewportOverlaySelectionContext::Edge;
     EXPECT_TRUE(submit().persistent_submitted);
     std::vector<std::pair<int, int>> submitted_edges;
@@ -408,11 +421,11 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
                           submitted_edges.end());
     EXPECT_EQ(submitted_edges,
               (std::vector<std::pair<int, int>>{{1, 2}, {1, 5}, {2, 6}, {5, 6}}));
-    ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Vertex).ok());
+    ASSERT_TRUE(enter_selection_context(editor, QuaderSelectionMode::Vertex).ok());
     context = ViewportOverlaySelectionContext::Vertex;
     EXPECT_TRUE(submit().persistent_submitted);
     EXPECT_EQ(submitted_vertices(), (std::vector<int>{1, 2, 5, 6}));
-    const auto unchanged_mode = editor.selection().set_mode(QuaderSelectionMode::Vertex);
+    const auto unchanged_mode = enter_selection_context(editor, QuaderSelectionMode::Vertex);
     ASSERT_TRUE(unchanged_mode.ok());
     EXPECT_FALSE(unchanged_mode.changed());
     expect_retained();
@@ -424,106 +437,150 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
 
 TEST(ViewportOverlaySubmissionCoordinatorTests,
      WireframeRetainsRearVerticesWithoutChangingSolidOcclusionOrSharedSources) {
-  ViewportOverlaySubmissionCoordinator coordinator;
-  RecordingOverlayTarget target;
-  const auto settings = ViewportSettings::defaults();
-  ViewportOverlayFrame selection;
-  selection.triangles.push_back({
-      .layer = ViewportOverlayLayer::SourceWireDepthStamp,
-      .a = {-2.0f, -2.0f, -1.0f},
-      .b = {2.0f, -2.0f, -1.0f},
-      .c = {0.0f, 2.0f, -1.0f},
-      .source = ViewportOverlaySource::ComponentSelection,
-      .element = {.object_id = 1},
-  });
-  selection.points.push_back({
-      .layer = ViewportOverlayLayer::SelectedVertex,
-      .position = {0.0f, 0.0f, -3.0f},
-      .source = ViewportOverlaySource::ComponentSelection,
-      .element = {.object_id = 1, .vertex_id = 1},
-      .outline_growth_pixels = 0.0f,
-  });
-  StaticSelectionFrameProvider selection_provider{selection};
-  ViewportOverlayFrame volatile_modeling = selection;
-  volatile_modeling.points.front().layer = ViewportOverlayLayer::HoverVertex;
-  volatile_modeling.points.front().source = ViewportOverlaySource::ComponentHover;
-  RenderOverlaySelectionSnapshot scene;
-  CurveToolPreviewState curve;
-  auto request = submission_request(selection_provider, scene, volatile_modeling, curve);
-  request.camera = {
-      .eye = {0.0f, 0.0f, 0.0f},
-      .forward = {0.0f, 0.0f, -1.0f},
-      .right = {1.0f, 0.0f, 0.0f},
-      .up = {0.0f, 1.0f, 0.0f},
-      .viewport_size = {800.0f, 600.0f},
-      .projection = ViewportOverlayProjection::Perspective,
-  };
-  request.style_selection_context = ViewportOverlaySelectionContext::Vertex;
-  request.selection_source.selection_context = ViewportOverlaySelectionContext::Vertex;
-  // Mode filtering must also work without a scene-overlay snapshot request.
-  request.scene_overlay_requested = false;
-  const auto stamps = [](const ViewportOverlayFrame &frame) {
-    return std::ranges::count_if(frame.triangles, [](const auto &triangle) {
-      return triangle.layer == ViewportOverlayLayer::SourceWireDepthStamp;
+  for (const auto context : {ViewportOverlaySelectionContext::Vertex,
+                             ViewportOverlaySelectionContext::Edge,
+                             ViewportOverlaySelectionContext::Face}) {
+    SCOPED_TRACE(static_cast<int>(context));
+    ViewportOverlaySubmissionCoordinator coordinator;
+    RecordingOverlayTarget target;
+    const auto settings = ViewportSettings::defaults();
+    ViewportOverlayFrame selection;
+    selection.triangles.push_back({
+        .layer = ViewportOverlayLayer::SourceWireDepthStamp,
+        .a = {-2.0f, -2.0f, -1.0f},
+        .b = {2.0f, -2.0f, -1.0f},
+        .c = {0.0f, 2.0f, -1.0f},
+        .source = ViewportOverlaySource::ComponentSelection,
+        .element = {.object_id = 1},
     });
-  };
-  const auto expect_visibility = [&](bool wireframe) {
-    for (const bool dynamic : {false, true}) {
-      const auto &frame = dynamic ? target.dynamic_frame : target.persistent_frame;
-      EXPECT_EQ(stamps(frame), wireframe ? 0 : 1);
-      const auto plan = OverlayRenderableBuilder::build_layer(
-          frame, request.camera, dynamic ? ViewportOverlayLayer::HoverVertex
-                                         : ViewportOverlayLayer::SelectedVertex);
-      EXPECT_EQ(plan.point_batches.empty(), !wireframe);
-      for (const auto &batch : plan.point_batches) {
-        EXPECT_EQ(batch.mesh.vertices.size(), 4u);
-        EXPECT_TRUE(batch.state.depth_culling);
-        EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::GreaterOrEqual);
-        EXPECT_EQ(batch.state.culling_mode, OverlayCullingMode::None);
-      }
+    selection.points.push_back({
+        .layer = ViewportOverlayLayer::SelectedVertex,
+        .position = {0.0f, 0.0f, -3.0f},
+        .source = ViewportOverlaySource::ComponentSelection,
+        .element = {.object_id = 1, .vertex_id = 1},
+        .outline_growth_pixels = 0.0f,
+    });
+    for (const auto &[layer, role, source] : {
+        std::tuple{ViewportOverlayLayer::SourceWire, ViewportOverlayStyleRole::SourceWire,
+                   ViewportOverlaySource::ComponentSelection},
+        std::tuple{ViewportOverlayLayer::SourceWire, ViewportOverlayStyleRole::SourceWire,
+                   ViewportOverlaySource::ComponentHover},
+        std::tuple{ViewportOverlayLayer::SourceWire, ViewportOverlayStyleRole::ExplicitColor,
+                   ViewportOverlaySource::External},
+        std::tuple{ViewportOverlayLayer::SelectedEdge, ViewportOverlayStyleRole::SelectionWire,
+                   ViewportOverlaySource::ComponentSelection},
+        std::tuple{ViewportOverlayLayer::SelectedEdge, ViewportOverlayStyleRole::ActiveSelectionWire,
+                   ViewportOverlaySource::ComponentSelection},
+        std::tuple{ViewportOverlayLayer::SelectedFaceEdge, ViewportOverlayStyleRole::SelectionWire,
+                   ViewportOverlaySource::ComponentSelection},
+        std::tuple{ViewportOverlayLayer::HoverEdge, ViewportOverlayStyleRole::HoverWire,
+                   ViewportOverlaySource::ComponentHover},
+        std::tuple{ViewportOverlayLayer::HoverFaceEdge, ViewportOverlayStyleRole::RemoveSelectionWire,
+                   ViewportOverlaySource::ComponentHover}}) {
+      selection.lines.push_back({
+          .layer = layer,
+          .start = {static_cast<float>(selection.lines.size()), 0.0f, -2.0f},
+          .end = {static_cast<float>(selection.lines.size()), 1.0f, -2.0f},
+          .style_role = role, .source = source, .element = {.object_id = 1}});
     }
-  };
-  auto result = coordinator.submit(request, settings, target);
-  ASSERT_TRUE(result.persistent_submitted);
-  ASSERT_TRUE(result.dynamic_submitted);
-  expect_visibility(false);
-  const auto initial_work = coordinator.work_counters();
-  const int initial_builds = selection_provider.build_count;
-  request.wireframe_pane = true;
-  result = coordinator.submit(request, settings, target);
-  EXPECT_TRUE(result.persistent_submitted);
-  EXPECT_TRUE(result.dynamic_submitted);
-  EXPECT_FALSE(result.selection_source_refreshed);
-  expect_visibility(true);
-  ASSERT_NE(result.edge_hud_frame, nullptr);
-  EXPECT_EQ(stamps(*result.edge_hud_frame), 1);
-  EXPECT_EQ(stamps(volatile_modeling), 1);
-  EXPECT_EQ(selection_provider.build_count, initial_builds);
-  EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
-            initial_work.dynamic_source_compose_count);
-  for (int frame = 0; frame < 8; ++frame) {
-    EXPECT_TRUE(coordinator.submit(request, settings, target).camera_only);
-  }
-  EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
-            initial_work.dynamic_source_compose_count);
-  request.wireframe_pane = false;
-  result = coordinator.submit(request, settings, target);
-  EXPECT_TRUE(result.persistent_submitted);
-  EXPECT_TRUE(result.dynamic_submitted);
-  expect_visibility(false);
-  EXPECT_EQ(selection_provider.build_count, initial_builds);
-  EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
-            initial_work.dynamic_source_compose_count);
+    StaticSelectionFrameProvider selection_provider{selection};
+    ViewportOverlayFrame volatile_modeling = selection;
+    volatile_modeling.points.front().layer = ViewportOverlayLayer::HoverVertex;
+    volatile_modeling.points.front().source = ViewportOverlaySource::ComponentHover;
+    RenderOverlaySelectionSnapshot scene;
+    CurveToolPreviewState curve;
+    auto request = submission_request(selection_provider, scene, volatile_modeling, curve);
+    request.camera = {
+        .eye = {0.0f, 0.0f, 0.0f},
+        .forward = {0.0f, 0.0f, -1.0f},
+        .right = {1.0f, 0.0f, 0.0f},
+        .up = {0.0f, 1.0f, 0.0f},
+        .viewport_size = {800.0f, 600.0f},
+        .projection = ViewportOverlayProjection::Perspective,
+    };
+    request.style_selection_context = context;
+    request.selection_source.selection_context = context;
+    // Mode filtering must also work without a scene-overlay snapshot request.
+    request.scene_overlay_requested = false;
+    const auto stamps = [](const ViewportOverlayFrame &frame) {
+      return std::ranges::count_if(frame.triangles, [](const auto &triangle) {
+        return triangle.layer == ViewportOverlayLayer::SourceWireDepthStamp;
+      });
+    };
+    const auto expect_visibility = [&](bool wireframe) {
+      for (const bool dynamic : {false, true}) {
+        const auto &frame = dynamic ? target.dynamic_frame : target.persistent_frame;
+        EXPECT_EQ(stamps(frame), wireframe ? 0 : 1);
+        EXPECT_EQ(frame.lines.size(), wireframe ? 6u : 8u);
+        for (const auto &line : selection.lines) {
+          const bool replaced_source = line.layer == ViewportOverlayLayer::SourceWire &&
+              (line.source == ViewportOverlaySource::ComponentSelection ||
+               line.source == ViewportOverlaySource::ComponentHover);
+          EXPECT_EQ(std::ranges::count_if(frame.lines, [&](const auto &shown) {
+            return shown.layer == line.layer && shown.style_role == line.style_role &&
+                   shown.source == line.source && shown.start.x == line.start.x &&
+                   shown.start.y == line.start.y && shown.start.z == line.start.z &&
+                   shown.end.x == line.end.x && shown.end.y == line.end.y &&
+                   shown.end.z == line.end.z;
+          }), wireframe && replaced_source ? 0 : 1);
+        }
+        const auto plan = OverlayRenderableBuilder::build_layer(
+            frame, request.camera, dynamic ? ViewportOverlayLayer::HoverVertex
+                                           : ViewportOverlayLayer::SelectedVertex);
+        EXPECT_EQ(plan.point_batches.empty(), !wireframe);
+        for (const auto &batch : plan.point_batches) {
+          EXPECT_EQ(batch.mesh.vertices.size(), 4u);
+          EXPECT_TRUE(batch.state.depth_culling);
+          EXPECT_EQ(batch.state.depth_func, OverlayDepthFunc::GreaterOrEqual);
+          EXPECT_EQ(batch.state.culling_mode, OverlayCullingMode::None);
+        }
+      }
+    };
+    auto result = coordinator.submit(request, settings, target);
+    ASSERT_TRUE(result.persistent_submitted);
+    ASSERT_TRUE(result.dynamic_submitted);
+    expect_visibility(false);
+    const auto initial_work = coordinator.work_counters();
+    const int initial_builds = selection_provider.build_count;
+    request.wireframe_pane = true;
+    result = coordinator.submit(request, settings, target);
+    EXPECT_TRUE(result.persistent_submitted);
+    EXPECT_TRUE(result.dynamic_submitted);
+    EXPECT_FALSE(result.selection_source_refreshed);
+    expect_visibility(true);
+    ASSERT_NE(result.edge_hud_frame, nullptr);
+    EXPECT_EQ(stamps(*result.edge_hud_frame), 1);
+    EXPECT_EQ(result.edge_hud_frame->lines.size(), 8u);
+    EXPECT_EQ(selection.lines.size(), 8u);
+    EXPECT_EQ(volatile_modeling.lines.size(), 8u);
+    EXPECT_EQ(stamps(volatile_modeling), 1);
+    EXPECT_EQ(selection_provider.build_count, initial_builds);
+    EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
+              initial_work.dynamic_source_compose_count);
+    for (int frame = 0; frame < 8; ++frame) {
+      EXPECT_TRUE(coordinator.submit(request, settings, target).camera_only);
+    }
+    EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
+              initial_work.dynamic_source_compose_count);
+    request.wireframe_pane = false;
+    result = coordinator.submit(request, settings, target);
+    EXPECT_TRUE(result.persistent_submitted);
+    EXPECT_TRUE(result.dynamic_submitted);
+    expect_visibility(false);
+    EXPECT_EQ(selection_provider.build_count, initial_builds);
+    EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
+              initial_work.dynamic_source_compose_count);
 
-  // Another pane must retain solid occlusion even while the first is wireframe.
-  request.wireframe_pane = true;
-  (void)coordinator.submit(request, settings, target);
-  request.viewport_index = 0u;
-  request.wireframe_pane = false;
-  result = coordinator.submit(request, settings, target);
-  EXPECT_FALSE(result.selection_source_refreshed);
-  expect_visibility(false);
-  EXPECT_EQ(selection_provider.build_count, initial_builds);
+    // Another pane must retain solid occlusion even while the first is wireframe.
+    request.wireframe_pane = true;
+    (void)coordinator.submit(request, settings, target);
+    request.viewport_index = 0u;
+    request.wireframe_pane = false;
+    result = coordinator.submit(request, settings, target);
+    EXPECT_FALSE(result.selection_source_refreshed);
+    expect_visibility(false);
+    EXPECT_EQ(selection_provider.build_count, initial_builds);
+  }
 }
 
 TEST(ViewportOverlaySubmissionCoordinatorTests,
@@ -810,6 +867,7 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
   ASSERT_NE(authored, nullptr);
 
   auto &modeling = session.modeling();
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::InsertEdgeLoop).ok());
   const auto origin = transform_point(*world, {1, 0, 5});
   const auto destination = transform_point(*world, {1, 0, 1});
@@ -894,6 +952,7 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
         .bounds = {.min = {-1, -1, -1}, .max = {1, 1, 1}},
         .name = "Knife zigzag submission"});
     ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(editor.tools().activate(ViewportToolId::Knife).ok());
     session.history().clear();
     session.mark_clean();
@@ -1903,7 +1962,7 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
       .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
       .name = "Shared extrusion"});
   ASSERT_TRUE(object.ok()) << object.error_message();
-  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(enter_selection_context(editor, QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_faces(object.value(), {1}).ok());
   ASSERT_TRUE(session.extrude().activate().ok);
   std::array<ViewportCameraController, 2> cameras;

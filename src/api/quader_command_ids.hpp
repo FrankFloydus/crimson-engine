@@ -26,6 +26,10 @@ struct QuaderCommandId {
 
 namespace quader_command {
 
+inline constexpr QuaderCommandId kEditorModeObject{"editor.mode.object"};
+inline constexpr QuaderCommandId kEditorModeEdit{"editor.mode.edit"};
+inline constexpr QuaderCommandId kEditorModeToggleEdit{"editor.mode.toggle_edit"};
+
 inline constexpr QuaderCommandId kEditUndo{"edit.undo"};
 inline constexpr QuaderCommandId kEditRedo{"edit.redo"};
 inline constexpr QuaderCommandId kEditRepeatLastAction{
@@ -130,6 +134,8 @@ inline constexpr QuaderCommandId kViewportViewRight{"viewport.view.right"};
 inline constexpr QuaderCommandId kViewportViewFront{"viewport.view.front"};
 inline constexpr QuaderCommandId kViewportViewBack{"viewport.view.back"};
 inline constexpr QuaderCommandId kViewportToggleGrid{"viewport.toggle_grid"};
+inline constexpr QuaderCommandId kViewportToggleWireframeOnShaded{
+    "viewport.toggle_wireframe_on_shaded"};
 inline constexpr QuaderCommandId kViewportToggleGizmos{
     "viewport.toggle_gizmos"};
 inline constexpr QuaderCommandId kViewportToggleMeshGrid{
@@ -426,6 +432,9 @@ inline constexpr QuaderCommandId kToolsActivatePathArray{
 inline constexpr QuaderCommandId kToolsActivateCurve{"tools.activate.curve"};
 
 inline constexpr QuaderCommandId kTypedCommandIds[] = {
+    kEditorModeObject,
+    kEditorModeEdit,
+    kEditorModeToggleEdit,
     kEditUndo,
     kEditRedo,
     kEditRepeatLastAction,
@@ -493,6 +502,7 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kViewportViewFront,
     kViewportViewBack,
     kViewportToggleGrid,
+    kViewportToggleWireframeOnShaded,
     kViewportToggleGizmos,
     kViewportToggleMeshGrid,
     kViewportToggleOverlays,

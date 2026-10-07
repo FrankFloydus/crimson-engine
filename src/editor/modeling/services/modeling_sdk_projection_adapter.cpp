@@ -10,6 +10,7 @@
 #include "assets/curve_asset.hpp"
 #include "assets/mesh_asset_payload.hpp"
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
+#include "editor/modes/editor_mode_service.hpp"
 #include "editor/modeling/operations/portable_operation_mapping.hpp"
 #include "editor/modeling/services/modeling_host_publication_transaction.hpp"
 #include "editor/modeling/services/modeling_mesh_sync_service.hpp"
@@ -470,6 +471,19 @@ scene_transform_from_modeling_transform(const ModelingTransform3 &transform) {
           mesh_asset_payload_detail::same_authored_document(left, right));
 }
 
+/** Compares immutable authored publications without materializing SDK views. */
+[[nodiscard]] bool same_authored_read_view(quader_poly::DocumentReadView left,
+                                           quader_poly::DocumentReadView right) {
+  return std::ranges::equal(left.vertices, right.vertices,
+                            mesh_asset_payload_detail::same_polygon_vertex) &&
+         std::ranges::equal(left.faces, right.faces,
+                            mesh_asset_payload_detail::same_polygon_face) &&
+         std::ranges::equal(left.hard_normal_edges, right.hard_normal_edges) &&
+         std::ranges::equal(left.soft_normal_edges, right.soft_normal_edges) &&
+         left.next_vertex_id == right.next_vertex_id &&
+         left.next_face_id == right.next_face_id;
+}
+
 /** Completes authored layout preservation only for a committed document edit. */
 [[nodiscard]] Result<OperationResult> transform_document_for_commit(
     PolygonDocument &document, const modeling::Transform3 &transform) {
@@ -534,6 +548,7 @@ struct ModelingSdkProjectionSnapshot::Impl {
   ModelingSelectionMode selection_mode = ModelingSelectionMode::Object;
   std::uint64_t persistent_content_revision = 0;
   std::uint64_t mode_revision = 0;
+  std::optional<EditorModeSnapshot> editor_mode;
 };
 
 ModelingSdkProjectionSnapshot::ModelingSdkProjectionSnapshot() = default;
@@ -703,6 +718,61 @@ private:
     std::optional<modeling::PreparedFaceExtrusion> prepared;
   };
 
+  /** Restores dormant component intent after a whole-object document operation. */
+  [[nodiscard]] static Result<OperationResult> restore_dormant_selection(
+      PolygonDocument &document, PolygonSelectionSnapshot selection,
+      const OperationResult &receipt) {
+    const auto remap = []<typename Element>(std::vector<Element> &selected,
+        const std::vector<Element> &source, const std::vector<Element> &destination,
+        const std::vector<Element> &live) {
+      std::vector<Element> mapped;
+      for (const Element element : selected) {
+        const auto found = std::ranges::find(source, element);
+        if (found != source.end() && source.size() == destination.size()) {
+          mapped.push_back(destination[static_cast<std::size_t>(found - source.begin())]);
+        } else if (found != source.end() && source.size() == 1u) {
+          mapped.insert(mapped.end(), destination.begin(), destination.end());
+        } else {
+          mapped.push_back(element);
+        }
+      }
+      selected.clear();
+      for (const Element element : mapped) {
+        if (std::ranges::find(live, element) != live.end() &&
+            std::ranges::find(selected, element) == selected.end()) {
+          selected.push_back(element);
+        }
+      }
+    };
+    if (receipt.dirty.topology) {
+      const auto &mapping = receipt.selection_remap;
+      remap(selection.vertices, mapping.source.vertices, mapping.destination.vertices,
+            document.vertex_ids());
+      remap(selection.edges, mapping.source.edges, mapping.destination.edges,
+            document.edge_ids());
+      remap(selection.faces, mapping.source.faces, mapping.destination.faces,
+            document.face_ids());
+    }
+    selection.has_active = false;
+    if (selection.kind == SelectionKind::Vertex && !selection.vertices.empty()) {
+      selection.has_active = true;
+      if (std::ranges::find(selection.vertices, selection.active_vertex) == selection.vertices.end()) {
+        selection.active_vertex = selection.vertices.front();
+      }
+    } else if (selection.kind == SelectionKind::Edge && !selection.edges.empty()) {
+      selection.has_active = true;
+      if (std::ranges::find(selection.edges, selection.active_edge) == selection.edges.end()) {
+        selection.active_edge = selection.edges.front();
+      }
+    } else if (selection.kind == SelectionKind::Face && !selection.faces.empty()) {
+      selection.has_active = true;
+      if (std::ranges::find(selection.faces, selection.active_face) == selection.faces.end()) {
+        selection.active_face = selection.faces.front();
+      }
+    }
+    return document.apply_selection(selection, SelectionEdit::Replace);
+  }
+
   [[nodiscard]] static Result<OperationResult>
   apply_with_whole_object_face_selection(
       ModelingSelectionMode mode, PolygonDocument &document,
@@ -711,6 +781,7 @@ private:
         mode != ModelingSelectionMode::Group) {
       return operation(document);
     }
+    const auto dormant = document.selection();
     Result<OperationResult> selected = document.select_all_faces();
     if (!selected.ok()) {
       return selected;
@@ -719,11 +790,11 @@ private:
     if (!operated.ok()) {
       return operated;
     }
-    Result<OperationResult> cleared = document.clear_selection();
-    if (!cleared.ok()) {
-      return cleared;
+    auto restored = restore_dormant_selection(document, dormant, operated.value());
+    if (!restored.ok()) {
+      return restored;
     }
-    operated.value().dirty.selection = false;
+    operated.value().dirty.selection = operated.value().dirty.topology && restored.value().changed;
     return operated;
   }
 
@@ -781,6 +852,7 @@ private:
   /// Stores only adapter-local state; owner checkpoints live in the shared
   /// host-publication transaction and binding registry.
   struct AdapterPublicationState {
+    std::optional<EditorModeSnapshot> editor_mode;
     int next_native_object_id = 1;
     int active_native_object_id = kInvalidModelingObjectId;
     ModelingSelectionMode selection_mode = ModelingSelectionMode::Object;
@@ -1330,7 +1402,10 @@ public:
   }
 
   [[nodiscard]] bool has_selection() const {
-    return selection_summary().selected_object_count != 0;
+    const auto summary = selection_summary();
+    return selection_mode_ == ModelingSelectionMode::Object ||
+                   selection_mode_ == ModelingSelectionMode::Group
+               ? summary.selected_object_count != 0u : summary.has_selection;
   }
 
   [[nodiscard]] const void *session_identity() const noexcept {
@@ -1674,7 +1749,10 @@ public:
         object.material_id = static_cast<int>(component->material_slot);
       }
       const auto source = sources.find(sdk_object_key(object_id));
-      object.selected = source != sources.end() && source->second.summary->selected;
+      object.selected = editor_mode_service_ != nullptr &&
+                                editor_mode_service_->mode() == EditorMode::Edit
+                            ? edit_scope_contains(native_id)
+                            : source != sources.end() && source->second.summary->selected;
       if (const auto *snapshot = mesh->authored_polygon_document.read_snapshot()) {
         object.document.share(*snapshot);
       } else {
@@ -1689,7 +1767,8 @@ public:
                     ? Result<PolygonDocument>::success(
                           committed_documents.value()[source->second.document_index])
                     : session_.document_copy(object_id);
-      if (document.ok()) {
+      if (document.ok() && (editor_mode_service_ == nullptr ||
+                            edit_scope_contains(native_id))) {
         const PolygonSelectionSnapshot selected = document.value().selection();
         switch (selected.kind) {
         case SelectionKind::Vertex:
@@ -1770,7 +1849,8 @@ public:
         .session_content_revision =
             curve_preview_active ? 0U : session_.content_revision(),
         .session_selection_revision = session_.selection_revision(),
-        .mode_revision = mode_revision_,
+        .mode_revision = mode_revision_ +
+            (editor_mode_service_ != nullptr ? editor_mode_service_->revision() : 0u),
         .scene_mesh_binding_revision = scene_.mesh_binding_revision(),
         .asset_revision = curve_preview_active
                               ? assets_.mesh_material_usage_revision()
@@ -3572,6 +3652,9 @@ public:
     if (result.ok && result.changed && operation == Id::FillHole) {
       selection_mode_ = ModelingSelectionMode::Face;
       ++mode_revision_;
+      if (editor_mode_service_ != nullptr) {
+        editor_mode_service_->record_component_kind(selection_mode_);
+      }
     }
     return result;
   }
@@ -3650,6 +3733,7 @@ public:
       break;
     }
 
+    const auto dormant = working.selection();
     PreparedHalfCutObject prepared;
     prepared.source = source;
     static_cast<SceneEntityState &>(prepared.source_identity) = *scene_identity;
@@ -3660,7 +3744,7 @@ public:
         error = cut.ok() ? cut.value().message : cut.error_message();
         return std::nullopt;
       }
-      Result<OperationResult> cleared = working.clear_selection();
+      auto cleared = restore_dormant_selection(working, dormant, cut.value());
       if (!cleared.ok()) {
         error = cleared.error_message();
         return std::nullopt;
@@ -3676,8 +3760,10 @@ public:
       error = cut.error_message();
       return std::nullopt;
     }
-    Result<OperationResult> cleared_front = cut.value().front.clear_selection();
-    Result<OperationResult> cleared_back = cut.value().back.clear_selection();
+    auto cleared_front = restore_dormant_selection(
+        cut.value().front, dormant, cut.value().receipt);
+    auto cleared_back = restore_dormant_selection(
+        cut.value().back, dormant, cut.value().receipt);
     if (!cleared_front.ok() || !cleared_back.ok()) {
       error = !cleared_front.ok() ? cleared_front.error_message()
                                   : cleared_back.error_message();
@@ -4716,10 +4802,143 @@ public:
     return active_preview_deleted_vertex_count_;
   }
 
+  void bind_editor_mode_service(EditorModeService *service) noexcept {
+    editor_mode_service_ = service;
+  }
+
+  [[nodiscard]] bool edit_scope_contains(int native_id) const {
+    if (editor_mode_service_ == nullptr) {
+      return true;
+    }
+    const auto entity = object_map_.entity_for_modeling_object(native_id);
+    return editor_mode_service_->mode() == EditorMode::Edit &&
+           entity.has_value() && editor_mode_service_->contains(*entity);
+  }
+
+  [[nodiscard]] ModelingCommandResult apply_editor_mode_context(
+      const EditorModeSnapshot &context,
+      std::span<const EntityId> first_admission_entities) {
+    if (preview_active()) {
+      return failure("Accept or cancel the active operation before changing mode.");
+    }
+    std::vector<ObjectId> selected;
+    std::vector<EntityId> entities;
+    std::vector<modeling::SessionComponentSelectionUpdate> updates;
+    int active_native = kInvalidModelingObjectId;
+    const auto append = [&](EntityId entity) {
+      const auto native = object_map_.modeling_object_for_entity(entity);
+      const auto object = native.has_value() ? sdk_object(*native) : std::nullopt;
+      if (!object.has_value() || !scene_.exists(entity)) {
+        return false;
+      }
+      selected.push_back(*object);
+      entities.push_back(entity);
+      if (entity == context.active_entity) {
+        active_native = *native;
+        std::rotate(selected.begin(), std::prev(selected.end()), selected.end());
+      }
+      return true;
+    };
+    if (context.mode == EditorMode::Edit) {
+      for (const auto &participant : context.participants) {
+        if (!append(participant.entity)) {
+          return failure("Edit participant is no longer a live modeling mesh.");
+        }
+        const auto object = sdk_object(participant.modeling_object_id);
+        if (!object.has_value()) {
+          return failure("Edit participant has no portable modeling identity.");
+        }
+        auto document = session_.document_copy(*object);
+        if (!document.ok()) {
+          return failure(document.error_message());
+        }
+        if (std::ranges::find(first_admission_entities, participant.entity) !=
+            first_admission_entities.end()) {
+          auto cleared = document.value().clear_selection();
+          if (!cleared.ok()) {
+            return failure(cleared.error_message());
+          }
+        }
+        auto converted = document.value().set_selection_mode(
+            to_sdk_component_mode(context.component_kind));
+        if (!converted.ok()) {
+          return failure(converted.error_message());
+        }
+        updates.push_back({.object = *object,
+                           .selection = document.value().selection()});
+      }
+    } else {
+      for (const EntityId entity : context.object_results) {
+        if (!scene_.exists(entity)) {
+          return failure("Object mode result is no longer a live scene object.");
+        }
+        if (!append(entity)) {
+          entities.push_back(entity);
+        }
+      }
+    }
+    if (active_native == kInvalidModelingObjectId && !selected.empty()) {
+      active_native = native_object(selected.front()).value_or(kInvalidModelingObjectId);
+    }
+    std::vector<ObjectId> affected;
+    for (const auto &object : session_.objects()) {
+      affected.push_back(object.id);
+    }
+    auto host_before = capture_adapter_publication_state();
+    ModelingHostPublicationTransaction publication(
+        scene_, assets_, object_map_, session_,
+        [this, host_before = std::move(host_before)]() mutable noexcept {
+          restore_adapter_publication_state(std::move(host_before));
+        },
+        {.sdk_rollback = affected.empty() ? ModelingSdkRollbackPolicy::None
+                                         : ModelingSdkRollbackPolicy::MutationCheckpoint,
+         .checkpoint_scope = ModelingHostPublicationCheckpointScope::ModelingProjection,
+         .capture_assets = false,
+         .capture_scene_entities = false,
+         .capture_bindings = false,
+         .capture_hierarchy = false,
+         .capture_scene_selection = true,
+         .affected_sdk_object_ids = affected});
+    if (!publication.ready()) {
+      return failure("Editor mode selection checkpoint is unavailable.");
+    }
+    auto committed = session_.commit_component_selection_batch(
+        updates, selected, selected.empty() ? ObjectId{} : selected.front());
+    if (!committed.ok()) {
+      return rollback_publication_result(publication, failure(committed.error_message()));
+    }
+    if (fails(ModelingSdkProjectionFailurePoint::AfterSdkMutation) ||
+        fails(ModelingSdkProjectionFailurePoint::SelectionScenePublication)) {
+      return rollback_publication_result(publication,
+          failure("Injected failure during editor mode selection publication."));
+    }
+    const auto desired = make_scene_selection(scene_, entities, context.active_entity);
+    (void)apply_scene_selection(scene_, desired, SceneSelectionApplicationMode::RuntimeSync);
+    if (!same_scene_selection(capture_scene_selection(scene_), desired)) {
+      return rollback_publication_result(publication,
+          failure("Editor mode selection could not be published."));
+    }
+    if (fails(ModelingSdkProjectionFailurePoint::AfterSelection) ||
+        fails(ModelingSdkProjectionFailurePoint::BeforeCommit)) {
+      return rollback_publication_result(publication,
+          failure("Injected failure before editor mode publication commit."));
+    }
+    active_native_object_id_ = active_native;
+    selection_mode_ = context.mode == EditorMode::Edit
+                          ? context.component_kind : ModelingSelectionMode::Object;
+    ++mode_revision_;
+    return commit_publication_result<ModelingCommandResult>(
+        publication, {.ok = true, .changed = true});
+  }
+
   [[nodiscard]] ModelingCommandResult
   set_object_selection(std::span<const EntityId> entities, EntityId active,
                        bool publish_scene = true,
                        bool preserve_selection_mode = false) {
+    if (editor_mode_service_ != nullptr &&
+        editor_mode_service_->mode() == EditorMode::Edit) {
+      return failure("Object selection cannot replace the current Edit participants.");
+    }
     std::vector<ObjectId> selected;
     selected.reserve(entities.size());
     int active_native = kInvalidModelingObjectId;
@@ -4890,6 +5109,10 @@ public:
 
   [[nodiscard]] ModelingCommandResult
   set_selection_mode(ModelingSelectionMode mode) {
+    if (editor_mode_service_ != nullptr &&
+        !editor_mode_service_->permits_selection_mode(mode)) {
+      return failure("Selection kind is unavailable in the current editor mode.");
+    }
     if (mode == selection_mode_) {
       return {.ok = true, .changed = false};
     }
@@ -4973,8 +5196,9 @@ public:
 
   [[nodiscard]] ModelingCommandResult
   select_mesh_ngons(std::span<const int> modeling_object_ids) {
-    if (selection_mode_ != ModelingSelectionMode::Object) {
-      return failure("Select N-Gons is available only in Mesh mode.");
+    if (editor_mode_service_ != nullptr &&
+        editor_mode_service_->mode() != EditorMode::Edit) {
+      return failure("Select N-Gons requires Edit Mode.");
     }
 
     std::vector<ModelingComponentSelectionRequest> requests;
@@ -5022,6 +5246,36 @@ public:
 
   [[nodiscard]] ModelingCommandResult set_component_selections(
       std::span<const ModelingComponentSelectionRequest> requests) {
+    // Membership belongs to the mode context. A selection request cannot enroll
+    // another mesh, and validation must not settle or suspend an active draft.
+    for (const auto &request : requests) {
+      if (!edit_scope_contains(request.modeling_object_id) ||
+          request.mode == ModelingSelectionMode::Object ||
+          request.mode == ModelingSelectionMode::Group ||
+          request.mode != requests.front().mode) {
+        return failure("Component selection requires current Edit participants and one component kind.");
+      }
+    }
+    std::vector<ModelingComponentSelectionRequest> scoped_requests;
+    if (editor_mode_service_ != nullptr && !requests.empty() &&
+        (requests.front().edit == ModelingSelectionEdit::Replace ||
+         requests.front().mode != editor_mode_service_->snapshot().component_kind)) {
+      // Replace clears other participants' components, never their membership.
+      // Kind changes convert dormant selections in every untouched participant.
+      for (const auto &participant : editor_mode_service_->snapshot().participants) {
+        if (std::ranges::none_of(requests, [&](const auto &request) {
+              return request.modeling_object_id == participant.modeling_object_id;
+            })) {
+          scoped_requests.push_back({.modeling_object_id = participant.modeling_object_id,
+                                     .mode = requests.front().mode,
+                                     .edit = requests.front().edit == ModelingSelectionEdit::Replace
+                                                 ? ModelingSelectionEdit::Replace
+                                                 : ModelingSelectionEdit::Add});
+        }
+      }
+      scoped_requests.insert(scoped_requests.end(), requests.begin(), requests.end());
+      requests = scoped_requests;
+    }
     const PreviewSelectionEditState preview_edit =
         suspend_operation_preview_for_selection_edit();
     if (!preview_edit.ok) {
@@ -5066,7 +5320,10 @@ public:
       if (native.has_value()) {
         session_index_by_native.emplace(*native, index);
       }
-      selected_by_index.push_back(session_objects[index].selected);
+      selected_by_index.push_back(
+          editor_mode_service_ != nullptr
+              ? native.has_value() && edit_scope_contains(*native)
+              : session_objects[index].selected);
     }
 
     std::vector<StagedSelectionDocument> staged_documents;
@@ -5209,8 +5466,8 @@ public:
         // Native Add enrolls a fresh component participant. An inactive SDK
         // document can retain an earlier selection through object workflows;
         // that dormant payload must not become input to mode conversion.
-        if (request.edit == ModelingSelectionEdit::Add &&
-            !target_was_selected) {
+        if (editor_mode_service_ == nullptr &&
+            request.edit == ModelingSelectionEdit::Add && !target_was_selected) {
           Result<OperationResult> cleared = document.clear_selection();
           if (!cleared.ok()) {
             return finish_operation_preview_selection_edit(
@@ -5247,11 +5504,12 @@ public:
           !effective_selection.vertices.empty() ||
           !effective_selection.edges.empty() ||
           !effective_selection.faces.empty();
-      if (request_index == 0U &&
+      if (editor_mode_service_ == nullptr && request_index == 0U &&
           request.edit == ModelingSelectionEdit::Replace) {
         std::fill(selected_by_index.begin(), selected_by_index.end(), false);
       }
       selected_by_index[session_index->second] =
+          editor_mode_service_ != nullptr ||
           target_has_selection || request.retain_component_edit_target ||
           (request.edit == ModelingSelectionEdit::Add && target_was_selected);
     }
@@ -5398,6 +5656,10 @@ public:
     }
 
     active_native_object_id_ = final_request.modeling_object_id;
+    if (editor_mode_service_ != nullptr) {
+      editor_mode_service_->set_active_participant(*mapped_final_entity);
+      editor_mode_service_->record_component_kind(final_request.mode);
+    }
     if (selection_mode_ != final_request.mode) {
       ++mode_revision_;
     }
@@ -5434,6 +5696,12 @@ public:
     std::vector<int> targets;
     targets.reserve(sdk_bindings().size());
     for (const auto &[native_id, object_id] : sdk_bindings()) {
+      if (editor_mode_service_ != nullptr) {
+        if (edit_scope_contains(native_id)) {
+          targets.push_back(native_id);
+        }
+        continue;
+      }
       const auto entity = object_map_.entity_for_modeling_object(native_id);
       if (entity.has_value() && scene_.curve(*entity) != nullptr) {
         continue;
@@ -5515,6 +5783,11 @@ public:
           "EditorSelectionService.");
     }
 
+    for (const auto &universe : universes) {
+      if (!edit_scope_contains(universe.modeling_object_id)) {
+        return failure("Selection inversion requires a current Edit participant.");
+      }
+    }
     const PreviewSelectionEditState preview_edit =
         suspend_operation_preview_for_selection_edit();
     if (!preview_edit.ok) {
@@ -5677,6 +5950,10 @@ public:
           rollback("Injected failure after SDK component inversion."));
     }
 
+    if (!synchronize_edit_membership(false)) {
+      return finish_operation_preview_selection_edit(
+          preview_edit, rollback("Edit membership could not be retained after inversion."));
+    }
     const std::vector<quader::modeling::SessionObjectSummary> after_objects =
         session_.objects();
     std::vector<EntityId> selected_entities;
@@ -5738,14 +6015,15 @@ public:
           preview_edit,
           commit_publication_result(publication, from_sdk(inverted)));
     }
+    // The component selection still publishes when fixed Edit membership keeps
+    // the scene selection unchanged; exercise that same rollback boundary.
+    if (fails(ModelingSdkProjectionFailurePoint::SelectionScenePublication)) {
+      return finish_operation_preview_selection_edit(
+          preview_edit,
+          rollback("Injected failure during SDK component inversion "
+                   "publication."));
+    }
     if (scene_selection_changed) {
-      if (fails(
-              ModelingSdkProjectionFailurePoint::SelectionScenePublication)) {
-        return finish_operation_preview_selection_edit(
-            preview_edit,
-            rollback("Injected failure during SDK component inversion "
-                     "publication."));
-      }
       QDR_PROFILE_SCOPE("Component inversion atomic scene publication");
       (void)apply_scene_selection(scene_, desired_scene_selection,
                                   SceneSelectionApplicationMode::RuntimeSync);
@@ -5847,6 +6125,9 @@ public:
     }
     ++persistent_content_revision_;
     clear_preview_checkpoints();
+    if (!synchronize_edit_membership()) {
+      return rollback("Edit membership could not be reconciled after removal.");
+    }
     return commit_publication_result<ModelingCommandResult>(
         publication,
         {.ok = true, .changed = true, .message = "Deleted SDK objects."});
@@ -6096,18 +6377,18 @@ public:
               mode != ModelingSelectionMode::Group) {
             return transform_document_for_commit(document, sdk_transform);
           }
-          Result<OperationResult> selected = document.select_all_faces();
+          const auto dormant = document.selection();
+          auto selected = document.select_all_faces();
           if (!selected.ok()) {
             return selected;
           }
-          Result<OperationResult> transformed =
-              transform_document_for_commit(document, sdk_transform);
+          auto transformed = transform_document_for_commit(document, sdk_transform);
           if (!transformed.ok()) {
             return transformed;
           }
-          Result<OperationResult> cleared = document.clear_selection();
-          if (!cleared.ok()) {
-            return cleared;
+          auto restored = restore_dormant_selection(document, dormant, transformed.value());
+          if (!restored.ok()) {
+            return restored;
           }
           transformed.value().dirty.selection = false;
           return transformed;
@@ -6248,18 +6529,18 @@ public:
               mode != ModelingSelectionMode::Group) {
             return document.assign_selected_face_material_slot(material_slot);
           }
-          Result<OperationResult> selected = document.select_all_faces();
+          const auto dormant = document.selection();
+          auto selected = document.select_all_faces();
           if (!selected.ok()) {
             return selected;
           }
-          Result<OperationResult> assigned =
-              document.assign_selected_face_material_slot(material_slot);
+          auto assigned = document.assign_selected_face_material_slot(material_slot);
           if (!assigned.ok()) {
             return assigned;
           }
-          Result<OperationResult> cleared = document.clear_selection();
-          if (!cleared.ok()) {
-            return cleared;
+          auto restored = restore_dormant_selection(document, dormant, assigned.value());
+          if (!restored.ok()) {
+            return restored;
           }
           assigned.value().dirty.selection = false;
           return assigned;
@@ -7023,6 +7304,10 @@ public:
 
   [[nodiscard]] ModelingCommandResult insert_edge_loop(
       int modeling_object_id, int edge_a, int edge_b, float factor) {
+    if (!edit_scope_contains(modeling_object_id)) {
+      return failure("Operation target must be a current Edit participant.");
+    }
+
     const std::optional<ObjectId> object = sdk_object(modeling_object_id);
     if (!object.has_value() || edge_a <= 0 || edge_b <= 0 ||
         edge_a == edge_b) {
@@ -7059,6 +7344,12 @@ public:
           }
           selection_mode_ = ModelingSelectionMode::Edge;
           active_native_object_id_ = modeling_object_id;
+          if (editor_mode_service_ != nullptr) {
+            editor_mode_service_->record_component_kind(selection_mode_);
+            if (const auto entity = object_map_.entity_for_modeling_object(modeling_object_id)) {
+              editor_mode_service_->set_active_participant(*entity);
+            }
+          }
           if (fails(
                   ModelingSdkProjectionFailurePoint::SelectionScenePublication) ||
               !add_selection_to_scene()) {
@@ -7073,6 +7364,10 @@ public:
       int modeling_object_id,
       std::span<const ModelingSdkKnifeTarget> points,
       std::span<const ModelingSdkKnifeStrokeSegment> segments) {
+    if (!edit_scope_contains(modeling_object_id)) {
+      return failure("Operation target must be a current Edit participant.");
+    }
+
     const std::optional<ObjectId> object = sdk_object(modeling_object_id);
     if (!object.has_value()) {
       return failure("Knife stroke needs a locked target mesh.");
@@ -7152,6 +7447,12 @@ public:
           }
           selection_mode_ = selection_mode_before;
           active_native_object_id_ = modeling_object_id;
+          if (editor_mode_service_ != nullptr) {
+            editor_mode_service_->record_component_kind(selection_mode_);
+            if (const auto entity = object_map_.entity_for_modeling_object(modeling_object_id)) {
+              editor_mode_service_->set_active_participant(*entity);
+            }
+          }
           if (fails(
                   ModelingSdkProjectionFailurePoint::SelectionScenePublication) ||
               !add_selection_to_scene()) {
@@ -7167,8 +7468,15 @@ public:
     transient_transform_participant_indices_.clear();
     transient_transform_payload_active_ = false;
     std::vector<ObjectId> selected;
+    const modeling::PreviewTransactionSummary active_preview =
+        session_.preview_summary();
     for (const modeling::SessionObjectSummary &object : session_.objects()) {
-      if (object.selected && object.kind == modeling::SessionObjectKind::Mesh) {
+      const bool participant = !active_preview.active ||
+          std::ranges::any_of(active_preview.objects, [&](const auto &entry) {
+            return entry.object_id == object.id &&
+                   entry.action != modeling::SessionPreviewAction::RemoveExisting;
+          });
+      if (object.selected && object.kind == modeling::SessionObjectKind::Mesh && participant) {
         selected.push_back(object.id);
       }
     }
@@ -7177,8 +7485,6 @@ public:
     }
     std::vector<PolygonDocument> documents;
     documents.reserve(selected.size());
-    const modeling::PreviewTransactionSummary active_preview =
-        session_.preview_summary();
     for (const ObjectId object : selected) {
       Result<PolygonDocument> document =
           active_preview.active
@@ -7279,11 +7585,14 @@ public:
       face_vertices.reserve(authored.value().faces.size());
       for (const quader::modeling::AuthoredTopologyFace &face :
            authored.value().faces) {
+        const auto selected_corner_count = std::ranges::count_if(
+            face.vertices, [&](modeling::VertexId vertex) {
+              return selected_vertices.contains(vertex.index);
+            });
         preserve_preview_uv_layout = preserve_preview_uv_layout ||
-            (face.vertices.size() > 4U && face.uvs.size() == face.vertices.size() &&
-             std::ranges::all_of(face.vertices, [&](modeling::VertexId vertex) {
-               return selected_vertices.contains(vertex.index);
-             }));
+            (face.uvs.size() == face.vertices.size() && selected_corner_count > 0 &&
+             (face.vertices.size() > 4U ||
+              static_cast<std::size_t>(selected_corner_count) < face.vertices.size()));
         std::vector<std::uint32_t> vertices;
         vertices.reserve(face.vertices.size());
         for (const quader::modeling::VertexId vertex : face.vertices) {
@@ -8352,7 +8661,9 @@ public:
       participants.erase(std::unique(participants.begin(), participants.end()),
                          participants.end());
     } else {
-      participants = selected_sdk_objects();
+      participants = selection_mode_ == ModelingSelectionMode::Object ||
+                             selection_mode_ == ModelingSelectionMode::Group
+                         ? selected_sdk_objects() : selected_component_objects();
     }
     if (participants.empty()) {
       return failure("No active SDK modeling selection.");
@@ -8609,18 +8920,18 @@ public:
               mode != ModelingSelectionMode::Group) {
             return document.translate_selection(to_sdk(delta));
           }
-          Result<OperationResult> selected = document.select_all_faces();
+          const auto dormant = document.selection();
+          auto selected = document.select_all_faces();
           if (!selected.ok()) {
             return selected;
           }
-          Result<OperationResult> translated =
-              document.translate_selection(to_sdk(delta));
+          auto translated = document.translate_selection(to_sdk(delta));
           if (!translated.ok()) {
             return translated;
           }
-          Result<OperationResult> cleared = document.clear_selection();
-          if (!cleared.ok()) {
-            return cleared;
+          auto restored = restore_dormant_selection(document, dormant, translated.value());
+          if (!restored.ok()) {
+            return restored;
           }
           translated.value().dirty.selection = false;
           return translated;
@@ -8687,18 +8998,18 @@ public:
               mode != ModelingSelectionMode::Group) {
             return document.transform_selection(sdk_transform);
           }
-          Result<OperationResult> selected = document.select_all_faces();
+          const auto dormant = document.selection();
+          auto selected = document.select_all_faces();
           if (!selected.ok()) {
             return selected;
           }
-          Result<OperationResult> transformed =
-              document.transform_selection(sdk_transform);
+          auto transformed = document.transform_selection(sdk_transform);
           if (!transformed.ok()) {
             return transformed;
           }
-          Result<OperationResult> cleared = document.clear_selection();
-          if (!cleared.ok()) {
-            return cleared;
+          auto restored = restore_dormant_selection(document, dormant, transformed.value());
+          if (!restored.ok()) {
+            return restored;
           }
           transformed.value().dirty.selection = false;
           return transformed;
@@ -9080,6 +9391,9 @@ public:
     };
     std::vector<PreparedMesh> prepared;
     prepared.reserve(preview.objects.size());
+    std::unordered_map<const MeshGeometryProjection *, std::vector<std::size_t>>
+        authored_families;
+    authored_families.reserve(preview.objects.size());
     std::unordered_set<std::uint64_t> changed_objects;
     changed_objects.reserve(preview.objects.size());
     bool coordinate_compatible =
@@ -9115,6 +9429,20 @@ public:
         MeshAsset mesh = MeshProjectionService::materialize_retained_mesh_projection(
             document.value(), found->second->preview_mesh,
             found->second->geometry_projection);
+        auto &family = authored_families[found->second->geometry_projection.get()];
+        const auto equivalent = std::ranges::find_if(family, [&](std::size_t index) {
+          return same_authored_read_view(
+              mesh.authored_polygon_document.read_view(),
+              prepared[index].mesh.authored_polygon_document.read_view());
+        });
+        if (equivalent != family.end()) {
+          // Only the immutable native publication is shared. Each SDK document
+          // keeps its own selection and identity cursors for subsequent edits.
+          mesh.authored_polygon_document =
+              prepared[*equivalent].mesh.authored_polygon_document;
+        } else {
+          family.push_back(prepared.size());
+        }
         prepared.push_back({object.object_id, std::move(mesh), true});
         continue;
       }
@@ -9350,6 +9678,17 @@ public:
       }
     }
 
+    if (structural_preview && editor_mode_service_ != nullptr &&
+        editor_mode_service_->mode() == EditorMode::Edit) {
+      preview_selected.clear();
+      for (const auto &participant : editor_mode_service_->snapshot().participants) {
+        if (std::ranges::none_of(removed, [&](const RemovedHostObject &object) {
+              return object.entity == participant.entity;
+            })) {
+          preview_selected.push_back(participant.entity);
+        }
+      }
+    }
     if (structural_preview) {
       std::vector<EntityId> combined;
       for (const EntityId entity : scene_.selected_entities()) {
@@ -9434,6 +9773,21 @@ public:
     active_native_object_id_ =
         native_object(committed.value().active_object)
             .value_or(kInvalidModelingObjectId);
+    if (editor_mode_service_ != nullptr && structural_preview) {
+      std::vector<EntityId> consumed;
+      for (const auto &object : removed) {
+        consumed.push_back(object.entity);
+      }
+      const auto survivor = object_map_.entity_for_modeling_object(active_native_object_id_);
+      if (survivor.has_value()) {
+        editor_mode_service_->remap_participants(consumed, *survivor);
+      }
+      // This restores empty, unchanged participants after SDK structural commit.
+      // Membership only shrinks/remaps; preview-created meshes never enroll here.
+      if (!add_selection_to_scene()) {
+        return failure("Committed edit membership could not be projected.");
+      }
+    }
     const bool changed =
         committed.value().operation.changed || preview_changed_;
     if (changed) {
@@ -9539,7 +9893,8 @@ public:
         .persistent_content_revision = persistent_content_revision_,
         .session_content_revision = session_.content_revision(),
         .session_selection_revision = session_.selection_revision(),
-        .mode_revision = mode_revision_,
+        .mode_revision = mode_revision_ +
+            (editor_mode_service_ != nullptr ? editor_mode_service_->revision() : 0u),
         .object_map_revision = object_map_.revision(),
         .active_native_object_id = active_native_object_id_,
         .mode = selection_mode_,
@@ -10067,7 +10422,82 @@ public:
         .value_or(kInvalidEntityId);
   }
 
+  /** Restores portable selection flags from the scene-owned edit membership. */
+  [[nodiscard]] bool synchronize_edit_membership(bool reconcile = true) {
+    if (editor_mode_service_ == nullptr) {
+      return true;
+    }
+    const bool was_component_mode = selection_mode_ != ModelingSelectionMode::Object &&
+                                    selection_mode_ != ModelingSelectionMode::Group;
+    if (reconcile) {
+      editor_mode_service_->reconcile_scene_lifecycle();
+    }
+    const auto &context = editor_mode_service_->snapshot();
+    if (context.mode != EditorMode::Edit && !was_component_mode) {
+      return true;
+    }
+    std::vector<ObjectId> objects;
+    int active_native = kInvalidModelingObjectId;
+    const auto append = [&](EntityId entity) {
+      const auto native = object_map_.modeling_object_for_entity(entity);
+      const auto object = native.has_value() ? sdk_object(*native) : std::nullopt;
+      if (!object.has_value()) {
+        return;
+      }
+      objects.push_back(*object);
+      if (entity == context.active_entity) {
+        active_native = *native;
+        std::rotate(objects.begin(), std::prev(objects.end()), objects.end());
+      }
+    };
+    if (context.mode == EditorMode::Edit) {
+      for (const auto &participant : context.participants) {
+        append(participant.entity);
+      }
+    } else {
+      for (const auto entity : context.object_results) {
+        append(entity);
+      }
+    }
+    std::vector<modeling::SessionComponentSelectionUpdate> updates;
+    if (context.mode == EditorMode::Edit && selection_mode_ != context.component_kind) {
+      for (const ObjectId object : objects) {
+        auto document = session_.document_copy(object);
+        if (!document.ok()) {
+          return false;
+        }
+        const auto converted = document.value().set_selection_mode(
+            to_sdk_component_mode(context.component_kind));
+        if (!converted.ok()) {
+          return false;
+        }
+        updates.push_back({.object = object, .selection = document.value().selection()});
+      }
+    }
+    const auto applied = updates.empty()
+        ? session_.apply_object_selection(objects, SelectionEdit::Replace)
+        : session_.commit_component_selection_batch(
+              updates, objects, objects.empty() ? ObjectId{} : objects.front());
+    if (!applied.ok()) {
+      return false;
+    }
+    if (active_native == kInvalidModelingObjectId && !objects.empty()) {
+      active_native = native_object(objects.front()).value_or(kInvalidModelingObjectId);
+    }
+    const auto mode = context.mode == EditorMode::Edit
+                          ? context.component_kind : ModelingSelectionMode::Object;
+    if (selection_mode_ != mode || active_native_object_id_ != active_native) {
+      ++mode_revision_;
+      selection_mode_ = mode;
+      active_native_object_id_ = active_native;
+    }
+    return true;
+  }
+
   [[nodiscard]] bool add_selection_to_scene() {
+    if (!synchronize_edit_membership()) {
+      return false;
+    }
     std::vector<EntityId> combined;
     for (const EntityId entity : scene_.selected_entities()) {
       if (!owns_entity(entity)) {
@@ -10108,7 +10538,8 @@ public:
   }
 
   [[nodiscard]] std::uint64_t selection_revision() const {
-    return session_.selection_revision() + mode_revision_;
+    return session_.selection_revision() + mode_revision_ +
+           (editor_mode_service_ != nullptr ? editor_mode_service_->revision() : 0u);
   }
 
   void release_redundant_sdk_history() {
@@ -10143,6 +10574,9 @@ public:
     snapshot->selection_mode = selection_mode_;
     snapshot->persistent_content_revision = persistent_content_revision_;
     snapshot->mode_revision = mode_revision_;
+    if (editor_mode_service_ != nullptr) {
+      snapshot->editor_mode = editor_mode_service_->capture_history_state();
+    }
     snapshot->projected_objects.reserve(sdk_bindings().size());
     std::unordered_set<int> projected_ids;
     projected_ids.reserve(sdk_bindings().size());
@@ -10218,6 +10652,7 @@ public:
     checkpoint->persistent_content_revision =
         snapshot.impl_->persistent_content_revision;
     checkpoint->mode_revision = snapshot.impl_->mode_revision;
+    checkpoint->editor_mode = snapshot.impl_->editor_mode;
     return checkpoint;
   }
 
@@ -10357,6 +10792,7 @@ public:
     if (!base) {
       return {};
     }
+    base->editor_mode = mesh_preview_host_baseline_->adapter_before.editor_mode;
     for (const modeling::PreviewTransactionObjectSummary &participant :
          preview.objects) {
       if (participant.action ==
@@ -10416,7 +10852,10 @@ public:
         mesh->name = history_asset->identity.name;
         projected.mesh_id = history_asset->asset;
         projected.identity.curve.reset();
-        projected.identity.mesh = MeshComponent{history_asset->asset};
+        MeshComponent mesh_component =
+            projected.identity.mesh.value_or(MeshComponent{});
+        mesh_component.mesh = history_asset->asset;
+        projected.identity.mesh = mesh_component;
         projected.mesh = std::move(*mesh);
       }
       const auto existing = std::ranges::find(
@@ -10487,6 +10926,9 @@ public:
       return failure("SDK projection restore point is invalid.");
     }
 
+    const auto mode_before = editor_mode_service_ != nullptr
+        ? std::optional{editor_mode_service_->snapshot()} : std::nullopt;
+    const SceneSelectionState scene_selection_before = capture_scene_selection(scene_);
     const int host_identity_high_water = next_available_native_object_id();
     std::vector<EntityId> affected_entities;
     std::vector<AssetId> affected_assets;
@@ -10851,6 +11293,37 @@ public:
     }
     mode_revision_ = snapshot.impl_->mode_revision;
     clear_preview_checkpoints();
+    if (editor_mode_service_ != nullptr && snapshot.impl_->editor_mode.has_value()) {
+      editor_mode_service_->restore_history_state(*snapshot.impl_->editor_mode,
+                                                  !history_transition);
+      if (history_transition && mode_before.has_value() &&
+          mode_before->mode == EditorMode::Object) {
+        // An old Edit history item can restore geometry, but cannot re-enter Edit
+        // or replace the current Object selection with its old editing targets.
+        if (snapshot.impl_->editor_mode->mode == EditorMode::Edit) {
+          selection_mode_ = ModelingSelectionMode::Object;
+          std::vector<ObjectId> retained;
+          active_native_object_id_ = kInvalidModelingObjectId;
+          for (const EntityId entity : scene_selection_before.selected) {
+            const auto native = object_map_.modeling_object_for_entity(entity);
+            const auto object = native.has_value() ? sdk_object(*native) : std::nullopt;
+            if (object.has_value() && scene_.exists(entity)) {
+              retained.push_back(*object);
+              if (entity == scene_selection_before.active) {
+                active_native_object_id_ = *native;
+                std::rotate(retained.begin(), std::prev(retained.end()), retained.end());
+              }
+            }
+          }
+          const auto restored = session_.apply_object_selection(retained, SelectionEdit::Replace);
+          if (!restored.ok()) {
+            return rollback(restored.error_message());
+          }
+        }
+      } else if (!synchronize_edit_membership(false)) {
+        return rollback("Editor mode history membership could not be restored.");
+      }
+    }
     if (!preserve_scene_selection && !add_selection_to_scene()) {
       return rollback("SDK history selection could not be restored.");
     }
@@ -10884,8 +11357,8 @@ private:
     objects.reserve(targets.size());
     for (const auto &target : targets) {
       const auto object = sdk_object(target.modeling_object_id);
-      if (!object.has_value() || target.edges.empty() ||
-          std::ranges::find(objects, *object) != objects.end()) {
+      if (!object.has_value() || !edit_scope_contains(target.modeling_object_id) ||
+          target.edges.empty() || std::ranges::find(objects, *object) != objects.end()) {
         return invalid("The selected UV Peel targets are no longer valid.");
       }
       objects.push_back(*object);
@@ -11130,7 +11603,11 @@ private:
     const std::vector<quader::modeling::SessionObjectSummary> objects =
         session_.objects();
     for (const quader::modeling::SessionObjectSummary &object : objects) {
-      if (object.selected) {
+      const auto native = native_object(object.id);
+      const bool in_scope = editor_mode_service_ == nullptr ||
+          editor_mode_service_->mode() != EditorMode::Edit ||
+          (native.has_value() && edit_scope_contains(*native));
+      if (object.selected && in_scope) {
         selected.push_back(object.id);
       }
     }
@@ -12306,8 +12783,8 @@ private:
       const ModelingResolvedVertexPositionBatch &batch = (*retained)[index];
       const std::optional<ObjectId> object =
           sdk_object(batch.modeling_object_id);
-      if (!object.has_value() || batch.positions.empty() ||
-          !batch_by_object->emplace(sdk_object_key(*object), index).second) {
+      if (!object.has_value() || !edit_scope_contains(batch.modeling_object_id) ||
+          batch.positions.empty() || !batch_by_object->emplace(sdk_object_key(*object), index).second) {
         return failure(
             "Resolved vertex positions contain an invalid object batch.");
       }
@@ -12467,6 +12944,10 @@ private:
     mesh_sync_.remove_unreferenced_history_mesh_assets(
         scene_, assets_, displaced_meshes);
     active_native_object_id_ = *survivor_native;
+    if (editor_mode_service_ != nullptr) {
+      const std::array consumed{*merged_entity};
+      editor_mode_service_->remap_participants(consumed, *survivor_entity);
+    }
     session_.squash_undo_since(undo_mark);
     ++persistent_content_revision_;
     if (!add_selection_to_scene()) {
@@ -12627,6 +13108,7 @@ private:
         }
       }
       PolygonDocument working = std::move(copied).value();
+      const auto dormant = working.selection();
       Result<OperationResult> selected = working.select_all_faces();
       if (!selected.ok()) {
         return rollback(selected.error_message());
@@ -12669,7 +13151,7 @@ private:
           if (!assigned.ok()) return rollback(assigned.error_message());
         }
       }
-      Result<OperationResult> cleared = working.clear_selection();
+      auto cleared = restore_dormant_selection(working, dormant, transformed.value());
       if (!cleared.ok()) {
         return rollback(cleared.error_message());
       }
@@ -12686,11 +13168,90 @@ private:
       }
     }
 
+    // The public combine receipt lists created vertices/faces in operand
+    // topology order. Retain each dormant component selection while those
+    // source identities are remapped into the surviving document.
+    struct DormantCombineSource final {
+      PolygonSelectionSnapshot selection;
+      AuthoredTopology topology;
+    };
+    std::vector<DormantCombineSource> dormant_sources;
+    dormant_sources.reserve(sources.size());
+    for (const ObjectId source : sources) {
+      auto document = session_.document_copy(source);
+      if (!document.ok()) {
+        return rollback(document.error_message());
+      }
+      if (editor_mode_service_ != nullptr) {
+        const auto converted = document.value().set_selection_mode(
+            to_sdk_component_mode(editor_mode_service_->snapshot().component_kind));
+        if (!converted.ok()) {
+          return rollback(converted.error_message());
+        }
+      }
+      auto topology = document.value().authored_topology();
+      if (!topology.ok()) {
+        return rollback(topology.error_message());
+      }
+      dormant_sources.push_back({document.value().selection(), std::move(topology).value()});
+    }
     Result<OperationResult> combined = session_.combine_objects(sources);
     if (!combined.ok() || !combined.value().success ||
         !combined.value().changed) {
       return rollback(combined.ok() ? combined.value().message
                                     : combined.error_message());
+    }
+    PolygonSelectionSnapshot dormant = dormant_sources.front().selection;
+    std::size_t vertex_offset = 0u;
+    std::size_t face_offset = 0u;
+    for (std::size_t index = 1u; index < dormant_sources.size(); ++index) {
+      const auto &source = dormant_sources[index];
+      if (vertex_offset + source.topology.vertices.size() > combined.value().created.vertices.size() ||
+          face_offset + source.topology.faces.size() > combined.value().created.faces.size()) {
+        return rollback("Combine Mesh component identity remap is incomplete.");
+      }
+      std::unordered_map<std::uint32_t, VertexId> vertices;
+      std::unordered_map<std::uint32_t, FaceId> faces;
+      for (const auto &vertex : source.topology.vertices) {
+        vertices.emplace(vertex.id.index, combined.value().created.vertices[vertex_offset++]);
+      }
+      for (const auto &face : source.topology.faces) {
+        faces.emplace(face.id.index, combined.value().created.faces[face_offset++]);
+      }
+      for (const VertexId vertex : source.selection.vertices) {
+        if (const auto mapped = vertices.find(vertex.index); mapped != vertices.end()) {
+          dormant.vertices.push_back(mapped->second);
+        }
+      }
+      for (const EdgeKey edge : source.selection.edges) {
+        const auto first = vertices.find(edge.a.index);
+        const auto second = vertices.find(edge.b.index);
+        if (first != vertices.end() && second != vertices.end()) {
+          dormant.edges.push_back(modeling::make_edge_key(first->second, second->second));
+        }
+      }
+      for (const FaceId face : source.selection.faces) {
+        if (const auto mapped = faces.find(face.index); mapped != faces.end()) {
+          dormant.faces.push_back(mapped->second);
+        }
+      }
+    }
+    auto combined_document = session_.document_copy(survivor);
+    if (!combined_document.ok()) {
+      return rollback(combined_document.error_message());
+    }
+    const auto restored = restore_dormant_selection(combined_document.value(),
+                                                   dormant, OperationResult{});
+    if (!restored.ok()) {
+      return rollback(restored.error_message());
+    }
+    const std::array selection_updates{modeling::SessionComponentSelectionUpdate{
+        .object = survivor, .selection = combined_document.value().selection()}};
+    const std::array selected_survivor{survivor};
+    const auto selected = session_.commit_component_selection_batch(
+        selection_updates, selected_survivor, survivor);
+    if (!selected.ok()) {
+      return rollback(selected.error_message());
     }
     if (combined_material != material_before &&
         !mesh_sync_.set_projected_material(scene_, *survivor_entity,
@@ -12918,6 +13479,9 @@ private:
     session_.squash_undo_since(undo_mark);
     ++persistent_content_revision_;
     ++stats_.scene_publication_count;
+    if (editor_mode_service_ != nullptr) {
+      editor_mode_service_->register_object_result(extracted_entity);
+    }
     if (!add_selection_to_scene()) {
       return rollback("SDK extract selection could not be published.");
     }
@@ -13056,8 +13620,11 @@ private:
         return rollback(cut.error_message());
       }
       if (!select_results) {
-        Result<OperationResult> front_clear = cut.value().front.clear_selection();
-        Result<OperationResult> back_clear = cut.value().back.clear_selection();
+        const auto dormant = copied.value().selection();
+        auto front_clear = restore_dormant_selection(
+            cut.value().front, dormant, cut.value().receipt);
+        auto back_clear = restore_dormant_selection(
+            cut.value().back, dormant, cut.value().receipt);
         if (!front_clear.ok() || !back_clear.ok()) {
           return rollback(!front_clear.ok() ? front_clear.error_message()
                                             : back_clear.error_message());
@@ -13291,13 +13858,14 @@ private:
         break;
       }
 
+      const auto dormant = working.selection();
       if (!settings.separate_parts) {
         Result<OperationResult> cut = working.cut_surface_by_plane(split);
         if (!cut.ok() || !cut.value().success || !cut.value().changed) {
           return rollback(cut.ok() ? cut.value().message
                                    : cut.error_message());
         }
-        Result<OperationResult> cleared = working.clear_selection();
+        auto cleared = restore_dormant_selection(working, dormant, cut.value());
         if (!cleared.ok()) {
           return rollback(cleared.error_message());
         }
@@ -13318,9 +13886,10 @@ private:
       if (!cut.ok()) {
         return rollback(cut.error_message());
       }
-      Result<OperationResult> cleared_front =
-          cut.value().front.clear_selection();
-      Result<OperationResult> cleared_back = cut.value().back.clear_selection();
+      auto cleared_front = restore_dormant_selection(
+          cut.value().front, dormant, cut.value().receipt);
+      auto cleared_back = restore_dormant_selection(
+          cut.value().back, dormant, cut.value().receipt);
       if (!cleared_front.ok() || !cleared_back.ok()) {
         return rollback(!cleared_front.ok() ? cleared_front.error_message()
                                             : cleared_back.error_message());
@@ -14730,6 +15299,9 @@ private:
 
   [[nodiscard]] AdapterPublicationState capture_adapter_publication_state() const {
     return {
+        .editor_mode = editor_mode_service_ != nullptr
+                           ? std::optional{editor_mode_service_->capture_history_state()}
+                           : std::nullopt,
         .next_native_object_id = next_native_object_id_,
         .active_native_object_id = active_native_object_id_,
         .selection_mode = selection_mode_,
@@ -14752,6 +15324,9 @@ private:
   }
 
   void restore_adapter_publication_state(AdapterPublicationState state) noexcept {
+    if (editor_mode_service_ != nullptr && state.editor_mode.has_value()) {
+      editor_mode_service_->restore_exact_state(std::move(*state.editor_mode));
+    }
     next_native_object_id_ = state.next_native_object_id;
     active_native_object_id_ = state.active_native_object_id;
     selection_mode_ = state.selection_mode;
@@ -15263,6 +15838,7 @@ private:
     active_edge_bevel_maximum_width_.reset();
   }
 
+  EditorModeService *editor_mode_service_ = nullptr;
   SceneDocument &scene_;
   AssetRegistry &assets_;
   ModelingObjectRuntimeMap &object_map_;
@@ -15344,6 +15920,17 @@ ModelingSdkProjectionAdapter::ModelingSdkProjectionAdapter(
     : impl_(std::make_unique<Impl>(scene, assets, object_map, mesh_sync)) {}
 
 ModelingSdkProjectionAdapter::~ModelingSdkProjectionAdapter() = default;
+
+void ModelingSdkProjectionAdapter::bind_editor_mode_service(
+    EditorModeService *service) noexcept {
+  impl_->bind_editor_mode_service(service);
+}
+
+ModelingCommandResult ModelingSdkProjectionAdapter::apply_editor_mode_context(
+    const EditorModeSnapshot &context,
+    std::span<const EntityId> first_admission_entities) {
+  return impl_->apply_editor_mode_context(context, first_admission_entities);
+}
 
 void ModelingSdkProjectionAdapter::set_modeling_object_world_transform_resolver(
     std::function<std::optional<QMat4>(int)> resolver) {

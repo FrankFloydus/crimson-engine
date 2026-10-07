@@ -275,6 +275,12 @@ texture_color_space_name(TextureColorSpace color_space) {
       {"collisionType", collision_type_name(mesh.collision_type)},
       {"displayCollision", mesh.display_collision},
       {"bodyType", body_type_name(mesh.body_type)},
+      {"wireframeOnShaded", mesh.wireframe_on_shaded},
+      {"wireframeOnShadedColor", mesh.wireframe_on_shaded_color.has_value()
+          ? Json::array({mesh.wireframe_on_shaded_color->x,
+                         mesh.wireframe_on_shaded_color->y,
+                         mesh.wireframe_on_shaded_color->z})
+          : Json(nullptr)},
   };
 }
 
@@ -438,9 +444,9 @@ chunk_codec_name(quader_io::QdrBinaryChunkCodec codec) {
          authored_polygon_json(*mesh.authored_polygon_document)},
     };
   } else {
-    static const MeshGeometryPayload empty_geometry;
+    static const MeshGeometryPayload kEmptyGeometry;
     const MeshGeometryPayload &payload =
-        mesh.geometry ? *mesh.geometry : empty_geometry;
+        mesh.geometry ? *mesh.geometry : kEmptyGeometry;
     Json vertices = Json::array();
     for (const MeshVertex &vertex : payload.vertices) {
       vertices.push_back({

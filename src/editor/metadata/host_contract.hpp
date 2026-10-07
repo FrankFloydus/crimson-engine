@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "editor/modes/editor_mode_policy.hpp"
+
 #include <cstdint>
 #include <span>
 #include <string_view>
@@ -120,6 +122,7 @@ struct HostActionDescriptor {
         HostPreviewKind preview_kind = HostPreviewKind::None;
         bool show_in_operations_panel = true;
 	HostActionAvailabilityDescriptor availability;
+        quader::EditorModeSupport supported_editor_modes = quader::EditorModeSupport::Edit;
 };
 
 /**

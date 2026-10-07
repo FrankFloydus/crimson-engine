@@ -22,6 +22,7 @@
 namespace quader {
 
 class QuaderApi;
+class QuaderEditorModeApi;
 enum class QuaderSelectionMode;
 #ifndef NDEBUG
 class QuaderDevToolsApi;
@@ -121,6 +122,7 @@ public:
     QuaderCommandsApi(QuaderApi& api, QuaderProjectApi& project,
                       QuaderSceneDocumentsApi &scene_documents,
                       QuaderViewportApi& viewports, QuaderToolsApi& tools,
+                      QuaderEditorModeApi &mode,
                       QuaderPreferencesApi& preferences, QuaderUIApi &ui,
                       QuaderSelectionDiagnosticsApi &selection_diagnostics,
                       QuaderDevToolsApi& dev_tools);
@@ -128,6 +130,7 @@ public:
     QuaderCommandsApi(QuaderApi& api, QuaderProjectApi& project,
                       QuaderSceneDocumentsApi &scene_documents,
                       QuaderViewportApi& viewports, QuaderToolsApi& tools,
+                      QuaderEditorModeApi &mode,
                       QuaderPreferencesApi& preferences, QuaderUIApi &ui,
                       QuaderSelectionDiagnosticsApi &selection_diagnostics);
 #endif

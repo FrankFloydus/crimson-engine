@@ -116,6 +116,15 @@ protected:
     EXPECT_EQ(parent->height() - settings_->geometry().bottom() - 1, inset);
   }
 
+  void prepare_empty_component_context() {
+    const auto target = editor_->modeling().create_box(
+        {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Overlay component target");
+    ASSERT_TRUE(target.ok()) << target.error_message();
+    ASSERT_TRUE(editor_->selection().select_object(target.value()).ok());
+    ASSERT_TRUE(editor_->mode().set(quader::QuaderEditorMode::Edit).ok());
+    session_->history().clear();
+  }
+
   void process_input() {
     host_->process_input(*editor_, session_->scene(), session_->assets(),
         session_->modeling(), {}, session_->native_tools(),
@@ -264,6 +273,7 @@ TEST_F(QtViewportSettingsOverlayTests,
 TEST_F(QtViewportSettingsOverlayTests,
        FocusKeepsTheActiveSettingsTargetWithoutSettlingTheSharedOperation) {
   ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Top));
+  ASSERT_NO_FATAL_FAILURE(prepare_empty_component_context());
   ASSERT_TRUE(editor_->selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(editor_->tools().activate(quader::ViewportToolId::Move).ok());
   ASSERT_TRUE(editor_->tools().set_setting("move", "auto_merge_vertices", false).ok());
@@ -285,6 +295,7 @@ TEST_F(QtViewportSettingsOverlayTests,
   EXPECT_FALSE(settings_->has_settings());
   EXPECT_TRUE(settings_->isHidden());
   ASSERT_TRUE(session_->viewport_workspace().focus_pane(quader::ViewportPaneId::Perspective));
+  ASSERT_TRUE(editor_->mode().set(quader::QuaderEditorMode::Object).ok());
   ASSERT_TRUE(editor_->tools().begin_primitive_creation(
       quader::QuaderPrimitiveCreationShape::Box).ok());
   refresh();
@@ -309,7 +320,7 @@ TEST_F(QtViewportSettingsOverlayTests,
     EXPECT_EQ(editor_->tools().active_settings_presentation_origin(), origin);
     EXPECT_TRUE(editor_->tools().has_active_primitive_creation());
     EXPECT_EQ(session_->primitive_creation().shape_count(), 0u);
-    EXPECT_TRUE(session_->modeling().objects().empty());
+    EXPECT_EQ(session_->modeling().objects().size(), 1u);
     EXPECT_FALSE(editor_->history().can_undo());
     EXPECT_EQ(session_->viewport_workspace().selected_tool(pane),
               quader::ViewportToolId::CreatePrimitive);
@@ -327,6 +338,7 @@ TEST_F(QtViewportSettingsOverlayTests,
   refresh();
   EXPECT_FALSE(settings_->has_settings());
   EXPECT_TRUE(settings_->isHidden());
+  ASSERT_NO_FATAL_FAILURE(prepare_empty_component_context());
   ASSERT_TRUE(editor_->selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(editor_->tools().set_setting("move", "auto_merge_vertices", false).ok());
   const auto origin = editor_->tools().active_settings_presentation_origin();
@@ -361,6 +373,10 @@ TEST_F(QtViewportSettingsOverlayTests,
     EXPECT_FALSE(toggle->isChecked());
     expect_unchanged_refresh();
 
+    const bool object_mode = mode == quader::QuaderSelectionMode::Object ||
+                             mode == quader::QuaderSelectionMode::Group;
+    ASSERT_TRUE(editor_->mode().set(object_mode ? quader::QuaderEditorMode::Object
+                                               : quader::QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(editor_->selection().set_mode(mode).ok());
     refresh();
     EXPECT_FALSE(settings_->has_settings());
@@ -369,6 +385,7 @@ TEST_F(QtViewportSettingsOverlayTests,
         QStringLiteral("tool_settings.control.auto_merge_vertices")), nullptr);
     expect_unchanged_refresh();
     EXPECT_EQ(editor_->tools().active_settings_presentation_origin(), origin);
+    ASSERT_TRUE(editor_->mode().set(quader::QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(editor_->selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
   }
   refresh();
@@ -447,6 +464,8 @@ TEST_F(QtViewportSettingsOverlayTests,
       {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}},
       "Focused pane extrusion");
   ASSERT_TRUE(created.ok()) << created.error_message();
+  ASSERT_TRUE(editor_->selection().select_object(created.value()).ok());
+  ASSERT_TRUE(editor_->mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor_->tools().activate(quader::ViewportToolId::Extrude).ok());
   ASSERT_TRUE(editor_->selection().select_face(created.value(), 1).ok());
   ASSERT_TRUE(editor_->tools().set_setting("extrude", "extrude.amount", 1.0).ok());
@@ -538,6 +557,8 @@ TEST_F(QtViewportSettingsOverlayTests,
       {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}},
       "Sticky extrusion draft");
   ASSERT_TRUE(created.ok()) << created.error_message();
+  ASSERT_TRUE(editor_->selection().select_object(created.value()).ok());
+  ASSERT_TRUE(editor_->mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor_->tools().activate(quader::ViewportToolId::Extrude).ok());
   ASSERT_TRUE(editor_->selection().select_face(created.value(), 1).ok());
   ASSERT_TRUE(editor_->tools().set_setting("extrude", "extrude.amount", 0.1).ok());
@@ -888,9 +909,6 @@ TEST_F(QtViewportSettingsOverlayTests,
       "Bevel settings layout");
   ASSERT_TRUE(source.ok()) << source.error_message();
   ASSERT_TRUE(editor_->selection().select_object(source.value()).ok());
-  ASSERT_TRUE(editor_->selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
-  ASSERT_TRUE(editor_->selection().select_edge(source.value(), 1, 2).ok());
-  ASSERT_TRUE(editor_->selection().select_all().ok());
   ASSERT_TRUE(editor_->tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
   settings_->set_expanded(true);
   refresh();
@@ -898,6 +916,10 @@ TEST_F(QtViewportSettingsOverlayTests,
 
   // Operation changes can happen between two retained UI refreshes.
   ASSERT_TRUE(editor_->tools().cancel_active_tool_preview().ok());
+  ASSERT_TRUE(editor_->mode().set(quader::QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(editor_->selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor_->selection().select_edge(source.value(), 1, 2).ok());
+  ASSERT_TRUE(editor_->selection().select_all().ok());
   ASSERT_TRUE(editor_->commands().execute(
       editor_->commands().command_id_for_modeling_action("bevel_edges")).ok());
   refresh();
@@ -913,6 +935,7 @@ TEST_F(QtViewportSettingsOverlayTests,
       {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Live bevel settings");
   ASSERT_TRUE(source.ok()) << source.error_message();
   ASSERT_TRUE(editor_->selection().select_object(source.value()).ok());
+  ASSERT_TRUE(editor_->mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor_->selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
   ASSERT_TRUE(editor_->selection().select_edge(source.value(), 1, 2).ok());
   ASSERT_TRUE(editor_->selection().select_all().ok());
@@ -988,6 +1011,7 @@ TEST_F(QtViewportSettingsOverlayTests,
   host_->activateWindow();
   for (const auto &operation : kOperations) {
     SCOPED_TRACE(operation.action);
+    ASSERT_TRUE(editor_->mode().set(quader::QuaderEditorMode::Object).ok());
     const auto source = [&] {
       if (operation.mode == quader::QuaderSelectionMode::Edge) {
         return editor_->modeling().create_box(
@@ -1008,6 +1032,7 @@ TEST_F(QtViewportSettingsOverlayTests,
     }();
     ASSERT_TRUE(source.ok()) << source.error_message();
     ASSERT_TRUE(editor_->selection().select_object(source.value()).ok());
+    ASSERT_TRUE(editor_->mode().set(quader::QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(editor_->selection().set_mode(operation.mode).ok());
     ASSERT_TRUE((operation.mode == quader::QuaderSelectionMode::Edge
         ? editor_->selection().select_edge(source.value(), 1, 2)

@@ -92,9 +92,9 @@ public:
   cached_scene_transformed_objects_for_picking() const = 0;
   [[nodiscard]] virtual const std::vector<
       quader_editor_core::PolygonObject> &
-  cached_local_objects_for_picking() const = 0;
+  cached_local_objects_for_picking(bool include_nonparticipants = false) const = 0;
   [[nodiscard]] virtual const std::vector<quader_editor_core::PickObjectBounds>
-      &cached_pick_object_bounds() const = 0;
+      &cached_pick_object_bounds(bool include_nonparticipants = false) const = 0;
   [[nodiscard]] virtual const std::vector<
       quader_editor_core::PickObjectFaceGeometry> &
   cached_pick_face_geometry(quader_poly::PickOptions pick_options = {}) const =
@@ -102,10 +102,11 @@ public:
   [[nodiscard]] virtual const std::vector<
       quader_editor_core::PickObjectFaceGeometry> &
   cached_local_pick_face_geometry(
-      quader_poly::PickOptions pick_options = {}) const = 0;
+      quader_poly::PickOptions pick_options = {},
+      bool include_nonparticipants = false) const = 0;
   [[nodiscard]] virtual std::span<
       const quader_editor_core::PickObjectTransform>
-  cached_local_picking_transforms() const = 0;
+  cached_local_picking_transforms(bool include_nonparticipants = false) const = 0;
 };
 
 /**

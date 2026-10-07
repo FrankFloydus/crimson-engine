@@ -306,6 +306,9 @@ DocumentCommandService::create_entity(std::string name, EntityKind kind,
                                       EntityId parent,
                                       TransformComponent transform,
                                       bool select_created) {
+  if (!object_mode_active()) {
+    return invalid_create_result("Entity creation requires Object Mode.");
+  }
   if ((kind == EntityKind::Light &&
        !release_has_feature(ReleaseFeature::Lights)) ||
       (kind == EntityKind::Curve &&
@@ -357,6 +360,9 @@ DocumentCommandService::create_entity(std::string name, EntityKind kind,
 }
 
 DocumentCommandResult DocumentCommandService::destroy_entity(EntityId entity) {
+  if (!object_mode_active()) {
+    return document_command_invalid_request_result("Whole-object editing requires Object Mode.");
+  }
   if (!scene_.exists(entity)) {
     return document_command_missing_entity_result();
   }
@@ -377,6 +383,9 @@ DocumentCommandResult DocumentCommandService::destroy_entity(EntityId entity) {
 DocumentCommandResult
 DocumentCommandService::reparent_entity(EntityId entity, EntityId parent,
                                         bool preserve_world_transform) {
+  if (!object_mode_active()) {
+    return document_command_invalid_request_result("Whole-object editing requires Object Mode.");
+  }
   if (!scene_.exists(entity)) {
     return document_command_missing_entity_result();
   }
@@ -403,6 +412,9 @@ DocumentCommandResult DocumentCommandService::move_entities(
 }
 
 DocumentCommandResult DocumentCommandService::parent_selection_to_active() {
+  if (!object_mode_active()) {
+    return document_command_invalid_request_result("Whole-object editing requires Object Mode.");
+  }
   const EntityId active = scene_.primary_selection();
   const std::vector<EntityId> selected = scene_.selected_entities();
   if (active == kInvalidEntityId ||
@@ -424,6 +436,9 @@ DocumentCommandResult DocumentCommandService::parent_selection_to_active() {
 }
 
 bool DocumentCommandService::can_parent_selection_to_active() const {
+  if (!object_mode_active()) {
+    return false;
+  }
   const EntityId active = scene_.primary_selection();
   const SelectionComponent *selection = scene_.selection(active);
   if (selection == nullptr || !selection->selected ||
@@ -446,6 +461,9 @@ bool DocumentCommandService::can_parent_selection_to_active() const {
 }
 
 bool DocumentCommandService::can_unparent_selection() const {
+  if (!object_mode_active()) {
+    return false;
+  }
   bool changes_parent = false;
   for (const EntityId entity : scene_.selected_entities()) {
     if (scene_.parent(entity) == kInvalidEntityId) {
@@ -461,6 +479,9 @@ bool DocumentCommandService::can_unparent_selection() const {
 }
 
 bool DocumentCommandService::can_group_selection() const {
+  if (!object_mode_active()) {
+    return false;
+  }
   const auto roots = document_command_selected_root_entities(scene_);
   return !roots.empty() && !selected_mutation_blocked() &&
          std::ranges::all_of(roots, [this](EntityId entity) {
@@ -469,6 +490,9 @@ bool DocumentCommandService::can_group_selection() const {
 }
 
 bool DocumentCommandService::can_ungroup_selection() const {
+  if (!object_mode_active()) {
+    return false;
+  }
   if (selected_mutation_blocked()) {
     return false;
   }
@@ -487,6 +511,9 @@ bool DocumentCommandService::can_ungroup_selection() const {
 }
 
 DocumentCommandResult DocumentCommandService::unparent_selection() {
+  if (!object_mode_active()) {
+    return document_command_invalid_request_result("Whole-object editing requires Object Mode.");
+  }
   std::vector<EntityId> children;
   for (const EntityId entity : scene_.selected_entities()) {
     if (scene_.parent(entity) != kInvalidEntityId) {
@@ -501,6 +528,9 @@ DocumentCommandResult DocumentCommandService::move_entities_impl(
     std::span<const EntityId> entities, EntityId parent,
     EntityId before_sibling, bool retain_subtrees,
     bool leave_direct_children, std::string label) {
+  if (!object_mode_active()) {
+    return document_command_invalid_request_result("Whole-object editing requires Object Mode.");
+  }
   if (entities.empty()) {
     return document_command_unchanged_result();
   }
@@ -627,6 +657,9 @@ DocumentCommandResult DocumentCommandService::ungroup_selection() {
 PreparedDocumentCommand
 DocumentCommandService::prepare_group_selection_command(
     std::string group_name, TransformComponent group_transform) {
+  if (!object_mode_active()) {
+    return {.status = document_command_invalid_request_result("Whole-object editing requires Object Mode.")};
+  }
   if (selected_mutation_blocked()) {
     return {.status = document_command_active_tool_entity_result()};
   }
@@ -643,6 +676,9 @@ DocumentCommandService::prepare_group_selection_command(
 
 PreparedDocumentCommand
 DocumentCommandService::prepare_ungroup_selection_command() {
+  if (!object_mode_active()) {
+    return {.status = document_command_invalid_request_result("Whole-object editing requires Object Mode.")};
+  }
   if (selected_mutation_blocked()) {
     return {.status = document_command_active_tool_entity_result()};
   }
@@ -658,6 +694,11 @@ DocumentCommandService::prepare_ungroup_selection_command() {
 
 DocumentDuplicateEntityResult
 DocumentCommandService::duplicate_entity(EntityId entity) {
+  if (!object_mode_active()) {
+    DocumentDuplicateEntityResult result;
+    assign_document_command_status(result, document_command_invalid_request_result("Whole-object editing requires Object Mode."));
+    return result;
+  }
   if (!document_command_hierarchy_available_in_release(
           scene_, std::span<const EntityId>(&entity, 1u))) {
     DocumentDuplicateEntityResult result;
@@ -701,6 +742,11 @@ DocumentCommandService::duplicate_entity(EntityId entity) {
 
 DocumentDuplicateHierarchyResult
 DocumentCommandService::duplicate_selected_hierarchy() {
+  if (!object_mode_active()) {
+    DocumentDuplicateHierarchyResult result;
+    assign_document_command_status(result, document_command_invalid_request_result("Whole-object editing requires Object Mode."));
+    return result;
+  }
   if (!document_command_hierarchy_available_in_release(
           scene_, document_command_selected_root_entities(scene_))) {
     DocumentDuplicateHierarchyResult result;
@@ -745,6 +791,11 @@ DocumentDuplicateHierarchyResult
 DocumentCommandService::duplicate_hierarchy_with_existing_clones(
     std::vector<EntityId> roots,
     std::unordered_map<EntityId, EntityId> existing_clones_by_source) {
+  if (!object_mode_active()) {
+    DocumentDuplicateHierarchyResult result;
+    assign_document_command_status(result, document_command_invalid_request_result("Whole-object editing requires Object Mode."));
+    return result;
+  }
   if (!document_command_hierarchy_available_in_release(
           scene_, roots)) {
     DocumentDuplicateHierarchyResult result;
@@ -837,6 +888,9 @@ DocumentCommandService::duplicate_hierarchy_with_existing_clones(
 DocumentCreateEntityResult DocumentCommandService::create_point_light(
     std::string name, LightComponent light, EntityId parent,
     TransformComponent transform, bool select_created) {
+  if (!object_mode_active()) {
+    return invalid_create_result("Light creation requires Object Mode.");
+  }
   if (!release_has_feature(ReleaseFeature::Lights)) {
     return invalid_create_result(release_feature_unavailable_message());
   }
@@ -893,6 +947,9 @@ DocumentCreateEntityResult DocumentCommandService::create_point_light(
 DocumentCreateEntityResult DocumentCommandService::create_directional_light(
     std::string name, LightComponent light, EntityId parent,
     TransformComponent transform, bool select_created) {
+  if (!object_mode_active()) {
+    return invalid_create_result("Light creation requires Object Mode.");
+  }
   if (!release_has_feature(ReleaseFeature::Lights)) {
     return invalid_create_result(release_feature_unavailable_message());
   }
@@ -987,6 +1044,9 @@ std::uint64_t DocumentCommandService::history_revision() const {
 DocumentCommandResult
 DocumentCommandService::apply_entity_transform(EntityId entity,
                                                TransformComponent transform) {
+  if (!object_mode_active()) {
+    return document_command_invalid_request_result("Whole-object editing requires Object Mode.");
+  }
   if (mutation_blocked(entity)) {
     return document_command_active_tool_entity_result();
   }
@@ -1152,6 +1212,9 @@ DocumentCommandResult DocumentCommandService::set_material(EntityId entity,
 DocumentCommandResult
 DocumentCommandService::set_mesh_component(EntityId entity,
                                            MeshComponent mesh) {
+  if (!mesh_wireframe_color_is_valid(mesh.wireframe_on_shaded_color)) {
+    return document_command_invalid_request_result("Wireframe color must contain finite RGB values from 0 to 1");
+  }
   if (mutation_blocked(entity)) {
     return document_command_active_tool_entity_result();
   }
@@ -1687,6 +1750,9 @@ DocumentCommandService::set_scene_settings(SceneSettings settings,
 DocumentCommandResult
 DocumentCommandService::set_transform(EntityId entity,
                                       TransformComponent transform) {
+  if (!object_mode_active()) {
+    return document_command_invalid_request_result("Whole-object editing requires Object Mode.");
+  }
   if (!scene_transform_is_finite(transform)) {
     return document_command_invalid_request_result(
         "Transform contains non-finite values");
@@ -1710,6 +1776,9 @@ DocumentCommandResult
 DocumentCommandService::set_transforms(std::vector<DocumentTransformEdit> edits,
                                        std::string label,
                                        SceneTextureTransformKind kind) {
+  if (!object_mode_active()) {
+    return document_command_invalid_request_result("Whole-object editing requires Object Mode.");
+  }
   if (label.empty()) {
     label = "Set Transform";
   }
@@ -2139,6 +2208,12 @@ DocumentCommandService::delete_layers(std::vector<SceneLayerId> layer_ids) {
 
 DocumentCommandResult DocumentCommandService::apply_scene_batch(
     std::string label, std::vector<DocumentSceneBatchOperation> operations) {
+  if (!object_mode_active() && std::ranges::any_of(operations, [](const auto &operation) {
+        return operation.kind == DocumentSceneBatchOperationKind::Reparent ||
+               operation.kind == DocumentSceneBatchOperationKind::SetTransform;
+      })) {
+    return document_command_invalid_request_result("Whole-object editing requires Object Mode.");
+  }
   if (label.empty()) {
     label = "Scene Batch";
   }
@@ -2299,6 +2374,9 @@ DocumentCommandResult DocumentCommandService::apply_scene_batch(
       break;
     }
     case DocumentSceneBatchOperationKind::SetMeshComponent: {
+      if (!mesh_wireframe_color_is_valid(operation.mesh.wireframe_on_shaded_color)) {
+        return failure("Wireframe color must contain finite RGB values from 0 to 1");
+      }
       if (operation.mesh.mesh == kInvalidAssetId) {
         return failure("Mesh asset is invalid");
       }

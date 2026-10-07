@@ -376,6 +376,21 @@ ViewportInteractionController::handle_before_active_tool_impl(
     ViewportCurveInteractionPort *curve,
     NativeViewportToolCoordinator *native_tools) {
   QDR_PROFILE_FUNCTION();
+  const SceneSessionId mode_scene =
+      editor.scene_documents().active_scene_id().value_or(SceneSessionId{});
+  const std::uint64_t mode_generation = editor.mode().generation();
+  if (mode_context_scene_.has_value() &&
+      (*mode_context_scene_ != mode_scene ||
+       mode_context_generation_ != mode_generation)) {
+    // The mode owner has already settled authored previews. Retire the old
+    // pane input, including a gizmo click still waiting for its release.
+    reset(nullptr);
+    if (native_tools != nullptr) {
+      native_tools->clear_pointer_drag_state();
+    }
+  }
+  mode_context_scene_ = mode_scene;
+  mode_context_generation_ = mode_generation;
   interaction_cursor_ = ViewportPointerCursor::Default;
   if (!release_has_feature(ReleaseFeature::Curves)) {
     curve = nullptr;

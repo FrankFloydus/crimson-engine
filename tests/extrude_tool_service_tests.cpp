@@ -62,6 +62,10 @@ protected:
   }
 
   void select_strip(QuaderModelingObjectRef strip) {
+    if (editor_.mode().current() == QuaderEditorMode::Object) {
+      ASSERT_TRUE(editor_.selection().select_all().ok());
+      ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
+    }
     if (session_.modeling().selection_mode() != ModelingSelectionMode::Face) {
       ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Face).ok());
     }
@@ -311,6 +315,7 @@ TEST_F(ExtrudeToolServiceTests, ReleasedDragKeepsItsCandidateEditableUntilApply)
 
 TEST_F(ExtrudeToolServiceTests, EmptyActivationAndSelectionDoNotCreateGeometry) {
   const auto strip = create_strip();
+  ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor_.selection().clear().ok());
   const auto original = mesh(strip);
   const auto steps = session_.history().undo_count();
@@ -650,7 +655,7 @@ TEST_F(ExtrudeToolServiceTests, SharedDefaultsRememberAcceptedAmountsWithoutChan
   ASSERT_TRUE(tool.commit_preview().ok);
   EXPECT_DOUBLE_EQ(tool.amount(), 2.15);
   EXPECT_DOUBLE_EQ(second.extrude().amount(), 2.15);
-  ASSERT_TRUE(second.extrude().activate().ok);
+  EXPECT_FALSE(second.extrude().activate().ok);
   EXPECT_DOUBLE_EQ(second.extrude().amount(), 2.15);
   EXPECT_FALSE(second.extrude().preview_active());
   EXPECT_EQ(second.extrude().mode(), modeling::FaceExtrudeMode::Individual);

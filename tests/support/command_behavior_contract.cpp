@@ -83,6 +83,18 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
   // Every id is intentionally written here. Do not replace this catalog with
   // prefix inference: adding a command must force an explicit behavior choice.
   static constexpr CommandBehaviorContract kContracts[]{
+      contract(quader_command::kEditorModeObject, Fixture::SingleVertexSelection,
+               Domain::Document | Domain::Selection | Domain::Overlay |
+                   Domain::Tool | Domain::Viewport | Domain::Revisions,
+               Outcome::ChangeRequired),
+      contract(quader_command::kEditorModeEdit, Fixture::ObjectSelection,
+               Domain::Document | Domain::Selection | Domain::Overlay |
+                   Domain::Tool | Domain::Viewport | Domain::Revisions,
+               Outcome::ChangeRequired),
+      contract(quader_command::kEditorModeToggleEdit, Fixture::ObjectSelection,
+               Domain::Document | Domain::Selection | Domain::Overlay |
+                   Domain::Tool | Domain::Viewport | Domain::Revisions,
+               Outcome::ChangeRequired),
       contract(quader_command::kEditUndo, Fixture::UndoHistory,
                kTopologySceneDomains, Outcome::ChangeRequired,
                UndoRepeat::HistoryUndo),
@@ -288,6 +300,9 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
       contract(quader_command::kViewportViewBack, Fixture::Viewport,
                kPersistedCameraDomains, Outcome::ChangeRequired),
       contract(quader_command::kViewportToggleGrid, Fixture::Viewport,
+               kViewportDomains | Domain::Overlay,
+               Outcome::ChangeRequired),
+      contract(quader_command::kViewportToggleWireframeOnShaded, Fixture::Viewport,
                kViewportDomains | Domain::Overlay,
                Outcome::ChangeRequired),
       contract(quader_command::kViewportToggleGizmos, Fixture::Viewport,
@@ -735,11 +750,11 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
                Fixture::SingleFaceSelection, kToolDomains | kTopologyDomains,
                Outcome::ChangeRequired, UndoRepeat::BeginPreview),
       contract(quader_command::kToolsActivateInsertEdgeLoop,
-               Fixture::ObjectSelection,
+               Fixture::SingleVertexSelection,
                kToolDomains | Domain::Selection | Domain::Overlay,
                Outcome::ChangeRequired, UndoRepeat::None),
       contract(quader_command::kToolsActivateKnife,
-               Fixture::ObjectSelection,
+               Fixture::SingleVertexSelection,
                kToolDomains | Domain::Selection | Domain::Overlay,
                Outcome::ChangeRequired, UndoRepeat::None),
       contract(quader_command::kToolsActivateCut,
@@ -771,9 +786,9 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
   };
 
 #ifndef NDEBUG
-  static_assert(std::size(kContracts) == 211U);
+  static_assert(std::size(kContracts) == 215U);
 #else
-  static_assert(std::size(kContracts) == 210U);
+  static_assert(std::size(kContracts) == 214U);
 #endif
   return std::span<const CommandBehaviorContract>{kContracts};
 }

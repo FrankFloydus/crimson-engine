@@ -12,6 +12,7 @@
 #include "api/quader_dev_tools_api.hpp"
 #endif
 #include "api/quader_events_api.hpp"
+#include "api/quader_editor_mode_api.hpp"
 #include "api/quader_materials_api.hpp"
 #include "api/quader_object_handle.hpp"
 #include "api/quader_preferences_api.hpp"
@@ -83,6 +84,8 @@ public:
     [[nodiscard]] const QuaderModelingApi& modeling() const;
     [[nodiscard]] QuaderSelectionApi& selection();
     [[nodiscard]] const QuaderSelectionApi& selection() const;
+    [[nodiscard]] QuaderEditorModeApi &mode();
+    [[nodiscard]] const QuaderEditorModeApi &mode() const;
     [[nodiscard]] QuaderSelectionDiagnosticsApi &selection_diagnostics();
     [[nodiscard]] const QuaderSelectionDiagnosticsApi &selection_diagnostics() const;
     [[nodiscard]] QuaderAssetApi& assets();

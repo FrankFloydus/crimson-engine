@@ -43,6 +43,7 @@
 #include <QWindow>
 #include <QEnterEvent>
 #include <QEventLoop>
+#include <QFocusEvent>
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QLineEdit>
@@ -140,6 +141,8 @@ TEST(QtCommandEventFilterTests,
     const auto box = editor.modeling().create_box(
         {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Toolbar loop box");
     ASSERT_TRUE(box.ok()) << box.error_message();
+    ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+    ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(editor.selection().select_edge(box.value(), 1, 2).ok());
     session.history().clear();
     ASSERT_TRUE(editor.scene().rename(box.value().entity, "Redo toolbar loop box").ok());
@@ -609,6 +612,7 @@ TEST(QtCommandEventFilterTests,
       "Mnemonic Extrusion Source");
   ASSERT_TRUE(box.ok());
   ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(box.value(), 1).ok());
   const auto tool_state = [&editor]() {
@@ -857,6 +861,9 @@ TEST(QtCommandEventFilterTests,
             status_revision_before_tab_bar);
 
   ASSERT_TRUE(editor.commands()
+                  .remove_shortcut(quader::quader_command::kEditorModeToggleEdit)
+                  .ok());
+  ASSERT_TRUE(editor.commands()
                   .set_shortcut(quader::quader_command::kEditUndo, "Tab")
                   .ok());
   focus_before.setFocus(Qt::OtherFocusReason);
@@ -932,6 +939,114 @@ TEST(QtCommandEventFilterTests,
 
   application.removeEventFilter(&command_filter);
   auxiliary_window.hide();
+}
+
+TEST(QtCommandEventFilterTests,
+     ModeTogglePreservesNativePanelAndTextFocusTraversal) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-mode-native-focus-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  auto standalone = quader::create_standalone_editor();
+  auto &editor = standalone.editor();
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto box = editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}});
+  ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  quader::QtCommandEventFilter filter(editor, {});
+  application.installEventFilter(&filter);
+  QWidget window;
+  window.resize(320, 140);
+  QWidget panel(&window);
+  panel.setFocusPolicy(Qt::StrongFocus);
+  panel.setGeometry(0, 0, 300, 30);
+  QLineEdit text(&window);
+  text.setGeometry(0, 40, 300, 30);
+  QPushButton next(QStringLiteral("Next"), &window);
+  next.setGeometry(0, 80, 300, 30);
+  QWidget::setTabOrder(&panel, &text);
+  QWidget::setTabOrder(&text, &next);
+  window.show();
+  window.activateWindow();
+  panel.setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  ASSERT_EQ(QApplication::focusWidget(), &panel);
+  const auto mode_revision = editor.mode().revision();
+  send_key_press(panel, Qt::Key_Tab, Qt::NoModifier);
+  EXPECT_EQ(QApplication::focusWidget(), &text);
+  EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Object);
+  send_key_press(text, Qt::Key_Tab, Qt::NoModifier);
+  EXPECT_EQ(QApplication::focusWidget(), &next);
+  EXPECT_EQ(editor.mode().revision(), mode_revision);
+
+  ASSERT_TRUE(editor.commands().set_shortcut(
+      quader::quader_command::kEditorModeToggleEdit, "F18").ok());
+  panel.setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  send_key_press(panel, Qt::Key_F18, Qt::NoModifier);
+  EXPECT_EQ(editor.mode().revision(), mode_revision);
+  text.setFocus(Qt::OtherFocusReason);
+  QCoreApplication::processEvents();
+  send_key_press(text, Qt::Key_F18, Qt::NoModifier);
+  EXPECT_EQ(editor.mode().revision(), mode_revision);
+  application.removeEventFilter(&filter);
+}
+
+TEST(QtCommandEventFilterTests,
+     ControlTabChangesScenesWithoutTogglingTheirIndependentModes) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-mode-scene-tab-input-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QTemporaryDir temporary;
+  ASSERT_TRUE(temporary.isValid());
+  const auto project_root =
+      std::filesystem::path(temporary.path().toStdWString()) / "Project";
+  ASSERT_TRUE(std::filesystem::create_directory(project_root));
+  quader::ProjectSession project;
+  ASSERT_TRUE(project.create(project_root).ok);
+  quader::QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto first_scene = editor.scene_documents().active_scene_id();
+  ASSERT_TRUE(first_scene.has_value());
+  const auto box = editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}});
+  ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+  const auto edit_generation = editor.mode().generation();
+  const auto second_scene = editor.scene_documents().new_scene();
+  ASSERT_TRUE(second_scene.ok());
+  ASSERT_EQ(editor.mode().current(), quader::QuaderEditorMode::Object);
+  quader::QtCommandEventFilter filter(editor, {});
+  quader::QuaderEditorApiSessionAccess::set_scene_binding_changed_callback(
+      editor, [&](quader::SceneSession &) { filter.rebind_editor(editor); });
+  application.installEventFilter(&filter);
+  quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  QFocusEvent focus(QEvent::FocusIn);
+  QCoreApplication::sendEvent(&surface, &focus);
+  const auto cycle = [&](Qt::KeyboardModifiers modifiers) {
+    QKeyEvent press(QEvent::KeyPress, Qt::Key_Tab, modifiers);
+    QKeyEvent release(QEvent::KeyRelease, Qt::Key_Tab, modifiers);
+    QCoreApplication::sendEvent(&surface, &press);
+    QCoreApplication::sendEvent(&surface, &release);
+  };
+  cycle(Qt::ControlModifier);
+  EXPECT_EQ(editor.scene_documents().active_scene_id(), first_scene);
+  EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Edit);
+  EXPECT_EQ(editor.mode().generation(), edit_generation);
+  ASSERT_EQ(editor.mode().state().participants.size(), 1u);
+  EXPECT_EQ(editor.mode().state().participants.front().id, box.value().entity);
+  cycle(Qt::ControlModifier | Qt::ShiftModifier);
+  EXPECT_EQ(editor.scene_documents().active_scene_id(), second_scene.value());
+  EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Object);
+  EXPECT_TRUE(editor.mode().state().participants.empty());
+  application.removeEventFilter(&filter);
+  quader::QuaderEditorApiSessionAccess::set_scene_binding_changed_callback(editor, {});
 }
 
 /// Supplies the real retained Outliner with a standalone editor's live owners.
@@ -1378,7 +1493,11 @@ TEST(QtCommandEventFilterTests,
   ASSERT_TRUE(editor.commands().set_shortcut(
       editor.commands().keybinding_target_id_for_selection_mode(
           quader::QuaderSelectionMode::Edge), "Shift+3").ok());
-  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  const auto box = editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}});
+  ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   quader::QtCommandEventFilter filter(editor, {});
   application.installEventFilter(&filter);
   QWidget surface;
@@ -1409,7 +1528,7 @@ TEST(QtCommandEventFilterTests,
   EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Edge);
   QCoreApplication::sendEvent(&surface, &changed_repeat);
   EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Face);
-  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
   QEvent deactivation(QEvent::ApplicationDeactivate);
   QCoreApplication::sendEvent(&surface, &deactivation);
   // The previous key can be released while another application owns input.
@@ -1595,6 +1714,7 @@ TEST(QtCommandEventFilterTests,
             {.min = {-1, -1, -1}, .max = {1, 1, 1}});
         ASSERT_TRUE(box.ok());
         ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+        ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
         ASSERT_TRUE(editor.selection().set_mode(
             bevel ? quader::QuaderSelectionMode::Edge
                   : quader::QuaderSelectionMode::Face).ok());
@@ -1739,6 +1859,8 @@ TEST(QtCommandEventFilterTests,
     const auto box = editor.modeling().create_box(
         {.min = {-1, -1, -1}, .max = {1, 1, 1}});
     ASSERT_TRUE(box.ok());
+    ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+    ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(editor.selection().select_face(box.value(), 1).ok());
     const auto source = editor.query().compiled_object_mesh(box.value());
     ASSERT_TRUE(source.has_value());
@@ -1808,6 +1930,8 @@ TEST(QtCommandEventFilterTests,
   const auto box = editor.modeling().create_box(
       {.min = {-1, -1, -1}, .max = {1, 1, 1}});
   ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().select_face(box.value(), 1).ok());
   session.history().clear();
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Extrude).ok());
@@ -1960,6 +2084,8 @@ TEST(QtCommandEventFilterTests,
     const auto box = editor.modeling().create_box(
         {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}});
     ASSERT_TRUE(box.ok());
+    ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+    ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(editor.selection().select_face(box.value(), 1).ok());
     const auto source = editor.query().compiled_object_mesh(box.value());
     ASSERT_TRUE(source.has_value());
@@ -2112,6 +2238,8 @@ TEST(QtCommandEventFilterTests,
       const auto box = editor->modeling().create_box(
           {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}});
       ASSERT_TRUE(box.ok());
+      ASSERT_TRUE(editor->selection().select_object(box.value()).ok());
+      ASSERT_TRUE(editor->mode().set(quader::QuaderEditorMode::Edit).ok());
       ASSERT_TRUE(editor->selection().select_face(box.value(), 1).ok());
       ASSERT_TRUE(editor->tools().activate(quader::ViewportToolId::Extrude).ok());
       ASSERT_TRUE(editor->tools().active_settings().preview_active);
@@ -2271,6 +2399,8 @@ TEST(QtCommandEventFilterTests,
       {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
       "Browser Shortcut Selection");
   ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(box.value(), 1).ok());
   const auto primitive = quader::quader_command::kToolsActivateCreatePrimitive;
@@ -2299,6 +2429,7 @@ TEST(QtCommandEventFilterTests,
   window.show();
   QCoreApplication::processEvents();
 
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
   for (bool floating : {false, true}) {
     SCOPED_TRACE(floating);
     dock->setFloating(floating);
@@ -2328,7 +2459,8 @@ TEST(QtCommandEventFilterTests,
     EXPECT_EQ(view->currentIndex(), selected_before);
     EXPECT_EQ(browser->current_selected_material(), first);
     EXPECT_EQ(QApplication::focusWidget(), view);
-    EXPECT_EQ(editor.selection().summary().selected_face_count, 1u);
+    EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Object);
+    EXPECT_EQ(editor.selection().summary().selected_object_count, 1u);
 
     // The browser's explicit navigation owns arrows even after a command
     // is customized to the same chord; ordinary tool letters stay global.
@@ -2390,6 +2522,8 @@ TEST(QtCommandEventFilterTests,
   const auto box = editor.modeling().create_box(
       {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}});
   ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   QWidget window;
   window.resize(340, 280);
   QTreeWidget panel(&window);
@@ -2498,6 +2632,11 @@ TEST(QtCommandEventFilterTests,
                          quader::QuaderSelectionMode::Object,
                          quader::QuaderSelectionMode::Group}) {
     SCOPED_TRACE(static_cast<int>(mode));
+    const bool component = mode == quader::QuaderSelectionMode::Vertex ||
+                           mode == quader::QuaderSelectionMode::Edge ||
+                           mode == quader::QuaderSelectionMode::Face;
+    ASSERT_TRUE(editor.mode().set(component ? quader::QuaderEditorMode::Edit
+                                          : quader::QuaderEditorMode::Object).ok());
     const std::string target = editor.commands().keybinding_target_id_for_selection_mode(mode);
     const QString mapping = QString::fromStdString(editor.commands().shortcut_for(target));
     ASSERT_EQ(mapping.size(), 1);
@@ -2512,7 +2651,10 @@ TEST(QtCommandEventFilterTests,
   ASSERT_TRUE(editor.tools().set_setting("create_primitive", "primitive.type", "sphere").ok());
   ASSERT_TRUE(editor.tools().has_active_primitive_creation());
   send_key_press(panel, Qt::Key_3, Qt::NoModifier, QStringLiteral("3"));
-  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Face);
+  EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Object);
+  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
+  EXPECT_TRUE(editor.tools().has_active_primitive_creation());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   EXPECT_FALSE(editor.tools().has_active_primitive_creation());
   EXPECT_EQ(editor.query().modeling_objects().size(), 1u);
 
@@ -2527,7 +2669,10 @@ TEST(QtCommandEventFilterTests,
   const auto preview_mesh = editor.query().mesh(box.value().mesh);
   ASSERT_TRUE(preview_mesh.has_value());
   send_key_press(panel, Qt::Key_4, Qt::NoModifier, QStringLiteral("4"));
-  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
+  EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Edit);
+  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Edge);
+  EXPECT_TRUE(editor.modeling().can_cancel_active_tool_or_preview());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
   EXPECT_FALSE(editor.modeling().can_cancel_active_tool_or_preview());
   const auto mesh_after = editor.query().mesh(box.value().mesh);
   ASSERT_TRUE(mesh_after.has_value());
@@ -2538,11 +2683,7 @@ TEST(QtCommandEventFilterTests,
   ASSERT_TRUE(restored.has_value());
   EXPECT_EQ(restored->vertex_count, mesh_before->vertex_count);
   EXPECT_EQ(restored->primitive_count, mesh_before->primitive_count);
-  ASSERT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Edge);
-  const auto restored_mode =
-      editor.selection().set_mode(quader::QuaderSelectionMode::Object);
-  ASSERT_TRUE(restored_mode.ok()) << restored_mode.error_message();
-  EXPECT_TRUE(restored_mode.changed());
+  EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Object);
   ASSERT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
 
   const std::string face_target = editor.commands().keybinding_target_id_for_selection_mode(
@@ -2555,6 +2696,12 @@ TEST(QtCommandEventFilterTests,
   EXPECT_EQ(panel.currentItem(), panel.topLevelItem(1));
   EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
   ASSERT_TRUE(editor.commands().set_shortcut(face_target, "Ctrl+Alt+F23").ok());
+  send_key_press(panel, Qt::Key_F23, Qt::ControlModifier | Qt::AltModifier);
+  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
+  QKeyEvent release_face(QEvent::KeyRelease, Qt::Key_F23,
+                          Qt::ControlModifier | Qt::AltModifier);
+  QCoreApplication::sendEvent(&panel, &release_face);
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   send_key_press(panel, Qt::Key_F23, Qt::ControlModifier | Qt::AltModifier);
   EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Face);
   ASSERT_TRUE(editor.commands().reset_shortcut(face_target).ok());
@@ -2587,6 +2734,8 @@ TEST(QtCommandEventFilterTests,
   const auto box = editor.modeling().create_box(
       {.min = {-1, -1, -1}, .max = {1, 1, 1}});
   ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(box.value(), 1).ok());
   session.history().clear();
@@ -2652,6 +2801,8 @@ TEST(QtCommandEventFilterTests,
       {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
       "Face Texture Keyboard Ownership");
   ASSERT_TRUE(box.ok()) << box.error_message();
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(box.value(), 1).ok());
 

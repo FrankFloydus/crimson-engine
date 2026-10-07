@@ -27,6 +27,10 @@ ModelingCommandDispatcher::history_policy(std::string_view tool_id) const {
 ModelingCommandAvailability ModelingCommandDispatcher::availability(
     std::string_view tool_id, ModelingSessionService &modeling,
     EditorSelectionService *selection) const {
+  if (!modeling.action_supports_editor_mode(tool_id)) {
+    return ModelingCommandAvailability::unavailable(
+        "The action is unavailable in the current editor mode.");
+  }
   if (!release_allows_action(tool_id) || !release_allows_operation(tool_id) ||
       !release_allows_tool(tool_id)) {
     return ModelingCommandAvailability::unavailable(
@@ -66,6 +70,10 @@ ModelingCommandResult ModelingCommandDispatcher::execute(
         const CommandTool& tool,
         ModelingSessionService& modeling,
         EditorSelectionService* selection) const {
+    if (!modeling.action_supports_editor_mode(tool.id())) {
+      return {.ok = false, .changed = false,
+              .message = "The action is unavailable in the current editor mode."};
+    }
     if (!release_allows_action(tool.id()) ||
         !release_allows_operation(tool.id()) ||
         !release_allows_tool(tool.id())) {

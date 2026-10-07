@@ -350,6 +350,8 @@ struct QuaderUIRuntimeHooks {
   std::function<QuaderApiVoidResult()> show_command_search;
   std::function<QuaderApiVoidResult()> toggle_asset_browser;
   std::function<QuaderApiVoidResult(QuaderNotification)> notify;
+  /// Accepts pending Inspector edits before an editor context transition.
+  std::function<QuaderApiVoidResult()> settle_pending_property_edits;
 };
 
 } // namespace quader

@@ -1655,11 +1655,12 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
       15.0f);
   EXPECT_FLOAT_EQ(
       settings.float_value(ViewportFloatSettingId::DimensionFontSize), 12.0f);
-  ASSERT_EQ(viewport_color_settings().size(), 26u);
+  ASSERT_EQ(viewport_color_settings().size(), 27u);
   ASSERT_EQ(viewport_float_settings().size(), 35u);
-  ASSERT_EQ(viewport_bool_settings().size(), 15u);
+  ASSERT_EQ(viewport_bool_settings().size(), 16u);
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowGrid));
   EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::ShowMeshGrid));
+  EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::WireframeOnShaded));
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowGizmos));
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowOverlays));
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowDimensions));
@@ -1697,6 +1698,54 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
   EXPECT_EQ(show_hover_dimensions.label, "Show Dimensions on Hover");
   EXPECT_EQ(show_hover_dimensions.key, "ShowHoverDimensions");
   EXPECT_TRUE(show_hover_dimensions.default_value);
+}
+
+TEST(ViewportSettingsTests,
+     WireframeOnShadedColorDefaultsBlackAndPersistsIndependently) {
+  const std::filesystem::path path =
+      std::filesystem::temp_directory_path() /
+      "quader_wireframe_on_shaded_color_preferences.ini";
+  {
+    std::ofstream file(path, std::ios::trunc);
+    ASSERT_TRUE(file.is_open());
+    file << "QVertexWorks.Quader.Viewport.SourceWireColor=336699FF\n";
+  }
+
+  ViewportSettings settings = ViewportSettings::load(path);
+  expect_color_near(settings.color(ViewportColorSettingId::WireframeOnShaded),
+                    {0.0f, 0.0f, 0.0f, 1.0f});
+  const ViewportSettingColor source_wire =
+      settings.color(ViewportColorSettingId::SourceWire);
+  EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::WireframeOnShaded));
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::WireframeOnShaded,
+                                 {51.0f / 255.0f, 102.0f / 255.0f,
+                                  153.0f / 255.0f, 77.0f / 255.0f}));
+  ASSERT_TRUE(settings.save(path));
+
+  ViewportSettings loaded = ViewportSettings::load(path);
+  expect_color_near(loaded.color(ViewportColorSettingId::WireframeOnShaded),
+                    {51.0f / 255.0f, 102.0f / 255.0f,
+                     153.0f / 255.0f, 77.0f / 255.0f});
+  expect_color_near(loaded.color(ViewportColorSettingId::SourceWire),
+                    source_wire);
+  EXPECT_FALSE(loaded.bool_value(ViewportBoolSettingId::WireframeOnShaded));
+  {
+    std::ifstream file(path);
+    const std::string text{std::istreambuf_iterator<char>(file),
+                           std::istreambuf_iterator<char>()};
+    EXPECT_NE(text.find(
+                  "QVertexWorks.Quader.Viewport.WireframeOnShadedColor=3366994D"),
+              std::string::npos);
+  }
+
+  ASSERT_TRUE(loaded.reset_to_defaults());
+  expect_color_near(loaded.color(ViewportColorSettingId::WireframeOnShaded),
+                    {0.0f, 0.0f, 0.0f, 1.0f});
+  ASSERT_TRUE(loaded.save(path));
+  expect_color_near(
+      ViewportSettings::load(path).color(ViewportColorSettingId::WireframeOnShaded),
+      {0.0f, 0.0f, 0.0f, 1.0f});
+  std::filesystem::remove(path);
 }
 
 TEST(ViewportSettingsTests,
@@ -22786,10 +22835,10 @@ TEST(ModelingSessionServiceTests,
 }
 
 TEST(ModelingSessionServiceTests,
-     VertexHoverCandidatePointsRespectSceneTransforms) {
-  SceneDocument scene;
-  AssetRegistry assets;
-  ModelingSessionService service(scene, assets);
+     EmptyEditParticipantVertexPointsRespectSceneTransforms) {
+  SceneSession session;
+  SceneDocument &scene = session.scene();
+  ModelingSessionService &service = session.modeling();
 
   const ModelingCreateBoxResult box = service.create_box_from_bounds({
       .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
@@ -22801,6 +22850,7 @@ TEST(ModelingSessionServiceTests,
   transform.position = {4.0f, 0.0f, 0.0f};
   scene.set_transform(box.object.entity, transform);
 
+  ASSERT_TRUE(session.editor_mode().set_mode(EditorMode::Edit).ok);
   ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Vertex).ok);
   ASSERT_TRUE(service.clear_selection().ok);
 
@@ -22814,6 +22864,8 @@ TEST(ModelingSessionServiceTests,
       });
   ASSERT_TRUE(hover.ok) << hover.message;
 
+  ASSERT_EQ(session.editor_mode().snapshot().participants.size(), 1u);
+  EXPECT_TRUE(session.editor_mode().contains(box.object.entity));
   const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   std::optional<SceneBounds> point_bounds;
   for (const ViewportOverlayPoint &point : frame.points) {
@@ -24094,16 +24146,17 @@ TEST(ModelingSessionServiceTests,
 }
 
 TEST(ModelingSessionServiceTests,
-     ComponentTransformCommitKeepsHoverHandlesOnCommittedGeometry) {
-  SceneDocument scene;
-  AssetRegistry assets;
-  ModelingSessionService service(scene, assets);
+     ComponentTransformCommitKeepsEmptyParticipantHandlesOnCommittedGeometry) {
+  SceneSession session;
+  SceneDocument &scene = session.scene();
+  ModelingSessionService &service = session.modeling();
 
   const ModelingCreateBoxResult box = service.create_box_from_bounds({
       .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
       .name = "Commit Hover Overlay Box",
   });
   ASSERT_TRUE(box.ok) << box.message;
+  ASSERT_TRUE(session.editor_mode().set_mode(EditorMode::Edit).ok);
   ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Vertex).ok);
   ASSERT_TRUE(seed_component_bulk_selection_scope(
                   service, box.object.modeling_object_id,
@@ -24128,6 +24181,8 @@ TEST(ModelingSessionServiceTests,
       });
   ASSERT_TRUE(hover.ok) << hover.message;
 
+  ASSERT_EQ(session.editor_mode().snapshot().participants.size(), 1u);
+  EXPECT_TRUE(session.editor_mode().contains(box.object.entity));
   const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   std::optional<SceneBounds> point_bounds;
   for (const ViewportOverlayPoint &point : frame.points) {
@@ -24199,15 +24254,16 @@ TEST(ModelingSessionServiceTests,
 
 TEST(ModelingSessionServiceTests,
      TransformDragComponentSelectionCommitsOverlayOnCommittedGeometry) {
-  SceneDocument scene;
-  AssetRegistry assets;
-  ModelingSessionService service(scene, assets);
+  SceneSession session;
+  SceneDocument &scene = session.scene();
+  ModelingSessionService &service = session.modeling();
 
   const ModelingCreateBoxResult box = service.create_box_from_bounds({
       .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
       .name = "Drag Commit Overlay Box",
   });
   ASSERT_TRUE(box.ok) << box.message;
+  ASSERT_TRUE(session.editor_mode().set_mode(EditorMode::Edit).ok);
   ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Vertex).ok);
   ASSERT_TRUE(seed_component_bulk_selection_scope(
                   service, box.object.modeling_object_id,
@@ -24245,6 +24301,8 @@ TEST(ModelingSessionServiceTests,
       });
   ASSERT_TRUE(hover.ok) << hover.message;
 
+  ASSERT_EQ(session.editor_mode().snapshot().participants.size(), 1u);
+  EXPECT_TRUE(session.editor_mode().contains(box.object.entity));
   const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   std::optional<SceneBounds> point_bounds;
   for (const ViewportOverlayPoint &point : frame.points) {
@@ -24936,6 +24994,7 @@ TEST(ModelingSessionServiceTests,
           .name = "History Face Drag Box",
       });
   ASSERT_TRUE(box.ok) << box.message;
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
 
   QuaderPickSelectRequest pick_face;
@@ -26154,11 +26213,10 @@ TEST(ModelingSessionServiceTests,
 }
 
 TEST(ModelingSessionServiceTests,
-     ComponentModeSourceWireUsesActiveEditMeshOnly) {
-  SceneDocument scene;
-  AssetRegistry assets;
-  ModelingSessionService service(scene, assets);
-  EditorSelectionTestHarness editor_selection(scene, assets, service);
+     ComponentModeSourceWireIncludesEveryEditParticipant) {
+  SceneSession session;
+  SceneDocument &scene = session.scene();
+  ModelingSessionService &service = session.modeling();
 
   const ModelingCreateBoxResult first = service.create_box_from_bounds({
       .bounds =
@@ -26179,10 +26237,9 @@ TEST(ModelingSessionServiceTests,
   });
   ASSERT_TRUE(second.ok) << second.message;
 
-  ASSERT_TRUE(select_through_editor(editor_selection.selection,
-                                    {first.object.entity, second.object.entity},
-                                    second.object.entity)
-                  .ok);
+  const std::array participants{first.object.entity, second.object.entity};
+  ASSERT_TRUE(service.set_object_selection(participants, second.object.entity).ok);
+  ASSERT_TRUE(session.editor_mode().set_mode(EditorMode::Edit).ok);
   ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Edge).ok);
   const ModelingSelectionSummary summary = service.selection_summary();
   ASSERT_EQ(summary.active_object_id, second.object.modeling_object_id);
@@ -26205,10 +26262,10 @@ TEST(ModelingSessionServiceTests,
         }));
   };
 
-  EXPECT_EQ(source_wire_count_for_object(first.object.modeling_object_id), 0u);
+  EXPECT_EQ(source_wire_count_for_object(first.object.modeling_object_id), 12u);
   EXPECT_EQ(source_wire_count_for_object(second.object.modeling_object_id),
             12u);
-  EXPECT_EQ(source_stamp_count_for_object(first.object.modeling_object_id), 0u);
+  EXPECT_GT(source_stamp_count_for_object(first.object.modeling_object_id), 0u);
   EXPECT_GT(source_stamp_count_for_object(second.object.modeling_object_id),
             0u);
 }

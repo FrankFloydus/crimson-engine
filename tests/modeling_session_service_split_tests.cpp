@@ -7,6 +7,7 @@
 #include "api/quader_editor_api.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/modes/editor_mode_service.hpp"
 #include "support/curve_modeling_test_support.hpp"
 #include "support/command_observable_state.hpp"
 #include "assets/asset_registry.hpp"
@@ -3426,6 +3427,7 @@ TEST(ModelingSessionServiceSplitTests,
       {.min = {-0.25f, -0.125f, -0.25f},
        .max = {0.25f, 2.125f, 0.25f}}, "Narrow Bevel Source");
   ASSERT_TRUE(source.ok()) << source.error_message();
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
   ASSERT_TRUE(editor.selection().select_edge(source.value(), 2, 3).ok());
   ASSERT_TRUE(editor.commands().execute(
@@ -3499,6 +3501,7 @@ TEST(ModelingSessionServiceSplitTests,
       {.min = {-0.25f, -0.125f, -0.25f},
        .max = {0.25f, 2.125f, 0.25f}}, "Failed Bevel Source");
   ASSERT_TRUE(source.ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
   ASSERT_TRUE(editor.selection().select_edge(source.value(), 2, 3).ok());
   ASSERT_TRUE(editor.tools().set_setting(
@@ -5409,6 +5412,7 @@ TEST(ModelingSessionServiceSplitTests,
       "Retained knife draft");
   ASSERT_TRUE(box.ok()) << box.error_message();
   ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::Knife).ok());
   for (const float y : {-1.0f, 1.0f}) {
     SCOPED_TRACE(y);
@@ -5435,10 +5439,9 @@ TEST(ModelingSessionServiceSplitTests,
 }
 
 TEST(ModelingSessionServiceSplitTests,
-     KnifePrelockSourceWireCacheTracksActiveSelectedObject) {
-  SceneDocument scene;
-  AssetRegistry assets;
-  ModelingSessionService service(scene, assets);
+     KnifePrelockSourceWireCacheRetainsAllEditParticipants) {
+  SceneSession session;
+  ModelingSessionService &service = session.modeling();
   const ModelingCreateBoxResult first = service.create_box_from_bounds({
       .bounds = {.min = {-3.0f, -1.0f, -1.0f},
                  .max = {-1.0f, 1.0f, 1.0f}},
@@ -5453,6 +5456,7 @@ TEST(ModelingSessionServiceSplitTests,
   ASSERT_TRUE(second.ok) << second.message;
   const std::array selected{first.object.entity, second.object.entity};
   ASSERT_TRUE(service.set_object_selection(selected, first.object.entity).ok);
+  ASSERT_TRUE(session.editor_mode().set_mode(EditorMode::Edit).ok);
   ASSERT_TRUE(
       service.activate_viewport_tool(ModelingViewportTool::Knife).ok);
 
@@ -5472,19 +5476,20 @@ TEST(ModelingSessionServiceSplitTests,
             12);
   EXPECT_EQ(source_wire_count(first_frame,
                               second.object.modeling_object_id),
-            0);
+            12);
 
   const ModelingCommandResult switched =
       service.set_object_selection(selected, second.object.entity);
-  ASSERT_TRUE(switched.ok) << switched.message;
-  ASSERT_TRUE(switched.changed);
+  EXPECT_FALSE(switched.ok);
+  EXPECT_FALSE(switched.changed);
+  ASSERT_EQ(session.editor_mode().snapshot().participants.size(), 2u);
   const std::uint64_t second_signature =
       service.selection_overlay_signature();
-  EXPECT_NE(second_signature, first_signature);
+  EXPECT_EQ(second_signature, first_signature);
   const ViewportOverlayFrame second_frame = service.selection_overlay_frame();
   EXPECT_EQ(source_wire_count(second_frame,
                               first.object.modeling_object_id),
-            0);
+            12);
   EXPECT_EQ(source_wire_count(second_frame,
                               second.object.modeling_object_id),
             12);
@@ -6827,6 +6832,7 @@ TEST_F(FaceExtrusionProjectionTests, CleanScenePreviewCancelZeroAndFailureRemain
           .document = service_uv_peel_strip_document(),
           .name = "Clean extrusion strip"});
       ASSERT_TRUE(mesh.ok) << mesh.message;
+      ASSERT_TRUE(session.editor_mode().set_mode(EditorMode::Edit).ok);
       ASSERT_TRUE(modeling.set_component_selection({
           .modeling_object_id = mesh.object.modeling_object_id,
           .mode = ModelingSelectionMode::Face,
@@ -6977,6 +6983,8 @@ TEST_F(ModelingSelectionProjectionRollbackTests,
   const auto box = create_box(editor_);
   const auto light = editor_.scene().create_point_light({.name = "Conversion Light"});
   ASSERT_TRUE(light.ok());
+  ASSERT_TRUE(editor_.selection().select_object(box).ok());
+  ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
   const auto selected_vertices = [&] {
     std::vector<std::pair<int, int>> ids;
     for (const auto &object : session_.modeling().export_selection().objects) {
@@ -7046,16 +7054,17 @@ TEST_F(ModelingSelectionProjectionRollbackTests,
        ComponentInverseFailureBoundariesRestoreExactSelectionAndOverlay) {
   const QuaderModelingObjectRef first = create_box(editor_);
   const QuaderModelingObjectRef second = create_box(editor_);
-  ASSERT_TRUE(editor_.selection().select_object(first).ok());
+  ASSERT_TRUE(editor_.selection().select_objects(
+      {first.entity, second.entity}, first.entity).ok());
+  ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Edge).ok());
   ASSERT_TRUE(editor_.selection().select_edge(first, 1, 2).ok());
   ASSERT_TRUE(editor_.selection()
                   .select_edge(first, 2, 3, QuaderSelectionEdit::Add)
                   .ok());
 
-  // An active constrained scope makes the otherwise-unselected second mesh an
-  // inversion target. Its projected selection would change the Scene, making
-  // SelectionScenePublication a required and observable failure boundary.
+  // Both meshes are fixed participants even though only the first has selected
+  // edges. Inversion includes the empty participant without enrolling a new mesh.
   session_.modeling().set_viewport_visibility_filter(
       [first_entity = first.entity,
        second_entity = second.entity](EntityId entity) {
@@ -7116,7 +7125,7 @@ TEST_F(ModelingSelectionProjectionRollbackTests,
   const EntityId primary_scene_selection_before =
       session_.scene().primary_selection();
   ASSERT_EQ(selected_scene_entities_before,
-            (std::vector<EntityId>{first.entity}));
+            (std::vector<EntityId>{first.entity, second.entity}));
   ASSERT_EQ(primary_scene_selection_before, first.entity);
 
   const QuaderRevisionStamp revisions_before = editor_.revisions();
@@ -7666,11 +7675,11 @@ TEST_F(CurveModelingProjectionTests,
               baseline_signature);
   }
 
-  ASSERT_TRUE(
+  EXPECT_FALSE(
       editor_.selection().set_mode(QuaderSelectionMode::Face).ok());
   const ViewportOverlayFrame after_selection =
       session_.modeling().selection_overlay_frame();
-  EXPECT_NE(overlay_frame_fingerprint(after_selection), baseline_fingerprint);
+  EXPECT_EQ(overlay_frame_fingerprint(after_selection), baseline_fingerprint);
   ASSERT_TRUE(editor_.modeling().cancel_curve_preview().ok());
 }
 

@@ -136,6 +136,7 @@ const std::array<ViewportColorSettingDescriptor, kViewportColorSettingCount> kCo
         {ViewportColorSettingId::CollisionFill, ViewportSettingsSectionId::Overlay, "Collision Color", key("CollisionFillColor"), kDefaultViewportCollisionFillColor},
         {ViewportColorSettingId::Background, ViewportSettingsSectionId::Shading, "Background Color", key("BackgroundColor"), kDefaultViewportBackgroundColor,
          "Editor background for Shaded, Solid and Wireframe views. Rendered views use the scene environment. Use Apply to preview."},
+        {ViewportColorSettingId::WireframeOnShaded, ViewportSettingsSectionId::Shading, "Wireframe on Shaded Color", key("WireframeOnShadedColor"), {0.0f, 0.0f, 0.0f, 1.0f}},
 }};
 
 const std::array<ViewportFloatSettingDescriptor, kViewportFloatSettingCount> kFloatSettings{{
@@ -197,6 +198,7 @@ const std::array<ViewportBoolSettingDescriptor, kViewportBoolSettingCount> kBool
         {ViewportBoolSettingId::TextureLockScale, ViewportSettingsSectionId::Texturing, "Texture Lock Scale", key("TextureLockScale"), false},
         {ViewportBoolSettingId::ShowCollisions, ViewportSettingsSectionId::Overlay, "Collisions", key("ShowCollisions"), true},
         {ViewportBoolSettingId::ShowDimensions, ViewportSettingsSectionId::Overlay, "Show Selection Dimensions", key("ShowDimensions"), true},
+        {ViewportBoolSettingId::WireframeOnShaded, ViewportSettingsSectionId::Shading, "Wireframe on Shaded", key("WireframeOnShaded"), false},
 }};
 
 std::string full_key(std::string_view suffix) {

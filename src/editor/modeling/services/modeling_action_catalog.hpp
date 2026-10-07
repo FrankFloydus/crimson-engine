@@ -7,6 +7,7 @@
 #pragma once
 
 #include "editor/modeling/modeling_types.hpp"
+#include "editor/modes/editor_mode_policy.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -84,6 +85,7 @@ struct ModelingActionAvailabilityRule {
     ModelingActiveSelectionKind required_active_kind =
         ModelingActiveSelectionKind::None;
     bool requires_single_object = false;
+    EditorModeSupport supported_editor_modes = EditorModeSupport::ObjectAndEdit;
 };
 
 /**
@@ -149,6 +151,10 @@ struct ModelingActionSet {
  */
 class ModelingActionCatalog {
 public:
+  [[nodiscard]] static bool
+  action_supports_editor_mode(std::string_view action_id, EditorMode mode);
+  [[nodiscard]] static bool
+  operation_supports_editor_mode(std::string_view operation_id, EditorMode mode);
   [[nodiscard]] static ModelingActionSet
   action_set_for(const ModelingSelectionSummary &summary,
                  const ModelingActionQuery &query);

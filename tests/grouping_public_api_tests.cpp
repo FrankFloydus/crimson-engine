@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "support/behavior_expect.hpp"
 #include "support/behavior_scenario.hpp"
+#include "support/command_observable_state.hpp"
 
 #include <gtest/gtest.h>
 
@@ -900,7 +901,7 @@ TEST(GroupingPublicApiTests, ObjectModeSceneSelectedGroupDeleteUsesSceneRoots) {
       .named_exists("Object Mode Decoy");
 }
 
-TEST(GroupingPublicApiTests, ComponentModeSceneSelectedGroupForcesEntityModeAndDeleteUsesSceneRoots) {
+TEST(GroupingPublicApiTests, EditModeGroupSelectionRequiresExplicitExitBeforeDeletingSceneRoots) {
   BehaviorScenario scenario = BehaviorScenario::new_project();
   given_box_at(scenario, "child", "Component Mode Child", {-1.0f, 0.0f, 0.0f});
   given_box_at(scenario, "sibling", "Component Mode Sibling",
@@ -908,7 +909,18 @@ TEST(GroupingPublicApiTests, ComponentModeSceneSelectedGroupForcesEntityModeAndD
   scenario.given().selected_aliases({"child", "sibling"}, "child");
   scenario.when().group_selection("group", "Component Mode Group");
 
-  scenario.given().selection_mode(QuaderSelectionMode::Face).selected("group");
+  scenario.given().edit_mode().selection_mode(QuaderSelectionMode::Face);
+  ASSERT_EQ(scenario.editor().mode().state().participants.size(), 2u);
+  const auto before_group_selection =
+      test::capture_command_observable_state(scenario.editor());
+  const auto rejected =
+      scenario.editor().selection().select_object(scenario.entity("group"));
+  EXPECT_FALSE(rejected.ok());
+  EXPECT_FALSE(rejected.changed());
+  EXPECT_EQ(test::capture_command_observable_state(scenario.editor()),
+            before_group_selection);
+
+  scenario.given().object_mode().selected("group");
   scenario.then().selection().mode(QuaderSelectionMode::Object);
 
   scenario.when().execute(quader_command::kDeleteSelection);
@@ -1247,11 +1259,12 @@ TEST(GroupingPublicApiTests,
 }
 
 TEST(GroupingPublicApiTests,
-     GroupHidesComponentSelectionAndUndoRedoRestoreEachSemanticState) {
+     GroupingRequiresObjectModeAndPreservesDormantComponentsThroughHistory) {
   BehaviorScenario scenario = BehaviorScenario::new_project();
   given_box_at(scenario, "first", "Component First", {-2.0f, 0.0f, 0.0f});
   given_box_at(scenario, "second", "Component Second", {2.0f, 0.0f, 0.0f});
   scenario.given().selected_aliases({"first", "second"}, "first");
+  scenario.given().edit_mode();
   ASSERT_TRUE(
       scenario.editor().selection().select_face(scenario.object("first"), 1).ok());
   QuaderSelectionSummary summary =
@@ -1259,6 +1272,16 @@ TEST(GroupingPublicApiTests,
   ASSERT_EQ(summary.mode, QuaderSelectionMode::Face);
   ASSERT_EQ(summary.selected_face_count, 1u);
 
+  const auto before_rejected_group =
+      test::capture_command_observable_state(scenario.editor());
+  const auto rejected =
+      scenario.editor().scene().group_selection("Rejected Component Group");
+  EXPECT_FALSE(rejected.ok());
+  EXPECT_FALSE(rejected.changed());
+  EXPECT_EQ(test::capture_command_observable_state(scenario.editor()),
+            before_rejected_group);
+
+  scenario.given().object_mode();
   scenario.when().group_selection("group", "Component Selection Group");
   scenario.then().command().ok_changed();
   summary = scenario.api().modeling().selection_summary();
@@ -1268,10 +1291,15 @@ TEST(GroupingPublicApiTests,
 
   scenario.when().undo();
   summary = scenario.api().modeling().selection_summary();
+  EXPECT_EQ(summary.mode, QuaderSelectionMode::Object);
+  EXPECT_EQ(summary.selected_face_count, 0u);
+  scenario.given().edit_mode();
+  summary = scenario.api().modeling().selection_summary();
   EXPECT_EQ(summary.mode, QuaderSelectionMode::Face);
   EXPECT_EQ(summary.selected_face_count, 1u);
   scenario.then().overlay().has_line(ViewportOverlayLayer::SelectedFaceEdge);
 
+  scenario.given().object_mode();
   scenario.when().redo();
   summary = scenario.api().modeling().selection_summary();
   EXPECT_EQ(summary.mode, QuaderSelectionMode::Object);

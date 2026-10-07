@@ -7,6 +7,7 @@
 #include "ui/qt_selection_toolbar.hpp"
 
 #include "api/quader_editor_api.hpp"
+#include "api/quader_command_ids.hpp"
 #include "ui/qt_multiresolution_icon.hpp"
 #include "ui/qt_toolbar_button_presentation.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
@@ -15,10 +16,12 @@
 
 #include <QAction>
 #include <QActionGroup>
+#include <QComboBox>
 #include <QIcon>
 #include <QLabel>
 #include <QSignalBlocker>
 #include <QSize>
+#include <QSizePolicy>
 #include <QStyle>
 #include <QToolButton>
 
@@ -70,6 +73,29 @@ QtSelectionToolbar::QtSelectionToolbar(QWidget *parent) : QToolBar(parent) {
   setIconSize(QSize(32, 32));
   setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
 
+  editor_mode_combo_ = new QComboBox(this);
+  editor_mode_combo_->setObjectName(QStringLiteral("editorModeCombo"));
+  editor_mode_combo_->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+  // Keep the current native contents width as the toolbar minimum. Qt refreshes
+  // sizeHint for font/label changes but may retain an earlier minimumSizeHint.
+  editor_mode_combo_->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+  editor_mode_combo_->setFixedHeight(kSelectionModeButtonHeight);
+  editor_mode_combo_->addItem(QStringLiteral("Object Mode"),
+                             static_cast<int>(QuaderEditorMode::Object));
+  editor_mode_combo_->addItem(QStringLiteral("Edit Mode"),
+                             static_cast<int>(QuaderEditorMode::Edit));
+  editor_mode_tooltip_ = QStringLiteral("Editor Mode");
+  editor_mode_combo_->setAccessibleName(editor_mode_tooltip_);
+  addWidget(editor_mode_combo_);
+  addSeparator();
+  QObject::connect(editor_mode_combo_, &QComboBox::activated, this,
+                   [this](int index) {
+                     if (editor_mode_requested_) {
+                       editor_mode_requested_(static_cast<QuaderEditorMode>(
+                           editor_mode_combo_->itemData(index).toInt()));
+                     }
+                   });
+
   selection_label_ = new QLabel(QStringLiteral("Select:"), this);
   selection_label_->setObjectName(QStringLiteral("selectionToolbarLabel"));
   addWidget(selection_label_);
@@ -84,6 +110,8 @@ QtSelectionToolbar::QtSelectionToolbar(QWidget *parent) : QToolBar(parent) {
         QString::fromUtf8(spec.fallback.data()));
     action->setObjectName(QString::fromUtf8(spec.object_name));
     action->setCheckable(true);
+    action->setEnabled(spec.mode == QuaderSelectionMode::Object ||
+                       spec.mode == QuaderSelectionMode::Group);
     action_group->addAction(action);
     QObject::connect(action, &QAction::triggered, this,
                      [this, mode = spec.mode](bool checked) {
@@ -119,6 +147,10 @@ void QtSelectionToolbar::apply_ui_scale(const QtUiScaleMetrics &metrics) {
   }
 
   const int scaled_button_height = metrics.px(kSelectionModeButtonHeight);
+  if (editor_mode_combo_->minimumHeight() != scaled_button_height ||
+      editor_mode_combo_->maximumHeight() != scaled_button_height) {
+    editor_mode_combo_->setFixedHeight(scaled_button_height);
+  }
   for (const ModeAction &entry : mode_actions_) {
     apply_native_toolbar_button_face_ui_scale(*this, *entry.action, metrics);
     if (auto *button =
@@ -137,6 +169,13 @@ void QtSelectionToolbar::set_localization(
                                 "Selection"));
   selection_label_->setText(localized_text(
       localization, "ui.toolbar.selection.label", "Select:"));
+  editor_mode_combo_->setItemText(0, localized_text(
+      localization, "command.editor.mode.object", "Object Mode"));
+  editor_mode_combo_->setItemText(1, localized_text(
+      localization, "command.editor.mode.edit", "Edit Mode"));
+  editor_mode_tooltip_ = localized_text(
+      localization, "ui.toolbar.editor_mode", "Editor Mode");
+  editor_mode_combo_->setAccessibleName(editor_mode_tooltip_);
   for (const ModeAction &entry : mode_actions_) {
     const QString text = localized_text(localization, entry.localization_key,
                                         entry.fallback);
@@ -148,12 +187,39 @@ void QtSelectionToolbar::set_localization(
 
 void QtSelectionToolbar::synchronize(const QuaderEditorApi &editor,
                                      QuaderSelectionMode mode, bool force) {
-  if (!force && synchronization_valid_ && presented_mode_ == mode) {
+  const auto mode_revision = editor.mode().revision();
+  const auto keybindings_revision = editor.commands().keybindings_revision();
+  if (!force && synchronization_valid_ && presented_editor_ == &editor &&
+      presented_mode_ == mode &&
+      presented_editor_mode_revision_ == mode_revision &&
+      presented_keybindings_revision_ == keybindings_revision) {
     return;
   }
 
   set_selection_mode(mode);
+  const bool edit_mode = editor.mode().current() == QuaderEditorMode::Edit;
+  const int editor_mode_index = edit_mode ? 1 : 0;
+  if (editor_mode_combo_->currentIndex() != editor_mode_index) {
+    const QSignalBlocker blocker(editor_mode_combo_);
+    editor_mode_combo_->setCurrentIndex(editor_mode_index);
+  }
+  const std::string mode_shortcut = editor.commands().shortcut_for(
+      quader_command::kEditorModeToggleEdit.string());
+  QString mode_tooltip = editor_mode_tooltip_;
+  if (!mode_shortcut.empty()) {
+    mode_tooltip.append(QStringLiteral(" [%1]").arg(
+        QString::fromStdString(mode_shortcut)));
+  }
+  if (editor_mode_combo_->toolTip() != mode_tooltip) {
+    editor_mode_combo_->setToolTip(mode_tooltip);
+  }
   for (const ModeAction &entry : mode_actions_) {
+    const bool component_mode = entry.mode == QuaderSelectionMode::Vertex ||
+        entry.mode == QuaderSelectionMode::Edge ||
+        entry.mode == QuaderSelectionMode::Face;
+    if (entry.action->isEnabled() != (component_mode == edit_mode)) {
+      entry.action->setEnabled(component_mode == edit_mode);
+    }
     const std::string target_id =
         editor.commands().keybinding_target_id_for_selection_mode(entry.mode);
     const std::string shortcut = editor.commands().shortcut_for(target_id);
@@ -166,6 +232,9 @@ void QtSelectionToolbar::synchronize(const QuaderEditorApi &editor,
       entry.action->setToolTip(tooltip);
     }
   }
+  presented_editor_ = &editor;
+  presented_editor_mode_revision_ = mode_revision;
+  presented_keybindings_revision_ = keybindings_revision;
   synchronization_valid_ = true;
 }
 
@@ -173,14 +242,21 @@ void QtSelectionToolbar::set_selection_mode(QuaderSelectionMode mode) {
   presented_mode_ = mode;
   synchronization_valid_ = false;
   for (const ModeAction &entry : mode_actions_) {
-    const QSignalBlocker blocker(entry.action);
-    entry.action->setChecked(entry.mode == mode);
+    if (entry.action->isChecked() != (entry.mode == mode)) {
+      const QSignalBlocker blocker(entry.action);
+      entry.action->setChecked(entry.mode == mode);
+    }
   }
 }
 
 void QtSelectionToolbar::set_mode_requested_callback(
     std::function<void(QuaderSelectionMode)> callback) {
   mode_requested_ = std::move(callback);
+}
+
+void QtSelectionToolbar::set_editor_mode_requested_callback(
+    std::function<void(QuaderEditorMode)> callback) {
+  editor_mode_requested_ = std::move(callback);
 }
 
 } // namespace quader

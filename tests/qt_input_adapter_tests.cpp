@@ -1591,6 +1591,8 @@ TEST(QtViewportSurfaceInputTests,
   expect_cursor(quader::QtApplicationCursorVariant::SelectionAdd);
 
   const auto active_tool_revision = editor.tools().active_tool_revision();
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_EQ(editor.tools().active_tool_revision(), active_tool_revision);
   const auto history_after_mode_change = editor.history().snapshot();
@@ -1625,6 +1627,11 @@ TEST(QtViewportSurfaceInputTests,
   quader::QuaderEditorApi editor(
       quader::QuaderApiSessionInternalAccess::from_scene_session(session));
   ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto box = editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}});
+  ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Extrude).ok());
   const quader::ViewportToolState state{
       .active_tool = quader::ViewportToolId::Extrude,
@@ -1725,6 +1732,8 @@ TEST(QtViewportSurfaceInputTests,
     const auto other = editor.modeling().create_box(
         {.min = {3.0F, -1.0F, -1.0F}, .max = {5.0F, 1.0F, 1.0F}});
     ASSERT_TRUE(other.ok()) << other.error_message();
+    ASSERT_TRUE(editor.selection().select_objects({box.value(), other.value()}).ok());
+    ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(editor.selection().clear().ok());
     ASSERT_TRUE(editor.main_viewport().set_view(quader::ViewportView::Front).ok());
 
@@ -1909,6 +1918,8 @@ TEST(QtViewportSurfaceInputTests,
                 std::move(document)), {.name = "Peel completion source"});
       }();
       ASSERT_TRUE(created.ok()) << created.error_message();
+      ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+      ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
       if (kind == Preview::Bevel) {
         ASSERT_TRUE(editor.selection().select_edge(created.value(), 1, 2).ok());
       } else if (kind == Preview::UvPeel) {
@@ -2141,6 +2152,11 @@ TEST(QtViewportSurfaceInputTests,
   quader::QuaderEditorApi editor(
       quader::QuaderApiSessionInternalAccess::from_scene_session(session));
   ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto box = editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}});
+  ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
   quader::QtViewportPanel panel;
   panel.attach_workspace(session.viewport_workspace());
@@ -3065,6 +3081,8 @@ TEST(QtViewportSurfaceInputTests,
       ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
       ASSERT_TRUE(editor.main_viewport().set_view(quader::ViewportView::Back).ok());
       context.camera.focus_origin(5);
+      ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+      ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
       ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::InsertEdgeLoop).ok());
       context.session.history().clear();
       ASSERT_TRUE(editor.scene().rename(box.value().entity, "Redo cancel phase loop box").ok());
@@ -3152,6 +3170,7 @@ TEST(QtViewportSurfaceInputTests,
           {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Other pane knife box");
       ASSERT_TRUE(box.ok());
       ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+      ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
       ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Knife).ok());
       if (pending == 1) {
         const quader::ModelingToolRayEvent event{
@@ -3349,6 +3368,8 @@ TEST(QtViewportSurfaceInputTests,
   const auto box = context.editor.modeling().create_box(
       {.min = {-1, -1, -1}, .max = {1, 1, 1}});
   ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(context.editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(context.editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(context.editor.selection().select_face(box.value(), 1).ok());
   context.session.history().clear();
   ASSERT_TRUE(context.editor.tools().activate(quader::ViewportToolId::Extrude).ok());
@@ -3536,6 +3557,8 @@ TEST(QtViewportSurfaceInputTests,
   ASSERT_TRUE(box.ok()) << box.error_message();
   ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
   ASSERT_TRUE(editor.main_viewport().set_view(quader::ViewportView::Back).ok());
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::InsertEdgeLoop).ok());
   session.history().clear();
 
@@ -3682,8 +3705,11 @@ TEST(QtViewportSurfaceInputTests,
   QApplication application(argc, argv);
   NavigationPanelTestContext context;
   ASSERT_NE(context.surface, nullptr);
-  ASSERT_TRUE(context.editor.modeling().create_box(
-      {.min = {0.5f, -2, -1}, .max = {4, 2, 1}}, "Stationary pick input box").ok());
+  const auto box = context.editor.modeling().create_box(
+      {.min = {0.5f, -2, -1}, .max = {4, 2, 1}}, "Stationary pick input box");
+  ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(context.editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(context.editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(context.editor.tools().activate(quader::ViewportToolId::Select).ok());
   ASSERT_TRUE(context.editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
   ASSERT_TRUE(context.editor.selection().clear().ok());
@@ -3740,6 +3766,8 @@ TEST(QtViewportSurfaceInputTests,
             {.min = {-4, -4, -4}, .max = {4, 4, 4}}, "Screen pick input box");
         ASSERT_TRUE(box.ok()) << box.error_message();
         ASSERT_TRUE(context.editor.tools().activate(quader::ViewportToolId::Select).ok());
+        ASSERT_TRUE(context.editor.selection().select_object(box.value()).ok());
+        ASSERT_TRUE(context.editor.mode().set(quader::QuaderEditorMode::Edit).ok());
         ASSERT_TRUE(context.editor.selection().set_mode(mode).ok());
         ASSERT_TRUE(context.editor.selection().clear().ok());
         ASSERT_TRUE(context.editor.selection().clear_hover().ok());
@@ -3817,6 +3845,8 @@ TEST(QtViewportSurfaceInputTests,
       constexpr auto kPaneId = quader::ViewportPaneId::Top;
       ASSERT_TRUE(editor.viewports().set_view(kPaneId, quader::ViewportView::Perspective).ok());
       ASSERT_TRUE(editor.viewports().focus_pane(kPaneId).ok());
+      ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+      ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
       ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::InsertEdgeLoop).ok());
       ASSERT_TRUE(editor.viewports().set_grid_preset(5).ok());
       ASSERT_FLOAT_EQ(quader::viewport_grid_world_size_for_preset(5), 0.5f);
@@ -4589,7 +4619,8 @@ TEST(QtViewportSurfaceInputTests,
       "en-US"));
 
   for (const auto mode : {quader::QuaderSelectionMode::Object,
-                          quader::QuaderSelectionMode::Vertex}) {
+                          quader::QuaderSelectionMode::Vertex,
+                          quader::QuaderSelectionMode::Face}) {
     SCOPED_TRACE(static_cast<int>(mode));
     quader::SceneSession session;
     quader::QuaderEditorApi editor(
@@ -4600,6 +4631,10 @@ TEST(QtViewportSurfaceInputTests,
     ASSERT_TRUE(box.ok()) << box.error_message();
     ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Select).ok());
     ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+    if (mode != quader::QuaderSelectionMode::Object) {
+      ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+      ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+    }
     ASSERT_TRUE(editor.selection().set_mode(mode).ok());
     quader::QVec3 target{0, 0, 1};
     if (mode == quader::QuaderSelectionMode::Vertex) {
@@ -4610,6 +4645,9 @@ TEST(QtViewportSurfaceInputTests,
       const auto &vertex = mesh->authored_polygon_document->vertices.front();
       target = vertex.position;
       ASSERT_TRUE(editor.selection().select_vertex(box.value(), vertex.id).ok());
+    } else if (mode == quader::QuaderSelectionMode::Face) {
+      ASSERT_TRUE(editor.selection().select_all().ok());
+      ASSERT_EQ(editor.selection().summary().selected_face_count, 6u);
     }
     session.history().clear();
 
@@ -4648,7 +4686,8 @@ TEST(QtViewportSurfaceInputTests,
       send_visible_viewport_event(surface, &event);
     };
     // Observe the actual presenter and close its nested event loop if a menu
-    // opens. A subsequent plain click proves that the presenter is enabled.
+    // opens. Face material transfer provides a plain-click positive control;
+    // generic Object/Vertex operations are intentionally presented through Q.
     const auto release_and_count_menus = [&]() {
       int opened_menus = 0;
       QTimer popup_observer;
@@ -4709,7 +4748,8 @@ TEST(QtViewportSurfaceInputTests,
     send_visible_viewport_event(surface, &focus);
     right_button(QEvent::MouseButtonPress);
     process_input();
-    EXPECT_EQ(release_and_count_menus(), 1);
+    EXPECT_EQ(release_and_count_menus(),
+              mode == quader::QuaderSelectionMode::Face ? 1 : 0);
   }
 }
 
@@ -4735,6 +4775,10 @@ TEST(QtViewportSurfaceInputTests,
         {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Centered navigation target");
     ASSERT_TRUE(box.ok()) << box.error_message();
     ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Select).ok());
+    if (mode != quader::QuaderSelectionMode::Object) {
+      ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+      ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+    }
     ASSERT_TRUE(editor.selection().set_mode(mode).ok());
     ASSERT_TRUE(editor.selection().clear().ok());
     ASSERT_TRUE(editor.selection().clear_hover().ok());
@@ -4776,10 +4820,13 @@ TEST(QtViewportSurfaceInputTests,
       EXPECT_EQ(editor.selection().hover_summary().target.kind,
                 quader::QuaderActiveSelectionKind::None);
       EXPECT_FALSE(session.selection().resolved_hover_target().has_value());
-      // Component candidates draw persistent cyan source wire even when no
-      // individual face, edge, or vertex remains under the restored cursor.
-      EXPECT_LE(session.modeling().selection_hover_summary().candidate_object_id,
-                0);
+      const auto edit = editor.mode().state();
+      if (mode == quader::QuaderSelectionMode::Object) {
+        EXPECT_TRUE(edit.participants.empty());
+      } else {
+        ASSERT_EQ(edit.participants.size(), 1u);
+        EXPECT_EQ(edit.participants.front().id, box.value().entity);
+      }
     };
     QEnterEvent enter(original_local, original_local,
                       original_local + QPointF{100, 100});
@@ -4842,8 +4889,10 @@ TEST(QtViewportSurfaceInputTests,
       EXPECT_EQ(editor.selection().hover_summary().target.object_id,
                 box.value().modeling_object_id);
     } else {
-      EXPECT_EQ(session.modeling().selection_hover_summary().candidate_object_id,
+      EXPECT_EQ(editor.selection().hover_summary().target.object_id,
                 box.value().modeling_object_id);
+      ASSERT_EQ(editor.mode().state().participants.size(), 1u);
+      EXPECT_EQ(editor.mode().state().participants.front().id, box.value().entity);
     }
     EXPECT_FALSE(editor.selection().summary().has_selection);
     EXPECT_EQ(editor.selection().summary().selection_revision,
@@ -4874,7 +4923,8 @@ TEST(QtViewportSurfaceInputTests,
     ASSERT_TRUE(slab.ok()) << slab.error_message();
     ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Select).ok());
     ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
-    ASSERT_TRUE(editor.selection().clear().ok());
+    ASSERT_TRUE(editor.selection().select_object(slab.value()).ok());
+    ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
     ASSERT_TRUE(context.camera.restore_perspective_pose(
         {.eye = {0, 0, 12}, .target = {0, 0, 0}, .up = {0, 1, 0}}));
@@ -4914,8 +4964,8 @@ TEST(QtViewportSurfaceInputTests,
     const QPointF end = crossing ? upper_left : lower_right;
     context.mouse(QEvent::MouseMove, front_local, Qt::NoButton, Qt::NoButton);
     context.process();
-    ASSERT_EQ(context.session.modeling().selection_hover_summary().candidate_object_id,
-              slab.value().modeling_object_id);
+    ASSERT_EQ(editor.mode().state().participants.size(), 1u);
+    ASSERT_EQ(editor.mode().state().participants.front().id, slab.value().entity);
     context.session.history().clear();
     const auto content_revision = context.session.modeling().content_revision();
     const auto asset_revision = context.session.assets().revision();
@@ -4946,8 +4996,8 @@ TEST(QtViewportSurfaceInputTests,
       EXPECT_EQ(editor.selection().summary().selected_vertex_count, 2u);
     };
     expect_released_selection();
-    EXPECT_EQ(context.session.modeling().selection_hover_summary().candidate_object_id,
-              slab.value().modeling_object_id);
+    ASSERT_EQ(editor.mode().state().participants.size(), 1u);
+    EXPECT_EQ(editor.mode().state().participants.front().id, slab.value().entity);
     EXPECT_EQ(context.session.history().undo_count(), 0u);
     const auto selection_revision = editor.selection().summary().selection_revision;
     context.process();
@@ -4956,6 +5006,363 @@ TEST(QtViewportSurfaceInputTests,
     EXPECT_EQ(context.session.history().undo_count(), 0u);
     EXPECT_EQ(context.session.modeling().content_revision(), content_revision);
     EXPECT_EQ(context.session.assets().revision(), asset_revision);
+
+    // Crossing the wall after release must not admit it into the edit context.
+    context.mouse(QEvent::MouseMove, {40, 40}, Qt::NoButton, Qt::NoButton);
+    context.process();
+    expect_released_selection();
+    ASSERT_EQ(editor.mode().state().participants.size(), 1u);
+    EXPECT_EQ(editor.mode().state().participants.front().id, slab.value().entity);
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     EditModeToggleUsesPhysicalPressAndCanonicalRemapping) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-edit-mode-toggle-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  for (const bool remapped : {false, true}) {
+    SCOPED_TRACE(remapped);
+    NavigationPanelTestContext context;
+    auto &editor = context.editor;
+    const auto box = editor.modeling().create_box(
+        {.min = {-1, -1, -1}, .max = {1, 1, 1}});
+    ASSERT_TRUE(box.ok());
+    ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+    if (remapped) {
+      ASSERT_TRUE(editor.commands().set_shortcut(
+          quader::quader_command::kEditorModeToggleEdit, "F18").ok());
+      context.key(Qt::Key_Tab);
+      EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Object);
+    }
+    context.session.history().clear();
+    context.process();
+    const int key = remapped ? Qt::Key_F18 : Qt::Key_Tab;
+    const auto send = [&](QEvent::Type type, bool repeat = false) {
+      QKeyEvent event(type, key, Qt::NoModifier, {}, repeat);
+      send_visible_viewport_event(context.surface, &event);
+      context.process();
+    };
+    send(QEvent::KeyPress);
+    ASSERT_EQ(editor.mode().current(), quader::QuaderEditorMode::Edit);
+    ASSERT_EQ(editor.mode().state().participants.size(), 1u);
+    EXPECT_EQ(editor.mode().state().participants.front().id, box.value().entity);
+    const auto entered_generation = editor.mode().generation();
+    for (int repeat = 0; repeat < 3; ++repeat) {
+      send(QEvent::KeyRelease, true);
+      send(QEvent::KeyPress, true);
+    }
+    send(QEvent::KeyRelease);
+    EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Edit);
+    EXPECT_EQ(editor.mode().generation(), entered_generation);
+    context.process();
+    EXPECT_EQ(editor.mode().generation(), entered_generation);
+    send(QEvent::KeyPress);
+    ASSERT_EQ(editor.mode().current(), quader::QuaderEditorMode::Object);
+    const auto exited_generation = editor.mode().generation();
+    EXPECT_GT(exited_generation, entered_generation);
+    send(QEvent::KeyRelease);
+    EXPECT_EQ(editor.mode().generation(), exited_generation);
+    EXPECT_EQ(context.session.history().undo_count(), 0u);
+    ASSERT_TRUE(editor.commands().remove_shortcut(
+        quader::quader_command::kEditorModeToggleEdit).ok());
+    send(QEvent::KeyPress);
+    send(QEvent::KeyRelease);
+    EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Object);
+    EXPECT_EQ(editor.mode().generation(), exited_generation);
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     NativeAndComposedHostsKeepTabInTheCanonicalInputQueue) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-mode-tab-host-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  for (const bool composed : {false, true}) {
+    SCOPED_TRACE(composed);
+    QWidget window;
+    window.resize(400, 200);
+    QWidget host(&window);
+    host.setGeometry(0, 0, 200, 200);
+    host.setFocusPolicy(Qt::StrongFocus);
+    QPushButton next(QStringLiteral("Next"), &window);
+    next.setGeometry(210, 0, 180, 32);
+    QWidget::setTabOrder(&host, &next);
+    quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective, composed);
+    surface.set_visible_host(host);
+    window.show();
+    window.activateWindow();
+    host.setFocus(Qt::OtherFocusReason);
+    QCoreApplication::processEvents();
+    ASSERT_EQ(QApplication::focusWidget(), &host);
+    QKeyEvent press(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+    QApplication::sendEvent(&host, &press);
+    const auto frame = surface.take_input_frame(0.0f, false);
+    ASSERT_EQ(frame.input.pressed_input_chords.size(), 1u);
+    EXPECT_EQ(frame.input.pressed_input_chords.front().key, QuaderKeyCode::Tab);
+    EXPECT_EQ(QApplication::focusWidget(), &host);
+    QKeyEvent repeat(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier, {}, true);
+    QApplication::sendEvent(&host, &repeat);
+    EXPECT_TRUE(surface.take_input_frame(0.0f, false).input.pressed_input_chords.empty());
+    QKeyEvent release(QEvent::KeyRelease, Qt::Key_Tab, Qt::NoModifier);
+    QApplication::sendEvent(&host, &release);
+    const auto released = surface.take_input_frame(0.0f, false);
+    ASSERT_EQ(released.input.released_input_chords.size(), 1u);
+    EXPECT_EQ(released.input.released_input_chords.front().key, QuaderKeyCode::Tab);
+    EXPECT_TRUE(released.input.active_input_chords.empty());
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     ComponentShortcutsRequireExplicitEditEntryAndCannotExitIt) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-component-mode-shortcut-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  NavigationPanelTestContext context;
+  auto &editor = context.editor;
+  const auto box = editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}});
+  ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  const auto generation = editor.mode().generation();
+  for (const int key : {Qt::Key_1, Qt::Key_2, Qt::Key_3}) {
+    context.key(key);
+    EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Object);
+    EXPECT_EQ(editor.mode().generation(), generation);
+    EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
+    EXPECT_EQ(editor.selection().summary().selected_object_count, 1u);
+  }
+  context.key(Qt::Key_Tab);
+  ASSERT_EQ(editor.mode().current(), quader::QuaderEditorMode::Edit);
+  for (const auto [key, mode] : {
+           std::pair{Qt::Key_1, quader::QuaderSelectionMode::Vertex},
+           std::pair{Qt::Key_2, quader::QuaderSelectionMode::Edge},
+           std::pair{Qt::Key_3, quader::QuaderSelectionMode::Face}}) {
+    context.key(key);
+    EXPECT_EQ(editor.selection().summary().mode, mode);
+  }
+  for (const int key : {Qt::Key_4, Qt::Key_5}) {
+    context.key(key);
+    EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Edit);
+    EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Face);
+    ASSERT_EQ(editor.mode().state().participants.size(), 1u);
+    EXPECT_EQ(editor.mode().state().participants.front().id, box.value().entity);
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     EditRoundTripAbandonsPendingMarqueeEvenWhenComponentKindIsUnchanged) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-edit-generation-marquee-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  NavigationPanelTestContext context;
+  auto &editor = context.editor;
+  const auto box = editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}});
+  ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Select).ok());
+  ASSERT_TRUE(editor.main_viewport().set_view(quader::ViewportView::Back).ok());
+  context.camera.focus_origin(8);
+  auto settings = quader::ViewportSettings::defaults();
+  (void)settings.set_bool_value(quader::ViewportBoolSettingId::BackfaceSelection, true);
+  (void)context.session.viewport_workspace().update_control_defaults(settings, 1u);
+  context.process();
+  context.session.history().clear();
+  context.mouse(QEvent::MouseButtonPress, {100, 100}, Qt::LeftButton, Qt::LeftButton);
+  context.process();
+  context.mouse(QEvent::MouseMove, {700, 500}, Qt::NoButton, Qt::LeftButton);
+  context.process();
+  ASSERT_EQ(context.panel.operation_input_context().selection_gesture,
+            quader::QuaderInputSelectionGesture::Box);
+  const auto generation = editor.mode().generation();
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+  ASSERT_GT(editor.mode().generation(), generation);
+  ASSERT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Vertex);
+  context.mouse(QEvent::MouseButtonRelease, {700, 500}, Qt::LeftButton, Qt::NoButton);
+  context.process();
+  EXPECT_EQ(editor.selection().summary().selected_vertex_count, 0u);
+  EXPECT_EQ(context.session.history().undo_count(), 0u);
+  ASSERT_EQ(editor.mode().state().participants.size(), 1u);
+  EXPECT_EQ(editor.mode().state().participants.front().id, box.value().entity);
+
+  context.mouse(QEvent::MouseButtonPress, {100, 100}, Qt::LeftButton, Qt::LeftButton);
+  context.process();
+  context.mouse(QEvent::MouseMove, {700, 500}, Qt::NoButton, Qt::LeftButton);
+  context.process();
+  context.mouse(QEvent::MouseButtonRelease, {700, 500}, Qt::LeftButton, Qt::NoButton);
+  context.process();
+  EXPECT_EQ(editor.selection().summary().selected_vertex_count, 8u);
+}
+
+TEST(QtViewportSurfaceInputTests,
+     QueuedPointerPacketsAreFencedAtTheirNativeEditContext) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-queued-edit-context-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  for (const bool lasso : {false, true}) {
+    for (const auto kind : {quader::QuaderSelectionMode::Vertex,
+                            quader::QuaderSelectionMode::Edge,
+                            quader::QuaderSelectionMode::Face}) {
+      SCOPED_TRACE(lasso);
+      SCOPED_TRACE(static_cast<int>(kind));
+      NavigationPanelTestContext context;
+      auto &editor = context.editor;
+      const auto box = editor.modeling().create_box(
+          {.min = {-1, -1, -1}, .max = {1, 1, 1}});
+      ASSERT_TRUE(box.ok());
+      ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+      ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+      ASSERT_TRUE(editor.selection().set_mode(kind).ok());
+      ASSERT_TRUE(editor.tools().activate(lasso ? quader::ViewportToolId::LassoSelect
+                                               : quader::ViewportToolId::Select).ok());
+      ASSERT_TRUE(editor.main_viewport().set_view(quader::ViewportView::Back).ok());
+      context.camera.focus_origin(8);
+      auto settings = quader::ViewportSettings::defaults();
+      (void)settings.set_bool_value(quader::ViewportBoolSettingId::BackfaceSelection, true);
+      (void)context.session.viewport_workspace().update_control_defaults(settings, 1u);
+      context.process();
+      context.session.history().clear();
+      const auto queue_marquee = [&]() {
+        context.mouse(QEvent::MouseButtonPress, {100, 100}, Qt::LeftButton, Qt::LeftButton);
+        context.mouse(QEvent::MouseMove, {700, 100}, Qt::NoButton, Qt::LeftButton);
+        context.mouse(QEvent::MouseMove, {700, 500}, Qt::NoButton, Qt::LeftButton);
+        if (lasso) {
+          context.mouse(QEvent::MouseMove, {100, 500}, Qt::NoButton, Qt::LeftButton);
+        }
+        context.mouse(QEvent::MouseButtonRelease, lasso ? QPointF{100, 100} : QPointF{700, 500},
+                      Qt::LeftButton, Qt::NoButton);
+      };
+      const auto selected_count = [&]() {
+        const auto summary = editor.selection().summary();
+        return kind == quader::QuaderSelectionMode::Vertex ? summary.selected_vertex_count
+             : kind == quader::QuaderSelectionMode::Edge ? summary.selected_edge_count
+                                                        : summary.selected_face_count;
+      };
+
+      // Neither press nor release has reached an interaction frame yet.
+      queue_marquee();
+      ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
+      ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+      context.process();
+      EXPECT_EQ(selected_count(), 0u);
+      EXPECT_EQ(context.session.history().undo_count(), 0u);
+      EXPECT_EQ(context.panel.operation_input_context().selection_gesture,
+                quader::QuaderInputSelectionGesture::None);
+      ASSERT_EQ(editor.mode().state().participants.size(), 1u);
+      EXPECT_EQ(editor.mode().state().participants.front().id, box.value().entity);
+
+      // Events captured after a transition remain usable without an idle tick.
+      ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
+      ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+      queue_marquee();
+      context.process();
+      EXPECT_EQ(selected_count(), kind == quader::QuaderSelectionMode::Vertex ? 8u
+                                 : kind == quader::QuaderSelectionMode::Edge ? 12u : 6u);
+    }
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     QueuedTabTransitionCannotReplayPointerPacketsInItsNewEditSet) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-queued-tab-pointer-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  for (const bool key_first : {false, true}) {
+    SCOPED_TRACE(key_first);
+    NavigationPanelTestContext context;
+    auto &editor = context.editor;
+    const auto box = editor.modeling().create_box(
+        {.min = {-1, -1, -1}, .max = {1, 1, 1}});
+    ASSERT_TRUE(box.ok());
+    ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+    ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Select).ok());
+    ASSERT_TRUE(editor.main_viewport().set_view(quader::ViewportView::Back).ok());
+    context.camera.focus_origin(8);
+    auto settings = quader::ViewportSettings::defaults();
+    (void)settings.set_bool_value(quader::ViewportBoolSettingId::BackfaceSelection, true);
+    (void)context.session.viewport_workspace().update_control_defaults(settings, 1u);
+    context.process();
+    context.session.history().clear();
+    if (key_first) {
+      ASSERT_TRUE(editor.commands().set_shortcut(
+          quader::quader_command::kSelectAll, "LeftMouse").ok());
+    }
+    const auto queue_key = [&]() {
+      QKeyEvent press(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+      send_visible_viewport_event(context.surface, &press);
+    };
+    if (key_first) queue_key();
+    context.mouse(QEvent::MouseButtonPress, {100, 100}, Qt::LeftButton, Qt::LeftButton);
+    context.mouse(QEvent::MouseMove, {700, 500}, Qt::NoButton, Qt::LeftButton);
+    context.mouse(QEvent::MouseButtonRelease, {700, 500}, Qt::LeftButton, Qt::NoButton);
+    if (!key_first) queue_key();
+    context.process();
+    ASSERT_EQ(editor.mode().current(), quader::QuaderEditorMode::Edit);
+    EXPECT_EQ(editor.selection().summary().selected_vertex_count, 0u);
+    EXPECT_EQ(context.session.history().undo_count(), 0u);
+    QKeyEvent repeat(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier, {}, true);
+    send_visible_viewport_event(context.surface, &repeat);
+    context.process();
+    EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Edit);
+    QKeyEvent release(QEvent::KeyRelease, Qt::Key_Tab, Qt::NoModifier);
+    send_visible_viewport_event(context.surface, &release);
+    context.process();
+    context.mouse(QEvent::MouseButtonPress, {100, 100}, Qt::LeftButton, Qt::LeftButton);
+    context.mouse(QEvent::MouseMove, {700, 500}, Qt::NoButton, Qt::LeftButton);
+    context.mouse(QEvent::MouseButtonRelease, {700, 500}, Qt::LeftButton, Qt::NoButton);
+    context.process();
+    EXPECT_EQ(editor.selection().summary().selected_vertex_count, 8u);
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     NativePointerContextIncludesTheSceneBindingAndPreservesKeyboardHolds) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-native-pointer-context-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  for (const bool composed : {false, true}) {
+    SCOPED_TRACE(composed);
+    quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective, composed);
+    quader::QtViewportInputContext input_context{.binding_generation = 1u, .edit_generation = 3u};
+    surface.set_input_context_provider([&]() { return input_context; });
+    QKeyEvent press(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+    QApplication::sendEvent(&surface, &press);
+    QMouseEvent pointer_press(QEvent::MouseButtonPress, QPointF{10, 10}, QPointF{10, 10},
+                             Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&surface, &pointer_press);
+    ++input_context.binding_generation;
+    const auto frame = surface.take_input_frame(0.0f, false);
+    ASSERT_TRUE(frame.context.has_value());
+    EXPECT_EQ(*frame.context, input_context);
+    EXPECT_FALSE(frame.left_pressed);
+    EXPECT_FALSE(frame.left_down);
+    EXPECT_TRUE(frame.input.pointer_pressed_edges.empty());
+    ASSERT_EQ(frame.input.active_input_chords.size(), 1u);
+    EXPECT_EQ(frame.input.active_input_chords.front().key, QuaderKeyCode::Tab);
+    ASSERT_EQ(frame.input.pressed_input_chords.size(), 1u);
+    EXPECT_EQ(frame.input.pressed_input_chords.front().key, QuaderKeyCode::Tab);
+    QMouseEvent pointer_release(QEvent::MouseButtonRelease, QPointF{20, 20}, QPointF{20, 20},
+                               Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(&surface, &pointer_release);
+    EXPECT_FALSE(surface.take_input_frame(0.0f, false).left_released);
   }
 }
 
@@ -7366,6 +7773,8 @@ TEST(QtViewportSurfaceInputTests,
   ASSERT_TRUE(box.ok()) << box.error_message();
   ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
   ASSERT_TRUE(editor.main_viewport().set_view(quader::ViewportView::Back).ok());
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Knife).ok());
 
   quader::ViewportSettings settings = quader::ViewportSettings::defaults();

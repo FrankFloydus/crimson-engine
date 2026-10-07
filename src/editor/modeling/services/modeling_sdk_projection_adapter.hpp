@@ -39,6 +39,8 @@ struct RectangleSelectionState;
 namespace quader {
 
 class AssetRegistry;
+class EditorModeService;
+struct EditorModeSnapshot;
 class ModelingMeshSyncService;
 class ModelingSelectionService;
 class SceneDocument;
@@ -298,6 +300,12 @@ public:
   ModelingSdkProjectionAdapter(const ModelingSdkProjectionAdapter &) = delete;
   ModelingSdkProjectionAdapter &
   operator=(const ModelingSdkProjectionAdapter &) = delete;
+
+  /// Binds the scene-owned mode context without introducing another membership owner.
+  void bind_editor_mode_service(EditorModeService *service) noexcept;
+  [[nodiscard]] ModelingCommandResult apply_editor_mode_context(
+      const EditorModeSnapshot &context,
+      std::span<const EntityId> first_admission_entities = {});
 
   void set_modeling_object_world_transform_resolver(
       std::function<std::optional<QMat4>(int)> resolver);

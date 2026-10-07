@@ -7,6 +7,7 @@
 #include "api/quader_editor_api.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/modes/editor_mode_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "math/glm_bridge.hpp"
 #include "support/command_observable_state.hpp"
@@ -189,6 +190,13 @@ protected:
     return count;
   }
 
+  void enter_edit_for_all_meshes() {
+    ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Object).ok());
+    ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Object).ok());
+    ASSERT_TRUE(editor_.selection().select_all().ok());
+    ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
+  }
+
   void split_positive_x_face(bool extract) {
     const auto document = topology(source_);
     const auto face = std::ranges::find_if(document.faces, [&](const auto &candidate) {
@@ -197,6 +205,8 @@ protected:
       });
     });
     ASSERT_NE(face, document.faces.end());
+    enter_edit_for_all_meshes();
+    ASSERT_FALSE(HasFatalFailure());
     ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Face).ok());
     ASSERT_TRUE(editor_.selection().select_face(
         source_, static_cast<QuaderElementId>(face->id)).ok());
@@ -206,16 +216,28 @@ protected:
     ASSERT_TRUE(split.changed());
     ASSERT_EQ(editor_.query().modeling_objects().size(), extract ? 2U : 1U);
     if (extract) {
-      const auto selected = editor_.selection().summary();
-      const auto active = editor_.query().modeling_object_for_id(selected.active_object_id);
-      ASSERT_TRUE(active.has_value());
-      ASSERT_NE(active->modeling_object_id, source_.modeling_object_id);
-      survivor_ = *active;
+      const auto objects = editor_.query().modeling_objects();
+      const auto extracted = std::ranges::find_if(objects, [&](const auto &object) {
+        return object.modeling_object_id != source_.modeling_object_id;
+      });
+      ASSERT_NE(extracted, objects.end());
+      const auto extracted_ref = editor_.query().modeling_object_for_id(
+          extracted->modeling_object_id);
+      ASSERT_TRUE(extracted_ref.has_value());
+      survivor_ = *extracted_ref;
+      const auto &mode = project_.active_scene()->session->editor_mode();
+      EXPECT_TRUE(mode.contains(source_.entity));
+      EXPECT_FALSE(mode.contains(survivor_.entity));
+      ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Object).ok());
     }
     EXPECT_EQ(vertex_count(), 12U);
   }
 
   void select_boundary_vertices(bool extract) {
+    if (extract) {
+      enter_edit_for_all_meshes();
+      ASSERT_FALSE(HasFatalFailure());
+    }
     const auto source_vertices = vertices_at(topology(source_), {1.0F, 1.0F, 1.0F});
     ASSERT_EQ(source_vertices.size(), extract ? 1U : 2U);
     ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Vertex).ok());
@@ -238,6 +260,10 @@ protected:
   }
 
   void select_boundary_edges(bool extract) {
+    if (extract) {
+      enter_edit_for_all_meshes();
+      ASSERT_FALSE(HasFatalFailure());
+    }
     const auto source_edges = edges_at(topology(source_), {1.0F, -1.0F, 1.0F},
                                       {1.0F, 1.0F, 1.0F});
     ASSERT_EQ(source_edges.size(), extract ? 1U : 2U);
@@ -316,7 +342,10 @@ protected:
     const auto cancel = editor_.modeling().cancel_preview();
     ASSERT_TRUE(cancel.ok()) << cancel.error_message();
     EXPECT_EQ(editor_.query().modeling_objects().size(), extract ? 2U : 1U);
-    expect_semantics(before, true);
+    {
+      SCOPED_TRACE("Canceled merge preview");
+      expect_semantics(before, true);
+    }
 
     ASSERT_TRUE(editor_.modeling().begin_preview("merge_by_distance").ok());
     const auto commit = editor_.modeling().commit_preview("Merge by Distance");
@@ -329,10 +358,16 @@ protected:
     const auto after = test::capture_command_observable_state(editor_);
     ASSERT_TRUE(editor_.history().undo().ok());
     EXPECT_EQ(editor_.query().modeling_objects().size(), extract ? 2U : 1U);
-    expect_semantics(before);
+    {
+      SCOPED_TRACE("Undo committed merge preview");
+      expect_semantics(before);
+    }
     ASSERT_TRUE(editor_.history().redo().ok());
     EXPECT_EQ(editor_.query().modeling_objects().size(), 1U);
-    expect_semantics(after);
+    {
+      SCOPED_TRACE("Redo committed merge preview");
+      expect_semantics(after);
+    }
   }
 
   void exercise_edge_merge(bool extract) {
@@ -430,18 +465,19 @@ protected:
       QuaderModelingObjectRef componentless,
       std::initializer_list<EntityId> entities, QuaderModelingObjectRef active,
       QuaderComponentKind kind) {
-    ASSERT_TRUE(editor_.selection().select_components(
-        {.object = componentless, .kind = kind,
-         .edit = QuaderSelectionEdit::Replace}).ok());
+    ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Object).ok());
     ASSERT_TRUE(editor_.selection().select_objects(entities, active.entity).ok());
-    ASSERT_TRUE(editor_.selection().select_components(
-        {.object = componentless, .kind = kind,
-         .edit = QuaderSelectionEdit::Add}).ok());
-    if (active.entity != componentless.entity) {
-      ASSERT_TRUE(editor_.selection().select_components(
-          {.object = active, .kind = kind,
-           .edit = QuaderSelectionEdit::Add}).ok());
+    ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
+    ASSERT_TRUE(editor_.selection().set_mode(
+        kind == QuaderComponentKind::Vertex ? QuaderSelectionMode::Vertex
+        : kind == QuaderComponentKind::Edge ? QuaderSelectionMode::Edge
+                                           : QuaderSelectionMode::Face).ok());
+    const auto &mode = project_.active_scene()->session->editor_mode();
+    for (const auto entity : entities) {
+      ASSERT_TRUE(mode.contains(entity));
     }
+    ASSERT_TRUE(mode.contains(componentless.entity));
+    EXPECT_EQ(mode.snapshot().participants.size(), entities.size());
     const auto summary = editor_.selection().summary();
     ASSERT_EQ(summary.selected_object_count, entities.size());
     ASSERT_EQ(summary.active_object_id, active.modeling_object_id);
@@ -479,6 +515,8 @@ protected:
                 (first_world.y + second_world.y + third_world.y) / 3.0F,
                 (first_world.z + second_world.z + third_world.z) / 3.0F}
         : third_world;
+    enter_edit_for_all_meshes();
+    ASSERT_FALSE(HasFatalFailure());
     ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Vertex).ok());
     ASSERT_TRUE(editor_.selection().select_vertex(
         source_, vertices_at(topology(source_), first_local).front()).ok());
@@ -665,6 +703,7 @@ TEST_F(ModelingComponentMergeTests, EmptyGlobalActiveOwnerRejectsActiveMergeAndA
   ASSERT_FALSE(HasFatalFailure());
   select_boundary_vertices(true);
   ASSERT_FALSE(HasFatalFailure());
+  ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Object).ok());
   const auto unrelated = create_quad(8.0F, "Componentless Active Mesh");
   retain_component_object_scope(
       unrelated, {source_.entity, survivor_.entity, unrelated.entity}, unrelated,
@@ -743,6 +782,8 @@ TEST_F(ModelingComponentMergeTests, VertexMergeRebasesEachSourcesMaterialAndRepl
 TEST_F(ModelingComponentMergeTests, BoundaryBridgeAvailabilityAcceptsOneEdgeFromEachMesh) {
   const auto first = create_quad(0.0F, "First Bridge Quad");
   const auto second = create_quad(4.0F, "Second Bridge Quad");
+  enter_edit_for_all_meshes();
+  ASSERT_FALSE(HasFatalFailure());
   ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Edge).ok());
   const auto first_face = topology(first).faces.front();
   const auto second_face = topology(second).faces.front();
@@ -770,6 +811,8 @@ TEST_F(ModelingComponentMergeTests, BridgeRejectsOneInteriorEdgeFromEachMeshWith
       {.min = {3.0F, -1.0F, -1.0F}, .max = {5.0F, 1.0F, 1.0F}},
       "Interior Bridge Source");
   ASSERT_TRUE(second.ok()) << second.error_message();
+  enter_edit_for_all_meshes();
+  ASSERT_FALSE(HasFatalFailure());
   ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Edge).ok());
   const auto first_face = topology(source_).faces.front();
   const auto second_face = topology(second.value()).faces.front();
@@ -820,6 +863,8 @@ TEST_F(ModelingComponentMergeTests, PolygonReadSnapshotPinsAcceptedPreviewAndRej
 TEST_F(ModelingComponentMergeTests, ConnectBatchesApplicableMeshesAndPreservesComponentlessObject) {
   const auto first = create_quad(0.0F, "First Connect Quad");
   const auto second = create_quad(4.0F, "Second Connect Quad");
+  enter_edit_for_all_meshes();
+  ASSERT_FALSE(HasFatalFailure());
   ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Vertex).ok());
   const auto first_face = topology(first).faces.front();
   const auto second_face = topology(second).faces.front();
@@ -854,6 +899,8 @@ TEST_F(ModelingComponentMergeTests, ConnectBatchesApplicableMeshesAndPreservesCo
 TEST_F(ModelingComponentMergeTests, ConnectRejectsInvalidApplicableMeshBeforePublishingValidMesh) {
   const auto first = create_quad(0.0F, "Valid Connect Quad");
   const auto second = create_quad(4.0F, "Adjacent Connect Quad");
+  enter_edit_for_all_meshes();
+  ASSERT_FALSE(HasFatalFailure());
   ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Vertex).ok());
   const auto first_face = topology(first).faces.front();
   const auto second_face = topology(second).faces.front();
@@ -875,6 +922,8 @@ TEST_F(ModelingComponentMergeTests, ConnectRejectsInvalidApplicableMeshBeforePub
 
 TEST_F(ModelingComponentMergeTests, SplitInteriorEdgeIgnoresComponentlessMeshAndReplaysHistory) {
   const auto unrelated = create_quad(5.0F, "Unselected Split Topology");
+  enter_edit_for_all_meshes();
+  ASSERT_FALSE(HasFatalFailure());
   ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Edge).ok());
   const auto face = topology(source_).faces.front();
   ASSERT_TRUE(editor_.selection().select_edge(
@@ -902,8 +951,9 @@ TEST_F(ModelingComponentMergeTests, SplitInteriorEdgeIgnoresComponentlessMeshAnd
 
 TEST_F(ModelingComponentMergeTests, EdgeConnectAndDissolveRebuildOnlyComponentOwnerAndReplayHistory) {
   const auto quad = create_quad(0.0F, "Edge Support Cut");
-  ASSERT_TRUE(editor_.selection().select_face(
-      source_, topology(source_).faces.front().id).ok());
+  enter_edit_for_all_meshes();
+  ASSERT_FALSE(HasFatalFailure());
+  ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Edge).ok());
   const auto face = topology(quad).faces.front();
   ASSERT_TRUE(editor_.selection().select_edge(
       quad, face.vertices[0], face.vertices[1], QuaderSelectionEdit::Add).ok());
@@ -912,7 +962,7 @@ TEST_F(ModelingComponentMergeTests, EdgeConnectAndDissolveRebuildOnlyComponentOw
   ASSERT_EQ(editor_.selection().summary().mode, QuaderSelectionMode::Edge);
   ASSERT_EQ(editor_.selection().summary().selected_object_count, 2U);
   ASSERT_EQ(editor_.selection().summary().selected_edge_count, 2U);
-  ASSERT_EQ(editor_.selection().summary().selected_face_count, 1U);
+  ASSERT_EQ(editor_.selection().summary().selected_face_count, 0U);
   expect_component_operation_availability(
       quader_command::kModelingConnectEdges, "connect_edges", true);
   ASSERT_FALSE(HasFatalFailure());
@@ -949,6 +999,8 @@ TEST_F(ModelingComponentMergeTests, EdgeConnectAndDissolveRebuildOnlyComponentOw
 TEST_F(ModelingComponentMergeTests, EdgeConnectAndDissolveRejectTwoComponentParticipants) {
   const auto first = create_quad(0.0F, "First edge participant");
   const auto second = create_quad(5.0F, "Second edge participant");
+  enter_edit_for_all_meshes();
+  ASSERT_FALSE(HasFatalFailure());
   for (const auto object : {first, second}) {
     const auto face = topology(object).faces.front();
     ASSERT_TRUE(editor_.selection().select_edge(
@@ -958,7 +1010,7 @@ TEST_F(ModelingComponentMergeTests, EdgeConnectAndDissolveRejectTwoComponentPart
     ASSERT_TRUE(editor_.selection().select_edge(
         object, face.vertices[2], face.vertices[3], QuaderSelectionEdit::Add).ok());
   }
-  ASSERT_EQ(editor_.selection().summary().selected_object_count, 2U);
+  ASSERT_EQ(editor_.selection().summary().selected_object_count, 3U);
   ASSERT_EQ(editor_.selection().summary().selected_edge_count, 4U);
   expect_component_operation_availability(
       quader_command::kModelingConnectEdges, "connect_edges", false);
@@ -991,7 +1043,7 @@ TEST_F(ModelingComponentMergeTests, EdgeConnectAndDissolveRejectTwoComponentPart
       first, interior_edges[0].a, interior_edges[0].b).ok());
   ASSERT_TRUE(editor_.selection().select_edge(
       second, interior_edges[1].a, interior_edges[1].b, QuaderSelectionEdit::Add).ok());
-  ASSERT_EQ(editor_.selection().summary().selected_object_count, 2U);
+  ASSERT_EQ(editor_.selection().summary().selected_object_count, 3U);
   ASSERT_EQ(editor_.selection().summary().selected_edge_count, 2U);
   expect_component_operation_availability(
       quader_command::kModelingDissolveEdges, "dissolve_edges", false);
@@ -1015,6 +1067,8 @@ TEST_F(ModelingComponentMergeTests, DissolveInlineVertexPreservesComponentlessMe
       QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
       {.name = "Inline Vertex Face"});
   ASSERT_TRUE(created.ok()) << created.error_message();
+  enter_edit_for_all_meshes();
+  ASSERT_FALSE(HasFatalFailure());
   ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(editor_.selection().select_vertex(created.value(), middle).ok());
   retain_component_object_scope(
@@ -1122,6 +1176,8 @@ TEST_F(ModelingComponentMergeTests, SameDirectionEdgeWeldRejectsWithoutCombining
   ASSERT_TRUE(source.ok()) << source.error_message();
   const auto child = editor_.scene().create_entity({.name = "Retained child", .parent = source.value().entity});
   ASSERT_TRUE(child.ok()) << child.error_message();
+  enter_edit_for_all_meshes();
+  ASSERT_FALSE(HasFatalFailure());
   ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Edge).ok());
   ASSERT_TRUE(editor_.selection().select_edge(source.value(), 1U, 2U).ok());
   ASSERT_TRUE(editor_.selection().select_edge(target.value(), 1U, 2U, QuaderSelectionEdit::Add).ok());
@@ -1184,6 +1240,8 @@ TEST_F(ModelingComponentMergeTests, InsertEdgeLoopSplicesNgonCapsAndReplaysOneNa
   const auto object = created.value();
   ASSERT_TRUE(editor_.object(object).set_transform(
       {.position = {-7.5F, 0.5F, -10.5F}}).ok());
+  enter_edit_for_all_meshes();
+  ASSERT_FALSE(HasFatalFailure());
   ASSERT_TRUE(editor_.selection().select_faces(object, {221, 3, 229, 224, 228}).ok());
   ASSERT_TRUE(editor_.tools().activate(ViewportToolId::InsertEdgeLoop).ok());
   auto &session = *project_.active_scene()->session;

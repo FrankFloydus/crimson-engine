@@ -1737,6 +1737,7 @@ void run_invalid_copy_case(InvalidCopyCase copy_case) {
     break;
   }
   case InvalidCopyCase::ComponentMode:
+    ASSERT_TRUE(harness.editor.mode().set(quader::QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(harness.editor.selection()
                     .set_mode(quader::QuaderSelectionMode::Vertex)
                     .ok());
@@ -2160,6 +2161,7 @@ TEST(CopyPivotFromActiveTests,
   EXPECT_TRUE(std::next(copy)->action_id == "delete_selection" ||
               std::next(copy)->action_id == "duplicate_meshes");
 
+  ASSERT_TRUE(harness.editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(harness.editor.selection()
                   .set_mode(quader::QuaderSelectionMode::Vertex)
                   .ok());

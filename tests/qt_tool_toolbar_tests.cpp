@@ -61,12 +61,20 @@ TEST(QtToolToolbarTests, RetainsAllModelingLaunchersAcrossSelectionModes) {
   EXPECT_EQ(toolbar.objectName(), QStringLiteral("toolToolbar"));
   ASSERT_EQ(toolbar.actions().size(),
             kModelingTools.size() + kSeparatorPositions.size());
+  const auto mesh = editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Toolbar component target");
+  ASSERT_TRUE(mesh.ok()) << mesh.error_message();
+  ASSERT_TRUE(editor.selection().select_object(mesh.value()).ok());
   for (const auto mode : {quader::QuaderSelectionMode::Vertex,
                           quader::QuaderSelectionMode::Edge,
                           quader::QuaderSelectionMode::Face,
                           quader::QuaderSelectionMode::Object,
                           quader::QuaderSelectionMode::Group}) {
     SCOPED_TRACE(static_cast<int>(mode));
+    const bool object_mode = mode == quader::QuaderSelectionMode::Object ||
+                             mode == quader::QuaderSelectionMode::Group;
+    ASSERT_TRUE(editor.mode().set(object_mode ? quader::QuaderEditorMode::Object
+                                              : quader::QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(editor.selection().set_mode(mode).ok());
     toolbar.synchronize(editor, editor.selection().summary());
     const auto actions = toolbar.actions();

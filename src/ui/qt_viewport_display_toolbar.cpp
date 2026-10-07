@@ -39,7 +39,10 @@ struct DisplaySpec {
   std::string_view fallback;
 };
 
-constexpr std::array<DisplaySpec, 4> kDisplaySpecs{{
+constexpr std::array<DisplaySpec, 5> kDisplaySpecs{{
+    {quader_command::kViewportToggleWireframeOnShaded,
+     ":/quader/icons/viewport_wireframe_on_shaded.png", "viewportWireframeOnShaded",
+     "ui.toolbar.viewport_display.wireframe_on_shaded", "Wireframe on Shaded"},
     {quader_command::kViewportToggleGrid,
      ":/quader/icons/viewport_grid.png", "viewportGrid",
      "ui.toolbar.viewport_display.grid", "Toggle Grid"},
@@ -112,9 +115,10 @@ QtViewportDisplayToolbar::QtViewportDisplayToolbar(QWidget *parent)
   }
 }
 
-std::array<QAction *, 4> QtViewportDisplayToolbar::viewport_actions() const {
+std::array<QAction *, 5> QtViewportDisplayToolbar::viewport_actions() const {
   return {display_actions_[0].action, display_actions_[1].action,
-          display_actions_[2].action, display_actions_[3].action};
+          display_actions_[2].action, display_actions_[3].action,
+          display_actions_[4].action};
 }
 
 void QtViewportDisplayToolbar::apply_ui_scale(
@@ -169,6 +173,7 @@ void QtViewportDisplayToolbar::synchronize(const QuaderEditorApi &editor,
       .keybindings_revision = editor.commands().keybindings_revision(),
       .toggles =
           {
+              viewports.control(pane, QuaderViewportControl::WireframeOnShaded),
               viewports.control(pane, QuaderViewportControl::ShowGrid),
               viewports.control(pane, QuaderViewportControl::ShowGizmos),
               viewports.control(pane, QuaderViewportControl::ShowMeshGrid),

@@ -23,6 +23,7 @@
 #include "editor/instances/scene_instance_service.hpp"
 #include "editor/modeling/operations/operation_schema.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/modes/editor_mode_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/modeling/services/modeling_operation_settings.hpp"
 #include "editor/modeling/services/modeling_tool_settings_service.hpp"
@@ -1561,6 +1562,14 @@ QuaderApiVoidResult QuaderToolsApi::activate(std::string_view tool_id) {
     return quader_api_failure_status(scene_session(session_),
                                      release_feature_unavailable_message());
   }
+  const ViewportTool *tool = find_viewport_tool(tool_id);
+  if (tool == nullptr) {
+    return quader_api_failure_status(scene_session(session_), "Unknown viewport tool.");
+  }
+  if (!viewport_tool_supports_editor_mode(tool_id, scene_session(session_).editor_mode().mode())) {
+    return quader_api_failure_status(scene_session(session_),
+        "The tool is unavailable in the current editor mode.");
+  }
   const QuaderSettingsOperationOriginCapture origin(session_);
   const bool same_operation =
       tool_id == active_tool_id(scene_session(session_)) &&
@@ -1568,10 +1577,6 @@ QuaderApiVoidResult QuaderToolsApi::activate(std::string_view tool_id) {
   bool transition_changed = false;
   const auto activate_tool = [&]() -> QuaderApiVoidResult {
     SceneSession &session = scene_session(session_);
-    const ViewportTool *tool = find_viewport_tool(tool_id);
-    if (tool == nullptr) {
-      return quader_api_failure_status(session, "Unknown viewport tool.");
-    }
     const bool native_tool = session.native_tools().handles(tool_id);
     const CommandResult preflight = tool->viewport_tool() == ViewportToolId::Extrude
         ? session.extrude().preflight_activation(session.extrude().mode())
@@ -1625,8 +1630,7 @@ QuaderApiVoidResult QuaderToolsApi::activate(std::string_view tool_id) {
         result.mutation_kind = QuaderMutationKind::Runtime;
       }
     }
-    if (const auto *tool = find_viewport_tool(tool_id);
-        tool != nullptr && origin.record_selected_tool(tool->viewport_tool())) {
+    if (origin.record_selected_tool(tool->viewport_tool())) {
       result.changed = true;
       if (result.mutation_kind == QuaderMutationKind::None) {
         result.mutation_kind = QuaderMutationKind::Runtime;
@@ -1710,6 +1714,9 @@ QuaderApiVoidResult QuaderToolsApi::activate_extrude(QuaderExtrudeMode mode) {
   }
   const QuaderSettingsOperationOriginCapture origin(session_);
   SceneSession &session = scene_session(session_);
+  if (session.editor_mode().mode() != EditorMode::Edit) {
+    return quader_api_failure_status(session, "Extrusion requires Edit Mode.");
+  }
   modeling::FaceExtrudeMode native_mode;
   switch (mode) {
   case QuaderExtrudeMode::Region:
@@ -1757,6 +1764,9 @@ bool QuaderToolsApi::can_activate(std::string_view tool_id) const {
     return false;
   }
   SceneSession &session = scene_session(session_);
+  if (!viewport_tool_supports_editor_mode(tool_id, session.editor_mode().mode())) {
+    return false;
+  }
   if (session.native_tools().handles(tool_id)) {
     return session.native_tools().can_activate(tool_id);
   }
@@ -1773,6 +1783,9 @@ QuaderApiVoidResult QuaderToolsApi::begin_primitive_creation(
   const QuaderSettingsOperationOriginCapture origin(session_);
   QuaderApiMutationRunner mutations(session_);
   SceneSession &session = scene_session(session_);
+  if (session.editor_mode().mode() != EditorMode::Object) {
+    return quader_api_failure_status(session, "Primitive creation requires Object Mode.");
+  }
   if (!mutations.available()) {
     return quader_api_failure_status(session, "No scene is active.");
   }
@@ -1817,6 +1830,9 @@ QuaderApiVoidResult QuaderToolsApi::begin_new_curve_creation() {
   const QuaderSettingsOperationOriginCapture origin(session_);
   QuaderApiMutationRunner mutations(session_);
   SceneSession &session = scene_session(session_);
+  if (session.editor_mode().mode() != EditorMode::Object) {
+    return quader_api_failure_status(session, "Curve creation requires Object Mode.");
+  }
   if (!mutations.available()) {
     return quader_api_failure_status(session, "No scene is active.");
   }
@@ -1858,6 +1874,9 @@ QuaderToolsApi::begin_light_creation(QuaderLightType type) {
   const QuaderSettingsOperationOriginCapture origin(session_);
   QuaderApiMutationRunner mutations(session_);
   SceneSession &session = scene_session(session_);
+  if (session.editor_mode().mode() != EditorMode::Object) {
+    return quader_api_failure_status(session, "Light creation requires Object Mode.");
+  }
   if (!mutations.available()) {
     return quader_api_failure_status(session, "No scene is active.");
   }
@@ -2136,8 +2155,9 @@ std::uint64_t QuaderToolsApi::active_tool_revision() const {
 
 std::uint64_t QuaderToolsApi::availability_revision() const {
   const SceneSession &session = scene_session(session_);
-  const std::array<std::uint64_t, 14> source{
+  const std::array<std::uint64_t, 15> source{
       session.document_binding_generation(),
+      session.editor_mode().revision(),
       session.align_tool().settings_revision(),
       session.modeling().tool_settings_revision(),
       session.modeling().tool_preview_source_revision(),
@@ -3363,6 +3383,9 @@ QuaderApiVoidResult QuaderToolsApi::commit_modeling_tool(ViewportToolId tool) {
   const ToolDescriptor *descriptor = find_viewport_tool_descriptor(tool);
   if (descriptor == nullptr) {
     return quader_api_failure_status(session, "Unknown viewport tool.");
+  }
+  if (!viewport_tool_supports_editor_mode(tool, session.editor_mode().mode())) {
+    return quader_api_failure_status(session, "The tool is unavailable in the current editor mode.");
   }
   ModelingCommandExecutionService execution;
   const auto pane = session.settings_presentation_origin().pane;

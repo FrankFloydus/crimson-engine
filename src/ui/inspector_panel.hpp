@@ -53,6 +53,8 @@ public:
   void refresh(UIContext &context);
   /// Presents live transform previews without rebuilding unrelated properties.
   void refresh_transform_preview(UIContext &context);
+  /// Accepts current property drafts before an editor mode transition.
+  [[nodiscard]] bool settle_pending_edits();
 
 protected:
   bool event(QEvent *event) override;

@@ -70,15 +70,6 @@ default_persistent_overlay_style() {
   return kStyle;
 }
 
-QVec3 resolved_scene_wireframe_tint(
-    const SceneDocument &document, EntityId entity) {
-  const SceneLayerRecord *layer = document.layer(document.entity_layer(entity));
-  if (layer == nullptr) {
-    return kDefaultSceneLayerWireframeColor;
-  }
-  return layer->wireframe_color;
-}
-
 std::span<const MeshVertex> mesh_vertices(const MeshAsset &mesh) {
   return {mesh.geometry().vertices.data(), mesh.geometry().vertices.size()};
 }
@@ -151,6 +142,7 @@ mesh_snapshot_for_placement(
       .active_selected = active_selection_owner(
           document, placement.display_entity, local_visibility,
           active_selection_visible),
+      .wireframe_on_shaded_color = scene_mesh->wireframe_on_shaded_color,
       .wireframe_tint = resolved_scene_wireframe_tint(
           document, placement.display_entity),
       .vertices = mesh_vertices(*asset),
@@ -343,6 +335,15 @@ RenderOverlayBoundsSnapshot translated_bounds(
 
 } // namespace
 
+QVec3 resolved_scene_wireframe_tint(
+    const SceneDocument &document, EntityId entity) {
+  const SceneLayerRecord *layer = document.layer(document.entity_layer(entity));
+  if (layer == nullptr) {
+    return kDefaultSceneLayerWireframeColor;
+  }
+  return layer->wireframe_color;
+}
+
 RenderOverlaySelectedObjectSnapshot
 build_render_overlay_selected_object_snapshot(const SceneDocument &document,
                                               const AssetRegistry &assets,
@@ -416,7 +417,8 @@ build_render_overlay_scene_wireframe_snapshot(
     const ViewportLocalVisibilitySnapshot *local_visibility,
     bool selected_mesh_wire_visible,
     RenderInstanceEditScope instance_edit_scope,
-    bool selected_mesh_outline_only) {
+    bool selected_mesh_outline_only,
+    std::uint8_t wireframe_on_shaded_layer_mask) {
   QDR_PROFILE_FUNCTION();
   RenderOverlaySceneWireframeSnapshot snapshot;
   static_cast<RenderSourceStamp &>(snapshot) = capture_render_source_stamp(
@@ -429,9 +431,11 @@ build_render_overlay_scene_wireframe_snapshot(
   snapshot.style = style;
   snapshot.clip_planes = scene_camera_clip_planes(document);
   snapshot.layer_mask = layer_mask;
+  snapshot.wireframe_on_shaded_layer_mask = wireframe_on_shaded_layer_mask;
   snapshot.selected_mesh_wire_visible = selected_mesh_wire_visible;
   snapshot.selected_mesh_outline_only = selected_mesh_outline_only;
-  if (layer_mask == 0u && !selected_mesh_wire_visible) {
+  if (layer_mask == 0u && wireframe_on_shaded_layer_mask == 0u &&
+      !selected_mesh_wire_visible) {
     return snapshot;
   }
   const std::shared_ptr<const SceneMeshOccurrenceProjectionSnapshot>
@@ -443,14 +447,35 @@ build_render_overlay_scene_wireframe_snapshot(
     // Filter against authoritative selection before the presentation flag can
     // demote selected wires to ordinary wireframe color. Group descendants and
     // formal occurrence members use the same inherited selection as outlines.
-    if (selected_mesh_outline_only &&
-        selected_in_hierarchy(document, placement.display_entity, local_visibility)) {
-      continue;
-    }
+    const bool selected = selected_in_hierarchy(
+        document, placement.display_entity, local_visibility);
+    const bool outline_only = selected_mesh_outline_only && selected;
+    const MeshComponent *component = document.mesh(placement.geometry_entity);
+    // Component participants already publish their complete editing wire. In
+    // Object mode an outline leaves the interior topology available here.
+    const bool shaded_wire = wireframe_on_shaded_layer_mask != 0u &&
+        component != nullptr && component->wireframe_on_shaded &&
+        (!selected || selected_mesh_outline_only);
+    const bool ordinary_wire = !outline_only || layer_mask != 0u;
+    if (!ordinary_wire && !shaded_wire) continue;
     if (std::optional<RenderOverlayMeshSnapshot> mesh =
             mesh_snapshot_for_placement(document, assets, placement,
                                         local_visibility, active_selection_visible)) {
-      snapshot.meshes.push_back(std::move(*mesh));
+      if (ordinary_wire) {
+        // A selection silhouette augments the Wireframe pane topology. It
+        // does not promote that ordinary topology into other pane modes.
+        if (outline_only) {
+          mesh->selected = false;
+          mesh->active_selected = false;
+        }
+        snapshot.meshes.push_back(*mesh);
+      }
+      if (shaded_wire) {
+        mesh->selected = false;
+        mesh->active_selected = false;
+        mesh->shaded_wire = true;
+        snapshot.meshes.push_back(std::move(*mesh));
+      }
     }
   }
   if (!selected_mesh_wire_visible) {
@@ -670,7 +695,8 @@ RenderOverlaySnapshotCache::update_persistent(
     const ViewportPersistentOverlayRasterGroupSet &raster_groups,
     bool selected_mesh_outline_only,
     bool collision_visible,
-    ViewportSettingColor collision_color) {
+    ViewportSettingColor collision_color,
+    std::uint8_t wireframe_on_shaded_layer_mask) {
   QDR_PROFILE_FUNCTION();
   bind_sources(document, assets, scene_binding);
   const RenderSourceStamp current = capture_render_source_stamp(
@@ -731,10 +757,13 @@ RenderOverlaySnapshotCache::update_persistent(
 
   const bool wireframe_sources_are_relevant =
       scene_wireframe_layer_mask != 0u ||
+      wireframe_on_shaded_layer_mask != 0u ||
       selected_mesh_wire_visible;
   const bool wireframe_snapshot_matches =
       has_scene_wireframe_snapshot_ &&
       scene_wireframe_snapshot_.layer_mask == scene_wireframe_layer_mask &&
+      scene_wireframe_snapshot_.wireframe_on_shaded_layer_mask ==
+          wireframe_on_shaded_layer_mask &&
       scene_wireframe_snapshot_.selected_mesh_wire_visible ==
           selected_mesh_wire_visible &&
       scene_wireframe_snapshot_.selected_mesh_outline_only ==
@@ -770,12 +799,14 @@ RenderOverlaySnapshotCache::update_persistent(
           kRenderOverlaySelectionCurveAdvanceDependencies);
   const bool scene_wireframe_changed =
       !wireframe_snapshot_matches || wireframe_context_changed ||
-      wireframe_raster_groups_changed;
+      wireframe_raster_groups_changed ||
+      !viewport_persistent_overlay_shaded_wire_styles_match(
+          scene_wireframe_snapshot_.style, style);
   if (!wireframe_snapshot_matches) {
     scene_wireframe_snapshot_ = build_render_overlay_scene_wireframe_snapshot(
         document, assets, scene_wireframe_layer_mask, style, scene_binding,
         local_visibility, selected_mesh_wire_visible, instance_edit_scope,
-        selected_mesh_outline_only);
+        selected_mesh_outline_only, wireframe_on_shaded_layer_mask);
     has_scene_wireframe_snapshot_ = true;
     ++stats_.scene_wireframe_build_count;
   } else {

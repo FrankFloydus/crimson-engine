@@ -8,6 +8,7 @@
 #include "assets/curve_asset_payload.hpp"
 #include "assets/default_material_catalog.hpp"
 #include "assets/mesh_asset.hpp"
+#include "assets/mesh_geometry_projection.hpp"
 #include "assets/texture_asset.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
@@ -80,6 +81,18 @@
 using namespace quader;
 
 namespace {
+/// Makes native fixture mode transitions explicit before changing selection kind.
+quader::QuaderApiVoidResult enter_selection_context(
+    quader::QuaderEditorApi &editor, quader::QuaderSelectionMode kind) {
+  const bool component = kind == quader::QuaderSelectionMode::Vertex ||
+      kind == quader::QuaderSelectionMode::Edge ||
+      kind == quader::QuaderSelectionMode::Face;
+  const auto transition = editor.mode().set(component
+      ? quader::QuaderEditorMode::Edit : quader::QuaderEditorMode::Object);
+  if (!transition.ok()) return transition;
+  return editor.selection().set_mode(kind);
+}
+
 
 /// Receives the real coordinator streams without requiring a GPU backend.
 class DimensionExtractionTarget final : public ViewportOverlaySubmissionTarget {
@@ -5778,7 +5791,9 @@ TEST(RenderSelectionDimensionIntegrationTests,
   ASSERT_TRUE(second.ok()) << second.error_message();
   ASSERT_TRUE(editor.object(second.value()).set_transform(
       {.position = {10.0f, 5.0f, -4.0f}}).ok());
-  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_objects(
+      {first.value().entity, second.value().entity}, first.value().entity).ok());
+  ASSERT_TRUE(enter_selection_context(editor, QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(first.value(), 1).ok());
 
   DimensionModelingFrameProvider provider(session.modeling());
@@ -5828,7 +5843,7 @@ TEST(RenderSelectionDimensionIntegrationTests,
       QuaderPolygonDocumentInternalAccess::from_backend(std::move(polygon)),
       {.name = "Extrusion Dimensions"});
   ASSERT_TRUE(object.ok()) << object.error_message();
-  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(enter_selection_context(editor, QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(object.value(),
       static_cast<QuaderElementId>(face)).ok());
 
@@ -7757,11 +7772,12 @@ TEST(RenderSceneSnapshotTests,
        ToolPreviewMesh{.source_entity = 8u,
                        .mesh = make_overlay_triangle_mesh()}}, assets);
   auto wires = build_render_tool_preview_wireframe_snapshot(records);
-  ASSERT_EQ(wires.meshes.size(), transforms.size());
+  ASSERT_EQ(wires.meshes.size(), transforms.size() + 1u);
   wires.layer_mask = viewport_grid_layer_mask(0u);
   const auto payload = wires.meshes.front().wire_geometry_payload;
   for (std::size_t index = 0u; index < transforms.size(); ++index) {
     const auto &mesh = wires.meshes[index];
+    EXPECT_EQ(mesh.entity, 7u);
     EXPECT_EQ(mesh.world_transform.values, transforms[index].values);
     EXPECT_EQ(mesh.wire_geometry_payload, payload);
     EXPECT_EQ(mesh.geometry_payload, wires.meshes.front().geometry_payload);
@@ -7770,19 +7786,31 @@ TEST(RenderSceneSnapshotTests,
       EXPECT_NE(mesh.participant_token, wires.meshes[index - 1u].participant_token);
     }
   }
+  const auto &single = wires.meshes.back();
+  EXPECT_EQ(single.entity, 8u);
+  EXPECT_EQ(single.world_transform.values, QMat4{}.values);
+  EXPECT_EQ(single.wire_segments.size(), 3u);
+  EXPECT_FALSE(single.shaded_wire);
+  EXPECT_NE(single.participant_token, wires.meshes[transforms.size() - 1u].participant_token);
   const auto plan = plan_scene_wireframe_overlay_batches(wires, 128u);
-  EXPECT_EQ(plan.participant_count, 257u);
+  EXPECT_EQ(plan.participant_count, 258u);
   EXPECT_EQ(plan.unique_geometry_style_count, 1u);
   EXPECT_EQ(plan.batches.chunks.size(), 3u);
-  EXPECT_EQ(plan.work.local_bounds_vertex_visit_count, 3u);
+  EXPECT_EQ(plan.work.local_bounds_vertex_visit_count, 6u);
   EXPECT_EQ(plan.work.local_bounds_cache_hit_count, 256u);
 
   auto moved = records;
   moved.front().instance_transforms.back().values[13] = 4.0f;
   const auto changed = build_render_tool_preview_wireframe_snapshot(moved);
   EXPECT_FALSE(scene_wireframe_overlay_mesh_inputs_match(wires.meshes, changed.meshes));
-  EXPECT_EQ(changed.meshes.back().wire_geometry_payload, payload);
-  EXPECT_FLOAT_EQ(changed.meshes.back().world_transform.values[13], 4.0f);
+  ASSERT_EQ(changed.meshes.size(), transforms.size() + 1u);
+  const auto &moved_instance = changed.meshes[transforms.size() - 1u];
+  EXPECT_EQ(moved_instance.wire_geometry_payload, payload);
+  EXPECT_EQ(moved_instance.entity, 7u);
+  EXPECT_FLOAT_EQ(moved_instance.world_transform.values[13], 4.0f);
+  EXPECT_EQ(changed.meshes.back().entity, 8u);
+  EXPECT_EQ(changed.meshes.back().world_transform.values, single.world_transform.values);
+  EXPECT_EQ(changed.meshes.back().wire_geometry_payload, single.wire_geometry_payload);
   EXPECT_TRUE(build_render_tool_preview_wireframe_snapshot({}).meshes.empty());
 }
 
@@ -11118,5 +11146,534 @@ TEST(RenderSceneExtractionScaleTests,
     EXPECT_EQ(records[index].material.component, components[index]);
     EXPECT_EQ(records[kUniqueMaterialCount + index].material.component,
               components[kUniqueMaterialCount - index - 1u]);
+  }
+}
+
+TEST(RenderWireframeOnShadedTests, MasterAndMeshFlagsPreserveSelectionAndRetainedExtraction) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId asset = assets.add_mesh(make_authored_quad_mesh());
+  const EntityId enabled = document.create_entity("Enabled", EntityKind::Mesh);
+  const EntityId disabled = document.create_entity("Disabled", EntityKind::Mesh);
+  const EntityId selected = document.create_entity("Selected", EntityKind::Mesh);
+  document.set_mesh(enabled, {.mesh = asset});
+  document.set_mesh(disabled, {.mesh = asset, .wireframe_on_shaded = false});
+  document.set_mesh(selected, {.mesh = asset});
+  ASSERT_TRUE(document.set_selected(selected, true));
+  const auto style = ViewportOverlayStyleResolver::persistent_style_snapshot(ViewportSettings{});
+  RenderOverlaySnapshotCache cache;
+  const auto update = [&](std::uint8_t shaded_mask, std::uint8_t wireframe_mask = 0u) {
+    return cache.update_persistent(document, assets, true, wireframe_mask, style,
+        {}, nullptr, false, {}, {}, true, false, {}, shaded_mask);
+  };
+  EXPECT_TRUE(update(0u).scene_wireframe->meshes.empty());
+  const auto shown = update(viewport_grid_layer_mask(1u));
+  ASSERT_NE(shown.scene_wireframe, nullptr);
+  const auto count_shaded = [](const auto &snapshot) {
+    return std::ranges::count_if(snapshot.meshes, [](const auto &mesh) {
+      return mesh.shaded_wire;
+    });
+  };
+  EXPECT_EQ(count_shaded(*shown.scene_wireframe), 2);
+  const auto plan = plan_scene_wireframe_overlay_batches(*shown.scene_wireframe, 64u);
+  EXPECT_EQ(plan.participant_count, 2u);
+  ASSERT_EQ(plan.batches.chunks.size(), 1u);
+  EXPECT_EQ(plan.batches.chunks.front().key.layer_mask,
+            static_cast<std::uint8_t>(ViewportOverlayLayer::WireframeBase));
+  for (const auto &mesh : shown.scene_wireframe->meshes) {
+    ASSERT_EQ(mesh.wire_segments.size(), 4u) << "A quad has no triangulation wire.";
+    if (mesh.shaded_wire) EXPECT_NE(mesh.entity, disabled);
+  }
+  ASSERT_EQ(shown.selected_object->meshes.size(), 1u);
+  EXPECT_EQ(shown.selected_object->meshes.front().entity, selected);
+  const auto builds = cache.stats().scene_wireframe_build_count;
+  const auto *retained = shown.scene_wireframe->meshes.data();
+  EXPECT_FALSE(update(viewport_grid_layer_mask(1u)).changed());
+  EXPECT_EQ(cache.stats().scene_wireframe_build_count, builds);
+  EXPECT_EQ(update(viewport_grid_layer_mask(1u)).scene_wireframe->meshes.data(), retained);
+
+  document.set_mesh(selected, {.mesh = asset, .wireframe_on_shaded = false});
+  const auto changed = update(viewport_grid_layer_mask(1u));
+  EXPECT_TRUE(changed.scene_wireframe_changed);
+  EXPECT_EQ(count_shaded(*changed.scene_wireframe), 1);
+  ASSERT_EQ(changed.selected_object->meshes.size(), 1u);
+  EXPECT_EQ(changed.selected_object->meshes.front().entity, selected);
+  const auto wireframe = update(0u, viewport_grid_layer_mask(0u));
+  const auto wireframe_plan = plan_scene_wireframe_overlay_batches(*wireframe.scene_wireframe, 64u);
+  EXPECT_EQ(wireframe_plan.participant_count, 3u);
+  ASSERT_EQ(wireframe.scene_wireframe->meshes.size(), 3u);
+  for (const auto entity : {enabled, disabled, selected}) {
+    EXPECT_EQ(std::ranges::count_if(wireframe.scene_wireframe->meshes,
+        [entity](const auto &mesh) { return mesh.entity == entity; }), 1);
+  }
+  for (const auto &mesh : wireframe.scene_wireframe->meshes) {
+    EXPECT_FALSE(mesh.selected);
+    EXPECT_FALSE(mesh.active_selected);
+    EXPECT_EQ(mesh.wire_segments.size(), 4u);
+  }
+  ASSERT_EQ(wireframe_plan.batches.chunks.size(), 1u);
+  EXPECT_EQ(wireframe_plan.batches.chunks.front().key.layer_mask,
+            static_cast<std::uint8_t>(ViewportOverlayLayer::WireframeXray));
+  const auto wireframe_builds = cache.stats().scene_wireframe_build_count;
+  EXPECT_FALSE(update(0u, viewport_grid_layer_mask(0u)).changed());
+  EXPECT_EQ(cache.stats().scene_wireframe_build_count, wireframe_builds);
+  const auto solid = update(0u);
+  EXPECT_EQ(plan_scene_wireframe_overlay_batches(*solid.scene_wireframe, 64u).participant_count, 0u);
+  EXPECT_TRUE(update(0u, viewport_grid_layer_mask(0u)).scene_wireframe_changed);
+  EXPECT_EQ(count_shaded(*wireframe.scene_wireframe), 0);
+  const auto editing = build_render_overlay_scene_wireframe_snapshot(document, assets,
+      0u, style, {}, nullptr, true, {}, false, viewport_grid_layer_mask(1u));
+  EXPECT_EQ(count_shaded(editing), 1);
+  EXPECT_EQ(std::ranges::count_if(editing.meshes, [selected](const auto &mesh) {
+    return mesh.entity == selected && mesh.selected && !mesh.shaded_wire;
+  }), 1) << "Disabling the display preference must not suppress editing wire.";
+}
+
+TEST(RenderWireframeOnShadedTests, FormalInstancesShareAuthoredEdgesAndRetainReflections) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId asset = assets.add_mesh(make_authored_quad_mesh());
+  const EntityId definition = document.create_entity("Definition", EntityKind::Empty);
+  ASSERT_TRUE(document.set_instance_definition(definition));
+  ASSERT_TRUE(document.set_visible(definition, false));
+  const EntityId member = document.create_entity("Member", EntityKind::Mesh);
+  document.set_mesh(member, {.mesh = asset});
+  ASSERT_TRUE(document.set_parent(member, definition, false));
+  const EntityId first = document.create_entity("First", EntityKind::Instance);
+  const EntityId reflected = document.create_entity("Reflected", EntityKind::Instance);
+  ASSERT_TRUE(document.set_instance_occurrence(first, {.definition = definition}));
+  ASSERT_TRUE(document.set_instance_occurrence(reflected, {.definition = definition}));
+  document.set_transform(reflected, {.scale = {-1.0f, 1.0f, 1.0f}});
+  const auto snapshot = build_render_overlay_scene_wireframe_snapshot(document, assets,
+      0u, ViewportPersistentOverlayStyleSnapshot{}, {}, nullptr, false, {}, false,
+      viewport_grid_layer_mask(2u));
+  std::vector<const RenderOverlayMeshSnapshot *> shaded;
+  for (const auto &mesh : snapshot.meshes) if (mesh.shaded_wire) shaded.push_back(&mesh);
+  ASSERT_EQ(shaded.size(), 2u);
+  EXPECT_EQ(shaded[0]->wire_geometry_payload, shaded[1]->wire_geometry_payload);
+  EXPECT_EQ(shaded[0]->wire_segments.size(), 4u);
+  EXPECT_EQ(shaded[1]->member, member);
+  const auto reflected_mesh = std::ranges::find_if(shaded, [reflected](const auto *mesh) {
+    return mesh->entity == reflected;
+  });
+  ASSERT_NE(reflected_mesh, shaded.end());
+  EXPECT_FLOAT_EQ((*reflected_mesh)->world_transform.values[0], -1.0f);
+  EXPECT_EQ(plan_scene_wireframe_overlay_batches(snapshot, 64u).participant_count, 2u);
+  document.set_mesh(member, {.mesh = asset, .wireframe_on_shaded = false});
+  const auto hidden = build_render_overlay_scene_wireframe_snapshot(document, assets,
+      0u, ViewportPersistentOverlayStyleSnapshot{}, {}, nullptr, false, {}, false,
+      viewport_grid_layer_mask(2u));
+  EXPECT_EQ(plan_scene_wireframe_overlay_batches(hidden, 64u).participant_count, 0u);
+}
+
+TEST(RenderWireframeOnShadedTests, DynamicPreviewUsesEffectivePositionsAndRetainedAuthoredTopology) {
+  MeshAsset mesh = make_authored_quad_mesh();
+  auto &vertices = mesh.edit_geometry().vertices;
+  for (std::size_t index = 0u; index < vertices.size(); ++index) {
+    vertices[index].source_vertex_id = static_cast<std::uint32_t>(index + 1u);
+  }
+  auto positions = std::make_shared<std::vector<QVec3>>();
+  for (const auto &vertex : vertices) positions->push_back(vertex.position + QVec3{0.0f, 3.0f, 0.0f});
+  auto projection = std::make_shared<MeshGeometryProjection>();
+  projection->source_geometry = mesh.geometry_payload();
+  projection->positions = positions;
+  std::vector<RenderToolPreviewMeshRecord> preview{{
+      .source_entity = 7u,
+      .mesh = mesh,
+      .dynamic_positions = true,
+      .geometry_projection = projection,
+  }};
+  auto snapshot = build_render_tool_preview_wireframe_snapshot(preview, true);
+  snapshot.layer_mask = viewport_grid_layer_mask(1u);
+  snapshot.wireframe_on_shaded_layer_mask = viewport_grid_layer_mask(0u);
+  ASSERT_EQ(snapshot.meshes.size(), 2u);
+  EXPECT_FALSE(snapshot.meshes.front().shaded_wire);
+  const auto &wire = snapshot.meshes.back();
+  ASSERT_TRUE(wire.shaded_wire);
+  EXPECT_EQ(snapshot.meshes.front().entity, 7u);
+  EXPECT_EQ(snapshot.meshes.front().wire_geometry_payload, wire.wire_geometry_payload);
+  ASSERT_EQ(wire.wire_segments.size(), 4u);
+  EXPECT_EQ(wire.geometry_projection, projection);
+  EXPECT_EQ(wire.geometry_payload, projection->source_geometry);
+  EXPECT_EQ(wire.vertices.data(), projection->source_geometry->vertices.data());
+  for (const auto &edge : wire.wire_segments) {
+    EXPECT_FLOAT_EQ(edge.start.y, 3.0f);
+    EXPECT_FLOAT_EQ(edge.end.y, 3.0f);
+  }
+  EXPECT_FLOAT_EQ(mesh.geometry_vertices().front().position.y, 0.0f);
+  const auto plan = plan_scene_wireframe_overlay_batches(snapshot, 64u);
+  ASSERT_EQ(plan.participant_count, 2u);
+  ASSERT_EQ(plan.batches.chunks.size(), 2u);
+  for (const auto &chunk : plan.batches.chunks) {
+    EXPECT_FLOAT_EQ(chunk.world_bounds.min.y, 3.0f);
+  }
+  EXPECT_TRUE(scene_wireframe_overlay_mesh_inputs_match(snapshot.meshes, snapshot.meshes));
+  auto moved_positions = std::make_shared<std::vector<QVec3>>(*positions);
+  for (auto &position : *moved_positions) position.y = 5.0f;
+  auto moved_projection = std::make_shared<MeshGeometryProjection>();
+  moved_projection->source_geometry = projection->source_geometry;
+  moved_projection->positions = moved_positions;
+  preview.front().geometry_projection = moved_projection;
+  const auto moved = build_render_tool_preview_wireframe_snapshot(preview, true);
+  EXPECT_FALSE(scene_wireframe_overlay_mesh_inputs_match(snapshot.meshes, moved.meshes));
+  ASSERT_EQ(moved.meshes.size(), 2u);
+  for (const auto &record : moved.meshes) {
+    EXPECT_FLOAT_EQ(record.wire_segments.front().start.y, 5.0f);
+    EXPECT_EQ(record.geometry_projection, moved_projection);
+  }
+  EXPECT_FLOAT_EQ(snapshot.meshes.front().wire_segments.front().start.y, 3.0f);
+  preview.front().wireframe_on_shaded = false;
+  for (const bool include_shaded : {false, true}) {
+    const auto ordinary = build_render_tool_preview_wireframe_snapshot(preview, include_shaded);
+    ASSERT_EQ(ordinary.meshes.size(), 1u);
+    EXPECT_FALSE(ordinary.meshes.front().shaded_wire);
+    EXPECT_EQ(ordinary.meshes.front().entity, 7u);
+    EXPECT_FLOAT_EQ(ordinary.meshes.front().wire_segments.front().start.y, 5.0f);
+  }
+}
+
+TEST(RenderWireframeOnShadedTests, PreviewPreparationGatesOrdinaryAndShadedRolesIndependently) {
+  for (const bool dynamic : {false, true}) {
+    for (const bool instanced : {false, true}) {
+      SCOPED_TRACE(dynamic);
+      SCOPED_TRACE(instanced);
+      std::vector<RenderToolPreviewMeshRecord> records{{
+          .source_entity = 9u,
+          .mesh = make_authored_quad_mesh(),
+          .dynamic_positions = dynamic}};
+      if (instanced) records.front().instance_transforms = {QMat4{}, QMat4{}};
+      const std::size_t placements = instanced ? 2u : 1u;
+      for (const bool include_ordinary : {false, true}) {
+        for (const bool include_shaded : {false, true}) {
+          SCOPED_TRACE(include_ordinary);
+          SCOPED_TRACE(include_shaded);
+          const auto snapshot = build_render_tool_preview_wireframe_snapshot(
+              records, include_shaded, include_ordinary);
+          EXPECT_EQ(snapshot.meshes.size(), placements *
+              (static_cast<std::size_t>(include_ordinary) +
+               static_cast<std::size_t>(include_shaded)));
+          EXPECT_EQ(std::ranges::count_if(snapshot.meshes,
+              [](const auto &mesh) { return mesh.shaded_wire; }),
+              include_shaded ? placements : 0u);
+          for (const auto &mesh : snapshot.meshes) {
+            EXPECT_EQ(mesh.entity, 9u);
+            EXPECT_TRUE(mesh.has_authored_polygon_geometry());
+            EXPECT_EQ(mesh.wire_segments.size(), 4u);
+          }
+        }
+      }
+      records.front().wireframe_on_shaded = false;
+      EXPECT_TRUE(build_render_tool_preview_wireframe_snapshot(records, true, false).meshes.empty());
+      const auto ordinary = build_render_tool_preview_wireframe_snapshot(records, true, true);
+      ASSERT_EQ(ordinary.meshes.size(), placements);
+      EXPECT_TRUE(std::ranges::none_of(ordinary.meshes,
+          [](const auto &mesh) { return mesh.shaded_wire; }));
+    }
+  }
+}
+
+TEST(RenderWireframeOnShadedTests, DefaultAndOverrideColorsRetainGlobalOpacityAndSelectionStyle) {
+  ViewportSettings settings;
+  const auto initial = ViewportOverlayStyleResolver::persistent_style_snapshot(settings);
+  RenderOverlayMeshSnapshot inherited{.shaded_wire = true};
+  const auto black = scene_wireframe_shaded_color(inherited, initial);
+  EXPECT_FLOAT_EQ(black.r, 0.0f);
+  EXPECT_FLOAT_EQ(black.g, 0.0f);
+  EXPECT_FLOAT_EQ(black.b, 0.0f);
+  EXPECT_FLOAT_EQ(black.a, 1.0f);
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::WireframeOnShaded,
+                                {0.25f, 0.5f, 0.75f, 0.4f}));
+  const auto changed = ViewportOverlayStyleResolver::persistent_style_snapshot(settings);
+  const auto global = scene_wireframe_shaded_color(inherited, changed);
+  EXPECT_FLOAT_EQ(global.r, 0.25f);
+  EXPECT_FLOAT_EQ(global.g, 0.5f);
+  EXPECT_FLOAT_EQ(global.b, 0.75f);
+  EXPECT_FLOAT_EQ(global.a, 0.4f);
+  inherited.wireframe_on_shaded_color = QVec3{0.125f, 0.375f, 0.625f};
+  const auto override_color = scene_wireframe_shaded_color(inherited, changed);
+  EXPECT_FLOAT_EQ(override_color.r, 0.125f);
+  EXPECT_FLOAT_EQ(override_color.g, 0.375f);
+  EXPECT_FLOAT_EQ(override_color.b, 0.625f);
+  EXPECT_FLOAT_EQ(override_color.a, 0.4f);
+  EXPECT_EQ(initial.wire_signature, changed.wire_signature);
+  EXPECT_EQ(initial.face_signature, changed.face_signature);
+  EXPECT_EQ(initial.selection_wire_color, changed.selection_wire_color);
+  EXPECT_EQ(initial.active_selection_wire_color, changed.active_selection_wire_color);
+  EXPECT_FALSE(viewport_persistent_overlay_wire_styles_match(initial, changed));
+  ViewportPersistentOverlayRasterGroupSet panes;
+  ASSERT_TRUE(panes.add(viewport_grid_layer_mask(0u), initial));
+  ASSERT_TRUE(panes.add(viewport_grid_layer_mask(1u), changed));
+  ASSERT_EQ(panes.size(), 2u);
+  EXPECT_FLOAT_EQ(scene_wireframe_shaded_color({}, panes.groups()[0].style).r, 0.0f);
+  EXPECT_FLOAT_EQ(scene_wireframe_shaded_color({}, panes.groups()[1].style).r, 0.25f);
+}
+
+TEST(RenderWireframeOnShadedTests, ColorChangesReuseAuthoredTopologyAndSeparateExactInstanceOverrides) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const AssetId asset = assets.add_mesh(make_authored_quad_mesh());
+  const EntityId inherited = document.create_entity("Inherited", EntityKind::Mesh);
+  const EntityId red = document.create_entity("Red", EntityKind::Mesh);
+  const EntityId blue = document.create_entity("Blue", EntityKind::Mesh);
+  document.set_mesh(inherited, {.mesh = asset});
+  document.set_mesh(red, {.mesh = asset, .wireframe_on_shaded_color = QVec3{1.0f, 0.0f, 0.0f}});
+  document.set_mesh(blue, {.mesh = asset, .wireframe_on_shaded_color = QVec3{0.0f, 0.0f, 1.0f}});
+  ViewportSettings settings;
+  auto style = ViewportOverlayStyleResolver::persistent_style_snapshot(settings);
+  RenderOverlaySnapshotCache cache;
+  const auto update = [&]() {
+    return cache.update_persistent(document, assets, false, 0u, style,
+        {}, nullptr, false, {}, {}, false, false, {}, viewport_grid_layer_mask(0u));
+  };
+  const auto first = update();
+  ASSERT_NE(first.scene_wireframe, nullptr);
+  const auto initial_plan = plan_scene_wireframe_overlay_batches(*first.scene_wireframe, 64u);
+  EXPECT_EQ(initial_plan.participant_count, 3u);
+  EXPECT_EQ(initial_plan.unique_geometry_style_count, 1u);
+  ASSERT_EQ(initial_plan.batches.chunks.size(), 3u);
+  const auto *retained_meshes = first.scene_wireframe->meshes.data();
+  const auto payload = first.scene_wireframe->meshes.front().wire_geometry_payload;
+  const auto source_geometry = first.scene_wireframe->meshes.front().geometry_payload;
+  const auto builds = cache.stats().scene_wireframe_build_count;
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::WireframeOnShaded,
+                                {0.25f, 0.5f, 0.75f, 0.5f}));
+  style = ViewportOverlayStyleResolver::persistent_style_snapshot(settings);
+  const auto recolored = update();
+  EXPECT_TRUE(recolored.scene_wireframe_changed);
+  EXPECT_EQ(cache.stats().scene_wireframe_build_count, builds);
+  EXPECT_EQ(recolored.scene_wireframe->meshes.data(), retained_meshes);
+  const auto recolored_plan = plan_scene_wireframe_overlay_batches(*recolored.scene_wireframe, 64u);
+  EXPECT_EQ(classify_instance_batch_update(initial_plan.batches, recolored_plan.batches),
+            RenderInstanceBatchUpdateKind::Unchanged);
+  EXPECT_FALSE(update().changed());
+
+  document.set_mesh(red, {.mesh = asset,
+      .wireframe_on_shaded_color = QVec3{0.0f, 0.0f, 0.99999f}});
+  const auto changed = update();
+  const auto changed_plan = plan_scene_wireframe_overlay_batches(*changed.scene_wireframe, 64u);
+  EXPECT_EQ(changed_plan.unique_geometry_style_count, 1u);
+  EXPECT_EQ(changed_plan.batches.chunks.size(), 3u)
+      << "Distinct normalized RGB values must not collapse through byte quantization.";
+  for (const auto &mesh : changed.scene_wireframe->meshes) {
+    EXPECT_EQ(mesh.wire_geometry_payload, payload);
+    EXPECT_EQ(mesh.geometry_payload, source_geometry);
+    ASSERT_EQ(mesh.wire_segments.size(), 4u);
+    if (!mesh.shaded_wire) continue;
+    const auto color = scene_wireframe_shaded_color(mesh, style);
+    EXPECT_FLOAT_EQ(color.a, 0.5f);
+    if (mesh.entity == inherited) EXPECT_FLOAT_EQ(color.r, 0.25f);
+    if (mesh.entity == red) EXPECT_FLOAT_EQ(color.b, 0.99999f);
+    if (mesh.entity == blue) EXPECT_FLOAT_EQ(color.b, 1.0f);
+  }
+}
+
+TEST(RenderWireframeOnShadedTests, PreviewColorsFollowOverridesAndGlobalPaneOpacity) {
+  MeshAsset mesh = make_authored_quad_mesh();
+  std::vector<RenderToolPreviewMeshRecord> previews{{
+      .source_entity = 4u,
+      .mesh = mesh,
+      .instance_transforms = {QMat4{}, QMat4{}},
+      .wireframe_on_shaded_color = QVec3{0.2f, 0.4f, 0.6f},
+  }};
+  const auto snapshot = build_render_tool_preview_wireframe_snapshot(previews, true);
+  ASSERT_EQ(snapshot.meshes.size(), 4u);
+  const auto original_wire = snapshot.meshes.front().wire_geometry_payload;
+  ASSERT_NE(original_wire, nullptr);
+  ViewportPersistentOverlayStyleSnapshot style;
+  style.wireframe_on_shaded_color = {0.9f, 0.8f, 0.7f, 0.3f};
+  std::size_t shaded_count = 0u;
+  for (const auto &record : snapshot.meshes) {
+    EXPECT_EQ(record.entity, 4u);
+    EXPECT_EQ(record.wire_geometry_payload, original_wire);
+    if (!record.shaded_wire) continue;
+    ++shaded_count;
+    const auto color = scene_wireframe_shaded_color(record, style);
+    EXPECT_FLOAT_EQ(color.r, 0.2f);
+    EXPECT_FLOAT_EQ(color.g, 0.4f);
+    EXPECT_FLOAT_EQ(color.b, 0.6f);
+    EXPECT_FLOAT_EQ(color.a, 0.3f);
+  }
+  EXPECT_EQ(shaded_count, 2u);
+  previews.front().instance_transforms.clear();
+  previews.front().dynamic_positions = true;
+  previews.front().wireframe_on_shaded_color.reset();
+  const auto dynamic = build_render_tool_preview_wireframe_snapshot(previews, true);
+  ASSERT_EQ(dynamic.meshes.size(), 2u);
+  EXPECT_EQ(dynamic.meshes.front().entity, 4u);
+  EXPECT_FALSE(dynamic.meshes.front().shaded_wire);
+  EXPECT_TRUE(dynamic.meshes.back().shaded_wire);
+  EXPECT_EQ(dynamic.meshes.front().wire_geometry_payload, dynamic.meshes.back().wire_geometry_payload);
+  const auto inherited = scene_wireframe_shaded_color(dynamic.meshes.back(), style);
+  EXPECT_FLOAT_EQ(inherited.r, 0.9f);
+  EXPECT_FLOAT_EQ(inherited.g, 0.8f);
+  EXPECT_FLOAT_EQ(inherited.b, 0.7f);
+  EXPECT_FLOAT_EQ(inherited.a, 0.3f);
+  const auto dynamic_wire = dynamic.meshes.front().wire_geometry_payload;
+  ASSERT_NE(dynamic_wire, nullptr);
+  EXPECT_EQ(dynamic.meshes.front().geometry_payload, snapshot.meshes.front().geometry_payload);
+  EXPECT_EQ(dynamic_wire->content_id, original_wire->content_id);
+  EXPECT_TRUE(dynamic_wire->authored);
+  EXPECT_TRUE(original_wire->authored);
+  ASSERT_EQ(original_wire->segments.size(), 4u);
+  ASSERT_EQ(dynamic_wire->segments.size(), original_wire->segments.size());
+  const auto same_point = [](QVec3 first, QVec3 second) {
+    return first.x == second.x && first.y == second.y && first.z == second.z;
+  };
+  for (std::size_t index = 0u; index < original_wire->segments.size(); ++index) {
+    const auto &original_segment = original_wire->segments[index];
+    const auto &dynamic_segment = dynamic_wire->segments[index];
+    EXPECT_TRUE(same_point(dynamic_segment.start, original_segment.start));
+    EXPECT_TRUE(same_point(dynamic_segment.end, original_segment.end));
+    ASSERT_EQ(dynamic_segment.surface_support_count, original_segment.surface_support_count);
+    for (std::size_t support = 0u; support < original_segment.surface_support_count; ++support) {
+      EXPECT_TRUE(same_point(dynamic_segment.surface_support[support],
+                             original_segment.surface_support[support]));
+    }
+  }
+}
+
+TEST(MeshWireGeometrySupportTests, NonplanarBoundaryUsesItsRenderedTriangle) {
+  MeshAsset mesh = make_authored_quad_mesh();
+  auto &geometry = mesh.edit_geometry();
+  geometry.vertices[2].position.y = 0.25f;
+  geometry.vertices[3].position.y = 10.0f;
+  auto &document = mesh.edit_authored_polygon_document();
+  for (std::size_t index = 0u; index < geometry.vertices.size(); ++index) {
+    geometry.vertices[index].source_vertex_id = static_cast<std::uint32_t>(index + 1u);
+    document.vertices[index].position = geometry.vertices[index].position;
+  }
+
+  const auto payload = mesh.wire_geometry_payload();
+  ASSERT_TRUE(payload->authored);
+  ASSERT_EQ(payload->segments.size(), 4u);
+  const auto &edge = payload->segments.front();
+  EXPECT_FLOAT_EQ(edge.start.x, -1.0f);
+  EXPECT_FLOAT_EQ(edge.end.x, 1.0f);
+  ASSERT_EQ(edge.surface_support_count, 1u);
+  EXPECT_FLOAT_EQ(edge.surface_support[0].x, 1.0f);
+  EXPECT_FLOAT_EQ(edge.surface_support[0].y, 0.25f);
+  EXPECT_FLOAT_EQ(edge.surface_support[0].z, 1.0f);
+  EXPECT_EQ(mesh.wire_geometry_payload(), payload);
+}
+
+TEST(MeshWireGeometrySupportTests, SharedEdgeRetainsBothIncidentSurfaces) {
+  MeshAsset mesh;
+  auto &geometry = mesh.edit_geometry();
+  geometry.vertices = {
+      {.position = {0.0f, 0.0f, 0.0f}, .source_vertex_id = 1u},
+      {.position = {1.0f, 0.0f, 0.0f}, .source_vertex_id = 2u},
+      {.position = {0.0f, 1.0f, 0.0f}, .source_vertex_id = 3u},
+      {.position = {0.0f, 0.0f, 1.0f}, .source_vertex_id = 4u},
+  };
+  geometry.indices = {0u, 1u, 2u, 1u, 0u, 3u};
+  quader_poly::Document document;
+  document.vertices = {
+      {.id = 1u, .position = geometry.vertices[0].position},
+      {.id = 2u, .position = geometry.vertices[1].position},
+      {.id = 3u, .position = geometry.vertices[2].position},
+      {.id = 4u, .position = geometry.vertices[3].position},
+  };
+  document.faces = {
+      {.id = 1u, .vertices = {1u, 2u, 3u}},
+      {.id = 2u, .vertices = {2u, 1u, 4u}},
+  };
+  mesh.replace_authored_polygon_document(std::move(document));
+
+  for (const bool authored : {true, false}) {
+    mesh.has_authored_polygon_document = authored;
+    const auto payload = mesh.wire_geometry_payload();
+    EXPECT_EQ(payload->authored, authored);
+    ASSERT_EQ(payload->segments.size(), 5u);
+    const auto &edge = payload->segments.front();
+    EXPECT_FLOAT_EQ(edge.start.x, 0.0f);
+    EXPECT_FLOAT_EQ(edge.end.x, 1.0f);
+    ASSERT_EQ(edge.surface_support_count, 2u);
+    EXPECT_FLOAT_EQ(edge.surface_support[0].x, 0.0f);
+    EXPECT_FLOAT_EQ(edge.surface_support[0].y, 1.0f);
+    EXPECT_FLOAT_EQ(edge.surface_support[0].z, 0.0f);
+    EXPECT_FLOAT_EQ(edge.surface_support[1].x, 0.0f);
+    EXPECT_FLOAT_EQ(edge.surface_support[1].y, 0.0f);
+    EXPECT_FLOAT_EQ(edge.surface_support[1].z, 1.0f);
+  }
+}
+
+TEST(MeshWireGeometrySupportTests, TriangulationSupportChangesInvalidateContentIdentity) {
+  MeshAsset mesh = make_authored_quad_mesh();
+  auto &geometry = mesh.edit_geometry();
+  for (std::size_t index = 0u; index < geometry.vertices.size(); ++index) {
+    geometry.vertices[index].source_vertex_id = static_cast<std::uint32_t>(index + 1u);
+  }
+  const auto original = mesh.wire_geometry_payload();
+  mesh.edit_geometry().indices = {0u, 1u, 3u, 1u, 2u, 3u};
+  const auto changed = mesh.wire_geometry_payload();
+
+  ASSERT_EQ(original->segments.size(), 4u);
+  ASSERT_EQ(changed->segments.size(), 4u);
+  for (std::size_t index = 0u; index < original->segments.size(); ++index) {
+    const auto &before = original->segments[index];
+    const auto &after = changed->segments[index];
+    EXPECT_FLOAT_EQ(after.start.x, before.start.x);
+    EXPECT_FLOAT_EQ(after.start.y, before.start.y);
+    EXPECT_FLOAT_EQ(after.start.z, before.start.z);
+    EXPECT_FLOAT_EQ(after.end.x, before.end.x);
+    EXPECT_FLOAT_EQ(after.end.y, before.end.y);
+    EXPECT_FLOAT_EQ(after.end.z, before.end.z);
+    ASSERT_EQ(before.surface_support_count, 1u);
+    ASSERT_EQ(after.surface_support_count, 1u);
+  }
+  EXPECT_FLOAT_EQ(original->segments.front().surface_support[0].x, 1.0f);
+  EXPECT_FLOAT_EQ(changed->segments.front().surface_support[0].x, -1.0f);
+  EXPECT_NE(original->content_id, changed->content_id);
+  EXPECT_EQ(mesh.wire_geometry_payload(), changed);
+}
+
+TEST(MeshWireGeometrySupportTests, LiveProjectionMovesEndpointsAndIncidentSurfaceTogether) {
+  MeshAsset mesh = make_authored_quad_mesh();
+  auto &geometry = mesh.edit_geometry();
+  for (std::size_t index = 0u; index < geometry.vertices.size(); ++index) {
+    geometry.vertices[index].source_vertex_id = static_cast<std::uint32_t>(index + 1u);
+  }
+  const auto original = mesh.wire_geometry_payload();
+  auto positions = std::make_shared<std::vector<QVec3>>();
+  for (const auto &vertex : mesh.geometry_vertices()) {
+    positions->push_back(vertex.position + QVec3{0.0f, 3.0f, 0.0f});
+  }
+  auto projection = std::make_shared<MeshGeometryProjection>();
+  projection->source_geometry = mesh.geometry_payload();
+  projection->positions = std::move(positions);
+  mesh.share_geometry_projection(std::move(projection));
+  const auto preview = mesh.wire_geometry_payload();
+
+  ASSERT_EQ(preview->segments.size(), 4u);
+  for (const auto &segment : preview->segments) {
+    EXPECT_FLOAT_EQ(segment.start.y, 3.0f);
+    EXPECT_FLOAT_EQ(segment.end.y, 3.0f);
+    ASSERT_EQ(segment.surface_support_count, 1u);
+    EXPECT_FLOAT_EQ(segment.surface_support[0].y, 3.0f);
+  }
+  EXPECT_FLOAT_EQ(original->segments.front().surface_support[0].y, 0.0f);
+  EXPECT_NE(original->content_id, preview->content_id);
+  EXPECT_EQ(mesh.wire_geometry_payload(), preview);
+}
+
+TEST(MeshWireGeometrySupportTests, MissingProvenanceUsesStableFaceSupportAndRejectsDegeneratePlanes) {
+  MeshAsset mesh = make_authored_quad_mesh();
+  auto &document = mesh.edit_authored_polygon_document();
+  document.vertices[2].position.z = -0.9999999f;
+  document.vertices[3].position.z = 2.0f;
+  const auto fallback = mesh.wire_geometry_payload();
+  ASSERT_EQ(fallback->segments.size(), 4u);
+  ASSERT_EQ(fallback->segments.front().surface_support_count, 1u);
+  EXPECT_FLOAT_EQ(fallback->segments.front().surface_support[0].x, -1.0f);
+  EXPECT_FLOAT_EQ(fallback->segments.front().surface_support[0].z, 2.0f);
+
+  auto &collinear = mesh.edit_authored_polygon_document();
+  for (std::size_t index = 0u; index < collinear.vertices.size(); ++index) {
+    collinear.vertices[index].position = {static_cast<float>(index), 0.0f, 0.0f};
+  }
+  const auto degenerate = mesh.wire_geometry_payload();
+  ASSERT_EQ(degenerate->segments.size(), 4u);
+  for (const auto &segment : degenerate->segments) {
+    EXPECT_EQ(segment.surface_support_count, 0u);
   }
 }

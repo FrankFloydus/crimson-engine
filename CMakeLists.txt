@@ -297,6 +297,11 @@ add_library(quader_modeling STATIC
 )
 
 quader_enable_common_pch(quader_modeling)
+if(MSVC)
+    # SDK projection and transactional history instantiate more than 65K COFF sections.
+    set_property(SOURCE src/editor/modeling/services/modeling_sdk_projection_adapter.cpp
+        APPEND PROPERTY COMPILE_OPTIONS /bigobj)
+endif()
 target_include_directories(quader_modeling PUBLIC src)
 target_link_libraries(quader_modeling PUBLIC glm::glm EnTT::EnTT)
 target_compile_definitions(quader_modeling
@@ -400,6 +405,7 @@ add_library(quader_editor_services STATIC
     src/editor/selection/editor_selection_service.cpp
     src/editor/session/project_asset_bootstrap_service.cpp
     src/editor/session/scene_session.cpp
+    src/editor/modes/editor_mode_service.cpp
     src/editor/session/viewport_local_visibility_service.cpp
     src/editor/tools/native_viewport_tool_coordinator.cpp
     src/editor/tools/uv_peel_tool_service.cpp
@@ -789,11 +795,11 @@ quader_register_filament_material(quader_mesh_lit_material resources/materials/q
 quader_register_filament_material(vertex_color_overlay_material resources/materials/vertex_color_overlay.mat vertex_color_overlay)
 quader_register_filament_material(quader_instance_selection_fill_material resources/materials/quader_instance_selection_fill.mat quader_instance_selection_fill)
 quader_register_filament_material(quader_overlay_line_material resources/materials/quader_overlay_line.mat quader_overlay_line resources/materials/overlay_line_coverage.glsl)
-quader_register_filament_material(quader_selected_object_line_material resources/materials/quader_selected_object_line.mat quader_selected_object_line resources/materials/instance_edit.glsl resources/materials/overlay_line_coverage.glsl)
+quader_register_filament_material(quader_selected_object_line_material resources/materials/quader_selected_object_line.mat quader_selected_object_line resources/materials/instance_edit.glsl resources/materials/overlay_line_coverage.glsl resources/materials/overlay_wire_surface_depth.glsl)
 quader_register_filament_material(quader_selection_mask_material resources/materials/quader_selection_mask.mat quader_selection_mask)
 quader_register_filament_material(quader_component_selection_material resources/materials/quader_component_selection.mat quader_component_selection)
 quader_register_filament_material(quader_selection_outline_material resources/materials/quader_selection_outline.mat quader_selection_outline)
-quader_register_filament_material(quader_edit_wire_line_material resources/materials/quader_edit_wire_line.mat quader_edit_wire_line resources/materials/overlay_line_coverage.glsl)
+quader_register_filament_material(quader_edit_wire_line_material resources/materials/quader_edit_wire_line.mat quader_edit_wire_line resources/materials/overlay_line_coverage.glsl resources/materials/overlay_wire_surface_depth.glsl)
 quader_register_filament_material(quader_overlay_point_material resources/materials/quader_overlay_point.mat quader_overlay_point)
 quader_register_filament_material(quader_overlay_icon_material resources/materials/quader_overlay_icon.mat quader_overlay_icon)
 quader_register_filament_material(overlay_stencil_reset_material resources/materials/overlay_stencil_reset.mat overlay_stencil_reset)
@@ -944,6 +950,7 @@ endif()
 
 add_library(quader_editor_api STATIC
     src/api/quader_editor_api.cpp
+    src/api/quader_editor_mode_api.cpp
     src/api/quader_render_api.cpp
 )
 
@@ -1276,6 +1283,7 @@ set(QUADER_SNAPPING_TOOLBAR_ICON_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/snapping_rotation.png")
 
 set(QUADER_VIEWPORT_DISPLAY_TOOLBAR_ICON_FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/viewport_wireframe_on_shaded.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/viewport_grid.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/viewport_gizmos.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/viewport_mesh_grid.png"
@@ -1793,6 +1801,10 @@ if(QUADER_BUILD_TESTS)
         tests/qt_viewport_marking_menu_tests.cpp
         tests/qstr_tests.cpp
         tests/editor_api_tests.cpp
+        tests/editor_mode_service_tests.cpp
+        tests/wireframe_on_shaded_tests.cpp
+        tests/editor_mode_structural_tests.cpp
+        tests/editor_mode_tool_policy_tests.cpp
         tests/modeling_selection_performance_tests.cpp
         tests/operation_input_hint_tests.cpp
         tests/transform_operation_input_hint_tests.cpp

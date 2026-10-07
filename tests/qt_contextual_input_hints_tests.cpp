@@ -557,6 +557,8 @@ TEST_F(QtContextualInputHintsTests,
   const auto created = editor.modeling().create_box(
       {.min = {-64, -32, -16}, .max = {64, 32, 16}}, "Texture hints");
   ASSERT_TRUE(created.ok());
+  ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(created.value(), 1).ok());
   QtFaceTextureCanvas canvas;

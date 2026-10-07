@@ -15,6 +15,7 @@
 namespace quader {
 
 class AssetRegistry;
+class EditorModeService;
 class ModelingSessionService;
 class NativeViewportToolCoordinator;
 class SceneDocument;
@@ -40,7 +41,8 @@ public:
 
   ViewportLocalVisibilityService(
       SceneDocument &scene, AssetRegistry &assets,
-      ModelingSessionService &modeling, SceneInstanceService &instances,
+      ModelingSessionService &modeling, const EditorModeService &editor_mode,
+      SceneInstanceService &instances,
       NativeViewportToolCoordinator &native_tools,
       ViewportWorkspaceService &workspace,
       ResolvedHoverClearer clear_resolved_hover);
@@ -67,6 +69,7 @@ private:
   SceneDocument &scene_;
   AssetRegistry &assets_;
   ModelingSessionService &modeling_;
+  const EditorModeService &editor_mode_;
   SceneInstanceService &instances_;
   NativeViewportToolCoordinator &native_tools_;
   ViewportWorkspaceService &workspace_;
@@ -74,7 +77,7 @@ private:
   mutable std::uint64_t last_reconciled_scene_content_revision_ = 0u;
   mutable std::uint64_t last_reconciled_workspace_revision_ = 0u;
   mutable bool lifecycle_reconcile_valid_ = false;
-  mutable std::uint64_t component_availability_selection_revision_ = 0u;
+  mutable std::uint64_t component_availability_mode_revision_ = 0u;
   mutable std::uint64_t component_availability_object_map_revision_ = 0u;
   mutable std::uint64_t component_availability_visibility_revision_ = 0u;
   mutable std::uint64_t component_availability_layer_revision_ = 0u;

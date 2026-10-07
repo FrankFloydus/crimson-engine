@@ -394,6 +394,7 @@ TEST_F(QtViewportEdgeLengthHudTests,
       quader::QuaderPolygonDocumentInternalAccess::from_backend(std::move(topology)));
   ASSERT_TRUE(mesh.ok()) << mesh.error_message();
   ASSERT_TRUE(editor.selection().select_object(mesh.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
   ASSERT_TRUE(editor.selection().select_edge(mesh.value(), vertices[0], vertices[3]).ok());
   ASSERT_TRUE(editor.main_viewport().set_view(quader::ViewportView::Back).ok());

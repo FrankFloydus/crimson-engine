@@ -13,6 +13,7 @@
 #include "editor/session/scene_session.hpp"
 #include "ui/inspector_panel.hpp"
 #include "ui/qt_application_theme.hpp"
+#include "ui/qt_color_swatch_button.hpp"
 #include "ui/qt_numeric_spin_box.hpp"
 #include "ui/qt_panel_section_header.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
@@ -22,6 +23,7 @@
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QColorDialog>
 #include <QComboBox>
 #include <QHeaderView>
 #include <QHelpEvent>
@@ -180,6 +182,11 @@ void export_inspector_image(InspectorPanel &panel, const QString &name) {
   ASSERT_TRUE(panel.grab().save(QDir(directory).filePath(name)));
 }
 
+QtColorSwatchButton *wireframe_color_button(InspectorPanel &panel) {
+  return dynamic_cast<QtColorSwatchButton *>(panel.findChild<QPushButton *>(
+      QStringLiteral("inspector.shading.wireframe_color")));
+}
+
 QRect relative_geometry(const QWidget &widget, const QWidget &ancestor) {
   return {widget.mapTo(&ancestor, QPoint{}), widget.size()};
 }
@@ -303,6 +310,403 @@ TEST_F(QtInspectorNumericDragTests,
   EXPECT_EQ(runtime.session.scene().revision(), revision);
   EXPECT_EQ(runtime.session.history().undo_count(), undo_count);
   runtime.expect_position_x(1.0);
+  panel.abandon_runtime();
+}
+
+TEST_F(QtInspectorNumericDragTests,
+       MeshShadingWireframeKeepsPerObjectChoiceAndSupportsMixedUndo) {
+  const QPalette native_palette = application().palette();
+  apply_qt_obsidian_application_theme(native_palette);
+  QtUiScaleApplicationController scale_controller(application());
+  InspectorTransformRuntime runtime;
+  runtime.initialize_box();
+  ASSERT_TRUE(runtime.localization.load(
+      std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales", "en-US"));
+  InspectorPanel panel;
+  scale_controller.add_change_listener(panel, [&](const QtUiScaleMetrics &metrics) {
+    panel.apply_ui_scale(metrics);
+  });
+  show(panel, runtime);
+  const auto refresh = [&] {
+    panel.refresh(runtime.context);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    settle_inspector_layout(panel);
+  };
+  const auto checkbox = [&] {
+    return panel.findChild<QCheckBox *>(
+        QStringLiteral("inspector.shading.wireframe_on_shaded"));
+  };
+  ASSERT_NE(checkbox(), nullptr);
+  EXPECT_TRUE(checkbox()->isChecked());
+  EXPECT_TRUE(runtime.session.scene().mesh(runtime.entity)->wireframe_on_shaded);
+  EXPECT_FALSE(runtime.editor.viewports().control(QuaderViewportControl::WireframeOnShaded));
+  const auto history_before = runtime.session.history().undo_count();
+  checkbox()->click();
+  refresh();
+  EXPECT_FALSE(runtime.session.scene().mesh(runtime.entity)->wireframe_on_shaded);
+  EXPECT_EQ(runtime.session.history().undo_count(), history_before + 1u);
+  ASSERT_TRUE(runtime.editor.viewports().set_control(
+      QuaderViewportControl::WireframeOnShaded, true).ok());
+  refresh();
+  EXPECT_FALSE(checkbox()->isChecked());
+  EXPECT_EQ(runtime.session.history().undo_count(), history_before + 1u);
+
+  const auto second = runtime.editor.modeling().create_box(
+      {.min = {3, -1, -1}, .max = {5, 1, 1}}, "Other shading mesh");
+  ASSERT_TRUE(second.ok());
+  ASSERT_TRUE(runtime.editor.scene().select({runtime.entity, second.value().entity}).ok());
+  refresh();
+  ASSERT_NE(checkbox(), nullptr);
+  EXPECT_FALSE(checkbox()->isChecked());
+  EXPECT_NE(panel.findChild<QLabel *>(
+      QStringLiteral("inspector.shading.wireframe_on_shaded.mixed")), nullptr);
+  const auto before_batch = runtime.session.history().undo_count();
+  checkbox()->click();
+  refresh();
+  EXPECT_TRUE(runtime.session.scene().mesh(runtime.entity)->wireframe_on_shaded);
+  EXPECT_TRUE(runtime.session.scene().mesh(second.value().entity)->wireframe_on_shaded);
+  EXPECT_EQ(runtime.session.history().undo_count(), before_batch + 1u);
+  ASSERT_TRUE(runtime.editor.history().undo().ok());
+  refresh();
+  EXPECT_FALSE(runtime.session.scene().mesh(runtime.entity)->wireframe_on_shaded);
+  EXPECT_TRUE(runtime.session.scene().mesh(second.value().entity)->wireframe_on_shaded);
+  ASSERT_TRUE(runtime.editor.history().redo().ok());
+  refresh();
+  EXPECT_TRUE(checkbox()->isChecked());
+  const QPointer<QCheckBox> retained(checkbox());
+  const auto unchanged_history = runtime.session.history().undo_count();
+  for (int frame = 0; frame < 12; ++frame) panel.refresh(runtime.context);
+  EXPECT_EQ(checkbox(), retained.data());
+  EXPECT_EQ(runtime.session.history().undo_count(), unchanged_history);
+  int cycle = 0;
+  for (const float factor : {1.0F, 2.0F, 1.0F}) {
+    scale_controller.apply_factor(factor);
+    panel.resize(scale_controller.metrics().size(QSize(418, 1000)));
+    refresh();
+    EXPECT_TRUE(checkbox()->isEnabled());
+    EXPECT_TRUE(checkbox()->isChecked());
+    export_inspector_image(panel, QStringLiteral("inspector-shading-%1-%2.png")
+        .arg(qRound(factor * 100)).arg(cycle++));
+  }
+  ASSERT_TRUE(runtime.localization.select_locale("it-IT"));
+  refresh();
+  export_inspector_image(panel, QStringLiteral("inspector-shading-italian.png"));
+  apply_qt_application_theme_for_contrast_preference(
+      native_palette, Qt::ContrastPreference::HighContrast);
+  refresh();
+  export_inspector_image(panel, QStringLiteral("inspector-shading-native-contrast.png"));
+  ASSERT_TRUE(runtime.editor.mode().set(QuaderEditorMode::Edit).ok());
+  refresh();
+  EXPECT_EQ(checkbox(), nullptr);
+  panel.abandon_runtime();
+}
+
+TEST_F(QtInspectorNumericDragTests,
+       MeshWireframeColorInheritsGlobalAndMixedOverridesUndoAsOneEdit) {
+  InspectorTransformRuntime runtime;
+  runtime.initialize_box();
+  InspectorPanel panel;
+  show(panel, runtime);
+  const auto refresh = [&] {
+    panel.refresh(runtime.context);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    settle_inspector_layout(panel);
+  };
+  const auto custom = [&] {
+    return panel.findChild<QCheckBox *>("inspector.shading.custom_wireframe_color");
+  };
+  const auto swatch = [&] {
+    return wireframe_color_button(panel);
+  };
+  ASSERT_NE(custom(), nullptr);
+  ASSERT_NE(swatch(), nullptr);
+  EXPECT_FALSE(custom()->isChecked());
+  EXPECT_FALSE(swatch()->isEnabled());
+  EXPECT_EQ(swatch()->swatch_color(), QColor(Qt::black));
+  EXPECT_FALSE(runtime.session.scene().mesh(runtime.entity)->wireframe_on_shaded_color);
+  const auto inherited_history = runtime.session.history().undo_count();
+  runtime.viewport_settings.set_color(ViewportColorSettingId::WireframeOnShaded,
+                                      {0.2f, 0.4f, 0.6f, 0.3f});
+  refresh();
+  EXPECT_EQ(swatch()->swatch_color(), QColor::fromRgbF(0.2f, 0.4f, 0.6f));
+  EXPECT_EQ(runtime.session.history().undo_count(), inherited_history);
+  custom()->click();
+  refresh();
+  ASSERT_TRUE(runtime.session.scene().mesh(runtime.entity)->wireframe_on_shaded_color);
+  const QVec3 original = *runtime.session.scene().mesh(runtime.entity)->wireframe_on_shaded_color;
+  EXPECT_FLOAT_EQ(original.x, 0.2f);
+  EXPECT_FLOAT_EQ(original.y, 0.4f);
+  EXPECT_FLOAT_EQ(original.z, 0.6f);
+  EXPECT_TRUE(swatch()->isEnabled());
+  EXPECT_EQ(runtime.session.history().undo_count(), inherited_history + 1u);
+  runtime.viewport_settings.set_color(ViewportColorSettingId::WireframeOnShaded,
+                                      {0.7f, 0.5f, 0.1f, 0.9f});
+  refresh();
+  EXPECT_EQ(swatch()->swatch_color(), QColor::fromRgbF(original.x, original.y, original.z));
+
+  const auto second = runtime.editor.modeling().create_box(
+      {.min = {3, -1, -1}, .max = {5, 1, 1}}, "Inherited color");
+  ASSERT_TRUE(second.ok());
+  auto second_mesh = to_api_mesh_component(*runtime.session.scene().mesh(second.value().entity));
+  second_mesh.wireframe_on_shaded = false;
+  second_mesh.display_collision = true;
+  ASSERT_TRUE(runtime.editor.scene().set_mesh_component(second.value().entity, second_mesh).ok());
+  ASSERT_TRUE(runtime.editor.scene().select({runtime.entity, second.value().entity}).ok());
+  refresh();
+  EXPECT_NE(panel.findChild<QLabel *>("inspector.shading.custom_wireframe_color.mixed"), nullptr);
+  EXPECT_NE(panel.findChild<QLabel *>("inspector.shading.wireframe_color.mixed"), nullptr);
+  EXPECT_FALSE(swatch()->isEnabled());
+  const auto before_enable = runtime.session.history().undo_count();
+  custom()->click();
+  refresh();
+  EXPECT_TRUE(custom()->isChecked());
+  EXPECT_TRUE(swatch()->isEnabled());
+  EXPECT_EQ(runtime.session.history().undo_count(), before_enable + 1u);
+  EXPECT_FLOAT_EQ(runtime.session.scene().mesh(runtime.entity)->wireframe_on_shaded_color->x, original.x);
+  ASSERT_TRUE(runtime.session.scene().mesh(second.value().entity)->wireframe_on_shaded_color);
+  EXPECT_FLOAT_EQ(runtime.session.scene().mesh(second.value().entity)->wireframe_on_shaded_color->x, 0.7f);
+  EXPECT_FALSE(runtime.session.scene().mesh(second.value().entity)->wireframe_on_shaded);
+  EXPECT_TRUE(runtime.session.scene().mesh(second.value().entity)->display_collision);
+  ASSERT_TRUE(runtime.editor.history().undo().ok());
+  EXPECT_FALSE(runtime.session.scene().mesh(second.value().entity)->wireframe_on_shaded_color);
+  EXPECT_TRUE(runtime.session.scene().mesh(runtime.entity)->wireframe_on_shaded_color);
+  ASSERT_TRUE(runtime.editor.history().redo().ok());
+  refresh();
+  const auto before_shared_color = runtime.session.history().undo_count();
+  QTimer::singleShot(0, &panel, [&] {
+    auto *dialog = panel.findChild<QColorDialog *>("inspector.shading.wireframe_color.dialog");
+    EXPECT_NE(dialog, nullptr);
+    if (dialog == nullptr) return;
+    dialog->setCurrentColor(Qt::white);
+    dialog->accept();
+  });
+  swatch()->click();
+  refresh();
+  EXPECT_EQ(runtime.session.history().undo_count(), before_shared_color + 1u);
+  EXPECT_FLOAT_EQ(runtime.session.scene().mesh(runtime.entity)->wireframe_on_shaded_color->x, 1.0f);
+  EXPECT_FLOAT_EQ(runtime.session.scene().mesh(second.value().entity)->wireframe_on_shaded_color->x, 1.0f);
+  EXPECT_EQ(panel.findChild<QLabel *>("inspector.shading.wireframe_color.mixed"), nullptr);
+  ASSERT_TRUE(runtime.editor.history().undo().ok());
+  refresh();
+  const auto before_clear = runtime.session.history().undo_count();
+  custom()->click();
+  refresh();
+  EXPECT_FALSE(runtime.session.scene().mesh(runtime.entity)->wireframe_on_shaded_color);
+  EXPECT_FALSE(runtime.session.scene().mesh(second.value().entity)->wireframe_on_shaded_color);
+  EXPECT_EQ(runtime.session.history().undo_count(), before_clear + 1u);
+  EXPECT_EQ(swatch()->swatch_color(), QColor::fromRgbF(0.7f, 0.5f, 0.1f));
+  ASSERT_TRUE(runtime.editor.history().undo().ok());
+  refresh();
+  EXPECT_TRUE(custom()->isChecked());
+  EXPECT_NE(panel.findChild<QLabel *>("inspector.shading.wireframe_color.mixed"), nullptr);
+  panel.abandon_runtime();
+}
+
+TEST_F(QtInspectorNumericDragTests,
+       MeshWireframeColorDialogStagesRgbAndCommitsCapturedMeshesOnly) {
+  InspectorTransformRuntime runtime;
+  runtime.initialize_box();
+  const auto second = runtime.editor.modeling().create_box(
+      {.min = {3, -1, -1}, .max = {5, 1, 1}}, "Other color target");
+  ASSERT_TRUE(second.ok());
+  ASSERT_TRUE(runtime.editor.scene().select(runtime.entity).ok());
+  InspectorPanel panel;
+  show(panel, runtime);
+  const auto refresh = [&] {
+    panel.refresh(runtime.context);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    settle_inspector_layout(panel);
+  };
+  auto *custom = panel.findChild<QCheckBox *>("inspector.shading.custom_wireframe_color");
+  ASSERT_NE(custom, nullptr);
+  custom->click();
+  refresh();
+  const QColor chosen = QColor::fromRgbF(0.25f, 0.5f, 0.75f);
+  QColor selected_sample;
+  const auto before_dialog = runtime.session.history().undo_count();
+  for (const bool accept : {false, true}) {
+    auto *swatch = wireframe_color_button(panel);
+    ASSERT_NE(swatch, nullptr);
+    bool visited = false;
+    QTimer::singleShot(0, &panel, [&] {
+      auto *dialog = panel.findChild<QColorDialog *>("inspector.shading.wireframe_color.dialog");
+      EXPECT_NE(dialog, nullptr);
+      if (dialog == nullptr) return;
+      visited = true;
+      EXPECT_FALSE(dialog->testOption(QColorDialog::ShowAlphaChannel));
+      dialog->setCurrentColor(chosen);
+      EXPECT_FLOAT_EQ(runtime.session.scene().mesh(runtime.entity)->wireframe_on_shaded_color->x, 0.0f);
+      EXPECT_EQ(runtime.session.history().undo_count(), before_dialog);
+      if (accept) {
+        EXPECT_TRUE(runtime.editor.scene().select(second.value().entity).ok());
+        panel.refresh(runtime.context); // Settles against the original captured mesh.
+        selected_sample = dialog->selectedColor();
+      } else {
+        dialog->reject();
+      }
+    });
+    swatch->click();
+    EXPECT_TRUE(visited);
+    if (!accept) {
+      EXPECT_EQ(runtime.session.history().undo_count(), before_dialog);
+      EXPECT_FLOAT_EQ(runtime.session.scene().mesh(runtime.entity)->wireframe_on_shaded_color->x, 0.0f);
+      EXPECT_EQ(swatch->swatch_color(), QColor(Qt::black));
+    }
+  }
+  refresh();
+  ASSERT_TRUE(runtime.session.scene().mesh(runtime.entity)->wireframe_on_shaded_color);
+  const auto accepted = *runtime.session.scene().mesh(runtime.entity)->wireframe_on_shaded_color;
+  ASSERT_TRUE(selected_sample.isValid());
+  EXPECT_FLOAT_EQ(accepted.x, static_cast<float>(selected_sample.redF()));
+  EXPECT_FLOAT_EQ(accepted.y, static_cast<float>(selected_sample.greenF()));
+  EXPECT_FLOAT_EQ(accepted.z, static_cast<float>(selected_sample.blueF()));
+  EXPECT_FALSE(runtime.session.scene().mesh(second.value().entity)->wireframe_on_shaded_color);
+  // Object selection has its own history entry, followed by one color edit.
+  EXPECT_EQ(runtime.session.history().undo_count(), before_dialog + 2u);
+  ASSERT_TRUE(runtime.editor.history().undo().ok());
+  EXPECT_FLOAT_EQ(runtime.session.scene().mesh(runtime.entity)->wireframe_on_shaded_color->x, 0.0f);
+  ASSERT_TRUE(runtime.editor.history().redo().ok());
+  EXPECT_FLOAT_EQ(runtime.session.scene().mesh(runtime.entity)->wireframe_on_shaded_color->x,
+                  static_cast<float>(selected_sample.redF()));
+  panel.abandon_runtime();
+}
+
+TEST_F(QtInspectorNumericDragTests,
+       MeshWireframeColorDialogRejectsStaleModeAndRuntimeResults) {
+  InspectorTransformRuntime runtime;
+  runtime.initialize_box();
+  InspectorTransformRuntime replacement;
+  replacement.initialize_box();
+  InspectorPanel panel;
+  show(panel, runtime);
+  const auto refresh = [&] {
+    panel.refresh(runtime.context);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    settle_inspector_layout(panel);
+  };
+  auto *custom = panel.findChild<QCheckBox *>("inspector.shading.custom_wireframe_color");
+  ASSERT_NE(custom, nullptr);
+  custom->click();
+  refresh();
+  const auto before_dialog = runtime.session.history().undo_count();
+  for (const bool rebind : {false, true}) {
+    auto *swatch = wireframe_color_button(panel);
+    ASSERT_NE(swatch, nullptr);
+    bool visited = false;
+    QTimer::singleShot(0, &panel, [&] {
+      auto *dialog = panel.findChild<QColorDialog *>("inspector.shading.wireframe_color.dialog");
+      EXPECT_NE(dialog, nullptr);
+      if (dialog == nullptr) return;
+      visited = true;
+      dialog->setCurrentColor(Qt::red);
+      if (rebind) {
+        panel.refresh(replacement.context);
+      } else {
+        EXPECT_TRUE(runtime.editor.mode().set(QuaderEditorMode::Edit).ok());
+        EXPECT_TRUE(runtime.editor.mode().set(QuaderEditorMode::Object).ok());
+        panel.refresh(runtime.context);
+      }
+      dialog->accept(); // Even a late explicit acceptance cannot cross the fence.
+    });
+    swatch->click();
+    EXPECT_TRUE(visited);
+    EXPECT_EQ(runtime.session.history().undo_count(), before_dialog);
+    EXPECT_FLOAT_EQ(runtime.session.scene().mesh(runtime.entity)->wireframe_on_shaded_color->x, 0.0f);
+    EXPECT_FALSE(replacement.session.scene().mesh(replacement.entity)->wireframe_on_shaded_color);
+    if (!rebind) refresh();
+  }
+  panel.abandon_runtime();
+}
+
+TEST_F(QtInspectorNumericDragTests,
+       MeshWireframeColorDialogCanOutliveItsInspectorWithoutPublishing) {
+  InspectorTransformRuntime runtime;
+  runtime.initialize_box();
+  auto panel = std::make_unique<InspectorPanel>();
+  show(*panel, runtime);
+  auto *custom = panel->findChild<QCheckBox *>("inspector.shading.custom_wireframe_color");
+  ASSERT_NE(custom, nullptr);
+  custom->click();
+  panel->refresh(runtime.context);
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  auto *swatch = wireframe_color_button(*panel);
+  ASSERT_NE(swatch, nullptr);
+  const auto before_dialog = runtime.session.history().undo_count();
+  bool visited = false;
+  QTimer::singleShot(0, &application(), [&] {
+    auto *dialog = panel->findChild<QColorDialog *>("inspector.shading.wireframe_color.dialog");
+    EXPECT_NE(dialog, nullptr);
+    if (dialog == nullptr) return;
+    visited = true;
+    dialog->setCurrentColor(Qt::red);
+    panel.reset();
+  });
+  swatch->click();
+  EXPECT_TRUE(visited);
+  EXPECT_EQ(panel, nullptr);
+  EXPECT_EQ(runtime.session.history().undo_count(), before_dialog);
+  EXPECT_FLOAT_EQ(runtime.session.scene().mesh(runtime.entity)->wireframe_on_shaded_color->x, 0.0f);
+}
+
+TEST_F(QtInspectorNumericDragTests,
+       MeshWireframeColorControlsRetainNativePresentationAcrossScaleAndLocale) {
+  const QPalette native_palette = application().palette();
+  apply_qt_obsidian_application_theme(native_palette);
+  QtUiScaleApplicationController scale_controller(application());
+  InspectorTransformRuntime runtime;
+  runtime.initialize_box();
+  ASSERT_TRUE(runtime.localization.load(
+      std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales", "en-US"));
+  InspectorPanel panel;
+  scale_controller.add_change_listener(panel, [&](const QtUiScaleMetrics &metrics) {
+    panel.apply_ui_scale(metrics);
+  });
+  show(panel, runtime);
+  const auto refresh = [&] {
+    panel.refresh(runtime.context);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    settle_inspector_layout(panel);
+  };
+  auto *custom = panel.findChild<QCheckBox *>("inspector.shading.custom_wireframe_color");
+  ASSERT_NE(custom, nullptr);
+  custom->click();
+  refresh();
+  int cycle = 0;
+  for (const float scale : {1.0f, 2.0f, 1.0f}) {
+    scale_controller.apply_factor(scale);
+    panel.resize(scale_controller.metrics().size(QSize(418, 1150)));
+    refresh();
+    auto *swatch = wireframe_color_button(panel);
+    ASSERT_NE(swatch, nullptr);
+    EXPECT_TRUE(swatch->isEnabled());
+    EXPECT_GE(swatch->width(), swatch->minimumSizeHint().width());
+    EXPECT_GE(swatch->height(), swatch->minimumSizeHint().height());
+    const QPointer<QtColorSwatchButton> retained(swatch);
+    auto *tree = panel.findChild<QTreeWidget *>("inspector.tree");
+    ASSERT_NE(tree, nullptr);
+    int inserted_rows = 0;
+    const auto counter_connection = QObject::connect(
+        tree->model(), &QAbstractItemModel::rowsInserted, &panel,
+        [&](const QModelIndex &, int first, int last) { inserted_rows += last - first + 1; });
+    const auto history_before = runtime.session.history().undo_count();
+    for (int frame = 0; frame < 16; ++frame) panel.refresh(runtime.context);
+    EXPECT_EQ(wireframe_color_button(panel), retained.data());
+    EXPECT_EQ(inserted_rows, 0);
+    QObject::disconnect(counter_connection);
+    EXPECT_EQ(runtime.session.history().undo_count(), history_before);
+    export_inspector_image(panel, QStringLiteral("inspector-wireframe-color-%1-%2.png")
+        .arg(qRound(scale * 100)).arg(cycle++));
+  }
+  ASSERT_TRUE(runtime.localization.select_locale("it-IT"));
+  refresh();
+  export_inspector_image(panel, QStringLiteral("inspector-wireframe-color-italian.png"));
+  panel.setLayoutDirection(Qt::RightToLeft);
+  refresh();
+  export_inspector_image(panel, QStringLiteral("inspector-wireframe-color-rtl.png"));
+  apply_qt_application_theme_for_contrast_preference(
+      native_palette, Qt::ContrastPreference::HighContrast);
+  refresh();
+  export_inspector_image(panel, QStringLiteral("inspector-wireframe-color-native-contrast.png"));
   panel.abandon_runtime();
 }
 
@@ -1431,7 +1835,10 @@ TEST_F(QtInspectorNumericDragTests,
   ASSERT_NE(position, nullptr);
   position->setValue(2.0);
   runtime.expect_position_x(2.0);
+  const auto mode_before_selection = runtime.editor.mode().state();
   ASSERT_TRUE(runtime.editor.scene().select(second.value().id).ok());
+  EXPECT_GT(runtime.editor.mode().revision(), mode_before_selection.revision);
+  EXPECT_EQ(runtime.editor.mode().generation(), mode_before_selection.generation);
   const auto undo_before_refresh = runtime.session.history().undo_count();
   panel.refresh(runtime.context);
   runtime.expect_position_x(2.0);

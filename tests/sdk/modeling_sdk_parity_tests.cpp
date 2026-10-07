@@ -238,6 +238,10 @@ public:
       : standalone_(quader::create_standalone_editor()),
         editor_(standalone_.editor()), api_(editor_.api()) {}
 
+  [[nodiscard]] quader::QuaderApiVoidResult enter_edit_mode() {
+    return editor_.mode().set(quader::QuaderEditorMode::Edit);
+  }
+
   [[nodiscard]] NormalizedObservation execute(const TranscriptStep &step) {
     bool ok = false;
     bool changed = false;
@@ -633,12 +637,20 @@ TEST(ModelingSdkParityHarnessTests,
   SdkTranscriptRunner sdk;
   for (std::size_t index = 0; index < kTranscript.size(); ++index) {
     SCOPED_TRACE(index);
+    if (kTranscript[index].intent == TranscriptIntent::SelectFace) {
+      ASSERT_TRUE(native.enter_edit_mode().ok());
+    }
     const NormalizedObservation native_observation =
         native.execute(kTranscript[index]);
     const NormalizedObservation sdk_observation = sdk.execute(kTranscript[index]);
     const std::vector<std::string> diff =
         observation_diff(native_observation, sdk_observation);
-    EXPECT_TRUE(diff.empty()) << (diff.empty() ? std::string{} : diff.front());
+    EXPECT_TRUE(diff.empty())
+        << (diff.empty() ? std::string{} : diff.front())
+        << "; native selection dirty="
+        << native_observation.selection_revision_changed
+        << ", SDK selection dirty="
+        << sdk_observation.selection_revision_changed;
   }
 
   const NormalizedObservation native_stale =
@@ -668,6 +680,7 @@ TEST(ModelingSdkParityTests,
   const quader::QuaderApiResult<quader::QuaderModelingObjectRef>
       native_object = api.modeling().create_box(args);
   ASSERT_TRUE(native_object.ok()) << native_object.error_message();
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(api.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(api.selection().select_face(native_object.value(), 1).ok());
   ASSERT_TRUE(api.modeling().move_selection({1.0F, 0.0F, 0.0F}).ok());
@@ -744,6 +757,7 @@ TEST(ModelingSdkParityTests,
       native_object = api.modeling().create_box(args);
   ASSERT_TRUE(native_object.ok()) << native_object.error_message();
   ASSERT_TRUE(api.selection().select_object(native_object.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(api.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(api.selection().select_face(native_object.value(), 1).ok());
 

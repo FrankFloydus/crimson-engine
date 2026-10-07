@@ -54,13 +54,15 @@ struct ExtrudePointerHarness final {
     input.viewport_size = {800.0F, 600.0F};
   }
 
-  void prepare_faces() {
+  void prepare_faces(const QuaderTransform &transform = {}) {
     const auto created = editor.modeling().create_box(
         {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}},
         "Extrusion pointer box");
     ASSERT_TRUE(created.ok()) << created.error_message();
     object = created.value();
+    ASSERT_TRUE(editor.scene().set_transform(object.entity, transform).ok());
     ASSERT_TRUE(editor.selection().select_object(object).ok());
+    ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
     ASSERT_TRUE(editor.selection().select_face(object, 1).ok());
     ASSERT_TRUE(session.extrude().set_amount(0.0).ok);
@@ -94,6 +96,7 @@ struct ExtrudePointerHarness final {
         {.name = "Perpendicular extrusion faces"});
     ASSERT_TRUE(created.ok()) << created.error_message();
     object = created.value();
+    ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
     ASSERT_TRUE(editor.selection().select_faces(object, {1, 2}).ok());
     ASSERT_TRUE(editor.tools().activate(ViewportToolId::Extrude).ok());
@@ -180,7 +183,7 @@ QVec3 selected_face_center(const ViewportOverlayFrame &frame) {
 
 TEST(ExtrudeViewportInteractionTests, EmptyActivationAndModifierClicksKeepSelectionInput) {
   ExtrudePointerHarness harness;
-  ASSERT_TRUE(harness.editor.tools().activate(ViewportToolId::Extrude).ok());
+  EXPECT_FALSE(harness.editor.tools().activate(ViewportToolId::Extrude).ok());
   EXPECT_FALSE(harness.frame(true, true, false).consumed);
   EXPECT_FALSE(harness.session.extrude().dragging());
   EXPECT_EQ(harness.session.extrude().work_stats_for_tests().geometry_update_count,
@@ -918,11 +921,13 @@ TEST(ExtrudeViewportInteractionTests,
     const auto target_ray = harness.camera.ray_from_viewport_point(
         prospective_layout.button_center_screen + QVec2{0.0F, -31.125F});
     const QVec3 target_corner = target_ray.origin + target_ray.direction * 4.0F;
+    ASSERT_TRUE(harness.editor.mode().set(QuaderEditorMode::Object).ok());
     const auto target = harness.editor.modeling().create_box(
         {.min = target_corner, .max = target_corner + QVec3{0.05F, 0.05F, 0.05F}},
         "Explicit vertex snap target");
     ASSERT_TRUE(target.ok());
     ASSERT_TRUE(harness.editor.selection().select_object(harness.object).ok());
+    ASSERT_TRUE(harness.editor.mode().set(QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(harness.editor.selection().set_mode(QuaderSelectionMode::Face).ok());
     ASSERT_TRUE(harness.editor.selection().select_face(harness.object, 1).ok());
     ASSERT_TRUE(harness.editor.commands().execute(quader_command::kToolsActivateExtrude).ok());
@@ -984,7 +989,8 @@ TEST(ExtrudeViewportInteractionTests,
      RegionDragCrossesVanishingPointWithoutSignFlipAndReturnsToSource) {
   ExtrudePointerHarness harness;
   harness.prepare_faces();
-  const auto normal = harness.session.extrude().handle_state().world_direction;
+  const auto source_handle = harness.session.extrude().handle_state();
+  const auto normal = source_handle.world_direction;
   constexpr float kHalfPi = 1.5707963268F;
   QVec3 rotation{};
   if (std::abs(normal.y) > 0.5F) {
@@ -994,14 +1000,19 @@ TEST(ExtrudeViewportInteractionTests,
   } else if (normal.z < 0.0F) {
     rotation.y = 2.0F * kHalfPi;
   }
+  ASSERT_TRUE(harness.editor.mode().set(QuaderEditorMode::Object).ok());
   ASSERT_TRUE(harness.editor.scene().set_transform(
       harness.object.entity, {.rotation_euler = rotation}).ok());
-  const QVec3 rotated_center =
-      harness.session.extrude().handle_state().world_position;
+  const QVec3 rotated_center = transform_point(
+      harness.session.scene().world_transform_matrix(harness.object.entity),
+      source_handle.world_position);
   ASSERT_TRUE(harness.editor.scene().set_transform(
       harness.object.entity,
       {.position = QVec3{1.0F, 0.0F, 0.0F} - rotated_center,
        .rotation_euler = rotation}).ok());
+  ASSERT_TRUE(harness.editor.mode().set(QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(harness.editor.selection().select_face(harness.object, 1).ok());
+  ASSERT_TRUE(harness.editor.tools().activate(ViewportToolId::Extrude).ok());
   const auto handle = harness.session.extrude().handle_state();
   ASSERT_NEAR(handle.world_direction.z, 1.0F, 1.0e-6F);
   ASSERT_NEAR(handle.world_position.x, 1.0F, 1.0e-6F);
@@ -1439,10 +1450,7 @@ TEST(ExtrudeViewportInteractionTests, FailedReleaseUpdateRetainsTheLastValidPend
 TEST(ExtrudeViewportInteractionTests,
      InvalidFiniteSampleRetainsPreviewAfterReleaseAndIsNotRetriedUnchanged) {
   ExtrudePointerHarness harness;
-  harness.prepare_faces();
-  ASSERT_TRUE(harness.editor.scene().set_transform(
-      harness.object.entity,
-      {.rotation_euler = {0.3F, 0.4F, 0.5F}}).ok());
+  harness.prepare_faces({.rotation_euler = {0.3F, 0.4F, 0.5F}});
   ASSERT_TRUE(harness.session.extrude().set_mode(
       modeling::FaceExtrudeMode::AlongNormals).ok);
   harness.choose_handle();

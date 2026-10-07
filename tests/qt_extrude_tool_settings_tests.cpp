@@ -133,6 +133,8 @@ TEST(QtExtrudeToolSettingsTests,
   ASSERT_TRUE(created.ok()) << created.error_message();
   const auto source = editor.query().compiled_object_mesh(created.value());
   ASSERT_TRUE(source.has_value());
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::Extrude).ok());
   expect_extrude_defaults(editor, "region", 0.0);
   const auto undo_count = session.history().undo_count();
@@ -234,6 +236,8 @@ TEST(QtExtrudeToolSettingsTests,
       {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}},
       "Retained Extrusion Source");
   ASSERT_TRUE(created.ok()) << created.error_message();
+  ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().select_face(created.value(), 1).ok());
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::Extrude).ok());
   QtToolSettingsPanel panel;
@@ -292,6 +296,8 @@ TEST(QtExtrudeToolSettingsTests,
       {.min = {3.0F, -1.0F, -1.0F}, .max = {5.0F, 1.0F, 1.0F}},
       "Preserved Redo").ok());
   ASSERT_TRUE(editor.history().undo().ok());
+  ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().select_face(created.value(), 1).ok());
   const auto source = editor.query().compiled_object_mesh(created.value());
   ASSERT_TRUE(source.has_value());
@@ -347,6 +353,8 @@ TEST(QtExtrudeToolSettingsTests,
       {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}},
       "Accepted Extrusion Source");
   ASSERT_TRUE(created.ok()) << created.error_message();
+  ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().select_face(created.value(), 1).ok());
   const auto source = editor.query().compiled_object_mesh(created.value());
   ASSERT_TRUE(source.has_value());
@@ -408,6 +416,8 @@ TEST(QtExtrudeToolSettingsTests,
       {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}},
       "Sequential Extrusion Settings Source");
   ASSERT_TRUE(created.ok()) << created.error_message();
+  ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().select_face(created.value(), 1).ok());
   const auto source = editor.query().compiled_object_mesh(created.value());
   ASSERT_TRUE(source.has_value());
@@ -501,6 +511,8 @@ TEST(QtExtrudeToolSettingsTests,
           {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}},
           "Gizmo Apply Source");
       ASSERT_TRUE(created.ok()) << created.error_message();
+      ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+      ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
       ASSERT_TRUE(editor.selection().select_face(created.value(), 1).ok());
       const auto source = editor.query().compiled_object_mesh(created.value());
       ASSERT_TRUE(source.has_value());
@@ -618,6 +630,8 @@ TEST(QtExtrudeToolSettingsTests,
       {.min = {3.0F, -1.0F, -1.0F}, .max = {5.0F, 1.0F, 1.0F}},
       "Preserved Gizmo Redo").ok());
   ASSERT_TRUE(editor.history().undo().ok());
+  ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().select_face(created.value(), 1).ok());
   const auto source = editor.query().compiled_object_mesh(created.value());
   ASSERT_TRUE(source.has_value());
@@ -661,6 +675,8 @@ TEST(QtExtrudeToolSettingsTests,
       {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}},
       "Extrusion Escape Drag Source");
   ASSERT_TRUE(created.ok()) << created.error_message();
+  ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().select_face(created.value(), 1).ok());
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::Extrude).ok());
   ASSERT_TRUE(session.extrude().set_amount(1.0).ok);
@@ -715,6 +731,8 @@ TEST(QtExtrudeToolSettingsTests,
       {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}},
       "Shared Extrusion Mode Source");
   ASSERT_TRUE(created.ok()) << created.error_message();
+  ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().select_face(created.value(), 1).ok());
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::Extrude).ok());
   expect_extrude_defaults(editor, "region", 0.0);
@@ -730,6 +748,12 @@ TEST(QtExtrudeToolSettingsTests,
 
   const auto second_scene = editor.scene_documents().new_scene();
   ASSERT_TRUE(second_scene.ok()) << second_scene.error_message();
+  const auto second_source = editor.modeling().create_box(
+      {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}},
+      "Second Scene Extrusion Source");
+  ASSERT_TRUE(second_source.ok()) << second_source.error_message();
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::Extrude).ok());
   expect_extrude_defaults(editor, "individual", 2.15);
   ASSERT_TRUE(editor.scene_documents().activate(*first_scene).ok());
@@ -749,12 +773,24 @@ TEST(QtExtrudeToolSettingsTests,
   ASSERT_TRUE(closed.ok()) << closed.error_message();
   const auto second_project = editor.project().create(root / "second-project");
   ASSERT_TRUE(second_project.ok()) << second_project.error_message();
+  const auto second_project_source = editor.modeling().create_box(
+      {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}},
+      "Second Project Extrusion Source");
+  ASSERT_TRUE(second_project_source.ok()) << second_project_source.error_message();
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::Extrude).ok());
   expect_extrude_defaults(editor, "individual", 3.25);
 
   SceneSession fresh_session;
   QuaderEditorApi fresh_editor(
       QuaderApiSessionInternalAccess::from_scene_session(fresh_session));
+  const auto fresh_source = fresh_editor.modeling().create_box(
+      {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}},
+      "Fresh Lifetime Extrusion Source");
+  ASSERT_TRUE(fresh_source.ok()) << fresh_source.error_message();
+  ASSERT_TRUE(fresh_editor.mode().set(QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(fresh_editor.selection().set_mode(QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(fresh_editor.tools().activate(ViewportToolId::Extrude).ok());
   expect_extrude_defaults(fresh_editor, "region", 0.0);
 }

@@ -37,6 +37,7 @@ Actual target dependencies live in [CMakeLists.txt](CMakeLists.txt) and
 | [src/api](src/api/AGENTS.md) | `QuaderEditorApi` whole-editor intent; `QuaderApi` document/modeling facades; typed commands, handles and batches |
 | [src/sdk/core/modeling](src/sdk/core/modeling/AGENTS.md) | Portable mesh/curve documents, operations, typed IDs, validation/remaps, sessions, preview/history, QDR document IO and neutral snapshots |
 | [src/editor](src/editor/AGENTS.md) | Native commands, tools, modeling publication, history integration, selection, metadata and project/scene sessions |
+| [src/editor/modes](src/editor/modes/README.md) | Scene-owned editor context, explicit Edit participants, transition/generation policy and mode requirements |
 | [src/editor/assets](src/editor/assets/project_asset_service.hpp) | Project asset discovery and mixed-asset transactions; delegates scene/material truth to existing owners and OS recycling to an injected port |
 | [src/scene](src/scene/AGENTS.md) | `SceneDocument`, live entities/components, hierarchy, transforms and stable editor-object identity |
 | [src/assets](src/assets/AGENTS.md) | `AssetRegistry`, mesh/material/texture identity, validation and copy-on-write assets |
@@ -78,6 +79,11 @@ Structural history includes registered sub-selection providers, stable identitie
 ordering. Failure compensation and ordinary undo have different revision semantics; preserve them.
 
 `EditorSelectionService` owns cross-domain selection publication and edit algebra.
+`SceneSession::editor_mode()` owns Object/Edit context and participant membership independently
+of component selection. Its `EditorModeService` snapshot scopes native picking, operations and
+presentation; SDK documents remain the sole owners of component selection. Structural publication
+checkpoints the mode context alongside selection and history, while generation checks reject input
+from a retired Edit context. See the [mode contract](src/editor/modes/README.md).
 `ViewportSceneHitPolicy` and shared scene-surface/occurrence queries own visibility, backface,
 occlusion, group promotion and instance policy. A render-visible surface may occlude while locked
 or nonselectable. Host selection can change even when SDK selection reports a no-op.

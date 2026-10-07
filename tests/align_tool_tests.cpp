@@ -299,12 +299,15 @@ TEST(AlignToolTests, UnusableContextsRetireAllPublicSettingsWithoutChangingAutho
     const auto tool_revision = harness.editor.tools().active_tool_revision();
     switch (change) {
     case ContextChange::FaceMode:
+      ASSERT_TRUE(harness.editor.mode().set(QuaderEditorMode::Edit).ok());
       ASSERT_TRUE(harness.editor.selection().set_mode(QuaderSelectionMode::Face).ok());
       break;
     case ContextChange::EdgeMode:
+      ASSERT_TRUE(harness.editor.mode().set(QuaderEditorMode::Edit).ok());
       ASSERT_TRUE(harness.editor.selection().set_mode(QuaderSelectionMode::Edge).ok());
       break;
     case ContextChange::VertexMode:
+      ASSERT_TRUE(harness.editor.mode().set(QuaderEditorMode::Edit).ok());
       ASSERT_TRUE(harness.editor.selection().set_mode(QuaderSelectionMode::Vertex).ok());
       break;
     case ContextChange::SingleRoot:
@@ -372,7 +375,10 @@ TEST(AlignToolTests, UnusableContextsRetireAllPublicSettingsWithoutChangingAutho
           *harness.session.scene().transform(harness.objects[index].entity), committed[index]));
     }
     EXPECT_TRUE(align.settings().use_snapping);
-    EXPECT_TRUE(harness.session.native_tools().refresh().changed);
+    const bool component_mode_transition = change == ContextChange::FaceMode ||
+        change == ContextChange::EdgeMode || change == ContextChange::VertexMode;
+    EXPECT_EQ(harness.session.native_tools().refresh().changed,
+              !component_mode_transition);
     const auto availability_queries = align.work_counters().availability_query_count;
     const auto context_validations = align.work_counters().context_validation_count;
     for (int frame = 0; frame < 8; ++frame) {
@@ -383,8 +389,8 @@ TEST(AlignToolTests, UnusableContextsRetireAllPublicSettingsWithoutChangingAutho
     }
     EXPECT_EQ(align.work_counters().availability_query_count, availability_queries);
     EXPECT_EQ(align.work_counters().context_validation_count, context_validations);
-    if (change == ContextChange::FaceMode || change == ContextChange::EdgeMode ||
-        change == ContextChange::VertexMode) {
+    if (component_mode_transition) {
+      ASSERT_TRUE(harness.editor.mode().set(QuaderEditorMode::Object).ok());
       ASSERT_TRUE(harness.editor.selection().set_mode(QuaderSelectionMode::Object).ok());
       EXPECT_FALSE(align.active());
       EXPECT_TRUE(align.can_activate());
@@ -539,6 +545,7 @@ TEST(AlignToolTests, ContextRetirementClearsSnappingResultAndRetainsFutureDefaul
   ASSERT_FALSE(align.warning_message().empty());
   ASSERT_TRUE(align.grid_alignment_unavailable());
   const auto committed = harness.transforms();
+  ASSERT_TRUE(harness.editor.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(harness.editor.selection().set_mode(QuaderSelectionMode::Face).ok());
   const auto history_count = harness.session.history().undo_count();
   EXPECT_TRUE(align.warning_message().empty());

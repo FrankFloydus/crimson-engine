@@ -28,6 +28,12 @@ void QuaderUIApi::set_runtime_hooks(QuaderUIRuntimeHooks hooks) {
   hooks_ = std::move(hooks);
 }
 
+QuaderApiVoidResult QuaderUIApi::settle_pending_property_edits() {
+  return hooks_.settle_pending_property_edits
+             ? hooks_.settle_pending_property_edits()
+             : QuaderApiVoidResult{.ok = true, .changed = false};
+}
+
 QuaderApiVoidResult QuaderUIApi::show_panel(std::string_view panel) {
   return set_panel_visible(panel, true);
 }

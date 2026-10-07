@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include <cstdint>
 #include <memory>
 
 namespace quader {
@@ -26,6 +27,9 @@ public:
     ModelingSelectionBoxBaseline& operator=(ModelingSelectionBoxBaseline&&) noexcept = default;
 
     [[nodiscard]] bool valid() const;
+
+    /// Rejects deferred selection captured before an editor mode transition.
+    std::uint64_t editor_mode_generation = 0;
 
 private:
     friend class ModelingSessionService;

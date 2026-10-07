@@ -808,27 +808,25 @@ TEST(UiLayoutGuardrailTests,
       "QTreeWidgetItem *add_summary_label(");
   ASSERT_FALSE(rebuild.empty());
 
-  const std::size_t component_blank = rebuild.find(
-      "if (summary.mode == ModelingSelectionMode::Vertex");
+  const std::size_t component_context = rebuild.find(
+      "if (editor_->mode().current() == QuaderEditorMode::Edit)");
   const std::size_t face_only = rebuild.find(
-      "} else if (summary.mode == ModelingSelectionMode::Face)",
-      component_blank);
+      "if (summary.mode == ModelingSelectionMode::Face)",
+      component_context);
   const std::size_t ordinary_selection =
       rebuild.find("} else if (selection_.empty())", face_only);
-  ASSERT_NE(component_blank, std::string::npos);
+  ASSERT_NE(component_context, std::string::npos);
   ASSERT_NE(face_only, std::string::npos);
   ASSERT_NE(ordinary_selection, std::string::npos);
-  EXPECT_LT(component_blank, face_only);
+  EXPECT_LT(component_context, face_only);
   EXPECT_LT(face_only, ordinary_selection);
 
-  const std::string vertex_edge_branch =
-      rebuild.substr(component_blank, face_only - component_blank);
-  expect_contains(vertex_edge_branch, "ModelingSelectionMode::Vertex");
-  expect_contains(vertex_edge_branch, "ModelingSelectionMode::Edge");
-  expect_missing(vertex_edge_branch, "build_general_section(");
-  expect_missing(vertex_edge_branch, "build_transform_section(");
-  expect_missing(vertex_edge_branch, "build_material_section(");
-  expect_missing(vertex_edge_branch, "build_empty_selection(");
+  const std::string component_branch =
+      rebuild.substr(component_context, ordinary_selection - component_context);
+  expect_missing(component_branch, "build_general_section(");
+  expect_missing(component_branch, "build_transform_section(");
+  expect_missing(component_branch, "build_empty_selection(");
+  EXPECT_EQ(count_occurrences(component_branch, "build_material_section()"), 1u);
 
   const std::string face_branch =
       rebuild.substr(face_only, ordinary_selection - face_only);

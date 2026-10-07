@@ -1177,12 +1177,32 @@ void UISystem::install_runtime_hooks(
   bind_scene_backed_panels();
   bind_project_workspace_events(editor);
 
+  selection_toolbar_->set_editor_mode_requested_callback(
+      [this](QuaderEditorMode mode) {
+        if (editor_ == nullptr || modeling_ == nullptr) {
+          return;
+        }
+        const auto generation = runtime_binding_generation_;
+        present_lifecycle_result(editor_->mode().set(mode));
+        if (editor_ == nullptr || modeling_ == nullptr ||
+            generation != runtime_binding_generation_) {
+          return;
+        }
+        selection_toolbar_->synchronize(*editor_,
+            to_api_selection_mode(modeling_->selection_mode()), true);
+        synchronize_tool_toolbar(editor_->selection().summary(), true);
+      });
   selection_toolbar_->set_mode_requested_callback(
       [this](QuaderSelectionMode mode) {
         if (editor_ == nullptr || modeling_ == nullptr) {
           return;
         }
+        const auto generation = runtime_binding_generation_;
         present_lifecycle_result(editor_->selection().set_mode(mode));
+        if (editor_ == nullptr || modeling_ == nullptr ||
+            generation != runtime_binding_generation_) {
+          return;
+        }
         const QuaderSelectionSummary selection =
             editor_->selection().summary();
         const QuaderSelectionMode active_mode =
@@ -1539,6 +1559,15 @@ void UISystem::install_runtime_hooks(
             present_status_notification(std::move(notification));
             return runtime_status(false);
           },
+      .settle_pending_property_edits = [this]() {
+        if (inspector_panel_ != nullptr &&
+            !inspector_panel_->settle_pending_edits()) {
+          return runtime_failure(localization_.text(
+              "ui.inspector.pending_edit_failed",
+              "The pending property edit could not be accepted."));
+        }
+        return runtime_status(false);
+      },
   });
   editor.preferences().set_runtime_hooks(QuaderPreferencesRuntimeHooks{
       .locale = [this]() { return settings_.locale(); },
@@ -2222,9 +2251,13 @@ void UISystem::configure_material_browser(QtMaterialBrowserWindow &source) {
 void UISystem::refresh_face_texture_browser_selection() {
   const auto revision = editor_->modeling().face_texture_settings_revision();
   const auto &face = face_texture_panel_->canvas().presentation();
+  // History can republish an unchanged selection with a new revision. Only a
+  // different face, material or edit context replaces the user's browser choice.
   const FaceTextureBrowserSelectionStamp stamp{
       .scene_session_id = revision.scene_session_id,
-      .selection_revision = revision.selection_revision,
+      .mode_generation = editor_->mode().generation(),
+      .object_id = face.object_id,
+      .face_id = face.face_id,
       .selected_face_count = face.selected_face_count,
       .reference = face_texture_panel_->canvas_material_reference(),
   };
@@ -2770,6 +2803,7 @@ void UISystem::refresh_inspector_material_presentation() {
   }
   refresh_material_presentation_cache();
   const InspectorMaterialQueryStamp stamp{
+      .editor_mode_revision = editor_->mode().revision(),
       .presentation_revision = material_presentation_revision_,
       .scene_selection_revision = document_->selection_revision(),
       .hierarchy_revision = document_->hierarchy_presentation_revision(),
@@ -2806,6 +2840,7 @@ void UISystem::refresh_inspector_material_presentation() {
     revision *= 1099511628211ull;
   };
   mix(material_presentation_revision_);
+  mix(stamp.editor_mode_revision);
   mix(stamp.scene_selection_revision);
   mix(stamp.hierarchy_revision);
   mix(stamp.material_binding_revision);
@@ -3381,6 +3416,7 @@ void UISystem::refresh(const FrameTiming &frame_timing,
         QDR_PROFILE_SCOPE("UI toolbar query owner revisions");
         return ToolbarOwnerPresentationStamp{
             .owner_available = owner_available,
+            .editor_mode_revision = editor_->mode().revision(),
             .scene_revision = owner_available ? document_->revision() : 0u,
             .asset_revision = assets_ != nullptr ? assets_->revision() : 0u,
             .scene_layer_revision =
@@ -3419,7 +3455,7 @@ void UISystem::refresh(const FrameTiming &frame_timing,
           return editor_->selection().summary();
         }();
         if (selection_toolbar_ != nullptr && modeling_ != nullptr &&
-            owner_state_changed) {
+            (owner_state_changed || active_tool_revision_changed)) {
           QDR_PROFILE_SCOPE("UI synchronize selection toolbar");
           const QuaderSelectionMode active_mode =
               to_api_selection_mode(modeling_->selection_mode());
@@ -3487,6 +3523,7 @@ void UISystem::refresh(const FrameTiming &frame_timing,
     const std::uint64_t localization_revision = localization_.revision();
     if (!edit_drag_active && panel_presented(UIPanelId::Outliner)) {
       const OutlinerPresentationStamp stamp{
+          .editor_mode_revision = editor_->mode().revision(),
           .hierarchy_revision =
               document_->hierarchy_presentation_revision(),
           .light_property_revision = document_->light_property_revision(),
@@ -3521,6 +3558,8 @@ void UISystem::refresh(const FrameTiming &frame_timing,
         panel_presented(UIPanelId::Inspector)) {
       refresh_material_presentation_cache();
       const InspectorPresentationStamp stamp{
+          .editor_mode_revision = editor_->mode().revision(),
+          .viewport_defaults_revision = viewport_defaults_revision_,
           .scene_revision = document_->revision(),
           .modeling_content_revision = modeling_->content_revision(),
           .modeling_selection_revision = modeling_->selection_revision(),
@@ -4302,6 +4341,7 @@ void UISystem::refresh_status_selection() {
     return;
   }
   const StatusSelectionPresentationStamp stamp{
+      .editor_mode_revision = editor_->mode().revision(),
       .scene_revision = document_->revision(),
       .scene_selection_revision = document_->selection_revision(),
       .modeling_content_revision = modeling_->content_revision(),

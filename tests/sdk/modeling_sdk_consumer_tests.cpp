@@ -6156,6 +6156,105 @@ TEST(ModelingSdkConsumerTests,
 }
 
 TEST(ModelingSdkConsumerTests,
+     DeleteSelectionClearsRemovedIdsAndRestoresExactSelectionThroughHistory) {
+  for (const auto mode : {SelectionMode::Vertex, SelectionMode::Edge,
+                          SelectionMode::Face}) {
+    for (const bool select_all : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(mode));
+      SCOPED_TRACE(select_all);
+      auto created = PolygonDocument::make_box({});
+      ASSERT_TRUE(created.ok()) << created.error_message();
+      PolygonDocument document = std::move(created).value();
+      switch (mode) {
+      case SelectionMode::Vertex:
+        ASSERT_TRUE((select_all ? document.select_all_vertices()
+                                : document.select_vertex(document.vertex_ids().front())).ok());
+        break;
+      case SelectionMode::Edge:
+        ASSERT_TRUE((select_all ? document.select_all_edges()
+                                : document.select_edge(document.edge_ids().front())).ok());
+        break;
+      case SelectionMode::Face:
+        ASSERT_TRUE((select_all ? document.select_all_faces()
+                                : document.select_face(document.face_ids().front())).ok());
+        break;
+      }
+      const auto selected = document.selection();
+      ASSERT_TRUE(selected.has_active);
+      const auto selection_revision = document.selection_revision();
+      const auto before_topology = serialize_qdr_authored_topology(document);
+      ASSERT_TRUE(before_topology.ok());
+      ModelingSession session;
+      const auto object = session.add_document(document, "Deleted Components");
+      ASSERT_TRUE(object.ok()) << object.error_message();
+      const auto session_selection_revision = session.selection_revision();
+
+      const auto deleted = document.delete_selection();
+      ASSERT_TRUE(deleted.ok()) << deleted.error_message();
+      ASSERT_TRUE(deleted.value().changed);
+      EXPECT_TRUE(deleted.value().dirty.selection);
+      EXPECT_GT(document.selection_revision(), selection_revision);
+      const auto expect_live_cleared_selection = [&](const PolygonDocument &current) {
+        const auto selection = current.selection();
+        EXPECT_EQ(selection.kind, selected.kind);
+        EXPECT_TRUE(selection.vertices.empty());
+        EXPECT_TRUE(selection.edges.empty());
+        EXPECT_TRUE(selection.faces.empty());
+        EXPECT_FALSE(selection.has_active);
+        EXPECT_FALSE(selection.active_vertex.valid());
+        EXPECT_FALSE(selection.active_edge.valid());
+        EXPECT_FALSE(selection.active_face.valid());
+        const auto validated = current.validate();
+        EXPECT_TRUE(validated.ok()) << validated.error_message();
+      };
+      expect_live_cleared_selection(document);
+      if (select_all) {
+        EXPECT_EQ(document.vertex_count(), 0u);
+        EXPECT_EQ(document.face_count(), 0u);
+      } else {
+        EXPECT_GT(document.vertex_count(), 0u);
+        EXPECT_GT(document.face_count(), 0u);
+      }
+      const auto after_topology = serialize_qdr_authored_topology(document);
+      ASSERT_TRUE(after_topology.ok());
+      EXPECT_NE(after_topology.value(), before_topology.value());
+
+      const auto unchanged_content = document.content_revision();
+      const auto unchanged_selection = document.selection_revision();
+      EXPECT_FALSE(document.delete_selection().ok());
+      EXPECT_EQ(document.content_revision(), unchanged_content);
+      EXPECT_EQ(document.selection_revision(), unchanged_selection);
+      expect_live_cleared_selection(document);
+
+      ASSERT_TRUE(session.commit_document(object.value(), document, deleted.value()).ok());
+      EXPECT_GT(session.selection_revision(), session_selection_revision);
+      ASSERT_TRUE(session.undo().ok());
+      const auto restored = session.document_copy(object.value());
+      ASSERT_TRUE(restored.ok());
+      const auto restored_selection = restored.value().selection();
+      EXPECT_EQ(restored_selection.kind, selected.kind);
+      EXPECT_EQ(restored_selection.vertices, selected.vertices);
+      EXPECT_EQ(restored_selection.edges, selected.edges);
+      EXPECT_EQ(restored_selection.faces, selected.faces);
+      EXPECT_EQ(restored_selection.has_active, selected.has_active);
+      EXPECT_EQ(restored_selection.active_vertex, selected.active_vertex);
+      EXPECT_EQ(restored_selection.active_edge, selected.active_edge);
+      EXPECT_EQ(restored_selection.active_face, selected.active_face);
+      const auto restored_topology = serialize_qdr_authored_topology(restored.value());
+      ASSERT_TRUE(restored_topology.ok());
+      EXPECT_EQ(restored_topology.value(), before_topology.value());
+      ASSERT_TRUE(session.redo().ok());
+      const auto redone = session.document_copy(object.value());
+      ASSERT_TRUE(redone.ok());
+      expect_live_cleared_selection(redone.value());
+      const auto redone_topology = serialize_qdr_authored_topology(redone.value());
+      ASSERT_TRUE(redone_topology.ok());
+      EXPECT_EQ(redone_topology.value(), after_topology.value());
+    }
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
      TopologyIdentityNeverAliasesAcrossDeletionUndoBranchAndQdr) {
   Result<PolygonDocument> direct_result = PolygonDocument::make_box({});
   ASSERT_TRUE(direct_result.ok()) << direct_result.error_message();

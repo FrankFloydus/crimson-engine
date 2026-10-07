@@ -166,10 +166,12 @@ TEST(PathArrayToolServiceTests,
                   .ok());
   EXPECT_FALSE(tool.can_activate());
 
-  ASSERT_TRUE(harness.editor.selection().select_object(first).ok());
+  ASSERT_TRUE(harness.editor.selection().select_object(mesh).ok());
+  ASSERT_TRUE(harness.editor.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(
       harness.editor.selection().set_mode(QuaderSelectionMode::Face).ok());
   EXPECT_FALSE(tool.can_activate());
+  ASSERT_TRUE(harness.editor.mode().set(QuaderEditorMode::Object).ok());
   ASSERT_TRUE(
       harness.editor.selection().set_mode(QuaderSelectionMode::Object).ok());
   ASSERT_TRUE(harness.editor.selection().select_object(first).ok());

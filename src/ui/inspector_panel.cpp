@@ -25,6 +25,7 @@
 #include "ui/qt_semantic_axis_colors.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/ui_context.hpp"
+#include "viewport/viewport_settings.hpp"
 #include "ui/ui_continuous_edit_tracker.hpp"
 #include "ui/ui_panel.hpp"
 
@@ -683,6 +684,7 @@ struct InspectorPanel::Impl {
     std::array<double, 3> values{};
     std::uint64_t binding_generation = 0;
     std::uint64_t selection_revision = 0;
+    std::uint64_t editor_mode_generation = 0;
   };
 
   explicit Impl(InspectorPanel &panel) : panel_(panel) {
@@ -829,6 +831,7 @@ struct InspectorPanel::Impl {
     document_ = nullptr;
     modeling_ = nullptr;
     localization_ = nullptr;
+    viewport_settings_ = nullptr;
     preview_document_ = nullptr;
     preview_assets_ = nullptr;
     force_rebuild_ = true;
@@ -836,6 +839,7 @@ struct InspectorPanel::Impl {
       active_color_dialog_->reject();
     }
     active_color_dialog_ = nullptr;
+    active_mesh_color_dialog_ = false;
   }
 
   void refresh(UIContext &context) {
@@ -843,6 +847,9 @@ struct InspectorPanel::Impl {
     const ModelingSessionService *next_modeling = &context.scene.modeling;
     const bool owner_changed =
         document_ != next_document || modeling_ != next_modeling;
+    const auto mode_generation = context.intent.editor.mode().generation();
+    const bool mode_changed = !owner_changed &&
+        built_editor_mode_generation_ != mode_generation;
 
     std::vector<EntityId> next_selection =
         next_document->selected_entities();
@@ -855,10 +862,29 @@ struct InspectorPanel::Impl {
       // Disarm previews without restoring through their non-owning document.
       abandon_runtime();
     }
+    if (mode_changed) {
+      if (active_mesh_color_dialog_ && active_color_dialog_ != nullptr) {
+        active_color_dialog_->reject();
+      }
+      // The transition owner already settled valid drafts. Retire callbacks
+      // retained by old controls before rebuilding the new mode presentation.
+      // Active-object changes only advance revision; their original draft must
+      // still commit through selection_changed below.
+      discard_pending_transform_preview();
+      for (QDoubleSpinBox *spin : panel_.findChildren<QDoubleSpinBox *>()) {
+        qt_install_numeric_spin_box(*spin).abandon_interaction();
+      }
+      active_transform_preview_.abandon();
+      active_transform_edit_.reset();
+      active_continuous_edit_.reset();
+      continuous_edit_active_ = false;
+      active_continuous_id_.clear();
+      force_rebuild_ = true;
+    }
     const bool selection_changed =
         owner_changed || next_selection != selection_ ||
         next_primary != primary_;
-    if (!owner_changed && selection_changed &&
+    if (!owner_changed && !mode_changed && selection_changed &&
         active_color_dialog_ != nullptr) {
       active_color_dialog_->accept();
     }
@@ -881,6 +907,15 @@ struct InspectorPanel::Impl {
     document_ = next_document;
     modeling_ = next_modeling;
     localization_ = &context.localization;
+    viewport_settings_ = &context.preferences.viewport;
+    const auto global_wireframe_color =
+        viewport_settings_->color(ViewportColorSettingId::WireframeOnShaded);
+    if (global_wireframe_color.r != presented_wireframe_color_.r ||
+        global_wireframe_color.g != presented_wireframe_color_.g ||
+        global_wireframe_color.b != presented_wireframe_color_.b) {
+      presented_wireframe_color_ = global_wireframe_color;
+      force_rebuild_ = true;
+    }
     preview_document_ = context.inspector_preview != nullptr
                             ? &context.inspector_preview->document
                             : nullptr;
@@ -919,6 +954,7 @@ struct InspectorPanel::Impl {
   void refresh_transform_preview(UIContext &context) {
     const SceneDocument &document = context.scene.document;
     if (document_ != &document || modeling_ != &context.scene.modeling ||
+        built_editor_mode_revision_ != context.intent.editor.mode().revision() ||
         built_scene_selection_revision_ != document.selection_revision() ||
         built_modeling_selection_revision_ !=
             context.scene.modeling.selection_revision() || force_rebuild_) {
@@ -1010,6 +1046,40 @@ struct InspectorPanel::Impl {
     tree_->viewport()->update();
   }
 
+  bool settle_pending_edits() {
+    const auto generation = runtime_binding_generation_;
+    const QPointer<InspectorPanel> guard(&panel_);
+    QWidget *focus = QApplication::focusWidget();
+    if (focus != nullptr && panel_.isAncestorOf(focus)) {
+      auto *spin = qobject_cast<QDoubleSpinBox *>(focus);
+      if (spin == nullptr) {
+        spin = qobject_cast<QDoubleSpinBox *>(focus->parentWidget());
+      }
+      if (spin != nullptr) {
+        if (!spin->hasAcceptableInput()) {
+          return false;
+        }
+        spin->interpretText();
+      }
+    }
+    flush_transform_preview();
+    if (guard == nullptr || generation != runtime_binding_generation_ ||
+        !commit_active_transform_edit()) {
+      return false;
+    }
+    if (guard == nullptr || generation != runtime_binding_generation_) {
+      return false;
+    }
+    discard_pending_transform_preview();
+    for (QDoubleSpinBox *spin : panel_.findChildren<QDoubleSpinBox *>()) {
+      qt_install_numeric_spin_box(*spin).abandon_interaction();
+    }
+    active_continuous_edit_.reset();
+    continuous_edit_active_ = false;
+    active_continuous_id_.clear();
+    return true;
+  }
+
 private:
   [[nodiscard]] int scaled_px(int baseline) const {
     return ui_scale_metrics_.px(baseline);
@@ -1039,10 +1109,22 @@ private:
       return;
     }
     QHeaderView *header = tree_->header();
+    int minimum_value_width = scaled_px(kInspectorMinimumValueColumnWidth);
+    for (const PropertyRow &row : property_rows_) {
+      if (row.axes == nullptr) {
+        continue;
+      }
+      // Compact numeric controls retain a readable native minimum even when
+      // their container ignores its size hint. Reserve the axis gutter and
+      // property padding before giving remaining width to localized labels.
+      const QMargins margins = row.layout->contentsMargins();
+      minimum_value_width = std::max(
+          minimum_value_width, row.axes->minimumSize().width() +
+                                   margins.left() + margins.right());
+    }
     const int maximum_label_width =
         std::max(header->minimumSectionSize(),
-                 tree_->viewport()->width() -
-                     scaled_px(kInspectorMinimumValueColumnWidth));
+                 tree_->viewport()->width() - minimum_value_width);
     const int desired_width = preferred_label_column_width_ > 0
                                   ? preferred_label_column_width_
                                   : scaled_default_label_column_width_;
@@ -1254,11 +1336,11 @@ private:
         {localized("ui.inspector.property", "Property"),
          localized("ui.inspector.value", "Value")});
 
-    if (summary.mode == ModelingSelectionMode::Vertex ||
-        summary.mode == ModelingSelectionMode::Edge) {
-      // Vertex and Edge modes intentionally present no Inspector properties.
-    } else if (summary.mode == ModelingSelectionMode::Face) {
-      build_material_section();
+    if (editor_->mode().current() == QuaderEditorMode::Edit) {
+      // Retained edit-set object selection never exposes whole-object fields.
+      if (summary.mode == ModelingSelectionMode::Face) {
+        build_material_section();
+      }
     } else if (selection_.empty()) {
       build_empty_selection(summary);
     } else {
@@ -1270,6 +1352,7 @@ private:
         build_mesh_sections();
         build_light_section();
       }
+      build_shading_section();
       build_physics_section();
       if (selection_.size() > 1u) {
         build_component_count_section();
@@ -1283,6 +1366,8 @@ private:
     built_scene_selection_revision_ = document_->selection_revision();
     built_modeling_content_revision_ = summary.content_revision;
     built_modeling_selection_revision_ = summary.selection_revision;
+    built_editor_mode_revision_ = editor_->mode().revision();
+    built_editor_mode_generation_ = editor_->mode().generation();
     built_material_presentation_revision_ = material_presentation_.revision;
     built_locale_ = localization_->current_locale();
     force_rebuild_ = false;
@@ -1586,7 +1671,7 @@ private:
     add_row(section, stable_id, label, box);
     QObject::connect(box, &QCheckBox::toggled, &panel_,
                      [this, changed = std::move(changed)](bool value) {
-                       if (!rebuilding_) {
+                       if (!rebuilding_ && object_transform_context_current()) {
                          changed(value);
                        }
                      });
@@ -1614,7 +1699,7 @@ private:
     add_row(section, stable_id, label, field);
     QObject::connect(box, &QCheckBox::toggled, &panel_,
                      [this, changed = std::move(changed)](bool value) {
-                       if (!rebuilding_) {
+                       if (!rebuilding_ && object_transform_context_current()) {
                          changed(value);
                        }
                      });
@@ -1654,7 +1739,7 @@ private:
     add_row(section, stable_id, label, combo);
     QObject::connect(combo, &QComboBox::activated, &panel_,
                      [this, combo, changed = std::move(changed)](int index) {
-                       if (rebuilding_ || index < 0 ||
+                       if (rebuilding_ || !object_transform_context_current() || index < 0 ||
                            !(combo->model()->flags(
                                  combo->model()->index(index, 0)) &
                              Qt::ItemIsEnabled)) {
@@ -1683,7 +1768,7 @@ private:
     QObject::connect(
         spin, &QDoubleSpinBox::valueChanged, &panel_,
         [this, stable_id, changed = std::move(changed)](double next) {
-          if (rebuilding_) {
+          if (rebuilding_ || !object_transform_context_current()) {
             return;
           }
           const std::span<const EntityId> selection(selection_.data(),
@@ -1745,7 +1830,7 @@ private:
 
     const auto update = [this, stable_id, field,
                          changed = std::move(changed)](double requested) {
-      if (rebuilding_) {
+      if (rebuilding_ || !object_transform_context_current()) {
         return;
       }
       const double next = std::clamp(requested, field.numeric_minimum,
@@ -1949,7 +2034,8 @@ private:
 
   void apply_mesh_components(
       const std::vector<EntityId> &entities,
-      const std::function<void(MeshComponent &)> &mutation) {
+      const std::function<void(MeshComponent &)> &mutation,
+      std::string history_label = "Set Mesh Physics") {
     if (editor_ == nullptr || document_ == nullptr) {
       return;
     }
@@ -1957,7 +2043,7 @@ private:
       apply_mesh_component(entities.front(), mutation);
       return;
     }
-    auto batch = editor_->scene().batch("Set Mesh Physics");
+    auto batch = editor_->scene().batch(std::move(history_label));
     for (const EntityId entity : entities) {
       const MeshComponent *current = document_->mesh(entity);
       if (current == nullptr) {
@@ -2011,7 +2097,7 @@ private:
       const EntityId entity = primary_;
       QObject::connect(name, &QLineEdit::editingFinished, &panel_,
                        [this, name, entity]() {
-                         if (!rebuilding_) {
+                         if (!rebuilding_ && object_transform_context_current()) {
                            (void)editor_->scene().rename(
                                entity, name->text().toUtf8().toStdString());
                          }
@@ -2336,7 +2422,7 @@ private:
 
   bool begin_transform_edit(TransformEditKind kind,
                             const std::array<double, 3> &values) {
-    if (document_ == nullptr ||
+    if (!object_transform_context_current() || document_ == nullptr ||
         document_->selection_revision() != built_scene_selection_revision_) {
       return false;
     }
@@ -2494,6 +2580,7 @@ private:
         .values = values,
         .binding_generation = runtime_binding_generation_,
         .selection_revision = document_->selection_revision(),
+        .editor_mode_generation = editor_->mode().generation(),
     };
     if (!transform_dispatch_timer_->isActive()) {
       transform_dispatch_timer_->start();
@@ -2505,7 +2592,9 @@ private:
     const auto pending = std::exchange(pending_transform_preview_, std::nullopt);
     transform_dispatch_timer_->stop();
     if (!pending.has_value() || rebuilding_ || document_ == nullptr ||
+        !object_transform_context_current() ||
         pending->binding_generation != runtime_binding_generation_ ||
+        pending->editor_mode_generation != editor_->mode().generation() ||
         pending->selection_revision != document_->selection_revision() ||
         !transform_edit_matches(pending->kind)) {
       return;
@@ -2526,6 +2615,13 @@ private:
     QPointer<InspectorPanel> guard(&panel_);
     flush_transform_preview();
     if (guard == nullptr || generation != runtime_binding_generation_) {
+      return;
+    }
+    if (!object_transform_context_current()) {
+      discard_pending_transform_preview();
+      active_transform_preview_.abandon();
+      active_transform_edit_.reset();
+      force_rebuild_ = true;
       return;
     }
     if (document_ == nullptr ||
@@ -2577,6 +2673,13 @@ private:
     return true;
   }
 
+  bool object_transform_context_current() const {
+    return editor_ != nullptr &&
+        editor_->mode().current() == QuaderEditorMode::Object &&
+        editor_->mode().generation() == built_editor_mode_generation_;
+  }
+
+
   void cancel_active_transform_edit() {
     discard_pending_transform_preview();
     if (active_transform_preview_.preview_active()) {
@@ -2620,6 +2723,147 @@ private:
                      next.double_sided = enabled;
                    });
                  });
+  }
+
+  void build_shading_section() {
+    std::vector<EntityId> meshes;
+    meshes.reserve(selection_.size());
+    BoolAggregate wireframe;
+    BoolAggregate custom_color;
+    std::optional<QVec3> first_color;
+    bool mixed_color = false;
+    for (const EntityId entity : selection_) {
+      const MeshComponent *mesh = document_->mesh(entity);
+      if (mesh == nullptr) {
+        continue;
+      }
+      meshes.push_back(entity);
+      wireframe.all_true = wireframe.all_true && mesh->wireframe_on_shaded;
+      wireframe.any_true = wireframe.any_true || mesh->wireframe_on_shaded;
+      custom_color.all_true = custom_color.all_true &&
+                             mesh->wireframe_on_shaded_color.has_value();
+      custom_color.any_true = custom_color.any_true ||
+                             mesh->wireframe_on_shaded_color.has_value();
+      const QVec3 color = mesh->wireframe_on_shaded_color.value_or(
+          QVec3{presented_wireframe_color_.r, presented_wireframe_color_.g,
+                presented_wireframe_color_.b});
+      if (!first_color.has_value()) {
+        first_color = color;
+      } else {
+        mixed_color = mixed_color || first_color->x != color.x ||
+                      first_color->y != color.y || first_color->z != color.z;
+      }
+    }
+    if (meshes.empty()) {
+      return;
+    }
+    Section shading =
+        add_section("shading", localized("ui.inspector.shading", "Shading"));
+    add_mixed_checkbox(
+        shading, "shading.wireframe_on_shaded",
+        localized("ui.inspector.wireframe_on_shaded", "Wireframe on Shaded"),
+        wireframe.all_true, wireframe.mixed(), [this, meshes](bool enabled) {
+          apply_mesh_components(meshes, [enabled](MeshComponent &next) {
+            next.wireframe_on_shaded = enabled;
+          }, "Set Mesh Shading");
+        });
+    add_mixed_checkbox(
+        shading, "shading.custom_wireframe_color",
+        localized("ui.inspector.custom_wireframe_color", "Custom Wireframe Color"),
+        custom_color.all_true, custom_color.mixed(), [this, meshes](bool enabled) {
+          const auto global =
+              viewport_settings_->color(ViewportColorSettingId::WireframeOnShaded);
+          apply_mesh_components(meshes, [enabled, global](MeshComponent &next) {
+            if (!enabled) {
+              next.wireframe_on_shaded_color.reset();
+            } else if (!next.wireframe_on_shaded_color.has_value()) {
+              next.wireframe_on_shaded_color = QVec3{global.r, global.g, global.b};
+            }
+          }, "Set Wireframe Color");
+        });
+    add_mesh_wireframe_color_button(shading, meshes, *first_color,
+                                    custom_color.all_true, mixed_color);
+  }
+
+  void add_mesh_wireframe_color_button(Section &section,
+                                       const std::vector<EntityId> &meshes,
+                                       QVec3 color, bool enabled, bool mixed) {
+    const std::string stable_id = "shading.wireframe_color";
+    const QString label = localized("ui.inspector.wireframe_color", "Wireframe Color");
+    auto *field = new QWidget(section.editor_parent);
+    auto *layout = new QHBoxLayout(field);
+    layout->setContentsMargins(0, 0, 0, 0);
+    auto *button = new QtColorSwatchButton(field);
+    button->setObjectName(stable_name(stable_id));
+    button->setAccessibleName(label);
+    button->set_swatch_color(QColor::fromRgbF(color.x, color.y, color.z));
+    button->setEnabled(enabled);
+    layout->addWidget(button, 1);
+    if (mixed) {
+      auto *mixed_label = new QLabel(localized("ui.inspector.mixed", "Mixed"), field);
+      mixed_label->setObjectName(stable_name(stable_id + ".mixed"));
+      layout->addWidget(mixed_label);
+    }
+    add_row(section, stable_id, label, field);
+    QObject::connect(button, &QtColorSwatchButton::clicked, &panel_,
+                     [this, button, meshes, stable_id] {
+      if (!object_transform_context_current() || document_ == nullptr) {
+        return;
+      }
+      const auto binding_generation = runtime_binding_generation_;
+      const auto mode_generation = editor_->mode().generation();
+      std::vector<std::string> identities;
+      identities.reserve(meshes.size());
+      for (const EntityId entity : meshes) identities.push_back(document_->uuid(entity));
+      const QPointer<InspectorPanel> panel_guard(&panel_);
+      const QPointer<QtColorSwatchButton> button_guard(button);
+      const QColor initial = button->swatch_color();
+      const QPointer<QColorDialog> dialog = new QColorDialog(initial, &panel_);
+      dialog->setObjectName(stable_name(stable_id + ".dialog"));
+      dialog->setOption(QColorDialog::DontUseNativeDialog, true);
+      dialog->setOption(QColorDialog::ShowAlphaChannel, false);
+      active_color_dialog_ = dialog.data();
+      active_mesh_color_dialog_ = true;
+      QObject::connect(dialog.data(), &QColorDialog::currentColorChanged, dialog.data(),
+                       [button_guard](const QColor &next) {
+        if (button_guard != nullptr && next.isValid()) {
+          button_guard->set_swatch_color(next);
+        }
+      });
+      const int result = dialog->exec();
+      if (panel_guard == nullptr) return;
+      if (active_color_dialog_ == dialog.data()) {
+        active_color_dialog_ = nullptr;
+        active_mesh_color_dialog_ = false;
+      }
+      if (dialog == nullptr) return;
+      const QColor accepted = dialog->selectedColor();
+      delete dialog.data();
+      if (runtime_binding_generation_ != binding_generation || editor_ == nullptr ||
+          document_ == nullptr || editor_->mode().generation() != mode_generation ||
+          editor_->mode().current() != QuaderEditorMode::Object) {
+        return;
+      }
+      if (result != QDialog::Accepted) {
+        if (button_guard != nullptr) button_guard->set_swatch_color(initial);
+        return;
+      }
+      for (std::size_t index = 0; index < meshes.size(); ++index) {
+        const MeshComponent *mesh = document_->mesh(meshes[index]);
+        if (mesh == nullptr || !mesh->wireframe_on_shaded_color.has_value() ||
+            document_->uuid(meshes[index]) != identities[index]) {
+          return;
+        }
+      }
+      if (!accepted.isValid()) return;
+      const QVec3 rgb{static_cast<float>(accepted.redF()),
+                     static_cast<float>(accepted.greenF()),
+                     static_cast<float>(accepted.blueF())};
+      apply_mesh_components(meshes, [rgb](MeshComponent &next) {
+        next.wireframe_on_shaded_color = rgb;
+      }, "Set Wireframe Color");
+      force_rebuild_ = true;
+    });
   }
 
   void build_physics_section() {
@@ -2823,6 +3067,8 @@ private:
   const SceneDocument *document_ = nullptr;
   const ModelingSessionService *modeling_ = nullptr;
   LocalizationService *localization_ = nullptr;
+  const ViewportSettings *viewport_settings_ = nullptr;
+  ViewportSettingColor presented_wireframe_color_{0.0f, 0.0f, 0.0f, 1.0f};
   SceneDocument *preview_document_ = nullptr;
   const AssetRegistry *preview_assets_ = nullptr;
   InspectorMaterialPresentationSnapshot material_presentation_;
@@ -2844,6 +3090,7 @@ private:
   QTimer *transform_dispatch_timer_ = nullptr;
   UIContinuousEditTracker active_continuous_edit_;
   QColorDialog *active_color_dialog_ = nullptr;
+  bool active_mesh_color_dialog_ = false;
   std::vector<EntityId> selection_;
   EntityId primary_ = kInvalidEntityId;
   std::unordered_map<std::string, bool> expanded_sections_;
@@ -2860,6 +3107,10 @@ private:
   std::uint64_t built_modeling_content_revision_ =
       std::numeric_limits<std::uint64_t>::max();
   std::uint64_t built_modeling_selection_revision_ =
+      std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t built_editor_mode_revision_ =
+      std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t built_editor_mode_generation_ =
       std::numeric_limits<std::uint64_t>::max();
   std::uint64_t built_material_presentation_revision_ =
       std::numeric_limits<std::uint64_t>::max();
@@ -2888,6 +3139,10 @@ void InspectorPanel::set_material_presentation(
 }
 
 void InspectorPanel::abandon_runtime() noexcept { impl_->abandon_runtime(); }
+
+bool InspectorPanel::settle_pending_edits() {
+  return impl_->settle_pending_edits();
+}
 
 void InspectorPanel::apply_ui_scale(const QtUiScaleMetrics &metrics) {
   impl_->apply_ui_scale(metrics);

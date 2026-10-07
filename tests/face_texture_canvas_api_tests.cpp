@@ -35,12 +35,18 @@ struct FaceTextureCanvasHarness final {
     return session.modeling().modeling_sdk_projection_stats_for_tests();
   }
 
+  std::vector<EntityId> fixture_entities;
+
   QuaderModelingObjectRef create_box() {
+    EXPECT_TRUE(editor.mode().set(QuaderEditorMode::Object).ok());
     const auto created = editor.modeling().create_box(
         QuaderBounds{.min = {0.0f, 0.0f, 0.0f}, .max = {128.0f, 64.0f, 32.0f}},
         "Face texture canvas");
     EXPECT_TRUE(created.ok()) << created.error_message();
     if (!created.ok()) return {};
+    fixture_entities.push_back(created.value().entity);
+    EXPECT_TRUE(editor.selection().select_objects(fixture_entities).ok());
+    EXPECT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
     EXPECT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
     EXPECT_TRUE(editor.selection().select_face(created.value(), 1).ok());
     return created.value();
@@ -157,6 +163,7 @@ TEST(FaceTextureCanvasPerformanceTests, ClonedLargeSceneSelectedFaceSettings) {
     return std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - start).count();
   };
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
   for (int sample = 0; sample < 3; ++sample) {
     ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
     ASSERT_TRUE(editor.selection().clear().ok());
@@ -333,7 +340,7 @@ TEST(FaceTextureCanvasApiTests, MixedAnglesStopPresentationAndRotationPreparesEv
   EXPECT_NEAR(editor.modeling().face_texture_settings().rotation_degrees, 35.0, 1.0e-4);
 }
 
-TEST(FaceTextureCanvasApiTests, MixedPresentationRejectsTokensAfterLockCleanupAndReselection) {
+TEST(FaceTextureCanvasApiTests, MixedPresentationRetainsEditScopeAndRejectsTokensAfterLockAndReselection) {
   FaceTextureCanvasHarness harness;
   auto &editor = harness.editor;
   const auto first = harness.create_box();
@@ -348,14 +355,15 @@ TEST(FaceTextureCanvasApiTests, MixedPresentationRejectsTokensAfterLockCleanupAn
   const auto original = editor.modeling().face_texture_settings();
   ASSERT_TRUE(original.rotation_mixed);
 
-  // Public locking republishes scene selection and clears component selection.
-  // A mixed presentation must not let its former token edit those former faces.
+  // Locking blocks edits without discarding the fixed edit set or its selection.
+  // A mixed presentation must still reject its former editing token.
   ASSERT_TRUE(editor.scene().set_locked(third.entity, true).ok());
   const auto remaining = editor.modeling().face_texture_settings();
-  EXPECT_EQ(remaining.selected_face_count, 0u);
-  EXPECT_FALSE(remaining.rotation_mixed);
+  EXPECT_EQ(remaining.selected_face_count, 3u);
+  EXPECT_TRUE(remaining.rotation_mixed);
+  EXPECT_EQ(editor.mode().state().participants.size(), 3u);
   EXPECT_FALSE(remaining.editable);
-  EXPECT_EQ(remaining.block_reason, QuaderFaceTextureBlockReason::NoSelection);
+  EXPECT_EQ(remaining.block_reason, QuaderFaceTextureBlockReason::TargetUnavailable);
   const auto before = harness.projection_stats();
   const auto rejected = editor.modeling().set_face_texture_setting({
       .field = QuaderFaceTextureField::Rotate, .value = 60.0,
@@ -704,6 +712,7 @@ TEST(FaceTextureCanvasApiTests, OccurrenceSamplingSurvivesPreviewCommitAndUndo) 
   FaceTextureCanvasHarness harness;
   const auto member = harness.create_box();
   auto &editor = harness.editor;
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Object).ok());
   ASSERT_TRUE(editor.selection().select_object(member).ok());
   const auto instance = editor.modeling().create_instance_from_selection();
   ASSERT_TRUE(instance.ok()) << instance.error_message();
@@ -711,6 +720,9 @@ TEST(FaceTextureCanvasApiTests, OccurrenceSamplingSurvivesPreviewCommitAndUndo) 
   ASSERT_TRUE(editor.scene().set_transform(occurrence, {
       .position = {105.0f, -27.0f, 32.0f}, .scale = {-2.0f, 3.0f, 1.0f}}).ok());
   ASSERT_TRUE(editor.modeling().enter_instance_edit(occurrence).ok());
+  ASSERT_TRUE(editor.selection().select_object(member).ok());
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(member, 1).ok());
   const auto original = editor.modeling().face_texture_canvas();
   ASSERT_TRUE(original.editable) << original.disabled_reason;

@@ -94,6 +94,10 @@ protected:
   }
 
   void assign_all(QuaderModelingObjectRef object, ProjectAssetId material) {
+    if (editor_->mode().current() == QuaderEditorMode::Object) {
+      ASSERT_TRUE(editor_->selection().select_object(object).ok());
+      ASSERT_TRUE(editor_->mode().set(QuaderEditorMode::Edit).ok());
+    }
     EXPECT_TRUE(editor_->selection().set_mode(QuaderSelectionMode::Face).ok());
     EXPECT_TRUE(editor_->selection().select_faces(object, {1, 2, 3, 4, 5, 6}).ok());
     const auto selection = editor_->modeling().face_texture_settings();
@@ -201,6 +205,8 @@ TEST_F(ProjectMaterialUsageTests, LastFaceAssignmentNoOpUndoAndRedoUpdateActualU
   const auto first = add_material("First");
   const auto second = add_material("Second");
   const auto object = box(first);
+  ASSERT_TRUE(editor_->selection().select_object(object).ok());
+  ASSERT_TRUE(editor_->mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor_->selection().set_mode(QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor_->selection().select_faces(object, {1, 2, 3, 4, 5}).ok());
   auto token = editor_->modeling().face_texture_settings().selection_token;

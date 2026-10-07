@@ -15,6 +15,7 @@
 #include "editor/tools/extrude_tool_service.hpp"
 #include "editor/tools/extrude_viewport_interaction.hpp"
 #include "editor/tools/viewport_tool_runtime.hpp"
+#include "editor/tools/viewport_tool_descriptor_catalog.hpp"
 #include "editor/tools/viewport_curve_interaction_port.hpp"
 #include "editor/tools/viewport_native_tool_interaction.hpp"
 
@@ -91,6 +92,9 @@ public:
     return runtime_.native_lifecycle_pending(tool_id);
   }
   [[nodiscard]] bool can_activate(std::string_view tool_id) const;
+  void set_editor_mode_provider(std::function<EditorMode()> provider) {
+    editor_mode_provider_ = std::move(provider);
+  }
   [[nodiscard]] bool has_pending_tool() const override;
   /// Distinguishes uncommitted gestures from an idle persistent curve editor.
   [[nodiscard]] bool has_pending_history_preview() const;
@@ -152,6 +156,8 @@ public:
   CommandResult settle_competing_state_for_tool_activation();
   /// Accepts pending authored work; failed acceptance leaves the operation active.
   CommandResult settle_transient_state();
+  /** Retires incompatible idle owners after the transition accepted their work. */
+  CommandResult retire_incompatible_tools(EditorMode mode);
   void set_creation_material(MaterialReference material) { creation_material_ = material; }
   [[nodiscard]] bool settlement_in_progress() const { return settling_transient_state_; }
   /// Explicit cancellation and destructive session teardown only.
@@ -179,6 +185,7 @@ private:
   ExtrudeToolService &extrude_;
   AlignToolService &align_;
   std::function<CommandResult(MaterialReference)> settle_modeling_;
+  std::function<EditorMode()> editor_mode_provider_;
   bool settling_transient_state_ = false;
   MaterialReference creation_material_;
   ViewportToolRuntime runtime_;

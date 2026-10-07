@@ -28,6 +28,7 @@
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/qt_snapping_toolbar.hpp"
+#include "ui/qt_selection_toolbar.hpp"
 #include "ui/qt_tool_toolbar.hpp"
 #include "ui/qt_viewport_control_strip.hpp"
 #include "ui/qt_viewport_display_toolbar.hpp"
@@ -105,6 +106,59 @@ private:
   char *argv_[2] = {application_name_, nullptr};
   std::unique_ptr<QApplication> application_;
 };
+
+TEST_F(PublicReleaseUiTests, ObjectAndEditModesExposeOnlyTheirSelectionDomains) {
+  SceneSession scene;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(scene));
+  const auto first = editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "First public mesh");
+  const auto second = editor.modeling().create_box(
+      {.min = {3, -1, -1}, .max = {5, 1, 1}}, "Second public mesh");
+  ASSERT_TRUE(first.ok());
+  ASSERT_TRUE(second.ok());
+  ASSERT_TRUE(editor.selection().select_objects({first.value(), second.value()}).ok());
+  QtSelectionToolbar toolbar;
+  LocalizationService localization;
+  ASSERT_TRUE(localization.load(resource_root() / "locales", "en-US"));
+  toolbar.set_localization(localization);
+  toolbar.synchronize(editor, QuaderSelectionMode::Object);
+  auto *combo = toolbar.findChild<QComboBox *>(QStringLiteral("editorModeCombo"));
+  ASSERT_NE(combo, nullptr);
+  EXPECT_EQ(combo->currentText(), QStringLiteral("Object Mode"));
+  const auto assert_domain = [&](bool edit) {
+    for (const auto *name : {"selectionModeVertex", "selectionModeEdge",
+                             "selectionModeFace", "selectionModeMesh",
+                             "selectionModeGroup"}) {
+      auto *action = toolbar.findChild<QAction *>(QString::fromLatin1(name));
+      ASSERT_NE(action, nullptr);
+      const bool component = action->objectName() != "selectionModeMesh" &&
+          action->objectName() != "selectionModeGroup";
+      EXPECT_EQ(action->isEnabled(), component == edit);
+    }
+  };
+  assert_domain(false);
+  EXPECT_FALSE(editor.selection().set_mode(QuaderSelectionMode::Vertex).ok());
+  ASSERT_TRUE(editor.commands().execute(quader_command::kEditorModeToggleEdit).ok());
+  toolbar.synchronize(editor, QuaderSelectionMode::Vertex);
+  EXPECT_EQ(combo->currentText(), QStringLiteral("Edit Mode"));
+  EXPECT_EQ(editor.mode().state().participants.size(), 2u);
+  assert_domain(true);
+  for (const auto mode : {QuaderSelectionMode::Vertex, QuaderSelectionMode::Edge,
+                          QuaderSelectionMode::Face}) {
+    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    ASSERT_TRUE(editor.selection().clear().ok());
+    toolbar.synchronize(editor, mode);
+    EXPECT_EQ(editor.mode().state().participants.size(), 2u);
+    assert_domain(true);
+  }
+  EXPECT_FALSE(editor.selection().set_mode(QuaderSelectionMode::Group).ok());
+  EXPECT_FALSE(editor.selection().set_mode(QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.commands().execute(quader_command::kEditorModeToggleEdit).ok());
+  toolbar.synchronize(editor, QuaderSelectionMode::Object);
+  assert_domain(false);
+  EXPECT_EQ(combo->currentIndex(), 0);
+  EXPECT_EQ(editor.selection().summary().selected_object_count, 2u);
+}
 
 TEST_F(PublicReleaseUiTests, AssetBrowserOpensAtItsFinalDockGeometry) {
   QTemporaryDir project_root;
@@ -259,7 +313,10 @@ TEST_F(PublicReleaseUiTests, StaleWindowStateCannotRestoreExcludedPanelsAndLaunc
   EXPECT_EQ(ui.main_window()->findChild<QWidget *>(QStringLiteral("viewportControlStrip")), nullptr);
   const auto snapping_actions = snapping->viewport_actions();
   const auto display_actions = display->viewport_actions();
-  EXPECT_EQ(display_actions[2], nullptr);
+  ASSERT_NE(display_actions[0], nullptr);
+  EXPECT_EQ(display_actions[0]->objectName(), QStringLiteral("viewportWireframeOnShaded"));
+  EXPECT_FALSE(display_actions[0]->isChecked());
+  EXPECT_EQ(display_actions[3], nullptr);
   EXPECT_FALSE(release_has_feature(ReleaseFeature::CameraSettings));
   for (const char *pane : {"perspective", "top", "front", "side"}) {
     SCOPED_TRACE(pane);

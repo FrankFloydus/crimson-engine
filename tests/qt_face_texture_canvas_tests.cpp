@@ -55,6 +55,8 @@ protected:
         "Face Texture Canvas");
     ASSERT_TRUE(created.ok()) << created.error_message();
     object_ = created.value();
+    ASSERT_TRUE(editor().selection().select_object(object_).ok());
+    ASSERT_TRUE(editor().mode().set(QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(editor().selection().set_mode(QuaderSelectionMode::Face).ok());
     ASSERT_TRUE(editor().selection().select_face(object_, 1).ok());
     canvas_ = std::make_unique<QtFaceTextureCanvas>();

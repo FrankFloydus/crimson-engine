@@ -34,6 +34,19 @@
 
 namespace quader {
 
+namespace {
+
+/** Source-plane mapping retained while a subset of a face moves in that plane. */
+struct PlanarFaceTextureChart {
+  QVec3 origin;
+  QVec3 normal;
+  std::size_t dropped_axis = 0U;
+  double plane_tolerance = 0.0;
+  quader_poly::TextureAffineChart mapping;
+};
+
+} // namespace
+
 struct MeshProjectionPositionUpdatePlan {
   struct FaceRange {
     std::size_t face_index = 0U;
@@ -73,16 +86,22 @@ struct MeshRetainedPositionProjectionPlan {
     explicit CoordinateWorkspace(std::span<const quader_poly::Vertex> source)
         : next_vertices(source.begin(), source.end()),
           previous_vertices(source.begin(), source.end()),
-          next_lookup(next_vertices), previous_lookup(previous_vertices) {}
+          source_lookup(source), next_lookup(next_vertices), previous_lookup(previous_vertices) {}
 
     std::vector<quader_poly::Vertex> next_vertices;
     std::vector<quader_poly::Vertex> previous_vertices;
+    quader_poly::document_internal::VertexLookupIndex source_lookup;
     quader_poly::document_internal::VertexLookupIndex next_lookup;
     quader_poly::document_internal::VertexLookupIndex previous_lookup;
     std::vector<std::size_t> update_sources;
     std::vector<std::uint8_t> dirty_face_flags;
     std::vector<std::size_t> dirty_faces;
     std::vector<std::size_t> preserved_uv_faces;
+    std::vector<std::optional<PlanarFaceTextureChart>> planar_uv_charts;
+    std::vector<std::size_t> planar_uv_faces;
+    std::vector<quader_poly::Face> texture_faces;
+    std::vector<quader_poly::Face> texture_partial_faces;
+    std::vector<std::size_t> partial_face_indices;
     std::vector<QVec3> face_positions;
     std::vector<std::array<std::uint32_t, 3>> triangle_identities;
     quader_poly::CompiledMesh compilation;
@@ -131,6 +150,123 @@ void replace_geometry_from_compiled(
 
 bool same_position(quader::QVec3 left, quader::QVec3 right) {
   return left.x == right.x && left.y == right.y && left.z == right.z;
+}
+
+std::array<double, 3> chart_relative_position(
+    QVec3 position, const PlanarFaceTextureChart &chart) {
+  return {static_cast<double>(position.x) - chart.origin.x,
+          static_cast<double>(position.y) - chart.origin.y,
+          static_cast<double>(position.z) - chart.origin.z};
+}
+
+std::array<double, 2> chart_coordinates(
+    QVec3 position, const PlanarFaceTextureChart &chart) {
+  const auto relative = chart_relative_position(position, chart);
+  if (chart.dropped_axis == 0U) return {relative[1], relative[2]};
+  if (chart.dropped_axis == 1U) return {relative[0], relative[2]};
+  return {relative[0], relative[1]};
+}
+
+std::array<double, 2> evaluate_planar_texture_chart(
+    QVec3 position, const PlanarFaceTextureChart &chart) {
+  const auto coordinates = chart_coordinates(position, chart);
+  return {chart.mapping.carrier[0] * coordinates[0] +
+              chart.mapping.carrier[1] * coordinates[1] + chart.mapping.offset[0],
+          chart.mapping.carrier[2] * coordinates[0] +
+              chart.mapping.carrier[3] * coordinates[1] + chart.mapping.offset[1]};
+}
+
+bool position_on_texture_chart_plane(
+    QVec3 position, const PlanarFaceTextureChart &chart) {
+  const auto relative = chart_relative_position(position, chart);
+  const double distance = relative[0] * chart.normal.x +
+      relative[1] * chart.normal.y + relative[2] * chart.normal.z;
+  return std::isfinite(distance) && std::abs(distance) <= chart.plane_tolerance;
+}
+
+/** Arbitrary authored corner charts remain untouched by component transforms. */
+std::optional<PlanarFaceTextureChart> prepare_planar_texture_chart(
+    const quader_poly::Face &face,
+    const quader_poly::document_internal::VertexLookupIndex &lookup) {
+  if (face.vertices.size() < 3U || face.uvs.size() != face.vertices.size()) return {};
+  const auto *origin = lookup.find(face.vertices.front());
+  if (origin == nullptr) return {};
+  PlanarFaceTextureChart chart{
+      .origin = origin->position,
+      .normal = quader_poly::document_internal::face_normal_from_vertex_lookup(face, lookup)};
+  const std::array normal{std::abs(chart.normal.x), std::abs(chart.normal.y),
+                          std::abs(chart.normal.z)};
+  chart.dropped_axis = static_cast<std::size_t>(
+      std::ranges::max_element(normal) - normal.begin());
+  std::vector<std::array<double, 2>> coordinates;
+  coordinates.reserve(face.vertices.size());
+  double radius_squared = 0.0;
+  std::array<double, 2> minimum_uv{face.uvs.front().x, face.uvs.front().y};
+  auto maximum_uv = minimum_uv;
+  for (std::size_t corner = 0U; corner < face.vertices.size(); ++corner) {
+    const auto *vertex = lookup.find(face.vertices[corner]);
+    if (vertex == nullptr) return {};
+    const auto relative = chart_relative_position(vertex->position, chart);
+    radius_squared = std::max(radius_squared, relative[0] * relative[0] +
+        relative[1] * relative[1] + relative[2] * relative[2]);
+    coordinates.push_back(chart_coordinates(vertex->position, chart));
+    const std::array<double, 2> uv{face.uvs[corner].x, face.uvs[corner].y};
+    for (std::size_t axis = 0U; axis < 2U; ++axis) {
+      if (!std::isfinite(uv[axis])) return {};
+      minimum_uv[axis] = std::min(minimum_uv[axis], uv[axis]);
+      maximum_uv[axis] = std::max(maximum_uv[axis], uv[axis]);
+    }
+  }
+  chart.plane_tolerance = 32.0 * std::numeric_limits<float>::epsilon() *
+      std::sqrt(radius_squared);
+  for (const auto id : face.vertices) {
+    if (!position_on_texture_chart_plane(lookup.find(id)->position, chart)) return {};
+  }
+  const auto fitted = quader_poly::fit_texture_affine_chart(coordinates, face.uvs);
+  if (!fitted.has_value()) return {};
+  chart.mapping = *fitted;
+  for (std::size_t corner = 0U; corner < face.vertices.size(); ++corner) {
+    const auto uv = evaluate_planar_texture_chart(lookup.find(face.vertices[corner])->position, chart);
+    if (!quader_poly::texture_uv_coordinate_close(uv[0], face.uvs[corner].x,
+                                                maximum_uv[0] - minimum_uv[0]) ||
+        !quader_poly::texture_uv_coordinate_close(uv[1], face.uvs[corner].y,
+                                                maximum_uv[1] - minimum_uv[1])) return {};
+  }
+  return chart;
+}
+
+/** Re-evaluates moved corners only; fixed corners keep their exact authored bits. */
+bool preserve_partial_face_texture_chart(
+    const PlanarFaceTextureChart &chart, const quader_poly::Face &source,
+    quader_poly::Face &candidate,
+    const quader_poly::document_internal::VertexLookupIndex &source_lookup,
+    const quader_poly::document_internal::VertexLookupIndex &candidate_lookup) {
+  if (candidate.vertices != source.vertices || candidate.uvs.size() != source.uvs.size()) return false;
+  const auto normal = quader_poly::document_internal::face_normal_from_vertex_lookup(
+      candidate, candidate_lookup);
+  if (static_cast<double>(normal.x) * chart.normal.x +
+      static_cast<double>(normal.y) * chart.normal.y +
+      static_cast<double>(normal.z) * chart.normal.z <= 0.0) return false;
+  for (const auto id : candidate.vertices) {
+    const auto *vertex = candidate_lookup.find(id);
+    if (vertex == nullptr || !position_on_texture_chart_plane(vertex->position, chart)) return false;
+    const auto uv = evaluate_planar_texture_chart(vertex->position, chart);
+    if (!std::isfinite(static_cast<float>(uv[0])) ||
+        !std::isfinite(static_cast<float>(uv[1]))) return false;
+  }
+  bool changed = false;
+  for (std::size_t corner = 0U; corner < candidate.vertices.size(); ++corner) {
+    const auto id = candidate.vertices[corner];
+    const auto position = candidate_lookup.find(id)->position;
+    QVec2 uv = source.uvs[corner];
+    if (!same_position(position, source_lookup.find(id)->position)) {
+      const auto mapped = evaluate_planar_texture_chart(position, chart);
+      uv = {static_cast<float>(mapped[0]), static_cast<float>(mapped[1])};
+    }
+    changed = changed || uv.x != candidate.uvs[corner].x || uv.y != candidate.uvs[corner].y;
+    candidate.uvs[corner] = uv;
+  }
+  return changed;
 }
 
 /** Checks stored attributes before attempting optional texture preservation. */
@@ -367,9 +503,11 @@ bool update_retained_projection_compilation(
     quader_poly::DocumentReadView next,
     const MeshRetainedPositionProjectionPlan &plan,
     RetainedProjectionWriter &writer, bool partial,
-    quader_poly::CompiledMesh *scratch = nullptr) {
+    quader_poly::CompiledMesh *scratch = nullptr,
+    std::span<const quader_poly::Face> texture_partial_faces = {}) {
   auto input = next;
-  if (partial) input.faces = plan.partial_faces;
+  if (partial) input.faces = texture_partial_faces.empty()
+      ? std::span<const quader_poly::Face>(plan.partial_faces) : texture_partial_faces;
   auto &compiled = scratch != nullptr ? *scratch : canonical_compilation_scratch();
   quader_poly::compile_document_into(input, compiled);
   if (compiled.primitives.size() != input.faces.size()) return false;
@@ -1202,14 +1340,35 @@ MeshProjectionService::project_retained_mesh_position_updates(
       work.partial_eligible = work.partial_eligible && plan.movable_vertices[index] != 0U;
     }
     work.preserved_uv_faces.clear();
+    work.planar_uv_charts.resize(source.faces.size());
+    bool has_planar_uv_chart = false;
     for (std::size_t index = 0U; index < source.faces.size(); ++index) {
-      if (plan.face_triangle_identities[index].empty()) continue;
       const auto offset = plan.face_vertex_offsets[index];
       bool complete = true;
-      for (std::size_t corner = 0U; complete && corner < source.faces[index].vertices.size(); ++corner) {
-        complete = selected[plan.compiled_vertex_sources[offset + corner]] != 0U;
+      bool partial = false;
+      for (std::size_t corner = 0U; corner < source.faces[index].vertices.size(); ++corner) {
+        const bool movable = selected[plan.compiled_vertex_sources[offset + corner]] != 0U;
+        complete = complete && movable;
+        partial = partial || movable;
       }
-      if (complete) work.preserved_uv_faces.push_back(index);
+      if (complete && !plan.face_triangle_identities[index].empty()) {
+        work.preserved_uv_faces.push_back(index);
+      } else if (!complete && partial && preserve_preview_uv_layout) {
+        work.planar_uv_charts[index] = prepare_planar_texture_chart(
+            source.faces[index], work.next_lookup);
+        if (work.planar_uv_charts[index].has_value()) {
+          work.planar_uv_faces.push_back(index);
+          has_planar_uv_chart = true;
+        }
+      }
+    }
+    if (has_planar_uv_chart) {
+      work.texture_faces.assign(source.faces.begin(), source.faces.end());
+      work.texture_partial_faces = plan.partial_faces;
+      work.partial_face_indices.resize(source.faces.size(), std::numeric_limits<std::size_t>::max());
+      for (std::size_t index = 0U; index < plan.partial_ranges.size(); ++index) {
+        work.partial_face_indices[plan.partial_ranges[index].face_index] = index;
+      }
     }
     work.dirty_face_flags.resize(source.faces.size(), 0U);
     work.dirty_faces.reserve(source.faces.size());
@@ -1259,6 +1418,22 @@ MeshProjectionService::project_retained_mesh_position_updates(
   auto before = source;
   before.vertices = work.previous_vertices;
   if (preserve_preview_uv_layout) {
+    if (!work.texture_faces.empty()) {
+      // Rejected samples may have touched this private scratch. Reconstruct all
+      // admitted charts from the immutable source before publishing any ranges.
+      for (const auto index : work.planar_uv_faces) {
+        const auto &face = source.faces[index];
+        auto &candidate = work.texture_faces[index];
+        std::ranges::copy(face.uvs, candidate.uvs.begin());
+        preserve_partial_face_texture_chart(*work.planar_uv_charts[index], face,
+            candidate, work.source_lookup, work.next_lookup);
+        const auto partial_index = work.partial_face_indices[index];
+        if (partial_index != std::numeric_limits<std::size_t>::max()) {
+          std::ranges::copy(candidate.uvs, work.texture_partial_faces[partial_index].uvs.begin());
+        }
+      }
+      next.faces = work.texture_faces;
+    }
     // The UV-preservation owner first tries the existing loop unchanged. Reuse
     // that exact case without copying/reimporting a complete authored document;
     // any changed triangulation still goes through its loop-rebasing fallback.
@@ -1318,7 +1493,10 @@ MeshProjectionService::project_retained_mesh_position_updates(
     writer = RetainedProjectionWriter(plan.source_geometry, previous, positions);
     bool compiled = false;
     if (work.partial_eligible) {
-      compiled = update_retained_projection_compilation(next, plan, writer, true, &work.compilation);
+      compiled = update_retained_projection_compilation(next, plan, writer, true,
+          &work.compilation, preserve_preview_uv_layout
+              ? std::span<const quader_poly::Face>(work.texture_partial_faces)
+              : std::span<const quader_poly::Face>{});
       partial_compiled_face_count.fetch_add(plan.partial_faces.size(), std::memory_order_relaxed);
       if (compiled) {
         retained_partial_count.fetch_add(1U, std::memory_order_relaxed);
@@ -1786,8 +1964,8 @@ MeshProjectionService::preserve_transformed_sdk_document_uv_layout(
   if (!source.has_value()) {
     return rejected("Transform source authored topology is unavailable.");
   }
-  if (std::ranges::none_of(source->faces, [](const quader_poly::Face &face) {
-        return face.vertices.size() > 4U &&
+  if (std::ranges::none_of(source->faces, [&](const quader_poly::Face &face) {
+        return face.vertices.size() >= (whole_object ? 5U : 3U) &&
                face.uvs.size() == face.vertices.size();
       })) {
     return modeling::Result<modeling::OperationResult>::success(
@@ -1820,7 +1998,21 @@ MeshProjectionService::preserve_transformed_sdk_document_uv_layout(
              return std::ranges::binary_search(selected_vertices, id);
            });
   };
-  if (std::ranges::none_of(source->faces, complete_face)) {
+  const quader_poly::document_internal::VertexLookupIndex source_lookup(*source);
+  std::vector<std::optional<PlanarFaceTextureChart>> planar_charts(source->faces.size());
+  bool has_partial_chart = false;
+  if (!whole_object) {
+    for (std::size_t index = 0U; index < source->faces.size(); ++index) {
+      const auto &face = source->faces[index];
+      const auto count = std::ranges::count_if(face.vertices, [&](quader_poly::ElementId id) {
+        return std::ranges::binary_search(selected_vertices, id);
+      });
+      if (count == 0 || static_cast<std::size_t>(count) == face.vertices.size()) continue;
+      planar_charts[index] = prepare_planar_texture_chart(face, source_lookup);
+      has_partial_chart = has_partial_chart || planar_charts[index].has_value();
+    }
+  }
+  if (!has_partial_chart && std::ranges::none_of(source->faces, complete_face)) {
     return modeling::Result<modeling::OperationResult>::success(
         std::move(receipt));
   }
@@ -1830,11 +2022,12 @@ MeshProjectionService::preserve_transformed_sdk_document_uv_layout(
   }
   std::unordered_map<quader_poly::ElementId, quader_poly::Face *> faces;
   for (auto &face : destination->faces) faces.emplace(face.id, &face);
-  const quader_poly::document_internal::VertexLookupIndex source_lookup(*source);
   const quader_poly::document_internal::VertexLookupIndex destination_lookup(
       *destination);
-  for (const auto &face : source->faces) {
-    if (!complete_face(face)) continue;
+  bool changed_loop = false;
+  for (std::size_t index = 0U; index < source->faces.size(); ++index) {
+    const auto &face = source->faces[index];
+    if (!complete_face(face) && !planar_charts[index].has_value()) continue;
     const auto found = faces.find(face.id);
     if (found == faces.end()) {
       return rejected("Transform candidate face identity is unavailable.");
@@ -1843,6 +2036,13 @@ MeshProjectionService::preserve_transformed_sdk_document_uv_layout(
     if (candidate.vertices.size() != face.vertices.size() ||
         candidate.uvs.size() != face.uvs.size()) {
       return rejected("Transform candidate face corner identities are invalid.");
+    }
+    if (planar_charts[index].has_value()) {
+      if (preserve_partial_face_texture_chart(*planar_charts[index], face,
+              candidate, source_lookup, destination_lookup)) {
+        receipt.modified.faces.push_back(modeling::make_id<modeling::FaceTag>(face.id));
+      }
+      continue;
     }
     const auto previous_loop = candidate.vertices;
     if (!quader_poly::document_internal::preserve_rebased_face_texture_triangulation(
@@ -1855,6 +2055,7 @@ MeshProjectionService::preserve_transformed_sdk_document_uv_layout(
       return rejected("Transform candidate face corner identities are invalid.");
     }
     if (candidate.vertices != previous_loop) {
+      changed_loop = true;
       receipt.modified.faces.push_back(modeling::make_id<modeling::FaceTag>(face.id));
     }
   }
@@ -1869,7 +2070,7 @@ MeshProjectionService::preserve_transformed_sdk_document_uv_layout(
   imported.value().preserve_identity_high_water(transformed);
   transformed = std::move(imported).value();
   receipt.changed = true;
-  receipt.dirty = {.topology = true,
+  receipt.dirty = {.topology = changed_loop,
                    .geometry = true,
                    .materials = true,
                    .overlays = true};

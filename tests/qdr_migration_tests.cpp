@@ -202,6 +202,8 @@ TEST(QdrMigrationTests, RetiredAuthoredScenePreservesIdentityOrderComponentsAndD
   EXPECT_TRUE(entity.mesh->double_sided);
   EXPECT_FALSE(entity.mesh->generate_collisions);
   EXPECT_TRUE(entity.mesh->display_collision);
+  EXPECT_TRUE(entity.mesh->wireframe_on_shaded);
+  EXPECT_FALSE(entity.mesh->wireframe_on_shaded_color.has_value());
   EXPECT_EQ(entity.mesh->collision_type, MeshCollisionType::Sphere);
   EXPECT_EQ(entity.mesh->body_type, MeshPhysicsBodyType::RigidBody);
   ASSERT_TRUE(entity.modeling_object.has_value());

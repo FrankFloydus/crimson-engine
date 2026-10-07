@@ -15,6 +15,7 @@ file except through prior written authorization from Francesco Di Blasi.
 | Recovery copies, interval/dirty gates, retention | `session/project_autosave_service.*` |
 | Duplicate, destroy, group, ungroup across owners | `commands/scene_structural_lifecycle_service.*` |
 | Scene/component selection and provider publication | `selection/editor_selection_service.*` |
+| Scene-owned Object/Edit context and fixed mesh participants | [mode contract](modes/README.md), `modes/editor_mode_service.*` |
 | SDK/scene/asset/binding publication rollback | `modeling/services/modeling_host_publication_transaction.*` |
 | Native modeling projection and picking | [runtime guide](modeling/runtime/README.md) |
 | Descriptor catalogs | [metadata guide](metadata/README.md) |

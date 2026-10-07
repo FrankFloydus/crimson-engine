@@ -40,6 +40,8 @@ struct ViewportPersistentOverlayStyleSnapshot {
       kOverlaySelectionWireLineWidthPixels;
   std::uint64_t face_signature = 0u;
   std::uint64_t wire_signature = 0u;
+  /// Shaded topology color is a uniform, separate from selection geometry keys.
+  ViewportSettingColor wireframe_on_shaded_color{0.0f, 0.0f, 0.0f, 1.0f};
   InstanceEditStyle instance_edit_style;
   /** Context uniforms invalidate independently of selected face/wire geometry. */
   std::uint64_t instance_edit_context_signature = 0u;
@@ -53,10 +55,19 @@ struct ViewportPersistentOverlayRasterGroup final {
   ViewportPersistentOverlayStyleSnapshot style;
 };
 
+[[nodiscard]] inline bool viewport_persistent_overlay_shaded_wire_styles_match(
+    const ViewportPersistentOverlayStyleSnapshot &left,
+    const ViewportPersistentOverlayStyleSnapshot &right) noexcept {
+  const auto &a = left.wireframe_on_shaded_color;
+  const auto &b = right.wireframe_on_shaded_color;
+  return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
+}
+
 [[nodiscard]] inline bool viewport_persistent_overlay_wire_styles_match(
     const ViewportPersistentOverlayStyleSnapshot &left,
     const ViewportPersistentOverlayStyleSnapshot &right) noexcept {
   return left.raster_scale == right.raster_scale &&
+         viewport_persistent_overlay_shaded_wire_styles_match(left, right) &&
          left.selection_wire_color == right.selection_wire_color &&
          left.active_selection_wire_color == right.active_selection_wire_color &&
          left.selection_edge_logical_width_pixels ==

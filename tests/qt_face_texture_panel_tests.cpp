@@ -80,6 +80,8 @@ protected:
          .max = {64.0f, 32.0f, 16.0f}}, "Face Texture Panel");
     ASSERT_TRUE(created.ok()) << created.error_message();
     object_ = created.value();
+    ASSERT_TRUE(editor().selection().select_object(object_).ok());
+    ASSERT_TRUE(editor().mode().set(QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(editor().selection().set_mode(QuaderSelectionMode::Face).ok());
     ASSERT_TRUE(editor().selection().select_face(object_, 1).ok());
     panel_ = std::make_unique<QtFaceTexturePanel>();
@@ -204,10 +206,13 @@ protected:
         quader_poly::add_vertex(document, {0.0f, 64.0f, 0.0f})};
     const auto face = quader_poly::add_face(document, vertices);
     document.faces.front().uvs = {{0.0f, 1.0f}, {1.0f, 1.0f}, {0.5f, 0.0f}};
+    ASSERT_TRUE(editor().mode().set(QuaderEditorMode::Object).ok());
     const auto created = editor().modeling().create_mesh(
         QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
         {.name = "Synthetic texture alignment triangle"});
     ASSERT_TRUE(created.ok()) << created.error_message();
+    ASSERT_TRUE(editor().selection().select_objects({object_, created.value()}).ok());
+    ASSERT_TRUE(editor().mode().set(QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(editor().selection().select_face(created.value(), face).ok());
     ASSERT_TRUE(editor().modeling().apply_face_texture_action({
         .action = QuaderFaceTextureAction::FitBoth,

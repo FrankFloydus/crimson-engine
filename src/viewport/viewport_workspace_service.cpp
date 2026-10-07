@@ -29,6 +29,7 @@ constexpr std::array<ViewportBoolSettingId, kQuaderViewportControlCount>
         ViewportBoolSettingId::ShowGizmos,
         ViewportBoolSettingId::ShowOverlays,
         ViewportBoolSettingId::ShowMeshGrid,
+        ViewportBoolSettingId::WireframeOnShaded,
 };
 
 bool valid_pane(ViewportPaneId pane) {

@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/selection/editor_selection_service.hpp"
+#include "editor/modes/editor_mode_service.hpp"
 
 #include "editor/selection/scene_selection_summary.hpp"
 
@@ -180,14 +181,16 @@ ModelingSelectionSummary EditorSelectionService::summary() const {
 
   const std::vector<EntityId> selected = scene_.selected_entities();
   ModelingSelectionSummary resolved = current;
-  if (!selected.empty() && has_scene_only_selection(scene_, selected)) {
+  const bool object_mode = editor_mode_service_ == nullptr ||
+                           editor_mode_service_->mode() == EditorMode::Object;
+  if (object_mode && !selected.empty() && has_scene_only_selection(scene_, selected)) {
     resolved = make_scene_selection_summary(
         scene_,
         current.mode == ModelingSelectionMode::Group
             ? ModelingSelectionMode::Group
             : ModelingSelectionMode::Object,
         current.content_revision);
-  } else if (current.has_selection &&
+  } else if (object_mode && current.has_selection &&
              current.active_object_id != kInvalidModelingObjectId) {
     const std::optional<EntityId> active_entity =
         modeling_.entity_for_modeling_object(current.active_object_id);
@@ -338,6 +341,11 @@ ModelingHoverSummary EditorSelectionService::hover_summary() const {
 
 ModelingSelectionMode EditorSelectionService::mode() const {
   return modeling_.selection_mode();
+}
+
+void EditorSelectionService::set_editor_mode_service(EditorModeService *service) {
+  editor_mode_service_ = service;
+  summary_cache_valid_ = false;
 }
 
 void EditorSelectionService::set_scene_selection_scope_policy(
@@ -577,6 +585,9 @@ DocumentCommandResult EditorSelectionService::publish_scene_selection(
   if (sub_selection_provider_ != nullptr) {
     sub_selection_provider_->synchronize_sub_selection_scope();
   }
+  if (editor_mode_service_ != nullptr) {
+    editor_mode_service_->synchronize_object_active_entity();
+  }
   summary_cache_valid_ = false;
   return {.ok = result.ok,
           .changed = result.changed,
@@ -589,6 +600,11 @@ EditorSelectionService::set_scene_selection(std::span<const EntityId> entities,
                                             std::uint64_t gesture_merge_key,
                                             std::optional<std::uint64_t>
                                                 expected_history_revision) {
+  if (editor_mode_service_ != nullptr &&
+      editor_mode_service_->mode() == EditorMode::Edit) {
+    return {.ok = false,
+            .message = "Exit Edit Mode before changing the selected objects."};
+  }
   QDR_PROFILE_FUNCTION();
   const ModelingSelectionSummary before = modeling_.selection_summary();
   SceneSelectionState selection;
@@ -625,6 +641,11 @@ EditorSelectionService::set_scene_selection(std::span<const EntityId> entities,
 
 DocumentCommandResult EditorSelectionService::set_inspection_scene_selection(
     std::span<const EntityId> entities, EntityId active) {
+  if (editor_mode_service_ != nullptr &&
+      editor_mode_service_->mode() == EditorMode::Edit) {
+    return {.ok = false,
+            .message = "Exit Edit Mode before changing the selected objects."};
+  }
   QDR_PROFILE_FUNCTION();
   const ModelingSelectionSummary before = modeling_.selection_summary();
   SceneSelectionState selection = make_scene_selection(scene_, entities, active);
@@ -686,11 +707,19 @@ ModelingCommandResult EditorSelectionService::set_component_selection(
             .message = "The component owner is not visible in the current "
                        "viewport scope."};
   }
-  if (requires_selection_settlement(request.mode != modeling_.selection_mode())) {
+  const bool changing_kind = request.mode != modeling_.selection_mode();
+  if (changing_kind || requires_selection_settlement()) {
     const auto validated = modeling_.validate_component_selection(request);
     if (!validated.ok) return validated;
   }
-  const auto settled = begin_selection_edit(request.mode != modeling_.selection_mode());
+  ModelingCommandResult settled{.ok = true};
+  if (changing_kind && editor_mode_service_ != nullptr) {
+    const CommandResult kind_changed = editor_mode_service_->set_component_kind(request.mode);
+    settled = {.ok = kind_changed.ok, .changed = kind_changed.changed,
+               .message = kind_changed.message};
+  } else {
+    settled = begin_selection_edit(changing_kind);
+  }
   if (!settled.ok) return settled;
   ModelingCommandResult result = modeling_.set_component_selection(request);
   if (result.ok && sub_selection_provider_ != nullptr) {
@@ -701,6 +730,16 @@ ModelingCommandResult EditorSelectionService::set_component_selection(
 
 ModelingCommandResult
 EditorSelectionService::set_mode(ModelingSelectionMode mode) {
+  if (editor_mode_service_ != nullptr) {
+    if (!editor_mode_service_->permits_selection_mode(mode)) {
+      return {.ok = false,
+              .message = "Selection kind is unavailable in the current editor mode."};
+    }
+    if (is_component_selection_mode(mode)) {
+      const CommandResult result = editor_mode_service_->set_component_kind(mode);
+      return {.ok = result.ok, .changed = result.changed, .message = result.message};
+    }
+  }
   const auto preflight = selection_edit_preflight();
   if (!preflight.ok) {
     return preflight;
@@ -740,17 +779,11 @@ bool EditorSelectionService::scene_target_selectable(EntityId entity) const {
 }
 
 bool EditorSelectionService::component_owner_selectable(EntityId entity) const {
-  if (scene_target_selectable(entity)) {
-    return true;
-  }
-  if (!scene_entity_selectable_for_user_selection(scene_, entity)) {
+  if (!modeling_.component_target_is_editable(entity)) {
     return false;
   }
-  const ModelingInstanceEditScope edit_scope = modeling_.instance_edit_scope();
-  return edit_scope.active() &&
-         scene_.containing_instance_definition(entity) ==
-             edit_scope.definition &&
-         entity != edit_scope.definition;
+  const ModelingInstanceEditScope scope = modeling_.instance_edit_scope();
+  return scope.active() || scene_target_selectable(entity);
 }
 
 std::vector<EntityId>
@@ -965,17 +998,20 @@ ModelingCommandResult EditorSelectionService::select_mesh_ngons() {
   if (!preflight.ok) {
     return preflight;
   }
-  if (modeling_.selection_mode() != ModelingSelectionMode::Object) {
+  if (editor_mode_service_ == nullptr ||
+      editor_mode_service_->mode() != EditorMode::Edit) {
     return {
         .ok = false,
         .changed = false,
-        .message = "Select N-Gons is available only in Mesh mode.",
+        .message = "Select N-Gons requires Edit Mode.",
     };
   }
 
   std::vector<int> targets;
   std::optional<int> active_target;
-  for (const EntityId entity : scene_.selected_entities()) {
+  for (const auto &participant : editor_mode_service_->snapshot().participants) {
+    const EntityId entity = participant.entity;
+    if (!component_owner_selectable(entity)) continue;
     const std::optional<int> modeling_object =
         modeling_.modeling_object_for_entity(entity);
     if (!modeling_object.has_value()) {
@@ -1057,6 +1093,8 @@ EditorSelectionBoxBaseline
 EditorSelectionService::capture_box_selection_baseline() const {
   QDR_PROFILE_SCOPE("Box selection capture editor baseline");
   EditorSelectionBoxBaseline baseline;
+  baseline.editor_mode_generation = editor_mode_service_ == nullptr
+                                        ? 0 : editor_mode_service_->generation();
   baseline.mode = modeling_.selection_mode();
   baseline.scene_selection = scene_.selected_entities();
   baseline.active_entity = scene_.primary_selection();
@@ -1226,6 +1264,8 @@ EditorSelectionService::resolve_depth_arbitrated_target(
     signature.append(reinterpret_cast<const char *>(&value), sizeof(value));
   };
   append(selection_mode);
+  append(editor_mode_service_ != nullptr ? editor_mode_service_->generation()
+                                         : std::uint64_t{0});
   append(request.control_pressed);
   append(request.command_pressed);
   append(request.shift_pressed);
@@ -1332,7 +1372,9 @@ ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_click(
       edge_traversal != ModelingEdgeSelectionTraversal::None ||
       component_traversal != ModelingComponentSelectionTraversal::None;
   if (request.baseline.has_value() &&
-      request.baseline->mode != selection_mode) {
+      (request.baseline->mode != selection_mode ||
+       (editor_mode_service_ != nullptr &&
+        request.baseline->editor_mode_generation != editor_mode_service_->generation()))) {
     return {
         .command = {.ok = false,
                     .message = "Resolved click selection baseline is stale."},
@@ -1431,34 +1473,6 @@ ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_click(
     if (traversal_requested) {
       return {.command = {.ok = true}, .selection = summary()};
     }
-    if (request.component_body_target.has_value()) {
-      const ResolvedComponentBodyTarget &body =
-          *request.component_body_target;
-      const std::optional<int> modeling_object =
-          modeling_.modeling_object_for_entity(body.geometry_entity);
-      if (modeling_object.has_value() &&
-          modeling_.resolved_component_body_target_eligible(
-              *modeling_object, body.source_occurrence)) {
-        const auto settled = begin_selection_edit();
-        if (!settled.ok) {
-          return {.command = settled, .selection = summary()};
-        }
-        ModelingCommandResult command =
-            modeling_.apply_resolved_component_body_selection({
-                .modeling_object_id = *modeling_object,
-                .source_occurrence = body.source_occurrence,
-                .mode = selection_mode,
-                .edit = click_selection_edit(request.policy),
-                .preserve_selection_on_selected_hit =
-                    request.policy.preserve_selection_on_selected_hit,
-                .preserve_existing_component_selection_on_hit =
-                    request.policy
-                        .preserve_existing_component_selection_on_hit,
-            });
-        command.changed = command.changed || settled.changed;
-        return {.command = std::move(command), .selection = summary()};
-      }
-    }
     ModelingCommandResult command{.ok = true};
     if (!request.policy.preserve_selection_on_miss &&
         click_selection_edit(request.policy) ==
@@ -1552,6 +1566,15 @@ ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_click(
         .selection = summary(),
     };
   }
+  const auto component_entity =
+      modeling_.entity_for_modeling_object(winner.modeling_object_id);
+  if (!component_entity.has_value() ||
+      !component_owner_selectable(*component_entity)) {
+    return {.command = {.ok = false,
+                        .message = "Component selection is outside the edit set."},
+            .selection = summary()};
+  }
+
   ModelingResolvedComponentSelectionRequest component{
       .modeling_object_id = winner.modeling_object_id,
       .mode = selection_mode,
@@ -1615,6 +1638,13 @@ ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_click(
 
 ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_marquee(
     const ResolvedSelectionMarqueeRequest &request) {
+  if (editor_mode_service_ != nullptr &&
+      request.baseline.editor_mode_generation != editor_mode_service_->generation()) {
+    return {.command = {.ok = false,
+                        .message = "Resolved marquee edit context is stale."},
+            .selection = summary()};
+  }
+
   const auto preflight = selection_edit_preflight();
   if (!preflight.ok) {
     return {.command = preflight, .selection = summary()};
@@ -1694,7 +1724,9 @@ ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_marquee(
         (current_mode == ModelingSelectionMode::Face &&
          target.component_kind == ModelingActiveSelectionKind::Face);
     if (target.modeling_object_id == kInvalidModelingObjectId ||
-        !kind_matches_mode) {
+        !kind_matches_mode ||
+        !component_owner_selectable(modeling_.entity_for_modeling_object(
+            target.modeling_object_id).value_or(kInvalidEntityId))) {
       invalid_component_target = true;
       continue;
     }
@@ -1868,36 +1900,9 @@ ModelingCommandResult EditorSelectionService::preview_resolved_hover(
 
 ModelingCommandResult EditorSelectionService::preview_spatial_hover(
     std::optional<ResolvedSelectionTarget> target,
-    bool selected_modifier_pressed,
-    std::optional<ResolvedComponentBodyTarget> component_body) {
-  if (target.has_value() ||
-      !is_component_selection_mode(modeling_.selection_mode())) {
-    return publish_resolved_hover(std::move(target), false,
-                                  selected_modifier_pressed);
-  }
-
-  const ModelingHoverSummary current = modeling_.selection_hover_summary();
-  int candidate_object_id = current.candidate_object_id;
-  if (component_body.has_value()) {
-    const std::optional<int> modeling_object =
-        modeling_.modeling_object_for_entity(component_body->geometry_entity);
-    if (modeling_object.has_value() &&
-        modeling_.resolved_component_body_target_eligible(
-            *modeling_object, component_body->source_occurrence)) {
-      candidate_object_id = *modeling_object;
-    }
-  }
-  if (candidate_object_id <= 0) {
-    return publish_resolved_hover(std::nullopt, false,
-                                  selected_modifier_pressed);
-  }
-
-  ModelingHoverSummary empty_spatial_sample;
-  empty_spatial_sample.candidate_object_id = candidate_object_id;
-  empty_spatial_sample.selected_modifier_pressed = selected_modifier_pressed;
-  return publish_resolved_hover(std::nullopt, false,
-                                selected_modifier_pressed, false,
-                                &empty_spatial_sample);
+    bool selected_modifier_pressed) {
+  return publish_resolved_hover(std::move(target), false,
+                                selected_modifier_pressed);
 }
 
 ModelingCommandResult EditorSelectionService::publish_resolved_hover(
@@ -1935,6 +1940,13 @@ ModelingCommandResult EditorSelectionService::publish_resolved_hover(
               .changed = false,
               .message = "Resolved component hover target is invalid."};
     }
+  }
+
+  if (target.has_value() &&
+      target->domain == ResolvedSelectionDomain::ModelingComponent &&
+      !component_owner_selectable(modeling_.entity_for_modeling_object(
+          target->modeling_object_id).value_or(kInvalidEntityId))) {
+    return {.ok = false, .message = "Component hover is outside the edit set."};
   }
 
   const std::optional<ResolvedSelectionTarget> resolved_before =
@@ -2045,9 +2057,7 @@ ModelingCommandResult EditorSelectionService::publish_resolved_hover(
        (target->domain == ResolvedSelectionDomain::SceneEntity &&
         target->modeling_object_id != kInvalidModelingObjectId));
   if (modeling_preview != nullptr) {
-    // Spatial hover owns the sticky component candidate used by constrained
-    // Select All. Publish the visible resolved target through this service,
-    // including its retained candidate when the visible ray target is empty.
+    // Publish the query result through the same selection authority.
     const ModelingHoverTarget &preview_target = modeling_preview->target;
     modeling = modeling_.set_selection_hover({
         .modeling_object_id = preview_target.object_id,

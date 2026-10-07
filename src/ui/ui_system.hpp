@@ -394,6 +394,7 @@ private:
 
   /** Captures revisions that determine whether the retained outliner must refresh. */
   struct OutlinerPresentationStamp final {
+    std::uint64_t editor_mode_revision = 0u;
     std::uint64_t hierarchy_revision = 0u;
     std::uint64_t light_property_revision = 0u;
     std::uint64_t selection_revision = 0u;
@@ -412,6 +413,8 @@ private:
   };
   /** Captures revisions that determine whether the retained inspector must refresh. */
   struct InspectorPresentationStamp final {
+    std::uint64_t editor_mode_revision = 0u;
+    std::uint64_t viewport_defaults_revision = 0u;
     std::uint64_t scene_revision = 0u;
     std::uint64_t modeling_content_revision = 0u;
     std::uint64_t modeling_selection_revision = 0u;
@@ -423,6 +426,7 @@ private:
   /** Captures owner revisions shared by retained toolbar controls. */
   struct ToolbarOwnerPresentationStamp final {
     bool owner_available = false;
+    std::uint64_t editor_mode_revision = 0u;
     std::uint64_t scene_revision = 0u;
     std::uint64_t asset_revision = 0u;
     std::uint64_t scene_layer_revision = 0u;
@@ -515,7 +519,9 @@ private:
   /** Follows face selection/material changes without overriding later browsing. */
   struct FaceTextureBrowserSelectionStamp final {
     SceneSessionId scene_session_id;
-    std::uint64_t selection_revision = 0u;
+    std::uint64_t mode_generation = 0u;
+    QuaderModelingObjectId object_id = kInvalidQuaderModelingObjectId;
+    QuaderElementId face_id = kInvalidQuaderElementId;
     std::size_t selected_face_count = 0u;
     QuaderMaterialReference reference;
     bool operator==(const FaceTextureBrowserSelectionStamp &) const = default;
@@ -571,6 +577,7 @@ private:
   bool material_presentation_cache_valid_ = false;
   /** Captures revisions that determine whether inspector material usage must be queried. */
   struct InspectorMaterialQueryStamp final {
+    std::uint64_t editor_mode_revision = 0u;
     std::uint64_t presentation_revision = 0u;
     std::uint64_t scene_selection_revision = 0u;
     std::uint64_t hierarchy_revision = 0u;
@@ -623,6 +630,7 @@ private:
   RetainedUiPresenter<StatusPresentationStamp> status_presenter_;
   /** Gates selection counting and formatting before querying either owner. */
   struct StatusSelectionPresentationStamp final {
+    std::uint64_t editor_mode_revision = 0u;
     std::uint64_t scene_revision = 0u;
     std::uint64_t scene_selection_revision = 0u;
     std::uint64_t modeling_content_revision = 0u;

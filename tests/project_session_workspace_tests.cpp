@@ -852,6 +852,7 @@ TEST(ProjectSessionWorkspace,
   const auto first_box = editor.modeling().create_box(
       {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "First guide");
   ASSERT_TRUE(first_box.ok()) << first_box.error_message();
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().select_edge(first_box.value(), 1, 2).ok());
   const auto first_token = editor.modeling().uv_peel_settings().selection_token;
 
@@ -868,6 +869,7 @@ TEST(ProjectSessionWorkspace,
   const auto second_box = editor.modeling().create_box(
       {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Second guide");
   ASSERT_TRUE(second_box.ok()) << second_box.error_message();
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().select_edge(second_box.value(), 1, 2).ok());
   EXPECT_NE(editor.modeling().uv_peel_settings().selection_token, first_token);
   const auto before_content = second->session->modeling().content_revision();

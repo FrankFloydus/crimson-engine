@@ -355,6 +355,50 @@ void append_host_panel_actions(
 
 } // namespace
 
+bool ModelingActionCatalog::action_supports_editor_mode(
+    std::string_view action_id, EditorMode mode) {
+  if (action_id == "copy_selection" || action_id == "paste_selection" ||
+      action_id == "mirror_selection_x" || action_id == "mirror_selection_y" ||
+      action_id == "mirror_selection_z" || action_id == "flip_horizontal" ||
+      action_id == "flip_vertical") {
+    return mode == EditorMode::Object;
+  }
+  if (action_id == "delete_selection" || action_id == "select_all" ||
+      action_id == "invert_selection" || action_id == "clear_selection" ||
+      action_id == "repeat_last_action") {
+    return true;
+  }
+  if (const auto *descriptor = quader_host_contract::find_action_descriptor(action_id)) {
+    return editor_mode_supported(descriptor->supported_editor_modes, mode);
+  }
+  for (const auto &entry : modeling_instant_operation_catalog()) {
+    if (entry.id == action_id) {
+      return editor_mode_supported(entry.availability.supported_editor_modes, mode);
+    }
+  }
+  return false;
+}
+
+bool ModelingActionCatalog::operation_supports_editor_mode(
+    std::string_view operation_id, EditorMode mode) {
+  if (operation_id == "delete_selection" || operation_id == "assign_material") {
+    return editor_mode_supported(EditorModeSupport::ObjectAndEdit, mode);
+  }
+  for (const auto &descriptor : quader_host_contract::action_catalog()) {
+    if (descriptor.operation_id == operation_id &&
+        editor_mode_supported(descriptor.supported_editor_modes, mode)) {
+      return true;
+    }
+  }
+  for (const auto &entry : modeling_instant_operation_catalog()) {
+    if (entry.operation_id == operation_id &&
+        editor_mode_supported(entry.availability.supported_editor_modes, mode)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 ModelingActionSet
 ModelingActionCatalog::action_set_for(const ModelingSelectionSummary &summary,
                                       const ModelingActionQuery &query) {

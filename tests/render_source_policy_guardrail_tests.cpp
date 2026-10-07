@@ -1678,7 +1678,7 @@ TEST(ViewportOverlayPolicyTests,
       ".layerMask(kViewportAllLayerMask, style.layer_mask)"));
   EXPECT_TRUE(source_contains_compact(
       wireframe_cache,
-      "mesh.selected ? kViewportOverlayLayerMask : snapshot.layer_mask"));
+      "mesh.selected ? kViewportOverlayLayerMask : wire_layer_mask(mesh, snapshot)"));
   EXPECT_TRUE(source_contains_compact(
       selection_cache, ".layer_mask = raster_group.layer_mask"));
   EXPECT_TRUE(source_contains_compact(

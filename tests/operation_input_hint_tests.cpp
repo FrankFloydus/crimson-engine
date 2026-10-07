@@ -70,6 +70,12 @@ LocalizationService localization_for(std::string_view locale = "en-US") {
   return localization;
 }
 
+void prepare_component_context(QuaderEditorApi &editor) {
+  ASSERT_TRUE(editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Component hint context").ok());
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
+}
+
 TEST(OperationInputHintTests, PrimitiveHintsFollowShapePhaseAndHoveredControl) {
   using Shape = QuaderPrimitiveCreationShape;
   using namespace quader_command;
@@ -268,6 +274,8 @@ TEST(OperationInputHintTests,
 TEST(OperationInputHintTests, UvPeelOnlyAdvertisesApplyForValidPreview) {
   auto standalone = create_standalone_editor();
   auto &editor = standalone.editor();
+  prepare_component_context(editor);
+  ASSERT_FALSE(::testing::Test::HasFatalFailure());
   ASSERT_TRUE(editor.commands().execute(quader_command::kModelingUvPeel).ok());
   EXPECT_EQ(editor.tools().active_tool(), "uv_peel");
   const auto hints = editor.tools().active_input_hints();
@@ -284,6 +292,7 @@ TEST(OperationInputHintTests, ExtrudeOwnerPhasesReplaceModeChoicesWithLiveModifi
   QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
   const auto box = editor.modeling().create_box({.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Hint Source");
   ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(box.value(), 1).ok());
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::Extrude).ok());
@@ -378,6 +387,8 @@ TEST(OperationInputHintTests, ModelingPhasesDoNotAdvertiseUnavailableApplyOrWron
 TEST(OperationInputHintTests, InsertEdgeLoopAdvertisesCtrlSnapIndependentlyOfGlobalToggles) {
   auto standalone = create_standalone_editor();
   auto &tools = standalone.editor().tools();
+  prepare_component_context(standalone.editor());
+  ASSERT_FALSE(::testing::Test::HasFatalFailure());
   ASSERT_TRUE(tools.activate(ViewportToolId::InsertEdgeLoop).ok());
   for (const bool available : {false, true}) {
     for (const bool enabled : {false, true}) {
@@ -564,6 +575,8 @@ TEST_F(QtOperationInputHintTests, InsertEdgeLoopRowShowsAvailableAndHeldCtrlSnap
   auto standalone = create_standalone_editor();
   auto &editor = standalone.editor();
   ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  prepare_component_context(editor);
+  ASSERT_FALSE(::testing::Test::HasFatalFailure());
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::InsertEdgeLoop).ok());
   auto localization = localization_for();
   QtOperationInputHints widget;

@@ -160,6 +160,8 @@ to_scene_mesh_component(const QuaderMeshComponent &component) {
       .collision_type = to_scene_mesh_collision_type(component.collision_type),
       .display_collision = component.display_collision,
       .body_type = to_scene_mesh_physics_body_type(component.body_type),
+      .wireframe_on_shaded = component.wireframe_on_shaded,
+      .wireframe_on_shaded_color = component.wireframe_on_shaded_color,
   };
 }
 
@@ -174,6 +176,8 @@ to_api_mesh_component(const MeshComponent &component) {
       .collision_type = to_api_mesh_collision_type(component.collision_type),
       .display_collision = component.display_collision,
       .body_type = to_api_mesh_physics_body_type(component.body_type),
+      .wireframe_on_shaded = component.wireframe_on_shaded,
+      .wireframe_on_shaded_color = component.wireframe_on_shaded_color,
   };
 }
 

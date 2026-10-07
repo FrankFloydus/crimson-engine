@@ -58,6 +58,7 @@ constexpr std::array<ToolDescriptor, 19> kViewportToolDescriptors{{
         .allows_selection_fallback = true,
         .editor_owned_native_lifecycle = true,
         .repeat_activation_when_active = true,
+        .supported_editor_modes = EditorModeSupport::Edit,
     },
     {
         .tool = ViewportToolId::Rotate,
@@ -93,6 +94,7 @@ constexpr std::array<ToolDescriptor, 19> kViewportToolDescriptors{{
         .menu_group = ToolMenuGroup::Modeling,
         .owns_viewport = true,
         .editor_owned_native_lifecycle = true,
+        .supported_editor_modes = EditorModeSupport::Object,
     },
     {
         .tool = ViewportToolId::InsertEdgeLoop,
@@ -103,6 +105,8 @@ constexpr std::array<ToolDescriptor, 19> kViewportToolDescriptors{{
         .kind = ToolKind::Modal,
         .menu_group = ToolMenuGroup::Modeling,
         .owns_viewport = true,
+        .supported_editor_modes = EditorModeSupport::Edit,
+        .required_component_kind = ModelingSelectionMode::Edge,
     },
     {
         .tool = ViewportToolId::Knife,
@@ -114,6 +118,8 @@ constexpr std::array<ToolDescriptor, 19> kViewportToolDescriptors{{
         .menu_group = ToolMenuGroup::Modeling,
         .owns_viewport = true,
         .blocks_viewport_focus_shortcuts = true,
+        .supported_editor_modes = EditorModeSupport::Edit,
+        .required_component_kind = ModelingSelectionMode::Edge,
     },
     {
         .tool = ViewportToolId::Cut,
@@ -124,6 +130,7 @@ constexpr std::array<ToolDescriptor, 19> kViewportToolDescriptors{{
         .menu_group = ToolMenuGroup::Modeling,
         .owns_viewport = true,
         .blocks_viewport_focus_shortcuts = true,
+        .supported_editor_modes = EditorModeSupport::Object,
     },
     {
         .tool = ViewportToolId::Poly,
@@ -134,6 +141,7 @@ constexpr std::array<ToolDescriptor, 19> kViewportToolDescriptors{{
         .menu_group = ToolMenuGroup::Modeling,
         .owns_viewport = true,
         .blocks_viewport_focus_shortcuts = true,
+        .supported_editor_modes = EditorModeSupport::Object,
     },
     {
         .tool = ViewportToolId::Mirror,
@@ -145,6 +153,7 @@ constexpr std::array<ToolDescriptor, 19> kViewportToolDescriptors{{
         .menu_group = ToolMenuGroup::Modeling,
         .owns_viewport = true,
         .blocks_viewport_focus_shortcuts = true,
+        .supported_editor_modes = EditorModeSupport::Object,
     },
     {
         .tool = ViewportToolId::UvPeel,
@@ -155,6 +164,8 @@ constexpr std::array<ToolDescriptor, 19> kViewportToolDescriptors{{
         .menu_group = ToolMenuGroup::Modeling,
         .allows_selection_fallback = true,
         .editor_owned_native_lifecycle = true,
+        .supported_editor_modes = EditorModeSupport::Edit,
+        .required_component_kind = ModelingSelectionMode::Edge,
     },
     {
         .tool = ViewportToolId::Pivot,
@@ -167,6 +178,7 @@ constexpr std::array<ToolDescriptor, 19> kViewportToolDescriptors{{
         .owns_viewport = true,
         .blocks_viewport_focus_shortcuts = true,
         .editor_owned_native_lifecycle = true,
+        .supported_editor_modes = EditorModeSupport::Object,
     },
     {
         .tool = ViewportToolId::LinearArray,
@@ -178,6 +190,7 @@ constexpr std::array<ToolDescriptor, 19> kViewportToolDescriptors{{
         .owns_viewport = true,
         .blocks_viewport_focus_shortcuts = true,
         .editor_owned_native_lifecycle = true,
+        .supported_editor_modes = EditorModeSupport::Object,
     },
     {
         .tool = ViewportToolId::RadialArray,
@@ -189,6 +202,7 @@ constexpr std::array<ToolDescriptor, 19> kViewportToolDescriptors{{
         .owns_viewport = true,
         .blocks_viewport_focus_shortcuts = true,
         .editor_owned_native_lifecycle = true,
+        .supported_editor_modes = EditorModeSupport::Object,
     },
     {
         .tool = ViewportToolId::PathArray,
@@ -200,6 +214,7 @@ constexpr std::array<ToolDescriptor, 19> kViewportToolDescriptors{{
         .owns_viewport = true,
         .blocks_viewport_focus_shortcuts = true,
         .editor_owned_native_lifecycle = true,
+        .supported_editor_modes = EditorModeSupport::Object,
     },
     {
         .tool = ViewportToolId::Curve,
@@ -211,6 +226,7 @@ constexpr std::array<ToolDescriptor, 19> kViewportToolDescriptors{{
         .owns_viewport = true,
         .blocks_viewport_focus_shortcuts = true,
         .editor_owned_native_lifecycle = true,
+        .supported_editor_modes = EditorModeSupport::Object,
     },
     {
         .tool = ViewportToolId::Align,
@@ -222,6 +238,7 @@ constexpr std::array<ToolDescriptor, 19> kViewportToolDescriptors{{
         .blocks_viewport_focus_shortcuts = true,
         .allows_selection_fallback = true,
         .editor_owned_native_lifecycle = true,
+        .supported_editor_modes = EditorModeSupport::Object,
     },
 }};
 
@@ -268,6 +285,24 @@ const ToolDescriptor *find_viewport_tool_descriptor(std::string_view id) {
 ToolDescriptor viewport_tool_descriptor(ViewportToolId tool) {
   const ToolDescriptor *descriptor = find_viewport_tool_descriptor(tool);
   return descriptor != nullptr ? *descriptor : ToolDescriptor{};
+}
+
+bool viewport_tool_supports_editor_mode(ViewportToolId tool, EditorMode mode) {
+  const auto *descriptor = find_viewport_tool_descriptor(tool);
+  return descriptor != nullptr &&
+         editor_mode_supported(descriptor->supported_editor_modes, mode);
+}
+
+bool viewport_tool_supports_editor_mode(ModelingViewportTool tool, EditorMode mode) {
+  const auto *descriptor = find_viewport_tool_descriptor(tool);
+  return descriptor != nullptr &&
+         editor_mode_supported(descriptor->supported_editor_modes, mode);
+}
+
+bool viewport_tool_supports_editor_mode(std::string_view tool_id, EditorMode mode) {
+  const auto *descriptor = find_viewport_tool_descriptor(tool_id);
+  return descriptor != nullptr &&
+         editor_mode_supported(descriptor->supported_editor_modes, mode);
 }
 
 } // namespace quader

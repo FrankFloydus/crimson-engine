@@ -1021,6 +1021,7 @@ TEST(RenderTextureLifetimeTests, VulkanSingleEdgeBevelSettingsUpdateScenePixels)
       "Bevel GPU settings source");
   ASSERT_TRUE(source.ok()) << source.error_message();
   ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Edge).ok());
   ASSERT_TRUE(editor.selection().select_edge(source.value(), 1, 2).ok());
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::Move).ok());

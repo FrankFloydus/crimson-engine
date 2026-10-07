@@ -1194,6 +1194,7 @@ void QtViewportPanel::sync_pane_actions(Pane &pane_state) {
     else if (name == QStringLiteral("gridSnapping")) checked = settings.bool_value(ViewportBoolSettingId::GridSnap);
     else if (name == QStringLiteral("vertexSnapping")) checked = settings.bool_value(ViewportBoolSettingId::VertexSnap);
     else if (name == QStringLiteral("rotationSnapping")) checked = settings.bool_value(ViewportBoolSettingId::RotationSnap);
+    else if (name == QStringLiteral("viewportWireframeOnShaded")) checked = settings.bool_value(ViewportBoolSettingId::WireframeOnShaded);
     else if (name == QStringLiteral("viewportGrid")) checked = settings.bool_value(ViewportBoolSettingId::ShowGrid);
     else if (name == QStringLiteral("viewportGizmos")) checked = settings.bool_value(ViewportBoolSettingId::ShowGizmos);
     else if (name == QStringLiteral("viewportMeshGrid")) checked = settings.bool_value(ViewportBoolSettingId::ShowMeshGrid);
@@ -1742,11 +1743,20 @@ void QtViewportPanel::prepare_viewports(
       ViewportOverlayStyleResolver::persistent_style_snapshot(
           settings, 1.0f);
   std::uint8_t wireframe_layer_mask = 0u;
+  std::uint8_t wireframe_on_shaded_layer_mask = 0u;
   for (const ViewportPanePlacement &placement : active_placements) {
-    if (workspace_->shading_mode(placement.pane_id) ==
-        ViewportShadingMode::Wireframe) {
+    const ViewportShadingMode shading = workspace_->shading_mode(placement.pane_id);
+    if (shading == ViewportShadingMode::Wireframe) {
       wireframe_layer_mask = static_cast<std::uint8_t>(
           wireframe_layer_mask |
+          viewport_grid_layer_mask(viewport_pane_index(placement.pane_id)));
+    } else if ((shading == ViewportShadingMode::Solid ||
+                shading == ViewportShadingMode::Shaded ||
+                shading == ViewportShadingMode::Rendered) &&
+               workspace_->effective_settings(placement.pane_id).bool_value(
+                   ViewportBoolSettingId::WireframeOnShaded)) {
+      wireframe_on_shaded_layer_mask = static_cast<std::uint8_t>(
+          wireframe_on_shaded_layer_mask |
           viewport_grid_layer_mask(viewport_pane_index(placement.pane_id)));
     }
   }
@@ -1759,6 +1769,7 @@ void QtViewportPanel::prepare_viewports(
           .selected_object_overlay_visible =
               any_overlays_visible && selected_mesh_outline_only,
           .scene_wireframe_layer_mask = wireframe_layer_mask,
+          .wireframe_on_shaded_layer_mask = wireframe_on_shaded_layer_mask,
           .selected_scene_wire_visible = false,
           .selected_mesh_outline_only = selected_mesh_outline_only,
           .style = persistent_overlay_style,
@@ -2475,6 +2486,13 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
     pane_state.surface_container->setFocusProxy(pane_state.surface_backing_container);
   }
   pane_state.surface->set_visible_host(*pane_state.surface_container);
+  pane_state.surface->set_input_context_provider(
+      [this]() -> std::optional<QtViewportInputContext> {
+    if (interaction_editor_ == nullptr) return std::nullopt;
+    return QtViewportInputContext{
+        .binding_generation = runtime_binding_generation_,
+        .edit_generation = interaction_editor_->mode().generation()};
+  });
   if (composed_) {
     pane_state.surface_container->installEventFilter(this);
   }
@@ -3963,6 +3981,20 @@ void QtViewportPanel::process_viewport_input(
     suppressed_keybinding_chords_.clear();
     linear_array_wheel_remainder_ = 0.0;
     radial_array_wheel_remainder_ = 0.0;
+    return;
+  }
+  if (sample.context.has_value() &&
+      sample.context->edit_generation != editor.mode().generation()) {
+    // A queued mode command ran after this packet was captured. Retire its
+    // pointer work before any tool can reinterpret it in the new edit set.
+    for (Pane &other_pane : panes_) {
+      other_pane.surface->synchronize_input_context();
+    }
+    interaction_controller_.reset(nullptr);
+    native_tools.clear_pointer_drag_state();
+    hover_controller_.invalidate();
+    active_box_preview_ = {};
+    pending_marking_menu_gesture_.reset();
     return;
   }
   const std::optional<QPoint> marking_menu_global_origin =

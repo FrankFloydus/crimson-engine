@@ -12,6 +12,7 @@
 #include "editor/commands/document_command_service.hpp"
 #include "editor/history/editor_history_service.hpp"
 #include "editor/instances/instance_edit_context.hpp"
+#include "editor/modes/editor_mode_service.hpp"
 #include "scene/document/scene_content_document.hpp"
 #include "viewport/viewport_workspace_service.hpp"
 
@@ -134,6 +135,8 @@ public:
   }
   EditorSelectionService &selection() { return *selection_; }
   const EditorSelectionService &selection() const { return *selection_; }
+  EditorModeService &editor_mode() { return *editor_mode_; }
+  const EditorModeService &editor_mode() const { return *editor_mode_; }
   SceneInstanceService &instances() { return *instances_; }
   const SceneInstanceService &instances() const { return *instances_; }
   PivotToolService &pivot() { return *pivot_; }
@@ -265,6 +268,7 @@ private:
   std::unique_ptr<EditorHistoryService> history_;
   std::unique_ptr<DocumentCommandService> document_commands_;
   std::unique_ptr<AssetCommandService> asset_commands_;
+  std::unique_ptr<EditorModeService> editor_mode_;
   std::unique_ptr<ModelingSessionService> modeling_;
   std::unique_ptr<EditorSelectionService> selection_;
   std::unique_ptr<SceneStructuralLifecycleService> structural_lifecycle_;

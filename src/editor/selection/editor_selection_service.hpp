@@ -27,6 +27,7 @@
 namespace quader {
 
 class DocumentCommandService;
+class EditorModeService;
 class ModelingSessionService;
 class SceneDocument;
 
@@ -116,6 +117,7 @@ struct EditorSelectionState {
  * Stores the press-time selection baseline used by a deferred box or depth pick.
  */
 struct EditorSelectionBoxBaseline {
+    std::uint64_t editor_mode_generation = 0;
     ModelingSelectionMode mode = ModelingSelectionMode::Object;
     std::vector<EntityId> scene_selection;
     EntityId active_entity = kInvalidEntityId;
@@ -123,16 +125,9 @@ struct EditorSelectionBoxBaseline {
     std::optional<EditorSubSelectionBaseline> sub_selection;
 };
 
-/** Identifies a selectable mesh body hit used by component-mode fallback. */
-struct ResolvedComponentBodyTarget {
-  EntityId geometry_entity = kInvalidEntityId;
-  EntityId source_occurrence = kInvalidEntityId;
-};
-
 /** Carries one resolved click and the canonical policy used to apply it. */
 struct ResolvedSelectionClickRequest {
   std::optional<ResolvedSelectionTarget> winner;
-  std::optional<ResolvedComponentBodyTarget> component_body_target;
   ModelingPickSelectRequest policy;
   std::optional<EditorSelectionBoxBaseline> baseline;
   /**
@@ -178,6 +173,7 @@ public:
                          DocumentCommandService &document_commands,
                          ModelingSessionService &modeling);
 
+  void set_editor_mode_service(EditorModeService *service);
   [[nodiscard]] EditorSelectionState state() const;
   [[nodiscard]] EditorSelectionTarget target() const;
   [[nodiscard]] ModelingSelectionSummary summary() const;
@@ -279,16 +275,10 @@ public:
       const ModelingPickSelectRequest &request);
   ModelingCommandResult preview_resolved_hover(
       std::optional<ResolvedSelectionTarget> target);
-  /**
-   * Publishes one spatial hover sample. An empty sample clears the immediate
-   * element target while retaining the current component-mode mesh candidate;
-   * a mesh-body hit adopts a candidate without inventing a component target.
-   * Explicit lifecycle clears still use clear_hover().
-   */
+  /// Publishes immediate hover without changing the explicit edit context.
   ModelingCommandResult preview_spatial_hover(
       std::optional<ResolvedSelectionTarget> target,
-      bool selected_modifier_pressed = false,
-      std::optional<ResolvedComponentBodyTarget> component_body = std::nullopt);
+      bool selected_modifier_pressed = false);
   [[nodiscard]] std::optional<ResolvedSelectionTarget>
   resolved_hover_target() const { return resolved_hover_target_; }
   /**
@@ -382,6 +372,7 @@ private:
   [[nodiscard]] EditorSubSelectionSnapshot
   current_sub_selection_snapshot() const;
 
+  EditorModeService *editor_mode_service_ = nullptr;
   SceneDocument &scene_;
   DocumentCommandService &document_commands_;
   ModelingSessionService &modeling_;

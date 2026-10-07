@@ -480,6 +480,9 @@ void append_scene_wireframe_overlay(ViewportOverlayFrame &frame,
   QDR_PROFILE_FUNCTION();
   for (const RenderOverlayMeshSnapshot &mesh : snapshot.meshes) {
     QDR_PROFILE_SCOPE("Viewport scene wireframe entity");
+    // Shaded records belong to the retained depth-tested pass, not this
+    // Wireframe-mode compatibility frame.
+    if (mesh.shaded_wire) continue;
     const ViewportOverlayLayer layer =
         mesh.selected ? ViewportOverlayLayer::SelectedEdge
                       : ViewportOverlayLayer::WireframeXray;

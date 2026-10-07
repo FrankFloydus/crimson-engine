@@ -231,6 +231,9 @@ std::string menu_command_localization_key(QuaderCommandId command_id) {
   if (is(quader_command::kViewportToggleGrid)) {
     return "ui.menu.view.grid";
   }
+  if (is(quader_command::kViewportToggleWireframeOnShaded)) {
+    return "ui.toolbar.viewport_display.wireframe_on_shaded";
+  }
   if (is(quader_command::kViewportToggleMeshGrid)) {
     return "ui.menu.view.mesh_grid";
   }
@@ -575,6 +578,12 @@ struct QtMainMenu::Impl {
       return [this] {
         return context.editor.get().viewports().transform_space() ==
                QuaderTransformSpace::Local;
+      };
+    }
+    if (same_command(command_id, quader_command::kViewportToggleWireframeOnShaded)) {
+      return [this] {
+        return context.editor.get().viewports().control(
+            QuaderViewportControl::WireframeOnShaded);
       };
     }
     if (same_command(command_id, quader_command::kViewportToggleGrid)) {

@@ -506,6 +506,7 @@ void expect_uv_peel_arch_operation(bool split_depth) {
   } else {
     guide.edges.emplace_back(5U, 15U);
   }
+  s.given().edit_mode();
   ASSERT_TRUE(api.selection().select_components(guide).ok());
   const auto before = api.query().compiled_object_mesh(object);
   const auto effective_before = effective_texture_mesh(api, object);
@@ -1074,7 +1075,7 @@ void select_repeat_rotation_target(quader::test::BehaviorScenario &s,
     s.given().selection_mode(test_case.mode).selected("box");
     return;
   }
-  s.given().selection_mode(test_case.mode);
+  s.given().edit_mode().selection_mode(test_case.mode);
   s.when().pick(test_case.ray_origin);
 }
 
@@ -1261,7 +1262,7 @@ void run_component_transform_drag_case(ComponentPickCase test_case) {
   auto s = quader::test::BehaviorScenario::new_project();
   s.given()
       .unit_box("box", "Component Drag Box")
-      .selection_mode(test_case.mode);
+      .edit_mode().selection_mode(test_case.mode);
   s.when().pick(test_case.ray_origin);
 
   const quader::test::BehaviorSnapshot before =
@@ -1313,7 +1314,7 @@ void run_component_transform_drag_case(ComponentPickCase test_case) {
 TEST(ProgrammaticBehaviorScenarioTests,
      FaceTextureScaleUsesAbsoluteMixedValuesAcrossSelectedFaces) {
   auto s = quader::test::BehaviorScenario::new_project();
-  s.given().unit_box("box").selection_mode(quader::QuaderSelectionMode::Face);
+  s.given().unit_box("box").edit_mode().selection_mode(quader::QuaderSelectionMode::Face);
   auto &api = s.api();
   const auto object = s.object("box");
   ASSERT_TRUE(api.selection().select_face(object, 1).ok());
@@ -1355,6 +1356,8 @@ TEST(ProgrammaticBehaviorScenarioTests,
       {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Texture Rotation");
   ASSERT_TRUE(created.ok());
   const auto object = created.value();
+  ASSERT_TRUE(s.editor().selection().select_all().ok());
+  s.given().edit_mode();
   ASSERT_TRUE(api.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(api.selection().select_face(object, 1).ok());
   ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::ShiftX, 16).ok());
@@ -1468,6 +1471,8 @@ TEST(ProgrammaticBehaviorScenarioTests,
       {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Texture Shift");
   ASSERT_TRUE(created.ok());
   const auto object = created.value();
+  ASSERT_TRUE(s.editor().selection().select_all().ok());
+  s.given().edit_mode();
   ASSERT_TRUE(api.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(api.selection().select_face(object, 1).ok());
   ASSERT_TRUE(edit_face_texture(api, quader::QuaderFaceTextureField::ShiftX, 16).ok());
@@ -1545,7 +1550,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
 TEST(ProgrammaticBehaviorScenarioTests,
      FaceTextureActionRotationCapturesDisabledSnapAngleAndRepeatsAfterUndoRedo) {
   auto s = quader::test::BehaviorScenario::new_project();
-  s.given().unit_box("box").selection_mode(quader::QuaderSelectionMode::Face);
+  s.given().unit_box("box").edit_mode().selection_mode(quader::QuaderSelectionMode::Face);
   auto &api = s.api();
   const auto object = s.object("box");
   double rotation_snap_degrees = 22.5;
@@ -1615,7 +1620,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
      FaceTextureActionClicksCreateSeparateAtomicMultiObjectUndoEntries) {
   auto s = quader::test::BehaviorScenario::new_project();
   s.given().unit_box("first").unit_box("second")
-      .selection_mode(quader::QuaderSelectionMode::Face);
+      .selected_aliases({"first", "second"}, "second").edit_mode().selection_mode(quader::QuaderSelectionMode::Face);
   auto &api = s.api();
   const auto first = s.object("first");
   const auto second = s.object("second");
@@ -1666,7 +1671,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
      FaceTextureActionStaleAndInvalidRequestsPreserveMeshesRevisionsAndRedo) {
   auto s = quader::test::BehaviorScenario::new_project();
   s.given().unit_box("first").unit_box("second")
-      .selection_mode(quader::QuaderSelectionMode::Face);
+      .selected_aliases({"first", "second"}, "second").edit_mode().selection_mode(quader::QuaderSelectionMode::Face);
   auto &api = s.api();
   const auto first = s.object("first");
   const auto second = s.object("second");
@@ -1740,7 +1745,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
   EXPECT_FALSE(api.modeling().set_face_texture_treat_as_one(true).changed());
   EXPECT_EQ(api.modeling().face_texture_settings_revision(), enabled_presentation);
 
-  s.given().unit_box("box").selection_mode(quader::QuaderSelectionMode::Face);
+  s.given().unit_box("box").edit_mode().selection_mode(quader::QuaderSelectionMode::Face);
   ASSERT_TRUE(api.selection().select_face(s.object("box"), 1).ok());
   EXPECT_TRUE(api.modeling().face_texture_settings().treat_as_one);
   ASSERT_TRUE(api.selection().clear().ok());
@@ -1763,7 +1768,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
   s.given().mesh("left", face_texture_wall_document())
       .mesh("right", face_texture_wall_document())
       .transform("right", {.position = {4.0f, 0.0f, 0.0f}})
-      .selection_mode(quader::QuaderSelectionMode::Face);
+      .selected_aliases({"left", "right"}, "right").edit_mode().selection_mode(quader::QuaderSelectionMode::Face);
   auto &api = s.api();
   const auto left = s.object("left");
   const auto right = s.object("right");
@@ -1845,8 +1850,8 @@ TEST(ProgrammaticBehaviorScenarioTests,
   const auto second_occurrence = duplicate.value().root_entities.front().id;
   ASSERT_NE(second_occurrence, first_occurrence);
 
-  ASSERT_TRUE(api.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
-  (void)api.selection().select_face(member, 1);
+  EXPECT_FALSE(api.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  EXPECT_FALSE(api.selection().select_face(member, 1).ok());
   EXPECT_FALSE(api.modeling().face_texture_settings().editable);
   const auto blocked = apply_face_texture_action(
       api, quader::QuaderFaceTextureAction::FitBoth);
@@ -1855,7 +1860,8 @@ TEST(ProgrammaticBehaviorScenarioTests,
   ASSERT_TRUE(api.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
   const auto entered = api.modeling().enter_instance_edit(second_occurrence);
   ASSERT_TRUE(entered.ok()) << entered.error_message();
-  // The direct component operation performs the Object-to-Face transition.
+  ASSERT_TRUE(api.selection().select_object(member).ok());
+  s.given().edit_mode();
   const auto selected = api.selection().select_face(member, 1);
   ASSERT_TRUE(selected.ok()) << selected.error_message();
   EXPECT_EQ(api.selection().summary().mode, quader::QuaderSelectionMode::Face);
@@ -1887,6 +1893,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
   expect_texture_mesh_equal(api.query().compiled_object_mesh(member), *before);
   ASSERT_TRUE(api.history().redo().ok());
   expect_texture_mesh_equal(api.query().compiled_object_mesh(member), *after);
+  s.given().object_mode();
   ASSERT_TRUE(api.modeling().exit_instance_edit().ok());
   EXPECT_FALSE(api.modeling().face_texture_settings().editable);
   EXPECT_FALSE(apply_face_texture_action(
@@ -1897,7 +1904,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
      FaceTextureActionAlignToViewRepeatRetainsCapturedCameraBasis) {
   auto s = quader::test::BehaviorScenario::new_project();
   s.given().mesh("wall", face_texture_wall_document())
-      .selection_mode(quader::QuaderSelectionMode::Face);
+      .edit_mode().selection_mode(quader::QuaderSelectionMode::Face);
   auto &api = s.api();
   const auto wall = s.object("wall");
   ASSERT_TRUE(api.selection().select_face(wall, 1).ok());
@@ -1985,6 +1992,8 @@ TEST(ProgrammaticBehaviorScenarioTests,
     expect_document_revisions_equal(api.revisions(), before);
   }
   s.given().mesh("strip", uv_peel_strip_document());
+  ASSERT_TRUE(s.editor().selection().select_all().ok());
+  s.given().edit_mode();
   ASSERT_TRUE(api.selection().select_edge(s.object("strip"), 2, 5).ok());
   const auto selected = api.modeling().uv_peel_settings();
   ASSERT_TRUE(selected.editable);
@@ -2005,6 +2014,8 @@ TEST(ProgrammaticBehaviorScenarioTests,
       .world_space = false, .u_offset = 0.25,
   };
   EXPECT_FALSE(peel_uv(api, options).ok());
+  ASSERT_TRUE(s.editor().selection().select_all().ok());
+  s.given().edit_mode();
   ASSERT_TRUE(api.selection().select_edge(strip, 2, 5).ok());
   const auto original_token = api.modeling().uv_peel_settings().selection_token;
   const auto peeled = peel_uv(api, options);
@@ -2068,6 +2079,8 @@ TEST(ProgrammaticBehaviorScenarioTests,
   auto &api = s.api();
   const auto first = s.object("first");
   const auto second = s.object("second");
+  ASSERT_TRUE(s.editor().selection().select_all().ok());
+  s.given().edit_mode();
   ASSERT_TRUE(api.selection().select_edge(first, 2, 5).ok());
   ASSERT_TRUE(api.selection().select_edge(
       second, 2, 5, quader::QuaderSelectionEdit::Add).ok());
@@ -2151,6 +2164,8 @@ TEST(ProgrammaticBehaviorScenarioTests,
       .u_offset = 0.25,
       .v_offset = -0.5,
   };
+  ASSERT_TRUE(s.editor().selection().select_all().ok());
+  s.given().edit_mode();
   ASSERT_TRUE(api.selection().select_edge(first, 2, 5).ok());
   ASSERT_TRUE(peel_uv(api, captured).ok());
   const auto first_result = api.query().compiled_object_mesh(first);
@@ -2212,6 +2227,8 @@ TEST(ProgrammaticBehaviorScenarioTests,
   for (quader::QuaderElementId index = 0; index < 32; ++index) {
     guide.edges.emplace_back(index + 1, (index + 1) % 32 + 1);
   }
+  ASSERT_TRUE(s.editor().selection().select_all().ok());
+  s.given().edit_mode();
   ASSERT_TRUE(api.selection().select_components(guide).ok());
   const auto settings = api.modeling().uv_peel_settings();
   ASSERT_TRUE(settings.editable) << settings.disabled_reason;
@@ -2297,6 +2314,8 @@ TEST(ProgrammaticBehaviorScenarioTests,
   for (std::size_t index = 0; index < kMiddleRing.size(); ++index) {
     guide.edges.emplace_back(kMiddleRing[index], kMiddleRing[(index + 1U) % kMiddleRing.size()]);
   }
+  ASSERT_TRUE(s.editor().selection().select_all().ok());
+  s.given().edit_mode();
   ASSERT_TRUE(api.selection().select_components(guide).ok());
   const auto settings = api.modeling().uv_peel_settings();
   ASSERT_TRUE(settings.editable) << settings.disabled_reason;
@@ -2433,13 +2452,15 @@ TEST(ProgrammaticBehaviorScenarioTests,
   ASSERT_EQ(duplicate.value().root_entities.size(), 1u);
   const auto second_occurrence = duplicate.value().root_entities.front().id;
   ASSERT_NE(second_occurrence, first_occurrence);
-  ASSERT_TRUE(api.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  EXPECT_FALSE(api.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
   EXPECT_FALSE(api.selection().select_edge(member, 2, 5).ok());
   EXPECT_FALSE(api.modeling().uv_peel_settings().editable);
 
   ASSERT_TRUE(api.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
   const auto entered = api.modeling().enter_instance_edit(second_occurrence);
   ASSERT_TRUE(entered.ok()) << entered.error_message();
+  ASSERT_TRUE(api.selection().select_object(member).ok());
+  s.given().edit_mode();
   const auto selected = api.selection().select_edge(member, 2, 5);
   ASSERT_TRUE(selected.ok()) << selected.error_message();
   ASSERT_TRUE(api.modeling().uv_peel_settings().editable);
@@ -2467,6 +2488,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
   expect_texture_mesh_equal(api.query().compiled_object_mesh(member), *before);
   ASSERT_TRUE(api.history().redo().ok());
   expect_texture_mesh_equal(api.query().compiled_object_mesh(member), *after);
+  s.given().object_mode();
   ASSERT_TRUE(api.modeling().exit_instance_edit().ok());
   EXPECT_FALSE(api.modeling().uv_peel_settings().editable);
 }
@@ -2632,6 +2654,8 @@ TEST(ProgrammaticBehaviorScenarioTests,
     auto s = quader::test::BehaviorScenario::new_project();
     s.given().mesh("side", beveled_box_side_document(first_corner),
                    "Box Face 10 Local Frame");
+    ASSERT_TRUE(s.editor().selection().select_all().ok());
+    s.given().edit_mode();
     ASSERT_TRUE(s.api().selection().select_face(s.object("side"), 1).ok());
     const auto orientation = s.api().query().selection_transform_orientation();
     ASSERT_TRUE(orientation.has_value());
@@ -2671,6 +2695,8 @@ TEST(ProgrammaticBehaviorScenarioTests,
       const auto diagonal = world_direction(positions[2] - positions[0]);
       const auto world_normal =
           quader::normalize(quader::cross(first_edge, diagonal));
+      ASSERT_TRUE(s.editor().selection().select_all().ok());
+      s.given().edit_mode();
       for (const auto mode : {quader::QuaderSelectionMode::Face,
                               quader::QuaderSelectionMode::Edge,
                               quader::QuaderSelectionMode::Vertex}) {
@@ -2741,6 +2767,8 @@ TEST(ProgrammaticBehaviorScenarioTests,
         .y_axis = quader::cross(world_normal, world_x),
         .z_axis = world_normal,
     };
+    ASSERT_TRUE(s.editor().selection().select_all().ok());
+    s.given().edit_mode();
     for (const bool select_edge : {false, true}) {
       SCOPED_TRACE(select_edge);
       if (select_edge) {
@@ -2771,6 +2799,8 @@ TEST(ProgrammaticBehaviorScenarioTests,
                     .scale = {1.4f, 0.8f, 1.9f}});
     const quader::QuaderModelingObjectRef object = s.object("box");
 
+    ASSERT_TRUE(s.editor().selection().select_all().ok());
+    s.given().edit_mode();
     const quader::QuaderApiVoidResult selected_first =
         s.api().selection().select_components(component_orientation_selection(
             object, mode, true, false, false));
@@ -2854,6 +2884,8 @@ TEST(ProgrammaticBehaviorScenarioTests,
       s.given().mesh("tetra", local_transform_tetrahedron_document(),
                      "Local Component Transform Tetrahedron");
       const quader::QuaderModelingObjectRef object = s.object("tetra");
+      ASSERT_TRUE(s.editor().selection().select_all().ok());
+      s.given().edit_mode();
       const quader::QuaderApiVoidResult selected =
           s.api().selection().select_components(
               tetrahedron_component_selection(object, mode));
@@ -3072,6 +3104,8 @@ TEST(ProgrammaticBehaviorScenarioTests,
                            .rotation_euler = {0.0f, 0.0f, quarter_turn},
                            .scale = {2.0f, 3.0f, 0.5f}});
   const auto object = s.object("tetra");
+  ASSERT_TRUE(s.editor().selection().select_all().ok());
+  s.given().edit_mode();
   ASSERT_TRUE(s.api().selection().select_components(
       tetrahedron_component_selection(object, quader::QuaderSelectionMode::Edge))
                   .ok());
@@ -3170,6 +3204,8 @@ TEST(ProgrammaticBehaviorScenarioTests,
   s.given().mesh("tetra", local_transform_tetrahedron_document(),
                  "Repeated Local Component Tetrahedron");
   const quader::QuaderModelingObjectRef object = s.object("tetra");
+  ASSERT_TRUE(s.editor().selection().select_all().ok());
+  s.given().edit_mode();
   ASSERT_TRUE(s.api()
                   .selection()
                   .select_components(tetrahedron_component_selection(
@@ -3417,7 +3453,7 @@ TEST(ProgrammaticBehaviorScenarioTests, FaceGizmoDragMovesOnlyPickedFaceAndKeeps
 
   s.given()
       .unit_box("box", "Face Gizmo Drag Box")
-      .selection_mode(quader::QuaderSelectionMode::Face);
+      .edit_mode().selection_mode(quader::QuaderSelectionMode::Face);
 
   s.when()
       .pick({0.0f, 0.0f, 5.0f})
@@ -3442,7 +3478,7 @@ TEST(ProgrammaticBehaviorScenarioTests, ShiftFaceMoveAndRotateExtrudeAndShiftFac
       auto s = quader::test::BehaviorScenario::new_project();
       s.given()
           .unit_box("box", "Shift Extrude Box")
-          .selection_mode(quader::QuaderSelectionMode::Face);
+          .edit_mode().selection_mode(quader::QuaderSelectionMode::Face);
       s.when().pick({0.0f, 0.0f, 5.0f});
       const quader::test::BehaviorSnapshot before =
           s.snapshot("before shift extrude");
@@ -3469,7 +3505,7 @@ TEST(ProgrammaticBehaviorScenarioTests, ShiftFaceMoveAndRotateExtrudeAndShiftFac
       auto s = quader::test::BehaviorScenario::new_project();
       s.given()
           .unit_box("box", "Shift Rotate Extrude Box")
-          .selection_mode(quader::QuaderSelectionMode::Face);
+          .edit_mode().selection_mode(quader::QuaderSelectionMode::Face);
       s.when().pick({0.0f, 0.0f, 5.0f});
       const quader::test::BehaviorSnapshot before =
           s.snapshot("before shift rotate extrude");
@@ -3501,7 +3537,7 @@ TEST(ProgrammaticBehaviorScenarioTests, ShiftFaceMoveAndRotateExtrudeAndShiftFac
       auto s = quader::test::BehaviorScenario::new_project();
       s.given()
           .unit_box("box", "Shift Inset Box")
-          .selection_mode(quader::QuaderSelectionMode::Face);
+          .edit_mode().selection_mode(quader::QuaderSelectionMode::Face);
       s.when().pick({0.0f, 0.0f, 5.0f});
       const quader::test::BehaviorSnapshot before =
           s.snapshot("before shift inset");
@@ -3544,7 +3580,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
             quader::QuaderPolygonDocumentInternalAccess::from_backend(
                 std::move(document)),
             "Poly Shift Extrude")
-      .selection_mode(quader::QuaderSelectionMode::Face)
+      .edit_mode().selection_mode(quader::QuaderSelectionMode::Face)
       .face_selected("poly", static_cast<int>(face));
 
   const quader::test::BehaviorSnapshot before =
@@ -3618,7 +3654,7 @@ TEST(ProgrammaticBehaviorScenarioTests, ShiftRotateExtrudeUsesWorldPivotForTrans
   s.given()
       .unit_box("box", "Shift Rotate Scene Pivot Box")
       .transform("box", {.position = {10.0f, 0.0f, 0.0f}})
-      .selection_mode(quader::QuaderSelectionMode::Face);
+      .edit_mode().selection_mode(quader::QuaderSelectionMode::Face);
 
   s.when().pick({10.0f, 0.0f, 5.0f});
   ASSERT_TRUE(s.api().query().selection_center().has_value());
@@ -3654,7 +3690,7 @@ TEST(ProgrammaticBehaviorScenarioTests, BridgeAfterShiftRotateExtrudeKeepsTransf
            {.min = {13.0f, -1.0f, -1.0f},
             .max = {15.0f, 1.0f, 1.0f}},
            "Bridge Target")
-      .selection_mode(quader::QuaderSelectionMode::Face);
+      .selected_aliases({"source", "target"}, "target").edit_mode().selection_mode(quader::QuaderSelectionMode::Face);
 
   s.when()
       .pick({10.0f, 0.0f, 5.0f})
@@ -3706,7 +3742,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
       .transform("source", {.position = {10.0f, 0.0f, 0.0f}})
       .unit_box("target", "Bridge Preview Target")
       .transform("target", {.position = {14.0f, 0.0f, 0.0f}})
-      .selection_mode(quader::QuaderSelectionMode::Face);
+      .selected_aliases({"source", "target"}, "target").edit_mode().selection_mode(quader::QuaderSelectionMode::Face);
 
   const quader::QuaderApiResult<quader::QuaderSelectionSummary> source_pick =
       s.api().selection().pick_select({
@@ -3792,7 +3828,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
                   .scale = {-1.0f, 1.0f, 1.0f}})
       .unit_box("target", "Mirrored Bridge Target")
       .transform("target", {.position = {14.0f, 0.0f, 0.0f}})
-      .selection_mode(quader::QuaderSelectionMode::Face);
+      .selected_aliases({"source", "target"}, "target").edit_mode().selection_mode(quader::QuaderSelectionMode::Face);
 
   ASSERT_TRUE(s.api()
                   .selection()
@@ -3834,7 +3870,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
                   .scale = {-1.0f, 1.0f, 1.0f}})
       .unit_box("target", "Mirrored Bridge Preview Target")
       .transform("target", {.position = {14.0f, 0.0f, 0.0f}})
-      .selection_mode(quader::QuaderSelectionMode::Face);
+      .selected_aliases({"source", "target"}, "target").edit_mode().selection_mode(quader::QuaderSelectionMode::Face);
 
   ASSERT_TRUE(s.api()
                   .selection()
@@ -3889,7 +3925,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
         .transform("box",
                    {.position = {10.0f, 0.0f, 0.0f},
                     .scale = {-1.0f, 1.0f, 1.0f}})
-        .selection_mode(quader::QuaderSelectionMode::Face);
+        .edit_mode().selection_mode(quader::QuaderSelectionMode::Face);
 
     s.when().pick({10.0f, 0.0f, 5.0f});
     run_shift_rotate_extrude_stability_case(s, "box");
@@ -3905,7 +3941,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
                     .ok());
     ASSERT_TRUE(s.editor().tools().commit_active_tool_preview().ok());
 
-    s.given().selection_mode(quader::QuaderSelectionMode::Face);
+    s.given().edit_mode().selection_mode(quader::QuaderSelectionMode::Face);
     s.when().pick({0.0f, 0.0f, 5.0f});
     run_shift_rotate_extrude_stability_case(s, "box");
   }
@@ -3958,7 +3994,7 @@ TEST(ProgrammaticBehaviorScenarioTests, RayPickingAndContextClickSemanticsPreser
       auto s = quader::test::BehaviorScenario::new_project();
       s.given()
           .unit_box("box", "Face Pick Box")
-          .selection_mode(quader::QuaderSelectionMode::Face);
+          .edit_mode().selection_mode(quader::QuaderSelectionMode::Face);
       s.when().pick({0.0f, 0.0f, 5.0f});
       s.then()
           .selection()
@@ -3977,7 +4013,7 @@ TEST(ProgrammaticBehaviorScenarioTests, RayPickingAndContextClickSemanticsPreser
       auto s = quader::test::BehaviorScenario::new_project();
       s.given()
           .unit_box("box", "Edge Pick Box")
-          .selection_mode(quader::QuaderSelectionMode::Edge);
+          .edit_mode().selection_mode(quader::QuaderSelectionMode::Edge);
       s.when().pick({0.0f, 1.0f, 5.0f});
       s.then()
           .selection()
@@ -3990,7 +4026,7 @@ TEST(ProgrammaticBehaviorScenarioTests, RayPickingAndContextClickSemanticsPreser
       auto s = quader::test::BehaviorScenario::new_project();
       s.given()
           .unit_box("box", "Vertex Pick Box")
-          .selection_mode(quader::QuaderSelectionMode::Vertex);
+          .edit_mode().selection_mode(quader::QuaderSelectionMode::Vertex);
       s.when().pick({1.0f, 1.0f, 5.0f});
       s.then()
           .selection()
@@ -4006,7 +4042,7 @@ TEST(ProgrammaticBehaviorScenarioTests, RayPickingAndContextClickSemanticsPreser
       s.given()
           .unit_box("box", "Transformed Pick Box")
           .transform("box", transform)
-          .selection_mode(quader::QuaderSelectionMode::Face);
+          .edit_mode().selection_mode(quader::QuaderSelectionMode::Face);
       s.when().pick({4.0f, 0.0f, 5.0f});
       s.then()
           .selection()
@@ -4037,7 +4073,7 @@ TEST(ProgrammaticBehaviorScenarioTests, SelectionAndHoverOverlaysAreBoundedDisti
       auto s = quader::test::BehaviorScenario::new_project();
       s.given()
           .unit_box("box", "Face Overlay Box")
-          .selection_mode(quader::QuaderSelectionMode::Face);
+          .edit_mode().selection_mode(quader::QuaderSelectionMode::Face);
       s.when().pick({0.0f, 0.0f, 5.0f});
       s.then()
           .overlay()
@@ -4063,7 +4099,7 @@ TEST(ProgrammaticBehaviorScenarioTests, SelectionAndHoverOverlaysAreBoundedDisti
       auto s = quader::test::BehaviorScenario::new_project();
       s.given()
           .unit_box("box", "Edge Overlay Box")
-          .selection_mode(quader::QuaderSelectionMode::Edge);
+          .edit_mode().selection_mode(quader::QuaderSelectionMode::Edge);
       s.when().pick({0.0f, 1.0f, 5.0f});
       s.then()
           .overlay()
@@ -4078,7 +4114,7 @@ TEST(ProgrammaticBehaviorScenarioTests, SelectionAndHoverOverlaysAreBoundedDisti
       auto s = quader::test::BehaviorScenario::new_project();
       s.given()
           .unit_box("box", "Vertex Overlay Box")
-          .selection_mode(quader::QuaderSelectionMode::Vertex);
+          .edit_mode().selection_mode(quader::QuaderSelectionMode::Vertex);
       s.when().pick({1.0f, 1.0f, 5.0f});
       s.then()
           .overlay()

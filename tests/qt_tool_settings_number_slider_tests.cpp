@@ -335,6 +335,15 @@ protected:
   }
 };
 
+/// Establishes an Edit context with no selected elements for settings-only tests.
+void prepare_empty_component_context(quader::QuaderEditorApi &editor) {
+  const auto target = editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Component settings target");
+  ASSERT_TRUE(target.ok()) << target.error_message();
+  ASSERT_TRUE(editor.selection().select_object(target.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+}
+
 } // namespace
 
 TEST(QtToolSettingsNumberSliderTests, IntegerRangesMapExactlyInBothDirections) {
@@ -1353,6 +1362,8 @@ TEST(QtToolSettingsPanelTests,
       {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}},
       "Extrude Numeric Grid Source");
   ASSERT_TRUE(box.ok()) << box.error_message();
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(box.value(), 1).ok());
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Extrude).ok());
@@ -1729,6 +1740,7 @@ TEST(QtToolSettingsPanelTests,
   QApplication::setStyle(QStringLiteral("Fusion"));
   auto standalone = quader::create_standalone_editor();
   auto &editor = standalone.editor();
+  ASSERT_NO_FATAL_FAILURE(prepare_empty_component_context(editor));
   quader::QtToolSettingsPanel panel;
   panel.setAttribute(Qt::WA_DontShowOnScreen, true);
   panel.bind(editor);
@@ -1835,6 +1847,8 @@ TEST(QtToolSettingsPanelTests, ActiveToolWithoutSettingsHidesTheEntireOverlay) {
       "Settings visibility");
   ASSERT_TRUE(created.ok());
   ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Move).ok());
   quader::QtToolSettingsPanel panel;
@@ -1843,7 +1857,7 @@ TEST(QtToolSettingsPanelTests, ActiveToolWithoutSettingsHidesTheEntireOverlay) {
   panel.show();
   ASSERT_TRUE(panel.has_settings());
   ASSERT_TRUE(panel.expanded());
-  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Mirror).ok());
   const auto mirror_target = editor.tools().active_settings();
   ASSERT_EQ(editor.tools().active_tool(), "mirror");
@@ -1878,11 +1892,13 @@ TEST(QtToolSettingsPanelTests,
   EXPECT_FALSE(panel.has_settings());
   EXPECT_TRUE(panel.isHidden());
 
+  ASSERT_NO_FATAL_FAILURE(prepare_empty_component_context(editor));
   for (const auto mode : {quader::QuaderSelectionMode::Edge,
                           quader::QuaderSelectionMode::Face,
                           quader::QuaderSelectionMode::Object,
                           quader::QuaderSelectionMode::Group}) {
     SCOPED_TRACE(static_cast<int>(mode));
+    ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
     panel.refresh();
     ASSERT_TRUE(panel.has_settings());
@@ -1907,6 +1923,10 @@ TEST(QtToolSettingsPanelTests,
     EXPECT_EQ(events.changes, 0);
     EXPECT_EQ(changes, 0);
 
+    const bool object_mode = mode == quader::QuaderSelectionMode::Object ||
+                             mode == quader::QuaderSelectionMode::Group;
+    ASSERT_TRUE(editor.mode().set(object_mode ? quader::QuaderEditorMode::Object
+                                              : quader::QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(editor.selection().set_mode(mode).ok());
     panel.refresh();
     EXPECT_FALSE(panel.has_settings());
@@ -1917,6 +1937,7 @@ TEST(QtToolSettingsPanelTests,
     const auto hidden_changes = changes;
     for (int frame = 0; frame < 20; ++frame) panel.refresh();
     EXPECT_EQ(changes, hidden_changes);
+    ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
     panel.refresh();
     toggle = panel.findChild<QCheckBox *>(
@@ -1939,6 +1960,8 @@ TEST(QtToolSettingsPanelTests,
   auto &editor = standalone.editor();
   const auto created = create_texture_action_surface(editor);
   ASSERT_TRUE(created.ok());
+  ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::UvPeel).ok());
   ASSERT_TRUE(editor.selection().select_edge(created.value(), 1, 2).ok());
   quader::QtToolSettingsPanel panel;
@@ -1987,6 +2010,7 @@ TEST(QtToolSettingsPanelTests,
   QApplication application(argc, argv);
   auto standalone = quader::create_standalone_editor();
   auto &editor = standalone.editor();
+  ASSERT_NO_FATAL_FAILURE(prepare_empty_component_context(editor));
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::UvPeel).ok());
   quader::QtToolSettingsPanel panel;
   panel.setAttribute(Qt::WA_DontShowOnScreen, true);
@@ -2021,6 +2045,7 @@ TEST(QtToolSettingsPanelTests,
   QApplication application(argc, argv);
   auto standalone = quader::create_standalone_editor();
   auto &editor = standalone.editor();
+  ASSERT_NO_FATAL_FAILURE(prepare_empty_component_context(editor));
   ASSERT_TRUE(editor.viewports().focus_pane(quader::ViewportPaneId::Top).ok());
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Move).ok());
   ASSERT_TRUE(editor.viewports().focus_pane(quader::ViewportPaneId::Perspective).ok());
@@ -2053,6 +2078,7 @@ TEST(QtToolSettingsPanelTests,
   QApplication application(argc, argv);
   auto standalone = quader::create_standalone_editor();
   auto &editor = standalone.editor();
+  ASSERT_NO_FATAL_FAILURE(prepare_empty_component_context(editor));
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::UvPeel).ok());
   quader::QtToolSettingsPanel panel;
   panel.setAttribute(Qt::WA_DontShowOnScreen, true);
@@ -2099,6 +2125,8 @@ TEST(QtToolSettingsPanelTests,
   auto &editor = standalone.editor();
   const auto created = create_texture_action_surface(editor);
   ASSERT_TRUE(created.ok());
+  ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::UvPeel).ok());
   ASSERT_TRUE(editor.selection().select_edge(created.value(), 1, 2).ok());
   quader::QtToolSettingsPanel panel;
@@ -2143,6 +2171,7 @@ TEST(QtToolSettingsPanelTests,
   QApplication application(argc, argv);
   auto standalone = quader::create_standalone_editor();
   auto &editor = standalone.editor();
+  ASSERT_NO_FATAL_FAILURE(prepare_empty_component_context(editor));
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::UvPeel).ok());
   quader::QtToolSettingsPanel panel;
   panel.setAttribute(Qt::WA_DontShowOnScreen, true);
@@ -2200,6 +2229,8 @@ TEST(QtFaceTextureControlsTests,
                            .max = {1.0f, 1.0f, 1.0f}},
       "Texture Settings Faces");
   ASSERT_TRUE(source.ok()) << source.error_message();
+  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
 
   quader::QtFaceTextureControls panel;
   panel.setAttribute(Qt::WA_DontShowOnScreen, true);
@@ -2487,7 +2518,7 @@ TEST(QtFaceTextureControlsTests,
   EXPECT_EQ(shift_y->accessibleName(), QStringLiteral("Spostamento V (px)"));
   EXPECT_EQ(scale_y->locale().decimalPoint(), QStringLiteral("."));
   EXPECT_TRUE(content->isHidden());
-  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
   panel.refresh();
   EXPECT_FALSE(section->isHidden());
   EXPECT_FALSE(edit_section->isHidden());
@@ -2535,6 +2566,8 @@ TEST(QtFaceTextureControlsTests,
     for (auto *api : {&editor, &expected_editor}) {
       const auto created = create_texture_action_surface(*api);
       ASSERT_TRUE(created.ok()) << created.error_message();
+      ASSERT_TRUE(api->selection().select_object(created.value()).ok());
+      ASSERT_TRUE(api->mode().set(quader::QuaderEditorMode::Edit).ok());
       objects[object_index++] = created.value();
       ASSERT_TRUE(api->selection().set_mode(quader::QuaderSelectionMode::Face).ok());
       ASSERT_TRUE(api->selection().select_face(created.value(), 1).ok());
@@ -2613,6 +2646,8 @@ TEST(QtFaceTextureControlsTests,
     auto &editor = standalone.editor();
     const auto created = create_texture_action_surface(editor);
     ASSERT_TRUE(created.ok()) << created.error_message();
+    ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+    ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(editor.selection()
                     .set_mode(quader::QuaderSelectionMode::Face).ok());
     ASSERT_TRUE(editor.selection().select_face(created.value(), 1).ok());
@@ -2711,6 +2746,8 @@ TEST(QtFaceTextureControlsTests,
         {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         "Mixed Texture Scale Steps");
     ASSERT_TRUE(created.ok()) << created.error_message();
+    ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+    ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(editor.selection()
                     .set_mode(quader::QuaderSelectionMode::Face).ok());
     ASSERT_TRUE(editor.selection().select_face(created.value(), 1).ok());
@@ -2775,6 +2812,8 @@ TEST(QtFaceTextureControlsTests,
   auto &editor = standalone.editor();
   const auto created = create_texture_action_surface(editor);
   ASSERT_TRUE(created.ok()) << created.error_message();
+  ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(created.value(), 1).ok());
   quader::QtFaceTextureControls panel;
@@ -2835,6 +2874,8 @@ TEST(QtFaceTextureControlsTests,
       {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
       "Edit Texture Drafts");
   ASSERT_TRUE(created.ok());
+  ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   std::vector<quader::QuaderNotification> notifications;
   editor.ui().set_runtime_hooks({.notify = [&](quader::QuaderNotification value) {
     notifications.push_back(std::move(value));
@@ -2998,6 +3039,8 @@ TEST(QtFaceTextureControlsTests,
   });
   const auto created = create_texture_action_surface(editor);
   ASSERT_TRUE(created.ok());
+  ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(created.value(), 1).ok());
 
@@ -3166,6 +3209,8 @@ TEST(QtToolSettingsPanelTests,
   auto &editor = standalone.editor();
   const auto created = create_texture_action_surface(editor);
   ASSERT_TRUE(created.ok());
+  ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
 
   QMainWindow window;
   window.setAttribute(Qt::WA_DontShowOnScreen, true);
@@ -3345,7 +3390,11 @@ TEST(QtToolSettingsPanelTests,
       const auto created = create_texture_action_surface(editor);
       const auto expected_created = create_texture_action_surface(expected_editor);
       ASSERT_TRUE(created.ok());
+      ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+      ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
       ASSERT_TRUE(expected_created.ok());
+      ASSERT_TRUE(expected_editor.selection().select_object(expected_created.value()).ok());
+      ASSERT_TRUE(expected_editor.mode().set(quader::QuaderEditorMode::Edit).ok());
       const auto before = editor.modeling().mesh(created.value()).compiled_mesh();
       ASSERT_TRUE(before.has_value());
       const auto history_before = editor.history().snapshot();
@@ -3439,6 +3488,8 @@ TEST(QtToolSettingsPanelTests,
   auto &editor = standalone.editor();
   const auto created = create_texture_action_surface(editor);
   ASSERT_TRUE(created.ok());
+  ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   const auto original = editor.modeling().mesh(created.value()).compiled_mesh();
   ASSERT_TRUE(original.has_value());
   const auto history_before = editor.history().snapshot();
@@ -3515,6 +3566,7 @@ TEST(QtToolSettingsPanelTests,
   QApplication application(argc, argv);
   auto standalone = quader::create_standalone_editor();
   auto &editor = standalone.editor();
+  ASSERT_NO_FATAL_FAILURE(prepare_empty_component_context(editor));
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::UvPeel).ok());
   quader::QtToolSettingsPanel panel;
   panel.set_expanded(true);
@@ -3551,6 +3603,7 @@ TEST(QtToolSettingsPanelTests,
   repeat->setValue(6.0);
   auto replacement = quader::create_standalone_editor();
   auto &replacement_editor = replacement.editor();
+  ASSERT_NO_FATAL_FAILURE(prepare_empty_component_context(replacement_editor));
   quader::QuaderUvPeelOptions replacement_options;
   replacement_options.u_repeat = 9.0;
   ASSERT_TRUE(replacement_editor.modeling()
@@ -3590,6 +3643,8 @@ TEST(QtFaceTextureControlsTests,
                            .max = {1.0f, 1.0f, 1.0f}},
       "Texture Rotation Faces");
   ASSERT_TRUE(source.ok());
+  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(source.value(), 1).ok());
   ASSERT_TRUE(set_face_texture_field(
@@ -3669,6 +3724,8 @@ TEST(QtFaceTextureControlsTests,
                            .max = {1.0f, 1.0f, 1.0f}},
       "Texture Lifecycle Faces");
   ASSERT_TRUE(source.ok());
+  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(source.value(), 1).ok());
   quader::QtFaceTextureControls panel;
@@ -3737,6 +3794,8 @@ TEST(QtFaceTextureControlsTests,
                            .max = {1.0f, 1.0f, 1.0f}},
       "Replacement Texture Scene");
   ASSERT_TRUE(replacement_source.ok());
+  ASSERT_TRUE(replacement_editor.selection().select_object(replacement_source.value()).ok());
+  ASSERT_TRUE(replacement_editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(replacement_editor.selection()
                   .set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(replacement_editor.selection()
@@ -3765,6 +3824,8 @@ TEST(QtFaceTextureControlsTests,
     auto &editor = outgoing.editor();
     const auto source = create_texture_action_surface(editor);
     ASSERT_TRUE(source.ok());
+    ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+    ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
     ASSERT_TRUE(editor.selection().select_face(source.value(), 1).ok());
     panel.bind(editor);
@@ -3786,6 +3847,8 @@ TEST(QtFaceTextureControlsTests,
   auto &editor = replacement.editor();
   const auto source = create_texture_action_surface(editor);
   ASSERT_TRUE(source.ok());
+  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(source.value(), 1).ok());
   panel.bind(editor);
@@ -4360,6 +4423,7 @@ TEST(QtToolSettingsPanelTests,
   application.setQuitOnLastWindowClosed(false);
   auto standalone = quader::create_standalone_editor();
   auto &editor = standalone.editor();
+  ASSERT_NO_FATAL_FAILURE(prepare_empty_component_context(editor));
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::UvPeel).ok());
   QMainWindow main_window;
   main_window.setAttribute(Qt::WA_DontShowOnScreen, true);
@@ -5112,6 +5176,8 @@ TEST(QtToolSettingsPanelTests,
          .max = {0.25F, 2.125F, 0.25F}},
         "Narrow Bevel Numeric Source");
     ASSERT_TRUE(source.ok()) << source.error_message();
+    ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+    ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
     ASSERT_TRUE(editor.selection().select_edge(source.value(), 2, 3).ok());
     ASSERT_TRUE(editor.commands()
@@ -5336,6 +5402,8 @@ TEST(QtToolSettingsPanelTests,
       {.min = {-0.25F, -0.125F, -0.25F}, .max = {0.25F, 2.125F, 0.25F}},
       "Queued Bevel Limit Source");
   ASSERT_TRUE(source.ok()) << source.error_message();
+  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
   ASSERT_TRUE(editor.selection().select_edge(source.value(), 2, 3).ok());
   ASSERT_TRUE(editor.commands().execute(
@@ -5427,6 +5495,8 @@ TEST(QtToolSettingsPanelTests,
       {.min = {-10.0F, -10.0F, -10.0F}, .max = {10.0F, 10.0F, 10.0F}},
       "Bevel Numeric Step Source");
   ASSERT_TRUE(source.ok()) << source.error_message();
+  ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
   ASSERT_TRUE(editor.selection().select_edge(source.value(), 1, 2).ok());
   ASSERT_TRUE(editor.commands()
@@ -5529,6 +5599,8 @@ TEST(QtToolSettingsNumberSliderTests,
           "Bevel Numeric Dispatch Source");
   ASSERT_TRUE(source.ok()) << source.error_message();
   ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+
   ASSERT_TRUE(
       editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
   ASSERT_TRUE(editor.selection().select_edge(source.value(), 1, 2).ok());
@@ -5939,6 +6011,8 @@ TEST(QtFaceTextureControlsTests,
   auto &editor = standalone.editor();
   const auto created = create_texture_action_surface(editor);
   ASSERT_TRUE(created.ok());
+  ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(created.value(), 1).ok());
   quader::QtFaceTextureControls panel;
@@ -6099,6 +6173,7 @@ TEST(QtToolSettingsPanelTests,
     ASSERT_TRUE(object.ok()) << object.error_message();
     ASSERT_TRUE(editor.selection().select_object(object.value()).ok());
     if (tool == quader::ViewportToolId::Move) {
+      ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
       ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
     }
     ASSERT_TRUE(editor.tools().activate(tool).ok());

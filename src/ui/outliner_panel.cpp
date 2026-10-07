@@ -86,6 +86,7 @@ namespace {
 
 constexpr int kEntityIdRole = Qt::UserRole + 1;
 constexpr int kSubduedRole = Qt::UserRole + 2;
+constexpr int kActiveEntityRole = Qt::UserRole + 3;
 
 /// Keeps the five authored entity symbols shared across retained tree rows.
 enum class OutlinerIcon : std::size_t {
@@ -340,6 +341,16 @@ public:
       styled_option.state &= ~QStyle::State_Enabled;
     }
     QStyledItemDelegate::paint(painter, styled_option, index);
+  }
+
+protected:
+  void initStyleOption(QStyleOptionViewItem *option,
+                       const QModelIndex &index) const override {
+    QStyledItemDelegate::initStyleOption(option, index);
+    if (index.data(kActiveEntityRole).toBool() &&
+        !option->state.testFlag(QStyle::State_Selected)) {
+      option->backgroundBrush = option->palette.brush(QPalette::AlternateBase);
+    }
   }
 };
 
@@ -737,6 +748,8 @@ struct OutlinerPanel::Impl {
     light_items_.clear();
     collapsed_entities_.clear();
     synced_selection_revision_ = 0;
+    presented_mode_revision_.reset();
+    presented_active_entity_ = kInvalidEntityId;
     syncing_expansion_ = false;
     syncing_model_ = false;
     syncing_selection_ = false;
@@ -774,10 +787,34 @@ struct OutlinerPanel::Impl {
     }
     refresh_model_if_needed();
     refresh_light_icons_if_needed();
+    sync_active_entity();
     sync_selection();
   }
 
 private:
+  void sync_active_entity() {
+    const std::uint64_t revision = editor_->mode().revision();
+    if (presented_mode_revision_ == revision &&
+        !selection_sync_after_model_rebuild_) {
+      return;
+    }
+    const EntityId active = editor_->mode().state().active_entity.id;
+    const QScopedValueRollback<bool> model_guard(syncing_model_, true);
+    const auto set_active = [&](EntityId entity, bool value) {
+      const auto found = item_by_entity_.find(entity);
+      if (found != item_by_entity_.end() &&
+          found->second->data(kActiveEntityRole).toBool() != value) {
+        found->second->setData(value, kActiveEntityRole);
+      }
+    };
+    if (presented_active_entity_ != active) {
+      set_active(presented_active_entity_, false);
+    }
+    set_active(active, true);
+    presented_active_entity_ = active;
+    presented_mode_revision_ = revision;
+  }
+
   const QIcon &light_icon(EntityId entity) const {
     const LightComponent *light = document_->light(entity);
     const OutlinerIcon type =
@@ -1612,6 +1649,8 @@ private:
   std::unordered_set<EntityId> collapsed_entities_;
   EntityId instance_scope_definition_ = kInvalidEntityId;
   std::uint64_t synced_selection_revision_ = 0;
+  std::optional<std::uint64_t> presented_mode_revision_;
+  EntityId presented_active_entity_ = kInvalidEntityId;
   std::uint64_t light_property_revision_ = 0;
   std::uint64_t runtime_binding_generation_ = 0;
   bool syncing_expansion_ = false;

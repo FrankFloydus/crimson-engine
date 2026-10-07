@@ -280,6 +280,8 @@ table MeshComponent {
   collision_type:MeshCollisionType = Box;
   display_collision:bool = false;
   body_type:MeshPhysicsBodyType = StaticBody;
+  wireframe_on_shaded:bool = true;
+  wireframe_on_shaded_color:Vec3;
 }
 
 table CurveComponent {

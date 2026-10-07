@@ -354,6 +354,10 @@ bool NativeViewportToolCoordinator::handles(std::string_view tool_id) const {
 
 bool NativeViewportToolCoordinator::can_activate(
     std::string_view tool_id) const {
+  if (editor_mode_provider_ &&
+      !viewport_tool_supports_editor_mode(tool_id, editor_mode_provider_())) {
+    return false;
+  }
   if (!release_allows_tool(tool_id)) {
     return false;
   }
@@ -554,6 +558,10 @@ bool NativeViewportToolCoordinator::curve_control_gizmo_start_allowed(
 
 CommandResult NativeViewportToolCoordinator::activate(
     std::string_view tool_id, double grid_world_size) {
+  if (editor_mode_provider_ &&
+      !viewport_tool_supports_editor_mode(tool_id, editor_mode_provider_())) {
+    return command_invalid_result("The tool is unavailable in the current editor mode.");
+  }
   if (!release_allows_tool(tool_id)) {
     return command_invalid_result(release_feature_unavailable_message());
   }
@@ -579,6 +587,10 @@ CommandResult NativeViewportToolCoordinator::activate(
 
 CommandResult NativeViewportToolCoordinator::activate_extrude(
     modeling::FaceExtrudeMode mode) {
+  if (editor_mode_provider_ &&
+      !viewport_tool_supports_editor_mode(ViewportToolId::Extrude, editor_mode_provider_())) {
+    return command_invalid_result("Extrusion requires Edit Mode.");
+  }
   if (!release_has_feature(ReleaseFeature::ExtrudeTool)) {
     return command_invalid_result(release_feature_unavailable_message());
   }
@@ -600,6 +612,9 @@ CommandResult NativeViewportToolCoordinator::activate_extrude(
 
 CommandResult NativeViewportToolCoordinator::begin_light_creation(
     LightCreationKind kind) {
+  if (editor_mode_provider_ && editor_mode_provider_() != EditorMode::Object) {
+    return command_invalid_result("Light creation requires Object Mode.");
+  }
   if (!release_has_feature(ReleaseFeature::Lights)) {
     return command_invalid_result(release_feature_unavailable_message());
   }
@@ -679,6 +694,20 @@ CommandResult NativeViewportToolCoordinator::settle_transient_state() {
   interaction_.clear_drag_state();
   extrude_interaction_.clear_drag_state();
   return result;
+}
+
+CommandResult NativeViewportToolCoordinator::retire_incompatible_tools(EditorMode mode) {
+  const std::string_view tool_id = runtime_.active_native_lifecycle_id();
+  const ToolDescriptor *descriptor = find_viewport_tool_descriptor(tool_id);
+  const bool component_kind_supported =
+      mode != EditorMode::Edit || descriptor == nullptr ||
+      !descriptor->required_component_kind.has_value() ||
+      *descriptor->required_component_kind == modeling_.selection_mode();
+  if (tool_id.empty() ||
+      (viewport_tool_supports_editor_mode(tool_id, mode) && component_kind_supported)) {
+    return command_unchanged_result();
+  }
+  return runtime_.cancel_native_lifecycles();
 }
 
 CommandResult NativeViewportToolCoordinator::cancel_transient_state() {

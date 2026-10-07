@@ -29,6 +29,8 @@ namespace quader {
 class AssetRegistry;
 class DocumentCommandService;
 class EditorHistoryService;
+class EditorModeService;
+struct EditorModeSnapshot;
 class EditorTransaction;
 class IUndoableCommand;
 class ModelingInteractionSettingsService;
@@ -349,6 +351,10 @@ public:
   [[nodiscard]] ModelingCommandResult
   restore_mesh_documents_from_scene(std::span<const EntityId> entities);
   [[nodiscard]] ModelingInstanceEditScope instance_edit_scope() const;
+  void set_editor_mode_service(EditorModeService *service);
+  [[nodiscard]] ModelingCommandResult apply_editor_mode_context(
+      const EditorModeSnapshot &snapshot,
+      std::span<const EntityId> first_admission_entities = {});
   void set_instance_edit_scope_provider(
       std::function<ModelingInstanceEditScope()> provider);
   void set_viewport_visibility_filter(
@@ -432,6 +438,7 @@ public:
   ModelingCommandResult
   set_interaction_settings(const ModelingInteractionSettings &settings);
   ModelingCommandResult reset_active_tool_settings();
+  [[nodiscard]] bool action_supports_editor_mode(std::string_view action_id) const;
   [[nodiscard]] ModelingActionSet
   context_action_set(const ModelingActionQuery &query = {}) const;
   [[nodiscard]] std::vector<ModelingActionItem>
@@ -547,6 +554,8 @@ public:
   /// Bakes one selected solidified Curve into an ordinary editable Mesh.
   [[nodiscard]] ModelingCreateBoxResult
   apply_curve_solidify(int modeling_object_id);
+  /// Shared read-only curve mutation admission, checked before draft settlement.
+  [[nodiscard]] bool curve_target_is_editable(int modeling_object_id) const;
   [[nodiscard]] std::optional<modeling::CurveDocument> curve_document(
       int modeling_object_id, bool include_preview = true) const;
   ModelingCommandResult replace_curve_document(
@@ -602,6 +611,7 @@ public:
                        EntityId active = kInvalidEntityId);
   ModelingCommandResult
   set_component_selection(const ModelingComponentSelectionRequest &request);
+  [[nodiscard]] bool component_target_is_editable(EntityId entity) const;
   /// Read-only preflight used only when a selection change would settle a draft.
   [[nodiscard]] ModelingCommandResult validate_component_selection(
       const ModelingComponentSelectionRequest &request) const;
@@ -610,10 +620,6 @@ public:
       const ModelingResolvedComponentSelectionRequest &request) const;
   ModelingCommandResult apply_resolved_component_selection(
       const ModelingResolvedComponentSelectionRequest &request);
-  [[nodiscard]] bool resolved_component_body_target_eligible(
-      int modeling_object_id, EntityId source_occurrence) const;
-  ModelingCommandResult apply_resolved_component_body_selection(
-      const ModelingResolvedComponentBodySelectionRequest &request);
   ModelingCommandResult set_component_selections(
       std::span<const ModelingComponentSelectionRequest> requests);
   ModelingCommandResult apply_resolved_component_selections(

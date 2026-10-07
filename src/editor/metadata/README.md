@@ -24,6 +24,10 @@ or own modeling, UI, input capture, or render resources.
   semantic input to the immutable executable release catalog in `core/release_features.hpp`.
   Keep raw identities registered for shortcut persistence; filter presentation and enforce the
   same requirements before invoking owner mutations or canceling competing tools.
+- Editor mode applicability belongs to action and tool descriptors. `EditorModeSupport` is
+  independent of component kind: admission checks run before pending-work settlement, while
+  selection requirements still decide whether the operation has meaningful operands. Whole-object
+  authoring is Object-only; component tools are Edit-only and use the scene-owned edit set.
 
 Descriptor contracts and a minimal consuming shell are tested in
 [tests/modeling_domain/editor_metadata](../../../tests/modeling_domain/editor_metadata), built by

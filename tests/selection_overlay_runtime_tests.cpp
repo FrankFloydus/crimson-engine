@@ -67,6 +67,38 @@
 
 namespace quader {
 namespace {
+/// Restores the explicitly captured set after fixture-only scene construction.
+bool restore_edit_participants(QuaderEditorApi &editor,
+                               const QuaderEditorModeState &previous) {
+  if (previous.mode != QuaderEditorMode::Edit) return true;
+  std::vector<EntityId> participants;
+  for (const auto &participant : previous.participants) participants.push_back(participant.id);
+  return editor.selection().select_objects(participants, previous.active_entity.id).ok() &&
+      editor.mode().set(QuaderEditorMode::Edit).ok() &&
+      editor.selection().set_mode(previous.component_kind).ok();
+}
+
+/// Creates an occluder through Object Mode while retaining the original Edit set.
+bool add_nonparticipant_occluder(QuaderEditorApi &editor,
+                                 QuaderBounds bounds, std::string name) {
+  const auto previous = editor.mode().state();
+  if (!editor.mode().set(QuaderEditorMode::Object).ok()) return false;
+  if (!editor.modeling().create_box(bounds, std::move(name)).ok()) return false;
+  return restore_edit_participants(editor, previous);
+}
+
+/// Makes native fixture mode transitions explicit before changing selection kind.
+quader::QuaderApiVoidResult enter_selection_context(
+    quader::QuaderEditorApi &editor, quader::QuaderSelectionMode kind) {
+  const bool component = kind == quader::QuaderSelectionMode::Vertex ||
+      kind == quader::QuaderSelectionMode::Edge ||
+      kind == quader::QuaderSelectionMode::Face;
+  const auto transition = editor.mode().set(component
+      ? quader::QuaderEditorMode::Edit : quader::QuaderEditorMode::Object);
+  if (!transition.ok()) return transition;
+  return editor.selection().set_mode(kind);
+}
+
 
 filament::Texture *create_test_solid_color_texture(
     filament::Engine &engine) {
@@ -348,7 +380,9 @@ public:
   }
 
   bool create_outline_depth_quad(const std::array<MeshVertex, 4u> &points) {
-    QuaderApi api(QuaderApiSessionInternalAccess::from_scene_session(session_));
+    QuaderEditorApi api(QuaderApiSessionInternalAccess::from_scene_session(session_));
+    const auto previous = api.mode().state();
+    if (!api.mode().set(QuaderEditorMode::Object).ok()) return false;
     quader_poly::Document document;
     // overlay_audit_world_point accounts for the mirrored readback, so this
     // image-space order produces a front surface toward positive camera Z.
@@ -364,7 +398,8 @@ public:
     const auto material = api.assets().add_material(QuaderMaterialAsset{
         .name = "Sloped outline neutral gray", .base_color = {0.18f, 0.18f, 0.18f}, .roughness = 1.0f});
     if (!object.ok() || !material.ok() ||
-        !api.assets().assign_material_to_entity(object.value().entity, material.value().id).ok()) return false;
+        !api.assets().assign_material_to_entity(object.value().entity, material.value().id).ok() ||
+        !restore_edit_participants(api, previous)) return false;
     bridge_.sync(session_.scene(), session_.assets());
     return true;
   }
@@ -451,8 +486,9 @@ public:
 
   bool select_inside_corner_native_wire() {
     auto &editor = array_editor();
-    return editor.selection().select_object(inside_corner_object_).ok() &&
-        editor.selection().set_mode(QuaderSelectionMode::Edge).ok();
+    return editor.mode().set(QuaderEditorMode::Object).ok() &&
+        editor.selection().select_object(inside_corner_object_).ok() &&
+        enter_selection_context(editor, QuaderSelectionMode::Edge).ok();
   }
 
   bool open_native_project_sample(const std::filesystem::path &manifest) {
@@ -479,7 +515,7 @@ public:
     }
     const auto object = array_editor_->query().modeling_object_for_id(objects.front().modeling_object_id);
     if (!object || !array_editor_->selection().select_object(*object).ok() ||
-        !array_editor_->selection().set_mode(QuaderSelectionMode::Edge).ok()) return false;
+        !enter_selection_context(*array_editor_, QuaderSelectionMode::Edge).ok()) return false;
     captured_project_materials_ = std::make_unique<ProjectSessionRenderMaterialResolver>(*captured_project_);
     bridge_.set_project_material_resolver(captured_project_materials_.get());
     camera_ = captured_project_scene_->viewport_workspace().camera(ViewportPaneId::Perspective);
@@ -508,7 +544,9 @@ public:
                                    QuaderElementId active_face) {
     if (captured_project_scene_ == nullptr) return false;
     const auto object = array_editor_->query().modeling_object_for_id(object_id);
-    return object && array_editor_->selection().set_mode(QuaderSelectionMode::Face).ok() &&
+    return object && array_editor_->mode().set(QuaderEditorMode::Object).ok() &&
+        array_editor_->selection().select_object(*object).ok() &&
+        enter_selection_context(*array_editor_, QuaderSelectionMode::Face).ok() &&
         array_editor_->selection().select_components({
             .object = *object, .kind = QuaderComponentKind::Face, .faces = faces,
             .active = {.object = *object, .kind = QuaderComponentKind::Face, .face = active_face}}).ok();
@@ -601,7 +639,9 @@ public:
 
   bool begin_inside_corner_support_preview() {
     auto &editor = array_editor();
-    return editor.selection().set_mode(QuaderSelectionMode::Vertex).ok() &&
+    return editor.mode().set(QuaderEditorMode::Object).ok() &&
+        editor.selection().select_object(inside_corner_object_).ok() &&
+        enter_selection_context(editor, QuaderSelectionMode::Vertex).ok() &&
         editor.selection().select_vertices(inside_corner_object_,
             {inside_corner_support_vertices_[0], inside_corner_support_vertices_[1],
              inside_corner_support_vertices_[2], inside_corner_support_vertices_[3]}).ok() &&
@@ -707,7 +747,7 @@ public:
     const auto object = editor.modeling().create_mesh(
         QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
         {.name = "Extrusion outline pixel regression"});
-    if (!object.ok() || !editor.selection().set_mode(QuaderSelectionMode::Face).ok() ||
+    if (!object.ok() || !enter_selection_context(editor, QuaderSelectionMode::Face).ok() ||
         !editor.selection().clear().ok() || !session_.extrude().activate(mode).ok ||
         !editor.selection().select_faces(object.value(), {1}).ok()) return false;
 
@@ -723,10 +763,10 @@ public:
   ExtrudeToolService &extrusion() { return session_.extrude(); }
   std::size_t undo_count() const { return session_.history().undo_count(); }
 
-  void initialize_extrusion_panes() {
+  void initialize_extrusion_panes(bool preserve_camera = false) {
     // Identical cameras expose any accidental active-pane styling difference.
     // The modest oblique angle keeps the complete disk on the 200% surface.
-    camera_.set_view_direction({0.0f, 0.5f, -1.0f});
+    if (!preserve_camera) camera_.set_view_direction({0.0f, 0.5f, -1.0f});
     view_.update_camera(camera_);
     for (std::size_t pane = 1u; pane <= sibling_views_.size(); ++pane) {
       auto &view = sibling_views_[pane - 1u];
@@ -837,8 +877,9 @@ public:
     const auto object = editor.modeling().create_mesh(
         QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
         {.name = "Edge loop preview vertex pixel regression"});
-    if (!object.ok() || !modeling().activate_viewport_tool(
-                            ModelingViewportTool::InsertEdgeLoop).ok) return false;
+    if (!object.ok() || !editor.selection().select_object(object.value()).ok() ||
+        !editor.mode().set(QuaderEditorMode::Edit).ok() ||
+        !editor.tools().activate(ViewportToolId::InsertEdgeLoop).ok()) return false;
     camera_.view_axis(ViewportViewAxis::Z, 1);
     camera_.focus_origin(3.0f);
     view_.update_camera(camera_);
@@ -852,7 +893,8 @@ public:
     const auto object = editor.modeling().create_box(
         {.min = {-1.0f, -0.75f, -0.75f}, .max = {1.0f, 0.75f, 0.75f}},
         "Self-occluded edge loop pixel regression");
-    return object.ok() && editor.tools().activate(ViewportToolId::InsertEdgeLoop).ok();
+    return object.ok() && editor.mode().set(QuaderEditorMode::Edit).ok() &&
+        editor.tools().activate(ViewportToolId::InsertEdgeLoop).ok();
   }
 
   bool edge_loop_point_is_scene_visible(QVec3 world) {
@@ -887,7 +929,7 @@ public:
         QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
         {.name = "Unselected cutting tool topology pixel regression"});
     if (!object.ok() ||
-        !editor.selection().set_mode(QuaderSelectionMode::Object).ok() ||
+        !enter_selection_context(editor, QuaderSelectionMode::Edge).ok() ||
         !editor.selection().clear().ok() || !editor.tools().activate(tool).ok()) {
       return false;
     }
@@ -923,16 +965,17 @@ public:
   bool select_tool_topology_sample() {
     QuaderEditorApi editor(
         QuaderApiSessionInternalAccess::from_scene_session(session_));
-    return editor.selection().select_object(tool_topology_object_).ok() &&
-           editor.selection().set_mode(QuaderSelectionMode::Edge).ok() &&
+    return editor.mode().set(QuaderEditorMode::Object).ok() &&
+           editor.selection().select_object(tool_topology_object_).ok() &&
+           enter_selection_context(editor, QuaderSelectionMode::Edge).ok() &&
            editor.tools().activate(tool_topology_tool_).ok();
   }
 
   bool occlude_tool_topology_internal_edge() {
-    QuaderApi api(QuaderApiSessionInternalAccess::from_scene_session(session_));
-    return api.modeling().create_box(
+    auto &editor = array_editor();
+    return add_nonparticipant_occluder(editor,
         {.min = {-0.2f, 0.2f, 0.2f}, .max = {0.2f, 0.6f, 0.4f}},
-        "Cutting topology foreground occluder").ok();
+        "Cutting topology foreground occluder");
   }
 
   QuaderSelectionSummary tool_topology_selection() {
@@ -974,7 +1017,7 @@ public:
     const auto object = editor.modeling().create_mesh(
         QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
         {.name = "Culled face fill depth regression"});
-    if (!object.ok() || !editor.selection().set_mode(QuaderSelectionMode::Face).ok()) {
+    if (!object.ok() || !enter_selection_context(editor, QuaderSelectionMode::Face).ok()) {
       return false;
     }
     face_fill_object_ = object.value();
@@ -1035,7 +1078,7 @@ public:
     const auto object = editor.modeling().create_mesh(
         QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
         {.name = "Overlapping component face fill regression"});
-    if (!object.ok() || !editor.selection().set_mode(QuaderSelectionMode::Face).ok()) {
+    if (!object.ok() || !enter_selection_context(editor, QuaderSelectionMode::Face).ok()) {
       return false;
     }
     face_fill_object_ = object.value();
@@ -1081,6 +1124,9 @@ public:
       objects[index] = object.value();
       faces[index] = static_cast<QuaderElementId>(face);
     }
+    if (!editor.selection().select_objects(
+            {objects[0].entity, objects[1].entity}, objects[1].entity).ok() ||
+        !enter_selection_context(editor, QuaderSelectionMode::Face).ok()) return false;
     for (std::size_t index = 0u; index < objects.size(); ++index) {
       if (!editor.selection().select_components({
               .object = objects[index], .kind = QuaderComponentKind::Face,
@@ -1091,13 +1137,13 @@ public:
         return false;
       }
     }
-    return editor.selection().set_mode(QuaderSelectionMode::Face).ok();
+    return enter_selection_context(editor, QuaderSelectionMode::Face).ok();
   }
 
   bool create_shared_face_edge_occluder() {
-    return array_editor().modeling().create_box(
+    return add_nonparticipant_occluder(array_editor(),
         {.min = {-0.4f, -0.4f, 1.0f}, .max = {0.4f, 0.4f, 1.2f}},
-        "Shared face edge genuine occluder").ok();
+        "Shared face edge genuine occluder");
   }
 
   bool set_overlapping_face_selection(const std::vector<QuaderElementId> &faces,
@@ -1200,7 +1246,7 @@ public:
       selection.kind = QuaderComponentKind::Face;
       selection.faces = {static_cast<QuaderElementId>(face)};
     }
-    if (!editor.selection().set_mode(mode).ok() ||
+    if (!enter_selection_context(editor, mode).ok() ||
         !editor.selection().select_components(selection).ok() ||
         !camera_.restore_perspective_pose({
             .eye = {0.0f, 0.0f, 4.0f}, .target = {}, .up = {0.0f, 1.0f, 0.0f}})) {
@@ -1286,7 +1332,7 @@ public:
     const auto object = editor.modeling().create_mesh(
         QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
         {.name = "Dimension frame pixel regression"});
-    if (!object.ok() || !editor.selection().set_mode(QuaderSelectionMode::Face).ok() ||
+    if (!object.ok() || !enter_selection_context(editor, QuaderSelectionMode::Face).ok() ||
         !editor.selection().clear().ok() ||
         !editor.selection().select_face(object.value(), 1).ok()) return false;
     if (!camera_.restore_perspective_pose(
@@ -1543,7 +1589,7 @@ public:
         active_entities_[index] = instance.value().occurrence.root.id;
       }
     }
-    if (!editor.selection().set_mode(groups ? QuaderSelectionMode::Group : QuaderSelectionMode::Object).ok()) return false;
+    if (!enter_selection_context(editor, groups ? QuaderSelectionMode::Group : QuaderSelectionMode::Object).ok()) return false;
     camera_.view_axis(ViewportViewAxis::Z, 1);
     camera_.focus_bounds({-2, -1, -0.5f}, {2, 1, 0.5f}, 1.5f);
     view_.update_camera(camera_);
@@ -1604,9 +1650,90 @@ public:
     return last_submission_;
   }
 
+  QuaderEditorApi &workflow_editor() { return array_editor(); }
+
+  bool present_workflow_pane(std::size_t pane = 0u) {
+    auto &editor = array_editor();
+    auto &modeling = session_.modeling();
+    auto &view = extrusion_pane_view(pane);
+    auto &camera = extrusion_pane_camera(pane);
+    capture_pane_ = pane;
+    const auto mode = modeling.selection_mode();
+    const bool outline_only = mode == ModelingSelectionMode::Object ||
+        mode == ModelingSelectionMode::Group;
+    const auto context = mode == ModelingSelectionMode::Vertex ? ViewportOverlaySelectionContext::Vertex
+        : mode == ModelingSelectionMode::Edge ? ViewportOverlaySelectionContext::Edge
+        : mode == ModelingSelectionMode::Face ? ViewportOverlaySelectionContext::Face
+        : mode == ModelingSelectionMode::Group ? ViewportOverlaySelectionContext::Group
+                                              : ViewportOverlaySelectionContext::Object;
+    const std::array panes{ViewportPaneId::Perspective, ViewportPaneId::Top};
+    std::uint8_t wire_mask = 0u;
+    const auto settings = ViewportSettings::defaults();
+    const auto style = ViewportOverlayStyleResolver::persistent_style_snapshot(settings);
+    ViewportPersistentOverlayRasterGroupSet groups;
+    for (std::size_t index = 0u; index < panes.size(); ++index) {
+      const auto mask = viewport_grid_layer_mask(static_cast<std::uint8_t>(index));
+      if (editor.viewports().shading_mode(panes[index]) == QuaderShadingMode::Wireframe)
+        wire_mask = static_cast<std::uint8_t>(wire_mask | mask);
+      if (!groups.add(mask, style)) return false;
+    }
+    const bool wireframe = editor.viewports().shading_mode(panes[pane]) == QuaderShadingMode::Wireframe;
+    view.set_scene_visible(!wireframe);
+    if (!QuaderRenderApiRuntimeAccess::sync_scene(editor.render(), bridge_).ok() ||
+        !QuaderRenderApiRuntimeAccess::sync_tool_previews(editor.render(), bridge_).ok()) return false;
+    // Match Qt's shared persistent routing, including selected-wire demotion.
+    if (!QuaderRenderApiRuntimeAccess::sync_scene_asset_overlays(
+            editor.render(), bridge_, active_snapshots_,
+            {.selected_object_overlay_visible = outline_only,
+             .scene_wireframe_layer_mask = wire_mask,
+             .selected_scene_wire_visible = false,
+             .selected_mesh_outline_only = outline_only,
+             .style = style, .raster_groups = groups}).ok()) return false;
+    const auto &scene = QuaderRenderApiRuntimeAccess::build_scene_overlay_snapshot(
+        editor.render(), active_snapshots_);
+    selection_frame_options_.suppress_persistent_object_selection =
+        mode == ModelingSelectionMode::Object;
+    const auto volatile_overlay = modeling.volatile_overlay_snapshot();
+    const bool retained_outlines = bridge_.tool_preview_suppression().empty();
+    const bool gpu_outlines = view.update_selected_mesh_outlines(
+        outline_only ? active_snapshots_.selected_object_snapshot() : nullptr,
+        outline_only ? &scene : nullptr, style, outline_only && retained_outlines) && retained_outlines;
+    last_submission_ = bridge_.submit_viewport_overlay(
+        {.viewport_index = pane,
+         .layer_mask = viewport_grid_layer_mask(static_cast<std::uint8_t>(pane)),
+         .camera = ViewportCameraAdapter::overlay_camera(camera, {kWidth, kHeight}),
+         .selection_source = {
+             .source_identity = reinterpret_cast<std::uintptr_t>(&modeling),
+             .content_revision = modeling.content_revision(),
+             .selection_revision = modeling.selection_revision(),
+             .scene_revision = session_.scene().revision(),
+             .asset_revision = session_.assets().revision(),
+             .overlay_signature = modeling.selection_overlay_signature(selection_frame_options_),
+             .selection_context = context},
+         .selection_frame_provider = this,
+         .scene_overlay_snapshot = &scene,
+         .selected_mesh_outline_snapshot = outline_only ? active_snapshots_.selected_object_snapshot() : nullptr,
+         .gpu_mesh_outlines = gpu_outlines,
+         .volatile_modeling_overlay_frame = volatile_overlay.frame.get(),
+         .volatile_modeling_source = {.source_identity = volatile_overlay.source.source_identity,
+             .publication_revision = volatile_overlay.source.publication_revision},
+         .scene_selection_mode = ViewportToolOverlayProjection::selection_mode(mode),
+         .style_selection_context = context,
+         .overlays_visible = true,
+         .scene_overlay_requested = true,
+         .wireframe_pane = wireframe,
+         .selection_dimensions_visible = false}, settings);
+    return true;
+  }
+
   void sync_selected_object_snapshot(
       const RenderOverlaySelectedObjectSnapshot &snapshot) {
     bridge_.sync_scene_asset_overlays(snapshot, {}, {});
+  }
+
+  void sync_scene_wireframe_snapshot(
+      const RenderOverlaySceneWireframeSnapshot &snapshot) {
+    bridge_.sync_scene_asset_overlays({}, snapshot, {});
   }
 
   void sync_render_scene(const SceneSession &session) {
@@ -1667,7 +1794,7 @@ public:
   ViewportOverlayFrame build_selection_overlay_frame() const override {
     ++selection_frame_builds_;
     return (captured_project_scene_ != nullptr ? *captured_project_scene_ : session_)
-        .modeling().selection_overlay_render_frame();
+        .modeling().selection_overlay_render_frame(selection_frame_options_);
   }
 
   std::uint64_t selection_frame_builds() const { return selection_frame_builds_; }
@@ -1861,6 +1988,7 @@ private:
   std::uint64_t tool_frame_builds_ = 0u;
   SelectionRuntimeFrame selected_vertex_frame_;
   SelectionRuntimeFrame overlay_audit_frame_;
+  ModelingSelectionOverlayOptions selection_frame_options_;
   ViewportOverlaySubmissionResult last_submission_;
   std::uint64_t revision_ = 0;
   mutable std::uint64_t selection_frame_builds_ = 0;
@@ -3887,6 +4015,754 @@ TEST(SelectionOverlayRuntimeTests, VulkanOverlayLineEndsAndPointRingsHaveAnalyti
 }
 
 TEST(SelectionOverlayRuntimeTests,
+     VulkanWireframePreservesTopologyAndAppearanceThroughObjectAndEditWorkflows) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-wireframe-workflow-runtime-test";
+  char *argv[] = {application_name, nullptr};
+  QCoreApplication application(argc, argv);
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0f, false));
+  ASSERT_TRUE(harness.prepare_overlay_audit_camera(5.0f, ViewportProjection::Perspective));
+  harness.initialize_extrusion_panes(true);
+  auto &editor = harness.workflow_editor();
+  ASSERT_TRUE(editor.viewports().set_layout(ViewportLayoutId::TwoVertical).ok());
+  ASSERT_TRUE(editor.viewports().set_shading_mode(ViewportPaneId::Perspective, QuaderShadingMode::Wireframe).ok());
+  ASSERT_TRUE(editor.viewports().set_shading_mode(ViewportPaneId::Top, QuaderShadingMode::Solid).ok());
+  std::array<QuaderElementId, 8u> vertex_ids{};
+  std::array<QuaderElementId, 3u> face_ids{};
+  const auto create_strip = [&](float scale, QVec3 origin, bool target) {
+    quader_poly::Document document;
+    std::array<quader_poly::ElementId, 8u> vertices{};
+    for (std::size_t row = 0u; row < 2u; ++row) {
+      for (std::size_t column = 0u; column < 4u; ++column) {
+        const std::size_t index = row * 4u + column;
+        vertices[index] = quader_poly::add_vertex(document, origin + QVec3{
+            (static_cast<float>(column) - 1.5f) * scale,
+            (row == 0u ? -0.75f : 0.75f) * scale, 0.0f});
+        if (target) vertex_ids[index] = static_cast<QuaderElementId>(vertices[index]);
+      }
+    }
+    for (std::size_t column = 0u; column < 3u; ++column) {
+      const auto face = quader_poly::add_face(document, std::array{
+          vertices[column], vertices[column + 1u], vertices[column + 5u], vertices[column + 4u]});
+      if (target) face_ids[column] = static_cast<QuaderElementId>(face);
+    }
+    return editor.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+        {.name = target ? "Wireframe editable strip" : "Wireframe unselected peer"});
+  };
+  const auto target = create_strip(1.0f, {}, true);
+  ASSERT_TRUE(target.ok()) << target.error_message();
+  const auto peer = create_strip(0.35f, {0.0f, 1.5f, 0.0f}, false);
+  ASSERT_TRUE(peer.ok()) << peer.error_message();
+  ASSERT_TRUE(editor.selection().select_object(target.value()).ok());
+  const auto layer = editor.layers().create_from_selection("Wireframe authored tint", {1.0f, 0.3f, 0.1f});
+  ASSERT_TRUE(layer.ok()) << layer.error_message();
+  ASSERT_TRUE(editor.selection().clear().ok());
+  const auto region = [&](QVec3 world, int radius = 4) {
+    const auto pixel = harness.overlay_audit_image_point(world);
+    return QRect(static_cast<int>(std::lround(pixel.x)) - radius,
+                 static_cast<int>(std::lround(pixel.y)) - radius,
+                 radius * 2 + 1, radius * 2 + 1);
+  };
+  const QRect interior = region({0.5f, 0.0f, 0.0f});
+  const QRect peer_interior = region({0.175f, 1.5f, 0.0f});
+  const QRect diagonal = region({0.0f, 0.0f, 0.0f});
+  const auto bright_pixels = [](const QImage &image, QRect bounds) {
+    int count = 0;
+    for (int y = bounds.top(); y <= bounds.bottom(); ++y)
+      for (int x = bounds.left(); x <= bounds.right(); ++x)
+        if (image.pixelColor(x, y).lightness() > 30) ++count;
+    return count;
+  };
+  const QString directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  const auto save = [&](const QImage &image, const QString &name) {
+    if (!directory.isEmpty()) {
+      EXPECT_TRUE(QDir().mkpath(directory));
+      EXPECT_TRUE(image.save(QDir(directory).filePath("wireframe_workflow_" + name + ".png")));
+    }
+  };
+  ASSERT_TRUE(harness.present_workflow_pane());
+  const QImage unselected = harness.capture();
+  ASSERT_FALSE(unselected.isNull());
+  ASSERT_GE(bright_pixels(unselected, interior), 7);
+  ASSERT_GE(bright_pixels(unselected, peer_interior), 7);
+  EXPECT_EQ(bright_pixels(unselected, diagonal), 0) << "Face triangulation is not authored topology.";
+  save(unselected, "object_unselected");
+  ASSERT_TRUE(editor.selection().select_object(target.value()).ok());
+  ASSERT_TRUE(harness.present_workflow_pane());
+  const QImage object_selected = harness.capture();
+  EXPECT_EQ(object_selected.copy(interior), unselected.copy(interior))
+      << "Object selection must retain interior authored topology and its ordinary Wireframe tint.";
+  EXPECT_EQ(object_selected.copy(peer_interior), unselected.copy(peer_interior));
+  save(object_selected, "object_selected");
+
+  for (const auto mode : {QuaderSelectionMode::Vertex, QuaderSelectionMode::Edge, QuaderSelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    ASSERT_TRUE(enter_selection_context(editor, mode).ok());
+    ASSERT_TRUE(editor.selection().clear().ok());
+    ASSERT_TRUE(harness.present_workflow_pane());
+    const QImage empty = harness.capture();
+    EXPECT_EQ(empty.copy(interior), unselected.copy(interior))
+        << "Empty Edit selection must preserve ordinary Wireframe, without cyan SourceWire.";
+    EXPECT_EQ(empty.copy(peer_interior), unselected.copy(peer_interior));
+    EXPECT_EQ(bright_pixels(empty, diagonal), 0);
+    save(empty, "edit_empty_" + QString::number(static_cast<int>(mode)));
+    ASSERT_TRUE(harness.present_workflow_pane(1u));
+    const QImage shaded = harness.capture();
+    EXPECT_GT(cyan_pixels(shaded, harness.overlay_audit_image_point({0.5f, 0.0f, 0.0f})), 0)
+        << "The shaded sibling must retain its cyan editing source wire.";
+    save(shaded, "shaded_edit_" + QString::number(static_cast<int>(mode)));
+    QVec3 highlight;
+    if (mode == QuaderSelectionMode::Vertex) {
+      ASSERT_TRUE(editor.selection().select_vertex(target.value(), vertex_ids[0]).ok());
+      highlight = {-1.5f, -0.75f, 0.0f};
+    } else if (mode == QuaderSelectionMode::Edge) {
+      ASSERT_TRUE(editor.selection().select_edge(target.value(), vertex_ids[0], vertex_ids[1]).ok());
+      highlight = {-1.0f, -0.75f, 0.0f};
+    } else {
+      ASSERT_TRUE(editor.selection().select_face(target.value(), face_ids[0]).ok());
+      highlight = {-1.0f, -0.75f, 0.0f};
+    }
+    ASSERT_TRUE(harness.present_workflow_pane());
+    const QImage selected = harness.capture();
+    EXPECT_EQ(selected.copy(interior), unselected.copy(interior));
+    EXPECT_EQ(selected.copy(peer_interior), unselected.copy(peer_interior));
+    EXPECT_NE(selected.copy(region(highlight, 6)), empty.copy(region(highlight, 6)))
+        << "Component selection must still highlight the selected vertex or edge.";
+    EXPECT_EQ(bright_pixels(selected, diagonal), 0);
+    save(selected, "edit_selected_" + QString::number(static_cast<int>(mode)));
+    const auto resources = harness.render_diagnostics();
+    ASSERT_TRUE(harness.present_workflow_pane());
+    EXPECT_EQ(harness.capture(), selected);
+    EXPECT_FALSE(harness.last_submission().persistent_submitted);
+    EXPECT_EQ(harness.render_diagnostics().gpu_geometry_upload_count, resources.gpu_geometry_upload_count);
+    ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Object).ok());
+    ASSERT_TRUE(harness.present_workflow_pane());
+    EXPECT_EQ(harness.capture().copy(interior), unselected.copy(interior));
+  }
+
+  ASSERT_TRUE(enter_selection_context(editor, QuaderSelectionMode::Vertex).ok());
+  ASSERT_TRUE(editor.selection().clear().ok());
+  // Move one side of an unselected authored edge through the real transform preview owner.
+  ASSERT_TRUE(editor.selection().select_vertices(target.value(), {vertex_ids[2], vertex_ids[6]}).ok());
+  ASSERT_TRUE(editor.modeling().begin_transform_preview().ok());
+  ASSERT_TRUE(harness.present_workflow_pane());
+  EXPECT_EQ(harness.capture().copy(interior), unselected.copy(interior))
+      << "Beginning a preview must retain the authored layer tint.";
+  constexpr int kPreviewOffsetPixels = 24;
+  const QVec2 original_pixel = harness.overlay_audit_image_point({0.5f, 0.0f, 0.0f});
+  const QVec3 moved_world = harness.overlay_audit_world_point(
+      {original_pixel.x + kPreviewOffsetPixels, original_pixel.y}, 0.0f);
+  const QuaderTransform3 preview_transform{.origin = {moved_world.x - 0.5f, 0.0f, 0.0f}};
+  ASSERT_TRUE(editor.modeling().update_transform_matrix(preview_transform, {}).ok());
+  ASSERT_TRUE(harness.present_workflow_pane());
+  const QImage preview = harness.capture();
+  EXPECT_EQ(bright_pixels(preview, interior), 0) << "Preview must retire the committed interior edge.";
+  const QRect moved_interior = region({moved_world.x, 0.0f, 0.0f});
+  ASSERT_EQ(moved_interior, interior.translated(kPreviewOffsetPixels, 0));
+  EXPECT_GE(bright_pixels(preview, moved_interior), 7);
+  EXPECT_EQ(cyan_pixels(preview, harness.overlay_audit_image_point({moved_world.x, 0.0f, 0.0f})), 0)
+      << "Live effective topology must keep ordinary Wireframe appearance.";
+  const auto expect_authored_wire_profile = [&](const QImage &image) {
+    int maximum_difference = 0;
+    for (int y = interior.top(); y <= interior.bottom(); ++y) {
+      for (int x = interior.left(); x <= interior.right(); ++x) {
+        const QColor expected = unselected.pixelColor(x, y);
+        const QColor actual = image.pixelColor(x + kPreviewOffsetPixels, y);
+        maximum_difference = std::max({maximum_difference,
+            std::abs(actual.red() - expected.red()),
+            std::abs(actual.green() - expected.green()),
+            std::abs(actual.blue() - expected.blue())});
+      }
+    }
+    // Whole-pixel translation preserves AA phase; allow only byte-rounding noise.
+    EXPECT_LE(maximum_difference, 2)
+        << "Effective preview wires must retain the ordinary authored layer tint and coverage.";
+  };
+  expect_authored_wire_profile(preview);
+  EXPECT_EQ(preview.copy(peer_interior), unselected.copy(peer_interior));
+  save(preview, "vertex_preview");
+  ASSERT_TRUE(editor.modeling().cancel_transform_preview().ok());
+  ASSERT_TRUE(harness.present_workflow_pane());
+  EXPECT_EQ(harness.capture().copy(interior), unselected.copy(interior))
+      << "Cancel must restore the committed edge with its authored layer tint.";
+  ASSERT_TRUE(editor.modeling().begin_transform_preview().ok());
+  ASSERT_TRUE(editor.modeling().update_transform_matrix(preview_transform, {}).ok());
+  ASSERT_TRUE(harness.present_workflow_pane());
+  expect_authored_wire_profile(harness.capture());
+  ASSERT_TRUE(editor.modeling().commit_transform_preview("Wireframe tint preview").ok());
+  ASSERT_TRUE(harness.present_workflow_pane());
+  const QImage committed = harness.capture();
+  expect_authored_wire_profile(committed);
+  EXPECT_EQ(bright_pixels(committed, interior), 0);
+  save(committed, "vertex_preview_committed");
+  ASSERT_TRUE(editor.history().undo().ok());
+  ASSERT_TRUE(harness.present_workflow_pane());
+  EXPECT_EQ(harness.capture().copy(interior), unselected.copy(interior));
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Object).ok());
+  ASSERT_TRUE(editor.selection().clear().ok());
+  ASSERT_TRUE(harness.present_workflow_pane());
+  EXPECT_EQ(harness.capture(), unselected);
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanShadedWireTogglesPreserveOcclusionAuthoredEdgesAndEditingWire) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-shaded-wire-runtime-test";
+  char *argv[] = {application_name, nullptr};
+  QCoreApplication application(argc, argv);
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0f, false));
+  ASSERT_TRUE(harness.prepare_overlay_audit_camera(3.0f, ViewportProjection::Perspective));
+
+  quader_poly::Document document;
+  const std::array vertices{
+      quader_poly::add_vertex(document, {-1.0f, -0.75f, 0.0f}),
+      quader_poly::add_vertex(document, {0.0f, -0.75f, 0.0f}),
+      quader_poly::add_vertex(document, {1.0f, -0.75f, 0.0f}),
+      quader_poly::add_vertex(document, {1.0f, 0.75f, 0.0f}),
+      quader_poly::add_vertex(document, {0.0f, 0.75f, 0.0f}),
+      quader_poly::add_vertex(document, {-1.0f, 0.75f, 0.0f})};
+  (void)quader_poly::add_face(document,
+      std::array{vertices[0], vertices[1], vertices[4], vertices[5]});
+  (void)quader_poly::add_face(document,
+      std::array{vertices[1], vertices[2], vertices[3], vertices[4]});
+  const auto target = editor.modeling().create_mesh(
+      QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+      {.name = "Shaded wire authored internal edge"});
+  ASSERT_TRUE(target.ok()) << target.error_message();
+  const auto occluder = editor.modeling().create_box(
+      {.min = {-0.25f, 0.15f, 0.2f}, .max = {0.25f, 0.65f, 0.4f}},
+      "Shaded wire opaque foreground");
+  ASSERT_TRUE(occluder.ok()) << occluder.error_message();
+  const auto material = editor.assets().add_material(QuaderMaterialAsset{
+      .name = "Shaded wire neutral gray", .base_color = {0.18f, 0.18f, 0.18f},
+      .roughness = 1.0f});
+  ASSERT_TRUE(material.ok());
+  for (const EntityId entity : {target.value().entity, occluder.value().entity}) {
+    ASSERT_TRUE(editor.assets().assign_material_to_entity(entity, material.value().id).ok());
+  }
+  const auto target_entity = editor.query().entity(target.value().entity);
+  const auto occluder_entity = editor.query().entity(occluder.value().entity);
+  ASSERT_TRUE(target_entity.has_value());
+  ASSERT_TRUE(occluder_entity.has_value());
+  ASSERT_TRUE(editor.scene().set_mesh_component(occluder.value().entity,
+      {.mesh = occluder_entity->mesh, .wireframe_on_shaded = false}).ok());
+  ASSERT_TRUE(editor.selection().clear().ok());
+  harness.sync_render_scene(session);
+
+  ViewportSettings appearance = ViewportSettings::defaults();
+  const auto present_wires = [&](bool master_enabled, bool ordinary_wireframe = false) {
+    const auto snapshot = build_render_overlay_scene_wireframe_snapshot(
+        session.scene(), session.assets(),
+        ordinary_wireframe ? viewport_grid_layer_mask(0u) : 0u,
+        ViewportOverlayStyleResolver::persistent_style_snapshot(appearance),
+        {}, nullptr, false, {}, false,
+        master_enabled ? viewport_grid_layer_mask(0u) : 0u);
+    harness.sync_scene_wireframe_snapshot(snapshot);
+  };
+  const auto probe_region = [&](QVec3 world) {
+    const QVec2 pixel = harness.overlay_audit_image_point(world);
+    return QRect(static_cast<int>(std::lround(pixel.x)) - 3,
+                 static_cast<int>(std::lround(pixel.y)) - 8, 7, 17);
+  };
+  const auto changed_pixels = [](const QImage &image, const QImage &baseline,
+                                 QRect region) {
+    int count = 0;
+    for (int y = region.top(); y <= region.bottom(); ++y) {
+      for (int x = region.left(); x <= region.right(); ++x) {
+        const QColor actual = image.pixelColor(x, y);
+        const QColor original = baseline.pixelColor(x, y);
+        if (std::max({std::abs(actual.red() - original.red()),
+                      std::abs(actual.green() - original.green()),
+                      std::abs(actual.blue() - original.blue())}) > 3) {
+          ++count;
+        }
+      }
+    }
+    return count;
+  };
+  const QRect visible_region = probe_region({0.0f, -0.4f, 0.0f});
+  const QRect occluded_region = probe_region({0.0f, 0.4f, 0.0f});
+  const QRect triangulation_region = probe_region({0.5f, 0.0f, 0.0f});
+  const auto colored_pixels = [](const QImage &image, QRect region, bool blue) {
+    int count = 0;
+    for (int y = region.top(); y <= region.bottom(); ++y) {
+      for (int x = region.left(); x <= region.right(); ++x) {
+        const QColor pixel = image.pixelColor(x, y);
+        const int channel = blue ? pixel.blue() : pixel.red();
+        const int other = blue ? pixel.red() : pixel.blue();
+        if (channel > 100 && channel > other + 45 &&
+            channel > pixel.green() + 45) ++count;
+      }
+    }
+    return count;
+  };
+  present_wires(false);
+  const QImage master_off = harness.capture();
+  ASSERT_FALSE(master_off.isNull());
+  present_wires(true);
+  const QImage master_on = harness.capture();
+  ASSERT_FALSE(master_on.isNull());
+  EXPECT_GE(changed_pixels(master_on, master_off, visible_region), 12)
+      << "Enabling shaded wire must draw the authored internal edge on its opaque surface.";
+  EXPECT_EQ(changed_pixels(master_on, master_off, occluded_region), 0)
+      << "The foreground surface must hide the rear topology wire.";
+  EXPECT_EQ(changed_pixels(master_on, master_off, triangulation_region), 0)
+      << "Compiled triangulation diagonals are not authored topology edges.";
+  int black_pixels = 0;
+  for (int y = visible_region.top(); y <= visible_region.bottom(); ++y) {
+    for (int x = visible_region.left(); x <= visible_region.right(); ++x) {
+      const QColor pixel = master_on.pixelColor(x, y);
+      const QColor baseline = master_off.pixelColor(x, y);
+      if (pixel.lightness() < 80 && pixel.lightness() + 15 < baseline.lightness() &&
+          std::abs(pixel.red() - pixel.green()) < 4 &&
+          std::abs(pixel.red() - pixel.blue()) < 4) ++black_pixels;
+    }
+  }
+  EXPECT_GE(black_pixels, 12) << "The default shaded wire must render black over the gray surface.";
+  const auto retained_resources = harness.render_diagnostics();
+  present_wires(true);
+  EXPECT_EQ(harness.capture(), master_on);
+  EXPECT_EQ(harness.render_diagnostics().gpu_geometry_upload_count,
+            retained_resources.gpu_geometry_upload_count);
+  present_wires(false);
+  EXPECT_EQ(harness.capture(), master_off)
+      << "Disabling the master toggle must retire the currently visible wire.";
+  present_wires(true);
+  EXPECT_EQ(harness.capture(), master_on);
+
+  ASSERT_TRUE(editor.scene().set_mesh_component(target.value().entity,
+      {.mesh = target_entity->mesh, .wireframe_on_shaded = false}).ok());
+  present_wires(true);
+  const QImage mesh_off = harness.capture();
+  EXPECT_EQ(mesh_off, master_off) << "A per-mesh opt-out must remove its shaded wire.";
+  ASSERT_TRUE(editor.scene().set_mesh_component(target.value().entity,
+      {.mesh = target_entity->mesh, .wireframe_on_shaded = true}).ok());
+  present_wires(false);
+  EXPECT_EQ(harness.capture(), master_off)
+      << "The master toggle must remove retained shaded wires.";
+
+  present_wires(false, true);
+  const QImage ordinary_wireframe = harness.capture();
+  EXPECT_GE(changed_pixels(ordinary_wireframe, master_off, visible_region), 12);
+  EXPECT_GE(changed_pixels(ordinary_wireframe, master_off, occluded_region), 12)
+      << "Ordinary Wireframe keeps its existing X-ray coverage.";
+  ASSERT_TRUE(editor.scene().set_mesh_component(target.value().entity,
+      {.mesh = target_entity->mesh, .wireframe_on_shaded = false}).ok());
+  present_wires(false, true);
+  EXPECT_EQ(harness.capture(), ordinary_wireframe)
+      << "The per-mesh shaded-wire toggle must not change ordinary Wireframe coverage.";
+  ASSERT_TRUE(editor.scene().set_mesh_component(target.value().entity,
+      {.mesh = target_entity->mesh, .wireframe_on_shaded = true}).ok());
+
+  ViewportOverlayFrame editing_frame;
+  editing_frame.lines.push_back({
+      .layer = ViewportOverlayLayer::SourceWire,
+      .start = {-0.5f, -0.65f, 0.001f}, .end = {-0.5f, 0.65f, 0.001f},
+      .color = kOverlaySourceWireColor, .width_pixels = 3.0f,
+      .source = ViewportOverlaySource::ComponentSelection,
+      .element = {.object_id = target.value().modeling_object_id}});
+  editing_frame.lines.push_back({
+      .layer = ViewportOverlayLayer::SelectedEdge,
+      .start = {-0.75f, -0.65f, 0.001f}, .end = {-0.75f, 0.65f, 0.001f},
+      .color = kOverlaySelectionWireColor, .width_pixels = 3.0f,
+      .source = ViewportOverlaySource::ComponentSelection,
+      .element = {.object_id = target.value().modeling_object_id}});
+  harness.set_overlay_audit_frame(std::move(editing_frame));
+  harness.present_overlay_audit_frame(1.0f, ViewportOverlaySelectionContext::Vertex);
+  present_wires(false);
+  const QImage editing_master_off = harness.capture();
+  const QVec2 editing_pixel = harness.overlay_audit_image_point({-0.5f, 0.0f, 0.001f});
+  EXPECT_GE(cyan_pixels(editing_master_off, editing_pixel), 3);
+  present_wires(true);
+  const QImage editing_master_on = harness.capture();
+  EXPECT_EQ(editing_master_on.copy(probe_region({-0.5f, 0.0f, 0.001f})),
+            editing_master_off.copy(probe_region({-0.5f, 0.0f, 0.001f})))
+      << "Independent component editing wire must survive shaded-wire toggles.";
+  ASSERT_TRUE(editor.scene().set_mesh_component(target.value().entity,
+      {.mesh = target_entity->mesh, .wireframe_on_shaded = false}).ok());
+  present_wires(true);
+  EXPECT_EQ(harness.capture(), editing_master_off);
+
+  ASSERT_TRUE(editor.scene().set_mesh_component(target.value().entity,
+      {.mesh = target_entity->mesh, .wireframe_on_shaded = true}).ok());
+  present_wires(false, true);
+  const QImage ordinary_before_colors = harness.capture();
+  ASSERT_TRUE(appearance.set_color(ViewportColorSettingId::WireframeOnShaded,
+      {1.0f, 0.0f, 0.0f, 1.0f}));
+  present_wires(true);
+  const QImage global_red = harness.capture();
+  EXPECT_GE(colored_pixels(global_red, visible_region, false), 12);
+  EXPECT_EQ(changed_pixels(global_red, editing_master_off, occluded_region), 0);
+  ASSERT_TRUE(editor.scene().set_mesh_component(target.value().entity,
+      {.mesh = target_entity->mesh, .wireframe_on_shaded = true,
+       .wireframe_on_shaded_color = QVec3{0.0f, 0.0f, 1.0f}}).ok());
+  present_wires(true);
+  const QImage custom_blue = harness.capture();
+  EXPECT_GE(colored_pixels(custom_blue, visible_region, true), 12);
+  EXPECT_EQ(changed_pixels(custom_blue, editing_master_off, occluded_region), 0);
+  for (const QImage &image : {global_red, custom_blue}) {
+    for (const float x : {-0.5f, -0.75f}) {
+      EXPECT_EQ(image.copy(probe_region({x, 0.0f, 0.001f})),
+                editing_master_off.copy(probe_region({x, 0.0f, 0.001f})))
+          << "Shaded-wire colors must not recolor cyan editing or selected edges.";
+    }
+  }
+  present_wires(false, true);
+  EXPECT_EQ(harness.capture(), ordinary_before_colors)
+      << "Global and per-mesh shaded-wire colors must not recolor ordinary Wireframe.";
+  ASSERT_TRUE(appearance.set_color(ViewportColorSettingId::WireframeOnShaded,
+      {1.0f, 0.0f, 0.0f, 0.0f}));
+  present_wires(true);
+  EXPECT_EQ(harness.capture(), editing_master_off)
+      << "A custom mesh RGB color must inherit the global wire alpha.";
+  ASSERT_TRUE(appearance.set_color(ViewportColorSettingId::WireframeOnShaded,
+      {1.0f, 0.0f, 0.0f, 1.0f}));
+  ASSERT_TRUE(editor.scene().set_mesh_component(target.value().entity,
+      {.mesh = target_entity->mesh, .wireframe_on_shaded = true,
+       .wireframe_on_shaded_color = std::nullopt}).ok());
+  present_wires(true);
+  EXPECT_EQ(harness.capture(), global_red)
+      << "Resetting a mesh color must restore the current global color.";
+
+  const auto shared_mesh_entity = editor.scene().create_empty();
+  ASSERT_TRUE(shared_mesh_entity.ok()) << shared_mesh_entity.error_message();
+  // Seed a second render placement of the same asset before editing its color.
+  ASSERT_TRUE(session.scene().set_mesh(shared_mesh_entity.value().id,
+      {.mesh = target_entity->mesh}));
+  const auto shared_mesh_color = editor.scene().set_mesh_component(shared_mesh_entity.value().id,
+      {.mesh = target_entity->mesh, .wireframe_on_shaded = true,
+       .wireframe_on_shaded_color = QVec3{0.0f, 0.0f, 1.0f}});
+  ASSERT_TRUE(shared_mesh_color.ok()) << shared_mesh_color.error_message();
+  ASSERT_TRUE(editor.scene().set_transform(shared_mesh_entity.value().id,
+      {.position = {1.3f, 0.0f, 0.0f}, .scale = {0.25f, 0.25f, 0.25f}}).ok());
+  ASSERT_TRUE(editor.assets().assign_material_to_entity(
+      shared_mesh_entity.value().id, material.value().id).ok());
+  ASSERT_TRUE(editor.selection().clear().ok());
+  harness.sync_render_scene(session);
+  present_wires(true);
+  const QImage shared_geometry_colors = harness.capture();
+  EXPECT_GE(colored_pixels(shared_geometry_colors, visible_region, false), 12);
+  EXPECT_GE(colored_pixels(shared_geometry_colors,
+      probe_region({1.3f, 0.0f, 0.0f}), true), 12)
+      << "Two placements of one mesh asset must retain distinct shaded-wire colors.";
+  const auto color_resources = harness.render_diagnostics();
+  present_wires(true);
+  EXPECT_EQ(harness.capture(), shared_geometry_colors);
+  EXPECT_EQ(harness.render_diagnostics().gpu_geometry_upload_count,
+            color_resources.gpu_geometry_upload_count);
+  EXPECT_EQ(harness.render_diagnostics().gpu_geometry_reuse_count,
+            color_resources.gpu_geometry_reuse_count);
+
+  const QString directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (!directory.isEmpty()) {
+    ASSERT_TRUE(QDir().mkpath(directory));
+    for (const auto &[image, name] : std::array{
+             std::pair{master_off, "shaded_wire_master_off"},
+             std::pair{master_on, "shaded_wire_master_on"},
+             std::pair{mesh_off, "shaded_wire_mesh_off"},
+             std::pair{ordinary_wireframe, "shaded_wire_ordinary_xray"},
+             std::pair{editing_master_on, "shaded_wire_editing_wire"},
+             std::pair{global_red, "shaded_wire_global_red"},
+             std::pair{custom_blue, "shaded_wire_custom_blue"},
+             std::pair{shared_geometry_colors, "shaded_wire_shared_geometry_colors"}}) {
+      ASSERT_TRUE(image.save(QDir(directory).filePath(
+          QString::fromLatin1(name) + QStringLiteral(".png"))));
+    }
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanShadedWireRemainsContinuousOnObliqueSurfaces) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-shaded-wire-continuity-test";
+  char *argv[] = {application_name, nullptr};
+  QCoreApplication application(argc, argv);
+  const QString directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (!directory.isEmpty()) ASSERT_TRUE(QDir().mkpath(directory));
+
+  for (const auto projection : {ViewportProjection::Perspective, ViewportProjection::Orthographic}) {
+    for (const float depth_scale : {1.0f, 6.0f}) {
+      for (const float phase : {0.0f, 0.25f, 0.5f, 0.75f}) {
+        SCOPED_TRACE(static_cast<int>(projection));
+        SCOPED_TRACE(depth_scale);
+        SCOPED_TRACE(phase);
+        SceneSession session;
+        QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+        SelectionOverlayRuntimeHarness harness;
+        ASSERT_TRUE(harness.initialize(0.0f, false));
+        ASSERT_TRUE(harness.prepare_overlay_audit_camera(5.0f, projection));
+        const auto material = editor.assets().add_material(QuaderMaterialAsset{
+            .name = "Oblique wire neutral gray", .base_color = {0.18f, 0.18f, 0.18f},
+            .roughness = 1.0f});
+        ASSERT_TRUE(material.ok());
+        const std::array edges{
+            std::array<QVec2, 2>{{{190.0f + phase, 80.0f}, {197.0f + phase, 400.0f}}},
+            std::array<QVec2, 2>{{{390.0f + phase, 80.0f}, {550.0f + phase, 400.0f}}}};
+        for (std::size_t panel = 0u; panel < edges.size(); ++panel) {
+          const float left = (panel == 0u ? 125.0f : 335.0f) + phase;
+          const float right = (panel == 0u ? 265.0f : 605.0f) + phase;
+          const float center = (panel == 0u ? 190.0f : 450.0f) + phase;
+          const std::array<QVec2, 6> pixels{{
+              {left, 80.0f}, edges[panel][0], {right, 80.0f},
+              {right, 400.0f}, edges[panel][1], {left, 400.0f}}};
+          quader_poly::Document document;
+          std::array<quader_poly::ElementId, 6> vertices;
+          for (std::size_t index = 0u; index < pixels.size(); ++index) {
+            const QVec2 pixel = pixels[index];
+            const float along = (pixel.y - 80.0f) / 320.0f;
+            // Affine reciprocal depth makes all perspective samples coplanar;
+            // affine depth does the same in an orthographic projection. The
+            // cross-edge gradient makes a centerline-only ribbon lose pixels.
+            const float depth = projection == ViewportProjection::Perspective
+                ? 1.0f / ((1.0f - along) / (5.0f * depth_scale) +
+                          along / (25.0f * depth_scale) +
+                          (pixel.x - center) * (panel == 0u ? 0.00012f : 0.00006f) /
+                              depth_scale)
+                : depth_scale * (5.0f + 20.0f * along - 0.03f * (pixel.x - center));
+            vertices[index] = quader_poly::add_vertex(document,
+                harness.overlay_audit_world_point(pixel, 5.0f - depth));
+          }
+          (void)quader_poly::add_face(document,
+              std::array{vertices[0], vertices[1], vertices[4], vertices[5]});
+          (void)quader_poly::add_face(document,
+              std::array{vertices[1], vertices[2], vertices[3], vertices[4]});
+          const auto mesh = editor.modeling().create_mesh(
+              QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+              {.name = "Oblique shaded wire continuity"});
+          ASSERT_TRUE(mesh.ok()) << mesh.error_message();
+          ASSERT_TRUE(editor.assets().assign_material_to_entity(
+              mesh.value().entity, material.value().id).ok());
+        }
+        ASSERT_TRUE(editor.selection().clear().ok());
+        harness.sync_render_scene(session);
+        ViewportSettings appearance = ViewportSettings::defaults();
+        ASSERT_TRUE(appearance.set_color(ViewportColorSettingId::WireframeOnShaded,
+            {1.0f, 1.0f, 1.0f, 1.0f}));
+        const auto present_wires = [&](bool enabled) {
+          harness.sync_scene_wireframe_snapshot(build_render_overlay_scene_wireframe_snapshot(
+              session.scene(), session.assets(), 0u,
+              ViewportOverlayStyleResolver::persistent_style_snapshot(appearance),
+              {}, nullptr, false, {}, false,
+              enabled ? viewport_grid_layer_mask(0u) : 0u));
+        };
+        const auto expect_continuity = [&](const QImage &image, const QImage &baseline,
+                                            bool occluded) {
+          for (std::size_t edge = 0u; edge < edges.size(); ++edge) {
+            int missing_rows = 0;
+            int tested_rows = 0;
+            for (int y = 88; y <= 392; ++y) {
+              if (occluded && y >= 195 && y <= 285) continue;
+              const float fraction = (static_cast<float>(y) + 0.5f - edges[edge][0].y) /
+                  (edges[edge][1].y - edges[edge][0].y);
+              const float center = edges[edge][0].x +
+                  (edges[edge][1].x - edges[edge][0].x) * fraction;
+              int strongest = 0;
+              for (int x = static_cast<int>(std::floor(center)) - 2;
+                   x <= static_cast<int>(std::floor(center)) + 2; ++x) {
+                const QColor pixel = image.pixelColor(x, y);
+                const QColor base = baseline.pixelColor(x, y);
+                strongest = std::max(strongest, std::min({pixel.red() - base.red(),
+                    pixel.green() - base.green(), pixel.blue() - base.blue()}));
+              }
+              // White wire on this neutral gray fixture needs a visible core, not only a faint fringe.
+              if (strongest <= 60) ++missing_rows;
+              ++tested_rows;
+            }
+            EXPECT_GT(tested_rows, 200);
+            EXPECT_EQ(missing_rows, 0)
+                << "Shaded wire must cover every interior scanline; edge=" << edge
+                << ", foreground=" << occluded;
+          }
+        };
+        present_wires(false);
+        const QImage baseline = harness.capture();
+        ASSERT_FALSE(baseline.isNull());
+        EXPECT_GT(baseline.pixelColor(193, 240).lightness(), 20);
+        EXPECT_GT(baseline.pixelColor(470, 240).lightness(), 20);
+        present_wires(true);
+        const QImage visible = harness.capture();
+        ASSERT_FALSE(visible.isNull());
+        expect_continuity(visible, baseline, false);
+        EXPECT_EQ(visible.copy(QRect(153, 225, 13, 30)),
+                  baseline.copy(QRect(153, 225, 13, 30)))
+            << "The quad's triangulation diagonal must remain invisible.";
+        const auto retained_resources = harness.render_diagnostics();
+        present_wires(true);
+        EXPECT_EQ(harness.capture(), visible);
+        EXPECT_EQ(harness.render_diagnostics().gpu_geometry_upload_count,
+                  retained_resources.gpu_geometry_upload_count);
+
+        quader_poly::Document occluder_document;
+        std::array<quader_poly::ElementId, 4> occluder_vertices;
+        const std::array<QVec2, 4> occluder_pixels{{
+            {70.0f, 205.0f}, {615.0f, 205.0f}, {615.0f, 275.0f}, {70.0f, 275.0f}}};
+        for (std::size_t index = 0u; index < occluder_vertices.size(); ++index) {
+          occluder_vertices[index] = quader_poly::add_vertex(occluder_document,
+              harness.overlay_audit_world_point(occluder_pixels[index], 4.9f));
+        }
+        (void)quader_poly::add_face(occluder_document, occluder_vertices);
+        const auto occluder = editor.modeling().create_mesh(
+            QuaderPolygonDocumentInternalAccess::from_backend(std::move(occluder_document)),
+            {.name = "Oblique wire foreground occluder"});
+        ASSERT_TRUE(occluder.ok()) << occluder.error_message();
+        ASSERT_TRUE(editor.assets().assign_material_to_entity(
+            occluder.value().entity, material.value().id).ok());
+        ASSERT_TRUE(editor.scene().set_mesh_component(occluder.value().entity,
+            {.mesh = occluder.value().mesh, .wireframe_on_shaded = false}).ok());
+        ASSERT_TRUE(editor.selection().clear().ok());
+        harness.sync_render_scene(session);
+        present_wires(false);
+        const QImage occluded_baseline = harness.capture();
+        ASSERT_FALSE(occluded_baseline.isNull());
+        present_wires(true);
+        const QImage occluded = harness.capture();
+        ASSERT_FALSE(occluded.isNull());
+        expect_continuity(occluded, occluded_baseline, true);
+        EXPECT_EQ(occluded.copy(QRect(80, 215, 525, 50)),
+                  occluded_baseline.copy(QRect(80, 215, 525, 50)))
+            << "A real foreground face must hide every interior shaded-wire fragment.";
+        if (!directory.isEmpty()) {
+          const QString prefix = QStringLiteral("shaded_wire_continuity_%1_%2_%3")
+              .arg(static_cast<int>(projection)).arg(static_cast<int>(depth_scale))
+              .arg(static_cast<int>(phase * 100.0f));
+          for (const auto &[image, suffix] : std::array{
+                   std::pair{baseline, "_baseline"}, std::pair{visible, "_visible"},
+                   std::pair{occluded_baseline, "_occluded_baseline"},
+                   std::pair{occluded, "_occluded"}}) {
+            ASSERT_TRUE(image.save(QDir(directory).filePath(
+                prefix + QString::fromLatin1(suffix) + QStringLiteral(".png"))));
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanGrazingShadedWireCannotCrossForegroundDepth) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-shaded-wire-grazing-occlusion-test";
+  char *argv[] = {application_name, nullptr};
+  QCoreApplication application(argc, argv);
+  const QString directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (!directory.isEmpty()) ASSERT_TRUE(QDir().mkpath(directory));
+  for (const auto projection : {ViewportProjection::Perspective, ViewportProjection::Orthographic}) {
+    SCOPED_TRACE(static_cast<int>(projection));
+    SceneSession session;
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+    SelectionOverlayRuntimeHarness harness;
+    ASSERT_TRUE(harness.initialize(0.0f, false));
+    ASSERT_TRUE(harness.prepare_overlay_audit_camera(5.0f, projection));
+    const auto material = editor.assets().add_material(QuaderMaterialAsset{
+        .name = "Grazing wire neutral gray", .base_color = {0.18f, 0.18f, 0.18f},
+        .roughness = 1.0f});
+    ASSERT_TRUE(material.ok());
+    const auto create_quad = [&](const std::array<QVec2, 4> &pixels,
+                                  const std::array<float, 4> &depths,
+                                  const char *name) {
+      quader_poly::Document document;
+      std::array<quader_poly::ElementId, 4> vertices;
+      for (std::size_t index = 0u; index < vertices.size(); ++index) {
+        vertices[index] = quader_poly::add_vertex(document,
+            harness.overlay_audit_world_point(pixels[index], 5.0f - depths[index]));
+      }
+      (void)quader_poly::add_face(document, vertices);
+      return editor.modeling().create_mesh(
+          QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+          {.name = name});
+    };
+    // The surface is only 0.032 pixels wide. Extending its depth plane toward
+    // pixel center 320.5 can put a ribbon in front of the depth-10 occluder,
+    // even though every authored point is at depth 30 or farther.
+    const auto target = create_quad(
+        {{{320.625f, 100.0f}, {320.657f, 100.0f},
+          {320.657f, 380.0f}, {320.625f, 380.0f}}},
+        {{30.0f, 90.0f, 90.0f, 30.0f}}, "Grazing shaded wire");
+    ASSERT_TRUE(target.ok()) << target.error_message();
+    ASSERT_TRUE(editor.assets().assign_material_to_entity(
+        target.value().entity, material.value().id).ok());
+    ASSERT_TRUE(editor.selection().clear().ok());
+    harness.sync_render_scene(session);
+    ViewportSettings appearance = ViewportSettings::defaults();
+    ASSERT_TRUE(appearance.set_color(ViewportColorSettingId::WireframeOnShaded,
+        {1.0f, 1.0f, 1.0f, 1.0f}));
+    const auto present_wires = [&](bool enabled) {
+      harness.sync_scene_wireframe_snapshot(build_render_overlay_scene_wireframe_snapshot(
+          session.scene(), session.assets(), 0u,
+          ViewportOverlayStyleResolver::persistent_style_snapshot(appearance),
+          {}, nullptr, false, {}, false,
+          enabled ? viewport_grid_layer_mask(0u) : 0u));
+    };
+    present_wires(false);
+    const QImage unoccluded_baseline = harness.capture();
+    ASSERT_FALSE(unoccluded_baseline.isNull());
+    present_wires(true);
+    const QImage unoccluded = harness.capture();
+    ASSERT_FALSE(unoccluded.isNull());
+    int visible_wire_pixels = 0;
+    for (int y = 108; y <= 372; ++y) {
+      for (int x = 318; x <= 323; ++x) {
+        if (unoccluded.pixelColor(x, y).lightness() >
+            unoccluded_baseline.pixelColor(x, y).lightness() + 12) ++visible_wire_pixels;
+      }
+    }
+    EXPECT_GT(visible_wire_pixels, 100) << "The grazing fixture must draw an unoccluded wire.";
+    const auto occluder = create_quad(
+        {{{300.0f, 80.0f}, {340.0f, 80.0f}, {340.0f, 400.0f}, {300.0f, 400.0f}}},
+        {{10.0f, 10.0f, 10.0f, 10.0f}}, "Grazing wire foreground occluder");
+    ASSERT_TRUE(occluder.ok()) << occluder.error_message();
+    ASSERT_TRUE(editor.assets().assign_material_to_entity(
+        occluder.value().entity, material.value().id).ok());
+    ASSERT_TRUE(editor.scene().set_mesh_component(occluder.value().entity,
+        {.mesh = occluder.value().mesh, .wireframe_on_shaded = false}).ok());
+    ASSERT_TRUE(editor.selection().clear().ok());
+    harness.sync_render_scene(session);
+    present_wires(false);
+    const QImage occluded_baseline = harness.capture();
+    ASSERT_FALSE(occluded_baseline.isNull());
+    EXPECT_GT(occluded_baseline.pixelColor(320, 240).lightness(), 20);
+    present_wires(true);
+    const QImage occluded = harness.capture();
+    ASSERT_FALSE(occluded.isNull());
+    EXPECT_EQ(occluded, occluded_baseline)
+        << "A grazing support plane must not pull any hidden ribbon in front of a real occluder.";
+    if (!directory.isEmpty()) {
+      const QString prefix = QStringLiteral("shaded_wire_grazing_%1")
+          .arg(static_cast<int>(projection));
+      for (const auto &[image, suffix] : std::array{
+               std::pair{unoccluded_baseline, "_baseline"},
+               std::pair{unoccluded, "_visible"},
+               std::pair{occluded_baseline, "_occluded_baseline"},
+               std::pair{occluded, "_occluded"}}) {
+        ASSERT_TRUE(image.save(QDir(directory).filePath(
+            prefix + QString::fromLatin1(suffix) + QStringLiteral(".png"))));
+      }
+    }
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests,
      VulkanArrayMeshPreviewsRetainWireGeometryInTheirWireframePanes) {
   if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
     GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
@@ -4964,7 +5840,7 @@ TEST(SelectionOverlayRuntimeTests,
     const auto before = harness.tool_topology_selection();
     ASSERT_EQ(before.mode, QuaderSelectionMode::Edge);
     ASSERT_FALSE(before.has_selection);
-    ASSERT_EQ(before.selected_object_count, 0u);
+    ASSERT_GT(before.selected_object_count, 0u);
     const auto history_before = harness.undo_count();
     const auto probe = harness.tool_topology_internal_edge_pixel();
     const QRect probe_region(int(probe.x) - 10, int(probe.y) - 10, 21, 21);
@@ -4986,7 +5862,7 @@ TEST(SelectionOverlayRuntimeTests,
       EXPECT_EQ(current.has_selection, before.has_selection);
       EXPECT_EQ(current.active_kind, before.active_kind);
       EXPECT_EQ(current.active_object_id, before.active_object_id);
-      EXPECT_EQ(current.selected_object_count, 0u);
+      EXPECT_EQ(current.selected_object_count, before.selected_object_count);
       EXPECT_EQ(current.selected_vertex_count, 0u);
       EXPECT_EQ(current.selected_edge_count, 0u);
       EXPECT_EQ(current.selected_face_count, 0u);
@@ -5029,8 +5905,8 @@ TEST(SelectionOverlayRuntimeTests,
       const QImage clear = harness.capture();
       ASSERT_FALSE(clear.isNull());
       save(clear, scale_label, "clear");
-      EXPECT_EQ(cyan_pixels(clear, probe), 0)
-          << "The unselected coplanar internal edge is absent without tool hover.";
+      EXPECT_GE(cyan_pixels(clear, probe), 3)
+          << "Edit topology remains visible without tool hover.";
       expect_unselected();
       expect_retained(scale);
 
@@ -5053,9 +5929,9 @@ TEST(SelectionOverlayRuntimeTests,
       const QImage left = harness.capture();
       ASSERT_FALSE(left.isNull());
       save(left, scale_label, "hover_left");
-      EXPECT_EQ(cyan_pixels(left, probe), 0);
+      EXPECT_GE(cyan_pixels(left, probe), 3);
       EXPECT_EQ(left.copy(probe_region), clear.copy(probe_region))
-          << "Leaving must retire transient topology independently of the retained cut preview.";
+          << "Leaving preserves Edit topology independently of the retained cut preview.";
       expect_unselected();
       expect_retained(scale);
     }
@@ -5073,7 +5949,7 @@ TEST(SelectionOverlayRuntimeTests,
       save(selected, scale_label, "selected_reference");
       EXPECT_GE(cyan_pixels(selected, probe), 3);
       EXPECT_EQ(selected.copy(probe_region), hovered_regions[index])
-          << "Transient topology must match the real selected mesh's source-wire rendering.";
+          << "Edit topology retains the same source-wire rendering across explicit re-entry.";
       expect_retained(scale);
       if (tool == ViewportToolId::InsertEdgeLoop) {
         ASSERT_TRUE(harness.update_tool_topology_hover({1.0f, -0.25f, 0.0f}));

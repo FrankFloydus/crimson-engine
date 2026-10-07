@@ -48,6 +48,9 @@ mode_selection(ModelingSelectionMode mode, std::uint32_t minimum_objects = 0,
       .minimum_selected_faces = minimum_faces,
       .minimum_selected_objects = minimum_objects,
       .required_active_kind = required_active,
+      .supported_editor_modes = mode == ModelingSelectionMode::Object ||
+              mode == ModelingSelectionMode::Group
+          ? EditorModeSupport::Object : EditorModeSupport::Edit,
   };
 }
 
@@ -62,6 +65,7 @@ object_or_group_selection(std::uint32_t minimum_objects = 1) {
       .requirement =
           ModelingActionSelectionRequirement::ObjectOrGroupSelection,
       .minimum_selected_objects = minimum_objects,
+      .supported_editor_modes = EditorModeSupport::Object,
   };
 }
 
@@ -88,12 +92,14 @@ face_selection(std::uint32_t minimum_faces = 1) {
 
 [[nodiscard]] ModelingActionAvailabilityRule edge_or_face_selection() {
   return {.requirement =
-              ModelingActionSelectionRequirement::EdgeOrFaceSelection};
+              ModelingActionSelectionRequirement::EdgeOrFaceSelection,
+          .supported_editor_modes = EditorModeSupport::Edit};
 }
 
 [[nodiscard]] ModelingActionAvailabilityRule component_selection() {
   return {.requirement =
-              ModelingActionSelectionRequirement::ComponentSelection};
+              ModelingActionSelectionRequirement::ComponentSelection,
+          .supported_editor_modes = EditorModeSupport::Edit};
 }
 
 [[nodiscard]] ModelingActionAvailabilityRule object_or_face_selection() {

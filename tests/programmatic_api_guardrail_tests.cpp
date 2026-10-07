@@ -12,6 +12,7 @@
 #include <array>
 #include <cctype>
 #include <filesystem>
+#include <regex>
 #include <set>
 #include <string>
 #include <string_view>
@@ -638,6 +639,10 @@ TEST(ProgrammaticApiGuardrailTests,
 }
 
 TEST(ProgrammaticApiGuardrailTests, ApiLayerUsesSharedResultStatusConversion) {
+  // Native callbacks adapt API results back into CommandResult. The shared
+  // API helper owns the opposite direction: constructing API status copies.
+  static const std::regex kNativeCommandResultInitializer(
+      R"(\bCommandResult\s*\{[^{}]*\})");
   for (const std::filesystem::path &file :
        source_files_under(source_root() / "src/api")) {
     const std::string relative = normalized_relative(file);
@@ -645,7 +650,8 @@ TEST(ProgrammaticApiGuardrailTests, ApiLayerUsesSharedResultStatusConversion) {
       continue;
     }
 
-    const std::string source = read_file(file);
+    const std::string source = std::regex_replace(
+        read_file(file), kNativeCommandResultInitializer, "");
     for (const std::string &line : lines_containing(
              source, {".ok = result.ok", ".changed = result.changed"})) {
       ADD_FAILURE() << relative

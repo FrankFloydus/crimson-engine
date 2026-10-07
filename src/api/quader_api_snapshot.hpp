@@ -43,6 +43,9 @@ struct QuaderEntitySnapshot {
   EntityId instance_definition = kInvalidEntityId;
   QuaderLayerId layer_id = kInvalidQuaderLayerId;
   AssetId mesh = kInvalidAssetId;
+  bool wireframe_on_shaded = true;
+  /// Null inherits the viewport wire color; an explicit RGB override includes black.
+  std::optional<QVec3> wireframe_on_shaded_color;
   AssetId material = kInvalidAssetId;
   QuaderLightComponent light;
   QuaderModelingObjectId modeling_object_id = kInvalidQuaderModelingObjectId;

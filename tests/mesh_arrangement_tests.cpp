@@ -900,6 +900,7 @@ TEST(MeshArrangementTests, RejectsComponentModesAndInsufficientSelections) {
                                           quader::QuaderMeshAlignment::Center)
                    .ok());
 
+  ASSERT_TRUE(harness.editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(harness.editor.selection()
                   .set_mode(quader::QuaderSelectionMode::Vertex)
                   .ok());

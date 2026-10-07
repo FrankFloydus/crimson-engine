@@ -70,7 +70,7 @@ public:
       const quader::modeling::PolygonDocument &transformed,
       const QMat4 &source_sampling, const QMat4 &destination_sampling,
       bool reflected_geometry);
-  /** Tries to retain n-gon UV interiors without rejecting valid geometry edits. */
+  /** Retains full-face n-gon interiors and planar charts for partial face edits. */
   [[nodiscard]] static quader::modeling::Result<quader::modeling::OperationResult>
   preserve_transformed_sdk_document_uv_layout(
       const quader::modeling::PolygonDocument &before,
@@ -121,8 +121,9 @@ public:
    * Applies the complete fixed vertex-update set of a prepared SDK transform
    * directly to gesture scratch and retained compiled ranges. Publications never
    * borrow the mutable scratch. A different update set/layout returns no result.
-   * UV-preserving n-gons retain this path only while their triangle identities
-   * match the source; loop rebasing remains with the canonical fallback.
+   * Full-face UV-preserving n-gons retain this path while triangle identities
+   * match the source. Partial planar faces retain their source affine chart;
+   * loop rebasing remains with the canonical fallback.
    */
   [[nodiscard]] static std::shared_ptr<const MeshGeometryProjection>
   project_retained_mesh_position_updates(

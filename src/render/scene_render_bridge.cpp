@@ -113,6 +113,8 @@ void SceneRenderBridge::shutdown() {
   tool_preview_suppression_ = {};
   tool_preview_overlay_frame_ = {};
   tool_preview_wireframe_snapshot_ = {};
+  tool_preview_ordinary_wires_prepared_ = false;
+  tool_preview_shaded_wires_prepared_ = false;
   tool_preview_wireframe_dirty_ = false;
   selection_dimension_preview_meshes_.clear();
   accepted_overlay_coordinates_.clear();
@@ -165,6 +167,8 @@ void SceneRenderBridge::bind_scene(RenderSceneBindingKey scene_binding) {
   tool_preview_suppression_ = {};
   tool_preview_overlay_frame_ = {};
   tool_preview_wireframe_snapshot_ = {};
+  tool_preview_ordinary_wires_prepared_ = false;
+  tool_preview_shaded_wires_prepared_ = false;
   tool_preview_wireframe_dirty_ = false;
   selection_dimension_preview_meshes_.clear();
   accepted_overlay_coordinates_.clear();
@@ -551,12 +555,24 @@ void SceneRenderBridge::sync_scene_asset_overlays(
   if (engine_ && scene_ && scene_wireframe_overlay_cache_.initialized()) {
     scene_wireframe_overlay_cache_.sync(*wireframe);
   }
+  const bool ordinary_preview_visible = wireframe_snapshot.layer_mask != 0u;
+  const bool shaded_preview_visible = wireframe_snapshot.wireframe_on_shaded_layer_mask != 0u;
+  if (tool_preview_ordinary_wires_prepared_ != ordinary_preview_visible ||
+      tool_preview_shaded_wires_prepared_ != shaded_preview_visible) {
+    tool_preview_wireframe_snapshot_ = build_render_tool_preview_wireframe_snapshot(
+        selection_dimension_preview_meshes_, shaded_preview_visible, ordinary_preview_visible);
+    tool_preview_wireframe_snapshot_.scene_revision = tool_preview_submission_revision_;
+    tool_preview_ordinary_wires_prepared_ = ordinary_preview_visible;
+    tool_preview_shaded_wires_prepared_ = shaded_preview_visible;
+  }
   if (engine_ && scene_ && tool_preview_wireframe_cache_.initialized()) {
     // Only wireframe panes receive generated mesh edges. The same accepted
     // placements keep their filled siblings in adjacent shaded/rendered panes.
     auto &preview = tool_preview_wireframe_snapshot_;
     preview.scene_binding = scene_binding_;
     preview.layer_mask = wireframe_snapshot.layer_mask;
+    preview.wireframe_on_shaded_layer_mask =
+        wireframe_snapshot.wireframe_on_shaded_layer_mask;
     preview.style = wireframe_snapshot.style;
     preview.raster_groups = wireframe_snapshot.raster_groups;
     preview.clip_planes = wireframe_snapshot.clip_planes;
@@ -662,7 +678,9 @@ ToolPreviewSubmissionResult SceneRenderBridge::set_tool_preview_scene(
   ViewportOverlayFrame overlay_candidate =
       build_render_tool_preview_overlay_frame(preview);
   RenderOverlaySceneWireframeSnapshot wireframe_candidate =
-      build_render_tool_preview_wireframe_snapshot(preview.meshes);
+      build_render_tool_preview_wireframe_snapshot(
+          preview.meshes, tool_preview_shaded_wires_prepared_,
+          tool_preview_ordinary_wires_prepared_);
   const auto surface_result = editable_surface_cache_.prepare(
       previous_scene_snapshot_, preview.meshes, preview.suppression);
   if (surface_result == ToolPreviewSubmissionResult::Failed) {

@@ -229,6 +229,8 @@ private:
   TransformGizmoInteraction transform_gizmo_;
   PointLightRangeInteraction point_light_range_;
   ViewportSelectionInteraction selection_;
+  std::optional<SceneSessionId> mode_context_scene_;
+  std::uint64_t mode_context_generation_ = 0;
   // Ownership only: transfer happens on the semantic trigger, never while held.
   std::optional<MaterialTransferPointer> material_transfer_pointer_;
   ViewportInputActionKind accepted_material_hint_action_ = ViewportInputActionKind::None;

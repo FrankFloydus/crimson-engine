@@ -12,6 +12,7 @@
 #include "core/release_features.hpp"
 #include "core/user_config_paths.hpp"
 #include "editor/input/quader_input_binding.hpp"
+#include "editor/modes/editor_mode_service.hpp"
 #include "editor/session/project_session.hpp"
 #include "editor/session/scene_session.hpp"
 #include "io/project/project_manifest.hpp"
@@ -299,6 +300,8 @@ TEST(PublicReleaseSelection, AltClickUsesTheClickedEdgeForVertexLoopsAndFaceStri
           QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
           {.name = "Public directional component patch"});
       ASSERT_TRUE(patch.ok()) << patch.error_message();
+      ASSERT_TRUE(editor.selection().select_object(patch.value()).ok());
+      ASSERT_TRUE(session.editor_mode().set_mode(EditorMode::Edit).ok);
       ASSERT_TRUE(editor.selection().set_mode(mode).ok());
       ASSERT_TRUE(editor.selection().clear().ok());
       const auto unrelated = mode == QuaderSelectionMode::Vertex
@@ -364,6 +367,39 @@ TEST(PublicReleaseSelection, AltClickUsesTheClickedEdgeForVertexLoopsAndFaceStri
   }
 }
 
+TEST(PublicReleaseSelection, ExplicitEditModeSupportsMultipleMeshesAndKeepsObjectActionsOut) {
+  auto standalone = create_standalone_editor();
+  auto &editor = standalone.editor();
+  EXPECT_EQ(editor.mode().current(), QuaderEditorMode::Object);
+  EXPECT_EQ(editor.commands().shortcut_for(quader_command::kEditorModeToggleEdit), "Tab");
+  const auto first = editor.modeling().create_box(
+      {.min = {-3, -1, -1}, .max = {-1, 1, 1}}, "First public edit participant");
+  const auto second = editor.modeling().create_box(
+      {.min = {1, -1, -1}, .max = {3, 1, 1}}, "Second public edit participant");
+  ASSERT_TRUE(first.ok());
+  ASSERT_TRUE(second.ok());
+  ASSERT_TRUE(editor.selection().select_objects(
+      {first.value().entity, second.value().entity}, first.value().entity).ok());
+  ASSERT_TRUE(editor.commands().execute(quader_command::kEditorModeToggleEdit).ok());
+  EXPECT_EQ(editor.mode().current(), QuaderEditorMode::Edit);
+  ASSERT_EQ(editor.mode().state().participants.size(), 2U);
+  for (const auto kind : {QuaderSelectionMode::Vertex, QuaderSelectionMode::Edge,
+                          QuaderSelectionMode::Face}) {
+    ASSERT_TRUE(editor.selection().set_mode(kind).ok());
+    ASSERT_TRUE(editor.selection().clear().ok());
+    EXPECT_EQ(editor.mode().state().participants.size(), 2U);
+  }
+  const auto before = capture_command_observable_state(editor);
+  EXPECT_FALSE(editor.selection().set_mode(QuaderSelectionMode::Group).ok());
+  EXPECT_FALSE(editor.modeling().create_box(
+      {.min = {5, -1, -1}, .max = {7, 1, 1}}, "Rejected Edit creation").ok());
+  expect_unchanged(editor, before);
+  ASSERT_TRUE(editor.commands().execute(quader_command::kEditorModeToggleEdit).ok());
+  EXPECT_EQ(editor.mode().current(), QuaderEditorMode::Object);
+  EXPECT_EQ(editor.selection().summary().mode, QuaderSelectionMode::Object);
+  EXPECT_EQ(editor.selection().summary().selected_object_count, 2U);
+}
+
 TEST(PublicReleaseSelection, ComponentModeConversionIgnoresDormantMeshPayload) {
   SceneSession session;
   QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
@@ -392,6 +428,11 @@ TEST(PublicReleaseSelection, ComponentModeConversionIgnoresDormantMeshPayload) {
     selected.erase(std::unique(selected.begin(), selected.end()), selected.end());
     return selected;
   };
+  ASSERT_TRUE(editor.selection().select_objects(
+      {first.value().entity, second.value().entity}, first.value().entity).ok());
+  const auto undo_count_before_entry = session.history().undo_count();
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
+  EXPECT_EQ(session.history().undo_count(), undo_count_before_entry);
   session.history().clear();
   ASSERT_TRUE(editor.selection().select_vertices(first.value(), {1, 2, 3, 4}).ok());
   ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
@@ -530,6 +571,7 @@ TEST(PublicReleaseCommands, DisabledHeldInputDoesNotConsumeQuickPivotOrMaterialT
   const auto box = editor.modeling().create_box(
       {.min = {-1.f, -1.f, -1.f}, .max = {1.f, 1.f, 1.f}}, "Gesture Box");
   ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().select_face(box.value(), 1u).ok());
   const auto before = capture_command_observable_state(editor);
   ViewportToolState state;

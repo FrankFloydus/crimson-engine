@@ -172,6 +172,10 @@ ModelingCommandResult ModelingCommandExecutionService::execute(
     EditorHistoryService &history, ModelingSessionService &modeling,
     EditorSelectionService &selection, std::string_view tool_id,
     SceneStructuralLifecycleService *structural_lifecycle) {
+  if (!modeling.action_supports_editor_mode(tool_id)) {
+    return {.ok = false, .changed = false,
+            .message = "The action is unavailable in the current editor mode."};
+  }
   if (!release_allows_action(tool_id) || !release_allows_operation(tool_id) ||
       !release_allows_tool(tool_id)) {
     return {.ok = false, .changed = false,
@@ -261,6 +265,10 @@ ModelingCommandResult ModelingCommandExecutionService::execute(
 ModelingCommandResult ModelingCommandExecutionService::execute_untracked(
     ModelingSessionService &modeling, std::string_view tool_id,
     EditorSelectionService *selection) {
+  if (!modeling.action_supports_editor_mode(tool_id)) {
+    return {.ok = false, .changed = false,
+            .message = "The action is unavailable in the current editor mode."};
+  }
   if (!release_allows_action(tool_id) || !release_allows_operation(tool_id) ||
       !release_allows_tool(tool_id)) {
     return {.ok = false, .changed = false,
@@ -279,6 +287,10 @@ ModelingCommandResult ModelingCommandExecutionService::begin_preview(
     EditorHistoryService &history, ModelingSessionService &modeling,
     EditorSelectionService &selection, std::string_view action_id,
     SceneStructuralLifecycleService *structural_lifecycle) {
+  if (!modeling.action_supports_editor_mode(action_id)) {
+    return {.ok = false, .changed = false,
+            .message = "The action is unavailable in the current editor mode."};
+  }
   if (!release_allows_action(action_id) || !release_allows_operation(action_id) ||
       !release_allows_tool(action_id)) {
     return {.ok = false, .changed = false,
@@ -487,6 +499,9 @@ ModelingCommandAvailability ModelingCommandExecutionService::availability(
     ModelingSessionService &modeling, std::string_view tool_id,
     EditorSelectionService *selection,
     SceneStructuralLifecycleService *structural_lifecycle) const {
+  if (!modeling.action_supports_editor_mode(tool_id)) {
+    return ModelingCommandAvailability::unavailable("The action is unavailable in the current editor mode.");
+  }
   if (!release_allows_action(tool_id) || !release_allows_operation(tool_id) ||
       !release_allows_tool(tool_id)) {
     return ModelingCommandAvailability::unavailable(

@@ -152,6 +152,10 @@ protected:
   }
 
   void select(QuaderModelingObjectRef object, int face = 1) {
+    if (editor_.mode().current() == QuaderEditorMode::Object) {
+      ASSERT_TRUE(editor_.selection().select_object(object).ok());
+      ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
+    }
     ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Face).ok());
     ASSERT_TRUE(editor_.selection().select_face(object, face).ok());
   }
@@ -199,13 +203,13 @@ TEST_F(FaceTextureMirrorApiTests, SingleBoxFaceMirrorsUvsWithoutMovingGeometryOr
   select(object);
   const auto before = snapshot(object);
   const auto selection = editor_.selection().summary();
-  const auto selection_revision = editor_.revisions().modeling_selection_revision;
   for (const bool horizontal : {true, false}) {
     SCOPED_TRACE(horizontal);
     session_.history().clear();
     // Undo/redo restores the numeric edit context and issues a fresh token.
     // Each mirror must preserve the token presented immediately before it.
     const auto token = editor_.modeling().face_texture_settings().selection_token;
+    const auto selection_revision = editor_.revisions().modeling_selection_revision;
     const auto edited = mirror(horizontal);
     ASSERT_TRUE(edited.ok()) << edited.error_message();
     ASSERT_TRUE(edited.changed());
@@ -267,6 +271,8 @@ TEST_F(FaceTextureMirrorApiTests, MirroringPreservesSignedScalarsAndOccurrenceSa
 
 TEST_F(FaceTextureMirrorApiTests, TreatAsOneMirrorsExistingChartsAcrossObjectsAtomically) {
   const std::array objects{wall(-2.0f), wall(5.0f)};
+  ASSERT_TRUE(editor_.selection().select_objects({objects[0], objects[1]}).ok());
+  ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
   select(objects[0]);
   ASSERT_TRUE(editor_.selection().select_face(objects[1], 1, QuaderSelectionEdit::Add).ok());
   const std::array before{snapshot(objects[0]), snapshot(objects[1])};

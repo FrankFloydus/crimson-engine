@@ -96,6 +96,7 @@ TEST_F(SelectionDiagnosticsTests, EmptySelectionRejectsWithoutCreatingFiles) {
 
 TEST_F(SelectionDiagnosticsTests, CapturesWholeAuthoredMeshForSelectedVertexAndReadsBack) {
   const auto object = selected_box();
+  ASSERT_TRUE(editor().mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor().selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(editor().selection().select_vertex(object, 1).ok());
   const auto before = editor().revisions();
@@ -136,6 +137,7 @@ TEST_F(SelectionDiagnosticsTests, CapturesWholeAuthoredMeshForSelectedVertexAndR
 
 TEST_F(SelectionDiagnosticsTests, CapturesLivePreviewWithoutSettlingAndPinsItsCoordinates) {
   const auto object = selected_box();
+  ASSERT_TRUE(editor().mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor().selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(editor().selection().select_vertex(object, 1).ok());
   ASSERT_TRUE(editor().modeling().begin_transform_preview().ok());
@@ -161,6 +163,7 @@ TEST_F(SelectionDiagnosticsTests, CapturesLivePreviewWithoutSettlingAndPinsItsCo
 
 TEST_F(SelectionDiagnosticsTests, ReportsNamedMergeEligibilityAndCurrentRejections) {
   const auto object = selected_box();
+  ASSERT_TRUE(editor().mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor().selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(editor().selection().select_vertices(object, {1, 2}).ok());
   ASSERT_TRUE(editor().selection_diagnostics().request_dump().ok());
@@ -241,6 +244,8 @@ TEST_F(SelectionDiagnosticsTests, MultilineObjectNamesCannotBypassSummaryLineLim
 TEST_F(SelectionDiagnosticsTests, RemovedPreviewSourceRetainsExplicitCommittedAuthoredMesh) {
   const auto first = selected_box();
   const auto second = selected_box();
+  ASSERT_TRUE(editor().selection().select_all().ok());
+  ASSERT_TRUE(editor().mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor().selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(editor().selection().select_vertex(first, 1).ok());
   ASSERT_TRUE(editor().selection().select_vertex(second, 1, quader::QuaderSelectionEdit::Add).ok());
@@ -264,6 +269,7 @@ TEST_F(SelectionDiagnosticsTests, RemovedPreviewSourceRetainsExplicitCommittedAu
 
 TEST_F(SelectionDiagnosticsTests, TopologyPreviewSelectionMatchesItsPinnedAuthoredCandidate) {
   const auto object = selected_box();
+  ASSERT_TRUE(editor().mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor().selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
   ASSERT_TRUE(editor().selection().select_edge(object, 1, 2).ok());
   ASSERT_TRUE(editor().selection().select_all().ok());
@@ -291,6 +297,7 @@ TEST_F(SelectionDiagnosticsTests, TopologyPreviewSelectionMatchesItsPinnedAuthor
 
 TEST_F(SelectionDiagnosticsTests, SavedTopologyAndSelectionReconstructConnectThroughPortableOwner) {
   const auto object = selected_box();
+  ASSERT_TRUE(editor().mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor().selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(editor().selection().select_vertices(object, {1, 3}).ok());
   ASSERT_TRUE(editor().selection_diagnostics().request_dump().ok());

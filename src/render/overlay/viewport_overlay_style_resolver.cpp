@@ -61,6 +61,8 @@ ViewportOverlayStyleResolver::persistent_style_snapshot(
   snapshot.active_selection_face_color =
       viewport_active_selection_color(snapshot.selection_face_color, active_color);
   snapshot.active_selection_wire_color = active_color;
+  snapshot.wireframe_on_shaded_color =
+      settings.color(ViewportColorSettingId::WireframeOnShaded);
   RenderSignatureBuilder face_signature;
   face_signature.add_value(snapshot.selection_face_color)
       .add_value(snapshot.active_selection_face_color);

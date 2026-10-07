@@ -914,6 +914,8 @@ TEST(QtSettingsDialogTests,
                 "settingsPage_viewport");
   expect_group("viewportSetting_BackgroundColor", "settingsGroup_shading",
                 "settingsPage_viewport");
+  expect_group("viewportSetting_WireframeOnShadedColor", "settingsGroup_shading",
+                "settingsPage_viewport");
   expect_group("settingsLocale", "settingsGroup_language",
                 "settingsPage_interface");
   expect_group("settingsInterfaceScale", "settingsGroup_interface_scale",
@@ -1802,6 +1804,95 @@ TEST(QtSettingsDialogTests,
       setting_color(applied)));
   EXPECT_TRUE(viewport_setting_colors_approximately(
       ViewportSettings::load(path).color(ViewportColorSettingId::Background),
+      setting_color(applied)));
+}
+
+TEST(QtSettingsDialogTests,
+     WireframeOnShadedColorStagesAndPersistsOnlyAppliedChanges) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-settings-wireframe-color-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  QTemporaryDir directory;
+  ASSERT_TRUE(directory.isValid());
+  const std::filesystem::path path =
+      std::filesystem::path(directory.path().toStdWString()) / "viewport.ini";
+  UISettings ui_settings = UISettings::defaults();
+  ViewportSettings viewport_settings = ViewportSettings::defaults();
+  const ViewportSettingColor initial =
+      viewport_settings.color(ViewportColorSettingId::WireframeOnShaded);
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      initial, {0.0f, 0.0f, 0.0f, 1.0f}));
+  LocalizationService localization = loaded_localization();
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  std::vector<QtSettingsChange> changes;
+  QtSettingsDialog dialog;
+  dialog.setAttribute(Qt::WA_DontShowOnScreen, true);
+  dialog.set_context(
+      ui_settings, viewport_settings, localization, editor.commands(),
+      [&](const QtSettingsChange &change) {
+        changes.push_back(change);
+        EXPECT_TRUE(viewport_settings.save(path));
+      });
+  auto *swatch = dialog.findChild<QPushButton *>(
+      QStringLiteral("viewportSetting_WireframeOnShadedColor"));
+  auto *apply = dialog.findChild<QPushButton *>(QStringLiteral("settingsApply"));
+  auto *cancel = dialog.findChild<QPushButton *>(QStringLiteral("settingsCancel"));
+  ASSERT_NE(swatch, nullptr);
+  ASSERT_NE(apply, nullptr);
+  ASSERT_NE(cancel, nullptr);
+  const auto *group = dynamic_cast<qt_settings_detail::QtSettingsSection *>(
+      swatch->parentWidget()->parentWidget());
+  ASSERT_NE(group, nullptr);
+  EXPECT_EQ(settings_section_title(*group), QStringLiteral("Shading"));
+
+  dialog.show();
+  QCoreApplication::processEvents();
+  EXPECT_EQ(swatch->accessibleName(), QStringLiteral("Wireframe on Shaded Color"));
+  const QColor applied = QColor::fromRgb(51, 102, 153, 77);
+  const QString picker_name =
+      QStringLiteral("viewportSetting_WireframeOnShadedColor_dialog");
+  ASSERT_TRUE(reject_color_picker(dialog, *swatch, picker_name, applied));
+  EXPECT_FALSE(apply->isEnabled());
+  EXPECT_TRUE(changes.empty());
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      viewport_settings.color(ViewportColorSettingId::WireframeOnShaded), initial));
+
+  ASSERT_TRUE(accept_color_picker(dialog, *swatch, picker_name, applied));
+  EXPECT_TRUE(apply->isEnabled());
+  EXPECT_TRUE(changes.empty());
+  EXPECT_FALSE(std::filesystem::exists(path));
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      viewport_settings.color(ViewportColorSettingId::WireframeOnShaded), initial));
+  apply->click();
+  EXPECT_FALSE(apply->isEnabled());
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::ViewportCommit), 1u);
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      viewport_settings.color(ViewportColorSettingId::WireframeOnShaded),
+      setting_color(applied)));
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      ViewportSettings::load(path).color(ViewportColorSettingId::WireframeOnShaded),
+      setting_color(applied)));
+  EXPECT_FALSE(viewport_settings.bool_value(ViewportBoolSettingId::WireframeOnShaded));
+
+  ASSERT_TRUE(localization.select_locale("it-IT"));
+  dialog.refresh();
+  EXPECT_EQ(swatch->accessibleName(),
+            QStringLiteral("Colore wireframe su ombreggiato"));
+  ASSERT_TRUE(accept_color_picker(dialog, *swatch, picker_name,
+                                 QColor::fromRgb(200, 10, 100, 230)));
+  cancel->click();
+  EXPECT_EQ(count_changes(changes, QtSettingsChangeKind::ViewportCommit), 1u);
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      viewport_settings.color(ViewportColorSettingId::WireframeOnShaded),
+      setting_color(applied)));
+  EXPECT_TRUE(viewport_setting_colors_approximately(
+      ViewportSettings::load(path).color(ViewportColorSettingId::WireframeOnShaded),
       setting_color(applied)));
 }
 
@@ -5994,6 +6085,11 @@ TEST(QtMainMenuTests,
        {QuaderSelectionMode::Object, QuaderSelectionMode::Vertex,
         QuaderSelectionMode::Edge, QuaderSelectionMode::Face,
         QuaderSelectionMode::Group}) {
+    const bool component = mode == QuaderSelectionMode::Vertex ||
+                           mode == QuaderSelectionMode::Edge ||
+                           mode == QuaderSelectionMode::Face;
+    ASSERT_TRUE(editor.mode().set(component ? QuaderEditorMode::Edit
+                                          : QuaderEditorMode::Object).ok());
     ASSERT_TRUE(editor.selection().set_mode(mode).ok());
     for (QMenu *component_menu : component_menus) {
       ASSERT_TRUE(QMetaObject::invokeMethod(component_menu, "aboutToShow",
@@ -6057,7 +6153,7 @@ TEST(QtMainMenuTests,
   EXPECT_FALSE(harden_edge_normals->isEnabled());
   EXPECT_FALSE(soften_edge_normals->isEnabled());
   EXPECT_FALSE(invert_faces->isEnabled());
-  EXPECT_TRUE(uv_peel->isEnabled());
+  EXPECT_FALSE(uv_peel->isEnabled());
   EXPECT_TRUE(project_texture_cube->isEnabled());
   EXPECT_FALSE(align_texture_to_grid->isEnabled());
   const std::optional<QuaderCommandDescriptor> shared_face_shading =
@@ -6068,6 +6164,10 @@ TEST(QtMainMenuTests,
   EXPECT_EQ(uv_peel->text(), QStringLiteral("UV Peel"));
   EXPECT_EQ(align_texture_to_grid->text(), QStringLiteral("To Grid"));
 
+  EXPECT_FALSE(insert_edge_loop->isEnabled());
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(QMetaObject::invokeMethod(edge_menu, "aboutToShow",
+                                        Qt::DirectConnection));
   ASSERT_TRUE(insert_edge_loop->isEnabled());
   insert_edge_loop->trigger();
   EXPECT_EQ(editor.selection().summary().mode, QuaderSelectionMode::Edge);
@@ -6183,6 +6283,11 @@ TEST(QtMainMenuTests,
       shrink,
   };
   const auto expect_visible_for_mode = [&](QuaderSelectionMode mode) {
+    const bool component = mode == QuaderSelectionMode::Vertex ||
+                           mode == QuaderSelectionMode::Edge ||
+                           mode == QuaderSelectionMode::Face;
+    ASSERT_TRUE(editor.mode().set(component ? QuaderEditorMode::Edit
+                                          : QuaderEditorMode::Object).ok());
     ASSERT_TRUE(editor.selection().set_mode(mode).ok());
     ASSERT_TRUE(QMetaObject::invokeMethod(select_menu, "aboutToShow",
                                           Qt::DirectConnection));
@@ -6359,9 +6464,11 @@ TEST(QtMainMenuTests,
        {QuaderSelectionMode::Object, QuaderSelectionMode::Edge,
         QuaderSelectionMode::Face, QuaderSelectionMode::Vertex,
         QuaderSelectionMode::Group}) {
-    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
     const bool arrangement_mode = mode == QuaderSelectionMode::Object ||
                                   mode == QuaderSelectionMode::Group;
+    ASSERT_TRUE(editor.mode().set(arrangement_mode ? QuaderEditorMode::Object
+                                                  : QuaderEditorMode::Edit).ok());
+    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
     if (arrangement_mode) {
       ASSERT_TRUE(editor.selection().select_objects(
           {first_group.value().id, second_group.value().id},

@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_editor_api.hpp"
+#include "api/quader_api_session_internal_access.hpp"
 #include "editor/input/quader_input_binding.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
@@ -20,6 +21,18 @@
 
 namespace quader {
 namespace {
+/// Makes native fixture mode transitions explicit before changing selection kind.
+quader::QuaderApiVoidResult enter_selection_context(
+    quader::QuaderEditorApi &editor, quader::QuaderSelectionMode kind) {
+  const bool component = kind == quader::QuaderSelectionMode::Vertex ||
+      kind == quader::QuaderSelectionMode::Edge ||
+      kind == quader::QuaderSelectionMode::Face;
+  const auto transition = editor.mode().set(component
+      ? quader::QuaderEditorMode::Edit : quader::QuaderEditorMode::Object);
+  if (!transition.ok()) return transition;
+  return editor.selection().set_mode(kind);
+}
+
 
 QuaderInputChord input_chord(std::string_view text) {
   const auto parsed = quader_input_parse_shortcut(text);
@@ -82,10 +95,13 @@ TEST(SelectionToolSettingsTests, LassoIdentityShortcutAndUserOverrideRemainCoher
 }
 
 TEST(SelectionToolSettingsTests, MoveAndLassoCheckboxesRetainValuesAndResetIndependently) {
-  auto standalone = create_standalone_editor();
-  auto &editor = standalone.editor();
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
   auto &tools = editor.tools();
-  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Vertex).ok());
+  ASSERT_TRUE(editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Settings edit participant").ok());
+  session.history().clear();
+  ASSERT_TRUE(enter_selection_context(editor, QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(tools.activate(ViewportToolId::Move).ok());
   auto target = tools.active_settings();
   ASSERT_TRUE(target.active);
@@ -125,12 +141,15 @@ TEST(SelectionToolSettingsTests, MoveAndLassoCheckboxesRetainValuesAndResetIndep
 
 TEST(SelectionToolSettingsTests,
      AutoMergeControlOnlyAppearsForVertexMoveAndPreservesItsStoredValue) {
-  auto standalone = create_standalone_editor();
-  auto &editor = standalone.editor();
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
   auto &tools = editor.tools();
+  ASSERT_TRUE(editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Settings edit participant").ok());
+  session.history().clear();
   ASSERT_TRUE(tools.activate(ViewportToolId::Move).ok());
   EXPECT_TRUE(tools.active_settings().controls.empty());
-  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Vertex).ok());
+  ASSERT_TRUE(enter_selection_context(editor, QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(tools.set_setting("move", "auto_merge_vertices", false).ok());
   const auto origin = tools.active_settings_presentation_origin();
   constexpr std::array kPanes{ViewportPaneId::Perspective, ViewportPaneId::Top,
@@ -140,7 +159,7 @@ TEST(SelectionToolSettingsTests,
                           QuaderSelectionMode::Object, QuaderSelectionMode::Group}) {
     SCOPED_TRACE(static_cast<int>(mode));
     const auto visible_revision = tools.active_settings_revision();
-    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    ASSERT_TRUE(enter_selection_context(editor, mode).ok());
     EXPECT_GT(tools.active_settings_revision(), visible_revision);
     EXPECT_TRUE(tools.active_settings().controls.empty());
     for (const auto pane : kPanes) {
@@ -152,7 +171,7 @@ TEST(SelectionToolSettingsTests,
     const auto hidden_revision = tools.active_settings_revision();
     for (int frame = 0; frame < 8; ++frame)
       EXPECT_EQ(tools.active_settings_revision(), hidden_revision);
-    ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Vertex).ok());
+    ASSERT_TRUE(enter_selection_context(editor, QuaderSelectionMode::Vertex).ok());
     EXPECT_GT(tools.active_settings_revision(), hidden_revision);
     for (const auto pane : kPanes) {
       const auto target = tools.settings_for_pane(pane);
@@ -179,9 +198,13 @@ TEST(SelectionToolSettingsTests,
 }
 
 TEST(SelectionToolSettingsTests, InvalidBooleanSettingsPreserveValuesAndRevision) {
-  auto standalone = create_standalone_editor();
-  auto &tools = standalone.editor().tools();
-  ASSERT_TRUE(standalone.editor().selection().set_mode(QuaderSelectionMode::Vertex).ok());
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+  auto &tools = editor.tools();
+  ASSERT_TRUE(editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Settings edit participant").ok());
+  session.history().clear();
+  ASSERT_TRUE(enter_selection_context(editor, QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(tools.activate(ViewportToolId::Move).ok());
   const auto revision = tools.active_settings_revision();
   for (const double value : {-1.0, 0.5, 2.0,
@@ -194,10 +217,13 @@ TEST(SelectionToolSettingsTests, InvalidBooleanSettingsPreserveValuesAndRevision
 }
 
 TEST(SelectionToolSettingsTests, SharedToolSettingsRemainPinnedAndEditableAcrossFocus) {
-  auto standalone = create_standalone_editor();
-  auto &editor = standalone.editor();
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
   auto &tools = editor.tools();
-  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Vertex).ok());
+  ASSERT_TRUE(editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Settings edit participant").ok());
+  session.history().clear();
+  ASSERT_TRUE(enter_selection_context(editor, QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(tools.activate(ViewportToolId::Move).ok());
   ASSERT_TRUE(editor.viewports().focus_pane(ViewportPaneId::Top).ok());
   ASSERT_TRUE(tools.activate(ViewportToolId::Rotate).ok());
@@ -238,10 +264,13 @@ TEST(SelectionToolSettingsTests, SharedToolSettingsRemainPinnedAndEditableAcross
 }
 
 TEST(SelectionToolSettingsTests, PaneAcquisitionRejectsStaleTargetsAndPreservesSharedOrigin) {
-  auto standalone = create_standalone_editor();
-  auto &editor = standalone.editor();
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
   auto &tools = editor.tools();
-  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Vertex).ok());
+  ASSERT_TRUE(editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Settings edit participant").ok());
+  session.history().clear();
+  ASSERT_TRUE(enter_selection_context(editor, QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(tools.activate(ViewportToolId::Move).ok());
   ASSERT_TRUE(editor.viewports().focus_pane(ViewportPaneId::Top).ok());
   const auto origin = tools.active_settings_presentation_origin();
@@ -277,6 +306,7 @@ TEST(SelectionToolSettingsTests, OtherPaneKeepsPendingExtrusionUntilExplicitTool
   ASSERT_TRUE(editor.viewports().focus_pane(ViewportPaneId::Top).ok());
   ASSERT_TRUE(tools.activate(ViewportToolId::Move).ok());
   ASSERT_TRUE(editor.viewports().focus_pane(ViewportPaneId::Perspective).ok());
+  ASSERT_TRUE(enter_selection_context(editor, QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(tools.activate(ViewportToolId::Extrude).ok());
   ASSERT_TRUE(editor.selection().select_face(created.value(), 1).ok());
   ASSERT_TRUE(tools.set_setting("extrude", "extrude.amount", 1.0).ok());
@@ -391,7 +421,7 @@ TEST(SelectionToolSettingsTests, LassoSettingsTakePriorityOverPassiveSelectedCur
       .name = "Lasso Settings Curve",
   });
   ASSERT_TRUE(curve.ok());
-  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(enter_selection_context(editor, QuaderSelectionMode::Object).ok());
   ASSERT_TRUE(editor.selection().select_object(curve.value()).ok());
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::Curve).ok());
   ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
@@ -427,7 +457,9 @@ TEST(SelectionToolSettingsTests, NewSceneSessionUsesDefaultCheckboxValues) {
   ASSERT_TRUE(first_tools.set_setting("lasso_select", "select_partial_intersection", true).ok());
   auto next_session = create_standalone_editor();
   auto &next_tools = next_session.editor().tools();
-  ASSERT_TRUE(next_session.editor().selection().set_mode(QuaderSelectionMode::Vertex).ok());
+  ASSERT_TRUE(next_session.editor().modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Next session edit participant").ok());
+  ASSERT_TRUE(enter_selection_context(next_session.editor(), QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(next_tools.activate(ViewportToolId::Move).ok());
   EXPECT_TRUE(next_tools.active_settings().controls[0].bool_value);
   ASSERT_TRUE(next_tools.activate(ViewportToolId::LassoSelect).ok());

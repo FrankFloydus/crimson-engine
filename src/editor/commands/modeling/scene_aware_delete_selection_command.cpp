@@ -697,10 +697,7 @@ bool scene_aware_delete_uses_document_route(ModelingSelectionMode mode) {
 
 bool scene_aware_delete_handles_selection(ModelingSelectionSummary summary,
                                           bool has_selected_root) {
-  const bool component_selection =
-      summary.has_selection &&
-      !scene_aware_delete_uses_document_route(summary.mode);
-  return has_selected_root && !component_selection;
+  return has_selected_root && scene_aware_delete_uses_document_route(summary.mode);
 }
 
 std::unique_ptr<IUndoableCommand>

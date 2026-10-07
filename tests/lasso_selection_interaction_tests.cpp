@@ -513,12 +513,16 @@ TEST(LassoSelectionInteractionTests,
 TEST(LassoSelectionInteractionTests,
      VertexLassoIncludesOccludedAndCoincidentVerticesWithBackfacePickingOff) {
   LassoSelectionHarness harness;
-  (void)harness.cube();
-  (void)harness.cube();
+  const auto first = harness.cube();
+  const auto second = harness.cube();
   harness.settings.set_bool_value(
       quader::ViewportBoolSettingId::BackfaceSelection, false);
-  ASSERT_TRUE(harness.editor.selection().set_mode(
-      quader::QuaderSelectionMode::Vertex).ok());
+  ASSERT_TRUE(harness.editor.selection().select_objects({first, second}).ok());
+  const auto entered = harness.editor.mode().set(quader::QuaderEditorMode::Edit);
+  ASSERT_TRUE(entered.ok()) << entered.error_message();
+  ASSERT_EQ(harness.editor.mode().state().participants.size(), 2u);
+  const auto kind = harness.editor.selection().set_mode(quader::QuaderSelectionMode::Vertex);
+  ASSERT_TRUE(kind.ok()) << kind.error_message();
   harness.router.set_selection_mode(quader::ViewportSelectionMode::Vertex);
   harness.loop();
   EXPECT_EQ(harness.editor.selection().summary().selected_vertex_count, 16u);
@@ -528,12 +532,16 @@ TEST(LassoSelectionInteractionTests,
 TEST(LassoSelectionInteractionTests,
      EdgeLassoIncludesOccludedAndCoincidentEdgesWithBackfacePickingOff) {
   LassoSelectionHarness harness;
-  (void)harness.cube();
-  (void)harness.cube();
+  const auto first = harness.cube();
+  const auto second = harness.cube();
   harness.settings.set_bool_value(
       quader::ViewportBoolSettingId::BackfaceSelection, false);
-  ASSERT_TRUE(harness.editor.selection().set_mode(
-      quader::QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(harness.editor.selection().select_objects({first, second}).ok());
+  const auto entered = harness.editor.mode().set(quader::QuaderEditorMode::Edit);
+  ASSERT_TRUE(entered.ok()) << entered.error_message();
+  ASSERT_EQ(harness.editor.mode().state().participants.size(), 2u);
+  const auto kind = harness.editor.selection().set_mode(quader::QuaderSelectionMode::Edge);
+  ASSERT_TRUE(kind.ok()) << kind.error_message();
   harness.router.set_selection_mode(quader::ViewportSelectionMode::Edge);
   harness.loop();
   EXPECT_EQ(harness.editor.selection().summary().selected_edge_count, 24u);

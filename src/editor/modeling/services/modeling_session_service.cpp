@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/modes/editor_mode_service.hpp"
 #include "editor/modeling/services/face_texture_edit_context.hpp"
 #include "editor/modeling/services/uv_peel_edit_context.hpp"
 
@@ -1508,6 +1509,7 @@ class ModelingSessionService::Impl : private ModelingTransformDragPort {
     std::uint64_t asset_revision = 0;
     std::uint64_t transform_preview_revision = 0;
     std::uint64_t runtime_overlay_revision = 0;
+    std::uint64_t editor_mode_revision = 0;
     ModelingSelectionMode app_selection_mode = ModelingSelectionMode::Object;
     ModelingInstanceEditScope instance_edit_scope;
 
@@ -1523,15 +1525,6 @@ class ModelingSessionService::Impl : private ModelingTransformDragPort {
     std::uint64_t publication_revision = 0u;
     std::uint64_t build_count = 0u;
     std::uint64_t reuse_count = 0u;
-  };
-
-  /// Retains fallback eligibility without inspecting selection on cursor moves.
-  struct ComponentSourceWireFallbackCache final {
-    bool valid = false;
-    std::uint64_t content_revision = 0;
-    std::uint64_t selection_revision = 0;
-    std::uint64_t object_map_revision = 0;
-    int object_id = -1;
   };
 
   /// Fixed-size Knife cursor facts consumed by the volatile overlay builder.
@@ -2233,6 +2226,10 @@ public:
   }
 
   [[nodiscard]] std::optional<SceneBounds> selection_bounds() const {
+    if (editor_mode_service_ != nullptr && editor_mode_service_->mode() == EditorMode::Edit &&
+        !ModelingSelectionService::has_component_selection(selection_summary())) {
+      return std::nullopt;
+    }
     const ModelingInstanceEditScope edit_scope =
         instance_edit_scope_provider_ ? instance_edit_scope_provider_()
                                       : ModelingInstanceEditScope{};
@@ -3083,6 +3080,11 @@ public:
     if (!target.command.ok) {
       return target.command;
     }
+    if (editor_mode_service_ != nullptr &&
+        !component_target_is_editable(target.entity)) {
+      return {.ok = false,
+              .message = "The target mesh is outside the current edit set."};
+    }
     if (selected.modeling_object_id == modeling_object_id &&
         source_face.index == static_cast<std::uint32_t>(face_id)) {
       return {.ok = true, .changed = false};
@@ -3537,9 +3539,11 @@ public:
     }();
     {
       QDR_PROFILE_SCOPE("Box selection capture session runtime baseline");
-      return ModelingSelectionBoxBaseline(
+      ModelingSelectionBoxBaseline baseline(
           std::make_shared<ModelingSelectionBoxBaseline::Impl>(
               selection_service_.rectangle_selection_state(projected)));
+      baseline.editor_mode_generation = editor_mode_generation();
+      return baseline;
     }
   }
 
@@ -3551,8 +3555,8 @@ public:
     options.persistent_source_wire_object_id =
         persistent_tool_source_wire_object_id();
     return overlay_service_.selection_overlay_signature(
-               runtime_, options,
-               suppressed_fallback_source_wire_object_id(options)) ^
+               runtime_, options) ^
+           selection_service_.editor_mode_revision() ^
            sdk_projection_adapter_.selection_overlay_preview_signature();
   }
 
@@ -3667,7 +3671,7 @@ public:
           persistent_tool_source_wire_object_id();
       if (auto base = overlay_service_.accepted_coordinate_base_frame(
               *coordinates, selection_service_.viewport_visibility_revision(),
-              options, suppressed_fallback_source_wire_object_id(options))) {
+              options, selection_service_.editor_mode_revision())) {
         return std::move(*base);
       }
     }
@@ -3687,6 +3691,7 @@ public:
         .transform_preview_revision =
             sdk_projection_adapter_.workspace_transform_preview_revision(),
         .runtime_overlay_revision = volatile_overlay_runtime_revision_,
+        .editor_mode_revision = selection_service_.editor_mode_revision(),
         .app_selection_mode = app_selection_mode_,
         .instance_edit_scope =
             selection_service_.overlay_instance_edit_scope(),
@@ -3926,7 +3931,8 @@ public:
       };
     }
     app_selection_mode_ = sdk_projection_adapter_.selection_mode();
-    if (memento.impl_->group_selection.has_value()) {
+    if (memento.impl_->group_selection.has_value() &&
+        (editor_mode_service_ == nullptr || editor_mode_service_->mode() != EditorMode::Edit)) {
       document_command_apply_selection(scene_, *memento.impl_->group_selection);
       app_selection_mode_ = ModelingSelectionMode::Group;
     }
@@ -3966,7 +3972,8 @@ public:
       };
     }
     app_selection_mode_ = sdk_projection_adapter_.selection_mode();
-    if (memento.impl_->group_selection.has_value()) {
+    if (memento.impl_->group_selection.has_value() &&
+        (editor_mode_service_ == nullptr || editor_mode_service_->mode() != EditorMode::Edit)) {
       app_selection_mode_ = ModelingSelectionMode::Group;
     }
     if (runtime_.active_tool() == quader_editor_core::ViewportInteractionTool::InsertEdgeLoop) {
@@ -4060,6 +4067,35 @@ public:
     return restored;
   }
 
+  void set_editor_mode_service(EditorModeService *service) {
+    editor_mode_service_ = service;
+    sdk_projection_adapter_.bind_editor_mode_service(service);
+    selection_service_.set_editor_mode_service(service);
+    invalidate_selection_overlay_caches();
+  }
+
+  [[nodiscard]] std::uint64_t editor_mode_generation() const {
+    return editor_mode_service_ == nullptr ? 0 : editor_mode_service_->generation();
+  }
+
+  ModelingCommandResult apply_editor_mode_context(
+      const EditorModeSnapshot &snapshot,
+      std::span<const EntityId> first_admission_entities) {
+    ModelingCommandResult result = sdk_projection_adapter_.apply_editor_mode_context(
+        snapshot, first_admission_entities);
+    if (result.ok) {
+      app_selection_mode_ = snapshot.mode == EditorMode::Edit
+                                ? snapshot.component_kind
+                                : ModelingSelectionMode::Object;
+      face_texture_context_.invalidate();
+      uv_peel_context_.invalidate_selection();
+      runtime_.set_hover({});
+      selection_service_.invalidate_picking_cache();
+      invalidate_selection_overlay_caches();
+    }
+    return result;
+  }
+
   void set_instance_edit_scope_provider(
       std::function<ModelingInstanceEditScope()> provider) {
     instance_edit_scope_provider_ = provider;
@@ -4085,6 +4121,9 @@ public:
 
   [[nodiscard]] ModelingCommandResult
   sync_object_selection_from_scene(bool force_object_mode = false) {
+    if (editor_mode_service_ != nullptr && editor_mode_service_->mode() == EditorMode::Edit) {
+      return {.ok = true};
+    }
     QDR_PROFILE_FUNCTION();
     std::vector<EntityId> sdk_selected;
     for (const EntityId entity : scene_.selected_entities()) {
@@ -4111,6 +4150,9 @@ public:
 
   [[nodiscard]] ModelingCommandResult
   clear_runtime_object_selection_for_scene_owned_selection() {
+    if (editor_mode_service_ != nullptr && editor_mode_service_->mode() == EditorMode::Edit) {
+      return {.ok = true};
+    }
     QDR_PROFILE_FUNCTION();
     ModelingCommandResult cleared =
         sdk_projection_adapter_.clear_object_selection_preserving_mode();
@@ -4156,11 +4198,13 @@ public:
       };
     }
     if (!preserve_scene_selection &&
-        memento.impl_->group_selection.has_value()) {
+        memento.impl_->group_selection.has_value() &&
+        (editor_mode_service_ == nullptr || editor_mode_service_->mode() != EditorMode::Edit)) {
       document_command_apply_selection(scene_, *memento.impl_->group_selection);
     }
     app_selection_mode_ = sdk_projection_adapter_.selection_mode();
-    if (memento.impl_->group_selection.has_value()) {
+    if (memento.impl_->group_selection.has_value() &&
+        (editor_mode_service_ == nullptr || editor_mode_service_->mode() != EditorMode::Edit)) {
       app_selection_mode_ = ModelingSelectionMode::Group;
     }
     face_texture_context_.invalidate();
@@ -4310,6 +4354,11 @@ public:
 
   ModelingCommandResult set_selection_mode(ModelingSelectionMode mode,
                                            bool structural_publication = false) {
+    if (editor_mode_service_ != nullptr &&
+        !editor_mode_service_->permits_selection_mode(mode)) {
+      return {.ok = false,
+              .message = "Selection kind is unavailable in the current editor mode."};
+    }
     if (mode == selection_mode()) {
       app_selection_mode_ = mode;
       return {.ok = true};
@@ -4419,6 +4468,9 @@ public:
       return result;
     }
     app_selection_mode_ = mode;
+    if (editor_mode_service_ != nullptr && is_component_selection_mode(mode)) {
+      editor_mode_service_->record_component_kind(mode);
+    }
     invalidate_selection_overlay_caches();
     if (mode == ModelingSelectionMode::Object &&
         !scene_only_selection.empty()) {
@@ -4439,8 +4491,7 @@ public:
         selection_projection_snapshot();
     if (const std::optional<ModelingSelectionProjectionCommandResult> scoped =
             selection_service_.select_all_in_constrained_component_scope(
-                projection, scene_, object_registry_,
-                runtime_.hover().candidate_object_id)) {
+                projection, scene_, object_registry_)) {
       if (!scoped->command.ok) {
         return scoped->command;
       }
@@ -4580,7 +4631,11 @@ public:
                 },
             .app_selection_mode = [&]() { return app_selection_mode_; },
             .set_app_selection_mode =
-                [&](ModelingSelectionMode mode) { app_selection_mode_ = mode; },
+                [&](ModelingSelectionMode mode) {
+                  app_selection_mode_ =
+                      editor_mode_service_ != nullptr && editor_mode_service_->mode() == EditorMode::Edit
+                          ? editor_mode_service_->snapshot().component_kind : mode;
+                },
             .delete_modeling_objects =
                 [&](const std::vector<int> &modeling_object_ids) {
                   return sdk_projection_adapter_.remove_objects(
@@ -4622,12 +4677,18 @@ public:
   }
 
   [[nodiscard]] bool can_copy_selection() const {
+    if (editor_mode_service_ != nullptr && editor_mode_service_->mode() != EditorMode::Object) {
+      return false;
+    }
     return !sdk_projection_adapter_.preview_active() &&
            sdk_projection_adapter_.selection_summary().selected_object_count !=
                0u;
   }
 
   [[nodiscard]] bool can_paste_selection() const {
+    if (editor_mode_service_ != nullptr && editor_mode_service_->mode() != EditorMode::Object) {
+      return false;
+    }
     return !sdk_projection_adapter_.preview_active() &&
            sdk_projection_adapter_.clipboard_available() &&
            clipboard_scene_identities_.size() ==
@@ -4635,6 +4696,9 @@ public:
   }
 
   ModelingCommandResult copy_selection() {
+    if (editor_mode_service_ != nullptr && editor_mode_service_->mode() != EditorMode::Object) {
+      return {.ok = false, .message = "This operation requires Object Mode."};
+    }
     if (!document_command_hierarchy_available_in_release(
             scene_, scene_.selected_entities())) {
       return {.ok = false, .changed = false,
@@ -4670,6 +4734,9 @@ public:
   }
 
   ModelingCommandResult paste_selection() {
+    if (editor_mode_service_ != nullptr && editor_mode_service_->mode() != EditorMode::Object) {
+      return {.ok = false, .message = "This operation requires Object Mode."};
+    }
     if (!release_has_feature(ReleaseFeature::Layers) &&
         std::any_of(clipboard_scene_identities_.begin(),
                     clipboard_scene_identities_.end(), [](const auto &identity) {
@@ -5575,6 +5642,13 @@ public:
     if (!target.command.ok) {
       return target.command;
     }
+    const auto entity = object_registry_.entity_for_modeling_object(modeling_object_id);
+    if (editor_mode_service_ != nullptr &&
+        editor_mode_service_->mode() == EditorMode::Edit &&
+        (!entity.has_value() || !component_target_is_editable(*entity))) {
+      return {.ok = false,
+              .message = "The target mesh is outside the current edit set."};
+    }
     const std::array object_ids{modeling_object_id};
     return normalize_whole_object_materials(object_ids, target.material);
   }
@@ -5592,6 +5666,12 @@ public:
     if (!target.command.ok) {
       return target.command;
     }
+    if (editor_mode_service_ != nullptr &&
+        editor_mode_service_->mode() == EditorMode::Edit &&
+        !component_target_is_editable(target.entity)) {
+      return {.ok = false,
+              .message = "The target mesh is outside the current edit set."};
+    }
     const std::array object_ids{modeling_object_id};
     return normalize_whole_object_materials(object_ids, material);
   }
@@ -5608,6 +5688,11 @@ public:
     const FaceTarget target = resolve_face_target(modeling_object_id, face_id);
     if (!target.command.ok) {
       return target.command;
+    }
+    if (editor_mode_service_ != nullptr &&
+        !component_target_is_editable(target.entity)) {
+      return {.ok = false,
+              .message = "The target mesh is outside the current edit set."};
     }
 
     const MaterialComponent *existing = scene_.material(target.entity);
@@ -5939,10 +6024,28 @@ public:
         query, modal_tool_owns_viewport());
   }
 
+  [[nodiscard]] bool action_supports_editor_mode(std::string_view action_id) const {
+    return editor_mode_service_ == nullptr ||
+           ModelingActionCatalog::action_supports_editor_mode(
+               action_id, editor_mode_service_->mode());
+  }
+
+  void apply_action_mode_policy(ModelingActionItem &action) const {
+    if (!action_supports_editor_mode(action.action_id) &&
+        action.visibility != ModelingActionVisibility::Hidden) {
+      action.visibility = ModelingActionVisibility::Disabled;
+      action.disabled_reason = "Action is unavailable in the current editor mode.";
+    }
+  }
+
   [[nodiscard]] ModelingActionSet
   context_action_set(ModelingActionQuery query) const {
-    return context_action_service_.action_set(action_selection_summary(), query,
-                                              modal_tool_owns_viewport());
+    auto actions = context_action_service_.action_set(action_selection_summary(), query,
+                                                       modal_tool_owns_viewport());
+    for (auto &panel : actions.panels) {
+      for (auto &action : panel.actions) apply_action_mode_policy(action);
+    }
+    return actions;
   }
 
   [[nodiscard]] ModelingSelectionSummary action_selection_summary() const {
@@ -5977,15 +6080,18 @@ public:
 
   [[nodiscard]] std::vector<ModelingActionItem>
   context_actions(ModelingActionQuery query) const {
-    return context_action_service_.actions(action_selection_summary(), query,
-                                           modal_tool_owns_viewport());
+    auto actions = context_action_service_.actions(action_selection_summary(), query,
+                                                   modal_tool_owns_viewport());
+    for (auto &action : actions) apply_action_mode_policy(action);
+    return actions;
   }
 
   [[nodiscard]] std::optional<ModelingActionItem>
   context_action(std::string_view action_id, ModelingActionQuery query) const {
-    return context_action_service_.action(action_selection_summary(), action_id,
-                                          query,
-                                          modal_tool_owns_viewport());
+    auto action = context_action_service_.action(action_selection_summary(), action_id,
+                                                 query, modal_tool_owns_viewport());
+    if (action.has_value()) apply_action_mode_policy(*action);
+    return action;
   }
 
   void clear_inactive_operation_preview_metadata() {
@@ -6010,6 +6116,12 @@ public:
     }
     const auto *descriptor =
         quader_editor_core::editor_operation_for_id(runtime_operation);
+    if (editor_mode_service_ != nullptr &&
+        (phase == OperationPhase::Execute || phase == OperationPhase::BeginPreview) &&
+        (descriptor == nullptr || !ModelingActionCatalog::operation_supports_editor_mode(
+             descriptor->id(), editor_mode_service_->mode()))) {
+      return {.ok = false, .message = "Operation is unavailable in the current editor mode."};
+    }
     if (descriptor != nullptr && !release_allows_operation(descriptor->id())) {
       return {.ok = false, .changed = false,
               .message = release_feature_unavailable_message()};
@@ -6341,6 +6453,10 @@ public:
       EditorHistoryService *history = nullptr,
       const ModelingStructuralDuplicate *structural_duplicate =
           nullptr) {
+    if (action.operation != quader_editor_core::TransformDragOperation::Transform &&
+        editor_mode_service_ != nullptr && editor_mode_service_->mode() != EditorMode::Edit) {
+      return {false, false, "Repeating a component extrusion requires Edit Mode."};
+    }
     const ModelingSelectionMode current_mode = selection_mode();
     const bool scene_selection_mode =
         current_mode == ModelingSelectionMode::Object ||
@@ -6668,6 +6784,9 @@ public:
   }
 
   ModelingCommandResult execute_context_action(std::string_view action_id) {
+    if (!action_supports_editor_mode(action_id)) {
+      return {.ok = false, .message = "Action is unavailable in the current editor mode."};
+    }
     if (action_id == std::string_view("delete_selection")) {
       return {.ok = false,
               .message = "Delete selection must use the command route."};
@@ -6741,7 +6860,8 @@ public:
           .operation = entry.operation,
           .id = std::string(entry.id),
           .label = std::string(entry.live_label),
-          .enabled = modeling_instant_operation_enabled(entry, summary),
+          .enabled = action_supports_editor_mode(entry.id) &&
+                     modeling_instant_operation_enabled(entry, summary),
           .rebuilds_mesh_on_success = entry.rebuilds_mesh_on_success,
       });
     }
@@ -6761,6 +6881,10 @@ public:
   ModelingCommandResult
   execute_instant_operation(ModelingInstantOperationId operation,
                             bool preserve_duplicate_scene_identity = true) {
+    const auto *entry = find_modeling_instant_operation_catalog_entry(operation);
+    if (entry == nullptr || !action_supports_editor_mode(entry->id)) {
+      return {.ok = false, .message = "Operation is unavailable in the current editor mode."};
+    }
     const std::optional<quader_editor_core::EditorOperationCommand> command =
         modeling_instant_operation_command(
             operation, interaction_settings_service_.settings());
@@ -6828,6 +6952,10 @@ public:
   }
 
   ModelingCommandResult begin_transform_preview(bool duplicate_selected) {
+    if (editor_mode_service_ != nullptr && editor_mode_service_->mode() == EditorMode::Edit &&
+        !ModelingSelectionService::has_component_selection(selection_summary())) {
+      return {.ok = false, .message = "Select components before transforming."};
+    }
     if (structural_transform_preview_active() ||
         structural_drag_checkpoint_active_) {
       return {
@@ -7278,6 +7406,11 @@ public:
                        const ModelingStructuralDuplicate
                            *structural_duplicate = nullptr,
                        EditorHistoryService *history = nullptr) {
+    if (editor_mode_service_ != nullptr && editor_mode_service_->mode() == EditorMode::Edit &&
+        !ModelingSelectionService::has_component_selection(selection_summary())) {
+      return {.ok = false, .message = "Select components before transforming."};
+    }
+
     if (structural_drag_checkpoint_active_) {
       return {
           .ok = false,
@@ -7580,13 +7713,17 @@ public:
   }
 
   ModelingCommandResult activate_viewport_tool(ModelingViewportTool tool) {
+    if (editor_mode_service_ != nullptr &&
+        !viewport_tool_supports_editor_mode(tool, editor_mode_service_->mode())) {
+      return {.ok = false, .message = "Tool is unavailable in the current editor mode."};
+    }
     if (to_runtime(tool) == runtime_.active_tool()) {
-      const bool idle_cutting_mode_correction =
-          (tool == ModelingViewportTool::Knife ||
-           tool == ModelingViewportTool::InsertEdgeLoop) &&
-          selection_mode() != ModelingSelectionMode::Edge &&
+      const ToolDescriptor *descriptor = find_viewport_tool_descriptor(tool);
+      const bool idle_component_kind_correction =
+          descriptor != nullptr && descriptor->required_component_kind.has_value() &&
+          selection_mode() != *descriptor->required_component_kind &&
           !pending_operation_active();
-      if (!idle_cutting_mode_correction) {
+      if (!idle_component_kind_correction) {
         return {.ok = true};
       }
     }
@@ -7597,11 +7734,10 @@ public:
     }
     bool selection_mode_changed = false;
     std::string selection_mode_message;
-    std::optional<ModelingSelectionMode> required_selection_mode;
-    if (tool == ModelingViewportTool::InsertEdgeLoop ||
-        tool == ModelingViewportTool::Knife) {
-      required_selection_mode = ModelingSelectionMode::Edge;
-    } else if (tool == ModelingViewportTool::Mirror) {
+    const ToolDescriptor *descriptor = find_viewport_tool_descriptor(tool);
+    std::optional<ModelingSelectionMode> required_selection_mode =
+        descriptor == nullptr ? std::nullopt : descriptor->required_component_kind;
+    if (tool == ModelingViewportTool::Mirror) {
       required_selection_mode = ModelingSelectionMode::Object;
     }
     if (required_selection_mode.has_value() &&
@@ -7814,17 +7950,17 @@ public:
         sdk_projection_adapter_.selection_projection_snapshot();
     const std::vector<quader_editor_core::PolygonObject> &objects =
         selection_service_.cached_local_picking_objects(
-            projection, scene_, object_registry_);
+            projection, scene_, object_registry_, true);
     const quader_editor_core::MoveVertexSnapQueryResult query =
         quader_editor_core::resolve_move_vertex_snap_query(
             objects, projection.selection_mode(), to_runtime(ray),
             vertex_radius,
             selection_service_.cached_pick_object_bounds(
-                projection, scene_, object_registry_),
+                projection, scene_, object_registry_, true),
             selection_service_.cached_local_pick_face_geometry(
-                projection, scene_, object_registry_, options),
+                projection, scene_, object_registry_, options, true),
             selection_service_.cached_local_picking_transforms(
-                projection, scene_, object_registry_),
+                projection, scene_, object_registry_, true),
             exclude_current_selection, &mesh_snap_picking_scratch_);
 
     ModelingMeshSnapQueryResult result{
@@ -7860,15 +7996,15 @@ public:
         sdk_projection_adapter_.selection_projection_snapshot();
     const std::vector<quader_editor_core::PolygonObject> &objects =
         selection_service_.cached_local_picking_objects(
-            projection, scene_, object_registry_);
+            projection, scene_, object_registry_, true);
     const std::optional<quader_editor_core::MoveVertexSnapTarget> target =
         quader_editor_core::resolve_move_vertex_snap_candidate(
             objects, projection.selection_mode(), to_runtime(ray),
             vertex_radius,
             selection_service_.cached_pick_object_bounds(
-                projection, scene_, object_registry_),
+                projection, scene_, object_registry_, true),
             selection_service_.cached_local_picking_transforms(
-                projection, scene_, object_registry_),
+                projection, scene_, object_registry_, true),
             exclude_current_selection, maximum_ray_distance,
             &mesh_snap_picking_scratch_);
     if (!target.has_value()) {
@@ -8521,6 +8657,9 @@ public:
 
   ModelingCommandResult
   update_insert_edge_loop_hover(const ModelingToolRayEvent &event) {
+    if (editor_mode_service_ != nullptr && editor_mode_service_->mode() != EditorMode::Edit) {
+      return {.ok = false, .message = "This component tool requires Edit Mode."};
+    }
     int hover_object_id = -1;
     const std::optional<quader_editor_core::PickHitRecord> world_hit =
         pick_insert_edge_loop_target(event, &hover_object_id);
@@ -8559,6 +8698,9 @@ public:
 
   ModelingCommandResult
   begin_insert_edge_loop_drag(const ModelingToolRayEvent &event) {
+    if (editor_mode_service_ != nullptr && editor_mode_service_->mode() != EditorMode::Edit) {
+      return {.ok = false, .message = "This component tool requires Edit Mode."};
+    }
     const std::optional<quader_editor_core::PickHitRecord> world_hit =
         pick_insert_edge_loop_target(event);
     const int target_object_id = world_hit.has_value()
@@ -8675,6 +8817,9 @@ public:
   }
 
   ModelingCommandResult update_knife_hover(const ModelingToolRayEvent &event) {
+    if (editor_mode_service_ != nullptr && editor_mode_service_->mode() != EditorMode::Edit) {
+      return {.ok = false, .message = "This component tool requires Edit Mode."};
+    }
     const int candidate_before = runtime_.hover().candidate_object_id;
     const KnifeHoverOverlayKey overlay_before =
         knife_hover_overlay_key(runtime_.knife_state());
@@ -9116,6 +9261,9 @@ public:
   }
 
   ModelingCommandResult activate_box_tool() {
+    if (editor_mode_service_ != nullptr && editor_mode_service_->mode() != EditorMode::Object) {
+      return {.ok = false, .message = "This operation requires Object Mode."};
+    }
     if (quader_host_contract::find_tool_descriptor("create_primitive") ==
         nullptr) {
       return {.ok = false,
@@ -9129,6 +9277,9 @@ public:
 
   ModelingCreateBoxResult
   create_box_from_bounds(const ModelingCreateBoxRequest &request) {
+    if (editor_mode_service_ != nullptr && editor_mode_service_->mode() != EditorMode::Object) {
+      return {.ok = false, .message = "This operation requires Object Mode."};
+    }
     ModelingCreateBoxResult created =
         sdk_projection_adapter_.create_box(request, sdk_creation_finalizer(true));
     if (created.ok) {
@@ -9181,6 +9332,9 @@ public:
   }
 
   ModelingCreateBoxResult commit_box(std::string name) {
+    if (editor_mode_service_ != nullptr && editor_mode_service_->mode() != EditorMode::Object) {
+      return {.ok = false, .message = "Primitive creation requires Object Mode."};
+    }
     const ModelingBoxPreview preview = current_box_preview(true);
     if (!preview.ok || !preview.valid || preview.bounds_empty) {
       return {
@@ -9226,6 +9380,9 @@ public:
 
   ModelingCreateBoxResult
   create_mesh(const ModelingCreateMeshRequest &request) {
+    if (editor_mode_service_ != nullptr && editor_mode_service_->mode() != EditorMode::Object) {
+      return {.ok = false, .message = "This operation requires Object Mode."};
+    }
     ModelingCreateBoxResult created =
         sdk_projection_adapter_.create_mesh(
             request, sdk_creation_finalizer(request.world_texture_projection));
@@ -9236,6 +9393,10 @@ public:
   }
 
   [[nodiscard]] bool curve_target_is_editable(int modeling_object_id) const {
+    if (editor_mode_service_ != nullptr &&
+        editor_mode_service_->mode() != EditorMode::Object) {
+      return false;
+    }
     const auto entity = object_registry_.entity_for_modeling_object(modeling_object_id);
     if (!entity.has_value() || !scene_.exists(*entity) ||
         scene_.curve(*entity) == nullptr ||
@@ -9250,6 +9411,9 @@ public:
 
   ModelingCreateBoxResult create_curve(modeling::CurveDocument document,
                                        std::string name) {
+    if (editor_mode_service_ != nullptr && editor_mode_service_->mode() != EditorMode::Object) {
+      return {.ok = false, .message = "Primitive creation requires Object Mode."};
+    }
     const ModelingInstanceEditScope scope = instance_edit_scope_provider_
         ? instance_edit_scope_provider_() : ModelingInstanceEditScope{};
     if (scope.active()) {
@@ -10347,7 +10511,17 @@ public:
         const EntityId target_entity =
             object_registry_.entity_for_modeling_object(request.modeling_object_id)
                 .value_or(kInvalidEntityId);
-        const std::array target_entities{target_entity};
+        const bool fixed_edit_scope = editor_mode_service_ != nullptr &&
+                                      editor_mode_service_->mode() == EditorMode::Edit;
+        std::vector<EntityId> target_entities;
+        if (fixed_edit_scope) {
+          target_entities.reserve(editor_mode_service_->snapshot().participants.size());
+          for (const auto &participant : editor_mode_service_->snapshot().participants) {
+            target_entities.push_back(participant.entity);
+          }
+        } else {
+          target_entities.push_back(target_entity);
+        }
         prepared.changed =
             projection.selection_mode() != candidate.projection.selection_mode() ||
             projection.active_object_id() != candidate.projection.active_object_id() ||
@@ -10358,10 +10532,19 @@ public:
                 projection.objects().begin(), projection.objects().end(),
                 candidate.projection.objects().begin(),
                 candidate.projection.objects().end(),
-                [](const quader_editor_core::PolygonObject &current,
-                   const quader_editor_core::PolygonObject &replacement) {
-                  return current.id == replacement.id &&
-                         current.selected == replacement.selected &&
+                [fixed_edit_scope](const quader_editor_core::PolygonObject &current,
+                                   const quader_editor_core::PolygonObject &replacement) {
+                  if (current.id != replacement.id) {
+                    return false;
+                  }
+                  if (fixed_edit_scope) {
+                    // Replace clears component payloads without changing the
+                    // fixed participants represented by selected object flags.
+                    return (current.selection.empty() && replacement.selection.empty()) ||
+                           ModelingSelectionService::selection_matches(
+                               current.selection, replacement.selection);
+                  }
+                  return current.selected == replacement.selected &&
                          (!current.selected ||
                           ModelingSelectionService::selection_matches(
                               current.selection, replacement.selection));
@@ -10550,83 +10733,32 @@ public:
     return set_component_selection(component);
   }
 
-  [[nodiscard]] bool resolved_component_body_target_eligible(
-      int modeling_object_id, EntityId source_occurrence) const {
-    const std::optional<EntityId> entity =
-        object_registry_.entity_for_modeling_object(modeling_object_id);
-    if (!entity.has_value() || !scene_.exists(*entity)) {
+  [[nodiscard]] bool component_target_is_editable(EntityId entity) const {
+    if (!scene_.exists(entity) || !selection_service_.viewport_entity_visible(entity) ||
+        (editor_mode_service_ != nullptr && !editor_mode_service_->contains(entity))) {
       return false;
     }
-    const EntityId definition =
-        scene_.containing_instance_definition(*entity);
-    const ModelingInstanceEditScope edit_scope =
-        instance_edit_scope_provider_ ? instance_edit_scope_provider_()
-                                      : ModelingInstanceEditScope{};
-    const bool active_instance_edit =
-        edit_scope.occurrence != kInvalidEntityId &&
-        edit_scope.definition != kInvalidEntityId;
-    if (definition != kInvalidEntityId) {
-      return active_instance_edit && definition == edit_scope.definition &&
-             source_occurrence == edit_scope.occurrence;
+    const ModelingInstanceEditScope scope = instance_edit_scope();
+    const EntityId definition = scene_.containing_instance_definition(entity);
+    if (scope.active()) {
+      return entity != scope.definition && definition == scope.definition &&
+             scene_hierarchy_segment_is_selectable(scene_, entity, scope.definition) &&
+             scene_.is_effectively_visible(scope.occurrence) &&
+             !scene_.is_effectively_locked(scope.occurrence) &&
+             scene_hierarchy_segment_is_selectable_ignoring_visibility(scene_, scope.occurrence) &&
+             selection_service_.viewport_entity_visible(scope.occurrence);
     }
-    return !active_instance_edit && source_occurrence == *entity;
-  }
-
-  ModelingCommandResult apply_resolved_component_body_selection(
-      const ModelingResolvedComponentBodySelectionRequest &request) {
-    const ModelingSelectionProjectionSnapshot &projection =
-        selection_projection_snapshot();
-    const auto object_it = std::find_if(
-        projection.objects().begin(), projection.objects().end(),
-        [&](const quader_editor_core::PolygonObject &object) {
-          return object.id == request.modeling_object_id;
-        });
-    if (object_it == projection.objects().end()) {
-      return {.ok = false,
-              .message = "Resolved component body owner is no longer live."};
-    }
-    if (request.mode == ModelingSelectionMode::Object ||
-        request.mode == ModelingSelectionMode::Group ||
-        request.mode != app_selection_mode_) {
-      return {
-          .ok = false,
-          .message =
-              "Resolved component body does not match the current selection mode.",
-      };
-    }
-    if (!resolved_component_body_target_eligible(
-            request.modeling_object_id, request.source_occurrence)) {
-      return {
-          .ok = false,
-          .message =
-              "Resolved component body is outside the active edit scope.",
-      };
-    }
-    if (request.edit == ModelingSelectionEdit::Remove ||
-        request.edit == ModelingSelectionEdit::Toggle) {
-      return {.ok = true, .changed = false};
-    }
-    if (request.preserve_existing_component_selection_on_hit &&
-        ModelingSelectionService::has_component_selection(
-            selection_summary())) {
-      return {.ok = true, .changed = false};
-    }
-    if (request.preserve_selection_on_selected_hit &&
-        (object_it->selected || object_it->component_edit_target)) {
-      return {.ok = true, .changed = false};
-    }
-
-    ModelingComponentSelectionRequest component{
-        .modeling_object_id = request.modeling_object_id,
-        .mode = request.mode,
-        .edit = request.edit,
-        .retain_component_edit_target = true,
-    };
-    return set_component_selection(component);
+    return definition == kInvalidEntityId && scene_.is_effectively_visible(entity) &&
+           !scene_.is_effectively_locked(entity) &&
+           scene_hierarchy_segment_is_selectable_ignoring_visibility(scene_, entity);
   }
 
   [[nodiscard]] ModelingCommandResult validate_component_selection_scope(
       std::span<const ModelingComponentSelectionRequest> requests) const {
+    if (editor_mode_service_ != nullptr &&
+        editor_mode_service_->mode() != EditorMode::Edit) {
+      return {.ok = false, .message = "Component selection requires Edit Mode."};
+    }
     const ModelingInstanceEditScope edit_scope =
         instance_edit_scope_provider_ ? instance_edit_scope_provider_()
                                       : ModelingInstanceEditScope{};
@@ -10636,6 +10768,12 @@ public:
               request.modeling_object_id);
       if (!requested_entity.has_value()) {
         continue;
+      }
+      if (!component_target_is_editable(*requested_entity) ||
+          (editor_mode_service_ != nullptr &&
+           !editor_mode_service_->permits_selection_mode(request.mode))) {
+        return {.ok = false,
+                .message = "Component selection is outside the current edit set."};
       }
       const EntityId definition =
           scene_.containing_instance_definition(*requested_entity);
@@ -10676,6 +10814,8 @@ public:
       std::span<const ModelingComponentSelectionRequest> requests,
       ModelingSelectionEdit edit,
       const quader_editor_core::RectangleSelectionState &baseline) {
+    const ModelingCommandResult scope = validate_component_selection_scope(requests);
+    if (!scope.ok) return scope;
     const ModelingSelectionMode current_mode = selection_mode();
     if (baseline.mode != selection_projection_snapshot().selection_mode()) {
       return {.ok = false,
@@ -10740,6 +10880,10 @@ public:
   }
 
   ModelingCommandResult move_selection(QVec3 delta) {
+    if (editor_mode_service_ != nullptr && editor_mode_service_->mode() == EditorMode::Edit &&
+        !ModelingSelectionService::has_component_selection(selection_summary())) {
+      return {.ok = false, .message = "Select components before transforming."};
+    }
     ModelingCommandResult result =
         sdk_projection_adapter_.move_selection(delta);
     if (result.ok) {
@@ -10750,6 +10894,11 @@ public:
 
   ModelingCommandResult transform_selection(const ModelingTransform3 &transform,
                                             QVec3 pivot) {
+
+    if (editor_mode_service_ != nullptr && editor_mode_service_->mode() == EditorMode::Edit &&
+        !ModelingSelectionService::has_component_selection(selection_summary())) {
+      return {.ok = false, .message = "Select components before transforming."};
+    }
     ModelingCommandResult result =
         sdk_projection_adapter_.transform_selection(transform, pivot);
     if (result.ok) {
@@ -10791,17 +10940,25 @@ public:
                   "Hover a mesh face while holding Alt before cutting."};
     }
 
+    const bool component_scope = editor_mode_service_ != nullptr &&
+        editor_mode_service_->mode() == EditorMode::Edit;
     std::vector<int> selected_object_ids;
     for (const ModelingSelectionExportObject &object :
          sdk_projection_adapter_.export_selection().objects) {
-      if (object.selected) {
+      // Edit membership includes the reference mesh and empty peers. Only
+      // actual component owners are mutation operands for this operation.
+      if (object.selected &&
+          (!component_scope || !object.selected_vertices.empty() ||
+           !object.selected_edges.empty() || !object.selected_faces.empty())) {
         selected_object_ids.push_back(object.modeling_object_id);
       }
     }
     if (selected_object_ids.empty()) {
       return {.ok = false,
               .message =
-                  "Select one or more mesh objects before cutting."};
+                  component_scope
+                      ? "Select components on one or more meshes before cutting."
+                      : "Select one or more mesh objects before cutting."};
     }
     const std::vector<quader_editor_core::PolygonObject> &picking_objects =
         cached_scene_transformed_objects_for_picking();
@@ -10863,10 +11020,13 @@ public:
         request.kind == ModelingActiveSelectionKind::Vertex ||
         request.kind == ModelingActiveSelectionKind::Edge ||
         request.kind == ModelingActiveSelectionKind::Face;
-    hover.candidate_object_id =
-        request.candidate_object_id > 0
-            ? request.candidate_object_id
-            : (component_hover ? request.modeling_object_id : -1);
+    if (component_hover && editor_mode_service_ != nullptr) {
+      const auto entity = object_registry_.entity_for_modeling_object(request.modeling_object_id);
+      if (!entity.has_value() || !editor_mode_service_->contains(*entity)) {
+        return {.ok = false, .message = "Component hover is outside the edit set."};
+      }
+    }
+    hover.candidate_object_id = -1;
     switch (request.kind) {
     case ModelingActiveSelectionKind::Object:
       hover.kind = quader_editor_core::SelectionHoverKind::Object;
@@ -10910,32 +11070,6 @@ public:
   }
 
 private:
-  [[nodiscard]] int suppressed_fallback_source_wire_object_id(
-      ModelingSelectionOverlayOptions options) const {
-    if (options.suppress_persistent_selection ||
-        runtime_.hover().candidate_object_id <= 0 ||
-        !is_component_selection_mode(sdk_projection_adapter_.selection_mode())) {
-      return -1;
-    }
-    auto &cache = component_source_wire_fallback_cache_;
-    const std::uint64_t current_content_revision = content_revision();
-    const std::uint64_t current_selection_revision = selection_revision();
-    const std::uint64_t current_object_map_revision = object_registry_.revision();
-    if (!cache.valid || cache.content_revision != current_content_revision ||
-        cache.selection_revision != current_selection_revision ||
-        cache.object_map_revision != current_object_map_revision) {
-      cache.object_id =
-          ModelingOverlayService::fallback_active_source_wire_object_id(
-              selection_projection_snapshot());
-      cache.content_revision = current_content_revision;
-      cache.selection_revision = current_selection_revision;
-      cache.object_map_revision = current_object_map_revision;
-      cache.valid = true;
-    }
-    return ModelingOverlayService::suppressed_fallback_source_wire_object_id(
-        cache.object_id, runtime_.hover(), options);
-  }
-
   bool set_cutting_tool_hover_candidate(int object_id) {
     auto hover = runtime_.hover();
     if (hover.candidate_object_id == object_id) return false;
@@ -10985,7 +11119,6 @@ private:
   }
 
   void invalidate_selection_overlay_caches() const override {
-    component_source_wire_fallback_cache_.valid = false;
     overlay_service_.invalidate();
     invalidate_volatile_overlay_cache();
   }
@@ -11026,6 +11159,9 @@ private:
   }
 
   [[nodiscard]] bool has_scene_transform_selection() const override {
+    if (editor_mode_service_ != nullptr && editor_mode_service_->mode() == EditorMode::Edit) {
+      return false;
+    }
     for (const EntityId entity : scene_.selected_entities()) {
       if (scene_.transform(entity) != nullptr &&
           !scene_.is_effectively_locked(entity)) {
@@ -11250,12 +11386,12 @@ private:
   }
 
   [[nodiscard]] const std::vector<quader_editor_core::PolygonObject> &
-  cached_local_objects_for_picking() const override {
+  cached_local_objects_for_picking(bool include_nonparticipants = false) const override {
     QDR_PROFILE_FUNCTION();
     const ModelingSelectionProjectionSnapshot &projected =
         selection_projection_snapshot();
     return selection_service_.cached_local_picking_objects(
-        projected, scene_, object_registry_);
+        projected, scene_, object_registry_, include_nonparticipants);
   }
 
   [[nodiscard]] std::vector<quader_editor_core::PolygonObject>
@@ -11268,12 +11404,12 @@ private:
   }
 
   [[nodiscard]] const std::vector<quader_editor_core::PickObjectBounds> &
-  cached_pick_object_bounds() const override {
+  cached_pick_object_bounds(bool include_nonparticipants = false) const override {
     QDR_PROFILE_FUNCTION();
     const ModelingSelectionProjectionSnapshot &projected =
         selection_projection_snapshot();
     return selection_service_.cached_pick_object_bounds(
-        projected, scene_, object_registry_);
+        projected, scene_, object_registry_, include_nonparticipants);
   }
 
   [[nodiscard]] const std::vector<quader_editor_core::PickObjectFaceGeometry> &
@@ -11289,21 +11425,22 @@ private:
   [[nodiscard]] const std::vector<
       quader_editor_core::PickObjectFaceGeometry> &
   cached_local_pick_face_geometry(
-      quader_poly::PickOptions pick_options = {}) const override {
+      quader_poly::PickOptions pick_options = {},
+      bool include_nonparticipants = false) const override {
     QDR_PROFILE_FUNCTION();
     const ModelingSelectionProjectionSnapshot &projected =
         selection_projection_snapshot();
     return selection_service_.cached_local_pick_face_geometry(
-        projected, scene_, object_registry_, pick_options);
+        projected, scene_, object_registry_, pick_options, include_nonparticipants);
   }
 
   [[nodiscard]] std::span<const quader_editor_core::PickObjectTransform>
-  cached_local_picking_transforms() const override {
+  cached_local_picking_transforms(bool include_nonparticipants = false) const override {
     QDR_PROFILE_FUNCTION();
     const ModelingSelectionProjectionSnapshot &projected =
         selection_projection_snapshot();
     return selection_service_.cached_local_picking_transforms(
-        projected, scene_, object_registry_);
+        projected, scene_, object_registry_, include_nonparticipants);
   }
 
   ModelingCommandResult execute_runtime_no_settings(
@@ -11335,6 +11472,9 @@ private:
   ModelingBoxPreview execute_box_preview_command(
       const quader_editor_core::EditorRuntimeCommand &command,
       bool snap_enabled) {
+    if (editor_mode_service_ != nullptr && editor_mode_service_->mode() != EditorMode::Object) {
+      return {.ok = false, .message = "Primitive creation requires Object Mode."};
+    }
     const quader_editor_core::EditorRuntimeCommandResult runtime_result =
         quader_editor_core::execute_runtime_command(runtime_selection_view(),
                                                     runtime_, command);
@@ -11414,7 +11554,6 @@ private:
   mutable ViewportCurvePickCache curve_box_pick_cache_;
   SelectionProjectionService selection_projection_service_;
   mutable ModelingOverlayService overlay_service_;
-  mutable ComponentSourceWireFallbackCache component_source_wire_fallback_cache_;
   mutable VolatileOverlayCache volatile_overlay_cache_;
   mutable std::uint64_t volatile_overlay_runtime_revision_ = 0u;
   mutable ModelingToolPreviewWorkStats tool_preview_work_stats_;
@@ -11442,6 +11581,7 @@ private:
   std::optional<QVec3> clipboard_world_center_;
   ModelingHistoryBridge history_bridge_;
   ModelingOperationPreviewCheckpointHooks preview_checkpoint_hooks_;
+  EditorModeService *editor_mode_service_ = nullptr;
   std::function<ModelingInstanceEditScope()> instance_edit_scope_provider_;
   ModelingSelectionMode app_selection_mode_ = ModelingSelectionMode::Object;
 
@@ -12041,6 +12181,16 @@ ModelingInstanceEditScope ModelingSessionService::instance_edit_scope() const {
   return impl_->instance_edit_scope();
 }
 
+void ModelingSessionService::set_editor_mode_service(EditorModeService *service) {
+  impl_->set_editor_mode_service(service);
+}
+
+ModelingCommandResult ModelingSessionService::apply_editor_mode_context(
+    const EditorModeSnapshot &snapshot,
+    std::span<const EntityId> first_admission_entities) {
+  return impl_->apply_editor_mode_context(snapshot, first_admission_entities);
+}
+
 void ModelingSessionService::set_instance_edit_scope_provider(
     std::function<ModelingInstanceEditScope()> provider) {
   impl_->set_instance_edit_scope_provider(std::move(provider));
@@ -12360,6 +12510,10 @@ ModelingCommandResult ModelingSessionService::reset_active_tool_settings() {
   return impl_->reset_active_tool_settings();
 }
 
+bool ModelingSessionService::action_supports_editor_mode(std::string_view action_id) const {
+  return impl_->action_supports_editor_mode(action_id);
+}
+
 ModelingActionSet ModelingSessionService::context_action_set(
     const ModelingActionQuery &query) const {
   return impl_->context_action_set(query);
@@ -12519,6 +12673,9 @@ ModelingSelectionSummary ModelingSessionService::box_select(
     const ModelingBoxSelectRequest &request,
     const ModelingSelectionBoxBaseline &baseline) {
   QDR_PROFILE_SCOPE("Modeling session baseline box select entry");
+  if (baseline.editor_mode_generation != impl_->editor_mode_generation()) {
+    return impl_->selection_summary();
+  }
   return baseline.impl_ ? impl_->box_select(request, baseline.impl_->selection)
                         : impl_->box_select(request);
 }
@@ -12857,6 +13014,12 @@ ModelingSessionService::apply_curve_solidify(int modeling_object_id) {
   return impl_->apply_curve_solidify(modeling_object_id);
 }
 
+bool ModelingSessionService::curve_target_is_editable(
+    int modeling_object_id) const {
+  return release_has_feature(ReleaseFeature::Curves) &&
+         impl_->curve_target_is_editable(modeling_object_id);
+}
+
 std::optional<modeling::CurveDocument> ModelingSessionService::curve_document(
     int modeling_object_id, bool include_preview) const {
   return impl_->curve_document(modeling_object_id, include_preview);
@@ -13023,6 +13186,10 @@ ModelingSessionService::set_object_selection(std::span<const EntityId> entities,
   return impl_->set_object_selection(entities, active);
 }
 
+bool ModelingSessionService::component_target_is_editable(EntityId entity) const {
+  return impl_->component_target_is_editable(entity);
+}
+
 ModelingCommandResult ModelingSessionService::set_component_selection(
     const ModelingComponentSelectionRequest &request) {
   return impl_->set_component_selection(request);
@@ -13044,18 +13211,6 @@ ModelingCommandResult ModelingSessionService::apply_resolved_component_selection
   return impl_->apply_resolved_component_selection(request);
 }
 
-bool ModelingSessionService::resolved_component_body_target_eligible(
-    int modeling_object_id, EntityId source_occurrence) const {
-  return impl_->resolved_component_body_target_eligible(modeling_object_id,
-                                                        source_occurrence);
-}
-
-ModelingCommandResult
-ModelingSessionService::apply_resolved_component_body_selection(
-    const ModelingResolvedComponentBodySelectionRequest &request) {
-  return impl_->apply_resolved_component_body_selection(request);
-}
-
 ModelingCommandResult ModelingSessionService::set_component_selections(
     std::span<const ModelingComponentSelectionRequest> requests) {
   return impl_->set_component_selections(requests);
@@ -13065,6 +13220,9 @@ ModelingCommandResult ModelingSessionService::apply_resolved_component_selection
     std::span<const ModelingComponentSelectionRequest> requests,
     ModelingSelectionEdit edit,
     const ModelingSelectionBoxBaseline &baseline) {
+  if (baseline.editor_mode_generation != impl_->editor_mode_generation()) {
+    return {.ok = false, .message = "Component marquee edit context is stale."};
+  }
   if (!baseline.impl_) {
     return {.ok = false,
             .message = "Resolved component marquee baseline is unavailable."};

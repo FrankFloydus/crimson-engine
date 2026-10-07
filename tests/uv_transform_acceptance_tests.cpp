@@ -132,12 +132,15 @@ protected:
       : editor_(QuaderApiSessionInternalAccess::from_scene_session(session_)) {}
 
   void create(bool reversed = false) {
+    ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Object).ok());
     const auto created = editor_.modeling().create_mesh(
         QuaderPolygonDocumentInternalAccess::from_backend(transform_uv_document(reversed)),
         {.name = "Transform UV interiors"});
     ASSERT_TRUE(created.ok()) << created.error_message();
     object_ = created.value();
     ASSERT_TRUE(session_.scene().set_texture_mapping(object_.entity, {QMat4{}}));
+    ASSERT_TRUE(editor_.selection().select_object(object_).ok());
+    ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
     select(QuaderSelectionMode::Face);
   }
 
@@ -451,6 +454,7 @@ TEST_F(UvTransformAcceptanceTests, ObjectGeometryPreviewPreservesChartsAndSelect
   for (const auto mode : {QuaderSelectionMode::Object, QuaderSelectionMode::Group}) {
     SCOPED_TRACE(static_cast<int>(mode));
     create();
+    ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Object).ok());
     ASSERT_TRUE(editor_.selection().clear().ok());
     ASSERT_TRUE(editor_.modeling().set_selection_mode(QuaderSelectionMode::Object).ok());
     ASSERT_TRUE(editor_.selection().select_object(object_).ok());

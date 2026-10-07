@@ -668,6 +668,8 @@ QtViewportSurface::take_input_frame(float delta_seconds,
   if (input_ == nullptr) {
     return frame;
   }
+  synchronize_input_context();
+  frame.context = input_context_;
   if (composed_ && pointer_captured() &&
       QWidget::mouseGrabber() != visible_host_) {
     native_capture_loss_pending_ = true;
@@ -783,15 +785,34 @@ std::optional<std::uint64_t> QtViewportSurface::held_keyboard_key_identity(
 }
 
 void QtViewportSurface::abandon_input() {
+  abandon_input(false);
+}
+
+void QtViewportSurface::synchronize_input_context() {
+  if (!input_context_provider_) {
+    return;
+  }
+  const std::optional<QtViewportInputContext> context = input_context_provider_();
+  const bool changed = input_context_.has_value() && input_context_ != context;
+  // Publish before releasing native capture: Qt may deliver events recursively.
+  input_context_ = context;
+  if (changed) {
+    abandon_input(true);
+  }
+}
+
+void QtViewportSurface::abandon_input(bool preserve_keyboard) {
   if (input_ == nullptr) {
     return;
   }
 
   std::unordered_set<std::uint64_t> abandoned_key_releases =
       std::move(input_->abandoned_key_releases);
-  for (const auto &[key, chord] : input_->active_keys) {
-    (void)chord;
-    abandoned_key_releases.insert(key);
+  if (!preserve_keyboard) {
+    for (const auto &[key, chord] : input_->active_keys) {
+      (void)chord;
+      abandoned_key_releases.insert(key);
+    }
   }
   std::unordered_set<int> abandoned_pointer_releases =
       std::move(input_->abandoned_pointer_releases);
@@ -826,6 +847,16 @@ void QtViewportSurface::abandon_input() {
       std::move(abandoned_key_releases);
   replacement.abandoned_pointer_releases =
       std::move(abandoned_pointer_releases);
+  if (preserve_keyboard) {
+    replacement.active_keys = std::move(input_->active_keys);
+    replacement.pressed = std::move(input_->pressed);
+    replacement.released = std::move(input_->released);
+    const auto pointer_chord = [](const QuaderInputChord &chord) {
+      return chord.device == QuaderInputDevice::Mouse;
+    };
+    std::erase_if(replacement.pressed, pointer_chord);
+    std::erase_if(replacement.released, pointer_chord);
+  }
   *input_ = std::move(replacement);
   set_interaction_cursor(ViewportPointerCursor::Default);
 }
@@ -1480,6 +1511,7 @@ void QtViewportSurface::record_mouse_release(QMouseEvent &event) {
 }
 
 void QtViewportSurface::record_mouse_move(QMouseEvent &event) {
+  synchronize_input_context();
   input_->has_event_modifiers = true;
   if (viewport_surface_diagnostics_enabled()) {
     ++input_->mouse_move_events;
@@ -1697,6 +1729,7 @@ void QtViewportSurface::recenter_captured_pointer() {
 }
 
 void QtViewportSurface::record_wheel(QWheelEvent &event) {
+  synchronize_input_context();
   input_->has_event_modifiers = true;
   const qreal scale = input_device_pixel_ratio();
   input_->mouse_local = visible_position_pixels(event.position());

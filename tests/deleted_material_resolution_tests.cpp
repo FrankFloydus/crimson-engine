@@ -186,6 +186,8 @@ TEST_F(DeletedMaterialResolutionTests,
   ASSERT_TRUE(ProjectMaterialFixture(project_).set_material(box.value().entity, old));
   ASSERT_TRUE(editor_.modeling().mesh(box.value()).materials()
                   .assign_to_face(second, 7u).ok());
+  ASSERT_TRUE(editor_.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor_.selection().select_faces(box.value(), {first, second}).ok());
   const auto before = *binding(box.value().entity);
@@ -230,6 +232,8 @@ TEST_F(DeletedMaterialResolutionTests,
   ASSERT_NE(document, nullptr);
   ASSERT_FALSE(document->faces.empty());
   const QuaderElementId face = document->faces.front().id;
+  ASSERT_TRUE(editor_.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor_.selection().select_face(box.value(), face).ok());
   const auto original_default = editor_.modeling().face_texture_canvas();

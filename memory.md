@@ -277,8 +277,9 @@ Tests: [settings transactions/categories](tests/qt_settings_dialog_tests.cpp),
   step; transient ports must not provide a history-bypassing fallback. A valid authored draft is
   accepted before leaving it; an idle hover-only preview is retired without geometry or history.
   Returning to Select without changing content must preserve the redo branch. Insert Edge Loop
-  and Knife activation enter Edge mode from every selection mode; shortcuts and menu eligibility
-  must not require that mode in advance. Loop retains its tool after each single-cut acceptance.
+  and Knife activation select Edge components within an existing Edit context; shortcuts and
+  menus must reject Object Mode without accepting a draft or entering Edit implicitly.
+  Loop retains its tool after each single-cut acceptance.
   Pane focus alone leaves pending work intact. The explicit Cancel
   Active Tool command (Escape by default) clears transient loop state and returns to Select while
   retaining Edge component mode, content, history, and redo. Normal undo/redo clears its stale seed
@@ -294,11 +295,13 @@ Tests: [settings transactions/categories](tests/qt_settings_dialog_tests.cpp),
   presentation. Clear, commit, and cancel must retire both lines and points in retained submission.
   See [loop input tests](tests/qt_input_adapter_tests.cpp) and
   [retained submission tests](tests/viewport_overlay_submission_coordinator_tests.cpp).
-- Knife/Loop surface hover exposes authored source wires without selecting the mesh. Keep the
-  actual surface candidate separate from valid Knife seeds and retained Loop seeds. The existing
+- Knife/Loop surface hover stays within the explicit Edit participants, whose authored source
+  wires remain visible independently of hover or component selection. Keep the actual surface
+  candidate separate from valid Knife seeds and retained Loop seeds. The existing
   persistent source-wire ID gates topology rebuilds; cursor movement only changes volatile cut
   feedback. Tool-owned hover survives the viewport selection pass and camera navigation (including
-  its captured release sample); ordinary pointer leave and hard interruption still clear it.
+  its captured release sample); ordinary pointer leave and hard interruption clear transient
+  hover while retaining the participants' editing wires.
   Component topology retains its normal edit-wire depth classification during hover and navigation;
   tagging it as generic Tool geometry makes hidden edges appear through occluders and disappear
   again when hover is cleared. Only Object-mode silhouette replacement needs that exemption.
@@ -396,7 +399,7 @@ Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
 [cube overlays](tests/primitive_cube_overlay_tests.cpp),
 [wire presentation](tests/viewport_overlay_submission_coordinator_tests.cpp).
 
-## Component picking and sticky selection
+## Component picking and explicit Edit membership
 
 - Selection and hover fills must test against scene depth without writing it. A two-sided
   backface highlight must not become an occluder for otherwise visible editing wires or vertices.
@@ -441,46 +444,79 @@ Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
   [native wire policy](tests/selected_mesh_outline_presentation_tests.cpp).
   Performance reproduction must include Frame Selection with the entire selected scene visible,
   interior navigation, and orthographic views; a mostly culled saved camera hides the union cost.
-- An empty spatial hover sample differs from explicit lifecycle clear. Component misses and leaving
-  the viewport retain the last candidate mesh wire; meshes with selected components remain sticky
-  independently. Object-mode hover emits no mesh outline and never changes click-owned selection.
-  Blank clicks, marquee threshold/release and stationary post-selection suppression also retire
-  only the component highlight. Preserve the mesh candidate and its Vertex dots through the retained
-  viewport submission; idle-hover tests alone miss these gesture paths. Mesh-body hover adopts a
-  candidate without fabricating a vertex/edge hit, while held paint remains component-hit-only.
-  A component marquee release owns its pointer sample, even over another mesh. Retain the candidate
-  through release and stationary frames; resume hover on fresh movement or a new interaction
-  context. Element-target suppression alone cannot cover vertex/edge body hits. Protect partial
-  rectangles over foreground geometry with a background mesh beneath the release point, checking
-  exact component IDs and retained presentation separately, including visible-only selection.
+- Object/Edit context is owned by the scene's
+  [mode service](src/editor/modes/editor_mode_service.hpp), separately from component selection.
+  Edit membership is explicit and survives empty component selections, blank clicks, hover,
+  viewport leave, gizmo hover and box/lasso completion. Only admitted meshes provide component
+  targets and editing visuals; cyan source wires apply to Shaded/Rendered panes. Hovering another
+  mesh never enrolls it. All viewports share
+  the scene context. Keep component selection in SDK documents, dormant in Object Mode, and
+  preserve it through whole-object operations. First admission in a newly opened scene is empty.
+  Object Mode retains active UUID independently of selection: deselection preserves it, a new
+  selected primary replaces it, and identity removal clears it. Only empty Object selection can
+  fall back to that eligible active mesh on Edit entry; an active group is not expanded. No eligible
+  target is a successful unchanged request before draft settlement. Coverage:
+  [mode lifecycle tests](tests/editor_mode_service_tests.cpp).
+  Mode transitions add no history entry; structural operations restore membership only within
+  their matching edit generation. See [mode contracts](src/editor/modes/README.md).
+  Component Delete retains an empty mesh identity but must clear consumed IDs and publish the
+  selection revision in the SDK transaction. Undo restores exact geometry and selection; do not
+  hide stale IDs in a native summary cache. Coverage: the Delete selection/history regression in
+  [SDK consumer tests](tests/sdk/modeling_sdk_consumer_tests.cpp).
+  Protect partial rectangles over edited geometry with another mesh beneath the release point,
+  checking exact component IDs, unchanged edit membership and retained presentation separately.
   Commit rectangles at the matched release edge, never the aggregate frame cursor: Qt can batch
   a later mouse move into the same frame and otherwise shrink the committed region to no hits.
   Protect that ordering through actual Qt mouse events as well as synthetic controller frames.
-  Moving from an empty selected mesh to a new candidate must retire the old fallback wire, depth
-  stamps and unselected dots in retained rendering too. Carry the suppression through both outer
-  submission and inner frame signatures, retaining the canonical geometry across hover changes.
+  Mode revisions/generations participate in both gesture fences and retained rendering signatures;
+  an Edit/Object/Edit round trip must reject an old gesture even when the component kind matches.
+  Active-only mode revisions refresh Outliner presentation without abandoning Inspector drafts;
+  those callbacks fence mode generation alongside their selection/binding identity.
   See the retained component presentation regressions in
   [interaction tests](tests/viewport_interaction_controller_tests.cpp).
   Captured navigation keeps hover/picking suppressed through its release frame: that sample still
   contains the navigation cursor, and only the next frame has the restored real mouse position.
-  A transient crosshair hit must never become a retained candidate; see the navigation-release
+  A transient crosshair hit must never become component selection; see the navigation-release
   regressions in [Qt input tests](tests/qt_input_adapter_tests.cpp).
   Gizmo hover owns immediate feedback separately from gesture consumption: the shared interaction
-  controller suppresses scene picks and clears the entire hover candidate while a handle is hovered
-  or consumed. Hover-only mesh wires disappear; meshes with selected components retain their wires.
-  This also clears candidates retained by a prior empty-space sample or viewport leave.
+  controller suppresses scene picks and clears component hover while a handle is hovered
+  or consumed. Edit participant wires remain independent of that transient highlight.
   Clear once and re-arm the hover work key so hiding a handle under a stationary pointer restores
   scene hover. Preserve short-click selection/depth cycling; coverage:
   [interaction tests](tests/viewport_interaction_controller_tests.cpp).
+  Shaded topology wires require both the pane master and the saved mesh flag. They remain
+  depth-tested and independent of selected outlines/Edit wires; ordinary Wireframe stays X-ray.
+  Their color defaults to the global black Shading setting, with an optional saved per-mesh RGB
+  override. Color changes affect this overlay only; preserve cyan Edit wires in Shaded/Rendered
+  panes and ordinary Wireframe/selection colors. An absent mesh override inherits future
+  global-color changes. True Wireframe always shows complete authored topology in Object and
+  Edit modes using its ordinary tint, including internal edges of selected meshes. Suppress the
+  cyan component source wire in that pane only; retain selected component highlights and markers.
+  For continuous thin edges on steep or distant walls, shaded ribbons expand depth along their
+  incident face support planes and retain reverse-Z precision through fragment depth. A broad
+  camera pull hides the symptom but exposes occluded edges. Support planes apply only inside
+  their finite projected triangles and source depth bounds. The depth-gradient allowance is
+  limited to one guaranteed raster subpixel; interpolating exact ribbon-corner depths alone
+  still loses core pixels after triangle setup rounds their XY coordinates. Shaded square caps
+  stay within the clipped endpoint depth interval before raster clipping and per fragment. The grazing sliver
+  regression protects foreground rejection alongside the per-scanline continuity regression.
+  Keep that separation in the [wire cache](src/render/overlay/scene_wireframe_overlay_cache.cpp)
+  and protect it with [extraction tests](tests/render_extraction_tests.cpp) and
+  [Vulkan overlay coverage](tests/selection_overlay_runtime_tests.cpp).
 - Component source topology remains complete in semantic overlays. The revision-gated
   [submission coordinator](src/render/overlay/viewport_overlay_submission_coordinator.cpp) removes
   a source-wire draw beneath an opaque selected edge or face boundary with matching object,
   edge IDs and world endpoints. Otherwise cyan blends into antialiased yellow at thin widths.
   Translucent user selection colors retain normal source-wire compositing. Coverage:
   [submission tests](tests/viewport_overlay_submission_coordinator_tests.cpp).
-- A Vertex/Edge mesh-body click outside component radii is a typed edit-target hit. Replace clears
-  target components but retains the mesh; Add adopts it; Remove is inert. Background misses keep
-  ordinary Replace clearing. This fallback is click-only and respects active instance-edit scope.
+- Vertex/Edge mesh-body clicks outside component radii never change Edit membership. Empty
+  Replace clears components; Add/Remove misses preserve them. Component scope intersects existing
+  instance, visibility and lock policy.
+- Selection occlusion matches rendered surface sidedness, including double-sided meshes and
+  reflected occurrences. The hallway regression has a nearer, invisible culled wall in front of
+  the selected planar mesh; a background-wall-only fixture misses this failure. Keep non-edit
+  meshes in the occluder query and verify exact CPU/Vulkan results in
+  [runtime selection tests](tests/component_selection_runtime_tests.cpp).
 - Backface filtering uses authored winding adjusted by the world determinant sign. It is independent
   of depth, select-through, culling, and marquee policy. Viewport requests inject the persisted
   preference; independent tools and public modeling defaults retain their explicit policy.
@@ -712,7 +748,14 @@ Bindings and scope rules: [INPUT_KEYBINDINGS.md](INPUT_KEYBINDINGS.md).
   sources, distant local edits, million-tile phase edits, rendered interiors and publication rollback.
   Contracts: [portable transfer](tests/sdk/modeling_sdk_consumer_tests.cpp),
   [native continuation](tests/project_material_behavior_tests.cpp).
-- Position edits retain authored face-corner UVs; procedural faces remain procedural. Topology
+- Portable position edits retain authored face-corner UVs; procedural faces remain procedural.
+  Native partial-component deformation preserves the original affine chart of a planar source
+  face while the result stays on that plane. Re-evaluate moved corners from that source chart;
+  keep unchanged corners bit-exact and reuse the same captured chart in retained previews and
+  accepted publication. Whole-face/Object transforms and custom/nonplanar charts retain their
+  existing behavior. Owner: [mesh projection](src/editor/projection/mesh_projection_service.cpp);
+  cover direct moves, preview/commit/cancel and Undo/Redo with the Hallway cases in
+  [native UV sampling tests](tests/uv_native_sampling_tests.cpp). Topology
   edits keep surviving corners, sample new corners in their source chart, and preserve seams
   that remain in the resulting topology. Merged boundaries receive UVs before UV-aware
   simplification. Dissolve Edges deliberately removes an interior edge and any seam on it:

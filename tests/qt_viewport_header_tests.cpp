@@ -662,10 +662,12 @@ TEST(QtViewportChromeLayoutTests,
   container->show();
   QFocusEvent surface_focus(QEvent::FocusIn, Qt::OtherFocusReason);
   QApplication::sendEvent(panel.surface(ViewportPaneId::Top), &surface_focus);
-  // Complete the shown native pane's activation before opening another window.
-  // A synthetic FocusIn alone leaves that activation queued behind the popup.
+  // This fixture is deliberately not mapped on screen. Assert the canonical
+  // FocusIn route instead of requiring OS activation of its hidden QWindow.
   application.processEvents();
-  ASSERT_EQ(QApplication::focusWindow(), panel.surface(ViewportPaneId::Top));
+  ASSERT_TRUE(panel.surface(ViewportPaneId::Top)
+                  ->take_input_frame(0.0f, false).input.viewport_focused);
+  ASSERT_EQ(workspace.focused_pane(), ViewportPaneId::Top);
 
   click_native_widget(*camera_settings);
   ASSERT_TRUE(popup->isVisible());

@@ -244,6 +244,22 @@ create_selected_box(quader::QuaderEditorApi &editor,
   return created.value();
 }
 
+// Establishes an explicit editing workflow before component assertions.
+void enter_edit_mode_for_objects(
+    quader::QuaderEditorApi &editor,
+    std::initializer_list<quader::QuaderModelingObjectRef> objects) {
+  ASSERT_EQ(editor.mode().current(), quader::QuaderEditorMode::Object);
+  std::vector<quader::EntityId> entities;
+  for (const auto &object : objects) {
+    entities.push_back(object.entity);
+  }
+  ASSERT_FALSE(entities.empty());
+  ASSERT_TRUE(editor.selection().select_objects(entities, entities.back()).ok());
+  const auto entered = editor.mode().set(quader::QuaderEditorMode::Edit);
+  ASSERT_TRUE(entered.ok()) << entered.error_message();
+  ASSERT_EQ(editor.mode().state().participants.size(), entities.size());
+}
+
 quader::QuaderModelingObjectRef
 create_polygon_mesh(quader::QuaderEditorApi &editor, std::size_t side_count,
                     std::string name) {
@@ -295,6 +311,8 @@ TEST(EditorApiTests, NativeModelingMeshHandleRoutesComponentPreviewWorkflow) {
   const std::optional<quader::QuaderMeshAsset> before = mesh.compiled_mesh();
   ASSERT_TRUE(before.has_value());
 
+  ASSERT_TRUE(editor.selection().select_object(mesh.ref()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   const quader::QuaderFaceSelection face = mesh.faces().only({1});
   ASSERT_EQ(face.count(), 1u);
   const quader::QuaderApiVoidResult selected = face.replace();
@@ -466,6 +484,7 @@ std::size_t count_tool_setting_controls_of_kind(
 void exercise_app_lifetime_tool_options(quader::QuaderEditorApi &editor,
                                        bool expect_remembered,
                                        bool author_settings = false) {
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
   const auto box = editor.modeling().create_box(
       {.min = {-10.0f, -10.0f, -10.0f}, .max = {10.0f, 10.0f, 10.0f}},
       "Tool Options Source");
@@ -500,18 +519,24 @@ void exercise_app_lifetime_tool_options(quader::QuaderEditorApi &editor,
   };
   for (const auto &option : kOptions) {
     SCOPED_TRACE(option.tool);
+    ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
     ASSERT_TRUE(
         editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
     ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
-    if (option.tool == "curve" || option.tool == "uv_peel") {
+    if (option.tool == "uv_peel") {
+      enter_edit_mode_for_objects(editor, {box.value()});
+      ASSERT_TRUE(editor.selection().clear().ok());
+    } else if (option.tool == "curve") {
       ASSERT_TRUE(editor.selection().clear().ok());
     } else if (option.tool == "path_array") {
       ASSERT_TRUE(editor.selection().select_object(path.value()).ok());
     } else if (option.tool == "edge_bevel") {
+      enter_edit_mode_for_objects(editor, {box.value()});
       ASSERT_TRUE(
           editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
       ASSERT_TRUE(editor.selection().select_edge(box.value(), 1, 2).ok());
     } else if (option.tool == "extrude") {
+      enter_edit_mode_for_objects(editor, {box.value()});
       ASSERT_TRUE(
           editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
       ASSERT_TRUE(editor.selection().select_face(box.value(), 1).ok());
@@ -658,6 +683,10 @@ quader::QuaderViewportCamera api_orthographic_camera() {
 void setup_selection_for_mode(quader::QuaderEditorApi &editor,
                               quader::QuaderSelectionMode mode) {
   const quader::QuaderModelingObjectRef object = create_selected_box(editor);
+  if (mode != quader::QuaderSelectionMode::Object &&
+      mode != quader::QuaderSelectionMode::Group) {
+    enter_edit_mode_for_objects(editor, {object});
+  }
   ASSERT_TRUE(editor.selection().set_mode(mode).ok());
   if (mode == quader::QuaderSelectionMode::Object) {
     return;
@@ -2552,6 +2581,7 @@ TEST(EditorApiTests,
             kCommands.size());
 
   const auto object = create_selected_box(editor, "Edit Texture Commands");
+  enter_edit_mode_for_objects(editor, {object});
   ASSERT_TRUE(
       editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(object, 1).ok());
@@ -2566,6 +2596,7 @@ TEST(EditorApiTests,
     }
   }
 
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
   ASSERT_TRUE(
       editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
   for (const quader::QuaderCommandId command : kCommands) {
@@ -2604,6 +2635,7 @@ TEST(EditorApiTests, UvProjectionCommandsExecuteInMeshAndFaceModes) {
       CommandTestHarness harness;
       const auto object =
           create_selected_box(harness.editor, "Face UV Projection");
+      enter_edit_mode_for_objects(harness.editor, {object});
       ASSERT_TRUE(harness.editor.selection()
                       .set_mode(quader::QuaderSelectionMode::Face)
                       .ok());
@@ -2676,6 +2708,7 @@ TEST(EditorApiTests, UvProjectionAvailabilitySharesAtomicTargetValidation) {
   ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
   ASSERT_TRUE(editor.selection().select_object(box).ok());
   expect_availability(true);
+  enter_edit_mode_for_objects(editor, {box});
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(box, 1).ok());
   expect_availability(true);
@@ -2709,6 +2742,7 @@ TEST(EditorApiTests, ComponentModeConversionIgnoresDormantMeshSelection) {
     ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
     return ids;
   };
+  enter_edit_mode_for_objects(editor, {first, second});
   ASSERT_TRUE(editor.selection().select_vertices(first, {1, 2, 3, 4}).ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   EXPECT_EQ(selected_ids(first, false), (std::vector<quader::QuaderElementId>{1}));
@@ -2783,6 +2817,7 @@ TEST(EditorApiTests,
   CommandTestHarness harness;
   auto &editor = harness.editor;
   const auto object = create_selected_box(editor, "Texture Scale Steps");
+  enter_edit_mode_for_objects(editor, {object});
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(object, 1).ok());
 
@@ -2888,6 +2923,7 @@ TEST(EditorApiTests,
   EXPECT_EQ(loaded_editor.commands().shortcut_for(kEdgeCommand), kShortcut);
   const auto object =
       create_selected_box(loaded_editor, "Rebound Texture Command");
+  enter_edit_mode_for_objects(loaded_editor, {object});
   ASSERT_TRUE(
       loaded_editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(loaded_editor.selection().select_face(object, 1).ok());
@@ -3314,6 +3350,86 @@ TEST(EditorApiTests,
   ASSERT_NE(new_curve, nullptr);
   EXPECT_EQ(new_curve->kind, quader::QuaderToolSettingControlKind::Action);
   EXPECT_FALSE(editing_settings.can_reset);
+}
+
+TEST(EditorApiTests, CurveMutationRejectsEditModeWithoutSettlingMeshDraft) {
+  for (const bool pending_mesh_preview : {false, true}) {
+    SCOPED_TRACE(pending_mesh_preview);
+    CommandTestHarness harness;
+    auto &editor = harness.editor;
+    const auto curve = editor.modeling().create_curve({
+        .points = {{.position = {0.0F, 0.0F, 0.0F}},
+                   {.position = {3.0F, 0.0F, 0.0F}},
+                   {.position = {3.0F, 2.0F, 0.0F}}},
+        .name = "Curve Outside Mesh Edit Set",
+    });
+    ASSERT_TRUE(curve.ok()) << curve.error_message();
+    const auto mesh = create_selected_box(editor, "Curve Guard Mesh Draft");
+    enter_edit_mode_for_objects(editor, {mesh});
+    ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+    ASSERT_TRUE(editor.selection().select_face(mesh, 1).ok());
+    if (pending_mesh_preview) {
+      ASSERT_TRUE(editor.modeling().begin_preview("slice_quad").ok());
+      ASSERT_TRUE(editor.tools().active_settings().preview_active);
+    }
+    const auto original = editor.modeling().curve_snapshot(curve.value(), false);
+    ASSERT_TRUE(original.ok()) << original.error_message();
+    auto replacement = original.value().document;
+    ASSERT_TRUE(replacement.set_closed(true).ok());
+    const auto point = original.value().document.points().front().id;
+    const std::array<std::function<quader::QuaderApiVoidResult()>, 4> mutations{{
+        [&] { return editor.modeling().replace_curve(curve.value(), replacement); },
+        [&] { return editor.modeling().set_curve_point(
+            curve.value(), point, {.position = {1.0F, 2.0F, 3.0F}}); },
+        [&] { return editor.modeling().toggle_curve_point_smoothness(curve.value(), point); },
+        [&] { return editor.modeling().set_curve_closed(curve.value(), true); },
+    }};
+    const auto before = quader::test::capture_command_observable_state(editor);
+    for (std::size_t index = 0; index < mutations.size(); ++index) {
+      SCOPED_TRACE(index);
+      const auto rejected = mutations[index]();
+      EXPECT_FALSE(rejected.ok());
+      EXPECT_FALSE(rejected.changed());
+      EXPECT_EQ(quader::test::capture_command_observable_state(editor), before);
+      const auto after = editor.modeling().curve_snapshot(curve.value(), false);
+      ASSERT_TRUE(after.ok()) << after.error_message();
+      EXPECT_TRUE(after.value().document.has_same_geometry(original.value().document));
+      EXPECT_EQ(editor.tools().active_settings().preview_active, pending_mesh_preview);
+    }
+  }
+}
+
+TEST(EditorApiTests, CurvePreviewRejectsEditModeWithoutReplacingMeshDraft) {
+  for (const bool pending_mesh_preview : {false, true}) {
+    SCOPED_TRACE(pending_mesh_preview);
+    CommandTestHarness harness;
+    auto &editor = harness.editor;
+    const auto curve = editor.modeling().create_curve({
+        .points = {{.position = {0.0F, 0.0F, 0.0F}},
+                   {.position = {3.0F, 0.0F, 0.0F}}},
+        .name = "Retained Curve Preview Target",
+    });
+    ASSERT_TRUE(curve.ok()) << curve.error_message();
+    const auto mesh = create_selected_box(editor, "Curve Preview Guard Mesh");
+    enter_edit_mode_for_objects(editor, {mesh});
+    ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+    ASSERT_TRUE(editor.selection().select_face(mesh, 1).ok());
+    if (pending_mesh_preview) {
+      ASSERT_TRUE(editor.modeling().begin_preview("slice_quad").ok());
+      ASSERT_TRUE(editor.tools().active_settings().preview_active);
+    }
+    const auto original = editor.modeling().curve_snapshot(curve.value(), false);
+    ASSERT_TRUE(original.ok()) << original.error_message();
+    const auto before = quader::test::capture_command_observable_state(editor);
+    const auto rejected = editor.modeling().begin_curve_preview(curve.value());
+    EXPECT_FALSE(rejected.ok());
+    EXPECT_FALSE(rejected.changed());
+    EXPECT_EQ(quader::test::capture_command_observable_state(editor), before);
+    const auto after = editor.modeling().curve_snapshot(curve.value(), true);
+    ASSERT_TRUE(after.ok()) << after.error_message();
+    EXPECT_TRUE(after.value().document.has_same_geometry(original.value().document));
+    EXPECT_EQ(editor.tools().active_settings().preview_active, pending_mesh_preview);
+  }
 }
 
 TEST(EditorApiTests,
@@ -3823,6 +3939,7 @@ TEST(EditorApiTests, NativeSettingsLifecycleProbesPreserveSequencesAndOverrides)
   auto &editor = harness.editor;
   ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
   const auto object = create_selected_box(editor, "Settings lifecycle chords");
+  enter_edit_mode_for_objects(editor, {object});
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(object, 1).ok());
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Extrude).ok());
@@ -3961,7 +4078,7 @@ TEST(EditorApiTests, UvPeelCommandActivatesBeforeSelectionAndPreservesOverrides)
   const auto descriptor = editor.commands().descriptor(kCommand);
   ASSERT_TRUE(descriptor.has_value());
   EXPECT_EQ(descriptor->label, "UV Peel");
-  EXPECT_TRUE(descriptor->enabled);
+  EXPECT_FALSE(descriptor->enabled);
 
   const auto catalog = editor.commands().keybinding_catalog();
   const auto *entry = find_keybinding_catalog_entry(catalog, kCommand.string());
@@ -3974,6 +4091,7 @@ TEST(EditorApiTests, UvPeelCommandActivatesBeforeSelectionAndPreservesOverrides)
   EXPECT_TRUE(editor.commands().shortcut_for(kCommand).empty());
 
   const auto object = create_polygon_mesh(editor, 4u, "UV Peel Command Quad");
+  enter_edit_mode_for_objects(editor, {object});
   ASSERT_TRUE(editor.selection().select_edge(object, 1, 2).ok());
   ASSERT_TRUE(editor.modeling().uv_peel_settings().editable);
   EXPECT_TRUE(editor.commands().descriptor(kCommand)->enabled);
@@ -4510,6 +4628,7 @@ TEST(EditorApiTests,
   ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
   const quader::QuaderModelingObjectRef object =
       create_selected_box(editor, "Scoped Keybinding Box");
+  enter_edit_mode_for_objects(editor, {object});
   ASSERT_TRUE(
       editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(editor.selection().select_vertex(object, 1).ok());
@@ -4641,18 +4760,20 @@ TEST(EditorApiTests, ClipboardAvailabilityTracksObjectsPayloadAndPreview) {
   expect_enabled(quader::quader_command::kCopySelection, false);
 }
 
-TEST(EditorApiTests, ClipboardAvailabilityPreservesWholeCurveAndComponentCopies) {
+TEST(EditorApiTests, ClipboardRequiresObjectModeAndPreservesWholeCurveCopies) {
   CommandTestHarness harness;
   auto &editor = harness.editor;
   const auto box = create_selected_box(editor, "Component clipboard source");
+  enter_edit_mode_for_objects(editor, {box});
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(box, 1).ok());
   const auto component_copy =
       editor.commands().descriptor(quader::quader_command::kCopySelection);
   ASSERT_TRUE(component_copy.has_value());
-  ASSERT_TRUE(component_copy->enabled);
-  ASSERT_TRUE(editor.modeling().copy_selection().ok());
+  EXPECT_FALSE(component_copy->enabled);
+  EXPECT_FALSE(editor.modeling().copy_selection().ok());
 
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object)
                   .ok());
   const auto curve = editor.modeling().create_curve({
@@ -4802,6 +4923,7 @@ TEST(EditorApiTests, ParentingShortcutsRespectSelectionModesTextAndOverrides) {
   ASSERT_EQ(unparent_dispatch.command_id, quader::quader_command::kUnparentSelection.string());
   ASSERT_TRUE(editor.commands().execute(unparent_dispatch.command_id).ok());
   EXPECT_EQ(editor.query().entity(child.entity)->parent, quader::kInvalidEntityId);
+  enter_edit_mode_for_objects(editor, {child, parent});
   for (auto mode : {quader::QuaderSelectionMode::Vertex,
                     quader::QuaderSelectionMode::Edge,
                     quader::QuaderSelectionMode::Face}) {
@@ -4809,6 +4931,7 @@ TEST(EditorApiTests, ParentingShortcutsRespectSelectionModesTextAndOverrides) {
     EXPECT_EQ(resolve("P").kind, Kind::NoMatch);
     EXPECT_EQ(resolve("Ctrl+P").kind, Kind::NoMatch);
   }
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
   ASSERT_TRUE(editor.selection().select_objects(
       {child.entity, parent.entity}, parent.entity).ok());
@@ -4943,6 +5066,7 @@ TEST(EditorApiTests, EditorPanelSequenceSurvivesIdleViewportAndEndsAtOwnerChange
 TEST(EditorApiTests, EditorPanelsResolveSelectionModesAndCustomGridPresets) {
   CommandTestHarness harness;
   auto &editor = harness.editor;
+  create_selected_box(editor, "Editor Panel Mode Target");
   const auto path = keybinding_test_path("editor-panel-mode-grid");
   ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
   for (bool outliner : {false, true}) {
@@ -4955,6 +5079,12 @@ TEST(EditorApiTests, EditorPanelsResolveSelectionModesAndCustomGridPresets) {
                            quader::ViewportSelectionMode::Object,
                            quader::ViewportSelectionMode::Group}) {
       SCOPED_TRACE(static_cast<int>(mode));
+      const bool component_mode = mode == quader::ViewportSelectionMode::Vertex ||
+          mode == quader::ViewportSelectionMode::Edge ||
+          mode == quader::ViewportSelectionMode::Face;
+      ASSERT_TRUE(editor.mode().set(component_mode
+          ? quader::QuaderEditorMode::Edit
+          : quader::QuaderEditorMode::Object).ok());
       const std::string target = quader::viewport_selection_mode_target_id(
           quader::viewport_selection_mode_id(mode));
       const std::string mapping = editor.commands().shortcut_for(target);
@@ -5400,7 +5530,8 @@ TEST(EditorApiTests, ViewportKeybindingsResolveContextAndUserOverrides) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
   ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
-  create_selected_box(editor, "Undo Shortcut Box");
+  const auto object = create_selected_box(editor, "Undo Shortcut Box");
+  enter_edit_mode_for_objects(editor, {object});
 
   quader::ViewportToolState state;
   quader::ViewportShortcut shortcut;
@@ -5778,6 +5909,8 @@ TEST(EditorApiTests,
   quader::ProjectSession project;
   quader::QuaderEditorApi editor(project);
   ASSERT_TRUE(editor.project().create(temporary.root / "Project").ok());
+  const auto box = create_selected_box(editor, "Stored Component Shortcut Target");
+  enter_edit_mode_for_objects(editor, {box});
   editor.ui().set_runtime_hooks({.toggle_asset_browser = [] {
     return quader::QuaderApiVoidResult{.ok = true, .changed = true};
   }});
@@ -6266,6 +6399,7 @@ TEST(EditorApiTests, DebugCopySelectionJsonCopiesEdgeSelectionAndReportsStatus) 
 
   const quader::QuaderModelingObjectRef box =
       create_selected_box(editor, "Dev Copy Edge Box");
+  enter_edit_mode_for_objects(editor, {box});
   ASSERT_TRUE(editor.selection().select_edge(box, 1, 2).ok());
   const quader::QuaderSelectionSummary selected =
       editor.selection().summary();
@@ -6782,8 +6916,7 @@ TEST(EditorApiTests, PrimitiveCapsHasTypedLocalizedCylinderAndConeBinding) {
   const auto outside = editor.commands().dispatch_viewport_input_binding(
       single_input_chord("C"), {}, true, false);
   ASSERT_EQ(outside.kind,
-            quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
-  EXPECT_EQ(outside.shortcut.tool, quader::ViewportToolId::Knife);
+            quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
   const quader::ViewportToolState state{
       .active_tool = quader::ViewportToolId::CreatePrimitive};
@@ -6899,7 +7032,7 @@ TEST(EditorApiTests, PrimitiveCapsRebindingPersistenceAndRemovalPreserveKnifeAnd
   EXPECT_EQ(reloaded.commands().shortcut_for(kCaps), "Ctrl+Alt+F19");
   EXPECT_EQ(reloaded.commands().shortcut_for(kKnife), "Ctrl+Alt+F19");
   EXPECT_EQ(reloaded.commands().shortcut_for(kCut), "C");
-  (void)create_selected_box(reloaded);
+  const auto object = create_selected_box(reloaded);
   ASSERT_TRUE(reloaded.tools().activate(quader::ViewportToolId::CreatePrimitive).ok());
   ASSERT_TRUE(reloaded.tools().set_setting("create_primitive", "primitive.type", 1.0).ok());
   const quader::ViewportToolState state{
@@ -6929,6 +7062,7 @@ TEST(EditorApiTests, PrimitiveCapsRebindingPersistenceAndRemovalPreserveKnifeAnd
       single_input_chord("C"), {}, true, false);
   EXPECT_EQ(cut.kind, quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
   EXPECT_EQ(cut.shortcut.tool, quader::ViewportToolId::Cut);
+  enter_edit_mode_for_objects(reloaded, {object});
   EXPECT_EQ(reloaded.commands().dispatch_viewport_input_binding(
       single_input_chord("Ctrl+Alt+F19"), {}, true, false).shortcut.tool,
       quader::ViewportToolId::Knife);
@@ -7927,6 +8061,7 @@ TEST(EditorApiTests,
   CommandTestHarness harness;
   auto &editor = harness.editor;
   const auto box = create_selected_box(editor, "Settings Preview Origin Source");
+  enter_edit_mode_for_objects(editor, {box});
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
   ASSERT_TRUE(editor.selection().select_edge(box, 1, 2).ok());
   ASSERT_TRUE(editor.selection().select_all().ok());
@@ -8085,9 +8220,16 @@ TEST(EditorApiTests, ViewportSelectionModeShortcutsResolveAsRouterIntents) {
     CommandTestHarness harness;
     quader::QuaderEditorApi& editor = harness.editor;
     const quader::ViewportShortcutController controller;
+    const auto object = create_selected_box(editor, "Selection kind shortcuts");
 
     for (const ModeCase &mode : kCases) {
       SCOPED_TRACE(static_cast<int>(mode.viewport_mode));
+      ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
+      if (mode.viewport_mode != quader::ViewportSelectionMode::Object &&
+          mode.viewport_mode != quader::ViewportSelectionMode::Group) {
+        enter_edit_mode_for_objects(editor, {object});
+      }
+      const auto before = editor.selection().summary().mode;
       const std::string target = quader::viewport_selection_mode_target_id(
           quader::viewport_selection_mode_id(mode.viewport_mode));
       const std::optional<std::vector<quader::QuaderInputChord>> parsed =
@@ -8118,12 +8260,12 @@ TEST(EditorApiTests, ViewportSelectionModeShortcutsResolveAsRouterIntents) {
       EXPECT_FALSE(result.invalidate_hover);
       EXPECT_FALSE(result.mark_overlay_dirty);
       EXPECT_EQ(editor.selection().summary().mode,
-                quader::QuaderSelectionMode::Object);
+                before);
     }
 }
 
 TEST(EditorApiTests,
-     KnifeShortcutResolvesAcrossEveryPersistentSelectionMode) {
+     KnifeShortcutRequiresEditModeAcrossPersistentSelectionKinds) {
   constexpr std::array kModes{
       quader::ViewportSelectionMode::Vertex,
       quader::ViewportSelectionMode::Edge,
@@ -8136,19 +8278,33 @@ TEST(EditorApiTests,
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
   ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
-  (void)create_selected_box(editor, "Knife Shortcut Box");
+  const auto box = create_selected_box(editor, "Knife Shortcut Box");
   EXPECT_EQ(editor.commands().shortcut_for(
                 quader::quader_command::kToolsActivateKnife),
             "C");
 
   for (const quader::ViewportSelectionMode mode : kModes) {
     SCOPED_TRACE(static_cast<int>(mode));
+    ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
+    const bool component = mode == quader::ViewportSelectionMode::Vertex ||
+        mode == quader::ViewportSelectionMode::Edge ||
+        mode == quader::ViewportSelectionMode::Face;
+    if (component) {
+      enter_edit_mode_for_objects(editor, {box});
+    }
     quader::ViewportToolState state;
     state.selection_mode = mode;
     const quader::QuaderViewportKeybindingDispatch dispatch =
         editor.commands().dispatch_viewport_input_binding(
             single_input_chord("C"), state, true, false);
-
+    if (!component) {
+      EXPECT_EQ(dispatch.kind,
+                quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+      EXPECT_FALSE(editor.commands().execute(
+          quader::quader_command::kToolsActivateKnife).ok());
+      EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Object);
+      continue;
+    }
     ASSERT_EQ(
         dispatch.kind,
         quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
@@ -8158,8 +8314,70 @@ TEST(EditorApiTests,
   }
 }
 
+TEST(EditorApiTests, EditorModeCommandsExposeScopedRemappableTransitions) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto path = keybinding_test_path("editor-mode-transitions");
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  constexpr std::array kCommands{
+      quader::quader_command::kEditorModeObject,
+      quader::quader_command::kEditorModeEdit,
+      quader::quader_command::kEditorModeToggleEdit};
+  const auto typed = typed_command_ids();
+  const auto registered = available_command_ids(editor);
+  for (const auto command : kCommands) {
+    EXPECT_TRUE(typed.contains(std::string(command.string())));
+    EXPECT_TRUE(registered.contains(std::string(command.string())));
+    ASSERT_TRUE(editor.commands().descriptor(command).has_value());
+  }
+  EXPECT_TRUE(editor.commands().descriptor(kCommands[0])->enabled);
+  EXPECT_TRUE(editor.commands().descriptor(kCommands[1])->enabled);
+  EXPECT_TRUE(editor.commands().descriptor(kCommands[2])->enabled);
+  EXPECT_EQ(editor.commands().shortcut_for(kCommands[2]), "Tab");
+  const auto object = create_selected_box(editor, "Mode command participant");
+  const auto history = editor.history().snapshot();
+  const auto dispatch = editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("Tab"), {}, true, false);
+  ASSERT_EQ(dispatch.kind, quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  ASSERT_EQ(dispatch.command_id, kCommands[2].string());
+  ASSERT_TRUE(editor.commands().execute(dispatch.command_id).ok());
+  EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Edit);
+  ASSERT_EQ(editor.mode().state().participants.size(), 1u);
+  EXPECT_EQ(editor.mode().state().participants.front().id, object.entity);
+  EXPECT_EQ(editor.history().snapshot().undo_label, history.undo_label);
+  EXPECT_EQ(editor.history().snapshot().redo_label, history.redo_label);
+  for (const auto context : {
+           quader::QuaderViewportKeybindingContext{.editor_focused = true},
+           quader::QuaderViewportKeybindingContext{.outliner_focused = true}}) {
+    EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+        single_input_chord("Tab"), {}, false, false, context).kind,
+        quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  }
+  EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("Tab"), {}, true, true).kind,
+      quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  ASSERT_TRUE(editor.commands().set_shortcut(kCommands[2], "Ctrl+Alt+F23").ok());
+  EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("Tab"), {}, true, false).kind,
+      quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  const auto remapped = editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("Ctrl+Alt+F23"), {}, true, false);
+  ASSERT_EQ(remapped.kind, quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  ASSERT_TRUE(editor.commands().execute(remapped.command_id).ok());
+  EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Object);
+  EXPECT_EQ(selected_entities(editor), std::vector<quader::EntityId>{object.entity});
+  CommandTestHarness reloaded;
+  ASSERT_TRUE(reloaded.editor.commands().set_keybinding_storage_path(path).ok());
+  EXPECT_EQ(reloaded.editor.commands().shortcut_for(kCommands[2]), "Ctrl+Alt+F23");
+  ASSERT_TRUE(reloaded.editor.commands().remove_shortcut(kCommands[2]).ok());
+  CommandTestHarness unassigned;
+  ASSERT_TRUE(unassigned.editor.commands().set_keybinding_storage_path(path).ok());
+  EXPECT_TRUE(unassigned.editor.commands().shortcut_for(kCommands[2]).empty());
+  std::filesystem::remove(path);
+}
+
 TEST(EditorApiTests,
-     CuttingToolCommandsAndShortcutsEnterEdgeModeFromEverySelectionMode) {
+     CuttingToolCommandsAndShortcutsRequireEditModeAndThenChooseEdges) {
   constexpr std::array kModes{
       std::pair{quader::QuaderSelectionMode::Vertex,
                 quader::ViewportSelectionMode::Vertex},
@@ -8185,13 +8403,40 @@ TEST(EditorApiTests,
         CommandTestHarness harness;
         auto &editor = harness.editor;
         ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
-        (void)create_selected_box(editor, "Cutting Tool Activation Box");
+        const auto box = create_selected_box(editor, "Cutting Tool Activation Box");
+        const bool component = api_mode == quader::QuaderSelectionMode::Vertex ||
+            api_mode == quader::QuaderSelectionMode::Edge ||
+            api_mode == quader::QuaderSelectionMode::Face;
+        if (component) {
+          enter_edit_mode_for_objects(editor, {box});
+        }
         ASSERT_TRUE(editor.selection().set_mode(api_mode).ok());
         const auto history_before = editor.history().snapshot();
         const auto content_before = editor.selection().summary().content_revision;
         const auto descriptor = editor.commands().descriptor(command);
         ASSERT_TRUE(descriptor.has_value());
-        ASSERT_TRUE(descriptor->enabled);
+        ASSERT_EQ(descriptor->enabled, component);
+        if (!component) {
+          const auto before = quader::test::capture_command_observable_state(editor);
+          if (through_shortcut) {
+            quader::ViewportToolState state;
+            state.selection_mode = input_mode;
+            EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+                single_input_chord(knife ? "C" : "Shift+R"), state, true, false).kind,
+                quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+          } else {
+            const auto rejected = editor.commands().execute(command);
+            EXPECT_FALSE(rejected.ok());
+            EXPECT_FALSE(rejected.changed());
+          }
+          const auto after = quader::test::capture_command_observable_state(editor);
+          using Domain = quader::test::CommandObservableDomain;
+          EXPECT_EQ(after.domain(Domain::Geometry), before.domain(Domain::Geometry));
+          EXPECT_EQ(after.domain(Domain::Selection), before.domain(Domain::Selection));
+          EXPECT_EQ(after.domain(Domain::History), before.domain(Domain::History));
+          EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Object);
+          continue;
+        }
         if (through_shortcut) {
           quader::ViewportToolState state;
           state.selection_mode = input_mode;
@@ -8235,23 +8480,26 @@ TEST(EditorApiTests,
 }
 
 TEST(EditorApiTests,
-     IdleCuttingToolReactivationRestoresEdgeModeWithoutGeometryOrHistoryChanges) {
+     IdleCuttingToolReactivationPreservesEditMembershipAndHistory) {
   for (const auto tool : {quader::ViewportToolId::Knife,
                           quader::ViewportToolId::InsertEdgeLoop}) {
     SCOPED_TRACE(static_cast<int>(tool));
     CommandTestHarness harness;
     auto &editor = harness.editor;
     const auto box = create_selected_box(editor, "Reactivated cutting tool");
+    enter_edit_mode_for_objects(editor, {box});
     ASSERT_TRUE(editor.tools().activate(tool).ok());
-    ASSERT_TRUE(editor.selection().select_object(box).ok());
-    ASSERT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
-    ASSERT_EQ(editor.viewports().selected_tool(), tool);
+    ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+    ASSERT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Face);
     const auto before = quader::test::capture_command_observable_state(editor);
     const auto reactivated = editor.tools().activate(tool);
     ASSERT_TRUE(reactivated.ok()) << reactivated.error_message();
     EXPECT_TRUE(reactivated.changed());
     EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Edge);
     EXPECT_EQ(editor.viewports().selected_tool(), tool);
+    EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Edit);
+    ASSERT_EQ(editor.mode().state().participants.size(), 1u);
+    EXPECT_EQ(editor.mode().state().participants.front().id, box.entity);
     const auto after = quader::test::capture_command_observable_state(editor);
     using Domain = quader::test::CommandObservableDomain;
     EXPECT_EQ(after.domain(Domain::Geometry), before.domain(Domain::Geometry));
@@ -8284,6 +8532,8 @@ TEST(EditorApiTests,
   }
 
   CommandTestHarness reloaded;
+  const auto object = create_selected_box(reloaded.editor, "Edge loop binding participant");
+  enter_edit_mode_for_objects(reloaded.editor, {object});
   auto &commands = reloaded.editor.commands();
   ASSERT_TRUE(commands.set_keybinding_storage_path(path).ok());
   EXPECT_EQ(commands.shortcut_for(kCommand), "Ctrl+Alt+F21");
@@ -9135,6 +9385,8 @@ TEST(EditorApiTests, EscapeClearsSelectionInOrdinarySelectionToolsAndModes) {
       ASSERT_TRUE(editor.selection().select_objects({first, second}).ok());
       if (mode == quader::QuaderSelectionMode::Group) {
         ASSERT_TRUE(editor.scene().group_selection("Escape Group").ok());
+      } else if (mode != quader::QuaderSelectionMode::Object) {
+        enter_edit_mode_for_objects(editor, {first, second});
       }
       ASSERT_TRUE(editor.selection().set_mode(mode).ok());
       if (mode == quader::QuaderSelectionMode::Vertex) {
@@ -9185,7 +9437,13 @@ TEST(EditorApiTests, EscapeClearsSelectionInOrdinarySelectionToolsAndModes) {
         EXPECT_EQ(cleared.changed(), press == 0);
         const auto selection = editor.selection().summary();
         EXPECT_FALSE(selection.has_selection);
-        EXPECT_TRUE(selected_entities(editor).empty());
+        if (mode == quader::QuaderSelectionMode::Object ||
+            mode == quader::QuaderSelectionMode::Group) {
+          EXPECT_TRUE(selected_entities(editor).empty());
+        } else {
+          EXPECT_EQ(selected_entities(editor), selected_before);
+          EXPECT_EQ(editor.mode().state().participants.size(), 2u);
+        }
         EXPECT_EQ(selection.selected_vertex_count, 0u);
         EXPECT_EQ(selection.selected_edge_count, 0u);
         EXPECT_EQ(selection.selected_face_count, 0u);
@@ -9211,6 +9469,7 @@ TEST(EditorApiTests, ExtrudeEscapeRestoresSourceSelectionGeometryAndHistory) {
   auto &editor = harness.editor;
   ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
   const auto box = create_selected_box(editor, "Extrude Escape");
+  enter_edit_mode_for_objects(editor, {box});
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(box, 1).ok());
   const auto before = editor.query().compiled_object_mesh(box);
@@ -9271,6 +9530,7 @@ TEST(EditorApiTests, PendingExtrusionIsAcceptedBeforeSelectionAndToolTransitions
     auto &editor = harness.editor;
     const auto source = create_selected_box(editor, "Accepted extrusion source");
     const auto other = create_selected_box(editor, "Other selection target");
+    enter_edit_mode_for_objects(editor, {source, other});
     ASSERT_TRUE(editor.selection().select_face(source, 1).ok());
     const auto original = editor.query().compiled_object_mesh(source);
     ASSERT_TRUE(original.has_value());
@@ -9282,10 +9542,10 @@ TEST(EditorApiTests, PendingExtrusionIsAcceptedBeforeSelectionAndToolTransitions
     ASSERT_TRUE(preview.has_value());
     ASSERT_GT(preview->indices.size(), original->indices.size());
     for (const auto tool : {quader::ViewportToolId::Select,
-                            quader::ViewportToolId::Move,
-                            quader::ViewportToolId::CreatePrimitive}) {
+                            quader::ViewportToolId::Move}) {
       EXPECT_TRUE(editor.tools().can_activate(tool));
     }
+    EXPECT_FALSE(editor.tools().can_activate(quader::ViewportToolId::CreatePrimitive));
     const std::vector<std::function<quader::QuaderApiVoidResult()>> edits{
         [&] { return editor.selection().select_face(source, 3); },
         [&] { return editor.selection().select_face(other, 1, quader::QuaderSelectionEdit::Add); },
@@ -9298,7 +9558,7 @@ TEST(EditorApiTests, PendingExtrusionIsAcceptedBeforeSelectionAndToolTransitions
         [&] { return editor.selection().grow(); },
         [&] { return editor.selection().shrink(); },
         [&] { return editor.selection().select_faces_with_same_material(); },
-        [&] { return editor.selection().set_mode(quader::QuaderSelectionMode::Object); },
+        [&] { return editor.mode().set(quader::QuaderEditorMode::Object); },
         [&] { return editor.tools().activate(quader::ViewportToolId::Select); },
         [&] { return editor.tools().activate(quader::ViewportToolId::Move); },
         [&] { return editor.tools().activate(quader::ViewportToolId::CreatePrimitive); },
@@ -9309,7 +9569,24 @@ TEST(EditorApiTests, PendingExtrusionIsAcceptedBeforeSelectionAndToolTransitions
         [&] { return editor.commands().execute(quader::quader_command::kToolsActivateSelect); },
     };
     ASSERT_EQ(edits.size(), 20u);
+    const auto mode_before = editor.mode().state();
     const auto result = edits[transition]();
+    if (transition == 3u || transition == 4u ||
+        (transition >= 14u && transition <= 17u)) {
+      EXPECT_FALSE(result.ok());
+      EXPECT_FALSE(result.changed());
+      EXPECT_EQ(editor.mode().revision(), mode_before.revision);
+      EXPECT_EQ(editor.mode().generation(), mode_before.generation);
+      EXPECT_EQ(editor.tools().active_tool(), "extrude");
+      EXPECT_TRUE(editor.tools().active_settings().preview_active);
+      EXPECT_EQ(editor.history().snapshot().undo_label, history.undo_label);
+      EXPECT_EQ(editor.history().snapshot().redo_label, history.redo_label);
+      const auto retained = editor.query().compiled_object_mesh(source);
+      ASSERT_TRUE(retained.has_value());
+      EXPECT_EQ(retained->indices, preview->indices);
+      EXPECT_EQ(retained->vertices.size(), preview->vertices.size());
+      continue;
+    }
     ASSERT_TRUE(result.ok()) << result.error_message();
     EXPECT_TRUE(result.changed());
     EXPECT_NE(editor.tools().active_tool(), "extrude");
@@ -9321,18 +9598,7 @@ TEST(EditorApiTests, PendingExtrusionIsAcceptedBeforeSelectionAndToolTransitions
       expect_vec3_near(retained->vertices[index].position,
                        preview->vertices[index].position);
     }
-    // Cancel only the newly started empty tool; the completed extrusion stays.
-    if (transition >= 14u && transition <= 17u) {
-      ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
-    }
     EXPECT_NE(editor.history().snapshot().undo_label, history.undo_label);
-    if (transition == 3u || transition == 4u) {
-      EXPECT_EQ(editor.history().snapshot().undo_label, "Select Entities");
-      ASSERT_TRUE(editor.history().undo().ok());
-      const auto after_selection_undo = editor.query().compiled_object_mesh(source);
-      ASSERT_TRUE(after_selection_undo.has_value());
-      EXPECT_EQ(after_selection_undo->indices, preview->indices);
-    }
     ASSERT_TRUE(editor.history().undo().ok());
     const auto undone = editor.query().compiled_object_mesh(source);
     ASSERT_TRUE(undone.has_value());
@@ -9357,6 +9623,7 @@ TEST(EditorApiTests, ExtrudeReactivationRetainsPreviewAndCancelRestoresLastApply
   const auto object = create_selected_box(editor, "Picked extrusion source");
   const auto original = editor.query().compiled_object_mesh(object);
   ASSERT_TRUE(original.has_value());
+  enter_edit_mode_for_objects(editor, {object});
   ASSERT_TRUE(editor.selection().clear().ok());
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Extrude).ok());
   EXPECT_FALSE(editor.tools().active_settings().preview_active);
@@ -9409,6 +9676,9 @@ TEST(EditorApiTests, ExtrudeReactivationRetainsPreviewAndCancelRestoresLastApply
 TEST(EditorApiTests, ExtrudeDefaultBindingAndAxisActionsRespectInputOwnership) {
   CommandTestHarness harness;
   auto &editor = harness.editor;
+  const auto object = create_selected_box(editor, "Extrude binding participant");
+  enter_edit_mode_for_objects(editor, {object});
+  const auto history = editor.history().snapshot();
   ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
   constexpr auto kCommand = quader::quader_command::kToolsActivateExtrude;
   EXPECT_EQ(editor.commands().shortcut_for(kCommand), "E");
@@ -9420,7 +9690,7 @@ TEST(EditorApiTests, ExtrudeDefaultBindingAndAxisActionsRespectInputOwnership) {
   ASSERT_EQ(activation.shortcut.tool, quader::ViewportToolId::Extrude);
   ASSERT_TRUE(editor.tools().activate(activation.shortcut.tool).ok());
   EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Face);
-  EXPECT_FALSE(editor.history().can_undo());
+  EXPECT_EQ(editor.history().snapshot().undo_label, history.undo_label);
   const quader::ViewportToolState state{
       .active_tool = quader::ViewportToolId::Extrude,
       .selection_mode = quader::ViewportSelectionMode::Face};
@@ -9494,6 +9764,8 @@ TEST(EditorApiTests, ExtrudeRemappingAndDeliberateUnassignmentSurviveReload) {
     }
     CommandTestHarness reloaded;
     auto &editor = reloaded.editor;
+    const auto object = create_selected_box(editor, "Rebound extrusion participant");
+    enter_edit_mode_for_objects(editor, {object});
     ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
     EXPECT_EQ(editor.commands().shortcut_for(kCommand),
               unassigned ? "" : "Ctrl+Alt+F23");
@@ -9527,6 +9799,9 @@ TEST(EditorApiTests, ExtrudeRemappingAndDeliberateUnassignmentSurviveReload) {
 TEST(EditorApiTests, ExtrudeModeShortcutsArmOneToolAndEUsesItsRememberedMode) {
   CommandTestHarness harness;
   auto &editor = harness.editor;
+  const auto object = create_selected_box(editor, "Extrude binding participant");
+  enter_edit_mode_for_objects(editor, {object});
+  const auto history = editor.history().snapshot();
   ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
   const auto catalog = editor.commands().keybinding_catalog();
   for (const auto &[command, shortcut, type] : {
@@ -9552,7 +9827,7 @@ TEST(EditorApiTests, ExtrudeModeShortcutsArmOneToolAndEUsesItsRememberedMode) {
     ASSERT_TRUE(activated.ok()) << activated.error_message();
     EXPECT_EQ(editor.tools().active_tool(), "extrude");
     EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Face);
-    EXPECT_FALSE(editor.history().can_undo());
+    EXPECT_EQ(editor.history().snapshot().undo_label, history.undo_label);
     auto settings = editor.tools().active_settings();
     const auto *mode = find_tool_setting_control(settings, "extrude.type");
     ASSERT_NE(mode, nullptr);
@@ -9569,7 +9844,7 @@ TEST(EditorApiTests, ExtrudeModeShortcutsArmOneToolAndEUsesItsRememberedMode) {
     mode = find_tool_setting_control(settings, "extrude.type");
     ASSERT_NE(mode, nullptr);
     EXPECT_EQ(mode->choice_value, type);
-    EXPECT_FALSE(editor.history().can_undo());
+    EXPECT_EQ(editor.history().snapshot().undo_label, history.undo_label);
   }
 
   quader::ProjectSession project;
@@ -9590,6 +9865,7 @@ TEST(EditorApiTests, ExtrudeModeCommandsRetainAmountAfterExplicitApply) {
   CommandTestHarness harness;
   auto &editor = harness.editor;
   const auto box = create_selected_box(editor, "Extrude Mode Shortcut Source");
+  enter_edit_mode_for_objects(editor, {box});
   ASSERT_TRUE(editor.selection().select_face(box, 1).ok());
   ASSERT_TRUE(editor.selection().select_face(
       box, 3, quader::QuaderSelectionEdit::Add).ok());
@@ -9645,6 +9921,8 @@ TEST(EditorApiTests, ExtrudeModeBindingsPreserveOverridesAndInputPrecedence) {
   const auto path = keybinding_test_path("extrude-mode-overrides");
   CommandTestHarness harness;
   auto &editor = harness.editor;
+  const auto object = create_selected_box(editor, "Extrude override participant");
+  enter_edit_mode_for_objects(editor, {object});
   ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
   for (const auto &[command, shortcut, custom] : {
            std::tuple{quader::quader_command::kToolsActivateExtrudeIndividual,
@@ -9673,6 +9951,8 @@ TEST(EditorApiTests, ExtrudeModeBindingsPreserveOverridesAndInputPrecedence) {
     ASSERT_TRUE(editor.preferences().set_shortcut(command, custom).ok());
   }
   CommandTestHarness reloaded;
+  const auto loaded_object = create_selected_box(reloaded.editor, "Reloaded extrusion participant");
+  enter_edit_mode_for_objects(reloaded.editor, {loaded_object});
   ASSERT_TRUE(reloaded.editor.commands().set_keybinding_storage_path(path).ok());
   for (const auto &[command, shortcut, custom] : {
            std::tuple{quader::quader_command::kToolsActivateExtrudeIndividual,
@@ -9795,7 +10075,7 @@ TEST(EditorApiTests, EscapeClearSelectionKeepsExplicitShortcutOverrides) {
   std::filesystem::remove(path);
 }
 
-TEST(EditorApiTests, EscapeClearsSceneOnlySelectionWhileInComponentMode) {
+TEST(EditorApiTests, SceneOnlySelectionRejectsComponentModesAndEscapeStillClears) {
   constexpr std::array kModes{
       std::pair{quader::QuaderSelectionMode::Vertex,
                 quader::ViewportSelectionMode::Vertex},
@@ -9810,13 +10090,23 @@ TEST(EditorApiTests, EscapeClearsSceneOnlySelectionWhileInComponentMode) {
     const auto light = editor.scene().create_point_light(
         {.name = "Escape Scene-Only Light", .select_created = true});
     ASSERT_TRUE(light.ok()) << light.error_message();
-    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    const auto before = editor.mode().state();
+    const auto before_entry = quader::test::capture_command_observable_state(editor);
+    const auto entry = editor.mode().set(quader::QuaderEditorMode::Edit);
+    EXPECT_TRUE(entry.ok()) << entry.error_message();
+    EXPECT_FALSE(entry.changed());
+    EXPECT_TRUE(entry.error_message().empty());
+    EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Object);
+    EXPECT_EQ(quader::test::capture_command_observable_state(editor), before_entry);
+    EXPECT_FALSE(editor.selection().set_mode(mode).ok());
+    EXPECT_EQ(editor.mode().revision(), before.revision);
+    EXPECT_EQ(editor.mode().generation(), before.generation);
     ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Move).ok());
     ASSERT_EQ(selected_entities(editor),
               std::vector<quader::EntityId>{light.value().id});
     quader::ViewportToolState state;
     state.active_tool = quader::ViewportToolId::Move;
-    state.selection_mode = viewport_mode;
+    state.selection_mode = quader::ViewportSelectionMode::Object;
     const auto dispatch = editor.commands().dispatch_viewport_input_binding(
         single_input_chord("Escape"), state, true, false);
     ASSERT_EQ(dispatch.kind,
@@ -9828,17 +10118,17 @@ TEST(EditorApiTests, EscapeClearsSceneOnlySelectionWhileInComponentMode) {
     EXPECT_TRUE(cleared.changed());
     EXPECT_TRUE(selected_entities(editor).empty());
     EXPECT_FALSE(editor.selection().summary().has_selection);
-    EXPECT_EQ(editor.selection().summary().mode, mode);
+    EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
     const auto repeated = editor.commands().execute(dispatch.command_id);
     ASSERT_TRUE(repeated.ok()) << repeated.error_message();
     EXPECT_FALSE(repeated.changed());
-    EXPECT_EQ(editor.selection().summary().mode, mode);
+    EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
     ASSERT_TRUE(editor.history().undo().ok());
     EXPECT_EQ(selected_entities(editor),
               std::vector<quader::EntityId>{light.value().id});
     ASSERT_TRUE(editor.history().redo().ok());
     EXPECT_TRUE(selected_entities(editor).empty());
-    EXPECT_EQ(editor.selection().summary().mode, mode);
+    EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
   }
 }
 
@@ -12416,7 +12706,7 @@ TEST(EditorApiTests,
       ScopeExpectation{quader::quader_command::kSelectFaceNormal,
                        "viewport.selection.face"},
       ScopeExpectation{quader::quader_command::kSelectMeshNGons,
-                       "viewport.selection.object"},
+                       "viewport.selection.component"},
       ScopeExpectation{quader::quader_command::kSelectSimilarMeshes,
                        "viewport.selection.object"},
       ScopeExpectation{quader::quader_command::kSelectGrow,
@@ -12491,13 +12781,14 @@ TEST(EditorApiTests,
   ASSERT_TRUE(
       editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
   expect_enabled(quader::quader_command::kSelectSimilarMeshes, true);
-  expect_enabled(quader::quader_command::kSelectMeshNGons, true);
+  expect_enabled(quader::quader_command::kSelectMeshNGons, false);
   expect_enabled(quader::quader_command::kSelectEdgeDirection, false);
   expect_enabled(quader::quader_command::kSelectFacesWithSameMaterial,
                  false);
   expect_enabled(quader::quader_command::kSelectGrow, false);
   expect_enabled(quader::quader_command::kSelectShrink, false);
 
+  enter_edit_mode_for_objects(editor, {box});
   ASSERT_TRUE(
       editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
   ASSERT_TRUE(editor.selection().select_edge(box, 1, 2).ok());
@@ -12516,7 +12807,7 @@ TEST(EditorApiTests,
                  true);
   expect_enabled(quader::quader_command::kSelectCoplanarFaces, true);
   expect_enabled(quader::quader_command::kSelectFaceNormal, true);
-  expect_enabled(quader::quader_command::kSelectMeshNGons, false);
+  expect_enabled(quader::quader_command::kSelectMeshNGons, true);
   expect_enabled(quader::quader_command::kSelectGrow, true);
   expect_enabled(quader::quader_command::kSelectShrink, true);
 
@@ -12525,10 +12816,11 @@ TEST(EditorApiTests,
   ASSERT_TRUE(editor.selection().select_vertex(box, 1).ok());
   expect_enabled(quader::quader_command::kSelectCoplanarFaces, false);
   expect_enabled(quader::quader_command::kSelectFaceNormal, false);
-  expect_enabled(quader::quader_command::kSelectMeshNGons, false);
+  expect_enabled(quader::quader_command::kSelectMeshNGons, true);
   expect_enabled(quader::quader_command::kSelectGrow, true);
   expect_enabled(quader::quader_command::kSelectShrink, true);
 
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
   ASSERT_TRUE(
       editor.selection().set_mode(quader::QuaderSelectionMode::Group).ok());
   expect_enabled(quader::quader_command::kSelectAll, true);
@@ -12711,6 +13003,7 @@ TEST(EditorApiTests,
       quader::QuaderCreateMeshArgs{.name = "Nonplanar Box Opening"});
   ASSERT_TRUE(created.ok()) << created.error_message();
   const auto object = created.value();
+  enter_edit_mode_for_objects(editor, {object});
   for (std::size_t index = 0; index < vertices.size(); ++index) {
     ASSERT_TRUE(editor.selection()
                     .select_edge(object, vertices[index],
@@ -12958,6 +13251,7 @@ TEST(EditorApiTests,
 
   const quader::QuaderModelingObjectRef box =
       create_selected_box(editor, "Default Edge Normals");
+  enter_edit_mode_for_objects(editor, {box});
   ASSERT_TRUE(
       editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
   ASSERT_TRUE(editor.selection().select_edge(box, 1, 2).ok());
@@ -13133,6 +13427,7 @@ TEST(EditorApiTests, ContextActionsOmitImpossibleTopologyAndKeepOpenFaces) {
   ASSERT_NE(open_object_panel, nullptr);
   EXPECT_EQ(find_action_item(*open_object_panel, "half_cut"), nullptr);
   EXPECT_NE(find_action_item(*open_object_panel, "create_outer_hull"), nullptr);
+  enter_edit_mode_for_objects(open.editor, {mesh});
   ASSERT_TRUE(open.editor.selection()
                   .set_mode(quader::QuaderSelectionMode::Face)
                   .ok());
@@ -13307,6 +13602,8 @@ TEST(EditorApiTests,
   EXPECT_EQ(disabled_mesh->disabled_reason_key,
             "modeling.action.disabled.snap_meshes_to_floor_selection");
 
+  const auto empty_box = create_selected_box(empty_harness.editor, "Empty component scope");
+  enter_edit_mode_for_objects(empty_harness.editor, {empty_box});
   ASSERT_TRUE(empty_harness.editor.selection()
                   .set_mode(quader::QuaderSelectionMode::Vertex)
                   .ok());
@@ -13421,6 +13718,8 @@ TEST(EditorApiTests,
                           quader::QuaderSelectionMode::Edge,
                           quader::QuaderSelectionMode::Face,
                           quader::QuaderSelectionMode::Group}) {
+    ASSERT_TRUE(editor.mode().set(mode == quader::QuaderSelectionMode::Group
+        ? quader::QuaderEditorMode::Object : quader::QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(editor.selection().set_mode(mode).ok());
     EXPECT_EQ(resolve_bake().kind,
               quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
@@ -13529,6 +13828,7 @@ TEST(EditorApiTests,
     ASSERT_EQ(harness.editor.selection().summary().active_object_id,
               receiver.modeling_object_id);
 
+    enter_edit_mode_for_objects(harness.editor, {source});
     constexpr quader::QuaderElementId kVertex = 1;
     const quader::QuaderApiVoidResult snapped = harness.editor.modeling()
                                                       .mesh(source)
@@ -13637,6 +13937,7 @@ TEST(EditorApiTests, ActivePreviewCommandsApplyAndCancelSliceQuadWithoutUi) {
         CommandTestHarness harness;
         const quader::QuaderModelingObjectRef box =
             create_selected_box(harness.editor, "Slice Apply Command Box");
+        enter_edit_mode_for_objects(harness.editor, {box});
         ASSERT_TRUE(harness.editor.selection()
                         .set_mode(quader::QuaderSelectionMode::Face)
                         .ok());
@@ -13724,6 +14025,7 @@ TEST(EditorApiTests, ActivePreviewCommandsApplyAndCancelSliceQuadWithoutUi) {
         CommandTestHarness harness;
         const quader::QuaderModelingObjectRef box =
             create_selected_box(harness.editor, "Slice Cancel Command Box");
+        enter_edit_mode_for_objects(harness.editor, {box});
         ASSERT_TRUE(harness.editor.selection()
                         .set_mode(quader::QuaderSelectionMode::Face)
                         .ok());
@@ -13770,6 +14072,7 @@ TEST(EditorApiTests, HistoryUndoAcceptsBevelPreviewThenUndoesItWithRedoAvailable
     quader::QuaderEditorApi& editor = harness.editor;
     const quader::QuaderModelingObjectRef box =
         create_selected_box(editor, "Undo Bevel Preview Box");
+    enter_edit_mode_for_objects(editor, {box});
     ASSERT_TRUE(
         editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
     ASSERT_TRUE(editor.selection().select_edge(box, 1, 2).ok());
@@ -13823,6 +14126,7 @@ TEST(EditorApiTests, ProjectSaveAcceptsPendingModelingAndNativePreviews) {
     CommandTestHarness harness;
     auto &editor = harness.editor;
     const auto box = create_selected_box(editor, "Saved Preview Box");
+    enter_edit_mode_for_objects(editor, {box});
     ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
     ASSERT_TRUE(editor.selection().select_edge(box, 1, 2).ok());
     ASSERT_TRUE(editor.selection().select_all().ok());
@@ -13900,6 +14204,7 @@ TEST(EditorApiTests,
   quader::QuaderEditorApi &editor = harness.editor;
   const quader::QuaderModelingObjectRef box =
       create_selected_box(editor, "Preview Mode Change Box");
+  enter_edit_mode_for_objects(editor, {box});
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
   ASSERT_TRUE(editor.selection().select_edge(box, 1, 2).ok());
   ASSERT_TRUE(editor.selection().select_all().ok());
@@ -13942,6 +14247,46 @@ TEST(EditorApiTests,
                    .ok());
 }
 
+TEST(EditorApiTests, EnteringEditAcceptsObjectPreviewExactlyOnceWithoutAModeUndoStep) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto box = create_selected_box(editor, "Object preview mode transition");
+  const auto original = editor.query().compiled_object_mesh(box);
+  ASSERT_TRUE(original.has_value());
+  const auto history = editor.history().snapshot();
+  ASSERT_TRUE(editor.commands().execute(quader::quader_command::kModelingHalfCut).ok());
+  ASSERT_TRUE(editor.modeling().can_cancel_active_tool_or_preview());
+  const auto preview = editor.query().compiled_object_mesh(box);
+  ASSERT_TRUE(preview.has_value());
+  const auto entered = editor.mode().set(quader::QuaderEditorMode::Edit);
+  ASSERT_TRUE(entered.ok()) << entered.error_message();
+  EXPECT_TRUE(entered.changed());
+  EXPECT_FALSE(editor.modeling().can_cancel_active_tool_or_preview());
+  EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Edit);
+  EXPECT_EQ(editor.selection().summary().selected_vertex_count, 0u);
+  const auto accepted = editor.query().compiled_object_mesh(box);
+  ASSERT_TRUE(accepted.has_value());
+  EXPECT_EQ(accepted->indices, preview->indices);
+  ASSERT_EQ(accepted->vertices.size(), preview->vertices.size());
+  for (std::size_t index = 0; index < preview->vertices.size(); ++index) {
+    expect_vec3_near(accepted->vertices[index].position, preview->vertices[index].position);
+  }
+  ASSERT_TRUE(editor.history().undo().ok());
+  const auto undone = editor.query().compiled_object_mesh(box);
+  ASSERT_TRUE(undone.has_value());
+  EXPECT_EQ(undone->indices, original->indices);
+  ASSERT_EQ(undone->vertices.size(), original->vertices.size());
+  for (std::size_t index = 0; index < original->vertices.size(); ++index) {
+    expect_vec3_near(undone->vertices[index].position, original->vertices[index].position);
+  }
+  EXPECT_EQ(editor.history().snapshot().undo_label, history.undo_label);
+  EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Edit);
+  ASSERT_TRUE(editor.history().redo().ok());
+  const auto redone = editor.query().compiled_object_mesh(box);
+  ASSERT_TRUE(redone.has_value());
+  EXPECT_EQ(redone->indices, preview->indices);
+}
+
 TEST(EditorApiTests, HistoryRedoIsUnavailableWhileActivePreviewCanBeCanceled) {
     CommandTestHarness harness;
     quader::QuaderEditorApi& editor = harness.editor;
@@ -13954,6 +14299,7 @@ TEST(EditorApiTests, HistoryRedoIsUnavailableWhileActivePreviewCanBeCanceled) {
     EXPECT_FALSE(entity_named(editor, "Redo Target Box").has_value());
 
     ASSERT_TRUE(editor.selection().select_object(preview_box).ok());
+    enter_edit_mode_for_objects(editor, {preview_box});
     ASSERT_TRUE(
         editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
     ASSERT_TRUE(editor.selection().select_edge(preview_box, 1, 2).ok());
@@ -14109,6 +14455,7 @@ TEST(EditorApiTests, OperationPreviewHistoryUsesAuthoredLabelsAndRetainsCallerLa
       const auto object =
           create_polygon_mesh(editor, 4U, "Preview History Label Quad");
       ASSERT_TRUE(editor.selection().select_object(object).ok());
+      enter_edit_mode_for_objects(editor, {object});
       ASSERT_TRUE(
           editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
       ASSERT_TRUE(editor.selection().select_face(object, 1).ok());
@@ -14150,6 +14497,7 @@ TEST(EditorApiTests, HistoryUndoAfterSliceQuadFinalizeRestoresPreOperationMeshAn
     quader::QuaderEditorApi& editor = harness.editor;
     const quader::QuaderModelingObjectRef box =
         create_selected_box(editor, "Undo Slice Quad Box");
+    enter_edit_mode_for_objects(editor, {box});
     ASSERT_TRUE(
         editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
     ASSERT_TRUE(editor.selection().select_face(box, 1).ok());
@@ -14210,6 +14558,7 @@ TEST(EditorApiTests, MixedUndoRedoPreviewStackPreservesTexturedMaterial) {
     const std::optional<quader::QuaderMeshSnapshot> original = editor.query().mesh(box.mesh);
     ASSERT_TRUE(original.has_value());
 
+    enter_edit_mode_for_objects(editor, {box});
     ASSERT_TRUE(
         editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
     ASSERT_TRUE(editor.selection().select_edge(box, 1, 2).ok());
@@ -14304,6 +14653,7 @@ TEST(EditorApiTests, MixedUndoRedoPreviewStackPreservesTexturedMaterial) {
     EXPECT_GT(editor.selection().summary().selected_face_count, 1u);
     expect_entity_textured(editor, box.entity, refs);
 
+    ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
     ASSERT_TRUE(
         editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
     ASSERT_TRUE(editor.selection().select_object(box).ok());
@@ -14343,6 +14693,7 @@ TEST(EditorApiTests, SliceQuadPreviewRebuildsAfterDirectFaceAddWithoutUi) {
     CommandTestHarness harness;
     const quader::QuaderModelingObjectRef box =
         create_selected_box(harness.editor, "Slice Direct Add Command Box");
+    enter_edit_mode_for_objects(harness.editor, {box});
     ASSERT_TRUE(harness.editor.selection()
                     .set_mode(quader::QuaderSelectionMode::Face)
                     .ok());
@@ -14553,11 +14904,12 @@ TEST(EditorApiTests, ObjectAndGroupPickingIgnoresInwardRoomBackfaces) {
       const auto preview = editor.selection().preview_hover(hover);
       EXPECT_EQ(preview.target.kind, quader::QuaderActiveSelectionKind::Face);
       EXPECT_EQ(preview.target.object_id, interior.modeling_object_id);
+      const auto before_hover =
+          quader::test::capture_command_observable_state(editor);
       const auto hovered = editor.selection().hover(hover);
-      ASSERT_TRUE(hovered.ok()) << hovered.error_message();
-      EXPECT_EQ(hovered.value().target.kind,
-                quader::QuaderActiveSelectionKind::Face);
-      EXPECT_EQ(hovered.value().target.object_id, interior.modeling_object_id);
+      EXPECT_FALSE(hovered.ok());
+      EXPECT_FALSE(hovered.changed());
+      EXPECT_EQ(quader::test::capture_command_observable_state(editor), before_hover);
 
       pick.select_backfaces = false;
       const auto front_facing = editor.selection().pick_select(pick);
@@ -14699,6 +15051,7 @@ TEST(EditorApiTests,
 
   // The same ray lies on the side's vertical boundary; ordinary two-sided
   // component picking proves this is a real edge hit, not an empty-space pick.
+  enter_edit_mode_for_objects(editor, {stair.value()});
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge)
                   .ok());
   const auto boundary = editor.selection().preview_hover(
@@ -14707,6 +15060,7 @@ TEST(EditorApiTests,
        .select_backfaces = true});
   ASSERT_EQ(boundary.target.kind, quader::QuaderActiveSelectionKind::Edge);
   ASSERT_EQ(boundary.target.object_id, stair.value().modeling_object_id);
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object)
                   .ok());
 
@@ -14850,7 +15204,11 @@ TEST(EditorApiTests, ObjectDepthPickingResetsAfterModeRoundTrip) {
     ASSERT_EQ(selected_entities(editor),
               std::vector<quader::EntityId>{middle_box.entity});
 
+    if (intervening_mode != quader::QuaderSelectionMode::Group) {
+      enter_edit_mode_for_objects(editor, {middle_box});
+    }
     ASSERT_TRUE(editor.selection().set_mode(intervening_mode).ok());
+    ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
     ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object)
                     .ok());
     const auto restarted = pick_pair();
@@ -14976,6 +15334,8 @@ TEST(EditorApiTests, DepthRequestsPreserveLegacyGroupAndComponentPicks) {
         ASSERT_TRUE(editor.selection().select_object(far_box).ok());
         const auto far_group = editor.scene().group_selection("Legacy Far Group");
         ASSERT_TRUE(far_group.ok()) << far_group.error_message();
+      } else {
+        enter_edit_mode_for_objects(editor, {near_box});
       }
       ASSERT_TRUE(editor.selection().set_mode(mode).ok());
       ASSERT_TRUE(editor.selection().clear().ok());
@@ -15316,6 +15676,7 @@ TEST(EditorApiTests, BoxSelectApiPreservesActiveFaceFromBaseline) {
     CommandTestHarness harness;
     const quader::QuaderModelingObjectRef object =
         create_selected_box(harness.editor, "Face Baseline Box");
+    enter_edit_mode_for_objects(harness.editor, {object});
     ASSERT_TRUE(harness.editor.selection()
                     .set_mode(quader::QuaderSelectionMode::Face)
                     .ok());
@@ -15374,6 +15735,7 @@ TEST(EditorApiTests,
     request.edit = quader::QuaderSelectionEdit::Add;
     request.rule = quader::QuaderBoxSelectionRule::Contain;
 
+    enter_edit_mode_for_objects(editor, {object});
     ASSERT_TRUE(
         editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
     ASSERT_TRUE(editor.selection().clear().ok());
@@ -15434,6 +15796,7 @@ TEST(EditorApiTests, ComponentMarqueeRetainsSelectionAndTracksMovedGeometry) {
       auto &editor = harness.editor;
       const auto object = create_polygon_mesh(editor, 3u, "Marquee Triangle");
       ASSERT_TRUE(editor.selection().select_object(object).ok());
+      enter_edit_mode_for_objects(editor, {object});
       ASSERT_TRUE(editor.selection().set_mode(mode).ok());
       ASSERT_TRUE(editor.selection().clear().ok());
       if (mode == QuaderSelectionMode::Vertex) {
@@ -15486,7 +15849,8 @@ TEST(EditorApiTests, ComponentMarqueeRetainsSelectionAndTracksMovedGeometry) {
 TEST(EditorApiTests, ComponentPickSelectionRemainsRuntimeOwned) {
     CommandTestHarness harness;
     quader::QuaderEditorApi& editor = harness.editor;
-    (void)create_selected_box(editor, "Runtime Pick Component Box");
+    const auto object = create_selected_box(editor, "Runtime Pick Component Box");
+    enter_edit_mode_for_objects(editor, {object});
     ASSERT_TRUE(
         editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
     const quader::QuaderHistorySnapshot history_before_pick =
@@ -15578,6 +15942,7 @@ TEST(EditorApiTests, RightClickPickWithExistingFaceSelectionPreservesComponentSe
                                  .max = {6.0f, 1.0f, 1.0f}},
             "Context Face Right");
     ASSERT_TRUE(right.ok()) << right.error_message();
+    enter_edit_mode_for_objects(harness.editor, {left, right.value()});
     ASSERT_TRUE(harness.editor.selection()
                     .set_mode(quader::QuaderSelectionMode::Face)
                     .ok());
@@ -15862,6 +16227,7 @@ TEST(EditorApiTests, NativeCurvePicksRejectHiddenLockedAndComponentModeTargets) 
   EXPECT_FALSE(editor.selection().pick_scene_entity(curve.value().entity, {}).ok());
   EXPECT_EQ(selected_entities(editor), std::vector<quader::EntityId>{box.entity});
   ASSERT_TRUE(editor.scene().set_locked(curve.value().entity, false).ok());
+  enter_edit_mode_for_objects(editor, {box});
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   const auto before = selected_entities(editor);
   EXPECT_FALSE(editor.selection().pick_scene_entity(curve.value().entity, {}).ok());
@@ -16301,12 +16667,24 @@ TEST(EditorApiTests, ObjectHandlesSelectionConveniencesAndSceneBatchesUsePublicA
                     .select_objects({created.value()},
                                     quader::QuaderSelectionEdit::Replace)
                     .ok());
+    const auto before_hidden_entry =
+        quader::test::capture_command_observable_state(editor);
+    const auto hidden_entry = editor.mode().set(quader::QuaderEditorMode::Edit);
+    EXPECT_TRUE(hidden_entry.ok()) << hidden_entry.error_message();
+    EXPECT_FALSE(hidden_entry.changed());
+    EXPECT_TRUE(hidden_entry.error_message().empty());
+    EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Object);
+    EXPECT_EQ(quader::test::capture_command_observable_state(editor),
+              before_hidden_entry);
+    ASSERT_TRUE(box.set_visible(true).ok());
+    enter_edit_mode_for_objects(editor, {created.value()});
     EXPECT_TRUE(editor.selection()
                     .select_vertices(created.value(),
                                      {first_vertex->vertex_id,
                                       second_vertex->vertex_id})
                     .ok());
 
+    ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
     const quader::QuaderApiResult<quader::QuaderEntityRef> duplicate =
         box.duplicate();
     ASSERT_TRUE(duplicate.ok()) << duplicate.error_message();
@@ -16317,9 +16695,12 @@ TEST(EditorApiTests, ObjectHandlesSelectionConveniencesAndSceneBatchesUsePublicA
               quader::QuaderSelectionMode::Object);
     ASSERT_TRUE(editor.history().undo().ok());
     EXPECT_FALSE(editor.query().entity(duplicate.value().id).has_value());
+    EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Object);
+    enter_edit_mode_for_objects(editor, {created.value()});
     EXPECT_EQ(editor.selection().summary().mode,
               quader::QuaderSelectionMode::Vertex);
     EXPECT_EQ(editor.selection().summary().selected_vertex_count, 2U);
+    ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
     ASSERT_TRUE(editor.history().redo().ok());
     EXPECT_TRUE(editor.query().entity(duplicate.value().id).has_value());
     EXPECT_EQ(editor.selection().summary().mode,
@@ -16972,11 +17353,11 @@ TEST(EditorApiTests, DeleteSelectionDeletesSelectedLightsThroughSceneAwareRoute)
   exercise("Directional Light", quader::QuaderLightType::Directional);
 }
 
-TEST(EditorApiTests, ScenePointLightSelectionFeedsQuerySummaryAndCenterInComponentMode) {
+TEST(EditorApiTests, ScenePointLightSelectionFeedsQuerySummaryAndCenterInObjectMode) {
     CommandTestHarness harness;
     quader::QuaderEditorApi& editor = harness.editor;
-    ASSERT_TRUE(
-        editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok);
+    EXPECT_FALSE(
+        editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
 
     quader::QuaderCreatePointLightArgs args;
     args.transform.position = {2.0f, 3.0f, 4.0f};
@@ -16999,12 +17380,13 @@ TEST(EditorApiTests, ScenePointLightSelectionFeedsQuerySummaryAndCenterInCompone
     EXPECT_FLOAT_EQ(center->z, 4.0f);
 }
 
-TEST(EditorApiTests, EntitySelectionClearsStaleComponentSelectionBeforeImmediateMove) {
+TEST(EditorApiTests, ObjectModeKeepsDormantComponentsOutOfImmediateEntityMove) {
     CommandTestHarness harness;
     quader::QuaderEditorApi& editor = harness.editor;
 
     const quader::QuaderModelingObjectRef box =
         create_selected_box(editor, "Stale Component Box");
+    enter_edit_mode_for_objects(editor, {box});
     ASSERT_TRUE(
         editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
     ASSERT_TRUE(editor.selection().select_face(box, 1).ok());
@@ -17013,6 +17395,7 @@ TEST(EditorApiTests, EntitySelectionClearsStaleComponentSelectionBeforeImmediate
         entity_by_id(editor, box.entity);
     ASSERT_TRUE(box_before.has_value());
 
+    ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
     quader::QuaderCreatePointLightArgs args;
     args.name = "Selection Move Light";
     args.transform.position = {5.0f, 0.0f, 0.0f};
@@ -17507,7 +17890,7 @@ TEST(EditorApiTests,
 }
 
 TEST(EditorApiTests,
-     ComponentSelectAllKeepsSeedScopeAndInverseTargetsEveryEligibleEditScopeMesh) {
+     ComponentBulkSelectionIncludesEveryEnrolledMeshWithoutAComponentSeed) {
   const auto create_three_boxes = [](quader::QuaderEditorApi &editor) {
     std::array<quader::QuaderModelingObjectRef, 3> boxes;
     boxes[0] = create_selected_box(editor, "Component Scope A");
@@ -17537,6 +17920,7 @@ TEST(EditorApiTests,
                         {boxes[0].entity, boxes[1].entity, boxes[2].entity},
                         boxes[2].entity)
                     .ok());
+    ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(editor.selection()
                     .set_mode(quader::QuaderSelectionMode::Vertex)
                     .ok());
@@ -17564,10 +17948,11 @@ TEST(EditorApiTests,
         harness.editor.selection().select_all();
     ASSERT_TRUE(selected_all.ok()) << selected_all.error_message();
     EXPECT_TRUE(selected_all.changed());
-    EXPECT_EQ(harness.editor.selection().summary().selected_vertex_count, 16u);
+    EXPECT_EQ(harness.editor.selection().summary().selected_vertex_count, 24u);
     EXPECT_EQ(selected_entities(harness.editor),
               (std::vector<quader::EntityId>{boxes[0].entity,
-                                             boxes[1].entity}));
+                                             boxes[1].entity,
+                                             boxes[2].entity}));
   }
 
   {
@@ -17617,6 +18002,7 @@ TEST(EditorApiTests,
                        locked.value().entity},
                       locked.value().entity)
                   .ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection()
                   .set_mode(quader::QuaderSelectionMode::Vertex)
                   .ok());
@@ -17681,6 +18067,7 @@ TEST(EditorApiTests,
   quader::QuaderEditorApi &editor = harness.editor;
   const quader::QuaderModelingObjectRef box =
       create_selected_box(editor, "Inverse Ordinary Scope");
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(
       editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(editor.selection()
@@ -17724,6 +18111,7 @@ TEST(EditorApiTests,
                   .select_objects({first.entity, second.value().entity},
                                   second.value().entity)
                   .ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(
       editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(editor.selection()
@@ -17751,7 +18139,7 @@ TEST(EditorApiTests,
 }
 
 TEST(EditorApiTests,
-     ComponentInversePreservesSceneOnlySelectionAndPrimary) {
+     ComponentInverseExcludesSceneOnlyObjectsAndRetainsMeshPrimary) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
   const quader::QuaderModelingObjectRef box =
@@ -17766,21 +18154,25 @@ TEST(EditorApiTests,
                   .select_objects({box.entity, light.value().id},
                                   light.value().id)
                   .ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(
       editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
   ASSERT_EQ(selected_entities(editor),
-            (std::vector<quader::EntityId>{box.entity, light.value().id}));
+            (std::vector<quader::EntityId>{box.entity}));
   ASSERT_TRUE(editor.query().entity(light.value().id).has_value());
-  ASSERT_TRUE(editor.query().entity(light.value().id)->active);
+  ASSERT_FALSE(editor.query().entity(light.value().id)->active);
+  ASSERT_TRUE(editor.query().entity(box.entity)->active);
 
   const quader::QuaderApiVoidResult inverted =
       editor.selection().select_inverse();
   ASSERT_TRUE(inverted.ok()) << inverted.error_message();
   EXPECT_TRUE(inverted.changed());
   EXPECT_EQ(selected_entities(editor),
-            (std::vector<quader::EntityId>{box.entity, light.value().id}));
+            (std::vector<quader::EntityId>{box.entity}));
   ASSERT_TRUE(editor.query().entity(light.value().id).has_value());
-  EXPECT_TRUE(editor.query().entity(light.value().id)->active);
+  EXPECT_FALSE(editor.query().entity(light.value().id)->active);
+  EXPECT_TRUE(editor.query().entity(box.entity)->active);
+  EXPECT_EQ(editor.selection().summary().selected_vertex_count, 8U);
 }
 
 TEST(EditorApiTests,
@@ -17812,6 +18204,7 @@ TEST(EditorApiTests,
                        outside.value().entity},
                       outside.value().entity)
                   .ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection()
                   .set_mode(quader::QuaderSelectionMode::Vertex)
                   .ok());
@@ -17927,6 +18320,7 @@ TEST(EditorApiTests,
                   .select_objects({first_member->entity, second_member->entity},
                                   second_member->entity)
                   .ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(
       editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
   const auto pick_vertex = [&editor, &occurrence_offset](float local_x,
@@ -18038,8 +18432,8 @@ TEST(EditorApiTests,
 }
 
 TEST(EditorApiTests,
-     ComponentSelectAllUsesAStickyHoveredMeshWithoutASeedSelection) {
-  /// Describes one component-mode variant of the sticky Select All contract.
+     ComponentSelectAllUsesTheFixedEditSetAfterClearAndHoverMiss) {
+  /// Describes one component-mode variant of the fixed Edit scope contract.
   struct ModeCase final {
     quader::QuaderSelectionMode mode;
     quader::QuaderActiveSelectionKind hover_kind;
@@ -18059,10 +18453,11 @@ TEST(EditorApiTests,
     CommandTestHarness harness;
     quader::QuaderEditorApi &editor = harness.editor;
     const quader::QuaderModelingObjectRef box =
-        create_selected_box(editor, "Sticky Select All Scope");
+        create_selected_box(editor, "Empty Edit Select All Scope");
+    enter_edit_mode_for_objects(editor, {box});
     ASSERT_TRUE(editor.selection().clear().ok());
     ASSERT_TRUE(editor.selection().set_mode(mode_case.mode).ok());
-    ASSERT_TRUE(selected_entities(editor).empty());
+    ASSERT_EQ(selected_entities(editor), std::vector<quader::EntityId>{box.entity});
     ASSERT_EQ(editor.selection().summary().selected_vertex_count, 0u);
     ASSERT_EQ(editor.selection().summary().selected_edge_count, 0u);
     ASSERT_EQ(editor.selection().summary().selected_face_count, 0u);
@@ -18100,11 +18495,17 @@ TEST(EditorApiTests,
     const quader::QuaderApiVoidResult inverted =
         editor.selection().select_inverse();
     ASSERT_TRUE(inverted.ok()) << inverted.error_message();
-    EXPECT_FALSE(inverted.changed());
+    EXPECT_TRUE(inverted.changed());
+    const auto inverted_selection = editor.selection().summary();
+    EXPECT_EQ(inverted_selection.selected_vertex_count +
+                  inverted_selection.selected_edge_count +
+                  inverted_selection.selected_face_count,
+              mode_case.expected_count);
+    ASSERT_TRUE(editor.selection().clear().ok());
     EXPECT_EQ(editor.selection().summary().selected_vertex_count, 0u);
     EXPECT_EQ(editor.selection().summary().selected_edge_count, 0u);
     EXPECT_EQ(editor.selection().summary().selected_face_count, 0u);
-    EXPECT_TRUE(selected_entities(editor).empty());
+    EXPECT_EQ(selected_entities(editor), std::vector<quader::EntityId>{box.entity});
 
     const quader::QuaderApiVoidResult selected_all =
         editor.selection().select_all();
@@ -18131,19 +18532,19 @@ TEST(EditorApiTests,
 }
 
 TEST(EditorApiTests,
-     ComponentSelectAllUnionsStickyHoverWithComponentSelectedMeshes) {
+     ComponentSelectAllIncludesEmptyParticipantsAndIgnoresOutsideHover) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
   const quader::QuaderModelingObjectRef selected_box =
       create_selected_box(editor, "Selected Component Scope");
-  const quader::QuaderApiResult<quader::QuaderModelingObjectRef> sticky_box =
+  const quader::QuaderApiResult<quader::QuaderModelingObjectRef> empty_box =
       editor.modeling().create_box(
           quader::QuaderBounds{
               .min = {3.0f, -1.0f, -1.0f},
               .max = {5.0f, 1.0f, 1.0f},
           },
-          "Sticky Component Scope");
-  ASSERT_TRUE(sticky_box.ok()) << sticky_box.error_message();
+          "Empty Component Scope");
+  ASSERT_TRUE(empty_box.ok()) << empty_box.error_message();
   const quader::QuaderApiResult<quader::QuaderModelingObjectRef> untouched_box =
       editor.modeling().create_box(
           quader::QuaderBounds{
@@ -18153,11 +18554,21 @@ TEST(EditorApiTests,
           "Untouched Component Scope");
   ASSERT_TRUE(untouched_box.ok()) << untouched_box.error_message();
 
+  enter_edit_mode_for_objects(editor, {selected_box, empty_box.value()});
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face)
                   .ok());
   ASSERT_TRUE(editor.selection().select_face(selected_box, 1).ok());
   ASSERT_EQ(editor.selection().summary().selected_face_count, 1u);
-  ASSERT_TRUE(editor.selection().hover_face(sticky_box.value(), 1).ok());
+  const auto before_outside_selection =
+      quader::test::capture_command_observable_state(editor);
+  const auto outside_hover = editor.selection().hover_face(untouched_box.value(), 1);
+  EXPECT_FALSE(outside_hover.ok());
+  EXPECT_FALSE(outside_hover.changed());
+  EXPECT_EQ(editor.mode().state().participants.size(), 2U);
+  EXPECT_FALSE(editor.selection().select_object(untouched_box.value()).ok());
+  EXPECT_FALSE(editor.selection().select_face(untouched_box.value(), 1).ok());
+  EXPECT_EQ(quader::test::capture_command_observable_state(editor),
+            before_outside_selection);
 
   quader::QuaderHoverRequest miss;
   miss.ray = {
@@ -18173,7 +18584,7 @@ TEST(EditorApiTests,
   EXPECT_EQ(editor.selection().summary().selected_face_count, 12u);
   EXPECT_EQ(selected_entities(editor),
             (std::vector<quader::EntityId>{selected_box.entity,
-                                           sticky_box.value().entity}));
+                                           empty_box.value().entity}));
   const std::optional<quader::QuaderEntitySnapshot> untouched =
       editor.query().entity(untouched_box.value().entity);
   ASSERT_TRUE(untouched.has_value());
@@ -18181,18 +18592,25 @@ TEST(EditorApiTests,
 }
 
 TEST(EditorApiTests,
-     ComponentSelectAllIgnoresAStaleStickyCandidate) {
+     ComponentSelectAllIgnoresAStaleHoverReference) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
   const quader::QuaderModelingObjectRef selected_box =
       create_selected_box(editor, "Live Component Scope");
 
+  enter_edit_mode_for_objects(editor, {selected_box});
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face)
                   .ok());
   ASSERT_TRUE(editor.selection().select_face(selected_box, 1).ok());
   quader::QuaderModelingObjectRef stale_reference = selected_box;
   stale_reference.modeling_object_id = 123456789;
-  ASSERT_TRUE(editor.selection().hover_face(stale_reference, 1).ok());
+  const auto before_stale_hover =
+      quader::test::capture_command_observable_state(editor);
+  const auto stale_hover = editor.selection().hover_face(stale_reference, 1);
+  EXPECT_FALSE(stale_hover.ok());
+  EXPECT_FALSE(stale_hover.changed());
+  EXPECT_EQ(quader::test::capture_command_observable_state(editor),
+            before_stale_hover);
   ASSERT_EQ(editor.selection().summary().selected_face_count, 1u);
 
   const quader::QuaderApiVoidResult selected_all =
@@ -18524,7 +18942,7 @@ TEST(EditorApiTests,
 }
 
 TEST(EditorApiTests,
-     SelectMeshNGonsCapturesDirectMeshesThenEntersFaceMode) {
+     SelectMeshNGonsRequiresEditModeAndRetainsEveryParticipant) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
   const quader::QuaderModelingObjectRef first =
@@ -18537,7 +18955,7 @@ TEST(EditorApiTests,
                   .select_objects({first, quad, second})
                   .ok());
   ASSERT_TRUE(
-      editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+      editor.mode().set(quader::QuaderEditorMode::Edit).ok());
 
   const quader::QuaderApiVoidResult selected =
       editor.selection().select_mesh_ngons();
@@ -18549,7 +18967,7 @@ TEST(EditorApiTests,
   EXPECT_EQ(summary.selected_face_count, 2U);
   EXPECT_EQ(summary.active_object_id, second.modeling_object_id);
   EXPECT_EQ(selected_entities(editor),
-            (std::vector<quader::EntityId>{first.entity, second.entity}));
+            (std::vector<quader::EntityId>{first.entity, second.entity, quad.entity}));
 
   CommandTestHarness instance_harness;
   quader::QuaderEditorApi &instance_editor = instance_harness.editor;
@@ -18561,8 +18979,7 @@ TEST(EditorApiTests,
             quader::QuaderSelectionMode::Object);
   const quader::QuaderApiVoidResult ignored_occurrence =
       instance_editor.selection().select_mesh_ngons();
-  ASSERT_TRUE(ignored_occurrence.ok())
-      << ignored_occurrence.error_message();
+  EXPECT_FALSE(ignored_occurrence.ok());
   EXPECT_FALSE(ignored_occurrence.changed());
   EXPECT_EQ(instance_editor.selection().summary().mode,
             quader::QuaderSelectionMode::Object);
@@ -18600,6 +19017,7 @@ TEST(EditorApiTests,
       quader::QuaderCreateMeshArgs{.name = "Tilted Coplanar Faces"});
   ASSERT_TRUE(created.ok()) << created.error_message();
   const quader::QuaderModelingObjectRef object = created.value();
+  enter_edit_mode_for_objects(editor, {object});
   quader::QuaderComponentSelectionArgs selection{
       .object = object,
       .kind = quader::QuaderComponentKind::Face,
@@ -18691,6 +19109,7 @@ TEST(EditorApiTests,
   ASSERT_TRUE(editor.selection()
                   .select_objects({first, mirrored.value(), tilted.value()})
                   .ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(
       editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection()
@@ -18707,7 +19126,7 @@ TEST(EditorApiTests,
   EXPECT_EQ(editor.selection().summary().selected_face_count, 2U);
   EXPECT_EQ(selected_entities(editor),
             (std::vector<quader::EntityId>{first.entity,
-                                           mirrored.value().entity}));
+                                           mirrored.value().entity, tilted.value().entity}));
 }
 
 TEST(EditorApiTests,
@@ -18752,6 +19171,7 @@ TEST(EditorApiTests,
   ASSERT_TRUE(editor.selection()
                   .select_objects({first, second.value(), third.value()})
                   .ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(
       editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
   ASSERT_TRUE(editor.selection()
@@ -18766,13 +19186,17 @@ TEST(EditorApiTests,
   ASSERT_TRUE(selected_direction.ok()) << selected_direction.error_message();
   EXPECT_TRUE(selected_direction.changed());
   EXPECT_EQ(editor.selection().summary().selected_edge_count, 8u);
-  EXPECT_EQ(selected_entities(editor).size(), 2u);
+  EXPECT_EQ(selected_entities(editor).size(), 3u);
   const std::optional<quader::QuaderEntitySnapshot> non_matching_after =
       entity_by_id(editor, third.value().entity);
   ASSERT_TRUE(non_matching_after.has_value());
-  EXPECT_FALSE(non_matching_after->selected)
-      << "A 45-degree rotation must not be compared as an unchanged local "
-         "edge direction.";
+  EXPECT_TRUE(non_matching_after->selected);
+  const auto overlay = editor.render().selection_overlay_frame();
+  EXPECT_FALSE(std::any_of(overlay.lines.begin(), overlay.lines.end(),
+      [&](const quader::QuaderOverlayLine &line) {
+        return line.layer == quader::QuaderOverlayLayer::SelectedEdge &&
+               line.element.object_id == third.value().modeling_object_id;
+      })) << "The enrolled non-matching mesh retains membership without selected edges.";
 
 #ifndef NDEBUG
   const nlohmann::json selection = nlohmann::json::parse(
@@ -19205,6 +19629,7 @@ TEST(EditorApiTests, SelectionApiExposesTypedTargetsThroughPublicQueries) {
     ASSERT_TRUE(first_snapshot.has_value());
     EXPECT_TRUE(first_snapshot->active);
 
+    enter_edit_mode_for_objects(editor, {first.value()});
     ASSERT_TRUE(editor.selection().select_face(first.value(), 1).ok());
     summary = editor.modeling().selection_summary();
     EXPECT_EQ(summary.mode, quader::QuaderSelectionMode::Face);
@@ -19213,7 +19638,7 @@ TEST(EditorApiTests, SelectionApiExposesTypedTargetsThroughPublicQueries) {
     EXPECT_EQ(summary.selected_face_count, 1u);
 
     ASSERT_TRUE(
-        editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+        editor.mode().set(quader::QuaderEditorMode::Object).ok());
     ASSERT_TRUE(
         editor.selection()
             .select_objects({first.value().entity, second.value().entity},
@@ -19239,6 +19664,7 @@ TEST(EditorApiTests,
     quader::QuaderEditorApi& editor = harness.editor;
     const quader::QuaderModelingObjectRef object =
         create_selected_box(editor, "Active Component Box");
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
     ASSERT_TRUE(
         editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
 
@@ -20111,6 +20537,7 @@ TEST(EditorApiTests, EdgeBevelToolSettingsUseOperationSchemaWidthLimits) {
   ASSERT_TRUE(created.ok()) << created.error_message();
   const quader::QuaderModelingObjectRef box = created.value();
   ASSERT_TRUE(editor.selection().select_object(box).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(
       editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
   ASSERT_TRUE(editor.selection().select_edge(box, 1, 2).ok());
@@ -20151,6 +20578,7 @@ TEST(EditorApiTests, EdgeBevelLearningMaximumReportsChangeWithoutGeometryChange)
       {.min = {-0.25f, -0.125f, -0.25f},
        .max = {0.25f, 2.125f, 0.25f}}, "Bevel Maximum Feedback Source");
   ASSERT_TRUE(source.ok()) << source.error_message();
+  enter_edit_mode_for_objects(editor, {source.value()});
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
   ASSERT_TRUE(editor.selection().select_edge(source.value(), 2, 3).ok());
   ASSERT_TRUE(editor.commands().execute(
@@ -20217,6 +20645,7 @@ TEST(EditorApiTests, EdgeBevelSelectionRestartRecalculatesUsefulWidth) {
        .max = {0.125f, 2.125f, 0.125f}}, "Smaller Bevel Source");
   ASSERT_TRUE(source.ok());
   ASSERT_TRUE(smaller.ok());
+  enter_edit_mode_for_objects(editor, {source.value(), smaller.value()});
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
   ASSERT_TRUE(editor.selection().select_edge(source.value(), 2, 3).ok());
   ASSERT_TRUE(editor.commands().execute(
@@ -20822,9 +21251,11 @@ TEST(EditorApiTests, StaleExtrudeActionCannotReactivateAnOutgoingTool) {
         {.min = {3.0f, -1.0f, -1.0f}, .max = {5.0f, 1.0f, 1.0f}},
         "Stale action companion");
     ASSERT_TRUE(companion.ok()) << companion.error_message();
+    enter_edit_mode_for_objects(editor, {source});
+    ASSERT_TRUE(editor.selection().select_face(source, 1).ok());
     ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Extrude).ok());
     ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Move).ok());
-    ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+    ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
     ASSERT_TRUE(editor.selection().select_objects(
         {source.entity, companion.value().entity}, source.entity).ok());
     ASSERT_TRUE(editor.tools().activate(incoming).ok());
@@ -21019,6 +21450,7 @@ TEST(EditorApiTests,
     const std::optional<quader::QuaderMeshSnapshot> before =
         editor.query().mesh(box.mesh);
     ASSERT_TRUE(before.has_value());
+    enter_edit_mode_for_objects(editor, {box});
     ASSERT_TRUE(
         editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
     ASSERT_TRUE(editor.selection().select_edge(box, 1, 2).ok());
@@ -21902,7 +22334,8 @@ TEST(EditorApiTests, PivotRejectsStaleSelectionAndIneligibleTargets) {
   {
     CommandTestHarness harness;
     quader::QuaderEditorApi &editor = harness.editor;
-    create_selected_box(editor, "Component Pivot Box");
+    const auto box = create_selected_box(editor, "Component Pivot Box");
+    enter_edit_mode_for_objects(editor, {box});
     ASSERT_TRUE(editor.modeling()
                     .set_selection_mode(quader::QuaderSelectionMode::Vertex)
                     .ok());
@@ -22929,18 +23362,21 @@ TEST(EditorApiTests,
   EXPECT_EQ(selected_entities(editor),
             std::vector<quader::EntityId>{second_occurrence});
 
-  // Formal occurrences expose no component targets until their definition is
-  // entered, and changing away from Object mode clears the atomic root.
-  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Group)
-                  .ok());
-  EXPECT_TRUE(selected_entities(editor).empty());
-  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face)
-                  .ok());
-  EXPECT_TRUE(selected_entities(editor).empty());
-  const auto outside_component_pick = pick_at_x(4.0f);
-  ASSERT_TRUE(outside_component_pick.ok())
-      << outside_component_pick.error_message();
-  EXPECT_EQ(outside_component_pick.value().selected_face_count, 0u);
+  // Formal occurrences do not expose components until their definition is
+  // entered and its editable member is explicitly enrolled in Edit Mode.
+  EXPECT_FALSE(editor.selection().set_mode(quader::QuaderSelectionMode::Face)
+                   .ok());
+  const auto before_occurrence_entry =
+      quader::test::capture_command_observable_state(editor);
+  const auto occurrence_entry = editor.mode().set(quader::QuaderEditorMode::Edit);
+  EXPECT_TRUE(occurrence_entry.ok()) << occurrence_entry.error_message();
+  EXPECT_FALSE(occurrence_entry.changed());
+  EXPECT_TRUE(occurrence_entry.error_message().empty());
+  EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Object);
+  EXPECT_EQ(quader::test::capture_command_observable_state(editor),
+            before_occurrence_entry);
+  EXPECT_EQ(selected_entities(editor),
+            std::vector<quader::EntityId>{second_occurrence});
   const auto outside_direct_component =
       editor.selection().select_face(member, 0);
   EXPECT_FALSE(outside_direct_component.ok());
@@ -23004,6 +23440,7 @@ TEST(EditorApiTests,
   ASSERT_TRUE(rotated_center_after_undo.has_value());
   expect_vec3_near(*rotated_center_after_undo, *rotated_center_before_move);
 
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face)
                   .ok());
 
@@ -23057,16 +23494,16 @@ TEST(EditorApiTests,
   EXPECT_EQ(editor.selection().summary().selected_face_count, 0u);
 
   ASSERT_TRUE(editor.selection().hover_face(member, 1).ok());
-  quader::QuaderHoverRequest sticky_miss;
-  sticky_miss.ray = {
+  quader::QuaderHoverRequest hover_miss;
+  hover_miss.ray = {
       .origin = {100.0f, 100.0f, 5.0f},
       .direction = {0.0f, 0.0f, -1.0f},
   };
-  ASSERT_TRUE(editor.selection().hover(sticky_miss).ok());
-  const quader::QuaderApiVoidResult sticky_select_all =
+  ASSERT_TRUE(editor.selection().hover(hover_miss).ok());
+  const quader::QuaderApiVoidResult selected_all_after_miss =
       editor.selection().select_all();
-  ASSERT_TRUE(sticky_select_all.ok()) << sticky_select_all.error_message();
-  EXPECT_TRUE(sticky_select_all.changed());
+  ASSERT_TRUE(selected_all_after_miss.ok()) << selected_all_after_miss.error_message();
+  EXPECT_TRUE(selected_all_after_miss.changed());
   EXPECT_EQ(editor.selection().summary().selected_face_count, 6u);
 
   quader::QuaderBoxSelectRequest active_box;
@@ -23086,6 +23523,7 @@ TEST(EditorApiTests,
   ASSERT_TRUE(sibling_box_pick.ok()) << sibling_box_pick.error_message();
   EXPECT_EQ(sibling_box_pick.value().selected_face_count, 0u);
 
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
   ASSERT_TRUE(editor.modeling().exit_instance_edit().ok());
   EXPECT_EQ(editor.selection().summary().mode,
             quader::QuaderSelectionMode::Object);
@@ -23608,7 +24046,7 @@ TEST(EditorApiTests, InstanceEditRejectsLockedAndHiddenOccurrences) {
 }
 
 TEST(EditorApiTests,
-     InvalidatedInstanceEditContextCancelsTransientStateAndRestoresObjectMode) {
+     InstanceOccurrenceDeletionRequiresObjectModeAndCleansItsEditContext) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
   const quader::QuaderModelingObjectRef member =
@@ -23619,11 +24057,20 @@ TEST(EditorApiTests,
   const std::uint64_t entered_instance_edit_revision =
       editor.modeling().instance_edit_revision();
   ASSERT_TRUE(editor.selection().select_object(member).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(
       editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   EXPECT_EQ(editor.selection().summary().mode,
             quader::QuaderSelectionMode::Face);
 
+  const auto before_rejected_destroy =
+      quader::test::capture_command_observable_state(editor);
+  const auto rejected_destroy = editor.scene().destroy(occurrence);
+  EXPECT_FALSE(rejected_destroy.ok());
+  EXPECT_FALSE(rejected_destroy.changed());
+  EXPECT_EQ(quader::test::capture_command_observable_state(editor),
+            before_rejected_destroy);
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
   const quader::QuaderApiVoidResult destroyed =
       editor.scene().destroy(occurrence);
   ASSERT_TRUE(destroyed.ok()) << destroyed.error_message();
@@ -23970,9 +24417,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 211u);
+  EXPECT_EQ(commands.size(), 215u);
 #else
-  EXPECT_EQ(commands.size(), 210u);
+  EXPECT_EQ(commands.size(), 214u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;
@@ -24066,6 +24513,9 @@ TEST(EditorApiTests,
   EXPECT_FALSE(has_keybinding_catalog_entry(
       catalog, quader::quader_command::kDeleteSelection.string(),
       "Backspace"));
+
+  EXPECT_TRUE(has_keybinding_catalog_entry(
+      catalog, quader::quader_command::kEditorModeToggleEdit.string(), "Tab"));
 
   const std::string vertex_target =
       editor.commands().keybinding_target_id_for_selection_mode(

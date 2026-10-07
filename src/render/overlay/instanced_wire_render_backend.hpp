@@ -49,6 +49,7 @@ struct InstancedWireBatchStyle final {
   float instance_edit_dim = 0.0f;
   std::uint8_t layer_mask = 0u;
   std::uint8_t channel = 0u;
+  bool surface_depth_enabled = false;
   ViewportSettingColor line_tint{1.0f, 1.0f, 1.0f, 1.0f};
 };
 

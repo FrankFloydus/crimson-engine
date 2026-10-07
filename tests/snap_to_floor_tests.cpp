@@ -905,6 +905,8 @@ TEST(SnapToFloorTests,
   const quader::QuaderModelingObjectRef source =
       create_mesh(harness, "Conforming Vertices",
                   std::move(source_document.document));
+  ASSERT_TRUE(harness.editor.selection().select_object(source).ok());
+  ASSERT_TRUE(harness.editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   select_quad_vertices(harness, source, source_vertices,
                        quader::QuaderSelectionEdit::Replace);
   ASSERT_TRUE(harness.editor.modeling().can_snap_selected_vertices_to_floor());
@@ -989,6 +991,10 @@ TEST(SnapToFloorTests,
       create_mesh(harness, "Upper Source", std::move(upper_document.document));
   const quader::QuaderModelingObjectRef lower =
       create_mesh(harness, "Lower Source", std::move(lower_document.document));
+  ASSERT_TRUE(harness.editor.selection()
+                  .select_objects({upper.entity, lower.entity}, upper.entity)
+                  .ok());
+  ASSERT_TRUE(harness.editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   select_quad_vertices(harness, upper, upper_vertices,
                        quader::QuaderSelectionEdit::Replace);
   select_quad_vertices(harness, lower, lower_vertices,
@@ -1036,6 +1042,8 @@ TEST(SnapToFloorTests,
   const quader::QuaderModelingObjectRef source = create_mesh(
       harness, "Affine Vertex Source", std::move(source_document.document),
       source_transform);
+  ASSERT_TRUE(harness.editor.selection().select_object(source).ok());
+  ASSERT_TRUE(harness.editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   select_quad_vertices(harness, source, source_vertices,
                        quader::QuaderSelectionEdit::Replace);
   const quader::TransformComponent transform_before =
@@ -1076,6 +1084,8 @@ TEST(SnapToFloorTests, VertexRedoRestoresCapturedResultWithoutReraycasting) {
   const auto source_vertices = source_document.vertices;
   const quader::QuaderModelingObjectRef source =
       create_mesh(harness, "Redo Source", std::move(source_document.document));
+  ASSERT_TRUE(harness.editor.selection().select_object(source).ok());
+  ASSERT_TRUE(harness.editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   select_quad_vertices(harness, source, source_vertices,
                        quader::QuaderSelectionEdit::Replace);
 
@@ -1137,6 +1147,10 @@ TEST(SnapToFloorTests,
   ASSERT_TRUE(harness.editor.scene()
                   .reparent(singular.entity, parent.value().id, false)
                   .ok());
+  ASSERT_TRUE(harness.editor.selection()
+                  .select_objects({valid.entity, singular.entity}, valid.entity)
+                  .ok());
+  ASSERT_TRUE(harness.editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   select_quad_vertices(harness, valid, valid_vertices,
                        quader::QuaderSelectionEdit::Replace);
   select_quad_vertices(harness, singular, singular_vertices,
@@ -1174,6 +1188,8 @@ TEST(SnapToFloorTests, VertexExactNoOpDoesNotPublishOrAddHistory) {
   const quader::QuaderModelingObjectRef source =
       create_mesh(harness, "Already Floored Vertices",
                   std::move(source_document.document));
+  ASSERT_TRUE(harness.editor.selection().select_object(source).ok());
+  ASSERT_TRUE(harness.editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   select_quad_vertices(harness, source, source_vertices,
                        quader::QuaderSelectionEdit::Replace);
   const MeshGeometryState geometry_before = mesh_geometry(harness, source);
@@ -1212,6 +1228,8 @@ TEST(SnapToFloorTests,
   ASSERT_TRUE(instance.ok()) << instance.error_message();
   const quader::EntityId occurrence = instance.value().occurrence.root.id;
   ASSERT_TRUE(harness.editor.modeling().enter_instance_edit(occurrence).ok());
+  ASSERT_TRUE(harness.editor.selection().select_object(member).ok());
+  ASSERT_TRUE(harness.editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(harness.editor.selection().select_vertex(member, 1).ok());
   ASSERT_EQ(harness.editor.selection().summary().mode,
             quader::QuaderSelectionMode::Vertex);

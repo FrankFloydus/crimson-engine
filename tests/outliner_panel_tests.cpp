@@ -21,6 +21,7 @@
 #include "viewport/viewport_settings.hpp"
 
 #include <QAbstractItemModel>
+#include <QAbstractItemDelegate>
 #include <QAbstractItemView>
 #include <QAction>
 #include <QApplication>
@@ -294,6 +295,95 @@ protected:
   quader::OutlinerPanel panel_;
   QTreeView *tree_ = nullptr;
 };
+
+TEST_F(OutlinerPanelDropTests,
+       DeselectedActiveMeshHasFaintNativePresentationWithoutSelection) {
+  const QPalette native_palette = application_.palette();
+  quader::apply_qt_obsidian_application_theme(native_palette);
+  quader::QtUiScaleApplicationController scale_controller(application_);
+  const auto first = editor_.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Retained active mesh");
+  const auto second = editor_.modeling().create_box(
+      {.min = {3, -1, -1}, .max = {5, 1, 1}}, "Other mesh");
+  ASSERT_TRUE(first.ok());
+  ASSERT_TRUE(second.ok());
+  ASSERT_TRUE(editor_.selection().select_object(first.value()).ok());
+  refresh();
+  ASSERT_TRUE(editor_.selection().clear().ok());
+  refresh();
+  EXPECT_EQ(editor_.mode().state().active_entity.id, first.value().entity);
+  expect_selection(*tree_, session_.scene(), {}, quader::kInvalidEntityId);
+  EXPECT_FALSE(tree_->currentIndex().isValid());
+  const QPersistentModelIndex retained_row(index(first.value().entity));
+  const auto history_count = session_.history().undo_count();
+  int row_changes = 0;
+  QObject::connect(tree_->model(), &QAbstractItemModel::dataChanged, &panel_,
+      [&](const QModelIndex &, const QModelIndex &, const QList<int> &) {
+        ++row_changes;
+      });
+  for (int frame = 0; frame < 12; ++frame) {
+    refresh();
+  }
+  EXPECT_EQ(row_changes, 0);
+  EXPECT_EQ(session_.history().undo_count(), history_count);
+  EXPECT_TRUE(retained_row.isValid());
+
+  const auto row_background = [&](quader::EntityId entity, bool selected) {
+    const QSize size = scale_controller.metrics().size(QSize(280, 28));
+    QImage image(size, QImage::Format_ARGB32_Premultiplied);
+    image.fill(tree_->palette().color(QPalette::Active, QPalette::Base).rgba());
+    QPainter painter(&image);
+    QStyleOptionViewItem option;
+    option.initFrom(tree_);
+    option.palette.setCurrentColorGroup(QPalette::Active);
+    option.rect = image.rect();
+    option.state = QStyle::State_Enabled | QStyle::State_Active;
+    if (selected) option.state |= QStyle::State_Selected;
+    tree_->itemDelegate()->paint(&painter, option, index(entity));
+    painter.end();
+    return image.pixel(image.width() - 8, image.height() / 2);
+  };
+  const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  const auto capture = [&](const QString &suffix) {
+    EXPECT_EQ(row_background(first.value().entity, false),
+              tree_->palette().color(QPalette::Active, QPalette::AlternateBase).rgba());
+    EXPECT_EQ(row_background(second.value().entity, false),
+              tree_->palette().color(QPalette::Active, QPalette::Base).rgba());
+    EXPECT_EQ(row_background(first.value().entity, true),
+              tree_->palette().color(QPalette::Active, QPalette::Highlight).rgba());
+    if (!review_directory.isEmpty()) {
+      ASSERT_TRUE(QDir().mkpath(review_directory));
+      EXPECT_TRUE(panel_.grab().save(QDir(review_directory).filePath(
+          QStringLiteral("outliner-active-deselected-%1.png").arg(suffix))));
+    }
+  };
+  int cycle = 0;
+  for (const float factor : {1.0F, 2.0F, 1.0F}) {
+    scale_controller.apply_factor(factor);
+    panel_.apply_ui_scale(scale_controller.metrics());
+    panel_.resize(scale_controller.metrics().size(QSize(280, 250)));
+    refresh();
+    capture(QStringLiteral("%1-%2").arg(qRound(factor * 100)).arg(cycle++));
+  }
+  quader::apply_qt_application_theme_for_contrast_preference(
+      native_palette, Qt::ContrastPreference::HighContrast);
+  refresh();
+  capture(QStringLiteral("native-contrast"));
+
+  ASSERT_TRUE(editor_.mode().toggle_edit().ok());
+  ASSERT_EQ(editor_.mode().state().participants.size(), 1u);
+  EXPECT_EQ(editor_.mode().state().participants.front().id, first.value().entity);
+  ASSERT_TRUE(editor_.mode().set(quader::QuaderEditorMode::Object).ok());
+  ASSERT_TRUE(editor_.selection().select_object(second.value()).ok());
+  ASSERT_TRUE(editor_.selection().clear().ok());
+  refresh();
+  EXPECT_EQ(editor_.mode().state().active_entity.id, second.value().entity);
+  expect_selection(*tree_, session_.scene(), {}, quader::kInvalidEntityId);
+  EXPECT_EQ(row_background(first.value().entity, false),
+            tree_->palette().color(QPalette::Active, QPalette::Base).rgba());
+  EXPECT_EQ(row_background(second.value().entity, false),
+            tree_->palette().color(QPalette::Active, QPalette::AlternateBase).rgba());
+}
 
 TEST_F(OutlinerPanelDropTests,
        TypeIconsShareRetainedArtworkAndLightEditsUpdateOnlyTheirDecoration) {

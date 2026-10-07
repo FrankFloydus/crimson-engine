@@ -19,6 +19,7 @@ namespace quader {
 enum class RenderInstancePresentationFlag : std::uint8_t {
   None = 0u,
   Dimmed = 1u << 0u,
+  ShadedWireColorOverride = 1u << 1u,
 };
 
 /// Identifies immutable render payloads without scene or asset identities.

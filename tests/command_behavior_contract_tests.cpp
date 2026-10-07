@@ -615,9 +615,9 @@ TEST(CommandBehaviorContractTests,
   EXPECT_EQ(contracted, registered)
       << "The registry and explicit behavior-contract catalog diverged.";
 #ifndef NDEBUG
-  EXPECT_EQ(contracted.size(), 211u);
+  EXPECT_EQ(contracted.size(), 215u);
 #else
-  EXPECT_EQ(contracted.size(), 210u);
+  EXPECT_EQ(contracted.size(), 214u);
 #endif
 }
 
@@ -629,6 +629,57 @@ TEST(CommandBehaviorContractTests,
   EXPECT_EQ(contract->fixture, CanonicalCommandFixture::CurveSelection);
   EXPECT_EQ(contract->outcome, CommandOutcomePolicy::SuccessRequired);
   EXPECT_EQ(contract->undo_repeat, CommandUndoRepeatPolicy::None);
+}
+
+TEST(CommandBehaviorContractTests,
+     MeshWireFingerprintsDistinguishVisibilityInheritedColorAndExplicitBlack) {
+  auto standalone = create_standalone_editor();
+  QuaderEditorApi &editor = standalone.editor();
+  const auto created = editor.modeling().create_box(
+      {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}},
+      "Wire Fingerprint Mesh");
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  const auto entity = editor.query().entity(created.value().entity);
+  ASSERT_TRUE(entity.has_value());
+  ASSERT_TRUE(entity->wireframe_on_shaded);
+  ASSERT_FALSE(entity->wireframe_on_shaded_color.has_value());
+  const auto inherited = capture_command_observable_state(editor);
+  QuaderMeshComponent mesh{.mesh = entity->mesh, .wireframe_on_shaded = false};
+  ASSERT_TRUE(editor.scene().set_mesh_component(entity->id, mesh).changed());
+  const auto disabled = capture_command_observable_state(editor);
+  EXPECT_TRUE(diff_command_observable_state(inherited, disabled)
+                  .changed(CommandObservableDomain::Scene));
+  EXPECT_EQ(inherited.domain(CommandObservableDomain::Geometry),
+            disabled.domain(CommandObservableDomain::Geometry));
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(inherited.domain(CommandObservableDomain::Scene),
+            capture_command_observable_state(editor).domain(CommandObservableDomain::Scene));
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(disabled.domain(CommandObservableDomain::Scene),
+            capture_command_observable_state(editor).domain(CommandObservableDomain::Scene));
+
+  mesh.wireframe_on_shaded_color = QVec3{};
+  ASSERT_TRUE(editor.scene().set_mesh_component(entity->id, mesh).changed());
+  const auto black = capture_command_observable_state(editor);
+  EXPECT_TRUE(diff_command_observable_state(disabled, black)
+                  .changed(CommandObservableDomain::Scene));
+  mesh.wireframe_on_shaded_color = QVec3{0.25F, 0.5F, 0.75F};
+  ASSERT_TRUE(editor.scene().set_mesh_component(entity->id, mesh).changed());
+  const auto colored = capture_command_observable_state(editor);
+  EXPECT_TRUE(diff_command_observable_state(black, colored)
+                  .changed(CommandObservableDomain::Scene));
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(black.domain(CommandObservableDomain::Scene),
+            capture_command_observable_state(editor).domain(CommandObservableDomain::Scene));
+  mesh.wireframe_on_shaded_color.reset();
+  ASSERT_TRUE(editor.scene().set_mesh_component(entity->id, mesh).changed());
+  EXPECT_EQ(disabled.domain(CommandObservableDomain::Scene),
+            capture_command_observable_state(editor).domain(CommandObservableDomain::Scene));
+  const auto unchanged = capture_command_observable_state(editor);
+  const auto repeated = editor.scene().set_mesh_component(entity->id, mesh);
+  EXPECT_TRUE(repeated.ok()) << repeated.error_message();
+  EXPECT_FALSE(repeated.changed());
+  EXPECT_EQ(unchanged, capture_command_observable_state(editor));
 }
 
 TEST(CommandBehaviorContractTests,
@@ -753,6 +804,7 @@ TEST(CommandBehaviorContractTests,
   ASSERT_NE(contract, nullptr);
   auto fixture = CommandBehaviorFixture::create(*contract);
   QuaderEditorApi &editor = fixture->editor();
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Object).ok());
   const auto created = editor.modeling().create_curve({
       .points = {{.position = {0.0F, 0.0F, 0.0F},
                   .outgoing_handle = {1.0F, 0.0F, 0.0F}},
@@ -1118,7 +1170,7 @@ TEST(CommandBehaviorContractTests, ApprovedFingerprintCoversEveryCommand) {
 
 TEST(CommandBehaviorContractTests,
      SeededCommandSequencesPreserveEveryGlobalMutationLaw) {
-  constexpr std::array<std::string_view, 28> kSequenceCommands{
+  constexpr std::array<std::string_view, 29> kSequenceCommands{
       "edit.clear_selection",
       "select.all",
       "select.inverse",
@@ -1140,6 +1192,7 @@ TEST(CommandBehaviorContractTests,
       "viewport.grid.increment",
       "viewport.grid.decrement",
       "viewport.toggle_grid",
+      "viewport.toggle_wireframe_on_shaded",
       "viewport.toggle_gizmos",
       "viewport.toggle_mesh_grid",
       "viewport.toggle_overlays",

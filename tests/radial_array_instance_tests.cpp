@@ -253,6 +253,8 @@ TEST(RadialArrayInstanceTests, LinkedMeshArrayConvertsOriginalAndPreservesRedoId
   EXPECT_EQ(h.session.scene().containing_instance_definition(source.entity), definition);
 
   ASSERT_TRUE(h.editor.modeling().enter_instance_edit(selected.front()).ok());
+  ASSERT_TRUE(h.editor.selection().select_object(source).ok());
+  ASSERT_TRUE(h.editor.mode().set(QuaderEditorMode::Edit).ok());
   const auto *before_asset = h.session.assets().mesh(original_mesh);
   ASSERT_NE(before_asset, nullptr);
   ASSERT_TRUE(before_asset->authored_polygon_document);

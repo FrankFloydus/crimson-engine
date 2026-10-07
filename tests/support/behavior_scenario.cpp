@@ -412,6 +412,22 @@ BehaviorGiven& BehaviorGiven::selected(std::string_view alias) {
     return *this;
 }
 
+BehaviorGiven &BehaviorGiven::edit_mode() {
+  const auto status = scenario_.editor().mode().set(QuaderEditorMode::Edit);
+  if (!status.ok()) {
+    ADD_FAILURE() << status.error_message();
+  }
+  return *this;
+}
+
+BehaviorGiven &BehaviorGiven::object_mode() {
+  const auto status = scenario_.editor().mode().set(QuaderEditorMode::Object);
+  if (!status.ok()) {
+    ADD_FAILURE() << status.error_message();
+  }
+  return *this;
+}
+
 BehaviorGiven &BehaviorGiven::selection_mode(QuaderSelectionMode mode) {
   const QuaderApiStatus status = scenario_.api().selection().set_mode(mode);
   scenario_.record_status(status);

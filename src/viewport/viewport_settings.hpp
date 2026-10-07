@@ -73,6 +73,7 @@ enum class ViewportColorSettingId {
     RemoveSelectionVertex,
     CollisionFill,
     Background,
+    WireframeOnShaded,
     Count,
 };
 
@@ -137,6 +138,7 @@ enum class ViewportBoolSettingId {
     TextureLockScale,
     ShowCollisions,
     ShowDimensions,
+    WireframeOnShaded,
     Count,
 };
 

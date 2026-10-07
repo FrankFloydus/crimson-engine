@@ -9,9 +9,11 @@
 
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_api_mutation_runner.hpp"
+#include "api/quader_api_status_internal.hpp"
 #include "diagnostics/profile.hpp"
 #include "core/release_features.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/modes/editor_mode_service.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "editor/placement/scene_surface_query.hpp"
 #include "editor/selection/quader_selection_api_runtime_access.hpp"
@@ -81,13 +83,14 @@ ModelingSelectionEdit to_modeling_edit(QuaderSelectionEdit edit) {
 class QuaderSelectionBoxBaseline::Impl final {
 public:
     Impl(EditorSelectionBoxBaseline baseline, SceneSessionId scene_session_id,
-         const SceneSession *owner)
+         const SceneSession *owner, std::uint64_t edit_generation)
         : baseline(std::move(baseline)), scene_session_id(scene_session_id),
-          owner(owner) {}
+          owner(owner), edit_generation(edit_generation) {}
 
     EditorSelectionBoxBaseline baseline;
     SceneSessionId scene_session_id;
     const SceneSession *owner = nullptr;
+    std::uint64_t edit_generation = 0u;
 };
 
 QuaderSelectionBoxBaseline::QuaderSelectionBoxBaseline() = default;
@@ -416,6 +419,20 @@ QuaderApiVoidResult QuaderSelectionApi::shrink() {
 }
 
 QuaderApiVoidResult QuaderSelectionApi::set_mode(QuaderSelectionMode mode) {
+  SceneSession &session = scene_session(session_);
+  if (!mutations_.available()) {
+    return quader_api_failure_status(session, "No scene is active.");
+  }
+  if (mode == QuaderSelectionMode::Vertex || mode == QuaderSelectionMode::Edge ||
+      mode == QuaderSelectionMode::Face) {
+    return mutations_.run_runtime_result(
+        session.editor_mode().set_component_kind(to_modeling_selection_mode(mode)),
+        "Set Component Selection Kind");
+  }
+  if (session.editor_mode().mode() != EditorMode::Object) {
+    return quader_api_failure_status(session,
+                                    "Mesh and Group selection require Object Mode.");
+  }
   return mutations_.set_selection_mode(to_modeling_selection_mode(mode));
 }
 
@@ -448,7 +465,9 @@ QuaderApiResult<QuaderSelectionSummary> QuaderSelectionApi::pick_select(
   if (baseline != nullptr && baseline->impl_ != nullptr &&
       (!mutations_.belongs_to_active_scene(baseline->impl_->scene_session_id) ||
        baseline->impl_->owner !=
-           QuaderApiSessionInternalAccess::active_scene_session(session_))) {
+           QuaderApiSessionInternalAccess::active_scene_session(session_) ||
+       baseline->impl_->edit_generation !=
+           scene_session(session_).editor_mode().generation())) {
     return quader_api_result_from_status<QuaderSelectionSummary>(
         mutations_.stale_scene_reference_status("Selection baseline"));
   }
@@ -528,7 +547,8 @@ QuaderSelectionApi::capture_box_selection_baseline() const {
               scene_session(session_)
                   .selection()
                   .capture_box_selection_baseline(),
-              mutations_.scene_session_id(), &scene_session(session_))));
+              mutations_.scene_session_id(), &scene_session(session_),
+              scene_session(session_).editor_mode().generation())));
 }
 
 QuaderApiResult<QuaderSelectionSummary>
@@ -549,7 +569,9 @@ QuaderApiResult<QuaderSelectionSummary> QuaderSelectionApi::box_select(
   if (baseline != nullptr && baseline->impl_ != nullptr &&
       (!mutations_.belongs_to_active_scene(baseline->impl_->scene_session_id) ||
        baseline->impl_->owner !=
-           QuaderApiSessionInternalAccess::active_scene_session(session_))) {
+           QuaderApiSessionInternalAccess::active_scene_session(session_) ||
+       baseline->impl_->edit_generation !=
+           scene_session(session_).editor_mode().generation())) {
     return quader_api_result_from_status<QuaderSelectionSummary>(
         mutations_.stale_scene_reference_status("Selection baseline"));
   }

@@ -879,6 +879,13 @@ private:
                "Select canonical object pair");
   }
 
+  void enter_mesh_edit(const QuaderModelingObjectRef &object) {
+    require_ok(editor().selection().select_object(object),
+               "Select canonical edit participant");
+    require_ok(editor().mode().set(QuaderEditorMode::Edit),
+               "Enter canonical Edit Mode");
+  }
+
   void configure_object_set() {
     const QuaderModelingObjectRef first = create_box("Object Set A");
     const QuaderModelingObjectRef second = create_box("Object Set B");
@@ -929,6 +936,8 @@ private:
                "Enter Object mode for N-Gon selection");
     require_ok(editor().selection().select_object(object),
                "Select canonical N-Gon object");
+    require_ok(editor().mode().set(QuaderEditorMode::Edit),
+               "Enter Edit Mode for N-Gon selection");
   }
 
   void configure_group() {
@@ -1026,6 +1035,7 @@ private:
     }
     const QuaderModelingObjectRef object =
         create_polygon_object(std::move(polygon), std::move(name));
+    enter_mesh_edit(object);
     if (selected_vertices.size() == 1u) {
       require_ok(editor().selection().select_vertex(
                      object, api_element(selected_vertices.front())),
@@ -1053,6 +1063,7 @@ private:
     const std::vector<quader_poly::ElementId> vertices = polygon.vertices;
     const QuaderModelingObjectRef object =
         create_polygon_object(std::move(polygon), "Edge Selection Plane");
+    enter_mesh_edit(object);
     if (!pair) {
       const bool loop_seed =
           command_id_ == quader_command::kSelectEdgeLoops.string();
@@ -1107,6 +1118,7 @@ private:
     polygon.document.hard_normal_edges.push_back(selected_edge);
     const QuaderModelingObjectRef object = create_polygon_object(
         std::move(polygon), "Authored Hard Edge Selection Plane");
+    enter_mesh_edit(object);
     require_ok(editor().selection().select_edge(
                    object, api_element(selected_edge.a),
                    api_element(selected_edge.b)),
@@ -1118,6 +1130,7 @@ private:
     const std::vector<quader_poly::ElementId> vertices = polygon.vertices;
     const QuaderModelingObjectRef object =
         create_polygon_object(std::move(polygon), "Open Quad Boundary");
+    enter_mesh_edit(object);
     for (std::size_t index = 0; index < vertices.size(); ++index) {
       const std::size_t next = (index + 1u) % vertices.size();
       require_ok(editor().selection().select_edge(
@@ -1149,6 +1162,7 @@ private:
     const std::vector<quader_poly::ElementId> faces = polygon.faces;
     const QuaderModelingObjectRef object =
         create_polygon_object(std::move(polygon), "Face Selection Plane");
+    enter_mesh_edit(object);
     if (command_id_ ==
         quader_command::kSelectFacesWithSameMaterial.string()) {
       const QuaderAssetRef material = require_value(
@@ -1175,6 +1189,7 @@ private:
     const quader_poly::ElementId face = polygon.faces.front();
     const QuaderModelingObjectRef object =
         create_polygon_object(std::move(polygon), "Texture Action Face");
+    enter_mesh_edit(object);
     require_ok(editor().selection().select_face(object, api_element(face)),
                "Select canonical texture face");
   }
@@ -1185,6 +1200,7 @@ private:
     const auto second = polygon.vertices[1];
     const QuaderModelingObjectRef object =
         create_polygon_object(std::move(polygon), "UV Peel Open Quad");
+    enter_mesh_edit(object);
     require_ok(editor().selection().select_edge(
                    object, api_element(first), api_element(second)),
                "Select canonical UV Peel guide edge");

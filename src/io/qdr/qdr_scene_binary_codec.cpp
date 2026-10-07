@@ -55,7 +55,7 @@ namespace {
 namespace fb = ::quader::qdr::fb;
 
 constexpr std::uint16_t kMinimumSceneChunkSchemaVersion = 1u;
-constexpr std::uint16_t kSceneChunkSchemaVersion = 17u;
+constexpr std::uint16_t kSceneChunkSchemaVersion = 19u;
 constexpr std::uint16_t kGeometryChunkSchemaVersion = 1u;
 
 /**
@@ -1051,12 +1051,21 @@ void validate_write_snapshot_roots(const QdrProjectWriteSnapshot &snapshot) {
     }
     flatbuffers::Offset<fb::MeshComponent> mesh;
     if (entity.mesh.has_value()) {
+      if (!mesh_wireframe_color_is_valid(entity.mesh->wireframe_on_shaded_color)) {
+        throw std::runtime_error("Cannot encode invalid mesh wireframe color.");
+      }
+      std::optional<fb::Vec3> wireframe_color;
+      if (entity.mesh->wireframe_on_shaded_color.has_value()) {
+        wireframe_color = to_fb(*entity.mesh->wireframe_on_shaded_color);
+      }
       mesh = fb::CreateMeshComponent(
           builder, entity.mesh->mesh, entity.mesh->editor_only,
           entity.mesh->cast_shadows, entity.mesh->double_sided,
           entity.mesh->generate_collisions,
           to_fb(entity.mesh->collision_type),
-          entity.mesh->display_collision, to_fb(entity.mesh->body_type));
+          entity.mesh->display_collision, to_fb(entity.mesh->body_type),
+          entity.mesh->wireframe_on_shaded,
+          wireframe_color.has_value() ? &*wireframe_color : nullptr);
     }
     flatbuffers::Offset<fb::MaterialComponent> material;
     if (entity.material.has_value()) {
@@ -1213,13 +1222,23 @@ require_scene_metadata_chunk(
 }
 
 [[nodiscard]] const fb::ScenePayload *verify_scene_payload(
-    std::span<const std::byte> bytes) {
+    std::span<const std::byte> bytes, std::uint16_t schema_version) {
   flatbuffers::Verifier verifier(
       reinterpret_cast<const std::uint8_t *>(bytes.data()), bytes.size());
   if (!fb::VerifyScenePayloadBuffer(verifier)) {
     throw std::runtime_error("QDR scene metadata FlatBuffer is invalid.");
   }
-  return fb::GetScenePayload(bytes.data());
+  const auto *payload = fb::GetScenePayload(bytes.data());
+  if (schema_version >= 19u && payload->entities() != nullptr) {
+    for (const auto *entity : *payload->entities()) {
+      if (const auto *mesh = entity->mesh();
+          mesh != nullptr && mesh->wireframe_on_shaded_color() != nullptr &&
+          !mesh_wireframe_color_is_valid(from_fb(mesh->wireframe_on_shaded_color()))) {
+        throw std::runtime_error("QDR scene contains an invalid mesh wireframe color.");
+      }
+    }
+  }
+  return payload;
 }
 
 [[nodiscard]] const RetiredSchema10DependencyPayload *
@@ -2399,6 +2418,11 @@ decode_entity_state(const SceneContentDocument &document,
         .collision_type = from_fb(value->collision_type()),
         .display_collision = value->display_collision(),
         .body_type = mesh_body_type_from_fb(value->body_type()),
+        .wireframe_on_shaded = schema_version < 18u || value->wireframe_on_shaded(),
+        .wireframe_on_shaded_color =
+            schema_version >= 19u && value->wireframe_on_shaded_color() != nullptr
+                ? std::optional{from_fb(value->wireframe_on_shaded_color())}
+                : std::nullopt,
     };
   }
   if (const fb::MaterialComponent *value = stored.material()) {
@@ -3116,7 +3140,7 @@ QdrSceneBinaryDecodeResult decode_qdr_scene_binary_with_stats(
   const auto metadata_started = std::chrono::steady_clock::now();
   const quader_io::QdrBinaryChunk &metadata =
       require_scene_metadata_chunk(container);
-  const fb::ScenePayload *payload = verify_scene_payload(metadata.bytes());
+  const fb::ScenePayload *payload = verify_scene_payload(metadata.bytes(), metadata.schema_version);
   stats.metadata_access_ms = std::chrono::duration<double, std::milli>(
                                  std::chrono::steady_clock::now() -
                                  metadata_started)
@@ -3192,7 +3216,7 @@ QdrSceneBinaryDependencyDecodeResult decode_qdr_scene_binary_dependencies(
       require_scene_metadata_chunk(container);
   const fb::ScenePayload *payload = nullptr;
   try {
-    payload = verify_scene_payload(metadata.bytes());
+    payload = verify_scene_payload(metadata.bytes(), metadata.schema_version);
   } catch (const std::runtime_error &error) {
     std::optional<QdrSceneBinaryDependencyDecodeResult> recovered =
         decode_retired_schema_10_dependency_projection(container, metadata,
@@ -3429,7 +3453,7 @@ QdrSceneBinaryMaterialUsageDecodeResult decode_qdr_scene_binary_material_usage(
       throw std::runtime_error(validation.validation_error);
     }
     result = collect_scene_material_usage(
-        *verify_scene_payload(metadata.bytes()), container, metadata.schema_version);
+        *verify_scene_payload(metadata.bytes(), metadata.schema_version), container, metadata.schema_version);
   }
   result.stats.metadata_access_ms = std::max(0.0,
       std::chrono::duration<double, std::milli>(

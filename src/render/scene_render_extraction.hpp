@@ -184,9 +184,11 @@ build_render_tool_preview_scene_snapshot(
 [[nodiscard]] ViewportOverlayFrame build_render_tool_preview_overlay_frame(
     const RenderToolPreviewSceneSnapshot &preview);
 
-/** Pins authored edges once and retains the placements of generated array meshes. */
+/** Pins effective authored edges and retains ordinary/instanced preview placements. */
 [[nodiscard]] RenderOverlaySceneWireframeSnapshot
 build_render_tool_preview_wireframe_snapshot(
-    std::span<const RenderToolPreviewMeshRecord> meshes);
+    std::span<const RenderToolPreviewMeshRecord> meshes,
+    bool include_shaded_wires = false,
+    bool include_ordinary_wires = true);
 
 } // namespace quader

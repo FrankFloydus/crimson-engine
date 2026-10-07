@@ -150,6 +150,13 @@ protected:
     return *mesh->authored_polygon_document;
   }
 
+  void enter_edit_for_all_meshes() {
+    if (editor_.mode().current() == QuaderEditorMode::Object) {
+      ASSERT_TRUE(editor_.selection().select_all().ok());
+      ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
+    }
+  }
+
   void select_positive_x_face() {
     const auto document = topology();
     const auto face = std::ranges::find_if(document.faces, [&](const auto &face) {
@@ -158,6 +165,7 @@ protected:
       });
     });
     ASSERT_NE(face, document.faces.end());
+    enter_edit_for_all_meshes();
     ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Face).ok());
     ASSERT_TRUE(editor_.selection()
                     .select_face(object_, static_cast<QuaderElementId>(face->id))
@@ -194,6 +202,7 @@ protected:
     ASSERT_TRUE(rebound.has_value());
     object_ = *rebound;
     // Rehydration must retain an editable SDK binding even with no visible triangles.
+    enter_edit_for_all_meshes();
     ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Vertex).ok());
     ASSERT_TRUE(editor_.selection()
                     .select_vertex(object_, static_cast<QuaderElementId>(after.vertices[0].id))
@@ -232,6 +241,7 @@ class ComponentZeroScalePersistenceTests
 
 TEST_P(ComponentZeroScalePersistenceTests, RetainsAllAuthoredFaces) {
     const auto mode = GetParam();
+    enter_edit_for_all_meshes();
     ASSERT_TRUE(editor_.selection().set_mode(mode).ok());
     if (mode == QuaderSelectionMode::Face) {
       ASSERT_TRUE(editor_.selection().select_face(object_, 1).ok());
@@ -393,6 +403,7 @@ TEST_F(ComponentTransformPersistenceTests, SparseDragHistoryRestoresCanonicalAcc
 }
 
 TEST_F(ComponentTransformPersistenceTests, SparseDragHistoryOmitsSdkUnchangedParticipants) {
+  enter_edit_for_all_meshes();
   ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Vertex).ok());
   const auto original = topology();
   const auto first_vertex = std::ranges::find_if(original.vertices, [](const auto &vertex) {
@@ -403,6 +414,7 @@ TEST_F(ComponentTransformPersistenceTests, SparseDragHistoryOmitsSdkUnchangedPar
   ASSERT_TRUE(editor_.selection().select_vertex(object_, first_id).ok());
   ASSERT_TRUE(editor_.modeling().move_selection({-1.0F, 0.0F, 0.0F}).ok());
   const auto first_before = topology();
+  ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Object).ok());
   const auto created = editor_.modeling().create_box(
       {.min = {2, 0, 0}, .max = {4, 1, 1}}, "Changed history participant");
   ASSERT_TRUE(created.ok());
@@ -421,6 +433,7 @@ TEST_F(ComponentTransformPersistenceTests, SparseDragHistoryOmitsSdkUnchangedPar
     return vertex.position.x == 2.0F && vertex.position.y == 1.0F && vertex.position.z == 0.0F;
   });
   ASSERT_NE(second_vertex, second_before.vertices.end());
+  enter_edit_for_all_meshes();
   ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(editor_.selection().select_vertex(object_, first_id).ok());
   ASSERT_TRUE(editor_.selection().select_components({
@@ -474,10 +487,13 @@ TEST_F(ComponentTransformPersistenceTests,
     objects.push_back(created.value());
   }
   constexpr std::array<float, 3u> kOrigins{0.0F, 1000.0F, 1000000.0F};
-  ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Vertex).ok());
   for (std::size_t index = 0u; index < objects.size(); ++index) {
     ASSERT_TRUE(editor_.scene().set_transform(objects[index].entity,
         {.position = {kOrigins[index], -kOrigins[index], kOrigins[index]}}).ok());
+  }
+  enter_edit_for_all_meshes();
+  ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Vertex).ok());
+  for (std::size_t index = 0u; index < objects.size(); ++index) {
     ASSERT_TRUE(editor_.selection().select_components({
         .object = objects[index], .kind = QuaderComponentKind::Vertex,
         .vertices = {selected_id},
@@ -519,6 +535,7 @@ TEST_F(ComponentTransformPersistenceTests,
   ASSERT_TRUE(editor_.scene().set_transform(objects[1].entity,
       {.position = {1000000, 0, 0}, .rotation_euler = {0.2F, 0.4F, 1.1F},
        .scale = {2.0F, 0.5F, 3.0F}}).ok());
+  enter_edit_for_all_meshes();
   ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Vertex).ok());
   for (std::size_t index = 0u; index < objects.size(); ++index) {
     ASSERT_TRUE(editor_.selection().select_components({
@@ -610,7 +627,9 @@ TEST_F(ComponentTransformPersistenceTests, EquivalentAffineParticipantsShareOnly
         ? *mesh->authored_polygon_document : quader_poly::Document{};
   };
   const ModelingRay pick_ray{.origin = {0, 0, 10}, .direction = {0, 0, -1}};
-  const auto expect_family_pick_work = [&](std::uint64_t family_count) {
+  const auto expect_family_pick_work = [&](std::uint64_t family_count,
+                                           std::string_view stage) {
+    SCOPED_TRACE(stage);
     const auto before_builds = session.modeling().local_face_geometry_build_count();
     const auto distance = session.modeling().pick_mesh_surface_distance(pick_ray);
     ASSERT_TRUE(distance.has_value());
@@ -622,6 +641,7 @@ TEST_F(ComponentTransformPersistenceTests, EquivalentAffineParticipantsShareOnly
   };
   std::vector<quader_poly::Document> before;
   std::vector<quader_poly::ElementId> selected;
+  enter_edit_for_all_meshes();
   ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Vertex).ok());
   for (std::size_t index = 0U; index < objects.size(); ++index) {
     before.push_back(authored(objects[index]));
@@ -680,7 +700,7 @@ TEST_F(ComponentTransformPersistenceTests, EquivalentAffineParticipantsShareOnly
   }
   // Two distinct accepted shapes must cost at most two local triangulations,
   // regardless of the independent objects and SDK documents presenting them.
-  expect_family_pick_work(2U);
+  expect_family_pick_work(2U, "Accepted equivalent transform families");
   std::vector<std::shared_ptr<const quader_poly::Document>> accepted_pins;
   for (const auto object : objects) {
     const auto *binding = session.scene().mesh(object.entity);
@@ -698,7 +718,7 @@ TEST_F(ComponentTransformPersistenceTests, EquivalentAffineParticipantsShareOnly
   for (std::size_t index = 0U; index < objects.size(); ++index) {
     expect_same_authored_topology(authored(objects[index]), accepted[index]);
   }
-  expect_family_pick_work(2U);
+  expect_family_pick_work(2U, "Replayed equivalent transform families");
   ASSERT_TRUE(editor_.modeling().begin_transform_preview().ok());
   ASSERT_TRUE(editor_.modeling().update_transform_translate({0.5F, 0, 0}).ok());
   ASSERT_TRUE(editor_.modeling().cancel_transform_preview().ok());
@@ -729,7 +749,7 @@ TEST_F(ComponentTransformPersistenceTests, EquivalentAffineParticipantsShareOnly
       expect_same_authored_topology(authored(objects[index]), accepted[index]);
     }
   }
-  expect_family_pick_work(3U);
+  expect_family_pick_work(3U, "Independently edited participant");
   ASSERT_TRUE(editor_.history().undo().ok());
   for (std::size_t index = 0U; index < objects.size(); ++index) {
     expect_same_authored_topology(authored(objects[index]), accepted[index]);
@@ -739,7 +759,7 @@ TEST_F(ComponentTransformPersistenceTests, EquivalentAffineParticipantsShareOnly
   for (std::size_t index = 1U; index < objects.size(); ++index) {
     expect_same_authored_topology(authored(objects[index]), accepted[index]);
   }
-  expect_family_pick_work(3U);
+  expect_family_pick_work(3U, "Replayed independent participant edit");
 }
 
 TEST_F(ComponentTransformPersistenceTests, ParallelAffineRejectionPreservesEveryAcceptedParticipant) {
@@ -761,6 +781,7 @@ TEST_F(ComponentTransformPersistenceTests, ParallelAffineRejectionPreservesEvery
                ? *mesh->authored_polygon_document : quader_poly::Document{};
   };
   std::vector<quader_poly::Document> before;
+  enter_edit_for_all_meshes();
   ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Face).ok());
   for (const auto object : objects) {
     before.push_back(authored(object));
@@ -827,14 +848,17 @@ TEST_F(ComponentTransformPersistenceTests, AffineOverflowPreservesAcceptedPrevie
     return vertex.position.x == 1.0F;
   });
   ASSERT_NE(first_vertex, original.vertices.end());
+  enter_edit_for_all_meshes();
   ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(editor_.selection().select_vertex(
       object_, static_cast<QuaderElementId>(first_vertex->id)).ok());
   ASSERT_TRUE(editor_.modeling().move_selection({-1, 0, 0}).ok());
+  ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Object).ok());
   const auto created = editor_.modeling().create_box(
       {.min = {0, 0, 0}, .max = {2, 1, 1}}, "Overflow participant");
   ASSERT_TRUE(created.ok());
   auto &session = *project_.active_scene()->session;
+  enter_edit_for_all_meshes();
   ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Vertex).ok());
   for (const auto object : {object_, created.value()}) {
     const auto *binding = session.scene().mesh(object.entity);
@@ -910,6 +934,7 @@ TEST_F(ComponentTransformPersistenceTests, AffinePreviewRetainsSemanticProjectio
                           QuaderSelectionMode::Face}) {
     SCOPED_TRACE(static_cast<int>(mode));
     ASSERT_TRUE(editor_.selection().clear().ok());
+    enter_edit_for_all_meshes();
     ASSERT_TRUE(editor_.selection().set_mode(mode).ok());
     const auto document = topology();
     const auto &face = document.faces.front();
@@ -1093,6 +1118,7 @@ TEST(ComponentTransformPerformanceTests, ClonedLargeSceneComponentDragSubmission
     return std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - start).count();
   };
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
   for (const auto mode : {QuaderSelectionMode::Vertex, QuaderSelectionMode::Edge,
                           QuaderSelectionMode::Face}) {
     SCOPED_TRACE(static_cast<int>(mode));

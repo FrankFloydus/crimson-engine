@@ -7,9 +7,11 @@
 #pragma once
 
 #include "editor/modeling/modeling_types.hpp"
+#include "editor/modes/editor_mode_policy.hpp"
 #include "viewport/viewport_input_types.hpp"
 
 #include <span>
+#include <optional>
 #include <string_view>
 
 namespace quader {
@@ -49,6 +51,8 @@ struct ToolDescriptor {
     bool supports_transform_gizmo = false;
     bool editor_owned_native_lifecycle = false;
     bool repeat_activation_when_active = false;
+    EditorModeSupport supported_editor_modes = EditorModeSupport::ObjectAndEdit;
+    std::optional<ModelingSelectionMode> required_component_kind;
 };
 
 [[nodiscard]] std::span<const ToolDescriptor> viewport_tool_descriptors();
@@ -59,5 +63,11 @@ find_viewport_tool_descriptor(ModelingViewportTool tool);
 [[nodiscard]] const ToolDescriptor *
 find_viewport_tool_descriptor(std::string_view id);
 [[nodiscard]] ToolDescriptor viewport_tool_descriptor(ViewportToolId tool);
+[[nodiscard]] bool viewport_tool_supports_editor_mode(ViewportToolId tool,
+                                                      EditorMode mode);
+[[nodiscard]] bool viewport_tool_supports_editor_mode(ModelingViewportTool tool,
+                                                      EditorMode mode);
+[[nodiscard]] bool viewport_tool_supports_editor_mode(std::string_view tool_id,
+                                                      EditorMode mode);
 
 } // namespace quader

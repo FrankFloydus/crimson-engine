@@ -38,7 +38,7 @@ public:
   void set_localization(const LocalizationService &localization);
   void synchronize(const QuaderEditorApi &editor, bool force = false);
   /** Shares display actions in toolbar order; excluded actions remain null. */
-  [[nodiscard]] std::array<QAction *, 4> viewport_actions() const;
+  [[nodiscard]] std::array<QAction *, 5> viewport_actions() const;
   void set_command_requested_callback(
       std::function<void(QuaderCommandId)> callback);
 
@@ -57,12 +57,12 @@ private:
     ViewportPaneId pane = ViewportPaneId::Perspective;
     std::uint64_t control_revision = 0;
     std::uint64_t keybindings_revision = 0;
-    std::array<bool, 4> toggles{};
+    std::array<bool, 5> toggles{};
 
     bool operator==(const PresentedState &) const = default;
   };
 
-  std::array<DisplayAction, 4> display_actions_{};
+  std::array<DisplayAction, 5> display_actions_{};
   std::optional<PresentedState> presented_state_;
   std::function<void(QuaderCommandId)> command_requested_;
 };

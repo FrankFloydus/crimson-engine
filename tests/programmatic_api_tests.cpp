@@ -230,15 +230,15 @@ TEST(ProgrammaticApiTests, ScriptRunsThroughPublicApiAndReturnsFinalSnapshot) {
             .select("box")
             .move_selection({2.0f, 0.0f, 0.0f})
             .assign_material_slot(1)
-            .select_vertex("box", 1)
             .run();
 
     ASSERT_TRUE(result.ok());
-    ASSERT_EQ(result.steps.size(), 5u);
+    ASSERT_EQ(result.steps.size(), 4u);
     ASSERT_TRUE(result.objects.contains("box"));
     EXPECT_EQ(user_entity_count(result.final_snapshot.entities), 1u);
     EXPECT_TRUE(result.final_snapshot.selection.has_selection);
-    EXPECT_EQ(result.final_snapshot.selection.selected_vertex_count, 1u);
+    EXPECT_EQ(result.final_snapshot.selection.selected_object_count, 1u);
+    EXPECT_EQ(result.final_snapshot.selection.selected_vertex_count, 0u);
     ASSERT_TRUE(api.history().can_undo());
     EXPECT_EQ(api.history().snapshot().undo_label, "scripted box");
 
@@ -250,7 +250,26 @@ TEST(ProgrammaticApiTests, ScriptRunsThroughPublicApiAndReturnsFinalSnapshot) {
     const quader::QuaderApiVoidResult redone = api.history().redo();
     ASSERT_TRUE(redone.ok) << redone.message;
     EXPECT_EQ(user_entity_count(api), 1u);
-    EXPECT_EQ(api.selection().summary().selected_vertex_count, 1u);
+    EXPECT_EQ(api.selection().summary().selected_object_count, 1u);
+    EXPECT_EQ(api.selection().summary().selected_vertex_count, 0u);
+}
+
+TEST(ProgrammaticApiTests, ScriptComponentRequestOutsideEditRollsBackEarlierSteps) {
+    ProgrammaticApiHarness harness;
+    auto &api = harness.api;
+    const auto result = api.script("component request outside Edit")
+        .create_box("box", {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Script Box")
+        .select_vertex("box", 1)
+        .run();
+
+    EXPECT_FALSE(result.ok());
+    EXPECT_FALSE(result.changed());
+    ASSERT_EQ(result.steps.size(), 2U);
+    EXPECT_FALSE(result.steps.back().status.ok);
+    EXPECT_TRUE(api.query().entities().empty());
+    EXPECT_FALSE(api.history().can_undo());
+    EXPECT_EQ(harness.standalone.editor().mode().current(),
+              quader::QuaderEditorMode::Object);
 }
 
 TEST(ProgrammaticApiTests, ScriptRecordsDocumentOwnedSelectionTransformsInOneHistoryEntry) {
@@ -355,7 +374,7 @@ TEST(ProgrammaticApiTests, ScriptRollsBackChangedStepsAcrossLaterFailure) {
                 "box",
                 {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
                 "Script Box")
-            .set_selection_mode(quader::QuaderSelectionMode::Face)
+            .set_selection_mode(quader::QuaderSelectionMode::Group)
             .select("missing")
             .run();
 

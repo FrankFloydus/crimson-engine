@@ -61,6 +61,11 @@ plan_scene_wireframe_overlay_batches(
     std::span<const RenderOverlayMeshSnapshot> previous,
     std::span<const RenderOverlayMeshSnapshot> next);
 
+/// Resolves an optional mesh RGB override with the consuming pane's opacity.
+[[nodiscard]] ViewportSettingColor scene_wireframe_shaded_color(
+    const RenderOverlayMeshSnapshot &mesh,
+    const ViewportPersistentOverlayStyleSnapshot &style);
+
 /// Reports resources and submissions for the persistent full-scene wire path.
 struct SceneWireframeOverlayCacheStats final {
   std::size_t participant_count = 0u;
@@ -162,6 +167,7 @@ private:
   bool synced_selected_mesh_outline_only_ = false;
   ViewportCameraClipPlanes synced_clip_planes_;
   std::uint8_t synced_layer_mask_ = 0u;
+  std::uint8_t synced_wireframe_on_shaded_layer_mask_ = 0u;
   bool layer_masks_forced_hidden_ = false;
   bool has_synced_ = false;
   SceneWireframeOverlayCacheStats stats_;

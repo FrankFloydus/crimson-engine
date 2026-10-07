@@ -204,6 +204,8 @@ public:
     RenderToolPreviewSuppressionSnapshot tool_preview_suppression_;
     ViewportOverlayFrame tool_preview_overlay_frame_;
     RenderOverlaySceneWireframeSnapshot tool_preview_wireframe_snapshot_;
+    bool tool_preview_ordinary_wires_prepared_ = false;
+    bool tool_preview_shaded_wires_prepared_ = false;
     bool tool_preview_wireframe_dirty_ = false;
     /// Pins the accepted candidate for CPU selection measurements as well as GPU streams.
     std::vector<RenderToolPreviewMeshRecord> selection_dimension_preview_meshes_;

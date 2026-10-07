@@ -18,6 +18,7 @@
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/selection/scene_selection_application.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/modes/editor_mode_service.hpp"
 #include "editor/tools/native_viewport_tool_coordinator.hpp"
 #include "scene/scene_document.hpp"
 
@@ -275,6 +276,9 @@ bool QuaderApiMutationRunner::can_run_tracked_modeling_tool(
     return false;
   }
   SceneSession &session = scene_session();
+  if (!ModelingActionCatalog::action_supports_editor_mode(tool_id, session.editor_mode().mode())) {
+    return false;
+  }
   return modeling_commands_
       .availability(session.modeling(), tool_id, &session.selection(),
                     &session.structural_lifecycle())
@@ -288,6 +292,9 @@ QuaderApiMutationRunner::run_tracked_modeling_tool(std::string_view tool_id) {
     return quader_api_failure_status(scene_session(), "No scene is active.");
   }
   SceneSession &session = scene_session();
+  if (!ModelingActionCatalog::action_supports_editor_mode(tool_id, session.editor_mode().mode())) {
+    return quader_api_failure_status(session, "The action is unavailable in the current editor mode.");
+  }
   const ModelingCommandAvailability available = modeling_commands_.availability(
       session.modeling(), tool_id, &session.selection(),
       &session.structural_lifecycle());
@@ -324,6 +331,9 @@ QuaderApiVoidResult QuaderApiMutationRunner::begin_tracked_modeling_preview(
     return quader_api_failure_status(scene_session(), "No scene is active.");
   }
   SceneSession &session = scene_session();
+  if (!ModelingActionCatalog::action_supports_editor_mode(action_id, session.editor_mode().mode())) {
+    return quader_api_failure_status(session, "The action is unavailable in the current editor mode.");
+  }
   const ModelingCommandAvailability available = modeling_commands_.availability(
       session.modeling(), action_id, &session.selection(),
       &session.structural_lifecycle());

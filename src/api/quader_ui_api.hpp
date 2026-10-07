@@ -26,6 +26,7 @@ public:
     QuaderUIApi();
 
     void set_runtime_hooks(QuaderUIRuntimeHooks hooks);
+    QuaderApiVoidResult settle_pending_property_edits();
 
     QuaderApiVoidResult show_panel(std::string_view panel);
     QuaderApiVoidResult hide_panel(std::string_view panel);

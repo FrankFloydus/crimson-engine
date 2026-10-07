@@ -337,6 +337,7 @@ TEST(QtViewportContextMenuTests,
       ComponentCase{quader::QuaderSelectionMode::Edge, "modeling.bevel_edges"},
       ComponentCase{quader::QuaderSelectionMode::Face, "modeling.extract_faces"},
   };
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   for (const auto &component : cases) {
     SCOPED_TRACE(component.operation);
     ASSERT_TRUE(editor.selection().set_mode(component.mode).ok());
@@ -351,7 +352,7 @@ TEST(QtViewportContextMenuTests,
     verify_ownership({}, false);
   }
 
-  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
   ASSERT_TRUE(editor.selection().select_object(mesh.value()).ok());
   ASSERT_TRUE(editor.modeling().create_instance().ok());
   verify_ownership({"edit.flatten_instance", "edit.duplicate"});
@@ -518,6 +519,8 @@ TEST(QtViewportContextMenuTests,
   });
   ASSERT_TRUE(source.ok()) << source.error_message();
   ASSERT_TRUE(target.ok()) << target.error_message();
+  ASSERT_TRUE(editor.selection().select_objects({source.value(), target.value()}).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(
       editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(source.value(), 1).ok());
@@ -605,6 +608,7 @@ TEST(QtViewportContextMenuTests,
   for (const auto &transfer : transfers) {
     const auto &action_id = transfer.first;
     SCOPED_TRACE(action_id.toStdString());
+    const auto selection_before_transfer = editor.selection().summary();
     const ContextMenuSnapshot menu = show_and_snapshot(
         owner, presenter, editor, input_router, localization, {},
         editor.selection().summary(), true, clicked_face, action_id);
@@ -647,7 +651,8 @@ TEST(QtViewportContextMenuTests,
     EXPECT_EQ(selection_after.active_object_id, selected.active_object_id);
     EXPECT_EQ(selection_after.active_face_id, selected.active_face_id);
     EXPECT_EQ(selection_after.selected_face_count, 1u);
-    EXPECT_EQ(selection_after.selection_revision, selected.selection_revision);
+    EXPECT_EQ(selection_after.selection_revision,
+              selection_before_transfer.selection_revision);
     ASSERT_TRUE(editor.history().undo().ok());
     EXPECT_EQ(session.history().undo_count(), history_count);
     EXPECT_EQ(read_material(source.value()), quader::MaterialReference{amber.value().id});
@@ -719,8 +724,7 @@ TEST(QtViewportContextMenuTests,
       editor.selection().summary(), true, clicked_face);
   EXPECT_FALSE(same_face.opened);
   EXPECT_TRUE(same_face.actions.empty());
-  ASSERT_TRUE(
-      editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
   ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
   const ContextMenuSnapshot object_mode = show_and_snapshot(
       owner, presenter, editor, input_router, localization, {},
