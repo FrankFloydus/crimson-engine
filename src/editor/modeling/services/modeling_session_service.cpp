@@ -1052,6 +1052,8 @@ to_runtime(ModelingViewportTool tool) {
     return quader_editor_core::ViewportInteractionTool::Select;
   case ModelingViewportTool::LassoSelect:
     return quader_editor_core::ViewportInteractionTool::LassoSelect;
+  case ModelingViewportTool::PaintSelect:
+    return quader_editor_core::ViewportInteractionTool::PaintSelect;
   }
   return quader_editor_core::ViewportInteractionTool::Select;
 }
@@ -1081,6 +1083,8 @@ from_runtime_viewport_tool(quader_editor_core::ViewportInteractionTool tool) {
     return ModelingViewportTool::Mirror;
   case quader_editor_core::ViewportInteractionTool::LassoSelect:
     return ModelingViewportTool::LassoSelect;
+  case quader_editor_core::ViewportInteractionTool::PaintSelect:
+    return ModelingViewportTool::PaintSelect;
   case quader_editor_core::ViewportInteractionTool::Select:
   case quader_editor_core::ViewportInteractionTool::Unknown:
     break;
@@ -1941,18 +1945,20 @@ public:
       case quader_poly::ElementKind::Vertex:
         result.kind = ModelingActiveSelectionKind::Vertex;
         result.vertex_id = static_cast<int>(hit.vertex_id);
+        result.edge_a = static_cast<int>(hit.edge.a);
+        result.edge_b = static_cast<int>(hit.edge.b);
+        result.face_id = static_cast<int>(hit.face_id);
         break;
       case quader_poly::ElementKind::Edge:
         result.kind = ModelingActiveSelectionKind::Edge;
-        if (app_selection_mode_ == ModelingSelectionMode::Vertex) {
-          result.vertex_id = static_cast<int>(hit.vertex_id);
-        }
         result.edge_a = static_cast<int>(hit.edge.a);
         result.edge_b = static_cast<int>(hit.edge.b);
         result.face_id = static_cast<int>(hit.face_id);
         break;
       case quader_poly::ElementKind::Face:
         result.kind = ModelingActiveSelectionKind::Face;
+        result.edge_a = static_cast<int>(hit.edge.a);
+        result.edge_b = static_cast<int>(hit.edge.b);
         result.face_id = static_cast<int>(hit.face_id);
         break;
       }
@@ -7842,6 +7848,7 @@ public:
           quader_editor_core::ViewportInteractionTool::Select);
     case quader_editor_core::ViewportInteractionTool::Select:
     case quader_editor_core::ViewportInteractionTool::LassoSelect:
+    case quader_editor_core::ViewportInteractionTool::PaintSelect:
     case quader_editor_core::ViewportInteractionTool::Move:
     case quader_editor_core::ViewportInteractionTool::Extrude:
     case quader_editor_core::ViewportInteractionTool::Rotate:
@@ -10421,39 +10428,61 @@ public:
       return {.command = {.ok = false,
               .message = "Resolved component owner is no longer live."}};
     }
-    const bool directional_edge_seed =
+    const bool vertex_traversal =
+        request.mode == ModelingSelectionMode::Vertex &&
+        request.kind == ModelingActiveSelectionKind::Vertex &&
+        (request.component_traversal == ModelingComponentSelectionTraversal::VertexLoop ||
+         request.component_traversal == ModelingComponentSelectionTraversal::VertexRing);
+    const bool face_traversal =
+        request.mode == ModelingSelectionMode::Face &&
+        request.kind == ModelingActiveSelectionKind::Face &&
+        request.component_traversal == ModelingComponentSelectionTraversal::FaceLoop;
+    const bool edge_traversal =
+        request.mode == ModelingSelectionMode::Edge &&
         request.kind == ModelingActiveSelectionKind::Edge &&
-        ((request.mode == ModelingSelectionMode::Vertex &&
-          request.component_traversal ==
-              ModelingComponentSelectionTraversal::VertexLoop) ||
-         (request.mode == ModelingSelectionMode::Face &&
-          request.component_traversal ==
-              ModelingComponentSelectionTraversal::FaceLoop));
-    if (!directional_edge_seed || request.mode != app_selection_mode_) {
+        request.edge_traversal != ModelingEdgeSelectionTraversal::None &&
+        request.component_traversal == ModelingComponentSelectionTraversal::None;
+    if ((!vertex_traversal && !face_traversal && !edge_traversal) ||
+        request.mode != app_selection_mode_) {
       return {.command = {.ok = false,
               .message = "Resolved traversal seed does not match the current selection mode."}};
     }
+    const std::array scope_request{ModelingComponentSelectionRequest{
+        .modeling_object_id = request.modeling_object_id, .mode = request.mode}};
+    const ModelingCommandResult scope =
+        validate_component_selection_scope(scope_request);
+    if (!scope.ok) return {.command = scope};
 
     const quader_poly::Document &document = object_it->document.read();
     const quader_poly::Selection &selected = object_it->selection;
-    const quader_poly::Edge seed = quader_poly::make_edge(
-        request.edge.first, request.edge.second);
+    const quader_poly::Edge hint = request.edge == std::pair{-1, -1}
+        ? quader_poly::Edge{}
+        : quader_poly::make_edge(request.edge.first, request.edge.second);
+    const quader_poly::PickResult clicked{
+        .hit = true,
+        .kind = vertex_traversal ? quader_poly::ElementKind::Vertex
+              : face_traversal ? quader_poly::ElementKind::Face
+                               : quader_poly::ElementKind::Edge,
+        .vertex_id = static_cast<quader_poly::ElementId>(request.vertex),
+        .edge = hint,
+        .face_id = request.face == -1 ? quader_poly::kInvalidElementId
+                                     : static_cast<quader_poly::ElementId>(request.face)};
+    const quader_poly::Selection direction_selection =
+        object_it->id == projection.active_object_id() ? selected
+                                                       : quader_poly::Selection{};
+    const auto resolved_seed = quader_poly::component_loop_seed(
+        document, clicked, direction_selection, hint,
+        request.component_traversal == ModelingComponentSelectionTraversal::VertexRing);
     const quader_poly::Face *context =
         quader_poly::find_face(document, request.face);
-    const bool edge_live = seed.a != seed.b &&
-        quader_poly::find_vertex(document, seed.a) != nullptr &&
-        quader_poly::find_vertex(document, seed.b) != nullptr &&
-        std::ranges::any_of(document.faces, [&](const quader_poly::Face &face) {
-          return knife_pick_face_contains_edge(face, seed);
-        });
-    if (!edge_live ||
-        (request.face != -1 &&
-         (context == nullptr || !knife_pick_face_contains_edge(*context, seed))) ||
-        (request.mode == ModelingSelectionMode::Face &&
-         !quader_poly::face_loop_seed_eligible(document, seed, request.face))) {
+    if (!resolved_seed.has_value() ||
+        (request.face != -1 && request.face != 0 &&
+         (context == nullptr ||
+          !knife_pick_face_contains_edge(*context, *resolved_seed)))) {
       return {.command = {.ok = false,
                 .message = "Resolved traversal seed is no longer eligible."}};
     }
+    const quader_poly::Edge seed = *resolved_seed;
     ModelingComponentSelectionRequest component{
         .modeling_object_id = request.modeling_object_id,
         .mode = request.mode,
@@ -10463,51 +10492,81 @@ public:
     const bool seed_has_selection = object_it->selected &&
         selected.mode == quader_editor_core::component_selection_mode(
             app_selection_mode_to_runtime(request.mode));
-    if (request.mode == ModelingSelectionMode::Vertex) {
-      const auto vertices = quader_poly::vertex_loop_vertices(
-          document, seed, request.face);
+    if (vertex_traversal) {
+      std::vector<quader_poly::ElementId> vertices;
+      if (request.component_traversal == ModelingComponentSelectionTraversal::VertexRing) {
+        for (const auto edge : quader_poly::edge_ring_edges(document, seed)) {
+          vertices.push_back(edge.a);
+          vertices.push_back(edge.b);
+        }
+        std::ranges::sort(vertices);
+        vertices.erase(std::unique(vertices.begin(), vertices.end()), vertices.end());
+      } else {
+        vertices = quader_poly::vertex_loop_vertices(document, seed, request.face);
+      }
       if (vertices.empty()) return {.command = {.ok = true}};
-      component.vertices.reserve(vertices.size());
-      for (const auto vertex : vertices) {
-        component.vertices.push_back(static_cast<int>(vertex));
-      }
+      component.vertices.assign(vertices.begin(), vertices.end());
       target_selected = seed_has_selection &&
-                        quader_poly::selection_contains(selected, seed.a) &&
-                        quader_poly::selection_contains(selected, seed.b);
+                        quader_poly::selection_contains(selected, request.vertex);
       component.active_kind = ModelingActiveSelectionKind::Vertex;
-      component.active_vertex =
-          std::ranges::find(component.vertices, request.vertex) !=
-                  component.vertices.end()
-              ? request.vertex : component.vertices.front();
-    } else {
-      const auto faces = quader_poly::face_loop_faces(
-          document, seed, request.face);
-      if (faces.empty()) return {.command = {.ok = true}};
-      component.faces.reserve(faces.size());
-      for (const auto face : faces) {
-        component.faces.push_back(static_cast<int>(face));
-      }
-      const int seed_face =
-          std::ranges::find(component.faces, request.face) !=
-                  component.faces.end()
-              ? request.face : component.faces.front();
+      component.active_vertex = request.vertex;
+    } else if (face_traversal) {
+      const auto faces = quader_poly::face_loop_faces(document, seed, request.face);
+      if (std::ranges::find(faces, request.face) == faces.end())
+        return {.command = {.ok = true}};
+      component.faces.assign(faces.begin(), faces.end());
       target_selected = seed_has_selection &&
-          quader_poly::selection_contains_face(selected, seed_face);
+          quader_poly::selection_contains_face(selected, request.face);
       component.active_kind = ModelingActiveSelectionKind::Face;
-      component.active_face = seed_face;
+      component.active_face = request.face;
+    } else {
+      std::vector<quader_poly::Edge> edges =
+          request.edge_traversal == ModelingEdgeSelectionTraversal::Ring
+              ? quader_poly::edge_ring_edges(document, seed)
+              : quader_poly::edge_loop_edges(document, seed, request.face);
+      target_selected = seed_has_selection &&
+                        quader_poly::selection_contains(selected, seed);
+      if (request.edge_traversal == ModelingEdgeSelectionTraversal::Loop &&
+          request.edit == ModelingSelectionEdit::Replace && target_selected &&
+          std::ranges::all_of(edges, [&](quader_poly::Edge edge) {
+            return quader_poly::selection_contains(selected, edge);
+          })) {
+        const auto boundary =
+            quader_poly::edge_boundary_component_edges(document, seed);
+        if (!boundary.empty() &&
+            !std::ranges::all_of(boundary, [&](quader_poly::Edge edge) {
+              return quader_poly::selection_contains(selected, edge);
+            })) {
+          edges = boundary;
+        }
+      }
+      if (edges.empty()) return {.command = {.ok = true}};
+      for (const auto edge : edges) component.edges.emplace_back(edge.a, edge.b);
+      component.active_kind = ModelingActiveSelectionKind::Edge;
+      component.active_edge = {seed.a, seed.b};
     }
+    // An opposite incident edge can describe the same selected band on a
+    // repeated click. Canonical IDs keep that traversal-order difference from
+    // publishing a selection change or settling a pending operation.
+    std::ranges::sort(component.vertices);
+    component.vertices.erase(
+        std::unique(component.vertices.begin(), component.vertices.end()),
+        component.vertices.end());
+    std::ranges::sort(component.faces);
+    component.faces.erase(
+        std::unique(component.faces.begin(), component.faces.end()),
+        component.faces.end());
     if (request.edit == ModelingSelectionEdit::Toggle) {
       component.edit = target_selected ? ModelingSelectionEdit::Remove
                                        : ModelingSelectionEdit::Add;
     }
-    const std::array one{component};
-    const ModelingCommandResult scope = validate_component_selection_scope(one);
-    if (!scope.ok) return {.command = scope};
     const ModelingSelectionProjectionCommandResult candidate =
         selection_service_.set_component_selection(projection, component);
     ModelingCommandResult prepared = candidate.command;
     if (prepared.ok) {
-      if (request.edit == ModelingSelectionEdit::Replace) {
+      if (request.edit == ModelingSelectionEdit::Replace ||
+          (editor_mode_service_ != nullptr &&
+           editor_mode_service_->mode() == EditorMode::Edit)) {
         const EntityId target_entity =
             object_registry_.entity_for_modeling_object(request.modeling_object_id)
                 .value_or(kInvalidEntityId);
@@ -10524,7 +10583,9 @@ public:
         }
         prepared.changed =
             projection.selection_mode() != candidate.projection.selection_mode() ||
-            projection.active_object_id() != candidate.projection.active_object_id() ||
+            projection.active_object_id() !=
+                (fixed_edit_scope ? request.modeling_object_id
+                                  : candidate.projection.active_object_id()) ||
             !same_scene_selection(
                 capture_scene_selection(scene_),
                 make_scene_selection(scene_, target_entities, target_entity)) ||
@@ -10532,12 +10593,14 @@ public:
                 projection.objects().begin(), projection.objects().end(),
                 candidate.projection.objects().begin(),
                 candidate.projection.objects().end(),
-                [fixed_edit_scope](const quader_editor_core::PolygonObject &current,
+                [fixed_edit_scope, &request](const quader_editor_core::PolygonObject &current,
                                    const quader_editor_core::PolygonObject &replacement) {
                   if (current.id != replacement.id) {
                     return false;
                   }
                   if (fixed_edit_scope) {
+                    if (request.edit != ModelingSelectionEdit::Replace &&
+                        current.id != request.modeling_object_id) return true;
                     // Replace clears component payloads without changing the
                     // fixed participants represented by selected object flags.
                     return (current.selection.empty() && replacement.selection.empty()) ||
@@ -10549,8 +10612,6 @@ public:
                           ModelingSelectionService::selection_matches(
                               current.selection, replacement.selection));
                 });
-      } else {
-        prepared.changed = true;
       }
     }
     return {.command = std::move(prepared), .selection = std::move(component)};
@@ -10558,7 +10619,8 @@ public:
 
   ModelingCommandResult apply_resolved_component_selection(
       const ModelingResolvedComponentSelectionRequest &request) {
-    if (request.component_traversal != ModelingComponentSelectionTraversal::None) {
+    if (request.component_traversal != ModelingComponentSelectionTraversal::None ||
+        request.edge_traversal != ModelingEdgeSelectionTraversal::None) {
       const auto prepared = prepare_component_traversal_selection(request);
       return prepared.command.ok && prepared.command.changed
                  ? set_component_selection(prepared.selection)
@@ -10622,10 +10684,7 @@ public:
               .message = "Resolved component target is no longer live."};
     }
 
-    const bool edge_traversal =
-        request.kind == ModelingActiveSelectionKind::Edge &&
-        request.edge_traversal != ModelingEdgeSelectionTraversal::None;
-    const bool expands_hit = request.click_count > 1 || edge_traversal;
+    const bool expands_hit = request.click_count > 1;
     if (!expands_hit && request.edit == ModelingSelectionEdit::Replace &&
         request.preserve_selection_on_selected_hit && target_selected) {
       return {.ok = true};
@@ -10640,12 +10699,9 @@ public:
     ModelingComponentSelectionRequest component{
         .modeling_object_id = request.modeling_object_id,
         .mode = request.mode,
-        .edit = edge_traversal && request.edit == ModelingSelectionEdit::Toggle
-                    ? (target_selected ? ModelingSelectionEdit::Remove
-                                       : ModelingSelectionEdit::Add)
-                    : request.edit,
+        .edit = request.edit,
     };
-    if (request.click_count > 1 && !edge_traversal) {
+    if (request.click_count > 1) {
       const quader_poly::PickResult seed{
           .hit = true,
           .kind = request.kind == ModelingActiveSelectionKind::Vertex
@@ -10689,40 +10745,7 @@ public:
       component.active_kind = ModelingActiveSelectionKind::Vertex;
       component.active_vertex = request.vertex;
     } else if (request.kind == ModelingActiveSelectionKind::Edge) {
-      if (edge_traversal) {
-        const quader_poly::Edge seed = quader_poly::make_edge(
-            request.edge.first, request.edge.second);
-        std::vector<quader_poly::Edge> edges =
-            request.edge_traversal == ModelingEdgeSelectionTraversal::Ring
-                ? quader_poly::edge_ring_edges(document, seed)
-                : quader_poly::edge_loop_edges(document, seed, request.face);
-        if (request.edge_traversal ==
-                ModelingEdgeSelectionTraversal::Loop &&
-            request.edit == ModelingSelectionEdit::Replace &&
-            target_selected &&
-            std::ranges::all_of(edges, [&](quader_poly::Edge edge) {
-              return quader_poly::selection_contains(selected, edge);
-            })) {
-          const std::vector<quader_poly::Edge> boundary =
-              quader_poly::edge_boundary_component_edges(document, seed);
-          if (!boundary.empty() &&
-              !std::ranges::all_of(boundary, [&](quader_poly::Edge edge) {
-                return quader_poly::selection_contains(selected, edge);
-              })) {
-            edges = boundary;
-          }
-        }
-        component.edges.reserve(edges.size());
-        for (const quader_poly::Edge edge : edges) {
-          component.edges.emplace_back(edge.a, edge.b);
-        }
-      } else {
-        component.edges.push_back(request.edge);
-      }
-      if (component.edges.empty()) {
-        return {.ok = false,
-                .message = "Resolved edge loop has no selectable edges."};
-      }
+      component.edges.push_back(request.edge);
       component.active_kind = ModelingActiveSelectionKind::Edge;
       component.active_edge = request.edge;
     } else {

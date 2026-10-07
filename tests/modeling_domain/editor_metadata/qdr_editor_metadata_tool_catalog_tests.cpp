@@ -53,6 +53,7 @@ TEST(QdrEditorMetadataToolCatalogTests, HostContractToolCatalogCoversEditorCoreT
 TEST(QdrEditorMetadataToolCatalogTests, HostContractToolCatalogExposesHostGlueHintsWithoutExecutableSurface) {
 	EXPECT_TRUE(require_tool("select").primary_shortcut.empty());
 	EXPECT_TRUE(same_text(require_tool("lasso_select").primary_shortcut, "Shift+Q"));
+	EXPECT_EQ(require_tool("paint_select").primary_shortcut, "Ctrl+Q");
 	EXPECT_TRUE(same_text(require_tool("move").primary_shortcut, "W"));
 	EXPECT_TRUE(same_text(require_tool("rotate").primary_shortcut, "R"));
 	EXPECT_TRUE(same_text(require_tool("scale").primary_shortcut, "S"));
@@ -71,6 +72,8 @@ TEST(QdrEditorMetadataToolCatalogTests, HostContractToolCatalogExposesHostGlueHi
 	EXPECT_FALSE(require_tool("select").transform_tool);
 	EXPECT_FALSE(require_tool("lasso_select").transform_tool);
 	EXPECT_FALSE(require_tool("lasso_select").modal_tool);
+	EXPECT_FALSE(require_tool("paint_select").transform_tool);
+	EXPECT_FALSE(require_tool("paint_select").modal_tool);
 
 	EXPECT_TRUE(require_tool("create_primitive").modal_tool);
 	EXPECT_TRUE(require_tool("insert_edge_loop").modal_tool);

@@ -137,9 +137,12 @@ struct ResolvedSelectionClickRequest {
    */
   EditorSubSelectionKind miss_sub_selection_kind =
       EditorSubSelectionKind::None;
-  /// Nonzero only for the ordinary click and its recognized depth correction.
+  /// Nonzero for samples sharing one selection gesture and history entry.
   std::uint64_t gesture_merge_key = 0;
   std::optional<std::uint64_t> expected_history_revision;
+  /// A held gesture publishes selection now and notifies dependent tools once
+  /// through complete_selection_edit() when its final valid sample is known.
+  bool defer_selection_completion = false;
 };
 
 /** Carries resolved marquee targets, baseline, and canonical edit policy. */
@@ -190,6 +193,9 @@ public:
                                  SelectionEditBeginCallback begin = {},
                                  SelectionSettlementPolicy requires_settlement = {});
   [[nodiscard]] ModelingCommandResult selection_edit_preflight() const;
+  /// Completes an already published selection gesture through the same policy
+  /// used by ordinary point and marquee edits; owns no separate selection state.
+  [[nodiscard]] ModelingCommandResult complete_selection_edit();
   void set_sub_selection_provider(EditorSubSelectionProvider *provider);
   [[nodiscard]] bool has_sub_selection() const;
   [[nodiscard]] std::optional<EditorSubSelectionBaseline>

@@ -409,6 +409,8 @@ ViewportInteractionController::handle_before_active_tool_impl(
   }
   if (frame.input_result.cancel_requested) {
     (void)selection_.cancel_lasso_drag();
+    (void)selection_.cancel_paint_drag();
+    (void)selection_.cancel_traversal_click();
     (void)point_light_range_.cancel(editor);
     (void)transform_gizmo_.cancel_active_drag(editor, curve);
     return {.gizmo_consumed = true};
@@ -442,7 +444,9 @@ ViewportInteractionController::handle_before_active_tool_impl(
   }
   if ((release_has_feature(ReleaseFeature::LassoSelection) &&
        frame.input_router.state().active_tool == ViewportToolId::LassoSelect) ||
-      selection_.lasso_pointer_active()) {
+      frame.input_router.state().active_tool == ViewportToolId::PaintSelect ||
+      selection_.lasso_pointer_active() || selection_.paint_pointer_active() ||
+      selection_.traversal_pointer_active()) {
     return {.selection_after_pending_pick = resolved_selection};
   }
   bool range_hovered = false;
@@ -485,6 +489,9 @@ std::optional<ViewportBeforeToolInteractionResult>
 ViewportInteractionController::reserve_material_transfer(
     QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
     NativeViewportToolCoordinator *native_tools) {
+  if (selection_.paint_pointer_active() || selection_.traversal_pointer_active()) {
+    return std::nullopt;
+  }
   if (!release_has_feature(ReleaseFeature::Materials) &&
       !release_has_feature(ReleaseFeature::UvEditing)) {
     return std::nullopt;
@@ -1162,7 +1169,8 @@ void ViewportInteractionController::set_primitive_creation_decrement(bool decrem
 bool ViewportInteractionController::cancel_active_drag(
     QuaderEditorApi &editor) {
   interaction_cursor_ = ViewportPointerCursor::Default;
-  if (selection_.cancel_lasso_drag()) return true;
+  if (selection_.cancel_lasso_drag() || selection_.cancel_paint_drag() ||
+      selection_.cancel_traversal_click()) return true;
   if (point_light_range_.cancel(editor)) return true;
   if (primitive_creation_pointer_active()) {
     const auto cube = editor.tools().live_primitive_creation();
@@ -1179,7 +1187,8 @@ bool ViewportInteractionController::cancel_active_drag(
 bool ViewportInteractionController::cancel_active_drag(
     QuaderEditorApi &editor, NativeViewportToolCoordinator &native_tools) {
   interaction_cursor_ = ViewportPointerCursor::Default;
-  if (selection_.cancel_lasso_drag()) return true;
+  if (selection_.cancel_lasso_drag() || selection_.cancel_paint_drag() ||
+      selection_.cancel_traversal_click()) return true;
   if (primitive_creation_pointer_active()) return cancel_active_drag(editor);
   if (point_light_range_.cancel(editor)) return true;
   return transform_gizmo_.cancel_active_drag(
@@ -1188,6 +1197,8 @@ bool ViewportInteractionController::cancel_active_drag(
 
 bool ViewportInteractionController::dragging() const {
   return selection_.lasso_pointer_active() ||
+         selection_.paint_pointer_active() ||
+         selection_.traversal_pointer_active() ||
          point_light_range_.dragging() || transform_gizmo_.dragging() ||
          (tool_runtime_.primitive_creation_interaction().active() >= 0 &&
           tool_runtime_.primitive_creation_interaction().active() < 6);

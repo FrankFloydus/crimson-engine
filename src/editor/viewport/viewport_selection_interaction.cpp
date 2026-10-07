@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -41,7 +42,7 @@ namespace {
 // remains intentionally dormant; material gestures use the keybinding resolver.
 constexpr bool kFacePlaneCutGestureEnabled = false;
 
-/// Keeps click-pair history keys distinct across panes and scene rebindings.
+/// Keeps selection gesture history keys distinct across panes and scenes.
 std::uint64_t next_depth_click_gesture_key() {
   static std::atomic<std::uint64_t> sequence{0};
   return sequence.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -252,7 +253,7 @@ bool depth_cycle_context_available(const ViewportInteractionFrame &frame) {
          !frame.input.operation_preview_active &&
          (!frame.input.active_transform_drag ||
           (release_has_feature(ReleaseFeature::LassoSelection) &&
-           frame.input_router.state().active_tool == ViewportToolId::LassoSelect)) &&
+           frame.selection_tool() == ViewportToolId::LassoSelect)) &&
          !frame.input.modal_tool_active &&
          !frame.input.active_tool_owns_viewport &&
          !frame.input.keybinding_input_consumed &&
@@ -593,7 +594,8 @@ ViewportSelectionApplyResult lasso_selection(
 } // namespace
 
 void ViewportSelectionInteraction::reset() {
-  if (box_state_.active || paint_selection_active_) {
+  if (box_state_.active || paint_selection_active_ || paint_stroke_.has_value() ||
+      traversal_context_.has_value()) {
     box_release_suppression_.begin(QuaderMouseButton::Left, true);
   }
   hover_clear_state_ = HoverClearState::Armed;
@@ -606,6 +608,9 @@ void ViewportSelectionInteraction::reset() {
   box_hovered_before_selection_.reset();
   box_baseline_.reset();
   lasso_context_.reset();
+  traversal_context_.reset();
+  paint_stroke_.reset();
+  paint_completion_tool_.reset();
   marquee_cache_ = {};
   lasso_projection_cache_ = {};
   curve_control_box_active_ = false;
@@ -643,6 +648,7 @@ bool ViewportSelectionInteraction::DepthClickBaseline::matches_context(
   const QuaderSelectionSummary &current = frame.selection_state.summary;
   if (camera != &frame.camera || scene_session_id != current_scene ||
       tool != frame.input_router.state().active_tool ||
+      selection_tool != frame.selection_tool() ||
       viewport_size.x != frame.input.viewport_size.x ||
       viewport_size.y != frame.input.viewport_size.y ||
       content_revision != current.content_revision ||
@@ -687,6 +693,7 @@ ViewportSelectionInteraction::prepare_frame(
     QuaderEditorApi &editor, const ViewportInteractionFrame &frame) {
   (void)synchronize_mode_context(editor, frame);
   if (!frame.active_tool_allows_selection_fallback ||
+      frame.selection_tool() == ViewportToolId::PaintSelect ||
       !frame.input.viewport_hovered || !depth_cycle_context_available(frame) ||
       frame.input_result.cancel_requested) {
     cancel_pending_click();
@@ -741,6 +748,7 @@ ViewportSelectionInteraction::prepare_frame(
         .viewport_size = frame.input.viewport_size,
         .scene_session_id = scene_session_id,
         .tool = frame.input_router.state().active_tool,
+        .selection_tool = frame.selection_tool(),
         .content_revision = selection.content_revision,
         .selection_revision = selection.selection_revision,
         .scene_revision = frame.selection_state.scene_revision,
@@ -837,17 +845,20 @@ void ViewportSelectionInteraction::populate_operation_input_context(
     context.selection_gesture = lasso_context_ ? Gesture::Lasso : Gesture::Box;
     context.selection_crossing = marquee().rule == ModelingBoxSelectionRule::Crossing;
     context.pointer_dragging = true;
-  } else if (paint_selection_active_) {
+  } else if (paint_selection_active_ || paint_stroke_.has_value()) {
     context.selection_gesture = Gesture::Paint;
     context.pointer_dragging = true;
   } else {
     std::optional<ModelingPickSelectRequest> request;
-    if (box_pointer_) {
+    const ViewportPointerGesture *pointer = traversal_context_
+        ? &traversal_context_->pointer
+        : box_pointer_ ? &*box_pointer_ : nullptr;
+    if (pointer != nullptr) {
       request = ModelingPickSelectRequest{
           .click_count = depth_click_baseline_ && depth_click_baseline_->double_click_pending ? 2 : 1,
-          .control_pressed = box_pointer_->modifiers.primary,
-          .shift_pressed = box_pointer_->modifiers.shift,
-          .alt_pressed = box_pointer_->modifiers.alt,
+          .control_pressed = pointer->modifiers.primary,
+          .shift_pressed = pointer->modifiers.shift,
+          .alt_pressed = pointer->modifiers.alt,
           .cycle_depth = box_cycle_depth_};
     }
     if (request) {
@@ -861,7 +872,9 @@ void ViewportSelectionInteraction::populate_operation_input_context(
         context.selection_toggle = request->shift_pressed;
       } else if (component_traversal !=
                  ModelingComponentSelectionTraversal::None) {
-        context.selection_gesture = Gesture::EdgeLoop;
+        context.selection_gesture =
+            component_traversal == ModelingComponentSelectionTraversal::VertexRing
+                ? Gesture::EdgeRing : Gesture::EdgeLoop;
         context.selection_toggle = request->shift_pressed;
       } else if (request->depth_cycle_requested(
                      to_modeling_selection_mode(frame.selection_state.summary.mode))) {
@@ -892,6 +905,16 @@ ViewportSelectionInteraction::pointer_edit_operation(
     return quader_editor_core::selection_edit_operation_from_modifiers(
         modifiers.primary, modifiers.shift);
   };
+
+  if (traversal_context_ ||
+      (!paint_stroke_ && frame.input.modifiers.alt)) return std::nullopt;
+
+  if (frame.selection_tool() == ViewportToolId::PaintSelect ||
+      paint_stroke_.has_value()) {
+    if (frame.input.modifiers.primary) return Edit::Remove;
+    return frame.input.modifiers.shift || paint_stroke_.has_value()
+               ? Edit::Add : Edit::Replace;
+  }
 
   if (box_state_.active) {
     // A stationary press still owns a traversal click. Once it becomes a
@@ -944,6 +967,364 @@ bool ViewportSelectionInteraction::cancel_lasso_drag() {
   committed_marquee_.reset();
   cancel_pending_click();
   return true;
+}
+
+bool ViewportSelectionInteraction::cancel_traversal_click() {
+  if (!traversal_context_) return false;
+  box_release_suppression_.begin(QuaderMouseButton::Left, true);
+  traversal_context_.reset();
+  return true;
+}
+
+bool ViewportSelectionInteraction::handle_traversal_frame(
+    QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
+    bool can_start, bool interrupted) {
+  if (!traversal_context_ &&
+      (interrupted || !can_start || !frame.left_pressed)) return false;
+  const auto scene = editor.scene_documents().active_scene_id().value_or(
+      SceneSessionId{});
+  if (traversal_context_ &&
+      (interrupted || !traversal_context_->matches_context(frame, scene) ||
+       traversal_context_->keybindings_revision !=
+           editor.commands().keybindings_revision() ||
+       traversal_context_->history_revision !=
+           selection_owner(editor).selection_history_revision())) {
+    (void)cancel_traversal_click();
+    return true;
+  }
+  if (!traversal_context_) {
+    const auto pointer = viewport_pointer_gesture_from_latest_edge(
+        frame.input.pointer_pressed_edges, QuaderMouseButton::Left,
+        frame.left_click_local, frame.input.mouse_screen, frame.input.modifiers,
+        frame.pointer_drag_threshold_pixels);
+    const ModelingPickSelectRequest request{
+        .control_pressed = pointer.modifiers.primary,
+        .shift_pressed = pointer.modifiers.shift,
+        .alt_pressed = pointer.modifiers.alt,
+    };
+    const auto mode = to_modeling_selection_mode(frame.selection_state.summary.mode);
+    if (request.edge_traversal_requested(mode) ==
+            ModelingEdgeSelectionTraversal::None &&
+        request.component_traversal_requested(mode) ==
+            ModelingComponentSelectionTraversal::None) return false;
+    const auto ray = frame.camera.ray_from_viewport_point(pointer.press.local);
+    traversal_context_ = DepthClickBaseline{
+        .pointer = pointer,
+        .selection = selection_owner(editor).capture_box_selection_baseline(),
+        .camera = &frame.camera,
+        .ray = {.origin = ray.origin, .direction = ray.direction},
+        .viewport_size = frame.input.viewport_size,
+        .scene_session_id = scene,
+        .tool = frame.input_router.state().active_tool,
+        .selection_tool = frame.selection_tool(),
+        .content_revision = frame.selection_state.summary.content_revision,
+        .selection_revision = frame.selection_state.summary.selection_revision,
+        .scene_revision = frame.selection_state.scene_revision,
+        .asset_revision = frame.selection_state.asset_revision,
+        .keybindings_revision = editor.commands().keybindings_revision(),
+        .history_revision = selection_owner(editor).selection_history_revision(),
+    };
+    cancel_pending_click();
+  }
+  const auto &pointer = traversal_context_->pointer;
+  const auto *release = lasso_release_edge(frame.input, pointer.press);
+  bool dragged = false;
+  for (const auto &sample : frame.input.pointer_motion_samples) {
+    if (sample.button != QuaderMouseButton::Left ||
+        (pointer.press.sequence != 0 &&
+         sample.press_sequence != pointer.press.sequence) ||
+        (sample.sequence != 0 && sample.sequence < pointer.press.sequence) ||
+        (release != nullptr && sample.sequence > release->sequence)) continue;
+    dragged = dragged ||
+        viewport_pointer_drag_threshold_reached(pointer, sample.local);
+  }
+  const bool synthetic_release = frame.left_released &&
+      pointer.press.sequence == 0 && frame.input.pointer_released_edges.empty();
+  if (release != nullptr || synthetic_release) {
+    const auto release_local = release != nullptr ? release->local
+                                                  : frame.input.mouse_local;
+    dragged = dragged ||
+        viewport_pointer_drag_threshold_reached(pointer, release_local);
+  } else if (frame.input.pointer_motion_samples.empty() && frame.left_down) {
+    dragged = viewport_pointer_drag_threshold_reached(pointer,
+                                                      frame.input.mouse_local);
+  }
+  if (dragged || (frame.left_released && release == nullptr &&
+                  !synthetic_release) ||
+      (!frame.left_down && release == nullptr && !synthetic_release)) {
+    (void)cancel_traversal_click();
+    return true;
+  }
+  if (release != nullptr || synthetic_release) {
+    const auto completed = pointer;
+    traversal_context_.reset();
+    (void)commit_pick_selection(editor, frame, completed.press.local, 1,
+                                true, false, false, completed.modifiers);
+  }
+  return true;
+}
+
+std::array<float, 11> paint_camera_basis(const ViewportCameraController &camera) {
+  const auto &state = camera.state();
+  return {state.target.x, state.target.y, state.target.z,
+          state.yaw_radians, state.pitch_radians, state.distance,
+          static_cast<float>(state.projection), state.orthographic_size,
+          state.fov_degrees, state.near_plane, state.far_plane};
+}
+
+bool ViewportSelectionInteraction::cancel_paint_drag() {
+  if (!paint_stroke_.has_value()) return false;
+  box_release_suppression_.begin(QuaderMouseButton::Left, true);
+  finish_paint_drag();
+  return true;
+}
+
+void ViewportSelectionInteraction::finish_paint_drag() {
+  if (paint_stroke_ && paint_stroke_->applied) {
+    paint_completion_tool_ = paint_stroke_->context.tool;
+  }
+  paint_stroke_.reset();
+}
+
+void ViewportSelectionInteraction::complete_paint_selection(
+    QuaderEditorApi &editor, const ViewportInteractionFrame &frame) {
+  if (paint_stroke_) return;
+  const auto tool = paint_completion_tool_;
+  paint_completion_tool_.reset();
+  if (!tool || *tool != frame.input_router.state().active_tool) return;
+  // Selection is already published. Let the active operation consume the
+  // complete selection once, after every sample of the owned stroke.
+  const auto completed = selection_owner(editor).complete_selection_edit();
+  if (!completed.ok) {
+    last_selection_command_result_ = completed;
+    LOG_ERROR("Viewport paint selection completion failed: {}", completed.message);
+  }
+}
+
+bool ViewportSelectionInteraction::append_paint_sample(
+    QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
+    PaintStroke &stroke, QVec2 local, ViewportModifiers modifiers) {
+  if (!std::isfinite(local.x) || !std::isfinite(local.y)) {
+    return true;
+  }
+  modifiers.alt = false;
+  const bool same_modifiers =
+      modifiers.primary == stroke.last_modifiers.primary &&
+      modifiers.shift == stroke.last_modifiers.shift;
+  if (stroke.sampled && same_modifiers &&
+      viewport_pointer_distance_squared(local, stroke.last_local) == 0.0) {
+    return true;
+  }
+
+  // Clip before sampling: captured motion can be arbitrarily far outside the
+  // pane. A stroke performs at most one pick per crossed physical pixel.
+  const QVec2 start = stroke.sampled ? stroke.last_local : local;
+  const double dx = static_cast<double>(local.x) - start.x;
+  const double dy = static_cast<double>(local.y) - start.y;
+  double first = 0.0;
+  double last = 1.0;
+  const auto clip = [&](double direction, double distance) {
+    if (direction == 0.0) return distance >= 0.0;
+    const double ratio = distance / direction;
+    if (direction < 0.0) first = std::max(first, ratio);
+    else last = std::min(last, ratio);
+    return first <= last;
+  };
+  const bool intersects = frame.input.viewport_size.x > 0.0f &&
+      frame.input.viewport_size.y > 0.0f &&
+      clip(-dx, start.x) &&
+      clip(dx, static_cast<double>(frame.input.viewport_size.x) - start.x) &&
+      clip(-dy, start.y) &&
+      clip(dy, static_cast<double>(frame.input.viewport_size.y) - start.y);
+  if (intersects) {
+    const double distance = std::hypot(dx, dy) * (last - first);
+    const int steps = static_cast<int>(std::ceil(distance));
+    const bool include_start = !stroke.sampled || first > 0.0 || !same_modifiers;
+    for (int step = include_start ? 0 : 1; step <= steps; ++step) {
+      const double fraction = steps == 0 ? first : first + (last - first) *
+          static_cast<double>(step) / static_cast<double>(steps);
+      const QVec2 point{static_cast<float>(start.x + dx * fraction),
+                       static_cast<float>(start.y + dy * fraction)};
+      ViewportModifiers edit_modifiers = modifiers;
+      // The first ordinary sample replaces. Every later sample accumulates in
+      // both scene and component selection; Ctrl always subtracts.
+      if (stroke.applied && !edit_modifiers.primary) {
+        edit_modifiers.shift = true;
+      }
+      const auto edit =
+          quader_editor_core::selection_edit_operation_from_modifiers(
+              edit_modifiers.primary, edit_modifiers.shift);
+      const ModelingPickSelectRequest request = make_pick_select_request(
+          frame, point, edit_modifiers, 1, stroke.applied, false);
+      ++work_stats_.paint_pick_count;
+      EditorSelectionService &selection = selection_owner(editor);
+      auto target = resolve_selection_point_target(
+          selection, frame, point, request, nullptr, &scene_surface_scratch_);
+      if (stroke.applied && stroke.last_target == target &&
+          stroke.last_edit == edit) {
+        continue;
+      }
+      const auto applied = checked_selection_apply_result(
+          frame.input_router,
+          selection.apply_resolved_click({
+              .winner = target,
+              .policy = request,
+              .gesture_merge_key = stroke.context.gesture_merge_key,
+              .expected_history_revision = stroke.history_started
+                  ? std::optional<std::uint64_t>(stroke.context.history_revision)
+                  : std::nullopt,
+              .defer_selection_completion = stroke.defer_completion,
+          }),
+          "Viewport paint selection");
+      last_selection_command_result_ = applied.command;
+      if (!applied.command.ok) return false;
+      stroke.applied = true;
+      stroke.last_target = std::move(target);
+      stroke.last_edit = edit;
+      stroke.context.selection_revision = applied.selection.selection_revision;
+      stroke.context.content_revision = applied.selection.content_revision;
+      const auto revisions = editor.query().revisions();
+      stroke.context.scene_revision = revisions.scene_revision;
+      stroke.context.asset_revision = revisions.asset_revision;
+      const auto history_revision = selection.selection_history_revision();
+      stroke.history_started = stroke.history_started ||
+          history_revision != stroke.context.history_revision;
+      stroke.context.history_revision = history_revision;
+    }
+  }
+  stroke.sampled = true;
+  stroke.last_local = local;
+  stroke.last_modifiers = modifiers;
+  return true;
+}
+
+bool ViewportSelectionInteraction::handle_paint_frame(
+    QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
+    bool can_start, bool interrupted) {
+  const auto scene = editor.scene_documents().active_scene_id().value_or(
+      SceneSessionId{});
+  if (paint_stroke_ &&
+      (interrupted || !paint_stroke_->context.matches_context(frame, scene) ||
+       paint_stroke_->camera_basis != paint_camera_basis(frame.camera) ||
+       paint_stroke_->context.keybindings_revision !=
+           editor.commands().keybindings_revision() ||
+       paint_stroke_->context.history_revision !=
+           selection_owner(editor).selection_history_revision())) {
+    (void)cancel_paint_drag();
+    return true;
+  }
+  if (interrupted) return frame.left_pressed || frame.left_released;
+
+  std::uint64_t completed_sequence = 0;
+  bool owned = paint_stroke_.has_value();
+  bool synthetic_press_consumed = false;
+  const auto inside_pane = [&](QVec2 point) {
+    return std::isfinite(point.x) && std::isfinite(point.y) &&
+           point.x >= 0.0f && point.y >= 0.0f &&
+           point.x < frame.input.viewport_size.x &&
+           point.y < frame.input.viewport_size.y;
+  };
+  for (;;) {
+    if (!paint_stroke_) {
+      if (!can_start || !frame.left_pressed) break;
+      const ViewportPointerButtonEdge *press = nullptr;
+      for (const auto &edge : frame.input.pointer_pressed_edges) {
+        if (edge.button == QuaderMouseButton::Left && inside_pane(edge.local) &&
+            (completed_sequence == 0 || edge.sequence > completed_sequence) &&
+            (press == nullptr || edge.sequence < press->sequence)) {
+          press = &edge;
+        }
+      }
+      if (press == nullptr &&
+          (synthetic_press_consumed ||
+           !frame.input.pointer_pressed_edges.empty())) break;
+      synthetic_press_consumed = true;
+      const ViewportPointerButtonEdge accepted = press != nullptr ? *press
+          : ViewportPointerButtonEdge{
+                .button = QuaderMouseButton::Left,
+                .local = frame.left_click_local,
+                .modifiers = frame.input.modifiers,
+            };
+      if (!inside_pane(accepted.local)) break;
+      const auto ray = frame.camera.ray_from_viewport_point(accepted.local);
+      paint_stroke_ = PaintStroke{
+          .context = {
+              .pointer = {
+                  .press = accepted,
+                  .modifiers = accepted.modifiers.value_or(frame.input.modifiers),
+              },
+              .camera = &frame.camera,
+              .ray = {.origin = ray.origin, .direction = ray.direction},
+              .viewport_size = frame.input.viewport_size,
+              .scene_session_id = scene,
+              .tool = frame.input_router.state().active_tool,
+              .selection_tool = frame.selection_tool(),
+              .content_revision = frame.selection_state.summary.content_revision,
+              .selection_revision = frame.selection_state.summary.selection_revision,
+              .scene_revision = frame.selection_state.scene_revision,
+              .asset_revision = frame.selection_state.asset_revision,
+              .keybindings_revision = editor.commands().keybindings_revision(),
+              .history_revision = selection_owner(editor).selection_history_revision(),
+              .gesture_merge_key = next_depth_click_gesture_key(),
+          },
+          .camera_basis = paint_camera_basis(frame.camera),
+          .sample_sequence = accepted.sequence,
+      };
+      cancel_pending_click();
+      paint_selection_active_ = false;
+      owned = true;
+      if (!append_paint_sample(editor, frame, *paint_stroke_, accepted.local,
+                               accepted.modifiers.value_or(frame.input.modifiers))) {
+        (void)cancel_paint_drag();
+        break;
+      }
+    }
+    const auto press = paint_stroke_->context.pointer.press;
+    const auto *release = lasso_release_edge(frame.input, press);
+    bool sampled = false;
+    for (const auto &sample : frame.input.pointer_motion_samples) {
+      if (sample.button != QuaderMouseButton::Left ||
+          (press.sequence != 0 && sample.press_sequence != press.sequence) ||
+          (sample.sequence != 0 &&
+           sample.sequence <= paint_stroke_->sample_sequence) ||
+          (release != nullptr && sample.sequence >= release->sequence)) continue;
+      if (!append_paint_sample(editor, frame, *paint_stroke_, sample.local,
+                               sample.modifiers.value_or(frame.input.modifiers))) {
+        (void)cancel_paint_drag();
+        return true;
+      }
+      paint_stroke_->sample_sequence = sample.sequence;
+      sampled = true;
+    }
+    if (release != nullptr) {
+      if (!append_paint_sample(editor, frame, *paint_stroke_, release->local,
+                               release->modifiers.value_or(frame.input.modifiers))) {
+        (void)cancel_paint_drag();
+        return true;
+      }
+      completed_sequence = release->sequence;
+      finish_paint_drag();
+      // Sequence-zero fixtures have no ordering for another coalesced stroke.
+      if (completed_sequence == 0) break;
+      continue;
+    }
+    if (!sampled && press.sequence == 0 &&
+        frame.input.pointer_motion_samples.empty() &&
+        (frame.left_down || frame.left_released) &&
+        (frame.input.pointer_released_edges.empty() || frame.left_down)) {
+      if (!append_paint_sample(editor, frame, *paint_stroke_, frame.input.mouse_local,
+                               frame.input.modifiers)) {
+        (void)cancel_paint_drag();
+        break;
+      }
+    }
+    if (!frame.left_down &&
+        (frame.input.pointer_released_edges.empty() || !frame.left_released)) {
+      finish_paint_drag();
+    }
+    break;
+  }
+  return owned;
 }
 
 void ViewportSelectionInteraction::append_lasso_point(QVec2 point,
@@ -1203,6 +1584,102 @@ void ViewportSelectionInteraction::handle_frame(
         clear_hover();
       };
 
+  const bool traversal_input_claimed = frame.input.keybinding_input_consumed ||
+      frame.input_result.consumed ||
+      frame.input.cycle_selection_depth_pressed ||
+      !frame.input.material_transfer_edges.empty() ||
+      !frame.input.curve_conversion_edges.empty();
+  const bool traversal_interrupted = mode_context_changed ||
+      canceled_release_reserved || !can_use_selection_fallback ||
+      !frame.input.viewport_focused || frame.input_result.view_changed ||
+      frame.input.pointer_interaction_canceled ||
+      frame.input_result.cancel_requested || traversal_input_claimed;
+  if (!paint_stroke_ && !lasso_context_ && !box_state_.active) {
+    if (!traversal_interrupted && can_pick &&
+        before_tool.selection_click_requested &&
+        before_tool.selection_click_modifiers.alt) {
+      // A handle owns its original press. Its deferred click retains the
+      // captured traversal chord, even when Paint is the pane's fallback.
+      (void)commit_pick_selection(
+          editor, frame, before_tool.selection_click_local, 1, true, false,
+          false, before_tool.selection_click_modifiers);
+      clear_hover();
+      refresh_hover_work_after_selection(before_tool.selection_click_local,
+                                         false);
+      return;
+    }
+    const bool traversal_was_active = traversal_context_.has_value();
+    if (handle_traversal_frame(editor, frame,
+                              can_pick && !before_tool.selection_click_requested,
+                              traversal_interrupted)) {
+      if (traversal_context_) {
+        if (!traversal_was_active) {
+          // Alt can arrive with the press after Ctrl-only hover. Retain the
+          // same target, but freeze traversal feedback instead of removal.
+          preview_hover(selection_owner(editor).resolved_hover_target());
+        }
+      } else {
+        if (hover_clear_state_ == HoverClearState::Armed) clear_hover();
+        refresh_hover_work_after_selection(frame.left_click_local, false);
+      }
+      return;
+    }
+    // Semantic commands, material transfer and curve input own their chord;
+    // the remembered selection shape must not reinterpret it as a stroke.
+    if (traversal_input_claimed && !frame.input.cycle_selection_depth_pressed &&
+        (frame.left_pressed || frame.left_released)) {
+      return;
+    }
+  }
+
+  if (frame.selection_tool() == ViewportToolId::PaintSelect ||
+      paint_stroke_.has_value() || paint_completion_tool_.has_value()) {
+    const bool interrupted = mode_context_changed || canceled_release_reserved ||
+        !can_use_selection_fallback || !frame.input.viewport_focused ||
+        frame.input_result.view_changed ||
+        frame.input.pointer_interaction_canceled ||
+        frame.input_result.cancel_requested;
+    const auto picks_before = work_stats_.paint_pick_count;
+    bool owns_frame = false;
+    if (!interrupted && before_tool.selection_click_requested &&
+        !paint_stroke_) {
+      // A stationary gizmo press becomes one selection sample at its saved
+      // position. Later release/hover motion must not turn it into a stroke.
+      PaintStroke click{.defer_completion = false};
+      (void)append_paint_sample(editor, frame, click,
+                               before_tool.selection_click_local,
+                               before_tool.selection_click_modifiers);
+      owns_frame = true;
+    } else {
+      owns_frame = handle_paint_frame(
+          editor, frame, can_use_selection_fallback &&
+              frame.selection_tool() == ViewportToolId::PaintSelect,
+          interrupted);
+    }
+    complete_paint_selection(editor, frame);
+    if (owns_frame || interrupted) {
+      if (hover_clear_state_ == HoverClearState::Armed) clear_hover();
+      if (tool_hover != nullptr && work_stats_.paint_pick_count != picks_before) {
+        tool_hover->invalidate();
+        (void)tool_hover->claim(ModelingBoxDragState::Idle);
+      }
+      return;
+    }
+    if (can_pick && !frame.left_down && claim_hover_work()) {
+      ++work_stats_.hover_pick_count;
+      ViewportModifiers modifiers = frame.input.modifiers;
+      modifiers.alt = false;
+      const auto request = make_pick_select_request(
+          frame, frame.input.mouse_local, modifiers, 0, true, false);
+      preview_hover(resolve_selection_point_target(
+          selection_owner(editor), frame, frame.input.mouse_local, request,
+          nullptr, &scene_surface_scratch_));
+    } else if (!can_pick && hover_clear_state_ == HoverClearState::Armed) {
+      clear_hover();
+    }
+    return;
+  }
+
   if (!mode_context_changed && before_tool.selection_click_requested && can_pick &&
       (!before_tool.selection_cycle_depth || can_cycle_depth)) {
     QDR_PROFILE_SCOPE("Viewport selection deferred gizmo click");
@@ -1330,16 +1807,10 @@ void ViewportSelectionInteraction::handle_frame(
       preview_hover(box_hovered_before_selection_);
     }
     if (release_has_feature(ReleaseFeature::LassoSelection) &&
-        frame.input_router.state().active_tool == ViewportToolId::LassoSelect) {
+        frame.selection_tool() == ViewportToolId::LassoSelect) {
       // Only a press resolves settings. Pointer motion retains this snapshot.
-      const QuaderToolSettingsTarget settings = editor.tools().active_settings();
-      const auto partial = std::find_if(
-          settings.controls.begin(), settings.controls.end(),
-          [](const QuaderToolSettingControl &control) {
-            return control.id == "select_partial_intersection";
-          });
       lasso_partial_intersection_ =
-          partial != settings.controls.end() && partial->bool_value;
+          editor.tools().lasso_select_partial_intersection();
       const ViewportRay ray =
           frame.camera.ray_from_viewport_point(box_pointer_->press.local);
       lasso_context_ = DepthClickBaseline{
@@ -1350,7 +1821,8 @@ void ViewportSelectionInteraction::handle_frame(
           .viewport_size = frame.input.viewport_size,
           .scene_session_id = editor.scene_documents().active_scene_id().value_or(
               SceneSessionId{}),
-          .tool = ViewportToolId::LassoSelect,
+          .tool = frame.input_router.state().active_tool,
+          .selection_tool = frame.selection_tool(),
           .content_revision = frame.selection_state.summary.content_revision,
           .selection_revision = frame.selection_state.summary.selection_revision,
           .scene_revision = frame.selection_state.scene_revision,

@@ -94,6 +94,8 @@ struct ViewportInteractionFrame {
   double double_click_interval_seconds = 0.5;
   double monotonic_time_seconds = 0.0;
   bool active_tool_allows_selection_fallback = false;
+  /// Pane-owned selection choice, independent of the executing operation.
+  ViewportToolId preferred_selection_tool = ViewportToolId::Select;
   std::span<const ViewportSceneBillboardPickCandidate>
       scene_billboard_pick_candidates;
   /// Host cache generation, including local visibility; zero disables reuse.
@@ -110,6 +112,17 @@ struct ViewportInteractionFrame {
                                                 maximum_ray_distance)>
       scene_mesh_snap_query;
   ViewportInteractionSelectionState selection_state;
+
+  /// Explicit selection tools win; other tools retain the pane's gesture.
+  [[nodiscard]] ViewportToolId selection_tool() const {
+    const auto active_tool = input_router.state().active_tool;
+    if (active_tool == ViewportToolId::Select ||
+        active_tool == ViewportToolId::LassoSelect ||
+        active_tool == ViewportToolId::PaintSelect) {
+      return active_tool;
+    }
+    return preferred_selection_tool;
+  }
 };
 
 /**

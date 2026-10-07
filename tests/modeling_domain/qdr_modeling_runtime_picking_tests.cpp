@@ -130,6 +130,39 @@ struct LoosePartFixture {
   std::array<std::array<quader_poly::ElementId, 2>, 2> faces;
 };
 
+/// Keeps authored grid identities explicit for typed loop and ring assertions.
+struct ComponentTraversalGrid {
+  quader_editor_core::PolygonObject object;
+  std::array<std::array<quader_poly::ElementId, 5>, 5> vertices{};
+  std::array<std::array<quader_poly::ElementId, 4>, 4> faces{};
+};
+
+ComponentTraversalGrid component_traversal_grid() {
+  ComponentTraversalGrid fixture;
+  fixture.object.id = 7;
+  auto &document = fixture.object.document;
+  for (std::size_t row = 0; row < fixture.vertices.size(); ++row) {
+    for (std::size_t column = 0; column < fixture.vertices[row].size(); ++column) {
+      fixture.vertices[row][column] = quader_poly::add_vertex(
+          document, {static_cast<float>(column), static_cast<float>(row), 0.0F});
+    }
+  }
+  for (std::size_t row = 0; row < fixture.faces.size(); ++row) {
+    for (std::size_t column = 0; column < fixture.faces[row].size(); ++column) {
+      fixture.faces[row][column] = quader_poly::add_face(
+          document, std::array{fixture.vertices[row][column],
+                               fixture.vertices[row][column + 1],
+                               fixture.vertices[row + 1][column + 1],
+                               fixture.vertices[row + 1][column]});
+    }
+  }
+  return fixture;
+}
+
+quader_poly::Ray component_traversal_ray(float x, float y) {
+  return {{x, y, 5.0F}, {0.0F, 0.0F, -1.0F}};
+}
+
 LoosePartFixture loose_part_fixture() {
   LoosePartFixture fixture;
   fixture.object.id = 7;
@@ -1964,6 +1997,249 @@ TEST(QdrModelingRuntimePickingTests,
   EXPECT_FALSE(missed.changed);
   EXPECT_EQ(session.objects().front().selection.edges, expected_ring);
   EXPECT_EQ(session.state().selection_revision, selection_revision);
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     TypedVertexLoopAndRingRetainClickedVertexAndIncidentDirection) {
+  const auto fixture = component_traversal_grid();
+  const auto ray = component_traversal_ray(2.025F, 2.0F);
+  auto options = quader_editor_core::selection_pick_options_from_radii(
+      0.05, 0.05, false);
+  options.mode = quader_poly::SelectionMode::Vertex;
+  const auto hint = quader_editor_core::pick_nearest(
+      {fixture.object}, {.ray = ray, .options = options,
+                         .resolve_component_loop_hint = true});
+  ASSERT_TRUE(hint.has_value());
+  EXPECT_EQ(hint->kind, quader_poly::ElementKind::Vertex);
+  EXPECT_EQ(hint->vertex_id, fixture.vertices[2][2]);
+  EXPECT_EQ(hint->edge, quader_poly::make_edge(fixture.vertices[2][2],
+                                             fixture.vertices[2][3]));
+
+  for (const auto traversal : std::array{
+           quader_editor_core::ComponentSelectionTraversal::VertexLoop,
+           quader_editor_core::ComponentSelectionTraversal::VertexRing}) {
+    SCOPED_TRACE(static_cast<int>(traversal));
+    quader_editor_core::EditorSession session({fixture.object});
+    session.set_selection_mode(quader_editor_core::SelectionMode::Vertex);
+    const auto content_revision = session.state().content_revision;
+    const quader_editor_core::ApplyPickSelectionRequest request{
+        .ray = ray, .pick_options = options, .click_count = 2,
+        .component_traversal = traversal};
+    const auto selected = quader_editor_core::apply_pick_selection(
+        session, session.objects(), request);
+    ASSERT_TRUE(selected.hit);
+    EXPECT_TRUE(selected.changed);
+    std::vector<quader_poly::ElementId> expected;
+    if (traversal == quader_editor_core::ComponentSelectionTraversal::VertexLoop) {
+      expected.assign(fixture.vertices[2].begin(), fixture.vertices[2].end());
+    } else {
+      for (const auto &row : fixture.vertices) {
+        expected.push_back(row[2]);
+        expected.push_back(row[3]);
+      }
+    }
+    const auto &selection = session.objects().front().selection;
+    EXPECT_TRUE(std::is_permutation(selection.vertices.begin(), selection.vertices.end(),
+                                    expected.begin(), expected.end()));
+    EXPECT_TRUE(selection.edges.empty());
+    EXPECT_TRUE(selection.faces.empty());
+    EXPECT_TRUE(selection.has_active);
+    EXPECT_EQ(selection.active_kind, quader_poly::ElementKind::Vertex);
+    EXPECT_EQ(selection.active_vertex, fixture.vertices[2][2]);
+    EXPECT_EQ(session.active_object_id(), fixture.object.id);
+    EXPECT_EQ(session.state().content_revision, content_revision);
+    const auto selection_revision = session.state().selection_revision;
+    const auto repeated = quader_editor_core::apply_pick_selection(
+        session, session.objects(), request);
+    EXPECT_TRUE(repeated.hit);
+    EXPECT_FALSE(repeated.changed);
+    EXPECT_EQ(session.state().selection_revision, selection_revision);
+  }
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     TypedVertexLoopUsesAdjacentActiveVertexBeforePointerDirection) {
+  const auto fixture = component_traversal_grid();
+  quader_editor_core::EditorSession session({fixture.object});
+  session.set_component_selection(
+      fixture.object.id,
+      {.mode = quader_poly::SelectionMode::Vertex,
+       .vertices = {fixture.vertices[1][2]}, .has_active = true,
+       .active_kind = quader_poly::ElementKind::Vertex,
+       .active_vertex = fixture.vertices[1][2]},
+      quader_editor_core::SelectionMode::Vertex);
+  const auto selected = quader_editor_core::apply_pick_selection(
+      session, session.objects(),
+      {.ray = component_traversal_ray(2.025F, 2.0F),
+       .pick_options = quader_editor_core::selection_pick_options_from_radii(
+           0.05, 0.05, false),
+       .component_traversal =
+           quader_editor_core::ComponentSelectionTraversal::VertexLoop});
+  ASSERT_TRUE(selected.hit);
+  EXPECT_TRUE(selected.changed);
+  const std::array expected{
+      fixture.vertices[0][2], fixture.vertices[1][2], fixture.vertices[2][2],
+      fixture.vertices[3][2], fixture.vertices[4][2]};
+  const auto &selection = session.objects().front().selection;
+  EXPECT_TRUE(std::is_permutation(selection.vertices.begin(), selection.vertices.end(),
+                                  expected.begin(), expected.end()));
+  EXPECT_EQ(selection.active_vertex, fixture.vertices[2][2]);
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     TypedVertexRingToggleUsesClickedVertexWithOnlyOneEndpointSelected) {
+  const auto fixture = component_traversal_grid();
+  quader_editor_core::EditorSession session({fixture.object});
+  session.set_component_selection(
+      fixture.object.id,
+      {.mode = quader_poly::SelectionMode::Vertex,
+       .vertices = {fixture.vertices[2][2], fixture.vertices[0][0]},
+       .has_active = true, .active_kind = quader_poly::ElementKind::Vertex,
+       .active_vertex = fixture.vertices[0][0]},
+      quader_editor_core::SelectionMode::Vertex);
+  quader_editor_core::ApplyPickSelectionRequest request{
+      .operation = quader_editor_core::SelectionEditOperation::Toggle,
+      .ray = component_traversal_ray(2.025F, 2.0F),
+      .pick_options = quader_editor_core::selection_pick_options_from_radii(
+          0.05, 0.05, false),
+      .component_traversal =
+          quader_editor_core::ComponentSelectionTraversal::VertexRing};
+  const auto removed = quader_editor_core::apply_pick_selection(
+      session, session.objects(), request);
+  ASSERT_TRUE(removed.hit);
+  EXPECT_TRUE(removed.changed);
+  EXPECT_EQ(session.objects().front().selection.vertices,
+            (std::vector{fixture.vertices[0][0]}));
+  EXPECT_EQ(session.objects().front().selection.active_vertex, fixture.vertices[0][0]);
+
+  const auto added = quader_editor_core::apply_pick_selection(
+      session, session.objects(), request);
+  ASSERT_TRUE(added.hit);
+  EXPECT_TRUE(added.changed);
+  std::vector expected{fixture.vertices[0][0]};
+  for (const auto &row : fixture.vertices) {
+    expected.push_back(row[2]);
+    expected.push_back(row[3]);
+  }
+  const auto &selection = session.objects().front().selection;
+  EXPECT_TRUE(std::is_permutation(selection.vertices.begin(), selection.vertices.end(),
+                                  expected.begin(), expected.end()));
+  EXPECT_EQ(selection.active_vertex, fixture.vertices[2][2]);
+
+  request.operation = quader_editor_core::SelectionEditOperation::Remove;
+  ASSERT_TRUE(quader_editor_core::apply_pick_selection(
+                  session, session.objects(), request).changed);
+  EXPECT_EQ(session.objects().front().selection.vertices,
+            (std::vector{fixture.vertices[0][0]}));
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     TypedFaceLoopAtFaceCenterUsesAdjacentSelectedFaceDirection) {
+  const auto fixture = component_traversal_grid();
+  for (const bool horizontal : std::array{false, true}) {
+    SCOPED_TRACE(horizontal);
+    quader_editor_core::EditorSession session({fixture.object});
+    const auto active = horizontal ? fixture.faces[2][0] : fixture.faces[1][1];
+    session.set_component_selection(
+        fixture.object.id,
+        {.mode = quader_poly::SelectionMode::Face, .faces = {active},
+         .has_active = true, .active_kind = quader_poly::ElementKind::Face,
+         .active_face = active},
+        quader_editor_core::SelectionMode::Face);
+    auto options = quader_editor_core::selection_pick_options_from_radii(
+        0.01, 0.01, false);
+    options.mode = quader_poly::SelectionMode::Face;
+    const auto ray = component_traversal_ray(1.5F, 2.5F);
+    const auto hint = session.pick_nearest(
+        {.ray = ray, .options = options, .resolve_component_loop_hint = true});
+    ASSERT_TRUE(hint.has_value());
+    EXPECT_EQ(hint->kind, quader_poly::ElementKind::Face);
+    EXPECT_EQ(hint->face_id, fixture.faces[2][1]);
+    const auto selected = quader_editor_core::apply_pick_selection(
+        session, session.objects(),
+        {.ray = ray, .pick_options = options, .click_count = 2,
+         .component_traversal =
+             quader_editor_core::ComponentSelectionTraversal::FaceLoop});
+    ASSERT_TRUE(selected.hit);
+    EXPECT_TRUE(selected.changed);
+    std::array<quader_poly::ElementId, 4> expected{};
+    for (std::size_t index = 0; index < expected.size(); ++index) {
+      expected[index] = horizontal ? fixture.faces[2][index] : fixture.faces[index][1];
+    }
+    const auto &selection = session.objects().front().selection;
+    EXPECT_TRUE(std::is_permutation(selection.faces.begin(), selection.faces.end(),
+                                    expected.begin(), expected.end()));
+    EXPECT_TRUE(selection.vertices.empty());
+    EXPECT_TRUE(selection.edges.empty());
+    EXPECT_TRUE(selection.has_active);
+    EXPECT_EQ(selection.active_kind, quader_poly::ElementKind::Face);
+    EXPECT_EQ(selection.active_face, fixture.faces[2][1]);
+  }
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     TypedComponentTraversalMissAndInvalidTopologyPreserveState) {
+  auto fixture = component_traversal_grid();
+  const auto isolated_vertex = quader_poly::add_vertex(
+      fixture.object.document, {8.0F, 0.0F, 0.0F});
+  const std::array triangle_vertices{
+      quader_poly::add_vertex(fixture.object.document, {6.0F, 0.0F, 0.0F}),
+      quader_poly::add_vertex(fixture.object.document, {7.0F, 0.0F, 0.0F}),
+      quader_poly::add_vertex(fixture.object.document, {6.0F, 1.0F, 0.0F})};
+  ASSERT_NE(quader_poly::add_face(fixture.object.document, triangle_vertices),
+            quader_poly::kInvalidElementId);
+  ASSERT_NE(isolated_vertex, quader_poly::kInvalidElementId);
+  for (const auto traversal : std::array{
+           quader_editor_core::ComponentSelectionTraversal::VertexLoop,
+           quader_editor_core::ComponentSelectionTraversal::VertexRing,
+           quader_editor_core::ComponentSelectionTraversal::FaceLoop}) {
+    SCOPED_TRACE(static_cast<int>(traversal));
+    const bool face = traversal == quader_editor_core::ComponentSelectionTraversal::FaceLoop;
+    quader_editor_core::EditorSession session({fixture.object});
+    quader_poly::Selection baseline;
+    baseline.mode = face ? quader_poly::SelectionMode::Face : quader_poly::SelectionMode::Vertex;
+    baseline.has_active = true;
+    if (face) {
+      baseline.faces = {fixture.faces[1][1]};
+      baseline.active_kind = quader_poly::ElementKind::Face;
+      baseline.active_face = fixture.faces[1][1];
+    } else {
+      baseline.vertices = {fixture.vertices[1][1]};
+      baseline.active_kind = quader_poly::ElementKind::Vertex;
+      baseline.active_vertex = fixture.vertices[1][1];
+    }
+    session.set_component_selection(
+        fixture.object.id, baseline,
+        face ? quader_editor_core::SelectionMode::Face : quader_editor_core::SelectionMode::Vertex);
+    const auto selection_revision = session.state().selection_revision;
+    const auto content_revision = session.state().content_revision;
+    for (const auto operation : std::array{
+             quader_editor_core::SelectionEditOperation::Replace,
+             quader_editor_core::SelectionEditOperation::Add,
+             quader_editor_core::SelectionEditOperation::Remove,
+             quader_editor_core::SelectionEditOperation::Toggle}) {
+      SCOPED_TRACE(static_cast<int>(operation));
+      for (const auto ray : std::array{
+               miss_ray(), face ? component_traversal_ray(6.25F, 0.25F)
+                                : component_traversal_ray(8.0F, 0.0F)}) {
+        const auto rejected = quader_editor_core::apply_pick_selection(
+            session, session.objects(),
+            {.operation = operation, .ray = ray,
+             .pick_options = quader_editor_core::selection_pick_options_from_radii(
+                 0.05, 0.05, false),
+             .component_traversal = traversal});
+        EXPECT_FALSE(rejected.hit);
+        EXPECT_FALSE(rejected.changed);
+        EXPECT_TRUE(quader_editor_core::polygon_selection_matches(
+            session.objects().front().selection, baseline));
+        EXPECT_EQ(session.active_object_id(), fixture.object.id);
+        EXPECT_TRUE(session.objects().front().selected);
+        EXPECT_TRUE(session.objects().front().component_edit_target);
+        EXPECT_EQ(session.state().selection_revision, selection_revision);
+        EXPECT_EQ(session.state().content_revision, content_revision);
+      }
+    }
+  }
 }
 
 TEST(QdrModelingRuntimePickingTests,

@@ -144,6 +144,7 @@ enum class ModelingViewportTool {
   Poly,
   Mirror,
   LassoSelect,
+  PaintSelect,
 };
 
 /**
@@ -405,10 +406,11 @@ enum class ModelingEdgeSelectionTraversal {
   Ring,
 };
 
-/** Preserves component mode while walking from one directional edge seed. */
+/** Expands a typed component using a resolved topology direction. */
 enum class ModelingComponentSelectionTraversal {
   None,
   VertexLoop,
+  VertexRing,
   FaceLoop,
 };
 
@@ -546,11 +548,13 @@ struct ModelingPickSelectRequest {
 
   [[nodiscard]] ModelingComponentSelectionTraversal
   component_traversal_requested(ModelingSelectionMode mode) const noexcept {
-    if (!alt_pressed || control_pressed || command_pressed || click_count == 0) {
+    if (!alt_pressed || click_count == 0) {
       return ModelingComponentSelectionTraversal::None;
     }
     if (mode == ModelingSelectionMode::Vertex) {
-      return ModelingComponentSelectionTraversal::VertexLoop;
+      return control_pressed || command_pressed
+                 ? ModelingComponentSelectionTraversal::VertexRing
+                 : ModelingComponentSelectionTraversal::VertexLoop;
     }
     return mode == ModelingSelectionMode::Face
                ? ModelingComponentSelectionTraversal::FaceLoop

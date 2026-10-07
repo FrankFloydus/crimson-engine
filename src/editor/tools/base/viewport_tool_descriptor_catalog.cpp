@@ -12,7 +12,7 @@
 namespace quader {
 namespace {
 
-constexpr std::array<ToolDescriptor, 19> kViewportToolDescriptors{{
+constexpr std::array<ToolDescriptor, 20> kViewportToolDescriptors{{
     {
         .tool = ViewportToolId::Select,
         .modeling_tool = ModelingViewportTool::Select,
@@ -30,6 +30,16 @@ constexpr std::array<ToolDescriptor, 19> kViewportToolDescriptors{{
         .id = "lasso_select",
         .label = "Lasso Select",
         .shortcut = "Shift+Q",
+        .kind = ToolKind::Selection,
+        .menu_group = ToolMenuGroup::Navigation,
+        .allows_selection_fallback = true,
+    },
+    {
+        .tool = ViewportToolId::PaintSelect,
+        .modeling_tool = ModelingViewportTool::PaintSelect,
+        .id = "paint_select",
+        .label = "Paint Select",
+        .shortcut = "Ctrl+Q",
         .kind = ToolKind::Selection,
         .menu_group = ToolMenuGroup::Navigation,
         .allows_selection_fallback = true,

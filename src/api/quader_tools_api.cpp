@@ -1951,6 +1951,11 @@ QuaderToolSettingsTarget QuaderToolsApi::active_settings() const {
                                        modeling.selection_mode());
 }
 
+bool QuaderToolsApi::lasso_select_partial_intersection() const {
+  return scene_session(session_).modeling().interaction_settings()
+      .lasso_select_partial_intersection;
+}
+
 std::optional<bool> QuaderToolsApi::active_array_bounding_box_dimensions() const {
   const SceneSession &session = scene_session(session_);
   if (session.path_array().active()) {

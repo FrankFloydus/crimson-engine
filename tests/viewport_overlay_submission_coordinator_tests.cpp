@@ -333,7 +333,9 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
     const auto asset_revision = session.assets().revision();
     const auto selection_revision = modeling.selection_revision();
     QuaderPickSelectRequest request{
-        .ray = {.origin = {0.0f, -0.5f, 5.0f}, .direction = {0.0f, 0.0f, -1.0f}},
+        .ray = {.origin = mode == QuaderSelectionMode::Vertex
+                    ? QVec3{-0.49f, -0.5f, 5.0f} : QVec3{0.0f, -0.49f, 5.0f},
+                .direction = {0.0f, 0.0f, -1.0f}},
         .alt_pressed = true, .vertex_radius = 0.03, .edge_radius = 0.03};
     ASSERT_TRUE(editor.selection().pick_select(request).ok());
     EXPECT_GT(modeling.selection_revision(), selection_revision);

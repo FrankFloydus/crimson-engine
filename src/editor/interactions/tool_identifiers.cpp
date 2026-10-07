@@ -126,6 +126,9 @@ CutMode next_cut_mode(CutMode mode)
 
 ViewportInteractionTool viewport_interaction_tool_from_id(std::string_view tool_id)
 {
+        if (tool_id == "paint_select") {
+          return ViewportInteractionTool::PaintSelect;
+        }
         if (tool_id == "lasso_select") {
           return ViewportInteractionTool::LassoSelect;
         }
@@ -172,6 +175,8 @@ std::string_view viewport_interaction_tool_id(ViewportInteractionTool tool)
           return "select";
         case ViewportInteractionTool::LassoSelect:
           return "lasso_select";
+        case ViewportInteractionTool::PaintSelect:
+          return "paint_select";
         case ViewportInteractionTool::Move:
           return "move";
         case ViewportInteractionTool::Extrude:

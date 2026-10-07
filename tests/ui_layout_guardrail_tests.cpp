@@ -1796,7 +1796,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(toolbar, "if (spec.toolbar_visible)");
   expect_contains(toolbar, "{ViewportToolId::CreatePrimitive,");
   for (std::string_view icon :
-       {"tool_select.png", "tool_move.png", "tool_rotate.png",
+       {"tool_box_select.png", "tool_paint_select.png", "tool_move.png", "tool_rotate.png",
         "tool_scale.png", "tool_pivot.png", "tool_create_box.png",
         "tool_extrude.png",
         "tool_insert_edge_loop.png", "tool_knife.png", "tool_cut.png",

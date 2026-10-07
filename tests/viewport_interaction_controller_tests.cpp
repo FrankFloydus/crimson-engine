@@ -537,7 +537,7 @@ struct CylinderEdgeSelectionScenario final {
   }
 };
 
-/// A regular quad patch gives the clicked edge two independent traversal axes.
+/// A regular quad patch gives each component two independent traversal axes.
 struct GridComponentSelectionScenario final {
   ViewportInteractionHarness harness;
   std::array<std::array<quader::QuaderElementId, 4>, 4> vertices{};
@@ -579,9 +579,15 @@ struct GridComponentSelectionScenario final {
   }
 
   [[nodiscard]] quader::QVec2 hit() const {
-    const auto projected = harness.camera.project_world_point({0.0f, -0.5f, 0.0f});
+    const auto projected = harness.camera.project_world_point(hit_position());
     EXPECT_TRUE(projected.visible);
     return projected.position;
+  }
+
+  [[nodiscard]] quader::QVec3 hit_position() const {
+    return mode == quader::QuaderSelectionMode::Vertex
+        ? quader::QVec3{-0.49f, -0.5f, 0.0f}
+        : quader::QVec3{0.0f, -0.49f, 0.0f};
   }
 
   [[nodiscard]] std::vector<quader::QuaderElementId> traversal() const {
@@ -619,6 +625,174 @@ struct GridComponentSelectionScenario final {
     }
     std::sort(result.begin(), result.end());
     return result;
+  }
+};
+
+/// Recreates the inset caps and three quad bands from the cylinder reports.
+struct SteppedCylinderSelectionScenario final {
+  static constexpr std::size_t kSides = 12;
+  using EdgeId = CylinderEdgeSelectionScenario::EdgeId;
+
+  ViewportInteractionHarness harness;
+  quader_poly::Document document;
+  std::array<std::array<quader::QuaderElementId, kSides>, 4> vertices{};
+  std::array<std::array<quader::QuaderElementId, kSides>, 3> faces{};
+  quader::QuaderModelingObjectRef object;
+  quader::QuaderModelingObjectRef other;
+
+  void initialize(quader::QuaderSelectionMode mode, bool reflected,
+                  bool orthographic) {
+    constexpr std::array<float, 4> kRadii{0.65f, 1.0f, 1.0f, 0.65f};
+    constexpr std::array<float, 4> kHeights{-1.0f, -0.75f, 0.75f, 1.0f};
+    constexpr float kTau = 6.2831853071795864769f;
+    for (std::size_t ring = 0; ring < vertices.size(); ++ring) {
+      for (std::size_t side = 0; side < kSides; ++side) {
+        const float angle = kTau * static_cast<float>(side) / static_cast<float>(kSides);
+        vertices[ring][side] = quader_poly::add_vertex(document,
+            {(reflected ? -1.0f : 1.0f) * kRadii[ring] * std::cos(angle),
+             kRadii[ring] * std::sin(angle), kHeights[ring]});
+      }
+    }
+    for (std::size_t band = 0; band < faces.size(); ++band) {
+      for (std::size_t side = 0; side < kSides; ++side) {
+        const auto next = (side + 1u) % kSides;
+        std::array<quader_poly::ElementId, 4> boundary{
+            static_cast<quader_poly::ElementId>(vertices[band][side]),
+            static_cast<quader_poly::ElementId>(vertices[band][next]),
+            static_cast<quader_poly::ElementId>(vertices[band + 1u][next]),
+            static_cast<quader_poly::ElementId>(vertices[band + 1u][side])};
+        if (reflected) std::reverse(boundary.begin(), boundary.end());
+        faces[band][side] = quader_poly::add_face(document, boundary);
+      }
+    }
+    std::vector<quader_poly::ElementId> bottom(vertices.front().rbegin(),
+                                             vertices.front().rend());
+    std::vector<quader_poly::ElementId> top(vertices.back().begin(),
+                                          vertices.back().end());
+    if (reflected) {
+      std::reverse(bottom.begin(), bottom.end());
+      std::reverse(top.begin(), top.end());
+    }
+    (void)quader_poly::add_face(document, bottom);
+    (void)quader_poly::add_face(document, top);
+    const auto created = harness.editor.modeling().create_mesh(
+        quader::QuaderPolygonDocumentInternalAccess::from_backend(document),
+        {.name = "Inset cylinder loop selection regression"});
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    object = created.value();
+    const auto outside = harness.editor.modeling().create_box(
+        {.min = {2.5f, -0.5f, -0.5f}, .max = {3.5f, 0.5f, 0.5f}},
+        "Unrelated hover target");
+    ASSERT_TRUE(outside.ok());
+    other = outside.value();
+    ASSERT_TRUE(harness.editor.selection().select_object(object).ok());
+    ASSERT_TRUE(enter_selection_context(harness.editor, mode).ok());
+    ASSERT_TRUE(harness.editor.selection().clear().ok());
+    harness.router.set_selection_mode(mode == quader::QuaderSelectionMode::Vertex
+        ? quader::ViewportSelectionMode::Vertex
+        : mode == quader::QuaderSelectionMode::Edge
+            ? quader::ViewportSelectionMode::Edge : quader::ViewportSelectionMode::Face);
+    if (orthographic) {
+      harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+    }
+    harness.camera.focus_origin(7.0f);
+    harness.session.history().clear();
+  }
+
+  [[nodiscard]] quader::QVec3 position(quader::QuaderElementId id) const {
+    return quader_poly::find_vertex(document, id)->position;
+  }
+
+  [[nodiscard]] quader::QVec3 face_center(std::size_t band, std::size_t side) const {
+    const auto next = (side + 1u) % kSides;
+    return (position(vertices[band][side]) + position(vertices[band][next]) +
+            position(vertices[band + 1u][side]) + position(vertices[band + 1u][next])) * 0.25f;
+  }
+
+  [[nodiscard]] quader::QVec2 project(quader::QVec3 position) const {
+    const auto point = harness.camera.project_world_point(position);
+    EXPECT_TRUE(point.visible);
+    return point.position;
+  }
+
+  [[nodiscard]] std::vector<quader::QuaderElementId> selected_components(
+      quader::QuaderSelectionMode mode) const {
+    std::vector<quader::QuaderElementId> result;
+    for (const auto &selected : harness.session.modeling().export_selection().objects) {
+      if (selected.modeling_object_id != object.modeling_object_id) continue;
+      if (mode == quader::QuaderSelectionMode::Vertex) {
+        for (const auto &vertex : selected.selected_vertices) result.push_back(vertex.id);
+      } else {
+        for (const auto &face : selected.selected_faces) result.push_back(face.id);
+      }
+    }
+    std::sort(result.begin(), result.end());
+    return result;
+  }
+
+  [[nodiscard]] std::vector<EdgeId> selected_edges() const {
+    std::vector<EdgeId> result;
+    for (const auto &selected : harness.session.modeling().export_selection().objects) {
+      if (selected.modeling_object_id != object.modeling_object_id) continue;
+      for (const auto &edge : selected.selected_edges) {
+        result.push_back(CylinderEdgeSelectionScenario::edge_id(edge.a, edge.b));
+      }
+    }
+    std::sort(result.begin(), result.end());
+    return result;
+  }
+};
+
+/// Authored UV-sphere opening and extensions keep boundary expectations explicit.
+struct SphereOpeningSelectionFixture final {
+  quader_poly::Document document;
+  std::array<std::vector<CylinderEdgeSelectionScenario::EdgeId>, 2> boundary_runs;
+
+  explicit SphereOpeningSelectionFixture(std::size_t extended_edges, bool reflected) {
+    document = quader_poly::make_sphere({.radial_segments = 12, .rings = 8});
+    const auto vertex = [&](std::size_t ring, std::size_t side) {
+      return document.vertices[1u + ring * 12u + side].id;
+    };
+    std::vector<quader_poly::ElementId> removed;
+    for (std::size_t band = 2; band < 4; ++band) {
+      for (std::size_t side = 2; side < 5; ++side) {
+        removed.push_back(document.faces[12u + band * 12u + side].id);
+      }
+    }
+    std::erase_if(document.faces, [&](const auto &face) {
+      return std::find(removed.begin(), removed.end(), face.id) != removed.end();
+    });
+    const std::array opening{
+        vertex(4, 2), vertex(4, 3), vertex(4, 4), vertex(4, 5), vertex(3, 5),
+        vertex(2, 5), vertex(2, 4), vertex(2, 3), vertex(2, 2), vertex(3, 2)};
+    const auto edge_id = CylinderEdgeSelectionScenario::edge_id;
+    if (extended_edges == 0u) {
+      for (std::size_t index = 0; index < opening.size(); ++index) {
+        boundary_runs[0].push_back(edge_id(opening[index], opening[(index + 1u) % opening.size()]));
+      }
+    } else {
+      std::vector<quader_poly::ElementId> extension;
+      for (std::size_t index = 0; index <= extended_edges; ++index) {
+        extension.push_back(quader_poly::add_vertex(document,
+            quader_poly::find_vertex(document, opening[index])->position +
+            quader::QVec3{0.3f, 0.8f, 1.5f}));
+      }
+      for (std::size_t index = 0; index < extended_edges; ++index) {
+        (void)quader_poly::add_face(document, std::array{
+            opening[index], opening[index + 1u], extension[index + 1u], extension[index]});
+        boundary_runs[0].push_back(edge_id(extension[index], extension[index + 1u]));
+      }
+      boundary_runs[1].push_back(edge_id(opening.front(), extension.front()));
+      boundary_runs[1].push_back(edge_id(opening[extended_edges], extension.back()));
+      for (std::size_t index = extended_edges; index < opening.size(); ++index) {
+        boundary_runs[1].push_back(edge_id(opening[index], opening[(index + 1u) % opening.size()]));
+      }
+    }
+    for (auto &run : boundary_runs) std::sort(run.begin(), run.end());
+    if (reflected) {
+      for (auto &vertex : document.vertices) vertex.position.x *= -1.0f;
+      for (auto &face : document.faces) std::reverse(face.vertices.begin(), face.vertices.end());
+    }
   }
 };
 
@@ -1948,6 +2122,200 @@ TEST(ViewportInteractionControllerTests,
   EXPECT_TRUE(result.before_tool.gizmo_consumed);
   EXPECT_EQ(result.interaction_selection.summary.selection_revision,
             harness.editor.selection().summary().selection_revision);
+}
+
+TEST(ViewportInteractionControllerTests,
+     PaintSelectionFallbackCompletesIdleExtrudeAfterWholeStroke) {
+  enum class Completion { Release, CoalescedRelease, FocusLoss, CoalescedHeldSecond };
+  constexpr std::array kCompletions{
+      Completion::Release, Completion::CoalescedRelease, Completion::FocusLoss,
+      Completion::CoalescedHeldSecond};
+  for (const auto completion : kCompletions) {
+    SCOPED_TRACE(static_cast<int>(completion));
+    ViewportInteractionHarness harness;
+    quader_poly::Document document;
+    constexpr std::array kCenters{
+        quader::QVec3{-2.0f, 0.0f, 0.0f},
+        quader::QVec3{2.0f, 0.0f, 0.0f}};
+    constexpr std::array kCorners{
+        quader::QVec3{-0.5f, -0.5f, 0.0f},
+        quader::QVec3{0.5f, -0.5f, 0.0f},
+        quader::QVec3{0.5f, 0.5f, 0.0f},
+        quader::QVec3{-0.5f, 0.5f, 0.0f}};
+    for (const auto center : kCenters) {
+      std::array<quader_poly::ElementId, 4> vertices;
+      for (std::size_t index = 0; index < vertices.size(); ++index) {
+        vertices[index] = quader_poly::add_vertex(document, center + kCorners[index]);
+      }
+      (void)quader_poly::add_face(document, vertices);
+    }
+    const auto created = harness.editor.modeling().create_mesh(
+        quader::QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+        {.name = "Paint Extrude source"});
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    ASSERT_TRUE(harness.editor.selection().select_object(created.value()).ok());
+    ASSERT_TRUE(enter_selection_context(harness.editor,
+                                        quader::QuaderSelectionMode::Face).ok());
+    ASSERT_TRUE(harness.editor.selection().clear().ok());
+    ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::PaintSelect).ok());
+    ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Extrude).ok());
+    ASSERT_TRUE(harness.editor.tools().set_setting("extrude", "extrude.amount", 8.0).ok());
+    harness.router.set_active_tool(quader::ViewportToolId::Extrude);
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Face);
+    ASSERT_EQ(harness.editor.viewports().preferred_selection_tool(),
+              quader::ViewportToolId::PaintSelect);
+    ASSERT_TRUE(harness.session.extrude().active());
+    ASSERT_FALSE(harness.session.extrude().preview_active());
+    const auto history = harness.session.history().undo_count();
+    const auto work = harness.session.extrude().work_stats_for_tests();
+    const auto source = harness.editor.query().compiled_object_mesh(created.value());
+    ASSERT_TRUE(source.has_value());
+    const auto first = harness.camera.project_world_point(kCenters[0]).position;
+    const auto second = harness.camera.project_world_point(kCenters[1]).position;
+    const auto dispatch = [&](bool pressed, bool down, bool released) {
+      harness.input.active_transform_drag = harness.controller.dragging();
+      auto interaction = harness.frame(pressed, down, released, first);
+      interaction.preferred_selection_tool =
+          harness.editor.viewports().preferred_selection_tool();
+      const auto lifecycle = harness.controller.handle_tool_pointer_lifecycle(
+          harness.editor, harness.session.scene(), harness.session.assets(),
+          harness.session.native_tools(), &harness.session.point_placement(),
+          harness.camera,
+          {.interaction = interaction,
+           .native_tool = {.input = harness.input,
+                           .input_result = harness.input_result,
+                           .left_pressed = pressed,
+                           .left_down = down,
+                           .left_released = released,
+                           .left_click_local = first}});
+      harness.controller.handle_after_active_tool(
+          harness.editor, interaction,
+          {.handled = lifecycle.native_tool.consumed}, lifecycle.before_tool,
+          harness.session.native_tools());
+      harness.input.pointer_pressed_edges.clear();
+      harness.input.pointer_released_edges.clear();
+      harness.input.pointer_motion_samples.clear();
+    };
+    const auto expect_unchanged_held_work = [&] {
+      // Handle presentation follows the newly painted selection once. Its
+      // cached source is distinct from actually beginning an extrusion preview.
+      dispatch(false, true, false);
+      const auto stationary = harness.session.extrude().work_stats_for_tests();
+      dispatch(false, true, false);
+      const auto unchanged = harness.session.extrude().work_stats_for_tests();
+      EXPECT_EQ(unchanged.source_capture_count, stationary.source_capture_count);
+      EXPECT_EQ(unchanged.geometry_update_count, stationary.geometry_update_count);
+      EXPECT_EQ(unchanged.geometry_update_count, work.geometry_update_count);
+      EXPECT_FALSE(harness.session.extrude().preview_active());
+      EXPECT_TRUE(harness.controller.dragging());
+    };
+    harness.input.mouse_local = first;
+    harness.input.pointer_pressed_edges = {{
+        .button = quader::QuaderMouseButton::Left, .local = first, .sequence = 1}};
+    if (completion == Completion::CoalescedHeldSecond) {
+      const quader::ViewportModifiers add{.shift = true};
+      const auto second_motion = second + quader::QVec2{4.0f, 0.0f};
+      harness.input.modifiers = add;
+      harness.input.pointer_pressed_edges.front().modifiers = quader::ViewportModifiers{};
+      harness.input.pointer_pressed_edges.push_back({
+          .button = quader::QuaderMouseButton::Left, .local = second,
+          .sequence = 3, .modifiers = add});
+      harness.input.pointer_released_edges = {{
+          .button = quader::QuaderMouseButton::Left, .local = first,
+          .sequence = 2, .modifiers = quader::ViewportModifiers{}}};
+      harness.input.pointer_motion_samples = {{
+          .button = quader::QuaderMouseButton::Left, .local = second_motion,
+          .sequence = 4, .press_sequence = 3, .modifiers = add}};
+      harness.input.mouse_local = second_motion;
+      dispatch(true, true, true);
+      EXPECT_TRUE(harness.controller.dragging());
+      EXPECT_EQ(harness.editor.selection().summary().selected_face_count, 2u);
+      EXPECT_FALSE(harness.session.extrude().preview_active());
+      EXPECT_EQ(harness.session.extrude().work_stats_for_tests().geometry_update_count,
+                work.geometry_update_count);
+      EXPECT_EQ(harness.session.history().undo_count(), history);
+      const auto final_motion = second + quader::QVec2{8.0f, 0.0f};
+      harness.input.mouse_local = final_motion;
+      harness.input.pointer_motion_samples = {{
+          .button = quader::QuaderMouseButton::Left, .local = final_motion,
+          .sequence = 5, .press_sequence = 3, .modifiers = add}};
+      dispatch(false, true, false);
+      EXPECT_TRUE(harness.controller.dragging());
+      EXPECT_EQ(harness.editor.selection().summary().selected_face_count, 2u);
+      EXPECT_FALSE(harness.session.extrude().preview_active());
+      EXPECT_EQ(harness.session.extrude().work_stats_for_tests().geometry_update_count,
+                work.geometry_update_count);
+      EXPECT_EQ(harness.session.history().undo_count(), history);
+      const auto during = harness.editor.query().compiled_object_mesh(created.value());
+      ASSERT_TRUE(during.has_value());
+      quader::test::curve::expect_same_mesh_geometry(*during, *source);
+      expect_unchanged_held_work();
+      harness.input.pointer_released_edges = {{
+          .button = quader::QuaderMouseButton::Left, .local = final_motion,
+          .sequence = 6, .modifiers = add}};
+      dispatch(false, false, true);
+    } else if (completion == Completion::CoalescedRelease) {
+      harness.input.pointer_motion_samples = {{
+          .button = quader::QuaderMouseButton::Left, .local = second,
+          .sequence = 2, .press_sequence = 1}};
+      harness.input.pointer_released_edges = {{
+          .button = quader::QuaderMouseButton::Left, .local = second, .sequence = 3}};
+      harness.input.mouse_local = second;
+      dispatch(true, false, true);
+    } else {
+      dispatch(true, true, false);
+      ASSERT_TRUE(harness.controller.dragging());
+      EXPECT_EQ(harness.editor.selection().summary().selected_face_count, 1u);
+      EXPECT_FALSE(harness.session.extrude().preview_active());
+      EXPECT_EQ(harness.session.extrude().work_stats_for_tests().geometry_update_count,
+                work.geometry_update_count);
+      harness.input.mouse_local = second;
+      harness.input.pointer_motion_samples = {{
+          .button = quader::QuaderMouseButton::Left, .local = second,
+          .sequence = 2, .press_sequence = 1}};
+      dispatch(false, true, false);
+      EXPECT_EQ(harness.editor.selection().summary().selected_face_count, 2u);
+      EXPECT_FALSE(harness.session.extrude().preview_active());
+      EXPECT_EQ(harness.session.history().undo_count(), history);
+      const auto during = harness.editor.query().compiled_object_mesh(created.value());
+      ASSERT_TRUE(during.has_value());
+      quader::test::curve::expect_same_mesh_geometry(*during, *source);
+      expect_unchanged_held_work();
+      if (completion == Completion::FocusLoss) {
+        harness.input.viewport_focused = false;
+        dispatch(false, true, false);
+      } else {
+        harness.input.pointer_released_edges = {{
+            .button = quader::QuaderMouseButton::Left, .local = second, .sequence = 3}};
+        dispatch(false, false, true);
+      }
+    }
+    EXPECT_FALSE(harness.controller.dragging());
+    EXPECT_TRUE(harness.session.extrude().active());
+    EXPECT_TRUE(harness.session.extrude().preview_active());
+    EXPECT_EQ(harness.session.extrude().work_stats_for_tests().geometry_update_count,
+              work.geometry_update_count + 1u);
+    EXPECT_EQ(harness.editor.selection().summary().selected_face_count, 2u);
+    EXPECT_EQ(harness.session.history().undo_count(), history);
+    EXPECT_EQ(harness.editor.tools().active_tool(), "extrude");
+    if (completion == Completion::FocusLoss) {
+      const auto completed_work = harness.session.extrude().work_stats_for_tests();
+      harness.input.viewport_focused = true;
+      harness.input.pointer_released_edges = {{
+          .button = quader::QuaderMouseButton::Left, .local = first, .sequence = 3}};
+      dispatch(false, false, true);
+      EXPECT_EQ(harness.session.extrude().work_stats_for_tests().geometry_update_count,
+                work.geometry_update_count + 1u);
+      EXPECT_EQ(harness.session.extrude().work_stats_for_tests().source_capture_count,
+                completed_work.source_capture_count);
+      EXPECT_EQ(harness.session.history().undo_count(), history);
+    }
+    ASSERT_TRUE(harness.editor.tools().cancel_active_tool_preview().ok());
+    const auto canceled = harness.editor.query().compiled_object_mesh(created.value());
+    ASSERT_TRUE(canceled.has_value());
+    quader::test::curve::expect_same_mesh_geometry(*canceled, *source);
+    EXPECT_EQ(harness.session.history().undo_count(), history);
+  }
 }
 
 TEST(ViewportInteractionControllerTests,
@@ -6961,7 +7329,232 @@ TEST(ViewportInteractionControllerTests, ShortMoveGizmoClickKeepsEdgeSelection) 
 }
 
 TEST(ViewportInteractionControllerTests,
-     AltComponentClickUsesTheGeometricEdgeWithoutPreselectionOrPriorDirection) {
+     AltFaceCenterFollowsTheActiveNeighborAroundInsetCylinderOrAlongItsAxis) {
+  for (const bool reflected : {false, true}) {
+    for (const bool orthographic : {false, true}) {
+      for (const bool axial : {false, true}) {
+        for (const bool ring : {false, true}) {
+          SCOPED_TRACE(reflected);
+          SCOPED_TRACE(orthographic);
+          SCOPED_TRACE(axial);
+          SCOPED_TRACE(ring);
+          SteppedCylinderSelectionScenario scenario;
+          scenario.initialize(quader::QuaderSelectionMode::Face, reflected, orthographic);
+          auto &harness = scenario.harness;
+          const auto center = scenario.face_center(1, 2);
+          harness.camera.set_view_direction({-center.x, -center.y, -0.25f});
+          ASSERT_TRUE(harness.editor.selection().select_face(
+              scenario.object, axial ? scenario.faces[0][2] : scenario.faces[1][1]).ok());
+          const auto context = harness.session.editor_mode().snapshot();
+          const auto before = harness.editor.selection().summary();
+          const auto asset_revision = harness.session.assets().revision();
+          harness.input.modifiers = {.primary = ring, .alt = true};
+          harness.click_selection(scenario.project(center));
+
+          std::vector<quader::QuaderElementId> expected;
+          if (axial) {
+            for (const auto &band : scenario.faces) expected.push_back(band[2]);
+          } else {
+            expected.assign(scenario.faces[1].begin(), scenario.faces[1].end());
+          }
+          std::sort(expected.begin(), expected.end());
+          EXPECT_EQ(scenario.selected_components(quader::QuaderSelectionMode::Face), expected);
+          EXPECT_EQ(harness.editor.selection().summary().active_face_id, scenario.faces[1][2]);
+          EXPECT_EQ(harness.editor.selection().summary().content_revision, before.content_revision);
+          EXPECT_EQ(harness.session.assets().revision(), asset_revision);
+          EXPECT_EQ(harness.session.editor_mode().snapshot().participants, context.participants);
+          EXPECT_EQ(harness.session.editor_mode().snapshot().generation, context.generation);
+          EXPECT_EQ(harness.session.history().undo_count(), 0u);
+
+          const auto selection_revision = harness.editor.selection().summary().selection_revision;
+          harness.click_selection(scenario.project(center));
+          EXPECT_EQ(scenario.selected_components(quader::QuaderSelectionMode::Face), expected);
+          EXPECT_EQ(harness.editor.selection().summary().selection_revision, selection_revision);
+          ASSERT_TRUE(harness.editor.modeling().begin_transform_preview().ok());
+          ASSERT_TRUE(harness.editor.modeling().update_transform_matrix(
+              {.origin = {0.0f, 0.0f, 0.125f}}, {}).ok());
+          ASSERT_TRUE(harness.session.modeling().pending_operation_active());
+          const auto preview_signature = harness.session.modeling().tool_preview_signature();
+          const auto preview_selection = harness.editor.selection().summary();
+          const auto history_revision = harness.session.history().revision();
+          harness.click_selection(scenario.project(center + quader::QVec3{0.0f, 0.0f, 0.125f}));
+          EXPECT_TRUE(harness.session.modeling().pending_operation_active());
+          EXPECT_EQ(harness.session.modeling().tool_preview_signature(), preview_signature);
+          EXPECT_EQ(harness.editor.selection().summary().selection_revision,
+                    preview_selection.selection_revision);
+          EXPECT_EQ(harness.session.history().revision(), history_revision);
+          EXPECT_EQ(scenario.selected_components(quader::QuaderSelectionMode::Face), expected);
+          ASSERT_TRUE(harness.editor.modeling().cancel_transform_preview().ok());
+
+          harness.input.modifiers = {};
+          harness.input.mouse_local = scenario.project({3.0f, 0.0f, 0.5f});
+          harness.input.mouse_screen = harness.input.mouse_local;
+          const auto idle_selection_revision = harness.editor.selection().summary().selection_revision;
+          for (int idle = 0; idle < 3; ++idle) {
+            (void)harness.dispatch_frame(harness.frame());
+            EXPECT_EQ(scenario.selected_components(quader::QuaderSelectionMode::Face), expected);
+            EXPECT_EQ(harness.editor.selection().summary().selection_revision, idle_selection_revision);
+            EXPECT_EQ(harness.session.editor_mode().snapshot().participants, context.participants);
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     AltVertexAndEdgeClicksSelectTheExactInsetNgonRimFromEverySide) {
+  for (const auto mode : {quader::QuaderSelectionMode::Vertex,
+                          quader::QuaderSelectionMode::Edge}) {
+    for (const bool reflected : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(mode));
+      SCOPED_TRACE(reflected);
+      SteppedCylinderSelectionScenario scenario;
+      scenario.initialize(mode, reflected, true);
+      auto &harness = scenario.harness;
+      harness.camera.set_view_direction({0.0f, 0.0f, -1.0f});
+      const auto &rim = scenario.vertices.back();
+      std::vector<quader::QuaderElementId> expected_vertices(rim.begin(), rim.end());
+      std::sort(expected_vertices.begin(), expected_vertices.end());
+      std::vector<SteppedCylinderSelectionScenario::EdgeId> expected_edges;
+      for (std::size_t side = 0; side < rim.size(); ++side) {
+        expected_edges.push_back(CylinderEdgeSelectionScenario::edge_id(
+            rim[side], rim[(side + 1u) % rim.size()]));
+      }
+      std::sort(expected_edges.begin(), expected_edges.end());
+      const auto context = harness.session.editor_mode().snapshot();
+      for (std::size_t side = 0; side < rim.size(); ++side) {
+        SCOPED_TRACE(side);
+        ASSERT_TRUE(harness.editor.selection().clear().ok());
+        const auto next = (side + 1u) % rim.size();
+        const auto previous = (side + rim.size() - 1u) % rim.size();
+        quader::QVec3 position;
+        if (mode == quader::QuaderSelectionMode::Vertex) {
+          ASSERT_TRUE(harness.editor.selection().select_vertex(scenario.object, rim[previous]).ok());
+          position = scenario.position(rim[side]);
+        } else {
+          ASSERT_TRUE(harness.editor.selection().select_edge(
+              scenario.object, rim[previous], rim[side]).ok());
+          position = (scenario.position(rim[side]) + scenario.position(rim[next])) * 0.5f;
+        }
+        harness.input.modifiers = {.alt = true};
+        harness.click_selection(scenario.project(position));
+        if (mode == quader::QuaderSelectionMode::Vertex) {
+          EXPECT_EQ(scenario.selected_components(mode), expected_vertices);
+          EXPECT_EQ(harness.editor.selection().summary().active_vertex_id, rim[side]);
+        } else {
+          EXPECT_EQ(scenario.selected_edges(), expected_edges);
+        }
+        EXPECT_EQ(harness.session.editor_mode().snapshot().participants, context.participants);
+        EXPECT_EQ(harness.session.history().undo_count(), 0u);
+      }
+    }
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     AltSphereOpeningBoundaryWorksFromEveryEdgeAndBothSidesOfItsScreenLine) {
+  for (const std::size_t extended_edges : {0u, 3u, 5u}) {
+    for (const bool reflected : {false, true}) {
+      SCOPED_TRACE(extended_edges);
+      SCOPED_TRACE(reflected);
+      SphereOpeningSelectionFixture fixture(extended_edges, reflected);
+      CylinderEdgeSelectionScenario scenario;
+      scenario.document = fixture.document;
+      auto &harness = scenario.harness;
+      const auto mesh = harness.editor.modeling().create_mesh(
+          quader::QuaderPolygonDocumentInternalAccess::from_backend(scenario.document),
+          {.name = "UV sphere opening boundary regression"});
+      ASSERT_TRUE(mesh.ok());
+      scenario.object = mesh.value();
+      ASSERT_TRUE(enter_selection_context(harness.editor, quader::QuaderSelectionMode::Edge).ok());
+      harness.router.set_selection_mode(quader::ViewportSelectionMode::Edge);
+      harness.session.history().clear();
+      const auto edit_context = harness.session.editor_mode().snapshot();
+      auto full_boundary = fixture.boundary_runs[0];
+      full_boundary.insert(full_boundary.end(), fixture.boundary_runs[1].begin(),
+                           fixture.boundary_runs[1].end());
+      std::sort(full_boundary.begin(), full_boundary.end());
+      for (const auto &run : fixture.boundary_runs) {
+        for (const auto edge : run) {
+          SCOPED_TRACE(edge.first);
+          SCOPED_TRACE(edge.second);
+          const auto a = quader_poly::find_vertex(scenario.document, edge.first)->position;
+          const auto b = quader_poly::find_vertex(scenario.document, edge.second)->position;
+          const auto midpoint = (a + b) * 0.5f;
+          const auto incident_face = std::find_if(scenario.document.faces.begin(),
+              scenario.document.faces.end(), [&](const auto &face) {
+                for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+                  if (CylinderEdgeSelectionScenario::edge_id(face.vertices[index],
+                      face.vertices[(index + 1u) % face.vertices.size()]) == edge) return true;
+                }
+                return false;
+              });
+          ASSERT_NE(incident_face, scenario.document.faces.end());
+          const auto face_normal = quader_poly::face_normal(scenario.document, *incident_face);
+          const auto tangent = quader::normalize_or_zero(quader::cross(face_normal, b - a));
+          // Frame the actual boundary face closely: the extended strips have
+          // different normals from the sphere, and a distant radial view can
+          // put an unrelated sphere meridian in front of their outer edges.
+          const auto view_normal = quader::normalize_or_zero(
+              face_normal + tangent * 0.15f + quader::normalize_or_zero(b - a) * 0.1f);
+          ASSERT_TRUE(harness.camera.restore_perspective_pose({
+              .eye = midpoint + view_normal * 0.5f,
+              .target = midpoint,
+              .up = quader::normalize_or_zero(b - a)}));
+          for (const float side : {-1.0f, 1.0f}) {
+            SCOPED_TRACE(side);
+            ASSERT_TRUE(harness.editor.selection().clear().ok());
+            const auto projected = harness.camera.project_world_point(midpoint + tangent * (side * 0.001f));
+            ASSERT_TRUE(projected.visible);
+            harness.input.modifiers = {};
+            harness.click_selection(projected.position);
+            ASSERT_EQ(scenario.selected_edges(),
+                      (std::vector<CylinderEdgeSelectionScenario::EdgeId>{edge}));
+            harness.input.modifiers = {.alt = true};
+            harness.click_selection(projected.position);
+            EXPECT_EQ(scenario.selected_edges(), run);
+            if (extended_edges != 0u) {
+              harness.click_selection(projected.position);
+              EXPECT_EQ(scenario.selected_edges(), full_boundary);
+              harness.click_selection(projected.position);
+              EXPECT_EQ(scenario.selected_edges(), run);
+            }
+            EXPECT_EQ(harness.session.editor_mode().snapshot().participants, edit_context.participants);
+            EXPECT_EQ(harness.session.history().undo_count(), 0u);
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     ShiftAltFaceCenterTogglesTheDirectionalBandAndPreservesOtherBands) {
+  SteppedCylinderSelectionScenario scenario;
+  scenario.initialize(quader::QuaderSelectionMode::Face, false, false);
+  auto &harness = scenario.harness;
+  const auto center = scenario.face_center(1, 2);
+  harness.camera.set_view_direction({-center.x, -center.y, -0.25f});
+  ASSERT_TRUE(harness.editor.selection().select_face(scenario.object, scenario.faces[0][7]).ok());
+  ASSERT_TRUE(harness.editor.selection().select_face(scenario.object, scenario.faces[1][1],
+      quader::QuaderSelectionEdit::Add).ok());
+  harness.input.modifiers = {.shift = true, .alt = true};
+  harness.click_selection(scenario.project(center));
+  std::vector<quader::QuaderElementId> expected(scenario.faces[1].begin(), scenario.faces[1].end());
+  expected.push_back(scenario.faces[0][7]);
+  std::sort(expected.begin(), expected.end());
+  ASSERT_EQ(scenario.selected_components(quader::QuaderSelectionMode::Face), expected);
+  ASSERT_TRUE(harness.editor.selection().select_face(scenario.object, scenario.faces[1][1],
+      quader::QuaderSelectionEdit::Add).ok());
+  harness.click_selection(scenario.project(center));
+  EXPECT_EQ(scenario.selected_components(quader::QuaderSelectionMode::Face),
+            (std::vector<quader::QuaderElementId>{scenario.faces[0][7]}));
+  EXPECT_EQ(harness.session.history().undo_count(), 0u);
+}
+
+TEST(ViewportInteractionControllerTests,
+     AltComponentClickUsesTypedHitsWithOrWithoutUnrelatedPreselection) {
   for (const auto mode : {quader::QuaderSelectionMode::Vertex,
                           quader::QuaderSelectionMode::Face}) {
     for (const bool prior_selection : {false, true}) {
@@ -6996,6 +7589,180 @@ TEST(ViewportInteractionControllerTests,
 }
 
 TEST(ViewportInteractionControllerTests,
+     CtrlAltVertexRingRepeatsAtTheSameTypedVertexWithoutSettlingItsPreview) {
+  GridComponentSelectionScenario scenario;
+  scenario.initialize(quader::QuaderSelectionMode::Vertex);
+  auto &harness = scenario.harness;
+  ASSERT_TRUE(harness.editor.selection().select_vertex(
+      scenario.object, scenario.vertices[1][2]).ok());
+  std::vector<quader::QuaderElementId> expected;
+  for (const auto &row : scenario.vertices) {
+    expected.push_back(row[1]);
+    expected.push_back(row[2]);
+  }
+  std::sort(expected.begin(), expected.end());
+  harness.input.modifiers = {.primary = true, .alt = true};
+  harness.click_selection(scenario.hit());
+  ASSERT_EQ(scenario.selected_components(), expected);
+  const auto selected = harness.editor.selection().summary();
+  harness.click_selection(scenario.hit());
+  EXPECT_EQ(scenario.selected_components(), expected);
+  EXPECT_EQ(harness.editor.selection().summary().selection_revision, selected.selection_revision);
+  ASSERT_TRUE(harness.editor.modeling().begin_transform_preview().ok());
+  ASSERT_TRUE(harness.editor.modeling().update_transform_matrix(
+      {.origin = {0.125f, 0.0f, 0.0f}}, {}).ok());
+  const auto preview_signature = harness.session.modeling().tool_preview_signature();
+  const auto preview_selection = harness.editor.selection().summary();
+  const auto history_revision = harness.session.history().revision();
+  const auto moved_hit = harness.camera.project_world_point(
+      scenario.hit_position() + quader::QVec3{0.125f, 0.0f, 0.0f});
+  ASSERT_TRUE(moved_hit.visible);
+  harness.click_selection(moved_hit.position);
+  EXPECT_TRUE(harness.session.modeling().pending_operation_active());
+  EXPECT_EQ(harness.session.modeling().tool_preview_signature(), preview_signature);
+  EXPECT_EQ(harness.editor.selection().summary().selection_revision,
+            preview_selection.selection_revision);
+  EXPECT_EQ(harness.session.history().revision(), history_revision);
+  EXPECT_EQ(scenario.selected_components(), expected);
+  EXPECT_EQ(harness.session.history().undo_count(), 0u);
+  ASSERT_TRUE(harness.editor.modeling().cancel_transform_preview().ok());
+}
+
+TEST(ViewportInteractionControllerTests,
+     RemovingAnAbsentTraversalPreservesTheUnrelatedActiveComponentAndDraft) {
+  for (const auto mode : {quader::QuaderSelectionMode::Vertex,
+                          quader::QuaderSelectionMode::Edge,
+                          quader::QuaderSelectionMode::Face}) {
+    for (const bool ring : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(mode));
+      SCOPED_TRACE(ring);
+      SteppedCylinderSelectionScenario scenario;
+      scenario.initialize(mode, false, false);
+      auto &harness = scenario.harness;
+      auto &modeling = harness.session.modeling();
+      const auto unrelated_vertex = scenario.vertices[0][0];
+      const auto unrelated_edge = CylinderEdgeSelectionScenario::edge_id(
+          scenario.vertices[0][0], scenario.vertices[0][1]);
+      const auto unrelated_face = scenario.faces[0][7];
+      if (mode == quader::QuaderSelectionMode::Vertex) {
+        ASSERT_TRUE(harness.editor.selection().select_vertex(scenario.object, unrelated_vertex).ok());
+      } else if (mode == quader::QuaderSelectionMode::Edge) {
+        ASSERT_TRUE(harness.editor.selection().select_edge(
+            scenario.object, unrelated_edge.first, unrelated_edge.second).ok());
+      } else {
+        ASSERT_TRUE(harness.editor.selection().select_face(scenario.object, unrelated_face).ok());
+      }
+      ASSERT_TRUE(harness.editor.modeling().begin_transform_preview().ok());
+      ASSERT_TRUE(harness.editor.modeling().update_transform_matrix(
+          {.origin = {0.125f, 0.0f, 0.0f}}, {}).ok());
+      ASSERT_TRUE(modeling.pending_operation_active());
+      const auto before = harness.editor.selection().summary();
+      const auto geometry = harness.editor.query().compiled_object_mesh(scenario.object);
+      ASSERT_TRUE(geometry.has_value());
+      const auto preview_signature = modeling.tool_preview_signature();
+      const auto overlay_signature = modeling.selection_overlay_signature();
+      const auto history_revision = harness.session.history().revision();
+      const auto asset_revision = harness.session.assets().revision();
+      const auto scene_revision = harness.session.scene().revision();
+      const auto edit_context = harness.session.editor_mode().snapshot();
+      const quader::ModelingResolvedComponentSelectionRequest request{
+          .modeling_object_id = scenario.object.modeling_object_id,
+          .mode = mode == quader::QuaderSelectionMode::Vertex ? quader::ModelingSelectionMode::Vertex
+              : mode == quader::QuaderSelectionMode::Edge ? quader::ModelingSelectionMode::Edge
+                                                         : quader::ModelingSelectionMode::Face,
+          .kind = mode == quader::QuaderSelectionMode::Vertex ? quader::ModelingActiveSelectionKind::Vertex
+              : mode == quader::QuaderSelectionMode::Edge ? quader::ModelingActiveSelectionKind::Edge
+                                                         : quader::ModelingActiveSelectionKind::Face,
+          .vertex = scenario.vertices[3][2],
+          .edge = mode == quader::QuaderSelectionMode::Face
+              ? std::pair<int, int>{scenario.vertices[1][2], scenario.vertices[2][2]}
+              : std::pair<int, int>{scenario.vertices[3][2], scenario.vertices[3][3]},
+          .face = mode == quader::QuaderSelectionMode::Face ? scenario.faces[1][2] : -1,
+          .edit = quader::ModelingSelectionEdit::Remove,
+          .edge_traversal = mode == quader::QuaderSelectionMode::Edge
+              ? (ring ? quader::ModelingEdgeSelectionTraversal::Ring : quader::ModelingEdgeSelectionTraversal::Loop)
+              : quader::ModelingEdgeSelectionTraversal::None,
+          .component_traversal = mode == quader::QuaderSelectionMode::Vertex
+              ? (ring ? quader::ModelingComponentSelectionTraversal::VertexRing : quader::ModelingComponentSelectionTraversal::VertexLoop)
+              : mode == quader::QuaderSelectionMode::Face ? quader::ModelingComponentSelectionTraversal::FaceLoop
+                                                         : quader::ModelingComponentSelectionTraversal::None};
+      const auto prepared = modeling.prepare_component_traversal_selection(request);
+      ASSERT_TRUE(prepared.command.ok) << prepared.command.message;
+      EXPECT_FALSE(prepared.command.changed);
+      const auto applied = modeling.apply_resolved_component_selection(request);
+      ASSERT_TRUE(applied.ok) << applied.message;
+      EXPECT_FALSE(applied.changed);
+      EXPECT_TRUE(modeling.pending_operation_active());
+      EXPECT_EQ(modeling.tool_preview_signature(), preview_signature);
+      EXPECT_EQ(modeling.selection_overlay_signature(), overlay_signature);
+      const auto after = harness.editor.selection().summary();
+      EXPECT_EQ(after.selection_revision, before.selection_revision);
+      EXPECT_EQ(after.content_revision, before.content_revision);
+      EXPECT_EQ(after.active_kind, before.active_kind);
+      EXPECT_EQ(after.active_vertex_id, before.active_vertex_id);
+      EXPECT_EQ(after.active_edge_a, before.active_edge_a);
+      EXPECT_EQ(after.active_edge_b, before.active_edge_b);
+      EXPECT_EQ(after.active_face_id, before.active_face_id);
+      EXPECT_EQ(after.active_object_id, before.active_object_id);
+      if (mode == quader::QuaderSelectionMode::Edge) {
+        EXPECT_EQ(scenario.selected_edges(),
+                  (std::vector<SteppedCylinderSelectionScenario::EdgeId>{unrelated_edge}));
+      } else {
+        EXPECT_EQ(scenario.selected_components(mode), (std::vector<quader::QuaderElementId>{
+            mode == quader::QuaderSelectionMode::Vertex ? unrelated_vertex : unrelated_face}));
+      }
+      const auto current_geometry = harness.editor.query().compiled_object_mesh(scenario.object);
+      ASSERT_TRUE(current_geometry.has_value());
+      quader::test::curve::expect_same_mesh_geometry(*current_geometry, *geometry);
+      EXPECT_EQ(harness.session.history().revision(), history_revision);
+      EXPECT_EQ(harness.session.history().undo_count(), 0u);
+      EXPECT_EQ(harness.session.assets().revision(), asset_revision);
+      EXPECT_EQ(harness.session.scene().revision(), scene_revision);
+      EXPECT_EQ(harness.session.editor_mode().snapshot().participants, edit_context.participants);
+      EXPECT_EQ(harness.session.editor_mode().snapshot().generation, edit_context.generation);
+      ASSERT_TRUE(harness.editor.modeling().cancel_transform_preview().ok());
+    }
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     AltTypedClickIgnoresDormantDirectionWhenAnotherEditMeshIsActive) {
+  for (const auto mode : {quader::QuaderSelectionMode::Vertex,
+                          quader::QuaderSelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    GridComponentSelectionScenario scenario;
+    scenario.initialize(mode);
+    auto &harness = scenario.harness;
+    ASSERT_TRUE(harness.editor.mode().set(quader::QuaderEditorMode::Object).ok());
+    const auto other = create_box_at(harness, {5.0f, 5.0f, 0.0f});
+    ASSERT_TRUE(harness.editor.selection().select_objects({scenario.object, other}).ok());
+    ASSERT_TRUE(enter_selection_context(harness.editor, mode).ok());
+    if (mode == quader::QuaderSelectionMode::Vertex) {
+      ASSERT_TRUE(harness.editor.selection().select_vertex(
+          scenario.object, scenario.vertices[0][1]).ok());
+      ASSERT_TRUE(harness.editor.selection().select_vertex(
+          other, 1, quader::QuaderSelectionEdit::Add).ok());
+    } else {
+      ASSERT_TRUE(harness.editor.selection().select_face(
+          scenario.object, scenario.faces[1][0]).ok());
+      ASSERT_TRUE(harness.editor.selection().select_face(
+          other, 1, quader::QuaderSelectionEdit::Add).ok());
+    }
+    ASSERT_EQ(harness.editor.selection().summary().active_object_id,
+              other.modeling_object_id);
+    const auto context = harness.session.editor_mode().snapshot();
+    harness.session.history().clear();
+    harness.input.modifiers = {.alt = true};
+    harness.click_selection(scenario.hit());
+    EXPECT_EQ(scenario.selected_components(), scenario.traversal());
+    EXPECT_EQ(harness.editor.selection().summary().active_object_id,
+              scenario.object.modeling_object_id);
+    EXPECT_EQ(harness.session.editor_mode().snapshot().participants, context.participants);
+    EXPECT_EQ(harness.session.history().undo_count(), 0u);
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
      RepeatedOrInvalidAltTraversalKeepsMeaningfulTransformPreviewPending) {
   for (const auto mode : {quader::QuaderSelectionMode::Vertex,
                           quader::QuaderSelectionMode::Face}) {
@@ -7004,7 +7771,8 @@ TEST(ViewportInteractionControllerTests,
     scenario.initialize(mode);
     auto &harness = scenario.harness;
     quader::QuaderPickSelectRequest request{
-        .ray = {.origin = {-0.1f, -0.5f, 5.0f}, .direction = {0.0f, 0.0f, -1.0f}},
+        .ray = {.origin = scenario.hit_position() + quader::QVec3{0.0f, 0.0f, 5.0f},
+                .direction = {0.0f, 0.0f, -1.0f}},
         .alt_pressed = true, .vertex_radius = 0.03, .edge_radius = 0.03};
     ASSERT_TRUE(harness.editor.selection().pick_select(request).ok());
     ASSERT_EQ(scenario.selected_components(), scenario.traversal());
@@ -7041,6 +7809,7 @@ TEST(ViewportInteractionControllerTests,
       EXPECT_EQ(harness.session.assets().revision(), asset_revision);
       EXPECT_EQ(harness.session.history().undo_count(), 0u);
     };
+    request.ray.origin.x += 0.125f;
     const auto repeated = harness.editor.selection().pick_select(request);
     ASSERT_TRUE(repeated.ok()) << repeated.error_message();
     EXPECT_FALSE(repeated.changed());
@@ -7051,7 +7820,10 @@ TEST(ViewportInteractionControllerTests,
             .domain = quader::ResolvedSelectionDomain::ModelingComponent,
             .entity = scenario.object.entity,
             .modeling_object_id = scenario.object.modeling_object_id,
-            .component_kind = quader::ModelingActiveSelectionKind::Edge,
+            .component_kind = mode == quader::QuaderSelectionMode::Vertex
+                ? quader::ModelingActiveSelectionKind::Vertex
+                : quader::ModelingActiveSelectionKind::Face,
+            .vertex = scenario.vertices[1][1],
             .edge_a = 999999,
             .edge_b = 1000000,
             .face = scenario.faces[0][1]},
@@ -7230,12 +8002,12 @@ TEST(ViewportInteractionControllerTests,
 }
 
 TEST(ViewportInteractionControllerTests,
-     ShiftAltVertexLoopAddsWhenOnlyOneClickedEdgeEndpointIsSelected) {
+     ShiftAltVertexLoopAddsFromTheAdjacentSelectedVertex) {
   GridComponentSelectionScenario scenario;
   scenario.initialize(quader::QuaderSelectionMode::Vertex);
   auto &harness = scenario.harness;
   ASSERT_TRUE(harness.editor.selection()
-      .select_vertex(scenario.object, scenario.vertices[1][1]).ok());
+      .select_vertex(scenario.object, scenario.vertices[1][0]).ok());
   harness.input.modifiers = {.shift = true, .alt = true};
   harness.click_selection(scenario.hit());
   EXPECT_EQ(scenario.selected_components(), scenario.traversal());
@@ -7336,6 +8108,7 @@ TEST(ViewportInteractionControllerTests,
         harness.input_result = harness.router.handle_frame(harness.input, harness.camera);
         harness.input.navigation_bindings = {};
         ASSERT_FALSE(harness.input_result.navigation_active);
+        harness.input_result = harness.router.handle_frame(harness.input, harness.camera);
       }
       // The canceled release must not poison the next complete press/release.
       harness.click_selection(hit);
@@ -7389,7 +8162,7 @@ TEST(ViewportInteractionControllerTests,
 }
 
 TEST(ViewportInteractionControllerTests,
-     AltClickSelectsCylinderSideQuadAndDoubleClickSelectsConnectedShell) {
+     AltClickStopsAtCylinderSidePolesAndDoubleClickSelectsConnectedShell) {
   for (const int side_count : {8, 32}) {
     for (const auto [alt, double_click] :
          std::array{std::pair{true, false}, std::pair{true, true},
@@ -7403,9 +8176,6 @@ TEST(ViewportInteractionControllerTests,
       const auto &side = scenario.document.faces[side_count / 4];
       const auto seed = CylinderEdgeSelectionScenario::edge_id(
           side.vertices[0], side.vertices[1]);
-      const auto first_quad = CylinderEdgeSelectionScenario::perimeter(side);
-      const auto second_quad = CylinderEdgeSelectionScenario::perimeter(
-          scenario.document.faces[side_count / 4 - 1]);
       const auto hit = scenario.midpoint(seed.first, seed.second);
 
       if (double_click) {
@@ -7418,8 +8188,7 @@ TEST(ViewportInteractionControllerTests,
 
       const auto selected = scenario.selected_edges();
       if (alt) {
-        EXPECT_TRUE(selected == first_quad || selected == second_quad);
-        EXPECT_EQ(selected.size(), 4u);
+        EXPECT_EQ(selected, (std::vector<CylinderEdgeSelectionScenario::EdgeId>{seed}));
       } else {
         EXPECT_EQ(selected, scenario.all_edges());
       }
@@ -7570,7 +8339,7 @@ TEST(ViewportInteractionControllerTests,
 }
 
 TEST(ViewportInteractionControllerTests,
-     AltClickEdgeSelectsThePoleFacePerimeterThroughViewportFallback) {
+     AltClickEdgeStopsAtCubePolesThroughViewportFallback) {
     ViewportInteractionHarness harness;
     (void)create_unit_box(harness);
 
@@ -7604,8 +8373,11 @@ TEST(ViewportInteractionControllerTests,
     const quader::QuaderSelectionSummary selection =
         harness.editor.selection().summary();
     EXPECT_EQ(selection.mode, quader::QuaderSelectionMode::Edge);
-    EXPECT_EQ(selection.selected_edge_count, 4u);
+    EXPECT_EQ(selection.selected_edge_count, 1u);
     EXPECT_EQ(selection.active_kind, quader::QuaderActiveSelectionKind::Edge);
+    EXPECT_EQ(CylinderEdgeSelectionScenario::edge_id(
+                  selection.active_edge_a, selection.active_edge_b),
+              (CylinderEdgeSelectionScenario::EdgeId{2, 3}));
 }
 
 TEST(ViewportInteractionControllerTests,

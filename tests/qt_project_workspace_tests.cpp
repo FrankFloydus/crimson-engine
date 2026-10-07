@@ -1950,7 +1950,7 @@ TEST(QtProjectWorkspaceTests,
   }
   const QDir icon_directory(QStringLiteral(QUADER_SOURCE_DIR "/resources/icons"));
   const std::array<const char *, 14> icon_names{
-      "tool_select.png", "tool_move.png", "tool_rotate.png", "tool_scale.png",
+      "tool_box_select.png", "tool_move.png", "tool_rotate.png", "tool_scale.png",
       "tool_transform_local.png", "snapping_master.png", "snapping_grid.png",
       "snapping_vertex.png", "snapping_rotation.png", "viewport_wireframe_on_shaded.png",
       "viewport_grid.png",
@@ -2257,6 +2257,120 @@ TEST(QtProjectWorkspaceTests,
 }
 
 TEST(QtProjectWorkspaceTests,
+     PaintSelectionMenuRemainsReadableAcrossScaleAndPaletteChanges) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-paint-selection-menu-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  ASSERT_NE(QApplication::setStyle(QStringLiteral("Fusion")), nullptr);
+  const auto native_palette = application.palette();
+  quader::apply_qt_obsidian_application_theme(native_palette);
+  quader::QtUiScaleApplicationController scale_controller(application);
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  quader::LocalizationService localization;
+  quader::QtToolToolbar tools;
+  tools.set_localization(localization);
+  quader::QtViewportPanel panel;
+  panel.attach_workspace(session.viewport_workspace());
+  panel.set_localization(localization);
+  auto *select = tools.tool_action(quader::ViewportToolId::Select);
+  auto *lasso = tools.tool_action(quader::ViewportToolId::LassoSelect);
+  auto *paint = tools.tool_action(quader::ViewportToolId::PaintSelect);
+  ASSERT_NE(select, nullptr);
+  ASSERT_NE(lasso, nullptr);
+  ASSERT_NE(paint, nullptr);
+  const QDir icons(QStringLiteral(QUADER_SOURCE_DIR "/resources/icons"));
+  EXPECT_FALSE(select->icon().isNull());
+  EXPECT_FALSE(paint->icon().isNull());
+  const auto box_artwork = quader::qt_multiresolution_icon(
+      icons.filePath(QStringLiteral("tool_box_select.png")));
+  const auto paint_artwork = quader::qt_multiresolution_icon(
+      icons.filePath(QStringLiteral("tool_paint_select.png")));
+  EXPECT_EQ(select->icon().pixmap(QSize(24, 24)).toImage(), box_artwork.pixmap(QSize(24, 24)).toImage());
+  EXPECT_EQ(paint->icon().pixmap(QSize(24, 24)).toImage(), paint_artwork.pixmap(QSize(24, 24)).toImage());
+  lasso->setIcon(quader::qt_multiresolution_icon(icons.filePath(QStringLiteral("tool_lasso.png"))));
+  panel.set_control_actions({select}, lasso, paint);
+  tools.set_tool_requested_callback([&](std::string_view id) {
+    EXPECT_TRUE(editor.tools().activate(id).ok());
+  });
+  panel.set_control_action_requested_callback([&](quader::ViewportPaneId, QAction &action) {
+    action.trigger();
+  });
+  tools.synchronize(editor, editor.selection().summary(), true);
+  panel.show();
+  auto *menu = panel.findChild<QMenu *>(QStringLiteral("viewportSelectionToolMenu_perspective"));
+  ASSERT_NE(menu, nullptr);
+  ASSERT_EQ(menu->actions().size(), 3);
+  auto *paint_choice = menu->actions()[2];
+  EXPECT_EQ(paint_choice->text(), QStringLiteral("Paint Select"));
+  paint_choice->trigger();
+  panel.refresh_control_actions(editor);
+  EXPECT_EQ(paint_choice->text(), QStringLiteral("Paint Select\tCtrl+Q"));
+  auto *launcher = panel.findChild<QToolButton *>(QStringLiteral("viewportStrip_tool_select"));
+  ASSERT_NE(launcher, nullptr);
+  EXPECT_TRUE(launcher->isChecked());
+  EXPECT_EQ(launcher->accessibleName(), QStringLiteral("Paint Select"));
+  EXPECT_FALSE(launcher->icon().isNull());
+  const QImage authored_icon = launcher->icon().pixmap(QSize(24, 24), QIcon::Normal).toImage();
+  EXPECT_FALSE(authored_icon.isNull());
+  EXPECT_EQ(editor.tools().active_tool(), "paint_select");
+  const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (!review_directory.isEmpty()) ASSERT_TRUE(QDir().mkpath(review_directory));
+  int cycle = 0;
+  for (const float factor : {1.0F, 2.0F, 1.0F}) {
+    scale_controller.apply_factor(factor);
+    panel.apply_ui_scale(scale_controller.metrics());
+    panel.resize(scale_controller.metrics().size(QSize(360, 180)));
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+    application.processEvents();
+    menu->popup(launcher->mapToGlobal(QPoint(0, launcher->height())));
+    application.processEvents();
+    EXPECT_TRUE(menu->isVisible());
+    EXPECT_TRUE(paint_choice->isChecked());
+    for (auto *choice : menu->actions()) {
+      EXPECT_TRUE(menu->rect().contains(menu->actionGeometry(choice)));
+      EXPECT_GE(menu->actionGeometry(choice).height(), menu->fontMetrics().height());
+    }
+    if (!review_directory.isEmpty()) {
+      const auto suffix = QStringLiteral("%1-%2").arg(qRound(factor * 100)).arg(cycle);
+      EXPECT_TRUE(menu->grab().save(QDir(review_directory).filePath(
+          QStringLiteral("paint-selection-menu-%1.png").arg(suffix))));
+      EXPECT_TRUE(launcher->grab().save(QDir(review_directory).filePath(
+          QStringLiteral("paint-selection-launcher-%1.png").arg(suffix))));
+    }
+    menu->close();
+    ++cycle;
+  }
+  QPalette high_contrast = native_palette;
+  high_contrast.setColor(QPalette::ButtonText, Qt::yellow);
+  const auto old_icon = paint->icon().cacheKey();
+  tools.setPalette(high_contrast);
+  EXPECT_EQ(paint->icon().cacheKey(), old_icon);
+  EXPECT_EQ(launcher->icon().cacheKey(), paint->icon().cacheKey());
+  EXPECT_EQ(launcher->icon().pixmap(QSize(24, 24), QIcon::Normal).toImage(), authored_icon);
+  if (!review_directory.isEmpty()) {
+    panel.setPalette(high_contrast);
+    EXPECT_TRUE(launcher->grab().save(QDir(review_directory).filePath(
+        QStringLiteral("paint-selection-launcher-high-contrast.png"))));
+  }
+  QPalette light = native_palette;
+  light.setColor(QPalette::Window, Qt::white);
+  light.setColor(QPalette::Button, QColor(240, 240, 240));
+  light.setColor(QPalette::ButtonText, Qt::black);
+  tools.setPalette(light);
+  panel.setPalette(light);
+  EXPECT_EQ(launcher->icon().pixmap(QSize(24, 24), QIcon::Normal).toImage(), authored_icon);
+  if (!review_directory.isEmpty()) {
+    EXPECT_TRUE(launcher->grab().save(QDir(review_directory).filePath(
+        QStringLiteral("paint-selection-launcher-light.png"))));
+  }
+}
+
+TEST(QtProjectWorkspaceTests,
      PaneHeadersKeepIndependentControlsWhenToolbarsHideAndLayoutsRestore) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   const auto isolated_profile = std::filesystem::temp_directory_path() /
@@ -2409,11 +2523,13 @@ TEST(QtProjectWorkspaceTests,
     EXPECT_EQ(selection->popupMode(), QToolButton::DelayedPopup);
     EXPECT_EQ(selection->defaultAction()->menu()->objectName(),
               QStringLiteral("viewportSelectionToolMenu_") + suffix);
-    ASSERT_EQ(selection->defaultAction()->menu()->actions().size(), 2);
+    ASSERT_EQ(selection->defaultAction()->menu()->actions().size(), 3);
     EXPECT_EQ(selection->defaultAction()->menu()->actions()[0]->objectName(), QStringLiteral("selectionBox"));
     EXPECT_EQ(selection->defaultAction()->menu()->actions()[1]->objectName(), QStringLiteral("selectionLasso"));
+    EXPECT_EQ(selection->defaultAction()->menu()->actions()[2]->objectName(), QStringLiteral("selectionPaint"));
     EXPECT_TRUE(selection->defaultAction()->menu()->actions()[0]->text().startsWith(QStringLiteral("Box Select")));
     EXPECT_TRUE(selection->defaultAction()->menu()->actions()[1]->text().startsWith(QStringLiteral("Lasso")));
+    EXPECT_EQ(selection->defaultAction()->menu()->actions()[2]->text(), QStringLiteral("Paint Select\tCtrl+Q"));
     for (QAction *choice : selection->defaultAction()->menu()->actions()) {
       EXPECT_TRUE(choice->shortcuts().empty());
     }
@@ -2510,6 +2626,28 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(lasso_dispatches, 2);
   EXPECT_EQ(editor.viewports().selected_tool(kPaneIds[1]), quader::ViewportToolId::LassoSelect);
   EXPECT_EQ(editor.viewports().selected_tool(kPaneIds[0]), quader::ViewportToolId::LassoSelect);
+  EXPECT_EQ(editor.viewports().preferred_selection_tool(kPaneIds[0]), quader::ViewportToolId::Select);
+
+  auto *paint_choice = top_select->defaultAction()->menu()->actions()[2];
+  int paint_dispatches = 0;
+  QObject::connect(tools->tool_action(quader::ViewportToolId::PaintSelect),
+                   &QAction::triggered, top_select, [&] { ++paint_dispatches; });
+  ASSERT_NO_FATAL_FAILURE(hold_selection_popup(*top_select, paint_choice));
+  synchronize();
+  EXPECT_EQ(paint_dispatches, 1);
+  EXPECT_EQ(editor.viewports().selected_tool(kPaneIds[1]), quader::ViewportToolId::PaintSelect);
+  EXPECT_EQ(editor.viewports().preferred_selection_tool(kPaneIds[1]), quader::ViewportToolId::PaintSelect);
+  EXPECT_EQ(editor.viewports().preferred_selection_tool(kPaneIds[0]), quader::ViewportToolId::Select);
+  EXPECT_EQ(top_select->defaultAction()->text(), QStringLiteral("Paint Select"));
+  EXPECT_FALSE(top_select->icon().isNull());
+  EXPECT_TRUE(top_select->isChecked());
+  click_widget(*button(1, "tool_move"), button(1, "tool_move")->rect().center());
+  synchronize();
+  EXPECT_FALSE(top_select->isChecked());
+  click_widget(*top_select, top_select->rect().center());
+  synchronize();
+  EXPECT_EQ(paint_dispatches, 2);
+  EXPECT_EQ(editor.viewports().selected_tool(kPaneIds[1]), quader::ViewportToolId::PaintSelect);
   EXPECT_EQ(editor.viewports().preferred_selection_tool(kPaneIds[0]), quader::ViewportToolId::Select);
 
   const bool backfaces = editor.preferences().backface_selection_enabled();
@@ -7035,13 +7173,14 @@ TEST(QtProjectWorkspaceTests,
 }
 
 TEST(QtProjectWorkspaceTests,
-     BoxAndLassoDragsKeepTheirInitiatingPaneUntilRelease) {
+     SelectionDragsKeepTheirInitiatingPaneUntilRelease) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   NativePaneInputHarness harness;
   ASSERT_NO_FATAL_FAILURE(harness.initialize());
   constexpr auto kPerspective = quader::ViewportPaneId::Perspective;
   constexpr auto kTop = quader::ViewportPaneId::Top;
-  for (const auto tool : {quader::ViewportToolId::Select, quader::ViewportToolId::LassoSelect}) {
+  for (const auto tool : {quader::ViewportToolId::Select, quader::ViewportToolId::LassoSelect,
+                          quader::ViewportToolId::PaintSelect}) {
     SCOPED_TRACE(static_cast<int>(tool));
     harness.focus(kPerspective);
     ASSERT_TRUE(harness.editor.tools().activate(tool).ok());
@@ -7051,7 +7190,8 @@ TEST(QtProjectWorkspaceTests,
     harness.mouse(kPerspective, QEvent::MouseMove, {120, 120}, Qt::NoButton, Qt::LeftButton);
     harness.process();
     const auto expected_gesture = tool == quader::ViewportToolId::Select
-        ? quader::QuaderInputSelectionGesture::Box : quader::QuaderInputSelectionGesture::Lasso;
+        ? quader::QuaderInputSelectionGesture::Box : tool == quader::ViewportToolId::LassoSelect
+        ? quader::QuaderInputSelectionGesture::Lasso : quader::QuaderInputSelectionGesture::Paint;
     ASSERT_EQ(harness.panel.operation_input_context().selection_gesture, expected_gesture);
     ASSERT_TRUE(harness.panel.operation_input_context().pointer_dragging);
     const auto origin = harness.editor.tools().active_settings_presentation_origin();

@@ -1006,7 +1006,8 @@ void QtViewportPanel::attach_workspace(ViewportWorkspaceService &workspace) {
 }
 
 void QtViewportPanel::set_control_actions(const std::vector<QAction *> &actions,
-                                          QAction *lasso_action) {
+                                          QAction *lasso_action,
+                                          QAction *paint_action) {
   for (Pane &pane_state : panes_) {
     if (!pane_state.control_actions.empty()) {
       continue;
@@ -1033,8 +1034,9 @@ void QtViewportPanel::set_control_actions(const std::vector<QAction *> &actions,
               [this, &pane_state, source](bool) {
                 if (source->objectName() == QStringLiteral("tool_select") &&
                     workspace_ != nullptr) {
-                  const std::size_t index = workspace_->preferred_selection_tool(pane_state.id) ==
-                      ViewportToolId::LassoSelect ? 1u : 0u;
+                  const auto preferred = workspace_->preferred_selection_tool(pane_state.id);
+                  const std::size_t index = preferred == ViewportToolId::PaintSelect ? 2u :
+                      preferred == ViewportToolId::LassoSelect ? 1u : 0u;
                   if (const auto &choice = pane_state.selection_choices[index];
                       choice.source != nullptr) {
                     dispatch_control_action(pane_state, *choice.source);
@@ -1051,13 +1053,14 @@ void QtViewportPanel::set_control_actions(const std::vector<QAction *> &actions,
             QString::fromUtf8(viewport_pane_stable_id(pane_state.id).data())));
         auto *group = new QActionGroup(menu);
         group->setExclusive(true);
-        const std::array<QAction *, 2> sources{source, lasso_action};
+        const std::array<QAction *, 3> sources{source, lasso_action, paint_action};
         for (std::size_t index = 0; index < sources.size(); ++index) {
           QAction *choice_source = sources[index];
           if (choice_source == nullptr) continue;
           auto *choice = new QAction(menu);
-          choice->setObjectName(index == 0u ? QStringLiteral("selectionBox")
-                                           : QStringLiteral("selectionLasso"));
+          choice->setObjectName(index == 0u ? QStringLiteral("selectionBox") :
+                               index == 1u ? QStringLiteral("selectionLasso") :
+                                             QStringLiteral("selectionPaint"));
           choice->setCheckable(true);
           group->addAction(choice);
           menu->addAction(choice);
@@ -1113,8 +1116,9 @@ void QtViewportPanel::refresh_selection_tool_actions(Pane &pane_state) {
     }
     QString menu_text = label;
     if (interaction_editor_ != nullptr) {
-      const auto command = index == 0u ? quader_command::kToolsActivateSelect
-                                      : quader_command::kToolsActivateLassoSelect;
+      const auto command = index == 0u ? quader_command::kToolsActivateSelect :
+                           index == 1u ? quader_command::kToolsActivateLassoSelect :
+                                         quader_command::kToolsActivatePaintSelect;
       const std::string shortcut = interaction_editor_->commands().shortcut_for(command);
       if (!shortcut.empty()) menu_text += QLatin1Char('\t') + QString::fromStdString(shortcut);
     }
@@ -1182,7 +1186,8 @@ void QtViewportPanel::sync_pane_actions(Pane &pane_state) {
     const QString name = entry.action->objectName();
     std::optional<bool> checked;
     if (name == QStringLiteral("tool_select")) checked =
-        tool == ViewportToolId::Select || tool == ViewportToolId::LassoSelect;
+        tool == ViewportToolId::Select || tool == ViewportToolId::LassoSelect ||
+        tool == ViewportToolId::PaintSelect;
     else if (name == QStringLiteral("tool_move")) checked = tool == ViewportToolId::Move;
     else if (name == QStringLiteral("tool_rotate")) checked = tool == ViewportToolId::Rotate;
     else if (name == QStringLiteral("tool_scale")) checked = tool == ViewportToolId::Scale;
@@ -1203,8 +1208,9 @@ void QtViewportPanel::sync_pane_actions(Pane &pane_state) {
       entry.action->setChecked(*checked);
     }
   }
-  const std::size_t preferred_selection =
-      workspace_->preferred_selection_tool(pane_state.id) == ViewportToolId::LassoSelect ? 1u : 0u;
+  const auto preferred_tool = workspace_->preferred_selection_tool(pane_state.id);
+  const std::size_t preferred_selection = preferred_tool == ViewportToolId::PaintSelect ? 2u :
+      preferred_tool == ViewportToolId::LassoSelect ? 1u : 0u;
   for (std::size_t index = 0; index < pane_state.selection_choices.size(); ++index) {
     const auto &entry = pane_state.selection_choices[index];
     if (entry.action == nullptr) continue;
@@ -4559,6 +4565,8 @@ void QtViewportPanel::process_viewport_input(
       .active_tool_allows_selection_fallback =
           interaction_controller_.active_tool_allows_selection_fallback(
               input_router_.state().active_tool),
+      .preferred_selection_tool =
+          workspace_->preferred_selection_tool(*input_pane),
       .scene_billboard_pick_candidates = billboards,
       .scene_billboard_pick_revision = point_light_pick_generation_,
   };
@@ -5233,6 +5241,8 @@ void QtViewportPanel::process_viewport_input(
         .right_click_local = pending_context_menu_local_mouse,
         .viewport_pixel_scale = viewport_pixel_scale,
         .active_tool_allows_selection_fallback = selection_fallback_active,
+        .preferred_selection_tool =
+            workspace_->preferred_selection_tool(*input_pane),
         .scene_billboard_pick_candidates = billboards,
         .scene_curve_pick_candidates =
             interaction_frame.scene_curve_pick_candidates,

@@ -321,6 +321,37 @@ does not restore that click; a fresh stationary RMB gesture can open the menu.
 Freehand selection consumes ordered, gesture-scoped pointer samples, including press and release;
 a closed path collected between frames must not collapse to the final cursor position. Clear the
 sample stream on capture/focus loss, runtime rebinding, and coordinate-system changes.
+The pane's remembered Box/Lasso/Paint choice also governs selection fallback while Move,
+Rotate, Scale, or another selection-capable tool remains active. Resolve that choice through
+the viewport workspace owner; do not infer Box from a non-selection active tool. Preserve the
+active tool's gesture and transform-handle precedence at press. Once a selection gesture owns
+the press, its matching release cannot become a transform or tool gesture. Lasso fallback
+retains its partial-intersection setting independently of the executing tool's settings.
+In Edit Mode, Alt+LMB requests one loop traversal from the actual clicked component:
+Vertex, Edge, or Face. Ctrl+Alt requests an edge ring in Vertex/Edge mode; Face mode
+keeps the quad face band. Shift toggles the whole result according to the clicked
+component's selectedness. For Vertex/Face direction, use an adjacent, still-selected
+active component only on the same globally active object and in the same mode;
+otherwise choose the pointer-nearest incident edge with a stable tie fallback.
+This one-shot gesture overrides the remembered Box/Lasso/Paint method without changing
+it. Navigation, mapped commands, active-tool gestures and transform handles retain their
+press precedence. Preserve the physical press chord through release and gizmo handoff;
+traversal misses must not clear selection or settle a pending operation.
+Paint Select uses those ordered samples with their event-time modifiers. Its press owns the stroke;
+unmodified input replaces once, then accumulates, Shift adds and Ctrl removes (including when both
+are held). Releasing a modifier never clears the stroke again. Interpolate pointer segments through
+the existing point-picking policy, stop at the matching release, and ignore later coalesced motion.
+Painting never changes Edit membership. Explicit Paint activation bypasses transform handles;
+Paint fallback honors the active tool's press precedence before capture. Both bypass click-only
+traversal once a paint stroke begins; an initial Alt traversal press remains a one-shot
+selection gesture. Scene, mode, tool, selection-kind and camera changes retire its capture. An interruption retains the
+already published selection without sampling the interruption coordinates. Object selection edits
+merge into one history entry per stroke; component selection keeps its existing history policy.
+Paint samples publish selection immediately but defer the dependent tool's selection-completion
+callback until release or interruption. An idle Extrude must not begin or settle a preview between
+samples. Keep this completion boundary in the existing selection owner without staging a second
+selection state.
+Ctrl+Q activates Paint Select by default and remains remappable; existing user overrides retain precedence.
 Focus/capture loss supplies `pointer_interaction_canceled`, even when Qt synthesizes a release.
 That transport signal is not explicit Cancel: gesture owners retain or accept their last valid
 sample on interruption without applying its pointer coordinates. Incomplete primitive footprints

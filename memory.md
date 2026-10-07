@@ -524,6 +524,26 @@ Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
   lock, clipping, and edit-scope eligibility. Full containment checks complete projected geometry;
   groups require all eligible descendants. Selection and its overlay share the boundary-inclusive
   even-odd region contract. Ordinary pick and hover continue to honor the backface preference.
+  The pane's remembered Lasso choice also applies under other selection-capable tools, including
+  its partial-intersection setting; changing the executing tool must not reset either policy.
+- Paint Select uses ordinary point visibility and fixed Edit scope across its complete stroke.
+  Preserve ordered pointer samples and event-time modifiers through the matching release; later
+  coalesced hover must not paint another target. Replace only the first unmodified sample, accumulate
+  later hits, and give Ctrl removal precedence over Shift addition. A sparse event stream still
+  selects crossed targets. A repeated stationary sample performs no picking work. Protect object
+  history merging, capture loss and stale mode generations in
+  [paint interaction tests](tests/paint_selection_interaction_tests.cpp), and Qt event transport in
+  [input adapter tests](tests/qt_input_adapter_tests.cpp).
+  The remembered per-pane Box/Lasso/Paint choice governs selection fallback under Move, Rotate,
+  Scale and other selection-capable tools. Their handles and native gestures keep first-press
+  precedence; after selection starts, crossing a handle cannot transfer capture. Explicit Paint
+  still bypasses handles. Selection fallback must leave the executing tool active, preserve fixed
+  Edit membership, and retain each pane's choice across focus changes. The Paint interaction
+  tests cover transform tools, handle precedence, pane memory and an active Align operation.
+  Paint fallback publishes each sample but defers the dependent tool's selection-completion
+  callback until release or interruption. Otherwise idle Extrude can begin and settle a preview
+  between samples. Keep completion in the existing selection owner; protect native Extrude with
+  [controller tests](tests/viewport_interaction_controller_tests.cpp).
 - Transform drag owns the active preview presentation once it begins. Clear semantic selection hover
   on a successful drag begin so ordinary hover fills and edges cannot remain composited over the
   selected transform preview; failed drag starts must leave hover feedback intact.
@@ -592,19 +612,31 @@ Tests: [viewport workflows](tests/viewport_interaction_controller_tests.cpp),
   publication through the existing selection owner. Coverage: the loose-part cases in
   [viewport workflows](tests/viewport_interaction_controller_tests.cpp) and
   [selection queries](tests/modeling_domain/operation/qdr_document_operation_selection_commands_tests.cpp).
-- Edge loops use topological continuation; rings cross opposite quad edges. Picked-face context does
-  not choose a loop side. If an interior loop stays at its seed, use the perimeter of its adjacent
-  face with the most corners (ties keep authored adjacency order): cylinder rims select their cap,
-  longitudinal edges select a side quad. Preserve the ordinary walker when it finds a longer path.
+- Edge loops use topological continuation; rings cross opposite quad edges. A dedicated ngon
+  face-hub walk follows a cap perimeter when its radial topology permits continuation. Never
+  replace a stopped loop with an arbitrary adjacent face's perimeter. Face bands cross opposite
+  edges of quads; ambiguous topology stops the walk instead of selecting an unrelated branch.
   Repeated plain loop selection on an open-boundary seed can cycle to its boundary component;
   ring and toggle behavior stay deterministic. Coverage: `EdgeLoopSelection*` in
   [loop tests](tests/modeling_domain/operation/qdr_document_operation_insert_edge_loop_tests.cpp).
-- Vertex and Face Alt-click resolve a geometric edge while preserving the component mode.
-  Vertex output uses the existing loop endpoints; Face output walks the perpendicular quad strip.
-  Prior selection never supplies direction. Shift toggles the whole walk; a Vertex seed is selected
-  only when both endpoints are selected. Traversal misses preserve selection and pending work.
-  Keep press-time modifiers and revision-gated retained submissions; see the component traversal
-  cases in [viewport workflows](tests/viewport_interaction_controller_tests.cpp).
+- Alt-click picks the enabled component kind, including face interiors and vertices. In Vertex/Face
+  mode, an adjacent active selected component on the same globally active object supplies direction;
+  otherwise use the pointer-nearest incident edge with deterministic ties. Dormant selection on a
+  different participant is not a direction anchor. Vertex output uses edge-walk endpoints; Face
+  output walks the quad strip. Ctrl+Alt chooses a ring in Vertex/Edge and the same band in Face.
+  Shift toggles the whole walk from the actual clicked component's selectedness, not from complete
+  endpoint support. Alt remains a one-shot traversal with Box/Lasso/Paint selected; navigation,
+  mapped commands and the active tool's press ownership retain priority. Traversal misses preserve
+  selection and pending work. Repeated clicks on the active component recover an unambiguous
+  direction from the current selection; canonicalize generated Vertex/Face ID order so the same
+  set cannot falsely settle a draft or advance selection revisions. Remove preflight preserves a
+  surviving active component exactly as SDK publication does. Keep press-time modifiers, Edit scope
+  and revision-gated retained submissions; see the component traversal cases in
+  [viewport workflows](tests/viewport_interaction_controller_tests.cpp).
+- A pending Move handle tests its drag threshold against the captured release coordinates before
+  considering later hover samples. Post-release motion must not turn an Alt-click into duplication
+  or a transform. Coverage: the typed Alt matrix in [Qt input tests](tests/qt_input_adapter_tests.cpp)
+  and the deferred-handle case in [Paint interaction tests](tests/paint_selection_interaction_tests.cpp).
 - Orthographic mesh-depth traversal shares the canonical occurrence collector and stable ordering.
   Selection changes do not reset its cursor; geometry, scope, visibility, ray direction, and policy
   changes do. Its edge-on fallback is specific to mesh depth cycling, not all-component picking.

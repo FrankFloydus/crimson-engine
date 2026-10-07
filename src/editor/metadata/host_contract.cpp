@@ -749,7 +749,7 @@ shortcut(std::string_view id, HostShortcutContext context, std::string_view key,
 
 std::span<const HostShortcutDescriptor> shortcut_descriptors()
 {
-  static const std::array<HostShortcutDescriptor, 39> kDescriptors{{
+  static const std::array<HostShortcutDescriptor, 40> kDescriptors{{
       shortcut("undo", HostShortcutContext::Global, "Z", true, false, false,
                HostShortcutTargetKind::EditorAction, "undo"),
       shortcut("redo_shift_z", HostShortcutContext::Global, "Z", true, false,
@@ -824,6 +824,8 @@ std::span<const HostShortcutDescriptor> shortcut_descriptors()
                "flip_vertical"),
       shortcut("lasso_select_tool", HostShortcutContext::Viewport, "Q", false,
                false, true, HostShortcutTargetKind::Tool, "lasso_select"),
+      shortcut("paint_select_tool", HostShortcutContext::Viewport, "Q", true,
+               false, false, HostShortcutTargetKind::Tool, "paint_select"),
       shortcut("knife_tool", HostShortcutContext::Viewport, "C", false, false,
                false, HostShortcutTargetKind::Action, "knife_tool"),
       shortcut("flip_mesh_normals", HostShortcutContext::Viewport, "F", false,
@@ -911,6 +913,9 @@ std::span<const HostGestureDescriptor> gesture_descriptors()
   }};
   static constexpr std::array<std::string_view, 1> kLassoSelectTool{{
       "lasso_select",
+  }};
+  static constexpr std::array<std::string_view, 1> kPaintSelectTool{{
+      "paint_select",
   }};
   static constexpr std::array<std::string_view, 1> kCreatePrimitiveTool{{
       "create_primitive",
@@ -1034,7 +1039,7 @@ std::span<const HostGestureDescriptor> gesture_descriptors()
       "shift:pan",
       "alt:orbit_snap_modifier",
   }};
-  static const std::array<HostGestureDescriptor, 16> kDescriptors{{
+  static const std::array<HostGestureDescriptor, 17> kDescriptors{{
       gesture("active_modal_tool_precedence", "Active Modal Tool Precedence",
               HostGestureTargetKind::InputPolicy,
               "active_modal_tool_precedence", 0, kModalTools, {}, {}, {}, true,
@@ -1075,6 +1080,10 @@ std::span<const HostGestureDescriptor> gesture_descriptors()
               true, true, false, false, false, false),
       gesture("lasso_selection_drag", "Lasso Selection Drag",
               HostGestureTargetKind::Tool, "lasso_select", 81, kLassoSelectTool,
+              kHoverPrimaryDrag, kCancelEscape, kLassoSelectionModifiers,
+              true, false, true, true, true, true, false, false, false),
+      gesture("paint_selection_drag", "Paint Selection Drag",
+              HostGestureTargetKind::Tool, "paint_select", 82, kPaintSelectTool,
               kHoverPrimaryDrag, kCancelEscape, kLassoSelectionModifiers,
               true, false, true, true, true, true, false, false, false),
       gesture("modifier_hover_refresh", "Modifier Hover Refresh",

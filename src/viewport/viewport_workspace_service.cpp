@@ -367,12 +367,13 @@ bool ViewportWorkspaceService::record_selected_tool(ViewportPaneId pane_id,
                                                     ViewportToolId tool,
                                                     bool remember_selection) {
   if (!valid_pane(pane_id) ||
-      static_cast<unsigned>(tool) > static_cast<unsigned>(ViewportToolId::Align)) {
+      static_cast<unsigned>(tool) > static_cast<unsigned>(ViewportToolId::PaintSelect)) {
     return false;
   }
   auto &state = pane(pane_id);
   const bool selection_changed = remember_selection &&
-      (tool == ViewportToolId::Select || tool == ViewportToolId::LassoSelect) &&
+      (tool == ViewportToolId::Select || tool == ViewportToolId::LassoSelect ||
+       tool == ViewportToolId::PaintSelect) &&
       state.preferred_selection_tool != tool;
   if (state.selected_tool == tool && !selection_changed) {
     return false;

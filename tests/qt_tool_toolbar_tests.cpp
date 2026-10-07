@@ -102,6 +102,7 @@ TEST(QtToolToolbarTests, RetainsAllModelingLaunchersAcrossSelectionModes) {
   }
   for (const auto tool : {quader::ViewportToolId::Select,
                           quader::ViewportToolId::LassoSelect,
+                          quader::ViewportToolId::PaintSelect,
                           quader::ViewportToolId::Move,
                           quader::ViewportToolId::Rotate,
                           quader::ViewportToolId::Scale}) {

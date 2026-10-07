@@ -7,6 +7,7 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
+#include "api/quader_polygon_document_internal_access.hpp"
 #include "editor/input/quader_input_binding.hpp"
 #include "editor/input/viewport_keybinding_resolver.hpp"
 #include "editor/placement/scene_surface_query.hpp"
@@ -85,6 +86,8 @@ public:
         .active_tool_allows_selection_fallback =
             controller.active_tool_allows_selection_fallback(
                 router.state().active_tool),
+        .preferred_selection_tool =
+            editor.viewports().preferred_selection_tool(),
         .scene_surfaces = &surfaces,
         .selection_state = {
             .summary = editor.selection().summary(),
@@ -573,6 +576,149 @@ TEST(LassoSelectionInteractionTests,
     EXPECT_EQ(harness.selected_entities(),
               std::vector<quader::EntityId>{cube.entity});
   }
+}
+
+TEST(LassoSelectionInteractionTests,
+     RememberedLassoUnderMoveUsesItsNonRectangularPath) {
+  LassoSelectionHarness harness;
+  const auto inside = harness.cube({-2.0f, -1.5f, 0.0f});
+  const auto excluded_corner = harness.cube({2.0f, 1.5f, 0.0f});
+  ASSERT_TRUE(
+      harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
+  harness.router.set_active_tool(harness.editor.viewports().selected_tool());
+  ASSERT_EQ(harness.editor.viewports().preferred_selection_tool(),
+            quader::ViewportToolId::LassoSelect);
+  const auto content_revision =
+      harness.editor.selection().summary().content_revision;
+  const auto inside_transform =
+      harness.editor.query().entity(inside.entity)->transform;
+  const auto outside_transform =
+      harness.editor.query().entity(excluded_corner.entity)->transform;
+  // The missing upper-right corner contains the second cube. Both cubes fit
+  // within the path's bounding rectangle, but only the first fits this L shape.
+  harness.queue_press({150.0f, 80.0f});
+  harness.dispatch(true, true, false);
+  harness.queue_move({360.0f, 80.0f});
+  harness.queue_move({360.0f, 300.0f});
+  harness.queue_move({650.0f, 300.0f});
+  harness.queue_move({650.0f, 520.0f});
+  harness.queue_move({150.0f, 520.0f});
+  harness.dispatch(false, true, false);
+  EXPECT_TRUE(harness.selected_entities().empty());
+  EXPECT_TRUE(harness.controller.selection_marquee().active);
+  EXPECT_GE(harness.controller.selection_marquee().lasso_points.size(), 6u);
+  harness.queue_release({150.0f, 80.0f});
+  harness.dispatch(false, false, true);
+  EXPECT_EQ(harness.selected_entities(),
+            std::vector<quader::EntityId>{inside.entity});
+  EXPECT_EQ(harness.editor.tools().active_tool(), "move");
+  EXPECT_EQ(harness.router.state().active_tool, quader::ViewportToolId::Move);
+  EXPECT_EQ(harness.editor.selection().summary().content_revision,
+            content_revision);
+  EXPECT_FLOAT_EQ(
+      harness.editor.query().entity(inside.entity)->transform.position.x,
+      inside_transform.position.x);
+  EXPECT_FLOAT_EQ(harness.editor.query()
+                      .entity(excluded_corner.entity)
+                      ->transform.position.x,
+                  outside_transform.position.x);
+}
+
+TEST(LassoSelectionInteractionTests,
+     RememberedLassoPartialIntersectionSettingStillAppliesAfterActivatingMove) {
+  for (const bool partial : {false, true}) {
+    SCOPED_TRACE(partial);
+    LassoSelectionHarness harness;
+    const auto cube = harness.cube();
+    ASSERT_TRUE(
+        harness.editor.tools()
+            .set_setting("lasso_select", "select_partial_intersection", partial)
+            .ok());
+    ASSERT_TRUE(
+        harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
+    harness.router.set_active_tool(harness.editor.viewports().selected_tool());
+    ASSERT_EQ(harness.editor.viewports().preferred_selection_tool(),
+              quader::ViewportToolId::LassoSelect);
+    harness.loop({380.0f, 280.0f}, {420.0f, 320.0f});
+    EXPECT_EQ(harness.selected_entities(),
+              partial ? std::vector<quader::EntityId>{cube.entity}
+                      : std::vector<quader::EntityId>{});
+    EXPECT_EQ(harness.controller.selection_marquee().rule,
+              partial ? quader::ModelingBoxSelectionRule::Crossing
+                      : quader::ModelingBoxSelectionRule::Contain);
+    EXPECT_FALSE(harness.controller.selection_marquee().lasso_points.empty());
+    EXPECT_EQ(harness.editor.tools().active_tool(), "move");
+    EXPECT_EQ(harness.editor.viewports().selected_tool(),
+              quader::ViewportToolId::Move);
+  }
+}
+
+TEST(LassoSelectionInteractionTests,
+     ChoosingBoxAfterLassoKeepsRectangleFallbackWhenMoveBecomesActive) {
+  LassoSelectionHarness harness;
+  const auto left = harness.cube({-2.0f, -1.5f, 0.0f});
+  const auto right = harness.cube({2.0f, 1.5f, 0.0f});
+  ASSERT_TRUE(
+      harness.editor.tools().activate(quader::ViewportToolId::Select).ok());
+  ASSERT_TRUE(
+      harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
+  harness.router.set_active_tool(harness.editor.viewports().selected_tool());
+  ASSERT_EQ(harness.editor.viewports().preferred_selection_tool(),
+            quader::ViewportToolId::Select);
+  harness.queue_press({150.0f, 80.0f});
+  harness.dispatch(true, true, false);
+  harness.queue_move({650.0f, 520.0f});
+  harness.dispatch(false, true, false);
+  EXPECT_TRUE(harness.selected_entities().empty());
+  EXPECT_TRUE(harness.controller.selection_marquee().active);
+  EXPECT_TRUE(harness.controller.selection_marquee().lasso_points.empty());
+  harness.queue_release({650.0f, 520.0f});
+  harness.dispatch(false, false, true);
+  EXPECT_EQ(harness.selected_entities(),
+            (std::vector<quader::EntityId>{left.entity, right.entity}));
+  EXPECT_EQ(harness.editor.tools().active_tool(), "move");
+  EXPECT_EQ(harness.editor.viewports().selected_tool(),
+            quader::ViewportToolId::Move);
+}
+
+TEST(LassoSelectionInteractionTests,
+     AltDragCannotBecomeAMarqueeOrSelectWhenItReturnsToItsPress) {
+  LassoSelectionHarness harness;
+  quader_poly::Document document;
+  const std::array corners{
+      quader_poly::add_vertex(document, {-1.0f, -1.0f, 0.0f}),
+      quader_poly::add_vertex(document, {0.0f, -1.0f, 0.0f}),
+      quader_poly::add_vertex(document, {1.0f, -1.0f, 0.0f}),
+      quader_poly::add_vertex(document, {1.0f, 1.0f, 0.0f}),
+      quader_poly::add_vertex(document, {-1.0f, 1.0f, 0.0f})};
+  (void)quader_poly::add_face(document, corners);
+  const auto created = harness.editor.modeling().create_mesh(
+      quader::QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+      {.name = "Lasso traversal quad"});
+  ASSERT_TRUE(created.ok());
+  ASSERT_TRUE(harness.editor.selection().select_object(created.value()).ok());
+  ASSERT_TRUE(harness.editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(harness.editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  harness.router.set_selection_mode(quader::ViewportSelectionMode::Edge);
+  const auto point = harness.camera.project_world_point({0.0f, 1.0f, 0.0f}).position;
+  harness.queue_press(point, {.alt = true});
+  harness.queue_move({550.0f, 150.0f});
+  harness.queue_move({550.0f, 450.0f});
+  harness.queue_move({250.0f, 450.0f});
+  harness.queue_release(point);
+  harness.dispatch(true, false, true);
+  EXPECT_EQ(harness.editor.selection().summary().selected_edge_count, 0u);
+  EXPECT_FALSE(harness.controller.selection_marquee().active);
+  EXPECT_FALSE(harness.controller.dragging());
+
+  // Cancellation reserves only the old gesture, not the next fresh click.
+  harness.queue_press(point, {.alt = true});
+  harness.queue_release(point);
+  harness.input.modifiers = {};
+  harness.dispatch(true, false, true);
+  EXPECT_EQ(harness.editor.selection().summary().selected_edge_count, 5u);
+  EXPECT_FALSE(harness.controller.selection_marquee().active);
+  EXPECT_EQ(harness.editor.tools().active_tool(), "lasso_select");
 }
 
 } // namespace

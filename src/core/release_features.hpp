@@ -66,6 +66,7 @@ enum class ReleaseFeature {
   ExtrudeTool,
   AdvancedSelectionUi,
   Instancing,
+  PaintSelection,
   Count,
 };
 

@@ -1218,6 +1218,64 @@ std::string pick_hit_signature(int object_id, const quader_poly::PickResult& hit
 	return signature;
 }
 
+quader_poly::Edge component_loop_pointer_hint(
+    const PolygonObject &object, const PickRequest &request,
+    const quader_poly::PickResult &hit,
+    const PickObjectTransform *object_transform) {
+  quader_poly::Edge nearest;
+  double nearest_distance = std::numeric_limits<double>::infinity();
+  const auto consider = [&](quader_poly::Edge edge) {
+    if (hit.kind == quader_poly::ElementKind::Vertex &&
+        edge.a != hit.vertex_id && edge.b != hit.vertex_id) return;
+    const auto *a = quader_poly::find_vertex(object.document, edge.a);
+    const auto *b = quader_poly::find_vertex(object.document, edge.b);
+    if (a == nullptr || b == nullptr) return;
+    const auto world_a = pick_world_position(a->position, object_transform);
+    const auto world_b = pick_world_position(b->position, object_transform);
+    double distance = std::numeric_limits<double>::infinity();
+    if (request.screen_context.has_value()) {
+      const auto &screen = *request.screen_context;
+      const auto segment = quader::project_visible_viewport_segment(
+          screen.camera, world_a, world_b, screen.near_plane,
+          screen.far_plane, false);
+      if (!segment.has_value()) return;
+      const auto delta = segment->end - segment->start;
+      const auto offset = screen.screen_position - segment->start;
+      const double squared_length = delta.x * delta.x + delta.y * delta.y;
+      const double factor = squared_length > 0.0
+          ? std::clamp((offset.x * delta.x + offset.y * delta.y) /
+                           squared_length, 0.0, 1.0)
+          : 0.0;
+      const double x = offset.x - delta.x * factor;
+      const double y = offset.y - delta.y * factor;
+      distance = x * x + y * y;
+    } else {
+      const auto closest = quader_geometry::closest_points_segment_ray<float>(
+          {to_geometry_vec3(world_a), to_geometry_vec3(world_b)},
+          {to_geometry_vec3(request.ray.origin),
+           to_geometry_vec3(request.ray.direction)},
+          kTransformPointEpsilon);
+      if (!closest.valid) return;
+      distance = closest.distance_squared;
+    }
+    if (distance < nearest_distance ||
+        (distance == nearest_distance &&
+         std::pair{edge.a, edge.b} < std::pair{nearest.a, nearest.b})) {
+      nearest_distance = distance;
+      nearest = edge;
+    }
+  };
+  for (const auto &face : object.document.faces) {
+    if (hit.kind == quader_poly::ElementKind::Face && face.id != hit.face_id)
+      continue;
+    for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+      consider(quader_poly::make_edge(
+          face.vertices[index], face.vertices[(index + 1) % face.vertices.size()]));
+    }
+  }
+  return nearest;
+}
+
 PickHitRecord make_pick_hit_record(
     const PolygonObject &object, int object_index, const PickRequest &request,
     const quader_poly::PickResult &hit,
@@ -1227,29 +1285,17 @@ PickHitRecord make_pick_hit_record(
       pick_world_position(hit.position, object_transform);
   const quader::QVec3 world_normal = pick_world_normal(
       pick_hit_normal(object.document, hit), object_transform);
-  quader_poly::ElementId vertex_id = hit.vertex_id;
-  if (request.resolve_edge_seed_vertex &&
-      hit.kind == quader_poly::ElementKind::Edge) {
-    const quader_poly::Vertex *a =
-        quader_poly::find_vertex(object.document, hit.edge.a);
-    const quader_poly::Vertex *b =
-        quader_poly::find_vertex(object.document, hit.edge.b);
-    if (a != nullptr && b != nullptr) {
-      const float distance_a = quader::length_squared(
-          pick_world_position(a->position, object_transform) - world_position);
-      const float distance_b = quader::length_squared(
-          pick_world_position(b->position, object_transform) - world_position);
-      vertex_id = distance_a <= distance_b ? hit.edge.a : hit.edge.b;
-    }
-  }
   return {
       true,
       object.id,
       object_index,
       object.material_id,
       hit.kind,
-      vertex_id,
-      hit.edge,
+      hit.vertex_id,
+      request.resolve_component_loop_hint &&
+              hit.kind != quader_poly::ElementKind::Edge
+          ? component_loop_pointer_hint(object, request, hit, object_transform)
+          : hit.edge,
       hit.face_id,
       world_position,
       world_normal,
@@ -3657,33 +3703,53 @@ bool pick_select_component_traversal(
     std::vector<PolygonObject> &objects, SelectionMode mode,
     int &active_object_id, const ApplyPickSelectionRequest &request) {
   quader_poly::PickOptions options = request.pick_options;
-  options.mode = quader_poly::SelectionMode::Edge;
+  options.mode = component_selection_mode(mode);
   apply_editor_surface_pick_policy(options);
   const auto hit = pick_nearest(
       objects, {.ray = request.ray, .options = options,
-                .resolve_edge_seed_vertex = mode == SelectionMode::Vertex},
+                .resolve_component_loop_hint = true},
       request.object_bounds,
       request.face_geometry, request.object_transforms);
-  if (!hit.has_value() || hit->kind != quader_poly::ElementKind::Edge) {
+  if (!hit.has_value()) {
     return false;
   }
   PolygonObject &object = objects[hit->object_index];
   const quader_poly::Document &document = object.document;
-  const std::vector<quader_poly::ElementId> components =
-      mode == SelectionMode::Vertex
-          ? quader_poly::vertex_loop_vertices(document, hit->edge, hit->face_id)
-          : quader_poly::face_loop_faces(document, hit->edge, hit->face_id);
+  const quader_poly::Selection direction_selection =
+      object.id == active_object_id ? object.selection : quader_poly::Selection{};
+  const auto seed = quader_poly::component_loop_seed(
+      document, {.hit = true, .kind = hit->kind, .vertex_id = hit->vertex_id,
+                 .edge = hit->edge, .face_id = hit->face_id},
+      direction_selection, hit->edge,
+      request.component_traversal == ComponentSelectionTraversal::VertexRing);
+  if (!seed.has_value()) return false;
+  std::vector<quader_poly::ElementId> components;
+  if (mode == SelectionMode::Vertex &&
+      request.component_traversal == ComponentSelectionTraversal::VertexRing) {
+    for (const auto edge : quader_poly::edge_ring_edges(document, *seed)) {
+      components.push_back(edge.a);
+      components.push_back(edge.b);
+    }
+  } else {
+    components = mode == SelectionMode::Vertex
+        ? quader_poly::vertex_loop_vertices(document, *seed, hit->face_id)
+        : quader_poly::face_loop_faces(document, *seed, hit->face_id);
+  }
+  // Direction recovery may reverse enumeration while retaining the same band.
+  // The picked component remains active independently of this canonical order.
+  std::ranges::sort(components);
+  components.erase(std::unique(components.begin(), components.end()), components.end());
   if (components.empty()) return false;
+  if (mode == SelectionMode::Face &&
+      std::ranges::find(components, hit->face_id) == components.end()) return false;
 
   const quader_poly::ElementId seed_component = mode == SelectionMode::Vertex
       ? hit->vertex_id
-      : (std::ranges::find(components, hit->face_id) != components.end()
-             ? hit->face_id : components.front());
+      : hit->face_id;
   const bool seed_has_selection = object.selected &&
       object.selection.mode == component_selection_mode(mode);
   const bool seed_selected = seed_has_selection && (mode == SelectionMode::Vertex
-      ? quader_poly::selection_contains(object.selection, hit->edge.a) &&
-            quader_poly::selection_contains(object.selection, hit->edge.b)
+      ? quader_poly::selection_contains(object.selection, seed_component)
       : quader_poly::selection_contains_face(object.selection, seed_component));
   const bool remove_selection =
       request.operation == SelectionEditOperation::Remove ||
@@ -4019,7 +4085,8 @@ ApplyPickSelectionProjectionResult apply_pick_selection(
 		mode == SelectionMode::Edge;
 	const bool component_traversal_select =
             (mode == SelectionMode::Vertex &&
-             request.component_traversal == ComponentSelectionTraversal::VertexLoop) ||
+             (request.component_traversal == ComponentSelectionTraversal::VertexLoop ||
+              request.component_traversal == ComponentSelectionTraversal::VertexRing)) ||
             (mode == SelectionMode::Face &&
              request.component_traversal == ComponentSelectionTraversal::FaceLoop);
 	const bool multi_click = request.click_count > 1;

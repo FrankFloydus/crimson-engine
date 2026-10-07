@@ -560,6 +560,8 @@ quader_editor_core::ComponentSelectionTraversal to_runtime_component_traversal(
   switch (traversal) {
   case ModelingComponentSelectionTraversal::VertexLoop:
     return quader_editor_core::ComponentSelectionTraversal::VertexLoop;
+  case ModelingComponentSelectionTraversal::VertexRing:
+    return quader_editor_core::ComponentSelectionTraversal::VertexRing;
   case ModelingComponentSelectionTraversal::FaceLoop:
     return quader_editor_core::ComponentSelectionTraversal::FaceLoop;
   case ModelingComponentSelectionTraversal::None:
@@ -684,6 +686,10 @@ ComponentSelectionEditResult validated_component_selection_edit(
   }
 
   result.selection.has_active = false;
+  result.selection.active_kind = quader_poly::ElementKind::Vertex;
+  result.selection.active_vertex = quader_poly::kInvalidElementId;
+  result.selection.active_edge = {};
+  result.selection.active_face = quader_poly::kInvalidElementId;
   if (request.active_kind == ModelingActiveSelectionKind::Vertex &&
       request.active_vertex > 0) {
     const auto active =
@@ -727,6 +733,52 @@ ComponentSelectionEditResult validated_component_selection_edit(
     }
   }
 
+  // Match SDK selection publication: a removed requested active component
+  // preserves the previous surviving active, then falls back to the first
+  // remaining component. No-op preflight must compare this canonical state.
+  if (!result.selection.has_active) {
+    const bool preserve_active = current_selection != nullptr &&
+        current_selection->has_active &&
+        current_selection->mode == result.selection.mode;
+    switch (result.selection.mode) {
+    case quader_poly::SelectionMode::Vertex:
+      if (!result.selection.vertices.empty()) {
+        result.selection.has_active = true;
+        result.selection.active_kind = quader_poly::ElementKind::Vertex;
+        result.selection.active_vertex =
+            preserve_active &&
+                    current_selection->active_kind == quader_poly::ElementKind::Vertex &&
+                    quader_poly::selection_contains(result.selection,
+                                                    current_selection->active_vertex)
+                ? current_selection->active_vertex : result.selection.vertices.front();
+      }
+      break;
+    case quader_poly::SelectionMode::Edge:
+      if (!result.selection.edges.empty()) {
+        result.selection.has_active = true;
+        result.selection.active_kind = quader_poly::ElementKind::Edge;
+        result.selection.active_edge =
+            preserve_active &&
+                    current_selection->active_kind == quader_poly::ElementKind::Edge &&
+                    quader_poly::selection_contains(result.selection,
+                                                    current_selection->active_edge)
+                ? current_selection->active_edge : result.selection.edges.front();
+      }
+      break;
+    case quader_poly::SelectionMode::Face:
+      if (!result.selection.faces.empty()) {
+        result.selection.has_active = true;
+        result.selection.active_kind = quader_poly::ElementKind::Face;
+        result.selection.active_face =
+            preserve_active &&
+                    current_selection->active_kind == quader_poly::ElementKind::Face &&
+                    quader_poly::selection_contains_face(result.selection,
+                                                         current_selection->active_face)
+                ? current_selection->active_face : result.selection.faces.front();
+      }
+      break;
+    }
+  }
   return result;
 }
 
@@ -1664,18 +1716,15 @@ ModelingSelectionService::pick_selection_hit(
   const ModelingComponentSelectionTraversal traversal =
       request.component_traversal_requested(
           runtime_selection_mode_to_app(session.selection_mode()));
-  if (traversal != ModelingComponentSelectionTraversal::None) {
-    pick_options.mode = quader_poly::SelectionMode::Edge;
-  }
   const auto &objects =
       cached_local_picking_objects(session, scene, object_registry);
-  const auto hit = quader_editor_core::pick_nearest(
+  auto hit = quader_editor_core::pick_nearest(
       objects,
       {.ray = to_runtime_ray(request.ray),
        .options = pick_options,
        .screen_context = pick_screen_context_from_request(request),
-       .resolve_edge_seed_vertex =
-           traversal == ModelingComponentSelectionTraversal::VertexLoop},
+       .resolve_component_loop_hint =
+           traversal != ModelingComponentSelectionTraversal::None},
       cached_pick_object_bounds(session, scene, object_registry),
       cached_local_pick_face_geometry(session, scene, object_registry,
                                       pick_options),
@@ -1684,11 +1733,24 @@ ModelingSelectionService::pick_selection_hit(
       traversal == ModelingComponentSelectionTraversal::None) {
     return hit;
   }
-  const auto &document = objects[hit->object_index].document;
-  const bool eligible =
-      traversal == ModelingComponentSelectionTraversal::VertexLoop ||
-      quader_poly::face_loop_seed_eligible(document, hit->edge, hit->face_id);
-  return eligible ? hit : std::nullopt;
+  const auto &object = objects[hit->object_index];
+  const auto &document = object.document;
+  const quader_poly::Selection direction_selection =
+      object.id == session.active_object_id() ? object.selection
+                                              : quader_poly::Selection{};
+  const auto seed = quader_poly::component_loop_seed(
+      document, {.hit = true, .kind = hit->kind,
+                 .vertex_id = hit->vertex_id, .edge = hit->edge,
+                 .face_id = hit->face_id},
+      direction_selection, hit->edge,
+      traversal == ModelingComponentSelectionTraversal::VertexRing);
+  if (!seed.has_value()) return std::nullopt;
+  if (traversal == ModelingComponentSelectionTraversal::FaceLoop) {
+    const auto faces = quader_poly::face_loop_faces(document, *seed, hit->face_id);
+    if (std::ranges::find(faces, hit->face_id) == faces.end()) return std::nullopt;
+  }
+  hit->edge = *seed;
+  return hit;
 }
 
 std::vector<quader_editor_core::PickHitRecord>

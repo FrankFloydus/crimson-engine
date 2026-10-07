@@ -105,7 +105,8 @@ public:
   void attach_workspace(ViewportWorkspaceService &workspace);
   /// Copies action presentation into independent controls for each pane.
   void set_control_actions(const std::vector<QAction *> &actions,
-                           QAction *lasso_action = nullptr);
+                           QAction *lasso_action = nullptr,
+                           QAction *paint_action = nullptr);
   void set_control_action_requested_callback(
       std::function<void(ViewportPaneId, QAction &)> callback);
   /// Requests the owning app's frame flow after native pane geometry/exposure changes.
@@ -231,7 +232,7 @@ private:
     };
     std::vector<ControlAction> control_actions;
     QAction *selection_action = nullptr;
-    std::array<ControlAction, 2> selection_choices{};
+    std::array<ControlAction, 3> selection_choices{};
     std::uint64_t controls_revision = 0u;
     bool controls_valid = false;
     TransformGizmoPresentation idle_gizmo;

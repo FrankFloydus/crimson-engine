@@ -2416,6 +2416,77 @@ TEST(QtViewportSurfaceInputTests,
 }
 
 TEST(QtViewportSurfaceInputTests,
+     FreehandSamplesPreserveEventModifiersThroughCoalescedReleaseAndHover) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-freehand-event-modifier-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  surface.resize(800, 600);
+  const std::array<QPointF, 4> points{{{40, 50}, {90, 50}, {90, 100},
+                                      {140, 100}}};
+  const std::array<Qt::KeyboardModifiers, 4> modifiers{{
+      Qt::ShiftModifier, Qt::ControlModifier,
+      Qt::ShiftModifier | Qt::ControlModifier, Qt::NoModifier}};
+  for (std::size_t index = 0; index < points.size(); ++index) {
+    const bool press = index == 0u;
+    const bool release = index == points.size() - 1u;
+    QMouseEvent event(press ? QEvent::MouseButtonPress
+                           : release ? QEvent::MouseButtonRelease
+                                     : QEvent::MouseMove,
+                      points[index], points[index],
+                      press || release ? Qt::LeftButton : Qt::NoButton,
+                      release ? Qt::NoButton : Qt::LeftButton,
+                      modifiers[index]);
+    QApplication::sendEvent(&surface, &event);
+  }
+  // Later hover belongs to no stroke and must not rewrite its final sample.
+  const QPointF hover_point{240, 200};
+  QMouseEvent hover(QEvent::MouseMove, hover_point, hover_point,
+                    Qt::NoButton, Qt::NoButton, Qt::ControlModifier);
+  QApplication::sendEvent(&surface, &hover);
+
+  const auto frame = surface.take_input_frame(1.0f / 60.0f, false);
+  ASSERT_EQ(frame.input.pointer_pressed_edges.size(), 1u);
+  ASSERT_EQ(frame.input.pointer_released_edges.size(), 1u);
+  const auto &samples = frame.input.pointer_motion_samples;
+  ASSERT_EQ(samples.size(), points.size());
+  const auto press_sequence = frame.input.pointer_pressed_edges[0].sequence;
+  for (std::size_t index = 0; index < samples.size(); ++index) {
+    SCOPED_TRACE(index);
+    ASSERT_TRUE(samples[index].modifiers.has_value());
+    EXPECT_EQ(samples[index].modifiers->shift,
+              modifiers[index].testFlag(Qt::ShiftModifier));
+    EXPECT_EQ(samples[index].modifiers->primary,
+              modifiers[index].testFlag(Qt::ControlModifier));
+    EXPECT_FALSE(samples[index].modifiers->alt);
+    EXPECT_EQ(samples[index].press_sequence, press_sequence);
+    EXPECT_FLOAT_EQ(samples[index].local.x,
+                    static_cast<float>(points[index].x()) *
+                        frame.input.device_pixel_ratio);
+    EXPECT_FLOAT_EQ(samples[index].local.y,
+                    static_cast<float>(points[index].y()) *
+                        frame.input.device_pixel_ratio);
+    if (index != 0u) {
+      EXPECT_GT(samples[index].sequence, samples[index - 1u].sequence);
+    }
+  }
+  EXPECT_EQ(samples.front().sequence, press_sequence);
+  EXPECT_EQ(samples.back().sequence,
+            frame.input.pointer_released_edges[0].sequence);
+  EXPECT_TRUE(frame.input.modifiers.primary);
+  EXPECT_FLOAT_EQ(frame.input.mouse_local.x,
+                  static_cast<float>(hover_point.x()) *
+                      frame.input.device_pixel_ratio);
+  EXPECT_FLOAT_EQ(frame.input.mouse_local.y,
+                  static_cast<float>(hover_point.y()) *
+                      frame.input.device_pixel_ratio);
+  EXPECT_TRUE(surface.take_input_frame(1.0f / 60.0f, false)
+                  .input.pointer_motion_samples.empty());
+}
+
+TEST(QtViewportSurfaceInputTests,
      FreehandSamplesSurviveFrameDrainsAndClosedMotionRemainsActivity) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
@@ -5014,6 +5085,322 @@ TEST(QtViewportSurfaceInputTests,
     ASSERT_EQ(editor.mode().state().participants.size(), 1u);
     EXPECT_EQ(editor.mode().state().participants.front().id, slab.value().entity);
   }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     PaintStrokeUsesCoalescedNativeSamplesWithoutAdmittingTheReleaseMesh) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-paint-release-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  for (const auto active_tool : {quader::ViewportToolId::PaintSelect,
+                                 quader::ViewportToolId::Move}) {
+    SCOPED_TRACE(static_cast<int>(active_tool));
+    NavigationPanelTestContext context;
+    ASSERT_NE(context.surface, nullptr);
+    auto &editor = context.editor;
+    const auto wall = editor.modeling().create_box(
+        {.min = {-10, -8, -4.5f}, .max = {10, 8, -4}}, "Background Wall");
+    ASSERT_TRUE(wall.ok()) << wall.error_message();
+    const auto slab = editor.modeling().create_box(
+        {.min = {-2, -2.5f, -0.25f}, .max = {2, 2.5f, 0.25f}},
+        "Foreground Slab");
+    ASSERT_TRUE(slab.ok()) << slab.error_message();
+    ASSERT_TRUE(context.camera.restore_perspective_pose(
+        {.eye = {0, 0, 12}, .target = {0, 0, 0}, .up = {0, 1, 0}}));
+    auto settings = quader::ViewportSettings::defaults();
+    (void)settings.set_bool_value(
+        quader::ViewportBoolSettingId::BackfaceSelection, false);
+    (void)context.session.viewport_workspace().update_control_defaults(settings, 1u);
+    context.process();
+    const qreal scale = context.surface->input_device_pixel_ratio();
+    const auto project = [&](quader::QVec3 world) {
+      const auto projected = context.camera.project_world_point(world);
+      EXPECT_TRUE(projected.visible);
+      return QPointF{projected.position.x / scale, projected.position.y / scale};
+    };
+    const std::array<QPointF, 3> painted_points{{
+        project({-2, 2.5f, 0.25f}), project({2, 2.5f, 0.25f}),
+        project({2, -2.5f, 0.25f})}};
+    const QPointF release_point = project({6, -2.5f, -4});
+    const QPointF later_hover_point = project({-2, -2.5f, 0.25f});
+    // Establish that the release coordinates really hit the other mesh through
+    // the production panel's Object picking before fixing the Edit scope.
+    context.mouse(QEvent::MouseMove, release_point, Qt::NoButton, Qt::NoButton);
+    context.process();
+    ASSERT_EQ(editor.selection().hover_summary().target.object_id,
+              wall.value().modeling_object_id);
+    ASSERT_TRUE(editor.selection().select_object(slab.value()).ok());
+    ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+    ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
+    ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::PaintSelect).ok());
+    if (active_tool != quader::ViewportToolId::PaintSelect) {
+      ASSERT_TRUE(editor.tools().activate(active_tool).ok());
+    }
+    context.process();
+    ASSERT_EQ(context.panel.tool_state().active_tool, active_tool);
+    ASSERT_EQ(context.session.viewport_workspace().preferred_selection_tool(
+                  quader::ViewportPaneId::Perspective),
+              quader::ViewportToolId::PaintSelect);
+    const auto generation = editor.mode().generation();
+    const auto *mesh = context.session.assets().mesh(slab.value().mesh);
+    ASSERT_NE(mesh, nullptr);
+    ASSERT_NE(mesh->authored_polygon_document, nullptr);
+    std::vector<int> expected_vertices;
+    for (const auto &vertex : mesh->authored_polygon_document->vertices) {
+      if (vertex.position.z > 0 &&
+          (vertex.position.x > 0 || vertex.position.y > 0)) {
+        expected_vertices.push_back(static_cast<int>(vertex.id));
+      }
+    }
+    std::ranges::sort(expected_vertices);
+    ASSERT_EQ(expected_vertices.size(), painted_points.size());
+    context.session.history().clear();
+    const auto content_revision = context.session.modeling().content_revision();
+    const auto asset_revision = context.session.assets().revision();
+
+    // A complete stroke and unrelated hover all arrive before the next frame.
+    // Paint must visit the native samples, stop at release, and keep its scope.
+    context.mouse(QEvent::MouseButtonPress, painted_points.front(),
+                  Qt::LeftButton, Qt::LeftButton);
+    context.mouse(QEvent::MouseMove, painted_points[1],
+                  Qt::NoButton, Qt::LeftButton);
+    context.mouse(QEvent::MouseMove, painted_points[2],
+                  Qt::NoButton, Qt::LeftButton);
+    context.mouse(QEvent::MouseButtonRelease, release_point,
+                  Qt::LeftButton, Qt::NoButton);
+    context.mouse(QEvent::MouseMove, later_hover_point,
+                  Qt::NoButton, Qt::NoButton);
+    context.process();
+    const auto expect_painted_selection = [&]() {
+      std::vector<int> actual_vertices;
+      for (const auto &object : context.session.modeling().export_selection().objects) {
+        for (const auto &vertex : object.selected_vertices) {
+          EXPECT_EQ(object.modeling_object_id, slab.value().modeling_object_id);
+          actual_vertices.push_back(static_cast<int>(vertex.id));
+        }
+      }
+      std::ranges::sort(actual_vertices);
+      EXPECT_EQ(actual_vertices, expected_vertices);
+      EXPECT_EQ(editor.selection().summary().selected_vertex_count,
+                expected_vertices.size());
+      EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Edit);
+      EXPECT_EQ(editor.mode().generation(), generation);
+      EXPECT_EQ(context.panel.tool_state().active_tool, active_tool);
+      EXPECT_EQ(editor.tools().active_tool(),
+                active_tool == quader::ViewportToolId::Move ? "move" : "paint_select");
+      ASSERT_EQ(editor.mode().state().participants.size(), 1u);
+      EXPECT_EQ(editor.mode().state().participants.front().id, slab.value().entity);
+      EXPECT_EQ(context.panel.operation_input_context().selection_gesture,
+                quader::QuaderInputSelectionGesture::None);
+    };
+    expect_painted_selection();
+    const auto selection_revision = editor.selection().summary().selection_revision;
+    context.process();
+    context.process();
+    expect_painted_selection();
+    EXPECT_EQ(editor.selection().summary().selection_revision, selection_revision);
+    context.mouse(QEvent::MouseMove, release_point, Qt::NoButton, Qt::NoButton);
+    context.process();
+    expect_painted_selection();
+    EXPECT_EQ(editor.selection().summary().selection_revision, selection_revision);
+    EXPECT_EQ(context.session.history().undo_count(), 0u);
+    EXPECT_EQ(context.session.modeling().content_revision(), content_revision);
+    EXPECT_EQ(context.session.assets().revision(), asset_revision);
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     TypedAltTraversalRetainsDirectionThroughNativeModifierReleaseAndLaterHover) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-typed-loop-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  for (const auto mode : {quader::QuaderSelectionMode::Vertex,
+                          quader::QuaderSelectionMode::Edge,
+                          quader::QuaderSelectionMode::Face}) {
+    for (const auto selection_tool : {quader::ViewportToolId::Select,
+                                      quader::ViewportToolId::LassoSelect,
+                                      quader::ViewportToolId::PaintSelect}) {
+      for (const bool move_tool : {false, true}) {
+        for (const bool ring : {false, true}) {
+          SCOPED_TRACE(static_cast<int>(mode));
+          SCOPED_TRACE(static_cast<int>(selection_tool));
+          SCOPED_TRACE(move_tool);
+          SCOPED_TRACE(ring);
+          NavigationPanelTestContext context;
+          ASSERT_NE(context.surface, nullptr);
+          auto &editor = context.editor;
+          quader_poly::Document document;
+          std::array<std::array<quader_poly::ElementId, 4>, 4> vertices{};
+          std::array<std::array<quader_poly::ElementId, 3>, 3> faces{};
+          for (std::size_t row = 0; row < vertices.size(); ++row) {
+            for (std::size_t column = 0; column < vertices[row].size(); ++column) {
+              vertices[row][column] = quader_poly::add_vertex(document,
+                  {-3.0f + 2.0f * static_cast<float>(column),
+                   -3.0f + 2.0f * static_cast<float>(row), 0.0f});
+            }
+          }
+          for (std::size_t row = 0; row < faces.size(); ++row) {
+            for (std::size_t column = 0; column < faces[row].size(); ++column) {
+              const std::array corners{vertices[row][column], vertices[row][column + 1],
+                  vertices[row + 1][column + 1], vertices[row + 1][column]};
+              faces[row][column] = quader_poly::add_face(document, corners);
+            }
+          }
+          const auto wall = editor.modeling().create_box(
+              {.min = {-12, -10, -3}, .max = {12, 10, -2}}, "Loop background");
+          ASSERT_TRUE(wall.ok());
+          const auto grid = editor.modeling().create_mesh(
+              quader::QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+              {.name = "Directional loop grid"});
+          ASSERT_TRUE(grid.ok()) << grid.error_message();
+          ASSERT_TRUE(editor.selection().select_object(grid.value()).ok());
+          ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+          ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+          const auto element = [](quader_poly::ElementId id) {
+            return static_cast<quader::QuaderElementId>(id);
+          };
+          quader::QVec3 clicked{};
+          if (mode == quader::QuaderSelectionMode::Vertex) {
+            ASSERT_TRUE(editor.selection().select_vertex(
+                grid.value(), element(vertices[1][1])).ok());
+            clicked = {1, -1, 0};
+          } else if (mode == quader::QuaderSelectionMode::Edge) {
+            ASSERT_TRUE(editor.selection().select_edge(grid.value(),
+                element(vertices[1][0]), element(vertices[1][1])).ok());
+            clicked = {0, -1, 0};
+          } else {
+            ASSERT_TRUE(editor.selection().select_face(
+                grid.value(), element(faces[1][0])).ok());
+            clicked = {0, 0, 0};
+          }
+          ASSERT_TRUE(editor.tools().activate(selection_tool).ok());
+          if (move_tool) ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Move).ok());
+          ASSERT_TRUE(context.camera.restore_perspective_pose(
+              {.eye = {0, 0, 12}, .target = {0, 0, 0}, .up = {0, 1, 0}}));
+          context.process();
+          const auto projected = context.camera.project_world_point(clicked);
+          ASSERT_TRUE(projected.visible);
+          const qreal scale = context.surface->input_device_pixel_ratio();
+          const QPointF point{projected.position.x / scale, projected.position.y / scale};
+          const auto generation = editor.mode().generation();
+          const auto content_revision = context.session.modeling().content_revision();
+          const auto asset_revision = context.session.assets().revision();
+          context.session.history().clear();
+          const auto press_modifiers = ring ? Qt::AltModifier | Qt::ControlModifier
+                                            : Qt::KeyboardModifiers{Qt::AltModifier};
+          context.mouse(QEvent::MouseButtonPress, point, Qt::LeftButton,
+                        Qt::LeftButton, press_modifiers);
+          context.process();
+          EXPECT_EQ(editor.selection().summary().selected_vertex_count +
+                    editor.selection().summary().selected_edge_count +
+                    editor.selection().summary().selected_face_count, 1u);
+          QKeyEvent alt_release(QEvent::KeyRelease, Qt::Key_Alt, Qt::NoModifier);
+          send_visible_viewport_event(context.surface, &alt_release);
+          context.mouse(QEvent::MouseButtonRelease, point, Qt::LeftButton,
+                        Qt::NoButton, Qt::NoModifier);
+          // This later sample is over another mesh and must not replace the
+          // exact typed component captured by the completed click.
+          context.mouse(QEvent::MouseMove, {20, 20}, Qt::NoButton, Qt::NoButton);
+          context.process();
+          std::vector<quader_poly::ElementId> expected_vertices;
+          std::vector<quader_poly::Edge> expected_edges;
+          std::vector<quader_poly::ElementId> expected_faces;
+          if (mode == quader::QuaderSelectionMode::Vertex) {
+            if (ring) {
+              for (const auto &row : vertices) {
+                expected_vertices.push_back(row[1]);
+                expected_vertices.push_back(row[2]);
+              }
+            } else {
+              expected_vertices.assign(vertices[1].begin(), vertices[1].end());
+            }
+          } else if (mode == quader::QuaderSelectionMode::Edge) {
+            if (ring) {
+              for (const auto &row : vertices) expected_edges.push_back(quader_poly::make_edge(row[1], row[2]));
+            } else {
+              for (std::size_t column = 0; column < 3; ++column) {
+                expected_edges.push_back(quader_poly::make_edge(vertices[1][column], vertices[1][column + 1]));
+              }
+            }
+          } else {
+            expected_faces.assign(faces[1].begin(), faces[1].end());
+          }
+          const auto edge_less = [](quader_poly::Edge a, quader_poly::Edge b) {
+            return a.a < b.a || (a.a == b.a && a.b < b.b);
+          };
+          std::ranges::sort(expected_vertices);
+          std::ranges::sort(expected_edges, edge_less);
+          std::ranges::sort(expected_faces);
+          const auto expect_selection = [&] {
+            const auto exported = context.session.modeling().export_selection();
+            const auto found = std::ranges::find(exported.objects,
+                grid.value().modeling_object_id, &quader::ModelingSelectionExportObject::modeling_object_id);
+            ASSERT_NE(found, exported.objects.end());
+            auto actual = found->selection;
+            std::ranges::sort(actual.vertices);
+            std::ranges::sort(actual.edges, edge_less);
+            std::ranges::sort(actual.faces);
+            EXPECT_EQ(actual.vertices, expected_vertices);
+            EXPECT_EQ(actual.edges, expected_edges);
+            EXPECT_EQ(actual.faces, expected_faces);
+            EXPECT_EQ(editor.mode().generation(), generation);
+            ASSERT_EQ(editor.mode().state().participants.size(), 1u);
+            EXPECT_EQ(editor.mode().state().participants.front().id, grid.value().entity);
+            EXPECT_EQ(context.panel.tool_state().active_tool,
+                      move_tool ? quader::ViewportToolId::Move : selection_tool);
+            EXPECT_EQ(editor.viewports().preferred_selection_tool(), selection_tool);
+            EXPECT_EQ(context.session.modeling().content_revision(), content_revision);
+            EXPECT_EQ(context.session.assets().revision(), asset_revision);
+            EXPECT_EQ(context.session.history().undo_count(), 0u);
+          };
+          expect_selection();
+          const auto selection_revision = editor.selection().summary().selection_revision;
+          context.process();
+          context.process();
+          expect_selection();
+          EXPECT_EQ(editor.selection().summary().selection_revision, selection_revision);
+        }
+      }
+    }
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     RemappedAltMouseCommandOwnsTheClickBeforePaintLoopFallback) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-loop-command-priority-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  NavigationPanelTestContext context;
+  ASSERT_NE(context.surface, nullptr);
+  const auto box = context.editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}});
+  ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(context.editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(context.editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(context.editor.tools().activate(quader::ViewportToolId::PaintSelect).ok());
+  ASSERT_TRUE(context.editor.commands().set_shortcut(
+      quader::quader_command::kSelectAll, "Alt+LeftMouseClick").ok());
+  context.process();
+  context.session.history().clear();
+  context.mouse(QEvent::MouseButtonPress, {400, 300}, Qt::LeftButton,
+                Qt::LeftButton, Qt::AltModifier);
+  context.mouse(QEvent::MouseButtonRelease, {400, 300}, Qt::LeftButton,
+                Qt::NoButton, Qt::NoModifier);
+  context.process();
+  EXPECT_EQ(context.editor.selection().summary().selected_vertex_count, 8u);
+  EXPECT_EQ(context.panel.tool_state().active_tool, quader::ViewportToolId::PaintSelect);
+  const auto revision = context.editor.selection().summary().selection_revision;
+  context.process();
+  EXPECT_EQ(context.editor.selection().summary().selection_revision, revision);
+  EXPECT_EQ(context.session.history().undo_count(), 0u);
 }
 
 TEST(QtViewportSurfaceInputTests,

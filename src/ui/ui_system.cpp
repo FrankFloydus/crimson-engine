@@ -610,7 +610,8 @@ bool UISystem::initialize(RenderSystem &render_system,
     }
   });
   viewport_panel_->set_control_actions(
-      viewport_actions, tool_toolbar_->tool_action(ViewportToolId::LassoSelect));
+      viewport_actions, tool_toolbar_->tool_action(ViewportToolId::LassoSelect),
+      tool_toolbar_->tool_action(ViewportToolId::PaintSelect));
   viewport_panel_->set_control_action_requested_callback(
       [this](ViewportPaneId pane, QAction &action) {
         if (editor_ == nullptr) {

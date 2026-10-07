@@ -359,17 +359,25 @@ TEST_F(PublicReleaseUiTests, StaleWindowStateCannotRestoreExcludedPanelsAndLaunc
     EXPECT_FALSE(tools->actions().contains(lasso_source));
     EXPECT_EQ(tools->widgetForAction(lasso_source), nullptr);
     EXPECT_TRUE(lasso_source->isVisible());
+    QAction *paint_source = tools->tool_action(ViewportToolId::PaintSelect);
+    ASSERT_NE(paint_source, nullptr);
+    EXPECT_FALSE(tools->actions().contains(paint_source));
+    EXPECT_EQ(tools->widgetForAction(paint_source), nullptr);
+    EXPECT_TRUE(paint_source->isVisible());
+    EXPECT_FALSE(paint_source->icon().isNull());
     auto *selection = strip->findChild<QToolButton *>(QStringLiteral("viewportStrip_tool_select"));
     ASSERT_NE(selection, nullptr);
     EXPECT_EQ(selection->popupMode(), QToolButton::DelayedPopup);
     ASSERT_NE(selection->defaultAction()->menu(), nullptr);
     EXPECT_EQ(selection->defaultAction()->menu()->objectName(),
               QStringLiteral("viewportSelectionToolMenu_") + QString::fromUtf8(pane));
-    ASSERT_EQ(selection->defaultAction()->menu()->actions().size(), 2);
+    ASSERT_EQ(selection->defaultAction()->menu()->actions().size(), 3);
     EXPECT_TRUE(selection->defaultAction()->menu()->actions()[0]->text().startsWith(QStringLiteral("Box Select")));
     EXPECT_TRUE(selection->defaultAction()->menu()->actions()[1]->text().startsWith(QStringLiteral("Lasso")));
     EXPECT_EQ(selection->defaultAction()->menu()->actions()[0]->objectName(), QStringLiteral("selectionBox"));
     EXPECT_EQ(selection->defaultAction()->menu()->actions()[1]->objectName(), QStringLiteral("selectionLasso"));
+    EXPECT_EQ(selection->defaultAction()->menu()->actions()[2]->objectName(), QStringLiteral("selectionPaint"));
+    EXPECT_EQ(selection->defaultAction()->menu()->actions()[2]->text(), QStringLiteral("Paint Select\tCtrl+Q"));
     for (QAction *choice : selection->defaultAction()->menu()->actions()) {
       EXPECT_TRUE(choice->shortcuts().empty());
     }

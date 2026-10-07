@@ -57,6 +57,13 @@ selection_gesture_input_hints(const QuaderOperationInputContext &context) {
     return {gesture(Gesture::Information, "operation.hints.selection.enter_instance", "Enter Instance", true, 95)};
   }
   if (context.selection_gesture == Selection::Paint) {
+    const auto operation = context.selection_operation;
+    hints.push_back(gesture(Gesture::Information,
+        operation == QuaderInputSelectionOperation::Add ? "operation.hints.selection.add" :
+        operation == QuaderInputSelectionOperation::Remove ? "operation.hints.selection.remove" : "operation.hints.selection.replace_operation",
+        operation == QuaderInputSelectionOperation::Add ? "Add" :
+        operation == QuaderInputSelectionOperation::Remove ? "Remove" : "Replace", true, 95));
+    hints.push_back(gesture(Gesture::Shift, "operation.hints.selection.add", "Add", context.shift, 80));
     hints.push_back(gesture(Gesture::Control, "operation.hints.selection.remove", "Remove", context.control, 80));
     return hints;
   }
@@ -148,6 +155,14 @@ viewport_tool_input_hints(std::string_view tool_id, const ModelingOperationHintS
                           const QuaderOperationInputContext &context) {
   Hints hints;
   if (tool_id == "lasso_select") return lasso_selection_input_hints(context);
+  if (tool_id == "paint_select") {
+    if (context.selection_gesture != QuaderInputSelectionGesture::None) {
+      return selection_gesture_input_hints(context);
+    }
+    return {gesture(Gesture::PrimaryDrag, "operation.hints.selection.paint", "Paint"),
+            gesture(Gesture::Shift, "operation.hints.selection.add", "Add", context.shift),
+            gesture(Gesture::Control, "operation.hints.selection.remove", "Remove", context.control)};
+  }
   if (tool_id == "select") return viewport_navigation_input_hints(context);
   if (tool_id == "create_point_light" || tool_id == "create_directional_light") {
     hints.push_back(binding("viewport.cancel_active_tool", "operation.hints.cancel_creation", "Cancel Creation", 90));

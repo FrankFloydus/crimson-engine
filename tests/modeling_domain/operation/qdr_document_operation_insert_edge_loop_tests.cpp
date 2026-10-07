@@ -8,8 +8,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <limits>
+#include <numbers>
 #include <optional>
 #include <ranges>
 #include <span>
@@ -179,6 +181,120 @@ void expect_edge_set(std::span<const Edge> actual,
 	for (const Edge edge : expected) {
 		EXPECT_TRUE(std::ranges::find(actual, edge) != actual.end());
 	}
+}
+
+void expect_id_set(std::vector<ElementId> actual,
+                    std::vector<ElementId> expected) {
+	std::ranges::sort(actual);
+	std::ranges::sort(expected);
+	EXPECT_EQ(actual, expected);
+}
+
+/// Owns an eight-sided cylinder with bevel, ledge and inset-cap profile bands.
+struct SteppedCylinderFixture {
+	Document document;
+	std::array<std::array<ElementId, 8>, 6> rings {};
+	std::array<std::array<ElementId, 8>, 5> bands {};
+	std::array<ElementId, 2> caps {};
+};
+
+SteppedCylinderFixture make_stepped_cylinder(bool reverse_winding = false) {
+	SteppedCylinderFixture fixture;
+	constexpr std::array<float, 6> kRadii { 2.0F, 3.0F, 3.0F, 2.6F, 1.9F, 1.9F };
+	constexpr std::array<float, 6> kHeights { -3.0F, -2.5F, 2.0F, 2.5F, 2.5F, 1.6F };
+	for (std::size_t ring = 0U; ring < fixture.rings.size(); ++ring) {
+		for (std::size_t corner = 0U; corner < 8U; ++corner) {
+			const float angle = static_cast<float>(corner) * std::numbers::pi_v<float> / 4.0F;
+			fixture.rings[ring][corner] = add_vertex(fixture.document, {
+				kRadii[ring] * std::cos(angle), kHeights[ring],
+				kRadii[ring] * std::sin(angle) });
+		}
+	}
+	for (std::size_t band = 0U; band < fixture.bands.size(); ++band) {
+		for (std::size_t corner = 0U; corner < 8U; ++corner) {
+			const std::size_t next = (corner + 1U) % 8U;
+			fixture.bands[band][corner] = add_face(fixture.document,
+				std::array { fixture.rings[band][corner], fixture.rings[band + 1U][corner],
+				             fixture.rings[band + 1U][next], fixture.rings[band][next] });
+		}
+	}
+	fixture.caps[0] = add_face(fixture.document, fixture.rings.front());
+	std::array<ElementId, 8> last_cap = fixture.rings.back();
+	std::ranges::reverse(last_cap);
+	fixture.caps[1] = add_face(fixture.document, last_cap);
+	if (reverse_winding) {
+		for (Face& face : fixture.document.faces) {
+			std::ranges::reverse(face.vertices);
+		}
+		std::ranges::reverse(fixture.document.faces);
+	}
+	return fixture;
+}
+
+std::vector<Edge> closed_ring_edges(std::span<const ElementId> vertices) {
+	std::vector<Edge> edges;
+	for (std::size_t index = 0U; index < vertices.size(); ++index) {
+		edges.push_back(make_edge(vertices[index], vertices[(index + 1U) % vertices.size()]));
+	}
+	return edges;
+}
+
+/// Keeps the authored opening path separate from the sphere's geometric shape.
+struct SphereOpeningFixture {
+	Document document;
+	std::vector<Edge> first_run;
+	std::vector<Edge> second_run;
+	std::vector<ElementId> meridian;
+};
+
+SphereOpeningFixture make_sphere_opening(std::size_t extended_edges) {
+	SphereOpeningFixture fixture;
+	fixture.document = make_sphere({ .radial_segments = 12, .rings = 8 });
+	const auto vertex = [&](std::size_t ring, std::size_t corner) {
+		return fixture.document.vertices[1U + ring * 12U + corner].id;
+	};
+	std::vector<ElementId> removed;
+	for (std::size_t band = 2U; band < 4U; ++band) {
+		for (std::size_t column = 2U; column < 5U; ++column) {
+			removed.push_back(fixture.document.faces[12U + band * 12U + column].id);
+		}
+	}
+	std::erase_if(fixture.document.faces, [&](const Face& face) {
+		return std::ranges::find(removed, face.id) != removed.end();
+	});
+	const std::vector<ElementId> opening {
+		vertex(4U, 2U), vertex(4U, 3U), vertex(4U, 4U), vertex(4U, 5U),
+		vertex(3U, 5U), vertex(2U, 5U), vertex(2U, 4U), vertex(2U, 3U),
+		vertex(2U, 2U), vertex(3U, 2U),
+	};
+	if (extended_edges == 0U) {
+		fixture.first_run = closed_ring_edges(opening);
+	} else {
+		std::vector<ElementId> extension;
+		for (std::size_t index = 0U; index <= extended_edges; ++index) {
+			extension.push_back(add_vertex(fixture.document,
+				find_vertex(fixture.document, opening[index])->position +
+				quader::QVec3 { 0.3F, 0.8F, 1.5F }));
+		}
+		for (std::size_t index = 0U; index < extended_edges; ++index) {
+			EXPECT_NE(add_face(fixture.document, std::array {
+				opening[index], opening[index + 1U], extension[index + 1U], extension[index] }),
+				kInvalidElementId);
+			fixture.first_run.push_back(make_edge(extension[index], extension[index + 1U]));
+		}
+		fixture.second_run.push_back(make_edge(opening.front(), extension.front()));
+		fixture.second_run.push_back(make_edge(opening[extended_edges], extension.back()));
+		for (std::size_t index = extended_edges; index < opening.size(); ++index) {
+			fixture.second_run.push_back(make_edge(opening[index], opening[(index + 1U) % opening.size()]));
+		}
+	}
+	fixture.meridian.push_back(fixture.document.vertices.front().id);
+	for (std::size_t ring = 0U; ring < 7U; ++ring) {
+		fixture.meridian.push_back(vertex(ring, 9U));
+	}
+	// The sphere's top pole predates the newly appended extension vertices.
+	fixture.meridian.push_back(fixture.document.vertices[85U].id);
+	return fixture;
 }
 
 std::optional<ElementId> edge_endpoint_at_position(
@@ -880,17 +996,12 @@ TEST(QdrDocumentOperationInsertEdgeLoopTests,
 }
 
 TEST(QdrDocumentOperationInsertEdgeLoopTests,
-     EdgeLoopSelectionClosesTheFirstAdjacentQuadAtCubePoles) {
+     EdgeLoopSelectionStopsAtCubePolesWithoutChoosingAnAdjacentFace) {
 	const Document document = make_cube({});
 	const std::vector<Edge> edges = document_edges(document);
 	ASSERT_FALSE(edges.empty());
 	const Edge seed = edges.front();
-	const auto first_face = std::ranges::find_if(document.faces, [&](const Face& face) {
-		const std::vector<Edge> boundary = qdr_test::face_edges_for_test(face);
-		return std::ranges::find(boundary, seed) != boundary.end();
-	});
-	ASSERT_NE(first_face, document.faces.end());
-	const std::vector<Edge> expected = qdr_test::face_edges_for_test(*first_face);
+	const std::array<Edge, 1> expected { seed };
 
 	expect_edge_set(edge_loop_edges(document, seed), expected);
 	for (const Face& face : document.faces) {
@@ -928,7 +1039,7 @@ TEST(QdrDocumentOperationInsertEdgeLoopTests,
 }
 
 TEST(QdrDocumentOperationInsertEdgeLoopTests,
-     EdgeLoopSelectionClosesOneSideQuadFromEveryCylinderLongitudinalEdge) {
+     EdgeLoopSelectionStopsAtBothPolesOfEveryCylinderLongitudinalEdge) {
 	const Document document = make_cylinder({ .side_count = 16 });
 	for (const Edge seed : document_edges(document)) {
 		const Vertex* a = find_vertex(document, seed.a);
@@ -941,15 +1052,8 @@ TEST(QdrDocumentOperationInsertEdgeLoopTests,
 		SCOPED_TRACE(seed.a);
 		SCOPED_TRACE(seed.b);
 		const std::vector<Edge> loop = edge_loop_edges(document, seed);
-		ASSERT_EQ(loop.size(), 4U);
+		ASSERT_EQ(loop.size(), 1U);
 		EXPECT_EQ(loop.front(), seed);
-		EXPECT_TRUE(std::ranges::any_of(document.faces, [&](const Face& face) {
-			const std::vector<Edge> boundary = qdr_test::face_edges_for_test(face);
-			return boundary.size() == loop.size() &&
-			       std::ranges::all_of(boundary, [&](Edge edge) {
-				       return std::ranges::find(loop, edge) != loop.end();
-			       });
-		}));
 		EXPECT_EQ(edge_loop_edges(document, { seed.b, seed.a }), loop);
 
 		Selection selected;
@@ -1442,5 +1546,315 @@ TEST(QdrDocumentLoopSelectionQueryTests,
 		}
 		EXPECT_FALSE(face_loop_seed_eligible(fixture.document, seed, picked));
 		EXPECT_TRUE(face_loop_faces(fixture.document, seed, picked).empty());
+	}
+}
+
+TEST(QdrDocumentLoopSelectionQueryTests,
+     SteppedInsetCylinderEveryRimClosesWithoutCrossingProfileBands) {
+	for (const bool reversed : { false, true }) {
+		const SteppedCylinderFixture fixture = make_stepped_cylinder(reversed);
+		for (const auto& rim : fixture.rings) {
+			const std::vector<Edge> expected = closed_ring_edges(rim);
+			for (const Edge seed : expected) {
+				SCOPED_TRACE(seed.a);
+				expect_edge_set(edge_loop_edges(fixture.document, seed), expected);
+				expect_edge_set(edge_loop_edges(fixture.document, { seed.b, seed.a }), expected);
+				expect_id_set(vertex_loop_vertices(fixture.document, seed),
+				              { rim.begin(), rim.end() });
+			}
+		}
+	}
+}
+
+TEST(QdrDocumentLoopSelectionQueryTests,
+     SteppedInsetCylinderBothFaceBandAxesAndEdgeRingsHaveExactMembers) {
+	for (const bool reversed : { false, true }) {
+		const SteppedCylinderFixture fixture = make_stepped_cylinder(reversed);
+		for (std::size_t band = 0U; band < fixture.bands.size(); ++band) {
+			std::vector<Edge> around_ring;
+			for (std::size_t corner = 0U; corner < 8U; ++corner) {
+				around_ring.push_back(make_edge(fixture.rings[band][corner],
+				                               fixture.rings[band + 1U][corner]));
+			}
+			for (std::size_t corner = 0U; corner < 8U; ++corner) {
+				SCOPED_TRACE(band);
+				SCOPED_TRACE(corner);
+				const ElementId picked = fixture.bands[band][corner];
+				expect_id_set(face_loop_faces(fixture.document, around_ring[corner], picked),
+				              { fixture.bands[band].begin(), fixture.bands[band].end() });
+				expect_edge_set(edge_ring_edges(fixture.document, around_ring[corner]), around_ring);
+				std::vector<ElementId> profile_faces;
+				std::vector<Edge> profile_ring;
+				std::vector<Edge> profile_loop;
+				for (std::size_t level = 0U; level < fixture.rings.size(); ++level) {
+					profile_ring.push_back(make_edge(fixture.rings[level][corner],
+					                                 fixture.rings[level][(corner + 1U) % 8U]));
+					if (level < fixture.bands.size()) {
+						profile_faces.push_back(fixture.bands[level][corner]);
+						profile_loop.push_back(make_edge(fixture.rings[level][corner],
+						                                 fixture.rings[level + 1U][corner]));
+					}
+				}
+				expect_id_set(face_loop_faces(fixture.document, profile_ring[band], picked), profile_faces);
+				expect_edge_set(edge_ring_edges(fixture.document, profile_ring[band]), profile_ring);
+				expect_edge_set(edge_loop_edges(fixture.document, around_ring[corner]), profile_loop);
+			}
+		}
+	}
+}
+
+TEST(QdrDocumentLoopSelectionQueryTests,
+     NgonHubKeepsItsIdentityAndStopsAfterReachingHighValenceVertices) {
+	for (const bool reversed : { false, true }) {
+		SteppedCylinderFixture fixture = make_stepped_cylinder(reversed);
+		const auto& rim = fixture.rings.back();
+		for (const std::size_t pole : { 0U, 4U }) {
+			const ElementId first = add_vertex(fixture.document, { 5.0F, 4.0F, static_cast<float>(pole) });
+			const ElementId second = add_vertex(fixture.document, { 6.0F, 4.0F, static_cast<float>(pole) });
+			ASSERT_NE(add_face(fixture.document, std::array { rim[pole], first, second }), kInvalidElementId);
+		}
+		const std::array<Edge, 4> expected {
+			make_edge(rim[0], rim[1]), make_edge(rim[1], rim[2]),
+			make_edge(rim[2], rim[3]), make_edge(rim[3], rim[4]),
+		};
+		for (const Edge seed : expected) {
+			expect_edge_set(edge_loop_edges(fixture.document, seed), expected);
+			expect_edge_set(edge_loop_edges(fixture.document, { seed.b, seed.a }), expected);
+		}
+	}
+}
+
+TEST(QdrDocumentLoopSelectionQueryTests,
+     NgonHubStopsBeforeItsBoundaryEdgeWithoutSwitchingFaces) {
+	SteppedCylinderFixture fixture = make_stepped_cylinder();
+	const auto& rim = fixture.rings.back();
+	const ElementId removed = fixture.bands.back()[4];
+	std::erase_if(fixture.document.faces, [&](const Face& face) { return face.id == removed; });
+	std::vector<Edge> expected = closed_ring_edges(rim);
+	const Edge boundary = make_edge(rim[4], rim[5]);
+	std::erase(expected, boundary);
+	expect_edge_set(edge_loop_edges(fixture.document, make_edge(rim[1], rim[2])), expected);
+	EXPECT_EQ(qdr_test::edge_incidence_count(fixture.document, boundary), 1);
+}
+
+TEST(QdrDocumentLoopSelectionQueryTests,
+     TriangleAndQuadCapsDoNotBecomeNgonHubs) {
+	for (const int sides : { 3, 4, 5, 8 }) {
+		const Document document = make_cylinder({ .side_count = sides });
+		const Face& cap = document.faces.back();
+		ASSERT_EQ(cap.vertices.size(), static_cast<std::size_t>(sides));
+		for (const Edge seed : qdr_test::face_edges_for_test(cap)) {
+			const std::vector<Edge> expected = sides > 4 ?
+				qdr_test::face_edges_for_test(cap) : std::vector<Edge> { seed };
+			expect_edge_set(edge_loop_edges(document, seed), expected);
+		}
+	}
+}
+
+TEST(QdrDocumentLoopSelectionQueryTests,
+     InteriorLoopUsesAnUnambiguousManifoldFanBesideANonmanifoldSeed) {
+	QuadGridFixture fixture = make_quad_grid(3U, 3U);
+	const std::vector<ElementId> duplicated = fixture.document.faces[4].vertices;
+	ASSERT_NE(add_face(fixture.document, duplicated), kInvalidElementId);
+	const Edge seed = make_edge(fixture.vertex(1U, 1U), fixture.vertex(1U, 2U));
+	ASSERT_EQ(qdr_test::edge_incidence_count(fixture.document, seed), 3);
+	const std::array<Edge, 3> expected {
+		make_edge(fixture.vertex(1U, 0U), fixture.vertex(1U, 1U)), seed,
+		make_edge(fixture.vertex(1U, 2U), fixture.vertex(1U, 3U)),
+	};
+	expect_edge_set(edge_loop_edges(fixture.document, seed), expected);
+	std::ranges::reverse(fixture.document.faces);
+	expect_edge_set(edge_loop_edges(fixture.document, { seed.b, seed.a }), expected);
+}
+
+TEST(QdrDocumentLoopSelectionQueryTests,
+     SphereOpeningAndExtendedBordersHaveDeterministicRunsFromEverySeed) {
+	for (const std::size_t extended : { 0U, 3U, 5U }) {
+		for (const bool reversed : { false, true }) {
+			SphereOpeningFixture fixture = make_sphere_opening(extended);
+			if (reversed) {
+				std::ranges::reverse(fixture.document.faces);
+				for (Face& face : fixture.document.faces) {
+					std::ranges::reverse(face.vertices);
+				}
+			}
+			std::vector<Edge> boundary = fixture.first_run;
+			boundary.insert(boundary.end(), fixture.second_run.begin(), fixture.second_run.end());
+			for (const auto& run : { fixture.first_run, fixture.second_run }) {
+				for (const Edge seed : run) {
+					SCOPED_TRACE(extended);
+					SCOPED_TRACE(seed.a);
+					expect_edge_set(edge_loop_edges(fixture.document, seed), run);
+					expect_edge_set(edge_loop_edges(fixture.document, { seed.b, seed.a }), run);
+					expect_edge_set(edge_boundary_component_edges(fixture.document, seed), boundary);
+				}
+			}
+			std::vector<Edge> meridian;
+			for (std::size_t index = 1U; index < fixture.meridian.size(); ++index) {
+				meridian.push_back(make_edge(fixture.meridian[index - 1U], fixture.meridian[index]));
+			}
+			for (const Edge seed : meridian) {
+				expect_edge_set(edge_loop_edges(fixture.document, seed), meridian);
+			}
+		}
+	}
+}
+
+TEST(QdrDocumentLoopSelectionQueryTests,
+     TypedFaceAndVertexAnchorsResolveBothAxesBeforeThePointerHint) {
+	const QuadGridFixture fixture = make_quad_grid(3U, 3U);
+	const PickResult face_pick { .hit = true, .kind = ElementKind::Face,
+		.face_id = fixture.document.faces[4].id };
+	const Edge vertical = make_edge(fixture.vertex(1U, 1U), fixture.vertex(1U, 2U));
+	const Edge horizontal = make_edge(fixture.vertex(1U, 1U), fixture.vertex(2U, 1U));
+	Selection selection;
+	select_only(selection, { .hit = true, .kind = ElementKind::Face,
+		.face_id = fixture.document.faces[3].id });
+	EXPECT_EQ(component_loop_seed(fixture.document, face_pick, selection, horizontal), vertical);
+	select_only(selection, { .hit = true, .kind = ElementKind::Face,
+		.face_id = fixture.document.faces[1].id });
+	EXPECT_EQ(component_loop_seed(fixture.document, face_pick, selection, vertical), horizontal);
+	const PickResult vertex_pick { .hit = true, .kind = ElementKind::Vertex,
+		.vertex_id = fixture.vertex(1U, 1U) };
+	select_only(selection, { .hit = true, .kind = ElementKind::Vertex,
+		.vertex_id = fixture.vertex(1U, 2U) });
+	EXPECT_EQ(component_loop_seed(fixture.document, vertex_pick, selection, horizontal), vertical);
+	select_only(selection, { .hit = true, .kind = ElementKind::Vertex,
+		.vertex_id = fixture.vertex(2U, 1U) });
+	EXPECT_EQ(component_loop_seed(fixture.document, vertex_pick, selection, vertical), horizontal);
+}
+
+TEST(QdrDocumentLoopSelectionQueryTests,
+     TypedSeedsIgnoreUnselectedStaleDifferentModeAndNonadjacentAnchors) {
+	const QuadGridFixture fixture = make_quad_grid(3U, 3U);
+	const PickResult picked { .hit = true, .kind = ElementKind::Face,
+		.face_id = fixture.document.faces[4].id };
+	const Edge hint = make_edge(fixture.vertex(1U, 1U), fixture.vertex(2U, 1U));
+	for (const int kind : { 0, 1, 2, 3 }) {
+		Selection selection;
+		select_only(selection, { .hit = true, .kind = ElementKind::Face,
+			.face_id = fixture.document.faces[3].id });
+		if (kind == 0) {
+			selection.faces.clear();
+		} else if (kind == 1) {
+			selection.active_face = fixture.document.next_face_id;
+			selection.faces = { selection.active_face };
+		} else if (kind == 2) {
+			selection.mode = SelectionMode::Vertex;
+		} else {
+			select_only(selection, { .hit = true, .kind = ElementKind::Face,
+				.face_id = fixture.document.faces[0].id });
+		}
+		EXPECT_EQ(component_loop_seed(fixture.document, picked, selection, hint), hint);
+	}
+	Selection vertex_selection;
+	select_only(vertex_selection, { .hit = true, .kind = ElementKind::Vertex,
+		.vertex_id = fixture.vertex(3U, 3U) });
+	const PickResult vertex_pick { .hit = true, .kind = ElementKind::Vertex,
+		.vertex_id = fixture.vertex(1U, 1U) };
+	EXPECT_EQ(component_loop_seed(fixture.document, vertex_pick, vertex_selection, hint), hint);
+}
+
+TEST(QdrDocumentLoopSelectionQueryTests,
+     TypedSeedsRejectExplicitNonincidentAndStaleHintsAndAmbiguousSharedFaces) {
+	QuadGridFixture fixture = make_quad_grid(3U, 3U);
+	const PickResult picked { .hit = true, .kind = ElementKind::Face,
+		.face_id = fixture.document.faces[4].id };
+	Selection selection;
+	select_only(selection, { .hit = true, .kind = ElementKind::Face,
+		.face_id = fixture.document.faces[3].id });
+	const Edge unrelated = make_edge(fixture.vertex(0U, 0U), fixture.vertex(1U, 0U));
+	EXPECT_FALSE(component_loop_seed(fixture.document, picked, selection, unrelated).has_value());
+	EXPECT_FALSE(component_loop_seed(fixture.document, picked, selection,
+		{ fixture.document.next_vertex_id, fixture.document.next_vertex_id + 1U }).has_value());
+	const auto default_seed = component_loop_seed(fixture.document, picked, {});
+	ASSERT_TRUE(default_seed.has_value());
+	EXPECT_EQ(*default_seed, make_edge(fixture.vertex(1U, 1U), fixture.vertex(2U, 1U)));
+	const ElementId duplicate = add_face(fixture.document, fixture.document.faces[4].vertices);
+	select_only(selection, { .hit = true, .kind = ElementKind::Face, .face_id = duplicate });
+	EXPECT_FALSE(component_loop_seed(fixture.document, picked, selection, *default_seed).has_value());
+}
+
+TEST(QdrDocumentLoopSelectionQueryTests,
+     RepeatedTypedClicksRecoverTheSelectedFaceBandAndVertexLoopOrRing) {
+	const SteppedCylinderFixture fixture = make_stepped_cylinder();
+	const ElementId face = fixture.bands[2][3];
+	const Edge around_seed = make_edge(fixture.rings[2][3], fixture.rings[3][3]);
+	const Edge profile_seed = make_edge(fixture.rings[2][3], fixture.rings[2][4]);
+	const PickResult face_pick { .hit = true, .kind = ElementKind::Face, .face_id = face };
+	for (const Edge seed : { around_seed, profile_seed }) {
+		Selection selected;
+		select_only(selected, face_pick);
+		selected.faces = face_loop_faces(fixture.document, seed, face);
+		const Edge wrong_hint = seed == around_seed ? profile_seed : around_seed;
+		const auto resolved = component_loop_seed(fixture.document, face_pick, selected, wrong_hint);
+		ASSERT_TRUE(resolved.has_value());
+		expect_id_set(face_loop_faces(fixture.document, *resolved, face), selected.faces);
+	}
+	const PickResult vertex_pick { .hit = true, .kind = ElementKind::Vertex,
+		.vertex_id = fixture.rings[2][3] };
+	for (const bool ring : { false, true }) {
+		for (const Edge seed : { around_seed, profile_seed }) {
+			Selection selected;
+			select_only(selected, vertex_pick);
+			if (ring) {
+				selected.vertices.clear();
+				for (const Edge edge : edge_ring_edges(fixture.document, seed)) {
+					selected.vertices.push_back(edge.a);
+					selected.vertices.push_back(edge.b);
+				}
+				std::ranges::sort(selected.vertices);
+				selected.vertices.erase(std::ranges::unique(selected.vertices).begin(), selected.vertices.end());
+			} else {
+				selected.vertices = vertex_loop_vertices(fixture.document, seed);
+			}
+			const Edge wrong_hint = seed == around_seed ? profile_seed : around_seed;
+			const auto resolved = component_loop_seed(fixture.document, vertex_pick, selected, wrong_hint, ring);
+			ASSERT_TRUE(resolved.has_value());
+			if (ring) {
+				expect_edge_set(edge_ring_edges(fixture.document, *resolved), edge_ring_edges(fixture.document, seed));
+			} else {
+				expect_id_set(vertex_loop_vertices(fixture.document, *resolved), selected.vertices);
+			}
+		}
+	}
+}
+
+TEST(QdrDocumentLoopSelectionQueryTests,
+     CoincidentDisconnectedGeometryDoesNotChangeLoopsOrTypedDirection) {
+	SteppedCylinderFixture fixture = make_stepped_cylinder();
+	const auto& rim = fixture.rings[3];
+	const std::vector<Edge> expected = closed_ring_edges(rim);
+	std::vector<ElementId> copied;
+	for (const ElementId vertex : rim) {
+		copied.push_back(add_vertex(fixture.document, find_vertex(fixture.document, vertex)->position));
+	}
+	const ElementId coincident = add_face(fixture.document, copied);
+	ASSERT_NE(coincident, kInvalidElementId);
+	expect_edge_set(edge_loop_edges(fixture.document, expected.front()), expected);
+	Selection selection;
+	select_only(selection, { .hit = true, .kind = ElementKind::Vertex, .vertex_id = copied.front() });
+	EXPECT_EQ(component_loop_seed(fixture.document,
+		{ .hit = true, .kind = ElementKind::Vertex, .vertex_id = rim.front() }, selection, expected.front()),
+		expected.front());
+}
+
+TEST(QdrDocumentLoopSelectionQueryTests,
+     InvalidOrDuplicateVertexIdentitiesNeverSeedLoopsRingsOrTypedClicks) {
+	for (const bool duplicate : { false, true }) {
+		QuadGridFixture fixture = make_quad_grid(3U, 3U);
+		const Edge seed = make_edge(fixture.vertex(1U, 1U), fixture.vertex(1U, 2U));
+		if (duplicate) {
+			fixture.document.vertices.push_back(*find_vertex(fixture.document, seed.a));
+		} else {
+			std::erase_if(fixture.document.vertices, [&](const Vertex& vertex) { return vertex.id == seed.a; });
+		}
+		EXPECT_TRUE(edge_loop_edges(fixture.document, seed).empty());
+		EXPECT_TRUE(edge_ring_edges(fixture.document, seed).empty());
+		EXPECT_TRUE(vertex_loop_vertices(fixture.document, seed).empty());
+		EXPECT_FALSE(component_loop_seed(fixture.document,
+			{ .hit = true, .kind = ElementKind::Vertex, .vertex_id = seed.a }, {}).has_value());
+		EXPECT_FALSE(component_loop_seed(fixture.document,
+			{ .hit = true, .kind = ElementKind::Edge, .edge = seed }, {}).has_value());
 	}
 }

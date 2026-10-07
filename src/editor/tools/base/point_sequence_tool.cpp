@@ -123,6 +123,7 @@ ViewportToolResult PointSequenceTool::handle_event(
     };
   case ModelingViewportTool::Select:
   case ModelingViewportTool::LassoSelect:
+  case ModelingViewportTool::PaintSelect:
   case ModelingViewportTool::Move:
   case ModelingViewportTool::Extrude:
   case ModelingViewportTool::Rotate:

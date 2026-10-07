@@ -282,7 +282,8 @@ struct PickRequest {
   int target_object_id = -1;
   std::optional<PickScreenContext> screen_context;
   PickScreenWorkCounters *screen_work_counters = nullptr;
-  bool resolve_edge_seed_vertex = false;
+  /// Annotates a typed component with the nearest incident cursor direction.
+  bool resolve_component_loop_hint = false;
 };
 
 struct PickCycleState;
@@ -294,10 +295,11 @@ enum class EdgeSelectionTraversal {
   Ring,
 };
 
-/** Preserves component mode while walking from a directional edge pick. */
+/** Expands a typed component using a resolved topology direction. */
 enum class ComponentSelectionTraversal {
   None,
   VertexLoop,
+  VertexRing,
   FaceLoop,
 };
 

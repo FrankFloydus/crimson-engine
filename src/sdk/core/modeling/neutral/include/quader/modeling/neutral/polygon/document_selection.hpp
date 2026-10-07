@@ -159,6 +159,16 @@ void select_only(Selection& selection, const PickResult& pick);
 [[nodiscard]] Selection connected_component_selection(
     const Document& document,
     const PickResult& pick);
+/// Resolves an authored traversal edge from a typed component click. A selected
+/// adjacent active face/vertex establishes direction; otherwise an incident
+/// pointer hint is used. Stale or inconsistent explicit hints reject the query.
+/// With no hint or active direction, the first canonical incident edge is used.
+[[nodiscard]] std::optional<Edge> component_loop_seed(
+    const Document& document,
+    const PickResult& clicked,
+    const Selection& prior_selection,
+    Edge pointer_hint = {},
+    bool ring = false);
 void add_selection(Selection& selection, const PickResult& pick);
 void remove_selection(Selection& selection, const PickResult& pick);
 void set_selection_mode(Selection& selection, SelectionMode mode);

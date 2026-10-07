@@ -18,6 +18,7 @@
 #include <editor/interactions/selection_edit.hpp>
 
 #include <cstdint>
+#include <array>
 #include <optional>
 #include <vector>
 
@@ -81,16 +82,27 @@ public:
     [[nodiscard]] bool lasso_pointer_active() const {
       return lasso_context_.has_value();
     }
+    [[nodiscard]] bool paint_pointer_active() const {
+      return paint_stroke_.has_value();
+    }
+    [[nodiscard]] bool traversal_pointer_active() const {
+      return traversal_context_.has_value();
+    }
     /// Projects the exact selection edit represented by the current pointer
     /// lifecycle. Toggle/non-selection gestures deliberately return no intent.
     [[nodiscard]] std::optional<quader_editor_core::SelectionEditOperation>
     pointer_edit_operation(const ViewportInteractionFrame &frame) const;
     /// Cancels the owned gesture while reserving its eventual button release.
     bool cancel_lasso_drag();
+    /// Ends an explicit paint stroke at its last published sample.
+    bool cancel_paint_drag();
+    /// Abandons a one-shot traversal while retaining its release ownership.
+    bool cancel_traversal_click();
     /// Reports ownership of a marquee or held paint gesture.
     [[nodiscard]] bool pointer_interaction_active() const {
       return box_state_.active ||
              box_pointer_.has_value() || paint_selection_active_ ||
+             paint_stroke_.has_value() || traversal_context_.has_value() ||
              box_release_suppression_.active();
     }
     [[nodiscard]] const ViewportSelectionInteractionWorkStats &
@@ -122,6 +134,7 @@ private:
     QVec2 viewport_size = {};
     SceneSessionId scene_session_id;
     ViewportToolId tool = ViewportToolId::Select;
+    ViewportToolId selection_tool = ViewportToolId::Select;
     std::uint64_t content_revision = 0;
     std::uint64_t selection_revision = 0;
     std::uint64_t scene_revision = 0;
@@ -137,6 +150,37 @@ private:
     [[nodiscard]] bool matches_frame(const ViewportInteractionFrame &frame,
                                      SceneSessionId current_scene) const;
   };
+
+  /// Gesture metadata only; component and object selection stay in their owners.
+  struct PaintStroke {
+    DepthClickBaseline context;
+    std::array<float, 11> camera_basis = {};
+    QVec2 last_local = {};
+    ViewportModifiers last_modifiers = {};
+    std::uint64_t sample_sequence = 0;
+    bool sampled = false;
+    bool applied = false;
+    bool history_started = false;
+    bool defer_completion = true;
+    std::optional<ResolvedSelectionTarget> last_target;
+    quader_editor_core::SelectionEditOperation last_edit =
+        quader_editor_core::SelectionEditOperation::Replace;
+  };
+
+  /// Returns true while a press, release, or interruption owns the frame.
+  bool handle_paint_frame(QuaderEditorApi &editor,
+                          const ViewportInteractionFrame &frame,
+                          bool can_start, bool interrupted);
+  bool append_paint_sample(QuaderEditorApi &editor,
+                           const ViewportInteractionFrame &frame,
+                           PaintStroke &stroke,
+                           QVec2 local, ViewportModifiers modifiers);
+  void finish_paint_drag();
+  void complete_paint_selection(QuaderEditorApi &editor,
+                                 const ViewportInteractionFrame &frame);
+  bool handle_traversal_frame(QuaderEditorApi &editor,
+                              const ViewportInteractionFrame &frame,
+                              bool can_start, bool interrupted);
 
   std::optional<ViewportSelectionApplyResult> commit_pick_selection(
       QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
@@ -164,6 +208,10 @@ private:
   std::optional<ResolvedSelectionTarget> box_hovered_before_selection_;
   std::optional<EditorSelectionBoxBaseline> box_baseline_;
   std::optional<DepthClickBaseline> lasso_context_;
+  std::optional<DepthClickBaseline> traversal_context_;
+  std::optional<PaintStroke> paint_stroke_;
+  /// Completion shares the stroke's scene/mode reset and executing-tool fence.
+  std::optional<ViewportToolId> paint_completion_tool_;
   bool lasso_partial_intersection_ = false;
   double lasso_sample_distance_squared_ = 4.0;
   std::uint64_t lasso_sample_sequence_ = 0;

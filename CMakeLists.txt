@@ -1104,6 +1104,18 @@ qt_add_resources(quader_ui "quader_align_tool_icon"
     FILES
         "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_align.png")
 
+qt_add_resources(quader_ui "quader_paint_select_icon"
+    PREFIX "/quader/icons"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
+    FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_paint_select.png")
+
+qt_add_resources(quader_ui "quader_box_select_icon"
+    PREFIX "/quader/icons"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
+    FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_box_select.png")
+
 qt_add_resources(quader_ui "quader_mouse_hint_icons"
     PREFIX "/quader/icons"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
@@ -1864,6 +1876,7 @@ if(QUADER_BUILD_TESTS)
         tests/lasso_overlay_tests.cpp
         tests/lasso_selection_geometry_tests.cpp
         tests/lasso_selection_interaction_tests.cpp
+        tests/paint_selection_interaction_tests.cpp
         tests/move_auto_merge_tests.cpp
         tests/scene_color_preview_tests.cpp
         tests/render_source_stamp_tests.cpp

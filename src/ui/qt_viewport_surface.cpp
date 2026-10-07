@@ -1413,6 +1413,7 @@ void QtViewportSurface::record_mouse_press(QMouseEvent &event,
           .local = input_->mouse_local,
           .sequence = input_->pointer_event_sequence,
           .press_sequence = input_->left_pointer_press_sequence,
+          .modifiers = input_->modifiers,
       });
     }
     input_->left_click_count = double_click ? 2 : 1;
@@ -1483,6 +1484,7 @@ void QtViewportSurface::record_mouse_release(QMouseEvent &event) {
           .local = input_->mouse_local,
           .sequence = input_->pointer_event_sequence,
           .press_sequence = input_->left_pointer_press_sequence,
+          .modifiers = input_->modifiers,
       });
       input_->left_pointer_press_sequence = 0u;
     }
@@ -1598,6 +1600,7 @@ void QtViewportSurface::record_mouse_move(QMouseEvent &event) {
         .local = local,
         .sequence = ++input_->pointer_event_sequence,
         .press_sequence = input_->left_pointer_press_sequence,
+        .modifiers = viewport_modifiers(event.modifiers()),
     });
   }
   input_->hovered = pointer_captured() || visible_host_ == nullptr ||

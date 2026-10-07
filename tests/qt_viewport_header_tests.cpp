@@ -216,7 +216,7 @@ TEST(QtViewportChromeLayoutTests,
                              "snappingEnabled", "gridSnapping", "vertexSnapping",
                              "rotationSnapping", "viewportGrid", "viewportGizmos",
                              "viewportMeshGrid", "viewportOverlays"};
-  constexpr std::array kIcons{"tool_select.png", "tool_move.png", "tool_rotate.png",
+  constexpr std::array kIcons{"tool_box_select.png", "tool_move.png", "tool_rotate.png",
                              "tool_scale.png", "tool_transform_local.png",
                              "selection_backface.png", "snapping_master.png",
                              "snapping_grid.png", "snapping_vertex.png",

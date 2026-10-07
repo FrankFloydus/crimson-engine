@@ -43,7 +43,7 @@ struct ToolIconSpec {
   bool separator_before = false;
 };
 
-constexpr std::array<ToolIconSpec, 19> kToolIconSpecs{{
+constexpr std::array<ToolIconSpec, 20> kToolIconSpecs{{
     {ViewportToolId::CreatePrimitive, ":/quader/icons/tool_create_box.png"},
     {ViewportToolId::Pivot, ":/quader/icons/tool_pivot.png"},
     {ViewportToolId::Align, ":/quader/icons/tool_align.png"},
@@ -60,8 +60,9 @@ constexpr std::array<ToolIconSpec, 19> kToolIconSpecs{{
     {ViewportToolId::Curve, nullptr, true, true},
     {ViewportToolId::PathArray, ":/quader/icons/tool_path_array.png"},
     {ViewportToolId::UvPeel, ":/quader/icons/tool_uv_peel.png", true, true},
-    {ViewportToolId::Select, ":/quader/icons/tool_select.png", false},
+    {ViewportToolId::Select, ":/quader/icons/tool_box_select.png", false},
     {ViewportToolId::LassoSelect, ":/quader/icons/tool_lasso.png", false},
+    {ViewportToolId::PaintSelect, ":/quader/icons/tool_paint_select.png", false},
     {ViewportToolId::Move, ":/quader/icons/tool_move.png", false},
     {ViewportToolId::Rotate, ":/quader/icons/tool_rotate.png", false},
     {ViewportToolId::Scale, ":/quader/icons/tool_scale.png", false},

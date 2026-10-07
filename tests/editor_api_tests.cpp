@@ -4967,6 +4967,62 @@ TEST(EditorApiTests, ParentingShortcutDefaultPreservesStoredPivotOverride) {
   EXPECT_EQ(resolved.command_id, quader::quader_command::kToolsActivatePivot.string());
 }
 
+TEST(EditorApiTests, PaintShortcutOverridePersistsAndResetRestoresCtrlQ) {
+  constexpr auto kPaint = quader::quader_command::kToolsActivatePaintSelect;
+  const auto path = keybinding_test_path("paint-shortcut-override");
+  CommandTestHarness harness;
+  ASSERT_TRUE(harness.editor.commands().set_keybinding_storage_path(path).ok());
+  ASSERT_TRUE(harness.editor.commands().set_shortcut(kPaint, "Ctrl+Alt+F22").ok());
+  CommandTestHarness reloaded;
+  auto &editor = reloaded.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  EXPECT_EQ(editor.commands().shortcut_for(kPaint), "Ctrl+Alt+F22");
+  const auto overridden = editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("Ctrl+Alt+F22"), {}, true, false);
+  ASSERT_EQ(overridden.kind, quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+  EXPECT_EQ(overridden.shortcut.tool, quader::ViewportToolId::PaintSelect);
+  EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("Ctrl+Q"), {}, true, false).kind,
+      quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  ASSERT_TRUE(editor.commands().reset_shortcut(kPaint).ok());
+  EXPECT_EQ(editor.commands().shortcut_for(kPaint), "Ctrl+Q");
+  ASSERT_TRUE(harness.editor.commands().set_keybinding_storage_path(path).ok());
+  const auto restored = harness.editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("Ctrl+Q"), {}, true, false);
+  ASSERT_EQ(restored.kind, quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+  EXPECT_EQ(restored.shortcut.tool, quader::ViewportToolId::PaintSelect);
+  std::filesystem::remove(path);
+}
+
+TEST(EditorApiTests, NewPaintDefaultYieldsToExistingCtrlQUserAssignment) {
+  const auto path = keybinding_test_path("paint-existing-shortcut-override");
+  {
+    std::ofstream stored(path);
+    ASSERT_TRUE(stored.is_open());
+    stored << R"([{"command":"tools.activate.select","key":"Ctrl+Q"}])";
+  }
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  EXPECT_EQ(editor.commands().shortcut_for(quader::quader_command::kToolsActivateSelect), "Ctrl+Q");
+  const auto resolved = editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("Ctrl+Q"), {}, true, false);
+  ASSERT_EQ(resolved.kind, quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+  EXPECT_EQ(resolved.shortcut.tool, quader::ViewportToolId::Select);
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto *paint = find_keybinding_catalog_entry(catalog,
+      quader::quader_command::kToolsActivatePaintSelect.string());
+  ASSERT_NE(paint, nullptr);
+  EXPECT_EQ(paint->default_shortcut, "Ctrl+Q");
+  const auto conflict = editor.commands().analyze_shortcut_assignment(paint->key, "Ctrl+Q");
+  ASSERT_TRUE(conflict.ok) << conflict.message;
+  EXPECT_TRUE(std::ranges::any_of(conflict.conflicts, [](const auto &entry) {
+    return entry.kind == quader::QuaderKeybindingCollisionKind::ExactConflict &&
+           entry.target_id == quader::quader_command::kToolsActivateSelect.string();
+  }));
+  std::filesystem::remove(path);
+}
+
 TEST(EditorApiTests, EditorPanelsResolveCommandsAndToolsWithCanonicalOverrides) {
   CommandTestHarness harness;
   auto &editor = harness.editor;
@@ -8004,6 +8060,12 @@ TEST(EditorApiTests,
   EXPECT_EQ(lasso.serial, rotated.serial + 1u);
   EXPECT_EQ(lasso.target_id, "lasso_select");
   EXPECT_EQ(lasso.pane, quader::ViewportPaneId::Front);
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::PaintSelect).ok());
+  const auto paint = editor.tools().active_settings_presentation_origin();
+  EXPECT_EQ(paint.serial, lasso.serial + 1u);
+  EXPECT_EQ(paint.target_id, "paint_select");
+  EXPECT_EQ(paint.pane, quader::ViewportPaneId::Front);
+  EXPECT_FALSE(editor.tools().active_settings().active);
 }
 
 TEST(EditorApiTests,
@@ -9372,6 +9434,7 @@ TEST(EditorApiTests, EscapeClearsSelectionInOrdinarySelectionToolsAndModes) {
                 quader::ViewportSelectionMode::Face}};
   for (const auto tool : {quader::ViewportToolId::Select,
                          quader::ViewportToolId::LassoSelect,
+                         quader::ViewportToolId::PaintSelect,
                          quader::ViewportToolId::Move,
                          quader::ViewportToolId::Rotate,
                          quader::ViewportToolId::Scale}) {
@@ -24417,9 +24480,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 215u);
+  EXPECT_EQ(commands.size(), 216u);
 #else
-  EXPECT_EQ(commands.size(), 214u);
+  EXPECT_EQ(commands.size(), 215u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;

@@ -9067,6 +9067,15 @@ TEST(ViewportWorkspaceServiceTests,
   EXPECT_EQ(workspace.control_revision(kPane), fallback_revision + 1u);
   EXPECT_EQ(workspace.preferred_selection_tool(kPane), ViewportToolId::Select);
   EXPECT_FALSE(workspace.record_selected_tool(kPane, ViewportToolId::Select));
+  ASSERT_TRUE(workspace.record_selected_tool(kPane, ViewportToolId::PaintSelect));
+  const auto paint_revision = workspace.control_revision(kPane);
+  EXPECT_EQ(workspace.preferred_selection_tool(kPane), ViewportToolId::PaintSelect);
+  EXPECT_FALSE(workspace.record_selected_tool(kPane, ViewportToolId::PaintSelect));
+  EXPECT_EQ(workspace.control_revision(kPane), paint_revision);
+  ASSERT_TRUE(workspace.record_selected_tool(kPane, ViewportToolId::Move));
+  ASSERT_TRUE(workspace.record_selected_tool(kPane, ViewportToolId::Select, false));
+  EXPECT_EQ(workspace.preferred_selection_tool(kPane), ViewportToolId::PaintSelect);
+  EXPECT_EQ(workspace.preferred_selection_tool(ViewportPaneId::Perspective), ViewportToolId::Select);
 }
 
 TEST(ViewportCameraTests, FlySpeedDefaultsUseHostViewportDefaults) {

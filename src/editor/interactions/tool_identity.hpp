@@ -41,6 +41,7 @@ enum class ViewportInteractionTool {
   Poly,
   Unknown,
   LassoSelect,
+  PaintSelect,
 };
 
 /**

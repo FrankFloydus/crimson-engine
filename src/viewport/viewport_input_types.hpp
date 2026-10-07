@@ -57,6 +57,9 @@ struct ViewportPointerMotionSample {
   // sequence. The originating press remains identifiable across frame drains.
   std::uint64_t sequence = 0u;
   std::uint64_t press_sequence = 0u;
+  // Paint selection follows each event's modifiers as the stroke progresses.
+  // Synthetic callers may leave this unset to retain their frame fallback.
+  std::optional<ViewportModifiers> modifiers;
 };
 
 /// Distinguishes ordered semantic pointer presses from releases.

@@ -458,6 +458,7 @@ enum class QuaderViewportTool {
     Pivot,
     Curve,
     LassoSelect,
+    PaintSelect,
 };
 
 /**

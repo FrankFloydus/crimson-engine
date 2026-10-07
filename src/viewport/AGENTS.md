@@ -16,7 +16,9 @@ file except through prior written authorization from Francesco Di Blasi.
   layout/tab changes and later default changes; pane-local strip controls do not save preferences.
   Backface Selection retains its existing shared preference and selection policy.
   Tool activation projects the scene's single executing operation into every pane, including
-  panes revealed by later layout changes. Each pane retains its own last Box/Lasso choice.
+  panes revealed by later layout changes. Each pane retains its own last Box/Lasso/Paint choice.
+  That choice also governs selection fallback under other selection-capable tools; those tools
+  retain their own press precedence, then the accepted selection gesture owns its release.
   Focus and same-operation acquisition never accept, cancel or restart a draft. Every visible
   pane can edit the shared operation; capture retains the actual editing pane and its effective
   snapping through release. Tool Settings stays in the operation's initiating pane independently

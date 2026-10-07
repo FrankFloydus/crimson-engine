@@ -58,6 +58,7 @@ constexpr auto kToolRequirements = std::to_array<FeatureRequirement>({
     {"extrude_individual", ReleaseFeature::ExtrudeTool},
     {"extrude_along_normals", ReleaseFeature::ExtrudeTool},
     {"lasso_select", ReleaseFeature::LassoSelection},
+    {"paint_select", ReleaseFeature::PaintSelection},
     {"mirror", ReleaseFeature::MirrorTool},
     {"cut", ReleaseFeature::CutTool},
     {"poly", ReleaseFeature::PolyTool},

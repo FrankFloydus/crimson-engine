@@ -565,5 +565,162 @@ TEST(ComponentSelectionRuntimeTests,
   }
 }
 
+TEST(ComponentSelectionRuntimeTests,
+     VulkanMarqueeSeedAndCpuSeedProduceTheSameCompleteCylinderTraversal) {
+  if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_SELECTION_TESTS") != 1) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_SELECTION_TESTS=1 for Vulkan traversal seed coverage";
+  }
+  ComponentSelectionRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(filament::Engine::Backend::VULKAN));
+  for (const auto mode : {QuaderSelectionMode::Vertex, QuaderSelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    SceneSession session;
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+    constexpr std::size_t kSides = 12u;
+    constexpr std::array kRadii{0.65f, 1.0f, 1.0f, 0.65f};
+    constexpr std::array kHeights{-1.0f, -0.75f, 0.75f, 1.0f};
+    constexpr float kTau = 6.2831853071795864769f;
+    quader_poly::Document cylinder_document;
+    std::array<std::array<quader_poly::ElementId, kSides>, 4u> vertices{};
+    std::array<std::array<QVec3, kSides>, 4u> positions{};
+    std::array<std::array<quader_poly::ElementId, kSides>, 3u> faces{};
+    for (std::size_t ring = 0u; ring < vertices.size(); ++ring) {
+      for (std::size_t side = 0u; side < kSides; ++side) {
+        const float angle = kTau * static_cast<float>(side) / static_cast<float>(kSides);
+        positions[ring][side] = {kRadii[ring] * std::cos(angle),
+                                 kRadii[ring] * std::sin(angle), kHeights[ring]};
+        vertices[ring][side] = quader_poly::add_vertex(cylinder_document, positions[ring][side]);
+      }
+    }
+    for (std::size_t band = 0u; band < faces.size(); ++band) {
+      for (std::size_t side = 0u; side < kSides; ++side) {
+        const auto next = (side + 1u) % kSides;
+        faces[band][side] = quader_poly::add_face(cylinder_document,
+            std::array{vertices[band][side], vertices[band][next],
+                       vertices[band + 1u][next], vertices[band + 1u][side]});
+      }
+    }
+    (void)quader_poly::add_face(cylinder_document,
+        std::vector<quader_poly::ElementId>(vertices.front().rbegin(), vertices.front().rend()));
+    (void)quader_poly::add_face(cylinder_document, vertices.back());
+    const auto cylinder = editor.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(std::move(cylinder_document)),
+        {.name = "Vulkan seeded closed cylinder traversal"});
+    ASSERT_TRUE(cylinder.ok()) << cylinder.error_message();
+
+    const auto face_center = [&](std::size_t side) {
+      const auto next = (side + 1u) % kSides;
+      return (positions[1][side] + positions[1][next] +
+              positions[2][side] + positions[2][next]) * 0.25f;
+    };
+    const bool vertex_mode = mode == QuaderSelectionMode::Vertex;
+    const auto seed_position = vertex_mode ? positions.back()[1] : face_center(1u);
+    const auto clicked_position = vertex_mode ? positions.back()[2] : face_center(2u);
+    const auto seed_id = vertex_mode ? vertices.back()[1] : faces[1][1];
+    const auto clicked_id = vertex_mode ? vertices.back()[2] : faces[1][2];
+    std::vector<quader_poly::ElementId> traversal = vertex_mode
+        ? std::vector<quader_poly::ElementId>(vertices.back().begin(), vertices.back().end())
+        : std::vector<quader_poly::ElementId>(faces[1].begin(), faces[1].end());
+    std::ranges::sort(traversal);
+
+    ViewportCameraController camera;
+    camera.set_viewport_size(800.0f, 600.0f);
+    if (vertex_mode) camera.view_axis(ViewportViewAxis::Z, 1);
+    camera.focus_origin(7.0f);
+    camera.set_view_direction(vertex_mode ? QVec3{0.0f, 0.0f, -1.0f}
+        : QVec3{-clicked_position.x, -clicked_position.y, -0.25f});
+    const auto modeling_camera = ViewportCameraAdapter::modeling_camera(camera, camera.viewport_size());
+    const ViewportSceneProjectionCamera projection(modeling_camera);
+    const auto seed_screen = projection.project_world_point(seed_position);
+    ASSERT_TRUE(seed_screen.visible);
+    const auto clicked_screen = projection.project_world_point(clicked_position);
+    ASSERT_TRUE(clicked_screen.visible);
+    const auto clicked_ray = projection.ray_from_viewport_point(clicked_screen.position);
+    const QuaderBoxSelectRequest seed_request{
+        .camera = {.orthographic = modeling_camera.orthographic,
+                   .origin = modeling_camera.origin,
+                   .x_axis = modeling_camera.x_axis,
+                   .y_axis = modeling_camera.y_axis,
+                   .z_axis = modeling_camera.z_axis,
+                   .viewport_size = modeling_camera.viewport_size,
+                   .orthographic_size = modeling_camera.orthographic_size,
+                   .fov_degrees = modeling_camera.fov_degrees},
+        .start = seed_screen.position + QVec2{1.0f, 1.0f},
+        .end = seed_screen.position - QVec2{1.0f, 1.0f},
+        .rule = QuaderBoxSelectionRule::Crossing,
+        .select_backfaces = false};
+
+    ASSERT_TRUE(editor.scene().select(cylinder.value().entity).ok());
+    ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
+    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    ASSERT_TRUE(editor.selection().clear().ok());
+    const auto selected_components = [&] {
+      std::vector<quader_poly::ElementId> result;
+      for (const auto &object : session.modeling().export_selection().objects) {
+        if (vertex_mode) {
+          for (const auto &vertex : object.selected_vertices) {
+            EXPECT_EQ(object.modeling_object_id, cylinder.value().modeling_object_id);
+            result.push_back(vertex.id);
+          }
+        } else {
+          for (const auto &face : object.selected_faces) {
+            EXPECT_EQ(object.modeling_object_id, cylinder.value().modeling_object_id);
+            result.push_back(face.id);
+          }
+        }
+      }
+      std::ranges::sort(result);
+      return result;
+    };
+    const auto surfaces = session.scene_surface_query().snapshot();
+    if (!vertex_mode) {
+      // The expected face band includes the far side of the closed cylinder.
+      // Visibility selects the seed; it must not truncate topology traversal.
+      const auto far_center = face_center(8u);
+      const auto far_screen = projection.project_world_point(far_center);
+      const auto far_ray = projection.ray_from_viewport_point(far_screen.position);
+      const auto occluder = surfaces.nearest_hit({.world_origin = far_ray.origin,
+          .world_direction = far_ray.direction, .respect_render_sidedness = true});
+      ASSERT_TRUE(occluder);
+      ASSERT_LT(occluder->distance,
+                dot(far_center - far_ray.origin, far_ray.direction) - 0.1f);
+    }
+    const auto depth_camera = projection.selection_depth_camera();
+    for (const bool gpu_seed : {false, true}) {
+      SCOPED_TRACE(gpu_seed ? "Vulkan seed" : "CPU seed");
+      ASSERT_TRUE(editor.selection().clear().ok());
+      if (gpu_seed) {
+        const auto snapshot = harness.capture(surfaces.selection_depth_geometry(), depth_camera);
+        ASSERT_TRUE(snapshot);
+        ASSERT_TRUE(snapshot->conservative_coverage);
+        session.scene_surface_query().set_selection_depth_source(harness.selection.source());
+        ASSERT_EQ(session.scene_surface_query().snapshot().selection_depth_snapshot(depth_camera), snapshot);
+      }
+      const auto before_seed = session.scene_surface_query().stats().selection_depth;
+      const auto seeded = editor.selection().box_select(seed_request);
+      ASSERT_TRUE(seeded.ok()) << seeded.error_message();
+      ASSERT_EQ(selected_components(), (std::vector<quader_poly::ElementId>{seed_id}));
+      const auto after_seed = session.scene_surface_query().stats().selection_depth;
+      if (gpu_seed) {
+        EXPECT_GT(after_seed.gpu_accepted_witnesses + after_seed.gpu_rejected_witnesses +
+                      after_seed.gpu_overflow_witnesses,
+                  before_seed.gpu_accepted_witnesses + before_seed.gpu_rejected_witnesses +
+                      before_seed.gpu_overflow_witnesses);
+        EXPECT_EQ(after_seed.stale_snapshot_queries, before_seed.stale_snapshot_queries);
+      }
+      // Alt point selection uses the exact CPU ray in production. The Vulkan
+      // step above exercises the native path that establishes its active seed.
+      const auto selected = editor.selection().pick_select({
+          .ray = {.origin = clicked_ray.origin, .direction = clicked_ray.direction},
+          .alt_pressed = true, .vertex_radius = 0.03, .edge_radius = 0.03,
+          .select_backfaces = false});
+      ASSERT_TRUE(selected.ok()) << selected.error_message();
+      EXPECT_EQ(selected_components(), traversal);
+      EXPECT_EQ(vertex_mode ? selected.value().active_vertex_id : selected.value().active_face_id,
+                clicked_id);
+    }
+  }
+}
+
 } // namespace
 } // namespace quader

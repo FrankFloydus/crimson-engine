@@ -1108,6 +1108,7 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
     }
   }
 
+  QVec2 drag_local = frame.input.mouse_local;
   if (pending_drag_.has_value()) {
     // Preserve a newer double-click count even outside Mesh depth cycling:
     // component loops also need the second press coalesced with the first release.
@@ -1126,8 +1127,14 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
     }
     result.gizmo_consumed = true;
     const bool release_requested = frame.left_released || !frame.left_down;
+    if (const auto *release = viewport_pointer_edge_after(
+            frame.input.pointer_released_edges, pending_drag_->pointer.press)) {
+      // A host frame may already contain hover after this physical release.
+      // Only the release can promote a pending handle click into a drag.
+      drag_local = release->local;
+    }
     const bool threshold_reached =
-        pending_drag_threshold_reached(frame.input.mouse_local);
+        pending_drag_threshold_reached(drag_local);
     if (!threshold_reached) {
       if (release_requested) {
         return release_pending_click();
@@ -1157,7 +1164,7 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
     // it before committing so a delayed frame catches up instead of retaining
     // the previous sample's transform.
     const ViewportRay drag_ray =
-        frame.camera.ray_from_viewport_point(frame.input.mouse_local);
+        frame.camera.ray_from_viewport_point(drag_local);
     const bool grid_snap_active = viewport_grid_snap_active(
         frame.settings, frame.input.modifiers.primary);
     const double rotation_snap_degrees =
@@ -1167,7 +1174,7 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
                   ViewportFloatSettingId::RotationSnapDegrees)
             : 0.0;
     const DragUpdateSignature update_signature{
-        .screen_position = frame.input.mouse_local,
+        .screen_position = drag_local,
         .viewport_size = frame.input.viewport_size,
         .grid_preset = frame.input.grid_preset,
         .vertex_snap_radius =
@@ -1204,7 +1211,7 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
                 curve_move_state_, snap_target->target.position);
           }
           return quader_editor_core::preview_move_from_viewport(
-              curve_move_state_, frame.input.mouse_local,
+              curve_move_state_, drag_local,
               {.origin = drag_ray.origin, .direction = drag_ray.direction},
               ViewportCameraAdapter::runtime_camera(
                   frame.camera, frame.input.viewport_size),
@@ -1239,7 +1246,7 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
         const QuaderApiResult<QuaderTransformDragPreview> preview = [&]() {
           QDR_PROFILE_SCOPE("Transform gizmo update drag");
           return editor.modeling().update_transform_drag({
-              .screen_position = frame.input.mouse_local,
+              .screen_position = drag_local,
               .ray =
                   {
                       .origin = drag_ray.origin,
@@ -1280,7 +1287,7 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
             rotation_indicator_start_direction_.has_value()) {
           const std::optional<QVec3> mouse_position =
               rotation_indicator_mouse_position_from_mouse(
-                  frame.camera, frame.input.mouse_local,
+                  frame.camera, drag_local,
                   current_frame_->info.pivot, active_world_direction_);
           active_rotate_indicator_ = {
               .active = true,

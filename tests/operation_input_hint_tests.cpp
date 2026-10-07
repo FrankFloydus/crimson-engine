@@ -170,6 +170,34 @@ TEST(OperationInputHintTests, SelectionUsesCapturedOperationAndNeverAdvertisesBo
   EXPECT_FALSE(contains_gesture(hints, QuaderOperationInputGesture::PrimaryDrag));
 }
 
+TEST(OperationInputHintTests, PaintSelectionShowsLiveModifiersWithoutBrushSettings) {
+  auto standalone = create_standalone_editor();
+  auto &tools = standalone.editor().tools();
+  ASSERT_TRUE(tools.activate(ViewportToolId::PaintSelect).ok());
+  QuaderOperationInputContext context;
+  const auto initial = tools.active_input_hints_revision(context);
+  const auto idle = tools.active_input_hints(context);
+  ASSERT_EQ(idle.size(), 3u);
+  EXPECT_EQ(idle[0].gesture, QuaderOperationInputGesture::PrimaryDrag);
+  EXPECT_EQ(idle[0].label_fallback, "Paint");
+  EXPECT_TRUE(contains_gesture(idle, QuaderOperationInputGesture::Shift));
+  EXPECT_TRUE(contains_gesture(idle, QuaderOperationInputGesture::Control));
+  for (int frame = 0; frame < 20; ++frame) {
+    EXPECT_EQ(tools.active_input_hints_revision(context), initial);
+  }
+  context.selection_gesture = QuaderInputSelectionGesture::Paint;
+  context.selection_operation = QuaderInputSelectionOperation::Remove;
+  context.control = true;
+  const auto painting = tools.active_input_hints(context);
+  ASSERT_EQ(painting.size(), 3u);
+  EXPECT_EQ(painting[0].label_fallback, "Remove");
+  EXPECT_FALSE(painting[1].active);
+  EXPECT_TRUE(painting[2].active);
+  const auto changed = tools.active_input_hints_revision(context);
+  EXPECT_GT(changed, initial);
+  EXPECT_EQ(tools.active_input_hints_revision(context), changed);
+}
+
 TEST(OperationInputHintTests, OwnerRevisionTracksPrimitiveKindFootprintAndCancel) {
   const auto *contract = test::find_command_behavior_contract(quader_command::kToolsTogglePrimitiveCaps.string());
   ASSERT_NE(contract, nullptr);
@@ -439,7 +467,7 @@ TEST(OperationInputHintTests, CatalogContextsHaveTranslationsInBothLocales) {
   const auto append = [&](std::vector<QuaderOperationInputHint> values) {
     hints.insert(hints.end(), values.begin(), values.end());
   };
-  for (const auto tool : {"select", "lasso_select", "extrude", "insert_edge_loop", "knife", "cut", "poly", "mirror", "uv_peel"}) {
+  for (const auto tool : {"select", "lasso_select", "paint_select", "extrude", "insert_edge_loop", "knife", "cut", "poly", "mirror", "uv_peel"}) {
     append(viewport_tool_input_hints(tool));
     append(viewport_tool_input_hints(tool, {.can_apply = true, .dragging = true, .active_stroke = true, .extrusion_pending = true}));
   }

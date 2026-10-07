@@ -94,6 +94,66 @@ TEST(SelectionToolSettingsTests, LassoIdentityShortcutAndUserOverrideRemainCoher
   EXPECT_EQ(editor.commands().shortcut_for(kCommand), "Shift+Q");
 }
 
+TEST(SelectionToolSettingsTests, PaintIdentityDefaultIsConflictFreeRemappableAndKeepsPanePreference) {
+  auto standalone = create_standalone_editor();
+  auto &editor = standalone.editor();
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  constexpr auto kCommand = quader_command::kToolsActivatePaintSelect;
+  const auto descriptor = editor.commands().descriptor(kCommand);
+  ASSERT_TRUE(descriptor.has_value());
+  EXPECT_EQ(descriptor->label, "Paint Select");
+  EXPECT_EQ(descriptor->shortcut, "Ctrl+Q");
+  EXPECT_TRUE(descriptor->enabled);
+  EXPECT_EQ(viewport_tool_for_modeling(ModelingViewportTool::PaintSelect),
+            ViewportToolId::PaintSelect);
+  EXPECT_EQ(viewport_tool_interaction_tool(ViewportToolId::PaintSelect),
+            quader_editor_core::ViewportInteractionTool::PaintSelect);
+  EXPECT_FALSE(viewport_tool_supports_transform_gizmo(ViewportToolId::PaintSelect));
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto row = std::ranges::find_if(catalog, [&](const auto &entry) {
+    return std::ranges::find(entry.target_ids, kCommand.string()) != entry.target_ids.end();
+  });
+  ASSERT_NE(row, catalog.end());
+  EXPECT_EQ(row->default_shortcut, "Ctrl+Q");
+  EXPECT_EQ(row->localization_key, "keybindings.target.tools.activate.paint_select.label");
+
+  const auto conflicts = editor.commands().analyze_shortcut_assignment(row->key, "Ctrl+Q");
+  ASSERT_TRUE(conflicts.ok) << conflicts.message;
+  EXPECT_TRUE(conflicts.conflicts.empty());
+  ViewportToolState state;
+  const auto chord = input_chord("Ctrl+Q");
+  const auto dispatch = editor.commands().dispatch_viewport_input_binding(chord, state, true, false);
+  ASSERT_EQ(dispatch.kind, QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+  EXPECT_EQ(dispatch.shortcut.tool, ViewportToolId::PaintSelect);
+  EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+                chord, state, true, false, {.navigation_active = true}).kind,
+            QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(chord, state, true, true).kind,
+            QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  ASSERT_TRUE(editor.commands().execute(kCommand).ok());
+  EXPECT_EQ(editor.tools().active_tool(), "paint_select");
+  EXPECT_EQ(editor.query().tool_status().active_tool, QuaderViewportTool::PaintSelect);
+  EXPECT_EQ(editor.viewports().preferred_selection_tool(), ViewportToolId::PaintSelect);
+  EXPECT_TRUE(editor.tools().active_settings().controls.empty());
+  const auto revision = editor.tools().active_tool_revision();
+  EXPECT_FALSE(editor.tools().activate(ViewportToolId::PaintSelect).changed());
+  EXPECT_EQ(editor.tools().active_tool_revision(), revision);
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::Move).ok());
+  EXPECT_EQ(editor.viewports().preferred_selection_tool(), ViewportToolId::PaintSelect);
+  EXPECT_FALSE(editor.history().can_undo());
+  ASSERT_TRUE(editor.commands().set_shortcut(kCommand, "Ctrl+Alt+F22").ok());
+  EXPECT_EQ(editor.commands().shortcut_for(kCommand), "Ctrl+Alt+F22");
+  const auto rebound = editor.commands().dispatch_viewport_input_binding(
+      input_chord("Ctrl+Alt+F22"), state, true, false);
+  EXPECT_EQ(rebound.kind, QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+  EXPECT_EQ(rebound.shortcut.tool, ViewportToolId::PaintSelect);
+  ASSERT_TRUE(editor.commands().remove_shortcut(kCommand).ok());
+  EXPECT_TRUE(editor.commands().shortcut_for(kCommand).empty());
+  ASSERT_TRUE(editor.commands().reset_shortcut(kCommand).ok());
+  EXPECT_EQ(editor.commands().shortcut_for(kCommand), "Ctrl+Q");
+  EXPECT_EQ(editor.commands().shortcut_for(quader_command::kToolsActivateLassoSelect), "Shift+Q");
+}
+
 TEST(SelectionToolSettingsTests, MoveAndLassoCheckboxesRetainValuesAndResetIndependently) {
   SceneSession session;
   QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));

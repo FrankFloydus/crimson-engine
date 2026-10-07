@@ -154,7 +154,7 @@ TEST(EditorModeToolPolicyTests, WholeObjectAuthoringAndClipboardRejectEditWithou
 }
 
 TEST(EditorModeToolPolicyTests, CommonToolsSurviveModeTransitionsAndAvailabilityHasAnIdleGate) {
-  for (const std::string_view tool : {"select", "lasso_select", "move", "rotate", "scale"}) {
+  for (const std::string_view tool : {"select", "lasso_select", "paint_select", "move", "rotate", "scale"}) {
     SCOPED_TRACE(tool);
     auto standalone = quader::create_standalone_editor();
     auto &editor = standalone.editor();

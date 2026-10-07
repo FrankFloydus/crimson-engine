@@ -402,6 +402,10 @@ ModelingCommandResult EditorSelectionService::finish_selection_edit(
   return result;
 }
 
+ModelingCommandResult EditorSelectionService::complete_selection_edit() {
+  return finish_selection_edit({.ok = true});
+}
+
 void EditorSelectionService::set_sub_selection_provider(
     EditorSubSelectionProvider *provider) {
   if (sub_selection_provider_ == provider) {
@@ -1549,17 +1553,13 @@ ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_click(
     return apply_sub_selection(winner.sub_selection_kind, &winner);
   }
 
-  const bool directional_edge_seed =
-      component_traversal != ModelingComponentSelectionTraversal::None &&
-      winner.component_kind == ModelingActiveSelectionKind::Edge;
   if (winner.modeling_object_id == kInvalidModelingObjectId ||
-      (!directional_edge_seed &&
        ((selection_mode == ModelingSelectionMode::Vertex &&
          winner.component_kind != ModelingActiveSelectionKind::Vertex) ||
         (selection_mode == ModelingSelectionMode::Edge &&
          winner.component_kind != ModelingActiveSelectionKind::Edge) ||
         (selection_mode == ModelingSelectionMode::Face &&
-         winner.component_kind != ModelingActiveSelectionKind::Face)))) {
+         winner.component_kind != ModelingActiveSelectionKind::Face))) {
     return {
         .command = {.ok = false,
                     .message = "Resolved component selection target is invalid."},
@@ -1599,7 +1599,7 @@ ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_click(
       traversal_preparation;
   const std::uint64_t content_revision = modeling_.content_revision();
   const std::uint64_t selection_revision = modeling_.selection_revision();
-  if (directional_edge_seed) {
+  if (traversal_requested) {
     traversal_preparation =
         modeling_.prepare_component_traversal_selection(component);
     if (!traversal_preparation->command.ok ||
@@ -1632,7 +1632,9 @@ ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_click(
           ? modeling_.set_component_selection(traversal_preparation->selection)
           : modeling_.apply_resolved_component_selection(component);
   command = include_settlement_change(
-      finish_selection_edit(std::move(command)), settled);
+      request.defer_selection_completion ? std::move(command)
+                                          : finish_selection_edit(std::move(command)),
+      settled);
   return {.command = std::move(command), .selection = summary()};
 }
 

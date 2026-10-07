@@ -72,6 +72,8 @@ public:
     /** Arms one-shot viewport placement for a Point or Directional light. */
     QuaderApiVoidResult begin_light_creation(QuaderLightType type);
     [[nodiscard]] QuaderToolSettingsTarget active_settings() const;
+    /// Returns the retained lasso option even while another tool is active.
+    [[nodiscard]] bool lasso_select_partial_intersection() const;
     [[nodiscard]] std::uint64_t active_settings_revision() const;
     /// Array-only presentation choice; no preview/layout evaluation. No value
     /// means ordinary selection dimensions own the viewport presentation.

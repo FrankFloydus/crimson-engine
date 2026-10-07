@@ -170,7 +170,8 @@ TEST(PublicReleaseProfile, ExecutableIdentityCatalogAndSettingsArePublic01) {
   for (const auto &feature : release_feature_catalog()) {
     SCOPED_TRACE(feature.id);
     EXPECT_EQ(editor.feature_available(feature.feature),
-              feature.feature == ReleaseFeature::LassoSelection);
+              feature.feature == ReleaseFeature::LassoSelection ||
+              feature.feature == ReleaseFeature::PaintSelection);
     EXPECT_TRUE(product_release_has_feature(kInternalFullRelease, feature.feature));
   }
   ASSERT_NE(std::getenv("LOCALAPPDATA"), nullptr);
@@ -231,6 +232,7 @@ TEST(PublicReleaseCommands, EveryExcludedCommandIsAbsentAndRejectsWithoutMutatio
   EXPECT_GE(count, kExcludedCommands.size());
   for (const auto command : {quader_command::kToolsActivateKnife,
                              quader_command::kToolsActivateLassoSelect,
+                             quader_command::kToolsActivatePaintSelect,
                              quader_command::kToolsActivateMove,
                              quader_command::kToolsActivateRotate,
                              quader_command::kToolsActivateScale,
@@ -269,7 +271,21 @@ TEST(PublicReleaseCommands, LassoSelectionIsAvailableThroughCommandsAndTools) {
   EXPECT_EQ(editor.tools().active_tool(), "lasso_select");
 }
 
-TEST(PublicReleaseSelection, AltClickUsesTheClickedEdgeForVertexLoopsAndFaceStrips) {
+TEST(PublicReleaseCommands, PaintSelectionIsAvailableThroughCommandsAndTools) {
+  auto standalone = create_standalone_editor();
+  auto &editor = standalone.editor();
+  EXPECT_TRUE(editor.feature_available(ReleaseFeature::PaintSelection));
+  EXPECT_TRUE(editor.tools().can_activate(ViewportToolId::PaintSelect));
+  ASSERT_TRUE(editor.commands().execute(quader_command::kToolsActivatePaintSelect).ok());
+  EXPECT_EQ(editor.tools().active_tool(), "paint_select");
+  EXPECT_EQ(editor.viewports().preferred_selection_tool(), ViewportToolId::PaintSelect);
+  EXPECT_EQ(editor.commands().shortcut_for(quader_command::kToolsActivatePaintSelect), "Ctrl+Q");
+  ASSERT_TRUE(editor.commands().execute(quader_command::kToolsActivateSelect).ok());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::PaintSelect).ok());
+  EXPECT_EQ(editor.tools().active_tool(), "paint_select");
+}
+
+TEST(PublicReleaseSelection, AltClickUsesTypedVertexAndFaceHits) {
   for (const auto mode : {QuaderSelectionMode::Vertex, QuaderSelectionMode::Face}) {
     for (const bool prior_selection : {false, true}) {
       SCOPED_TRACE(static_cast<int>(mode));
@@ -345,7 +361,9 @@ TEST(PublicReleaseSelection, AltClickUsesTheClickedEdgeForVertexLoopsAndFaceStri
       session.history().clear();
       const auto content_revision = editor.selection().summary().content_revision;
       QuaderPickSelectRequest request{
-          .ray = {.origin = {0.0f, -0.5f, 5.0f}, .direction = {0.0f, 0.0f, -1.0f}},
+          .ray = {.origin = mode == QuaderSelectionMode::Vertex
+                      ? QVec3{-0.49f, -0.5f, 5.0f} : QVec3{0.0f, -0.49f, 5.0f},
+                  .direction = {0.0f, 0.0f, -1.0f}},
           .alt_pressed = true, .vertex_radius = 0.03, .edge_radius = 0.03};
       const auto picked = editor.selection().pick_select(request);
       ASSERT_TRUE(picked.ok()) << picked.error_message();
@@ -356,6 +374,10 @@ TEST(PublicReleaseSelection, AltClickUsesTheClickedEdgeForVertexLoopsAndFaceStri
       EXPECT_EQ(session.history().undo_count(), 0u);
       const auto repeated = editor.selection().pick_select(request);
       ASSERT_TRUE(repeated.ok());
+      EXPECT_EQ(selected_ids(), expected);
+      EXPECT_EQ(repeated.value().active_kind, picked.value().active_kind);
+      EXPECT_EQ(repeated.value().active_vertex_id, picked.value().active_vertex_id);
+      EXPECT_EQ(repeated.value().active_face_id, picked.value().active_face_id);
       EXPECT_FALSE(repeated.changed());
       EXPECT_EQ(repeated.value().selection_revision, picked.value().selection_revision);
       EXPECT_EQ(session.history().undo_count(), 0u);
@@ -363,6 +385,34 @@ TEST(PublicReleaseSelection, AltClickUsesTheClickedEdgeForVertexLoopsAndFaceStri
       request.shift_pressed = true;
       ASSERT_TRUE(editor.selection().pick_select(request).ok());
       EXPECT_TRUE(selected_ids().empty());
+
+      // Ring/loop direction follows the selected neighbor while hits retain
+      // their actual component kind, even at a face center far from an edge.
+      const auto anchor = mode == QuaderSelectionMode::Vertex
+          ? editor.selection().select_vertex(patch.value(), vertices[1][2])
+          : editor.selection().select_face(patch.value(), faces[1][0]);
+      ASSERT_TRUE(anchor.ok());
+      request.ray.origin = mode == QuaderSelectionMode::Vertex
+          ? QVec3{-0.5f, -0.5f, 5.0f} : QVec3{0.0f, 0.0f, 5.0f};
+      request.shift_pressed = false;
+      request.control_pressed = true;
+      expected.clear();
+      if (mode == QuaderSelectionMode::Vertex) {
+        for (const auto &row : vertices) {
+          expected.push_back(row[1]);
+          expected.push_back(row[2]);
+        }
+      } else {
+        expected.assign(faces[1].begin(), faces[1].end());
+      }
+      std::sort(expected.begin(), expected.end());
+      const auto edit_context = session.editor_mode().snapshot();
+      ASSERT_TRUE(editor.selection().pick_select(request).ok());
+      EXPECT_EQ(selected_ids(), expected);
+      EXPECT_EQ(session.editor_mode().snapshot().participants, edit_context.participants);
+      EXPECT_EQ(session.editor_mode().snapshot().generation, edit_context.generation);
+      EXPECT_EQ(session.history().undo_count(), 0u);
+      EXPECT_EQ(editor.selection().summary().content_revision, content_revision);
     }
   }
 }
@@ -1005,7 +1055,7 @@ TEST(PublicReleasePresentation, MenusAndToolbarsContainOnlyPublishedControls) {
     EXPECT_EQ(toolbar.findChild<QAction *>(QStringLiteral("tool_%1").arg(tool)), nullptr)
         << tool;
   }
-  for (const auto tool : {"select", "lasso_select", "move", "rotate", "scale", "knife"}) {
+  for (const auto tool : {"select", "lasso_select", "paint_select", "move", "rotate", "scale", "knife"}) {
     EXPECT_NE(toolbar.findChild<QAction *>(QStringLiteral("tool_%1").arg(tool)), nullptr)
         << tool;
   }

@@ -96,7 +96,7 @@ TEST(QdrEditorMetadataShortcutCatalogTests, HostContractSelectionModeCatalogExpo
 
 TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutTargetsResolveToDescriptorOnlyCatalogs) {
 	const std::span<const qhc::HostShortcutDescriptor> shortcuts = qhc::shortcut_catalog();
-	EXPECT_EQ(shortcuts.size(), 39U);
+	EXPECT_EQ(shortcuts.size(), 40U);
 	EXPECT_FALSE(has_shortcut("select_tool"));
 
 	for (const qhc::HostShortcutDescriptor& shortcut : shortcuts) {
@@ -152,6 +152,14 @@ TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutCatalogHasNoDupl
 }
 
 TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutCatalogPreservesEditorAndViewportKeyMeanings) {
+  const auto &paint = require_shortcut("paint_select_tool");
+  EXPECT_EQ(paint.context, qhc::HostShortcutContext::Viewport);
+  EXPECT_EQ(paint.key, "Q");
+  EXPECT_TRUE(paint.primary_modifier);
+  EXPECT_FALSE(paint.alt);
+  EXPECT_FALSE(paint.shift);
+  EXPECT_EQ(paint.target_kind, qhc::HostShortcutTargetKind::Tool);
+  EXPECT_EQ(paint.target_id, "paint_select");
 	const qhc::HostShortcutDescriptor& undo = require_shortcut("undo");
         EXPECT_TRUE(undo.context == qhc::HostShortcutContext::Global);
         EXPECT_TRUE(same_text(undo.key, "Z"));
