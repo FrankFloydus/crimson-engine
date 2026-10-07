@@ -47,7 +47,8 @@ Current owner slices:
 - `quader_poly_document_mesh_api.cpp`: public face-normal and mesh compilation API.
 - `quader_poly_document_mesh_internal.cpp`: private triangulation, generated-UV basis, and mesh/UV helpers.
 - `quader_poly_document_face_api.cpp`: face perimeter helpers and public UV entry points.
-- `quader_poly_document_selection_api.cpp`: selection conversion, containment, edge loops, and selection center.
+- `quader_poly_document_selection_api.cpp`: selection conversion, containment, mutation, and selection center.
+- `quader_poly_document_component_traversal.cpp`: component connectivity queries and typed loop direction.
 - `operations/`: one compiled owner file per public polygon operation.
 - `quader_poly_document_picking_overlay.cpp`: document-local picking and primitive overlay/preview data.
 - `quader_poly_document_*_helpers.cpp`: private topology, hull, OpenMesh, knife, UV, picking, bridge,
@@ -57,12 +58,24 @@ Keep backend-neutral topology query/mutation declarations in
 `quader_poly_document_topology_backend.hpp`; OpenMesh implementation types stay in
 `quader_poly_document_openmesh_helpers.cpp`. OpenMesh-named shims support focused backend tests.
 
-Component loop queries stay with `quader_poly_document_selection_api.cpp` and the neutral
-`document_topology.hpp` surface. Vertex loops return the live unique endpoints of the existing
-edge traversal. Face loops cross opposite edges of eligible quads on both sides of the seed;
-picked-face context chooses deterministic ordering without limiting the strip. Boundaries,
-non-quads, malformed identities/corners and nonmanifold crossings stop traversal. Coverage lives
-in `QdrDocumentLoopSelectionQueryTests` beside the existing edge-loop compatibility tests.
+Component loop queries live in `quader_poly_document_component_traversal.cpp` behind the neutral
+`document_topology.hpp` surface. Each query builds an immutable incidence index from stable vertex
+IDs and face corners. Edge loops use continuation relations, edge rings connect opposite quad
+edges, and face bands connect quad-axis nodes. Vertex loops return unique endpoints in traversal
+order. Geometry coordinates do not choose branches. Picked-face context chooses deterministic
+face order without limiting the strip; boundaries, non-quads, malformed identities/corners and
+nonmanifold crossings stop face traversal. Typed direction uses the selected active component,
+then an unambiguous already-selected loop or band, then the validated pointer hint.
+
+`QdrDocumentLoopSelectionQueryTests` covers component behavior and compatibility.
+`QdrDocumentOperationComponentTraversalTests` separately checks authored component sets under
+coordinate collapse, sparse ID remapping, storage permutation, corner rotation and winding
+changes, plus repeated direction recovery with unrelated selected components.
+
+The graph implementation was authored from Quader's interfaces and behavioral fixtures without
+consulting the preceding traversal implementation or Blender source. Earlier reference research
+and the preceding implementation remain in Git history; this engineering separation does not
+establish a formal clean-room or legal clearance.
 
 Use normal `.cpp` files and narrow helper headers; do not add permanent `.inc` implementation
 shards. Document overlay APIs emit primitive geometry only. Semantic host projection belongs in

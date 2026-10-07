@@ -511,6 +511,7 @@ if(QUADER_BUILD_TESTS AND QUADER_BUILD_NATIVE_APP)
         tests/modeling_domain/operation/qdr_document_operation_collapse_edges_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_collapse_faces_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_combine_faces_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_component_traversal_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_connect_edges_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_connect_vertices_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_delete_selection_tests.cpp
