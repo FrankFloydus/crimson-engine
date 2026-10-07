@@ -417,11 +417,9 @@ TEST(ModelingSelectionPerformanceTests,
           .rule = rule, .select_backfaces = true};
       auto targets = session.selection().query_modeling_marquee_hits(request);
       ASSERT_FALSE(targets.empty());
-      const bool front_can_skip = mode != QuaderSelectionMode::Face ||
-                                  rule == ModelingBoxSelectionRule::Contain;
       for (const auto &target : targets) {
         EXPECT_EQ(target.rectangle_target_only,
-                  front_can_skip && target.target.entity == front.value().entity);
+                  target.target.entity == front.value().entity);
       }
       // An unmarked empty witness remains a rejection, even in a mixed batch.
       ResolvedSelectionHit empty = targets.front();
@@ -475,8 +473,6 @@ TEST(ModelingSelectionPerformanceTests,
       for (const auto rule : {ModelingBoxSelectionRule::Contain,
                              ModelingBoxSelectionRule::Crossing}) {
         SCOPED_TRACE(static_cast<int>(rule));
-        const bool targets_only = mode != QuaderSelectionMode::Face ||
-                                  rule == ModelingBoxSelectionRule::Contain;
         for (const auto edit : {ModelingSelectionEdit::Replace, ModelingSelectionEdit::Add,
                                ModelingSelectionEdit::Remove, ModelingSelectionEdit::Toggle}) {
           SCOPED_TRACE(static_cast<int>(edit));
@@ -489,16 +485,12 @@ TEST(ModelingSelectionPerformanceTests,
             (void)session.selection().box_select(seed);
             const auto world_builds = session.modeling().world_picking_geometry_build_count();
             const auto targets = session.selection().query_modeling_marquee_hits(request);
-            if (targets_only) {
-              EXPECT_EQ(session.modeling().world_picking_geometry_build_count(), world_builds);
-            }
+            EXPECT_EQ(session.modeling().world_picking_geometry_build_count(), world_builds);
             for (const auto &target : targets) {
               EXPECT_EQ(target.target.domain, ResolvedSelectionDomain::ModelingComponent);
-              EXPECT_EQ(target.rectangle_target_only, targets_only);
-              if (targets_only) {
-                EXPECT_TRUE(target.visibility_witnesses.empty());
-                EXPECT_FALSE(target.world_position.has_value());
-              }
+              EXPECT_TRUE(target.rectangle_target_only);
+              EXPECT_TRUE(target.visibility_witnesses.empty());
+              EXPECT_FALSE(target.world_position.has_value());
             }
             // The native rectangle owner is the independent publication oracle:
             // it applies exact projected hits without the typed depth arbitration.
@@ -531,9 +523,7 @@ TEST(ModelingSelectionPerformanceTests,
               EXPECT_TRUE(quader_editor_core::polygon_selection_matches(
                   actual.objects[index].selection, expected.objects[index].selection));
             }
-            if (targets_only) {
-              EXPECT_EQ(session.modeling().world_picking_geometry_build_count(), world_builds);
-            }
+            EXPECT_EQ(session.modeling().world_picking_geometry_build_count(), world_builds);
           }
         }
       }

@@ -4852,6 +4852,114 @@ TEST(QtViewportSurfaceInputTests,
 }
 
 TEST(QtViewportSurfaceInputTests,
+     ComponentMarqueeUsesReleasePositionBeforeCoalescedPointerMotion) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-marquee-release-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  for (const bool crossing : {false, true}) {
+    SCOPED_TRACE(crossing);
+    NavigationPanelTestContext context;
+    ASSERT_NE(context.surface, nullptr);
+    auto &editor = context.editor;
+    const auto wall = editor.modeling().create_box(
+        {.min = {-10, -8, -4.5f}, .max = {10, 8, -4}}, "Background Wall");
+    ASSERT_TRUE(wall.ok()) << wall.error_message();
+    const auto slab = editor.modeling().create_box(
+        {.min = {-2, -2.5f, -0.25f}, .max = {2, 2.5f, 0.25f}},
+        "Foreground Slab");
+    ASSERT_TRUE(slab.ok()) << slab.error_message();
+    ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Select).ok());
+    ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+    ASSERT_TRUE(editor.selection().clear().ok());
+    ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
+    ASSERT_TRUE(context.camera.restore_perspective_pose(
+        {.eye = {0, 0, 12}, .target = {0, 0, 0}, .up = {0, 1, 0}}));
+    quader::ViewportSettings settings = quader::ViewportSettings::defaults();
+    (void)settings.set_bool_value(
+        quader::ViewportBoolSettingId::BackfaceSelection, true);
+    (void)context.session.viewport_workspace().update_control_defaults(settings, 1u);
+    context.process();
+    ASSERT_TRUE(context.session.viewport_workspace()
+                    .effective_settings(quader::ViewportPaneId::Perspective)
+                    .bool_value(quader::ViewportBoolSettingId::BackfaceSelection));
+
+    const auto *mesh = context.session.assets().mesh(slab.value().mesh);
+    ASSERT_NE(mesh, nullptr);
+    ASSERT_NE(mesh->authored_polygon_document, nullptr);
+    std::vector<int> expected_vertices;
+    for (const auto &vertex : mesh->authored_polygon_document->vertices) {
+      if (vertex.position.x > 0 && vertex.position.y > 0) {
+        expected_vertices.push_back(static_cast<int>(vertex.id));
+      }
+    }
+    std::ranges::sort(expected_vertices);
+    ASSERT_EQ(expected_vertices.size(), 2u);
+    const auto front = context.camera.project_world_point({2, 2.5f, 0.25f});
+    const auto back = context.camera.project_world_point({2, 2.5f, -0.25f});
+    ASSERT_TRUE(front.visible);
+    ASSERT_TRUE(back.visible);
+    const qreal scale = context.surface->input_device_pixel_ratio();
+    const QPointF front_local{front.position.x / scale, front.position.y / scale};
+    const QPointF upper_left{
+        std::min(front.position.x, back.position.x) / scale - 20,
+        std::min(front.position.y, back.position.y) / scale - 20};
+    const QPointF lower_right{
+        std::max(front.position.x, back.position.x) / scale + 20,
+        std::max(front.position.y, back.position.y) / scale + 20};
+    const QPointF start = crossing ? lower_right : upper_left;
+    const QPointF end = crossing ? upper_left : lower_right;
+    context.mouse(QEvent::MouseMove, front_local, Qt::NoButton, Qt::NoButton);
+    context.process();
+    ASSERT_EQ(context.session.modeling().selection_hover_summary().candidate_object_id,
+              slab.value().modeling_object_id);
+    context.session.history().clear();
+    const auto content_revision = context.session.modeling().content_revision();
+    const auto asset_revision = context.session.assets().revision();
+
+    context.mouse(QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
+    context.process();
+    context.mouse(QEvent::MouseMove, end, Qt::NoButton, Qt::LeftButton);
+    context.process();
+    ASSERT_EQ(context.panel.operation_input_context().selection_gesture,
+              quader::QuaderInputSelectionGesture::Box);
+    EXPECT_EQ(editor.selection().summary().selected_vertex_count, 0u);
+
+    // Both native packets arrive before the next input frame. The later
+    // cursor is back at the press, where its collapsed rectangle selects none.
+    context.mouse(QEvent::MouseButtonRelease, end, Qt::LeftButton, Qt::NoButton);
+    context.mouse(QEvent::MouseMove, start, Qt::NoButton, Qt::NoButton);
+    context.process();
+    const auto expect_released_selection = [&]() {
+      std::vector<int> actual_vertices;
+      for (const auto &object : context.session.modeling().export_selection().objects) {
+        for (const auto &vertex : object.selected_vertices) {
+          EXPECT_EQ(object.modeling_object_id, slab.value().modeling_object_id);
+          actual_vertices.push_back(static_cast<int>(vertex.id));
+        }
+      }
+      std::ranges::sort(actual_vertices);
+      EXPECT_EQ(actual_vertices, expected_vertices);
+      EXPECT_EQ(editor.selection().summary().selected_vertex_count, 2u);
+    };
+    expect_released_selection();
+    EXPECT_EQ(context.session.modeling().selection_hover_summary().candidate_object_id,
+              slab.value().modeling_object_id);
+    EXPECT_EQ(context.session.history().undo_count(), 0u);
+    const auto selection_revision = editor.selection().summary().selection_revision;
+    context.process();
+    expect_released_selection();
+    EXPECT_EQ(editor.selection().summary().selection_revision, selection_revision);
+    EXPECT_EQ(context.session.history().undo_count(), 0u);
+    EXPECT_EQ(context.session.modeling().content_revision(), content_revision);
+    EXPECT_EQ(context.session.assets().revision(), asset_revision);
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
      NativeMeshDoubleClicksCycleDepthThroughTheProductionPanelPath) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;

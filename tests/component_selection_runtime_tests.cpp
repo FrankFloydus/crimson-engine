@@ -7,18 +7,28 @@
 #include "render/component_selection_renderer.hpp"
 #include "render/filament_material_library.hpp"
 #include "render/png_texture_loader.hpp"
+#include "api/quader_api_session_internal_access.hpp"
+#include "api/quader_editor_api.hpp"
+#include "api/quader_polygon_document_internal_access.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/placement/scene_surface_query.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/viewport/viewport_scene_hit_policy.hpp"
+#include "viewport/viewport_camera_adapter.hpp"
 
 #include <gtest/gtest.h>
 #include <QString>
 #include <filament/Engine.h>
 #include <filament/Renderer.h>
 #include <filament/SwapChain.h>
+#include <quader/modeling/neutral/polygon/document_topology.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <filesystem>
+#include <utility>
+#include <vector>
 
 namespace quader {
 namespace {
@@ -194,6 +204,136 @@ TEST(ComponentSelectionRuntimeTests, DiscardedNearPlaneOccludersRequireTheExactC
       EXPECT_EQ(decision, ViewportSelectionDepthDecision::Accepted);
     }
   }
+}
+
+TEST(ComponentSelectionRuntimeTests,
+     VulkanPartialVertexMarqueeMatchesCpuSelectionBeforeBackgroundWall) {
+  if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_SELECTION_TESTS") != 1) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_SELECTION_TESTS=1 for Vulkan component marquee coverage";
+  }
+  ComponentSelectionRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(filament::Engine::Backend::VULKAN));
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+
+  quader_poly::Document wall_document;
+  std::array<quader_poly::ElementId, 4> wall_vertices{};
+  constexpr std::array kWallPositions{
+      QVec3{-12.0f, -10.0f, -4.0f}, QVec3{12.0f, -10.0f, -4.0f},
+      QVec3{12.0f, 10.0f, -4.0f}, QVec3{-12.0f, 10.0f, -4.0f}};
+  for (std::size_t index = 0u; index < wall_vertices.size(); ++index) {
+    wall_vertices[index] = quader_poly::add_vertex(wall_document, kWallPositions[index]);
+  }
+  (void)quader_poly::add_face(wall_document, wall_vertices);
+  const auto wall = editor.modeling().create_mesh(
+      QuaderPolygonDocumentInternalAccess::from_backend(std::move(wall_document)),
+      {.name = "Component Marquee Background Wall"});
+  ASSERT_TRUE(wall.ok()) << wall.error_message();
+
+  constexpr std::array kPositions{
+      QVec3{-2.0f, -2.5f, -0.25f}, QVec3{2.0f, -2.5f, -0.25f},
+      QVec3{2.0f, 2.5f, -0.25f}, QVec3{-2.0f, 2.5f, -0.25f},
+      QVec3{-2.0f, -2.5f, 0.25f}, QVec3{2.0f, -2.5f, 0.25f},
+      QVec3{2.0f, 2.5f, 0.25f}, QVec3{-2.0f, 2.5f, 0.25f}};
+  constexpr std::array kFaces{
+      std::array{4u, 5u, 6u, 7u}, std::array{0u, 3u, 2u, 1u},
+      std::array{1u, 2u, 6u, 5u}, std::array{0u, 4u, 7u, 3u},
+      std::array{3u, 7u, 6u, 2u}, std::array{0u, 1u, 5u, 4u}};
+  quader_poly::Document slab_document;
+  std::array<quader_poly::ElementId, 8> vertices{};
+  for (std::size_t index = 0u; index < vertices.size(); ++index) {
+    vertices[index] = quader_poly::add_vertex(slab_document, kPositions[index]);
+  }
+  for (const auto &face : kFaces) {
+    (void)quader_poly::add_face(slab_document,
+        std::array{vertices[face[0]], vertices[face[1]],
+                   vertices[face[2]], vertices[face[3]]});
+  }
+  const auto slab = editor.modeling().create_mesh(
+      QuaderPolygonDocumentInternalAccess::from_backend(std::move(slab_document)),
+      {.name = "Component Marquee Foreground Slab"});
+  ASSERT_TRUE(slab.ok()) << slab.error_message();
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Vertex).ok());
+  ASSERT_TRUE(editor.selection().clear().ok());
+
+  ViewportCameraController camera;
+  camera.set_viewport_size(800.0f, 600.0f);
+  camera.focus_origin(8.0f);
+  camera.set_view_direction({-0.35f, -0.3f, -1.0f});
+  const auto modeling_camera = ViewportCameraAdapter::modeling_camera(
+      camera, camera.viewport_size());
+  const ViewportSceneProjectionCamera projection(modeling_camera);
+  const auto upper_back = projection.project_world_point(kPositions[2]);
+  const auto upper_front = projection.project_world_point(kPositions[6]);
+  ASSERT_TRUE(upper_back.visible);
+  ASSERT_TRUE(upper_front.visible);
+  const QuaderBoxSelectRequest request{
+      .camera = {.orthographic = modeling_camera.orthographic,
+                 .origin = modeling_camera.origin,
+                 .x_axis = modeling_camera.x_axis,
+                 .y_axis = modeling_camera.y_axis,
+                 .z_axis = modeling_camera.z_axis,
+                 .viewport_size = modeling_camera.viewport_size,
+                 .orthographic_size = modeling_camera.orthographic_size,
+                 .fov_degrees = modeling_camera.fov_degrees},
+      .start = {std::max(upper_back.position.x, upper_front.position.x) + 35.0f,
+                std::max(upper_back.position.y, upper_front.position.y) + 80.0f},
+      .end = {std::min(upper_back.position.x, upper_front.position.x) - 15.0f,
+              std::min(upper_back.position.y, upper_front.position.y) - 15.0f},
+      .rule = QuaderBoxSelectionRule::Crossing,
+      .select_backfaces = false};
+  const auto selected_vertices = [&] {
+    std::vector<std::array<int, 2>> result;
+    for (const auto &object : session.modeling().export_selection().objects) {
+      for (const auto &vertex : object.selected_vertices) {
+        result.push_back({object.modeling_object_id, static_cast<int>(vertex.id)});
+      }
+    }
+    std::ranges::sort(result);
+    return result;
+  };
+  std::vector<std::array<int, 2>> expected{
+      {slab.value().modeling_object_id, static_cast<int>(vertices[2])},
+      {slab.value().modeling_object_id, static_cast<int>(vertices[6])}};
+  std::ranges::sort(expected);
+
+  // The public API runs native projection, scene occlusion and publication.
+  const auto cpu_selection = editor.selection().box_select(request);
+  ASSERT_TRUE(cpu_selection.ok()) << cpu_selection.error_message();
+  EXPECT_EQ(selected_vertices(), expected);
+  ASSERT_TRUE(editor.selection().clear().ok());
+  const auto surfaces = session.scene_surface_query().snapshot();
+  const auto geometry = surfaces.selection_depth_geometry();
+  const auto depth_camera = projection.selection_depth_camera();
+  const auto snapshot = harness.capture(geometry, depth_camera);
+  ASSERT_TRUE(snapshot);
+  ASSERT_TRUE(snapshot->conservative_coverage);
+  session.scene_surface_query().set_selection_depth_source(harness.selection.source());
+  ASSERT_EQ(session.scene_surface_query().snapshot().selection_depth_snapshot(depth_camera),
+            snapshot);
+
+  const auto before_gpu = session.scene_surface_query().stats().selection_depth;
+  const auto gpu_selection = editor.selection().box_select(request);
+  ASSERT_TRUE(gpu_selection.ok()) << gpu_selection.error_message();
+  EXPECT_EQ(selected_vertices(), expected);
+  const auto after_gpu = session.scene_surface_query().stats().selection_depth;
+  EXPECT_EQ(after_gpu.gpu_accepted_witnesses - before_gpu.gpu_accepted_witnesses, 2u);
+  EXPECT_EQ(after_gpu.gpu_rejected_witnesses, before_gpu.gpu_rejected_witnesses);
+  EXPECT_EQ(after_gpu.cpu_fallback_witnesses, before_gpu.cpu_fallback_witnesses);
+
+  // A retained readback for the old view must return to the exact CPU path.
+  ASSERT_TRUE(editor.selection().clear().ok());
+  auto moved_request = request;
+  moved_request.camera.origin.x += 0.01f;
+  const auto before_stale = session.scene_surface_query().stats().selection_depth;
+  const auto stale_selection = editor.selection().box_select(moved_request);
+  ASSERT_TRUE(stale_selection.ok()) << stale_selection.error_message();
+  EXPECT_EQ(selected_vertices(), expected);
+  const auto after_stale = session.scene_surface_query().stats().selection_depth;
+  EXPECT_EQ(after_stale.stale_snapshot_queries - before_stale.stale_snapshot_queries, 1u);
+  EXPECT_EQ(after_stale.cpu_fallback_witnesses - before_stale.cpu_fallback_witnesses, 2u);
+  EXPECT_EQ(after_stale.gpu_accepted_witnesses, before_stale.gpu_accepted_witnesses);
+  EXPECT_EQ(after_stale.gpu_rejected_witnesses, before_stale.gpu_rejected_witnesses);
 }
 
 } // namespace

@@ -444,6 +444,23 @@ Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
 - An empty spatial hover sample differs from explicit lifecycle clear. Component misses and leaving
   the viewport retain the last candidate mesh wire; meshes with selected components remain sticky
   independently. Object-mode hover emits no mesh outline and never changes click-owned selection.
+  Blank clicks, marquee threshold/release and stationary post-selection suppression also retire
+  only the component highlight. Preserve the mesh candidate and its Vertex dots through the retained
+  viewport submission; idle-hover tests alone miss these gesture paths. Mesh-body hover adopts a
+  candidate without fabricating a vertex/edge hit, while held paint remains component-hit-only.
+  A component marquee release owns its pointer sample, even over another mesh. Retain the candidate
+  through release and stationary frames; resume hover on fresh movement or a new interaction
+  context. Element-target suppression alone cannot cover vertex/edge body hits. Protect partial
+  rectangles over foreground geometry with a background mesh beneath the release point, checking
+  exact component IDs and retained presentation separately, including visible-only selection.
+  Commit rectangles at the matched release edge, never the aggregate frame cursor: Qt can batch
+  a later mouse move into the same frame and otherwise shrink the committed region to no hits.
+  Protect that ordering through actual Qt mouse events as well as synthetic controller frames.
+  Moving from an empty selected mesh to a new candidate must retire the old fallback wire, depth
+  stamps and unselected dots in retained rendering too. Carry the suppression through both outer
+  submission and inner frame signatures, retaining the canonical geometry across hover changes.
+  See the retained component presentation regressions in
+  [interaction tests](tests/viewport_interaction_controller_tests.cpp).
   Captured navigation keeps hover/picking suppressed through its release frame: that sample still
   contains the navigation cursor, and only the next frame has the restored real mouse position.
   A transient crosshair hit must never become a retained candidate; see the navigation-release

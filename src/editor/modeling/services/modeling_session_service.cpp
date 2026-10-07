@@ -1525,6 +1525,15 @@ class ModelingSessionService::Impl : private ModelingTransformDragPort {
     std::uint64_t reuse_count = 0u;
   };
 
+  /// Retains fallback eligibility without inspecting selection on cursor moves.
+  struct ComponentSourceWireFallbackCache final {
+    bool valid = false;
+    std::uint64_t content_revision = 0;
+    std::uint64_t selection_revision = 0;
+    std::uint64_t object_map_revision = 0;
+    int object_id = -1;
+  };
+
   /// Fixed-size Knife cursor facts consumed by the volatile overlay builder.
   struct KnifeHoverOverlayKey final {
     quader_editor_core::KnifeToolStatus status =
@@ -3541,7 +3550,9 @@ public:
         active_scene_selection_is_owned_outside_modeling();
     options.persistent_source_wire_object_id =
         persistent_tool_source_wire_object_id();
-    return overlay_service_.selection_overlay_signature(runtime_, options) ^
+    return overlay_service_.selection_overlay_signature(
+               runtime_, options,
+               suppressed_fallback_source_wire_object_id(options)) ^
            sdk_projection_adapter_.selection_overlay_preview_signature();
   }
 
@@ -3654,9 +3665,10 @@ public:
           active_scene_selection_is_owned_outside_modeling();
       options.persistent_source_wire_object_id =
           persistent_tool_source_wire_object_id();
-      if (const auto *base = overlay_service_.accepted_coordinate_base_frame(
-              *coordinates, selection_service_.viewport_visibility_revision(), options)) {
-        return *base;
+      if (auto base = overlay_service_.accepted_coordinate_base_frame(
+              *coordinates, selection_service_.viewport_visibility_revision(),
+              options, suppressed_fallback_source_wire_object_id(options))) {
+        return std::move(*base);
       }
     }
     return selection_overlay_frame(options);
@@ -10898,6 +10910,32 @@ public:
   }
 
 private:
+  [[nodiscard]] int suppressed_fallback_source_wire_object_id(
+      ModelingSelectionOverlayOptions options) const {
+    if (options.suppress_persistent_selection ||
+        runtime_.hover().candidate_object_id <= 0 ||
+        !is_component_selection_mode(sdk_projection_adapter_.selection_mode())) {
+      return -1;
+    }
+    auto &cache = component_source_wire_fallback_cache_;
+    const std::uint64_t current_content_revision = content_revision();
+    const std::uint64_t current_selection_revision = selection_revision();
+    const std::uint64_t current_object_map_revision = object_registry_.revision();
+    if (!cache.valid || cache.content_revision != current_content_revision ||
+        cache.selection_revision != current_selection_revision ||
+        cache.object_map_revision != current_object_map_revision) {
+      cache.object_id =
+          ModelingOverlayService::fallback_active_source_wire_object_id(
+              selection_projection_snapshot());
+      cache.content_revision = current_content_revision;
+      cache.selection_revision = current_selection_revision;
+      cache.object_map_revision = current_object_map_revision;
+      cache.valid = true;
+    }
+    return ModelingOverlayService::suppressed_fallback_source_wire_object_id(
+        cache.object_id, runtime_.hover(), options);
+  }
+
   bool set_cutting_tool_hover_candidate(int object_id) {
     auto hover = runtime_.hover();
     if (hover.candidate_object_id == object_id) return false;
@@ -10947,6 +10985,7 @@ private:
   }
 
   void invalidate_selection_overlay_caches() const override {
+    component_source_wire_fallback_cache_.valid = false;
     overlay_service_.invalidate();
     invalidate_volatile_overlay_cache();
   }
@@ -11375,6 +11414,7 @@ private:
   mutable ViewportCurvePickCache curve_box_pick_cache_;
   SelectionProjectionService selection_projection_service_;
   mutable ModelingOverlayService overlay_service_;
+  mutable ComponentSourceWireFallbackCache component_source_wire_fallback_cache_;
   mutable VolatileOverlayCache volatile_overlay_cache_;
   mutable std::uint64_t volatile_overlay_runtime_revision_ = 0u;
   mutable ModelingToolPreviewWorkStats tool_preview_work_stats_;

@@ -214,6 +214,226 @@ TEST(SceneSurfaceQueryTests,
 }
 
 TEST(SceneSurfaceQueryTests,
+     RenderSidednessPreservesExplicitRayPoliciesForFrontAndBackFaces) {
+  for (const bool double_sided : {false, true}) {
+    SCOPED_TRACE(testing::Message() << "double_sided=" << double_sided);
+    SceneSurfaceQueryHarness harness;
+    const quader::AssetId mesh =
+        harness.add_mesh(make_surface_mesh(0.0f, true));
+    const quader::EntityId entity =
+        harness.add_mesh_entity(mesh, "Sided Surface");
+    ASSERT_TRUE(harness.session.scene().set_mesh(
+        entity, {.mesh = mesh, .double_sided = double_sided}));
+    const auto snapshot = harness.query.snapshot();
+    ASSERT_EQ(snapshot.participants().size(), 1u);
+    EXPECT_EQ(snapshot.participants().front().double_sided, double_sided);
+    const auto geometry = snapshot.selection_depth_geometry();
+    ASSERT_NE(geometry, nullptr);
+    ASSERT_EQ(geometry->triangles.size(), 1u);
+
+    for (const bool front_face : {false, true}) {
+      SCOPED_TRACE(testing::Message() << "front_face=" << front_face);
+      quader::SceneSurfaceRaycastRequest request{
+          .world_origin = {0.0f, front_face ? 5.0f : -5.0f, 0.0f},
+          .world_direction = {0.0f, front_face ? -1.0f : 1.0f, 0.0f},
+      };
+
+      // Placement and snapping retain their explicitly two-sided ray contract.
+      const auto unrestricted = snapshot.nearest_hit(request);
+      ASSERT_TRUE(unrestricted.has_value());
+      EXPECT_EQ(unrestricted->participant.display_entity, entity);
+      EXPECT_NEAR(unrestricted->distance, 5.0f, kTestTolerance);
+
+      request.respect_render_sidedness = true;
+      const auto rendered = snapshot.nearest_hit(request);
+      EXPECT_EQ(rendered.has_value(), front_face || double_sided);
+      const auto raster_candidate = snapshot.selection_depth_triangle_distance(
+          1u, request.world_origin, request.world_direction);
+      EXPECT_EQ(raster_candidate.has_value(), rendered.has_value())
+          << "A GPU triangle ID must not turn a culled back face into an occluder.";
+      if (rendered.has_value()) {
+        EXPECT_EQ(rendered->participant.display_entity, entity);
+        EXPECT_NEAR(rendered->distance, 5.0f, kTestTolerance);
+        ASSERT_TRUE(raster_candidate.has_value());
+        EXPECT_NEAR(*raster_candidate, 5.0f, kTestTolerance);
+      }
+
+      // An explicit front-face-only query remains stricter than double-sided
+      // rendering, whether the optional render restriction is enabled or not.
+      request.include_backfaces = false;
+      EXPECT_EQ(snapshot.nearest_hit(request).has_value(), front_face);
+      request.respect_render_sidedness = false;
+      EXPECT_EQ(snapshot.nearest_hit(request).has_value(), front_face);
+    }
+  }
+}
+
+TEST(SceneSurfaceQueryTests,
+     BackFacingSingleSidedRoomWallDoesNotHideFarRenderedSurface) {
+  SceneSurfaceQueryHarness harness;
+  const quader::AssetId room_mesh = harness.add_mesh(make_surface_mesh());
+  const quader::AssetId target_mesh =
+      harness.add_mesh(make_surface_mesh(0.0f, true));
+  const quader::EntityId room = harness.add_mesh_entity(
+      room_mesh, "Room Wall Seen From Inside", {0.0f, 2.0f, 0.0f});
+  const quader::EntityId target =
+      harness.add_mesh_entity(target_mesh, "Visible Target");
+  const auto snapshot = harness.query.snapshot();
+  const auto geometry = snapshot.selection_depth_geometry();
+  ASSERT_NE(geometry, nullptr);
+  ASSERT_EQ(geometry->triangles.size(), 2u);
+
+  auto request = downward_ray({0.0f, 5.0f, 0.0f});
+  const auto placement_hit = snapshot.nearest_hit(request);
+  ASSERT_TRUE(placement_hit.has_value());
+  EXPECT_EQ(placement_hit->participant.display_entity, room);
+  EXPECT_NEAR(placement_hit->distance, 3.0f, kTestTolerance);
+
+  request.respect_render_sidedness = true;
+  const auto visible_hit = snapshot.nearest_hit(request);
+  ASSERT_TRUE(visible_hit.has_value());
+  EXPECT_EQ(visible_hit->participant.display_entity, target);
+  EXPECT_NEAR(visible_hit->distance, 5.0f, kTestTolerance);
+  EXPECT_FALSE(snapshot.selection_depth_triangle_distance(
+      1u, request.world_origin, request.world_direction).has_value());
+  const auto target_distance = snapshot.selection_depth_triangle_distance(
+      2u, request.world_origin, request.world_direction);
+  ASSERT_TRUE(target_distance.has_value());
+  EXPECT_NEAR(*target_distance, 5.0f, kTestTolerance);
+}
+
+TEST(SceneSurfaceQueryTests,
+     ReflectedOrdinaryMeshesAndFormalOccurrencesUseRenderedWorldWinding) {
+  for (const bool formal_occurrence : {false, true}) {
+    for (const bool reflected : {false, true}) {
+      for (const bool double_sided : {false, true}) {
+        SCOPED_TRACE(testing::Message()
+                     << "formal_occurrence=" << formal_occurrence
+                     << " reflected=" << reflected
+                     << " double_sided=" << double_sided);
+        SceneSurfaceQueryHarness harness;
+        const auto mesh = harness.add_mesh(make_surface_mesh(0.0f, true));
+        quader::EntityId display_entity = quader::kInvalidEntityId;
+        quader::EntityId geometry_entity = quader::kInvalidEntityId;
+        if (formal_occurrence) {
+          const auto formal = harness.add_formal_instance(mesh, false);
+          display_entity = formal.first_occurrence;
+          geometry_entity = formal.member;
+        } else {
+          display_entity = harness.add_mesh_entity(mesh, "Reflected Surface");
+          geometry_entity = display_entity;
+        }
+        ASSERT_TRUE(harness.session.scene().set_mesh(
+            geometry_entity, {.mesh = mesh, .double_sided = double_sided}));
+        ASSERT_TRUE(harness.session.scene().set_transform(
+            display_entity,
+            {.position = {3.0f, 1.0f, 0.0f},
+             .scale = {reflected ? -2.0f : 2.0f, 1.0f, 0.5f}}));
+        const auto snapshot = harness.query.snapshot();
+        ASSERT_EQ(snapshot.participants().size(), 1u);
+        EXPECT_EQ(snapshot.participants().front().id.display_entity,
+                  display_entity);
+        EXPECT_EQ(snapshot.participants().front().id.geometry_entity,
+                  geometry_entity);
+        EXPECT_EQ(snapshot.participants().front().double_sided, double_sided);
+        ASSERT_EQ(snapshot.selection_depth_geometry()->triangles.size(), 1u);
+
+        for (const bool from_above : {false, true}) {
+          SCOPED_TRACE(testing::Message() << "from_above=" << from_above);
+          const quader::SceneSurfaceRaycastRequest request{
+              .world_origin = {3.0f, from_above ? 6.0f : -4.0f, 0.0f},
+              .world_direction = {0.0f, from_above ? -1.0f : 1.0f, 0.0f},
+              .respect_render_sidedness = true,
+          };
+          const bool rendered_face = double_sided || from_above != reflected;
+          const auto hit = snapshot.nearest_hit(request);
+          EXPECT_EQ(hit.has_value(), rendered_face);
+          const auto raster_candidate = snapshot.selection_depth_triangle_distance(
+              1u, request.world_origin, request.world_direction);
+          EXPECT_EQ(raster_candidate.has_value(), rendered_face);
+          if (hit.has_value()) {
+            EXPECT_EQ(hit->participant.display_entity, display_entity);
+            EXPECT_EQ(hit->participant.geometry_entity, geometry_entity);
+            EXPECT_NEAR(hit->distance, 5.0f, kTestTolerance);
+          }
+          if (raster_candidate.has_value()) {
+            EXPECT_NEAR(*raster_candidate, 5.0f, kTestTolerance);
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(SceneSurfaceQueryTests,
+     SidednessChangesFreezeOldQueriesInvalidateGpuIdentityAndReuseGeometry) {
+  for (const bool formal_occurrence : {false, true}) {
+    SCOPED_TRACE(testing::Message() << "formal_occurrence=" << formal_occurrence);
+    SceneSurfaceQueryHarness harness;
+    const auto mesh = harness.add_mesh(make_surface_mesh());
+    quader::EntityId geometry_entity = quader::kInvalidEntityId;
+    quader::QVec3 ray_origin{0.0f, 5.0f, 0.0f};
+    if (formal_occurrence) {
+      const auto formal = harness.add_formal_instance(mesh, false);
+      geometry_entity = formal.member;
+      ray_origin.x = -5.0f;
+    } else {
+      geometry_entity = harness.add_mesh_entity(mesh, "Changing Sidedness");
+    }
+    auto request = downward_ray(ray_origin);
+    request.respect_render_sidedness = true;
+
+    const auto single_sided = harness.query.snapshot();
+    const auto single_sided_geometry = single_sided.selection_depth_geometry();
+    const auto initial_stats = harness.query.stats();
+    ASSERT_NE(single_sided_geometry, nullptr);
+    ASSERT_EQ(single_sided_geometry->triangles.size(), 1u);
+    EXPECT_FALSE(single_sided.nearest_hit(request).has_value());
+    EXPECT_FALSE(single_sided.selection_depth_triangle_distance(
+        1u, request.world_origin, request.world_direction).has_value());
+
+    ASSERT_TRUE(harness.session.scene().set_mesh(
+        geometry_entity, {.mesh = mesh, .double_sided = true}));
+    const auto double_sided = harness.query.snapshot();
+    const auto double_sided_geometry = double_sided.selection_depth_geometry();
+    ASSERT_NE(double_sided_geometry, nullptr);
+    EXPECT_NE(double_sided.revision(), single_sided.revision());
+    EXPECT_NE(double_sided_geometry.get(), single_sided_geometry.get());
+    EXPECT_TRUE(double_sided.nearest_hit(request).has_value());
+    EXPECT_TRUE(double_sided.selection_depth_triangle_distance(
+        1u, request.world_origin, request.world_direction).has_value());
+    EXPECT_FALSE(single_sided.nearest_hit(request).has_value());
+    EXPECT_FALSE(single_sided.selection_depth_triangle_distance(
+        1u, request.world_origin, request.world_direction).has_value());
+    EXPECT_EQ(harness.query.stats().blas_build_count, initial_stats.blas_build_count);
+
+    ASSERT_TRUE(harness.session.scene().set_mesh(
+        geometry_entity, {.mesh = mesh, .double_sided = false}));
+    const auto restored = harness.query.snapshot();
+    const auto restored_geometry = restored.selection_depth_geometry();
+    EXPECT_NE(restored.revision(), double_sided.revision());
+    EXPECT_NE(restored_geometry.get(), double_sided_geometry.get());
+    EXPECT_FALSE(restored.nearest_hit(request).has_value());
+    EXPECT_FALSE(restored.selection_depth_triangle_distance(
+        1u, request.world_origin, request.world_direction).has_value());
+    EXPECT_TRUE(double_sided.nearest_hit(request).has_value());
+    EXPECT_TRUE(double_sided.selection_depth_triangle_distance(
+        1u, request.world_origin, request.world_direction).has_value());
+
+    const auto changed_stats = harness.query.stats();
+    EXPECT_EQ(changed_stats.snapshot_build_count,
+              initial_stats.snapshot_build_count + 2u);
+    EXPECT_EQ(changed_stats.blas_build_count, initial_stats.blas_build_count);
+    const auto unchanged = harness.query.snapshot();
+    EXPECT_EQ(unchanged.revision(), restored.revision());
+    EXPECT_EQ(unchanged.selection_depth_geometry().get(), restored_geometry.get());
+    EXPECT_EQ(harness.query.stats().snapshot_build_count,
+              changed_stats.snapshot_build_count);
+    EXPECT_EQ(harness.query.stats().blas_build_count, changed_stats.blas_build_count);
+  }
+}
+
+TEST(SceneSurfaceQueryTests,
      IdenticalPayloadsAndFormalOccurrencesShareOneLocalBvh) {
   SceneSurfaceQueryHarness harness;
   const quader::MeshAsset source = make_surface_mesh();

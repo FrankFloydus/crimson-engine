@@ -339,7 +339,7 @@ ResolvedSelectionPointPick resolve_selection_point_pick(
   const bool scene_mode = mode == ViewportSelectionMode::Object ||
                           mode == ViewportSelectionMode::Group;
   const bool component_body_enabled =
-      include_component_body && !scene_mode && request.click_count > 0;
+      include_component_body && !scene_mode;
   const std::vector<ViewportSceneHitCandidate> hits =
       collect_selection_point_hits(selection, frame, local_mouse, request,
                                    curve, surface_scratch, false, false,
@@ -487,7 +487,8 @@ pick_selection(QuaderEditorApi &editor, ViewportInputRouter &input_router,
         "Viewport resolved depth selection");
   }
   ResolvedSelectionPointPick resolved = resolve_selection_point_pick(
-      selection, frame, local_mouse, request, curve, surface_scratch, true);
+      selection, frame, local_mouse, request, curve, surface_scratch,
+      request.click_count > 0);
   if (curve_controls_only &&
       (!resolved.winner.has_value() ||
        resolved.winner->domain !=
@@ -683,6 +684,7 @@ void ViewportSelectionInteraction::reset() {
   curve_control_box_active_ = false;
   committed_marquee_.reset();
   hover_suppressed_target_.reset();
+  component_marquee_hover_barrier_.reset();
   paint_selection_active_ = false;
   viewport_hover_state_initialized_ = false;
   viewport_hovered_last_frame_ = false;
@@ -1104,6 +1106,25 @@ void ViewportSelectionInteraction::handle_frame(
       can_use_selection_fallback && frame.input.viewport_hovered;
   const bool can_cycle_depth =
       can_pick && depth_cycle_context_available(frame);
+  if (component_marquee_hover_barrier_.has_value()) {
+    const ComponentMarqueeHoverBarrier &barrier =
+        *component_marquee_hover_barrier_;
+    if (barrier.local.x != frame.input.mouse_local.x ||
+        barrier.local.y != frame.input.mouse_local.y || frame.left_pressed ||
+        !frame.input.viewport_hovered || navigation_active ||
+        frame.input_result.camera_changed || frame.input_result.view_changed ||
+        frame.input.pointer_interaction_canceled ||
+        frame.input_result.cancel_requested ||
+        barrier.mode != frame.selection_state.summary.mode ||
+        barrier.tool != frame.input_router.state().active_tool ||
+        barrier.scene_session_id !=
+            editor.scene_documents().active_scene_id().value_or(SceneSessionId{})) {
+      component_marquee_hover_barrier_.reset();
+      if (tool_hover != nullptr) {
+        tool_hover->invalidate();
+      }
+    }
+  }
   if (lasso_context_.has_value() &&
       (!can_use_selection_fallback || !frame.input.viewport_focused ||
        frame.input_result.view_changed ||
@@ -1172,9 +1193,9 @@ void ViewportSelectionInteraction::handle_frame(
         local_mouse.y != frame.input.mouse_local.y) {
       return;
     }
-    // Held paint cannot run the release-time hover suppression comparison.
-    // Consume its post-pick revision explicitly so the stationary pointer
-    // does not paint again on the next frame.
+    // Held paint and a completed component marquee own this pointer sample.
+    // Consume the post-selection revision so an unchanged frame does not
+    // immediately perform another spatial query.
     (void)tool_hover->claim(ModelingBoxDragState::Idle);
   };
 
@@ -1216,7 +1237,9 @@ void ViewportSelectionInteraction::handle_frame(
   };
   auto clear_hover = [&]() { publish_empty_hover(false); };
   auto clear_spatial_hover = [&]() { publish_empty_hover(true); };
-  auto preview_hover = [&](std::optional<ResolvedSelectionTarget> target) {
+  auto preview_hover = [&](std::optional<ResolvedSelectionTarget> target,
+                           std::optional<ResolvedComponentBodyTarget> body =
+                               std::nullopt) {
     const bool curve_control = target &&
         target->sub_selection_kind == EditorSubSelectionKind::CurveControl &&
         target->sub_element.has_value();
@@ -1226,7 +1249,8 @@ void ViewportSelectionInteraction::handle_frame(
         selection_owner(editor).preview_spatial_hover(
             std::move(target),
             pointer_edit_operation(frame) ==
-                quader_editor_core::SelectionEditOperation::Remove);
+                quader_editor_core::SelectionEditOperation::Remove,
+            std::move(body));
     if (!hover.ok) {
       LOG_ERROR("Viewport hover failed: {}",
                 hover.message.empty() ? "Hover failed." : hover.message);
@@ -1250,7 +1274,9 @@ void ViewportSelectionInteraction::handle_frame(
               selection_owner(editor), frame, local_mouse, hover_request,
               curve, &scene_surface_scratch_);
         }
-        clear_hover();
+        // Selection gestures retire the element highlight, not the mesh
+        // editing context. Empty clicks must leave its wire and vertices ready.
+        clear_spatial_hover();
       };
 
   if (before_tool.selection_click_requested && can_pick &&
@@ -1438,21 +1464,25 @@ void ViewportSelectionInteraction::handle_frame(
       // Mouse motion only presents the marquee. Resolving and publishing a
       // selection here would synchronously rebuild SDK, scene, UI, and overlay
       // state for every changing hit set; the final rectangle commits below.
-      if (hover_clear_state_ != HoverClearState::FullyCleared) {
-        clear_hover();
+      if (hover_clear_state_ == HoverClearState::Armed) {
+        clear_spatial_hover();
       }
     }
   }
 
   const bool release_provenance_available =
       !frame.input.pointer_released_edges.empty();
+  const ViewportPointerButtonEdge *box_release =
+      box_pointer_.has_value() && frame.left_released
+          ? (lasso_context_.has_value()
+                 ? lasso_release_edge(frame.input, box_pointer_->press)
+                 : viewport_pointer_edge_after(frame.input.pointer_released_edges,
+                                                box_pointer_->press))
+          : nullptr;
   const bool matching_box_release =
       box_pointer_.has_value() && frame.left_released &&
       (!release_provenance_available || box_pointer_->press.sequence == 0u ||
-       (lasso_context_.has_value()
-            ? lasso_release_edge(frame.input, box_pointer_->press)
-            : viewport_pointer_edge_after(frame.input.pointer_released_edges,
-                                           box_pointer_->press)) != nullptr);
+       box_release != nullptr);
   const bool exact_box_press =
       box_pointer_.has_value() && box_pointer_->press.sequence != 0u;
   const bool mismatched_box_release =
@@ -1474,8 +1504,11 @@ void ViewportSelectionInteraction::handle_frame(
       (matching_box_release || box_button_became_idle)) {
     QDR_PROFILE_SCOPE("Viewport selection finish box");
     const bool lasso_commit = lasso_context_.has_value();
+    // The host can batch a release and later pointer motion into one frame.
+    // Only the matching release edge may close the captured rectangle.
     const QVec2 release_local = lasso_commit
-        ? box_state_.end : frame.input.mouse_local;
+        ? box_state_.end
+        : box_release != nullptr ? box_release->local : frame.input.mouse_local;
     const quader_editor_core::SelectionBoxCommit commit =
         quader_editor_core::finish_selection_box(
             box_state_, release_local, box_edit_,
@@ -1511,8 +1544,24 @@ void ViewportSelectionInteraction::handle_frame(
                     : EditorSubSelectionKind::None,
                 &scene_surface_scratch_);
       last_selection_command_result_ = applied.command;
-      suppress_hover_after_selection(commit.end, hovered_before_selection);
-      refresh_hover_work_after_selection(commit.end, false);
+      const bool component_marquee = is_component_selection_mode(baseline.mode);
+      if (component_marquee) {
+        // Preserve the gesture's mesh context through release and idle frames,
+        // including body-only hits with no component target to suppress. A
+        // subsequent pointer movement may adopt another mesh normally.
+        clear_spatial_hover();
+        hover_suppressed_target_.reset();
+        component_marquee_hover_barrier_ = ComponentMarqueeHoverBarrier{
+            .local = commit.end,
+            .mode = frame.selection_state.summary.mode,
+            .tool = frame.input_router.state().active_tool,
+            .scene_session_id = editor.scene_documents().active_scene_id().value_or(
+                SceneSessionId{}),
+        };
+      } else {
+        suppress_hover_after_selection(commit.end, hovered_before_selection);
+      }
+      refresh_hover_work_after_selection(commit.end, component_marquee);
     } else if (can_pick || include_curve_controls) {
       const std::optional<ViewportSelectionApplyResult> applied =
           commit_pick_selection(
@@ -1584,6 +1633,7 @@ void ViewportSelectionInteraction::handle_frame(
   const bool can_hover = selection_fallback_active &&
                          frame.input.viewport_hovered && !suppress_hover_work &&
                          !box_dragging && !frame.left_down &&
+                         !component_marquee_hover_barrier_.has_value() &&
                          !tool_result.handled;
   if (can_hover && !claim_hover_work()) {
     return;
@@ -1601,7 +1651,7 @@ void ViewportSelectionInteraction::handle_frame(
     if (hover == hover_suppressed_target_) {
       if (pointer_edit_operation(frame) !=
           quader_editor_core::SelectionEditOperation::Remove) {
-        clear_hover();
+        clear_spatial_hover();
         hover_suppressed_this_frame = true;
       }
     } else {
@@ -1615,11 +1665,10 @@ void ViewportSelectionInteraction::handle_frame(
     const ModelingPickSelectRequest hover_request = make_pick_select_request(
         frame, frame.input.mouse_local,
         frame.input.modifiers, 0, true, false);
-    const std::optional<ResolvedSelectionTarget> hover_target =
-        resolve_selection_point_target(selection_owner(editor), frame,
-                                       frame.input.mouse_local, hover_request,
-                                       curve, &scene_surface_scratch_);
-    preview_hover(hover_target);
+    const ResolvedSelectionPointPick hover = resolve_selection_point_pick(
+        selection_owner(editor), frame, frame.input.mouse_local, hover_request,
+        curve, &scene_surface_scratch_, true);
+    preview_hover(hover.winner, hover.component_body_target);
     return;
   }
 
@@ -1659,6 +1708,7 @@ void ViewportSelectionInteraction::handle_frame(
         requires_full_hover_clear));
   if (should_clear_hover && (needs_spatial_clear || needs_full_clear)) {
     hover_suppressed_target_.reset();
+    component_marquee_hover_barrier_.reset();
     if (tool_hover != nullptr &&
         frame.input_router.state().active_tool == ViewportToolId::Knife) {
       const ModelingCommandResult clear_knife = tool_hover->clear_knife_hover();

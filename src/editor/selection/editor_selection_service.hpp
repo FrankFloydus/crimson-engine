@@ -282,11 +282,13 @@ public:
   /**
    * Publishes one spatial hover sample. An empty sample clears the immediate
    * element target while retaining the current component-mode mesh candidate;
-   * explicit lifecycle clears still use clear_hover().
+   * a mesh-body hit adopts a candidate without inventing a component target.
+   * Explicit lifecycle clears still use clear_hover().
    */
   ModelingCommandResult preview_spatial_hover(
       std::optional<ResolvedSelectionTarget> target,
-      bool selected_modifier_pressed = false);
+      bool selected_modifier_pressed = false,
+      std::optional<ResolvedComponentBodyTarget> component_body = std::nullopt);
   [[nodiscard]] std::optional<ResolvedSelectionTarget>
   resolved_hover_target() const { return resolved_hover_target_; }
   /**

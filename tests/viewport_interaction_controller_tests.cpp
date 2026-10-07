@@ -34,6 +34,7 @@
 #include "editor/viewport/viewport_scene_projection.hpp"
 #include "editor/viewport/viewport_selection_interaction.hpp"
 #include "render/viewport_overlay_policy.hpp"
+#include "render/overlay/viewport_overlay_submission_coordinator.hpp"
 #include "render/scene_render_extraction.hpp"
 #include "render/scene_render_light_refresh.hpp"
 #include "editor/session/scene_session.hpp"
@@ -931,6 +932,199 @@ create_box_at(ViewportInteractionHarness &harness, quader::QVec3 center) {
           "Viewport Interaction Box");
   EXPECT_TRUE(box.ok) << box.message;
   return box.value();
+}
+
+/// Retains exactly the styled streams submitted by the viewport coordinator.
+class ComponentSelectionPresentation final
+    : public quader::ViewportOverlaySelectionFrameProvider,
+      public quader::ViewportOverlaySubmissionTarget {
+public:
+  ComponentSelectionPresentation(
+      ViewportInteractionHarness &harness,
+      quader::ViewportOverlaySelectionContext context)
+      : harness_(harness), context_(context) {}
+
+  quader::ViewportOverlaySubmissionResult submit() {
+    auto &modeling = harness_.session.modeling();
+    const auto volatile_overlay = modeling.volatile_overlay_snapshot();
+    return coordinator_.submit(
+        {
+            .viewport_index = 0u,
+            .layer_mask = 1u,
+            .camera = quader::ViewportCameraAdapter::overlay_camera(
+                harness_.camera, harness_.input.viewport_size),
+            .selection_source =
+                {
+                    .source_identity =
+                        reinterpret_cast<std::uintptr_t>(&modeling),
+                    .content_revision = modeling.content_revision(),
+                    .selection_revision = modeling.selection_revision(),
+                    .scene_revision = harness_.session.scene().revision(),
+                    .asset_revision = harness_.session.assets().revision(),
+                    .overlay_signature = modeling.selection_overlay_signature(),
+                    .selection_context = context_,
+                },
+            .selection_frame_provider = this,
+            .volatile_modeling_overlay_frame = volatile_overlay.frame.get(),
+            .volatile_modeling_source =
+                {
+                    .source_identity = volatile_overlay.source.source_identity,
+                    .publication_revision =
+                        volatile_overlay.source.publication_revision,
+                },
+            .scene_selection_mode = quader::RenderOverlaySelectionMode::Component,
+            .style_selection_context = context_,
+            .overlays_visible = true,
+            .selection_dimensions_visible = false,
+        },
+        harness_.settings, *this);
+  }
+
+  [[nodiscard]] quader::ViewportOverlayFrame
+  build_selection_overlay_frame() const override {
+    return harness_.session.modeling().selection_overlay_render_frame();
+  }
+
+  [[nodiscard]] quader::ViewportOverlayCameraUpdate update_overlay_cameras(
+      std::size_t, std::uint8_t, quader::ViewportOverlayCamera) override {
+    return {true, true};
+  }
+
+  void submit_persistent_overlay(std::size_t, std::uint8_t,
+      quader::ViewportOverlayFrame frame,
+      quader::ViewportOverlayCamera) override {
+    persistent_ = std::move(frame);
+  }
+
+  void submit_dynamic_overlay(std::size_t, std::uint8_t,
+      quader::ViewportOverlayFrame frame,
+      quader::ViewportOverlayCamera) override {
+    dynamic_ = std::move(frame);
+  }
+
+  [[nodiscard]] std::size_t wire_count(int object_id) const {
+    using Endpoint = std::pair<int, std::array<float, 3>>;
+    std::vector<std::array<Endpoint, 2>> wires;
+    for (const auto *frame : {&persistent_, &dynamic_}) {
+      for (const auto &line : frame->lines) {
+        if (line.element.object_id != object_id ||
+            (line.layer != quader::ViewportOverlayLayer::SourceWire &&
+             line.layer != quader::ViewportOverlayLayer::SelectedEdge &&
+             line.layer != quader::ViewportOverlayLayer::SelectedFaceEdge)) {
+          continue;
+        }
+        std::array<Endpoint, 2> endpoints{
+            Endpoint{line.element.edge_a,
+                     {line.start.x, line.start.y, line.start.z}},
+            Endpoint{line.element.edge_b,
+                     {line.end.x, line.end.y, line.end.z}}};
+        std::ranges::sort(endpoints);
+        wires.push_back(endpoints);
+      }
+    }
+    std::ranges::sort(wires);
+    return static_cast<std::size_t>(
+        std::unique(wires.begin(), wires.end()) - wires.begin());
+  }
+
+  [[nodiscard]] std::size_t vertex_count(int object_id) const {
+    std::vector<std::pair<int, std::array<float, 3>>> vertices;
+    for (const auto *frame : {&persistent_, &dynamic_}) {
+      for (const auto &point : frame->points) {
+        if (point.element.object_id == object_id &&
+            (point.layer == quader::ViewportOverlayLayer::UnselectedVertex ||
+             point.layer == quader::ViewportOverlayLayer::SelectedVertex)) {
+          vertices.push_back({point.element.vertex_id,
+              {point.position.x, point.position.y, point.position.z}});
+        }
+      }
+    }
+    std::ranges::sort(vertices);
+    return static_cast<std::size_t>(
+        std::unique(vertices.begin(), vertices.end()) - vertices.begin());
+  }
+
+  [[nodiscard]] std::vector<std::array<int, 3>> selected_elements() const {
+    std::vector<std::array<int, 3>> selected;
+    std::vector<std::array<int, 3>> unselected_vertices;
+    for (const auto *frame : {&persistent_, &dynamic_}) {
+      if (context_ == quader::ViewportOverlaySelectionContext::Vertex) {
+        for (const auto &point : frame->points) {
+          const std::array key{point.element.object_id, point.element.vertex_id, 0};
+          if (point.layer == quader::ViewportOverlayLayer::SelectedVertex) {
+            selected.push_back(key);
+            EXPECT_TRUE(point.style_role == quader::ViewportOverlayStyleRole::SelectedVertex ||
+                        point.style_role == quader::ViewportOverlayStyleRole::ActiveSelectedVertex ||
+                        point.style_role == quader::ViewportOverlayStyleRole::LayerDefault);
+            EXPECT_GT(point.color >> 24u, 0u);
+            EXPECT_GT(point.size_pixels, 0.0f);
+          } else if (point.layer == quader::ViewportOverlayLayer::UnselectedVertex) {
+            unselected_vertices.push_back(key);
+          }
+        }
+      } else if (context_ == quader::ViewportOverlaySelectionContext::Edge) {
+        for (const auto &line : frame->lines) {
+          if (line.layer == quader::ViewportOverlayLayer::SelectedEdge) {
+            selected.push_back({line.element.object_id,
+                std::min(line.element.edge_a, line.element.edge_b),
+                std::max(line.element.edge_a, line.element.edge_b)});
+            EXPECT_GT(line.color >> 24u, 0u);
+            EXPECT_GT(line.width_pixels, 0.0f);
+          }
+        }
+      } else if (context_ == quader::ViewportOverlaySelectionContext::Face) {
+        for (const auto &triangle : frame->triangles) {
+          if (triangle.layer == quader::ViewportOverlayLayer::SelectedVisibleFace ||
+              triangle.layer == quader::ViewportOverlayLayer::SelectedXrayFace) {
+            selected.push_back({triangle.element.object_id, triangle.element.face_id, 0});
+            EXPECT_GT(triangle.color >> 24u, 0u);
+          }
+        }
+      }
+    }
+    std::ranges::sort(selected);
+    selected.erase(std::unique(selected.begin(), selected.end()), selected.end());
+    for (const auto &unselected : unselected_vertices) {
+      EXPECT_FALSE(std::ranges::binary_search(selected, unselected));
+    }
+    return selected;
+  }
+
+private:
+  ViewportInteractionHarness &harness_;
+  quader::ViewportOverlaySelectionContext context_;
+  quader::ViewportOverlaySubmissionCoordinator coordinator_;
+  quader::ViewportOverlayFrame persistent_;
+  quader::ViewportOverlayFrame dynamic_;
+};
+
+struct StickyComponentModeCase final {
+  quader::QuaderSelectionMode api_mode;
+  quader::ViewportSelectionMode viewport_mode;
+  quader::ViewportOverlaySelectionContext overlay_context;
+  quader::QVec3 left_target;
+  quader::QVec3 right_target;
+};
+
+constexpr std::array<StickyComponentModeCase, 3> kStickyComponentModeCases{
+    StickyComponentModeCase{quader::QuaderSelectionMode::Vertex,
+        quader::ViewportSelectionMode::Vertex,
+        quader::ViewportOverlaySelectionContext::Vertex,
+        {-2.0f, 1.0f, 1.0f}, {4.0f, 1.0f, 1.0f}},
+    StickyComponentModeCase{quader::QuaderSelectionMode::Edge,
+        quader::ViewportSelectionMode::Edge,
+        quader::ViewportOverlaySelectionContext::Edge,
+        {-2.0f, 0.0f, 1.0f}, {4.0f, 0.0f, 1.0f}},
+    StickyComponentModeCase{quader::QuaderSelectionMode::Face,
+        quader::ViewportSelectionMode::Face,
+        quader::ViewportOverlaySelectionContext::Face,
+        {-3.0f, 0.0f, 1.0f}, {3.0f, 0.0f, 1.0f}},
+};
+
+std::uint32_t selected_component_count(
+    const quader::QuaderSelectionSummary &selection) {
+  return selection.selected_vertex_count + selection.selected_edge_count +
+         selection.selected_face_count;
 }
 
 void set_curve_solidify(ViewportInteractionHarness &harness,
@@ -9843,52 +10037,74 @@ TEST(ViewportSelectionInteractionTests,
 }
 
 TEST(ViewportSelectionInteractionTests,
-     MarqueeReleaseAtDifferentTargetRestoresHoverImmediately) {
-  ViewportInteractionHarness harness;
-  const quader::QuaderModelingObjectRef left =
-      create_box_at(harness, {-3.0f, 0.0f, 0.0f});
-  const quader::QuaderModelingObjectRef right =
-      create_box_at(harness, {3.0f, 0.0f, 0.0f});
-  ASSERT_TRUE(harness.editor.selection()
-                  .set_mode(quader::QuaderSelectionMode::Face)
-                  .ok());
-  ASSERT_TRUE(harness.editor.selection().clear().ok());
-  harness.router.set_selection_mode(quader::ViewportSelectionMode::Face);
+     MarqueeReleaseAtDifferentTargetRetainsCandidateUntilPointerMoves) {
+  for (const bool gated : {false, true}) {
+    SCOPED_TRACE(gated);
+    ViewportInteractionHarness harness;
+    const quader::QuaderModelingObjectRef left =
+        create_box_at(harness, {-3.0f, 0.0f, 0.0f});
+    const quader::QuaderModelingObjectRef right =
+        create_box_at(harness, {3.0f, 0.0f, 0.0f});
+    ASSERT_TRUE(harness.editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Face)
+                    .ok());
+    ASSERT_TRUE(harness.editor.selection().clear().ok());
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Face);
 
-  const quader::ViewportScreenPoint left_screen =
-      harness.camera.project_world_point({-3.0f, 0.0f, 0.0f});
-  const quader::ViewportScreenPoint right_screen =
-      harness.camera.project_world_point({3.0f, 0.0f, 0.0f});
-  ASSERT_TRUE(left_screen.visible);
-  ASSERT_TRUE(right_screen.visible);
+    const quader::ViewportScreenPoint left_screen =
+        harness.camera.project_world_point({-3.0f, 0.0f, 0.0f});
+    const quader::ViewportScreenPoint right_screen =
+        harness.camera.project_world_point({3.0f, 0.0f, 0.0f});
+    ASSERT_TRUE(left_screen.visible);
+    ASSERT_TRUE(right_screen.visible);
 
-  quader::ViewportSelectionInteraction interaction;
-  ViewportSelectionWorkGateHarness work_gate(harness);
-  harness.input.mouse_local = left_screen.position;
-  harness.input.mouse_screen = harness.input.mouse_local;
-  interaction.handle_frame(
-      harness.editor, harness.frame(), quader::ViewportToolResult{},
-      quader::ViewportBeforeToolInteractionResult{}, work_gate.hover_port());
-  ASSERT_EQ(harness.editor.selection().hover_summary().target.object_id,
-            left.modeling_object_id);
-  ASSERT_EQ(interaction.work_stats().hover_pick_count, 1u);
+    quader::ViewportSelectionInteraction interaction;
+    ViewportSelectionWorkGateHarness work_gate(harness);
+    auto *hover_port = gated ? work_gate.hover_port() : nullptr;
+    harness.input.mouse_local = left_screen.position;
+    harness.input.mouse_screen = harness.input.mouse_local;
+    interaction.handle_frame(
+        harness.editor, harness.frame(), quader::ViewportToolResult{},
+        quader::ViewportBeforeToolInteractionResult{}, hover_port);
+    ASSERT_EQ(harness.editor.selection().hover_summary().target.object_id,
+              left.modeling_object_id);
+    ASSERT_EQ(interaction.work_stats().hover_pick_count, 1u);
 
-  interaction.handle_frame(
-      harness.editor,
-      harness.frame(true, true, false, left_screen.position),
-      quader::ViewportToolResult{},
-      quader::ViewportBeforeToolInteractionResult{}, work_gate.hover_port());
-  harness.input.mouse_local = right_screen.position;
-  harness.input.mouse_screen = harness.input.mouse_local;
-  interaction.handle_frame(
-      harness.editor,
-      harness.frame(false, false, true, left_screen.position),
-      quader::ViewportToolResult{},
-      quader::ViewportBeforeToolInteractionResult{}, work_gate.hover_port());
+    interaction.handle_frame(
+        harness.editor, harness.frame(true, true, false, left_screen.position),
+        quader::ViewportToolResult{},
+        quader::ViewportBeforeToolInteractionResult{}, hover_port);
+    harness.input.mouse_local = right_screen.position;
+    harness.input.mouse_screen = harness.input.mouse_local;
+    interaction.handle_frame(
+        harness.editor, harness.frame(false, false, true, left_screen.position),
+        quader::ViewportToolResult{},
+        quader::ViewportBeforeToolInteractionResult{}, hover_port);
 
-  EXPECT_EQ(interaction.work_stats().hover_pick_count, 2u);
-  EXPECT_EQ(harness.editor.selection().hover_summary().target.object_id,
-            right.modeling_object_id);
+    EXPECT_EQ(interaction.work_stats().hover_pick_count, 1u);
+    EXPECT_EQ(harness.session.modeling()
+                  .selection_hover_summary()
+                  .candidate_object_id,
+              left.modeling_object_id);
+    for (int idle_frame = 0; idle_frame < 3; ++idle_frame) {
+      interaction.handle_frame(harness.editor, harness.frame(), {}, {},
+                               hover_port);
+      EXPECT_EQ(interaction.work_stats().hover_pick_count, 1u);
+      EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
+                quader::QuaderActiveSelectionKind::None);
+      EXPECT_EQ(harness.session.modeling()
+                    .selection_hover_summary()
+                    .candidate_object_id,
+                left.modeling_object_id);
+    }
+    harness.input.mouse_local.x += 1.0f;
+    harness.input.mouse_screen = harness.input.mouse_local;
+    interaction.handle_frame(harness.editor, harness.frame(), {}, {},
+                             hover_port);
+    EXPECT_EQ(interaction.work_stats().hover_pick_count, 2u);
+    EXPECT_EQ(harness.editor.selection().hover_summary().target.object_id,
+              right.modeling_object_id);
+  }
 }
 
 TEST(ViewportInteractionControllerTests,
@@ -10269,7 +10485,7 @@ TEST(ViewportInteractionControllerTests,
 }
 
 TEST(ViewportInteractionControllerTests,
-     EdgeModeFaceInteriorClickKeepsMeshEditTargetUntilBackgroundClick) {
+     EdgeModeFaceInteriorAndBackgroundClicksKeepMeshEditingWire) {
   ViewportInteractionHarness harness;
   const quader::QuaderModelingObjectRef box = create_unit_box(harness);
   ASSERT_TRUE(harness.editor.selection().select_object(box).ok());
@@ -10281,16 +10497,11 @@ TEST(ViewportInteractionControllerTests,
   const quader::ViewportScreenPoint face_interior =
       harness.camera.project_world_point({0.0f, 0.0f, 1.0f});
   ASSERT_TRUE(face_interior.visible);
+  ComponentSelectionPresentation presentation(
+      harness, quader::ViewportOverlaySelectionContext::Edge);
   const auto source_wire_count = [&]() {
-    const quader::ViewportOverlayFrame overlay =
-        quader::test_support::visible_modeling_overlay_frame(
-            harness.session.modeling());
-    return std::count_if(
-        overlay.lines.begin(), overlay.lines.end(),
-        [&](const quader::ViewportOverlayLine &line) {
-          return line.layer == quader::ViewportOverlayLayer::SourceWire &&
-                 line.element.object_id == box.modeling_object_id;
-        });
+    (void)presentation.submit();
+    return presentation.wire_count(box.modeling_object_id);
   };
 
   const quader::QuaderSelectionSummary edit_target =
@@ -10325,12 +10536,13 @@ TEST(ViewportInteractionControllerTests,
   EXPECT_EQ(component_cleared.selected_edge_count, 0u);
   EXPECT_GT(source_wire_count(), 0);
 
-  // A real background click retains the established replace-on-miss behavior.
+  // A background click clears the selection, but keeps the editing candidate.
   harness.click_selection({20.0f, 20.0f});
   const quader::QuaderSelectionSummary cleared =
       harness.editor.selection().summary();
   EXPECT_EQ(cleared.selected_object_count, 0u);
   EXPECT_EQ(cleared.selected_edge_count, 0u);
+  EXPECT_GT(source_wire_count(), 0);
 }
 
 TEST(ViewportSelectionInteractionTests,
@@ -10398,6 +10610,1015 @@ TEST(ViewportSelectionInteractionTests,
   EXPECT_EQ(after.selected_object_count, 0u);
   EXPECT_EQ(after.selected_edge_count, 0u);
   EXPECT_EQ(after.selection_revision, before.selection_revision);
+}
+
+TEST(ViewportInteractionControllerTests,
+     ComponentMeshBodyHoverAdoptsAndTransfersRetainedEditingPresentation) {
+  for (const auto &mode_case : kStickyComponentModeCases) {
+    SCOPED_TRACE(static_cast<int>(mode_case.api_mode));
+    ViewportInteractionHarness harness;
+    const auto left = create_box_at(harness, {-3.0f, 0.0f, 0.0f});
+    const auto right = create_box_at(harness, {3.0f, 0.0f, 0.0f});
+    ASSERT_TRUE(harness.editor.selection().set_mode(mode_case.api_mode).ok());
+    ASSERT_TRUE(harness.editor.selection().clear().ok());
+    harness.router.set_selection_mode(mode_case.viewport_mode);
+    ComponentSelectionPresentation presentation(harness,
+                                                mode_case.overlay_context);
+    const auto selection_revision =
+        harness.editor.selection().summary().selection_revision;
+
+    for (const auto &object : {left, right}) {
+      SCOPED_TRACE(object.modeling_object_id);
+      const bool on_left = object.modeling_object_id == left.modeling_object_id;
+      const auto body = harness.camera.project_world_point(
+          {on_left ? -3.0f : 3.0f, 0.0f, 1.0f});
+      ASSERT_TRUE(body.visible);
+      harness.input.mouse_local = body.position;
+      harness.input.mouse_screen = body.position;
+      harness.dispatch_frame(harness.frame());
+      (void)presentation.submit();
+      EXPECT_GT(presentation.wire_count(object.modeling_object_id), 0u);
+      EXPECT_EQ(presentation.wire_count(
+          on_left ? right.modeling_object_id : left.modeling_object_id), 0u);
+      if (mode_case.api_mode == quader::QuaderSelectionMode::Vertex) {
+        EXPECT_GT(presentation.vertex_count(object.modeling_object_id), 0u);
+      }
+      if (mode_case.api_mode != quader::QuaderSelectionMode::Face) {
+        EXPECT_EQ(harness.editor.selection().hover_summary().target.kind,
+                  quader::QuaderActiveSelectionKind::None);
+      }
+      EXPECT_EQ(harness.editor.selection().summary().selection_revision,
+                selection_revision);
+      EXPECT_EQ(selected_component_count(harness.editor.selection().summary()),
+                0u);
+    }
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     ComponentCandidatePresentationSurvivesBlankClickAndStationaryFrames) {
+  for (const auto &mode_case : kStickyComponentModeCases) {
+    for (const bool orthographic : {false, true}) {
+      for (const bool mesh_selected : {false, true}) {
+        SCOPED_TRACE(static_cast<int>(mode_case.api_mode));
+        SCOPED_TRACE(orthographic);
+        SCOPED_TRACE(mesh_selected);
+        ViewportInteractionHarness harness;
+        const auto left = create_box_at(harness, {-3.0f, 0.0f, 0.0f});
+        const auto right = create_box_at(harness, {3.0f, 0.0f, 0.0f});
+        ASSERT_TRUE(harness.editor.selection().clear().ok());
+        if (mesh_selected) {
+          ASSERT_TRUE(harness.editor.selection().select_object(left).ok());
+        }
+        ASSERT_TRUE(harness.editor.selection().set_mode(mode_case.api_mode).ok());
+        harness.router.set_selection_mode(mode_case.viewport_mode);
+        if (orthographic) {
+          harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+        }
+        ComponentSelectionPresentation presentation(harness,
+                                                    mode_case.overlay_context);
+        const auto hover_at = [&](quader::QVec2 position) {
+          harness.input.mouse_local = position;
+          harness.input.mouse_screen = position;
+          harness.dispatch_frame(harness.frame());
+          return presentation.submit();
+        };
+        const auto left_screen =
+            harness.camera.project_world_point(mode_case.left_target);
+        const auto right_screen =
+            harness.camera.project_world_point(mode_case.right_target);
+        ASSERT_TRUE(left_screen.visible);
+        ASSERT_TRUE(right_screen.visible);
+        hover_at(left_screen.position);
+        const auto wire_count = presentation.wire_count(left.modeling_object_id);
+        const auto vertex_count = presentation.vertex_count(left.modeling_object_id);
+        ASSERT_GT(wire_count, 0u);
+        if (mode_case.api_mode == quader::QuaderSelectionMode::Vertex) {
+          ASSERT_GT(vertex_count, 0u);
+        }
+        const auto expect_left_candidate = [&]() {
+          EXPECT_EQ(presentation.wire_count(left.modeling_object_id), wire_count);
+          EXPECT_EQ(presentation.wire_count(right.modeling_object_id), 0u);
+          EXPECT_EQ(presentation.vertex_count(left.modeling_object_id), vertex_count);
+          EXPECT_EQ(selected_component_count(harness.editor.selection().summary()),
+                    0u);
+        };
+
+        if (mesh_selected) {
+          // An authored mesh selection without selected components must not
+          // keep its persistent wire when hover adopts another editing mesh.
+          const auto selection_revision =
+              harness.editor.selection().summary().selection_revision;
+          const auto geometry_work = harness.session.modeling()
+              .selection_overlay_geometry_work_counters();
+          hover_at(right_screen.position);
+          EXPECT_EQ(presentation.wire_count(left.modeling_object_id), 0u);
+          EXPECT_GT(presentation.wire_count(right.modeling_object_id), 0u);
+          if (mode_case.api_mode == quader::QuaderSelectionMode::Vertex) {
+            EXPECT_EQ(presentation.vertex_count(left.modeling_object_id), 0u);
+            EXPECT_GT(presentation.vertex_count(right.modeling_object_id), 0u);
+          }
+          EXPECT_EQ(harness.editor.selection().summary().selected_object_count,
+                    1u);
+          EXPECT_EQ(harness.editor.selection().summary().selection_revision,
+                    selection_revision);
+          for (const float body_y : {0.0f, 0.2f}) {
+            const auto body = harness.camera.project_world_point(
+                {3.0f, body_y, 1.0f});
+            ASSERT_TRUE(body.visible);
+            const auto submitted = hover_at(body.position);
+            EXPECT_FALSE(submitted.persistent_submitted);
+            EXPECT_FALSE(submitted.selection_source_refreshed);
+            EXPECT_EQ(presentation.wire_count(left.modeling_object_id), 0u);
+            EXPECT_GT(presentation.wire_count(right.modeling_object_id), 0u);
+          }
+          hover_at(left_screen.position);
+          expect_left_candidate();
+          EXPECT_EQ(harness.editor.selection().summary().selection_revision,
+                    selection_revision);
+          const auto after_transfer = harness.session.modeling()
+              .selection_overlay_geometry_work_counters();
+          EXPECT_EQ(after_transfer.semantic_aggregate_build_count,
+                    geometry_work.semantic_aggregate_build_count);
+          EXPECT_EQ(after_transfer.world_projection_build_count,
+                    geometry_work.world_projection_build_count);
+        }
+
+        constexpr quader::QVec2 kBlank{20.0f, 20.0f};
+        hover_at(kBlank);
+        expect_left_candidate();
+        harness.dispatch_frame(harness.frame(true, true, false, kBlank));
+        (void)presentation.submit();
+        expect_left_candidate();
+        harness.dispatch_frame(harness.frame(false, false, true, kBlank));
+        (void)presentation.submit();
+        expect_left_candidate();
+
+        // The release sample and subsequent stationary frames share the same
+        // suppression state, while the renderer retains the submitted mesh.
+        for (int idle_frame = 0; idle_frame < 3; ++idle_frame) {
+          harness.dispatch_frame(harness.frame());
+          const auto submitted = presentation.submit();
+          expect_left_candidate();
+          EXPECT_FALSE(submitted.persistent_submitted);
+          EXPECT_FALSE(submitted.selection_source_refreshed);
+        }
+
+        hover_at(right_screen.position);
+        EXPECT_EQ(presentation.wire_count(left.modeling_object_id), 0u);
+        EXPECT_GT(presentation.wire_count(right.modeling_object_id), 0u);
+        if (mode_case.api_mode == quader::QuaderSelectionMode::Vertex) {
+          EXPECT_EQ(presentation.vertex_count(left.modeling_object_id), 0u);
+          EXPECT_GT(presentation.vertex_count(right.modeling_object_id), 0u);
+        }
+      }
+    }
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     ComponentMarqueeRetainsCandidateUntilReleaseAndKeepsSelectedMeshes) {
+  for (const auto &mode_case : kStickyComponentModeCases) {
+    for (const bool orthographic : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(mode_case.api_mode));
+      SCOPED_TRACE(orthographic);
+      ViewportInteractionHarness harness;
+      const auto left = create_box_at(harness, {-3.0f, 0.0f, 0.0f});
+      const auto right = create_box_at(harness, {3.0f, 0.0f, 0.0f});
+      ASSERT_TRUE(harness.editor.selection().set_mode(mode_case.api_mode).ok());
+      ASSERT_TRUE(harness.editor.selection().clear().ok());
+      harness.router.set_selection_mode(mode_case.viewport_mode);
+      if (orthographic) {
+        harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+      }
+      ComponentSelectionPresentation presentation(harness,
+                                                  mode_case.overlay_context);
+      const auto point_at = [&](quader::QVec2 position) {
+        harness.input.mouse_local = position;
+        harness.input.mouse_screen = position;
+      };
+      const auto hover_at = [&](quader::QVec2 position) {
+        point_at(position);
+        harness.dispatch_frame(harness.frame());
+        (void)presentation.submit();
+      };
+      const auto left_screen =
+          harness.camera.project_world_point(mode_case.left_target);
+      const auto right_screen =
+          harness.camera.project_world_point(mode_case.right_target);
+      ASSERT_TRUE(left_screen.visible);
+      ASSERT_TRUE(right_screen.visible);
+      hover_at(left_screen.position);
+      const auto wire_count = presentation.wire_count(left.modeling_object_id);
+      const auto vertex_count = presentation.vertex_count(left.modeling_object_id);
+      ASSERT_GT(wire_count, 0u);
+      if (mode_case.api_mode == quader::QuaderSelectionMode::Vertex) {
+        ASSERT_GT(vertex_count, 0u);
+      }
+      const auto expect_left_candidate = [&]() {
+        EXPECT_EQ(presentation.wire_count(left.modeling_object_id), wire_count);
+        EXPECT_EQ(presentation.wire_count(right.modeling_object_id), 0u);
+        EXPECT_EQ(presentation.vertex_count(left.modeling_object_id), vertex_count);
+        EXPECT_EQ(selected_component_count(harness.editor.selection().summary()),
+                  0u);
+      };
+
+      constexpr quader::QVec2 kStart{20.0f, 20.0f};
+      constexpr quader::QVec2 kEmptyEnd{80.0f, 60.0f};
+      hover_at(kStart);
+      harness.dispatch_frame(harness.frame(true, true, false, kStart));
+      (void)presentation.submit();
+      expect_left_candidate();
+      for (const auto position : {kEmptyEnd, right_screen.position, kEmptyEnd}) {
+        point_at(position);
+        harness.dispatch_frame(harness.frame(false, true, false, kStart));
+        ASSERT_TRUE(harness.controller.selection_marquee().active);
+        (void)presentation.submit();
+        expect_left_candidate();
+      }
+      harness.dispatch_frame(harness.frame(false, false, true, kStart));
+      (void)presentation.submit();
+      expect_left_candidate();
+      harness.dispatch_frame(harness.frame());
+      (void)presentation.submit();
+      expect_left_candidate();
+      EXPECT_FALSE(harness.controller.selection_marquee().active);
+
+      // The other mesh could not steal the candidate during capture. Once
+      // released, a fresh hover transfers an empty candidate normally.
+      hover_at(right_screen.position);
+      EXPECT_EQ(presentation.wire_count(left.modeling_object_id), 0u);
+      EXPECT_GT(presentation.wire_count(right.modeling_object_id), 0u);
+      hover_at(left_screen.position);
+      expect_left_candidate();
+
+      const auto selection_start = harness.camera.project_world_point(
+          {-4.4f, 1.4f, 1.0f});
+      const auto selection_end = harness.camera.project_world_point(
+          {-1.6f, -1.4f, 1.0f});
+      ASSERT_TRUE(selection_start.visible);
+      ASSERT_TRUE(selection_end.visible);
+      hover_at(selection_start.position);
+      harness.dispatch_frame(harness.frame(
+          true, true, false, selection_start.position));
+      (void)presentation.submit();
+      expect_left_candidate();
+      point_at(selection_end.position);
+      harness.dispatch_frame(harness.frame(
+          false, true, false, selection_start.position));
+      ASSERT_TRUE(harness.controller.selection_marquee().active);
+      (void)presentation.submit();
+      expect_left_candidate();
+      harness.dispatch_frame(harness.frame(
+          false, false, true, selection_start.position));
+      (void)presentation.submit();
+      const auto selected = harness.editor.selection().summary();
+      ASSERT_GT(selected_component_count(selected), 0u);
+      EXPECT_GT(presentation.wire_count(left.modeling_object_id), 0u);
+      EXPECT_EQ(presentation.wire_count(right.modeling_object_id), 0u);
+      if (mode_case.api_mode == quader::QuaderSelectionMode::Vertex) {
+        EXPECT_GT(selected.selected_vertex_count, 1u);
+        EXPECT_EQ(presentation.vertex_count(left.modeling_object_id), vertex_count);
+      }
+
+      hover_at(right_screen.position);
+      EXPECT_GT(presentation.wire_count(left.modeling_object_id), 0u);
+      EXPECT_GT(presentation.wire_count(right.modeling_object_id), 0u);
+      hover_at(kStart);
+      EXPECT_GT(presentation.wire_count(left.modeling_object_id), 0u);
+      EXPECT_GT(presentation.wire_count(right.modeling_object_id), 0u);
+      EXPECT_EQ(selected_component_count(harness.editor.selection().summary()),
+                selected_component_count(selected));
+      EXPECT_EQ(harness.editor.selection().summary().selection_revision,
+                selected.selection_revision);
+    }
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     PartialComponentMarqueeOverBackgroundRetainsPinnedMeshAndExactSelection) {
+  for (const bool move_after_release : {false, true}) {
+    SCOPED_TRACE(move_after_release);
+    for (const auto &mode_case : kStickyComponentModeCases) {
+      SCOPED_TRACE(static_cast<int>(mode_case.api_mode));
+      for (const bool orthographic : {false, true}) {
+        for (const bool select_backfaces : {false, true}) {
+          for (const bool crossing : {false, true}) {
+            SCOPED_TRACE(orthographic);
+            SCOPED_TRACE(select_backfaces);
+            SCOPED_TRACE(crossing);
+            ViewportInteractionHarness harness;
+            quader_poly::Document wall_document;
+            std::array<quader_poly::ElementId, 4> wall_vertices{};
+            constexpr std::array<quader::QVec3, 4> kWallPositions{
+                quader::QVec3{-12.0f, -10.0f, -4.0f},
+                quader::QVec3{12.0f, -10.0f, -4.0f},
+                quader::QVec3{12.0f, 10.0f, -4.0f},
+                quader::QVec3{-12.0f, 10.0f, -4.0f}};
+            for (std::size_t index = 0u; index < wall_vertices.size();
+                 ++index) {
+              wall_vertices[index] =
+                  quader_poly::add_vertex(wall_document, kWallPositions[index]);
+            }
+            const auto wall_face =
+                quader_poly::add_face(wall_document, wall_vertices);
+            const auto wall = harness.editor.modeling().create_mesh(
+                quader::QuaderPolygonDocumentInternalAccess::from_backend(
+                    std::move(wall_document)),
+                {.name = "Background Wall"});
+            ASSERT_TRUE(wall.ok()) << wall.error_message();
+            constexpr std::array<quader::QVec3, 8> kPositions{
+                quader::QVec3{-2.0f, -2.5f, -0.25f},
+                quader::QVec3{2.0f, -2.5f, -0.25f},
+                quader::QVec3{2.0f, 2.5f, -0.25f},
+                quader::QVec3{-2.0f, 2.5f, -0.25f},
+                quader::QVec3{-2.0f, -2.5f, 0.25f},
+                quader::QVec3{2.0f, -2.5f, 0.25f},
+                quader::QVec3{2.0f, 2.5f, 0.25f},
+                quader::QVec3{-2.0f, 2.5f, 0.25f},
+            };
+            constexpr std::array<std::array<std::size_t, 4>, 6> kFaces{
+                std::array<std::size_t, 4>{4u, 5u, 6u, 7u},
+                std::array<std::size_t, 4>{0u, 3u, 2u, 1u},
+                std::array<std::size_t, 4>{1u, 2u, 6u, 5u},
+                std::array<std::size_t, 4>{0u, 4u, 7u, 3u},
+                std::array<std::size_t, 4>{3u, 7u, 6u, 2u},
+                std::array<std::size_t, 4>{0u, 1u, 5u, 4u},
+            };
+            quader_poly::Document document;
+            std::array<quader_poly::ElementId, 8> vertices{};
+            std::array<quader_poly::ElementId, 6> faces{};
+            for (std::size_t index = 0u; index < vertices.size(); ++index) {
+              vertices[index] =
+                  quader_poly::add_vertex(document, kPositions[index]);
+            }
+            for (std::size_t index = 0u; index < kFaces.size(); ++index) {
+              const auto &face = kFaces[index];
+              faces[index] = quader_poly::add_face(
+                  document, std::array{vertices[face[0]], vertices[face[1]],
+                                       vertices[face[2]], vertices[face[3]]});
+            }
+            const auto slab = harness.editor.modeling().create_mesh(
+                quader::QuaderPolygonDocumentInternalAccess::from_backend(
+                    std::move(document)),
+                {.name = "Foreground Upright Slab"});
+            ASSERT_TRUE(slab.ok()) << slab.error_message();
+            ASSERT_TRUE(
+                harness.editor.selection().set_mode(mode_case.api_mode).ok());
+            ASSERT_TRUE(harness.editor.selection().clear().ok());
+            harness.router.set_selection_mode(mode_case.viewport_mode);
+            (void)harness.settings.set_bool_value(
+                quader::ViewportBoolSettingId::BackfaceSelection,
+                select_backfaces);
+            if (orthographic) {
+              harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+            }
+            harness.camera.set_view_direction({-0.35f, -0.3f, -1.0f});
+            ComponentSelectionPresentation presentation(
+                harness, mode_case.overlay_context);
+            const auto point_at = [&](quader::QVec2 position) {
+              harness.input.mouse_local = position;
+              harness.input.mouse_screen = position;
+            };
+            const auto upper_back =
+                harness.camera.project_world_point(kPositions[2]);
+            const auto upper_front =
+                harness.camera.project_world_point(kPositions[6]);
+            ASSERT_TRUE(upper_back.visible);
+            ASSERT_TRUE(upper_front.visible);
+            const quader::QVec2 upper_left{
+                std::min(upper_back.position.x, upper_front.position.x) - 15.0f,
+                std::min(upper_back.position.y, upper_front.position.y) -
+                    15.0f};
+            const quader::QVec2 lower_right{
+                std::max(upper_back.position.x, upper_front.position.x) + 35.0f,
+                std::max(upper_back.position.y, upper_front.position.y) +
+                    80.0f};
+            std::vector<quader::QuaderElementId> expected_vertices{
+                static_cast<quader::QuaderElementId>(vertices[2]),
+                static_cast<quader::QuaderElementId>(vertices[6])};
+            std::ranges::sort(expected_vertices);
+            std::vector<quader::QuaderElementId> projected_inside;
+            for (std::size_t index = 0u; index < vertices.size(); ++index) {
+              const auto projected =
+                  harness.camera.project_world_point(kPositions[index]);
+              if (projected.visible && projected.position.x >= upper_left.x &&
+                  projected.position.x <= lower_right.x &&
+                  projected.position.y >= upper_left.y &&
+                  projected.position.y <= lower_right.y) {
+                projected_inside.push_back(vertices[index]);
+              }
+            }
+            std::ranges::sort(projected_inside);
+            ASSERT_EQ(projected_inside, expected_vertices);
+            using ElementKey = std::array<int, 3>;
+            std::vector<ElementKey> expected;
+            const int slab_id = slab.value().modeling_object_id;
+            const int wall_id = wall.value().modeling_object_id;
+            const bool top_visible = select_backfaces || orthographic ||
+                                     harness.camera.pose().eye.y > 2.5f;
+            const auto append_edge = [&](std::size_t first,
+                                         std::size_t second) {
+              const int a = static_cast<int>(vertices[first]);
+              const int b = static_cast<int>(vertices[second]);
+              expected.push_back({slab_id, std::min(a, b), std::max(a, b)});
+            };
+            if (mode_case.api_mode == quader::QuaderSelectionMode::Vertex) {
+              for (const int vertex : expected_vertices) {
+                expected.push_back({slab_id, vertex, 0});
+              }
+            } else if (mode_case.api_mode ==
+                       quader::QuaderSelectionMode::Edge) {
+              append_edge(2u, 6u);
+              if (crossing) {
+                append_edge(1u, 2u);
+                if (top_visible) {
+                  append_edge(2u, 3u);
+                }
+                append_edge(5u, 6u);
+                append_edge(6u, 7u);
+              }
+            } else if (crossing) {
+              // The perspective eye can sit below the slab's top plane, while
+              // orthographic down-rays see its top. Through also includes its
+              // rear.
+              for (const std::size_t face : {0u, 2u}) {
+                expected.push_back({slab_id, static_cast<int>(faces[face]), 0});
+              }
+              if (top_visible) {
+                expected.push_back({slab_id, static_cast<int>(faces[4]), 0});
+              }
+              if (select_backfaces) {
+                expected.push_back({slab_id, static_cast<int>(faces[1]), 0});
+              }
+              expected.push_back({wall_id, static_cast<int>(wall_face), 0});
+            }
+            std::ranges::sort(expected);
+            const bool wall_selected =
+                mode_case.api_mode == quader::QuaderSelectionMode::Face &&
+                crossing;
+            const auto start = crossing ? lower_right : upper_left;
+            const auto end = crossing ? upper_left : lower_right;
+            const auto assert_wall_beneath = [&](quader::QVec2 position) {
+              const auto ray = harness.camera.ray_from_viewport_point(position);
+              const auto surfaces =
+                  harness.session.scene_surface_query().snapshot();
+              quader::SceneSurfaceQueryScratch scratch;
+              const auto hit = surfaces.nearest_hit(
+                  {.world_origin = ray.origin,
+                   .world_direction = ray.direction,
+                   .include_backfaces = false,
+                   .eligibility =
+                       quader::SceneSurfaceEligibility::SelectableUnlocked},
+                  scratch);
+              ASSERT_TRUE(hit.has_value());
+              EXPECT_EQ(hit->participant.geometry_entity, wall.value().entity);
+            };
+            ASSERT_NO_FATAL_FAILURE(assert_wall_beneath(start));
+            ASSERT_NO_FATAL_FAILURE(assert_wall_beneath(end));
+
+            point_at(upper_front.position);
+            harness.dispatch_frame(harness.frame());
+            (void)presentation.submit();
+            ASSERT_GT(presentation.wire_count(slab.value().modeling_object_id),
+                      0u);
+            if (mode_case.api_mode == quader::QuaderSelectionMode::Vertex) {
+              ASSERT_EQ(
+                  presentation.vertex_count(slab.value().modeling_object_id),
+                  8u);
+            }
+            ASSERT_EQ(presentation.wire_count(wall.value().modeling_object_id),
+                      0u);
+            ASSERT_EQ(harness.session.modeling()
+                          .selection_hover_summary()
+                          .candidate_object_id,
+                      slab_id);
+            harness.session.history().clear();
+            const auto content_revision =
+                harness.session.modeling().content_revision();
+            const auto asset_revision = harness.session.assets().revision();
+
+            // Press starts over the wall without an intervening wall-hover
+            // frame. Both rectangle directions end on the wall, enclosing only
+            // two slab vertices.
+            point_at(start);
+            harness.input.pointer_pressed_edges = {
+                {.button = quader::QuaderMouseButton::Left,
+                 .local = start,
+                 .sequence = 20u}};
+            harness.dispatch_frame(harness.frame(true, true, false, start));
+            harness.input.pointer_pressed_edges.clear();
+            (void)presentation.submit();
+            EXPECT_GT(presentation.wire_count(slab.value().modeling_object_id),
+                      0u);
+            EXPECT_EQ(presentation.wire_count(wall.value().modeling_object_id),
+                      0u);
+            point_at(end);
+            harness.dispatch_frame(harness.frame(false, true, false, start));
+            ASSERT_TRUE(harness.controller.selection_marquee().active);
+            EXPECT_EQ(harness.controller.selection_marquee().rule,
+                      crossing ? quader::ModelingBoxSelectionRule::Crossing
+                               : quader::ModelingBoxSelectionRule::Contain);
+            (void)presentation.submit();
+            EXPECT_GT(presentation.wire_count(slab.value().modeling_object_id),
+                      0u);
+            if (mode_case.api_mode == quader::QuaderSelectionMode::Vertex) {
+              EXPECT_EQ(
+                  presentation.vertex_count(slab.value().modeling_object_id),
+                  8u);
+            }
+            EXPECT_EQ(presentation.wire_count(wall.value().modeling_object_id),
+                      0u);
+            EXPECT_EQ(
+                harness.editor.selection().summary().selected_vertex_count, 0u);
+            EXPECT_EQ(harness.session.history().undo_count(), 0u);
+
+            harness.input.pointer_released_edges = {
+                {.button = quader::QuaderMouseButton::Left,
+                 .local = end,
+                 .sequence = 21u}};
+            if (move_after_release) {
+              // A queued MouseMove after release updates the frame's aggregate
+              // cursor, but must not collapse the already completed rectangle.
+              point_at(start);
+            }
+            harness.dispatch_frame(harness.frame(false, false, true, start));
+            harness.input.pointer_released_edges.clear();
+            EXPECT_EQ(harness.controller.selection_marquee().end.x, end.x);
+            EXPECT_EQ(harness.controller.selection_marquee().end.y, end.y);
+            (void)presentation.submit();
+            const auto expect_subset = [&]() {
+              std::vector<ElementKey> actual;
+              for (const auto &object :
+                   harness.session.modeling().export_selection().objects) {
+                if (mode_case.api_mode == quader::QuaderSelectionMode::Vertex) {
+                  for (const auto &vertex : object.selected_vertices) {
+                    actual.push_back({object.modeling_object_id,
+                                      static_cast<int>(vertex.id), 0});
+                  }
+                } else if (mode_case.api_mode ==
+                           quader::QuaderSelectionMode::Edge) {
+                  for (const auto &edge : object.selected_edges) {
+                    actual.push_back(
+                        {object.modeling_object_id,
+                         static_cast<int>(std::min(edge.a, edge.b)),
+                         static_cast<int>(std::max(edge.a, edge.b))});
+                  }
+                } else {
+                  for (const auto &face : object.selected_faces) {
+                    actual.push_back({object.modeling_object_id,
+                                      static_cast<int>(face.id), 0});
+                  }
+                }
+              }
+              std::ranges::sort(actual);
+              EXPECT_EQ(actual, expected);
+              EXPECT_EQ(presentation.selected_elements(), expected);
+              EXPECT_EQ(selected_component_count(
+                            harness.editor.selection().summary()),
+                        expected.size());
+              EXPECT_EQ(harness.session.modeling().content_revision(),
+                        content_revision);
+              EXPECT_EQ(harness.session.assets().revision(), asset_revision);
+              EXPECT_EQ(harness.session.history().undo_count(), 0u);
+              if (mode_case.api_mode == quader::QuaderSelectionMode::Vertex) {
+                EXPECT_EQ(
+                    presentation.vertex_count(slab.value().modeling_object_id),
+                    8u);
+              }
+            };
+            expect_subset();
+            EXPECT_EQ(harness.session.modeling()
+                          .selection_hover_summary()
+                          .candidate_object_id,
+                      slab_id);
+            EXPECT_GT(presentation.wire_count(slab_id), 0u);
+            EXPECT_EQ(presentation.wire_count(wall_id) > 0u, wall_selected);
+            const auto selection_revision =
+                harness.editor.selection().summary().selection_revision;
+            for (int idle_frame = 0; idle_frame < 3; ++idle_frame) {
+              harness.dispatch_frame(harness.frame());
+              (void)presentation.submit();
+              expect_subset();
+              EXPECT_EQ(harness.session.modeling()
+                            .selection_hover_summary()
+                            .candidate_object_id,
+                        move_after_release ? wall_id : slab_id);
+              EXPECT_EQ(presentation.wire_count(slab_id) > 0u,
+                        !move_after_release || !expected.empty());
+              EXPECT_EQ(presentation.wire_count(wall_id) > 0u,
+                        wall_selected || move_after_release);
+              EXPECT_EQ(harness.editor.selection().summary().selection_revision,
+                        selection_revision);
+            }
+
+            const quader::QVec2 moved{end.x + 10.0f, end.y - 10.0f};
+            ASSERT_NO_FATAL_FAILURE(assert_wall_beneath(moved));
+            point_at(moved);
+            harness.dispatch_frame(harness.frame());
+            (void)presentation.submit();
+            expect_subset();
+            EXPECT_GT(presentation.wire_count(wall.value().modeling_object_id),
+                      0u);
+            EXPECT_EQ(presentation.wire_count(slab_id) > 0u, !expected.empty());
+            EXPECT_EQ(harness.session.modeling()
+                          .selection_hover_summary()
+                          .candidate_object_id,
+                      wall_id);
+            EXPECT_EQ(harness.editor.selection().summary().selection_revision,
+                      selection_revision);
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     HallwayInsetMarqueeIgnoresTheCulledRoomWallInFrontOfItsVertices) {
+  for (const bool select_backfaces : {false, true}) {
+    for (const bool crossing : {false, true}) {
+      SCOPED_TRACE(select_backfaces);
+      SCOPED_TRACE(crossing);
+      ViewportInteractionHarness harness;
+      // Minimal reduction of the reported hallway: mesh 5's face 53 sits
+      // between the saved camera and mesh 6, but faces away from the camera.
+      // Both original local documents share this authored translation.
+      constexpr quader::QVec3 kTranslation{-7.5f, 0.5f, -10.5f};
+      constexpr std::array<quader::QVec3, 6> kRoomPositions{
+          quader::QVec3{-0.5f, 0.5f, -51.5f},
+          quader::QVec3{-0.5f, 0.5f, -14.5f},
+          quader::QVec3{-0.5f, 0.5f, 14.5f},
+          quader::QVec3{-0.5f, 11.5f, 14.5f},
+          quader::QVec3{-0.5f, 11.5f, -14.5f},
+          quader::QVec3{-0.5f, 11.5f, -51.5f}};
+      quader_poly::Document room_document;
+      std::array<quader_poly::ElementId, 6> room_vertices{};
+      for (std::size_t index = 0u; index < room_vertices.size(); ++index) {
+        room_vertices[index] = quader_poly::add_vertex(
+            room_document, kRoomPositions[index] + kTranslation);
+      }
+      quader_poly::add_face(room_document, room_vertices);
+      const auto room = harness.editor.modeling().create_mesh(
+          quader::QuaderPolygonDocumentInternalAccess::from_backend(
+              std::move(room_document)),
+          {.name = "Hallway culled room face"});
+      ASSERT_TRUE(room.ok()) << room.error_message();
+      constexpr std::array<quader::QVec3, 8> kInsetPositions{
+          quader::QVec3{-12.5f, 10.5f, -8.5f},
+          quader::QVec3{-12.5f, 1.49999976158f, -8.5f},
+          quader::QVec3{-12.5f, 1.49999976158f, -17.5f},
+          quader::QVec3{-12.5f, 10.5f, -17.5f},
+          quader::QVec3{-12.5f, 11.5f, -18.5f},
+          quader::QVec3{-12.5f, 11.5f, -7.5f},
+          quader::QVec3{-12.5f, 0.5f, -7.5f},
+          quader::QVec3{-12.5f, 0.5f, -18.5f}};
+      constexpr std::array<std::array<std::size_t, 4>, 5> kInsetFaces{
+          std::array<std::size_t, 4>{0u, 1u, 2u, 3u},
+          std::array<std::size_t, 4>{4u, 5u, 0u, 3u},
+          std::array<std::size_t, 4>{5u, 6u, 1u, 0u},
+          std::array<std::size_t, 4>{7u, 4u, 3u, 2u},
+          std::array<std::size_t, 4>{6u, 7u, 2u, 1u}};
+      quader_poly::Document inset_document;
+      std::array<quader_poly::ElementId, 8> inset_vertices{};
+      for (std::size_t index = 0u; index < inset_vertices.size(); ++index) {
+        inset_vertices[index] = quader_poly::add_vertex(
+            inset_document, kInsetPositions[index] + kTranslation);
+      }
+      for (const auto &face : kInsetFaces) {
+        quader_poly::add_face(
+            inset_document,
+            std::array{inset_vertices[face[0]], inset_vertices[face[1]],
+                       inset_vertices[face[2]], inset_vertices[face[3]]});
+      }
+      const auto inset = harness.editor.modeling().create_mesh(
+          quader::QuaderPolygonDocumentInternalAccess::from_backend(
+              std::move(inset_document)),
+          {.name = "Hallway planar inset"});
+      ASSERT_TRUE(inset.ok()) << inset.error_message();
+      harness.camera.set_viewport_size(1200.0f, 800.0f);
+      harness.input.viewport_size = {1200.0f, 800.0f};
+      ASSERT_TRUE(harness.camera.restore_perspective_pose(
+          {.eye = {-3.2057762146f, 10.1406784058f, -12.6346263885f},
+           .target = {-38.0157394409f, 6.5449800491f, -35.6011009216f},
+           .up = {-0.0717023462f, 0.9963036776f, -0.0473059975f}}));
+      ASSERT_TRUE(harness.editor.selection()
+                      .set_mode(quader::QuaderSelectionMode::Vertex)
+                      .ok());
+      ASSERT_TRUE(harness.editor.selection().clear().ok());
+      harness.router.set_selection_mode(quader::ViewportSelectionMode::Vertex);
+      const auto vertex_screen = harness.camera.project_world_point(
+          kInsetPositions[3] + kTranslation);
+      ASSERT_TRUE(vertex_screen.visible);
+      // The same vertex that responds to a normal click must remain selectable
+      // by a rectangle. This distinguishes visibility from hover presentation.
+      harness.click_selection(vertex_screen.position);
+      ComponentSelectionPresentation presentation(
+          harness, quader::ViewportOverlaySelectionContext::Vertex);
+      (void)presentation.submit();
+      const int inset_id = inset.value().modeling_object_id;
+      using ElementKey = std::array<int, 3>;
+      const std::vector<ElementKey> clicked{
+          {inset_id, static_cast<int>(inset_vertices[3]), 0}};
+      ASSERT_EQ(presentation.selected_elements(), clicked);
+      ASSERT_TRUE(harness.editor.selection().clear().ok());
+      harness.input.mouse_local = vertex_screen.position;
+      harness.input.mouse_screen = vertex_screen.position;
+      harness.dispatch_frame(harness.frame());
+      ASSERT_EQ(harness.session.modeling()
+                    .selection_hover_summary()
+                    .candidate_object_id,
+                inset_id);
+      (void)harness.settings.set_bool_value(
+          quader::ViewportBoolSettingId::BackfaceSelection, select_backfaces);
+      constexpr quader::QVec2 kUpperLeft{658.0f, 220.0f};
+      constexpr quader::QVec2 kLowerRight{818.0f, 475.0f};
+      std::vector<ElementKey> projected_inside;
+      for (std::size_t index = 0u; index < inset_vertices.size(); ++index) {
+        const auto point = harness.camera.project_world_point(
+            kInsetPositions[index] + kTranslation);
+        if (point.visible && point.position.x >= kUpperLeft.x &&
+            point.position.x <= kLowerRight.x &&
+            point.position.y >= kUpperLeft.y &&
+            point.position.y <= kLowerRight.y) {
+          projected_inside.push_back(
+              {inset_id, static_cast<int>(inset_vertices[index]), 0});
+        }
+      }
+      const std::vector<ElementKey> expected{
+          {inset_id, static_cast<int>(inset_vertices[3]), 0},
+          {inset_id, static_cast<int>(inset_vertices[4]), 0}};
+      ASSERT_EQ(projected_inside, expected);
+      const auto start = crossing ? kLowerRight : kUpperLeft;
+      const auto end = crossing ? kUpperLeft : kLowerRight;
+      harness.session.history().clear();
+      const auto content_revision = harness.session.modeling().content_revision();
+      const auto asset_revision = harness.session.assets().revision();
+      harness.input.mouse_local = start;
+      harness.input.mouse_screen = start;
+      harness.dispatch_frame(harness.frame(true, true, false, start));
+      harness.input.mouse_local = end;
+      harness.input.mouse_screen = end;
+      harness.dispatch_frame(harness.frame(false, true, false, start));
+      ASSERT_TRUE(harness.controller.selection_marquee().active);
+      harness.dispatch_frame(harness.frame(false, false, true, start));
+      for (int idle = 0; idle < 3; ++idle) {
+        (void)presentation.submit();
+        EXPECT_EQ(harness.editor.selection().summary().selected_vertex_count, 2u);
+        EXPECT_EQ(presentation.selected_elements(), expected);
+        EXPECT_GT(presentation.wire_count(inset_id), 0u);
+        EXPECT_EQ(harness.session.modeling()
+                      .selection_hover_summary()
+                      .candidate_object_id,
+                  inset_id);
+        harness.dispatch_frame(harness.frame());
+      }
+      EXPECT_EQ(harness.session.modeling().content_revision(), content_revision);
+      EXPECT_EQ(harness.session.assets().revision(), asset_revision);
+      EXPECT_EQ(harness.session.history().undo_count(), 0u);
+    }
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     EmptyComponentMarqueeRetainsCandidateAndRearmsOnInputLifecycle) {
+  enum class Rearm { Motion, Press, Return, Cancel, Mode, Tool, CaptureLoss };
+  constexpr std::array kRearmCases{
+      Rearm::Motion, Rearm::Press, Rearm::Return,     Rearm::Cancel,
+      Rearm::Mode,   Rearm::Tool,  Rearm::CaptureLoss};
+  for (const auto &mode_case : kStickyComponentModeCases) {
+    for (const bool gated : {false, true}) {
+      for (const auto rearm : kRearmCases) {
+        SCOPED_TRACE(static_cast<int>(mode_case.api_mode));
+        SCOPED_TRACE(gated);
+        SCOPED_TRACE(static_cast<int>(rearm));
+        ViewportInteractionHarness harness;
+        const auto left = create_box_at(harness, {-3.0f, 0.0f, 0.0f});
+        const auto right = create_box_at(harness, {3.0f, 0.0f, 0.0f});
+        ASSERT_TRUE(
+            harness.editor.selection().set_mode(mode_case.api_mode).ok());
+        ASSERT_TRUE(harness.editor.selection().clear().ok());
+        harness.router.set_selection_mode(mode_case.viewport_mode);
+        (void)harness.settings.set_bool_value(
+            quader::ViewportBoolSettingId::ShowGizmos, false);
+        quader::ViewportSelectionInteraction interaction;
+        ViewportSelectionWorkGateHarness work_gate(harness);
+        auto *hover_port = gated ? work_gate.hover_port() : nullptr;
+        ComponentSelectionPresentation presentation(harness,
+                                                    mode_case.overlay_context);
+        const auto dispatch = [&](bool pressed = false, bool down = false,
+                                  bool released = false,
+                                  quader::QVec2 start = {}) {
+          interaction.handle_frame(
+              harness.editor, harness.frame(pressed, down, released, start), {},
+              {}, hover_port);
+          return presentation.submit();
+        };
+        const auto point_at = [&](quader::QVec2 position) {
+          harness.input.mouse_local = position;
+          harness.input.mouse_screen = position;
+        };
+        const auto left_screen =
+            harness.camera.project_world_point(mode_case.left_target);
+        const auto right_body =
+            harness.camera.project_world_point({3.0f, 0.0f, 1.0f});
+        ASSERT_TRUE(left_screen.visible);
+        ASSERT_TRUE(right_body.visible);
+        point_at(left_screen.position);
+        (void)dispatch();
+        ASSERT_EQ(harness.session.modeling()
+                      .selection_hover_summary()
+                      .candidate_object_id,
+                  left.modeling_object_id);
+        const quader::QVec2 start{right_body.position.x - 7.0f,
+                                  right_body.position.y - 7.0f};
+        const quader::QVec2 end{right_body.position.x + 7.0f,
+                                right_body.position.y + 7.0f};
+        point_at(start);
+        (void)dispatch(true, true, false, start);
+        point_at(end);
+        (void)dispatch(false, true, false, start);
+        ASSERT_TRUE(interaction.marquee().active);
+        (void)dispatch(false, false, true, start);
+        const auto hover_picks = interaction.work_stats().hover_pick_count;
+        const auto rectangle_builds =
+            harness.session.modeling()
+                .rectangle_selection_resolution_build_count();
+        const auto revision =
+            harness.editor.selection().summary().selection_revision;
+        for (int idle_frame = 0; idle_frame < 3; ++idle_frame) {
+          const auto submitted = dispatch();
+          EXPECT_EQ(
+              selected_component_count(harness.editor.selection().summary()),
+              0u);
+          EXPECT_EQ(harness.session.modeling()
+                        .selection_hover_summary()
+                        .candidate_object_id,
+                    left.modeling_object_id);
+          EXPECT_GT(presentation.wire_count(left.modeling_object_id), 0u);
+          EXPECT_EQ(presentation.wire_count(right.modeling_object_id), 0u);
+          EXPECT_FALSE(submitted.persistent_submitted);
+          EXPECT_FALSE(submitted.dynamic_submitted);
+          EXPECT_EQ(interaction.work_stats().hover_pick_count, hover_picks);
+          EXPECT_EQ(harness.session.modeling()
+                        .rectangle_selection_resolution_build_count(),
+                    rectangle_builds);
+          EXPECT_EQ(harness.editor.selection().summary().selection_revision,
+                    revision);
+        }
+
+        switch (rearm) {
+        case Rearm::Motion:
+          point_at({end.x + 1.0f, end.y});
+          break;
+        case Rearm::Press:
+          // A new explicit Remove click keeps the established stationary-hover
+          // exception; a completed marquee must not swallow the new gesture.
+          harness.input.modifiers.primary = true;
+          (void)dispatch(true, true, false, end);
+          (void)dispatch(false, false, true, end);
+          break;
+        case Rearm::Return:
+          harness.input.viewport_hovered = false;
+          (void)dispatch();
+          harness.input.viewport_hovered = true;
+          break;
+        case Rearm::Cancel:
+          harness.input_result.cancel_requested = true;
+          (void)dispatch();
+          harness.input_result.cancel_requested = false;
+          break;
+        case Rearm::Mode: {
+          const bool to_face =
+              mode_case.api_mode != quader::QuaderSelectionMode::Face;
+          ASSERT_TRUE(harness.editor.selection()
+                          .set_mode(to_face
+                                        ? quader::QuaderSelectionMode::Face
+                                        : quader::QuaderSelectionMode::Vertex)
+                          .ok());
+          harness.router.set_selection_mode(
+              to_face ? quader::ViewportSelectionMode::Face
+                      : quader::ViewportSelectionMode::Vertex);
+          break;
+        }
+        case Rearm::Tool:
+          harness.router.set_active_tool(quader::ViewportToolId::Move);
+          break;
+        case Rearm::CaptureLoss:
+          harness.input.pointer_interaction_canceled = true;
+          (void)dispatch();
+          harness.input.pointer_interaction_canceled = false;
+          break;
+        }
+        (void)dispatch();
+        EXPECT_EQ(
+            selected_component_count(harness.editor.selection().summary()), 0u);
+        EXPECT_EQ(harness.session.modeling()
+                      .selection_hover_summary()
+                      .candidate_object_id,
+                  right.modeling_object_id);
+        EXPECT_EQ(presentation.wire_count(left.modeling_object_id), 0u);
+        EXPECT_GT(presentation.wire_count(right.modeling_object_id), 0u);
+      }
+    }
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
+     ComponentMarqueeCapturesAddRemoveModifiersThroughReleaseAndIdle) {
+  for (const bool remove : {false, true}) {
+    SCOPED_TRACE(remove);
+    ViewportInteractionHarness harness;
+    const auto wall = harness.editor.modeling().create_box(
+        {.min = {-8.0f, -8.0f, -3.5f}, .max = {8.0f, 8.0f, -3.0f}},
+        "Modifier Background");
+    ASSERT_TRUE(wall.ok());
+    quader_poly::Document document;
+    std::array<quader_poly::ElementId, 4> vertices{};
+    constexpr std::array<quader::QVec3, 4> kPositions{
+        quader::QVec3{-1.0f, -1.0f, 0.0f}, quader::QVec3{1.0f, -1.0f, 0.0f},
+        quader::QVec3{1.0f, 1.0f, 0.0f}, quader::QVec3{-1.0f, 1.0f, 0.0f}};
+    for (std::size_t index = 0u; index < vertices.size(); ++index) {
+      vertices[index] = quader_poly::add_vertex(document, kPositions[index]);
+    }
+    (void)quader_poly::add_face(document, vertices);
+    const auto patch = harness.editor.modeling().create_mesh(
+        quader::QuaderPolygonDocumentInternalAccess::from_backend(
+            std::move(document)),
+        {.name = "Modifier Foreground"});
+    ASSERT_TRUE(patch.ok());
+    ASSERT_TRUE(harness.editor.selection()
+                    .set_mode(quader::QuaderSelectionMode::Vertex)
+                    .ok());
+    harness.router.set_selection_mode(quader::ViewportSelectionMode::Vertex);
+    ASSERT_TRUE(harness.editor.selection()
+                    .select_vertex(patch.value(), static_cast<int>(vertices[0]))
+                    .ok());
+    if (remove) {
+      ASSERT_TRUE(harness.editor.selection()
+                      .select_vertex(patch.value(),
+                                     static_cast<int>(vertices[2]),
+                                     quader::QuaderSelectionEdit::Add)
+                      .ok());
+    }
+    const quader::ViewportModifiers captured{.primary = remove,
+                                             .shift = !remove};
+    harness.input.modifiers = captured;
+    const auto target = harness.camera.project_world_point(kPositions[2]);
+    ASSERT_TRUE(target.visible);
+    const auto point_at = [&](quader::QVec2 position) {
+      harness.input.mouse_local = position;
+      harness.input.mouse_screen = position;
+    };
+    point_at(target.position);
+    harness.dispatch_frame(harness.frame());
+    ComponentSelectionPresentation presentation(
+        harness, quader::ViewportOverlaySelectionContext::Vertex);
+    (void)presentation.submit();
+    const quader::QVec2 start{target.position.x - 10.0f,
+                              target.position.y - 10.0f};
+    const quader::QVec2 end{target.position.x + 10.0f,
+                            target.position.y + 10.0f};
+    point_at(start);
+    harness.input.pointer_pressed_edges = {
+        {.button = quader::QuaderMouseButton::Left,
+         .local = start,
+         .sequence = 30u,
+         .modifiers = captured}};
+    harness.dispatch_frame(harness.frame(true, true, false, start));
+    harness.input.pointer_pressed_edges.clear();
+    harness.input.modifiers = {.primary = !remove, .shift = remove};
+    point_at(end);
+    harness.dispatch_frame(harness.frame(false, true, false, start));
+    ASSERT_TRUE(harness.controller.selection_marquee().active);
+    harness.input.pointer_released_edges = {
+        {.button = quader::QuaderMouseButton::Left,
+         .local = end,
+         .sequence = 31u,
+         .modifiers = harness.input.modifiers}};
+    harness.dispatch_frame(harness.frame(false, false, true, start));
+    harness.input.pointer_released_edges.clear();
+    std::vector<std::array<int, 3>> expected{
+        {patch.value().modeling_object_id, static_cast<int>(vertices[0]), 0}};
+    if (!remove) {
+      expected.push_back(
+          {patch.value().modeling_object_id, static_cast<int>(vertices[2]), 0});
+    }
+    for (int idle_frame = 0; idle_frame < 4; ++idle_frame) {
+      if (idle_frame != 0)
+        harness.dispatch_frame(harness.frame());
+      (void)presentation.submit();
+      EXPECT_EQ(presentation.selected_elements(), expected);
+      EXPECT_EQ(harness.editor.selection().summary().selected_vertex_count,
+                expected.size());
+      EXPECT_EQ(harness.session.modeling()
+                    .selection_hover_summary()
+                    .candidate_object_id,
+                patch.value().modeling_object_id);
+      EXPECT_GT(presentation.wire_count(patch.value().modeling_object_id), 0u);
+      EXPECT_EQ(presentation.wire_count(wall.value().modeling_object_id), 0u);
+    }
+  }
 }
 
 TEST(ViewportInteractionControllerTests,

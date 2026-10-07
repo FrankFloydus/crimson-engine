@@ -76,6 +76,8 @@ struct SceneSurfaceParticipant final {
   /// independently so rendered occluders are never removed from the index.
   bool selectable = false;
   bool effectively_locked = false;
+  /// Freezes the source mesh's render policy for ordinary and instanced surfaces.
+  bool double_sided = false;
 };
 
 /// Selects participants without changing the render-visible snapshot itself.
@@ -113,6 +115,9 @@ struct SceneSurfaceRaycastRequest final {
   /// When false, triangle winding is evaluated after the participant's world
   /// transform so reflected occurrences retain the renderer's face policy.
   bool include_backfaces = true;
+  /// Restricts otherwise included backfaces to meshes rendered double-sided.
+  /// False preserves the query's independent include_backfaces policy.
+  bool respect_render_sidedness = false;
   SceneSurfaceEligibility eligibility =
       SceneSurfaceEligibility::RenderVisible;
   // Must be sorted by scene_surface_participant_id_less and contain no
@@ -199,7 +204,8 @@ public:
   /// Derives a retained render-neutral projection of this exact occluder set.
   [[nodiscard]] std::shared_ptr<const ViewportSelectionDepthGeometry>
   selection_depth_geometry() const;
-  /// Verifies a proposed raster ID with the same local-ray kernel as the BVH.
+  /// Verifies a proposed raster ID with the BVH's local-ray kernel and the
+  /// frozen render-sidedness policy, evaluated using world-space winding.
   [[nodiscard]] std::optional<float> selection_depth_triangle_distance(
       std::uint32_t triangle_id, QVec3 origin, QVec3 direction) const;
   [[nodiscard]] std::shared_ptr<const ViewportSelectionDepthSnapshot>

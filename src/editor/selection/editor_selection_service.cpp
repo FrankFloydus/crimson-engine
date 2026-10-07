@@ -1868,7 +1868,8 @@ ModelingCommandResult EditorSelectionService::preview_resolved_hover(
 
 ModelingCommandResult EditorSelectionService::preview_spatial_hover(
     std::optional<ResolvedSelectionTarget> target,
-    bool selected_modifier_pressed) {
+    bool selected_modifier_pressed,
+    std::optional<ResolvedComponentBodyTarget> component_body) {
   if (target.has_value() ||
       !is_component_selection_mode(modeling_.selection_mode())) {
     return publish_resolved_hover(std::move(target), false,
@@ -1876,13 +1877,23 @@ ModelingCommandResult EditorSelectionService::preview_spatial_hover(
   }
 
   const ModelingHoverSummary current = modeling_.selection_hover_summary();
-  if (current.candidate_object_id <= 0) {
+  int candidate_object_id = current.candidate_object_id;
+  if (component_body.has_value()) {
+    const std::optional<int> modeling_object =
+        modeling_.modeling_object_for_entity(component_body->geometry_entity);
+    if (modeling_object.has_value() &&
+        modeling_.resolved_component_body_target_eligible(
+            *modeling_object, component_body->source_occurrence)) {
+      candidate_object_id = *modeling_object;
+    }
+  }
+  if (candidate_object_id <= 0) {
     return publish_resolved_hover(std::nullopt, false,
                                   selected_modifier_pressed);
   }
 
   ModelingHoverSummary empty_spatial_sample;
-  empty_spatial_sample.candidate_object_id = current.candidate_object_id;
+  empty_spatial_sample.candidate_object_id = candidate_object_id;
   empty_spatial_sample.selected_modifier_pressed = selected_modifier_pressed;
   return publish_resolved_hover(std::nullopt, false,
                                 selected_modifier_pressed, false,

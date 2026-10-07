@@ -373,7 +373,7 @@ TEST(ModelingSessionServiceTests,
       split_source, "selection_mode, overlay_signature, hover"));
   EXPECT_TRUE(source_contains_compact(
       source, "return overlay_service_.selection_overlay_signature(runtime_, "
-              "options) ^ "
+              "options, suppressed_fallback_source_wire_object_id(options)) ^ "
               "sdk_projection_adapter_.selection_overlay_preview_signature();"));
   EXPECT_EQ(source.find("selectionOverlayToolSignature()"), std::string::npos);
   EXPECT_NE(

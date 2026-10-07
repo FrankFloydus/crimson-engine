@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include <editor/interactions/selection_edit.hpp>
@@ -75,17 +76,25 @@ public:
   [[nodiscard]] static bool has_modal_overlay(const ModelingToolStatus &status);
   void invalidate() const;
   void invalidate_composed_frame() const;
-  [[nodiscard]] const ViewportOverlayFrame *accepted_coordinate_base_frame(
+  [[nodiscard]] std::optional<ViewportOverlayFrame> accepted_coordinate_base_frame(
       const ModelingAcceptedOverlayCoordinates &coordinates,
       std::uint64_t local_visibility_revision,
-      ModelingSelectionOverlayOptions options) const;
+      ModelingSelectionOverlayOptions options,
+      int suppressed_fallback_source_wire_object_id) const;
+  [[nodiscard]] static int fallback_active_source_wire_object_id(
+      const ModelingSelectionProjectionSnapshot &selection);
+  [[nodiscard]] static int suppressed_fallback_source_wire_object_id(
+      int fallback_object_id,
+      const quader_editor_core::SelectionHoverState &hover,
+      ModelingSelectionOverlayOptions options);
   [[nodiscard]] const quader_editor_core::SelectionOverlayGeometryWorkCounters &
   selection_overlay_geometry_work_counters() const {
     return geometry_work_;
   }
   [[nodiscard]] std::uint64_t selection_overlay_signature(
       const quader_editor_core::EditorRuntime &runtime,
-      ModelingSelectionOverlayOptions options = {}) const;
+      ModelingSelectionOverlayOptions options = {},
+      int suppressed_fallback_source_wire_object_id = -1) const;
   [[nodiscard]] std::uint64_t volatile_overlay_signature(
       const quader_editor_core::EditorRuntime &runtime) const;
   /// Hashes generated mesh-preview inputs without projecting or compiling them.
