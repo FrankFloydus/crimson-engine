@@ -5212,6 +5212,394 @@ TEST(QtViewportSurfaceInputTests,
   }
 }
 
+namespace {
+
+/// Names exact component results exercised through physical Qt click packets.
+enum class ComponentDoubleClickCase {
+  EdgeLoop,
+  EdgeInterval,
+  EdgeIntervalAtGizmo,
+  EdgeRemoval,
+  FaceStrip,
+  FaceContiguous,
+  VertexContiguous,
+  AltEdgeLoop,
+};
+
+/// Exercises native event ordering against authored grid identities, not a
+/// traversal helper that could repeat the production algorithm's mistake.
+void expect_native_component_double_click(
+    ComponentDoubleClickCase selection_case,
+    quader::ViewportToolId selection_tool, bool move_tool,
+    const std::array<bool, 4> &frame_schedule, bool queue_next_press = false,
+    bool queue_next_release = false) {
+  SCOPED_TRACE(static_cast<int>(selection_case));
+  SCOPED_TRACE(static_cast<int>(selection_tool));
+  SCOPED_TRACE(move_tool);
+  SCOPED_TRACE(queue_next_press);
+  SCOPED_TRACE(queue_next_release);
+  SCOPED_TRACE(frame_schedule[0]);
+  SCOPED_TRACE(frame_schedule[1]);
+  SCOPED_TRACE(frame_schedule[2]);
+  NavigationPanelTestContext context;
+  ASSERT_NE(context.surface, nullptr);
+  auto &editor = context.editor;
+  quader_poly::Document document;
+  std::array<std::array<quader_poly::ElementId, 6>, 4> vertices{};
+  std::array<std::array<quader_poly::ElementId, 5>, 3> faces{};
+  for (std::size_t row = 0; row < vertices.size(); ++row) {
+    for (std::size_t column = 0; column < vertices[row].size(); ++column) {
+      vertices[row][column] = quader_poly::add_vertex(
+          document, {-5.0f + 2.0f * static_cast<float>(column),
+                     -3.0f + 2.0f * static_cast<float>(row), 0.0f});
+    }
+  }
+  for (std::size_t row = 0; row < faces.size(); ++row) {
+    for (std::size_t column = 0; column < faces[row].size(); ++column) {
+      const std::array corners{vertices[row][column], vertices[row][column + 1],
+                               vertices[row + 1][column + 1], vertices[row + 1][column]};
+      faces[row][column] = quader_poly::add_face(document, corners);
+      ASSERT_NE(faces[row][column], quader_poly::kInvalidElementId);
+    }
+  }
+  const auto wall = editor.modeling().create_box(
+      {.min = {-12, -10, -3}, .max = {12, 10, -2}}, "Double-click background");
+  ASSERT_TRUE(wall.ok()) << wall.error_message();
+  const auto grid = editor.modeling().create_mesh(
+      quader::QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+      {.name = "Double-click component grid"});
+  ASSERT_TRUE(grid.ok()) << grid.error_message();
+  ASSERT_TRUE(context.camera.restore_perspective_pose(
+      {.eye = {0, 0, 14}, .target = {0, 0, 0}, .up = {0, 1, 0}}));
+  context.process();
+  const qreal scale = context.surface->input_device_pixel_ratio();
+  const auto project = [&](quader::QVec3 world) {
+    const auto projected = context.camera.project_world_point(world);
+    EXPECT_TRUE(projected.visible);
+    return QPointF{projected.position.x / scale, projected.position.y / scale};
+  };
+  const QPointF wall_point = project({0, 4, -2});
+  const quader::QVec2 wall_local{
+      static_cast<float>(wall_point.x() * scale),
+      static_cast<float>(wall_point.y() * scale)};
+  ASSERT_GT(wall_local.x, 0.0f);
+  ASSERT_GT(wall_local.y, 0.0f);
+  ASSERT_LT(wall_local.x, context.camera.viewport_size().x);
+  ASSERT_LT(wall_local.y, context.camera.viewport_size().y);
+  const auto wall_ray = context.camera.ray_from_viewport_point(wall_local);
+  const auto wall_pick = editor.selection().pick_select({
+      .ray = {.origin = wall_ray.origin, .direction = wall_ray.direction}});
+  ASSERT_TRUE(wall_pick.ok()) << wall_pick.error_message();
+  ASSERT_EQ(wall_pick.value().active_object_id, wall.value().modeling_object_id);
+  ASSERT_TRUE(editor.selection().select_object(grid.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+  // The release-following hover is geometrically over the background wall,
+  // which must remain outside this explicitly fixed editing scope.
+  context.mouse(QEvent::MouseMove, wall_point, Qt::NoButton, Qt::NoButton);
+  context.process();
+  ASSERT_EQ(editor.selection().hover_summary().target.object_id, -1);
+
+  const auto element = [](quader_poly::ElementId id) {
+    return static_cast<quader::QuaderElementId>(id);
+  };
+  std::vector<quader_poly::ElementId> expected_vertices;
+  std::vector<quader_poly::Edge> expected_edges;
+  std::vector<quader_poly::ElementId> expected_faces;
+  Qt::KeyboardModifiers modifiers = Qt::NoModifier;
+  quader::QVec3 clicked{2, -1, 0};
+  const auto select_edge = [&](std::size_t row, std::size_t column) {
+    EXPECT_TRUE(editor.selection().select_edge(
+        grid.value(), element(vertices[row][column]), element(vertices[row][column + 1]),
+        quader::QuaderSelectionEdit::Add).ok());
+  };
+  const auto append_edges = [&](std::size_t row, std::size_t count) {
+    for (std::size_t column = 0; column < count; ++column) {
+      expected_edges.push_back(quader_poly::make_edge(
+          vertices[row][column], vertices[row][column + 1]));
+    }
+  };
+  if (selection_case == ComponentDoubleClickCase::FaceStrip ||
+      selection_case == ComponentDoubleClickCase::FaceContiguous) {
+    ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+    clicked = {-2, 0, 0};
+    if (selection_case == ComponentDoubleClickCase::FaceStrip) {
+      ASSERT_TRUE(editor.selection().select_face(grid.value(), element(faces[1][0])).ok());
+      expected_faces.assign(faces[1].begin(), faces[1].end());
+    } else {
+      for (const auto &row : faces) {
+        expected_faces.insert(expected_faces.end(), row.begin(), row.end());
+      }
+    }
+  } else if (selection_case == ComponentDoubleClickCase::VertexContiguous) {
+    ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
+    ASSERT_TRUE(editor.selection().select_vertex(grid.value(), element(vertices[0][0])).ok());
+    clicked = {1, -1, 0};
+    for (const auto &row : vertices) {
+      expected_vertices.insert(expected_vertices.end(), row.begin(), row.end());
+    }
+  } else {
+    ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+    if (selection_case == ComponentDoubleClickCase::EdgeRemoval) {
+      modifiers = Qt::ControlModifier;
+      for (std::size_t column = 0; column < faces[1].size(); ++column) {
+        select_edge(1, column);
+      }
+      select_edge(2, 0);
+      append_edges(2, 1);
+    } else if (selection_case == ComponentDoubleClickCase::AltEdgeLoop) {
+      modifiers = Qt::AltModifier | Qt::ShiftModifier;
+      select_edge(2, 0);
+      append_edges(2, 1);
+      append_edges(1, 5);
+    } else {
+      select_edge(1, 0);
+      if (selection_case == ComponentDoubleClickCase::EdgeInterval ||
+          selection_case == ComponentDoubleClickCase::EdgeIntervalAtGizmo) {
+        modifiers = Qt::ShiftModifier;
+        if (selection_case == ComponentDoubleClickCase::EdgeIntervalAtGizmo) {
+          // The selected end edges center the Move gizmo on the middle edge.
+          // A stationary first press must retain both interval endpoints.
+          select_edge(1, 4);
+          clicked = {0, -1, 0};
+          append_edges(1, 5);
+        } else {
+          append_edges(1, 4);
+        }
+      } else {
+        append_edges(1, 5);
+      }
+    }
+  }
+  ASSERT_TRUE(editor.tools().activate(selection_tool).ok());
+  if (move_tool) {
+    ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Move).ok());
+  }
+  context.process();
+  const QPointF point = project(clicked);
+  // Keep the ordinary follow-up outside the selected row. Clicking an already
+  // selected edge beneath a Move handle deliberately preserves that selection.
+  const QPointF next_point = project({4, 1, 0});
+  const auto generation = editor.mode().generation();
+  const auto content_revision = context.session.modeling().content_revision();
+  const auto asset_revision = context.session.assets().revision();
+  context.session.history().clear();
+  constexpr std::array kEventTypes{
+      QEvent::MouseButtonPress, QEvent::MouseButtonRelease,
+      QEvent::MouseButtonDblClick, QEvent::MouseButtonRelease};
+  for (std::size_t index = 0; index < kEventTypes.size(); ++index) {
+    const bool release = kEventTypes[index] == QEvent::MouseButtonRelease;
+    context.mouse(kEventTypes[index], point, Qt::LeftButton,
+                  release ? Qt::NoButton : Qt::LeftButton,
+                  release ? Qt::NoModifier : modifiers);
+    if (index + 1 == kEventTypes.size()) {
+      // The completed click owns its coordinates even if another mesh is under
+      // the pointer by the time the queued native packets reach the editor.
+      context.mouse(QEvent::MouseMove, wall_point, Qt::NoButton, Qt::NoButton);
+      if (queue_next_press) {
+        context.mouse(QEvent::MouseButtonPress, next_point, Qt::LeftButton,
+                      Qt::LeftButton, Qt::NoModifier);
+        if (queue_next_release) {
+          context.mouse(QEvent::MouseButtonRelease, next_point, Qt::LeftButton,
+                        Qt::NoButton, Qt::NoModifier);
+        }
+      }
+    }
+    if (frame_schedule[index]) {
+      context.process();
+    }
+  }
+  const auto edge_less = [](quader_poly::Edge a, quader_poly::Edge b) {
+    return a.a < b.a || (a.a == b.a && a.b < b.b);
+  };
+  std::ranges::sort(expected_vertices);
+  std::ranges::sort(expected_edges, edge_less);
+  std::ranges::sort(expected_faces);
+  const auto expect_selection = [&](bool pointer_still_pressed = false) {
+    const auto exported = context.session.modeling().export_selection();
+    const auto found = std::ranges::find(
+        exported.objects, grid.value().modeling_object_id,
+        &quader::ModelingSelectionExportObject::modeling_object_id);
+    ASSERT_NE(found, exported.objects.end());
+    auto actual = found->selection;
+    std::ranges::sort(actual.vertices);
+    std::ranges::sort(actual.edges, edge_less);
+    std::ranges::sort(actual.faces);
+    EXPECT_EQ(actual.vertices, expected_vertices);
+    EXPECT_EQ(actual.edges, expected_edges);
+    EXPECT_EQ(actual.faces, expected_faces);
+    EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Edit);
+    EXPECT_EQ(editor.mode().generation(), generation);
+    ASSERT_EQ(editor.mode().state().participants.size(), 1u);
+    EXPECT_EQ(editor.mode().state().participants.front().id, grid.value().entity);
+    EXPECT_EQ(context.panel.tool_state().active_tool,
+              move_tool ? quader::ViewportToolId::Move : selection_tool);
+    EXPECT_EQ(editor.viewports().preferred_selection_tool(), selection_tool);
+    EXPECT_FALSE(context.session.modeling().transform_drag_active());
+    if (!pointer_still_pressed) {
+      EXPECT_EQ(context.panel.operation_input_context().selection_gesture,
+                quader::QuaderInputSelectionGesture::None);
+    }
+    EXPECT_EQ(context.session.modeling().content_revision(), content_revision);
+    EXPECT_EQ(context.session.assets().revision(), asset_revision);
+    EXPECT_EQ(context.session.history().undo_count(), 0u);
+  };
+  if (queue_next_press) {
+    const std::vector next_edge{
+        quader_poly::make_edge(vertices[2][4], vertices[2][5])};
+    if (selection_tool == quader::ViewportToolId::PaintSelect || queue_next_release) {
+      // Paint owns its press immediately; ordinary Box/Lasso clicks wait for
+      // release and must leave the completed double-click interval observable.
+      expected_edges = next_edge;
+    }
+    expect_selection(!queue_next_release);
+    if (!queue_next_release) {
+      context.mouse(QEvent::MouseButtonRelease, next_point, Qt::LeftButton,
+                    Qt::NoButton, Qt::NoModifier);
+      context.process();
+    }
+    expected_edges = next_edge;
+    expect_selection();
+    if (move_tool) {
+      // The following stationary click lands on E's newly centered Move gizmo.
+      // Neither the consumed double-click nor the queued ordinary click may
+      // leave capture that starts a transform on this later press.
+      context.mouse(QEvent::MouseButtonPress, next_point, Qt::LeftButton,
+                    Qt::LeftButton, Qt::NoModifier);
+      context.process();
+      context.mouse(QEvent::MouseButtonRelease, next_point, Qt::LeftButton,
+                    Qt::NoButton, Qt::NoModifier);
+      context.process();
+    }
+  }
+  expect_selection();
+  const auto selection_revision = editor.selection().summary().selection_revision;
+  context.process();
+  context.process();
+  context.mouse(QEvent::MouseMove, project({-4, 2, 0}), Qt::NoButton, Qt::NoButton);
+  context.process();
+  expect_selection();
+  EXPECT_EQ(editor.selection().summary().selection_revision, selection_revision);
+}
+
+} // namespace
+
+TEST(QtViewportSurfaceInputTests,
+     ComponentEdgeDoubleClicksPreserveAnchorAndApplyOneModifierOperation) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-component-double-click-edge-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  constexpr std::array kFrameSchedules{
+      std::array{true, true, true, true},
+      std::array{false, false, false, true},
+      std::array{true, false, true, true}};
+  for (const auto selection_case : {ComponentDoubleClickCase::EdgeLoop,
+                                    ComponentDoubleClickCase::EdgeInterval,
+                                    ComponentDoubleClickCase::EdgeRemoval}) {
+    for (const auto selection_tool : {quader::ViewportToolId::Select,
+                                      quader::ViewportToolId::LassoSelect,
+                                      quader::ViewportToolId::PaintSelect}) {
+      for (const bool move_tool : {false, true}) {
+        for (const auto &schedule : kFrameSchedules) {
+          expect_native_component_double_click(selection_case, selection_tool,
+                                                move_tool, schedule);
+        }
+      }
+    }
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     ComponentFaceAndVertexDoubleClicksUseTypedExpansionAcrossNativeBatches) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-component-double-click-face-vertex-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  constexpr std::array kFrameSchedules{
+      std::array{true, true, true, true},
+      std::array{false, false, false, true},
+      std::array{true, false, true, true}};
+  for (const auto selection_case : {ComponentDoubleClickCase::FaceStrip,
+                                    ComponentDoubleClickCase::FaceContiguous,
+                                    ComponentDoubleClickCase::VertexContiguous}) {
+    for (const auto selection_tool : {quader::ViewportToolId::Select,
+                                      quader::ViewportToolId::LassoSelect,
+                                      quader::ViewportToolId::PaintSelect}) {
+      for (const auto &schedule : kFrameSchedules) {
+        expect_native_component_double_click(selection_case, selection_tool,
+                                              false, schedule);
+      }
+    }
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     ComponentDoubleClickRetainsAnchorThroughStationaryGizmoAndNextPress) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-component-double-click-boundary-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  constexpr std::array kFrameSchedules{
+      std::array{true, true, true, true},
+      std::array{false, false, false, true},
+      std::array{true, false, true, true}};
+  for (const auto &schedule : kFrameSchedules) {
+    for (const auto selection_tool : {quader::ViewportToolId::Select,
+                                      quader::ViewportToolId::LassoSelect,
+                                      quader::ViewportToolId::PaintSelect}) {
+      expect_native_component_double_click(ComponentDoubleClickCase::EdgeIntervalAtGizmo,
+                                            selection_tool, true, schedule);
+    }
+    for (const auto selection_tool : {quader::ViewportToolId::Select,
+                                      quader::ViewportToolId::LassoSelect,
+                                      quader::ViewportToolId::PaintSelect}) {
+      for (const bool move_tool : {false, true}) {
+        expect_native_component_double_click(ComponentDoubleClickCase::EdgeInterval,
+                                              selection_tool, move_tool,
+                                              schedule, true);
+      }
+    }
+  }
+  // A pending first gizmo press must consume its own release coordinates when
+  // both the double-click and a different ordinary click arrive in one frame.
+  constexpr std::array kPendingGizmoSchedule{true, false, false, true};
+  for (const auto selection_tool : {quader::ViewportToolId::Select,
+                                    quader::ViewportToolId::LassoSelect,
+                                    quader::ViewportToolId::PaintSelect}) {
+    expect_native_component_double_click(ComponentDoubleClickCase::EdgeIntervalAtGizmo,
+                                          selection_tool, true,
+                                          kPendingGizmoSchedule, true, true);
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     ShiftAltDoubleClickTogglesTraversalOnlyOnceAcrossNativeBatches) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-component-double-click-alt-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  constexpr std::array kFrameSchedules{
+      std::array{true, true, true, true},
+      std::array{false, false, false, true},
+      std::array{true, false, true, true}};
+  for (const auto selection_tool : {quader::ViewportToolId::Select,
+                                    quader::ViewportToolId::LassoSelect,
+                                    quader::ViewportToolId::PaintSelect}) {
+    for (const auto &schedule : kFrameSchedules) {
+      expect_native_component_double_click(ComponentDoubleClickCase::AltEdgeLoop,
+                                            selection_tool, true, schedule);
+    }
+  }
+}
+
 TEST(QtViewportSurfaceInputTests,
      TypedAltTraversalRetainsDirectionThroughNativeModifierReleaseAndLaterHover) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);

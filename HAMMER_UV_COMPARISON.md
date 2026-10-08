@@ -8,6 +8,12 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Hammer UV comparison and complete function review
 
+**Historical implementation review.** The structured UV Peel traversal and coordinate writer
+described here were replaced on 8 October 2026. Current ownership, independently authored scope
+and retained compatibility are documented in [Guided UV Peel ownership](src/sdk/core/modeling/src/uv_peel.md).
+This report preserves the earlier research record; its recovered implementation descriptions
+are not instructions to restore that code.
+
 Reviewed **9 September 2026**, against Quader **0.1.66**, including the current uncommitted UV remediation. The Git base is `c7a6e9a93b96e920c02be10ca199bb3155cee16b`; it identifies the starting commit, not a clean snapshot containing every reviewed change.
 
 The review accounts for **every candidate in the supplied study: 295 complete successful pseudocode bodies and one failed export, 296 unique addresses total**. It compares actual algorithms, UI/API entry points, publication owners and relevant Quader test bodies. It does not equate 295 functions with 295 features.

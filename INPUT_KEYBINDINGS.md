@@ -327,6 +327,20 @@ the viewport workspace owner; do not infer Box from a non-selection active tool.
 active tool's gesture and transform-handle precedence at press. Once a selection gesture owns
 the press, its matching release cannot become a transform or tool gesture. Lasso fallback
 retains its partial-intersection setting independently of the executing tool's settings.
+
+Ordinary component double-click dispatch is kind-specific: Edge selects the clicked loop,
+Face uses the prior active selected face to resolve a unique quad strip or falls back to
+connected faces, and Vertex selects connected vertices. Shift adds and Ctrl removes, with
+Ctrl taking precedence; unmodified input replaces. Modified Edge double-click bounds a
+valid loop using the pre-first-click selection and clicked edge when those seeds are separated;
+an already contiguous seed chain expands to the full loop. Adjacent Face anchors select the
+whole strip; separated anchors bound an interval. Closed intervals minimize element count,
+with a stable tie rule, rather than searching arbitrary mesh paths. None changes Edit membership.
+Capture the anchor and selection before the first click publishes, then resolve one logical
+double-click result against that context. Fence it by scene, Edit generation, selection kind,
+gesture and intervening selection changes; cancellation must retain an already published
+ordinary single click. An Alt double-click must not reapply the first click's traversal toggle.
+
 In Edit Mode, Alt+LMB requests one loop traversal from the actual clicked component:
 Vertex, Edge, or Face. Ctrl+Alt requests an edge ring in Vertex/Edge mode; Face mode
 keeps the quad face band. Shift toggles the whole result according to the clicked

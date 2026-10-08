@@ -617,9 +617,15 @@ public:
       const ModelingComponentSelectionRequest &request) const;
   [[nodiscard]] ModelingComponentTraversalSelectionPreparation
   prepare_component_traversal_selection(
-      const ModelingResolvedComponentSelectionRequest &request) const;
+      const ModelingResolvedComponentSelectionRequest &request,
+      const ModelingSelectionBoxBaseline *baseline = nullptr) const;
+  [[nodiscard]] ModelingComponentTraversalSelectionPreparation
+  prepare_component_double_click_selection(
+      const ModelingResolvedComponentSelectionRequest &request,
+      const ModelingSelectionBoxBaseline *baseline = nullptr) const;
   ModelingCommandResult apply_resolved_component_selection(
-      const ModelingResolvedComponentSelectionRequest &request);
+      const ModelingResolvedComponentSelectionRequest &request,
+      const ModelingSelectionBoxBaseline *baseline = nullptr);
   ModelingCommandResult set_component_selections(
       std::span<const ModelingComponentSelectionRequest> requests);
   ModelingCommandResult apply_resolved_component_selections(

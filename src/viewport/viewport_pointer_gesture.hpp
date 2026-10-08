@@ -122,6 +122,34 @@ viewport_pointer_edge_after(
   return found == edges.rend() ? nullptr : &*found;
 }
 
+/// Matches a press to its first release before another press of that button.
+/// Later coalesced button cycles cannot move or complete the original gesture.
+[[nodiscard]] inline const ViewportPointerButtonEdge *
+viewport_pointer_matching_release(
+    std::span<const ViewportPointerButtonEdge> released_edges,
+    std::span<const ViewportPointerButtonEdge> pressed_edges,
+    const ViewportPointerButtonEdge &press) {
+  const ViewportPointerButtonEdge *release = nullptr;
+  for (const auto &edge : released_edges) {
+    if (edge.button != press.button ||
+        (press.sequence != 0u && edge.sequence != 0u &&
+         edge.sequence <= press.sequence)) {
+      continue;
+    }
+    const bool followed_new_press = std::any_of(
+        pressed_edges.begin(), pressed_edges.end(), [&](const auto &new_press) {
+          return new_press.button == press.button &&
+                 new_press.sequence > press.sequence &&
+                 new_press.sequence < edge.sequence;
+        });
+    if (!followed_new_press &&
+        (release == nullptr || edge.sequence < release->sequence)) {
+      release = &edge;
+    }
+  }
+  return release;
+}
+
 /**
  * Retains cancellation ownership until the originating button is physically
  * up. This prevents a synthetic or delayed release from becoming a new click

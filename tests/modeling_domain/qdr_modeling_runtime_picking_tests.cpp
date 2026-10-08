@@ -217,8 +217,9 @@ void expect_loose_part_selection(const quader_poly::Selection &selection,
     EXPECT_TRUE(std::is_permutation(selection.vertices.begin(), selection.vertices.end(),
                                     fixture.vertices[part].begin(), fixture.vertices[part].end()));
   } else if (mode == quader_editor_core::SelectionMode::Edge) {
+    const std::array expected{fixture.edges[part][0], fixture.edges[part][4]};
     EXPECT_TRUE(std::is_permutation(selection.edges.begin(), selection.edges.end(),
-                                    fixture.edges[part].begin(), fixture.edges[part].end()));
+                                    expected.begin(), expected.end()));
   } else {
     EXPECT_TRUE(std::is_permutation(selection.faces.begin(), selection.faces.end(),
                                     fixture.faces[part].begin(), fixture.faces[part].end()));
@@ -1804,7 +1805,7 @@ TEST(QdrModelingRuntimePickingTests,
     if (mode == quader_editor_core::SelectionMode::Vertex) {
       EXPECT_EQ(selection.vertices.size(), 12U);
     } else if (mode == quader_editor_core::SelectionMode::Edge) {
-      EXPECT_EQ(selection.edges.size(), 14U);
+      EXPECT_EQ(selection.edges.size(), 4U);
     } else {
       EXPECT_EQ(selection.faces.size(), 4U);
     }
@@ -1843,10 +1844,92 @@ TEST(QdrModelingRuntimePickingTests,
     if (mode == quader_editor_core::SelectionMode::Vertex) {
       EXPECT_EQ(selection.vertices.size(), 4U);
     } else if (mode == quader_editor_core::SelectionMode::Edge) {
-      EXPECT_EQ(selection.edges.size(), 4U);
+      EXPECT_EQ(selection.edges.size(), 1U);
     } else {
       EXPECT_EQ(selection.faces.size(), 1U);
     }
+  }
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     EdgeDoubleClickBoundsSeparatedSeedsAndKeepsUnrelatedEdges) {
+  const auto fixture = component_traversal_grid();
+  const auto edge = [&](std::size_t column) {
+    return quader_poly::make_edge(fixture.vertices[2][column],
+                                  fixture.vertices[2][column + 1u]);
+  };
+  const auto unrelated = quader_poly::make_edge(fixture.vertices[0][0], fixture.vertices[1][0]);
+  for (const auto operation : {quader_editor_core::SelectionEditOperation::Replace,
+                               quader_editor_core::SelectionEditOperation::Add,
+                               quader_editor_core::SelectionEditOperation::Remove}) {
+    SCOPED_TRACE(static_cast<int>(operation));
+    quader_editor_core::EditorSession session({fixture.object});
+    std::vector prior{unrelated, edge(0)};
+    if (operation == quader_editor_core::SelectionEditOperation::Remove) prior.push_back(edge(2));
+    session.set_component_selection(fixture.object.id,
+        {.mode = quader_poly::SelectionMode::Edge, .edges = prior,
+         .has_active = true, .active_kind = quader_poly::ElementKind::Edge,
+         .active_edge = edge(0)}, quader_editor_core::SelectionMode::Edge);
+    const auto content_revision = session.state().content_revision;
+    const auto selected = quader_editor_core::apply_pick_selection(
+        session, session.objects(),
+        {.operation = operation, .ray = component_traversal_ray(2.5F, 2.0F),
+         .pick_options = quader_editor_core::selection_pick_options_from_radii(0.03, 0.03, false),
+         .click_count = 2});
+    ASSERT_TRUE(selected.hit);
+    EXPECT_TRUE(selected.changed);
+    std::vector<quader_poly::Edge> expected;
+    if (operation != quader_editor_core::SelectionEditOperation::Replace) expected.push_back(unrelated);
+    if (operation != quader_editor_core::SelectionEditOperation::Remove) {
+      for (std::size_t column = 0;
+           column < (operation == quader_editor_core::SelectionEditOperation::Replace ? 4u : 3u);
+           ++column) expected.push_back(edge(column));
+    }
+    const auto &selection = session.objects().front().selection;
+    EXPECT_TRUE(std::is_permutation(selection.edges.begin(), selection.edges.end(),
+                                    expected.begin(), expected.end()));
+    EXPECT_TRUE(selection.vertices.empty());
+    EXPECT_TRUE(selection.faces.empty());
+    EXPECT_TRUE(session.objects().front().component_edit_target);
+    EXPECT_EQ(session.active_object_id(), fixture.object.id);
+    EXPECT_EQ(session.state().content_revision, content_revision);
+  }
+}
+
+TEST(QdrModelingRuntimePickingTests,
+     FaceDoubleClickUsesAdjacentActiveFaceOrFallsBackToContiguousFaces) {
+  const auto fixture = component_traversal_grid();
+  for (const int direction : {-1, 0, 1}) {
+    SCOPED_TRACE(direction);
+    quader_editor_core::EditorSession session({fixture.object});
+    session.set_selection_mode(quader_editor_core::SelectionMode::Face);
+    if (direction >= 0) {
+      const auto active = direction == 0 ? fixture.faces[2][0] : fixture.faces[1][1];
+      session.set_component_selection(fixture.object.id,
+          {.mode = quader_poly::SelectionMode::Face, .faces = {active},
+           .has_active = true, .active_kind = quader_poly::ElementKind::Face,
+           .active_face = active}, quader_editor_core::SelectionMode::Face);
+    }
+    const auto selected = quader_editor_core::apply_pick_selection(
+        session, session.objects(),
+        {.ray = component_traversal_ray(1.5F, 2.5F),
+         .pick_options = quader_editor_core::selection_pick_options_from_radii(0.03, 0.03, false),
+         .click_count = 2});
+    ASSERT_TRUE(selected.hit);
+    EXPECT_TRUE(selected.changed);
+    std::vector<quader_poly::ElementId> expected;
+    if (direction < 0) {
+      for (const auto &row : fixture.faces) expected.insert(expected.end(), row.begin(), row.end());
+    } else {
+      for (std::size_t index = 0; index < fixture.faces.size(); ++index)
+        expected.push_back(direction == 0 ? fixture.faces[2][index] : fixture.faces[index][1]);
+    }
+    const auto &selection = session.objects().front().selection;
+    EXPECT_TRUE(std::is_permutation(selection.faces.begin(), selection.faces.end(),
+                                    expected.begin(), expected.end()));
+    EXPECT_EQ(selection.active_face, fixture.faces[2][1]);
+    EXPECT_TRUE(session.objects().front().component_edit_target);
+    EXPECT_EQ(session.active_object_id(), fixture.object.id);
   }
 }
 

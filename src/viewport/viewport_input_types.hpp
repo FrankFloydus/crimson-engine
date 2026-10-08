@@ -46,6 +46,9 @@ struct ViewportPointerButtonEdge {
   // Real mouse releases capture holds before later key events can change them.
   // An empty state means no held keys; absence retains synthetic frame fallback.
   std::optional<ViewportPointerHeldInputState> held_input;
+  // Native press count survives later presses in the same frame. Zero retains
+  // the aggregate frame count for synthetic callers and non-press edges.
+  int click_count = 0;
 };
 
 /// Preserves a freehand pointer path when a complete gesture occurs in one frame.

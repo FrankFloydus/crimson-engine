@@ -50,13 +50,19 @@ presentation and rendering integration.
   Material diagnostics remain independent of the grid.
 - Perspective ground-grid colors are sRGB palette values decoded before ordinary alpha blending.
   Keep palette intensity separate from coverage: the default small/64-unit shades are 76/114,
-  with full authored opacity. Verify the blend over black and textured beige in Shaded mode;
+  with full authored opacity. There is no separate 1024-map-unit color tier; those lines use the
+  ordinary major color. Verify the blend over black and textured beige in Shaded mode;
   matching grid/background colors do not imply a contrast-adaptation rule.
 - The perspective construction grid occupies a fixed 1024-by-1024 world rectangle at the origin.
   Its coverage has no camera-distance or perimeter opacity fade; the visible edge is the grid's
   boundary. Shaded uses the viewport Background Color preference; the scene's Environment Clear
   Color applies only in Rendered mode. Preserve orthographic placement/fades
   separately; verify distant lines and the fixed corner in `RenderGroundGridRuntimeTests`.
+  Perspective coverage uses independently derived pixel-area integration; see
+  [the material owner](materials/ground_grid.md). Preserve subpixel area, authored transparent
+  hierarchy slots and smooth averaged dense coverage in GPU tests with the actual default opacity.
+  Do not fade dense U/V families independently or let parent stripes fill the distant fine grid;
+  both cause visible oblique-view regressions that low-opacity contrast fixtures can miss.
 - Keep default material assets under the app-owned resources tree and preserve post-build copy
   paths.
 - Update localization, render, or resource tests when resource contracts change.

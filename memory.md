@@ -605,13 +605,18 @@ Tests: [viewport workflows](tests/viewport_interaction_controller_tests.cpp),
   [Vulkan previews](tests/selection_overlay_runtime_tests.cpp).
 - Freeze the resolved physical chord and semantic action at press through deferred release, gizmo
   handoff, and click/double-click disambiguation. A modifier release must not reinterpret the gesture.
-- Component double-click selects the picked loose part through shared authored vertex identities
-  in Vertex, Edge and Face modes. Coincident unwelded vertices stay separate; Shift adds and Ctrl
-  removes only that part. Explicit Alt loop/ring traversal takes precedence. Both native resolved
-  picking and runtime picking use the neutral `connected_component_selection` query; preserve
-  publication through the existing selection owner. Coverage: the loose-part cases in
-  [viewport workflows](tests/viewport_interaction_controller_tests.cpp) and
-  [selection queries](tests/modeling_domain/operation/qdr_document_operation_selection_commands_tests.cpp).
+- Component double-click uses `component_double_click_selection`: edges follow a valid loop,
+  faces try the previous active face's unambiguous quad strip before contiguous fallback, and
+  vertices select their connected component. Shift/Ctrl edge expansion uses all selected seeds
+  on that loop: contiguous seeds expand the loop; separated seeds bound an interval. Closed
+  loops retain the fewest elements, with stable identity ties. Native pairs retain the component
+  selection from before the first click, including per-participant active components. Apply the
+  result atomically through the SDK selection owner, preserve Edit membership and unrelated
+  components for Add/Remove, and add no Undo entry. Explicit Alt traversal takes precedence and
+  toggles only once per pair. Match each press to its own release; later ordinary clicks in the
+  same native batch must still reach gizmo/selection routing. Coverage: [native events](tests/qt_input_adapter_tests.cpp),
+  [viewport workflows](tests/viewport_interaction_controller_tests.cpp), and
+  [topology queries](tests/modeling_domain/operation/qdr_document_operation_component_traversal_tests.cpp).
 - Edge loops use topological continuation; rings cross opposite quad edges. A dedicated ngon
   face-hub walk follows a cap perimeter when its radial topology permits continuation. Never
   replace a stopped loop with an arbitrary adjacent face's perimeter. Face bands cross opposite
@@ -883,6 +888,11 @@ Tests: [transform/texture workflows](tests/editor_api_tests.cpp),
   include both clip planes in the retained grid signature so clip-only edits relocate it.
   See [placement policy](src/viewport/viewport_grid_placement_policy.hpp) and
   `ViewportGridPlacementPolicyTests` / `RenderGroundGridRuntimeTests`.
+- Perspective grid filtering must retain the averaged coverage of unresolved lines. Independently
+  dropping dense U/V families creates striped bands; unbounded parent
+  widths create an overly bright distant sheet. Verify default-opacity oblique captures, not only
+  the low-opacity contrast fixtures. See [coverage owner](resources/materials/ground_grid.md) and
+  `RenderGroundGridRuntimeTests.ObliqueDenseGridPreservesAveragedCoverageWithoutStripedBands`.
 
 Owners: [scene occurrence projection](src/scene/scene_mesh_occurrence_projection.cpp),
 [viewport workspace](src/viewport/viewport_workspace_service.cpp).
@@ -1266,8 +1276,12 @@ Tests: [normal behavior](tests/modeling_domain/operation/qdr_document_operation_
 - Guided UV Peel orders selected connected edge guides and walks opposite edges through quads on
   both sides, including front/back bands and quad end caps. Stop at a boundary, non-quad or the
   starting directed edge. Never restrict structured Peel to incident faces or n-gon rim cases.
-  Direct face-corner lanes preserve seam identities, normalize transverse spans by H/Hj, and write
-  A then B in guide order; later writes can intentionally replace earlier cyclic-strip values.
+  Authored face-corner occurrences preserve seam identities and normalize endpoint spans against
+  the maximum transverse width. Explicit segment/endpoint/side/occurrence priority resolves
+  repeated assignments; later occurrences intentionally replace earlier cyclic-strip values.
+  The independent helper indexes topology once per target, not once per guide. Its metric
+  integrates transformed differences without world translation. See [structured owner](src/sdk/core/modeling/src/uv_peel.md)
+  and [invariance fixtures](tests/sdk/uv_peel_invariance_tests.cpp).
   Mixed guides retain the length of edges with empty quad walks; those stations make no stores.
   Do not send structured output through a global chart-overlap veto or authored transverse-cut
   search. Non-quad-only guides retain the irregular guided-LSCM extension and its validation.

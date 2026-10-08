@@ -55,7 +55,6 @@ bool authored_face_chord_is_valid(
 ElementId mapped_vertex_for_merge(ElementId vertex_id, const std::set<ElementId>& merge_vertex_ids, ElementId active_vertex_id);
 float face_loop_area_score(const Document& document, std::span<const ElementId> vertex_ids);
 bool face_loop_is_valid_after_merge(const Document& document, std::span<const ElementId> vertex_ids);
-Face make_repaired_merge_face(const Face& source_face, std::vector<ElementId> vertices);
 std::vector<Face> repaired_faces_for_vertex_merge( const Document& source_document, const Document& candidate_document, const Face& source_face, const std::set<ElementId>& merge_vertex_ids, ElementId active_vertex_id);
 OperationResult build_vertex_merge_candidate( const Document& document, Document& candidate, const std::set<ElementId>& merge_vertex_ids, ElementId survivor_vertex_id, quader::QVec3 target_position);
 /// Repairs only incident topology, without the convex-hull reconstruction fallback.

@@ -132,6 +132,8 @@ struct ViewportBeforeToolInteractionResult {
   /// A resolved earlier single click can change the selection before gizmo work.
   std::optional<ViewportInteractionSelectionState> selection_after_pending_pick;
   bool gizmo_consumed = false;
+  /// A stationary mesh gizmo press may still resolve to a selection click.
+  bool pending_selection_gizmo_click = false;
   /// A visible handle owns hover feedback without consuming an ordinary click.
   bool gizmo_hovered = false;
   /// Distinguishes a material gesture's pointer claim from a transform gizmo.

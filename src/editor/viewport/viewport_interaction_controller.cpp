@@ -446,7 +446,9 @@ ViewportInteractionController::handle_before_active_tool_impl(
        frame.input_router.state().active_tool == ViewportToolId::LassoSelect) ||
       frame.input_router.state().active_tool == ViewportToolId::PaintSelect ||
       selection_.lasso_pointer_active() || selection_.paint_pointer_active() ||
-      selection_.traversal_pointer_active()) {
+      selection_.traversal_pointer_active() ||
+      (selection_.component_double_click_active() &&
+       !transform_gizmo_.pointer_interaction_active())) {
     return {.selection_after_pending_pick = resolved_selection};
   }
   bool range_hovered = false;
@@ -464,6 +466,9 @@ ViewportInteractionController::handle_before_active_tool_impl(
   }
   ViewportBeforeToolInteractionResult result =
       transform_gizmo_.handle_frame(editor, prepared, curve);
+  result.pending_selection_gizmo_click =
+      transform_gizmo_.pointer_interaction_active() &&
+      !transform_gizmo_.dragging() && !frame.input.curve_controls_editable;
   const auto *gizmo_frame = transform_gizmo_.frame();
   result.gizmo_hovered =
       range_hovered ||
@@ -876,6 +881,81 @@ void ViewportInteractionController::handle_after_active_tool_impl(
   }
   selection_.handle_frame(editor, prepared, tool_result, before_tool, tool_hover,
                           curve);
+  const auto completed_release = selection_.completed_component_double_release();
+  if (!completed_release || !runtime_binding.current()) {
+    return;
+  }
+  const auto *next_press = viewport_pointer_latest_edge(
+      frame.input.pointer_pressed_edges, QuaderMouseButton::Left);
+  if (next_press == nullptr || next_press->sequence <= *completed_release) {
+    return;
+  }
+
+  // One native batch can finish the double and begin an ordinary next click.
+  // Replay only its remaining pointer edges through the existing gizmo and
+  // selection owners; the consumed second release must not close its marquee.
+  ViewportInputFrame remaining_input = frame.input;
+  const auto consumed = [boundary = *completed_release](const auto &edge) {
+    return edge.button != QuaderMouseButton::Left || edge.sequence <= boundary;
+  };
+  std::erase_if(remaining_input.pointer_pressed_edges, consumed);
+  std::erase_if(remaining_input.pointer_released_edges, consumed);
+  std::erase_if(remaining_input.pointer_drag_started_edges, consumed);
+  std::erase_if(remaining_input.pointer_motion_samples, consumed);
+  remaining_input.pressed_input_chords.clear();
+  remaining_input.released_input_chords.clear();
+  remaining_input.wheel_input_edges.clear();
+  remaining_input.resolved_shortcuts.clear();
+  remaining_input.material_transfer_edges.clear();
+  remaining_input.curve_conversion_edges.clear();
+  remaining_input.command_pointer_edges.clear();
+  remaining_input.middle_pressed = false;
+  remaining_input.middle_released = false;
+  remaining_input.right_pressed = false;
+  remaining_input.right_released = false;
+  remaining_input.mouse_wheel = 0.0f;
+  remaining_input.cycle_selection_depth_pressed = false;
+  remaining_input.selection_click_has_depth_double_click = false;
+  const auto revisions = editor.query().revisions();
+  ViewportInteractionFrame remaining_frame{
+      .input_router = frame.input_router,
+      .camera = frame.camera,
+      .settings = frame.settings,
+      .input = remaining_input,
+      .input_result = frame.input_result,
+      .left_click_local = next_press->local,
+      .left_click_count = next_press->click_count > 0
+          ? next_press->click_count : frame.left_click_count,
+      .left_pressed = true,
+      .left_down = frame.left_down,
+      .left_released = !remaining_input.pointer_released_edges.empty(),
+      .pointer_drag_threshold_pixels = frame.pointer_drag_threshold_pixels,
+      .viewport_pixel_scale = frame.viewport_pixel_scale,
+      .pointer_capture_recentered = frame.pointer_capture_recentered,
+      .double_click_interval_seconds = frame.double_click_interval_seconds,
+      .monotonic_time_seconds = frame.monotonic_time_seconds,
+      .active_tool_allows_selection_fallback =
+          frame.active_tool_allows_selection_fallback,
+      .preferred_selection_tool = frame.preferred_selection_tool,
+      .scene_billboard_pick_candidates = frame.scene_billboard_pick_candidates,
+      .scene_billboard_pick_revision = frame.scene_billboard_pick_revision,
+      .scene_curve_pick_candidates = frame.scene_curve_pick_candidates,
+      .scene_surfaces = frame.scene_surfaces,
+      .scene_mesh_snap_query = frame.scene_mesh_snap_query,
+      .selection_state = {
+          .summary = editor.selection().summary(),
+          .scene_revision = revisions.scene_revision,
+          .asset_revision = revisions.asset_revision,
+          .pivot_revision = frame.selection_state.pivot_revision,
+      },
+  };
+  const auto remaining_before = handle_before_active_tool_impl(
+      editor, remaining_frame, curve, nullptr);
+  if (!runtime_binding.current()) {
+    return;
+  }
+  selection_.handle_frame(editor, remaining_frame, tool_result, remaining_before,
+                          tool_hover, curve);
 }
 
 void ViewportInteractionController::handle_after_active_tool(

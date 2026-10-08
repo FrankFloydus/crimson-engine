@@ -879,88 +879,6 @@ bool face_loop_is_valid_after_merge(const Document& document, std::span<const El
            !triangulate_face_local_indices(document, face).empty();
 }
 
-std::vector<ElementId> cyclic_face_path(
-        std::span<const ElementId> vertices,
-        std::size_t first_index,
-        std::size_t last_index)
-{
-    std::vector<ElementId> path;
-    path.reserve(vertices.size());
-    std::size_t index = first_index;
-    while (true) {
-        path.push_back(vertices[index]);
-        if (index == last_index) {
-            break;
-        }
-        index = (index + 1U) % vertices.size();
-    }
-    return path;
-}
-
-std::optional<std::pair<std::vector<ElementId>, std::vector<ElementId>>>
-split_source_face_at_nonadjacent_merge_pair(
-        const Face& source_face,
-        const std::set<ElementId>& merge_vertex_ids,
-        ElementId survivor_vertex_id)
-{
-    if (source_face.vertices.size() < 4U) {
-        return std::nullopt;
-    }
-
-    const auto survivor = std::ranges::find(
-            source_face.vertices, survivor_vertex_id);
-    if (survivor == source_face.vertices.end()) {
-        return std::nullopt;
-    }
-    const std::size_t survivor_index = static_cast<std::size_t>(
-            std::distance(source_face.vertices.begin(), survivor));
-
-    for (std::size_t merge_index = 0;
-         merge_index < source_face.vertices.size(); ++merge_index) {
-        if (!merge_vertex_ids.contains(source_face.vertices[merge_index])) {
-            continue;
-        }
-        const bool adjacent =
-                (merge_index + 1U) % source_face.vertices.size() ==
-                        survivor_index ||
-                (survivor_index + 1U) % source_face.vertices.size() ==
-                        merge_index;
-        if (adjacent) {
-            continue;
-        }
-
-        return std::pair{
-                cyclic_face_path(source_face.vertices, merge_index,
-                                 survivor_index),
-                cyclic_face_path(source_face.vertices, survivor_index,
-                                 merge_index)};
-    }
-
-    return std::nullopt;
-}
-
-Face make_repaired_merge_face(const Face& source_face, std::vector<ElementId> vertices)
-{
-    Face repaired;
-    repaired.id = source_face.id;
-    repaired.vertices = std::move(vertices);
-    repaired.material_slot = source_face.material_slot;
-    repaired.normal_shading = source_face.normal_shading;
-    repaired.texture_transform = source_face.texture_transform;
-    if (face_has_loop_uvs(source_face)) {
-        repaired.uvs.reserve(repaired.vertices.size());
-        for (const ElementId vertex_id : repaired.vertices) {
-            const auto uv = face_uv_for_vertex_id(source_face, vertex_id);
-            if (!uv.has_value()) {
-                repaired.uvs.clear();
-                break;
-            }
-            repaired.uvs.push_back(*uv);
-        }
-    }
-    return repaired;
-}
-
 std::vector<ElementId> duplicate_face_key(const Face& face)
 {
     std::vector<ElementId> best;
@@ -1073,76 +991,151 @@ bool remove_duplicate_faces_created_by_merge(
 }
 
 std::vector<Face> repaired_faces_for_vertex_merge(
-        const Document& source_document,
-        const Document& candidate_document,
-        const Face& source_face,
-        const std::set<ElementId>& merge_vertex_ids,
-        ElementId active_vertex_id)
-{
-    std::vector<ElementId> compact_vertices = compact_face_vertices_for_merge(source_face, merge_vertex_ids, active_vertex_id);
-    if (face_loop_is_valid_after_merge(candidate_document, compact_vertices)) {
-        Face mapped_source = source_face;
-        for (ElementId& vertex_id : mapped_source.vertices) {
-            vertex_id = mapped_vertex_for_merge(vertex_id, merge_vertex_ids, active_vertex_id);
-        }
-        return { make_repaired_merge_face(mapped_source, std::move(compact_vertices)) };
-    }
-
-    // Blender's weld operator splits a face between a source corner and its
-    // non-adjacent target before replacing either vertex. After the weld, the
-    // temporary split edge collapses to zero length. Keeping the two boundary
-    // paths separate prevents unrelated neighbors from being joined by a new
-    // diagonal when the survivor would otherwise occur twice in one loop.
-    const auto split_paths = split_source_face_at_nonadjacent_merge_pair(
-            source_face, merge_vertex_ids, active_vertex_id);
-    if (split_paths.has_value()) {
-        std::vector<Face> repaired_faces;
-        const auto append_split_path = [&](const std::vector<ElementId>& path) {
-            Face split_source = make_repaired_merge_face(source_face, path);
-            std::vector<Face> split_repair = repaired_faces_for_vertex_merge(
-                    source_document, candidate_document, split_source,
-                    merge_vertex_ids, active_vertex_id);
-            repaired_faces.insert(
-                    repaired_faces.end(),
-                    std::make_move_iterator(split_repair.begin()),
-                    std::make_move_iterator(split_repair.end()));
-        };
-        append_split_path(split_paths->first);
-        append_split_path(split_paths->second);
+    const Document& source_document,
+    const Document& candidate_document,
+    const Face& source_face,
+    const std::set<ElementId>& merge_vertex_ids,
+    ElementId active_vertex_id) {
+    std::vector<Face> repaired_faces;
+    if (source_face.vertices.size() < 3U) {
         return repaired_faces;
     }
 
-    if (has_repeated_vertex(compact_vertices)) {
-        return {};
+    Face face_metadata;
+    face_metadata.id = source_face.id;
+    face_metadata.material_slot = source_face.material_slot;
+    face_metadata.normal_shading = source_face.normal_shading;
+    face_metadata.texture_transform = source_face.texture_transform;
+    const bool source_has_uvs = face_has_loop_uvs(source_face);
+
+    const auto mapped_id = [&merge_vertex_ids, active_vertex_id](ElementId id) {
+        return merge_vertex_ids.contains(id) ? active_vertex_id : id;
+    };
+    const auto emit_face = [&repaired_faces, &face_metadata, &source_face,
+                           source_has_uvs](
+                              std::span<const ElementId> vertices,
+                              std::span<const std::size_t> donor_corners) {
+        Face face = face_metadata;
+        face.vertices.assign(vertices.begin(), vertices.end());
+        if (source_has_uvs) {
+            face.uvs.reserve(donor_corners.size());
+            for (const std::size_t corner : donor_corners) {
+                face.uvs.push_back(source_face.uvs[corner]);
+            }
+        }
+        repaired_faces.push_back(std::move(face));
+    };
+
+    // Regions retain original corners; only emitted faces contain mapped IDs.
+    std::vector<std::vector<std::size_t>> pending_regions(1U);
+    pending_regions.back().reserve(source_face.vertices.size());
+    for (std::size_t corner = 0; corner < source_face.vertices.size(); ++corner) {
+        pending_regions.back().push_back(corner);
     }
 
-    std::vector<Face> repaired_faces;
-    std::set<std::array<ElementId, 3>> emitted_triangles;
-    for (const Triangle& triangle : triangulate_face_local_indices(source_document, source_face)) {
-        std::array<ElementId, 3> vertices {
-            mapped_vertex_for_merge(source_face.vertices[triangle.a], merge_vertex_ids, active_vertex_id),
-            mapped_vertex_for_merge(source_face.vertices[triangle.b], merge_vertex_ids, active_vertex_id),
-            mapped_vertex_for_merge(source_face.vertices[triangle.c], merge_vertex_ids, active_vertex_id),
-        };
-        if (vertices[0] == vertices[1] || vertices[0] == vertices[2] || vertices[1] == vertices[2]) {
+    while (!pending_regions.empty()) {
+        std::vector<std::size_t> region = std::move(pending_regions.back());
+        pending_regions.pop_back();
+
+        std::vector<ElementId> mapped_vertices;
+        std::vector<std::size_t> mapped_donors;
+        mapped_vertices.reserve(region.size());
+        mapped_donors.reserve(region.size());
+        for (const std::size_t corner : region) {
+            const ElementId id = mapped_id(source_face.vertices[corner]);
+            if (mapped_vertices.empty() || mapped_vertices.back() != id) {
+                mapped_vertices.push_back(id);
+                mapped_donors.push_back(corner);
+            }
+        }
+        if (mapped_vertices.size() > 1U &&
+            mapped_vertices.front() == mapped_vertices.back()) {
+            mapped_vertices.pop_back();
+            mapped_donors.pop_back();
+        }
+        if (face_loop_is_valid_after_merge(candidate_document, mapped_vertices)) {
+            emit_face(mapped_vertices, mapped_donors);
             continue;
         }
 
-        std::array<ElementId, 3> triangle_key = vertices;
-        std::ranges::sort(triangle_key);
-        if (!emitted_triangles.insert(triangle_key).second || !face_loop_is_valid_after_merge(candidate_document, vertices)) {
+        const auto survivor = std::find_if(
+            region.begin(), region.end(), [&source_face, active_vertex_id](
+                                             std::size_t corner) {
+                return source_face.vertices[corner] == active_vertex_id;
+            });
+        if (survivor != region.end() && region.size() >= 4U) {
+            const std::size_t survivor_offset =
+                static_cast<std::size_t>(std::distance(region.begin(), survivor));
+            std::optional<std::size_t> division_offset;
+            for (std::size_t offset = 0; offset < region.size(); ++offset) {
+                if (merge_vertex_ids.contains(source_face.vertices[region[offset]]) &&
+                    (offset + 1U) % region.size() != survivor_offset &&
+                    (survivor_offset + 1U) % region.size() != offset) {
+                    division_offset = offset;
+                    break;
+                }
+            }
+            if (division_offset.has_value()) {
+                const auto boundary_walk = [&region](std::size_t first,
+                                                     std::size_t last) {
+                    std::vector<std::size_t> corners;
+                    corners.reserve((last + region.size() - first) % region.size() + 1U);
+                    for (std::size_t offset = first;;
+                         offset = (offset + 1U) % region.size()) {
+                        corners.push_back(region[offset]);
+                        if (offset == last) {
+                            break;
+                        }
+                    }
+                    return corners;
+                };
+                // A stack processes the selected-to-survivor walk first.
+                pending_regions.push_back(
+                    boundary_walk(survivor_offset, *division_offset));
+                pending_regions.push_back(
+                    boundary_walk(*division_offset, survivor_offset));
+                continue;
+            }
+        }
+
+        if (has_repeated_vertex(mapped_vertices)) {
             continue;
         }
 
-        Face triangle_source = source_face;
-        triangle_source.vertices.assign(vertices.begin(), vertices.end());
-        if (face_has_loop_uvs(source_face)) {
-            triangle_source.uvs = { source_face.uvs[triangle.a],
-                                    source_face.uvs[triangle.b], source_face.uvs[triangle.c] };
+        Face source_region = face_metadata;
+        source_region.vertices.reserve(region.size());
+        if (source_has_uvs) {
+            source_region.uvs.reserve(region.size());
         }
-        repaired_faces.push_back(std::move(triangle_source));
-    }
+        for (const std::size_t corner : region) {
+            source_region.vertices.push_back(source_face.vertices[corner]);
+            if (source_has_uvs) {
+                source_region.uvs.push_back(source_face.uvs[corner]);
+            }
+        }
 
+        std::set<std::array<ElementId, 3U>> seen_triangles;
+        for (const auto& triangle :
+             triangulate_face_local_indices(source_document, source_region)) {
+            const std::array<std::size_t, 3U> donor_corners{
+                region[triangle.a], region[triangle.b], region[triangle.c]};
+            const std::array<ElementId, 3U> vertices{
+                mapped_id(source_face.vertices[donor_corners[0]]),
+                mapped_id(source_face.vertices[donor_corners[1]]),
+                mapped_id(source_face.vertices[donor_corners[2]])};
+            if (vertices[0] == vertices[1] || vertices[1] == vertices[2] ||
+                vertices[2] == vertices[0]) {
+                continue;
+            }
+            auto triangle_key = vertices;
+            std::sort(triangle_key.begin(), triangle_key.end());
+            if (!seen_triangles.insert(triangle_key).second ||
+                !face_loop_is_valid_after_merge(candidate_document, vertices)) {
+                continue;
+            }
+            emit_face(vertices, donor_corners);
+        }
+    }
     return repaired_faces;
 }
 

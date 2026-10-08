@@ -12,6 +12,54 @@ Quader is a native Windows level design tool: C++20, Qt Widgets, Filament,
 CMake and vcpkg. This file owns repository-wide agent policy. Read it first, then
 only the guidance relevant to the change.
 
+## IMPORTANT: External DCC research and independent implementations
+
+**Read before using Blender, Source 2 Hammer, Maya or another DCC's source, shaders or
+decompilation.** The user will continue requesting these investigations. "Check how they do it"
+means understand the requested behavior and implement it for Quader. Where implementation choices
+exist, develop our own solution. Temporary copied reference implementations are explicitly
+authorized as development scaffolding; replace them before final delivery. Apply this policy to
+delegated agents as well.
+
+### Understand the behavior, then design for Quader
+
+- Extract inputs, outputs, gestures, topology/attribute constraints, failure cases and numerical/
+  visual expectations. Separate observations from hypotheses; design through Quader's owners/APIs.
+- Where choices exist, develop Quader's own approach. Transliteration, renamed variables or
+  rearranged foreign code is not independent authorship. Scrutinize comments, assets and tests too.
+- **Do not invent different math merely to look different.** Mathematical identities, required
+  topology invariants and standard methods can legitimately lead to the same equations or steps.
+  If only one practical method fits, explain the constraint and implement it from that contract.
+  Distinguish necessary steps from optional choices; "the reference does it" does not prove necessity.
+
+### Difficult tasks: reference prototype, tests, independent replacement
+
+**The user authorizes temporarily copying reference code to establish a working baseline.
+Do not ask for additional permission or impose a separate approval step for this workflow.**
+Use it when it helps resolve a difficult task, then replace the copied implementation:
+
+1. Establish the expected behavior. Inspect the reference source or recovered algorithm and,
+   when useful, copy/adapt it into a temporary working prototype.
+2. Clearly identify the reference implementation and its origin/version so it can be replaced
+   completely. Keep a clear boundary between that prototype and the eventual Quader implementation.
+3. Build Quader-owned regression fixtures around observable results. Exercise ordinary and
+   degenerate geometry, selections, attributes, errors, rollback and history where relevant. Use
+   tolerances and geometric equivalence unless exact ordering is part of the contract.
+   Include actual GPU/visual checks for rendering; passing topology tests cannot prove appearance.
+4. Implement the production solution from the contract and fixtures through Quader's owners.
+   Compare against the reference without retaining its source structure as a template. Preserve
+   intended behavior, performance and precision; differences need investigation, not weakened tests.
+5. Replace the copied prototype completely before final delivery. Check delivered code and build
+   inputs for leftover reference implementations. Keep the regression fixtures and rerun them
+   against our implementation alone, preserving the framework for future regressions.
+
+### Evidence and handoff
+
+Keep reference identities and behavioral requirements beside the owner or in the task report.
+Report what was studied, what was independently implemented, whether a temporary prototype was
+used and replaced, and what was verified. Passing tests proves the tested behavior; renaming a
+copied implementation does not make it independent. Describe the actual work accurately.
+
 ## Daily Filament check
 
 At the start of each task, and when resuming on a new local day, the coordinating agent runs

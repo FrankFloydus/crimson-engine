@@ -34,10 +34,6 @@ using AttributeType = filament::backend::ElementType;
 constexpr float kGroundGridFadeStart = 96.0f;
 constexpr float kGroundGridFadeEnd = 1536.0f;
 constexpr float kParentGridWorldSize = 2.0f;
-// The installed Hammer palette after its 30% grid-intensity conversion.
-// Small and 64-unit colors are exposed by the existing viewport settings.
-constexpr ViewportSettingColor kGroundGrid1024Color = {
-    100.0f / 255.0f, 50.0f / 255.0f, 5.0f / 255.0f, 1.0f};
 // Clip-depth bias keeps the plane visible on coplanar faces without disabling
 // mesh occlusion. The perspective material applies it in homogeneous space.
 constexpr float kGroundGridDepthBias = 0.005f;
@@ -303,15 +299,6 @@ void ViewportGridRenderer::update(const ViewportCameraController &controller,
       "gridColor", grid_color(ViewportColorSettingId::GridMinor));
   ground_grid_material_instance_->setParameter(
       "majorGridColor", grid_color(ViewportColorSettingId::GridMajor));
-  const auto tier_color = [&](ViewportSettingColor color,
-                              ViewportColorSettingId opacity_setting) {
-    color.a = settings.color(opacity_setting).a;
-    return setting_color(instance_edit_style.resolve_grid_color(
-        color, instance_edit_context));
-  };
-  ground_grid_material_instance_->setParameter(
-      "grid1024Color",
-      tier_color(kGroundGrid1024Color, ViewportColorSettingId::GridMajor));
   ground_grid_material_instance_->setParameter(
       "originUColor", grid_color(grid.axes.u_color));
   ground_grid_material_instance_->setParameter(

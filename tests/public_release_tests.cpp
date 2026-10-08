@@ -417,6 +417,89 @@ TEST(PublicReleaseSelection, AltClickUsesTypedVertexAndFaceHits) {
   }
 }
 
+TEST(PublicReleaseSelection, DoubleClicksUseTypedExpansionAndBoundedEdgeSelection) {
+  for (const auto mode : {QuaderSelectionMode::Vertex, QuaderSelectionMode::Edge,
+                          QuaderSelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    SceneSession session;
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+    quader_poly::Document document;
+    std::array<std::array<quader_poly::ElementId, 6>, 4> vertices{};
+    std::array<std::array<quader_poly::ElementId, 5>, 3> faces{};
+    for (std::size_t row = 0; row < vertices.size(); ++row) {
+      for (std::size_t column = 0; column < vertices[row].size(); ++column) {
+        vertices[row][column] = quader_poly::add_vertex(document,
+            {static_cast<float>(column), static_cast<float>(row), 0.0f});
+      }
+    }
+    for (std::size_t row = 0; row < faces.size(); ++row) {
+      for (std::size_t column = 0; column < faces[row].size(); ++column) {
+        faces[row][column] = quader_poly::add_face(document, std::array{
+            vertices[row][column], vertices[row][column + 1u],
+            vertices[row + 1u][column + 1u], vertices[row + 1u][column]});
+      }
+    }
+    const auto created = editor.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+        {.name = "Public double-click selection"});
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
+    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    ASSERT_TRUE(editor.selection().clear().ok());
+    QuaderPickSelectRequest request{
+        .ray = {.origin = {1.5f, 1.5f, 5.0f}, .direction = {0.0f, 0.0f, -1.0f}},
+        .click_count = 2, .vertex_radius = 0.03, .edge_radius = 0.03};
+    if (mode == QuaderSelectionMode::Edge) {
+      ASSERT_TRUE(editor.selection().select_edge(created.value(), vertices[1][0], vertices[1][1]).ok());
+      request.ray.origin = {3.5f, 1.0f, 5.0f};
+      request.shift_pressed = true;
+    } else if (mode == QuaderSelectionMode::Face) {
+      ASSERT_TRUE(editor.selection().select_face(created.value(), faces[1][0]).ok());
+    } else {
+      request.ray.origin = {1.0f, 1.0f, 5.0f};
+    }
+    session.history().clear();
+    const auto context = session.editor_mode().snapshot();
+    const auto content_revision = editor.selection().summary().content_revision;
+    const auto selected = editor.selection().pick_select(request);
+    ASSERT_TRUE(selected.ok()) << selected.error_message();
+    const auto overlay = editor.query().selection_overlay();
+    std::vector<std::pair<QuaderElementId, QuaderElementId>> actual;
+    std::vector<std::pair<QuaderElementId, QuaderElementId>> expected;
+    if (mode == QuaderSelectionMode::Edge) {
+      for (const auto &line : overlay.lines) {
+        if (line.layer == QuaderOverlayLayer::SelectedEdge)
+          actual.emplace_back(std::min(line.element.edge_a, line.element.edge_b),
+                              std::max(line.element.edge_a, line.element.edge_b));
+      }
+      for (std::size_t column = 0; column < 4; ++column)
+        expected.emplace_back(vertices[1][column], vertices[1][column + 1u]);
+    } else if (mode == QuaderSelectionMode::Face) {
+      for (const auto &triangle : overlay.triangles) {
+        if (triangle.layer == QuaderOverlayLayer::SelectedVisibleFace ||
+            triangle.layer == QuaderOverlayLayer::SelectedXrayFace)
+          actual.emplace_back(triangle.element.face_id, triangle.element.face_id);
+      }
+      for (const auto face : faces[1]) expected.emplace_back(face, face);
+    } else {
+      for (const auto &point : overlay.points) {
+        if (point.layer == QuaderOverlayLayer::SelectedVertex)
+          actual.emplace_back(point.element.vertex_id, point.element.vertex_id);
+      }
+      for (const auto &row : vertices)
+        for (const auto vertex : row) expected.emplace_back(vertex, vertex);
+    }
+    std::sort(actual.begin(), actual.end());
+    actual.erase(std::unique(actual.begin(), actual.end()), actual.end());
+    std::sort(expected.begin(), expected.end());
+    EXPECT_EQ(actual, expected);
+    EXPECT_EQ(session.editor_mode().snapshot().participants, context.participants);
+    EXPECT_EQ(session.editor_mode().snapshot().generation, context.generation);
+    EXPECT_EQ(editor.selection().summary().content_revision, content_revision);
+    EXPECT_EQ(session.history().undo_count(), 0u);
+  }
+}
+
 TEST(PublicReleaseSelection, ExplicitEditModeSupportsMultipleMeshesAndKeepsObjectActionsOut) {
   auto standalone = create_standalone_editor();
   auto &editor = standalone.editor();

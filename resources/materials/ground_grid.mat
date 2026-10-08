@@ -20,10 +20,6 @@ material {
         },
         {
             type : float4,
-            name : grid1024Color
-        },
-        {
-            type : float4,
             name : originUColor
         },
         {
@@ -117,8 +113,8 @@ vertex {
         material.gridWorldPosition = worldPosition;
         highp vec4 clipPosition = getClipFromWorldMatrix() * worldPosition;
         if (materialParams.analyticGridEnabled > 0.5) {
-            // Hammer's D_DEPTH_BIAS shifts clip depth toward the camera,
-            // with the same interpolation W as the original grid plane.
+            // Retained coplanar-depth policy: positive reversed depth moves
+            // the plane toward the eye without changing interpolation W.
             highp float depth = clamp(clipPosition.z / clipPosition.w, 0.0, 1.0);
             highp float bias = mix(0.000001, materialParams.depthBiasAmount, depth);
             clipPosition.z += clipPosition.w * bias;
@@ -160,84 +156,249 @@ fragment {
         return value / len;
     }
 
-    vec4 analyticGridTier(highp float nearestIndex, highp float mapSpacing,
-            highp float derivativeWidth, vec4 gridColor, vec4 majorGridColor,
-            vec4 originColor, out float thickness) {
-        highp float mapCoordinate = nearestIndex * mapSpacing;
-        int lineCoordinate = int(mapCoordinate);
-        vec4 color = gridColor;
-        thickness = materialParams.analyticLineThickness.x;
-        if ((lineCoordinate & 63) == 0) {
-            float highlight = 1.0 - clamp((derivativeWidth - 12.0) / 12.0, 0.0, 1.0);
-            color = mix(gridColor, majorGridColor, highlight);
-            thickness = materialParams.analyticLineThickness.y;
-        }
-        if ((lineCoordinate & 1023) == 0) {
-            color = materialParams.grid1024Color;
-            thickness = materialParams.analyticLineThickness.y;
-        }
-        if (lineCoordinate == 0) {
-            color = originColor;
-            thickness = materialParams.analyticLineThickness.z;
-        }
-        return color;
+    // Independently derived perspective-grid fragment helpers.
+    //
+    // A pixel is a unit square in screen coordinates. For one world-plane coordinate,
+    // its linearized offset inside that square is dx * x + dy * y, with x and y in
+    // [-0.5, 0.5]. After division by length(vec2(dx, dy)), the coordinate measures
+    // perpendicular screen pixels. Its distribution is the convolution of two
+    // centered uniform intervals. Integrating that distribution between the edges
+    // of a line band gives exact square-pixel coverage for the local affine map.
+    // No samples, neighboring-fragment queries, or temporal state are involved.
+
+    struct GridPixelFootprint {
+        highp float inverse_gradient;
+        highp float long_interval;
+        highp float short_interval;
+    };
+
+    GridPixelFootprint grid_pixel_footprint(highp vec2 coordinate_derivatives) {
+        GridPixelFootprint footprint;
+        highp float gradient = length(coordinate_derivatives);
+        // A constant coordinate has no resolvable line family. This floor is many
+        // orders below meaningful world-units-per-pixel for the fixed grid plane.
+        footprint.inverse_gradient = gradient > 1.0e-12 ? 1.0 / gradient : 0.0;
+        highp vec2 intervals = abs(coordinate_derivatives) * footprint.inverse_gradient;
+        footprint.long_interval = max(intervals.x, intervals.y);
+        footprint.short_interval = min(intervals.x, intervals.y);
+        return footprint;
     }
 
-    vec4 analyticGroundGrid(highp vec3 worldPosition, highp vec3 shaderWorldPosition,
-            vec3 uAxis, vec3 vAxis, highp vec2 coords) {
-        // Grid spacing and the 64/1024 hierarchy use Quader map units.
-        highp vec2 mapCoords = coords * 32.0;
-        highp float mapSpacing = max(materialParams.gridSize * 32.0, 0.0001);
-        highp float inverseSpacing = 1.0 / mapSpacing;
-        // Filament's portable material compiler exposes fwidth rather than
-        // the explicit coarse derivatives used by the source DXBC shader.
-        highp vec2 derivativeWidth = fwidth(mapCoords);
-        highp vec4 projectedPosition = getClipFromWorldMatrix() * vec4(shaderWorldPosition, 1.0);
-        highp vec2 pixelNdc = projectedPosition.xy / projectedPosition.w;
-        highp mat4 userWorldFromClip = getUserWorldFromWorldMatrix() * getWorldFromClipMatrix();
-        highp vec3 planeNormal = cross(uAxis, vAxis);
-        highp float planeDistance = dot(worldPosition - materialParams.cameraPosition, planeNormal);
-        highp vec2 inverseResolution = getResolution().zw;
-        vec4 gridColor = materialParams.gridColor;
-        vec4 majorGridColor = materialParams.majorGridColor;
-        vec4 colorSum = vec4(0.0);
-        float coverageSum = 0.0;
+    highp float grid_pixel_cdf(highp float coordinate, GridPixelFootprint footprint) {
+        highp float long_interval = footprint.long_interval;
+        highp float short_interval = footprint.short_interval;
+        // The vanishing-interval limit is a uniform distribution. Taking that limit
+        // below 0.0001 pixel avoids division by a tiny interval; the maximum omitted
+        // corner extent is below 0.00005 pixel.
+        if (short_interval < 1.0e-4) {
+            return clamp(coordinate / long_interval + 0.5, 0.0, 1.0);
+        }
+        highp float support_half_width = 0.5 * (long_interval + short_interval);
+        highp float plateau_half_width = 0.5 * (long_interval - short_interval);
+        if (coordinate <= -support_half_width) {
+            return 0.0;
+        }
+        if (coordinate >= support_half_width) {
+            return 1.0;
+        }
+        if (coordinate < -plateau_half_width) {
+            highp float corner = coordinate + support_half_width;
+            return corner * corner / (2.0 * long_interval * short_interval);
+        }
+        if (coordinate > plateau_half_width) {
+            highp float corner = support_half_width - coordinate;
+            return 1.0 - corner * corner / (2.0 * long_interval * short_interval);
+        }
+        return 0.5 + coordinate / long_interval;
+    }
 
-        for (int sampleY = -1; sampleY <= 1; ++sampleY) {
-            for (int sampleX = -1; sampleX <= 1; ++sampleX) {
-                // These are NDC offsets, equivalent to +/-0.125 screen pixel.
-                highp vec2 sampleNdc = pixelNdc
-                        + vec2(float(sampleX), float(sampleY)) * 0.25 * inverseResolution;
-                highp vec4 projectedWorld = userWorldFromClip * vec4(sampleNdc, 1.0, 1.0);
-                highp vec3 ray = normalize(projectedWorld.xyz / projectedWorld.w
-                        - materialParams.cameraPosition);
-                highp vec3 sampleWorld = materialParams.cameraPosition
-                        + ray * (planeDistance / dot(ray, planeNormal));
-                highp vec2 sampleCoords = vec2(dot(sampleWorld, uAxis), dot(sampleWorld, vAxis)) * 32.0;
-                highp vec2 scaledCoords = sampleCoords * inverseSpacing;
-                highp vec2 nearestIndex = roundEven(scaledCoords);
-                float uThickness;
-                float vThickness;
-                vec4 uColor = analyticGridTier(nearestIndex.x, mapSpacing, derivativeWidth.x,
-                        gridColor, majorGridColor, materialParams.originVColor, uThickness);
-                vec4 vColor = analyticGridTier(nearestIndex.y, mapSpacing, derivativeWidth.y,
-                        gridColor, majorGridColor, materialParams.originUColor, vThickness);
-                // Settings supply ratios against their defaults: (1,1,1)
-                // retains Hammer's 0.7-pixel half width for every line tier.
-                highp vec2 halfWidth = derivativeWidth * (0.7 * inverseSpacing)
-                        * max(vec2(uThickness, vThickness), vec2(0.0001));
-                vec2 coverage = vec2(1.0) - clamp(abs(scaledCoords - nearestIndex) / halfWidth,
-                        vec2(0.0), vec2(1.0));
-                colorSum += coverage.x > coverage.y ? uColor : vColor;
-                coverageSum += max(coverage.x, coverage.y);
-            }
+    highp float grid_band_coverage(
+            highp float distance_pixels,
+            highp float width_pixels,
+            GridPixelFootprint footprint) {
+        if (width_pixels <= 0.0 || footprint.inverse_gradient == 0.0) {
+            return 0.0;
+        }
+        highp float half_width = 0.5 * width_pixels;
+        return clamp(
+            grid_pixel_cdf(half_width - distance_pixels, footprint)
+                - grid_pixel_cdf(-half_width - distance_pixels, footprint),
+            0.0, 1.0);
+    }
+
+    // Periodic primitives of (stripe coverage - mean coverage). Reducing phase
+    // first keeps their values bounded even when a pixel spans many stripes.
+    highp float grid_periodic_first_primitive(
+            highp float coordinate, highp float period, highp float duty) {
+        highp float phase = fract(coordinate / period + 0.5) - 0.5;
+        return period * (sign(phase) * min(abs(phase), 0.5 * duty) - duty * phase);
+    }
+
+    highp float grid_periodic_second_primitive(
+            highp float coordinate, highp float period, highp float duty) {
+        highp float phase = fract(coordinate / period + 0.5) - 0.5;
+        highp float half_band = 0.5 * duty;
+        highp float inside_band = min(abs(phase), half_band);
+        return period * period * (0.5 * inside_band * inside_band
+            + half_band * max(abs(phase) - half_band, 0.0)
+            - 0.5 * duty * phase * phase);
+    }
+
+    highp float grid_periodic_band_coverage(
+            highp float coordinate,
+            highp float spacing,
+            highp float width_pixels,
+            GridPixelFootprint footprint) {
+        if (width_pixels <= 0.0 || footprint.inverse_gradient == 0.0) {
+            return 0.0;
+        }
+        highp float period = spacing * footprint.inverse_gradient;
+        if (width_pixels >= period) {
+            return 1.0;
+        }
+        // Taking abs before reduction makes reflection symmetry explicit, including
+        // negative world coordinates. The absolute phase remains world anchored.
+        highp float phase = fract(abs(coordinate) / spacing);
+        highp float nearest_phase = min(phase, 1.0 - phase);
+        highp float distance_pixels = nearest_phase * period;
+        highp float long_interval = footprint.long_interval;
+        highp float short_interval = footprint.short_interval;
+        highp float pixel_span = long_interval + short_interval;
+        // If only one band (or one complementary gap) can intersect the pixel,
+        // the isolated CDF is exact and avoids cancellation of large primitives.
+        if (period >= width_pixels + pixel_span) {
+            return grid_band_coverage(distance_pixels, width_pixels, footprint);
+        }
+        highp float gap = period - width_pixels;
+        if (period >= gap + pixel_span) {
+            return 1.0 - grid_band_coverage(0.5 * period - distance_pixels, gap, footprint);
+        }
+        highp float duty = width_pixels / period;
+        // Here both the band and gap are smaller than the projected pixel span.
+        // Integrate ALL intersecting stripes, retaining their average at distance.
+        // The uniform limit omits less than 0.00025 coverage at this threshold.
+        if (short_interval < 1.0e-3) {
+            return clamp(duty + (
+                grid_periodic_first_primitive(distance_pixels + 0.5 * long_interval, period, duty)
+                    - grid_periodic_first_primitive(distance_pixels - 0.5 * long_interval, period, duty))
+                / long_interval, 0.0, 1.0);
+        }
+        highp float outer_offset = 0.5 * pixel_span;
+        highp float inner_offset = 0.5 * (long_interval - short_interval);
+        return clamp(duty + (
+            grid_periodic_second_primitive(distance_pixels + outer_offset, period, duty)
+                - grid_periodic_second_primitive(distance_pixels + inner_offset, period, duty)
+                - grid_periodic_second_primitive(distance_pixels - inner_offset, period, duty)
+                + grid_periodic_second_primitive(distance_pixels - outer_offset, period, duty))
+            / (long_interval * short_interval), 0.0, 1.0);
+    }
+
+    highp vec3 grid_family_coverages(
+            highp float coordinate,
+            GridPixelFootprint footprint,
+            highp vec2 spacings,
+            highp vec3 widths) {
+        if (footprint.inverse_gradient == 0.0) {
+            return vec3(0.0);
+        }
+        // Keep a line and a gap in each base cell. When cells become smaller
+        // than pixels, widen neither minor nor parent stripes beyond half a cell;
+        // integrate their remaining area instead. This bounds distant opacity
+        // without letting broad parent stripes consume the fine grid's palette.
+        widths.xy = min(widths.xy, vec2(0.5 * spacings.x * footprint.inverse_gradient));
+        highp vec3 coverage = vec3(0.0);
+        // The hierarchy is nested. Line integration is linear, so removing the
+        // coarser subset at the SAME width removes its whole slot, including AA edges.
+        // This exclusion is independent of that slot's color opacity or own width.
+        coverage.x = max(
+            grid_periodic_band_coverage(coordinate, spacings.x, widths.x, footprint)
+                - grid_periodic_band_coverage(coordinate, spacings.y, widths.x, footprint),
+            0.0);
+        highp float origin_distance_pixels = abs(coordinate) * footprint.inverse_gradient;
+        coverage.y = max(
+            grid_periodic_band_coverage(coordinate, spacings.y, widths.y, footprint)
+                - grid_band_coverage(origin_distance_pixels, widths.y, footprint),
+            0.0);
+        coverage.z = grid_band_coverage(origin_distance_pixels, widths.z, footprint);
+        return coverage;
+    }
+
+    vec4 perspective_grid_coverage(
+            highp vec2 coords,
+            highp vec2 derivative_x,
+            highp vec2 derivative_y) {
+        highp float base_spacing = max(materialParams.gridSize, 1.0e-6);
+        // Two world units are the 64-map-unit parent interval.
+        // Integer multiples preserve nesting for any positive selected base spacing;
+        // power-of-two spacings give exactly max(base, 2).
+        highp float major_spacing = base_spacing * max(1.0, ceil(2.0 / base_spacing));
+        highp vec2 spacings = vec2(base_spacing, major_spacing);
+        highp vec3 normalized_widths = max(materialParams.analyticLineThickness, vec3(0.0));
+        // Width is measured perpendicular to each screen-space line. The default
+        // minor occupies exactly one pixel of integrated area when fully resolved.
+        // Slightly broader parent lines/axes remain distinguishable at equal alpha.
+        highp vec3 widths = vec3(
+            normalized_widths.x,
+            1.25 * normalized_widths.y,
+            1.5 * normalized_widths.z);
+        GridPixelFootprint u_footprint = grid_pixel_footprint(vec2(derivative_x.x, derivative_y.x));
+        GridPixelFootprint v_footprint = grid_pixel_footprint(vec2(derivative_x.y, derivative_y.y));
+        highp vec3 u_coverage = grid_family_coverages(coords.x, u_footprint, spacings, widths);
+        highp vec3 v_coverage = grid_family_coverages(coords.y, v_footprint, spacings, widths);
+        highp vec2 tier_coverage = max(u_coverage.xy, v_coverage.xy);
+        highp float total_coverage = clamp(max(
+            dot(u_coverage, vec3(1.0)), dot(v_coverage, vec3(1.0))), 0.0, 1.0);
+
+        // U is the axis along world +X (V coordinate zero); V has U coordinate zero.
+        highp float axis_u_coverage = v_coverage.z;
+        highp float axis_v_coverage = u_coverage.z;
+        highp float occupied_coverage = max(axis_u_coverage, axis_v_coverage);
+        highp float axis_u_alpha = axis_u_coverage * clamp(materialParams.originUColor.a, 0.0, 1.0);
+        highp float axis_v_alpha = axis_v_coverage * clamp(materialParams.originVColor.a, 0.0, 1.0);
+        highp float alpha = max(axis_u_alpha, axis_v_alpha);
+        highp vec3 premultiplied_color = vec3(0.0);
+        highp float axis_alpha_sum = axis_u_alpha + axis_v_alpha;
+        if (axis_alpha_sum > 0.0) {
+            // Symmetric color mixing at the origin with a maximum, rather than a
+            // sum, for opacity. Hiding one axis does not dim the other at the origin.
+            premultiplied_color = alpha * (
+                materialParams.originUColor.rgb * axis_u_alpha
+                    + materialParams.originVColor.rgb * axis_v_alpha) / axis_alpha_sum;
         }
 
-        // The source shader averages colors and coverage separately.
-        vec4 color = colorSum / 9.0;
-        color.a *= coverageSum / 9.0;
-        return color;
+        // Higher-priority geometric coverage reserves its slot even at zero opacity.
+        // Disjoint stripes inside one pixel contribute their combined area. The
+        // two directional totals use a bounded maximum to avoid bright crossings.
+        // Allocate that total by priority, reserving even transparent hierarchy
+        // slots without discarding the remaining lower-tier area at high density.
+        highp float major_weight = min(tier_coverage.y, max(total_coverage - occupied_coverage, 0.0));
+        occupied_coverage += major_weight;
+        highp float minor_weight = min(tier_coverage.x, max(total_coverage - occupied_coverage, 0.0));
+        highp float major_alpha = major_weight * clamp(materialParams.majorGridColor.a, 0.0, 1.0);
+        highp float minor_alpha = minor_weight * clamp(materialParams.gridColor.a, 0.0, 1.0);
+        premultiplied_color += materialParams.majorGridColor.rgb * major_alpha
+            + materialParams.gridColor.rgb * minor_alpha;
+        alpha += major_alpha + minor_alpha;
+        // The caller owns gridIntensity and the final transparent material blend.
+        return alpha > 0.0 ? vec4(premultiplied_color / alpha, alpha) : vec4(0.0);
     }
+
+    // Independent numerical reference cases (not source-dependent expectations):
+    // - Derivative (1,0), width 1: band coverage at perpendicular distances
+    //   0, 0.25, 0.5, 0.75, 1 is respectively 1, 0.75, 0.5, 0.25, 0.
+    // - Derivative (1,0), width 2: corresponding coverage is 1, 1, 1, 0.75, 0.5;
+    //   the integral over all signed distances is 2 (versus 1 for width 1).
+    // - Derivative (1/sqrt(2),1/sqrt(2)), width 1, centered on the band:
+    //   direct CDF evaluation gives 1 - 2*(sqrt(0.5)-0.5)^2 = 0.914213562373.
+    // - Derivative (1,0), period 0.5, width 0.125: coverage is 0.25 at any phase
+    //   because the pixel spans two complete periods. Width >= period gives 1.
+    // - Base 1 gives parent spacing 2; bases 4 and 64 use that same base as their
+    //   parent spacing and have only major slots apart from the origin axes.
+    // - Reflection of either coordinate and its derivatives preserves coverage.
+    //   Exchanging screen derivative X/Y also preserves it exactly in ideal math.
+    // - Fully covered transparent major or axis slots contribute zero alpha and do
+    //   not reveal the matching ordinary line. Equal opaque crossing lines never
+    //   exceed alpha 1; equal half-opacity crossing lines never exceed alpha 0.5.
 
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
@@ -251,8 +412,15 @@ fragment {
         vec3 color;
         float alpha;
         if (materialParams.analyticGridEnabled > 0.5) {
-            vec4 grid = analyticGroundGrid(worldPosition, shaderWorldPosition,
-                    safeUAxis, safeVAxis, coords);
+            // Differentiate the camera-relative interpolant before restoring
+            // authored axes; differentiating translated world coordinates loses
+            // fine footprints at large coordinates.
+            highp mat3 user_world_rotation = mat3(getUserWorldFromWorldMatrix());
+            highp vec3 world_dx = user_world_rotation * dFdx(shaderWorldPosition);
+            highp vec3 world_dy = user_world_rotation * dFdy(shaderWorldPosition);
+            highp vec2 derivative_x = vec2(dot(world_dx, safeUAxis), dot(world_dx, safeVAxis));
+            highp vec2 derivative_y = vec2(dot(world_dy, safeUAxis), dot(world_dy, safeVAxis));
+            vec4 grid = perspective_grid_coverage(coords, derivative_x, derivative_y);
             color = grid.rgb;
             alpha = grid.a;
         } else {
@@ -305,7 +473,7 @@ fragment {
             discard;
         }
         // Filament's transparent blend uses ONE / ONE_MINUS_SRC_ALPHA.
-        // Premultiply once to preserve Hammer's SRC_ALPHA blend for RGB.
+        // Convert the coverage-weighted color to premultiplied RGB once.
         material.baseColor = vec4(color * alpha, alpha);
     }
 }

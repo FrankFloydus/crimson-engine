@@ -6945,7 +6945,7 @@ struct NativePaneInputHarness {
     for (const auto pane : {quader::ViewportPaneId::Perspective, quader::ViewportPaneId::Top}) {
       auto *surface = panel.surface(pane);
       ASSERT_NE(surface, nullptr);
-      surface->resize(800, 600);
+      quader::test_support::resize_viewport_surface(panel, *surface, {800, 600});
     }
     focus(quader::ViewportPaneId::Perspective);
     process();
@@ -6974,10 +6974,10 @@ struct NativePaneInputHarness {
   void mouse(quader::ViewportPaneId pane, QEvent::Type type, QPoint local,
              Qt::MouseButton button, Qt::MouseButtons buttons) {
     auto *surface = panel.surface(pane);
-    const QPoint global = surface->mapToGlobal(local);
+    const QPoint global = surface->visible_local_to_global(local);
     QMouseEvent event(type, QPointF(local), QPointF(global), button, buttons,
                       Qt::NoModifier);
-    QCoreApplication::sendEvent(surface, &event);
+    quader::test_support::send_visible_viewport_event(surface, &event);
   }
 };
 

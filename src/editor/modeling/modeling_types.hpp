@@ -474,10 +474,12 @@ struct ModelingResolvedComponentSelectionRequest {
   bool preserve_existing_component_selection_on_hit = false;
 };
 
-/** Validates a traversal and resolves its selection before settling a draft. */
+/** Validates component expansion before settling a draft. */
 struct ModelingComponentTraversalSelectionPreparation {
   ModelingCommandResult command;
   ModelingComponentSelectionRequest selection;
+  /// Exact per-participant results, published together through the SDK owner.
+  std::vector<ModelingComponentSelectionRequest> replacements;
 };
 
 /** Applies component-mode policy to a mesh body hit with no component hit. */

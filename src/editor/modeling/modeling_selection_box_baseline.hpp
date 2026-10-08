@@ -14,8 +14,8 @@ namespace quader {
 class ModelingSessionService;
 
 /**
- * Stores an opaque modeling selection baseline for one deferred viewport
- * box-selection commit.
+ * Stores an opaque modeling selection baseline for a deferred viewport
+ * selection gesture, including component double-click pairs.
  */
 class ModelingSelectionBoxBaseline final {
 public:

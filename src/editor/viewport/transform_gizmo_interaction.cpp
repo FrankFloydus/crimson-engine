@@ -1127,8 +1127,9 @@ TransformGizmoInteraction::handle_frame(QuaderEditorApi &editor,
     }
     result.gizmo_consumed = true;
     const bool release_requested = frame.left_released || !frame.left_down;
-    if (const auto *release = viewport_pointer_edge_after(
-            frame.input.pointer_released_edges, pending_drag_->pointer.press)) {
+    if (const auto *release = viewport_pointer_matching_release(
+            frame.input.pointer_released_edges, frame.input.pointer_pressed_edges,
+            pending_drag_->pointer.press)) {
       // A host frame may already contain hover after this physical release.
       // Only the release can promote a pending handle click into a drag.
       drag_local = release->local;

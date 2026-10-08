@@ -425,6 +425,29 @@ struct StripNode {
     std::array<std::optional<std::size_t>, 2> neighbors;
 };
 
+std::vector<StripNode> face_strip_nodes(const TraversalTopology& topology) {
+    std::vector<StripNode> nodes(topology.faces().size() * 2U);
+    for (std::size_t face = 0U; face < topology.faces().size(); ++face) {
+        const IndexedFace& indexed = topology.faces()[face];
+        if (!indexed.eligible || indexed.edges.size() != 4U) {
+            continue;
+        }
+        for (std::size_t corner = 0U; corner < 4U; ++corner) {
+            const auto& shared = topology.edges()[indexed.edges[corner]].faces;
+            if (shared.size() != 2U) {
+                continue;
+            }
+            const std::size_t adjacent = shared[0] == face ? shared[1] : shared[0];
+            const auto adjacent_axis = quad_axis(topology, adjacent, indexed.edges[corner]);
+            if (adjacent_axis.has_value()) {
+                nodes[face * 2U + corner % 2U].neighbors[corner / 2U] =
+                    adjacent * 2U + *adjacent_axis;
+            }
+        }
+    }
+    return nodes;
+}
+
 std::vector<ElementId> face_component(const TraversalTopology& topology,
                                      std::size_t seed, ElementId context) {
     const auto picked = topology.face_index(context);
@@ -448,25 +471,7 @@ std::vector<ElementId> face_component(const TraversalTopology& topology,
         return {};
     }
 
-    std::vector<StripNode> nodes(topology.faces().size() * 2U);
-    for (std::size_t face = 0U; face < topology.faces().size(); ++face) {
-        const IndexedFace& indexed = topology.faces()[face];
-        if (!indexed.eligible || indexed.edges.size() != 4U) {
-            continue;
-        }
-        for (std::size_t corner = 0U; corner < 4U; ++corner) {
-            const auto& shared = topology.edges()[indexed.edges[corner]].faces;
-            if (shared.size() != 2U) {
-                continue;
-            }
-            const std::size_t adjacent = shared[0] == face ? shared[1] : shared[0];
-            const auto adjacent_axis = quad_axis(topology, adjacent, indexed.edges[corner]);
-            if (adjacent_axis.has_value()) {
-                nodes[face * 2U + corner % 2U].neighbors[corner / 2U] =
-                    adjacent * 2U + *adjacent_axis;
-            }
-        }
-    }
+    const auto nodes = face_strip_nodes(topology);
 
     const auto& initial_edges = topology.faces()[*initial].edges;
     const std::size_t entry_corner = static_cast<std::size_t>(
@@ -510,7 +515,252 @@ std::vector<ElementId> canonical_ids(std::span<const ElementId> ids) {
     return result;
 }
 
+/// Orders one unbranched relation component so bounds refer to topology distance.
+struct OrderedComponent {
+    std::vector<std::size_t> nodes;
+    bool closed = false;
+};
+
+template <typename Less>
+OrderedComponent order_component(const EdgeRelations& relations, std::size_t seed,
+                                 const Less& less) {
+    const auto component = edge_component(relations, seed);
+    std::vector<std::size_t> ends;
+    for (const std::size_t node : component) {
+        if (relations[node].size() > 2U) {
+            return {};
+        }
+        if (relations[node].size() < 2U) {
+            ends.push_back(node);
+        }
+    }
+    if (component.size() == 1U) {
+        return { component, false };
+    }
+    if (!ends.empty() && ends.size() != 2U) {
+        return {};
+    }
+    const auto& starts = ends.empty() ? component : ends;
+    const std::size_t start = *std::ranges::min_element(starts, less);
+    OrderedComponent ordered { { start }, ends.empty() };
+    std::optional<std::size_t> previous;
+    std::size_t current = start;
+    while (ordered.nodes.size() < component.size()) {
+        std::optional<std::size_t> next;
+        for (const std::size_t neighbor : relations[current]) {
+            if ((!previous.has_value() || neighbor != *previous) &&
+                (!next.has_value() || less(neighbor, *next))) {
+                next = neighbor;
+            }
+        }
+        if (!next.has_value() || *next == start) {
+            return {};
+        }
+        ordered.nodes.push_back(*next);
+        previous = current;
+        current = *next;
+    }
+    return ordered;
+}
+
+/// Fills gaps between seeds on an already determined loop, never across the mesh.
+template <typename Selected, typename Less>
+std::vector<std::size_t> bounded_component(const OrderedComponent& component,
+                                          const Selected& selected, const Less& less) {
+    std::vector<std::size_t> seeds;
+    for (std::size_t position = 0U; position < component.nodes.size(); ++position) {
+        if (selected(component.nodes[position])) {
+            seeds.push_back(position);
+        }
+    }
+    if (seeds.size() < 2U) {
+        return component.nodes;
+    }
+    if (!component.closed) {
+        const std::size_t begin = seeds.front();
+        const std::size_t end = seeds.back() + 1U;
+        // One existing run establishes direction rather than an interval.
+        if (end - begin == seeds.size()) {
+            return component.nodes;
+        }
+        return { component.nodes.begin() + static_cast<std::ptrdiff_t>(begin),
+                 component.nodes.begin() + static_cast<std::ptrdiff_t>(end) };
+    }
+
+    const std::size_t count = component.nodes.size();
+    std::size_t gap_count = 0U;
+    std::size_t largest_gap = 0U;
+    std::size_t begin = 0U;
+    for (std::size_t index = 0U; index < seeds.size(); ++index) {
+        const std::size_t next = seeds[(index + 1U) % seeds.size()];
+        const std::size_t gap = (next + count - seeds[index] - 1U) % count;
+        gap_count += gap != 0U ? 1U : 0U;
+        // Removing the largest seed-free gap leaves the fewest selected nodes.
+        // Equal gaps choose the smallest stable ID at the retained start.
+        if (gap > largest_gap || (gap == largest_gap &&
+            less(component.nodes[next], component.nodes[begin]))) {
+            largest_gap = gap;
+            begin = next;
+        }
+    }
+    if (gap_count <= 1U) {
+        return component.nodes;
+    }
+    std::vector<std::size_t> result;
+    result.reserve(count - largest_gap);
+    for (std::size_t offset = 0U; offset < count - largest_gap; ++offset) {
+        result.push_back(component.nodes[(begin + offset) % count]);
+    }
+    return result;
+}
+
+std::optional<std::size_t> guided_face_anchor(const TraversalTopology& topology,
+                                             const Selection& prior, ElementId clicked) {
+    if (prior.mode != SelectionMode::Face || !prior.has_active ||
+        prior.active_kind != ElementKind::Face ||
+        std::ranges::find(prior.faces, prior.active_face) == prior.faces.end()) {
+        return std::nullopt;
+    }
+    ElementId anchor = prior.active_face;
+    if (anchor == clicked) {
+        const auto previous = std::ranges::find_if(prior.faces | std::views::reverse,
+            [&](ElementId id) { return id != clicked; });
+        if (previous == prior.faces.rend()) {
+            return std::nullopt;
+        }
+        anchor = *previous;
+    }
+    const auto found = topology.face_index(anchor);
+    return found.has_value() && topology.faces()[*found].eligible ? found : std::nullopt;
+}
+
+std::optional<std::vector<ElementId>> guided_face_interval(
+    const TraversalTopology& topology, std::size_t picked, const Selection& prior) {
+    const auto anchor = guided_face_anchor(topology, prior, topology.faces()[picked].source->id);
+    if (!anchor.has_value() || topology.faces()[picked].edges.size() != 4U ||
+        topology.faces()[*anchor].edges.size() != 4U) {
+        return std::nullopt;
+    }
+    std::optional<std::size_t> adjacent_axis;
+    for (const std::size_t edge : topology.faces()[picked].edges) {
+        if (std::ranges::find(topology.faces()[*anchor].edges, edge) !=
+            topology.faces()[*anchor].edges.end()) {
+            // A single shared edge establishes local direction even if the two
+            // global strips intersect again elsewhere on an unusual surface.
+            if (adjacent_axis.has_value() || topology.edges()[edge].faces.size() != 2U) {
+                return std::nullopt;
+            }
+            adjacent_axis = quad_axis(topology, picked, edge);
+        }
+    }
+    const auto nodes = face_strip_nodes(topology);
+    EdgeRelations relations(nodes.size());
+    for (std::size_t node = 0U; node < nodes.size(); ++node) {
+        for (const auto neighbor : nodes[node].neighbors) {
+            if (neighbor.has_value()) {
+                connect(relations, node, *neighbor);
+            }
+        }
+    }
+    const auto less = [&](std::size_t left, std::size_t right) {
+        return topology.faces()[left / 2U].source->id < topology.faces()[right / 2U].source->id;
+    };
+    std::optional<OrderedComponent> guided;
+    for (std::size_t axis = 0U; axis < 2U; ++axis) {
+        if (adjacent_axis.has_value() && axis != *adjacent_axis) {
+            continue;
+        }
+        auto ordered = order_component(relations, picked * 2U + axis, less);
+        if (std::ranges::none_of(ordered.nodes, [&](std::size_t node) {
+            return node / 2U == *anchor;
+        })) {
+            continue;
+        }
+        // A self-crossing strip cannot provide an unambiguous interval of faces.
+        std::unordered_set<std::size_t> unique_faces;
+        for (const std::size_t node : ordered.nodes) {
+            if (!unique_faces.insert(node / 2U).second) {
+                return std::nullopt;
+            }
+        }
+        if (guided.has_value()) {
+            return std::nullopt;
+        }
+        guided = std::move(ordered);
+    }
+    if (!guided.has_value()) {
+        return std::nullopt;
+    }
+    const std::unordered_set<ElementId> selected(prior.faces.begin(), prior.faces.end());
+    const auto interval = bounded_component(*guided, [&](std::size_t node) {
+        return node / 2U == picked || selected.contains(topology.faces()[node / 2U].source->id);
+    }, less);
+    std::vector<ElementId> result;
+    result.reserve(interval.size());
+    for (const std::size_t node : interval) {
+        result.push_back(topology.faces()[node / 2U].source->id);
+    }
+    return result;
+}
+
 } // namespace
+
+Selection component_double_click_selection(const Document& document, const PickResult& clicked,
+                                           const Selection& prior_selection) {
+    Selection result;
+    result.mode = clicked.kind == ElementKind::Edge ? SelectionMode::Edge :
+        (clicked.kind == ElementKind::Face ? SelectionMode::Face : SelectionMode::Vertex);
+    if (!clicked.hit) {
+        return result;
+    }
+    const TraversalTopology topology(document);
+    if (clicked.kind == ElementKind::Vertex) {
+        return topology.live_vertex(clicked.vertex_id) ?
+            connected_component_selection(document, clicked) : result;
+    }
+    if (clicked.kind == ElementKind::Face) {
+        const auto picked = topology.face_index(clicked.face_id);
+        if (!picked.has_value() || !topology.faces()[*picked].eligible) {
+            return result;
+        }
+        auto guided = guided_face_interval(topology, *picked, prior_selection);
+        if (!guided.has_value()) {
+            return connected_component_selection(document, clicked);
+        }
+        select_only(result, clicked);
+        result.faces = std::move(*guided);
+        return result;
+    }
+    const auto picked = topology.edge_index(clicked.edge);
+    if (!picked.has_value()) {
+        return result;
+    }
+    const auto relations = loop_relations(topology, *picked);
+    const auto less = [](std::size_t left, std::size_t right) { return left < right; };
+    const auto ordered = order_component(relations, *picked, less);
+    std::unordered_set<std::size_t> selected;
+    if (prior_selection.mode == SelectionMode::Edge) {
+        for (const Edge edge : prior_selection.edges) {
+            if (const auto index = topology.edge_index(edge); index.has_value()) {
+                selected.insert(*index);
+            }
+        }
+    }
+    const auto interval = bounded_component(ordered, [&](std::size_t node) {
+        return node == *picked || selected.contains(node);
+    }, less);
+    if (interval.empty()) {
+        return result;
+    }
+    select_only(result, clicked);
+    result.active_edge = topology.edges()[*picked].edge;
+    result.edges.clear();
+    result.edges.reserve(interval.size());
+    for (const std::size_t node : interval) {
+        result.edges.push_back(topology.edges()[node].edge);
+    }
+    return result;
+}
 
 std::vector<Edge> edge_loop_edges(const Document& document, Edge seed_edge) {
     const TraversalTopology topology(document);

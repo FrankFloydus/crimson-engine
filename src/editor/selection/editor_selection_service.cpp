@@ -1599,9 +1599,13 @@ ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_click(
       traversal_preparation;
   const std::uint64_t content_revision = modeling_.content_revision();
   const std::uint64_t selection_revision = modeling_.selection_revision();
-  if (traversal_requested) {
-    traversal_preparation =
-        modeling_.prepare_component_traversal_selection(component);
+  const ModelingSelectionBoxBaseline *component_baseline =
+      baseline != nullptr && baseline->modeling_selection.has_value()
+          ? &*baseline->modeling_selection : nullptr;
+  if (traversal_requested || component.click_count > 1) {
+    traversal_preparation = traversal_requested
+        ? modeling_.prepare_component_traversal_selection(component, component_baseline)
+        : modeling_.prepare_component_double_click_selection(component, component_baseline);
     if (!traversal_preparation->command.ok ||
         !traversal_preparation->command.changed) {
       return {.command = traversal_preparation->command, .selection = summary()};
@@ -1629,8 +1633,8 @@ ResolvedSelectionApplyResult EditorSelectionService::apply_resolved_click(
       traversal_preparation.has_value() &&
               modeling_.content_revision() == content_revision &&
               modeling_.selection_revision() == selection_revision
-          ? modeling_.set_component_selection(traversal_preparation->selection)
-          : modeling_.apply_resolved_component_selection(component);
+          ? modeling_.set_component_selections(traversal_preparation->replacements)
+          : modeling_.apply_resolved_component_selection(component, component_baseline);
   command = include_settlement_change(
       request.defer_selection_completion ? std::move(command)
                                           : finish_selection_edit(std::move(command)),

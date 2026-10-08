@@ -173,21 +173,11 @@ TEST(GroundGridMaterialTests,
   const std::string fragment = source.substr(fragment_start);
   const std::string perspective = source_slice(
       fragment, "if (materialParams.analyticGridEnabled > 0.5)", "} else {");
-  EXPECT_NE(perspective.find("analyticGroundGrid("), std::string::npos);
-  EXPECT_EQ(perspective.find("length("), std::string::npos);
-  EXPECT_EQ(perspective.find("smoothstep("), std::string::npos);
-  EXPECT_EQ(perspective.find("discard"), std::string::npos);
-  EXPECT_NE(perspective.find("color = grid.rgb"), std::string::npos);
-  EXPECT_NE(perspective.find("alpha = grid.a"), std::string::npos);
-
-  const std::string analytic = source_slice(
-      source, "vec4 analyticGroundGrid(",
-      "void material(inout MaterialInputs material)");
-  EXPECT_NE(analytic.find("vec4 gridColor = materialParams.gridColor"),
-            std::string::npos);
-  EXPECT_NE(analytic.find("vec4 majorGridColor = materialParams.majorGridColor"),
-            std::string::npos);
-  EXPECT_NE(analytic.find("color.a *= coverageSum / 9.0"), std::string::npos);
+  // GPU coverage tests own the numerical AA, palette and world-boundary
+  // contracts. This guard retains only the material/pass separation policy.
+  EXPECT_EQ(perspective.find("materialParams.fadeStart"), std::string::npos);
+  EXPECT_EQ(perspective.find("materialParams.fadeEnd"), std::string::npos);
+  EXPECT_EQ(perspective.find("materialParams.planeHalfSize"), std::string::npos);
   EXPECT_EQ(source.find("sampler2d"), std::string::npos);
 
   const std::string orthographic = source_slice(

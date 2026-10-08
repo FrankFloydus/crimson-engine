@@ -93,6 +93,17 @@ This statement covers that query only; it does not establish formal clean-room o
 publication and history. Preserve original triangle corners and unrelated junctions; do not
 replace the operation's cleanup with generic UV-redundancy filtering.
 
+Vertex merge repairs face boundaries in `quader_poly_document_hull_plane_helpers.cpp` using
+an explicit worklist of original corner indices. Nonadjacent merged corners retain separate
+oriented boundary arcs; emitted faces retain descendant order and the first local corner's UV
+donor after adjacent duplicates collapse. Source-region triangulation remains the fallback;
+repeated-survivor rejection, normal/material transfer, stable IDs and publication are unchanged.
+The replacement traversal was authored from Quader's interfaces, behavioral requirements and
+tests without consulting the preceding implementation or external editor source. This statement
+covers boundary repair only, not formal clean-room or legal clearance. The `BoundaryArcRepair*`
+fixtures in `QdrDocumentOperationMergeVerticesToActiveTests` passed before replacement and protect
+ordered face IDs, corner donors, transforms, storage permutations and external survivors.
+
 Edge bevel keeps support limits, retained faces, strip construction, UV/normal transfer and
 publication in `operations/bevel_edges_operation.cpp`. Its corner helper receives shared boundary
 identities and stages a patch in the disposable candidate. Multi-edge corner samples retain

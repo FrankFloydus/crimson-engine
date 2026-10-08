@@ -8,6 +8,7 @@
 
 #include "polygon_document_native.hpp"
 #include "uv_peel_solver.hpp"
+#include "uv_peel_structured.hpp"
 
 #include <quader/modeling/neutral/geometry/geometry.hpp>
 #include <quader/modeling/neutral/polygon/document_texture.hpp>
@@ -22,6 +23,7 @@
 #include <functional>
 #include <limits>
 #include <map>
+#include <memory>
 #include <numeric>
 #include <optional>
 #include <queue>
@@ -323,200 +325,75 @@ struct ChartWork {
   return std::nullopt;
 }
 
-/// Retains authored corner records and arc lengths along one transverse walk.
-struct PeelLane {
-  std::vector<EdgeUse> corners;
-  std::vector<double> distances;
+/// Copies the authored values consumed by the isolated structured solver.
+struct StructuredPeelMesh {
+  std::vector<detail::StructuredPeelPosition> positions;
+  std::shared_ptr<const detail::StructuredPeelTopology> topology;
+  std::map<NativeId, std::size_t> vertex_indices;
 };
 
-/// Pairs the two independently walked sides at one guide endpoint occurrence.
-struct PeelStation {
-  std::array<PeelLane, 2> sides;
-  double guide_distance = 0.0;
-  double span = 0.0;
-};
-
-/// Keeps deliberate repeated corner writes in guide and lane traversal order.
-struct StructuredPeel {
-  std::vector<PeelStation> stations;
-  double guide_length = 0.0;
-  double maximum_span = 0.0;
-};
-
-[[nodiscard]] bool same_corner(const EdgeUse &a, const EdgeUse &b) {
-  return a.face == b.face && a.corner == b.corner;
-}
-
-[[nodiscard]] bool supports_structured_guide(
-    const NativeDocument &document, const EdgeUses &all_edges,
-    const GuidePath &guide) {
-  for (std::size_t index = 1U; index < guide.vertices.size(); ++index) {
-    const auto &uses = all_edges.at(edge_key(guide.vertices[index - 1U],
-                                             guide.vertices[index]));
-    if (std::ranges::any_of(uses, [&](const EdgeUse &use) {
-          return document.faces[use.face].vertices.size() == 4U;
-        })) {
-      return true;
+[[nodiscard]] bool guide_has_quad_faces(const NativeDocument &document,
+                                        const EdgeUses &edges, const GuidePath &guide) {
+  for (std::size_t endpoint = 1U; endpoint < guide.vertices.size(); ++endpoint) {
+    for (const auto use : edges.at(edge_key(guide.vertices[endpoint - 1U],
+                                           guide.vertices[endpoint]))) {
+      if (document.faces[use.face].vertices.size() == 4U) {
+        return true;
+      }
     }
   }
   return false;
 }
 
-[[nodiscard]] Result<std::array<PeelLane, 2>> walk_quad_side(
-    const NativeDocument &document, const EdgeUses &all_edges,
-    std::optional<EdgeUse> seed, bool reverse, std::size_t &remaining_corner_writes) {
-  using WalkResult = Result<std::array<PeelLane, 2>>;
-  std::array<PeelLane, 2> lanes;
-  if (!seed.has_value()) {
-    return WalkResult::success(std::move(lanes));
+[[nodiscard]] Result<StructuredPeelMesh> structured_peel_mesh(const NativeDocument &document) {
+  StructuredPeelMesh result;
+  std::vector<detail::StructuredPeelFace> faces;
+  result.positions.reserve(document.vertices.size());
+  faces.reserve(document.faces.size());
+  for (const auto &vertex : document.vertices) {
+    result.vertex_indices.emplace(vertex.id, result.positions.size());
+    result.positions.push_back({vertex.position.x, vertex.position.y, vertex.position.z});
   }
-  auto current = *seed;
-  std::set<std::pair<std::size_t, std::size_t>> visited;
-  for (;;) {
-    const auto &face = document.faces[current.face];
-    if (face.vertices.size() != 4U) {
-      break;
+  for (const auto &face : document.faces) {
+    detail::StructuredPeelFace copied;
+    copied.vertices.reserve(face.vertices.size());
+    for (const auto vertex : face.vertices) {
+      copied.vertices.push_back(result.vertex_indices.at(vertex));
     }
-    if (remaining_corner_writes < 4U) {
-      return WalkResult::failure(peel_error("UV Peel exceeds the supported corner-write budget."));
-    }
-    remaining_corner_writes -= 4U;
-    if (!visited.emplace(current.face, current.corner).second) {
-      return WalkResult::failure(peel_error(
-          "UV Peel found a transverse walk that repeats before returning to its seed."));
-    }
-    const auto corner = current.corner;
-    lanes[0].corners.push_back({current.face, (corner + (reverse ? 1U : 0U)) % 4U});
-    lanes[0].corners.push_back({current.face, (corner + (reverse ? 2U : 3U)) % 4U});
-    lanes[1].corners.push_back({current.face, (corner + (reverse ? 0U : 1U)) % 4U});
-    lanes[1].corners.push_back({current.face, (corner + (reverse ? 3U : 2U)) % 4U});
-    const auto opposite = (corner + 2U) % 4U;
-    const auto &uses = all_edges.at(edge_key(face.vertices[opposite],
-                                             face.vertices[(opposite + 1U) % 4U]));
-    if (uses.size() > 2U) {
-      return WalkResult::failure(peel_error("UV Peel requires manifold authored edges."));
-    }
-    const auto next = std::ranges::find_if(uses, [&](const EdgeUse &use) {
-      return use.face != current.face;
-    });
-    if (next == uses.end()) {
-      break;
-    }
-    if (document.faces[next->face].vertices[next->corner] == face.vertices[opposite]) {
-      return WalkResult::failure(peel_error(
-          "UV Peel requires consistently oriented shared face edges."));
-    }
-    current = *next;
-    // A closed transverse profile is a valid pair of corner walks. The two
-    // sides can revisit the same faces in reverse, including quad end caps.
-    if (same_corner(current, *seed)) {
-      break;
-    }
+    faces.push_back(std::move(copied));
   }
-  return WalkResult::success(std::move(lanes));
+  auto topology = detail::make_structured_peel_topology(std::move(faces), result.positions.size());
+  if (!topology.success) {
+    return Result<StructuredPeelMesh>::failure(peel_error(std::move(topology.error_message)));
+  }
+  result.topology = std::move(topology.topology);
+  return Result<StructuredPeelMesh>::success(std::move(result));
 }
 
-[[nodiscard]] Result<StructuredPeel> prepare_structured_guide(
-    const NativeDocument &document, const VertexLookup &vertices,
-    const NativeTransform &world, const EdgeUses &all_edges, GuidePath guide,
+[[nodiscard]] detail::StructuredPeelResult compute_structured_guide(
+    const StructuredPeelMesh &mesh, const NativeTransform &world,
+    const GuidePath &guide, const UvPeelOptions &options,
     std::size_t &remaining_corner_writes) {
-  const auto fail = [](std::string message) {
-    return Result<StructuredPeel>::failure(peel_error(std::move(message)));
+  std::vector<std::size_t> guide_indices;
+  guide_indices.reserve(guide.vertices.size());
+  for (const auto vertex : guide.vertices) {
+    guide_indices.push_back(mesh.vertex_indices.at(vertex));
+  }
+  const auto basis = [](QVec3 axis) {
+    return detail::StructuredPeelPosition{axis.x, axis.y, axis.z};
   };
-  if (guide.vertices.size() - 1U > kUvPeelMaxCornerWrites / 4U) {
-    return fail("UV Peel exceeds the supported guide-sample budget.");
-  }
-  if (guide.closed) {
-    std::array<std::set<std::size_t>, 2> adjacent_faces;
-    for (std::size_t index = 1U; index < guide.vertices.size(); ++index) {
-      const auto a = guide.vertices[index - 1U];
-      for (const auto &use : all_edges.at(edge_key(a, guide.vertices[index]))) {
-        const auto side = document.faces[use.face].vertices[use.corner] == a ? 0U : 1U;
-        adjacent_faces[side].insert(use.face);
-      }
-    }
-    if (adjacent_faces[1].size() < adjacent_faces[0].size()) {
-      std::ranges::reverse(guide.vertices);
-    }
-  }
-  StructuredPeel result;
-  result.stations.reserve((guide.vertices.size() - 1U) * 2U);
-  for (std::size_t index = 1U; index < guide.vertices.size(); ++index) {
-    const auto a = guide.vertices[index - 1U];
-    const auto b = guide.vertices[index];
-    const auto &uses = all_edges.at(edge_key(a, b));
-    if (uses.size() > 2U) {
-      return fail("UV Peel requires manifold authored edges.");
-    }
-    std::array<std::optional<EdgeUse>, 2> seeds;
-    for (const auto &use : uses) {
-      const auto side = document.faces[use.face].vertices[use.corner] == a ? 0U : 1U;
-      if (seeds[side].has_value()) {
-        return fail("UV Peel requires consistently oriented shared face edges.");
-      }
-      seeds[side] = use;
-    }
-    std::array<std::array<PeelLane, 2>, 2> walks;
-    for (std::size_t side = 0U; side < 2U; ++side) {
-      auto walked = walk_quad_side(document, all_edges, seeds[side], side != 0U,
-                                    remaining_corner_writes);
-      if (!walked.ok()) {
-        return Result<StructuredPeel>::failure(walked.error());
-      }
-      walks[side] = std::move(walked).value();
-    }
-    const double edge_length = world_distance(
-        world, vertices.find(a)->position, vertices.find(b)->position);
-    if (!std::isfinite(edge_length) || edge_length <= 0.0) {
-      return fail("UV Peel requires guide edges with finite positive length.");
-    }
-    for (std::size_t endpoint = 0U; endpoint < 2U; ++endpoint) {
-      PeelStation station;
-      station.guide_distance = result.guide_length + (endpoint == 0U ? 0.0 : edge_length);
-      for (std::size_t side = 0U; side < 2U; ++side) {
-        auto &lane = station.sides[side];
-        lane = std::move(walks[side][endpoint]);
-        double distance = 0.0;
-        lane.distances.reserve(lane.corners.size());
-        for (std::size_t corner = 0U; corner < lane.corners.size(); ++corner) {
-          if (corner != 0U) {
-            const auto current = lane.corners[corner];
-            const auto previous = lane.corners[corner - 1U];
-            distance += world_distance(world,
-                vertices.find(document.faces[current.face].vertices[current.corner])->position,
-                vertices.find(document.faces[previous.face].vertices[previous.corner])->position);
-          }
-          lane.distances.push_back(distance);
-        }
-        if (!std::isfinite(distance)) {
-          return fail("UV Peel found a non-finite transverse distance.");
-        }
-      }
-      const auto &side_a = station.sides[0];
-      const auto &side_b = station.sides[1];
-      if (side_a.corners.empty() && side_b.corners.empty()) {
-        // Nonquad-only guide segments still advance the selected guide's
-        // distance, but neither native corner writer has anything to store.
-        continue;
-      }
-      station.span = side_a.distances.empty() ? 0.0 : side_a.distances.back();
-      if (side_a.corners.empty() || side_b.corners.empty() ||
-          !same_corner(side_a.corners.front(), side_b.corners.back())) {
-        station.span += side_b.distances.empty() ? 0.0 : side_b.distances.back();
-      }
-      if (!std::isfinite(station.span) || station.span <= 0.0) {
-        return fail("UV Peel requires a finite positive transverse span.");
-      }
-      result.maximum_span = std::max(result.maximum_span, station.span);
-      result.stations.push_back(std::move(station));
-    }
-    result.guide_length += edge_length;
-  }
-  if (!std::isfinite(result.guide_length) || result.guide_length <= 0.0 ||
-      result.stations.empty()) {
-    return fail("UV Peel requires a nonempty finite guide.");
-  }
-  return Result<StructuredPeel>::success(std::move(result));
+  const detail::StructuredPeelInput input{
+      .positions = mesh.positions,
+      .topology = mesh.topology,
+      .guide = guide_indices,
+      .closed = guide.closed,
+      .world_basis = {basis(world.x_axis), basis(world.y_axis), basis(world.z_axis)},
+      .options = {.axis_u = options.axis == UvPeelAxis::U,
+                  .world_space = options.world_space,
+                  .u_repeat = options.u_repeat, .v_repeat = options.v_repeat,
+                  .u_offset = options.u_offset, .v_offset = options.v_offset},
+      .corner_budget_cap = kUvPeelMaxCornerWrites};
+  return detail::compute_structured_uv_peel(input, remaining_corner_writes);
 }
 
 [[nodiscard]] Result<ChartWork> build_chart(
@@ -1208,54 +1085,24 @@ struct StoredFaceUvs {
 
 [[nodiscard]] std::optional<Error> prepare_structured_uvs(
     const NativeDocument &document, const VertexLookup &vertices,
-    const NativeTransform &sampling, const StructuredPeel &peel,
-    const UvPeelOptions &options,
+    const NativeTransform &sampling,
+    std::span<const detail::StructuredPeelFaceCoordinates> faces,
     std::map<std::size_t, std::vector<QVec2>> &updates) {
-  constexpr double kTextureDensity =
-      quader_poly::document_internal::kGeneratedUvTilesPerWorldUnit;
-  const double along_repeat = options.axis == UvPeelAxis::U ? options.u_repeat : options.v_repeat;
-  const double across_repeat = options.axis == UvPeelAxis::U ? options.v_repeat : options.u_repeat;
-  const double along_offset = options.axis == UvPeelAxis::U ? options.u_offset : options.v_offset;
-  const double across_offset = options.axis == UvPeelAxis::U ? options.v_offset : options.u_offset;
-  const double along_gain = along_repeat *
-      (options.world_space ? kTextureDensity : 1.0 / peel.guide_length);
-  const double across_gain = across_repeat *
-      (options.world_space ? kTextureDensity * peel.maximum_span : 1.0);
-  std::map<std::size_t, std::array<PeelPoint2, 4>> face_coordinates;
-  const double unset = std::numeric_limits<double>::quiet_NaN();
-  for (const auto &station : peel.stations) {
-    const double along = along_offset + along_gain * station.guide_distance;
-    for (std::size_t side = 0U; side < 2U; ++side) {
-      const auto &lane = station.sides[side];
-      const double sign = side == 0U ? 1.0 : -1.0;
-      for (std::size_t corner = 0U; corner < lane.corners.size(); ++corner) {
-        const auto destination = lane.corners[corner];
-        const double across = across_offset +
-            sign * across_gain * lane.distances[corner] / station.span;
-        const PeelPoint2 coordinate = options.axis == UvPeelAxis::U
-                                          ? PeelPoint2{along, across}
-                                          : PeelPoint2{across, along};
-        auto [entry, inserted] = face_coordinates.try_emplace(destination.face);
-        if (inserted) {
-          entry->second.fill({unset, unset});
-        }
-        // Native Peel writes A, then B, then the next station. Cyclic
-        // transverse profiles deliberately overwrite the same corner records.
-        entry->second[destination.corner] = coordinate;
-      }
+  for (const auto &face : faces) {
+    std::array<PeelPoint2, 4> coordinates;
+    for (std::size_t corner = 0U; corner < coordinates.size(); ++corner) {
+      coordinates[corner] = {face.corners[corner].u, face.corners[corner].v};
     }
-  }
-  for (const auto &[face_index, coordinates] : face_coordinates) {
-    auto stored = prepare_face_storage(document, vertices, sampling, face_index,
+    auto stored = prepare_face_storage(document, vertices, sampling, face.face_index,
                                         coordinates, chart_float_tolerances(coordinates), updates);
     if (!stored.ok()) {
       return stored.error();
     }
-    if (auto error = validate_corner_mapping(document, vertices, face_index,
+    if (auto error = validate_corner_mapping(document, vertices, face.face_index,
                                               stored.value().desired)) {
       return error;
     }
-    if (auto error = validate_corner_mapping(document, vertices, face_index,
+    if (auto error = validate_corner_mapping(document, vertices, face.face_index,
                                               stored.value().effective)) {
       error->message = "Stored effective UVs: " + error->message;
       return error;
@@ -1320,16 +1167,24 @@ struct StoredFaceUvs {
     return fail(std::move(*error));
   }
   std::map<std::size_t, std::vector<QVec2>> updates;
+  std::optional<StructuredPeelMesh> structured_mesh;
   std::size_t remaining_corner_writes = kUvPeelMaxCornerWrites;
   for (const auto &guide : selected.guides) {
-    if (supports_structured_guide(document, all_edges, guide)) {
-      auto peel = prepare_structured_guide(document, vertices, world, all_edges, guide,
-                                           remaining_corner_writes);
-      if (!peel.ok()) {
-        return fail(peel.error());
+    if (guide_has_quad_faces(document, all_edges, guide)) {
+      if (!structured_mesh.has_value()) {
+        auto prepared_mesh = structured_peel_mesh(document);
+        if (!prepared_mesh.ok()) {
+          return fail(prepared_mesh.error());
+        }
+        structured_mesh = std::move(prepared_mesh).value();
+      }
+      const auto peel = compute_structured_guide(*structured_mesh, world, guide, options,
+                                                 remaining_corner_writes);
+      if (!peel.success) {
+        return fail(peel_error(peel.error_message));
       }
       if (auto error = prepare_structured_uvs(document, vertices, sampling,
-                                               peel.value(), options, updates)) {
+                                               peel.faces, updates)) {
         return fail(std::move(*error));
       }
       continue;

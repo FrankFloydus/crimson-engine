@@ -159,6 +159,18 @@ void select_only(Selection& selection, const PickResult& pick);
 [[nodiscard]] Selection connected_component_selection(
     const Document& document,
     const PickResult& pick);
+/// Computes a double-click target without changing document or selection state.
+/// Vertices select their connected part. Edges follow a topological loop; separated
+/// prior seeds bound a connected interval, while a single contiguous seed run
+/// expands the loop. Faces use the prior active face to identify a unique quad
+/// strip, falling back to connected faces when no unique strip is established.
+/// Closed intervals minimize element count, with stable component IDs breaking
+/// ties. The host supplies the selection from before the first click, and may
+/// pass an empty edge context when the requested edit must replace the full loop.
+[[nodiscard]] Selection component_double_click_selection(
+    const Document& document,
+    const PickResult& clicked,
+    const Selection& prior_selection);
 /// Resolves an authored traversal edge from a typed component click. A selected
 /// adjacent active face/vertex establishes direction; otherwise an incident
 /// pointer hint is used. Stale or inconsistent explicit hints reject the query.

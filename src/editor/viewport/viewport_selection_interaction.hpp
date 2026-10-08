@@ -60,7 +60,7 @@ struct ViewportSelectionApplyResult {
 class ViewportSelectionInteraction {
 public:
     void reset();
-    /// Captures the baseline for a possible native depth double-click.
+    /// Captures selection context before a possible native double-click pair.
     [[nodiscard]] std::optional<ViewportInteractionSelectionState>
     prepare_frame(QuaderEditorApi &editor,
                   const ViewportInteractionFrame &frame);
@@ -88,6 +88,14 @@ public:
     [[nodiscard]] bool traversal_pointer_active() const {
       return traversal_context_.has_value();
     }
+    [[nodiscard]] bool component_double_click_active() const {
+      return component_double_pointer_.has_value();
+    }
+    /// Exact native boundary consumed by the latest handled double-click.
+    [[nodiscard]] std::optional<std::uint64_t>
+    completed_component_double_release() const {
+      return completed_component_double_release_;
+    }
     /// Projects the exact selection edit represented by the current pointer
     /// lifecycle. Toggle/non-selection gestures deliberately return no intent.
     [[nodiscard]] std::optional<quader_editor_core::SelectionEditOperation>
@@ -103,6 +111,7 @@ public:
       return box_state_.active ||
              box_pointer_.has_value() || paint_selection_active_ ||
              paint_stroke_.has_value() || traversal_context_.has_value() ||
+             component_double_pointer_.has_value() ||
              box_release_suppression_.active();
     }
     [[nodiscard]] const ViewportSelectionInteractionWorkStats &
@@ -181,6 +190,15 @@ private:
   bool handle_traversal_frame(QuaderEditorApi &editor,
                               const ViewportInteractionFrame &frame,
                               bool can_start, bool interrupted);
+  void cancel_depth_click();
+  void cancel_component_click();
+  void prepare_component_click(QuaderEditorApi &editor,
+                                const ViewportInteractionFrame &frame);
+  void acknowledge_component_click(QuaderEditorApi &editor,
+                                    const QuaderSelectionSummary &selection);
+  bool handle_component_double_click(QuaderEditorApi &editor,
+                                      const ViewportInteractionFrame &frame,
+                                      bool interrupted);
 
   std::optional<ViewportSelectionApplyResult> commit_pick_selection(
       QuaderEditorApi &editor, const ViewportInteractionFrame &frame,
@@ -205,6 +223,10 @@ private:
   bool box_cycle_depth_ = false;
   ViewportModifiers box_cycle_modifiers_ = {};
   std::optional<DepthClickBaseline> depth_click_baseline_;
+  /// The pre-first-click snapshot is transient gesture context, never live truth.
+  std::optional<DepthClickBaseline> component_click_baseline_;
+  std::optional<ViewportPointerGesture> component_double_pointer_;
+  std::optional<std::uint64_t> completed_component_double_release_;
   std::optional<ResolvedSelectionTarget> box_hovered_before_selection_;
   std::optional<EditorSelectionBoxBaseline> box_baseline_;
   std::optional<DepthClickBaseline> lasso_context_;

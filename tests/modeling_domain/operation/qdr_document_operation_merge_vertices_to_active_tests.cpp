@@ -7,10 +7,167 @@
 #include "operation_atomicity_test_helpers.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <vector>
 
 using namespace quader_poly;
+
+namespace {
+
+Document make_boundary_arc_merge_document(std::size_t arc_count) {
+    Document document;
+    constexpr std::array kPositions{
+        quader::QVec3{0.0F, 0.0F, 0.0F},
+        quader::QVec3{2.0F, 0.0F, 0.0F},
+        quader::QVec3{1.0F, 1.0F, 0.0F},
+        quader::QVec3{0.0F, 0.0F, 0.0F},
+        quader::QVec3{-1.0F, 1.0F, 0.0F},
+        quader::QVec3{-2.0F, 0.0F, 0.0F},
+        quader::QVec3{0.0F, 0.0F, 0.0F},
+        quader::QVec3{-1.0F, -1.0F, 0.0F},
+        quader::QVec3{1.0F, -1.0F, 0.0F}};
+    std::vector<ElementId> boundary;
+    for (std::size_t index = 0; index < arc_count * 3U; ++index) {
+        boundary.push_back(add_vertex(document, kPositions[index]));
+    }
+    const ElementId face_id = add_face(document, boundary, 17U);
+    Face& face = *find_face(document, face_id);
+    face.normal_shading = SurfaceShading::Smooth;
+    face.texture_transform = {{-2.0F, 0.5F}, {0.125F, -0.25F}, 35.0F};
+    for (std::size_t index = 0; index < boundary.size(); ++index) {
+        const float value = static_cast<float>(index);
+        face.uvs.push_back({value + 0.25F, -value - 0.5F});
+    }
+    document.next_face_id = 100U;
+    return document;
+}
+
+void expect_boundary_arc_face(const Face& face, const Face& source,
+                             ElementId face_id,
+                             const std::vector<ElementId>& vertices,
+                             const std::vector<std::size_t>& uv_corners) {
+    EXPECT_EQ(face.id, face_id);
+    EXPECT_EQ(face.vertices, vertices);
+    EXPECT_EQ(face.material_slot, source.material_slot);
+    EXPECT_EQ(face.normal_shading, source.normal_shading);
+    EXPECT_EQ(face.texture_transform.scale.x, source.texture_transform.scale.x);
+    EXPECT_EQ(face.texture_transform.scale.y, source.texture_transform.scale.y);
+    EXPECT_EQ(face.texture_transform.shift_uv.x, source.texture_transform.shift_uv.x);
+    EXPECT_EQ(face.texture_transform.shift_uv.y, source.texture_transform.shift_uv.y);
+    EXPECT_EQ(face.texture_transform.rotation_degrees,
+              source.texture_transform.rotation_degrees);
+    ASSERT_EQ(face.uvs.size(), uv_corners.size());
+    for (std::size_t index = 0; index < uv_corners.size(); ++index) {
+        EXPECT_EQ(face.uvs[index].x, source.uvs[uv_corners[index]].x);
+        EXPECT_EQ(face.uvs[index].y, source.uvs[uv_corners[index]].y);
+    }
+}
+
+} // namespace
+
+TEST(QdrDocumentOperationMergeVerticesToActiveTests,
+     BoundaryArcRepairPreservesOrderedFacesAndCornerDonors) {
+    for (std::size_t rotation = 0; rotation < 6U; ++rotation) {
+        SCOPED_TRACE(rotation);
+        Document document = make_boundary_arc_merge_document(2U);
+        const Face source = document.faces.front();
+        Face& rotated = document.faces.front();
+        std::rotate(rotated.vertices.begin(), rotated.vertices.begin() + rotation,
+                    rotated.vertices.end());
+        std::rotate(rotated.uvs.begin(), rotated.uvs.begin() + rotation,
+                    rotated.uvs.end());
+        document.hard_normal_edges = {make_edge(4U, 5U)};
+        document.soft_normal_edges = {make_edge(3U, 4U)};
+        Selection selection = qdr_test::vertex_selection({4U, 1U}, 1U);
+
+        const OperationResult result =
+            merge_selected_vertices_to_active(document, selection);
+
+        ASSERT_TRUE(result.success) << result.message;
+        ASSERT_TRUE(result.changed);
+        ASSERT_EQ(document.faces.size(), 2U);
+        expect_boundary_arc_face(document.faces[0], source, source.id,
+                                 {1U, 5U, 6U}, {3U, 4U, 5U});
+        expect_boundary_arc_face(document.faces[1], source, 100U,
+                                 {1U, 2U, 3U}, {0U, 1U, 2U});
+        EXPECT_EQ(document.next_face_id, 101U);
+        EXPECT_EQ(document.next_vertex_id, 7U);
+        EXPECT_EQ(selection.vertices, (std::vector<ElementId>{1U}));
+        EXPECT_TRUE(selection.has_active);
+        EXPECT_EQ(selection.active_vertex, 1U);
+        EXPECT_EQ(qdr_test::edge_normal_mode(document, make_edge(1U, 5U)),
+                  EdgeNormalMode::Hard);
+        EXPECT_EQ(qdr_test::edge_normal_mode(document, make_edge(1U, 3U)),
+                  EdgeNormalMode::Soft);
+        EXPECT_FALSE(qdr_test::document_has_edge(document, make_edge(3U, 5U)));
+        EXPECT_FALSE(qdr_test::document_has_edge(document, make_edge(6U, 2U)));
+        qdr_test::expect_valid_polygon_document_after_success(document, result);
+    }
+}
+
+TEST(QdrDocumentOperationMergeVerticesToActiveTests,
+     BoundaryArcRepairKeepsMultipleSourceOrderingUnderRigidTransformsAndStoragePermutation) {
+    for (const bool permuted : {false, true}) {
+        SCOPED_TRACE(permuted);
+        Document document = make_boundary_arc_merge_document(3U);
+        const Face source = document.faces.front();
+        if (permuted) {
+            std::reverse(document.vertices.begin(), document.vertices.end());
+            for (Vertex& vertex : document.vertices) {
+                const auto position = vertex.position;
+                vertex.position = {11.0F + position.z * 2.0F,
+                                   -7.0F + position.x * 2.0F,
+                                   5.0F + position.y * 2.0F};
+            }
+        }
+        Selection selection = qdr_test::vertex_selection({7U, 1U, 4U}, 1U);
+
+        const OperationResult result =
+            merge_selected_vertices_to_active(document, selection);
+
+        ASSERT_TRUE(result.success) << result.message;
+        ASSERT_TRUE(result.changed);
+        ASSERT_EQ(document.faces.size(), 3U);
+        expect_boundary_arc_face(document.faces[0], source, source.id,
+                                 {1U, 8U, 9U}, {6U, 7U, 8U});
+        expect_boundary_arc_face(document.faces[1], source, 100U,
+                                 {1U, 5U, 6U}, {0U, 4U, 5U});
+        expect_boundary_arc_face(document.faces[2], source, 101U,
+                                 {1U, 2U, 3U}, {0U, 1U, 2U});
+        EXPECT_EQ(document.next_face_id, 102U);
+        EXPECT_EQ(document.next_vertex_id, 10U);
+        EXPECT_EQ(selection.vertices, (std::vector<ElementId>{1U}));
+        EXPECT_EQ(selection.active_vertex, 1U);
+        EXPECT_FALSE(qdr_test::document_has_edge(document, make_edge(3U, 5U)));
+        EXPECT_FALSE(qdr_test::document_has_edge(document, make_edge(6U, 8U)));
+        EXPECT_FALSE(qdr_test::document_has_edge(document, make_edge(9U, 2U)));
+        qdr_test::expect_valid_polygon_document_after_success(document, result);
+    }
+}
+
+TEST(QdrDocumentOperationMergeVerticesToActiveTests,
+     BoundaryArcRepairRetainsExternalSurvivorRepeatedCornerPolicy) {
+    Document document = make_boundary_arc_merge_document(2U);
+    const ElementId external_survivor = add_vertex(document, {});
+    Selection selection = qdr_test::vertex_selection(
+        {1U, 4U, external_survivor}, external_survivor);
+
+    const OperationResult result =
+        merge_selected_vertices_to_active(document, selection);
+
+    ASSERT_TRUE(result.success) << result.message;
+    ASSERT_TRUE(result.changed);
+    EXPECT_TRUE(document.faces.empty());
+    EXPECT_EQ(document.vertices.size(), 5U);
+    EXPECT_NE(find_vertex(document, external_survivor), nullptr);
+    EXPECT_EQ(find_vertex(document, 1U), nullptr);
+    EXPECT_EQ(find_vertex(document, 4U), nullptr);
+    EXPECT_EQ(document.next_face_id, 100U);
+    EXPECT_EQ(selection.vertices, (std::vector<ElementId>{external_survivor}));
+    EXPECT_TRUE(selection.has_active);
+    EXPECT_EQ(selection.active_vertex, external_survivor);
+}
 
 TEST(QdrDocumentOperationMergeVerticesToActiveTests,
      PreservesUnrelatedCollapsedFacesAndLooseVertices) {

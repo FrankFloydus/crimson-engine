@@ -1460,10 +1460,18 @@ bool ModelingSessionMemento::valid() const { return static_cast<bool>(impl_); }
  * Stores private runtime selection state for a modeling box-selection baseline.
  */
 struct ModelingSelectionBoxBaseline::Impl {
-  explicit Impl(quader_editor_core::RectangleSelectionState selection)
-      : selection(std::move(selection)) {}
+  Impl(quader_editor_core::RectangleSelectionState selection,
+       const ModelingSelectionProjectionSnapshot &projection)
+      : selection(std::move(selection)) {
+    for (const auto &object : projection.objects()) {
+      if (object.selected) components.emplace_back(object.id, object.selection);
+    }
+  }
 
   quader_editor_core::RectangleSelectionState selection;
+  // Click pairs retain per-object active components, including inactive
+  // participants. Rectangle state alone retains only the globally active one.
+  std::vector<std::pair<int, quader_poly::Selection>> components;
 };
 
 ModelingSelectionBoxBaseline::ModelingSelectionBoxBaseline() = default;
@@ -3547,7 +3555,7 @@ public:
       QDR_PROFILE_SCOPE("Box selection capture session runtime baseline");
       ModelingSelectionBoxBaseline baseline(
           std::make_shared<ModelingSelectionBoxBaseline::Impl>(
-              selection_service_.rectangle_selection_state(projected)));
+              selection_service_.rectangle_selection_state(projected), projected));
       baseline.editor_mode_generation = editor_mode_generation();
       return baseline;
     }
@@ -10416,9 +10424,9 @@ public:
 
   [[nodiscard]] ModelingComponentTraversalSelectionPreparation
   prepare_component_traversal_selection(
-      const ModelingResolvedComponentSelectionRequest &request) const {
-    const ModelingSelectionProjectionSnapshot &projection =
-        selection_projection_snapshot();
+      const ModelingResolvedComponentSelectionRequest &request,
+      const ModelingSelectionBoxBaseline::Impl *baseline = nullptr) const {
+    const ModelingSelectionProjectionSnapshot projection = component_click_basis(baseline);
     const auto object_it = std::find_if(
         projection.objects().begin(), projection.objects().end(),
         [&](const quader_editor_core::PolygonObject &object) {
@@ -10560,71 +10568,157 @@ public:
       component.edit = target_selected ? ModelingSelectionEdit::Remove
                                        : ModelingSelectionEdit::Add;
     }
-    const ModelingSelectionProjectionCommandResult candidate =
-        selection_service_.set_component_selection(projection, component);
-    ModelingCommandResult prepared = candidate.command;
-    if (prepared.ok) {
-      if (request.edit == ModelingSelectionEdit::Replace ||
-          (editor_mode_service_ != nullptr &&
-           editor_mode_service_->mode() == EditorMode::Edit)) {
-        const EntityId target_entity =
-            object_registry_.entity_for_modeling_object(request.modeling_object_id)
-                .value_or(kInvalidEntityId);
-        const bool fixed_edit_scope = editor_mode_service_ != nullptr &&
-                                      editor_mode_service_->mode() == EditorMode::Edit;
-        std::vector<EntityId> target_entities;
-        if (fixed_edit_scope) {
-          target_entities.reserve(editor_mode_service_->snapshot().participants.size());
-          for (const auto &participant : editor_mode_service_->snapshot().participants) {
-            target_entities.push_back(participant.entity);
-          }
-        } else {
-          target_entities.push_back(target_entity);
-        }
-        prepared.changed =
-            projection.selection_mode() != candidate.projection.selection_mode() ||
-            projection.active_object_id() !=
-                (fixed_edit_scope ? request.modeling_object_id
-                                  : candidate.projection.active_object_id()) ||
-            !same_scene_selection(
-                capture_scene_selection(scene_),
-                make_scene_selection(scene_, target_entities, target_entity)) ||
-            !std::equal(
-                projection.objects().begin(), projection.objects().end(),
-                candidate.projection.objects().begin(),
-                candidate.projection.objects().end(),
-                [fixed_edit_scope, &request](const quader_editor_core::PolygonObject &current,
-                                   const quader_editor_core::PolygonObject &replacement) {
-                  if (current.id != replacement.id) {
-                    return false;
-                  }
-                  if (fixed_edit_scope) {
-                    if (request.edit != ModelingSelectionEdit::Replace &&
-                        current.id != request.modeling_object_id) return true;
-                    // Replace clears component payloads without changing the
-                    // fixed participants represented by selected object flags.
-                    return (current.selection.empty() && replacement.selection.empty()) ||
-                           ModelingSelectionService::selection_matches(
-                               current.selection, replacement.selection);
-                  }
-                  return current.selected == replacement.selected &&
-                         (!current.selected ||
-                          ModelingSelectionService::selection_matches(
-                              current.selection, replacement.selection));
-                });
-      }
+    return prepare_component_expansion_result(component, projection);
+  }
+
+  [[nodiscard]] ModelingSelectionProjectionSnapshot component_click_basis(
+      const ModelingSelectionBoxBaseline::Impl *baseline) const {
+    const auto &current = selection_projection_snapshot();
+    if (baseline == nullptr) return current;
+    std::vector<quader_editor_core::PolygonObject> objects(
+        current.objects().begin(), current.objects().end());
+    for (auto &object : objects) {
+      if (!object.selected) continue;
+      const auto found = std::ranges::find_if(baseline->components,
+          [&](const auto &entry) { return entry.first == object.id; });
+      object.selection = found == baseline->components.end()
+                             ? quader_poly::Selection{} : found->second;
+      object.selection.mode = quader_editor_core::component_selection_mode(
+          current.selection_mode());
     }
-    return {.command = std::move(prepared), .selection = std::move(component)};
+    return current.with_selection(std::move(objects), current.selection_mode(),
+        baseline->selection.active_object_id, current.selection_revision());
+  }
+
+  [[nodiscard]] ModelingComponentTraversalSelectionPreparation
+  prepare_component_expansion_result(
+      const ModelingComponentSelectionRequest &component,
+      const ModelingSelectionProjectionSnapshot &basis) const {
+    const auto candidate = selection_service_.set_component_selection(basis, component);
+    if (!candidate.command.ok) return {.command = candidate.command};
+    const auto &current = selection_projection_snapshot();
+    ModelingComponentTraversalSelectionPreparation result{
+        .command = {.ok = true}, .selection = component};
+    const auto append = [&](const quader_editor_core::PolygonObject &object,
+                            const quader_poly::Selection &selection) {
+      ModelingComponentSelectionRequest replacement{
+          .modeling_object_id = object.id,
+          .mode = component.mode, .edit = ModelingSelectionEdit::Replace};
+      replacement.vertices.assign(selection.vertices.begin(), selection.vertices.end());
+      replacement.faces.assign(selection.faces.begin(), selection.faces.end());
+      for (const auto edge : selection.edges) replacement.edges.emplace_back(edge.a, edge.b);
+      if (selection.has_active) {
+        replacement.active_kind = component.mode == ModelingSelectionMode::Vertex
+            ? ModelingActiveSelectionKind::Vertex
+            : component.mode == ModelingSelectionMode::Edge
+                ? ModelingActiveSelectionKind::Edge : ModelingActiveSelectionKind::Face;
+        replacement.active_vertex = static_cast<int>(selection.active_vertex);
+        replacement.active_edge = {static_cast<int>(selection.active_edge.a),
+                                   static_cast<int>(selection.active_edge.b)};
+        replacement.active_face = static_cast<int>(selection.active_face);
+      }
+      result.command.changed = result.command.changed ||
+          (!(object.selection.empty() && selection.empty()) &&
+           !ModelingSelectionService::selection_matches(object.selection, selection));
+      result.replacements.push_back(std::move(replacement));
+    };
+    for (const auto &object : current.objects()) {
+      if (!object.selected || object.id == component.modeling_object_id) continue;
+      const auto source = std::ranges::find(basis.objects(), object.id,
+                                           &quader_editor_core::PolygonObject::id);
+      const quader_poly::Selection empty{};
+      append(object, component.edit == ModelingSelectionEdit::Replace ||
+                             source == basis.objects().end() ? empty : source->selection);
+    }
+    const auto target = std::ranges::find(current.objects(), component.modeling_object_id,
+                                         &quader_editor_core::PolygonObject::id);
+    const auto selected = std::ranges::find(candidate.projection.objects(),
+        component.modeling_object_id, &quader_editor_core::PolygonObject::id);
+    if (target == current.objects().end() || selected == candidate.projection.objects().end()) {
+      return {.command = {.ok = false, .message = "Component expansion target is no longer live."}};
+    }
+    append(*target, selected->selection);
+    result.command.changed = result.command.changed ||
+        current.active_object_id() != component.modeling_object_id;
+    return result;
+  }
+
+  [[nodiscard]] ModelingComponentTraversalSelectionPreparation
+  prepare_component_double_click_selection(
+      const ModelingResolvedComponentSelectionRequest &request,
+      const ModelingSelectionBoxBaseline::Impl *baseline = nullptr) const {
+    const auto basis = component_click_basis(baseline);
+    const auto object = std::ranges::find(basis.objects(), request.modeling_object_id,
+                                         &quader_editor_core::PolygonObject::id);
+    const bool kind_matches =
+        (request.mode == ModelingSelectionMode::Vertex && request.kind == ModelingActiveSelectionKind::Vertex) ||
+        (request.mode == ModelingSelectionMode::Edge && request.kind == ModelingActiveSelectionKind::Edge) ||
+        (request.mode == ModelingSelectionMode::Face && request.kind == ModelingActiveSelectionKind::Face);
+    if (object == basis.objects().end() || !kind_matches || request.mode != app_selection_mode_) {
+      return {.command = {.ok = false, .message = "Component expansion target does not match the current mode."}};
+    }
+    ModelingComponentSelectionRequest component{
+        .modeling_object_id = request.modeling_object_id, .mode = request.mode,
+        .edit = request.edit};
+    const std::array scope_request{component};
+    const auto scope = validate_component_selection_scope(scope_request);
+    if (!scope.ok) return {.command = scope};
+    if ((request.mode == ModelingSelectionMode::Vertex && request.vertex <= 0) ||
+        (request.mode == ModelingSelectionMode::Face && request.face <= 0) ||
+        (request.mode == ModelingSelectionMode::Edge &&
+         (request.edge.first <= 0 || request.edge.second <= 0 ||
+          request.edge.first == request.edge.second))) {
+      return {.command = {.ok = false, .message = "Resolved component target is no longer live."}};
+    }
+    if (request.mode == ModelingSelectionMode::Vertex) {
+      component.vertices.push_back(request.vertex);
+    } else if (request.mode == ModelingSelectionMode::Edge) {
+      component.edges.push_back(request.edge);
+    } else {
+      component.faces.push_back(request.face);
+    }
+    const auto validated = selection_service_.set_component_selection(basis, component);
+    if (!validated.command.ok) return {.command = validated.command};
+    component.vertices.clear();
+    component.edges.clear();
+    component.faces.clear();
+    const quader_poly::PickResult seed{
+        .hit = true,
+        .kind = request.kind == ModelingActiveSelectionKind::Vertex ? quader_poly::ElementKind::Vertex
+            : request.kind == ModelingActiveSelectionKind::Edge ? quader_poly::ElementKind::Edge
+                                                                : quader_poly::ElementKind::Face,
+        .vertex_id = static_cast<quader_poly::ElementId>(request.vertex),
+        .edge = quader_poly::make_edge(request.edge.first, request.edge.second),
+        .face_id = static_cast<quader_poly::ElementId>(request.face)};
+    quader_poly::Selection context = object->selection;
+    if ((request.mode == ModelingSelectionMode::Edge && request.edit == ModelingSelectionEdit::Replace) ||
+        (request.mode == ModelingSelectionMode::Face && basis.active_object_id() != object->id)) {
+      context = {};
+    }
+    const auto expanded = quader_poly::component_double_click_selection(
+        object->document.read(), seed, context);
+    if (expanded.empty()) return {.command = {.ok = true}};
+    component.vertices.assign(expanded.vertices.begin(), expanded.vertices.end());
+    component.faces.assign(expanded.faces.begin(), expanded.faces.end());
+    for (const auto edge : expanded.edges) component.edges.emplace_back(edge.a, edge.b);
+    component.active_kind = request.kind;
+    component.active_vertex = static_cast<int>(expanded.active_vertex);
+    component.active_edge = {static_cast<int>(expanded.active_edge.a),
+                             static_cast<int>(expanded.active_edge.b)};
+    component.active_face = static_cast<int>(expanded.active_face);
+    return prepare_component_expansion_result(component, basis);
   }
 
   ModelingCommandResult apply_resolved_component_selection(
-      const ModelingResolvedComponentSelectionRequest &request) {
-    if (request.component_traversal != ModelingComponentSelectionTraversal::None ||
-        request.edge_traversal != ModelingEdgeSelectionTraversal::None) {
-      const auto prepared = prepare_component_traversal_selection(request);
+      const ModelingResolvedComponentSelectionRequest &request,
+      const ModelingSelectionBoxBaseline::Impl *baseline = nullptr) {
+    const bool traversal = request.component_traversal != ModelingComponentSelectionTraversal::None ||
+                           request.edge_traversal != ModelingEdgeSelectionTraversal::None;
+    if (traversal || request.click_count > 1) {
+      const auto prepared = traversal ? prepare_component_traversal_selection(request, baseline)
+          : prepare_component_double_click_selection(request, baseline);
       return prepared.command.ok && prepared.command.changed
-                 ? set_component_selection(prepared.selection)
-                 : prepared.command;
+                 ? set_component_selections(prepared.replacements) : prepared.command;
     }
     const ModelingSelectionProjectionSnapshot &projection =
         selection_projection_snapshot();
@@ -10684,12 +10778,11 @@ public:
               .message = "Resolved component target is no longer live."};
     }
 
-    const bool expands_hit = request.click_count > 1;
-    if (!expands_hit && request.edit == ModelingSelectionEdit::Replace &&
+    if (request.edit == ModelingSelectionEdit::Replace &&
         request.preserve_selection_on_selected_hit && target_selected) {
       return {.ok = true};
     }
-    if (!expands_hit && request.edit == ModelingSelectionEdit::Replace &&
+    if (request.edit == ModelingSelectionEdit::Replace &&
         request.preserve_existing_component_selection_on_hit &&
         ModelingSelectionService::has_component_selection(
             selection_summary())) {
@@ -10701,45 +10794,6 @@ public:
         .mode = request.mode,
         .edit = request.edit,
     };
-    if (request.click_count > 1) {
-      const quader_poly::PickResult seed{
-          .hit = true,
-          .kind = request.kind == ModelingActiveSelectionKind::Vertex
-                      ? quader_poly::ElementKind::Vertex
-                      : (request.kind == ModelingActiveSelectionKind::Edge
-                             ? quader_poly::ElementKind::Edge
-                             : quader_poly::ElementKind::Face),
-          .vertex_id = static_cast<quader_poly::ElementId>(request.vertex),
-          .edge = quader_poly::make_edge(request.edge.first,
-                                         request.edge.second),
-          .face_id = static_cast<quader_poly::ElementId>(request.face),
-      };
-      const quader_poly::Selection connected =
-          quader_poly::connected_component_selection(document, seed);
-      if (connected.empty()) {
-        return {.ok = false,
-                .message = "Resolved component has no selectable connected elements."};
-      }
-      component.vertices.reserve(connected.vertices.size());
-      for (const quader_poly::ElementId vertex : connected.vertices) {
-        component.vertices.push_back(static_cast<int>(vertex));
-      }
-      component.faces.reserve(connected.faces.size());
-      for (const quader_poly::ElementId face : connected.faces) {
-        component.faces.push_back(static_cast<int>(face));
-      }
-      component.edges.reserve(connected.edges.size());
-      for (const quader_poly::Edge edge : connected.edges) {
-        component.edges.emplace_back(static_cast<int>(edge.a),
-                                     static_cast<int>(edge.b));
-      }
-      component.active_kind = request.kind;
-      component.active_vertex = static_cast<int>(connected.active_vertex);
-      component.active_edge = {static_cast<int>(connected.active_edge.a),
-                               static_cast<int>(connected.active_edge.b)};
-      component.active_face = static_cast<int>(connected.active_face);
-      return set_component_selection(component);
-    }
     if (request.kind == ModelingActiveSelectionKind::Vertex) {
       component.vertices.push_back(request.vertex);
       component.active_kind = ModelingActiveSelectionKind::Vertex;
@@ -13225,13 +13279,37 @@ ModelingCommandResult ModelingSessionService::validate_component_selection(
 
 ModelingComponentTraversalSelectionPreparation
 ModelingSessionService::prepare_component_traversal_selection(
-    const ModelingResolvedComponentSelectionRequest &request) const {
-  return impl_->prepare_component_traversal_selection(request);
+    const ModelingResolvedComponentSelectionRequest &request,
+    const ModelingSelectionBoxBaseline *baseline) const {
+  if (baseline != nullptr && (!baseline->valid() ||
+      baseline->editor_mode_generation != impl_->editor_mode_generation() ||
+      baseline->impl_->selection.mode != app_selection_mode_to_runtime(impl_->selection_mode()))) {
+    return {.command = {.ok = false, .message = "Component click edit context is stale."}};
+  }
+  return impl_->prepare_component_traversal_selection(request, baseline ? baseline->impl_.get() : nullptr);
+}
+
+ModelingComponentTraversalSelectionPreparation
+ModelingSessionService::prepare_component_double_click_selection(
+    const ModelingResolvedComponentSelectionRequest &request,
+    const ModelingSelectionBoxBaseline *baseline) const {
+  if (baseline != nullptr && (!baseline->valid() ||
+      baseline->editor_mode_generation != impl_->editor_mode_generation() ||
+      baseline->impl_->selection.mode != app_selection_mode_to_runtime(impl_->selection_mode()))) {
+    return {.command = {.ok = false, .message = "Component click edit context is stale."}};
+  }
+  return impl_->prepare_component_double_click_selection(request, baseline ? baseline->impl_.get() : nullptr);
 }
 
 ModelingCommandResult ModelingSessionService::apply_resolved_component_selection(
-    const ModelingResolvedComponentSelectionRequest &request) {
-  return impl_->apply_resolved_component_selection(request);
+    const ModelingResolvedComponentSelectionRequest &request,
+    const ModelingSelectionBoxBaseline *baseline) {
+  if (baseline != nullptr && (!baseline->valid() ||
+      baseline->editor_mode_generation != impl_->editor_mode_generation() ||
+      baseline->impl_->selection.mode != app_selection_mode_to_runtime(impl_->selection_mode()))) {
+    return {.ok = false, .message = "Component click edit context is stale."};
+  }
+  return impl_->apply_resolved_component_selection(request, baseline ? baseline->impl_.get() : nullptr);
 }
 
 ModelingCommandResult ModelingSessionService::set_component_selections(

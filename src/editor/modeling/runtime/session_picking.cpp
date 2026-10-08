@@ -3800,7 +3800,7 @@ bool pick_select_component_traversal(
   return true;
 }
 
-bool pick_select_connected_component(
+bool pick_select_component_double_click(
     std::vector<PolygonObject> &objects, SelectionMode mode,
     int &active_object_id, const ApplyPickSelectionRequest &request) {
   const bool replace_selection =
@@ -3840,8 +3840,13 @@ bool pick_select_connected_component(
     return false;
   }
   PolygonObject &object = objects[hit_index];
-  quader_poly::Selection connected =
-      quader_poly::connected_component_selection(object.document, hit);
+  quader_poly::Selection context = object.selection;
+  if ((replace_selection && mode == SelectionMode::Edge) ||
+      (mode == SelectionMode::Face && object.id != active_object_id)) {
+    context = {};
+  }
+  quader_poly::Selection expanded =
+      quader_poly::component_double_click_selection(object.document, hit, context);
   if (options.has_hidden_material_slot) {
     if (mode == SelectionMode::Face) {
       std::unordered_set<quader_poly::ElementId> hidden_faces;
@@ -3850,29 +3855,29 @@ bool pick_select_connected_component(
           hidden_faces.insert(face.id);
         }
       }
-      std::erase_if(connected.faces, [&](quader_poly::ElementId face) {
+      std::erase_if(expanded.faces, [&](quader_poly::ElementId face) {
         return hidden_faces.contains(face);
       });
     } else {
       const quader_poly::document_internal::DocumentPickFacts pick_facts(
           object.document, options);
-      std::erase_if(connected.vertices, [&](quader_poly::ElementId vertex) {
+      std::erase_if(expanded.vertices, [&](quader_poly::ElementId vertex) {
         return !pick_facts.vertex_can_be_picked(vertex);
       });
-      std::erase_if(connected.edges, [&](quader_poly::Edge edge) {
+      std::erase_if(expanded.edges, [&](quader_poly::Edge edge) {
         return !pick_facts.edge_can_be_picked(edge);
       });
     }
   }
-  if (connected.empty()) {
+  if (expanded.empty()) {
     return false;
   }
   const bool was_edit_target = object.selected || object.id == active_object_id;
   if (replace_selection) {
     clear_selection(objects, active_object_id);
-    object.selection = std::move(connected);
+    object.selection = std::move(expanded);
   } else {
-    object.selection.mode = connected.mode;
+    object.selection.mode = expanded.mode;
     const auto edit_components = [&](auto &selected, const auto &components,
                                      const auto &key) {
       std::unordered_set<std::uint64_t> existing;
@@ -3901,9 +3906,9 @@ bool pick_select_connected_component(
     const auto element_key = [](quader_poly::ElementId element) {
       return static_cast<std::uint64_t>(element);
     };
-    edit_components(object.selection.vertices, connected.vertices, element_key);
-    edit_components(object.selection.edges, connected.edges, component_edge_key);
-    edit_components(object.selection.faces, connected.faces, element_key);
+    edit_components(object.selection.vertices, expanded.vertices, element_key);
+    edit_components(object.selection.edges, expanded.edges, component_edge_key);
+    edit_components(object.selection.faces, expanded.faces, element_key);
     object.selection.has_active = !object.selection.empty();
     object.selection.active_kind = hit.kind;
     if (!object.selection.vertices.empty()) {
@@ -4148,7 +4153,7 @@ ApplyPickSelectionProjectionResult apply_pick_selection(
                         request.object_bounds, request.face_geometry,
                         request.object_transforms);
         } else if (multi_click && mode != SelectionMode::Object) {
-          result.hit = pick_select_connected_component(
+          result.hit = pick_select_component_double_click(
               picking_objects, mode, resolved_active_object_id, request);
         } else {
           result.hit =

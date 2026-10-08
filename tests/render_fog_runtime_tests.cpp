@@ -362,10 +362,11 @@ public:
     viewport_.set_scene_visible(visible);
   }
 
-  bool create_empty_grid_sample(QVec3 eye, QVec3 target, float far_plane) {
+  bool create_empty_grid_sample(QVec3 eye, QVec3 target, float far_plane,
+                                QVec3 up = {0.0f, 1.0f, 0.0f}) {
     destroy_patch();
     if (!camera_.restore_perspective_pose(
-            {.eye = eye, .target = target, .up = {0.0f, 1.0f, 0.0f}})) return false;
+            {.eye = eye, .target = target, .up = up})) return false;
     camera_.set_clip_planes(0.05f, far_plane);
     viewport_.update_camera(camera_);
     viewport_.set_scene_layer_mask(kViewportShadedSceneLayerMask);
@@ -434,7 +435,8 @@ public:
   ViewportCameraController &grid_camera() { return camera_; }
 
   QImage capture_grid(bool rendered, bool visible, bool axes_visible = true,
-                      const ViewportSettings *authored_settings = nullptr) {
+                      const ViewportSettings *authored_settings = nullptr,
+                      float grid_spacing = 1.0f) {
     ViewportSettings viewport_settings = authored_settings
         ? *authored_settings : ViewportSettings::defaults();
     // Grid contrast fixtures use an authored black backdrop independently of
@@ -462,7 +464,7 @@ public:
     }
     presentation_settings = viewport_settings;
     viewport_.update_camera(camera_);
-    viewport_.update_ground_grid(camera_, 1.0f, viewport_settings, visible);
+    viewport_.update_ground_grid(camera_, grid_spacing, viewport_settings, visible);
     return capture_image(rendered, 0u, 0u, width_, height_);
   }
 
@@ -1479,7 +1481,7 @@ TEST(RenderGroundGridRuntimeTests,
 }
 
 TEST(RenderGroundGridRuntimeTests,
-     NativeSrgbGridUsesFixedHammerPaletteAcrossTexturedSurfaces) {
+     NativeSrgbGridUsesConfiguredPaletteAcrossTexturedSurfaces) {
   if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_GRID_TESTS") != 1) {
     GTEST_SKIP() << "Set QUADER_RUN_VULKAN_GRID_TESTS=1 for native sRGB "
                    "fixed ground-grid palette coverage";
@@ -1573,7 +1575,7 @@ TEST(RenderGroundGridRuntimeTests,
 
         // Keep camera, geometry and depth fixed while hiding the scene's
         // color. White over measured black directly reveals raster coverage;
-        // no test copy of line widths or the nine-sample shader is involved.
+        // no test copy of the shader's coverage formula is involved.
         harness.set_grid_scene_visible(false);
         const QImage black = harness.capture_grid(rendered, false, false, &authored);
         const QImage on_black = harness.capture_grid(rendered, true, false, &authored);
@@ -1724,6 +1726,285 @@ TEST(RenderGroundGridRuntimeTests,
       }
     }
   }
+}
+
+TEST(RenderGroundGridRuntimeTests,
+     PerspectiveCoverageRepeatsAcrossWorldCellsAndReflectedViews) {
+  if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_GRID_TESTS") != 1) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_GRID_TESTS=1 for periodic grid coverage";
+  }
+  FogRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(256u, true));
+  const QString output_directory =
+      qEnvironmentVariable("QUADER_VULKAN_GRID_OUTPUT_DIR");
+  if (!output_directory.isEmpty()) ASSERT_TRUE(QDir().mkpath(output_directory));
+  const ViewportSettings authored = ViewportSettings::defaults();
+  // These cell centers keep origin axes outside the image. The
+  // authored minor/major lattice must repeat without changing its AA phase.
+  for (const float roll : {0.0f, 0.37f, 1.57079632679f}) {
+    QImage reference;
+    for (int variant = 0; variant < 4; ++variant) {
+      const QVec3 target = variant == 1 ? QVec3{464.0f, 0.0f, 464.0f}
+          : variant == 2 ? QVec3{-464.0f, 0.0f, -464.0f}
+                         : QVec3{16.0f, 0.0f, 16.0f};
+      const float side = variant == 3 ? -1.0f : 1.0f;
+      const QVec3 up{std::sin(roll), 0.0f, -std::cos(roll)};
+      SCOPED_TRACE(::testing::Message() << "roll=" << roll << ", variant=" << variant);
+      ASSERT_TRUE(harness.create_empty_grid_sample(
+          target + QVec3{0.0f, side * 20.0f, 0.0f}, target, 1000.0f, up));
+      const QImage image = harness.capture_grid(false, true, false, &authored);
+      ASSERT_FALSE(image.isNull());
+      if (variant == 0) {
+        reference = image;
+      } else {
+        int maximum_delta = 0;
+        std::uint64_t total_delta = 0u;
+        for (int y = 0; y < image.height(); ++y) {
+          for (int x = 0; x < image.width(); ++x) {
+            // Looking from below reverses the camera's horizontal direction.
+            const int reference_x = variant == 3 ? image.width() - 1 - x : x;
+            const QRgb a = image.pixel(x, y);
+            const QRgb b = reference.pixel(reference_x, y);
+            const int delta = std::max({std::abs(qRed(a) - qRed(b)),
+                std::abs(qGreen(a) - qGreen(b)), std::abs(qBlue(a) - qBlue(b))});
+            maximum_delta = std::max(maximum_delta, delta);
+            total_delta += static_cast<std::uint64_t>(delta);
+          }
+        }
+        EXPECT_LE(maximum_delta, 4);
+        EXPECT_LT(static_cast<double>(total_delta) /
+                      (image.width() * image.height()), 0.15);
+        std::cout << "Periodic grid GPU roll=" << roll << " variant=" << variant
+                  << " maximum_delta=" << maximum_delta
+                  << " total_delta=" << total_delta << '\n';
+      }
+      if (!output_directory.isEmpty()) {
+        ASSERT_TRUE(image.save(QDir(output_directory).filePath(
+            QString("periodic_grid_roll_%1_variant_%2.png").arg(roll).arg(variant))));
+      }
+    }
+  }
+}
+
+TEST(RenderGroundGridRuntimeTests,
+     PerspectiveTransparentHierarchyAndSpacingRemainAuthoritative) {
+  if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_GRID_TESTS") != 1) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_GRID_TESTS=1 for grid hierarchy coverage";
+  }
+  FogRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(512u, true));
+  ASSERT_TRUE(harness.create_empty_grid_sample(
+      {2.0f, 8.0f, 1.0f}, {2.0f, 0.0f, 1.0f}, 1000.0f, {0.0f, 0.0f, -1.0f}));
+  ViewportSettings authored = ViewportSettings::defaults();
+  authored.set_color(ViewportColorSettingId::GridMinor, {1.0f, 1.0f, 1.0f, 1.0f});
+  authored.set_color(ViewportColorSettingId::GridMajor, {1.0f, 1.0f, 1.0f, 0.0f});
+  const auto peak = [&](const QImage &image, QVec3 world) {
+    const QPoint center = harness.grid_pixel(world);
+    const QRect region(center - QPoint(3, 3), QSize(7, 7));
+    EXPECT_TRUE(image.rect().contains(region));
+    if (!image.rect().contains(region)) return -1;
+    int result = 0;
+    for (int y = region.top(); y <= region.bottom(); ++y) {
+      for (int x = region.left(); x <= region.right(); ++x) {
+        result = std::max(result, qRed(image.pixel(x, y)));
+      }
+    }
+    return result;
+  };
+  const QImage hidden_major = harness.capture_grid(false, true, false, &authored);
+  ASSERT_FALSE(hidden_major.isNull());
+  EXPECT_GT(peak(hidden_major, {1.0f, 0.0f, 0.5f}), 128);
+  EXPECT_LE(peak(hidden_major, {2.0f, 0.0f, 0.5f}), 1)
+      << "Transparent major slots must not reveal the minor layer beneath";
+  EXPECT_LE(peak(hidden_major, {0.0f, 0.0f, 0.5f}), 1)
+      << "Transparent origin slots must not reveal ordinary grid lines";
+  authored.set_color(ViewportColorSettingId::GridMajor, {1.0f, 1.0f, 1.0f, 1.0f});
+  const QImage spacing_two = harness.capture_grid(false, true, false, &authored, 2.0f);
+  ASSERT_FALSE(spacing_two.isNull());
+  EXPECT_LE(peak(spacing_two, {1.0f, 0.0f, 0.5f}), 1);
+  EXPECT_GT(peak(spacing_two, {2.0f, 0.0f, 0.5f}), 128);
+  const QImage spacing_four = harness.capture_grid(false, true, false, &authored, 4.0f);
+  ASSERT_FALSE(spacing_four.isNull());
+  EXPECT_LE(peak(spacing_four, {2.0f, 0.0f, 0.5f}), 1);
+  EXPECT_GT(peak(spacing_four, {4.0f, 0.0f, 0.5f}), 128);
+
+  const QString output_directory =
+      qEnvironmentVariable("QUADER_VULKAN_GRID_OUTPUT_DIR");
+  if (!output_directory.isEmpty()) {
+    ASSERT_TRUE(QDir().mkpath(output_directory));
+    ASSERT_TRUE(hidden_major.save(QDir(output_directory).filePath("grid_transparent_major.png")));
+    ASSERT_TRUE(spacing_two.save(QDir(output_directory).filePath("grid_spacing_two.png")));
+    ASSERT_TRUE(spacing_four.save(QDir(output_directory).filePath("grid_spacing_four.png")));
+  }
+}
+
+TEST(RenderGroundGridRuntimeTests,
+     ObliqueDenseGridPreservesAveragedCoverageWithoutStripedBands) {
+  if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_GRID_TESTS") != 1) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_GRID_TESTS=1 for oblique grid density coverage";
+  }
+  FogRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(768u, true, 512u));
+  const QString output_directory =
+      qEnvironmentVariable("QUADER_VULKAN_GRID_OUTPUT_DIR");
+  if (!output_directory.isEmpty()) ASSERT_TRUE(QDir().mkpath(output_directory));
+  const ViewportSettings authored = ViewportSettings::defaults();
+  const double minor_gray = 255.0 * authored.color(ViewportColorSettingId::GridMinor).r;
+  const double major_gray = 255.0 * authored.color(ViewportColorSettingId::GridMajor).r;
+  struct GridView {
+    const char *name;
+    QVec3 eye;
+    QVec3 target;
+  };
+  const std::array<GridView, 3u> views{{
+      {"forward", {0.0f, 60.0f, 0.0f}, {0.0f, 0.0f, -80.0f}},
+      {"diagonal", {80.0f, 60.0f, 80.0f}, {}},
+      {"low", {0.0f, 16.0f, 64.0f}, {}},
+  }};
+  for (const GridView &view : views) {
+    ASSERT_TRUE(harness.create_empty_grid_sample(view.eye, view.target, 1000.0f));
+    for (const float spacing : {1.0f / 32.0f, 0.25f, 1.0f}) {
+      const QString name = QString("oblique_density_%1_spacing_%2")
+          .arg(QString::fromLatin1(view.name)).arg(spacing);
+      SCOPED_TRACE(name.toStdString());
+      const QImage image = harness.capture_grid(false, true, false, &authored, spacing);
+      ASSERT_FALSE(image.isNull());
+      if (!output_directory.isEmpty()) {
+        ASSERT_TRUE(image.save(QDir(output_directory).filePath(name + ".png")));
+      }
+      int maximum_chroma = 0;
+      for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+          const QRgb pixel = image.pixel(x, y);
+          const int maximum = std::max({qRed(pixel), qGreen(pixel), qBlue(pixel)});
+          const int minimum = std::min({qRed(pixel), qGreen(pixel), qBlue(pixel)});
+          maximum_chroma = std::max(maximum_chroma, maximum - minimum);
+        }
+      }
+      EXPECT_LE(maximum_chroma, 2)
+          << "With colored origin axes disabled, every default grid tier must be neutral gray";
+      // Project real major-grid cells to identify the reported anisotropic
+      // region: one direction fits less than 1.5 pixels, the other remains wider
+      // than three. This measures the visible scene, independently of the shader's
+      // derivatives, filtering functions, or choice of coverage integrator.
+      std::array<std::uint64_t, 3u> neutral_sums{};
+      std::array<int, 3u> neutral_counts{};
+      int neutral_peak = 0;
+      const auto &camera = harness.grid_camera();
+      for (int y = 16; y < image.height() - 16; y += 2) {
+        for (int x = 16; x < image.width() - 16; x += 2) {
+          const auto ray = camera.ray_from_viewport_point(
+              {static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f});
+          if (ray.direction.y >= -0.0001f) continue;
+          const QVec3 world = ray.origin - ray.direction * (ray.origin.y / ray.direction.y);
+          // Stay away from the finite grid boundary and the camera clip limit.
+          if (std::abs(world.x) > 480.0f || std::abs(world.z) > 480.0f) continue;
+          const auto origin = camera.project_world_point(world);
+          const auto adjacent_u = camera.project_world_point(world + QVec3{2.0f, 0.0f, 0.0f});
+          const auto adjacent_v = camera.project_world_point(world + QVec3{0.0f, 0.0f, 2.0f});
+          if (!origin.visible || !adjacent_u.visible || !adjacent_v.visible) continue;
+          const QVec2 u = adjacent_u.position - origin.position;
+          const QVec2 v = adjacent_v.position - origin.position;
+          const float area = std::abs(u.x * v.y - u.y * v.x);
+          const float spacing_u = area / std::max(std::hypot(v.x, v.y), 0.001f);
+          const float spacing_v = area / std::max(std::hypot(u.x, u.y), 0.001f);
+          const float dense_spacing = std::min(spacing_u, spacing_v);
+          if (dense_spacing >= 1.5f || std::max(spacing_u, spacing_v) <= 3.0f) continue;
+          const QRgb pixel = image.pixel(x, y);
+          const int maximum = std::max({qRed(pixel), qGreen(pixel), qBlue(pixel)});
+          // Include every sampled pixel, including black, so losing coverage
+          // cannot masquerade as a stable average of surviving lines.
+          const auto bin = static_cast<std::size_t>(dense_spacing / 0.5f);
+          neutral_sums[bin] += static_cast<std::uint64_t>(maximum);
+          ++neutral_counts[bin];
+          neutral_peak = std::max(neutral_peak, maximum);
+        }
+      }
+      const int total_samples = neutral_counts[0] + neutral_counts[1] + neutral_counts[2];
+      ASSERT_GT(total_samples, 256) << "The camera must exercise a dense grid direction";
+      double previous_mean = -1.0;
+      int populated_bins = 0;
+      for (std::size_t bin = 0u; bin < neutral_counts.size(); ++bin) {
+        if (neutral_counts[bin] >= 128) {
+          ++populated_bins;
+          const double mean = static_cast<double>(neutral_sums[bin]) / neutral_counts[bin];
+          EXPECT_GE(mean, minor_gray * 0.5)
+              << "Dense gray coverage must not collapse to isolated stripes or disappear";
+          // Dense sampling may average the lattice, but its sparse brighter
+          // parent lines must not replace the entire region with their color.
+          // Allow a broad visual range below the midpoint of the authored grays,
+          // without prescribing the shader's filtering or line-width formula.
+          EXPECT_LE(mean, (minor_gray + major_gray) * 0.5)
+              << "Dense parent lines must not turn the grid into a flat major-gray sheet";
+          if (previous_mean >= 0.0) {
+            EXPECT_LE(std::abs(mean - previous_mean), 24.0)
+                << "Neighboring projected densities must retain a smooth neutral transition";
+          }
+          previous_mean = mean;
+          std::cout << "Oblique grid GPU " << name.toStdString() << " density_bin=" << bin
+                    << " neutral_mean=" << mean << " samples=" << neutral_counts[bin] << '\n';
+        }
+      }
+      EXPECT_GT(populated_bins, 0);
+      EXPECT_LE(neutral_peak, std::max(minor_gray, major_gray) + 2.0)
+          << "Averaging must preserve the authored gray palette instead of creating white";
+    }
+  }
+}
+
+TEST(RenderGroundGridRuntimeTests,
+     PerspectiveLineAreaIsStableUnderSubpixelMotionAndRespondsToWidth) {
+  if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_GRID_TESTS") != 1) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_GRID_TESTS=1 for subpixel grid coverage";
+  }
+  FogRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(512u, true));
+  ViewportSettings authored = ViewportSettings::defaults();
+  authored.set_color(ViewportColorSettingId::GridMinor, {1.0f, 1.0f, 1.0f, 1.0f});
+  authored.set_color(ViewportColorSettingId::GridMajor, {1.0f, 1.0f, 1.0f, 0.0f});
+  ASSERT_TRUE(harness.create_empty_grid_sample(
+      {1.0f, 8.0f, 0.5f}, {1.0f, 0.0f, 0.5f}, 1000.0f, {0.0f, 0.0f, -1.0f}));
+  const auto &camera = harness.grid_camera();
+  const float pixels_per_world =
+      camera.project_world_point({2.0f, 0.0f, 0.5f}).position.x -
+      camera.project_world_point({1.0f, 0.0f, 0.5f}).position.x;
+  ASSERT_GT(pixels_per_world, 10.0f);
+  const auto line_area = [&](const QImage &image) {
+    const QPoint center = harness.grid_pixel({1.0f, 0.0f, 0.5f});
+    const QRect region(center - QPoint(6, 5), QSize(13, 11));
+    EXPECT_TRUE(image.rect().contains(region));
+    if (!image.rect().contains(region)) return 0.0;
+    double area = 0.0;
+    for (int y = region.top(); y <= region.bottom(); ++y) {
+      for (int x = region.left(); x <= region.right(); ++x) {
+        const double displayed = qRed(image.pixel(x, y)) / 255.0;
+        area += displayed <= 0.04045 ? displayed / 12.92
+            : std::pow((displayed + 0.055) / 1.055, 2.4);
+      }
+    }
+    return area / region.height();
+  };
+  double reference_area = 0.0;
+  for (int phase = 0; phase <= 8; ++phase) {
+    const float camera_x = 1.0f + static_cast<float>(phase) / (8.0f * pixels_per_world);
+    ASSERT_TRUE(harness.create_empty_grid_sample(
+        {camera_x, 8.0f, 0.5f}, {camera_x, 0.0f, 0.5f}, 1000.0f,
+        {0.0f, 0.0f, -1.0f}));
+    const QImage image = harness.capture_grid(false, true, false, &authored);
+    ASSERT_FALSE(image.isNull());
+    const double area = line_area(image);
+    if (phase == 0) reference_area = area;
+    EXPECT_GT(area, 0.4);
+    EXPECT_LT(area, 1.6);
+    EXPECT_NEAR(area, reference_area, reference_area * 0.10)
+        << "Subpixel translation must redistribute coverage rather than pulse the line";
+    std::cout << "Subpixel grid GPU phase=" << phase << " area=" << area << '\n';
+  }
+  authored.set_float_value(ViewportFloatSettingId::GridMinorLineSize, 0.65f);
+  const QImage wider = harness.capture_grid(false, true, false, &authored);
+  ASSERT_FALSE(wider.isNull());
+  EXPECT_GT(line_area(wider), reference_area * 1.6);
+  EXPECT_LT(line_area(wider), reference_area * 2.4);
 }
 
 TEST(RenderFogRuntimeTests, FogControlsAndRenderedModeAffectProductionPixels) {

@@ -1371,6 +1371,7 @@ void QtViewportSurface::record_mouse_press(QMouseEvent &event,
       .local = input_->mouse_local,
       .sequence = ++input_->pointer_event_sequence,
       .modifiers = input_->modifiers,
+      .click_count = double_click ? 2 : 1,
   });
 
   if (double_click) {
