@@ -285,6 +285,54 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
       contract(quader_command::kViewportToggleTransformSpace,
                Fixture::Viewport, kViewportDomains,
                Outcome::ChangeRequired),
+      contract(quader_command::kViewportNudgeMoveUp, Fixture::ObjectSelection,
+               kTransformDomains, Outcome::ChangeRequired,
+               UndoRepeat::UndoableAndRepeatable),
+      contract(quader_command::kViewportNudgeMoveDown, Fixture::ObjectSelection,
+               kTransformDomains, Outcome::ChangeRequired,
+               UndoRepeat::UndoableAndRepeatable),
+      contract(quader_command::kViewportNudgeMoveLeft, Fixture::ObjectSelection,
+               kTransformDomains, Outcome::ChangeRequired,
+               UndoRepeat::UndoableAndRepeatable),
+      contract(quader_command::kViewportNudgeMoveRight, Fixture::ObjectSelection,
+               kTransformDomains, Outcome::ChangeRequired,
+               UndoRepeat::UndoableAndRepeatable),
+      contract(quader_command::kViewportNudgeRotateUp, Fixture::ObjectSelection,
+               kTransformDomains, Outcome::ChangeRequired,
+               UndoRepeat::UndoableAndRepeatable),
+      contract(quader_command::kViewportNudgeRotateDown, Fixture::ObjectSelection,
+               kTransformDomains, Outcome::ChangeRequired,
+               UndoRepeat::UndoableAndRepeatable),
+      contract(quader_command::kViewportNudgeRotateLeft, Fixture::ObjectSelection,
+               kTransformDomains, Outcome::ChangeRequired,
+               UndoRepeat::UndoableAndRepeatable),
+      contract(quader_command::kViewportNudgeRotateRight, Fixture::ObjectSelection,
+               kTransformDomains, Outcome::ChangeRequired,
+               UndoRepeat::UndoableAndRepeatable),
+      contract(quader_command::kViewportNudgeDuplicateOrExtrudeMoveUp,
+               Fixture::ObjectSelection, kTopologySceneDomains,
+               Outcome::ChangeRequired, UndoRepeat::UndoableAndRepeatable),
+      contract(quader_command::kViewportNudgeDuplicateOrExtrudeMoveDown,
+               Fixture::ObjectSelection, kTopologySceneDomains,
+               Outcome::ChangeRequired, UndoRepeat::UndoableAndRepeatable),
+      contract(quader_command::kViewportNudgeDuplicateOrExtrudeMoveLeft,
+               Fixture::ObjectSelection, kTopologySceneDomains,
+               Outcome::ChangeRequired, UndoRepeat::UndoableAndRepeatable),
+      contract(quader_command::kViewportNudgeDuplicateOrExtrudeMoveRight,
+               Fixture::ObjectSelection, kTopologySceneDomains,
+               Outcome::ChangeRequired, UndoRepeat::UndoableAndRepeatable),
+      contract(quader_command::kViewportNudgeDuplicateOrExtrudeRotateUp,
+               Fixture::ObjectSelection, kTopologySceneDomains,
+               Outcome::ChangeRequired, UndoRepeat::UndoableAndRepeatable),
+      contract(quader_command::kViewportNudgeDuplicateOrExtrudeRotateDown,
+               Fixture::ObjectSelection, kTopologySceneDomains,
+               Outcome::ChangeRequired, UndoRepeat::UndoableAndRepeatable),
+      contract(quader_command::kViewportNudgeDuplicateOrExtrudeRotateLeft,
+               Fixture::ObjectSelection, kTopologySceneDomains,
+               Outcome::ChangeRequired, UndoRepeat::UndoableAndRepeatable),
+      contract(quader_command::kViewportNudgeDuplicateOrExtrudeRotateRight,
+               Fixture::ObjectSelection, kTopologySceneDomains,
+               Outcome::ChangeRequired, UndoRepeat::UndoableAndRepeatable),
       contract(quader_command::kViewportViewPerspective, Fixture::Viewport,
                kPersistedCameraDomains, Outcome::SuccessRequired),
       contract(quader_command::kViewportViewTop, Fixture::Viewport,
@@ -788,9 +836,9 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
   };
 
 #ifndef NDEBUG
-  static_assert(std::size(kContracts) == 216U);
+  static_assert(std::size(kContracts) == 232U);
 #else
-  static_assert(std::size(kContracts) == 215U);
+  static_assert(std::size(kContracts) == 231U);
 #endif
   return std::span<const CommandBehaviorContract>{kContracts};
 }

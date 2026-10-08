@@ -740,6 +740,8 @@ public:
   QuaderApiVoidResult cancel_transform_drag();
 
   QuaderApiVoidResult move_selection(QVec3 delta);
+  [[nodiscard]] bool can_nudge_selection(bool duplicate_selected = false) const;
+  QuaderApiVoidResult nudge_selection(const QuaderResolvedNudgeRequest &request);
   QuaderApiVoidResult rotate_selection(QVec3 euler_radians, QVec3 pivot = {});
   QuaderApiVoidResult scale_selection(QVec3 scale, QVec3 pivot = {});
   QuaderApiVoidResult transform_selection(const QuaderTransform3 &transform,

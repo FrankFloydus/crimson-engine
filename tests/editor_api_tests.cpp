@@ -24202,6 +24202,563 @@ TEST(EditorApiTests,
   EXPECT_EQ(material_after->material, material_before->material);
 }
 
+namespace {
+
+constexpr std::array<std::pair<quader::QuaderCommandId, std::string_view>, 16>
+    kNudgeCommandBindings{{
+        {quader::quader_command::kViewportNudgeMoveUp, "Up"},
+        {quader::quader_command::kViewportNudgeMoveDown, "Down"},
+        {quader::quader_command::kViewportNudgeMoveLeft, "Left"},
+        {quader::quader_command::kViewportNudgeMoveRight, "Right"},
+        {quader::quader_command::kViewportNudgeRotateUp, "Alt+Up"},
+        {quader::quader_command::kViewportNudgeRotateDown, "Alt+Down"},
+        {quader::quader_command::kViewportNudgeRotateLeft, "Alt+Left"},
+        {quader::quader_command::kViewportNudgeRotateRight, "Alt+Right"},
+        {quader::quader_command::kViewportNudgeDuplicateOrExtrudeMoveUp, "Shift+Up"},
+        {quader::quader_command::kViewportNudgeDuplicateOrExtrudeMoveDown, "Shift+Down"},
+        {quader::quader_command::kViewportNudgeDuplicateOrExtrudeMoveLeft, "Shift+Left"},
+        {quader::quader_command::kViewportNudgeDuplicateOrExtrudeMoveRight, "Shift+Right"},
+        {quader::quader_command::kViewportNudgeDuplicateOrExtrudeRotateUp, "Shift+Alt+Up"},
+        {quader::quader_command::kViewportNudgeDuplicateOrExtrudeRotateDown, "Shift+Alt+Down"},
+        {quader::quader_command::kViewportNudgeDuplicateOrExtrudeRotateLeft, "Shift+Alt+Left"},
+        {quader::quader_command::kViewportNudgeDuplicateOrExtrudeRotateRight, "Shift+Alt+Right"},
+    }};
+
+} // namespace
+
+TEST(EditorApiTests, ViewportNudgeCommandsExposeDefaultsAndPreserveActiveScaleTool) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto typed = typed_command_ids();
+  for (const auto &[command, shortcut] : kNudgeCommandBindings) {
+    SCOPED_TRACE(command.string());
+    EXPECT_TRUE(typed.contains(std::string(command.string())));
+    const auto descriptor = editor.commands().descriptor(command);
+    ASSERT_TRUE(descriptor.has_value());
+    EXPECT_FALSE(descriptor->enabled);
+    EXPECT_FALSE(descriptor->label.empty());
+    EXPECT_EQ(descriptor->shortcut, shortcut);
+    const auto *entry = find_keybinding_catalog_entry(catalog, command.string());
+    ASSERT_NE(entry, nullptr);
+    EXPECT_EQ(entry->scope_id, "viewport");
+    EXPECT_EQ(entry->localization_key,
+              "keybindings.target." + std::string(command.string()) + ".label");
+    EXPECT_EQ(entry->default_shortcut, shortcut);
+    EXPECT_EQ(entry->shortcut, shortcut);
+    EXPECT_FALSE(entry->customized);
+    EXPECT_FALSE(entry->unassigned);
+  }
+
+  (void)create_selected_box(editor, "Nudge Commands");
+  ASSERT_TRUE(editor.viewports().set_view(editor.viewports().focused_pane(),
+                                         quader::ViewportView::Back).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Scale).ok());
+  const quader::ViewportToolState state{
+      .active_tool = quader::ViewportToolId::Scale};
+  using Kind = quader::QuaderViewportKeybindingDispatch::Kind;
+  using Domain = quader::test::CommandObservableDomain;
+  for (const auto &[command, shortcut] : kNudgeCommandBindings) {
+    SCOPED_TRACE(command.string());
+    ASSERT_TRUE(editor.commands().descriptor(command)->enabled);
+    const auto before = quader::test::capture_command_observable_state(editor);
+    const auto dispatch = editor.commands().dispatch_viewport_input_binding(
+        single_input_chord(shortcut), state, true, false);
+    ASSERT_EQ(dispatch.kind, Kind::Command);
+    ASSERT_EQ(dispatch.command_id, command.string());
+    ASSERT_TRUE(dispatch.repeat_binding.has_value());
+    EXPECT_EQ(dispatch.repeat_binding->command_id, command.string());
+    EXPECT_EQ(dispatch.repeat_binding->sequence,
+              *quader::quader_input_parse_shortcut(shortcut));
+    EXPECT_EQ(dispatch.repeat_binding->keybindings_revision,
+              editor.commands().keybindings_revision());
+    EXPECT_EQ(dispatch.repeat_binding->pane, editor.viewports().focused_pane());
+    ASSERT_TRUE(editor.commands().can_repeat_viewport_input_binding(
+        *dispatch.repeat_binding, state, true, false));
+    EXPECT_EQ(quader::test::capture_command_observable_state(editor), before);
+    const auto executed = editor.commands().execute(dispatch.command_id);
+    ASSERT_TRUE(executed.ok()) << executed.error_message();
+    EXPECT_TRUE(executed.changed());
+    EXPECT_EQ(editor.tools().active_tool(), "scale");
+    EXPECT_TRUE(editor.history().can_undo());
+    ASSERT_TRUE(editor.history().undo().ok());
+    const auto restored = quader::test::capture_command_observable_state(editor);
+    for (const auto domain : {Domain::Scene, Domain::Geometry, Domain::Selection,
+                              Domain::Overlay, Domain::Tools}) {
+      EXPECT_EQ(restored.domain(domain), before.domain(domain));
+    }
+  }
+}
+
+TEST(EditorApiTests, ViewportNudgesUseCurrentGridAndFixedFortyFiveDegreeRotation) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto box = create_selected_box(editor, "Nudge Step Settings");
+  ASSERT_TRUE(editor.viewports().set_view(editor.viewports().focused_pane(),
+                                         quader::ViewportView::Back).ok());
+  ASSERT_TRUE(editor.viewports().set_grid_preset(4).ok());
+  for (const auto [snap_enabled, grid_enabled] :
+       {std::pair{true, true}, std::pair{true, false}, std::pair{false, true}}) {
+    SCOPED_TRACE(snap_enabled);
+    SCOPED_TRACE(grid_enabled);
+    ASSERT_TRUE(editor.viewports().set_control(
+        quader::QuaderViewportControl::SnappingEnabled, snap_enabled).ok());
+    ASSERT_TRUE(editor.viewports().set_control(
+        quader::QuaderViewportControl::GridSnap, grid_enabled).ok());
+    const auto before = editor.query().selection_transform_pivot();
+    ASSERT_TRUE(before.has_value());
+    const auto moved = editor.commands().execute(
+        quader::quader_command::kViewportNudgeMoveRight);
+    ASSERT_TRUE(moved.ok()) << moved.error_message();
+    ASSERT_TRUE(moved.changed());
+    const auto after = editor.query().selection_transform_pivot();
+    ASSERT_TRUE(after.has_value());
+    EXPECT_NEAR(after->x - before->x, snap_enabled && grid_enabled ? 0.25F : 1.0F,
+                1e-6F);
+    EXPECT_NEAR(after->y, before->y, 1e-6F);
+    EXPECT_NEAR(after->z, before->z, 1e-6F);
+    ASSERT_TRUE(editor.history().undo().ok());
+  }
+  ASSERT_TRUE(editor.viewports().set_control(
+      quader::QuaderViewportControl::SnappingEnabled, true).ok());
+  for (const auto [snap_enabled, snap_degrees] :
+       {std::pair{true, 15.0}, std::pair{true, 90.0}, std::pair{false, 90.0}}) {
+    SCOPED_TRACE(snap_degrees);
+    SCOPED_TRACE(snap_enabled);
+    ASSERT_TRUE(editor.viewports().set_rotation_snap_degrees(snap_degrees).ok());
+    ASSERT_TRUE(editor.viewports().set_control(
+        quader::QuaderViewportControl::RotationSnap, snap_enabled).ok());
+    const auto rotated = editor.commands().execute(
+        quader::quader_command::kViewportNudgeRotateRight);
+    ASSERT_TRUE(rotated.ok()) << rotated.error_message();
+    ASSERT_TRUE(rotated.changed());
+    const auto world = entity_world_transform(editor, box.entity);
+    ASSERT_TRUE(world.has_value());
+    EXPECT_NEAR(world->values[0], std::sqrt(0.5F), 1e-5F);
+    EXPECT_NEAR(world->values[1], -std::sqrt(0.5F), 1e-5F);
+    EXPECT_NEAR(world->values[2], 0.0F, 1e-5F);
+    ASSERT_TRUE(editor.history().undo().ok());
+  }
+}
+
+TEST(EditorApiTests, PerspectiveHorizontalRotationBindingsUseGlobalUpAcrossHeadings) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto box = create_selected_box(editor, "Perspective Nudge Axes");
+  const auto pane = editor.viewports().focused_pane();
+  ASSERT_TRUE(editor.viewports().set_view(pane, quader::ViewportView::Perspective).ok());
+  ASSERT_TRUE(editor.viewports().set_transform_space(
+      pane, quader::QuaderTransformSpace::Global).ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Scale).ok());
+  auto &camera = quader::QuaderViewportApiRuntimeAccess::workspace(
+      editor.viewports()).camera(pane);
+  const quader::ViewportToolState state{.active_tool = quader::ViewportToolId::Scale};
+  constexpr std::array<quader::QVec3, 3> kEyes{{{8, 4, 0}, {0, 4, 8}, {-8, 4, -4}}};
+  constexpr std::array<std::pair<quader::QuaderCommandId, std::string_view>, 2> kRotations{{
+      {quader::quader_command::kViewportNudgeRotateLeft, "Alt+Left"},
+      {quader::quader_command::kViewportNudgeRotateRight, "Alt+Right"}}};
+  for (const auto eye : kEyes) {
+    SCOPED_TRACE(::testing::Message() << eye.x << ", " << eye.y << ", " << eye.z);
+    ASSERT_TRUE(camera.restore_perspective_pose(
+        {.eye = eye, .target = {0, 0, 0}, .up = {0, 1, 0}}));
+    for (const auto &[command, shortcut] : kRotations) {
+      SCOPED_TRACE(shortcut);
+      const auto dispatch = editor.commands().dispatch_viewport_input_binding(
+          single_input_chord(shortcut), state, true, false);
+      ASSERT_EQ(dispatch.kind, quader::QuaderViewportKeybindingDispatch::Kind::Command);
+      ASSERT_EQ(dispatch.command_id, command.string());
+      const auto rotated = editor.commands().execute(dispatch.command_id);
+      ASSERT_TRUE(rotated.ok()) << rotated.error_message();
+      ASSERT_TRUE(rotated.changed());
+      const auto world = entity_world_transform(editor, box.entity);
+      ASSERT_TRUE(world.has_value());
+      const float sine = shortcut == "Alt+Left" ? std::sqrt(0.5F) : -std::sqrt(0.5F);
+      EXPECT_NEAR(world->values[0], std::sqrt(0.5F), 1e-5F);
+      EXPECT_NEAR(world->values[1], 0.0F, 1e-5F);
+      EXPECT_NEAR(world->values[2], -sine, 1e-5F);
+      EXPECT_NEAR(world->values[4], 0.0F, 1e-5F);
+      EXPECT_NEAR(world->values[5], 1.0F, 1e-5F);
+      EXPECT_NEAR(world->values[6], 0.0F, 1e-5F);
+      EXPECT_NEAR(world->values[8], sine, 1e-5F);
+      EXPECT_NEAR(world->values[9], 0.0F, 1e-5F);
+      EXPECT_NEAR(world->values[10], std::sqrt(0.5F), 1e-5F);
+      EXPECT_EQ(editor.tools().active_tool(), "scale");
+      ASSERT_TRUE(editor.history().undo().ok());
+    }
+  }
+}
+
+TEST(EditorApiTests, ModifiedNudgeBindingsDuplicateObjectsAndGroupsAsOneUndoStep) {
+  using Domain = quader::test::CommandObservableDomain;
+  for (const auto mode : {quader::QuaderSelectionMode::Object,
+                          quader::QuaderSelectionMode::Group}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    CommandTestHarness harness;
+    auto &editor = harness.editor;
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+    const auto box = create_selected_box(editor, "Modified Nudge Original");
+    if (mode == quader::QuaderSelectionMode::Group) {
+      const auto second = create_selected_box(editor, "Modified Nudge Child");
+      ASSERT_TRUE(editor.selection().select_objects({box.entity, second.entity}, box.entity).ok());
+      const auto group = editor.scene().group_selection("Modified Nudge Group");
+      ASSERT_TRUE(group.ok()) << group.error_message();
+      ASSERT_TRUE(editor.scene().select(group.value().id).ok());
+      ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    }
+    ASSERT_TRUE(editor.viewports().set_view(editor.viewports().focused_pane(),
+                                           quader::ViewportView::Back).ok());
+    ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Scale).ok());
+    const quader::ViewportToolState state{.active_tool = quader::ViewportToolId::Scale};
+    constexpr std::array<std::pair<quader::QuaderCommandId, std::string_view>, 2> kModified{{
+        {quader::quader_command::kViewportNudgeDuplicateOrExtrudeMoveRight, "Shift+Right"},
+        {quader::quader_command::kViewportNudgeDuplicateOrExtrudeRotateRight, "Shift+Alt+Right"}}};
+    for (const auto &[command, shortcut] : kModified) {
+      SCOPED_TRACE(shortcut);
+      const auto before = quader::test::capture_command_observable_state(editor);
+      const auto original_entities = editor.query().entities();
+      const auto original_world = entity_world_transform(editor, box.entity);
+      ASSERT_TRUE(original_world.has_value());
+      const auto dispatch = editor.commands().dispatch_viewport_input_binding(
+          single_input_chord(shortcut), state, true, false);
+      ASSERT_EQ(dispatch.kind, quader::QuaderViewportKeybindingDispatch::Kind::Command);
+      ASSERT_EQ(dispatch.command_id, command.string());
+      const auto executed = editor.commands().execute(dispatch.command_id);
+      ASSERT_TRUE(executed.ok()) << executed.error_message();
+      ASSERT_TRUE(executed.changed());
+      EXPECT_EQ(editor.query().entities().size(), original_entities.size() * 2U);
+      const auto selected = selected_entities(editor);
+      ASSERT_FALSE(selected.empty());
+      for (const auto entity : selected) {
+        EXPECT_TRUE(std::ranges::none_of(original_entities, [entity](const auto &original) {
+          return original.id == entity;
+        }));
+      }
+      EXPECT_EQ(editor.selection().summary().mode, mode);
+      const auto retained_world = entity_world_transform(editor, box.entity);
+      ASSERT_TRUE(retained_world.has_value());
+      EXPECT_EQ(retained_world->values, original_world->values);
+      EXPECT_EQ(editor.tools().active_tool(), "scale");
+      ASSERT_TRUE(editor.history().undo().ok());
+      const auto restored = quader::test::capture_command_observable_state(editor);
+      for (const auto domain : {Domain::Scene, Domain::Geometry, Domain::Selection,
+                                Domain::Overlay, Domain::Tools}) {
+        EXPECT_EQ(restored.domain(domain), before.domain(domain));
+      }
+    }
+  }
+}
+
+TEST(EditorApiTests, ModifiedNudgeBindingsExtrudeComponentsAndPreserveActiveScaleTool) {
+  using Domain = quader::test::CommandObservableDomain;
+  for (const auto mode : {quader::QuaderSelectionMode::Face, quader::QuaderSelectionMode::Edge,
+                          quader::QuaderSelectionMode::Vertex}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    CommandTestHarness harness;
+    auto &editor = harness.editor;
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+    quader::QuaderModelingObjectRef object;
+    if (mode == quader::QuaderSelectionMode::Vertex) {
+      object = create_selected_box(editor, "Vertex Nudge Fan");
+    } else {
+      quader_poly::Document document;
+      const std::array vertices{
+          quader_poly::add_vertex(document, {1, -1, -1}),
+          quader_poly::add_vertex(document, {1, 1, -1}),
+          quader_poly::add_vertex(document, {1, 1, 1}),
+          quader_poly::add_vertex(document, {1, -1, 1})};
+      ASSERT_NE(quader_poly::add_face(document, vertices), quader_poly::kInvalidElementId);
+      const auto created = editor.modeling().create_mesh(
+          quader::QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+          {.name = "Component Nudge Quad"});
+      ASSERT_TRUE(created.ok()) << created.error_message();
+      object = created.value();
+    }
+    enter_edit_mode_for_objects(editor, {object});
+    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    if (mode == quader::QuaderSelectionMode::Face) {
+      ASSERT_TRUE(editor.selection().select_face(object, 1).ok());
+    } else if (mode == quader::QuaderSelectionMode::Edge) {
+      ASSERT_TRUE(editor.selection().select_edge(object, 1, 2).ok());
+    } else {
+      ASSERT_TRUE(editor.selection().select_vertex(object, 1).ok());
+    }
+    ASSERT_TRUE(editor.viewports().set_view(editor.viewports().focused_pane(),
+                                           quader::ViewportView::Back).ok());
+    ASSERT_TRUE(editor.viewports().set_transform_space(quader::QuaderTransformSpace::Global).ok());
+    ASSERT_TRUE(editor.viewports().set_grid_preset(4).ok());
+    ASSERT_TRUE(editor.viewports().set_control(
+        quader::QuaderViewportControl::SnappingEnabled, false).ok());
+    ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Scale).ok());
+    const quader::ViewportToolState state{.active_tool = quader::ViewportToolId::Scale};
+    const std::array modified{
+        std::pair{mode == quader::QuaderSelectionMode::Vertex
+                      ? quader::quader_command::kViewportNudgeDuplicateOrExtrudeMoveLeft
+                      : quader::quader_command::kViewportNudgeDuplicateOrExtrudeMoveRight,
+                  mode == quader::QuaderSelectionMode::Vertex ? "Shift+Left" : "Shift+Right"},
+        std::pair{quader::quader_command::kViewportNudgeDuplicateOrExtrudeRotateRight,
+                  "Shift+Alt+Right"}};
+    for (const auto &[command, shortcut] : modified) {
+      SCOPED_TRACE(shortcut);
+      const auto before = quader::test::capture_command_observable_state(editor);
+      const auto mesh_before = editor.query().compiled_object_mesh(object);
+      const auto center_before = editor.query().selection_center();
+      ASSERT_TRUE(mesh_before.has_value());
+      ASSERT_TRUE(center_before.has_value());
+      ASSERT_TRUE(editor.commands().descriptor(command)->enabled);
+      const auto dispatch = editor.commands().dispatch_viewport_input_binding(
+          single_input_chord(shortcut), state, true, false);
+      ASSERT_EQ(dispatch.kind, quader::QuaderViewportKeybindingDispatch::Kind::Command);
+      ASSERT_EQ(dispatch.command_id, command.string());
+      const auto executed = editor.commands().execute(dispatch.command_id);
+      ASSERT_TRUE(executed.ok()) << executed.error_message();
+      ASSERT_TRUE(executed.changed());
+      const auto mesh_after = editor.query().compiled_object_mesh(object);
+      ASSERT_TRUE(mesh_after.has_value());
+      EXPECT_GT(mesh_after->face_textures.size(), mesh_before->face_textures.size());
+      EXPECT_EQ(editor.query().modeling_objects().size(), 1U);
+      const auto selected = editor.selection().summary();
+      EXPECT_EQ(selected.mode, mode);
+      EXPECT_TRUE(selected.has_selection);
+      if (mode == quader::QuaderSelectionMode::Face) {
+        EXPECT_EQ(selected.selected_face_count, 1U);
+        EXPECT_NE(selected.active_face_id, quader::kInvalidQuaderElementId);
+      } else if (mode == quader::QuaderSelectionMode::Edge) {
+        EXPECT_EQ(selected.selected_edge_count, 1U);
+        EXPECT_NE(selected.active_edge_a, quader::kInvalidQuaderElementId);
+        EXPECT_NE(selected.active_edge_b, quader::kInvalidQuaderElementId);
+      } else {
+        EXPECT_EQ(selected.selected_vertex_count, 1U);
+        EXPECT_EQ(selected.active_vertex_id, 1U);
+        if (command.string() ==
+            quader::quader_command::kViewportNudgeDuplicateOrExtrudeMoveLeft.string()) {
+          const auto center_after = editor.query().selection_center();
+          ASSERT_TRUE(center_after.has_value());
+          EXPECT_NEAR(center_after->x, center_before->x - 1.0F, 1e-5F);
+          EXPECT_TRUE(std::ranges::any_of(mesh_after->vertices, [&](const auto &vertex) {
+            const auto offset = vertex.position - *center_before;
+            return std::abs(offset.x * offset.x + offset.y * offset.y + offset.z * offset.z -
+                            0.25F * 0.25F) < 1e-5F;
+          })) << "Vertex extrusion uses the current grid for its fan even when move snapping is off.";
+        }
+      }
+      EXPECT_EQ(editor.tools().active_tool(), "scale");
+      ASSERT_TRUE(editor.history().undo().ok());
+      const auto restored = quader::test::capture_command_observable_state(editor);
+      for (const auto domain : {Domain::Scene, Domain::Geometry, Domain::Selection,
+                                Domain::Overlay, Domain::Tools}) {
+        EXPECT_EQ(restored.domain(domain), before.domain(domain));
+      }
+    }
+  }
+}
+
+TEST(EditorApiTests, ViewportNudgeBindingsRespectInputOwnershipAndSelection) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  (void)create_selected_box(editor, "Nudge Input Ownership");
+  using Kind = quader::QuaderViewportKeybindingDispatch::Kind;
+  for (const auto &[command, shortcut] : kNudgeCommandBindings) {
+    SCOPED_TRACE(command.string());
+    const auto chord = single_input_chord(shortcut);
+    EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+                  chord, {}, false, false).kind, Kind::NoMatch);
+    EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+                  chord, {}, true, true).kind, Kind::NoMatch);
+    for (const quader::QuaderViewportKeybindingContext context : {
+             quader::QuaderViewportKeybindingContext{.navigation_active = true},
+             quader::QuaderViewportKeybindingContext{.fly_navigation_active = true},
+             quader::QuaderViewportKeybindingContext{.orbit_navigation_active = true},
+             quader::QuaderViewportKeybindingContext{.pan_navigation_active = true},
+             quader::QuaderViewportKeybindingContext{.modal_tool_active = true},
+             quader::QuaderViewportKeybindingContext{.active_tool_owns_viewport = true},
+             quader::QuaderViewportKeybindingContext{.active_transform_drag = true},
+             quader::QuaderViewportKeybindingContext{.operation_preview_active = true},
+         }) {
+      EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+                    chord, {}, true, false, context).kind, Kind::NoMatch);
+    }
+    for (const quader::QuaderViewportKeybindingContext context : {
+             quader::QuaderViewportKeybindingContext{.outliner_focused = true},
+             quader::QuaderViewportKeybindingContext{.editor_focused = true},
+             quader::QuaderViewportKeybindingContext{.asset_browser_focused = true},
+         }) {
+      EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+                    chord, {}, false, false, context).kind, Kind::NoMatch);
+    }
+  }
+  ASSERT_TRUE(editor.selection().clear().ok());
+  const auto before = quader::test::capture_command_observable_state(editor);
+  for (const auto &[command, shortcut] : kNudgeCommandBindings) {
+    EXPECT_FALSE(editor.commands().descriptor(command)->enabled);
+    EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+                  single_input_chord(shortcut), {}, true, false).kind, Kind::NoMatch);
+    EXPECT_FALSE(editor.commands().execute(command).ok());
+  }
+  EXPECT_EQ(quader::test::capture_command_observable_state(editor), before);
+}
+
+TEST(EditorApiTests, ViewportNudgeCommandsDoNotSettlePendingMeshPreview) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto mesh = create_selected_box(editor, "Nudge Pending Draft");
+  enter_edit_mode_for_objects(editor, {mesh});
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(mesh, 1).ok());
+  ASSERT_TRUE(editor.modeling().begin_preview("slice_quad").ok());
+  ASSERT_TRUE(editor.tools().active_settings().preview_active);
+  const auto before = quader::test::capture_command_observable_state(editor);
+  for (const auto &[command, shortcut] : kNudgeCommandBindings) {
+    SCOPED_TRACE(command.string());
+    EXPECT_FALSE(editor.commands().descriptor(command)->enabled);
+    const auto dispatch = editor.commands().dispatch_viewport_input_binding(
+        single_input_chord(shortcut), {}, true, false);
+    EXPECT_EQ(dispatch.kind, quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+    const auto rejected = editor.commands().execute(command);
+    EXPECT_FALSE(rejected.ok());
+    EXPECT_FALSE(rejected.changed());
+    EXPECT_EQ(quader::test::capture_command_observable_state(editor), before);
+    EXPECT_TRUE(editor.tools().active_settings().preview_active);
+  }
+}
+
+TEST(EditorApiTests, ViewportNudgeRemappingAndUnassignmentSurviveReload) {
+  const auto path = keybinding_test_path("viewport-nudge-remap");
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  (void)create_selected_box(editor, "Nudge Remap");
+  constexpr auto kCommand = quader::quader_command::kViewportNudgeMoveUp;
+  ASSERT_TRUE(editor.preferences().set_shortcut(kCommand, "Ctrl+Alt+F24").ok());
+  using Kind = quader::QuaderViewportKeybindingDispatch::Kind;
+  EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+                single_input_chord("Up"), {}, true, false).kind, Kind::NoMatch);
+  EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+                single_input_chord("Ctrl+Alt+F24"), {}, true, false).command_id,
+            kCommand.string());
+  CommandTestHarness reloaded;
+  ASSERT_TRUE(reloaded.editor.commands().set_keybinding_storage_path(path).ok());
+  (void)create_selected_box(reloaded.editor, "Reloaded Nudge Remap");
+  EXPECT_EQ(reloaded.editor.commands().shortcut_for(kCommand), "Ctrl+Alt+F24");
+  ASSERT_TRUE(reloaded.editor.commands().remove_shortcut(kCommand).ok());
+  CommandTestHarness unassigned;
+  ASSERT_TRUE(unassigned.editor.commands().set_keybinding_storage_path(path).ok());
+  (void)create_selected_box(unassigned.editor, "Unassigned Nudge Remap");
+  EXPECT_TRUE(unassigned.editor.commands().shortcut_for(kCommand).empty());
+  const auto catalog = unassigned.editor.commands().keybinding_catalog();
+  const auto *entry = find_keybinding_catalog_entry(catalog, kCommand.string());
+  ASSERT_NE(entry, nullptr);
+  EXPECT_TRUE(entry->unassigned);
+  EXPECT_TRUE(entry->customized);
+  for (const auto shortcut : {"Up", "Ctrl+Alt+F24"}) {
+    EXPECT_EQ(unassigned.editor.commands().dispatch_viewport_input_binding(
+                  single_input_chord(shortcut), {}, true, false).kind, Kind::NoMatch);
+  }
+  ASSERT_TRUE(unassigned.editor.preferences().reset_shortcut(kCommand).ok());
+  EXPECT_EQ(unassigned.editor.commands().shortcut_for(kCommand), "Up");
+  std::error_code ignored;
+  std::filesystem::remove(path, ignored);
+}
+
+TEST(EditorApiTests, ViewportNudgeDefaultsPreserveStoredArrowOverrideAndReportConflict) {
+  const auto path = keybinding_test_path("viewport-nudge-existing-arrow");
+  {
+    std::ofstream stored(path);
+    ASSERT_TRUE(stored.is_open());
+    stored << R"([{"command":"scene.hide_selection","key":"Up"}])";
+  }
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  (void)create_selected_box(editor, "Nudge Existing Override");
+  EXPECT_EQ(editor.commands().shortcut_for(quader::quader_command::kSceneHideSelection),
+            "Up");
+  const auto dispatch = editor.commands().dispatch_viewport_input_binding(
+      single_input_chord("Up"), {}, true, false);
+  EXPECT_EQ(dispatch.command_id, quader::quader_command::kSceneHideSelection.string());
+  EXPECT_FALSE(dispatch.repeat_binding.has_value());
+  const auto conflicts = editor.commands().conflicts_for_shortcut("Up");
+  EXPECT_TRUE(std::ranges::any_of(conflicts, [](const auto &conflict) {
+    return conflict.target_id == quader::quader_command::kSceneHideSelection.string() &&
+           conflict.source == "user";
+  }));
+  const auto catalog = editor.commands().keybinding_catalog();
+  const auto *entry = find_keybinding_catalog_entry(
+      catalog, quader::quader_command::kViewportNudgeMoveDown.string());
+  ASSERT_NE(entry, nullptr);
+  const auto analysis = editor.commands().analyze_shortcut_assignment(entry->key, "Up");
+  ASSERT_TRUE(analysis.ok);
+  EXPECT_FALSE(analysis.conflicts.empty());
+  std::error_code ignored;
+  std::filesystem::remove(path, ignored);
+}
+
+TEST(EditorApiTests, ViewportNudgeRepeatValidatesCompleteSequenceWithoutConsumingPrefixes) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  (void)create_selected_box(editor, "Nudge Repeat Sequence");
+  constexpr auto kCommand = quader::quader_command::kViewportNudgeMoveUp;
+  ASSERT_TRUE(editor.commands().set_shortcut(kCommand, "Ctrl+Alt+F24 Up").ok());
+  using Kind = quader::QuaderViewportKeybindingDispatch::Kind;
+  const auto dispatch = [&](std::string_view chord) {
+    return editor.commands().dispatch_viewport_input_binding(
+        single_input_chord(chord), {}, true, false);
+  };
+  EXPECT_EQ(dispatch("Up").kind, Kind::NoMatch);
+  ASSERT_EQ(dispatch("Ctrl+Alt+F24").kind, Kind::PendingChord);
+  const auto completed = dispatch("Up");
+  ASSERT_EQ(completed.kind, Kind::Command);
+  ASSERT_TRUE(completed.repeat_binding.has_value());
+  const auto token = *completed.repeat_binding;
+  EXPECT_EQ(token.sequence, *quader::quader_input_parse_shortcut("Ctrl+Alt+F24 Up"));
+  const auto before = quader::test::capture_command_observable_state(editor);
+  for (int probe = 0; probe < 3; ++probe) {
+    EXPECT_TRUE(editor.commands().can_repeat_viewport_input_binding(token, {}, true, false));
+    EXPECT_FALSE(editor.commands().has_pending_keybinding_chord());
+  }
+  EXPECT_EQ(quader::test::capture_command_observable_state(editor), before);
+  auto altered = token;
+  altered.sequence = {single_input_chord("Up")};
+  EXPECT_FALSE(editor.commands().can_repeat_viewport_input_binding(altered, {}, true, false));
+  altered = token;
+  altered.command_id = std::string(quader::quader_command::kViewportNudgeMoveDown.string());
+  EXPECT_FALSE(editor.commands().can_repeat_viewport_input_binding(altered, {}, true, false));
+  EXPECT_FALSE(editor.commands().can_repeat_viewport_input_binding(token, {}, false, false));
+  EXPECT_FALSE(editor.commands().can_repeat_viewport_input_binding(token, {}, true, true));
+  EXPECT_FALSE(editor.commands().can_repeat_viewport_input_binding(
+      token, {}, true, false, {.navigation_active = true}));
+  EXPECT_FALSE(editor.commands().can_repeat_viewport_input_binding(
+      token, {}, true, false, {.active_transform_drag = true}));
+  EXPECT_FALSE(editor.commands().can_repeat_viewport_input_binding(
+      token, {}, true, false, {.operation_preview_active = true}));
+  ASSERT_EQ(dispatch("Ctrl+Alt+F24").kind, Kind::PendingChord);
+  EXPECT_FALSE(editor.commands().can_repeat_viewport_input_binding(token, {}, true, false));
+  EXPECT_TRUE(editor.commands().has_pending_keybinding_chord());
+  EXPECT_EQ(dispatch("Up").command_id, kCommand.string());
+  ASSERT_TRUE(editor.viewports().set_layout(quader::ViewportLayoutId::FourQuad).ok());
+  ASSERT_TRUE(editor.viewports().focus_pane(quader::ViewportPaneId::Top).ok());
+  EXPECT_FALSE(editor.commands().can_repeat_viewport_input_binding(token, {}, true, false));
+  ASSERT_TRUE(editor.viewports().focus_pane(token.pane).ok());
+  EXPECT_TRUE(editor.commands().can_repeat_viewport_input_binding(token, {}, true, false));
+  ASSERT_TRUE(editor.selection().clear().ok());
+  EXPECT_FALSE(editor.commands().can_repeat_viewport_input_binding(token, {}, true, false));
+  (void)create_selected_box(editor, "Nudge Repeat New Selection");
+  EXPECT_TRUE(editor.commands().can_repeat_viewport_input_binding(token, {}, true, false));
+  ASSERT_TRUE(editor.commands().set_shortcut(kCommand, "Ctrl+Alt+F23").ok());
+  EXPECT_FALSE(editor.commands().can_repeat_viewport_input_binding(token, {}, true, false));
+  const auto remapped = dispatch("Ctrl+Alt+F23");
+  ASSERT_TRUE(remapped.repeat_binding.has_value());
+  EXPECT_TRUE(editor.commands().can_repeat_viewport_input_binding(
+      *remapped.repeat_binding, {}, true, false));
+  ASSERT_TRUE(editor.commands().remove_shortcut(kCommand).ok());
+  EXPECT_FALSE(editor.commands().can_repeat_viewport_input_binding(
+      *remapped.repeat_binding, {}, true, false));
+}
+
 TEST(EditorApiTests,
      RequestedVisibilityViewShadingLayoutAndGridBindingsDrivePublicCommands) {
   const std::filesystem::path path =
@@ -24480,9 +25037,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 216u);
+  EXPECT_EQ(commands.size(), 232u);
 #else
-  EXPECT_EQ(commands.size(), 215u);
+  EXPECT_EQ(commands.size(), 231u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;

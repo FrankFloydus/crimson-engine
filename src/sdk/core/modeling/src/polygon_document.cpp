@@ -3423,13 +3423,15 @@ PolygonDocument::extrude_selected_elements(Vec3 offset,
 
 Result<OperationResult>
 PolygonDocument::transform_extrude_selected_elements(Transform3 transform,
-                                                      Vec3 pivot) {
+                                                      Vec3 pivot,
+                                                      float vertex_extrude_size) {
   return apply_operation(
       *impl_,
-      [transform, pivot](quader_poly::Document &document,
+      [transform, pivot, vertex_extrude_size](quader_poly::Document &document,
                          quader_poly::Selection &selection) {
         return quader_poly::transform_extrude_selected_elements(
-            document, selection, to_native(transform), to_native(pivot));
+            document, selection, to_native(transform), to_native(pivot),
+            vertex_extrude_size);
       });
 }
 

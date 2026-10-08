@@ -334,6 +334,53 @@ ModelingTransform3 from_runtime(quader_poly::Transform3 value) {
 
 } // namespace
 
+ModelingCommandResult ModelingTransformDragService::begin_structural_duplicate(
+    ModelingTransformDragServiceContext context,
+    std::vector<ModelingStructuralEntityClone> &modeling_clones) {
+  if (context.structural_duplicate == nullptr || context.history == nullptr) {
+    return {.ok = false,
+            .message = "Scene drag duplication requires structural lifecycle and history ownership."};
+  }
+  const bool duplicate_instances =
+      selected_scene_targets_are_instance_occurrences(context.scene);
+  const std::string duplicate_label =
+      duplicate_instances ? "Duplicate Instance" : "Duplicate Selection";
+  scene_duplicate_transaction_.emplace(
+      context.history->begin_transaction(duplicate_label));
+  if (!scene_duplicate_transaction_->active()) {
+    scene_duplicate_transaction_.reset();
+    return {.ok = false,
+            .message = "Could not start scene drag duplication while another editor transaction is active."};
+  }
+  structural_duplicate_scalar_checkpoint_.emplace(
+      context.scene.capture_scalar_compensation_checkpoint());
+  if (!structural_duplicate_scalar_checkpoint_->valid()) {
+    const CommandResult canceled = scene_duplicate_transaction_->cancel();
+    scene_duplicate_transaction_.reset();
+    structural_duplicate_scalar_checkpoint_.reset();
+    return {.ok = false,
+            .changed = !canceled.ok,
+            .message = canceled.ok
+                ? "Scene scalar compensation is unavailable for drag duplication."
+                : "Scene scalar compensation is unavailable for drag duplication; empty transaction cleanup failed: " +
+                      canceled.message};
+  }
+  structural_duplicate_selection_before_.emplace(capture_scene_selection(context.scene));
+  ModelingStructuralDuplicateResult duplicated = (*context.structural_duplicate)(
+      *scene_duplicate_transaction_, context.port.portable_modeling_selection_mode(), duplicate_label);
+  if (!duplicated.ok || !duplicated.changed) {
+    return {.ok = false,
+            .changed = duplicated.changed,
+            .message = duplicated.message.empty()
+                ? "Could not duplicate the scene selection." : std::move(duplicated.message)};
+  }
+  modeling_clones = std::move(duplicated.modeling_objects);
+  structural_duplicate_active_ = true;
+  context.port.refresh_transform_drag_projection();
+  context.port.invalidate_selection_overlay_caches();
+  return {.ok = true, .changed = true};
+}
+
 ModelingTransformDragPreview
 ModelingTransformDragService::begin_transform_drag(
     ModelingTransformDragServiceContext context,
@@ -431,66 +478,17 @@ ModelingTransformDragService::begin_transform_drag(
 
   std::vector<ModelingStructuralEntityClone> structural_modeling_clones;
   if (duplicate_structural_selection) {
-    if (context.structural_duplicate == nullptr || context.history == nullptr) {
-      return {
-          .ok = false,
-          .message = "Scene drag duplication requires structural lifecycle "
-                     "and history ownership.",
-      };
+    const ModelingCommandResult duplicated =
+        begin_structural_duplicate(context, structural_modeling_clones);
+    if (!duplicated.ok) {
+      if (!scene_duplicate_transaction_.has_value() &&
+          !structural_duplicate_scalar_checkpoint_.has_value()) {
+        return {.ok = false, .changed = duplicated.changed, .message = duplicated.message};
+      }
+      return fail_after_cancel(duplicated.message, duplicated.changed);
     }
-    const bool duplicate_instances =
-        selected_scene_targets_are_instance_occurrences(context.scene);
-    const std::string duplicate_label =
-        duplicate_instances ? "Duplicate Instance" : "Duplicate Selection";
-    scene_duplicate_transaction_.emplace(
-        context.history->begin_transaction(duplicate_label));
-    if (!scene_duplicate_transaction_->active()) {
-      scene_duplicate_transaction_.reset();
-      return {
-          .ok = false,
-          .message = "Could not start scene drag duplication while "
-                     "another editor transaction is active.",
-      };
-    }
-
-    structural_duplicate_scalar_checkpoint_.emplace(
-        context.scene.capture_scalar_compensation_checkpoint());
-    if (!structural_duplicate_scalar_checkpoint_->valid()) {
-      const CommandResult canceled = scene_duplicate_transaction_->cancel();
-      scene_duplicate_transaction_.reset();
-      structural_duplicate_scalar_checkpoint_.reset();
-      return {
-          .ok = false,
-          .changed = !canceled.ok,
-          .message = canceled.ok
-                         ? "Scene scalar compensation is unavailable for "
-                           "drag duplication."
-                         : "Scene scalar compensation is unavailable for "
-                           "drag duplication; empty transaction cleanup "
-                           "failed: " +
-                               canceled.message,
-      };
-    }
-    structural_duplicate_selection_before_.emplace(
-        capture_scene_selection(context.scene));
-
-    ModelingStructuralDuplicateResult duplicated =
-        (*context.structural_duplicate)(
-            *scene_duplicate_transaction_,
-            context.port.portable_modeling_selection_mode(), duplicate_label);
-    if (!duplicated.ok || !duplicated.changed) {
-      return fail_after_cancel(
-          duplicated.message.empty()
-              ? "Could not duplicate the scene selection."
-              : std::move(duplicated.message),
-          duplicated.changed);
-    }
-    structural_modeling_clones = std::move(duplicated.modeling_objects);
-    structural_duplicate_active_ = true;
-    context.port.refresh_transform_drag_projection();
     portable_modeling_selection =
         context.port.has_portable_modeling_selection();
-    context.port.invalidate_selection_overlay_caches();
   }
 
   {
@@ -738,6 +736,122 @@ ModelingTransformDragService::update_transform_drag(
     return transform_drag_preview(context, false);
   }
   return apply_transform_drag_preview(context, request);
+}
+
+ModelingTransformDragPreview
+ModelingTransformDragService::apply_resolved_nudge(
+    ModelingTransformDragServiceContext context,
+    const ModelingResolvedNudgeRequest &request, EditorHistoryService &history) {
+  if (context.runtime.transform_drag_active() ||
+      context.port.portable_modeling_preview_active() ||
+      scene_transform_drag_service_.preview_active() ||
+      scene_duplicate_transaction_.has_value() ||
+      structural_duplicate_scalar_checkpoint_.has_value()) {
+    return {.ok = false, .message = "Finish the active transform before nudging."};
+  }
+  const bool portable_selection = context.port.has_portable_modeling_selection();
+  if (!portable_selection && !context.port.has_scene_transform_selection()) {
+    return {.ok = false, .message = "Select something before nudging."};
+  }
+  const bool duplicate_scene_selection = request.duplicate_selected && !portable_selection;
+  const bool extrude_selection = request.duplicate_selected && portable_selection;
+  if (duplicate_scene_selection &&
+      !selected_scene_targets_support_structural_duplicate(context.scene)) {
+    return {.ok = false, .message = "This selection does not support nudge duplication."};
+  }
+  const auto cancel_failed_nudge =
+      [this, &context](ModelingTransformDragPreview result) {
+    if (!context.runtime.transform_drag_active() &&
+        !context.port.portable_modeling_preview_active() &&
+        !scene_transform_drag_service_.preview_active() &&
+        !scene_duplicate_transaction_.has_value() &&
+        !structural_duplicate_scalar_checkpoint_.has_value()) {
+      return result;
+    }
+    const ModelingCommandResult canceled = cancel_transform_drag(context);
+    result.active = false;
+    result.changed = !canceled.ok;
+    if (!canceled.ok) {
+      result.message += "; nudge rollback failed: " + canceled.message;
+    }
+    return result;
+  };
+
+  if (duplicate_scene_selection) {
+    std::vector<ModelingStructuralEntityClone> modeling_clones;
+    const ModelingCommandResult duplicated = begin_structural_duplicate(context, modeling_clones);
+    if (!duplicated.ok) {
+      return cancel_failed_nudge(
+          {.ok = false, .changed = duplicated.changed, .message = duplicated.message});
+    }
+  }
+  context.runtime.begin_transform_drag_state(
+      to_runtime(request.tool),
+      extrude_selection ? quader_editor_core::TransformDragOperation::Extrude
+                        : quader_editor_core::TransformDragOperation::Transform,
+      to_runtime(request.axis), to_runtime(request.space),
+      to_runtime(request.orientation), request.pivot);
+  controller_.set_preview_driven(portable_selection, duplicate_scene_selection);
+  quader_editor_core::TransformDragState drag =
+      context.runtime.transform_drag_state();
+  drag.scene_transform_preview_eligible = !portable_selection;
+  drag.move.active = request.tool == ModelingTransformTool::Move;
+  drag.move.axis = drag.axis;
+  drag.move.orientation = drag.orientation;
+  drag.move_auto_merge_vertices =
+      drag.move.active && portable_selection &&
+      context.port.portable_modeling_selection_mode() == ModelingSelectionMode::Vertex &&
+      context.move_auto_merge_vertices;
+  drag.rotate.active = request.tool == ModelingTransformTool::Rotate;
+  drag.rotate.axis = drag.axis;
+  drag.rotate.orientation = drag.orientation;
+  drag.rotate.pivot = drag.pivot;
+  context.runtime.set_transform_drag_state(drag);
+  if (portable_selection) {
+    const ModelingCommandResult begun =
+        context.port.begin_portable_transform_preview(false, !extrude_selection);
+    if (!begun.ok) {
+      return cancel_failed_nudge({.ok = false, .message = begun.message});
+    }
+  } else if (!scene_transform_drag_service_.begin(
+                 context.scene, request.pivot, true, "Nudge Selection",
+                 context.port.scene_selection_display_from_scene(),
+                 &context.assets,
+                 context.document_commands != nullptr
+                     ? context.document_commands->texture_lock_settings()
+                     : TextureLockSettings{})) {
+    return cancel_failed_nudge(
+        {.ok = false, .message = "Could not capture the nudge selection."});
+  }
+
+  const quader_editor_core::TransformDragState before = drag;
+  drag.move.preview_delta = request.move_delta;
+  drag.rotate.preview_angle_degrees = request.rotate_angle_degrees;
+  context.runtime.set_transform_drag_state(drag);
+  const ModelingTransformDragPreview applied =
+      publish_transform_drag_preview(context, before,
+                                     extrude_selection ? request.extrusion_grid_size : 0.0,
+                                     true);
+  if (!applied.ok) {
+    return cancel_failed_nudge(applied);
+  }
+  ModelingTransformDragPreview committed = commit_transform_drag(context, &history);
+  if (!committed.ok) {
+    if (context.runtime.transform_drag_active() ||
+        context.port.portable_modeling_preview_active() ||
+        scene_transform_drag_service_.preview_active() ||
+        scene_duplicate_transaction_.has_value() ||
+        structural_duplicate_scalar_checkpoint_.has_value()) {
+      return cancel_failed_nudge(std::move(committed));
+    }
+    return committed;
+  }
+  // The scene preview owner supports native and mixed selections too. Record
+  // only after its history entry has committed, alongside component nudges.
+  if (committed.changed) {
+    context.port.record_portable_transform(drag, duplicate_scene_selection);
+  }
+  return committed;
 }
 
 ModelingTransformDragPreview
@@ -1336,8 +1450,6 @@ ModelingTransformDragService::apply_transform_drag_preview(
   input.grid_enabled = request.grid_snap_enabled;
   input.rotation_snap_degrees = request.rotation_snap_degrees;
   input.precision = request.precision;
-  const bool portable_modeling_preview =
-      context.port.portable_modeling_preview_active();
   if (request.vertex_snap_radius > 0.0 &&
       transform_drag_can_use_vertex_snap(drag_before_update) &&
       transform_drag_has_stationary_vertex_snap_target(context.session)) {
@@ -1365,13 +1477,38 @@ ModelingTransformDragService::apply_transform_drag_preview(
                                : result.message);
   }
 
-  bool changed = result.changed;
+  return publish_transform_drag_preview(context, drag_before_update,
+                                        input.grid_size, result.changed);
+}
+
+ModelingTransformDragPreview
+ModelingTransformDragService::publish_transform_drag_preview(
+    ModelingTransformDragServiceContext context,
+    const quader_editor_core::TransformDragState &drag_before_update,
+    double grid_size, bool changed) {
+  const auto fail_after_cancel =
+      [this, &context](std::string message) -> ModelingTransformDragPreview {
+    const bool was_preview_driven = controller_.preview_driven();
+    const ModelingCommandResult canceled = cancel_transform_drag(context);
+    if (!canceled.ok) {
+      message += "; rollback failed: ";
+      message += canceled.message.empty() ? "unknown transform rollback failure"
+                                          : canceled.message;
+    }
+    return {.ok = false,
+            .active = false,
+            .changed = !canceled.ok,
+            .preview_driven = was_preview_driven,
+            .message = std::move(message)};
+  };
+  const bool portable_modeling_preview =
+      context.port.portable_modeling_preview_active();
   if (portable_modeling_preview && controller_.preview_driven() &&
-      result.changed) {
+      changed) {
     const ModelingCommandResult portable_result = [&]() {
       QDR_PROFILE_SCOPE("Modeling transform drag update portable preview");
       return context.port.update_portable_transform_preview(
-          context.runtime.transform_drag_state(), input.grid_size);
+          context.runtime.transform_drag_state(), grid_size);
     }();
     if (!portable_result.ok) {
       if (drag_before_update.operation ==
@@ -1385,7 +1522,7 @@ ModelingTransformDragService::apply_transform_drag_preview(
         context.runtime.set_transform_drag_state(drag_before_update);
         const ModelingCommandResult restored =
             context.port.update_portable_transform_preview(drag_before_update,
-                                                           input.grid_size);
+                                                           grid_size);
         if (restored.ok) {
           ModelingTransformDragPreview rejected =
               transform_drag_preview(context, false);

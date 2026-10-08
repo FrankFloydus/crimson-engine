@@ -27,6 +27,46 @@ Pivot rebasing and baking compensate descendants through their offsets rather
 than decomposing inherited affine transforms. All before/after comparisons and
 history snapshots include the offset.
 
+## Keyboard nudges
+
+[`make_viewport_nudge_plan`](viewport_nudge_plan.hpp) resolves screen-direction intent against
+the captured camera and gizmo frame. Move adds one enabled grid interval, or one unit with grid
+snapping disabled, preserving an off-grid offset. Rotate uses 45 degrees independently of angle
+snapping. Direction ties retain +X, +Y, +Z, -X, -Y, -Z order. The perspective correction uses an
+explicit frame up axis: Y for World and Object/Group Local frames, or Z (the supporting surface
+normal) for component Local frames. Hammer's Z-up convention must not become a literal Quader
+world-Z rule. Orthographic views skip this correction and use their mapped viewing axis.
+
+The command boundary resolves the focused pane, pivot and World/Local setting. The modeling
+transform owner applies the resolved operation through its existing preview and commit path,
+including per-participant world-to-local conversion, occurrence compensation and sparse history.
+Object Local rotation keeps each participant's authored frame and pivot semantics. A pending
+edit rejects the nudge before any preview or history change; the selected tool is preserved.
+
+Shift variants duplicate Object/Group selections through the structural transform transaction,
+or extrude Face/Edge/Vertex selections through the portable topology preview before applying the
+resolved transform. Each step keeps its creation and transform in one atomic history entry.
+Vertex boundary chains extend through shared duplicate endpoints and walls; isolated boundary
+vertices extend a quad. Interior vertices retain the selected apex and split its incident faces
+around a support ring. The raw active grid size controls the ring setback, independently of move
+snapping and also for rotation. Short spokes reuse existing neighbors. These rules are implemented
+in the portable surface operation owner, with attribute and rollback regression coverage.
+
+Every changed invocation has one undo entry. Nudge Repeat Last Action uses the same transform
+transaction, including native-only and mixed scene selections; a generic modeling memento does
+not capture those scene transforms. Repeat retains duplication/extrusion intent and its grid
+size. Input repeat lifetime and live Shift ordering are specified in
+[`INPUT_KEYBINDINGS.md`](../../../INPUT_KEYBINDINGS.md#mouse-and-held-key-contracts).
+
+Behavioral evidence was inspected statically in the installed CS2 Hammer DLL with SHA-256
+`d8c10d4a28665fe68f9186538228c4dbd17cb3e0cb284f8aaef0e02017286c11`; the board task #14 retains
+the bounded address and keymap provenance. Quader's implementation is independent. Native OS
+repeat and one undo entry per invocation are explicit Quader policy, not verified Hammer timing.
+Regression coverage lives in [viewport_nudge_plan_tests.cpp](../../../tests/viewport_nudge_plan_tests.cpp),
+[editor_api_tests.cpp](../../../tests/editor_api_tests.cpp),
+[component_transform_persistence_tests.cpp](../../../tests/component_transform_persistence_tests.cpp)
+and [scene_transform_tests.cpp](../../../tests/scene_transform_tests.cpp).
+
 ## Object arrangement
 
 [`MeshArrangementService`](mesh_arrangement_service.hpp) owns Align and Distribute

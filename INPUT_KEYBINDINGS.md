@@ -303,6 +303,27 @@ parser also accepts explicit press aliases and normalizes them to the bare butto
 normalizes the primary modifier, rejects unsupported keys, and ignores auto-repeat/pure modifiers for
 capture. Use the shared parser/formatter for keyboard, mouse, and mixed sequences.
 
+Keyboard nudges are the explicit repeatable command family. Arrow defaults move the selection;
+Alt+arrows rotate it. Shift+arrows and Shift+Alt+arrows duplicate objects/groups or extrude
+components before the step. Qt retains the original physical press chord and queues native repeat
+edges with their event-time Shift state and position among true presses. Keep repeats out of
+`pressed_input_chords`: SDK consumers,
+ordinary commands and marking-menu holds still receive one initiating press.
+
+The viewport panel retains a repeat token only after a changed, successful nudge. The command owner
+revalidates its completed sequence, binding revision, pane, context and current availability without
+advancing the sequence dispatcher. Prefixes and other commands never become repeatable. Release,
+focus/text/navigation ownership changes, runtime rebinding and remapping retire accepted tokens.
+For live Shift changes, resolve a copy of the complete accepted sequence with only its terminal
+Shift modifier changed. Accept only the corresponding normal/duplicate-or-extrude action for
+that same tool and direction. Missing, deliberately unassigned or conflicting variants skip the
+repeat without dispatching another command or consuming a prefix; the original valid hold remains.
+Process queued repeats before release cleanup, including a complete tap/repeat/release between frames;
+the final held-key set cannot discard those already received events. A navigation press in the same
+batch blocks later repeats immediately through its semantic action flags. Each accepted invocation
+has one undo entry and preserves the selected tool. Pending edits are rejected, never settled by a nudge.
+See `tests/qt_input_adapter_tests.cpp` and `tests/editor_api_tests.cpp` for these contracts.
+
 The viewport emits Click on release below the drag threshold and emits the navigation Drag edge on
 press for immediate response. Settings capture resolves a stationary quick release as Click, movement
 as Drag, a native double as DoubleClick, and a hold beyond the double-click interval as Press. Pending

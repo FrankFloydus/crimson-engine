@@ -141,6 +141,9 @@ public:
   [[nodiscard]] ModelingTransformDragPreview update_transform_drag(
       ModelingTransformDragServiceContext context,
       const ModelingTransformDragUpdateRequest &request);
+  [[nodiscard]] ModelingTransformDragPreview apply_resolved_nudge(
+      ModelingTransformDragServiceContext context,
+      const ModelingResolvedNudgeRequest &request, EditorHistoryService &history);
   [[nodiscard]] ModelingTransformDragPreview commit_transform_drag(
       ModelingTransformDragServiceContext context,
       EditorHistoryService *history = nullptr);
@@ -152,6 +155,9 @@ public:
   [[nodiscard]] bool scene_preview_active() const;
 
 private:
+  [[nodiscard]] ModelingCommandResult begin_structural_duplicate(
+      ModelingTransformDragServiceContext context,
+      std::vector<ModelingStructuralEntityClone> &modeling_clones);
   void clear_runtime_state(ModelingTransformDragServiceContext context);
   [[nodiscard]] ModelingTransformDragPreview transform_drag_preview(
       const ModelingTransformDragServiceContext &context, bool changed) const;
@@ -161,6 +167,10 @@ private:
   [[nodiscard]] ModelingTransformDragPreview apply_transform_drag_preview(
       ModelingTransformDragServiceContext context,
       const ModelingTransformDragUpdateRequest &request);
+  [[nodiscard]] ModelingTransformDragPreview publish_transform_drag_preview(
+      ModelingTransformDragServiceContext context,
+      const quader_editor_core::TransformDragState &drag_before_update,
+      double grid_size, bool changed);
 
   TransformDragController controller_;
   SceneTransformDragService scene_transform_drag_service_;

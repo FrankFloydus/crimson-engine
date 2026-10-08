@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
+#include <limits>
 #include <span>
 #include <string_view>
 #include <string>
@@ -189,6 +190,96 @@ void expect_retained_authored_island(const PolygonDocument& actual, const Polygo
     return PolygonDocument::from_authored_topology(topology).or_throw();
   };
   expect_document_equal(extract_island(actual), extract_island(expected));
+}
+
+enum class VertexExtrudeWorkflow { BoundaryCorner, BoundaryChain, InteriorFan };
+
+constexpr std::array kVertexExtrudeWorkflows{
+    VertexExtrudeWorkflow::BoundaryCorner, VertexExtrudeWorkflow::BoundaryChain,
+    VertexExtrudeWorkflow::InteriorFan};
+
+Vec3 vertex_extrude_offset(VertexExtrudeWorkflow workflow, float amount) {
+  return workflow == VertexExtrudeWorkflow::InteriorFan
+             ? Vec3{0.0F, 0.0F, amount}
+             : Vec3{-amount, -amount, 0.0F};
+}
+
+PolygonDocument make_vertex_extrude_document(VertexExtrudeWorkflow workflow) {
+  auto topology = make_workflow_document(OperationKind::ConnectVertices, false)
+                      .authored_topology()
+                      .or_throw();
+  if (workflow == VertexExtrudeWorkflow::InteriorFan) {
+    topology.vertices = {{vertex_id(1U), {0.0F, 0.0F, 0.0F}},
+                         {vertex_id(2U), {2.0F, 0.0F, 0.0F}},
+                         {vertex_id(3U), {0.0F, 2.0F, 0.0F}},
+                         {vertex_id(4U), {-2.0F, 0.0F, 0.0F}},
+                         {vertex_id(5U), {0.0F, -2.0F, 0.0F}}};
+    topology.faces = {
+        workflow_face(1U, {1U, 2U, 3U}), workflow_face(2U, {1U, 3U, 4U}),
+        workflow_face(3U, {1U, 4U, 5U}), workflow_face(4U, {1U, 5U, 2U})};
+  }
+  PolygonDocument document =
+      PolygonDocument::from_authored_topology(topology).or_throw();
+  PolygonSelectionSnapshot selection{.kind = SelectionKind::Vertex,
+                                     .vertices = {vertex_id(1U)},
+                                     .has_active = true,
+                                     .active_vertex = vertex_id(1U)};
+  if (workflow == VertexExtrudeWorkflow::BoundaryChain) {
+    selection.vertices.push_back(vertex_id(2U));
+    selection.active_vertex = vertex_id(2U);
+  }
+  static_cast<void>(document.apply_selection(selection).or_throw());
+  return document;
+}
+
+void expect_vertex_extrude_selection(const PolygonDocument &document,
+                                     const PolygonDocument &source,
+                                     VertexExtrudeWorkflow workflow,
+                                     Vec3 offset) {
+  const auto topology = document.authored_topology().or_throw();
+  const auto source_topology = source.authored_topology().or_throw();
+  const auto selection = document.selection();
+  const auto source_selection = source.selection();
+  EXPECT_EQ(selection.kind, SelectionKind::Vertex);
+  EXPECT_TRUE(selection.edges.empty());
+  EXPECT_TRUE(selection.faces.empty());
+  ASSERT_EQ(selection.vertices.size(), source_selection.vertices.size());
+  ASSERT_TRUE(selection.has_active);
+  EXPECT_NE(std::find(selection.vertices.begin(), selection.vertices.end(),
+                      selection.active_vertex),
+            selection.vertices.end());
+  if (workflow == VertexExtrudeWorkflow::InteriorFan) {
+    expect_selection_equal(selection, source_selection);
+    EXPECT_EQ(document.vertex_count(), source.vertex_count() + 4U);
+    EXPECT_EQ(document.face_count(), source.face_count() + 4U);
+  } else {
+    EXPECT_EQ(document.vertex_count(),
+              source.vertex_count() + source_selection.vertices.size());
+    EXPECT_EQ(document.face_count(), source.face_count() + 1U);
+    for (const auto selected : selection.vertices) {
+      EXPECT_GE(selected.index, source_topology.next_vertex_id);
+    }
+  }
+  for (const auto selected : source_selection.vertices) {
+    const auto original = std::find_if(
+        source_topology.vertices.begin(), source_topology.vertices.end(),
+        [&](const auto &vertex) { return vertex.id == selected; });
+    ASSERT_NE(original, source_topology.vertices.end());
+    const auto moved = std::find_if(
+        topology.vertices.begin(), topology.vertices.end(),
+        [&](const auto &vertex) {
+          return std::find(selection.vertices.begin(), selection.vertices.end(),
+                           vertex.id) != selection.vertices.end() &&
+                 vertex.position.x == original->position.x + offset.x &&
+                 vertex.position.y == original->position.y + offset.y &&
+                 vertex.position.z == original->position.z + offset.z;
+        });
+    ASSERT_NE(moved, topology.vertices.end());
+    if (selected == source_selection.active_vertex) {
+      EXPECT_EQ(selection.active_vertex, moved->id);
+    }
+  }
+  EXPECT_TRUE(PolygonDocument(document).apply_selection(selection).ok());
 }
 
 PolygonDocument make_edge_loop_boundary_document() {
@@ -379,6 +470,269 @@ TEST(ModelingSdkComponentOperationWorkflowTests, SessionCommitUndoRedoRestoresAu
     ASSERT_TRUE(session.redo().ok());
     expect_document_equal(session.document_copy(object).or_throw(), published);
   }
+}
+
+TEST(ModelingSdkComponentOperationWorkflowTests,
+     VertexExtrusionCommitUndoRedoPreservesRemappedSelectionAndTopology) {
+  for (const auto workflow : kVertexExtrudeWorkflows) {
+    SCOPED_TRACE(static_cast<int>(workflow));
+    const auto source = make_vertex_extrude_document(workflow);
+    ModelingSession session;
+    const auto object =
+        session.add_document(source, "Vertex extrusion").or_throw();
+    session.clear_history();
+    auto candidate = session.document_copy(object).or_throw();
+    const auto offset = vertex_extrude_offset(workflow, 0.75F);
+    const auto receipt = candidate.extrude_selected_elements(offset, 0.5F);
+    ASSERT_TRUE(receipt.ok()) << receipt.error_message();
+    ASSERT_TRUE(receipt.value().changed);
+    EXPECT_TRUE(receipt.value().dirty.topology);
+    expect_vertex_extrude_selection(candidate, source, workflow, offset);
+
+    const auto committed = session.commit_documents_batch(
+        {{object, candidate, receipt.value()}}, true);
+
+    ASSERT_TRUE(committed.ok()) << committed.error_message();
+    ASSERT_TRUE(committed.value().changed);
+    EXPECT_EQ(session.undo_depth(), 1U);
+    const auto published = session.document_copy(object).or_throw();
+    expect_document_equal(published, candidate);
+    ASSERT_TRUE(session.undo().ok());
+    EXPECT_EQ(session.undo_depth(), 0U);
+    expect_document_equal(session.document_copy(object).or_throw(), source,
+                          true);
+    ASSERT_TRUE(session.redo().ok());
+    EXPECT_EQ(session.undo_depth(), 1U);
+    expect_document_equal(session.document_copy(object).or_throw(), published);
+    expect_vertex_extrude_selection(session.document_copy(object).or_throw(),
+                                    source, workflow, offset);
+  }
+}
+
+TEST(ModelingSdkComponentOperationWorkflowTests,
+     VertexExtrusionPreviewRejectCancelAndCommitRetireGeneratedIdentities) {
+  for (const auto workflow : kVertexExtrudeWorkflows) {
+    SCOPED_TRACE(static_cast<int>(workflow));
+    const auto source = make_vertex_extrude_document(workflow);
+    ModelingSession session;
+    const auto object =
+        session.add_document(source, "Vertex extrusion preview").or_throw();
+    session.clear_history();
+    auto candidate = session.document_copy(object).or_throw();
+    const auto first_receipt =
+        candidate
+            .extrude_selected_elements(vertex_extrude_offset(workflow, 0.25F),
+                                       0.5F)
+            .or_throw();
+    ASSERT_TRUE(first_receipt.changed);
+    ASSERT_FALSE(first_receipt.created.vertices.empty());
+    ASSERT_FALSE(first_receipt.created.faces.empty());
+    const auto retired_topology = candidate.authored_topology().or_throw();
+    const auto canceled =
+        session
+            .begin_document_preview(object, "modeling.extrude", candidate,
+                                    first_receipt)
+            .or_throw();
+    expect_document_equal(
+        session.preview_document_copy(canceled, object).or_throw(), candidate);
+    expect_document_equal(session.document_copy(object).or_throw(), source,
+                          true);
+    ASSERT_TRUE(session.cancel_preview(canceled).ok());
+    EXPECT_FALSE(session.preview_active());
+    EXPECT_FALSE(session.can_undo());
+    EXPECT_FALSE(session.can_redo());
+    expect_document_equal(session.document_copy(object).or_throw(), source,
+                          true);
+    const auto restored_topology =
+        session.document_copy(object).or_throw().authored_topology().or_throw();
+    EXPECT_GE(restored_topology.next_vertex_id,
+              retired_topology.next_vertex_id);
+    EXPECT_GE(restored_topology.next_face_id, retired_topology.next_face_id);
+
+    candidate = session.document_copy(object).or_throw();
+    const auto second_receipt =
+        candidate
+            .extrude_selected_elements(vertex_extrude_offset(workflow, 0.5F),
+                                       0.5F)
+            .or_throw();
+    for (const auto created : second_receipt.created.vertices) {
+      EXPECT_EQ(std::find(first_receipt.created.vertices.begin(),
+                          first_receipt.created.vertices.end(), created),
+                first_receipt.created.vertices.end());
+    }
+    for (const auto created : second_receipt.created.faces) {
+      EXPECT_EQ(std::find(first_receipt.created.faces.begin(),
+                          first_receipt.created.faces.end(), created),
+                first_receipt.created.faces.end());
+    }
+    const auto preview = session
+                             .begin_document_preview(object, "modeling.extrude",
+                                                     candidate, second_receipt)
+                             .or_throw();
+    candidate = session.preview_base_document_copy(preview, object).or_throw();
+    const auto offset = vertex_extrude_offset(workflow, 1.25F);
+    const auto updated_receipt =
+        candidate.extrude_selected_elements(offset, 0.5F).or_throw();
+    ASSERT_TRUE(
+        session.update_document_preview(preview, candidate, updated_receipt)
+            .ok());
+    expect_vertex_extrude_selection(
+        session.preview_document_copy(preview, object).or_throw(), source,
+        workflow, offset);
+    const auto accepted =
+        session.preview_document_copy(preview, object).or_throw();
+    const auto preview_revision = session.preview_summary().content_revision;
+
+    auto rejected =
+        session.preview_base_document_copy(preview, object).or_throw();
+    const auto before_rejection = rejected;
+    const auto failure = rejected.extrude_selected_elements(offset, -1.0F);
+    ASSERT_FALSE(failure.ok());
+    expect_document_equal(rejected, before_rejection);
+    OperationResult rejected_receipt;
+    rejected_receipt.success = false;
+    rejected_receipt.error_code = failure.error().code;
+    rejected_receipt.message = failure.error_message();
+    EXPECT_FALSE(
+        session.update_document_preview(preview, rejected, rejected_receipt)
+            .ok());
+    EXPECT_EQ(session.preview_summary().content_revision, preview_revision);
+    expect_document_equal(
+        session.preview_document_copy(preview, object).or_throw(), accepted);
+    expect_document_equal(session.document_copy(object).or_throw(), source,
+                          true);
+    EXPECT_EQ(session.undo_depth(), 0U);
+
+    ASSERT_TRUE(session.commit_preview(preview).ok());
+    EXPECT_FALSE(session.preview_active());
+    EXPECT_EQ(session.undo_depth(), 1U);
+    const auto published = session.document_copy(object).or_throw();
+    expect_document_equal(published, accepted);
+    ASSERT_TRUE(session.undo().ok());
+    expect_document_equal(session.document_copy(object).or_throw(), source,
+                          true);
+    ASSERT_TRUE(session.redo().ok());
+    expect_document_equal(session.document_copy(object).or_throw(), published);
+  }
+}
+
+TEST(ModelingSdkComponentOperationWorkflowTests,
+     VertexExtrusionPortableQdrRetainsExactTopologyAndActiveSelection) {
+  for (const auto workflow : kVertexExtrudeWorkflows) {
+    SCOPED_TRACE(static_cast<int>(workflow));
+    auto document = make_vertex_extrude_document(workflow);
+    const auto receipt = document.extrude_selected_elements(
+        vertex_extrude_offset(workflow, 0.75F), 0.5F);
+    ASSERT_TRUE(receipt.ok()) << receipt.error_message();
+    ASSERT_TRUE(receipt.value().changed);
+    const auto object = make_id<ObjectTag>(19U, 3U);
+    QdrDocumentDto portable;
+    portable.objects.push_back({.id = object,
+                                .selected = true,
+                                .name = "Vertex extrusion",
+                                .document = document});
+    portable.active_object = object;
+    portable.selection_mode = QdrSelectionMode::Vertex;
+    const auto encoded = serialize_qdr_document(portable);
+    ASSERT_TRUE(encoded.ok()) << encoded.error_message();
+
+    const auto decoded = deserialize_qdr_document(encoded.value());
+
+    ASSERT_TRUE(decoded.ok()) << decoded.error_message();
+    ASSERT_EQ(decoded.value().objects.size(), 1U);
+    EXPECT_EQ(decoded.value().active_object, object);
+    EXPECT_EQ(decoded.value().selection_mode, QdrSelectionMode::Vertex);
+    EXPECT_TRUE(decoded.value().objects.front().selected);
+    expect_document_equal(decoded.value().objects.front().document, document);
+    EXPECT_EQ(serialize_qdr_document(decoded.value()).or_throw(),
+              encoded.value());
+  }
+}
+
+TEST(ModelingSdkComponentOperationWorkflowTests,
+     VertexExtrusionRotationAtApexCreatesUndoableSupportFan) {
+  const auto source =
+      make_vertex_extrude_document(VertexExtrudeWorkflow::InteriorFan);
+  ModelingSession session;
+  const auto object =
+      session.add_document(source, "Vertex rotation extrusion").or_throw();
+  session.clear_history();
+  auto candidate = session.document_copy(object).or_throw();
+  const auto cosine = std::sqrt(0.5F);
+  const Transform3 rotation{.x_axis = {cosine, cosine, 0.0F},
+                            .y_axis = {-cosine, cosine, 0.0F}};
+
+  const auto receipt =
+      candidate.transform_extrude_selected_elements(rotation, {}, 0.5F);
+
+  ASSERT_TRUE(receipt.ok()) << receipt.error_message();
+  ASSERT_TRUE(receipt.value().changed);
+  EXPECT_TRUE(receipt.value().dirty.topology);
+  expect_vertex_extrude_selection(candidate, source,
+                                  VertexExtrudeWorkflow::InteriorFan, {});
+  ASSERT_TRUE(
+      session
+          .commit_documents_batch({{object, candidate, receipt.value()}}, true)
+          .ok());
+  EXPECT_EQ(session.undo_depth(), 1U);
+  ASSERT_TRUE(session.undo().ok());
+  expect_document_equal(session.document_copy(object).or_throw(), source, true);
+  ASSERT_TRUE(session.redo().ok());
+  expect_document_equal(session.document_copy(object).or_throw(), candidate);
+}
+
+TEST(ModelingSdkComponentOperationWorkflowTests,
+     VertexExtrusionInvalidSetbackPreservesDocumentAndAtomicSessionBatch) {
+  const auto source =
+      make_vertex_extrude_document(VertexExtrudeWorkflow::InteriorFan);
+  for (const auto setback : {-1.0F, std::numeric_limits<float>::infinity(),
+                             std::numeric_limits<float>::quiet_NaN()}) {
+    SCOPED_TRACE(setback);
+    auto rejected = source;
+    const auto failure =
+        rejected.extrude_selected_elements({0.0F, 0.0F, 0.75F}, setback);
+    ASSERT_FALSE(failure.ok());
+    EXPECT_FALSE(failure.error_message().empty());
+    EXPECT_TRUE(rejected.shares_topology_with(source));
+    EXPECT_TRUE(rejected.shares_selection_with(source));
+    EXPECT_EQ(rejected.content_revision(), source.content_revision());
+    EXPECT_EQ(rejected.selection_revision(), source.selection_revision());
+    expect_document_equal(rejected, source);
+
+    ModelingSession session;
+    const auto first = session.add_document(source, "First").or_throw();
+    const auto second = session.add_document(source, "Second").or_throw();
+    session.clear_history();
+    ASSERT_TRUE(session.rename_object(first, "Renamed").ok());
+    ASSERT_TRUE(session.undo().ok());
+    const auto revision = session.content_revision();
+    const auto selection_revision = session.selection_revision();
+    auto candidate = session.document_copy(first).or_throw();
+    const auto receipt =
+        candidate.extrude_selected_elements({0.0F, 0.0F, 0.75F}, 0.5F)
+            .or_throw();
+    OperationResult rejected_receipt;
+    rejected_receipt.success = false;
+    rejected_receipt.error_code = failure.error().code;
+    rejected_receipt.message = failure.error_message();
+
+    const auto committed = session.commit_documents_batch(
+        {{first, candidate, receipt}, {second, rejected, rejected_receipt}},
+        true);
+
+    EXPECT_FALSE(committed.ok());
+    EXPECT_EQ(session.content_revision(), revision);
+    EXPECT_EQ(session.selection_revision(), selection_revision);
+    EXPECT_EQ(session.undo_depth(), 0U);
+    EXPECT_TRUE(session.can_redo());
+    expect_document_equal(session.document_copy(first).or_throw(), source);
+    expect_document_equal(session.document_copy(second).or_throw(), source);
+  }
+  auto rejected = source;
+  const Transform3 translated{.origin = {0.0F, 0.0F, 0.75F}};
+  EXPECT_FALSE(
+      rejected.transform_extrude_selected_elements(translated, {}, 0.0F).ok());
+  expect_document_equal(rejected, source);
 }
 
 TEST(ModelingSdkComponentOperationWorkflowTests, SteppedBridgeUvPreviewCancelCommitAndHistoryRetainEndpointCharts) {

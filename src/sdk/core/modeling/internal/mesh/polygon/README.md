@@ -175,3 +175,15 @@ and position-dependent texture mapping. The template's IDs are stable while it r
 Zero evaluates to the source; publishing zero or retiring a generation requires a fresh preparation
 above the observed allocation high-water. The public SDK evaluator returns both the candidate and
 the complete source-relative receipt, leaving preview publication and history with the session.
+
+Vertex extrusion uses the existing element-extrusion entry points. Boundary chains extend
+with shared vertex copies and wall quads; a single boundary corner adds one quad between
+its two boundary neighbors and its copied tip. Interior vertices keep their identities while
+their incident faces split around a support ring, with each spoke setback capped at its length.
+The raw grid-derived setback is independent of the requested displacement or rotation; a
+nonidentity rotation still constructs the fan when its selected apex lies on the pivot.
+Corner UV charts and surface/edge attributes remain with their existing owners, and all topology
+and selection changes publish atomically. Unconnected vertices move without new topology.
+The implementation was independently authored from the recovered behavior contract; no
+reference implementation was copied. Direct topology and SDK lifecycle coverage lives in
+`QdrDocumentOperationExtrudeElementsTests` and `ModelingSdkComponentOperationWorkflowTests`.

@@ -32,9 +32,12 @@
 #include "editor/modeling/services/modeling_action_catalog.hpp"
 #include "editor/modeling/services/modeling_instant_operation_catalog.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
+#include "editor/transform/viewport_nudge_plan.hpp"
+#include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 #include "io/qdr/qdr_atomic_write.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 #include "viewport/viewport_input_types.hpp"
+#include "viewport/viewport_camera_adapter.hpp"
 
 #include <algorithm>
 #include <array>
@@ -49,6 +52,61 @@
 
 namespace quader {
 namespace {
+
+/// One canonical viewport action, including its remappable compiled default.
+struct ViewportNudgeCommand final {
+  QuaderCommandId id;
+  ViewportNudgeAction action;
+  std::string_view label;
+  std::string_view shortcut;
+  bool duplicate_selected = false;
+};
+
+constexpr std::array<ViewportNudgeCommand, 16> kViewportNudgeCommands{{
+    {quader_command::kViewportNudgeMoveUp, ViewportNudgeAction::MoveUp,
+     "Nudge Selection Up", "Up"},
+    {quader_command::kViewportNudgeMoveDown, ViewportNudgeAction::MoveDown,
+     "Nudge Selection Down", "Down"},
+    {quader_command::kViewportNudgeMoveLeft, ViewportNudgeAction::MoveLeft,
+     "Nudge Selection Left", "Left"},
+    {quader_command::kViewportNudgeMoveRight, ViewportNudgeAction::MoveRight,
+     "Nudge Selection Right", "Right"},
+    {quader_command::kViewportNudgeRotateUp, ViewportNudgeAction::RotateUp,
+     "Rotate Selection Up 45°", "Alt+Up"},
+    {quader_command::kViewportNudgeRotateDown, ViewportNudgeAction::RotateDown,
+     "Rotate Selection Down 45°", "Alt+Down"},
+    {quader_command::kViewportNudgeRotateLeft, ViewportNudgeAction::RotateLeft,
+     "Rotate Selection Left 45°", "Alt+Left"},
+    {quader_command::kViewportNudgeRotateRight, ViewportNudgeAction::RotateRight,
+     "Rotate Selection Right 45°", "Alt+Right"},
+    {quader_command::kViewportNudgeDuplicateOrExtrudeMoveUp, ViewportNudgeAction::MoveUp,
+     "Duplicate or Extrude Up", "Shift+Up", true},
+    {quader_command::kViewportNudgeDuplicateOrExtrudeMoveDown, ViewportNudgeAction::MoveDown,
+     "Duplicate or Extrude Down", "Shift+Down", true},
+    {quader_command::kViewportNudgeDuplicateOrExtrudeMoveLeft, ViewportNudgeAction::MoveLeft,
+     "Duplicate or Extrude Left", "Shift+Left", true},
+    {quader_command::kViewportNudgeDuplicateOrExtrudeMoveRight, ViewportNudgeAction::MoveRight,
+     "Duplicate or Extrude Right", "Shift+Right", true},
+    {quader_command::kViewportNudgeDuplicateOrExtrudeRotateUp, ViewportNudgeAction::RotateUp,
+     "Duplicate or Extrude and Rotate Up 45°", "Shift+Alt+Up", true},
+    {quader_command::kViewportNudgeDuplicateOrExtrudeRotateDown, ViewportNudgeAction::RotateDown,
+     "Duplicate or Extrude and Rotate Down 45°", "Shift+Alt+Down", true},
+    {quader_command::kViewportNudgeDuplicateOrExtrudeRotateLeft, ViewportNudgeAction::RotateLeft,
+     "Duplicate or Extrude and Rotate Left 45°", "Shift+Alt+Left", true},
+    {quader_command::kViewportNudgeDuplicateOrExtrudeRotateRight, ViewportNudgeAction::RotateRight,
+     "Duplicate or Extrude and Rotate Right 45°", "Shift+Alt+Right", true},
+}};
+
+const ViewportNudgeCommand *viewport_nudge_command(std::string_view command_id) {
+  const auto command = std::ranges::find_if(kViewportNudgeCommands, [command_id](const auto &candidate) {
+    return candidate.id.string() == command_id;
+  });
+  return command == kViewportNudgeCommands.end() ? nullptr : &*command;
+}
+
+bool is_viewport_nudge_command(std::string_view command_id) {
+  return viewport_nudge_command(command_id) != nullptr;
+}
 
 /// Maps one native modeling action token to its dedicated public command.
 struct NativeModelingActionCommand final {
@@ -409,6 +467,13 @@ bool command_semantically_requires_viewport(std::string_view command_id) {
 
 std::string_view
 default_keybinding_context_for_command(std::string_view command_id) {
+  if (is_viewport_nudge_command(command_id)) {
+    return "viewportFocus && !textInputActive && !navigation.active && "
+           "!navigation.flyActive && !navigation.orbitActive && !navigation.panActive && "
+           "!modalTool.active && !activeTool.ownsViewport && "
+           "!transformDrag.active && !operationPreview.active && "
+           "!activeTool.nativeLifecycle";
+  }
   if (command_id.starts_with("editor.mode.")) {
     return viewport_command_keybinding_context();
   }
@@ -1182,6 +1247,15 @@ public:
         const QuaderInputChord &chord, const ViewportToolState &state,
         bool viewport_focused, bool text_input_active,
         QuaderViewportKeybindingContext input_context = {});
+    [[nodiscard]] bool can_repeat_viewport_input_binding(
+        const QuaderViewportKeybindingRepeat &binding,
+        const ViewportToolState &state, bool viewport_focused,
+        bool text_input_active, QuaderViewportKeybindingContext input_context) const;
+    [[nodiscard]] std::optional<std::string> resolve_repeated_viewport_input_command(
+        const QuaderViewportKeybindingRepeat &binding,
+        const ViewportToolState &state, bool viewport_focused,
+        bool text_input_active, QuaderViewportKeybindingContext input_context,
+        bool shift) const;
     [[nodiscard]] QuaderViewportKeybindingDispatch
     resolve_asset_browser_input_binding(const QuaderInputChord &chord,
                                         bool text_input_active) const;
@@ -1243,6 +1317,7 @@ public:
     QuaderApiVoidResult set_keybinding_storage_path(std::filesystem::path path);
 
   private:
+    QuaderApiVoidResult nudge_selection(ViewportNudgeAction action, bool duplicate_selected);
     void register_commands();
     void register_default_keybindings();
     void register_viewport_default_keybindings();
@@ -2097,6 +2172,17 @@ QuaderCommandsApi::Impl::dispatch_viewport_input_binding(
     return {};
   }
 
+  std::optional<QuaderViewportKeybindingRepeat> repeat_binding;
+  if (is_viewport_nudge_command(dispatch.target_id)) {
+    if (auto sequence = quader_input_parse_shortcut(dispatch.shortcut)) {
+      repeat_binding = QuaderViewportKeybindingRepeat{
+          .command_id = dispatch.target_id,
+          .sequence = std::move(*sequence),
+          .keybindings_revision = keybindings_.revision(),
+          .pane = viewports_.focused_pane()};
+    }
+  }
+
   ViewportInputActionKind action = ViewportInputActionKind::None;
   if (viewport_input_action_for_target_id(dispatch.target_id, action)) {
     return {
@@ -2111,6 +2197,7 @@ QuaderCommandsApi::Impl::dispatch_viewport_input_binding(
     return {
         .kind = QuaderViewportKeybindingDispatch::Kind::Command,
         .command_id = dispatch.target_id,
+        .repeat_binding = std::move(repeat_binding),
     };
   }
 
@@ -2128,10 +2215,66 @@ QuaderCommandsApi::Impl::dispatch_viewport_input_binding(
     return {
         .kind = QuaderViewportKeybindingDispatch::Kind::Command,
         .command_id = dispatch.target_id,
+        .repeat_binding = std::move(repeat_binding),
     };
   }
 
   return {};
+}
+
+bool QuaderCommandsApi::Impl::can_repeat_viewport_input_binding(
+    const QuaderViewportKeybindingRepeat &binding,
+    const ViewportToolState &state, bool viewport_focused,
+    bool text_input_active, QuaderViewportKeybindingContext input_context) const {
+  if (!viewport_focused || text_input_active ||
+      input_context.outliner_focused || input_context.editor_focused ||
+      input_context.asset_browser_focused ||
+      binding.keybindings_revision != keybindings_.revision() ||
+      binding.pane != viewports_.focused_pane() ||
+      !is_viewport_nudge_command(binding.command_id) ||
+      binding.sequence.empty() || keybindings_.has_pending_chord()) {
+    return false;
+  }
+  const QuaderKeybindingContext context = viewport_keybinding_context(
+      state, viewport_focused, text_input_active, input_context,
+      api_.history().can_undo(), api_.history().can_redo(), tools_, mode_);
+  const auto resolved = keybindings_.resolve_sequence(
+      binding.sequence, context, [this, &state, input_context](std::string_view target_id) {
+        return viewport_input_target_available(target_id, state, input_context);
+      });
+  return resolved.kind == QuaderKeybindingDispatch::Kind::ExactMatch &&
+         resolved.target_id == binding.command_id;
+}
+
+std::optional<std::string>
+QuaderCommandsApi::Impl::resolve_repeated_viewport_input_command(
+    const QuaderViewportKeybindingRepeat &binding,
+    const ViewportToolState &state, bool viewport_focused,
+    bool text_input_active, QuaderViewportKeybindingContext input_context,
+    bool shift) const {
+  if (!can_repeat_viewport_input_binding(binding, state, viewport_focused,
+                                         text_input_active, input_context)) {
+    return std::nullopt;
+  }
+  if (binding.sequence.back().shift == shift) {
+    return binding.command_id;
+  }
+  auto sequence = binding.sequence;
+  sequence.back().shift = shift;
+  const QuaderKeybindingContext context = viewport_keybinding_context(
+      state, viewport_focused, text_input_active, input_context,
+      api_.history().can_undo(), api_.history().can_redo(), tools_, mode_);
+  const auto resolved = keybindings_.resolve_sequence(
+      sequence, context, [this, &state, input_context](std::string_view target_id) {
+        return viewport_input_target_available(target_id, state, input_context);
+      });
+  if (resolved.kind != QuaderKeybindingDispatch::Kind::ExactMatch) {
+    return std::nullopt;
+  }
+  const auto *original = viewport_nudge_command(binding.command_id);
+  const auto *variant = viewport_nudge_command(resolved.target_id);
+  return original != nullptr && variant != nullptr && original->action == variant->action
+      ? std::optional<std::string>{resolved.target_id} : std::nullopt;
 }
 
 bool QuaderCommandsApi::Impl::viewport_input_target_available(
@@ -3276,6 +3419,16 @@ void QuaderCommandsApi::Impl::register_commands() {
       quader_command::kViewportToggleTransformSpace,
       "Toggle Global/Local Transforms",
       [this] { return viewports_.toggle_transform_space(); }, "T");
+  for (const auto &command : kViewportNudgeCommands) {
+    register_command(command.id, std::string(command.label),
+        [this, action = command.action, duplicate_selected = command.duplicate_selected] {
+          return nudge_selection(action, duplicate_selected);
+        },
+        std::string(command.shortcut),
+        [this, duplicate_selected = command.duplicate_selected] {
+          return api_.modeling().can_nudge_selection(duplicate_selected);
+        });
+  }
   register_viewport_view_command(quader_command::kViewportViewPerspective,
                                  "Perspective View",
                                  ViewportView::Perspective, "F4");
@@ -3546,6 +3699,69 @@ void QuaderCommandsApi::Impl::register_viewport_view_command(
         return viewports_.set_view(viewports_.focused_pane(), view);
       },
       std::move(shortcut));
+}
+
+QuaderApiVoidResult QuaderCommandsApi::Impl::nudge_selection(
+    ViewportNudgeAction action, bool duplicate_selected) {
+  if (!api_.modeling().can_nudge_selection(duplicate_selected)) {
+    return failure("The current selection cannot be nudged.");
+  }
+  const auto pivot = api_.query().selection_transform_pivot();
+  if (!pivot.has_value()) {
+    return failure("The current selection has no transform pivot.");
+  }
+  const auto pane = viewports_.focused_pane();
+  const auto space = viewports_.transform_space(pane);
+  QuaderTransform3 orientation;
+  auto up_axis = ViewportNudgeAxis::Y;
+  if (space == QuaderTransformSpace::Local) {
+    const auto selected_orientation = api_.query().selection_transform_orientation();
+    if (!selected_orientation.has_value()) {
+      return failure("The current selection has no transform orientation.");
+    }
+    orientation = *selected_orientation;
+    const auto mode = api_.query().selection().mode;
+    if (mode == QuaderSelectionMode::Vertex || mode == QuaderSelectionMode::Edge ||
+        mode == QuaderSelectionMode::Face) {
+      // Component frames place their supporting surface normal on Z;
+      // world and object frames retain Quader's Y-up convention.
+      up_axis = ViewportNudgeAxis::Z;
+    }
+  }
+  const auto &camera = QuaderViewportApiRuntimeAccess::workspace(viewports_).camera(pane);
+  const auto camera_basis = ViewportCameraAdapter::basis(camera);
+  const double grid_size = viewport_grid_world_size_from_contract(viewports_.grid_preset());
+  const auto plan = make_viewport_nudge_plan({
+      .camera_right = camera_basis.right,
+      .camera_up = camera_basis.up,
+      .camera_forward = camera_basis.forward,
+      .orthographic = camera.state().projection == ViewportProjection::Orthographic,
+      .gizmo_x_axis = orientation.x_axis,
+      .gizmo_y_axis = orientation.y_axis,
+      .gizmo_z_axis = orientation.z_axis,
+      .up_axis = up_axis,
+      .grid_step = grid_size,
+      .grid_snap_enabled = viewports_.control(pane, QuaderViewportControl::SnappingEnabled) &&
+                           viewports_.control(pane, QuaderViewportControl::GridSnap),
+      .action = action});
+  if (!plan.has_value()) {
+    return failure("The viewport or selection transform frame is invalid.");
+  }
+  QuaderTransformAxis axis = QuaderTransformAxis::All;
+  switch (plan->rotate_axis) {
+  case ViewportNudgeAxis::X: axis = QuaderTransformAxis::X; break;
+  case ViewportNudgeAxis::Y: axis = QuaderTransformAxis::Y; break;
+  case ViewportNudgeAxis::Z: axis = QuaderTransformAxis::Z; break;
+  case ViewportNudgeAxis::None: break;
+  }
+  return api_.modeling().nudge_selection({
+      .tool = plan->rotate_axis == ViewportNudgeAxis::None ? QuaderTransformTool::Move
+                                                         : QuaderTransformTool::Rotate,
+      .axis = axis, .space = space, .orientation = orientation,
+      .pivot = *pivot, .move_delta = plan->move_delta,
+      .rotate_angle_degrees = plan->rotate_angle_degrees,
+      .duplicate_selected = duplicate_selected,
+      .extrusion_grid_size = grid_size});
 }
 
 void QuaderCommandsApi::Impl::register_default_keybindings() {
@@ -4174,6 +4390,23 @@ QuaderCommandsApi::dispatch_viewport_input_binding(
     QuaderViewportKeybindingContext input_context) {
   return impl_->dispatch_viewport_input_binding(
       chord, state, viewport_focused, text_input_active, input_context);
+}
+
+bool QuaderCommandsApi::can_repeat_viewport_input_binding(
+    const QuaderViewportKeybindingRepeat &binding,
+    const ViewportToolState &state, bool viewport_focused,
+    bool text_input_active, QuaderViewportKeybindingContext input_context) const {
+  return impl_->can_repeat_viewport_input_binding(
+      binding, state, viewport_focused, text_input_active, input_context);
+}
+
+std::optional<std::string> QuaderCommandsApi::resolve_repeated_viewport_input_command(
+    const QuaderViewportKeybindingRepeat &binding,
+    const ViewportToolState &state, bool viewport_focused,
+    bool text_input_active, QuaderViewportKeybindingContext input_context,
+    bool shift) const {
+  return impl_->resolve_repeated_viewport_input_command(
+      binding, state, viewport_focused, text_input_active, input_context, shift);
 }
 
 QuaderViewportKeybindingDispatch

@@ -7,6 +7,8 @@
 #include "operation_validation_test_helpers.hpp"
 
 #include <array>
+#include <limits>
+#include <set>
 
 using namespace quader_poly;
 
@@ -433,4 +435,324 @@ TEST(QdrDocumentOperationExtrudeElementsTests, ExtrudeSelectedCircularBoundaryEd
 		EXPECT_TRUE(vertical_wall_normals_have_consistent_radial_direction(fixture.document));
 		EXPECT_TRUE(qdr_test::shared_edges_have_opposite_winding(fixture.document));
 	}
+}
+
+TEST(QdrDocumentOperationExtrudeElementsTests,
+     VertexBoundaryCornerExtendsOneWeldedQuadAndRemapsActiveVertex) {
+  auto fixture = qdr_test::make_quad_document(7U);
+  fixture.document.faces.front().uvs = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+  fixture.document.faces.front().normal_shading = SurfaceShading::Smooth;
+  const Face original = fixture.document.faces.front();
+  Selection selection =
+      qdr_test::vertex_selection({fixture.bottom_left}, fixture.bottom_left);
+  const auto result = extrude_selected_elements(fixture.document, selection,
+                                                {-0.5F, -0.5F, 0.0F}, 0.25F);
+  ASSERT_TRUE(result.success) << result.message;
+  ASSERT_TRUE(result.changed);
+  ASSERT_EQ(fixture.document.vertices.size(), 5U);
+  ASSERT_EQ(fixture.document.faces.size(), 2U);
+  ASSERT_EQ(selection.vertices.size(), 1U);
+  const ElementId clone = selection.vertices.front();
+  EXPECT_EQ(result.created.vertices, std::vector<ElementId>{clone});
+  EXPECT_EQ(result.created.faces,
+            std::vector<ElementId>{fixture.document.faces.back().id});
+  EXPECT_TRUE(result.deleted.empty());
+  EXPECT_NE(clone, fixture.bottom_left);
+  EXPECT_EQ(selection.active_vertex, clone);
+  EXPECT_TRUE(qdr_test::vec_nearly_equal(
+      find_vertex(fixture.document, fixture.bottom_left)->position,
+      {-1, -1, 0}));
+  EXPECT_TRUE(qdr_test::vec_nearly_equal(
+      find_vertex(fixture.document, clone)->position, {-1.5F, -1.5F, 0}));
+  EXPECT_EQ(fixture.document.faces.front().vertices, original.vertices);
+  const Face &patch = fixture.document.faces.back();
+  EXPECT_EQ(patch.vertices,
+            (std::vector<ElementId>{fixture.bottom_right, fixture.bottom_left,
+                                    fixture.top_left, clone}));
+  EXPECT_EQ(patch.material_slot, original.material_slot);
+  EXPECT_EQ(patch.normal_shading, original.normal_shading);
+  ASSERT_EQ(patch.uvs.size(), 4U);
+  EXPECT_TRUE(
+      qdr_test::vec2_nearly_equal(patch.uvs.back(), original.uvs.front()));
+  EXPECT_TRUE(qdr_test::shared_edges_have_opposite_winding(fixture.document));
+  qdr_test::expect_valid_polygon_document_after_success(fixture.document,
+                                                        result);
+}
+
+TEST(QdrDocumentOperationExtrudeElementsTests,
+     AdjacentBoundaryVerticesShareClonesAcrossAnExtendedChain) {
+  auto fixture = qdr_test::make_quad_document();
+  Selection selection = qdr_test::vertex_selection(
+      {fixture.bottom_left, fixture.bottom_right, fixture.top_right},
+      fixture.bottom_right);
+  const auto result = extrude_selected_elements(fixture.document, selection,
+                                                {0.0F, 0.0F, 0.5F}, 0.25F);
+  ASSERT_TRUE(result.success) << result.message;
+  ASSERT_TRUE(result.changed);
+  ASSERT_EQ(fixture.document.vertices.size(), 7U);
+  ASSERT_EQ(fixture.document.faces.size(), 3U);
+  ASSERT_EQ(selection.vertices.size(), 3U);
+  EXPECT_EQ(selection.active_vertex, selection.vertices[1]);
+  const ElementId shared_clone = selection.vertices[1];
+  for (std::size_t index = 1; index < fixture.document.faces.size(); ++index) {
+    const auto &vertices = fixture.document.faces[index].vertices;
+    EXPECT_EQ(std::ranges::count(vertices, shared_clone), 1);
+  }
+  EXPECT_TRUE(qdr_test::shared_edges_have_opposite_winding(fixture.document));
+  qdr_test::expect_valid_polygon_document_after_success(fixture.document,
+                                                        result);
+}
+
+TEST(QdrDocumentOperationExtrudeElementsTests,
+     InteriorVertexFanPreservesCornerChartsSurfaceAndSpokeNormalModes) {
+  Document document = make_cube({});
+  const ElementId apex = qdr_test::vertex_at_position(document, {1, 1, 1});
+  ASSERT_NE(apex, kInvalidElementId);
+  for (std::size_t index = 0; index < document.faces.size(); ++index) {
+    auto &face = document.faces[index];
+    face.material_slot = static_cast<std::uint32_t>(index + 7U);
+    face.normal_shading = SurfaceShading::Smooth;
+    face.texture_transform = {{-2, 0.5F}, {0.2F, -0.4F}, 33.0F};
+    face.uvs = {{2, 3}, {6, 4}, {9, 10}, {1, 8}};
+  }
+  const ElementId neighbor = qdr_test::vertex_at_position(document, {-1, 1, 1});
+  ASSERT_TRUE(qdr_test::set_edge_normal_mode(
+      document, make_edge(apex, neighbor), EdgeNormalMode::Soft));
+  const Document source = document;
+  const ElementId loose = add_vertex(document, {9, 8, 7});
+  Selection selection = qdr_test::vertex_selection({apex}, apex);
+  const auto result =
+      extrude_selected_elements(document, selection, {0.5F, 0.5F, 0.5F}, 0.25F);
+  ASSERT_TRUE(result.success) << result.message;
+  ASSERT_TRUE(result.changed);
+  EXPECT_EQ(document.vertices.size(), 12U);
+  EXPECT_EQ(document.faces.size(), 9U);
+  EXPECT_EQ(result.created.vertices.size(), 3U);
+  EXPECT_EQ(result.created.faces.size(), 3U);
+  EXPECT_EQ(result.deleted.edges.size(), 3U);
+  EXPECT_EQ(selection.vertices, std::vector<ElementId>{apex});
+  EXPECT_EQ(selection.active_vertex, apex);
+  EXPECT_TRUE(qdr_test::vec_nearly_equal(find_vertex(document, apex)->position,
+                                         {1.5F, 1.5F, 1.5F}));
+  EXPECT_TRUE(qdr_test::vec_nearly_equal(find_vertex(document, loose)->position,
+                                         {9, 8, 7}));
+  const ElementId support =
+      qdr_test::vertex_at_position(document, {0.75F, 1, 1});
+  ASSERT_NE(support, kInvalidElementId);
+  EXPECT_EQ(qdr_test::edge_normal_mode(document, make_edge(apex, support)),
+            EdgeNormalMode::Soft);
+  EXPECT_EQ(qdr_test::edge_normal_mode(document, make_edge(support, neighbor)),
+            EdgeNormalMode::Soft);
+  for (const auto &face : document.faces) {
+    const Face &donor = source.faces[face.material_slot - 7U];
+    EXPECT_EQ(face.normal_shading, donor.normal_shading);
+    EXPECT_EQ(face.texture_transform, donor.texture_transform);
+    ASSERT_EQ(face.uvs.size(), face.vertices.size());
+    for (std::size_t corner = 0; corner < face.vertices.size(); ++corner) {
+      const auto found =
+          std::ranges::find(donor.vertices, face.vertices[corner]);
+      if (found != donor.vertices.end()) {
+        const auto source_corner =
+            static_cast<std::size_t>(found - donor.vertices.begin());
+        EXPECT_TRUE(qdr_test::vec2_nearly_equal(face.uvs[corner],
+                                                donor.uvs[source_corner]));
+      } else if (face.vertices[corner] == support) {
+        const auto apex_corner = static_cast<std::size_t>(
+            std::ranges::find(donor.vertices, apex) - donor.vertices.begin());
+        const auto neighbor_corner = static_cast<std::size_t>(
+            std::ranges::find(donor.vertices, neighbor) -
+            donor.vertices.begin());
+        ASSERT_LT(apex_corner, donor.uvs.size());
+        ASSERT_LT(neighbor_corner, donor.uvs.size());
+        const auto from = donor.uvs[apex_corner];
+        const auto to = donor.uvs[neighbor_corner];
+        EXPECT_TRUE(qdr_test::vec2_nearly_equal(
+            face.uvs[corner], {from.x + (to.x - from.x) * 0.125F,
+                               from.y + (to.y - from.y) * 0.125F}));
+      }
+    }
+  }
+  EXPECT_TRUE(qdr_test::shared_edges_have_opposite_winding(document));
+  qdr_test::expect_valid_polygon_document_after_success(document, result);
+}
+
+TEST(QdrDocumentOperationExtrudeElementsTests,
+     VertexRotationAtItsPivotStillBuildsFanAndClampedSpokesReuseNeighbors) {
+  for (const float setback : {0.25F, 3.0F}) {
+    SCOPED_TRACE(setback);
+    Document document = make_cube({});
+    const ElementId apex = qdr_test::vertex_at_position(document, {1, 1, 1});
+    Selection selection = qdr_test::vertex_selection({apex}, apex);
+    Transform3 rotation;
+    constexpr float kDiagonal = 0.7071067812F;
+    rotation.x_axis = {kDiagonal, 0, -kDiagonal};
+    rotation.z_axis = {kDiagonal, 0, kDiagonal};
+    const auto result = transform_extrude_selected_elements(
+        document, selection, rotation, {1, 1, 1}, setback);
+    ASSERT_TRUE(result.success) << result.message;
+    ASSERT_TRUE(result.changed);
+    EXPECT_EQ(document.vertices.size(), setback < 2.0F ? 11U : 8U);
+    EXPECT_EQ(document.faces.size(), 9U);
+    EXPECT_TRUE(qdr_test::vec_nearly_equal(
+        find_vertex(document, apex)->position, {1, 1, 1}));
+    EXPECT_EQ(selection.active_vertex, apex);
+    qdr_test::expect_valid_polygon_document_after_success(document, result);
+  }
+}
+
+TEST(QdrDocumentOperationExtrudeElementsTests,
+     AdjacentInteriorVerticesShareTheOriginalSpokeWithoutWeldingTips) {
+  Document document = make_cube({});
+  const ElementId first = qdr_test::vertex_at_position(document, {1, 1, 1});
+  const ElementId second = qdr_test::vertex_at_position(document, {-1, 1, 1});
+  Selection selection = qdr_test::vertex_selection({first, second}, second);
+  const auto result =
+      extrude_selected_elements(document, selection, {0, 0.5F, 0.5F}, 0.25F);
+  ASSERT_TRUE(result.success) << result.message;
+  EXPECT_EQ(document.vertices.size(), 14U);
+  EXPECT_EQ(document.faces.size(), 12U);
+  EXPECT_EQ(selection.vertices, (std::vector<ElementId>{first, second}));
+  EXPECT_EQ(selection.active_vertex, second);
+  EXPECT_NE(qdr_test::vertex_at_position(document, {0.75F, 1, 1}),
+            kInvalidElementId);
+  EXPECT_NE(qdr_test::vertex_at_position(document, {-0.75F, 1, 1}),
+            kInvalidElementId);
+  EXPECT_TRUE(qdr_test::shared_edges_have_opposite_winding(document));
+  qdr_test::expect_valid_polygon_document_after_success(document, result);
+}
+
+TEST(QdrDocumentOperationExtrudeElementsTests,
+     LooseVertexMovesWithoutTopologyAndIdentityExtrusionPreservesItsState) {
+  auto fixture = qdr_test::make_quad_document();
+  const ElementId loose = add_vertex(fixture.document, {4, 5, 6});
+  Selection selection = qdr_test::vertex_selection({loose}, loose);
+  const auto before_vertex_id = fixture.document.next_vertex_id;
+  const auto before_face_id = fixture.document.next_face_id;
+  const auto no_op = transform_extrude_selected_elements(
+      fixture.document, selection, {}, {4, 5, 6}, 0.25F);
+  EXPECT_TRUE(no_op.success);
+  EXPECT_FALSE(no_op.changed);
+  const auto moved =
+      extrude_selected_elements(fixture.document, selection, {1, -2, 3}, 0.25F);
+  ASSERT_TRUE(moved.success) << moved.message;
+  EXPECT_TRUE(moved.changed);
+  EXPECT_TRUE(moved.created.empty());
+  EXPECT_TRUE(moved.deleted.empty());
+  EXPECT_EQ(moved.affected.vertices, std::vector<ElementId>{loose});
+  EXPECT_EQ(fixture.document.next_vertex_id, before_vertex_id);
+  EXPECT_EQ(fixture.document.next_face_id, before_face_id);
+  EXPECT_EQ(fixture.document.vertices.size(), 5U);
+  EXPECT_EQ(fixture.document.faces.size(), 1U);
+  EXPECT_EQ(selection.vertices, std::vector<ElementId>{loose});
+  EXPECT_TRUE(qdr_test::vec_nearly_equal(
+      find_vertex(fixture.document, loose)->position, {5, 3, 9}));
+}
+
+TEST(QdrDocumentOperationExtrudeElementsTests,
+     VertexSupportRingReusesCoincidentSpokesWithoutRemovingAuthoredVertices) {
+  Document document = make_cube({});
+  const ElementId apex = qdr_test::vertex_at_position(document, {1, 1, 1});
+  const ElementId neighbor = qdr_test::vertex_at_position(document, {-1, 1, 1});
+  find_vertex(document, neighbor)->position = {1, 1, 1};
+  Selection selection = qdr_test::vertex_selection({apex}, apex);
+  const auto result =
+      extrude_selected_elements(document, selection, {0.5F, 0.5F, 0.5F}, 0.25F);
+  ASSERT_TRUE(result.success) << result.message;
+  EXPECT_TRUE(result.changed);
+  EXPECT_EQ(document.vertices.size(), 10U);
+  EXPECT_EQ(document.faces.size(), 9U);
+  EXPECT_NE(find_vertex(document, neighbor), nullptr);
+  EXPECT_EQ(selection.active_vertex, apex);
+  EXPECT_TRUE(validate_polygon_document(
+                  document, PolygonDocumentValidationPolicy::AuthoredTopology)
+                  .ok());
+}
+
+TEST(QdrDocumentOperationExtrudeElementsTests,
+     RepresentableSmallVertexExtrusionDoesNotUseFaceDistanceFloor) {
+  Document document;
+  const ElementId vertex = add_vertex(document, {});
+  Selection selection = qdr_test::vertex_selection({vertex}, vertex);
+  const auto result =
+      extrude_selected_elements(document, selection, {0.0000001F, 0, 0}, 0.25F);
+  ASSERT_TRUE(result.success) << result.message;
+  EXPECT_TRUE(result.changed);
+  EXPECT_FLOAT_EQ(find_vertex(document, vertex)->position.x, 0.0000001F);
+  EXPECT_EQ(document.vertices.size(), 1U);
+  EXPECT_TRUE(document.faces.empty());
+}
+
+TEST(QdrDocumentOperationExtrudeElementsTests,
+     InvalidVertexExtrusionRollsBackTopologyAttributesSelectionAndAllocators) {
+  for (const int failure : {0, 1, 2, 3, 4}) {
+    SCOPED_TRACE(failure);
+    auto fixture = qdr_test::make_quad_document(7U);
+    Selection selection =
+        qdr_test::vertex_selection({fixture.bottom_left}, fixture.bottom_left);
+    Transform3 transform;
+    transform.origin = {-0.5F, -0.5F, 0};
+    float setback = 0.25F;
+    if (failure == 0) {
+      setback = -1.0F;
+    } else if (failure == 1) {
+      transform.origin.x = std::numeric_limits<float>::infinity();
+    } else if (failure == 2) {
+      selection.vertices.push_back(99U);
+    } else if (failure == 3) {
+      fixture.document.next_face_id = std::numeric_limits<ElementId>::max();
+    } else {
+      fixture.document.faces.front().id = kInvalidElementId;
+    }
+    const Document before = fixture.document;
+    const Selection selection_before = selection;
+    const auto result = transform_extrude_selected_elements(
+        fixture.document, selection, transform, {}, setback);
+    EXPECT_FALSE(result.success);
+    EXPECT_FALSE(result.changed);
+    EXPECT_EQ(fixture.document.next_vertex_id, before.next_vertex_id);
+    EXPECT_EQ(fixture.document.next_face_id, before.next_face_id);
+    ASSERT_EQ(fixture.document.vertices.size(), before.vertices.size());
+    ASSERT_EQ(fixture.document.faces.size(), before.faces.size());
+    for (std::size_t index = 0; index < before.vertices.size(); ++index) {
+      EXPECT_EQ(fixture.document.vertices[index].id, before.vertices[index].id);
+      EXPECT_TRUE(
+          qdr_test::vec_nearly_equal(fixture.document.vertices[index].position,
+                                     before.vertices[index].position));
+    }
+    EXPECT_EQ(fixture.document.faces.front().vertices,
+              before.faces.front().vertices);
+    EXPECT_EQ(fixture.document.faces.front().material_slot,
+              before.faces.front().material_slot);
+    EXPECT_EQ(selection.vertices, selection_before.vertices);
+    EXPECT_EQ(selection.active_vertex, selection_before.active_vertex);
+  }
+}
+
+TEST(QdrDocumentOperationExtrudeElementsTests,
+     VertexExtrusionReceiptIncludesRetainedFaceWithOnlyNewSupportCorners) {
+  Document document = make_cube({});
+  const Face source_face = document.faces.front();
+  ASSERT_EQ(source_face.vertices.size(), 4U);
+  const ElementId first_generated_vertex = document.next_vertex_id;
+  Selection selection = qdr_test::vertex_selection(
+      {source_face.vertices[0], source_face.vertices[1], source_face.vertices[2],
+       source_face.vertices[3]},
+      source_face.vertices[0]);
+  const auto offset = face_normal(document, source_face) * 0.5F;
+
+  const auto result =
+      extrude_selected_elements(document, selection, offset, 0.25F);
+
+  ASSERT_TRUE(result.success) << result.message;
+  ASSERT_TRUE(result.changed);
+  const Face *center = find_face(document, source_face.id);
+  ASSERT_NE(center, nullptr);
+  for (const ElementId vertex : center->vertices) {
+    EXPECT_GE(vertex, first_generated_vertex);
+  }
+  EXPECT_NE(std::ranges::find(result.affected.faces, source_face.id),
+            result.affected.faces.end());
+  EXPECT_EQ(std::ranges::find(result.created.faces, source_face.id),
+            result.created.faces.end());
+  qdr_test::expect_valid_polygon_document_after_success(document, result);
 }

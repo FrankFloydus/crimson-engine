@@ -8,6 +8,7 @@
 
 #include "api/quader_api_result.hpp"
 #include "api/quader_api_types.hpp"
+#include "api/quader_commands_api.hpp"
 #include "api/quader_operation_input_hint_types.hpp"
 #include "api/quader_viewport_layout_types.hpp"
 #include "viewport/viewport_runtime_binding_token.hpp"
@@ -385,6 +386,7 @@ private:
   bool modal_tool_owns_viewport_snapshot_ = false;
   bool active_tool_revision_valid_ = false;
   std::vector<QuaderInputChord> suppressed_keybinding_chords_;
+  std::vector<QuaderViewportKeybindingRepeat> repeated_keybinding_commands_;
   std::array<ViewportPointerReleaseSuppression, 3>
       command_pointer_release_suppression_;
   double linear_array_wheel_remainder_ = 0.0;

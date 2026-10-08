@@ -35,6 +35,14 @@ class QuaderUIApi;
 class QuaderSelectionDiagnosticsApi;
 class QuaderViewportApi;
 
+/** Captures the accepted binding whose physical key may repeat a nudge. */
+struct QuaderViewportKeybindingRepeat {
+  std::string command_id;
+  std::vector<QuaderInputChord> sequence;
+  std::uint64_t keybindings_revision = 0U;
+  ViewportPaneId pane = ViewportPaneId::Perspective;
+};
+
 /**
  * Stores the result of dispatching one viewport-scoped keybinding.
  */
@@ -54,6 +62,7 @@ struct QuaderViewportKeybindingDispatch {
     ViewportInputActionKind action = ViewportInputActionKind::None;
     ViewportShortcut shortcut = {};
     std::string command_id;
+    std::optional<QuaderViewportKeybindingRepeat> repeat_binding;
 };
 
 /** Identifies Apply/Cancel intent resolved for a settings or dialog draft. */
@@ -203,6 +212,18 @@ public:
         const QuaderInputChord &chord, const ViewportToolState &state,
         bool viewport_focused, bool text_input_active,
         QuaderViewportKeybindingContext input_context = {});
+    /** Revalidates a completed nudge sequence without advancing prefix state. */
+    [[nodiscard]] bool can_repeat_viewport_input_binding(
+        const QuaderViewportKeybindingRepeat &binding,
+        const ViewportToolState &state, bool viewport_focused,
+        bool text_input_active,
+        QuaderViewportKeybindingContext input_context = {}) const;
+    /** Resolves the held Shift variant of an accepted nudge without advancing prefixes. */
+    [[nodiscard]] std::optional<std::string> resolve_repeated_viewport_input_command(
+        const QuaderViewportKeybindingRepeat &binding,
+        const ViewportToolState &state, bool viewport_focused,
+        bool text_input_active, QuaderViewportKeybindingContext input_context,
+        bool shift) const;
     /** Probes the asset browser's canonical shortcuts before Qt activation. */
     [[nodiscard]] QuaderViewportKeybindingDispatch
     resolve_asset_browser_input_binding(const QuaderInputChord &chord,

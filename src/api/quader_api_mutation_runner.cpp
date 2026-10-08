@@ -56,6 +56,17 @@ bool QuaderApiMutationRunner::can_mutate_modeling_content() const {
          !scene_session().native_tools().blocks_modeling_content_mutation();
 }
 
+bool QuaderApiMutationRunner::can_nudge_selection(bool duplicate_selected) const {
+  if (!can_mutate_modeling_content()) {
+    return false;
+  }
+  const SceneSession &session = scene_session();
+  return !session.native_tools().has_pending_tool() &&
+         !session.native_tools().pointer_dragging() &&
+         !session.history().transaction_active() &&
+         session.modeling().can_nudge_selection(duplicate_selected);
+}
+
 QuaderApiVoidResult QuaderApiMutationRunner::modeling_content_blocked_status(
     std::string_view label) const {
   std::string message = "Apply or cancel the active tool before ";
@@ -574,6 +585,23 @@ QuaderApiVoidResult QuaderApiMutationRunner::repeat_last_action() {
     return modeling_content_blocked_status("repeating a modeling action.");
   }
   SceneSession &session = scene_session();
+  if (session.modeling().repeat_last_action_is_nudge()) {
+    if (!can_nudge_selection()) {
+      return modeling_content_blocked_status("repeating a nudge.");
+    }
+    const ModelingStructuralDuplicate structural_duplicate =
+        [&session](EditorTransaction &transaction, ModelingSelectionMode mode,
+                   std::string_view label) {
+          return modeling_structural_duplicate_result(
+              session.structural_lifecycle().duplicate_hierarchy_in_transaction(
+                  transaction, session.structural_lifecycle().selected_roots(),
+                  mode, std::string(label)));
+        };
+    return status_from(
+        session.modeling().repeat_last_nudge(
+            session.document_commands(), session.history(), structural_duplicate),
+        QuaderMutationKind::Modeling, "Repeat Last Action");
+  }
   if (session.modeling().repeat_last_action_uses_structural_duplicate()) {
     const SceneSelectionState selection_before =
         capture_scene_selection(session.scene());

@@ -2594,6 +2594,38 @@ QuaderApiVoidResult QuaderModelingApi::move_selection(QVec3 delta) {
       "Move Selection");
 }
 
+bool QuaderModelingApi::can_nudge_selection(bool duplicate_selected) const {
+  return mutations_.can_nudge_selection(duplicate_selected);
+}
+
+QuaderApiVoidResult QuaderModelingApi::nudge_selection(
+    const QuaderResolvedNudgeRequest &request) {
+  if (!can_nudge_selection(request.duplicate_selected)) {
+    return mutations_.modeling_content_blocked_status("nudging the selection.");
+  }
+  SceneSession &session = scene_session(session_);
+  if ((request.tool != QuaderTransformTool::Move && request.tool != QuaderTransformTool::Rotate) ||
+      (request.space != QuaderTransformSpace::Global && request.space != QuaderTransformSpace::Local)) {
+    return quader_api_failure_status(session, "The resolved nudge transform is invalid.");
+  }
+  const ModelingStructuralDuplicate structural_duplicate =
+      structural_duplicate_for_transform(session);
+  return mutations_.run_modeling_result(
+      session.modeling().nudge_selection(
+          {.tool = to_modeling_transform_tool(request.tool),
+           .axis = to_modeling_transform_axis(request.axis),
+           .space = request.space == QuaderTransformSpace::Local
+                        ? ModelingTransformSpace::Local : ModelingTransformSpace::Global,
+           .orientation = to_modeling_transform3(request.orientation),
+           .pivot = request.pivot,
+           .move_delta = request.move_delta,
+           .rotate_angle_degrees = request.rotate_angle_degrees,
+           .duplicate_selected = request.duplicate_selected,
+           .extrusion_grid_size = request.extrusion_grid_size},
+          session.document_commands(), session.history(), structural_duplicate),
+      "Nudge Selection");
+}
+
 QuaderApiVoidResult QuaderModelingApi::rotate_selection(QVec3 euler_radians,
                                                         QVec3 pivot) {
   return apply_selection_transform(session_, mutations_,

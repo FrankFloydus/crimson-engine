@@ -182,6 +182,30 @@ inline constexpr QuaderCommandId kViewportGridIncrement{
     "viewport.grid.increment"};
 inline constexpr QuaderCommandId kViewportGridDecrement{
     "viewport.grid.decrement"};
+inline constexpr QuaderCommandId kViewportNudgeMoveUp{"viewport.nudge.move_up"};
+inline constexpr QuaderCommandId kViewportNudgeMoveDown{"viewport.nudge.move_down"};
+inline constexpr QuaderCommandId kViewportNudgeMoveLeft{"viewport.nudge.move_left"};
+inline constexpr QuaderCommandId kViewportNudgeMoveRight{"viewport.nudge.move_right"};
+inline constexpr QuaderCommandId kViewportNudgeRotateUp{"viewport.nudge.rotate_up"};
+inline constexpr QuaderCommandId kViewportNudgeRotateDown{"viewport.nudge.rotate_down"};
+inline constexpr QuaderCommandId kViewportNudgeRotateLeft{"viewport.nudge.rotate_left"};
+inline constexpr QuaderCommandId kViewportNudgeRotateRight{"viewport.nudge.rotate_right"};
+inline constexpr QuaderCommandId kViewportNudgeDuplicateOrExtrudeMoveUp{
+    "viewport.nudge.duplicate_or_extrude_move_up"};
+inline constexpr QuaderCommandId kViewportNudgeDuplicateOrExtrudeMoveDown{
+    "viewport.nudge.duplicate_or_extrude_move_down"};
+inline constexpr QuaderCommandId kViewportNudgeDuplicateOrExtrudeMoveLeft{
+    "viewport.nudge.duplicate_or_extrude_move_left"};
+inline constexpr QuaderCommandId kViewportNudgeDuplicateOrExtrudeMoveRight{
+    "viewport.nudge.duplicate_or_extrude_move_right"};
+inline constexpr QuaderCommandId kViewportNudgeDuplicateOrExtrudeRotateUp{
+    "viewport.nudge.duplicate_or_extrude_rotate_up"};
+inline constexpr QuaderCommandId kViewportNudgeDuplicateOrExtrudeRotateDown{
+    "viewport.nudge.duplicate_or_extrude_rotate_down"};
+inline constexpr QuaderCommandId kViewportNudgeDuplicateOrExtrudeRotateLeft{
+    "viewport.nudge.duplicate_or_extrude_rotate_left"};
+inline constexpr QuaderCommandId kViewportNudgeDuplicateOrExtrudeRotateRight{
+    "viewport.nudge.duplicate_or_extrude_rotate_right"};
 
 /// Deprecated compatibility spelling. Use kDeleteSelection for new C++ callers.
 inline constexpr QuaderCommandId kModelingDeleteSelection{"edit.delete"};
@@ -528,6 +552,22 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kViewportLayoutFourQuad,
     kViewportGridIncrement,
     kViewportGridDecrement,
+    kViewportNudgeMoveUp,
+    kViewportNudgeMoveDown,
+    kViewportNudgeMoveLeft,
+    kViewportNudgeMoveRight,
+    kViewportNudgeRotateUp,
+    kViewportNudgeRotateDown,
+    kViewportNudgeRotateLeft,
+    kViewportNudgeRotateRight,
+    kViewportNudgeDuplicateOrExtrudeMoveUp,
+    kViewportNudgeDuplicateOrExtrudeMoveDown,
+    kViewportNudgeDuplicateOrExtrudeMoveLeft,
+    kViewportNudgeDuplicateOrExtrudeMoveRight,
+    kViewportNudgeDuplicateOrExtrudeRotateUp,
+    kViewportNudgeDuplicateOrExtrudeRotateDown,
+    kViewportNudgeDuplicateOrExtrudeRotateLeft,
+    kViewportNudgeDuplicateOrExtrudeRotateRight,
     kModelingDuplicateMeshes,
     kModelingBridge,
     kModelingExtractFaces,

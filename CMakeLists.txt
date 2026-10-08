@@ -416,6 +416,7 @@ add_library(quader_editor_services STATIC
     src/editor/transform/align_tool_service.cpp
     src/editor/transform/mesh_transform_bake_service.cpp
     src/editor/transform/scene_transform_drag_service.cpp
+    src/editor/transform/viewport_nudge_plan.cpp
     src/editor/commands/document/scene_texture_mapping_plan.cpp
 )
 
@@ -1883,6 +1884,7 @@ if(QUADER_BUILD_TESTS)
         tests/tool_preview_submission_tests.cpp
         tests/scene_mesh_occurrence_projection_tests.cpp
         tests/scene_transform_tests.cpp
+        tests/viewport_nudge_plan_tests.cpp
         tests/selection_mode_adapter_tests.cpp
         tests/selection_overlay_runtime_tests.cpp
         tests/dense_component_frame_runtime_tests.cpp

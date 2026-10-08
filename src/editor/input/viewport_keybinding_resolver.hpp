@@ -16,6 +16,7 @@ namespace quader {
 class QuaderEditorApi;
 struct ViewportInputFrame;
 struct ViewportToolState;
+struct QuaderViewportKeybindingRepeat;
 
 /**
  * Resolves canonical host input into semantic viewport actions and commands.
@@ -27,7 +28,8 @@ public:
                       std::vector<QuaderInputChord> &suppressed_chords,
                       double &linear_array_wheel_remainder,
                       double &radial_array_wheel_remainder,
-                      ViewportRuntimeBindingToken runtime_binding = {});
+                      ViewportRuntimeBindingToken runtime_binding = {},
+                      std::vector<QuaderViewportKeybindingRepeat> *repeat_bindings = nullptr);
 };
 
 } // namespace quader

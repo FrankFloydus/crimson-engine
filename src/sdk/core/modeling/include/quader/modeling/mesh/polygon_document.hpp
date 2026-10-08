@@ -359,8 +359,10 @@ public:
   [[nodiscard]] Result<OperationResult>
   extrude_selected_elements(Vec3 offset,
                             float closed_edge_ledge_size = 0.0F);
+  /// Vertex fan support uses this raw setback independently of the transform.
   [[nodiscard]] Result<OperationResult>
-  transform_extrude_selected_elements(Transform3 transform, Vec3 pivot = {});
+  transform_extrude_selected_elements(Transform3 transform, Vec3 pivot = {},
+                                      float vertex_extrude_size = 1.0F);
   [[nodiscard]] Result<OperationResult>
   inset_selected_elements(Transform3 transform, Vec3 pivot);
   [[nodiscard]] Result<OperationResult>

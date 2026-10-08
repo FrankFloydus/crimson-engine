@@ -1428,9 +1428,20 @@ OperationResult evaluate_face_extrusion(
 
 namespace document_internal {
 
+OperationResult extrude_selected_vertices_impl(
+    Document &document, Selection &selection, const Transform3 &transform,
+    quader::QVec3 pivot, float setback);
+
 OperationResult extrude_selected_elements_impl(Document& document, Selection& selection, quader::QVec3 offset, float closed_edge_ledge_size)
 {
     QDR_PROFILE_SCOPE("qdr_document.extrude_selected_elements_impl");
+    if (selection.mode == SelectionMode::Vertex) {
+      Transform3 transform;
+      transform.origin = offset;
+      return extrude_selected_vertices_impl(document, selection, transform, {},
+          closed_edge_ledge_size == 0.0F ? 1.0F : closed_edge_ledge_size);
+    }
+
     if (length(offset) <= kEpsilon) {
       return {false, "Extrude distance must be non-zero."};
     }
@@ -1465,9 +1476,13 @@ OperationResult extrude_selected_elements_impl(Document& document, Selection& se
     return OperationResult::failure("Extrude needs a face or edge selection.");
 }
 
-OperationResult transform_extrude_selected_elements_impl(Document& document, Selection& selection, const Transform3& transform, quader::QVec3 pivot)
+OperationResult transform_extrude_selected_elements_impl(Document& document, Selection& selection, const Transform3& transform, quader::QVec3 pivot, float vertex_extrude_size)
 {
     QDR_PROFILE_SCOPE("qdr_document.transform_extrude_selected_elements_impl");
+    if (selection.mode == SelectionMode::Vertex) {
+      return extrude_selected_vertices_impl(document, selection, transform, pivot,
+                                             vertex_extrude_size);
+    }
     if (selection.mode == SelectionMode::Face) {
       return extrude_selected_faces_with_copied_vertices(
           document, selection,

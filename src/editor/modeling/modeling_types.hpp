@@ -944,6 +944,20 @@ struct ModelingTransformDragBeginRequest {
   bool duplicate_selected = false;
 };
 
+/// Captures the frame and displacement for one discrete viewport transform.
+struct ModelingResolvedNudgeRequest {
+  ModelingTransformTool tool = ModelingTransformTool::Move;
+  ModelingTransformAxis axis = ModelingTransformAxis::None;
+  ModelingTransformSpace space = ModelingTransformSpace::Global;
+  ModelingTransform3 orientation = {};
+  QVec3 pivot = {};
+  QVec3 move_delta = {};
+  double rotate_angle_degrees = 0.0;
+  /// Uses structural duplication for objects and extrusion for components.
+  bool duplicate_selected = false;
+  double extrusion_grid_size = 1.0;
+};
+
 /**
  * Stores the Modeling Transform Drag Update Request data contract used by the
  * modeling domain.

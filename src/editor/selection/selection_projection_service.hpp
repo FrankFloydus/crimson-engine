@@ -13,6 +13,7 @@
 #include "scene/scene_bounds.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <span>
 
@@ -109,6 +110,13 @@ public:
                          const AssetRegistry &assets,
                          const ModelingObjectRuntimeMap &object_registry,
                          SelectionBoundsWorkStats *work_stats = nullptr) const;
+
+  /// Measures selected authored points after occurrence and reference-frame projection.
+  [[nodiscard]] std::optional<SceneBounds> component_selection_bounds(
+      const ModelingSelectionProjectionSnapshot &selection,
+      const std::function<std::optional<QMat4>(int)> &world_transform,
+      const std::function<QVec3(QVec3)> &reference_position = {},
+      SelectionBoundsWorkStats *work_stats = nullptr) const;
 };
 
 } // namespace quader

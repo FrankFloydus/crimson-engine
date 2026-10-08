@@ -392,6 +392,10 @@ public:
   ModelingCommandResult copy_selection();
   ModelingCommandResult paste_selection();
   ModelingCommandResult repeat_last_action();
+  [[nodiscard]] bool repeat_last_action_is_nudge() const;
+  ModelingCommandResult repeat_last_nudge(
+      DocumentCommandService &document_commands, EditorHistoryService &history,
+      const ModelingStructuralDuplicate &structural_duplicate);
   void record_repeatable_structural_duplicate();
   [[nodiscard]] bool repeat_last_action_uses_structural_duplicate() const;
   ModelingCommandResult repeat_last_structural_transform(
@@ -633,6 +637,12 @@ public:
       ModelingSelectionEdit edit,
       const ModelingSelectionBoxBaseline &baseline);
   ModelingCommandResult move_selection(QVec3 delta);
+  [[nodiscard]] bool can_nudge_selection(bool duplicate_selected = false) const;
+  [[nodiscard]] std::uint64_t nudge_selection_eligibility_build_count() const;
+  ModelingCommandResult nudge_selection(
+      const ModelingResolvedNudgeRequest &request,
+      DocumentCommandService &document_commands, EditorHistoryService &history,
+      const ModelingStructuralDuplicate &structural_duplicate);
   ModelingCommandResult transform_selection(const ModelingTransform3 &transform,
                                             QVec3 pivot);
   ModelingCommandResult apply_resolved_vertex_positions(

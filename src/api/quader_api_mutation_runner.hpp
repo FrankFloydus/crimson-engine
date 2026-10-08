@@ -41,6 +41,7 @@ public:
   [[nodiscard]] bool
   belongs_to_active_scene(SceneSessionId scene_session_id) const;
   [[nodiscard]] bool can_mutate_modeling_content() const;
+  [[nodiscard]] bool can_nudge_selection(bool duplicate_selected = false) const;
   [[nodiscard]] QuaderApiVoidResult modeling_content_blocked_status(
       std::string_view label) const;
   [[nodiscard]] QuaderApiVoidResult

@@ -1496,6 +1496,20 @@ class ModelingSessionService::Impl : private ModelingTransformDragPort {
     QMat4 object_from_world;
   };
 
+  struct NudgeSelectionCacheKey final {
+    std::uint64_t content_revision = 0;
+    std::uint64_t selection_revision = 0;
+    std::uint64_t scene_revision = 0;
+    std::uint64_t asset_revision = 0;
+    std::uint64_t object_map_revision = 0;
+    std::uint64_t editor_mode_revision = 0;
+    ModelingSelectionMode app_selection_mode = ModelingSelectionMode::Object;
+    ModelingInstanceEditScope instance_scope;
+
+    friend bool operator==(const NudgeSelectionCacheKey &,
+                           const NudgeSelectionCacheKey &) = default;
+  };
+
   /// Precomputes one source's identity and representable local transforms.
   struct TransformedDuplicateSourcePlan {
     EntityId source_entity = kInvalidEntityId;
@@ -4809,6 +4823,68 @@ public:
         .changed = result.changed,
         .message = result.message,
     };
+  }
+
+  [[nodiscard]] bool repeat_last_action_is_nudge() const {
+    const auto &repeat = history_bridge_.repeat_last_action();
+    return repeat.last_action_kind ==
+               quader_editor_core::RepeatableActionKind::Transform &&
+           repeat.last_transform.has_value() && repeat.last_transform->nudge;
+  }
+
+  ModelingCommandResult repeat_last_nudge(
+      DocumentCommandService &document_commands, EditorHistoryService &history,
+      const ModelingStructuralDuplicate &structural_duplicate) {
+    if (!repeat_last_action_is_nudge()) {
+      return {.ok = false, .message = "No repeatable nudge is available."};
+    }
+    const auto repeated_action = history_bridge_.repeat_last_action();
+    const auto &action = *repeated_action.last_transform;
+    const bool scene_selection_mode = selection_mode() == ModelingSelectionMode::Object ||
+        selection_mode() == ModelingSelectionMode::Group;
+    const bool extrude_selection =
+        action.operation == quader_editor_core::TransformDragOperation::Extrude;
+    if ((extrude_selection && scene_selection_mode) ||
+        (action.duplicate_selected && !scene_selection_mode)) {
+      return {.ok = false, .message = "The current selection cannot repeat this nudge operation."};
+    }
+    ModelingTransformAxis axis = ModelingTransformAxis::All;
+    switch (action.axis) {
+    case quader_editor_core::TransformAxis::X: axis = ModelingTransformAxis::X; break;
+    case quader_editor_core::TransformAxis::Y: axis = ModelingTransformAxis::Y; break;
+    case quader_editor_core::TransformAxis::Z: axis = ModelingTransformAxis::Z; break;
+    default: break;
+    }
+    ModelingResolvedNudgeRequest request{
+        .tool = action.tool == quader_editor_core::ViewportInteractionTool::Move
+                    ? ModelingTransformTool::Move : ModelingTransformTool::Rotate,
+        .axis = axis,
+        .space = action.space == quader_editor_core::TransformSpace::Local
+                     ? ModelingTransformSpace::Local : ModelingTransformSpace::Global,
+        .orientation = from_runtime(action.orientation),
+        .pivot = action.pivot,
+        .move_delta = action.move_delta,
+        .rotate_angle_degrees = action.rotate_angle_degrees,
+        .duplicate_selected = action.duplicate_selected || extrude_selection,
+        .extrusion_grid_size = action.extrusion_grid_size,
+    };
+    if (request.tool == ModelingTransformTool::Move &&
+        request.space == ModelingTransformSpace::Local) {
+      const auto orientation = selection_transform_orientation();
+      const auto remapped = orientation.has_value()
+          ? remap_local_move_delta(action.move_delta, action.orientation, *orientation)
+          : std::nullopt;
+      if (!remapped.has_value()) {
+        return {.ok = false, .message = "Could not resolve the local nudge frame."};
+      }
+      request.move_delta = *remapped;
+      request.orientation = *orientation;
+    }
+    const ModelingCommandResult result =
+        nudge_selection(request, document_commands, history, structural_duplicate,
+                        action.move_auto_merge_vertices);
+    history_bridge_.repeat_last_action() = repeated_action;
+    return result;
   }
 
   void record_repeatable_structural_duplicate() {
@@ -10956,6 +11032,147 @@ public:
     return result;
   }
 
+  [[nodiscard]] bool can_nudge_selection(bool duplicate_selected = false) const {
+    if (can_cancel_active_tool_or_preview()) {
+      return false;
+    }
+    const NudgeSelectionCacheKey key{
+        .content_revision = content_revision(),
+        .selection_revision = selection_revision(),
+        .scene_revision = scene_.revision(),
+        .asset_revision = assets_.revision(),
+        .object_map_revision = object_registry_.revision(),
+        .editor_mode_revision = editor_mode_service_ != nullptr
+                                    ? editor_mode_service_->revision() : 0U,
+        .app_selection_mode = app_selection_mode_,
+        .instance_scope = instance_edit_scope_provider_
+                              ? instance_edit_scope_provider_() : ModelingInstanceEditScope{},
+    };
+    if (nudge_selection_cache_key_ == key) {
+      return duplicate_selected ? modified_nudge_selection_cache_ : nudge_selection_cache_;
+    }
+    ++nudge_selection_eligibility_build_count_;
+    const auto editable_entity = [this](EntityId entity) {
+      return scene_.exists(entity) && scene_.transform(entity) != nullptr &&
+             !scene_.is_effectively_locked(entity);
+    };
+    const ModelingSelectionMode mode = selection_mode();
+    if (mode == ModelingSelectionMode::Object || mode == ModelingSelectionMode::Group) {
+      const auto selected = scene_.selected_entities();
+      nudge_selection_cache_ = !selected.empty() && std::all_of(
+          selected.begin(), selected.end(), editable_entity);
+      modified_nudge_selection_cache_ = nudge_selection_cache_;
+    } else {
+      const auto selected = selected_component_entities();
+      nudge_selection_cache_ = !selected.empty() && std::all_of(
+          selected.begin(), selected.end(), editable_entity);
+      modified_nudge_selection_cache_ = nudge_selection_cache_ && std::all_of(
+          selected.begin(), selected.end(),
+          [this](EntityId entity) { return scene_.mesh(entity) != nullptr; });
+    }
+    nudge_selection_cache_key_ = key;
+    return duplicate_selected ? modified_nudge_selection_cache_ : nudge_selection_cache_;
+  }
+
+  [[nodiscard]] std::uint64_t nudge_selection_eligibility_build_count() const {
+    return nudge_selection_eligibility_build_count_;
+  }
+
+  ModelingCommandResult nudge_selection(
+      const ModelingResolvedNudgeRequest &request,
+      DocumentCommandService &document_commands, EditorHistoryService &history,
+      const ModelingStructuralDuplicate &structural_duplicate,
+      std::optional<bool> move_auto_merge_vertices = std::nullopt) {
+    const auto finite_vector = [](QVec3 value) {
+      return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+    };
+    const bool supported_axis = request.axis == ModelingTransformAxis::X ||
+        request.axis == ModelingTransformAxis::Y || request.axis == ModelingTransformAxis::Z ||
+        (request.tool == ModelingTransformTool::Move && request.axis == ModelingTransformAxis::All);
+    if ((request.tool != ModelingTransformTool::Move && request.tool != ModelingTransformTool::Rotate) ||
+        !supported_axis ||
+        (request.space != ModelingTransformSpace::Global && request.space != ModelingTransformSpace::Local) ||
+        !finite_vector(request.pivot) || !finite_vector(request.move_delta) ||
+        !finite_vector(request.orientation.origin) ||
+        !std::isfinite(request.rotate_angle_degrees) ||
+        !std::isfinite(request.extrusion_grid_size) ||
+        request.extrusion_grid_size <= 0.0 ||
+        request.extrusion_grid_size > std::numeric_limits<float>::max() ||
+        static_cast<float>(request.extrusion_grid_size) <= 0.0F ||
+        !normalized_orientation_basis(to_runtime(request.orientation)).has_value()) {
+      return {.ok = false, .message = "The resolved nudge transform is invalid."};
+    }
+    if (document_commands.property_edit_active() || history.transaction_active() ||
+        !can_nudge_selection(request.duplicate_selected)) {
+      return {.ok = false, .message = "Nudging requires an editable selection with no active edit."};
+    }
+    const bool duplicate_scene_selection = request.duplicate_selected &&
+        (selection_mode() == ModelingSelectionMode::Object ||
+         selection_mode() == ModelingSelectionMode::Group);
+    if (duplicate_scene_selection && !structural_duplicate) {
+      return {.ok = false, .message = "This selection does not support nudge duplication."};
+    }
+    const bool unchanged = request.tool == ModelingTransformTool::Move
+        ? request.move_delta.x == 0.0F && request.move_delta.y == 0.0F && request.move_delta.z == 0.0F
+        : std::remainder(request.rotate_angle_degrees, 360.0) == 0.0;
+    if (unchanged) {
+      return {.ok = true, .changed = false};
+    }
+    if (has_portable_modeling_selection()) {
+      for (const EntityId entity : selected_component_entities()) {
+        const auto object_id = object_registry_.modeling_object_for_entity(entity);
+        const auto world = object_id.has_value()
+            ? modeling_object_world_transform(*object_id) : std::nullopt;
+        if (!world.has_value() || !try_scene_matrix_inverse(*world).has_value()) {
+          return {.ok = false, .message = "A nudge participant has no invertible transform."};
+        }
+      }
+    }
+    const auto repeat_before = history_bridge_.repeat_last_action();
+    const ModelingSessionMemento structural_before = duplicate_scene_selection
+        ? capture_history_memento(true) : ModelingSessionMemento{};
+    if (duplicate_scene_selection && !structural_before.valid()) {
+      return {.ok = false, .message = "The nudge rollback state could not be captured."};
+    }
+    if (duplicate_scene_selection) {
+      begin_preview_content_checkpoint(structural_drag_checkpoint_active_);
+    }
+    refresh_transform_drag_projection_cache();
+    auto context = transform_drag_context(&document_commands, &structural_duplicate, &history);
+    if (move_auto_merge_vertices.has_value()) {
+      context.move_auto_merge_vertices = *move_auto_merge_vertices;
+    }
+    ModelingTransformDragPreview result = transform_drag_service_.apply_resolved_nudge(
+        context, request, history);
+    if (duplicate_scene_selection) {
+      if (!result.ok && !result.changed) {
+        // Transaction cancellation restores history monotonically. A rejected
+        // synchronous nudge also restores its captured publication revisions.
+        const ModelingCommandResult restored =
+            restore_history_memento_exact(structural_before, true);
+        if (!restored.ok) {
+          result.changed = true;
+          result.message += "; modeling rollback failed: " + restored.message;
+        }
+      }
+      record_preview_content_checkpoint(structural_drag_checkpoint_active_);
+      finish_preview_content_checkpoint(structural_drag_checkpoint_active_,
+                                        !result.ok && !result.changed);
+    }
+    clear_transform_drag_caches();
+    if (result.ok && result.changed) {
+      auto &repeat = history_bridge_.repeat_last_action();
+      if (repeat.last_transform.has_value()) {
+        repeat.last_transform->nudge = true;
+        repeat.last_transform->extrusion_grid_size = request.extrusion_grid_size;
+      }
+      invalidate_volatile_overlay_cache();
+    } else {
+      history_bridge_.repeat_last_action() = repeat_before;
+    }
+    return {.ok = result.ok, .changed = result.changed, .message = result.message};
+  }
+
   ModelingCommandResult move_selection(QVec3 delta) {
     if (editor_mode_service_ != nullptr && editor_mode_service_->mode() == EditorMode::Edit &&
         !ModelingSelectionService::has_component_selection(selection_summary())) {
@@ -11307,7 +11524,8 @@ private:
           quader_editor_core::TransformDragOperation::Extrude) {
         kind = ModelingSdkTransformPreviewKind::ExtrudeOffset;
         closed_edge_ledge_size =
-            static_cast<float>(std::max(grid_size, 0.0001));
+            static_cast<float>(selection_mode() == ModelingSelectionMode::Vertex
+                                   ? grid_size : std::max(grid_size, 0.0001));
       }
     } else if (drag.tool ==
                quader_editor_core::ViewportInteractionTool::Rotate) {
@@ -11318,6 +11536,9 @@ private:
       if (drag.operation ==
           quader_editor_core::TransformDragOperation::Extrude) {
         kind = ModelingSdkTransformPreviewKind::TransformExtrude;
+        if (selection_mode() == ModelingSelectionMode::Vertex) {
+          closed_edge_ledge_size = static_cast<float>(grid_size);
+        }
       }
     } else if (drag.tool ==
                quader_editor_core::ViewportInteractionTool::Scale) {
@@ -11463,38 +11684,13 @@ private:
         transform_drag_projection_cache_ != nullptr
             ? *transform_drag_projection_cache_
             : selection_projection_snapshot();
-    std::optional<SceneBounds> bounds;
-    for (const quader_editor_core::PolygonObject &object :
-         projection.objects()) {
-      if (!object.selected || object.selection.empty()) {
-        continue;
-      }
-      const std::optional<QMat4> world_from_object =
-          modeling_object_world_transform(object.id);
-      if (!world_from_object.has_value()) {
-        continue;
-      }
-      const std::vector<quader_poly::ElementId> selected_vertex_ids =
-          quader_poly::selected_vertex_ids(object.document, object.selection);
-      std::unordered_set<quader_poly::ElementId> remaining_vertices(
-          selected_vertex_ids.begin(), selected_vertex_ids.end());
-      for (const quader_poly::Vertex &vertex : object.document.vertices) {
-        if (remaining_vertices.erase(vertex.id) == 0U) {
-          continue;
-        }
-        const QVec3 world =
-            transform_point(*world_from_object, vertex.position);
-        // Grid coordinates remain absolute: orientation.origin does not shift
-        // the grid, just as it does not shift an oriented scale transform.
-        const QVec3 point =
-            quader_editor_core::inverse_transform_vector(orientation, world);
-        if (!bounds.has_value()) {
-          bounds = SceneBounds{.min = point, .max = point};
-        } else {
-          include_point(*bounds, point);
-        }
-      }
-    }
+    const auto bounds = selection_projection_service_.component_selection_bounds(
+        projection,
+        [this](int object_id) { return modeling_object_world_transform(object_id); },
+        [&orientation](QVec3 world) {
+          // The gizmo origin does not shift absolute grid coordinates.
+          return quader_editor_core::inverse_transform_vector(orientation, world);
+        });
     return bounds.has_value()
                ? quader_editor_core::Bounds3{.empty = false,
                                             .min = bounds->min,
@@ -11689,6 +11885,10 @@ private:
   ModelingInteractionSettingsService &interaction_settings_service_;
   ModelingToolSettingsService tool_settings_service_;
   ModelingTransformDragService transform_drag_service_;
+  mutable std::optional<NudgeSelectionCacheKey> nudge_selection_cache_key_;
+  mutable bool nudge_selection_cache_ = false;
+  mutable bool modified_nudge_selection_cache_ = false;
+  mutable std::uint64_t nudge_selection_eligibility_build_count_ = 0;
   SceneTransformDragService structural_preview_scene_transform_;
   std::optional<EditorTransaction> structural_preview_transaction_;
   ModelingStructuralDuplicateResult structural_preview_duplicate_;
@@ -12421,6 +12621,16 @@ ModelingCommandResult ModelingSessionService::paste_selection() {
 
 ModelingCommandResult ModelingSessionService::repeat_last_action() {
   return impl_->repeat_last_action();
+}
+
+bool ModelingSessionService::repeat_last_action_is_nudge() const {
+  return impl_->repeat_last_action_is_nudge();
+}
+
+ModelingCommandResult ModelingSessionService::repeat_last_nudge(
+    DocumentCommandService &document_commands, EditorHistoryService &history,
+    const ModelingStructuralDuplicate &structural_duplicate) {
+  return impl_->repeat_last_nudge(document_commands, history, structural_duplicate);
 }
 
 void ModelingSessionService::record_repeatable_structural_duplicate() {
@@ -13383,6 +13593,21 @@ ModelingCommandResult ModelingSessionService::apply_resolved_component_selection
 
 ModelingCommandResult ModelingSessionService::move_selection(QVec3 delta) {
   return impl_->move_selection(delta);
+}
+
+bool ModelingSessionService::can_nudge_selection(bool duplicate_selected) const {
+  return impl_->can_nudge_selection(duplicate_selected);
+}
+
+std::uint64_t ModelingSessionService::nudge_selection_eligibility_build_count() const {
+  return impl_->nudge_selection_eligibility_build_count();
+}
+
+ModelingCommandResult ModelingSessionService::nudge_selection(
+    const ModelingResolvedNudgeRequest &request,
+    DocumentCommandService &document_commands, EditorHistoryService &history,
+    const ModelingStructuralDuplicate &structural_duplicate) {
+  return impl_->nudge_selection(request, document_commands, history, structural_duplicate);
 }
 
 ModelingCommandResult

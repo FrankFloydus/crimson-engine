@@ -643,7 +643,9 @@ void log_command_failure(std::string_view source,
 
 bool apply_keybinding_dispatch(QuaderEditorApi &editor,
                                const QuaderViewportKeybindingDispatch &dispatch,
-                               ViewportInputFrame &input) {
+                               ViewportInputFrame &input,
+                               ViewportRuntimeBindingToken runtime_binding,
+                               std::vector<QuaderViewportKeybindingRepeat> *repeat_bindings) {
   switch (dispatch.kind) {
   case QuaderViewportKeybindingDispatch::Kind::PendingChord:
     input.keybinding_input_consumed = true;
@@ -656,11 +658,16 @@ bool apply_keybinding_dispatch(QuaderEditorApi &editor,
   case QuaderViewportKeybindingDispatch::Kind::ViewportShortcut:
     input.resolved_shortcuts.push_back(dispatch.shortcut);
     return true;
-  case QuaderViewportKeybindingDispatch::Kind::Command:
-    log_command_failure("Keybinding command",
-                        editor.commands().execute(dispatch.command_id));
+  case QuaderViewportKeybindingDispatch::Kind::Command: {
+    const auto result = editor.commands().execute(dispatch.command_id);
+    log_command_failure("Keybinding command", result);
+    if (runtime_binding.current() && repeat_bindings != nullptr &&
+        result.ok() && result.changed() && dispatch.repeat_binding.has_value()) {
+      repeat_bindings->push_back(*dispatch.repeat_binding);
+    }
     input.keybinding_input_consumed = true;
     return true;
+  }
   case QuaderViewportKeybindingDispatch::Kind::NoMatch:
     return false;
   }
@@ -701,7 +708,8 @@ void ViewportKeybindingResolver::resolve(
     std::vector<QuaderInputChord> &suppressed_chords,
     double &linear_array_wheel_remainder,
     double &radial_array_wheel_remainder,
-    ViewportRuntimeBindingToken runtime_binding) {
+    ViewportRuntimeBindingToken runtime_binding,
+    std::vector<QuaderViewportKeybindingRepeat> *repeat_bindings) {
   input.resolved_shortcuts.clear();
   input.navigation_bindings = {};
   input.transform_vertex_snap_down = false;
@@ -738,21 +746,88 @@ void ViewportKeybindingResolver::resolve(
   if (!input.viewport_focused || input.text_input_active) {
     editor.commands().reset_pending_viewport_keybinding_chord();
     suppressed_chords.clear();
+    if (repeat_bindings != nullptr) repeat_bindings->clear();
     return;
+  }
+  if (repeat_bindings != nullptr &&
+      (input.navigation_active || input.modal_tool_active ||
+       input.active_tool_owns_viewport || input.active_transform_drag ||
+       input.operation_preview_active)) {
+    repeat_bindings->clear();
   }
 
   bool wheel_event_resolved_linear_array_action = false;
   bool wheel_event_resolved_radial_array_action = false;
   const std::uint64_t edit_generation = editor.mode().generation();
   std::size_t wheel_input_edge_offset = 0u;
+  std::size_t repeat_input_edge_offset = 0u;
   bool dispatch_continues = runtime_binding.current();
   PointerEdgeProvenanceCursor pointer_edge_cursor;
   dispatch_ordered_viewport_input_edges(
-      input.pressed_input_chords, input.wheel_input_edges,
+      input.pressed_input_chords, input.repeated_input_edges, input.wheel_input_edges,
       [&](const QuaderInputChord &chord, ViewportInputEdgeKind kind,
           double wheel_step_delta) {
         if (!dispatch_continues) {
           return true;
+        }
+        if (kind == ViewportInputEdgeKind::Repeated) {
+          const auto &repeat = input.repeated_input_edges[repeat_input_edge_offset++];
+          if (repeat_bindings == nullptr) return true;
+          const auto &navigation = input.navigation_bindings;
+          if (input.navigation_active || navigation.orbit_pressed ||
+              navigation.orbit_snap_pressed || navigation.pan_pressed ||
+              navigation.fly_pressed) {
+            repeat_bindings->clear();
+            return true;
+          }
+          const auto binding = std::find_if(
+              repeat_bindings->begin(), repeat_bindings->end(),
+              [&](const auto &accepted) {
+                return !accepted.sequence.empty() && accepted.sequence.back() == chord;
+              });
+          if (binding == repeat_bindings->end()) return true;
+          if (!editor.commands().can_repeat_viewport_input_binding(
+                  *binding, state, input.viewport_focused,
+                  input.text_input_active, keybinding_context(input))) {
+            repeat_bindings->erase(binding);
+            return true;
+          }
+          const auto command_id = editor.commands().resolve_repeated_viewport_input_command(
+              *binding, state, input.viewport_focused, input.text_input_active,
+              keybinding_context(input), repeat.shift_held.value_or(chord.shift));
+          // An unassigned or conflicting Shift variant skips this repeat while
+          // the accepted physical hold remains eligible when Shift changes back.
+          if (!command_id.has_value()) return true;
+          // Copy before dispatch: a synchronous command may rebind the panel
+          // and clear its retained tokens while this stack is still active.
+          const auto accepted = *binding;
+          const auto result = editor.commands().execute(*command_id);
+          log_command_failure("Repeated keybinding command", result);
+          input.keybinding_input_consumed = true;
+          if (!runtime_binding.current()) {
+            dispatch_continues = false;
+            return true;
+          }
+          if (!result.ok() || !result.changed()) {
+            std::erase_if(*repeat_bindings, [&](const auto &retained) {
+              return retained.sequence == accepted.sequence;
+            });
+          }
+          return true;
+        }
+        if (kind == ViewportInputEdgeKind::Pressed &&
+            chord.device == QuaderInputDevice::Keyboard) {
+          // Every true press begins a new physical hold, including a complete
+          // release/repress cycle coalesced into this host frame.
+          std::erase_if(suppressed_chords, [&](const auto &suppressed) {
+            return suppressed.device == QuaderInputDevice::Keyboard &&
+                   suppressed.key == chord.key;
+          });
+          if (repeat_bindings != nullptr) {
+            std::erase_if(*repeat_bindings, [&](const auto &accepted) {
+              return !accepted.sequence.empty() && accepted.sequence.back().key == chord.key;
+            });
+          }
         }
         if (chord.device == QuaderInputDevice::Mouse &&
             editor.mode().generation() != edit_generation) {
@@ -895,10 +970,19 @@ void ViewportKeybindingResolver::resolve(
             },
             [&](const QuaderInputChord &candidate,
                 ViewportInputEdgeKind edge_kind) {
+              auto dispatch_context = keybinding_context(input);
+              const auto &navigation = input.navigation_bindings;
+              dispatch_context.fly_navigation_active |= navigation.fly_pressed;
+              dispatch_context.orbit_navigation_active |=
+                  navigation.orbit_pressed || navigation.orbit_snap_pressed;
+              dispatch_context.pan_navigation_active |= navigation.pan_pressed;
+              dispatch_context.navigation_active |= navigation.fly_pressed ||
+                  navigation.orbit_pressed || navigation.orbit_snap_pressed ||
+                  navigation.pan_pressed;
               const QuaderViewportKeybindingDispatch dispatch =
                   editor.commands().dispatch_viewport_input_binding(
                       candidate, state, input.viewport_focused,
-                      input.text_input_active, keybinding_context(input));
+                      input.text_input_active, dispatch_context);
               if (dispatch.kind == QuaderViewportKeybindingDispatch::Kind::
                                        ViewportInputAction) {
                 stateful_dispatch_handled =
@@ -907,7 +991,8 @@ void ViewportKeybindingResolver::resolve(
                 return stateful_dispatch_handled;
               }
               stateful_dispatch_handled =
-                  apply_keybinding_dispatch(editor, dispatch, input);
+                  apply_keybinding_dispatch(editor, dispatch, input,
+                                            runtime_binding, repeat_bindings);
               stateful_dispatch_suppresses_chord =
                   stateful_dispatch_handled;
               return stateful_dispatch_handled;
@@ -960,7 +1045,18 @@ void ViewportKeybindingResolver::resolve(
       });
 
   if (!dispatch_continues) {
+    if (repeat_bindings != nullptr) repeat_bindings->clear();
     return;
+  }
+  if (repeat_bindings != nullptr) {
+    const auto &navigation = input.navigation_bindings;
+    const bool navigation_started = navigation.orbit_pressed || navigation.orbit_snap_pressed ||
+        navigation.pan_pressed || navigation.fly_pressed;
+    std::erase_if(*repeat_bindings, [&](const auto &accepted) {
+      return navigation_started || accepted.sequence.empty() ||
+          std::find(input.active_input_chords.begin(), input.active_input_chords.end(),
+                    accepted.sequence.back()) == input.active_input_chords.end();
+    });
   }
 
   for (const QuaderInputChord &chord : input.active_input_chords) {

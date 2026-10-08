@@ -258,6 +258,100 @@ TEST(PublicReleaseCommands, DisabledToolActivationPreservesActivePrimitivePrevie
   }
 }
 
+TEST(PublicReleaseCommands, KeyboardNudgesHaveDefaultsAndExecuteThroughPublicProfile) {
+  auto standalone = create_standalone_editor();
+  auto &editor = standalone.editor();
+  constexpr std::array<std::pair<QuaderCommandId, std::string_view>, 16> kCommands{{
+      {quader_command::kViewportNudgeMoveUp, "Up"},
+      {quader_command::kViewportNudgeMoveDown, "Down"},
+      {quader_command::kViewportNudgeMoveLeft, "Left"},
+      {quader_command::kViewportNudgeMoveRight, "Right"},
+      {quader_command::kViewportNudgeRotateUp, "Alt+Up"},
+      {quader_command::kViewportNudgeRotateDown, "Alt+Down"},
+      {quader_command::kViewportNudgeRotateLeft, "Alt+Left"},
+      {quader_command::kViewportNudgeRotateRight, "Alt+Right"},
+      {quader_command::kViewportNudgeDuplicateOrExtrudeMoveUp, "Shift+Up"},
+      {quader_command::kViewportNudgeDuplicateOrExtrudeMoveDown, "Shift+Down"},
+      {quader_command::kViewportNudgeDuplicateOrExtrudeMoveLeft, "Shift+Left"},
+      {quader_command::kViewportNudgeDuplicateOrExtrudeMoveRight, "Shift+Right"},
+      {quader_command::kViewportNudgeDuplicateOrExtrudeRotateUp, "Shift+Alt+Up"},
+      {quader_command::kViewportNudgeDuplicateOrExtrudeRotateDown, "Shift+Alt+Down"},
+      {quader_command::kViewportNudgeDuplicateOrExtrudeRotateLeft, "Shift+Alt+Left"},
+      {quader_command::kViewportNudgeDuplicateOrExtrudeRotateRight, "Shift+Alt+Right"}}};
+  const auto box = editor.modeling().create_box(
+      {.min = {-0.5F, -1.0F, -1.5F}, .max = {0.5F, 1.0F, 1.5F}}, "Nudge selection");
+  ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(editor.viewports().focus_pane(ViewportPaneId::Perspective).ok());
+  ASSERT_TRUE(editor.viewports().set_view(ViewportPaneId::Perspective, ViewportView::Back).ok());
+  ASSERT_TRUE(editor.viewports().set_control(QuaderViewportControl::SnappingEnabled, false).ok());
+  const auto tool = editor.tools().active_tool();
+  const auto catalog = editor.commands().keybinding_catalog();
+  for (const auto &[command, shortcut] : kCommands) {
+    SCOPED_TRACE(command.string());
+    EXPECT_TRUE(editor.commands().descriptor(command).has_value());
+    EXPECT_EQ(editor.commands().shortcut_for(command), shortcut);
+    EXPECT_TRUE(std::ranges::any_of(catalog, [&](const auto &entry) {
+      return std::ranges::find(entry.target_ids, command.string()) != entry.target_ids.end();
+    }));
+    const auto result = editor.commands().execute(command);
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    EXPECT_TRUE(result.changed());
+    EXPECT_EQ(editor.tools().active_tool(), tool);
+  }
+}
+
+TEST(PublicReleaseCommands, ModifiedNudgeBindingExtrudesFacesAndUndoesThroughPublicProfile) {
+  auto standalone = create_standalone_editor();
+  auto &editor = standalone.editor();
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  quader_poly::Document document;
+  const std::array vertices{
+      quader_poly::add_vertex(document, {1, -1, -1}),
+      quader_poly::add_vertex(document, {1, 1, -1}),
+      quader_poly::add_vertex(document, {1, 1, 1}),
+      quader_poly::add_vertex(document, {1, -1, 1})};
+  const auto face = quader_poly::add_face(document, vertices);
+  ASSERT_NE(face, quader_poly::kInvalidElementId);
+  const auto object = editor.modeling().create_mesh(
+      QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+      {.name = "Public Modified Nudge Face"});
+  ASSERT_TRUE(object.ok()) << object.error_message();
+  ASSERT_TRUE(editor.selection().select_object(object.value()).ok());
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(object.value(), static_cast<QuaderElementId>(face)).ok());
+  ASSERT_TRUE(editor.viewports().set_view(editor.viewports().focused_pane(), ViewportView::Back).ok());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::Scale).ok());
+  const auto before = capture_command_observable_state(editor);
+  const auto mesh_before = editor.query().compiled_object_mesh(object.value());
+  ASSERT_TRUE(mesh_before.has_value());
+  const auto descriptor = editor.commands().descriptor(
+      quader_command::kViewportNudgeDuplicateOrExtrudeMoveRight);
+  ASSERT_TRUE(descriptor.has_value());
+  ASSERT_TRUE(descriptor->enabled);
+  const auto dispatch = editor.commands().dispatch_viewport_input_binding(
+      single_chord("Shift+Right"), {.active_tool = ViewportToolId::Scale}, true, false);
+  ASSERT_EQ(dispatch.kind, QuaderViewportKeybindingDispatch::Kind::Command);
+  ASSERT_EQ(dispatch.command_id, quader_command::kViewportNudgeDuplicateOrExtrudeMoveRight.string());
+  const auto extruded = editor.commands().execute(dispatch.command_id);
+  ASSERT_TRUE(extruded.ok()) << extruded.error_message();
+  ASSERT_TRUE(extruded.changed());
+  const auto mesh_after = editor.query().compiled_object_mesh(object.value());
+  ASSERT_TRUE(mesh_after.has_value());
+  EXPECT_GT(mesh_after->face_textures.size(), mesh_before->face_textures.size());
+  EXPECT_EQ(editor.selection().summary().mode, QuaderSelectionMode::Face);
+  EXPECT_EQ(editor.selection().summary().selected_face_count, 1U);
+  EXPECT_EQ(editor.tools().active_tool(), "scale");
+  ASSERT_TRUE(editor.history().undo().ok());
+  const auto restored = capture_command_observable_state(editor);
+  for (const auto domain : {CommandObservableDomain::Scene, CommandObservableDomain::Geometry,
+                            CommandObservableDomain::Selection, CommandObservableDomain::Overlay,
+                            CommandObservableDomain::Tools}) {
+    EXPECT_EQ(restored.domain(domain), before.domain(domain));
+  }
+}
+
 TEST(PublicReleaseCommands, LassoSelectionIsAvailableThroughCommandsAndTools) {
   auto standalone = create_standalone_editor();
   auto &editor = standalone.editor();

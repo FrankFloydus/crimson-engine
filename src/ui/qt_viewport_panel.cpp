@@ -658,6 +658,7 @@ void log_command_failure(std::string_view source,
 bool has_input_activity(const QtViewportInputFrame &frame) {
   return frame.pointer_activity() ||
          !frame.input.pressed_input_chords.empty() ||
+         !frame.input.repeated_input_edges.empty() ||
          !frame.input.released_input_chords.empty() ||
          !frame.input.wheel_input_edges.empty();
 }
@@ -959,6 +960,7 @@ void QtViewportPanel::abandon_interactions() {
   active_box_preview_ = {};
   modal_tool_dragging_ = false;
   suppressed_keybinding_chords_.clear();
+  repeated_keybinding_commands_.clear();
   command_pointer_release_suppression_ = {};
   linear_array_wheel_remainder_ = 0.0;
   radial_array_wheel_remainder_ = 0.0;
@@ -3869,6 +3871,7 @@ void QtViewportPanel::process_viewport_input(
       .focused_pane = workspace_->focused_pane(),
   });
   if (!input_pane.has_value()) {
+    repeated_keybinding_commands_.clear();
     pending_marking_menu_gesture_.reset();
     interaction_controller_.cancel_pending_material_interaction();
     interaction_controller_.cancel_pending_selection_click();
@@ -3974,17 +3977,22 @@ void QtViewportPanel::process_viewport_input(
   const bool keybinding_edge_can_change_tool =
       !input.pressed_input_chords.empty() ||
       !input.wheel_input_edges.empty();
+  std::erase_if(repeated_keybinding_commands_, [&](const auto &binding) {
+    return binding.pane != *input_pane;
+  });
   ViewportKeybindingResolver::resolve(
       editor, input_router_.state(), input, suppressed_keybinding_chords_,
       linear_array_wheel_remainder_, radial_array_wheel_remainder_,
       {.current_generation = &runtime_binding_generation_,
-       .expected_generation = input_binding_generation});
+       .expected_generation = input_binding_generation},
+      &repeated_keybinding_commands_);
   if (runtime_binding_generation_ != input_binding_generation) {
     // A synchronous command (for example Close Scene) rebound every runtime
     // owner while this stack still holds references to the previous scene.
     // The rebind has already abandoned Qt-owned state, so no old owner may be
     // observed again in this input frame.
     suppressed_keybinding_chords_.clear();
+    repeated_keybinding_commands_.clear();
     linear_array_wheel_remainder_ = 0.0;
     radial_array_wheel_remainder_ = 0.0;
     return;
@@ -4490,6 +4498,7 @@ void QtViewportPanel::process_viewport_input(
       // before the surface regains ownership of the next editing gesture.
       pane_state.surface->abandon_input();
       suppressed_keybinding_chords_.clear();
+      repeated_keybinding_commands_.clear();
       editor.commands().reset_pending_viewport_keybinding_chord();
       if (changed) {
         hover_controller_.invalidate();

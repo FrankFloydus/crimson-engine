@@ -9109,7 +9109,8 @@ public:
                 found->transform.origin, closed_edge_ledge_size);
           case ModelingSdkTransformPreviewKind::TransformExtrude:
             return document.transform_extrude_selected_elements(
-                found->transform);
+                found->transform, {},
+                closed_edge_ledge_size > 0.0F ? closed_edge_ledge_size : 1.0F);
           case ModelingSdkTransformPreviewKind::Inset:
             return document.inset_selected_elements(found->transform, {});
           }

@@ -69,6 +69,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -16593,6 +16594,106 @@ TEST(ViewportHostInteractionPolicyTests,
 }
 
 TEST(ViewportHostInteractionPolicyTests,
+     OrderedEdgesMergeSparseRepeatsBeforeTheirNextPhysicalPress) {
+  using quader::QuaderInputChord;
+  using quader::QuaderInputDevice;
+  using quader::QuaderKeyCode;
+  using quader::ViewportInputEdgeKind;
+  const QuaderInputChord left{
+      .shift = true,
+      .device = QuaderInputDevice::Keyboard,
+      .key = QuaderKeyCode::Left,
+  };
+  const QuaderInputChord right{
+      .primary = true,
+      .device = QuaderInputDevice::Keyboard,
+      .key = QuaderKeyCode::Right,
+  };
+  const std::vector<QuaderInputChord> pressed{
+      {.device = QuaderInputDevice::Keyboard, .key = QuaderKeyCode::W},
+      {.device = QuaderInputDevice::Keyboard, .key = QuaderKeyCode::E},
+  };
+  const std::vector<quader::QuaderKeyboardRepeatInputEdge> repeated{
+      {.chord = left, .pressed_chord_offset = 0U},
+      {.chord = right, .pressed_chord_offset = 0U},
+      {.chord = left, .pressed_chord_offset = 1U},
+      {.chord = right, .pressed_chord_offset = 2U},
+  };
+  std::vector<std::pair<QuaderInputChord, ViewportInputEdgeKind>> dispatched;
+
+  quader::dispatch_ordered_viewport_input_edges(
+      pressed, repeated, {},
+      [&](const QuaderInputChord &chord, ViewportInputEdgeKind kind,
+          double wheel_step_delta) {
+        EXPECT_DOUBLE_EQ(wheel_step_delta, 0.0);
+        dispatched.emplace_back(chord, kind);
+        return true;
+      });
+
+  EXPECT_EQ(dispatched,
+            (std::vector<std::pair<QuaderInputChord, ViewportInputEdgeKind>>{
+                {left, ViewportInputEdgeKind::Repeated},
+                {right, ViewportInputEdgeKind::Repeated},
+                {pressed[0], ViewportInputEdgeKind::Pressed},
+                {left, ViewportInputEdgeKind::Repeated},
+                {pressed[1], ViewportInputEdgeKind::Pressed},
+                {right, ViewportInputEdgeKind::Repeated},
+            }));
+}
+
+TEST(ViewportHostInteractionPolicyTests,
+     RepeatOnlyFrameDispatchesBeforeWheelFallbackAndCompletion) {
+  const quader::QuaderInputChord repeated_chord{
+      .device = quader::QuaderInputDevice::Keyboard,
+      .key = quader::QuaderKeyCode::Right,
+  };
+  const std::vector<quader::QuaderKeyboardRepeatInputEdge> repeated{
+      {.chord = repeated_chord, .pressed_chord_offset = 0U},
+      {.chord = repeated_chord, .pressed_chord_offset = 0U},
+  };
+  const quader::QuaderInputChord generic{
+      .device = quader::QuaderInputDevice::Mouse,
+      .gesture = quader::QuaderInputGesture::Wheel,
+  };
+  const quader::QuaderInputChord up{
+      .device = quader::QuaderInputDevice::Mouse,
+      .gesture = quader::QuaderInputGesture::WheelUp,
+  };
+  const std::vector<quader::QuaderWheelInputEdge> wheel{
+      {.chord = generic, .step_delta = 0.6},
+      {.chord = up, .step_delta = 0.6},
+  };
+  std::vector<std::string_view> dispatched;
+
+  quader::dispatch_ordered_viewport_input_edges(
+      {}, repeated, wheel,
+      [&](const quader::QuaderInputChord &chord,
+          quader::ViewportInputEdgeKind kind, double wheel_step_delta) {
+        if (kind == quader::ViewportInputEdgeKind::Repeated) {
+          EXPECT_EQ(chord, repeated_chord);
+          EXPECT_DOUBLE_EQ(wheel_step_delta, 0.0);
+          dispatched.push_back("repeat");
+          return false;
+        }
+        EXPECT_EQ(kind, quader::ViewportInputEdgeKind::Wheel);
+        EXPECT_DOUBLE_EQ(wheel_step_delta, 0.6);
+        const bool generic_fallback =
+            chord.gesture == quader::QuaderInputGesture::Wheel;
+        dispatched.push_back(generic_fallback ? "wheel" : "up");
+        return generic_fallback;
+      },
+      [&](std::span<const quader::QuaderWheelInputEdge> physical_event) {
+        ASSERT_EQ(physical_event.size(), 2U);
+        EXPECT_EQ(physical_event[0].chord, generic);
+        EXPECT_EQ(physical_event[1].chord, up);
+        dispatched.push_back("complete");
+      });
+
+  EXPECT_EQ(dispatched, (std::vector<std::string_view>{
+                            "repeat", "repeat", "up", "wheel", "complete"}));
+}
+
+TEST(ViewportHostInteractionPolicyTests,
      StatefulDispatchPrecedesStatelessActionsAndPendingOwnsMismatch) {
   const quader::QuaderInputChord continuation{
       .device = quader::QuaderInputDevice::Keyboard,
@@ -19068,4 +19169,632 @@ TEST(ViewportOperationInputContextTests,
   EXPECT_EQ(context.navigation, quader::QuaderInputNavigation::Orbit);
   EXPECT_TRUE(context.orbit_snap_active);
   EXPECT_FALSE(context.alt);
+}
+
+namespace {
+
+/// Retains the same repeat ownership a native viewport keeps across frames.
+struct ViewportNudgeRepeatScenario {
+  ViewportInteractionHarness harness;
+  quader::QuaderModelingObjectRef box;
+  quader::TransformComponent baseline;
+  std::vector<quader::QuaderInputChord> suppressed;
+  std::vector<quader::QuaderViewportKeybindingRepeat> repeat_bindings;
+  double linear_remainder = 0.0;
+  double radial_remainder = 0.0;
+  std::filesystem::path binding_path =
+      std::filesystem::temp_directory_path() /
+      ("quader-nudge-repeat-" +
+       std::to_string(std::chrono::steady_clock::now()
+                          .time_since_epoch().count()) + ".json");
+
+  ~ViewportNudgeRepeatScenario() {
+    std::error_code ignored;
+    std::filesystem::remove(binding_path, ignored);
+  }
+
+  void initialize(std::string shortcut = "Ctrl+Alt+J") {
+    ASSERT_TRUE(harness.editor.commands()
+                    .set_keybinding_storage_path(binding_path).ok());
+    ASSERT_TRUE(harness.editor.commands().reset_all_shortcuts().ok());
+    ASSERT_TRUE(harness.editor.commands()
+                    .set_shortcut(quader::quader_command::kViewportNudgeMoveRight,
+                                  std::move(shortcut)).ok());
+    ASSERT_TRUE(harness.editor.viewports()
+                    .set_layout(quader::ViewportLayoutId::FourQuad).ok());
+    ASSERT_TRUE(harness.editor.viewports()
+                    .focus_pane(quader::ViewportPaneId::Perspective).ok());
+    ASSERT_TRUE(harness.editor.viewports()
+                    .set_view(quader::ViewportPaneId::Perspective,
+                              quader::ViewportView::Back).ok());
+    ASSERT_TRUE(harness.editor.viewports()
+                    .set_transform_space(quader::QuaderTransformSpace::Global)
+                    .ok());
+    ASSERT_TRUE(harness.editor.viewports()
+                    .set_control(quader::QuaderViewportControl::SnappingEnabled,
+                                 false).ok());
+    box = create_unit_box(harness);
+    ASSERT_TRUE(enter_selection_context(
+                    harness.editor, quader::QuaderSelectionMode::Object).ok());
+    ASSERT_TRUE(harness.editor.selection().select_object(box).ok());
+    ASSERT_NE(harness.session.scene().transform(box.entity), nullptr);
+    baseline = *harness.session.scene().transform(box.entity);
+    harness.input.orthographic_view = true;
+    harness.session.history().clear();
+  }
+
+  static quader::QuaderInputChord chord(std::string_view shortcut) {
+    const auto parsed = quader::quader_input_parse_shortcut(shortcut);
+    EXPECT_TRUE(parsed.has_value());
+    EXPECT_EQ(parsed ? parsed->size() : 0U, 1U);
+    return parsed && parsed->size() == 1U ? parsed->front()
+                                        : quader::QuaderInputChord{};
+  }
+
+  void resolve(quader::ViewportRuntimeBindingToken runtime_binding = {}) {
+    harness.input.keybinding_input_consumed = false;
+    quader::ViewportKeybindingResolver::resolve(
+        harness.editor, harness.router.state(), harness.input, suppressed,
+        linear_remainder, radial_remainder, runtime_binding, &repeat_bindings);
+    harness.input.pressed_input_chords.clear();
+    harness.input.repeated_input_edges.clear();
+    harness.input.released_input_chords.clear();
+  }
+
+  void expect_nudges(std::size_t count) {
+    ASSERT_NE(harness.session.scene().transform(box.entity), nullptr);
+    auto expected = baseline;
+    expected.position.x += static_cast<float>(count);
+    expect_transform_near(*harness.session.scene().transform(box.entity),
+                          expected);
+    EXPECT_EQ(harness.session.history().undo_count(), count);
+  }
+
+  void bind_shift_variant(std::string shortcut) {
+    const auto result = harness.editor.commands().set_shortcut(
+        quader::quader_command::kViewportNudgeDuplicateOrExtrudeMoveRight,
+        std::move(shortcut));
+    ASSERT_TRUE(result.ok()) << result.error_message();
+  }
+
+  void expect_objects_at_x(std::vector<float> positions,
+                           std::size_t undo_count, float selected_x) {
+    const auto entities = harness.session.scene().entities();
+    ASSERT_EQ(entities.size(), positions.size());
+    std::vector<float> actual_positions;
+    for (const auto entity : entities) {
+      const auto *transform = harness.session.scene().transform(entity);
+      ASSERT_NE(transform, nullptr);
+      auto expected = baseline;
+      expected.position.x = transform->position.x;
+      expect_transform_near(*transform, expected);
+      actual_positions.push_back(transform->position.x - baseline.position.x);
+    }
+    std::sort(actual_positions.begin(), actual_positions.end());
+    std::sort(positions.begin(), positions.end());
+    for (std::size_t index = 0U; index < positions.size(); ++index) {
+      EXPECT_NEAR(actual_positions[index], positions[index], 0.0001f);
+    }
+    const auto selected = selected_entities(harness);
+    ASSERT_EQ(selected.size(), 1U);
+    const auto *selected_transform =
+        harness.session.scene().transform(selected.front());
+    ASSERT_NE(selected_transform, nullptr);
+    EXPECT_NEAR(selected_transform->position.x,
+                baseline.position.x + selected_x, 0.0001f);
+    EXPECT_EQ(harness.session.history().undo_count(), undo_count);
+  }
+};
+
+} // namespace
+
+TEST(ViewportKeybindingRepeatTests,
+     RemappedNudgePreservesEveryRepeatAndReleaseWithoutFinalHold) {
+  for (const bool coalesced : {false, true}) {
+    SCOPED_TRACE(coalesced);
+    ViewportNudgeRepeatScenario scenario;
+    scenario.initialize();
+    auto &input = scenario.harness.input;
+    const auto chord = scenario.chord("Ctrl+Alt+J");
+    input.pressed_input_chords = {chord};
+    if (!coalesced) {
+      input.active_input_chords = {chord};
+      scenario.resolve();
+      scenario.expect_nudges(1U);
+      ASSERT_EQ(scenario.repeat_bindings.size(), 1U);
+    }
+    const std::size_t offset = coalesced ? 1U : 0U;
+    input.repeated_input_edges = {{chord, offset}, {chord, offset},
+                                 {chord, offset}};
+    input.active_input_chords.clear();
+    input.released_input_chords = {chord};
+    scenario.resolve();
+    scenario.expect_nudges(4U);
+    EXPECT_TRUE(scenario.repeat_bindings.empty());
+    EXPECT_FALSE(scenario.harness.editor.commands().has_pending_keybinding_chord());
+
+    for (std::size_t remaining = 4U; remaining > 0U; --remaining) {
+      ASSERT_TRUE(scenario.harness.editor.history().undo().ok());
+      scenario.expect_nudges(remaining - 1U);
+    }
+    for (std::size_t count = 1U; count <= 4U; ++count) {
+      ASSERT_TRUE(scenario.harness.editor.history().redo().ok());
+      scenario.expect_nudges(count);
+    }
+    input.repeated_input_edges = {{chord, 0U}};
+    scenario.resolve();
+    scenario.expect_nudges(4U);
+  }
+}
+
+TEST(ViewportKeybindingRepeatTests,
+     FreshPressAfterReleaseRetainsItsNewRepeatOwnershipInTheSameFrame) {
+  ViewportNudgeRepeatScenario scenario;
+  scenario.initialize();
+  auto &input = scenario.harness.input;
+  const auto chord = scenario.chord("Ctrl+Alt+J");
+  input.pressed_input_chords = {chord};
+  input.active_input_chords = {chord};
+  scenario.resolve();
+  scenario.expect_nudges(1U);
+
+  input.repeated_input_edges = {{chord, 0U}, {chord, 1U}};
+  input.released_input_chords = {chord};
+  input.pressed_input_chords = {chord};
+  scenario.resolve();
+  scenario.expect_nudges(4U);
+  ASSERT_EQ(scenario.repeat_bindings.size(), 1U);
+
+  input.repeated_input_edges = {{chord, 0U}};
+  scenario.resolve();
+  scenario.expect_nudges(5U);
+  input.active_input_chords.clear();
+  input.released_input_chords = {chord};
+  scenario.resolve();
+  EXPECT_TRUE(scenario.repeat_bindings.empty());
+  ASSERT_TRUE(scenario.harness.editor.history().undo().ok());
+  scenario.expect_nudges(4U);
+}
+
+TEST(ViewportKeybindingRepeatTests,
+     RepeatedPrefixDoesNotAdvanceSequenceAndCompletedFinalChordRepeats) {
+  ViewportNudgeRepeatScenario scenario;
+  scenario.initialize("Ctrl+Alt+J Ctrl+Alt+K");
+  auto &input = scenario.harness.input;
+  const auto prefix = scenario.chord("Ctrl+Alt+J");
+  const auto final_chord = scenario.chord("Ctrl+Alt+K");
+  input.pressed_input_chords = {prefix};
+  input.active_input_chords = {prefix};
+  input.repeated_input_edges = {{prefix, 1U}, {prefix, 1U}};
+  scenario.resolve();
+  scenario.expect_nudges(0U);
+  ASSERT_TRUE(scenario.harness.editor.commands().has_pending_keybinding_chord());
+  EXPECT_TRUE(scenario.repeat_bindings.empty());
+
+  input.active_input_chords.clear();
+  input.released_input_chords = {prefix};
+  scenario.resolve();
+  ASSERT_TRUE(scenario.harness.editor.commands().has_pending_keybinding_chord());
+  input.pressed_input_chords = {final_chord};
+  input.active_input_chords = {final_chord};
+  input.repeated_input_edges = {{final_chord, 1U}, {final_chord, 1U}};
+  scenario.resolve();
+  scenario.expect_nudges(3U);
+  EXPECT_FALSE(scenario.harness.editor.commands().has_pending_keybinding_chord());
+  ASSERT_EQ(scenario.repeat_bindings.size(), 1U);
+
+  input.repeated_input_edges = {{prefix, 0U}, {final_chord, 0U}};
+  scenario.resolve();
+  scenario.expect_nudges(4U);
+  EXPECT_FALSE(scenario.harness.editor.commands().has_pending_keybinding_chord());
+  ASSERT_TRUE(scenario.harness.editor.history().undo().ok());
+  scenario.expect_nudges(3U);
+}
+
+TEST(ViewportKeybindingRepeatTests,
+     UnacceptedFirstPressCannotStartNudgingWhenSelectionBecomesAvailable) {
+  ViewportNudgeRepeatScenario scenario;
+  scenario.initialize();
+  auto &harness = scenario.harness;
+  const auto chord = scenario.chord("Ctrl+Alt+J");
+  ASSERT_TRUE(harness.editor.selection().clear().ok());
+  harness.session.history().clear();
+  harness.input.pressed_input_chords = {chord};
+  harness.input.active_input_chords = {chord};
+  scenario.resolve();
+  scenario.expect_nudges(0U);
+  EXPECT_TRUE(scenario.repeat_bindings.empty());
+
+  ASSERT_TRUE(harness.editor.selection().select_object(scenario.box).ok());
+  harness.session.history().clear();
+  harness.input.repeated_input_edges = {{chord, 0U}, {chord, 0U}};
+  scenario.resolve();
+  scenario.expect_nudges(0U);
+  harness.input.active_input_chords.clear();
+  harness.input.released_input_chords = {chord};
+  scenario.resolve();
+  harness.input.pressed_input_chords = {chord};
+  harness.input.active_input_chords = {chord};
+  scenario.resolve();
+  scenario.expect_nudges(1U);
+}
+
+TEST(ViewportKeybindingRepeatTests,
+     ContextRemappingPaneAndRuntimeRebindPermanentlyRetireRepeat) {
+  enum class Interruption {
+    Focus,
+    Text,
+    Navigation,
+    ModalTool,
+    ToolOwnership,
+    TransformDrag,
+    OperationPreview,
+    Remapping,
+    Pane,
+    RuntimeRebind,
+  };
+  for (const auto interruption : {
+           Interruption::Focus, Interruption::Text, Interruption::Navigation,
+           Interruption::ModalTool, Interruption::ToolOwnership,
+           Interruption::TransformDrag, Interruption::OperationPreview,
+           Interruption::Remapping, Interruption::Pane,
+           Interruption::RuntimeRebind}) {
+    SCOPED_TRACE(static_cast<int>(interruption));
+    ViewportNudgeRepeatScenario scenario;
+    scenario.initialize();
+    auto &harness = scenario.harness;
+    auto &input = harness.input;
+    const auto chord = scenario.chord("Ctrl+Alt+J");
+    input.pressed_input_chords = {chord};
+    input.active_input_chords = {chord};
+    scenario.resolve();
+    scenario.expect_nudges(1U);
+    ASSERT_EQ(scenario.repeat_bindings.size(), 1U);
+    std::uint64_t runtime_generation = 2U;
+    quader::ViewportRuntimeBindingToken runtime_binding;
+    switch (interruption) {
+    case Interruption::Focus:
+      input.viewport_focused = false;
+      break;
+    case Interruption::Text:
+      input.text_input_active = true;
+      break;
+    case Interruption::Navigation:
+      input.navigation_active = true;
+      break;
+    case Interruption::ModalTool:
+      input.modal_tool_active = true;
+      break;
+    case Interruption::ToolOwnership:
+      input.active_tool_owns_viewport = true;
+      break;
+    case Interruption::TransformDrag:
+      input.active_transform_drag = true;
+      break;
+    case Interruption::OperationPreview:
+      input.operation_preview_active = true;
+      break;
+    case Interruption::Remapping:
+      ASSERT_TRUE(harness.editor.commands()
+                      .set_shortcut(quader::quader_command::kViewportNudgeMoveRight,
+                                    "Ctrl+Alt+L").ok());
+      break;
+    case Interruption::Pane:
+      ASSERT_TRUE(harness.editor.viewports()
+                      .focus_pane(quader::ViewportPaneId::Top).ok());
+      break;
+    case Interruption::RuntimeRebind:
+      runtime_binding = {&runtime_generation, 1U};
+      break;
+    }
+    if (interruption == Interruption::Remapping ||
+        interruption == Interruption::Pane ||
+        interruption == Interruption::RuntimeRebind) {
+      input.repeated_input_edges = {{chord, 0U}, {chord, 0U}};
+    }
+    // An idle frame in a competing context must retire the physical hold too.
+    scenario.resolve(runtime_binding);
+    scenario.expect_nudges(1U);
+    EXPECT_TRUE(scenario.repeat_bindings.empty());
+
+    input.viewport_focused = true;
+    input.text_input_active = false;
+    input.navigation_active = false;
+    input.modal_tool_active = false;
+    input.active_tool_owns_viewport = false;
+    input.active_transform_drag = false;
+    input.operation_preview_active = false;
+    if (interruption == Interruption::Remapping) {
+      ASSERT_TRUE(harness.editor.commands()
+                      .set_shortcut(quader::quader_command::kViewportNudgeMoveRight,
+                                    "Ctrl+Alt+J").ok());
+    }
+    ASSERT_TRUE(harness.editor.viewports()
+                    .focus_pane(quader::ViewportPaneId::Perspective).ok());
+    input.repeated_input_edges = {{chord, 0U}};
+    scenario.resolve();
+    scenario.expect_nudges(1U);
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    scenario.expect_nudges(0U);
+  }
+}
+
+TEST(ViewportKeybindingRepeatTests,
+     SameFrameSemanticNavigationPreventsInitialNudgeAndRetiresPriorRepeat) {
+  for (const bool accepted_before_navigation : {false, true}) {
+    SCOPED_TRACE(accepted_before_navigation);
+    ViewportNudgeRepeatScenario scenario;
+    scenario.initialize();
+    auto &harness = scenario.harness;
+    auto &input = harness.input;
+    const auto nudge = scenario.chord("Ctrl+Alt+J");
+    const auto navigation = scenario.chord("Shift+MiddleMouseDrag");
+    if (accepted_before_navigation) {
+      input.pressed_input_chords = {nudge};
+      input.active_input_chords = {nudge};
+      scenario.resolve();
+      scenario.expect_nudges(1U);
+      ASSERT_EQ(scenario.repeat_bindings.size(), 1U);
+    }
+
+    input.pressed_input_chords = {navigation};
+    if (!accepted_before_navigation) {
+      input.pressed_input_chords.push_back(nudge);
+    }
+    input.active_input_chords = {navigation, nudge};
+    input.repeated_input_edges = {
+        {nudge, input.pressed_input_chords.size()}};
+    ASSERT_FALSE(input.navigation_active);
+    scenario.resolve();
+    EXPECT_TRUE(input.navigation_bindings.pan_pressed);
+    scenario.expect_nudges(accepted_before_navigation ? 1U : 0U);
+    EXPECT_TRUE(scenario.repeat_bindings.empty());
+
+    input.active_input_chords = {nudge};
+    input.released_input_chords = {navigation};
+    input.repeated_input_edges = {{nudge, 0U}};
+    scenario.resolve();
+    scenario.expect_nudges(accepted_before_navigation ? 1U : 0U);
+    if (accepted_before_navigation) {
+      ASSERT_TRUE(harness.editor.history().undo().ok());
+      scenario.expect_nudges(0U);
+    }
+  }
+}
+
+TEST(ViewportKeybindingRepeatTests,
+     ArrowRemappedToDeleteDoesNotDeleteTheNextSelectionOnRepeat) {
+  ViewportNudgeRepeatScenario scenario;
+  scenario.initialize();
+  auto &harness = scenario.harness;
+  const auto survivor = create_unit_box(harness);
+  ASSERT_TRUE(harness.editor.selection().select_object(scenario.box).ok());
+  ASSERT_TRUE(harness.editor.commands()
+                  .set_shortcut(quader::quader_command::kDeleteSelection,
+                                "Right").ok());
+  harness.session.history().clear();
+  const auto chord = scenario.chord("Right");
+  harness.input.pressed_input_chords = {chord};
+  harness.input.active_input_chords = {chord};
+  scenario.resolve();
+  EXPECT_TRUE(harness.input.keybinding_input_consumed);
+  EXPECT_TRUE(harness.input.resolved_shortcuts.empty());
+  ASSERT_FALSE(harness.session.scene().exists(scenario.box.entity));
+  ASSERT_TRUE(harness.session.scene().exists(survivor.entity));
+  ASSERT_EQ(harness.session.history().undo_count(), 1U);
+  ASSERT_TRUE(harness.editor.selection().select_object(survivor).ok());
+  const auto history_before = harness.session.history().undo_count();
+  const auto survivor_before =
+      *harness.session.scene().transform(survivor.entity);
+
+  harness.input.repeated_input_edges = {{chord, 0U}, {chord, 0U}};
+  scenario.resolve();
+  EXPECT_TRUE(harness.input.resolved_shortcuts.empty());
+  ASSERT_TRUE(harness.session.scene().exists(survivor.entity));
+  expect_transform_near(*harness.session.scene().transform(survivor.entity),
+                        survivor_before);
+  EXPECT_EQ(harness.session.history().undo_count(), history_before);
+  EXPECT_TRUE(scenario.repeat_bindings.empty());
+}
+
+TEST(ViewportKeybindingRepeatTests,
+     ArrowRemappedToToolActivationDoesNotProduceRepeatedToolShortcuts) {
+  ViewportNudgeRepeatScenario scenario;
+  scenario.initialize();
+  auto &harness = scenario.harness;
+  ASSERT_TRUE(harness.editor.commands()
+                  .set_shortcut(quader::quader_command::kToolsActivateMove,
+                                "Right").ok());
+  const auto chord = scenario.chord("Right");
+  harness.input.pressed_input_chords = {chord};
+  harness.input.active_input_chords = {chord};
+  scenario.resolve();
+  ASSERT_EQ(harness.input.resolved_shortcuts.size(), 1U);
+  (void)harness.router.handle_frame(harness.input, harness.camera);
+  ASSERT_EQ(harness.router.state().active_tool, quader::ViewportToolId::Move);
+  harness.router.set_active_tool(quader::ViewportToolId::Rotate);
+  harness.input.repeated_input_edges = {{chord, 0U}, {chord, 0U}};
+  scenario.resolve();
+  EXPECT_TRUE(harness.input.resolved_shortcuts.empty());
+  (void)harness.router.handle_frame(harness.input, harness.camera);
+  EXPECT_EQ(harness.router.state().active_tool, quader::ViewportToolId::Rotate);
+  EXPECT_TRUE(scenario.repeat_bindings.empty());
+  scenario.expect_nudges(0U);
+}
+
+TEST(ViewportKeybindingRepeatTests,
+     LiveShiftRepeatsPreserveDuplicateMoveOrderAcrossFramesOrCoalescedRelease) {
+  for (const bool coalesced : {false, true}) {
+    SCOPED_TRACE(coalesced);
+    ViewportNudgeRepeatScenario scenario;
+    scenario.initialize("Right");
+    auto &harness = scenario.harness;
+    auto &input = harness.input;
+    const auto chord = scenario.chord("Right");
+    input.pressed_input_chords = {chord};
+    input.modifiers.shift = false;
+    if (coalesced) {
+      input.repeated_input_edges = {{chord, 1U, true}, {chord, 1U, false},
+                                   {chord, 1U, true}, {chord, 1U, false}};
+      input.released_input_chords = {chord};
+      scenario.resolve();
+    } else {
+      input.active_input_chords = {chord};
+      scenario.resolve();
+      scenario.expect_objects_at_x({1.0f}, 1U, 1.0f);
+      input.repeated_input_edges = {{chord, 0U, true}};
+      scenario.resolve();
+      scenario.expect_objects_at_x({1.0f, 2.0f}, 2U, 2.0f);
+      input.repeated_input_edges = {{chord, 0U, false}};
+      scenario.resolve();
+      scenario.expect_objects_at_x({1.0f, 3.0f}, 3U, 3.0f);
+      input.repeated_input_edges = {{chord, 0U, true}};
+      scenario.resolve();
+      scenario.expect_objects_at_x({1.0f, 3.0f, 4.0f}, 4U, 4.0f);
+      input.repeated_input_edges = {{chord, 0U, false}};
+      input.active_input_chords.clear();
+      input.released_input_chords = {chord};
+      scenario.resolve();
+    }
+    scenario.expect_objects_at_x({1.0f, 3.0f, 5.0f}, 5U, 5.0f);
+    EXPECT_TRUE(scenario.repeat_bindings.empty());
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    scenario.expect_objects_at_x({1.0f, 3.0f, 4.0f}, 4U, 4.0f);
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    scenario.expect_objects_at_x({1.0f, 3.0f}, 3U, 3.0f);
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    scenario.expect_objects_at_x({1.0f, 2.0f}, 2U, 2.0f);
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    scenario.expect_objects_at_x({1.0f}, 1U, 1.0f);
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    scenario.expect_objects_at_x({0.0f}, 0U, 0.0f);
+    for (std::size_t index = 0U; index < 5U; ++index) {
+      ASSERT_TRUE(harness.editor.history().redo().ok());
+    }
+    scenario.expect_objects_at_x({1.0f, 3.0f, 5.0f}, 5U, 5.0f);
+  }
+}
+
+TEST(ViewportKeybindingRepeatTests,
+     ShiftFirstPressUsesExactVariantAndShiftReleaseResumesPlainMove) {
+  ViewportNudgeRepeatScenario scenario;
+  scenario.initialize();
+  scenario.bind_shift_variant("Ctrl+Alt+Shift+J");
+  auto &input = scenario.harness.input;
+  const auto chord = scenario.chord("Ctrl+Alt+Shift+J");
+  input.pressed_input_chords = {chord};
+  input.active_input_chords = {chord};
+  input.repeated_input_edges = {{chord, 1U, true}, {chord, 1U, false}};
+  scenario.resolve();
+  scenario.expect_objects_at_x({0.0f, 1.0f, 3.0f}, 3U, 3.0f);
+  ASSERT_EQ(scenario.repeat_bindings.size(), 1U);
+  EXPECT_EQ(scenario.repeat_bindings.front().command_id,
+            quader::quader_command::kViewportNudgeDuplicateOrExtrudeMoveRight
+                .string());
+
+  // Synthetic callers that omit event-time Shift retain the original chord.
+  input.repeated_input_edges = {{chord, 0U}};
+  scenario.resolve();
+  scenario.expect_objects_at_x({0.0f, 1.0f, 3.0f, 4.0f}, 4U, 4.0f);
+  ASSERT_TRUE(scenario.harness.editor.history().undo().ok());
+  scenario.expect_objects_at_x({0.0f, 1.0f, 3.0f}, 3U, 3.0f);
+}
+
+TEST(ViewportKeybindingRepeatTests,
+     LiveShiftChangesOnlyTerminalChordOfTheCompletedRemappedSequence) {
+  ViewportNudgeRepeatScenario scenario;
+  scenario.initialize("Ctrl+Alt+J Ctrl+Alt+K");
+  scenario.bind_shift_variant("Ctrl+Alt+J Ctrl+Alt+Shift+K");
+  auto &harness = scenario.harness;
+  ASSERT_TRUE(harness.editor.commands()
+                  .set_shortcut(quader::quader_command::kDeleteSelection,
+                                "Ctrl+Alt+Shift+K").ok());
+  auto &input = harness.input;
+  const auto prefix = scenario.chord("Ctrl+Alt+J");
+  const auto terminal = scenario.chord("Ctrl+Alt+K");
+  input.pressed_input_chords = {prefix, terminal};
+  input.active_input_chords = {terminal};
+  input.repeated_input_edges = {{prefix, 1U, true}, {terminal, 2U, true},
+                               {terminal, 2U, false}};
+  scenario.resolve();
+  scenario.expect_objects_at_x({1.0f, 3.0f}, 3U, 3.0f);
+  EXPECT_FALSE(harness.editor.commands().has_pending_keybinding_chord());
+  ASSERT_EQ(scenario.repeat_bindings.size(), 1U);
+  EXPECT_EQ(scenario.repeat_bindings.front().sequence,
+            (std::vector<quader::QuaderInputChord>{prefix, terminal}));
+
+  input.repeated_input_edges = {{terminal, 0U, true}};
+  scenario.resolve();
+  scenario.expect_objects_at_x({1.0f, 3.0f, 4.0f}, 4U, 4.0f);
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  scenario.expect_objects_at_x({1.0f, 3.0f}, 3U, 3.0f);
+}
+
+TEST(ViewportKeybindingRepeatTests,
+     MissingDeleteOrDifferentNudgeShiftBindingSkipsRepeatWithoutLosingHold) {
+  enum class ShiftBinding { Missing, Delete, DifferentNudge };
+  for (const auto shift_binding : {ShiftBinding::Missing, ShiftBinding::Delete,
+                                    ShiftBinding::DifferentNudge}) {
+    SCOPED_TRACE(static_cast<int>(shift_binding));
+    ViewportNudgeRepeatScenario scenario;
+    scenario.initialize();
+    auto &harness = scenario.harness;
+    if (shift_binding != ShiftBinding::Missing) {
+      ASSERT_TRUE(harness.editor.commands()
+                      .set_shortcut(shift_binding == ShiftBinding::Delete
+                                        ? quader::quader_command::kDeleteSelection
+                                        : quader::quader_command::kViewportNudgeMoveLeft,
+                                    "Ctrl+Alt+Shift+J").ok());
+    }
+    auto &input = harness.input;
+    const auto chord = scenario.chord("Ctrl+Alt+J");
+    input.pressed_input_chords = {chord};
+    input.active_input_chords = {chord};
+    input.repeated_input_edges = {{chord, 1U, true}, {chord, 1U, true}};
+    scenario.resolve();
+    scenario.expect_objects_at_x({1.0f}, 1U, 1.0f);
+    ASSERT_EQ(scenario.repeat_bindings.size(), 1U);
+
+    input.repeated_input_edges = {{chord, 0U, false}};
+    scenario.resolve();
+    scenario.expect_objects_at_x({2.0f}, 2U, 2.0f);
+    input.repeated_input_edges = {{chord, 0U, true}, {chord, 0U, false}};
+    scenario.resolve();
+    scenario.expect_objects_at_x({3.0f}, 3U, 3.0f);
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    scenario.expect_objects_at_x({2.0f}, 2U, 2.0f);
+  }
+}
+
+TEST(ViewportKeybindingRepeatTests,
+     LiveShiftCannotRestoreRepeatOwnershipAfterFocusLossOrRuntimeRebind) {
+  for (const bool runtime_rebind : {false, true}) {
+    SCOPED_TRACE(runtime_rebind);
+    ViewportNudgeRepeatScenario scenario;
+    scenario.initialize();
+    scenario.bind_shift_variant("Ctrl+Alt+Shift+J");
+    auto &harness = scenario.harness;
+    auto &input = harness.input;
+    const auto chord = scenario.chord("Ctrl+Alt+J");
+    input.pressed_input_chords = {chord};
+    input.active_input_chords = {chord};
+    input.repeated_input_edges = {{chord, 1U, true}};
+    scenario.resolve();
+    scenario.expect_objects_at_x({1.0f, 2.0f}, 2U, 2.0f);
+
+    std::uint64_t runtime_generation = 2U;
+    input.viewport_focused = runtime_rebind;
+    scenario.resolve(runtime_rebind
+                         ? quader::ViewportRuntimeBindingToken{&runtime_generation, 1U}
+                         : quader::ViewportRuntimeBindingToken{});
+    EXPECT_TRUE(scenario.repeat_bindings.empty());
+    input.viewport_focused = true;
+    input.repeated_input_edges = {{chord, 0U, true}, {chord, 0U, false}};
+    scenario.resolve();
+    scenario.expect_objects_at_x({1.0f, 2.0f}, 2U, 2.0f);
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    scenario.expect_objects_at_x({1.0f}, 1U, 1.0f);
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    scenario.expect_objects_at_x({0.0f}, 0U, 0.0f);
+  }
 }

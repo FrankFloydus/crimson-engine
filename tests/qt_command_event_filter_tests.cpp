@@ -848,6 +848,9 @@ TEST(QtCommandEventFilterTests,
       << "combo keyboard search must not become a customized global command";
 
   ASSERT_TRUE(editor.commands()
+                  .remove_shortcut(quader::quader_command::kViewportNudgeMoveRight)
+                  .ok());
+  ASSERT_TRUE(editor.commands()
                   .set_shortcut(quader::quader_command::kEditUndo, "Right")
                   .ok());
   scene_tabs.setCurrentIndex(0);
@@ -2464,6 +2467,9 @@ TEST(QtCommandEventFilterTests,
 
     // The browser's explicit navigation owns arrows even after a command
     // is customized to the same chord; ordinary tool letters stay global.
+    ASSERT_TRUE(editor.commands()
+                    .remove_shortcut(quader::quader_command::kViewportNudgeMoveDown)
+                    .ok());
     ASSERT_TRUE(editor.commands().set_shortcut(primitive, "Down").ok());
     ASSERT_TRUE(editor.commands().execute(
         quader::quader_command::kToolsActivateSelect).ok());
@@ -2688,6 +2694,9 @@ TEST(QtCommandEventFilterTests,
 
   const std::string face_target = editor.commands().keybinding_target_id_for_selection_mode(
       quader::QuaderSelectionMode::Face);
+  ASSERT_TRUE(editor.commands()
+                  .remove_shortcut(quader::quader_command::kViewportNudgeMoveDown)
+                  .ok());
   ASSERT_TRUE(editor.commands().set_shortcut(face_target, "Down").ok());
   ASSERT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
   const auto status_before_navigation = editor.commands().last_status_revision();

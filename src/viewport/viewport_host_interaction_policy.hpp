@@ -139,6 +139,7 @@ struct ViewportToolActivationDispatchRequest {
 /// Identifies the semantic edge represented by one canonical input chord.
 enum class ViewportInputEdgeKind {
   Pressed,
+  Repeated,
   Wheel,
 };
 
@@ -164,11 +165,20 @@ enum class ViewportInputEdgeKind {
 template <typename DispatchEdge, typename CompleteWheelEvent>
 void dispatch_ordered_viewport_input_edges(
     std::span<const QuaderInputChord> pressed,
+    std::span<const QuaderKeyboardRepeatInputEdge> repeated,
     std::span<const QuaderWheelInputEdge> wheel,
     DispatchEdge &&dispatch_edge,
     CompleteWheelEvent &&complete_wheel_event) {
-  for (const QuaderInputChord &chord : pressed) {
-    (void)dispatch_edge(chord, ViewportInputEdgeKind::Pressed, 0.0);
+  std::size_t repeat_index = 0u;
+  for (std::size_t press_index = 0u; press_index <= pressed.size(); ++press_index) {
+    while (repeat_index < repeated.size() &&
+           std::min(repeated[repeat_index].pressed_chord_offset, pressed.size()) <= press_index) {
+      (void)dispatch_edge(repeated[repeat_index++].chord,
+                          ViewportInputEdgeKind::Repeated, 0.0);
+    }
+    if (press_index < pressed.size()) {
+      (void)dispatch_edge(pressed[press_index], ViewportInputEdgeKind::Pressed, 0.0);
+    }
   }
 
   for (std::size_t index = 0; index < wheel.size();) {
@@ -190,6 +200,29 @@ void dispatch_ordered_viewport_input_edges(
     complete_wheel_event(wheel.subspan(index, 1u));
     ++index;
   }
+}
+
+template <typename DispatchEdge, typename CompleteWheelEvent>
+void dispatch_ordered_viewport_input_edges(
+    std::span<const QuaderInputChord> pressed,
+    std::span<const QuaderWheelInputEdge> wheel,
+    DispatchEdge &&dispatch_edge,
+    CompleteWheelEvent &&complete_wheel_event) {
+  dispatch_ordered_viewport_input_edges(
+      pressed, std::span<const QuaderKeyboardRepeatInputEdge>{}, wheel,
+      std::forward<DispatchEdge>(dispatch_edge),
+      std::forward<CompleteWheelEvent>(complete_wheel_event));
+}
+
+template <typename DispatchEdge>
+void dispatch_ordered_viewport_input_edges(
+    std::span<const QuaderInputChord> pressed,
+    std::span<const QuaderKeyboardRepeatInputEdge> repeated,
+    std::span<const QuaderWheelInputEdge> wheel,
+    DispatchEdge &&dispatch_edge) {
+  dispatch_ordered_viewport_input_edges(
+      pressed, repeated, wheel, std::forward<DispatchEdge>(dispatch_edge),
+      [](std::span<const QuaderWheelInputEdge>) {});
 }
 
 template <typename DispatchEdge>

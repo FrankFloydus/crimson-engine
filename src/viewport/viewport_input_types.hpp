@@ -248,6 +248,7 @@ struct ViewportInputFrame {
   ViewportModifiers modifiers = {};
   QVec3 fly_local_direction = {};
   std::vector<QuaderInputChord> pressed_input_chords;
+  std::vector<QuaderKeyboardRepeatInputEdge> repeated_input_edges;
   std::vector<QuaderInputChord> active_input_chords;
   std::vector<QuaderInputChord> released_input_chords;
   std::vector<ViewportPointerButtonEdge> pointer_pressed_edges;

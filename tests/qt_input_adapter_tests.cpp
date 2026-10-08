@@ -5883,7 +5883,13 @@ TEST(QtViewportSurfaceInputTests,
     EXPECT_EQ(QApplication::focusWidget(), &host);
     QKeyEvent repeat(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier, {}, true);
     QApplication::sendEvent(&host, &repeat);
-    EXPECT_TRUE(surface.take_input_frame(0.0f, false).input.pressed_input_chords.empty());
+    const auto repeated = surface.take_input_frame(0.0f, false);
+    EXPECT_TRUE(repeated.input.pressed_input_chords.empty());
+    ASSERT_EQ(repeated.input.repeated_input_edges.size(), 1U);
+    EXPECT_EQ(repeated.input.repeated_input_edges.front().chord,
+              frame.input.pressed_input_chords.front());
+    EXPECT_EQ(repeated.input.repeated_input_edges.front().pressed_chord_offset,
+              0U);
     QKeyEvent release(QEvent::KeyRelease, Qt::Key_Tab, Qt::NoModifier);
     QApplication::sendEvent(&host, &release);
     const auto released = surface.take_input_frame(0.0f, false);
@@ -7476,6 +7482,286 @@ TEST(QtViewportSurfaceInputTests,
 }
 
 TEST(QtViewportSurfaceInputTests,
+     RemappedNudgeRepeatsReachThePanelAcrossFramesAndRelease) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-panel-nudge-repeat-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  NavigationPanelTestContext context;
+  ASSERT_NE(context.surface, nullptr);
+  auto &editor = context.editor;
+  ASSERT_TRUE(editor.commands().reset_all_shortcuts().ok());
+  ASSERT_TRUE(editor.commands().set_shortcut(
+      quader::quader_command::kViewportNudgeMoveRight, "Ctrl+Alt+J").ok());
+  ASSERT_TRUE(editor.viewports().set_layout(quader::ViewportLayoutId::FourQuad).ok());
+  ASSERT_TRUE(editor.main_viewport().set_view(quader::ViewportView::Back).ok());
+  ASSERT_TRUE(editor.viewports().set_transform_space(
+      quader::QuaderTransformSpace::Global).ok());
+  ASSERT_TRUE(editor.viewports().set_control(
+      quader::QuaderViewportControl::SnappingEnabled, false).ok());
+  const auto box = editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}});
+  ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  context.process();
+  context.session.history().clear();
+  const auto *initial_transform = context.session.scene().transform(box.value().entity);
+  ASSERT_NE(initial_transform, nullptr);
+  const auto baseline = *initial_transform;
+  const auto expect_nudges = [&](std::size_t count) {
+    const auto *transform = context.session.scene().transform(box.value().entity);
+    ASSERT_NE(transform, nullptr);
+    EXPECT_FLOAT_EQ(transform->position.x,
+                    baseline.position.x + static_cast<float>(count));
+    EXPECT_FLOAT_EQ(transform->position.y, baseline.position.y);
+    EXPECT_FLOAT_EQ(transform->position.z, baseline.position.z);
+    EXPECT_FLOAT_EQ(quader::length_squared(
+                        transform->rotation_euler - baseline.rotation_euler), 0.0F);
+    EXPECT_FLOAT_EQ(quader::length_squared(transform->scale - baseline.scale), 0.0F);
+    EXPECT_EQ(context.session.history().undo_count(), count);
+  };
+  const auto send_key = [&](QEvent::Type type, bool repeat = false) {
+    QKeyEvent event(type, Qt::Key_J,
+                    repeat ? Qt::NoModifier
+                           : Qt::ControlModifier | Qt::AltModifier,
+                    QStringLiteral("j"), repeat);
+    send_visible_viewport_event(context.surface, &event);
+  };
+
+  // A different hovered pane would win routing if repeat-only frames were idle.
+  auto *top_surface = context.panel.surface(quader::ViewportPaneId::Top);
+  ASSERT_NE(top_surface, nullptr);
+  QEvent leave(QEvent::Leave);
+  send_visible_viewport_event(context.surface, &leave);
+  QEnterEvent enter({24, 24}, {24, 24}, {124, 124});
+  send_visible_viewport_event(top_surface, &enter);
+  QFocusEvent focus(QEvent::FocusIn);
+  send_visible_viewport_event(context.surface, &focus);
+  ASSERT_EQ(editor.viewports().focused_pane(), quader::ViewportPaneId::Perspective);
+
+  send_key(QEvent::KeyPress);
+  context.process();
+  expect_nudges(1U);
+  for (std::size_t count = 2U; count <= 3U; ++count) {
+    send_key(QEvent::KeyPress, true);
+    context.process();
+    expect_nudges(count);
+    EXPECT_EQ(editor.viewports().focused_pane(), quader::ViewportPaneId::Perspective);
+  }
+  send_key(QEvent::KeyRelease);
+  context.process();
+  expect_nudges(3U);
+
+  send_key(QEvent::KeyPress);
+  send_key(QEvent::KeyRelease, true);
+  send_key(QEvent::KeyPress, true);
+  send_key(QEvent::KeyRelease);
+  context.process();
+  expect_nudges(5U);
+  send_key(QEvent::KeyPress, true);
+  context.process();
+  expect_nudges(5U);
+  EXPECT_EQ(editor.viewports().focused_pane(), quader::ViewportPaneId::Top);
+
+  send_visible_viewport_event(context.surface, &focus);
+  send_key(QEvent::KeyPress);
+  context.process();
+  expect_nudges(6U);
+  send_key(QEvent::KeyPress, true);
+  QFocusEvent focus_out(QEvent::FocusOut);
+  send_visible_viewport_event(context.surface, &focus_out);
+  send_visible_viewport_event(context.surface, &focus);
+  send_key(QEvent::KeyPress, true);
+  send_key(QEvent::KeyRelease);
+  context.process();
+  expect_nudges(6U);
+
+  for (std::size_t remaining = 6U; remaining > 0U; --remaining) {
+    ASSERT_TRUE(editor.history().undo().ok());
+    expect_nudges(remaining - 1U);
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     CoalescedKeyboardRepeatsRetainThePressChordAndDrainOnce) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-coalesced-key-repeat-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+
+  QKeyEvent press(QEvent::KeyPress, Qt::Key_Right,
+                  Qt::ControlModifier | Qt::ShiftModifier);
+  QApplication::sendEvent(&surface, &press);
+  constexpr std::array kRepeatShiftStates{false, true, false};
+  for (const bool shift_held : kRepeatShiftStates) {
+    const auto modifiers = shift_held ? Qt::ShiftModifier : Qt::NoModifier;
+    QKeyEvent shift_event(shift_held ? QEvent::KeyPress : QEvent::KeyRelease,
+                          Qt::Key_Shift, modifiers);
+    QApplication::sendEvent(&surface, &shift_event);
+    QKeyEvent repeat_release(QEvent::KeyRelease, Qt::Key_Right,
+                             modifiers, {}, true);
+    QKeyEvent repeat_press(QEvent::KeyPress, Qt::Key_Right,
+                           modifiers, {}, true);
+    QApplication::sendEvent(&surface, &repeat_release);
+    QApplication::sendEvent(&surface, &repeat_press);
+  }
+  QKeyEvent release(QEvent::KeyRelease, Qt::Key_Right, Qt::NoModifier);
+  QApplication::sendEvent(&surface, &release);
+
+  const auto frame = surface.take_input_frame(0.0F, true);
+  ASSERT_EQ(frame.input.pressed_input_chords.size(), 1U);
+  const auto accepted_chord = frame.input.pressed_input_chords.front();
+  EXPECT_EQ(accepted_chord.key, QuaderKeyCode::Right);
+  EXPECT_TRUE(accepted_chord.primary);
+  EXPECT_TRUE(accepted_chord.shift);
+  ASSERT_EQ(frame.input.repeated_input_edges.size(), kRepeatShiftStates.size());
+  for (std::size_t index = 0; index < kRepeatShiftStates.size(); ++index) {
+    SCOPED_TRACE(index);
+    const auto &edge = frame.input.repeated_input_edges[index];
+    EXPECT_EQ(edge.chord, accepted_chord);
+    EXPECT_EQ(edge.pressed_chord_offset, 1U);
+    ASSERT_TRUE(edge.shift_held.has_value());
+    EXPECT_EQ(*edge.shift_held, kRepeatShiftStates[index]);
+  }
+  ASSERT_EQ(frame.input.released_input_chords.size(), 1U);
+  EXPECT_EQ(frame.input.released_input_chords.front(), accepted_chord);
+  EXPECT_TRUE(frame.input.active_input_chords.empty());
+
+  const auto drained = surface.take_input_frame(0.0F, true);
+  EXPECT_TRUE(drained.input.pressed_input_chords.empty());
+  EXPECT_TRUE(drained.input.repeated_input_edges.empty());
+  EXPECT_TRUE(drained.input.released_input_chords.empty());
+  EXPECT_TRUE(drained.input.active_input_chords.empty());
+}
+
+TEST(QtViewportSurfaceInputTests,
+     KeyboardRepeatsCaptureEventShiftAcrossFramesWithoutChangingTheChord) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-repeat-event-shift-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  QKeyEvent press(QEvent::KeyPress, Qt::Key_J,
+                  Qt::ControlModifier | Qt::AltModifier);
+  QApplication::sendEvent(&surface, &press);
+  const auto first_frame = surface.take_input_frame(0.0F, true);
+  ASSERT_EQ(first_frame.input.pressed_input_chords.size(), 1U);
+  const auto accepted_chord = first_frame.input.pressed_input_chords.front();
+  EXPECT_TRUE(accepted_chord.primary);
+  EXPECT_TRUE(accepted_chord.alt);
+  EXPECT_FALSE(accepted_chord.shift);
+
+  for (const bool shift_held : {false, true, false}) {
+    SCOPED_TRACE(shift_held);
+    const auto modifiers = shift_held ? Qt::ShiftModifier : Qt::NoModifier;
+    QKeyEvent repeat(QEvent::KeyPress, Qt::Key_J, modifiers, {}, true);
+    QApplication::sendEvent(&surface, &repeat);
+    // A later modifier transition cannot rewrite an already queued repeat.
+    QKeyEvent later_shift(shift_held ? QEvent::KeyRelease : QEvent::KeyPress,
+                          Qt::Key_Shift,
+                          shift_held ? Qt::NoModifier : Qt::ShiftModifier);
+    QApplication::sendEvent(&surface, &later_shift);
+    const auto frame = surface.take_input_frame(0.0F, true);
+    EXPECT_TRUE(frame.input.pressed_input_chords.empty());
+    EXPECT_TRUE(frame.input.released_input_chords.empty());
+    ASSERT_EQ(frame.input.repeated_input_edges.size(), 1U);
+    const auto &edge = frame.input.repeated_input_edges.front();
+    EXPECT_EQ(edge.chord, accepted_chord);
+    EXPECT_EQ(edge.pressed_chord_offset, 0U);
+    ASSERT_TRUE(edge.shift_held.has_value());
+    EXPECT_EQ(*edge.shift_held, shift_held);
+    EXPECT_EQ(frame.input.modifiers.shift, !shift_held);
+    ASSERT_EQ(frame.input.active_input_chords.size(), 1U);
+    EXPECT_EQ(frame.input.active_input_chords.front(), accepted_chord);
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     KeyboardRepeatOffsetsPreserveArrivalOrderAcrossFrameBoundaries) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-key-repeat-offset-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+
+  QKeyEvent first_press(QEvent::KeyPress, Qt::Key_Left, Qt::ShiftModifier);
+  QApplication::sendEvent(&surface, &first_press);
+  const auto first_frame = surface.take_input_frame(0.0F, true);
+  ASSERT_EQ(first_frame.input.pressed_input_chords.size(), 1U);
+  const auto first_chord = first_frame.input.pressed_input_chords.front();
+  QKeyEvent repeat(QEvent::KeyPress, Qt::Key_Left, Qt::NoModifier, {}, true);
+  QApplication::sendEvent(&surface, &repeat);
+  QApplication::sendEvent(&surface, &repeat);
+  QKeyEvent second_press(QEvent::KeyPress, Qt::Key_Up, Qt::NoModifier);
+  QApplication::sendEvent(&surface, &second_press);
+  QApplication::sendEvent(&surface, &repeat);
+  QKeyEvent third_press(QEvent::KeyPress, Qt::Key_Down, Qt::AltModifier);
+  QApplication::sendEvent(&surface, &third_press);
+  QApplication::sendEvent(&surface, &repeat);
+
+  const auto frame = surface.take_input_frame(0.0F, true);
+  ASSERT_EQ(frame.input.pressed_input_chords.size(), 2U);
+  EXPECT_EQ(frame.input.pressed_input_chords[0].key, QuaderKeyCode::Up);
+  EXPECT_EQ(frame.input.pressed_input_chords[1].key, QuaderKeyCode::Down);
+  ASSERT_EQ(frame.input.repeated_input_edges.size(), 4U);
+  constexpr std::array<std::size_t, 4> kExpectedOffsets{0U, 0U, 1U, 2U};
+  for (std::size_t index = 0; index < kExpectedOffsets.size(); ++index) {
+    SCOPED_TRACE(index);
+    EXPECT_EQ(frame.input.repeated_input_edges[index].chord, first_chord);
+    EXPECT_EQ(frame.input.repeated_input_edges[index].pressed_chord_offset,
+              kExpectedOffsets[index]);
+  }
+  const auto held = surface.take_input_frame(0.0F, true);
+  EXPECT_TRUE(held.input.pressed_input_chords.empty());
+  EXPECT_TRUE(held.input.repeated_input_edges.empty());
+  EXPECT_EQ(held.input.active_input_chords.size(), 3U);
+}
+
+TEST(QtViewportSurfaceInputTests,
+     KeyboardRepeatsWithoutAnAcceptedPressAreIgnored) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-unarmed-key-repeat-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
+  QKeyEvent repeat_press(QEvent::KeyPress, Qt::Key_Right,
+                         Qt::ShiftModifier, {}, true);
+  QKeyEvent repeat_release(QEvent::KeyRelease, Qt::Key_Right,
+                           Qt::ShiftModifier, {}, true);
+  const auto expect_ignored_repeat = [&]() {
+    QApplication::sendEvent(&surface, &repeat_press);
+    QApplication::sendEvent(&surface, &repeat_release);
+    const auto frame = surface.take_input_frame(0.0F, true);
+    EXPECT_TRUE(frame.input.pressed_input_chords.empty());
+    EXPECT_TRUE(frame.input.repeated_input_edges.empty());
+    EXPECT_TRUE(frame.input.released_input_chords.empty());
+    EXPECT_TRUE(frame.input.active_input_chords.empty());
+  };
+  expect_ignored_repeat();
+
+  QKeyEvent press(QEvent::KeyPress, Qt::Key_Right, Qt::NoModifier);
+  QKeyEvent release(QEvent::KeyRelease, Qt::Key_Right, Qt::NoModifier);
+  QApplication::sendEvent(&surface, &press);
+  QApplication::sendEvent(&surface, &release);
+  const auto released = surface.take_input_frame(0.0F, true);
+  ASSERT_EQ(released.input.pressed_input_chords.size(), 1U);
+  ASSERT_EQ(released.input.released_input_chords.size(), 1U);
+  expect_ignored_repeat();
+}
+
+TEST(QtViewportSurfaceInputTests,
      HeldKeyboardOriginRequiresOneNativePhysicalKey) {
 #ifndef Q_OS_WIN
   GTEST_SKIP() << "Windows native key metadata supplies physical key identity.";
@@ -7542,9 +7828,26 @@ TEST(QtViewportSurfaceInputTests,
   QKeyEvent changed_repeat(QEvent::KeyPress, Qt::Key_3, Qt::NoModifier,
                            0x04U, 0x33U, 0U, QStringLiteral("3"));
   QApplication::sendEvent(&surface, &changed_repeat);
+  QKeyEvent shifted_native_repeat(QEvent::KeyPress, Qt::Key_sterling,
+                                  Qt::ShiftModifier, 0x04U, 0x33U, 0U,
+                                  QString(QChar(0x00a3)));
+  QApplication::sendEvent(&surface, &shifted_native_repeat);
+  QKeyEvent remapped_repeat(QEvent::KeyPress, Qt::Key_Z, Qt::AltModifier,
+                            0x04U, 0x5aU, 0U, QStringLiteral("z"), true);
+  QApplication::sendEvent(&surface, &remapped_repeat);
   frame = surface.take_input_frame(0.0F, true);
   EXPECT_TRUE(frame.input.pressed_input_chords.empty());
   EXPECT_TRUE(frame.input.released_input_chords.empty());
+  constexpr std::array kRepeatShiftStates{false, true, false};
+  ASSERT_EQ(frame.input.repeated_input_edges.size(), kRepeatShiftStates.size());
+  for (std::size_t index = 0; index < kRepeatShiftStates.size(); ++index) {
+    SCOPED_TRACE(index);
+    const auto &edge = frame.input.repeated_input_edges[index];
+    EXPECT_EQ(edge.chord, accepted_chord);
+    EXPECT_EQ(edge.pressed_chord_offset, 0U);
+    ASSERT_TRUE(edge.shift_held.has_value());
+    EXPECT_EQ(*edge.shift_held, kRepeatShiftStates[index]);
+  }
   ASSERT_EQ(frame.input.active_input_chords.size(), 1U);
   EXPECT_EQ(frame.input.active_input_chords.front(), accepted_chord);
   QKeyEvent release(QEvent::KeyRelease, Qt::Key_3, Qt::NoModifier,
@@ -7578,21 +7881,27 @@ TEST(QtViewportSurfaceInputTests,
     QApplication::sendEvent(&surface, &press);
     const auto pressed = surface.take_input_frame(0.0F, true);
     ASSERT_EQ(pressed.input.pressed_input_chords.size(), 1U);
+    QKeyEvent repeat(QEvent::KeyPress, Qt::Key_3, Qt::NoModifier,
+                     0x04U, 0x33U, 0U, QStringLiteral("3"), true);
+    QApplication::sendEvent(&surface, &repeat);
     if (focus_loss) {
       QFocusEvent lost(QEvent::FocusOut);
       QApplication::sendEvent(&surface, &lost);
       const auto interrupted = surface.take_input_frame(0.0F, false);
+      EXPECT_TRUE(interrupted.input.repeated_input_edges.empty());
       ASSERT_EQ(interrupted.input.released_input_chords.size(), 1U);
       EXPECT_EQ(interrupted.input.released_input_chords.front(),
                 pressed.input.pressed_input_chords.front());
     } else {
       surface.abandon_input();
     }
+    QApplication::sendEvent(&surface, &repeat);
     QKeyEvent release(QEvent::KeyRelease, Qt::Key_3, Qt::NoModifier,
                       0x04U, 0x33U, 0U, QStringLiteral("3"));
     QApplication::sendEvent(&surface, &release);
     const auto trailing = surface.take_input_frame(0.0F, true);
     EXPECT_TRUE(trailing.input.pressed_input_chords.empty());
+    EXPECT_TRUE(trailing.input.repeated_input_edges.empty());
     EXPECT_TRUE(trailing.input.released_input_chords.empty());
     EXPECT_TRUE(trailing.input.active_input_chords.empty());
     QKeyEvent fresh_press(QEvent::KeyPress, Qt::Key_3, Qt::NoModifier,
@@ -7658,6 +7967,9 @@ TEST(QtViewportSurfaceInputTests,
   QKeyEvent key_press(QEvent::KeyPress, Qt::Key_A, Qt::ControlModifier,
                       QStringLiteral("a"));
   QApplication::sendEvent(&surface, &key_press);
+  QKeyEvent key_repeat(QEvent::KeyPress, Qt::Key_A, Qt::ControlModifier,
+                       QStringLiteral("a"), true);
+  QApplication::sendEvent(&surface, &key_repeat);
   QMouseEvent mouse_press(QEvent::MouseButtonPress, local, global,
                           Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
   QApplication::sendEvent(&surface, &mouse_press);
@@ -7679,6 +7991,7 @@ TEST(QtViewportSurfaceInputTests,
   EXPECT_TRUE(abandoned.input.viewport_hovered);
   EXPECT_TRUE(abandoned.input.viewport_focused);
   EXPECT_TRUE(abandoned.input.pressed_input_chords.empty());
+  EXPECT_TRUE(abandoned.input.repeated_input_edges.empty());
   EXPECT_TRUE(abandoned.input.released_input_chords.empty());
   EXPECT_TRUE(abandoned.input.active_input_chords.empty());
   EXPECT_TRUE(abandoned.input.pointer_pressed_edges.empty());

@@ -197,6 +197,7 @@ struct QtViewportSurface::InputAccumulator {
   ViewportModifiers modifiers = {};
   bool has_event_modifiers = false;
   std::vector<QuaderInputChord> pressed;
+  std::vector<QuaderKeyboardRepeatInputEdge> repeated;
   std::vector<QuaderInputChord> released;
   std::vector<ViewportPointerButtonEdge> pointer_pressed_edges;
   std::vector<ViewportPointerButtonEdge> pointer_released_edges;
@@ -711,6 +712,7 @@ QtViewportSurface::take_input_frame(float delta_seconds,
           presentation_geometry().device_pixel_ratio, 0.01));
   frame.input.modifiers = input_->modifiers;
   frame.input.pressed_input_chords = std::move(input_->pressed);
+  frame.input.repeated_input_edges = std::move(input_->repeated);
   frame.input.released_input_chords = std::move(input_->released);
   frame.input.pointer_pressed_edges = std::move(input_->pointer_pressed_edges);
   frame.input.pointer_released_edges = std::move(input_->pointer_released_edges);
@@ -753,6 +755,7 @@ QtViewportSurface::take_input_frame(float delta_seconds,
   input_->mouse_delta = {};
   input_->mouse_move_events = 0u;
   input_->pressed.clear();
+  input_->repeated.clear();
   input_->released.clear();
   input_->pointer_pressed_edges.clear();
   input_->pointer_released_edges.clear();
@@ -1260,6 +1263,7 @@ void QtViewportSurface::record_focus_in() {
 }
 
 void QtViewportSurface::record_focus_out() {
+  input_->repeated.clear();
   input_->focused = false;
   input_->modifiers = {};
   input_->has_event_modifiers = true;
@@ -1307,7 +1311,15 @@ void QtViewportSurface::record_focus_out() {
 }
 
 void QtViewportSurface::record_key_press(QKeyEvent &event) {
-  if (event.isAutoRepeat()) {
+  const auto key_identity = quader_keyboard_event_key_identity(event);
+  const auto held = input_->active_keys.find(key_identity);
+  if (event.isAutoRepeat() ||
+      ((event.nativeScanCode() != 0u || event.nativeVirtualKey() != 0u) &&
+       held != input_->active_keys.end())) {
+    if (held != input_->active_keys.end()) {
+      input_->repeated.push_back({held->second, input_->pressed.size(),
+                                 event.modifiers().testFlag(Qt::ShiftModifier)});
+    }
     return;
   }
   // Modifier-only keys have no command chord, but still change live tool UI.
@@ -1316,13 +1328,6 @@ void QtViewportSurface::record_key_press(QKeyEvent &event) {
   const std::optional<QuaderInputChord> chord =
       quader_pressed_input_chord_from_qt_event(event);
   if (!chord.has_value()) {
-    return;
-  }
-  const auto key_identity = quader_keyboard_event_key_identity(event);
-  // Native repeats can become ordinary Qt presses after modifiers change.
-  // Retain the first accepted chord until its physical key is released.
-  if ((event.nativeScanCode() != 0u || event.nativeVirtualKey() != 0u) &&
-      input_->active_keys.contains(key_identity)) {
     return;
   }
   input_->abandoned_key_releases.erase(key_identity);

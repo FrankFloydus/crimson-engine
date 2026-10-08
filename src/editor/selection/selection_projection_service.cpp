@@ -278,6 +278,41 @@ std::optional<SceneBounds> SelectionProjectionService::world_selection_bounds(
     }
   }
 
+  const auto world_transform = [&](int object_id) -> std::optional<QMat4> {
+    const std::optional<EntityId> entity =
+        object_registry.entity_for_modeling_object(object_id);
+    if (entity.has_value() && !scene.is_effectively_visible(*entity)) {
+      return std::nullopt;
+    }
+    std::optional<QMat4> world_from_object{QMat4{}};
+    if (entity.has_value() && scene.transform(*entity) != nullptr) {
+      world_from_object = scene.world_transform_matrix(*entity);
+      if (work_stats != nullptr) {
+        ++work_stats->world_transform_evaluation_count;
+      }
+    }
+    return world_from_object;
+  };
+  if (const auto bounds = component_selection_bounds(selection, world_transform,
+                                                     {}, work_stats)) {
+    return bounds;
+  }
+  const quader_editor_core::Bounds3 runtime_bounds = selection.selection_bounds();
+  if (!runtime_bounds.empty) {
+    return SceneBounds{.min = runtime_bounds.min, .max = runtime_bounds.max};
+  }
+  return std::nullopt;
+}
+
+std::optional<SceneBounds> SelectionProjectionService::component_selection_bounds(
+    const ModelingSelectionProjectionSnapshot &selection,
+    const std::function<std::optional<QMat4>(int)> &world_transform,
+    const std::function<QVec3(QVec3)> &reference_position,
+    SelectionBoundsWorkStats *work_stats) const {
+  if (work_stats != nullptr) {
+    *work_stats = {};
+  }
+
   std::optional<SceneBounds> bounds;
   for (const quader_editor_core::PolygonObject &object : selection.objects()) {
     if (!object.selected || object.selection.empty()) {
@@ -286,9 +321,8 @@ std::optional<SceneBounds> SelectionProjectionService::world_selection_bounds(
     if (work_stats != nullptr) {
       ++work_stats->selected_object_visit_count;
     }
-    const std::optional<EntityId> entity =
-        object_registry.entity_for_modeling_object(object.id);
-    if (entity.has_value() && !scene.is_effectively_visible(*entity)) {
+    const std::optional<QMat4> world_from_object = world_transform(object.id);
+    if (!world_from_object.has_value()) {
       continue;
     }
 
@@ -309,13 +343,6 @@ std::optional<SceneBounds> SelectionProjectionService::world_selection_bounds(
       vertices_by_id.emplace(vertex.id, &vertex);
     }
 
-    std::optional<QMat4> world_from_object;
-    if (entity.has_value() && scene.transform(*entity) != nullptr) {
-      world_from_object = scene.world_transform_matrix(*entity);
-      if (work_stats != nullptr) {
-        ++work_stats->world_transform_evaluation_count;
-      }
-    }
     for (const quader_poly::ElementId vertex_id : vertex_ids) {
       if (work_stats != nullptr) {
         ++work_stats->selected_vertex_lookup_count;
@@ -325,29 +352,19 @@ std::optional<SceneBounds> SelectionProjectionService::world_selection_bounds(
         continue;
       }
       const QVec3 world =
-          world_from_object.has_value()
-              ? transform_point(*world_from_object, vertex->second->position)
-              : vertex->second->position;
+          transform_point(*world_from_object, vertex->second->position);
+      const QVec3 point = reference_position ? reference_position(world) : world;
       if (work_stats != nullptr) {
         ++work_stats->included_point_count;
       }
       if (!bounds) {
-        bounds = SceneBounds{.min = world, .max = world};
+        bounds = SceneBounds{.min = point, .max = point};
       } else {
-        include_point(*bounds, world);
+        include_point(*bounds, point);
       }
     }
   }
-  if (bounds) {
-    return bounds;
-  }
-
-  const quader_editor_core::Bounds3 runtime_bounds =
-      selection.selection_bounds();
-  if (!runtime_bounds.empty) {
-    return SceneBounds{.min = runtime_bounds.min, .max = runtime_bounds.max};
-  }
-  return std::nullopt;
+  return bounds;
 }
 
 } // namespace quader

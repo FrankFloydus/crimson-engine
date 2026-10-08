@@ -5517,6 +5517,295 @@ TEST(SelectionOverlayRuntimeTests,
   }
 }
 
+TEST(SelectionOverlayRuntimeTests,
+     VulkanKeyboardNudgesPublishSelectionDepthAndUndoTogether) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-keyboard-nudge-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  const QString directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (!directory.isEmpty()) ASSERT_TRUE(QDir().mkpath(directory));
+  for (const auto &[context, label] :
+       std::array<std::pair<ViewportOverlaySelectionContext, const char *>, 3>{{
+           {ViewportOverlaySelectionContext::Vertex, "vertex"},
+           {ViewportOverlaySelectionContext::Edge, "edge"},
+           {ViewportOverlaySelectionContext::Face, "face"}}}) {
+    SCOPED_TRACE(label);
+    SelectionOverlayRuntimeHarness harness;
+    ASSERT_TRUE(harness.initialize(0.0f, false));
+    ASSERT_TRUE(harness.create_component_transform_sample(context));
+    auto &editor = harness.workflow_editor();
+    ASSERT_TRUE(editor.viewports().focus_pane(ViewportPaneId::Perspective).ok());
+    ASSERT_TRUE(editor.viewports().set_view(ViewportPaneId::Perspective, ViewportView::Back).ok());
+    ASSERT_TRUE(editor.viewports().set_transform_space(QuaderTransformSpace::Global).ok());
+    ASSERT_TRUE(editor.viewports().set_control(QuaderViewportControl::SnappingEnabled, false).ok());
+    const auto present = [&] {
+      return harness.present_component_transform_sample(context, ViewportSettings::defaults());
+    };
+    const auto capture = [&](const char *phase) {
+      const QImage image = harness.capture();
+      EXPECT_FALSE(image.isNull());
+      if (!directory.isEmpty()) {
+        EXPECT_TRUE(image.save(QDir(directory).filePath(
+            QStringLiteral("keyboard_nudge_%1_%2.png")
+                .arg(QString::fromLatin1(label), QString::fromLatin1(phase)))));
+      }
+      return image;
+    };
+    const auto expect_selected = [&](const QImage &image, QVec3 position) {
+      const auto pixel = harness.cutting_preview_pixel(position);
+      EXPECT_GE(context == ViewportOverlaySelectionContext::Face
+                    ? yellow_pixels(image, pixel) : pink_pixels(image, pixel), 3);
+    };
+    const auto objects = editor.query().modeling_objects();
+    ASSERT_EQ(objects.size(), 1u);
+    const auto authored_state = [&] {
+      return harness.modeling().polygon_document_read_snapshot(
+          objects.front().modeling_object_id, false);
+    };
+    const auto expect_authored_state = [&](const ModelingPolygonDocumentReadSnapshot &expected) {
+      const auto restored = authored_state();
+      ASSERT_TRUE(restored.ok()) << restored.error_message();
+      const auto expected_vertices = expected.document.view().vertices;
+      const auto restored_vertices = restored.value().document.view().vertices;
+      ASSERT_EQ(restored_vertices.size(), expected_vertices.size());
+      for (std::size_t index = 0u; index < expected_vertices.size(); ++index) {
+        EXPECT_EQ(restored_vertices[index].id, expected_vertices[index].id);
+        EXPECT_EQ(restored_vertices[index].position.x, expected_vertices[index].position.x);
+        EXPECT_EQ(restored_vertices[index].position.y, expected_vertices[index].position.y);
+        EXPECT_EQ(restored_vertices[index].position.z, expected_vertices[index].position.z);
+      }
+      const auto &selection = restored.value().selection;
+      EXPECT_EQ(selection.kind, expected.selection.kind);
+      EXPECT_EQ(selection.vertices, expected.selection.vertices);
+      EXPECT_EQ(selection.edges, expected.selection.edges);
+      EXPECT_EQ(selection.faces, expected.selection.faces);
+      EXPECT_EQ(selection.has_active, expected.selection.has_active);
+      EXPECT_EQ(selection.active_vertex, expected.selection.active_vertex);
+      EXPECT_EQ(selection.active_edge, expected.selection.active_edge);
+      EXPECT_EQ(selection.active_face, expected.selection.active_face);
+    };
+    const auto expect_history_frame = [&](const QImage &restored, const QImage &expected) {
+      ASSERT_EQ(restored.size(), expected.size());
+      if (context != ViewportOverlaySelectionContext::Edge) {
+        EXPECT_EQ(restored, expected);
+        return;
+      }
+      // Accepted transforms retain their coordinate projection; history restores
+      // a canonical projection. Their edge-boundary compositing can differ while
+      // selection cores, ribbon location, authored coordinates and depth agree.
+      const auto pink_core = [](QColor color) {
+        return color.red() > 180 && color.green() < 130 && color.blue() > 80;
+      };
+      const auto cyan_core = [](QColor color) {
+        return color.green() > 150 && color.blue() > 150 && color.red() < 100;
+      };
+      const auto selected_ribbon = [](QColor color) {
+        const bool pink = color.red() > 130 && color.green() > 30 &&
+            color.blue() > color.green() + 20 && color.red() > color.blue() + 20;
+        const bool orange = color.red() > 130 && color.green() > 110 &&
+            color.red() > color.blue() + 50 && color.green() > color.blue() + 35;
+        return pink || orange;
+      };
+      const auto near_ribbon = [&](const QImage &image, int x, int y) {
+        for (int sample_y = std::max(0, y - 1); sample_y <= std::min(image.height() - 1, y + 1); ++sample_y) {
+          for (int sample_x = std::max(0, x - 1); sample_x <= std::min(image.width() - 1, x + 1); ++sample_x) {
+            if (selected_ribbon(image.pixelColor(sample_x, sample_y))) return true;
+          }
+        }
+        return false;
+      };
+      int changed_pink_core = 0;
+      int changed_cyan_core = 0;
+      int missing_ribbon = 0;
+      int added_ribbon = 0;
+      int changed_outside_ribbon = 0;
+      for (int y = 0; y < expected.height(); ++y) {
+        for (int x = 0; x < expected.width(); ++x) {
+          const QColor before = expected.pixelColor(x, y);
+          const QColor after = restored.pixelColor(x, y);
+          changed_pink_core += pink_core(before) != pink_core(after);
+          changed_cyan_core += cyan_core(before) != cyan_core(after);
+          missing_ribbon += selected_ribbon(before) && !near_ribbon(restored, x, y);
+          added_ribbon += selected_ribbon(after) && !near_ribbon(expected, x, y);
+          changed_outside_ribbon += before != after &&
+              !near_ribbon(expected, x, y) && !near_ribbon(restored, x, y);
+        }
+      }
+      EXPECT_EQ(changed_pink_core, 0);
+      EXPECT_EQ(changed_cyan_core, 0);
+      EXPECT_EQ(missing_ribbon, 0);
+      EXPECT_EQ(added_ribbon, 0);
+      EXPECT_EQ(changed_outside_ribbon, 0);
+    };
+    ASSERT_TRUE(present());
+    const auto baseline = capture("baseline");
+    const auto baseline_state = authored_state();
+    ASSERT_TRUE(baseline_state.ok()) << baseline_state.error_message();
+    const auto moved = editor.commands().execute(quader_command::kViewportNudgeMoveRight);
+    ASSERT_TRUE(moved.ok()) << moved.error_message();
+    ASSERT_TRUE(moved.changed());
+    ASSERT_TRUE(present());
+    const auto translated = capture("move");
+    const auto translated_state = authored_state();
+    ASSERT_TRUE(translated_state.ok()) << translated_state.error_message();
+    expect_selected(translated, {-0.2f,
+        context == ViewportOverlaySelectionContext::Vertex ? -0.6f : 0.0f, 0.0f});
+    EXPECT_EQ(cyan_pixels(translated, harness.cutting_preview_pixel({0.1f, 0.25f, -0.3f})), 0);
+    const auto uploads = harness.component_overlay_stats().uploads;
+    ASSERT_TRUE(present());
+    EXPECT_EQ(harness.component_overlay_stats().uploads.shared_position_upload_count,
+              uploads.shared_position_upload_count);
+    EXPECT_EQ(harness.capture(), translated);
+
+    const auto rotated = editor.commands().execute(quader_command::kViewportNudgeRotateRight);
+    ASSERT_TRUE(rotated.ok()) << rotated.error_message();
+    ASSERT_TRUE(rotated.changed());
+    ASSERT_TRUE(present());
+    const auto rotation = capture("rotate");
+    const auto rotated_state = authored_state();
+    ASSERT_TRUE(rotated_state.ok()) << rotated_state.error_message();
+    const float diagonal = std::sqrt(0.5f);
+    const float initial_y = context == ViewportOverlaySelectionContext::Vertex ? -0.6f : 0.0f;
+    expect_selected(rotation, {0.1f + (-0.3f + initial_y) * diagonal,
+                               (0.3f + initial_y) * diagonal, 0.0f});
+    EXPECT_EQ(cyan_pixels(rotation, harness.cutting_preview_pixel({0.1f, 0.25f, -0.3f})), 0);
+    ASSERT_TRUE(editor.history().undo().ok());
+    ASSERT_TRUE(present());
+    const auto restored_translation = capture("undo_rotate");
+    expect_authored_state(translated_state.value());
+    expect_history_frame(restored_translation, translated);
+    EXPECT_EQ(cyan_pixels(restored_translation, harness.cutting_preview_pixel({0.1f, 0.25f, -0.3f})), 0);
+    ASSERT_TRUE(editor.history().undo().ok());
+    ASSERT_TRUE(present());
+    expect_authored_state(baseline_state.value());
+    EXPECT_EQ(capture("undo_move"), baseline);
+    ASSERT_TRUE(editor.history().redo().ok());
+    ASSERT_TRUE(editor.history().redo().ok());
+    ASSERT_TRUE(present());
+    const auto restored_rotation = capture("redo");
+    expect_authored_state(rotated_state.value());
+    expect_history_frame(restored_rotation, rotation);
+    EXPECT_EQ(cyan_pixels(restored_rotation, harness.cutting_preview_pixel({0.1f, 0.25f, -0.3f})), 0);
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanShiftNudgesPublishExtrusionSelectionDepthAndRepeatTogether) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-shift-nudge-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  const QString directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (!directory.isEmpty()) ASSERT_TRUE(QDir().mkpath(directory));
+  for (const auto &[context, label] :
+       std::array<std::pair<ViewportOverlaySelectionContext, const char *>, 3>{{
+           {ViewportOverlaySelectionContext::Vertex, "vertex"},
+           {ViewportOverlaySelectionContext::Edge, "edge"},
+           {ViewportOverlaySelectionContext::Face, "face"}}}) {
+    SCOPED_TRACE(label);
+    SelectionOverlayRuntimeHarness harness;
+    ASSERT_TRUE(harness.initialize(0.0f, false));
+    ASSERT_TRUE(harness.create_component_transform_sample(context));
+    auto &editor = harness.workflow_editor();
+    ASSERT_TRUE(editor.viewports().focus_pane(ViewportPaneId::Perspective).ok());
+    ASSERT_TRUE(editor.viewports().set_view(ViewportPaneId::Perspective, ViewportView::Top).ok());
+    ASSERT_TRUE(editor.viewports().set_transform_space(QuaderTransformSpace::Global).ok());
+    ASSERT_TRUE(editor.viewports().set_control(QuaderViewportControl::SnappingEnabled, false).ok());
+    const auto present = [&] {
+      return harness.present_component_transform_sample(context, ViewportSettings::defaults());
+    };
+    const auto capture = [&](const char *phase) {
+      const QImage image = harness.capture();
+      EXPECT_FALSE(image.isNull());
+      if (!directory.isEmpty()) {
+        EXPECT_TRUE(image.save(QDir(directory).filePath(
+            QStringLiteral("shift_nudge_%1_%2.png")
+                .arg(QString::fromLatin1(label), QString::fromLatin1(phase)))));
+      }
+      return image;
+    };
+    const auto objects = editor.query().modeling_objects();
+    ASSERT_EQ(objects.size(), 1u);
+    const auto topology_size = [&] {
+      const auto snapshot = harness.modeling().polygon_document_read_snapshot(
+          objects.front().modeling_object_id, false);
+      EXPECT_TRUE(snapshot.ok()) << snapshot.error_message();
+      if (!snapshot.ok()) return std::pair<std::size_t, std::size_t>{};
+      const auto view = snapshot.value().document.view();
+      return std::pair{view.vertices.size(), view.faces.size()};
+    };
+    const auto rear_probe = harness.cutting_preview_pixel({-1.35f, 0.25f, -0.3f});
+    const auto expect_extruded = [&](const QImage &image, float distance) {
+      const auto selected_probe = harness.cutting_preview_pixel({
+          -1.2f, context == ViewportOverlaySelectionContext::Vertex ? -0.6f : 0.0f,
+          distance});
+      if (context == ViewportOverlaySelectionContext::Edge) {
+        // Extrusion preserves left/right order and activates the last copied edge.
+        EXPECT_GE(yellow_pixels(image, selected_probe), 3);
+        EXPECT_GE(pink_pixels(image, harness.cutting_preview_pixel(
+            {-0.6f, 0.0f, distance})), 3);
+      } else {
+        EXPECT_GE(context == ViewportOverlaySelectionContext::Face
+                      ? yellow_pixels(image, selected_probe) : pink_pixels(image, selected_probe), 3);
+      }
+      EXPECT_EQ(cyan_pixels(image, rear_probe), 0);
+    };
+    ASSERT_TRUE(present());
+    const auto baseline = capture("baseline");
+    const auto baseline_size = topology_size();
+    EXPECT_GE(cyan_pixels(baseline, rear_probe), 3);
+    const auto extruded = editor.commands().execute(
+        quader_command::kViewportNudgeDuplicateOrExtrudeMoveDown);
+    ASSERT_TRUE(extruded.ok()) << extruded.error_message();
+    ASSERT_TRUE(extruded.changed());
+    ASSERT_TRUE(present());
+    const auto first = capture("extrude");
+    const auto first_size = topology_size();
+    EXPECT_GT(first_size.first, baseline_size.first);
+    EXPECT_GT(first_size.second, baseline_size.second);
+    expect_extruded(first, 1.0f);
+    const auto uploads = harness.component_overlay_stats().uploads;
+    ASSERT_TRUE(present());
+    EXPECT_EQ(harness.component_overlay_stats().uploads.shared_position_upload_count,
+              uploads.shared_position_upload_count);
+    EXPECT_EQ(harness.capture(), first);
+
+    const auto repeated = editor.commands().execute(quader_command::kEditRepeatLastAction);
+    ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+    ASSERT_TRUE(repeated.changed());
+    ASSERT_TRUE(present());
+    const auto second = capture("repeat");
+    const auto second_size = topology_size();
+    EXPECT_GT(second_size.first, first_size.first);
+    EXPECT_GT(second_size.second, first_size.second);
+    expect_extruded(second, 2.0f);
+    ASSERT_TRUE(editor.history().undo().ok());
+    ASSERT_TRUE(present());
+    EXPECT_EQ(topology_size(), first_size);
+    expect_extruded(capture("undo_repeat"), 1.0f);
+    ASSERT_TRUE(editor.history().undo().ok());
+    ASSERT_TRUE(present());
+    EXPECT_EQ(topology_size(), baseline_size);
+    EXPECT_EQ(capture("undo_extrude"), baseline);
+    ASSERT_TRUE(editor.history().redo().ok());
+    ASSERT_TRUE(editor.history().redo().ok());
+    ASSERT_TRUE(present());
+    EXPECT_EQ(topology_size(), second_size);
+    expect_extruded(capture("redo"), 2.0f);
+  }
+}
+
 int loop_preview_green_pixels(const QImage &image, QVec2 center,
                               bool vertex_fill_only) {
   int count = 0;

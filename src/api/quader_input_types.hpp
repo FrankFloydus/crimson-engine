@@ -6,6 +6,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include <cstddef>
+#include <optional>
+
 namespace quader {
 
 /**
@@ -208,6 +211,15 @@ struct QuaderWheelInputEdge {
   double step_delta = 0.0;
   QuaderInputPosition local = {};
   bool has_local_position = false;
+};
+
+/// Retains an operating-system repeat after the indicated number of true
+/// presses in the same packet. The chord is the original physical key press.
+/// Hosts capture Shift per repeat; omitted metadata preserves the press chord.
+struct QuaderKeyboardRepeatInputEdge {
+  QuaderInputChord chord;
+  std::size_t pressed_chord_offset = 0u;
+  std::optional<bool> shift_held;
 };
 
 inline bool operator==(const QuaderInputChord& left, const QuaderInputChord& right) {

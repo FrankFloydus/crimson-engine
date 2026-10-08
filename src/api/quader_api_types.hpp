@@ -720,6 +720,21 @@ struct QuaderTransformDragBeginRequest {
     bool duplicate_selected = false;
 };
 
+/// A discrete transform already resolved against the current viewport frame.
+struct QuaderResolvedNudgeRequest {
+  QuaderTransformTool tool = QuaderTransformTool::Move;
+  QuaderTransformAxis axis = QuaderTransformAxis::None;
+  QuaderTransformSpace space = QuaderTransformSpace::Global;
+  QuaderTransform3 orientation = {};
+  QVec3 pivot = {};
+  QVec3 move_delta = {};
+  double rotate_angle_degrees = 0.0;
+  /// Duplicates Object/Group selections or extrudes selected components.
+  bool duplicate_selected = false;
+  /// Raw active grid step; extrusion retains it when move snapping is disabled.
+  double extrusion_grid_size = 1.0;
+};
+
 /**
  * Stores a Quader Transform Drag Update Request value used by the public Quader API surface.
  */
