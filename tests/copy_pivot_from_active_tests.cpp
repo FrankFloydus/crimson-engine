@@ -463,8 +463,10 @@ void expect_uvs_near(const std::vector<quader::QVec2> &actual,
 }
 
 quader::QuaderModelingObjectRef
-create_textured_asymmetric_mesh(CopyPivotHarness &harness) {
+create_textured_asymmetric_mesh(CopyPivotHarness &harness,
+                                std::uint32_t material_slot = 0u) {
   quader_poly::Document document = asymmetric_document();
+  document.faces.front().material_slot = material_slot;
   document.faces.front().texture_transform = {
       .scale = {2.0f, -0.5f},
       .shift_uv = {0.125f, -0.25f},
@@ -2112,7 +2114,10 @@ TEST(CopyPivotFromActiveTests,
       find_panel(operations, "object_operations");
   ASSERT_NE(object_panel, nullptr);
   ASSERT_FALSE(object_panel->actions.empty());
-  const quader::QuaderActionItem &disabled = object_panel->actions.back();
+  const quader::QuaderActionItem *copy_action =
+      find_action(*object_panel, "copy_pivot_from_active");
+  ASSERT_NE(copy_action, nullptr);
+  const quader::QuaderActionItem &disabled = *copy_action;
   EXPECT_EQ(disabled.action_id, "copy_pivot_from_active");
   EXPECT_TRUE(disabled.operation_id.empty());
   EXPECT_EQ(disabled.label, "Copy Pivot From Active");
@@ -2138,9 +2143,9 @@ TEST(CopyPivotFromActiveTests,
   object_panel = find_panel(operations, "object_operations");
   ASSERT_NE(object_panel, nullptr);
   ASSERT_FALSE(object_panel->actions.empty());
-  EXPECT_EQ(object_panel->actions.back().action_id,
-            "copy_pivot_from_active");
-  EXPECT_EQ(object_panel->actions.back().visibility,
+  copy_action = find_action(*object_panel, "copy_pivot_from_active");
+  ASSERT_NE(copy_action, nullptr);
+  EXPECT_EQ(copy_action->visibility,
             quader::QuaderActionVisibility::Enabled);
 
   const quader::QuaderActionSet context =
@@ -2158,8 +2163,7 @@ TEST(CopyPivotFromActiveTests,
       });
   ASSERT_NE(copy, context_panel->actions.end());
   ASSERT_NE(std::next(copy), context_panel->actions.end());
-  EXPECT_TRUE(std::next(copy)->action_id == "delete_selection" ||
-              std::next(copy)->action_id == "duplicate_meshes");
+  EXPECT_EQ(std::next(copy)->action_id, "set_origin_to_center");
 
   ASSERT_TRUE(harness.editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(harness.editor.selection()
@@ -2182,6 +2186,581 @@ TEST(CopyPivotFromActiveTests,
   EXPECT_EQ(hidden->visibility, quader::QuaderActionVisibility::Hidden);
 }
 
+TEST(MeshOriginPlacementTests,
+     CenterUsesLocalSurfaceAreaForAuthoredMeshUnderReflectedScale) {
+  CopyPivotHarness harness;
+  const quader::EntityId target =
+      create_asymmetric_mesh(harness, "Area Center").entity;
+  const quader::TransformComponent transform{
+      .position = {7.0f, -4.0f, 2.0f},
+      .rotation_euler = {0.3f, -0.4f, 0.2f},
+      .scale = {-2.0f, 0.5f, 3.0f}};
+  set_transform(harness, target, transform);
+  ASSERT_TRUE(harness.editor.selection().select_objects({target}, target).ok());
+  // The two right triangles have local areas 4 and 6. Their weighted
+  // centroid differs from both the vertex mean and the bounds center.
+  constexpr quader::QVec3 kLocalCenter{4.0f / 3.0f, 4.0f / 15.0f, 0.6f};
+  const quader::QVec3 expected = quader::transform_point(
+      harness.session.scene().world_transform_matrix(target), kLocalCenter);
+  const auto vertices_before = world_vertices(harness, target);
+  const auto authored_before = authored_world_vertices(harness, target);
+  harness.session.history().clear();
+
+  ASSERT_TRUE(harness.editor.modeling().can_set_origin_to_center());
+  const auto result = harness.editor.modeling().set_origin_to_center();
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  ASSERT_TRUE(result.changed());
+  expect_vec3_near(world_origin(harness, target), expected);
+  EXPECT_TRUE(harness.session.scene().transform(target)->custom_pivot);
+  expect_vec3_near(harness.session.scene().transform(target)->rotation_euler,
+                   transform.rotation_euler);
+  expect_vec3_near(harness.session.scene().transform(target)->scale,
+                   transform.scale);
+  expect_vertices_near(world_vertices(harness, target), vertices_before);
+  expect_vertices_near(authored_world_vertices(harness, target),
+                       authored_before);
+
+  const PivotRollbackState after =
+      capture_pivot_rollback_state(harness, target);
+  const auto repeated = harness.editor.modeling().set_origin_to_center();
+  ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+  EXPECT_FALSE(repeated.changed());
+  expect_pivot_rollback_state(harness, target, after);
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  expect_transform_near(*harness.session.scene().transform(target), transform);
+  expect_vertices_near(world_vertices(harness, target), vertices_before);
+  EXPECT_FALSE(harness.editor.history().can_undo());
+  ASSERT_TRUE(harness.editor.history().redo().ok());
+  expect_vec3_near(world_origin(harness, target), expected);
+  expect_vertices_near(world_vertices(harness, target), vertices_before);
+}
+
+TEST(MeshOriginPlacementTests, CenterOfConcavePolygonUsesItsActualSurface) {
+  CopyPivotHarness harness;
+  quader_poly::Document document;
+  // A 4x1 rectangle joined to a 1x2 rectangle has area 6 and centroid
+  // (1.5, 1). Starting at this corner also exercises a non-star-shaped fan.
+  const std::array<quader::QVec3, 6> positions{{{4.0f, 1.0f, 0.0f},
+                                                {1.0f, 1.0f, 0.0f},
+                                                {1.0f, 3.0f, 0.0f},
+                                                {0.0f, 3.0f, 0.0f},
+                                                {0.0f, 0.0f, 0.0f},
+                                                {4.0f, 0.0f, 0.0f}}};
+  std::vector<quader_poly::ElementId> vertices;
+  for (const auto position : positions) {
+    vertices.push_back(quader_poly::add_vertex(document, position));
+  }
+  ASSERT_NE(quader_poly::add_face(document, vertices),
+            quader_poly::kInvalidElementId);
+  const auto created = harness.editor.modeling().create_mesh(
+      quader::QuaderPolygonDocumentInternalAccess::from_backend(document),
+      {.name = "Concave Center"});
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  ASSERT_TRUE(harness.editor.selection().select_object(created.value()).ok());
+  const auto before = authored_world_vertices(harness, created.value().entity);
+
+  const auto result = harness.editor.modeling().set_origin_to_center();
+
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  EXPECT_TRUE(result.changed());
+  expect_vec3_near(world_origin(harness, created.value().entity),
+                   {1.5f, 1.0f, 0.0f});
+  expect_vertices_near(authored_world_vertices(harness, created.value().entity),
+                       before);
+}
+
+TEST(MeshOriginPlacementTests, LegacyCpuMeshesRejectWithoutPartialMutation) {
+  for (const bool degenerate : {false, true}) {
+    SCOPED_TRACE(degenerate);
+    CopyPivotHarness harness;
+    const auto valid = create_asymmetric_mesh(harness, "Earlier Authored Mesh");
+    const auto target = create_plain_cpu_mesh(harness, "Legacy CPU Mesh");
+    if (degenerate) {
+      ASSERT_TRUE(harness.session.assets().update_mesh(
+          mesh_id(harness, target), [](quader::MeshAsset &mesh) {
+            auto &geometry = mesh.edit_geometry();
+            geometry.vertices[0].position = {0.0f, 0.0f, 0.0f};
+            geometry.vertices[1].position = {2.0f, 0.0f, 0.0f};
+            geometry.vertices[2].position = {8.0f, 0.0f, 0.0f};
+            geometry.vertices[3].position = {10.0f, 0.0f, 0.0f};
+          }));
+    }
+    ASSERT_TRUE(harness.editor.selection()
+                    .select_objects({valid.entity, target}, valid.entity)
+                    .ok());
+    harness.session.history().clear();
+    const auto valid_before =
+        capture_pivot_rollback_state(harness, valid.entity);
+    const auto target_before = capture_pivot_rollback_state(harness, target);
+    EXPECT_FALSE(harness.editor.modeling().can_set_origin_to_center());
+    EXPECT_FALSE(harness.editor.modeling().can_set_origin_to_pivot());
+    for (const bool center : {true, false}) {
+      const auto result = center
+                              ? harness.editor.modeling().set_origin_to_center()
+                              : harness.editor.modeling().set_origin_to_pivot();
+      EXPECT_FALSE(result.ok());
+      EXPECT_FALSE(result.changed());
+      EXPECT_FALSE(result.error_message().empty());
+      expect_pivot_rollback_state(harness, valid.entity, valid_before);
+      expect_pivot_rollback_state(harness, target, target_before);
+    }
+  }
+}
+
+TEST(MeshOriginPlacementTests, CoincidentOriginAuthorsCustomPivotOnlyOnce) {
+  for (const bool center : {true, false}) {
+    SCOPED_TRACE(center);
+    CopyPivotHarness harness;
+    const auto target = create_box(harness, "Already Centered");
+    ASSERT_TRUE(harness.editor.selection().select_object(target).ok());
+    harness.session.history().clear();
+    const auto place = [&] {
+      return center ? harness.editor.modeling().set_origin_to_center()
+                    : harness.editor.modeling().set_origin_to_pivot();
+    };
+
+    const auto first = place();
+    ASSERT_TRUE(first.ok()) << first.error_message();
+    EXPECT_TRUE(first.changed());
+    EXPECT_TRUE(harness.session.scene().transform(target.entity)->custom_pivot);
+    const PivotRollbackState after =
+        capture_pivot_rollback_state(harness, target.entity);
+    const auto repeated = place();
+    ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+    EXPECT_FALSE(repeated.changed());
+    expect_pivot_rollback_state(harness, target.entity, after);
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    EXPECT_FALSE(
+        harness.session.scene().transform(target.entity)->custom_pivot);
+    EXPECT_FALSE(harness.editor.history().can_undo());
+  }
+}
+
+TEST(MeshOriginPlacementTests,
+     CoincidentCenterKeepsChildTransformAndMeshPayloadExactlyUnchanged) {
+  CopyPivotHarness harness;
+  const auto parent = create_box(harness, "Centered Parent");
+  const auto child = create_box(harness, "Preserved Child");
+  set_transform(harness, parent.entity,
+                {.position = {3.0f, -7.0f, 5.0f},
+                 .rotation_euler = {0.37f, -0.29f, 0.53f},
+                 .scale = {-1.3f, 0.7f, 2.1f}});
+  set_transform(harness, child.entity,
+                {.position = {-2.3f, 4.7f, 1.9f},
+                 .rotation_euler = {-0.21f, 0.63f, -0.47f},
+                 .scale = {0.8f, 1.4f, 0.6f}});
+  ASSERT_TRUE(
+      harness.editor.scene().reparent(child.entity, parent.entity, false).ok());
+  ASSERT_TRUE(harness.editor.selection().select_object(parent).ok());
+  const auto child_before = *harness.session.scene().transform(child.entity);
+  const auto child_world =
+      harness.session.scene().world_transform_matrix(child.entity);
+  const auto mesh_before = quader::clone_mesh_asset_payload(
+      *harness.session.assets().mesh(mesh_id(harness, parent.entity)));
+  harness.session.history().clear();
+
+  const auto result = harness.editor.modeling().set_origin_to_center();
+
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  EXPECT_TRUE(result.changed());
+  EXPECT_TRUE(harness.session.scene().transform(parent.entity)->custom_pivot);
+  const auto expect_exact_preservation = [&] {
+    const auto &after = *harness.session.scene().transform(child.entity);
+    EXPECT_EQ(after.position.x, child_before.position.x);
+    EXPECT_EQ(after.position.y, child_before.position.y);
+    EXPECT_EQ(after.position.z, child_before.position.z);
+    EXPECT_EQ(after.rotation_euler.x, child_before.rotation_euler.x);
+    EXPECT_EQ(after.rotation_euler.y, child_before.rotation_euler.y);
+    EXPECT_EQ(after.rotation_euler.z, child_before.rotation_euler.z);
+    EXPECT_EQ(after.scale.x, child_before.scale.x);
+    EXPECT_EQ(after.scale.y, child_before.scale.y);
+    EXPECT_EQ(after.scale.z, child_before.scale.z);
+    EXPECT_EQ(after.custom_pivot, child_before.custom_pivot);
+    EXPECT_EQ(after.parenting_offset.values,
+              child_before.parenting_offset.values);
+    EXPECT_EQ(
+        harness.session.scene().world_transform_matrix(child.entity).values,
+        child_world.values);
+    EXPECT_TRUE(quader::mesh_asset_payload_equal(
+        *harness.session.assets().mesh(mesh_id(harness, parent.entity)),
+        mesh_before));
+  };
+  expect_exact_preservation();
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  expect_exact_preservation();
+  ASSERT_TRUE(harness.editor.history().redo().ok());
+  expect_exact_preservation();
+}
+
+TEST(MeshOriginPlacementTests,
+     PivotSnapshotsSharedVisiblePivotForAllSelectedMeshes) {
+  CopyPivotHarness harness;
+  const auto first = create_box(harness, "Left Mesh");
+  const auto second = create_box_with_bounds(
+      harness, "Right Mesh", {0.0f, -1.0f, -1.0f}, {4.0f, 3.0f, 1.0f});
+  set_transform(harness, first.entity, {.position = {-6.0f, 0.0f, 0.0f}});
+  set_transform(harness, second.entity, {.position = {10.0f, 0.0f, 0.0f}});
+  ASSERT_TRUE(harness.editor.selection()
+                  .select_objects({first.entity, second.entity}, first.entity)
+                  .ok());
+  constexpr quader::QVec3 kSharedPivot{3.5f, 1.0f, 0.0f};
+  const auto visible_pivot = harness.editor.query().selection_transform_pivot();
+  ASSERT_TRUE(visible_pivot.has_value());
+  expect_vec3_near(*visible_pivot, kSharedPivot);
+  const auto first_before = world_vertices(harness, first.entity);
+  const auto second_before = world_vertices(harness, second.entity);
+  const auto selected_before = harness.session.scene().selected_entities();
+  harness.session.history().clear();
+
+  ASSERT_TRUE(harness.editor.modeling().can_set_origin_to_pivot());
+  const auto result = harness.editor.commands().execute(
+      quader::quader_command::kModelingSetOriginToPivot);
+
+  ASSERT_TRUE(result.ok()) << result.error_message();
+  ASSERT_TRUE(result.changed());
+  expect_vec3_near(world_origin(harness, first.entity), kSharedPivot);
+  expect_vec3_near(world_origin(harness, second.entity), kSharedPivot);
+  expect_vertices_near(world_vertices(harness, first.entity), first_before);
+  expect_vertices_near(world_vertices(harness, second.entity), second_before);
+  EXPECT_EQ(harness.session.scene().selected_entities(), selected_before);
+  EXPECT_EQ(harness.session.scene().primary_selection(), first.entity);
+  ASSERT_TRUE(harness.editor.history().undo().ok());
+  expect_vec3_near(world_origin(harness, first.entity), {-6.0f, 0.0f, 0.0f});
+  expect_vec3_near(world_origin(harness, second.entity), {10.0f, 0.0f, 0.0f});
+  EXPECT_FALSE(harness.editor.history().can_undo());
+  ASSERT_TRUE(harness.editor.history().redo().ok());
+  expect_vec3_near(world_origin(harness, first.entity), kSharedPivot);
+  expect_vec3_near(world_origin(harness, second.entity), kSharedPivot);
+}
+
+TEST(MeshOriginPlacementTests,
+     CenterAndQuickPivotPreserveSharedHierarchyUvsAndMaterialsThroughHistory) {
+  for (const bool center : {true, false}) {
+    SCOPED_TRACE(center);
+    CopyPivotHarness harness;
+    const auto child = create_textured_asymmetric_mesh(harness, 3u);
+    const auto parent = create_asymmetric_mesh(harness, "Selected Parent");
+    const auto sharer = create_box(harness, "Unselected Shared Mesh");
+    const auto descendant = create_box(harness, "Unselected Descendant");
+    ASSERT_TRUE(harness.editor.scene()
+                    .reparent(child.entity, parent.entity, false)
+                    .ok());
+    ASSERT_TRUE(harness.editor.scene()
+                    .reparent(descendant.entity, child.entity, false)
+                    .ok());
+    set_transform(harness, parent.entity,
+                  {.position = {5.0f, -2.0f, 3.0f},
+                   .rotation_euler = {0.2f, -0.3f, 0.4f},
+                   .scale = {-1.5f, 0.7f, 2.0f}});
+    set_transform(harness, child.entity,
+                  {.position = {-2.0f, 4.0f, 1.0f},
+                   .rotation_euler = {-0.4f, 0.1f, 0.3f},
+                   .scale = {0.8f, 1.2f, 0.6f}});
+    const auto shared_mesh = mesh_id(harness, child.entity);
+    for (const auto entity : {parent.entity, sharer.entity}) {
+      auto component = *harness.session.scene().mesh(entity);
+      component.mesh = shared_mesh;
+      ASSERT_TRUE(harness.session.scene().set_mesh(entity, component));
+    }
+    const quader::TransformComponent mapping_transform{
+        .position = {0.3f, -1.0f, 0.5f},
+        .rotation_euler = {0.3f, 1.2f, -0.4f},
+        .scale = {1.3f, 0.7f, -1.1f}};
+    const auto mapping =
+        quader::compose_transform(mapping_transform.spatial_transform());
+    ASSERT_TRUE(harness.session.scene().set_texture_mapping(
+        child.entity, {.sampling_from_local = mapping}));
+    ASSERT_TRUE(harness.editor.selection()
+                    .select_objects({child.entity, parent.entity}, child.entity)
+                    .ok());
+    constexpr quader::QVec3 kQuickPivot{19.0f, -11.0f, 7.0f};
+    harness.session.pivot().begin_quick(kQuickPivot);
+    harness.session.pivot().end_quick_edit();
+    const auto quick_before =
+        harness.session.pivot().selection_pivot_override();
+    ASSERT_TRUE(quick_before.valid);
+    constexpr quader::QVec3 kLocalCenter{4.0f / 3.0f, 4.0f / 15.0f, 0.6f};
+    const std::array selected{child.entity, parent.entity};
+    std::array<quader::QVec3, 2> expected;
+    std::array<quader::QMat4, 2> world_before;
+    std::array<std::vector<quader::QVec3>, 2> vertices_before;
+    for (std::size_t index = 0; index < selected.size(); ++index) {
+      world_before[index] =
+          harness.session.scene().world_transform_matrix(selected[index]);
+      expected[index] =
+          center ? quader::transform_point(world_before[index], kLocalCenter)
+                 : kQuickPivot;
+      vertices_before[index] = world_vertices(harness, selected[index]);
+    }
+    const auto shared_before = quader::clone_mesh_asset_payload(
+        *harness.session.assets().mesh(shared_mesh));
+    const auto child_uvs_before = effective_uvs(shared_before, mapping);
+    const auto parent_uvs_before = effective_uvs(shared_before, {});
+    const auto descendant_world =
+        harness.session.scene().world_transform_matrix(descendant.entity);
+    const auto sharer_before = world_vertices(harness, sharer.entity);
+    const auto selected_before = harness.session.scene().selected_entities();
+    const auto mesh_count_before = harness.session.assets().mesh_count();
+    harness.session.history().clear();
+
+    const auto placed = harness.editor.commands().execute(
+        center ? quader::quader_command::kModelingSetOriginToCenter
+               : quader::quader_command::kModelingSetOriginToPivot);
+    ASSERT_TRUE(placed.ok()) << placed.error_message();
+    ASSERT_TRUE(placed.changed());
+    const std::array placed_meshes{mesh_id(harness, child.entity),
+                                   mesh_id(harness, parent.entity)};
+    EXPECT_NE(placed_meshes[0], shared_mesh);
+    EXPECT_NE(placed_meshes[1], shared_mesh);
+    EXPECT_NE(placed_meshes[0], placed_meshes[1]);
+    EXPECT_EQ(harness.session.assets().mesh_count(), mesh_count_before + 2u);
+    const auto expect_preserved = [&] {
+      for (std::size_t index = 0; index < selected.size(); ++index) {
+        expect_vec3_near(world_origin(harness, selected[index]),
+                         expected[index]);
+        expect_vertices_near(world_vertices(harness, selected[index]),
+                             vertices_before[index]);
+        const auto *asset =
+            harness.session.assets().mesh(mesh_id(harness, selected[index]));
+        ASSERT_NE(asset, nullptr);
+        ASSERT_NE(asset->authored_polygon_document, nullptr);
+        ASSERT_EQ(asset->authored_polygon_document->faces.size(),
+                  shared_before.authored_polygon_document->faces.size());
+        for (std::size_t face = 0;
+             face < asset->authored_polygon_document->faces.size(); ++face) {
+          EXPECT_EQ(asset->authored_polygon_document->faces[face].material_slot,
+                    shared_before.authored_polygon_document->faces[face]
+                        .material_slot);
+          EXPECT_EQ(
+              asset->authored_polygon_document->faces[face].texture_transform,
+              shared_before.authored_polygon_document->faces[face]
+                  .texture_transform);
+        }
+        const auto *sampling =
+            harness.session.scene().texture_mapping(selected[index]);
+        expect_uvs_near(
+            effective_uvs(*asset, sampling == nullptr
+                                      ? quader::QMat4{}
+                                      : sampling->sampling_from_local),
+            index == 0u ? child_uvs_before : parent_uvs_before);
+      }
+      expect_matrix_near(
+          harness.session.scene().world_transform_matrix(descendant.entity),
+          descendant_world);
+      expect_vertices_near(world_vertices(harness, sharer.entity),
+                           sharer_before);
+      EXPECT_EQ(mesh_id(harness, sharer.entity), shared_mesh);
+      EXPECT_TRUE(quader::mesh_asset_payload_equal(
+          *harness.session.assets().mesh(shared_mesh), shared_before));
+      EXPECT_EQ(harness.session.scene().selected_entities(), selected_before);
+      EXPECT_EQ(harness.session.scene().primary_selection(), child.entity);
+    };
+    expect_preserved();
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    EXPECT_FALSE(harness.editor.history().can_undo());
+    EXPECT_EQ(harness.session.assets().mesh_count(), mesh_count_before);
+    for (std::size_t index = 0; index < selected.size(); ++index) {
+      EXPECT_EQ(mesh_id(harness, selected[index]), shared_mesh);
+      expect_matrix_near(
+          harness.session.scene().world_transform_matrix(selected[index]),
+          world_before[index]);
+    }
+    ASSERT_TRUE(harness.editor.history().redo().ok());
+    EXPECT_EQ(mesh_id(harness, child.entity), placed_meshes[0]);
+    EXPECT_EQ(mesh_id(harness, parent.entity), placed_meshes[1]);
+    expect_preserved();
+  }
+}
+
+TEST(MeshOriginPlacementTests, InvalidSelectionRejectsBothActionsAtomically) {
+  /// Enumerates invalid selections that must never partially rebase a batch.
+  enum class InvalidSelection {
+    Empty,
+    Mixed,
+    Locked,
+    Hidden,
+    Singular,
+    Component,
+    MissingMesh,
+    UnstableMesh,
+    InstanceDefinitionMember,
+    InstanceOccurrence,
+    ModelingPreview,
+    PersistentPivot,
+  };
+  constexpr std::array kCases{InvalidSelection::Empty,
+                              InvalidSelection::Mixed,
+                              InvalidSelection::Locked,
+                              InvalidSelection::Hidden,
+                              InvalidSelection::Singular,
+                              InvalidSelection::Component,
+                              InvalidSelection::MissingMesh,
+                              InvalidSelection::UnstableMesh,
+                              InvalidSelection::InstanceDefinitionMember,
+                              InvalidSelection::InstanceOccurrence,
+                              InvalidSelection::ModelingPreview,
+                              InvalidSelection::PersistentPivot};
+  for (const auto invalid_case : kCases) {
+    SCOPED_TRACE(static_cast<int>(invalid_case));
+    CopyPivotHarness harness;
+    const auto valid = create_box(harness, "Valid Earlier Target");
+    const auto invalid = create_box(harness, "Invalid Later Target");
+    set_transform(harness, invalid.entity, {.position = {9.0f, 2.0f, 1.0f}});
+    ASSERT_TRUE(
+        harness.editor.selection()
+            .select_objects({valid.entity, invalid.entity}, valid.entity)
+            .ok());
+    switch (invalid_case) {
+    case InvalidSelection::Empty:
+      harness.session.scene().clear_selection();
+      break;
+    case InvalidSelection::Mixed: {
+      const auto empty = harness.editor.scene().create_entity(
+          {.name = "Selected Empty", .kind = quader::QuaderEntityKind::Empty});
+      ASSERT_TRUE(empty.ok());
+      ASSERT_TRUE(
+          harness.editor.selection()
+              .select_objects({valid.entity, empty.value().id}, valid.entity)
+              .ok());
+      break;
+    }
+    case InvalidSelection::Locked:
+      ASSERT_TRUE(harness.session.scene().set_locked(invalid.entity, true));
+      break;
+    case InvalidSelection::Hidden:
+      ASSERT_TRUE(harness.session.scene().set_visible(invalid.entity, false));
+      break;
+    case InvalidSelection::Singular:
+      set_transform(harness, invalid.entity, {.scale = {1.0f, 0.0f, 1.0f}});
+      break;
+    case InvalidSelection::Component:
+      ASSERT_TRUE(
+          harness.editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+      ASSERT_TRUE(harness.editor.selection()
+                      .set_mode(quader::QuaderSelectionMode::Vertex)
+                      .ok());
+      break;
+    case InvalidSelection::MissingMesh: {
+      auto component = *harness.session.scene().mesh(invalid.entity);
+      component.mesh = std::numeric_limits<quader::AssetId>::max();
+      ASSERT_TRUE(harness.session.scene().set_mesh(invalid.entity, component));
+      break;
+    }
+    case InvalidSelection::UnstableMesh:
+      ASSERT_TRUE(harness.session.assets().update_mesh(
+          mesh_id(harness, invalid.entity), [](quader::MeshAsset &mesh) {
+            mesh.has_stable_cpu_topology = false;
+          }));
+      break;
+    case InvalidSelection::InstanceDefinitionMember: {
+      const auto definition =
+          harness.session.scene().create_entity("Definition");
+      ASSERT_TRUE(harness.session.scene().set_parent(invalid.entity, definition,
+                                                     false));
+      ASSERT_TRUE(harness.session.scene().set_instance_definition(definition));
+      break;
+    }
+    case InvalidSelection::InstanceOccurrence: {
+      const auto definition =
+          harness.session.scene().create_entity("Definition");
+      ASSERT_TRUE(harness.session.scene().set_parent(invalid.entity, definition,
+                                                     false));
+      ASSERT_TRUE(harness.session.scene().set_instance_definition(definition));
+      const auto occurrence = harness.session.scene().create_entity(
+          "Occurrence", quader::EntityKind::Instance);
+      ASSERT_TRUE(harness.session.scene().set_instance_occurrence(
+          occurrence, {.definition = definition}));
+      ASSERT_TRUE(harness.editor.selection()
+                      .select_objects({valid.entity, occurrence}, valid.entity)
+                      .ok());
+      break;
+    }
+    case InvalidSelection::ModelingPreview: {
+      const auto preview = harness.editor.commands().execute(
+          harness.editor.commands().command_id_for_modeling_action("half_cut"));
+      ASSERT_TRUE(preview.ok()) << preview.error_message();
+      break;
+    }
+    case InvalidSelection::PersistentPivot:
+      ASSERT_TRUE(harness.editor.selection().select_object(valid).ok());
+      ASSERT_TRUE(
+          harness.editor.tools().activate(quader::ViewportToolId::Pivot).ok());
+      harness.session.pivot().set_persistent_preview_position(
+          {8.0f, 3.0f, 2.0f});
+      break;
+    }
+    harness.session.history().clear();
+    const auto before = capture_pivot_rollback_state(harness, valid.entity);
+    const auto observable_before =
+        quader::test::capture_command_observable_state(harness.editor);
+    EXPECT_FALSE(harness.editor.modeling().can_set_origin_to_center());
+    EXPECT_FALSE(harness.editor.modeling().can_set_origin_to_pivot());
+    for (const bool center : {true, false}) {
+      const auto result = center
+                              ? harness.editor.modeling().set_origin_to_center()
+                              : harness.editor.modeling().set_origin_to_pivot();
+      EXPECT_FALSE(result.ok());
+      EXPECT_FALSE(result.changed());
+      EXPECT_FALSE(result.error_message().empty());
+      expect_pivot_rollback_state(harness, valid.entity, before);
+      const auto difference = quader::test::diff_command_observable_state(
+          observable_before,
+          quader::test::capture_command_observable_state(harness.editor));
+      EXPECT_TRUE(difference.empty()) << difference.summary;
+    }
+  }
+}
+
+TEST(MeshOriginPlacementTests,
+     FailedUndoDuringPreviewRestoresStateAndRemainsRetryable) {
+  for (const bool center : {true, false}) {
+    SCOPED_TRACE(center);
+    CopyPivotHarness harness;
+    const auto target = create_box_with_bounds(
+        harness, "Undo Target", {0.0f, 0.0f, 0.0f}, {4.0f, 2.0f, 3.0f});
+    const auto sharer = create_box(harness, "Unselected Sharer");
+    const auto shared_mesh = mesh_id(harness, target.entity);
+    auto component = *harness.session.scene().mesh(sharer.entity);
+    component.mesh = shared_mesh;
+    ASSERT_TRUE(harness.session.scene().set_mesh(sharer.entity, component));
+    ASSERT_TRUE(harness.editor.selection().select_object(target).ok());
+    harness.session.history().clear();
+    const auto placed = center
+                            ? harness.editor.modeling().set_origin_to_center()
+                            : harness.editor.modeling().set_origin_to_pivot();
+    ASSERT_TRUE(placed.ok()) << placed.error_message();
+    ASSERT_TRUE(placed.changed());
+    const auto cloned_mesh = mesh_id(harness, target.entity);
+    ASSERT_NE(cloned_mesh, shared_mesh);
+    const auto preview = harness.editor.commands().execute(
+        harness.editor.commands().command_id_for_modeling_action("half_cut"));
+    ASSERT_TRUE(preview.ok()) << preview.error_message();
+    const auto before = capture_pivot_rollback_state(harness, target.entity);
+    const auto observable_before =
+        quader::test::capture_command_observable_state(harness.editor);
+
+    const auto failed = harness.session.history().undo();
+
+    EXPECT_FALSE(failed.ok);
+    EXPECT_FALSE(failed.changed);
+    EXPECT_EQ(failed.message, "Commit or cancel the active preview first.");
+    expect_pivot_rollback_state(harness, target.entity, before);
+    const auto difference = quader::test::diff_command_observable_state(
+        observable_before,
+        quader::test::capture_command_observable_state(harness.editor));
+    EXPECT_TRUE(difference.empty()) << difference.summary;
+    EXPECT_TRUE(harness.session.history().can_undo());
+    EXPECT_FALSE(harness.session.history().can_redo());
+    ASSERT_TRUE(harness.editor.tools().cancel_active_tool_preview().ok());
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    EXPECT_EQ(mesh_id(harness, target.entity), shared_mesh);
+    EXPECT_FALSE(harness.editor.history().can_undo());
+    ASSERT_TRUE(harness.editor.history().redo().ok());
+    EXPECT_EQ(mesh_id(harness, target.entity), cloned_mesh);
+    EXPECT_EQ(mesh_id(harness, sharer.entity), shared_mesh);
+  }
+}
+
 TEST(PivotPerformanceTests,
      CopyBatchBuildsOneHierarchyAndUsesSceneMeshReferenceIndex) {
   constexpr std::size_t kTargetCount = 24u;
@@ -2189,8 +2768,7 @@ TEST(PivotPerformanceTests,
   const quader::QuaderModelingObjectRef source =
       create_asymmetric_mesh(harness, "Scale Source", 2.0f);
   set_transform(harness, source.entity,
-                {.position = {8.0f, 3.0f, -5.0f},
-                 .custom_pivot = true});
+                {.position = {8.0f, 3.0f, -5.0f}, .custom_pivot = true});
 
   std::vector<quader::QuaderModelingObjectRef> targets;
   targets.reserve(kTargetCount);
@@ -2202,10 +2780,10 @@ TEST(PivotPerformanceTests,
                                 static_cast<float>(index % 5u),
                                 -static_cast<float>(index % 7u)}});
     if (index > 0u) {
-      ASSERT_TRUE(harness.editor.scene()
-                      .reparent(targets[index].entity,
-                                targets[index - 1u].entity, true)
-                      .ok());
+      ASSERT_TRUE(
+          harness.editor.scene()
+              .reparent(targets[index].entity, targets[index - 1u].entity, true)
+              .ok());
     }
   }
 

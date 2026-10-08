@@ -70,12 +70,18 @@ public:
   can_activate_persistent(const EditorSelectionService &selection) const;
   [[nodiscard]] bool can_copy_pivot_from_active(
       const EditorSelectionService &selection) const;
+  [[nodiscard]] bool can_set_origin_to_center(
+      const EditorSelectionService &selection) const;
+  [[nodiscard]] bool can_set_origin_to_pivot(
+      const EditorSelectionService &selection) const;
 
   CommandResult activate_persistent(EditorSelectionService &selection);
   CommandResult cancel_persistent();
   CommandResult apply_persistent();
   CommandResult
   copy_pivot_from_active(const EditorSelectionService &selection);
+  CommandResult set_origin_to_center(const EditorSelectionService &selection);
+  CommandResult set_origin_to_pivot(const EditorSelectionService &selection);
   CommandResult set_snap_enabled(std::string_view setting_id, bool enabled);
   CommandResult reset_settings();
   CommandResult execute_align_action(std::string_view action_id);

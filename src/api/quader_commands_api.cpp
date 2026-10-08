@@ -114,7 +114,7 @@ struct NativeModelingActionCommand final {
   QuaderCommandId command_id;
 };
 
-constexpr std::array<NativeModelingActionCommand, 7>
+constexpr std::array<NativeModelingActionCommand, 9>
     kNativeModelingActionCommands{{
         {"snap_meshes_to_floor",
          quader_command::kModelingSnapMeshesToFloor},
@@ -124,6 +124,8 @@ constexpr std::array<NativeModelingActionCommand, 7>
         {"bake_scale", quader_command::kModelingBakeScale},
         {"copy_pivot_from_active",
          quader_command::kModelingCopyPivotFromActive},
+        {"set_origin_to_center", quader_command::kModelingSetOriginToCenter},
+        {"set_origin_to_pivot", quader_command::kModelingSetOriginToPivot},
         {"snap_vertices_to_floor",
          quader_command::kModelingSnapVerticesToFloor},
     }};
@@ -3094,6 +3096,19 @@ void QuaderCommandsApi::Impl::register_commands() {
       quader_command::kModelingCopyPivotFromActive, "Copy Pivot From Active",
       [this] { return api_.modeling().copy_pivot_from_active(); }, {},
       [this] { return api_.modeling().can_copy_pivot_from_active(); });
+  // Origin rebasing deliberately has no default shortcut; it is assignable in Settings.
+  register_command(
+      quader_command::kModelingSetOriginToCenter, "Set Origin to Center",
+      [this] { return api_.modeling().set_origin_to_center(); }, {},
+      [this] { return api_.modeling().can_set_origin_to_center(); });
+  set_keybinding_selection_modes(
+      quader_command::kModelingSetOriginToCenter.string(), kSelectionModeObject);
+  register_command(
+      quader_command::kModelingSetOriginToPivot, "Set Origin to Pivot",
+      [this] { return api_.modeling().set_origin_to_pivot(); }, {},
+      [this] { return api_.modeling().can_set_origin_to_pivot(); });
+  set_keybinding_selection_modes(
+      quader_command::kModelingSetOriginToPivot.string(), kSelectionModeObject);
   for (const FaceTextureCommand &command : kFaceTextureCommands) {
     register_command(
         command.command_id,

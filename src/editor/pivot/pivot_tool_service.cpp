@@ -391,31 +391,34 @@ make_rebase_plan(const SceneDocument &scene, const AssetRegistry &assets,
     });
   }
 
-  for (const EntityId child : scene.children(target)) {
-    const TransformComponent *child_before = scene.transform(child);
-    if (child_before == nullptr) {
-      continue;
-    }
-    const std::optional<TransformComponent> compensated =
-        try_scene_reparented_transform_preserving_world(
-            target_world_after, target_world_before, *child_before);
-    if (!compensated.has_value()) {
-      error_message = "Pivot child transform could not be compensated.";
-      return std::nullopt;
-    }
-    const QMat4 child_world_after = scene_transform_multiply(
-        target_world_after, scene_local_transform_matrix(*compensated));
-    if (!scene_transform_is_finite(*compensated) ||
-        !scene_matrix_is_finite(child_world_after)) {
-      error_message = "Pivot child transform could not be compensated.";
-      return std::nullopt;
-    }
-    if (!same_transform(*child_before, *compensated)) {
-      plan.transforms.push_back(PivotTransformEdit{
-          .entity = child,
-          .before = *child_before,
-          .after = *compensated,
-      });
+  // A metadata-only custom-pivot promotion does not change the child frame.
+  if (world_delta.x != 0.0f || world_delta.y != 0.0f || world_delta.z != 0.0f) {
+    for (const EntityId child : scene.children(target)) {
+      const TransformComponent *child_before = scene.transform(child);
+      if (child_before == nullptr) {
+        continue;
+      }
+      const std::optional<TransformComponent> compensated =
+          try_scene_reparented_transform_preserving_world(
+              target_world_after, target_world_before, *child_before);
+      if (!compensated.has_value()) {
+        error_message = "Pivot child transform could not be compensated.";
+        return std::nullopt;
+      }
+      const QMat4 child_world_after = scene_transform_multiply(
+          target_world_after, scene_local_transform_matrix(*compensated));
+      if (!scene_transform_is_finite(*compensated) ||
+          !scene_matrix_is_finite(child_world_after)) {
+        error_message = "Pivot child transform could not be compensated.";
+        return std::nullopt;
+      }
+      if (!same_transform(*child_before, *compensated)) {
+        plan.transforms.push_back(PivotTransformEdit{
+            .entity = child,
+            .before = *child_before,
+            .after = *compensated,
+        });
+      }
     }
   }
 
@@ -858,9 +861,9 @@ struct PivotGeometryFrame {
 };
 
 /**
- * Stores a fully validated copy-pivot selection and its target requests.
+ * Stores a fully validated origin-rebase selection and its target requests.
  */
-struct CopyPivotSelection {
+struct PivotRebaseSelection {
   bool ok = false;
   std::string message;
   std::vector<PivotRebaseRequest> requests;
@@ -1040,7 +1043,7 @@ void sort_copy_pivot_requests_parent_first(
             });
 }
 
-CopyPivotSelection collect_copy_pivot_selection(
+PivotRebaseSelection collect_copy_pivot_selection(
     const SceneDocument &scene, const AssetRegistry &assets,
     const EditorSelectionService &selection,
     PivotPlanningStats *planning_stats = nullptr) {
@@ -1077,7 +1080,7 @@ CopyPivotSelection collect_copy_pivot_selection(
       glm::transpose(source_frame->world_rotation) *
       to_glm(*source_pivot - source_frame->world_hybrid_center);
 
-  CopyPivotSelection result;
+  PivotRebaseSelection result;
   bool found_target = false;
   for (const EntityId entity : selected) {
     if (entity == source || scene.mesh(entity) == nullptr) {
@@ -1138,6 +1141,183 @@ CopyPivotSelection collect_copy_pivot_selection(
 
   sort_copy_pivot_requests_parent_first(scene, result.requests,
                                         planning_stats);
+  result.ok = true;
+  return result;
+}
+
+enum class OriginPlacement {
+  SurfaceCenter,
+  SelectionPivot,
+};
+
+glm::dvec3 double_point(QVec3 point) {
+  return {static_cast<double>(point.x), static_cast<double>(point.y),
+          static_cast<double>(point.z)};
+}
+
+template <class Value>
+void add_compensated(Value value, Value &sum, Value &correction) {
+  const Value corrected = value - correction;
+  const Value next = sum + corrected;
+  correction = (next - sum) - corrected;
+  sum = next;
+}
+
+std::optional<QVec3> local_surface_center(const MeshAsset &mesh) {
+  const MeshGeometryPayload &geometry = mesh.geometry();
+  if (geometry.vertices.empty() || geometry.indices.size() % 3u != 0u) {
+    return std::nullopt;
+  }
+  // Compiled indices already carry Quader's concave polygon triangulation.
+  // Integrate in local space: object scaling must not change local area weights.
+  const glm::dvec3 anchor = double_point(geometry.vertices.front().position);
+  glm::dvec3 moment{0.0};
+  glm::dvec3 moment_correction{0.0};
+  double area = 0.0;
+  double area_correction = 0.0;
+  for (std::size_t index = 0u; index < geometry.indices.size(); index += 3u) {
+    const std::uint32_t first = geometry.indices[index];
+    const std::uint32_t second = geometry.indices[index + 1u];
+    const std::uint32_t third = geometry.indices[index + 2u];
+    if (first >= geometry.vertices.size() || second >= geometry.vertices.size() ||
+        third >= geometry.vertices.size()) {
+      return std::nullopt;
+    }
+    const glm::dvec3 a = double_point(geometry.vertices[first].position) - anchor;
+    const glm::dvec3 b = double_point(geometry.vertices[second].position) - anchor;
+    const glm::dvec3 c = double_point(geometry.vertices[third].position) - anchor;
+    const double triangle_area = glm::length(glm::cross(b - a, c - a)) * 0.5;
+    add_compensated(triangle_area, area, area_correction);
+    add_compensated(((a + b + c) / 3.0) * triangle_area, moment,
+                    moment_correction);
+  }
+
+  glm::dvec3 center = anchor;
+  if (area > 0.0) {
+    center += moment / area;
+  } else {
+    glm::dvec3 sum{0.0};
+    glm::dvec3 correction{0.0};
+    std::size_t count = 0u;
+    if (mesh.authored_polygon_document != nullptr &&
+        !mesh.authored_polygon_document->vertices.empty()) {
+      for (const quader_poly::Vertex &vertex :
+           mesh.authored_polygon_document->vertices) {
+        add_compensated(double_point(vertex.position) - anchor, sum, correction);
+        ++count;
+      }
+    } else {
+      for (const MeshVertex &vertex : geometry.vertices) {
+        add_compensated(double_point(vertex.position) - anchor, sum, correction);
+        ++count;
+      }
+    }
+    center += sum / static_cast<double>(count);
+  }
+  const QVec3 result{static_cast<float>(center.x), static_cast<float>(center.y),
+                     static_cast<float>(center.z)};
+  return finite_vector(result) ? std::optional<QVec3>{result} : std::nullopt;
+}
+
+PivotRebaseSelection collect_origin_rebase_selection(
+    const SceneDocument &scene, const AssetRegistry &assets,
+    const ModelingSessionService &modeling,
+    const EditorSelectionService &selection, bool persistent_session,
+    OriginPlacement placement, SelectionPivotOverride temporary_pivot,
+    bool resolve_destinations = true) {
+  if (!release_has_feature(ReleaseFeature::Pivot)) {
+    return {.message = release_feature_unavailable_message()};
+  }
+  if (persistent_session || modeling.can_cancel_active_preview_for_undo() ||
+      modeling.uv_peel_preview_active() ||
+      modeling.curve_document_preview_active()) {
+    return {.message = "Commit or cancel the active preview first."};
+  }
+  if (selection.mode() != ModelingSelectionMode::Object ||
+      modeling.instance_edit_scope().active()) {
+    return {.message = "Set Origin only works on meshes in object mode."};
+  }
+  const std::vector<EntityId> selected = scene.selected_entities();
+  if (selected.empty()) {
+    return {.message = "Select at least one mesh to set its origin."};
+  }
+
+  std::optional<QVec3> shared_world_pivot;
+  if (resolve_destinations && placement == OriginPlacement::SelectionPivot) {
+    shared_world_pivot = temporary_pivot.valid
+                             ? std::optional<QVec3>{temporary_pivot.world_position}
+                             : resolve_scene_selection_visible_pivot(scene, assets);
+    if (!shared_world_pivot.has_value() || !finite_vector(*shared_world_pivot)) {
+      return {.message = "The selection has no valid visible pivot."};
+    }
+  }
+
+  PivotRebaseSelection result;
+  if (resolve_destinations) {
+    result.requests.reserve(selected.size());
+  }
+  for (const EntityId entity : selected) {
+    if (!scene.exists(entity) || scene.kind(entity) != EntityKind::Mesh ||
+        scene.transform(entity) == nullptr ||
+        scene.instance_occurrence(entity) != nullptr ||
+        scene.is_instance_definition_entity(entity) ||
+        scene.is_instance_definition_member(entity) ||
+        !scene.is_effectively_visible(entity) ||
+        scene.is_effectively_locked(entity)) {
+      return {.message = "Every origin target must be a visible, unlocked mesh."};
+    }
+    const QMat4 world_matrix = scene.world_transform_matrix(entity);
+    if (!invertible_world_matrix(world_matrix) ||
+        (resolve_destinations &&
+         !pivot_rebase_environment_is_valid(scene, entity))) {
+      return {.message = "Origin target has an invalid transform hierarchy."};
+    }
+    const MeshComponent *component = scene.mesh(entity);
+    const MeshAsset *mesh = component != nullptr ? assets.mesh(component->mesh)
+                                               : nullptr;
+    const ModelingObjectComponent *modeling_object =
+        scene.modeling_object(entity);
+    if (modeling_object == nullptr || !modeling_object->sdk_owned ||
+        modeling_object->object_id == kInvalidModelingObjectId ||
+        mesh == nullptr || !mesh->has_authored_polygon_document ||
+        mesh->authored_polygon_document == nullptr) {
+      return {.message =
+                  "Origin target is not an editable authored modeling mesh."};
+    }
+    if (!mesh->has_stable_cpu_topology || mesh->geometry().vertices.empty()) {
+      return {.message = "Origin target does not have editable CPU mesh data."};
+    }
+    // Availability stays bounded by selected objects. Full geometry validation,
+    // centroid integration and hierarchy sorting belong to command execution.
+    if (!resolve_destinations) {
+      continue;
+    }
+    if (!mesh_has_editable_finite_geometry(*mesh)) {
+      return {.message = "Origin target has non-finite mesh geometry."};
+    }
+    QVec3 world_pivot;
+    if (shared_world_pivot.has_value()) {
+      world_pivot = *shared_world_pivot;
+    } else {
+      const std::optional<QVec3> center = local_surface_center(*mesh);
+      if (!center.has_value()) {
+        return {.message = "Origin target has no valid surface center."};
+      }
+      world_pivot = transform_point(world_matrix, *center);
+    }
+    if (!finite_vector(world_pivot)) {
+      return {.message = "Origin destination is not finite."};
+    }
+    const QVec3 world_origin = transform_point(world_matrix, {});
+    const bool origin_matches = near_same_point(world_origin, world_pivot);
+    if (!scene.transform(entity)->custom_pivot || !origin_matches) {
+      result.requests.push_back({
+          .target = entity,
+          .world_pivot = origin_matches ? world_origin : world_pivot,
+      });
+    }
+  }
+  sort_copy_pivot_requests_parent_first(scene, result.requests, nullptr);
   result.ok = true;
   return result;
 }
@@ -1306,6 +1486,22 @@ bool PivotToolService::can_copy_pivot_from_active(
   return collect_copy_pivot_selection(scene_, assets_, selection).ok;
 }
 
+bool PivotToolService::can_set_origin_to_center(
+    const EditorSelectionService &selection) const {
+  return collect_origin_rebase_selection(
+             scene_, assets_, modeling_, selection, persistent_.has_value(),
+             OriginPlacement::SurfaceCenter, {}, false)
+      .ok;
+}
+
+bool PivotToolService::can_set_origin_to_pivot(
+    const EditorSelectionService &selection) const {
+  return collect_origin_rebase_selection(
+             scene_, assets_, modeling_, selection, persistent_.has_value(),
+             OriginPlacement::SelectionPivot, selection_pivot_override(), false)
+      .ok;
+}
+
 CommandResult
 PivotToolService::activate_persistent(EditorSelectionService &selection) {
   if (!release_has_feature(ReleaseFeature::Pivot)) {
@@ -1420,7 +1616,7 @@ CommandResult PivotToolService::copy_pivot_from_active(
   if (!release_has_feature(ReleaseFeature::Pivot)) {
     return command_invalid_result(release_feature_unavailable_message());
   }
-  CopyPivotSelection copy =
+  PivotRebaseSelection copy =
       collect_copy_pivot_selection(scene_, assets_, selection,
                                    &planning_stats_);
   if (!copy.ok) {
@@ -1434,6 +1630,38 @@ CommandResult PivotToolService::copy_pivot_from_active(
   return history_.execute(std::make_unique<PivotRebaseCommand>(
       scene_, assets_, modeling_, std::move(copy.requests),
       "Copy Pivot From Active", &planning_stats_));
+}
+
+CommandResult PivotToolService::set_origin_to_center(
+    const EditorSelectionService &selection) {
+  PivotRebaseSelection origins = collect_origin_rebase_selection(
+      scene_, assets_, modeling_, selection, persistent_.has_value(),
+      OriginPlacement::SurfaceCenter, {});
+  if (!origins.ok) {
+    return command_invalid_result(std::move(origins.message));
+  }
+  if (origins.requests.empty()) {
+    return command_unchanged_result();
+  }
+  return history_.execute(std::make_unique<PivotRebaseCommand>(
+      scene_, assets_, modeling_, std::move(origins.requests),
+      "Set Origin to Center"));
+}
+
+CommandResult PivotToolService::set_origin_to_pivot(
+    const EditorSelectionService &selection) {
+  PivotRebaseSelection origins = collect_origin_rebase_selection(
+      scene_, assets_, modeling_, selection, persistent_.has_value(),
+      OriginPlacement::SelectionPivot, selection_pivot_override());
+  if (!origins.ok) {
+    return command_invalid_result(std::move(origins.message));
+  }
+  if (origins.requests.empty()) {
+    return command_unchanged_result();
+  }
+  return history_.execute(std::make_unique<PivotRebaseCommand>(
+      scene_, assets_, modeling_, std::move(origins.requests),
+      "Set Origin to Pivot"));
 }
 
 CommandResult

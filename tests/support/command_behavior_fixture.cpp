@@ -702,7 +702,18 @@ private:
                     "Create second canonical scene");
       break;
     case CanonicalCommandFixture::ObjectSelection:
-      if (command_id_ ==
+      if (command_id_ == quader_command::kModelingSetOriginToCenter.string()) {
+        PolygonFixture polygon = make_single_quad();
+        for (auto &vertex : polygon.document.vertices) {
+          vertex.position += QVec3{3.0f, 1.0f, 2.0f};
+        }
+        const QuaderModelingObjectRef object =
+            create_polygon_object(std::move(polygon), "Offset Origin Surface");
+        require_ok(editor().selection().set_mode(QuaderSelectionMode::Object),
+                   "Enter Object mode for origin placement");
+        require_ok(editor().selection().select_object(object),
+                   "Select canonical origin surface");
+      } else if (command_id_ ==
           quader_command::kModelingCreateOuterHull.string()) {
         const QuaderModelingObjectRef object = create_polygon_object(
             make_single_quad(), "Open Outer Hull Surface");

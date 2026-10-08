@@ -326,7 +326,20 @@ TEST(QtViewportContextMenuTests,
   };
   verify_ownership({"edit.duplicate", "edit.create_instance", "edit.copy",
                     "edit.delete", "modeling.bake_rotation",
-                    "modeling.remove_doubles"});
+                    "modeling.remove_doubles", "modeling.set_origin_to_center",
+                    "modeling.set_origin_to_pivot"});
+
+  const auto expect_no_origin_commands = [&]() {
+    const auto commands = quader::qt_viewport_context_commands(
+        editor, editor.selection().summary(), localization);
+    for (const auto id : {
+             quader::quader_command::kModelingSetOriginToCenter,
+             quader::quader_command::kModelingSetOriginToPivot}) {
+      EXPECT_FALSE(std::ranges::any_of(commands, [id](const auto &command) {
+        return command.command_id == id.string();
+      })) << id.string();
+    }
+  };
 
   struct ComponentCase final {
     quader::QuaderSelectionMode mode;
@@ -349,6 +362,7 @@ TEST(QtViewportContextMenuTests,
       ASSERT_TRUE(editor.selection().select_face(mesh.value(), 1).ok());
     }
     verify_ownership({"edit.delete", component.operation});
+    expect_no_origin_commands();
     verify_ownership({}, false);
   }
 
@@ -359,6 +373,7 @@ TEST(QtViewportContextMenuTests,
   ASSERT_TRUE(editor.commands().execute("edit.copy").ok());
   ASSERT_TRUE(editor.selection().clear().ok());
   verify_ownership({"edit.paste"}, false);
+  expect_no_origin_commands();
 
   const auto second = editor.modeling().create_box(
       {.min = {2.0F, -1.0F, -1.0F}, .max = {4.0F, 1.0F, 1.0F}},
@@ -374,6 +389,7 @@ TEST(QtViewportContextMenuTests,
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Group).ok());
   ASSERT_TRUE(editor.selection().select_objects({group.value().id}).ok());
   verify_ownership({"edit.ungroup", "edit.duplicate", "edit.delete"});
+  expect_no_origin_commands();
 }
 
 TEST(QtViewportContextMenuTests, SelectedCurveKeepsSolidifyWhileGenericOperationsStayInQ) {

@@ -454,6 +454,14 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
                Fixture::ObjectPairSelection,
                kTransformDomains | Domain::ModelingContent | Domain::Assets,
                Outcome::ChangeRequired, UndoRepeat::Undoable),
+      contract(quader_command::kModelingSetOriginToCenter,
+               Fixture::ObjectSelection,
+               kTransformDomains | Domain::ModelingContent | Domain::Assets,
+               Outcome::ChangeRequired, UndoRepeat::Undoable),
+      contract(quader_command::kModelingSetOriginToPivot,
+               Fixture::ObjectPairSelection,
+               kTransformDomains | Domain::ModelingContent | Domain::Assets,
+               Outcome::ChangeRequired, UndoRepeat::Undoable),
       contract(quader_command::kModelingSnapMeshesToFloor,
                Fixture::ObjectSelection, kTransformDomains,
                Outcome::ChangeRequired, UndoRepeat::Undoable),
@@ -838,7 +846,7 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
 #ifndef NDEBUG
   static_assert(std::size(kContracts) == 232U);
 #else
-  static_assert(std::size(kContracts) == 231U);
+  static_assert(std::size(kContracts) == 233U);
 #endif
   return std::span<const CommandBehaviorContract>{kContracts};
 }

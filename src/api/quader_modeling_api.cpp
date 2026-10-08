@@ -444,6 +444,8 @@ std::string_view transform_bake_label(QuaderTransformBakeMode mode) {
 enum class NativeModelingActionAvailability {
   SnapMeshesToFloor,
   CopyPivotFromActive,
+  SetOriginToCenter,
+  SetOriginToPivot,
   SnapVerticesToFloor,
   BakeTransforms,
   BakeLocation,
@@ -478,7 +480,7 @@ struct NativeModelingActionDescriptor final {
   bool rebuilds_mesh_on_success = true;
 };
 
-constexpr std::array<NativeModelingActionDescriptor, 7>
+constexpr std::array<NativeModelingActionDescriptor, 9>
     kNativeModelingActions{{
         {
             .action_id = "snap_meshes_to_floor",
@@ -582,6 +584,36 @@ constexpr std::array<NativeModelingActionDescriptor, 7>
             .rebuilds_mesh_on_success = true,
         },
         {
+            .action_id = "set_origin_to_center",
+            .label = "Set Origin to Center",
+            .selection_mode = ModelingSelectionMode::Object,
+            .panel_id = "object_operations",
+            .availability = NativeModelingActionAvailability::SetOriginToCenter,
+            .operations_placement = NativeModelingActionPlacement::Last,
+            .context_placement = NativeModelingActionPlacement::BeforeEditActions,
+            .unavailable_reason_key =
+                "modeling.action.disabled.set_origin_to_center_selection",
+            .active_tool_reason_key =
+                "modeling.action.disabled.set_origin_active_tool",
+            .instance_edit_reason_key = {},
+            .rebuilds_mesh_on_success = true,
+        },
+        {
+            .action_id = "set_origin_to_pivot",
+            .label = "Set Origin to Pivot",
+            .selection_mode = ModelingSelectionMode::Object,
+            .panel_id = "object_operations",
+            .availability = NativeModelingActionAvailability::SetOriginToPivot,
+            .operations_placement = NativeModelingActionPlacement::Last,
+            .context_placement = NativeModelingActionPlacement::BeforeEditActions,
+            .unavailable_reason_key =
+                "modeling.action.disabled.set_origin_to_pivot_selection",
+            .active_tool_reason_key =
+                "modeling.action.disabled.set_origin_active_tool",
+            .instance_edit_reason_key = {},
+            .rebuilds_mesh_on_success = true,
+        },
+        {
             .action_id = "snap_vertices_to_floor",
             .label = "Snap Vertices to Floor",
             .selection_mode = ModelingSelectionMode::Vertex,
@@ -610,6 +642,10 @@ bool native_modeling_action_is_available(
     return session.snap_to_floor().can_snap_selected_meshes_to_floor();
   case NativeModelingActionAvailability::CopyPivotFromActive:
     return session.pivot().can_copy_pivot_from_active(session.selection());
+  case NativeModelingActionAvailability::SetOriginToCenter:
+    return session.pivot().can_set_origin_to_center(session.selection());
+  case NativeModelingActionAvailability::SetOriginToPivot:
+    return session.pivot().can_set_origin_to_pivot(session.selection());
   case NativeModelingActionAvailability::SnapVerticesToFloor:
     return session.snap_to_floor().can_snap_selected_vertices_to_floor();
   case NativeModelingActionAvailability::BakeTransforms:
@@ -2216,6 +2252,56 @@ QuaderApiVoidResult QuaderModelingApi::copy_pivot_from_active() {
   return mutations_.run_document_command(
       session.pivot().copy_pivot_from_active(session.selection()),
       "Copy Pivot From Active");
+}
+
+bool QuaderModelingApi::can_set_origin_to_center() const {
+  if (!release_has_feature(ReleaseFeature::Pivot)) {
+    return false;
+  }
+  const SceneSession &session = scene_session(session_);
+  return native_modeling_action_execution_is_available(session) &&
+         session.pivot().can_set_origin_to_center(session.selection());
+}
+
+QuaderApiVoidResult QuaderModelingApi::set_origin_to_center() {
+  if (!release_has_feature(ReleaseFeature::Pivot)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
+  SceneSession &session = scene_session(session_);
+  if (!native_modeling_action_execution_is_available(session)) {
+    return mutations_.run_document_command(
+        command_invalid_result(
+            "Apply or cancel the active tool before setting an origin."),
+        "Set Origin to Center");
+  }
+  return mutations_.run_document_command(
+      session.pivot().set_origin_to_center(session.selection()),
+      "Set Origin to Center");
+}
+
+bool QuaderModelingApi::can_set_origin_to_pivot() const {
+  if (!release_has_feature(ReleaseFeature::Pivot)) {
+    return false;
+  }
+  const SceneSession &session = scene_session(session_);
+  return native_modeling_action_execution_is_available(session) &&
+         session.pivot().can_set_origin_to_pivot(session.selection());
+}
+
+QuaderApiVoidResult QuaderModelingApi::set_origin_to_pivot() {
+  if (!release_has_feature(ReleaseFeature::Pivot)) {
+    return invalid_api_status(session_, release_feature_unavailable_message());
+  }
+  SceneSession &session = scene_session(session_);
+  if (!native_modeling_action_execution_is_available(session)) {
+    return mutations_.run_document_command(
+        command_invalid_result(
+            "Apply or cancel the active tool before setting an origin."),
+        "Set Origin to Pivot");
+  }
+  return mutations_.run_document_command(
+      session.pivot().set_origin_to_pivot(session.selection()),
+      "Set Origin to Pivot");
 }
 
 bool QuaderModelingApi::can_bake_transforms(QuaderTransformBakeMode mode) const {

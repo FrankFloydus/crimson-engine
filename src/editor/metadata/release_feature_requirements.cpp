@@ -39,6 +39,8 @@ constexpr auto kActionRequirements = std::to_array<FeatureRequirement>({
     {"bake_rotation", ReleaseFeature::TransformBaking},
     {"bake_scale", ReleaseFeature::TransformBaking},
     {"copy_pivot_from_active", ReleaseFeature::Pivot},
+    {"set_origin_to_center", ReleaseFeature::Pivot},
+    {"set_origin_to_pivot", ReleaseFeature::Pivot},
     {"mirror_selection_x", ReleaseFeature::MeshMirror},
     {"mirror_selection_y", ReleaseFeature::MeshMirror},
     {"mirror_selection_z", ReleaseFeature::MeshMirror},

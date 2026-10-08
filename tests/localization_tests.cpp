@@ -547,7 +547,7 @@ TEST(LocalizationResourceTests,
     std::string_view english;
     std::string_view italian;
   };
-  constexpr std::array<LabelExpectation, 43> kExpectedLabels{{
+  constexpr std::array<LabelExpectation, 45> kExpectedLabels{{
       {"delete_selection", "Delete", "Elimina"},
       {"duplicate_meshes", "Duplicate", "Duplica"},
       {"snap_meshes_to_floor", "Snap to Floor", "Aggancia al pavimento"},
@@ -559,6 +559,8 @@ TEST(LocalizationResourceTests,
       {"create_outer_hull", "Create Outer Hull", "Crea guscio esterno"},
       {"copy_pivot_from_active", "Copy Pivot From Active",
        "Copia pivot dall'oggetto attivo"},
+      {"set_origin_to_center", "Set Origin to Center", "Imposta origine al centro"},
+      {"set_origin_to_pivot", "Set Origin to Pivot", "Imposta origine al pivot"},
       {"snap_vertices_to_active", "Snap to Vertex", "Aggancia al vertice"},
       {"snap_vertices_to_floor", "Snap to Floor",
        "Aggancia al pavimento"},

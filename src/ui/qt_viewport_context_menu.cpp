@@ -385,6 +385,12 @@ std::vector<QtViewportContextCommand> qt_viewport_context_commands(
                  "Unparent", Section::Primary);
     append_fixed(quader_command::kEditFlattenInstance, "ui.menu.edit.flatten_instance",
                  "Flatten Instance", Section::Primary);
+    append_fixed(quader_command::kModelingSetOriginToCenter,
+                 "ui.viewport.context_menu.action.set_origin_to_center.label",
+                 "Set Origin to Center", Section::Arrange);
+    append_fixed(quader_command::kModelingSetOriginToPivot,
+                 "ui.viewport.context_menu.action.set_origin_to_pivot.label",
+                 "Set Origin to Pivot", Section::Arrange);
   }
   const auto append_section = [&](Section section) {
     for (const QuaderActionItem *action :

@@ -120,6 +120,8 @@ constexpr auto kExcludedCommands = std::to_array<QuaderCommandId>({
     quader_command::kModelingBakeLocation,
     quader_command::kModelingBakeRotation,
     quader_command::kModelingBakeScale,
+    quader_command::kModelingSetOriginToCenter,
+    quader_command::kModelingSetOriginToPivot,
     quader_command::kModelingMirrorSelectionX,
     quader_command::kModelingMirrorSelectionY,
     quader_command::kModelingMirrorSelectionZ,
@@ -239,6 +241,26 @@ TEST(PublicReleaseCommands, EveryExcludedCommandIsAbsentAndRejectsWithoutMutatio
                              quader_command::kModelingFlipFaceNormals}) {
     EXPECT_TRUE(editor.commands().descriptor(command).has_value()) << command.string();
   }
+}
+
+TEST(PublicReleaseCommands, OriginPlacementApisRejectWithoutMutation) {
+  auto standalone = create_standalone_editor();
+  auto &editor = standalone.editor();
+  const auto box = editor.modeling().create_box(
+      {.min = {0.f, 0.f, 0.f}, .max = {4.f, 2.f, 3.f}}, "Origin selection");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  const auto before = capture_command_observable_state(editor);
+  EXPECT_FALSE(editor.modeling().can_set_origin_to_center());
+  EXPECT_FALSE(editor.modeling().can_set_origin_to_pivot());
+  const auto centered = editor.modeling().set_origin_to_center();
+  EXPECT_FALSE(centered.ok());
+  EXPECT_FALSE(centered.changed());
+  expect_unchanged(editor, before);
+  const auto pivoted = editor.modeling().set_origin_to_pivot();
+  EXPECT_FALSE(pivoted.ok());
+  EXPECT_FALSE(pivoted.changed());
+  expect_unchanged(editor, before);
 }
 
 TEST(PublicReleaseCommands, DisabledToolActivationPreservesActivePrimitivePreview) {

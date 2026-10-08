@@ -48,6 +48,8 @@ constexpr CommandScope kCommandScopes[]{
     {quader_command::kModelingFlipHorizontal, kObject, Operand::Polygon},
     {quader_command::kModelingFlipVertical, kObject, Operand::Polygon},
     {quader_command::kModelingCopyPivotFromActive, kObject, Operand::Polygon},
+    {quader_command::kModelingSetOriginToCenter, kObject, Operand::Polygon},
+    {quader_command::kModelingSetOriginToPivot, kObject, Operand::Polygon},
     {quader_command::kModelingSnapMeshesToFloor, kObject, Operand::Polygon},
     {quader_command::kModelingBakeTransforms, kObject, Operand::Polygon},
     {quader_command::kModelingBakeLocation, kObject, Operand::Polygon},
@@ -183,7 +185,9 @@ viewport_context_menu_modeling_section(QuaderSelectionMode mode) {
 ViewportContextMenuActionBucket
 viewport_context_menu_action_bucket(QuaderSelectionMode mode,
                                     std::string_view action_id) {
-  if (action_id == "copy_pivot_from_active") {
+  if (action_id == "copy_pivot_from_active" ||
+      action_id == "set_origin_to_center" ||
+      action_id == "set_origin_to_pivot") {
     return mode == QuaderSelectionMode::Object
                ? ViewportContextMenuActionBucket::Object
                : ViewportContextMenuActionBucket::Suppressed;

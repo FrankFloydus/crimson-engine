@@ -36,6 +36,7 @@
 #include <filesystem>
 #include <functional>
 #include <set>
+#include <utility>
 
 namespace {
 
@@ -536,6 +537,118 @@ TEST(QtViewportMarkingMenuTests, MixedInstancesAndLightsExposeOneAlignToolLaunch
     EXPECT_EQ(popup.findChild<QAction *>(QStringLiteral("tools.activate.align")), nullptr);
     popup.close();
   }));
+}
+
+TEST(QtViewportMarkingMenuTests,
+     OriginCommandsUseFixedRowsAndDispatchThroughTheirCommandOwners) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-marking-menu-origin-commands-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  quader::apply_qt_obsidian_application_theme(application.palette());
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  quader::ViewportInputRouter input_router;
+  auto localization = loaded_localization();
+  QWidget owner;
+  prepare_owner(owner);
+  const auto first = editor.modeling().create_box(
+      {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}},
+      "First Origin Mesh");
+  const auto second = editor.modeling().create_box(
+      {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}},
+      "Second Origin Mesh");
+  ASSERT_TRUE(first.ok()) << first.error_message();
+  ASSERT_TRUE(second.ok()) << second.error_message();
+  ASSERT_TRUE(editor.scene().set_transform(
+      first.value().entity, {.position = {-4.0F, 0.0F, 0.0F}}).ok());
+  ASSERT_TRUE(editor.scene().set_transform(
+      second.value().entity, {.position = {4.0F, 0.0F, 0.0F}}).ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.selection().select_objects({first.value(), second.value()}).ok());
+  const auto original_pivot = editor.query().selection_transform_pivot();
+  ASSERT_TRUE(original_pivot.has_value());
+  const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (!review_directory.isEmpty()) {
+    ASSERT_TRUE(QDir().mkpath(review_directory));
+  }
+  const QFont baseline_font = application.font();
+  for (const float factor : {1.0F, 2.0F}) {
+    SCOPED_TRACE(factor);
+    const quader::QtUiScaleMetrics metrics(factor);
+    application.setFont(metrics.font(baseline_font));
+    for (const auto command_id : {command::kModelingSetOriginToPivot,
+                                  command::kModelingSetOriginToCenter}) {
+      SCOPED_TRACE(command_id.string());
+      const bool set_center =
+          command_id.string() == command::kModelingSetOriginToCenter.string();
+      EXPECT_TRUE(show_and_interact(owner, editor, input_router, localization,
+                                   [&](QWidget &popup) {
+        auto *overflow = popup.findChild<QListWidget *>(
+            QStringLiteral("markingMenu.overflow"));
+        ASSERT_NE(overflow, nullptr);
+        for (const auto &[id, label] : {
+                 std::pair{command::kModelingSetOriginToCenter,
+                           QStringLiteral("Set Origin to Center")},
+                 std::pair{command::kModelingSetOriginToPivot,
+                           QStringLiteral("Set Origin to Pivot")}}) {
+          const auto actions = popup.findChildren<QAction *>(
+              QString::fromUtf8(id.string().data(), id.string().size()));
+          ASSERT_EQ(actions.size(), 1);
+          EXPECT_EQ(actions.front()->text(), label);
+          EXPECT_TRUE(actions.front()->isEnabled());
+          EXPECT_TRUE(actions.front()->shortcuts().isEmpty());
+          EXPECT_EQ(overflow->findItems(label, Qt::MatchExactly).size(), 1);
+          for (const auto *button : popup.findChildren<QToolButton *>()) {
+            EXPECT_NE(button->accessibleName(), label);
+          }
+        }
+        const QString selected_label = set_center
+            ? QStringLiteral("Set Origin to Center")
+            : QStringLiteral("Set Origin to Pivot");
+        const auto items = overflow->findItems(selected_label, Qt::MatchExactly);
+        ASSERT_EQ(items.size(), 1);
+        overflow->scrollToItem(items.front());
+        const QPoint global_point = overflow->viewport()->mapToGlobal(
+            overflow->visualItemRect(items.front()).center());
+        QMouseEvent hover(QEvent::MouseMove,
+                          QPointF(popup.mapFromGlobal(global_point)),
+                          QPointF(global_point), Qt::NoButton, Qt::NoButton,
+                          Qt::NoModifier);
+        QCoreApplication::sendEvent(&popup, &hover);
+        if (!review_directory.isEmpty() && !set_center) {
+          const QImage capture = popup.grab().toImage();
+          ASSERT_FALSE(capture.isNull());
+          EXPECT_TRUE(capture.save(QDir(review_directory).filePath(
+              QStringLiteral("marking-origin-commands-%1.png")
+                  .arg(static_cast<int>(factor * 100.0F)))));
+        }
+        QKeyEvent release(QEvent::KeyRelease, Qt::Key_Space, Qt::NoModifier);
+        QCoreApplication::sendEvent(&popup, &release);
+      }, {}, metrics));
+      const auto first_state = editor.query().entity(first.value().entity);
+      const auto second_state = editor.query().entity(second.value().entity);
+      ASSERT_TRUE(first_state.has_value());
+      ASSERT_TRUE(second_state.has_value());
+      const quader::QVec3 first_expected = set_center
+          ? quader::QVec3{-4.0F, 0.0F, 0.0F} : *original_pivot;
+      const quader::QVec3 second_expected = set_center
+          ? quader::QVec3{4.0F, 0.0F, 0.0F} : *original_pivot;
+      EXPECT_FLOAT_EQ(first_state->transform.position.x, first_expected.x);
+      EXPECT_FLOAT_EQ(first_state->transform.position.y, first_expected.y);
+      EXPECT_FLOAT_EQ(first_state->transform.position.z, first_expected.z);
+      EXPECT_FLOAT_EQ(second_state->transform.position.x, second_expected.x);
+      EXPECT_FLOAT_EQ(second_state->transform.position.y, second_expected.y);
+      EXPECT_FLOAT_EQ(second_state->transform.position.z, second_expected.z);
+    }
+    ASSERT_TRUE(editor.history().undo().ok());
+    ASSERT_TRUE(editor.history().undo().ok());
+  }
+  application.setFont(baseline_font);
 }
 
 TEST(QtViewportMarkingMenuTests, ChangedSelectionPaneAndRuntimeRejectStaleIntent) {

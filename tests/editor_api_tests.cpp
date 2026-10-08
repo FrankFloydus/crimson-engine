@@ -25037,9 +25037,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 232u);
+  EXPECT_EQ(commands.size(), 234u);
 #else
-  EXPECT_EQ(commands.size(), 231u);
+  EXPECT_EQ(commands.size(), 233u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;
