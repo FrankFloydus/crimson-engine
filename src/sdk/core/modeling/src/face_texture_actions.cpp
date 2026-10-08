@@ -389,134 +389,313 @@ struct TransferChart {
   }
 };
 
-/// Face-oriented boundary edges select Hammer's local plane orientation.
-struct TransferEdgePair {
-  std::size_t source = 0U;
-  std::size_t target = 0U;
+/// A local frame and target-center pullback, independent of chart values or state.
+struct ContinuationPlan {
+  std::optional<std::array<std::size_t, 3>> source_corners;
+  bool rotates = false;
+  QVec3d source_reference{};
+  QVec3d target_reference{};
+  QVec3d target_pullback_offset{};
+  QVec3d source_normal{};
+  QVec3d source_transverse{};
+  double sine = 0.0;
+  double one_minus_cosine = 0.0;
 };
 
-[[nodiscard]] std::optional<TransferEdgePair> shared_transfer_edge(
-    const TargetWork &source, const FaceWork &source_face,
-    const TransferPlane &source_plane, const TargetWork &target,
-    const FaceWork &target_face, const TransferPlane &target_plane) {
-  if (source.target->key != target.target->key || source.original != target.original) {
+/// Perimeter indices retain each polygon's own edge direction.
+struct ContinuationEdges {
+  std::size_t source_start = 0;
+  std::size_t target_start = 0;
+  bool shared = false;
+};
+
+/// Exact endpoint coincidence distinguishes shared topology from displaced copies.
+[[nodiscard]] bool continuation_same_position(QVec3d left, QVec3d right) {
+  return left.x == right.x && left.y == right.y && left.z == right.z;
+}
+
+/// Every finite, nonzero normal is usable, even when its magnitude is tiny.
+[[nodiscard]] QVec3d continuation_unit_or_zero(QVec3d value) {
+  const double magnitude = std::hypot(value.x, value.y, value.z);
+  if (!(magnitude > 0.0) || !std::isfinite(magnitude)) {
+    return {};
+  }
+  return value / magnitude;
+}
+
+/// The proximity policy treats a componentwise tiny direction as its first point.
+[[nodiscard]] bool continuation_direction_is_point(QVec3d direction) {
+  constexpr double kPointThreshold = 1.0e-6;
+  return std::abs(direction.x) < kPointThreshold &&
+         std::abs(direction.y) < kPointThreshold &&
+         std::abs(direction.z) < kPointThreshold;
+}
+
+/// Uses a relative displacement so distant world origins do not enter projection.
+[[nodiscard]] double continuation_point_line_distance_squared(
+    QVec3d displacement, QVec3d direction, double direction_squared) {
+  const auto perpendicular = quader_geometry::cross(displacement, direction);
+  return quader_geometry::dot(perpendicular, perpendicular) / direction_squared;
+}
+
+/// Scores aligned edges by their supporting lines and the prescribed overlap sample.
+[[nodiscard]] double continuation_edge_distance_squared(
+    QVec3d source_first, QVec3d source_direction,
+    QVec3d target_first, QVec3d target_direction) {
+  const auto displacement = target_first - source_first;
+  const bool source_is_point = continuation_direction_is_point(source_direction);
+  const bool target_is_point = continuation_direction_is_point(target_direction);
+  const double source_squared =
+      quader_geometry::dot(source_direction, source_direction);
+  const double target_squared =
+      quader_geometry::dot(target_direction, target_direction);
+  if (source_is_point && target_is_point) {
+    return quader_geometry::dot(displacement, displacement);
+  }
+  if (source_is_point) {
+    return continuation_point_line_distance_squared(
+        displacement, target_direction, target_squared);
+  }
+  if (target_is_point) {
+    return continuation_point_line_distance_squared(
+        displacement, source_direction, source_squared);
+  }
+
+  constexpr double kCrossSquaredThreshold = 1.0e-6;
+  const auto line_normal =
+      quader_geometry::cross(source_direction, target_direction);
+  const double cross_squared = quader_geometry::dot(line_normal, line_normal);
+  if (cross_squared >= kCrossSquaredThreshold) {
+    const double distance = quader_geometry::dot(
+        displacement, line_normal / std::sqrt(cross_squared));
+    return distance * distance;
+  }
+
+  const double first_parameter =
+      quader_geometry::dot(displacement, source_direction) / source_squared;
+  const double second_parameter = quader_geometry::dot(
+      displacement + target_direction, source_direction) / source_squared;
+  const double lower = std::max(0.0, std::min(first_parameter, second_parameter));
+  const double upper = std::min(1.0, std::max(first_parameter, second_parameter));
+  // Crossed bounds are intentional when the projected intervals do not overlap.
+  const double sample = 0.5 * (lower + upper);
+  const auto target_displacement =
+      source_first - target_first + source_direction * sample;
+  return continuation_point_line_distance_squared(
+      target_displacement, target_direction, target_squared);
+}
+
+/// Shared edges have priority; strict comparisons preserve both perimeter orders.
+[[nodiscard]] std::optional<ContinuationEdges> find_continuation_edges(
+    const TransferPlane &source, const TransferPlane &target,
+    std::span<const quader_poly::ElementId> source_vertices,
+    std::span<const quader_poly::ElementId> target_vertices,
+    bool same_occurrence) {
+  const std::size_t source_count = source.positions.size();
+  const std::size_t target_count = target.positions.size();
+  if (source_count < 2 || target_count < 2) {
     return std::nullopt;
   }
-  const auto &vertices = source_face.face->vertices;
-  const auto &target_vertices = target_face.face->vertices;
-  const auto same_point = [](QVec3d left, QVec3d right) {
-    return left.x == right.x && left.y == right.y && left.z == right.z;
-  };
-  for (std::size_t first = 0U; first < vertices.size(); ++first) {
-    const std::size_t second = (first + 1U) % vertices.size();
-    const auto target_first = std::ranges::find(target_vertices, vertices[first]);
-    const auto target_second = std::ranges::find(target_vertices, vertices[second]);
-    if (target_first == target_vertices.end() || target_second == target_vertices.end()) {
-      continue;
+  if (same_occurrence && source_vertices.size() == source_count &&
+      target_vertices.size() == target_count) {
+    for (std::size_t source_start = 0; source_start < source_count; ++source_start) {
+      const std::size_t source_end = (source_start + 1) % source_count;
+      for (std::size_t target_start = 0; target_start < target_count; ++target_start) {
+        const std::size_t target_end = (target_start + 1) % target_count;
+        const bool forward =
+            source_vertices[source_start] == target_vertices[target_start] &&
+            source_vertices[source_end] == target_vertices[target_end] &&
+            continuation_same_position(source.positions[source_start],
+                                       target.positions[target_start]) &&
+            continuation_same_position(source.positions[source_end],
+                                       target.positions[target_end]);
+        const bool reverse =
+            source_vertices[source_start] == target_vertices[target_end] &&
+            source_vertices[source_end] == target_vertices[target_start] &&
+            continuation_same_position(source.positions[source_start],
+                                       target.positions[target_end]) &&
+            continuation_same_position(source.positions[source_end],
+                                       target.positions[target_start]);
+        if (forward || reverse) {
+          return ContinuationEdges{source_start, target_start, true};
+        }
+      }
     }
-    const auto a = static_cast<std::size_t>(target_first - target_vertices.begin());
-    const auto b = static_cast<std::size_t>(target_second - target_vertices.begin());
-    if (((a + 1U) % target_vertices.size() != b &&
-         (b + 1U) % target_vertices.size() != a) ||
-        !same_point(source_plane.positions[first], target_plane.positions[a]) ||
-        !same_point(source_plane.positions[second], target_plane.positions[b])) {
-      continue;
-    }
-    return TransferEdgePair{first, (a + 1U) % target_vertices.size() == b ? a : b};
   }
-  return std::nullopt;
-}
 
-[[nodiscard]] double transfer_line_distance_squared(
-    QVec3d first, QVec3d first_direction, QVec3d second, QVec3d second_direction) {
-  const auto delta = first - second;
-  const double aa = quader_geometry::dot(first_direction, first_direction);
-  const double bb = quader_geometry::dot(first_direction, second_direction);
-  const double cc = quader_geometry::dot(second_direction, second_direction);
-  const double dd = quader_geometry::dot(first_direction, delta);
-  const double ee = quader_geometry::dot(second_direction, delta);
-  const auto point_edge = [](QVec3d direction) {
-    return std::abs(direction.x) < 1.0e-6 && std::abs(direction.y) < 1.0e-6 &&
-           std::abs(direction.z) < 1.0e-6;
-  };
-  const auto cross = quader_geometry::cross(first_direction, second_direction);
-  // The equivalent Gram determinant avoids cancellation for long aligned edges.
-  const double determinant = quader_geometry::dot(cross, cross);
-  QVec3d separation;
-  if (point_edge(first_direction)) {
-    separation = point_edge(second_direction) ? delta
-        : delta - second_direction * (ee / cc);
-  } else if (point_edge(second_direction)) {
-    separation = delta - first_direction * (dd / aa);
-  } else if (std::abs(determinant) >= 1.0e-6) {
-    const double along_first = -quader_geometry::dot(
-        quader_geometry::cross(delta, second_direction), cross) / determinant;
-    const double along_second = -quader_geometry::dot(
-        quader_geometry::cross(delta, first_direction), cross) / determinant;
-    separation = delta + first_direction * along_first - second_direction * along_second;
-  } else {
-    const double first_projection = -dd / aa;
-    const double second_projection = (bb - dd) / aa;
-    const double lower = std::max(std::min(first_projection, second_projection), 0.0);
-    const double upper = std::min(std::max(first_projection, second_projection), 1.0);
-    const auto midpoint_delta = delta + first_direction * ((lower + upper) * 0.5);
-    separation = midpoint_delta - second_direction *
-        (quader_geometry::dot(midpoint_delta, second_direction) / cc);
-  }
-  return quader_geometry::dot(separation, separation);
-}
-
-[[nodiscard]] std::optional<TransferEdgePair> closest_transfer_edges(
-    const TransferPlane &source, const TransferPlane &target) {
-  std::optional<TransferEdgePair> result;
+  constexpr double kMinimumAlignment = 0.95;
+  std::optional<ContinuationEdges> best;
   double best_distance = std::numeric_limits<double>::infinity();
-  for (std::size_t first = 0U; first < source.positions.size(); ++first) {
-    const auto source_edge = source.positions[(first + 1U) % source.positions.size()] -
-                             source.positions[first];
-    const double source_length_squared = quader_geometry::dot(source_edge, source_edge);
-    if (source_length_squared == 0.0) {
+  for (std::size_t source_start = 0; source_start < source_count; ++source_start) {
+    const auto source_direction = source.positions[(source_start + 1) % source_count] -
+                                  source.positions[source_start];
+    const double source_length =
+        std::hypot(source_direction.x, source_direction.y, source_direction.z);
+    if (!(source_length > 0.0) || !std::isfinite(source_length)) {
       continue;
     }
-    for (std::size_t second = 0U; second < target.positions.size(); ++second) {
-      const auto target_edge = target.positions[(second + 1U) % target.positions.size()] -
-                               target.positions[second];
-      const double target_length_squared = quader_geometry::dot(target_edge, target_edge);
-      if (target_length_squared == 0.0 ||
-          std::abs(quader_geometry::dot(source_edge, target_edge)) <
-              0.95 * std::sqrt(source_length_squared * target_length_squared)) {
+    const auto source_unit = source_direction / source_length;
+    for (std::size_t target_start = 0; target_start < target_count; ++target_start) {
+      const auto target_direction = target.positions[(target_start + 1) % target_count] -
+                                    target.positions[target_start];
+      const double target_length =
+          std::hypot(target_direction.x, target_direction.y, target_direction.z);
+      if (!(target_length > 0.0) || !std::isfinite(target_length)) {
         continue;
       }
-      const double distance = transfer_line_distance_squared(
-          source.positions[first], source_edge, target.positions[second], target_edge);
-      if (distance < best_distance) {
+      const double alignment = std::abs(quader_geometry::dot(
+          source_unit, target_direction / target_length));
+      if (alignment < kMinimumAlignment) {
+        continue;
+      }
+      const double distance = continuation_edge_distance_squared(
+          source.positions[source_start], source_direction,
+          target.positions[target_start], target_direction);
+      if (std::isfinite(distance) && distance < best_distance) {
         best_distance = distance;
-        result = TransferEdgePair{first, second};
+        best = ContinuationEdges{source_start, target_start, false};
       }
     }
   }
-  return result;
+  return best;
 }
 
-void orient_transfer_plane(TransferPlane &plane, std::size_t first) {
-  const auto origin = plane.positions[first];
-  const auto edge = plane.positions[(first + 1U) % plane.positions.size()] - origin;
-  const double length_squared = quader_geometry::dot(edge, edge);
-  double best_distance = 0.0;
-  QVec3d farthest;
-  for (const auto position : plane.positions) {
-    const auto delta = position - origin;
-    const auto perpendicular = length_squared >= 1.0e-5
-        ? delta - edge * (quader_geometry::dot(delta, edge) / length_squared) : delta;
-    const double distance = quader_geometry::dot(perpendicular, perpendicular);
-    if (distance > best_distance) {
-      best_distance = distance;
-      farthest = delta;
+/// Conditions a local seam chart using the earliest best corner after its endpoint.
+[[nodiscard]] std::optional<std::array<std::size_t, 3>>
+continuation_source_corners(const TransferPlane &source, std::size_t source_start) {
+  const std::size_t count = source.positions.size();
+  const std::size_t source_end = (source_start + 1) % count;
+  const auto edge = source.positions[source_start] - source.positions[source_end];
+  const double edge_squared = quader_geometry::dot(edge, edge);
+  if (!(edge_squared > 0.0) || !std::isfinite(edge_squared)) {
+    return std::nullopt;
+  }
+  std::optional<std::array<std::size_t, 3>> best;
+  double best_score = 0.0;
+  for (std::size_t offset = 2; offset < count; ++offset) {
+    const std::size_t candidate = (source_start + offset) % count;
+    const auto reach = source.positions[candidate] - source.positions[source_end];
+    const double reach_squared = quader_geometry::dot(reach, reach);
+    if (!(reach_squared > 0.0) || !std::isfinite(reach_squared)) {
+      continue;
+    }
+    const double absolute_cosine = std::clamp(std::abs(
+        quader_geometry::dot(edge, reach) /
+        (std::sqrt(edge_squared) * std::sqrt(reach_squared))), 0.0, 1.0);
+    const double score = edge_squared * reach_squared * (1.0 - absolute_cosine);
+    if (std::isfinite(score) && score > best_score) {
+      best_score = score;
+      best = std::array<std::size_t, 3>{source_start, source_end, candidate};
     }
   }
-  const auto normal = quader_geometry::cross(edge, farthest);
-  const double normal_length = std::sqrt(quader_geometry::dot(normal, normal));
-  plane.normal = normal_length > 0.0 && std::isfinite(normal_length)
-      ? normal / normal_length : QVec3d{};
+  return best;
+}
+
+/// The chosen edge and its first farthest corner determine orientation, even on concave faces.
+[[nodiscard]] QVec3d continuation_edge_normal(
+    const TransferPlane &plane, std::size_t start) {
+  constexpr double kShortEdgeSquared = 1.0e-5;
+  const auto first = plane.positions[start];
+  const auto direction = plane.positions[(start + 1) % plane.positions.size()] - first;
+  const double direction_squared = quader_geometry::dot(direction, direction);
+  double farthest_distance = -1.0;
+  QVec3d farthest_displacement{};
+  for (const auto position : plane.positions) {
+    const auto displacement = position - first;
+    const double distance = direction_squared < kShortEdgeSquared
+        ? quader_geometry::dot(displacement, displacement)
+        : continuation_point_line_distance_squared(
+              displacement, direction, direction_squared);
+    if (distance > farthest_distance) {
+      farthest_distance = distance;
+      farthest_displacement = displacement;
+    }
+  }
+  return continuation_unit_or_zero(
+      quader_geometry::cross(direction, farthest_displacement));
+}
+
+/// Plans seam conditioning and the acute-angle spatial pullback without fitting UVs.
+[[nodiscard]] ContinuationPlan make_continuation_plan(
+    const TransferPlane &source, const TransferPlane &target,
+    std::span<const quader_poly::ElementId> source_vertices,
+    std::span<const quader_poly::ElementId> target_vertices,
+    bool same_occurrence) {
+  ContinuationPlan plan;
+  auto source_normal = source.normal;
+  auto target_normal = target.normal;
+  if (const auto edges = find_continuation_edges(
+          source, target, source_vertices, target_vertices, same_occurrence)) {
+    if (edges->shared) {
+      plan.source_corners = continuation_source_corners(source, edges->source_start);
+    }
+    source_normal = continuation_edge_normal(source, edges->source_start);
+    target_normal = continuation_edge_normal(target, edges->target_start);
+  }
+
+  const auto normal_cross = quader_geometry::cross(source_normal, target_normal);
+  const double plane_sine =
+      std::hypot(normal_cross.x, normal_cross.y, normal_cross.z);
+  if (!std::isfinite(plane_sine) ||
+      plane_sine < static_cast<double>(std::numeric_limits<float>::epsilon())) {
+    return plan;
+  }
+  const double plane_cosine = std::clamp(
+      quader_geometry::dot(source_normal, target_normal), -1.0, 1.0);
+  const double angle = std::atan2(plane_sine, std::abs(plane_cosine));
+  plan.sine = std::sin(angle);
+  // This half-angle identity avoids subtracting nearly equal values near parallel.
+  plan.one_minus_cosine = plan.sine * plan.sine / (1.0 + std::cos(angle));
+  plan.source_normal = source_normal;
+  plan.source_transverse =
+      quader_geometry::cross(normal_cross / plane_sine, source_normal);
+  plan.source_reference = source.positions.front();
+  plan.target_reference = target.center;
+
+  const auto reference_delta = plan.target_reference - plan.source_reference;
+  const double normal_distance = quader_geometry::dot(source_normal, reference_delta);
+  const double normal_ratio = plane_cosine / plane_sine;
+  // In the (transverse, normal) frame, the true intersection fixes the target
+  // center's transverse distance from the pivot to -normal_ratio*normal_distance.
+  // Apply the inverse rotation to that displacement without constructing a
+  // potentially distant pivot or subtracting large world-space plane constants.
+  const double transverse_correction = normal_distance *
+      (plan.one_minus_cosine * normal_ratio - plan.sine);
+  const double normal_correction = normal_distance *
+      (-plan.sine * normal_ratio - plan.one_minus_cosine);
+  plan.target_pullback_offset = reference_delta +
+      plan.source_transverse * transverse_correction +
+      plan.source_normal * normal_correction;
+  plan.rotates = true;
+  return plan;
+}
+
+/// Pushes a covector through the frame rotation while retaining its axial component.
+[[nodiscard]] QVec3d continuation_transport_gradient(
+    QVec3d gradient, const ContinuationPlan &plan) {
+  const double transverse = quader_geometry::dot(gradient, plan.source_transverse);
+  const double normal = quader_geometry::dot(gradient, plan.source_normal);
+  return gradient + plan.source_transverse *
+      (-plan.one_minus_cosine * transverse + plan.sine * normal) +
+      plan.source_normal * (-plan.sine * transverse - plan.one_minus_cosine * normal);
+}
+
+/// Reanchors the transported affine field locally; constant and rank-one fields need no special case.
+[[nodiscard]] TransferChart transport_continuation_chart(
+    const TransferChart &source, const ContinuationPlan &plan) {
+  if (!plan.rotates) {
+    return source;
+  }
+  const auto pullback_delta =
+      (plan.source_reference - source.origin) + plan.target_pullback_offset;
+  TransferChart transported = source;
+  transported.origin = plan.target_reference;
+  transported.u_gradient = continuation_transport_gradient(source.u_gradient, plan);
+  transported.v_gradient = continuation_transport_gradient(source.v_gradient, plan);
+  transported.offset = {
+      source.offset.x + quader_geometry::dot(source.u_gradient, pullback_delta),
+      source.offset.y + quader_geometry::dot(source.v_gradient, pullback_delta)};
+  return transported;
 }
 
 [[nodiscard]] quader_geometry::QVec2d texture_span(std::span<const QVec2> uvs) {
@@ -613,39 +792,12 @@ void orient_transfer_plane(TransferPlane &plane, std::size_t first) {
   };
 }
 
-/// A shared seam supplies the local chart even when other source corners differ.
-[[nodiscard]] std::optional<TransferChart> continuation_source_chart(
+/// Fits selected source samples through the existing local precision owner.
+[[nodiscard]] std::optional<TransferChart> fit_continuation_chart(
     const TargetWork &source, const FaceWork &source_face,
-    const TransferPlane &source_plane, const TargetWork &target,
-    const FaceWork &target_face, const TransferPlane &target_plane) {
-  if (const auto shared = shared_transfer_edge(
-          source, source_face, source_plane, target, target_face, target_plane)) {
-    const auto &vertices = source_face.face->vertices;
-    const std::size_t first = shared->source;
-    const std::size_t second = (first + 1U) % vertices.size();
-    const auto edge = source_plane.positions[first] - source_plane.positions[second];
-    const double edge_squared = quader_geometry::dot(edge, edge);
-    double best_score = 0.0;
-    std::optional<std::size_t> third;
-    for (std::size_t corner = (second + 1U) % vertices.size(); corner != first;
-         corner = (corner + 1U) % vertices.size()) {
-      const auto candidate = source_plane.positions[corner] -
-                             source_plane.positions[second];
-      const double candidate_squared = quader_geometry::dot(candidate, candidate);
-      if (edge_squared == 0.0 || candidate_squared == 0.0) {
-        continue;
-      }
-      const double cosine = std::clamp(std::abs(quader_geometry::dot(edge, candidate)) /
-          std::sqrt(edge_squared * candidate_squared), 0.0, 1.0);
-      const double score = (1.0 - cosine) * edge_squared * candidate_squared;
-      if (std::isfinite(score) && score > best_score) {
-        best_score = score;
-        third = corner;
-      }
-    }
-    if (!third.has_value()) {
-      return transfer_chart(source, source_face, source_plane);
-    }
+    const TransferPlane &source_plane,
+    const std::optional<std::array<std::size_t, 3>> &source_corners) {
+  if (source_corners.has_value()) {
     NativeFace sampled_face = *source_face.face;
     sampled_face.vertices.clear();
     sampled_face.uvs.clear();
@@ -654,8 +806,8 @@ void orient_transfer_plane(TransferPlane &plane, std::size_t first) {
         .face = &sampled_face, .normal = source_face.normal};
     TransferPlane sample_plane{
         .normal = source_plane.normal, .center = source_plane.center};
-    for (const auto corner : {first, second, *third}) {
-      sampled_face.vertices.push_back(vertices[corner]);
+    for (const auto corner : *source_corners) {
+      sampled_face.vertices.push_back(source_face.face->vertices[corner]);
       if (!source_face.face->uvs.empty()) {
         sampled_face.uvs.push_back(source_face.face->uvs[corner]);
       }
@@ -668,41 +820,6 @@ void orient_transfer_plane(TransferPlane &plane, std::size_t first) {
     }
   }
   return transfer_chart(source, source_face, source_plane);
-}
-
-[[nodiscard]] TransferChart rotate_transfer_chart(
-    TransferChart chart, const TransferPlane &source, const TransferPlane &target) {
-  const auto cross = quader_geometry::cross(source.normal, target.normal);
-  const double sine_squared = quader_geometry::dot(cross, cross);
-  // Hammer leaves the source chart untouched when its three-plane hinge
-  // intersection falls below float epsilon, including parallel/opposed planes.
-  constexpr double kParallelSineTolerance =
-      std::numeric_limits<float>::epsilon();
-  if (sine_squared < kParallelSineTolerance * kParallelSineTolerance) {
-    return chart;
-  }
-  const double sine = std::sqrt(sine_squared);
-  const double cosine = std::clamp(
-      quader_geometry::dot(source.normal, target.normal), -1.0, 1.0);
-  // The wrap operation uses the acute plane angle even for opposed normals.
-  // Keep the signed dot product below for the actual intersection position.
-  const double rotation_cosine = std::abs(cosine);
-  const auto axis = cross / sine;
-  const auto rotate = [&](QVec3d gradient) {
-    return gradient * rotation_cosine + quader_geometry::cross(axis, gradient) * sine +
-           axis * (quader_geometry::dot(axis, gradient) * (1.0 - rotation_cosine));
-  };
-  // Project the target center onto the planes' intersection line within the
-  // target plane. Every point on this seam retains its source UV exactly.
-  const auto toward_seam = source.normal - target.normal * cosine;
-  const auto anchor = target.center + toward_seam *
-      (quader_geometry::dot(source.normal, source.positions.front() - target.center) /
-       sine_squared);
-  chart.offset = chart.project(anchor);
-  chart.origin = anchor;
-  chart.u_gradient = rotate(chart.u_gradient);
-  chart.v_gradient = rotate(chart.v_gradient);
-  return chart;
 }
 
 [[nodiscard]] bool chart_has_area(std::span<const QVec2> points) {
@@ -1773,24 +1890,16 @@ Result<PreparedFaceTextureAction> prepare_face_texture_transfer(
     return prepare_texture_documents(std::span<TargetWork>(&targets[1], 1U), false,
                                       "Face texture transferred.");
   }
-  const auto source_chart = continuation_source_chart(
-      targets[0], faces[0], planes[0], targets[1], faces[1], planes[1]);
+  const auto continuation = make_continuation_plan(
+      planes[0], planes[1], faces[0].face->vertices, faces[1].face->vertices,
+      source.key == target.key && targets[0].original == targets[1].original);
+  const auto source_chart = fit_continuation_chart(
+      targets[0], faces[0], planes[0], continuation.source_corners);
   if (!source_chart.has_value()) {
     return fail(face_error(faces[0],
         "Texture transfer requires an affine source mapping."));
   }
-  auto edges = shared_transfer_edge(
-      targets[0], faces[0], planes[0], targets[1], faces[1], planes[1]);
-  if (!edges.has_value()) {
-    edges = closest_transfer_edges(planes[0], planes[1]);
-  }
-  if (edges.has_value()) {
-    // The source chart remains tangential to its authored plane. Only the
-    // hinge orientation follows the selected edge and farthest face corner.
-    orient_transfer_plane(planes[0], edges->source);
-    orient_transfer_plane(planes[1], edges->target);
-  }
-  const auto chart = rotate_transfer_chart(*source_chart, planes[0], planes[1]);
+  const auto chart = transport_continuation_chart(*source_chart, continuation);
   std::vector<QVec2> desired;
   std::vector<quader_geometry::QVec2d> ideal_deltas;
   desired.reserve(planes[1].positions.size());

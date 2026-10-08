@@ -2090,6 +2090,141 @@ void expect_native_wire_coverage(const QImage &actual, const QImage &reference,
 }
 
 TEST(SelectionOverlayRuntimeTests,
+     VulkanSequentialBevelCornerChainRetainsPreviewCommitAndHistoryPixels) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for sequential bevel captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-sequential-bevel-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  QString output = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (output.isEmpty()) {
+    output = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(
+        QStringLiteral("../selection_features_visual"));
+  }
+  ASSERT_TRUE(QDir().mkpath(output));
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0f, false));
+  ASSERT_TRUE(harness.set_native_project_camera_pose(
+      {.eye = {6.0f, 5.0f, 6.0f}, .target = {}, .up = {0.0f, 1.0f, 0.0f}}));
+  auto &editor = harness.workflow_editor();
+  const auto created = editor.modeling().create_box(
+      {.min = {-2.0f, -2.0f, -2.0f}, .max = {2.0f, 2.0f, 2.0f}},
+      "Sequential bevel GPU corner");
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  const auto object = created.value();
+  ASSERT_TRUE(editor.selection().select_object(object).ok());
+  ASSERT_TRUE(enter_selection_context(editor, QuaderSelectionMode::Edge).ok());
+  const auto select_edges = [&](bool top_perimeter) {
+    std::vector<std::pair<QuaderElementId, QuaderElementId>> edges;
+    for (const auto &line : editor.query().selection_overlay().lines) {
+      if (line.element.object_id != object.modeling_object_id ||
+          (line.layer != QuaderOverlayLayer::SourceWire &&
+           line.layer != QuaderOverlayLayer::SelectedEdge)) continue;
+      const auto eligible = [&](const QVec3 &position) {
+        return top_perimeter ? std::abs(position.y - 2.0f) < 1.0e-5f
+            : position.x > 0.0f && position.z > 0.0f &&
+                  std::abs(position.x - position.z) < 1.0e-5f;
+      };
+      if (eligible(line.start) && eligible(line.end)) {
+        edges.emplace_back(std::min(line.element.edge_a, line.element.edge_b),
+                           std::max(line.element.edge_a, line.element.edge_b));
+      }
+    }
+    std::ranges::sort(edges);
+    edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+    ASSERT_EQ(edges.size(), top_perimeter ? 4u : 3u);
+    ASSERT_TRUE(editor.selection().clear().ok());
+    for (const auto &[a, b] : edges) {
+      ASSERT_TRUE(editor.selection().select_edge(
+          object, a, b, QuaderSelectionEdit::Add).ok());
+    }
+  };
+  const auto begin_bevel = [&](double width) {
+    ASSERT_TRUE(editor.commands().execute(
+        editor.commands().command_id_for_modeling_action("bevel_edges")).ok());
+    ASSERT_TRUE(editor.tools().set_setting(
+        "edge_bevel", "operation.edge_bevel.width", width).ok());
+    ASSERT_TRUE(editor.tools().set_setting(
+        "edge_bevel", "operation.edge_bevel.segments", 2.0).ok());
+    ASSERT_TRUE(editor.tools().set_setting(
+        "edge_bevel", "operation.edge_bevel.profile", 0.5).ok());
+  };
+  const auto capture = [&](const char *phase) {
+    EXPECT_TRUE(harness.present_component_sample(
+        ViewportOverlaySelectionContext::Edge, 1.0f,
+        ViewportSettings::defaults(), true));
+    const QImage image = harness.capture();
+    EXPECT_FALSE(image.isNull());
+    const QString path = QDir(output).filePath(
+        QStringLiteral("sequential_bevel_%1.png").arg(QString::fromLatin1(phase)));
+    EXPECT_TRUE(image.save(path));
+    std::cout << "Sequential bevel GPU png=" << path.toStdString() << '\n';
+    const auto builds = harness.selection_frame_builds();
+    EXPECT_TRUE(harness.present_component_sample(
+        ViewportOverlaySelectionContext::Edge, 1.0f,
+        ViewportSettings::defaults(), true));
+    EXPECT_EQ(harness.selection_frame_builds(), builds);
+    EXPECT_FALSE(harness.last_submission().persistent_submitted);
+    EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+    EXPECT_EQ(harness.capture(), image);
+    return image;
+  };
+  const auto changed_pixels = [](const QImage &first, const QImage &second) {
+    std::size_t changed = 0u;
+    if (first.isNull() || second.isNull() || first.size() != second.size()) return changed;
+    for (int y = 0; y < first.height(); ++y) {
+      for (int x = 0; x < first.width(); ++x) {
+        const auto a = first.pixelColor(x, y);
+        const auto b = second.pixelColor(x, y);
+        if (std::abs(a.red() - b.red()) > 2 ||
+            std::abs(a.green() - b.green()) > 2 ||
+            std::abs(a.blue() - b.blue()) > 2) ++changed;
+      }
+    }
+    return changed;
+  };
+  ASSERT_NO_FATAL_FAILURE(select_edges(true));
+  ASSERT_NO_FATAL_FAILURE(begin_bevel(0.5));
+  ASSERT_TRUE(editor.commands().execute(
+      quader_command::kModelingApplyActivePreview).ok());
+  (void)capture("first_bevel");
+  ASSERT_NO_FATAL_FAILURE(select_edges(false));
+  const auto source = capture("selected_corner_chain");
+  const auto initial_history = harness.undo_count();
+  ASSERT_NO_FATAL_FAILURE(begin_bevel(0.2));
+  const auto preview = capture("second_preview");
+  EXPECT_GT(changed_pixels(source, preview), 32u);
+  EXPECT_EQ(harness.undo_count(), initial_history);
+  ASSERT_TRUE(editor.tools().set_setting(
+      "edge_bevel", "operation.edge_bevel.width", 0.25).ok());
+  const auto widened = capture("wider_preview");
+  EXPECT_GT(changed_pixels(preview, widened), 32u);
+  ASSERT_TRUE(editor.tools().set_setting(
+      "edge_bevel", "operation.edge_bevel.profile", 0.25).ok());
+  const auto profiled = capture("profile_preview");
+  EXPECT_GT(changed_pixels(widened, profiled), 8u);
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_EQ(capture("canceled"), source);
+  EXPECT_EQ(harness.undo_count(), initial_history);
+
+  ASSERT_NO_FATAL_FAILURE(begin_bevel(0.2));
+  EXPECT_EQ(capture("restored_preview"), preview);
+  ASSERT_TRUE(editor.commands().execute(
+      quader_command::kModelingApplyActivePreview).ok());
+  const auto committed = capture("committed");
+  EXPECT_EQ(committed, preview);
+  EXPECT_EQ(harness.undo_count(), initial_history + 1u);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(capture("undone"), source);
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(capture("redone"), committed);
+}
+
+TEST(SelectionOverlayRuntimeTests,
      VulkanMeshMaskOutlinesPreserveUnionOcclusionActiveStyleAndVisibility) {
   if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
     GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";

@@ -503,6 +503,8 @@ if(QUADER_BUILD_TESTS AND QUADER_BUILD_NATIVE_APP)
         tests/modeling_domain/operation/qdr_document_operation_auto_merge_vertices_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_assign_material_slot_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_bevel_edges_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_bevel_chain_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_bevel_patch_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_bevel_vertices_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_bridge_edge_boundaries_tests.cpp
         tests/modeling_domain/operation/qdr_document_operation_bridge_edge_pairs_tests.cpp

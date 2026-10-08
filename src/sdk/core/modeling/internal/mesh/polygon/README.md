@@ -49,6 +49,7 @@ Current owner slices:
 - `quader_poly_document_face_api.cpp`: face perimeter helpers and public UV entry points.
 - `quader_poly_document_selection_api.cpp`: selection conversion, containment, mutation, and selection center.
 - `quader_poly_document_component_traversal.cpp`: component connectivity queries and typed loop direction.
+- `quader_poly_document_bevel_corner_patch.cpp`: profile sampling and boundary-constrained bevel corner patches.
 - `operations/`: one compiled owner file per public polygon operation.
 - `quader_poly_document_picking_overlay.cpp`: document-local picking and primitive overlay/preview data.
 - `quader_poly_document_*_helpers.cpp`: private topology, hull, OpenMesh, knife, UV, picking, bridge,
@@ -76,6 +77,59 @@ The graph implementation was authored from Quader's interfaces and behavioral fi
 consulting the preceding traversal implementation or Blender source. Earlier reference research
 and the preceding implementation remain in Git history; this engineering separation does not
 establish a formal clean-room or legal clearance.
+
+Edge dissolve captures vertex eligibility from original authored topology in
+`operations/dissolve_edges_operation.cpp`. Edges connected through degree-two vertices form
+seam components; selected components own all their continuations. Terminal nominations use
+the complete selected batch and original triangle-pair policy. A multi-seam terminal remains
+protected when an untouched face corner uses neither neighboring seam edge. Closed degree-two
+circuits have no terminal. Face joining, boundary UV transfer, normal-mode donors and final
+endpoint cleanup remain with their existing owners.
+
+The eligibility query was independently authored from Quader's interface and behavioral
+requirements without consulting the preceding query or external editor implementations.
+This statement covers that query only; it does not establish formal clean-room or legal clearance.
+`QdrDocumentOperationDissolveEdgesTests` protects the behavior, with SDK/native tests covering
+publication and history. Preserve original triangle corners and unrelated junctions; do not
+replace the operation's cleanup with generic UV-redundancy filtering.
+
+Edge bevel keeps support limits, retained faces, strip construction, UV/normal transfer and
+publication in `operations/bevel_edges_operation.cpp`. Its corner helper receives shared boundary
+identities and stages a patch in the disposable candidate. Multi-edge corner samples retain
+distinct identities even when a square profile puts them at the same position; positional welding
+must not destroy the patch boundary before its coincident samples can be separated.
+
+Consecutive selected edges crossing noncoplanar face bands share their cuts on the original
+unselected support edge. Width measures travel along that edge before rebuilding strip profiles;
+perpendicular face offsets would widen a strip as it crosses increasingly sloped bands. Each cut
+respects its available support length, and opposing cuts must not cross. Separate offset endpoints
+must not be closed with thin junction faces. Existing shared coplanar miters retain their positions.
+At a three-edge terminal, both cuts use the same along-edge width rule and the profile remains on
+the unselected cap face. Width feedback excludes provisional face limits when both offset
+endpoints were replaced, but preserves constraints belonging to surviving offsets and miters.
+The sequential-bevel fixtures in `QdrDocumentOperationBevelChainTests`
+protect support alignment, transverse spacing through every band and terminal, quad-strip counts,
+oriented closure and unchanged surrounding geometry. Native retained-overlay and Vulkan tests
+cover the same two-step workflow through preview, acceptance, cancellation and history.
+
+The replacement profile sampler blends a rational conic with its inward/outward polyline limits.
+It spaces samples in normalized support-ray coordinates so a stretched miter keeps the same profile
+parameters. Corner topology consists of concentric quad rings ending in a shared center or polygon.
+A boundary-constrained harmonic solve places interior nodes; circular boundaries that pass a sphere
+fit can lift the interior onto that sphere. If an inward profile folds the initial cells and its
+projected boundary is star-shaped, a convex reference polygon supplies an orientation-checked radial
+map. Bounded radial redistribution preserves the boundary while keeping its center cells apart.
+The helper checks its generated cells before staging;
+the owner then completes winding and attribute transfer before publication. A rejected corner
+must leave the document and selection untouched.
+
+This profile and corner implementation was authored from Quader's value interfaces and behavioral
+tests without consulting the preceding implementation or external editor source. Integration review
+removed the preceding machinery; earlier source research remains in Git history. This describes
+engineering inputs, not a formal clean-room or legal determination. Existing
+`QdrDocumentOperationBevelEdgesTests` retain their geometry, topology, UV and normal expectations;
+`QdrDocumentOperationBevelPatchTests` independently checks rigid-transform and uniform-scale
+equivariance, oriented closure, generated selection and nondegenerate rendering triangles.
 
 Use normal `.cpp` files and narrow helper headers; do not add permanent `.inc` implementation
 shards. Document overlay APIs emit primitive geometry only. Semantic host projection belongs in

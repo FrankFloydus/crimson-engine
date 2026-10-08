@@ -54,6 +54,7 @@
 #include <array>
 #include <cstdint>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -465,6 +466,171 @@ TEST(SelectedMeshOutlinePresentationTests,
     ASSERT_TRUE(submit().persistent_submitted);
     EXPECT_EQ(target.persistent.lines.size(), original_lines);
   }
+}
+
+TEST(SelectedMeshOutlinePresentationTests,
+     SequentialBevelCornerChainPublishesRetainedWiresThroughHistory) {
+  SceneSession session;
+  QuaderEditorApi editor{QuaderApiSessionInternalAccess::from_scene_session(session)};
+  const auto created = editor.modeling().create_box(
+      {.min = {-2.0f, -2.0f, -2.0f}, .max = {2.0f, 2.0f, 2.0f}},
+      "Sequential bevel corner");
+  ASSERT_TRUE(created.ok()) << created.error_message();
+  const auto object = created.value();
+  ASSERT_TRUE(editor.selection().select_object(object).ok());
+  ASSERT_TRUE(enter_selection_context(editor, QuaderSelectionMode::Edge).ok());
+
+  // Resolve authored IDs from visible edges, so the second selection follows
+  // the first operation's real topology rather than assuming allocation order.
+  const auto select_edges = [&](bool top_perimeter) {
+    std::vector<std::pair<QuaderElementId, QuaderElementId>> edges;
+    for (const auto &line : editor.query().selection_overlay().lines) {
+      if (line.element.object_id != object.modeling_object_id ||
+          (line.layer != QuaderOverlayLayer::SourceWire &&
+           line.layer != QuaderOverlayLayer::SelectedEdge)) continue;
+      const auto eligible = [&](const QVec3 &position) {
+        return top_perimeter ? std::abs(position.y - 2.0f) < 1.0e-5f
+            : position.x > 0.0f && position.z > 0.0f &&
+                  std::abs(position.x - position.z) < 1.0e-5f;
+      };
+      if (eligible(line.start) && eligible(line.end)) {
+        edges.emplace_back(std::min(line.element.edge_a, line.element.edge_b),
+                           std::max(line.element.edge_a, line.element.edge_b));
+      }
+    }
+    std::ranges::sort(edges);
+    edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+    EXPECT_EQ(edges.size(), top_perimeter ? 4u : 3u);
+    EXPECT_TRUE(editor.selection().clear().ok());
+    for (const auto &[a, b] : edges) {
+      EXPECT_TRUE(editor.selection().select_edge(
+          object, a, b, QuaderSelectionEdit::Add).ok());
+    }
+  };
+  const auto begin_bevel = [&](double width) {
+    ASSERT_TRUE(editor.commands().execute(
+        editor.commands().command_id_for_modeling_action("bevel_edges")).ok());
+    ASSERT_TRUE(editor.tools().set_setting(
+        "edge_bevel", "operation.edge_bevel.width", width).ok());
+    ASSERT_TRUE(editor.tools().set_setting(
+        "edge_bevel", "operation.edge_bevel.segments", 2.0).ok());
+    ASSERT_TRUE(editor.tools().set_setting(
+        "edge_bevel", "operation.edge_bevel.profile", 0.5).ok());
+  };
+  ASSERT_NO_FATAL_FAILURE(select_edges(true));
+  ASSERT_NO_FATAL_FAILURE(begin_bevel(0.5));
+  ASSERT_TRUE(editor.commands().execute(
+      quader_command::kModelingApplyActivePreview).ok());
+  ASSERT_NO_FATAL_FAILURE(select_edges(false));
+  ASSERT_EQ(editor.selection().summary().selected_edge_count, 3u);
+
+  ExtrudeOutlineProvider provider{session};
+  ExtrudeOutlineTarget target;
+  ViewportOverlaySubmissionCoordinator coordinator;
+  auto &modeling = session.modeling();
+  const auto submit = [&] {
+    return coordinator.submit({
+        .viewport_index = 0u,
+        .layer_mask = 1u,
+        .selection_source = {
+            .source_identity = reinterpret_cast<std::uintptr_t>(&modeling),
+            .content_revision = modeling.content_revision(),
+            .selection_revision = modeling.selection_revision(),
+            .scene_revision = session.scene().revision(),
+            .asset_revision = session.assets().revision(),
+            .overlay_signature = modeling.selection_overlay_signature(),
+            .selection_context = ViewportOverlaySelectionContext::Edge},
+        .selection_frame_provider = &provider,
+        .scene_selection_mode = RenderOverlaySelectionMode::Component,
+        .style_selection_context = ViewportOverlaySelectionContext::Edge,
+        .overlays_visible = true}, ViewportSettings::defaults(), target);
+  };
+  struct SubmittedGeometry {
+    std::vector<std::array<float, 3>> positions;
+    std::vector<std::uint32_t> indices;
+    std::vector<std::array<float, 6>> wires;
+    bool operator==(const SubmittedGeometry &) const = default;
+  };
+  const auto capture = [&] {
+    SubmittedGeometry result;
+    const auto snapshot = build_render_scene_snapshot(session.scene(), session.assets());
+    EXPECT_EQ(snapshot.meshes.size(), 1u);
+    for (const auto &record : snapshot.meshes) {
+      for (const auto &vertex : record.mesh.vertices) {
+        const auto position = transform_point(record.world_transform, vertex.position);
+        result.positions.push_back({position.x, position.y, position.z});
+      }
+      result.indices.insert(result.indices.end(), record.mesh.indices.begin(),
+                            record.mesh.indices.end());
+    }
+    EXPECT_TRUE(submit().persistent_submitted);
+    for (const auto &line : target.persistent.lines) {
+      if (line.element.object_id != object.modeling_object_id ||
+          (line.layer != ViewportOverlayLayer::SourceWire &&
+           line.layer != ViewportOverlayLayer::SelectedEdge)) continue;
+      for (const auto endpoint : {line.start, line.end}) {
+        EXPECT_TRUE(std::ranges::any_of(result.positions, [&](const auto &position) {
+          return length_squared(endpoint - QVec3{position[0], position[1], position[2]})
+              < 1.0e-10f;
+        })) << "A submitted corner-chain wire must belong to the displayed mesh.";
+      }
+      std::array<float, 3> start{line.start.x, line.start.y, line.start.z};
+      std::array<float, 3> end{line.end.x, line.end.y, line.end.z};
+      if (end < start) std::swap(start, end);
+      result.wires.push_back({start[0], start[1], start[2], end[0], end[1], end[2]});
+    }
+    std::ranges::sort(result.wires);
+    result.wires.erase(std::unique(result.wires.begin(), result.wires.end()),
+                       result.wires.end());
+    EXPECT_FALSE(result.wires.empty());
+    const auto builds = provider.builds;
+    const auto submissions = target.submissions;
+    const auto work = modeling.tool_preview_work_stats();
+    for (int frame = 0; frame < 3; ++frame) {
+      const auto unchanged = submit();
+      EXPECT_FALSE(unchanged.selection_source_refreshed);
+      EXPECT_FALSE(unchanged.persistent_submitted);
+    }
+    EXPECT_EQ(provider.builds, builds);
+    EXPECT_EQ(target.submissions, submissions);
+    EXPECT_EQ(modeling.tool_preview_work_stats().mesh_extraction_count,
+              work.mesh_extraction_count);
+    EXPECT_EQ(modeling.tool_preview_work_stats().signature_enumeration_count,
+              work.signature_enumeration_count);
+    return result;
+  };
+  const auto source = capture();
+  const auto initial_history = session.history().undo_count();
+  ASSERT_NO_FATAL_FAILURE(begin_bevel(0.2));
+  auto preview = capture();
+  EXPECT_NE(preview, source);
+  for (const auto &[setting, value] : std::array{
+           std::pair{"operation.edge_bevel.width", 0.25},
+           std::pair{"operation.edge_bevel.segments", 4.0},
+           std::pair{"operation.edge_bevel.profile", 0.25}}) {
+    SCOPED_TRACE(setting);
+    ASSERT_TRUE(editor.tools().set_setting("edge_bevel", setting, value).ok());
+    const auto updated = capture();
+    EXPECT_NE(updated, preview);
+    EXPECT_EQ(session.history().undo_count(), initial_history);
+    preview = updated;
+  }
+  ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+  EXPECT_EQ(capture(), source);
+  EXPECT_EQ(session.history().undo_count(), initial_history);
+  EXPECT_EQ(editor.selection().summary().selected_edge_count, 3u);
+
+  ASSERT_NO_FATAL_FAILURE(begin_bevel(0.2));
+  const auto accepted = capture();
+  ASSERT_TRUE(editor.commands().execute(
+      quader_command::kModelingApplyActivePreview).ok());
+  EXPECT_EQ(capture(), accepted);
+  EXPECT_EQ(session.history().undo_count(), initial_history + 1u);
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_EQ(capture(), source);
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(capture(), accepted);
+  EXPECT_EQ(editor.mode().state().participants.size(), 1u);
 }
 
 TEST(SelectedMeshOutlinePresentationTests,

@@ -927,7 +927,7 @@ TEST(QdrDocumentOperationBevelEdgesTests, RetainedSurfacesKeepDistinctAuthoredCh
 TEST(QdrDocumentOperationBevelEdgesTests, WarpedSourceSurfacesDoNotRejectBevelForUvInterpolation) {
     CubePrimitiveSpec spec;
     spec.width = 8.0F;
-    spec.height = 8.0F;
+    spec.height = 6.0F;
     spec.depth = 8.0F;
     Document document = make_cube(spec);
     document.vertices.front().position.z += 0.5F;
@@ -935,12 +935,22 @@ TEST(QdrDocumentOperationBevelEdgesTests, WarpedSourceSurfacesDoNotRejectBevelFo
         face.uvs = {{2.0F, 3.0F}, {6.0F, 4.0F}, {9.0F, 10.0F}, {1.0F, 8.0F}};
     }
     const Document original = document;
-    Selection selection = edge_selection_for_edge(document_edges(document).front());
+    // Two adjacent cuts create an interior miter on the warped face. Unequal
+    // side lengths keep it away from the source triangulation's diagonal;
+    // a single-edge cut now stays on the original support and needs no fallback.
+    const Face& warped_face = original.faces.front();
+    Selection selection;
+    selection.mode = SelectionMode::Edge;
+    selection.edges = {
+        make_edge(warped_face.vertices.back(), warped_face.vertices.front()),
+        make_edge(warped_face.vertices.front(), warped_face.vertices[1]),
+    };
     EdgeBevelSettings settings;
     settings.width = 0.5F;
 
     const OperationResult result = bevel_selected_edges(document, selection, settings);
 
+    ASSERT_TRUE(result.success) << result.message;
     ASSERT_TRUE(result.changed) << result.message;
     qdr_test::expect_valid_polygon_document_after_success(document, result);
     std::size_t projected_corners = 0U;

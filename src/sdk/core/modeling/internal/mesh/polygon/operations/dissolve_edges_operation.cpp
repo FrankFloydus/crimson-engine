@@ -52,75 +52,97 @@ VertexNeighbors vertex_neighbors(const Document& document)
     return neighbors;
 }
 
-/// Follow a degree-two chain and optionally extend the original dissolve tags.
-std::optional<ElementId> chain_endpoint(
-    const VertexNeighbors& neighbors, ElementId previous, ElementId current,
-    std::set<EdgeKey>* tagged_edges = nullptr)
-{
-    std::set<ElementId> visited;
-    while (true) {
-        const auto found = neighbors.find(current);
-        if (found == neighbors.end() || found->second.size() != 2U) {
-            return current;
-        }
-        if (!visited.insert(current).second) {
-            return std::nullopt;
-        }
-        const ElementId next = found->second[0] == previous ? found->second[1] : found->second[0];
-        if (tagged_edges != nullptr) {
-            tagged_edges->insert(edge_key(current, next));
-        }
-        previous = current;
-        current = next;
-    }
-}
-
-/// Capture Blender's endpoint eligibility before any selected edge is removed.
+/// Classify cleanup candidates from original authored-edge components.
 std::set<ElementId> dissolve_vertex_candidates(
-    const Document& document, std::span<const Edge> edges,
-    const std::map<EdgeKey, std::vector<std::size_t>>& adjacent_faces)
+    const Document& document,
+    std::span<const Edge> edges,
+    const std::map<std::pair<ElementId, ElementId>, std::vector<std::size_t>>& adjacent_faces)
 {
     const VertexNeighbors neighbors = vertex_neighbors(document);
-    std::set<EdgeKey> tagged_edges;
+    std::map<EdgeKey, bool> selected_triangle_pairs;
     for (const Edge edge : edges) {
-        tagged_edges.insert(edge_key(edge.a, edge.b));
-    }
-    for (const Edge edge : edges) {
-        chain_endpoint(neighbors, edge.b, edge.a, &tagged_edges);
-        chain_endpoint(neighbors, edge.a, edge.b, &tagged_edges);
+        const EdgeKey key = edge_key(edge.a, edge.b);
+        const auto& face_indices = adjacent_faces.at(key);
+        selected_triangle_pairs.emplace(key,
+            document.faces[face_indices[0]].vertices.size() == 3U &&
+            document.faces[face_indices[1]].vertices.size() == 3U);
     }
 
-    std::set<ElementId> candidates;
-    const auto tagged_count = [&](ElementId vertex_id) {
-        const auto found = neighbors.find(vertex_id);
-        return found == neighbors.end() ? 0U : static_cast<unsigned>(std::ranges::count_if(
-            found->second, [&](ElementId neighbor) { return tagged_edges.contains(edge_key(vertex_id, neighbor)); }));
-    };
+    // Edges are graph nodes, linked only through original degree-two vertices.
+    // A selected component owns its entire chain; a circuit has no terminal.
+    std::map<EdgeKey, std::size_t> owned_components;
+    std::vector<std::size_t> component_selected_counts;
+    std::vector<EdgeKey> pending;
     for (const Edge edge : edges) {
-        const auto& faces = adjacent_faces.at(edge_key(edge.a, edge.b));
-        for (const ElementId endpoint : std::array{edge.a, edge.b}) {
-            if (document.faces[faces[0]].vertices.size() == 3U &&
-                document.faces[faces[1]].vertices.size() == 3U && tagged_count(endpoint) == 1U) {
-                continue;
+        const EdgeKey seed = edge_key(edge.a, edge.b);
+        const std::size_t component_index = component_selected_counts.size();
+        if (!owned_components.emplace(seed, component_index).second) {
+            continue;
+        }
+        component_selected_counts.push_back(0U);
+        pending.push_back(seed);
+        while (!pending.empty()) {
+            const EdgeKey current = pending.back();
+            pending.pop_back();
+            if (selected_triangle_pairs.contains(current)) {
+                ++component_selected_counts[component_index];
             }
-            const auto vertex_id = chain_endpoint(neighbors, endpoint == edge.a ? edge.b : edge.a, endpoint);
-            if (!vertex_id.has_value() || candidates.contains(*vertex_id)) {
-                continue;
-            }
-            bool incidental_contact = false;
-            if (tagged_count(*vertex_id) != 1U) {
-                for (const Face& face : document.faces) {
-                    const auto corner = loop_vertex_index(face.vertices, *vertex_id);
-                    if (corner.has_value() &&
-                        !tagged_edges.contains(edge_key(*vertex_id, face.vertices[(*corner + face.vertices.size() - 1U) % face.vertices.size()])) &&
-                        !tagged_edges.contains(edge_key(*vertex_id, face.vertices[(*corner + 1U) % face.vertices.size()]))) {
-                        incidental_contact = true;
-                        break;
+            for (const ElementId vertex_id : {current.first, current.second}) {
+                const auto& adjacent_vertices = neighbors.at(vertex_id);
+                if (adjacent_vertices.size() != 2U) {
+                    continue;
+                }
+                for (const ElementId neighbor_id : adjacent_vertices) {
+                    const EdgeKey linked = edge_key(vertex_id, neighbor_id);
+                    if (owned_components.emplace(linked, component_index).second) {
+                        pending.push_back(linked);
                     }
                 }
             }
-            if (!incidental_contact) {
-                candidates.insert(*vertex_id);
+        }
+    }
+
+    std::map<ElementId, std::size_t> owned_incidence_counts;
+    for (const auto& [key, component_index] : owned_components) {
+        ++owned_incidence_counts[key.first];
+        ++owned_incidence_counts[key.second];
+    }
+
+    std::set<ElementId> candidates;
+    for (const auto& [key, component_index] : owned_components) {
+        const auto selected = selected_triangle_pairs.find(key);
+        for (const ElementId vertex_id : {key.first, key.second}) {
+            if (neighbors.at(vertex_id).size() == 2U) {
+                continue;
+            }
+            // Each selected edge in a chain nominates both terminal incidences.
+            // Only a sole selected edge immediately at this terminal can have
+            // every nomination blocked by the original triangle-pair rule.
+            const bool protected_terminal =
+                owned_incidence_counts.at(vertex_id) == 1U &&
+                component_selected_counts[component_index] == 1U &&
+                selected != selected_triangle_pairs.end() && selected->second;
+            if (!protected_terminal) {
+                candidates.insert(vertex_id);
+            }
+        }
+    }
+
+    // Multiple owned incidences must cover every original face corner at the
+    // terminal. One unrelated corner protects that vertex for the whole batch.
+    for (const Face& face : document.faces) {
+        for (std::size_t corner = 0; corner < face.vertices.size(); ++corner) {
+            const ElementId vertex_id = face.vertices[corner];
+            if (!candidates.contains(vertex_id) ||
+                owned_incidence_counts.at(vertex_id) == 1U) {
+                continue;
+            }
+            const ElementId previous = face.vertices[
+                (corner + face.vertices.size() - 1U) % face.vertices.size()];
+            const ElementId next = face.vertices[(corner + 1U) % face.vertices.size()];
+            if (!owned_components.contains(edge_key(previous, vertex_id)) &&
+                !owned_components.contains(edge_key(vertex_id, next))) {
+                candidates.erase(vertex_id);
             }
         }
     }

@@ -46,6 +46,52 @@ DissolvableSeamFixture make_dissolvable_seam_fixture()
     return fixture;
 }
 
+/// Splits one rectangular face with a seam containing two authored degree-two vertices.
+struct SubdividedSeamFixture {
+    Document document;
+    std::array<ElementId, 4> boundary;
+    std::array<ElementId, 4> seam;
+    ElementId first_face = kInvalidElementId;
+};
+
+SubdividedSeamFixture make_subdivided_seam_fixture(bool relabeled, bool reversed)
+{
+    SubdividedSeamFixture fixture;
+    const std::array<quader::QVec3, 8> positions{{
+        {-1.0F, -1.0F, 0.0F}, {0.0F, -1.0F, 0.0F},
+        {1.0F, -1.0F, 0.0F}, {1.0F, 1.0F, 0.0F},
+        {0.0F, 1.0F, 0.0F}, {-1.0F, 1.0F, 0.0F},
+        {0.0F, -0.25F, 0.0F}, {0.0F, 0.25F, 0.0F}}};
+    std::array<ElementId, 8> vertices{};
+    for (std::size_t index = 0; index < vertices.size(); ++index) {
+        const std::size_t slot = relabeled ? vertices.size() - index - 1U : index;
+        const auto position = positions[slot];
+        vertices[slot] = add_vertex(fixture.document, relabeled
+            ? quader::QVec3{position.y + 10.0F, 3.0F, -position.x - 2.0F}
+            : position);
+    }
+    fixture.boundary = {vertices[0], vertices[2], vertices[3], vertices[5]};
+    fixture.seam = {vertices[1], vertices[6], vertices[7], vertices[4]};
+    fixture.first_face = add_face(fixture.document,
+        std::array{vertices[0], vertices[1], vertices[6], vertices[7], vertices[4], vertices[5]}, 7U);
+    static_cast<void>(add_face(fixture.document,
+        std::array{vertices[1], vertices[2], vertices[3], vertices[4], vertices[7], vertices[6]}, 11U));
+    for (Face& face : fixture.document.faces) {
+        if (reversed) {
+            std::ranges::reverse(face.vertices);
+        }
+        face.normal_shading = SurfaceShading::Smooth;
+        for (const ElementId id : face.vertices) {
+            const auto position = find_vertex(fixture.document, id)->position;
+            face.uvs.push_back({position.x + 3.0F, position.y + position.z - 4.0F});
+        }
+    }
+    if (reversed) {
+        std::ranges::reverse(fixture.boundary);
+    }
+    return fixture;
+}
+
 } // namespace
 
 TEST(QdrDocumentOperationDissolveEdgesTests, DissolveRetainsIdentityTransformAuthoredChartsAndNeighborCorners) {
@@ -638,5 +684,289 @@ TEST(QdrDocumentOperationDissolveEdgesTests, DissolveRejectsNonfiniteOrMalformed
         EXPECT_FALSE(result.message.empty());
         EXPECT_EQ(qdr_test::document_fingerprint(fixture.document), original_document);
         EXPECT_EQ(qdr_test::selection_fingerprint(selection), original_selection);
+    }
+}
+
+TEST(QdrDocumentOperationDissolveEdgesTests,
+     DissolveRemovesTheWholeSubdividedSeamFromAnySelectedSegment) {
+    for (const bool relabeled : {false, true}) {
+        for (const bool reversed : {false, true}) {
+            const auto fixture = make_subdivided_seam_fixture(relabeled, reversed);
+            for (const int selected_segment : {-1, 0, 1, 2}) {
+                std::string expected_document;
+                for (const bool reverse_selection : {false, true}) {
+                    SCOPED_TRACE(::testing::Message()
+                        << "relabeled=" << relabeled << ", reversed=" << reversed
+                        << ", segment=" << selected_segment
+                        << ", reverse selection=" << reverse_selection);
+                    Document document = fixture.document;
+                    std::vector<Edge> edges;
+                    for (std::size_t index = 0; index + 1U < fixture.seam.size(); ++index) {
+                        if (selected_segment < 0 || index == static_cast<std::size_t>(selected_segment)) {
+                            edges.push_back(make_edge(fixture.seam[index], fixture.seam[index + 1U]));
+                        }
+                    }
+                    Selection selection = qdr_test::edge_selection({edges.front()}, edges.front());
+                    selection.edges = edges;
+                    if (reverse_selection) {
+                        std::ranges::reverse(selection.edges);
+                        selection.edges.push_back(selection.edges.front());
+                        std::swap(selection.edges.back().a, selection.edges.back().b);
+                    }
+
+                    const OperationResult result = dissolve_selected_edges(document, selection);
+
+                    ASSERT_TRUE(result.success) << result.message;
+                    ASSERT_TRUE(result.changed);
+                    ASSERT_EQ(document.faces.size(), 1U);
+                    ASSERT_EQ(document.vertices.size(), fixture.boundary.size());
+                    const Face& merged = document.faces.front();
+                    EXPECT_EQ(merged.id, fixture.first_face);
+                    EXPECT_EQ(merged.material_slot, 7U);
+                    EXPECT_EQ(merged.normal_shading, SurfaceShading::Smooth);
+                    ASSERT_EQ(merged.vertices.size(), fixture.boundary.size());
+                    ASSERT_EQ(merged.uvs.size(), merged.vertices.size());
+                    auto boundary = merged.vertices;
+                    const auto start = std::ranges::find(boundary, fixture.boundary.front());
+                    ASSERT_NE(start, boundary.end());
+                    std::rotate(boundary.begin(), start, boundary.end());
+                    EXPECT_EQ(boundary, (std::vector<ElementId>{
+                        fixture.boundary.begin(), fixture.boundary.end()}));
+                    for (const ElementId id : fixture.seam) {
+                        EXPECT_EQ(find_vertex(document, id), nullptr);
+                    }
+                    for (std::size_t corner = 0; corner < merged.vertices.size(); ++corner) {
+                        const Vertex* original = find_vertex(fixture.document, merged.vertices[corner]);
+                        const Vertex* retained = find_vertex(document, merged.vertices[corner]);
+                        ASSERT_NE(original, nullptr);
+                        ASSERT_NE(retained, nullptr);
+                        EXPECT_FLOAT_EQ(retained->position.x, original->position.x);
+                        EXPECT_FLOAT_EQ(retained->position.y, original->position.y);
+                        EXPECT_FLOAT_EQ(retained->position.z, original->position.z);
+                        EXPECT_FLOAT_EQ(merged.uvs[corner].x, original->position.x + 3.0F);
+                        EXPECT_FLOAT_EQ(merged.uvs[corner].y,
+                            original->position.y + original->position.z - 4.0F);
+                    }
+                    EXPECT_EQ(selection.mode, SelectionMode::Face);
+                    EXPECT_EQ(selection.faces, std::vector<ElementId>{fixture.first_face});
+                    EXPECT_TRUE(selection.has_active);
+                    EXPECT_EQ(selection.active_kind, ElementKind::Face);
+                    EXPECT_EQ(selection.active_face, fixture.first_face);
+                    EXPECT_TRUE(selection.edges.empty());
+                    EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
+                    qdr_test::expect_valid_polygon_document_after_success(document, result);
+                    if (expected_document.empty()) {
+                        expected_document = qdr_test::document_fingerprint(document);
+                    } else {
+                        EXPECT_EQ(qdr_test::document_fingerprint(document), expected_document);
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST(QdrDocumentOperationDissolveEdgesTests,
+     DissolveKeepsAStraightMultiSeamJunctionTouchedByAnUnselectedFace) {
+    Document source;
+    const ElementId junction = add_vertex(source, {0.0F, 0.0F, 0.0F});
+    const ElementId left = add_vertex(source, {-1.0F, 0.0F, 0.0F});
+    const ElementId upper_left = add_vertex(source, {-0.4F, 1.0F, 0.0F});
+    const ElementId upper_right = add_vertex(source, {0.4F, 1.0F, 0.0F});
+    const ElementId right = add_vertex(source, {1.0F, 0.0F, 0.0F});
+    const ElementId below = add_vertex(source, {0.0F, -1.0F, 0.0F});
+    const ElementId first = add_face(source, std::array{junction, left, upper_left}, 7U);
+    ASSERT_NE(first, kInvalidElementId);
+    ASSERT_NE(add_face(source, std::array{junction, upper_left, upper_right}, 7U), kInvalidElementId);
+    ASSERT_NE(add_face(source, std::array{junction, upper_right, right}, 7U), kInvalidElementId);
+    const ElementId neighbor = add_face(source, std::array{junction, right, below, left}, 11U);
+    ASSERT_NE(neighbor, kInvalidElementId);
+    for (Face& face : source.faces) {
+        for (const ElementId id : face.vertices) {
+            const auto position = find_vertex(source, id)->position;
+            face.uvs.push_back({position.x + 3.0F, position.y - 4.0F});
+        }
+    }
+    const Face original_neighbor = *find_face(source, neighbor);
+    std::string expected_document;
+    for (const bool reversed : {false, true}) {
+        Document document = source;
+        Selection selection = qdr_test::edge_selection({
+            make_edge(junction, upper_left), make_edge(junction, upper_right)});
+        if (reversed) {
+            std::ranges::reverse(selection.edges);
+        }
+
+        const OperationResult result = dissolve_selected_edges(document, selection);
+
+        ASSERT_TRUE(result.success) << result.message;
+        ASSERT_TRUE(result.changed);
+        ASSERT_EQ(document.faces.size(), 2U);
+        ASSERT_EQ(document.vertices.size(), source.vertices.size());
+        const Face* merged = find_face(document, first);
+        ASSERT_NE(merged, nullptr);
+        ASSERT_EQ(merged->vertices.size(), 5U);
+        auto boundary = merged->vertices;
+        const auto start = std::ranges::find(boundary, junction);
+        ASSERT_NE(start, boundary.end());
+        std::rotate(boundary.begin(), start, boundary.end());
+        EXPECT_EQ(boundary, (std::vector<ElementId>{junction, left, upper_left, upper_right, right}));
+        EXPECT_EQ(merged->material_slot, 7U);
+        const Face* retained_neighbor = find_face(document, neighbor);
+        ASSERT_NE(retained_neighbor, nullptr);
+        EXPECT_EQ(retained_neighbor->vertices, original_neighbor.vertices);
+        EXPECT_EQ(retained_neighbor->material_slot, original_neighbor.material_slot);
+        EXPECT_EQ(retained_neighbor->texture_transform, original_neighbor.texture_transform);
+        for (const Face& face : document.faces) {
+            ASSERT_EQ(face.uvs.size(), face.vertices.size());
+            for (std::size_t corner = 0; corner < face.vertices.size(); ++corner) {
+                const auto position = find_vertex(document, face.vertices[corner])->position;
+                EXPECT_FLOAT_EQ(face.uvs[corner].x, position.x + 3.0F);
+                EXPECT_FLOAT_EQ(face.uvs[corner].y, position.y - 4.0F);
+            }
+        }
+        EXPECT_FALSE(qdr_test::document_has_edge(document, make_edge(junction, upper_left)));
+        EXPECT_FALSE(qdr_test::document_has_edge(document, make_edge(junction, upper_right)));
+        EXPECT_EQ(selection.mode, SelectionMode::Face);
+        EXPECT_EQ(selection.faces, std::vector<ElementId>{first});
+        EXPECT_EQ(selection.active_face, first);
+        EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
+        qdr_test::expect_valid_polygon_document_after_success(document, result);
+        if (reversed) {
+            EXPECT_EQ(qdr_test::document_fingerprint(document), expected_document);
+        } else {
+            expected_document = qdr_test::document_fingerprint(document);
+        }
+    }
+}
+
+TEST(QdrDocumentOperationDissolveEdgesTests,
+     DissolveRejectsAClosedDegreeTwoSeamWithoutChangingAuthoredState) {
+    auto fixture = qdr_test::make_quad_document(7U);
+    auto opposite = fixture.document.faces.front().vertices;
+    std::ranges::reverse(opposite);
+    ASSERT_NE(add_face(fixture.document, opposite, 11U), kInvalidElementId);
+    for (Face& face : fixture.document.faces) {
+        for (const ElementId id : face.vertices) {
+            const auto position = find_vertex(fixture.document, id)->position;
+            face.uvs.push_back({position.x + 3.0F, position.y - 4.0F});
+        }
+    }
+    const auto edges = document_edges(fixture.document);
+    for (const bool whole_loop : {false, true}) {
+        Document document = fixture.document;
+        Selection selection = qdr_test::edge_selection({edges.front()}, edges.front());
+        if (whole_loop) {
+            selection.edges = edges;
+        }
+        const auto original_document = qdr_test::document_fingerprint(document);
+        const auto original_selection = qdr_test::selection_fingerprint(selection);
+
+        const OperationResult result = dissolve_selected_edges(document, selection);
+
+        EXPECT_FALSE(result.success);
+        EXPECT_FALSE(result.changed);
+        EXPECT_FALSE(result.message.empty());
+        EXPECT_EQ(qdr_test::document_fingerprint(document), original_document);
+        EXPECT_EQ(qdr_test::selection_fingerprint(selection), original_selection);
+    }
+}
+
+TEST(QdrDocumentOperationDissolveEdgesTests,
+     DissolveRejectsAMixedInteriorAndBoundarySelectionAtomically) {
+    const auto fixture = make_dissolvable_seam_fixture();
+    const auto& face = fixture.document.faces.front();
+    const Edge boundary = make_edge(face.vertices[0], face.vertices[1]);
+    for (const bool reversed : {false, true}) {
+        Document document = fixture.document;
+        Selection selection = qdr_test::edge_selection({fixture.seam, boundary}, fixture.seam);
+        if (reversed) {
+            std::ranges::reverse(selection.edges);
+        }
+        const auto original_document = qdr_test::document_fingerprint(document);
+        const auto original_selection = qdr_test::selection_fingerprint(selection);
+
+        const OperationResult result = dissolve_selected_edges(document, selection);
+
+        EXPECT_FALSE(result.success);
+        EXPECT_FALSE(result.changed);
+        EXPECT_FALSE(result.message.empty());
+        EXPECT_EQ(qdr_test::document_fingerprint(document), original_document);
+        EXPECT_EQ(qdr_test::selection_fingerprint(selection), original_selection);
+    }
+}
+
+TEST(QdrDocumentOperationDissolveEdgesTests,
+     DissolveProcessesDisconnectedSeamsWithoutConnectingTheirBoundaries) {
+    Document source;
+    std::array<ElementId, 2> surviving_faces{};
+    std::array<Edge, 2> seams{};
+    std::array<std::array<ElementId, 4>, 2> boundaries{};
+    for (std::size_t island = 0; island < seams.size(); ++island) {
+        const float offset = 5.0F * static_cast<float>(island);
+        const ElementId left_bottom = add_vertex(source, {offset, 0.0F, 0.0F});
+        const ElementId middle_bottom = add_vertex(source, {offset + 1.0F, 0.0F, 0.0F});
+        const ElementId right_bottom = add_vertex(source, {offset + 2.0F, 0.0F, 0.0F});
+        const ElementId left_top = add_vertex(source, {offset, 2.0F, 0.0F});
+        const ElementId middle_top = add_vertex(source, {offset + 1.0F, 2.0F, 0.0F});
+        const ElementId right_top = add_vertex(source, {offset + 2.0F, 2.0F, 0.0F});
+        surviving_faces[island] = add_face(source,
+            std::array{left_bottom, middle_bottom, middle_top, left_top}, 7U);
+        ASSERT_NE(surviving_faces[island], kInvalidElementId);
+        ASSERT_NE(add_face(source,
+            std::array{middle_bottom, right_bottom, right_top, middle_top}, 7U), kInvalidElementId);
+        seams[island] = make_edge(middle_bottom, middle_top);
+        boundaries[island] = {left_bottom, right_bottom, right_top, left_top};
+    }
+    for (Face& face : source.faces) {
+        for (const ElementId id : face.vertices) {
+            const auto position = find_vertex(source, id)->position;
+            face.uvs.push_back({position.x + 3.0F, position.y - 4.0F});
+        }
+    }
+    std::string expected_document;
+    for (const bool reversed : {false, true}) {
+        Document document = source;
+        Selection selection = qdr_test::edge_selection({seams[0], seams[1]}, seams[0]);
+        if (reversed) {
+            std::ranges::reverse(selection.edges);
+        }
+
+        const OperationResult result = dissolve_selected_edges(document, selection);
+
+        ASSERT_TRUE(result.success) << result.message;
+        ASSERT_TRUE(result.changed);
+        ASSERT_EQ(document.faces.size(), 2U);
+        ASSERT_EQ(document.vertices.size(), 8U);
+        for (std::size_t island = 0; island < seams.size(); ++island) {
+            const Face* merged = find_face(document, surviving_faces[island]);
+            ASSERT_NE(merged, nullptr);
+            auto boundary = merged->vertices;
+            const auto start = std::ranges::find(boundary, boundaries[island].front());
+            ASSERT_NE(start, boundary.end());
+            std::rotate(boundary.begin(), start, boundary.end());
+            EXPECT_EQ(boundary, (std::vector<ElementId>{boundaries[island].begin(), boundaries[island].end()}));
+            ASSERT_EQ(merged->uvs.size(), merged->vertices.size());
+            for (std::size_t corner = 0; corner < merged->vertices.size(); ++corner) {
+                const auto position = find_vertex(document, merged->vertices[corner])->position;
+                EXPECT_FLOAT_EQ(merged->uvs[corner].x, position.x + 3.0F);
+                EXPECT_FLOAT_EQ(merged->uvs[corner].y, position.y - 4.0F);
+            }
+            EXPECT_EQ(find_vertex(document, seams[island].a), nullptr);
+            EXPECT_EQ(find_vertex(document, seams[island].b), nullptr);
+        }
+        auto selected_faces = selection.faces;
+        std::ranges::sort(selected_faces);
+        EXPECT_EQ(selected_faces, (std::vector<ElementId>{surviving_faces.begin(), surviving_faces.end()}));
+        EXPECT_EQ(selection.mode, SelectionMode::Face);
+        EXPECT_TRUE(selection.has_active);
+        EXPECT_NE(std::ranges::find(selected_faces, selection.active_face), selected_faces.end());
+        EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
+        qdr_test::expect_valid_polygon_document_after_success(document, result);
+        if (reversed) {
+            EXPECT_EQ(qdr_test::document_fingerprint(document), expected_document);
+        } else {
+            expected_document = qdr_test::document_fingerprint(document);
+        }
     }
 }

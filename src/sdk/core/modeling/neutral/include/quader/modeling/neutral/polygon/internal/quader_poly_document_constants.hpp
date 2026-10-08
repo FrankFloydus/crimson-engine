@@ -27,11 +27,5 @@ inline constexpr float kHullDistanceEpsilon = 0.001F;
 inline constexpr float kHullNormalEpsilon = 0.000001F;
 inline constexpr float kEdgeBevelMinProfile = 0.0F;
 inline constexpr float kEdgeBevelMaxProfile = 1.0F;
-inline constexpr float kEdgeBevelSquareProfileThreshold = 0.950F;
-inline constexpr float kEdgeBevelSquareExponent = 10000.0F;
-inline constexpr float kEdgeBevelCircleExponent = 2.0F;
-inline constexpr float kEdgeBevelLineExponent = 1.0F;
-inline constexpr float kEdgeBevelSquareInExponent = 0.0F;
-inline constexpr float kEdgeBevelExponentEpsilon = 0.0001F;
 
 } // namespace quader_poly::document_internal

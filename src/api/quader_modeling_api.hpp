@@ -674,7 +674,7 @@ public:
   QuaderApiVoidResult
   apply_face_texture_action(const QuaderFaceTextureActionRequest &request);
   /// Continues the sole selected face's material/UV chart onto a target face by
-  /// rotating about the planes' intersection with Hammer's folded-angle rule.
+  /// rotating about the planes' intersection with the folded acute-angle rule.
   /// Nearly parallel planes retain the chart; the source selection stays intact.
   QuaderApiVoidResult transfer_face_texture_to_face(
       QuaderModelingObjectId object_id, QuaderElementId face_id);

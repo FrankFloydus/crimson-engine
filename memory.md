@@ -768,7 +768,10 @@ Bindings and scope rules: [INPUT_KEYBINDINGS.md](INPUT_KEYBINDINGS.md).
   Test non-square images and front-view feature movement for named CW/CCW actions.
 - Continue Texture retains the selected source; target material and UVs publish in one history
   step. A shared source/target edge supplies its endpoint UVs plus a conditioned third corner,
-  following Hammer's recovered same-mesh operation. Other corners need not fit that local chart.
+  without requiring other source corners to fit that local chart.
+  A geometry-only plan carries the chart through a local frame with the signed acute fold.
+  Keep its source plane anchored at the first source corner and the target plane at its center,
+  including faces with tolerated planarity residuals; a full normal-alignment rotation differs.
   Keep exact seam phase and self-transfer no-ops; separately placed occurrences are not shared edges.
   Fit transient charts in double precision with normalized axes. CPU and both mesh shaders
   difference affine sampling coefficients before evaluating positions, preserving small changes
@@ -793,9 +796,11 @@ Bindings and scope rules: [INPUT_KEYBINDINGS.md](INPUT_KEYBINDINGS.md).
   simplification. Dissolve Edges deliberately removes an interior edge and any seam on it:
   inherit stored boundary corners from outgoing edge donors in the survivor's texture frame,
   then remove captured affected vertices with two remaining edges after the complete edge batch.
-  UV breakpoints and bends do not block this cleanup. Capture triangle-pair and incidental
-  untouched-face corner protections before merging; do not sweep unrelated vertices. Preserve
-  surviving corner values, combine hard-edge flags, and return only live face IDs. Quader retains
+  UV breakpoints do not block this cleanup; boundary bends exceeding five degrees do. Capture
+  triangle-pair and incidental untouched-face corner protections before merging; do not sweep
+  unrelated vertices. Preserve surviving corner values and use the last canonically ordered
+  donor's normal mode for a new replacement edge; retain an existing replacement edge's mode.
+  Return only live face IDs. Quader retains
   a candidate if removing it would leave a neighboring face with fewer than three corners.
   Do not require the removed faces' entire interior UV fields to survive retriangulation;
   that rejects valid peeled, discontinuous and nonplanar joins. Keep finite and topology checks.

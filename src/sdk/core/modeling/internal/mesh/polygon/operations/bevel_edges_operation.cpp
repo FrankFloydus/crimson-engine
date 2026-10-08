@@ -10,6 +10,7 @@
 
 #include <diagnostics/profile.hpp>
 
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_bevel_corner_patch.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_bridge_surface_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_hull_plane_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_knife_helpers.hpp>
@@ -217,6 +218,187 @@ void preserve_bevel_edge_descendant_normal_modes(
     prune_normal_edge_states(candidate);
 }
 
+std::optional<std::set<ElementId>> join_edge_bevel_chain_supports(
+    const Document& source,
+    Document& candidate,
+    std::vector<EdgeBevelBuild>& builds,
+    const std::map<ElementId, int>& selected_edge_counts,
+    const std::map<ElementId, int>& incident_edge_counts,
+    const std::set<std::pair<ElementId, ElementId>>& selected_edge_keys,
+    const std::map<std::pair<ElementId, ElementId>, int>& incidence_counts,
+    float requested_width,
+    EdgeBevelWidthFeedback& width_feedback,
+    std::vector<std::array<EdgeBevelWidthFeedback, 2>>& side_width_feedback,
+    std::map<std::pair<ElementId, ElementId>, ElementId>& terminal_boundaries)
+{
+    /// Associates a strip side with the original edge supporting its endpoint.
+    struct SupportRef {
+        std::size_t build_index = 0;
+        std::size_t side_index = 0;
+        quader::QVec3 inward;
+    };
+    /// Stages both sides of a terminal so an incomplete cap is never adjusted.
+    struct TerminalCut {
+        SupportRef ref;
+        ElementId neighbor_id = kInvalidElementId;
+        quader::QVec3 position;
+        float distance = 0.0F;
+    };
+    std::set<std::tuple<std::size_t, std::size_t, ElementId>> replaced_endpoints;
+    std::map<ElementId, std::vector<TerminalCut>> terminal_cuts;
+    std::map<std::pair<ElementId, ElementId>, float> support_distances;
+    std::map<std::pair<ElementId, ElementId>, std::vector<SupportRef>> supports;
+    for (std::size_t build_index = 0; build_index < builds.size(); ++build_index) {
+        const EdgeBevelBuild& build = builds[build_index];
+        for (std::size_t side_index = 0; side_index < build.sides.size(); ++side_index) {
+            const EdgeBevelSide& side = build.sides[side_index];
+            const Face* face = find_face(source, side.face_id);
+            if (face == nullptr || face->vertices.size() < 3U) {
+                continue;
+            }
+            auto edge_index = directed_face_edge_index(*face, build.edge.a, build.edge.b);
+            if (!edge_index) {
+                edge_index = directed_face_edge_index(*face, build.edge.b, build.edge.a);
+            }
+            if (!edge_index) {
+                continue;
+            }
+            const Vertex* from = find_vertex(source, face->vertices[*edge_index]);
+            const Vertex* to = find_vertex(source, face->vertices[(*edge_index + 1U) % face->vertices.size()]);
+            if (from == nullptr || to == nullptr) {
+                continue;
+            }
+            const quader::QVec3 inward = normalize_or_zero(cross(side.normal, to->position - from->position));
+            for (const ElementId endpoint_id : {build.edge.a, build.edge.b}) {
+                const auto selected_count = selected_edge_counts.find(endpoint_id);
+                const auto incident_count = incident_edge_counts.find(endpoint_id);
+                const bool terminal = selected_count != selected_edge_counts.end() && selected_count->second == 1 &&
+                    incident_count != incident_edge_counts.end() && incident_count->second == 3;
+                if (selected_count == selected_edge_counts.end() || (selected_count->second != 2 && !terminal)) {
+                    continue;
+                }
+                const auto endpoint = std::ranges::find(face->vertices, endpoint_id);
+                const std::size_t index = static_cast<std::size_t>(endpoint - face->vertices.begin());
+                const std::array neighbors {
+                    face->vertices[(index + face->vertices.size() - 1U) % face->vertices.size()],
+                    face->vertices[(index + 1U) % face->vertices.size()]};
+                for (const ElementId neighbor_id : neighbors) {
+                    const auto key = edge_key(make_edge(endpoint_id, neighbor_id));
+                    const auto incidence = incidence_counts.find(key);
+                    if (selected_edge_keys.contains(key) || incidence == incidence_counts.end() || incidence->second != 2) {
+                        continue;
+                    }
+                    supports[{endpoint_id, neighbor_id}].push_back({build_index, side_index, inward});
+                }
+            }
+        }
+    }
+
+    for (const auto& [support, refs] : supports) {
+        const bool terminal = selected_edge_counts.at(support.first) == 1;
+        if ((terminal && refs.size() != 1U) ||
+            (!terminal && (refs.size() != 2U || refs[0].build_index == refs[1].build_index))) {
+            continue;
+        }
+        const ElementId endpoint_id = support.first;
+        if (!terminal) {
+            const EdgeBevelSide& first = builds[refs[0].build_index].sides[refs[0].side_index];
+            const EdgeBevelSide& second = builds[refs[1].build_index].sides[refs[1].side_index];
+            const bool shared =
+                edge_bevel_side_endpoint_vertex(first, endpoint_id) == edge_bevel_side_endpoint_vertex(second, endpoint_id) ||
+                length_squared(edge_bevel_side_endpoint_position(first, endpoint_id) -
+                               edge_bevel_side_endpoint_position(second, endpoint_id)) <= 0.000001F;
+            if (first.face_id == second.face_id || (shared && dot(first.normal, second.normal) >= 0.999F)) {
+                // Existing coplanar miters may intentionally leave an internal spoke.
+                continue;
+            }
+        }
+        const Vertex* root = find_vertex(source, endpoint_id);
+        const Vertex* neighbor = find_vertex(source, support.second);
+        if (root == nullptr || neighbor == nullptr) {
+            continue;
+        }
+        const auto support_delta = neighbor->position - root->position;
+        const float support_length = std::sqrt(length_squared(support_delta));
+        if (!std::isfinite(support_length) || support_length <= kEpsilon) {
+            continue;
+        }
+        const auto direction = support_delta / support_length;
+        bool valid = true;
+        for (const SupportRef& ref : refs) {
+            const float coefficient = dot(direction, ref.inward);
+            if (!std::isfinite(coefficient) || coefficient <= kEpsilon) {
+                valid = false;
+                break;
+            }
+        }
+        if (!valid) {
+            continue;
+        }
+        // Carry the width along the original support edge. Perpendicular face
+        // offsets grow the cut as a chain crosses steeper bands, making an
+        // otherwise connected strip flare toward its terminal cap.
+        const float distance = std::min(requested_width, support_length * 0.999F);
+        if (!std::isfinite(distance) || distance <= 0.0F || distance >= support_length) {
+            continue;
+        }
+        const auto opposite = support_distances.find({support.second, support.first});
+        if (opposite != support_distances.end() &&
+            distance + opposite->second >= support_length) {
+            return std::nullopt;
+        }
+        support_distances[support] = distance;
+        const auto position = root->position + direction * distance;
+        if (terminal) {
+            terminal_cuts[endpoint_id].push_back({refs.front(), support.second, position, distance});
+            continue;
+        }
+        record_edge_bevel_applied_width(&width_feedback, requested_width, distance);
+        const ElementId vertex_id = add_vertex(candidate, position);
+        for (const SupportRef& ref : refs) {
+            EdgeBevelSide& side = builds[ref.build_index].sides[ref.side_index];
+            side.endpoint_vertices[endpoint_id] = vertex_id;
+            side.endpoint_positions[endpoint_id] = position;
+            replaced_endpoints.emplace(ref.build_index, ref.side_index, endpoint_id);
+        }
+    }
+    std::set<ElementId> constrained_terminals;
+    for (const auto& [endpoint_id, cuts] : terminal_cuts) {
+        if (cuts.size() != 2U || cuts[0].ref.build_index != cuts[1].ref.build_index) {
+            continue;
+        }
+        const auto cap = std::ranges::find_if(source.faces, [&](const Face& face) {
+            return face_uses_edge(face, make_edge(endpoint_id, cuts[0].neighbor_id)) &&
+                   face_uses_edge(face, make_edge(endpoint_id, cuts[1].neighbor_id));
+        });
+        if (cap == source.faces.end()) {
+            continue;
+        }
+        for (const TerminalCut& cut : cuts) {
+            EdgeBevelSide& side = builds[cut.ref.build_index].sides[cut.ref.side_index];
+            if (length_squared(edge_bevel_side_endpoint_position(side, endpoint_id) - cut.position) > 0.0F) {
+                side.endpoint_vertices[endpoint_id] = add_vertex(candidate, cut.position);
+                side.endpoint_positions[endpoint_id] = cut.position;
+            }
+            terminal_boundaries[{endpoint_id, cut.neighbor_id}] = edge_bevel_side_endpoint_vertex(side, endpoint_id);
+            record_edge_bevel_applied_width(&width_feedback, requested_width, cut.distance);
+            replaced_endpoints.emplace(cut.ref.build_index, cut.ref.side_index, endpoint_id);
+        }
+        constrained_terminals.insert(endpoint_id);
+    }
+    // Discard provisional face-width limits only when neither original offset
+    // survives. Otherwise preserve feedback for the untouched endpoint/miter.
+    for (std::size_t build_index = 0; build_index < builds.size(); ++build_index) {
+        for (std::size_t side_index = 0; side_index < builds[build_index].sides.size(); ++side_index) {
+            if (replaced_endpoints.contains({build_index, side_index, builds[build_index].edge.a}) &&
+                replaced_endpoints.contains({build_index, side_index, builds[build_index].edge.b})) {
+                side_width_feedback[build_index][side_index] = {};
+            }
+        }
+    }
+    return constrained_terminals;
+}
+
 
 OperationResult bevel_selected_edges_impl(Document& document, Selection& selection, const EdgeBevelSettings& requested_settings)
 {
@@ -281,10 +463,23 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
     Document candidate = document;
     std::vector<EdgeBevelBuild> builds;
     builds.reserve(selected_edges.size());
+    std::vector<std::array<EdgeBevelWidthFeedback, 2>> side_width_feedback;
+    side_width_feedback.reserve(selected_edges.size());
     std::map<std::tuple<ElementId, ElementId, ElementId>, std::pair<std::size_t, int>> side_by_face_edge;
     std::map<ElementId, std::vector<EdgeBevelFaceVertexOffset>> offsets_by_vertex;
     std::map<std::pair<ElementId, ElementId>, std::pair<ElementId, quader::QVec3>> miter_vertices;
     std::map<ElementId, std::vector<std::pair<ElementId, quader::QVec3>>> profile_vertices_by_source;
+    std::set<ElementId> constrained_terminal_vertices;
+    std::map<std::pair<ElementId, ElementId>, ElementId> terminal_boundary_vertices_by_edge;
+    const auto profile_vertex_for_endpoint = [&](ElementId endpoint_id, quader::QVec3 position) {
+        // A multi-edge corner connects distinct strip samples through its patch.
+        // Positional welding here would collapse square-profile poles before
+        // the patch can separate them while preserving the boundary topology.
+        if (selected_edge_counts.contains(endpoint_id) && selected_edge_counts.at(endpoint_id) >= 3) {
+            return add_vertex(candidate, position);
+        }
+        return edge_bevel_profile_vertex_for_source(candidate, endpoint_id, position, profile_vertices_by_source);
+    };
     const auto profile_points_are_collinear = [](quader::QVec3 start, quader::QVec3 middle, quader::QVec3 end) {
         const quader::QVec3 first = middle - start;
         const quader::QVec3 second = middle - end;
@@ -353,7 +548,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
         const quader::QVec3 side1 = edge_bevel_side_endpoint_position(build.sides[1], endpoint_id);
         const int selected_count = selected_edge_counts.contains(endpoint_id) ? selected_edge_counts.at(endpoint_id) : 0;
         const bool fully_selected = fully_selected_vertices.contains(endpoint_id) && fully_selected_vertices.at(endpoint_id);
-        if (selected_count == 2 && !fully_selected) {
+        if ((selected_count == 2 && !fully_selected) || constrained_terminal_vertices.contains(endpoint_id)) {
             return source_endpoint->position;
         }
         quader::QVec3 middle = endpoint_is_a ?
@@ -451,8 +646,8 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
                     settings.profile,
                     settings.profile_type);
                 build.rows[static_cast<std::size_t>(segment_index)] = {
-                    edge_bevel_profile_vertex_for_source(candidate, build.edge.a, profiled_a, profile_vertices_by_source),
-                    edge_bevel_profile_vertex_for_source(candidate, build.edge.b, profiled_b, profile_vertices_by_source),
+                    profile_vertex_for_endpoint(build.edge.a, profiled_a),
+                    profile_vertex_for_endpoint(build.edge.b, profiled_b),
                 };
             }
 
@@ -474,12 +669,14 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
         }
 
         EdgeBevelBuild build;
+        std::array<EdgeBevelWidthFeedback, 2> build_width_feedback{};
         build.edge = make_edge(selected_edge.a, selected_edge.b);
         build.concave = edge_bevel_edge_is_concave(document, build.edge, adjacent_faces);
         bool side_failed = false;
         for (std::size_t side_index = 0; side_index < adjacent_faces.size(); ++side_index) {
             std::optional<EdgeBevelSide> side =
-                edge_bevel_side_for_face(candidate, document, build.edge, adjacent_faces[side_index], settings.width, &width_feedback);
+                edge_bevel_side_for_face(candidate, document, build.edge, adjacent_faces[side_index], settings.width,
+                                         &build_width_feedback[side_index]);
             if (!side.has_value()) {
                 side_failed = true;
                 break;
@@ -495,7 +692,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
                             endpoint_id,
                             settings.width,
                             selected_edge_keys,
-                            miter_vertices, &width_feedback)) {
+                            miter_vertices, &build_width_feedback[side_index])) {
                     bevel_side.endpoint_vertices[endpoint_id] = miter->first;
                     bevel_side.endpoint_positions[endpoint_id] = miter->second;
                 }
@@ -570,8 +767,8 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
                 settings.profile,
                 settings.profile_type);
             build.rows[static_cast<std::size_t>(segment_index)] = {
-                edge_bevel_profile_vertex_for_source(candidate, build.edge.a, profiled_a, profile_vertices_by_source),
-                edge_bevel_profile_vertex_for_source(candidate, build.edge.b, profiled_b, profile_vertices_by_source),
+                profile_vertex_for_endpoint(build.edge.a, profiled_a),
+                profile_vertex_for_endpoint(build.edge.b, profiled_b),
             };
         }
 
@@ -588,6 +785,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
             side_by_face_edge.emplace(edge_bevel_side_key(build.sides[side_index].face_id, build.edge), std::pair { build_index, side_index });
         }
         builds.push_back(std::move(build));
+        side_width_feedback.push_back(build_width_feedback);
     }
 
     /**
@@ -698,6 +896,21 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
                 side.endpoint_vertices[vertex_id] = miter_vertex_id;
                 side.endpoint_positions[vertex_id] = *miter_position;
             }
+        }
+    }
+
+    const auto constrained_terminals = join_edge_bevel_chain_supports(
+        document, candidate, builds, selected_edge_counts, incident_edge_counts,
+        selected_edge_keys, incidence_counts, settings.width, width_feedback,
+        side_width_feedback, terminal_boundary_vertices_by_edge);
+    if (!constrained_terminals) {
+        return OperationResult::failure("Bevel width exceeds the space between selected corners.");
+    }
+    constrained_terminal_vertices = *constrained_terminals;
+    for (const auto& build_feedback : side_width_feedback) {
+        for (const EdgeBevelWidthFeedback& side_feedback : build_feedback) {
+            width_feedback.applied_width = std::max(width_feedback.applied_width, side_feedback.applied_width);
+            width_feedback.support_limited |= side_feedback.support_limited;
         }
     }
 
@@ -879,7 +1092,6 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
             terminal_profiles_by_vertex[build.edge.b] = edge_bevel_endpoint_profile_vertices(build, build.edge.b);
         }
     }
-    std::map<std::pair<ElementId, ElementId>, ElementId> terminal_boundary_vertices_by_edge;
     const auto terminal_boundary_vertex =
         [&](ElementId source_vertex_id,
             ElementId neighbor_vertex_id) -> ElementId {
@@ -1753,31 +1965,22 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
             expected_normal = fully_selected ? source_vertex->position - patch_centroid : patch_centroid - source_vertex->position;
         }
         const std::size_t first_patch_face = bevel_faces.size();
-        const bool vmesh_appended = settings.segments > 1 &&
-            append_edge_bevel_vmesh_corner_patch_faces(
-                candidate,
-                bevel_faces,
-                generated_face_ids,
-                corner_arcs,
-                vertex_id,
-                material_slot,
-                expected_normal,
-                settings.segments,
-                settings.profile,
-                settings.profile_type);
-        if (!vmesh_appended) {
-            [[maybe_unused]] const bool patch_appended = append_edge_bevel_corner_patch_faces(
-                candidate,
-                bevel_faces,
-                generated_face_ids,
-                std::move(patch_vertices),
-                vertex_id,
-                selected_count,
-                material_slot,
-                expected_normal,
-                settings.segments,
-                settings.profile,
-                settings.profile_type);
+        std::vector<BevelCornerSide> patch_sides;
+        patch_sides.reserve(corner_arcs.size());
+        for (const EdgeBevelCornerArc& arc : corner_arcs) {
+            BevelCornerSide side;
+            side.vertices = arc.vertices;
+            if (!arc.use_global_profile) {
+                side.profile = arc.profile;
+            }
+            patch_sides.push_back(std::move(side));
+        }
+        if (source_vertex == nullptr ||
+            !append_bevel_corner_patch(candidate, patch_sides,
+                                       source_vertex->position, expected_normal,
+                                       settings, material_slot, bevel_faces,
+                                       generated_face_ids)) {
+            return OperationResult::failure("Unable to construct a valid bevel corner.");
         }
         for (std::size_t index = first_patch_face; index < bevel_faces.size(); ++index) {
             bevel_faces[index].texture_transform = texture_transform;

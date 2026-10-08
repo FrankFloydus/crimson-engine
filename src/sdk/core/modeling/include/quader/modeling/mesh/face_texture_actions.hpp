@@ -124,7 +124,7 @@ struct PreparedFaceTextureAction {
     const FaceTextureActionOptions &options);
 
 /**
- * Continues a source texture chart about the planes' intersection using Hammer's
+ * Continues a source texture chart about the planes' intersection using the
  * acute plane angle. A shared edge in the same document uses its endpoint UVs
  * and a geometrically conditioned third corner, preserving that local seam
  * even for non-affine source UVs. Otherwise the source must supply an affine
