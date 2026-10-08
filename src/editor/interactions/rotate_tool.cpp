@@ -44,7 +44,6 @@ bool initialize_trackball_camera(RotateToolState& state, const RotateBeginInput&
 RotatePreviewResult preview_trackball(
 	RotateToolState& state,
 	quader::QVec2 screen_position,
-	double snap_degrees,
 	bool precision)
 {
 	if (!std::isfinite(screen_position.x) || !std::isfinite(screen_position.y)) {
@@ -60,14 +59,9 @@ RotatePreviewResult preview_trackball(
 	state.trackball_vertical_radians +=
 		(static_cast<double>(screen_position.y) - state.trackball_last_screen.y) * sensitivity;
 	state.trackball_last_screen = screen_position;
-	double horizontal = state.trackball_horizontal_radians;
-	double vertical = state.trackball_vertical_radians;
+	const double horizontal = state.trackball_horizontal_radians;
+	const double vertical = state.trackball_vertical_radians;
 	const double radians_per_degree = std::acos(-1.0) / 180.0;
-	if (snap_degrees > 0.0) {
-		const double snap_radians = snap_degrees * radians_per_degree;
-		horizontal = std::round(horizontal / snap_radians) * snap_radians;
-		vertical = std::round(vertical / snap_radians) * snap_radians;
-	}
 	const quader::QVec3 rotation_vector =
 		vec3_scale(state.trackball_camera_right, vertical) +
 		vec3_scale(state.trackball_camera_up, horizontal);
@@ -183,7 +177,7 @@ public:
 			return { false, "Rotate tool is not active.", {}, {}, {}, {} };
 		}
 		if (state.axis == TransformAxis::All) {
-			return preview_trackball(state, screen_position, snap_degrees, precision);
+			return preview_trackball(state, screen_position, precision);
 		}
 		if (state.edge_on_linear_drag) {
 			const double projected_pixels = vec2_dot(vec2_sub(screen_position, state.start_screen), state.edge_on_screen_axis);
@@ -215,7 +209,7 @@ public:
 		}
 		state.accumulated_angle_degrees = angle_degrees;
 		if (snap_degrees > 0.0) {
-			angle_degrees = std::round(angle_degrees / snap_degrees) * snap_degrees;
+			angle_degrees = std::trunc(angle_degrees / snap_degrees) * snap_degrees;
 		}
 		state.preview_angle_degrees = angle_degrees;
 		const quader_poly::Transform3 transform = rotate_preview_transform(state);

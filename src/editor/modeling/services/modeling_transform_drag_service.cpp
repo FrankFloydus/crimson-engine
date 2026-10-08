@@ -667,9 +667,16 @@ ModelingTransformDragService::begin_transform_drag(
     begin.screen_pivot = screen_pivot;
     begin.has_screen_tip = true;
     begin.screen_tip = screen_tip;
+    begin.snap_bounds_to_grid =
+        portable_modeling_selection &&
+        operation == quader_editor_core::TransformDragOperation::Transform;
+    begin.snap_uniform_to_grid =
+        operation == quader_editor_core::TransformDragOperation::Inset;
     const quader_editor_core::Bounds3 bounds = [&]() {
       QDR_PROFILE_SCOPE("Modeling transform drag scale bounds");
-      return context.port.transform_drag_bounds();
+      return begin.snap_bounds_to_grid
+                 ? context.port.transform_drag_component_bounds(begin.orientation)
+                 : context.port.transform_drag_bounds();
     }();
     begin.bounds.has_bounds = !bounds.empty;
     begin.bounds.min = bounds.min;

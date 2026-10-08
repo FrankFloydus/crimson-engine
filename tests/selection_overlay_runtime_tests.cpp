@@ -5427,6 +5427,96 @@ TEST(SelectionOverlayRuntimeTests,
   }
 }
 
+TEST(SelectionOverlayRuntimeTests,
+     VulkanComponentGridCatchupMovesSelectionAndDepthTogether) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-grid-catchup-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  const QString directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (!directory.isEmpty()) ASSERT_TRUE(QDir().mkpath(directory));
+  const auto settings = ViewportSettings::defaults();
+  for (const auto &[context, label] :
+       std::array<std::pair<ViewportOverlaySelectionContext, const char *>, 3>{{
+           {ViewportOverlaySelectionContext::Vertex, "vertex"},
+           {ViewportOverlaySelectionContext::Edge, "edge"},
+           {ViewportOverlaySelectionContext::Face, "face"}}}) {
+    SCOPED_TRACE(label);
+    SelectionOverlayRuntimeHarness harness;
+    ASSERT_TRUE(harness.initialize(0.0f, false));
+    ASSERT_TRUE(harness.create_component_transform_sample(context));
+    auto &modeling = harness.workflow_editor().modeling();
+    const auto present = [&] {
+      return harness.present_component_transform_sample(context, settings);
+    };
+    const auto selected_pixels = [&](const QImage &image, float delta) {
+      const auto pixel = harness.cutting_preview_pixel({
+          -1.2f + delta,
+          context == ViewportOverlaySelectionContext::Vertex ? -0.6f : 0.0f,
+          0.0f});
+      return context == ViewportOverlaySelectionContext::Face
+          ? yellow_pixels(image, pixel) : pink_pixels(image, pixel);
+    };
+    const auto capture = [&](const char *phase) {
+      const QImage image = harness.capture();
+      EXPECT_FALSE(image.isNull());
+      if (!directory.isEmpty()) {
+        EXPECT_TRUE(image.save(QDir(directory).filePath(
+            QStringLiteral("grid_catchup_%1_%2.png")
+                .arg(QString::fromLatin1(label), QString::fromLatin1(phase)))));
+      }
+      return image;
+    };
+    ASSERT_TRUE(present());
+    const auto baseline = capture("baseline");
+    EXPECT_GE(selected_pixels(baseline, 0.0f), 3);
+    const QuaderTransformDragBeginRequest begin{
+        .tool = QuaderTransformTool::Move, .axis = QuaderTransformAxis::X,
+        .pivot = {-0.9f, 0.0f, 0.0f},
+        .screen_position = {100, 100}, .screen_pivot = {100, 100},
+        .screen_tip = {120, 100}, .has_world_direction = true,
+        .world_direction = {1, 0, 0},
+        .ray = {.origin = {-0.9f, 0, 5}, .direction = {0, 0, -1}},
+        .camera = {.orthographic = true, .origin = {0, 0, 5},
+                   .x_axis = {1, 0, 0}, .y_axis = {0, 1, 0}, .z_axis = {0, 0, 1},
+                   .viewport_size = {800, 600}, .orthographic_size = 8},
+        .grid_size = 0.75, .vertex_snap_radius = 0, .grid_snap_enabled = true};
+    const auto begun = modeling.begin_transform_drag(begin);
+    ASSERT_TRUE(begun.ok()) << begun.error_message();
+    EXPECT_FALSE(begun.changed());
+    ASSERT_TRUE(present());
+    EXPECT_EQ(capture("press"), baseline);
+    for (const auto &[raw_delta, expected_delta] :
+         std::array<std::pair<float, float>, 2>{{{0.05f, 0.15f}, {0.8f, 0.9f}}}) {
+      const auto moved = modeling.update_transform_drag({
+          .screen_position = {100 + raw_delta * 100, 100},
+          .ray = {.origin = {-0.9f + raw_delta, 0, 5}, .direction = {0, 0, -1}},
+          .camera = begin.camera, .grid_size = begin.grid_size,
+          .vertex_snap_radius = 0, .grid_snap_enabled = true});
+      ASSERT_TRUE(moved.ok()) << moved.error_message();
+      EXPECT_NEAR(moved.value().move_delta.x, expected_delta, 1.0e-5f);
+      ASSERT_TRUE(present());
+      const auto image = capture(raw_delta < 0.1f ? "catchup" : "grid_step");
+      EXPECT_GE(selected_pixels(image, expected_delta), 3);
+      EXPECT_EQ(cyan_pixels(image, harness.cutting_preview_pixel(
+          {-0.9f + expected_delta, 0.25f, -0.3f})), 0);
+      const auto uploads = harness.component_overlay_stats().uploads;
+      ASSERT_TRUE(present());
+      EXPECT_EQ(harness.component_overlay_stats().uploads.shared_position_upload_count,
+                uploads.shared_position_upload_count);
+      EXPECT_EQ(harness.capture(), image);
+    }
+    ASSERT_TRUE(modeling.cancel_transform_drag().ok());
+    ASSERT_TRUE(present());
+    EXPECT_EQ(capture("cancel"), baseline);
+  }
+}
+
 int loop_preview_green_pixels(const QImage &image, QVec2 center,
                               bool vertex_fill_only) {
   int count = 0;

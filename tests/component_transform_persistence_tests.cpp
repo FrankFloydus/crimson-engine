@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -31,6 +32,8 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <tuple>
+#include <utility>
 
 namespace quader {
 namespace {
@@ -270,6 +273,241 @@ INSTANTIATE_TEST_SUITE_P(ComponentModes, ComponentZeroScalePersistenceTests,
                         ::testing::Values(QuaderSelectionMode::Face,
                                           QuaderSelectionMode::Edge,
                                           QuaderSelectionMode::Vertex));
+
+class ComponentGridSnapPersistenceTests
+    : public ComponentTransformPersistenceTests,
+      public ::testing::WithParamInterface<std::tuple<QuaderSelectionMode, float>> {};
+
+TEST_P(ComponentGridSnapPersistenceTests,
+       OffGridAnchorCatchesUpWithoutChangingOffsetsAndRetainsHistory) {
+  const auto [mode, direction] = GetParam();
+  enter_edit_for_all_meshes();
+  ASSERT_TRUE(editor_.selection().set_mode(mode).ok());
+  ASSERT_TRUE(editor_.selection().select_all().ok());
+  const float anchor = direction * 6.0F;
+  ASSERT_TRUE(editor_.modeling().move_selection({anchor, 0, 0}).ok());
+  const auto before = topology();
+  auto &session = *project_.active_scene()->session;
+  const auto history_count = session.history().undo_count();
+  auto begin = component_move_request();
+  begin.pivot = {anchor, 0, 0};
+  begin.ray.origin.x = anchor;
+  begin.grid_size = 8.0;
+  begin.grid_snap_enabled = true;
+  const auto drag_to = [&](float raw_delta) {
+    return editor_.modeling().update_transform_drag({
+        .screen_position = {100.0F + raw_delta * 100.0F, 100.0F},
+        .ray = {.origin = {anchor + raw_delta, 0, 5}, .direction = {0, 0, -1}},
+        .camera = begin.camera, .grid_size = 8.0,
+        .vertex_snap_radius = 0, .grid_snap_enabled = true});
+  };
+  const auto expected_document = [&](float delta) {
+    auto expected = before;
+    for (auto &vertex : expected.vertices) vertex.position.x += delta;
+    return expected;
+  };
+
+  ASSERT_TRUE(editor_.modeling().begin_transform_drag(begin).ok());
+  const auto stationary = drag_to(0.0F);
+  ASSERT_TRUE(stationary.ok()) << stationary.error_message();
+  EXPECT_FLOAT_EQ(stationary.value().move_delta.x, 0.0F);
+  const auto clicked = editor_.modeling().commit_transform_drag();
+  ASSERT_TRUE(clicked.ok()) << clicked.error_message();
+  EXPECT_FALSE(clicked.changed());
+  EXPECT_EQ(session.history().undo_count(), history_count);
+  expect_same_authored_topology(topology(), before);
+
+  for (const bool cancel : {true, false}) {
+    SCOPED_TRACE(cancel);
+    ASSERT_TRUE(editor_.modeling().begin_transform_drag(begin).ok());
+    // Each sample starts from the original off-grid anchor, even after the
+    // previous candidate has already caught up to the neighboring grid line.
+    for (const auto [raw_delta, snapped_delta] :
+         {std::pair{1.0F, 2.0F}, std::pair{7.0F, 10.0F}}) {
+      const auto moved = drag_to(direction * raw_delta);
+      ASSERT_TRUE(moved.ok()) << moved.error_message();
+      EXPECT_FLOAT_EQ(moved.value().move_delta.x, direction * snapped_delta);
+      EXPECT_FLOAT_EQ(moved.value().move_delta.y, 0.0F);
+      EXPECT_FLOAT_EQ(moved.value().move_delta.z, 0.0F);
+      const auto previews = session.modeling().tool_preview_meshes();
+      ASSERT_EQ(previews.size(), 1U);
+      expect_preview_matches_document(previews.front(),
+          expected_document(direction * snapped_delta));
+      expect_same_authored_topology(topology(), before);
+      EXPECT_EQ(session.history().undo_count(), history_count);
+    }
+    if (cancel) {
+      const auto returned = drag_to(0.0F);
+      ASSERT_TRUE(returned.ok()) << returned.error_message();
+      EXPECT_FLOAT_EQ(returned.value().move_delta.x, 0.0F);
+      const auto previews = session.modeling().tool_preview_meshes();
+      if (!previews.empty()) {
+        ASSERT_EQ(previews.size(), 1U);
+        expect_preview_matches_document(previews.front(), before);
+      }
+      ASSERT_TRUE(drag_to(direction).ok());
+      ASSERT_TRUE(editor_.modeling().cancel_transform_drag().ok());
+      EXPECT_EQ(session.history().undo_count(), history_count);
+      expect_same_authored_topology(topology(), before);
+    } else {
+      ASSERT_TRUE(editor_.modeling().commit_transform_drag().ok());
+      EXPECT_EQ(session.history().undo_count(), history_count + 1U);
+      const auto after = expected_document(direction * 10.0F);
+      expect_same_authored_topology(topology(), after);
+      verify_history_and_roundtrip(before, after);
+    }
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(ComponentModesAndDirections, ComponentGridSnapPersistenceTests,
+                        ::testing::Combine(
+                            ::testing::Values(QuaderSelectionMode::Face,
+                                              QuaderSelectionMode::Edge,
+                                              QuaderSelectionMode::Vertex),
+                            ::testing::Values(-1.0F, 1.0F)));
+
+TEST_F(ComponentTransformPersistenceTests,
+       ComponentScaleCapturesSelectedBoundsInReflectedShearedFrame) {
+  const auto unit_box = topology();
+  const auto first = std::ranges::find_if(unit_box.vertices, [](const auto &vertex) {
+    return vertex.position.x == -1.0F && vertex.position.y == 1.0F &&
+           vertex.position.z == 1.0F;
+  });
+  const auto second = std::ranges::find_if(unit_box.vertices, [](const auto &vertex) {
+    return vertex.position.x == 1.0F && vertex.position.y == -1.0F &&
+           vertex.position.z == -1.0F;
+  });
+  ASSERT_NE(first, unit_box.vertices.end());
+  ASSERT_NE(second, unit_box.vertices.end());
+  enter_edit_for_all_meshes();
+  ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Vertex).ok());
+  ASSERT_TRUE(editor_.selection().select_all().ok());
+  const QuaderTransform3 orientation{
+      .x_axis = {-1, 0, 0}, .y_axis = {0.5F, 1, 0},
+      .z_axis = {0.25F, 0.5F, 1}};
+  ASSERT_TRUE(editor_.modeling().transform_selection({
+      .x_axis = {-4, 0, 0}, .y_axis = orientation.y_axis,
+      .z_axis = orientation.z_axis, .origin = {-5, 0, 0}}).ok());
+  ASSERT_TRUE(editor_.selection().select_components({
+      .object = object_, .kind = QuaderComponentKind::Vertex,
+      .vertices = {static_cast<QuaderElementId>(first->id),
+                   static_cast<QuaderElementId>(second->id)},
+      .edit = QuaderSelectionEdit::Replace}).ok());
+  const auto before = topology();
+  auto &session = *project_.active_scene()->session;
+  const auto history_count = session.history().undo_count();
+  auto begin = component_move_request();
+  begin.tool = QuaderTransformTool::Scale;
+  begin.orientation = orientation;
+  begin.pivot = {-5, 0, 0};
+  begin.world_direction = {-1, 0, 0};
+  begin.grid_size = 8.0;
+  begin.grid_snap_enabled = true;
+  ASSERT_TRUE(editor_.modeling().begin_transform_drag(begin).ok());
+  const auto expected_document = [&](float factor) {
+    auto expected = before;
+    for (auto &vertex : expected.vertices) {
+      if (vertex.id != first->id && vertex.id != second->id) continue;
+      // The inverse of the authored reflected/sheared frame gives logical
+      // x = -world.x + world.y/2. Selected endpoints are exactly 1 and 9;
+      // inverse-projecting their world AABB would instead give -0.5 and 10.5.
+      const float logical_x = -vertex.position.x + vertex.position.y * 0.5F;
+      vertex.position.x -= (factor - 1.0F) * (logical_x - 5.0F);
+    }
+    return expected;
+  };
+  for (const auto [pointer_delta, expected_factor] : {
+           std::pair{19.2F, 1.25F}, std::pair{-19.2F, 0.75F},
+           std::pair{12.0F, 1.0F}, std::pair{-12.0F, 1.0F},
+           std::pair{0.0F, 1.0F}, std::pair{19.2F, 1.25F}}) {
+    SCOPED_TRACE(pointer_delta);
+    const auto scaled = editor_.modeling().update_transform_drag({
+        .screen_position = {100.0F + pointer_delta, 100},
+        .ray = begin.ray, .camera = begin.camera, .grid_size = 8.0,
+        .vertex_snap_radius = 0, .grid_snap_enabled = true});
+    ASSERT_TRUE(scaled.ok()) << scaled.error_message();
+    EXPECT_FLOAT_EQ(scaled.value().scale.x, expected_factor);
+    EXPECT_FLOAT_EQ(scaled.value().scale.y, 1.0F);
+    EXPECT_FLOAT_EQ(scaled.value().scale.z, 1.0F);
+    const auto previews = session.modeling().tool_preview_meshes();
+    if (!previews.empty()) {
+      ASSERT_EQ(previews.size(), 1U);
+      expect_preview_matches_document(previews.front(), expected_document(expected_factor));
+    } else {
+      EXPECT_FLOAT_EQ(expected_factor, 1.0F);
+    }
+    expect_same_authored_topology(topology(), before);
+    EXPECT_EQ(session.history().undo_count(), history_count);
+  }
+  ASSERT_TRUE(editor_.modeling().commit_transform_drag().ok());
+  const auto after = expected_document(1.25F);
+  expect_same_authored_topology(topology(), after);
+  EXPECT_EQ(session.history().undo_count(), history_count + 1U);
+  verify_history_and_roundtrip(before, after);
+}
+
+TEST_F(ComponentTransformPersistenceTests,
+       UniformInsetRetainsGridQuantizationWhileOrdinaryScaleRemainsFree) {
+  select_positive_x_face();
+  const auto before = topology();
+  auto &session = *project_.active_scene()->session;
+  const auto history_count = session.history().undo_count();
+  for (const auto operation : {
+           QuaderTransformOperation::Transform, QuaderTransformOperation::Inset}) {
+    SCOPED_TRACE(static_cast<int>(operation));
+    auto begin = component_move_request();
+    begin.tool = QuaderTransformTool::Scale;
+    begin.axis = QuaderTransformAxis::All;
+    begin.operation = operation;
+    begin.pivot = {1, 0, 0};
+    begin.grid_size = 0.5;
+    begin.grid_snap_enabled = true;
+    const auto started = editor_.modeling().begin_transform_drag(begin);
+    ASSERT_TRUE(started.ok()) << started.error_message();
+    for (const bool grid_enabled : {true, false, true}) {
+      const auto scaled = editor_.modeling().update_transform_drag({
+          .screen_position = {80.8F, 100},
+          .ray = begin.ray, .camera = begin.camera, .grid_size = 0.5,
+          .vertex_snap_radius = 0, .grid_snap_enabled = grid_enabled});
+      ASSERT_TRUE(scaled.ok()) << scaled.error_message();
+      const float expected = operation == QuaderTransformOperation::Inset && grid_enabled
+          ? 0.75F : 0.8F;
+      EXPECT_NEAR(scaled.value().scale.x, expected, 0.0001F);
+      EXPECT_NEAR(scaled.value().scale.y, expected, 0.0001F);
+      EXPECT_NEAR(scaled.value().scale.z, expected, 0.0001F);
+      EXPECT_EQ(scaled.value().operation, operation);
+      if (operation == QuaderTransformOperation::Transform) {
+        EXPECT_FALSE(session.modeling().tool_preview_meshes().empty());
+        expect_same_authored_topology(topology(), before);
+      } else {
+        // Inset publishes its topology draft into the authored projection;
+        // cancellation restores the baseline after all grid updates below.
+        const auto preview = topology();
+        ASSERT_EQ(preview.vertices.size(), before.vertices.size() + 4U);
+        EXPECT_EQ(preview.faces.size(), before.faces.size() + 4U);
+        std::size_t inset_vertices = 0U;
+        for (const auto &vertex : preview.vertices) {
+          const auto *original = quader_poly::find_vertex(before, vertex.id);
+          if (original != nullptr) {
+            EXPECT_FLOAT_EQ(vertex.position.x, original->position.x);
+            EXPECT_FLOAT_EQ(vertex.position.y, original->position.y);
+            EXPECT_FLOAT_EQ(vertex.position.z, original->position.z);
+          } else {
+            ++inset_vertices;
+            EXPECT_NEAR(vertex.position.x, 1.0F, 0.0001F);
+            EXPECT_NEAR(std::abs(vertex.position.y), expected, 0.0001F);
+            EXPECT_NEAR(std::abs(vertex.position.z), expected, 0.0001F);
+          }
+        }
+        EXPECT_EQ(inset_vertices, 4U);
+      }
+      EXPECT_EQ(session.history().undo_count(), history_count);
+    }
+    ASSERT_TRUE(editor_.modeling().cancel_transform_drag().ok());
+    expect_same_authored_topology(topology(), before);
+    EXPECT_EQ(session.history().undo_count(), history_count);
+  }
+}
 
 TEST_F(ComponentTransformPersistenceTests, OrdinaryFaceMoveRetainsItsTopologyThroughSaveAndHistory) {
   select_positive_x_face();

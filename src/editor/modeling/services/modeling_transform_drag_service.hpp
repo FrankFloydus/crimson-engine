@@ -76,6 +76,10 @@ public:
   scene_selection_display_from_scene() const = 0;
   [[nodiscard]] virtual quader_editor_core::Bounds3
   transform_drag_bounds() const = 0;
+  /// Captures selected component points in the gizmo's linear coordinate frame.
+  [[nodiscard]] virtual quader_editor_core::Bounds3
+  transform_drag_component_bounds(
+      const quader_poly::Transform3 &orientation) const = 0;
   virtual void invalidate_selection_overlay_caches() const = 0;
   virtual void sync_scene_selection_from_modeling() = 0;
   virtual void refresh_transform_drag_projection() = 0;

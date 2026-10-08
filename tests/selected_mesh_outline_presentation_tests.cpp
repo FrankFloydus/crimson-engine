@@ -895,12 +895,18 @@ TEST(SelectedMeshOutlinePresentationTests,
 
 TEST(SelectedMeshOutlinePresentationTests,
      RejectedFaceCollapseKeepsRetainedWiresAndAllowsDragRecovery) {
-  for (const bool cancel : {false, true}) {
+  for (const auto [cancel, grid_snap] : {
+           std::pair{false, false}, std::pair{true, false},
+           std::pair{false, true}, std::pair{true, true}}) {
     SCOPED_TRACE(cancel);
+    SCOPED_TRACE(grid_snap);
+    const float fixed_x = grid_snap ? -8.0F : -1.0F;
+    const float initial_x = grid_snap ? 6.0F : 1.0F;
+    const float recovered_x = grid_snap ? 0.0F : -0.5F;
     ExtrudeOutlineHarness harness;
     auto &modeling = harness.session.modeling();
     const auto created = harness.editor.modeling().create_box(
-        {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}},
+        {.min = {fixed_x, -1.0F, -1.0F}, .max = {initial_x, 1.0F, 1.0F}},
         "Retained face drag");
     ASSERT_TRUE(created.ok()) << created.error_message();
     harness.object = created.value();
@@ -913,7 +919,7 @@ TEST(SelectedMeshOutlinePresentationTests,
     const auto face = std::ranges::find_if(document.faces, [&](const auto &item) {
       return std::ranges::all_of(item.vertices, [&](auto id) {
         const auto *vertex = quader_poly::find_vertex(document, id);
-        return vertex != nullptr && vertex->position.x == 1.0F;
+        return vertex != nullptr && vertex->position.x == initial_x;
       });
     });
     ASSERT_NE(face, document.faces.end());
@@ -1007,7 +1013,7 @@ TEST(SelectedMeshOutlinePresentationTests,
           EXPECT_FLOAT_EQ(position[1], x);
         } else {
           ++source_edges;
-          EXPECT_TRUE(position[1] == -1.0F || position[1] == x)
+          EXPECT_TRUE(position[1] == fixed_x || position[1] == x)
               << "Stale source wire endpoint at " << position[1];
         }
       }
@@ -1026,18 +1032,21 @@ TEST(SelectedMeshOutlinePresentationTests,
       ASSERT_NO_FATAL_FAILURE(harness.expect_unchanged());
     };
     ASSERT_TRUE(submit().persistent_submitted);
-    expect_face_position(1.0F);
+    expect_face_position(initial_x);
+    ASSERT_NO_FATAL_FAILURE(expect_unchanged());
     auto begin = test::x_move_drag_begin({
-        .pivot = {1.0F, 0.0F, 0.0F}, .grid_snap_enabled = false});
-    begin.ray.origin.x = 1.0F;
+        .pivot = {initial_x, 0.0F, 0.0F}, .grid_snap_enabled = grid_snap});
+    begin.ray.origin.x = initial_x;
+    begin.grid_size = 8.0;
     begin.vertex_snap_radius = 0.0;
     ASSERT_TRUE(modeling.begin_transform_drag(begin).ok);
     const auto drag_to = [&](float x) {
-      auto update = test::x_move_drag_update((x - 1.0F) * 60.0F);
+      auto update = test::x_move_drag_update((x - initial_x) * 60.0F);
       // The drag retains its axis even when the pointer leaves the box silhouette.
       update.screen_position.y = 180.0F;
       update.ray.origin = {x, 3.0F, 5.0F};
-      update.grid_snap_enabled = false;
+      update.grid_size = 8.0;
+      update.grid_snap_enabled = grid_snap;
       update.vertex_snap_radius = 0.0;
       return modeling.update_transform_drag(update);
     };
@@ -1045,8 +1054,13 @@ TEST(SelectedMeshOutlinePresentationTests,
     bool first_sample = true;
     std::uint64_t retained_builds = 0U;
     std::uint64_t retained_submissions = 0U;
-    for (const float x : {0.5F, 0.0F}) {
-      ASSERT_TRUE(drag_to(x).ok);
+    const std::array samples = grid_snap
+        ? std::array{std::pair{7.0F, 8.0F}, std::pair{13.0F, 16.0F}}
+        : std::array{std::pair{0.5F, 0.5F}, std::pair{0.0F, 0.0F}};
+    for (const auto [raw_x, snapped_x] : samples) {
+      const auto moved = drag_to(raw_x);
+      ASSERT_TRUE(moved.ok) << moved.message;
+      EXPECT_FLOAT_EQ(moved.move_delta.x, snapped_x - initial_x);
       const auto submission = submit();
       EXPECT_EQ(submission.persistent_submitted, first_sample);
       EXPECT_EQ(submission.selection_source_refreshed, first_sample);
@@ -1059,7 +1073,7 @@ TEST(SelectedMeshOutlinePresentationTests,
         EXPECT_EQ(harness.target.submissions, retained_submissions);
       }
       ASSERT_EQ(published.size(), 1u);
-      expect_face_position(x);
+      expect_face_position(snapped_x);
       const auto stamp = harness.source_stamp();
       EXPECT_EQ(stamp.content_revision, durable.content_revision);
       EXPECT_EQ(stamp.scene_revision, durable.scene_revision);
@@ -1068,25 +1082,34 @@ TEST(SelectedMeshOutlinePresentationTests,
     }
     const auto accepted_wires = wires();
     for (int sample = 0; sample < 2; ++sample) {
-      const auto rejected = drag_to(-1.0F);
+      const auto rejected = drag_to(fixed_x);
       ASSERT_FALSE(rejected.ok);
       ASSERT_TRUE(modeling.transform_drag_active());
       (void)submit();
       ASSERT_EQ(published.size(), 1u);
       EXPECT_EQ(wires(), accepted_wires);
-      expect_face_position(0.0F);
+      expect_face_position(samples.back().second);
       ASSERT_NO_FATAL_FAILURE(expect_unchanged());
     }
     if (cancel) {
+      if (grid_snap) {
+        ASSERT_TRUE(drag_to(initial_x).ok);
+        (void)submit();
+        expect_face_position(initial_x);
+        ASSERT_NO_FATAL_FAILURE(expect_unchanged());
+        ASSERT_TRUE(drag_to(samples.front().first).ok);
+        (void)submit();
+        expect_face_position(samples.front().second);
+      }
       ASSERT_TRUE(modeling.cancel_transform_drag().ok);
       ASSERT_TRUE(submit().persistent_submitted);
       EXPECT_TRUE(published.empty());
       EXPECT_TRUE(accepted_coordinates.empty());
-      expect_face_position(1.0F);
+      expect_face_position(initial_x);
     } else {
-      ASSERT_TRUE(drag_to(-0.5F).ok);
+      ASSERT_TRUE(drag_to(recovered_x).ok);
       EXPECT_FALSE(submit().persistent_submitted);
-      expect_face_position(-0.5F);
+      expect_face_position(recovered_x);
       EXPECT_NE(wires(), accepted_wires);
       ASSERT_NO_FATAL_FAILURE(expect_unchanged());
       const auto before_commit_work =
@@ -1098,7 +1121,7 @@ TEST(SelectedMeshOutlinePresentationTests,
       EXPECT_FALSE(position_stream_changed);
       EXPECT_FALSE(modeling.transient_transform_preview_active());
       EXPECT_TRUE(modeling.tool_preview_meshes().empty());
-      expect_face_position(-0.5F);
+      expect_face_position(recovered_x);
       const auto committed_work = modeling.selection_overlay_geometry_work_counters();
       EXPECT_EQ(committed_work.geometry_build_count,
                 before_commit_work.geometry_build_count);
@@ -1113,10 +1136,10 @@ TEST(SelectedMeshOutlinePresentationTests,
       ASSERT_TRUE(harness.editor.history().undo().ok());
       ASSERT_TRUE(submit().persistent_submitted);
       EXPECT_TRUE(accepted_coordinates.empty());
-      expect_face_position(1.0F);
+      expect_face_position(initial_x);
       ASSERT_TRUE(harness.editor.history().redo().ok());
       ASSERT_TRUE(submit().persistent_submitted);
-      expect_face_position(-0.5F);
+      expect_face_position(recovered_x);
       EXPECT_EQ(modeling.selection_overlay_geometry_work_counters().geometry_build_count,
                 before_commit_work.geometry_build_count);
     }

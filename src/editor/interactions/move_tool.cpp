@@ -153,22 +153,36 @@ quader::QVec3 snap_center_drag_delta(
 		const quader_poly::Transform3& orientation,
 		double grid_size)
 {
+	if (vec3_is_tiny(raw_delta)) {
+		return {};
+	}
 	const quader::QVec3 logical_center =
 		inverse_transform_vector(orientation, center_world);
-	const quader::QVec3 logical_target =
-		inverse_transform_vector(orientation, center_world + raw_delta);
+	const quader::QVec3 logical_motion =
+		inverse_transform_vector(orientation, raw_delta);
+	const double step = std::max(grid_size, 0.0001);
+	const auto snapped_displacement = [step](double center, double motion) {
+		// Keep the frozen anchor and motion separate until double-precision
+		// quantization; signed half-grid ties advance toward the positive line.
+		const double grid_index = (center + motion) / step + 0.5;
+		const double nearest_boundary = std::round(grid_index);
+		// Float frame projections can place an exact midpoint just below its
+		// boundary. Bound this tolerance in grid units, never by world magnitude.
+		constexpr double kMidpointTolerance = 4.0 * std::numeric_limits<float>::epsilon();
+		const double stable_index = std::abs(grid_index - nearest_boundary) <= kMidpointTolerance
+			? nearest_boundary : grid_index;
+		return static_cast<float>(
+			std::floor(stable_index) * step - center);
+	};
 	quader::QVec3 logical_delta;
 	if (transform_axis_includes_basis_axis(axis, 0)) {
-		logical_delta.x = static_cast<float>(
-			snap_world_value(logical_target.x, grid_size) - logical_center.x);
+		logical_delta.x = snapped_displacement(logical_center.x, logical_motion.x);
 	}
 	if (transform_axis_includes_basis_axis(axis, 1)) {
-		logical_delta.y = static_cast<float>(
-			snap_world_value(logical_target.y, grid_size) - logical_center.y);
+		logical_delta.y = snapped_displacement(logical_center.y, logical_motion.y);
 	}
 	if (transform_axis_includes_basis_axis(axis, 2)) {
-		logical_delta.z = static_cast<float>(
-			snap_world_value(logical_target.z, grid_size) - logical_center.z);
+		logical_delta.z = snapped_displacement(logical_center.z, logical_motion.z);
 	}
 	return transform_vector(orientation, logical_delta);
 }
@@ -585,9 +599,7 @@ public:
                         state.move, input.screen_position, input.ray,
                         input.camera, input.precision, input.grid_enabled,
                         input.grid_size,
-                        state.scene_transform_preview_eligible &&
-                            state.operation ==
-                                TransformDragOperation::Transform);
+                        state.operation == TransformDragOperation::Transform);
                   }
                   if (!preview.ok) {
                     return {false, false,

@@ -28,6 +28,8 @@ struct ScaleToolState {
 	quader::QVec2 start_mouse;
 	quader::QVec2 screen_axis { 1.0F, 0.0F };
 	ToolBounds3 bounds;
+	bool snap_bounds_to_grid = false;
+	bool snap_uniform_to_grid = false;
 	quader::QVec3 preview_scale { 1.0F, 1.0F, 1.0F };
 };
 
@@ -45,6 +47,11 @@ struct ScaleBeginInput {
   bool has_screen_tip = false;
   quader::QVec2 screen_tip;
   ToolBounds3 bounds;
+  // Component bounds use absolute coordinates in the captured orientation.
+  // Other callers retain world bounds and the dimensions-based snap policy.
+  bool snap_bounds_to_grid = false;
+  // Topology tools retain their dimensions-based uniform grid snapping.
+  bool snap_uniform_to_grid = false;
 };
 
 /**

@@ -14642,6 +14642,95 @@ TEST(ViewportInteractionControllerTests,
 }
 
 TEST(ViewportInteractionControllerTests,
+     ComponentGridCatchUpUsesLatestReleaseAndSkipsUnchangedHeldFrames) {
+  for (const auto mode : {quader::QuaderSelectionMode::Vertex,
+                          quader::QuaderSelectionMode::Edge,
+                          quader::QuaderSelectionMode::Face}) {
+    for (const bool coalesced : {false, true}) {
+      SCOPED_TRACE(static_cast<int>(mode));
+      SCOPED_TRACE(coalesced);
+      ViewportInteractionHarness harness;
+      harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);
+      harness.input.orthographic_view = true;
+      harness.input.grid_preset = 6;
+      harness.settings.set_bool_value(quader::ViewportBoolSettingId::SnappingEnabled, true);
+      harness.settings.set_bool_value(quader::ViewportBoolSettingId::GridSnap, true);
+      harness.settings.set_bool_value(quader::ViewportBoolSettingId::VertexSnap, false);
+      const float grid = quader::viewport_grid_world_size_for_preset(harness.input.grid_preset);
+      const auto box = create_unit_box(harness);
+      select_single_component(harness, box, mode);
+      ASSERT_TRUE(harness.editor.selection().select_all().ok());
+      const auto original_pivot = harness.editor.query().selection_transform_pivot();
+      ASSERT_TRUE(original_pivot.has_value());
+      ASSERT_TRUE(harness.editor.modeling().move_selection(
+          {grid * 0.75F - original_pivot->x, 0, 0}).ok());
+      const auto initial_pivot = harness.editor.query().selection_transform_pivot();
+      ASSERT_TRUE(initial_pivot.has_value());
+      EXPECT_NEAR(initial_pivot->x, grid * 0.75F, 0.00001F);
+      ASSERT_TRUE(harness.editor.tools().activate(quader::ViewportToolId::Move).ok());
+      harness.router.set_active_tool(quader::ViewportToolId::Move);
+      harness.session.history().clear();
+      (void)harness.controller.handle_before_active_tool(harness.editor, harness.frame());
+      const auto *gizmo = harness.controller.transform_gizmo_frame();
+      ASSERT_NE(gizmo, nullptr);
+      const auto *axis = find_axis(*gizmo, quader_editor_core::TransformAxis::X);
+      ASSERT_NE(axis, nullptr);
+      const auto start = axis_screen_point(*axis, 0.75F);
+      const auto grid_pixels = harness.camera.project_world_point(
+          *initial_pivot + quader::QVec3{grid, 0, 0}).position -
+          harness.camera.project_world_point(*initial_pivot).position;
+      const auto release_local = start + grid_pixels * 0.875F;
+      const auto move_to = [&](quader::QVec2 position, bool pressed, bool released) {
+        harness.input.mouse_local = position;
+        harness.input.mouse_screen = position;
+        return harness.controller.handle_before_active_tool(
+            harness.editor, harness.frame(pressed, !released, released, start));
+      };
+      const auto expect_pivot_delta = [&](float delta) {
+        const auto pivot = harness.editor.query().selection_transform_pivot();
+        ASSERT_TRUE(pivot.has_value());
+        expect_vec3_near(*pivot, *initial_pivot + quader::QVec3{delta, 0, 0});
+      };
+      harness.input.pointer_pressed_edges = {{
+          .button = quader::QuaderMouseButton::Left, .local = start, .sequence = 1U}};
+      if (coalesced) {
+        harness.input.pointer_released_edges = {{
+            .button = quader::QuaderMouseButton::Left,
+            .local = release_local, .sequence = 2U}};
+        // A later hover belongs to the same host frame, after the physical release.
+        ASSERT_TRUE(move_to(start + grid_pixels * 2.0F, true, true).gizmo_consumed);
+      } else {
+        ASSERT_TRUE(move_to(start, true, false).gizmo_consumed);
+        harness.input.pointer_pressed_edges.clear();
+        const auto first_sample = start + grid_pixels * 0.125F;
+        ASSERT_TRUE(move_to(first_sample, false, false).gizmo_consumed);
+        ASSERT_TRUE(harness.controller.dragging());
+        ASSERT_NO_FATAL_FAILURE(expect_pivot_delta(grid * 0.25F));
+        auto &modeling = harness.session.modeling();
+        const auto revision = modeling.transient_transform_preview_revision();
+        const auto work = modeling.modeling_sdk_projection_stats_for_tests();
+        for (int frame = 0; frame < 5; ++frame) {
+          ASSERT_TRUE(move_to(first_sample, false, false).gizmo_consumed);
+          EXPECT_EQ(modeling.transient_transform_preview_revision(), revision);
+          const auto after = modeling.modeling_sdk_projection_stats_for_tests();
+          EXPECT_EQ(after.preview_publication_count, work.preview_publication_count);
+          EXPECT_EQ(after.mesh_compile_count, work.mesh_compile_count);
+        }
+        EXPECT_EQ(harness.session.history().undo_count(), 0U);
+        ASSERT_TRUE(move_to(release_local, false, true).gizmo_consumed);
+      }
+      EXPECT_FALSE(harness.controller.dragging());
+      EXPECT_EQ(harness.session.history().undo_count(), 1U);
+      ASSERT_NO_FATAL_FAILURE(expect_pivot_delta(grid * 1.25F));
+      ASSERT_TRUE(harness.editor.history().undo().ok());
+      ASSERT_NO_FATAL_FAILURE(expect_pivot_delta(0.0F));
+      ASSERT_TRUE(harness.editor.history().redo().ok());
+      ASSERT_NO_FATAL_FAILURE(expect_pivot_delta(grid * 1.25F));
+    }
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
      RejectedFaceGizmoSampleRetainsGestureAndDoesNotRetryUnchangedFrames) {
   ViewportInteractionHarness harness;
   harness.camera.view_axis(quader::ViewportViewAxis::Z, 1);

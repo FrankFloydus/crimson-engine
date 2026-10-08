@@ -10,10 +10,59 @@
 #include "tool_math_internal.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <string_view>
 
 namespace quader_editor_core {
 namespace {
+
+double snap_component_scale(const ScaleToolState& state, double factor, double grid_size)
+{
+	if (!state.bounds.has_bounds || grid_size <= kScreenEpsilon) {
+		return factor;
+	}
+	const auto pivot = inverse_transform_vector(state.orientation, state.pivot);
+	const std::array<double, 3> pivot_coordinates{pivot.x, pivot.y, pivot.z};
+	const std::array<double, 3> minimum{state.bounds.min.x, state.bounds.min.y, state.bounds.min.z};
+	const std::array<double, 3> maximum{state.bounds.max.x, state.bounds.max.y, state.bounds.max.z};
+	const auto active_axes = axis_vector(state.axis);
+	const std::array<float, 3> active_components{active_axes.x, active_axes.y, active_axes.z};
+	double nearest_factor = 1.0;
+	double nearest_distance = std::abs(factor - nearest_factor);
+	// Identity wins equal-distance ties. Remaining ties follow axis, minimum
+	// endpoint, then the grid line nearer zero, keeping reversal deterministic.
+	for (std::size_t component = 0; component < active_components.size(); ++component) {
+		if (active_components[component] == 0.0F) {
+			continue;
+		}
+		const double coordinate = pivot_coordinates[component];
+		for (const double endpoint : {minimum[component], maximum[component]}) {
+			const double extent = endpoint - coordinate;
+			// A nearly coincident pivot endpoint cannot define a stable factor.
+			constexpr double kMinimumSnapExtent = 0.001;
+			if (std::abs(extent) < kMinimumSnapExtent) {
+				continue;
+			}
+			const double target = coordinate + extent * factor;
+			const double lower_line = std::floor(target / grid_size) * grid_size;
+			const double upper_line = lower_line + grid_size;
+			const bool lower_nearer_zero = std::abs(lower_line) <= std::abs(upper_line);
+			const std::array<double, 2> lines = lower_nearer_zero
+				? std::array<double, 2>{lower_line, upper_line}
+				: std::array<double, 2>{upper_line, lower_line};
+			for (const double line : lines) {
+				const double candidate = std::max(0.0, (line - coordinate) / extent);
+				const double distance = std::abs(candidate - factor);
+				if (distance < nearest_distance) {
+					nearest_factor = candidate;
+					nearest_distance = distance;
+				}
+			}
+		}
+	}
+	return nearest_factor;
+}
 
 /**
  * Implements Scale Tool behavior for the modal modeling interaction layer.
@@ -59,6 +108,8 @@ public:
 			quader::QVec2 { input.screen_position.x + 1.0F, input.screen_position.y };
 		state.screen_axis = vec2_normalize_or(vec2_sub(screen_tip, state.screen_pivot), { 1.0F, 0.0F });
 		state.bounds = input.bounds;
+		state.snap_bounds_to_grid = input.snap_bounds_to_grid;
+		state.snap_uniform_to_grid = input.snap_uniform_to_grid;
 		state.preview_scale = { 1.0F, 1.0F, 1.0F };
 		return { true, {}, state };
 	}
@@ -75,7 +126,11 @@ public:
 		const double axis_pixels = vec2_dot(vec2_sub(screen_position, state.start_mouse), state.screen_axis);
                 double factor = std::max(
                     kMinScaleFactor, 1.0 + axis_pixels / kScalePixelsPerFactor);
-                factor = snapped_scale_factor(state.axis, factor, state.bounds, state.pivot, grid_enabled, grid_size);
+		if (grid_enabled && (state.axis != TransformAxis::All || state.snap_uniform_to_grid)) {
+			factor = state.snap_bounds_to_grid && state.axis != TransformAxis::All
+				? snap_component_scale(state, factor, grid_size)
+				: snapped_scale_factor(state.axis, factor, state.bounds, state.pivot, true, grid_size);
+		}
 		return preview_scale_from_scale(state, axis_scale(state.axis, factor));
 	}
 

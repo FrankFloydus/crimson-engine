@@ -166,23 +166,26 @@ TEST(QdrModelingRuntimeToolRotateTests, TrackballPrecisionChangesOnlyNewMotionWi
 	expect_transform_near(returned.transform, {});
 }
 
-TEST(QdrModelingRuntimeToolRotateTests, TrackballSnapsEachAngularComponentAndRetainsUnsnappedMotion)
+TEST(QdrModelingRuntimeToolRotateTests, TrackballRemainsFreeWhenAngularSnapChanges)
 {
 	const auto begin = quader_editor_core::begin_rotate_drag(trackball_begin_input());
 	ASSERT_TRUE(begin.ok);
 	auto state = begin.state;
-	const auto snapped = quader_editor_core::preview_rotate_from_screen_position(
+	const auto preview = quader_editor_core::preview_rotate_from_screen_position(
 		state, { 240.0F, 170.0F }, 15.0);
-	ASSERT_TRUE(snapped.ok);
-	const double angle = std::sqrt(30.0 * 30.0 + 15.0 * 15.0) * std::acos(-1.0) / 180.0;
+	ASSERT_TRUE(preview.ok);
+	const double angle = std::sqrt(0.2);
 	const double component = std::sin(angle) / std::sqrt(5.0);
-	expect_vector_near(snapped.transform.z_axis,
+	expect_vector_near(preview.transform.z_axis,
 		{ static_cast<float>(2.0 * component), static_cast<float>(-component), static_cast<float>(std::cos(angle)) });
-	EXPECT_NEAR(snapped.preview_angle_degrees, std::sqrt(1125.0), 0.00001);
-	const auto unsnapped = quader_editor_core::preview_rotate_from_screen_position(
-		state, { 240.0F, 170.0F }, 0.0);
-	ASSERT_TRUE(unsnapped.ok);
-	EXPECT_NEAR(unsnapped.preview_angle_degrees, std::sqrt(0.2) * 180.0 / std::acos(-1.0), 0.00001);
+	EXPECT_NEAR(preview.preview_angle_degrees, angle * 180.0 / std::acos(-1.0), 0.00001);
+	for (const double snap_degrees : {0.0, 90.0, 1.0, 15.0}) {
+		const auto repeated = quader_editor_core::preview_rotate_from_screen_position(
+			state, {240.0F, 170.0F}, snap_degrees);
+		ASSERT_TRUE(repeated.ok);
+		expect_transform_near(repeated.transform, preview.transform);
+		EXPECT_DOUBLE_EQ(repeated.preview_angle_degrees, preview.preview_angle_degrees);
+	}
 }
 
 TEST(QdrModelingRuntimeToolRotateTests, TrackballRejectsMissingAndDegenerateCameraFrames)
@@ -253,6 +256,44 @@ TEST(QdrModelingRuntimeToolRotateTests, RotateDragSnapsScreenAngleAndBuildsPivot
 	EXPECT_NEAR(preview.transform.x_axis.x, 0.0, 0.0001);
 	EXPECT_NEAR(preview.transform.x_axis.y, 1.0, 0.0001);
 	EXPECT_FALSE(qdr_test::nearly_equal(preview.pivoted_transform.origin.x, 0.0F, 0.0001));
+}
+
+TEST(QdrModelingRuntimeToolRotateTests,
+     ConstrainedRotationSnapsOnlyCompletedSignedAngularSteps) {
+	struct AngleCase {
+		double angle;
+		double expected;
+	};
+	const AngleCase cases[] = {
+		{14.0, 0.0}, {16.0, 15.0}, {29.0, 15.0}, {31.0, 30.0},
+		{15.0, 15.0}, {0.0, 0.0}, {-14.0, 0.0}, {-16.0, -15.0},
+		{-29.0, -15.0}, {-31.0, -30.0}, {-15.0, -15.0}, {0.0, 0.0},
+	};
+	for (const auto axis : {quader_editor_core::TransformAxis::X,
+		quader_editor_core::TransformAxis::Y, quader_editor_core::TransformAxis::Z}) {
+		quader_editor_core::RotateBeginInput input;
+		input.axis = axis;
+		input.pivot = {2.0F, 3.0F, 4.0F};
+		const auto begin = quader_editor_core::begin_rotate_drag(input);
+		ASSERT_TRUE(begin.ok);
+		auto state = begin.state;
+		for (const AngleCase& angle_case : cases) {
+			SCOPED_TRACE(static_cast<int>(axis));
+			SCOPED_TRACE(angle_case.angle);
+			const auto preview = quader_editor_core::preview_rotate_from_angle_degrees(
+				state, angle_case.angle, 15.0);
+			ASSERT_TRUE(preview.ok);
+			EXPECT_DOUBLE_EQ(preview.preview_angle_degrees, angle_case.expected);
+			EXPECT_DOUBLE_EQ(state.accumulated_angle_degrees, angle_case.angle);
+			expect_vector_near(
+				quader_editor_core::transform_point(preview.pivoted_transform, input.pivot),
+				input.pivot);
+			const auto unsnapped = quader_editor_core::preview_rotate_from_angle_degrees(
+				state, angle_case.angle, 0.0);
+			ASSERT_TRUE(unsnapped.ok);
+			EXPECT_DOUBLE_EQ(unsnapped.preview_angle_degrees, angle_case.angle);
+		}
+	}
 }
 
 TEST(QdrModelingRuntimeToolRotateTests, RotateDragAccumulatesCircularMotionBeyondHalfTurns) {

@@ -707,6 +707,14 @@ Bindings and scope rules: [INPUT_KEYBINDINGS.md](INPUT_KEYBINDINGS.md).
 - Use the displayed affine world basis, including hierarchy shear/reflection and instance transforms.
   Local Move shares the active frame; Rotate/Scale use each target's pinned frame/pivot. Use full
   inverse-basis math, not orthonormal dot-product shortcuts. Freeze active component frames at press.
+- Ordinary gizmo Move snaps the shared selection anchor, including component selections; a stationary
+  press or return to the press position stays unchanged. Grid half-ties advance toward positive
+  coordinates. Constrained rotation uses complete angle intervals toward zero; free rotation remains
+  continuous. Component constrained scale uses captured logical-frame selected bounds and an absolute
+  logical pivot; derive those bounds from selected positions, never from an enclosing world AABB.
+  Coverage: [transform math](tests/modeling_domain/tool/qdr_modeling_runtime_tool_move_tests.cpp),
+  [component lifecycle](tests/component_transform_persistence_tests.cpp) and
+  [retained Vulkan pixels](tests/selection_overlay_runtime_tests.cpp).
 - Rotate's trackball (`All`) freezes the camera right/up frame at press and uses a shared world pivot,
   even with Local selected. Preserve its complete rotation matrix through scene/component previews
   and repeat; the scalar angle is only a summary. Visible axis arcs take priority over the ball.

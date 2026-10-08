@@ -11453,6 +11453,55 @@ private:
     return {};
   }
 
+  [[nodiscard]] quader_editor_core::Bounds3
+  transform_drag_component_bounds(
+      const quader_poly::Transform3 &orientation) const override {
+    // Capture once from the drag's selected authored points. Inverting their
+    // world AABB would add extrema that do not belong to the selection when
+    // the captured frame is rotated or sheared.
+    const ModelingSelectionProjectionSnapshot &projection =
+        transform_drag_projection_cache_ != nullptr
+            ? *transform_drag_projection_cache_
+            : selection_projection_snapshot();
+    std::optional<SceneBounds> bounds;
+    for (const quader_editor_core::PolygonObject &object :
+         projection.objects()) {
+      if (!object.selected || object.selection.empty()) {
+        continue;
+      }
+      const std::optional<QMat4> world_from_object =
+          modeling_object_world_transform(object.id);
+      if (!world_from_object.has_value()) {
+        continue;
+      }
+      const std::vector<quader_poly::ElementId> selected_vertex_ids =
+          quader_poly::selected_vertex_ids(object.document, object.selection);
+      std::unordered_set<quader_poly::ElementId> remaining_vertices(
+          selected_vertex_ids.begin(), selected_vertex_ids.end());
+      for (const quader_poly::Vertex &vertex : object.document.vertices) {
+        if (remaining_vertices.erase(vertex.id) == 0U) {
+          continue;
+        }
+        const QVec3 world =
+            transform_point(*world_from_object, vertex.position);
+        // Grid coordinates remain absolute: orientation.origin does not shift
+        // the grid, just as it does not shift an oriented scale transform.
+        const QVec3 point =
+            quader_editor_core::inverse_transform_vector(orientation, world);
+        if (!bounds.has_value()) {
+          bounds = SceneBounds{.min = point, .max = point};
+        } else {
+          include_point(*bounds, point);
+        }
+      }
+    }
+    return bounds.has_value()
+               ? quader_editor_core::Bounds3{.empty = false,
+                                            .min = bounds->min,
+                                            .max = bounds->max}
+               : quader_editor_core::Bounds3{};
+  }
+
   [[nodiscard]] const std::vector<quader_editor_core::PolygonObject> &
   cached_scene_transformed_objects_for_picking() const override {
     QDR_PROFILE_FUNCTION();

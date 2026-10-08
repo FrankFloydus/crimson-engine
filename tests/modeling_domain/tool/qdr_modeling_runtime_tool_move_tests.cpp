@@ -377,31 +377,42 @@ TEST(QdrModelingRuntimeToolMoveTests,
 	const quader_poly::Transform3 orientation = nonorthogonal_orientation();
 	const quader::QVec3 center =
 		transformed_vector(orientation, {0.2F, -0.3F, 1.1F});
-	quader_editor_core::MoveToolState state = begin_plane_move(
-		quader_editor_core::TransformAxis::Xy, orientation, center);
-	const quader::QVec3 raw_delta =
-		transformed_vector(orientation, {0.55F, 0.9F, 0.0F});
-	const quader::QVec3 target{
-		center.x + raw_delta.x,
-		center.y + raw_delta.y,
-		center.z + raw_delta.z,
+	struct MidpointCase {
+		float motion;
+		float expected_delta;
 	};
-	const quader::QVec3 expected =
-		transformed_vector(orientation, {0.8F, 0.8F, 0.0F});
+	const MidpointCase cases[] = {
+		{0.55F, 0.8F}, {0.5499F, 0.3F}, {0.5501F, 0.8F},
+		{-0.95F, -0.7F}, {-0.9501F, -1.2F}, {-0.9499F, -0.7F},
+	};
+	for (const MidpointCase& midpoint_case : cases) {
+		SCOPED_TRACE(midpoint_case.motion);
+		quader_editor_core::MoveToolState state = begin_plane_move(
+			quader_editor_core::TransformAxis::Xy, orientation, center);
+		const quader::QVec3 raw_delta =
+			transformed_vector(orientation, {midpoint_case.motion, 0.9F, 0.0F});
+		const quader::QVec3 target{
+			center.x + raw_delta.x,
+			center.y + raw_delta.y,
+			center.z + raw_delta.z,
+		};
+		const quader::QVec3 expected =
+			transformed_vector(orientation, {midpoint_case.expected_delta, 0.8F, 0.0F});
 
-	const quader_editor_core::MovePreviewResult preview =
-		quader_editor_core::preview_move_from_viewport(
-			state, {100.0F, 100.0F},
-			ray_through_plane_point(
-				target,
-				included_plane_normal(
-					orientation, quader_editor_core::TransformAxis::Xy)),
-			front_camera(), false, true, 0.5, true);
+		const quader_editor_core::MovePreviewResult preview =
+			quader_editor_core::preview_move_from_viewport(
+				state, {100.0F, 100.0F},
+				ray_through_plane_point(
+					target,
+					included_plane_normal(
+						orientation, quader_editor_core::TransformAxis::Xy)),
+				front_camera(), false, true, 0.5, true);
 
-	ASSERT_TRUE(preview.ok);
-	EXPECT_NEAR(preview.preview_delta.x, expected.x, 0.0001F);
-	EXPECT_NEAR(preview.preview_delta.y, expected.y, 0.0001F);
-	EXPECT_NEAR(preview.preview_delta.z, expected.z, 0.0001F);
+		ASSERT_TRUE(preview.ok);
+		EXPECT_NEAR(preview.preview_delta.x, expected.x, 0.0001F);
+		EXPECT_NEAR(preview.preview_delta.y, expected.y, 0.0001F);
+		EXPECT_NEAR(preview.preview_delta.z, expected.z, 0.0001F);
+	}
 }
 
 TEST(QdrModelingRuntimeToolMoveTests, ObjectMoveDragSnapsSelectionCenterToGridIntersections) {
@@ -415,6 +426,118 @@ TEST(QdrModelingRuntimeToolMoveTests, ObjectMoveDragSnapsSelectionCenterToGridIn
   EXPECT_TRUE(preview.ok);
   EXPECT_NEAR(preview.preview_delta.x, 0.75F, 0.0001);
   EXPECT_NEAR(state.center_world.x + preview.preview_delta.x, 1.0F, 0.0001);
+}
+
+TEST(QdrModelingRuntimeToolMoveTests,
+     AnchorGridCatchupUsesSignedPositiveHalfTiesAndFrozenStart) {
+	struct MoveCase {
+		float anchor;
+		float motion;
+		float expected;
+	};
+	const MoveCase cases[] = {
+		{6.0F, 1.0F, 2.0F}, {6.0F, 7.0F, 10.0F},
+		{6.0F, -3.0F, -6.0F}, {-6.0F, -1.0F, -2.0F},
+		{-6.0F, -7.0F, -10.0F}, {-6.0F, 2.0F, 6.0F},
+		{-10.0F, -2.0F, 2.0F}, {0.0F, -4.0F, 0.0F},
+		{0.0F, 4.0F, 8.0F}, {6.0F, 0.0F, 0.0F},
+		{16777216.0F, 3.0F, 0.0F}, {-16777216.0F, -5.0F, -8.0F},
+	};
+	auto camera = front_camera();
+	camera.projection = quader_editor_core::CameraProjection::Orthographic;
+	camera.orthographic_size = camera.viewport_size.y;
+	for (const MoveCase& move_case : cases) {
+		SCOPED_TRACE(move_case.anchor);
+		SCOPED_TRACE(move_case.motion);
+		auto state = begin_axis_move(
+			quader_editor_core::TransformAxis::X, {move_case.anchor, 3.0F, 5.0F});
+		for (const bool grid_enabled : {true, false, true}) {
+			const auto preview = quader_editor_core::preview_move_from_viewport(
+				state, {100.0F + move_case.motion, 100.0F}, {}, camera,
+				false, grid_enabled, 8.0, true);
+			ASSERT_TRUE(preview.ok);
+			EXPECT_NEAR(preview.preview_delta.x,
+				grid_enabled ? move_case.expected : move_case.motion, 0.0001F);
+			EXPECT_FLOAT_EQ(preview.preview_delta.y, 0.0F);
+			EXPECT_FLOAT_EQ(preview.preview_delta.z, 0.0F);
+		}
+		const auto returned = quader_editor_core::preview_move_from_viewport(
+			state, {100.0F, 100.0F}, {}, camera, false, true, 8.0, true);
+		ASSERT_TRUE(returned.ok);
+		EXPECT_FLOAT_EQ(returned.preview_delta.x, 0.0F);
+	}
+}
+
+TEST(QdrModelingRuntimeToolMoveTests,
+     OrdinaryComponentAnchorCatchupDoesNotDependOnScenePreviewEligibility) {
+	auto camera = front_camera();
+	camera.projection = quader_editor_core::CameraProjection::Orthographic;
+	camera.orthographic_size = camera.viewport_size.y;
+	for (const auto mode : {
+		quader_editor_core::SelectionMode::Object,
+		quader_editor_core::SelectionMode::Vertex,
+		quader_editor_core::SelectionMode::Edge,
+		quader_editor_core::SelectionMode::Face}) {
+		for (const bool scene_preview : {false, true}) {
+			SCOPED_TRACE(static_cast<int>(mode));
+			SCOPED_TRACE(scene_preview);
+			quader_editor_core::TransformDragState drag;
+			drag.active = true;
+			drag.tool = quader_editor_core::ViewportInteractionTool::Move;
+			drag.axis = quader_editor_core::TransformAxis::X;
+			drag.scene_transform_preview_eligible = scene_preview;
+			drag.move = begin_axis_move(drag.axis, {6.0F, 0.0F, 0.0F});
+			quader_editor_core::TransformDragPreviewInput input;
+			input.camera = camera;
+			input.grid_enabled = true;
+			input.grid_size = 8.0;
+			input.screen_position = {101.0F, 100.0F};
+			const auto preview = quader_editor_core::apply_transform_drag_preview(
+				{}, mode, drag, input);
+			ASSERT_TRUE(preview.ok);
+			EXPECT_NEAR(drag.move.preview_delta.x, 2.0F, 0.0001F);
+			EXPECT_EQ(drag.scene_transform_preview_eligible, scene_preview);
+		}
+	}
+}
+
+TEST(QdrModelingRuntimeToolMoveTests,
+     LocalPlaneAnchorCatchupPreservesExcludedCoordinatesAndZeroMotion) {
+	const quader_poly::Transform3 orientation{
+		{1.0F, 0.0F, 0.0F}, {0.5F, 1.0F, 0.0F}, {0.5F, 0.0F, 1.0F}, {}};
+	const quader::QVec3 center = transformed_vector(orientation, {6.0F, -6.0F, 10.0F});
+	struct PlaneCase {
+		quader_editor_core::TransformAxis axis;
+		quader::QVec3 motion;
+		quader::QVec3 expected;
+	};
+	const PlaneCase cases[] = {
+		{quader_editor_core::TransformAxis::Xy, {1.0F, 2.0F, 0.0F}, {2.0F, 6.0F, 0.0F}},
+		{quader_editor_core::TransformAxis::Xz, {1.0F, 0.0F, -6.0F}, {2.0F, 0.0F, -2.0F}},
+		{quader_editor_core::TransformAxis::Yz, {0.0F, 2.0F, -6.0F}, {0.0F, 6.0F, -2.0F}},
+	};
+	for (const PlaneCase& plane_case : cases) {
+		SCOPED_TRACE(static_cast<int>(plane_case.axis));
+		auto state = begin_plane_move(plane_case.axis, orientation, center);
+		const auto normal = included_plane_normal(orientation, plane_case.axis);
+		const auto motion = transformed_vector(orientation, plane_case.motion);
+		const auto expected = transformed_vector(orientation, plane_case.expected);
+		for (const bool grid_enabled : {true, false}) {
+			const auto preview = quader_editor_core::preview_move_from_viewport(
+				state, {101.0F, 102.0F}, ray_through_plane_point(center + motion, normal),
+				front_camera(), false, grid_enabled, 8.0, true);
+			ASSERT_TRUE(preview.ok);
+			const auto expected_delta = grid_enabled ? expected : motion;
+			EXPECT_NEAR(preview.preview_delta.x, expected_delta.x, 0.0001F);
+			EXPECT_NEAR(preview.preview_delta.y, expected_delta.y, 0.0001F);
+			EXPECT_NEAR(preview.preview_delta.z, expected_delta.z, 0.0001F);
+		}
+		const auto returned = quader_editor_core::preview_move_from_viewport(
+			state, {100.0F, 100.0F}, ray_through_plane_point(center, normal),
+			front_camera(), false, true, 8.0, true);
+		ASSERT_TRUE(returned.ok);
+		EXPECT_NEAR(quader::length(returned.preview_delta), 0.0F, 0.0001F);
+	}
 }
 
 TEST(QdrModelingRuntimeToolMoveTests,
