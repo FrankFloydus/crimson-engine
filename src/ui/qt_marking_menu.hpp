@@ -33,7 +33,9 @@ public:
   void apply_ui_scale(const QtUiScaleMetrics &metrics);
 
   /// Eight stable compass slots run clockwise from north. Supplemental actions
-  /// and separators appear in a native menu list below the ring. The complete
+  /// and separators appear in a native menu list below the ring. Menu actions
+  /// open native submenus; only their borrowed leaves can be returned, without
+  /// triggering them. The complete
   /// layout fits the monitor once before opening; a tall list can sit beside
   /// it.
   [[nodiscard]] QAction *exec(const QPoint &global_anchor,

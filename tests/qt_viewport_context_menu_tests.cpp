@@ -16,6 +16,7 @@
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/qt_viewport_context_menu.hpp"
+#include "ui/viewport_context_menu_policy.hpp"
 #include "viewport/viewport_input_router.hpp"
 
 #include <quader/modeling/neutral/polygon/document.hpp>
@@ -272,6 +273,54 @@ std::vector<std::array<double, 2>> face_uv_coordinates(const quader_poly::Face &
 } // namespace
 
 TEST(QtViewportContextMenuTests,
+     MeshOmissionsPreserveGroupAndComponentCommandPolicy) {
+  using Mode = quader::QuaderSelectionMode;
+  namespace command = quader::quader_command;
+  quader::ViewportContextMenuScope scope{
+      .mode = Mode::Object,
+      .has_selection = true,
+      .polygon_targets = true,
+      .groupable_targets = true,
+      .has_group_target = true,
+      .clipboard_targets = true,
+  };
+  for (const auto id : {
+           command::kModelingHalfCut, command::kModelingDuplicateMeshes,
+           command::kCutSelection, command::kCopySelection,
+           command::kDeleteSelection, command::kGroupSelection,
+           command::kModelingRemoveDoubles,
+           command::kModelingRecalculateFaceNormals}) {
+    EXPECT_FALSE(quader::viewport_context_menu_allows_command(scope, id.string()))
+        << id.string();
+  }
+  for (const auto id : {
+           command::kEditCreateInstance, command::kModelingInvertMesh,
+           command::kModelingSnapMeshesToFloor, command::kModelingSetOriginToCenter,
+           command::kModelingSetOriginToPivot, command::kModelingMirrorSelectionX,
+           command::kModelingMirrorSelectionY, command::kModelingMirrorSelectionZ,
+           command::kModelingFlipHorizontal, command::kModelingFlipVertical,
+           command::kModelingBakeLocation, command::kModelingBakeRotation,
+           command::kModelingBakeScale, command::kModelingBakeTransforms,
+           command::kDuplicateSelection, command::kPasteSelection}) {
+    EXPECT_TRUE(quader::viewport_context_menu_allows_command(scope, id.string()))
+        << id.string();
+  }
+  scope.mode = Mode::Group;
+  EXPECT_TRUE(quader::viewport_context_menu_allows_command(
+      scope, command::kGroupSelection.string()));
+  EXPECT_TRUE(quader::viewport_context_menu_allows_command(
+      scope, command::kDeleteSelection.string()));
+  for (const Mode mode : {Mode::Vertex, Mode::Edge, Mode::Face}) {
+    scope.mode = mode;
+    EXPECT_TRUE(quader::viewport_context_menu_allows_command(
+        scope, command::kDeleteSelection.string()));
+    EXPECT_EQ(quader::viewport_context_menu_allows_command(
+                  scope, command::kModelingRecalculateFaceNormals.string()),
+              mode == Mode::Face);
+  }
+}
+
+TEST(QtViewportContextMenuTests,
      GenericOperationsStayInQForObjectComponentInstanceAndEmptySelections) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
@@ -324,10 +373,20 @@ TEST(QtViewportContextMenuTests,
     EXPECT_FALSE(menu.opened);
     EXPECT_TRUE(menu.actions.empty());
   };
-  verify_ownership({"edit.duplicate", "edit.create_instance", "edit.copy",
-                    "edit.delete", "modeling.bake_rotation",
-                    "modeling.remove_doubles", "modeling.set_origin_to_center",
+  verify_ownership({"edit.duplicate", "edit.create_instance",
+                    "modeling.bake_rotation", "modeling.set_origin_to_center",
                     "modeling.set_origin_to_pivot"});
+  const auto mesh_commands = quader::qt_viewport_context_commands(
+      editor, editor.selection().summary(), localization);
+  for (const std::string_view id : {
+           "modeling.half_cut", "modeling.duplicate_meshes", "edit.cut",
+           "edit.copy", "edit.delete", "edit.group", "modeling.remove_doubles",
+           "modeling.recalculate_face_normals"}) {
+    EXPECT_FALSE(std::ranges::any_of(mesh_commands, [id](const auto &entry) {
+      return entry.command_id == id;
+    })) << id;
+    EXPECT_TRUE(editor.commands().descriptor(id).has_value()) << id;
+  }
 
   const auto expect_no_origin_commands = [&]() {
     const auto commands = quader::qt_viewport_context_commands(
@@ -429,7 +488,7 @@ TEST(QtViewportContextMenuTests, SelectedCurveKeepsSolidifyWhileGenericOperation
   });
   const auto q_commands = quader::qt_viewport_context_commands(
       editor, editor.selection().summary(), localization);
-  for (const std::string_view id : {"edit.duplicate", "edit.delete"}) {
+  for (const std::string_view id : {"edit.duplicate"}) {
     EXPECT_TRUE(std::ranges::any_of(q_commands, [id](const auto &command) {
       return command.command_id == id;
     })) << id;

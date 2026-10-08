@@ -547,11 +547,20 @@ TEST(LocalizationResourceTests,
     std::string_view english;
     std::string_view italian;
   };
-  constexpr std::array<LabelExpectation, 45> kExpectedLabels{{
+  constexpr std::array<LabelExpectation, 54> kExpectedLabels{{
       {"delete_selection", "Delete", "Elimina"},
       {"duplicate_meshes", "Duplicate", "Duplica"},
       {"snap_meshes_to_floor", "Snap to Floor", "Aggancia al pavimento"},
-      {"invert_mesh", "Flip Mesh Normals", "Inverti normali mesh"},
+      {"invert_mesh", "Flip Normals", "Inverti normali"},
+      {"mirror_selection_x", "Mirror X", "Specchia X"},
+      {"mirror_selection_y", "Mirror Y", "Specchia Y"},
+      {"mirror_selection_z", "Mirror Z", "Specchia Z"},
+      {"flip_horizontal", "Flip Horizontally", "Ribalta orizzontalmente"},
+      {"flip_vertical", "Flip Vertically", "Ribalta verticalmente"},
+      {"bake_location", "Bake Position", "Applica posizione"},
+      {"bake_rotation", "Bake Rotation", "Applica rotazione"},
+      {"bake_scale", "Bake Scale", "Applica scala"},
+      {"bake_transforms", "Bake All", "Applica tutto"},
       {"shade_smooth_mesh", "Shade Smooth", "Ombreggiatura morbida"},
       {"shade_flat_mesh", "Shade Flat", "Ombreggiatura piatta"},
       {"combine_mesh", "Combine Meshes", "Combina mesh"},
@@ -643,6 +652,17 @@ TEST(LocalizationResourceTests,
             "Snap Edges to Active");
   EXPECT_EQ(italian->at("modeling.action.snap_edges_to_active.label"),
             "Aggancia spigoli all'attivo");
+  EXPECT_EQ(english->at("modeling.action.invert_mesh.label"), "Flip Mesh Normals");
+  EXPECT_EQ(english->at("modeling.action.bake_location.label"), "Bake Location");
+  EXPECT_EQ(english->at("modeling.action.bake_transforms.label"), "Bake Transforms");
+  EXPECT_EQ(english->at("keybindings.target.modeling.flip_horizontal.label"),
+            "Flip Selection Horizontally");
+  EXPECT_EQ(english->at("ui.viewport.marking_menu.submenu.mirror"), "Mirror");
+  EXPECT_EQ(english->at("ui.viewport.marking_menu.submenu.flip"), "Flip");
+  EXPECT_EQ(english->at("ui.viewport.marking_menu.submenu.bake"), "Bake");
+  EXPECT_EQ(italian->at("ui.viewport.marking_menu.submenu.mirror"), "Specchia");
+  EXPECT_EQ(italian->at("ui.viewport.marking_menu.submenu.flip"), "Ribalta");
+  EXPECT_EQ(italian->at("ui.viewport.marking_menu.submenu.bake"), "Applica");
 
   EXPECT_EQ(english->at("ui.viewport.context_menu.section.mesh"), "Mesh");
   EXPECT_EQ(italian->at("ui.viewport.context_menu.section.mesh"), "Mesh");

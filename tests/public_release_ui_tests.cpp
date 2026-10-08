@@ -32,8 +32,10 @@
 #include "ui/qt_tool_toolbar.hpp"
 #include "ui/qt_viewport_control_strip.hpp"
 #include "ui/qt_viewport_display_toolbar.hpp"
+#include "ui/qt_viewport_marking_menu.hpp"
 #include "ui/ui_context.hpp"
 #include "viewport/viewport_settings.hpp"
+#include "viewport/viewport_input_router.hpp"
 #include "ui/ui_settings.hpp"
 #include "ui/ui_system.hpp"
 
@@ -45,6 +47,7 @@
 #include <QLineEdit>
 #include <QLabel>
 #include <QImage>
+#include <QKeyEvent>
 #include <QLayout>
 #include <QTableView>
 #include <QDockWidget>
@@ -55,9 +58,11 @@
 #include <QMenu>
 #include <QPushButton>
 #include <QPropertyAnimation>
+#include <QPixmap>
 #include <QStackedWidget>
 #include <QStyle>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
 #include <QTreeWidget>
@@ -106,6 +111,85 @@ private:
   char *argv_[2] = {application_name_, nullptr};
   std::unique_ptr<QApplication> application_;
 };
+
+TEST_F(PublicReleaseUiTests, MeshMarkingMenuRetainsOnlyThePublicNormalDirection) {
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+  const auto box = editor.modeling().create_box(
+      {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}}, "Public Mesh Menu");
+  ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  LocalizationService localization;
+  ASSERT_TRUE(localization.load(resource_root() / "locales", "en-US"));
+  ViewportInputRouter input_router;
+  QWidget owner;
+  owner.resize(700, 500);
+  owner.show();
+  owner.activateWindow();
+  QCoreApplication::processEvents();
+  QTimer watchdog;
+  watchdog.setSingleShot(true);
+  QObject::connect(&watchdog, &QTimer::timeout, &owner, []() {
+    ADD_FAILURE() << "The public marking-menu fixture did not finish.";
+    if (auto *popup = QApplication::activePopupWidget()) {
+      popup->close();
+    }
+  });
+  watchdog.start(3000);
+  bool inspected = false;
+  QTimer::singleShot(0, &owner, [&]() {
+    auto *popup = QApplication::activePopupWidget();
+    ASSERT_NE(popup, nullptr);
+    ASSERT_EQ(popup->objectName(), QStringLiteral("viewport_marking_menu"));
+    inspected = true;
+    for (int slot = 0; slot < 8; ++slot) {
+      const auto *button = popup->findChild<QToolButton *>(
+          QStringLiteral("markingMenu.slot.%1").arg(slot));
+      ASSERT_NE(button, nullptr);
+      EXPECT_EQ(!button->isHidden(), slot == 2);
+      if (slot == 2) {
+        EXPECT_EQ(button->accessibleName(), QStringLiteral("Flip Normals"));
+        EXPECT_TRUE(button->isEnabled());
+      }
+    }
+    const auto *flip = popup->findChild<QAction *>(QStringLiteral("modeling.invert_mesh"));
+    ASSERT_NE(flip, nullptr);
+    EXPECT_TRUE(flip->isEnabled());
+    for (const auto id : {quader_command::kEditCreateInstance,
+                          quader_command::kModelingSnapMeshesToFloor,
+                          quader_command::kModelingSetOriginToCenter,
+                          quader_command::kModelingSetOriginToPivot,
+                          quader_command::kModelingBakeLocation,
+                          quader_command::kModelingBakeTransforms,
+                          quader_command::kModelingMirrorSelectionX,
+                          quader_command::kModelingFlipHorizontal}) {
+      EXPECT_EQ(popup->findChild<QAction *>(QString::fromUtf8(id.string().data())), nullptr)
+          << id.string();
+    }
+    for (const auto *name : {"viewport_marking_submenu_mirror",
+                              "viewport_marking_submenu_flip",
+                              "viewport_marking_submenu_bake"}) {
+      EXPECT_EQ(popup->findChild<QMenu *>(QString::fromUtf8(name)), nullptr);
+    }
+    const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+    if (!review_directory.isEmpty()) {
+      ASSERT_TRUE(QDir().mkpath(review_directory));
+      EXPECT_TRUE(popup->grab().save(QDir(review_directory).filePath(
+          QStringLiteral("marking-mesh-public-100.png"))));
+    }
+    QKeyEvent cancel(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QCoreApplication::sendEvent(popup, &cancel);
+  });
+  QtViewportMarkingMenuPresenter presenter;
+  const QuaderInputChord chord{
+      .device = QuaderInputDevice::Keyboard, .key = QuaderKeyCode::Q};
+  EXPECT_FALSE(presenter.show(owner, owner.mapToGlobal(owner.rect().center()),
+      editor.viewports().focused_pane(), chord, editor, input_router, localization,
+      QtUiScaleMetrics{}));
+  watchdog.stop();
+  EXPECT_TRUE(inspected);
+}
 
 TEST_F(PublicReleaseUiTests, ObjectAndEditModesExposeOnlyTheirSelectionDomains) {
   SceneSession scene;

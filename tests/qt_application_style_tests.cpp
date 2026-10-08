@@ -1013,6 +1013,87 @@ TEST_F(QtApplicationStyleTests,
   }
 }
 
+TEST_F(QtApplicationStyleTests,
+       NativeFallbackMenuLabelsRemainUnelidedAcrossScaleAndDirection) {
+  const QPalette fusion = QApplication::style()->standardPalette();
+  QPalette light_palette = fusion;
+  light_palette.setColor(QPalette::Window, Qt::white);
+  light_palette.setColor(QPalette::WindowText, Qt::black);
+  light_palette.setColor(QPalette::Base, Qt::white);
+  light_palette.setColor(QPalette::Text, Qt::black);
+  light_palette.setColor(QPalette::Button, Qt::white);
+  light_palette.setColor(QPalette::ButtonText, Qt::black);
+  quader::apply_qt_obsidian_application_theme(fusion);
+  quader::QtUiScaleApplicationController controller(*application_);
+  for (const bool high_contrast : {false, true}) {
+    quader::apply_qt_application_theme_for_contrast_preference(
+        fusion, high_contrast ? Qt::ContrastPreference::HighContrast
+                              : Qt::ContrastPreference::NoPreference);
+    InspectableMenu menu;
+    menu.setAttribute(Qt::WA_DontShowOnScreen, true);
+    menu.setPalette(high_contrast ? QPalette{} : light_palette);
+    menu.addAction(QStringLiteral("Bake Position"));
+    menu.addAction(QStringLiteral("Bake Rotation"));
+    menu.addAction(QStringLiteral("Bake Scale"));
+    menu.addAction(QStringLiteral("Bake All"));
+    const std::array<float, 3> factors{1.0F, 2.0F, 1.0F};
+    for (std::size_t index = 0; index < factors.size(); ++index) {
+      (void)controller.apply_factor(factors[index]);
+      for (const auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
+        SCOPED_TRACE(::testing::Message() << "high_contrast=" << high_contrast
+                                         << " scale=" << factors[index]
+                                         << " direction=" << direction);
+        menu.setLayoutDirection(direction);
+        menu.popup(QPoint(20, 20));
+        QCoreApplication::processEvents();
+        ASSERT_TRUE(menu.isVisible());
+        for (QAction *action : menu.actions()) {
+          SCOPED_TRACE(action->text().toStdString());
+          QStyleOptionMenuItem option = menu.action_option(action);
+          option.rect.moveTopLeft(QPoint{});
+          EXPECT_FALSE(quader::qt_application_style_active(&option));
+          const QImage actual = render_menu_item(*menu.style(), option, menu);
+          QStyleOptionMenuItem blank_option(option);
+          blank_option.text.clear();
+          const QImage blank = render_menu_item(*menu.style(), blank_option, menu);
+          const QRect actual_ink = changed_pixels(blank, actual);
+          ASSERT_FALSE(actual_ink.isEmpty());
+
+          // Compare the actual text raster with an unconstrained native row.
+          // This detects elision without mirroring Fusion's private gutters.
+          option.rect.setWidth(option.rect.width() +
+                               option.fontMetrics.horizontalAdvance(option.text));
+          const QImage roomy = render_menu_item(*menu.style(), option, menu);
+          blank_option = option;
+          blank_option.text.clear();
+          const QImage roomy_blank =
+              render_menu_item(*menu.style(), blank_option, menu);
+          const QRect full_ink = changed_pixels(roomy_blank, roomy);
+          ASSERT_FALSE(full_ink.isEmpty());
+          EXPECT_EQ(actual.copy(actual_ink), roomy.copy(full_ink));
+        }
+        const QString directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+        if (!directory.isEmpty()) {
+          ASSERT_TRUE(QDir().mkpath(directory));
+          QImage image(menu.size(), QImage::Format_ARGB32_Premultiplied);
+          image.fill(Qt::transparent);
+          menu.render(&image);
+          const QString filename =
+              QStringLiteral("menu-native-fallback-%1-%2-%3.png")
+                  .arg(high_contrast ? QStringLiteral("high-contrast")
+                                     : QStringLiteral("light"))
+                  .arg(direction == Qt::LeftToRight ? QStringLiteral("ltr")
+                                                   : QStringLiteral("rtl"))
+                  .arg(static_cast<int>(index));
+          EXPECT_TRUE(image.save(QDir(directory).filePath(filename)));
+        }
+        menu.close();
+        QCoreApplication::processEvents();
+      }
+    }
+  }
+}
+
 TEST_F(QtApplicationStyleTests, HighContrastMenusKeepNativePaintAndSizing) {
   QApplication::setPalette(QPalette{});
   quader::QtUiScaleProxyStyle style;
@@ -1036,10 +1117,16 @@ TEST_F(QtApplicationStyleTests, HighContrastMenusKeepNativePaintAndSizing) {
       option.menuItemType = type;
       EXPECT_EQ(render_menu_item(style, option, menu),
                   render_menu_item(*fusion, option, menu));
-      EXPECT_EQ(style.sizeFromContents(QStyle::CT_MenuItem, &option,
-                                         QSize(150, 20), &menu),
-                  fusion->sizeFromContents(QStyle::CT_MenuItem, &option,
-                                             QSize(150, 20), &menu));
+      const QSize size = style.sizeFromContents(
+          QStyle::CT_MenuItem, &option, QSize(150, 20), &menu);
+      const QSize native_size = fusion->sizeFromContents(
+          QStyle::CT_MenuItem, &option, QSize(150, 20), &menu);
+      EXPECT_EQ(size.height(), native_size.height());
+      if (type == QStyleOptionMenuItem::Separator) {
+        EXPECT_EQ(size, native_size);
+      } else {
+        EXPECT_GE(size.width(), native_size.width());
+      }
     }
   }
   for (const auto metric : {QStyle::PM_MenuHMargin, QStyle::PM_MenuVMargin}) {

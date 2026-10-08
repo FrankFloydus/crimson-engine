@@ -20,6 +20,7 @@
 #include "viewport/viewport_input_router.hpp"
 
 #include <QAction>
+#include <QMenu>
 #include <QPointer>
 #include <QString>
 #include <QWidget>
@@ -27,6 +28,7 @@
 #include <algorithm>
 #include <array>
 #include <optional>
+#include <span>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -38,6 +40,49 @@ struct BoundMarkingCommand final {
   QAction *action = nullptr;
   std::string command_id;
 };
+
+/// Groups object-only supplemental commands while preserving canonical IDs.
+struct MarkingSubmenuSpec final {
+  std::string_view object_name;
+  std::string_view title_key;
+  std::string_view fallback;
+  std::span<const QuaderCommandId> commands;
+};
+
+constexpr QuaderCommandId kMirrorCommands[]{
+    quader_command::kModelingMirrorSelectionX,
+    quader_command::kModelingMirrorSelectionY,
+    quader_command::kModelingMirrorSelectionZ,
+};
+constexpr QuaderCommandId kFlipCommands[]{
+    quader_command::kModelingFlipHorizontal,
+    quader_command::kModelingFlipVertical,
+};
+constexpr QuaderCommandId kBakeCommands[]{
+    quader_command::kModelingBakeLocation,
+    quader_command::kModelingBakeRotation,
+    quader_command::kModelingBakeScale,
+    quader_command::kModelingBakeTransforms,
+};
+constexpr MarkingSubmenuSpec kObjectSubmenus[]{
+    {"viewport_marking_submenu_mirror", "ui.viewport.marking_menu.submenu.mirror",
+     "Mirror", kMirrorCommands},
+    {"viewport_marking_submenu_flip", "ui.viewport.marking_menu.submenu.flip",
+     "Flip", kFlipCommands},
+    {"viewport_marking_submenu_bake", "ui.viewport.marking_menu.submenu.bake",
+     "Bake", kBakeCommands},
+};
+
+const MarkingSubmenuSpec *object_submenu_for_command(std::string_view command_id) {
+  for (const MarkingSubmenuSpec &submenu : kObjectSubmenus) {
+    if (std::ranges::any_of(submenu.commands, [command_id](QuaderCommandId id) {
+          return id.string() == command_id;
+        })) {
+      return &submenu;
+    }
+  }
+  return nullptr;
+}
 
 // The palette and RMB retain compatibility IDs for the same merge operations.
 // Deduplicate their presentation without changing the command a direction runs.
@@ -114,11 +159,13 @@ bool QtViewportMarkingMenuPresenter::show(
     presented_commands.emplace(context_command_identity(spec.command_id.string()));
     slot_actions[static_cast<std::size_t>(spec.marking_slot)] = action;
   }
+  const auto context_commands =
+      qt_viewport_context_commands(editor, selection, localization);
   std::optional<ViewportContextMenuActionSection> previous_section;
-  for (const auto &entry :
-       qt_viewport_context_commands(editor, selection, localization)) {
+  for (const auto &entry : context_commands) {
     if (!release_presents_command(QuaderCommandId{entry.command_id}) ||
-        !presented_commands.emplace(context_command_identity(entry.command_id)).second) {
+        presented_commands.contains(
+            std::string(context_command_identity(entry.command_id)))) {
       continue;
     }
     if (previous_section.has_value() && *previous_section != entry.section) {
@@ -127,6 +174,35 @@ bool QtViewportMarkingMenuPresenter::show(
       overflow_actions.push_back(separator);
     }
     previous_section = entry.section;
+    const MarkingSubmenuSpec *submenu_spec =
+        presented_mode == QuaderSelectionMode::Object
+            ? object_submenu_for_command(entry.command_id)
+            : nullptr;
+    if (submenu_spec != nullptr) {
+      auto *submenu = new QMenu(QString::fromStdString(localization.text(
+          submenu_spec->title_key, submenu_spec->fallback)), &menu);
+      submenu->setObjectName(QString::fromUtf8(submenu_spec->object_name.data(),
+                                             submenu_spec->object_name.size()));
+      for (const QuaderCommandId command_id : submenu_spec->commands) {
+        const auto child = std::ranges::find_if(
+            context_commands, [command_id](const auto &candidate) {
+              return candidate.command_id == command_id.string();
+            });
+        if (child == context_commands.end() ||
+            !release_presents_command(command_id) ||
+            !presented_commands.emplace(
+                context_command_identity(command_id.string())).second) {
+          continue;
+        }
+        QAction *action = submenu->addAction(qt_modeling_operation_label(
+            localization, command_id, child->label.toStdString()));
+        action->setObjectName(QString::fromStdString(child->command_id));
+        commands.push_back({action, child->command_id});
+      }
+      overflow_actions.push_back(submenu->menuAction());
+      continue;
+    }
+    presented_commands.emplace(context_command_identity(entry.command_id));
     auto *action = new QAction(entry.label, &menu);
     if (entry.command_id == quader_command::kToolsActivateAlign.string()) {
       action->setIcon(qt_multiresolution_icon(

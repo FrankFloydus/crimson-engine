@@ -273,12 +273,12 @@ QSize QtUiScaleProxyStyle::sizeFromContents(
   QSize size = QProxyStyle::sizeFromContents(type, option, contents_size, widget);
   const auto *item = qstyleoption_cast<const QStyleOptionMenuItem *>(option);
   if (type != CT_MenuItem || item == nullptr ||
-      qobject_cast<const QMenu *>(widget) == nullptr ||
-      !qt_application_style_active(option)) {
+      qobject_cast<const QMenu *>(widget) == nullptr) {
     return size;
   }
+  const bool themed = qt_application_style_active(option);
   if (item->menuItemType == QStyleOptionMenuItem::Separator) {
-    if (item->text.isEmpty() && item->icon.isNull()) {
+    if (themed && item->text.isEmpty() && item->icon.isNull()) {
       size.setHeight(metrics_.px(8));
     }
     return size;
@@ -286,11 +286,15 @@ QSize QtUiScaleProxyStyle::sizeFromContents(
   if (item->menuItemType == QStyleOptionMenuItem::Normal ||
       item->menuItemType == QStyleOptionMenuItem::DefaultItem ||
       item->menuItemType == QStyleOptionMenuItem::SubMenu) {
-    const int height = std::max({size.height(), metrics_.px(28),
-                                item->fontMetrics.height() + metrics_.px(8)});
+    const int height = themed
+                           ? std::max({size.height(), metrics_.px(28),
+                                       item->fontMetrics.height() + metrics_.px(8)})
+                           : size.height();
     // Fusion paints its check/icon gutter from the final row height, while its
     // content measurement can reserve a smaller column. Delegate measurement
     // with room for that full gutter rather than copying native paint constants.
+    // High Contrast and explicit light palettes retain their native row height,
+    // but need the same reservation for the native painter's text column.
     QStyleOptionMenuItem measured_item(*item);
     measured_item.maxIconWidth = std::max(item->maxIconWidth, height);
     const QSize measured_size = QProxyStyle::sizeFromContents(

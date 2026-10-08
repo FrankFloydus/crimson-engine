@@ -20,6 +20,8 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QMouseEvent>
+#include <QMenu>
+#include <QPointer>
 #include <QScreen>
 #include <QScrollBar>
 #include <QStyle>
@@ -95,6 +97,42 @@ QToolButton *slot_button(QtMarkingMenu &menu, int slot) {
 
 QListWidget *overflow_list(QtMarkingMenu &menu) {
   return menu.findChild<QListWidget *>(QStringLiteral("markingMenu.overflow"));
+}
+
+QMenu *visible_submenu(QtMarkingMenu &menu, const QString &name) {
+  const auto candidates = menu.findChildren<QMenu *>(name);
+  const auto found = std::find_if(candidates.begin(), candidates.end(),
+                                [](QMenu *popup) { return popup->isVisible(); });
+  return found == candidates.end() ? nullptr : *found;
+}
+
+void hover_overflow_row(QtMarkingMenu &menu, int row) {
+  auto *list = overflow_list(menu);
+  ASSERT_NE(list, nullptr);
+  ASSERT_LT(row, list->count());
+  move_pointer(*list->viewport(), list->viewport()->mapToGlobal(
+                                     list->visualItemRect(list->item(row)).center()));
+}
+
+void send_mouse(QWidget &receiver, QEvent::Type type,
+                const QPoint &global_position, Qt::MouseButton button) {
+  QMouseEvent event(type, QPointF(receiver.mapFromGlobal(global_position)),
+                    QPointF(global_position), button,
+                    type == QEvent::MouseButtonPress ? button : Qt::NoButton,
+                    Qt::NoModifier);
+  QCoreApplication::sendEvent(&receiver, &event);
+}
+
+void capture_submenu(QMenu &popup, const QString &filename) {
+  const QString directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (directory.isEmpty()) {
+    return;
+  }
+  EXPECT_TRUE(QDir().mkpath(directory));
+  QImage image(popup.size(), QImage::Format_ARGB32_Premultiplied);
+  image.fill(Qt::transparent);
+  popup.render(&image);
+  EXPECT_TRUE(image.save(QDir(directory).filePath(filename)));
 }
 
 void capture_menu(QtMarkingMenu &menu, const QString &filename) {
@@ -597,6 +635,400 @@ TEST_F(QtMarkingMenuTests,
                       });
   EXPECT_EQ(selected, nullptr);
   EXPECT_EQ(trigger_count, 0);
+}
+
+TEST_F(QtMarkingMenuTests,
+       SubmenuHoverReturnsBorrowedLeafForKeyboardAndMouseInitiatingRelease) {
+  QtMarkingMenu menu;
+  MarkingActions actions;
+  QMenu source(QStringLiteral("Bake"));
+  source.setObjectName(QStringLiteral("test.bake"));
+  QAction *position = source.addAction(QStringLiteral("Bake Position"));
+  QAction *rotation = source.addAction(QStringLiteral("Bake Rotation"));
+  int trigger_count = 0;
+  QObject::connect(rotation, &QAction::triggered, &menu,
+                   [&]() { ++trigger_count; });
+  for (const bool mouse_gesture : {false, true}) {
+    SCOPED_TRACE(mouse_gesture);
+    const QuaderInputChord chord = mouse_gesture
+        ? QuaderInputChord{.device = QuaderInputDevice::Mouse,
+                            .mouse_button = QuaderMouseButton::Middle}
+        : opening_chord();
+    QPointer<QMenu> shown_popup;
+    QAction *selected = run_menu(
+        menu, actions.slot_actions, {source.menuAction()}, [&]() {
+          hover_overflow_row(menu, 0);
+          auto *popup = visible_submenu(menu, source.objectName());
+          ASSERT_NE(popup, nullptr);
+          shown_popup = popup;
+          EXPECT_FALSE(source.isVisible());
+          ASSERT_EQ(popup->actions().size(), 2);
+          EXPECT_NE(popup->actions()[0], position);
+          const QPoint target = popup->mapToGlobal(
+              popup->actionGeometry(popup->actions()[1]).center());
+          // The event receiver deliberately remains the root. Hit testing
+          // must use the global pointer inside the native child popup.
+          move_pointer(menu, target);
+          EXPECT_EQ(popup->activeAction(), popup->actions()[1]);
+          if (mouse_gesture) {
+            send_mouse(menu, QEvent::MouseButtonRelease, target,
+                       Qt::MiddleButton);
+          } else {
+            send_key(menu, QEvent::KeyRelease, Qt::Key_Q);
+          }
+        }, chord);
+    EXPECT_EQ(selected, rotation);
+    EXPECT_EQ(trigger_count, 0);
+    ASSERT_NE(shown_popup, nullptr);
+    EXPECT_FALSE(shown_popup->isVisible());
+  }
+}
+
+TEST_F(QtMarkingMenuTests,
+       SubmenuHeadersNeverDispatchAndClickOpensNativeLeafNavigation) {
+  QtMarkingMenu menu;
+  MarkingActions actions;
+  QMenu source(QStringLiteral("Mirror"));
+  source.setObjectName(QStringLiteral("test.mirror"));
+  QAction *leaf = source.addAction(QStringLiteral("X"));
+  int trigger_count = 0;
+  QObject::connect(source.menuAction(), &QAction::triggered, &menu,
+                   [&]() { ++trigger_count; });
+  QObject::connect(leaf, &QAction::triggered, &menu,
+                   [&]() { ++trigger_count; });
+  EXPECT_EQ(run_menu(menu, actions.slot_actions, {source.menuAction()}, [&]() {
+              hover_overflow_row(menu, 0);
+              ASSERT_NE(visible_submenu(menu, source.objectName()), nullptr);
+              send_key(menu, QEvent::KeyRelease, Qt::Key_Q);
+            }), nullptr);
+  EXPECT_EQ(run_menu(menu, actions.slot_actions, {source.menuAction()}, [&]() {
+              auto *list = overflow_list(menu);
+              ASSERT_NE(list, nullptr);
+              const QPoint header = list->viewport()->mapToGlobal(
+                  list->visualItemRect(list->item(0)).center());
+              send_mouse(menu, QEvent::MouseButtonPress, header, Qt::LeftButton);
+              send_mouse(menu, QEvent::MouseButtonRelease, header, Qt::LeftButton);
+              EXPECT_TRUE(menu.isVisible());
+              auto *popup = visible_submenu(menu, source.objectName());
+              ASSERT_NE(popup, nullptr);
+              EXPECT_EQ(popup->activeAction(), popup->actions().front());
+              send_key(*popup, QEvent::KeyPress, Qt::Key_Return);
+            }), leaf);
+  EXPECT_EQ(trigger_count, 0);
+}
+
+TEST_F(QtMarkingMenuTests,
+       NativeSubmenuClickReturnsLeafWithoutTogglingOrTriggeringSource) {
+  QtMarkingMenu menu;
+  MarkingActions actions;
+  QMenu source(QStringLiteral("Flip"));
+  source.setObjectName(QStringLiteral("test.flip"));
+  QAction *leaf = source.addAction(QStringLiteral("Flip Horizontally"));
+  leaf->setCheckable(true);
+  int trigger_count = 0;
+  QObject::connect(leaf, &QAction::triggered, &menu,
+                   [&]() { ++trigger_count; });
+  EXPECT_EQ(run_menu(menu, actions.slot_actions, {source.menuAction()}, [&]() {
+              hover_overflow_row(menu, 0);
+              auto *popup = visible_submenu(menu, source.objectName());
+              ASSERT_NE(popup, nullptr);
+              const QPoint target = popup->mapToGlobal(
+                  popup->actionGeometry(popup->actions().front()).center());
+              move_pointer(*popup, target);
+              send_mouse(*popup, QEvent::MouseButtonPress, target, Qt::LeftButton);
+              send_mouse(*popup, QEvent::MouseButtonRelease, target, Qt::LeftButton);
+            }), leaf);
+  EXPECT_FALSE(leaf->isChecked());
+  EXPECT_EQ(trigger_count, 0);
+}
+
+TEST_F(QtMarkingMenuTests,
+       SubmenuKeyboardNavigationSkipsUnavailableLeavesAndSupportsRtlReturn) {
+  QtMarkingMenu menu;
+  MarkingActions actions;
+  QMenu source(QStringLiteral("Bake"));
+  source.setObjectName(QStringLiteral("test.bake"));
+  source.addAction(QStringLiteral("Disabled"))->setEnabled(false);
+  source.addAction(QStringLiteral("Hidden"))->setVisible(false);
+  source.addSeparator();
+  QAction *first = source.addAction(QStringLiteral("Bake Position"));
+  QAction *last = source.addAction(QStringLiteral("Bake All"));
+  for (const auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
+    SCOPED_TRACE(static_cast<int>(direction));
+    menu.setLayoutDirection(direction);
+    const int forward = direction == Qt::LeftToRight ? Qt::Key_Right : Qt::Key_Left;
+    const int backward = direction == Qt::LeftToRight ? Qt::Key_Left : Qt::Key_Right;
+    EXPECT_EQ(run_menu(menu, actions.slot_actions, {source.menuAction()}, [&]() {
+                send_key(menu, QEvent::KeyPress, Qt::Key_Down);
+                send_key(menu, QEvent::KeyPress, forward);
+                auto *popup = visible_submenu(menu, source.objectName());
+                ASSERT_NE(popup, nullptr);
+                ASSERT_NE(popup->activeAction(), nullptr);
+                EXPECT_EQ(popup->activeAction()->text(), first->text());
+                send_key(*popup, QEvent::KeyPress, backward);
+                EXPECT_FALSE(popup->isVisible());
+                EXPECT_TRUE(menu.isVisible());
+                send_key(menu, QEvent::KeyPress, forward);
+                ASSERT_TRUE(popup->isVisible());
+                send_key(*popup, QEvent::KeyPress, Qt::Key_Down);
+                EXPECT_EQ(popup->activeAction()->text(), last->text());
+                send_key(*popup, QEvent::KeyRelease, Qt::Key_Q);
+              }), last);
+  }
+}
+
+TEST_F(QtMarkingMenuTests,
+       NestedNativeSubmenusReturnOnlyLiveBorrowedLeaves) {
+  QtMarkingMenu menu;
+  MarkingActions actions;
+  QMenu source(QStringLiteral("Parent"));
+  source.setObjectName(QStringLiteral("test.parent"));
+  QMenu *child = source.addMenu(QStringLiteral("Nested"));
+  child->setObjectName(QStringLiteral("test.child"));
+  QAction *leaf = child->addAction(QStringLiteral("Leaf"));
+  int trigger_count = 0;
+  QObject::connect(leaf, &QAction::triggered, &menu,
+                   [&]() { ++trigger_count; });
+  EXPECT_EQ(run_menu(menu, actions.slot_actions, {source.menuAction()}, [&]() {
+              send_key(menu, QEvent::KeyPress, Qt::Key_Down);
+              send_key(menu, QEvent::KeyPress, Qt::Key_Right);
+              auto *parent = visible_submenu(menu, source.objectName());
+              ASSERT_NE(parent, nullptr);
+              send_key(*parent, QEvent::KeyPress, Qt::Key_Right);
+              auto *popup = visible_submenu(menu, child->objectName());
+              ASSERT_NE(popup, nullptr);
+              send_key(*popup, QEvent::KeyRelease, Qt::Key_Q);
+            }), leaf);
+  EXPECT_EQ(trigger_count, 0);
+}
+
+TEST_F(QtMarkingMenuTests,
+       SubmenuSourceChangesCannotDispatchStaleOrUnavailableLeaves) {
+  QtMarkingMenu menu;
+  MarkingActions actions;
+  for (int mutation = 0; mutation < 7; ++mutation) {
+    SCOPED_TRACE(mutation);
+    auto source = std::make_unique<QMenu>(QStringLiteral("Bake"));
+    source->setObjectName(QStringLiteral("test.bake"));
+    QAction *leaf = source->addAction(QStringLiteral("Bake Position"));
+    EXPECT_EQ(run_menu(menu, actions.slot_actions, {source->menuAction()}, [&]() {
+                hover_overflow_row(menu, 0);
+                auto *popup = visible_submenu(menu, source->objectName());
+                ASSERT_NE(popup, nullptr);
+                move_pointer(menu, popup->mapToGlobal(
+                    popup->actionGeometry(popup->actions().front()).center()));
+                switch (mutation) {
+                case 0: leaf->setEnabled(false); break;
+                case 1: leaf->setVisible(false); break;
+                case 2: delete leaf; break;
+                case 3: source->removeAction(leaf); break;
+                case 4: source->menuAction()->setEnabled(false); break;
+                case 5: source.reset(); break;
+                case 6: source->menuAction()->setVisible(false); break;
+                }
+                if (menu.isVisible()) {
+                  send_key(menu, QEvent::KeyRelease, Qt::Key_Q);
+                }
+              }), nullptr);
+  }
+}
+
+TEST_F(QtMarkingMenuTests,
+       ReturningFromNativeSubmenuToRadialSlotClosesChildAndReturnsRadialAction) {
+  QtMarkingMenu menu;
+  MarkingActions actions;
+  QMenu source(QStringLiteral("Bake"));
+  source.setObjectName(QStringLiteral("test.bake"));
+  source.addAction(QStringLiteral("Bake Position"));
+  EXPECT_EQ(run_menu(menu, actions.slot_actions, {source.menuAction()}, [&]() {
+              hover_overflow_row(menu, 0);
+              auto *popup = visible_submenu(menu, source.objectName());
+              ASSERT_NE(popup, nullptr);
+              move_pointer(menu, popup->mapToGlobal(
+                  popup->actionGeometry(popup->actions().front()).center()));
+              auto *button = slot_button(menu, 2);
+              ASSERT_NE(button, nullptr);
+              move_pointer(menu, button->mapToGlobal(button->rect().center()));
+              EXPECT_FALSE(popup->isVisible());
+              send_key(menu, QEvent::KeyRelease, Qt::Key_Q);
+            }), actions.slot_actions[2]);
+}
+
+TEST_F(QtMarkingMenuTests,
+       NativeSubmenuEscapeOutsideClickAndApplicationDeactivationCloseAllPopups) {
+  QtMarkingMenu menu;
+  MarkingActions actions;
+  QMenu source(QStringLiteral("Bake"));
+  source.setObjectName(QStringLiteral("test.bake"));
+  source.addAction(QStringLiteral("Bake Position"));
+  for (int cancellation = 0; cancellation < 3; ++cancellation) {
+    SCOPED_TRACE(cancellation);
+    QPointer<QMenu> shown_popup;
+    EXPECT_EQ(run_menu(menu, actions.slot_actions, {source.menuAction()}, [&]() {
+                hover_overflow_row(menu, 0);
+                auto *popup = visible_submenu(menu, source.objectName());
+                ASSERT_NE(popup, nullptr);
+                shown_popup = popup;
+                move_pointer(menu, popup->mapToGlobal(
+                    popup->actionGeometry(popup->actions().front()).center()));
+                if (cancellation == 0) {
+                  send_key(*popup, QEvent::KeyPress, Qt::Key_Escape);
+                } else if (cancellation == 1) {
+                  send_mouse(menu, QEvent::MouseButtonPress,
+                             menu.geometry().topLeft() - QPoint(10, 10),
+                             Qt::LeftButton);
+                } else {
+                  QEvent deactivate(QEvent::ApplicationDeactivate);
+                  QCoreApplication::sendEvent(&menu, &deactivate);
+                }
+              }), nullptr);
+    ASSERT_NE(shown_popup, nullptr);
+    EXPECT_FALSE(shown_popup->isVisible());
+  }
+}
+
+TEST_F(QtMarkingMenuTests,
+       SupplementalScrollingClosesThePopupForItsPreviousRow) {
+  QtMarkingMenu menu;
+  MarkingActions actions;
+  QMenu source(QStringLiteral("Bake"));
+  source.setObjectName(QStringLiteral("test.bake"));
+  source.addAction(QStringLiteral("Bake Position"));
+  std::vector<std::unique_ptr<QAction>> owned;
+  std::vector<QAction *> overflow{source.menuAction()};
+  for (int index = 0; index < 100; ++index) {
+    owned.push_back(std::make_unique<QAction>(QStringLiteral("Action %1").arg(index)));
+    overflow.push_back(owned.back().get());
+  }
+  EXPECT_EQ(run_menu(menu, actions.slot_actions, overflow, [&]() {
+              hover_overflow_row(menu, 0);
+              auto *popup = visible_submenu(menu, source.objectName());
+              ASSERT_NE(popup, nullptr);
+              auto *list = overflow_list(menu);
+              ASSERT_NE(list, nullptr);
+              ASSERT_GT(list->verticalScrollBar()->maximum(), 0);
+              list->verticalScrollBar()->setValue(list->verticalScrollBar()->maximum());
+              EXPECT_FALSE(popup->isVisible());
+              send_key(menu, QEvent::KeyRelease, Qt::Key_Q);
+            }), nullptr);
+}
+
+TEST_F(QtMarkingMenuTests,
+       NativePopupFocusIsOwnedButExternalWidgetFocusCancels) {
+  QWidget external;
+  external.setAttribute(Qt::WA_DontShowOnScreen, true);
+  external.setFocusPolicy(Qt::StrongFocus);
+  external.show();
+  QtMarkingMenu menu;
+  MarkingActions actions;
+  QMenu source(QStringLiteral("Bake"));
+  source.setObjectName(QStringLiteral("test.bake"));
+  source.addAction(QStringLiteral("Bake Position"));
+  EXPECT_EQ(run_menu(menu, actions.slot_actions, {source.menuAction()}, [&]() {
+              hover_overflow_row(menu, 0);
+              auto *popup = visible_submenu(menu, source.objectName());
+              ASSERT_NE(popup, nullptr);
+              QEvent lost_focus(QEvent::FocusOut);
+              QCoreApplication::sendEvent(&menu, &lost_focus);
+              QCoreApplication::processEvents();
+              EXPECT_TRUE(menu.isVisible());
+              EXPECT_TRUE(popup->isVisible());
+              QApplication::setActiveWindow(&external);
+              external.setFocus(Qt::OtherFocusReason);
+              QCoreApplication::sendEvent(popup, &lost_focus);
+              QCoreApplication::processEvents();
+              EXPECT_FALSE(menu.isVisible());
+              EXPECT_FALSE(popup->isVisible());
+            }), nullptr);
+}
+
+TEST_F(QtMarkingMenuTests,
+       NativeSubmenuUsesSharedScalePaletteAndScreenEdgePlacement) {
+  QWidget owner;
+  owner.setAttribute(Qt::WA_DontShowOnScreen, true);
+  const QRect available = QApplication::primaryScreen()->availableGeometry();
+  owner.setGeometry(available.right() - 239, available.bottom() - 119, 240, 120);
+  owner.show();
+  anchor_ = owner.mapToGlobal(owner.rect().bottomRight());
+  QtMarkingMenu menu(&owner);
+  MarkingActions actions;
+  QMenu source(QStringLiteral("Bake"));
+  source.setObjectName(QStringLiteral("test.bake"));
+  QAction *leaf = source.addAction(QStringLiteral("Bake Position"));
+  source.addAction(QStringLiteral("Bake Rotation"));
+  source.addAction(QStringLiteral("Bake Scale"));
+  source.addAction(QStringLiteral("Bake All"));
+  const QPalette fusion = QApplication::style()->standardPalette();
+  apply_qt_obsidian_application_theme(fusion);
+  const QFont baseline_font = QApplication::font();
+  for (int appearance = 0; appearance < 3; ++appearance) {
+    SCOPED_TRACE(appearance);
+    apply_qt_application_theme_for_contrast_preference(
+        fusion, appearance == 2 ? Qt::ContrastPreference::HighContrast
+                                 : Qt::ContrastPreference::NoPreference);
+    menu.setPalette(appearance == 1 ? fusion : QApplication::palette());
+    menu.setLayoutDirection(appearance == 1 ? Qt::RightToLeft : Qt::LeftToRight);
+    std::array<QSize, 3> sizes;
+    const std::array<float, 3> factors{1.0F, 2.0F, 1.0F};
+    for (std::size_t index = 0; index < factors.size(); ++index) {
+      const QtUiScaleMetrics metrics(factors[index], index + 1);
+      // The application scales its immutable font baseline as well as style
+      // metrics. Fusion's High Contrast fallback sizes rows from that font.
+      QApplication::setFont(metrics.font(baseline_font));
+      menu.apply_ui_scale(metrics);
+      EXPECT_EQ(run_menu(menu, actions.slot_actions, {source.menuAction()}, [&]() {
+                  hover_overflow_row(menu, 0);
+                  auto *popup = visible_submenu(menu, source.objectName());
+                  ASSERT_NE(popup, nullptr);
+                  sizes[index] = popup->size();
+                  EXPECT_EQ(popup->layoutDirection(), menu.layoutDirection());
+                  EXPECT_EQ(popup->font(), menu.font());
+                  if (appearance == 2) {
+                    QMenu native_reference;
+                    native_reference.ensurePolished();
+                    EXPECT_EQ(popup->palette().resolveMask(), 0U);
+                    // Native QMenu colors may differ from QWidget's class
+                    // palette when Windows owns unresolved High Contrast.
+                    for (const auto group : {QPalette::Active, QPalette::Inactive,
+                                             QPalette::Disabled}) {
+                      for (const auto role : {QPalette::Window, QPalette::Base,
+                                              QPalette::WindowText, QPalette::Text,
+                                              QPalette::ButtonText, QPalette::Highlight,
+                                              QPalette::HighlightedText, QPalette::Mid}) {
+                        EXPECT_EQ(popup->palette().brush(group, role),
+                                  native_reference.palette().brush(group, role));
+                      }
+                    }
+                  } else {
+                    EXPECT_EQ(popup->palette(), menu.palette());
+                  }
+                  EXPECT_TRUE(available.contains(popup->frameGeometry()));
+                  EXPECT_TRUE(popup->styleSheet().isEmpty());
+                  ASSERT_EQ(popup->actions().size(), 4);
+                  for (QAction *action : popup->actions()) {
+                    const QRect row = popup->actionGeometry(action);
+                    EXPECT_TRUE(popup->rect().contains(row));
+                    EXPECT_GE(row.height(), popup->fontMetrics().height());
+                    EXPECT_GT(row.width(), popup->fontMetrics().horizontalAdvance(action->text()));
+                  }
+                  const QPoint target = popup->mapToGlobal(
+                      popup->actionGeometry(popup->actions().front()).center());
+                  move_pointer(*popup, target);
+                  capture_submenu(*popup,
+                      QStringLiteral("marking-submenu-%1-scale-%2.png")
+                          .arg(appearance).arg(static_cast<int>(index)));
+                  capture_menu(menu,
+                      QStringLiteral("marking-submenu-root-%1-scale-%2.png")
+                          .arg(appearance).arg(static_cast<int>(index)));
+                  send_key(*popup, QEvent::KeyRelease, Qt::Key_Q);
+                }), leaf);
+    }
+    EXPECT_GT(sizes[1].height(), sizes[0].height());
+    EXPECT_GT(sizes[1].width(), sizes[0].width());
+    EXPECT_EQ(sizes[2], sizes[0]);
+  }
+  apply_qt_application_theme_for_contrast_preference(
+      fusion, Qt::ContrastPreference::NoPreference);
 }
 
 TEST_F(QtMarkingMenuTests,

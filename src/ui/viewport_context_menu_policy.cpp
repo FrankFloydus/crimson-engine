@@ -35,12 +35,10 @@ constexpr CommandScope kCommandScopes[]{
     {quader_command::kEditCreateInstance, kObject | kGroup, Operand::Selection},
     {quader_command::kEditFlattenInstance, kObject | kGroup, Operand::Selection},
     {quader_command::kEditExitInstanceEdit, kObject | kGroup, Operand::Selection},
-    {quader_command::kGroupSelection, kObject | kGroup, Operand::Groupable},
+    {quader_command::kGroupSelection, kGroup, Operand::Groupable},
     {quader_command::kUngroupSelection, kObject | kGroup, Operand::Group},
     {quader_command::kParentToActive, kObject | kGroup, Operand::Selection},
     {quader_command::kUnparentSelection, kObject | kGroup, Operand::Selection},
-    {quader_command::kCutSelection, kObject, Operand::Clipboard},
-    {quader_command::kCopySelection, kObject, Operand::Clipboard},
     {quader_command::kPasteSelection, kObject, Operand::Clipboard},
     {quader_command::kModelingMirrorSelectionX, kObject, Operand::Polygon},
     {quader_command::kModelingMirrorSelectionY, kObject, Operand::Polygon},
@@ -55,16 +53,13 @@ constexpr CommandScope kCommandScopes[]{
     {quader_command::kModelingBakeLocation, kObject, Operand::Polygon},
     {quader_command::kModelingBakeRotation, kObject, Operand::Polygon},
     {quader_command::kModelingBakeScale, kObject, Operand::Polygon},
-    {quader_command::kModelingDuplicateMeshes, kObject, Operand::Polygon},
     {quader_command::kModelingCombineMesh, kObject, Operand::Polygon},
     {quader_command::kModelingCreateOuterHull, kObject, Operand::Polygon},
-    {quader_command::kModelingHalfCut, kObject, Operand::Polygon},
     {quader_command::kModelingInvertMesh, kObject, Operand::Polygon},
     {quader_command::kModelingShadeSmoothMesh, kObject, Operand::Polygon},
     {quader_command::kModelingShadeFlatMesh, kObject, Operand::Polygon},
-    {quader_command::kModelingRemoveDoubles, kObject, Operand::Polygon},
     {quader_command::kToolsActivateAlign, kObject | kGroup, Operand::Selection},
-    {quader_command::kModelingRecalculateFaceNormals, kObject | kFace, Operand::Polygon},
+    {quader_command::kModelingRecalculateFaceNormals, kFace, Operand::Polygon},
     {quader_command::kModelingConnectVertices, kVertex, Operand::Selection},
     {quader_command::kModelingBevelVertices, kVertex, Operand::Selection},
     {quader_command::kModelingSnapVerticesToActive, kVertex, Operand::Selection},
@@ -115,7 +110,7 @@ unsigned mode_bit(QuaderSelectionMode mode) {
 bool viewport_context_menu_allows_command(
     const ViewportContextMenuScope &scope, std::string_view command_id) {
   if (command_id == quader_command::kDeleteSelection.string()) {
-    return scope.has_selection;
+    return scope.has_selection && scope.mode != QuaderSelectionMode::Object;
   }
   if (scope.curve_controls_selected) {
     return false;

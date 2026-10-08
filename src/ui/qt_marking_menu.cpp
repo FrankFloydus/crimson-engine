@@ -238,7 +238,220 @@ struct QtMarkingMenu::Impl {
     overflow_->hide();
     QObject::connect(
         overflow_, &QListWidget::itemClicked, &menu_,
-        [this](QListWidgetItem *) { finish(overflow_selection()); });
+        [this](QListWidgetItem *) { activate_selection(); });
+    QObject::connect(overflow_->verticalScrollBar(), &QScrollBar::valueChanged,
+                     &menu_, [this]() { close_submenus(); });
+  }
+
+  /// A private native menu projection keeps QAction dispatch with the caller.
+  struct SubmenuProjection {
+    QPointer<QMenu> popup;
+    QPointer<QMenu> source;
+    QPointer<QAction> branch;
+    QPointer<QMenu> parent_popup;
+  };
+
+  /// Maps each private native action back to its lifetime-fenced source.
+  struct LeafProjection {
+    QPointer<QAction> proxy;
+    QPointer<QAction> source;
+    QPointer<QMenu> popup;
+  };
+
+  void close_submenus() {
+    active_popup_ = nullptr;
+    for (auto iterator = submenus_.rbegin(); iterator != submenus_.rend();
+         ++iterator) {
+      if (iterator->popup != nullptr) {
+        iterator->popup->hide();
+      }
+    }
+  }
+
+  static void synchronize_action(QAction &proxy, const QAction &source) {
+    proxy.setText(source.text());
+    proxy.setIcon(source.icon());
+    proxy.setEnabled(source.isEnabled());
+    proxy.setVisible(source.isVisible());
+    proxy.setSeparator(source.isSeparator());
+    proxy.setCheckable(source.isCheckable());
+    proxy.setChecked(source.isChecked());
+    proxy.setObjectName(source.objectName());
+  }
+
+  QMenu *project_submenu(QAction &branch, QMenu *parent_popup = nullptr) {
+    QMenu *source = branch.menu();
+    if (source == nullptr) {
+      return nullptr;
+    }
+    // QAction menus can be cyclic; reject a repeated source in this path.
+    for (QMenu *ancestor = parent_popup; ancestor != nullptr;) {
+      const auto found = std::find_if(
+          submenus_.begin(), submenus_.end(),
+          [ancestor](const SubmenuProjection &entry) {
+            return entry.popup == ancestor;
+          });
+      if (found == submenus_.end() || found->source == source) {
+        return nullptr;
+      }
+      ancestor = found->parent_popup;
+    }
+    auto *popup = new QMenu(parent_popup != nullptr
+                                ? static_cast<QWidget *>(parent_popup)
+                                : static_cast<QWidget *>(&menu_));
+    if (parent_popup == nullptr) {
+      submenu_roots_.emplace_back(popup);
+    }
+    popup->setObjectName(source->objectName().isEmpty()
+                             ? QStringLiteral("markingMenu.submenu")
+                             : source->objectName());
+    popup->setAttribute(Qt::WA_DontShowOnScreen,
+                        menu_.testAttribute(Qt::WA_DontShowOnScreen));
+    popup->setStyle(&submenu_style_);
+    popup->setPalette(menu_.palette());
+    popup->setFont(menu_.font());
+    popup->setLayoutDirection(menu_.layoutDirection());
+    submenus_.push_back({popup, source, &branch, parent_popup});
+    for (QAction *action : source->actions()) {
+      auto *proxy = new QAction(popup);
+      synchronize_action(*proxy, *action);
+      popup->addAction(proxy);
+      projected_actions_.push_back({proxy, action, popup});
+      if (action->menu() != nullptr) {
+        proxy->setMenu(project_submenu(*action, popup));
+      }
+      QObject::connect(action, &QAction::changed, proxy,
+                       [proxy, original = QPointer<QAction>(action)]() {
+                         if (original != nullptr) {
+                           synchronize_action(*proxy, *original);
+                         }
+                       });
+      QObject::connect(action, &QObject::destroyed, proxy,
+                       [proxy]() { proxy->setEnabled(false); });
+    }
+    QObject::connect(popup, &QMenu::triggered, popup, [this](QAction *proxy) {
+      finish(original_leaf(proxy));
+    });
+    QObject::connect(source, &QObject::destroyed, popup, [this, popup]() {
+      if (running_ && popup->isVisible()) {
+        finish(nullptr);
+      }
+    });
+    return popup;
+  }
+
+  bool valid_popup(QMenu *popup) const {
+    while (popup != nullptr) {
+      const auto found = std::find_if(
+          submenus_.begin(), submenus_.end(),
+          [popup](const SubmenuProjection &entry) {
+            return entry.popup == popup;
+          });
+      if (found == submenus_.end() || found->source == nullptr ||
+          !selectable_action(found->branch) ||
+          found->branch->menu() != found->source) {
+        return false;
+      }
+      if (found->parent_popup != nullptr) {
+        const auto parent = std::find_if(
+            submenus_.begin(), submenus_.end(),
+            [&](const SubmenuProjection &entry) {
+              return entry.popup == found->parent_popup;
+            });
+        if (parent == submenus_.end() || parent->source == nullptr ||
+            !parent->source->actions().contains(found->branch)) {
+          return false;
+        }
+      }
+      popup = found->parent_popup;
+    }
+    return true;
+  }
+
+  QAction *original_leaf(QAction *proxy) const {
+    const auto found = std::find_if(
+        projected_actions_.begin(), projected_actions_.end(),
+        [proxy](const LeafProjection &entry) { return entry.proxy == proxy; });
+    if (found == projected_actions_.end() || !selectable_action(proxy) ||
+        !selectable_action(found->source) || found->source->menu() != nullptr ||
+        !valid_popup(found->popup)) {
+      return nullptr;
+    }
+    const auto owner = std::find_if(
+        submenus_.begin(), submenus_.end(),
+        [&](const SubmenuProjection &entry) { return entry.popup == found->popup; });
+    return owner != submenus_.end() &&
+                   owner->source->actions().contains(found->source)
+               ? found->source.data()
+               : nullptr;
+  }
+
+  QMenu *popup_at(const QPoint &global_position) const {
+    for (auto iterator = submenus_.rbegin(); iterator != submenus_.rend();
+         ++iterator) {
+      QMenu *popup = iterator->popup;
+      if (popup != nullptr && popup->isVisible() &&
+          popup->rect().contains(popup->mapFromGlobal(global_position))) {
+        return popup;
+      }
+    }
+    return nullptr;
+  }
+
+  QMenu *owned_popup(QObject *object) const {
+    auto *widget = qobject_cast<QWidget *>(object);
+    for (auto iterator = submenus_.rbegin(); iterator != submenus_.rend();
+         ++iterator) {
+      if (iterator->popup != nullptr &&
+          (iterator->popup == widget || iterator->popup->isAncestorOf(widget))) {
+        return iterator->popup;
+      }
+    }
+    return nullptr;
+  }
+
+  void open_submenu(QAction *branch, bool select_first = false) {
+    if (!selectable_action(branch) || branch->menu() == nullptr) {
+      return;
+    }
+    const auto found = std::find_if(
+        submenus_.begin(), submenus_.end(),
+        [branch](const SubmenuProjection &entry) {
+          return entry.branch == branch && entry.parent_popup == nullptr;
+        });
+    if (found == submenus_.end() || !valid_popup(found->popup)) {
+      return;
+    }
+    QMenu *popup = found->popup;
+    if (!popup->isVisible()) {
+      close_submenus();
+      const QRect row = overflow_->visualItemRect(overflow_->currentItem());
+      const QRect global_row(overflow_->viewport()->mapToGlobal(row.topLeft()),
+                             row.size());
+      popup->ensurePolished();
+      const QSize size = popup->sizeHint();
+      const bool right_to_left = menu_.isRightToLeft();
+      QPoint origin(right_to_left ? global_row.left() - size.width()
+                                  : global_row.right() + 1,
+                    global_row.top());
+      if (!available_geometry_.contains(QRect(origin, size))) {
+        origin.setX(right_to_left ? global_row.right() + 1
+                                  : global_row.left() - size.width());
+      }
+      origin = fitted_rect(QRect(origin, size), available_geometry_).topLeft();
+      opening_submenu_ = true;
+      popup->popup(origin);
+      opening_submenu_ = false;
+    }
+    if (select_first) {
+      active_popup_ = popup;
+      for (QAction *action : popup->actions()) {
+        if (selectable_action(action)) {
+          popup->setActiveAction(action);
+          break;
+        }
+      }
+    }
   }
 
   bool has_overflow() const { return !overflow_actions_.empty(); }
@@ -262,6 +475,11 @@ struct QtMarkingMenu::Impl {
     selected_action_ = nullptr;
     active_slot_ = -1;
     mouse_pressed_ = false;
+    close_submenus();
+    projected_actions_.clear();
+    submenus_.clear();
+    submenu_roots_.clear();
+    submenu_style_.set_metrics(metrics_);
     overflow_->hide();
     overflow_->clear();
     overflow_actions_.clear();
@@ -270,6 +488,9 @@ struct QtMarkingMenu::Impl {
         continue;
       }
       overflow_actions_.push_back(action);
+      if (action->menu() != nullptr) {
+        project_submenu(*action);
+      }
       auto *item =
           new QListWidgetItem(action->icon(), action_label(*action), overflow_);
       item->setFlags(selectable_action(action)
@@ -483,9 +704,16 @@ struct QtMarkingMenu::Impl {
               .translated(-menu_.pos());
       menu_.update(dirty.intersected(menu_.rect()));
     }
+    if (QMenu *popup = popup_at(global_position)) {
+      active_popup_ = popup;
+      popup->setActiveAction(popup->actionAt(popup->mapFromGlobal(global_position)));
+      return;
+    }
+    active_popup_ = nullptr;
     // Fitting the initial layout may place a row beneath the opening cursor.
     // A stationary release still cancels; an explicit click may select it.
     if (!explicit_target && global_position == global_anchor_) {
+      close_submenus();
       overflow_->setCurrentRow(-1);
       set_active_slot(-1);
       return;
@@ -498,8 +726,15 @@ struct QtMarkingMenu::Impl {
       overflow_->setCurrentRow(
           index.isValid() && (index.flags() & Qt::ItemIsEnabled) ? index.row()
                                                                  : -1);
+      QAction *action = overflow_selection();
+      if (action != nullptr && action->menu() != nullptr) {
+        open_submenu(action);
+      } else {
+        close_submenus();
+      }
       return;
     }
+    close_submenus();
     overflow_->setCurrentRow(-1);
     const QPoint delta = global_position - radial_center_;
     if (QPoint::dotProduct(delta, delta) <= dead_zone_ * dead_zone_) {
@@ -530,16 +765,28 @@ struct QtMarkingMenu::Impl {
   }
 
   QAction *selection() const {
+    if (active_popup_ != nullptr && active_popup_->isVisible()) {
+      return original_leaf(active_popup_->activeAction());
+    }
     if (overflow_->currentRow() >= 0) {
-      return overflow_selection();
+      QAction *action = overflow_selection();
+      return action != nullptr && action->menu() == nullptr ? action : nullptr;
     }
     return slot_available(active_slot_) ? actions_[active_slot_].data()
                                         : nullptr;
   }
 
-  void activate_selection() { finish(selection()); }
+  void activate_selection() {
+    if (active_popup_ == nullptr && overflow_selection() != nullptr &&
+        overflow_selection()->menu() != nullptr) {
+      open_submenu(overflow_selection(), true);
+      return;
+    }
+    finish(selection());
+  }
 
   void step_selection(int direction, bool prefer_overflow) {
+    close_submenus();
     const int count_radial = kSlotCount;
     const int total = count_radial + overflow_->count();
     int index = overflow_->currentRow() >= 0
@@ -584,8 +831,11 @@ struct QtMarkingMenu::Impl {
     if (!running_) {
       return;
     }
-    selected_action_ = selectable_action(action) ? action : nullptr;
+    selected_action_ = selectable_action(action) && action->menu() == nullptr
+                           ? action
+                           : nullptr;
     running_ = false;
+    close_submenus();
     menu_.hide();
     if (loop_ != nullptr) {
       loop_->quit();
@@ -597,6 +847,11 @@ private:
 
   QtMarkingMenu &menu_;
   QtUiScaleMetrics metrics_;
+  QtUiScaleProxyStyle submenu_style_;
+  std::vector<std::unique_ptr<QMenu>> submenu_roots_;
+  std::vector<SubmenuProjection> submenus_;
+  std::vector<LeafProjection> projected_actions_;
+  QPointer<QMenu> active_popup_;
   QuaderInputChord initiating_chord_;
   std::optional<std::uint64_t> initiating_key_identity_;
   std::array<QPointer<QAction>, kSlotCount> actions_{};
@@ -618,6 +873,7 @@ private:
   int dead_zone_ = 24;
   bool running_ = false;
   bool mouse_pressed_ = false;
+  bool opening_submenu_ = false;
 };
 
 QtMarkingMenu::QtMarkingMenu(QWidget *parent)
@@ -672,6 +928,10 @@ bool QtMarkingMenu::eventFilter(QObject *watched, QEvent *event) {
       return true;
     }
     if (event->type() == QEvent::KeyRelease) {
+      if (QMenu *popup = impl_->owned_popup(watched);
+          popup != nullptr && popup->isVisible()) {
+        impl_->active_popup_ = popup;
+      }
       if (impl_->initiating_chord_.device == QuaderInputDevice::Keyboard) {
         const auto chord = quader_input_chord_from_qt_event(*key);
         const bool initiating_key_released =
@@ -683,6 +943,40 @@ bool QtMarkingMenu::eventFilter(QObject *watched, QEvent *event) {
           impl_->finish(impl_->selection());
         }
       }
+      return true;
+    }
+    if (key->key() == Qt::Key_Escape) {
+      impl_->finish(nullptr);
+      return true;
+    }
+    QMenu *popup = impl_->owned_popup(watched);
+    if (popup == nullptr || !popup->isVisible()) {
+      popup = impl_->active_popup_;
+    }
+    if (popup != nullptr && popup->isVisible()) {
+      impl_->active_popup_ = popup;
+      const int backward_key = isRightToLeft() ? Qt::Key_Right : Qt::Key_Left;
+      const auto root = std::find_if(
+          impl_->submenus_.begin(), impl_->submenus_.end(),
+          [popup](const Impl::SubmenuProjection &entry) {
+            return entry.popup == popup && entry.parent_popup == nullptr;
+          });
+      if (key->key() == backward_key && root != impl_->submenus_.end()) {
+        impl_->close_submenus();
+        setFocus(Qt::PopupFocusReason);
+        return true;
+      }
+      if (watched != popup) {
+        QCoreApplication::sendEvent(popup, event);
+        return true;
+      }
+      return QWidget::eventFilter(watched, event);
+    }
+    const int forward_key = isRightToLeft() ? Qt::Key_Left : Qt::Key_Right;
+    if (key->key() == forward_key &&
+        impl_->overflow_selection() != nullptr &&
+        impl_->overflow_selection()->menu() != nullptr) {
+      impl_->open_submenu(impl_->overflow_selection(), true);
       return true;
     }
     switch (key->key()) {
@@ -723,6 +1017,18 @@ bool QtMarkingMenu::eventFilter(QObject *watched, QEvent *event) {
       impl_->finish(impl_->selection());
       return true;
     }
+    if (QMenu *popup = impl_->popup_at(global_position)) {
+      impl_->update_pointer(global_position);
+      if (watched != popup) {
+        QMouseEvent projected(event->type(),
+                              QPointF(popup->mapFromGlobal(global_position)),
+                              QPointF(global_position), mouse->button(),
+                              mouse->buttons(), mouse->modifiers());
+        QCoreApplication::sendEvent(popup, &projected);
+        return true;
+      }
+      return QWidget::eventFilter(watched, event);
+    }
     if (qobject_cast<QScrollBar *>(watched) != nullptr) {
       impl_->update_pointer(global_position);
       return QWidget::eventFilter(watched, event);
@@ -749,15 +1055,21 @@ bool QtMarkingMenu::eventFilter(QObject *watched, QEvent *event) {
     }
   }
   if (event->type() == QEvent::ApplicationDeactivate ||
-      (event->type() == QEvent::WindowDeactivate && watched == this)) {
+      (event->type() == QEvent::WindowDeactivate && watched == this &&
+       !impl_->opening_submenu_ &&
+       impl_->owned_popup(QApplication::activePopupWidget()) == nullptr)) {
     impl_->finish(nullptr);
     return false;
   }
   if (event->type() == QEvent::FocusOut &&
-      (watched == this || isAncestorOf(qobject_cast<QWidget *>(watched)))) {
+      (watched == this || isAncestorOf(qobject_cast<QWidget *>(watched)) ||
+       impl_->owned_popup(watched) != nullptr)) {
     QTimer::singleShot(0, this, [this]() {
       QWidget *focused = QApplication::focusWidget();
-      if (impl_->running_ && focused != this && !isAncestorOf(focused)) {
+      if (impl_->running_ && focused != this && !isAncestorOf(focused) &&
+          impl_->owned_popup(focused) == nullptr &&
+          (focused != nullptr ||
+           impl_->owned_popup(QApplication::activePopupWidget()) == nullptr)) {
         impl_->finish(nullptr);
       }
     });
