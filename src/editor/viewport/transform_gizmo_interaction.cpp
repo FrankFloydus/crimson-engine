@@ -1507,7 +1507,8 @@ void TransformGizmoInteraction::populate_operation_input_context(
   const bool surface_mode = selection.mode == QuaderSelectionMode::Edge ||
                             selection.mode == QuaderSelectionMode::Face;
   context.can_duplicate = !presented_curve_route_ && object_mode;
-  context.can_component_extrude = !presented_curve_route_ && surface_mode &&
+  context.can_component_extrude = !presented_curve_route_ &&
+                                 (surface_mode || selection.mode == QuaderSelectionMode::Vertex) &&
                                  (tool == Tool::Move || tool == Tool::Rotate);
   context.can_component_inset = !presented_curve_route_ && surface_mode &&
                                tool == Tool::Scale;

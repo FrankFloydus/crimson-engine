@@ -549,15 +549,15 @@ public:
           const bool component_topology_selection =
               selection_mode == SelectionMode::Face ||
               selection_mode == SelectionMode::Edge;
-          if (!component_topology_selection) {
-            return TransformDragOperation::Transform;
-          }
           if (operation == TransformDragOperation::Extrude &&
+              (component_topology_selection ||
+               selection_mode == SelectionMode::Vertex) &&
               (tool == ViewportInteractionTool::Move ||
                tool == ViewportInteractionTool::Rotate)) {
             return TransformDragOperation::Extrude;
           }
           if (operation == TransformDragOperation::Inset &&
+              component_topology_selection &&
               tool == ViewportInteractionTool::Scale) {
             return TransformDragOperation::Inset;
           }

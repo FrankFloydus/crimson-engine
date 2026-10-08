@@ -31,6 +31,7 @@
 #include <filesystem>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -727,6 +728,340 @@ INSTANTIATE_TEST_SUITE_P(FaceAndBoundaryEdge, ComponentExtrudeNudgeTests,
     ::testing::Combine(::testing::Values(QuaderSelectionMode::Face, QuaderSelectionMode::Edge),
                        ::testing::Values(QuaderTransformTool::Move, QuaderTransformTool::Rotate)));
 
+class ClosedEdgeExtrudeNudgeTests : public ComponentTransformPersistenceTests {
+protected:
+  void SetUp() override {
+    ComponentTransformPersistenceTests::SetUp();
+    if (HasFatalFailure()) return;
+    auto document = topology();
+    for (std::size_t index = 0; index < document.faces.size(); ++index) {
+      auto &face = document.faces[index];
+      face.material_slot = static_cast<std::uint32_t>(index + 1U);
+      face.texture_transform.rotation_degrees = static_cast<float>(index * 10U);
+    }
+    ASSERT_TRUE(editor_.scene().destroy(object_.entity).ok());
+    const auto created = editor_.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+        {.name = "Closed Edge Nudge Cube"});
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    object_ = created.value();
+    const auto source = topology();
+    for (const auto &vertex : source.vertices) {
+      if (vertex.position.x == 1.0F && vertex.position.y == -1.0F) {
+        if (vertex.position.z == -1.0F) ridge_.a = vertex.id;
+        if (vertex.position.z == 1.0F) ridge_.b = vertex.id;
+      }
+    }
+    ASSERT_NE(ridge_.a, quader_poly::kInvalidElementId);
+    ASSERT_NE(ridge_.b, quader_poly::kInvalidElementId);
+    ridge_ = quader_poly::make_edge(ridge_.a, ridge_.b);
+    enter_edit_for_all_meshes();
+    ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Edge).ok());
+    ASSERT_TRUE(editor_.selection().select_edge(object_,
+        static_cast<QuaderElementId>(ridge_.a), static_cast<QuaderElementId>(ridge_.b)).ok());
+    ASSERT_TRUE(editor_.tools().activate(ViewportToolId::Scale).ok());
+  }
+
+  void expect_ridge_selection() const {
+    const auto exported = project_.active_scene()->session->modeling().export_selection();
+    ASSERT_EQ(exported.objects.size(), 1U);
+    const auto &selection = exported.objects.front().selection;
+    EXPECT_EQ(selection.edges, (std::vector<quader_poly::Edge>{ridge_}));
+    // Debug export carries per-object element lists; the selection owner
+    // publishes the current mode and active component through its summary.
+    const auto summary = editor_.selection().summary();
+    EXPECT_EQ(summary.mode, QuaderSelectionMode::Edge);
+    EXPECT_TRUE(summary.has_selection);
+    EXPECT_EQ(summary.selected_edge_count, 1U);
+    EXPECT_EQ(summary.active_kind, QuaderActiveSelectionKind::Edge);
+    EXPECT_EQ(summary.active_object_id, object_.modeling_object_id);
+    EXPECT_EQ(summary.active_edge_a, static_cast<QuaderElementId>(ridge_.a));
+    EXPECT_EQ(summary.active_edge_b, static_cast<QuaderElementId>(ridge_.b));
+    EXPECT_EQ(editor_.tools().active_tool(), "scale");
+    EXPECT_FALSE(project_.active_scene()->session->modeling().transform_drag_active());
+    EXPECT_TRUE(project_.active_scene()->session->modeling().tool_preview_meshes().empty());
+  }
+
+  void expect_closed_surface(const quader_poly::Document &document) const {
+    EXPECT_TRUE(quader_poly::validate_polygon_document(document).ok());
+    std::map<std::pair<quader_poly::ElementId, quader_poly::ElementId>, std::size_t> directed_edges;
+    for (const auto &face : document.faces) {
+      EXPECT_TRUE(quader_poly::face_perimeter_info(document, face.id).has_only_closed_edges());
+      for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+        ++directed_edges[{face.vertices[index], face.vertices[(index + 1U) % face.vertices.size()]}];
+      }
+    }
+    for (const auto &[edge, count] : directed_edges) {
+      EXPECT_EQ(count, 1U);
+      const auto reverse = directed_edges.find({edge.second, edge.first});
+      ASSERT_NE(reverse, directed_edges.end());
+      EXPECT_EQ(reverse->second, 1U);
+    }
+    const auto connected = quader_poly::connected_component_selection(document,
+        {.hit = true, .kind = quader_poly::ElementKind::Vertex, .vertex_id = ridge_.a});
+    EXPECT_EQ(connected.vertices.size(), document.vertices.size());
+  }
+
+  void expect_retained_source(const quader_poly::Document &before,
+                              const quader_poly::Document &after) const {
+    for (const auto &vertex : before.vertices) {
+      const auto *retained = quader_poly::find_vertex(after, vertex.id);
+      ASSERT_NE(retained, nullptr);
+      if (vertex.id != ridge_.a && vertex.id != ridge_.b) {
+        EXPECT_EQ(retained->position.x, vertex.position.x);
+        EXPECT_EQ(retained->position.y, vertex.position.y);
+        EXPECT_EQ(retained->position.z, vertex.position.z);
+      }
+    }
+    for (const auto &face : before.faces) {
+      const auto *retained = quader_poly::find_face(after, face.id);
+      ASSERT_NE(retained, nullptr);
+      EXPECT_EQ(retained->material_slot, face.material_slot);
+      EXPECT_EQ(retained->texture_transform, face.texture_transform);
+      EXPECT_EQ(retained->normal_shading, face.normal_shading);
+      if (std::ranges::find(face.vertices, ridge_.a) == face.vertices.end() &&
+          std::ranges::find(face.vertices, ridge_.b) == face.vertices.end()) {
+        EXPECT_EQ(retained->vertices, face.vertices);
+      }
+    }
+  }
+
+  void expect_supports(const quader_poly::Document &before,
+                       const quader_poly::Document &after, float setback) const {
+    EXPECT_EQ(after.vertices.size(), before.vertices.size() + 4U);
+    for (const float end : {-1.0F, 1.0F}) {
+      for (const QVec3 expected : {QVec3{1.0F - setback, -1, end},
+                                  QVec3{1, -1.0F + setback, end}}) {
+        const auto found = std::ranges::find_if(after.vertices, [&](const auto &vertex) {
+          return vertex.id >= before.next_vertex_id &&
+                 std::abs(vertex.position.x - expected.x) < 0.00001F &&
+                 std::abs(vertex.position.y - expected.y) < 0.00001F &&
+                 std::abs(vertex.position.z - expected.z) < 0.00001F;
+        });
+        EXPECT_NE(found, after.vertices.end());
+      }
+    }
+  }
+
+  void expect_moved_ridge(const quader_poly::Document &document, float x) const {
+    for (const auto id : {ridge_.a, ridge_.b}) {
+      const auto *vertex = quader_poly::find_vertex(document, id);
+      ASSERT_NE(vertex, nullptr);
+      EXPECT_FLOAT_EQ(vertex->position.x, x);
+      EXPECT_FLOAT_EQ(vertex->position.y, -1.0F);
+      EXPECT_FLOAT_EQ(std::abs(vertex->position.z), 1.0F);
+    }
+  }
+
+  quader_poly::Edge ridge_;
+};
+
+TEST_F(ClosedEdgeExtrudeNudgeTests, LowerCubeEdgeMoveAndRepeatPreserveClosedSurfaceAndExactHistory) {
+  const auto before = topology();
+  auto &history = project_.active_scene()->session->history();
+  const auto undo_count = history.undo_count();
+  const auto moved = editor_.modeling().nudge_selection({
+      .axis = QuaderTransformAxis::X, .move_delta = {1, 0, 0},
+      .duplicate_selected = true, .extrusion_grid_size = 1.0});
+  ASSERT_TRUE(moved.ok()) << moved.error_message();
+  EXPECT_TRUE(moved.changed());
+  const auto once = topology();
+  expect_closed_surface(once);
+  expect_ridge_selection();
+  expect_retained_source(before, once);
+  expect_supports(before, once, 0.25F);
+  expect_moved_ridge(once, 2.0F);
+  EXPECT_EQ(history.undo_count(), undo_count + 1U);
+
+  const auto repeated = editor_.history().repeat_last_action();
+  ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+  EXPECT_TRUE(repeated.changed());
+  const auto twice = topology();
+  expect_closed_surface(twice);
+  expect_ridge_selection();
+  expect_retained_source(once, twice);
+  expect_moved_ridge(twice, 3.0F);
+  EXPECT_GT(twice.vertices.size(), once.vertices.size());
+  EXPECT_GT(twice.faces.size(), once.faces.size());
+  EXPECT_EQ(history.undo_count(), undo_count + 2U);
+  for (const auto &vertex : twice.vertices) {
+    if (quader_poly::find_vertex(once, vertex.id) == nullptr) {
+      EXPECT_GE(vertex.id, once.next_vertex_id);
+    }
+  }
+  ASSERT_TRUE(editor_.history().undo().ok());
+  expect_restored_extrusion_topology(topology(), once, twice);
+  expect_ridge_selection();
+  ASSERT_TRUE(editor_.history().undo().ok());
+  expect_restored_extrusion_topology(topology(), before, once);
+  expect_ridge_selection();
+  ASSERT_TRUE(editor_.history().redo().ok());
+  expect_same_authored_topology(topology(), once);
+  expect_ridge_selection();
+  ASSERT_TRUE(editor_.history().redo().ok());
+  expect_same_authored_topology(topology(), twice);
+  expect_ridge_selection();
+
+  ASSERT_TRUE(editor_.history().undo().ok());
+  const auto branched_result = editor_.history().repeat_last_action();
+  ASSERT_TRUE(branched_result.ok()) << branched_result.error_message();
+  EXPECT_TRUE(branched_result.changed());
+  const auto branched = topology();
+  EXPECT_TRUE(quader_poly::has_same_geometry(branched, twice));
+  expect_closed_surface(branched);
+  expect_ridge_selection();
+  expect_retained_source(once, branched);
+  expect_moved_ridge(branched, 3.0F);
+  for (const auto &vertex : branched.vertices) {
+    if (quader_poly::find_vertex(once, vertex.id) == nullptr) {
+      EXPECT_GE(vertex.id, twice.next_vertex_id);
+    }
+  }
+  for (const auto &face : branched.faces) {
+    if (quader_poly::find_face(once, face.id) == nullptr) {
+      EXPECT_GE(face.id, twice.next_face_id);
+    }
+  }
+  ASSERT_TRUE(editor_.history().undo().ok());
+  expect_restored_extrusion_topology(topology(), once, branched);
+  expect_ridge_selection();
+  ASSERT_TRUE(editor_.history().redo().ok());
+  expect_same_authored_topology(topology(), branched);
+  expect_ridge_selection();
+}
+
+TEST_F(ClosedEdgeExtrudeNudgeTests, MidpointRotationUsesRawGridEvenWhenAverageDisplacementIsZero) {
+  for (const auto axis : {QuaderTransformAxis::X, QuaderTransformAxis::Z}) {
+    SCOPED_TRACE(static_cast<int>(axis));
+    const auto before = topology();
+    const double grid = axis == QuaderTransformAxis::X ? 4.0 : 0.5;
+    auto &history = project_.active_scene()->session->history();
+    const auto undo_count = history.undo_count();
+    const auto rotated = editor_.modeling().nudge_selection({
+        .tool = QuaderTransformTool::Rotate, .axis = axis,
+        .pivot = {1, -1, 0}, .rotate_angle_degrees = 45.0,
+        .duplicate_selected = true, .extrusion_grid_size = grid});
+    ASSERT_TRUE(rotated.ok()) << rotated.error_message();
+    EXPECT_TRUE(rotated.changed());
+    const auto after = topology();
+    expect_closed_surface(after);
+    expect_ridge_selection();
+    expect_retained_source(before, after);
+    expect_supports(before, after, static_cast<float>(grid * 0.25));
+    EXPECT_GT(after.faces.size(), before.faces.size());
+    EXPECT_EQ(history.undo_count(), undo_count + 1U);
+    QVec3 summed_displacement;
+    const float cosine = std::sqrt(0.5F);
+    for (const auto id : {ridge_.a, ridge_.b}) {
+      const auto *source = quader_poly::find_vertex(before, id);
+      const auto *vertex = quader_poly::find_vertex(after, id);
+      ASSERT_NE(source, nullptr);
+      ASSERT_NE(vertex, nullptr);
+      const QVec3 expected = axis == QuaderTransformAxis::X
+          ? QVec3{1, -1.0F - cosine * source->position.z, cosine * source->position.z}
+          : source->position;
+      EXPECT_NEAR(vertex->position.x, expected.x, 0.00001F);
+      EXPECT_NEAR(vertex->position.y, expected.y, 0.00001F);
+      EXPECT_NEAR(vertex->position.z, expected.z, 0.00001F);
+      summed_displacement = summed_displacement + vertex->position - source->position;
+    }
+    EXPECT_NEAR(summed_displacement.x, 0.0F, 0.00001F);
+    EXPECT_NEAR(summed_displacement.y, 0.0F, 0.00001F);
+    EXPECT_NEAR(summed_displacement.z, 0.0F, 0.00001F);
+    ASSERT_TRUE(editor_.history().undo().ok());
+    expect_restored_extrusion_topology(topology(), before, after);
+    expect_ridge_selection();
+    ASSERT_TRUE(editor_.history().redo().ok());
+    expect_same_authored_topology(topology(), after);
+    expect_ridge_selection();
+    ASSERT_TRUE(editor_.history().undo().ok());
+    expect_restored_extrusion_topology(topology(), before, after);
+  }
+}
+
+TEST_F(ClosedEdgeExtrudeNudgeTests, LegacyRecordedVectorMoveKeepsDisplacementBasedSupport) {
+  const auto before = topology();
+  auto &session = *project_.active_scene()->session;
+  const auto history_count = session.history().undo_count();
+  ASSERT_TRUE(session.modeling().record_repeatable_transform({
+      .active = true, .tool = ModelingTransformTool::Move,
+      .operation = ModelingTransformOperation::Extrude,
+      .axis = ModelingTransformAxis::X, .move_delta = {0.75F, 0, 0}}).ok);
+  const auto repeated = editor_.history().repeat_last_action();
+  ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+  EXPECT_TRUE(repeated.changed());
+  const auto after = topology();
+  expect_supports(before, after, 0.75F);
+  expect_moved_ridge(after, 1.75F);
+  expect_closed_surface(after);
+  EXPECT_EQ(session.history().undo_count(), history_count + 1U);
+  ASSERT_TRUE(editor_.history().undo().ok());
+  // Repeat's memento restores the exact authored document, including allocators.
+  expect_same_authored_topology(topology(), before);
+  ASSERT_TRUE(editor_.history().redo().ok());
+  expect_same_authored_topology(topology(), after);
+}
+
+TEST_F(ClosedEdgeExtrudeNudgeTests, ZeroGridDragReplayKeepsTheAcceptedUnitGridFallback) {
+  auto &session = *project_.active_scene()->session;
+  for (const auto tool : {QuaderTransformTool::Move, QuaderTransformTool::Rotate}) {
+    SCOPED_TRACE(static_cast<int>(tool));
+    for (const bool prior_positive_sample : {false, true}) {
+      SCOPED_TRACE(prior_positive_sample);
+      const auto before = topology();
+      const auto history_count = session.history().undo_count();
+      auto begin = component_move_request();
+      begin.tool = tool;
+      begin.operation = QuaderTransformOperation::Extrude;
+      begin.pivot = {1, -1, 0};
+      begin.grid_size = 0.0;
+      begin.rotation_snap_degrees = 0.0;
+      if (tool == QuaderTransformTool::Rotate) {
+        begin.axis = QuaderTransformAxis::Z;
+        begin.world_direction = {0, 0, 1};
+        begin.screen_position = {120, 100};
+      }
+      const auto update = [&](float amount, double grid) {
+        const auto position = tool == QuaderTransformTool::Move
+            ? QVec2{100 + amount * 100, 100}
+            : QVec2{100 + 20 * std::cos(amount), 100 + 20 * std::sin(amount)};
+        return editor_.modeling().update_transform_drag({
+            .screen_position = position,
+            .ray = {.origin = {amount, 0, 5}, .direction = {0, 0, -1}},
+            .camera = begin.camera, .grid_size = grid,
+            .vertex_snap_radius = 0, .grid_snap_enabled = false,
+            .rotation_snap_degrees = 0.0});
+      };
+      ASSERT_TRUE(editor_.modeling().begin_transform_drag(begin).ok());
+      if (prior_positive_sample) {
+        const auto prior = update(0.2F, 0.5);
+        ASSERT_TRUE(prior.ok()) << prior.error_message();
+        expect_supports(before, topology(), 0.125F);
+      }
+      const auto updated = update(0.35F, 0.0);
+      ASSERT_TRUE(updated.ok()) << updated.error_message();
+      const auto accepted = topology();
+      expect_supports(before, accepted, 0.25F);
+      ASSERT_TRUE(editor_.modeling().commit_transform_drag().ok());
+      EXPECT_EQ(session.history().undo_count(), history_count + 1U);
+      ASSERT_TRUE(editor_.history().undo().ok());
+      expect_restored_extrusion_topology(topology(), before, accepted);
+      const auto replay_before = topology();
+      const auto repeated = editor_.history().repeat_last_action();
+      ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+      const auto replayed = topology();
+      EXPECT_TRUE(quader_poly::has_same_geometry(replayed, accepted));
+      expect_supports(before, replayed, 0.25F);
+      EXPECT_EQ(session.history().undo_count(), history_count + 1U);
+      ASSERT_TRUE(editor_.history().undo().ok());
+      expect_same_authored_topology(topology(), replay_before);
+      ASSERT_TRUE(editor_.history().redo().ok());
+      expect_same_authored_topology(topology(), replayed);
+      ASSERT_TRUE(editor_.history().undo().ok());
+    }
+  }
+}
+
 TEST_F(ComponentTransformPersistenceTests, InvalidVertexExtrusionGridPreservesRedoAndPreviousRepeat) {
   const auto before = topology();
   enter_edit_for_all_meshes();
@@ -969,6 +1304,342 @@ TEST_F(VertexExtrudeNudgeTests, IsolatedPointKeepsIdentityAndTopologyForModifier
     }
     expect_history(before, after, selection, selection);
     ASSERT_TRUE(editor_.history().undo().ok());
+  }
+}
+
+class VertexExtrudeDragTests : public VertexExtrudeNudgeTests {};
+
+TEST_F(VertexExtrudeDragTests, BoundaryPreviewSelectsThePublishedCloneAndRestoresSelection) {
+  quader_poly::Document document;
+  const std::array vertices{
+      quader_poly::add_vertex(document, {0, 0, 0}),
+      quader_poly::add_vertex(document, {0, 4, 0}),
+      quader_poly::add_vertex(document, {0, 4, 4}),
+      quader_poly::add_vertex(document, {0, 0, 4})};
+  (void)quader_poly::add_face(document, vertices);
+  install_document(std::move(document));
+  const auto original_id = vertices.front();
+  ASSERT_TRUE(editor_.selection().select_vertex(
+      object_, static_cast<QuaderElementId>(original_id)).ok());
+  auto &modeling = project_.active_scene()->session->modeling();
+  auto settings = modeling.interaction_settings();
+  settings.move_auto_merge_vertices = false;
+  ASSERT_TRUE(modeling.set_interaction_settings(settings).ok);
+  auto begin = component_move_request();
+  begin.operation = QuaderTransformOperation::Extrude;
+  begin.grid_size = 0.25;
+  const auto update = [&](float amount, double grid = 0.25) {
+    return editor_.modeling().update_transform_drag({
+        .screen_position = {100 + amount * 100, 100},
+        .ray = {.origin = {amount, 0, 5}, .direction = {0, 0, -1}},
+        .camera = begin.camera, .grid_size = grid,
+        .vertex_snap_radius = 0, .grid_snap_enabled = false});
+  };
+  const auto expect_selection = [&](quader_poly::ElementId selected_id,
+                                    QVec3 position, bool preview) {
+    const auto snapshot = modeling.polygon_document_read_snapshot(object_.modeling_object_id);
+    ASSERT_TRUE(snapshot.ok()) << snapshot.error().message;
+    EXPECT_EQ(snapshot.value().preview, preview);
+    const auto &selection = snapshot.value().selection;
+    ASSERT_EQ(selection.vertices.size(), 1U);
+    EXPECT_EQ(selection.vertices.front().index, selected_id);
+    EXPECT_TRUE(selection.has_active);
+    EXPECT_EQ(selection.active_vertex.index, selected_id);
+
+    const auto frame = modeling.selection_overlay_render_frame();
+    std::vector<int> selected_vertex_ids;
+    for (const auto &point : frame.points) {
+      if (point.layer == ViewportOverlayLayer::SelectedVertex) {
+        selected_vertex_ids.push_back(point.element.vertex_id);
+        EXPECT_EQ(point.style_role, ViewportOverlayStyleRole::SelectedVertex);
+        EXPECT_NEAR(point.position.x, position.x, 0.00001F);
+        EXPECT_NEAR(point.position.y, position.y, 0.00001F);
+        EXPECT_NEAR(point.position.z, position.z, 0.00001F);
+      }
+    }
+    EXPECT_EQ(selected_vertex_ids, std::vector<int>{static_cast<int>(selected_id)});
+    const auto original = std::ranges::find_if(frame.points, [&](const auto &point) {
+      return point.element.vertex_id == static_cast<int>(original_id);
+    });
+    ASSERT_NE(original, frame.points.end());
+    EXPECT_EQ(original->layer, selected_id == original_id
+        ? ViewportOverlayLayer::SelectedVertex : ViewportOverlayLayer::UnselectedVertex);
+    EXPECT_FLOAT_EQ(original->position.x, 0.0F);
+    EXPECT_FLOAT_EQ(original->position.y, 0.0F);
+    EXPECT_FLOAT_EQ(original->position.z, 0.0F);
+
+    const auto builds = modeling.modeling_sdk_projection_stats_for_tests()
+                            .native_selection_projection_build_count;
+    (void)modeling.selection_overlay_render_frame();
+    EXPECT_EQ(modeling.modeling_sdk_projection_stats_for_tests()
+                  .native_selection_projection_build_count, builds);
+  };
+
+  enum class Ending { Cancel, Reject, Commit };
+  for (const auto ending : {Ending::Cancel, Ending::Reject, Ending::Commit}) {
+    SCOPED_TRACE(static_cast<int>(ending));
+    const auto before = topology();
+    expect_selection(original_id, {}, false);
+    ASSERT_TRUE(editor_.modeling().begin_transform_drag(begin).ok());
+    quader_poly::ElementId clone_id = quader_poly::kInvalidElementId;
+    for (const float amount : {0.75F, 1.25F}) {
+      const auto moved = update(amount);
+      ASSERT_TRUE(moved.ok()) << moved.error_message();
+      ASSERT_TRUE(moved.changed());
+      const auto candidate = topology();
+      const auto clone = std::ranges::find_if(candidate.vertices, [&](const auto &vertex) {
+        return quader_poly::find_vertex(before, vertex.id) == nullptr;
+      });
+      ASSERT_NE(clone, candidate.vertices.end());
+      clone_id = clone->id;
+      expect_selection(clone_id, {amount, 0, 0}, true);
+    }
+    if (ending == Ending::Commit) {
+      const auto accepted = topology();
+      ASSERT_TRUE(editor_.modeling().commit_transform_drag().ok());
+      expect_selection(clone_id, {1.25F, 0, 0}, false);
+      ASSERT_TRUE(editor_.history().undo().ok());
+      expect_restored_extrusion_topology(topology(), before, accepted);
+      expect_selection(original_id, {}, false);
+      ASSERT_TRUE(editor_.history().redo().ok());
+      expect_same_authored_topology(topology(), accepted);
+      expect_selection(clone_id, {1.25F, 0, 0}, false);
+    } else {
+      if (ending == Ending::Reject) {
+        EXPECT_FALSE(update(1.5F, std::numeric_limits<double>::max()).ok());
+      } else {
+        ASSERT_TRUE(editor_.modeling().cancel_transform_drag().ok());
+      }
+      EXPECT_FALSE(modeling.transform_drag_active());
+      expect_same_authored_topology(topology(), before);
+      expect_selection(original_id, {}, false);
+    }
+  }
+}
+
+TEST_F(VertexExtrudeDragTests, MoveAndRotatePreviewUseRawGridAndPreserveCancelAndHistory) {
+  select_cube_tip();
+  auto &session = *project_.active_scene()->session;
+  auto settings = session.modeling().interaction_settings();
+  settings.move_auto_merge_vertices = false;
+  ASSERT_TRUE(session.modeling().set_interaction_settings(settings).ok);
+  for (const auto tool : {QuaderTransformTool::Move, QuaderTransformTool::Rotate}) {
+    SCOPED_TRACE(static_cast<int>(tool));
+    const auto before = topology();
+    const auto selection = vertex_selection();
+    const auto history_count = session.history().undo_count();
+    auto begin = component_move_request();
+    begin.tool = tool;
+    begin.operation = QuaderTransformOperation::Extrude;
+    begin.pivot = {1, 1, 1};
+    begin.grid_size = 0.25;
+    begin.rotation_snap_degrees = 0.0;
+    if (tool == QuaderTransformTool::Rotate) {
+      begin.axis = QuaderTransformAxis::Z;
+      begin.world_direction = {0, 0, 1};
+      begin.screen_position = {120, 100};
+    }
+    const auto start = [&]() {
+      const auto result = editor_.modeling().begin_transform_drag(begin);
+      EXPECT_TRUE(result.ok()) << result.error_message();
+      if (result.ok()) {
+        EXPECT_EQ(result.value().operation, QuaderTransformOperation::Extrude);
+        EXPECT_TRUE(result.value().active);
+      }
+      return result.ok();
+    };
+    const auto update = [&](float amount) {
+      const auto position = tool == QuaderTransformTool::Move
+          ? QVec2{100 + amount * 100, 100}
+          : QVec2{100 + 20 * std::cos(amount), 100 + 20 * std::sin(amount)};
+      return editor_.modeling().update_transform_drag({
+          .screen_position = position,
+          .ray = {.origin = {amount, 0, 5}, .direction = {0, 0, -1}},
+          .camera = begin.camera, .grid_size = 0.25,
+          .vertex_snap_radius = 0, .grid_snap_enabled = false,
+          .rotation_snap_degrees = 0.0});
+    };
+    const auto expect_draft = [&](const quader_poly::Document &draft, float amount) {
+      ASSERT_EQ(draft.vertices.size(), before.vertices.size() + 3U);
+      EXPECT_EQ(draft.faces.size(), before.faces.size() + 3U);
+      EXPECT_EQ(vertex_selection(), selection);
+      expect_position(draft, tip_, tool == QuaderTransformTool::Move
+          ? QVec3{1 + amount, 1, 1} : QVec3{1, 1, 1});
+      for (const auto &vertex : draft.vertices) {
+        if (quader_poly::find_vertex(before, vertex.id) == nullptr) {
+          const auto offset = vertex.position - QVec3{1, 1, 1};
+          EXPECT_NEAR(length_squared(offset), 0.0625F, 0.00001F);
+        }
+      }
+      EXPECT_EQ(session.history().undo_count(), history_count);
+    };
+
+    ASSERT_TRUE(start());
+    expect_same_authored_topology(topology(), before);
+    ASSERT_TRUE(editor_.modeling().commit_transform_drag().ok());
+    EXPECT_EQ(session.history().undo_count(), history_count);
+    expect_same_authored_topology(topology(), before);
+
+    ASSERT_TRUE(start());
+    for (const float amount : {0.75F, 1.25F}) {
+      const auto moved = update(amount);
+      ASSERT_TRUE(moved.ok()) << moved.error_message();
+      EXPECT_TRUE(moved.changed());
+      expect_draft(topology(), amount);
+    }
+    ASSERT_TRUE(editor_.modeling().cancel_transform_drag().ok());
+    expect_same_authored_topology(topology(), before);
+    EXPECT_EQ(vertex_selection(), selection);
+    EXPECT_EQ(session.history().undo_count(), history_count);
+
+    ASSERT_TRUE(start());
+    const auto moved = update(0.75F);
+    ASSERT_TRUE(moved.ok()) << moved.error_message();
+    const auto accepted = topology();
+    expect_draft(accepted, 0.75F);
+    ASSERT_TRUE(editor_.modeling().commit_transform_drag().ok());
+    expect_same_authored_topology(topology(), accepted);
+    EXPECT_EQ(session.history().undo_count(), history_count + 1U);
+    EXPECT_FALSE(session.modeling().transform_drag_active());
+    expect_history(before, accepted, selection, selection);
+    ASSERT_TRUE(editor_.history().undo().ok());
+  }
+}
+
+TEST_F(VertexExtrudeDragTests, VertexScaleKeepsOrdinaryTransformWhenInsetIsRequested) {
+  select_cube_tip();
+  const auto before = topology();
+  const auto selection = vertex_selection();
+  auto &session = *project_.active_scene()->session;
+  const auto history_count = session.history().undo_count();
+  auto begin = component_move_request();
+  begin.tool = QuaderTransformTool::Scale;
+  begin.operation = QuaderTransformOperation::Inset;
+  begin.axis = QuaderTransformAxis::All;
+  begin.pivot = {};
+  const auto started = editor_.modeling().begin_transform_drag(begin);
+  ASSERT_TRUE(started.ok()) << started.error_message();
+  EXPECT_EQ(started.value().operation, QuaderTransformOperation::Transform);
+  const auto scaled = editor_.modeling().update_transform_drag({
+      .screen_position = {124, 100}, .ray = begin.ray, .camera = begin.camera,
+      .vertex_snap_radius = 0, .grid_snap_enabled = false});
+  ASSERT_TRUE(scaled.ok()) << scaled.error_message();
+  EXPECT_EQ(scaled.value().operation, QuaderTransformOperation::Transform);
+  EXPECT_NEAR(scaled.value().scale.x, 1.25F, 0.00001F);
+  expect_same_authored_topology(topology(), before);
+  ASSERT_TRUE(editor_.modeling().commit_transform_drag().ok());
+  auto expected = before;
+  quader_poly::find_vertex(expected, tip_)->position = {1.25F, 1.25F, 1.25F};
+  expect_same_authored_topology(topology(), expected);
+  EXPECT_EQ(vertex_selection(), selection);
+  EXPECT_EQ(session.history().undo_count(), history_count + 1U);
+  expect_history(before, expected, selection, selection);
+}
+
+TEST_F(ComponentTransformPersistenceTests,
+       ExtrudeDragRepeatKeepsAcceptedGridThroughCanceledAndRejectedDrafts) {
+  auto &session = *project_.active_scene()->session;
+  auto settings = session.modeling().interaction_settings();
+  settings.move_auto_merge_vertices = false;
+  ASSERT_TRUE(session.modeling().set_interaction_settings(settings).ok);
+  for (const auto mode : {QuaderSelectionMode::Vertex, QuaderSelectionMode::Edge,
+                          QuaderSelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    enter_edit_for_all_meshes();
+    ASSERT_TRUE(editor_.selection().set_mode(mode).ok());
+    const auto source = topology();
+    if (mode == QuaderSelectionMode::Face) {
+      select_positive_x_face();
+    } else {
+      const auto tip = std::ranges::find_if(source.vertices, [](const auto &vertex) {
+        return vertex.position.x == 1.0F && vertex.position.y == -1.0F &&
+               vertex.position.z == 1.0F;
+      });
+      ASSERT_NE(tip, source.vertices.end());
+      if (mode == QuaderSelectionMode::Vertex) {
+        ASSERT_TRUE(editor_.selection().select_vertex(object_,
+            static_cast<QuaderElementId>(tip->id)).ok());
+      } else {
+        const auto other = std::ranges::find_if(source.vertices, [](const auto &vertex) {
+          return vertex.position.x == 1.0F && vertex.position.y == -1.0F &&
+                 vertex.position.z == -1.0F;
+        });
+        ASSERT_NE(other, source.vertices.end());
+        ASSERT_TRUE(editor_.selection().select_edge(object_,
+            static_cast<QuaderElementId>(tip->id),
+            static_cast<QuaderElementId>(other->id)).ok());
+      }
+    }
+    for (const auto tool : {QuaderTransformTool::Move, QuaderTransformTool::Rotate}) {
+      SCOPED_TRACE(static_cast<int>(tool));
+      const auto before = topology();
+      const auto history_count = session.history().undo_count();
+      auto begin = component_move_request();
+      begin.tool = tool;
+      begin.operation = QuaderTransformOperation::Extrude;
+      begin.grid_size = 0.5;
+      begin.rotation_snap_degrees = 0.0;
+      if (tool == QuaderTransformTool::Rotate) {
+        begin.axis = QuaderTransformAxis::Z;
+        begin.world_direction = {0, 0, 1};
+        begin.screen_position = {120, 100};
+      }
+      const auto update = [&](float amount, double grid) {
+        const auto position = tool == QuaderTransformTool::Move
+            ? QVec2{100 + amount * 100, 100}
+            : QVec2{100 + 20 * std::cos(amount), 100 + 20 * std::sin(amount)};
+        return editor_.modeling().update_transform_drag({
+            .screen_position = position,
+            .ray = {.origin = {amount, 0, 5}, .direction = {0, 0, -1}},
+            .camera = begin.camera, .grid_size = grid,
+            .vertex_snap_radius = 0, .grid_snap_enabled = false,
+            .rotation_snap_degrees = 0.0});
+      };
+      ASSERT_TRUE(editor_.modeling().begin_transform_drag(begin).ok());
+      const auto accepted_update = update(0.35F, 0.5);
+      ASSERT_TRUE(accepted_update.ok()) << accepted_update.error_message();
+      ASSERT_TRUE(editor_.modeling().commit_transform_drag().ok());
+      const auto accepted = topology();
+      ASSERT_GT(accepted.vertices.size(), before.vertices.size());
+      EXPECT_EQ(session.history().undo_count(), history_count + 1U);
+      ASSERT_TRUE(editor_.history().undo().ok());
+      expect_restored_extrusion_topology(topology(), before, accepted);
+
+      for (const bool reject : {false, true}) {
+        if (reject && mode == QuaderSelectionMode::Face) continue;
+        SCOPED_TRACE(reject);
+        const auto rollback_base = topology();
+        auto different_begin = begin;
+        different_begin.grid_size = 0.125;
+        ASSERT_TRUE(editor_.modeling().begin_transform_drag(different_begin).ok());
+        const auto draft = update(0.2F, reject
+            ? std::numeric_limits<double>::max() : 0.125);
+        if (reject) {
+          EXPECT_FALSE(draft.ok());
+          EXPECT_FALSE(session.modeling().transform_drag_active());
+        } else {
+          ASSERT_TRUE(draft.ok()) << draft.error_message();
+          ASSERT_TRUE(editor_.modeling().cancel_transform_drag().ok());
+        }
+        expect_same_authored_topology(topology(), rollback_base);
+        EXPECT_EQ(session.history().undo_count(), history_count);
+        EXPECT_TRUE(editor_.history().can_redo());
+
+        const auto repeated = editor_.history().repeat_last_action();
+        ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+        EXPECT_TRUE(repeated.changed());
+        const auto replayed = topology();
+        EXPECT_TRUE(quader_poly::has_same_geometry(replayed, accepted));
+        EXPECT_EQ(replayed.faces.size(), accepted.faces.size());
+        EXPECT_EQ(replayed.vertices.size(), accepted.vertices.size());
+        EXPECT_EQ(session.history().undo_count(), history_count + 1U);
+        ASSERT_TRUE(editor_.history().undo().ok());
+        expect_same_authored_topology(topology(), rollback_base);
+        ASSERT_TRUE(editor_.history().redo().ok());
+        expect_same_authored_topology(topology(), replayed);
+        ASSERT_TRUE(editor_.history().undo().ok());
+      }
+    }
   }
 }
 

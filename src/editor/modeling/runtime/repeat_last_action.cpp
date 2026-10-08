@@ -212,6 +212,7 @@ void record_repeatable_transform(
 	action.orientation = drag.orientation;
 	action.duplicate_selected = duplicate_selected;
         action.move_auto_merge_vertices = drag.move_auto_merge_vertices;
+        action.extrusion_grid_size = drag.extrusion_grid_size;
 	action.pivot = drag.pivot;
 	action.move_delta = drag.move.preview_delta;
 	action.rotate_angle_degrees = drag.rotate.preview_angle_degrees;

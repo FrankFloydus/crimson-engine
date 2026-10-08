@@ -14875,6 +14875,93 @@ TEST(ViewportInteractionControllerTests,
 }
 
 TEST(ViewportInteractionControllerTests,
+     ShiftMoveAndRotateVertexGizmosExtrudeThroughReleaseAndHistory) {
+  for (const auto tool : {quader::ViewportToolId::Move, quader::ViewportToolId::Rotate}) {
+    SCOPED_TRACE(static_cast<int>(tool));
+    ViewportInteractionHarness harness;
+    const auto box = create_unit_box(harness);
+    select_single_component(harness, box, quader::QuaderSelectionMode::Vertex);
+    ASSERT_TRUE(harness.editor.tools().activate(tool).ok());
+    harness.router.set_active_tool(tool);
+    ASSERT_TRUE(harness.settings.set_bool_value(quader::ViewportBoolSettingId::GridSnap, false));
+    ASSERT_TRUE(harness.settings.set_bool_value(quader::ViewportBoolSettingId::VertexSnap, false));
+    harness.input.grid_preset = 4;
+    auto interaction_settings = harness.session.modeling().interaction_settings();
+    interaction_settings.move_auto_merge_vertices = false;
+    ASSERT_TRUE(harness.session.modeling().set_interaction_settings(interaction_settings).ok);
+    const auto authored = [&]() -> const quader_poly::Document & {
+      return *harness.session.assets().mesh(box.mesh)->authored_polygon_document;
+    };
+    const auto before = authored();
+    const auto selected_before = harness.editor.selection().summary();
+    harness.session.history().clear();
+    (void)harness.controller.handle_before_active_tool(harness.editor, harness.frame());
+    const auto *gizmo = harness.controller.transform_gizmo_frame();
+    ASSERT_NE(gizmo, nullptr);
+    quader::QVec2 start;
+    quader::QVec2 update;
+    if (tool == quader::ViewportToolId::Move) {
+      const auto *axis = find_axis(*gizmo, quader_editor_core::TransformAxis::X);
+      ASSERT_NE(axis, nullptr);
+      start = axis->screen_tip;
+      update = start - quader::QVec2{40, 0};
+    } else {
+      const auto *ring = find_ring(*gizmo, quader_editor_core::TransformAxis::Z);
+      ASSERT_NE(ring, nullptr);
+      start = ring->screen_start;
+      update = rotated_point(gizmo->info.screen_pivot, start, 0.6F);
+    }
+    harness.input.modifiers.shift = true;
+    harness.input.mouse_local = start;
+    harness.input.mouse_screen = start;
+    ASSERT_TRUE(harness.controller.handle_before_active_tool(
+        harness.editor, harness.frame(true, true, false, start)).gizmo_consumed);
+    EXPECT_EQ(authored().vertices.size(), before.vertices.size());
+    EXPECT_EQ(authored().faces.size(), before.faces.size());
+
+    // The modifier at press selects the operation for the whole gesture.
+    harness.input.modifiers.shift = false;
+    harness.input.mouse_local = update;
+    harness.input.mouse_screen = update;
+    const auto drag = harness.frame(false, true, false, start);
+    ASSERT_TRUE(harness.controller.handle_before_active_tool(harness.editor, drag).gizmo_consumed);
+    ASSERT_TRUE(harness.controller.dragging());
+    quader::QuaderOperationInputContext context;
+    harness.controller.populate_operation_input_context(context, drag);
+    EXPECT_EQ(context.transform_operation, quader::QuaderInputTransformOperation::Extrude);
+    EXPECT_TRUE(context.can_component_extrude);
+    EXPECT_FALSE(context.can_component_inset);
+    EXPECT_FALSE(context.shift);
+    EXPECT_EQ(authored().vertices.size(), before.vertices.size() + 3U);
+    EXPECT_EQ(authored().faces.size(), before.faces.size() + 3U);
+    EXPECT_EQ(harness.session.history().undo_count(), 0U);
+    ASSERT_TRUE(harness.controller.handle_before_active_tool(
+        harness.editor, harness.frame(false, false, true, start)).gizmo_consumed);
+    EXPECT_FALSE(harness.controller.dragging());
+    const auto accepted = authored();
+    EXPECT_EQ(harness.session.history().undo_count(), 1U);
+    EXPECT_EQ(harness.editor.selection().summary().active_vertex_id, selected_before.active_vertex_id);
+    EXPECT_EQ(harness.editor.selection().summary().selected_vertex_count, 1U);
+    ASSERT_TRUE(harness.editor.history().undo().ok());
+    EXPECT_EQ(authored().vertices.size(), before.vertices.size());
+    EXPECT_EQ(authored().faces.size(), before.faces.size());
+    for (const auto &vertex : before.vertices) {
+      const auto *restored = quader_poly::find_vertex(authored(), vertex.id);
+      ASSERT_NE(restored, nullptr);
+      expect_vec3_near(restored->position, vertex.position);
+    }
+    ASSERT_TRUE(harness.editor.history().redo().ok());
+    EXPECT_EQ(authored().vertices.size(), accepted.vertices.size());
+    EXPECT_EQ(authored().faces.size(), accepted.faces.size());
+    for (const auto &vertex : accepted.vertices) {
+      const auto *restored = quader_poly::find_vertex(authored(), vertex.id);
+      ASSERT_NE(restored, nullptr);
+      expect_vec3_near(restored->position, vertex.position);
+    }
+  }
+}
+
+TEST(ViewportInteractionControllerTests,
      BeveledBoxLocalComponentGizmoUsesStableFramesForDrawingDragAndHistory) {
   for (const auto mode : {quader::QuaderSelectionMode::Face,
                           quader::QuaderSelectionMode::Edge,

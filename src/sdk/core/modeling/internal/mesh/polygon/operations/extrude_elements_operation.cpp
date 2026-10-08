@@ -200,7 +200,11 @@ bool vertex_extrude_face_changed(const Face &source, const Face &candidate) {
                              });
 }
 
-OperationResult vertex_extrude_receipt(const Document &source,
+} // namespace
+
+namespace document_internal {
+
+OperationResult component_extrusion_receipt(const Document &source,
                                        const Document &candidate) {
   OperationResult result;
   result.changed = true;
@@ -267,10 +271,6 @@ OperationResult vertex_extrude_receipt(const Document &source,
   }
   return result;
 }
-
-} // namespace
-
-namespace document_internal {
 
 OperationResult extrude_selected_vertices_impl(Document &document,
                                                Selection &selection,
@@ -461,7 +461,7 @@ OperationResult extrude_selected_vertices_impl(Document &document,
   } else {
     activate_last_selection(result_selection);
   }
-  OperationResult result = vertex_extrude_receipt(document, candidate);
+  OperationResult result = component_extrusion_receipt(document, candidate);
   document = std::move(candidate);
   selection = std::move(result_selection);
   return result;
@@ -500,7 +500,7 @@ private:
 class TransformExtrudeElementsOperation final : public PolyOperation {
 public:
   TransformExtrudeElementsOperation(Transform3 transform, quader::QVec3 pivot,
-                                    float vertex_extrude_size);
+                                    float extrusion_grid_size);
 
   [[nodiscard]] std::string_view id() const override {
     return poly_operation_descriptor(PolyOperationKey::ExtrudeSelectedElements)
@@ -516,7 +516,7 @@ public:
 private:
   Transform3 transform_;
   quader::QVec3 pivot_;
-  float vertex_extrude_size_ = 1.0F;
+  float extrusion_grid_size_ = 1.0F;
 };
 
 namespace document_internal {
@@ -526,7 +526,7 @@ extrude_selected_elements_impl(Document &document, Selection &selection,
                                float closed_edge_ledge_size);
 [[nodiscard]] OperationResult transform_extrude_selected_elements_impl(
     Document &document, Selection &selection, const Transform3 &transform,
-    quader::QVec3 pivot, float vertex_extrude_size);
+    quader::QVec3 pivot, float extrusion_grid_size);
 } // namespace document_internal
 
 ExtrudeElementsOperation::ExtrudeElementsOperation(quader::QVec3 offset,
@@ -540,15 +540,15 @@ OperationResult ExtrudeElementsOperation::apply(Document &document,
 }
 
 TransformExtrudeElementsOperation::TransformExtrudeElementsOperation(
-    Transform3 transform, quader::QVec3 pivot, float vertex_extrude_size)
+    Transform3 transform, quader::QVec3 pivot, float extrusion_grid_size)
     : transform_(transform), pivot_(pivot),
-      vertex_extrude_size_(vertex_extrude_size) {}
+      extrusion_grid_size_(extrusion_grid_size) {}
 
 OperationResult
 TransformExtrudeElementsOperation::apply(Document &document,
                                          Selection &selection) const {
   return document_internal::transform_extrude_selected_elements_impl(
-      document, selection, transform_, pivot_, vertex_extrude_size_);
+      document, selection, transform_, pivot_, extrusion_grid_size_);
 }
 
 OperationResult extrude_selected_elements(Document &document,
@@ -563,9 +563,9 @@ OperationResult transform_extrude_selected_elements(Document &document,
                                                     Selection &selection,
                                                     const Transform3 &transform,
                                                     quader::QVec3 pivot,
-                                                    float vertex_extrude_size) {
+                                                    float extrusion_grid_size) {
   return TransformExtrudeElementsOperation(transform, pivot,
-                                           vertex_extrude_size)
+                                           extrusion_grid_size)
       .apply(document, selection);
 }
 

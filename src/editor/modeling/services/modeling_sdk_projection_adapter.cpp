@@ -1722,6 +1722,28 @@ public:
     // complete workspace. Index once so one preview update stays linear in
     // the number of projected objects, while retaining the binding order.
     const auto committed_documents = session_.document_copies(committed_object_ids);
+    const auto preview = session_.preview_summary();
+    std::unordered_set<std::uint64_t> authored_preview_objects;
+    if (preview.active && preview.operation_id == "translate_selection" &&
+        mesh_preview_host_baseline_.has_value() &&
+        mesh_preview_host_baseline_->active_for(preview.id) &&
+        mesh_preview_host_baseline_->fence_acknowledged &&
+        mesh_preview_host_baseline_->acknowledged_sdk.preview_content_revision ==
+            preview.content_revision &&
+        !has_acknowledged_affine_transform_preview()) {
+      // Authored transform candidates can replace selected element identities.
+      // Read their selection from the same acknowledged candidate as the mesh;
+      // packed affine previews continue sharing committed semantic selection.
+      const auto &participants =
+          mesh_preview_host_baseline_->acknowledged_sdk.preview_objects;
+      authored_preview_objects.reserve(participants.size());
+      for (const auto &participant : participants) {
+        if (participant.kind == modeling::SessionObjectKind::Mesh &&
+            participant.action != modeling::SessionPreviewAction::RemoveExisting) {
+          authored_preview_objects.insert(sdk_object_key(participant.object));
+        }
+      }
+    }
     for (const auto &[native_id, object_id] : sdk_bindings()) {
       const std::optional<EntityId> entity =
           object_map_.entity_for_modeling_object(native_id);
@@ -1760,9 +1782,9 @@ public:
       }
 
       Result<PolygonDocument> document =
-          extrusion != face_extrusion_preview_meshes_.end()
-              ? session_.preview_document_copy(session_.preview_summary().id,
-                                               object_id)
+          extrusion != face_extrusion_preview_meshes_.end() ||
+                  authored_preview_objects.contains(sdk_object_key(object_id))
+              ? session_.preview_document_copy(preview.id, object_id)
               : committed_documents.ok() && source != sources.end()
                     ? Result<PolygonDocument>::success(
                           committed_documents.value()[source->second.document_index])

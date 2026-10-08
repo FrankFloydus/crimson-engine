@@ -1541,6 +1541,19 @@ ModelingTransformDragService::publish_transform_drag_preview(
               ? "Could not update portable transform preview."
               : portable_result.message);
     }
+    if (portable_result.changed &&
+        drag_before_update.operation == quader_editor_core::TransformDragOperation::Extrude) {
+      const auto selection_mode = context.port.portable_modeling_selection_mode();
+      if (selection_mode == ModelingSelectionMode::Vertex ||
+          selection_mode == ModelingSelectionMode::Edge) {
+        auto accepted_drag = context.runtime.transform_drag_state();
+        // Store the scalar used by the accepted portable operation, including
+        // its unit-grid fallback. Invalid vector scalars fail before this point.
+        const float forwarded_grid = static_cast<float>(grid_size);
+        accepted_drag.extrusion_grid_size = forwarded_grid > 0.0F ? forwarded_grid : 1.0F;
+        context.runtime.set_transform_drag_state(accepted_drag);
+      }
+    }
     changed = changed || portable_result.changed;
   }
 

@@ -169,65 +169,62 @@ TEST(QdrDocumentOperationExtrudeElementsTests, EdgeExtrudeCopiesExactModeAndDefa
 	qdr_test::expect_valid_polygon_document_after_success(fixture.document, result);
 }
 
-TEST(QdrDocumentOperationExtrudeElementsTests, ClosedEdgeLedgeCopiesSelectedAndClippedCapModes) {
-	Document document;
-	const ElementId bottom_left = add_vertex(document, { -1.0F, -1.0F, 0.0F });
-	const ElementId bottom_middle = add_vertex(document, { 0.0F, -1.0F, 0.0F });
-	const ElementId bottom_right = add_vertex(document, { 1.0F, -1.0F, 0.0F });
-	const ElementId top_left = add_vertex(document, { -1.0F, 1.0F, 0.0F });
-	const ElementId top_middle = add_vertex(document, { 0.0F, 1.0F, 0.0F });
-	const ElementId top_right = add_vertex(document, { 1.0F, 1.0F, 0.0F });
-	ASSERT_NE(add_face(document, std::array { bottom_left, bottom_middle, top_middle, top_left }), kInvalidElementId);
-	ASSERT_NE(add_face(document, std::array { bottom_middle, bottom_right, top_right, top_middle }), kInvalidElementId);
-	const Edge source = make_edge(bottom_middle, top_middle);
-	ASSERT_TRUE(qdr_test::set_edge_normal_mode(document, source, EdgeNormalMode::Hard));
-	for (const Edge edge : document_edges(document)) {
-		if (edge != source) {
-			ASSERT_TRUE(qdr_test::set_edge_normal_mode(document, edge, EdgeNormalMode::Soft));
-		}
-	}
-	const ElementId last_source_vertex_id = document.next_vertex_id - 1U;
-	const quader::QVec3 source_a_position = find_vertex(document, source.a)->position;
-	const quader::QVec3 source_b_position = find_vertex(document, source.b)->position;
-	Selection selection = qdr_test::edge_selection({ source }, source);
-
-	const OperationResult result = extrude_selected_elements(
-		document, selection, { 0.0F, 0.0F, 1.0F }, 0.25F);
-
-	ASSERT_TRUE(result.changed) << result.message;
-	ASSERT_EQ(selection.edges.size(), 1U);
-	EXPECT_EQ(qdr_test::edge_normal_mode(document, selection.edges.front()), EdgeNormalMode::Hard);
-	auto new_vertex_at = [&](quader::QVec3 position) {
-		const auto found = std::ranges::find_if(document.vertices, [&](const Vertex& vertex) {
-			return vertex.id > last_source_vertex_id &&
-				qdr_test::vec_nearly_equal(vertex.position, position);
-		});
-		return found == document.vertices.end() ? kInvalidElementId : found->id;
-	};
-	const ElementId root_a = new_vertex_at(source_a_position);
-	const ElementId root_b = new_vertex_at(source_b_position);
-	ASSERT_NE(root_a, kInvalidElementId);
-	ASSERT_NE(root_b, kInvalidElementId);
-	const Edge root_edge = make_edge(root_a, root_b);
-	EXPECT_EQ(qdr_test::edge_normal_mode(document, root_edge), EdgeNormalMode::Hard);
-	for (const ElementId root : { root_a, root_b }) {
-		bool found_clipped_cap_edge = false;
-		for (const Edge edge : document_edges(document)) {
-			if ((edge.a != root && edge.b != root) || edge == root_edge) {
-				continue;
-			}
-			const ElementId other_id = edge.a == root ? edge.b : edge.a;
-			const Vertex* other = find_vertex(document, other_id);
-			if (other == nullptr || other_id <= last_source_vertex_id ||
-				!qdr_test::nearly_equal(other->position.z, 0.0F)) {
-				continue;
-			}
-			found_clipped_cap_edge = true;
-			EXPECT_EQ(qdr_test::edge_normal_mode(document, edge), EdgeNormalMode::Soft);
-		}
-		EXPECT_TRUE(found_clipped_cap_edge);
-	}
-	qdr_test::expect_valid_polygon_document_after_success(document, result);
+TEST(QdrDocumentOperationExtrudeElementsTests, ClosedEdgeSupportsPreserveBothFaceChartsAndSplitSpokeModes) {
+    Document document;
+    const ElementId bottom_left = add_vertex(document, {-1, -1, 0});
+    const ElementId bottom_middle = add_vertex(document, {0, -1, 0});
+    const ElementId bottom_right = add_vertex(document, {1, -1, 0});
+    const ElementId top_left = add_vertex(document, {-1, 1, 0});
+    const ElementId top_middle = add_vertex(document, {0, 1, 0});
+    const ElementId top_right = add_vertex(document, {1, 1, 0});
+    ASSERT_NE(add_face(document, std::array{bottom_left, bottom_middle, top_middle, top_left}), kInvalidElementId);
+    ASSERT_NE(add_face(document, std::array{bottom_middle, bottom_right, top_right, top_middle}), kInvalidElementId);
+    for (std::size_t index = 0; index < document.faces.size(); ++index) {
+        Face& face = document.faces[index];
+        face.material_slot = static_cast<std::uint32_t>(index + 7U);
+        face.normal_shading = SurfaceShading::Smooth;
+        face.texture_transform = {{-2, 0.5F}, {0.2F, -0.4F}, 33.0F};
+        face.uvs.clear();
+        for (const ElementId id : face.vertices) {
+            const auto position = find_vertex(document, id)->position;
+            face.uvs.push_back({position.x + 10.0F * index, position.y - 3.0F * index});
+        }
+    }
+    const Edge ridge = make_edge(bottom_middle, top_middle);
+    for (const Edge edge : document_edges(document)) {
+        ASSERT_TRUE(qdr_test::set_edge_normal_mode(document, edge,
+            edge == ridge ? EdgeNormalMode::Hard : EdgeNormalMode::Soft));
+    }
+    const Document source = document;
+    Selection selection = qdr_test::edge_selection({ridge}, ridge);
+    const auto result = extrude_selected_elements(document, selection, {0, 0, 1}, 0.25F);
+    ASSERT_TRUE(result.success) << result.message;
+    ASSERT_TRUE(result.changed);
+    EXPECT_EQ(selection.edges, std::vector<Edge>{ridge});
+    EXPECT_EQ(selection.active_edge, ridge);
+    EXPECT_EQ(qdr_test::edge_normal_mode(document, ridge), EdgeNormalMode::Hard);
+    const ElementId support = qdr_test::vertex_at_position(document, {-0.25F, -1, 0});
+    ASSERT_NE(support, kInvalidElementId);
+    EXPECT_EQ(qdr_test::edge_normal_mode(document, make_edge(bottom_middle, support)), EdgeNormalMode::Soft);
+    EXPECT_EQ(qdr_test::edge_normal_mode(document, make_edge(support, bottom_left)), EdgeNormalMode::Soft);
+    for (const Face& face : document.faces) {
+        const std::size_t donor_index = face.material_slot - 7U;
+        ASSERT_LT(donor_index, source.faces.size());
+        EXPECT_EQ(face.normal_shading, source.faces[donor_index].normal_shading);
+        EXPECT_EQ(face.texture_transform, source.faces[donor_index].texture_transform);
+        ASSERT_EQ(face.uvs.size(), face.vertices.size());
+        for (std::size_t corner = 0; corner < face.vertices.size(); ++corner) {
+            const auto position = find_vertex(document, face.vertices[corner])->position;
+            EXPECT_NEAR(face.uvs[corner].x, position.x + 10.0F * donor_index, 0.00001F);
+            EXPECT_NEAR(face.uvs[corner].y, position.y - 3.0F * donor_index, 0.00001F);
+        }
+    }
+    EXPECT_TRUE(qdr_test::shared_edges_have_opposite_winding(document));
+    EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
+    EXPECT_EQ(result.created.vertices.size(), 4U);
+    EXPECT_EQ(result.created.faces.size(), 2U);
+    EXPECT_EQ(result.deleted.edges.size(), 4U);
+    qdr_test::expect_valid_polygon_document_after_success(document, result);
 }
 
 TEST(QdrDocumentOperationExtrudeElementsTests, ExtrudeSelectedStandaloneFaceReplacesSourceAndLeavesBaseOpen) {
@@ -755,4 +752,299 @@ TEST(QdrDocumentOperationExtrudeElementsTests,
   EXPECT_EQ(std::ranges::find(result.created.faces, source_face.id),
             result.created.faces.end());
   qdr_test::expect_valid_polygon_document_after_success(document, result);
+}
+
+TEST(QdrDocumentOperationExtrudeElementsTests,
+     ClosedCubeEdgeExtrusionCutsBothSidesAndMovesTheOriginalRidge) {
+  for (const float distance : {1.0F, 3.0F}) {
+    SCOPED_TRACE(distance);
+    Document document = make_cube({});
+    const ElementId first = qdr_test::vertex_at_position(document, {1, -1, -1});
+    const ElementId second = qdr_test::vertex_at_position(document, {1, -1, 1});
+    const Edge ridge = make_edge(first, second);
+    const Document source = document;
+    Selection selection = qdr_test::edge_selection({ridge}, ridge);
+    Transform3 transform;
+    transform.origin = {distance, 0, 0};
+    const auto result = transform_extrude_selected_elements(document, selection, transform, {}, 1.0F);
+    ASSERT_TRUE(result.success) << result.message;
+    ASSERT_TRUE(result.changed);
+    EXPECT_EQ(selection.edges, std::vector<Edge>{ridge});
+    EXPECT_EQ(selection.active_edge, ridge);
+    EXPECT_EQ(document.vertices.size(), 12U);
+    EXPECT_EQ(document.faces.size(), 10U);
+    EXPECT_EQ(result.created.vertices.size(), 4U);
+    EXPECT_EQ(result.created.faces.size(), 4U);
+    EXPECT_TRUE(result.deleted.vertices.empty());
+    EXPECT_TRUE(result.deleted.faces.empty());
+    for (const Vertex& vertex : source.vertices) {
+      const auto expected = vertex.id == first || vertex.id == second
+          ? vertex.position + quader::QVec3{distance, 0, 0} : vertex.position;
+      ASSERT_NE(find_vertex(document, vertex.id), nullptr);
+      EXPECT_TRUE(qdr_test::vec_nearly_equal(find_vertex(document, vertex.id)->position, expected));
+    }
+    for (const float z : {-1.0F, 1.0F}) {
+      EXPECT_NE(qdr_test::vertex_at_position(document, {0.75F, -1, z}), kInvalidElementId);
+      EXPECT_NE(qdr_test::vertex_at_position(document, {1, -0.75F, z}), kInvalidElementId);
+    }
+    for (const Face& face : source.faces) {
+      EXPECT_NE(find_face(document, face.id), nullptr);
+    }
+    EXPECT_TRUE(qdr_test::every_edge_is_closed(document));
+    EXPECT_TRUE(qdr_test::shared_edges_have_opposite_winding(document));
+    EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
+    qdr_test::expect_valid_polygon_document_after_success(document, result);
+  }
+}
+
+TEST(QdrDocumentOperationExtrudeElementsTests,
+     ClosedEdgeAffineExtrusionUsesGridSupportWhenEndpointDeltasCancel) {
+  for (const bool stationary_ridge : {false, true}) {
+    SCOPED_TRACE(stationary_ridge);
+    Document document = make_cube({});
+    const ElementId first = qdr_test::vertex_at_position(document, {1, -1, -1});
+    const ElementId second = qdr_test::vertex_at_position(document, {1, -1, 1});
+    const Edge ridge = make_edge(first, second);
+    Selection selection = qdr_test::edge_selection({ridge}, ridge);
+    constexpr float kDiagonal = 0.70710678118F;
+    Transform3 transform;
+    if (stationary_ridge) {
+      transform.x_axis = {kDiagonal, kDiagonal, 0};
+      transform.y_axis = {-kDiagonal, kDiagonal, 0};
+    } else {
+      transform.y_axis = {0, kDiagonal, kDiagonal};
+      transform.z_axis = {0, -kDiagonal, kDiagonal};
+    }
+    const float grid_size = stationary_ridge ? 0.5F : 4.0F;
+    const auto result = transform_extrude_selected_elements(
+        document, selection, transform, {1, -1, 0}, grid_size);
+    ASSERT_TRUE(result.success) << result.message;
+    EXPECT_TRUE(result.changed);
+    EXPECT_EQ(selection.edges, std::vector<Edge>{ridge});
+    EXPECT_EQ(result.created.vertices.size(), 4U);
+    const auto first_position = find_vertex(document, first)->position;
+    const auto second_position = find_vertex(document, second)->position;
+    EXPECT_TRUE(qdr_test::vec_nearly_equal((first_position + second_position) * 0.5F, {1, -1, 0}));
+    EXPECT_TRUE(qdr_test::vec_nearly_equal(first_position,
+        stationary_ridge ? quader::QVec3{1, -1, -1}
+                         : quader::QVec3{1, -1 + kDiagonal, -kDiagonal}));
+    const float support = grid_size * 0.25F;
+    EXPECT_NE(qdr_test::vertex_at_position(document, {1 - support, -1, -1}), kInvalidElementId);
+    EXPECT_NE(qdr_test::vertex_at_position(document, {1, -1 + support, 1}), kInvalidElementId);
+    EXPECT_TRUE(qdr_test::every_edge_is_closed(document));
+    EXPECT_TRUE(qdr_test::shared_edges_have_opposite_winding(document));
+    EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
+    qdr_test::expect_valid_polygon_document_after_success(document, result);
+  }
+}
+
+TEST(QdrDocumentOperationExtrudeElementsTests,
+     ClosedEdgeVectorExtrusionKeepsExplicitWidthAndZeroDisplacementFallback) {
+  for (const float requested_width : {0.125F, 0.5F, 4.0F, 0.0F, 0.0000001F}) {
+    SCOPED_TRACE(requested_width);
+    Document document = make_cube({});
+    const Edge ridge = make_edge(qdr_test::vertex_at_position(document, {1, -1, -1}),
+        qdr_test::vertex_at_position(document, {1, -1, 1}));
+    Selection selection = qdr_test::edge_selection({ridge}, ridge);
+    const auto result = extrude_selected_elements(document, selection, {0.75F, 0, 0}, requested_width);
+    ASSERT_TRUE(result.success) << result.message;
+    EXPECT_TRUE(result.changed);
+    const float expected_depth = requested_width < 0.000001F ? 0.75F : std::min(requested_width, 1.0F);
+    for (const float z : {-1.0F, 1.0F}) {
+      EXPECT_NE(qdr_test::vertex_at_position(document, {1, -1 + expected_depth, z}), kInvalidElementId);
+      EXPECT_NE(qdr_test::vertex_at_position(document, {1 - expected_depth, -1, z}), kInvalidElementId);
+    }
+    EXPECT_EQ(selection.edges, std::vector<Edge>{ridge});
+    EXPECT_TRUE(qdr_test::every_edge_is_closed(document));
+    EXPECT_TRUE(qdr_test::shared_edges_have_opposite_winding(document));
+    qdr_test::expect_valid_polygon_document_after_success(document, result);
+  }
+}
+
+TEST(QdrDocumentOperationExtrudeElementsTests,
+     AdjacentClosedEdgesShareTheMovingEndpointAndSupportCuts) {
+  Document document = make_cube({});
+  const ElementId first = qdr_test::vertex_at_position(document, {1, -1, -1});
+  const ElementId joint = qdr_test::vertex_at_position(document, {1, -1, 1});
+  const ElementId last = qdr_test::vertex_at_position(document, {1, 1, 1});
+  const Edge first_edge = make_edge(first, joint);
+  const Edge last_edge = make_edge(joint, last);
+  Selection selection = qdr_test::edge_selection({first_edge, last_edge}, first_edge);
+  Transform3 transform;
+  transform.origin = {1, 0, 0};
+  const auto result = transform_extrude_selected_elements(document, selection, transform, {}, 1.0F);
+  ASSERT_TRUE(result.success) << result.message;
+  EXPECT_TRUE(result.changed);
+  EXPECT_EQ(selection.edges, (std::vector<Edge>{first_edge, last_edge}));
+  EXPECT_EQ(selection.active_edge, last_edge);
+  EXPECT_TRUE(qdr_test::vec_nearly_equal(find_vertex(document, joint)->position, {2, -1, 1}));
+  const ElementId support = qdr_test::vertex_at_position(document, {0.75F, -1, 1});
+  ASSERT_NE(support, kInvalidElementId);
+  EXPECT_EQ(std::ranges::count_if(document.vertices, [&](const Vertex& vertex) {
+      return qdr_test::vec_nearly_equal(vertex.position, {0.75F, -1, 1});
+    }), 1);
+  EXPECT_TRUE(qdr_test::every_edge_is_closed(document));
+  EXPECT_TRUE(qdr_test::shared_edges_have_opposite_winding(document));
+  EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
+  qdr_test::expect_valid_polygon_document_after_success(document, result);
+}
+
+TEST(QdrDocumentOperationExtrudeElementsTests,
+     MixedDisjointOpenAndClosedExtrusionKeepsBothSelectionContracts) {
+  Document document = make_cube({});
+  const Edge ridge = make_edge(qdr_test::vertex_at_position(document, {1, -1, -1}),
+      qdr_test::vertex_at_position(document, {1, -1, 1}));
+  const ElementId first = add_vertex(document, {5, -1, 0});
+  const ElementId second = add_vertex(document, {5, 1, 0});
+  const ElementId third = add_vertex(document, {4, 1, 0});
+  const ElementId fourth = add_vertex(document, {4, -1, 0});
+  ASSERT_NE(add_face(document, std::array{first, second, third, fourth}), kInvalidElementId);
+  const Edge boundary = make_edge(first, second);
+  Selection selection = qdr_test::edge_selection({boundary, ridge}, boundary);
+  Transform3 transform;
+  transform.origin = {1, 0, 0};
+  const auto result = transform_extrude_selected_elements(document, selection, transform, {}, 1.0F);
+  ASSERT_TRUE(result.success) << result.message;
+  ASSERT_EQ(selection.edges.size(), 2U);
+  EXPECT_EQ(selection.edges.front(), ridge);
+  EXPECT_NE(selection.edges.back(), boundary);
+  EXPECT_EQ(selection.active_edge, selection.edges.back());
+  EXPECT_TRUE(qdr_test::vec_nearly_equal(find_vertex(document, first)->position, {5, -1, 0}));
+  EXPECT_NE(qdr_test::vertex_at_position(document, {6, -1, 0}), kInvalidElementId);
+  EXPECT_NE(qdr_test::vertex_at_position(document, {6, 1, 0}), kInvalidElementId);
+  EXPECT_EQ(qdr_test::open_edge_count(document), 6U);
+  EXPECT_TRUE(qdr_test::shared_edges_have_opposite_winding(document));
+  EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
+  qdr_test::expect_valid_polygon_document_after_success(document, result);
+}
+
+TEST(QdrDocumentOperationExtrudeElementsTests,
+     ClosedEdgeGridSupportCanExceedHalfSpokeAndStaysInsideItsEndpoint) {
+  for (const float grid_size : {7.0F, 100.0F}) {
+    SCOPED_TRACE(grid_size);
+    Document document = make_cube({});
+    const Edge ridge = make_edge(qdr_test::vertex_at_position(document, {1, -1, -1}),
+        qdr_test::vertex_at_position(document, {1, -1, 1}));
+    Selection selection = qdr_test::edge_selection({ridge}, ridge);
+    Transform3 transform;
+    transform.origin = {1, 0, 0};
+    const auto result = transform_extrude_selected_elements(document, selection, transform, {}, grid_size);
+    ASSERT_TRUE(result.success) << result.message;
+    ASSERT_TRUE(result.changed);
+    ASSERT_EQ(result.created.vertices.size(), 4U);
+    const Vertex* support = nullptr;
+    for (const ElementId id : result.created.vertices) {
+      const Vertex* vertex = find_vertex(document, id);
+      ASSERT_NE(vertex, nullptr);
+      if (vertex->position.y == -1.0F && vertex->position.z == -1.0F && vertex->position.x < 1.0F) {
+        support = vertex;
+      }
+    }
+    ASSERT_NE(support, nullptr);
+    if (grid_size == 7.0F) {
+      EXPECT_FLOAT_EQ(support->position.x, -0.75F);
+    } else {
+      EXPECT_GT(support->position.x, -1.0F);
+      EXPECT_LT(support->position.x, -0.999F);
+    }
+    EXPECT_TRUE(qdr_test::every_edge_is_closed(document));
+    EXPECT_TRUE(qdr_test::shared_edges_have_opposite_winding(document));
+    EXPECT_TRUE(validate_polygon_document(document, PolygonDocumentValidationPolicy::AuthoredTopology).ok());
+  }
+}
+
+TEST(QdrDocumentOperationExtrudeElementsTests,
+     ClosedEdgeInsetSupportTracksDisplacementAndKeepsOneSharedHalfLimit) {
+  for (const float scale : {1.125F, 1.5F, 4.0F}) {
+    SCOPED_TRACE(scale);
+    Document document = make_cube({});
+    const Edge ridge = make_edge(qdr_test::vertex_at_position(document, {1, -1, -1}),
+        qdr_test::vertex_at_position(document, {1, -1, 1}));
+    Selection selection = qdr_test::edge_selection({ridge}, ridge);
+    Transform3 transform;
+    transform.x_axis.x = scale;
+    const auto result = inset_selected_elements(document, selection, transform, {});
+    ASSERT_TRUE(result.success) << result.message;
+    EXPECT_TRUE(result.changed);
+    const float expected_depth = std::min(scale - 1.0F, 1.0F);
+    for (const float z : {-1.0F, 1.0F}) {
+      EXPECT_NE(qdr_test::vertex_at_position(document, {1, -1 + expected_depth, z}), kInvalidElementId);
+      EXPECT_NE(qdr_test::vertex_at_position(document, {1 - expected_depth, -1, z}), kInvalidElementId);
+    }
+    EXPECT_EQ(selection.edges, std::vector<Edge>{ridge});
+    EXPECT_TRUE(qdr_test::every_edge_is_closed(document));
+    EXPECT_TRUE(qdr_test::shared_edges_have_opposite_winding(document));
+    qdr_test::expect_valid_polygon_document_after_success(document, result);
+  }
+
+  Document asymmetric = make_cube({});
+  for (Vertex& vertex : asymmetric.vertices) {
+    if (vertex.position.y == 1.0F && vertex.position.z == -1.0F) {
+      vertex.position.y = -0.5F;
+    }
+  }
+  const Edge ridge = make_edge(qdr_test::vertex_at_position(asymmetric, {1, -1, -1}),
+      qdr_test::vertex_at_position(asymmetric, {1, -1, 1}));
+  Selection selection = qdr_test::edge_selection({ridge}, ridge);
+  Transform3 transform;
+  transform.x_axis.x = 1.5F;
+  const auto result = inset_selected_elements(asymmetric, selection, transform, {});
+  ASSERT_TRUE(result.success) << result.message;
+  for (const float z : {-1.0F, 1.0F}) {
+    EXPECT_NE(qdr_test::vertex_at_position(asymmetric, {1, -0.75F, z}), kInvalidElementId);
+    EXPECT_NE(qdr_test::vertex_at_position(asymmetric, {0.75F, -1, z}), kInvalidElementId);
+  }
+  EXPECT_TRUE(qdr_test::every_edge_is_closed(asymmetric));
+  EXPECT_TRUE(qdr_test::shared_edges_have_opposite_winding(asymmetric));
+  qdr_test::expect_valid_polygon_document_after_success(asymmetric, result);
+}
+
+TEST(QdrDocumentOperationExtrudeElementsTests,
+     InvalidClosedEdgeExtrusionPreservesDocumentSelectionAndAllocators) {
+  for (const int failure : {0, 1, 2, 3, 4, 5}) {
+    SCOPED_TRACE(failure);
+    Document document = make_cube({});
+    const Edge ridge = make_edge(qdr_test::vertex_at_position(document, {1, -1, -1}),
+        qdr_test::vertex_at_position(document, {1, -1, 1}));
+    Selection selection = qdr_test::edge_selection({ridge}, ridge);
+    Transform3 transform;
+    transform.origin = {1, 0, 0};
+    float grid_size = 1;
+    if (failure == 0) {
+      grid_size = -1;
+    } else if (failure == 1) {
+      transform.origin.x = std::numeric_limits<float>::infinity();
+    } else if (failure == 2) {
+      selection.edges.push_back(make_edge(ridge.a, 99999U));
+    } else if (failure == 3) {
+      document.next_face_id = std::numeric_limits<ElementId>::max();
+    } else if (failure == 4) {
+      document.faces.front().id = kInvalidElementId;
+    } else {
+      const Edge opposite = make_edge(qdr_test::vertex_at_position(document, {-1, -1, -1}),
+          qdr_test::vertex_at_position(document, {-1, -1, 1}));
+      selection.edges.push_back(opposite);
+      grid_size = 5;
+    }
+    const Document before = document;
+    const Selection selection_before = selection;
+    const auto result = transform_extrude_selected_elements(document, selection, transform, {}, grid_size);
+    EXPECT_FALSE(result.success);
+    EXPECT_FALSE(result.changed);
+    EXPECT_EQ(document.next_vertex_id, before.next_vertex_id);
+    EXPECT_EQ(document.next_face_id, before.next_face_id);
+    ASSERT_EQ(document.vertices.size(), before.vertices.size());
+    ASSERT_EQ(document.faces.size(), before.faces.size());
+    for (std::size_t index = 0; index < before.vertices.size(); ++index) {
+      EXPECT_EQ(document.vertices[index].id, before.vertices[index].id);
+      EXPECT_TRUE(qdr_test::vec_nearly_equal(document.vertices[index].position, before.vertices[index].position));
+    }
+    for (std::size_t index = 0; index < before.faces.size(); ++index) {
+      EXPECT_EQ(document.faces[index].id, before.faces[index].id);
+      EXPECT_EQ(document.faces[index].vertices, before.faces[index].vertices);
+      EXPECT_EQ(document.faces[index].material_slot, before.faces[index].material_slot);
+    }
+    EXPECT_EQ(selection.edges, selection_before.edges);
+    EXPECT_EQ(selection.active_edge, selection_before.active_edge);
+  }
 }

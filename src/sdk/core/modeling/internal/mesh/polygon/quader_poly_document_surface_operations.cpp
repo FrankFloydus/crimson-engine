@@ -15,14 +15,21 @@
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_hull_plane_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_mesh_internal.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_helpers.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_uv_helpers.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
+#include <map>
 #include <set>
 #include <unordered_map>
 
 namespace quader_poly {
+
+namespace document_internal {
+OperationResult component_extrusion_receipt(const Document& source, const Document& candidate);
+}
 
 using namespace document_internal;
 
@@ -419,245 +426,6 @@ ElementId copied_vertex_with_transform(
     return copied_id;
 }
 
-/**
- * Represents an Edge Extrude Face Source value used by the polygon document and mesh editing core.
- */
-struct EdgeExtrudeFaceSource {
-  ElementId face_id = kInvalidElementId;
-  std::pair<ElementId, ElementId> oriented_edge;
-  quader::QVec3 source_normal;
-  std::uint32_t material_slot = 0;
-  FaceTextureTransform texture_transform{};
-};
-
-/**
- * Represents an Edge Extrude Source value used by the polygon document and mesh editing core.
- */
-struct EdgeExtrudeSource {
-    std::vector<EdgeExtrudeFaceSource> faces;
-};
-
-EdgeExtrudeSource edge_extrude_source_for_edge(const Document& document, Edge edge)
-{
-    edge = make_edge(edge.a, edge.b);
-    EdgeExtrudeSource source;
-    for (const Face& face : document.faces) {
-        const std::optional<std::pair<ElementId, ElementId>> oriented = oriented_edge_in_face(face, edge);
-        if (!oriented.has_value()) {
-            continue;
-        }
-
-        source.faces.push_back({
-            face.id,
-            *oriented,
-            face_normal(document, face),
-            face.material_slot,
-            face.texture_transform,
-        });
-    }
-    return source;
-}
-
-quader::QVec3 copied_edge_delta(
-    const Document& document,
-    Edge edge,
-    const std::map<ElementId, ElementId>& copied_vertices)
-{
-    const auto copied_a_id = copied_vertices.find(edge.a);
-    const auto copied_b_id = copied_vertices.find(edge.b);
-    const Vertex* source_a = find_vertex(document, edge.a);
-    const Vertex* source_b = find_vertex(document, edge.b);
-    const Vertex* copied_a = copied_a_id == copied_vertices.end() ? nullptr : find_vertex(document, copied_a_id->second);
-    const Vertex* copied_b = copied_b_id == copied_vertices.end() ? nullptr : find_vertex(document, copied_b_id->second);
-    if (source_a == nullptr || source_b == nullptr || copied_a == nullptr || copied_b == nullptr) {
-        return {};
-    }
-
-    return ((copied_a->position - source_a->position) + (copied_b->position - source_b->position)) * 0.5F;
-}
-
-std::pair<const EdgeExtrudeFaceSource*, const EdgeExtrudeFaceSource*> closed_edge_source_pair_for_delta(
-    const Document& document,
-    const EdgeExtrudeSource& source,
-    Edge edge,
-    const std::map<ElementId, ElementId>& copied_vertices)
-{
-    if (source.faces.size() != 2U) {
-        return { nullptr, nullptr };
-    }
-
-    const quader::QVec3 delta = normalize_or_zero(copied_edge_delta(document, edge, copied_vertices));
-    if (length_squared(delta) <= kEpsilon) {
-      return {&source.faces[0], &source.faces[1]};
-    }
-
-    const float first_score = std::abs(dot(normalize_or_zero(source.faces[0].source_normal), delta));
-    const float second_score = std::abs(dot(normalize_or_zero(source.faces[1].source_normal), delta));
-    if (first_score <= second_score) {
-        return { &source.faces[0], &source.faces[1] };
-    }
-    return { &source.faces[1], &source.faces[0] };
-}
-
-bool append_renderable_face(Document& document, std::span<const ElementId> vertices, std::uint32_t material_slot, const FaceTextureTransform& texture_transform)
-{
-    if (vertices.size() < 3) {
-        return false;
-    }
-
-    Face face;
-    face.vertices.assign(vertices.begin(), vertices.end());
-    if (face_loop_area_score(document, face.vertices) <=
-            kFaceAreaScoreEpsilon ||
-        triangulate_face_local_indices(document, face).empty()) {
-      return false;
-    }
-
-    [[maybe_unused]] const ElementId face_id = add_face_with_texture_transform(document, vertices, material_slot, texture_transform);
-    return true;
-}
-
-bool append_renderable_face_oriented(Document& document, std::span<const ElementId> vertices, const EdgeExtrudeFaceSource& source, quader::QVec3 expected_normal)
-{
-    if (vertices.size() < 3) {
-        return false;
-    }
-
-    Face face;
-    face.vertices.assign(vertices.begin(), vertices.end());
-    orient_face_toward_normal(document, face, expected_normal);
-    return append_renderable_face(document, face.vertices, source.material_slot, source.texture_transform);
-}
-
-template <typename CopyVertex>
-bool append_closed_edge_ledge_extrusion_with_copied_vertices(
-    Document& document,
-    Edge edge,
-    const EdgeExtrudeSource& edge_source,
-    std::map<ElementId, ElementId>& copied_vertices,
-    CopyVertex& copy_vertex,
-    float ledge_size,
-    std::vector<Edge>& selected_edges)
-{
-    if (edge_source.faces.size() != 2U) {
-        return false;
-    }
-
-    const ElementId copied_a = copy_vertex(copied_vertices, edge.a);
-    const ElementId copied_b = copy_vertex(copied_vertices, edge.b);
-    if (copied_a == kInvalidElementId || copied_b == kInvalidElementId ||
-        copied_a == copied_b) {
-      return false;
-    }
-
-    const auto [ledge_source, cap_source] = closed_edge_source_pair_for_delta(document, edge_source, edge, copied_vertices);
-    if (ledge_source == nullptr || cap_source == nullptr) {
-        return false;
-    }
-
-    const Face* cap_face = find_face(document, cap_source->face_id);
-    if (cap_face == nullptr) {
-        return false;
-    }
-    const Face cap_face_snapshot = *cap_face;
-    const auto cap_from_entry = std::ranges::find(cap_face_snapshot.vertices, cap_source->oriented_edge.first);
-    if (cap_from_entry == cap_face_snapshot.vertices.end() || cap_face_snapshot.vertices.size() < 4U) {
-        return false;
-    }
-
-    const std::size_t cap_from_index = static_cast<std::size_t>(std::distance(cap_face_snapshot.vertices.begin(), cap_from_entry));
-    const std::size_t cap_to_index = (cap_from_index + 1U) % cap_face_snapshot.vertices.size();
-    if (cap_face_snapshot.vertices[cap_to_index] != cap_source->oriented_edge.second) {
-        return false;
-    }
-
-    const ElementId cap_from = cap_source->oriented_edge.first;
-    const ElementId cap_to = cap_source->oriented_edge.second;
-    const std::size_t from_neighbor_index = (cap_from_index + cap_face_snapshot.vertices.size() - 1U) % cap_face_snapshot.vertices.size();
-    const std::size_t to_neighbor_index = (cap_to_index + 1U) % cap_face_snapshot.vertices.size();
-    const ElementId from_neighbor = cap_face_snapshot.vertices[from_neighbor_index];
-    const ElementId to_neighbor = cap_face_snapshot.vertices[to_neighbor_index];
-    if (from_neighbor == kInvalidElementId ||
-        to_neighbor == kInvalidElementId || from_neighbor == cap_to ||
-        to_neighbor == cap_from) {
-      return false;
-    }
-
-    const quader::QVec3 cap_from_position = vertex_position_or_zero(document, cap_from);
-    const quader::QVec3 cap_to_position = vertex_position_or_zero(document, cap_to);
-    const quader::QVec3 from_neighbor_position = vertex_position_or_zero(document, from_neighbor);
-    const quader::QVec3 to_neighbor_position = vertex_position_or_zero(document, to_neighbor);
-    const quader::QVec3 from_strip_direction = normalize_or_zero(from_neighbor_position - cap_from_position);
-    const quader::QVec3 to_strip_direction = normalize_or_zero(to_neighbor_position - cap_to_position);
-    const float from_strip_length = length(from_neighbor_position - cap_from_position);
-    const float to_strip_length = length(to_neighbor_position - cap_to_position);
-    const float drag_length = length(copied_edge_delta(document, edge, copied_vertices));
-    const float requested_depth =
-        ledge_size > kEpsilon ? ledge_size : drag_length;
-    const float strip_depth = std::min(requested_depth, std::min(from_strip_length, to_strip_length) * 0.5F);
-    if (strip_depth <= kEpsilon ||
-        length_squared(from_strip_direction) <= kEpsilon ||
-        length_squared(to_strip_direction) <= kEpsilon) {
-      return false;
-    }
-
-    const ElementId from_inner = add_vertex(document, cap_from_position + (from_strip_direction * strip_depth));
-    const ElementId to_inner = add_vertex(document, cap_to_position + (to_strip_direction * strip_depth));
-    const ElementId copied_cap_from = copy_vertex(copied_vertices, cap_from);
-    const ElementId copied_cap_to = copy_vertex(copied_vertices, cap_to);
-    const ElementId root_cap_from = add_vertex(document, cap_from_position);
-    const ElementId root_cap_to = add_vertex(document, cap_to_position);
-    if (from_inner == kInvalidElementId || to_inner == kInvalidElementId ||
-        copied_cap_from == kInvalidElementId ||
-        copied_cap_to == kInvalidElementId ||
-        root_cap_from == kInvalidElementId ||
-        root_cap_to == kInvalidElementId) {
-      return false;
-    }
-
-    const std::array ledge {
-        root_cap_from,
-        root_cap_to,
-        copied_cap_to,
-        copied_cap_from,
-    };
-    if (!append_renderable_face_oriented(document, ledge, *ledge_source, ledge_source->source_normal)) {
-        return false;
-    }
-
-    const quader::QVec3 edge_direction = normalize_or_zero(cap_to_position - cap_from_position);
-    const std::array to_cap {
-        root_cap_to,
-        to_inner,
-        copied_cap_to,
-    };
-    [[maybe_unused]] const bool to_cap_added = append_renderable_face_oriented(document, to_cap, *cap_source, edge_direction);
-
-    const std::array from_cap {
-        from_inner,
-        root_cap_from,
-        copied_cap_from,
-    };
-    [[maybe_unused]] const bool from_cap_added = append_renderable_face_oriented(document, from_cap, *cap_source, edge_direction * -1.0F);
-
-    const std::array normal_mode_copies {
-        EdgeNormalModeCopy {edge, make_edge(root_cap_from, root_cap_to)},
-        EdgeNormalModeCopy {
-            make_edge(cap_from, from_neighbor),
-            make_edge(root_cap_from, from_inner),
-        },
-        EdgeNormalModeCopy {
-            make_edge(cap_to, to_neighbor),
-            make_edge(root_cap_to, to_inner),
-        },
-    };
-    static_cast<void>(
-        copy_edge_normal_modes(document, document, normal_mode_copies));
-
-    add_unique_edge(selected_edges, make_edge(copied_a, copied_b));
-    return true;
-}
-
 template <typename CopyVertex>
 OperationResult extrude_selected_faces_with_copied_vertices(
     Document& document,
@@ -810,115 +578,362 @@ OperationResult extrude_selected_faces_with_copied_vertices(
     return { true, {} };
 }
 
-template <typename CopyVertex>
-OperationResult extrude_selected_edges_with_copied_vertices(
-    Document& document,
-    Selection& selection,
-    CopyVertex&& copy_vertex,
-    float closed_edge_ledge_size,
-    std::string_view empty_message,
-    std::string_view missing_message,
-    std::string_view unchanged_message)
+using ExtrusionEdgeKey = std::pair<ElementId, ElementId>;
+
+/** Captures one face's directed use of an edge before support topology changes. */
+struct ExtrusionEdgeUse {
+    ElementId face = kInvalidElementId;
+    ElementId from = kInvalidElementId;
+    ElementId to = kInvalidElementId;
+};
+
+using ExtrusionEdgeUses = std::map<ExtrusionEdgeKey, std::vector<ExtrusionEdgeUse>>;
+
+/** Selects the established support-width source without changing topology ownership. */
+enum class EdgeExtrusionSupportPolicy {
+    Grid,
+    ExplicitLedge,
+    Displacement,
+};
+
+ExtrusionEdgeKey extrusion_edge_key(ElementId first, ElementId second)
 {
-  if (selection.mode != SelectionMode::Edge || selection.edges.empty()) {
-    return OperationResult::failure(std::string(empty_message));
-  }
+    const Edge edge = make_edge(first, second);
+    return {edge.a, edge.b};
+}
 
-    const std::vector<Edge> edges = selected_valid_edges(document, selection);
-    if (edges.empty()) {
-        return OperationResult::failure(std::string(missing_message));
-    }
-
-    std::map<ElementId, ElementId> copied_vertices;
-    std::vector<Edge> selected_edges;
-    selected_edges.reserve(edges.size());
-    std::vector<Edge> open_edges;
-    std::map<std::pair<ElementId, ElementId>, EdgeExtrudeSource> sources_by_edge;
-    for (const Edge& edge : edges) {
-        const EdgeExtrudeSource edge_source = edge_extrude_source_for_edge(document, edge);
-        if (edge_source.faces.size() == 1U) {
-            open_edges.push_back(edge);
-            sources_by_edge[{ edge.a, edge.b }] = edge_source;
-        } else if (edge_source.faces.size() == 2U) {
-            sources_by_edge[{ edge.a, edge.b }] = edge_source;
+bool collect_extrusion_edge_uses(const Document& document, ExtrusionEdgeUses& uses)
+{
+    for (const Face& face : document.faces) {
+        for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+            const ElementId from = face.vertices[index];
+            const ElementId to = face.vertices[(index + 1U) % face.vertices.size()];
+            auto& edge_uses = uses[extrusion_edge_key(from, to)];
+            if (edge_uses.size() == 2U ||
+                (!edge_uses.empty() && edge_uses.front().from == from)) {
+                return false;
+            }
+            edge_uses.push_back({face.id, from, to});
         }
     }
+    return true;
+}
 
-    bool changed = false;
-    for (const Edge& edge : edges) {
-        const auto source_entry = sources_by_edge.find({ edge.a, edge.b });
-        if (source_entry == sources_by_edge.end() || source_entry->second.faces.size() != 2U) {
+ElementId append_edge_extrusion_vertex(Document& document, quader::QVec3 position)
+{
+    if (!extrusion_finite(extrusion_vector(position)) ||
+        document.next_vertex_id == kInvalidElementId ||
+        document.next_vertex_id == std::numeric_limits<ElementId>::max()) {
+        return kInvalidElementId;
+    }
+    return add_vertex(document, position);
+}
+
+quader::QVec3 edge_extrusion_position(const Transform3& transform,
+    quader::QVec3 pivot, quader::QVec3 position)
+{
+    const ExtrudeVector relative = extrusion_vector(position) - extrusion_vector(pivot);
+    return extrusion_storage_vector(extrusion_vector(pivot) + extrusion_vector(transform.origin) +
+        extrusion_vector(transform.x_axis) * relative.x +
+        extrusion_vector(transform.y_axis) * relative.y +
+        extrusion_vector(transform.z_axis) * relative.z);
+}
+
+bool append_edge_extrusion_face(Document& candidate, const Document& source,
+    const Face& donor, std::vector<ElementId> vertices)
+{
+    if (candidate.next_face_id == kInvalidElementId ||
+        candidate.next_face_id == std::numeric_limits<ElementId>::max()) {
+        return false;
+    }
+    Face face = donor;
+    face.id = candidate.next_face_id++;
+    face.vertices = std::move(vertices);
+    if (!preserve_face_uvs(source, donor, candidate, face)) {
+        return false;
+    }
+    candidate.faces.push_back(std::move(face));
+    return true;
+}
+
+double closed_edge_legacy_support_width(const Document& source,
+    const std::vector<ExtrusionEdgeUse>& uses, const Transform3& transform,
+    quader::QVec3 pivot, double requested_width)
+{
+    const auto first_position = find_vertex(source, uses.front().from)->position;
+    const auto second_position = find_vertex(source, uses.front().to)->position;
+    const auto average_delta = ((edge_extrusion_position(transform, pivot, first_position) - first_position) +
+        (edge_extrusion_position(transform, pivot, second_position) - second_position)) * 0.5F;
+    const auto direction = normalize_or_zero(average_delta);
+    const Face& first_face = *find_face(source, uses[0].face);
+    const Face& second_face = *find_face(source, uses[1].face);
+    const float first_score = std::abs(dot(normalize_or_zero(face_normal(source, first_face)), direction));
+    const float second_score = std::abs(dot(normalize_or_zero(face_normal(source, second_face)), direction));
+    const std::size_t cap_index = first_score <= second_score ? 1U : 0U;
+    const Face& cap = cap_index == 0U ? first_face : second_face;
+    const auto& cap_use = uses[cap_index];
+    const std::size_t from_index = static_cast<std::size_t>(
+        std::ranges::find(cap.vertices, cap_use.from) - cap.vertices.begin());
+    const auto previous = find_vertex(source, cap.vertices[(from_index + cap.vertices.size() - 1U) % cap.vertices.size()])->position;
+    const auto next = find_vertex(source, cap.vertices[(from_index + 2U) % cap.vertices.size()])->position;
+    const auto from = find_vertex(source, cap_use.from)->position;
+    const auto to = find_vertex(source, cap_use.to)->position;
+    const double half_spoke_limit = 0.5 * std::min(
+        extrusion_length(extrusion_vector(previous) - extrusion_vector(from)),
+        extrusion_length(extrusion_vector(next) - extrusion_vector(to)));
+    const double depth = requested_width > kEpsilon ? requested_width
+        : extrusion_length(extrusion_vector(average_delta));
+    return std::min(depth, half_spoke_limit);
+}
+
+// Each original face owns its outer region and the strips around its moving
+// ridge runs. Shared spoke cuts keep neighboring faces welded at the endpoints.
+bool prepare_closed_edge_extrusion(Document& candidate, const Document& source,
+    const std::set<ExtrusionEdgeKey>& ridges, const std::set<ElementId>& moving,
+    const ExtrusionEdgeUses& edge_uses, const std::map<ElementId, double>& support_widths)
+{
+    std::map<ExtrusionEdgeKey, ElementId> supports;
+    std::vector<EdgeNormalModeAssignment> normal_modes;
+    for (const auto& [edge, uses] : edge_uses) {
+        static_cast<void>(uses);
+        if (ridges.contains(edge) ||
+            (!moving.contains(edge.first) && !moving.contains(edge.second))) {
             continue;
         }
-        if (append_closed_edge_ledge_extrusion_with_copied_vertices(
-            document,
-            edge,
-            source_entry->second,
-            copied_vertices,
-            copy_vertex,
-            closed_edge_ledge_size,
-            selected_edges)) {
-            changed = true;
+        const ExtrudeVector first = extrusion_vector(find_vertex(source, edge.first)->position);
+        const ExtrudeVector second = extrusion_vector(find_vertex(source, edge.second)->position);
+        const double distance = extrusion_length(second - first);
+        constexpr double kMinimumSupportSpoke = 0.000001;
+        constexpr double kMaximumSupportFraction = 0.9999997615814208984375;
+        if (distance <= kMinimumSupportSpoke ||
+            (moving.contains(edge.first) && moving.contains(edge.second) &&
+                support_widths.at(edge.first) + support_widths.at(edge.second) >= distance)) {
+            return false;
+        }
+        std::vector<ElementId> split_loop{edge.first};
+        for (const auto& [apex, neighbor] :
+            {ExtrusionEdgeKey{edge.first, edge.second}, ExtrusionEdgeKey{edge.second, edge.first}}) {
+            if (!moving.contains(apex)) {
+                continue;
+            }
+            const double fraction = std::min(support_widths.at(apex) / distance, kMaximumSupportFraction);
+            const ExtrudeVector origin = extrusion_vector(find_vertex(source, apex)->position);
+            const ExtrudeVector endpoint = extrusion_vector(find_vertex(source, neighbor)->position);
+            const ElementId support = append_edge_extrusion_vertex(candidate,
+                extrusion_storage_vector(origin + (endpoint - origin) * fraction));
+            if (support == kInvalidElementId) {
+                return false;
+            }
+            supports.emplace(ExtrusionEdgeKey{apex, neighbor}, support);
+            split_loop.push_back(support);
+        }
+        split_loop.push_back(edge.second);
+        const auto mode = edge_normal_mode(source, make_edge(edge.first, edge.second));
+        for (std::size_t index = 1; index < split_loop.size(); ++index) {
+            normal_modes.push_back({make_edge(split_loop[index - 1U], split_loop[index]), mode});
         }
     }
 
-    for (const Edge& edge : open_edges) {
-        const auto source_entry = sources_by_edge.find({ edge.a, edge.b });
-        if (source_entry == sources_by_edge.end() || source_entry->second.faces.empty()) {
-            continue;
-        }
-
-        const EdgeExtrudeFaceSource& source = source_entry->second.faces.front();
-
-        const ElementId from_id = source.oriented_edge.first;
-        const ElementId to_id = source.oriented_edge.second;
-        const ElementId copied_from = copy_vertex(copied_vertices, from_id);
-        const ElementId copied_to = copy_vertex(copied_vertices, to_id);
-        if (copied_from == kInvalidElementId ||
-            copied_to == kInvalidElementId || copied_from == copied_to) {
-          continue;
-        }
-
-        std::array side {
-            to_id,
-            from_id,
-            copied_from,
-            copied_to,
+    candidate.faces.clear();
+    for (const Face& donor : source.faces) {
+        const std::size_t count = donor.vertices.size();
+        const auto ridge_edge = [&](std::size_t index) {
+            return ridges.contains(extrusion_edge_key(
+                donor.vertices[index], donor.vertices[(index + 1U) % count]));
         };
-
-        [[maybe_unused]] const ElementId side_face_id = add_face_with_texture_transform(
-            document, side, source.material_slot, source.texture_transform);
-        add_unique_edge(selected_edges, make_edge(copied_from, copied_to));
-        changed = true;
-    }
-
-    if (!changed || selected_edges.empty()) {
-        return OperationResult::failure(std::string(unchanged_message));
-    }
-
-    std::vector<EdgeNormalModeCopy> normal_mode_copies;
-    for (const Edge source_edge : edges) {
-        const auto copied_a = copied_vertices.find(source_edge.a);
-        const auto copied_b = copied_vertices.find(source_edge.b);
-        if (copied_a == copied_vertices.end() ||
-            copied_b == copied_vertices.end()) {
+        if (std::ranges::none_of(donor.vertices, [&](ElementId id) { return moving.contains(id); })) {
+            candidate.faces.push_back(donor);
             continue;
         }
-        normal_mode_copies.push_back({
-            source_edge,
-            make_edge(copied_a->second, copied_b->second),
-        });
+        std::size_t start = 0;
+        while (start < count && ridge_edge((start + count - 1U) % count)) {
+            ++start;
+        }
+        if (start == count) {
+            candidate.faces.push_back(donor);
+            continue;
+        }
+        Face outside = donor;
+        outside.vertices.clear();
+        std::size_t processed = 0;
+        while (processed < count) {
+            const std::size_t index = (start + processed) % count;
+            const ElementId vertex = donor.vertices[index];
+            if (!moving.contains(vertex)) {
+                outside.vertices.push_back(vertex);
+                ++processed;
+                continue;
+            }
+            const ElementId previous = donor.vertices[(index + count - 1U) % count];
+            const ElementId left = supports.at({vertex, previous});
+            std::vector<ElementId> strip{left, vertex};
+            std::size_t last = index;
+            ++processed;
+            while (ridge_edge(last)) {
+                last = (last + 1U) % count;
+                strip.push_back(donor.vertices[last]);
+                ++processed;
+            }
+            const ElementId next = donor.vertices[(last + 1U) % count];
+            const ElementId right = supports.at({donor.vertices[last], next});
+            strip.push_back(right);
+            outside.vertices.push_back(left);
+            outside.vertices.push_back(right);
+            if (!append_edge_extrusion_face(candidate, source, donor, std::move(strip))) {
+                return false;
+            }
+        }
+        if (outside.vertices.size() < 3U ||
+            !preserve_face_uvs(source, donor, candidate, outside)) {
+            return false;
+        }
+        candidate.faces.push_back(std::move(outside));
     }
-    static_cast<void>(
-        copy_edge_normal_modes(document, document, normal_mode_copies));
+    prune_normal_edge_states(candidate);
+    static_cast<void>(set_edge_normal_modes(candidate, normal_modes));
+    return true;
+}
 
-    prune_invalid_faces(document);
-    prune_normal_edge_states(document);
-    selection.clear();
-    selection.mode = SelectionMode::Edge;
-    selection.edges = std::move(selected_edges);
-    activate_last_selection(selection);
-    return { true, {} };
+OperationResult extrude_selected_edges_through_transform(Document& document,
+    Selection& selection, const Transform3& transform, quader::QVec3 pivot,
+    float extrusion_grid_size, EdgeExtrusionSupportPolicy support_policy = EdgeExtrusionSupportPolicy::Grid)
+{
+    if (selection.edges.empty()) {
+        return OperationResult::failure("Select one or more edges to extrude.");
+    }
+    if (!std::isfinite(extrusion_grid_size) ||
+        (support_policy != EdgeExtrusionSupportPolicy::Displacement && extrusion_grid_size <= 0.0F) ||
+        !extrusion_finite(extrusion_vector(pivot)) ||
+        !extrusion_finite(extrusion_vector(transform.origin)) ||
+        !extrusion_finite(extrusion_vector(transform.x_axis)) ||
+        !extrusion_finite(extrusion_vector(transform.y_axis)) ||
+        !extrusion_finite(extrusion_vector(transform.z_axis))) {
+        return OperationResult::failure("Edge extrusion requires a finite transform and positive grid size.");
+    }
+    if (!validate_polygon_document(document, PolygonDocumentValidationPolicy::AuthoredTopology).ok() ||
+        std::ranges::any_of(document.faces, [](const Face& face) { return face.id == kInvalidElementId; })) {
+        return OperationResult::failure("Edge extrusion requires valid authored topology.");
+    }
+    ExtrusionEdgeUses edge_uses;
+    if (!collect_extrusion_edge_uses(document, edge_uses)) {
+        return OperationResult::failure("Edge extrusion requires consistently wound manifold edges.");
+    }
+    std::set<ExtrusionEdgeKey> ridges;
+    std::set<ElementId> moving;
+    std::vector<Edge> edges;
+    std::vector<ExtrusionEdgeUse> boundary;
+    for (const Edge selected : selection.edges) {
+        const auto key = extrusion_edge_key(selected.a, selected.b);
+        const auto found = edge_uses.find(key);
+        if (found == edge_uses.end()) {
+            return OperationResult::failure("A selected extrusion edge is missing.");
+        }
+        const Edge edge = make_edge(selected.a, selected.b);
+        if (std::ranges::find(edges, edge) != edges.end()) {
+            continue;
+        }
+        edges.push_back(edge);
+        if (found->second.size() == 2U) {
+            ridges.insert(key);
+            moving.insert(edge.a);
+            moving.insert(edge.b);
+        } else {
+            boundary.push_back(found->second.front());
+        }
+    }
+    if (std::ranges::any_of(boundary, [&](const ExtrusionEdgeUse& edge) {
+            return moving.contains(edge.from) || moving.contains(edge.to);
+        })) {
+        return OperationResult::failure("Boundary and closed extrusion edges cannot share an endpoint.");
+    }
+    const Edge active = make_edge(selection.active_edge.a, selection.active_edge.b);
+    if (selection.has_active && (selection.active_kind != ElementKind::Edge ||
+            std::ranges::find(edges, active) == edges.end())) {
+        return OperationResult::failure("The active extrusion edge is not selected.");
+    }
+    if (transform.origin.x == 0.0F && transform.origin.y == 0.0F && transform.origin.z == 0.0F &&
+        transform.x_axis.x == 1.0F && transform.x_axis.y == 0.0F && transform.x_axis.z == 0.0F &&
+        transform.y_axis.x == 0.0F && transform.y_axis.y == 1.0F && transform.y_axis.z == 0.0F &&
+        transform.z_axis.x == 0.0F && transform.z_axis.y == 0.0F && transform.z_axis.z == 1.0F) {
+        return {false, {}};
+    }
+
+    std::map<ElementId, double> support_widths;
+    for (const auto& ridge : ridges) {
+        const double width = support_policy == EdgeExtrusionSupportPolicy::Grid
+            ? static_cast<double>(extrusion_grid_size) * 0.25
+            : closed_edge_legacy_support_width(document, edge_uses.at(ridge), transform, pivot,
+                support_policy == EdgeExtrusionSupportPolicy::ExplicitLedge ? extrusion_grid_size : 0.0);
+        if (!std::isfinite(width) ||
+            (support_policy != EdgeExtrusionSupportPolicy::Grid && width <= kEpsilon)) {
+            return OperationResult::failure("Closed edge extrusion requires a non-zero supporting width.");
+        }
+        for (const ElementId endpoint : {ridge.first, ridge.second}) {
+            const auto [entry, inserted] = support_widths.emplace(endpoint, width);
+            if (!inserted) {
+                // One welded junction uses the most restrictive incident support.
+                entry->second = std::min(entry->second, width);
+            }
+        }
+    }
+    Document candidate = document;
+    if (!ridges.empty() && !prepare_closed_edge_extrusion(candidate, document,
+            ridges, moving, edge_uses, support_widths)) {
+        return OperationResult::failure("Closed edge extrusion support cuts overlap or cannot be constructed.");
+    }
+    std::map<ElementId, ElementId> copied;
+    for (const ExtrusionEdgeUse& edge : boundary) {
+        for (const ElementId vertex : {edge.from, edge.to}) {
+            if (!copied.contains(vertex)) {
+                const ElementId copy = append_edge_extrusion_vertex(candidate,
+                    edge_extrusion_position(transform, pivot, find_vertex(document, vertex)->position));
+                if (copy == kInvalidElementId) {
+                    return OperationResult::failure("Extrusion vertex identity allocation failed.");
+                }
+                copied.emplace(vertex, copy);
+            }
+        }
+        // Boundary extrusion retains its existing offset-edge and side-wall contract.
+        const Face& donor = *find_face(document, edge.face);
+        const std::array side{edge.to, edge.from, copied.at(edge.from), copied.at(edge.to)};
+        if (candidate.next_face_id == kInvalidElementId ||
+            candidate.next_face_id == std::numeric_limits<ElementId>::max() ||
+            add_face_with_texture_transform(candidate, side, donor.material_slot, donor.texture_transform) == kInvalidElementId) {
+            return OperationResult::failure("Extrusion face identity allocation failed.");
+        }
+    }
+    for (const ElementId vertex : moving) {
+        Vertex* target = find_vertex(candidate, vertex);
+        target->position = edge_extrusion_position(transform, pivot, target->position);
+        if (!extrusion_finite(extrusion_vector(target->position))) {
+            return OperationResult::failure("Extrusion produced a non-finite vertex.");
+        }
+    }
+    std::vector<EdgeNormalModeCopy> normal_copies;
+    for (const ExtrusionEdgeUse& edge : boundary) {
+        normal_copies.push_back({make_edge(edge.from, edge.to), make_edge(copied.at(edge.from), copied.at(edge.to))});
+    }
+    static_cast<void>(copy_edge_normal_modes(document, candidate, normal_copies));
+    ExtrusionEdgeUses candidate_uses;
+    if (!validate_polygon_document(candidate, PolygonDocumentValidationPolicy::AuthoredTopology).ok() ||
+        !collect_extrusion_edge_uses(candidate, candidate_uses)) {
+        return OperationResult::failure("Extrusion could not preserve valid manifold topology.");
+    }
+    Selection result_selection;
+    result_selection.mode = SelectionMode::Edge;
+    for (const Edge edge : edges) {
+        if (ridges.contains({edge.a, edge.b})) {
+            result_selection.edges.push_back(edge);
+        }
+    }
+    for (const ExtrusionEdgeUse& edge : boundary) {
+        result_selection.edges.push_back(make_edge(copied.at(edge.from), copied.at(edge.to)));
+    }
+    activate_last_selection(result_selection);
+    OperationResult result = component_extrusion_receipt(document, candidate);
+    document = std::move(candidate);
+    selection = std::move(result_selection);
+    return result;
 }
 
 } // namespace
@@ -1442,10 +1457,20 @@ OperationResult extrude_selected_elements_impl(Document& document, Selection& se
           closed_edge_ledge_size == 0.0F ? 1.0F : closed_edge_ledge_size);
     }
 
+
+
     if (length(offset) <= kEpsilon) {
       return {false, "Extrude distance must be non-zero."};
     }
 
+    if (selection.mode == SelectionMode::Edge) {
+      Transform3 transform;
+      transform.origin = offset;
+      return extrude_selected_edges_through_transform(document, selection, transform, {},
+          closed_edge_ledge_size, closed_edge_ledge_size == 0.0F
+              ? EdgeExtrusionSupportPolicy::Displacement : EdgeExtrusionSupportPolicy::ExplicitLedge);
+    }
+
     if (selection.mode == SelectionMode::Face) {
       return extrude_selected_faces_with_copied_vertices(
           document, selection,
@@ -1460,28 +1485,17 @@ OperationResult extrude_selected_elements_impl(Document& document, Selection& se
           "No selected faces were found.", "No selected faces were extruded.");
     }
 
-    if (selection.mode == SelectionMode::Edge) {
-      return extrude_selected_edges_with_copied_vertices(
-          document, selection,
-          [&document, offset](std::map<ElementId, ElementId> &copied_vertices,
-                              ElementId source_id) {
-            return copied_vertex_with_offset(document, copied_vertices,
-                                             source_id, offset);
-          },
-          closed_edge_ledge_size, "Select one or more edges to extrude.",
-          "Select one or more valid edges to extrude.",
-          "No selected edges were extruded.");
-    }
+
 
     return OperationResult::failure("Extrude needs a face or edge selection.");
 }
 
-OperationResult transform_extrude_selected_elements_impl(Document& document, Selection& selection, const Transform3& transform, quader::QVec3 pivot, float vertex_extrude_size)
+OperationResult transform_extrude_selected_elements_impl(Document& document, Selection& selection, const Transform3& transform, quader::QVec3 pivot, float extrusion_grid_size)
 {
     QDR_PROFILE_SCOPE("qdr_document.transform_extrude_selected_elements_impl");
     if (selection.mode == SelectionMode::Vertex) {
       return extrude_selected_vertices_impl(document, selection, transform, pivot,
-                                             vertex_extrude_size);
+                                             extrusion_grid_size);
     }
     if (selection.mode == SelectionMode::Face) {
       return extrude_selected_faces_with_copied_vertices(
@@ -1499,17 +1513,7 @@ OperationResult transform_extrude_selected_elements_impl(Document& document, Sel
     }
 
     if (selection.mode == SelectionMode::Edge) {
-      return extrude_selected_edges_with_copied_vertices(
-          document, selection,
-          [&document, &transform,
-           pivot](std::map<ElementId, ElementId> &copied_vertices,
-                  ElementId source_id) {
-            return copied_vertex_with_transform(document, copied_vertices,
-                                                source_id, transform, pivot);
-          },
-          0.0F, "Select one or more edges to extrude.",
-          "Select one or more valid edges to extrude.",
-          "No selected edges were extruded.");
+      return extrude_selected_edges_through_transform(document, selection, transform, pivot, extrusion_grid_size);
     }
 
     return OperationResult::failure("Extrude needs a face or edge selection.");
@@ -1534,17 +1538,8 @@ OperationResult inset_selected_elements_impl(Document& document, Selection& sele
     }
 
     if (selection.mode == SelectionMode::Edge) {
-      return extrude_selected_edges_with_copied_vertices(
-          document, selection,
-          [&document, &transform,
-           pivot](std::map<ElementId, ElementId> &copied_vertices,
-                  ElementId source_id) {
-            return copied_vertex_with_transform(document, copied_vertices,
-                                                source_id, transform, pivot);
-          },
-          0.0F, "Select one or more edges to inset.",
-          "Select one or more valid edges to inset.",
-          "No selected edges were inset.");
+      return extrude_selected_edges_through_transform(document, selection, transform, pivot, 0.0F,
+          EdgeExtrusionSupportPolicy::Displacement);
     }
 
     return OperationResult::failure("Inset needs a face or edge selection.");

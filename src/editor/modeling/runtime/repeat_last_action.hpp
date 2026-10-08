@@ -47,8 +47,8 @@ struct RepeatTransformAction {
   bool move_auto_merge_vertices = false;
   /// Discrete transforms replay through their scene-aware history owner.
   bool nudge = false;
-  /// Raw grid captured by a discrete extrusion, independent of its move step.
-  double extrusion_grid_size = 1.0;
+  /// Accepted raw extrusion grid; zero preserves legacy vector-extrusion replay.
+  double extrusion_grid_size = 0.0;
   quader::QVec3 pivot;
   quader::QVec3 move_delta;
   double rotate_angle_degrees = 0.0;

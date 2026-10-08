@@ -345,7 +345,7 @@ extrude_selected_elements(Document &document, Selection &selection,
 transform_extrude_selected_elements(Document &document, Selection &selection,
                                     const Transform3 &transform,
                                     quader::QVec3 pivot,
-                                    float vertex_extrude_size = 1.0F);
+                                    float extrusion_grid_size = 1.0F);
 [[nodiscard]] OperationResult
 inset_selected_elements(Document &document, Selection &selection,
                         const Transform3 &transform, quader::QVec3 pivot);

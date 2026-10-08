@@ -1213,7 +1213,8 @@ public:
     return present_component_sample(ViewportOverlaySelectionContext::Edge, scale);
   }
 
-  bool create_component_transform_sample(ViewportOverlaySelectionContext context) {
+  bool create_component_transform_sample(ViewportOverlaySelectionContext context,
+                                         bool single_vertex = false) {
     auto &editor = array_editor();
     quader_poly::Document document;
     const std::array front{
@@ -1238,6 +1239,7 @@ public:
       mode = QuaderSelectionMode::Vertex;
       selection.kind = QuaderComponentKind::Vertex;
       selection.vertices.assign(front.begin(), front.end());
+      if (single_vertex) selection.vertices.resize(1u);
     } else if (context == ViewportOverlaySelectionContext::Edge) {
       mode = QuaderSelectionMode::Edge;
       selection.kind = QuaderComponentKind::Edge;
@@ -1260,6 +1262,42 @@ public:
   bool present_component_transform_sample(ViewportOverlaySelectionContext context,
                                           const ViewportSettings &settings) {
     return present_component_sample(context, 1.0f, settings, true);
+  }
+
+  bool create_closed_edge_extrusion_sample(bool below) {
+    auto &editor = array_editor();
+    auto document = quader_poly::make_cube({});
+    std::array<QuaderElementId, 2> endpoints{};
+    for (const auto &vertex : document.vertices) {
+      if (vertex.position.x == 1.0f && vertex.position.y == -1.0f) {
+        endpoints[vertex.position.z < 0.0f ? 0u : 1u] = vertex.id;
+      }
+    }
+    if (endpoints[0] == 0u || endpoints[1] == 0u) return false;
+    if (below) {
+      // This cyan boundary lies behind the future underside and in front of the cube.
+      const std::array witness{
+          quader_poly::add_vertex(document, {1.25f, -5.0f / 6.0f, -0.35f}),
+          quader_poly::add_vertex(document, {1.25f, -0.55f, -0.35f}),
+          quader_poly::add_vertex(document, {1.25f, -0.55f, 0.35f}),
+          quader_poly::add_vertex(document, {1.25f, -5.0f / 6.0f, 0.35f})};
+      (void)quader_poly::add_face(document, witness);
+    }
+    const auto object = editor.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+        {.name = "Closed cube edge extrusion pixel regression"});
+    if (!object.ok() || !enter_selection_context(editor, QuaderSelectionMode::Edge).ok() ||
+        !editor.selection().select_components({
+            .object = object.value(), .kind = QuaderComponentKind::Edge,
+            .edges = {{endpoints[0], endpoints[1]}}}).ok() ||
+        !camera_.restore_perspective_pose({
+            .eye = {6.0f, below ? -4.0f : 4.0f, 0.0f},
+            .target = {0.5f, -0.25f, 0.0f}, .up = {0.0f, 1.0f, 0.0f}})) {
+      return false;
+    }
+    view_.update_camera(camera_);
+    view_.update_ground_grid(camera_, 1.0f, ViewportSettings::defaults(), false);
+    return true;
   }
 
   OverlayRenderableCacheStats component_overlay_stats() const {
@@ -5803,6 +5841,209 @@ TEST(SelectionOverlayRuntimeTests,
     ASSERT_TRUE(present());
     EXPECT_EQ(topology_size(), second_size);
     expect_extruded(capture("redo"), 2.0f);
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanClosedEdgeNudgeKeepsBothRidgeSurfacesVisibleThroughHistory) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-closed-edge-nudge-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  const QString directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (!directory.isEmpty()) ASSERT_TRUE(QDir().mkpath(directory));
+  for (const bool below : {false, true}) {
+    SCOPED_TRACE(below ? "below" : "above");
+    SelectionOverlayRuntimeHarness harness;
+    ASSERT_TRUE(harness.initialize(0.0f, false));
+    ASSERT_TRUE(harness.create_closed_edge_extrusion_sample(below));
+    auto &editor = harness.workflow_editor();
+    ASSERT_TRUE(editor.viewports().focus_pane(ViewportPaneId::Perspective).ok());
+    ASSERT_TRUE(editor.viewports().set_view(ViewportPaneId::Perspective, ViewportView::Front).ok());
+    ASSERT_TRUE(editor.viewports().set_transform_space(QuaderTransformSpace::Global).ok());
+    ASSERT_TRUE(editor.viewports().set_grid_preset(6).ok());
+    ASSERT_TRUE(editor.viewports().set_control(QuaderViewportControl::SnappingEnabled, false).ok());
+    const auto present = [&] {
+      return harness.present_component_transform_sample(
+          ViewportOverlaySelectionContext::Edge, ViewportSettings::defaults());
+    };
+    const auto capture = [&](const char *phase) {
+      const QImage image = harness.capture();
+      EXPECT_FALSE(image.isNull());
+      if (!directory.isEmpty()) {
+        EXPECT_TRUE(image.save(QDir(directory).filePath(
+            QStringLiteral("closed_edge_%1_%2.png")
+                .arg(below ? QStringLiteral("below") : QStringLiteral("above"),
+                     QString::fromLatin1(phase)))));
+      }
+      return image;
+    };
+    const auto expect_first_ridge = [&](const QImage &image) {
+      EXPECT_GE(yellow_pixels(image, harness.cutting_preview_pixel({2.0f, -1.0f, 0.0f})), 3);
+      // Both sides of the ridge must contain surface pixels away from wire overlays.
+      const auto probe = harness.cutting_preview_pixel({1.5f, below ? -1.0f : -0.875f, 0.0f});
+      for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+          const auto pixel = image.pixelColor(static_cast<int>(probe.x) + dx,
+                                             static_cast<int>(probe.y) + dy);
+          EXPECT_GT(std::min({pixel.red(), pixel.green(), pixel.blue()}), 100);
+        }
+      }
+      if (below) {
+        EXPECT_EQ(cyan_pixels(image, harness.cutting_preview_pixel(
+            {1.25f, -5.0f / 6.0f, 0.0f})), 0)
+            << "The ridge underside must occlude the boundary in front of the original cube.";
+      }
+    };
+    ASSERT_TRUE(present());
+    const auto baseline = capture("baseline");
+    if (below) {
+      EXPECT_GE(cyan_pixels(baseline, harness.cutting_preview_pixel(
+          {1.25f, -5.0f / 6.0f, 0.0f})), 3);
+    }
+    const auto nudged = editor.commands().execute(
+        quader_command::kViewportNudgeDuplicateOrExtrudeMoveLeft);
+    ASSERT_TRUE(nudged.ok()) << nudged.error_message();
+    ASSERT_TRUE(nudged.changed());
+    ASSERT_TRUE(present());
+    const auto first = capture("extrude");
+    expect_first_ridge(first);
+    const auto uploads = harness.component_overlay_stats().uploads;
+    ASSERT_TRUE(present());
+    EXPECT_EQ(harness.component_overlay_stats().uploads.shared_position_upload_count,
+              uploads.shared_position_upload_count);
+    EXPECT_EQ(harness.capture(), first);
+    const auto repeated = editor.commands().execute(quader_command::kEditRepeatLastAction);
+    ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+    ASSERT_TRUE(repeated.changed());
+    ASSERT_TRUE(present());
+    EXPECT_GE(yellow_pixels(capture("repeat"),
+                         harness.cutting_preview_pixel({3.0f, -1.0f, 0.0f})), 3);
+    ASSERT_TRUE(editor.history().undo().ok());
+    ASSERT_TRUE(present());
+    expect_first_ridge(capture("undo_repeat"));
+    ASSERT_TRUE(editor.history().undo().ok());
+    ASSERT_TRUE(present());
+    EXPECT_EQ(capture("undo_extrude"), baseline);
+    ASSERT_TRUE(editor.history().redo().ok());
+    ASSERT_TRUE(present());
+    expect_first_ridge(capture("redo"));
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanVertexDragExtrusionPublishesPreviewCancelCommitAndUndo) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") != QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-vertex-extrude-drag-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  const QString directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (!directory.isEmpty()) ASSERT_TRUE(QDir().mkpath(directory));
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0f, false));
+  ASSERT_TRUE(harness.create_component_transform_sample(ViewportOverlaySelectionContext::Vertex, true));
+  auto &editor = harness.workflow_editor();
+  auto &modeling = editor.modeling();
+  const auto present = [&] {
+    return harness.present_component_transform_sample(
+        ViewportOverlaySelectionContext::Vertex, ViewportSettings::defaults());
+  };
+  const auto capture = [&](const char *phase) {
+    const QImage image = harness.capture();
+    EXPECT_FALSE(image.isNull());
+    if (!directory.isEmpty()) {
+      EXPECT_TRUE(image.save(QDir(directory).filePath(
+          QStringLiteral("vertex_drag_extrude_%1.png").arg(QString::fromLatin1(phase)))));
+    }
+    return image;
+  };
+  const QuaderTransformDragBeginRequest begin{
+      .tool = QuaderTransformTool::Move, .operation = QuaderTransformOperation::Extrude,
+      .axis = QuaderTransformAxis::Z, .pivot = {-1.2f, -0.6f, 0.0f},
+      .screen_position = {100, 100}, .screen_pivot = {100, 100}, .screen_tip = {120, 100},
+      .has_world_direction = true, .world_direction = {0, 0, 1},
+      .ray = {.origin = {5, -0.6f, 0}, .direction = {-1, 0, 0}},
+      .camera = {.orthographic = true, .origin = {5, 0, 0},
+                 .x_axis = {0, 0, 1}, .y_axis = {0, 1, 0}, .z_axis = {-1, 0, 0},
+                 .viewport_size = {800, 600}, .orthographic_size = 8},
+      .grid_size = 0.25, .vertex_snap_radius = 0, .grid_snap_enabled = false};
+  const auto move = [&] {
+    return modeling.update_transform_drag({
+        .screen_position = {200, 100},
+        .ray = {.origin = {5, -0.6f, 1}, .direction = {-1, 0, 0}},
+        .camera = begin.camera, .grid_size = begin.grid_size,
+        .vertex_snap_radius = 0, .grid_snap_enabled = false});
+  };
+  const auto expect_extruded = [&](const QImage &image) {
+    const auto tip = harness.cutting_preview_pixel({-1.2f, -0.6f, 1.0f});
+    int selected_tip_pixels = 0;
+    for (int dy = -3; dy <= 3; ++dy) {
+      for (int dx = -3; dx <= 3; ++dx) {
+        const auto pixel = image.pixelColor(static_cast<int>(tip.x) + dx,
+                                           static_cast<int>(tip.y) + dy);
+        selected_tip_pixels += pixel.red() > 160 && pixel.green() > 60 &&
+            pixel.red() > pixel.green() + 70 && pixel.green() > pixel.blue() + 35 ? 1 : 0;
+      }
+    }
+    EXPECT_GE(selected_tip_pixels, 3) << "The single selected vertex uses its orange point style.";
+    EXPECT_GE(cyan_pixels(image, harness.cutting_preview_pixel({-1.2f, -0.6f, 0.0f})), 3)
+        << "Extrusion keeps its original boundary vertex; an ordinary move does not.";
+    const auto surface_probe = harness.cutting_preview_pixel({-1.17f, -0.54f, 0.9f});
+    for (int dy = -1; dy <= 1; ++dy) {
+      for (int dx = -1; dx <= 1; ++dx) {
+        const auto pixel = image.pixelColor(static_cast<int>(surface_probe.x) + dx,
+                                           static_cast<int>(surface_probe.y) + dy);
+        EXPECT_GT(std::min({pixel.red(), pixel.green(), pixel.blue()}), 100)
+            << "The new surface must render outside the original quad's silhouette.";
+      }
+    }
+  };
+  ASSERT_TRUE(present());
+  const auto baseline = capture("baseline");
+  const auto surface_probe = harness.cutting_preview_pixel({-1.17f, -0.54f, 0.9f});
+  EXPECT_LT(baseline.pixelColor(static_cast<int>(surface_probe.x),
+                               static_cast<int>(surface_probe.y)).red(), 70);
+  const auto undo_count = harness.undo_count();
+  for (const bool commit : {false, true}) {
+    const auto started = modeling.begin_transform_drag(begin);
+    ASSERT_TRUE(started.ok()) << started.error_message();
+    ASSERT_EQ(started.value().operation, QuaderTransformOperation::Extrude);
+    const auto moved = move();
+    ASSERT_TRUE(moved.ok()) << moved.error_message();
+    EXPECT_NEAR(moved.value().move_delta.z, 1.0f, 1.0e-5f);
+    ASSERT_TRUE(present());
+    const auto preview = capture(commit ? "accept_preview" : "cancel_preview");
+    expect_extruded(preview);
+    const auto uploads = harness.component_overlay_stats().uploads;
+    ASSERT_TRUE(present());
+    EXPECT_EQ(harness.component_overlay_stats().uploads.shared_position_upload_count,
+              uploads.shared_position_upload_count);
+    EXPECT_EQ(harness.capture(), preview);
+    if (!commit) {
+      ASSERT_TRUE(modeling.cancel_transform_drag().ok());
+      ASSERT_TRUE(present());
+      EXPECT_EQ(capture("cancel"), baseline);
+      EXPECT_EQ(harness.undo_count(), undo_count);
+    } else {
+      ASSERT_TRUE(modeling.commit_transform_drag().ok());
+      ASSERT_TRUE(present());
+      expect_extruded(capture("commit"));
+      EXPECT_EQ(harness.undo_count(), undo_count + 1u);
+      ASSERT_TRUE(editor.history().undo().ok());
+      ASSERT_TRUE(present());
+      EXPECT_EQ(capture("undo"), baseline);
+      ASSERT_TRUE(editor.history().redo().ok());
+      ASSERT_TRUE(present());
+      expect_extruded(capture("redo"));
+    }
   }
 }
 

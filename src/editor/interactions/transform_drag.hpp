@@ -119,6 +119,8 @@ struct TransformDragState {
         quader::QVec3 pivot;
 	bool scene_transform_preview_eligible = false;
         bool move_auto_merge_vertices = false;
+        /// Raw grid of the accepted vertex/edge extrusion; zero keeps legacy replay.
+        double extrusion_grid_size = 0.0;
 	TransformSnapTarget snap_target;
 	MoveToolState move;
 	RotateToolState rotate;

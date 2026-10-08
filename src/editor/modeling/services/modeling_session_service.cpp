@@ -6639,8 +6639,12 @@ public:
       return {true, duplicated || transformed.changed, {}};
     }
 
+    const bool captured_component_extrusion_grid = action.extrusion_grid_size > 0.0 &&
+        (current_mode == ModelingSelectionMode::Vertex ||
+         current_mode == ModelingSelectionMode::Edge);
     if (action.tool == quader_editor_core::ViewportInteractionTool::Move &&
-        action.operation == quader_editor_core::TransformDragOperation::Extrude) {
+        action.operation == quader_editor_core::TransformDragOperation::Extrude &&
+        !captured_component_extrusion_grid) {
       const ModelingCommandResult begun =
           begin_transform_preview(action.duplicate_selected);
       if (!begun.ok) {
@@ -6706,7 +6710,8 @@ public:
     replay_drag.scale.preview_scale = action.scale;
 
     const ModelingCommandResult update =
-        update_portable_transform_preview(replay_drag, 0.0);
+        update_portable_transform_preview(
+            replay_drag, captured_component_extrusion_grid ? action.extrusion_grid_size : 0.0);
     if (!update.ok) {
       (void)cancel_transform_preview();
       clear_transform_drag_caches();
@@ -11516,16 +11521,21 @@ private:
     QMat4 world_affine;
     ModelingSdkTransformPreviewKind kind =
         ModelingSdkTransformPreviewKind::Transform;
-    float closed_edge_ledge_size = 0.0F;
+    float extrusion_grid_size = 0.0F;
     if (drag.tool == quader_editor_core::ViewportInteractionTool::Move) {
       world_affine = world_translation_affine(
           from_runtime(drag.move.preview_delta));
       if (drag.operation ==
           quader_editor_core::TransformDragOperation::Extrude) {
-        kind = ModelingSdkTransformPreviewKind::ExtrudeOffset;
-        closed_edge_ledge_size =
-            static_cast<float>(selection_mode() == ModelingSelectionMode::Vertex
-                                   ? grid_size : std::max(grid_size, 0.0001));
+        // Native edge gestures use the grid-aware affine contract. The vector
+        // API keeps its existing explicit-width and displacement defaults.
+        kind = selection_mode() == ModelingSelectionMode::Edge
+            ? ModelingSdkTransformPreviewKind::TransformExtrude
+            : ModelingSdkTransformPreviewKind::ExtrudeOffset;
+        extrusion_grid_size = static_cast<float>(
+            selection_mode() == ModelingSelectionMode::Vertex ||
+                    selection_mode() == ModelingSelectionMode::Edge
+                ? grid_size : std::max(grid_size, 0.0001));
       }
     } else if (drag.tool ==
                quader_editor_core::ViewportInteractionTool::Rotate) {
@@ -11536,8 +11546,9 @@ private:
       if (drag.operation ==
           quader_editor_core::TransformDragOperation::Extrude) {
         kind = ModelingSdkTransformPreviewKind::TransformExtrude;
-        if (selection_mode() == ModelingSelectionMode::Vertex) {
-          closed_edge_ledge_size = static_cast<float>(grid_size);
+        if (selection_mode() == ModelingSelectionMode::Vertex ||
+            selection_mode() == ModelingSelectionMode::Edge) {
+          extrusion_grid_size = static_cast<float>(grid_size);
         }
       }
     } else if (drag.tool ==
@@ -11561,7 +11572,7 @@ private:
       return {.ok = false, .changed = false, .message = std::move(message)};
     }
     return sdk_projection_adapter_.update_object_transform_preview(
-        transform_drag_preview_transforms_, kind, closed_edge_ledge_size);
+        transform_drag_preview_transforms_, kind, extrusion_grid_size);
   }
 
   ModelingCommandResult commit_portable_translate_preview() override {
