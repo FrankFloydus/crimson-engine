@@ -2632,6 +2632,13 @@ TEST(QtCommandEventFilterTests,
   quader::QtCommandEventFilter filter(editor, {});
   application.installEventFilter(&filter);
 
+  ASSERT_TRUE(editor.commands().set_shortcut(
+      editor.commands().keybinding_target_id_for_selection_mode(
+          quader::QuaderSelectionMode::Object), "4").ok());
+  ASSERT_TRUE(editor.commands().set_shortcut(
+      editor.commands().keybinding_target_id_for_selection_mode(
+          quader::QuaderSelectionMode::Group), "5").ok());
+
   for (const auto mode : {quader::QuaderSelectionMode::Vertex,
                          quader::QuaderSelectionMode::Edge,
                          quader::QuaderSelectionMode::Face,

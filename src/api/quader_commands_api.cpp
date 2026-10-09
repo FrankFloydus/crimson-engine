@@ -2865,6 +2865,21 @@ void QuaderCommandsApi::Impl::register_commands() {
       quader_command::kSelectToggleBackfaceSelection.string(),
       kSelectionModeAny);
   register_command(
+      quader_command::kSelectToggleGroupSelection, "Toggle Group Selection",
+      [this] {
+        const QuaderSelectionMode mode = api_.query().selection().mode;
+        return api_.selection().set_mode(mode == QuaderSelectionMode::Group
+                                            ? QuaderSelectionMode::Object
+                                            : QuaderSelectionMode::Group);
+      },
+      "Shift+G", [this] {
+        return mode_.current() == QuaderEditorMode::Object &&
+               mode_.can_set(QuaderEditorMode::Object);
+      });
+  set_keybinding_selection_modes(
+      quader_command::kSelectToggleGroupSelection.string(),
+      kSelectionModeObject | kSelectionModeGroup);
+  register_command(
       quader_command::kSelectEdgeDirection, "Select Direction",
       [this] { return api_.selection().select_edge_direction(); }, {},
       [this] {
@@ -4024,12 +4039,8 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
   keybindings_.add_default_keybinding(
       viewport_selection_mode_target_id("face"), "3",
       selection_kind_keybinding_context("face"), 5);
-  keybindings_.add_default_keybinding(
-      viewport_selection_mode_target_id("object"), "4",
-      selection_kind_keybinding_context("object"), 5);
-  keybindings_.add_default_keybinding(
-      viewport_selection_mode_target_id("group"), "5",
-      selection_kind_keybinding_context("group"), 5);
+  // Explicit Object/Group targets remain bindable for existing overrides.
+  // Their defaults are unassigned; Group Selection now has its own toggle.
 
   const std::vector<ViewportGridShortcutBindingDescriptor> presets =
       viewport_grid_shortcut_binding_catalog();

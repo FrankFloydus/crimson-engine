@@ -209,6 +209,13 @@ Object/Edit Mode is a scene-owned context separate from selection kind. The rema
 command toggles it from a focused viewport; panel/text-field Tab traversal and Ctrl+Tab scene
 switching retain their owners. Vertex/Edge/Face selection commands require Edit Mode; Mesh/Group
 commands require Object Mode. Changing selection kind never implicitly enters or exits Edit.
+`select.toggle_group_selection` is the canonical Object Mode toggle, default Shift+G.
+It switches the existing selection owner between Object and Group: enabled uses the current
+group picking and hierarchy promotion; disabled restores ordinary object selection. The toolbar
+shows one checkable Groups icon in Object Mode and only Vertex/Edge/Face icons in Edit Mode.
+Object selection has no separate toolbar button. Exiting Edit Mode restores Object selection,
+so Groups is unchecked. Explicit Object/Group semantic selection targets remain remappable,
+but their former compiled 4/5 defaults are deliberately unassigned; preserve stored user overrides.
 When Object selection is empty, Edit entry may use the retained active mesh if it is eligible;
 selected objects take precedence, and a retained group does not expand. No eligible target leaves
 the mode unchanged without settling pending work or showing a disabled-command error.

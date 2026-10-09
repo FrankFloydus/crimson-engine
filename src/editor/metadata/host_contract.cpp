@@ -749,7 +749,7 @@ shortcut(std::string_view id, HostShortcutContext context, std::string_view key,
 
 std::span<const HostShortcutDescriptor> shortcut_descriptors()
 {
-  static const std::array<HostShortcutDescriptor, 40> kDescriptors{{
+  static const std::array<HostShortcutDescriptor, 38> kDescriptors{{
       shortcut("undo", HostShortcutContext::Global, "Z", true, false, false,
                HostShortcutTargetKind::EditorAction, "undo"),
       shortcut("redo_shift_z", HostShortcutContext::Global, "Z", true, false,
@@ -842,10 +842,6 @@ std::span<const HostShortcutDescriptor> shortcut_descriptors()
                false, false, HostShortcutTargetKind::SelectionMode, "edge"),
       shortcut("face_selection", HostShortcutContext::Viewport, "3", false,
                false, false, HostShortcutTargetKind::SelectionMode, "face"),
-      shortcut("object_selection", HostShortcutContext::Viewport, "4", false,
-               false, false, HostShortcutTargetKind::SelectionMode, "object"),
-      shortcut("group_selection", HostShortcutContext::Viewport, "5", false,
-               false, false, HostShortcutTargetKind::SelectionMode, "group"),
   }};
   return kDescriptors;
 }

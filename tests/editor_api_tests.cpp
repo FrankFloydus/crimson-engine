@@ -1119,11 +1119,14 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     EXPECT_EQ(editor.commands().shortcut_for(
                   editor.commands().keybinding_target_id_for_selection_mode(
                       quader::QuaderSelectionMode::Object)),
-              "4");
+              "");
     EXPECT_EQ(editor.commands().shortcut_for(
                   editor.commands().keybinding_target_id_for_selection_mode(
                       quader::QuaderSelectionMode::Group)),
-              "5");
+              "");
+    EXPECT_EQ(editor.commands().shortcut_for(
+                  quader::quader_command::kSelectToggleGroupSelection),
+              "Shift+G");
     for (int preset = 1; preset <= 10; ++preset) {
       const std::string target =
           editor.commands().keybinding_target_id_for_grid_preset(preset);
@@ -5125,6 +5128,10 @@ TEST(EditorApiTests, EditorPanelsResolveSelectionModesAndCustomGridPresets) {
   create_selected_box(editor, "Editor Panel Mode Target");
   const auto path = keybinding_test_path("editor-panel-mode-grid");
   ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  ASSERT_TRUE(editor.commands().set_shortcut(
+      quader::quader_viewport_selection_mode_target_id("object"), "4").ok());
+  ASSERT_TRUE(editor.commands().set_shortcut(
+      quader::quader_viewport_selection_mode_target_id("group"), "5").ok());
   for (bool outliner : {false, true}) {
     SCOPED_TRACE(outliner);
     const quader::QuaderViewportKeybindingContext context{
@@ -8283,6 +8290,11 @@ TEST(EditorApiTests, ViewportSelectionModeShortcutsResolveAsRouterIntents) {
     quader::QuaderEditorApi& editor = harness.editor;
     const quader::ViewportShortcutController controller;
     const auto object = create_selected_box(editor, "Selection kind shortcuts");
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+    ASSERT_TRUE(editor.commands().set_shortcut(
+        quader::quader_viewport_selection_mode_target_id("object"), "4").ok());
+    ASSERT_TRUE(editor.commands().set_shortcut(
+        quader::quader_viewport_selection_mode_target_id("group"), "5").ok());
 
     for (const ModeCase &mode : kCases) {
       SCOPED_TRACE(static_cast<int>(mode.viewport_mode));
@@ -8435,6 +8447,98 @@ TEST(EditorApiTests, EditorModeCommandsExposeScopedRemappableTransitions) {
   CommandTestHarness unassigned;
   ASSERT_TRUE(unassigned.editor.commands().set_keybinding_storage_path(path).ok());
   EXPECT_TRUE(unassigned.editor.commands().shortcut_for(kCommands[2]).empty());
+  std::filesystem::remove(path);
+}
+
+TEST(EditorApiTests, GroupSelectionToggleUsesObjectModeAndRejectsEditChanges) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto object = create_selected_box(editor, "Group toggle participant");
+  constexpr auto kToggle = quader::quader_command::kSelectToggleGroupSelection;
+  const auto descriptor = editor.commands().descriptor(kToggle);
+  ASSERT_TRUE(descriptor.has_value());
+  EXPECT_TRUE(descriptor->enabled);
+  EXPECT_TRUE(typed_command_ids().contains(std::string(kToggle.string())));
+  const auto chord = single_input_chord("Shift+G");
+  for (const auto expected : {quader::QuaderSelectionMode::Group,
+                              quader::QuaderSelectionMode::Object}) {
+    const auto dispatch = editor.commands().dispatch_viewport_input_binding(
+        chord, {}, true, false);
+    ASSERT_EQ(dispatch.kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::Command);
+    EXPECT_EQ(dispatch.command_id, kToggle.string());
+    const auto toggled = editor.commands().execute(dispatch.command_id);
+    ASSERT_TRUE(toggled.ok()) << toggled.error_message();
+    EXPECT_TRUE(toggled.changed());
+    EXPECT_EQ(editor.selection().summary().mode, expected);
+    EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Object);
+  }
+  EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+      chord, {}, true, true).kind,
+      quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+      chord, {}, true, false, {.navigation_active = true}).kind,
+      quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+
+  ASSERT_TRUE(editor.commands().execute(kToggle).ok());
+  ASSERT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Group);
+  enter_edit_mode_for_objects(editor, {object});
+  EXPECT_FALSE(editor.commands().descriptor(kToggle)->enabled);
+  const auto before = quader::test::capture_command_observable_state(editor);
+  const auto rejected = editor.commands().execute(kToggle);
+  EXPECT_FALSE(rejected.ok());
+  EXPECT_FALSE(rejected.changed());
+  EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+      chord, {}, true, false).kind,
+      quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  EXPECT_EQ(quader::test::capture_command_observable_state(editor), before);
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
+  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
+}
+
+TEST(EditorApiTests, GroupSelectionToggleKeepsLegacyOverridesAndUnassignments) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto path = keybinding_test_path("group-selection-toggle-bindings");
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+  constexpr auto kToggle = quader::quader_command::kSelectToggleGroupSelection;
+  const auto object_target =
+      quader::quader_viewport_selection_mode_target_id("object");
+  const auto group_target =
+      quader::quader_viewport_selection_mode_target_id("group");
+  EXPECT_TRUE(editor.commands().shortcut_for(object_target).empty());
+  EXPECT_TRUE(editor.commands().shortcut_for(group_target).empty());
+  for (const auto key : {"4", "5"}) {
+    EXPECT_EQ(editor.commands().dispatch_viewport_input_binding(
+        single_input_chord(key), {}, true, false).kind,
+        quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  }
+  ASSERT_TRUE(editor.commands().set_shortcut(object_target, "4").ok());
+  ASSERT_TRUE(editor.commands().set_shortcut(group_target, "5").ok());
+  ASSERT_TRUE(editor.commands().set_shortcut(kToggle, "Ctrl+K F19").ok());
+
+  CommandTestHarness reloaded;
+  auto &loaded = reloaded.editor;
+  ASSERT_TRUE(loaded.commands().set_keybinding_storage_path(path).ok());
+  EXPECT_EQ(loaded.commands().shortcut_for(kToggle), "Ctrl+K F19");
+  for (const auto &[key, mode] : {
+           std::pair{"4", quader::ViewportSelectionMode::Object},
+           std::pair{"5", quader::ViewportSelectionMode::Group}}) {
+    const auto dispatch = loaded.commands().dispatch_viewport_input_binding(
+        single_input_chord(key), {}, true, false);
+    ASSERT_EQ(dispatch.kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+    EXPECT_EQ(dispatch.shortcut.kind, quader::ViewportShortcutKind::SetSelectionMode);
+    EXPECT_EQ(dispatch.shortcut.selection_mode, mode);
+  }
+  ASSERT_TRUE(loaded.commands().remove_shortcut(group_target).ok());
+  ASSERT_TRUE(loaded.commands().remove_shortcut(kToggle).ok());
+  CommandTestHarness unassigned;
+  ASSERT_TRUE(unassigned.editor.commands().set_keybinding_storage_path(path).ok());
+  EXPECT_EQ(unassigned.editor.commands().shortcut_for(object_target), "4");
+  EXPECT_TRUE(unassigned.editor.commands().shortcut_for(group_target).empty());
+  EXPECT_TRUE(unassigned.editor.commands().shortcut_for(kToggle).empty());
   std::filesystem::remove(path);
 }
 
@@ -15969,7 +16073,10 @@ TEST(EditorApiTests, GroupModeBoxSelectsContainingGroupByViewportRectangle) {
     ASSERT_TRUE(right_group.ok()) << right_group.error_message();
 
     ASSERT_TRUE(harness.editor.selection()
-                    .set_mode(quader::QuaderSelectionMode::Group)
+                    .set_mode(quader::QuaderSelectionMode::Object)
+                    .ok());
+    ASSERT_TRUE(harness.editor.commands()
+                    .execute(quader::quader_command::kSelectToggleGroupSelection)
                     .ok());
     ASSERT_TRUE(harness.editor.selection().clear().ok());
     quader::QuaderBoxSelectRequest request;
@@ -25183,9 +25290,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 234u);
+  EXPECT_EQ(commands.size(), 235u);
 #else
-  EXPECT_EQ(commands.size(), 233u);
+  EXPECT_EQ(commands.size(), 234u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;
@@ -25196,6 +25303,14 @@ TEST(EditorApiTests,
   }
   for (const quader::QuaderKeybindingRule &rule : rules) {
     expected_target_ids.insert(rule.target_id);
+  }
+  for (const auto mode : {quader::QuaderSelectionMode::Vertex,
+                         quader::QuaderSelectionMode::Edge,
+                         quader::QuaderSelectionMode::Face,
+                         quader::QuaderSelectionMode::Object,
+                         quader::QuaderSelectionMode::Group}) {
+    expected_target_ids.insert(
+        editor.commands().keybinding_target_id_for_selection_mode(mode));
   }
   for (int preset = 1; preset <= 10; ++preset) {
     expected_target_ids.insert(
@@ -25253,6 +25368,13 @@ TEST(EditorApiTests,
           }));
   EXPECT_EQ(non_command_target_count, 59u);
   EXPECT_TRUE(has_keybinding_catalog_entry(catalog, "viewport.marking_menu", "Q"));
+  for (const auto mode : {quader::QuaderSelectionMode::Object,
+                         quader::QuaderSelectionMode::Group}) {
+    EXPECT_TRUE(has_keybinding_catalog_entry(catalog,
+        editor.commands().keybinding_target_id_for_selection_mode(mode), ""));
+  }
+  EXPECT_TRUE(has_keybinding_catalog_entry(catalog,
+      quader::quader_command::kSelectToggleGroupSelection.string(), "Shift+G"));
 
   for (const std::string &typed_id : typed_command_ids()) {
     const bool compatibility_arrangement = std::any_of(

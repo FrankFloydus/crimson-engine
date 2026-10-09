@@ -115,6 +115,11 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
       contract(quader_command::kSelectToggleBackfaceSelection,
                Fixture::Viewport, Domain::Preferences,
                Outcome::ChangeRequired),
+      contract(quader_command::kSelectToggleGroupSelection,
+               Fixture::ObjectSelection,
+               Domain::Document | Domain::Selection | Domain::Overlay |
+                   Domain::Tool | Domain::Viewport | Domain::Revisions,
+               Outcome::ChangeRequired),
       contract(quader_command::kSelectEdgeDirection,
                Fixture::SingleEdgeSelection, kSelectionDomains,
                Outcome::ChangeRequired),
@@ -844,9 +849,9 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
   };
 
 #ifndef NDEBUG
-  static_assert(std::size(kContracts) == 232U);
-#else
   static_assert(std::size(kContracts) == 233U);
+#else
+  static_assert(std::size(kContracts) == 234U);
 #endif
   return std::span<const CommandBehaviorContract>{kContracts};
 }

@@ -1211,6 +1211,23 @@ void UISystem::install_runtime_hooks(
         selection_toolbar_->synchronize(*editor_, active_mode, true);
         synchronize_tool_toolbar(selection, true);
       });
+  selection_toolbar_->set_group_selection_toggle_requested_callback([this]() {
+    if (editor_ == nullptr || modeling_ == nullptr) {
+      return;
+    }
+    const auto generation = runtime_binding_generation_;
+    present_lifecycle_result(editor_->commands().execute(
+        quader_command::kSelectToggleGroupSelection));
+    if (editor_ == nullptr || modeling_ == nullptr ||
+        generation != runtime_binding_generation_) {
+      return;
+    }
+    const QuaderSelectionSummary selection = editor_->selection().summary();
+    const QuaderSelectionMode active_mode =
+        to_api_selection_mode(modeling_->selection_mode());
+    selection_toolbar_->synchronize(*editor_, active_mode, true);
+    synchronize_tool_toolbar(selection, true);
+  });
   tool_toolbar_->set_tool_requested_callback(
       [this](std::string_view tool_id) {
         if (editor_ == nullptr) {

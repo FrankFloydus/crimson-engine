@@ -5994,6 +5994,90 @@ TEST(QtViewportSurfaceInputTests,
 }
 
 TEST(QtViewportSurfaceInputTests,
+     GroupSelectionToggleUsesPhysicalPressRemappingAndSequencesWithoutRepeating) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-group-selection-toggle-input-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  for (const int mapping : {0, 1, 2}) {
+    SCOPED_TRACE(mapping);
+    NavigationPanelTestContext context;
+    auto &editor = context.editor;
+    const auto box = editor.modeling().create_box(
+        {.min = {-1, -1, -1}, .max = {1, 1, 1}});
+    ASSERT_TRUE(box.ok());
+    ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+    constexpr auto kToggle = quader::quader_command::kSelectToggleGroupSelection;
+    if (mapping != 0) {
+      ASSERT_TRUE(editor.commands().set_shortcut(
+          kToggle, mapping == 1 ? "F19" : "Ctrl+K F19").ok());
+      QKeyEvent old_press(QEvent::KeyPress, Qt::Key_G, Qt::ShiftModifier);
+      QKeyEvent old_release(QEvent::KeyRelease, Qt::Key_G, Qt::NoModifier);
+      send_visible_viewport_event(context.surface, &old_press);
+      send_visible_viewport_event(context.surface, &old_release);
+      context.process();
+      EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
+    }
+    const int key = mapping == 0 ? Qt::Key_G : Qt::Key_F19;
+    const Qt::KeyboardModifiers modifiers =
+        mapping == 0 ? Qt::ShiftModifier : Qt::NoModifier;
+    const auto prefix = [&]() {
+      if (mapping == 2) {
+        QKeyEvent press(QEvent::KeyPress, Qt::Key_K, Qt::ControlModifier);
+        QKeyEvent release(QEvent::KeyRelease, Qt::Key_K, Qt::NoModifier);
+        send_visible_viewport_event(context.surface, &press);
+        send_visible_viewport_event(context.surface, &release);
+        context.process();
+      }
+    };
+    const auto send = [&](QEvent::Type type, bool repeat = false) {
+      QKeyEvent event(type, key, modifiers, {}, repeat);
+      send_visible_viewport_event(context.surface, &event);
+      context.process();
+    };
+    context.process();
+    for (const auto expected : {quader::QuaderSelectionMode::Group,
+                                quader::QuaderSelectionMode::Object}) {
+      prefix();
+      send(QEvent::KeyPress);
+      ASSERT_EQ(editor.selection().summary().mode, expected);
+      const auto revision = editor.selection().summary().selection_revision;
+      for (int repeat = 0; repeat < 3; ++repeat) {
+        send(QEvent::KeyRelease, true);
+        send(QEvent::KeyPress, true);
+      }
+      send(QEvent::KeyRelease);
+      EXPECT_EQ(editor.selection().summary().mode, expected);
+      EXPECT_EQ(editor.selection().summary().selection_revision, revision);
+    }
+    context.mouse(QEvent::MouseButtonPress, {400, 300}, Qt::MiddleButton,
+                  Qt::MiddleButton);
+    context.process();
+    prefix();
+    send(QEvent::KeyPress);
+    send(QEvent::KeyRelease);
+    EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
+    context.mouse(QEvent::MouseButtonRelease, {400, 300}, Qt::MiddleButton,
+                  Qt::NoButton);
+    context.process();
+    ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+    const auto component_mode = editor.selection().summary().mode;
+    prefix();
+    send(QEvent::KeyPress);
+    send(QEvent::KeyRelease);
+    EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Edit);
+    EXPECT_EQ(editor.selection().summary().mode, component_mode);
+    ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
+    ASSERT_TRUE(editor.commands().remove_shortcut(kToggle).ok());
+    prefix();
+    send(QEvent::KeyPress);
+    send(QEvent::KeyRelease);
+    EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
      NativeAndComposedHostsKeepTabInTheCanonicalInputQueue) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;

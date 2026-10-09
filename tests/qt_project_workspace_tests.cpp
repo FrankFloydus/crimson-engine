@@ -789,7 +789,7 @@ TEST(QtProjectWorkspaceTests,
 
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(32, 32));
-  EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 5);
+  EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 4);
   EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 14);
   QToolButton *scale_metric_probe = nullptr;
   for (QToolButton *candidate :
@@ -809,7 +809,7 @@ TEST(QtProjectWorkspaceTests,
   tool_toolbar.apply_ui_scale(quader::QtUiScaleMetrics(2.0F, 1U));
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(64, 64));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(64, 64));
-  EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 60), 5);
+  EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 60), 4);
   EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 80), 14);
   EXPECT_EQ(scale_metric_probe->style()->pixelMetric(
                 QStyle::PM_ButtonMargin, nullptr, scale_metric_probe),
@@ -820,7 +820,7 @@ TEST(QtProjectWorkspaceTests,
   tool_toolbar.apply_ui_scale(quader::QtUiScaleMetrics(1.0F, 2U));
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(32, 32));
-  EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 5);
+  EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 4);
   EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 14);
   EXPECT_EQ(scale_metric_probe->style()->pixelMetric(
                 QStyle::PM_ButtonMargin, nullptr, scale_metric_probe),
@@ -1006,7 +1006,7 @@ TEST(QtProjectWorkspaceTests,
   const QDir icons(QStringLiteral(QUADER_SOURCE_DIR "/resources/icons"));
   QList<QAction *> retained_actions;
   QList<QToolButton *> retained_buttons;
-  for (const auto *kind : {"Vertex", "Edge", "Face", "Mesh", "Group"}) {
+  for (const auto *kind : {"Vertex", "Edge", "Face", "Group"}) {
     const QString suffix = QString::fromLatin1(kind);
     auto *action = toolbar.findChild<QAction *>(
         QStringLiteral("selectionMode%1").arg(suffix));
@@ -1024,13 +1024,14 @@ TEST(QtProjectWorkspaceTests,
   ASSERT_NE(combo, nullptr);
   ASSERT_EQ(combo->count(), 2);
   EXPECT_EQ(toolbar.widgetForAction(toolbar.actions().front()), combo);
-  ASSERT_EQ(toolbar.actions().size(), 7);
+  ASSERT_EQ(toolbar.actions().size(), 6);
   QAction *selection_separator = toolbar.actions()[1];
   ASSERT_TRUE(selection_separator->isSeparator());
   EXPECT_EQ(toolbar.findChild<QLabel *>(QStringLiteral("selectionToolbarLabel")), nullptr);
   EXPECT_EQ(toolbar.toolButtonStyle(), Qt::ToolButtonIconOnly);
   int requests = 0;
   int selection_requests = 0;
+  int group_toggle_requests = 0;
   bool last_mode_request_changed = false;
   toolbar.set_editor_mode_requested_callback([&](quader::QuaderEditorMode mode) {
     ++requests;
@@ -1045,17 +1046,23 @@ TEST(QtProjectWorkspaceTests,
     EXPECT_TRUE(editor.selection().set_mode(mode).ok());
     toolbar.synchronize(editor, editor.selection().summary().mode);
   });
+  toolbar.set_group_selection_toggle_requested_callback([&]() {
+    ++group_toggle_requests;
+    EXPECT_TRUE(editor.commands().execute(
+        quader::quader_command::kSelectToggleGroupSelection).ok());
+    toolbar.synchronize(editor, editor.selection().summary().mode, true);
+  });
   const auto verify_controls = [&](bool edit) {
     EXPECT_EQ(combo->currentIndex(), edit ? 1 : 0);
     EXPECT_TRUE(selection_separator->isVisible());
-    EXPECT_EQ(toolbar.actions().size(), 7);
+    EXPECT_EQ(toolbar.actions().size(), 6);
+    EXPECT_EQ(toolbar.findChild<QAction *>(QStringLiteral("selectionModeMesh")), nullptr);
     for (qsizetype index = 0; index < retained_actions.size(); ++index) {
       QAction *action = retained_actions[index];
       QToolButton *button = retained_buttons[index];
       EXPECT_EQ(toolbar.findChild<QAction *>(action->objectName()), action);
       EXPECT_EQ(toolbar.widgetForAction(action), button);
-      const bool component = action->objectName() != "selectionModeMesh" &&
-          action->objectName() != "selectionModeGroup";
+      const bool component = action->objectName() != "selectionModeGroup";
       EXPECT_EQ(action->isVisible(), component == edit);
       if (component == edit) EXPECT_TRUE(action->isEnabled());
       EXPECT_FALSE(action->text().isEmpty());
@@ -1170,28 +1177,31 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(combo->currentText(), QStringLiteral("Object Mode"));
   EXPECT_TRUE(combo->toolTip().contains(QStringLiteral("Tab"), Qt::CaseInsensitive));
   review_layout(QStringLiteral("object-100"), 1.0F, 1000);
-  auto *mesh = toolbar.findChild<QAction *>(QStringLiteral("selectionModeMesh"));
   auto *group = toolbar.findChild<QAction *>(QStringLiteral("selectionModeGroup"));
-  ASSERT_NE(mesh, nullptr);
   ASSERT_NE(group, nullptr);
-  auto *mesh_button = qobject_cast<QToolButton *>(toolbar.widgetForAction(mesh));
   auto *group_button = qobject_cast<QToolButton *>(toolbar.widgetForAction(group));
-  ASSERT_NE(mesh_button, nullptr);
   ASSERT_NE(group_button, nullptr);
-  ASSERT_TRUE(mesh_button->isVisible());
   ASSERT_TRUE(group_button->isVisible());
-  EXPECT_TRUE(mesh->isChecked());
+  EXPECT_EQ(group->actionGroup(), nullptr);
+  EXPECT_FALSE(group->isChecked());
+  EXPECT_TRUE(group->toolTip().contains(QStringLiteral("Shift+G")));
   click_widget(*group_button, group_button->rect().center());
-  EXPECT_EQ(selection_requests, 1);
+  EXPECT_EQ(group_toggle_requests, 1);
+  EXPECT_EQ(selection_requests, 0);
   EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Group);
   EXPECT_TRUE(group->isChecked());
-  EXPECT_FALSE(mesh->isChecked());
   review_layout(QStringLiteral("object-group-selected-100"), 1.0F, 1000);
-  click_widget(*mesh_button, mesh_button->rect().center());
-  EXPECT_EQ(selection_requests, 2);
+  click_widget(*group_button, group_button->rect().center());
+  EXPECT_EQ(group_toggle_requests, 2);
+  EXPECT_EQ(selection_requests, 0);
   EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
-  EXPECT_TRUE(mesh->isChecked());
   EXPECT_FALSE(group->isChecked());
+  ASSERT_TRUE(editor.preferences().set_shortcut(
+      quader::quader_command::kSelectToggleGroupSelection, "Ctrl+Alt+F21").ok());
+  toolbar.synchronize(editor, quader::QuaderSelectionMode::Object);
+  EXPECT_TRUE(group->toolTip().contains(QStringLiteral("Ctrl+Alt+F21")));
+  EXPECT_FALSE(group->toolTip().contains(QStringLiteral("Shift+G")));
+  EXPECT_EQ(group_button->accessibleDescription(), group->toolTip());
   review_layout(QStringLiteral("object-200"), 2.0F, 1000);
   review_layout(QStringLiteral("object-narrow-200"), 2.0F, 320);
   review_layout(QStringLiteral("object-narrow-100-down"), 1.0F, 320);
@@ -1308,7 +1318,6 @@ TEST(QtProjectWorkspaceTests,
   ASSERT_TRUE(editor.commands().execute(quader::quader_command::kEditorModeObject).ok());
   toolbar.synchronize(editor, quader::QuaderSelectionMode::Object);
   verify_controls(false);
-  EXPECT_TRUE(mesh->isChecked());
   EXPECT_FALSE(group->isChecked());
   review_layout(QStringLiteral("object-native-high-contrast"), 1.0F, 1000);
   EXPECT_EQ(requests, 1);
@@ -5599,14 +5608,16 @@ TEST(QtProjectWorkspaceTests,
       QStringLiteral("selectionModeVertex"));
   auto *face_mode_action = ui.main_window()->findChild<QAction *>(
       QStringLiteral("selectionModeFace"));
-  auto *mesh_mode_action = ui.main_window()->findChild<QAction *>(
-      QStringLiteral("selectionModeMesh"));
+  auto *group_mode_action = ui.main_window()->findChild<QAction *>(
+      QStringLiteral("selectionModeGroup"));
   ASSERT_NE(counter, nullptr);
   ASSERT_NE(separator, nullptr);
   ASSERT_NE(version, nullptr);
   ASSERT_NE(vertex_mode_action, nullptr);
   ASSERT_NE(face_mode_action, nullptr);
-  ASSERT_NE(mesh_mode_action, nullptr);
+  ASSERT_NE(group_mode_action, nullptr);
+  EXPECT_EQ(ui.main_window()->findChild<QAction *>(
+      QStringLiteral("selectionModeMesh")), nullptr);
   EXPECT_EQ(separator->frameShape(), QFrame::VLine);
 
   quader_poly::Document document;
@@ -5728,7 +5739,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(editor.mode().revision(), mode_before_empty_entry.revision);
   EXPECT_EQ(editor.mode().generation(), mode_before_empty_entry.generation);
   ui.refresh({}, {});
-  EXPECT_TRUE(mesh_mode_action->isChecked());
+  EXPECT_FALSE(group_mode_action->isChecked());
   EXPECT_EQ(counter->text(), QStringLiteral("1 Mesh Selected"));
   ASSERT_TRUE(editor.selection().select_objects(
       {mesh.value().entity, light.value().id}).ok());
@@ -5748,7 +5759,7 @@ TEST(QtProjectWorkspaceTests,
               mode == quader::QuaderSelectionMode::Face);
     EXPECT_EQ(vertex_mode_action->isChecked(),
               mode == quader::QuaderSelectionMode::Vertex);
-    EXPECT_FALSE(mesh_mode_action->isChecked());
+    EXPECT_FALSE(group_mode_action->isChecked());
     EXPECT_EQ(counter->text(),
               mode == quader::QuaderSelectionMode::Face
                   ? QStringLiteral("0 Faces Selected")
@@ -5761,12 +5772,19 @@ TEST(QtProjectWorkspaceTests,
       {mesh.value().entity, light.value().id, curve.value().entity}).ok());
   ui.refresh({}, {});
   EXPECT_EQ(counter->text(), QStringLiteral("3 Meshes Selected"));
+  group_mode_action->trigger();
+  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Group);
+  EXPECT_TRUE(group_mode_action->isChecked());
+  group_mode_action->trigger();
+  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
+  EXPECT_FALSE(group_mode_action->isChecked());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Group).ok());
   ASSERT_TRUE(editor.selection().select_objects(
       {first_group.value().id, first_group.value().id,
        mesh.value().entity, light.value().id, curve.value().entity}).ok());
   ui.refresh({}, {});
   EXPECT_EQ(counter->text(), QStringLiteral("1 Group Selected"));
+  EXPECT_TRUE(group_mode_action->isChecked());
 
   // A retained value is untouched on unchanged frames; rebinding invalidates
   // the gate even when both runtime owners and their revisions are identical.

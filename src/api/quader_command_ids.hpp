@@ -93,6 +93,8 @@ inline constexpr QuaderCommandId kSelectAll{"select.all"};
 inline constexpr QuaderCommandId kSelectInverse{"select.inverse"};
 inline constexpr QuaderCommandId kSelectToggleBackfaceSelection{
     "select.toggle_backface_selection"};
+inline constexpr QuaderCommandId kSelectToggleGroupSelection{
+    "select.toggle_group_selection"};
 inline constexpr QuaderCommandId kSelectEdgeDirection{
     "select.edge.direction"};
 inline constexpr QuaderCommandId kSelectEdgeLoops{"select.edge.loops"};
@@ -472,6 +474,7 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kSelectAll,
     kSelectInverse,
     kSelectToggleBackfaceSelection,
+    kSelectToggleGroupSelection,
     kSelectEdgeDirection,
     kSelectEdgeLoops,
     kSelectEdgeRing,

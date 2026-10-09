@@ -211,7 +211,7 @@ TEST_F(PublicReleaseUiTests, ObjectAndEditModesExposeOnlyTheirSelectionDomains) 
   toolbar.set_localization(localization);
   // The public test target has no application QRC; use its shipping artwork.
   const QDir icons(QString::fromStdWString((resource_root() / "icons").wstring()));
-  for (const auto *kind : {"Vertex", "Edge", "Face", "Mesh", "Group"}) {
+  for (const auto *kind : {"Vertex", "Edge", "Face", "Group"}) {
     const QString suffix = QString::fromLatin1(kind);
     auto *action = toolbar.findChild<QAction *>(
         QStringLiteral("selectionMode%1").arg(suffix));
@@ -223,10 +223,16 @@ TEST_F(PublicReleaseUiTests, ObjectAndEditModesExposeOnlyTheirSelectionDomains) 
   }
   toolbar.synchronize(editor, QuaderSelectionMode::Object);
   int selection_requests = 0;
+  int group_toggle_requests = 0;
   toolbar.set_mode_requested_callback([&](QuaderSelectionMode mode) {
     ++selection_requests;
     EXPECT_TRUE(editor.selection().set_mode(mode).ok());
     toolbar.synchronize(editor, editor.selection().summary().mode);
+  });
+  toolbar.set_group_selection_toggle_requested_callback([&]() {
+    ++group_toggle_requests;
+    EXPECT_TRUE(editor.commands().execute(quader_command::kSelectToggleGroupSelection).ok());
+    toolbar.synchronize(editor, editor.selection().summary().mode, true);
   });
   auto *combo = toolbar.findChild<QComboBox *>(QStringLiteral("editorModeCombo"));
   ASSERT_NE(combo, nullptr);
@@ -240,6 +246,8 @@ TEST_F(PublicReleaseUiTests, ObjectAndEditModesExposeOnlyTheirSelectionDomains) 
     QCoreApplication::processEvents();
     EXPECT_TRUE(combo->isVisible());
     EXPECT_EQ(toolbar.actions(), retained_actions);
+    EXPECT_EQ(toolbar.actions().size(), 6);
+    EXPECT_EQ(toolbar.findChild<QAction *>(QStringLiteral("selectionModeMesh")), nullptr);
     EXPECT_EQ(toolbar.findChildren<QToolButton *>(), retained_buttons);
     int visible_separators = 0;
     for (const auto *action : toolbar.actions()) {
@@ -252,12 +260,10 @@ TEST_F(PublicReleaseUiTests, ObjectAndEditModesExposeOnlyTheirSelectionDomains) 
       EXPECT_FALSE(label->isVisible());
     }
     for (const auto *name : {"selectionModeVertex", "selectionModeEdge",
-                             "selectionModeFace", "selectionModeMesh",
-                             "selectionModeGroup"}) {
+                             "selectionModeFace", "selectionModeGroup"}) {
       auto *action = toolbar.findChild<QAction *>(QString::fromLatin1(name));
       ASSERT_NE(action, nullptr);
-      const bool component = action->objectName() != "selectionModeMesh" &&
-          action->objectName() != "selectionModeGroup";
+      const bool component = action->objectName() != "selectionModeGroup";
       if (component == edit) {
         EXPECT_TRUE(action->isEnabled());
       }
@@ -284,15 +290,14 @@ TEST_F(PublicReleaseUiTests, ObjectAndEditModesExposeOnlyTheirSelectionDomains) 
   };
   assert_domain(false);
   capture_toolbar(QStringLiteral("selection-toolbar-public-object-100.png"));
-  auto *mesh = toolbar.findChild<QAction *>(QStringLiteral("selectionModeMesh"));
   auto *group = toolbar.findChild<QAction *>(QStringLiteral("selectionModeGroup"));
-  ASSERT_NE(mesh, nullptr);
   ASSERT_NE(group, nullptr);
-  EXPECT_TRUE(mesh->isChecked());
-  for (const auto &[action, expected_mode] : {
-           std::pair{group, QuaderSelectionMode::Group},
-           std::pair{mesh, QuaderSelectionMode::Object}}) {
-    auto *button = qobject_cast<QToolButton *>(toolbar.widgetForAction(action));
+  EXPECT_FALSE(group->isChecked());
+  EXPECT_EQ(group->actionGroup(), nullptr);
+  EXPECT_TRUE(group->toolTip().contains(QStringLiteral("Shift+G")));
+  for (const auto expected_mode : {QuaderSelectionMode::Group,
+                                   QuaderSelectionMode::Object}) {
+    auto *button = qobject_cast<QToolButton *>(toolbar.widgetForAction(group));
     ASSERT_NE(button, nullptr);
     ASSERT_TRUE(button->isVisible());
     button->setFocus(Qt::TabFocusReason);
@@ -301,11 +306,11 @@ TEST_F(PublicReleaseUiTests, ObjectAndEditModesExposeOnlyTheirSelectionDomains) 
     QCoreApplication::sendEvent(button, &press);
     QCoreApplication::sendEvent(button, &release);
     EXPECT_EQ(editor.selection().summary().mode, expected_mode);
-    EXPECT_TRUE(action->isChecked());
-    EXPECT_FALSE((action == group ? mesh : group)->isChecked());
+    EXPECT_EQ(group->isChecked(), expected_mode == QuaderSelectionMode::Group);
     assert_domain(false);
   }
-  EXPECT_EQ(selection_requests, 2);
+  EXPECT_EQ(group_toggle_requests, 2);
+  EXPECT_EQ(selection_requests, 0);
   EXPECT_FALSE(editor.selection().set_mode(QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(editor.commands().execute(quader_command::kEditorModeToggleEdit).ok());
   toolbar.synchronize(editor, QuaderSelectionMode::Vertex);
@@ -326,7 +331,6 @@ TEST_F(PublicReleaseUiTests, ObjectAndEditModesExposeOnlyTheirSelectionDomains) 
   ASSERT_TRUE(editor.commands().execute(quader_command::kEditorModeToggleEdit).ok());
   toolbar.synchronize(editor, QuaderSelectionMode::Object);
   assert_domain(false);
-  EXPECT_TRUE(mesh->isChecked());
   EXPECT_FALSE(group->isChecked());
   EXPECT_EQ(combo->currentIndex(), 0);
   EXPECT_EQ(editor.selection().summary().selected_object_count, 2u);

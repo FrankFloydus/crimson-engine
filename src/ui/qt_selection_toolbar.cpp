@@ -43,15 +43,13 @@ struct SelectionModeSpec {
   std::string_view fallback;
 };
 
-constexpr std::array<SelectionModeSpec, 5> kSelectionModeSpecs{{
+constexpr std::array<SelectionModeSpec, 4> kSelectionModeSpecs{{
     {QuaderSelectionMode::Vertex, ":/quader/icons/selection_vertex.png",
      "selectionModeVertex", "ui.toolbar.selection.vertices", "Vertices"},
     {QuaderSelectionMode::Edge, ":/quader/icons/selection_edge.png",
      "selectionModeEdge", "ui.toolbar.selection.edges", "Edges"},
     {QuaderSelectionMode::Face, ":/quader/icons/selection_face.png",
      "selectionModeFace", "ui.toolbar.selection.faces", "Faces"},
-    {QuaderSelectionMode::Object, ":/quader/icons/selection_mesh.png",
-     "selectionModeMesh", "ui.toolbar.selection.meshes", "Meshes"},
     {QuaderSelectionMode::Group, ":/quader/icons/selection_group.png",
      "selectionModeGroup", "ui.toolbar.selection.groups", "Groups"},
 }};
@@ -104,14 +102,19 @@ QtSelectionToolbar::QtSelectionToolbar(QWidget *parent) : QToolBar(parent) {
         QString::fromUtf8(spec.fallback.data()));
     action->setObjectName(QString::fromUtf8(spec.object_name));
     action->setCheckable(true);
-    const bool object_mode = spec.mode == QuaderSelectionMode::Object ||
-        spec.mode == QuaderSelectionMode::Group;
+    const bool object_mode = spec.mode == QuaderSelectionMode::Group;
     action->setEnabled(object_mode);
     action->setVisible(object_mode);
-    action_group->addAction(action);
+    if (!object_mode) {
+      action_group->addAction(action);
+    }
     QObject::connect(action, &QAction::triggered, this,
                      [this, mode = spec.mode](bool checked) {
-                       if (checked && mode_requested_) {
+                       if (mode == QuaderSelectionMode::Group) {
+                         if (group_selection_toggle_requested_) {
+                           group_selection_toggle_requested_();
+                         }
+                       } else if (checked && mode_requested_) {
                          mode_requested_(mode);
                        }
                      });
@@ -218,8 +221,9 @@ void QtSelectionToolbar::synchronize(const QuaderEditorApi &editor,
     if (entry.action->isVisible() != visible) {
       entry.action->setVisible(visible);
     }
-    const std::string target_id =
-        editor.commands().keybinding_target_id_for_selection_mode(entry.mode);
+    const std::string target_id = entry.mode == QuaderSelectionMode::Group
+        ? std::string(quader_command::kSelectToggleGroupSelection.string())
+        : editor.commands().keybinding_target_id_for_selection_mode(entry.mode);
     const std::string shortcut = editor.commands().shortcut_for(target_id);
     QString tooltip = entry.action->text();
     if (!shortcut.empty()) {
@@ -255,6 +259,11 @@ void QtSelectionToolbar::set_mode_requested_callback(
 void QtSelectionToolbar::set_editor_mode_requested_callback(
     std::function<void(QuaderEditorMode)> callback) {
   editor_mode_requested_ = std::move(callback);
+}
+
+void QtSelectionToolbar::set_group_selection_toggle_requested_callback(
+    std::function<void()> callback) {
+  group_selection_toggle_requested_ = std::move(callback);
 }
 
 } // namespace quader

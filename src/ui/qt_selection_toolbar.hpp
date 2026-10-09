@@ -40,6 +40,7 @@ public:
   void set_selection_mode(QuaderSelectionMode mode);
   void set_mode_requested_callback(
       std::function<void(QuaderSelectionMode)> callback);
+  void set_group_selection_toggle_requested_callback(std::function<void()> callback);
   void set_editor_mode_requested_callback(
       std::function<void(QuaderEditorMode)> callback);
 
@@ -53,7 +54,7 @@ private:
   };
 
   QComboBox *editor_mode_combo_ = nullptr;
-  std::array<ModeAction, 5> mode_actions_{};
+  std::array<ModeAction, 4> mode_actions_{};
   bool synchronization_valid_ = false;
   std::optional<QuaderSelectionMode> presented_mode_;
   const QuaderEditorApi *presented_editor_ = nullptr;
@@ -61,6 +62,7 @@ private:
   std::uint64_t presented_keybindings_revision_ = 0;
   QString editor_mode_tooltip_;
   std::function<void(QuaderSelectionMode)> mode_requested_;
+  std::function<void()> group_selection_toggle_requested_;
   std::function<void(QuaderEditorMode)> editor_mode_requested_;
 };
 
