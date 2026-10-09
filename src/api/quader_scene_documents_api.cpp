@@ -10,6 +10,7 @@
 #include "api/quader_api_status_internal.hpp"
 #include "api/quader_events_api.hpp"
 #include "api/quader_events_api_internal_access.hpp"
+#include "api/quader_loading_scope.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/commands/document_command_service.hpp"
 #include "editor/session/project_session.hpp"
@@ -258,6 +259,8 @@ QuaderSceneDocumentsApi::recover_autosave(ProjectRelativePath path) {
         status_for(impl_->status_session(), false, false,
                    "Recovery copies require an open project."), SceneSessionId{});
   }
+  QuaderLoadingScope loading(impl_->hooks.begin_loading,
+                             impl_->hooks.end_loading);
   const ProjectSessionResult result = impl_->project_session->autosave().recover(
       *impl_->project_session, path);
   if (result.ok && result.changed) {
@@ -266,6 +269,7 @@ QuaderSceneDocumentsApi::recover_autosave(ProjectRelativePath path) {
     impl_->publish(quader_event::kActiveSceneChanged);
     impl_->publish(quader_event::kSceneDirtyChanged);
   }
+  loading.set_succeeded(result.ok && result.changed);
   return scene_result(impl_->status_session(), result);
 }
 
@@ -314,6 +318,8 @@ QuaderSceneDocumentsApi::open(ProjectRelativePath path) {
                    "path."),
         SceneSessionId{});
   }
+  QuaderLoadingScope loading(impl_->hooks.begin_loading,
+                             impl_->hooks.end_loading);
   const std::size_t open_count_before =
       impl_->project_session->open_scenes().size();
   const SceneSessionId active_before =
@@ -333,6 +339,7 @@ QuaderSceneDocumentsApi::open(ProjectRelativePath path) {
       impl_->publish(quader_event::kActiveSceneChanged);
     }
   }
+  loading.set_succeeded(result.ok && result.changed);
   return scene_result(impl_->status_session(), result);
 }
 
@@ -390,6 +397,8 @@ QuaderApiResult<SceneSessionId> QuaderSceneDocumentsApi::open_native_path(
                    "opening another scene."),
         SceneSessionId{});
   }
+  QuaderLoadingScope loading(impl_->hooks.begin_loading,
+                             impl_->hooks.end_loading);
   QdrProjectReadResult read =
       QdrDocumentReader::read_project_document(path, current_product_release());
   if (!read.ok) {
@@ -423,6 +432,7 @@ QuaderApiResult<SceneSessionId> QuaderSceneDocumentsApi::open_native_path(
   impl_->publish(quader_event::kSceneOpened, impl_->standalone_session_id);
   impl_->publish(quader_event::kActiveSceneChanged,
                  impl_->standalone_session_id);
+  loading.set_succeeded(true);
   return quader_api_result_from_status(
       status_for(session, true, true, "Scene opened."),
       impl_->standalone_session_id);

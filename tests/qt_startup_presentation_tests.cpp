@@ -49,6 +49,49 @@ TEST(QtStartupPresentationTests,
 }
 
 TEST(QtStartupPresentationTests,
+     GeometryInvalidationRestartsPendingPresentationButPreservesCompletedReveal) {
+  quader::QtStartupPresentationState state;
+  using Action = quader::QtStartupPresentationAction;
+  EXPECT_EQ(quader::qt_startup_presentation_action(state, true, 320u),
+            Action::WaitForStableGeometry);
+  EXPECT_EQ(quader::qt_startup_presentation_action(state, true, 320u),
+            Action::GeometryStabilized);
+  quader::qt_invalidate_startup_presentation_geometry(state);
+  EXPECT_EQ(quader::qt_startup_presentation_action(state, true, 320u),
+            Action::WaitForStableGeometry);
+  EXPECT_EQ(quader::qt_startup_presentation_action(state, true, 320u),
+            Action::GeometryStabilized);
+  EXPECT_EQ(quader::qt_startup_presentation_action(state, true, 320u),
+            Action::PresentationReady);
+
+  quader::qt_invalidate_startup_presentation_geometry(state);
+  EXPECT_EQ(quader::qt_startup_presentation_action(state, false, 0u),
+            Action::PresentationReady);
+  // A subsequent load owns a fresh stabilization sequence even at the same size.
+  state = {};
+  EXPECT_EQ(quader::qt_startup_presentation_action(state, true, 320u),
+            Action::WaitForStableGeometry);
+}
+
+TEST(QtStartupPresentationTests,
+     EmptyGeometryCannotCompleteAnOtherwiseReadyTransition) {
+  quader::QtStartupPresentationState state;
+  using Action = quader::QtStartupPresentationAction;
+  for (int sample = 0; sample < 8; ++sample) {
+    EXPECT_EQ(quader::qt_startup_presentation_action(state, true, 0u),
+              Action::WaitForStableGeometry);
+  }
+  EXPECT_EQ(quader::qt_startup_presentation_action(state, true, 640u),
+            Action::WaitForStableGeometry);
+  EXPECT_EQ(quader::qt_startup_presentation_action(state, true, 640u),
+            Action::GeometryStabilized);
+  EXPECT_EQ(quader::qt_startup_presentation_action(state, true, 0u),
+            Action::WaitForStableGeometry);
+  EXPECT_EQ(quader::qt_startup_presentation_action(state, true, 640u),
+            Action::WaitForStableGeometry);
+}
+
+TEST(QtStartupPresentationTests,
      RejectsSavedNormalExtentInsideMaximizedNativeClient) {
   EXPECT_FALSE(quader::qt_startup_client_extents_match(1326, 1013, 1896,
                                                        1013));

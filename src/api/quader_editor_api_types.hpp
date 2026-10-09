@@ -111,6 +111,12 @@ struct QuaderProjectRuntimeHooks {
   /// Returning false cancels the project command without discarding content.
   std::function<bool(std::string_view action_id)>
       prepare_material_document_close;
+  /// Presents synchronous loading after the path picker. Preflight reads have
+  /// a separate scope that ends before any dirty-content confirmation.
+  std::function<void()> begin_loading;
+  /// True only after a replacement is bound and its lifecycle events published;
+  /// false restores the current presentation after preflight, failure or no-op.
+  std::function<void(bool succeeded)> end_loading;
 };
 
 /**

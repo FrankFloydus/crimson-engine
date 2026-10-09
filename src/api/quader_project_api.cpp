@@ -11,6 +11,7 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_events_api.hpp"
 #include "api/quader_events_api_internal_access.hpp"
+#include "api/quader_loading_scope.hpp"
 #include "api/quader_scene_documents_api.hpp"
 #include "diagnostics/profile.hpp"
 #include "editor/modeling/modeling_types.hpp"
@@ -352,6 +353,8 @@ QuaderProjectApi::create(const std::filesystem::path &root_path) {
   if (!closed.status.ok() || !closed.proceed) {
     return closed.status;
   }
+  QuaderLoadingScope loading(runtime_hooks_.begin_loading,
+                             runtime_hooks_.end_loading);
   ProjectCloseLifecycleEvents close_events =
       capture_project_close_events(*project_session_);
   ProjectSessionResult created = project_session_->create(target, true);
@@ -380,6 +383,7 @@ QuaderProjectApi::create(const std::filesystem::path &root_path) {
                                           *project_session_, *active));
     }
   }
+  loading.set_succeeded(true);
   return project_runtime_status(scene_session(session_), true,
                                 std::move(created.message));
 }
@@ -419,7 +423,11 @@ QuaderApiVoidResult QuaderProjectApi::open(const std::filesystem::path& path) {
     }
 
     if (project_session_ != nullptr) {
-      const ProjectSessionResult validated = ProjectSession::preflight_open(target);
+      const ProjectSessionResult validated = [&]() {
+        QuaderLoadingScope preflight_loading(runtime_hooks_.begin_loading,
+                                             runtime_hooks_.end_loading);
+        return ProjectSession::preflight_open(target);
+      }();
       if (!validated.ok) {
         return quader_api_failure_status(scene_session(session_), validated.message);
       }
@@ -427,6 +435,8 @@ QuaderApiVoidResult QuaderProjectApi::open(const std::filesystem::path& path) {
       if (!closed.status.ok() || !closed.proceed) {
         return closed.status;
       }
+      QuaderLoadingScope loading(runtime_hooks_.begin_loading,
+                                 runtime_hooks_.end_loading);
       ProjectCloseLifecycleEvents close_events =
           capture_project_close_events(*project_session_);
       ProjectSessionResult opened = project_session_->open(target, true);
@@ -470,14 +480,19 @@ QuaderApiVoidResult QuaderProjectApi::open(const std::filesystem::path& path) {
           message += opened.warnings[index];
         }
       }
+      loading.set_succeeded(true);
       return project_runtime_status(scene_session(session_), true,
                                     std::move(message));
     }
 
     // Invalid candidates must not settle the outgoing preview or open a prompt.
     // Read again after the decision because Save may update this exact target.
-    const auto compatible = QdrDocumentReader::read_project_document(
-        target, current_product_release());
+    const auto compatible = [&]() {
+      QuaderLoadingScope preflight_loading(runtime_hooks_.begin_loading,
+                                           runtime_hooks_.end_loading);
+      return QdrDocumentReader::read_project_document(
+          target, current_product_release());
+    }();
     if (!compatible.ok) {
       return quader_api_failure_status(scene_session(session_), compatible.message);
     }
@@ -485,6 +500,8 @@ QuaderApiVoidResult QuaderProjectApi::open(const std::filesystem::path& path) {
             dirty_replacement_preflight("project.open")) {
       return std::move(*blocked);
     }
+    QuaderLoadingScope loading(runtime_hooks_.begin_loading,
+                               runtime_hooks_.end_loading);
     QdrProjectReadResult read =
         QdrDocumentReader::read_project_document(target, current_product_release());
     if (!read.ok) {
@@ -503,6 +520,7 @@ QuaderApiVoidResult QuaderProjectApi::open(const std::filesystem::path& path) {
     }
     session.set_minimum_product_release(read.minimum_product_release);
     path_ = std::move(target);
+    loading.set_succeeded(true);
     return project_runtime_status(session, true, "Scene opened.");
 }
 

@@ -340,7 +340,7 @@ TEST(UiLayoutGuardrailTests,
 }
 
 TEST(UiLayoutGuardrailTests,
-     StartupSuppressesWholeShellUntilFinalDockLayoutAndNativePresentation) {
+     LoadingPresentationKeepsQtCompositionAndNativeGeometryOwnership) {
   const std::string app_source = read_source_file("src/app/app.cpp");
   const std::string ui_header = read_source_file("src/ui/ui_system.hpp");
   const std::string ui_source = read_source_file("src/ui/ui_system.cpp");
@@ -427,7 +427,16 @@ TEST(UiLayoutGuardrailTests,
   EXPECT_LT(prepare_shell, show_shell);
 
   expect_contains(ui_header, "QtStartupPresentationState");
-  expect_contains(ui_source, "main_window_->setUpdatesEnabled(false)");
+  // Loading remains a UI concern. Native App hooks delegate to the same owner
+  // for project and scene loading rather than creating competing covers.
+  expect_contains(app_source, "ui_.begin_loading_presentation()");
+  expect_contains(app_source, "ui_.end_loading_presentation(succeeded)");
+  const std::string loading_body = source_slice(
+      ui_source, "void UISystem::begin_loading_presentation()",
+      "bool UISystem::startup_layout_ready() const");
+  expect_missing(loading_body, "setUpdatesEnabled(false)");
+  expect_missing(loading_body, "processEvents(");
+  expect_missing(loading_body, "QEventLoop");
   expect_contains(ui_source,
                   "viewport_panel_->set_startup_presentation_blocked(true)");
   expect_contains(ui_source, "platform_window_is_maximized(");
@@ -436,34 +445,9 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(ui_source, "startup_layout_ready()");
   expect_contains(ui_source, "startup_layout_geometry_signature(");
   expect_contains(ui_source, "main_window_->devicePixelRatioF()");
-  expect_contains(ui_source, "main_window_->setUpdatesEnabled(true)");
-  const std::size_t timeout_guard =
-      ui_source.find("kStartupPresentationTimeout");
-  const std::size_t timeout_hard_invariants =
-      ui_source.find("hard_invariants_ready", timeout_guard);
-  const std::size_t timeout_finish =
-      ui_source.find("finish_startup_presentation(true)", timeout_guard);
-  ASSERT_NE(timeout_guard, std::string::npos);
-  ASSERT_NE(timeout_hard_invariants, std::string::npos);
-  ASSERT_NE(timeout_finish, std::string::npos);
-  EXPECT_LT(timeout_hard_invariants, timeout_finish);
-  const std::size_t finish_shell =
-      ui_source.find("void UISystem::finish_startup_presentation(");
-  const std::size_t release_panes = ui_source.find(
-      "viewport_panel_->set_startup_presentation_blocked(false)",
-      finish_shell);
-  const std::size_t enable_updates =
-      ui_source.find("main_window_->setUpdatesEnabled(true)", release_panes);
-  const std::size_t repaint_shell =
-      ui_source.find("main_window_->repaint()", enable_updates);
-  ASSERT_NE(finish_shell, std::string::npos);
-  ASSERT_NE(release_panes, std::string::npos);
-  ASSERT_NE(enable_updates, std::string::npos);
-  ASSERT_NE(repaint_shell, std::string::npos);
-  EXPECT_LT(release_panes, enable_updates);
-  EXPECT_LT(enable_updates, repaint_shell);
-  expect_missing(ui_source, "startupCurtain");
-  expect_missing(ui_source, "prepare_startup_curtain");
+  // Elapsed time must never bypass native geometry or actual pane readiness.
+  expect_missing(loading_body, "kStartupPresentationTimeout");
+  expect_missing(loading_body, "forced_fallback");
 
   expect_contains(startup_policy, "consecutive_equal_samples");
   expect_contains(startup_policy,

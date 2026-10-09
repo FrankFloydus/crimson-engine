@@ -381,6 +381,9 @@ bool App::initialize(QApplication &application,
             return ui_.prepare_standard_material_project_transition(
                 action_id);
           },
+      .begin_loading = [this]() { ui_.begin_loading_presentation(); },
+      .end_loading =
+          [this](bool succeeded) { ui_.end_loading_presentation(succeeded); },
   });
   editor_->scene_documents().set_runtime_hooks(
       QuaderSceneDocumentsRuntimeHooks{
@@ -406,6 +409,9 @@ bool App::initialize(QApplication &application,
                      std::string_view action_id) {
                 return ui_.confirm_dirty_scene(scene, action_id);
               },
+          .begin_loading = [this]() { ui_.begin_loading_presentation(); },
+          .end_loading =
+              [this](bool succeeded) { ui_.end_loading_presentation(succeeded); },
       });
 
   if (!composed_viewports) {

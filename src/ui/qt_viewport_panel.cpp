@@ -889,6 +889,7 @@ void QtViewportPanel::shutdown() {
   curve_pick_cache_.reset();
   native_surface_startup_ = {};
   startup_presentation_blocked_ = true;
+  loading_presentation_blocked_ = false;
   initialized_ = false;
   render_system_ = nullptr;
   if (workspace_ != nullptr) {
@@ -917,6 +918,7 @@ void QtViewportPanel::reset_interactions(QuaderEditorApi *editor,
 }
 
 void QtViewportPanel::abandon_interactions() {
+  reset_loading_frame_fence();
   pending_marking_menu_gesture_.reset();
   operation_input_context_ = {.viewport_available = false};
   if (environment_popup_ != nullptr) {
@@ -1155,7 +1157,8 @@ void QtViewportPanel::set_composed_frame_prepare_callback(
 
 bool QtViewportPanel::prepare_composed_frame() {
   if (!composed_ || composed_preparing_ || workspace_ == nullptr ||
-      startup_presentation_blocked_ || !composed_frame_prepare_) {
+      startup_presentation_blocked_ || loading_presentation_blocked_ ||
+      !composed_frame_prepare_) {
     return false;
   }
   if (composed_prepared_geometry_revision_ == composed_geometry_revision_) {
@@ -1433,6 +1436,31 @@ void QtViewportPanel::set_startup_presentation_blocked(bool blocked) {
   }
   displayed_placements_.clear();
   refresh_workspace_layout();
+}
+
+void QtViewportPanel::reset_loading_frame_fence() {
+  ++loading_frame_generation_;
+  composed_prepared_geometry_revision_ = 0u;
+}
+
+bool QtViewportPanel::loading_frame_presented() const {
+  if (!initialized_ || workspace_ == nullptr || startup_presentation_blocked_ ||
+      loading_presentation_blocked_) {
+    return false;
+  }
+  bool visible_pane_found = false;
+  for (const Pane &pane_state : panes_) {
+    if (!workspace_->pane_visible(pane_state.id)) {
+      continue;
+    }
+    visible_pane_found = true;
+    if (!pane_state.frame_presented || !pane_state.surface_container->isVisible() ||
+        pane_state.loading_submitted_generation != loading_frame_generation_ ||
+        pane_state.loading_submitted_geometry != composed_geometry_revision_) {
+      return false;
+    }
+  }
+  return visible_pane_found;
 }
 
 void QtViewportPanel::refresh_workspace_layout() {
@@ -2102,7 +2130,8 @@ QtViewportPanel::render_viewports(bool account_presentation_frame) {
   const ViewportProbeClock::time_point render_start =
       diagnostics_enabled ? ViewportProbeClock::now()
                           : ViewportProbeClock::time_point{};
-  if (!initialized_ || startup_presentation_blocked_ || workspace_ == nullptr ||
+  if (!initialized_ || startup_presentation_blocked_ || loading_presentation_blocked_ ||
+      workspace_ == nullptr ||
       render_system_ == nullptr) {
     return 0u;
   }
@@ -2176,8 +2205,13 @@ QtViewportPanel::render_viewports(bool account_presentation_frame) {
       active_placements, input_router_.navigating(), interaction_pane_id_,
       [this](const ViewportPanePlacement &placement) {
         Pane &pane_state = pane(placement.pane_id);
-        return workspace_->pane_visible(pane_state.id) &&
-               pane_state.surface->render_frame();
+        const bool submitted = workspace_->pane_visible(pane_state.id) &&
+                               pane_state.surface->render_frame();
+        if (submitted) {
+          pane_state.loading_submitted_generation = loading_frame_generation_;
+          pane_state.loading_submitted_geometry = composed_geometry_revision_;
+        }
+        return submitted;
       });
   if (account_presentation_frame) {
     render_system_->complete_presentation_frame(submitted);
@@ -2467,8 +2501,28 @@ void QtViewportPanel::create_pane(Pane &pane_state) {
     pane_state.surface_container = host;
     const QPointer<QtViewportSurface> surface = pane_state.surface;
     host->set_prepare_callback([this]() { return prepare_composed_frame(); });
-    host->set_render_callback([surface](const RenderVulkanCompositionTarget &target) {
-      return surface != nullptr && surface->render_composed_frame(target);
+    const ViewportPaneId pane_id = pane_state.id;
+    host->set_render_callback([this, surface, pane_id](const RenderVulkanCompositionTarget &target) {
+      Pane &rendered_pane = pane(pane_id);
+      rendered_pane.loading_rendered_generation = 0u;
+      const auto generation = loading_frame_generation_;
+      const auto geometry = composed_geometry_revision_;
+      const bool submitted = surface != nullptr && !startup_presentation_blocked_ &&
+                             !loading_presentation_blocked_ &&
+                             surface->render_composed_frame(target);
+      if (submitted && generation == loading_frame_generation_ &&
+          geometry == composed_geometry_revision_) {
+        rendered_pane.loading_rendered_generation = generation;
+        rendered_pane.loading_rendered_geometry = geometry;
+      }
+      return submitted;
+    });
+    QObject::connect(host, &QRhiWidget::frameSubmitted, host, [this, pane_id]() {
+      Pane &submitted_pane = pane(pane_id);
+      submitted_pane.loading_submitted_generation =
+          submitted_pane.loading_rendered_generation;
+      submitted_pane.loading_submitted_geometry =
+          submitted_pane.loading_rendered_geometry;
     });
     host->set_release_callback([surface]() {
       if (surface != nullptr) {

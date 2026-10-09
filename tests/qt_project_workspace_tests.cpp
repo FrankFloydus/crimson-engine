@@ -3572,6 +3572,270 @@ TEST(QtProjectWorkspaceTests,
 }
 
 TEST(QtProjectWorkspaceTests,
+     LoadingCoverRetainsLogoAndSettlesHomeAcrossRepeatedLoads) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const auto profile = std::filesystem::temp_directory_path() /
+      ("quader-loading-cover-" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+  ScopedIsolatedLocalAppData scoped_profile(profile);
+  ASSERT_TRUE(scoped_profile.active());
+  int argc = 1;
+  char application_name[] = "quader-loading-cover-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  ASSERT_NE(QApplication::setStyle(QStringLiteral("Fusion")), nullptr);
+  const QPalette native_palette = application.palette();
+  quader::apply_qt_obsidian_application_theme(native_palette);
+  application.setWindowIcon(quader::qt_multiresolution_icon(
+      QStringLiteral(QUADER_SOURCE_DIR "/resources/icons/quader_256.png")));
+  const auto resources = std::filesystem::path(QUADER_SOURCE_DIR) / "resources";
+  quader::RenderSystem renderer;
+  quader::ProjectSession project;
+  project.set_resource_root(resources / "modeling_assets");
+  quader::QuaderEditorApi editor(project);
+  quader::UISystem ui;
+  ASSERT_TRUE(ui.initialize(renderer, resources));
+  auto *window = ui.main_window();
+  ASSERT_NE(window, nullptr);
+  window->resize(1000, 740);
+  window->setWindowState(window->windowState() | Qt::WindowMaximized);
+  ui.show();
+  auto *cover = window->findChild<QWidget *>(QStringLiteral("quaderLoadingCover"));
+  ASSERT_NE(cover, nullptr);
+  EXPECT_TRUE(window->updatesEnabled());
+  EXPECT_TRUE(ui.loading_presentation_active());
+  EXPECT_TRUE(cover->isVisible());
+  EXPECT_EQ(cover->geometry(), window->rect());
+  for (int frame = 0; frame < 8; ++frame) {
+    application.processEvents();
+    ui.refresh({}, {});
+  }
+  EXPECT_TRUE(ui.loading_presentation_active())
+      << "the first reveal must wait for the editor binding";
+
+  auto &scene = project.fallback_scene();
+  ui.install_runtime_hooks(editor, scene.scene(), scene.assets(), scene.modeling(),
+      scene.selection(), scene.native_tools(), scene.point_placement(),
+      quader::kInvalidAssetId);
+  ASSERT_TRUE(window->isMaximized());
+  ASSERT_TRUE(quader::platform_window_is_maximized(ui.native_window_handle()));
+  // Restore through the native title-bar command while the initial cover is
+  // still held. Readiness must follow the new state, not the original maximize.
+#if defined(_WIN32)
+  ASSERT_NE(PostMessageW(static_cast<HWND>(ui.native_window_handle()),
+                        WM_SYSCOMMAND, SC_RESTORE, 0), FALSE);
+#else
+  window->showNormal();
+#endif
+  QElapsedTimer restore_deadline;
+  restore_deadline.start();
+  while ((window->isMaximized() ||
+          quader::platform_window_is_maximized(ui.native_window_handle())) &&
+         restore_deadline.elapsed() < 1000) {
+    application.processEvents();
+    ui.refresh({}, {});
+  }
+  ASSERT_FALSE(window->isMaximized());
+  ASSERT_FALSE(quader::platform_window_is_maximized(ui.native_window_handle()));
+  EXPECT_TRUE(ui.loading_presentation_active());
+  EXPECT_TRUE(cover->isVisible());
+  const QSize restored_extent = window->size();
+  const auto settle_home = [&] {
+    QElapsedTimer deadline;
+    deadline.start();
+    while (ui.loading_presentation_active() && deadline.elapsed() < 3000) {
+      application.processEvents();
+      ui.refresh({}, {});
+    }
+    EXPECT_FALSE(ui.loading_presentation_active());
+    EXPECT_TRUE(cover->isHidden());
+    EXPECT_TRUE(window->updatesEnabled());
+  };
+  settle_home();
+  EXPECT_EQ(window->size(), restored_extent);
+  const auto native_extent = quader::platform_window_client_extent(ui.native_window_handle());
+  EXPECT_TRUE(quader::qt_startup_client_extents_match(
+      qRound(window->width() * window->devicePixelRatioF()),
+      qRound(window->height() * window->devicePixelRatioF()),
+      native_extent.width, native_extent.height));
+  auto *stack = window->findChild<QStackedWidget *>(QStringLiteral("mainCentralStack"));
+  ASSERT_NE(stack, nullptr);
+  EXPECT_NE(dynamic_cast<quader::QtProjectHomePage *>(stack->currentWidget()), nullptr);
+  std::vector<std::pair<QWidget *, QRect>> revealed_home_geometry;
+  for (const QString &name : {
+           QStringLiteral("projectHome.title"),
+           QStringLiteral("projectHome.recentProjects.frame"),
+           QStringLiteral("projectHome.tutorial.card"),
+           QStringLiteral("projectHome.documentation.card")}) {
+    auto *widget = window->findChild<QWidget *>(name);
+    ASSERT_NE(widget, nullptr);
+    ASSERT_TRUE(widget->geometry().isValid());
+    revealed_home_geometry.emplace_back(widget, widget->geometry());
+  }
+  for (int frame = 0; frame < 8; ++frame) {
+    application.processEvents();
+    ui.refresh({}, {});
+    for (const auto &[widget, geometry] : revealed_home_geometry) {
+      EXPECT_EQ(widget->geometry(), geometry)
+          << widget->objectName().toStdString()
+          << " must reach its final layout before Home is revealed";
+    }
+  }
+  class CoverEventProbe final : public QObject {
+  public:
+    int transitions = 0;
+  protected:
+    bool eventFilter(QObject *watched, QEvent *event) override {
+      if (event->type() == QEvent::Show || event->type() == QEvent::Hide ||
+          event->type() == QEvent::Resize || event->type() == QEvent::Move) {
+        ++transitions;
+      }
+      return QObject::eventFilter(watched, event);
+    }
+  } probe;
+  cover->installEventFilter(&probe);
+  const QString review = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (!review.isEmpty()) ASSERT_TRUE(QDir().mkpath(review));
+  const QImage authored_logo(QStringLiteral(
+      QUADER_SOURCE_DIR "/resources/icons/quader_256.png"));
+  ASSERT_FALSE(authored_logo.isNull());
+  QRect authored_alpha_bounds;
+  for (int y = 0; y < authored_logo.height(); ++y) {
+    for (int x = 0; x < authored_logo.width(); ++x) {
+      if (authored_logo.pixelColor(x, y).alpha() != 0) {
+        authored_alpha_bounds |= QRect(x, y, 1, 1);
+      }
+    }
+  }
+  ASSERT_TRUE(authored_alpha_bounds.isValid());
+  QSize painted_logo_size;
+  const auto expect_logo_paint = [&](const QString &name) {
+    EXPECT_TRUE(ui.loading_presentation_active());
+    EXPECT_TRUE(cover->isVisible());
+    EXPECT_EQ(cover->geometry(), window->rect());
+    const QImage image = cover->grab().toImage();
+    ASSERT_FALSE(image.isNull());
+    const QColor background = cover->palette().color(QPalette::Window);
+    EXPECT_EQ(image.pixelColor(0, 0), background);
+    EXPECT_EQ(image.pixelColor(image.width() - 1, image.height() - 1), background);
+    QRect logo_bounds;
+    for (int y = 0; y < image.height(); ++y) {
+      for (int x = 0; x < image.width(); ++x) {
+        if (image.pixelColor(x, y) != background) {
+          logo_bounds |= QRect(x, y, 1, 1);
+        }
+      }
+    }
+    EXPECT_TRUE(logo_bounds.isValid()) << "the loading cover must paint the logo";
+    // Center the authored canvas. The Q tail makes its alpha bounds asymmetric
+    // (19..245 horizontally in the 256px asset), so visible pixels sit right
+    // of the canvas center; their expected offset scales with the artwork.
+    const QPointF authored_offset = QRectF(authored_alpha_bounds).center() -
+                                    QRectF(authored_logo.rect()).center();
+    const QPointF expected_center = QRectF(image.rect()).center() + QPointF(
+        authored_offset.x() * logo_bounds.width() / authored_alpha_bounds.width(),
+        authored_offset.y() * logo_bounds.height() / authored_alpha_bounds.height());
+    EXPECT_NEAR(QRectF(logo_bounds).center().x(), expected_center.x(), 1);
+    EXPECT_NEAR(QRectF(logo_bounds).center().y(), expected_center.y(), 1);
+    EXPECT_LT(logo_bounds.width(), image.width() / 2);
+    EXPECT_LT(logo_bounds.height(), image.height() / 2);
+    painted_logo_size = logo_bounds.size();
+    if (!review.isEmpty()) EXPECT_TRUE(image.save(QDir(review).filePath(name)));
+  };
+  int cycle = 0;
+  QSize baseline_logo_size;
+  for (const double factor : {1.0, 2.0, 1.0}) {
+    ASSERT_TRUE(editor.preferences().set_interface_scale(factor).ok());
+    ui.refresh({}, {});
+    ui.begin_loading_presentation();
+    application.processEvents();
+    expect_logo_paint(QStringLiteral("loading-cover-%1-%2.png")
+                         .arg(qRound(factor * 100)).arg(cycle++));
+    if (cycle == 1) {
+      baseline_logo_size = painted_logo_size;
+    } else if (factor == 2.0) {
+      EXPECT_GT(painted_logo_size.width(), baseline_logo_size.width());
+      EXPECT_GT(painted_logo_size.height(), baseline_logo_size.height());
+    } else {
+      EXPECT_EQ(painted_logo_size, baseline_logo_size);
+    }
+    const int stable_transitions = probe.transitions;
+    for (int frame = 0; frame < 8; ++frame) {
+      ui.refresh({}, {});
+      application.processEvents();
+    }
+    EXPECT_TRUE(ui.loading_presentation_active())
+        << "stable geometry cannot finish an operation still in progress";
+    EXPECT_EQ(probe.transitions, stable_transitions);
+    ui.end_loading_presentation(true);
+    EXPECT_TRUE(ui.loading_presentation_active())
+        << "success must wait for the resulting layout";
+    settle_home();
+    const int completed_transitions = probe.transitions;
+    for (int frame = 0; frame < 8; ++frame) {
+      ui.refresh({}, {});
+      application.processEvents();
+    }
+    EXPECT_EQ(probe.transitions, completed_transitions);
+  }
+  window->resize(660, 740);
+  ui.begin_loading_presentation();
+  application.processEvents();
+  expect_logo_paint(QStringLiteral("loading-cover-narrow.png"));
+  ui.end_loading_presentation(false);
+  EXPECT_FALSE(ui.loading_presentation_active());
+  EXPECT_TRUE(cover->isHidden());
+  EXPECT_NE(dynamic_cast<quader::QtProjectHomePage *>(stack->currentWidget()), nullptr);
+  ui.begin_loading_presentation();
+  ui.begin_loading_presentation();
+  ui.end_loading_presentation(true);
+  EXPECT_TRUE(ui.loading_presentation_active());
+  ui.end_loading_presentation(false);
+  EXPECT_FALSE(ui.loading_presentation_active());
+  ui.end_loading_presentation(true);
+  EXPECT_FALSE(ui.loading_presentation_active());
+  {
+    QLineEdit draft(stack->currentWidget());
+    draft.setGeometry(20, 20, 180, 32);
+    draft.show();
+    window->activateWindow();
+    QApplication::setActiveWindow(window);
+    draft.setFocus(Qt::OtherFocusReason);
+    application.processEvents();
+    ASSERT_EQ(QApplication::focusWidget(), &draft);
+    draft.setText(QStringLiteral("Uncommitted draft"));
+    draft.setModified(true);
+    int edits_finished = 0;
+    QObject::connect(&draft, &QLineEdit::editingFinished,
+                     &draft, [&] { ++edits_finished; });
+    ui.begin_loading_presentation();
+    EXPECT_EQ(QApplication::focusWidget(), &draft);
+    EXPECT_EQ(edits_finished, 0);
+    send_key(draft, Qt::Key_Return);
+    EXPECT_EQ(edits_finished, 0) << "covered input must not commit a retained draft";
+    ui.end_loading_presentation(false);
+    EXPECT_EQ(QApplication::focusWidget(), &draft);
+    EXPECT_EQ(edits_finished, 0);
+    EXPECT_EQ(draft.text(), QStringLiteral("Uncommitted draft"));
+    EXPECT_TRUE(draft.isModified());
+  }
+
+  quader::apply_qt_application_theme_for_contrast_preference(
+      native_palette, Qt::ContrastPreference::HighContrast);
+  ui.begin_loading_presentation();
+  application.processEvents();
+  expect_logo_paint(QStringLiteral("loading-cover-native-palette.png"));
+  ui.end_loading_presentation(false);
+  EXPECT_TRUE(cover->isHidden());
+  EXPECT_EQ(window->findChildren<QWidget *>(QStringLiteral("quaderLoadingCover")).size(), 1);
+  cover->removeEventFilter(&probe);
+  quader::apply_qt_application_theme_for_contrast_preference(
+      native_palette, Qt::ContrastPreference::NoPreference);
+  ui.shutdown();
+}
+
+TEST(QtProjectWorkspaceTests,
      HomeLayoutKeepsCardsReadableAcrossScaleWidthAndNativePalettes) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
@@ -4472,11 +4736,12 @@ TEST(QtProjectWorkspaceTests,
   quader::QuaderEditorApiSessionAccess::set_scene_binding_changed_callback(
       editor, bind_scene);
   bind_scene(project.fallback_scene());
-  ui.show();
-  ASSERT_TRUE(ui.main_window()->isVisible());
-
   const auto created = editor.project().create(project_root);
   ASSERT_TRUE(created.ok()) << created.error_message();
+  // This owner fixture has no renderer or exposed native window. Present the
+  // bound workspace directly; App loading readiness has its own GPU fixture.
+  ui.main_window()->show();
+  ASSERT_TRUE(ui.main_window()->isVisible());
   ASSERT_TRUE(editor.scene().create_point_light().ok());
   ASSERT_TRUE(editor.scene_documents().has_dirty_scenes());
   const auto active_scene = editor.scene_documents().active_scene_id();
@@ -6104,7 +6369,8 @@ TEST(QtProjectWorkspaceTests,
   ui.install_runtime_hooks(editor, scene.scene(), scene.assets(), scene.modeling(),
       scene.selection(), scene.native_tools(), scene.point_placement(),
       quader::kInvalidAssetId);
-  ui.show();
+  // Exercise retained Inspector input without starting the App/GPU loading gate.
+  ui.main_window()->show();
   ASSERT_TRUE(editor.ui().show_panel("inspector").ok());
   application.processEvents();
   ui.refresh({}, {});
@@ -7535,6 +7801,372 @@ TEST(QtProjectWorkspaceTests,
   QCoreApplication::sendEvent(&widget, &disabled_paint);
   EXPECT_EQ(preparations, 1);
   EXPECT_EQ(renders, 0);
+}
+
+TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) {
+  if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_LOADING_APP_TESTS") != 1) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_LOADING_APP_TESTS=1 for loading transitions";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const auto profile = std::filesystem::temp_directory_path() /
+      ("quader-loading-app-" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+  ScopedIsolatedLocalAppData scoped_profile(profile);
+  ASSERT_TRUE(scoped_profile.active());
+  int argc = 1;
+  char application_name[] = "quader-loading-real-app-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  application.setApplicationName(QStringLiteral("Quader"));
+  application.setOrganizationName(QStringLiteral("Quader"));
+  QStyle *style = QStyleFactory::create(QStringLiteral("Fusion"));
+  ASSERT_NE(style, nullptr);
+  QApplication::setStyle(style);
+  quader::apply_qt_obsidian_application_theme(style->standardPalette());
+  application.setWindowIcon(QIcon(QStringLiteral(
+      QUADER_SOURCE_DIR "/resources/icons/quader.ico")));
+  const auto executable = std::filesystem::path(
+      QCoreApplication::applicationFilePath().toStdWString());
+  const auto resources = executable.parent_path();
+  const auto project_root = profile / "Loading Project";
+  ASSERT_TRUE(std::filesystem::create_directory(project_root));
+  std::filesystem::path manifest_path;
+  std::filesystem::path unopened_scene_path;
+  QString unopened_scene_identity;
+  {
+    quader::ProjectSession project;
+    project.set_resource_root(resources);
+    quader::QuaderEditorApi editor(project);
+    ASSERT_TRUE(editor.project().create(project_root).ok());
+    ASSERT_TRUE(editor.viewports().set_layout(quader::ViewportLayoutId::FourQuad).ok());
+    const auto box = editor.modeling().create_box(
+        {.min = {-2, -1, -3}, .max = {2, 3, 1}}, "Loading fixture box");
+    ASSERT_TRUE(box.ok()) << box.error_message();
+    ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+    const auto scene_id = editor.scene_documents().active_scene_id();
+    ASSERT_TRUE(scene_id.has_value());
+    const auto path = quader::ProjectRelativePath::parse_portable("Loaded.qdr");
+    ASSERT_TRUE(path.ok());
+    ASSERT_TRUE(editor.scene_documents().save_as(*scene_id, path.value()).ok());
+    const auto unopened = editor.project_assets().create_scene_asset("", "Unopened");
+    ASSERT_TRUE(unopened.ok()) << unopened.error_message();
+    unopened_scene_path = project_root / unopened.value().project_relative_path;
+    unopened_scene_identity = QString::fromStdString(
+        std::string(unopened.value().scene_id.str()));
+    manifest_path = editor.project().manifest_path();
+  }
+  auto settings = quader::UISettings::defaults();
+  settings.set_interface_scale(1.0f);
+  settings.set_panel_visible(quader::UIPanelId::AssetBrowser, true);
+  ASSERT_TRUE(settings.save(quader::UISettings::resolve_paths(resources).settings_file));
+  class LoadingRevealProbe final : public QObject {
+  public:
+    std::chrono::steady_clock::time_point first_paint{};
+    std::function<void()> revealed;
+  protected:
+    bool eventFilter(QObject *watched, QEvent *event) override {
+      if (watched->objectName() != QStringLiteral("quaderLoadingCover")) {
+        return QObject::eventFilter(watched, event);
+      }
+      if (event->type() == QEvent::Show) first_paint = {};
+      if (event->type() == QEvent::Paint &&
+          first_paint == std::chrono::steady_clock::time_point{}) {
+        first_paint = std::chrono::steady_clock::now();
+      }
+      if (event->type() == QEvent::Hide && revealed) revealed();
+      return QObject::eventFilter(watched, event);
+    }
+  } reveal_probe;
+  application.installEventFilter(&reveal_probe);
+  quader::App app;
+  ASSERT_TRUE(app.initialize(application, executable));
+  QMainWindow *window = nullptr;
+  for (auto *widget : QApplication::topLevelWidgets()) {
+    if (widget->objectName() == QStringLiteral("quaderMainWindow")) {
+      window = qobject_cast<QMainWindow *>(widget);
+    }
+  }
+  ASSERT_NE(window, nullptr);
+  auto *cover = window->findChild<QWidget *>(QStringLiteral("quaderLoadingCover"));
+  auto *recent = window->findChild<QTableView *>(
+      QStringLiteral("projectHome.recentProjects.view"));
+  auto *stack = window->findChild<QStackedWidget *>(QStringLiteral("mainCentralStack"));
+  auto *close_project = window->findChild<QAction *>(QStringLiteral("command_project_close"));
+  auto *viewport = dynamic_cast<quader::QtViewportPanel *>(
+      window->findChild<QWidget *>(QStringLiteral("viewportWorkspace")));
+  ASSERT_NE(cover, nullptr);
+  ASSERT_NE(recent, nullptr);
+  ASSERT_NE(stack, nullptr);
+  ASSERT_NE(close_project, nullptr);
+  ASSERT_NE(viewport, nullptr);
+  EXPECT_FALSE(cover->testAttribute(Qt::WA_OpaquePaintEvent));
+  EXPECT_FALSE(cover->autoFillBackground());
+  EXPECT_TRUE(window->updatesEnabled());
+  constexpr std::array kLoadingPaneIds{
+      quader::ViewportPaneId::Perspective, quader::ViewportPaneId::Top,
+      quader::ViewportPaneId::Front, quader::ViewportPaneId::Side};
+  std::array<quader::QtVulkanCompositionWidget *, 4> hosts{};
+  std::array<std::uint64_t, 4> submitted_frames{};
+  std::array<std::uint64_t, 4> frames_before_open{};
+  for (std::size_t index = 0; index < hosts.size(); ++index) {
+    const QString pane_name = QString::fromUtf8(
+        quader::viewport_pane_stable_id(kLoadingPaneIds[index]).data());
+    hosts[index] = dynamic_cast<quader::QtVulkanCompositionWidget *>(
+        window->findChild<QWidget *>(QStringLiteral("viewportSurfaceContainer_%1")
+                                        .arg(pane_name)));
+    ASSERT_NE(hosts[index], nullptr);
+    QObject::connect(hosts[index], &QRhiWidget::frameSubmitted,
+                     &application, [&, index] {
+      if (hosts[index]->isVisible()) ++submitted_frames[index];
+    });
+  }
+  const auto expect_presented_panes = [&] {
+    for (std::size_t index = 0; index < hosts.size(); ++index) {
+      SCOPED_TRACE(index);
+      EXPECT_GT(submitted_frames[index], frames_before_open[index])
+          << "every visible pane requires its own submitted frame before reveal";
+      EXPECT_TRUE(hosts[index]->isVisible());
+      auto *surface = viewport->surface(kLoadingPaneIds[index]);
+      ASSERT_NE(surface, nullptr);
+      EXPECT_TRUE(surface->ready_to_render());
+      const auto extent = surface->render_size_pixels();
+      EXPECT_EQ(surface->renderer().width(), extent.x);
+      EXPECT_EQ(surface->renderer().height(), extent.y);
+    }
+  };
+  const QString review = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (!review.isEmpty()) ASSERT_TRUE(QDir().mkpath(review));
+  const auto capture = [&](const QString &name) {
+    ASSERT_NE(window->screen(), nullptr);
+    const QPoint origin = window->mapToGlobal(QPoint{});
+    const QPixmap image = window->screen()->grabWindow(
+        0, origin.x(), origin.y(), window->width(), window->height());
+    ASSERT_FALSE(image.isNull());
+    if (!review.isEmpty()) EXPECT_TRUE(image.save(QDir(review).filePath(name)));
+  };
+  enum class Phase {
+    InitialHome, FirstProject, FailedWorkspaceOpen, ReturningHome,
+    ReopenedProject, Complete
+  };
+  Phase phase = Phase::InitialHome;
+  bool awaiting_project_reveal = false;
+  bool quad_layout_pending = false;
+  bool observing_transition = false;
+  int successful_reveals = 0;
+  std::vector<std::pair<QWidget *, QRect>> revealed_geometry;
+  QElapsedTimer reveal_observation;
+  reveal_probe.revealed = [&] {
+    if (phase != Phase::InitialHome && !awaiting_project_reveal) return;
+    if (awaiting_project_reveal) {
+      EXPECT_FALSE(quad_layout_pending);
+      expect_presented_panes();
+    }
+    ASSERT_NE(reveal_probe.first_paint, std::chrono::steady_clock::time_point{});
+    const auto displayed_for = std::chrono::steady_clock::now() - reveal_probe.first_paint;
+    EXPECT_GE(std::chrono::duration_cast<std::chrono::milliseconds>(displayed_for).count(), 2000);
+    ++successful_reveals;
+    awaiting_project_reveal = false;
+    revealed_geometry.clear();
+    revealed_geometry.emplace_back(window, window->geometry());
+    revealed_geometry.emplace_back(stack->currentWidget(), stack->currentWidget()->geometry());
+    for (auto *widget : window->findChildren<QWidget *>()) {
+      const auto name = widget->objectName();
+      if (widget->isVisible() && (qobject_cast<QDockWidget *>(widget) != nullptr ||
+          name.startsWith(QStringLiteral("viewportPane_")) ||
+          name.startsWith(QStringLiteral("viewportSurfaceContainer_")) ||
+          name == QStringLiteral("projectHome.title") ||
+          name == QStringLiteral("projectHome.recentProjects.frame") ||
+          name == QStringLiteral("projectHome.tutorial.card") ||
+          name == QStringLiteral("projectHome.documentation.card"))) {
+        revealed_geometry.emplace_back(widget, widget->geometry());
+      }
+    }
+    reveal_observation.start();
+  };
+  bool captured_initial_cover = false;
+  bool captured_project_cover = false;
+  bool captured_reopen_cover = false;
+  int uncovered_samples = 0;
+  const auto open_recent = [&] {
+    ASSERT_EQ(recent->model()->rowCount(), 1);
+    frames_before_open = submitted_frames;
+    recent->setCurrentIndex(recent->model()->index(0, 0));
+    send_key(*recent, Qt::Key_Return);
+    EXPECT_TRUE(cover->isVisible());
+    EXPECT_TRUE(window->updatesEnabled());
+    // Layout is transient scene-session state. Apply its ordinary command once
+    // the App refresh has rebound its retained actions, while loading is covered.
+    quad_layout_pending = true;
+    awaiting_project_reveal = true;
+    revealed_geometry.clear();
+  };
+  int acknowledged_errors = 0;
+  const auto acknowledge_expected_error = [&] {
+    QTimer::singleShot(0, &application, [&] {
+      auto *dialog = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+      ASSERT_NE(dialog, nullptr);
+      EXPECT_EQ(dialog->objectName(), QStringLiteral("lifecycle_error_message_box"));
+      auto *accept = dialog->findChild<QPushButton *>(QStringLiteral("lifecycleMessageBox.ok"));
+      ASSERT_NE(accept, nullptr);
+      ++acknowledged_errors;
+      accept->click();
+    });
+  };
+  QTimer observer(&application);
+  observer.setInterval(5);
+  QObject::connect(&observer, &QTimer::timeout, &application, [&] {
+    if (observing_transition) return;
+    const QScopedValueRollback observation_guard(observing_transition, true);
+    if (cover->isVisible()) {
+      uncovered_samples = 0;
+      if (quad_layout_pending) {
+        auto *layout_menu = window->findChild<QMenu *>(
+            QStringLiteral("viewportLayoutMenu_perspective"));
+        ASSERT_NE(layout_menu, nullptr);
+        ASSERT_TRUE(QMetaObject::invokeMethod(layout_menu, "aboutToShow", Qt::DirectConnection));
+        auto *quad_layout = layout_menu->findChild<QAction *>(QStringLiteral("layout_four_quad"));
+        ASSERT_NE(quad_layout, nullptr);
+        if (quad_layout->isEnabled()) {
+          quad_layout->trigger();
+          quad_layout_pending = false;
+        }
+      }
+      if (phase == Phase::InitialHome && !captured_initial_cover) {
+        capture(QStringLiteral("loading-app-initial-cover.png"));
+        captured_initial_cover = true;
+      } else if (phase == Phase::FirstProject && !captured_project_cover) {
+        capture(QStringLiteral("loading-app-project-cover.png"));
+        captured_project_cover = true;
+      } else if (phase == Phase::ReopenedProject && !captured_reopen_cover) {
+        capture(QStringLiteral("loading-app-reopen-cover.png"));
+        captured_reopen_cover = true;
+      }
+      return;
+    }
+    for (const auto &[widget, geometry] : revealed_geometry) {
+      EXPECT_EQ(widget->geometry(), geometry)
+          << widget->objectName().toStdString() << " shifted after the cover was removed";
+    }
+    if (!revealed_geometry.empty() && reveal_observation.elapsed() < 250) return;
+    // Give the native compositor a turn after the retained cover is removed.
+    if (++uncovered_samples < 3) return;
+    uncovered_samples = 0;
+    if (phase == Phase::InitialHome) {
+      EXPECT_NE(dynamic_cast<quader::QtProjectHomePage *>(stack->currentWidget()), nullptr);
+      capture(QStringLiteral("loading-app-home-ready.png"));
+      phase = Phase::FirstProject;
+      open_recent();
+    } else if (phase == Phase::FirstProject || phase == Phase::ReopenedProject) {
+      expect_presented_panes();
+      capture(phase == Phase::FirstProject
+          ? QStringLiteral("loading-app-project-ready.png")
+          : QStringLiteral("loading-app-reopen-ready.png"));
+      if (phase == Phase::ReopenedProject) {
+        phase = Phase::Complete;
+        application.quit();
+      } else {
+        auto *dock = window->findChild<QDockWidget *>(QStringLiteral("dock_asset_browser"));
+        ASSERT_NE(dock, nullptr);
+        auto *browser = dynamic_cast<quader::QtAssetBrowser *>(dock->widget());
+        ASSERT_NE(browser, nullptr);
+        ASSERT_TRUE(dock->isVisible());
+        ASSERT_TRUE(browser->reveal_item(unopened_scene_identity));
+        auto *tabs = window->findChild<QTabBar *>(QStringLiteral("sceneWorkspace.tabs"));
+        ASSERT_NE(tabs, nullptr);
+        const int tab_count = tabs->count();
+        const int active_tab = tabs->currentIndex();
+        const QString tab_name = tabs->tabText(active_tab);
+        const auto valid_scene = read_binary_file(unopened_scene_path);
+        ASSERT_TRUE(valid_scene.has_value());
+        {
+          std::ofstream corrupt(unopened_scene_path, std::ios::binary | std::ios::trunc);
+          corrupt << "invalid scene fixture";
+        }
+        class PaneHideProbe final : public QObject {
+        public:
+          int hidden_count = 0;
+        protected:
+          bool eventFilter(QObject *watched, QEvent *event) override {
+            if (event->type() == QEvent::Hide) ++hidden_count;
+            return QObject::eventFilter(watched, event);
+          }
+        } hide_probe;
+        std::array<QRect, 4> previous_geometry{};
+        for (std::size_t index = 0; index < hosts.size(); ++index) {
+          hosts[index]->installEventFilter(&hide_probe);
+          previous_geometry[index] = hosts[index]->geometry();
+        }
+        acknowledge_expected_error();
+        EXPECT_TRUE(browser->handle_action(quader::QtAssetBrowserAction::Open));
+        EXPECT_TRUE(cover->isHidden());
+        EXPECT_EQ(hide_probe.hidden_count, 0)
+            << "a failed preflight must preserve the displayed viewport texture";
+        for (std::size_t index = 0; index < hosts.size(); ++index) {
+          hosts[index]->removeEventFilter(&hide_probe);
+          EXPECT_TRUE(hosts[index]->isVisible());
+          EXPECT_EQ(hosts[index]->geometry(), previous_geometry[index]);
+        }
+        EXPECT_EQ(tabs->count(), tab_count);
+        EXPECT_EQ(tabs->currentIndex(), active_tab);
+        EXPECT_EQ(tabs->tabText(active_tab), tab_name);
+        {
+          std::ofstream restored(unopened_scene_path, std::ios::binary | std::ios::trunc);
+          restored << *valid_scene;
+        }
+        phase = Phase::FailedWorkspaceOpen;
+      }
+    } else if (phase == Phase::FailedWorkspaceOpen) {
+      expect_presented_panes();
+      capture(QStringLiteral("loading-app-failed-workspace-open.png"));
+      ASSERT_TRUE(close_project->isEnabled());
+      revealed_geometry.clear();
+      close_project->trigger();
+      phase = Phase::ReturningHome;
+    } else if (phase == Phase::ReturningHome) {
+      EXPECT_NE(dynamic_cast<quader::QtProjectHomePage *>(stack->currentWidget()), nullptr);
+      std::ifstream input(manifest_path, std::ios::binary);
+      const std::string valid_manifest((std::istreambuf_iterator<char>(input)),
+                                       std::istreambuf_iterator<char>());
+      input.close();
+      ASSERT_FALSE(valid_manifest.empty());
+      {
+        std::ofstream corrupt(manifest_path, std::ios::binary | std::ios::trunc);
+        corrupt << "invalid project fixture";
+      }
+      recent->setCurrentIndex(recent->model()->index(0, 0));
+      acknowledge_expected_error();
+      send_key(*recent, Qt::Key_Return);
+      EXPECT_TRUE(cover->isHidden()) << "a failed open must immediately restore Home";
+      EXPECT_NE(dynamic_cast<quader::QtProjectHomePage *>(stack->currentWidget()), nullptr);
+      capture(QStringLiteral("loading-app-failed-open.png"));
+      {
+        std::ofstream restored(manifest_path, std::ios::binary | std::ios::trunc);
+        restored << valid_manifest;
+      }
+      phase = Phase::ReopenedProject;
+      open_recent();
+    }
+  });
+  QTimer deadline(&application);
+  deadline.setSingleShot(true);
+  QObject::connect(&deadline, &QTimer::timeout, &application, [&] {
+    ADD_FAILURE() << "loading transition did not finish; phase=" << static_cast<int>(phase);
+    application.quit();
+  });
+  observer.start();
+  deadline.start(20000);
+  EXPECT_EQ(app.run(), 0);
+  observer.stop();
+  deadline.stop();
+  EXPECT_EQ(phase, Phase::Complete);
+  EXPECT_TRUE(captured_initial_cover);
+  EXPECT_TRUE(captured_project_cover);
+  EXPECT_TRUE(captured_reopen_cover);
+  EXPECT_EQ(successful_reveals, 3);
+  EXPECT_EQ(acknowledged_errors, 2);
+  application.removeEventFilter(&reveal_probe);
+  app.shutdown();
 }
 
 TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {

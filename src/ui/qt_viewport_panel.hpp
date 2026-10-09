@@ -139,6 +139,16 @@ public:
   [[nodiscard]] bool startup_presentation_blocked() const {
     return startup_presentation_blocked_;
   }
+  /// Rejects old textures after a load, even if the pane geometry is unchanged.
+  void reset_loading_frame_fence();
+  [[nodiscard]] bool loading_frame_presented() const;
+  /// Keeps existing pane textures visible while synchronous loading is covered.
+  void set_loading_presentation_blocked(bool blocked) {
+    loading_presentation_blocked_ = blocked;
+  }
+  [[nodiscard]] bool loading_presentation_blocked() const {
+    return loading_presentation_blocked_;
+  }
   void refresh_workspace_layout();
   void process_input(QuaderEditorApi &editor, SceneDocument &document,
                      AssetRegistry &assets, ModelingSessionService &modeling,
@@ -226,6 +236,10 @@ private:
     bool frame_presented = false;
     bool surface_presented = false;
     bool overlay_stack_valid = false;
+    std::uint64_t loading_rendered_generation = 0u;
+    std::uint64_t loading_rendered_geometry = 0u;
+    std::uint64_t loading_submitted_generation = 0u;
+    std::uint64_t loading_submitted_geometry = 0u;
     /// Associates a pane-owned presentation action with its metadata source.
     struct ControlAction {
       QPointer<QAction> source;
@@ -326,6 +340,7 @@ private:
   std::function<void()> composed_frame_prepare_;
   std::uint64_t composed_geometry_revision_ = 1u;
   std::uint64_t composed_prepared_geometry_revision_ = 0u;
+  std::uint64_t loading_frame_generation_ = 1u;
   bool composed_preparing_ = false;
   bool composed_ = false;
   RenderFramePerformanceStats render_performance_ = {};
@@ -417,6 +432,7 @@ private:
   bool viewport_info_scene_stats_valid_ = false;
   QtStartupPresentationState native_surface_startup_;
   bool startup_presentation_blocked_ = true;
+  bool loading_presentation_blocked_ = false;
   bool initialized_ = false;
 };
 

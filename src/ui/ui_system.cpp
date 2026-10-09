@@ -121,6 +121,134 @@ namespace {
 constexpr int kQtWindowStateVersion = 1;
 constexpr int kDockContentMinimumWidth = 220;
 
+/** Covers the shell without suppressing the QRhi children below its paint. */
+class QtLoadingCover final : public QWidget {
+public:
+  QtLoadingCover(QWidget &parent, bool composed, int logo_extent)
+      : QWidget(&parent), logo_extent_(logo_extent), composed_(composed) {
+    setObjectName(QStringLiteral("quaderLoadingCover"));
+    setAttribute(Qt::WA_DontCreateNativeAncestors);
+    setAttribute(Qt::WA_NativeWindow, !composed);
+    setFocusPolicy(Qt::NoFocus);
+    parent.installEventFilter(this);
+    hide();
+  }
+
+  void set_logo_extent(int extent) {
+    if (logo_extent_ != extent) {
+      logo_extent_ = extent;
+      update();
+    }
+  }
+
+  void flush_presentation() {
+    const auto previous_paint = paint_count_;
+    // Repaint the root: in the composed path a cover paint alone is not
+    // evidence that Qt submitted the backing store to the native window.
+    window()->repaint();
+    // QtMainWindow permits two input-before-paint deferrals. Deliver only its
+    // queued repaint so keyboard-triggered loading cannot skip this cover.
+    for (unsigned int attempt = 0u; attempt != 3u && isVisible() &&
+         paint_count_ == previous_paint; ++attempt) {
+      QCoreApplication::sendPostedEvents(window(), QEvent::UpdateRequest);
+    }
+  }
+
+  void begin_presentation() {
+    presentation_begin_paint_count_ = paint_count_;
+    first_presented_at_ = {};
+  }
+
+  void note_composited_submission() {
+    if (isVisible() && paint_count_ != presentation_begin_paint_count_ &&
+        first_presented_at_ == std::chrono::steady_clock::time_point{}) {
+      first_presented_at_ = std::chrono::steady_clock::now();
+    }
+  }
+
+  [[nodiscard]] bool minimum_duration_elapsed() const {
+    constexpr auto kMinimumLoadingDuration = std::chrono::seconds(2);
+    return first_presented_at_ != std::chrono::steady_clock::time_point{} &&
+           std::chrono::steady_clock::now() - first_presented_at_ >=
+               kMinimumLoadingDuration;
+  }
+
+  void set_input_blocked(bool blocked) {
+    if (blocked) {
+      QApplication::instance()->installEventFilter(this);
+    } else {
+      QApplication::instance()->removeEventFilter(this);
+    }
+  }
+
+protected:
+  bool eventFilter(QObject *watched, QEvent *event) override {
+    if (watched == parentWidget() && event->type() == QEvent::Resize) {
+      setGeometry(parentWidget()->rect());
+    }
+    if (isVisible()) {
+      switch (event->type()) {
+      case QEvent::ShortcutOverride:
+      case QEvent::KeyPress:
+      case QEvent::MouseButtonPress:
+      case QEvent::MouseButtonDblClick:
+      case QEvent::Wheel:
+      case QEvent::ContextMenu:
+        for (QObject *target = watched; target != nullptr; target = target->parent()) {
+          if (target == parentWidget() || target == window()->windowHandle()) {
+            event->accept();
+            return true;
+          }
+        }
+        break;
+      default:
+        break;
+      }
+    }
+    return QWidget::eventFilter(watched, event);
+  }
+
+  bool event(QEvent *event) override {
+    switch (event->type()) {
+    case QEvent::ShortcutOverride:
+    case QEvent::KeyPress:
+    case QEvent::KeyRelease:
+    case QEvent::MouseButtonPress:
+    case QEvent::MouseButtonRelease:
+    case QEvent::MouseButtonDblClick:
+    case QEvent::Wheel:
+    case QEvent::ContextMenu:
+      event->accept();
+      return true;
+    default:
+      return QWidget::event(event);
+    }
+  }
+
+  void paintEvent(QPaintEvent *) override {
+    ++paint_count_;
+    if (!composed_ && isVisible() && window()->windowHandle() != nullptr &&
+        window()->windowHandle()->isExposed() &&
+        first_presented_at_ == std::chrono::steady_clock::time_point{}) {
+      first_presented_at_ = std::chrono::steady_clock::now();
+    }
+    QPainter painter(this);
+    // An opaque-widget hint would let Qt cull the underlying scene texture.
+    painter.fillRect(rect(), palette().brush(QPalette::Window));
+    const QSize extent(logo_extent_, logo_extent_);
+    const QRect logo_rect(QPoint((width() - extent.width()) / 2,
+                                (height() - extent.height()) / 2), extent);
+    QApplication::windowIcon().paint(&painter, logo_rect);
+  }
+
+private:
+  int logo_extent_ = 0;
+  std::uint64_t paint_count_ = 0u;
+  std::uint64_t presentation_begin_paint_count_ = 0u;
+  std::chrono::steady_clock::time_point first_presented_at_{};
+  bool composed_ = false;
+};
+
 /** Keeps the menu/toolbar boundary on the same quiet palette role as the status bar. */
 class QtMainMenuBar final : public QMenuBar {
 public:
@@ -555,6 +683,9 @@ bool UISystem::initialize(RenderSystem &render_system,
     composition_anchor_->set_vsync_enabled(settings_.vsync_enabled());
     QObject::connect(composition_anchor_, &QRhiWidget::frameSubmitted,
                      composition_anchor_, [this]() {
+      if (loading_presentation_active_ && loading_cover_ != nullptr) {
+        static_cast<QtLoadingCover *>(loading_cover_)->note_composited_submission();
+      }
       if (render_system_ != nullptr && render_system_->initialized()) {
         render_system_->complete_composited_presentation_frame();
       }
@@ -1088,6 +1219,8 @@ bool UISystem::initialize(RenderSystem &render_system,
   panels_.apply_settings(settings_);
   initialized_ = true;
   show_home();
+  loading_cover_ = new QtLoadingCover(
+      *main_window_, composed_viewports, ui_scale_controller_->metrics().px(96));
   return true;
 }
 
@@ -1097,6 +1230,9 @@ void UISystem::install_runtime_hooks(
     NativeViewportToolCoordinator &native_tools,
     ViewportPointPlacementService &point_placement, AssetId default_material) {
   ++runtime_binding_generation_;
+  if (loading_presentation_active_) {
+    startup_presentation_ = {};
+  }
   material_color_preview_session_.reset();
   if (standard_material_editor_window_ != nullptr) {
     standard_material_editor_window_->abandon_interactions();
@@ -1971,7 +2107,7 @@ void UISystem::install_runtime_hooks(
                                             : ViewportToolState{};
         });
     command_event_filter_->set_command_input_owner_provider([this]() {
-      return command_palette_open_pending_ ||
+      return loading_presentation_active_ || command_palette_open_pending_ ||
              qt_foreign_window_owns_command_input(main_window_.get()) ||
              qt_window_owns_command_input(command_palette_) ||
              qt_window_owns_command_input(settings_dialog_) ||
@@ -3147,10 +3283,12 @@ bool UISystem::allow_main_window_close() {
 
 void UISystem::show() {
   if (main_window_ != nullptr && !main_window_->isVisible()) {
-    if (!home_visible_) {
-      prepare_startup_presentation();
-    }
+    startup_presentation_pending_ = true;
+    prepare_startup_presentation();
     main_window_->show();
+    // App initializes the renderer synchronously immediately after this call.
+    // Submit the logo cover first instead of waiting for the first frame timer.
+    static_cast<QtLoadingCover *>(loading_cover_)->flush_presentation();
     schedule_retained_message_box_prewarm();
   }
 }
@@ -3276,8 +3414,14 @@ void UISystem::shutdown() {
   command_palette_ = nullptr;
   command_palette_open_pending_ = false;
   startup_presentation_ = {};
-  startup_presentation_started_ = {};
-  startup_expected_maximized_ = false;
+  loading_geometry_stable_since_ = {};
+  loading_geometry_signature_ = 0u;
+  loading_cover_ = nullptr;
+  loading_previous_focus_.clear();
+  loading_operation_depth_ = 0u;
+  loading_presentation_active_ = false;
+  loading_previous_presentation_pending_ = false;
+  startup_presentation_pending_ = false;
   viewport_panel_ = nullptr;
   central_stack_ = nullptr;
   composition_anchor_ = nullptr;
@@ -3521,10 +3665,6 @@ void UISystem::refresh(const FrameTiming &frame_timing,
   if (viewport_panel_ != nullptr) {
     viewport_panel_->set_render_performance_stats(render_performance_);
   }
-  {
-    QDR_PROFILE_SCOPE("UI advance startup presentation");
-    advance_startup_presentation();
-  }
   if (!initialized_ || editor_ == nullptr || document_ == nullptr ||
       assets_ == nullptr || modeling_ == nullptr || selection_ == nullptr) {
     return;
@@ -3681,10 +3821,16 @@ void UISystem::refresh(const FrameTiming &frame_timing,
     ui_settings_changed_ = false;
     (void)save_settings();
   }
+  {
+    // Inspector, settings and localization above can all change child minima.
+    // Decide reveal only after this frame's retained presentation is complete.
+    QDR_PROFILE_SCOPE("UI advance startup presentation");
+    advance_startup_presentation();
+  }
 }
 
 void UISystem::process_viewport_input() {
-  if (home_visible_ || !initialized_ || viewport_panel_ == nullptr || editor_ == nullptr ||
+  if (loading_presentation_active_ || home_visible_ || !initialized_ || viewport_panel_ == nullptr || editor_ == nullptr ||
       document_ == nullptr || assets_ == nullptr || modeling_ == nullptr ||
       native_tools_ == nullptr) {
     return;
@@ -3750,7 +3896,7 @@ bool UISystem::needs_continuous_rendering() const {
        (asset_thumbnail_picker_ && asset_thumbnail_picker_->isVisible())) &&
       asset_thumbnails_ != nullptr &&
       asset_thumbnails_->pending_count() != 0u;
-  return scene_continuous || preview_pending || asset_preview_pending;
+  return loading_presentation_active_ || scene_continuous || preview_pending || asset_preview_pending;
 }
 
 void *UISystem::native_window_handle() const {
@@ -3765,7 +3911,8 @@ bool UISystem::can_render_viewports() const {
   return !home_visible_ && main_window_ != nullptr && main_window_->isVisible() &&
          !main_window_->isMinimized() && main_window_->updatesEnabled() &&
          viewport_panel_ != nullptr &&
-         !viewport_panel_->startup_presentation_blocked();
+         !viewport_panel_->startup_presentation_blocked() &&
+         !viewport_panel_->loading_presentation_blocked();
 }
 
 bool UISystem::save_settings() {
@@ -4055,20 +4202,75 @@ void UISystem::restore_window_state() {
   }
 }
 
-void UISystem::prepare_startup_presentation() {
-  if (main_window_ == nullptr || viewport_panel_ == nullptr) {
+void UISystem::begin_loading_presentation() {
+  if (main_window_ == nullptr || loading_cover_ == nullptr) {
     return;
   }
+  ++loading_operation_depth_;
+  if (loading_operation_depth_ != 1u) {
+    return;
+  }
+  loading_previous_presentation_pending_ = loading_presentation_active_;
+  prepare_startup_presentation();
+  // Flush only this retained cover; never enter a nested input/event loop
+  // while project owners are about to replace the current runtime.
+  static_cast<QtLoadingCover *>(loading_cover_)->flush_presentation();
+}
+
+void UISystem::end_loading_presentation(bool succeeded) {
+  if (loading_operation_depth_ == 0u) {
+    return;
+  }
+  --loading_operation_depth_;
+  if (loading_operation_depth_ != 0u) {
+    return;
+  }
+  const bool previous_presentation_pending = loading_previous_presentation_pending_;
+  loading_previous_presentation_pending_ = false;
+  if (!succeeded && !startup_presentation_pending_ && !previous_presentation_pending) {
+    finish_startup_presentation();
+    return;
+  }
+  refresh_project_workspace(true);
   startup_presentation_ = {};
-  startup_presentation_started_ = std::chrono::steady_clock::now();
-  startup_expected_maximized_ =
-      main_window_->windowState().testFlag(Qt::WindowMaximized);
-  viewport_panel_->set_startup_presentation_blocked(true);
-  main_window_->setUpdatesEnabled(false);
+  loading_geometry_stable_since_ = {};
+  loading_geometry_signature_ = 0u;
+  if (viewport_panel_ != nullptr) {
+    viewport_panel_->reset_loading_frame_fence();
+  }
+  if (viewport_presentation_requested_) {
+    viewport_presentation_requested_();
+  }
+}
+
+void UISystem::prepare_startup_presentation() {
+  if (main_window_ == nullptr || loading_cover_ == nullptr) {
+    return;
+  }
+  if (!loading_presentation_active_) {
+    loading_previous_focus_ = QApplication::focusWidget();
+    static_cast<QtLoadingCover *>(loading_cover_)->begin_presentation();
+  }
+  loading_presentation_active_ = true;
+  startup_presentation_ = {};
+  loading_geometry_stable_since_ = {};
+  loading_geometry_signature_ = 0u;
+  if (viewport_panel_ != nullptr) {
+    viewport_panel_->reset_loading_frame_fence();
+    viewport_panel_->set_loading_presentation_blocked(true);
+    if (startup_presentation_pending_ || home_visible_) {
+      viewport_panel_->set_startup_presentation_blocked(true);
+    }
+  }
+  loading_cover_->setGeometry(main_window_->rect());
+  loading_cover_->show();
+  loading_cover_->raise();
+  static_cast<QtLoadingCover *>(loading_cover_)->set_input_blocked(true);
 }
 
 void UISystem::advance_startup_presentation() {
-  if (main_window_ == nullptr || main_window_->updatesEnabled()) {
+  if (!loading_presentation_active_ || loading_operation_depth_ != 0u ||
+      main_window_ == nullptr || editor_ == nullptr) {
     return;
   }
   if (QLayout *layout = main_window_->layout()) {
@@ -4083,9 +4285,12 @@ void UISystem::advance_startup_presentation() {
       static_cast<int>(std::lround(main_window_->width() * pixel_scale));
   const int retained_client_height_pixels =
       static_cast<int>(std::lround(main_window_->height() * pixel_scale));
+  // Title-bar actions remain available while covered. Follow the current
+  // requested state so restore/maximize cannot strand an earlier startup latch.
+  const bool requested_maximized =
+      main_window_->windowState().testFlag(Qt::WindowMaximized);
   const bool native_state_ready =
-      !startup_expected_maximized_ ||
-      platform_window_is_maximized(native_handle);
+      requested_maximized == platform_window_is_maximized(native_handle);
   const bool native_client_ready = qt_startup_client_extents_match(
       retained_client_width_pixels, retained_client_height_pixels,
       native_client.width, native_client.height);
@@ -4094,40 +4299,62 @@ void UISystem::advance_startup_presentation() {
       host_window != nullptr && host_window->isExposed() &&
       !main_window_->isMinimized() && native_state_ready &&
       native_client_ready && layout_ready;
+  const std::uint64_t geometry_signature = hard_invariants_ready
+      ? startup_layout_geometry_signature(native_client.width, native_client.height)
+      : 0u;
+  const auto now = std::chrono::steady_clock::now();
+  if (geometry_signature == 0u || loading_geometry_signature_ != geometry_signature) {
+    loading_geometry_signature_ = geometry_signature;
+    loading_geometry_stable_since_ = now;
+  }
+  if (startup_presentation_.presentation_ready &&
+      startup_presentation_.observed_geometry_signature != geometry_signature) {
+    startup_presentation_ = {};
+  }
   const QtStartupPresentationAction action = qt_startup_presentation_action(
-      startup_presentation_, hard_invariants_ready,
-      hard_invariants_ready
-          ? startup_layout_geometry_signature(native_client.width,
-                                              native_client.height)
-          : 0u);
-  if (action == QtStartupPresentationAction::PresentationReady) {
-    finish_startup_presentation(false);
+      startup_presentation_, hard_invariants_ready, geometry_signature);
+  if (action != QtStartupPresentationAction::WaitForStableGeometry &&
+      viewport_panel_ != nullptr &&
+      (viewport_panel_->startup_presentation_blocked() ||
+       viewport_panel_->loading_presentation_blocked())) {
+    // Expose the panes under the cover so their first real GPU submission can
+    // join the same root composition. The bootstrap anchor remains alive.
+    viewport_panel_->set_startup_presentation_blocked(false);
+    viewport_panel_->set_loading_presentation_blocked(false);
+    loading_cover_->raise();
     return;
   }
-
-  constexpr auto kStartupPresentationTimeout = std::chrono::seconds(2);
-  if (startup_presentation_started_ !=
-          std::chrono::steady_clock::time_point{} &&
-      std::chrono::steady_clock::now() - startup_presentation_started_ >=
-          kStartupPresentationTimeout &&
-      hard_invariants_ready) {
-    finish_startup_presentation(true);
+  const bool scene_frame_ready = home_visible_ ||
+      !editor_->scene_documents().has_active_scene() ||
+      (viewport_panel_ != nullptr && viewport_panel_->loading_frame_presented());
+  constexpr auto kSettledLayoutDuration = std::chrono::milliseconds(100);
+  const bool geometry_settled = hard_invariants_ready &&
+      now - loading_geometry_stable_since_ >= kSettledLayoutDuration;
+  if (action == QtStartupPresentationAction::PresentationReady && scene_frame_ready &&
+      geometry_settled &&
+      static_cast<QtLoadingCover *>(loading_cover_)->minimum_duration_elapsed()) {
+    finish_startup_presentation();
   }
 }
 
-void UISystem::finish_startup_presentation(bool forced_fallback) {
-  if (main_window_ == nullptr || main_window_->updatesEnabled()) {
+void UISystem::finish_startup_presentation() {
+  if (main_window_ == nullptr || !loading_presentation_active_) {
     return;
-  }
-  if (forced_fallback) {
-    LOG_WARN("Qt startup presentation did not stabilize within two seconds; "
-             "revealing the shell with its latest layout.");
   }
   if (viewport_panel_ != nullptr) {
     viewport_panel_->set_startup_presentation_blocked(false);
+    viewport_panel_->set_loading_presentation_blocked(false);
   }
-  main_window_->setUpdatesEnabled(true);
-  main_window_->repaint();
+  loading_presentation_active_ = false;
+  startup_presentation_pending_ = false;
+  static_cast<QtLoadingCover *>(loading_cover_)->set_input_blocked(false);
+  loading_cover_->hide();
+  if (loading_previous_focus_ != nullptr && loading_previous_focus_->isVisible() &&
+      loading_previous_focus_->isEnabled()) {
+    loading_previous_focus_->setFocus(Qt::OtherFocusReason);
+  }
+  loading_previous_focus_.clear();
+  main_window_->update();
   schedule_retained_message_box_prewarm();
   if (auxiliary_window_state_.settings_dialog_visible &&
       settings_dialog_ != nullptr && !settings_dialog_->isVisible()) {
@@ -4146,8 +4373,8 @@ bool UISystem::startup_layout_ready() const {
   };
   if (!main_window_->contentsRect().isValid() ||
       !geometry_ready(main_window_->centralWidget()) ||
-      !geometry_ready(main_window_->menuBar()) ||
-      !geometry_ready(main_window_->statusBar())) {
+      (main_window_->menuBar()->isVisible() && !geometry_ready(main_window_->menuBar())) ||
+      (main_window_->statusBar()->isVisible() && !geometry_ready(main_window_->statusBar()))) {
     return false;
   }
 
@@ -4188,6 +4415,21 @@ std::uint64_t UISystem::startup_layout_geometry_signature(
     mix(static_cast<int>(std::lround(rect.width() * pixel_scale)));
     mix(static_cast<int>(std::lround(rect.height() * pixel_scale)));
   };
+  // Wrapping controls and scroll content can move below unchanged page/dock
+  // rectangles. This bounded retained traversal runs only while covered.
+  const auto mix_children = [&](const auto &self, const QWidget &parent) -> void {
+    for (QObject *child : parent.children()) {
+      const auto *widget = qobject_cast<const QWidget *>(child);
+      if (widget == nullptr || widget->isWindow() || !widget->isVisibleTo(&parent)) {
+        continue;
+      }
+      mix_rect(widget->geometry());
+      if (widget->layout() != nullptr) {
+        mix_rect(widget->layout()->geometry());
+      }
+      self(self, *widget);
+    }
+  };
 
   mix(static_cast<int>(std::lround(pixel_scale * 1000.0)));
   mix(native_client_width_pixels);
@@ -4197,6 +4439,14 @@ std::uint64_t UISystem::startup_layout_geometry_signature(
   if (const QWidget *central = main_window_->centralWidget()) {
     mix_rect(central->geometry());
   }
+  if (const QWidget *page = central_stack_ != nullptr ? central_stack_->currentWidget()
+                                                    : nullptr) {
+    mix_rect(page->geometry());
+    if (page->layout() != nullptr) {
+      mix_rect(page->layout()->geometry());
+    }
+    mix_children(mix_children, *page);
+  }
   mix_rect(main_window_->menuBar()->geometry());
   mix_rect(main_window_->statusBar()->geometry());
   for (UIPanelId id : kUiDockPanelIds) {
@@ -4204,6 +4454,9 @@ std::uint64_t UISystem::startup_layout_geometry_signature(
     if (const QDockWidget *dock = panels_.dock(id)) {
       mix(dock->isFloating() ? 1 : 0);
       mix_rect(dock->geometry());
+      if (dock->isVisible()) {
+        mix_children(mix_children, *dock);
+      }
     }
   }
   const auto mix_toolbar = [&mix, &mix_rect](const QToolBar *toolbar) {
@@ -5639,6 +5892,9 @@ bool UISystem::apply_interface_scale(float factor) {
 
 void UISystem::apply_ui_scale_to_retained_surfaces(
     const QtUiScaleMetrics &metrics) {
+  if (loading_cover_ != nullptr) {
+    static_cast<QtLoadingCover *>(loading_cover_)->set_logo_extent(metrics.px(96));
+  }
   if (main_window_ != nullptr) {
     const int padding = metrics.px(10);
     // QStatusBar adds 3 native pixels above its row and 2 below. Balance

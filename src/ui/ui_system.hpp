@@ -154,6 +154,12 @@ public:
   void show_home();
   void show_workspace();
   void show();
+  /// Covers synchronous document loading through the first current scene frame.
+  void begin_loading_presentation();
+  void end_loading_presentation(bool succeeded);
+  [[nodiscard]] bool loading_presentation_active() const {
+    return loading_presentation_active_;
+  }
   /// Releases renderer borrowers while preserving the Qt-owned device.
   void detach_render_resources();
   void shutdown();
@@ -200,7 +206,7 @@ private:
   void capture_workspace_window_state();
   void prepare_startup_presentation();
   void advance_startup_presentation();
-  void finish_startup_presentation(bool forced_fallback);
+  void finish_startup_presentation();
   void schedule_retained_message_box_prewarm();
   [[nodiscard]] bool startup_layout_ready() const;
   [[nodiscard]] std::uint64_t startup_layout_geometry_signature(
@@ -382,8 +388,14 @@ private:
   FrameTiming frame_timing_{};
   RenderFramePerformanceStats render_performance_{};
   QtStartupPresentationState startup_presentation_;
-  std::chrono::steady_clock::time_point startup_presentation_started_{};
-  bool startup_expected_maximized_ = false;
+  std::chrono::steady_clock::time_point loading_geometry_stable_since_{};
+  std::uint64_t loading_geometry_signature_ = 0u;
+  QWidget *loading_cover_ = nullptr;
+  QPointer<QWidget> loading_previous_focus_;
+  unsigned int loading_operation_depth_ = 0u;
+  bool loading_presentation_active_ = false;
+  bool loading_previous_presentation_pending_ = false;
+  bool startup_presentation_pending_ = false;
   bool retained_message_box_prewarm_scheduled_ = false;
   bool initialized_ = false;
   bool render_resources_detached_ = false;

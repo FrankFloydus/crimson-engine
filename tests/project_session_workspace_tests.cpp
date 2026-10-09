@@ -4282,4 +4282,307 @@ TEST(ProjectSessionWorkspace, InvalidStandaloneProjectOpenPreservesPendingEdit) 
   ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
 }
 
+TEST(ProjectSessionWorkspace,
+     ProjectLoadingEndsAfterBindingAndLifecyclePublication) {
+  ScopedProjectSessionDirectory temporary("project-loading-order");
+  ProjectSession project;
+  QuaderEditorApi editor(project);
+  std::vector<std::string> order;
+  bool loading = false;
+  editor.project().set_runtime_hooks({
+      .begin_loading = [&]() {
+        EXPECT_FALSE(loading);
+        loading = true;
+        order.push_back("begin");
+      },
+      .end_loading = [&](bool succeeded) {
+        EXPECT_TRUE(loading);
+        loading = false;
+        order.push_back(succeeded ? "end-installed" : "end-uninstalled");
+      },
+  });
+  QuaderEditorApiSessionAccess::set_scene_binding_changed_callback(
+      editor, [&](SceneSession &scene) {
+        EXPECT_TRUE(loading);
+        EXPECT_EQ(&scene, project.active_scene()->session.get());
+        order.push_back("binding");
+      });
+  const auto opened = editor.events().subscribe(
+      quader_event::kActiveSceneChanged, [&](const QuaderEvent &) {
+        EXPECT_TRUE(loading);
+        EXPECT_EQ(order.back(), "binding");
+        order.push_back("active");
+      });
+  ASSERT_TRUE(opened.valid());
+  ASSERT_TRUE(editor.project().create(temporary.make_empty_child("Project")).ok());
+  EXPECT_EQ(order, (std::vector<std::string>{
+                       "begin", "binding", "active", "end-installed"}));
+  ASSERT_TRUE(editor.scene_documents()
+                  .save_as(*editor.scene_documents().active_scene_id(),
+                           project_path("Scenes/Loading.qdr"))
+                  .ok());
+  const auto manifest = editor.project().manifest_path();
+  // Closing replaces the binding without a loading presentation.
+  QuaderEditorApiSessionAccess::set_scene_binding_changed_callback(
+      editor, [&](SceneSession &) { EXPECT_FALSE(loading); });
+  ASSERT_TRUE(editor.events().unsubscribe(opened));
+  ASSERT_TRUE(editor.project().close().ok());
+  order.clear();
+
+  QuaderEditorApiSessionAccess::set_scene_binding_changed_callback(
+      editor, [&](SceneSession &scene) {
+        EXPECT_TRUE(loading);
+        EXPECT_EQ(&scene, project.active_scene()->session.get());
+        order.push_back("binding");
+      });
+  const auto reopened = editor.events().subscribe(
+      quader_event::kActiveSceneChanged, [&](const QuaderEvent &) {
+        EXPECT_TRUE(loading);
+        EXPECT_EQ(order.back(), "binding");
+        order.push_back("active");
+      });
+  ASSERT_TRUE(reopened.valid());
+  ASSERT_TRUE(editor.project().open(manifest).ok());
+  EXPECT_FALSE(loading);
+  EXPECT_EQ(order, (std::vector<std::string>{
+                       "begin", "end-uninstalled", "begin", "binding",
+                       "active", "end-installed"}));
+}
+
+TEST(ProjectSessionWorkspace,
+     ProjectLoadingRestoresBeforeDirtyPromptsAndBalancesFailedReads) {
+  ScopedProjectSessionDirectory temporary("project-loading-failures");
+  ProjectSession candidate;
+  ASSERT_TRUE(candidate.create(temporary.make_empty_child("Candidate")).ok);
+  const auto candidate_manifest = candidate.manifest_path();
+  ASSERT_TRUE(candidate.close(true).ok);
+  ProjectSession project;
+  QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.project().create(temporary.make_empty_child("Original")).ok());
+  ASSERT_TRUE(editor.scene().create_entity({.name = "Retained edit"}).ok());
+  const auto original_root = project.root();
+  const auto original_scene = project.active_scene_id();
+  std::vector<std::string> order;
+  bool loading = false;
+  bool cancel_dirty = true;
+  bool fail_install = false;
+  int begins = 0;
+  editor.project().set_runtime_hooks({
+      .choose_open_manifest_path = [&]() -> std::optional<std::filesystem::path> {
+        EXPECT_FALSE(loading);
+        order.push_back("picker");
+        return std::nullopt;
+      },
+      .begin_loading = [&]() {
+        EXPECT_FALSE(loading);
+        loading = true;
+        order.push_back("begin");
+        if (++begins == 2 && fail_install) {
+          std::error_code error;
+          EXPECT_TRUE(std::filesystem::remove(candidate_manifest, error));
+          EXPECT_FALSE(error);
+        }
+      },
+      .end_loading = [&](bool succeeded) {
+        EXPECT_TRUE(loading);
+        EXPECT_FALSE(succeeded);
+        loading = false;
+        order.push_back("end");
+      },
+  });
+  editor.scene_documents().set_runtime_hooks({
+      .confirm_dirty_scene = [&](const QuaderSceneDocumentInfo &, std::string_view) {
+        EXPECT_FALSE(loading);
+        order.push_back("prompt");
+        return cancel_dirty ? QuaderDirtySceneDecision::Cancel
+                            : QuaderDirtySceneDecision::Discard;
+      },
+  });
+  const auto picker_canceled = editor.project().open({});
+  ASSERT_TRUE(picker_canceled.ok());
+  EXPECT_FALSE(picker_canceled.changed());
+  EXPECT_EQ(order, (std::vector<std::string>{"picker"}));
+
+  order.clear();
+  EXPECT_FALSE(editor.project().open(temporary.path() / "Missing.qproj").ok());
+  EXPECT_EQ(order, (std::vector<std::string>{"begin", "end"}));
+  EXPECT_FALSE(loading);
+
+  order.clear();
+  const auto dirty_canceled = editor.project().open(candidate_manifest);
+  ASSERT_TRUE(dirty_canceled.ok());
+  EXPECT_FALSE(dirty_canceled.changed());
+  EXPECT_EQ(order, (std::vector<std::string>{"begin", "end", "prompt"}));
+  EXPECT_EQ(project.active_scene_id(), original_scene);
+  EXPECT_EQ(project.root(), original_root);
+  EXPECT_TRUE(project.active_scene()->dirty());
+
+  order.clear();
+  begins = 0;
+  cancel_dirty = false;
+  fail_install = true;
+  EXPECT_FALSE(editor.project().open(candidate_manifest).ok());
+  EXPECT_EQ(order, (std::vector<std::string>{
+                       "begin", "end", "prompt", "begin", "end"}));
+  EXPECT_FALSE(loading);
+  EXPECT_EQ(project.active_scene_id(), original_scene);
+  EXPECT_EQ(project.root(), original_root);
+  EXPECT_TRUE(project.active_scene()->dirty());
+}
+
+TEST(ProjectSessionWorkspace,
+     SceneLoadingCoversOpenRoutesAndRetainsHooksAcrossRebinding) {
+  ScopedProjectSessionDirectory temporary("scene-loading-routes");
+  ProjectSession project;
+  QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.project().create(temporary.make_empty_child("Project")).ok());
+  const auto path = project_path("Scenes/Loading.qdr");
+  ASSERT_TRUE(editor.scene_documents()
+                  .save_as(*editor.scene_documents().active_scene_id(), path)
+                  .ok());
+  const auto native_path = project.root() / path.native_path();
+  const auto recents = editor.project().recent_scenes();
+  ASSERT_EQ(recents.size(), 1u);
+  std::vector<std::string> order;
+  bool loading = false;
+  for (int route = 0; route < 4; ++route) {
+    SCOPED_TRACE(route);
+    ASSERT_TRUE(editor.scene_documents().close_active().ok());
+    order.clear();
+    editor.scene_documents().set_runtime_hooks({
+        .choose_open_scene_path = [&]() -> std::optional<std::filesystem::path> {
+          EXPECT_FALSE(loading);
+          order.push_back("picker");
+          return native_path;
+        },
+        .begin_loading = [&]() {
+          EXPECT_FALSE(loading);
+          loading = true;
+          order.push_back("begin");
+          // A host may replace its callbacks while presentation is starting.
+          editor.scene_documents().set_runtime_hooks({});
+        },
+        .end_loading = [&](bool succeeded) {
+          EXPECT_TRUE(loading);
+          EXPECT_TRUE(succeeded);
+          loading = false;
+          order.push_back("end");
+        },
+    });
+    QuaderEditorApiSessionAccess::set_scene_binding_changed_callback(
+        editor, [&](SceneSession &scene) {
+          EXPECT_TRUE(loading);
+          EXPECT_EQ(&scene, project.active_scene()->session.get());
+          order.push_back("binding");
+        });
+    const auto active = editor.events().subscribe(
+        quader_event::kActiveSceneChanged, [&](const QuaderEvent &) {
+          EXPECT_TRUE(loading);
+          EXPECT_EQ(order.back(), "binding");
+          order.push_back("active");
+        });
+    ASSERT_TRUE(active.valid());
+    switch (route) {
+    case 0:
+      ASSERT_TRUE(editor.scene_documents().open(path).ok());
+      break;
+    case 1:
+      ASSERT_TRUE(editor.scene_documents().open_native_path(native_path).ok());
+      break;
+    case 2:
+      ASSERT_TRUE(editor.project().open_recent_scene(recents.front()).ok());
+      break;
+    case 3:
+      ASSERT_TRUE(editor.scene_documents().open().ok());
+      break;
+    }
+    EXPECT_FALSE(loading);
+    std::vector<std::string> expected{"begin", "binding", "active", "end"};
+    if (route == 3) {
+      expected.insert(expected.begin(), "picker");
+    }
+    EXPECT_EQ(order, expected);
+    QuaderEditorApiSessionAccess::set_scene_binding_changed_callback(
+        editor, [&](SceneSession &) { EXPECT_FALSE(loading); });
+    ASSERT_TRUE(editor.events().unsubscribe(active));
+  }
+
+  order.clear();
+  editor.scene_documents().set_runtime_hooks({
+      .choose_open_scene_path = [&]() -> std::optional<std::filesystem::path> {
+        order.push_back("picker");
+        return std::nullopt;
+      },
+      .begin_loading = [&]() { order.push_back("begin"); },
+      .end_loading = [&](bool succeeded) {
+        EXPECT_FALSE(succeeded);
+        order.push_back("end");
+      },
+  });
+  const auto canceled = editor.scene_documents().open();
+  EXPECT_TRUE(canceled.ok());
+  EXPECT_FALSE(canceled.changed());
+  EXPECT_EQ(order, (std::vector<std::string>{"picker"}));
+  order.clear();
+  const auto unchanged = editor.scene_documents().open(path);
+  EXPECT_TRUE(unchanged.ok());
+  EXPECT_FALSE(unchanged.changed());
+  EXPECT_EQ(order, (std::vector<std::string>{"begin", "end"}));
+  order.clear();
+  const auto active_before = project.active_scene_id();
+  EXPECT_FALSE(editor.scene_documents().open(project_path("Scenes/Missing.qdr")).ok());
+  EXPECT_EQ(order, (std::vector<std::string>{"begin", "end"}));
+  EXPECT_EQ(project.active_scene_id(), active_before);
+}
+
+TEST(ProjectSessionWorkspace,
+     StandaloneLoadingBalancesCompatibilityOpenFailureAndCancellation) {
+  ScopedProjectSessionDirectory temporary("standalone-loading");
+  SceneSession scene;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(scene));
+  const auto path = temporary.path() / "Scene.qdr";
+  ASSERT_TRUE(editor.scene_documents()
+                  .save_as_native_path(*editor.scene_documents().active_scene_id(), path)
+                  .ok());
+  std::vector<bool> completions;
+  bool loading = false;
+  const auto begin = [&]() {
+    EXPECT_FALSE(loading);
+    loading = true;
+  };
+  const auto end = [&](bool succeeded) {
+    EXPECT_TRUE(loading);
+    loading = false;
+    completions.push_back(succeeded);
+  };
+  editor.scene_documents().set_runtime_hooks({
+      .begin_loading = begin,
+      .end_loading = end,
+  });
+  editor.project().set_runtime_hooks({
+      .confirm_dirty_project_replacement = [&](std::string_view) {
+        EXPECT_FALSE(loading);
+        return QuaderDirtyProjectDecision::Cancel;
+      },
+      .begin_loading = begin,
+      .end_loading = end,
+  });
+  ASSERT_TRUE(editor.scene_documents().open_native_path(path).ok());
+  EXPECT_EQ(completions, (std::vector<bool>{true}));
+  completions.clear();
+  EXPECT_FALSE(editor.scene_documents().open_native_path(temporary.path() / "Missing.qdr").ok());
+  EXPECT_EQ(completions, (std::vector<bool>{false}));
+  completions.clear();
+  ASSERT_TRUE(editor.project().open(path).ok());
+  EXPECT_EQ(completions, (std::vector<bool>{false, true}));
+  completions.clear();
+  ASSERT_TRUE(editor.scene().create_entity({.name = "Unsaved"}).ok());
+  const auto canceled = editor.project().open(path);
+  EXPECT_TRUE(canceled.ok());
+  EXPECT_FALSE(canceled.changed());
+  EXPECT_EQ(completions, (std::vector<bool>{false}));
+  EXPECT_TRUE(scene.dirty());
+  EXPECT_FALSE(loading);
+}
+
 } // namespace

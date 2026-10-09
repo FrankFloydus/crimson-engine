@@ -67,6 +67,11 @@ struct QuaderSceneDocumentsRuntimeHooks final {
   std::function<QuaderDirtySceneDecision(const QuaderSceneDocumentInfo &,
                                          std::string_view action_id)>
       confirm_dirty_scene;
+  /// Presents synchronous scene loading after native path selection.
+  std::function<void()> begin_loading;
+  /// True after a changed scene is bound and lifecycle events are published;
+  /// false restores the current presentation after a failure or no-op.
+  std::function<void(bool succeeded)> end_loading;
 };
 
 /// Provides public multi-document scene lifecycle operations.
