@@ -790,8 +790,11 @@ Bindings and scope rules: [INPUT_KEYBINDINGS.md](INPUT_KEYBINDINGS.md).
   step. A shared source/target edge supplies its endpoint UVs plus a conditioned third corner,
   without requiring other source corners to fit that local chart.
   A geometry-only plan carries the chart through a local frame with the signed acute fold.
-  Keep its source plane anchored at the first source corner and the target plane at its center,
-  including faces with tolerated planarity residuals; a full normal-alignment rotation differs.
+  Planar faces keep the source plane anchored at the first source corner and the target plane
+  at its center, including tolerated planarity residuals; a full normal-alignment rotation differs.
+  Edited, nonplanar faces remain valid texture-transfer inputs. Recover a local chart and fold
+  around their actual seam; do not reject a renderable face just because its corners are warped.
+  Preserve the seam endpoint UVs, source attributes and geometry in both transfer directions.
   Keep exact seam phase and self-transfer no-ops; separately placed occurrences are not shared edges.
   Fit transient charts in double precision with normalized axes. CPU and both mesh shaders
   difference affine sampling coefficients before evaluating positions, preserving small changes
@@ -802,7 +805,9 @@ Bindings and scope rules: [INPUT_KEYBINDINGS.md](INPUT_KEYBINDINGS.md).
   Cover diagonal lip continuation, thin local and oblique geometry, transferred faces reused as
   sources, distant local edits, million-tile phase edits, rendered interiors and publication rollback.
   Contracts: [portable transfer](tests/sdk/modeling_sdk_consumer_tests.cpp),
-  [native continuation](tests/project_material_behavior_tests.cpp).
+  [native continuation](tests/project_material_behavior_tests.cpp), and the saved edited-face
+  Alt+RMB regression in [viewport interaction](tests/viewport_interaction_controller_tests.cpp),
+  which verifies target UVs/material, retained source selection and exact Undo/Redo restoration.
 - Portable position edits retain authored face-corner UVs; procedural faces remain procedural.
   Native partial-component deformation preserves the original affine chart of a planar source
   face while the result stays on that plane. Re-evaluate moved corners from that source chart;

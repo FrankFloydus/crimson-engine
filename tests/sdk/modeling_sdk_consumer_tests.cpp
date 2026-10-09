@@ -7379,7 +7379,176 @@ TEST(ModelingSdkConsumerTests,
 }
 
 TEST(ModelingSdkConsumerTests,
-     FaceTextureTransferRejectsNonAffineAndNonplanarInputsAtomically) {
+     FaceTextureTransferContinuesEditedNonplanarSeamsWithoutChangingGeometry) {
+  // Two adjacent faces reduced from the edited Box that rejected Alt+RMB.
+  AuthoredTopology topology;
+  topology.vertices = {
+      {make_id<VertexTag>(17U), {0.935583234F, 0.909887314F, 1.242052078F}},
+      {make_id<VertexTag>(18U), {1.935581326F, 0.909889936F, -0.062553406F}},
+      {make_id<VertexTag>(19U), {0.935579419F, 0.919828653F, -0.770998001F}},
+      {make_id<VertexTag>(21U), {1.935578465F, 0.051608682F, -1.062553406F}},
+      {make_id<VertexTag>(22U), {1.228471875F, 0.051607132F, -1.355445862F}},
+      {make_id<VertexTag>(62U), {-1.379130244F, 0.909882307F, 1.242056847F}},
+      {make_id<VertexTag>(65U), {-0.018673539F, 0.916664779F, -0.863734245F}},
+  };
+  topology.faces = {
+      {.id = make_id<FaceTag>(5U),
+       .vertices = {make_id<VertexTag>(19U), make_id<VertexTag>(65U),
+                    make_id<VertexTag>(62U), make_id<VertexTag>(17U),
+                    make_id<VertexTag>(18U)},
+       .uvs = {{0.500000119F, -0.354227811F}, {0.022873342F, -0.400596738F},
+               {-0.657357693F, 0.652298570F}, {0.500000179F, 0.652298748F},
+               {1.000000715F, -0.00000317538547F}},
+       .material_slot = 3U},
+      {.id = make_id<FaceTag>(20U),
+       .vertices = {make_id<VertexTag>(22U), make_id<VertexTag>(19U),
+                    make_id<VertexTag>(18U), make_id<VertexTag>(21U)},
+       .uvs = {{0.646460474F, -0.646464527F}, {0.500012875F, -0.354239553F},
+               {1.000012875F, -0.0000168206752F}, {1.000013828F, -0.500018179F}},
+       .material_slot = 7U},
+  };
+  topology.next_vertex_id = 66U;
+  topology.next_face_id = 21U;
+  for (int variant = 0; variant < 4; ++variant) {
+    const bool reverse = (variant & 1) != 0;
+    const bool restored_sampling = (variant & 2) != 0;
+    SCOPED_TRACE(::testing::Message() << "reverse=" << reverse
+        << ", restored sampling=" << restored_sampling);
+    const auto& source_face = topology.faces[reverse ? 1U : 0U];
+    const auto& target_face = topology.faces[reverse ? 0U : 1U];
+    auto document = PolygonDocument::from_authored_topology(topology).or_throw();
+    ASSERT_TRUE(document.select_face(source_face.id).ok());
+    const auto before = serialize_qdr_authored_topology(document).or_throw();
+    FaceTextureTransferFace source{
+        .key = 1U, .document = &document, .face = source_face.id};
+    FaceTextureTransferFace target{
+        .key = 1U, .document = &document, .face = target_face.id};
+    if (restored_sampling) {
+      // Retain the edited Box's stored texture-lock frame and translation.
+      source.sampling_from_local = {
+          .x_axis = {-1.0F, -4.298979092709487e-6F, -8.742517820792273e-8F},
+          .y_axis = {-4.298979092709487e-6F, 1.0F, 1.095820834962069e-6F},
+          .z_axis = {8.742063073441386e-8F, 1.0958211760225822e-6F, -1.0F},
+          .origin = {1.8711882829666138F, 0.49999773502349854F, 10.874887466430664F}};
+      target.sampling_from_local = source.sampling_from_local;
+      source.world_from_local.origin = {0.4388159513473511F, 1.0901143550872803F, 19.0F};
+      target.world_from_local = source.world_from_local;
+    }
+
+    const auto result = prepare_face_texture_transfer(source, target, 42U);
+
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    ASSERT_TRUE(result.value().changed);
+    ASSERT_EQ(result.value().documents.size(), 1U);
+    const auto& replacement = result.value().documents.front();
+    const auto& prepared = replacement.document;
+    EXPECT_TRUE(prepared.has_same_geometry(document));
+    EXPECT_TRUE(prepared.shares_selection_with(document));
+    EXPECT_EQ(replacement.receipt.modified.faces, (std::vector<FaceId>{target_face.id}));
+    EXPECT_FALSE(replacement.receipt.dirty.topology);
+    EXPECT_FALSE(replacement.receipt.dirty.selection);
+    const auto output = prepared.authored_topology().or_throw();
+    const auto copied_source = std::ranges::find(output.faces, source_face.id,
+                                                &AuthoredTopologyFace::id);
+    const auto copied_target = std::ranges::find(output.faces, target_face.id,
+                                                &AuthoredTopologyFace::id);
+    ASSERT_NE(copied_source, output.faces.end());
+    ASSERT_NE(copied_target, output.faces.end());
+    EXPECT_EQ(copied_target->material_slot, 42U);
+    EXPECT_EQ(copied_target->texture_transform, source_face.texture_transform);
+    ASSERT_EQ(copied_source->uvs.size(), source_face.uvs.size());
+    for (std::size_t corner = 0U; corner < source_face.uvs.size(); ++corner) {
+      EXPECT_FLOAT_EQ(copied_source->uvs[corner].x, source_face.uvs[corner].x);
+      EXPECT_FLOAT_EQ(copied_source->uvs[corner].y, source_face.uvs[corner].y);
+    }
+    ASSERT_EQ(copied_target->uvs.size(), target_face.vertices.size());
+    if (!restored_sampling) {
+      // Base corner coordinates equal displayed coordinates only in this frame.
+      for (const auto seam : {make_id<VertexTag>(18U), make_id<VertexTag>(19U)}) {
+        const auto source_corner = std::ranges::find(source_face.vertices, seam) -
+                                   source_face.vertices.begin();
+        const auto target_corner = std::ranges::find(target_face.vertices, seam) -
+                                   target_face.vertices.begin();
+        expect_vec2_near(copied_target->uvs[target_corner],
+                        source_face.uvs[source_corner], 2.0e-5F);
+      }
+    }
+    EXPECT_TRUE(std::ranges::all_of(copied_target->uvs, [](Vec2 uv) {
+      return std::isfinite(uv.x) && std::isfinite(uv.y);
+    }));
+    ASSERT_TRUE(prepared.compile_mesh().ok());
+    EXPECT_EQ(serialize_qdr_authored_topology(document).or_throw(), before);
+    auto repeated_source = source;
+    auto repeated_target = target;
+    repeated_source.document = &prepared;
+    repeated_target.document = &prepared;
+    const auto repeated = prepare_face_texture_transfer(repeated_source, repeated_target, 42U);
+    ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+    EXPECT_FALSE(repeated.value().changed);
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureTransferUsesLocalChartsForWarpedSourcesAndTargets) {
+  constexpr std::array<Vec3, 4> kPoints{{
+      {0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F},
+      {2.0F, 2.0F, 0.0F}, {0.0F, 1.0F, 0.0F},
+  }};
+  constexpr std::array<Vec2, 4> kUvs{{
+      {0.0F, 0.0F}, {1.0F, 0.0F}, {1.0F, 1.0F}, {0.0F, 0.5F},
+  }};
+  for (const bool source_warped : {false, true}) {
+    for (const bool target_warped : {false, true}) {
+      for (const bool placed : {false, true}) {
+        SCOPED_TRACE(::testing::Message() << "source=" << source_warped
+            << ", target=" << target_warped << ", placed=" << placed);
+        auto source_points = kPoints;
+        auto target_points = kPoints;
+        source_points.back().z = source_warped ? 0.25F : 0.0F;
+        target_points.back().z = target_warped ? -0.5F : 0.0F;
+        const auto source = make_texture_action_face(source_points, kUvs).or_throw();
+        const auto target = make_texture_action_face(target_points).or_throw();
+        const auto source_before = serialize_qdr_authored_topology(source).or_throw();
+        const auto target_before = serialize_qdr_authored_topology(target).or_throw();
+        auto from = texture_transfer_face(source);
+        auto to = texture_transfer_face(target, 2U);
+        if (placed) {
+          // Common mirrored, nonuniform placement preserves the local XY chart.
+          from.world_from_local = {
+              .x_axis = {-1.2F, -1.6F, 0.0F},
+              .y_axis = {-1.44F, 1.08F, 2.4F},
+              .z_axis = {2.56F, -1.92F, 2.4F},
+              .origin = {1.0e6F, -2.0e6F, 3.0e6F}};
+          to.world_from_local = from.world_from_local;
+        }
+
+        const auto result = prepare_face_texture_transfer(from, to, 42U);
+
+        ASSERT_TRUE(result.ok()) << result.error_message();
+        ASSERT_TRUE(result.value().changed);
+        const auto& prepared = result.value().documents.front().document;
+        EXPECT_TRUE(prepared.has_same_geometry(target));
+        EXPECT_TRUE(prepared.shares_selection_with(target));
+        const auto output = prepared.authored_topology().or_throw();
+        EXPECT_EQ(output.faces.front().material_slot, 42U);
+        expect_compiled_texture_uvs(prepared, output.faces.front().vertices, kUvs);
+        EXPECT_EQ(serialize_qdr_authored_topology(source).or_throw(), source_before);
+        EXPECT_EQ(serialize_qdr_authored_topology(target).or_throw(), target_before);
+        to.document = &prepared;
+        const auto repeated = prepare_face_texture_transfer(from, to, 42U);
+        ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+        EXPECT_FALSE(repeated.value().changed);
+        const auto source_slot = source.authored_topology().or_throw().faces.front().material_slot;
+        const auto unchanged = prepare_face_texture_transfer(from, from, source_slot);
+        ASSERT_TRUE(unchanged.ok()) << unchanged.error_message();
+        EXPECT_FALSE(unchanged.value().changed);
+      }
+    }
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     FaceTextureTransferRejectsNonAffineAndDegenerateInputsAtomically) {
   constexpr std::array<Vec3, 4> kPoints{{
       {0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F},
       {2.0F, 2.0F, 0.0F}, {0.0F, 2.0F, 0.0F},
@@ -7399,15 +7568,20 @@ TEST(ModelingSdkConsumerTests,
           uv.x += 1.0e6F;
         }
       }
-    } else if (invalid == 2) {
-      source_points[2].z = 0.25F;
-    } else {
-      target_points[2].z = 0.25F;
     }
     auto source = make_texture_action_face(source_points, source_uvs);
     auto target = make_texture_action_face(target_points);
     ASSERT_TRUE(source.ok()) << source.error_message();
     ASSERT_TRUE(target.ok()) << target.error_message();
+    if (invalid >= 2) {
+      auto& collapsed = invalid == 2 ? source : target;
+      auto authored = collapsed.value().authored_topology().or_throw();
+      for (std::size_t corner = 0U; corner < authored.vertices.size(); ++corner) {
+        authored.vertices[corner].position = {static_cast<float>(corner), 0.0F, 0.0F};
+      }
+      collapsed = PolygonDocument::from_authored_topology(authored);
+      ASSERT_TRUE(collapsed.ok()) << collapsed.error_message();
+    }
     const auto source_before = serialize_qdr_authored_topology(source.value());
     const auto target_before = serialize_qdr_authored_topology(target.value());
     ASSERT_TRUE(source_before.ok());

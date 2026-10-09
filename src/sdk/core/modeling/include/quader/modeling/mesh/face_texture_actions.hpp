@@ -127,9 +127,11 @@ struct PreparedFaceTextureAction {
  * Continues a source texture chart about the planes' intersection using the
  * acute plane angle. A shared edge in the same document uses its endpoint UVs
  * and a geometrically conditioned third corner, preserving that local seam
- * even for non-affine source UVs. Otherwise the source must supply an affine
+ * even for non-affine source UVs. Otherwise a planar source must supply an affine
  * chart. The shared edge, or closest aligned pair of boundary-edge lines,
- * orients each plane using its farthest corner, including concave faces.
+ * orients planar faces using their farthest corner, including concave faces.
+ * Warped authored faces use a conditioned local boundary triangle for their
+ * chart and fold plane, anchored at that boundary so shared seams remain fixed.
  * Parallel/opposed and float-epsilon near-parallel planes retain world
  * axes and phase. Copies the source face settings and the host-resolved material
  * slot without changing geometry, component IDs, selection, or sampling.

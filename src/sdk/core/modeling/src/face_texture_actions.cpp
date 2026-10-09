@@ -331,6 +331,7 @@ struct TransferPlane {
   std::vector<QVec3d> positions;
   QVec3d normal;
   QVec3d center;
+  bool planar = true;
 };
 
 [[nodiscard]] std::optional<TransferPlane> transfer_plane(
@@ -369,7 +370,7 @@ struct TransferPlane {
   for (const auto position : plane.positions) {
     if (std::abs(quader_geometry::dot(position - origin, plane.normal)) >
         kPlanarityTolerance * std::sqrt(radius_squared)) {
-      return std::nullopt;
+      plane.planar = false;
     }
   }
   return plane;
@@ -615,6 +616,28 @@ continuation_source_corners(const TransferPlane &source, std::size_t source_star
       quader_geometry::cross(direction, farthest_displacement));
 }
 
+/// A warped face supplies its local chart through a conditioned boundary triangle.
+[[nodiscard]] std::optional<std::array<std::size_t, 3>>
+continuation_local_corners(const TransferPlane &plane,
+                           std::optional<std::size_t> preferred_edge) {
+  if (preferred_edge.has_value()) {
+    return continuation_source_corners(plane, *preferred_edge);
+  }
+  for (std::size_t edge = 0U; edge < plane.positions.size(); ++edge) {
+    if (const auto corners = continuation_source_corners(plane, edge)) {
+      return corners;
+    }
+  }
+  return std::nullopt;
+}
+
+[[nodiscard]] QVec3d continuation_triangle_normal(
+    const TransferPlane &plane, const std::array<std::size_t, 3> &corners) {
+  return continuation_unit_or_zero(quader_geometry::cross(
+      plane.positions[corners[1]] - plane.positions[corners[0]],
+      plane.positions[corners[2]] - plane.positions[corners[0]]));
+}
+
 /// Plans seam conditioning and the acute-angle spatial pullback without fitting UVs.
 [[nodiscard]] ContinuationPlan make_continuation_plan(
     const TransferPlane &source, const TransferPlane &target,
@@ -624,13 +647,37 @@ continuation_source_corners(const TransferPlane &source, std::size_t source_star
   ContinuationPlan plan;
   auto source_normal = source.normal;
   auto target_normal = target.normal;
-  if (const auto edges = find_continuation_edges(
-          source, target, source_vertices, target_vertices, same_occurrence)) {
+  auto source_reference = source.positions.front();
+  auto target_reference = target.center;
+  const auto edges = find_continuation_edges(
+      source, target, source_vertices, target_vertices, same_occurrence);
+  if (edges) {
     if (edges->shared) {
       plan.source_corners = continuation_source_corners(source, edges->source_start);
     }
     source_normal = continuation_edge_normal(source, edges->source_start);
     target_normal = continuation_edge_normal(target, edges->target_start);
+    if (!source.planar || !target.planar) {
+      // The polygon center need not lie on the local plane after vertex edits.
+      // Actual boundary points keep a shared seam fixed during the fold.
+      source_reference = source.positions[edges->source_start];
+      target_reference = target.positions[edges->target_start];
+    }
+  }
+  if (!source.planar) {
+    plan.source_corners = continuation_local_corners(
+        source, edges ? std::optional{edges->source_start} : std::nullopt);
+    if (plan.source_corners) {
+      source_normal = continuation_triangle_normal(source, *plan.source_corners);
+      source_reference = source.positions[plan.source_corners->front()];
+    }
+  }
+  if (!target.planar) {
+    if (const auto corners = continuation_local_corners(
+            target, edges ? std::optional{edges->target_start} : std::nullopt)) {
+      target_normal = continuation_triangle_normal(target, *corners);
+      target_reference = target.positions[corners->front()];
+    }
   }
 
   const auto normal_cross = quader_geometry::cross(source_normal, target_normal);
@@ -649,8 +696,8 @@ continuation_source_corners(const TransferPlane &source, std::size_t source_star
   plan.source_normal = source_normal;
   plan.source_transverse =
       quader_geometry::cross(normal_cross / plane_sine, source_normal);
-  plan.source_reference = source.positions.front();
-  plan.target_reference = target.center;
+  plan.source_reference = source_reference;
+  plan.target_reference = target_reference;
 
   const auto reference_delta = plan.target_reference - plan.source_reference;
   const double normal_distance = quader_geometry::dot(source_normal, reference_delta);
@@ -814,6 +861,13 @@ continuation_source_corners(const TransferPlane &source, std::size_t source_star
       samples.local_positions.push_back(source_face.local_positions[corner]);
       samples.effective_uvs.push_back(source_face.effective_uvs[corner]);
       sample_plane.positions.push_back(source_plane.positions[corner]);
+    }
+    if (!source_plane.planar) {
+      // Fit and transport the same triangle, rather than projecting its chart
+      // back onto the unrelated whole-polygon area normal.
+      samples.normal = geometric_normal(samples.local_positions);
+      sample_plane.normal = continuation_triangle_normal(
+          sample_plane, std::array<std::size_t, 3>{0U, 1U, 2U});
     }
     if (auto chart = transfer_chart(source, samples, sample_plane)) {
       return chart;
@@ -1869,7 +1923,7 @@ Result<PreparedFaceTextureAction> prepare_face_texture_transfer(
     auto plane = transfer_plane(work, faces[index]);
     if (!plane.has_value()) {
       return fail(face_error(faces[index],
-          "Texture transfer requires a nondegenerate planar face."));
+          "Texture transfer requires a nondegenerate face."));
     }
     planes[index] = std::move(*plane);
   }
