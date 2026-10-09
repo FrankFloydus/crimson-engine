@@ -306,6 +306,7 @@ MaterialBindingService::create_mesh_material_instance(
   filament::MaterialInstance *material_instance =
       mesh_material.createInstance();
   bind_mesh_texture_mappings(*material_instance);
+  material_instance->setDoubleSided(double_sided);
   material_instance->setCullingMode(
       double_sided ? filament::MaterialInstance::CullingMode::NONE
                    : filament::MaterialInstance::CullingMode::BACK);
@@ -414,6 +415,7 @@ MaterialBindingService::create_mesh_material_instance(
   filament::MaterialInstance *material_instance =
       mesh_material.createInstance();
   bind_mesh_texture_mappings(*material_instance);
+  material_instance->setDoubleSided(double_sided);
   material_instance->setCullingMode(
       double_sided ? filament::MaterialInstance::CullingMode::NONE
                    : filament::MaterialInstance::CullingMode::BACK);

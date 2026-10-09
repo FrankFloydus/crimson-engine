@@ -3,6 +3,7 @@ material {
     blending : transparent,
     postLightingBlending : opaque,
     depthWrite : true,
+    doubleSided : false,
     instanced : true,
     flipUV : true,
     shadingModel : lit,

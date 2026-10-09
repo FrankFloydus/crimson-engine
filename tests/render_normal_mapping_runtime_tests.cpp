@@ -282,9 +282,10 @@ public:
   std::optional<QVec3>
   render_normal(QVec3 normal, bool mirror_authored_u,
                 const RenderStandardMaterialTextureTransformSnapshot &transform,
-                const QMat4 &world_transform) {
+                const QMat4 &world_transform, bool back_facing = false) {
     const auto pixel = render_surface(normal, mirror_authored_u, transform,
-                                       world_transform, false, 1.0f, 1.0f, 0.0f);
+                                       world_transform, false, 1.0f, 1.0f, 0.0f,
+                                       nullptr, nullptr, back_facing);
     if (!pixel) {
       return std::nullopt;
     }
@@ -395,7 +396,8 @@ public:
   std::optional<SurfaceGridImage> render_scene_document(
       const SceneDocument &document, const AssetRegistry &assets,
       const std::vector<RenderToolPreviewMeshRecord> &previews, bool shaded,
-      bool submit_previews = true) {
+      bool submit_previews = true, float debug_mode = 6.0f,
+      bool solid = false, bool oblique = false) {
     auto &bridge = scene_bridge();
     bridge.sync(document, assets, 0u, {.scene_session_id = 1u});
     if (submit_previews &&
@@ -404,10 +406,11 @@ public:
     }
     camera_->setProjection(filament::Camera::Projection::ORTHO,
                            -1.5, 1.5, -1.5, 1.5, 0.1, 20.0);
-    camera_->lookAt({0.0, 0.0, 4.0}, {0.0, 0.0, 0.0}, {0.0, 1.0, 0.0});
+    camera_->lookAt({oblique ? 1.3 : 0.0, oblique ? -0.8 : 0.0, 4.0},
+                    {0.0, 0.0, 0.0}, {0.0, 1.0, 0.0});
     view_->setVisibleLayers(0xffu, shaded ? kViewportShadedSceneLayerMask
                                         : kViewportRenderedSceneLayerMask);
-    set_debug_view(6.0f);
+    set_debug_view(debug_mode, solid);
     return read_current_mesh();
   }
 
@@ -430,9 +433,9 @@ public:
     return read_current_mesh();
   }
 
-  void set_debug_view(float debug_mode) {
+  void set_debug_view(float debug_mode, bool solid = false) {
     view_->setMaterialGlobal(
-        0u, filament::math::float4{debug_mode, 0.0f, 0.0f, 1.0f});
+        0u, filament::math::float4{debug_mode, solid ? 1.0f : 0.0f, 0.0f, 1.0f});
   }
 
   utils::Entity current_surface_entity() const {
@@ -658,7 +661,7 @@ private:
       const QMat4 &world_transform, bool shaded, float normal_strength,
       float roughness, float metallic,
       const SurfaceGridOptions *grid = nullptr,
-      SurfaceGridImage *image = nullptr) {
+      SurfaceGridImage *image = nullptr, bool back_facing = false) {
     if (proxy_) {
       factory_.destroy(*proxy_);
       proxy_.reset();
@@ -723,10 +726,11 @@ private:
     const QVec3 world_center{world_transform.values[12u],
                             world_transform.values[13u],
                             world_transform.values[14u]};
+    const double camera_distance = back_facing ? -4.0 : 4.0;
     camera_->lookAt(
-        {world_center.x + world_normal.x * 4.0,
-         world_center.y + world_normal.y * 4.0,
-         world_center.z + world_normal.z * 4.0},
+        {world_center.x + world_normal.x * camera_distance,
+         world_center.y + world_normal.y * camera_distance,
+         world_center.z + world_normal.z * camera_distance},
         {world_center.x, world_center.y, world_center.z},
         {world_up.x, world_up.y, world_up.z});
     if (grid != nullptr) {
@@ -992,6 +996,159 @@ std::vector<RenderToolPreviewMeshRecord> visible_dynamic_occurrences(
   records[1].instance_sampling_from_local = {quarter_turn, mirrored_sampling};
   records[2].transform = transforms[5];
   return records;
+}
+
+void save_grid_capture(const SurfaceGridImage &image, const QString &label);
+
+TEST(RenderNormalMappingRuntimeTests,
+     TouchingOppositeFacesMatchSingleSurfaceInEveryShadedPresentation) {
+  if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_NORMAL_TESTS") != 1) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_NORMAL_TESTS=1 for Vulkan coverage";
+  }
+  for (const bool back_first : {false, true}) {
+    SCOPED_TRACE(back_first ? "back inserted first" : "front inserted first");
+    CullingMaterialResolver resolver;
+    NormalMappingHarness harness;
+    ASSERT_TRUE(harness.initialize(kGridTargetSize));
+    auto material = uv_checker_reference_material(harness.preview_material());
+    ASSERT_TRUE(material.has_value());
+    resolver.material = material->primary_material;
+    harness.scene_bridge().set_project_material_resolver(&resolver);
+    SceneDocument document;
+    AssetRegistry assets;
+    const auto front_mesh = visible_dynamic_occurrences(*material).front().mesh;
+    auto back_mesh = front_mesh;
+    auto back_geometry = back_mesh.geometry();
+    // The two opposite diagonals make unequal lighting reveal every raster
+    // depth tie, as on touching faces from separately triangulated brushes.
+    back_geometry.indices = {0u, 3u, 1u, 1u, 3u, 2u};
+    for (auto &vertex : back_geometry.vertices) {
+      vertex.normal = {0.0f, 0.0f, -1.0f};
+      vertex.uv_geometric_normal = vertex.normal;
+    }
+    back_mesh.replace_geometry(std::move(back_geometry));
+    std::array<EntityId, 2u> entities{};
+    for (std::size_t index = 0u; index < entities.size(); ++index) {
+      const bool back = back_first != (index != 0u);
+      const auto entity = document.create_entity(
+          back ? "Touching back surface" : "Touching front surface", EntityKind::Mesh);
+      entities[back ? 1u : 0u] = entity;
+      ASSERT_TRUE(document.set_mesh(entity, {.mesh = assets.add_mesh(back ? back_mesh : front_mesh)}));
+    }
+    const auto light = document.create_entity("Surface witness light", EntityKind::Light);
+    ASSERT_TRUE(document.set_light(light, {.type = LightType::Directional, .intensity = 16.0f}));
+    ASSERT_TRUE(document.set_transform(light, {.rotation_euler = {1.5707963268f, 0.0f, 0.0f}}));
+    auto &bridge = harness.scene_bridge();
+    auto settings = ViewportSettings::defaults();
+    settings.set_bool_value(ViewportBoolSettingId::ShowMeshGrid, false);
+    bridge.update_mesh_surface_grid(0.25f, settings);
+    for (int presentation = 0; presentation < 3; ++presentation) {
+      const bool solid = presentation == 0;
+      const bool shaded = presentation != 2;
+      const QString label = QString("touching-%1-%2")
+          .arg(solid ? "solid" : shaded ? "shaded" : "rendered")
+          .arg(back_first ? "back-first" : "front-first");
+      SCOPED_TRACE(label.toStdString());
+      const auto render = [&]() {
+        return harness.render_scene_document(document, assets, {}, shaded,
+                                              true, 0.0f, solid, true);
+      };
+      ASSERT_TRUE(document.set_visible(entities[0u], true));
+      ASSERT_TRUE(document.set_visible(entities[1u], false));
+      bridge.set_backface_culling_enabled(true);
+      const auto reference = render();
+      ASSERT_TRUE(reference.has_value());
+      EXPECT_GT(length(reference->pixel(128, 128)), 0.02f);
+      save_grid_capture(*reference, label + "-front-reference");
+
+      ASSERT_TRUE(document.set_visible(entities[1u], true));
+      bridge.set_backface_culling_enabled(false);
+      const auto touching = render();
+      ASSERT_TRUE(touching.has_value());
+      save_grid_capture(*touching, label + "-touching");
+      expect_same_pixels(*touching, *reference);
+
+      ASSERT_TRUE(document.set_visible(entities[0u], false));
+      const auto back_only = render();
+      ASSERT_TRUE(back_only.has_value());
+      save_grid_capture(*back_only, label + "-back-only");
+      expect_same_pixels(*back_only, *reference);
+
+      bridge.set_backface_culling_enabled(true);
+      const auto culled = render();
+      ASSERT_TRUE(culled.has_value());
+      EXPECT_LT(length(culled->pixel(128, 128)), 0.01f);
+      ASSERT_TRUE(document.set_visible(entities[0u], true));
+      const auto restored = render();
+      ASSERT_TRUE(restored.has_value());
+      expect_same_pixels(*restored, *reference);
+      bridge.set_backface_culling_enabled(false);
+      const auto restored_touching = render();
+      ASSERT_TRUE(restored_touching.has_value());
+      expect_same_pixels(*restored_touching, *touching);
+    }
+  }
+}
+
+TEST(RenderNormalMappingRuntimeTests,
+     BackfaceNormalsRemainContinuousWhenTextureMappingUsesDerivatives) {
+  if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_NORMAL_TESTS") != 1) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_NORMAL_TESTS=1 for Vulkan coverage";
+  }
+  NormalMappingHarness harness;
+  ASSERT_TRUE(harness.initialize(kGridTargetSize));
+  struct ChartCase final {
+    const char *name;
+    RenderStandardMaterialTextureTransformSnapshot transform;
+    QVec3 tangent;
+    QVec3 image_up;
+    bool near_identity = false;
+  };
+  const std::array<ChartCase, 5u> charts{{
+      {"identity", {}, {1.0f, 0.0f, 0.0f}, {0.0f, -1.0f, 0.0f}, true},
+      {"epsilon scale", {.scale = {1.0001f, 1.0f}},
+       {1.0f, 0.0f, 0.0f}, {0.0f, -1.0f, 0.0f}, true},
+      {"epsilon rotation", {.rotation_degrees = 0.001f},
+       {1.0f, 0.0f, 0.0f}, {0.0f, -1.0f, 0.0f}, true},
+      {"quarter turn", {.rotation_degrees = 90.0f},
+       {0.0f, -1.0f, 0.0f}, {-1.0f, 0.0f, 0.0f}},
+      {"mirror U", {.scale = {-1.0f, 1.0f}},
+       {-1.0f, 0.0f, 0.0f}, {0.0f, -1.0f, 0.0f}},
+  }};
+  const QVec3 sampled = normalize(QVec3{
+      static_cast<float>(std::to_integer<unsigned>(kNormalTexel[0u])) * (2.0f / 255.0f) - 1.0f,
+      static_cast<float>(std::to_integer<unsigned>(kNormalTexel[1u])) * (2.0f / 255.0f) - 1.0f,
+      static_cast<float>(std::to_integer<unsigned>(kNormalTexel[2u])) * (2.0f / 255.0f) - 1.0f});
+  for (int occurrence = 0; occurrence < 3; ++occurrence) {
+    SCOPED_TRACE(occurrence);
+    QMat4 world;
+    if (occurrence != 0) {
+      world.values[0u] = occurrence == 2 ? -1.5f : 1.5f;
+      world.values[5u] = 0.75f;
+      world.values[10u] = 2.0f;
+    }
+    QVec3 baseline;
+    for (const auto &chart : charts) {
+      SCOPED_TRACE(chart.name);
+      const auto actual = harness.render_normal(
+          {0.0f, 0.0f, 1.0f}, false, chart.transform, world, true);
+      ASSERT_TRUE(actual.has_value());
+      // A two-sided backface presents the reversed authored tangent frame.
+      // Signed chart axes give an independent normal-map direction oracle.
+      const QVec3 expected =
+          normalize(transform_direction(world, chart.tangent)) * -sampled.x +
+          normalize(transform_direction(world, chart.image_up)) * -sampled.y +
+          QVec3{0.0f, 0.0f, -sampled.z};
+      EXPECT_LT(length(*actual - expected), 0.006f)
+          << "actual (" << actual->x << ", " << actual->y << ", " << actual->z
+          << "), expected (" << expected.x << ", " << expected.y << ", " << expected.z << ')';
+      if (&chart == charts.data()) baseline = *actual;
+      else if (chart.near_identity) {
+        EXPECT_LT(length(*actual - baseline), 0.002f)
+            << "A small texture edit must preserve the backface bump direction";
+      }
+    }
+  }
 }
 
 TEST(RenderNormalMappingRuntimeTests,

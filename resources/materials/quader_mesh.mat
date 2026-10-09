@@ -2,6 +2,7 @@ material {
     name : QuaderDefaultMesh,
     blending : transparent,
     depthWrite : true,
+    doubleSided : false,
     instanced : true,
     flipUV : true,
     shadingModel : unlit,

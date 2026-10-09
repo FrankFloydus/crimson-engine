@@ -26,6 +26,11 @@ file except through prior written authorization from Francesco Di Blasi.
   reflected-entity front-face correction. Backface Selection remains independent.
   Coverage: `tests/scene_surface_query_tests.cpp`, `tests/render_extraction_tests.cpp` and the
   global-culling pixel test in `tests/render_normal_mapping_runtime_tests.cpp`.
+- Disabling mesh culling also enables Filament's two-sided lighting in both mesh materials.
+  Keep that shader capability explicit and bind it with raster culling. Opposing coplanar faces
+  with the same flat material must agree on visible-side lighting; disabling raster culling
+  alone leaves opposing normals and exposes bright/dark depth-tie patches. Preserve tangent-frame
+  orientation through both packed and derivative normal mapping, without moving surface depth.
 - `RenderSourceStamp` gates extraction; `RenderSceneSnapshot` feeds `SceneRenderBridge` and caches.
   Put dirty/revision checks before topology hashes, geometry compilation, snapshots, or uploads.
   Snapshot-owned material bindings use exact authored keys and material catalog/project revisions.

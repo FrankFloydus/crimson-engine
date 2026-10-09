@@ -66,8 +66,12 @@ vec3 normalForTextureUv(vec3 normalSample, highp vec2 uv) {
     // Filament's packed tangent frame uses -dP/dV for normal-map +Y:
     // image rows run down while the tangent-space normal points up.
     // Keep that convention when a changed chart requires derivatives.
-    highp vec3 mappedWorldNormal = tangent * normalSample.x
-            - bitangent * normalSample.y + normal * normalSample.z;
+    // UV derivatives retain authored orientation, while Filament flips the
+    // entire packed frame on a two-sided backface. Its normal is already flipped.
+    float tangentFacing = isDoubleSided() && !gl_FrontFacing ? -1.0 : 1.0;
+    highp vec3 mappedWorldNormal =
+            (tangent * normalSample.x - bitangent * normalSample.y) * tangentFacing
+            + normal * normalSample.z;
 
     // Filament retains an unnormalized, interpolated TBN. Invert that frame
     // instead of transposing it so prepareMaterial reproduces this direction.
