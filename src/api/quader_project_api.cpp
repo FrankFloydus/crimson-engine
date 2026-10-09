@@ -682,6 +682,7 @@ std::vector<QuaderRecentProject> QuaderProjectApi::recent_projects() const {
         .manifest_last_modified_unix_ms =
             entry.manifest_last_modified_unix_ms,
         .manifest_size_bytes = entry.manifest_size_bytes,
+        .last_saved_app_version = entry.last_saved_app_version,
     });
   }
   return result;

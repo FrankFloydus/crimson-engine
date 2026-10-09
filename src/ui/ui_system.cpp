@@ -2271,7 +2271,8 @@ void UISystem::refresh_project_workspace(bool force) {
             .available = project.available,
             .manifest_last_modified_unix_ms =
                 project.manifest_last_modified_unix_ms,
-            .manifest_size_bytes = project.manifest_size_bytes,
+            .last_saved_app_version =
+                QString::fromStdString(project.last_saved_app_version),
         });
       }
       project_home_page_->set_recent_projects(std::move(recent));
@@ -3481,6 +3482,7 @@ void UISystem::shutdown() {
   loading_presentation_active_ = false;
   loading_previous_presentation_pending_ = false;
   startup_presentation_pending_ = false;
+  window_placement_transition_visible_ = false;
   viewport_panel_ = nullptr;
   central_stack_ = nullptr;
   composition_anchor_ = nullptr;
@@ -4276,6 +4278,38 @@ void UISystem::begin_loading_presentation() {
   static_cast<QtLoadingCover *>(loading_cover_)->flush_presentation();
 }
 
+void UISystem::begin_window_placement_transition() {
+  if (main_window_ == nullptr) {
+    return;
+  }
+  window_placement_transition_visible_ = main_window_->isVisible();
+  if (!home_visible_) {
+    capture_workspace_window_state();
+  }
+  // The domain binding has already changed. Retire outgoing drafts without
+  // consulting old owners before hiding the window delivers focus events.
+  abandon_scene_backed_panels();
+  if (viewport_panel_ != nullptr) {
+    viewport_panel_->abandon_interactions();
+  }
+  if (standard_material_editor_window_ != nullptr) {
+    standard_material_editor_window_->abandon_interactions();
+  }
+  // Hiding this same root preserves Qt's device and the retained anchor.
+  main_window_->hide();
+  if (loading_cover_ != nullptr) {
+    static_cast<QtLoadingCover *>(loading_cover_)->begin_presentation();
+  }
+}
+
+void UISystem::end_window_placement_transition() {
+  const bool restore_visible = window_placement_transition_visible_;
+  window_placement_transition_visible_ = false;
+  if (restore_visible && !main_window_close_in_progress_) {
+    show();
+  }
+}
+
 bool UISystem::loading_logo_presented() const {
   return loading_cover_ != nullptr &&
          static_cast<const QtLoadingCover *>(loading_cover_)->logo_presented();
@@ -4411,6 +4445,7 @@ void UISystem::finish_startup_presentation() {
   }
   loading_presentation_active_ = false;
   startup_presentation_pending_ = false;
+  window_placement_transition_visible_ = false;
   static_cast<QtLoadingCover *>(loading_cover_)->set_input_blocked(false);
   loading_cover_->hide();
   if (loading_previous_focus_ != nullptr && loading_previous_focus_->isVisible() &&
@@ -5507,7 +5542,8 @@ void UISystem::refresh_localized_chrome() {
         .recent_name_column = text("ui.home.recent_name", "Project"),
         .recent_last_modified_column = text(
             "ui.home.recent_last_modified", "Last modified"),
-        .recent_size_column = text("ui.home.recent_size", "Size"),
+        .recent_editor_version_column =
+            text("ui.home.recent_editor_version", "Editor version"),
         .recent_actions_column =
             text("ui.home.recent_actions", "Actions"),
         .no_recent_projects =
@@ -5537,6 +5573,20 @@ void UISystem::refresh_localized_chrome() {
             "Explore guides to Quader’s tools and workflows."),
         .documentation_action = text(
             "ui.home.documentation.action", "Open docs"),
+        .modified_just_now = text("ui.home.modified.just_now", "Just now"),
+        .modified_minute_ago = text("ui.home.modified.minute_ago", "1 minute ago"),
+        .modified_minutes_ago =
+            text("ui.home.modified.minutes_ago", "%1 minutes ago"),
+        .modified_hour_ago = text("ui.home.modified.hour_ago", "1 hour ago"),
+        .modified_hours_ago = text("ui.home.modified.hours_ago", "%1 hours ago"),
+        .modified_yesterday = text("ui.home.modified.yesterday", "Yesterday"),
+        .modified_days_ago = text("ui.home.modified.days_ago", "%1 days ago"),
+        .modified_week_ago = text("ui.home.modified.week_ago", "1 week ago"),
+        .modified_weeks_ago = text("ui.home.modified.weeks_ago", "%1 weeks ago"),
+        .modified_month_ago = text("ui.home.modified.month_ago", "1 month ago"),
+        .modified_months_ago = text("ui.home.modified.months_ago", "%1 months ago"),
+        .modified_year_ago = text("ui.home.modified.year_ago", "1 year ago"),
+        .modified_years_ago = text("ui.home.modified.years_ago", "%1 years ago"),
     });
   }
   if (scene_workspace_ != nullptr) {

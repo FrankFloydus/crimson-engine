@@ -65,6 +65,12 @@ public:
 
   [[nodiscard]] const ProjectId &id() const noexcept { return id_; }
   [[nodiscard]] const std::string &name() const noexcept { return name_; }
+  /// Empty for projects saved before application-version metadata was recorded.
+  [[nodiscard]] const std::string &last_saved_app_version() const noexcept {
+    return last_saved_app_version_;
+  }
+  /// Stamp an authored save candidate; publish it only after its write commits.
+  void mark_saved_by_current_app();
   /// Source format read from disk; serialization always writes the current format.
   [[nodiscard]] std::uint32_t loaded_version() const noexcept {
     return loaded_version_;
@@ -147,6 +153,7 @@ private:
 
   ProjectId id_;
   std::string name_;
+  std::string last_saved_app_version_;
   std::uint32_t loaded_version_ = kQuaderProjectManifestVersion;
   ProductRelease minimum_product_release_ = kInternalFullRelease;
   std::vector<ProjectSceneCatalogEntry> scenes_;

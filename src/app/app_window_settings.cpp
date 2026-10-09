@@ -9,6 +9,9 @@
 #include "core/qstr.hpp"
 #include "core/user_config_paths.hpp"
 
+#include <QCryptographicHash>
+#include <QString>
+
 #include <algorithm>
 #include <charconv>
 #include <fstream>
@@ -104,6 +107,32 @@ AppWindowSettings AppWindowSettings::load(const std::filesystem::path& path) {
 std::filesystem::path
 AppWindowSettings::resolve_path(const std::filesystem::path &executable_dir) {
   return quader_user_config_directory(executable_dir) / "window_settings.ini";
+}
+
+std::filesystem::path AppWindowSettings::resolve_project_path(
+    const std::filesystem::path &executable_dir,
+    const std::filesystem::path &manifest_path) {
+  if (manifest_path.empty()) {
+    return {};
+  }
+  std::error_code error;
+  auto normalized = std::filesystem::weakly_canonical(manifest_path, error);
+  if (error || normalized.empty()) {
+    error.clear();
+    normalized = std::filesystem::absolute(manifest_path, error);
+    if (error) {
+      normalized = manifest_path;
+    }
+  }
+  QString identity = QString::fromStdWString(
+      normalized.lexically_normal().generic_wstring());
+#ifdef _WIN32
+  identity = identity.toCaseFolded();
+#endif
+  const auto digest = QCryptographicHash::hash(
+      identity.toUtf8(), QCryptographicHash::Sha256).toHex();
+  return quader_user_config_directory(executable_dir) / "project_windows" /
+         (digest.toStdString() + ".ini");
 }
 
 bool AppWindowSettings::save(const std::filesystem::path& path) const {

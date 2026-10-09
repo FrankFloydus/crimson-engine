@@ -99,6 +99,10 @@ file except through prior written authorization from Francesco Di Blasi.
   native previews retain render's native presentation path.
   The retained bootstrap anchor keeps Qt's device alive across home/workspace changes and until
   render teardown. Disconnect callbacks and release render resources before destroying that device.
+  Project placement handoff hides and reshows this same root after App captures the outgoing
+  bounds. Retire outgoing UI drafts before hiding, apply the new binding/layout while hidden,
+  and restart the accepted-logo timer at the new placement. Keep root flags, native identity and
+  anchor parent intact so the borrowed composition device survives. Accepted quit never reshows it.
   Native-child panes remain available for standalone render/tests and other backends. Preserve
   `Qt::AA_DontCreateNativeWidgetSiblings`, `Qt::WA_DontCreateNativeAncestors`, bounded ancestor
   observation and cached OS geometry queries for that route. Its reserved backing stays at `(0, 0)`

@@ -52,6 +52,7 @@ public:
 
 private:
   void apply_window_settings();
+  void apply_home_window_placement();
   void install_display_refresh_rate_sync();
   void bind_display_refresh_rate_screen(QScreen *screen);
   void synchronize_display_refresh_rate(QScreen *screen);
@@ -79,6 +80,7 @@ private:
   ProjectSession project_session_;
   RenderOverlaySnapshotCache render_overlay_snapshot_cache_;
   std::unique_ptr<QuaderEditorApi> editor_;
+  std::filesystem::path executable_dir_;
   std::filesystem::path window_settings_path_;
   AppWindowSettings window_settings_;
   AssetId default_material_ = kInvalidAssetId;

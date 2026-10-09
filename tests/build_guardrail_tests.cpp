@@ -4733,8 +4733,9 @@ TEST(WindowGuardrailTests,
   expect_contains(app_source, "#include <QMainWindow>");
   expect_contains(app_source, "#include <QScreen>");
   expect_contains(app_source,
-                  "AppWindowSettings::resolve_path(executable_dir)");
-  expect_contains(app_source, "AppWindowSettings::load(window_settings_path_)");
+                  "AppWindowSettings::resolve_project_path(");
+  expect_contains(app_source, "AppWindowSettings::load(");
+  expect_contains(app_settings_header, "resolve_project_path(");
   expect_contains(app_source,
                   "const std::optional<PlatformWindowPlacement> placement");
   expect_contains(app_source, "QGuiApplication::screens()");

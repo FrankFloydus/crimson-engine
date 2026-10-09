@@ -742,6 +742,7 @@ ProjectSessionResult ProjectMaterialDeletionService::delete_preview(
     const auto graph = project_->dependencies().snapshot();
     ProjectManifest candidate = workspace.manifest;
     candidate.require_product_release(current_product_release());
+    candidate.mark_saved_by_current_app();
     const auto marked = candidate.mark_materials_deleted(preview.material_ids);
     if (!marked.ok()) {
       throw std::runtime_error(marked.error().message);

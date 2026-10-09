@@ -491,6 +491,7 @@ endif()
 quader_configure_core_module(quader_project_qdr_io)
 target_include_directories(quader_project_qdr_io
     PRIVATE
+        "${QUADER_GENERATED_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty"
         "${QUADER_MODELING_SDK_NEUTRAL_INCLUDE_DIR}"
         "${QUADER_QDR_GENERATED_DIR}")
@@ -565,6 +566,7 @@ add_library(quader_project_session STATIC
     src/editor/session/project_session.cpp)
 quader_configure_core_module(quader_project_session)
 target_include_directories(quader_project_session PRIVATE
+    "${QUADER_GENERATED_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty")
 target_link_libraries(quader_project_session
     PUBLIC
@@ -1923,6 +1925,7 @@ if(QUADER_BUILD_TESTS)
             "$<$<CONFIG:Debug>:/INCREMENTAL:NO>")
     endif()
     target_include_directories(quader_tests PRIVATE
+        "${QUADER_GENERATED_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty"
         "${QUADER_QDR_GENERATED_DIR}")
     target_compile_definitions(quader_tests

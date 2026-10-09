@@ -731,7 +731,7 @@ TEST(LocalizationResourceTests,
   EXPECT_EQ(english->at("ui.home.open_project"), "Open project…");
   EXPECT_EQ(english->at("ui.home.recent_projects"), "Recent projects");
   EXPECT_EQ(english->at("ui.home.recent_last_modified"), "Last modified");
-  EXPECT_EQ(english->at("ui.home.recent_size"), "Size");
+  EXPECT_EQ(english->at("ui.home.recent_editor_version"), "Editor version");
   EXPECT_EQ(english->at("ui.home.recent_actions"), "Actions");
   EXPECT_EQ(english->at("ui.home.recent_action.open"), "Open");
   EXPECT_EQ(english->at("ui.home.recent_action.open_file_location"),
@@ -744,7 +744,7 @@ TEST(LocalizationResourceTests,
   EXPECT_EQ(italian->at("ui.home.open_project"), "Apri progetto…");
   EXPECT_EQ(italian->at("ui.home.recent_projects"), "Progetti recenti");
   EXPECT_EQ(italian->at("ui.home.recent_last_modified"), "Ultima modifica");
-  EXPECT_EQ(italian->at("ui.home.recent_size"), "Dimensione");
+  EXPECT_EQ(italian->at("ui.home.recent_editor_version"), "Versione editor");
   EXPECT_EQ(italian->at("ui.home.recent_actions"), "Azioni");
   EXPECT_EQ(italian->at("ui.home.recent_action.open"), "Apri");
   EXPECT_EQ(italian->at("ui.home.recent_action.open_file_location"),

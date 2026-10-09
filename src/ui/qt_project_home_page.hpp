@@ -25,19 +25,22 @@ class QEvent;
 class QFrame;
 class QBoxLayout;
 class QHBoxLayout;
+class QHideEvent;
 class QMenu;
 class QPushButton;
 class QScrollArea;
+class QShowEvent;
 class QSpacerItem;
 class QStackedWidget;
 class QTableView;
+class QTimer;
 class QVBoxLayout;
 
 namespace quader {
 
 class QtProjectHomeResourceCard;
 
-inline constexpr int kQtProjectHomeMaximumRecentProjects = 10;
+inline constexpr int kQtProjectHomeMaximumRecentProjects = 20;
 
 /**
  * Read-only presentation data for one project in the Home page's recent list.
@@ -48,7 +51,7 @@ struct QtRecentProjectItem {
   QString manifest_path;
   bool available = true;
   std::optional<std::uint64_t> manifest_last_modified_unix_ms;
-  std::optional<std::uintmax_t> manifest_size_bytes;
+  QString last_saved_app_version;
 
   bool operator==(const QtRecentProjectItem &) const = default;
 };
@@ -62,7 +65,7 @@ struct QtProjectHomeLabels {
   QString recent_projects;
   QString recent_name_column;
   QString recent_last_modified_column;
-  QString recent_size_column;
+  QString recent_editor_version_column;
   QString recent_actions_column;
   QString no_recent_projects;
   QString unavailable_project;
@@ -79,6 +82,19 @@ struct QtProjectHomeLabels {
   QString documentation_description =
       QStringLiteral("Explore guides to Quader\u2019s tools and workflows.");
   QString documentation_action = QStringLiteral("Open docs");
+  QString modified_just_now = QStringLiteral("Just now");
+  QString modified_minute_ago = QStringLiteral("1 minute ago");
+  QString modified_minutes_ago = QStringLiteral("%1 minutes ago");
+  QString modified_hour_ago = QStringLiteral("1 hour ago");
+  QString modified_hours_ago = QStringLiteral("%1 hours ago");
+  QString modified_yesterday = QStringLiteral("Yesterday");
+  QString modified_days_ago = QStringLiteral("%1 days ago");
+  QString modified_week_ago = QStringLiteral("1 week ago");
+  QString modified_weeks_ago = QStringLiteral("%1 weeks ago");
+  QString modified_month_ago = QStringLiteral("1 month ago");
+  QString modified_months_ago = QStringLiteral("%1 months ago");
+  QString modified_year_ago = QStringLiteral("1 year ago");
+  QString modified_years_ago = QStringLiteral("%1 years ago");
 
   [[nodiscard]] static QtProjectHomeLabels defaults();
 };
@@ -93,7 +109,7 @@ public:
   enum Column {
     NameColumn = 0,
     LastModifiedColumn,
-    SizeColumn,
+    EditorVersionColumn,
     ActionsColumn,
     ColumnCount,
   };
@@ -120,6 +136,8 @@ public:
   void set_labels(QtProjectHomeLabels labels);
   [[nodiscard]] bool
   set_projects(std::vector<QtRecentProjectItem> projects);
+  /** Refreshes elapsed-time labels without resetting retained rows or selection. */
+  void refresh_relative_times(std::uint64_t now_unix_ms);
   [[nodiscard]] const std::vector<QtRecentProjectItem> &projects() const {
     return projects_;
   }
@@ -128,6 +146,8 @@ public:
 private:
   QtProjectHomeLabels labels_ = QtProjectHomeLabels::defaults();
   std::vector<QtRecentProjectItem> projects_;
+  std::vector<QString> relative_times_;
+  std::uint64_t now_unix_ms_ = 0;
 };
 
 /**
@@ -174,6 +194,8 @@ public:
 protected:
   bool eventFilter(QObject *watched, QEvent *event) override;
   void changeEvent(QEvent *event) override;
+  void showEvent(QShowEvent *event) override;
+  void hideEvent(QHideEvent *event) override;
 
 private:
   void dispatch_recent_project_open(const QModelIndex &index);
@@ -185,6 +207,8 @@ private:
   void refresh_project_logo();
   void refresh_labels();
   void refresh_recent_projects_page();
+  void refresh_recent_project_cursor();
+  void update_recent_project_cursor(const QPoint &viewport_position);
 
   QtProjectHomeLabels labels_ = QtProjectHomeLabels::defaults();
   QScrollArea *scroll_area_ = nullptr;
@@ -211,6 +235,7 @@ private:
   QTableView *recent_projects_view_ = nullptr;
   QLabel *no_recent_projects_label_ = nullptr;
   QtRecentProjectsModel *recent_projects_model_ = nullptr;
+  QTimer *relative_time_timer_ = nullptr;
   QMenu *recent_project_actions_menu_ = nullptr;
   QAction *open_recent_project_action_ = nullptr;
   QAction *open_recent_project_location_action_ = nullptr;

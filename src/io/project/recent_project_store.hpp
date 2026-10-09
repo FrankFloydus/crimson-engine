@@ -29,6 +29,7 @@ struct RecentProjectEntry {
   bool available = false;
   std::optional<std::uint64_t> manifest_last_modified_unix_ms;
   std::optional<std::uintmax_t> manifest_size_bytes;
+  std::string last_saved_app_version;
 };
 
 /**
@@ -37,7 +38,7 @@ struct RecentProjectEntry {
  */
 class RecentProjectStore final {
 public:
-  static constexpr std::size_t kMaximumEntries = 10u;
+  static constexpr std::size_t kMaximumEntries = 20u;
 
   explicit RecentProjectStore(std::filesystem::path storage_path)
       : storage_path_(std::move(storage_path)) {}

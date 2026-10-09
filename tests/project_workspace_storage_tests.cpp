@@ -8,9 +8,12 @@
 #include "io/project/project_manifest.hpp"
 #include "io/project/project_types.hpp"
 #include "io/project/recent_project_store.hpp"
+#include "quader_app_version.hpp"
 
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -152,6 +155,7 @@ TEST(ProjectManifestStore, CreatesOnlyInsideAnExactlyEmptyFolder) {
       ProjectManifestStore::create_in_empty_directory(project_root);
   ASSERT_TRUE(created.ok()) << created.error().message;
   EXPECT_EQ(created.value().manifest.name(), "Museum");
+  EXPECT_EQ(created.value().manifest.last_saved_app_version(), kQuaderAppVersion);
   EXPECT_EQ(created.value().manifest_path.filename(), "Museum.qproj");
   EXPECT_TRUE(std::filesystem::is_regular_file(created.value().manifest_path));
   EXPECT_TRUE(
@@ -161,6 +165,7 @@ TEST(ProjectManifestStore, CreatesOnlyInsideAnExactlyEmptyFolder) {
       ProjectManifestStore::open(created.value().manifest_path);
   ASSERT_TRUE(reopened.ok()) << reopened.error().message;
   EXPECT_EQ(reopened.value().manifest.id(), created.value().manifest.id());
+  EXPECT_EQ(reopened.value().manifest.last_saved_app_version(), kQuaderAppVersion);
   EXPECT_TRUE(reopened.value().manifest.scenes().empty());
   EXPECT_TRUE(reopened.value().manifest.open_scene_paths().empty());
 
@@ -780,6 +785,78 @@ TEST(RecentProjectStore, UnicodeProjectRootsRemainAvailableAcrossStoreReload) {
   EXPECT_TRUE(std::filesystem::is_regular_file(entry.manifest_path));
 }
 
+TEST(ProjectManifestStore, OptionalAppVersionPreservesUnknownAndRecordedValues) {
+  auto created = ProjectManifest::create(ProjectId::generate(), "Versioned");
+  ASSERT_TRUE(created.ok());
+  EXPECT_TRUE(created.value().last_saved_app_version().empty());
+  auto encoded = nlohmann::json::parse(ProjectManifestStore::serialize(created.value()));
+  EXPECT_FALSE(encoded.contains("lastSavedAppVersion"));
+  const auto unknown = ProjectManifestStore::deserialize(encoded.dump());
+  ASSERT_TRUE(unknown.ok());
+  EXPECT_TRUE(unknown.value().last_saved_app_version().empty());
+
+  encoded["lastSavedAppVersion"] = "0.1.25";
+  auto recorded = ProjectManifestStore::deserialize(encoded.dump());
+  ASSERT_TRUE(recorded.ok());
+  EXPECT_EQ(recorded.value().last_saved_app_version(), "0.1.25");
+  EXPECT_EQ(nlohmann::json::parse(ProjectManifestStore::serialize(recorded.value()))
+                .at("lastSavedAppVersion"),
+            "0.1.25");
+  recorded.value().mark_saved_by_current_app();
+  EXPECT_EQ(recorded.value().last_saved_app_version(), kQuaderAppVersion);
+  const auto stamped = ProjectManifestStore::deserialize(
+      ProjectManifestStore::serialize(recorded.value()));
+  ASSERT_TRUE(stamped.ok());
+  EXPECT_EQ(stamped.value().last_saved_app_version(), kQuaderAppVersion);
+  EXPECT_EQ(stamped.value().loaded_version(), kQuaderProjectManifestVersion);
+
+  encoded["lastSavedAppVersion"] = 42;
+  EXPECT_FALSE(ProjectManifestStore::deserialize(encoded.dump()).ok());
+  encoded["lastSavedAppVersion"] = std::string(65u, '1');
+  EXPECT_FALSE(ProjectManifestStore::deserialize(encoded.dump()).ok());
+}
+
+TEST(RecentProjectStore, ReadsSavedAppVersionWithoutRestampingOrCachingIt) {
+  ScopedProjectTestDirectory temporary("recent-app-version");
+  const auto root = temporary.path() / "Versioned";
+  ASSERT_TRUE(std::filesystem::create_directory(root));
+  auto project = ProjectManifestStore::create_in_empty_directory(root);
+  ASSERT_TRUE(project.ok()) << project.error().message;
+  auto encoded = nlohmann::json::parse(
+      ProjectManifestStore::serialize(project.value().manifest));
+  encoded["lastSavedAppVersion"] = "0.1.25";
+  auto recorded = ProjectManifestStore::deserialize(encoded.dump());
+  ASSERT_TRUE(recorded.ok());
+  project.value().manifest = recorded.take_value();
+  ASSERT_TRUE(ProjectManifestStore::save_atomic(project.value()).ok());
+  const RecentProjectStore store(temporary.path() / "recent-projects.json");
+  ASSERT_TRUE(store.remember(project.value().manifest,
+                             project.value().manifest_path).ok());
+  auto loaded = store.load();
+  ASSERT_TRUE(loaded.ok());
+  ASSERT_EQ(loaded.value().size(), 1u);
+  EXPECT_TRUE(loaded.value().front().available);
+  EXPECT_EQ(loaded.value().front().last_saved_app_version, "0.1.25");
+  const auto unchanged = ProjectManifestStore::open_metadata(project.value().manifest_path);
+  ASSERT_TRUE(unchanged.ok());
+  EXPECT_EQ(unchanged.value().manifest.last_saved_app_version(), "0.1.25");
+
+  project.value().manifest.mark_saved_by_current_app();
+  ASSERT_TRUE(ProjectManifestStore::save_atomic(project.value()).ok());
+  loaded = store.load();
+  ASSERT_TRUE(loaded.ok());
+  ASSERT_EQ(loaded.value().size(), 1u);
+  EXPECT_EQ(loaded.value().front().last_saved_app_version, kQuaderAppVersion);
+
+  encoded.erase("lastSavedAppVersion");
+  write_text_file(project.value().manifest_path, encoded.dump());
+  loaded = store.load();
+  ASSERT_TRUE(loaded.ok());
+  ASSERT_EQ(loaded.value().size(), 1u);
+  EXPECT_TRUE(loaded.value().front().available);
+  EXPECT_TRUE(loaded.value().front().last_saved_app_version.empty());
+}
+
 TEST(RecentProjectStore, DeduplicatesAndRetainsUnavailableEntries) {
   ScopedProjectTestDirectory temporary("recent");
   const std::filesystem::path project_root = temporary.path() / "Recent";
@@ -831,6 +908,79 @@ TEST(RecentProjectStore, DeduplicatesAndRetainsUnavailableEntries) {
   loaded = store.load();
   ASSERT_TRUE(loaded.ok());
   EXPECT_TRUE(loaded.value().empty());
+}
+
+TEST(RecentProjectStore, RetainsTwentyAvailableProjectsAcrossReorderAndRemoval) {
+  ScopedProjectTestDirectory temporary("recent-twenty");
+  const auto storage_path = temporary.path() / "Config" / "recent-projects.json";
+  const RecentProjectStore store(storage_path);
+  std::vector<ProjectWorkspaceStorage> projects;
+  std::vector<ProjectId> expected;
+  for (int index = 0; index < 21; ++index) {
+    const auto root = temporary.path() / ("Project-" + std::to_string(index));
+    ASSERT_TRUE(std::filesystem::create_directory(root));
+    auto created = ProjectManifestStore::create_in_empty_directory(root);
+    ASSERT_TRUE(created.ok()) << created.error().message;
+    projects.push_back(created.take_value());
+    if (index < 20) {
+      ASSERT_TRUE(store.remember(projects.back().manifest,
+                                 projects.back().manifest_path).ok());
+      expected.insert(expected.begin(), projects.back().manifest.id());
+    }
+  }
+
+  const auto expect_reloaded_order = [&]() {
+    const RecentProjectStore reopened(storage_path);
+    const auto loaded = reopened.load();
+    ASSERT_TRUE(loaded.ok()) << loaded.error().message;
+    ASSERT_EQ(loaded.value().size(), expected.size());
+    for (std::size_t index = 0; index < expected.size(); ++index) {
+      SCOPED_TRACE(index);
+      const auto &entry = loaded.value()[index];
+      EXPECT_EQ(entry.project_id, expected[index]);
+      EXPECT_TRUE(entry.available);
+      EXPECT_TRUE(std::filesystem::is_regular_file(entry.manifest_path));
+      ASSERT_TRUE(entry.manifest_size_bytes.has_value());
+      EXPECT_EQ(*entry.manifest_size_bytes,
+                std::filesystem::file_size(entry.manifest_path));
+    }
+  };
+  ASSERT_EQ(expected.size(), 20u);
+  expect_reloaded_order();
+
+  // A twenty-first project evicts only the least recently opened project.
+  ASSERT_TRUE(store.remember(projects.back().manifest,
+                             projects.back().manifest_path).ok());
+  expected.insert(expected.begin(), projects.back().manifest.id());
+  expected.pop_back();
+  expect_reloaded_order();
+
+  const auto &reopened_project = projects[7];
+  ASSERT_TRUE(store.remember(reopened_project.manifest,
+                             reopened_project.manifest_path).ok());
+  const auto old_position = std::find(expected.begin(), expected.end(),
+                                      reopened_project.manifest.id());
+  ASSERT_NE(old_position, expected.end());
+  expected.erase(old_position);
+  expected.insert(expected.begin(), reopened_project.manifest.id());
+  ASSERT_EQ(expected.size(), 20u);
+  expect_reloaded_order();
+
+  const auto &removed_project = projects[11];
+  ASSERT_TRUE(store.remove(removed_project.manifest_path).ok());
+  const auto removed_position = std::find(expected.begin(), expected.end(),
+                                          removed_project.manifest.id());
+  ASSERT_NE(removed_position, expected.end());
+  expected.erase(removed_position);
+  ASSERT_EQ(expected.size(), 19u);
+  expect_reloaded_order();
+  EXPECT_TRUE(std::filesystem::is_regular_file(removed_project.manifest_path));
+
+  ASSERT_TRUE(store.remember(projects.front().manifest,
+                             projects.front().manifest_path).ok());
+  expected.insert(expected.begin(), projects.front().manifest.id());
+  ASSERT_EQ(expected.size(), 20u);
+  expect_reloaded_order();
 }
 
 } // namespace

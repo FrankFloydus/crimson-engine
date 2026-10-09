@@ -38,6 +38,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -290,9 +291,10 @@ bool App::initialize(QApplication &application,
   viewport_presentation_request_ = {};
   application_ = &application;
   const std::filesystem::path executable_dir = executable_path.parent_path();
+  executable_dir_ = executable_dir;
   project_session_.set_resource_root(executable_dir);
-  window_settings_path_ = AppWindowSettings::resolve_path(executable_dir);
-  window_settings_ = AppWindowSettings::load(window_settings_path_);
+  window_settings_path_.clear();
+  window_settings_ = AppWindowSettings::defaults();
 
   const bool composed_viewports = options.render_backend == RendererBackend::Vulkan;
   if (composed_viewports) {
@@ -532,6 +534,26 @@ void App::shutdown() {
 }
 
 void App::bind_active_scene(SceneSession &scene) {
+  const auto next_window_settings_path = AppWindowSettings::resolve_project_path(
+      executable_dir_, project_session_.manifest_path());
+  const bool project_changed = next_window_settings_path != window_settings_path_;
+  if (project_changed) {
+    // The committed project binding changed, but the shell still presents the
+    // outgoing placement. Scene/tab replacement within one project skips this.
+    save_window_settings();
+    ui_.begin_window_placement_transition();
+    window_settings_path_ = next_window_settings_path;
+    window_settings_ = AppWindowSettings::defaults();
+    if (!window_settings_path_.empty()) {
+      std::error_code error;
+      const bool project_settings_exist =
+          std::filesystem::exists(window_settings_path_, error);
+      window_settings_ = AppWindowSettings::load(
+          project_settings_exist || error
+              ? window_settings_path_
+              : AppWindowSettings::resolve_path(executable_dir_));
+    }
+  }
   scene_settings_binding_.reset();
   default_material_ = kInvalidAssetId;
   if (!project_session_.has_project()) {
@@ -547,6 +569,12 @@ void App::bind_active_scene(SceneSession &scene) {
         *editor_, scene.scene(), scene.assets(), scene.modeling(),
         scene.selection(), scene.native_tools(), scene.point_placement(),
         default_material_);
+  }
+  if (project_changed) {
+    // Docks and Home content have their new minima before final placement and
+    // first logo submission; no intermediate window geometry is exposed.
+    apply_window_settings();
+    ui_.end_window_placement_transition();
   }
 }
 
@@ -604,10 +632,18 @@ void App::apply_window_settings() {
   if (window == nullptr) {
     return;
   }
+  if (window_settings_path_.empty()) {
+    apply_home_window_placement();
+    return;
+  }
+  window->setWindowState(Qt::WindowNoState);
+  window->setMinimumSize(kPlatformWindowMinimumWidth, kPlatformWindowMinimumHeight);
   const std::optional<PlatformWindowPlacement> placement =
       window_settings_.placement();
   if (!placement.has_value()) {
-    window->resize(1600, 960);
+    // A project without saved or legacy placement starts from the current
+    // display's centered Home bounds, then owns its subsequent placement.
+    apply_home_window_placement();
     return;
   }
   std::vector<PlatformWindowChromeFrame> work_areas;
@@ -661,6 +697,41 @@ void App::apply_window_settings() {
     // mapping the composed shell. Its loading cover admits the logo only once
     // retained geometry matches this real native client and maximized state.
     window->setWindowState(window->windowState() | Qt::WindowMaximized);
+  }
+}
+
+void App::apply_home_window_placement() {
+  QMainWindow *window = ui_.main_window();
+  if (window == nullptr) {
+    return;
+  }
+  window->setWindowState(Qt::WindowNoState);
+  QScreen *screen = active_display_screen(window);
+  if (screen == nullptr) {
+    window->resize(1200, 740);
+    return;
+  }
+  window->setScreen(screen);
+  (void)window->winId();
+  QWindow *host = window->windowHandle();
+  const QMargins margins = host != nullptr ? host->frameMargins() : QMargins{};
+  const QRect available = screen->availableGeometry();
+  const int frame_width = std::max(0, margins.left()) + std::max(0, margins.right());
+  const int frame_height = std::max(0, margins.top()) + std::max(0, margins.bottom());
+  const int maximum_width = std::max(1, available.width() - frame_width);
+  const int maximum_height = std::max(1, available.height() - frame_height);
+  // Home dimensions are Qt logical pixels, independent of interface scale.
+  const int width = std::min(1200, maximum_width);
+  const int height = std::min(740, maximum_height);
+  window->setMinimumSize(std::min(kPlatformWindowMinimumWidth, maximum_width),
+                         std::min(kPlatformWindowMinimumHeight, maximum_height));
+  const int x = available.x() + (available.width() - width - frame_width) / 2 +
+                std::max(0, margins.left());
+  const int y = available.y() + (available.height() - height - frame_height) / 2 +
+                std::max(0, margins.top());
+  window->setGeometry(x, y, width, height);
+  if (host != nullptr) {
+    host->setGeometry(window->geometry());
   }
 }
 

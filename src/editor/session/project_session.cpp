@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/session/project_session.hpp"
+#include "quader_app_version.hpp"
 #include "editor/session/tool_session_defaults.hpp"
 #include "editor/tools/extrude_tool_service.hpp"
 
@@ -297,12 +298,14 @@ QdrProjectWriteResult write_scene_with_project_requirement(
     ProjectWorkspaceStorage &workspace, const std::filesystem::path &path,
     const QdrProjectWriteSnapshot &snapshot, const SceneId &scene_id) {
   if (workspace.manifest.minimum_product_release() >= snapshot.minimum_product_release &&
-      workspace.manifest.loaded_version() >= kQuaderProjectManifestVersion) {
+      workspace.manifest.loaded_version() >= kQuaderProjectManifestVersion &&
+      workspace.manifest.last_saved_app_version() == kQuaderAppVersion) {
     return QdrDocumentWriter::write_project_document_atomic(
         path, snapshot, scene_id.bytes());
   }
   auto candidate = workspace.manifest;
   candidate.require_product_release(snapshot.minimum_product_release);
+  candidate.mark_saved_by_current_app();
   quader_io::QdrAtomicFileTransaction transaction;
   const auto prepared = transaction.prepare(path);
   if (!prepared.ok) {
@@ -1367,6 +1370,7 @@ ProjectSessionResult ProjectSession::prepare_asset_manifest(
   const auto state = manifest.set_workspace(std::move(paths), std::move(active));
   if (!state.ok()) return failure(state.error().message);
   manifest.require_product_release(current_product_release());
+  manifest.mark_saved_by_current_app();
   return success(false, {});
 }
 
@@ -1567,6 +1571,7 @@ ProjectSessionResult ProjectSession::save_as(SceneSessionId id,
   ProjectManifest candidate_manifest = workspace_->manifest;
   ProjectManifest recovery_manifest = candidate_manifest;
   candidate_manifest.require_product_release(snapshot.snapshot.minimum_product_release);
+  candidate_manifest.mark_saved_by_current_app();
   PersistedWorkspaceState previous_workspace_state =
       workspace_state_for(open_scenes_, active_scene_id_);
   ProjectIoResult<void> recovery_workspace_set = recovery_manifest.set_workspace(
@@ -1992,6 +1997,7 @@ ProjectSessionResult ProjectSession::install_material_catalog(
   }
   auto manifest = discovered.take_value();
   manifest.require_product_release(current_product_release());
+  manifest.mark_saved_by_current_app();
   if (ProjectManifestStore::serialize(manifest) !=
       ProjectManifestStore::serialize(workspace_->manifest) ||
       candidate_manifest.has_value() ||

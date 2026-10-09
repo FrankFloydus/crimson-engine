@@ -12,13 +12,16 @@
 #include <QAction>
 #include <QApplication>
 #include <QBoxLayout>
+#include <QCursor>
 #include <QDateTime>
+#include <QEnterEvent>
 #include <QEvent>
 #include <QFrame>
 #include <QFont>
 #include <QFontInfo>
 #include <QHeaderView>
 #include <QHBoxLayout>
+#include <QHideEvent>
 #include <QIcon>
 #include <QImage>
 #include <QLabel>
@@ -26,6 +29,7 @@
 #include <QLocale>
 #include <QMenu>
 #include <QModelIndex>
+#include <QMouseEvent>
 #include <QPalette>
 #include <QPainter>
 #include <QPainterPath>
@@ -36,12 +40,15 @@
 #include <QRegion>
 #include <QScopedValueRollback>
 #include <QScrollArea>
+#include <QScrollBar>
+#include <QShowEvent>
 #include <QSizePolicy>
 #include <QSpacerItem>
 #include <QStackedWidget>
 #include <QStyledItemDelegate>
 #include <QStyleOptionViewItem>
 #include <QTableView>
+#include <QTimer>
 #include <QVariant>
 #include <QVBoxLayout>
 
@@ -433,24 +440,66 @@ QString format_local_timestamp(
   }
   const std::uint64_t maximum_qint64 =
       static_cast<std::uint64_t>(std::numeric_limits<qint64>::max());
-  const qint64 clamped_unix_milliseconds = static_cast<qint64>(
-      std::min(*unix_milliseconds, maximum_qint64));
-  const QDateTime local_time =
-      QDateTime::fromMSecsSinceEpoch(clamped_unix_milliseconds)
-          .toLocalTime();
-  return QLocale().toString(local_time, QLocale::ShortFormat);
-}
-
-QString format_manifest_size(
-    const std::optional<std::uintmax_t> size_bytes) {
-  if (!size_bytes.has_value()) {
+  if (*unix_milliseconds > maximum_qint64) {
     return unavailable_metadata_text();
   }
-  const std::uintmax_t maximum_qint64 =
-      static_cast<std::uintmax_t>(std::numeric_limits<qint64>::max());
-  return QLocale().formattedDataSize(
-      static_cast<qint64>(std::min(*size_bytes, maximum_qint64)), 2,
-      QLocale::DataSizeTraditionalFormat);
+  const QDateTime local_time =
+      QDateTime::fromMSecsSinceEpoch(static_cast<qint64>(*unix_milliseconds))
+          .toLocalTime();
+  return local_time.isValid()
+             ? QLocale().toString(local_time, QLocale::LongFormat)
+             : unavailable_metadata_text();
+}
+
+std::uint64_t current_unix_milliseconds() {
+  return static_cast<std::uint64_t>(
+      std::max<qint64>(0, QDateTime::currentMSecsSinceEpoch()));
+}
+
+QString format_relative_timestamp(
+    const std::optional<std::uint64_t> unix_milliseconds,
+    std::uint64_t now_unix_ms, const QtProjectHomeLabels &labels) {
+  if (!unix_milliseconds.has_value() ||
+      *unix_milliseconds > static_cast<std::uint64_t>(
+                               std::numeric_limits<qint64>::max())) {
+    return unavailable_metadata_text();
+  }
+  const std::uint64_t elapsed_seconds =
+      now_unix_ms > *unix_milliseconds
+          ? (now_unix_ms - *unix_milliseconds) / 1000
+          : 0;
+  if (elapsed_seconds < 60) {
+    return labels.modified_just_now;
+  }
+  const auto plural = [](std::uint64_t count, const QString &singular,
+                         const QString &multiple) {
+    return count == 1 ? singular : multiple.arg(QLocale().toString(count));
+  };
+  if (elapsed_seconds < 60 * 60) {
+    return plural(elapsed_seconds / 60, labels.modified_minute_ago,
+                  labels.modified_minutes_ago);
+  }
+  if (elapsed_seconds < 24 * 60 * 60) {
+    return plural(elapsed_seconds / (60 * 60), labels.modified_hour_ago,
+                  labels.modified_hours_ago);
+  }
+  const std::uint64_t elapsed_days = elapsed_seconds / (24 * 60 * 60);
+  if (elapsed_days == 1) {
+    return labels.modified_yesterday;
+  }
+  if (elapsed_days < 7) {
+    return labels.modified_days_ago.arg(QLocale().toString(elapsed_days));
+  }
+  if (elapsed_days < 30) {
+    return plural(elapsed_days / 7, labels.modified_week_ago,
+                  labels.modified_weeks_ago);
+  }
+  if (elapsed_days < 365) {
+    return plural(elapsed_days / 30, labels.modified_month_ago,
+                  labels.modified_months_ago);
+  }
+  return plural(elapsed_days / 365, labels.modified_year_ago,
+                labels.modified_years_ago);
 }
 
 } // namespace
@@ -633,7 +682,7 @@ QtProjectHomeLabels QtProjectHomeLabels::defaults() {
       .recent_projects = QStringLiteral("Recent projects"),
       .recent_name_column = QStringLiteral("Project"),
       .recent_last_modified_column = QStringLiteral("Last modified"),
-      .recent_size_column = QStringLiteral("Size"),
+      .recent_editor_version_column = QStringLiteral("Editor version"),
       .recent_actions_column = QStringLiteral("Actions"),
       .no_recent_projects = QStringLiteral("No recent projects"),
       .unavailable_project = QStringLiteral("Project is unavailable"),
@@ -646,7 +695,7 @@ QtProjectHomeLabels QtProjectHomeLabels::defaults() {
 }
 
 QtRecentProjectsModel::QtRecentProjectsModel(QObject *parent)
-    : QAbstractTableModel(parent) {}
+    : QAbstractTableModel(parent), now_unix_ms_(current_unix_milliseconds()) {}
 
 int QtRecentProjectsModel::rowCount(const QModelIndex &parent) const {
   return parent.isValid() ? 0 : static_cast<int>(projects_.size());
@@ -673,6 +722,10 @@ QVariant QtRecentProjectsModel::data(const QModelIndex &index,
   if (role == Qt::TextAlignmentRole &&
       index.column() == ActionsColumn) {
     return Qt::AlignCenter;
+  }
+  if ((role == Qt::ToolTipRole || role == Qt::AccessibleDescriptionRole) &&
+      index.column() == LastModifiedColumn) {
+    return format_local_timestamp(project->manifest_last_modified_unix_ms);
   }
   if (role == Qt::ToolTipRole) {
     if (index.column() == ActionsColumn) {
@@ -705,10 +758,11 @@ QVariant QtRecentProjectsModel::data(const QModelIndex &index,
         .arg(display_name, project->manifest_path);
   }
   if (index.column() == LastModifiedColumn) {
-    return format_local_timestamp(
-        project->manifest_last_modified_unix_ms);
+    return relative_times_[static_cast<std::size_t>(index.row())];
   }
-  return format_manifest_size(project->manifest_size_bytes);
+  return project->last_saved_app_version.isEmpty()
+             ? unavailable_metadata_text()
+             : QStringLiteral("v%1").arg(project->last_saved_app_version);
 }
 
 QVariant QtRecentProjectsModel::headerData(int section,
@@ -724,8 +778,8 @@ QVariant QtRecentProjectsModel::headerData(int section,
   if (section == LastModifiedColumn) {
     return labels_.recent_last_modified_column;
   }
-  if (section == SizeColumn) {
-    return labels_.recent_size_column;
+  if (section == EditorVersionColumn) {
+    return labels_.recent_editor_version_column;
   }
   if (section == ActionsColumn) {
     return role == Qt::DisplayRole ? QString{} : labels_.recent_actions_column;
@@ -743,6 +797,10 @@ Qt::ItemFlags QtRecentProjectsModel::flags(const QModelIndex &index) const {
 
 void QtRecentProjectsModel::set_labels(QtProjectHomeLabels labels) {
   labels_ = std::move(labels);
+  for (std::size_t row = 0; row < projects_.size(); ++row) {
+    relative_times_[row] = format_relative_timestamp(
+        projects_[row].manifest_last_modified_unix_ms, now_unix_ms_, labels_);
+  }
   emit headerDataChanged(Qt::Horizontal, NameColumn, ActionsColumn);
   if (!projects_.empty()) {
     emit dataChanged(index(0, 0),
@@ -763,8 +821,30 @@ bool QtRecentProjectsModel::set_projects(
   }
   beginResetModel();
   projects_ = std::move(projects);
+  relative_times_.clear();
+  relative_times_.reserve(projects_.size());
+  now_unix_ms_ = current_unix_milliseconds();
+  for (const QtRecentProjectItem &project : projects_) {
+    relative_times_.push_back(format_relative_timestamp(
+        project.manifest_last_modified_unix_ms, now_unix_ms_, labels_));
+  }
   endResetModel();
   return true;
+}
+
+void QtRecentProjectsModel::refresh_relative_times(std::uint64_t now_unix_ms) {
+  now_unix_ms_ = now_unix_ms;
+  for (std::size_t row = 0; row < projects_.size(); ++row) {
+    const QString updated = format_relative_timestamp(
+        projects_[row].manifest_last_modified_unix_ms, now_unix_ms_, labels_);
+    if (relative_times_[row] == updated) {
+      continue;
+    }
+    relative_times_[row] = updated;
+    const QModelIndex changed = index(static_cast<int>(row), LastModifiedColumn);
+    emit dataChanged(changed, changed,
+                     {Qt::DisplayRole, Qt::AccessibleTextRole});
+  }
 }
 
 const QtRecentProjectItem *
@@ -862,6 +942,8 @@ QtProjectHomePage::QtProjectHomePage(QWidget *parent) : QWidget(parent) {
   recent_projects_view_->setSelectionMode(
       QAbstractItemView::SingleSelection);
   recent_projects_view_->setShowGrid(false);
+  recent_projects_view_->setMouseTracking(true);
+  recent_projects_view_->viewport()->installEventFilter(this);
   recent_projects_view_->setWordWrap(true);
   recent_projects_view_->setAlternatingRowColors(false);
   recent_projects_view_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
@@ -886,7 +968,7 @@ QtProjectHomePage::QtProjectHomePage(QWidget *parent) : QWidget(parent) {
   recent_projects_view_->horizontalHeader()->setSectionResizeMode(
       QtRecentProjectsModel::LastModifiedColumn, QHeaderView::Fixed);
   recent_projects_view_->horizontalHeader()->setSectionResizeMode(
-      QtRecentProjectsModel::SizeColumn, QHeaderView::Fixed);
+      QtRecentProjectsModel::EditorVersionColumn, QHeaderView::Fixed);
   recent_projects_view_->horizontalHeader()->setSectionResizeMode(
       QtRecentProjectsModel::ActionsColumn, QHeaderView::Fixed);
   recent_projects_stack_->addWidget(recent_projects_view_);
@@ -938,6 +1020,29 @@ QtProjectHomePage::QtProjectHomePage(QWidget *parent) : QWidget(parent) {
   open_recent_project_location_action_->setEnabled(false);
   copy_recent_project_path_action_->setEnabled(false);
   remove_recent_project_action_->setEnabled(false);
+
+  relative_time_timer_ = new QTimer(this);
+  relative_time_timer_->setObjectName(
+      QStringLiteral("projectHome.recentProjects.relativeTimeTimer"));
+  relative_time_timer_->setTimerType(Qt::CoarseTimer);
+  relative_time_timer_->setInterval(60 * 1000);
+  QObject::connect(relative_time_timer_, &QTimer::timeout, this, [this]() {
+    recent_projects_model_->refresh_relative_times(current_unix_milliseconds());
+  });
+  QObject::connect(recent_projects_model_, &QAbstractItemModel::modelReset, this,
+                   [this]() { refresh_recent_project_cursor(); });
+  QObject::connect(recent_projects_view_->verticalScrollBar(),
+                   &QScrollBar::valueChanged, this,
+                   [this]() { refresh_recent_project_cursor(); });
+  QObject::connect(recent_projects_view_->horizontalScrollBar(),
+                   &QScrollBar::valueChanged, this,
+                   [this]() { refresh_recent_project_cursor(); });
+  QObject::connect(recent_projects_view_->horizontalHeader(),
+                   &QHeaderView::sectionResized, this,
+                   [this]() { refresh_recent_project_cursor(); });
+  QObject::connect(recent_projects_view_->horizontalHeader(),
+                   &QHeaderView::sectionMoved, this,
+                   [this]() { refresh_recent_project_cursor(); });
 
   QObject::connect(new_project_button_, &QPushButton::clicked, this,
                    [this]() {
@@ -1058,9 +1163,10 @@ void QtProjectHomePage::refresh_layout_metrics() {
                                    labels_.recent_last_modified_column) +
                                    metrics.px(32)));
   recent_projects_view_->setColumnWidth(
-      QtRecentProjectsModel::SizeColumn,
-      std::max(metrics.px(96), header_metrics.horizontalAdvance(
-                                  labels_.recent_size_column) + metrics.px(32)));
+      QtRecentProjectsModel::EditorVersionColumn,
+      std::max(metrics.px(132), header_metrics.horizontalAdvance(
+                                  labels_.recent_editor_version_column) +
+                                  metrics.px(32)));
   recent_projects_view_->setColumnWidth(QtRecentProjectsModel::ActionsColumn,
                                         metrics.px(52));
   // Keep a useful native table viewport even when the outer page must scroll.
@@ -1068,11 +1174,28 @@ void QtProjectHomePage::refresh_layout_metrics() {
   recent_projects_stack_->setMinimumHeight(header->minimumHeight() +
                                             row_height * 3 + metrics.px(2));
   refreshing_layout_ = false;
+  refresh_recent_project_cursor();
 }
 
 bool QtProjectHomePage::eventFilter(QObject *watched, QEvent *event) {
   if (event != nullptr) {
-    if (watched == logo_ &&
+    if (recent_projects_view_ != nullptr &&
+        watched == recent_projects_view_->viewport()) {
+      if (event->type() == QEvent::MouseMove) {
+        update_recent_project_cursor(
+            static_cast<QMouseEvent *>(event)->position().toPoint());
+      } else if (event->type() == QEvent::Enter) {
+        update_recent_project_cursor(
+            static_cast<QEnterEvent *>(event)->position().toPoint());
+      } else if (event->type() == QEvent::Leave ||
+                 event->type() == QEvent::Hide) {
+        recent_projects_view_->viewport()->unsetCursor();
+      } else if (event->type() == QEvent::Resize ||
+                 event->type() == QEvent::Show ||
+                 event->type() == QEvent::EnabledChange) {
+        refresh_recent_project_cursor();
+      }
+    } else if (watched == logo_ &&
         (event->type() == QEvent::Show ||
          event->type() == QEvent::DevicePixelRatioChange ||
          event->type() == QEvent::ScreenChangeInternal)) {
@@ -1086,6 +1209,46 @@ bool QtProjectHomePage::eventFilter(QObject *watched, QEvent *event) {
     }
   }
   return QWidget::eventFilter(watched, event);
+}
+
+void QtProjectHomePage::refresh_recent_project_cursor() {
+  if (recent_projects_view_ != nullptr && recent_projects_model_ != nullptr) {
+    update_recent_project_cursor(
+        recent_projects_view_->viewport()->mapFromGlobal(QCursor::pos()));
+  }
+}
+
+void QtProjectHomePage::update_recent_project_cursor(
+    const QPoint &viewport_position) {
+  QWidget *viewport = recent_projects_view_->viewport();
+  const QModelIndex hovered = recent_projects_view_->indexAt(viewport_position);
+  const bool action_hovered =
+      viewport->isVisible() && viewport->isEnabled() &&
+      viewport->rect().contains(viewport_position) && hovered.isValid() &&
+      hovered.column() == QtRecentProjectsModel::ActionsColumn;
+  if (action_hovered) {
+    if (!viewport->testAttribute(Qt::WA_SetCursor) ||
+        viewport->cursor().shape() != Qt::PointingHandCursor) {
+      viewport->setCursor(Qt::PointingHandCursor);
+    }
+  } else if (viewport->testAttribute(Qt::WA_SetCursor)) {
+    viewport->unsetCursor();
+  }
+}
+
+void QtProjectHomePage::showEvent(QShowEvent *event) {
+  QWidget::showEvent(event);
+  recent_projects_model_->refresh_relative_times(current_unix_milliseconds());
+  if (recent_projects_model_->rowCount() != 0) {
+    relative_time_timer_->start();
+  }
+  refresh_recent_project_cursor();
+}
+
+void QtProjectHomePage::hideEvent(QHideEvent *event) {
+  relative_time_timer_->stop();
+  recent_projects_view_->viewport()->unsetCursor();
+  QWidget::hideEvent(event);
 }
 
 void QtProjectHomePage::changeEvent(QEvent *event) {
@@ -1130,6 +1293,7 @@ void QtProjectHomePage::refresh_project_icons() {
   }
   if (recent_projects_view_ != nullptr) {
     recent_projects_view_->horizontalHeader()->setDefaultAlignment(alignment);
+    refresh_recent_project_cursor();
   }
 }
 
@@ -1285,6 +1449,12 @@ void QtProjectHomePage::refresh_recent_projects_page() {
   recent_projects_stack_->setCurrentWidget(
       has_recent_projects ? static_cast<QWidget *>(recent_projects_view_)
                           : static_cast<QWidget *>(no_recent_projects_label_));
+  if (has_recent_projects && isVisible()) {
+    relative_time_timer_->start();
+  } else {
+    relative_time_timer_->stop();
+  }
+  refresh_recent_project_cursor();
 }
 
 } // namespace quader

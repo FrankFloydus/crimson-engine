@@ -150,6 +150,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -281,15 +282,17 @@ bool set_local_app_data(const std::optional<std::string> &value) {
 
 class ScopedIsolatedLocalAppData final {
 public:
-  explicit ScopedIsolatedLocalAppData(std::filesystem::path profile)
-      : profile_(std::move(profile)) {
+  explicit ScopedIsolatedLocalAppData(std::filesystem::path profile,
+                                     bool preserve_files = false)
+      : profile_(std::move(profile)), preserve_files_(preserve_files) {
     if (const char *current = std::getenv("LOCALAPPDATA")) {
       previous_ = current;
     }
     std::error_code error;
-    std::filesystem::remove_all(profile_, error);
+    if (!preserve_files_) std::filesystem::remove_all(profile_, error);
     error.clear();
-    if (!std::filesystem::create_directories(profile_, error) || error) {
+    std::filesystem::create_directories(profile_, error);
+    if (error || !std::filesystem::is_directory(profile_)) {
       return;
     }
     active_ = set_local_app_data(profile_.string());
@@ -298,7 +301,7 @@ public:
   ~ScopedIsolatedLocalAppData() {
     (void)set_local_app_data(previous_);
     std::error_code error;
-    std::filesystem::remove_all(profile_, error);
+    if (!preserve_files_) std::filesystem::remove_all(profile_, error);
   }
 
   ScopedIsolatedLocalAppData(const ScopedIsolatedLocalAppData &) = delete;
@@ -314,6 +317,7 @@ private:
   std::filesystem::path profile_;
   std::optional<std::string> previous_;
   bool active_ = false;
+  bool preserve_files_ = false;
 };
 
 class RuntimeRebindWindowHideProbe final : public QObject {
@@ -3920,18 +3924,18 @@ TEST(QtProjectWorkspaceTests,
       {.name = QStringLiteral("Courtyard"),
        .manifest_path = QStringLiteral("C:/Projects/Courtyard/Courtyard.qproj"),
        .manifest_last_modified_unix_ms = 1790250000000,
-       .manifest_size_bytes = 32768u},
+       .last_saved_app_version = QStringLiteral("0.1.42")},
       {.name = QStringLiteral("Industrial passage"),
        .manifest_path = QStringLiteral(
            "C:/Projects/Experiments/Environment blockouts/Industrial passage/"
            "Industrial passage.qproj"),
        .manifest_last_modified_unix_ms = 1790163600000,
-       .manifest_size_bytes = 18432u},
+       .last_saved_app_version = QStringLiteral("0.1.67")},
       {.name = QStringLiteral("Lighting studies"),
        .manifest_path = QStringLiteral(
            "C:/Projects/Lighting studies/Lighting studies.qproj"),
        .manifest_last_modified_unix_ms = 1789990800000,
-       .manifest_size_bytes = 4096u},
+       .last_saved_app_version = QStringLiteral("0.1.5")},
       {.name = QStringLiteral("Archived prototype"),
        .manifest_path = QStringLiteral("D:/Archive/Prototype/Prototype.qproj"),
        .available = false},
@@ -3943,6 +3947,8 @@ TEST(QtProjectWorkspaceTests,
       QStringLiteral("projectHome.scroll"));
   auto *table = home.findChild<QTableView *>(
       QStringLiteral("projectHome.recentProjects.view"));
+  auto *relative_time_timer = home.findChild<QTimer *>(
+      QStringLiteral("projectHome.recentProjects.relativeTimeTimer"));
   auto *recent_frame = home.findChild<QFrame *>(
       QStringLiteral("projectHome.recentProjects.frame"));
   auto *title = home.findChild<QLabel *>(QStringLiteral("projectHome.title"));
@@ -3958,6 +3964,8 @@ TEST(QtProjectWorkspaceTests,
   ASSERT_NE(scroll, nullptr);
   ASSERT_NE(scroll->widget(), nullptr);
   ASSERT_NE(table, nullptr);
+  ASSERT_NE(relative_time_timer, nullptr);
+  EXPECT_TRUE(relative_time_timer->isActive());
   ASSERT_NE(recent_frame, nullptr);
   ASSERT_NE(title, nullptr);
   ASSERT_NE(logo, nullptr);
@@ -4051,6 +4059,32 @@ TEST(QtProjectWorkspaceTests,
     settle_layout();
     SCOPED_TRACE(suffix.toStdString());
     expect_rounded_recent_frame();
+    for (const int column : {quader::QtRecentProjectsModel::LastModifiedColumn,
+                             quader::QtRecentProjectsModel::EditorVersionColumn}) {
+      const QString header_text =
+          table->model()->headerData(column, Qt::Horizontal).toString();
+      EXPECT_GE(table->columnWidth(column),
+                table->horizontalHeader()->fontMetrics().horizontalAdvance(
+                    header_text));
+      const QString value = table->model()->index(0, column).data().toString();
+      EXPECT_GE(table->columnWidth(column),
+                table->fontMetrics().horizontalAdvance(value));
+    }
+    const QModelIndex actions_index = table->model()->index(
+        0, quader::QtRecentProjectsModel::ActionsColumn);
+    const int previous_horizontal_scroll = table->horizontalScrollBar()->value();
+    const int previous_vertical_scroll = table->verticalScrollBar()->value();
+    table->scrollTo(actions_index);
+    const QRect actions_rect = table->visualRect(actions_index);
+    ASSERT_TRUE(table->viewport()->rect().contains(actions_rect.center()));
+    send_mouse_event(*table->viewport(), QEvent::MouseMove,
+                     actions_rect.center(), Qt::NoButton, Qt::NoButton);
+    EXPECT_EQ(table->viewport()->cursor().shape(), Qt::PointingHandCursor);
+    QEvent leave_actions(QEvent::Leave);
+    QCoreApplication::sendEvent(table->viewport(), &leave_actions);
+    EXPECT_EQ(table->viewport()->cursor().shape(), Qt::ArrowCursor);
+    table->horizontalScrollBar()->setValue(previous_horizontal_scroll);
+    table->verticalScrollBar()->setValue(previous_vertical_scroll);
     EXPECT_TRUE(title->isVisible());
     EXPECT_TRUE(logo->isVisible());
     ASSERT_FALSE(logo->pixmap().isNull());
@@ -4193,7 +4227,7 @@ TEST(QtProjectWorkspaceTests,
   translated.recent_projects = QStringLiteral("Progetti recenti");
   translated.recent_name_column = QStringLiteral("Progetto");
   translated.recent_last_modified_column = QStringLiteral("Ultima modifica");
-  translated.recent_size_column = QStringLiteral("Dimensione");
+  translated.recent_editor_version_column = QStringLiteral("Versione editor");
   translated.tutorial_title = QStringLiteral("La tua prima ora in Quader");
   translated.tutorial_description =
       QStringLiteral("Impara le basi e costruisci la tua prima scena.");
@@ -4236,6 +4270,7 @@ TEST(QtProjectWorkspaceTests,
 
   home.set_recent_projects({});
   settle_layout();
+  EXPECT_FALSE(relative_time_timer->isActive());
   expect_rounded_recent_frame();
   EXPECT_TRUE(table->isHidden());
   EXPECT_TRUE(tutorial->isVisible());
@@ -4246,7 +4281,7 @@ TEST(QtProjectWorkspaceTests,
   }
 
   std::vector<quader::QtRecentProjectItem> many_projects;
-  for (int index = 0; index < 12; ++index) {
+  for (int index = 0; index < 22; ++index) {
     many_projects.push_back({
         .name = QStringLiteral("Project %1").arg(index),
         .manifest_path = QStringLiteral("C:/Projects/%1/project.qproj").arg(index),
@@ -4254,10 +4289,18 @@ TEST(QtProjectWorkspaceTests,
   }
   home.set_recent_projects(many_projects);
   settle_layout();
-  EXPECT_EQ(home.recent_projects_model().rowCount(),
-            quader::kQtProjectHomeMaximumRecentProjects);
+  EXPECT_TRUE(relative_time_timer->isActive());
+  ASSERT_EQ(home.recent_projects_model().rowCount(), 20);
+  EXPECT_EQ(home.recent_projects_model().projects().front().name,
+            QStringLiteral("Project 0"));
   EXPECT_EQ(home.recent_projects_model().projects().back().name,
-            QStringLiteral("Project 9"));
+            QStringLiteral("Project 19"));
+  EXPECT_FALSE(home.recent_projects_model().index(20, 0).isValid());
+  const QModelIndex last_recent = home.recent_projects_model().index(19, 0);
+  table->scrollTo(last_recent);
+  settle_layout();
+  EXPECT_TRUE(table->viewport()->rect().intersects(table->visualRect(last_recent)))
+      << "all twenty retained recent projects must remain reachable";
   scroll->verticalScrollBar()->setValue(scroll->verticalScrollBar()->maximum());
   settle_layout();
   EXPECT_TRUE(tutorial->isVisible());
@@ -4266,8 +4309,107 @@ TEST(QtProjectWorkspaceTests,
             scroll->viewport()->height());
   if (!review_directory.isEmpty()) {
     EXPECT_TRUE(home.grab().save(QDir(review_directory).filePath(
-        QStringLiteral("launcher-ten-recent-scrolled.png"))));
+        QStringLiteral("launcher-twenty-recent-scrolled.png"))));
   }
+  home.hide();
+  EXPECT_FALSE(relative_time_timer->isActive());
+}
+
+TEST(QtProjectWorkspaceTests,
+     RecentProjectMetadataUsesSavedVersionsAndStableRelativeTimes) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader_recent_project_metadata_test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  quader::QtRecentProjectsModel model;
+  constexpr std::uint64_t kNow = 1'800'000'000'000ULL;
+  constexpr std::uint64_t kMinute = 60'000ULL;
+  constexpr std::uint64_t kHour = 60 * kMinute;
+  constexpr std::uint64_t kDay = 24 * kHour;
+  struct RelativeTimeCase {
+    std::optional<std::uint64_t> modified;
+    QString expected;
+  };
+  const std::vector<RelativeTimeCase> cases{
+      {kNow - 30'000, QStringLiteral("Just now")},
+      {kNow - kMinute - 30'000, QStringLiteral("1 minute ago")},
+      {kNow - 12 * kMinute - 30'000, QStringLiteral("12 minutes ago")},
+      {kNow - kHour - 30'000, QStringLiteral("1 hour ago")},
+      {kNow - 23 * kHour - 30'000, QStringLiteral("23 hours ago")},
+      {kNow - kDay - 30'000, QStringLiteral("Yesterday")},
+      {kNow - 3 * kDay - 30'000, QStringLiteral("3 days ago")},
+      {kNow - 8 * kDay - 30'000, QStringLiteral("1 week ago")},
+      {kNow - 22 * kDay - 30'000, QStringLiteral("3 weeks ago")},
+      {kNow - 31 * kDay - 30'000, QStringLiteral("1 month ago")},
+      {kNow - 95 * kDay - 30'000, QStringLiteral("3 months ago")},
+      {kNow - 366 * kDay - 30'000, QStringLiteral("1 year ago")},
+      {kNow - 800 * kDay - 30'000, QStringLiteral("2 years ago")},
+      {kNow + kDay, QStringLiteral("Just now")},
+      {std::nullopt, QStringLiteral("\u2014")},
+      {std::numeric_limits<std::uint64_t>::max(), QStringLiteral("\u2014")},
+  };
+  std::vector<quader::QtRecentProjectItem> projects;
+  for (std::size_t index = 0; index < cases.size(); ++index) {
+    projects.push_back({
+        .name = QStringLiteral("Project %1").arg(index),
+        .manifest_path = QStringLiteral("C:/Projects/%1/project.qproj").arg(index),
+        .manifest_last_modified_unix_ms = cases[index].modified,
+        .last_saved_app_version = index == 0 ? QStringLiteral("0.1.42") : QString{},
+    });
+  }
+  ASSERT_TRUE(model.set_projects(projects));
+  model.refresh_relative_times(kNow);
+  for (int row = 0; row < static_cast<int>(cases.size()); ++row) {
+    SCOPED_TRACE(row);
+    EXPECT_EQ(model.index(row, quader::QtRecentProjectsModel::LastModifiedColumn)
+                  .data().toString(),
+              cases[static_cast<std::size_t>(row)].expected);
+  }
+  const QModelIndex saved_version =
+      model.index(0, quader::QtRecentProjectsModel::EditorVersionColumn);
+  EXPECT_EQ(saved_version.data().toString(), QStringLiteral("v0.1.42"));
+  EXPECT_EQ(model.index(1, quader::QtRecentProjectsModel::EditorVersionColumn)
+                .data().toString(),
+            QStringLiteral("\u2014"))
+      << "projects without saved-version metadata must not claim the running version";
+  const QModelIndex modified =
+      model.index(1, quader::QtRecentProjectsModel::LastModifiedColumn);
+  const QString absolute_timestamp = modified.data(Qt::ToolTipRole).toString();
+  EXPECT_FALSE(absolute_timestamp.isEmpty());
+  EXPECT_NE(absolute_timestamp, modified.data().toString());
+  EXPECT_EQ(modified.data(Qt::AccessibleDescriptionRole).toString(),
+            absolute_timestamp);
+  auto translated_labels = quader::QtProjectHomeLabels::defaults();
+  translated_labels.modified_week_ago = QStringLiteral("1 settimana fa");
+  model.set_labels(std::move(translated_labels));
+  EXPECT_EQ(model.index(7, quader::QtRecentProjectsModel::LastModifiedColumn)
+                .data().toString(),
+            QStringLiteral("1 settimana fa"));
+  model.set_labels(quader::QtProjectHomeLabels::defaults());
+
+  int model_resets = 0;
+  int data_changes = 0;
+  QObject::connect(&model, &QAbstractItemModel::modelReset, &application,
+                   [&]() { ++model_resets; });
+  QObject::connect(&model, &QAbstractItemModel::dataChanged, &application,
+                   [&](const QModelIndex &first, const QModelIndex &last) {
+                     ++data_changes;
+                     EXPECT_EQ(first.column(),
+                               quader::QtRecentProjectsModel::LastModifiedColumn);
+                     EXPECT_EQ(last.column(),
+                               quader::QtRecentProjectsModel::LastModifiedColumn);
+                   });
+  model.refresh_relative_times(kNow + 1'000);
+  EXPECT_EQ(data_changes, 0)
+      << "unchanged relative labels must not invalidate retained rows";
+  model.refresh_relative_times(kNow + kMinute);
+  EXPECT_GT(data_changes, 0);
+  EXPECT_EQ(modified.data().toString(), QStringLiteral("2 minutes ago"));
+  EXPECT_EQ(modified.data(Qt::ToolTipRole).toString(), absolute_timestamp);
+  EXPECT_EQ(saved_version.data().toString(), QStringLiteral("v0.1.42"));
+  EXPECT_EQ(model.projects(), projects);
+  EXPECT_EQ(model_resets, 0);
 }
 
 TEST(QtProjectWorkspaceTests,
@@ -4293,7 +4435,7 @@ TEST(QtProjectWorkspaceTests,
       {.name = QStringLiteral("Available"),
        .manifest_path = QStringLiteral("C:/Projects/Available/Available.qproj"),
        .manifest_last_modified_unix_ms = 1704067200000,
-       .manifest_size_bytes = 2048u},
+       .last_saved_app_version = QStringLiteral("0.1.42")},
       {.name = QStringLiteral("Missing"),
        .manifest_path = QStringLiteral("C:/Projects/Missing/Missing.qproj"),
        .available = false},
@@ -4385,6 +4527,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_DOUBLE_EQ(title->font().pointSizeF(), baseline_title_size);
   ASSERT_EQ(recent_view->model()->columnCount(),
             quader::QtRecentProjectsModel::ColumnCount);
+  EXPECT_EQ(recent_view->model()->columnCount(), 4);
   EXPECT_EQ(recent_view->model()
                 ->headerData(quader::QtRecentProjectsModel::NameColumn,
                              Qt::Horizontal)
@@ -4407,10 +4550,10 @@ TEST(QtProjectWorkspaceTests,
                 .toString(),
             QStringLiteral("Last modified"));
   EXPECT_EQ(recent_view->model()
-                ->headerData(quader::QtRecentProjectsModel::SizeColumn,
+                ->headerData(quader::QtRecentProjectsModel::EditorVersionColumn,
                              Qt::Horizontal)
                 .toString(),
-            QStringLiteral("Size"));
+            QStringLiteral("Editor version"));
   EXPECT_EQ(recent_view->model()
                 ->index(0, quader::QtRecentProjectsModel::NameColumn)
                 .data()
@@ -4423,8 +4566,13 @@ TEST(QtProjectWorkspaceTests,
                    .data()
                    .toString()
                    .isEmpty());
-  EXPECT_NE(recent_view->model()
-                ->index(0, quader::QtRecentProjectsModel::SizeColumn)
+  EXPECT_EQ(recent_view->model()
+                ->index(0, quader::QtRecentProjectsModel::EditorVersionColumn)
+                .data()
+                .toString(),
+            QStringLiteral("v0.1.42"));
+  EXPECT_EQ(recent_view->model()
+                ->index(1, quader::QtRecentProjectsModel::EditorVersionColumn)
                 .data()
                 .toString(),
             QStringLiteral("\u2014"));
@@ -4451,6 +4599,23 @@ TEST(QtProjectWorkspaceTests,
   const QModelIndex available_index = recent_view->model()->index(0, 0);
   const QRect available_rect = recent_view->visualRect(available_index);
   ASSERT_TRUE(available_rect.isValid());
+  const QRect actions_rect = recent_view->visualRect(recent_view->model()->index(
+      0, quader::QtRecentProjectsModel::ActionsColumn));
+  ASSERT_TRUE(actions_rect.isValid());
+  send_mouse_event(*recent_view->viewport(), QEvent::MouseMove,
+                   actions_rect.center(), Qt::NoButton, Qt::NoButton);
+  EXPECT_EQ(recent_view->viewport()->cursor().shape(), Qt::PointingHandCursor);
+  send_mouse_event(*recent_view->viewport(), QEvent::MouseMove,
+                   available_rect.center(), Qt::NoButton, Qt::NoButton);
+  EXPECT_EQ(recent_view->viewport()->cursor().shape(), Qt::ArrowCursor);
+  const QPoint empty_position =
+      recent_view->viewport()->rect().bottomRight() - QPoint(2, 2);
+  ASSERT_FALSE(recent_view->indexAt(empty_position).isValid());
+  send_mouse_event(*recent_view->viewport(), QEvent::MouseMove,
+                   actions_rect.center(), Qt::NoButton, Qt::NoButton);
+  send_mouse_event(*recent_view->viewport(), QEvent::MouseMove,
+                   empty_position, Qt::NoButton, Qt::NoButton);
+  EXPECT_EQ(recent_view->viewport()->cursor().shape(), Qt::ArrowCursor);
   click_widget(*recent_view->viewport(), available_rect.center());
   EXPECT_EQ(recent_view->currentIndex().row(), 0);
   int recent_model_resets = 0;
@@ -7872,10 +8037,18 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
     GTEST_SKIP() << "Set QUADER_RUN_VULKAN_LOADING_APP_TESTS=1 for loading transitions";
   }
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
-  const auto profile = std::filesystem::temp_directory_path() /
-      ("quader-loading-app-" + std::to_string(
-          std::chrono::steady_clock::now().time_since_epoch().count()));
-  ScopedIsolatedLocalAppData scoped_profile(profile);
+  const QString preview_root = qEnvironmentVariable("QUADER_LOADING_APP_PREVIEW_ROOT");
+  const auto profile = preview_root.isEmpty()
+      ? std::filesystem::temp_directory_path() /
+            ("quader-loading-app-" + std::to_string(
+                std::chrono::steady_clock::now().time_since_epoch().count()))
+      : std::filesystem::absolute(std::filesystem::path(preview_root.toStdWString()));
+  if (!preview_root.isEmpty()) {
+    ASSERT_TRUE(!std::filesystem::exists(profile) ||
+                (std::filesystem::is_directory(profile) && std::filesystem::is_empty(profile)))
+        << "QUADER_LOADING_APP_PREVIEW_ROOT must name a missing or empty dedicated directory";
+  }
+  ScopedIsolatedLocalAppData scoped_profile(profile, !preview_root.isEmpty());
   ASSERT_TRUE(scoped_profile.active());
   int argc = 1;
   char application_name[] = "quader-loading-real-app-test";
@@ -7895,9 +8068,12 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
       const QPointer<QWidget> widget = cover_paint || root_update
           ? qobject_cast<QWidget *>(receiver) : nullptr;
 #if defined(_WIN32)
-      if (widget != nullptr && !capture_window_raised_) {
+      if (widget != nullptr) {
         auto *root = widget->window();
-        if (root->isVisible() && root->internalWinId() != 0) {
+        const auto native_root = reinterpret_cast<HWND>(root->internalWinId());
+        if (root->isVisible() && native_root != nullptr &&
+            (!capture_window_raised_ ||
+             (GetWindowLongPtrW(native_root, GWL_EXSTYLE) & WS_EX_TOPMOST) == 0)) {
           capture_window_raised_ = true;
           EXPECT_NE(SetWindowPos(reinterpret_cast<HWND>(root->internalWinId()),
               HWND_TOPMOST, 0, 0, 0, 0,
@@ -7930,6 +8106,7 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
   if (!review.isEmpty()) ASSERT_TRUE(QDir().mkpath(review));
   const bool saved_maximized = qEnvironmentVariable(
       "QUADER_LOADING_APP_MAXIMIZED", QStringLiteral("1")) == QStringLiteral("1");
+  const bool home_only = qEnvironmentVariableIntValue("QUADER_LOADING_APP_HOME_ONLY") == 1;
   const int scale_percent = qEnvironmentVariable(
       "QUADER_LOADING_APP_SCALE", QStringLiteral("100")).toInt();
   ASSERT_TRUE(scale_percent == 100 || scale_percent == 200);
@@ -7950,9 +8127,32 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
                        std::min(986, work_area.height() - 46)},
       .maximized = saved_maximized});
   ASSERT_TRUE(window_settings.save(quader::AppWindowSettings::resolve_path(resources)));
-  const auto project_root = profile / "Loading Project";
+  const auto project_root = profile / "Atrium Blockout";
   ASSERT_TRUE(std::filesystem::create_directory(project_root));
   std::filesystem::path manifest_path;
+  std::filesystem::path second_manifest_path;
+  const std::array<const char *, 19> preview_names{
+      "Harbor Warehouse", "Canal District", "Metro Interchange", "Glasshouse",
+      "Old Town Courtyard", "Mountain Relay", "Underground Service Tunnels",
+      "Coastal Observatory", "Foundry North", "Station Platform", "Riverside Depot",
+      "Market Square", "Industrial Passage", "Hotel Atrium", "Fortress Approach",
+      "Museum Annex", "Desert Outpost", "Research Campus", "Warehouse Loading Dock"};
+  std::vector<std::filesystem::path> fixture_manifests;
+  for (std::size_t index = 0; index < preview_names.size(); ++index) {
+    const auto root = profile / preview_names[index];
+    ASSERT_TRUE(std::filesystem::create_directory(root));
+    quader::ProjectSession project;
+    project.set_resource_root(resources);
+    quader::QuaderEditorApi editor(project);
+    ASSERT_TRUE(editor.project().create(root).ok());
+    const auto scene_id = editor.scene_documents().active_scene_id();
+    ASSERT_TRUE(scene_id.has_value());
+    const auto scene_path = quader::ProjectRelativePath::parse_portable("Main.qdr");
+    ASSERT_TRUE(scene_path.ok());
+    ASSERT_TRUE(editor.scene_documents().save_as(*scene_id, scene_path.value()).ok());
+    fixture_manifests.push_back(editor.project().manifest_path());
+    if (index == 0) second_manifest_path = fixture_manifests.back();
+  }
   std::filesystem::path unopened_scene_path;
   QString unopened_scene_identity;
   {
@@ -7977,6 +8177,36 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
         std::string(unopened.value().scene_id.str()));
     manifest_path = editor.project().manifest_path();
   }
+  fixture_manifests.push_back(manifest_path);
+  for (std::size_t index = 0; index < fixture_manifests.size(); ++index) {
+    std::filesystem::last_write_time(fixture_manifests[index],
+        std::filesystem::file_time_type::clock::now() - std::chrono::hours(24 * index));
+  }
+  const auto first_placement_path = quader::AppWindowSettings::resolve_project_path(
+      resources, manifest_path);
+  const auto second_placement_path = quader::AppWindowSettings::resolve_project_path(
+      resources, second_manifest_path);
+  ASSERT_NE(first_placement_path, second_placement_path);
+  const QRect first_editor_rect(work_area.topLeft() + QPoint(40, 40),
+      QSize(std::min(1500, work_area.width() - 80),
+            std::min(800, work_area.height() - 80)));
+  window_settings.set_placement({
+      .normal_frame = {first_editor_rect.x(), first_editor_rect.y(),
+                       first_editor_rect.width(), first_editor_rect.height()},
+      .maximized = saved_maximized});
+  ASSERT_TRUE(window_settings.save(first_placement_path));
+  auto second_window_settings = quader::AppWindowSettings::defaults();
+  const QRect second_work_area = screens.front()->availableGeometry();
+  const QRect second_editor_rect(second_work_area.topLeft() + QPoint(70, 70),
+      QSize(std::min(1700, second_work_area.width() - 140),
+            std::min(1000, second_work_area.height() - 140)));
+  second_window_settings.set_placement({
+      .normal_frame = {second_editor_rect.x(), second_editor_rect.y(),
+                       second_editor_rect.width(), second_editor_rect.height()},
+      .maximized = false});
+  ASSERT_TRUE(second_window_settings.save(second_placement_path));
+  const auto first_placement_before_home = read_binary_file(first_placement_path);
+  const auto second_placement_before_home = read_binary_file(second_placement_path);
   auto settings = quader::UISettings::defaults();
   settings.set_interface_scale(static_cast<float>(scale_percent) / 100.0f);
   settings.set_panel_visible(quader::UIPanelId::AssetBrowser, true);
@@ -7995,7 +8225,8 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
           first_paint == std::chrono::steady_clock::time_point{}) {
         first_paint = std::chrono::steady_clock::now();
       }
-      if (event->type() == QEvent::Hide && revealed) revealed();
+      if (event->type() == QEvent::Hide && revealed &&
+          qobject_cast<QWidget *>(watched)->window()->isVisible()) revealed();
       return QObject::eventFilter(watched, event);
     }
   } reveal_probe;
@@ -8189,6 +8420,57 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
   ASSERT_NE(stack, nullptr);
   ASSERT_NE(close_project, nullptr);
   ASSERT_NE(viewport, nullptr);
+  auto *composition_anchor = dynamic_cast<quader::QtVulkanCompositionWidget *>(
+      window->findChild<QWidget *>(QStringLiteral("viewportCompositionAnchor")));
+  ASSERT_NE(composition_anchor, nullptr);
+  ASSERT_NE(composition_anchor->shared_context(), nullptr);
+  const VkDevice composition_device = composition_anchor->shared_context()->device;
+  const WId native_window_id = window->internalWinId();
+  RuntimeRebindWindowHideProbe root_hide_probe;
+  window->installEventFilter(&root_hide_probe);
+  const auto expect_same_composition = [&] {
+    EXPECT_EQ(window->internalWinId(), native_window_id);
+    ASSERT_NE(composition_anchor->shared_context(), nullptr);
+    EXPECT_EQ(composition_anchor->shared_context()->device, composition_device);
+  };
+  const auto expect_home_placement = [&] {
+    ASSERT_NE(window->screen(), nullptr);
+    ASSERT_NE(window->windowHandle(), nullptr);
+    const QRect area = window->screen()->availableGeometry();
+    const QMargins margins = window->windowHandle()->frameMargins();
+    EXPECT_FALSE(window->isMaximized());
+    EXPECT_FALSE(quader::platform_window_is_maximized(
+        reinterpret_cast<void *>(window->internalWinId())));
+    EXPECT_EQ(window->size(), QSize(
+        std::min(1200, area.width() - margins.left() - margins.right()),
+        std::min(740, area.height() - margins.top() - margins.bottom())));
+    EXPECT_NEAR(QRectF(window->frameGeometry()).center().x(), QRectF(area).center().x(), 1.0);
+    EXPECT_NEAR(QRectF(window->frameGeometry()).center().y(), QRectF(area).center().y(), 1.0);
+    EXPECT_EQ(recent->model()->rowCount(), 20);
+    expect_same_composition();
+  };
+  const auto current_placement = [&] {
+    const QRect normal = window->normalGeometry();
+    return quader::PlatformWindowPlacement{
+        .normal_frame = {normal.x(), normal.y(), normal.width(), normal.height()},
+        .maximized = window->isMaximized()};
+  };
+  const auto expect_placement = [](const quader::PlatformWindowPlacement &actual,
+                                   const quader::PlatformWindowPlacement &expected) {
+    EXPECT_EQ(actual.normal_frame.x, expected.normal_frame.x);
+    EXPECT_EQ(actual.normal_frame.y, expected.normal_frame.y);
+    EXPECT_EQ(actual.normal_frame.width, expected.normal_frame.width);
+    EXPECT_EQ(actual.normal_frame.height, expected.normal_frame.height);
+    EXPECT_EQ(actual.maximized, expected.maximized);
+  };
+  const auto expect_saved_placement = [&](const std::filesystem::path &path,
+                                         const quader::PlatformWindowPlacement &expected) {
+    const auto saved = quader::AppWindowSettings::load(path);
+    ASSERT_TRUE(saved.placement().has_value());
+    expect_placement(*saved.placement(), expected);
+  };
+  quader::PlatformWindowPlacement first_expected = *window_settings.placement();
+  quader::PlatformWindowPlacement second_expected = *second_window_settings.placement();
   EXPECT_FALSE(cover->testAttribute(Qt::WA_OpaquePaintEvent));
   EXPECT_FALSE(cover->autoFillBackground());
   EXPECT_TRUE(window->updatesEnabled());
@@ -8226,7 +8508,7 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
   };
   bool saved_mismatch_diagnostic = false;
   bool capture_failed = false;
-  int stable_capture_mismatches = 0;
+  QElapsedTimer capture_mismatch_deadline;
   const auto capture = [&](const QString &name) {
     if (window->screen() == nullptr) return false;
     const QPoint origin = window->mapToGlobal(QPoint{}) -
@@ -8256,7 +8538,8 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
             }
           }
         }
-        if (++stable_capture_mismatches >= 3) {
+        if (!capture_mismatch_deadline.isValid()) capture_mismatch_deadline.start();
+        if (capture_mismatch_deadline.elapsed() >= 1000) {
           capture_failed = true;
           ADD_FAILURE() << name.toStdString()
                         << " native pixels differ from the settled Qt backing store";
@@ -8265,23 +8548,34 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
       }
       return false;
     }
-    stable_capture_mismatches = 0;
+    capture_mismatch_deadline.invalidate();
     if (cover->isVisible() && purple_bounds(image).isEmpty()) return false;
     return review.isEmpty() || image.save(QDir(review).filePath(name));
   };
   enum class Phase {
-    InitialHome, FirstProject, FailedWorkspaceOpen, ReturningHome,
-    FailedHomeOpen, ReopenedProject, Complete
+    InitialHome, FirstProject, FailedWorkspaceOpen, OpenedSiblingScene,
+    ResizeFirstProject, ReturningHome, FailedHomeOpen, ReopenedProject,
+    HomeForSecondProject, SecondProject, MaximizeSecondProject,
+    HomeForFirstProject, FinalFirstProject, QuitFirstProject, Complete
   };
   Phase phase = Phase::InitialHome;
   bool awaiting_project_reveal = false;
+  bool awaiting_home_reveal = false;
   bool quad_layout_pending = false;
   bool observing_transition = false;
   int successful_reveals = 0;
   std::vector<std::pair<QWidget *, QRect>> revealed_geometry;
+  QRect scene_switch_geometry;
+  QRect scene_switch_normal_geometry;
+  int scene_switch_hide_count = 0;
+  const QRect edited_first_rect(work_area.topLeft() + QPoint(65, 65),
+      QSize(std::min(1550, work_area.width() - 130),
+            std::min(820, work_area.height() - 130)));
+  const QRect quitting_first_rect = edited_first_rect.adjusted(10, 10, 30, 20);
   QElapsedTimer reveal_observation;
   reveal_probe.revealed = [&] {
-    if (phase != Phase::InitialHome && !awaiting_project_reveal) return;
+    if (phase != Phase::InitialHome && !awaiting_project_reveal && !awaiting_home_reveal) return;
+    expect_same_composition();
     if (phase == Phase::InitialHome) {
       recording_early_frames = false;
       const QRect final_client = native_client_rect(window);
@@ -8290,9 +8584,9 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
                 << final_client.height() << " center="
                 << QRectF(final_client).center().x() << ','
                 << QRectF(final_client).center().y() << '\n';
-      EXPECT_EQ(quader::platform_window_is_maximized(
-          reinterpret_cast<void *>(window->internalWinId())), saved_maximized);
-      EXPECT_EQ(window->screen(), screens[screen_index]);
+      expect_home_placement();
+      EXPECT_EQ(read_binary_file(first_placement_path), first_placement_before_home);
+      EXPECT_EQ(read_binary_file(second_placement_path), second_placement_before_home);
       EXPECT_TRUE(observed_early_logo) << "must inspect actual logo pixels before reveal";
       EXPECT_GT(desktop_frame_count, 0);
       for (std::size_t index = 0; index < early_frames.size(); ++index) {
@@ -8317,11 +8611,13 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
       EXPECT_FALSE(quad_layout_pending);
       expect_presented_panes();
     }
+    if (awaiting_home_reveal) expect_home_placement();
     ASSERT_NE(reveal_probe.first_paint, std::chrono::steady_clock::time_point{});
     const auto displayed_for = std::chrono::steady_clock::now() - reveal_probe.first_paint;
     EXPECT_GE(std::chrono::duration_cast<std::chrono::milliseconds>(displayed_for).count(), 2000);
     ++successful_reveals;
     awaiting_project_reveal = false;
+    awaiting_home_reveal = false;
     revealed_geometry.clear();
     revealed_geometry.emplace_back(window, window->geometry());
     revealed_geometry.emplace_back(stack->currentWidget(), stack->currentWidget()->geometry());
@@ -8343,10 +8639,23 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
   bool captured_project_cover = false;
   bool captured_reopen_cover = false;
   int uncovered_samples = 0;
-  const auto open_recent = [&] {
-    ASSERT_EQ(recent->model()->rowCount(), 1);
+  const auto select_recent = [&](const std::filesystem::path &path) {
+    for (int row = 0; row < recent->model()->rowCount(); ++row) {
+      const auto index = recent->model()->index(row, 0);
+      const auto candidate = std::filesystem::path(
+          index.data(quader::QtRecentProjectsModel::ManifestPathRole).toString().toStdWString());
+      if (candidate.lexically_normal() == path.lexically_normal()) {
+        recent->setCurrentIndex(index);
+        recent->scrollTo(index);
+        return;
+      }
+    }
+    FAIL() << "missing recent fixture " << path.string();
+  };
+  const auto open_recent = [&](const std::filesystem::path &path) {
+    ASSERT_EQ(recent->model()->rowCount(), 20);
     frames_before_open = submitted_frames;
-    recent->setCurrentIndex(recent->model()->index(0, 0));
+    select_recent(path);
     send_key(*recent, Qt::Key_Return);
     EXPECT_TRUE(cover->isVisible());
     EXPECT_TRUE(window->updatesEnabled());
@@ -8355,6 +8664,13 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
     quad_layout_pending = true;
     awaiting_project_reveal = true;
     revealed_geometry.clear();
+  };
+  const auto close_to_home = [&](Phase next) {
+    ASSERT_TRUE(close_project->isEnabled());
+    revealed_geometry.clear();
+    close_project->trigger();
+    phase = next;
+    awaiting_home_reveal = cover->isVisible();
   };
   int acknowledged_errors = 0;
   const auto acknowledge_expected_error = [&] {
@@ -8406,17 +8722,24 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
     uncovered_samples = 0;
     if (phase == Phase::InitialHome) {
       EXPECT_NE(dynamic_cast<quader::QtProjectHomePage *>(stack->currentWidget()), nullptr);
+      expect_home_placement();
       if (!capture(QStringLiteral("loading-app-home-ready.png"))) return;
+      if (home_only) {
+        phase = Phase::Complete;
+        application.quit();
+        return;
+      }
       phase = Phase::FirstProject;
-      open_recent();
+      open_recent(manifest_path);
     } else if (phase == Phase::FirstProject || phase == Phase::ReopenedProject) {
       expect_presented_panes();
+      expect_placement(current_placement(), first_expected);
+      EXPECT_EQ(window->screen(), screens[screen_index]);
       if (!capture(phase == Phase::FirstProject
           ? QStringLiteral("loading-app-project-ready.png")
           : QStringLiteral("loading-app-reopen-ready.png"))) return;
       if (phase == Phase::ReopenedProject) {
-        phase = Phase::Complete;
-        application.quit();
+        close_to_home(Phase::HomeForSecondProject);
       } else {
         auto *dock = window->findChild<QDockWidget *>(QStringLiteral("dock_asset_browser"));
         ASSERT_NE(dock, nullptr);
@@ -8471,12 +8794,43 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
     } else if (phase == Phase::FailedWorkspaceOpen) {
       expect_presented_panes();
       if (!capture(QStringLiteral("loading-app-failed-workspace-open.png"))) return;
-      ASSERT_TRUE(close_project->isEnabled());
+      auto *dock = window->findChild<QDockWidget *>(QStringLiteral("dock_asset_browser"));
+      ASSERT_NE(dock, nullptr);
+      auto *browser = dynamic_cast<quader::QtAssetBrowser *>(dock->widget());
+      ASSERT_NE(browser, nullptr);
+      ASSERT_TRUE(browser->reveal_item(unopened_scene_identity));
+      scene_switch_geometry = window->geometry();
+      scene_switch_normal_geometry = window->normalGeometry();
+      scene_switch_hide_count = root_hide_probe.hide_count;
+      frames_before_open = submitted_frames;
+      ASSERT_TRUE(browser->handle_action(quader::QtAssetBrowserAction::Open));
+      awaiting_project_reveal = true;
+      quad_layout_pending = true;
       revealed_geometry.clear();
-      close_project->trigger();
-      phase = Phase::ReturningHome;
+      phase = Phase::OpenedSiblingScene;
+    } else if (phase == Phase::OpenedSiblingScene) {
+      expect_presented_panes();
+      EXPECT_EQ(window->geometry(), scene_switch_geometry);
+      EXPECT_EQ(window->normalGeometry(), scene_switch_normal_geometry);
+      EXPECT_EQ(root_hide_probe.hide_count, scene_switch_hide_count)
+          << "opening another scene in one project must preserve editor placement";
+      expect_same_composition();
+      revealed_geometry.clear();
+      window->showNormal();
+      window->setGeometry(edited_first_rect);
+      phase = Phase::ResizeFirstProject;
+    } else if (phase == Phase::ResizeFirstProject) {
+      const auto extent = native_client_rect(window).size();
+      const qreal ratio = window->devicePixelRatioF();
+      if (window->isMaximized() || window->geometry() != edited_first_rect ||
+          extent != QSize(qRound(window->width() * ratio), qRound(window->height() * ratio))) return;
+      first_expected = current_placement();
+      close_to_home(Phase::ReturningHome);
     } else if (phase == Phase::ReturningHome) {
       EXPECT_NE(dynamic_cast<quader::QtProjectHomePage *>(stack->currentWidget()), nullptr);
+      expect_home_placement();
+      expect_saved_placement(first_placement_path, first_expected);
+      expect_saved_placement(second_placement_path, second_expected);
       std::ifstream input(manifest_path, std::ios::binary);
       const std::string valid_manifest((std::istreambuf_iterator<char>(input)),
                                        std::istreambuf_iterator<char>());
@@ -8486,7 +8840,7 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
         std::ofstream corrupt(manifest_path, std::ios::binary | std::ios::trunc);
         corrupt << "invalid project fixture";
       }
-      recent->setCurrentIndex(recent->model()->index(0, 0));
+      select_recent(manifest_path);
       acknowledge_expected_error();
       send_key(*recent, Qt::Key_Return);
       EXPECT_TRUE(cover->isHidden()) << "a failed open must immediately restore Home";
@@ -8499,7 +8853,46 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
     } else if (phase == Phase::FailedHomeOpen) {
       if (!capture(QStringLiteral("loading-app-failed-open.png"))) return;
       phase = Phase::ReopenedProject;
-      open_recent();
+      open_recent(manifest_path);
+    } else if (phase == Phase::HomeForSecondProject) {
+      expect_home_placement();
+      expect_saved_placement(first_placement_path, first_expected);
+      phase = Phase::SecondProject;
+      open_recent(second_manifest_path);
+    } else if (phase == Phase::SecondProject) {
+      expect_presented_panes();
+      expect_placement(current_placement(), second_expected);
+      EXPECT_EQ(window->screen(), screens.front());
+      if (!capture(QStringLiteral("loading-app-second-project-ready.png"))) return;
+      revealed_geometry.clear();
+      window->showMaximized();
+      phase = Phase::MaximizeSecondProject;
+    } else if (phase == Phase::MaximizeSecondProject) {
+      if (!window->isMaximized() || !quader::platform_window_is_maximized(
+          reinterpret_cast<void *>(window->internalWinId()))) return;
+      second_expected = current_placement();
+      close_to_home(Phase::HomeForFirstProject);
+    } else if (phase == Phase::HomeForFirstProject) {
+      expect_home_placement();
+      expect_saved_placement(first_placement_path, first_expected);
+      expect_saved_placement(second_placement_path, second_expected);
+      phase = Phase::FinalFirstProject;
+      open_recent(manifest_path);
+    } else if (phase == Phase::FinalFirstProject) {
+      expect_presented_panes();
+      expect_placement(current_placement(), first_expected);
+      EXPECT_EQ(window->screen(), screens[screen_index]);
+      if (!capture(QStringLiteral("loading-app-first-project-restored.png"))) return;
+      revealed_geometry.clear();
+      window->setGeometry(quitting_first_rect);
+      phase = Phase::QuitFirstProject;
+    } else if (phase == Phase::QuitFirstProject) {
+      const qreal ratio = window->devicePixelRatioF();
+      if (window->geometry() != quitting_first_rect || native_client_rect(window).size() !=
+          QSize(qRound(window->width() * ratio), qRound(window->height() * ratio))) return;
+      first_expected = current_placement();
+      phase = Phase::Complete;
+      application.quit();
     }
   });
   QTimer deadline(&application);
@@ -8509,20 +8902,31 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
     application.quit();
   });
   observer.start();
-  deadline.start(20000);
+  deadline.start(45000);
   EXPECT_EQ(app.run(), 0);
   observer.stop();
   deadline.stop();
   EXPECT_EQ(phase, Phase::Complete);
   EXPECT_TRUE(captured_initial_cover);
-  EXPECT_TRUE(captured_project_cover);
-  EXPECT_TRUE(captured_reopen_cover);
-  EXPECT_EQ(successful_reveals, 3);
-  EXPECT_EQ(acknowledged_errors, 2);
+  EXPECT_EQ(captured_project_cover, !home_only);
+  EXPECT_EQ(captured_reopen_cover, !home_only);
+  EXPECT_EQ(successful_reveals, home_only ? 1 : 9);
+  EXPECT_EQ(acknowledged_errors, home_only ? 0 : 2);
   application.removeEventFilter(&reveal_probe);
+  window->removeEventFilter(&root_hide_probe);
   application.cover_painted = {};
   application.root_updated = {};
   app.shutdown();
+  if (home_only) {
+    EXPECT_EQ(read_binary_file(first_placement_path), first_placement_before_home);
+    EXPECT_EQ(read_binary_file(second_placement_path), second_placement_before_home);
+  } else {
+    expect_saved_placement(first_placement_path, first_expected);
+    expect_saved_placement(second_placement_path, second_expected);
+  }
+  if (!preview_root.isEmpty()) {
+    std::cout << "retained project-list preview LOCALAPPDATA=" << profile.string() << '\n';
+  }
 }
 
 TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {

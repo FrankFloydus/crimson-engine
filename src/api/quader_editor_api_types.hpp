@@ -67,6 +67,7 @@ struct QuaderRecentProject final {
   bool available = false;
   std::optional<std::uint64_t> manifest_last_modified_unix_ms;
   std::optional<std::uintmax_t> manifest_size_bytes;
+  std::string last_saved_app_version;
 };
 
 /// Describes one saved scene in the opened project's Open Recent menu.

@@ -154,6 +154,9 @@ public:
   void show_home();
   void show_workspace();
   void show();
+  /// Repositions the retained root between committed project/Home bindings.
+  void begin_window_placement_transition();
+  void end_window_placement_transition();
   /// Covers synchronous document loading through the first current scene frame.
   void begin_loading_presentation();
   void end_loading_presentation(bool succeeded);
@@ -398,6 +401,7 @@ private:
   bool loading_presentation_active_ = false;
   bool loading_previous_presentation_pending_ = false;
   bool startup_presentation_pending_ = false;
+  bool window_placement_transition_visible_ = false;
   bool retained_message_box_prewarm_scheduled_ = false;
   bool initialized_ = false;
   bool render_resources_detached_ = false;

@@ -22,6 +22,10 @@ public:
     static AppWindowSettings load(const std::filesystem::path& path);
     static std::filesystem::path
     resolve_path(const std::filesystem::path &executable_dir);
+    /// Per-user placement keyed by canonical manifest path; Home has no file.
+    static std::filesystem::path resolve_project_path(
+        const std::filesystem::path &executable_dir,
+        const std::filesystem::path &manifest_path);
 
     bool save(const std::filesystem::path& path) const;
 

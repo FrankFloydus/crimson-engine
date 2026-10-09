@@ -10,6 +10,15 @@ file except through prior written authorization from Francesco Di Blasi.
 
 - `App` composes services and owns startup/shutdown, persisted top-level placement, and frame flow.
   Domain behavior remains in its owner; `UISystem` constructs/composes the retained `QMainWindow`.
+- Home starts centered at 1200 by 740 Qt logical client pixels, clamped to the current display's
+  work area and native frame margins independently of interface scale. Its resized placement is
+  never persisted. Project placement uses `AppWindowSettings::resolve_project_path()` in the
+  per-user `project_windows` directory, keyed by canonical manifest path; the legacy global file
+  is a read-only fallback for projects without their own file. At a committed project binding
+  change, save the outgoing project's normal/maximized placement before hiding the retained root.
+  Rebind the new content, apply final placement while hidden, then restart and reveal its loading
+  cover. Scene switches within one project do not restore placement. Accepted quit saves the
+  outgoing project before Home and must not reshow the root.
 - `QApplication` owns the only event loop. The app `QTimer` schedules UI refresh, semantic input,
   scene synchronization and viewport preparation. Vulkan scene panes submit from Qt's composition
   callbacks; native preview and standalone surfaces retain their existing submission path.

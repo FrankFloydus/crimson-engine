@@ -11,6 +11,7 @@
 #include "io/project/project_texture_catalog.hpp"
 #include "io/qdr/qdr_atomic_write.hpp"
 #include "io/shared_file_read.hpp"
+#include "quader_app_version.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -38,6 +39,7 @@ constexpr std::size_t kMaximumManifestScenes = 100'000u;
 constexpr std::size_t kMaximumDeletedMaterialIds = 100'000u;
 constexpr std::size_t kMaximumTextureIdentities = 100'000u;
 constexpr std::size_t kMaximumPortablePathBytes = 32'768u;
+constexpr std::size_t kMaximumAppVersionBytes = 64u;
 
 bool non_whitespace_name(std::string_view value) {
   return std::any_of(value.begin(), value.end(), [](char character) {
@@ -191,6 +193,10 @@ ProjectIoResult<ProjectManifest> ProjectManifest::hydrate(
 
 void ProjectManifest::require_product_release(ProductRelease release) noexcept {
   minimum_product_release_ = std::max(minimum_product_release_, release);
+}
+
+void ProjectManifest::mark_saved_by_current_app() {
+  last_saved_app_version_ = kQuaderAppVersion;
 }
 
 const ProjectSceneCatalogEntry *
@@ -580,6 +586,7 @@ ProjectManifestStore::create_in_empty_directory(
       .manifest = created_manifest.take_value(),
   };
   workspace.manifest_path = expected_manifest_path(workspace.file_system);
+  workspace.manifest.mark_saved_by_current_app();
   ProjectIoResult<void> saved = save_atomic(workspace);
   if (!saved.ok()) {
     std::error_code ignored;
@@ -771,6 +778,9 @@ std::string ProjectManifestStore::serialize(const ProjectManifest &manifest) {
            {"activeScene", std::move(active_scene)},
        }},
   };
+  if (!manifest.last_saved_app_version().empty()) {
+    root["lastSavedAppVersion"] = manifest.last_saved_app_version();
+  }
   {
     Json deleted_material_ids = Json::array();
     deleted_material_ids.get_ref<Json::array_t &>().reserve(
@@ -831,6 +841,16 @@ ProjectManifestStore::deserialize(std::string_view text) {
           "Project manifest version is not supported.");
     }
     ProductRelease minimum_product_release = kInternalFullRelease;
+    std::string last_saved_app_version;
+    if (root.contains("lastSavedAppVersion")) {
+      if (!root["lastSavedAppVersion"].is_string()) {
+        return malformed_manifest("Last saved application version must be a string.");
+      }
+      last_saved_app_version = root["lastSavedAppVersion"].get<std::string>();
+      if (last_saved_app_version.size() > kMaximumAppVersionBytes) {
+        return malformed_manifest("Last saved application version exceeds its size limit.");
+      }
+    }
     if (version >= 4u) {
       if (!root.contains("minimumProductRelease") ||
           !root["minimumProductRelease"].is_number_unsigned() ||
@@ -1032,6 +1052,7 @@ ProjectManifestStore::deserialize(std::string_view text) {
         std::move(textures), std::move(deleted_texture_ids));
     if (hydrated.ok()) {
       hydrated.value().loaded_version_ = static_cast<std::uint32_t>(version);
+      hydrated.value().last_saved_app_version_ = std::move(last_saved_app_version);
     }
     return hydrated;
   } catch (const std::exception &exception) {

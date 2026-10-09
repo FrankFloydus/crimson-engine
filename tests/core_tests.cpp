@@ -122,6 +122,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <initializer_list>
@@ -1299,6 +1300,171 @@ TEST(AppWindowSettingsTests, IgnoresIncompleteWindowPlacementFiles) {
 
   const AppWindowSettings loaded = AppWindowSettings::load(path);
   EXPECT_FALSE(loaded.placement().has_value());
+}
+
+namespace {
+
+class ScopedWindowSettingsProfile final {
+public:
+  ScopedWindowSettingsProfile()
+      : directory_(std::filesystem::temp_directory_path() /
+                   ("quader_project_window_settings_" +
+                    std::to_string(std::chrono::steady_clock::now()
+                                       .time_since_epoch()
+                                       .count()))) {
+    if (const char *previous = std::getenv(kVariable)) {
+      previous_ = previous;
+    }
+    std::error_code error;
+    owns_directory_ = std::filesystem::create_directory(directory_, error);
+    if (owns_directory_ && !error) {
+      active_ = set_variable(directory_.string());
+    }
+  }
+
+  ~ScopedWindowSettingsProfile() {
+    if (active_) {
+      (void)set_variable(previous_);
+    }
+    if (owns_directory_) {
+      std::error_code error;
+      std::filesystem::remove_all(directory_, error);
+    }
+  }
+
+  ScopedWindowSettingsProfile(const ScopedWindowSettingsProfile &) = delete;
+  ScopedWindowSettingsProfile &
+  operator=(const ScopedWindowSettingsProfile &) = delete;
+
+  [[nodiscard]] bool active() const noexcept { return active_; }
+  [[nodiscard]] const std::filesystem::path &directory() const noexcept {
+    return directory_;
+  }
+
+private:
+#if defined(_WIN32)
+  static constexpr const char *kVariable = "LOCALAPPDATA";
+#else
+  static constexpr const char *kVariable = "XDG_CONFIG_HOME";
+#endif
+
+  static bool set_variable(const std::optional<std::string> &value) {
+#if defined(_WIN32)
+    return _putenv_s(kVariable, value ? value->c_str() : "") == 0;
+#else
+    return value ? ::setenv(kVariable, value->c_str(), 1) == 0
+                 : ::unsetenv(kVariable) == 0;
+#endif
+  }
+
+  std::filesystem::path directory_;
+  std::optional<std::string> previous_;
+  bool owns_directory_ = false;
+  bool active_ = false;
+};
+
+} // namespace
+
+TEST(AppWindowSettingsTests, ResolvesOnePlacementRecordPerCanonicalProject) {
+  ScopedWindowSettingsProfile profile;
+  ASSERT_TRUE(profile.active());
+  const auto executable_dir = profile.directory() / "bin";
+  const auto first_directory = profile.directory() / "Project A";
+  const auto second_directory = profile.directory() / "Project B";
+  ASSERT_TRUE(std::filesystem::create_directories(first_directory / "Scratch"));
+  ASSERT_TRUE(std::filesystem::create_directories(second_directory));
+  const auto first_manifest = first_directory / "Project.qproj";
+  const auto second_manifest = second_directory / "Project.qproj";
+  {
+    std::ofstream first_file(first_manifest);
+    std::ofstream second_file(second_manifest);
+    ASSERT_TRUE(first_file.is_open());
+    ASSERT_TRUE(second_file.is_open());
+  }
+
+  const auto first_path =
+      AppWindowSettings::resolve_project_path(executable_dir, first_manifest);
+  const auto second_path =
+      AppWindowSettings::resolve_project_path(executable_dir, second_manifest);
+  ASSERT_FALSE(first_path.empty());
+  ASSERT_FALSE(second_path.empty());
+  EXPECT_NE(first_path, second_path);
+  EXPECT_NE(first_path, AppWindowSettings::resolve_path(executable_dir));
+  EXPECT_NE(second_path, AppWindowSettings::resolve_path(executable_dir));
+  EXPECT_EQ(first_path, AppWindowSettings::resolve_project_path(
+                            executable_dir,
+                            first_directory / "Scratch" / ".." / "Project.qproj"));
+  EXPECT_EQ(first_path, AppWindowSettings::resolve_project_path(
+                            executable_dir,
+                            std::filesystem::canonical(first_manifest)));
+  EXPECT_NE(first_path, AppWindowSettings::resolve_project_path(
+                            executable_dir, first_directory / "Renamed.qproj"));
+#if defined(_WIN32)
+  EXPECT_EQ(first_path, AppWindowSettings::resolve_project_path(
+                            executable_dir,
+                            profile.directory() / "PROJECT A" / "PROJECT.QPROJ"));
+#endif
+  EXPECT_TRUE(
+      AppWindowSettings::resolve_project_path(executable_dir, {}).empty());
+}
+
+TEST(AppWindowSettingsTests, ProjectPlacementsRoundTripWithoutChangingOtherRecords) {
+  ScopedWindowSettingsProfile profile;
+  ASSERT_TRUE(profile.active());
+  const auto executable_dir = profile.directory() / "bin";
+  const auto legacy_path = AppWindowSettings::resolve_path(executable_dir);
+  const auto first_path = AppWindowSettings::resolve_project_path(
+      executable_dir, profile.directory() / "Project A" / "Project.qproj");
+  const auto second_path = AppWindowSettings::resolve_project_path(
+      executable_dir, profile.directory() / "Project B" / "Project.qproj");
+  ASSERT_FALSE(first_path.empty());
+  ASSERT_FALSE(second_path.empty());
+  ASSERT_NE(first_path, second_path);
+  ASSERT_NE(first_path, legacy_path);
+  ASSERT_NE(second_path, legacy_path);
+
+  const PlatformWindowPlacement legacy_placement{
+      .normal_frame = {.x = 40, .y = 60, .width = 1152, .height = 720},
+      .maximized = false};
+  const PlatformWindowPlacement first_placement{
+      .normal_frame = {.x = -1600, .y = 100, .width = 1440, .height = 900},
+      .maximized = true};
+  const PlatformWindowPlacement second_placement{
+      .normal_frame = {.x = 240, .y = 180, .width = 1000, .height = 780},
+      .maximized = false};
+  const auto save_placement = [](const std::filesystem::path &path,
+                                 PlatformWindowPlacement placement) {
+    auto settings = AppWindowSettings::defaults();
+    settings.set_placement(placement);
+    return settings.save(path);
+  };
+  const auto expect_placement = [](const std::filesystem::path &path,
+                                  const PlatformWindowPlacement &expected) {
+    const auto loaded = AppWindowSettings::load(path);
+    ASSERT_TRUE(loaded.placement().has_value());
+    const auto &actual = *loaded.placement();
+    EXPECT_EQ(actual.normal_frame.x, expected.normal_frame.x);
+    EXPECT_EQ(actual.normal_frame.y, expected.normal_frame.y);
+    EXPECT_EQ(actual.normal_frame.width, expected.normal_frame.width);
+    EXPECT_EQ(actual.normal_frame.height, expected.normal_frame.height);
+    EXPECT_EQ(actual.maximized, expected.maximized);
+  };
+
+  ASSERT_TRUE(save_placement(legacy_path, legacy_placement));
+  EXPECT_FALSE(AppWindowSettings::load(first_path).placement().has_value());
+  ASSERT_TRUE(save_placement(first_path, first_placement));
+  ASSERT_TRUE(save_placement(second_path, second_placement));
+  expect_placement(first_path, first_placement);
+  expect_placement(second_path, second_placement);
+  expect_placement(legacy_path, legacy_placement);
+
+  const PlatformWindowPlacement resized_first_placement{
+      .normal_frame = {.x = -1420, .y = 140, .width = 960, .height = 640},
+      .maximized = false};
+  ASSERT_TRUE(save_placement(first_path, resized_first_placement));
+  expect_placement(first_path, resized_first_placement);
+  expect_placement(second_path, second_placement);
+  expect_placement(legacy_path, legacy_placement);
 }
 
 TEST(AppFrameScheduleTests, PreservesSynchronizedAndIdleCadence) {

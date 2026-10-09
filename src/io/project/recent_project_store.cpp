@@ -181,7 +181,12 @@ RecentProjectStore::load() const {
           !availability_error;
       std::optional<std::uint64_t> manifest_last_modified_unix_ms;
       std::optional<std::uintmax_t> manifest_size_bytes;
+      std::string last_saved_app_version;
       if (available) {
+        const auto metadata = ProjectManifestStore::open_metadata(manifest_path);
+        if (metadata.ok() && metadata.value().manifest.id() == parsed_id) {
+          last_saved_app_version = metadata.value().manifest.last_saved_app_version();
+        }
         std::error_code metadata_error;
         const std::uintmax_t manifest_size =
             std::filesystem::file_size(manifest_path, metadata_error);
@@ -220,6 +225,7 @@ RecentProjectStore::load() const {
           .manifest_last_modified_unix_ms =
               manifest_last_modified_unix_ms,
           .manifest_size_bytes = manifest_size_bytes,
+          .last_saved_app_version = std::move(last_saved_app_version),
       });
     }
     return ProjectIoResult<std::vector<RecentProjectEntry>>::success(

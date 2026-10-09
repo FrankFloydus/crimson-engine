@@ -23,6 +23,7 @@
 #include "io/qdr/qdr_document_reader.hpp"
 #include "io/qdr/qdr_document_writer.hpp"
 #include "scene/scene_transform.hpp"
+#include "quader_app_version.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -3881,6 +3882,72 @@ TEST(ProjectSessionWorkspace,
   ASSERT_TRUE(after_close.ok()) << after_close.error().message;
   EXPECT_EQ(after_close.value().manifest.minimum_product_release(),
             kPublicRelease01);
+  EXPECT_TRUE(after_close.value().manifest.last_saved_app_version().empty());
+}
+
+TEST(ProjectSessionWorkspace,
+     OrdinarySceneSaveUpdatesAppVersionOnlyAfterSuccessfulCommit) {
+  ScopedProjectSessionDirectory temporary("saved-app-version");
+  const auto root = temporary.make_empty_child("Project");
+  ProjectSession project;
+  QuaderEditorApi editor(project);
+  ASSERT_TRUE(editor.project().create(root).ok());
+  const auto path = project_path("Scenes/Authored.qdr");
+  ASSERT_TRUE(editor.scene_documents()
+                  .save_as(*editor.scene_documents().active_scene_id(), path).ok());
+  const auto manifest_path = project.manifest_path();
+  const auto scene_path = root / path.native_path();
+  ASSERT_TRUE(editor.project().close().ok());
+  auto storage = ProjectManifestStore::open_metadata(manifest_path);
+  ASSERT_TRUE(storage.ok());
+  auto encoded = nlohmann::json::parse(
+      ProjectManifestStore::serialize(storage.value().manifest));
+  encoded["lastSavedAppVersion"] = "0.0.1";
+  auto older = ProjectManifestStore::deserialize(encoded.dump());
+  ASSERT_TRUE(older.ok());
+  storage.value().manifest = older.take_value();
+  ASSERT_TRUE(ProjectManifestStore::save_atomic(storage.value()).ok());
+
+  ASSERT_TRUE(editor.project().open(manifest_path).ok());
+  EXPECT_EQ(project.manifest()->last_saved_app_version(), "0.0.1");
+  const auto original_scene = project.active_scene_id();
+  const auto unsaved = editor.scene_documents().new_scene();
+  ASSERT_TRUE(unsaved.ok());
+  ASSERT_TRUE(editor.scene_documents().activate(original_scene).ok());
+  ASSERT_TRUE(editor.scene_documents().close(unsaved.value()).ok());
+  ASSERT_TRUE(project.refresh_asset_catalog().ok);
+  EXPECT_EQ(project.manifest()->last_saved_app_version(), "0.0.1");
+  const auto workspace_only = ProjectManifestStore::open_metadata(manifest_path);
+  ASSERT_TRUE(workspace_only.ok());
+  EXPECT_EQ(workspace_only.value().manifest.last_saved_app_version(), "0.0.1");
+  const auto recent_before = editor.project().recent_projects();
+  const auto entry_before = std::find_if(recent_before.begin(), recent_before.end(),
+      [&](const QuaderRecentProject &entry) { return entry.manifest_path == manifest_path; });
+  ASSERT_NE(entry_before, recent_before.end());
+  EXPECT_EQ(entry_before->last_saved_app_version, "0.0.1");
+
+  ASSERT_TRUE(editor.scene().create_entity({.name = "Saved in this version"}).ok());
+  const auto original_scene_bytes = read_file_bytes(scene_path);
+  const auto original_manifest_bytes = read_file_bytes(manifest_path);
+  {
+    ScopedManifestWriteFailure blocked(manifest_path);
+    ASSERT_TRUE(blocked.ready()) << blocked.message();
+    EXPECT_FALSE(editor.scene_documents().save_active().ok());
+    EXPECT_EQ(project.manifest()->last_saved_app_version(), "0.0.1");
+    EXPECT_EQ(read_file_bytes(scene_path), original_scene_bytes);
+    EXPECT_TRUE(project.active_scene()->dirty());
+  }
+  EXPECT_EQ(read_file_bytes(manifest_path), original_manifest_bytes);
+  ASSERT_TRUE(editor.scene_documents().save_active().ok());
+  EXPECT_EQ(project.manifest()->last_saved_app_version(), kQuaderAppVersion);
+  const auto saved = ProjectManifestStore::open_metadata(manifest_path);
+  ASSERT_TRUE(saved.ok());
+  EXPECT_EQ(saved.value().manifest.last_saved_app_version(), kQuaderAppVersion);
+  const auto recent_after = editor.project().recent_projects();
+  const auto entry_after = std::find_if(recent_after.begin(), recent_after.end(),
+      [&](const QuaderRecentProject &entry) { return entry.manifest_path == manifest_path; });
+  ASSERT_NE(entry_after, recent_after.end());
+  EXPECT_EQ(entry_after->last_saved_app_version, kQuaderAppVersion);
 }
 
 TEST(ProjectSessionWorkspace,
@@ -3906,12 +3973,14 @@ TEST(ProjectSessionWorkspace,
       {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
       "Authored in Full").ok());
   EXPECT_EQ(project.manifest()->minimum_product_release(), kPublicRelease01);
+  EXPECT_TRUE(project.manifest()->last_saved_app_version().empty());
   const auto scene_path = project_path("Scenes/Authored.qdr");
   {
     ScopedManifestWriteFailure blocked(project.manifest_path());
     ASSERT_TRUE(blocked.ready()) << blocked.message();
     EXPECT_FALSE(editor.scene_documents().save_as(added.value(), scene_path).ok());
     EXPECT_EQ(project.manifest()->minimum_product_release(), kPublicRelease01);
+    EXPECT_TRUE(project.manifest()->last_saved_app_version().empty());
     EXPECT_FALSE(std::filesystem::exists(
         project.root() / scene_path.native_path()));
   }
@@ -3919,14 +3988,61 @@ TEST(ProjectSessionWorkspace,
   const auto saved = editor.scene_documents().save_as(added.value(), scene_path);
   ASSERT_TRUE(saved.ok()) << saved.error_message();
   EXPECT_EQ(project.manifest()->minimum_product_release(), kInternalFullRelease);
+  EXPECT_EQ(project.manifest()->last_saved_app_version(), kQuaderAppVersion);
   const auto persisted = ProjectManifestStore::open(project.manifest_path());
   ASSERT_TRUE(persisted.ok()) << persisted.error().message;
   EXPECT_EQ(persisted.value().manifest.minimum_product_release(),
             kInternalFullRelease);
+  EXPECT_EQ(persisted.value().manifest.last_saved_app_version(), kQuaderAppVersion);
   const auto scene = QdrDocumentReader::read_project_document(
       project.root() / scene_path.native_path());
   ASSERT_TRUE(scene.ok) << scene.message;
   EXPECT_EQ(scene.minimum_product_release, kInternalFullRelease);
+}
+
+TEST(ProjectSessionWorkspace,
+     AssetAndMaterialSavesStampAppVersionOnlyOnCommittedCandidates) {
+  for (const bool save_material : {false, true}) {
+    SCOPED_TRACE(save_material);
+    ScopedProjectSessionDirectory temporary("asset-saved-app-version");
+    auto storage = ProjectManifestStore::create_in_empty_directory(
+        temporary.make_empty_child("Project"));
+    ASSERT_TRUE(storage.ok());
+    auto legacy = ProjectManifest::create(storage.value().manifest.id(),
+                                          storage.value().manifest.name());
+    ASSERT_TRUE(legacy.ok());
+    storage.value().manifest = legacy.take_value();
+    ASSERT_TRUE(ProjectManifestStore::save_atomic(storage.value()).ok());
+    ProjectSession project;
+    QuaderEditorApi editor(project);
+    ASSERT_TRUE(editor.project().open(storage.value().manifest_path).ok());
+    EXPECT_TRUE(project.manifest()->last_saved_app_version().empty());
+    if (save_material) {
+      ASSERT_TRUE(editor.standard_material_documents().new_material().ok());
+    }
+    const auto write_asset = [&]() {
+      return save_material
+          ? editor.standard_material_documents().save_as(project_path("Authored.qmat"))
+          : editor.project_assets().create_folder("", "Authored");
+    };
+    const auto target = project.root() / (save_material ? "Authored.qmat" : "Authored");
+    const auto original_manifest = read_file_bytes(project.manifest_path());
+    {
+      ScopedManifestWriteFailure blocked(project.manifest_path());
+      ASSERT_TRUE(blocked.ready()) << blocked.message();
+      EXPECT_FALSE(write_asset().ok());
+      EXPECT_TRUE(project.manifest()->last_saved_app_version().empty());
+      EXPECT_FALSE(std::filesystem::exists(target));
+    }
+    EXPECT_EQ(read_file_bytes(project.manifest_path()), original_manifest);
+    const auto saved = write_asset();
+    ASSERT_TRUE(saved.ok()) << saved.error_message();
+    EXPECT_TRUE(std::filesystem::exists(target));
+    EXPECT_EQ(project.manifest()->last_saved_app_version(), kQuaderAppVersion);
+    const auto persisted = ProjectManifestStore::open_metadata(project.manifest_path());
+    ASSERT_TRUE(persisted.ok());
+    EXPECT_EQ(persisted.value().manifest.last_saved_app_version(), kQuaderAppVersion);
+  }
 }
 
 TEST(ProjectSessionWorkspace,
