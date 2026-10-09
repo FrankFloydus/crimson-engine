@@ -297,6 +297,17 @@ ToolDescriptor viewport_tool_descriptor(ViewportToolId tool) {
   return descriptor != nullptr ? *descriptor : ToolDescriptor{};
 }
 
+ViewportToolId next_viewport_selection_tool(ViewportToolId tool) {
+  switch (tool) {
+  case ViewportToolId::Select:
+    return ViewportToolId::LassoSelect;
+  case ViewportToolId::LassoSelect:
+    return ViewportToolId::PaintSelect;
+  default:
+    return ViewportToolId::Select;
+  }
+}
+
 bool viewport_tool_supports_editor_mode(ViewportToolId tool, EditorMode mode) {
   const auto *descriptor = find_viewport_tool_descriptor(tool);
   return descriptor != nullptr &&

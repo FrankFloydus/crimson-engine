@@ -63,6 +63,8 @@ find_viewport_tool_descriptor(ModelingViewportTool tool);
 [[nodiscard]] const ToolDescriptor *
 find_viewport_tool_descriptor(std::string_view id);
 [[nodiscard]] ToolDescriptor viewport_tool_descriptor(ViewportToolId tool);
+/// Cycles Box/Lasso/Paint, starting with Box when another tool is active.
+[[nodiscard]] ViewportToolId next_viewport_selection_tool(ViewportToolId tool);
 [[nodiscard]] bool viewport_tool_supports_editor_mode(ViewportToolId tool,
                                                       EditorMode mode);
 [[nodiscard]] bool viewport_tool_supports_editor_mode(ModelingViewportTool tool,

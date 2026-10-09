@@ -26,6 +26,7 @@
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/tools/viewport_tool.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
+#include "editor/tools/viewport_tool_descriptor_catalog.hpp"
 #include "editor/tools/viewport_tool_ports.hpp"
 #include "editor/viewport/viewport_modeling_tool_commit_adapter.hpp"
 #include "editor/tools/viewport_native_tool_interaction.hpp"
@@ -3741,7 +3742,8 @@ std::optional<QPoint> QtViewportPanel::resolve_marking_menu_gesture(
     // shared-pane publication. No popup is constructed before the hold resolves.
     input.resolved_shortcuts.push_back({
         .kind = ViewportShortcutKind::ActivateTool,
-        .tool = ViewportToolId::Select,
+        .tool = next_viewport_selection_tool(
+            editor.viewports().selected_tool(gesture.pane_id)),
     });
     pending_marking_menu_gesture_.reset();
     return std::nullopt;

@@ -136,8 +136,10 @@ presenter uses stack-local popup menus and revalidates the runtime, scene sessio
 and selected command after the nested popup loop returns. Menu actions do not own private shortcuts.
 
 The marking-menu launcher's accepted keyboard chord has a tap/hold gesture: release before
-opening activates Select through the ordinary tool lifecycle, while a 200 ms hold opens the
-menu. Capture the initiating pane and pointer origin once; auto-repeat never restarts the hold.
+opening activates Select from another tool, or cycles Select → Lasso Select → Paint Select →
+Select when a selection tool is active. Every transition uses the ordinary tool lifecycle;
+a 200 ms hold opens the menu without cycling on release. Capture the initiating pane and pointer
+origin once; auto-repeat never restarts the hold.
 Focus/context loss, runtime replacement, navigation or another input abandons a pending hold
 without selecting or opening. Remapping `viewport.marking_menu` preserves both gestures;
 separately assigned Select shortcuts keep their canonical command behavior.

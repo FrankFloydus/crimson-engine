@@ -3336,7 +3336,7 @@ TEST(QtViewportSurfaceInputTests,
 }
 
 TEST(QtViewportSurfaceInputTests,
-     MarkingMenuTapSelectsWithoutPopupForCoalescedAndRemappedKeys) {
+     MarkingMenuTapCyclesSelectionWithoutPopupForCoalescedAndRemappedKeys) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-marking-menu-tap-tests";
@@ -3381,39 +3381,52 @@ TEST(QtViewportSurfaceInputTests,
         unexpected_popup.stop();
         EXPECT_EQ(QApplication::activePopupWidget(), nullptr);
       };
-      if (mapping == 2) {
-        QKeyEvent prefix(QEvent::KeyPress, Qt::Key_K, Qt::ControlModifier);
-        QKeyEvent prefix_release(QEvent::KeyRelease, Qt::Key_K, Qt::NoModifier);
-        send_visible_viewport_event(context.surface, &prefix);
-        send_visible_viewport_event(context.surface, &prefix_release);
-        if (!coalesced) process_without_popup();
-      }
-      QKeyEvent press(QEvent::KeyPress, key, modifiers);
-      send_visible_viewport_event(context.surface, &press);
-      if (!coalesced) {
+      constexpr std::array kSelectionCycle{
+          std::pair{quader::ViewportToolId::Select, std::string_view{"select"}},
+          std::pair{quader::ViewportToolId::LassoSelect,
+                    std::string_view{"lasso_select"}},
+          std::pair{quader::ViewportToolId::PaintSelect,
+                    std::string_view{"paint_select"}},
+          std::pair{quader::ViewportToolId::Select, std::string_view{"select"}},
+      };
+      std::string_view previous_tool = "move";
+      for (const auto &[tool, tool_id] : kSelectionCycle) {
+        SCOPED_TRACE(tool_id);
+        if (mapping == 2) {
+          QKeyEvent prefix(QEvent::KeyPress, Qt::Key_K, Qt::ControlModifier);
+          QKeyEvent prefix_release(QEvent::KeyRelease, Qt::Key_K, Qt::NoModifier);
+          send_visible_viewport_event(context.surface, &prefix);
+          send_visible_viewport_event(context.surface, &prefix_release);
+          if (!coalesced) process_without_popup();
+        }
+        QKeyEvent press(QEvent::KeyPress, key, modifiers);
+        send_visible_viewport_event(context.surface, &press);
+        if (!coalesced) {
+          process_without_popup();
+          EXPECT_EQ(context.editor.tools().active_tool(), previous_tool);
+          QKeyEvent repeat(QEvent::KeyPress, key, modifiers, {}, true);
+          QKeyEvent repeated_release(QEvent::KeyRelease, key, modifiers, {}, true);
+          send_visible_viewport_event(context.surface, &repeat);
+          send_visible_viewport_event(context.surface, &repeated_release);
+          process_without_popup();
+          EXPECT_EQ(context.editor.tools().active_tool(), previous_tool);
+        }
+        // Releasing a modifier first does not change the accepted launcher's key.
+        QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier);
+        send_visible_viewport_event(context.surface, &release);
         process_without_popup();
-        EXPECT_EQ(context.editor.tools().active_tool(), "move");
-        QKeyEvent repeat(QEvent::KeyPress, key, modifiers, {}, true);
-        QKeyEvent repeated_release(QEvent::KeyRelease, key, modifiers, {}, true);
-        send_visible_viewport_event(context.surface, &repeat);
-        send_visible_viewport_event(context.surface, &repeated_release);
+        EXPECT_EQ(context.editor.tools().active_tool(), tool_id);
+        for (const auto pane_id : {quader::ViewportPaneId::Perspective,
+                                  quader::ViewportPaneId::Top,
+                                  quader::ViewportPaneId::Front,
+                                  quader::ViewportPaneId::Side}) {
+          EXPECT_EQ(context.editor.viewports().selected_tool(pane_id), tool);
+        }
+        expect_history_unchanged(context.editor.history().snapshot(), history_before);
         process_without_popup();
-        EXPECT_EQ(context.editor.tools().active_tool(), "move");
+        EXPECT_EQ(context.editor.tools().active_tool(), tool_id);
+        previous_tool = tool_id;
       }
-      // Releasing a modifier first does not change the accepted launcher's key.
-      QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier);
-      send_visible_viewport_event(context.surface, &release);
-      process_without_popup();
-      EXPECT_EQ(context.editor.tools().active_tool(), "select");
-      for (const auto pane_id : {quader::ViewportPaneId::Perspective,
-                                quader::ViewportPaneId::Top,
-                                quader::ViewportPaneId::Front,
-                                quader::ViewportPaneId::Side}) {
-        EXPECT_EQ(context.editor.viewports().selected_tool(pane_id),
-                  quader::ViewportToolId::Select);
-      }
-      expect_history_unchanged(context.editor.history().snapshot(), history_before);
-      process_without_popup();
       if (remapped) {
         ASSERT_TRUE(context.editor.preferences().set_shortcut(
             quader::quader_command::kToolsActivateSelect, "Q").ok());
@@ -3421,8 +3434,131 @@ TEST(QtViewportSurfaceInputTests,
             quader::ViewportToolId::Move).ok());
         context.key(Qt::Key_Q);
         EXPECT_EQ(context.editor.tools().active_tool(), "select");
+        context.key(Qt::Key_Q);
+        EXPECT_EQ(context.editor.tools().active_tool(), "select");
         EXPECT_EQ(QApplication::activePopupWidget(), nullptr);
       }
+    }
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
+     MarkingMenuSelectionCyclePreservesDomainsHistoryAndPaneFallback) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-marking-menu-selection-cycle-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  for (const auto selection_mode : {quader::QuaderSelectionMode::Object,
+                                    quader::QuaderSelectionMode::Group,
+                                    quader::QuaderSelectionMode::Vertex,
+                                    quader::QuaderSelectionMode::Edge,
+                                    quader::QuaderSelectionMode::Face}) {
+    for (const auto origin : {quader::ViewportPaneId::Perspective,
+                              quader::ViewportPaneId::Top}) {
+      SCOPED_TRACE(static_cast<int>(selection_mode));
+      SCOPED_TRACE(static_cast<int>(origin));
+      NavigationPanelTestContext context;
+      auto &editor = context.editor;
+      ASSERT_TRUE(editor.viewports().set_layout(quader::ViewportLayoutId::FourQuad).ok());
+      context.panel.refresh_workspace_layout();
+      ASSERT_TRUE(editor.viewports().record_selected_tool(
+          quader::ViewportPaneId::Top, quader::ViewportToolId::PaintSelect).ok());
+      ASSERT_TRUE(editor.viewports().record_selected_tool(
+          quader::ViewportPaneId::Front, quader::ViewportToolId::LassoSelect).ok());
+      ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::LassoSelect).ok());
+      ASSERT_TRUE(editor.tools().set_setting(
+          "lasso_select", "select_partial_intersection", true).ok());
+      ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Move).ok());
+      QEvent leave(QEvent::Leave);
+      QFocusEvent blur(QEvent::FocusOut);
+      send_visible_viewport_event(context.surface, &leave);
+      send_visible_viewport_event(context.surface, &blur);
+      context.surface = context.panel.surface(origin);
+      ASSERT_NE(context.surface, nullptr);
+      resize_viewport_surface(context.panel, *context.surface, {800, 600});
+      ASSERT_TRUE(editor.viewports().focus_pane(origin).ok());
+      QEnterEvent enter({400, 300}, {400, 300}, {500, 400});
+      QFocusEvent focus(QEvent::FocusIn);
+      send_visible_viewport_event(context.surface, &enter);
+      send_visible_viewport_event(context.surface, &focus);
+      const auto box = editor.modeling().create_box(
+          {.min = {-1, -1, -1}, .max = {1, 1, 1}});
+      ASSERT_TRUE(box.ok());
+      ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+      const bool edit_mode = selection_mode != quader::QuaderSelectionMode::Object &&
+                             selection_mode != quader::QuaderSelectionMode::Group;
+      if (edit_mode) {
+        ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+      }
+      ASSERT_TRUE(editor.selection().set_mode(selection_mode).ok());
+      if (selection_mode == quader::QuaderSelectionMode::Vertex) {
+        ASSERT_TRUE(editor.selection().select_vertices(box.value(), {1, 2}).ok());
+      } else if (selection_mode == quader::QuaderSelectionMode::Edge) {
+        ASSERT_TRUE(editor.selection().select_edge(box.value(), 1, 2).ok());
+      } else if (selection_mode == quader::QuaderSelectionMode::Face) {
+        ASSERT_TRUE(editor.selection().select_faces(box.value(), {1, 2}).ok());
+      }
+      ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Move).ok());
+      context.process();
+      ASSERT_EQ(editor.viewports().focused_pane(), origin);
+      const auto selection_before = editor.selection().summary();
+      const auto entities_before = context.session.scene().selected_entities();
+      const auto mode_before = editor.mode().state();
+      const auto mesh_before = editor.query().compiled_object_mesh(box.value());
+      ASSERT_TRUE(mesh_before.has_value());
+      const auto history_before = editor.history().snapshot();
+      const auto undo_count_before = context.session.history().undo_count();
+      constexpr std::array kPanes{quader::ViewportPaneId::Perspective,
+                                 quader::ViewportPaneId::Top,
+                                 quader::ViewportPaneId::Front,
+                                 quader::ViewportPaneId::Side};
+      std::array<quader::ViewportToolId, kPanes.size()> preferred_before{};
+      for (std::size_t index = 0; index < kPanes.size(); ++index) {
+        preferred_before[index] = editor.viewports().preferred_selection_tool(kPanes[index]);
+      }
+      for (const auto tool : {quader::ViewportToolId::Select,
+                              quader::ViewportToolId::LassoSelect,
+                              quader::ViewportToolId::PaintSelect,
+                              quader::ViewportToolId::Select}) {
+        SCOPED_TRACE(static_cast<int>(tool));
+        context.key(Qt::Key_Q);
+        for (std::size_t index = 0; index < kPanes.size(); ++index) {
+          EXPECT_EQ(editor.viewports().selected_tool(kPanes[index]), tool);
+          EXPECT_EQ(editor.viewports().preferred_selection_tool(kPanes[index]),
+                    kPanes[index] == origin ? tool : preferred_before[index]);
+        }
+        const auto selected = editor.selection().summary();
+        EXPECT_EQ(selected.mode, selection_before.mode);
+        EXPECT_EQ(selected.active_kind, selection_before.active_kind);
+        EXPECT_EQ(selected.active_object_id, selection_before.active_object_id);
+        EXPECT_EQ(selected.active_vertex_id, selection_before.active_vertex_id);
+        EXPECT_EQ(selected.active_edge_a, selection_before.active_edge_a);
+        EXPECT_EQ(selected.active_edge_b, selection_before.active_edge_b);
+        EXPECT_EQ(selected.active_face_id, selection_before.active_face_id);
+        EXPECT_EQ(selected.selected_vertex_count, selection_before.selected_vertex_count);
+        EXPECT_EQ(selected.selected_edge_count, selection_before.selected_edge_count);
+        EXPECT_EQ(selected.selected_face_count, selection_before.selected_face_count);
+        EXPECT_EQ(selected.selection_revision, selection_before.selection_revision);
+        EXPECT_EQ(selected.content_revision, selection_before.content_revision);
+        EXPECT_EQ(context.session.scene().selected_entities(), entities_before);
+        EXPECT_EQ(editor.mode().current(), mode_before.mode);
+        EXPECT_EQ(editor.mode().generation(), mode_before.generation);
+        EXPECT_EQ(editor.mode().revision(), mode_before.revision);
+        EXPECT_TRUE(editor.tools().lasso_select_partial_intersection());
+        const auto mesh_after = editor.query().compiled_object_mesh(box.value());
+        ASSERT_TRUE(mesh_after.has_value());
+        expect_compiled_mesh_equal(*mesh_after, *mesh_before);
+        expect_history_unchanged(editor.history().snapshot(), history_before);
+        EXPECT_EQ(context.session.history().undo_count(), undo_count_before);
+      }
+      context.key(Qt::Key_Q);
+      context.key(Qt::Key_W);
+      EXPECT_EQ(editor.tools().active_tool(), "move");
+      EXPECT_EQ(editor.viewports().preferred_selection_tool(origin),
+                quader::ViewportToolId::LassoSelect);
+      context.key(Qt::Key_Q);
+      EXPECT_EQ(editor.tools().active_tool(), "select");
     }
   }
 }
@@ -3479,7 +3615,7 @@ TEST(QtViewportSurfaceInputTests,
   ASSERT_TRUE(localization.load(std::filesystem::path(QUADER_SOURCE_DIR) /
                                     "resources" / "locales", "en-US"));
   context.panel.set_localization(localization);
-  ASSERT_TRUE(context.editor.tools().activate(quader::ViewportToolId::Move).ok());
+  ASSERT_TRUE(context.editor.tools().activate(quader::ViewportToolId::LassoSelect).ok());
   context.process();
   QTimer watchdog;
   watchdog.setSingleShot(true);
@@ -3493,7 +3629,7 @@ TEST(QtViewportSurfaceInputTests,
   context.process();
   watchdog.stop();
   EXPECT_EQ(QApplication::activePopupWidget(), nullptr);
-  EXPECT_EQ(context.editor.tools().active_tool(), "move");
+  EXPECT_EQ(context.editor.tools().active_tool(), "lasso_select");
   // Event-loop time, rather than synthesized frame deltas, defines the hold.
   QEventLoop before_threshold;
   QTimer::singleShot(80, &before_threshold, &QEventLoop::quit);
@@ -3502,7 +3638,7 @@ TEST(QtViewportSurfaceInputTests,
   context.process();
   watchdog.stop();
   EXPECT_EQ(QApplication::activePopupWidget(), nullptr);
-  EXPECT_EQ(context.editor.tools().active_tool(), "move");
+  EXPECT_EQ(context.editor.tools().active_tool(), "lasso_select");
   QEventLoop hold;
   QTimer::singleShot(150, &hold, &QEventLoop::quit);
   hold.exec();
@@ -3523,11 +3659,11 @@ TEST(QtViewportSurfaceInputTests,
   watchdog.stop();
   EXPECT_TRUE(popup_opened);
   EXPECT_EQ(QApplication::activePopupWidget(), nullptr);
-  EXPECT_EQ(context.editor.tools().active_tool(), "move");
+  EXPECT_EQ(context.editor.tools().active_tool(), "lasso_select");
   QKeyEvent trailing_release(QEvent::KeyRelease, Qt::Key_Q, Qt::NoModifier);
   send_visible_viewport_event(context.surface, &trailing_release);
   context.process();
-  EXPECT_EQ(context.editor.tools().active_tool(), "move");
+  EXPECT_EQ(context.editor.tools().active_tool(), "lasso_select");
   EXPECT_EQ(QApplication::activePopupWidget(), nullptr);
 }
 
@@ -3539,11 +3675,11 @@ TEST(QtViewportSurfaceInputTests,
   char *argv[] = {application_name, nullptr};
   QApplication application(argc, argv);
   application.setQuitOnLastWindowClosed(false);
-  for (const int interruption : {0, 1, 2, 3}) {
+  for (const int interruption : {0, 1, 2, 3, 4, 5}) {
     SCOPED_TRACE(interruption);
     NavigationPanelTestContext context;
     ASSERT_NE(context.surface, nullptr);
-    ASSERT_TRUE(context.editor.tools().activate(quader::ViewportToolId::Scale).ok());
+    ASSERT_TRUE(context.editor.tools().activate(quader::ViewportToolId::LassoSelect).ok());
     context.process();
     QKeyEvent press(QEvent::KeyPress, Qt::Key_Q, Qt::NoModifier);
     send_visible_viewport_event(context.surface, &press);
@@ -3560,16 +3696,22 @@ TEST(QtViewportSurfaceInputTests,
     } else if (interruption == 2) {
       context.key(Qt::Key_W);
       EXPECT_EQ(context.editor.tools().active_tool(), "move");
-    } else {
+    } else if (interruption == 3) {
       context.mouse(QEvent::MouseButtonPress, {400, 300},
                     Qt::MiddleButton, Qt::MiddleButton);
       context.process();
+    } else if (interruption == 4) {
+      ASSERT_TRUE(context.editor.preferences().set_shortcut(
+          "viewport.marking_menu", "Ctrl+Alt+F20").ok());
+    } else {
+      ASSERT_TRUE(context.editor.tools().activate(quader::ViewportToolId::PaintSelect).ok());
     }
     QKeyEvent release(QEvent::KeyRelease, Qt::Key_Q, Qt::NoModifier);
     send_visible_viewport_event(context.surface, &release);
     context.process();
     EXPECT_EQ(context.editor.tools().active_tool(),
-              interruption == 2 ? "move" : "scale");
+              interruption == 2 ? "move" :
+              interruption == 5 ? "paint_select" : "lasso_select");
     EXPECT_EQ(QApplication::activePopupWidget(), nullptr);
     if (interruption == 3) {
       context.mouse(QEvent::MouseButtonRelease, {400, 300},
@@ -3578,7 +3720,8 @@ TEST(QtViewportSurfaceInputTests,
     }
     context.process();
     EXPECT_EQ(context.editor.tools().active_tool(),
-              interruption == 2 ? "move" : "scale");
+              interruption == 2 ? "move" :
+              interruption == 5 ? "paint_select" : "lasso_select");
   }
 }
 
