@@ -26,7 +26,6 @@
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/tools/viewport_tool.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
-#include "editor/tools/viewport_tool_descriptor_catalog.hpp"
 #include "editor/tools/viewport_tool_ports.hpp"
 #include "editor/viewport/viewport_modeling_tool_commit_adapter.hpp"
 #include "editor/tools/viewport_native_tool_interaction.hpp"

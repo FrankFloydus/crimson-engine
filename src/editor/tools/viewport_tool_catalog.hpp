@@ -20,6 +20,8 @@ namespace quader {
 [[nodiscard]] bool viewport_tool_available(ViewportToolId tool);
 [[nodiscard]] std::string_view viewport_tool_catalog_id(ViewportToolId tool);
 [[nodiscard]] std::string_view viewport_tool_label(ViewportToolId tool);
+/// Cycles Box/Lasso/Paint, starting with Box when another tool is active.
+[[nodiscard]] ViewportToolId next_viewport_selection_tool(ViewportToolId tool);
 [[nodiscard]] bool viewport_tool_owns_viewport(ViewportToolId tool);
 [[nodiscard]] bool viewport_tool_blocks_focus_shortcuts(ViewportToolId tool);
 [[nodiscard]] bool viewport_tool_supports_transform_gizmo(ViewportToolId tool);

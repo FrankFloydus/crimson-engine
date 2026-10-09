@@ -106,6 +106,17 @@ std::string_view viewport_tool_label(ViewportToolId tool) {
   return item != nullptr ? item->label() : std::string_view{"Unknown"};
 }
 
+ViewportToolId next_viewport_selection_tool(ViewportToolId tool) {
+  switch (tool) {
+  case ViewportToolId::Select:
+    return ViewportToolId::LassoSelect;
+  case ViewportToolId::LassoSelect:
+    return ViewportToolId::PaintSelect;
+  default:
+    return ViewportToolId::Select;
+  }
+}
+
 bool viewport_tool_owns_viewport(ViewportToolId tool) {
   const ViewportTool *item = find_viewport_tool(tool);
   return item != nullptr && item->owns_viewport();
