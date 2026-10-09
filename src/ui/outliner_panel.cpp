@@ -349,7 +349,7 @@ public:
   std::optional<bool> row_hover_hint;
 
   bool apply_ui_scale(const QtUiScaleMetrics &metrics) {
-    const int extent = metrics.px(10);
+    const int extent = metrics.px(16);
     const int width = metrics.px(24);
     const int padding = metrics.px(4);
     if (action_extent_ == extent && action_width_ == width &&
@@ -502,7 +502,7 @@ private:
   QTreeView &tree_;
   std::array<std::array<QIcon, 4>, 6> action_icons_;
   QPalette palette_;
-  int action_extent_ = 10;
+  int action_extent_ = 16;
   int action_width_ = 24;
   int action_padding_ = 4;
   bool palette_valid_ = false;
