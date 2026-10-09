@@ -2282,6 +2282,108 @@ struct CuttingToolOutlineHarness {
 };
 
 TEST(SelectedMeshOutlinePresentationTests,
+     CutFaceCandidateRefreshesSubmittedTopologyAndRestoresSelectedFaces) {
+  CuttingToolOutlineHarness harness;
+  const auto source = harness.add_strip(0.0f);
+  auto &editor = harness.editor;
+  auto &modeling = harness.session.modeling();
+  ASSERT_TRUE(editor.selection().select_object(source).ok());
+  ASSERT_TRUE(enter_selection_context(editor, QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor.selection().select_face(source, 1).ok());
+  (void)harness.submit();
+  const auto baseline_wires = harness.wires(source.modeling_object_id);
+  const auto baseline_depths = harness.depths(source.modeling_object_id);
+  const auto selected_faces = editor.selection().summary().selected_face_count;
+  const auto content_revision = modeling.content_revision();
+  const auto asset_revision = harness.session.assets().revision();
+  const auto selected_bounds = modeling.selection_bounds();
+  ASSERT_TRUE(selected_bounds.has_value());
+  const auto cut_event = [](float x, float y) {
+    auto event = CuttingToolOutlineHarness::event_at(x, y);
+    event.grid_size = 0.125;
+    event.snap_enabled = true;
+    return event;
+  };
+  const auto face_fill_count = [&]() {
+    return std::ranges::count_if(harness.target.persistent.triangles,
+        [&](const ViewportOverlayTriangle &triangle) {
+          return triangle.element.object_id == source.modeling_object_id &&
+              (triangle.layer == ViewportOverlayLayer::SelectedVisibleFace ||
+               triangle.layer == ViewportOverlayLayer::SelectedXrayFace ||
+               triangle.layer == ViewportOverlayLayer::SelectedFaceMask);
+        });
+  };
+  const auto baseline_fills = face_fill_count();
+  ASSERT_GT(baseline_fills, 0);
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::Cut).ok());
+  (void)harness.submit();
+  EXPECT_EQ(face_fill_count(), 0);
+  EXPECT_EQ(editor.selection().summary().selected_face_count, selected_faces);
+
+  ASSERT_TRUE(modeling.click_cut(cut_event(0.5f, 0.25f)).ok);
+  auto second = cut_event(0.5f, 0.75f);
+  second.dragging = true;
+  ASSERT_TRUE(modeling.update_cut_hover(second).ok);
+  ASSERT_TRUE(modeling.end_cut_drag().ok);
+  float previous_x = -1.0f;
+  for (const float plane_x : {0.5f, 0.625f, 0.375f}) {
+    if (previous_x >= 0.0f) {
+      ASSERT_TRUE(modeling.begin_cut_line_drag(
+          cut_event(previous_x, 0.5f)).ok);
+      auto moved = cut_event(plane_x, 0.5f);
+      moved.dragging = true;
+      ASSERT_TRUE(modeling.update_cut_hover(moved).ok);
+      ASSERT_TRUE(modeling.end_cut_drag().ok);
+    }
+    (void)harness.submit();
+    const auto has_seam = [&](float x) {
+      return std::ranges::any_of(harness.target.persistent.lines,
+          [&](const ViewportOverlayLine &line) {
+            return line.layer == ViewportOverlayLayer::SourceWire &&
+                line.element.object_id == source.modeling_object_id &&
+                std::abs(line.start.x - x) < 0.0001f &&
+                std::abs(line.end.x - x) < 0.0001f &&
+                std::abs(line.start.y - line.end.y) > 0.9f;
+          });
+    };
+    EXPECT_TRUE(has_seam(plane_x));
+    if (previous_x >= 0.0f) EXPECT_FALSE(has_seam(previous_x));
+    EXPECT_EQ(face_fill_count(), 0);
+    EXPECT_EQ(modeling.content_revision(), content_revision);
+    EXPECT_EQ(harness.session.assets().revision(), asset_revision);
+    EXPECT_NE(harness.depths(source.modeling_object_id), baseline_depths);
+    ASSERT_TRUE(modeling.set_cut_mode(ModelingCutMode::DiscardLeft).ok);
+    (void)harness.submit();
+    const auto kept_bounds = modeling.selection_bounds();
+    ASSERT_TRUE(kept_bounds.has_value());
+    EXPECT_NEAR(kept_bounds->min.x, selected_bounds->min.x, 0.0001f);
+    EXPECT_NEAR(kept_bounds->max.x, plane_x, 0.0001f);
+    EXPECT_NEAR(kept_bounds->min.y, selected_bounds->min.y, 0.0001f);
+    EXPECT_NEAR(kept_bounds->max.y, selected_bounds->max.y, 0.0001f);
+    ASSERT_TRUE(modeling.set_cut_mode(ModelingCutMode::KeepBoth).ok);
+    (void)harness.submit();
+    const auto builds = harness.provider.builds;
+    const auto submissions = harness.target.submissions;
+    for (int frame = 0; frame < 8; ++frame) (void)harness.submit();
+    EXPECT_EQ(harness.provider.builds, builds);
+    EXPECT_EQ(harness.target.submissions, submissions);
+    previous_x = plane_x;
+  }
+  ASSERT_TRUE(editor.tools().cancel_modal_tool().ok());
+  (void)harness.submit();
+  EXPECT_EQ(harness.wires(source.modeling_object_id), baseline_wires);
+  EXPECT_EQ(harness.depths(source.modeling_object_id), baseline_depths);
+  EXPECT_EQ(face_fill_count(), baseline_fills);
+  EXPECT_EQ(editor.selection().summary().selected_face_count, selected_faces);
+  const auto restored_bounds = modeling.selection_bounds();
+  ASSERT_TRUE(restored_bounds.has_value());
+  EXPECT_NEAR(restored_bounds->min.x, selected_bounds->min.x, 0.0001f);
+  EXPECT_NEAR(restored_bounds->max.x, selected_bounds->max.x, 0.0001f);
+  EXPECT_NEAR(restored_bounds->min.y, selected_bounds->min.y, 0.0001f);
+  EXPECT_NEAR(restored_bounds->max.y, selected_bounds->max.y, 0.0001f);
+}
+
+TEST(SelectedMeshOutlinePresentationTests,
      CuttingToolSurfaceHoverKeepsFixedEditTopologyWithoutChangingSelection) {
   for (const auto tool : {ViewportToolId::Knife, ViewportToolId::InsertEdgeLoop}) {
     for (const bool selected : {false, true}) {

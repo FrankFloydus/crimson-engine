@@ -42,7 +42,7 @@ CommandResult blocked_tool_activation_result(
 
 CommandResult missing_cut_selection_result()
 {
-	return { false, false, "Select one or more mesh objects to cut." };
+	return { false, false, "Select meshes, faces, or edges to cut." };
 }
 
 CommandResult missing_mirror_selection_result()
@@ -54,6 +54,19 @@ bool has_object_selection_for_drawn_plane_tool(const EditorRuntimeSelectionView&
 {
   return selection.selection_mode() == SelectionMode::Object &&
          !selection.selected_object_ids().empty();
+}
+
+RectangleSelectionState rectangle_selection_for_cut(const EditorRuntimeSelectionView& selection);
+RectangleSelectionState rectangle_selection_for_cut(const EditorRuntimeSelectionView& selection,
+                                                    const EditorRuntime& runtime);
+
+bool has_selection_for_cut(const EditorRuntimeSelectionView& selection,
+                          const EditorRuntime& runtime)
+{
+  if (runtime.cut_state().scope_captured) {
+    return !runtime.cut_state().target_object_ids.empty();
+  }
+  return !cut_target_object_ids_for_selection(rectangle_selection_for_cut(selection)).empty();
 }
 
 CommandResult clear_hover(EditorRuntime& runtime)
@@ -70,12 +83,25 @@ EditorRuntimeToolActivationResult activate_tool_for_selection(
 {
 	const std::size_t selected_object_count =
 		selection.selected_object_ids().size();
-	return runtime.activate_tool({
+	const bool activating_cut = requested_tool == ViewportInteractionTool::Cut;
+	const bool captured_cut = activating_cut && runtime.cut_state().scope_captured;
+	const std::size_t cut_target_count = !activating_cut ? selected_object_count :
+		captured_cut ? runtime.cut_state().target_object_ids.size() :
+		cut_target_object_ids_for_selection(rectangle_selection_for_cut(selection)).size();
+	const SelectionMode mode = captured_cut
+		? (runtime.cut_state().scope == CutScope::Face ? SelectionMode::Face :
+		   runtime.cut_state().scope == CutScope::Edge ? SelectionMode::Edge : SelectionMode::Object)
+		: selection.selection_mode();
+	const auto activation = runtime.activate_tool({
 		.requested_tool = requested_tool,
-		.selection_mode = selection.selection_mode(),
+		.selection_mode = mode,
 		.selected_object_count = selected_object_count,
-		.selected_cut_target_object_count = selected_object_count,
+		.selected_cut_target_object_count = cut_target_count,
 	});
+	if (activating_cut && !activation.plan.activation_blocked && !runtime.cut_state().scope_captured) {
+		(void)runtime.refresh_cut_preview_from_selection(rectangle_selection_for_cut(selection), selection.objects());
+	}
+	return activation;
 }
 
 CommandResult set_active_tool(
@@ -274,8 +300,29 @@ RectangleSelectionState rectangle_selection_for_cut(const EditorRuntimeSelection
 	RectangleSelectionState state;
 	state.mode = selection.selection_mode();
 	state.active_object_id = selection.active_object();
-	state.selected_object_ids = selection.selected_object_ids();
+	if (state.mode == SelectionMode::Object) {
+		state.selected_object_ids = selection.selected_object_ids();
+	} else {
+		for (const PolygonObject& object : selection.objects()) {
+			if (state.mode == SelectionMode::Face) {
+				for (const auto face_id : object.selection.faces) {
+					state.selected_faces.push_back({object.id, static_cast<int>(face_id)});
+				}
+			} else if (state.mode == SelectionMode::Edge) {
+				for (const auto edge : object.selection.edges) {
+					state.selected_edges.push_back({object.id, static_cast<int>(edge.a), static_cast<int>(edge.b)});
+				}
+			}
+		}
+	}
 	return state;
+}
+
+RectangleSelectionState rectangle_selection_for_cut(const EditorRuntimeSelectionView& selection,
+                                                    const EditorRuntime& runtime)
+{
+  return runtime.cut_state().scope_captured ? RectangleSelectionState{} :
+                                             rectangle_selection_for_cut(selection);
 }
 
 bool cut_runtime_status_changed(const EditorRuntimeStatus& before, const EditorRuntimeStatus& after)
@@ -372,8 +419,11 @@ CommandResult cancel_insert_edge_loop(EditorRuntime& runtime)
 
 CommandResult activate_cut(const EditorRuntimeSelectionView& selection, EditorRuntime& runtime)
 {
-	if (!has_object_selection_for_drawn_plane_tool(selection)) {
+	if (!has_selection_for_cut(selection, runtime)) {
 		return missing_cut_selection_result();
+	}
+	if (runtime.active_tool() == ViewportInteractionTool::Cut && runtime.cut_state().scope_captured) {
+		return {true, false, {}};
 	}
 
 	const EditorRuntimeStatus before = runtime.status();
@@ -388,7 +438,7 @@ CommandResult activate_cut(const EditorRuntimeSelectionView& selection, EditorRu
 	runtime.clear_gizmo_hover();
 	runtime.clear_transform_drag_state();
 	const CutToolResult refresh =
-		runtime.refresh_cut_preview_from_selection(rectangle_selection_for_cut(selection), selection.objects());
+		runtime.refresh_cut_preview_from_selection(rectangle_selection_for_cut(selection, runtime), selection.objects());
 	if (!refresh.ok) {
 		return { false, false, refresh.message.empty() ? "Could not activate cut." : refresh.message };
 	}
@@ -404,7 +454,7 @@ CommandResult activate_cut(const EditorRuntimeSelectionView& selection, EditorRu
 
 CommandResult update_cut_preview(const EditorRuntimeSelectionView& selection, EditorRuntime& runtime)
 {
-	if (!has_object_selection_for_drawn_plane_tool(selection)) {
+	if (!has_selection_for_cut(selection, runtime)) {
 		return missing_cut_selection_result();
 	}
 
@@ -416,7 +466,7 @@ CommandResult update_cut_preview(const EditorRuntimeSelectionView& selection, Ed
 	runtime.reset_mirror_state();
 	runtime.reset_poly_state();
 	const CutToolResult refresh =
-		runtime.refresh_cut_preview_from_selection(rectangle_selection_for_cut(selection), selection.objects());
+		runtime.refresh_cut_preview_from_selection(rectangle_selection_for_cut(selection, runtime), selection.objects());
 	if (!refresh.ok) {
 		return { false, false, refresh.message.empty() ? "Could not update cut preview." : refresh.message };
 	}
@@ -432,8 +482,13 @@ CommandResult update_cut_preview(const EditorRuntimeSelectionView& selection, Ed
 
 CommandResult set_cut_mode(const EditorRuntimeSelectionView& selection, EditorRuntime& runtime, SetCutModeRuntimeCommandSettings settings)
 {
-	if (!has_object_selection_for_drawn_plane_tool(selection)) {
+	if (!has_selection_for_cut(selection, runtime)) {
 		return missing_cut_selection_result();
+	}
+	if ((runtime.cut_state().scope_captured ? runtime.cut_state().scope == CutScope::Edge :
+	     selection.selection_mode() == SelectionMode::Edge) &&
+	    cut_mode_from_id(settings.mode) != CutMode::KeepBoth) {
+		return {false, false, "Edge Cut only inserts crossing vertices."};
 	}
 
 	const EditorRuntimeStatus before = runtime.status();
@@ -443,7 +498,7 @@ CommandResult set_cut_mode(const EditorRuntimeSelectionView& selection, EditorRu
 	runtime.reset_mirror_state();
 	const CutToolResult mode_result = runtime.set_cut_mode(cut_mode_from_id(settings.mode));
 	const CutToolResult refresh =
-		runtime.refresh_cut_preview_from_selection(rectangle_selection_for_cut(selection), selection.objects());
+		runtime.refresh_cut_preview_from_selection(rectangle_selection_for_cut(selection, runtime), selection.objects());
 	if (!mode_result.ok) {
 		return { false, false, mode_result.message.empty() ? "Could not set cut mode." : mode_result.message };
 	}
@@ -477,13 +532,22 @@ CommandResult cancel_cut(const EditorRuntimeSelectionView& selection, EditorRunt
 		"" };
 }
 
-CutRayUpdateInput cut_ray_input(CutRayRuntimeCommandSettings settings)
+CutRayUpdateInput cut_ray_input(const EditorRuntimeSelectionView& selection,
+                               const EditorRuntime& runtime,
+                               CutRayRuntimeCommandSettings settings)
 {
+	if (!settings.surface_hit_resolved && runtime.cut_state().points.empty()) {
+		settings.resolved_surface_hit = resolved_or_runtime_surface_hit(
+			selection, settings.ray, {}, false);
+		settings.surface_hit_resolved = true;
+	}
 	return {
 		settings.camera,
 		settings.ray,
 		settings.grid_size,
 		settings.dragging,
+		settings.resolved_surface_hit,
+		settings.surface_hit_resolved,
 	};
 }
 
@@ -508,7 +572,7 @@ CommandResult update_cut_hover(
 		EditorRuntime& runtime,
 		CutRayRuntimeCommandSettings settings)
 {
-	if (!has_object_selection_for_drawn_plane_tool(selection)) {
+	if (!has_selection_for_cut(selection, runtime)) {
 		return missing_cut_selection_result();
 	}
 
@@ -520,9 +584,9 @@ CommandResult update_cut_hover(
         }
 	const CutToolResult result =
 		runtime.update_cut_hover_from_ray(
-			rectangle_selection_for_cut(selection),
+			rectangle_selection_for_cut(selection, runtime),
 			selection.objects(),
-			cut_ray_input(settings));
+			cut_ray_input(selection, runtime, settings));
 	if (!result.ok) {
 		return { false, false, result.message.empty() ? "Cut hover was rejected." : result.message };
 	}
@@ -541,7 +605,7 @@ CommandResult click_cut(
 		EditorRuntime& runtime,
 		CutRayRuntimeCommandSettings settings)
 {
-	if (!has_object_selection_for_drawn_plane_tool(selection)) {
+	if (!has_selection_for_cut(selection, runtime)) {
 		return missing_cut_selection_result();
 	}
 
@@ -551,11 +615,11 @@ CommandResult click_cut(
           return blocked_tool_activation_result(activation,
                                                 ViewportInteractionTool::Cut);
         }
-	CutRayUpdateInput input = cut_ray_input(settings);
+	CutRayUpdateInput input = cut_ray_input(selection, runtime, settings);
 	input.dragging = false;
 	const CutToolResult result =
 		runtime.click_cut_from_ray(
-			rectangle_selection_for_cut(selection),
+			rectangle_selection_for_cut(selection, runtime),
 			selection.objects(),
 			input);
 	if (!result.ok) {
@@ -576,7 +640,7 @@ CommandResult begin_cut_point_drag(
 		EditorRuntime& runtime,
 		CutPointDragRuntimeCommandSettings settings)
 {
-	if (!has_object_selection_for_drawn_plane_tool(selection)) {
+	if (!has_selection_for_cut(selection, runtime)) {
 		return missing_cut_selection_result();
 	}
 
@@ -590,7 +654,7 @@ CommandResult begin_cut_point_drag(
 	if (!result.ok) {
 		return { false, false, result.message.empty() ? "Cut point drag was rejected." : result.message };
 	}
-	(void)runtime.refresh_cut_preview_from_selection(rectangle_selection_for_cut(selection), selection.objects());
+	(void)runtime.refresh_cut_preview_from_selection(rectangle_selection_for_cut(selection, runtime), selection.objects());
 	const EditorRuntimeStatus after = runtime.status();
 	return {
 		true,
@@ -606,7 +670,7 @@ CommandResult begin_cut_line_drag(
 		EditorRuntime& runtime,
 		CutRayRuntimeCommandSettings settings)
 {
-	if (!has_object_selection_for_drawn_plane_tool(selection)) {
+	if (!has_selection_for_cut(selection, runtime)) {
 		return missing_cut_selection_result();
 	}
 
@@ -616,13 +680,13 @@ CommandResult begin_cut_line_drag(
           return blocked_tool_activation_result(activation,
                                                 ViewportInteractionTool::Cut);
         }
-	CutRayUpdateInput input = cut_ray_input(settings);
+	CutRayUpdateInput input = cut_ray_input(selection, runtime, settings);
 	input.dragging = true;
 	const CutToolResult result = runtime.begin_cut_line_drag(input);
 	if (!result.ok) {
 		return { false, false, result.message.empty() ? "Cut line drag was rejected." : result.message };
 	}
-	(void)runtime.refresh_cut_preview_from_selection(rectangle_selection_for_cut(selection), selection.objects());
+	(void)runtime.refresh_cut_preview_from_selection(rectangle_selection_for_cut(selection, runtime), selection.objects());
 	const EditorRuntimeStatus after = runtime.status();
 	return {
 		true,
@@ -635,7 +699,7 @@ CommandResult begin_cut_line_drag(
 
 CommandResult end_cut_drag(const EditorRuntimeSelectionView& selection, EditorRuntime& runtime)
 {
-	if (!has_object_selection_for_drawn_plane_tool(selection)) {
+	if (!has_selection_for_cut(selection, runtime)) {
 		return missing_cut_selection_result();
 	}
 
@@ -648,7 +712,7 @@ CommandResult end_cut_drag(const EditorRuntimeSelectionView& selection, EditorRu
         }
 	runtime.reset_poly_state();
 	const CutToolResult result = runtime.end_cut_drag();
-	(void)runtime.refresh_cut_preview_from_selection(rectangle_selection_for_cut(selection), selection.objects());
+	(void)runtime.refresh_cut_preview_from_selection(rectangle_selection_for_cut(selection, runtime), selection.objects());
 	const EditorRuntimeStatus after = runtime.status();
 	return {
 		result.ok,

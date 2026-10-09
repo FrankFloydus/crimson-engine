@@ -337,15 +337,6 @@ struct InsetOptions {
 };
 
 /**
- * Selects which side of a cut operation remains.
- */
-enum class CutKeepMode {
-  DiscardLeft,
-  DiscardRight,
-  KeepBoth,
-};
-
-/**
  * Configures the host-neutral knife tool.
  */
 struct KnifeToolOptions {};

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <set>
 #include <utility>
@@ -234,7 +235,323 @@ Document two_cube_document()
 	return first;
 }
 
+std::vector<ElementId> center_x_crossing_faces(const Document& document)
+{
+    std::vector<ElementId> faces;
+    for (const Face& face : document.faces) {
+        bool front = false;
+        bool back = false;
+        for (const ElementId vertex_id : face.vertices) {
+            const auto* vertex = quader_poly::find_vertex(document, vertex_id);
+            front = front || vertex->position.x > 0.0F;
+            back = back || vertex->position.x < 0.0F;
+        }
+        if (front && back) {
+            faces.push_back(face.id);
+        }
+    }
+    return faces;
+}
+
+std::vector<quader_poly::Edge> center_x_crossing_edges(const Document& document)
+{
+    std::vector<quader_poly::Edge> edges;
+    for (const auto edge : quader_poly::document_edges(document)) {
+        if (quader_poly::find_vertex(document, edge.a)->position.x *
+                quader_poly::find_vertex(document, edge.b)->position.x < 0.0F) {
+            edges.push_back(edge);
+        }
+    }
+    return edges;
+}
+
+void author_distinct_face_charts(Document& document)
+{
+    for (Face& face : document.faces) {
+        face.material_slot = face.id;
+        face.normal_shading = quader_poly::SurfaceShading::Smooth;
+        face.texture_transform.rotation_degrees = 17.0F;
+        face.uvs.clear();
+        for (const ElementId vertex_id : face.vertices) {
+            const auto position = quader_poly::find_vertex(document, vertex_id)->position;
+            face.uvs.push_back({position.x + static_cast<float>(face.id) * 10.0F,
+                               position.y + position.z * 2.0F});
+        }
+    }
+}
+
+void expect_preserved_face_chart(const Document& document, const Face& face,
+                                 const Face& source)
+{
+    EXPECT_EQ(face.material_slot, source.material_slot);
+    EXPECT_EQ(face.normal_shading, source.normal_shading);
+    EXPECT_FLOAT_EQ(face.texture_transform.rotation_degrees,
+                    source.texture_transform.rotation_degrees);
+    ASSERT_EQ(face.uvs.size(), face.vertices.size());
+    for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+        const auto position = quader_poly::find_vertex(document, face.vertices[index])->position;
+        EXPECT_NEAR(face.uvs[index].x,
+                    position.x + static_cast<float>(source.id) * 10.0F, 0.0001F);
+        EXPECT_NEAR(face.uvs[index].y, position.y + position.z * 2.0F, 0.0001F);
+    }
+}
+
 } // namespace
+
+TEST(QdrDocumentOperationPlaneCutTests,
+     SelectedFaceCutPartitionsOnlyItsFaceAndExpandsSharedBoundaries) {
+    Document document = quader_poly::make_cube({});
+    author_distinct_face_charts(document);
+    const Document source = document;
+    const ElementId selected_face = center_x_crossing_faces(document).front();
+    const Face source_face = *quader_poly::find_face(source, selected_face);
+    quader_poly::Selection selection;
+    selection.mode = quader_poly::SelectionMode::Face;
+    selection.faces = {selected_face};
+    selection.has_active = true;
+    selection.active_kind = quader_poly::ElementKind::Face;
+    selection.active_face = selected_face;
+
+    const auto result = quader_poly::plane_cut_selected_faces(
+        document, selection, center_x_cut(PlaneCutMode::KeepBoth));
+
+    ASSERT_TRUE(result.success) << result.message;
+    ASSERT_TRUE(result.changed);
+    qdr_test::expect_valid_polygon_document_after_success(document, result);
+    EXPECT_EQ(document.faces.size(), source.faces.size() + 1U);
+    EXPECT_EQ(document.vertices.size(), source.vertices.size() + 2U);
+    EXPECT_EQ(selection.mode, quader_poly::SelectionMode::Face);
+    EXPECT_EQ(selection.faces.size(), 2U);
+    EXPECT_EQ(selection.active_face, selected_face);
+    EXPECT_EQ(result.created.faces.size(), 1U);
+    check_closed_manifold(document);
+    for (const Face& face : document.faces) {
+        const Face* original = quader_poly::find_face(source, face.id);
+        expect_preserved_face_chart(document, face, original ? *original : source_face);
+        if (original != nullptr && original->id != selected_face) {
+            EXPECT_GE(face.vertices.size(), original->vertices.size());
+            for (const ElementId vertex_id : original->vertices) {
+                EXPECT_NE(std::ranges::find(face.vertices, vertex_id), face.vertices.end());
+            }
+        }
+    }
+}
+
+TEST(QdrDocumentOperationPlaneCutTests,
+     AdjacentSelectedFacesShareOneIntersectionVertex) {
+    Document document = quader_poly::make_cube({});
+    const auto selected_edge = center_x_crossing_edges(document).front();
+    quader_poly::Selection selection;
+    selection.mode = quader_poly::SelectionMode::Face;
+    for (const Face& face : document.faces) {
+        const bool first = std::ranges::find(face.vertices, selected_edge.a) != face.vertices.end();
+        const bool second = std::ranges::find(face.vertices, selected_edge.b) != face.vertices.end();
+        if (first && second) {
+            selection.faces.push_back(face.id);
+        }
+    }
+    ASSERT_EQ(selection.faces.size(), 2U);
+    const auto result = quader_poly::plane_cut_selected_faces(
+        document, selection, center_x_cut(PlaneCutMode::KeepBoth));
+    ASSERT_TRUE(result.success) << result.message;
+    ASSERT_TRUE(result.changed);
+    qdr_test::expect_valid_polygon_document_after_success(document, result);
+    EXPECT_EQ(document.faces.size(), 8U);
+    EXPECT_EQ(document.vertices.size(), 11U);
+    EXPECT_EQ(result.created.vertices.size(), 3U);
+    check_closed_manifold(document);
+}
+
+TEST(QdrDocumentOperationPlaneCutTests,
+     SelectedFaceDiscardKeepsOriginalIdentityAndUnselectedGeometry) {
+    for (const auto mode : {PlaneCutMode::KeepFront, PlaneCutMode::KeepBack}) {
+        Document document = quader_poly::make_cube({});
+        author_distinct_face_charts(document);
+        const Document source = document;
+        const auto selected_face = center_x_crossing_faces(document).front();
+        quader_poly::Selection selection;
+        selection.mode = quader_poly::SelectionMode::Face;
+        selection.faces = {selected_face};
+        const auto result = quader_poly::plane_cut_selected_faces(
+            document, selection, center_x_cut(mode));
+        ASSERT_TRUE(result.success) << result.message;
+        ASSERT_TRUE(result.changed);
+        qdr_test::expect_valid_polygon_document_after_success(document, result);
+        EXPECT_EQ(document.faces.size(), source.faces.size());
+        EXPECT_TRUE(result.created.faces.empty());
+        EXPECT_EQ(selection.faces, std::vector<ElementId>{selected_face});
+        const Face* retained = quader_poly::find_face(document, selected_face);
+        ASSERT_NE(retained, nullptr);
+        for (const ElementId vertex_id : retained->vertices) {
+            const float x = quader_poly::find_vertex(document, vertex_id)->position.x;
+            EXPECT_GE(mode == PlaneCutMode::KeepFront ? x : -x, -0.0001F);
+        }
+        for (const Face& face : source.faces) {
+            ASSERT_NE(quader_poly::find_face(document, face.id), nullptr);
+            if (face.id != selected_face) {
+                const auto& retained_loop = quader_poly::find_face(document, face.id)->vertices;
+                for (const auto vertex_id : face.vertices) {
+                    EXPECT_NE(std::ranges::find(retained_loop, vertex_id), retained_loop.end());
+                }
+            }
+        }
+    }
+}
+
+TEST(QdrDocumentOperationPlaneCutTests,
+     SelectedEdgeCutInsertsOnceAcrossIncidentLoopsWithoutPartitioningFaces) {
+    Document document = quader_poly::make_cube({});
+    author_distinct_face_charts(document);
+    const auto crossing = center_x_crossing_edges(document);
+    const auto selected_edge = crossing.front();
+    document.hard_normal_edges = {selected_edge};
+    document.soft_normal_edges = {crossing.back()};
+    const Document source = document;
+    quader_poly::Selection selection;
+    selection.mode = quader_poly::SelectionMode::Edge;
+    selection.edges = {selected_edge, {selected_edge.b, selected_edge.a}};
+    selection.has_active = true;
+    selection.active_kind = quader_poly::ElementKind::Edge;
+    selection.active_edge = selected_edge;
+    const auto result = quader_poly::plane_cut_selected_edges(
+        document, selection, center_x_cut(PlaneCutMode::KeepBack));
+    ASSERT_TRUE(result.success) << result.message;
+    ASSERT_TRUE(result.changed);
+    qdr_test::expect_valid_polygon_document_after_success(document, result);
+    EXPECT_EQ(document.faces.size(), source.faces.size());
+    EXPECT_EQ(document.vertices.size(), source.vertices.size() + 1U);
+    EXPECT_EQ(result.created.vertices.size(), 1U);
+    EXPECT_TRUE(result.created.faces.empty());
+    EXPECT_EQ(selection.mode, quader_poly::SelectionMode::Edge);
+    EXPECT_EQ(selection.edges.size(), 2U);
+    EXPECT_EQ(document.hard_normal_edges.size(), 2U);
+    EXPECT_EQ(document.soft_normal_edges, source.soft_normal_edges);
+    EXPECT_EQ(result.affected.faces.size(), 2U);
+    check_closed_manifold(document);
+    const auto edges = quader_poly::document_edges(document);
+    for (const auto edge : crossing) {
+        EXPECT_EQ(std::ranges::find(edges, edge) != edges.end(), edge != selected_edge);
+    }
+    for (const Face& face : document.faces) {
+        const Face* original = quader_poly::find_face(source, face.id);
+        ASSERT_NE(original, nullptr);
+        expect_preserved_face_chart(document, face, *original);
+        const bool incident = std::ranges::find(original->vertices, selected_edge.a) != original->vertices.end() &&
+                              std::ranges::find(original->vertices, selected_edge.b) != original->vertices.end();
+        EXPECT_EQ(face.vertices.size(), original->vertices.size() + (incident ? 1U : 0U));
+    }
+}
+
+TEST(QdrDocumentOperationPlaneCutTests,
+     ScopedCutsPreserveNoOpsAndRejectStaleSelectionsAtomically) {
+    const auto source = quader_poly::make_cube({});
+    for (const bool faces : {false, true}) {
+        Document document = source;
+        quader_poly::Selection selection;
+        selection.mode = faces ? quader_poly::SelectionMode::Face : quader_poly::SelectionMode::Edge;
+        selection.faces = {center_x_crossing_faces(source).front()};
+        selection.edges = {center_x_crossing_edges(source).front()};
+        const auto operate = [&](const PlaneCutRequest& request) {
+            return faces ? quader_poly::plane_cut_selected_faces(document, selection, request)
+                         : quader_poly::plane_cut_selected_edges(document, selection, request);
+        };
+        auto missed = center_x_cut(PlaneCutMode::KeepBoth);
+        missed.first_point.x = missed.second_point.x = missed.third_point.x = 4.0F;
+        const auto no_op = operate(missed);
+        EXPECT_TRUE(no_op.success);
+        EXPECT_FALSE(no_op.changed);
+        EXPECT_EQ(document.next_vertex_id, source.next_vertex_id);
+        EXPECT_EQ(document.next_face_id, source.next_face_id);
+        EXPECT_EQ(edge_set(document), edge_set(source));
+
+        auto invalid = center_x_cut(PlaneCutMode::KeepBoth);
+        invalid.first_point.x = std::numeric_limits<float>::quiet_NaN();
+        EXPECT_FALSE(operate(invalid).success);
+        selection.faces.push_back(99999U);
+        selection.edges.push_back({99998U, 99999U});
+        EXPECT_FALSE(operate(center_x_cut(PlaneCutMode::KeepBoth)).success);
+        EXPECT_EQ(document.next_vertex_id, source.next_vertex_id);
+        EXPECT_EQ(document.next_face_id, source.next_face_id);
+        EXPECT_EQ(edge_set(document), edge_set(source));
+    }
+}
+
+TEST(QdrDocumentOperationPlaneCutTests,
+     ScopedCutsIgnoreEndpointAndCoplanarContactsWithoutConsumingIds) {
+    const Document source = quader_poly::make_cube({});
+    for (const bool faces : {false, true}) {
+        Document document = source;
+        quader_poly::Selection selection;
+        selection.mode = faces ? quader_poly::SelectionMode::Face : quader_poly::SelectionMode::Edge;
+        for (const Face& face : source.faces) {
+            selection.faces.push_back(face.id);
+        }
+        selection.edges = quader_poly::document_edges(source);
+        auto request = center_x_cut(PlaneCutMode::KeepBoth);
+        request.first_point.x = request.second_point.x = request.third_point.x = 1.0F;
+        const auto result = faces
+                                ? quader_poly::plane_cut_selected_faces(document, selection, request)
+                                : quader_poly::plane_cut_selected_edges(document, selection, request);
+        EXPECT_TRUE(result.success) << result.message;
+        EXPECT_FALSE(result.changed);
+        EXPECT_EQ(document.next_face_id, source.next_face_id);
+        EXPECT_EQ(document.next_vertex_id, source.next_vertex_id);
+        EXPECT_EQ(edge_set(document), edge_set(source));
+    }
+}
+
+TEST(QdrDocumentOperationPlaneCutTests,
+     SelectedFaceCutRejectsMultipleIntersectionIntervalsAtomically) {
+    Document document;
+    const std::vector<QVec3> positions{
+        {-3.0F, -3.0F, 0.0F}, {3.0F, -3.0F, 0.0F},
+        {3.0F, 3.0F, 0.0F}, {1.0F, 3.0F, 0.0F},
+        {1.0F, -1.0F, 0.0F}, {-1.0F, -1.0F, 0.0F},
+        {-1.0F, 3.0F, 0.0F}, {-3.0F, 3.0F, 0.0F}};
+    Face face;
+    face.id = document.next_face_id++;
+    for (const auto position : positions) {
+        const auto id = document.next_vertex_id++;
+        document.vertices.push_back({id, position});
+        face.vertices.push_back(id);
+    }
+    document.faces.push_back(face);
+    const auto source = document;
+    quader_poly::Selection selection;
+    selection.mode = quader_poly::SelectionMode::Face;
+    selection.faces = {face.id};
+    const auto result = quader_poly::plane_cut_selected_faces(
+        document, selection,
+        {{-4.0F, 0.0F, 0.0F}, {4.0F, 0.0F, 0.0F}, {0.0F, 0.0F, 1.0F}});
+    EXPECT_FALSE(result.success);
+    EXPECT_FALSE(result.changed);
+    EXPECT_EQ(document.next_vertex_id, source.next_vertex_id);
+    EXPECT_EQ(document.next_face_id, source.next_face_id);
+    EXPECT_EQ(document.faces.front().vertices, source.faces.front().vertices);
+    EXPECT_EQ(document.vertices.size(), source.vertices.size());
+    EXPECT_EQ(selection.faces, std::vector<ElementId>{face.id});
+}
+
+TEST(QdrDocumentOperationPlaneCutTests,
+     SelectedFaceDiscardPreservesUnrelatedLooseVertices) {
+    Document document = quader_poly::make_cube({});
+    const ElementId loose_vertex = document.next_vertex_id++;
+    document.vertices.push_back({loose_vertex, {12.0F, 13.0F, 14.0F}});
+    quader_poly::Selection selection;
+    selection.mode = quader_poly::SelectionMode::Face;
+    for (const Face& face : document.faces) {
+        selection.faces.push_back(face.id);
+    }
+    auto request = center_x_cut(PlaneCutMode::KeepFront);
+    request.first_point.x = request.second_point.x = request.third_point.x = 4.0F;
+    const auto result = quader_poly::plane_cut_selected_faces(document, selection, request);
+    ASSERT_TRUE(result.success) << result.message;
+    EXPECT_TRUE(result.changed);
+    EXPECT_TRUE(document.faces.empty());
+    ASSERT_EQ(document.vertices.size(), 1U);
+    EXPECT_EQ(document.vertices.front().id, loose_vertex);
+    EXPECT_TRUE(selection.faces.empty());
+}
 
 TEST(QdrDocumentOperationPlaneCutTests, PlaneCutSplitsACubeAndKeepsBothClosedHalves) {
 	Document document = quader_poly::make_cube({});

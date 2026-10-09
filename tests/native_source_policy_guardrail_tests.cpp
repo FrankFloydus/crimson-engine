@@ -405,9 +405,6 @@ TEST(ModelingSessionServiceTests,
             std::string::npos);
   EXPECT_NE(split_source.find("DrawnPlaneOverlayProjection::append("),
             std::string::npos);
-  EXPECT_NE(
-      split_source.find("CutPreviewOverlayProjection::append_result_lines("),
-      std::string::npos);
   EXPECT_EQ(
       split_source.find("ToolPreviewMeshProjection::mirror_preview_meshes("),
       std::string::npos);

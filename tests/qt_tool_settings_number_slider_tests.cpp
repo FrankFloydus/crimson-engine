@@ -6128,6 +6128,130 @@ TEST(QtFaceTextureControlsTests,
 }
 
 TEST(QtToolSettingsPanelTests,
+     CutKeepChoicesFollowSelectionContextAcrossScaleAndContrastChanges) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char executable[] = "quader-cut-keep-settings-tests";
+  char *argv[] = {executable, nullptr};
+  QApplication application(argc, argv);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  const auto native_palette = QApplication::palette();
+  quader::apply_qt_obsidian_application_theme(native_palette);
+  quader::QtUiScaleApplicationController scale_controller(application);
+  quader::LocalizationService localization;
+  ASSERT_TRUE(localization.load(
+      std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales", "en-US"));
+  const QString directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (!directory.isEmpty()) ASSERT_TRUE(QDir().mkpath(directory));
+
+  auto standalone = quader::create_standalone_editor();
+  auto &editor = standalone.editor();
+  const auto object = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Cut settings selection context");
+  ASSERT_TRUE(object.ok());
+  ASSERT_TRUE(editor.selection().select_object(object.value()).ok());
+  quader::QtToolSettingsPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen, true);
+  panel.bind(editor);
+  panel.show();
+  struct CaptureLayout final {
+    float scale;
+    int width;
+    const char *name;
+  };
+  constexpr std::array<CaptureLayout, 4> kLayouts{{
+      {1.0f, 360, "100"}, {2.0f, 360, "200"},
+      {1.0f, 240, "100-narrow"}, {1.0f, 360, "scale-down"}}};
+  for (const auto &[mode, mode_name] :
+       std::array<std::pair<quader::QuaderSelectionMode, const char *>, 3>{{
+           {quader::QuaderSelectionMode::Object, "object"},
+           {quader::QuaderSelectionMode::Face, "face"},
+           {quader::QuaderSelectionMode::Edge, "edge"}}}) {
+    SCOPED_TRACE(mode_name);
+    if (mode != quader::QuaderSelectionMode::Object) {
+      ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+      ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+      if (mode == quader::QuaderSelectionMode::Face) {
+        ASSERT_TRUE(editor.selection().select_face(object.value(), 1).ok());
+      }
+    }
+    ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Cut).ok());
+    panel.refresh();
+    auto *discard_left = panel.findChild<QRadioButton *>(QStringLiteral(
+        "tool_settings.control.operation.cut.keep_mode.option.discard_left"));
+    auto *keep_both = panel.findChild<QRadioButton *>(QStringLiteral(
+        "tool_settings.control.operation.cut.keep_mode.option.keep_both"));
+    ASSERT_NE(discard_left, nullptr);
+    ASSERT_NE(keep_both, nullptr);
+    if (mode != quader::QuaderSelectionMode::Edge) {
+      discard_left->click();
+      process_events_for(20);
+      panel.refresh();
+      EXPECT_EQ(editor.tools().active_settings().controls.front().choice_value,
+                std::to_string(static_cast<int>(quader::ModelingCutMode::DiscardLeft)));
+      keep_both->click();
+      process_events_for(20);
+      panel.refresh();
+      EXPECT_TRUE(keep_both->isChecked());
+    } else {
+      const auto before = editor.tools().active_settings().controls.front().choice_value;
+      discard_left->click();
+      panel.refresh();
+      EXPECT_EQ(editor.tools().active_settings().controls.front().choice_value, before);
+    }
+    for (const char *locale : {"en-US", "it-IT"}) {
+      ASSERT_TRUE(localization.select_locale(locale));
+      panel.set_localization(localization);
+      panel.refresh();
+      for (const bool high_contrast : {false, true}) {
+        quader::apply_qt_application_theme_for_contrast_preference(
+            native_palette, high_contrast ? Qt::ContrastPreference::HighContrast
+                                          : Qt::ContrastPreference::NoPreference);
+        for (const auto &layout : kLayouts) {
+          SCOPED_TRACE(locale);
+          SCOPED_TRACE(layout.name);
+          SCOPED_TRACE(high_contrast);
+          scale_controller.apply_factor(layout.scale);
+          panel.apply_ui_scale(scale_controller.metrics());
+          panel.refresh();
+          process_events_for(20);
+          panel.resize(std::max(scale_controller.metrics().px(layout.width),
+                                 panel.minimumSizeHint().width()),
+                       panel.sizeHint().height());
+          process_events_for(20);
+          for (const char *option : {"discard_left", "discard_right", "keep_both"}) {
+            const auto option_name =
+                QStringLiteral("tool_settings.control.operation.cut.keep_mode.option.%1")
+                    .arg(QString::fromLatin1(option));
+            auto *radio = panel.findChild<QRadioButton *>(option_name);
+            ASSERT_NE(radio, nullptr);
+            EXPECT_TRUE(radio->isVisible());
+            EXPECT_EQ(radio->isEnabled(), mode != quader::QuaderSelectionMode::Edge);
+            EXPECT_TRUE(radio->parentWidget()->rect().contains(radio->geometry()));
+            EXPECT_GE(radio->width(), radio->minimumSizeHint().width());
+            EXPECT_GE(radio->height(), radio->minimumSizeHint().height());
+            EXPECT_TRUE(panel.rect().contains(
+                QRect(radio->mapTo(&panel, QPoint{}), radio->size())));
+          }
+          if (!directory.isEmpty()) {
+            QImage image(panel.size(), QImage::Format_ARGB32_Premultiplied);
+            image.fill(Qt::transparent);
+            panel.render(&image);
+            EXPECT_TRUE(image.save(QDir(directory).filePath(
+                QStringLiteral("cut-settings-%1-%2-%3-%4.png")
+                    .arg(QString::fromLatin1(mode_name), QString::fromLatin1(locale),
+                         high_contrast ? QStringLiteral("high-contrast") : QStringLiteral("dark"),
+                         QString::fromLatin1(layout.name)))));
+          }
+        }
+      }
+    }
+  }
+  panel.unbind();
+}
+
+TEST(QtToolSettingsPanelTests,
      EveryControlUsesAlignedLabelAndFieldRowsAcrossLocalesAndScales) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;

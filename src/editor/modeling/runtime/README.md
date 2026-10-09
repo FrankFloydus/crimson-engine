@@ -57,6 +57,16 @@ retained overlays, when reporting viewport performance.
 Regression examples: [submitted extrusion wires](../../../../tests/selected_mesh_outline_presentation_tests.cpp)
 and [Vulkan outline pixels](../../../../tests/selection_overlay_runtime_tests.cpp).
 
+Cut captures its Object, Face or Edge targets before plane placement. Its first surface hit
+sets the support plane used by subsequent endpoint and line drags. The SDK projection adapter
+prepares candidates from committed documents and retains the accepted result for surfaces,
+picking and commit. Candidate revisions also invalidate selection topology and depth geometry.
+Face scope clips only captured regions without caps; Edge scope inserts intersection vertices
+without splitting face interiors or applying discard settings. Cancellation retires the candidate
+and restores the captured face highlights without changing selection. See the
+[scoped operation tests](../../../../tests/modeling_domain/operation/qdr_document_operation_plane_cut_tests.cpp)
+and [retained submission tests](../../../../tests/tool_preview_submission_tests.cpp).
+
 Ordinary component transforms retain SDK topology and publish immutable coordinate snapshots.
 The native projection prepares authored-to-compiled mappings once, then publishes
 `MeshGeometryProjection` position, attribute and index streams. When that pin is present,

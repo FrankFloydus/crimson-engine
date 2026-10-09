@@ -387,6 +387,21 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(
                 ? preview_mesh.visibility_entity
                 : preview_visibility_entity(project,
                                             preview_mesh.source_entity);
+        if (preview_mesh.suppress_source_only) {
+          if (preview_mesh.source_entity != kInvalidEntityId &&
+              local_visibility.allows(visibility_entity)) {
+            if (visibility_entity == preview_mesh.source_entity) {
+              neutral_preview.suppressed_entities.push_back(
+                  preview_mesh.source_entity);
+            } else {
+              neutral_preview.occurrence_suppressions.push_back({
+                  .source_entity = preview_mesh.source_entity,
+                  .occurrence = visibility_entity,
+              });
+            }
+          }
+          continue;
+        }
         const QMat4 mapping = effective_texture_sampling_from_local(
             session.scene, preview_mesh.source_entity,
             visibility_entity == preview_mesh.source_entity
@@ -455,11 +470,32 @@ QuaderRenderApiRuntimeAccess::sync_tool_previews(
           std::make_shared<const RenderToolPreviewSceneSnapshot>(preview_snapshot);
     }
   }
+  // Only a mesh-only observer needs this compatibility check. The production
+  // scene publisher always carries suppression atomically with its candidate.
+  const bool explicit_preview_suppression = publish && !publish_scene &&
+      (std::ranges::any_of(
+      preview_snapshot.suppression.entities, [&](EntityId entity) {
+        return std::ranges::none_of(preview_snapshot.meshes,
+            [&](const RenderToolPreviewMeshRecord &mesh) {
+              return mesh.suppress_source && mesh.source_entity == entity &&
+                  (mesh.visibility_entity == kInvalidEntityId ||
+                   mesh.visibility_entity == entity);
+            });
+      }) || std::ranges::any_of(preview_snapshot.suppression.occurrences,
+          [&](const RenderInstancePreviewSuppression &occurrence) {
+            return std::ranges::none_of(preview_snapshot.meshes,
+                [&](const RenderToolPreviewMeshRecord &mesh) {
+                  return mesh.suppress_source &&
+                      mesh.source_entity == occurrence.source_entity &&
+                      mesh.visibility_entity == occurrence.occurrence;
+                });
+          }));
   const bool compound_publication_required =
       native_array_kind == 3u || !preview_snapshot.curves.empty() ||
       !preview_snapshot.lights.empty() ||
       !preview_snapshot.group_markers.empty() ||
-      !preview_snapshot.accepted_overlay_coordinates.empty();
+      !preview_snapshot.accepted_overlay_coordinates.empty() ||
+      explicit_preview_suppression;
   ToolPreviewSubmissionResult preview_result;
   if (!preview_snapshot.complete) {
     preview_result = ToolPreviewSubmissionResult::Failed;

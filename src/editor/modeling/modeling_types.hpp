@@ -826,6 +826,7 @@ struct ModelingToolStatus {
   bool cut_has_line = false;
   std::array<QVec3, 3> cut_points = {};
   ModelingCutMode cut_mode = ModelingCutMode::KeepBoth;
+  bool cut_keep_mode_enabled = true;
   bool mirror_active = false;
   bool mirror_can_preview = false;
   bool mirror_preview_valid = false;

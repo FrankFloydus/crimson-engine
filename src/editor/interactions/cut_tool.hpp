@@ -10,6 +10,7 @@
 #include <editor/interactions/viewport_projection.hpp>
 
 #include <span>
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -27,6 +28,13 @@ enum class CutMode {
   KeepBoth = 2,
 };
 
+/** Selection domain fixed for the lifetime of a Cut operation. */
+enum class CutScope {
+  Object,
+  Face,
+  Edge,
+};
+
 /**
  * Represents a Cut Preview Counts value used by the modal modeling interaction layer.
  */
@@ -42,8 +50,16 @@ struct CutPreviewCounts {
 struct CutToolState {
 	std::vector<quader::QVec3> points;
 	std::vector<int> target_object_ids;
+	CutScope scope = CutScope::Object;
+	bool scope_captured = false;
+	std::vector<RectangleSelectionFace> target_faces;
+	std::vector<RectangleSelectionEdge> target_edges;
+	std::vector<int> target_edge_full_object_ids;
+	std::uint64_t editor_mode_generation = 0;
 	int source_object_id = -1;
 	quader::QVec3 face_normal;
+	quader::QVec3 support_plane_origin;
+	bool support_plane_valid = false;
         CutMode mode = CutMode::KeepBoth;
         int dragging_point_index = -1;
 	bool dragging_new_point = false;
@@ -109,6 +125,8 @@ struct CutRayUpdateInput {
 	quader_poly::Ray ray;
 	double grid_size = 1.0;
 	bool dragging = false;
+	std::optional<PickHitRecord> resolved_surface_hit;
+	bool surface_hit_resolved = false;
 };
 
 CutMode cut_mode_from_id(int id);

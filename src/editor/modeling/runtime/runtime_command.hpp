@@ -114,6 +114,8 @@ struct CutRayRuntimeCommandSettings {
 	quader_poly::Ray ray;
 	double grid_size = 1.0;
 	bool dragging = false;
+	std::optional<PickHitRecord> resolved_surface_hit;
+	bool surface_hit_resolved = false;
 };
 
 /**

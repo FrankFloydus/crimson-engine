@@ -226,6 +226,195 @@ TEST(ToolPreviewSubmissionTests,
 }
 
 TEST(ToolPreviewSubmissionTests,
+     CutPreviewReplacesSourcesThroughRetainedPublicationAndHistory) {
+  RenderPreviewTestHarness harness;
+  auto &editor = harness.editor;
+  auto &modeling = harness.session.modeling();
+  const auto source = create_selected_box(editor, "Retained Cut Source");
+  const auto material = editor.assets().add_material(quader::QuaderMaterialAsset{
+      .name = "Cut Preview Material", .base_color = {0.2f, 0.4f, 0.8f}});
+  ASSERT_TRUE(material.ok());
+  ASSERT_TRUE(editor.assets().assign_material_to_entity(
+      source.entity, material.value().id).ok());
+  harness.session.history().clear();
+  const auto committed_bounds = quader::entity_world_bounds(
+      harness.session.scene(), harness.session.assets(), source.entity);
+  ASSERT_TRUE(committed_bounds.has_value());
+
+  const auto cut_event = [](float x, float z, bool dragging = false) {
+    auto event = mirror_plane_event(x, z, dragging);
+    event.grid_size = 0.25;
+    return event;
+  };
+  ASSERT_TRUE(harness.sync().ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Cut).ok());
+  ASSERT_TRUE(modeling.click_cut(cut_event(-0.5f, 0.0f)).ok);
+  ASSERT_TRUE(harness.sync().ok());
+  EXPECT_TRUE(harness.published.empty());
+  ASSERT_TRUE(modeling.update_cut_hover(cut_event(0.5f, 0.0f, true)).ok);
+  ASSERT_TRUE(modeling.end_cut_drag().ok);
+  ASSERT_TRUE(harness.sync().ok());
+  ASSERT_EQ(harness.published.size(), 2u);
+  for (const auto &preview : harness.published) {
+    EXPECT_TRUE(preview.renderable());
+    EXPECT_TRUE(preview.suppress_source);
+    EXPECT_EQ(preview.source_entity, source.entity);
+    EXPECT_EQ(preview.source_object_id, source.modeling_object_id);
+    EXPECT_EQ(preview.material_id, material.value().id);
+    const auto bounds = preview_world_bounds(preview);
+    EXPECT_NEAR(bounds.max.z - bounds.min.z, 1.0f, kTestPositionEpsilon);
+  }
+  const auto content_revision = modeling.content_revision();
+  const auto asset_revision = harness.session.assets().revision();
+  const auto scene_revision = harness.session.scene().revision();
+
+  float plane_z = 0.0f;
+  for (const float offset : {0.25f, 0.5f, -0.25f}) {
+    ASSERT_TRUE(modeling.begin_cut_line_drag(cut_event(0.0f, plane_z)).ok);
+    plane_z += offset;
+    ASSERT_TRUE(modeling.update_cut_hover(cut_event(0.0f, plane_z, true)).ok);
+    ASSERT_TRUE(modeling.end_cut_drag().ok);
+    ASSERT_TRUE(harness.sync().ok());
+    ASSERT_EQ(harness.published.size(), 2u);
+    const auto first_bounds = preview_world_bounds(harness.published.front());
+    const auto second_bounds = preview_world_bounds(harness.published.back());
+    EXPECT_NEAR(std::max(first_bounds.min.z, second_bounds.min.z),
+                plane_z, kTestPositionEpsilon);
+    EXPECT_NEAR(std::min(first_bounds.max.z, second_bounds.max.z),
+                plane_z, kTestPositionEpsilon);
+    EXPECT_NE(first_bounds.min.z, second_bounds.min.z);
+    EXPECT_NE(first_bounds.max.z, second_bounds.max.z);
+    EXPECT_EQ(modeling.content_revision(), content_revision);
+    EXPECT_EQ(harness.session.assets().revision(), asset_revision);
+    EXPECT_EQ(harness.session.scene().revision(), scene_revision);
+    EXPECT_EQ(harness.session.history().undo_count(), 0u);
+    const auto both_selection_bounds = modeling.selection_bounds();
+    ASSERT_TRUE(both_selection_bounds.has_value());
+    expect_bounds_near(*both_selection_bounds, *committed_bounds);
+    ASSERT_TRUE(modeling.set_cut_mode(quader::ModelingCutMode::DiscardLeft).ok);
+    ASSERT_TRUE(harness.sync().ok());
+    ASSERT_EQ(harness.published.size(), 1u);
+    const auto kept_selection_bounds = modeling.selection_bounds();
+    ASSERT_TRUE(kept_selection_bounds.has_value());
+    expect_bounds_near(*kept_selection_bounds,
+                      preview_world_bounds(harness.published.front()));
+    ASSERT_TRUE(modeling.set_cut_mode(quader::ModelingCutMode::KeepBoth).ok);
+    ASSERT_TRUE(harness.sync().ok());
+    ASSERT_EQ(harness.published.size(), 2u);
+    const auto attempts = harness.publication_attempts;
+    const auto work = modeling.tool_preview_work_stats();
+    const auto compiles =
+        modeling.modeling_sdk_projection_stats_for_tests().mesh_compile_count;
+    for (int frame = 0; frame < 8; ++frame) {
+      ASSERT_TRUE(modeling.update_cut_hover(cut_event(4.0f + frame, 8.0f)).ok);
+      ASSERT_TRUE(harness.sync().ok());
+    }
+    EXPECT_EQ(harness.publication_attempts, attempts);
+    EXPECT_EQ(modeling.tool_preview_work_stats().mesh_extraction_count,
+              work.mesh_extraction_count);
+    EXPECT_EQ(modeling.modeling_sdk_projection_stats_for_tests().mesh_compile_count,
+              compiles);
+  }
+
+  ASSERT_TRUE(modeling.set_cut_mode(quader::ModelingCutMode::DiscardLeft).ok);
+  ASSERT_TRUE(harness.sync().ok());
+  ASSERT_EQ(harness.published.size(), 1u);
+  const auto accepted_bounds = preview_world_bounds(harness.published.front());
+  const auto accepted_selection_bounds = modeling.selection_bounds();
+  ASSERT_TRUE(accepted_selection_bounds.has_value());
+  expect_bounds_near(*accepted_selection_bounds, accepted_bounds);
+  ASSERT_TRUE(modeling.set_cut_mode(quader::ModelingCutMode::DiscardRight).ok);
+  harness.reject_next_publication = true;
+  EXPECT_FALSE(harness.sync().ok());
+  ASSERT_EQ(harness.published.size(), 1u);
+  expect_bounds_near(preview_world_bounds(harness.published.front()), accepted_bounds);
+  const auto rejected_attempts = harness.publication_attempts;
+  EXPECT_FALSE(harness.sync().ok());
+  EXPECT_EQ(harness.publication_attempts, rejected_attempts);
+  ASSERT_TRUE(editor.tools().cancel_modal_tool().ok());
+  ASSERT_TRUE(harness.sync().ok());
+  EXPECT_TRUE(harness.published.empty());
+  EXPECT_EQ(harness.session.history().undo_count(), 0u);
+  expect_bounds_near(*quader::entity_world_bounds(
+      harness.session.scene(), harness.session.assets(), source.entity),
+      *committed_bounds);
+  const auto canceled_selection_bounds = modeling.selection_bounds();
+  ASSERT_TRUE(canceled_selection_bounds.has_value());
+  expect_bounds_near(*canceled_selection_bounds, *committed_bounds);
+
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Cut).ok());
+  ASSERT_TRUE(modeling.set_cut_mode(quader::ModelingCutMode::KeepBoth).ok);
+  ASSERT_TRUE(modeling.click_cut(cut_event(-0.5f, 0.0f)).ok);
+  ASSERT_TRUE(modeling.update_cut_hover(cut_event(0.5f, 0.0f, true)).ok);
+  ASSERT_TRUE(modeling.end_cut_drag().ok);
+  ASSERT_TRUE(harness.sync().ok());
+  ASSERT_EQ(harness.published.size(), 2u);
+  quader::ViewportModelingToolCommitAdapter port(editor.tools());
+  const auto committed = port.finalize_drawn_plane_tool(quader::ModelingViewportTool::Cut);
+  ASSERT_TRUE(committed.ok) << committed.message;
+  ASSERT_TRUE(harness.sync().ok());
+  EXPECT_TRUE(harness.published.empty());
+  EXPECT_EQ(editor.query().modeling_objects().size(), 2u);
+  EXPECT_EQ(harness.session.history().undo_count(), 1u);
+  ASSERT_TRUE(editor.history().undo().ok());
+  ASSERT_TRUE(harness.sync().ok());
+  EXPECT_TRUE(harness.published.empty());
+  EXPECT_EQ(editor.query().modeling_objects().size(), 1u);
+  ASSERT_TRUE(editor.history().redo().ok());
+  ASSERT_TRUE(harness.sync().ok());
+  EXPECT_EQ(editor.query().modeling_objects().size(), 2u);
+}
+
+TEST(ToolPreviewSubmissionTests,
+     CutCompleteRemovalPublishesExplicitSuppressionWithoutAnEmptyRenderable) {
+  RenderPreviewTestHarness harness;
+  auto &editor = harness.editor;
+  auto &modeling = harness.session.modeling();
+  const auto source = create_selected_box(editor, "Cut Removed Preview Source");
+  const auto original_selection_bounds = modeling.selection_bounds();
+  ASSERT_TRUE(original_selection_bounds.has_value());
+  quader::RenderToolPreviewSceneSnapshot published;
+  const quader::QuaderRenderApiRuntimeAccess::ToolPreviewScenePublisher publisher =
+      [&](quader::RenderToolPreviewSceneSnapshot candidate) {
+        published = std::move(candidate);
+        return quader::ToolPreviewSubmissionResult::Published;
+      };
+  const auto sync = [&]() {
+    return quader::QuaderRenderApiRuntimeAccess::sync_tool_previews(
+        editor.render(), harness.bridge, {}, publisher);
+  };
+  ASSERT_TRUE(sync().ok());
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Cut).ok());
+  ASSERT_TRUE(modeling.set_cut_mode(quader::ModelingCutMode::DiscardRight).ok);
+  ASSERT_TRUE(modeling.click_cut(mirror_plane_event(-0.5f)).ok);
+  ASSERT_TRUE(modeling.update_cut_hover(mirror_plane_event(0.5f, 0.0f, true)).ok);
+  ASSERT_TRUE(modeling.end_cut_drag().ok);
+  ASSERT_TRUE(sync().ok());
+  ASSERT_EQ(published.meshes.size(), 1u);
+  const auto kept_selection_bounds = modeling.selection_bounds();
+  ASSERT_TRUE(kept_selection_bounds.has_value());
+  expect_bounds_near(*kept_selection_bounds,
+                    preview_world_bounds(published.meshes.front()));
+  ASSERT_TRUE(modeling.begin_cut_line_drag(mirror_plane_event(0.0f)).ok);
+  ASSERT_TRUE(modeling.update_cut_hover(mirror_plane_event(0.0f, 2.0f, true)).ok);
+  ASSERT_TRUE(modeling.end_cut_drag().ok);
+  ASSERT_TRUE(sync().ok());
+  EXPECT_TRUE(published.meshes.empty());
+  EXPECT_EQ(published.suppression.entities,
+            std::vector<quader::EntityId>{source.entity});
+  EXPECT_FALSE(modeling.selection_bounds().has_value());
+  EXPECT_TRUE(harness.session.scene().exists(source.entity));
+  ASSERT_TRUE(editor.tools().cancel_modal_tool().ok());
+  ASSERT_TRUE(sync().ok());
+  EXPECT_TRUE(published.meshes.empty());
+  EXPECT_TRUE(published.suppression.entities.empty());
+  EXPECT_TRUE(harness.session.scene().exists(source.entity));
+  const auto restored_selection_bounds = modeling.selection_bounds();
+  ASSERT_TRUE(restored_selection_bounds.has_value());
+  expect_bounds_near(*restored_selection_bounds, *original_selection_bounds);
+}
+
+TEST(ToolPreviewSubmissionTests,
      MirrorPreviewRenderSubmissionTracksPlaneEditsAfterIdleSync) {
   RenderPreviewTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;

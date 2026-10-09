@@ -214,7 +214,7 @@ viewport_tool_input_hints(std::string_view tool_id, const ModelingOperationHintS
     completion(hints, state.can_apply && !state.dragging, "operation.hints.cancel", "Cancel");
     if (context.plane_endpoint_hovered) hints.push_back(gesture(Gesture::PrimaryDrag, "operation.hints.plane.endpoint", "Drag Endpoint", false, 80));
     else if (context.plane_body_hovered) hints.push_back(gesture(Gesture::PrimaryDrag, "operation.hints.plane.body", "Drag Plane", false, 80));
-    if (tool_id == "cut") hints.push_back(binding("viewport.modal_tool.mode_cycle", "operation.hints.cut.keep_mode", "Cycle Keep Mode"));
+    if (tool_id == "cut" && state.cut_keep_mode_enabled) hints.push_back(binding("viewport.modal_tool.mode_cycle", "operation.hints.cut.keep_mode", "Cycle Keep Mode"));
   } else if (state.can_apply) {
     hints.push_back({Gesture::Command, quader_command::kModelingApplyActivePreview,
                      "operation.hints.apply", "Apply", 95});

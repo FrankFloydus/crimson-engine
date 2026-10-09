@@ -10,6 +10,7 @@
 #include <diagnostics/profile.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_bridge_surface_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_hull_plane_helpers.hpp>
+#include <quader/modeling/neutral/polygon/internal/quader_poly_document_knife_helpers.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_mesh_internal.hpp>
 #include <quader/modeling/neutral/polygon/internal/quader_poly_document_topology_helpers.hpp>
 
@@ -535,7 +536,8 @@ bool append_surface_face_by_plane(
     std::vector<ElementId>& cut_vertex_ids,
     std::vector<ElementId>& created_face_ids,
     std::vector<ElementId>& affected_face_ids,
-    std::string& message)
+    std::string& message,
+    PlaneCutMode mode = PlaneCutMode::KeepBoth)
 {
     if (face.vertices.size() < 3U) {
         return true;
@@ -617,13 +619,21 @@ bool append_surface_face_by_plane(
         return false;
     }
 
-    const ElementId created_face_id = builder.document.next_face_id++;
-    if (!append_face_from_points(builder, face, std::move(front_points), message) ||
-        !append_face_from_points(
-            builder, face, std::move(back_points), message, created_face_id)) {
+    if (mode == PlaneCutMode::KeepBoth) {
+        const ElementId created_face_id = builder.document.next_face_id++;
+        if (!append_face_from_points(builder, face, std::move(front_points), message) ||
+            !append_face_from_points(
+                builder, face, std::move(back_points), message, created_face_id)) {
+            return false;
+        }
+        add_unique_id(created_face_ids, created_face_id);
+    } else if (!append_face_from_points(
+                   builder, face,
+                   mode == PlaneCutMode::KeepFront ? std::move(front_points)
+                                                  : std::move(back_points),
+                   message)) {
         return false;
     }
-    add_unique_id(created_face_ids, created_face_id);
     add_unique_id(affected_face_ids, face.id);
     return true;
 }
@@ -925,6 +935,83 @@ PlaneCutResult plane_cut_impl(const Document& document, const PlaneCutRequest& r
     return result;
 }
 
+std::optional<PlaneCutPlane> scoped_cut_plane(const PlaneCutRequest& request)
+{
+    for (const quader::QVec3 point : {
+             request.first_point, request.second_point, request.third_point}) {
+        if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
+            !std::isfinite(point.z)) {
+            return std::nullopt;
+        }
+    }
+    const auto plane = plane_from_request(request);
+    if (!plane || !std::isfinite(plane->normal.x) ||
+        !std::isfinite(plane->normal.y) || !std::isfinite(plane->normal.z)) {
+        return std::nullopt;
+    }
+    return plane;
+}
+
+void collect_scoped_cut_deltas(const Document& source, const Document& candidate,
+                              OperationResult& result)
+{
+    std::set<std::pair<ElementId, ElementId>> source_edges;
+    std::set<std::pair<ElementId, ElementId>> candidate_edges;
+    for (const Edge edge : document_edges(source)) {
+        source_edges.emplace(edge.a, edge.b);
+    }
+    for (const Edge edge : document_edges(candidate)) {
+        candidate_edges.emplace(edge.a, edge.b);
+        if (!source_edges.contains({edge.a, edge.b})) {
+            result.created.edges.push_back(edge);
+        }
+    }
+    for (const auto& [first, second] : source_edges) {
+        if (!candidate_edges.contains({first, second})) {
+            result.deleted.edges.push_back(make_edge(first, second));
+        }
+    }
+    std::set<ElementId> source_vertices;
+    std::set<ElementId> candidate_vertices;
+    for (const Vertex& vertex : source.vertices) {
+        source_vertices.insert(vertex.id);
+    }
+    for (const Vertex& vertex : candidate.vertices) {
+        candidate_vertices.insert(vertex.id);
+        if (!source_vertices.contains(vertex.id)) {
+            result.created.vertices.push_back(vertex.id);
+        }
+    }
+    for (const Vertex& vertex : source.vertices) {
+        if (!candidate_vertices.contains(vertex.id)) {
+            result.deleted.vertices.push_back(vertex.id);
+        }
+    }
+    result.affected.edges = result.created.edges;
+    result.affected.vertices = result.created.vertices;
+}
+
+bool expand_scoped_cut_boundary(
+    Document& candidate,
+    const std::map<std::pair<ElementId, ElementId>, ElementId>& split_vertices,
+    OperationResult& result)
+{
+    bool needs_expansion = false;
+    for (const Face& face : candidate.faces) {
+        for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+            const Edge edge = make_edge(
+                face.vertices[index],
+                face.vertices[(index + 1U) % face.vertices.size()]);
+            if (split_vertices.contains({edge.a, edge.b})) {
+                add_unique_id(result.affected.faces, face.id);
+                needs_expansion = true;
+                break;
+            }
+        }
+    }
+    return !needs_expansion ||
+           apply_knife_edge_splits_to_faces(candidate, split_vertices);
+}
 
 
 } // namespace
@@ -1035,6 +1122,211 @@ OperationResult plane_surface_cut(Document &document, Selection &selection,
   selection.vertices = std::move(cut_vertex_ids);
   activate_last_selection(selection);
   return result;
+}
+
+OperationResult plane_cut_selected_faces(Document& document,
+                                         Selection& selection,
+                                         const PlaneCutRequest& request)
+{
+    const auto plane = scoped_cut_plane(request);
+    if (!plane) {
+        return OperationResult::failure(
+            "Cut plane needs three finite non-collinear points.");
+    }
+    if (request.mode != PlaneCutMode::KeepBoth &&
+        request.mode != PlaneCutMode::KeepFront &&
+        request.mode != PlaneCutMode::KeepBack) {
+        return OperationResult::failure("Cut received an unsupported keep mode.");
+    }
+    const std::set<ElementId> selected_faces(selection.faces.begin(),
+                                              selection.faces.end());
+    for (const ElementId face_id : selected_faces) {
+        if (find_face(document, face_id) == nullptr) {
+            return OperationResult::failure("Cut selected face is unavailable.");
+        }
+    }
+    if (selected_faces.empty()) {
+        return {false, "Cut needs selected faces."};
+    }
+
+    PlaneCutWork work;
+    work.plane = *plane;
+    work.next_vertex_id = document.next_vertex_id;
+    PlaneCutBuilder builder;
+    builder.document = document;
+    builder.document.faces.clear();
+    for (const Vertex& vertex : document.vertices) {
+        work.source_vertices[vertex.id] = {vertex.id, vertex.position};
+        builder.emitted_vertices.insert(vertex.id);
+    }
+
+    OperationResult result;
+    std::vector<ElementId> cut_vertices;
+    std::set<ElementId> selected_source_vertices;
+    std::string message;
+    for (const Face& face : document.faces) {
+        if (!selected_faces.contains(face.id)) {
+            builder.document.faces.push_back(face);
+            continue;
+        }
+        bool has_front = false;
+        bool has_back = false;
+        for (const ElementId vertex_id : face.vertices) {
+            selected_source_vertices.insert(vertex_id);
+            const auto vertex = work.source_vertices.find(vertex_id);
+            if (vertex == work.source_vertices.end()) {
+                return OperationResult::failure("Cut face vertex is unavailable.");
+            }
+            const float distance = signed_distance_to_cut_plane(
+                *plane, vertex->second.position);
+            if (!std::isfinite(distance)) {
+                return OperationResult::failure("Cut face positions must be finite.");
+            }
+            has_front = has_front || plane_side(distance) > 0;
+            has_back = has_back || plane_side(distance) < 0;
+        }
+        if ((request.mode == PlaneCutMode::KeepFront && has_back && !has_front) ||
+            (request.mode == PlaneCutMode::KeepBack && has_front && !has_back)) {
+            result.deleted.faces.push_back(face.id);
+            continue;
+        }
+        if (!has_front || !has_back) {
+            builder.document.faces.push_back(face);
+            continue;
+        }
+        if (!append_surface_face_by_plane(
+                work, builder, face, cut_vertices, result.created.faces,
+                result.affected.faces, message, request.mode)) {
+            return OperationResult::failure(std::move(message));
+        }
+    }
+    if (result.affected.faces.empty() && result.deleted.faces.empty()) {
+        return {false, "Cut plane did not change selected faces."};
+    }
+
+    const auto split_vertices = plane_cut_split_vertices(work.intersections);
+    if (!expand_scoped_cut_boundary(builder.document, split_vertices, result)) {
+        return OperationResult::failure("Cut could not expand incident face loops.");
+    }
+    std::set<ElementId> retained_vertices;
+    for (const Face& face : builder.document.faces) {
+        retained_vertices.insert(face.vertices.begin(), face.vertices.end());
+    }
+    std::erase_if(builder.document.vertices, [&](const Vertex& vertex) {
+        return selected_source_vertices.contains(vertex.id) &&
+               !retained_vertices.contains(vertex.id);
+    });
+    remap_normal_edge_states_after_edge_splits(
+        document, builder.document, split_vertices);
+    prune_normal_edge_states(builder.document);
+    const auto validation = validate_authored_operation_candidate(document, builder.document);
+    if (!validation.success) {
+        return validation;
+    }
+
+    Selection output;
+    output.mode = SelectionMode::Face;
+    for (const ElementId face_id : selection.faces) {
+        if (find_face(builder.document, face_id) != nullptr) {
+            add_unique_id(output.faces, face_id);
+        }
+    }
+    for (const ElementId face_id : result.created.faces) {
+        add_unique_id(output.faces, face_id);
+    }
+    activate_last_selection(output);
+    if (selection.has_active &&
+        contains_id(output.faces, selection.active_face)) {
+        output.active_face = selection.active_face;
+    }
+    collect_scoped_cut_deltas(document, builder.document, result);
+    result.changed = true;
+    document = std::move(builder.document);
+    selection = std::move(output);
+    return result;
+}
+
+OperationResult plane_cut_selected_edges(Document& document,
+                                         Selection& selection,
+                                         const PlaneCutRequest& request)
+{
+    const auto plane = scoped_cut_plane(request);
+    if (!plane) {
+        return OperationResult::failure(
+            "Cut plane needs three finite non-collinear points.");
+    }
+    std::set<std::pair<ElementId, ElementId>> available_edges;
+    for (const Edge edge : document_edges(document)) {
+        available_edges.emplace(edge.a, edge.b);
+    }
+    for (const Edge edge : selection.edges) {
+        const Edge canonical = make_edge(edge.a, edge.b);
+        if (!available_edges.contains({canonical.a, canonical.b})) {
+            return OperationResult::failure("Cut selected edge is unavailable.");
+        }
+    }
+    Document candidate = document;
+    std::map<std::pair<ElementId, ElementId>, ElementId> split_vertices;
+    for (const Edge edge : selection.edges) {
+        const Vertex* first = find_vertex(document, edge.a);
+        const Vertex* second = find_vertex(document, edge.b);
+        if (first == nullptr || second == nullptr) {
+            return OperationResult::failure("Cut edge vertex is unavailable.");
+        }
+        const float first_distance = signed_distance_to_cut_plane(*plane, first->position);
+        const float second_distance = signed_distance_to_cut_plane(*plane, second->position);
+        if (!std::isfinite(first_distance) || !std::isfinite(second_distance)) {
+            return OperationResult::failure("Cut edge positions must be finite.");
+        }
+        if (plane_side(first_distance) * plane_side(second_distance) != -1) {
+            continue;
+        }
+        const float factor = cut_edge_factor(
+            *plane, first->position, second->position, first_distance, second_distance);
+        if (split_vertex_for_edge(candidate, split_vertices, edge, factor) ==
+            kInvalidElementId) {
+            return OperationResult::failure("Cut could not insert an edge vertex.");
+        }
+    }
+    if (split_vertices.empty()) {
+        return {false, "Cut plane did not intersect selected edge interiors."};
+    }
+    OperationResult result;
+    if (!expand_scoped_cut_boundary(candidate, split_vertices, result)) {
+        return OperationResult::failure("Cut could not expand incident face loops.");
+    }
+    remap_normal_edge_states_after_edge_splits(document, candidate, split_vertices);
+    const auto validation = validate_authored_operation_candidate(document, candidate);
+    if (!validation.success) {
+        return validation;
+    }
+    Selection output;
+    output.mode = SelectionMode::Edge;
+    for (const Edge edge : selection.edges) {
+        const Edge canonical = make_edge(edge.a, edge.b);
+        const auto split = split_vertices.find({canonical.a, canonical.b});
+        if (split == split_vertices.end()) {
+            add_unique_edge(output.edges, canonical);
+        } else {
+            add_unique_edge(output.edges, make_edge(canonical.a, split->second));
+            add_unique_edge(output.edges, make_edge(split->second, canonical.b));
+        }
+    }
+    activate_last_selection(output);
+    if (selection.has_active) {
+        const Edge active = make_edge(selection.active_edge.a, selection.active_edge.b);
+        const auto split = split_vertices.find({active.a, active.b});
+        const Edge remapped = split == split_vertices.end()
+                                  ? active : make_edge(active.a, split->second);
+        if (contains_edge(output.edges, remapped)) {
+            output.active_edge = remapped;
+        }
+    }
+    collect_scoped_cut_deltas(document, candidate, result);
+    result.changed = true;
+    document = std::move(candidate);
+    selection = std::move(output);
+    return result;
 }
 
 } // namespace quader_poly

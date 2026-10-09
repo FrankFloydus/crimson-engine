@@ -20403,6 +20403,155 @@ TEST(EditorApiTests, ToolsApiSetsCutKeepModeThroughPublicSetting) {
     EXPECT_EQ(editor.tools().active_settings_revision(), reset_revision);
 }
 
+TEST(EditorApiTests, CutActivationPreservesSelectedObjectFaceAndEdgeScopes) {
+  for (const auto mode : {quader::QuaderSelectionMode::Object,
+                         quader::QuaderSelectionMode::Face,
+                         quader::QuaderSelectionMode::Edge}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    CommandTestHarness harness;
+    auto &editor = harness.editor;
+    const auto box = create_selected_box(editor, "Scoped Cut Selection");
+    if (mode != quader::QuaderSelectionMode::Object) {
+      enter_edit_mode_for_objects(editor, {box});
+      ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+      if (mode == quader::QuaderSelectionMode::Face) {
+        ASSERT_TRUE(editor.selection().select_face(box, 1).ok());
+      } else {
+        ASSERT_TRUE(editor.selection().select_edge(box, 1, 2).ok());
+      }
+    }
+    const auto before = quader::test::capture_command_observable_state(editor);
+    const auto selection_before = editor.selection().summary();
+    ASSERT_TRUE(editor.tools().can_activate(quader::ViewportToolId::Cut));
+    const auto descriptor =
+        editor.commands().descriptor(quader::quader_command::kToolsActivateCut);
+    ASSERT_TRUE(descriptor.has_value());
+    EXPECT_TRUE(descriptor->enabled);
+    const auto activated =
+        editor.commands().execute(quader::quader_command::kToolsActivateCut);
+    ASSERT_TRUE(activated.ok()) << activated.error_message();
+    const auto selection_after = editor.selection().summary();
+    EXPECT_EQ(selection_after.mode, mode);
+    EXPECT_EQ(selection_after.has_selection, selection_before.has_selection);
+    EXPECT_EQ(selection_after.selected_object_count,
+              selection_before.selected_object_count);
+    EXPECT_EQ(selection_after.selected_vertex_count,
+              selection_before.selected_vertex_count);
+    EXPECT_EQ(selection_after.selected_edge_count,
+              selection_before.selected_edge_count);
+    EXPECT_EQ(selection_after.selected_face_count,
+              selection_before.selected_face_count);
+    EXPECT_EQ(selection_after.active_kind, selection_before.active_kind);
+    EXPECT_EQ(selection_after.active_object_id, selection_before.active_object_id);
+    EXPECT_EQ(selection_after.active_edge_a, selection_before.active_edge_a);
+    EXPECT_EQ(selection_after.active_edge_b, selection_before.active_edge_b);
+    EXPECT_EQ(selection_after.active_face_id, selection_before.active_face_id);
+    if (mode == quader::QuaderSelectionMode::Face) {
+      // Cut hides selected face overlays; the singleton's durable ID remains selected.
+      EXPECT_EQ(selection_after.selected_face_count, 1u);
+      EXPECT_EQ(selection_after.active_face_id, 1);
+      EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Edit);
+      const auto edit_mode = editor.mode().state();
+      ASSERT_EQ(edit_mode.participants.size(), 1u);
+      EXPECT_EQ(edit_mode.participants.front().id, box.entity);
+    }
+    EXPECT_TRUE(editor.query().tool_status().cut_active);
+    const auto after = quader::test::capture_command_observable_state(editor);
+    using Domain = quader::test::CommandObservableDomain;
+    if (mode != quader::QuaderSelectionMode::Face) {
+      EXPECT_EQ(after.domain(Domain::Selection), before.domain(Domain::Selection));
+    }
+    EXPECT_EQ(after.domain(Domain::Geometry), before.domain(Domain::Geometry));
+    EXPECT_EQ(after.domain(Domain::History), before.domain(Domain::History));
+    const auto repeated = editor.tools().activate(quader::ViewportToolId::Cut);
+    ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+    EXPECT_FALSE(repeated.changed());
+  }
+}
+
+TEST(EditorApiTests, CutRejectsVertexAndEmptyComponentSelectionsWithoutPromotion) {
+  for (const auto mode : {quader::QuaderSelectionMode::Vertex,
+                         quader::QuaderSelectionMode::Face,
+                         quader::QuaderSelectionMode::Edge}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    CommandTestHarness harness;
+    auto &editor = harness.editor;
+    const auto box = create_selected_box(editor, "Rejected Cut Selection");
+    enter_edit_mode_for_objects(editor, {box});
+    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    ASSERT_TRUE(editor.selection().clear().ok());
+    if (mode == quader::QuaderSelectionMode::Vertex) {
+      ASSERT_TRUE(editor.selection().select_vertex(box, 1).ok());
+    }
+    const auto before = quader::test::capture_command_observable_state(editor);
+    EXPECT_FALSE(editor.tools().can_activate(quader::ViewportToolId::Cut));
+    const auto descriptor =
+        editor.commands().descriptor(quader::quader_command::kToolsActivateCut);
+    ASSERT_TRUE(descriptor.has_value());
+    EXPECT_FALSE(descriptor->enabled);
+    const auto rejected = editor.tools().activate(quader::ViewportToolId::Cut);
+    EXPECT_FALSE(rejected.ok());
+    EXPECT_FALSE(rejected.changed());
+    EXPECT_EQ(quader::test::capture_command_observable_state(editor), before);
+    EXPECT_EQ(editor.selection().summary().mode, mode);
+    EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Edit);
+  }
+}
+
+TEST(EditorApiTests, EdgeCutDisablesKeepModeAndPreservesRememberedChoice) {
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  const auto box = create_selected_box(editor, "Cut Keep Scope");
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Cut).ok());
+  ASSERT_TRUE(editor.tools().set_setting(
+      "cut", "operation.cut.keep_mode",
+      static_cast<double>(quader::QuaderCutMode::DiscardRight)).ok());
+  ASSERT_TRUE(editor.tools().cancel_modal_tool().ok());
+  enter_edit_mode_for_objects(editor, {box});
+
+  for (const auto mode : {quader::QuaderSelectionMode::Face,
+                         quader::QuaderSelectionMode::Edge,
+                         quader::QuaderSelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+    if (mode == quader::QuaderSelectionMode::Face) {
+      ASSERT_TRUE(editor.selection().select_face(box, 1).ok());
+    } else {
+      ASSERT_TRUE(editor.selection().select_edge(box, 1, 2).ok());
+    }
+    ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Cut).ok());
+    const bool keep_enabled = mode != quader::QuaderSelectionMode::Edge;
+    const auto settings = editor.tools().active_settings();
+    const auto *keep_mode =
+        find_tool_setting_control(settings, "operation.cut.keep_mode");
+    ASSERT_NE(keep_mode, nullptr);
+    EXPECT_EQ(keep_mode->enabled, keep_enabled);
+    EXPECT_EQ(settings.can_reset, keep_enabled);
+    EXPECT_EQ(keep_mode->choice_value,
+              std::to_string(static_cast<int>(quader::QuaderCutMode::DiscardRight)));
+    const auto hints = editor.tools().active_input_hints();
+    EXPECT_EQ(std::any_of(hints.begin(), hints.end(), [](const auto &hint) {
+      return hint.command.string() == "viewport.modal_tool.mode_cycle";
+    }), keep_enabled);
+    const auto revision = editor.tools().active_settings_revision();
+    for (int unchanged = 0; unchanged < 8; ++unchanged) {
+      EXPECT_EQ(editor.tools().active_settings_revision(), revision);
+    }
+    if (!keep_enabled) {
+      const auto before = quader::test::capture_command_observable_state(editor);
+      const auto rejected = editor.tools().set_setting(
+          "cut", "operation.cut.keep_mode",
+          static_cast<double>(quader::QuaderCutMode::DiscardLeft));
+      EXPECT_FALSE(rejected.ok());
+      EXPECT_FALSE(rejected.changed());
+      EXPECT_FALSE(editor.tools().reset_active_settings().ok());
+      EXPECT_EQ(editor.tools().active_settings_revision(), revision);
+      EXPECT_EQ(quader::test::capture_command_observable_state(editor), before);
+    }
+    ASSERT_TRUE(editor.tools().cancel_modal_tool().ok());
+  }
+}
+
 TEST(EditorApiTests, HalfCutPreviewExposesLiveAxisAndPartSettings) {
     CommandTestHarness harness;
     quader::QuaderEditorApi& editor = harness.editor;

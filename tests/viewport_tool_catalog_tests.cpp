@@ -89,6 +89,7 @@ public:
   int hover_updates = 0;
   int invalidations = 0;
   int cancellations = 0;
+  int cut_mode_cycles = 0;
 
   bool claim(ModelingBoxDragState) override { return allow_hover; }
   void invalidate() override { ++invalidations; }
@@ -176,7 +177,10 @@ public:
   ModelingCommandResult end_drawn_plane_drag(ModelingViewportTool) override {
     return {.ok = true};
   }
-  ModelingCommandResult cycle_cut_mode() override { return {.ok = true}; }
+  ModelingCommandResult cycle_cut_mode() override {
+    ++cut_mode_cycles;
+    return {.ok = true};
+  }
   ModelingCommandResult cancel_box() override { return {.ok = true}; }
   ModelingCommandResult cancel_active_modal_tool(bool exit_tool) override {
     ++cancellations;
@@ -194,6 +198,35 @@ private:
     };
   }
 };
+
+TEST(ViewportToolCatalogTests, CutModeCycleHonorsCapturedKeepModeAvailability) {
+  ViewportToolRuntime runtime;
+  ViewportToolState state;
+  ASSERT_TRUE(runtime.set_active_tool(state, ViewportToolId::Cut));
+  ViewportCameraController camera;
+  FailingToolPreviewPorts ports;
+  RejectingToolCommitPort commit;
+  ViewportModalToolState modal_state;
+  ViewportPointToolContext point;
+  point.make_event_at = [](QVec2, bool) { return ModelingToolRayEvent{}; };
+  ViewportToolContext context{
+      .state = state, .camera = camera,
+      .ports = {.hover = &ports, .preview = &ports, .commit = &commit,
+                .cancel = &ports},
+      .modal_state = &modal_state,
+      .point = &point,
+  };
+  const ViewportToolEvent event{
+      .kind = ViewportToolEventKind::Frame, .tool = ViewportToolId::Cut,
+      .pointer = {.mode_cycle_pressed = true},
+  };
+  ports.status.cut_keep_mode_enabled = false;
+  (void)runtime.handle_active_tool_event(state, context, event);
+  EXPECT_EQ(ports.cut_mode_cycles, 0);
+  ports.status.cut_keep_mode_enabled = true;
+  (void)runtime.handle_active_tool_event(state, context, event);
+  EXPECT_EQ(ports.cut_mode_cycles, 1);
+}
 
 TEST(ViewportToolCatalogTests, ModalPlaneHintsRetainAcceptedHoverWithoutRepeatingQueries) {
   ViewportToolRuntime runtime;

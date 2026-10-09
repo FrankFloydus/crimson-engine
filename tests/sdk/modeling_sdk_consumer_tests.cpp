@@ -5604,6 +5604,108 @@ TEST(ModelingSdkConsumerTests,
   }
 }
 
+TEST(ModelingSdkConsumerTests,
+     ScopedPlaneCutsPreserveDomainAndPreviewHistoryTransactions) {
+  const PlaneSplitSpec plane{
+      .a = {0.0F, -2.0F, -2.0F},
+      .b = {0.0F, 2.0F, -2.0F},
+      .c = {0.0F, -2.0F, 2.0F}};
+  for (const bool faces : {false, true}) {
+    SCOPED_TRACE(faces);
+    auto source = PolygonDocument::make_box({}).or_throw();
+    const auto payload = source.authored_payload().or_throw();
+    if (faces) {
+      const auto selected = std::ranges::find_if(payload.faces, [&](const auto& face) {
+        bool front = false;
+        bool back = false;
+        for (const auto vertex : face.vertices) {
+          const auto position = authored_position(payload, vertex).value();
+          front = front || position.x > 0.0F;
+          back = back || position.x < 0.0F;
+        }
+        return front && back;
+      });
+      ASSERT_NE(selected, payload.faces.end());
+      ASSERT_TRUE(source.select_face(selected->id).ok());
+    } else {
+      const auto edges = source.edge_ids();
+      const auto selected = std::ranges::find_if(edges, [&](const auto edge) {
+        return authored_position(payload, edge.a)->x *
+                   authored_position(payload, edge.b)->x < 0.0F;
+      });
+      ASSERT_NE(selected, edges.end());
+      ASSERT_TRUE(source.select_edge(*selected).ok());
+    }
+    ModelingSession session;
+    const auto object = session.add_document(source, "Scoped Cut").or_throw();
+    session.clear_history();
+    auto candidate = source;
+    const auto cut = faces ? candidate.cut_selected_faces_by_plane(plane)
+                           : candidate.cut_selected_edges_by_plane(plane);
+    ASSERT_TRUE(cut.ok()) << cut.error_message();
+    ASSERT_TRUE(cut.value().changed);
+    EXPECT_NE(candidate.content_identity(), source.content_identity());
+    EXPECT_EQ(candidate.selection().kind, faces ? SelectionKind::Face : SelectionKind::Edge);
+    if (faces) {
+      EXPECT_EQ(cut.value().selection_remap.source.faces, source.selection().faces);
+      EXPECT_EQ(cut.value().selection_remap.destination.faces, candidate.selection().faces);
+    } else {
+      EXPECT_EQ(cut.value().selection_remap.source.edges, source.selection().edges);
+      EXPECT_EQ(cut.value().selection_remap.destination.edges, candidate.selection().edges);
+    }
+    EXPECT_EQ(candidate.face_ids().size(), source.face_ids().size() + (faces ? 1U : 0U));
+    EXPECT_EQ(candidate.vertex_ids().size(), source.vertex_ids().size() + (faces ? 2U : 1U));
+    EXPECT_TRUE(candidate.validate().ok());
+    const auto preview = session.begin_document_preview(
+        object, "scoped_cut", candidate, cut.value()).or_throw();
+    EXPECT_FALSE(session.can_undo());
+    ASSERT_TRUE(session.cancel_preview(preview).ok());
+    EXPECT_EQ(session.document_copy(object).or_throw().face_ids(), source.face_ids());
+    EXPECT_EQ(session.document_copy(object).or_throw().vertex_ids(), source.vertex_ids());
+    EXPECT_FALSE(session.can_undo());
+
+    candidate = session.document_copy(object).or_throw();
+    const auto committed_cut = faces ? candidate.cut_selected_faces_by_plane(plane)
+                                     : candidate.cut_selected_edges_by_plane(plane);
+    ASSERT_TRUE(committed_cut.ok()) << committed_cut.error_message();
+    const auto committed = session.commit_document(object, candidate, committed_cut.value());
+    ASSERT_TRUE(committed.ok()) << committed.error_message();
+    EXPECT_EQ(session.undo_depth(), 1U);
+    ASSERT_TRUE(session.undo().ok());
+    EXPECT_EQ(session.document_copy(object).or_throw().face_ids(), source.face_ids());
+    EXPECT_EQ(session.document_copy(object).or_throw().vertex_ids(), source.vertex_ids());
+    ASSERT_TRUE(session.redo().ok());
+    EXPECT_EQ(session.document_copy(object).or_throw().face_ids(), candidate.face_ids());
+    EXPECT_EQ(session.document_copy(object).or_throw().vertex_ids(), candidate.vertex_ids());
+    EXPECT_EQ(session.document_copy(object).or_throw().selection().kind,
+              faces ? SelectionKind::Face : SelectionKind::Edge);
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
+     ScopedPlaneCutMissAndInvalidPlaneRetainContentAndSelectionRevisions) {
+  auto source = PolygonDocument::make_box({}).or_throw();
+  const PlaneSplitSpec miss{
+      .a = {4.0F, -2.0F, -2.0F}, .b = {4.0F, 2.0F, -2.0F},
+      .c = {4.0F, -2.0F, 2.0F}};
+  for (const bool faces : {false, true}) {
+    auto document = source;
+    ASSERT_TRUE((faces ? document.select_all_faces() : document.select_all_edges()).ok());
+    const auto before = document;
+    const auto no_op = faces ? document.cut_selected_faces_by_plane(miss)
+                             : document.cut_selected_edges_by_plane(miss);
+    ASSERT_TRUE(no_op.ok()) << no_op.error_message();
+    EXPECT_FALSE(no_op.value().changed);
+    const auto invalid = faces ? document.cut_selected_faces_by_plane({})
+                               : document.cut_selected_edges_by_plane({});
+    EXPECT_FALSE(invalid.ok());
+    EXPECT_EQ(document.content_identity(), before.content_identity());
+    EXPECT_EQ(document.content_revision(), before.content_revision());
+    EXPECT_EQ(document.selection_revision(), before.selection_revision());
+    EXPECT_TRUE(document.shares_selection_with(before));
+  }
+}
+
 TEST(ModelingSdkConsumerTests, ModelingApiPlaneCutKeepsBothHalves) {
   ModelingApi quader = ModelingApi::create();
   MeshHandle mesh = quader.create_box({.name = "Cut Box"});

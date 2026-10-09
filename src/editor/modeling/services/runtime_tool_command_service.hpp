@@ -50,9 +50,13 @@ public:
 
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand activate_cut();
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand
-  update_cut_hover(const ModelingToolRayEvent &event);
+  update_cut_hover(const ModelingToolRayEvent &event,
+                   std::optional<quader_editor_core::PickHitRecord> surface_hit = std::nullopt,
+                   bool surface_hit_resolved = false);
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand
-  click_cut(const ModelingToolRayEvent &event);
+  click_cut(const ModelingToolRayEvent &event,
+            std::optional<quader_editor_core::PickHitRecord> surface_hit = std::nullopt,
+            bool surface_hit_resolved = false);
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand
   begin_cut_point_drag(int point_index);
   [[nodiscard]] static quader_editor_core::EditorRuntimeCommand

@@ -13,6 +13,7 @@
 #include "render/scene_render_light_refresh.hpp"
 
 #include <algorithm>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -123,6 +124,8 @@ void SceneRenderBridge::shutdown() {
   array_dimension_preview_lights_.clear();
   ++tool_preview_overlay_revision_;
   filtered_scene_overlay_snapshot_ = {};
+  preview_outline_snapshot_ = {};
+  preview_outline_valid_ = false;
   filtered_collision_snapshot_ = {};
   filtered_collision_valid_ = false;
   filtered_scene_overlay_signature_ = 0u;
@@ -177,6 +180,8 @@ void SceneRenderBridge::bind_scene(RenderSceneBindingKey scene_binding) {
   array_dimension_preview_lights_.clear();
   ++tool_preview_overlay_revision_;
   filtered_scene_overlay_snapshot_ = {};
+  preview_outline_snapshot_ = {};
+  preview_outline_valid_ = false;
   filtered_collision_snapshot_ = {};
   filtered_collision_valid_ = false;
   filtered_scene_overlay_signature_ = 0u;
@@ -793,6 +798,114 @@ ViewportOverlaySubmissionResult SceneRenderBridge::submit_viewport_overlay(
   request.array_dimension_scene_snapshot = has_previous_scene_snapshot_
       ? &previous_scene_snapshot_ : nullptr;
   request.selection_dimension_preview_suppression = &tool_preview_suppression_;
+  if (!tool_preview_suppression_.empty() &&
+      request.selected_mesh_outline_snapshot != nullptr && !request.gpu_mesh_outlines) {
+    const auto &source = *request.selected_mesh_outline_snapshot;
+    const RenderSourceStamp source_stamp = source;
+    const RenderSourceStamp hierarchy_stamp = request.scene_overlay_snapshot != nullptr
+        ? static_cast<const RenderSourceStamp &>(*request.scene_overlay_snapshot)
+        : RenderSourceStamp{};
+    if (!preview_outline_valid_ || preview_outline_source_ != source_stamp ||
+        preview_outline_hierarchy_source_ != hierarchy_stamp ||
+        preview_outline_revision_ != tool_preview_submission_revision_ ||
+        preview_outline_snapshot_.visible != source.visible) {
+      QDR_PROFILE_SCOPE("Tool preview project selected outline candidates");
+      ++preview_outline_build_count_;
+      preview_outline_snapshot_ = source;
+      preview_outline_snapshot_.meshes.clear();
+      std::unordered_multimap<EntityId, const RenderToolPreviewMeshRecord *> candidates;
+      for (const auto &preview : selection_dimension_preview_meshes_) {
+        if (preview.suppress_source) candidates.emplace(preview.source_entity, &preview);
+      }
+      const auto replace_source = [&](EntityId entity, EntityId occurrence,
+                                      EntityId definition, EntityId member,
+                                      bool active_selected) {
+        const bool suppressed = tool_preview_suppressed_entities_.contains(entity) ||
+            tool_preview_suppressed_entities_.contains(occurrence) ||
+            tool_preview_suppressed_entities_.contains(definition) ||
+            tool_preview_suppressed_entities_.contains(member) ||
+            std::ranges::any_of(tool_preview_occurrence_suppressions_,
+                [&](const RenderInstancePreviewSuppression &suppression) {
+                  return suppression.occurrence == occurrence &&
+                      (suppression.source_entity == member ||
+                       suppression.source_entity == definition);
+                });
+        if (!suppressed) return false;
+        std::array identities{entity, occurrence, definition, member};
+        std::ranges::sort(identities);
+        const auto unique_end = std::ranges::unique(identities).begin();
+        for (auto identity = identities.begin(); identity != unique_end; ++identity) {
+          if (*identity == kInvalidEntityId) continue;
+          const auto [first, last] = candidates.equal_range(*identity);
+          for (auto candidate = first; candidate != last; ++candidate) {
+            const auto &preview = *candidate->second;
+            const EntityId visibility = preview.visibility_entity != kInvalidEntityId
+                ? preview.visibility_entity : preview.source_entity;
+            if (occurrence != kInvalidEntityId && visibility != occurrence &&
+                visibility != preview.source_entity) continue;
+            auto projection = preview.geometry_projection;
+            if (!projection) projection = preview.mesh.geometry_projection();
+            if (!projection && preview.dynamic_position_payload) {
+              auto positions = std::make_shared<MeshGeometryProjection>();
+              positions->source_geometry = preview.mesh.geometry_payload();
+              positions->positions = preview.dynamic_position_payload;
+              projection = std::move(positions);
+            }
+            const auto mesh = render_mesh_asset_snapshot(kInvalidAssetId, preview.mesh, projection);
+            const std::span<const QMat4> placements = preview.instance_transforms.empty()
+                ? std::span<const QMat4>(&preview.transform, 1u)
+                : std::span<const QMat4>(preview.instance_transforms);
+            for (const QMat4 &placement : placements) {
+              preview_outline_snapshot_.meshes.push_back({
+                  .entity = preview.source_entity,
+                  .occurrence = occurrence,
+                  .definition = definition,
+                  .member = member,
+                  .mesh_revision = tool_preview_submission_revision_,
+                  .geometry_payload = mesh.geometry_payload,
+                  .geometry_projection = mesh.geometry_projection,
+                  .geometry_content_id = mesh.geometry_content_id,
+                  .world_transform = placement,
+                  .selected = true,
+                  .active_selected = active_selected,
+                  .vertices = mesh.vertices,
+                  .indices = mesh.indices,
+              });
+            }
+          }
+        }
+        return true;
+      };
+      for (const auto &mesh : source.meshes) {
+        if (!replace_source(mesh.entity, mesh.occurrence, mesh.definition,
+                            mesh.member, mesh.active_selected)) {
+          preview_outline_snapshot_.meshes.push_back(mesh);
+        }
+      }
+      std::erase_if(preview_outline_snapshot_.instance_selection_fills,
+          [&](const auto &mesh) {
+            return replace_source(kInvalidEntityId, mesh.occurrence,
+                mesh.definition, mesh.member, mesh.active_selected);
+          });
+      if (request.scene_overlay_snapshot != nullptr) {
+        for (const auto &mesh : request.scene_overlay_snapshot->hierarchy_selection_wires) {
+          (void)replace_source(mesh.entity, mesh.occurrence, mesh.definition,
+                               mesh.member, mesh.active_selected);
+        }
+      }
+      preview_outline_snapshot_.mesh_binding_revision = RenderSignatureBuilder{}
+          .add_value(source.mesh_binding_revision)
+          .add_value(tool_preview_submission_revision_).value();
+      preview_outline_source_ = source_stamp;
+      preview_outline_hierarchy_source_ = hierarchy_stamp;
+      preview_outline_revision_ = tool_preview_submission_revision_;
+      preview_outline_valid_ = true;
+    }
+    request.selected_mesh_outline_snapshot = &preview_outline_snapshot_;
+  } else if (tool_preview_suppression_.empty() && preview_outline_valid_) {
+    preview_outline_snapshot_ = {};
+    preview_outline_valid_ = false;
+  }
   if (!tool_preview_suppression_.empty() &&
       request.scene_overlay_snapshot != nullptr) {
     const RenderOverlaySelectionSnapshot &source =

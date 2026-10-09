@@ -282,7 +282,9 @@ active_tool_settings_source(const SceneSession &session) {
       .identity = &modeling,
       .revision = modeling.tool_settings_revision(),
       .dependent_revision =
-          modeling.active_viewport_tool() == ModelingViewportTool::Move &&
+          modeling.active_viewport_tool() == ModelingViewportTool::Cut
+              ? (modeling.cut_keep_mode_enabled() ? 2u : 3u)
+          : modeling.active_viewport_tool() == ModelingViewportTool::Move &&
                   modeling.selection_mode() == ModelingSelectionMode::Vertex
               ? 1u : 0u,
       .kind = ActiveToolSettingsSourceKind::Modeling,
@@ -299,6 +301,19 @@ CommandResult runtime_tool_activation_preflight(
   if (!quader_editor_core::viewport_tool_requires_selected_objects(
           requested_tool)) {
     return command_unchanged_result();
+  }
+
+  if (requested_tool == quader_editor_core::ViewportInteractionTool::Cut &&
+      session.editor_mode().mode() == EditorMode::Edit) {
+    const ModelingSelectionSummary selection =
+        session.modeling().selection_summary();
+    if ((selection.mode == ModelingSelectionMode::Face &&
+         selection.selected_face_count > 0) ||
+        (selection.mode == ModelingSelectionMode::Edge &&
+         selection.selected_edge_count > 0)) {
+      return command_unchanged_result();
+    }
+    return command_invalid_result("Select faces or edges to cut in Edit Mode.");
   }
 
   const std::vector<EntityId> selected_entities =
@@ -1281,7 +1296,8 @@ const char *fallback_tool_settings_description(
 QuaderToolSettingsTarget modeling_tool_settings_target(
     const ModelingToolSettingsTarget &target,
     const ModelingInteractionSettings &settings,
-    ModelingSelectionMode selection_mode) {
+    ModelingSelectionMode selection_mode,
+    bool cut_keep_mode_enabled) {
   QuaderToolSettingsTarget result;
   if (!target.active) {
     return result;
@@ -1325,7 +1341,7 @@ QuaderToolSettingsTarget modeling_tool_settings_target(
     break;
   case ModelingToolSettingsTargetKind::Cut: {
     const int cut_mode = static_cast<int>(settings.cut_mode);
-    result.controls.push_back(choice_control(
+    auto keep_mode = choice_control(
         "operation.cut.keep_mode", "Keep Mode", std::to_string(cut_mode),
         {
             {.id = "discard_left",
@@ -1337,7 +1353,9 @@ QuaderToolSettingsTarget modeling_tool_settings_target(
             {.id = "keep_both",
              .label = "Keep Both",
              .value = static_cast<double>(ModelingCutMode::KeepBoth)},
-        }));
+        });
+    keep_mode.enabled = cut_keep_mode_enabled;
+    result.controls.push_back(std::move(keep_mode));
     break;
   }
   case ModelingToolSettingsTargetKind::EdgeBevel: {
@@ -1428,7 +1446,8 @@ QuaderToolSettingsTarget modeling_tool_settings_target(
   result.can_reset = std::any_of(
       result.controls.begin(), result.controls.end(),
       [](const QuaderToolSettingControl &control) {
-        return control.kind != QuaderToolSettingControlKind::Action;
+        return control.enabled &&
+               control.kind != QuaderToolSettingControlKind::Action;
       });
   return result;
 }
@@ -1948,7 +1967,8 @@ QuaderToolSettingsTarget QuaderToolsApi::active_settings() const {
   const ModelingSessionService &modeling = session.modeling();
   return modeling_tool_settings_target(modeling.tool_settings_target(),
                                        modeling.interaction_settings(),
-                                       modeling.selection_mode());
+                                       modeling.selection_mode(),
+                                       modeling.cut_keep_mode_enabled());
 }
 
 bool QuaderToolsApi::lasso_select_partial_intersection() const {
@@ -2018,7 +2038,8 @@ QuaderToolsApi::settings_for_pane(ViewportPaneId pane) const {
         ModelingToolSettingsService{}.selected_runtime_tool_target(
             viewport_tool_interaction_tool(selected)),
         session.modeling().interaction_settings(),
-        session.modeling().selection_mode());
+        session.modeling().selection_mode(),
+        session.modeling().selection_mode() != ModelingSelectionMode::Edge);
     break;
   }
   // The shared parameter owners are readable without owning their operation.
@@ -2301,6 +2322,10 @@ std::vector<QuaderOperationInputHint> QuaderToolsApi::active_input_hints(
       }
     } else {
       ModelingOperationHintState state;
+      if (tool_id == "cut") {
+        state.cut_keep_mode_enabled =
+            modeling.selection_mode() != ModelingSelectionMode::Edge;
+      }
       if (owns_operation && (tool_id == "knife" || tool_id == "poly" ||
                              tool_id == "cut" || tool_id == "mirror")) {
         const auto status = modeling.tool_status();
@@ -2314,6 +2339,7 @@ std::vector<QuaderOperationInputHint> QuaderToolsApi::active_input_hints(
         } else if (tool_id == "cut") {
           state.can_apply = status.cut_preview_valid;
           state.dragging = status.cut_dragging;
+          state.cut_keep_mode_enabled = status.cut_keep_mode_enabled;
         } else {
           state.can_apply = status.mirror_preview_valid;
           state.dragging = status.mirror_dragging;

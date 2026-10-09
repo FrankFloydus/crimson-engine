@@ -22,6 +22,7 @@ struct ModelingOperationHintState {
   bool closed = false;
   bool extrusion_pending = false;
   bool extrusion_region = true;
+  bool cut_keep_mode_enabled = true;
 };
 
 [[nodiscard]] std::vector<QuaderOperationInputHint>

@@ -528,6 +528,7 @@ public:
   ModelingCommandResult end_cut_drag();
   ModelingCommandResult set_cut_mode(ModelingCutMode mode);
   ModelingCommandResult cycle_cut_mode();
+  [[nodiscard]] bool cut_keep_mode_enabled() const;
   ModelingCommandResult finalize_cut_tool();
   ModelingCommandResult update_mirror_hover(const ModelingToolRayEvent &event);
   ModelingCommandResult click_mirror(const ModelingToolRayEvent &event);

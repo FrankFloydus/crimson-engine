@@ -4046,6 +4046,7 @@ public:
 
     (void)cancel_active_modal_tool();
     (void)runtime_.discard_transient_state();
+    sdk_projection_adapter_.clear_plane_cut_preview();
     tool_settings_service_.clear_preview_metadata();
     invalidate_selection_overlay_caches();
   }
@@ -4090,6 +4091,7 @@ public:
         sdk_projection_adapter_.restore_mesh_documents_from_scene(entities);
     if (restored.ok) {
       runtime_.reset_document_state();
+      sdk_projection_adapter_.clear_plane_cut_preview();
       invalidate_selection_overlay_caches();
     }
     return restored;
@@ -5176,6 +5178,10 @@ public:
       };
     }
     if (active_target.kind == ModelingToolSettingsTargetKind::Cut) {
+      if (!cut_keep_mode_enabled()) {
+        return {.ok = false,
+                .message = "Discard settings do not apply to edge cuts."};
+      }
       const ModelingInteractionSettings defaults =
           interaction_settings_service_.normalize(
               ModelingInteractionSettings{});
@@ -7813,6 +7819,11 @@ public:
         !viewport_tool_supports_editor_mode(tool, editor_mode_service_->mode())) {
       return {.ok = false, .message = "Tool is unavailable in the current editor mode."};
     }
+    if (tool == ModelingViewportTool::Cut &&
+        selection_mode() == ModelingSelectionMode::Vertex) {
+      return {.ok = false,
+              .message = "Cut requires Object, Face or Edge selection."};
+    }
     if (to_runtime(tool) == runtime_.active_tool()) {
       const ToolDescriptor *descriptor = find_viewport_tool_descriptor(tool);
       const bool idle_component_kind_correction =
@@ -7873,20 +7884,23 @@ public:
       }
       return result;
     };
-    if (tool == ModelingViewportTool::Cut ||
-        tool == ModelingViewportTool::Mirror) {
+    if (tool == ModelingViewportTool::Mirror) {
       promote_drawn_plane_tool_object_selection();
     }
     if (tool == ModelingViewportTool::Cut) {
+      sdk_projection_adapter_.clear_plane_cut_preview();
       ModelingCommandResult activated = execute_runtime_command(
           RuntimeToolCommandService::activate_cut(), false);
       if (activated.ok) {
-        const ModelingCommandResult mode_result =
-            set_cut_mode(interaction_settings_service_.settings().cut_mode);
-        activated.ok = mode_result.ok;
-        activated.changed = activated.changed || mode_result.changed;
-        if (!mode_result.message.empty()) {
-          activated.message = mode_result.message;
+        runtime_.state().cut.editor_mode_generation = editor_mode_generation();
+        if (runtime_.cut_state().scope != quader_editor_core::CutScope::Edge) {
+          const ModelingCommandResult mode_result =
+              set_cut_mode(interaction_settings_service_.settings().cut_mode);
+          activated.ok = mode_result.ok;
+          activated.changed = activated.changed || mode_result.changed;
+          if (!mode_result.message.empty()) {
+            activated.message = mode_result.message;
+          }
         }
       }
       return finish(activated);
@@ -7924,6 +7938,7 @@ public:
     case quader_editor_core::ViewportInteractionTool::Cut:
       (void)execute_runtime_command(RuntimeToolCommandService::cancel_cut(),
                                     false);
+      sdk_projection_adapter_.clear_plane_cut_preview();
       return set_active_runtime_tool(
           quader_editor_core::ViewportInteractionTool::Select);
     case quader_editor_core::ViewportInteractionTool::Mirror:
@@ -9075,48 +9090,113 @@ public:
     return result;
   }
 
-  ModelingCommandResult update_cut_hover(const ModelingToolRayEvent &event) {
-    const quader_editor_core::EditorRuntimeCommand command =
-        RuntimeToolCommandService::update_cut_hover(event);
+  [[nodiscard]] bool cut_keep_mode_enabled() const {
+    const auto &cut = runtime_.cut_state();
+    return cut.scope_captured
+               ? cut.scope != quader_editor_core::CutScope::Edge
+               : selection_mode() != ModelingSelectionMode::Edge;
+  }
+
+  [[nodiscard]] bool cut_context_current() const {
+    const auto &cut = runtime_.cut_state();
+    return !cut.scope_captured ||
+           cut.editor_mode_generation == editor_mode_generation();
+  }
+
+  ModelingCommandResult execute_cut_runtime_command(
+      const quader_editor_core::EditorRuntimeCommand &command,
+      bool dragging = false) {
+    if (!cut_context_current()) {
+      return {.ok = false, .message = "Cut selection belongs to a retired editor mode."};
+    }
+    const auto previous_cut = runtime_.cut_state();
+    const auto previous_hover = runtime_.cut_hover();
+    const bool hover_only = command.command_id ==
+        quader_editor_core::EditorRuntimeCommandId::UpdateCutHover;
     const quader_editor_core::EditorRuntimeCommandResult result =
-        quader_editor_core::execute_cut_hover_runtime_command(
-            runtime_selection_view(), runtime_, command);
+        hover_only ? quader_editor_core::execute_cut_hover_runtime_command(
+                         runtime_selection_view(), runtime_, command)
+                   : quader_editor_core::execute_runtime_command(
+                         runtime_selection_view(), runtime_, command);
+    if (result.command.ok && !previous_cut.scope_captured &&
+        runtime_.cut_state().scope_captured) {
+      runtime_.state().cut.editor_mode_generation = editor_mode_generation();
+    }
     if (result.command.changed) {
       const quader_editor_core::CutToolState &cut = runtime_.cut_state();
       const bool inert_hover_over_retained_preview =
-          !event.dragging && quader_editor_core::cut_can_preview(cut) &&
+          hover_only &&
+          !dragging &&
+          quader_editor_core::cut_can_preview(cut) &&
           cut.preview_valid && !quader_editor_core::cut_is_dragging(cut);
       if (!inert_hover_over_retained_preview) {
+        if (result.command.ok && quader_editor_core::cut_can_preview(cut)) {
+          const auto preview = sdk_projection_adapter_.preview_plane_cut(cut);
+          if (!preview.command.ok) {
+            runtime_.set_cut_state(previous_cut);
+            runtime_.set_cut_hover(previous_hover);
+            return preview.command;
+          }
+          runtime_.state().cut.preview_valid = true;
+          runtime_.state().cut.preview_counts = {
+              preview.target_count, preview.split_count, preview.removed_count};
+        }
         invalidate_selection_overlay_caches();
       }
     }
     return command_executor_.from_runtime(result.command);
   }
 
+  ModelingCommandResult update_cut_hover(const ModelingToolRayEvent &event) {
+    const auto &cut = runtime_.cut_state();
+    if (!cut_context_current()) {
+      return {.ok = false, .message = "Cut selection belongs to a retired editor mode."};
+    }
+    // Captured endpoints own the display once the line is complete. Moving an
+    // idle cursor cannot alter that candidate or require another snapshot.
+    if (!event.dragging && quader_editor_core::cut_can_preview(cut) &&
+        cut.preview_valid && !quader_editor_core::cut_is_dragging(cut)) {
+      return {.ok = true};
+    }
+    const auto surface = cut.points.empty() ? pick_scene_surface(event.ray) : std::nullopt;
+    return execute_cut_runtime_command(
+        RuntimeToolCommandService::update_cut_hover(event, surface, true), event.dragging);
+  }
+
   ModelingCommandResult click_cut(const ModelingToolRayEvent &event) {
-    return execute_runtime_command(RuntimeToolCommandService::click_cut(event),
-                                   false);
+    const auto surface = runtime_.cut_state().points.empty()
+                             ? pick_scene_surface(event.ray) : std::nullopt;
+    return execute_cut_runtime_command(
+        RuntimeToolCommandService::click_cut(event, surface, true));
   }
 
   ModelingCommandResult begin_cut_point_drag(int point_index) {
-    return execute_runtime_command(
-        RuntimeToolCommandService::begin_cut_point_drag(point_index), false);
+    return execute_cut_runtime_command(
+        RuntimeToolCommandService::begin_cut_point_drag(point_index));
   }
 
   ModelingCommandResult begin_cut_line_drag(const ModelingToolRayEvent &event) {
-    return execute_runtime_command(
-        RuntimeToolCommandService::begin_cut_line_drag(event), false);
+    return execute_cut_runtime_command(
+        RuntimeToolCommandService::begin_cut_line_drag(event));
   }
 
   ModelingCommandResult end_cut_drag() {
-    return execute_runtime_command(RuntimeToolCommandService::end_cut_drag(),
-                                   false);
+    return execute_cut_runtime_command(RuntimeToolCommandService::end_cut_drag());
   }
 
   ModelingCommandResult set_cut_mode(ModelingCutMode mode) {
-    interaction_settings_service_.set_cut_mode(mode);
-    return execute_runtime_command(
-        RuntimeToolCommandService::set_cut_mode(mode), false);
+    if (!cut_keep_mode_enabled()) {
+      return {.ok = false,
+              .message = "Discard settings do not apply to edge cuts."};
+    }
+    ModelingCommandResult result = execute_cut_runtime_command(
+        RuntimeToolCommandService::set_cut_mode(mode));
+    if (result.ok) {
+      result.changed =
+          interaction_settings_service_.settings().cut_mode != mode || result.changed;
+      interaction_settings_service_.set_cut_mode(mode);
+    }
+    return result;
   }
 
   ModelingCommandResult cycle_cut_mode() {
@@ -9125,42 +9205,20 @@ public:
   }
 
   ModelingCommandResult finalize_cut_tool() {
+    if (!cut_context_current()) {
+      return {.ok = false, .message = "Cut selection belongs to a retired editor mode."};
+    }
     const quader_editor_core::CutToolState &cut = runtime_.cut_state();
-    const std::vector<QVec3> world_points = [&]() {
-      std::vector<QVec3> result;
-      for (quader::QVec3 point : quader_editor_core::cut_plane_points(cut)) {
-        result.push_back(from_runtime(point));
-      }
-      return result;
-    }();
-    if (world_points.size() < 3U || cut.target_object_ids.empty()) {
+    const auto requests = sdk_projection_adapter_.plane_cut_requests(cut);
+    if (!requests.ok()) {
       return {.ok = false,
               .changed = false,
-              .message = "Cut needs a valid plane and selected meshes."};
-    }
-    std::vector<ModelingSdkPlaneCutRequest> requests;
-    requests.reserve(cut.target_object_ids.size());
-    for (int object_id : cut.target_object_ids) {
-      const std::optional<QMat4> world =
-          modeling_object_world_transform(object_id);
-      if (!world.has_value()) {
-        return {.ok = false,
-                .changed = false,
-                .message = "Cut target mesh world transform was not found."};
-      }
-      const QMat4 local_from_world = inverse(*world);
-      requests.push_back({
-          .modeling_object_id = object_id,
-          .local_plane_points = {
-              transform_point(local_from_world, world_points[0]),
-              transform_point(local_from_world, world_points[1]),
-              transform_point(local_from_world, world_points[2]),
-          },
-      });
+              .message = requests.error_message()};
     }
     ModelingCommandResult result = sdk_projection_adapter_.plane_cut(
-        requests, from_runtime(cut.mode), true);
+        requests.value(), from_runtime(cut.mode), true);
     if (result.ok) {
+      sdk_projection_adapter_.clear_plane_cut_preview();
       runtime_.reset_cut_state();
       const ModelingCommandResult selected = set_active_runtime_tool(
           quader_editor_core::ViewportInteractionTool::Select);
@@ -13158,6 +13216,10 @@ ModelingCommandResult ModelingSessionService::end_cut_drag() {
             .message = release_feature_unavailable_message()};
   }
   return impl_->end_cut_drag();
+}
+
+bool ModelingSessionService::cut_keep_mode_enabled() const {
+  return impl_->cut_keep_mode_enabled();
 }
 
 ModelingCommandResult

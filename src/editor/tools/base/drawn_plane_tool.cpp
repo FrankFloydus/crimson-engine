@@ -256,7 +256,8 @@ ViewportToolResult handle_drawn_plane_lifecycle(
     handle_result(context, std::string(tool_name) + " drag end", command, true);
     drag_active = false;
   }
-  if (kind == DrawnPlaneToolKind::Cut && pointer.mode_cycle_pressed) {
+  if (kind == DrawnPlaneToolKind::Cut && pointer.mode_cycle_pressed &&
+      preview_port.tool_status().cut_keep_mode_enabled) {
     handle_result(context, "Cut mode", preview_port.cycle_cut_mode(), true);
   }
 

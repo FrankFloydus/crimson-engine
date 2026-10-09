@@ -28,6 +28,7 @@
 #include "render/scene_render_bridge.hpp"
 #include "render/viewport_overlay_policy.hpp"
 #include "render/viewport_renderer.hpp"
+#include "support/modeling_test_events.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
 #include "viewport/viewport_host_interaction_policy.hpp"
@@ -1688,9 +1689,14 @@ public:
     return last_submission_;
   }
 
+  std::uint64_t tool_preview_outline_build_count() const {
+    return bridge_.tool_preview_outline_build_count();
+  }
+
   QuaderEditorApi &workflow_editor() { return array_editor(); }
 
-  bool present_workflow_pane(std::size_t pane = 0u) {
+  bool present_workflow_pane(std::size_t pane = 0u,
+                             const ViewportSettings *appearance = nullptr) {
     auto &editor = array_editor();
     auto &modeling = session_.modeling();
     auto &view = extrusion_pane_view(pane);
@@ -1706,7 +1712,7 @@ public:
                                               : ViewportOverlaySelectionContext::Object;
     const std::array panes{ViewportPaneId::Perspective, ViewportPaneId::Top};
     std::uint8_t wire_mask = 0u;
-    const auto settings = ViewportSettings::defaults();
+    const auto settings = appearance != nullptr ? *appearance : ViewportSettings::defaults();
     const auto style = ViewportOverlayStyleResolver::persistent_style_snapshot(settings);
     ViewportPersistentOverlayRasterGroupSet groups;
     for (std::size_t index = 0u; index < panes.size(); ++index) {
@@ -6563,6 +6569,145 @@ TEST(SelectionOverlayRuntimeTests,
   ASSERT_FALSE(committed.isNull());
   save(committed, "committed");
   expect_removed(committed, first_pixels);
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanCutKeepModesHideDiscardedSurfaceAndRestoreCancelCommitHistory) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-cut-kept-surface-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  const QString directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (!directory.isEmpty()) ASSERT_TRUE(QDir().mkpath(directory));
+
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0f, false));
+  auto &editor = harness.workflow_editor();
+  auto &modeling = harness.modeling();
+  ViewportCameraController camera;
+  camera.view_axis(ViewportViewAxis::Y, 1);
+  camera.focus_origin(4.0f);
+  harness.set_sample_camera(camera);
+  auto settings = ViewportSettings::defaults();
+  auto selection_fill = settings.color(ViewportColorSettingId::SelectionFace);
+  selection_fill.a = 0.0f;
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::SelectionFace, selection_fill));
+  // Control the selection tint so exact patch comparisons prove that the
+  // source material survives preview, commit and history without conflating
+  // ordinary selection fill with source-replacing tool presentation.
+  const auto capture = [&](const char *phase) {
+    EXPECT_TRUE(harness.present_workflow_pane(0u, &settings));
+    QImage image = harness.capture();
+    EXPECT_FALSE(image.isNull());
+    if (!directory.isEmpty()) {
+      EXPECT_TRUE(image.save(QDir(directory).filePath(
+          QStringLiteral("cut-kept-surface-%1.png").arg(QString::fromLatin1(phase)))));
+    }
+    return image;
+  };
+  const QImage background = capture("background");
+  const auto box = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Cut kept surface pixel regression");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  const QImage source = capture("source");
+  const std::array probes{
+      harness.cutting_preview_pixel({0.3f, 1.0f, -0.6f}),
+      harness.cutting_preview_pixel({0.3f, 1.0f, 0.6f})};
+  const std::array outline_probes{
+      harness.cutting_preview_pixel({0.3f, 1.0f, -1.0f}),
+      harness.cutting_preview_pixel({0.3f, 1.0f, 1.0f})};
+  const auto patch = [](const QImage &image, QVec2 probe) {
+    return image.copy(QRect(static_cast<int>(probe.x) - 3,
+                            static_cast<int>(probe.y) - 3, 7, 7));
+  };
+  for (const auto probe : probes) {
+    EXPECT_NE(patch(source, probe), patch(background, probe))
+        << "Both probes must initially cover actual box surfaces.";
+  }
+  for (const auto probe : outline_probes) EXPECT_GE(yellow_pixels(source, probe), 3);
+  const auto draw_cut = [&] {
+    EXPECT_TRUE(editor.tools().activate(ViewportToolId::Cut).ok());
+    auto start = test::drawn_plane_event(-0.5f);
+    start.ray.origin.y = 20.0f;
+    start.camera.origin = {0.0f, 20.0f, 10.0f};
+    auto end = start;
+    end.ray.origin.x = 0.5f;
+    end.dragging = true;
+    EXPECT_TRUE(modeling.click_cut(start).ok);
+    EXPECT_TRUE(modeling.update_cut_hover(end).ok);
+    EXPECT_TRUE(modeling.end_cut_drag().ok);
+    EXPECT_TRUE(modeling.tool_status().cut_preview_valid);
+  };
+  const auto undo_count = harness.undo_count();
+  draw_cut();
+  ASSERT_TRUE(modeling.set_cut_mode(ModelingCutMode::KeepBoth).ok);
+  const QImage both = capture("keep-both");
+  for (const auto probe : probes) {
+    EXPECT_EQ(patch(both, probe), patch(source, probe));
+  }
+  ASSERT_TRUE(modeling.set_cut_mode(ModelingCutMode::DiscardLeft).ok);
+  const QImage first_half = capture("discard-left");
+  const std::array retained{
+      patch(first_half, probes[0]) == patch(source, probes[0]),
+      patch(first_half, probes[1]) == patch(source, probes[1])};
+  ASSERT_NE(retained[0], retained[1])
+      << "A one-sided preview must retain exactly one original surface.";
+  for (std::size_t index = 0; index < probes.size(); ++index) {
+    EXPECT_EQ(patch(first_half, probes[index]),
+              patch(retained[index] ? source : background, probes[index]))
+        << "Discarded geometry must disappear rather than receive an overlay tint.";
+    if (retained[index]) {
+      EXPECT_GE(yellow_pixels(first_half, outline_probes[index]), 3);
+    } else {
+      EXPECT_EQ(yellow_pixels(first_half, outline_probes[index]), 0)
+          << "The discarded source silhouette must disappear with its surface.";
+    }
+  }
+  const auto outline_build_count = harness.tool_preview_outline_build_count();
+  EXPECT_EQ(capture("discard-left-retained"), first_half);
+  ASSERT_TRUE(harness.present_workflow_pane(0u, &settings));
+  EXPECT_EQ(harness.tool_preview_outline_build_count(), outline_build_count)
+      << "Unchanged frames must retain the accepted preview outline projection.";
+  ASSERT_TRUE(modeling.set_cut_mode(ModelingCutMode::DiscardRight).ok);
+  const QImage second_half = capture("discard-right");
+  for (std::size_t index = 0; index < probes.size(); ++index) {
+    EXPECT_EQ(patch(second_half, probes[index]),
+              patch(retained[index] ? background : source, probes[index]));
+    if (retained[index]) {
+      EXPECT_EQ(yellow_pixels(second_half, outline_probes[index]), 0);
+    } else {
+      EXPECT_GE(yellow_pixels(second_half, outline_probes[index]), 3);
+    }
+  }
+  EXPECT_EQ(harness.undo_count(), undo_count);
+  ASSERT_TRUE(editor.tools().cancel_modal_tool().ok());
+  EXPECT_EQ(capture("cancel"), source);
+  EXPECT_EQ(harness.undo_count(), undo_count);
+
+  draw_cut();
+  ASSERT_TRUE(modeling.set_cut_mode(ModelingCutMode::DiscardRight).ok);
+  const QImage accepted_preview = capture("accepted-preview");
+  for (const auto probe : probes) {
+    EXPECT_EQ(patch(accepted_preview, probe), patch(second_half, probe));
+  }
+  ASSERT_TRUE(editor.tools().commit_modeling_tool(ViewportToolId::Cut).ok());
+  const QImage committed = capture("commit");
+  for (const auto probe : probes) {
+    EXPECT_EQ(patch(committed, probe), patch(accepted_preview, probe));
+  }
+  EXPECT_EQ(harness.undo_count(), undo_count + 1u);
+  ASSERT_TRUE(editor.history().undo().ok());
+  const QImage undone = capture("undo");
+  for (const auto probe : probes) EXPECT_EQ(patch(undone, probe), patch(source, probe));
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(capture("redo"), committed);
 }
 
 TEST(SelectionOverlayRuntimeTests,

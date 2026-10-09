@@ -140,7 +140,7 @@ constexpr std::array<ToolDescriptor, 20> kViewportToolDescriptors{{
         .menu_group = ToolMenuGroup::Modeling,
         .owns_viewport = true,
         .blocks_viewport_focus_shortcuts = true,
-        .supported_editor_modes = EditorModeSupport::Object,
+        .supported_editor_modes = EditorModeSupport::ObjectAndEdit,
     },
     {
         .tool = ViewportToolId::Poly,

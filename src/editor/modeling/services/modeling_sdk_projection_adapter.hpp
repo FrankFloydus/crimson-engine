@@ -13,6 +13,7 @@
 #include "editor/modeling/operations/editor_operation.hpp"
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
 #include "editor/modeling/services/modeling_structural_duplicate.hpp"
+#include "editor/interactions/cut_tool.hpp"
 #include "editor/selection/modeling_selection_projection_snapshot.hpp"
 #include "scene/scene_bounds.hpp"
 
@@ -192,6 +193,10 @@ struct ModelingSdkClipboardCopyResult {
 struct ModelingSdkPlaneCutRequest {
   int modeling_object_id = kInvalidModelingObjectId;
   std::array<QVec3, 3> local_plane_points{};
+  quader_editor_core::CutScope scope = quader_editor_core::CutScope::Object;
+  std::vector<modeling::FaceId> faces;
+  std::vector<modeling::EdgeKey> edges;
+  bool all_edges = false;
 };
 
 /// Renderer-ready host projection of an SDK-owned plane-cut preview.
@@ -199,6 +204,8 @@ struct ModelingSdkPlaneCutPreviewResult {
   ModelingCommandResult command;
   std::vector<ModelingToolPreviewMesh> kept_meshes;
   std::vector<ModelingToolPreviewMesh> discarded_meshes;
+  std::vector<QVec3> inserted_points;
+  std::uint64_t revision = 0;
   int target_count = 0;
   int split_count = 0;
   int removed_count = 0;
@@ -333,6 +340,17 @@ public:
       std::span<const int> modeling_object_ids,
       const std::array<QVec3, 3> &world_plane_points,
       ModelingCutMode mode) const;
+  [[nodiscard]] modeling::Result<std::vector<ModelingSdkPlaneCutRequest>>
+  plane_cut_requests(const quader_editor_core::CutToolState &state) const;
+  [[nodiscard]] ModelingSdkPlaneCutPreviewResult preview_plane_cut(
+      const quader_editor_core::CutToolState &state) const;
+  [[nodiscard]] ModelingSdkPlaneCutPreviewResult preview_plane_cut(
+      std::span<const ModelingSdkPlaneCutRequest> requests,
+      ModelingCutMode mode) const;
+  [[nodiscard]] const ModelingSdkPlaneCutPreviewResult &
+  plane_cut_preview() const noexcept;
+  [[nodiscard]] std::uint64_t plane_cut_preview_revision() const noexcept;
+  void clear_plane_cut_preview();
   [[nodiscard]] ModelingSdkMirrorPreviewResult preview_mirror(
       std::span<const int> modeling_object_ids,
       const std::array<QVec3, 3> &world_plane_points) const;

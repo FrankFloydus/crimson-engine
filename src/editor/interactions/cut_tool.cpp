@@ -11,6 +11,7 @@
 
 #include "tool_math_internal.hpp"
 
+#include <algorithm>
 #include <span>
 #include <string>
 #include <utility>
@@ -59,6 +60,49 @@ void invalidate_cut_plane_preview(CutToolState& state)
 	state.preview_counts = {};
 }
 
+quader::QVec3 cut_point_on_support_plane(const CutToolState& state,
+                                       quader::QVec3 point)
+{
+  if (!state.support_plane_valid) {
+    return point;
+  }
+  return point - vec3_scale(state.face_normal,
+      vec3_dot(point - state.support_plane_origin, state.face_normal));
+}
+
+struct CutPlacementPoint {
+  CutGridPointResult point;
+  int object_id = -1;
+};
+
+CutPlacementPoint cut_placement_point_from_ray(
+    const CutToolState& state, std::span<const PolygonObject> objects,
+    const CutRayUpdateInput& input)
+{
+  if (!state.points.empty()) {
+    return {cut_support_plane_point_from_ray(
+                input.ray,
+                state.support_plane_valid ? state.support_plane_origin
+                                          : state.points.front(),
+                state.face_normal, input.grid_size),
+            state.source_object_id};
+  }
+  std::optional<PickHitRecord> hit = input.resolved_surface_hit;
+  if (!input.surface_hit_resolved) {
+    quader_poly::PickOptions options;
+    options.mode = quader_poly::SelectionMode::Face;
+    hit = pick_nearest(std::vector<PolygonObject>(objects.begin(), objects.end()),
+                       {input.ray, options});
+  }
+  if (hit.has_value() && !vec3_is_tiny(hit->local_normal)) {
+    return {cut_support_plane_point_from_ray(
+                input.ray, hit->local_position, hit->local_normal,
+                input.grid_size),
+            hit->object_id};
+  }
+  return {cut_grid_point_from_ray(input.camera, input.ray, input.grid_size), -1};
+}
+
 /**
  * Implements Cut Tool behavior for the modal modeling interaction layer.
  */
@@ -86,16 +130,60 @@ public:
 
 	[[nodiscard]] std::vector<int> target_object_ids_for_selection(const RectangleSelectionState& selection) const
 	{
-		return object_operation_object_ids_for_selection(selection);
+		std::vector<int> targets;
+		const auto append = [&targets](int object_id) {
+			if (object_id >= 0 && std::find(targets.begin(), targets.end(), object_id) == targets.end()) {
+				targets.push_back(object_id);
+			}
+		};
+		if (selection.mode == SelectionMode::Object) {
+			for (const int object_id : selection.selected_object_ids) {
+				append(object_id);
+			}
+		} else if (selection.mode == SelectionMode::Face) {
+			for (const auto& face : selection.selected_faces) {
+				append(face.object_id);
+			}
+		} else if (selection.mode == SelectionMode::Edge) {
+			for (const auto& edge : selection.selected_edges) {
+				append(edge.object_id);
+			}
+			for (const int object_id : selection.selected_edge_full_object_ids) {
+				append(object_id);
+			}
+			if (!selection.active_edge_vertex_indices.empty()) {
+				append(selection.active_object_id);
+			}
+		}
+		return targets;
 	}
 
 	[[nodiscard]] CutToolResult set_targets_from_selection(CutToolState& state, const RectangleSelectionState& selection) const
 	{
-		const std::vector<int> targets = target_object_ids_for_selection(selection);
-		if (targets == state.target_object_ids) {
+		if (state.scope_captured) {
 			return { true, false, {}, static_cast<int>(state.target_object_ids.size()) };
 		}
+		if (selection.mode == SelectionMode::Vertex) {
+			return {false, false, "Cut requires Object, Face, or Edge selection."};
+		}
+		const std::vector<int> targets = target_object_ids_for_selection(selection);
+		if (targets.empty()) {
+			return {false, false, "Select meshes, faces, or edges to cut."};
+		}
 		state.target_object_ids = targets;
+		state.scope = selection.mode == SelectionMode::Face ? CutScope::Face :
+			selection.mode == SelectionMode::Edge ? CutScope::Edge : CutScope::Object;
+		state.target_faces = state.scope == CutScope::Face ? selection.selected_faces : std::vector<RectangleSelectionFace>{};
+		state.target_edges = state.scope == CutScope::Edge ? selection.selected_edges : std::vector<RectangleSelectionEdge>{};
+		if (state.scope == CutScope::Edge) {
+			state.target_edge_full_object_ids = selection.selected_edge_full_object_ids;
+			if (state.target_edges.empty() && selection.active_edge_vertex_indices.size() == 2U) {
+				state.target_edges.push_back({selection.active_object_id,
+					selection.active_edge_vertex_indices[0], selection.active_edge_vertex_indices[1]});
+			}
+			state.mode = CutMode::KeepBoth;
+		}
+		state.scope_captured = true;
 		state.source_object_id = -1;
 		state.preview_valid = false;
 		state.preview_counts = {};
@@ -108,11 +196,16 @@ public:
 			quader::QVec3 position,
 			quader::QVec3 plane_normal) const
 	{
-		(void)set_targets_from_selection(state, selection);
+		const CutToolResult targets = set_targets_from_selection(state, selection);
+		if (!targets.ok) {
+			return targets;
+		}
 		state.source_object_id = -1;
 		const DrawnPlaneToolResult result =
 			drawn_plane_tool_logic().capture_first(cut_drawn_plane_ref(state), position, plane_normal, label());
 		if (result.ok && result.changed) {
+			state.support_plane_origin = position;
+			state.support_plane_valid = true;
 			invalidate_cut_plane_preview(state);
 		}
 		return cut_result_from_drawn_plane(result, static_cast<int>(state.target_object_ids.size()));
@@ -121,7 +214,7 @@ public:
 	[[nodiscard]] CutToolResult capture_second_point(CutToolState& state, quader::QVec3 position) const
 	{
 		const DrawnPlaneToolResult result =
-			drawn_plane_tool_logic().capture_second(cut_drawn_plane_ref(state), position, label());
+			drawn_plane_tool_logic().capture_second(cut_drawn_plane_ref(state), cut_point_on_support_plane(state, position), label());
 		if (result.ok && result.changed) {
 			invalidate_cut_plane_preview(state);
 		}
@@ -131,7 +224,7 @@ public:
 	[[nodiscard]] CutToolResult update_dragged_new_point(CutToolState& state, quader::QVec3 position) const
 	{
 		const DrawnPlaneToolResult result =
-			drawn_plane_tool_logic().update_dragged_new_point(cut_drawn_plane_ref(state), position, label());
+			drawn_plane_tool_logic().update_dragged_new_point(cut_drawn_plane_ref(state), cut_point_on_support_plane(state, position), label());
 		if (result.ok && result.changed) {
 			invalidate_cut_plane_preview(state);
 		}
@@ -141,7 +234,8 @@ public:
 	[[nodiscard]] CutToolResult update_dragged_point(CutToolState& state, quader::QVec3 position, quader::QVec3 plane_normal) const
 	{
 		const DrawnPlaneToolResult result =
-			drawn_plane_tool_logic().update_dragged_point(cut_drawn_plane_ref(state), position, plane_normal, label());
+			drawn_plane_tool_logic().update_dragged_point(cut_drawn_plane_ref(state), cut_point_on_support_plane(state, position),
+				state.support_plane_valid ? state.face_normal : plane_normal, label());
 		if (result.ok && result.changed) {
 			invalidate_cut_plane_preview(state);
 		}
@@ -157,13 +251,13 @@ public:
 	[[nodiscard]] CutToolResult begin_line_drag(CutToolState& state, quader::QVec3 anchor) const
 	{
 		return cut_result_from_drawn_plane(
-			drawn_plane_tool_logic().begin_line_drag(cut_drawn_plane_ref(state), anchor, label()));
+			drawn_plane_tool_logic().begin_line_drag(cut_drawn_plane_ref(state), cut_point_on_support_plane(state, anchor), label()));
 	}
 
 	[[nodiscard]] CutToolResult update_dragged_line(CutToolState& state, quader::QVec3 position) const
 	{
 		const DrawnPlaneToolResult result =
-			drawn_plane_tool_logic().update_dragged_line(cut_drawn_plane_ref(state), position, label());
+			drawn_plane_tool_logic().update_dragged_line(cut_drawn_plane_ref(state), cut_point_on_support_plane(state, position), label());
 		if (result.ok && result.changed) {
 			invalidate_cut_plane_preview(state);
 		}
@@ -187,6 +281,9 @@ public:
 
 	[[nodiscard]] CutToolResult set_mode(CutToolState& state, CutMode mode) const
 	{
+		if (state.scope == CutScope::Edge && mode != CutMode::KeepBoth) {
+			return {false, false, "Edge Cut only inserts crossing vertices."};
+		}
 		const CutMode previous_mode = state.mode;
 		state.mode = mode;
 		if (previous_mode != state.mode) {
@@ -226,8 +323,12 @@ public:
 
 	[[nodiscard]] CutPreviewRequest preview_request(CutToolState& state, CutMode mode) const
 	{
-		state.mode = mode;
 		CutPreviewRequest request;
+		const CutToolResult mode_result = set_mode(state, mode);
+		if (!mode_result.ok) {
+			request.message = mode_result.message;
+			return request;
+		}
 		request.mode = state.mode;
 		request.point_count = static_cast<int>(state.points.size());
 		request.target_count = static_cast<int>(state.target_object_ids.size());
@@ -252,7 +353,10 @@ public:
 			const CutPreviewCounts& counts,
 			std::string message) const
 	{
-		state.mode = mode;
+		const CutToolResult mode_result = set_mode(state, mode);
+		if (!mode_result.ok) {
+			return mode_result;
+		}
 		if (!ok) {
 			state.preview_valid = false;
 			state.preview_counts = {};
@@ -320,6 +424,10 @@ public:
 		const int split_count = metadata.split_count > 0 ? metadata.split_count : fallback_counts.split_count;
 		const int target_count = metadata.target_count > 0 ? metadata.target_count : fallback_counts.target_count;
 		const int removed_count = metadata.removed_count > 0 ? metadata.removed_count : fallback_counts.removed_count;
+		if (state.scope == CutScope::Edge) {
+			return "Cut preview: " + std::to_string(split_count) + "/" +
+				std::to_string(target_count) + " affected meshes. Enter/Space confirms.";
+		}
 		return "Cut preview: " +
 			std::string(cut_mode_label(mode)) +
 			", " +
@@ -381,12 +489,12 @@ public:
 			return target_result;
 		}
 
-		const CutGridPointResult point =
-			cut_grid_point_from_ray(input.camera, input.ray, input.grid_size);
+		const CutPlacementPoint placement = cut_placement_point_from_ray(runtime.cut, objects, input);
+		const CutGridPointResult& point = placement.point;
 		if (!point.ok) {
 			return { false, false, point.message.empty() ? "Cut needs a valid grid point." : point.message };
 		}
-		const bool hover_changed = update_hover(runtime.cut_hover, true, -1, point.position, 0.000001);
+		const bool hover_changed = update_hover(runtime.cut_hover, true, placement.object_id, point.position, 0.000001);
 		if (!input.dragging) {
 			(void)refresh_preview(runtime.cut, objects);
 			return { true, hover_changed };
@@ -420,16 +528,19 @@ public:
 			return target_result;
 		}
 
-		const CutGridPointResult point =
-			cut_grid_point_from_ray(input.camera, input.ray, input.grid_size);
+		const CutPlacementPoint placement = cut_placement_point_from_ray(runtime.cut, objects, input);
+		const CutGridPointResult& point = placement.point;
 		if (!point.ok) {
 			return { false, false, point.message.empty() ? "Cut needs a valid grid point." : point.message };
 		}
-		(void)update_hover(runtime.cut_hover, true, -1, point.position, 0.000001);
+		(void)update_hover(runtime.cut_hover, true, placement.object_id, point.position, 0.000001);
 
 		CutToolResult result;
 		if (runtime.cut.points.empty()) {
 			result = capture_first_point(runtime.cut, selection, point.position, point.plane_normal);
+			if (result.ok) {
+				runtime.cut.source_object_id = placement.object_id;
+			}
 		} else if (runtime.cut.points.size() == 1U) {
 			result = capture_second_point(runtime.cut, point.position);
 		} else {
@@ -444,8 +555,7 @@ public:
 
 	[[nodiscard]] CutToolResult begin_line_drag_from_ray(EditorRuntimeState& runtime, const CutRayUpdateInput& input) const
 	{
-		const CutGridPointResult point =
-			cut_grid_point_from_ray(input.camera, input.ray, input.grid_size);
+		const CutGridPointResult point = cut_placement_point_from_ray(runtime.cut, {}, input).point;
 		if (!point.ok) {
 			return { false, false, point.message.empty() ? "Cut needs a valid grid point." : point.message };
 		}

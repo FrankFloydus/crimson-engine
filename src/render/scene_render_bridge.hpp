@@ -133,6 +133,9 @@ public:
     [[nodiscard]] std::uint64_t tool_preview_submission_revision() const {
       return tool_preview_submission_revision_;
     }
+    [[nodiscard]] std::uint64_t tool_preview_outline_build_count() const noexcept {
+      return preview_outline_build_count_;
+    }
     [[nodiscard]] bool scene_asset_overlay_sync_pending() const {
       return tool_preview_overlay_suppression_dirty_ || tool_preview_wireframe_dirty_;
     }
@@ -218,6 +221,12 @@ public:
     std::vector<RenderToolPreviewLightRecord> array_dimension_preview_lights_;
     std::uint64_t tool_preview_overlay_revision_ = 0u;
     RenderOverlaySelectionSnapshot filtered_scene_overlay_snapshot_;
+    RenderOverlaySelectedObjectSnapshot preview_outline_snapshot_;
+    RenderSourceStamp preview_outline_source_;
+    RenderSourceStamp preview_outline_hierarchy_source_;
+    std::uint64_t preview_outline_revision_ = 0u;
+    std::uint64_t preview_outline_build_count_ = 0u;
+    bool preview_outline_valid_ = false;
     RenderOverlayCollisionSnapshot filtered_collision_snapshot_;
     RenderSourceStamp filtered_collision_source_stamp_;
     bool filtered_collision_valid_ = false;

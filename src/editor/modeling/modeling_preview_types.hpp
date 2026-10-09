@@ -49,6 +49,9 @@ struct ModelingToolPreviewMesh {
   bool cast_shadows = false;
   bool dynamic_positions = false;
   bool suppress_source = false;
+  // A successfully prepared removal has no drawable replacement. Keep that
+  // explicit so malformed empty mesh payloads still fail render validation.
+  bool suppress_source_only = false;
   std::uint64_t layout_key = 0u;
   // Participant-local token for the packed position stream. A collection
   // update must leave this value and the payload unchanged for participants

@@ -843,10 +843,36 @@ private:
     PreviewId preview_id{};
     ObjectId preview_object_id{};
     std::uint64_t preview_content_revision = 0;
+    std::uint64_t plane_cut_revision = 0;
 
     friend bool operator==(const SelectionProjectionSnapshotCacheKey &,
                            const SelectionProjectionSnapshotCacheKey &) =
         default;
+  };
+
+  /// Pins the accepted Cut documents used by rendering, picking and commit.
+  struct PlaneCutCandidate {
+    int native_id = kInvalidModelingObjectId;
+    ObjectId object;
+    PolygonDocument kept;
+    std::optional<PolygonDocument> second;
+    PolygonDocument projected;
+    MeshAsset projected_mesh;
+    QMat4 world_from_object;
+    PolygonSelectionSnapshot dormant_selection;
+    OperationResult receipt;
+  };
+
+  struct PlaneCutPreviewCache {
+    std::vector<ModelingSdkPlaneCutRequest> requests;
+    ModelingCutMode mode = ModelingCutMode::KeepBoth;
+    std::uint64_t content_revision = 0;
+    std::uint64_t selection_revision = 0;
+    std::uint64_t scene_revision = 0;
+    std::uint64_t asset_revision = 0;
+    std::uint64_t object_map_revision = 0;
+    std::vector<PlaneCutCandidate> candidates;
+    ModelingSdkPlaneCutPreviewResult preview;
   };
 
   /// Stores only adapter-local state; owner checkpoints live in the shared
@@ -1136,6 +1162,7 @@ public:
   }
 
   void reset_from_scene() {
+    clear_plane_cut_preview();
     accepted_overlay_coordinates_.reset();
     ++face_extrusion_generation_;
     ++stats_.full_scene_reset_count;
@@ -1425,6 +1452,9 @@ public:
   }
 
   [[nodiscard]] std::uint64_t selection_overlay_preview_signature() const noexcept {
+    if (!plane_cut_preview_cache_.candidates.empty()) {
+      return (plane_cut_preview_revision_ ^ 0x437574ULL) * 1099511628211ULL;
+    }
     if (!mesh_preview_host_baseline_.has_value() ||
         !mesh_preview_host_baseline_->fence_acknowledged ||
         !session_.preview_active(mesh_preview_host_baseline_->preview_id)) {
@@ -1469,6 +1499,16 @@ public:
           modeling::make_error(modeling::ErrorCode::InvalidId,
                                "Modeling object identity is not live."));
     }
+    if (include_preview) {
+      if (const auto *candidate = plane_cut_candidate(modeling_object_id)) {
+        return Result<ModelingPolygonDocumentReadSnapshot>::success({
+            .object = *object,
+            .document = modeling::polygon_document_read_snapshot(candidate->projected),
+            .selection = candidate->projected.selection(),
+            .preview = true,
+        });
+      }
+    }
     const auto preview = session_.preview_summary();
     const auto participant = std::ranges::find(
         preview.objects, *object,
@@ -1492,6 +1532,9 @@ public:
 
   [[nodiscard]] std::optional<MeshAsset>
   compile_object_mesh(int modeling_object_id) const {
+    if (const auto *candidate = plane_cut_candidate(modeling_object_id)) {
+      return candidate->projected_mesh;
+    }
     const auto extrusion = std::ranges::find(
         face_extrusion_preview_meshes_, modeling_object_id,
         &ModelingToolPreviewMesh::source_object_id);
@@ -1511,104 +1554,351 @@ public:
     return std::nullopt;
   }
 
+  [[nodiscard]] static std::array<QVec3, 3> local_cut_plane_points(
+      const QMat4 &world_from_object, const QMat4 &object_from_world,
+      const std::array<QVec3, 3> &world_points) {
+    std::array<QVec3, 3> local_points{
+        transform_point(object_from_world, world_points[0]),
+        transform_point(object_from_world, world_points[1]),
+        transform_point(object_from_world, world_points[2]),
+    };
+    // A reflected basis reverses the cross product of the transformed plane
+    // tangents. Preserve the world-space signed half-space chosen by Cut.
+    if (glm::determinant(glm::dmat3{to_glm(world_from_object)}) < 0.0) {
+      std::swap(local_points[1], local_points[2]);
+    }
+    return local_points;
+  }
+
+  [[nodiscard]] Result<std::vector<ModelingSdkPlaneCutRequest>>
+  plane_cut_requests(const quader_editor_core::CutToolState &state) const {
+    using Requests = std::vector<ModelingSdkPlaneCutRequest>;
+    const auto points = quader_editor_core::cut_plane_points(state);
+    if (points.size() != 3U || state.target_object_ids.empty()) {
+      return Result<Requests>::failure(modeling::make_error(
+          modeling::ErrorCode::InvalidArgument, "Cut needs a plane and target meshes."));
+    }
+    Requests requests;
+    requests.reserve(state.target_object_ids.size());
+    for (const int native_id : state.target_object_ids) {
+      const auto entity = object_map_.entity_for_modeling_object(native_id);
+      const auto world = modeling_object_world_transform_resolver_
+          ? modeling_object_world_transform_resolver_(native_id)
+          : entity.has_value() && scene_.exists(*entity)
+                ? std::optional<QMat4>{scene_.world_transform_matrix(*entity)}
+                : std::nullopt;
+      const auto local = world.has_value() ? try_scene_matrix_inverse(*world)
+                                         : std::nullopt;
+      if (!local.has_value()) {
+        return Result<Requests>::failure(modeling::make_error(
+            modeling::ErrorCode::InvalidArgument,
+            "Cut target mesh has a non-invertible world transform."));
+      }
+      ModelingSdkPlaneCutRequest request{
+          .modeling_object_id = native_id,
+          .local_plane_points = local_cut_plane_points(
+              *world, *local, {points[0], points[1], points[2]}),
+          .scope = state.scope,
+      };
+      for (const auto face : state.target_faces) {
+        if (face.object_id == native_id) {
+          request.faces.push_back(modeling::make_id<modeling::FaceTag>(face.face_index));
+        }
+      }
+      for (const auto edge : state.target_edges) {
+        if (edge.object_id == native_id) {
+          request.edges.push_back(modeling::make_edge_key(
+              modeling::make_id<modeling::VertexTag>(edge.a_index),
+              modeling::make_id<modeling::VertexTag>(edge.b_index)));
+        }
+      }
+      request.all_edges = std::ranges::find(state.target_edge_full_object_ids,
+                                             native_id) !=
+                          state.target_edge_full_object_ids.end();
+      requests.push_back(std::move(request));
+    }
+    return Result<Requests>::success(std::move(requests));
+  }
+
+  [[nodiscard]] ModelingSdkPlaneCutPreviewResult rejected_plane_cut_preview(
+      std::string message) const {
+    auto rejected = plane_cut_preview_cache_.preview;
+    rejected.command = failure(std::move(message));
+    return rejected;
+  }
+
+  [[nodiscard]] ModelingSdkPlaneCutPreviewResult preview_plane_cut(
+      const quader_editor_core::CutToolState &state) const {
+    const auto requests = plane_cut_requests(state);
+    if (!requests.ok()) return rejected_plane_cut_preview(requests.error_message());
+    const auto mode = state.mode == quader_editor_core::CutMode::KeepBack
+        ? ModelingCutMode::DiscardLeft
+        : state.mode == quader_editor_core::CutMode::KeepFront
+              ? ModelingCutMode::DiscardRight : ModelingCutMode::KeepBoth;
+    return preview_plane_cut(requests.value(), mode);
+  }
+
   [[nodiscard]] ModelingSdkPlaneCutPreviewResult preview_plane_cut(
       std::span<const int> modeling_object_ids,
       const std::array<QVec3, 3> &world_plane_points,
       ModelingCutMode mode) const {
-    ModelingSdkPlaneCutPreviewResult preview;
-    preview.target_count = static_cast<int>(modeling_object_ids.size());
-    if (modeling_object_ids.empty()) {
-      preview.command = failure("Cut needs a selected mesh.");
-      return preview;
-    }
-
+    std::vector<ModelingSdkPlaneCutRequest> requests;
+    requests.reserve(modeling_object_ids.size());
     for (const int native_id : modeling_object_ids) {
-      const std::optional<ObjectId> object = sdk_object(native_id);
-      const std::optional<EntityId> entity =
-          object_map_.entity_for_modeling_object(native_id);
-      if (!object.has_value() || !entity.has_value() ||
-          !scene_.exists(*entity)) {
-        preview.command = failure("Cut target mesh was not found.");
-        preview.kept_meshes.clear();
-        preview.discarded_meshes.clear();
-        return preview;
+      const auto entity = object_map_.entity_for_modeling_object(native_id);
+      const auto world = modeling_object_world_transform_resolver_
+          ? modeling_object_world_transform_resolver_(native_id)
+          : entity.has_value() && scene_.exists(*entity)
+                ? std::optional<QMat4>{scene_.world_transform_matrix(*entity)}
+                : std::nullopt;
+      const auto local = world.has_value() ? try_scene_matrix_inverse(*world)
+                                         : std::nullopt;
+      if (!local.has_value()) {
+        return rejected_plane_cut_preview("Cut target transform is not invertible.");
       }
-
-      const QMat4 world = scene_.world_transform_matrix(*entity);
-      const QMat4 local_from_world = inverse(world);
-      const std::array<QVec3, 3> local_points{
-          transform_point(local_from_world, world_plane_points[0]),
-          transform_point(local_from_world, world_plane_points[1]),
-          transform_point(local_from_world, world_plane_points[2]),
-      };
-      Result<PolygonDocument> copied = session_.document_copy(*object);
-      if (!copied.ok()) {
-        preview.command = failure(copied.error_message());
-        preview.kept_meshes.clear();
-        preview.discarded_meshes.clear();
-        return preview;
-      }
-      Result<quader::modeling::SplitPolygonDocuments> split =
-          copied.value().split_by_plane({
-              .a = to_sdk(local_points[0]),
-              .b = to_sdk(local_points[1]),
-              .c = to_sdk(local_points[2]),
-              .cap = true,
-          });
-      if (!split.ok()) {
-        preview.command = failure(split.error_message());
-        preview.kept_meshes.clear();
-        preview.discarded_meshes.clear();
-        return preview;
-      }
-
-      const bool keep_front = mode != ModelingCutMode::DiscardLeft;
-      const PolygonDocument &kept =
-          keep_front ? split.value().front : split.value().back;
-      const PolygonDocument &discarded =
-          keep_front ? split.value().back : split.value().front;
-      std::optional<MeshAsset> kept_mesh =
-          MeshProjectionService::compile_sdk_document_mesh(kept);
-      std::optional<MeshAsset> discarded_mesh =
-          MeshProjectionService::compile_sdk_document_mesh(discarded);
-      stats_.mesh_compile_count += 2U;
-      if (!kept_mesh.has_value() || !discarded_mesh.has_value() ||
-          kept_mesh->geometry().vertices.empty() ||
-          kept_mesh->geometry().indices.empty() ||
-          discarded_mesh->geometry().vertices.empty() ||
-          discarded_mesh->geometry().indices.empty()) {
-        preview.command = failure("Cut preview failed.");
-        preview.kept_meshes.clear();
-        preview.discarded_meshes.clear();
-        return preview;
-      }
-
-      const MaterialComponent *material = scene_.material(*entity);
-      const MaterialComponent material_component =
-          material != nullptr ? *material : MaterialComponent{};
-      kept_mesh->name = "Cut Preview Keep";
-      discarded_mesh->name = "Cut Preview Discard";
-      preview.kept_meshes.push_back({
-          .source_entity = *entity,
-          .material = material_component,
-          .mesh = std::move(*kept_mesh),
-          .transform = world,
-      });
-      preview.discarded_meshes.push_back({
-          .source_entity = *entity,
-          .material = material_component,
-          .mesh = std::move(*discarded_mesh),
-          .transform = world,
-      });
-      preview.split_count += split.value().split_count;
-      preview.removed_count +=
-          mode == ModelingCutMode::KeepBoth
-              ? split.value().removed_count
-              : std::max(1, split.value().removed_count);
+      requests.push_back({.modeling_object_id = native_id,
+          .local_plane_points = local_cut_plane_points(
+              *world, *local, world_plane_points)});
     }
+    return preview_plane_cut(requests, mode);
+  }
 
-    preview.command = {.ok = true, .changed = false};
-    return preview;
+  [[nodiscard]] bool matches_plane_cut_preview(
+      std::span<const ModelingSdkPlaneCutRequest> requests,
+      ModelingCutMode mode) const {
+    const auto &cache = plane_cut_preview_cache_;
+    if (cache.requests.size() != requests.size() || !cache.preview.command.ok ||
+        cache.mode != mode || cache.content_revision != session_.content_revision() ||
+        cache.selection_revision != session_.selection_revision() ||
+        cache.scene_revision != scene_.revision() ||
+        cache.asset_revision != assets_.revision() ||
+        cache.object_map_revision != object_map_.revision()) return false;
+    for (std::size_t index = 0; index < requests.size(); ++index) {
+      const auto &left = cache.requests[index];
+      const auto &right = requests[index];
+      if (left.modeling_object_id != right.modeling_object_id ||
+          left.scope != right.scope || left.faces != right.faces ||
+          left.edges != right.edges || left.all_edges != right.all_edges) return false;
+      for (std::size_t point = 0; point < 3U; ++point) {
+        const auto a = left.local_plane_points[point];
+        const auto b = right.local_plane_points[point];
+        if (a.x != b.x || a.y != b.y || a.z != b.z) return false;
+      }
+    }
+    return true;
+  }
+
+  [[nodiscard]] static Result<PolygonDocument> combined_cut_projection(
+      const PolygonDocument &front, const PolygonDocument &back) {
+    // Combine through the portable owner so the temporary read projection uses
+    // the same topology/attribute handling as an authored object combination.
+    modeling::ModelingSession projection;
+    auto first = projection.add_document(front, "Cut front projection");
+    if (!first.ok()) return Result<PolygonDocument>::failure(first.error());
+    auto second = projection.add_document(back, "Cut back projection");
+    if (!second.ok()) return Result<PolygonDocument>::failure(second.error());
+    const std::array objects{first.value(), second.value()};
+    const auto combined = projection.combine_objects(objects);
+    if (!combined.ok()) return Result<PolygonDocument>::failure(combined.error());
+    return projection.document_copy(first.value());
+  }
+
+  [[nodiscard]] ModelingSdkPlaneCutPreviewResult preview_plane_cut(
+      std::span<const ModelingSdkPlaneCutRequest> requests,
+      ModelingCutMode mode) const {
+    using Scope = quader_editor_core::CutScope;
+    if (requests.empty()) return rejected_plane_cut_preview("Cut needs a selected mesh.");
+    if (matches_plane_cut_preview(requests, mode)) return plane_cut_preview_cache_.preview;
+    PlaneCutPreviewCache prepared;
+    prepared.requests.assign(requests.begin(), requests.end());
+    prepared.mode = mode;
+    prepared.content_revision = session_.content_revision();
+    prepared.selection_revision = session_.selection_revision();
+    prepared.scene_revision = scene_.revision();
+    prepared.asset_revision = assets_.revision();
+    prepared.object_map_revision = object_map_.revision();
+    prepared.preview.target_count = static_cast<int>(requests.size());
+    std::unordered_set<int> seen;
+    for (const auto &request : requests) {
+      const int native_id = request.modeling_object_id;
+      const auto object = sdk_object(native_id);
+      const auto entity = object_map_.entity_for_modeling_object(native_id);
+      if (!object.has_value() || !entity.has_value() || !scene_.exists(*entity) ||
+          !seen.insert(native_id).second) {
+        return rejected_plane_cut_preview("Cut target mesh was not found or was duplicated.");
+      }
+      const auto world = modeling_object_world_transform_resolver_
+          ? modeling_object_world_transform_resolver_(native_id)
+          : std::optional<QMat4>{scene_.world_transform_matrix(*entity)};
+      if (!world.has_value() || !try_scene_matrix_inverse(*world).has_value()) {
+        return rejected_plane_cut_preview("Cut target transform is not invertible.");
+      }
+      const auto &points = request.local_plane_points;
+      const auto normal = cross(points[1] - points[0], points[2] - points[0]);
+      if (!finite(points[0]) || !finite(points[1]) || !finite(points[2]) ||
+          !finite(normal) || length_squared(normal) <= 0.0000001F) {
+        return rejected_plane_cut_preview("Cut plane is degenerate.");
+      }
+      auto source = session_.document_copy(*object);
+      if (!source.ok()) return rejected_plane_cut_preview(source.error_message());
+      PlaneCutCandidate candidate;
+      candidate.native_id = native_id;
+      candidate.object = *object;
+      candidate.world_from_object = *world;
+      candidate.dormant_selection = source.value().selection();
+      const modeling::PlaneSplitSpec plane{.a = to_sdk(points[0]),
+          .b = to_sdk(points[1]), .c = to_sdk(points[2]), .cap = request.scope == Scope::Object};
+      std::optional<PolygonDocument> discarded;
+      if (request.scope == Scope::Object) {
+        auto split = source.value().split_by_plane(plane);
+        if (!split.ok()) {
+          // A valid plane beyond the mesh is a complete keep or discard.
+          // Reject other split failures instead of masking invalid topology.
+          const auto topology = source.value().authored_topology();
+          if (!topology.ok()) return rejected_plane_cut_preview(topology.error_message());
+          bool front = false;
+          bool back = false;
+          const auto unit_normal = normalize_or_zero(normal);
+          for (const auto &vertex : topology.value().vertices) {
+            const auto position = vertex.position;
+            const float distance = dot(QVec3{position.x, position.y, position.z} - points[0], unit_normal);
+            front = front || distance > 0.00001F;
+            back = back || distance < -0.00001F;
+          }
+          if (front == back) return rejected_plane_cut_preview(split.error_message());
+          const bool keep_source = mode == ModelingCutMode::KeepBoth ||
+              (front && mode == ModelingCutMode::DiscardRight) ||
+              (back && mode == ModelingCutMode::DiscardLeft);
+          candidate.kept = source.value();
+          if (!keep_source) {
+            discarded = source.value();
+            auto selected = candidate.kept.select_all_faces();
+            if (!selected.ok()) return rejected_plane_cut_preview(selected.error_message());
+            auto removed = candidate.kept.delete_selection();
+            if (!removed.ok()) return rejected_plane_cut_preview(removed.error_message());
+            candidate.receipt = std::move(removed).value();
+            ++prepared.preview.removed_count;
+          }
+        } else {
+          candidate.receipt = split.value().receipt;
+          prepared.preview.split_count += split.value().split_count;
+          candidate.kept = mode == ModelingCutMode::DiscardLeft
+              ? std::move(split.value().back) : std::move(split.value().front);
+          if (mode == ModelingCutMode::KeepBoth) {
+            candidate.second = std::move(split.value().back);
+          } else {
+            discarded = mode == ModelingCutMode::DiscardLeft
+                ? std::move(split.value().front) : std::move(split.value().back);
+            prepared.preview.removed_count += std::max(1, split.value().removed_count);
+          }
+        }
+      } else {
+        auto selected = request.scope == Scope::Face
+            ? source.value().select_faces(request.faces)
+            : request.all_edges ? source.value().select_all_edges()
+                                : source.value().select_edges(request.edges);
+        if (!selected.ok()) return rejected_plane_cut_preview(selected.error_message());
+        candidate.kept = source.value();
+        const auto keep = mode == ModelingCutMode::DiscardLeft ? modeling::CutKeepMode::DiscardLeft
+            : mode == ModelingCutMode::DiscardRight ? modeling::CutKeepMode::DiscardRight
+                                                   : modeling::CutKeepMode::KeepBoth;
+        auto cut = request.scope == Scope::Face
+            ? candidate.kept.cut_selected_faces_by_plane(plane, keep)
+            : candidate.kept.cut_selected_edges_by_plane(plane);
+        if (!cut.ok()) return rejected_plane_cut_preview(cut.error_message());
+        candidate.receipt = std::move(cut).value();
+        prepared.preview.split_count += static_cast<int>(candidate.receipt.created.vertices.size());
+        prepared.preview.removed_count += static_cast<int>(candidate.receipt.deleted.faces.size());
+        if (request.scope == Scope::Face && mode != ModelingCutMode::KeepBoth) {
+          auto opposite = source.value();
+          auto opposite_cut = opposite.cut_selected_faces_by_plane(plane,
+              keep == modeling::CutKeepMode::DiscardRight ? modeling::CutKeepMode::DiscardLeft
+                                                      : modeling::CutKeepMode::DiscardRight);
+          if (!opposite_cut.ok()) return rejected_plane_cut_preview(opposite_cut.error_message());
+          if (!opposite.selection().faces.empty()) {
+            auto extracted = opposite.extract_selected_faces();
+            if (!extracted.ok()) return rejected_plane_cut_preview(extracted.error_message());
+            discarded = std::move(extracted.value().document);
+          }
+        }
+        if (request.scope == Scope::Edge && !candidate.receipt.created.vertices.empty()) {
+          const auto payload = candidate.kept.authored_payload();
+          if (!payload.ok()) return rejected_plane_cut_preview(payload.error_message());
+          for (std::size_t index = 0; index < payload.value().vertices.size(); ++index) {
+            if (std::ranges::find(candidate.receipt.created.vertices, payload.value().vertices[index]) !=
+                candidate.receipt.created.vertices.end()) {
+              const auto point = payload.value().positions[index];
+              prepared.preview.inserted_points.push_back(transform_point(*world, {point.x, point.y, point.z}));
+            }
+          }
+        }
+      }
+      const auto *material = scene_.material(*entity);
+      const auto *binding = scene_.mesh(*entity);
+      const auto append_mesh = [&](const PolygonDocument &document,
+                                   std::vector<ModelingToolPreviewMesh> &meshes,
+                                   bool suppress_source) {
+        auto mesh = MeshProjectionService::compile_sdk_document_mesh(document);
+        ++stats_.mesh_compile_count;
+        if (!mesh.has_value()) return false;
+        const bool empty = mesh->geometry().indices.empty();
+        mesh->name = "Cut Preview";
+        meshes.push_back({.source_object_id = native_id, .source_entity = *entity,
+            .material = material != nullptr ? *material : MaterialComponent{},
+            .mesh = std::move(*mesh), .transform = *world,
+            .double_sided = binding != nullptr && binding->double_sided,
+            .suppress_source = suppress_source,
+            .suppress_source_only = suppress_source && empty});
+        return true;
+      };
+      if (!append_mesh(candidate.kept, prepared.preview.kept_meshes, true) ||
+          (candidate.second.has_value() &&
+           !append_mesh(*candidate.second, prepared.preview.kept_meshes, true)) ||
+          (discarded.has_value() &&
+           !append_mesh(*discarded, prepared.preview.discarded_meshes, false))) {
+        return rejected_plane_cut_preview("Cut candidate mesh could not be compiled.");
+      }
+      candidate.projected = candidate.kept;
+      if (candidate.second.has_value()) {
+        auto combined = combined_cut_projection(candidate.kept, *candidate.second);
+        if (!combined.ok()) return rejected_plane_cut_preview(combined.error_message());
+        candidate.projected = std::move(combined).value();
+        auto mesh = MeshProjectionService::compile_sdk_document_mesh(candidate.projected);
+        ++stats_.mesh_compile_count;
+        if (!mesh.has_value()) return rejected_plane_cut_preview("Cut picking projection failed.");
+        candidate.projected_mesh = std::move(*mesh);
+      } else {
+        candidate.projected_mesh = prepared.preview.kept_meshes.back().mesh;
+      }
+      prepared.candidates.push_back(std::move(candidate));
+    }
+    prepared.preview.command = {.ok = true, .changed = false};
+    prepared.preview.revision = ++plane_cut_preview_revision_;
+    plane_cut_preview_cache_ = std::move(prepared);
+    return plane_cut_preview_cache_.preview;
+  }
+
+  [[nodiscard]] const PlaneCutCandidate *plane_cut_candidate(int native_id) const {
+    if (plane_cut_preview_cache_.content_revision != session_.content_revision()) return nullptr;
+    const auto found = std::ranges::find(plane_cut_preview_cache_.candidates,
+                                       native_id, &PlaneCutCandidate::native_id);
+    return found != plane_cut_preview_cache_.candidates.end() &&
+                   sdk_object(native_id) == found->object
+               ? &*found : nullptr;
+  }
+
+  [[nodiscard]] const ModelingSdkPlaneCutPreviewResult &plane_cut_preview() const noexcept {
+    return plane_cut_preview_cache_.preview;
+  }
+
+  [[nodiscard]] std::uint64_t plane_cut_preview_revision() const noexcept {
+    return plane_cut_preview_revision_;
+  }
+
+  void clear_plane_cut_preview() {
+    if (plane_cut_preview_cache_.candidates.empty()) return;
+    plane_cut_preview_cache_ = {};
+    ++plane_cut_preview_revision_;
   }
 
   [[nodiscard]] ModelingSdkMirrorPreviewResult preview_mirror(
@@ -1758,6 +2048,8 @@ public:
       if (extrusion != face_extrusion_preview_meshes_.end()) {
         mesh = &extrusion->mesh;
       }
+      const auto *cut_candidate = plane_cut_candidate(native_id);
+      if (cut_candidate != nullptr) mesh = &cut_candidate->projected_mesh;
       if (!entity.has_value() || !scene_.exists(*entity) || mesh == nullptr ||
           !mesh->has_authored_polygon_document ||
           !mesh->authored_polygon_document) {
@@ -1782,7 +2074,9 @@ public:
       }
 
       Result<PolygonDocument> document =
-          extrusion != face_extrusion_preview_meshes_.end() ||
+          cut_candidate != nullptr
+              ? Result<PolygonDocument>::success(cut_candidate->projected)
+              : extrusion != face_extrusion_preview_meshes_.end() ||
                   authored_preview_objects.contains(sdk_object_key(object_id))
               ? session_.preview_document_copy(preview.id, object_id)
               : committed_documents.ok() && source != sources.end()
@@ -1850,7 +2144,7 @@ public:
     }
     return ModelingSelectionProjectionSnapshot(
         std::move(objects), projected_mode, active_native_object_id_,
-        content_revision(), selection_revision());
+        content_revision() + plane_cut_preview_revision_, selection_revision());
   }
 
   [[nodiscard]] const ModelingSelectionProjectionSnapshot &
@@ -1886,6 +2180,7 @@ public:
         .preview_content_revision =
             curve_preview_active || has_acknowledged_affine_transform_preview()
                 ? 0U : preview.content_revision,
+        .plane_cut_revision = plane_cut_preview_revision_,
     };
     if (!selection_projection_snapshot_cache_key_.has_value() ||
         *selection_projection_snapshot_cache_key_ != cache_key ||
@@ -10314,8 +10609,12 @@ public:
         if (!entity.has_value() || !scene_.exists(*entity)) {
           continue;
         }
+        const auto *cut_candidate = native.has_value()
+            ? plane_cut_candidate(*native) : nullptr;
         Result<PolygonDocument> document =
-            preview.active && preview.object_id == object.id
+            cut_candidate != nullptr
+                ? Result<PolygonDocument>::success(cut_candidate->projected)
+                : preview.active && preview.object_id == object.id
                 ? session_.preview_document_copy(preview.id)
                 : query_polygon_document(object.id);
         if (!document.ok()) {
@@ -10366,8 +10665,9 @@ public:
             faces_by_id.emplace(id_key(face.id), &face);
           }
         }
-        const QMat4 world_from_object =
-            scene_.world_transform_matrix(*entity);
+        const QMat4 world_from_object = cut_candidate != nullptr
+            ? cut_candidate->world_from_object
+            : scene_.world_transform_matrix(*entity);
         const auto include_vertex = [&](VertexId id) {
           const auto vertex = vertices_by_id.find(id_key(id));
           if (vertex == vertices_by_id.end() || vertex->second == nullptr) {
@@ -10404,8 +10704,13 @@ public:
 
     std::optional<SceneBounds> bounds;
     for (const EntityId entity : selected_entities()) {
-      const std::optional<SceneBounds> current =
-          entity_world_bounds(scene_, assets_, entity);
+      const auto native = object_map_.modeling_object_for_entity(entity);
+      const auto *cut_candidate = native.has_value()
+          ? plane_cut_candidate(*native) : nullptr;
+      const std::optional<SceneBounds> current = cut_candidate != nullptr
+          ? mesh_world_bounds(cut_candidate->projected_mesh,
+                              cut_candidate->world_from_object)
+          : entity_world_bounds(scene_, assets_, entity);
       if (!current.has_value()) {
         continue;
       }
@@ -13518,56 +13823,56 @@ private:
   [[nodiscard]] ModelingCommandResult plane_cut(
       std::span<const ModelingSdkPlaneCutRequest> requests,
       ModelingCutMode mode, bool select_results) {
-    if (requests.empty()) {
-      return failure("Cut needs a selected mesh.");
+    using Scope = quader_editor_core::CutScope;
+    if (requests.empty()) return failure("Cut needs a selected mesh.");
+    if (preview_active()) return failure("Commit or cancel the active preview first.");
+    if (std::ranges::any_of(requests, [&](const auto &request) {
+          return request.scope != requests.front().scope;
+        })) return failure("Cut cannot mix component scopes.");
+    const auto prepared = preview_plane_cut(requests, mode);
+    if (!prepared.command.ok) return prepared.command;
+    // These pins are exactly the documents accepted by the preview. Scene and
+    // asset publication below cannot change the inputs to a later participant.
+    auto candidates = plane_cut_preview_cache_.candidates;
+    const bool changed = std::ranges::any_of(candidates, [](const auto &candidate) {
+      return candidate.receipt.changed || candidate.second.has_value();
+    });
+    if (!changed) {
+      clear_plane_cut_preview();
+      return {.ok = true, .changed = false, .message = "Cut did not cross the selected geometry."};
     }
-    if (preview_active()) {
-      return failure("Commit or cancel the active preview first.");
-    }
+    const std::size_t duplicate_count = static_cast<std::size_t>(
+        std::ranges::count_if(candidates, [](const auto &candidate) {
+          return candidate.second.has_value();
+        }));
     std::vector<int> affected_modeling_ids;
     std::vector<EntityId> affected_entities;
     std::vector<AssetId> affected_assets;
-    std::unordered_set<std::uint64_t> preflight_sources;
-    affected_modeling_ids.reserve(
-        requests.size() * (mode == ModelingCutMode::KeepBoth ? 2u : 1u));
-    for (const ModelingSdkPlaneCutRequest &request : requests) {
-      const std::optional<ObjectId> source =
-          sdk_object(request.modeling_object_id);
-      const std::optional<EntityId> entity =
-          object_map_.entity_for_modeling_object(request.modeling_object_id);
-      if (!source.has_value() || !entity.has_value() ||
-          !scene_.exists(*entity) ||
-          !preflight_sources.emplace(sdk_object_key(*source)).second) {
-        return failure("Cut target mesh was not found or was duplicated.");
-      }
+    affected_modeling_ids.reserve(requests.size() + duplicate_count);
+    for (const auto &request : requests) {
+      const auto entity = object_map_.entity_for_modeling_object(request.modeling_object_id);
+      if (!entity.has_value() || !scene_.exists(*entity)) return failure("Cut target mesh was not found.");
       affected_modeling_ids.push_back(request.modeling_object_id);
-      std::vector<EntityId> subtree = scene_.descendants(*entity, true);
-      affected_entities.insert(affected_entities.end(), subtree.begin(),
-                               subtree.end());
-      if (const MeshComponent *mesh = scene_.mesh(*entity)) {
-        affected_assets.push_back(mesh->mesh);
-      }
+      const auto subtree = scene_.descendants(*entity, true);
+      affected_entities.insert(affected_entities.end(), subtree.begin(), subtree.end());
+      if (const auto *mesh = scene_.mesh(*entity)) affected_assets.push_back(mesh->mesh);
     }
     std::optional<int> first_back_native_candidate;
-    if (mode == ModelingCutMode::KeepBoth) {
+    if (duplicate_count != 0U) {
       const int first = next_available_native_object_id();
-      const std::size_t available =
-          first == kInvalidModelingObjectId
-              ? 0u
-              : static_cast<std::size_t>(std::numeric_limits<int>::max() -
-                                         first);
-      if (first == kInvalidModelingObjectId || requests.size() > available) {
+      const auto available = first == kInvalidModelingObjectId ? 0U
+          : static_cast<std::size_t>(std::numeric_limits<int>::max() - first);
+      if (first == kInvalidModelingObjectId || duplicate_count > available) {
         return failure("Native modeling object IDs are exhausted.");
       }
       first_back_native_candidate = first;
-      for (std::size_t index = 0; index < requests.size(); ++index) {
+      for (std::size_t index = 0; index < duplicate_count; ++index) {
         affected_modeling_ids.push_back(first + static_cast<int>(index));
       }
     }
-    for (const EntityId selected : scene_.selected_entities()) {
-      std::vector<EntityId> subtree = scene_.descendants(selected, true);
-      affected_entities.insert(affected_entities.end(), subtree.begin(),
-                               subtree.end());
+    for (const auto selected : scene_.selected_entities()) {
+      const auto subtree = scene_.descendants(selected, true);
+      affected_entities.insert(affected_entities.end(), subtree.begin(), subtree.end());
     }
     AdapterPublicationState host_before = capture_adapter_publication_state();
     ModelingHostPublicationTransaction publication(
@@ -13575,136 +13880,78 @@ private:
         [this, host_before = std::move(host_before)]() mutable noexcept {
           restore_adapter_publication_state(std::move(host_before));
         },
-        {.checkpoint_scope =
-             ModelingHostPublicationCheckpointScope::ModelingProjection,
-         .capture_hierarchy = mode == ModelingCutMode::KeepBoth,
+        {.checkpoint_scope = ModelingHostPublicationCheckpointScope::ModelingProjection,
+         .capture_hierarchy = duplicate_count != 0U,
          .capture_scene_selection = true,
          .affected_scene_entities = affected_entities,
          .affected_asset_ids = affected_assets,
          .affected_modeling_object_ids = affected_modeling_ids});
-    if (!publication.ready()) {
-      return failure("Host publication checkpoint is unavailable.");
-    }
-    const std::size_t undo_mark = publication.sdk_undo_mark();
+    if (!publication.ready()) return failure("Host publication checkpoint is unavailable.");
+    const auto undo_mark = publication.sdk_undo_mark();
     const auto rollback = [&](std::string message) {
-      return rollback_publication_result(publication,
-                                         failure(std::move(message)));
+      return rollback_publication_result(publication, failure(std::move(message)));
     };
-
-    std::vector<ObjectId> result_objects;
-    result_objects.reserve(requests.size() *
-                           (mode == ModelingCutMode::KeepBoth ? 2U : 1U));
-    std::unordered_set<std::uint64_t> seen;
-    seen.reserve(requests.size());
     std::optional<int> first_back_native_id;
-    if (mode == ModelingCutMode::KeepBoth) {
-      first_back_native_id = reserve_native_object_ids(requests.size());
+    if (duplicate_count != 0U) {
+      first_back_native_id = reserve_native_object_ids(duplicate_count);
       if (first_back_native_id != first_back_native_candidate) {
         return rollback("Native modeling object IDs could not be reserved.");
       }
     }
+    std::vector<ObjectId> result_objects;
+    result_objects.reserve(candidates.size() + duplicate_count);
     std::size_t published_back_count = 0U;
-    for (const ModelingSdkPlaneCutRequest &request : requests) {
-      const std::optional<ObjectId> source =
-          sdk_object(request.modeling_object_id);
-      const std::optional<EntityId> source_entity =
-          object_map_.entity_for_modeling_object(request.modeling_object_id);
-      if (!source.has_value() || !source_entity.has_value() ||
-          !scene_.exists(*source_entity) ||
-          !seen.emplace(sdk_object_key(*source)).second) {
-        return rollback("Cut target mesh was not found or was duplicated.");
-      }
-      object_map_.remember_scene_entity(request.modeling_object_id, scene_,
-                                        *source_entity);
-      const std::optional<ModelingObjectSceneIdentity> identity =
-          object_map_.scene_identity_for_modeling_object(
-              request.modeling_object_id);
-      const ModelingObjectComponent *component =
-          scene_.modeling_object(*source_entity);
+    for (auto &candidate : candidates) {
+      const auto source_entity = object_map_.entity_for_modeling_object(candidate.native_id);
+      if (!source_entity.has_value()) return rollback("Cut source scene identity is missing.");
+      object_map_.remember_scene_entity(candidate.native_id, scene_, *source_entity);
+      const auto identity = object_map_.scene_identity_for_modeling_object(candidate.native_id);
+      const auto *component = scene_.modeling_object(*source_entity);
       if (!identity.has_value() || component == nullptr) {
         return rollback("Cut target scene identity is incomplete.");
       }
-      const ModelingObjectSceneIdentity identity_copy = *identity;
-      const std::uint32_t material_slot = component->material_slot;
-
-      Result<PolygonDocument> copied = session_.document_copy(*source);
-      if (!copied.ok()) {
-        return rollback(copied.error_message());
-      }
-      quader::modeling::PlaneSplitSpec split{
-          .a = to_sdk(request.local_plane_points[0]),
-          .b = to_sdk(request.local_plane_points[1]),
-          .c = to_sdk(request.local_plane_points[2]),
-          .cap = true,
-      };
-      Result<quader::modeling::SplitPolygonDocuments> cut =
-          copied.value().split_by_plane(split);
-      if (!cut.ok()) {
-        return rollback(cut.error_message());
-      }
-      if (!select_results) {
-        const auto dormant = copied.value().selection();
-        auto front_clear = restore_dormant_selection(
-            cut.value().front, dormant, cut.value().receipt);
-        auto back_clear = restore_dormant_selection(
-            cut.value().back, dormant, cut.value().receipt);
-        if (!front_clear.ok() || !back_clear.ok()) {
-          return rollback(!front_clear.ok() ? front_clear.error_message()
-                                            : back_clear.error_message());
+      const auto identity_copy = *identity;
+      const auto material_slot = component->material_slot;
+      if (!select_results && requests.front().scope == Scope::Object) {
+        const auto restored = restore_dormant_selection(candidate.kept,
+            candidate.dormant_selection, candidate.receipt);
+        if (!restored.ok()) return rollback(restored.error_message());
+        if (candidate.second.has_value()) {
+          const auto second_restored = restore_dormant_selection(*candidate.second,
+              candidate.dormant_selection, candidate.receipt);
+          if (!second_restored.ok()) return rollback(second_restored.error_message());
         }
       }
-
-      PolygonDocument source_result =
-          mode == ModelingCutMode::DiscardLeft
-              ? std::move(cut.value().back)
-              : std::move(cut.value().front);
-      OperationResult source_receipt = cut.value().receipt;
-      Result<OperationResult> committed = session_.commit_document(
-          *source, std::move(source_result), std::move(source_receipt));
-      if (!committed.ok() ||
-          !project_committed_object(publication, *source)) {
-        return rollback(committed.ok() ? "Cut source projection failed."
-                                       : committed.error_message());
-      }
-      result_objects.push_back(*source);
-
-      if (mode == ModelingCutMode::KeepBoth) {
-        Result<ObjectId> back = session_.add_document(
-            std::move(cut).value().back, identity_copy.name);
-        if (!back.ok()) {
-          return rollback(back.error_message());
+      if (candidate.receipt.changed) {
+        const auto committed = session_.commit_document(candidate.object,
+            std::move(candidate.kept), std::move(candidate.receipt));
+        if (!committed.ok() || !project_committed_object(publication, candidate.object)) {
+          return rollback(committed.ok() ? "Cut source projection failed." : committed.error_message());
         }
+      }
+      result_objects.push_back(candidate.object);
+      if (candidate.second.has_value()) {
+        auto back = session_.add_document(std::move(*candidate.second), identity_copy.name);
+        if (!back.ok()) return rollback(back.error_message());
         int back_native = kInvalidModelingObjectId;
         EntityId back_entity = kInvalidEntityId;
-        const bool published = publish_new_object(
-            &publication, back.value(), identity_copy, material_slot, back_native,
-            back_entity, false,
-            *first_back_native_id +
-                static_cast<int>(published_back_count));
-        if (back_entity != kInvalidEntityId) {
-          publication.track_created_entity(back_entity);
-        }
-        if (!published) {
-          return rollback("Cut back projection failed.");
-        }
+        const bool published = publish_new_object(&publication, back.value(), identity_copy,
+            material_slot, back_native, back_entity, false,
+            *first_back_native_id + static_cast<int>(published_back_count));
+        if (back_entity != kInvalidEntityId) publication.track_created_entity(back_entity);
+        if (!published) return rollback("Cut back projection failed.");
         ++published_back_count;
         result_objects.push_back(back.value());
       }
     }
-
-    const std::span<const ObjectId> selection =
-        select_results ? std::span<const ObjectId>(result_objects)
-                       : std::span<const ObjectId>{};
-    Result<OperationResult> selected =
-        session_.apply_object_selection(selection, SelectionEdit::Replace);
-    if (!selected.ok()) {
-      return rollback(selected.error_message());
-    }
+    const std::span<const ObjectId> selection = select_results
+        ? std::span<const ObjectId>(result_objects) : std::span<const ObjectId>{};
+    const auto selected = session_.apply_object_selection(selection, SelectionEdit::Replace);
+    if (!selected.ok()) return rollback(selected.error_message());
     if (select_results) {
-      selection_mode_ = ModelingSelectionMode::Face;
-      const std::optional<int> active = native_object(result_objects.back());
-      active_native_object_id_ =
-          active.value_or(kInvalidModelingObjectId);
+      selection_mode_ = requests.front().scope == Scope::Edge
+          ? ModelingSelectionMode::Edge : ModelingSelectionMode::Face;
+      active_native_object_id_ = native_object(result_objects.back()).value_or(kInvalidModelingObjectId);
     } else {
       active_native_object_id_ = kInvalidModelingObjectId;
     }
@@ -13715,12 +13962,11 @@ private:
     session_.squash_undo_since(undo_mark);
     ++persistent_content_revision_;
     ++stats_.scene_publication_count;
-    if (!add_selection_to_scene()) {
-      return rollback("SDK plane-cut selection could not be published.");
-    }
-    return commit_publication_result<ModelingCommandResult>(
-        publication,
-        {.ok = true, .changed = true, .message = "Cut selected meshes."});
+    if (!add_selection_to_scene()) return rollback("SDK plane-cut selection could not be published.");
+    const auto result = commit_publication_result<ModelingCommandResult>(publication,
+        {.ok = true, .changed = true, .message = "Cut selected geometry."});
+    if (result.ok) clear_plane_cut_preview();
+    return result;
   }
 
   [[nodiscard]] ModelingCommandResult half_cut_selected_objects(
@@ -15882,6 +16128,8 @@ private:
   std::vector<FaceExtrusionPreviewObject> face_extrusion_preview_objects_;
   std::vector<ModelingToolPreviewMesh> face_extrusion_preview_meshes_;
   std::uint64_t face_extrusion_preview_revision_ = 0;
+  mutable PlaneCutPreviewCache plane_cut_preview_cache_;
+  mutable std::uint64_t plane_cut_preview_revision_ = 0;
   int next_native_object_id_ = 1;
   int active_native_object_id_ = kInvalidModelingObjectId;
   ModelingSelectionMode selection_mode_ = ModelingSelectionMode::Object;
@@ -16012,6 +16260,37 @@ ModelingSdkProjectionAdapter::preview_plane_cut(
     ModelingCutMode mode) const {
   return impl_->preview_plane_cut(modeling_object_ids, world_plane_points,
                                   mode);
+}
+
+modeling::Result<std::vector<ModelingSdkPlaneCutRequest>>
+ModelingSdkProjectionAdapter::plane_cut_requests(
+    const quader_editor_core::CutToolState &state) const {
+  return impl_->plane_cut_requests(state);
+}
+
+ModelingSdkPlaneCutPreviewResult ModelingSdkProjectionAdapter::preview_plane_cut(
+    const quader_editor_core::CutToolState &state) const {
+  return impl_->preview_plane_cut(state);
+}
+
+ModelingSdkPlaneCutPreviewResult ModelingSdkProjectionAdapter::preview_plane_cut(
+    std::span<const ModelingSdkPlaneCutRequest> requests,
+    ModelingCutMode mode) const {
+  return impl_->preview_plane_cut(requests, mode);
+}
+
+const ModelingSdkPlaneCutPreviewResult &
+ModelingSdkProjectionAdapter::plane_cut_preview() const noexcept {
+  return impl_->plane_cut_preview();
+}
+
+std::uint64_t
+ModelingSdkProjectionAdapter::plane_cut_preview_revision() const noexcept {
+  return impl_->plane_cut_preview_revision();
+}
+
+void ModelingSdkProjectionAdapter::clear_plane_cut_preview() {
+  impl_->clear_plane_cut_preview();
 }
 
 ModelingSdkMirrorPreviewResult ModelingSdkProjectionAdapter::preview_mirror(

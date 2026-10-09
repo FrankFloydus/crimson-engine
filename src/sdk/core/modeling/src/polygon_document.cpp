@@ -3701,6 +3701,57 @@ PolygonDocument::cut_surface_by_plane(const PlaneSplitSpec &spec) {
       });
 }
 
+Result<OperationResult> PolygonDocument::cut_selected_faces_by_plane(
+    const PlaneSplitSpec &spec, CutKeepMode keep) {
+  if (keep != CutKeepMode::DiscardLeft && keep != CutKeepMode::DiscardRight &&
+      keep != CutKeepMode::KeepBoth) {
+    return Result<OperationResult>::failure(
+        make_error(ErrorCode::InvalidArgument, "Cut keep mode is invalid."));
+  }
+  const auto source_selection = selection();
+  auto result = apply_operation(
+      *impl_, [&spec, keep](quader_poly::Document &document,
+                           quader_poly::Selection &selection) {
+        return quader_poly::plane_cut_selected_faces(
+            document, selection,
+            {.first_point = to_native(spec.a),
+             .second_point = to_native(spec.b),
+             .third_point = to_native(spec.c),
+             .mode = keep == CutKeepMode::DiscardLeft
+                         ? quader_poly::PlaneCutMode::KeepBack
+                         : keep == CutKeepMode::DiscardRight
+                               ? quader_poly::PlaneCutMode::KeepFront
+                               : quader_poly::PlaneCutMode::KeepBoth,
+             .cap = false});
+      });
+  if (result.ok() && result.value().changed) {
+    result.value().selection_remap.source.faces = source_selection.faces;
+    result.value().selection_remap.destination.faces = selection().faces;
+  }
+  return result;
+}
+
+Result<OperationResult>
+PolygonDocument::cut_selected_edges_by_plane(const PlaneSplitSpec &spec) {
+  const auto source_selection = selection();
+  auto result = apply_operation(
+      *impl_, [&spec](quader_poly::Document &document,
+                     quader_poly::Selection &selection) {
+        return quader_poly::plane_cut_selected_edges(
+            document, selection,
+            {.first_point = to_native(spec.a),
+             .second_point = to_native(spec.b),
+             .third_point = to_native(spec.c),
+             .mode = quader_poly::PlaneCutMode::KeepBoth,
+             .cap = false});
+      });
+  if (result.ok() && result.value().changed) {
+    result.value().selection_remap.source.edges = source_selection.edges;
+    result.value().selection_remap.destination.edges = selection().edges;
+  }
+  return result;
+}
+
 Result<OperationResult> PolygonDocument::bridge_selected_faces(int steps) {
   return apply_operation(
       *impl_,

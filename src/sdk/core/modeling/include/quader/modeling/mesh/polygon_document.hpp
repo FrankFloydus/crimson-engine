@@ -198,6 +198,13 @@ struct PlaneSplitSpec {
   bool cap = true;
 };
 
+/** Selects which side of a cut operation remains. */
+enum class CutKeepMode {
+  DiscardLeft,
+  DiscardRight,
+  KeepBoth,
+};
+
 /**
  * Owns an SDK polygon document facade over portable polygon operations.
  */
@@ -383,6 +390,12 @@ public:
   split_by_plane(const PlaneSplitSpec &spec) const;
   [[nodiscard]] Result<OperationResult>
   cut_surface_by_plane(const PlaneSplitSpec &spec);
+  /// Cuts selected faces in the existing mesh, without creating caps.
+  [[nodiscard]] Result<OperationResult> cut_selected_faces_by_plane(
+      const PlaneSplitSpec &spec, CutKeepMode keep = CutKeepMode::KeepBoth);
+  /// Inserts plane intersections into selected edges and their incident loops.
+  [[nodiscard]] Result<OperationResult>
+  cut_selected_edges_by_plane(const PlaneSplitSpec &spec);
   [[nodiscard]] Result<OperationResult>
   bridge_selected_faces(int steps = 1);
   [[nodiscard]] Result<OperationResult>

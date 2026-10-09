@@ -216,15 +216,27 @@ RuntimeToolCommandService::activate_cut() {
 }
 
 quader_editor_core::EditorRuntimeCommand
-RuntimeToolCommandService::update_cut_hover(const ModelingToolRayEvent &event) {
+RuntimeToolCommandService::update_cut_hover(
+    const ModelingToolRayEvent &event,
+    std::optional<quader_editor_core::PickHitRecord> surface_hit,
+    bool surface_hit_resolved) {
+  auto settings = cut_ray_settings(event, event.dragging);
+  settings.resolved_surface_hit = std::move(surface_hit);
+  settings.surface_hit_resolved = surface_hit_resolved;
   return make_command(quader_editor_core::EditorRuntimeCommandId::UpdateCutHover,
-                      cut_ray_settings(event, event.dragging));
+                      std::move(settings));
 }
 
 quader_editor_core::EditorRuntimeCommand
-RuntimeToolCommandService::click_cut(const ModelingToolRayEvent &event) {
+RuntimeToolCommandService::click_cut(
+    const ModelingToolRayEvent &event,
+    std::optional<quader_editor_core::PickHitRecord> surface_hit,
+    bool surface_hit_resolved) {
+  auto settings = cut_ray_settings(event, event.dragging);
+  settings.resolved_surface_hit = std::move(surface_hit);
+  settings.surface_hit_resolved = surface_hit_resolved;
   return make_command(quader_editor_core::EditorRuntimeCommandId::ClickCut,
-                      cut_ray_settings(event, event.dragging));
+                      std::move(settings));
 }
 
 quader_editor_core::EditorRuntimeCommand

@@ -10,6 +10,7 @@
 #include "render/overlay/viewport_overlay_submission_coordinator.hpp"
 #include "render/overlay/overlay_renderable_builder.hpp"
 #include "assets/asset_registry.hpp"
+#include "assets/mesh_geometry_projection.hpp"
 #include "api/quader_editor_api.hpp"
 #include "editor/modeling/services/primitive_creation_tool_service.hpp"
 #include "editor/session/project_session.hpp"
@@ -373,6 +374,51 @@ ViewportOverlayCamera front_orthographic() {
   camera.right = {1, 0, 0};
   camera.up = {0, 1, 0};
   return camera;
+}
+
+TEST(SelectedMeshOutlineCacheTests,
+     CandidatePositionStreamsReplaceRetainedOutlineWithoutChangingSourceVertices) {
+  const auto payload = outline_quad();
+  RenderOverlaySelectedObjectSnapshot snapshot;
+  snapshot.meshes.push_back({.geometry_payload = payload, .selected = true,
+      .vertices = payload->vertices, .indices = payload->indices});
+  SelectedMeshOutlineCache cache;
+  const auto camera = front_orthographic();
+  ASSERT_EQ(cache.frame(&snapshot, camera, 0).lines.size(), 4u);
+  for (const float upper_x : {0.5f, 0.0f, -0.5f}) {
+    auto positions = std::make_shared<std::vector<QVec3>>();
+    for (const auto &vertex : payload->vertices) {
+      QVec3 position = vertex.position;
+      position.x = position.x > 0.0f ? upper_x : position.x;
+      positions->push_back(position);
+    }
+    auto projection = std::make_shared<MeshGeometryProjection>();
+    projection->source_geometry = payload;
+    projection->positions = std::move(positions);
+    snapshot.meshes.front().geometry_projection = std::move(projection);
+    ++snapshot.mesh_binding_revision;
+    const auto &frame = cache.frame(&snapshot, camera, 0);
+    ASSERT_EQ(frame.lines.size(), 4u);
+    float maximum_x = -1.0f;
+    for (const auto &line : frame.lines) {
+      maximum_x = std::max({maximum_x, line.start.x, line.end.x});
+      EXPECT_LE(line.start.x, upper_x + 0.0001f);
+      EXPECT_LE(line.end.x, upper_x + 0.0001f);
+    }
+    EXPECT_NEAR(maximum_x, upper_x, 0.0001f);
+    const auto work = cache.work_stats();
+    for (int repeat = 0; repeat < 8; ++repeat) (void)cache.frame(&snapshot, camera, 0);
+    EXPECT_EQ(cache.work_stats().topology_builds, work.topology_builds);
+    EXPECT_EQ(cache.work_stats().camera_classifications, work.camera_classifications);
+    EXPECT_EQ(cache.work_stats().source_refreshes, work.source_refreshes);
+    EXPECT_FLOAT_EQ(payload->vertices[1].position.x, 1.0f);
+  }
+  snapshot.meshes.front().geometry_projection.reset();
+  ++snapshot.mesh_binding_revision;
+  const auto &restored = cache.frame(&snapshot, camera, 0);
+  EXPECT_TRUE(std::ranges::any_of(restored.lines, [](const ViewportOverlayLine &line) {
+    return line.start.x == 1.0f && line.end.x == 1.0f;
+  }));
 }
 
 TEST(SelectedMeshOutlineCacheTests, FramingChangesRetainOrRestoreVisibleOccurrences) {

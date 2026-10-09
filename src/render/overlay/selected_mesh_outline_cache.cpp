@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/overlay/selected_mesh_outline_cache.hpp"
 
+#include "assets/mesh_geometry_projection.hpp"
 #include "math/glm_bridge.hpp"
 #include "render/overlay/overlay_camera_projector.hpp"
 #include "render/viewport_overlay_policy.hpp"
@@ -54,6 +55,7 @@ struct OutlineTopology {
     std::array<QVec3, 3> points;
   };
   std::shared_ptr<const MeshGeometryPayload> payload;
+  std::shared_ptr<const MeshGeometryProjection> projection;
   std::vector<Edge> edges;
   std::vector<Face> faces;
   std::array<QVec3, 8> bounds;
@@ -61,9 +63,18 @@ struct OutlineTopology {
 
 std::shared_ptr<OutlineTopology> build_topology(
     std::shared_ptr<const MeshGeometryPayload> payload,
-    std::span<const MeshVertex> vertices, std::span<const std::uint32_t> indices) {
+    std::span<const MeshVertex> vertices, std::span<const std::uint32_t> indices,
+    std::shared_ptr<const MeshGeometryProjection> projection) {
   auto topology = std::make_shared<OutlineTopology>();
   topology->payload = std::move(payload);
+  topology->projection = std::move(projection);
+  const auto projected_positions = topology->projection && topology->projection->positions
+      ? std::span<const QVec3>(*topology->projection->positions)
+      : std::span<const QVec3>{};
+  const auto position_at = [&](std::uint32_t index) {
+    return projected_positions.size() == vertices.size() ? projected_positions[index]
+                                                         : vertices[index].position;
+  };
   std::unordered_map<std::array<float, 3>, std::uint32_t, PositionHash> positions;
   std::unordered_map<std::uint64_t, std::size_t> edges;
   positions.reserve(vertices.size());
@@ -73,8 +84,8 @@ std::shared_ptr<OutlineTopology> build_topology(
   for (std::size_t i = 0; i + 2 < indices.size(); i += 3) {
     if (indices[i] >= vertices.size() || indices[i + 1] >= vertices.size() ||
         indices[i + 2] >= vertices.size()) continue;
-    const std::array<QVec3, 3> points{vertices[indices[i]].position,
-        vertices[indices[i + 1]].position, vertices[indices[i + 2]].position};
+    const std::array<QVec3, 3> points{position_at(indices[i]),
+        position_at(indices[i + 1]), position_at(indices[i + 2])};
     if (!std::all_of(points.begin(), points.end(), finite)) continue;
     const QVec3 normal = cross(points[1] - points[0], points[2] - points[0]);
     const float magnitude = length(normal);
@@ -485,7 +496,7 @@ struct SelectedMeshOutlineCache::Impl {
   RenderSourceStamp hierarchy_stamp;
   bool source_valid = false, visible = false;
   std::uint64_t source_revision = 0;
-  std::unordered_map<const MeshGeometryPayload *, std::shared_ptr<OutlineTopology>> topologies;
+  std::unordered_map<const void *, std::shared_ptr<OutlineTopology>> topologies;
   std::vector<Occurrence> occurrences;
   std::array<Pane, 4> panes;
   SelectedMeshOutlineWorkStats stats;
@@ -502,17 +513,24 @@ struct SelectedMeshOutlineCache::Impl {
     const bool same_scene = source_valid && source == snapshot && stamp.scene_binding == next_stamp.scene_binding &&
         hierarchy_stamp.scene_binding == next_hierarchy_stamp.scene_binding;
     if (!same_scene) topologies.clear();
-    std::unordered_map<const MeshGeometryPayload *, std::shared_ptr<OutlineTopology>> retained;
+    std::unordered_map<const void *, std::shared_ptr<OutlineTopology>> retained;
     occurrences.clear();
     const auto append = [&](const auto &mesh) {
       if (mesh.vertices.empty() || mesh.indices.size() < 3) return;
-      auto &topology = retained[mesh.geometry_payload.get()];
+      std::shared_ptr<const MeshGeometryProjection> projection;
+      if constexpr (requires { mesh.geometry_projection; }) {
+        projection = mesh.geometry_projection;
+      }
+      const void *geometry_identity = projection
+          ? static_cast<const void *>(projection.get()) : mesh.geometry_payload.get();
+      auto &topology = retained[geometry_identity];
       if (!topology || !mesh.geometry_payload) {
-        const auto found = topologies.find(mesh.geometry_payload.get());
+        const auto found = topologies.find(geometry_identity);
         if (mesh.geometry_payload && found != topologies.end()) {
           topology = found->second;
         } else {
-          topology = build_topology(mesh.geometry_payload, mesh.vertices, mesh.indices);
+          topology = build_topology(mesh.geometry_payload, mesh.vertices, mesh.indices,
+                                     std::move(projection));
           ++stats.topology_builds;
         }
       }
