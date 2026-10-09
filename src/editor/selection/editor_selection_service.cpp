@@ -195,7 +195,7 @@ ModelingSelectionSummary EditorSelectionService::summary() const {
     const std::optional<EntityId> active_entity =
         modeling_.entity_for_modeling_object(current.active_object_id);
     if (active_entity.has_value() &&
-        scene_.is_effectively_locked(*active_entity)) {
+        !scene_.is_effectively_selectable(*active_entity)) {
       resolved = make_scene_selection_summary(scene_, current.mode,
                                               current.content_revision);
     }
@@ -2134,7 +2134,7 @@ EditorSelectionService::group_promoted_scene_target(EntityId entity) const {
   if (entity == kInvalidEntityId || !scene_.exists(entity) ||
       !scene_target_selectable(entity) ||
       !scene_.is_effectively_visible(entity) ||
-      scene_.is_effectively_locked(entity)) {
+      !scene_.is_effectively_selectable(entity)) {
     return kInvalidEntityId;
   }
   const EntityId group = nearest_group_ancestor(entity);

@@ -34,6 +34,7 @@ constexpr std::array kDependencies{
     RenderSourceDependency::MaterialCatalogRevision,
     RenderSourceDependency::ProjectMaterialRevision,
     RenderSourceDependency::InstanceEditScope,
+    RenderSourceDependency::BackfaceCulling,
 };
 
 bool dependency_matches(const RenderSourceStamp &left,
@@ -78,6 +79,8 @@ bool dependency_matches(const RenderSourceStamp &left,
     return left.project_material_revision == right.project_material_revision;
   case RenderSourceDependency::InstanceEditScope:
     return left.instance_edit_scope == right.instance_edit_scope;
+  case RenderSourceDependency::BackfaceCulling:
+    return left.backface_culling_enabled == right.backface_culling_enabled;
   }
   return false;
 }
@@ -136,6 +139,7 @@ bool revision_value(const RenderSourceStamp &stamp,
     return true;
   case RenderSourceDependency::SceneBinding:
   case RenderSourceDependency::InstanceEditScope:
+  case RenderSourceDependency::BackfaceCulling:
     return false;
   }
   return false;
@@ -169,6 +173,7 @@ RenderSourceStamp capture_render_source_stamp(
       .material_catalog_revision = assets.material_catalog_revision(),
       .project_material_revision = options.project_material_revision,
       .instance_edit_scope = options.instance_edit_scope,
+      .backface_culling_enabled = options.backface_culling_enabled,
   };
 }
 

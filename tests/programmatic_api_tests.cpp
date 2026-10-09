@@ -133,9 +133,9 @@ TEST(ProgrammaticApiTests,
     EXPECT_FALSE(first_snapshot->has_mesh);
     EXPECT_FALSE(first_snapshot->has_curve);
     EXPECT_FALSE(first_snapshot->has_light);
-    EXPECT_FLOAT_EQ(first_snapshot->transform.position.x, 0.0f);
-    EXPECT_FLOAT_EQ(first_snapshot->transform.position.y, 0.0f);
-    EXPECT_FLOAT_EQ(first_snapshot->transform.position.z, 0.0f);
+    EXPECT_FLOAT_EQ(first_snapshot->transform.location.x, 0.0f);
+    EXPECT_FLOAT_EQ(first_snapshot->transform.location.y, 0.0f);
+    EXPECT_FLOAT_EQ(first_snapshot->transform.location.z, 0.0f);
     EXPECT_FLOAT_EQ(first_snapshot->transform.rotation_euler.x, 0.0f);
     EXPECT_FLOAT_EQ(first_snapshot->transform.rotation_euler.y, 0.0f);
     EXPECT_FLOAT_EQ(first_snapshot->transform.rotation_euler.z, 0.0f);
@@ -278,7 +278,7 @@ TEST(ProgrammaticApiTests, ScriptRecordsDocumentOwnedSelectionTransformsInOneHis
 
     quader::QuaderCreatePointLightArgs args;
     args.name = "Script Light";
-    args.transform.position = {3.0f, 0.0f, 0.0f};
+    args.transform.location = {3.0f, 0.0f, 0.0f};
     args.select_created = true;
     const quader::QuaderApiResult<quader::QuaderEntityRef> light =
         api.scene().create_point_light(args);
@@ -294,20 +294,20 @@ TEST(ProgrammaticApiTests, ScriptRecordsDocumentOwnedSelectionTransformsInOneHis
 
     std::optional<quader::QuaderEntitySnapshot> snapshot = api.query().entity(light.value.id);
     ASSERT_TRUE(snapshot.has_value());
-    EXPECT_FLOAT_EQ(snapshot->transform.position.x, 5.0f);
+    EXPECT_FLOAT_EQ(snapshot->transform.location.x, 5.0f);
 
     const quader::QuaderApiVoidResult undone = api.history().undo();
     ASSERT_TRUE(undone.ok) << undone.message;
     snapshot = api.query().entity(light.value.id);
     ASSERT_TRUE(snapshot.has_value());
-    EXPECT_FLOAT_EQ(snapshot->transform.position.x, 3.0f);
+    EXPECT_FLOAT_EQ(snapshot->transform.location.x, 3.0f);
     EXPECT_EQ(api.history().snapshot().redo_label, "script moves light");
 
     const quader::QuaderApiVoidResult redone = api.history().redo();
     ASSERT_TRUE(redone.ok) << redone.message;
     snapshot = api.query().entity(light.value.id);
     ASSERT_TRUE(snapshot.has_value());
-    EXPECT_FLOAT_EQ(snapshot->transform.position.x, 5.0f);
+    EXPECT_FLOAT_EQ(snapshot->transform.location.x, 5.0f);
 }
 
 TEST(ProgrammaticApiTests, ScriptRejectsHistoryStepsInsideActiveTransaction) {

@@ -132,7 +132,7 @@ TEST(LassoSelectionGeometryTests, QuerySelectsThroughMeshAndReusesPathIndependen
   request.select_backfaces = false;
   EXPECT_EQ(service.query_selection_lasso_hits(request).size(), 4u);
   EXPECT_EQ(service.rectangle_picking_projection_build_count(), builds);
-  ASSERT_TRUE(scene.set_selectable(box.object.entity, false));
+  ASSERT_TRUE(scene.set_selectability(box.object.entity, false));
   EXPECT_TRUE(service.query_selection_lasso_hits(request).empty());
 }
 
@@ -190,7 +190,7 @@ TEST(LassoSelectionGeometryTests, SceneProvidersSelectThroughDepthAndKeepUnmatch
       {.entity = 10, .position = {0, 0, 0}, .size_pixels = 6},
       {.entity = 11, .position = {0, 0, -4}, .size_pixels = 6},
       {.entity = 12, .position = {0, 0, 20}, .size_pixels = 6},
-      {.entity = 13, .position = {0, 0, 0}, .effectively_locked = true}}};
+      {.entity = 13, .position = {0, 0, 0}, .effectively_selectable = false}}};
   std::vector<EntityId> eligible;
   ViewportSceneLassoProjectionCache cache;
   ViewportSceneLassoHitQuery query{.camera = lasso_camera(), .points = kSquare,

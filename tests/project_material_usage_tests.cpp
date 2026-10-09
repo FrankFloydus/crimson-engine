@@ -240,7 +240,7 @@ TEST_F(ProjectMaterialUsageTests, HiddenLockedGeometryCountsWithoutRescanningVis
   const auto work = project_.material_usage().work_stats();
   auto &scene = project_.active_scene()->session->scene();
   ASSERT_TRUE(scene.set_visible(object.entity, false));
-  ASSERT_TRUE(scene.set_locked(object.entity, true));
+  ASSERT_TRUE(scene.set_selectable(object.entity, false));
   EXPECT_EQ(project_ids(usage()), (std::set<ProjectAssetId>{used}));
   EXPECT_EQ(project_.material_usage().work_stats(), work);
 }

@@ -100,6 +100,13 @@ struct PrimitiveGroup final {
   std::vector<Occurrence> occurrences;
 };
 
+std::size_t chunk_capacity(const RenderInstancePrimitiveKey &key,
+                           std::size_t maximum) {
+  return (key.presentation_flags & static_cast<std::uint8_t>(
+              RenderInstancePresentationFlag::PerObjectTransform)) != 0u
+             ? 1u : maximum;
+}
+
 void include_point(RenderInstanceBounds &bounds, QVec3 point) {
   if (!bounds.present) {
     bounds.min = point;
@@ -260,8 +267,9 @@ bool try_retain_layout(const std::vector<PrimitiveGroup> &groups,
 
   std::size_t required_chunk_count = 0u;
   for (const PrimitiveGroup &group : groups) {
-    required_chunk_count += group.occurrences.size() / max_instances_per_chunk +
-        (group.occurrences.size() % max_instances_per_chunk != 0u);
+    const auto capacity = chunk_capacity(group.key, max_instances_per_chunk);
+    required_chunk_count += group.occurrences.size() / capacity +
+        (group.occurrences.size() % capacity != 0u);
   }
   if (previous.chunks.size() != required_chunk_count) {
     // Geometry edits can split a shared batch, then undo can merge its payloads.
@@ -294,7 +302,7 @@ bool try_retain_layout(const std::vector<PrimitiveGroup> &groups,
   reserve_chunk_storage(retained, previous.chunks.size());
   for (const RenderInstanceBatchChunk &before : previous.chunks) {
     if (before.occurrences.empty() ||
-        before.occurrences.size() > max_instances_per_chunk ||
+        before.occurrences.size() > chunk_capacity(before.key, max_instances_per_chunk) ||
         before.world_transforms.size() != before.occurrences.size() ||
         before.visibility.size() != before.occurrences.size() ||
         before.visible_occurrence_count > before.occurrences.size()) {
@@ -389,10 +397,9 @@ RenderInstanceBatchPlan plan_render_instance_batches(
     QDR_PROFILE_SCOPE("Instance batch rebuild Morton layout");
     std::size_t total_chunk_count = 0u;
     for (const PrimitiveGroup &group : groups) {
-      total_chunk_count += group.occurrences.size() /
-                               plan.max_instances_per_chunk +
-                           (group.occurrences.size() %
-                                    plan.max_instances_per_chunk != 0u);
+      const auto capacity = chunk_capacity(group.key, plan.max_instances_per_chunk);
+      total_chunk_count += group.occurrences.size() / capacity +
+                           (group.occurrences.size() % capacity != 0u);
     }
     // Reserving after each group repeatedly relocates every prior chunk when
     // a scene contains many distinct mesh payloads.
@@ -400,10 +407,11 @@ RenderInstanceBatchPlan plan_render_instance_batches(
     for (PrimitiveGroup &group : groups) {
       plan.work.morton_ordered_occurrence_count += group.occurrences.size();
       morton_sort_group(group);
+      const auto capacity = chunk_capacity(group.key, plan.max_instances_per_chunk);
       for (std::size_t offset = 0u; offset < group.occurrences.size();
-           offset += plan.max_instances_per_chunk) {
+           offset += capacity) {
         const std::size_t end = std::min(
-            group.occurrences.size(), offset + plan.max_instances_per_chunk);
+            group.occurrences.size(), offset + capacity);
         RenderInstanceBatchChunk chunk;
         chunk.key = group.key;
         chunk.occurrences.reserve(end - offset);

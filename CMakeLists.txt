@@ -1297,6 +1297,7 @@ set(QUADER_SNAPPING_TOOLBAR_ICON_FILES
 
 set(QUADER_VIEWPORT_DISPLAY_TOOLBAR_ICON_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/viewport_wireframe_on_shaded.png"
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/viewport_backface_culling.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/viewport_grid.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/viewport_gizmos.png"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/viewport_mesh_grid.png"

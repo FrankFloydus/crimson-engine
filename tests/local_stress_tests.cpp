@@ -471,7 +471,7 @@ TEST(LocalStressTests, SingleMeshPivotApply) {
       editor.query().entities();
   const auto target = std::ranges::find_if(
       entities, [&](const quader::QuaderEntitySnapshot &entity) {
-        if (!entity.has_mesh || !entity.has_modeling_object || entity.locked ||
+        if (!entity.has_mesh || !entity.has_modeling_object || !entity.selectable ||
             !entity.selectable) {
           return false;
         }

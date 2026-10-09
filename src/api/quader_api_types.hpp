@@ -171,7 +171,7 @@ enum class QuaderLightSourcePreset {
  * Represents a Quader Transform value used by the public Quader API surface.
  */
 struct QuaderTransform {
-    QVec3 position = {};
+    QVec3 location = {};
     QVec3 rotation_euler = {};
     QVec3 scale = {1.0f, 1.0f, 1.0f};
 };

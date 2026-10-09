@@ -1718,13 +1718,13 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_TRUE(toolbar.isMovable());
   EXPECT_TRUE(toolbar.isFloatable());
   EXPECT_EQ(toolbar.iconSize(), QSize(32, 32));
-  EXPECT_EQ(expect_persistent_button_faces(toolbar, 30), 5);
+  EXPECT_EQ(expect_persistent_button_faces(toolbar, 30), 6);
   toolbar.apply_ui_scale(quader::QtUiScaleMetrics(2.0F, 1U));
   EXPECT_EQ(toolbar.iconSize(), QSize(64, 64));
-  EXPECT_EQ(expect_persistent_button_faces(toolbar, 60), 5);
+  EXPECT_EQ(expect_persistent_button_faces(toolbar, 60), 6);
   toolbar.apply_ui_scale(quader::QtUiScaleMetrics(1.0F, 2U));
   EXPECT_EQ(toolbar.iconSize(), QSize(32, 32));
-  EXPECT_EQ(expect_persistent_button_faces(toolbar, 30), 5);
+  EXPECT_EQ(expect_persistent_button_faces(toolbar, 30), 6);
 
   std::vector<QAction *> actions;
   for (QAction *action : toolbar.actions()) {
@@ -1732,16 +1732,18 @@ TEST(QtProjectWorkspaceTests,
       actions.push_back(action);
     }
   }
-  ASSERT_EQ(actions.size(), 5u);
-  const std::array<QString, 5> expected_names{
+  ASSERT_EQ(actions.size(), 6u);
+  const std::array<QString, 6> expected_names{
       QStringLiteral("viewportWireframeOnShaded"),
+      QStringLiteral("viewportBackfaceCulling"),
       QStringLiteral("viewportGrid"),
       QStringLiteral("viewportGizmos"),
       QStringLiteral("viewportMeshGrid"),
       QStringLiteral("viewportOverlays"),
   };
-  const std::array<QString, 5> expected_labels{
-      QStringLiteral("Wireframe on Shaded"),
+  const std::array<QString, 6> expected_labels{
+      QStringLiteral("Show Wireframe"),
+      QStringLiteral("Backface Culling"),
       QStringLiteral("Toggle Grid"),
       QStringLiteral("Toggle Gizmos"),
       QStringLiteral("Toggle Mesh Grid"),
@@ -1761,6 +1763,7 @@ TEST(QtProjectWorkspaceTests,
   std::filesystem::remove(keybindings);
   ASSERT_TRUE(editor.commands().set_keybinding_storage_path(keybindings).ok());
   std::array<bool, 4> owner_state{};
+  bool backface_culling = false;
   const auto runtime_result = [](bool changed) {
     return quader::QuaderApiVoidResult{
         .ok = true,
@@ -1775,6 +1778,12 @@ TEST(QtProjectWorkspaceTests,
   };
   editor.preferences().set_runtime_hooks(
       quader::QuaderPreferencesRuntimeHooks{
+          .backface_culling_enabled = [&] { return backface_culling; },
+          .set_backface_culling_enabled = [&](bool value) {
+            const bool changed = backface_culling != value;
+            backface_culling = value;
+            return runtime_result(changed);
+          },
           .grid_visible = [&] { return owner_state[0]; },
           .set_grid_visible = [&](bool value) { return set_state(0, value); },
           .gizmos_visible = [&] { return owner_state[1]; },
@@ -1793,6 +1802,8 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_FALSE(editor.viewports().control(quader::QuaderViewportControl::WireframeOnShaded));
   EXPECT_TRUE(editor.commands().shortcut_for(
       quader::quader_command::kViewportToggleWireframeOnShaded).empty());
+  EXPECT_TRUE(editor.commands().shortcut_for(
+      quader::quader_command::kViewportToggleBackfaceCulling).empty());
   for (const auto control : kControls) {
     ASSERT_TRUE(editor.viewports().set_control(control, false).ok());
   }
@@ -1803,10 +1814,11 @@ TEST(QtProjectWorkspaceTests,
                   .ok());
   toolbar.synchronize(editor, true);
   EXPECT_TRUE(
-      actions[1]->toolTip().contains(QStringLiteral("[Ctrl+Alt+F12]")));
+      actions[2]->toolTip().contains(QStringLiteral("[Ctrl+Alt+F12]")));
 
-  const std::array<quader::QuaderCommandId, 5> expected_commands{
+  const std::array<quader::QuaderCommandId, 6> expected_commands{
       quader::quader_command::kViewportToggleWireframeOnShaded,
+      quader::quader_command::kViewportToggleBackfaceCulling,
       quader::quader_command::kViewportToggleGrid,
       quader::quader_command::kViewportToggleGizmos,
       quader::quader_command::kViewportToggleMeshGrid,
@@ -1837,7 +1849,11 @@ TEST(QtProjectWorkspaceTests,
     actions[index]->trigger();
     toolbar.synchronize(editor, true);
     EXPECT_TRUE(actions[index]->isChecked());
-    EXPECT_TRUE(editor.viewports().control(kControls[index]));
+    if (index == 1u) {
+      EXPECT_TRUE(editor.preferences().backface_culling_enabled());
+    } else {
+      EXPECT_TRUE(editor.viewports().control(kControls[index > 1u ? index - 1u : index]));
+    }
     EXPECT_EQ(owner_state, (std::array<bool, 4>{}));
   }
   ASSERT_EQ(requested_commands.size(), expected_commands.size());
@@ -1851,6 +1867,20 @@ TEST(QtProjectWorkspaceTests,
   toolbar.synchronize(editor);
   EXPECT_FALSE(wireframe_menu->isChecked());
   EXPECT_FALSE(actions.front()->isChecked());
+  ASSERT_TRUE(editor.preferences().set_shortcut(
+      quader::quader_command::kViewportToggleBackfaceCulling, "Ctrl+Alt+F23").ok());
+  toolbar.synchronize(editor);
+  EXPECT_TRUE(actions[1]->toolTip().contains(QStringLiteral("[Ctrl+Alt+F23]")));
+  EXPECT_TRUE(editor.preferences().set_backface_culling_enabled(false).changed());
+  EXPECT_FALSE(editor.preferences().set_backface_culling_enabled(false).changed());
+  toolbar.synchronize(editor);
+  EXPECT_FALSE(actions[1]->isChecked());
+  quader::SceneSession reloaded_session;
+  quader::QuaderEditorApi reloaded_editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(reloaded_session));
+  ASSERT_TRUE(reloaded_editor.commands().set_keybinding_storage_path(keybindings).ok());
+  EXPECT_EQ(reloaded_editor.commands().shortcut_for(
+      quader::quader_command::kViewportToggleBackfaceCulling), "Ctrl+Alt+F23");
   std::filesystem::remove(keybindings);
 
   const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
@@ -1858,8 +1888,9 @@ TEST(QtProjectWorkspaceTests,
     ASSERT_TRUE(QDir().mkpath(review_directory));
     // Load the shipping artwork because this test host has no application QRC.
     const QDir icon_directory(QStringLiteral(QUADER_SOURCE_DIR "/resources/icons"));
-    const std::array<const char *, 5> icon_names{
+    const std::array<const char *, 6> icon_names{
         "viewport_wireframe_on_shaded.png",
+        "viewport_backface_culling.png",
         "viewport_grid.png", "viewport_gizmos.png", "viewport_mesh_grid.png",
         "viewport_overlays.png"};
     for (std::size_t index = 0; index < actions.size(); ++index) {
@@ -1929,7 +1960,7 @@ TEST(QtProjectWorkspaceTests,
     }
     return nullptr;
   };
-  ASSERT_EQ(strip.findChildren<QToolButton *>().size(), 10);
+  ASSERT_EQ(strip.findChildren<QToolButton *>().size(), 11);
   EXPECT_TRUE(strip.findChildren<QComboBox *>().empty());
   EXPECT_TRUE(strip.findChildren<QDoubleSpinBox *>().empty());
   EXPECT_EQ(snapping.findChildren<QComboBox *>().size(), 2);
@@ -1940,6 +1971,8 @@ TEST(QtProjectWorkspaceTests,
   ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
   std::array<bool, 8> values{};
   std::array<int, 8> preference_writes{};
+  bool backface_culling = false;
+  int culling_writes = 0;
   const auto set_value = [&](std::size_t index, bool value) {
     ++preference_writes[index];
     const bool changed = values[index] != value;
@@ -1951,6 +1984,15 @@ TEST(QtProjectWorkspaceTests,
   editor.preferences().set_runtime_hooks({
       .snapping_enabled = [&] { return values[0]; },
       .set_snapping_enabled = [&](bool value) { return set_value(0, value); },
+      .backface_culling_enabled = [&] { return backface_culling; },
+      .set_backface_culling_enabled = [&](bool value) {
+        ++culling_writes;
+        const bool changed = backface_culling != value;
+        backface_culling = value;
+        return quader::QuaderApiVoidResult{
+            .ok = true, .changed = changed,
+            .mutation_kind = quader::QuaderMutationKind::Runtime};
+      },
       .grid_visible = [&] { return values[4]; },
       .set_grid_visible = [&](bool value) { return set_value(4, value); },
       .gizmos_visible = [&] { return values[5]; },
@@ -2045,7 +2087,8 @@ TEST(QtProjectWorkspaceTests,
     action->setEnabled(true);
   }
   EXPECT_EQ(transform_requests, 2);
-  EXPECT_EQ(display_requests, 10);
+  EXPECT_EQ(display_requests, 12);
+  EXPECT_EQ(culling_writes, 2);
   EXPECT_EQ(preference_writes, (std::array<int, 8>{}));
 
   for (const auto control : kControls) {
@@ -2053,6 +2096,7 @@ TEST(QtProjectWorkspaceTests,
   }
   ASSERT_TRUE(editor.viewports().set_transform_space(
       quader::QuaderTransformSpace::Local).ok());
+  ASSERT_TRUE(editor.preferences().set_backface_culling_enabled(true).ok());
   synchronize();
   for (std::size_t index = 0; index < actions.size(); ++index) {
     EXPECT_TRUE(button_for(strip, actions[index])->isChecked());
@@ -2086,7 +2130,8 @@ TEST(QtProjectWorkspaceTests,
   }
   EXPECT_EQ(changed_signals, 0);
   EXPECT_EQ(transform_requests, 2);
-  EXPECT_EQ(display_requests, 10);
+  EXPECT_EQ(display_requests, 12);
+  EXPECT_EQ(culling_writes, 3);
   EXPECT_EQ(preference_writes, (std::array<int, 8>{}));
 }
 
@@ -2146,10 +2191,11 @@ TEST(QtProjectWorkspaceTests,
     actions.push_back(action);
   }
   const QDir icon_directory(QStringLiteral(QUADER_SOURCE_DIR "/resources/icons"));
-  const std::array<const char *, 14> icon_names{
+  const std::array<const char *, 15> icon_names{
       "tool_box_select.png", "tool_move.png", "tool_rotate.png", "tool_scale.png",
       "tool_transform_local.png", "snapping_master.png", "snapping_grid.png",
       "snapping_vertex.png", "snapping_rotation.png", "viewport_wireframe_on_shaded.png",
+      "viewport_backface_culling.png",
       "viewport_grid.png",
       "viewport_gizmos.png", "viewport_mesh_grid.png", "viewport_overlays.png"};
   for (std::size_t index = 0; index < actions.size(); ++index) {
@@ -2735,13 +2781,18 @@ TEST(QtProjectWorkspaceTests,
     auto *local = button(pane, "toggle_transform_space");
     auto *backface = button(pane, "backfaceSelection");
     auto *wireframe = button(pane, "viewportWireframeOnShaded");
+    auto *culling = button(pane, "viewportBackfaceCulling");
     auto *grid = button(pane, "viewportGrid");
     ASSERT_NE(local, nullptr);
     ASSERT_NE(backface, nullptr);
     ASSERT_NE(wireframe, nullptr);
+    ASSERT_NE(culling, nullptr);
     ASSERT_NE(grid, nullptr);
     EXPECT_FALSE(wireframe->isChecked());
+    EXPECT_TRUE(culling->isChecked());
     EXPECT_EQ(strips[pane]->layout()->indexOf(wireframe) + 1,
+              strips[pane]->layout()->indexOf(culling));
+    EXPECT_EQ(strips[pane]->layout()->indexOf(culling) + 1,
               strips[pane]->layout()->indexOf(grid));
     EXPECT_EQ(strips[pane]->layout()->indexOf(backface),
               strips[pane]->layout()->indexOf(local) + 1);
@@ -2950,6 +3001,26 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_TRUE(button(1, "viewportWireframeOnShaded")->isChecked());
   EXPECT_FALSE(editor.viewports().control(kPaneIds[0], quader::QuaderViewportControl::WireframeOnShaded));
   EXPECT_FALSE(button(0, "viewportWireframeOnShaded")->isChecked());
+  const auto history_before_culling = editor.history().snapshot();
+  const auto selection_before_culling = editor.selection().summary();
+  const bool selection_backfaces = editor.preferences().backface_selection_enabled();
+  button(1, "viewportBackfaceCulling")->click();
+  synchronize();
+  EXPECT_FALSE(editor.preferences().backface_culling_enabled());
+  EXPECT_EQ(editor.preferences().backface_selection_enabled(), selection_backfaces);
+  for (std::size_t pane = 0; pane < kPaneIds.size(); ++pane) {
+    EXPECT_FALSE(button(pane, "viewportBackfaceCulling")->isChecked());
+  }
+  button(0, "viewportBackfaceCulling")->click();
+  synchronize();
+  EXPECT_TRUE(editor.preferences().backface_culling_enabled());
+  for (std::size_t pane = 0; pane < kPaneIds.size(); ++pane) {
+    EXPECT_TRUE(button(pane, "viewportBackfaceCulling")->isChecked());
+  }
+  EXPECT_EQ(editor.history().snapshot().undo_label, history_before_culling.undo_label);
+  EXPECT_EQ(editor.history().snapshot().redo_label, history_before_culling.redo_label);
+  EXPECT_EQ(editor.selection().summary().selection_revision,
+            selection_before_culling.selection_revision);
   button(1, "viewportGrid")->click();
   button(1, "toggle_transform_space")->click();
   synchronize();
@@ -5205,7 +5276,7 @@ TEST(QtProjectWorkspaceTests,
     ASSERT_TRUE(created.ok()) << created.error_message();
     entities[index] = created.value().entity;
     ASSERT_TRUE(editor.scene().set_transform(entities[index],
-        {.position = {kPositions[index], 0, 0}}).ok());
+        {.location = {kPositions[index], 0, 0}}).ok());
   }
   ASSERT_TRUE(editor.selection().select_objects(entities, entities[1]).ok());
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Align).ok());
@@ -5952,7 +6023,7 @@ TEST(QtProjectWorkspaceTests,
   QPointer<QLineEdit> retained_name = dock->findChild<QLineEdit *>(
       QStringLiteral("inspector.general.name"));
   QPointer<QDoubleSpinBox> retained_position = dock->findChild<QDoubleSpinBox *>(
-      QStringLiteral("inspector.transform.position.x"));
+      QStringLiteral("inspector.transform.location.x"));
   ASSERT_NE(retained_name, nullptr);
   ASSERT_NE(retained_position, nullptr);
   ASSERT_EQ(retained_name->text(), QStringLiteral("Before numeric drag"));
@@ -5982,7 +6053,7 @@ TEST(QtProjectWorkspaceTests,
     ASSERT_NE(retained_position, nullptr);
     EXPECT_EQ(retained_name->text(), QStringLiteral("Before numeric drag"));
     EXPECT_EQ(dock->findChild<QDoubleSpinBox *>(
-                  QStringLiteral("inspector.transform.position.x")),
+                  QStringLiteral("inspector.transform.location.x")),
               retained_position.data());
   }
 
@@ -6041,14 +6112,14 @@ TEST(QtProjectWorkspaceTests,
       QStringLiteral("dock_inspector"));
   ASSERT_NE(dock, nullptr);
   QPointer<QDoubleSpinBox> position = dock->findChild<QDoubleSpinBox *>(
-      QStringLiteral("inspector.transform.position.x"));
+      QStringLiteral("inspector.transform.location.x"));
   auto *timer = dock->findChild<QTimer *>(
       QStringLiteral("inspector.transform.dispatchTimer"));
   ASSERT_NE(position, nullptr);
   ASSERT_NE(timer, nullptr);
   auto *line = position->findChild<QLineEdit *>();
   ASSERT_NE(line, nullptr);
-  const auto initial_position = scene.scene().transform(source.value().entity)->position;
+  const auto initial_position = scene.scene().transform(source.value().entity)->location;
   const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
   if (!review_directory.isEmpty()) {
     ASSERT_TRUE(QDir().mkpath(review_directory));
@@ -6077,7 +6148,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_FALSE(timer->isActive());
   EXPECT_FALSE(quader::qt_install_numeric_spin_box(*position).is_dragging());
   const auto settled_transform = *scene.scene().transform(source.value().entity);
-  EXPECT_NEAR(settled_transform.position.x, draft_value, 0.0001);
+  EXPECT_NEAR(settled_transform.location.x, draft_value, 0.0001);
   const auto settled_history = editor.history().snapshot();
   EXPECT_EQ(scene.history().undo_count(), history_before_transition + 1u);
   ASSERT_EQ(editor.mode().state().participants.size(), 1u);
@@ -6099,14 +6170,17 @@ TEST(QtProjectWorkspaceTests,
   QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
   EXPECT_EQ(position, nullptr);
   const auto &after = *scene.scene().transform(source.value().entity);
-  EXPECT_FLOAT_EQ(after.position.x, settled_transform.position.x);
-  EXPECT_FLOAT_EQ(after.position.y, settled_transform.position.y);
-  EXPECT_FLOAT_EQ(after.position.z, settled_transform.position.z);
+  EXPECT_FLOAT_EQ(after.location.x, settled_transform.location.x);
+  EXPECT_FLOAT_EQ(after.location.y, settled_transform.location.y);
+  EXPECT_FLOAT_EQ(after.location.z, settled_transform.location.z);
   EXPECT_EQ(editor.history().snapshot().undo_label, settled_history.undo_label);
   EXPECT_EQ(editor.history().snapshot().redo_label, settled_history.redo_label);
   EXPECT_EQ(scene.history().undo_count(), history_before_transition + 1u);
-  EXPECT_EQ(dock->findChild<QDoubleSpinBox *>(
-      QStringLiteral("inspector.transform.position.x")), nullptr);
+  auto *edit_location = dock->findChild<QDoubleSpinBox *>(
+      QStringLiteral("inspector.transform.location.x"));
+  ASSERT_NE(edit_location, nullptr);
+  EXPECT_TRUE(edit_location->isEnabled());
+  EXPECT_NEAR(edit_location->value(), settled_transform.location.x, 0.0001);
   auto *combo = ui.main_window()->findChild<QComboBox *>(QStringLiteral("editorModeCombo"));
   ASSERT_NE(combo, nullptr);
   EXPECT_EQ(combo->currentIndex(), 1);
@@ -6114,9 +6188,9 @@ TEST(QtProjectWorkspaceTests,
   ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
   ui.refresh({}, {});
   auto *restored = dock->findChild<QDoubleSpinBox *>(
-      QStringLiteral("inspector.transform.position.x"));
+      QStringLiteral("inspector.transform.location.x"));
   ASSERT_NE(restored, nullptr);
-  EXPECT_NEAR(restored->value(), settled_transform.position.x, 0.0001);
+  EXPECT_NEAR(restored->value(), settled_transform.location.x, 0.0001);
   capture_inspector(QStringLiteral("object-settled-draft"));
   ui.shutdown();
 }
@@ -8678,7 +8752,7 @@ TEST(QtProjectWorkspaceTests, AssetBrowserNativeCtrlSpaceHasNoIntermediateDockAn
             QStringLiteral("inspector.general.name"));
       } else {
         numeric_target = inspector->findChild<QDoubleSpinBox *>(
-            QStringLiteral("inspector.transform.position.x"));
+            QStringLiteral("inspector.transform.location.x"));
         EXPECT_NE(numeric_target, nullptr);
         target = numeric_target;
       }

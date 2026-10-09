@@ -4620,7 +4620,7 @@ TEST(SelectionOverlayRuntimeTests,
        .wireframe_on_shaded_color = QVec3{0.0f, 0.0f, 1.0f}});
   ASSERT_TRUE(shared_mesh_color.ok()) << shared_mesh_color.error_message();
   ASSERT_TRUE(editor.scene().set_transform(shared_mesh_entity.value().id,
-      {.position = {1.3f, 0.0f, 0.0f}, .scale = {0.25f, 0.25f, 0.25f}}).ok());
+      {.location = {1.3f, 0.0f, 0.0f}, .scale = {0.25f, 0.25f, 0.25f}}).ok());
   ASSERT_TRUE(editor.assets().assign_material_to_entity(
       shared_mesh_entity.value().id, material.value().id).ok());
   ASSERT_TRUE(editor.selection().clear().ok());

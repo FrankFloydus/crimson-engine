@@ -854,7 +854,7 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
   ASSERT_TRUE(instance.ok()) << instance.error_message();
   const auto occurrence = instance.value().occurrence.root.id;
   ASSERT_TRUE(editor.scene().set_transform(occurrence, {
-      .position = {3, 2, 1}, .rotation_euler = {0.3f, 0.4f, 0.1f},
+      .location = {3, 2, 1}, .rotation_euler = {0.3f, 0.4f, 0.1f},
       .scale = {2, 3, 0.5f}}).ok());
   ASSERT_TRUE(editor.modeling().enter_instance_edit(occurrence).ok());
   ASSERT_TRUE(editor.selection().select_object(object).ok());
@@ -3413,7 +3413,7 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
     ASSERT_TRUE(document.set_parent(child, group));
     ASSERT_TRUE(document.set_selected(group, true));
   }
-  ASSERT_TRUE(document.set_transform(second, TransformComponent{.position = {4, 0, 0}}));
+  ASSERT_TRUE(document.set_transform(second, TransformComponent{.location = {4, 0, 0}}));
   RenderOverlaySnapshotCache snapshots;
   ViewportOverlaySubmissionCoordinator coordinator;
   RecordingOverlayTarget target;

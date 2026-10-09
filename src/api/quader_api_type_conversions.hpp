@@ -79,7 +79,7 @@ inline QuaderLightType to_api_light_type(LightType type) {
 
 inline TransformComponent to_scene_transform(const QuaderTransform &transform) {
   return {
-      .position = transform.position,
+      .location = transform.location,
       .rotation_euler = transform.rotation_euler,
       .scale = transform.scale,
   };
@@ -87,7 +87,7 @@ inline TransformComponent to_scene_transform(const QuaderTransform &transform) {
 
 inline QuaderTransform to_api_transform(const TransformComponent &transform) {
   return {
-      .position = transform.position,
+      .location = transform.location,
       .rotation_euler = transform.rotation_euler,
       .scale = transform.scale,
   };

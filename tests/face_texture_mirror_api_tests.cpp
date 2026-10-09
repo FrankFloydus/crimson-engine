@@ -253,7 +253,7 @@ TEST_F(FaceTextureMirrorApiTests, MirroringPreservesSignedScalarsAndOccurrenceSa
         .selection_token = editor_.modeling().face_texture_settings().selection_token}).ok());
   }
   ASSERT_TRUE(session_.scene().set_texture_mapping(object.entity,
-      {compose_transform(QTransform{.position = {0.4f, -0.3f, 0},
+      {compose_transform(QTransform{.location = {0.4f, -0.3f, 0},
                                     .scale = {0.8f, 1.2f, 1}})}));
   const auto before = snapshot(object);
   for (const bool horizontal : {true, false}) {

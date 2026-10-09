@@ -63,7 +63,7 @@ TEST(PathArrayLayoutTests,
      OpenPathKeepsExactSpacingAndExtrapolatesPastAuthoredEnd) {
   const std::vector<PathArrayPathStation> path = straight_path(10.0);
   const QMat4 source = compose_transform(QTransform{
-      .position = {50.0F, 3.0F, -2.0F},
+      .location = {50.0F, 3.0F, -2.0F},
       .rotation = quat_from_euler_radians({0.3F, -0.4F, 0.2F}),
       .scale = {2.0F, 3.0F, 4.0F},
   });
@@ -238,7 +238,7 @@ TEST(PathArrayLayoutTests, FollowPathAlignsTheSelectedSignedAxis) {
        .tangent_world = {0.0F, 0.0F, 1.0F}},
   }};
   const QMat4 source = compose_transform(QTransform{
-      .position = {8.0F, -3.0F, 6.0F},
+      .location = {8.0F, -3.0F, 6.0F},
       .rotation = quat_from_euler_radians({0.2F, 0.4F, -0.1F}),
       .scale = {2.0F, 3.0F, 4.0F},
   });
@@ -272,7 +272,7 @@ TEST(PathArrayLayoutTests, FollowPathAlignsTheSelectedSignedAxis) {
 TEST(PathArrayLayoutTests, FollowPathPlacesTheRequestedVisiblePivot) {
   const std::vector<PathArrayPathStation> path = straight_path(6.0);
   const QMat4 source = compose_transform(QTransform{
-      .position = {4.0F, -2.0F, 3.0F},
+      .location = {4.0F, -2.0F, 3.0F},
       .rotation = quat_from_euler_radians({0.2F, 0.5F, -0.35F}),
       .scale = {2.0F, 3.0F, 0.5F},
   });
@@ -477,7 +477,7 @@ TEST(PathArrayLayoutTests,
   const QQuat rotation_step = quat_from_euler_radians(
       {0.0F, 0.0F, 30.0F * std::numbers::pi_v<float> / 180.0F});
   const QMat4 expected = compose_transform(QTransform{
-      .position = {1.0F, 0.0F, 0.0F},
+      .location = {1.0F, 0.0F, 0.0F},
       .rotation = normalize(source_rotation * rotation_step),
       .scale = source_scale,
   });
@@ -570,7 +570,7 @@ TEST(PathArrayLayoutTests, VariationKeepsTheVisiblePivotOnFollowedStations) {
        .tangent_world = {0.0F, 1.0F, 0.0F}},
   }};
   const QMat4 source = compose_transform(QTransform{
-      .position = {5.0F, -2.0F, 1.0F},
+      .location = {5.0F, -2.0F, 1.0F},
       .rotation = quat_from_euler_radians({0.2F, -0.1F, 0.4F}),
       .scale = {1.5F, 0.75F, 2.0F},
   });

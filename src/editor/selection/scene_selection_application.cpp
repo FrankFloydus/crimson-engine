@@ -144,7 +144,7 @@ bool scene_entity_selectable_for_user_selection(const SceneDocument &scene,
   if (entity == kInvalidEntityId || !scene.exists(entity)) {
     return false;
   }
-  if (scene.is_effectively_locked(entity)) {
+  if (!scene.is_effectively_selectable(entity)) {
     return false;
   }
   const VisibilityComponent *visibility = scene.visibility(entity);
@@ -196,28 +196,28 @@ std::vector<EntityId>
 user_selectable_scene_entities_for_mode(const SceneDocument &scene,
                                         SceneSelectionBulkMode mode) {
   std::vector<EntityId> result;
-  std::unordered_map<EntityId, bool> effectively_locked;
+  std::unordered_map<EntityId, bool> effectively_selectable;
   const std::vector<EntityId> tree_order = scene.entity_tree_order();
   result.reserve(tree_order.size());
-  effectively_locked.reserve(tree_order.size());
+  effectively_selectable.reserve(tree_order.size());
   for (const EntityId entity : tree_order) {
     const EntityId parent = scene.parent(entity);
-    bool locked =
-        parent != kInvalidEntityId && effectively_locked[parent];
-    if (const LockComponent *component = scene.lock(entity);
-        component != nullptr && component->locked) {
-      locked = true;
+    bool selection_allowed =
+        parent == kInvalidEntityId || effectively_selectable[parent];
+    if (const SelectableComponent *component = scene.selectable(entity);
+        component != nullptr && !component->selectable) {
+      selection_allowed = false;
     }
     const SceneLayerId layer_id = scene.entity_layer(entity);
     if (layer_id != kInvalidSceneLayerId) {
       const SceneLayerRecord *layer = scene.layer(layer_id);
       if (layer == nullptr || layer->locked) {
-        locked = true;
+        selection_allowed = false;
       }
     }
-    effectively_locked.emplace(entity, locked);
+    effectively_selectable.emplace(entity, selection_allowed);
     const VisibilityComponent *visibility = scene.visibility(entity);
-    if (locked ||
+    if (!selection_allowed ||
         (visibility != nullptr && !visibility->selectable)) {
       continue;
     }

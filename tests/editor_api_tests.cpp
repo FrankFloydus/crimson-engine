@@ -383,7 +383,7 @@ entity_world_origin_translation_only(const quader::QuaderEditorApi &editor,
     if (!snapshot.has_value()) {
       return std::nullopt;
     }
-    origin += snapshot->transform.position;
+    origin += snapshot->transform.location;
     current = snapshot->parent;
     ++guard;
   }
@@ -403,7 +403,7 @@ entity_world_transform(const quader::QuaderEditorApi &editor,
       return std::nullopt;
     }
     const auto channels = quader::compose_transform(quader::QTransform{
-        .position = snapshot->transform.position,
+        .location = snapshot->transform.location,
         .rotation = quader::quat_from_euler_radians(
             snapshot->transform.rotation_euler),
         .scale = snapshot->transform.scale});
@@ -1529,7 +1529,7 @@ TEST(EditorApiTests, ProjectSaveAsSaveAndOpenUseQdrDocumentIo) {
 
   quader::QuaderCreatePointLightArgs light_args;
   light_args.name = "Persisted Key Light";
-  light_args.transform.position = {3.0f, 4.0f, 5.0f};
+  light_args.transform.location = {3.0f, 4.0f, 5.0f};
   light_args.light = quader::QuaderLightComponent{
       .type = quader::QuaderLightType::Point,
       .color = {1.0f, 0.75f, 0.5f},
@@ -1572,15 +1572,15 @@ TEST(EditorApiTests, ProjectSaveAsSaveAndOpenUseQdrDocumentIo) {
   ASSERT_TRUE(opened_light.has_value());
   ASSERT_TRUE(opened_light->has_light);
   EXPECT_EQ(opened_light->kind, quader::QuaderEntityKind::Light);
-  EXPECT_FLOAT_EQ(opened_light->transform.position.x, 3.0f);
-  EXPECT_FLOAT_EQ(opened_light->transform.position.y, 4.0f);
-  EXPECT_FLOAT_EQ(opened_light->transform.position.z, 5.0f);
+  EXPECT_FLOAT_EQ(opened_light->transform.location.x, 3.0f);
+  EXPECT_FLOAT_EQ(opened_light->transform.location.y, 4.0f);
+  EXPECT_FLOAT_EQ(opened_light->transform.location.z, 5.0f);
   expect_light_eq(opened_light->light, light_args.light);
   EXPECT_TRUE(selected_entities(opened).empty())
       << "selection is transient and must not be stored in a scene file";
 
   quader::QuaderTransform moved_transform = opened_light->transform;
-  moved_transform.position.x += 0.25f;
+  moved_transform.location.x += 0.25f;
   const quader::QuaderApiVoidResult moved = opened.scene().set_transform(
       opened_light->id, moved_transform);
   ASSERT_TRUE(moved.ok()) << moved.error_message();
@@ -2696,9 +2696,9 @@ TEST(EditorApiTests, UvProjectionAvailabilitySharesAtomicTargetValidation) {
   }
   ASSERT_TRUE(editor.selection().select_object(box).ok());
   expect_availability(true);
-  ASSERT_TRUE(editor.scene().set_locked(box.entity, true).ok());
+  ASSERT_TRUE(editor.scene().set_selectable(box.entity, false).ok());
   expect_availability(false);
-  ASSERT_TRUE(editor.scene().set_locked(box.entity, false).ok());
+  ASSERT_TRUE(editor.scene().set_selectable(box.entity, true).ok());
   ASSERT_TRUE(editor.selection().select_object(box).ok());
   expect_availability(true);
   ASSERT_TRUE(editor.scene().set_visible(box.entity, false).ok());
@@ -3025,9 +3025,9 @@ TEST(EditorApiTests, AlignToolUnifiesArrangementActivationAndPreservesStoredRout
   const auto light = loaded.scene().create_point_light({.name = "Align Light"});
   ASSERT_TRUE(light.ok()) << light.error_message();
   ASSERT_TRUE(loaded.scene().set_transform(occurrence,
-      {.position = {1.125f, 2.5f, -3.25f}}).ok());
+      {.location = {1.125f, 2.5f, -3.25f}}).ok());
   ASSERT_TRUE(loaded.scene().set_transform(light.value().id,
-      {.position = {5.625f, 4.5f, 7.75f}}).ok());
+      {.location = {5.625f, 4.5f, 7.75f}}).ok());
   ASSERT_TRUE(loaded.selection().select_objects({occurrence, light.value().id}).ok());
   const auto command = loaded.commands().descriptor(kAlign);
   ASSERT_TRUE(command.has_value());
@@ -3077,9 +3077,9 @@ TEST(EditorApiTests, AlignActionsCompleteImmediatelyAndUndoDoesNotRetainPrevious
     ASSERT_TRUE(first.ok()) << first.error_message();
     ASSERT_TRUE(second.ok()) << second.error_message();
     ASSERT_TRUE(editor.scene().set_transform(first.value().id,
-        {.position = {2.0f, 3.0f, 4.0f}}).ok());
+        {.location = {2.0f, 3.0f, 4.0f}}).ok());
     ASSERT_TRUE(editor.scene().set_transform(second.value().id,
-        {.position = {8.0f, 7.0f, 6.0f}}).ok());
+        {.location = {8.0f, 7.0f, 6.0f}}).ok());
     ASSERT_TRUE(editor.selection().select_objects(
         {first.value().id, second.value().id}).ok());
     const auto before_history = editor.history().undo_history();
@@ -3101,15 +3101,15 @@ TEST(EditorApiTests, AlignActionsCompleteImmediatelyAndUndoDoesNotRetainPrevious
     }
     ASSERT_TRUE(editor.tools().execute_action("align", "align.x.min").ok());
     ASSERT_TRUE(editor.query().entity(second.value().id).has_value());
-    EXPECT_FLOAT_EQ(editor.query().entity(second.value().id)->transform.position.x, 2.0f);
+    EXPECT_FLOAT_EQ(editor.query().entity(second.value().id)->transform.location.x, 2.0f);
     EXPECT_EQ(editor.history().undo_history().entries.size(),
               before_history.entries.size() + 1u);
     ASSERT_TRUE(editor.commands().execute(quader::quader_command::kEditUndo).ok());
     EXPECT_EQ(editor.tools().active_tool(), "align");
-    EXPECT_FLOAT_EQ(editor.query().entity(second.value().id)->transform.position.x, 8.0f);
+    EXPECT_FLOAT_EQ(editor.query().entity(second.value().id)->transform.location.x, 8.0f);
     ASSERT_TRUE(editor.tools().execute_action("align", "align.y.min").ok());
-    EXPECT_FLOAT_EQ(editor.query().entity(second.value().id)->transform.position.x, 8.0f);
-    EXPECT_FLOAT_EQ(editor.query().entity(second.value().id)->transform.position.y, 3.0f);
+    EXPECT_FLOAT_EQ(editor.query().entity(second.value().id)->transform.location.x, 8.0f);
+    EXPECT_FLOAT_EQ(editor.query().entity(second.value().id)->transform.location.y, 3.0f);
     EXPECT_EQ(editor.history().undo_history().entries.size(),
               before_history.entries.size() + 1u);
     EXPECT_FALSE(editor.tools().set_setting("align", "align.x", "min").ok());
@@ -3121,13 +3121,13 @@ TEST(EditorApiTests, AlignActionsCompleteImmediatelyAndUndoDoesNotRetainPrevious
     ASSERT_TRUE(exited.ok()) << exited.error_message();
     EXPECT_TRUE(exited.changed());
     EXPECT_EQ(editor.tools().active_tool(), "select");
-    EXPECT_FLOAT_EQ(editor.query().entity(second.value().id)->transform.position.y, 3.0f);
+    EXPECT_FLOAT_EQ(editor.query().entity(second.value().id)->transform.location.y, 3.0f);
     EXPECT_EQ(editor.history().undo_history().entries.size(),
               before_history.entries.size() + 1u);
     ASSERT_TRUE(editor.history().undo().ok());
-    EXPECT_FLOAT_EQ(editor.query().entity(second.value().id)->transform.position.y, 7.0f);
+    EXPECT_FLOAT_EQ(editor.query().entity(second.value().id)->transform.location.y, 7.0f);
     ASSERT_TRUE(editor.history().redo().ok());
-    EXPECT_FLOAT_EQ(editor.query().entity(second.value().id)->transform.position.y, 3.0f);
+    EXPECT_FLOAT_EQ(editor.query().entity(second.value().id)->transform.location.y, 3.0f);
 }
 
 TEST(EditorApiTests, CurveToolUsesUnassignedActivationAndSharedFinalizeBinding) {
@@ -13794,7 +13794,7 @@ TEST(EditorApiTests,
   auto &editor = harness.editor;
   const auto object = create_selected_box(editor, "Bake Command Discovery");
   ASSERT_TRUE(editor.scene().set_transform(
-      object.entity, {.position = {3.0f, -2.0f, 5.0f},
+      object.entity, {.location = {3.0f, -2.0f, 5.0f},
                       .rotation_euler = {0.3f, 0.6f, -0.4f},
                       .scale = {1.5f, 0.75f, 2.0f}}).ok());
   struct BakeCommand {
@@ -13923,9 +13923,9 @@ TEST(EditorApiTests, BakeCommandsRejectUnavailableSelectionAndActivePreview) {
   };
   expect_rejected();
   const auto object = create_selected_box(editor);
-  ASSERT_TRUE(editor.scene().set_locked(object.entity, true).ok());
+  ASSERT_TRUE(editor.scene().set_selectable(object.entity, false).ok());
   expect_rejected();
-  ASSERT_TRUE(editor.scene().set_locked(object.entity, false).ok());
+  ASSERT_TRUE(editor.scene().set_selectable(object.entity, true).ok());
   ASSERT_TRUE(editor.selection().select_object(object).ok());
   ASSERT_TRUE(editor.commands().execute(
       editor.commands().command_id_for_modeling_action("half_cut")).ok());
@@ -15081,8 +15081,13 @@ TEST(EditorApiTests, ObjectAndGroupPickingIgnoresInwardRoomBackfaces) {
       pick.select_backfaces = false;
       const auto front_facing = editor.selection().pick_select(pick);
       ASSERT_TRUE(front_facing.ok()) << front_facing.error_message();
-      EXPECT_EQ(selected_entities(editor),
-                std::vector<quader::EntityId>{interior_target});
+      // The reflected room has inward world winding but outward local winding.
+      // Filament's reflected-entity correction renders its near wall, so it
+      // occludes the interior even though Backface Selection rejects that wall.
+      // The geometric hover above still proves the independent winding filter.
+      EXPECT_EQ(selected_entities(editor), reflected
+          ? std::vector<quader::EntityId>{}
+          : std::vector<quader::EntityId>{interior_target});
     }
   }
 }
@@ -15563,7 +15568,7 @@ TEST(EditorApiTests, DepthPickingSkipsHiddenLockedAndLayerMaskedMeshes) {
   const auto layered = create_depth_pick_box(editor, -1.0f, "Layered Depth Box");
   const auto far_box = create_depth_pick_box(editor, -4.0f, "Visible Far Box");
   ASSERT_TRUE(editor.scene().set_visible(hidden.entity, false).ok());
-  ASSERT_TRUE(editor.scene().set_locked(locked.entity, true).ok());
+  ASSERT_TRUE(editor.scene().set_selectable(locked.entity, false).ok());
   ASSERT_TRUE(editor.selection().select_object(layered).ok());
   const auto layer = editor.layers().create_from_selection("Masked Depth");
   ASSERT_TRUE(layer.ok()) << layer.error_message();
@@ -15708,12 +15713,12 @@ TEST(EditorApiTests, BoxSelectApiSelectsContainedObjectByViewportRectangle) {
     ASSERT_TRUE(harness.editor.scene()
                     .set_transform(left.value().entity,
                                    quader::QuaderTransform{
-                                       .position = {-20.0f, 0.0f, 0.0f}})
+                                       .location = {-20.0f, 0.0f, 0.0f}})
                     .ok());
     ASSERT_TRUE(harness.editor.scene()
                     .set_transform(right.value().entity,
                                    quader::QuaderTransform{
-                                       .position = {20.0f, 0.0f, 0.0f}})
+                                       .location = {20.0f, 0.0f, 0.0f}})
                     .ok());
     ASSERT_TRUE(harness.editor.selection()
                     .set_mode(quader::QuaderSelectionMode::Object)
@@ -15754,12 +15759,12 @@ TEST(EditorApiTests, ObjectBoxSelectionRoutesThroughDocumentHistory) {
     ASSERT_TRUE(editor.scene()
                     .set_transform(left.value().entity,
                                    quader::QuaderTransform{
-                                       .position = {-20.0f, 0.0f, 0.0f}})
+                                       .location = {-20.0f, 0.0f, 0.0f}})
                     .ok());
     ASSERT_TRUE(editor.scene()
                     .set_transform(right.value().entity,
                                    quader::QuaderTransform{
-                                       .position = {20.0f, 0.0f, 0.0f}})
+                                       .location = {20.0f, 0.0f, 0.0f}})
                     .ok());
     ASSERT_TRUE(editor.selection()
                     .set_mode(quader::QuaderSelectionMode::Object)
@@ -15812,12 +15817,12 @@ TEST(EditorApiTests, BoxSelectApiTogglesObjectSelection) {
     ASSERT_TRUE(harness.editor.scene()
                     .set_transform(left.value().entity,
                                    quader::QuaderTransform{
-                                       .position = {-20.0f, 0.0f, 0.0f}})
+                                       .location = {-20.0f, 0.0f, 0.0f}})
                     .ok());
     ASSERT_TRUE(harness.editor.scene()
                     .set_transform(right.value().entity,
                                    quader::QuaderTransform{
-                                       .position = {20.0f, 0.0f, 0.0f}})
+                                       .location = {20.0f, 0.0f, 0.0f}})
                     .ok());
     ASSERT_TRUE(harness.editor.selection()
                     .set_mode(quader::QuaderSelectionMode::Object)
@@ -16050,7 +16055,7 @@ TEST(EditorApiTests, GroupModeBoxSelectsContainingGroupByViewportRectangle) {
     ASSERT_TRUE(harness.editor.scene()
                     .set_transform(left.entity,
                                    quader::QuaderTransform{
-                                       .position = {-20.0f, 0.0f, 0.0f}})
+                                       .location = {-20.0f, 0.0f, 0.0f}})
                     .ok());
     const quader::QuaderApiResult<quader::QuaderEntityRef> left_group =
         harness.editor.scene().group_selection("Box Group A");
@@ -16065,7 +16070,7 @@ TEST(EditorApiTests, GroupModeBoxSelectsContainingGroupByViewportRectangle) {
     ASSERT_TRUE(harness.editor.scene()
                     .set_transform(right.value().entity,
                                    quader::QuaderTransform{
-                                       .position = {20.0f, 0.0f, 0.0f}})
+                                       .location = {20.0f, 0.0f, 0.0f}})
                     .ok());
     ASSERT_TRUE(harness.editor.selection().select_object(right.value()).ok());
     const quader::QuaderApiResult<quader::QuaderEntityRef> right_group =
@@ -16279,7 +16284,7 @@ TEST(EditorApiTests,
   const quader::EntityId occurrence = instance.value().occurrence.root.id;
   ASSERT_TRUE(editor.scene()
                   .set_transform(occurrence,
-                                 {.position = {4.0F, 0.0F, 0.0F}})
+                                 {.location = {4.0F, 0.0F, 0.0F}})
                   .ok());
   ASSERT_TRUE(
       editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
@@ -16294,7 +16299,7 @@ TEST(EditorApiTests,
   EXPECT_NEAR(target->world_position.y, -1.0, 1.0e-6);
   EXPECT_NEAR(target->world_position.z, -1.0, 1.0e-6);
 
-  ASSERT_TRUE(editor.scene().set_locked(occurrence, true).ok());
+  ASSERT_TRUE(editor.scene().set_selectable(occurrence, false).ok());
   EXPECT_FALSE(editor.query()
                    .mesh_vertex_snap_target(
                        {.origin = {3.0F, -1.0F, -5.0F},
@@ -16393,10 +16398,10 @@ TEST(EditorApiTests, NativeCurvePicksRejectHiddenLockedAndComponentModeTargets) 
   EXPECT_FALSE(editor.selection().pick_scene_entity(curve.value().entity, {}).ok());
   EXPECT_EQ(selected_entities(editor), std::vector<quader::EntityId>{box.entity});
   ASSERT_TRUE(editor.scene().set_visible(curve.value().entity, true).ok());
-  ASSERT_TRUE(editor.scene().set_locked(curve.value().entity, true).ok());
+  ASSERT_TRUE(editor.scene().set_selectable(curve.value().entity, false).ok());
   EXPECT_FALSE(editor.selection().pick_scene_entity(curve.value().entity, {}).ok());
   EXPECT_EQ(selected_entities(editor), std::vector<quader::EntityId>{box.entity});
-  ASSERT_TRUE(editor.scene().set_locked(curve.value().entity, false).ok());
+  ASSERT_TRUE(editor.scene().set_selectable(curve.value().entity, true).ok());
   enter_edit_mode_for_objects(editor, {box});
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
   const auto before = selected_entities(editor);
@@ -16830,8 +16835,8 @@ TEST(EditorApiTests, ObjectHandlesSelectionConveniencesAndSceneBatchesUsePublicA
     quader::QuaderObjectHandle box = editor.object(created.value());
     EXPECT_TRUE(box.rename("Public Handle Box").ok());
     EXPECT_TRUE(box.set_visible(false).ok());
-    EXPECT_TRUE(box.set_locked(true).ok());
-    EXPECT_TRUE(box.set_locked(false).ok());
+    EXPECT_TRUE(box.set_selectable(false).ok());
+    EXPECT_TRUE(box.set_selectable(true).ok());
     EXPECT_TRUE(editor.selection().select_object(created.value().entity).ok());
     EXPECT_TRUE(editor.selection()
                     .select_objects({created.value()},
@@ -16894,14 +16899,14 @@ TEST(EditorApiTests, ObjectHandlesSelectionConveniencesAndSceneBatchesUsePublicA
     ASSERT_TRUE(second.ok()) << second.error_message();
 
     quader::QuaderTransform moved;
-    moved.position = {3.0f, 0.0f, 0.0f};
+    moved.location = {3.0f, 0.0f, 0.0f};
     const quader::QuaderApiVoidResult batch =
         editor.scene()
             .batch("Arrange")
             .rename(first.value().id, "Renamed First")
             .set_transform(first.value().id, moved)
             .set_visible(second.value().id, false)
-            .set_locked(second.value().id, true)
+            .set_selectable(second.value().id, false)
             .commit();
     ASSERT_TRUE(batch.ok()) << batch.error_message();
     EXPECT_TRUE(batch.changed());
@@ -16910,12 +16915,12 @@ TEST(EditorApiTests, ObjectHandlesSelectionConveniencesAndSceneBatchesUsePublicA
         entity_by_id(editor, first.value().id);
     ASSERT_TRUE(first_after_batch.has_value());
     EXPECT_EQ(first_after_batch->name, "Renamed First");
-    EXPECT_EQ(first_after_batch->transform.position.x, 3.0f);
+    EXPECT_EQ(first_after_batch->transform.location.x, 3.0f);
     std::optional<quader::QuaderEntitySnapshot> second_after_batch =
         entity_by_id(editor, second.value().id);
     ASSERT_TRUE(second_after_batch.has_value());
     EXPECT_FALSE(second_after_batch->visible);
-    EXPECT_TRUE(second_after_batch->locked);
+    EXPECT_FALSE(second_after_batch->selectable);
 
     EXPECT_TRUE(editor.history().undo().ok());
     first_after_batch = entity_by_id(editor, first.value().id);
@@ -16924,7 +16929,7 @@ TEST(EditorApiTests, ObjectHandlesSelectionConveniencesAndSceneBatchesUsePublicA
     second_after_batch = entity_by_id(editor, second.value().id);
     ASSERT_TRUE(second_after_batch.has_value());
     EXPECT_TRUE(second_after_batch->visible);
-    EXPECT_FALSE(second_after_batch->locked);
+    EXPECT_TRUE(second_after_batch->selectable);
 }
 
 TEST(EditorApiTests, SceneBatchUsesPendingStateForRepeatedEntityEdits) {
@@ -16938,17 +16943,17 @@ TEST(EditorApiTests, SceneBatchUsesPendingStateForRepeatedEntityEdits) {
     ASSERT_TRUE(entity.ok()) << entity.error_message();
 
     quader::QuaderTransform first_move;
-    first_move.position = {1.0f, 0.0f, 0.0f};
+    first_move.location = {1.0f, 0.0f, 0.0f};
     quader::QuaderTransform second_move;
-    second_move.position = {2.0f, 0.0f, 0.0f};
+    second_move.location = {2.0f, 0.0f, 0.0f};
 
     const quader::QuaderApiVoidResult batch =
         editor.scene()
             .batch("Repeated Batch")
             .set_visible(entity.value().id, false)
             .set_visible(entity.value().id, true)
-            .set_locked(entity.value().id, true)
-            .set_locked(entity.value().id, false)
+            .set_selectable(entity.value().id, false)
+            .set_selectable(entity.value().id, true)
             .set_transform(entity.value().id, first_move)
             .set_transform(entity.value().id, second_move)
             .commit();
@@ -16959,22 +16964,22 @@ TEST(EditorApiTests, SceneBatchUsesPendingStateForRepeatedEntityEdits) {
         entity_by_id(editor, entity.value().id);
     ASSERT_TRUE(snapshot.has_value());
     EXPECT_TRUE(snapshot->visible);
-    EXPECT_FALSE(snapshot->locked);
-    EXPECT_EQ(snapshot->transform.position.x, 2.0f);
+    EXPECT_TRUE(snapshot->selectable);
+    EXPECT_EQ(snapshot->transform.location.x, 2.0f);
 
     ASSERT_TRUE(editor.history().undo().ok());
     snapshot = entity_by_id(editor, entity.value().id);
     ASSERT_TRUE(snapshot.has_value());
     EXPECT_TRUE(snapshot->visible);
-    EXPECT_FALSE(snapshot->locked);
-    EXPECT_EQ(snapshot->transform.position.x, 0.0f);
+    EXPECT_TRUE(snapshot->selectable);
+    EXPECT_EQ(snapshot->transform.location.x, 0.0f);
 
     ASSERT_TRUE(editor.history().redo().ok());
     snapshot = entity_by_id(editor, entity.value().id);
     ASSERT_TRUE(snapshot.has_value());
     EXPECT_TRUE(snapshot->visible);
-    EXPECT_FALSE(snapshot->locked);
-    EXPECT_EQ(snapshot->transform.position.x, 2.0f);
+    EXPECT_TRUE(snapshot->selectable);
+    EXPECT_EQ(snapshot->transform.location.x, 2.0f);
 }
 
 TEST(EditorApiTests, SceneBatchMeshPhysicsEditsShareOneUndoRedoStep) {
@@ -17073,14 +17078,14 @@ TEST(EditorApiTests, SceneBatchTransformLockChecksUsePendingParentAndLockState) 
     const quader::QuaderApiResult<quader::QuaderEntityRef> locked_entity =
         editor.scene().create_entity(locked_args);
     ASSERT_TRUE(locked_entity.ok()) << locked_entity.error_message();
-    ASSERT_TRUE(editor.scene().set_locked(locked_entity.value().id, true).ok());
+    ASSERT_TRUE(editor.scene().set_selectable(locked_entity.value().id, false).ok());
 
     quader::QuaderTransform moved_after_unlock;
-    moved_after_unlock.position = {5.0f, 0.0f, 0.0f};
+    moved_after_unlock.location = {5.0f, 0.0f, 0.0f};
     const quader::QuaderApiVoidResult unlock_then_move =
         editor.scene()
             .batch("Unlock Then Move")
-            .set_locked(locked_entity.value().id, false)
+            .set_selectable(locked_entity.value().id, true)
             .set_transform(locked_entity.value().id, moved_after_unlock)
             .commit();
     ASSERT_TRUE(unlock_then_move.ok()) << unlock_then_move.error_message();
@@ -17089,15 +17094,15 @@ TEST(EditorApiTests, SceneBatchTransformLockChecksUsePendingParentAndLockState) 
     std::optional<quader::QuaderEntitySnapshot> snapshot =
         entity_by_id(editor, locked_entity.value().id);
     ASSERT_TRUE(snapshot.has_value());
-    EXPECT_FALSE(snapshot->locked);
-    EXPECT_NEAR(snapshot->transform.position.x, 5.0f, 0.001f);
+    EXPECT_TRUE(snapshot->selectable);
+    EXPECT_NEAR(snapshot->transform.location.x, 5.0f, 0.001f);
 
     quader::QuaderCreateEntityArgs parent_args;
     parent_args.name = "Batch Locked Parent";
     const quader::QuaderApiResult<quader::QuaderEntityRef> parent =
         editor.scene().create_entity(parent_args);
     ASSERT_TRUE(parent.ok()) << parent.error_message();
-    ASSERT_TRUE(editor.scene().set_locked(parent.value().id, true).ok());
+    ASSERT_TRUE(editor.scene().set_selectable(parent.value().id, false).ok());
 
     quader::QuaderCreateEntityArgs child_args;
     child_args.name = "Batch Reparent Then Transform";
@@ -17106,7 +17111,7 @@ TEST(EditorApiTests, SceneBatchTransformLockChecksUsePendingParentAndLockState) 
     ASSERT_TRUE(child.ok()) << child.error_message();
 
     quader::QuaderTransform skipped_move;
-    skipped_move.position = {9.0f, 0.0f, 0.0f};
+    skipped_move.location = {9.0f, 0.0f, 0.0f};
     const quader::QuaderApiVoidResult reparent_then_move =
         editor.scene()
             .batch("Reparent Then Move")
@@ -17119,7 +17124,7 @@ TEST(EditorApiTests, SceneBatchTransformLockChecksUsePendingParentAndLockState) 
     snapshot = entity_by_id(editor, child.value().id);
     ASSERT_TRUE(snapshot.has_value());
     EXPECT_EQ(snapshot->parent, parent.value().id);
-    EXPECT_NEAR(snapshot->transform.position.x, 0.0f, 0.001f);
+    EXPECT_NEAR(snapshot->transform.location.x, 0.0f, 0.001f);
 }
 
 TEST(EditorApiTests, LockingSelectedEntitiesClearsSelectionAndUndoRestoresIt) {
@@ -17146,7 +17151,7 @@ TEST(EditorApiTests, LockingSelectedEntitiesClearsSelectionAndUndoRestoresIt) {
     ASSERT_TRUE(entity_by_id(editor, child.value().id)->active);
 
     const quader::QuaderApiVoidResult locked =
-        editor.scene().set_locked(parent.value().id, true);
+        editor.scene().set_selectable(parent.value().id, false);
     ASSERT_TRUE(locked.ok()) << locked.error_message();
     EXPECT_TRUE(locked.changed());
 
@@ -17192,7 +17197,7 @@ TEST(EditorApiTests, LockingParentClearsSelectedModelingDescendantAndUndoRestore
     EXPECT_TRUE(editor.modeling().selection_summary().has_selection);
 
     const quader::QuaderApiVoidResult locked =
-        editor.scene().set_locked(parent.value().id, true);
+        editor.scene().set_selectable(parent.value().id, false);
     ASSERT_TRUE(locked.ok()) << locked.error_message();
     EXPECT_TRUE(locked.changed());
     EXPECT_FALSE(editor.query().selection().has_selection);
@@ -17226,7 +17231,7 @@ TEST(EditorApiTests,
                                  .max = {1.0f, 1.0f, 1.0f}},
             "Locked Selection Target");
     ASSERT_TRUE(box.ok()) << box.error_message();
-    ASSERT_TRUE(editor.scene().set_locked(box.value().entity, true).ok());
+    ASSERT_TRUE(editor.scene().set_selectable(box.value().entity, false).ok());
 
     const quader::QuaderApiVoidResult selected =
         editor.selection().select_object(box.value().entity);
@@ -17244,7 +17249,7 @@ TEST(EditorApiTests,
     std::optional<quader::QuaderEntitySnapshot> snapshot =
         entity_by_id(editor, box.value().entity);
     ASSERT_TRUE(snapshot.has_value());
-    EXPECT_TRUE(snapshot->locked);
+    EXPECT_FALSE(snapshot->selectable);
     EXPECT_TRUE(snapshot->selected);
     EXPECT_TRUE(snapshot->active);
     EXPECT_TRUE(editor.query().selection().has_selection);
@@ -17269,12 +17274,12 @@ TEST(EditorApiTests,
     EXPECT_EQ(editor.query().entities().size(), 1u);
 
     const quader::QuaderApiVoidResult unlocked =
-        editor.scene().set_locked(box.value().entity, false);
+        editor.scene().set_selectable(box.value().entity, true);
     ASSERT_TRUE(unlocked.ok()) << unlocked.error_message();
     EXPECT_TRUE(unlocked.changed());
     snapshot = entity_by_id(editor, box.value().entity);
     ASSERT_TRUE(snapshot.has_value());
-    EXPECT_FALSE(snapshot->locked);
+    EXPECT_TRUE(snapshot->selectable);
     EXPECT_TRUE(snapshot->selected);
     EXPECT_TRUE(snapshot->active);
 }
@@ -17318,7 +17323,7 @@ TEST(EditorApiTests, ScenePointLightApiCreatesSnapshotsAndEditsThroughHistory) {
 
     quader::QuaderCreatePointLightArgs args;
     args.name = "Key Light";
-    args.transform.position = {1.0f, 2.0f, 3.0f};
+    args.transform.location = {1.0f, 2.0f, 3.0f};
     args.light.color = {1.0f, 0.75f, 0.5f};
     args.light.intensity = 950.0f;
     args.light.range = 14.0f;
@@ -17341,7 +17346,7 @@ TEST(EditorApiTests, ScenePointLightApiCreatesSnapshotsAndEditsThroughHistory) {
     EXPECT_FLOAT_EQ(snapshot->light.intensity, 950.0f);
     EXPECT_FLOAT_EQ(snapshot->light.range, 14.0f);
     EXPECT_TRUE(snapshot->light.casts_shadows);
-    EXPECT_FLOAT_EQ(snapshot->transform.position.z, 3.0f);
+    EXPECT_FLOAT_EQ(snapshot->transform.location.z, 3.0f);
     EXPECT_TRUE(snapshot->selected);
     EXPECT_TRUE(snapshot->active);
 
@@ -17530,7 +17535,7 @@ TEST(EditorApiTests, ScenePointLightSelectionFeedsQuerySummaryAndCenterInObjectM
         editor.selection().set_mode(quader::QuaderSelectionMode::Face).ok());
 
     quader::QuaderCreatePointLightArgs args;
-    args.transform.position = {2.0f, 3.0f, 4.0f};
+    args.transform.location = {2.0f, 3.0f, 4.0f};
     args.select_created = true;
     const quader::QuaderApiResult<quader::QuaderEntityRef> light =
         editor.scene().create_point_light(args);
@@ -17568,7 +17573,7 @@ TEST(EditorApiTests, ObjectModeKeepsDormantComponentsOutOfImmediateEntityMove) {
     ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
     quader::QuaderCreatePointLightArgs args;
     args.name = "Selection Move Light";
-    args.transform.position = {5.0f, 0.0f, 0.0f};
+    args.transform.location = {5.0f, 0.0f, 0.0f};
     args.select_created = true;
     const quader::QuaderApiResult<quader::QuaderEntityRef> light =
         editor.scene().create_point_light(args);
@@ -17594,14 +17599,14 @@ TEST(EditorApiTests, ObjectModeKeepsDormantComponentsOutOfImmediateEntityMove) {
         entity_by_id(editor, light.value().id);
     ASSERT_TRUE(box_after.has_value());
     ASSERT_TRUE(light_after.has_value());
-    EXPECT_NEAR(box_after->transform.position.x,
-                box_before->transform.position.x, 0.001f);
-    EXPECT_NEAR(light_after->transform.position.x, 7.0f, 0.001f);
+    EXPECT_NEAR(box_after->transform.location.x,
+                box_before->transform.location.x, 0.001f);
+    EXPECT_NEAR(light_after->transform.location.x, 7.0f, 0.001f);
 
     ASSERT_TRUE(editor.history().undo().ok());
     light_after = entity_by_id(editor, light.value().id);
     ASSERT_TRUE(light_after.has_value());
-    EXPECT_NEAR(light_after->transform.position.x, 5.0f, 0.001f);
+    EXPECT_NEAR(light_after->transform.location.x, 5.0f, 0.001f);
     selection = editor.query().selection();
     EXPECT_EQ(selection.mode, quader::QuaderSelectionMode::Object);
     EXPECT_EQ(selection.active_kind, quader::QuaderActiveSelectionKind::Light);
@@ -17609,7 +17614,7 @@ TEST(EditorApiTests, ObjectModeKeepsDormantComponentsOutOfImmediateEntityMove) {
     ASSERT_TRUE(editor.history().redo().ok());
     light_after = entity_by_id(editor, light.value().id);
     ASSERT_TRUE(light_after.has_value());
-    EXPECT_NEAR(light_after->transform.position.x, 7.0f, 0.001f);
+    EXPECT_NEAR(light_after->transform.location.x, 7.0f, 0.001f);
     EXPECT_EQ(editor.query().selection().active_kind,
               quader::QuaderActiveSelectionKind::Light);
 }
@@ -17623,7 +17628,7 @@ TEST(EditorApiTests, MixedEntitySelectionMoveSelectionTransformsMeshAndLight) {
 
     quader::QuaderCreatePointLightArgs args;
     args.name = "Mixed Entity Move Light";
-    args.transform.position = {10.0f, 0.0f, 0.0f};
+    args.transform.location = {10.0f, 0.0f, 0.0f};
     const quader::QuaderApiResult<quader::QuaderEntityRef> light =
         editor.scene().create_point_light(args);
     ASSERT_TRUE(light.ok()) << light.error_message();
@@ -17654,8 +17659,8 @@ TEST(EditorApiTests, MixedEntitySelectionMoveSelectionTransformsMeshAndLight) {
         entity_by_id(editor, light.value().id);
     ASSERT_TRUE(box_after.has_value());
     ASSERT_TRUE(light_after.has_value());
-    EXPECT_NEAR(box_after->transform.position.x, 3.0f, 0.001f);
-    EXPECT_NEAR(light_after->transform.position.x, 13.0f, 0.001f);
+    EXPECT_NEAR(box_after->transform.location.x, 3.0f, 0.001f);
+    EXPECT_NEAR(light_after->transform.location.x, 13.0f, 0.001f);
 }
 
 TEST(EditorApiTests, EntitySelectionTransformSelectionRoutesLightThroughSceneTransformHistory) {
@@ -17664,7 +17669,7 @@ TEST(EditorApiTests, EntitySelectionTransformSelectionRoutesLightThroughSceneTra
 
     quader::QuaderCreatePointLightArgs args;
     args.name = "Transform Selection Light";
-    args.transform.position = {4.0f, 1.0f, 0.0f};
+    args.transform.location = {4.0f, 1.0f, 0.0f};
     args.select_created = true;
     const quader::QuaderApiResult<quader::QuaderEntityRef> light =
         editor.scene().create_point_light(args);
@@ -17681,18 +17686,18 @@ TEST(EditorApiTests, EntitySelectionTransformSelectionRoutesLightThroughSceneTra
     std::optional<quader::QuaderEntitySnapshot> snapshot =
         entity_by_id(editor, light.value().id);
     ASSERT_TRUE(snapshot.has_value());
-    EXPECT_NEAR(snapshot->transform.position.x, 6.0f, 0.001f);
-    EXPECT_NEAR(snapshot->transform.position.y, 1.0f, 0.001f);
+    EXPECT_NEAR(snapshot->transform.location.x, 6.0f, 0.001f);
+    EXPECT_NEAR(snapshot->transform.location.y, 1.0f, 0.001f);
 
     ASSERT_TRUE(editor.history().undo().ok());
     snapshot = entity_by_id(editor, light.value().id);
     ASSERT_TRUE(snapshot.has_value());
-    EXPECT_NEAR(snapshot->transform.position.x, 4.0f, 0.001f);
+    EXPECT_NEAR(snapshot->transform.location.x, 4.0f, 0.001f);
 
     ASSERT_TRUE(editor.history().redo().ok());
     snapshot = entity_by_id(editor, light.value().id);
     ASSERT_TRUE(snapshot.has_value());
-    EXPECT_NEAR(snapshot->transform.position.x, 6.0f, 0.001f);
+    EXPECT_NEAR(snapshot->transform.location.x, 6.0f, 0.001f);
 }
 
 TEST(EditorApiTests, MixedEntitySelectionTransformSelectionTransformsMeshAndLight) {
@@ -17703,7 +17708,7 @@ TEST(EditorApiTests, MixedEntitySelectionTransformSelectionTransformsMeshAndLigh
         create_selected_box(editor, "Mixed Transform Box");
     quader::QuaderCreatePointLightArgs args;
     args.name = "Mixed Transform Light";
-    args.transform.position = {8.0f, 0.0f, 0.0f};
+    args.transform.location = {8.0f, 0.0f, 0.0f};
     const quader::QuaderApiResult<quader::QuaderEntityRef> light =
         editor.scene().create_point_light(args);
     ASSERT_TRUE(light.ok()) << light.error_message();
@@ -17726,8 +17731,8 @@ TEST(EditorApiTests, MixedEntitySelectionTransformSelectionTransformsMeshAndLigh
         entity_by_id(editor, light.value().id);
     ASSERT_TRUE(box_after.has_value());
     ASSERT_TRUE(light_after.has_value());
-    EXPECT_NEAR(box_after->transform.position.x, -2.0f, 0.001f);
-    EXPECT_NEAR(light_after->transform.position.x, 6.0f, 0.001f);
+    EXPECT_NEAR(box_after->transform.location.x, -2.0f, 0.001f);
+    EXPECT_NEAR(light_after->transform.location.x, 6.0f, 0.001f);
 }
 
 TEST(EditorApiTests, PublicDuplicateSelectionDuplicatesLightEntityThroughSceneHierarchy) {
@@ -17736,7 +17741,7 @@ TEST(EditorApiTests, PublicDuplicateSelectionDuplicatesLightEntityThroughSceneHi
 
     quader::QuaderCreatePointLightArgs args;
     args.name = "Duplicate Entity Light";
-    args.transform.position = {1.0f, 2.0f, 3.0f};
+    args.transform.location = {1.0f, 2.0f, 3.0f};
     args.select_created = true;
     const quader::QuaderApiResult<quader::QuaderEntityRef> source =
         editor.scene().create_point_light(args);
@@ -17758,7 +17763,7 @@ TEST(EditorApiTests, PublicDuplicateSelectionDuplicatesLightEntityThroughSceneHi
     ASSERT_TRUE(duplicate_snapshot.has_value());
     EXPECT_TRUE(duplicate_snapshot->has_light);
     EXPECT_EQ(duplicate_snapshot->light.type, quader::QuaderLightType::Point);
-    EXPECT_NEAR(duplicate_snapshot->transform.position.x, 1.0f, 0.001f);
+    EXPECT_NEAR(duplicate_snapshot->transform.location.x, 1.0f, 0.001f);
     EXPECT_TRUE(duplicate_snapshot->selected);
     EXPECT_TRUE(duplicate_snapshot->active);
 
@@ -18040,7 +18045,7 @@ TEST(EditorApiTests, ObjectSelectAllAndInvertUseSceneEntitiesAndExcludeLocked) {
     ASSERT_TRUE(loose_light.ok()) << loose_light.error_message();
     const quader::QuaderModelingObjectRef locked_box =
         create_selected_box(editor, "Select All Locked Box");
-    ASSERT_TRUE(editor.scene().set_locked(locked_box.entity, true).ok());
+    ASSERT_TRUE(editor.scene().set_selectable(locked_box.entity, false).ok());
 
     ASSERT_TRUE(
         editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
@@ -18108,7 +18113,7 @@ TEST(EditorApiTests,
                     .select_objects({hidden.id, selected_eligible.id}, hidden.id)
                     .ok());
     ASSERT_TRUE(editor.scene().set_visible(hidden.id, false).ok());
-    ASSERT_TRUE(editor.scene().set_locked(locked.id, true).ok());
+    ASSERT_TRUE(editor.scene().set_selectable(locked.id, false).ok());
     ASSERT_TRUE(editor.selection()
                     .select_objects_for_inspection(
                         {hidden.id, locked.id, selected_eligible.id}, hidden.id)
@@ -18302,7 +18307,7 @@ TEST(EditorApiTests,
           },
           "Inverse Locked Mesh");
   ASSERT_TRUE(locked.ok()) << locked.error_message();
-  ASSERT_TRUE(editor.scene().set_locked(locked.value().entity, true).ok());
+  ASSERT_TRUE(editor.scene().set_selectable(locked.value().entity, false).ok());
 
   ASSERT_TRUE(editor.selection()
                   .select_objects(
@@ -18620,7 +18625,7 @@ TEST(EditorApiTests,
   ASSERT_TRUE(editor.scene()
                   .set_transform(occurrence,
                                  quader::QuaderTransform{
-                                     .position = occurrence_offset,
+                                     .location = occurrence_offset,
                                  })
                   .ok());
   ASSERT_TRUE(editor.modeling().enter_instance_edit(occurrence).ok());
@@ -18958,7 +18963,7 @@ TEST(EditorApiTests,
       editor.scene()
           .set_transform(independent_match.value().entity,
                          quader::QuaderTransform{
-                             .position = {8.0f, -3.0f, 5.0f},
+                             .location = {8.0f, -3.0f, 5.0f},
                              .rotation_euler = {0.25f, 0.5f, 1.0f},
                              .scale = {2.0f, 3.0f, 4.0f},
                          })
@@ -19051,7 +19056,7 @@ TEST(EditorApiTests,
   ASSERT_TRUE(editor.scene()
                   .set_transform(linked_member.entity,
                                  quader::QuaderTransform{
-                                     .position = {7.0f, -3.0f, 2.0f},
+                                     .location = {7.0f, -3.0f, 2.0f},
                                      .rotation_euler = {0.2f, 0.4f, 0.6f},
                                      .scale = {2.0f, 3.0f, 4.0f},
                                  })
@@ -19071,7 +19076,7 @@ TEST(EditorApiTests,
   ASSERT_TRUE(editor.scene()
                   .set_transform(independent_member.entity,
                                  quader::QuaderTransform{
-                                     .position = {-11.0f, 5.0f, 9.0f},
+                                     .location = {-11.0f, 5.0f, 9.0f},
                                      .rotation_euler = {0.9f, 0.1f, 0.3f},
                                      .scale = {0.5f, 1.5f, 2.5f},
                                  })
@@ -19185,13 +19190,13 @@ TEST(EditorApiTests,
     if (!editor.scene()
              .set_transform(first.entity,
                             quader::QuaderTransform{
-                                .position = {center - half_spacing, 0.0f,
+                                .location = {center - half_spacing, 0.0f,
                                              0.0f}})
              .ok() ||
         !editor.scene()
              .set_transform(second.value().entity,
                             quader::QuaderTransform{
-                                .position = {center + half_spacing, 0.0f,
+                                .location = {center + half_spacing, 0.0f,
                                              0.0f}})
              .ok() ||
         !editor.selection()
@@ -19400,7 +19405,7 @@ TEST(EditorApiTests,
       editor.scene()
           .set_transform(mirrored.value().entity,
                          quader::QuaderTransform{
-                             .position = {6.0F, 0.0F, 0.0F},
+                             .location = {6.0F, 0.0F, 0.0F},
                              .rotation_euler = {0.0F, 0.0F, 0.75F},
                              .scale = {-2.0F, 3.0F, 0.5F},
                          })
@@ -19409,7 +19414,7 @@ TEST(EditorApiTests,
       editor.scene()
           .set_transform(tilted.value().entity,
                          quader::QuaderTransform{
-                             .position = {12.0F, 0.0F, 0.0F},
+                             .location = {12.0F, 0.0F, 0.0F},
                              .rotation_euler = {0.00001F, 0.0F, 0.0F},
                          })
           .ok());
@@ -19463,7 +19468,7 @@ TEST(EditorApiTests,
       editor.scene()
           .set_transform(second.value().entity,
                          quader::QuaderTransform{
-                             .position = {6.0f, 0.0f, 0.0f},
+                             .location = {6.0f, 0.0f, 0.0f},
                              .rotation_euler = {0.0f, 0.0f, 1.5707963f},
                          })
           .ok());
@@ -19471,7 +19476,7 @@ TEST(EditorApiTests,
       editor.scene()
           .set_transform(third.value().entity,
                          quader::QuaderTransform{
-                             .position = {12.0f, 0.0f, 0.0f},
+                             .location = {12.0f, 0.0f, 0.0f},
                              .rotation_euler = {0.0f, 0.0f, 0.7853982f},
                          })
           .ok());
@@ -19798,13 +19803,13 @@ TEST(EditorApiTests, SceneBatchReparentPreservesWorldTransformAgainstPendingPare
 
     quader::QuaderCreateEntityArgs child_args;
     child_args.name = "Batch Reparent Child";
-    child_args.transform.position = {2.0f, 0.0f, 0.0f};
+    child_args.transform.location = {2.0f, 0.0f, 0.0f};
     const quader::QuaderApiResult<quader::QuaderEntityRef> child =
         editor.scene().create_entity(child_args);
     ASSERT_TRUE(child.ok()) << child.error_message();
 
     quader::QuaderTransform parent_move;
-    parent_move.position = {10.0f, 0.0f, 0.0f};
+    parent_move.location = {10.0f, 0.0f, 0.0f};
     const quader::QuaderApiVoidResult batch =
         editor.scene()
             .batch("Batch Reparent Preserve")
@@ -19821,8 +19826,8 @@ TEST(EditorApiTests, SceneBatchReparentPreservesWorldTransformAgainstPendingPare
     ASSERT_TRUE(parent_snapshot.has_value());
     ASSERT_TRUE(child_snapshot.has_value());
     EXPECT_EQ(child_snapshot->parent, parent.value().id);
-    EXPECT_NEAR(parent_snapshot->transform.position.x, 10.0f, 0.001f);
-    EXPECT_NEAR(child_snapshot->transform.position.x, 2.0f, 0.001f);
+    EXPECT_NEAR(parent_snapshot->transform.location.x, 10.0f, 0.001f);
+    EXPECT_NEAR(child_snapshot->transform.location.x, 2.0f, 0.001f);
     ASSERT_TRUE(child_snapshot->parenting_offset.has_value());
     EXPECT_NEAR(child_snapshot->parenting_offset->values[12], -10.0f, 0.001f);
     ASSERT_TRUE(entity_world_transform(editor, child.value().id).has_value());
@@ -19835,8 +19840,8 @@ TEST(EditorApiTests, SceneBatchReparentPreservesWorldTransformAgainstPendingPare
     ASSERT_TRUE(parent_snapshot.has_value());
     ASSERT_TRUE(child_snapshot.has_value());
     EXPECT_EQ(child_snapshot->parent, quader::kInvalidEntityId);
-    EXPECT_NEAR(parent_snapshot->transform.position.x, 0.0f, 0.001f);
-    EXPECT_NEAR(child_snapshot->transform.position.x, 2.0f, 0.001f);
+    EXPECT_NEAR(parent_snapshot->transform.location.x, 0.0f, 0.001f);
+    EXPECT_NEAR(child_snapshot->transform.location.x, 2.0f, 0.001f);
 
     ASSERT_TRUE(editor.history().redo().ok());
     parent_snapshot = entity_by_id(editor, parent.value().id);
@@ -19844,8 +19849,8 @@ TEST(EditorApiTests, SceneBatchReparentPreservesWorldTransformAgainstPendingPare
     ASSERT_TRUE(parent_snapshot.has_value());
     ASSERT_TRUE(child_snapshot.has_value());
     EXPECT_EQ(child_snapshot->parent, parent.value().id);
-    EXPECT_NEAR(parent_snapshot->transform.position.x, 10.0f, 0.001f);
-    EXPECT_NEAR(child_snapshot->transform.position.x, 2.0f, 0.001f);
+    EXPECT_NEAR(parent_snapshot->transform.location.x, 10.0f, 0.001f);
+    EXPECT_NEAR(child_snapshot->transform.location.x, 2.0f, 0.001f);
     ASSERT_TRUE(child_snapshot->parenting_offset.has_value());
     EXPECT_NEAR(child_snapshot->parenting_offset->values[12], -10.0f, 0.001f);
     ASSERT_TRUE(entity_world_transform(editor, child.value().id).has_value());
@@ -19865,13 +19870,13 @@ TEST(EditorApiTests, SceneBatchReparentCanKeepLocalTransformAgainstPendingParent
 
     quader::QuaderCreateEntityArgs child_args;
     child_args.name = "Batch Reparent Local Child";
-    child_args.transform.position = {2.0f, 0.0f, 0.0f};
+    child_args.transform.location = {2.0f, 0.0f, 0.0f};
     const quader::QuaderApiResult<quader::QuaderEntityRef> child =
         editor.scene().create_entity(child_args);
     ASSERT_TRUE(child.ok()) << child.error_message();
 
     quader::QuaderTransform parent_move;
-    parent_move.position = {10.0f, 0.0f, 0.0f};
+    parent_move.location = {10.0f, 0.0f, 0.0f};
     const quader::QuaderApiVoidResult batch =
         editor.scene()
             .batch("Batch Reparent Local")
@@ -19888,8 +19893,8 @@ TEST(EditorApiTests, SceneBatchReparentCanKeepLocalTransformAgainstPendingParent
     ASSERT_TRUE(parent_snapshot.has_value());
     ASSERT_TRUE(child_snapshot.has_value());
     EXPECT_EQ(child_snapshot->parent, parent.value().id);
-    EXPECT_NEAR(parent_snapshot->transform.position.x, 10.0f, 0.001f);
-    EXPECT_NEAR(child_snapshot->transform.position.x, 2.0f, 0.001f);
+    EXPECT_NEAR(parent_snapshot->transform.location.x, 10.0f, 0.001f);
+    EXPECT_NEAR(child_snapshot->transform.location.x, 2.0f, 0.001f);
 
     ASSERT_TRUE(editor.history().undo().ok());
     parent_snapshot = entity_by_id(editor, parent.value().id);
@@ -19897,8 +19902,8 @@ TEST(EditorApiTests, SceneBatchReparentCanKeepLocalTransformAgainstPendingParent
     ASSERT_TRUE(parent_snapshot.has_value());
     ASSERT_TRUE(child_snapshot.has_value());
     EXPECT_EQ(child_snapshot->parent, quader::kInvalidEntityId);
-    EXPECT_NEAR(parent_snapshot->transform.position.x, 0.0f, 0.001f);
-    EXPECT_NEAR(child_snapshot->transform.position.x, 2.0f, 0.001f);
+    EXPECT_NEAR(parent_snapshot->transform.location.x, 0.0f, 0.001f);
+    EXPECT_NEAR(child_snapshot->transform.location.x, 2.0f, 0.001f);
 
     ASSERT_TRUE(editor.history().redo().ok());
     parent_snapshot = entity_by_id(editor, parent.value().id);
@@ -19906,8 +19911,8 @@ TEST(EditorApiTests, SceneBatchReparentCanKeepLocalTransformAgainstPendingParent
     ASSERT_TRUE(parent_snapshot.has_value());
     ASSERT_TRUE(child_snapshot.has_value());
     EXPECT_EQ(child_snapshot->parent, parent.value().id);
-    EXPECT_NEAR(parent_snapshot->transform.position.x, 10.0f, 0.001f);
-    EXPECT_NEAR(child_snapshot->transform.position.x, 2.0f, 0.001f);
+    EXPECT_NEAR(parent_snapshot->transform.location.x, 10.0f, 0.001f);
+    EXPECT_NEAR(child_snapshot->transform.location.x, 2.0f, 0.001f);
 }
 
 TEST(EditorApiTests, SelectionApiExposesTypedTargetsThroughPublicQueries) {
@@ -20051,14 +20056,14 @@ TEST(EditorApiTests, AppCommandsAndDirectOperationsShareChronologicalUndoStack) 
   EXPECT_EQ(editor.query().history().undo_label, "Duplicate Meshes");
 
     quader::QuaderTransform moved;
-    moved.position = {3.0f, 0.0f, 0.0f};
+    moved.location = {3.0f, 0.0f, 0.0f};
     const quader::QuaderApiVoidResult transformed =
         editor.scene().set_transform(original.entity, moved);
     ASSERT_TRUE(transformed.ok()) << transformed.error_message();
     std::optional<quader::QuaderEntitySnapshot> original_snapshot =
         entity_by_id(editor, original.entity);
     ASSERT_TRUE(original_snapshot.has_value());
-    EXPECT_NEAR(original_snapshot->transform.position.x, 3.0f, 0.001f);
+    EXPECT_NEAR(original_snapshot->transform.location.x, 3.0f, 0.001f);
     EXPECT_EQ(editor.query().history().undo_label, "Set Transform");
 
     const std::vector<quader::EntityId> selected_before_delete =
@@ -20076,7 +20081,7 @@ TEST(EditorApiTests, AppCommandsAndDirectOperationsShareChronologicalUndoStack) 
     ASSERT_TRUE(editor.history().undo().ok());
     original_snapshot = entity_by_id(editor, original.entity);
     ASSERT_TRUE(original_snapshot.has_value());
-    EXPECT_NEAR(original_snapshot->transform.position.x, 0.0f, 0.001f);
+    EXPECT_NEAR(original_snapshot->transform.location.x, 0.0f, 0.001f);
     EXPECT_EQ(editor.query().history().redo_label, "Set Transform");
 
     ASSERT_TRUE(editor.history().undo().ok());
@@ -20088,7 +20093,7 @@ TEST(EditorApiTests, AppCommandsAndDirectOperationsShareChronologicalUndoStack) 
     ASSERT_TRUE(editor.history().redo().ok());
     original_snapshot = entity_by_id(editor, original.entity);
     ASSERT_TRUE(original_snapshot.has_value());
-    EXPECT_NEAR(original_snapshot->transform.position.x, 3.0f, 0.001f);
+    EXPECT_NEAR(original_snapshot->transform.location.x, 3.0f, 0.001f);
     ASSERT_TRUE(editor.history().redo().ok());
     EXPECT_LT(editor.query().entities().size(), 2u);
 }
@@ -20109,7 +20114,7 @@ TEST(EditorApiTests, DuplicateMeshesHistoryRestoresSceneOnlyDuplicateState) {
     ASSERT_TRUE(editor.scene().reparent(source.entity, parent.value().id, false).ok());
 
     quader::QuaderTransform transform;
-    transform.position = {2.0f, 3.0f, 4.0f};
+    transform.location = {2.0f, 3.0f, 4.0f};
     transform.rotation_euler = {0.25f, 0.5f, 0.75f};
     ASSERT_TRUE(editor.scene().set_transform(source.entity, transform).ok());
     ASSERT_TRUE(editor.scene().set_visible(source.entity, false).ok());
@@ -20136,10 +20141,10 @@ TEST(EditorApiTests, DuplicateMeshesHistoryRestoresSceneOnlyDuplicateState) {
         entity_by_id(editor, duplicate_entity);
     ASSERT_TRUE(duplicate_snapshot.has_value());
     EXPECT_EQ(duplicate_snapshot->parent, parent.value().id);
-    EXPECT_NEAR(duplicate_snapshot->transform.position.x, 2.0f, 0.001f);
+    EXPECT_NEAR(duplicate_snapshot->transform.location.x, 2.0f, 0.001f);
     EXPECT_NEAR(duplicate_snapshot->transform.rotation_euler.z, 0.75f, 0.001f);
     EXPECT_FALSE(duplicate_snapshot->visible);
-    EXPECT_FALSE(duplicate_snapshot->locked);
+    EXPECT_TRUE(duplicate_snapshot->selectable);
     EXPECT_TRUE(duplicate_snapshot->has_material);
     EXPECT_EQ(duplicate_snapshot->material, material.value().id);
     EXPECT_TRUE(duplicate_snapshot->has_mesh);
@@ -20152,10 +20157,10 @@ TEST(EditorApiTests, DuplicateMeshesHistoryRestoresSceneOnlyDuplicateState) {
     duplicate_snapshot = entity_by_id(editor, duplicate_entity);
     ASSERT_TRUE(duplicate_snapshot.has_value());
     EXPECT_EQ(duplicate_snapshot->parent, parent.value().id);
-    EXPECT_NEAR(duplicate_snapshot->transform.position.x, 2.0f, 0.001f);
+    EXPECT_NEAR(duplicate_snapshot->transform.location.x, 2.0f, 0.001f);
     EXPECT_NEAR(duplicate_snapshot->transform.rotation_euler.z, 0.75f, 0.001f);
     EXPECT_FALSE(duplicate_snapshot->visible);
-    EXPECT_FALSE(duplicate_snapshot->locked);
+    EXPECT_TRUE(duplicate_snapshot->selectable);
     EXPECT_TRUE(duplicate_snapshot->has_material);
     EXPECT_EQ(duplicate_snapshot->material, material.value().id);
     EXPECT_TRUE(duplicate_snapshot->has_mesh);
@@ -20178,7 +20183,7 @@ TEST(EditorApiTests, DuplicateMeshesActionCommandPreservesSceneOnlyDuplicateStat
     ASSERT_TRUE(editor.scene().reparent(source.entity, parent.value().id, false).ok());
 
     quader::QuaderTransform transform;
-    transform.position = {4.0f, 5.0f, 6.0f};
+    transform.location = {4.0f, 5.0f, 6.0f};
     transform.rotation_euler = {0.5f, 0.25f, 1.0f};
     ASSERT_TRUE(editor.scene().set_transform(source.entity, transform).ok());
     ASSERT_TRUE(editor.scene().set_visible(source.entity, false).ok());
@@ -20205,10 +20210,10 @@ TEST(EditorApiTests, DuplicateMeshesActionCommandPreservesSceneOnlyDuplicateStat
         entity_by_id(editor, duplicate_entity);
     ASSERT_TRUE(duplicate_snapshot.has_value());
     EXPECT_EQ(duplicate_snapshot->parent, parent.value().id);
-    EXPECT_NEAR(duplicate_snapshot->transform.position.x, 4.0f, 0.001f);
+    EXPECT_NEAR(duplicate_snapshot->transform.location.x, 4.0f, 0.001f);
     EXPECT_NEAR(duplicate_snapshot->transform.rotation_euler.z, 1.0f, 0.001f);
     EXPECT_FALSE(duplicate_snapshot->visible);
-    EXPECT_FALSE(duplicate_snapshot->locked);
+    EXPECT_TRUE(duplicate_snapshot->selectable);
     EXPECT_TRUE(duplicate_snapshot->has_material);
     EXPECT_EQ(duplicate_snapshot->material, material.value().id);
     EXPECT_TRUE(duplicate_snapshot->has_mesh);
@@ -20508,7 +20513,7 @@ TEST(EditorApiTests,
                     .ok());
 
     quader::QuaderTransform transform;
-    transform.position = {4.0f, 5.0f, 6.0f};
+    transform.location = {4.0f, 5.0f, 6.0f};
     transform.rotation_euler = {0.25f, 0.5f, 0.75f};
     ASSERT_TRUE(editor.scene().set_transform(source.entity, transform).ok());
     ASSERT_TRUE(editor.scene().set_visible(source.entity, false).ok());
@@ -20555,9 +20560,9 @@ TEST(EditorApiTests,
     std::optional<quader::QuaderEntitySnapshot> part = separated_part();
     ASSERT_TRUE(part.has_value());
     EXPECT_EQ(part->parent, parent.value().id);
-    EXPECT_NEAR(part->transform.position.x, 4.0f, 0.001f);
-    EXPECT_NEAR(part->transform.position.y, 5.0f, 0.001f);
-    EXPECT_NEAR(part->transform.position.z, 6.0f, 0.001f);
+    EXPECT_NEAR(part->transform.location.x, 4.0f, 0.001f);
+    EXPECT_NEAR(part->transform.location.y, 5.0f, 0.001f);
+    EXPECT_NEAR(part->transform.location.z, 6.0f, 0.001f);
     EXPECT_NEAR(part->transform.rotation_euler.z, 0.75f, 0.001f);
     EXPECT_FALSE(part->visible);
     EXPECT_TRUE(part->has_material);
@@ -20579,7 +20584,7 @@ TEST(EditorApiTests,
     part = separated_part();
     ASSERT_TRUE(part.has_value());
     EXPECT_EQ(part->parent, parent.value().id);
-    EXPECT_NEAR(part->transform.position.x, 4.0f, 0.001f);
+    EXPECT_NEAR(part->transform.location.x, 4.0f, 0.001f);
     EXPECT_FALSE(part->visible);
     EXPECT_TRUE(part->has_material);
     EXPECT_EQ(part->material, material.value().id);
@@ -20619,9 +20624,9 @@ TEST(EditorApiTests,
                     .ok());
 
     quader::QuaderTransform first_transform;
-    first_transform.position = {3.0f, 4.0f, 5.0f};
+    first_transform.location = {3.0f, 4.0f, 5.0f};
     quader::QuaderTransform second_transform;
-    second_transform.position = {-6.0f, 7.0f, 8.0f};
+    second_transform.location = {-6.0f, 7.0f, 8.0f};
     ASSERT_TRUE(editor.scene()
                     .set_transform(first.entity, first_transform)
                     .ok());
@@ -20682,10 +20687,10 @@ TEST(EditorApiTests,
         part_for_parent(second_parent.value().id);
     ASSERT_NE(first_part, nullptr);
     ASSERT_NE(second_part, nullptr);
-    EXPECT_NEAR(first_part->transform.position.x, 3.0f, 0.001f);
+    EXPECT_NEAR(first_part->transform.location.x, 3.0f, 0.001f);
     EXPECT_FALSE(first_part->visible);
     EXPECT_EQ(first_part->material, first_material.value().id);
-    EXPECT_NEAR(second_part->transform.position.x, -6.0f, 0.001f);
+    EXPECT_NEAR(second_part->transform.location.x, -6.0f, 0.001f);
     EXPECT_TRUE(second_part->visible);
     EXPECT_EQ(second_part->material, second_material.value().id);
 
@@ -21077,7 +21082,7 @@ TEST(EditorApiTests,
       create_selected_box(editor, "Linear Array Tool Second");
   ASSERT_TRUE(editor.scene()
                   .set_transform(second.entity,
-                                 {.position = {10.0f, 0.0f, 0.0f}})
+                                 {.location = {10.0f, 0.0f, 0.0f}})
                   .ok());
   ASSERT_TRUE(editor.selection()
                   .select_objects({source.entity, second.entity}, source.entity)
@@ -21174,7 +21179,7 @@ TEST(EditorApiTests, LinearArrayToolApplyUsesTheAtomicModelingCommand) {
       create_selected_box(editor, "Linear Array Apply Second");
   ASSERT_TRUE(editor.scene()
                   .set_transform(second.entity,
-                                 {.position = {10.0f, 0.0f, 0.0f}})
+                                 {.location = {10.0f, 0.0f, 0.0f}})
                   .ok());
   ASSERT_TRUE(editor.selection()
                   .select_objects({primary.entity, second.entity},
@@ -21196,7 +21201,7 @@ TEST(EditorApiTests, LinearArrayToolApplyUsesTheAtomicModelingCommand) {
   std::vector<float> positions;
   std::optional<quader::QuaderEntitySnapshot> active;
   for (const quader::QuaderEntitySnapshot &entity : editor.query().entities()) {
-    positions.push_back(entity.transform.position.x);
+    positions.push_back(entity.transform.location.x);
     if (entity.active) {
       active = entity;
     }
@@ -21210,7 +21215,7 @@ TEST(EditorApiTests, LinearArrayToolApplyUsesTheAtomicModelingCommand) {
   EXPECT_NEAR(positions[4], 36.0f, kTestPositionEpsilon);
   EXPECT_NEAR(positions[5], 46.0f, kTestPositionEpsilon);
   ASSERT_TRUE(active.has_value());
-  EXPECT_NEAR(active->transform.position.x, 36.0f, kTestPositionEpsilon);
+  EXPECT_NEAR(active->transform.location.x, 36.0f, kTestPositionEpsilon);
 
   ASSERT_TRUE(editor.history().undo().ok());
   EXPECT_EQ(editor.query().entities().size(), 2u);
@@ -21676,7 +21681,7 @@ TEST(EditorApiTests,
   ASSERT_TRUE(editor.modeling().can_cancel_active_tool_or_preview());
   const auto moved = editor.query().entity(box.entity);
   ASSERT_TRUE(moved.has_value());
-  EXPECT_NE(moved->transform.position.x, 0.0f);
+  EXPECT_NE(moved->transform.location.x, 0.0f);
 
   const quader::QuaderApiVoidResult activated =
       editor.tools().activate(quader::ViewportToolId::Pivot);
@@ -21685,21 +21690,21 @@ TEST(EditorApiTests,
   const std::optional<quader::QuaderEntitySnapshot> restored =
       editor.query().entity(box.entity);
   ASSERT_TRUE(restored.has_value());
-  expect_vec3_near(restored->transform.position, moved->transform.position);
+  expect_vec3_near(restored->transform.location, moved->transform.location);
   const std::optional<quader::QVec3> pivot =
       editor.query().selection_transform_pivot();
   ASSERT_TRUE(pivot.has_value());
-  expect_vec3_near(*pivot, moved->transform.position);
+  expect_vec3_near(*pivot, moved->transform.location);
   EXPECT_NE(editor.query().history().undo_label, history_before.undo_label);
   ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
   ASSERT_TRUE(editor.history().undo().ok());
   const auto undone = editor.query().entity(box.entity);
   ASSERT_TRUE(undone.has_value());
-  expect_vec3_near(undone->transform.position, {});
+  expect_vec3_near(undone->transform.location, {});
   ASSERT_TRUE(editor.history().redo().ok());
   const auto redone = editor.query().entity(box.entity);
   ASSERT_TRUE(redone.has_value());
-  expect_vec3_near(redone->transform.position, moved->transform.position);
+  expect_vec3_near(redone->transform.location, moved->transform.location);
 }
 
 TEST(EditorApiTests, NativeAndRuntimeToolTransitionsAcceptTheirPriorSession) {
@@ -21866,7 +21871,7 @@ TEST(EditorApiTests,
         editor.query().entity(element.entity);
     ASSERT_TRUE(snapshot.has_value());
     snapshots.push_back(*snapshot);
-    expect_vec3_near(snapshot->transform.position,
+    expect_vec3_near(snapshot->transform.location,
                      {static_cast<float>(index) * 2.0f, 0.0f, 0.0f});
     EXPECT_EQ(snapshot->parent,
               editor.query().entity(source.entity)->parent);
@@ -21900,8 +21905,8 @@ TEST(EditorApiTests,
     ASSERT_TRUE(restored.has_value());
     EXPECT_EQ(restored->uuid, snapshots[index].uuid);
     EXPECT_EQ(restored->editor_object_id, snapshots[index].editor_object_id);
-    expect_vec3_near(restored->transform.position,
-                     snapshots[index].transform.position);
+    expect_vec3_near(restored->transform.location,
+                     snapshots[index].transform.location);
   }
 }
 
@@ -21912,7 +21917,7 @@ TEST(EditorApiTests, LinearArrayResolvesWorldEndpointThroughSourceParent) {
       editor.scene().create_entity(quader::QuaderCreateEntityArgs{
           .name = "Array Parent",
           .kind = quader::QuaderEntityKind::Empty,
-          .transform = {.position = {10.0f, 0.0f, 0.0f}},
+          .transform = {.location = {10.0f, 0.0f, 0.0f}},
       });
   ASSERT_TRUE(parent.ok()) << parent.error_message();
   const quader::QuaderModelingObjectRef source =
@@ -21920,7 +21925,7 @@ TEST(EditorApiTests, LinearArrayResolvesWorldEndpointThroughSourceParent) {
   ASSERT_TRUE(editor.scene().reparent(source.entity, parent.value().id, false).ok());
   ASSERT_TRUE(editor.scene()
                   .set_transform(source.entity,
-                                 {.position = {2.0f, 0.0f, 0.0f}})
+                                 {.location = {2.0f, 0.0f, 0.0f}})
                   .ok());
 
   const quader::QuaderApiResult<quader::QuaderLinearArrayResult> array =
@@ -21936,7 +21941,7 @@ TEST(EditorApiTests, LinearArrayResolvesWorldEndpointThroughSourceParent) {
         editor.query().entity(array.value().elements[index].entity);
     ASSERT_TRUE(snapshot.has_value());
     EXPECT_EQ(snapshot->parent, parent.value().id);
-    expect_vec3_near(snapshot->transform.position,
+    expect_vec3_near(snapshot->transform.location,
                      {2.0f + static_cast<float>(index) * 2.0f, 0.0f, 0.0f});
   }
 }
@@ -21959,7 +21964,7 @@ TEST(EditorApiTests, LinearArrayAllowsZeroSpanOverlap) {
     const std::optional<quader::QuaderEntitySnapshot> snapshot =
         editor.query().entity(element.entity);
     ASSERT_TRUE(snapshot.has_value());
-    expect_vec3_near(snapshot->transform.position, {});
+    expect_vec3_near(snapshot->transform.location, {});
   }
 }
 
@@ -21977,7 +21982,7 @@ TEST(EditorApiTests, LinearArrayRejectsAnyStaleSourceBeforeApply) {
   ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::LinearArray).ok());
   ASSERT_TRUE(editor.scene()
                   .set_transform(changed_source.entity,
-                                 {.position = {1.0f, 0.0f, 0.0f}})
+                                 {.location = {1.0f, 0.0f, 0.0f}})
                   .ok());
   EXPECT_EQ(editor.tools().active_tool(), "select");
   EXPECT_TRUE(editor.render().tool_preview_meshes().empty());
@@ -21996,13 +22001,13 @@ TEST(EditorApiTests,
       create_selected_box(editor, "Radial Array First Source");
   ASSERT_TRUE(editor.scene()
                   .set_transform(first.entity,
-                                 {.position = {2.0f, 0.0f, 0.0f}})
+                                 {.location = {2.0f, 0.0f, 0.0f}})
                   .ok());
   const quader::QuaderModelingObjectRef second =
       create_selected_box(editor, "Radial Array Second Source");
   ASSERT_TRUE(editor.scene()
                   .set_transform(second.entity,
-                                 {.position = {0.0f, 0.0f, 3.0f}})
+                                 {.location = {0.0f, 0.0f, 3.0f}})
                   .ok());
 
   const quader::QuaderApiResult<quader::QuaderRadialArrayResult> array =
@@ -22049,7 +22054,7 @@ TEST(EditorApiTests,
       const std::optional<quader::QuaderEntitySnapshot> snapshot =
           editor.query().entity(source_array.elements[element_index].entity);
       ASSERT_TRUE(snapshot.has_value());
-      expect_vec3_near(snapshot->transform.position,
+      expect_vec3_near(snapshot->transform.location,
                        expected_positions[source_index][element_index]);
       if (element_index > 0u) {
         created_snapshots.push_back(*snapshot);
@@ -22073,8 +22078,8 @@ TEST(EditorApiTests,
     ASSERT_TRUE(restored.has_value());
     EXPECT_EQ(restored->uuid, snapshot.uuid);
     EXPECT_EQ(restored->editor_object_id, snapshot.editor_object_id);
-    expect_vec3_near(restored->transform.position,
-                     snapshot.transform.position);
+    expect_vec3_near(restored->transform.location,
+                     snapshot.transform.location);
   }
 }
 
@@ -22084,7 +22089,7 @@ TEST(EditorApiTests, RadialArraySpacingModePreservesNeighborAnglesThroughUndoRed
   const auto source = create_selected_box(editor, "Radial Spacing API Source");
   ASSERT_TRUE(editor.scene()
                   .set_transform(source.entity,
-                                 {.position = {2.0f, 0.0f, 0.0f}})
+                                 {.location = {2.0f, 0.0f, 0.0f}})
                   .ok());
   const auto array = editor.modeling().create_radial_array(
       quader::QuaderRadialArrayArgs{
@@ -22107,7 +22112,7 @@ TEST(EditorApiTests, RadialArraySpacingModePreservesNeighborAnglesThroughUndoRed
   for (std::size_t index = 0; index < elements.size(); ++index) {
     const auto snapshot = editor.query().entity(elements[index].entity);
     ASSERT_TRUE(snapshot.has_value());
-    expect_vec3_near(snapshot->transform.position, expected_positions[index]);
+    expect_vec3_near(snapshot->transform.location, expected_positions[index]);
   }
   EXPECT_EQ(editor.query().history().undo_label, "Radial Array");
   ASSERT_TRUE(editor.history().undo().ok());
@@ -22116,7 +22121,7 @@ TEST(EditorApiTests, RadialArraySpacingModePreservesNeighborAnglesThroughUndoRed
   for (std::size_t index = 0; index < elements.size(); ++index) {
     const auto snapshot = editor.query().entity(elements[index].entity);
     ASSERT_TRUE(snapshot.has_value());
-    expect_vec3_near(snapshot->transform.position, expected_positions[index]);
+    expect_vec3_near(snapshot->transform.location, expected_positions[index]);
   }
 }
 
@@ -22229,7 +22234,7 @@ TEST(EditorApiTests,
       editor.scene().reparent(source.entity, parent.value().id, false).ok());
   ASSERT_TRUE(editor.scene()
                   .set_transform(source.entity,
-                                 {.position = {2.0f, 0.5f, -1.0f},
+                                 {.location = {2.0f, 0.5f, -1.0f},
                                   .rotation_euler = {0.2f, 0.4f, 0.1f},
                                   .scale = {1.0f, 0.8f, 1.2f}})
                   .ok());
@@ -22254,8 +22259,8 @@ TEST(EditorApiTests,
       editor.query().entity(source.entity);
   ASSERT_TRUE(source_after.has_value());
   EXPECT_EQ(source_after->parent, source_before->parent);
-  expect_vec3_near(source_after->transform.position,
-                   source_before->transform.position);
+  expect_vec3_near(source_after->transform.location,
+                   source_before->transform.location);
   expect_vec3_near(source_after->transform.rotation_euler,
                    source_before->transform.rotation_euler);
   expect_vec3_near(source_after->transform.scale,
@@ -22372,7 +22377,7 @@ TEST(EditorApiTests, PivotToolAppliesMeshOriginRebaseWithoutMovingWorldBounds) {
   const std::optional<quader::QuaderEntitySnapshot> after =
       editor.query().entity(box.entity);
   ASSERT_TRUE(after.has_value());
-  expect_vec3_near(after->transform.position, {0.0f, 1.0f, 0.0f});
+  expect_vec3_near(after->transform.location, {0.0f, 1.0f, 0.0f});
   const std::optional<quader::QVec3> applied_transform_pivot =
       editor.query().selection_transform_pivot();
   ASSERT_TRUE(applied_transform_pivot.has_value());
@@ -22387,7 +22392,7 @@ TEST(EditorApiTests, PivotToolAppliesMeshOriginRebaseWithoutMovingWorldBounds) {
   const std::optional<quader::QuaderEntitySnapshot> undone =
       editor.query().entity(box.entity);
   ASSERT_TRUE(undone.has_value());
-  expect_vec3_near(undone->transform.position, {});
+  expect_vec3_near(undone->transform.location, {});
   const std::optional<quader::QVec3> undone_transform_pivot =
       editor.query().selection_transform_pivot();
   ASSERT_TRUE(undone_transform_pivot.has_value());
@@ -22402,7 +22407,7 @@ TEST(EditorApiTests, PivotToolAppliesMeshOriginRebaseWithoutMovingWorldBounds) {
   const std::optional<quader::QuaderEntitySnapshot> redone =
       editor.query().entity(box.entity);
   ASSERT_TRUE(redone.has_value());
-  expect_vec3_near(redone->transform.position, {0.0f, 1.0f, 0.0f});
+  expect_vec3_near(redone->transform.location, {0.0f, 1.0f, 0.0f});
   const std::optional<quader::QVec3> redone_transform_pivot =
       editor.query().selection_transform_pivot();
   ASSERT_TRUE(redone_transform_pivot.has_value());
@@ -22436,7 +22441,7 @@ TEST(EditorApiTests, PivotToolCancelDiscardsMeshPreview) {
   const std::optional<quader::QuaderEntitySnapshot> after =
       editor.query().entity(box.entity);
   ASSERT_TRUE(after.has_value());
-  expect_vec3_near(after->transform.position, {});
+  expect_vec3_near(after->transform.location, {});
   const std::optional<TestWorldBounds> after_bounds =
       compiled_object_world_bounds_translation_only(editor, box);
   ASSERT_TRUE(after_bounds.has_value());
@@ -22484,7 +22489,7 @@ TEST(EditorApiTests, PivotToolAllowsStandaloneMeshSelectedInGroupMode) {
   const std::optional<quader::QuaderEntitySnapshot> applied =
       editor.query().entity(box.entity);
   ASSERT_TRUE(applied.has_value());
-  expect_vec3_near(applied->transform.position, {0.0f, -1.0f, 0.0f});
+  expect_vec3_near(applied->transform.location, {0.0f, -1.0f, 0.0f});
   const std::optional<quader::QVec3> pivot =
       editor.query().selection_transform_pivot();
   ASSERT_TRUE(pivot.has_value());
@@ -22532,7 +22537,7 @@ TEST(EditorApiTests, RepeatedPivotActivationPreservesTheLivePreview) {
     const std::optional<quader::QuaderEntitySnapshot> applied =
         editor.query().entity(box.entity);
     ASSERT_TRUE(applied.has_value());
-    expect_vec3_near(applied->transform.position, {0.0f, -1.0f, 0.0f});
+    expect_vec3_near(applied->transform.location, {0.0f, -1.0f, 0.0f});
   };
 
   run(false);
@@ -22596,7 +22601,7 @@ TEST(EditorApiTests, PivotRejectsStaleSelectionAndIneligibleTargets) {
     const std::optional<quader::QuaderEntitySnapshot> unchanged =
         editor.query().entity(first.entity);
     ASSERT_TRUE(unchanged.has_value());
-    expect_vec3_near(unchanged->transform.position, {0.0f, -1.0f, 0.0f});
+    expect_vec3_near(unchanged->transform.location, {0.0f, -1.0f, 0.0f});
     const auto after_bounds = compiled_object_world_bounds_translation_only(editor, first);
     ASSERT_TRUE(after_bounds.has_value());
     expect_bounds_near(*after_bounds, *before_bounds);
@@ -22605,7 +22610,7 @@ TEST(EditorApiTests, PivotRejectsStaleSelectionAndIneligibleTargets) {
     EXPECT_EQ(editor.query().history().undo_label, "Set Pivot");
     ASSERT_TRUE(editor.history().undo().ok());
     ASSERT_TRUE(editor.query().entity(first.entity).has_value());
-    expect_vec3_near(editor.query().entity(first.entity)->transform.position, {});
+    expect_vec3_near(editor.query().entity(first.entity)->transform.location, {});
   }
 
   {
@@ -22624,7 +22629,7 @@ TEST(EditorApiTests, PivotRejectsStaleSelectionAndIneligibleTargets) {
     quader::QuaderEditorApi &editor = harness.editor;
     const quader::QuaderModelingObjectRef box =
         create_selected_box(editor, "Locked Pivot Box");
-    ASSERT_TRUE(editor.scene().set_locked(box.entity, true).ok());
+    ASSERT_TRUE(editor.scene().set_selectable(box.entity, false).ok());
     EXPECT_FALSE(editor.tools().can_activate(quader::ViewportToolId::Pivot));
     EXPECT_FALSE(editor.tools().activate(quader::ViewportToolId::Pivot).ok());
   }
@@ -22695,7 +22700,7 @@ TEST(EditorApiTests, PivotQuickAlignActionsUseAxisStableBoundsPositions) {
     const std::optional<quader::QuaderEntitySnapshot> entity =
         editor.query().entity(box.entity);
     ASSERT_TRUE(entity.has_value());
-    expect_vec3_near(entity->transform.position, align.expected_position);
+    expect_vec3_near(entity->transform.location, align.expected_position);
     const std::optional<TestWorldBounds> after_bounds =
         compiled_object_world_bounds_translation_only(editor, box);
     ASSERT_TRUE(after_bounds.has_value());
@@ -22723,7 +22728,7 @@ TEST(EditorApiTests, PivotQuickAlignCycleSkipsDuplicateCenterPreset) {
   const std::optional<quader::QuaderEntitySnapshot> entity =
       editor.query().entity(box.entity);
   ASSERT_TRUE(entity.has_value());
-  expect_vec3_near(entity->transform.position, {0.0f, -1.0f, 0.0f});
+  expect_vec3_near(entity->transform.location, {0.0f, -1.0f, 0.0f});
   const std::optional<TestWorldBounds> after_bounds =
       compiled_object_world_bounds_translation_only(editor, box);
   ASSERT_TRUE(after_bounds.has_value());
@@ -22740,12 +22745,12 @@ TEST(EditorApiTests, PivotToolAppliesGroupPivotWithoutMovingChildren) {
   ASSERT_TRUE(editor.scene()
                   .set_transform(left.entity,
                                  quader::QuaderTransform{
-                                     .position = {-3.0f, 0.0f, 0.0f}})
+                                     .location = {-3.0f, 0.0f, 0.0f}})
                   .ok());
   ASSERT_TRUE(editor.scene()
                   .set_transform(right.entity,
                                  quader::QuaderTransform{
-                                     .position = {3.0f, 0.0f, 0.0f}})
+                                     .location = {3.0f, 0.0f, 0.0f}})
                   .ok());
   ASSERT_TRUE(editor.selection()
                   .select_objects({left.entity, right.entity}, right.entity)
@@ -22792,7 +22797,7 @@ TEST(EditorApiTests, PivotToolAppliesGroupPivotWithoutMovingChildren) {
   const std::optional<quader::QuaderEntitySnapshot> group_after =
       editor.query().entity(group.value().id);
   ASSERT_TRUE(group_after.has_value());
-  expect_vec3_near(group_after->transform.position, {0.0f, 1.0f, 0.0f});
+  expect_vec3_near(group_after->transform.location, {0.0f, 1.0f, 0.0f});
   const std::optional<quader::QVec3> group_transform_pivot =
       editor.query().selection_transform_pivot();
   ASSERT_TRUE(group_transform_pivot.has_value());
@@ -22804,7 +22809,7 @@ TEST(EditorApiTests, PivotToolAppliesGroupPivotWithoutMovingChildren) {
   const std::optional<quader::QuaderEntitySnapshot> group_undone =
       editor.query().entity(group.value().id);
   ASSERT_TRUE(group_undone.has_value());
-  expect_vec3_near(group_undone->transform.position, {});
+  expect_vec3_near(group_undone->transform.location, {});
   expect_preserved_child(left, *left_before, *left_mesh_before);
   expect_preserved_child(right, *right_before, *right_mesh_before);
 
@@ -22812,7 +22817,7 @@ TEST(EditorApiTests, PivotToolAppliesGroupPivotWithoutMovingChildren) {
   const std::optional<quader::QuaderEntitySnapshot> group_redone =
       editor.query().entity(group.value().id);
   ASSERT_TRUE(group_redone.has_value());
-  expect_vec3_near(group_redone->transform.position, {0.0f, 1.0f, 0.0f});
+  expect_vec3_near(group_redone->transform.location, {0.0f, 1.0f, 0.0f});
   expect_preserved_child(left, *left_before, *left_mesh_before);
   expect_preserved_child(right, *right_before, *right_mesh_before);
 }
@@ -22847,7 +22852,7 @@ TEST(EditorApiTests, PivotToolCancelDiscardsGroupPreview) {
   const std::optional<quader::QuaderEntitySnapshot> group_after =
       editor.query().entity(group.value().id);
   ASSERT_TRUE(group_after.has_value());
-  expect_vec3_near(group_after->transform.position, {});
+  expect_vec3_near(group_after->transform.location, {});
   expect_vec3_near(*entity_world_origin_translation_only(editor, left.entity),
                    *left_before);
   expect_vec3_near(*entity_world_origin_translation_only(editor, right.entity),
@@ -22945,7 +22950,7 @@ TEST(EditorApiTests,
   ASSERT_TRUE(editor.scene()
                   .set_transform(member.entity,
                                  quader::QuaderTransform{
-                                     .position = {3.0f, 2.0f, -1.0f}})
+                                     .location = {3.0f, 2.0f, -1.0f}})
                   .ok());
   ASSERT_TRUE(editor.selection().select_object(member).ok());
 
@@ -22976,7 +22981,8 @@ TEST(EditorApiTests,
   ASSERT_TRUE(definition_snapshot.has_value());
   EXPECT_TRUE(definition_snapshot->is_instance_definition);
   EXPECT_FALSE(definition_snapshot->visible);
-  EXPECT_FALSE(definition_snapshot->selectable);
+  EXPECT_FALSE(definition_snapshot->selection_eligible);
+  EXPECT_TRUE(definition_snapshot->selectable);
   const std::optional<quader::QuaderEntitySnapshot> canonical_member =
       editor.query().entity(member.entity);
   ASSERT_TRUE(canonical_member.has_value());
@@ -23024,9 +23030,9 @@ TEST(EditorApiTests,
   ASSERT_TRUE(editor.scene()
                   .set_transform(member.entity,
                                  quader::QuaderTransform{
-                                     .position = {5.0f, 2.0f, -1.0f}})
+                                     .location = {5.0f, 2.0f, -1.0f}})
                   .ok());
-  EXPECT_FLOAT_EQ(editor.query().entity(member.entity)->transform.position.x,
+  EXPECT_FLOAT_EQ(editor.query().entity(member.entity)->transform.location.x,
                   5.0f);
 
   ASSERT_TRUE(editor.modeling().can_exit_instance_edit());
@@ -23120,7 +23126,7 @@ TEST(EditorApiTests, SceneInstanceFlattenBakesTextureMappingAndPreservesSettings
     ASSERT_EQ(member_snapshot->parent, definition);
     const auto &member_transform = member_snapshot->transform;
     const quader::QMat4 definition_from_member = quader::compose_transform({
-        .position = member_transform.position,
+        .location = member_transform.location,
         .rotation = quader::quat_from_euler_radians(
             member_transform.rotation_euler),
         .scale = member_transform.scale,
@@ -23203,7 +23209,7 @@ TEST(EditorApiTests, SceneInstanceLastFlattenAndCreateUndoPreservePlacement) {
   ASSERT_TRUE(editor.scene()
                   .set_transform(member.entity,
                                  quader::QuaderTransform{
-                                     .position = {-4.0f, 1.0f, 6.0f}})
+                                     .location = {-4.0f, 1.0f, 6.0f}})
                   .ok());
   const std::optional<quader::QVec3> before =
       entity_world_origin_translation_only(editor, member.entity);
@@ -23434,7 +23440,7 @@ TEST(EditorApiTests,
   ASSERT_TRUE(editor.scene()
                   .set_transform(first,
                                  quader::QuaderTransform{
-                                     .position = {-6.0f, 1.0f, 0.0f}})
+                                     .location = {-6.0f, 1.0f, 0.0f}})
                   .ok());
 
   ASSERT_TRUE(editor.modeling().duplicate_selected_entity_hierarchy().ok());
@@ -23442,14 +23448,14 @@ TEST(EditorApiTests,
   ASSERT_TRUE(editor.scene()
                   .set_transform(second,
                                  quader::QuaderTransform{
-                                     .position = {0.0f, 1.0f, 0.0f}})
+                                     .location = {0.0f, 1.0f, 0.0f}})
                   .ok());
   ASSERT_TRUE(editor.modeling().duplicate_selected_entity_hierarchy().ok());
   const quader::EntityId third = selected_entities(editor).front();
   ASSERT_TRUE(editor.scene()
                   .set_transform(third,
                                  quader::QuaderTransform{
-                                     .position = {6.0f, 1.0f, 0.0f}})
+                                     .location = {6.0f, 1.0f, 0.0f}})
                   .ok());
   ASSERT_EQ(editor.query().entity(second)->instance_definition, definition);
   ASSERT_EQ(editor.query().entity(third)->instance_definition, definition);
@@ -23615,7 +23621,7 @@ TEST(EditorApiTests,
   ASSERT_TRUE(editor.scene()
                   .set_transform(first_occurrence,
                                  quader::QuaderTransform{
-                                     .position = {-4.0f, 0.0f, 0.0f}})
+                                     .location = {-4.0f, 0.0f, 0.0f}})
                   .ok());
 
   ASSERT_TRUE(editor.modeling().duplicate_selected_entity_hierarchy().ok());
@@ -23624,7 +23630,7 @@ TEST(EditorApiTests,
   ASSERT_TRUE(editor.scene()
                   .set_transform(second_occurrence,
                                  quader::QuaderTransform{
-                                     .position = {4.0f, 0.0f, 0.0f}})
+                                     .location = {4.0f, 0.0f, 0.0f}})
                   .ok());
 
   const quader::QuaderModelingObjectRef context =
@@ -23632,7 +23638,7 @@ TEST(EditorApiTests,
   ASSERT_TRUE(editor.scene()
                   .set_transform(context.entity,
                                  quader::QuaderTransform{
-                                     .position = {10.0f, 0.0f, 0.0f}})
+                                     .location = {10.0f, 0.0f, 0.0f}})
                   .ok());
 
   const auto pick_at_x = [&](float x, bool preserve_on_miss = false) {
@@ -23726,7 +23732,7 @@ TEST(EditorApiTests,
   ASSERT_TRUE(editor.scene()
                   .set_transform(second_occurrence,
                                  quader::QuaderTransform{
-                                     .position = {4.0f, 0.0f, 0.0f},
+                                     .location = {4.0f, 0.0f, 0.0f},
                                      .rotation_euler = {0.0f, 0.0f, 1.5707963f}})
                   .ok());
   const std::optional<quader::QVec3> rotated_center_before_move =
@@ -23921,8 +23927,8 @@ TEST(EditorApiTests,
   ASSERT_TRUE(update.value().changed);
   const quader::QuaderTransform duplicate_transform =
       editor.query().entity(duplicate)->transform;
-  EXPECT_GT(duplicate_transform.position.x, 0.001f);
-  EXPECT_NEAR(editor.query().entity(source)->transform.position.x, 0.0f,
+  EXPECT_GT(duplicate_transform.location.x, 0.001f);
+  EXPECT_NEAR(editor.query().entity(source)->transform.location.x, 0.0f,
               kTestPositionEpsilon);
 
   const auto committed = editor.modeling().commit_transform_drag();
@@ -23937,8 +23943,8 @@ TEST(EditorApiTests,
   ASSERT_TRUE(editor.history().redo().ok());
   ASSERT_TRUE(editor.query().entity(duplicate).has_value());
   EXPECT_EQ(editor.query().entity(duplicate)->instance_definition, definition);
-  expect_vec3_near(editor.query().entity(duplicate)->transform.position,
-                   duplicate_transform.position);
+  expect_vec3_near(editor.query().entity(duplicate)->transform.location,
+                   duplicate_transform.location);
   EXPECT_EQ(selected_entities(editor),
             std::vector<quader::EntityId>{duplicate});
 
@@ -24111,7 +24117,7 @@ TEST(EditorApiTests,
   ASSERT_TRUE(editor.scene()
                   .set_transform(loose_mesh.entity,
                                  quader::QuaderTransform{
-                                     .position = {-4.0f, 1.0f, 0.0f}})
+                                     .location = {-4.0f, 1.0f, 0.0f}})
                   .ok());
   const quader::QuaderApiResult<quader::QuaderEntityRef> group =
       editor.scene().create_entity({
@@ -24129,14 +24135,14 @@ TEST(EditorApiTests,
   ASSERT_TRUE(editor.scene()
                   .set_transform(group.value().id,
                                  quader::QuaderTransform{
-                                     .position = {3.0f, 2.0f, 0.0f}})
+                                     .location = {3.0f, 2.0f, 0.0f}})
                   .ok());
   const quader::QuaderModelingObjectRef nested_mesh =
       create_selected_box(editor, "Nested Instance Member");
   ASSERT_TRUE(editor.scene()
                   .set_transform(nested_mesh.entity,
                                  quader::QuaderTransform{
-                                     .position = {5.0f, 3.0f, 0.0f}})
+                                     .location = {5.0f, 3.0f, 0.0f}})
                   .ok());
   ASSERT_TRUE(editor.scene()
                   .reparent(nested_mesh.entity, nested_empty.value().id, true)
@@ -24196,7 +24202,7 @@ TEST(EditorApiTests,
   ASSERT_TRUE(editor.scene()
                   .set_transform(sibling_occurrence,
                                  quader::QuaderTransform{
-                                     .position = {10.0f, 0.0f, 0.0f}})
+                                     .location = {10.0f, 0.0f, 0.0f}})
                   .ok());
   ASSERT_TRUE(editor.modeling().enter_instance_edit(first_occurrence).ok());
 
@@ -24210,7 +24216,7 @@ TEST(EditorApiTests,
   ASSERT_TRUE(editor.scene()
                   .set_transform(added.entity,
                                  quader::QuaderTransform{
-                                     .position = {2.0f, 0.0f, 0.0f}})
+                                     .location = {2.0f, 0.0f, 0.0f}})
                   .ok());
 
   ASSERT_TRUE(editor.modeling().exit_instance_edit().ok());
@@ -24348,10 +24354,10 @@ TEST(EditorApiTests, InstanceEditRejectsLockedAndHiddenOccurrences) {
   ASSERT_TRUE(editor.modeling().create_instance().ok());
   const quader::EntityId occurrence = selected_entities(editor).front();
 
-  ASSERT_TRUE(editor.scene().set_locked(occurrence, true).ok());
+  ASSERT_TRUE(editor.scene().set_selectable(occurrence, false).ok());
   EXPECT_FALSE(editor.modeling().can_enter_instance_edit(occurrence));
   EXPECT_FALSE(editor.modeling().enter_instance_edit(occurrence).ok());
-  ASSERT_TRUE(editor.scene().set_locked(occurrence, false).ok());
+  ASSERT_TRUE(editor.scene().set_selectable(occurrence, true).ok());
 
   ASSERT_TRUE(editor.scene().set_visible(occurrence, false).ok());
   EXPECT_FALSE(editor.modeling().can_enter_instance_edit(occurrence));
@@ -25290,9 +25296,9 @@ TEST(EditorApiTests,
       editor.commands().keybinding_catalog();
 
 #ifndef NDEBUG
-  EXPECT_EQ(commands.size(), 235u);
+  EXPECT_EQ(commands.size(), 236u);
 #else
-  EXPECT_EQ(commands.size(), 234u);
+  EXPECT_EQ(commands.size(), 235u);
 #endif
 
   std::unordered_set<std::string> expected_target_ids;
@@ -25853,8 +25859,8 @@ TEST(EditorApiLayerTests,
   EXPECT_TRUE(editor.layers().layer(created.value.id)->locked);
   EXPECT_EQ(editor.layers().revision(), revision_before + 1u);
   ASSERT_TRUE(editor.query().entity(entity.value.id).has_value());
-  EXPECT_FALSE(editor.query().entity(entity.value.id)->locked)
-      << "the layer mask must not rewrite the entity-local lock";
+  EXPECT_TRUE(editor.query().entity(entity.value.id)->selectable)
+      << "the layer mask must not rewrite the entity-local selectability";
   EXPECT_TRUE(selected_entities(editor).empty());
   EXPECT_EQ(editor.query().history().undo_label, "Set Layer Lock");
 
@@ -25876,7 +25882,7 @@ TEST(EditorApiLayerTests,
   EXPECT_TRUE(selected_entities(editor).empty());
 
   quader::QuaderTransform blocked_transform;
-  blocked_transform.position = {8.0f, 0.0f, 0.0f};
+  blocked_transform.location = {8.0f, 0.0f, 0.0f};
   const quader::QuaderApiVoidResult batch_move =
       editor.scene()
           .batch("Move Layer-Locked Entity")
@@ -25885,7 +25891,7 @@ TEST(EditorApiLayerTests,
   ASSERT_TRUE(batch_move.ok()) << batch_move.error_message();
   EXPECT_FALSE(batch_move.changed());
   ASSERT_TRUE(editor.query().entity(entity.value.id).has_value());
-  EXPECT_FLOAT_EQ(editor.query().entity(entity.value.id)->transform.position.x,
+  EXPECT_FLOAT_EQ(editor.query().entity(entity.value.id)->transform.location.x,
                   0.0f);
 }
 
@@ -26001,7 +26007,7 @@ TEST(EditorApiLayerTests,
   ASSERT_TRUE(editor.layers().set_locked(layer.value.id, true).ok());
 
   quader::QuaderTransform blocked_transform;
-  blocked_transform.position = {9.0f, 0.0f, 0.0f};
+  blocked_transform.location = {9.0f, 0.0f, 0.0f};
   const quader::QuaderApiVoidResult batch_move =
       editor.scene()
           .batch("Move Child of Layer-Locked Group")
@@ -26010,6 +26016,6 @@ TEST(EditorApiLayerTests,
   ASSERT_TRUE(batch_move.ok()) << batch_move.error_message();
   EXPECT_FALSE(batch_move.changed());
   ASSERT_TRUE(editor.query().entity(child.value.id).has_value());
-  EXPECT_FLOAT_EQ(editor.query().entity(child.value.id)->transform.position.x,
+  EXPECT_FLOAT_EQ(editor.query().entity(child.value.id)->transform.location.x,
                   0.0f);
 }

@@ -473,7 +473,7 @@ TEST_F(OutlinerPanelDropTests,
   const auto hidden = create("Hidden group");
   const auto locked = create("Locked group");
   ASSERT_TRUE(editor_.scene().set_visible(hidden, false).ok());
-  ASSERT_TRUE(editor_.scene().set_locked(locked, true).ok());
+  ASSERT_TRUE(editor_.scene().set_selectable(locked, false).ok());
   ASSERT_TRUE(editor_.scene().select(entities.front()).ok());
   refresh();
   tree_->expandAll();
@@ -632,10 +632,10 @@ TEST_F(OutlinerPanelDropTests,
   const quader::EntityId group = create("Translated Group");
   const quader::EntityId existing = create("Existing Member", group);
   ASSERT_TRUE(editor_.scene()
-                  .set_transform(group, {.position = {10.0f, 20.0f, 30.0f}})
+                  .set_transform(group, {.location = {10.0f, 20.0f, 30.0f}})
                   .ok());
   ASSERT_TRUE(editor_.scene()
-                  .set_transform(first, {.position = {2.0f, 3.0f, 4.0f}})
+                  .set_transform(first, {.location = {2.0f, 3.0f, 4.0f}})
                   .ok());
   const quader::QMat4 first_world = session_.scene().world_transform_matrix(first);
   const quader::QMat4 second_world = session_.scene().world_transform_matrix(second);
@@ -761,17 +761,17 @@ TEST_F(OutlinerPanelDropTests, StaleForeignLockedAndInvalidDragsCannotMutateScen
   ASSERT_TRUE(editor_.scene().rename(source, "Renamed Source").ok());
   refresh();
   EXPECT_FALSE(drop(*data, index(target)));
-  ASSERT_TRUE(editor_.scene().set_locked(source, true).ok());
+  ASSERT_TRUE(editor_.scene().set_selectable(source, false).ok());
   refresh();
   EXPECT_EQ(mime({source}), nullptr);
-  ASSERT_TRUE(editor_.scene().set_locked(source, false).ok());
-  ASSERT_TRUE(editor_.scene().set_locked(target, true).ok());
+  ASSERT_TRUE(editor_.scene().set_selectable(source, true).ok());
+  ASSERT_TRUE(editor_.scene().set_selectable(target, false).ok());
   refresh();
   const auto unlocked = mime({source});
   ASSERT_NE(unlocked, nullptr);
   EXPECT_FALSE(drop(*unlocked, index(target)));
 
-  ASSERT_TRUE(editor_.scene().set_locked(target, false).ok());
+  ASSERT_TRUE(editor_.scene().set_selectable(target, true).ok());
   refresh();
   const auto before_rebind = mime({source});
   ASSERT_NE(before_rebind, nullptr);
@@ -1059,7 +1059,7 @@ TEST(OutlinerPanelTests,
             layer.value().id);
   quader::TransformComponent moved =
       *session.scene().transform(entity.value().id);
-  moved.position = {4.0f, 5.0f, 6.0f};
+  moved.location = {4.0f, 5.0f, 6.0f};
   ASSERT_TRUE(session.scene().set_transform(entity.value().id, moved));
   ASSERT_GT(session.scene().content_revision(), content_revision_before);
   ASSERT_EQ(session.scene().hierarchy_presentation_revision(),
@@ -1375,13 +1375,13 @@ TEST(OutlinerPanelTests,
   EXPECT_FALSE((styled_first.flags() & Qt::ItemIsUserCheckable) != 0);
   EXPECT_TRUE(styled_first.data(Qt::UserRole + 2).toBool());
   ASSERT_TRUE(editor.scene().set_visible(first.value().id, true).ok());
-  ASSERT_TRUE(editor.scene().set_locked(first.value().id, true).ok());
+  ASSERT_TRUE(editor.scene().set_selectable(first.value().id, false).ok());
   panel.refresh(context);
   styled_first = find_entity_index(*tree->model(), first.value().id);
   EXPECT_TRUE(styled_first.data(Qt::UserRole + 2).toBool());
   EXPECT_FALSE((styled_first.flags() & Qt::ItemIsDragEnabled) != 0);
   EXPECT_FALSE((styled_first.flags() & Qt::ItemIsDropEnabled) != 0);
-  ASSERT_TRUE(editor.scene().set_locked(first.value().id, false).ok());
+  ASSERT_TRUE(editor.scene().set_selectable(first.value().id, true).ok());
   panel.refresh(context);
   styled_first = find_entity_index(*tree->model(), first.value().id);
   EXPECT_FALSE(styled_first.data(Qt::UserRole + 2).toBool());
@@ -1599,20 +1599,20 @@ TEST(OutlinerPanelTests,
                   .ok());
   panel.refresh(context);
   invoke_action(QStringLiteral("outliner.action.show_selected"));
-  invoke_action(QStringLiteral("outliner.action.lock_selected"));
-  ASSERT_NE(session.scene().lock(first.value().id), nullptr);
-  ASSERT_NE(session.scene().lock(second.value().id), nullptr);
-  EXPECT_TRUE(session.scene().lock(first.value().id)->locked);
-  EXPECT_TRUE(session.scene().lock(second.value().id)->locked);
+  invoke_action(QStringLiteral("outliner.action.make_unselectable"));
+  ASSERT_NE(session.scene().selectable(first.value().id), nullptr);
+  ASSERT_NE(session.scene().selectable(second.value().id), nullptr);
+  EXPECT_FALSE(session.scene().selectable(first.value().id)->selectable);
+  EXPECT_FALSE(session.scene().selectable(second.value().id)->selectable);
   EXPECT_TRUE(session.scene().selected_entities().empty());
 
   ASSERT_TRUE(editor.selection()
                   .select_objects_for_inspection(selected, first.value().id)
                   .ok());
   panel.refresh(context);
-  invoke_action(QStringLiteral("outliner.action.unlock_selected"));
-  EXPECT_FALSE(session.scene().lock(first.value().id)->locked);
-  EXPECT_FALSE(session.scene().lock(second.value().id)->locked);
+  invoke_action(QStringLiteral("outliner.action.make_selectable"));
+  EXPECT_TRUE(session.scene().selectable(first.value().id)->selectable);
+  EXPECT_TRUE(session.scene().selectable(second.value().id)->selectable);
 
   invoke_action(
       QStringLiteral("outliner.action.delete"),

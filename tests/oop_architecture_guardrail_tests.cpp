@@ -1064,7 +1064,7 @@ TEST(OopArchitectureGuardrailTests, SceneTransformDragServiceOwnsTransformPrevie
 
   EXPECT_NE(service_source.find("SceneTransformPreviewTransaction"),
             std::string::npos);
-  EXPECT_NE(service_source.find("has_selected_ancestor(document, entity)"),
+  EXPECT_NE(service_source.find("has_selected_ancestor(document, entity, selected)"),
             std::string::npos);
   EXPECT_NE(service_source.find("try_scene_matrix_inverse(world_transform)"),
             std::string::npos);
@@ -1091,7 +1091,7 @@ TEST(OopArchitectureGuardrailTests, SceneTransformDragServiceOwnsTransformPrevie
             std::string::npos);
   EXPECT_NE(inspector_source.find("active_transform_preview_"),
             std::string::npos);
-  EXPECT_NE(inspector_source.find("preview_selected_to_primary_position("),
+  EXPECT_NE(inspector_source.find("preview_selected_to_primary_location("),
             std::string::npos);
   EXPECT_NE(inspector_source.find("preview_selected_to_primary_euler("),
             std::string::npos);

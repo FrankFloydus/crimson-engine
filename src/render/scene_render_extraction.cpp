@@ -294,7 +294,8 @@ RenderSceneSnapshotDirtyState scene_snapshot_dirty_state(
       .mesh_bindings_changed =
           changed.contains(RenderSourceDependency::MeshBindingRevision),
       .render_components_changed =
-          changed.contains(RenderSourceDependency::RenderComponentRevision),
+          changed.contains(RenderSourceDependency::RenderComponentRevision) ||
+          changed.contains(RenderSourceDependency::BackfaceCulling),
       .assets_changed =
           changed.contains(RenderSourceDependency::AssetRevision),
       .project_materials_changed =
@@ -344,7 +345,8 @@ void mark_mesh_dirty(RenderSceneMeshRecord &record,
   record.texture_mapping_dirty = previous->sampling_from_local.values !=
                                   record.sampling_from_local.values;
   record.binding_dirty =
-      !same_mesh_component(previous->mesh_component, record.mesh_component);
+      !same_mesh_component(previous->mesh_component, record.mesh_component) ||
+      previous->backface_culling_enabled != record.backface_culling_enabled;
 }
 
 void mark_light_dirty(RenderSceneLightRecord &record,
@@ -903,13 +905,13 @@ RenderSceneMeshRecord make_render_scene_mesh_record(
     const SceneDocument &document, const AssetRegistry &assets,
     EntityId entity_id, const MeshComponent &component,
     SceneMaterialBindingBuilder &material_bindings,
-    const RenderSceneSnapshot *previous);
+    const RenderSceneSnapshot *previous, bool backface_culling_enabled);
 RenderSceneMeshRecord make_render_scene_curve_solid_record(
     const SceneDocument &document, const AssetRegistry &assets,
     EntityId entity_id, const CurveComponent &component,
     CurveSolidGeometryCache &geometry_cache,
     SceneMaterialBindingBuilder &material_bindings,
-    const RenderSceneSnapshot *previous);
+    const RenderSceneSnapshot *previous, bool backface_culling_enabled);
 
 RenderSceneSnapshot build_render_scene_snapshot(
     const SceneDocument &document, const AssetRegistry &assets,
@@ -931,6 +933,7 @@ RenderSceneSnapshot build_render_scene_snapshot(
           .local_visibility = options.local_visibility,
           .project_material_revision = project_material_revision,
           .instance_edit_scope = options.instance_edit_scope,
+          .backface_culling_enabled = options.backface_culling_enabled,
       });
   const RenderSceneSnapshot *const previous =
       options.previous != nullptr &&
@@ -967,7 +970,7 @@ RenderSceneSnapshot build_render_scene_snapshot(
     if (component != nullptr) {
       ordinary_meshes.push_back(make_render_scene_mesh_record(
           document, assets, placement->geometry_entity, *component,
-          material_bindings, previous));
+          material_bindings, previous, options.backface_culling_enabled));
     }
   }
 
@@ -1001,7 +1004,7 @@ RenderSceneSnapshot build_render_scene_snapshot(
       solid_curve_meshes.push_back(make_render_scene_curve_solid_record(
           document, assets, entity_id, *component,
           curve_solid_geometry_cache, material_bindings,
-          previous));
+          previous, options.backface_culling_enabled));
     }
 
     if (const LightComponent *component = document.light(entity_id)) {
@@ -1080,7 +1083,7 @@ RenderSceneSnapshot build_render_scene_snapshot(
     }
     RenderSceneMeshRecord source = make_render_scene_mesh_record(
         document, assets, group.geometry_entity, *component,
-        material_bindings, nullptr);
+        material_bindings, nullptr, options.backface_culling_enabled);
     std::vector<RenderSceneInstanceOccurrenceRecord> occurrences;
     occurrences.reserve(group.participant_indices.size());
     for (const std::size_t index : group.participant_indices) {
@@ -1272,7 +1275,7 @@ RenderSceneMeshRecord make_render_scene_mesh_record(
     const SceneDocument &document, const AssetRegistry &assets,
     EntityId entity_id, const MeshComponent &component,
     SceneMaterialBindingBuilder &material_bindings,
-    const RenderSceneSnapshot *previous) {
+    const RenderSceneSnapshot *previous, bool backface_culling_enabled) {
   const MaterialComponent *scene_material = document.material(entity_id);
   const RenderMaterialBindingSnapshot &material =
       material_bindings.binding(scene_material);
@@ -1296,6 +1299,7 @@ RenderSceneMeshRecord make_render_scene_mesh_record(
       .transform_revision =
           RenderSignatureBuilder::light_transform_signature(world_transform),
   };
+  entry.backface_culling_enabled = backface_culling_enabled;
   mark_mesh_dirty(entry, previous_mesh_record(previous, entity_id));
   return entry;
 }
@@ -1305,7 +1309,7 @@ RenderSceneMeshRecord make_render_scene_curve_solid_record(
     EntityId entity_id, const CurveComponent &component,
     CurveSolidGeometryCache &geometry_cache,
     SceneMaterialBindingBuilder &material_bindings,
-    const RenderSceneSnapshot *previous) {
+    const RenderSceneSnapshot *previous, bool backface_culling_enabled) {
   const CurveAsset *asset = assets.curve(component.curve);
   std::shared_ptr<const MeshGeometryPayload> geometry;
   if (asset != nullptr && asset->document != nullptr &&
@@ -1358,6 +1362,7 @@ RenderSceneMeshRecord make_render_scene_curve_solid_record(
       .transform_revision =
           RenderSignatureBuilder::light_transform_signature(world_transform),
   };
+  entry.backface_culling_enabled = backface_culling_enabled;
   mark_mesh_dirty(entry, previous_mesh_record(previous, entity_id));
   return entry;
 }
@@ -1463,7 +1468,8 @@ bool try_refresh_render_scene_snapshot_light_properties(
     RenderSceneBindingKey scene_binding,
     std::uint64_t project_material_revision,
     RenderInstanceEditScope instance_edit_scope,
-    const ViewportLocalVisibilitySnapshot *local_visibility) {
+    const ViewportLocalVisibilitySnapshot *local_visibility,
+    bool backface_culling_enabled) {
   const std::uint64_t light_revision = document.light_property_revision();
   if (light_revision <= snapshot.light_property_revision) {
     return false;
@@ -1473,7 +1479,8 @@ bool try_refresh_render_scene_snapshot_light_properties(
       {.scene_binding = scene_binding,
        .local_visibility = local_visibility,
        .project_material_revision = project_material_revision,
-       .instance_edit_scope = instance_edit_scope});
+       .instance_edit_scope = instance_edit_scope,
+       .backface_culling_enabled = backface_culling_enabled});
   constexpr RenderSourceDependencyMask kStableDependencies =
       RenderSourceDependencyMask::from({
           RenderSourceDependency::SceneBinding,
@@ -1492,6 +1499,7 @@ bool try_refresh_render_scene_snapshot_light_properties(
           RenderSourceDependency::MaterialCatalogRevision,
           RenderSourceDependency::ProjectMaterialRevision,
           RenderSourceDependency::InstanceEditScope,
+          RenderSourceDependency::BackfaceCulling,
       });
   const std::uint64_t light_delta =
       light_revision - snapshot.light_property_revision;
@@ -1556,7 +1564,8 @@ bool try_refresh_render_scene_snapshot_curve_publication(
     RenderSceneBindingKey scene_binding,
     std::uint64_t project_material_revision,
     RenderInstanceEditScope instance_edit_scope,
-    const ViewportLocalVisibilitySnapshot *local_visibility) {
+    const ViewportLocalVisibilitySnapshot *local_visibility,
+    bool backface_culling_enabled) {
   // Curve publications are overlay-only only while no Curve can contribute a
   // derived main-scene tube. Check both states so enabling and disabling the
   // last tube cannot retain stale mesh records.
@@ -1571,6 +1580,7 @@ bool try_refresh_render_scene_snapshot_curve_publication(
           .local_visibility = local_visibility,
           .project_material_revision = project_material_revision,
           .instance_edit_scope = instance_edit_scope,
+          .backface_culling_enabled = backface_culling_enabled,
       });
   if (!render_source_dependencies_match(
           snapshot, current,
@@ -1614,7 +1624,8 @@ bool try_refresh_render_scene_snapshot_selection(
     RenderSceneBindingKey scene_binding,
     std::uint64_t project_material_revision,
     RenderInstanceEditScope instance_edit_scope,
-    const ViewportLocalVisibilitySnapshot *local_visibility) {
+    const ViewportLocalVisibilitySnapshot *local_visibility,
+    bool backface_culling_enabled) {
   const RenderSourceStamp current = capture_render_source_stamp(
       document, assets,
       {
@@ -1622,6 +1633,7 @@ bool try_refresh_render_scene_snapshot_selection(
           .local_visibility = local_visibility,
           .project_material_revision = project_material_revision,
           .instance_edit_scope = instance_edit_scope,
+          .backface_culling_enabled = backface_culling_enabled,
       });
   if (!render_source_dependencies_match(
           snapshot, current,
@@ -1681,7 +1693,8 @@ bool try_refresh_render_scene_snapshot_transforms(
     RenderSceneBindingKey scene_binding,
     std::uint64_t project_material_revision,
     RenderInstanceEditScope instance_edit_scope,
-    const ViewportLocalVisibilitySnapshot *local_visibility) {
+    const ViewportLocalVisibilitySnapshot *local_visibility,
+    bool backface_culling_enabled) {
   QDR_PROFILE_FUNCTION();
   const RenderSourceStamp current = capture_render_source_stamp(
       document, assets,
@@ -1690,6 +1703,7 @@ bool try_refresh_render_scene_snapshot_transforms(
           .local_visibility = local_visibility,
           .project_material_revision = project_material_revision,
           .instance_edit_scope = instance_edit_scope,
+          .backface_culling_enabled = backface_culling_enabled,
       });
   if (!render_source_dependencies_match(
           snapshot, current,
@@ -1843,7 +1857,8 @@ bool render_scene_snapshot_matches_sources(
     const AssetRegistry &assets, RenderSceneBindingKey scene_binding,
     std::uint64_t project_material_revision,
     RenderInstanceEditScope instance_edit_scope,
-    const ViewportLocalVisibilitySnapshot *local_visibility) {
+    const ViewportLocalVisibilitySnapshot *local_visibility,
+    bool backface_culling_enabled) {
   const RenderSourceStamp current = capture_render_source_stamp(
       document, assets,
       {
@@ -1851,6 +1866,7 @@ bool render_scene_snapshot_matches_sources(
           .local_visibility = local_visibility,
           .project_material_revision = project_material_revision,
           .instance_edit_scope = instance_edit_scope,
+          .backface_culling_enabled = backface_culling_enabled,
       });
   return render_source_dependencies_match(
       snapshot, current, kRenderSceneSnapshotSourceDependencies);
@@ -1864,7 +1880,8 @@ SceneRenderExtractionPlan build_scene_render_extraction_plan(
 std::vector<RenderToolPreviewMeshRecord> build_render_tool_preview_snapshot(
     std::vector<ToolPreviewMesh> meshes, const AssetRegistry &assets,
     const ViewportLocalVisibilitySnapshot *local_visibility,
-    const RenderProjectMaterialResolver *project_material_resolver) {
+    const RenderProjectMaterialResolver *project_material_resolver,
+    bool backface_culling_enabled) {
   QDR_PROFILE_FUNCTION();
   std::vector<RenderToolPreviewMeshRecord> records;
   records.reserve(meshes.size());
@@ -1927,7 +1944,7 @@ std::vector<RenderToolPreviewMeshRecord> build_render_tool_preview_snapshot(
         .sampling_from_local = mesh.sampling_from_local,
         .instance_sampling_from_local =
             std::move(mesh.instance_sampling_from_local),
-        .double_sided = mesh.double_sided,
+        .double_sided = !backface_culling_enabled,
         .cast_shadows = mesh.cast_shadows,
         .dynamic_positions = mesh.dynamic_positions,
         .suppress_source = mesh.suppress_source,
@@ -1946,7 +1963,8 @@ RenderToolPreviewSceneSnapshot build_render_tool_preview_scene_snapshot(
     ToolPreviewScene preview, const AssetRegistry &assets,
     const ViewportLocalVisibilitySnapshot *local_visibility,
     const RenderProjectMaterialResolver *project_material_resolver,
-    CurveSolidGeometryCache *curve_solid_geometry_cache) {
+    CurveSolidGeometryCache *curve_solid_geometry_cache,
+    bool backface_culling_enabled) {
   RenderToolPreviewSceneSnapshot snapshot;
   snapshot.revision = preview.revision;
   for (const ToolPreviewMesh &mesh : preview.meshes) {
@@ -2072,7 +2090,7 @@ RenderToolPreviewSceneSnapshot build_render_tool_preview_scene_snapshot(
 
   snapshot.meshes = build_render_tool_preview_snapshot(
       std::move(preview.meshes), assets, local_visibility,
-      project_material_resolver);
+      project_material_resolver, backface_culling_enabled);
 
   snapshot.lights.reserve(preview.lights.size());
   for (ToolPreviewLight &light : preview.lights) {

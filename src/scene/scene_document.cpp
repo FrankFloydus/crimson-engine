@@ -1500,7 +1500,7 @@ bool SceneDocument::restore_modeling_projection_checkpoint_impl(
           entity, EntityKindComponent{.kind = structure.kind});
       registry_.emplace<HierarchyComponent>(entity, HierarchyComponent{});
       registry_.emplace<VisibilityComponent>(entity, structure.visibility);
-      registry_.emplace<LockComponent>(entity, structure.lock);
+      registry_.emplace<SelectableComponent>(entity, structure.selectable);
       registry_.emplace<SelectionComponent>(entity, SelectionComponent{});
       entities_.emplace(record.entity, entity);
       ids_by_entity_.emplace(entity_key(entity), record.entity);
@@ -1526,7 +1526,7 @@ bool SceneDocument::restore_modeling_projection_checkpoint_impl(
           entity, EntityKindComponent{.kind = structure.kind});
       registry_.emplace_or_replace<VisibilityComponent>(entity,
                                                         structure.visibility);
-      registry_.emplace_or_replace<LockComponent>(entity, structure.lock);
+      registry_.emplace_or_replace<SelectableComponent>(entity, structure.selectable);
       restore_optional_component(registry_, entity,
                                  structure.modeling_object);
       restore_optional_component(registry_, entity, structure.material);
@@ -1782,9 +1782,9 @@ bool valid_entity_uuid(std::string_view uuid) {
 
 bool same_transform(const TransformComponent &left,
                     const TransformComponent &right) {
-  return left.position.x == right.position.x &&
-         left.position.y == right.position.y &&
-         left.position.z == right.position.z &&
+  return left.location.x == right.location.x &&
+         left.location.y == right.location.y &&
+         left.location.z == right.location.z &&
          left.rotation_euler.x == right.rotation_euler.x &&
          left.rotation_euler.y == right.rotation_euler.y &&
          left.rotation_euler.z == right.rotation_euler.z &&
@@ -1970,7 +1970,7 @@ EntityId SceneDocument::create_entity(std::string name, EntityKind kind,
                                          EntityKindComponent{.kind = kind});
   registry_.emplace<HierarchyComponent>(entity, HierarchyComponent{});
   registry_.emplace<VisibilityComponent>(entity, VisibilityComponent{});
-  registry_.emplace<LockComponent>(entity, LockComponent{});
+  registry_.emplace<SelectableComponent>(entity, SelectableComponent{});
   registry_.emplace<SelectionComponent>(entity, SelectionComponent{});
   entities_.emplace(id, entity);
   root_entities_.push_back(id);
@@ -2035,7 +2035,7 @@ EntityId SceneDocument::create_entity_with_id(EntityId id, std::string name,
                                          EntityKindComponent{.kind = kind});
   registry_.emplace<HierarchyComponent>(entity, HierarchyComponent{});
   registry_.emplace<VisibilityComponent>(entity, VisibilityComponent{});
-  registry_.emplace<LockComponent>(entity, LockComponent{});
+  registry_.emplace<SelectableComponent>(entity, SelectableComponent{});
   registry_.emplace<SelectionComponent>(entity, SelectionComponent{});
   entities_.emplace(id, entity);
   root_entities_.push_back(id);
@@ -2334,7 +2334,7 @@ bool SceneDocument::set_visible(EntityId id, bool visible) {
   return false;
 }
 
-bool SceneDocument::set_selectable(EntityId id, bool selectable) {
+bool SceneDocument::set_selectability(EntityId id, bool selectable) {
   if (VisibilityComponent *component = mutable_visibility(id)) {
     if (component->selectable == selectable) {
       return true;
@@ -2347,12 +2347,12 @@ bool SceneDocument::set_selectable(EntityId id, bool selectable) {
   return false;
 }
 
-bool SceneDocument::set_locked(EntityId id, bool locked) {
-  if (LockComponent *component = mutable_lock(id)) {
-    if (component->locked == locked) {
+bool SceneDocument::set_selectable(EntityId id, bool selectable) {
+  if (SelectableComponent *component = mutable_selectable(id)) {
+    if (component->selectable == selectable) {
       return true;
     }
-    component->locked = locked;
+    component->selectable = selectable;
     ++hierarchy_presentation_revision_;
     mark_dirty(id, SceneModelingProjectionDomain::Structure);
     return true;
@@ -3466,7 +3466,7 @@ bool SceneDocument::replace_layer_state(SceneLayerState state) {
   }
 
   constexpr std::uint8_t kEffectivelyVisible = 1u << 0u;
-  constexpr std::uint8_t kEffectivelyLocked = 1u << 1u;
+  constexpr std::uint8_t kEffectivelySelectable = 1u << 1u;
   const auto effective_hierarchy_presentation_state =
       [&](std::span<const EntityId> tree_order) {
         std::vector<std::uint8_t> result;
@@ -3478,16 +3478,16 @@ bool SceneDocument::replace_layer_state(SceneLayerState state) {
           bool visible =
               parent_id == kInvalidEntityId ||
               (state_by_entity[parent_id] & kEffectivelyVisible) != 0u;
-          bool locked =
-              parent_id != kInvalidEntityId &&
-              (state_by_entity[parent_id] & kEffectivelyLocked) != 0u;
+          bool selection_allowed =
+              parent_id == kInvalidEntityId ||
+              (state_by_entity[parent_id] & kEffectivelySelectable) != 0u;
           if (const VisibilityComponent *component = visibility(entity);
               component != nullptr && !component->visible) {
             visible = false;
           }
-          if (const LockComponent *component = lock(entity);
-              component != nullptr && component->locked) {
-            locked = true;
+          if (const SelectableComponent *component = selectable(entity);
+              component != nullptr && !component->selectable) {
+            selection_allowed = false;
           }
           const SceneLayerId layer_id = entity_layer(entity);
           if (layer_id != kInvalidSceneLayerId) {
@@ -3496,12 +3496,12 @@ bool SceneDocument::replace_layer_state(SceneLayerState state) {
               visible = false;
             }
             if (record == nullptr || record->locked) {
-              locked = true;
+              selection_allowed = false;
             }
           }
           const std::uint8_t presentation_state =
               (visible ? kEffectivelyVisible : 0u) |
-              (locked ? kEffectivelyLocked : 0u);
+              (selection_allowed ? kEffectivelySelectable : 0u);
           state_by_entity.emplace(entity, presentation_state);
           result.push_back(presentation_state);
         }
@@ -3706,10 +3706,10 @@ VisibilityComponent *SceneDocument::mutable_visibility(EntityId id) {
                               : registry_.try_get<VisibilityComponent>(entity);
 }
 
-LockComponent *SceneDocument::mutable_lock(EntityId id) {
+SelectableComponent *SceneDocument::mutable_selectable(EntityId id) {
   const entt::entity entity = require_entity(id);
   return entity == entt::null ? nullptr
-                              : registry_.try_get<LockComponent>(entity);
+                              : registry_.try_get<SelectableComponent>(entity);
 }
 
 SelectionComponent *SceneDocument::mutable_selection(EntityId id) {
@@ -3762,10 +3762,10 @@ const VisibilityComponent* SceneDocument::visibility(EntityId id) const {
                               : registry_.try_get<VisibilityComponent>(entity);
 }
 
-const LockComponent* SceneDocument::lock(EntityId id) const {
+const SelectableComponent* SceneDocument::selectable(EntityId id) const {
   const entt::entity entity = require_entity(id);
   return entity == entt::null ? nullptr
-                              : registry_.try_get<LockComponent>(entity);
+                              : registry_.try_get<SelectableComponent>(entity);
 }
 
 const SelectionComponent* SceneDocument::selection(EntityId id) const {
@@ -4009,7 +4009,7 @@ SceneDocument::hierarchy_projection() const {
           parent_state->world_transform, record.world_transform);
       ++work.world_transform_multiply_count;
       record.effectively_visible = parent_state->effectively_visible;
-      record.effectively_locked = parent_state->effectively_locked;
+      record.effectively_selectable = parent_state->effectively_selectable;
       record.containing_instance_definition =
           parent_state->containing_instance_definition;
     }
@@ -4018,9 +4018,9 @@ SceneDocument::hierarchy_projection() const {
         component != nullptr && !component->visible) {
       record.effectively_visible = false;
     }
-    if (const LockComponent *component = lock(entity);
-        component != nullptr && component->locked) {
-      record.effectively_locked = true;
+    if (const SelectableComponent *component = selectable(entity);
+        component != nullptr && !component->selectable) {
+      record.effectively_selectable = false;
     }
     const SceneLayerId layer_id = entity_layer(entity);
     if (layer_id != kInvalidSceneLayerId) {
@@ -4029,7 +4029,7 @@ SceneDocument::hierarchy_projection() const {
         record.effectively_visible = false;
       }
       if (layer_record == nullptr || layer_record->locked) {
-        record.effectively_locked = true;
+        record.effectively_selectable = false;
       }
     }
     if (is_instance_definition_entity(entity)) {
@@ -4106,22 +4106,22 @@ SceneDocument::entity_records_for_instance_definition(
   records.reserve(members.size());
   std::function<void(EntityId, int, bool, bool)> append_member =
       [&](EntityId member, int depth, bool parent_visible,
-          bool parent_locked) {
+          bool parent_selectable) {
         EntityRecord record = make_entity_record(
             member, depth, active, projection->find(member));
         if (depth == 0) {
           record.parent = kInvalidEntityId;
         }
         record.effectively_visible = parent_visible && record.visible;
-        record.effectively_locked = parent_locked || record.locked;
+        record.effectively_selectable = parent_selectable && record.selectable;
         records.push_back(record);
         for (const EntityId child : children(member)) {
           append_member(child, depth + 1, record.effectively_visible,
-                        record.effectively_locked);
+                        record.effectively_selectable);
         }
       };
   for (const EntityId member : children(definition)) {
-    append_member(member, 0, true, false);
+    append_member(member, 0, true, true);
   }
   return records;
 }
@@ -4274,28 +4274,28 @@ bool SceneDocument::is_effectively_visible(EntityId id) const {
   return true;
 }
 
-bool SceneDocument::is_effectively_locked(EntityId id) const {
+bool SceneDocument::is_effectively_selectable(EntityId id) const {
   if (require_entity(id) == entt::null) {
     return false;
   }
   EntityId current = id;
   std::size_t guard = entities_.size() + 1u;
   while (current != kInvalidEntityId && guard-- > 0u) {
-    if (const LockComponent *component = lock(current)) {
-      if (component->locked) {
-        return true;
+    if (const SelectableComponent *component = selectable(current)) {
+      if (!component->selectable) {
+        return false;
       }
     }
     const SceneLayerId layer_id = entity_layer(current);
     if (layer_id != kInvalidSceneLayerId) {
       const SceneLayerRecord *record = layer(layer_id);
       if (record == nullptr || record->locked) {
-        return true;
+        return false;
       }
     }
     current = parent(current);
   }
-  return false;
+  return true;
 }
 
 QMat4 SceneDocument::local_transform_matrix(EntityId id) const {
@@ -4645,12 +4645,12 @@ EntityRecord SceneDocument::make_entity_record(EntityId id, int depth,
   record.effectively_visible =
       projection != nullptr ? projection->effectively_visible
                             : is_effectively_visible(id);
-  if (const LockComponent *component = lock(id)) {
-    record.locked = component->locked;
+  if (const SelectableComponent *component = selectable(id)) {
+    record.selectable = component->selectable;
   }
-  record.effectively_locked =
-      projection != nullptr ? projection->effectively_locked
-                            : is_effectively_locked(id);
+  record.effectively_selectable =
+      projection != nullptr ? projection->effectively_selectable
+                            : is_effectively_selectable(id);
   if (const SelectionComponent *component = selection(id)) {
     record.selected = component->selected;
   }

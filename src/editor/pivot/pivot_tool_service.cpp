@@ -101,9 +101,9 @@ bool pivot_rebase_environment_is_valid(const SceneDocument &scene,
 
 bool same_transform(const TransformComponent &left,
                     const TransformComponent &right) {
-  return left.position.x == right.position.x &&
-         left.position.y == right.position.y &&
-         left.position.z == right.position.z &&
+  return left.location.x == right.location.x &&
+         left.location.y == right.location.y &&
+         left.location.z == right.location.z &&
          left.rotation_euler.x == right.rotation_euler.x &&
          left.rotation_euler.y == right.rotation_euler.y &&
          left.rotation_euler.z == right.rotation_euler.z &&
@@ -374,7 +374,7 @@ make_rebase_plan(const SceneDocument &scene, const AssetRegistry &assets,
     return std::nullopt;
   }
   TransformComponent target_after_transform = *target_before;
-  target_after_transform.position += parent_local_delta;
+  target_after_transform.location += parent_local_delta;
   target_after_transform.custom_pivot = true;
   const QMat4 target_world_after = scene_transform_multiply(
       parent_world, scene_local_transform_matrix(target_after_transform));
@@ -1090,8 +1090,8 @@ PivotRebaseSelection collect_copy_pivot_selection(
     if (!scene.is_effectively_visible(entity)) {
       return {.message = "Every pivot target must be visible."};
     }
-    if (scene.is_effectively_locked(entity)) {
-      return {.message = "Locked mesh objects cannot receive a copied pivot."};
+    if (!scene.is_effectively_selectable(entity)) {
+      return {.message = "Non-selectable mesh objects cannot receive a copied pivot."};
     }
     if (!pivot_rebase_environment_is_valid(scene, entity)) {
       return {.message = "Pivot target has an invalid transform hierarchy."};
@@ -1263,8 +1263,8 @@ PivotRebaseSelection collect_origin_rebase_selection(
         scene.is_instance_definition_entity(entity) ||
         scene.is_instance_definition_member(entity) ||
         !scene.is_effectively_visible(entity) ||
-        scene.is_effectively_locked(entity)) {
-      return {.message = "Every origin target must be a visible, unlocked mesh."};
+        !scene.is_effectively_selectable(entity)) {
+      return {.message = "Every origin target must be a visible, selectable mesh."};
     }
     const QMat4 world_matrix = scene.world_transform_matrix(entity);
     if (!invertible_world_matrix(world_matrix) ||
@@ -1517,7 +1517,7 @@ PivotToolService::activate_persistent(EditorSelectionService &selection) {
   const PivotTargetKind kind = target_kind(*target, selection);
   if (!target_is_eligible(*target, kind)) {
     return command_invalid_result(
-        "Select one visible, unlocked mesh or group in object mode.");
+        "Select one visible, selectable mesh or group in object mode.");
   }
 
   const std::optional<QVec3> committed_pivot =
@@ -1849,7 +1849,7 @@ bool PivotToolService::target_is_eligible(EntityId target,
                                           PivotTargetKind kind) const {
   if (!scene_.exists(target) || scene_.transform(target) == nullptr ||
       !scene_.is_effectively_visible(target) ||
-      scene_.is_effectively_locked(target) ||
+      !scene_.is_effectively_selectable(target) ||
       !pivot_rebase_environment_is_valid(scene_, target)) {
     return false;
   }

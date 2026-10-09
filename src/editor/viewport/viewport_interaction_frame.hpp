@@ -34,7 +34,7 @@ struct ViewportSceneBillboardPickCandidate {
   QVec3 position = {};
   float size_pixels = 1.0f;
   bool selectable = true;
-  bool effectively_locked = false;
+  bool effectively_selectable = true;
   /// Present only for selected, visible point lights with a radius handle.
   std::optional<float> point_light_range;
 };

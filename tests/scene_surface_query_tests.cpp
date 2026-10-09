@@ -72,11 +72,13 @@ quader::MeshAsset make_surface_mesh(float local_y = 0.0f,
 /// Owns the minimum editor state needed by native surface-query tests.
 struct SceneSurfaceQueryHarness final {
   quader::SceneSession session;
+  bool backface_culling_enabled = true;
   quader::SceneSurfaceQuery query;
 
   SceneSurfaceQueryHarness()
       : query(session.scene(), session.assets(),
-              session.viewport_local_visibility()) {}
+              session.viewport_local_visibility(),
+              [this] { return backface_culling_enabled; }) {}
 
   quader::AssetId add_mesh(quader::MeshAsset mesh) {
     return session.assets().add_mesh(std::move(mesh));
@@ -91,7 +93,7 @@ struct SceneSurfaceQueryHarness final {
         entity, quader::MeshComponent{.mesh = mesh}));
     if (position.x != 0.0f || position.y != 0.0f || position.z != 0.0f) {
       EXPECT_TRUE(session.scene().set_transform(
-          entity, quader::TransformComponent{.position = position}));
+          entity, quader::TransformComponent{.location = position}));
     }
     return entity;
   }
@@ -125,7 +127,7 @@ struct SceneSurfaceQueryHarness final {
                                                 result.definition}));
     EXPECT_TRUE(session.scene().set_transform(
         result.first_occurrence,
-        quader::TransformComponent{.position = {-5.0f, 0.0f, 0.0f}}));
+        quader::TransformComponent{.location = {-5.0f, 0.0f, 0.0f}}));
     if (add_second_occurrence) {
       result.second_occurrence = session.scene().create_entity(
           "Second Surface Occurrence", quader::EntityKind::Instance);
@@ -135,7 +137,7 @@ struct SceneSurfaceQueryHarness final {
                                                   result.definition}));
       EXPECT_TRUE(session.scene().set_transform(
           result.second_occurrence,
-          quader::TransformComponent{.position = {5.0f, 0.0f, 0.0f}}));
+          quader::TransformComponent{.location = {5.0f, 0.0f, 0.0f}}));
     }
     return result;
   }
@@ -223,7 +225,8 @@ TEST(SceneSurfaceQueryTests,
     const quader::EntityId entity =
         harness.add_mesh_entity(mesh, "Sided Surface");
     ASSERT_TRUE(harness.session.scene().set_mesh(
-        entity, {.mesh = mesh, .double_sided = double_sided}));
+        entity, {.mesh = mesh, .double_sided = !double_sided}));
+    harness.backface_culling_enabled = !double_sided;
     const auto snapshot = harness.query.snapshot();
     ASSERT_EQ(snapshot.participants().size(), 1u);
     EXPECT_EQ(snapshot.participants().front().double_sided, double_sided);
@@ -303,7 +306,7 @@ TEST(SceneSurfaceQueryTests,
 }
 
 TEST(SceneSurfaceQueryTests,
-     ReflectedOrdinaryMeshesAndFormalOccurrencesUseRenderedWorldWinding) {
+     ReflectedOrdinaryMeshesAndFormalOccurrencesUseRendererWindingCorrection) {
   for (const bool formal_occurrence : {false, true}) {
     for (const bool reflected : {false, true}) {
       for (const bool double_sided : {false, true}) {
@@ -324,10 +327,11 @@ TEST(SceneSurfaceQueryTests,
           geometry_entity = display_entity;
         }
         ASSERT_TRUE(harness.session.scene().set_mesh(
-            geometry_entity, {.mesh = mesh, .double_sided = double_sided}));
+            geometry_entity, {.mesh = mesh, .double_sided = !double_sided}));
+        harness.backface_culling_enabled = !double_sided;
         ASSERT_TRUE(harness.session.scene().set_transform(
             display_entity,
-            {.position = {3.0f, 1.0f, 0.0f},
+            {.location = {3.0f, 1.0f, 0.0f},
              .scale = {reflected ? -2.0f : 2.0f, 1.0f, 0.5f}}));
         const auto snapshot = harness.query.snapshot();
         ASSERT_EQ(snapshot.participants().size(), 1u);
@@ -345,9 +349,14 @@ TEST(SceneSurfaceQueryTests,
               .world_direction = {0.0f, from_above ? -1.0f : 1.0f, 0.0f},
               .respect_render_sidedness = true,
           };
-          const bool rendered_face = double_sided || from_above != reflected;
+          const bool rendered_face = double_sided || from_above;
           const auto hit = snapshot.nearest_hit(request);
           EXPECT_EQ(hit.has_value(), rendered_face);
+          auto explicit_selection = request;
+          explicit_selection.include_backfaces = false;
+          explicit_selection.respect_render_sidedness = false;
+          EXPECT_EQ(snapshot.nearest_hit(explicit_selection).has_value(),
+                    from_above != reflected);
           const auto raster_candidate = snapshot.selection_depth_triangle_distance(
               1u, request.world_origin, request.world_direction);
           EXPECT_EQ(raster_candidate.has_value(), rendered_face);
@@ -366,7 +375,7 @@ TEST(SceneSurfaceQueryTests,
 }
 
 TEST(SceneSurfaceQueryTests,
-     SidednessChangesFreezeOldQueriesInvalidateGpuIdentityAndReuseGeometry) {
+     GlobalCullingChangesFreezeOldQueriesInvalidateGpuIdentityAndReuseGeometry) {
   for (const bool formal_occurrence : {false, true}) {
     SCOPED_TRACE(testing::Message() << "formal_occurrence=" << formal_occurrence);
     SceneSurfaceQueryHarness harness;
@@ -392,8 +401,8 @@ TEST(SceneSurfaceQueryTests,
     EXPECT_FALSE(single_sided.selection_depth_triangle_distance(
         1u, request.world_origin, request.world_direction).has_value());
 
-    ASSERT_TRUE(harness.session.scene().set_mesh(
-        geometry_entity, {.mesh = mesh, .double_sided = true}));
+    const auto scene_revision = harness.session.scene().revision();
+    harness.backface_culling_enabled = false;
     const auto double_sided = harness.query.snapshot();
     const auto double_sided_geometry = double_sided.selection_depth_geometry();
     ASSERT_NE(double_sided_geometry, nullptr);
@@ -407,8 +416,9 @@ TEST(SceneSurfaceQueryTests,
         1u, request.world_origin, request.world_direction).has_value());
     EXPECT_EQ(harness.query.stats().blas_build_count, initial_stats.blas_build_count);
 
-    ASSERT_TRUE(harness.session.scene().set_mesh(
-        geometry_entity, {.mesh = mesh, .double_sided = false}));
+    harness.backface_culling_enabled = true;
+    EXPECT_EQ(harness.session.scene().revision(), scene_revision);
+    EXPECT_FALSE(harness.session.scene().mesh(geometry_entity)->double_sided);
     const auto restored = harness.query.snapshot();
     const auto restored_geometry = restored.selection_depth_geometry();
     EXPECT_NE(restored.revision(), double_sided.revision());
@@ -516,7 +526,7 @@ TEST(SceneSurfaceQueryTests,
             cold_stats.snapshot_build_count);
 
   ASSERT_TRUE(harness.session.scene().set_transform(
-      entity, quader::TransformComponent{.position = {0.0f, 3.0f, 0.0f}}));
+      entity, quader::TransformComponent{.location = {0.0f, 3.0f, 0.0f}}));
   const std::optional<quader::SceneSurfaceHit> frozen_hit =
       frozen.nearest_hit(downward_ray({0.0f, 5.0f, 0.0f}));
   ASSERT_TRUE(frozen_hit.has_value());
@@ -566,7 +576,7 @@ TEST(SceneSurfaceQueryTests,
   for (std::size_t step = 1u; step <= 5u; ++step) {
     ASSERT_TRUE(harness.session.scene().set_transform(
         moving_entity, quader::TransformComponent{
-                           .position = {0.0f, static_cast<float>(step), 0.0f}}));
+                           .location = {0.0f, static_cast<float>(step), 0.0f}}));
     const auto moved = harness.query.snapshot();
     EXPECT_EQ(moved.participants().size(), kGeometryCount);
     EXPECT_EQ(harness.query.stats().blas_build_count, kGeometryCount);
@@ -589,7 +599,7 @@ TEST(SceneSurfaceQueryTests,
     entity = harness.add_mesh_entity(mesh, "Frozen Landmarks", {0.0f, 1.0f, 0.0f});
     original = harness.query.snapshot();
     ASSERT_TRUE(harness.session.scene().set_transform(
-        entity, quader::TransformComponent{.position = {0.0f, 3.0f, 0.0f}}));
+        entity, quader::TransformComponent{.location = {0.0f, 3.0f, 0.0f}}));
     ASSERT_TRUE(harness.session.assets().replace_mesh(mesh, make_surface_mesh(2.0f)));
     changed = harness.query.snapshot();
     EXPECT_EQ(harness.query.stats().landmark_build_count, 0u);
@@ -724,7 +734,7 @@ TEST(SceneSurfaceQueryTests,
 
   ASSERT_TRUE(harness.session.scene().set_transform(
       ordinary,
-      quader::TransformComponent{.position = {0.0f, 2.0f, 0.0f}}));
+      quader::TransformComponent{.location = {0.0f, 2.0f, 0.0f}}));
   const quader::SceneSurfaceQuerySnapshot after_transform =
       harness.query.snapshot();
   EXPECT_EQ(harness.query.stats().snapshot_build_count, 3u);
@@ -815,7 +825,7 @@ TEST(SceneSurfaceQueryTests,
       harness.add_formal_instance(mesh, false);
   ASSERT_TRUE(harness.session.scene().set_transform(
       formal.first_occurrence,
-      quader::TransformComponent{.position = {1.0f, 0.0f, 0.0f}}));
+      quader::TransformComponent{.location = {1.0f, 0.0f, 0.0f}}));
 
   quader::ViewportCameraController camera;
   camera.set_viewport_size(800.0f, 600.0f);
@@ -841,7 +851,7 @@ TEST(SceneSurfaceQueryTests,
   EXPECT_NEAR(result.world_position.y, 0.0f, kTestTolerance);
 
   ASSERT_TRUE(
-      harness.session.scene().set_locked(formal.first_occurrence, true));
+      harness.session.scene().set_selectable(formal.first_occurrence, false));
   const quader::SceneSurfaceQuerySnapshot locked_snapshot =
       harness.session.scene_surface_query().snapshot();
   const quader::ViewportRay ray =
@@ -860,7 +870,7 @@ TEST(SceneSurfaceQueryTests,
                        .world_origin = ray.origin,
                        .world_direction = ray.direction,
                        .eligibility =
-                           quader::SceneSurfaceEligibility::SelectableUnlocked,
+                           quader::SceneSurfaceEligibility::EffectivelySelectable,
                    })
                    .has_value());
   EXPECT_FALSE(harness.session.point_placement()
@@ -879,7 +889,7 @@ TEST(SceneSurfaceQueryTests,
       harness.add_formal_instance(mesh, false);
   ASSERT_TRUE(harness.session.scene().set_transform(
       formal.first_occurrence,
-      quader::TransformComponent{.position = {4.0f, 0.0f, 1.0f}}));
+      quader::TransformComponent{.location = {4.0f, 0.0f, 1.0f}}));
 
   const quader::QVec3 occurrence_vertex{2.0f, 0.0f, -1.0f};
   quader::ViewportCameraController camera;
@@ -911,14 +921,14 @@ TEST(SceneSurfaceQueryTests,
   EXPECT_NEAR(visible.world_position.z, occurrence_vertex.z, kTestTolerance);
 
   ASSERT_TRUE(
-      harness.session.scene().set_locked(formal.first_occurrence, true));
+      harness.session.scene().set_selectable(formal.first_occurrence, false));
   const quader::SceneSurfaceQuerySnapshot locked =
       harness.session.scene_surface_query().snapshot();
   ASSERT_TRUE(std::ranges::any_of(
       locked.landmarks(), [&](const quader::SceneSurfaceLandmark &landmark) {
         return landmark.participant.display_entity ==
                    formal.first_occurrence &&
-               landmark.effectively_locked;
+               !landmark.effectively_selectable;
       }));
   EXPECT_FALSE(resolve().valid)
       << "Locked formal geometry stays in render occlusion but cannot become "
@@ -934,7 +944,7 @@ TEST(SceneSurfaceQueryTests,
       harness.add_mesh_entity(mesh, "Eligible Back Surface");
   const quader::EntityId front = harness.add_mesh_entity(
       mesh, "Locked Front Occluder", {0.0f, 1.0f, 0.0f});
-  ASSERT_TRUE(harness.session.scene().set_locked(front, true));
+  ASSERT_TRUE(harness.session.scene().set_selectable(front, false));
 
   quader::ViewportCameraController camera;
   camera.set_viewport_size(800.0f, 600.0f);
@@ -965,8 +975,8 @@ TEST(SceneSurfaceQueryTests,
   ASSERT_EQ(visible_hit->participant.display_entity, front);
   EXPECT_FALSE(resolve().valid);
 
-  ASSERT_TRUE(harness.session.scene().set_locked(front, false));
-  ASSERT_TRUE(harness.session.scene().set_selectable(front, false));
+  ASSERT_TRUE(harness.session.scene().set_selectable(front, true));
+  ASSERT_TRUE(harness.session.scene().set_selectability(front, false));
   EXPECT_FALSE(resolve().valid);
 
   ASSERT_TRUE(harness.session.scene().set_visible(front, false));
@@ -982,7 +992,7 @@ TEST(SceneSurfaceQueryTests,
   ASSERT_NE(mesh, quader::kInvalidAssetId);
   const quader::EntityId occluder = harness.add_mesh_entity(
       mesh, "Locked Curve Occluder", {0.0f, 1.0f, 0.0f});
-  ASSERT_TRUE(harness.session.scene().set_locked(occluder, true));
+  ASSERT_TRUE(harness.session.scene().set_selectable(occluder, false));
 
   quader::ViewportCameraController camera;
   camera.set_viewport_size(800.0f, 600.0f);
@@ -1051,8 +1061,8 @@ TEST(SceneSurfaceQueryTests, LargeSceneSingleMeshTransformSnapshotWorkload) {
   const auto entities = editor.query().entities();
   const auto moving_entity = std::ranges::find_if(
       entities, [](const quader::QuaderEntitySnapshot &entity) {
-        return entity.has_mesh && entity.visible && entity.selectable &&
-               !entity.locked && !entity.is_instance_definition;
+        return entity.has_mesh && entity.visible && entity.selection_eligible &&
+               entity.selectable && !entity.is_instance_definition;
       });
   ASSERT_NE(moving_entity, entities.end());
   auto &query = project.active_scene()->session->scene_surface_query();
@@ -1078,7 +1088,7 @@ TEST(SceneSurfaceQueryTests, LargeSceneSingleMeshTransformSnapshotWorkload) {
   double landmark_milliseconds = 0.0;
   for (std::size_t step = 0u; step < kTransformSteps; ++step) {
     quader::QuaderTransform transform = moving_entity->transform;
-    transform.position.x += static_cast<float>(step + 1u) * 0.25f;
+    transform.location.x += static_cast<float>(step + 1u) * 0.25f;
     const auto moved = editor.scene().set_transform(moving_entity->id, transform);
     ASSERT_TRUE(moved.ok()) << moved.error_message();
     ASSERT_TRUE(moved.changed());

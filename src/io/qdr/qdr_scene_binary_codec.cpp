@@ -1024,7 +1024,8 @@ void validate_write_snapshot_roots(const QdrProjectWriteSnapshot &snapshot) {
     } else if (entity.kind == EntityKind::Curve) {
       throw std::runtime_error("QDR curve entity is missing its curve binding.");
     }
-    const fb::Vec3 position = to_fb(entity.transform.position);
+    // The legacy position slot stores the authored Location channel.
+    const fb::Vec3 location = to_fb(entity.transform.location);
     const fb::Vec3 rotation = to_fb(entity.transform.rotation_euler);
     const fb::Vec3 scale = to_fb(entity.transform.scale);
     if (!scene_matrix_is_affine(entity.transform.parenting_offset)) {
@@ -1032,15 +1033,16 @@ void validate_write_snapshot_roots(const QdrProjectWriteSnapshot &snapshot) {
     }
     const auto &offset_values = entity.transform.parenting_offset.values;
     const flatbuffers::Offset<fb::TransformComponent> transform =
-        fb::CreateTransformComponent(builder, &position, &rotation, &scale,
+        fb::CreateTransformComponent(builder, &location, &rotation, &scale,
                                      entity.transform.custom_pivot,
                                      builder.CreateVector(offset_values.data(),
                                                           offset_values.size()));
     const flatbuffers::Offset<fb::VisibilityComponent> visibility =
         fb::CreateVisibilityComponent(builder, entity.visibility.visible,
                                       entity.visibility.selectable);
+    // Historical wire slots retain their inverse locked convention.
     const flatbuffers::Offset<fb::LockComponent> lock =
-        fb::CreateLockComponent(builder, entity.lock.locked);
+        fb::CreateLockComponent(builder, !entity.selectable.selectable);
     flatbuffers::Offset<fb::ModelingObjectComponent> modeling_object;
     if (entity.modeling_object.has_value()) {
       modeling_object = fb::CreateModelingObjectComponent(
@@ -1967,15 +1969,16 @@ void apply_scene_document_metadata(
     for (const EntityId child : children) {
       const QMat4 world_transform = scene.world_transform_matrix(child);
       const bool visible = scene.is_effectively_visible(child);
-      const bool locked = scene.is_effectively_locked(child);
+      const bool selection_allowed = scene.is_effectively_selectable(child);
       const bool selectable = root_selectable && scene.visibility(child)->selectable;
       // Preserve exact authored TRS when the removed wrapper has no placement.
       const bool transform_changes =
           scene.local_transform_matrix(root).values != QMat4{}.values;
       if (!scene.set_parent(child, kInvalidEntityId, transform_changes) ||
           !scene_matrix_near_equal(scene.world_transform_matrix(child), world_transform) ||
-          !scene.set_visible(child, visible) || !scene.set_locked(child, locked) ||
-          !scene.set_selectable(child, selectable)) {
+          !scene.set_visible(child, visible) ||
+          !scene.set_selectable(child, selection_allowed) ||
+          !scene.set_selectability(child, selectable)) {
         throw std::runtime_error("QDR legacy scene-root promotion cannot preserve object state.");
       }
     }
@@ -2342,7 +2345,7 @@ decode_viewport_camera_pose(const fb::ScenePayload &payload,
 decode_transform_component(const fb::TransformComponent &stored,
                            std::uint16_t schema_version) {
   TransformComponent transform{
-      .position = from_fb(stored.position()),
+      .location = from_fb(stored.position()),
       .rotation_euler = from_fb(stored.rotation_euler()),
       .scale = from_fb(stored.scale(), {1.0f, 1.0f, 1.0f}),
       .custom_pivot = stored.custom_pivot(),
@@ -2395,7 +2398,7 @@ decode_entity_state(const SceneContentDocument &document,
     };
   }
   if (const fb::LockComponent *value = stored.lock()) {
-    state.lock = {.locked = value->locked()};
+    state.selectable = {.selectable = !value->locked()};
   }
   if (const fb::ModelingObjectComponent *value = stored.modeling_object()) {
     state.modeling_object = ModelingObjectComponent{
@@ -3383,7 +3386,7 @@ QdrSceneBinaryDependencyDecodeResult decode_qdr_scene_binary_dependencies(
         };
       }
       if (const auto *lock = stored->lock()) {
-        metadata_state.lock.locked = lock->locked();
+        metadata_state.selectable.selectable = !lock->locked();
       }
       if (!apply_scene_entity_state(
               metadata_document.scene(), entity, metadata_state,

@@ -181,8 +181,8 @@ collect_arrangement_selection(const SceneDocument &scene,
   }
 
   for (const EntityId entity : selected_objects) {
-    if (scene.is_effectively_locked(entity)) {
-      return {.message = "Locked objects cannot be arranged."};
+    if (!scene.is_effectively_selectable(entity)) {
+      return {.message = "Non-selectable objects cannot be arranged."};
     }
     if (!scene.is_effectively_visible(entity) ||
         !has_arrangement_geometry(scene, assets, entity)) {
@@ -231,7 +231,7 @@ MeshArrangementAvailability collect_arrangement_availability(
     if (scene.transform(entity) == nullptr) {
       continue;
     }
-    if (scene.is_effectively_locked(entity) ||
+    if (!scene.is_effectively_selectable(entity) ||
         !scene.is_effectively_visible(entity) ||
         !has_arrangement_geometry(scene, assets, entity)) {
       return {};
@@ -494,7 +494,7 @@ MeshArrangementTransformPlan MeshArrangementService::plan(
                   "An object parent transform cannot represent the world translation."};
     }
     TransformComponent after = entry.transform;
-    after.position += local_delta;
+    after.location += local_delta;
     if (!scene_transform_is_finite(after)) {
       return {.message = "Object arrangement would produce an invalid transform."};
     }

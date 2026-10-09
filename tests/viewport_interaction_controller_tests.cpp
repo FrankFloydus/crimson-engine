@@ -1612,9 +1612,9 @@ quader::QVec2 rotated_point(quader::QVec2 pivot, quader::QVec2 point,
 
 void expect_transform_near(const quader::TransformComponent &actual,
                            const quader::TransformComponent &expected) {
-  EXPECT_NEAR(actual.position.x, expected.position.x, 0.001f);
-  EXPECT_NEAR(actual.position.y, expected.position.y, 0.001f);
-  EXPECT_NEAR(actual.position.z, expected.position.z, 0.001f);
+  EXPECT_NEAR(actual.location.x, expected.location.x, 0.001f);
+  EXPECT_NEAR(actual.location.y, expected.location.y, 0.001f);
+  EXPECT_NEAR(actual.location.z, expected.location.z, 0.001f);
   EXPECT_NEAR(actual.rotation_euler.x, expected.rotation_euler.x, 0.001f);
   EXPECT_NEAR(actual.rotation_euler.y, expected.rotation_euler.y, 0.001f);
   EXPECT_NEAR(actual.rotation_euler.z, expected.rotation_euler.z, 0.001f);
@@ -2542,7 +2542,7 @@ TEST(ViewportInteractionControllerTests,
     ASSERT_NE(unrelated, quader::kInvalidEntityId);
     ASSERT_TRUE(harness.session.scene().set_transform(
         unrelated, quader::TransformComponent{
-                  .position = {10.0f, 2.0f, -4.0f},
+                  .location = {10.0f, 2.0f, -4.0f},
                   .rotation_euler = {0.0f, 0.25f, 0.0f},
                   .scale = {1.5f, 0.75f, 2.0f},
               }));
@@ -3931,12 +3931,12 @@ TEST(ViewportInteractionControllerTests,
   }};
   const quader::QVec2 hit{400.0f, 300.0f};
 
-  ASSERT_TRUE(harness.editor.scene().set_locked(front.entity, true).ok());
+  ASSERT_TRUE(harness.editor.scene().set_selectable(front.entity, false).ok());
   harness.click_selection(hit);
   EXPECT_TRUE(selected_entities(harness).empty());
 
-  ASSERT_TRUE(harness.editor.scene().set_locked(front.entity, false).ok());
-  ASSERT_TRUE(harness.session.scene().set_selectable(front.entity, false));
+  ASSERT_TRUE(harness.editor.scene().set_selectable(front.entity, true).ok());
+  ASSERT_TRUE(harness.session.scene().set_selectability(front.entity, false));
   harness.click_selection(hit);
   EXPECT_TRUE(selected_entities(harness).empty());
 
@@ -4394,7 +4394,7 @@ TEST(ViewportCurvePickingTests,
 
   ASSERT_TRUE(harness.session.scene().set_transform(
       curve.value().entity,
-      quader::TransformComponent{.position = {0.0f, 2.0f, 0.0f}}));
+      quader::TransformComponent{.location = {0.0f, 2.0f, 0.0f}}));
   const auto moved = harness.frame().scene_curve_pick_candidates;
   ASSERT_EQ(moved.size(), 1u);
   EXPECT_EQ(moved.front().tube_payload, payload);
@@ -4945,7 +4945,7 @@ TEST(ViewportCurvePickingTests,
     EXPECT_EQ(harness.curve_pick_cache.build_count(), builds);
   }
   ASSERT_TRUE(harness.editor.scene().set_transform(
-      first.value().entity, {.position = {0.0f, 2.0f, 0.0f}}).ok());
+      first.value().entity, {.location = {0.0f, 2.0f, 0.0f}}).ok());
   const auto moved = harness.frame().scene_curve_pick_candidates;
   ASSERT_EQ(moved.size(), 1u);
   EXPECT_EQ(moved.front().sample_payload, samples);
@@ -4962,12 +4962,12 @@ TEST(ViewportCurvePickingTests,
   ASSERT_TRUE(harness.editor.scene().set_visible(group.value().id, false).ok());
   EXPECT_TRUE(harness.frame().scene_curve_pick_candidates.empty());
   ASSERT_TRUE(harness.editor.scene().set_visible(group.value().id, true).ok());
-  ASSERT_TRUE(harness.editor.scene().set_locked(group.value().id, true).ok());
+  ASSERT_TRUE(harness.editor.scene().set_selectable(group.value().id, false).ok());
   EXPECT_TRUE(harness.frame().scene_curve_pick_candidates.empty());
-  ASSERT_TRUE(harness.editor.scene().set_locked(group.value().id, false).ok());
-  ASSERT_TRUE(harness.session.scene().set_selectable(group.value().id, false));
+  ASSERT_TRUE(harness.editor.scene().set_selectable(group.value().id, true).ok());
+  ASSERT_TRUE(harness.session.scene().set_selectability(group.value().id, false));
   EXPECT_TRUE(harness.frame().scene_curve_pick_candidates.empty());
-  ASSERT_TRUE(harness.session.scene().set_selectable(group.value().id, true));
+  ASSERT_TRUE(harness.session.scene().set_selectability(group.value().id, true));
 
   ASSERT_TRUE(harness.editor.scene().select(group.value().id).ok());
   const auto layer = harness.editor.layers().create_from_selection("Curve Layer");
@@ -5239,11 +5239,11 @@ TEST(ViewportCurveMarqueeTests,
   ASSERT_TRUE(selected.ok()) << selected.error_message();
   EXPECT_TRUE(selected_entities(harness).empty());
   ASSERT_TRUE(harness.editor.scene().set_visible(outer.value().id, true).ok());
-  ASSERT_TRUE(harness.editor.scene().set_locked(outer.value().id, true).ok());
+  ASSERT_TRUE(harness.editor.scene().set_selectable(outer.value().id, false).ok());
   selected = harness.editor.selection().box_select(request);
   ASSERT_TRUE(selected.ok()) << selected.error_message();
   EXPECT_TRUE(selected_entities(harness).empty());
-  ASSERT_TRUE(harness.editor.scene().set_locked(outer.value().id, false).ok());
+  ASSERT_TRUE(harness.editor.scene().set_selectable(outer.value().id, true).ok());
   ASSERT_TRUE(harness.editor.scene().select(outer.value().id).ok());
   const auto layer = harness.editor.layers().create_from_selection("Marquee Layer");
   ASSERT_TRUE(layer.ok()) << layer.error_message();
@@ -7531,7 +7531,7 @@ TEST(ViewportInteractionControllerTests,
 
     quader::QuaderCreatePointLightArgs second_args;
     second_args.name = "Second Billboard Point Light";
-    second_args.transform.position = {3.0f, 0.0f, 0.0f};
+    second_args.transform.location = {3.0f, 0.0f, 0.0f};
     const quader::QuaderApiResult<quader::QuaderEntityRef> second =
         harness.editor.scene().create_point_light(second_args);
     ASSERT_TRUE(second.ok()) << second.error_message();
@@ -9169,14 +9169,14 @@ TEST(ViewportInteractionControllerTests,
     ViewportInteractionHarness harness;
     const quader::QuaderModelingObjectRef target = create_unit_box(harness);
     quader::QuaderTransform target_transform;
-    target_transform.position = {4.0f, 0.0f, 0.0f};
+    target_transform.location = {4.0f, 0.0f, 0.0f};
     ASSERT_TRUE(harness.editor.scene()
                     .set_transform(target.entity, target_transform)
                     .ok());
     const quader::QuaderModelingObjectRef second_target =
         create_unit_box(harness);
     quader::QuaderTransform second_target_transform;
-    second_target_transform.position = {4.0f, -3.0f, 0.0f};
+    second_target_transform.location = {4.0f, -3.0f, 0.0f};
     ASSERT_TRUE(harness.editor.scene()
                     .set_transform(second_target.entity,
                                    second_target_transform)
@@ -9298,9 +9298,9 @@ TEST(ViewportInteractionControllerTests,
       const auto *transform =
           harness.session.scene().transform(cut_halves[index].entity);
       ASSERT_NE(transform, nullptr);
-      expect_vec3_near(transform->position,
-                       index == 0 ? target_transform.position
-                                  : second_target_transform.position);
+      expect_vec3_near(transform->location,
+                       index == 0 ? target_transform.location
+                                  : second_target_transform.location);
     }
     EXPECT_TRUE(harness.editor.selection().summary().has_selection);
     const auto selected_after_cut = selected_face_keys();
@@ -9480,7 +9480,7 @@ TEST(ViewportInteractionControllerTests,
   ASSERT_TRUE(curve.ok()) << curve.error_message();
   const auto light = harness.editor.scene().create_point_light({
       .name = "Mixed Marquee Light",
-      .transform = {.position = {0.0f, 0.0f, 0.0f}},
+      .transform = {.location = {0.0f, 0.0f, 0.0f}},
   });
   ASSERT_TRUE(light.ok()) << light.error_message();
   ASSERT_TRUE(enter_selection_context(harness.editor, quader::QuaderSelectionMode::Object)
@@ -9660,12 +9660,12 @@ TEST(ViewportInteractionControllerTests,
   const quader::QVec2 start{300.0f, 200.0f};
   const quader::QVec2 end{500.0f, 400.0f};
 
-  ASSERT_TRUE(harness.editor.scene().set_locked(front.entity, true).ok());
+  ASSERT_TRUE(harness.editor.scene().set_selectable(front.entity, false).ok());
   drag_selection_marquee(harness, start, end);
   EXPECT_TRUE(selected_entities(harness).empty());
 
-  ASSERT_TRUE(harness.editor.scene().set_locked(front.entity, false).ok());
-  ASSERT_TRUE(harness.session.scene().set_selectable(front.entity, false));
+  ASSERT_TRUE(harness.editor.scene().set_selectable(front.entity, true).ok());
+  ASSERT_TRUE(harness.session.scene().set_selectability(front.entity, false));
   drag_selection_marquee(harness, start, end);
   EXPECT_TRUE(selected_entities(harness).empty());
 
@@ -9675,13 +9675,13 @@ TEST(ViewportInteractionControllerTests,
             std::vector<quader::EntityId>{back.entity});
 
   ASSERT_TRUE(harness.editor.selection().clear().ok());
-  ASSERT_TRUE(harness.session.scene().set_selectable(front.entity, true));
+  ASSERT_TRUE(harness.session.scene().set_selectability(front.entity, true));
   ASSERT_TRUE(harness.editor.scene().set_visible(front.entity, true).ok());
   ASSERT_TRUE(harness.editor.scene()
                   .set_transform(front.entity,
-                                 {.position = {1.5f, 0.0f, 2.0f}})
+                                 {.location = {1.5f, 0.0f, 2.0f}})
                   .ok());
-  ASSERT_TRUE(harness.editor.scene().set_locked(front.entity, true).ok());
+  ASSERT_TRUE(harness.editor.scene().set_selectable(front.entity, false).ok());
   drag_selection_marquee(harness, start, end);
   EXPECT_EQ(selected_entities(harness),
             std::vector<quader::EntityId>{back.entity})
@@ -9700,7 +9700,7 @@ TEST(ViewportInteractionControllerTests,
   ASSERT_TRUE(harness.editor.selection().clear().ok());
   harness.router.set_selection_mode(quader::ViewportSelectionMode::Vertex);
 
-  ASSERT_TRUE(harness.editor.scene().set_locked(front.entity, true).ok());
+  ASSERT_TRUE(harness.editor.scene().set_selectable(front.entity, false).ok());
   drag_selection_marquee(harness, {300.0f, 200.0f}, {500.0f, 400.0f});
   EXPECT_EQ(harness.editor.selection().summary().selected_vertex_count, 0u);
 
@@ -9720,7 +9720,7 @@ TEST(ViewportInteractionControllerTests,
   ASSERT_TRUE(curve.ok()) << curve.error_message();
   const quader::QuaderModelingObjectRef occluder =
       create_box_at(harness, {0.0f, 0.0f, 2.0f});
-  ASSERT_TRUE(harness.editor.scene().set_locked(occluder.entity, true).ok());
+  ASSERT_TRUE(harness.editor.scene().set_selectable(occluder.entity, false).ok());
   ASSERT_TRUE(enter_selection_context(harness.editor, quader::QuaderSelectionMode::Object)
                   .ok());
   ASSERT_TRUE(harness.editor.selection().clear().ok());
@@ -10844,8 +10844,8 @@ TEST(ViewportInteractionControllerTests,
                     .gizmo_consumed);
     ASSERT_TRUE(harness.controller.dragging());
     EXPECT_GT(quader::length(
-                  harness.session.scene().transform(box.entity)->position -
-                  before.position),
+                  harness.session.scene().transform(box.entity)->location -
+                  before.location),
               0.001f);
     const quader::TransformComponent authored =
         *harness.session.scene().transform(box.entity);
@@ -11553,11 +11553,11 @@ TEST(ViewportInteractionControllerTests,
 
   ASSERT_TRUE(harness.editor.scene()
                   .set_transform(active_occurrence,
-                                 {.position = {0.0f, 0.0f, 0.0f}})
+                                 {.location = {0.0f, 0.0f, 0.0f}})
                   .ok());
   ASSERT_TRUE(harness.editor.scene()
                   .set_transform(sibling_occurrence,
-                                 {.position = {0.0f, 0.0f, 4.0f}})
+                                 {.location = {0.0f, 0.0f, 4.0f}})
                   .ok());
   ASSERT_TRUE(
       harness.editor.selection().select_object(active_occurrence).ok());
@@ -11669,7 +11669,7 @@ TEST(ViewportInteractionControllerTests,
   // Keep the front member rendered while making its components ineligible.
   // The rear member then remains a valid raw modeling-radius candidate.
   ASSERT_TRUE(
-      harness.editor.scene().set_locked(foreground.entity, true).ok());
+      harness.editor.scene().set_selectable(foreground.entity, false).ok());
   ASSERT_TRUE(harness.editor.selection().select_object(occurrence).ok());
   ASSERT_TRUE(harness.editor.modeling().enter_instance_edit(occurrence).ok());
   ASSERT_TRUE(harness.editor.selection().select_object(rear).ok());
@@ -12517,7 +12517,7 @@ TEST(ViewportInteractionControllerTests,
                    .world_direction = ray.direction,
                    .include_backfaces = false,
                    .eligibility =
-                       quader::SceneSurfaceEligibility::SelectableUnlocked},
+                       quader::SceneSurfaceEligibility::EffectivelySelectable},
                   scratch);
               ASSERT_TRUE(hit.has_value());
               EXPECT_EQ(hit->participant.geometry_entity, wall.value().entity);
@@ -13497,7 +13497,7 @@ TEST(ViewportInteractionControllerTests,
         harness.editor, harness.frame(false, true, false, start)).gizmo_consumed);
     ASSERT_TRUE(harness.controller.dragging());
     const auto authored = *harness.session.scene().transform(box.entity);
-    ASSERT_GT(length(authored.position - before.position), 0.001f);
+    ASSERT_GT(length(authored.location - before.location), 0.001f);
     // An interruption's pointer sample is not another authored drag sample.
     harness.input.mouse_local = start + quader::QVec2{240.0f, 0.0f};
     switch (interruption) {
@@ -13594,7 +13594,7 @@ TEST(ViewportInteractionControllerTests, MoveRotateAndScaleGizmosDragSelectedObj
           *harness.session.scene().transform(box.entity);
 
       if (tool_case.tool == quader::ViewportToolId::Move) {
-        EXPECT_GT(length(after_transform.position - before_transform.position),
+        EXPECT_GT(length(after_transform.location - before_transform.location),
                   0.001f);
       } else if (tool_case.tool == quader::ViewportToolId::Rotate) {
         EXPECT_GT(length(after_transform.rotation_euler -
@@ -13707,7 +13707,7 @@ TEST(ViewportInteractionControllerTests,
     const quader::TransformComponent after_transform =
         *harness.session.scene().transform(box.entity);
     if (selection_case.mode == quader::QuaderSelectionMode::Object) {
-      EXPECT_GT(length(after_transform.position - before_transform.position),
+      EXPECT_GT(length(after_transform.location - before_transform.location),
                 0.01f);
     } else {
       expect_transform_near(after_transform, before_transform);
@@ -13793,10 +13793,10 @@ TEST(ViewportInteractionControllerTests,
   const quader::QuaderModelingObjectRef other =
       create_box_at(harness, {3.0f, 0.0f, 0.0f});
   quader::TransformComponent active_transform;
-  active_transform.position = {-2.0f, 0.0f, 0.0f};
+  active_transform.location = {-2.0f, 0.0f, 0.0f};
   active_transform.rotation_euler = {0.0f, 0.0f, 1.57079632679f};
   quader::TransformComponent other_transform;
-  other_transform.position = {3.0f, 0.0f, 0.0f};
+  other_transform.location = {3.0f, 0.0f, 0.0f};
   other_transform.rotation_euler = {0.25f, -0.4f, -0.65f};
   ASSERT_TRUE(
       harness.session.scene().set_transform(active.entity, active_transform));
@@ -13856,7 +13856,7 @@ TEST(ViewportInteractionControllerTests,
   const quader::TransformComponent single_after =
       *harness.session.scene().transform(active.entity);
   const quader::QVec3 single_delta =
-      single_after.position - single_before.position;
+      single_after.location - single_before.location;
   ASSERT_GT(quader::length(single_delta), 0.01f);
   EXPECT_GT(quader::dot(quader::normalize(single_delta),
                         active_orientation->x_axis),
@@ -13891,9 +13891,9 @@ TEST(ViewportInteractionControllerTests,
   const quader::TransformComponent other_multi_after =
       *harness.session.scene().transform(other.entity);
   const quader::QVec3 active_delta =
-      active_multi_after.position - active_multi_before.position;
+      active_multi_after.location - active_multi_before.location;
   const quader::QVec3 other_delta =
-      other_multi_after.position - other_multi_before.position;
+      other_multi_after.location - other_multi_before.location;
   ASSERT_GT(quader::length(active_delta), 0.01f);
   expect_vec3_near(other_delta, active_delta);
   EXPECT_GT(quader::dot(quader::normalize(active_delta),
@@ -14084,14 +14084,14 @@ TEST(ViewportInteractionControllerTests,
   ASSERT_TRUE(harness.editor.scene()
                   .set_transform(recorded.entity,
                                  {
-                                     .position = {-1.0f, 0.0f, 0.0f},
+                                     .location = {-1.0f, 0.0f, 0.0f},
                                      .rotation_euler = {0.0f, 0.0f, 0.65f},
                                  })
                   .ok());
   ASSERT_TRUE(harness.editor.scene()
                   .set_transform(replayed.entity,
                                  {
-                                     .position = {3.0f, 0.0f, 0.0f},
+                                     .location = {3.0f, 0.0f, 0.0f},
                                      .rotation_euler = {0.0f, 0.0f, kHalfPi},
                                  })
                   .ok());
@@ -14128,7 +14128,7 @@ TEST(ViewportInteractionControllerTests,
       quader::dot(recorded_preview.move_delta, recorded_orientation->x_axis);
   const quader::QVec3 expected_delta =
       replay_orientation->x_axis * recorded_local_x_distance;
-  expect_vec3_near(after.position - before.position, expected_delta);
+  expect_vec3_near(after.location - before.location, expected_delta);
   EXPECT_GT(std::abs(expected_delta.y), 0.01f);
   EXPECT_NEAR(expected_delta.x, 0.0f, 0.001f);
 }
@@ -14147,11 +14147,11 @@ TEST(ViewportInteractionControllerTests,
     const quader::QuaderModelingObjectRef other =
         create_box_at(harness, {4.0f, -2.0f, 0.0f});
     quader::TransformComponent active_before;
-    active_before.position = {-3.0f, 1.0f, 0.0f};
+    active_before.location = {-3.0f, 1.0f, 0.0f};
     active_before.rotation_euler = {0.0f, 0.0f, 1.57079632679f};
     active_before.scale = {1.25f, 0.75f, 1.5f};
     quader::TransformComponent other_before;
-    other_before.position = {4.0f, -2.0f, 0.0f};
+    other_before.location = {4.0f, -2.0f, 0.0f};
     other_before.rotation_euler = {0.35f, -0.5f, -0.7f};
     other_before.scale = {0.6f, 1.4f, 2.0f};
     ASSERT_TRUE(
@@ -14171,10 +14171,10 @@ TEST(ViewportInteractionControllerTests,
     const quader::QVec3 other_visible_pivot_before =
         quader::bounds_center(*other_bounds_before);
     EXPECT_GT(quader::length(active_visible_pivot_before -
-                             active_before.position),
+                             active_before.location),
               0.1f);
     EXPECT_GT(
-        quader::length(other_visible_pivot_before - other_before.position),
+        quader::length(other_visible_pivot_before - other_before.location),
         0.1f);
     ASSERT_TRUE(harness.editor.selection()
                     .select_objects({other.entity, active.entity}, active.entity)
@@ -14286,7 +14286,7 @@ TEST(ViewportInteractionControllerTests,
         quader::ViewportBoolSettingId::VertexSnap, false));
     const quader::QuaderModelingObjectRef source = create_unit_box(harness);
     quader::TransformComponent source_transform;
-    source_transform.position = {0.75f, -0.5f, 0.25f};
+    source_transform.location = {0.75f, -0.5f, 0.25f};
     source_transform.rotation_euler = {0.15f, 0.25f, -0.2f};
     source_transform.scale = {1.1f, 0.9f, 1.2f};
     ASSERT_TRUE(harness.session.scene().set_transform(source.entity,
@@ -14388,8 +14388,8 @@ TEST(ViewportInteractionControllerTests,
         harness.session.scene().transform(duplicate);
     ASSERT_NE(duplicate_transform, nullptr);
     if (tool_case.tool == quader::ViewportToolId::Move) {
-      EXPECT_GT(length(duplicate_transform->position -
-                       source_transform.position),
+      EXPECT_GT(length(duplicate_transform->location -
+                       source_transform.location),
                 0.001f);
     } else if (tool_case.tool == quader::ViewportToolId::Rotate) {
       EXPECT_GT(length(duplicate_transform->rotation_euler -
@@ -14405,7 +14405,7 @@ TEST(ViewportInteractionControllerTests,
     quader::TransformComponent previous_repeat_transform =
         *duplicate_transform;
     const quader::QVec3 original_move_step =
-        duplicate_transform->position - source_transform.position;
+        duplicate_transform->location - source_transform.location;
     for (std::size_t repeat_index = 0u; repeat_index < 2u; ++repeat_index) {
       const quader::QuaderApiVoidResult repeated =
           harness.editor.commands().execute(
@@ -14429,7 +14429,7 @@ TEST(ViewportInteractionControllerTests,
       ASSERT_NE(repeated_transform, nullptr);
       if (tool_case.tool == quader::ViewportToolId::Move) {
         const quader::QVec3 repeat_step =
-            repeated_transform->position - previous_repeat_transform.position;
+            repeated_transform->location - previous_repeat_transform.location;
         EXPECT_NEAR(repeat_step.x, original_move_step.x, 0.001f);
         EXPECT_NEAR(repeat_step.y, original_move_step.y, 0.001f);
         EXPECT_NEAR(repeat_step.z, original_move_step.z, 0.001f);
@@ -14509,8 +14509,8 @@ TEST(ViewportInteractionControllerTests,
         harness.session.scene().instance_occurrence(duplicate);
     ASSERT_NE(duplicate_instance, nullptr);
     EXPECT_EQ(duplicate_instance->definition, definition);
-    EXPECT_GT(length(harness.session.scene().transform(duplicate)->position -
-                     source_transform.position),
+    EXPECT_GT(length(harness.session.scene().transform(duplicate)->location -
+                     source_transform.location),
               0.001f);
     expect_transform_near(*harness.session.scene().transform(source),
                           source_transform);
@@ -14564,7 +14564,7 @@ TEST(ViewportInteractionControllerTests,
     EXPECT_FALSE(harness.controller.dragging());
     const quader::TransformComponent after =
         *harness.session.scene().transform(box.entity);
-    EXPECT_GT(length(after.position - before.position), 0.001f);
+    EXPECT_GT(length(after.location - before.location), 0.001f);
     ASSERT_TRUE(harness.editor.history().can_undo());
     const quader::QuaderApiVoidResult undo = harness.editor.commands().execute(
         quader::quader_command::kEditUndo);
@@ -14631,8 +14631,8 @@ TEST(ViewportInteractionControllerTests,
     EXPECT_FALSE(harness.controller.dragging());
     const quader::TransformComponent after =
         *harness.session.scene().transform(box.entity);
-    EXPECT_GT(length(during_drag.position - before.position), 0.001f);
-    EXPECT_GT(length(after.position - during_drag.position), 0.001f);
+    EXPECT_GT(length(during_drag.location - before.location), 0.001f);
+    EXPECT_GT(length(after.location - during_drag.location), 0.001f);
     ASSERT_TRUE(harness.editor.history().can_undo());
     const quader::QuaderApiVoidResult undo = harness.editor.commands().execute(
         quader::quader_command::kEditUndo);
@@ -15411,10 +15411,10 @@ TEST(ViewportInteractionControllerTests, PointLightRadiusHoverCachesPicksAndClea
   for (int index = 0; index < 8; ++index) EXPECT_TRUE(hover(1).gizmo_hovered);
   EXPECT_EQ(harness.controller.point_light_range_hover_pick_count(), picks);
   EXPECT_EQ(harness.session.scene().revision(), scene_revision);
-  harness.billboard_pick_candidates.front().effectively_locked = true;
+  harness.billboard_pick_candidates.front().effectively_selectable = false;
   EXPECT_FALSE(hover(2).gizmo_hovered);
   EXPECT_EQ(cursor(), quader::ViewportPointerCursor::SelectionDefault);
-  harness.billboard_pick_candidates.front().effectively_locked = false;
+  harness.billboard_pick_candidates.front().effectively_selectable = true;
   EXPECT_TRUE(hover(3).gizmo_hovered);
   ASSERT_EQ(cursor(), quader::ViewportPointerCursor::OpenHand);
   for (int unavailable = 0; unavailable < 5; ++unavailable) {
@@ -15536,7 +15536,7 @@ TEST(ViewportInteractionControllerTests, PointLightRadiusInterruptionAcceptsUnle
     case 2: harness.input_result.navigation_active = true; break;
     case 3: harness.input_result.cancel_requested = true; break;
     case 4: ASSERT_TRUE(harness.editor.preferences().set_overlays_visible(false).ok()); break;
-    case 5: ASSERT_TRUE(harness.editor.scene().set_locked(light.id, true).ok()); break;
+    case 5: ASSERT_TRUE(harness.editor.scene().set_selectable(light.id, false).ok()); break;
     }
     ASSERT_TRUE(radius_frame(harness, start + quader::QVec2{80, 0}, false, true, false));
     if (interruption == 1) {
@@ -15695,12 +15695,12 @@ TEST(ViewportInteractionControllerTests, PointLightRadiusProjectionTracksSelecti
   auto parent = harness.editor.scene().create_entity({.name = "Light Parent"});
   ASSERT_TRUE(parent.ok());
   quader::QuaderTransform parent_transform;
-  parent_transform.position = {3, 4, 5};
+  parent_transform.location = {3, 4, 5};
   parent_transform.scale = {2, 3, 4};
   ASSERT_TRUE(harness.editor.scene().set_transform(parent.value().id, parent_transform).ok());
   quader::QuaderCreatePointLightArgs args;
   args.parent = parent.value().id;
-  args.transform.position = {1, 0, 0};
+  args.transform.location = {1, 0, 0};
   args.light.range = 2;
   const auto light = harness.editor.scene().create_point_light(args);
   ASSERT_TRUE(light.ok());
@@ -15815,7 +15815,7 @@ TEST(ViewportInteractionControllerTests,
       const auto shared_mesh = *scene.mesh(mesh_entities.front());
       ASSERT_TRUE(scene.set_mesh(mesh_entities.back(), shared_mesh));
       auto placement = *scene.transform(mesh_entities.back());
-      placement.position.x = 3.0f;
+      placement.location.x = 3.0f;
       ASSERT_TRUE(scene.set_transform(mesh_entities.back(), placement));
     }
     auto render = quader::build_render_scene_snapshot(scene, assets);
@@ -15910,7 +15910,7 @@ TEST(ViewportInteractionControllerTests,
     }
     case 3: {
       auto transform = *scene.transform(box.entity);
-      transform.position.x += 1.0f;
+      transform.location.x += 1.0f;
       ASSERT_TRUE(scene.set_transform(box.entity, transform));
       break;
     }
@@ -16058,7 +16058,7 @@ TEST(ViewportInteractionControllerTests, MoveRotateAndScaleGizmosDragSelectedPoi
           *harness.session.scene().transform(light.value().id);
 
       if (tool_case.tool == quader::ViewportToolId::Move) {
-        EXPECT_GT(length(after_transform.position - before_transform.position),
+        EXPECT_GT(length(after_transform.location - before_transform.location),
                   0.001f);
       } else if (tool_case.tool == quader::ViewportToolId::Rotate) {
         EXPECT_GT(length(after_transform.rotation_euler -
@@ -19331,7 +19331,7 @@ struct ViewportNudgeRepeatScenario {
   void expect_nudges(std::size_t count) {
     ASSERT_NE(harness.session.scene().transform(box.entity), nullptr);
     auto expected = baseline;
-    expected.position.x += static_cast<float>(count);
+    expected.location.x += static_cast<float>(count);
     expect_transform_near(*harness.session.scene().transform(box.entity),
                           expected);
     EXPECT_EQ(harness.session.history().undo_count(), count);
@@ -19353,9 +19353,9 @@ struct ViewportNudgeRepeatScenario {
       const auto *transform = harness.session.scene().transform(entity);
       ASSERT_NE(transform, nullptr);
       auto expected = baseline;
-      expected.position.x = transform->position.x;
+      expected.location.x = transform->location.x;
       expect_transform_near(*transform, expected);
-      actual_positions.push_back(transform->position.x - baseline.position.x);
+      actual_positions.push_back(transform->location.x - baseline.location.x);
     }
     std::sort(actual_positions.begin(), actual_positions.end());
     std::sort(positions.begin(), positions.end());
@@ -19367,8 +19367,8 @@ struct ViewportNudgeRepeatScenario {
     const auto *selected_transform =
         harness.session.scene().transform(selected.front());
     ASSERT_NE(selected_transform, nullptr);
-    EXPECT_NEAR(selected_transform->position.x,
-                baseline.position.x + selected_x, 0.0001f);
+    EXPECT_NEAR(selected_transform->location.x,
+                baseline.location.x + selected_x, 0.0001f);
     EXPECT_EQ(harness.session.history().undo_count(), undo_count);
   }
 };

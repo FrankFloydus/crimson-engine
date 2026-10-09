@@ -211,7 +211,7 @@ SceneContentDocument make_lighting_document(std::span<const float> intensities,
       light.distance_attenuation = falloff;
       light.casts_shadows = false;
       EXPECT_TRUE(scene.set_light(id, light));
-      EXPECT_TRUE(scene.set_transform(id, TransformComponent{.position = {0, 3, 0}}));
+      EXPECT_TRUE(scene.set_transform(id, TransformComponent{.location = {0, 3, 0}}));
       ++id;
     }
   }
@@ -433,10 +433,10 @@ TEST_F(BridgeReaderTests, ParentingCompensationExportsCompleteAffineMeshAndLight
   ASSERT_EQ(parent, 200u);
   ASSERT_EQ(light, 300u);
   ASSERT_TRUE(scene.set_light(light, {.type = LightType::Directional}));
-  TransformComponent parent_transform{.position = {5.0f, -2.0f, 7.0f},
+  TransformComponent parent_transform{.location = {5.0f, -2.0f, 7.0f},
       .rotation_euler = {0.2f, -0.6f, 0.4f}, .scale = {-2.0f, 3.0f, 0.5f}};
   parent_transform.parenting_offset.values[8] = 0.375f;
-  TransformComponent child_transform{.position = {-1.0f, 2.0f, 3.0f},
+  TransformComponent child_transform{.location = {-1.0f, 2.0f, 3.0f},
       .rotation_euler = {0.1f, 0.7f, -0.2f}, .scale = {0.75f, -1.0f, 2.0f}};
   child_transform.parenting_offset.values[4] = -0.25f;
   child_transform.parenting_offset.values[12] = 4.0f;
@@ -1247,7 +1247,7 @@ TEST_F(BridgeReaderTests, IncludesHiddenMeshesAndMirroredInstancePlacementsOnce)
   ASSERT_TRUE(source.set_material(member, MaterialComponent{.material = 20u}));
   ASSERT_TRUE(source.set_parent(member, definition, false));
   ASSERT_TRUE(source.set_transform(member,
-                                  TransformComponent{.position = {2, 0, 0}}));
+                                  TransformComponent{.location = {2, 0, 0}}));
   ASSERT_TRUE(source.set_instance_definition(definition));
   for (const EntityId id : {202u, 203u}) {
     ASSERT_EQ(source.create_entity_with_id(id, "Placed instance",
@@ -1255,7 +1255,7 @@ TEST_F(BridgeReaderTests, IncludesHiddenMeshesAndMirroredInstancePlacementsOnce)
     ASSERT_TRUE(source.set_instance_occurrence(
         id, InstanceOccurrenceComponent{.definition = definition}));
     ASSERT_TRUE(source.set_transform(
-        id, TransformComponent{.position = {10, 3, 4}, .scale = {-1, 2, 1}}));
+        id, TransformComponent{.location = {10, 3, 4}, .scale = {-1, 2, 1}}));
   }
   ASSERT_TRUE(source.set_visible(203u, false));
   add_scene(kFirstScene, "Scenes/first.qdr", document);
@@ -1438,7 +1438,7 @@ TEST_F(BridgeReaderTests, ExportGodotAcceptanceFixtures) {
   ASSERT_TRUE(source.set_material(101u, *source.material(100u)));
   ASSERT_TRUE(source.set_visible(101u, false));
   ASSERT_TRUE(source.set_transform(101u,
-      TransformComponent{.position = {3, 0, 0}, .scale = {1.5f, 2.0f, 0.75f}}));
+      TransformComponent{.location = {3, 0, 0}, .scale = {1.5f, 2.0f, 0.75f}}));
   ASSERT_EQ(source.create_entity_with_id(200u, "Stored definition",
                                          EntityKind::Generic), 200u);
   ASSERT_EQ(source.create_entity_with_id(201u, "Definition member",
@@ -1452,7 +1452,7 @@ TEST_F(BridgeReaderTests, ExportGodotAcceptanceFixtures) {
   ASSERT_TRUE(source.set_instance_occurrence(
       202u, InstanceOccurrenceComponent{.definition = 200u}));
   ASSERT_TRUE(source.set_transform(
-      202u, TransformComponent{.position = {6, 0, 0}, .scale = {-1, 2, 1}}));
+      202u, TransformComponent{.location = {6, 0, 0}, .scale = {-1, 2, 1}}));
   add_scene(kFirstScene, "Scenes/mixed_materials.qdr", document,
            kProjectMaterial, project_material_path);
   add_scene(kSecondScene, "Scenes/missing_texture.qdr",
@@ -1790,7 +1790,7 @@ TEST_F(BridgeReaderTests, SaveGodotAcceptanceFixture) {
     const unsigned count = mode == "rapid" ? 3u : 1u;
     for (unsigned offset = 0u; offset < count; ++offset) {
       const auto changed = scene->session->document_commands().apply_entity_transform(
-          100u, TransformComponent{.position = {static_cast<float>(revision + offset),
+          100u, TransformComponent{.location = {static_cast<float>(revision + offset),
                                                0.0f, 0.0f}});
       ASSERT_TRUE(changed.ok) << changed.message;
       const auto committed = mode == "save_all"

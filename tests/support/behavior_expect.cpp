@@ -33,21 +33,21 @@ void expect_vec3_near(QVec3 actual, QVec3 expected, float epsilon) {
 
 void expect_transform_near(const TransformComponent &actual,
                            const TransformComponent &expected, float epsilon) {
-  expect_vec3_near(actual.position, expected.position, epsilon);
+  expect_vec3_near(actual.location, expected.location, epsilon);
   expect_vec3_near(actual.rotation_euler, expected.rotation_euler, epsilon);
   expect_vec3_near(actual.scale, expected.scale, epsilon);
 }
 
 void expect_transform_near(const QuaderTransform &actual,
                            const TransformComponent &expected, float epsilon) {
-  expect_vec3_near(actual.position, expected.position, epsilon);
+  expect_vec3_near(actual.location, expected.location, epsilon);
   expect_vec3_near(actual.rotation_euler, expected.rotation_euler, epsilon);
   expect_vec3_near(actual.scale, expected.scale, epsilon);
 }
 
 void expect_transform_near(const QuaderTransform &actual,
                            const QuaderTransform &expected, float epsilon) {
-  expect_vec3_near(actual.position, expected.position, epsilon);
+  expect_vec3_near(actual.location, expected.location, epsilon);
   expect_vec3_near(actual.rotation_euler, expected.rotation_euler, epsilon);
   expect_vec3_near(actual.scale, expected.scale, epsilon);
 }
@@ -291,14 +291,14 @@ SceneExpect& SceneExpect::visible(std::string_view alias, bool expected) {
     return *this;
 }
 
-SceneExpect& SceneExpect::locked(std::string_view alias, bool expected) {
+SceneExpect& SceneExpect::selectable(std::string_view alias, bool expected) {
   const std::optional<QuaderEntitySnapshot> snapshot =
       find_entity_alias(scenario_, alias);
   EXPECT_TRUE(snapshot.has_value()) << alias;
   if (!snapshot.has_value()) {
     return *this;
   }
-    EXPECT_EQ(snapshot->locked, expected);
+    EXPECT_EQ(snapshot->selectable, expected);
     return *this;
 }
 

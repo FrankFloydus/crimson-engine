@@ -64,11 +64,11 @@ TEST(SceneTransformTests, UnparentPreservesWorldTransformAndAppendsAuthoredRoot)
   const auto child = scene.create_empty("Child");
   const auto sibling = scene.create_empty("Sibling");
   ASSERT_TRUE(scene.set_transform(group, {
-      .position = {4.0f, 2.0f, -1.0f},
+      .location = {4.0f, 2.0f, -1.0f},
       .rotation_euler = {0.0f, 0.5f, 0.0f},
       .scale = {2.0f, 2.0f, 2.0f},
   }));
-  ASSERT_TRUE(scene.set_transform(child, {.position = {3.0f, 0.0f, 1.0f}}));
+  ASSERT_TRUE(scene.set_transform(child, {.location = {3.0f, 0.0f, 1.0f}}));
   ASSERT_TRUE(scene.set_parent(child, group, false));
   const auto before = scene.world_transform_matrix(child);
   ASSERT_TRUE(scene.set_parent(child, quader::kInvalidEntityId, true));
@@ -104,17 +104,17 @@ TEST(SceneTransformTests,
   const EntityId child = scene.create_entity("Mesh", EntityKind::Mesh);
   const EntityId grandchild = scene.create_empty("Grandchild");
   ASSERT_TRUE(scene.set_transform(first_parent, {
-      .position = {3.0f, -2.0f, 1.0f},
+      .location = {3.0f, -2.0f, 1.0f},
       .rotation_euler = {0.7f, -0.3f, 0.2f},
       .scale = {-2.0f, 0.5f, 3.0f},
   }));
   ASSERT_TRUE(scene.set_transform(second_parent, {
-      .position = {-1.0f, 4.0f, 2.0f},
+      .location = {-1.0f, 4.0f, 2.0f},
       .rotation_euler = {-0.4f, 0.8f, 0.1f},
       .scale = {0.5f, 1.5f, -2.0f},
   }));
   TransformComponent authored{
-      .position = {1.0f, 2.0f, -3.0f},
+      .location = {1.0f, 2.0f, -3.0f},
       .rotation_euler = {0.6f, 0.3f, -0.9f},
       .scale = {0.75f, 2.0f, 1.0f},
       .custom_pivot = true,
@@ -123,7 +123,7 @@ TEST(SceneTransformTests,
   ASSERT_TRUE(scene.set_transform(child, authored));
   ASSERT_TRUE(scene.set_parent(child, first_parent, false));
   ASSERT_TRUE(scene.set_parent(grandchild, child, false));
-  ASSERT_TRUE(scene.set_transform(grandchild, {.position = {2.0f, 1.0f, -1.0f}}));
+  ASSERT_TRUE(scene.set_transform(grandchild, {.location = {2.0f, 1.0f, -1.0f}}));
   const QMat4 child_world = scene.world_transform_matrix(child);
   const QMat4 grandchild_world = scene.world_transform_matrix(grandchild);
 
@@ -132,7 +132,7 @@ TEST(SceneTransformTests,
     ASSERT_TRUE(scene.set_parent(child, destination, true));
     const auto *actual = scene.transform(child);
     ASSERT_NE(actual, nullptr);
-    expect_vector_near(actual->position, authored.position);
+    expect_vector_near(actual->location, authored.location);
     expect_vector_near(actual->rotation_euler, authored.rotation_euler);
     expect_vector_near(actual->scale, authored.scale);
     EXPECT_TRUE(actual->custom_pivot);
@@ -149,8 +149,8 @@ TEST(SceneTransformTests, ReparentWithoutPreservationRetainsCompleteLocalMatrix)
   SceneDocument scene;
   const EntityId parent = scene.create_empty("Parent");
   const EntityId child = scene.create_empty("Child");
-  ASSERT_TRUE(scene.set_transform(parent, {.position = {8.0f, -3.0f, 2.0f}}));
-  TransformComponent authored{.position = {1.0f, 2.0f, 3.0f}};
+  ASSERT_TRUE(scene.set_transform(parent, {.location = {8.0f, -3.0f, 2.0f}}));
+  TransformComponent authored{.location = {1.0f, 2.0f, 3.0f}};
   authored.parenting_offset.values[4] = 0.5f;
   authored.parenting_offset.values[12] = -4.0f;
   ASSERT_TRUE(scene.set_transform(child, authored));
@@ -172,11 +172,11 @@ TEST(SceneTransformTests, SingularChildAndOldParentRemainPreservable) {
   const EntityId child = scene.create_empty("Collapsed child");
   ASSERT_TRUE(scene.set_transform(parent, {.scale = {0.0f, 2.0f, 1.0f}}));
   ASSERT_TRUE(scene.set_transform(destination, {
-      .position = {5.0f, -1.0f, 3.0f},
+      .location = {5.0f, -1.0f, 3.0f},
       .rotation_euler = {0.3f, -0.8f, 0.2f},
   }));
   ASSERT_TRUE(scene.set_transform(child, {
-      .position = {3.0f, 1.0f, 2.0f}, .scale = {1.0f, 0.0f, -2.0f}}));
+      .location = {3.0f, 1.0f, 2.0f}, .scale = {1.0f, 0.0f, -2.0f}}));
   ASSERT_TRUE(scene.set_parent(child, parent, false));
   const QMat4 world = scene.world_transform_matrix(child);
   ASSERT_TRUE(scene.set_parent(child, kInvalidEntityId, true));
@@ -191,7 +191,7 @@ TEST(SceneTransformTests, CompensationOnlyEditsInvalidateAndRollbackProjection) 
   using namespace quader;
   SceneDocument scene;
   const EntityId child = scene.create_empty("Child");
-  TransformComponent authored{.position = {1.0f, 2.0f, 3.0f}};
+  TransformComponent authored{.location = {1.0f, 2.0f, 3.0f}};
   authored.parenting_offset.values[4] = 0.4f;
   ASSERT_TRUE(scene.set_transform(child, authored));
   const auto captured = capture_scene_entity_state(scene, child);
@@ -244,7 +244,7 @@ TEST(SceneTransformTests, InvalidCompensationIsRejectedBeforePublication) {
 TEST(SceneTransformTests, ChannelWorldSolveRetainsCompensationAndRejectsShear) {
   using namespace quader;
   const QMat4 parent = compose_transform(QTransform{
-      .position = {2.0f, -3.0f, 1.0f},
+      .location = {2.0f, -3.0f, 1.0f},
       .rotation = quat_from_euler_radians({0.2f, 0.5f, -0.7f}),
       .scale = {2.0f, 0.5f, -1.0f},
   });
@@ -252,7 +252,7 @@ TEST(SceneTransformTests, ChannelWorldSolveRetainsCompensationAndRejectsShear) {
   original.parenting_offset.values[4] = 0.25f;
   original.parenting_offset.values[12] = 3.0f;
   TransformComponent desired = original;
-  desired.position = {4.0f, -1.0f, 2.0f};
+  desired.location = {4.0f, -1.0f, 2.0f};
   desired.rotation_euler = {0.3f, 0.6f, 0.2f};
   desired.scale = {2.0f, 3.0f, 4.0f};
   const QMat4 desired_world = scene_transform_multiply(
@@ -262,7 +262,7 @@ TEST(SceneTransformTests, ChannelWorldSolveRetainsCompensationAndRejectsShear) {
   ASSERT_TRUE(solved.has_value());
   EXPECT_EQ(solved->parenting_offset.values, original.parenting_offset.values);
   EXPECT_TRUE(solved->custom_pivot);
-  expect_vector_near(solved->position, desired.position);
+  expect_vector_near(solved->location, desired.location);
   expect_matrix_near(scene_transform_multiply(parent,
                                               scene_local_transform_matrix(*solved)),
                      desired_world);
@@ -281,7 +281,7 @@ TEST(SceneTransformTests,
      PureWorldRotationRemovesPositiveNonuniformScale) {
   const quader::QVec3 euler{0.37F, -0.61F, 1.12F};
   const quader::QTransform transform{
-      .position = {4.0F, -2.0F, 9.0F},
+      .location = {4.0F, -2.0F, 9.0F},
       .rotation = quader::quat_from_euler_radians(euler),
       .scale = {2.0F, 0.25F, 7.0F},
   };
@@ -348,7 +348,7 @@ TEST(SceneTransformTests, MatrixRoundTripPreservesQuarterTurnAndMixedRotations) 
     SCOPED_TRACE(::testing::Message()
                  << degrees.x << ", " << degrees.y << ", " << degrees.z);
     const TransformComponent authored{
-        .position = {4.0F, -2.0F, 9.0F},
+        .location = {4.0F, -2.0F, 9.0F},
         .rotation_euler = radians(degrees),
         .scale = {2.0F, 0.25F, 7.0F},
     };
@@ -535,7 +535,7 @@ TEST_F(MeshObjectTransformTests,
   for (std::size_t index = 0; index < objects.size(); ++index) {
     ASSERT_TRUE(editor_.scene()
                     .set_transform(objects[index].entity,
-                                   {.position = positions[index],
+                                   {.location = positions[index],
                                     .rotation_euler = initial_rotations[index]})
                     .ok());
     before[index] = session_.scene().world_transform_matrix(objects[index].entity);
@@ -600,7 +600,7 @@ TEST_F(MeshObjectTransformTests,
   using namespace quader;
   ASSERT_TRUE(editor_.scene()
                   .set_transform(object_.entity,
-                                 {.position = {4.0F, -3.0F, 2.0F},
+                                 {.location = {4.0F, -3.0F, 2.0F},
                                   .rotation_euler = radians({20.0F, 35.0F, 50.0F}),
                                   .scale = {1.25F, 0.5F, 2.0F}})
                   .ok());
@@ -648,14 +648,14 @@ TEST_F(MeshObjectTransformTests,
   ASSERT_TRUE(parent.ok()) << parent.error_message();
   ASSERT_TRUE(editor_.scene()
                   .set_transform(parent.value().id,
-                                 {.position = {10.0F, -5.0F, 3.0F},
+                                 {.location = {10.0F, -5.0F, 3.0F},
                                   .rotation_euler = radians({25.0F, -40.0F, 15.0F}),
                                   .scale = {2.0F, 2.0F, 2.0F}})
                   .ok());
   ASSERT_TRUE(editor_.scene().reparent(object_.entity, parent.value().id, false).ok());
   ASSERT_TRUE(editor_.scene()
                   .set_transform(object_.entity,
-                                 {.position = {2.0F, -1.0F, 4.0F},
+                                 {.location = {2.0F, -1.0F, 4.0F},
                                   .rotation_euler = radians({35.0F, 55.0F, -25.0F})})
                   .ok());
   ASSERT_TRUE(editor_.selection().select_object(object_).ok());
@@ -724,7 +724,7 @@ TEST_F(MeshObjectTransformTests,
                  << scale.x << ", " << scale.y << ", " << scale.z);
     ASSERT_TRUE(editor_.scene()
                     .set_transform(object_.entity,
-                                   {.position = {4.0F, -3.0F, 2.0F},
+                                   {.location = {4.0F, -3.0F, 2.0F},
                                     .rotation_euler = {},
                                     .scale = scale})
                     .ok());
@@ -762,7 +762,7 @@ TEST_F(MeshObjectTransformTests,
     expect_matrix_near(
         session_.scene().world_transform_matrix(object_.entity),
         scene_transform_multiply(
-            compose_transform(QTransform{.position = translation}), rotated));
+            compose_transform(QTransform{.location = translation}), rotated));
     ASSERT_TRUE(service.cancel().ok);
     EXPECT_EQ(session_.history().undo_count(), undo_count);
     expect_authored_rotation(rotated_euler);
@@ -823,7 +823,7 @@ TEST_F(MeshObjectTransformTests,
       const auto expect_unchanged = [&]() {
         const TransformComponent *actual = session_.scene().transform(object_.entity);
         ASSERT_NE(actual, nullptr);
-        expect_vector_near(actual->position, before.position);
+        expect_vector_near(actual->location, before.location);
         expect_vector_near(actual->rotation_euler, before.rotation_euler);
         expect_vector_near(actual->scale, before.scale);
         expect_authored_vertices_unchanged();
@@ -850,12 +850,12 @@ protected:
     ASSERT_TRUE(light.ok()) << light.error_message();
     light_ = light.value().id;
     ASSERT_TRUE(editor_.scene()
-                    .set_transform(light_, {.position = {-4.0F, 3.0F, 2.0F},
+                    .set_transform(light_, {.location = {-4.0F, 3.0F, 2.0F},
                                             .rotation_euler = radians({20.0F, -15.0F, 35.0F})})
                     .ok());
     ASSERT_TRUE(editor_.scene()
                     .set_transform(object_.entity,
-                                   {.position = {3.0F, -2.0F, 1.0F},
+                                   {.location = {3.0F, -2.0F, 1.0F},
                                     .rotation_euler = radians({-25.0F, 40.0F, 10.0F}),
                                     .scale = {1.5F, 0.75F, 2.0F}})
                     .ok());
@@ -898,8 +898,8 @@ TEST_P(SceneNudgeTests, MoveAndRepeatEachRecordOneReversibleSceneStep) {
   ASSERT_TRUE(nudged.ok()) << nudged.error_message();
   EXPECT_TRUE(nudged.changed());
   EXPECT_EQ(session_.history().undo_count(), undo_count + 1U);
-  const QMat4 once = compose_transform(QTransform{.position = request.move_delta});
-  const QMat4 twice = compose_transform(QTransform{.position = request.move_delta * 2.0F});
+  const QMat4 once = compose_transform(QTransform{.location = request.move_delta});
+  const QMat4 twice = compose_transform(QTransform{.location = request.move_delta * 2.0F});
   expect_world_delta(once);
 
   const auto repeated = editor_.history().repeat_last_action();
@@ -967,10 +967,10 @@ TEST_F(MeshObjectTransformTests, LocalNudgeRotatesEachObjectAroundItsOwnVisibleO
   ASSERT_TRUE(peer.ok()) << peer.error_message();
   const std::array entities{object_.entity, peer.value().entity};
   const std::array<QuaderTransform, 2> transforms{{
-      {.position = {4.0F, -3.0F, 2.0F},
+      {.location = {4.0F, -3.0F, 2.0F},
        .rotation_euler = radians({20.0F, 35.0F, 50.0F}),
        .scale = {1.25F, 0.5F, 2.0F}},
-      {.position = {-6.0F, 2.0F, 1.0F},
+      {.location = {-6.0F, 2.0F, 1.0F},
        .rotation_euler = radians({-30.0F, 15.0F, 65.0F}),
        .scale = {0.75F, 2.0F, 1.5F}},
   }};
@@ -998,7 +998,7 @@ TEST_F(MeshObjectTransformTests, LocalNudgeRotatesEachObjectAroundItsOwnVisibleO
         to_glm(quat_from_euler_radians(transforms[index].rotation_euler)) *
         to_glm(quat_from_euler_radians(radians({15.0F, 0.0F, 0.0F})));
     QTransform after{.rotation = from_glm(rotation), .scale = transforms[index].scale};
-    after.position = pivots[index] - transform_point(compose_transform(after), local_pivot);
+    after.location = pivots[index] - transform_point(compose_transform(after), local_pivot);
     expected[index] = compose_transform(after);
   }
   const auto undo_count = session_.history().undo_count();
@@ -1042,7 +1042,7 @@ TEST_F(MeshObjectTransformTests, LockedMixedNudgeRejectsAtomicallyAndRetainsPrev
   ASSERT_TRUE(editor_.modeling().nudge_selection(request).ok());
   const QMat4 mesh_before = session_.scene().world_transform_matrix(object_.entity);
   const QMat4 light_before = session_.scene().world_transform_matrix(light.value().id);
-  ASSERT_TRUE(session_.scene().set_locked(light.value().id, true));
+  ASSERT_TRUE(session_.scene().set_selectable(light.value().id, false));
   const auto before = test::capture_command_observable_state(editor_);
   EXPECT_FALSE(editor_.modeling().can_nudge_selection());
   for (const bool duplicate : {false, true}) {
@@ -1055,11 +1055,11 @@ TEST_F(MeshObjectTransformTests, LockedMixedNudgeRejectsAtomicallyAndRetainsPrev
     EXPECT_FALSE(rejected.changed());
     EXPECT_EQ(test::capture_command_observable_state(editor_), before);
   }
-  ASSERT_TRUE(session_.scene().set_locked(light.value().id, false));
+  ASSERT_TRUE(session_.scene().set_selectable(light.value().id, true));
   const auto repeated = editor_.history().repeat_last_action();
   ASSERT_TRUE(repeated.ok()) << repeated.error_message();
   EXPECT_TRUE(repeated.changed());
-  const QMat4 delta = compose_transform(QTransform{.position = request.move_delta});
+  const QMat4 delta = compose_transform(QTransform{.location = request.move_delta});
   expect_matrix_near(session_.scene().world_transform_matrix(object_.entity),
                      scene_transform_multiply(delta, mesh_before));
   expect_matrix_near(session_.scene().world_transform_matrix(light.value().id),
@@ -1116,7 +1116,7 @@ TEST_F(MeshObjectTransformTests, NudgeRejectsPendingGeometryWithoutSettlingOrRep
   ASSERT_TRUE(editor_.history().repeat_last_action().ok());
   expect_matrix_near(session_.scene().world_transform_matrix(object_.entity),
                      scene_transform_multiply(
-                         compose_transform(QTransform{.position = request.move_delta}), transform));
+                         compose_transform(QTransform{.location = request.move_delta}), transform));
   expect_authored_vertices_unchanged();
 }
 
@@ -1151,7 +1151,7 @@ TEST_F(MeshObjectTransformTests, NudgeRejectsLivePropertyDraftWithoutAcceptingIt
   ASSERT_TRUE(editor_.history().repeat_last_action().ok());
   expect_matrix_near(session_.scene().world_transform_matrix(light.value().id),
                      scene_transform_multiply(
-                         compose_transform(QTransform{.position = request.move_delta}), transform));
+                         compose_transform(QTransform{.location = request.move_delta}), transform));
 }
 
 enum class DuplicateNudgeSelection { Mesh, Light, Mixed, Group };
@@ -1167,13 +1167,13 @@ protected:
     }
     using namespace quader;
     ASSERT_TRUE(editor_.scene().set_transform(object_.entity,
-        {.position = {3.0F, -2.0F, 1.0F},
+        {.location = {3.0F, -2.0F, 1.0F},
          .rotation_euler = radians({15.0F, 25.0F, -35.0F})}).ok());
     if (GetParam() != DuplicateNudgeSelection::Mesh) {
       const auto light = editor_.scene().create_point_light();
       ASSERT_TRUE(light.ok()) << light.error_message();
       ASSERT_TRUE(editor_.scene().set_transform(light.value().id,
-          {.position = {-4.0F, 3.0F, 2.0F}}).ok());
+          {.location = {-4.0F, 3.0F, 2.0F}}).ok());
       if (GetParam() == DuplicateNudgeSelection::Light) {
         ASSERT_TRUE(editor_.scene().select(light.value().id).ok());
       } else {
@@ -1256,7 +1256,7 @@ TEST_P(SceneDuplicateNudgeTests, EachMoveOrRotationAndRepeatClonesAsOneReversibl
         .duplicate_selected = true,
     };
     const QMat4 delta = tool == QuaderTransformTool::Move
-        ? compose_transform(QTransform{.position = request.move_delta})
+        ? compose_transform(QTransform{.location = request.move_delta})
         : from_glm(glm::translate(glm::mat4{1.0F}, to_glm(pivot)) *
             glm::mat4_cast(to_glm(quat_from_euler_radians(radians({0.0F, 0.0F, 30.0F})))) *
             glm::translate(glm::mat4{1.0F}, -to_glm(pivot)));

@@ -31,7 +31,7 @@ void expect_vector(QVec3 actual, QVec3 expected) {
 
 void expect_channels(const TransformComponent &actual,
                      const TransformComponent &expected) {
-  expect_vector(actual.position, expected.position);
+  expect_vector(actual.location, expected.location);
   expect_vector(actual.rotation_euler, expected.rotation_euler);
   expect_vector(actual.scale, expected.scale);
   EXPECT_EQ(actual.custom_pivot, expected.custom_pivot);
@@ -61,7 +61,7 @@ protected:
 
   void compensated(EntityId entity) {
     TransformComponent transform{
-        .position = {2.0f, -3.0f, 4.0f},
+        .location = {2.0f, -3.0f, 4.0f},
         .rotation_euler = {0.35f, -0.4f, 0.7f},
         .scale = {-1.25f, 0.8f, 2.5f},
         .custom_pivot = true};
@@ -78,11 +78,11 @@ protected:
 TEST_F(ParentingStructuralTransformTests,
        GroupUngroupAndDuplicatePreserveShearChannelsAndPivots) {
   const EntityId parent = empty("Scaled Parent",
-      {.position = {3.0f, 5.0f, -2.0f},
+      {.location = {3.0f, 5.0f, -2.0f},
        .rotation_euler = {-0.2f, 0.5f, 0.4f},
        .scale = {0.75f, 2.0f, -1.5f}});
   const EntityId first = empty("First");
-  const EntityId second = empty("Second", {.position = {-4.0f, 1.0f, 2.0f}});
+  const EntityId second = empty("Second", {.location = {-4.0f, 1.0f, 2.0f}});
   compensated(first);
   ASSERT_TRUE(editor_.scene().reparent(first, parent, false).ok());
   ASSERT_TRUE(editor_.scene().reparent(second, parent, false).ok());
@@ -92,7 +92,7 @@ TEST_F(ParentingStructuralTransformTests,
   const QMat4 second_world = session_.scene().world_transform_matrix(second);
   ASSERT_TRUE(editor_.scene().select({first, second}, second).ok());
   const auto grouped = editor_.scene().group_selection("Compensated Group",
-      {.position = {-1.0f, 2.0f, 3.0f},
+      {.location = {-1.0f, 2.0f, 3.0f},
        .rotation_euler = {0.3f, -0.25f, 0.6f},
        .scale = {1.5f, 0.5f, -2.0f}});
   ASSERT_TRUE(grouped.ok()) << grouped.error_message();
@@ -127,7 +127,7 @@ TEST_F(ParentingStructuralTransformTests,
 TEST_F(ParentingStructuralTransformTests,
        ClipboardRootRetainsCapturedAffineFrameWithoutSourceParent) {
   const EntityId parent = empty("Clipboard Parent",
-      {.position = {3.0f, -1.0f, 2.0f},
+      {.location = {3.0f, -1.0f, 2.0f},
        .rotation_euler = {0.5f, 0.2f, -0.4f},
        .scale = {1.5f, 0.75f, -2.0f}});
   const EntityId source = box("Clipboard Child");

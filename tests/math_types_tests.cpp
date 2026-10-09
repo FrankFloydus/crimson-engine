@@ -56,7 +56,7 @@ TEST(MathTypesTests, QuaternionProductAppliesRightRotationBeforeLeftRotation) {
 
 TEST(MathTypesTests, GlmBridgePreservesColumnMajorMat4Storage) {
   const QMat4 transform = compose_transform(QTransform{
-      .position = {3.0f, 4.0f, 5.0f},
+      .location = {3.0f, 4.0f, 5.0f},
       .rotation = quat_from_euler_radians({0.0f, 0.0f, 0.0f}),
       .scale = {2.0f, 3.0f, 4.0f},
   });

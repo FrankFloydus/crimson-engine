@@ -1767,7 +1767,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
   auto s = quader::test::BehaviorScenario::new_project();
   s.given().mesh("left", face_texture_wall_document())
       .mesh("right", face_texture_wall_document())
-      .transform("right", {.position = {4.0f, 0.0f, 0.0f}})
+      .transform("right", {.location = {4.0f, 0.0f, 0.0f}})
       .selected_aliases({"left", "right"}, "right").edit_mode().selection_mode(quader::QuaderSelectionMode::Face);
   auto &api = s.api();
   const auto left = s.object("left");
@@ -1837,7 +1837,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
   const auto first_occurrence = created.value().occurrence.root.id;
   const auto definition = created.value().definition.root.id;
   ASSERT_TRUE(api.scene().set_transform(first_occurrence, {
-      .position = {5.0f, 2.0f, 0.0f},
+      .location = {5.0f, 2.0f, 0.0f},
       .scale = {2.0f, 3.0f, 1.0f},
   }).ok());
   const auto first_snapshot = api.query().entity(first_occurrence);
@@ -2295,7 +2295,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
       .texture_lock_enabled = [] { return false; },
       .texture_lock_scale_enabled = [] { return false; }});
   ASSERT_TRUE(api.scene().set_transform(object.entity,
-      {.position = {4.0F, 0.1249997615814209F, -18.0F}}).ok());
+      {.location = {4.0F, 0.1249997615814209F, -18.0F}}).ok());
   const auto entity_before = api.query().entity(object.entity);
   ASSERT_TRUE(entity_before.has_value());
   ASSERT_TRUE(entity_before->texture_sampling_from_local.has_value());
@@ -2441,7 +2441,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
   const auto first_occurrence = created.value().occurrence.root.id;
   const auto definition = created.value().definition.root.id;
   ASSERT_TRUE(api.scene().set_transform(first_occurrence, {
-      .position = {5.0f, 2.0f, 0.0f}, .scale = {2.0f, 3.0f, 1.0f},
+      .location = {5.0f, 2.0f, 0.0f}, .scale = {2.0f, 3.0f, 1.0f},
   }).ok());
   const auto first_snapshot = api.query().entity(first_occurrence);
   ASSERT_TRUE(first_snapshot.has_value());
@@ -2681,7 +2681,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
       s.given()
           .mesh("side", beveled_box_side_document(0U, oblique),
                  "Transformed Box Face 10")
-          .transform("side", {.position = {2.0f, 1.0f, -3.0f},
+          .transform("side", {.location = {2.0f, 1.0f, -3.0f},
                                .rotation_euler = {0.0f, quarter_turn, 0.0f},
                                .scale = scale});
       const auto object = s.object("side");
@@ -3001,10 +3001,10 @@ TEST(ProgrammaticBehaviorScenarioTests,
   };
   s.given()
       .unit_box("first", "First Trackball Box")
-      .transform("first", {.position = positions[0],
+      .transform("first", {.location = positions[0],
                            .rotation_euler = {0.0f, 0.0f, 0.25f}})
       .unit_box("second", "Second Trackball Box")
-      .transform("second", {.position = positions[1],
+      .transform("second", {.location = positions[1],
                             .rotation_euler = {0.0f, 0.0f, 0.25f}})
       .selected_aliases({"first", "second"}, "second");
   const auto initial_orientation =
@@ -3019,7 +3019,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
     for (std::size_t index = 0; index < aliases.size(); ++index) {
       const auto entity = s.api().query().entity(s.object(aliases[index]).entity);
       ASSERT_TRUE(entity.has_value());
-      expect_vec3_near(entity->transform.position,
+      expect_vec3_near(entity->transform.location,
                        rotate_about_axis(positions[index],
                                          kRepeatRotationWorldPivot, axis,
                                          degrees));
@@ -3100,7 +3100,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
   const float quarter_turn = static_cast<float>(std::acos(-1.0) * 0.5);
   s.given()
       .mesh("tetra", local_transform_tetrahedron_document(), "Trackball Tetrahedron")
-      .transform("tetra", {.position = scene_position,
+      .transform("tetra", {.location = scene_position,
                            .rotation_euler = {0.0f, 0.0f, quarter_turn},
                            .scale = {2.0f, 3.0f, 0.5f}});
   const auto object = s.object("tetra");
@@ -3152,7 +3152,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
     }
     const auto entity = s.api().query().entity(object.entity);
     ASSERT_TRUE(entity.has_value());
-    expect_vec3_near(entity->transform.position, scene_position);
+    expect_vec3_near(entity->transform.location, scene_position);
     expect_vec3_near(entity->transform.rotation_euler, {0.0f, 0.0f, quarter_turn});
     expect_vec3_near(entity->transform.scale, {2.0f, 3.0f, 0.5f});
     const auto selection = s.api().selection().summary();
@@ -3653,7 +3653,7 @@ TEST(ProgrammaticBehaviorScenarioTests, ShiftRotateExtrudeUsesWorldPivotForTrans
   auto s = quader::test::BehaviorScenario::new_project();
   s.given()
       .unit_box("box", "Shift Rotate Scene Pivot Box")
-      .transform("box", {.position = {10.0f, 0.0f, 0.0f}})
+      .transform("box", {.location = {10.0f, 0.0f, 0.0f}})
       .edit_mode().selection_mode(quader::QuaderSelectionMode::Face);
 
   s.when().pick({10.0f, 0.0f, 5.0f});
@@ -3685,7 +3685,7 @@ TEST(ProgrammaticBehaviorScenarioTests, BridgeAfterShiftRotateExtrudeKeepsTransf
   auto s = quader::test::BehaviorScenario::new_project();
   s.given()
       .unit_box("source", "Bridge Shift Rotate Source")
-      .transform("source", {.position = {10.0f, 0.0f, 0.0f}})
+      .transform("source", {.location = {10.0f, 0.0f, 0.0f}})
       .box("target",
            {.min = {13.0f, -1.0f, -1.0f},
             .max = {15.0f, 1.0f, 1.0f}},
@@ -3739,9 +3739,9 @@ TEST(ProgrammaticBehaviorScenarioTests,
   auto s = quader::test::BehaviorScenario::new_project();
   s.given()
       .unit_box("source", "Bridge Preview Source")
-      .transform("source", {.position = {10.0f, 0.0f, 0.0f}})
+      .transform("source", {.location = {10.0f, 0.0f, 0.0f}})
       .unit_box("target", "Bridge Preview Target")
-      .transform("target", {.position = {14.0f, 0.0f, 0.0f}})
+      .transform("target", {.location = {14.0f, 0.0f, 0.0f}})
       .selected_aliases({"source", "target"}, "target").edit_mode().selection_mode(quader::QuaderSelectionMode::Face);
 
   const quader::QuaderApiResult<quader::QuaderSelectionSummary> source_pick =
@@ -3824,10 +3824,10 @@ TEST(ProgrammaticBehaviorScenarioTests,
   s.given()
       .unit_box("source", "Mirrored Bridge Source")
       .transform("source",
-                 {.position = {10.0f, 0.0f, 0.0f},
+                 {.location = {10.0f, 0.0f, 0.0f},
                   .scale = {-1.0f, 1.0f, 1.0f}})
       .unit_box("target", "Mirrored Bridge Target")
-      .transform("target", {.position = {14.0f, 0.0f, 0.0f}})
+      .transform("target", {.location = {14.0f, 0.0f, 0.0f}})
       .selected_aliases({"source", "target"}, "target").edit_mode().selection_mode(quader::QuaderSelectionMode::Face);
 
   ASSERT_TRUE(s.api()
@@ -3866,10 +3866,10 @@ TEST(ProgrammaticBehaviorScenarioTests,
   s.given()
       .unit_box("source", "Mirrored Bridge Preview Source")
       .transform("source",
-                 {.position = {10.0f, 0.0f, 0.0f},
+                 {.location = {10.0f, 0.0f, 0.0f},
                   .scale = {-1.0f, 1.0f, 1.0f}})
       .unit_box("target", "Mirrored Bridge Preview Target")
-      .transform("target", {.position = {14.0f, 0.0f, 0.0f}})
+      .transform("target", {.location = {14.0f, 0.0f, 0.0f}})
       .selected_aliases({"source", "target"}, "target").edit_mode().selection_mode(quader::QuaderSelectionMode::Face);
 
   ASSERT_TRUE(s.api()
@@ -3923,7 +3923,7 @@ TEST(ProgrammaticBehaviorScenarioTests,
     s.given()
         .unit_box("box", "Mirrored Shift Rotate Extrude Box")
         .transform("box",
-                   {.position = {10.0f, 0.0f, 0.0f},
+                   {.location = {10.0f, 0.0f, 0.0f},
                     .scale = {-1.0f, 1.0f, 1.0f}})
         .edit_mode().selection_mode(quader::QuaderSelectionMode::Face);
 
@@ -3951,7 +3951,7 @@ TEST(ProgrammaticBehaviorScenarioTests, CombineMeshesConsumesTransformedSourcesI
   auto s = quader::test::BehaviorScenario::new_project();
   s.given()
       .unit_box("source", "Combine Source")
-      .transform("source", {.position = {10.0f, 0.0f, 0.0f}})
+      .transform("source", {.location = {10.0f, 0.0f, 0.0f}})
       .box("target",
            {.min = {13.0f, -1.0f, -1.0f},
             .max = {15.0f, 1.0f, 1.0f}},
@@ -3975,10 +3975,10 @@ TEST(ProgrammaticBehaviorScenarioTests,
   s.given()
       .unit_box("source", "Mirrored Combine Source")
       .transform("source",
-                 {.position = {10.0f, 0.0f, 0.0f},
+                 {.location = {10.0f, 0.0f, 0.0f},
                   .scale = {-1.0f, 1.0f, 1.0f}})
       .unit_box("target", "Mirrored Combine Target")
-      .transform("target", {.position = {14.0f, 0.0f, 0.0f}})
+      .transform("target", {.location = {14.0f, 0.0f, 0.0f}})
       .selection_mode(quader::QuaderSelectionMode::Object)
       .selected_aliases({"source", "target"}, "target");
 
@@ -4038,7 +4038,7 @@ TEST(ProgrammaticBehaviorScenarioTests, RayPickingAndContextClickSemanticsPreser
     {
       auto s = quader::test::BehaviorScenario::new_project();
       quader::QuaderTransform transform;
-      transform.position = {4.0f, 0.0f, 0.0f};
+      transform.location = {4.0f, 0.0f, 0.0f};
       s.given()
           .unit_box("box", "Transformed Pick Box")
           .transform("box", transform)

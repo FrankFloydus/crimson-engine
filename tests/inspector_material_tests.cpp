@@ -1221,7 +1221,8 @@ TEST(InspectorMaterialTests,
                   .ok());
   set_presentation(2u);
   panel.refresh(context);
-  EXPECT_NE(find_top_level_item(*tree, QStringLiteral("general")), nullptr);
+  EXPECT_EQ(find_top_level_item(*tree, QStringLiteral("general")), nullptr);
+  EXPECT_NE(find_top_level_item(*tree, QStringLiteral("visibility")), nullptr);
   EXPECT_NE(find_top_level_item(*tree, QStringLiteral("material")), nullptr);
 
   ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Group).ok());
@@ -1239,18 +1240,28 @@ TEST(InspectorMaterialTests,
   ASSERT_EQ(editor.selection().summary().selected_face_count, 1u);
   set_presentation(4u);
   panel.refresh(context);
-  ASSERT_EQ(tree->topLevelItemCount(), 1);
+  const auto expect_edit_properties = [&] {
+    EXPECT_EQ(find_top_level_item(*tree, QStringLiteral("general")), nullptr);
+    EXPECT_NE(find_top_level_item(*tree, QStringLiteral("visibility")), nullptr);
+    EXPECT_NE(find_top_level_item(*tree, QStringLiteral("transform")), nullptr);
+    EXPECT_NE(find_top_level_item(*tree, QStringLiteral("viewport")), nullptr);
+    EXPECT_NE(find_top_level_item(*tree, QStringLiteral("physics")), nullptr);
+    EXPECT_NE(find_top_level_item(*tree, QStringLiteral("components")), nullptr);
+  };
+  expect_edit_properties();
   EXPECT_NE(find_top_level_item(*tree, QStringLiteral("material")), nullptr);
 
   ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Vertex).ok());
   set_presentation(5u);
   panel.refresh(context);
-  EXPECT_EQ(tree->topLevelItemCount(), 0);
+  expect_edit_properties();
+  EXPECT_EQ(find_top_level_item(*tree, QStringLiteral("material")), nullptr);
 
   ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Edge).ok());
   set_presentation(6u);
   panel.refresh(context);
-  EXPECT_EQ(tree->topLevelItemCount(), 0);
+  expect_edit_properties();
+  EXPECT_EQ(find_top_level_item(*tree, QStringLiteral("material")), nullptr);
 }
 
 TEST(InspectorMaterialTests,

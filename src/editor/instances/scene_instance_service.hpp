@@ -264,7 +264,7 @@ private:
       return command_invalid_result("Instance definition could not be created.");
     }
     (void)scene().set_visible(definition_, false);
-    (void)scene().set_selectable(definition_, false);
+    (void)scene().set_selectability(definition_, false);
 
     occurrence_ =
         scene().create_entity(occurrence_name_, EntityKind::Instance);
@@ -513,7 +513,7 @@ public:
     }
     const std::optional<CreatePlan> plan = prepare_create(roots);
     if (!plan.has_value()) {
-      return invalid("Instance sources must be visible, unlocked, unnested meshes "
+      return invalid("Instance sources must be visible, selectable, unnested meshes "
                      "or mesh groups with a common parent in Object mode.");
     }
     auto command =
@@ -592,7 +592,7 @@ public:
     }
     const std::optional<CreatePlan> plan = prepare_create();
     if (!plan.has_value()) {
-      return invalid("Select one or more visible, unlocked, unnested meshes "
+      return invalid("Select one or more visible, selectable, unnested meshes "
                      "or mesh groups with a common parent in Object mode.");
     }
 
@@ -629,7 +629,7 @@ public:
     const std::optional<std::vector<EntityId>> selected =
         selected_occurrences();
     if (!selected.has_value() || !can_flatten_selected_instances()) {
-      return invalid("Select one or more unlocked instances in Object mode "
+      return invalid("Select one or more selectable instances in Object mode "
                      "with no active preview or instance edit scope.");
     }
 
@@ -810,7 +810,7 @@ private:
     }
     for (const EntityId occurrence : occurrences) {
       if (!valid_occurrence(occurrence) ||
-          scene_.is_effectively_locked(occurrence) ||
+          !scene_.is_effectively_selectable(occurrence) ||
           !scene_.is_effectively_visible(occurrence)) {
         return invalid("Instance materialization source is no longer eligible.");
       }
@@ -1008,7 +1008,7 @@ public:
     }
     sanitize_edit_context();
     if (!can_enter_instance_edit(occurrence)) {
-      return invalid("Instance edit requires one valid, unlocked occurrence "
+      return invalid("Instance edit requires one valid, selectable occurrence "
                      "in Object mode with no active preview.");
     }
     const InstanceOccurrenceComponent *component =
@@ -1132,7 +1132,7 @@ public:
     if (edit_context_.active()) {
       return modeling_.selection_mode() == ModelingSelectionMode::Object &&
              is_in_active_definition_scope(entity) &&
-             !scene_.is_effectively_locked(entity) &&
+             scene_.is_effectively_selectable(entity) &&
              (scene_.visibility(entity) == nullptr ||
               scene_.visibility(entity)->selectable);
     }
@@ -1294,7 +1294,7 @@ private:
 
     CreatePlan plan;
     plan.occurrence_parent = common_parent;
-    plan.occurrence_transform.position = transform_point(
+    plan.occurrence_transform.location = transform_point(
         *inverse_parent, bounds_center(*selected_bounds));
     const QMat4 occurrence_world = scene_transform_multiply(
         parent_world,
@@ -1355,7 +1355,7 @@ private:
     }
     bool contains_mesh = false;
     for (const EntityId entity : scene_.descendants(root, true)) {
-      if (!scene_.exists(entity) || scene_.is_effectively_locked(entity) ||
+      if (!scene_.exists(entity) || !scene_.is_effectively_selectable(entity) ||
           !scene_.is_effectively_visible(entity) ||
           scene_.instance_occurrence(entity) != nullptr ||
           scene_.is_instance_definition_entity(entity) ||
@@ -1394,7 +1394,7 @@ private:
     }
     for (const EntityId occurrence : selected) {
       if (!valid_occurrence(occurrence) ||
-          scene_.is_effectively_locked(occurrence) ||
+          !scene_.is_effectively_selectable(occurrence) ||
           !scene_.is_effectively_visible(occurrence)) {
         return std::nullopt;
       }

@@ -348,7 +348,7 @@ TEST(ComponentSelectionRuntimeTests,
   struct WallCase final {
     const char *name;
     bool reversed;
-    bool double_sided;
+    bool culling_disabled;
     bool reflected;
     bool occludes;
   };
@@ -356,8 +356,8 @@ TEST(ComponentSelectionRuntimeTests,
       WallCase{"culled back face", false, false, false, false},
       WallCase{"front face", true, false, false, true},
       WallCase{"double-sided back face", false, true, false, true},
-      WallCase{"reflected back face", false, false, true, true},
-      WallCase{"reflected front face", true, false, true, false}};
+      WallCase{"reflected back face", false, false, true, false},
+      WallCase{"reflected front face", true, false, true, true}};
   for (const bool complete_room : {true, false}) {
     SCOPED_TRACE(complete_room ? "saved room crossing camera plane"
                               : "bounded wall with certified GPU coverage");
@@ -397,13 +397,17 @@ TEST(ComponentSelectionRuntimeTests,
       ASSERT_TRUE(room.ok()) << room.error_message();
       ASSERT_TRUE(editor.scene().set_mesh_component(
           room.value().entity,
-          {.mesh = room.value().mesh, .double_sided = wall_case.double_sided}).ok());
+          {.mesh = room.value().mesh, .double_sided = !wall_case.culling_disabled}).ok());
+      auto viewport_settings = ViewportSettings::defaults();
+      (void)viewport_settings.set_bool_value(
+          ViewportBoolSettingId::BackfaceCulling, !wall_case.culling_disabled);
+      (void)session.viewport_workspace().update_control_defaults(viewport_settings, 1u);
       if (wall_case.reflected) {
         // Reflect around the wall's vertical midpoint to reverse world winding
         // without moving its footprint away from the tested camera rays.
         ASSERT_TRUE(editor.scene().set_transform(
             room.value().entity,
-            {.position = {0.0f, complete_room ? 13.0f : 21.0f, 0.0f},
+            {.location = {0.0f, complete_room ? 13.0f : 21.0f, 0.0f},
              .scale = {1.0f, -1.0f, 1.0f}}).ok());
       }
 

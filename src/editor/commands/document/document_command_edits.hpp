@@ -43,12 +43,12 @@ struct DocumentVisibilityEdit {
 };
 
 /**
- * Represents a Document Lock Edit value used by the editor document command layer.
+ * Represents a Document Selectability Edit value used by the editor document command layer.
  */
-struct DocumentLockEdit {
+struct DocumentSelectabilityEdit {
   EntityId entity = kInvalidEntityId;
-  bool before = false;
-  bool after = false;
+  bool before = true;
+  bool after = true;
 };
 
 /**
@@ -59,7 +59,7 @@ enum class DocumentSceneBatchOperationKind {
     Reparent,
     SetTransform,
     SetVisible,
-    SetLocked,
+    SetSelectable,
     SetMeshComponent,
 };
 
@@ -79,9 +79,9 @@ struct DocumentSceneBatchOperation {
 
 inline bool document_command_same_transform(const TransformComponent &left,
                                             const TransformComponent &right) {
-  return left.position.x == right.position.x &&
-         left.position.y == right.position.y &&
-         left.position.z == right.position.z &&
+  return left.location.x == right.location.x &&
+         left.location.y == right.location.y &&
+         left.location.z == right.location.z &&
          left.rotation_euler.x == right.rotation_euler.x &&
          left.rotation_euler.y == right.rotation_euler.y &&
          left.rotation_euler.z == right.rotation_euler.z &&

@@ -340,7 +340,7 @@ document_command_selected_root_entities(const SceneDocument &scene) {
     if (!selected_set.contains(entity)) {
       continue;
     }
-    if (scene.is_effectively_locked(entity)) {
+    if (!scene.is_effectively_selectable(entity)) {
       continue;
     }
 

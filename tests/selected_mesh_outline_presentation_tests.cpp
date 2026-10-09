@@ -1862,7 +1862,7 @@ TEST(SelectedMeshOutlinePresentationTests,
   EXPECT_EQ(harness.cache.stats().scene_wireframe_build_count, stats.scene_wireframe_build_count);
 
   ASSERT_TRUE(harness.document.set_transform(harness.selected_instance,
-      TransformComponent{.position = {5.0f, 2.0f, -1.0f}}));
+      TransformComponent{.location = {5.0f, 2.0f, -1.0f}}));
   ASSERT_TRUE(harness.update(true, 0u).selected_object_changed);
   const auto *moved = harness.cache.selected_object_snapshot();
   ASSERT_NE(moved, nullptr);

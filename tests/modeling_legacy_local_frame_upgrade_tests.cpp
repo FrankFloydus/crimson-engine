@@ -96,9 +96,9 @@ AssetRevisionSnapshot asset_revisions(const AssetRegistry &assets) {
 
 void expect_transform_exact(const TransformComponent &actual,
                             const TransformComponent &expected) {
-  EXPECT_EQ(actual.position.x, expected.position.x);
-  EXPECT_EQ(actual.position.y, expected.position.y);
-  EXPECT_EQ(actual.position.z, expected.position.z);
+  EXPECT_EQ(actual.location.x, expected.location.x);
+  EXPECT_EQ(actual.location.y, expected.location.y);
+  EXPECT_EQ(actual.location.z, expected.location.z);
   EXPECT_EQ(actual.rotation_euler.x, expected.rotation_euler.x);
   EXPECT_EQ(actual.rotation_euler.y, expected.rotation_euler.y);
   EXPECT_EQ(actual.rotation_euler.z, expected.rotation_euler.z);
@@ -214,7 +214,7 @@ TEST(ModelingLegacyLocalFrameUpgradeTests,
       scene.create_entity("Legacy Box", EntityKind::Mesh);
   ASSERT_TRUE(scene.set_transform(
       target, TransformComponent{
-                  .position = {-1.0f, 0.5f, 4.0f},
+                  .location = {-1.0f, 0.5f, 4.0f},
                   .rotation_euler = {0.0f, -kBakedAngle, 0.0f},
                   .scale = {1.0f, 1.0f, 1.0f},
               }));
@@ -230,7 +230,7 @@ TEST(ModelingLegacyLocalFrameUpgradeTests,
   const EntityId child = scene.create_empty("Child");
   ASSERT_TRUE(scene.set_transform(
       child, TransformComponent{
-                 .position = {0.5f, 2.0f, -1.0f},
+                 .location = {0.5f, 2.0f, -1.0f},
                  .rotation_euler = {0.2f, -0.1f, 0.3f},
                  .scale = {1.0f, 1.0f, 1.0f},
                  .custom_pivot = true,
@@ -423,7 +423,7 @@ TEST(ModelingLegacyLocalFrameUpgradeTests,
     ASSERT_TRUE(scene.set_transform(
         targets[index],
         TransformComponent{
-            .position = {static_cast<float>(index) * 8.0f, 0.0f, 0.0f},
+            .location = {static_cast<float>(index) * 8.0f, 0.0f, 0.0f},
             .rotation_euler = {0.0f, -kBakedAngle, 0.0f},
             .scale = {1.0f, 1.0f, 1.0f},
         }));
@@ -549,7 +549,7 @@ TEST(ModelingLegacyLocalFrameUpgradeTests,
     const EntityId target =
         scene.create_entity("Atomic Legacy Box", EntityKind::Mesh);
     const TransformComponent target_transform{
-        .position = {-1.0f, 0.5f, 4.0f},
+        .location = {-1.0f, 0.5f, 4.0f},
         .rotation_euler = {0.0f, -kBakedAngle, 0.0f},
         .scale = {1.0f, 1.0f, 1.0f},
     };
@@ -576,7 +576,7 @@ TEST(ModelingLegacyLocalFrameUpgradeTests,
 
     const EntityId child = scene.create_empty("Atomic Child");
     const TransformComponent child_transform{
-        .position = {0.5f, 2.0f, -1.0f},
+        .location = {0.5f, 2.0f, -1.0f},
         .rotation_euler = {0.2f, -0.1f, 0.3f},
         .scale = {1.25f, 0.75f, 1.5f},
         .custom_pivot = true,
@@ -705,7 +705,7 @@ TEST(ModelingLegacyLocalFrameUpgradeTests,
   const EntityId target =
       scene.create_entity("In-place Atomic Box", EntityKind::Mesh);
   const TransformComponent transform_before{
-      .position = {-1.0f, 0.5f, 4.0f},
+      .location = {-1.0f, 0.5f, 4.0f},
       .rotation_euler = {0.0f, -kBakedAngle, 0.0f},
       .scale = {1.0f, 1.0f, 1.0f},
   };

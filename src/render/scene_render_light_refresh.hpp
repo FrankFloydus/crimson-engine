@@ -29,6 +29,7 @@ struct RenderSceneSnapshot;
     RenderSceneBindingKey scene_binding = {},
     std::uint64_t project_material_revision = 0u,
     RenderInstanceEditScope instance_edit_scope = {},
-    const ViewportLocalVisibilitySnapshot *local_visibility = nullptr);
+    const ViewportLocalVisibilitySnapshot *local_visibility = nullptr,
+    bool backface_culling_enabled = true);
 
 } // namespace quader

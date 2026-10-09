@@ -260,18 +260,18 @@ TEST(PathArrayToolServiceTests,
   const QuaderApiVoidResult blocked_path_parent =
       harness.editor.scene().set_transform(
           path_grandparent.id,
-          {.position = {3.0F, 0.0F, 0.0F}});
+          {.location = {3.0F, 0.0F, 0.0F}});
   EXPECT_FALSE(blocked_path_parent.ok());
   const QuaderApiVoidResult blocked_source_parent =
       harness.editor.scene().set_transform(
           source_ancestor.id,
-          {.position = {0.0F, 4.0F, 0.0F}});
+          {.location = {0.0F, 4.0F, 0.0F}});
   EXPECT_FALSE(blocked_source_parent.ok());
   EXPECT_FALSE(harness.session.history().can_undo());
   const QVec3 path_parent_position =
-      harness.session.scene().transform(path_grandparent.id)->position;
+      harness.session.scene().transform(path_grandparent.id)->location;
   const QVec3 source_parent_position =
-      harness.session.scene().transform(source_ancestor.id)->position;
+      harness.session.scene().transform(source_ancestor.id)->location;
   EXPECT_FLOAT_EQ(path_parent_position.x, 0.0F);
   EXPECT_FLOAT_EQ(path_parent_position.y, 0.0F);
   EXPECT_FLOAT_EQ(path_parent_position.z, 0.0F);
@@ -286,7 +286,7 @@ TEST(PathArrayToolServiceTests,
   // and restore the exact activation selection memento.
   ASSERT_TRUE(harness.session.scene().set_transform(
       path_grandparent.id,
-      TransformComponent{.position = {1.0F, 0.0F, 0.0F}}));
+      TransformComponent{.location = {1.0F, 0.0F, 0.0F}}));
   EXPECT_FALSE(tool.active());
   const CommandResult refreshed = tool.refresh();
   ASSERT_TRUE(refreshed.ok) << refreshed.message;
@@ -872,7 +872,7 @@ TEST(PathArrayToolServiceTests,
   const QQuat rotation_step = quat_from_euler_radians(
       {0.0F, 0.0F, 30.0F * std::numbers::pi_v<float> / 180.0F});
   const QMat4 expected_local = compose_transform(QTransform{
-      .position = transform_point(
+      .location = transform_point(
           inverse(harness.session.scene().world_transform_matrix(parent.id)),
           {2.0F, 0.0F, 0.0F}),
       .rotation = normalize(source_rotation * rotation_step),
@@ -1084,7 +1084,7 @@ TEST(PathArrayToolServiceTests,
       harness.editor.scene().reparent(child.entity, source_root.id, false).ok());
   ASSERT_TRUE(harness.editor.scene()
                   .set_transform(source_root.id,
-                                 {.position = {3.0F, 2.0F, 0.0F},
+                                 {.location = {3.0F, 2.0F, 0.0F},
                                   .rotation_euler = {0.0F, 0.0F, 0.25F},
                                   .scale = {1.25F, 0.75F, 1.0F}})
                   .ok());

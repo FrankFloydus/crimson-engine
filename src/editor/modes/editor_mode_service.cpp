@@ -103,14 +103,14 @@ std::vector<EditorModeParticipant> EditorModeService::entry_participants() const
       if (!scene_hierarchy_segment_is_selectable(scene, entity,
                                                   instance_scope.definition) ||
           !scene.is_effectively_visible(instance_scope.occurrence) ||
-          scene.is_effectively_locked(instance_scope.occurrence) ||
+          !scene.is_effectively_selectable(instance_scope.occurrence) ||
           !scene_hierarchy_segment_is_selectable_ignoring_visibility(
               scene, instance_scope.occurrence)) {
         continue;
       }
     } else if (instance_scope.active() ||
                !scene.is_effectively_visible(entity) ||
-               scene.is_effectively_locked(entity)) {
+               !scene.is_effectively_selectable(entity)) {
       continue;
     }
     // Only selected groups expand membership. Their complete hierarchy is

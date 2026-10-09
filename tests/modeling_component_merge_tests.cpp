@@ -398,10 +398,10 @@ protected:
     ASSERT_TRUE(editor_.scene().reparent(survivor_.entity, source_.entity).ok());
     const auto child = editor_.scene().create_entity({
         .name = "Source Child", .parent = source_.entity,
-        .transform = {.position = {3.0F, 2.0F, 0.0F}}});
+        .transform = {.location = {3.0F, 2.0F, 0.0F}}});
     ASSERT_TRUE(child.ok()) << child.error_message();
     ASSERT_TRUE(editor_.object(source_).set_transform(
-        {.position = {5.0F, 2.0F, -1.0F}, .scale = {2.0F, 3.0F, 1.0F}}).ok());
+        {.location = {5.0F, 2.0F, -1.0F}, .scale = {2.0F, 3.0F, 1.0F}}).ok());
     const auto child_world_before = project_.active_scene()->session->scene().world_transform_matrix(child.value().id);
     const auto survivor_world_before = project_.active_scene()->session->scene().world_transform_matrix(survivor_.entity);
     if (merge_edges) {
@@ -494,12 +494,12 @@ protected:
     ASSERT_TRUE(third.ok()) << third.error_message();
     survivor_ = third.value();
     ASSERT_TRUE(editor_.object(source_).set_transform(
-        {.position = {-5.0F, 1.0F, 0.0F}, .scale = {2.0F, 1.0F, 1.0F}}).ok());
+        {.location = {-5.0F, 1.0F, 0.0F}, .scale = {2.0F, 1.0F, 1.0F}}).ok());
     ASSERT_TRUE(editor_.object(second.value()).set_transform(
-        {.position = {4.0F, -2.0F, 1.0F}, .rotation_euler = {0.0F, 0.0F, 90.0F},
+        {.location = {4.0F, -2.0F, 1.0F}, .rotation_euler = {0.0F, 0.0F, 90.0F},
          .scale = {2.0F, 1.0F, 3.0F}}).ok());
     ASSERT_TRUE(editor_.object(survivor_).set_transform(
-        {.position = {2.0F, 5.0F, -1.0F}, .scale = {-1.0F, 2.0F, 1.0F}}).ok());
+        {.location = {2.0F, 5.0F, -1.0F}, .scale = {-1.0F, 2.0F, 1.0F}}).ok());
     const QVec3 first_local{1.0F, 1.0F, 1.0F};
     const QVec3 second_local{-1.0F, 1.0F, 1.0F};
     const QVec3 third_local{1.0F, -1.0F, 1.0F};
@@ -582,7 +582,7 @@ TEST_F(ModelingComponentMergeTests, ExtractedCoincidentBoundaryEdgesMergeAndUndo
 TEST_F(ModelingComponentMergeTests, DistancePreviewCanEnterAndLeaveCrossObjectMergeWithoutHistory) {
   split_positive_x_face(true);
   ASSERT_FALSE(HasFatalFailure());
-  ASSERT_TRUE(editor_.object(survivor_).set_transform({.position = {0.5F, 0.0F, 0.0F}}).ok());
+  ASSERT_TRUE(editor_.object(survivor_).set_transform({.location = {0.5F, 0.0F, 0.0F}}).ok());
   select_boundary_vertices(true);
   ASSERT_FALSE(HasFatalFailure());
   const auto before = test::capture_command_observable_state(editor_);
@@ -613,7 +613,7 @@ TEST_F(ModelingComponentMergeTests, ExtractedMergePreservesReflectedSourceWorldG
   split_positive_x_face(true);
   ASSERT_FALSE(HasFatalFailure());
   ASSERT_TRUE(editor_.object(source_).set_transform(
-      {.position = {2.0F, 0.0F, 0.0F}, .scale = {-1.0F, 1.0F, 1.0F}}).ok());
+      {.location = {2.0F, 0.0F, 0.0F}, .scale = {-1.0F, 1.0F, 1.0F}}).ok());
   select_boundary_vertices(true);
   ASSERT_FALSE(HasFatalFailure());
   const auto before = test::capture_command_observable_state(editor_);
@@ -1239,7 +1239,7 @@ TEST_F(ModelingComponentMergeTests, InsertEdgeLoopSplicesNgonCapsAndReplaysOneNa
   ASSERT_TRUE(created.ok()) << created.error_message();
   const auto object = created.value();
   ASSERT_TRUE(editor_.object(object).set_transform(
-      {.position = {-7.5F, 0.5F, -10.5F}}).ok());
+      {.location = {-7.5F, 0.5F, -10.5F}}).ok());
   enter_edit_for_all_meshes();
   ASSERT_FALSE(HasFatalFailure());
   ASSERT_TRUE(editor_.selection().select_faces(object, {221, 3, 229, 224, 228}).ok());

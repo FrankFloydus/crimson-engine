@@ -121,8 +121,8 @@ constexpr std::size_t kGeometryCacheCapacity = 64u;
     return true;
   case SceneSurfaceEligibility::Selectable:
     return participant.selectable;
-  case SceneSurfaceEligibility::SelectableUnlocked:
-    return participant.selectable && !participant.effectively_locked;
+  case SceneSurfaceEligibility::EffectivelySelectable:
+    return participant.selectable && participant.effectively_selectable;
   }
   return false;
 }
@@ -250,6 +250,20 @@ struct FrozenSurfaceParticipant final {
          dot(area_normal, world_direction) < 0.0f;
 }
 
+// Filament flips raster front faces for a negative entity determinant. Testing
+// the local triangle against the inverse-transformed ray preserves that policy
+// independently of the authored world-winding selection filter above.
+[[nodiscard]] bool rendered_surface_triangle_is_front_facing(
+    const NeutralTriangle &triangle, QVec3 local_direction) {
+  const QVec3 a{triangle.a.x, triangle.a.y, triangle.a.z};
+  const QVec3 b{triangle.b.x, triangle.b.y, triangle.b.z};
+  const QVec3 c{triangle.c.x, triangle.c.y, triangle.c.z};
+  const QVec3 area_normal = cross(b - a, c - a);
+  return finite_vector(area_normal) &&
+         length_squared(area_normal) > kRayEpsilon * kRayEpsilon &&
+         dot(area_normal, local_direction) < 0.0f;
+}
+
 /// Identifies every owner revision that can change surface participation.
 struct SurfaceSnapshotFingerprint final {
   const SceneDocument *scene = nullptr;
@@ -260,6 +274,7 @@ struct SurfaceSnapshotFingerprint final {
   std::uint64_t mesh_binding_revision = 0u;
   std::uint64_t mesh_asset_revision = 0u;
   std::uint64_t local_visibility_revision = 0u;
+  bool backface_culling_enabled = true;
 
   [[nodiscard]] bool
   operator==(const SurfaceSnapshotFingerprint &) const = default;
@@ -329,7 +344,7 @@ void append_landmarks(std::vector<SceneSurfaceLandmark> &landmarks,
         .kind = SceneSurfaceLandmarkKind::FaceCenter,
         .element_key = offset / 3u,
         .selectable = participant.selectable,
-        .effectively_locked = participant.effectively_locked,
+        .effectively_selectable = participant.effectively_selectable,
     });
     vertex_normal_sums[first] += area_normal;
     vertex_normal_sums[second] += area_normal;
@@ -362,7 +377,7 @@ void append_landmarks(std::vector<SceneSurfaceLandmark> &landmarks,
         .kind = SceneSurfaceLandmarkKind::Vertex,
         .element_key = index,
         .selectable = participant.selectable,
-        .effectively_locked = participant.effectively_locked,
+        .effectively_selectable = participant.effectively_selectable,
     });
   }
   for (const SurfaceEdgeAccumulator &edge : edges) {
@@ -374,7 +389,7 @@ void append_landmarks(std::vector<SceneSurfaceLandmark> &landmarks,
         .kind = SceneSurfaceLandmarkKind::EdgeMidpoint,
         .element_key = edge.key,
         .selectable = participant.selectable,
-        .effectively_locked = participant.effectively_locked,
+        .effectively_selectable = participant.effectively_selectable,
     });
   }
 }
@@ -408,17 +423,21 @@ struct SceneSurfaceQuerySnapshot::Data final {
 class SceneSurfaceQuery::Impl final {
 public:
   Impl(const SceneDocument &scene, const AssetRegistry &assets,
-       const ViewportLocalVisibilityService &local_visibility)
+       const ViewportLocalVisibilityService &local_visibility,
+       std::function<bool()> backface_culling_provider)
       : scene_(scene), assets_(assets),
-        local_visibility_(&local_visibility) {}
+        local_visibility_(&local_visibility),
+        backface_culling_provider_(std::move(backface_culling_provider)) {}
 
   Impl(const SceneDocument &scene, const AssetRegistry &assets,
        std::function<bool(EntityId)> local_visibility_filter,
-       std::function<std::uint64_t()> local_visibility_revision_provider)
+       std::function<std::uint64_t()> local_visibility_revision_provider,
+       std::function<bool()> backface_culling_provider)
       : scene_(scene), assets_(assets),
         local_visibility_filter_(std::move(local_visibility_filter)),
         local_visibility_revision_provider_(
-            std::move(local_visibility_revision_provider)) {}
+            std::move(local_visibility_revision_provider)),
+        backface_culling_provider_(std::move(backface_culling_provider)) {}
 
   [[nodiscard]] SceneSurfaceQuerySnapshot snapshot() const {
     std::optional<ViewportLocalVisibilitySnapshot> local_snapshot;
@@ -440,6 +459,8 @@ public:
         .mesh_binding_revision = scene_.mesh_binding_revision(),
         .mesh_asset_revision = assets_.mesh_material_usage_revision(),
         .local_visibility_revision = local_visibility_revision,
+        .backface_culling_enabled = !backface_culling_provider_ ||
+                                    backface_culling_provider_(),
     };
     if (snapshot_ && fingerprint_valid_ && fingerprint == fingerprint_) {
       return SceneSurfaceQuery::snapshot_from_data(snapshot_);
@@ -457,7 +478,7 @@ public:
       }
       return !local_visibility_filter_ || local_visibility_filter_(entity);
     };
-    build_participants(local_allows, *next);
+    build_participants(local_allows, !fingerprint.backface_culling_enabled, *next);
     build_tlas(*next);
     snapshot_ = std::move(next);
     fingerprint_ = fingerprint;
@@ -578,7 +599,7 @@ private:
       SceneSurfaceQuerySnapshot::Data &target,
       SceneSurfaceParticipantId id, const QMat4 &world_from_local,
       const MeshAsset &mesh, bool selectable,
-      bool effectively_locked, bool double_sided) const {
+      bool effectively_selectable, bool double_sided) const {
     const std::optional<QMat4> local_from_world =
         try_scene_matrix_inverse(world_from_local);
     SurfaceGeometryView source = surface_geometry_view(mesh);
@@ -597,7 +618,7 @@ private:
         .world_bounds = *bounds,
         .triangle_count = geometry->bvh.primitive_count(),
         .selectable = selectable,
-        .effectively_locked = effectively_locked,
+        .effectively_selectable = effectively_selectable,
         .double_sided = double_sided,
     };
     target.participants.push_back({
@@ -609,7 +630,7 @@ private:
   }
 
   void build_participants(
-      const std::function<bool(EntityId)> &local_allows,
+      const std::function<bool(EntityId)> &local_allows, bool double_sided,
       SceneSurfaceQuerySnapshot::Data &target) const {
     QDR_PROFILE_SCOPE("Scene surface query collect participants");
     const std::shared_ptr<const SceneMeshOccurrenceProjectionSnapshot>
@@ -631,7 +652,7 @@ private:
            .geometry_entity = occurrence.geometry_entity,
            .definition_entity = occurrence.definition_entity},
           occurrence.world_from_geometry, *mesh, occurrence.selectable,
-          occurrence.effectively_locked, component->double_sided);
+          occurrence.effectively_selectable, double_sided);
     }
 
     std::ranges::sort(
@@ -682,6 +703,7 @@ private:
   const ViewportLocalVisibilityService *local_visibility_ = nullptr;
   std::function<bool(EntityId)> local_visibility_filter_;
   std::function<std::uint64_t()> local_visibility_revision_provider_;
+  std::function<bool()> backface_culling_provider_;
   mutable std::vector<GeometryCacheEntry> geometry_cache_;
   mutable std::uint64_t geometry_use_sequence_ = 0u;
   mutable std::uint64_t snapshot_revision_ = 0u;
@@ -815,19 +837,20 @@ std::optional<SceneSurfaceHit> SceneSurfaceQuerySnapshot::nearest_hit(
         options.max_distance = traversal_max_distance;
         options.intersection_epsilon = kRayEpsilon;
         options.tie_tolerance = kDistanceTieTolerance;
-        const bool include_backfaces =
-            request.include_backfaces &&
-            (!request.respect_render_sidedness ||
-             participant.public_record.double_sided);
+        const bool cull_render_backfaces = request.respect_render_sidedness &&
+            !participant.public_record.double_sided;
         const quader_geometry::QTriangleBvhHit<float> local_hit =
             participant.geometry->bvh.nearest_hit(
                 NeutralRay{neutral_vector(local_origin),
                            neutral_vector(local_direction)},
                 options, scratch.impl_->blas,
-                [&participant, &world_direction, include_backfaces](
+                [&participant, &world_direction, &local_direction,
+                 &request, cull_render_backfaces](
                     std::size_t, const NeutralTriangle &triangle) {
-                  return include_backfaces || surface_triangle_is_front_facing(
-                      participant, triangle, world_direction);
+                  return (request.include_backfaces || surface_triangle_is_front_facing(
+                              participant, triangle, world_direction)) &&
+                         (!cull_render_backfaces || rendered_surface_triangle_is_front_facing(
+                              triangle, local_direction));
                 });
         if (!local_hit.hit ||
             local_hit.triangle_index >= participant.geometry->triangles.size()) {
@@ -882,16 +905,20 @@ std::optional<SceneSurfaceHit> SceneSurfaceQuerySnapshot::nearest_hit(
 
 SceneSurfaceQuery::SceneSurfaceQuery(
     const SceneDocument &scene, const AssetRegistry &assets,
-    const ViewportLocalVisibilityService &local_visibility)
-    : impl_(std::make_unique<Impl>(scene, assets, local_visibility)) {}
+    const ViewportLocalVisibilityService &local_visibility,
+    std::function<bool()> backface_culling_provider)
+    : impl_(std::make_unique<Impl>(scene, assets, local_visibility,
+                                  std::move(backface_culling_provider))) {}
 
 SceneSurfaceQuery::SceneSurfaceQuery(
     const SceneDocument &scene, const AssetRegistry &assets,
     std::function<bool(EntityId)> local_visibility_filter,
-    std::function<std::uint64_t()> local_visibility_revision_provider)
+    std::function<std::uint64_t()> local_visibility_revision_provider,
+    std::function<bool()> backface_culling_provider)
     : impl_(std::make_unique<Impl>(
           scene, assets, std::move(local_visibility_filter),
-          std::move(local_visibility_revision_provider))) {}
+          std::move(local_visibility_revision_provider),
+          std::move(backface_culling_provider))) {}
 
 SceneSurfaceQuery::~SceneSurfaceQuery() = default;
 SceneSurfaceQuery::SceneSurfaceQuery(SceneSurfaceQuery &&) noexcept = default;
@@ -1012,12 +1039,12 @@ std::optional<float> SceneSurfaceQuerySnapshot::selection_depth_triangle_distanc
   const auto &participant = data_->participants[participant_index];
   const auto &triangle = participant.geometry->triangles[triangle_index];
   const QVec3 world_direction = normalize_or_zero(direction);
-  if (!participant.public_record.double_sided &&
-      !surface_triangle_is_front_facing(participant, triangle, world_direction)) {
-    return {};
-  }
   const QVec3 local_origin = transform_point(participant.local_from_world, origin);
   const QVec3 local_direction = transform_vector(participant.local_from_world, world_direction);
+  if (!participant.public_record.double_sided &&
+      !rendered_surface_triangle_is_front_facing(triangle, local_direction)) {
+    return {};
+  }
   if (!finite_vector(local_origin) || !finite_vector(local_direction) ||
       length_squared(local_direction) <= kRayEpsilon * kRayEpsilon) return {};
   const auto hit = quader_geometry::intersect_ray_triangle<float>(

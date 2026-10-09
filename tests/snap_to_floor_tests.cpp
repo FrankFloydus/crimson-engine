@@ -210,7 +210,7 @@ void expect_vec3_near(quader::QVec3 actual, quader::QVec3 expected,
 void expect_transform_near(const quader::TransformComponent &actual,
                            const quader::TransformComponent &expected,
                            float epsilon = kEpsilon) {
-  expect_vec3_near(actual.position, expected.position, epsilon);
+  expect_vec3_near(actual.location, expected.location, epsilon);
   expect_vec3_near(actual.rotation_euler, expected.rotation_euler, epsilon);
   expect_vec3_near(actual.scale, expected.scale, epsilon);
   EXPECT_EQ(actual.custom_pivot, expected.custom_pivot);
@@ -378,21 +378,21 @@ TEST(SnapToFloorTests,
   const quader::QuaderModelingObjectRef source = create_box(
       harness, "Asymmetric Source",
       {.min = {2.0f, -2.0f, 4.0f}, .max = {4.0f, 1.0f, 6.0f}},
-      {.position = {0.0f, 10.0f, 0.0f}});
+      {.location = {0.0f, 10.0f, 0.0f}});
   static_cast<void>(create_box(
       harness, "Lower Receiver",
       {.min = {2.25f, -0.25f, 4.25f}, .max = {3.75f, 0.25f, 5.75f}},
-      {.position = {0.0f, 1.0f, 0.0f}}));
+      {.location = {0.0f, 1.0f, 0.0f}}));
   const quader::QuaderModelingObjectRef nearest = create_box(
       harness, "Nearest Receiver",
       {.min = {2.25f, -0.25f, 4.25f}, .max = {3.75f, 0.25f, 5.75f}},
-      {.position = {0.0f, 4.0f, 0.0f}});
+      {.location = {0.0f, 4.0f, 0.0f}});
   // A higher decoy below the entity pivot distinguishes the AABB-bottom-center
   // ray from a ray cast through the object's transform origin.
   static_cast<void>(create_box(
       harness, "Pivot Decoy",
       {.min = {-0.5f, -0.25f, -0.5f}, .max = {0.5f, 0.25f, 0.5f}},
-      {.position = {0.0f, 6.0f, 0.0f}}));
+      {.location = {0.0f, 6.0f, 0.0f}}));
   ASSERT_TRUE(harness.editor.selection().select_object(source).ok());
   ASSERT_TRUE(harness.editor.modeling().can_snap_selected_meshes_to_floor());
 
@@ -434,13 +434,13 @@ TEST(SnapToFloorTests,
       .min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}};
   const quader::QuaderModelingObjectRef lower =
       create_box(harness, "Lower Source", box_bounds,
-                 {.position = {0.0f, 3.0f, 0.0f}});
+                 {.location = {0.0f, 3.0f, 0.0f}});
   const quader::QuaderModelingObjectRef upper =
       create_box(harness, "Upper Source", box_bounds,
-                 {.position = {0.0f, 7.0f, 0.0f}});
+                 {.location = {0.0f, 7.0f, 0.0f}});
   const quader::QuaderModelingObjectRef below =
       create_box(harness, "Below Floor Source", box_bounds,
-                 {.position = {0.0f, -4.0f, 0.0f}});
+                 {.location = {0.0f, -4.0f, 0.0f}});
   ASSERT_TRUE(harness.editor.selection()
                   .select_objects({lower.entity, upper.entity, below.entity},
                                   lower.entity)
@@ -461,17 +461,17 @@ TEST(SnapToFloorTests, ObjectIncludesLockedReceiversAndIgnoresHiddenOnes) {
   const quader::QuaderModelingObjectRef source = create_box(
       harness, "Source", {.min = {-1.0f, -1.0f, -1.0f},
                           .max = {1.0f, 1.0f, 1.0f}},
-      {.position = {0.0f, 10.0f, 0.0f}});
+      {.location = {0.0f, 10.0f, 0.0f}});
   const quader::QuaderModelingObjectRef hidden = create_box(
       harness, "Hidden Receiver", {.min = {-3.0f, -0.5f, -3.0f},
                                     .max = {3.0f, 0.5f, 3.0f}},
-      {.position = {0.0f, 6.0f, 0.0f}});
+      {.location = {0.0f, 6.0f, 0.0f}});
   const quader::QuaderModelingObjectRef locked = create_box(
       harness, "Locked Receiver", {.min = {-3.0f, -0.5f, -3.0f},
                                     .max = {3.0f, 0.5f, 3.0f}},
-      {.position = {0.0f, 3.0f, 0.0f}});
+      {.location = {0.0f, 3.0f, 0.0f}});
   ASSERT_TRUE(harness.editor.scene().set_visible(hidden.entity, false).ok());
-  ASSERT_TRUE(harness.editor.scene().set_locked(locked.entity, true).ok());
+  ASSERT_TRUE(harness.editor.scene().set_selectable(locked.entity, false).ok());
   ASSERT_TRUE(harness.editor.selection().select_object(source).ok());
 
   const quader::QuaderApiVoidResult snapped =
@@ -490,7 +490,7 @@ TEST(SnapToFloorTests,
   parent_args.name = "Affine Parent";
   parent_args.kind = quader::QuaderEntityKind::Empty;
   parent_args.transform = {
-      .position = {3.0f, -2.0f, 4.0f},
+      .location = {3.0f, -2.0f, 4.0f},
       .rotation_euler = {0.18f, -0.37f, 0.24f},
       .scale = {1.6f, 0.75f, 1.3f},
   };
@@ -500,13 +500,13 @@ TEST(SnapToFloorTests,
   const quader::QuaderModelingObjectRef source = create_box(
       harness, "Parented Source",
       {.min = {-1.5f, -1.0f, -0.75f}, .max = {1.5f, 1.0f, 0.75f}},
-      {.position = {5.0f, 9.0f, -3.0f},
+      {.location = {5.0f, 9.0f, -3.0f},
        .rotation_euler = {-0.16f, 0.29f, 0.21f},
        .scale = {1.25f, 0.8f, 1.1f}});
   const quader::QuaderModelingObjectRef receiver = create_box(
       harness, "Wide Receiver",
       {.min = {-30.0f, -0.5f, -30.0f}, .max = {30.0f, 0.5f, 30.0f}},
-      {.position = {0.0f, 2.0f, 0.0f}});
+      {.location = {0.0f, 2.0f, 0.0f}});
   ASSERT_TRUE(
       harness.editor.scene().reparent(source.entity, parent.value().id, true).ok());
   ASSERT_TRUE(harness.editor.selection().select_object(source).ok());
@@ -549,7 +549,7 @@ TEST(SnapToFloorTests, ObjectExactNoOpDoesNotPublishOrAddHistory) {
   const quader::QuaderModelingObjectRef source = create_box(
       harness, "Already Floored", {.min = {-1.0f, -1.0f, -1.0f},
                                     .max = {1.0f, 1.0f, 1.0f}},
-      {.position = {2.0f, 1.0f, -4.0f}});
+      {.location = {2.0f, 1.0f, -4.0f}});
   ASSERT_TRUE(harness.editor.selection().select_object(source).ok());
   const quader::TransformComponent transform_before =
       *harness.session.scene().transform(source.entity);
@@ -574,11 +574,11 @@ TEST(SnapToFloorTests, ObjectReceiverBelowWorldFloorStillTakesPrecedence) {
   const quader::QuaderModelingObjectRef source = create_box(
       harness, "Source Above Floor",
       {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
-      {.position = {0.0f, 4.0f, 0.0f}});
+      {.location = {0.0f, 4.0f, 0.0f}});
   const quader::QuaderModelingObjectRef receiver = create_box(
       harness, "Receiver Below Floor",
       {.min = {-3.0f, -0.5f, -3.0f}, .max = {3.0f, 0.5f, 3.0f}},
-      {.position = {0.0f, -4.0f, 0.0f}});
+      {.location = {0.0f, -4.0f, 0.0f}});
   ASSERT_TRUE(harness.editor.selection().select_object(source).ok());
 
   const quader::QuaderApiVoidResult snapped =
@@ -597,7 +597,7 @@ TEST(SnapToFloorTests,
       .min = {-3.0f, -0.5f, -3.0f}, .max = {3.0f, 0.5f, 3.0f}};
   const quader::QuaderModelingObjectRef receiver_member = create_box(
       harness, "Occurrence Receiver Member", kReceiverBounds,
-      {.position = {0.0f, 3.0f, 0.0f}});
+      {.location = {0.0f, 3.0f, 0.0f}});
   ASSERT_TRUE(harness.editor.selection().select_object(receiver_member).ok());
   const quader::QuaderApiResult<quader::QuaderInstanceCreateResult>
       receiver_instance =
@@ -617,7 +617,7 @@ TEST(SnapToFloorTests,
   const quader::QuaderModelingObjectRef direct_source = create_box(
       harness, "Direct Source",
       {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
-      {.position = {0.0f, 9.0f, 0.0f}});
+      {.location = {0.0f, 9.0f, 0.0f}});
   ASSERT_TRUE(harness.editor.selection().select_object(direct_source).ok());
   ASSERT_TRUE(
       harness.editor.modeling().snap_selected_meshes_to_floor().ok());
@@ -628,7 +628,7 @@ TEST(SnapToFloorTests,
       .min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}};
   const quader::QuaderModelingObjectRef source_member = create_box(
       harness, "Occurrence Source Member", kSourceBounds,
-      {.position = {10.0f, 8.0f, 0.0f}});
+      {.location = {10.0f, 8.0f, 0.0f}});
   ASSERT_TRUE(harness.editor.selection().select_object(source_member).ok());
   const quader::QuaderApiResult<quader::QuaderInstanceCreateResult>
       source_instance =
@@ -643,10 +643,10 @@ TEST(SnapToFloorTests,
   ASSERT_TRUE(sibling.ok()) << sibling.error_message();
   quader::TransformComponent sibling_transform =
       *harness.session.scene().transform(sibling.value().id);
-  sibling_transform.position.x += 20.0f;
+  sibling_transform.location.x += 20.0f;
   ASSERT_TRUE(harness.editor.scene()
                   .set_transform(sibling.value().id,
-                                 {.position = sibling_transform.position,
+                                 {.location = sibling_transform.location,
                                   .rotation_euler =
                                       sibling_transform.rotation_euler,
                                   .scale = sibling_transform.scale})
@@ -654,7 +654,7 @@ TEST(SnapToFloorTests,
   const quader::QuaderModelingObjectRef direct_receiver = create_box(
       harness, "Direct Receiver For Occurrence",
       {.min = {7.0f, -0.5f, -3.0f}, .max = {13.0f, 0.5f, 3.0f}},
-      {.position = {0.0f, 1.0f, 0.0f}});
+      {.location = {0.0f, 1.0f, 0.0f}});
   ASSERT_TRUE(
       harness.editor.selection().select_object(source_occurrence).ok());
   const quader::TransformComponent member_before =
@@ -699,17 +699,17 @@ TEST(SnapToFloorTests,
       .min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}};
   const quader::QuaderModelingObjectRef parent =
       create_box(harness, "Selected Root", kUnitBounds,
-                 {.position = {0.0f, 6.0f, 0.0f}});
+                 {.location = {0.0f, 6.0f, 0.0f}});
   const quader::QuaderModelingObjectRef selected_child =
       create_box(harness, "Selected Child", kUnitBounds,
-                 {.position = {0.0f, 9.0f, 0.0f}});
+                 {.location = {0.0f, 9.0f, 0.0f}});
   ASSERT_TRUE(harness.editor.scene()
                   .reparent(selected_child.entity, parent.entity, true)
                   .ok());
 
   const quader::QuaderModelingObjectRef nested_member =
       create_box(harness, "Nested Occurrence Member", kUnitBounds,
-                 {.position = {0.0f, 4.0f, 0.0f}});
+                 {.location = {0.0f, 4.0f, 0.0f}});
   ASSERT_TRUE(harness.editor.selection().select_object(nested_member).ok());
   const quader::QuaderApiResult<quader::QuaderInstanceCreateResult> instance =
       harness.editor.modeling().create_instance_from_selection();
@@ -720,7 +720,7 @@ TEST(SnapToFloorTests,
       harness.editor.scene().reparent(occurrence, parent.entity, true).ok());
   const quader::QuaderModelingObjectRef independent =
       create_box(harness, "Independent Selected Source", kUnitBounds,
-                 {.position = {0.0f, 12.0f, 0.0f}});
+                 {.location = {0.0f, 12.0f, 0.0f}});
   ASSERT_TRUE(harness.editor.selection()
                   .select_objects(
                       {parent.entity, selected_child.entity,
@@ -758,14 +758,14 @@ TEST(SnapToFloorTests,
 TEST(SnapToFloorTests, ImportedStandaloneMeshIsAReceiver) {
   SnapToFloorHarness harness;
   const quader::QuaderEntityRef receiver = create_standalone_quad_mesh(
-      harness, "Imported Receiver", {.position = {0.0f, 2.25f, 0.0f}});
+      harness, "Imported Receiver", {.location = {0.0f, 2.25f, 0.0f}});
   EXPECT_FALSE(harness.editor.query()
                    .modeling_object_for_entity(receiver.id)
                    .has_value());
   const quader::QuaderModelingObjectRef source = create_box(
       harness, "Modeled Source",
       {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
-      {.position = {0.0f, 8.0f, 0.0f}});
+      {.location = {0.0f, 8.0f, 0.0f}});
   ASSERT_TRUE(harness.editor.selection().select_object(source).ok());
 
   const quader::QuaderApiVoidResult snapped =
@@ -779,7 +779,7 @@ TEST(SnapToFloorTests,
      ImportedStandaloneMeshCanBeSelectedSourceWithUndoRedo) {
   SnapToFloorHarness harness;
   const quader::QuaderEntityRef source = create_standalone_quad_mesh(
-      harness, "Imported Source", {.position = {3.0f, 6.0f, -2.0f}});
+      harness, "Imported Source", {.location = {3.0f, 6.0f, -2.0f}});
   ASSERT_FALSE(harness.editor.query()
                    .modeling_object_for_entity(source.id)
                    .has_value());
@@ -811,12 +811,12 @@ TEST(SnapToFloorTests,
   const quader::QuaderModelingObjectRef valid_source = create_box(
       harness, "Valid Source",
       {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
-      {.position = {-5.0f, 6.0f, 0.0f}});
+      {.location = {-5.0f, 6.0f, 0.0f}});
   quader::QuaderCreateEntityArgs parent_args;
   parent_args.name = "Singular Parent";
   parent_args.kind = quader::QuaderEntityKind::Empty;
   parent_args.transform = {
-      .position = {5.0f, 0.0f, 0.0f},
+      .location = {5.0f, 0.0f, 0.0f},
       .scale = {0.0f, 1.0f, 1.0f},
   };
   const quader::QuaderApiResult<quader::QuaderEntityRef> parent =
@@ -825,7 +825,7 @@ TEST(SnapToFloorTests,
   const quader::QuaderModelingObjectRef singular_source = create_box(
       harness, "Singular Source",
       {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
-      {.position = {0.0f, 7.0f, 0.0f}});
+      {.location = {0.0f, 7.0f, 0.0f}});
   ASSERT_TRUE(harness.editor.scene()
                   .reparent(singular_source.entity, parent.value().id, false)
                   .ok());
@@ -862,15 +862,15 @@ TEST(SnapToFloorTests, LocalVisibilityExcludesOtherwiseNearestReceiver) {
   const quader::QuaderModelingObjectRef source = create_box(
       harness, "Local Source",
       {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
-      {.position = {0.0f, 10.0f, 0.0f}});
+      {.location = {0.0f, 10.0f, 0.0f}});
   const quader::QuaderModelingObjectRef included = create_box(
       harness, "Included Receiver",
       {.min = {-3.0f, -0.5f, -3.0f}, .max = {3.0f, 0.5f, 3.0f}},
-      {.position = {0.0f, 3.0f, 0.0f}});
+      {.location = {0.0f, 3.0f, 0.0f}});
   static_cast<void>(create_box(
       harness, "Locally Excluded Receiver",
       {.min = {-3.0f, -0.5f, -3.0f}, .max = {3.0f, 0.5f, 3.0f}},
-      {.position = {0.0f, 6.0f, 0.0f}}));
+      {.location = {0.0f, 6.0f, 0.0f}}));
   ASSERT_TRUE(harness.editor.selection()
                   .select_objects({source.entity, included.entity},
                                   source.entity)
@@ -970,7 +970,7 @@ TEST(SnapToFloorTests,
   const quader::QuaderModelingObjectRef receiver = create_box(
       harness, "Partial Receiver",
       {.min = {-2.7f, -0.5f, -1.5f}, .max = {-1.3f, 0.5f, 1.5f}},
-      {.position = {0.0f, 0.5f, 0.0f}});
+      {.location = {0.0f, 0.5f, 0.0f}});
   const std::array<quader::QVec3, 4> upper_positions{
       quader::QVec3{-2.2f, 5.0f, -0.5f},
       quader::QVec3{2.2f, 5.0f, -0.5f},
@@ -1026,7 +1026,7 @@ TEST(SnapToFloorTests,
   const quader::QuaderModelingObjectRef receiver = create_box(
       harness, "Affine Vertex Receiver",
       {.min = {-40.0f, -0.5f, -40.0f}, .max = {40.0f, 0.5f, 40.0f}},
-      {.position = {0.0f, 1.5f, 0.0f}});
+      {.location = {0.0f, 1.5f, 0.0f}});
   QuadDocument source_document = make_quad_document({
       quader::QVec3{-1.0f, 2.0f, -1.0f},
       quader::QVec3{1.0f, 2.0f, -1.0f},
@@ -1035,7 +1035,7 @@ TEST(SnapToFloorTests,
   });
   const auto source_vertices = source_document.vertices;
   const quader::QuaderTransform source_transform{
-      .position = {3.0f, 10.0f, -2.0f},
+      .location = {3.0f, 10.0f, -2.0f},
       .rotation_euler = {0.22f, -0.31f, 0.27f},
       .scale = {2.0f, 0.7f, 1.4f},
   };
@@ -1074,7 +1074,7 @@ TEST(SnapToFloorTests, VertexRedoRestoresCapturedResultWithoutReraycasting) {
   const quader::QuaderModelingObjectRef receiver = create_box(
       harness, "Movable Receiver",
       {.min = {-4.0f, -0.5f, -4.0f}, .max = {4.0f, 0.5f, 4.0f}},
-      {.position = {0.0f, 2.0f, 0.0f}});
+      {.location = {0.0f, 2.0f, 0.0f}});
   QuadDocument source_document = make_quad_document({
       quader::QVec3{-1.0f, 6.0f, -1.0f},
       quader::QVec3{1.0f, 6.0f, -1.0f},
@@ -1138,7 +1138,7 @@ TEST(SnapToFloorTests,
   parent_args.name = "Singular Vertex Parent";
   parent_args.kind = quader::QuaderEntityKind::Empty;
   parent_args.transform = {
-      .position = {5.0f, 0.0f, 0.0f},
+      .location = {5.0f, 0.0f, 0.0f},
       .scale = {0.0f, 1.0f, 1.0f},
   };
   const quader::QuaderApiResult<quader::QuaderEntityRef> parent =

@@ -233,9 +233,9 @@ TEST_F(CurveModelingBehaviorTests,
   for (const auto entity : {mesh.entity, curve.entity}) {
     const auto moved = editor_.query().entity(entity);
     ASSERT_TRUE(moved.has_value());
-    EXPECT_FLOAT_EQ(moved->transform.position.x, 3.0F);
-    EXPECT_FLOAT_EQ(moved->transform.position.y, 2.0F);
-    EXPECT_FLOAT_EQ(moved->transform.position.z, -1.0F);
+    EXPECT_FLOAT_EQ(moved->transform.location.x, 3.0F);
+    EXPECT_FLOAT_EQ(moved->transform.location.y, 2.0F);
+    EXPECT_FLOAT_EQ(moved->transform.location.z, -1.0F);
   }
   expect_curve(editor_, curve, edited);
 
@@ -253,9 +253,9 @@ TEST_F(CurveModelingBehaviorTests,
   for (const auto entity : {mesh.entity, curve.entity}) {
     const auto restored = editor_.query().entity(entity);
     ASSERT_TRUE(restored.has_value());
-    EXPECT_FLOAT_EQ(restored->transform.position.x, 0.0F);
-    EXPECT_FLOAT_EQ(restored->transform.position.y, 0.0F);
-    EXPECT_FLOAT_EQ(restored->transform.position.z, 0.0F);
+    EXPECT_FLOAT_EQ(restored->transform.location.x, 0.0F);
+    EXPECT_FLOAT_EQ(restored->transform.location.y, 0.0F);
+    EXPECT_FLOAT_EQ(restored->transform.location.z, 0.0F);
   }
   const auto mesh_after = editor_.query().compiled_object_mesh(mesh);
   ASSERT_TRUE(mesh_after.has_value());
@@ -490,7 +490,7 @@ TEST_F(CurveModelingBehaviorTests,
       .name = "Generic Marker",
       .kind = QuaderEntityKind::Generic,
       .parent = group.value().id,
-      .transform = {.position = {0.0F, 4.0F, 0.0F}},
+      .transform = {.location = {0.0F, 4.0F, 0.0F}},
   });
   ASSERT_TRUE(generic.ok()) << generic.error_message();
   ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Group).ok());
@@ -550,23 +550,23 @@ TEST_F(CurveModelingBehaviorTests,
   ASSERT_TRUE(updated.changed());
   const auto moved_root = editor_.query().entity(copy_root);
   ASSERT_TRUE(moved_root.has_value());
-  EXPECT_FLOAT_EQ(moved_root->transform.position.x,
-                  copy_root_at_begin->transform.position.x + delta.x);
-  EXPECT_FLOAT_EQ(moved_root->transform.position.y,
-                  copy_root_at_begin->transform.position.y + delta.y);
-  EXPECT_FLOAT_EQ(moved_root->transform.position.z,
-                  copy_root_at_begin->transform.position.z + delta.z);
+  EXPECT_FLOAT_EQ(moved_root->transform.location.x,
+                  copy_root_at_begin->transform.location.x + delta.x);
+  EXPECT_FLOAT_EQ(moved_root->transform.location.y,
+                  copy_root_at_begin->transform.location.y + delta.y);
+  EXPECT_FLOAT_EQ(moved_root->transform.location.z,
+                  copy_root_at_begin->transform.location.z + delta.z);
   const std::vector<QuaderEntitySnapshot> moved_children =
       children_of(copy_root);
   ASSERT_EQ(moved_children.size(), copy_children_at_begin.size());
   for (std::size_t index = 0; index < moved_children.size(); ++index) {
     EXPECT_EQ(moved_children[index].id, copy_children_at_begin[index].id);
-    EXPECT_FLOAT_EQ(moved_children[index].transform.position.x,
-                    copy_children_at_begin[index].transform.position.x);
-    EXPECT_FLOAT_EQ(moved_children[index].transform.position.y,
-                    copy_children_at_begin[index].transform.position.y);
-    EXPECT_FLOAT_EQ(moved_children[index].transform.position.z,
-                    copy_children_at_begin[index].transform.position.z);
+    EXPECT_FLOAT_EQ(moved_children[index].transform.location.x,
+                    copy_children_at_begin[index].transform.location.x);
+    EXPECT_FLOAT_EQ(moved_children[index].transform.location.y,
+                    copy_children_at_begin[index].transform.location.y);
+    EXPECT_FLOAT_EQ(moved_children[index].transform.location.z,
+                    copy_children_at_begin[index].transform.location.z);
   }
   const auto moved_mesh = editor_.query().compiled_object_mesh(*copy_mesh);
   ASSERT_TRUE(moved_mesh.has_value());
@@ -598,8 +598,8 @@ TEST_F(CurveModelingBehaviorTests,
   EXPECT_EQ(copy_root_after_redo->uuid, copy_root_at_begin->uuid);
   EXPECT_EQ(copy_root_after_redo->editor_object_id,
             copy_root_at_begin->editor_object_id);
-  EXPECT_FLOAT_EQ(copy_root_after_redo->transform.position.x,
-                  moved_root->transform.position.x);
+  EXPECT_FLOAT_EQ(copy_root_after_redo->transform.location.x,
+                  moved_root->transform.location.x);
   const std::vector<QuaderEntitySnapshot> copy_children_after_redo =
       children_of(copy_root);
   ASSERT_EQ(copy_children_after_redo.size(), copy_children_at_begin.size());
@@ -807,7 +807,7 @@ TEST_F(CurveModelingBehaviorTests,
   ASSERT_TRUE(editor_.modeling().begin_curve_preview(curve).ok());
   ASSERT_TRUE(editor_.modeling().update_curve_preview(authored).ok());
   QuaderTransform transform;
-  transform.position = {7.0F, 2.0F, 1.0F};
+  transform.location = {7.0F, 2.0F, 1.0F};
   ASSERT_TRUE(editor_.scene().set_transform(curve.entity, transform).ok());
   ASSERT_TRUE(editor_.scene().set_visible(curve.entity, false).ok());
   const auto selected = editor_.selection().select_object(mesh);
@@ -823,9 +823,9 @@ TEST_F(CurveModelingBehaviorTests,
   const auto entity = editor_.query().entity(curve.entity);
   ASSERT_TRUE(entity.has_value());
   EXPECT_FALSE(entity->visible);
-  EXPECT_FLOAT_EQ(entity->transform.position.x, 7.0F);
-  EXPECT_FLOAT_EQ(entity->transform.position.y, 2.0F);
-  EXPECT_FLOAT_EQ(entity->transform.position.z, 1.0F);
+  EXPECT_FLOAT_EQ(entity->transform.location.x, 7.0F);
+  EXPECT_FLOAT_EQ(entity->transform.location.y, 2.0F);
+  EXPECT_FLOAT_EQ(entity->transform.location.z, 1.0F);
   EXPECT_EQ(active_entity(editor_), mesh.entity);
   EXPECT_EQ(selected_entities(editor_),
             std::vector<EntityId>{mesh.entity});

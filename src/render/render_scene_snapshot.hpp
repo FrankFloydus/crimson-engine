@@ -165,10 +165,12 @@ struct RenderSceneMeshRecord {
   bool transform_dirty = true;
   bool texture_mapping_dirty = true;
   bool binding_dirty = true;
+  /// Global viewport policy, independent of the preserved authored component.
+  bool backface_culling_enabled = true;
 
   [[nodiscard]] bool renderable() const { return mesh.renderable(); }
   [[nodiscard]] bool cast_shadows() const { return mesh_component.cast_shadows; }
-  [[nodiscard]] bool double_sided() const { return mesh_component.double_sided; }
+  [[nodiscard]] bool double_sided() const { return !backface_culling_enabled; }
 };
 
 /**
@@ -262,6 +264,7 @@ struct RenderSceneSnapshotBuildOptions {
   RenderInstanceEditScope instance_edit_scope;
   const ViewportLocalVisibilitySnapshot *local_visibility = nullptr;
   CurveSolidGeometryCache *curve_solid_geometry_cache = nullptr;
+  bool backface_culling_enabled = true;
 };
 
 /**

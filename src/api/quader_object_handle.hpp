@@ -35,7 +35,7 @@ public:
     QuaderApiResult<QuaderEntityRef> duplicate();
     QuaderApiVoidResult set_transform(QuaderTransform transform);
     QuaderApiVoidResult set_visible(bool visible);
-    QuaderApiVoidResult set_locked(bool locked);
+    QuaderApiVoidResult set_selectable(bool selectable);
     QuaderApiVoidResult move(QVec3 delta);
     QuaderApiVoidResult rotate_euler(QVec3 euler_radians, QVec3 pivot = {});
     QuaderApiVoidResult scale(QVec3 scale, QVec3 pivot = {});

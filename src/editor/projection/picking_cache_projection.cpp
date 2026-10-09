@@ -145,7 +145,7 @@ PickingCacheProjection::scene_transformed_objects_for_picking(
            .definition_entity = definition,
            .geometry_entity = *entity});
       if (occurrence == nullptr || !occurrence->selectable ||
-          occurrence->effectively_locked) {
+          !occurrence->effectively_selectable) {
         continue;
       }
       quader_editor_core::PolygonObject object = source;
@@ -175,7 +175,7 @@ PickingCacheProjection::scene_transformed_objects_for_picking(
         const SceneMeshOccurrenceProjectionRecord *occurrence =
             occurrences->record(participant_index);
         if (occurrence == nullptr || !occurrence->selectable ||
-            occurrence->effectively_locked ||
+            !occurrence->effectively_selectable ||
             (entity_visible &&
              !entity_visible(occurrence->display_entity))) {
           continue;
@@ -207,7 +207,7 @@ PickingCacheProjection::scene_transformed_objects_for_picking(
          .geometry_entity = *entity});
     if (occurrence == nullptr ||
         (entity_visible && !entity_visible(*entity)) ||
-        !occurrence->selectable || occurrence->effectively_locked) {
+        !occurrence->selectable || !occurrence->effectively_selectable) {
       continue;
     }
     quader_editor_core::PolygonObject object = source;

@@ -57,7 +57,7 @@ struct AlignSettingsHarness final {
       objects[index] = created.value();
       ASSERT_TRUE(editor.scene()
                       .set_transform(objects[index].entity,
-                                     {.position = kPositions[index]})
+                                     {.location = kPositions[index]})
                       .ok());
     }
     ASSERT_TRUE(editor.selection()
@@ -88,9 +88,9 @@ void expect_align_transforms(
   const auto actual = harness.transforms();
   for (std::size_t index = 0; index < actual.size(); ++index) {
     SCOPED_TRACE(index);
-    EXPECT_FLOAT_EQ(actual[index].position.x, expected[index].position.x);
-    EXPECT_FLOAT_EQ(actual[index].position.y, expected[index].position.y);
-    EXPECT_FLOAT_EQ(actual[index].position.z, expected[index].position.z);
+    EXPECT_FLOAT_EQ(actual[index].location.x, expected[index].location.x);
+    EXPECT_FLOAT_EQ(actual[index].location.y, expected[index].location.y);
+    EXPECT_FLOAT_EQ(actual[index].location.z, expected[index].location.z);
     EXPECT_FLOAT_EQ(actual[index].rotation_euler.x, expected[index].rotation_euler.x);
     EXPECT_FLOAT_EQ(actual[index].rotation_euler.y, expected[index].rotation_euler.y);
     EXPECT_FLOAT_EQ(actual[index].rotation_euler.z, expected[index].rotation_euler.z);
@@ -210,7 +210,7 @@ TEST_F(QtAlignToolSettingsTests,
   refresh();
   auto expected = baseline;
   for (auto &transform : expected) {
-    transform.position.x = 25.0F;
+    transform.location.x = 25.0F;
   }
   expect_align_transforms(*harness_, expected);
   EXPECT_EQ(harness_->session.history().undo_count(), 1U);
@@ -220,7 +220,7 @@ TEST_F(QtAlignToolSettingsTests,
   maximum_y->click();
   refresh();
   for (auto &transform : expected) {
-    transform.position.y = 15.0F;
+    transform.location.y = 15.0F;
   }
   expect_align_transforms(*harness_, expected);
   EXPECT_EQ(harness_->session.history().undo_count(), 2U);
@@ -296,7 +296,7 @@ TEST_F(QtAlignToolSettingsTests,
   refresh();
   auto expected = baseline;
   for (auto &transform : expected) {
-    transform.position.y = 15.0F;
+    transform.location.y = 15.0F;
   }
   expect_align_transforms(*harness_, expected);
   EXPECT_EQ(harness_->session.history().undo_count(), 1U);
@@ -310,7 +310,7 @@ TEST_F(QtAlignToolSettingsTests,
   distribute_x->click();
   refresh();
   expected = baseline;
-  expected[1].position.x = 40.0F;
+  expected[1].location.x = 40.0F;
   expect_align_transforms(*harness_, expected);
   EXPECT_EQ(harness_->session.history().undo_count(), 1U);
   EXPECT_TRUE(harness_->session.align_tool().active());
@@ -327,7 +327,7 @@ TEST_F(QtAlignToolSettingsTests,
   for (std::size_t index = 0; index < kPositions.size(); ++index) {
     ASSERT_TRUE(harness_->editor.scene()
                     .set_transform(harness_->objects[index].entity,
-                                   {.position = {kPositions[index], 0.0F, 0.0F}})
+                                   {.location = {kPositions[index], 0.0F, 0.0F}})
                     .ok());
   }
   harness_->session.history().clear();
@@ -363,9 +363,9 @@ TEST_F(QtAlignToolSettingsTests,
   distribute_x->click();
   refresh();
   const auto distributed = harness_->transforms();
-  EXPECT_NEAR(distributed[1].position.x, 3.55F, kAlignSettingsEpsilon);
-  EXPECT_NEAR(distributed[1].position.x - distributed[0].position.x - 1.0F,
-              distributed[2].position.x - distributed[1].position.x - 1.0F,
+  EXPECT_NEAR(distributed[1].location.x, 3.55F, kAlignSettingsEpsilon);
+  EXPECT_NEAR(distributed[1].location.x - distributed[0].location.x - 1.0F,
+              distributed[2].location.x - distributed[1].location.x - 1.0F,
               kAlignSettingsEpsilon);
   EXPECT_EQ(harness_->session.history().undo_count(), 1U);
   EXPECT_TRUE(harness_->session.align_tool().active());
@@ -386,7 +386,7 @@ TEST_F(QtAlignToolSettingsTests,
   refresh();
   auto expected = distributed;
   for (auto &transform : expected) {
-    transform.position.x = 0.0F;
+    transform.location.x = 0.0F;
   }
   expect_align_transforms(*harness_, expected);
   EXPECT_EQ(harness_->session.history().undo_count(), 2U);
@@ -500,7 +500,7 @@ TEST_F(QtAlignToolSettingsTests,
   ASSERT_EQ(panel_->target_id(), "align");
   outgoing = action_button("y", "max");
   ASSERT_NE(outgoing, nullptr);
-  ASSERT_TRUE(harness_->session.scene().set_locked(harness_->objects[0].entity, true));
+  ASSERT_TRUE(harness_->session.scene().set_selectable(harness_->objects[0].entity, false));
   const auto locked_history = harness_->session.history().undo_count();
   refresh();
   EXPECT_TRUE(panel_->target_id().empty());
@@ -508,7 +508,7 @@ TEST_F(QtAlignToolSettingsTests,
   EXPECT_FALSE(harness_->session.align_tool().active());
   expect_align_transforms(*harness_, committed);
   EXPECT_EQ(harness_->session.history().undo_count(), locked_history);
-  ASSERT_TRUE(harness_->session.scene().set_locked(harness_->objects[0].entity, false));
+  ASSERT_TRUE(harness_->session.scene().set_selectable(harness_->objects[0].entity, true));
   refresh();
   EXPECT_TRUE(panel_->target_id().empty());
   EXPECT_FALSE(harness_->session.align_tool().active());

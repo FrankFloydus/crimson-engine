@@ -35,14 +35,15 @@ public:
   SceneTransformPreviewTransaction(
       SceneDocument &scene, std::vector<EntityId> entities,
       std::string label = "Scene Transform Preview",
-      TextureLockSettings texture_locks = {})
-      : scene_(scene), label_(std::move(label)) {
+      TextureLockSettings texture_locks = {}, bool allow_unselectable = false)
+      : scene_(scene), label_(std::move(label)),
+        allow_unselectable_(allow_unselectable) {
     std::sort(entities.begin(), entities.end());
     entities.erase(std::unique(entities.begin(), entities.end()), entities.end());
     std::vector<EntityId> captured;
     for (const EntityId entity : entities) {
       if (entity == kInvalidEntityId || !scene_.exists(entity) ||
-          scene_.is_effectively_locked(entity)) {
+          (!allow_unselectable_ && !scene_.is_effectively_selectable(entity))) {
         continue;
       }
       const TransformComponent *transform = scene_.transform(entity);
@@ -82,7 +83,8 @@ public:
         edits_(std::move(other.edits_)),
         edit_index_by_entity_(std::move(other.edit_index_by_entity_)),
         mapping_plan_(std::move(other.mapping_plan_)),
-        mapping_edits_(std::move(other.mapping_edits_)), active_(other.active_) {
+        mapping_edits_(std::move(other.mapping_edits_)),
+        allow_unselectable_(other.allow_unselectable_), active_(other.active_) {
     other.active_ = false;
   }
   SceneTransformPreviewTransaction &operator=(SceneTransformPreviewTransaction &&) = delete;
@@ -114,7 +116,8 @@ public:
       }
       const auto found = edit_index_by_entity_.find(edit.entity);
       if (found == edit_index_by_entity_.end() || !scene_.exists(edit.entity) ||
-          scene_.is_effectively_locked(edit.entity)) {
+          (!allow_unselectable_ &&
+           !scene_.is_effectively_selectable(edit.entity))) {
         return document_command_missing_entity_result();
       }
       DocumentTransformEdit &target = staged[found->second];
@@ -225,7 +228,9 @@ private:
 
   [[nodiscard]] bool finish_targets_are_valid() const {
     return std::all_of(edits_.begin(), edits_.end(), [this](const auto &edit) {
-             return scene_.exists(edit.entity) && !scene_.is_effectively_locked(edit.entity);
+             return scene_.exists(edit.entity) &&
+                    (allow_unselectable_ ||
+                     scene_.is_effectively_selectable(edit.entity));
            }) && std::all_of(mapping_edits_.begin(), mapping_edits_.end(), [this](const auto &edit) {
              return scene_.exists(edit.entity);
            });
@@ -259,6 +264,8 @@ private:
   std::unordered_map<EntityId, std::size_t> edit_index_by_entity_;
   std::optional<SceneTextureMappingPlan> mapping_plan_;
   std::vector<DocumentTextureMappingEdit> mapping_edits_;
+  // Explicit property editing retains captured targets regardless of picking permission.
+  bool allow_unselectable_ = false;
   bool active_ = false;
 };
 

@@ -50,7 +50,7 @@ struct SceneMeshOccurrenceProjectionRecord final {
   EntityId definition_entity = kInvalidEntityId;
   QMat4 world_from_geometry;
   bool selectable = true;
-  bool effectively_locked = false;
+  bool effectively_selectable = true;
   /** Occurrence hierarchy and member segment visibility, excluding storage. */
   bool effectively_visible = true;
 

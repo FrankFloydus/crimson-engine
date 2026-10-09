@@ -150,7 +150,7 @@ TEST(ToolPreviewSubmissionTests,
   RenderPreviewTestHarness harness;
   auto &editor = harness.editor;
   const auto source = create_selected_box(editor, "Live radial preview source");
-  ASSERT_TRUE(editor.scene().set_transform(source.entity, {.position = {6, 0, 0}}).ok());
+  ASSERT_TRUE(editor.scene().set_transform(source.entity, {.location = {6, 0, 0}}).ok());
   harness.session.history().clear();
   ASSERT_TRUE(harness.sync().ok());
   ASSERT_TRUE(harness.published.empty());
@@ -234,7 +234,7 @@ TEST(ToolPreviewSubmissionTests,
       create_selected_box(editor, "Placed Mirror Preview Source");
   ASSERT_TRUE(editor.scene()
                   .set_transform(source.entity,
-                                 {.position = {3.0f, 2.0f, 5.0f}})
+                                 {.location = {3.0f, 2.0f, 5.0f}})
                   .ok());
   const auto material = editor.assets().add_material(quader::QuaderMaterialAsset{
       .name = "Mirror Preview Material",
@@ -394,7 +394,7 @@ TEST(ToolPreviewSubmissionTests,
 }
 
 TEST(ToolPreviewSubmissionTests,
-     InvertedMirrorPreservesWindingNormalsAndLiveSourceCullingThroughCommit) {
+     InvertedMirrorPreservesWindingNormalsAndGlobalCullingThroughCommit) {
   for (const bool initial_double_sided : {false, true}) {
     SCOPED_TRACE(::testing::Message()
                  << "initial_double_sided=" << initial_double_sided);
@@ -409,7 +409,7 @@ TEST(ToolPreviewSubmissionTests,
     ASSERT_TRUE(inverted.changed());
     ASSERT_TRUE(editor.scene()
                     .set_transform(source.entity,
-                                   {.position = {3.0f, 2.0f, 5.0f}})
+                                   {.location = {3.0f, 2.0f, 5.0f}})
                     .ok());
     const auto *source_binding = harness.session.scene().mesh(source.entity);
     ASSERT_NE(source_binding, nullptr);
@@ -435,7 +435,7 @@ TEST(ToolPreviewSubmissionTests,
     ASSERT_TRUE(modeling.end_mirror_drag().ok);
     ASSERT_TRUE(harness.sync().ok());
     ASSERT_EQ(harness.published.size(), 1u);
-    EXPECT_EQ(harness.published.front().double_sided, initial_double_sided);
+    EXPECT_FALSE(harness.published.front().double_sided);
     EXPECT_FALSE(harness.published.front().suppress_source);
     expect_inward_box_geometry(harness.published.front().mesh);
     expect_bounds_near(preview_world_bounds(harness.published.front()),
@@ -457,11 +457,82 @@ TEST(ToolPreviewSubmissionTests,
     ASSERT_TRUE(harness.sync().ok());
     EXPECT_GT(harness.publication_attempts, previous_attempts);
     ASSERT_EQ(harness.published.size(), 1u);
-    EXPECT_EQ(harness.published.front().double_sided, presentation.double_sided);
+    EXPECT_FALSE(harness.published.front().double_sided);
     expect_mesh_positions_and_normals_near(
         harness.published.front().mesh.geometry(), preview_geometry);
+
+    auto &workspace = harness.session.viewport_workspace();
+    auto settings = workspace.effective_settings(workspace.focused_pane());
+    const auto scene_revision_before_preference = harness.session.scene().revision();
+    const auto compiles_before_preference =
+        modeling.modeling_sdk_projection_stats_for_tests().mesh_compile_count;
+    const auto work_before_preference = modeling.tool_preview_work_stats();
+    const auto expect_reused_preview_geometry = [&]() {
+      EXPECT_EQ(modeling.modeling_sdk_projection_stats_for_tests().mesh_compile_count,
+                compiles_before_preference);
+      EXPECT_EQ(modeling.tool_preview_work_stats().signature_enumeration_count,
+                work_before_preference.signature_enumeration_count);
+      EXPECT_EQ(modeling.tool_preview_work_stats().mesh_extraction_count,
+                work_before_preference.mesh_extraction_count);
+    };
+    std::uint64_t preference_revision = 1u;
+    for (const bool enabled : {false, true, presentation.double_sided}) {
+      const bool preference_changed = settings.bool_value(
+          quader::ViewportBoolSettingId::BackfaceCulling) != enabled;
+      const auto attempts_before_preference = harness.publication_attempts;
+      (void)settings.set_bool_value(quader::ViewportBoolSettingId::BackfaceCulling, enabled);
+      (void)workspace.update_control_defaults(settings, preference_revision++);
+      ASSERT_TRUE(harness.sync().ok());
+      ASSERT_EQ(harness.published.size(), 1u);
+      EXPECT_EQ(harness.published.front().double_sided, !enabled);
+      if (preference_changed) {
+        EXPECT_GT(harness.publication_attempts, attempts_before_preference);
+      } else {
+        EXPECT_EQ(harness.publication_attempts, attempts_before_preference);
+      }
+      expect_mesh_positions_and_normals_near(
+          harness.published.front().mesh.geometry(), preview_geometry);
+      ASSERT_NE(harness.session.scene().mesh(source.entity), nullptr);
+      EXPECT_EQ(*harness.session.scene().mesh(source.entity), presentation);
+      EXPECT_EQ(harness.session.scene().revision(), scene_revision_before_preference);
+      expect_reused_preview_geometry();
+    }
+
+    const auto attempts_before_rejection = harness.publication_attempts;
+    (void)settings.set_bool_value(quader::ViewportBoolSettingId::BackfaceCulling,
+                                  !presentation.double_sided);
+    (void)workspace.update_control_defaults(settings, preference_revision++);
+    harness.reject_next_publication = true;
+    EXPECT_FALSE(harness.sync().ok());
+    EXPECT_EQ(harness.publication_attempts, attempts_before_rejection + 1u);
+    ASSERT_EQ(harness.published.size(), 1u);
+    EXPECT_EQ(harness.published.front().double_sided, !presentation.double_sided);
+    expect_mesh_positions_and_normals_near(
+        harness.published.front().mesh.geometry(), preview_geometry);
+    expect_reused_preview_geometry();
+    const auto rejected_attempts = harness.publication_attempts;
+    for (int frame = 0; frame < 4; ++frame) {
+      EXPECT_FALSE(harness.sync().ok());
+      EXPECT_EQ(harness.publication_attempts, rejected_attempts);
+      expect_reused_preview_geometry();
+    }
+
+    (void)settings.set_bool_value(quader::ViewportBoolSettingId::BackfaceCulling,
+                                  presentation.double_sided);
+    (void)workspace.update_control_defaults(settings, preference_revision++);
+    ASSERT_TRUE(harness.sync().ok());
+    EXPECT_EQ(harness.publication_attempts, rejected_attempts + 1u);
+    ASSERT_EQ(harness.published.size(), 1u);
+    EXPECT_EQ(harness.published.front().double_sided, !presentation.double_sided);
+    expect_mesh_positions_and_normals_near(
+        harness.published.front().mesh.geometry(), preview_geometry);
+    expect_reused_preview_geometry();
+    ASSERT_NE(harness.session.scene().mesh(source.entity), nullptr);
+    EXPECT_EQ(*harness.session.scene().mesh(source.entity), presentation);
+    EXPECT_EQ(harness.session.scene().revision(), scene_revision_before_preference);
     const quader::RenderToolPreviewMeshRecord saved_preview =
         harness.published.front();
+    EXPECT_NE(saved_preview.double_sided, presentation.double_sided);
     const std::size_t changed_attempts = harness.publication_attempts;
     const std::uint64_t changed_compiles =
         modeling.modeling_sdk_projection_stats_for_tests().mesh_compile_count;
@@ -487,7 +558,7 @@ TEST(ToolPreviewSubmissionTests,
     const auto *committed_binding =
         harness.session.scene().mesh(reflected->entity);
     ASSERT_NE(committed_binding, nullptr);
-    EXPECT_EQ(committed_binding->double_sided, saved_preview.double_sided);
+    EXPECT_EQ(committed_binding->double_sided, presentation.double_sided);
     quader::MeshComponent expected_duplicate = presentation;
     expected_duplicate.mesh = committed_binding->mesh;
     EXPECT_EQ(*committed_binding, expected_duplicate);
@@ -524,7 +595,7 @@ TEST(ToolPreviewSubmissionTests,
   ASSERT_TRUE(editor.scene().rename(occurrence, std::string(512u, 'M')).ok());
   ASSERT_TRUE(editor.scene()
                   .set_transform(occurrence,
-                                 {.position = {3.0f, 2.0f, 8.0f}})
+                                 {.location = {3.0f, 2.0f, 8.0f}})
                   .ok());
   ASSERT_TRUE(editor.modeling().enter_instance_edit(occurrence).ok());
   ASSERT_TRUE(editor.selection().select_object(source).ok());

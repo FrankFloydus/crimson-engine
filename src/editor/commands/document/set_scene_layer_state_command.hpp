@@ -29,9 +29,9 @@ public:
         before_selection_(capture_scene_selection(scene)) {
     normalize(before_);
     normalize(after_);
-    before_effectively_locked_.reserve(before_selection_.selected.size());
+    before_effectively_selectable_.reserve(before_selection_.selected.size());
     for (const EntityId entity : before_selection_.selected) {
-      before_effectively_locked_.push_back(scene.is_effectively_locked(entity));
+      before_effectively_selectable_.push_back(scene.is_effectively_selectable(entity));
     }
   }
 
@@ -52,9 +52,9 @@ public:
       for (std::size_t index = 0; index < after_selection_.selected.size();
            ++index) {
         const EntityId entity = after_selection_.selected[index];
-        const bool was_locked = index < before_effectively_locked_.size() &&
-                                before_effectively_locked_[index];
-        if (!was_locked && scene().is_effectively_locked(entity)) {
+        const bool was_selectable = index < before_effectively_selectable_.size() &&
+                                before_effectively_selectable_[index];
+        if (was_selectable && !scene().is_effectively_selectable(entity)) {
           continue;
         }
         retained.push_back(entity);
@@ -123,7 +123,7 @@ private:
   SceneLayerState after_;
   SceneSelectionState before_selection_;
   SceneSelectionState after_selection_;
-  std::vector<bool> before_effectively_locked_;
+  std::vector<bool> before_effectively_selectable_;
   bool after_selection_initialized_ = false;
 };
 

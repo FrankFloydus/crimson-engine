@@ -1679,7 +1679,7 @@ TEST(ModelingSessionServiceSplitTests,
   ASSERT_TRUE(session.rename_object(object.value(), "Current Branch").ok());
   ASSERT_TRUE(scene.set_mesh(participant, {.mesh = 12u}));
   TransformComponent moved;
-  moved.position = {3.0f, 2.0f, 1.0f};
+  moved.location = {3.0f, 2.0f, 1.0f};
   ASSERT_TRUE(scene.set_transform(unrelated, moved));
 
   EXPECT_FALSE(publication.rollback());
@@ -1690,7 +1690,7 @@ TEST(ModelingSessionServiceSplitTests,
   ASSERT_NE(scene.mesh(participant), nullptr);
   EXPECT_EQ(scene.mesh(participant)->mesh, 12u);
   ASSERT_NE(scene.transform(unrelated), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(unrelated)->position.x, 3.0f);
+  EXPECT_FLOAT_EQ(scene.transform(unrelated)->location.x, 3.0f);
 }
 
 TEST(ModelingSessionServiceSplitTests,
@@ -2017,11 +2017,11 @@ TEST(ModelingSessionServiceSplitTests,
   scene.set_mesh(entity, MeshComponent{.mesh = 99});
   scene.set_material(entity, MaterialComponent{.material = 42});
   TransformComponent transform;
-  transform.position = {2.0f, 3.0f, 4.0f};
+  transform.location = {2.0f, 3.0f, 4.0f};
   scene.set_transform(entity, transform);
   ASSERT_TRUE(scene.set_parent(entity, parent, false));
   scene.set_visible(entity, false);
-  scene.set_locked(entity, true);
+  scene.set_selectable(entity, false);
   const SceneLayerId layer = scene.create_layer("Redo Layer");
   ASSERT_NE(layer, kInvalidSceneLayerId);
   ASSERT_TRUE(scene.set_entity_layer(entity, layer));
@@ -2038,9 +2038,9 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_EQ(identity->editor_object_id, editor_object_id);
   EXPECT_EQ(identity->name, "Redo Source");
   EXPECT_EQ(identity->parent, parent);
-  EXPECT_EQ(identity->transform.position.x, transform.position.x);
+  EXPECT_EQ(identity->transform.location.x, transform.location.x);
   EXPECT_FALSE(identity->visibility.visible);
-  EXPECT_TRUE(identity->lock.locked);
+  EXPECT_FALSE(identity->selectable.selectable);
   ASSERT_TRUE(identity->mesh.has_value());
   EXPECT_EQ(identity->mesh->mesh, 99);
   ASSERT_TRUE(identity->material.has_value());
@@ -2061,9 +2061,9 @@ TEST(ModelingSessionServiceSplitTests,
   const EntityId first = scene.create_entity("First", EntityKind::Mesh);
   const EntityId second = scene.create_entity("Second", EntityKind::Mesh);
   TransformComponent first_transform;
-  first_transform.position = {1.0f, 0.0f, 0.0f};
+  first_transform.location = {1.0f, 0.0f, 0.0f};
   TransformComponent second_transform;
-  second_transform.position = {2.0f, 0.0f, 0.0f};
+  second_transform.location = {2.0f, 0.0f, 0.0f};
   scene.set_transform(first, first_transform);
   scene.set_transform(second, second_transform);
 
@@ -2078,9 +2078,9 @@ TEST(ModelingSessionServiceSplitTests,
 
   ASSERT_EQ(identities.size(), 2U);
   EXPECT_EQ(identities[0].id, second);
-  EXPECT_EQ(identities[0].transform.position.x, second_transform.position.x);
+  EXPECT_EQ(identities[0].transform.location.x, second_transform.location.x);
   EXPECT_EQ(identities[1].id, first);
-  EXPECT_EQ(identities[1].transform.position.x, first_transform.position.x);
+  EXPECT_EQ(identities[1].transform.location.x, first_transform.location.x);
 }
 
 TEST(ModelingSessionServiceSplitTests,
@@ -2134,11 +2134,11 @@ TEST(ModelingSessionServiceSplitTests,
   const EntityId duplicate = scene.create_entity("Duplicate", EntityKind::Mesh);
 
   TransformComponent transform;
-  transform.position = {3.0f, 4.0f, 5.0f};
+  transform.location = {3.0f, 4.0f, 5.0f};
   scene.set_transform(source, transform);
   ASSERT_TRUE(scene.set_parent(source, parent, false));
   scene.set_visible(source, false);
-  scene.set_locked(source, true);
+  scene.set_selectable(source, false);
   scene.set_mesh(source, MeshComponent{
                              .mesh = 11,
                              .editor_only = true,
@@ -2170,12 +2170,12 @@ TEST(ModelingSessionServiceSplitTests,
 
   const TransformComponent *duplicate_transform = scene.transform(duplicate);
   ASSERT_NE(duplicate_transform, nullptr);
-  EXPECT_EQ(duplicate_transform->position.x, transform.position.x);
+  EXPECT_EQ(duplicate_transform->location.x, transform.location.x);
   EXPECT_EQ(scene.parent(duplicate), parent);
   ASSERT_NE(scene.visibility(duplicate), nullptr);
   EXPECT_FALSE(scene.visibility(duplicate)->visible);
-  ASSERT_NE(scene.lock(duplicate), nullptr);
-  EXPECT_TRUE(scene.lock(duplicate)->locked);
+  ASSERT_NE(scene.selectable(duplicate), nullptr);
+  EXPECT_FALSE(scene.selectable(duplicate)->selectable);
   const MeshComponent *duplicate_mesh = scene.mesh(duplicate);
   ASSERT_NE(duplicate_mesh, nullptr);
   EXPECT_EQ(duplicate_mesh->mesh, 99);
@@ -2918,7 +2918,7 @@ TEST(ModelingSessionServiceSplitTests,
     const EntityId entity =
         scene.create_entity("Selected Mesh", EntityKind::Mesh);
     TransformComponent transform;
-    transform.position = {10.0f, 20.0f, 30.0f};
+    transform.location = {10.0f, 20.0f, 30.0f};
     EXPECT_TRUE(scene.set_transform(entity, transform));
 
     ModelingObjectRuntimeMap object_map;
@@ -3005,9 +3005,9 @@ TEST(ModelingSessionServiceSplitTests,
   const std::uint64_t scene_revision_before = scene.revision();
 
   TransformComponent moved;
-  moved.position = {3.0f, -2.0f, 7.0f};
+  moved.location = {3.0f, -2.0f, 7.0f};
   ASSERT_TRUE(scene.set_transform(group, moved));
-  ASSERT_TRUE(scene.set_locked(group, true));
+  ASSERT_TRUE(scene.set_selectable(group, false));
   ASSERT_TRUE(scene.set_visible(group, false));
   ASSERT_GT(scene.revision(), scene_revision_before);
 
@@ -5536,7 +5536,7 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_EQ(after.mesh_compile_count, before.mesh_compile_count);
   EXPECT_EQ(after.asset_publication_count, before.asset_publication_count);
   EXPECT_EQ(after.selection_summary_build_count, before.selection_summary_build_count);
-  ASSERT_TRUE(scene.set_locked(created.object.entity, true));
+  ASSERT_TRUE(scene.set_selectable(created.object.entity, false));
   EXPECT_FALSE(service.can_project_uv());
   const auto locked = service.modeling_sdk_projection_stats_for_tests();
   for (int frame = 0; frame < 20; ++frame) {
@@ -5544,7 +5544,7 @@ TEST(ModelingSessionServiceSplitTests,
   }
   EXPECT_EQ(service.modeling_sdk_projection_stats_for_tests().face_texture_summary_build_count,
             locked.face_texture_summary_build_count);
-  ASSERT_TRUE(scene.set_locked(created.object.entity, false));
+  ASSERT_TRUE(scene.set_selectable(created.object.entity, true));
   ASSERT_TRUE(service.set_object_selection(selected).ok);
   EXPECT_TRUE(service.can_project_uv());
   const auto reusable = service.modeling_sdk_projection_stats_for_tests();
@@ -5631,7 +5631,7 @@ TEST(ModelingSessionServiceSplitTests,
 
   ASSERT_TRUE(service.move_selection({0.1f, 0.0f, 0.0f}).ok);
   EXPECT_DOUBLE_EQ(service.face_texture_settings().shift_x, 256);
-  ASSERT_TRUE(scene.set_locked(created.object.entity, true));
+  ASSERT_TRUE(scene.set_selectable(created.object.entity, false));
   const auto locked = service.face_texture_settings();
   EXPECT_EQ(locked.selected_face_count, 1u);
   EXPECT_FALSE(locked.editable);
@@ -6327,7 +6327,7 @@ TEST_F(FaceExtrusionProjectionTests,
   const auto second = add_strip("Mirrored normal strip");
   ASSERT_TRUE(first.ok && second.ok);
   ASSERT_TRUE(scene_.set_transform(second.object.entity, {
-      .position = {6.0f, 0.0f, 0.0f}, .scale = {-2.0f, 1.0f, 1.0f}}));
+      .location = {6.0f, 0.0f, 0.0f}, .scale = {-2.0f, 1.0f, 1.0f}}));
   select_strip_faces(first.object);
   select_strip_faces(second.object, ModelingSelectionEdit::Add);
   const auto captured = service_.capture_face_extrusion_source();
@@ -7757,7 +7757,7 @@ TEST_F(CurveModelingProjectionTests,
   const auto *current_transform = session_.scene().transform(companion.entity);
   ASSERT_NE(current_transform, nullptr);
   auto moved = *current_transform;
-  moved.position = {3.0F, 2.0F, 1.0F};
+  moved.location = {3.0F, 2.0F, 1.0F};
   ASSERT_TRUE(session_.scene().set_transform(companion.entity, moved));
   const auto peer_identity = editor_.query().entity(peer.entity);
   ASSERT_TRUE(peer_identity.has_value());
@@ -7799,9 +7799,9 @@ TEST_F(CurveModelingProjectionTests,
   expect_curve(editor_, curve, next.value().document, false);
   const auto entity = editor_.query().entity(companion.entity);
   ASSERT_TRUE(entity.has_value());
-  EXPECT_FLOAT_EQ(entity->transform.position.x, 3.0F);
-  EXPECT_FLOAT_EQ(entity->transform.position.y, 2.0F);
-  EXPECT_FLOAT_EQ(entity->transform.position.z, 1.0F);
+  EXPECT_FLOAT_EQ(entity->transform.location.x, 3.0F);
+  EXPECT_FLOAT_EQ(entity->transform.location.y, 2.0F);
+  EXPECT_FLOAT_EQ(entity->transform.location.z, 1.0F);
 }
 
 TEST_F(CurveModelingProjectionTests,

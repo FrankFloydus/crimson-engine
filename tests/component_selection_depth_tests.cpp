@@ -124,11 +124,11 @@ TEST(ComponentSelectionDepthTests, SurfaceExportRetainsRigidUniformAndReflectedT
   const auto entity = session.scene().create_entity("GPU certificate transform", EntityKind::Mesh);
   ASSERT_TRUE(session.scene().set_mesh(entity, {.mesh = asset}));
   SceneSurfaceQuery surfaces(session.scene(), session.assets(), session.viewport_local_visibility());
-  ASSERT_TRUE(session.scene().set_transform(entity, {.position = {3, 4, -10}, .rotation_euler = {0.2f, 0.4f, 0.8f}, .scale = {-2, 2, 2}}));
+  ASSERT_TRUE(session.scene().set_transform(entity, {.location = {3, 4, -10}, .rotation_euler = {0.2f, 0.4f, 0.8f}, .scale = {-2, 2, 2}}));
   const auto rigid = surfaces.snapshot().selection_depth_geometry();
   ASSERT_TRUE(rigid);
   EXPECT_TRUE(rigid->conservative_transforms);
-  ASSERT_TRUE(session.scene().set_transform(entity, {.position = {3, 4, -10}, .scale = {10000, 0.0001f, 1}}));
+  ASSERT_TRUE(session.scene().set_transform(entity, {.location = {3, 4, -10}, .scale = {10000, 0.0001f, 1}}));
   const auto ill_conditioned = surfaces.snapshot().selection_depth_geometry();
   ASSERT_TRUE(ill_conditioned);
   EXPECT_FALSE(ill_conditioned->conservative_transforms);
@@ -145,7 +145,7 @@ TEST(ComponentSelectionDepthTests, SurfaceExportBoundsLargeTermsEvenWhenWorldCoo
   const auto asset = session.assets().add_mesh(std::move(mesh));
   const auto entity = session.scene().create_entity("GPU cancellation bound", EntityKind::Mesh);
   ASSERT_TRUE(session.scene().set_mesh(entity, {.mesh = asset}));
-  ASSERT_TRUE(session.scene().set_transform(entity, {.position = {-1000000, 0, -10}}));
+  ASSERT_TRUE(session.scene().set_transform(entity, {.location = {-1000000, 0, -10}}));
   SceneSurfaceQuery surfaces(session.scene(), session.assets(), session.viewport_local_visibility());
   const auto geometry = surfaces.snapshot().selection_depth_geometry();
   ASSERT_TRUE(geometry);

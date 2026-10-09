@@ -1772,6 +1772,20 @@ void UISystem::install_runtime_hooks(
             }
             return runtime_status(changed);
           },
+      .backface_culling_enabled = [this]() {
+        return viewport_settings_.bool_value(
+            ViewportBoolSettingId::BackfaceCulling);
+      },
+      .set_backface_culling_enabled =
+          [this](bool enabled) {
+            const bool changed = viewport_settings_.set_bool_value(
+                ViewportBoolSettingId::BackfaceCulling, enabled);
+            if (changed) {
+              (void)save_viewport_settings();
+              synchronize_settings_surfaces(true);
+            }
+            return runtime_status(changed);
+          },
       .grid_visible = [this]() {
         return viewport_settings_.bool_value(ViewportBoolSettingId::ShowGrid);
       },

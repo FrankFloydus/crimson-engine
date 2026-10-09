@@ -386,7 +386,7 @@ QuaderModelingObjectRef create_curve_pick_occluder(
   });
   EXPECT_TRUE(created.ok()) << created.error_message();
   if (created.ok()) {
-    EXPECT_TRUE(harness.session.scene().set_selectable(created.value().entity,
+    EXPECT_TRUE(harness.session.scene().set_selectability(created.value().entity,
                                                        false));
     harness.session.scene_surface_query().invalidate();
   }
@@ -919,7 +919,7 @@ TEST(CurveToolServiceTests,
   ASSERT_NE(parent, kInvalidEntityId);
   ASSERT_TRUE(harness.session.scene().set_parent(object.entity, parent, false));
   TransformComponent transform;
-  transform.position = {2.0f, 3.0f, -1.0f};
+  transform.location = {2.0f, 3.0f, -1.0f};
   transform.rotation_euler = {0.25f, 0.5f, -0.125f};
   transform.scale = {1.25f, 0.75f, 2.0f};
   ASSERT_TRUE(harness.session.scene().set_transform(object.entity, transform));
@@ -999,9 +999,9 @@ TEST(CurveToolServiceTests,
   const TransformComponent *baked_transform =
       harness.session.scene().transform(baked);
   ASSERT_NE(baked_transform, nullptr);
-  EXPECT_FLOAT_EQ(baked_transform->position.x, transform.position.x);
-  EXPECT_FLOAT_EQ(baked_transform->position.y, transform.position.y);
-  EXPECT_FLOAT_EQ(baked_transform->position.z, transform.position.z);
+  EXPECT_FLOAT_EQ(baked_transform->location.x, transform.location.x);
+  EXPECT_FLOAT_EQ(baked_transform->location.y, transform.location.y);
+  EXPECT_FLOAT_EQ(baked_transform->location.z, transform.location.z);
   EXPECT_FLOAT_EQ(baked_transform->rotation_euler.x,
                   transform.rotation_euler.x);
   EXPECT_FLOAT_EQ(baked_transform->rotation_euler.y,
@@ -2054,7 +2054,7 @@ TEST(CurveToolServiceTests, TransformedAnchorsAndHandlesEditInLocalSpace) {
   const auto object = harness.make_curve();
   ASSERT_TRUE(harness.editor.scene().set_transform(
       object.entity,
-      {.position = {7.0f, 3.0f, -4.0f},
+      {.location = {7.0f, 3.0f, -4.0f},
        .rotation_euler = {15.0f, 35.0f, 8.0f},
        .scale = {2.0f, 0.75f, -1.5f}}).ok());
   ASSERT_TRUE(harness.editor.tools().activate(kCurveToolId).ok());
@@ -2304,7 +2304,7 @@ TEST(CurveToolServiceTests,
     const auto object = harness.make_curve();
     ASSERT_TRUE(harness.editor.scene().set_transform(
         object.entity,
-        {.position = {0.0f, 3.0f, 0.0f},
+        {.location = {0.0f, 3.0f, 0.0f},
          .rotation_euler = {0.0f, 25.0f, 0.0f},
          .scale = {1.5f, 0.75f, 2.0f}}).ok());
     ASSERT_TRUE(harness.editor.tools().activate(kCurveToolId).ok());
@@ -3391,9 +3391,9 @@ TEST(CurveToolServiceTests,
     ASSERT_NE(occluder.entity, kInvalidEntityId);
     if (occluder_case.locked) {
       ASSERT_TRUE(
-          harness.session.scene().set_selectable(occluder.entity, true));
+          harness.session.scene().set_selectability(occluder.entity, true));
       ASSERT_TRUE(
-          harness.session.scene().set_locked(occluder.entity, true));
+          harness.session.scene().set_selectable(occluder.entity, false));
       harness.session.scene_surface_query().invalidate();
     }
     ASSERT_TRUE(harness.editor.selection().clear().ok());
@@ -4559,7 +4559,7 @@ TEST(CurveToolServiceTests, CanonicalAltClickConvertsOnceWithoutDraggingOrSelect
   CurveToolHarness harness;
   const auto object = harness.make_curve();
   ASSERT_TRUE(harness.editor.scene().set_transform(object.entity,
-      {.position = {3, 0, -2}, .rotation_euler = {0, 35, 0},
+      {.location = {3, 0, -2}, .rotation_euler = {0, 35, 0},
        .scale = {2, 1, -0.75f}}).ok());
   ASSERT_TRUE(harness.editor.tools().activate(kCurveToolId).ok());
   harness.session.history().clear();
@@ -6139,9 +6139,9 @@ TEST(CurveToolServiceTests,
       harness.session.document_commands().apply_scene_batch(
           "Lock Selected In Batch",
           {DocumentSceneBatchOperation{
-              .kind = DocumentSceneBatchOperationKind::SetLocked,
+              .kind = DocumentSceneBatchOperationKind::SetSelectable,
               .entity = selected.entity,
-              .flag = true,
+              .flag = false,
           }});
   EXPECT_FALSE(failed.ok);
   EXPECT_FALSE(failed.changed);
@@ -6150,7 +6150,7 @@ TEST(CurveToolServiceTests,
   EXPECT_EQ(harness.session.scene().selected_entities(), selection_before);
   EXPECT_EQ(harness.session.scene().primary_selection(), active_before);
   EXPECT_EQ(scene_scalar_fingerprint(harness.session.scene()), scalars_before);
-  EXPECT_FALSE(harness.session.scene().is_effectively_locked(selected.entity));
+  EXPECT_TRUE(harness.session.scene().is_effectively_selectable(selected.entity));
   const ModelingSelectionSummary modeling_after =
       harness.session.modeling().selection_summary();
   EXPECT_EQ(modeling_after.mode, modeling_before.mode);
@@ -6310,7 +6310,7 @@ TEST(CurveToolServiceTests,
   ASSERT_TRUE(replace_curve_control_selection(curve, outgoing));
   ASSERT_TRUE(harness.editor.scene()
                   .set_transform(object.entity,
-                                 {.position = {3.0f, 0.0f, 0.0f}})
+                                 {.location = {3.0f, 0.0f, 0.0f}})
                   .ok());
   EXPECT_FALSE(harness.session.selection().has_sub_selection())
       << "cheap summary polling must not refresh a stale provider scope";

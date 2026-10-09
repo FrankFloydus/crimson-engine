@@ -881,12 +881,12 @@ TEST(UvPeelToolServiceTests, LockedTargetsNeverPublishAndCanRecoverAfterUnlock) 
   ASSERT_TRUE(editor.selection().select_edge(strip, 2, 5).ok());
   const auto original = editor.query().compiled_object_mesh(strip);
   ASSERT_TRUE(original.has_value());
-  ASSERT_TRUE(editor.scene().set_locked(strip.entity, true).ok());
+  ASSERT_TRUE(editor.scene().set_selectable(strip.entity, false).ok());
   ASSERT_TRUE(editor.tools().activate("uv_peel").ok());
   EXPECT_FALSE(editor.tools().active_settings().can_apply);
   expect_mesh_equal(editor.query().compiled_object_mesh(strip), *original);
   ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
-  ASSERT_TRUE(editor.scene().set_locked(strip.entity, false).ok());
+  ASSERT_TRUE(editor.scene().set_selectable(strip.entity, true).ok());
   ASSERT_TRUE(editor.tools().activate("uv_peel").ok());
   ASSERT_TRUE(editor.selection().select_edge(strip, 2, 5).ok());
   refresh(harness);
@@ -905,7 +905,7 @@ TEST(UvPeelToolServiceTests, InstanceEditKeepsOccurrenceMappingThroughCancelAndA
   const auto occurrence = created.value().occurrence.root.id;
   const auto definition = created.value().definition.root.id;
   ASSERT_TRUE(editor.scene().set_transform(occurrence, {
-      .position = {5.0f, 2.0f, 0.0f}, .scale = {2.0f, 3.0f, 1.0f},
+      .location = {5.0f, 2.0f, 0.0f}, .scale = {2.0f, 3.0f, 1.0f},
   }).ok());
   const auto before_occurrence = editor.query().entity(occurrence);
   ASSERT_TRUE(before_occurrence.has_value());

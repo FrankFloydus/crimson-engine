@@ -694,7 +694,7 @@ TEST(SceneLightColorPreviewTests, LockedEntityRejectsAcceptanceWithoutCancelingD
   ASSERT_TRUE(edit.ok());
   ASSERT_TRUE(editor.scene().update_light_color_edit(
       edit.value(), {0.125f, 0.25f, 0.5f}).ok());
-  ASSERT_TRUE(session.scene().set_locked(entity, true));
+  ASSERT_TRUE(session.scene().set_selectable(entity, false));
   const auto history_count = session.history().undo_count();
   const auto revision = session.scene().revision();
   EXPECT_FALSE(session.document_commands().accept_active_property_edit().ok);

@@ -51,7 +51,7 @@ inline QMat4 from_glm(const glm::mat4 &value) {
 
 inline QMat4 compose_transform(const QTransform &transform) {
   const glm::mat4 translation =
-      glm::translate(glm::mat4{1.0f}, to_glm(transform.position));
+      glm::translate(glm::mat4{1.0f}, to_glm(transform.location));
   const glm::mat4 rotation = glm::mat4_cast(to_glm(transform.rotation));
   const glm::mat4 scale = glm::scale(glm::mat4{1.0f}, to_glm(transform.scale));
   return from_glm(translation * rotation * scale);

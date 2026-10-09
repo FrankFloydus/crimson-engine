@@ -108,7 +108,7 @@ std::string face_texture_text(const QuaderMeshFaceTexture &face) {
 }
 
 std::string transform_text(const QuaderTransform &value) {
-  return "position:" + vec3_text(value.position) + ",rotation:" +
+  return "position:" + vec3_text(value.location) + ",rotation:" +
          vec3_text(value.rotation_euler) + ",scale:" +
          vec3_text(value.scale);
 }
@@ -844,8 +844,8 @@ std::string capture_scene(const CaptureData &data) {
                     ? matrix_text(*entity->texture_sampling_from_local)
                     : "identity");
     writer.line(prefix + ".visible", bool_text(entity->visible));
-    writer.line(prefix + ".selectable", bool_text(entity->selectable));
-    writer.line(prefix + ".locked", bool_text(entity->locked));
+    writer.line(prefix + ".selectable", bool_text(entity->selection_eligible));
+    writer.line(prefix + ".locked", bool_text(!entity->selectable));
     writer.line(prefix + ".layer", data.layer_label(entity->layer_id));
     writer.line(prefix + ".has_mesh", bool_text(entity->has_mesh));
     writer.line(prefix + ".mesh", data.mesh_label(entity->mesh));
@@ -1730,6 +1730,9 @@ std::string capture_preferences(const CaptureData &data) {
               bool_text(preferences.snapping_enabled()));
   writer.line("preferences.backface_selection",
               bool_text(preferences.backface_selection_enabled()));
+  if (!preferences.backface_culling_enabled()) {
+    writer.line("preferences.backface_culling", "false");
+  }
   writer.line("preferences.texture_lock",
               bool_text(preferences.texture_lock_enabled()));
   writer.line("preferences.texture_lock_scale",

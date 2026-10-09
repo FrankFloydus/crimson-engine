@@ -47,7 +47,7 @@ ViewportSceneProjection::point_light_pick_candidates(
         .selectable =
             scene_hierarchy_segment_is_selectable_ignoring_visibility(
                 document, entity),
-        .effectively_locked = state->effectively_locked,
+        .effectively_selectable = state->effectively_selectable,
         .point_light_range = selection != nullptr && selection->selected
                                  ? std::optional<float>(light->range)
                                  : std::nullopt,

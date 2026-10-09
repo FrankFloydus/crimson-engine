@@ -11,12 +11,14 @@
 #include "editor/modes/editor_mode_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/transform/scene_transform_drag_service.hpp"
 
 #include <QTemporaryDir>
 #include <gtest/gtest.h>
 
 #include <array>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -78,6 +80,239 @@ private:
   bool active_ = false;
 };
 
+TEST_F(EditorModeServiceTests, InspectorTransformsUseFixedEditParticipantsWithoutComponents) {
+  const auto outside = create_box("Outside");
+  const auto first = create_box("First");
+  const auto second = create_box("Second");
+  ASSERT_TRUE(editor_.scene().select({first.entity, second.entity}, first.entity).ok());
+  ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
+  EXPECT_EQ(editor_.selection().summary().selected_vertex_count, 0u);
+  const auto context = editor_.scene().inspector_object_edit_context();
+  ASSERT_EQ(context.entities.size(), 2u);
+  const QuaderTransform before;
+  QuaderTransform moved;
+  moved.location = {4.0f, 2.0f, -1.0f};
+  EXPECT_FALSE(editor_.scene().set_transform(first.entity, moved).ok());
+  const std::array outside_edit{QuaderSceneTransformEdit{
+      .entity = outside.entity, .before = before, .after = moved}};
+  EXPECT_FALSE(editor_.scene().set_inspector_transforms(context, outside_edit).ok());
+  const std::array edits{
+      QuaderSceneTransformEdit{.entity = first.entity, .before = before, .after = moved},
+      QuaderSceneTransformEdit{.entity = second.entity, .before = before, .after = moved}};
+  ASSERT_TRUE(editor_.scene().set_inspector_transforms(context, edits).ok());
+  EXPECT_FLOAT_EQ(session_.scene().transform(first.entity)->location.x, 4.0f);
+  EXPECT_FLOAT_EQ(session_.scene().transform(second.entity)->location.x, 4.0f);
+  EXPECT_FLOAT_EQ(session_.scene().transform(outside.entity)->location.x, 0.0f);
+  EXPECT_EQ(editor_.selection().summary().selected_vertex_count, 0u);
+  ASSERT_TRUE(editor_.commands().execute(quader_command::kEditUndo).ok());
+  EXPECT_FLOAT_EQ(session_.scene().transform(first.entity)->location.x, 0.0f);
+  ASSERT_TRUE(editor_.commands().execute(quader_command::kEditRedo).ok());
+  EXPECT_FLOAT_EQ(session_.scene().transform(second.entity)->location.x, 4.0f);
+  EXPECT_EQ(session_.editor_mode().snapshot().participants.size(), 2u);
+}
+
+TEST_F(EditorModeServiceTests, InspectorPreviewRetainsInvisibleUnselectableEditParticipants) {
+  const auto box = create_box();
+  ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(editor_.scene().set_visible(box.entity, false).ok());
+  ASSERT_TRUE(editor_.scene().set_selectable(box.entity, false).ok());
+  ASSERT_TRUE(session_.editor_mode().contains(box.entity));
+  SceneTransformDragService preview;
+  ASSERT_TRUE(preview.begin_inspector_transform_preview(
+      editor_, session_.scene(), session_.assets(), box.entity,
+      SceneTextureTransformKind::Translation, "Inspector Location"));
+  ASSERT_TRUE(preview.preview_selected_to_primary_location(
+      session_.scene(), box.entity, {3.0f, 0.0f, 0.0f}).ok);
+  EXPECT_FLOAT_EQ(session_.scene().transform(box.entity)->location.x, 3.0f);
+  ASSERT_TRUE(preview.cancel().ok);
+  EXPECT_FLOAT_EQ(session_.scene().transform(box.entity)->location.x, 0.0f);
+  ASSERT_TRUE(preview.begin_inspector_transform_preview(
+      editor_, session_.scene(), session_.assets(), box.entity,
+      SceneTextureTransformKind::Translation, "Inspector Location"));
+  ASSERT_TRUE(preview.preview_selected_to_primary_location(
+      session_.scene(), box.entity, {5.0f, 0.0f, 0.0f}).ok);
+  ASSERT_TRUE(preview.commit(editor_).ok());
+  ASSERT_TRUE(editor_.commands().execute(quader_command::kEditUndo).ok());
+  EXPECT_FLOAT_EQ(session_.scene().transform(box.entity)->location.x, 0.0f);
+  ASSERT_TRUE(editor_.commands().execute(quader_command::kEditRedo).ok());
+  EXPECT_FLOAT_EQ(session_.scene().transform(box.entity)->location.x, 5.0f);
+  EXPECT_FALSE(session_.scene().selectable(box.entity)->selectable);
+  EXPECT_FALSE(session_.scene().visibility(box.entity)->visible);
+  EXPECT_EQ(editor_.selection().summary().selected_vertex_count, 0u);
+  SceneTransformPreviewTransaction generic(session_.scene(), {box.entity});
+  EXPECT_TRUE(generic.empty());
+}
+
+TEST_F(EditorModeServiceTests, SelectabilityPublicationFailureRestoresAuthoredStateAndSelection) {
+  const auto first = create_box("First");
+  const auto second = create_box("Second");
+  ASSERT_TRUE(editor_.scene().select({first.entity, second.entity}, first.entity).ok());
+  const auto selected = session_.scene().selected_entities();
+  const auto history_revision = session_.history().revision();
+  session_.document_commands().set_selection_publication([] {
+    return command_invalid_result("Injected selection publication failure");
+  });
+  const auto result = editor_.scene().set_selectable(first.entity, false);
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(session_.scene().selectable(first.entity)->selectable);
+  EXPECT_EQ(session_.scene().selected_entities(), selected);
+  EXPECT_EQ(session_.scene().primary_selection(), first.entity);
+  EXPECT_EQ(session_.history().revision(), history_revision);
+}
+
+TEST_F(EditorModeServiceTests, InspectorRotationAndScaleUseAllFixedParticipants) {
+  const auto first = create_box("First");
+  const auto second = create_box("Second");
+  QuaderTransform offset;
+  offset.location = {4.0f, 0.0f, 0.0f};
+  ASSERT_TRUE(editor_.scene().set_transform(second.entity, offset).ok());
+  ASSERT_TRUE(editor_.scene().select({first.entity, second.entity}, first.entity).ok());
+  ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
+  SceneTransformDragService preview;
+  ASSERT_TRUE(preview.begin_inspector_transform_preview(
+      editor_, session_.scene(), session_.assets(), first.entity,
+      SceneTextureTransformKind::Rotation, "Inspector Rotation"));
+  ASSERT_TRUE(preview.preview_selected_to_primary_euler(
+      session_.scene(), first.entity, {0.0f, 0.0f, 1.57079632679f}).ok);
+  EXPECT_NEAR(session_.scene().transform(first.entity)->location.x, 2.0f, 0.0001f);
+  EXPECT_NEAR(session_.scene().transform(first.entity)->location.y, -2.0f, 0.0001f);
+  EXPECT_NEAR(session_.scene().transform(second.entity)->location.x, 2.0f, 0.0001f);
+  EXPECT_NEAR(session_.scene().transform(second.entity)->location.y, 2.0f, 0.0001f);
+  ASSERT_TRUE(preview.cancel().ok);
+  ASSERT_TRUE(preview.begin_inspector_transform_preview(
+      editor_, session_.scene(), session_.assets(), first.entity,
+      SceneTextureTransformKind::Scale, "Inspector Scale"));
+  ASSERT_TRUE(preview.preview_selected_to_primary_scale(
+      session_.scene(), first.entity, {2.0f, 2.0f, 2.0f}).ok);
+  EXPECT_FLOAT_EQ(session_.scene().transform(first.entity)->location.x, -2.0f);
+  EXPECT_FLOAT_EQ(session_.scene().transform(second.entity)->location.x, 6.0f);
+  ASSERT_TRUE(preview.commit(editor_).ok());
+  EXPECT_EQ(editor_.selection().summary().selected_vertex_count, 0u);
+  ASSERT_TRUE(editor_.commands().execute(quader_command::kEditUndo).ok());
+  EXPECT_FLOAT_EQ(session_.scene().transform(second.entity)->location.x, 4.0f);
+}
+
+TEST_F(EditorModeServiceTests, SelectableHistoryPreservesIndependentEligibilityGate) {
+  for (const bool eligible : {false, true}) {
+    const auto box = create_box();
+    ASSERT_TRUE(editor_.scene().select(std::span<const EntityId>{}).ok());
+    ASSERT_TRUE(session_.scene().set_selectability(box.entity, eligible));
+    const auto unchanged = editor_.scene().set_selectable(box.entity, true);
+    EXPECT_TRUE(unchanged.ok());
+    EXPECT_FALSE(unchanged.changed());
+    ASSERT_TRUE(editor_.scene().set_selectable(box.entity, false).ok());
+    auto snapshot = editor_.query().entity(box.entity);
+    ASSERT_TRUE(snapshot.has_value());
+    EXPECT_FALSE(snapshot->selectable);
+    EXPECT_EQ(snapshot->selection_eligible, eligible);
+    ASSERT_TRUE(editor_.commands().execute(quader_command::kEditUndo).ok());
+    snapshot = editor_.query().entity(box.entity);
+    EXPECT_TRUE(snapshot->selectable);
+    EXPECT_EQ(snapshot->selection_eligible, eligible);
+    ASSERT_TRUE(editor_.commands().execute(quader_command::kEditRedo).ok());
+    snapshot = editor_.query().entity(box.entity);
+    EXPECT_FALSE(snapshot->selectable);
+    EXPECT_EQ(snapshot->selection_eligible, eligible);
+  }
+}
+
+TEST_F(EditorModeServiceTests, InspectorObjectDraftSettlesCapturedTargetsAfterSelectionChanges) {
+  const auto first = create_box("First");
+  const auto second = create_box("Second");
+  ASSERT_TRUE(editor_.scene().select(first.entity).ok());
+  SceneTransformDragService preview;
+  ASSERT_TRUE(preview.begin_inspector_transform_preview(
+      editor_, session_.scene(), session_.assets(), first.entity,
+      SceneTextureTransformKind::Translation, "Inspector Location"));
+  ASSERT_TRUE(preview.preview_selected_to_primary_location(
+      session_.scene(), first.entity, {3.0f, 0.0f, 0.0f}).ok);
+  ASSERT_TRUE(editor_.scene().select(second.entity).ok());
+  EXPECT_FALSE(preview.preview_selected_to_primary_location(
+      session_.scene(), first.entity, {8.0f, 0.0f, 0.0f}).ok);
+  ASSERT_TRUE(preview.commit(editor_).ok());
+  EXPECT_FLOAT_EQ(session_.scene().transform(first.entity)->location.x, 3.0f);
+  EXPECT_FLOAT_EQ(session_.scene().transform(second.entity)->location.x, 0.0f);
+  EXPECT_EQ(session_.scene().primary_selection(), second.entity);
+}
+
+TEST_F(EditorModeServiceTests, InspectorContextUsesIdentityAndFixedParticipantsBeyondSelectionRevisions) {
+  const auto first = create_box("First");
+  const auto second = create_box("Second");
+  ASSERT_TRUE(editor_.scene().select({first.entity, second.entity}, first.entity).ok());
+  ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
+  const auto context = editor_.scene().inspector_object_edit_context();
+  ASSERT_TRUE(editor_.selection().select_vertex(first, 1).ok());
+  for (int sample = 0; sample < 10; ++sample) {
+    EXPECT_TRUE(editor_.scene().inspector_object_edit_context_valid(context));
+  }
+  const auto second_identity = session_.scene().uuid(second.entity);
+  ASSERT_TRUE(session_.scene().set_entity_uuid(second.entity, "8fad8c01-0161-47ac-9d2c-0371da41a6fd"));
+  EXPECT_FALSE(editor_.scene().inspector_object_edit_context_valid(context));
+  ASSERT_TRUE(session_.scene().set_entity_uuid(second.entity, second_identity));
+  EXPECT_TRUE(editor_.scene().inspector_object_edit_context_valid(context));
+}
+
+TEST_F(EditorModeServiceTests, InspectorContextRejectsReplacedDocument) {
+  const auto box = create_box();
+  ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
+  const auto context = editor_.scene().inspector_object_edit_context();
+  session_.replace_document(SceneContentDocument{});
+  EXPECT_FALSE(editor_.scene().inspector_object_edit_context_valid(context));
+  const std::array edits{QuaderSceneTransformEdit{
+      .entity = box.entity, .before = {}, .after = {.location = {3.0f, 0.0f, 0.0f}}}};
+  EXPECT_FALSE(editor_.scene().set_inspector_transforms(context, edits).ok());
+}
+
+TEST_F(EditorModeServiceTests, RetiredInspectorPreviewNeverRestoresIntoAReplacementEntity) {
+  for (int finish_kind = 0; finish_kind < 3; ++finish_kind) {
+    session_.replace_document(SceneContentDocument{});
+    const auto original = create_box("Original");
+    ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
+    auto preview = std::make_unique<SceneTransformDragService>();
+    ASSERT_TRUE(preview->begin_inspector_transform_preview(
+        editor_, session_.scene(), session_.assets(), original.entity,
+        SceneTextureTransformKind::Translation, "Inspector Location"));
+    ASSERT_TRUE(preview->preview_selected_to_primary_location(
+        session_.scene(), original.entity, {3.0f, 0.0f, 0.0f}).ok);
+    session_.replace_document(SceneContentDocument{});
+    const auto replacement = create_box("Replacement");
+    ASSERT_EQ(replacement.entity, original.entity);
+    QuaderTransform replacement_transform;
+    replacement_transform.location = {17.0f, 5.0f, 2.0f};
+    ASSERT_TRUE(editor_.scene().set_transform(replacement.entity, replacement_transform).ok());
+    if (finish_kind == 0) {
+      EXPECT_FALSE(preview->cancel().ok);
+    } else if (finish_kind == 1) {
+      preview->reset();
+    } else {
+      preview.reset();
+    }
+    EXPECT_FLOAT_EQ(session_.scene().transform(replacement.entity)->location.x, 17.0f);
+    EXPECT_FLOAT_EQ(session_.scene().transform(replacement.entity)->location.y, 5.0f);
+    EXPECT_FLOAT_EQ(session_.scene().transform(replacement.entity)->location.z, 2.0f);
+  }
+}
+
+TEST_F(EditorModeServiceTests, InspectorContextRejectsRetiredModeGenerationAndRestoresPreview) {
+  const auto box = create_box();
+  ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
+  const auto context = editor_.scene().inspector_object_edit_context();
+  SceneTransformDragService preview;
+  ASSERT_TRUE(preview.begin_inspector_transform_preview(
+      editor_, session_.scene(), session_.assets(), box.entity,
+      SceneTextureTransformKind::Translation, "Inspector Location"));
+  ASSERT_TRUE(preview.preview_selected_to_primary_location(
+      session_.scene(), box.entity, {3.0f, 0.0f, 0.0f}).ok);
+  ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Object).ok());
+  ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
+  EXPECT_FALSE(editor_.scene().inspector_object_edit_context_valid(context));
+  EXPECT_FALSE(preview.preview_selected_to_primary_location(
+      session_.scene(), box.entity, {8.0f, 0.0f, 0.0f}).ok);
+  EXPECT_FALSE(preview.commit(editor_).ok());
+  ASSERT_TRUE(preview.cancel().ok);
+  EXPECT_FLOAT_EQ(session_.scene().transform(box.entity)->location.x, 0.0f);
+}
+
 TEST_F(EditorModeServiceTests, NewSceneStartsInObjectWithoutEditableComponents) {
   EXPECT_EQ(editor_.mode().current(), QuaderEditorMode::Object);
   EXPECT_EQ(session_.modeling().selection_mode(), ModelingSelectionMode::Object);
@@ -120,7 +355,7 @@ TEST_F(EditorModeServiceTests, ObjectDeselectionRetainsActiveMeshForExplicitEdit
   const auto mesh = create_box("Last Active");
   const auto outside = create_box("Outside");
   ASSERT_TRUE(editor_.object(outside).set_transform(
-      {.position = {5.0f, 0.0f, 0.0f}}).ok());
+      {.location = {5.0f, 0.0f, 0.0f}}).ok());
   const QuaderRay outside_ray{.origin = {5.0f, 0.0f, 5.0f},
                              .direction = {0.0f, 0.0f, -1.0f}};
   for (int deselection_path = 0; deselection_path < 5; ++deselection_path) {
@@ -253,7 +488,7 @@ TEST_F(EditorModeServiceTests, IneligibleRetainedActiveNeverFallsBackToAnotherMe
       if (ineligible_kind == 0) {
         ASSERT_TRUE(editor_.scene().set_visible(active, false).ok());
       } else {
-        ASSERT_TRUE(editor_.scene().set_locked(active, true).ok());
+        ASSERT_TRUE(editor_.scene().set_selectable(active, false).ok());
       }
     } else {
       const auto created = editor_.scene().create_entity(
@@ -434,7 +669,7 @@ TEST_F(EditorModeServiceTests, GroupEntryRecursesDeduplicatesAndSkipsIneligibleE
                   .reparent(hidden.entity, group.value().id)
                   .set_visible(hidden.entity, false)
                   .reparent(locked.entity, group.value().id)
-                  .set_locked(locked.entity, true)
+                  .set_selectable(locked.entity, false)
                   .commit().ok());
   ASSERT_TRUE(editor_.selection().select_objects(
       {group.value().id, second.entity}, second.entity).ok());
@@ -484,7 +719,7 @@ TEST_F(EditorModeServiceTests, InstanceEntryUsesVisibleOccurrenceAndAuthoredMemb
   EXPECT_FALSE(session_.scene().is_effectively_visible(visible.entity));
   ASSERT_TRUE(editor_.modeling().enter_instance_edit(occurrence).ok());
   ASSERT_TRUE(editor_.scene().set_visible(hidden.entity, false).ok());
-  ASSERT_TRUE(editor_.scene().set_locked(locked.entity, true).ok());
+  ASSERT_TRUE(editor_.scene().set_selectable(locked.entity, false).ok());
   ASSERT_TRUE(editor_.selection().select_objects(
       {visible.entity, hidden.entity, locked.entity, outside.entity},
       visible.entity).ok());

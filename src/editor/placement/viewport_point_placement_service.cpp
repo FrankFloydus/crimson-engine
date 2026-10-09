@@ -451,7 +451,7 @@ ViewportPointPlacementResult ViewportPointPlacementService::resolve(
     SceneSurfaceRaycastRequest selectable_request{
         .world_origin = ray.origin,
         .world_direction = ray.direction,
-        .eligibility = SceneSurfaceEligibility::SelectableUnlocked,
+        .eligibility = SceneSurfaceEligibility::EffectivelySelectable,
     };
     if (render_surface.has_value()) {
       selectable_request.max_distance =
@@ -470,7 +470,7 @@ ViewportPointPlacementResult ViewportPointPlacementService::resolve(
       const SceneSurfaceLandmark &landmark = landmarks[landmark_index];
       const ViewportPointSnapKind kind = point_snap_kind(landmark.kind);
       if (!policy_enables(kind, request.policy) || !landmark.selectable ||
-          landmark.effectively_locked) {
+          !landmark.effectively_selectable) {
         continue;
       }
       const std::optional<std::size_t> slot = landmark_slot(kind);

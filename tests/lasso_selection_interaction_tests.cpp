@@ -616,12 +616,12 @@ TEST(LassoSelectionInteractionTests,
   EXPECT_EQ(harness.editor.selection().summary().content_revision,
             content_revision);
   EXPECT_FLOAT_EQ(
-      harness.editor.query().entity(inside.entity)->transform.position.x,
-      inside_transform.position.x);
+      harness.editor.query().entity(inside.entity)->transform.location.x,
+      inside_transform.location.x);
   EXPECT_FLOAT_EQ(harness.editor.query()
                       .entity(excluded_corner.entity)
-                      ->transform.position.x,
-                  outside_transform.position.x);
+                      ->transform.location.x,
+                  outside_transform.location.x);
 }
 
 TEST(LassoSelectionInteractionTests,

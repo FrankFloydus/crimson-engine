@@ -72,11 +72,11 @@ struct SceneSurfaceParticipant final {
   SceneSurfaceParticipantId id;
   SceneBounds world_bounds{};
   std::size_t triangle_count = 0u;
-  /// Selectability excludes visibility and lock state, which are represented
+  /// Selectability excludes visibility and inherited selection state, which are represented
   /// independently so rendered occluders are never removed from the index.
   bool selectable = false;
-  bool effectively_locked = false;
-  /// Freezes the source mesh's render policy for ordinary and instanced surfaces.
+  bool effectively_selectable = true;
+  /// Freezes the shared viewport render policy for ordinary and instanced surfaces.
   bool double_sided = false;
 };
 
@@ -84,7 +84,7 @@ struct SceneSurfaceParticipant final {
 enum class SceneSurfaceEligibility : std::uint8_t {
   RenderVisible,
   Selectable,
-  SelectableUnlocked,
+  EffectivelySelectable,
 };
 
 /// Identifies one stable mesh landmark class in a frozen surface snapshot.
@@ -103,7 +103,7 @@ struct SceneSurfaceLandmark final {
   /// Stable within the source mesh payload and landmark kind.
   std::uint64_t element_key = 0u;
   bool selectable = false;
-  bool effectively_locked = false;
+  bool effectively_selectable = true;
 };
 
 /// Carries one downward or arbitrary world-space surface query.
@@ -112,8 +112,8 @@ struct SceneSurfaceRaycastRequest final {
   QVec3 world_direction{0.0f, -1.0f, 0.0f};
   float min_distance = 0.0f;
   float max_distance = std::numeric_limits<float>::infinity();
-  /// When false, triangle winding is evaluated after the participant's world
-  /// transform so reflected occurrences retain the renderer's face policy.
+  /// When false, explicit selection filtering uses world-space triangle winding.
+  /// Render sidedness below independently includes Filament's reflection correction.
   bool include_backfaces = true;
   /// Restricts otherwise included backfaces to meshes rendered double-sided.
   /// False preserves the query's independent include_backfaces policy.
@@ -205,7 +205,7 @@ public:
   [[nodiscard]] std::shared_ptr<const ViewportSelectionDepthGeometry>
   selection_depth_geometry() const;
   /// Verifies a proposed raster ID with the BVH's local-ray kernel and the
-  /// frozen render-sidedness policy, evaluated using world-space winding.
+  /// frozen render-sidedness policy, including reflected-entity raster winding.
   [[nodiscard]] std::optional<float> selection_depth_triangle_distance(
       std::uint32_t triangle_id, QVec3 origin, QVec3 direction) const;
   [[nodiscard]] std::shared_ptr<const ViewportSelectionDepthSnapshot>
@@ -224,13 +224,14 @@ private:
  * Owns the editor-side scene/asset adapter for neutral triangle BVHs.
  *
  * Receivers mirror render visibility: ordinary meshes and every visible
- * formal-instance occurrence participate, including locked/non-selectable
+ * formal-instance occurrence participate, including non-selectable
  * meshes. Viewport Local Visibility is the only additional filter.
  */
 class SceneSurfaceQuery final {
 public:
   SceneSurfaceQuery(const SceneDocument &scene, const AssetRegistry &assets,
-                    const ViewportLocalVisibilityService &local_visibility);
+                    const ViewportLocalVisibilityService &local_visibility,
+                    std::function<bool()> backface_culling_provider = {});
   /**
    * Creates the same render-visible query for a standalone editor service.
    * The callbacks represent Local Visibility only; ordinary scene visibility
@@ -239,7 +240,8 @@ public:
   SceneSurfaceQuery(
       const SceneDocument &scene, const AssetRegistry &assets,
       std::function<bool(EntityId)> local_visibility_filter,
-      std::function<std::uint64_t()> local_visibility_revision_provider);
+      std::function<std::uint64_t()> local_visibility_revision_provider,
+      std::function<bool()> backface_culling_provider = {});
   ~SceneSurfaceQuery();
 
   SceneSurfaceQuery(const SceneSurfaceQuery &) = delete;

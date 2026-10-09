@@ -197,14 +197,14 @@ BoolAggregate aggregate_visibility(const SceneDocument &document,
   return result;
 }
 
-BoolAggregate aggregate_lock(const SceneDocument &document,
-                             const std::vector<EntityId> &selected) {
+BoolAggregate aggregate_selectability(const SceneDocument &document,
+                                      const std::vector<EntityId> &selected) {
   BoolAggregate result;
   for (const EntityId id : selected) {
-    if (const LockComponent *lock = document.lock(id)) {
+    if (const SelectableComponent *selectability = document.selectable(id)) {
       result.has_value = true;
-      result.all_true = result.all_true && lock->locked;
-      result.any_true = result.any_true || lock->locked;
+      result.all_true = result.all_true && selectability->selectable;
+      result.any_true = result.any_true || selectability->selectable;
     }
   }
   return result;
@@ -214,18 +214,18 @@ bool same_float(float left, float right) {
   return std::fabs(left - right) <= 0.0001f;
 }
 
-std::array<bool, 3> mixed_position_axes(const SceneDocument &document,
+std::array<bool, 3> mixed_location_axes(const SceneDocument &document,
                                         const std::vector<EntityId> &selected,
                                         const TransformComponent &primary) {
   std::array<bool, 3> mixed{false, false, false};
   for (const EntityId id : selected) {
     if (const TransformComponent *transform = document.transform(id)) {
       mixed[0] =
-          mixed[0] || !same_float(transform->position.x, primary.position.x);
+          mixed[0] || !same_float(transform->location.x, primary.location.x);
       mixed[1] =
-          mixed[1] || !same_float(transform->position.y, primary.position.y);
+          mixed[1] || !same_float(transform->location.y, primary.location.y);
       mixed[2] =
-          mixed[2] || !same_float(transform->position.z, primary.position.z);
+          mixed[2] || !same_float(transform->location.z, primary.location.z);
     }
   }
   return mixed;
@@ -464,6 +464,8 @@ public:
 
   void apply_ui_scale(const QtUiScaleMetrics &metrics) { metrics_ = metrics; }
 
+  void synchronize_column_editors() { updateEditorGeometries(); }
+
 protected:
   void mousePressEvent(QMouseEvent *event) override {
     if (event->button() == Qt::LeftButton &&
@@ -611,14 +613,14 @@ private:
 
 /// Identifies which transform component an inspector preview edits.
 enum class TransformEditKind {
-  Position,
+  Location,
   Rotation,
   Scale,
 };
 
 /// Captures the selection and baseline values for one transform edit preview.
 struct TransformEditState {
-  TransformEditKind kind = TransformEditKind::Position;
+  TransformEditKind kind = TransformEditKind::Location;
   EntityId primary = kInvalidEntityId;
   std::vector<EntityId> selection;
   std::array<float, 3> values{};
@@ -680,7 +682,7 @@ struct InspectorPanel::Impl {
 
   /// Latest absolute pointer sample within one live transform preview.
   struct PendingTransformPreview {
-    TransformEditKind kind = TransformEditKind::Position;
+    TransformEditKind kind = TransformEditKind::Location;
     std::array<double, 3> values{};
     std::uint64_t binding_generation = 0;
     std::uint64_t selection_revision = 0;
@@ -816,6 +818,7 @@ struct InspectorPanel::Impl {
 
   void abandon_runtime() noexcept {
     ++runtime_binding_generation_;
+    ++property_generation_;
     discard_pending_transform_preview();
     for (QDoubleSpinBox *spin : panel_.findChildren<QDoubleSpinBox *>()) {
       qt_install_numeric_spin_box(*spin).abandon_interaction();
@@ -850,12 +853,35 @@ struct InspectorPanel::Impl {
     const auto mode_generation = context.intent.editor.mode().generation();
     const bool mode_changed = !owner_changed &&
         built_editor_mode_generation_ != mode_generation;
+    const auto mode_revision = context.intent.editor.mode().revision();
+    const auto selection_revision = next_document->selection_revision();
+    const bool edit_mode =
+        context.intent.editor.mode().current() == QuaderEditorMode::Edit;
+    const bool targets_changed = owner_changed || mode_changed ||
+        (edit_mode ? inspected_mode_revision_ != mode_revision
+                   : inspected_selection_revision_ != selection_revision);
 
-    std::vector<EntityId> next_selection =
-        next_document->selected_entities();
-    EntityId next_primary = next_document->primary_selection();
-    if (next_primary == kInvalidEntityId && !next_selection.empty()) {
-      next_primary = next_selection.front();
+    std::vector<EntityId> next_selection;
+    EntityId next_primary = kInvalidEntityId;
+    if (targets_changed) {
+      if (edit_mode) {
+        const auto mode = context.intent.editor.mode().state();
+        next_selection.reserve(mode.participants.size());
+        for (const auto &participant : mode.participants) {
+          next_selection.push_back(participant.id);
+        }
+        next_primary = mode.active_entity.id;
+        if (std::find(next_selection.begin(), next_selection.end(), next_primary) ==
+            next_selection.end()) {
+          next_primary = kInvalidEntityId;
+        }
+      } else {
+        next_selection = next_document->selected_entities();
+        next_primary = next_document->primary_selection();
+      }
+      if (next_primary == kInvalidEntityId && !next_selection.empty()) {
+        next_primary = next_selection.front();
+      }
     }
     if (owner_changed && (document_ != nullptr || modeling_ != nullptr)) {
       // The former SceneSession may already be gone when a host rebind arrives.
@@ -881,9 +907,9 @@ struct InspectorPanel::Impl {
       active_continuous_id_.clear();
       force_rebuild_ = true;
     }
-    const bool selection_changed =
-        owner_changed || next_selection != selection_ ||
-        next_primary != primary_;
+    const bool selection_changed = targets_changed &&
+        (owner_changed || next_selection != selection_ ||
+         next_primary != primary_);
     if (!owner_changed && !mode_changed && selection_changed &&
         active_color_dialog_ != nullptr) {
       active_color_dialog_->accept();
@@ -902,6 +928,8 @@ struct InspectorPanel::Impl {
       primary_ = next_primary;
       force_rebuild_ = true;
     }
+    inspected_mode_revision_ = mode_revision;
+    inspected_selection_revision_ = selection_revision;
 
     editor_ = &context.intent.editor;
     document_ = next_document;
@@ -1135,6 +1163,9 @@ private:
     }
     adjusting_label_column_width_ = true;
     header->resizeSection(0, width);
+    // QTreeView defers this synchronization to a timer after sectionResized.
+    // Our scale/layout correction must place retained editors before painting.
+    tree_->synchronize_column_editors();
     adjusting_label_column_width_ = false;
   }
 
@@ -1213,6 +1244,7 @@ private:
   }
 
   void clear_content() {
+    ++property_generation_;
     discard_pending_transform_preview();
     section_headers_.clear();
     property_rows_.clear();
@@ -1239,7 +1271,7 @@ private:
       return false;
     }
     const std::array<std::array<bool, 3>, 3> mixed{
-        mixed_position_axes(*document_, selection_, *transform),
+        mixed_location_axes(*document_, selection_, *transform),
         mixed_rotation_axes(*document_, selection_, *transform),
         mixed_scale_axes(*document_, selection_, *transform),
     };
@@ -1250,7 +1282,7 @@ private:
     }
     const QVec3 rotation = positive_euler_radians(transform->rotation_euler);
     const std::array<std::array<double, 3>, 3> values{{
-        {transform->position.x, transform->position.y, transform->position.z},
+        {transform->location.x, transform->location.y, transform->location.z},
         {rotation.x * kRadToDeg, rotation.y * kRadToDeg,
          rotation.z * kRadToDeg},
         {transform->scale.x, transform->scale.y, transform->scale.z},
@@ -1336,23 +1368,22 @@ private:
         {localized("ui.inspector.property", "Property"),
          localized("ui.inspector.value", "Value")});
 
-    if (editor_->mode().current() == QuaderEditorMode::Edit) {
-      // Retained edit-set object selection never exposes whole-object fields.
-      if (summary.mode == ModelingSelectionMode::Face) {
-        build_material_section();
-      }
-    } else if (selection_.empty()) {
+    if (selection_.empty()) {
       build_empty_selection(summary);
     } else {
       build_general_section();
+      build_visibility_section();
       build_transform_section();
-      build_material_section();
+      if (editor_->mode().current() == QuaderEditorMode::Object ||
+          summary.mode == ModelingSelectionMode::Face) {
+        build_material_section();
+      }
 
       if (selection_.size() == 1u) {
         build_mesh_sections();
         build_light_section();
       }
-      build_shading_section();
+      build_viewport_section();
       build_physics_section();
       if (selection_.size() > 1u) {
         build_component_count_section();
@@ -1669,9 +1700,12 @@ private:
     box->setObjectName(stable_name(stable_id));
     box->setChecked(checked);
     add_row(section, stable_id, label, box);
+    const auto property_generation = property_generation_;
     QObject::connect(box, &QCheckBox::toggled, &panel_,
-                     [this, changed = std::move(changed)](bool value) {
-                       if (!rebuilding_ && object_transform_context_current()) {
+                     [this, property_generation,
+                      changed = std::move(changed)](bool value) {
+                       if (!rebuilding_ &&
+                           property_context_current(property_generation)) {
                          changed(value);
                        }
                      });
@@ -1697,9 +1731,12 @@ private:
     }
     layout->addStretch(1);
     add_row(section, stable_id, label, field);
+    const auto property_generation = property_generation_;
     QObject::connect(box, &QCheckBox::toggled, &panel_,
-                     [this, changed = std::move(changed)](bool value) {
-                       if (!rebuilding_ && object_transform_context_current()) {
+                     [this, property_generation,
+                      changed = std::move(changed)](bool value) {
+                       if (!rebuilding_ &&
+                           property_context_current(property_generation)) {
                          changed(value);
                        }
                      });
@@ -1737,9 +1774,12 @@ private:
     }
     combo->setCurrentIndex(mixed ? -1 : selected_index);
     add_row(section, stable_id, label, combo);
+    const auto property_generation = property_generation_;
     QObject::connect(combo, &QComboBox::activated, &panel_,
-                     [this, combo, changed = std::move(changed)](int index) {
-                       if (rebuilding_ || !object_transform_context_current() || index < 0 ||
+                     [this, combo, property_generation,
+                      changed = std::move(changed)](int index) {
+                       if (rebuilding_ ||
+                           !property_context_current(property_generation) || index < 0 ||
                            !(combo->model()->flags(
                                  combo->model()->index(index, 0)) &
                              Qt::ItemIsEnabled)) {
@@ -1765,10 +1805,12 @@ private:
     spin->setValue(value);
     add_row(section, stable_id, label, spin);
 
+    const auto property_generation = property_generation_;
     QObject::connect(
         spin, &QDoubleSpinBox::valueChanged, &panel_,
-        [this, stable_id, changed = std::move(changed)](double next) {
-          if (rebuilding_ || !object_transform_context_current()) {
+        [this, stable_id, property_generation,
+         changed = std::move(changed)](double next) {
+          if (rebuilding_ || !property_context_current(property_generation)) {
             return;
           }
           const std::span<const EntityId> selection(selection_.data(),
@@ -1780,8 +1822,9 @@ private:
           active_continuous_id_ = stable_id;
           changed(next, merge_key);
         });
-    const auto finish = [this, stable_id]() {
-      if (rebuilding_ || active_continuous_id_ != stable_id) {
+    const auto finish = [this, stable_id, property_generation]() {
+      if (rebuilding_ || !property_context_current(property_generation) ||
+          active_continuous_id_ != stable_id) {
         return;
       }
       active_continuous_edit_.reset();
@@ -1828,9 +1871,10 @@ private:
     synchronize_number_field(field, value);
     add_row(section, stable_id, label, spin);
 
-    const auto update = [this, stable_id, field,
+    const auto property_generation = property_generation_;
+    const auto update = [this, stable_id, field, property_generation,
                          changed = std::move(changed)](double requested) {
-      if (rebuilding_ || !object_transform_context_current()) {
+      if (rebuilding_ || !property_context_current(property_generation)) {
         return;
       }
       const double next = std::clamp(requested, field.numeric_minimum,
@@ -1852,8 +1896,9 @@ private:
       }
     };
     QObject::connect(spin, &QDoubleSpinBox::valueChanged, &panel_, update);
-    const auto finish = [this, stable_id]() {
-      if (rebuilding_ || active_continuous_id_ != stable_id) {
+    const auto finish = [this, stable_id, property_generation]() {
+      if (rebuilding_ || !property_context_current(property_generation) ||
+          active_continuous_id_ != stable_id) {
         return;
       }
       active_continuous_edit_.reset();
@@ -1918,10 +1963,11 @@ private:
     button->set_swatch_color(initial);
     add_row(section, stable_id, label, button);
 
+    const auto property_generation = property_generation_;
     QObject::connect(
         button, &QtColorSwatchButton::clicked, &panel_,
-        [this, stable_id, button, entity]() {
-          if (editor_ == nullptr) {
+        [this, stable_id, button, entity, property_generation]() {
+          if (!property_context_current(property_generation)) {
             return;
           }
           const std::uint64_t dialog_generation = runtime_binding_generation_;
@@ -2075,11 +2121,7 @@ private:
   }
 
   void build_general_section() {
-    const std::vector<EntityId> &editable_selected = selection_;
-    const BoolAggregate visibility =
-        aggregate_visibility(*document_, editable_selected);
-    const BoolAggregate lock = aggregate_lock(*document_, editable_selected);
-    if (selection_.size() != 1u && !visibility.has_value && !lock.has_value) {
+    if (selection_.size() != 1u) {
       return;
     }
 
@@ -2095,21 +2137,36 @@ private:
       add_row(section, "general.name", localized("ui.inspector.name", "Name"),
               name);
       const EntityId entity = primary_;
+      const auto property_generation = property_generation_;
       QObject::connect(name, &QLineEdit::editingFinished, &panel_,
-                       [this, name, entity]() {
-                         if (!rebuilding_ && object_transform_context_current()) {
+                       [this, name, entity, property_generation]() {
+                         if (!rebuilding_ &&
+                             property_context_current(property_generation)) {
                            (void)editor_->scene().rename(
                                entity, name->text().toUtf8().toStdString());
                          }
                        });
     }
+  }
+
+  void build_visibility_section() {
+    const std::vector<EntityId> &editable_selected = selection_;
+    const BoolAggregate visibility =
+        aggregate_visibility(*document_, editable_selected);
+    const BoolAggregate selectability =
+        aggregate_selectability(*document_, editable_selected);
+    if (!visibility.has_value && !selectability.has_value) {
+      return;
+    }
+    Section section = add_section(
+        "visibility", localized("ui.inspector.visibility", "Visibility"));
 
     if (visibility.has_value) {
-      const bool hidden = !visibility.all_true;
-      add_mixed_checkbox(section, "general.hidden",
-                         localized("ui.inspector.hidden", "Hidden"), hidden,
+      add_mixed_checkbox(section, "visibility.visible",
+                         localized("ui.inspector.visible", "Visible"),
+                         visibility.all_true,
                          visibility.mixed(),
-                         [this, editable_selected](bool next_hidden) {
+                         [this, editable_selected](bool next_visible) {
                            std::vector<QuaderSceneVisibilityEdit> edits;
                            edits.reserve(editable_selected.size());
                            for (const EntityId entity : editable_selected) {
@@ -2117,7 +2174,7 @@ private:
                                      document_->visibility(entity)) {
                                edits.push_back({.entity = entity,
                                                 .before = current->visible,
-                                                .after = !next_hidden});
+                                                .after = next_visible});
                              }
                            }
                            (void)editor_->scene().set_visibility(
@@ -2126,23 +2183,22 @@ private:
                          });
     }
 
-    if (lock.has_value) {
+    if (selectability.has_value) {
       add_mixed_checkbox(
-          section, "general.locked", localized("ui.inspector.locked", "Locked"),
-          lock.all_true, lock.mixed(),
-          [this, editable_selected](bool next_locked) {
-            std::vector<QuaderSceneLockEdit> edits;
+          section, "visibility.selectable",
+          localized("ui.inspector.selectable", "Selectable"),
+          selectability.all_true, selectability.mixed(),
+          [this, editable_selected](bool next_selectable) {
+            std::vector<QuaderSceneSelectabilityEdit> edits;
             edits.reserve(editable_selected.size());
             for (const EntityId entity : editable_selected) {
-              if (const LockComponent *current = document_->lock(entity)) {
+              if (const SelectableComponent *current = document_->selectable(entity)) {
                 edits.push_back({.entity = entity,
-                                 .before = current->locked,
-                                 .after = next_locked});
+                                 .before = current->selectable,
+                                 .after = next_selectable});
               }
             }
-            (void)editor_->scene().set_locks(
-                std::span<const QuaderSceneLockEdit>(edits.data(),
-                                                     edits.size()));
+            (void)editor_->scene().set_selectability(edits);
           });
     }
   }
@@ -2168,15 +2224,15 @@ private:
                           qt_text(value));
     }
 
-    const std::array<double, 3> position{
-        transform->position.x,
-        transform->position.y,
-        transform->position.z,
+    const std::array<double, 3> location{
+        transform->location.x,
+        transform->location.y,
+        transform->location.z,
     };
-    add_transform_row(section, "transform.position",
-                      localized("ui.inspector.position", "Position"),
-                      TransformEditKind::Position, position,
-                      mixed_position_axes(*document_, selection_, *transform),
+    add_transform_row(section, "transform.location",
+                      localized("ui.inspector.location", "Location"),
+                      TransformEditKind::Location, location,
+                      mixed_location_axes(*document_, selection_, *transform),
                       0.05, -std::numeric_limits<double>::max(),
                       std::numeric_limits<double>::max());
 
@@ -2273,10 +2329,12 @@ private:
       spin->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
       layout->addWidget(spin, axis_row, 1);
 
+      const auto property_generation = property_generation_;
       QObject::connect(spin, &QDoubleSpinBox::valueChanged, &panel_,
-                       [this, kind, axis, values,
+                       [this, kind, axis, values, property_generation,
                         controller = &numeric](double next) {
-                         if (rebuilding_) {
+                         if (rebuilding_ ||
+                             !property_context_current(property_generation)) {
                            return;
                          }
                          (*values)[axis] = next;
@@ -2302,13 +2360,15 @@ private:
                          }
                        });
       QObject::connect(spin, &QDoubleSpinBox::editingFinished, &panel_,
-                       [this, kind]() {
-                         if (!rebuilding_) {
+                       [this, kind, property_generation]() {
+                         if (!rebuilding_ &&
+                             property_context_current(property_generation)) {
                            finish_transform_edit(kind);
                          }
                        });
-      spin->cancel_handler = [this, kind]() {
-        if (active_transform_edit_ && active_transform_edit_->kind == kind) {
+      spin->cancel_handler = [this, kind, property_generation]() {
+        if (property_context_current(property_generation) &&
+            active_transform_edit_ && active_transform_edit_->kind == kind) {
           cancel_active_transform_edit();
           force_rebuild_ = true;
         }
@@ -2362,17 +2422,20 @@ private:
     row.scale_link = button;
     row.item->setData(0, kInspectorRetainedLabelRole, true);
     tree_->setItemWidget(row.item, 0, container);
-    const auto generation = runtime_binding_generation_;
+    const auto property_generation = property_generation_;
     QObject::connect(button, &QToolButton::pressed, &panel_,
-                     [this, generation,
+                     [this, property_generation,
                       guard = QPointer<QtScaleLinkButton>(button)]() {
+      if (!property_context_current(property_generation)) {
+        return;
+      }
       const QPointer<InspectorPanel> panel_guard(&panel_);
       if (QWidget *focus = QApplication::focusWidget();
           focus != nullptr && focus != guard && panel_.isAncestorOf(focus)) {
         focus->clearFocus();
       }
       if (panel_guard == nullptr || guard == nullptr ||
-          generation != runtime_binding_generation_) {
+          !property_context_current(property_generation)) {
         return;
       }
       if (active_transform_edit_) {
@@ -2380,8 +2443,8 @@ private:
       }
     });
     QObject::connect(button, &QToolButton::toggled, &panel_,
-                     [this, generation](bool checked) {
-      if (generation == runtime_binding_generation_) {
+                     [this, property_generation](bool checked) {
+      if (property_context_current(property_generation)) {
         scale_linked_ = checked;
       }
     });
@@ -2422,7 +2485,7 @@ private:
 
   bool begin_transform_edit(TransformEditKind kind,
                             const std::array<double, 3> &values) {
-    if (!object_transform_context_current() || document_ == nullptr ||
+    if (!property_context_current() || document_ == nullptr ||
         document_->selection_revision() != built_scene_selection_revision_) {
       return false;
     }
@@ -2430,7 +2493,8 @@ private:
         active_transform_preview_.preview_active()) {
       return true;
     }
-    if (preview_document_ == nullptr || editor_ == nullptr) {
+    if (preview_document_ == nullptr || preview_assets_ == nullptr ||
+        editor_ == nullptr) {
       return false;
     }
 
@@ -2449,29 +2513,20 @@ private:
         .texture_lock_scale =
             editor_->preferences().texture_lock_scale_enabled(),
     };
-    bool began = false;
+    SceneTextureTransformKind transform_kind = SceneTextureTransformKind::Translation;
     switch (kind) {
-    case TransformEditKind::Position:
-      began = active_transform_preview_
-                  .begin_move_selected_to_primary_position_preview(
-                      *preview_document_, primary_, "Set Transform",
-                      texture_locks);
+    case TransformEditKind::Location:
       break;
     case TransformEditKind::Rotation:
-      began = preview_assets_ != nullptr &&
-              active_transform_preview_
-                  .begin_rotate_selected_to_primary_euler_preview(
-                      *preview_document_, *preview_assets_, primary_,
-                      "Set Transform", texture_locks);
+      transform_kind = SceneTextureTransformKind::Rotation;
       break;
     case TransformEditKind::Scale:
-      began = preview_assets_ != nullptr &&
-              active_transform_preview_
-                  .begin_scale_selected_to_primary_scale_preview(
-                      *preview_document_, *preview_assets_, primary_,
-                      "Set Transform", texture_locks);
+      transform_kind = SceneTextureTransformKind::Scale;
       break;
     }
+    const bool began = active_transform_preview_.begin_inspector_transform_preview(
+        *editor_, *preview_document_, *preview_assets_, primary_, transform_kind,
+        "Set Transform", texture_locks);
     if (!began) {
       return false;
     }
@@ -2542,8 +2597,8 @@ private:
 
     DocumentCommandResult result;
     switch (kind) {
-    case TransformEditKind::Position:
-      result = active_transform_preview_.preview_selected_to_primary_position(
+    case TransformEditKind::Location:
+      result = active_transform_preview_.preview_selected_to_primary_location(
           *preview_document_, primary_,
           {active_transform_edit_->values[0], active_transform_edit_->values[1],
            active_transform_edit_->values[2]});
@@ -2592,7 +2647,7 @@ private:
     const auto pending = std::exchange(pending_transform_preview_, std::nullopt);
     transform_dispatch_timer_->stop();
     if (!pending.has_value() || rebuilding_ || document_ == nullptr ||
-        !object_transform_context_current() ||
+        !property_context_current() ||
         pending->binding_generation != runtime_binding_generation_ ||
         pending->editor_mode_generation != editor_->mode().generation() ||
         pending->selection_revision != document_->selection_revision() ||
@@ -2617,7 +2672,7 @@ private:
     if (guard == nullptr || generation != runtime_binding_generation_) {
       return;
     }
-    if (!object_transform_context_current()) {
+    if (!property_context_current()) {
       discard_pending_transform_preview();
       active_transform_preview_.abandon();
       active_transform_edit_.reset();
@@ -2673,12 +2728,15 @@ private:
     return true;
   }
 
-  bool object_transform_context_current() const {
+  bool property_context_current() const {
     return editor_ != nullptr &&
-        editor_->mode().current() == QuaderEditorMode::Object &&
         editor_->mode().generation() == built_editor_mode_generation_;
   }
 
+  bool property_context_current(std::uint64_t property_generation) const {
+    return property_generation == property_generation_ &&
+        property_context_current();
+  }
 
   void cancel_active_transform_edit() {
     discard_pending_transform_preview();
@@ -2705,9 +2763,9 @@ private:
                    });
                  });
 
-    Section lighting =
-        add_section("lighting", localized("ui.inspector.lighting", "Lighting"));
     if (release_has_feature(ReleaseFeature::CastShadows)) {
+      Section lighting =
+          add_section("lighting", localized("ui.inspector.lighting", "Lighting"));
       add_checkbox(lighting, "lighting.cast_shadows",
                    localized("ui.inspector.cast_shadows", "Cast Shadows"),
                    mesh->cast_shadows, [this, entity](bool enabled) {
@@ -2716,16 +2774,9 @@ private:
                      });
                    });
     }
-    add_checkbox(lighting, "lighting.double_sided",
-                 localized("ui.inspector.double_sided", "Double sided"),
-                 mesh->double_sided, [this, entity](bool enabled) {
-                   apply_mesh_component(entity, [enabled](MeshComponent &next) {
-                     next.double_sided = enabled;
-                   });
-                 });
   }
 
-  void build_shading_section() {
+  void build_viewport_section() {
     std::vector<EntityId> meshes;
     meshes.reserve(selection_.size());
     BoolAggregate wireframe;
@@ -2758,18 +2809,18 @@ private:
       return;
     }
     Section shading =
-        add_section("shading", localized("ui.inspector.shading", "Shading"));
+        add_section("viewport", localized("ui.inspector.viewport", "Viewport"));
     add_mixed_checkbox(
-        shading, "shading.wireframe_on_shaded",
-        localized("ui.inspector.wireframe_on_shaded", "Wireframe on Shaded"),
+        shading, "viewport.wireframe_on_shaded",
+        localized("ui.inspector.show_wireframe", "Show Wireframe"),
         wireframe.all_true, wireframe.mixed(), [this, meshes](bool enabled) {
           apply_mesh_components(meshes, [enabled](MeshComponent &next) {
             next.wireframe_on_shaded = enabled;
           }, "Set Mesh Shading");
         });
     add_mixed_checkbox(
-        shading, "shading.custom_wireframe_color",
-        localized("ui.inspector.custom_wireframe_color", "Custom Wireframe Color"),
+        shading, "viewport.custom_wireframe_color",
+        localized("ui.inspector.custom_wireframe_color", "Use Custom Color"),
         custom_color.all_true, custom_color.mixed(), [this, meshes](bool enabled) {
           const auto global =
               viewport_settings_->color(ViewportColorSettingId::WireframeOnShaded);
@@ -2781,14 +2832,16 @@ private:
             }
           }, "Set Wireframe Color");
         });
-    add_mesh_wireframe_color_button(shading, meshes, *first_color,
-                                    custom_color.all_true, mixed_color);
+    if (custom_color.any_true) {
+      add_mesh_wireframe_color_button(shading, meshes, *first_color,
+                                      custom_color.all_true, mixed_color);
+    }
   }
 
   void add_mesh_wireframe_color_button(Section &section,
                                        const std::vector<EntityId> &meshes,
                                        QVec3 color, bool enabled, bool mixed) {
-    const std::string stable_id = "shading.wireframe_color";
+    const std::string stable_id = "viewport.wireframe_color";
     const QString label = localized("ui.inspector.wireframe_color", "Wireframe Color");
     auto *field = new QWidget(section.editor_parent);
     auto *layout = new QHBoxLayout(field);
@@ -2805,9 +2858,10 @@ private:
       layout->addWidget(mixed_label);
     }
     add_row(section, stable_id, label, field);
+    const auto property_generation = property_generation_;
     QObject::connect(button, &QtColorSwatchButton::clicked, &panel_,
-                     [this, button, meshes, stable_id] {
-      if (!object_transform_context_current() || document_ == nullptr) {
+                     [this, button, meshes, stable_id, property_generation] {
+      if (!property_context_current(property_generation) || document_ == nullptr) {
         return;
       }
       const auto binding_generation = runtime_binding_generation_;
@@ -2840,8 +2894,7 @@ private:
       const QColor accepted = dialog->selectedColor();
       delete dialog.data();
       if (runtime_binding_generation_ != binding_generation || editor_ == nullptr ||
-          document_ == nullptr || editor_->mode().generation() != mode_generation ||
-          editor_->mode().current() != QuaderEditorMode::Object) {
+          document_ == nullptr || editor_->mode().generation() != mode_generation) {
         return;
       }
       if (result != QDialog::Accepted) {
@@ -3110,11 +3163,16 @@ private:
       std::numeric_limits<std::uint64_t>::max();
   std::uint64_t built_editor_mode_revision_ =
       std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t inspected_mode_revision_ =
+      std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t inspected_selection_revision_ =
+      std::numeric_limits<std::uint64_t>::max();
   std::uint64_t built_editor_mode_generation_ =
       std::numeric_limits<std::uint64_t>::max();
   std::uint64_t built_material_presentation_revision_ =
       std::numeric_limits<std::uint64_t>::max();
   std::uint64_t runtime_binding_generation_ = 0;
+  std::uint64_t property_generation_ = 0;
   QtUiScaleMetrics ui_scale_metrics_;
   int scaled_default_label_column_width_ = 140;
   int preferred_label_column_width_ = 0;

@@ -126,7 +126,7 @@ SceneBounds exact_transformed_geometry_bounds(const MeshAsset &mesh,
 
 TEST(LinearArrayLayoutTests, PreservesOrientationAndIncludesSharedEndpoint) {
   const QMat4 source_world = compose_transform(QTransform{
-      .position = {4.0f, 3.0f, 2.0f},
+      .location = {4.0f, 3.0f, 2.0f},
       .scale = {2.0f, 1.0f, 0.5f},
   });
   const LinearArrayLayoutResult layout = build_linear_array_layout({
@@ -655,7 +655,7 @@ TEST(NativeViewportToolCursorTests,
   ASSERT_TRUE(source.ok()) << source.error_message();
   ASSERT_TRUE(editor.scene()
                   .set_transform(source.value().entity,
-                                 {.position = {6.0f, 0.0f, 0.0f}})
+                                 {.location = {6.0f, 0.0f, 0.0f}})
                   .ok());
   ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::RadialArray).ok());
@@ -740,7 +740,7 @@ protected:
     ASSERT_TRUE(created.ok()) << created.error_message();
     source_ = created.value().entity;
     ASSERT_TRUE(editor_.scene().set_transform(source_,
-        {.position = {6.0f, 0.0f, 0.0f}}).ok());
+        {.location = {6.0f, 0.0f, 0.0f}}).ok());
     ASSERT_TRUE(editor_.selection().select_object(created.value()).ok());
     ASSERT_TRUE(editor_.tools().activate(ViewportToolId::RadialArray).ok());
     camera_.set_viewport_size(800.0f, 600.0f);
@@ -1313,7 +1313,7 @@ TEST(LinearArrayToolServiceTests,
       "Axis Motion Linear Source");
   ASSERT_TRUE(source.ok()) << source.error_message();
   ASSERT_TRUE(editor.scene().set_transform(
-      source.value().entity, {.position = {10.0f, 20.0f, 30.0f}}).ok());
+      source.value().entity, {.location = {10.0f, 20.0f, 30.0f}}).ok());
   ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::LinearArray).ok());
   auto &tool = session.linear_array();
@@ -1546,7 +1546,7 @@ TEST(RadialArrayToolServiceTests,
   ASSERT_TRUE(source.ok()) << source.error_message();
   ASSERT_TRUE(editor.scene()
                   .set_transform(source.value().entity,
-                                 {.position = {6.0f, 0.0f, 0.0f}})
+                                 {.location = {6.0f, 0.0f, 0.0f}})
                   .ok());
   ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
 
@@ -1611,7 +1611,7 @@ TEST(LinearArrayToolServiceTests,
           "Array Dimension Source");
       ASSERT_TRUE(source.ok()) << source.error_message();
       ASSERT_TRUE(editor.scene().set_transform(
-          source.value().entity, {.position = {6.0f, 0.0f, 0.0f}}).ok());
+          source.value().entity, {.location = {6.0f, 0.0f, 0.0f}}).ok());
       ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
 
       const auto verify_visibility = [&](auto &tool, auto prepare_preview,
@@ -1724,7 +1724,7 @@ TEST(LinearArrayToolServiceTests,
   ASSERT_TRUE(second.ok()) << second.error_message();
   ASSERT_TRUE(editor.scene()
                   .set_transform(primary.value().entity,
-                                 {.position = {100.0f, 20.0f, -30.0f}})
+                                 {.location = {100.0f, 20.0f, -30.0f}})
                   .ok());
   ASSERT_TRUE(editor.selection()
                   .select_objects(
@@ -1774,7 +1774,7 @@ TEST(LinearArrayToolServiceTests,
                   .ok());
   ASSERT_TRUE(editor.scene()
                   .set_transform(child.value().entity,
-                                 {.position = {10.0f, 0.0f, 0.0f}})
+                                 {.location = {10.0f, 0.0f, 0.0f}})
                   .ok());
   ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::LinearArray).ok());
@@ -1783,7 +1783,7 @@ TEST(LinearArrayToolServiceTests,
 
   ASSERT_TRUE(editor.scene()
                   .set_transform(child.value().entity,
-                                 {.position = {20.0f, 0.0f, 0.0f}})
+                                 {.location = {20.0f, 0.0f, 0.0f}})
                   .ok());
   const CommandResult refreshed = session.linear_array().refresh();
   EXPECT_TRUE(refreshed.ok);
@@ -1811,7 +1811,7 @@ TEST(LinearArrayToolServiceTests,
   ASSERT_TRUE(second.ok()) << second.error_message();
   ASSERT_TRUE(editor.scene()
                   .set_transform(second.value().entity,
-                                 {.position = {10.0f, 0.0f, 0.0f}})
+                                 {.location = {10.0f, 0.0f, 0.0f}})
                   .ok());
   ASSERT_TRUE(editor.selection()
                   .select_objects(
@@ -1897,7 +1897,7 @@ TEST(LinearArrayToolServiceTests,
 
   ASSERT_TRUE(editor.scene()
                   .set_transform(source.value().entity,
-                                 {.position = {0.000001f, 0.0f, 0.0f}})
+                                 {.location = {0.000001f, 0.0f, 0.0f}})
                   .ok());
   const CommandResult refreshed = session.linear_array().refresh();
   EXPECT_TRUE(refreshed.ok);
@@ -2031,7 +2031,7 @@ TEST(LinearArrayToolServiceTests,
   ASSERT_TRUE(second.ok()) << second.error_message();
   ASSERT_TRUE(editor.scene()
                   .set_transform(second.value().entity,
-                                 {.position = {4.0f, 0.0f, 0.0f}})
+                                 {.location = {4.0f, 0.0f, 0.0f}})
                   .ok());
   ASSERT_TRUE(editor.selection()
                   .select_objects(
@@ -2051,12 +2051,12 @@ TEST(LinearArrayToolServiceTests,
 
   ASSERT_TRUE(editor.scene()
                   .set_transform(parent.value().id,
-                                 {.position = {7.0f, 1.0f, -2.0f}})
+                                 {.location = {7.0f, 1.0f, -2.0f}})
                   .ok());
   ASSERT_TRUE(editor.scene().reparent(occurrence, parent.value().id, false).ok());
   ASSERT_TRUE(editor.scene()
                   .set_transform(occurrence,
-                                 {.position = {3.0f, 2.0f, 1.0f}})
+                                 {.location = {3.0f, 2.0f, 1.0f}})
                   .ok());
   ASSERT_TRUE(editor.selection()
                   .select_objects({occurrence}, occurrence)
@@ -2128,8 +2128,8 @@ TEST(LinearArrayToolServiceTests,
     EXPECT_EQ(session.scene().parent(copy), parent.value().id);
     ASSERT_NE(session.scene().visibility(copy), nullptr);
     EXPECT_TRUE(session.scene().visibility(copy)->visible);
-    ASSERT_NE(session.scene().lock(copy), nullptr);
-    EXPECT_FALSE(session.scene().lock(copy)->locked);
+    ASSERT_NE(session.scene().selectable(copy), nullptr);
+    EXPECT_TRUE(session.scene().selectable(copy)->selectable);
     ASSERT_NE(session.scene().name(copy), nullptr);
     EXPECT_NE(session.scene().name(copy)->name.find(source_name),
               std::string::npos);
@@ -2194,7 +2194,7 @@ TEST(RadialArrayToolServiceTests,
   ASSERT_EQ(members.size(), 1u);
   ASSERT_TRUE(editor.scene()
                   .set_transform(occurrence,
-                                 {.position = {4.0f, 0.0f, 0.0f}})
+                                 {.location = {4.0f, 0.0f, 0.0f}})
                   .ok());
   ASSERT_TRUE(editor.selection()
                   .select_objects({occurrence}, occurrence)
@@ -2331,9 +2331,9 @@ TEST(LinearArrayToolServiceTests,
       EXPECT_EQ(editor.tools().can_activate(tool), expected);
     };
     expect_available(true);
-    ASSERT_TRUE(session.scene().set_locked(source.value().entity, true));
+    ASSERT_TRUE(session.scene().set_selectable(source.value().entity, false));
     expect_available(false);
-    ASSERT_TRUE(session.scene().set_locked(source.value().entity, false));
+    ASSERT_TRUE(session.scene().set_selectable(source.value().entity, true));
     expect_available(true);
     ASSERT_TRUE(session.scene().set_visible(source.value().entity, false));
     expect_available(false);

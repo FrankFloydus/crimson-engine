@@ -67,7 +67,7 @@ std::string bake_label(MeshTransformBakeMode mode) {
 bool eligible_mesh(const SceneDocument &scene, const AssetRegistry &assets,
                    EntityId entity) {
   if (!scene.exists(entity) || scene.kind(entity) != EntityKind::Mesh ||
-      scene.is_effectively_locked(entity) ||
+      !scene.is_effectively_selectable(entity) ||
       !scene.is_effectively_visible(entity) ||
       scene.instance_occurrence(entity) != nullptr) {
     return false;
@@ -87,7 +87,7 @@ TransformComponent reset_channels(TransformComponent transform,
                                   MeshTransformBakeMode mode) {
   if (mode == MeshTransformBakeMode::Transforms ||
       mode == MeshTransformBakeMode::Location) {
-    transform.position = {};
+    transform.location = {};
   }
   if (mode == MeshTransformBakeMode::Transforms ||
       mode == MeshTransformBakeMode::Rotation) {
@@ -599,7 +599,7 @@ CommandResult MeshTransformBakeService::bake(
     return command_invalid_result(release_feature_unavailable_message());
   }
   if (!can_bake(selection, mode)) {
-    return command_invalid_result("Select editable unlocked meshes in Mesh selection mode to bake transforms.");
+    return command_invalid_result("Select editable selectable meshes in Mesh selection mode to bake transforms.");
   }
   const auto entities = scene_.selected_entities();
   std::string error;

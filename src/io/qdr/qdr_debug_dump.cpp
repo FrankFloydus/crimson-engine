@@ -257,7 +257,7 @@ texture_color_space_name(TextureColorSpace color_space) {
 
 [[nodiscard]] Json transform_json(const TransformComponent &transform) {
   return {
-      {"position", vec3_json(transform.position)},
+      {"location", vec3_json(transform.location)},
       {"rotationEuler", vec3_json(transform.rotation_euler)},
       {"scale", vec3_json(transform.scale)},
       {"customPivot", transform.custom_pivot},
@@ -531,7 +531,7 @@ chunk_codec_name(quader_io::QdrBinaryChunkCodec codec) {
       {"visibility",
        {{"visible", entity.visibility.visible},
         {"selectable", entity.visibility.selectable}}},
-      {"locked", entity.lock.locked},
+      {"selectable", entity.selectable.selectable},
   };
   if (entity.texture_mapping) {
     value["textureMapping"] = {

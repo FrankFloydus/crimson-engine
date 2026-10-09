@@ -643,7 +643,7 @@ TEST_F(QtMarkingMenuTests,
   MarkingActions actions;
   QMenu source(QStringLiteral("Bake"));
   source.setObjectName(QStringLiteral("test.bake"));
-  QAction *position = source.addAction(QStringLiteral("Bake Position"));
+  QAction *position = source.addAction(QStringLiteral("Bake Location"));
   QAction *rotation = source.addAction(QStringLiteral("Bake Rotation"));
   int trigger_count = 0;
   QObject::connect(rotation, &QAction::triggered, &menu,
@@ -751,7 +751,7 @@ TEST_F(QtMarkingMenuTests,
   source.addAction(QStringLiteral("Disabled"))->setEnabled(false);
   source.addAction(QStringLiteral("Hidden"))->setVisible(false);
   source.addSeparator();
-  QAction *first = source.addAction(QStringLiteral("Bake Position"));
+  QAction *first = source.addAction(QStringLiteral("Bake Location"));
   QAction *last = source.addAction(QStringLiteral("Bake All"));
   for (const auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
     SCOPED_TRACE(static_cast<int>(direction));
@@ -810,7 +810,7 @@ TEST_F(QtMarkingMenuTests,
     SCOPED_TRACE(mutation);
     auto source = std::make_unique<QMenu>(QStringLiteral("Bake"));
     source->setObjectName(QStringLiteral("test.bake"));
-    QAction *leaf = source->addAction(QStringLiteral("Bake Position"));
+    QAction *leaf = source->addAction(QStringLiteral("Bake Location"));
     EXPECT_EQ(run_menu(menu, actions.slot_actions, {source->menuAction()}, [&]() {
                 hover_overflow_row(menu, 0);
                 auto *popup = visible_submenu(menu, source->objectName());
@@ -839,7 +839,7 @@ TEST_F(QtMarkingMenuTests,
   MarkingActions actions;
   QMenu source(QStringLiteral("Bake"));
   source.setObjectName(QStringLiteral("test.bake"));
-  source.addAction(QStringLiteral("Bake Position"));
+  source.addAction(QStringLiteral("Bake Location"));
   EXPECT_EQ(run_menu(menu, actions.slot_actions, {source.menuAction()}, [&]() {
               hover_overflow_row(menu, 0);
               auto *popup = visible_submenu(menu, source.objectName());
@@ -860,7 +860,7 @@ TEST_F(QtMarkingMenuTests,
   MarkingActions actions;
   QMenu source(QStringLiteral("Bake"));
   source.setObjectName(QStringLiteral("test.bake"));
-  source.addAction(QStringLiteral("Bake Position"));
+  source.addAction(QStringLiteral("Bake Location"));
   for (int cancellation = 0; cancellation < 3; ++cancellation) {
     SCOPED_TRACE(cancellation);
     QPointer<QMenu> shown_popup;
@@ -893,7 +893,7 @@ TEST_F(QtMarkingMenuTests,
   MarkingActions actions;
   QMenu source(QStringLiteral("Bake"));
   source.setObjectName(QStringLiteral("test.bake"));
-  source.addAction(QStringLiteral("Bake Position"));
+  source.addAction(QStringLiteral("Bake Location"));
   std::vector<std::unique_ptr<QAction>> owned;
   std::vector<QAction *> overflow{source.menuAction()};
   for (int index = 0; index < 100; ++index) {
@@ -923,7 +923,7 @@ TEST_F(QtMarkingMenuTests,
   MarkingActions actions;
   QMenu source(QStringLiteral("Bake"));
   source.setObjectName(QStringLiteral("test.bake"));
-  source.addAction(QStringLiteral("Bake Position"));
+  source.addAction(QStringLiteral("Bake Location"));
   EXPECT_EQ(run_menu(menu, actions.slot_actions, {source.menuAction()}, [&]() {
               hover_overflow_row(menu, 0);
               auto *popup = visible_submenu(menu, source.objectName());
@@ -954,7 +954,7 @@ TEST_F(QtMarkingMenuTests,
   MarkingActions actions;
   QMenu source(QStringLiteral("Bake"));
   source.setObjectName(QStringLiteral("test.bake"));
-  QAction *leaf = source.addAction(QStringLiteral("Bake Position"));
+  QAction *leaf = source.addAction(QStringLiteral("Bake Location"));
   source.addAction(QStringLiteral("Bake Rotation"));
   source.addAction(QStringLiteral("Bake Scale"));
   source.addAction(QStringLiteral("Bake All"));

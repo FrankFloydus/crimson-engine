@@ -167,9 +167,9 @@ TEST(SceneContentDocumentTests,
       200u, "Canonical Mesh", EntityKind::Mesh, 77u);
   ASSERT_NE(entity, kInvalidEntityId);
   ASSERT_TRUE(document.scene().set_transform(
-      entity, TransformComponent{.position = {1.0f, 2.0f, 3.0f}}));
+      entity, TransformComponent{.location = {1.0f, 2.0f, 3.0f}}));
   ASSERT_TRUE(document.scene().set_visible(entity, false));
-  ASSERT_TRUE(document.scene().set_locked(entity, true));
+  ASSERT_TRUE(document.scene().set_selectable(entity, false));
   ASSERT_TRUE(document.scene().set_modeling_object(
       entity, ModelingObjectComponent{.object_id = 42,
                                       .material_slot = 2u,
@@ -187,11 +187,11 @@ TEST(SceneContentDocumentTests,
   EXPECT_EQ(state->mesh->mesh, mesh);
   EXPECT_EQ(state->material->material, material);
   EXPECT_EQ(state->modeling_object->object_id, 42);
-  EXPECT_FLOAT_EQ(state->transform.position.x, 1.0f);
-  EXPECT_FLOAT_EQ(state->transform.position.y, 2.0f);
-  EXPECT_FLOAT_EQ(state->transform.position.z, 3.0f);
+  EXPECT_FLOAT_EQ(state->transform.location.x, 1.0f);
+  EXPECT_FLOAT_EQ(state->transform.location.y, 2.0f);
+  EXPECT_FLOAT_EQ(state->transform.location.z, 3.0f);
   EXPECT_FALSE(state->visibility.visible);
-  EXPECT_TRUE(state->lock.locked);
+  EXPECT_FALSE(state->selectable.selectable);
 
   TextureMappingComponent later_mapping;
   later_mapping.sampling_from_local.values[12] = 5.0f;

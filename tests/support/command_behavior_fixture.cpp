@@ -509,6 +509,10 @@ private:
             [this](bool value) {
               return set_preference(backface_selection_enabled_, value);
             },
+        .backface_culling_enabled = [this] { return backface_culling_enabled_; },
+        .set_backface_culling_enabled = [this](bool value) {
+          return set_preference(backface_culling_enabled_, value);
+        },
         .grid_visible = [this] { return grid_visible_; },
         .set_grid_visible =
             [this](bool value) { return set_preference(grid_visible_, value); },
@@ -730,7 +734,7 @@ private:
             command_id_ == quader_command::kModelingBakeScale.string()) {
           require_ok(editor().scene().set_transform(
                          object.entity,
-                         QuaderTransform{.position = {3.0f, -2.0f, 5.0f},
+                         QuaderTransform{.location = {3.0f, -2.0f, 5.0f},
                                          .rotation_euler = {0.3f, 0.6f, -0.4f},
                                          .scale = {1.5f, 0.75f, 2.0f}}),
                      "Set canonical mesh transforms before baking");
@@ -866,11 +870,11 @@ private:
     const QuaderModelingObjectRef second = create_box("Object Pair B");
     require_ok(editor().scene().set_transform(
                    first.entity,
-                   QuaderTransform{.position = {-2.0f, 1.0f, 0.5f}}),
+                   QuaderTransform{.location = {-2.0f, 1.0f, 0.5f}}),
                "Position first object-pair mesh");
     require_ok(editor().scene().set_transform(
                    second.entity,
-                   QuaderTransform{.position = {4.5f, -1.5f, 3.0f}}),
+                   QuaderTransform{.location = {4.5f, -1.5f, 3.0f}}),
                "Position second object-pair mesh");
     if (command_id_ ==
         quader_command::kModelingCopyPivotFromActive.string()) {
@@ -878,7 +882,7 @@ private:
           create_box("Copy Pivot Active Source Child");
       require_ok(editor().scene().set_transform(
                      child.entity,
-                     QuaderTransform{.position = {8.0f, 0.0f, 0.0f}}),
+                     QuaderTransform{.location = {8.0f, 0.0f, 0.0f}}),
                  "Offset Copy Pivot source child");
       require_ok(editor().scene().reparent(child.entity, second.entity, false),
                  "Parent Copy Pivot source child");
@@ -903,17 +907,17 @@ private:
     const QuaderModelingObjectRef third = create_box("Object Set C");
     require_ok(editor().scene().set_transform(
                    first.entity,
-                   QuaderTransform{.position = {-4.0f, 1.5f, -2.0f},
+                   QuaderTransform{.location = {-4.0f, 1.5f, -2.0f},
                                    .scale = {1.0f, 0.75f, 1.25f}}),
                "Position first object-set mesh");
     require_ok(editor().scene().set_transform(
                    second.entity,
-                   QuaderTransform{.position = {1.0f, -3.0f, 4.0f},
+                   QuaderTransform{.location = {1.0f, -3.0f, 4.0f},
                                    .scale = {0.6f, 1.4f, 0.9f}}),
                "Position second object-set mesh");
     require_ok(editor().scene().set_transform(
                    third.entity,
-                   QuaderTransform{.position = {9.0f, 2.0f, -5.0f},
+                   QuaderTransform{.location = {9.0f, 2.0f, -5.0f},
                                    .scale = {1.8f, 0.8f, 1.1f}}),
                "Position third object-set mesh");
     require_ok(editor().selection().set_mode(QuaderSelectionMode::Object),
@@ -929,7 +933,7 @@ private:
     const QuaderModelingObjectRef peer = create_box("Similar Peer");
     require_ok(editor().scene().set_transform(
                    peer.entity,
-                   QuaderTransform{.position = {6.0f, 2.0f, -3.0f},
+                   QuaderTransform{.location = {6.0f, 2.0f, -3.0f},
                                    .rotation_euler = {0.2f, 0.5f, -0.1f},
                                    .scale = {1.5f, 0.8f, 2.0f}}),
                "Transform exact-geometry peer");
@@ -1398,6 +1402,7 @@ private:
   SessionPreferences session_preferences_;
   bool snapping_enabled_ = true;
   bool backface_selection_enabled_ = false;
+  bool backface_culling_enabled_ = true;
   bool texture_lock_enabled_ = true;
   bool texture_lock_scale_enabled_ = false;
   bool grid_visible_ = true;

@@ -2280,7 +2280,7 @@ TEST(ResolvedSelectionPolicyGuardrailTests,
   EXPECT_NE(scene_hit_policy.find("SceneSurfaceEligibility::RenderVisible"),
             std::string::npos);
   EXPECT_NE(scene_hit_policy.find(
-                "SceneSurfaceEligibility::SelectableUnlocked"),
+                "SceneSurfaceEligibility::EffectivelySelectable"),
             std::string::npos);
 
   EXPECT_EQ(public_api.find("session.selection().pick_select("),

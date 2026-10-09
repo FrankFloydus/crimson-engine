@@ -1202,6 +1202,7 @@ void QtViewportPanel::sync_pane_actions(Pane &pane_state) {
     else if (name == QStringLiteral("vertexSnapping")) checked = settings.bool_value(ViewportBoolSettingId::VertexSnap);
     else if (name == QStringLiteral("rotationSnapping")) checked = settings.bool_value(ViewportBoolSettingId::RotationSnap);
     else if (name == QStringLiteral("viewportWireframeOnShaded")) checked = settings.bool_value(ViewportBoolSettingId::WireframeOnShaded);
+    else if (name == QStringLiteral("viewportBackfaceCulling")) checked = settings.bool_value(ViewportBoolSettingId::BackfaceCulling);
     else if (name == QStringLiteral("viewportGrid")) checked = settings.bool_value(ViewportBoolSettingId::ShowGrid);
     else if (name == QStringLiteral("viewportGizmos")) checked = settings.bool_value(ViewportBoolSettingId::ShowGizmos);
     else if (name == QStringLiteral("viewportMeshGrid")) checked = settings.bool_value(ViewportBoolSettingId::ShowMeshGrid);

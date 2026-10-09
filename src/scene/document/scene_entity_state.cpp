@@ -43,8 +43,8 @@ capture_scene_entity_state(const SceneDocument &scene, EntityId entity) {
   if (const VisibilityComponent *component = scene.visibility(entity)) {
     state.visibility = *component;
   }
-  if (const LockComponent *component = scene.lock(entity)) {
-    state.lock = *component;
+  if (const SelectableComponent *component = scene.selectable(entity)) {
+    state.selectable = *component;
   }
   if (const SelectionComponent *component = scene.selection(entity)) {
     state.selection = *component;
@@ -97,8 +97,8 @@ bool apply_scene_entity_common_state(SceneDocument &scene, EntityId entity,
       !scene.rename_entity(entity, std::move(name)) ||
       !scene.set_transform(entity, state.transform) ||
       !scene.set_visible(entity, state.visibility.visible) ||
-      !scene.set_selectable(entity, state.visibility.selectable) ||
-      !scene.set_locked(entity, state.lock.locked) ||
+      !scene.set_selectability(entity, state.visibility.selectable) ||
+      !scene.set_selectable(entity, state.selectable.selectable) ||
       !scene.set_entity_kind(entity, state.kind)) {
     return false;
   }
@@ -116,8 +116,8 @@ bool apply_scene_entity_state(SceneDocument &scene, EntityId entity,
   if (!scene.exists(entity) ||
       !scene.set_transform(entity, state.transform) ||
       !scene.set_visible(entity, state.visibility.visible) ||
-      !scene.set_selectable(entity, state.visibility.selectable) ||
-      !scene.set_locked(entity, state.lock.locked)) {
+      !scene.set_selectability(entity, state.visibility.selectable) ||
+      !scene.set_selectable(entity, state.selectable.selectable)) {
     return false;
   }
 

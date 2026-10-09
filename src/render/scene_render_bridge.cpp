@@ -205,6 +205,18 @@ void SceneRenderBridge::bind_scene(RenderSceneBindingKey scene_binding) {
   }
 }
 
+void SceneRenderBridge::set_backface_culling_enabled(bool enabled) {
+  if (backface_culling_enabled_ == enabled) {
+    return;
+  }
+  backface_culling_enabled_ = enabled;
+  for (auto &mesh : selection_dimension_preview_meshes_) {
+    mesh.double_sided = !enabled;
+  }
+  surface_sync_pending_ = true;
+  ++tool_preview_submission_revision_;
+}
+
 void SceneRenderBridge::sync(const SceneDocument &document,
                              const AssetRegistry &assets,
                              std::uint64_t frame_index,
@@ -226,7 +238,7 @@ void SceneRenderBridge::sync(const SceneDocument &document,
                                           assets, scene_binding,
                                           project_material_revision,
                                           instance_edit_scope,
-                                          local_visibility)) {
+                                          local_visibility, backface_culling_enabled_)) {
     // Keep draining retired GPU proxies while making unchanged camera-only
     // frames O(1) at the scene-extraction boundary.
     if (surface_sync_pending_) {
@@ -240,7 +252,7 @@ void SceneRenderBridge::sync(const SceneDocument &document,
       try_refresh_render_scene_snapshot_light_properties(
           previous_scene_snapshot_, document, assets, frame_index,
           scene_binding, project_material_revision, instance_edit_scope,
-          local_visibility)) {
+          local_visibility, backface_culling_enabled_)) {
     if (surface_sync_pending_) {
       (void)synchronize_mesh_surfaces(previous_scene_snapshot_);
     } else {
@@ -252,7 +264,7 @@ void SceneRenderBridge::sync(const SceneDocument &document,
       try_refresh_render_scene_snapshot_curve_publication(
           previous_scene_snapshot_, document, assets, frame_index,
           scene_binding, project_material_revision, instance_edit_scope,
-          local_visibility)) {
+          local_visibility, backface_culling_enabled_)) {
     if (surface_sync_pending_) {
       (void)synchronize_mesh_surfaces(previous_scene_snapshot_);
     } else {
@@ -264,7 +276,7 @@ void SceneRenderBridge::sync(const SceneDocument &document,
       try_refresh_render_scene_snapshot_selection(
           previous_scene_snapshot_, document, assets, frame_index,
           scene_binding, project_material_revision,
-          instance_edit_scope, local_visibility)) {
+          instance_edit_scope, local_visibility, backface_culling_enabled_)) {
     if (surface_sync_pending_) {
       (void)synchronize_mesh_surfaces(previous_scene_snapshot_);
     } else {
@@ -276,7 +288,7 @@ void SceneRenderBridge::sync(const SceneDocument &document,
       try_refresh_render_scene_snapshot_transforms(
           previous_scene_snapshot_, document, assets, frame_index,
           scene_binding, project_material_revision,
-          instance_edit_scope, local_visibility)) {
+          instance_edit_scope, local_visibility, backface_culling_enabled_)) {
     (void)synchronize_mesh_surfaces(previous_scene_snapshot_);
     return;
   }
@@ -290,7 +302,8 @@ void SceneRenderBridge::sync(const SceneDocument &document,
        .project_material_revision = project_material_revision,
        .instance_edit_scope = instance_edit_scope,
        .local_visibility = local_visibility,
-       .curve_solid_geometry_cache = &curve_solid_geometry_cache_});
+       .curve_solid_geometry_cache = &curve_solid_geometry_cache_,
+       .backface_culling_enabled = backface_culling_enabled_});
   sync(std::move(snapshot));
 }
 
@@ -589,7 +602,8 @@ SceneRenderBridge::build_tool_preview_scene_snapshot(
     const ViewportLocalVisibilitySnapshot *local_visibility) {
   return build_render_tool_preview_scene_snapshot(
       std::move(preview), assets, local_visibility,
-      project_material_resolver_, &curve_solid_geometry_cache_);
+      project_material_resolver_, &curve_solid_geometry_cache_,
+      backface_culling_enabled_);
 }
 
 ToolPreviewSubmissionResult SceneRenderBridge::set_tool_preview_meshes(
@@ -644,6 +658,9 @@ ToolPreviewSubmissionResult SceneRenderBridge::set_tool_preview_scene(
   if (!engine_ || !scene_ || !tool_preview_cache_.initialized() ||
       !tool_preview_light_cache_.initialized() || !preview.complete) {
     return ToolPreviewSubmissionResult::Failed;
+  }
+  for (auto &mesh : preview.meshes) {
+    mesh.double_sided = !backface_culling_enabled_;
   }
   std::unordered_set<EntityId> candidate_suppressed_entities(
       preview.suppression.entities.begin(),

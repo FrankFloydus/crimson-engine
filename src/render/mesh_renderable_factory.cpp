@@ -1901,7 +1901,8 @@ bool MeshRenderableFactory::try_rebind_instance_geometry(
     const RenderMeshAssetSnapshot *mesh = request.mesh;
     if (proxy == nullptr || mesh == nullptr || !mesh->renderable() || !mesh->positions.empty() ||
         !proxy->entity || proxy->dynamic_geometry ||
-        proxy->instance_buffer == nullptr || proxy->mesh != mesh->mesh_id ||
+        (proxy->instance_buffer == nullptr && !proxy->entity_transform_instance) ||
+        proxy->mesh != mesh->mesh_id ||
         proxy->geometry_resource == 0u || !proxy->owns_mesh_buffers ||
         proxy->vertex_count != mesh->vertices.size() ||
         proxy->index_count != mesh->indices.size() ||
@@ -1973,7 +1974,9 @@ bool MeshRenderableFactory::try_rebind_instance_geometry(
         filament::RenderableManager::PrimitiveType::TRIANGLES,
         replacement.vertex_buffer, replacement.index_buffer,
         request.primitive.index_offset, request.primitive.index_count);
-    renderables.setAxisAlignedBoundingBox(instance, filament_bounds(request.world_bounds));
+    renderables.setAxisAlignedBoundingBox(instance, filament_bounds(
+        proxy.entity_transform_instance ? compute_local_bounds_impl(*request.mesh)
+                                        : request.world_bounds));
     release_geometry(proxy);
     proxy.mesh_revision = request.mesh->mesh_revision;
     proxy.geometry_resource = std::exchange(replacement.geometry_resource, 0u);
@@ -2369,6 +2372,12 @@ MeshRenderableProxy MeshRenderableFactory::create_explicit_instances(
     const MeshRenderableProxy *geometry_source) {
   QDR_PROFILE_FUNCTION();
   MeshRenderableProxy proxy;
+  const bool entity_transform_instance = (presentation_flags & static_cast<std::uint8_t>(
+      RenderInstancePresentationFlag::PerObjectTransform)) != 0u;
+  if (entity_transform_instance && world_transforms.size() != 1u) {
+    return proxy;
+  }
+  if (entity_transform_instance) instance_capacity = 1u;
   instance_capacity = instance_capacity == 0u
                           ? world_transforms.size()
                           : instance_capacity;
@@ -2402,6 +2411,7 @@ MeshRenderableProxy MeshRenderableFactory::create_explicit_instances(
   proxy.material_revision = material != nullptr ? material->revision : 0u;
   proxy.cast_shadows = cast_shadows;
   proxy.double_sided = double_sided;
+  proxy.entity_transform_instance = entity_transform_instance;
   if (geometry_source != nullptr) {
     proxy.owns_mesh_buffers = false;
     proxy.dynamic_geometry = true;
@@ -2438,30 +2448,32 @@ MeshRenderableProxy MeshRenderableFactory::create_explicit_instances(
     material_instance->setDepthWrite(true);
     material_instance->setDepthCulling(true);
   }
-  std::vector<filament::math::mat4f> transforms;
-  transforms.reserve(instance_capacity);
-  for (const QMat4 &transform : world_transforms) {
-    transforms.push_back(make_transform(transform));
+  filament::RenderableManager::Builder builder(1u);
+  if (!entity_transform_instance) {
+    std::vector<filament::math::mat4f> transforms;
+    transforms.reserve(instance_capacity);
+    for (const QMat4 &transform : world_transforms) {
+      transforms.push_back(make_transform(transform));
+    }
+    transforms.resize(instance_capacity, make_transform(QMat4{}));
+    proxy.instance_buffer = filament::InstanceBuffer::Builder(instance_capacity)
+        .localTransforms(transforms.data()).build(*engine_);
+    if (proxy.instance_buffer == nullptr) return proxy;
+    builder.instances(world_transforms.size(), proxy.instance_buffer);
   }
-  transforms.resize(instance_capacity, make_transform(QMat4{}));
-  proxy.instance_buffer =
-      filament::InstanceBuffer::Builder(instance_capacity)
-          .localTransforms(transforms.data())
-          .build(*engine_);
-
-  filament::RenderableManager::Builder(1u)
-      .geometry(0u, filament::RenderableManager::PrimitiveType::TRIANGLES,
+  builder.geometry(0u, filament::RenderableManager::PrimitiveType::TRIANGLES,
                 proxy.vertex_buffer, proxy.index_buffer,
                 primitive.index_offset, primitive.index_count)
       .material(0u, material_instance)
-      .instances(world_transforms.size(), proxy.instance_buffer)
-      .boundingBox(filament_bounds(world_bounds))
+      .boundingBox(filament_bounds(entity_transform_instance
+          ? compute_local_bounds_impl(mesh) : world_bounds))
       .layerMask(kViewportAllLayerMask, layer_mask)
       .channel(channel)
       .castShadows(cast_shadows)
       .receiveShadows(receive_shadows)
       .build(*engine_, proxy.entity);
   engine_->getTransformManager().create(proxy.entity);
+  if (entity_transform_instance) update_transform(proxy, world_transforms.front());
   scene_->addEntity(proxy.entity);
   creation_guard.mark_scene_added();
   creation_guard.release();
@@ -2691,9 +2703,10 @@ bool MeshRenderableFactory::update_explicit_instances(
     std::span<const QMat4> world_transforms,
     const RenderInstanceBounds &world_bounds) {
   QDR_PROFILE_FUNCTION();
-  if (!initialized() || proxy.instance_buffer == nullptr || !proxy.entity ||
-      world_transforms.empty() ||
-      world_transforms.size() > proxy.instance_buffer->getInstanceCount()) {
+  if (!initialized() || !proxy.entity || world_transforms.empty() ||
+      (proxy.entity_transform_instance ? world_transforms.size() != 1u :
+       proxy.instance_buffer == nullptr ||
+       world_transforms.size() > proxy.instance_buffer->getInstanceCount())) {
     return false;
   }
   filament::RenderableManager &renderables = engine_->getRenderableManager();
@@ -2725,9 +2738,10 @@ MeshRenderableFactory::prepare_explicit_instance_update(
 bool MeshRenderableFactory::validate_explicit_instances(
     const MeshRenderableProxy &proxy,
     const ExplicitInstanceUpdate &prepared) const {
-  if (!initialized() || proxy.instance_buffer == nullptr || !proxy.entity ||
-      prepared.transforms.empty() ||
-      prepared.transforms.size() > proxy.instance_buffer->getInstanceCount()) {
+  if (!initialized() || !proxy.entity || prepared.transforms.empty() ||
+      (proxy.entity_transform_instance ? prepared.transforms.size() != 1u :
+       proxy.instance_buffer == nullptr ||
+       prepared.transforms.size() > proxy.instance_buffer->getInstanceCount())) {
     return false;
   }
   const auto &renderables = engine_->getRenderableManager();
@@ -2746,10 +2760,14 @@ bool MeshRenderableFactory::update_explicit_instances_prepared(
   }
   auto &renderables = engine_->getRenderableManager();
   const auto renderable = renderables.getInstance(proxy.entity);
-  proxy.instance_buffer->setLocalTransforms(prepared.transforms.data(),
-                                            prepared.transforms.size());
-  renderables.setAxisAlignedBoundingBox(renderable,
-                                        filament_bounds(world_bounds));
+  if (proxy.entity_transform_instance) {
+    auto &transforms = engine_->getTransformManager();
+    transforms.setTransform(transforms.getInstance(proxy.entity), prepared.transforms.front());
+  } else {
+    proxy.instance_buffer->setLocalTransforms(prepared.transforms.data(),
+                                              prepared.transforms.size());
+    renderables.setAxisAlignedBoundingBox(renderable, filament_bounds(world_bounds));
+  }
   return true;
 }
 
@@ -2760,7 +2778,8 @@ bool MeshRenderableFactory::rebind_explicit_instances(
     bool receive_shadows, bool double_sided, std::uint8_t layer_mask,
     bool depth_only, std::uint8_t channel) {
   QDR_PROFILE_FUNCTION();
-  if (!initialized() || !proxy.entity || proxy.instance_buffer == nullptr ||
+  if (!initialized() || !proxy.entity ||
+      (proxy.instance_buffer == nullptr && !proxy.entity_transform_instance) ||
       proxy.vertex_buffer == nullptr || proxy.index_buffer == nullptr ||
       proxy.material_instances.size() != 1u ||
       proxy.material_instances.front() == nullptr ||
@@ -2768,8 +2787,8 @@ bool MeshRenderableFactory::rebind_explicit_instances(
       proxy.material_slots.front() != primitive.material_slot ||
       proxy.cast_shadows != cast_shadows ||
       proxy.double_sided != double_sided ||
-      active_world_transforms.size() >
-          proxy.instance_buffer->getInstanceCount() ||
+      active_world_transforms.size() > (proxy.entity_transform_instance
+          ? 1u : proxy.instance_buffer->getInstanceCount()) ||
       primitive.index_count == 0u ||
       static_cast<std::uint64_t>(primitive.index_offset) +
               primitive.index_count >
@@ -2789,6 +2808,14 @@ bool MeshRenderableFactory::rebind_explicit_instances(
   if (active_world_transforms.empty()) {
     QDR_PROFILE_SCOPE("Explicit instance rebind hide empty batch");
     renderables.setLayerMask(current, kViewportAllLayerMask, 0u);
+    return true;
+  }
+
+  if (proxy.entity_transform_instance) {
+    update_transform(proxy, active_world_transforms.front());
+    renderables.setLayerMask(current, kViewportAllLayerMask, layer_mask);
+    renderables.setCastShadows(current, cast_shadows);
+    renderables.setReceiveShadows(current, receive_shadows && !depth_only);
     return true;
   }
 

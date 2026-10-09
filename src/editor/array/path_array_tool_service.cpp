@@ -67,7 +67,7 @@ bool same_vector(QVec3 left, QVec3 right) {
 
 bool same_transform(const TransformComponent &left,
                     const TransformComponent &right) {
-  return same_vector(left.position, right.position) &&
+  return same_vector(left.location, right.location) &&
          same_vector(left.rotation_euler, right.rotation_euler) &&
          same_vector(left.scale, right.scale) &&
          left.custom_pivot == right.custom_pivot &&
@@ -377,7 +377,7 @@ PathArrayToolService::capture_selected_path() const {
       component == nullptr || transform == nullptr || modeling == nullptr ||
       modeling->object_id == kInvalidModelingObjectId || asset == nullptr ||
       asset->document == nullptr || !scene_.is_effectively_visible(entity) ||
-      scene_.is_effectively_locked(entity) ||
+      !scene_.is_effectively_selectable(entity) ||
       scene_.is_instance_definition_entity(entity) ||
       scene_.is_instance_definition_member(entity) ||
       modeling_.modeling_object_for_entity(entity) != modeling->object_id) {
@@ -438,7 +438,7 @@ bool PathArrayToolService::path_is_valid(const PathSnapshot &path) const {
          same_matrix(scene_.world_transform_matrix(path.entity),
                      path.world_transform) &&
          scene_.is_effectively_visible(path.entity) &&
-         !scene_.is_effectively_locked(path.entity);
+         scene_.is_effectively_selectable(path.entity);
 }
 
 bool PathArrayToolService::active() const {
@@ -529,7 +529,7 @@ PathArrayToolService::resolve_source_candidate(EntityId candidate) const {
       scene_.is_instance_definition_member(candidate) ||
       scene_.transform(candidate) == nullptr ||
       !scene_.is_effectively_visible(candidate) ||
-      scene_.is_effectively_locked(candidate)) {
+      !scene_.is_effectively_selectable(candidate)) {
     return std::nullopt;
   }
   const bool source_kind = scene_.mesh(candidate) != nullptr ||
@@ -628,7 +628,7 @@ CommandResult PathArrayToolService::activate() {
   std::optional<PathSnapshot> path = capture_selected_path();
   if (!path.has_value()) {
     return command_invalid_result(
-        "Select one visible, unlocked, nondegenerate Curve in object mode.");
+        "Select one visible, selectable, nondegenerate Curve in object mode.");
   }
   const double fitted = fit_distance(path->path.total_length(),
                                      path->path.closed(),
@@ -767,7 +767,7 @@ CommandResult PathArrayToolService::select_source(EntityId source) {
   const std::optional<EntityId> resolved = resolve_source_candidate(source);
   if (!resolved.has_value()) {
     return command_invalid_result(
-        "Select one visible, unlocked mesh or group outside the driving Curve.");
+        "Select one visible, selectable mesh or group outside the driving Curve.");
   }
   std::optional<SourceSnapshot> captured = capture_source(*resolved);
   if (!captured.has_value()) {
@@ -1153,8 +1153,9 @@ PathArrayToolService::capture_source(EntityId source) const {
         .visibility = scene_.visibility(entity) != nullptr
                           ? *scene_.visibility(entity)
                           : VisibilityComponent{},
-        .lock = scene_.lock(entity) != nullptr ? *scene_.lock(entity)
-                                                : LockComponent{},
+        .selectable = scene_.selectable(entity) != nullptr
+                          ? *scene_.selectable(entity)
+                          : SelectableComponent{},
         .layer_id = scene_.entity_layer(entity),
     };
     if (const ModelingObjectComponent *component =
@@ -1434,7 +1435,7 @@ bool PathArrayToolService::same_source_snapshot(
            same_transform(first.transform, second.transform) &&
            first.visibility.visible == second.visibility.visible &&
            first.visibility.selectable == second.visibility.selectable &&
-           first.lock.locked == second.lock.locked &&
+           first.selectable.selectable == second.selectable.selectable &&
            first.layer_id == second.layer_id &&
            same_optional_modeling(first.modeling_object,
                                   second.modeling_object) &&

@@ -2124,7 +2124,7 @@ TEST(QtViewportSurfaceInputTests,
         if (tool == quader::ViewportToolId::Pivot) {
           const auto moved = editor.query().entity(source.value().entity);
           ASSERT_TRUE(moved.has_value());
-          EXPECT_FLOAT_EQ(moved->transform.position.y, 1.0F);
+          EXPECT_FLOAT_EQ(moved->transform.location.y, 1.0F);
         }
         ASSERT_TRUE(editor.history().undo().ok());
         EXPECT_EQ(session.scene().entities(), baseline_entities);
@@ -4219,7 +4219,7 @@ TEST(QtViewportSurfaceInputTests,
     const auto source = editor.modeling().create_box(
         {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Radial toolbar source");
     ASSERT_TRUE(source.ok()) << source.error_message();
-    ASSERT_TRUE(editor.scene().set_transform(source.value().entity, {.position = {6, 0, 0}}).ok());
+    ASSERT_TRUE(editor.scene().set_transform(source.value().entity, {.location = {6, 0, 0}}).ok());
     ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
     ASSERT_TRUE(editor.main_viewport().set_view(quader::ViewportView::Top).ok());
     session.history().clear();
@@ -7741,10 +7741,10 @@ TEST(QtViewportSurfaceInputTests,
   const auto expect_nudges = [&](std::size_t count) {
     const auto *transform = context.session.scene().transform(box.value().entity);
     ASSERT_NE(transform, nullptr);
-    EXPECT_FLOAT_EQ(transform->position.x,
-                    baseline.position.x + static_cast<float>(count));
-    EXPECT_FLOAT_EQ(transform->position.y, baseline.position.y);
-    EXPECT_FLOAT_EQ(transform->position.z, baseline.position.z);
+    EXPECT_FLOAT_EQ(transform->location.x,
+                    baseline.location.x + static_cast<float>(count));
+    EXPECT_FLOAT_EQ(transform->location.y, baseline.location.y);
+    EXPECT_FLOAT_EQ(transform->location.z, baseline.location.z);
     EXPECT_FLOAT_EQ(quader::length_squared(
                         transform->rotation_euler - baseline.rotation_euler), 0.0F);
     EXPECT_FLOAT_EQ(quader::length_squared(transform->scale - baseline.scale), 0.0F);

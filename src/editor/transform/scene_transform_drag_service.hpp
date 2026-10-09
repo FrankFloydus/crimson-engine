@@ -7,10 +7,12 @@
 #pragma once
 
 #include "api/quader_api_result.hpp"
+#include "api/quader_scene_api.hpp"
 #include "editor/commands/document/document_command_result.hpp"
 #include "editor/history/scene_transform_preview_transaction.hpp"
 #include "scene/components.hpp"
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -64,7 +66,7 @@ public:
                              const AssetRegistry *visible_pivot_assets =
                                  nullptr,
                              TextureLockSettings texture_locks = {});
-    [[nodiscard]] bool begin_move_selected_to_primary_position_preview(
+    [[nodiscard]] bool begin_move_selected_to_primary_location_preview(
         SceneDocument &document, EntityId primary,
         std::string label = "Transform Selection",
         TextureLockSettings texture_locks = {});
@@ -76,13 +78,19 @@ public:
         SceneDocument &document, const AssetRegistry &assets, EntityId primary,
         std::string label = "Transform Selection",
         TextureLockSettings texture_locks = {});
+    /// Inspector intent captures fixed Edit participants even without component selection.
+    [[nodiscard]] bool begin_inspector_transform_preview(
+        QuaderEditorApi &editor, SceneDocument &document,
+        const AssetRegistry &assets, EntityId primary,
+        SceneTextureTransformKind kind, std::string label,
+        TextureLockSettings texture_locks = {});
     [[nodiscard]] bool preview_active() const;
     [[nodiscard]] const std::vector<SceneTransformDragTarget>& targets() const;
 
     DocumentCommandResult preview_transform(EntityId entity,
                                             TransformComponent transform);
-    DocumentCommandResult preview_selected_to_primary_position(
-        SceneDocument &document, EntityId primary, QVec3 next_primary_position);
+    DocumentCommandResult preview_selected_to_primary_location(
+        SceneDocument &document, EntityId primary, QVec3 next_primary_location);
     DocumentCommandResult preview_selected_to_primary_euler(
         SceneDocument &document, EntityId primary,
         QVec3 next_primary_euler_radians);
@@ -111,9 +119,9 @@ public:
     void abandon() noexcept;
     void reset();
 
-    QuaderApiVoidResult move_selected_to_primary_position(
+    QuaderApiVoidResult move_selected_to_primary_location(
         QuaderEditorApi &editor, SceneDocument &document, EntityId primary,
-        QVec3 next_primary_position, std::string label = "Transform Selection");
+        QVec3 next_primary_location, std::string label = "Transform Selection");
     QuaderApiVoidResult rotate_selected_to_primary_euler_around_selection_pivot(
         QuaderEditorApi &editor, SceneDocument &document,
         const AssetRegistry &assets, EntityId primary,
@@ -146,7 +154,9 @@ public:
     [[nodiscard]] CaptureTargetsStatus
     capture_targets(SceneDocument &document, QVec3 world_pivot,
                     QMat4 display_from_scene = {},
-                    const AssetRegistry *visible_pivot_assets = nullptr);
+                    const AssetRegistry *visible_pivot_assets = nullptr,
+                    std::span<const EntityId> explicit_entities = {},
+                    bool allow_unselectable = false);
     [[nodiscard]] const TransformComponent *
     captured_primary_transform(const SceneDocument &document,
                                EntityId primary) const;
@@ -155,6 +165,10 @@ public:
         std::vector<DocumentTransformEdit> edits,
         SceneTextureTransformKind kind);
 
+    bool allow_unselectable_ = false;
+    std::optional<QuaderInspectorObjectEditContext> inspector_context_;
+    std::function<bool()> inspector_context_validator_;
+    std::function<bool()> inspector_restore_validator_;
     std::optional<SceneTransformPreviewTransaction> preview_;
     std::vector<SceneTransformDragTarget> targets_;
     std::string label_ = "Transform Selection";

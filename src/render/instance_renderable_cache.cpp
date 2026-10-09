@@ -7,6 +7,7 @@
 #include "render/instance_renderable_cache.hpp"
 
 #include "diagnostics/profile.hpp"
+#include "math/glm_bridge.hpp"
 #include "render/material_binding_service.hpp"
 #include "render/mesh_renderable_factory.hpp"
 #include "render/render_layers.hpp"
@@ -52,7 +53,7 @@ constexpr std::array<InstanceVariant, 3u> kInstanceVariants{{
 RenderInstancePrimitiveKey variant_key(
     const RenderSceneInstancePrimitiveRecord &record,
     const RenderSceneInstanceOccurrenceRecord &occurrence,
-    const InstanceVariant &variant) {
+    const InstanceVariant &variant, bool per_object_transform) {
   RenderInstancePrimitiveKey key = record.key;
   key.layer_mask = variant.layer_mask;
   key.channel = variant.channel;
@@ -63,6 +64,10 @@ RenderInstancePrimitiveKey variant_key(
                                ? static_cast<std::uint8_t>(
                                      RenderInstancePresentationFlag::Dimmed)
                                : 0u;
+  if (per_object_transform) {
+    key.presentation_flags |= static_cast<std::uint8_t>(
+        RenderInstancePresentationFlag::PerObjectTransform);
+  }
   return key;
 }
 
@@ -513,9 +518,14 @@ InstanceRenderableCache::PreparedPlan InstanceRenderableCache::prepare(
         ++participant_count;
         visible_occurrence_count += kInstanceVariants.size();
       }
+      // Filament aab101b4c038 corrects reflected winding/normals for an entity,
+      // but InstanceBuffer::prepare overwrites the corrected normal matrix.
+      // Keep those occurrences on ordinary entity transforms with shared buffers.
+      const bool per_object_transform = !(glm::determinant(
+          glm::dmat3{to_glm(occurrence.world_transform)}) > 0.0);
       for (const InstanceVariant &variant : kInstanceVariants) {
         occurrences.push_back({
-            .key = variant_key(record, occurrence, variant),
+            .key = variant_key(record, occurrence, variant, per_object_transform),
             .occurrence = occurrence.occurrence,
             .world_transform = occurrence.world_transform,
             .sampling_from_local = occurrence.sampling_from_local,
@@ -621,7 +631,7 @@ MeshRenderableProxy InstanceRenderableCache::create_chunk_proxy(
       chunk.key.double_sided, initial_layer_mask, chunk.key.editor_unlit,
       variant->depth_only, chunk.key.channel, chunk.key.presentation_flags,
       max_instances_per_chunk_);
-  if (!proxy.entity || proxy.instance_buffer == nullptr) {
+  if (!proxy.entity || (proxy.instance_buffer == nullptr && !proxy.entity_transform_instance)) {
     factory_->destroy(proxy);
     return {};
   }
@@ -711,8 +721,9 @@ bool InstanceRenderableCache::rebuild(const PreparedPlan &prepared) {
         .instance_capacity =
             proxy.instance_buffer != nullptr
                 ? proxy.instance_buffer->getInstanceCount()
-                : 0u,
-        .valid = proxy.entity && proxy.instance_buffer != nullptr,
+                : (proxy.entity_transform_instance ? 1u : 0u),
+        .valid = proxy.entity &&
+            (proxy.instance_buffer != nullptr || proxy.entity_transform_instance),
     });
   }
 
@@ -749,7 +760,7 @@ bool InstanceRenderableCache::rebuild(const PreparedPlan &prepared) {
   }
   const auto stage_proxy = [&](std::size_t next_index) {
     MeshRenderableProxy proxy = create_chunk_proxy(prepared, next_index);
-    if (!proxy.entity || proxy.instance_buffer == nullptr) return false;
+    if (!proxy.entity || (proxy.instance_buffer == nullptr && !proxy.entity_transform_instance)) return false;
     staged_by_chunk[next_index] = staged.size();
     staged.push_back({.proxy = std::move(proxy)});
     ++stats_.proxy_creation_count;

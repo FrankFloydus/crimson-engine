@@ -256,7 +256,7 @@ protected:
     ASSERT_TRUE(created.ok()) << created.error_message();
     object = created.value();
     const QVec3 position = translated ? QVec3{-7.5F, 0.5F, -10.5F} : QVec3{};
-    ASSERT_TRUE(editor_.scene().set_transform(object.entity, {.position = position}).ok());
+    ASSERT_TRUE(editor_.scene().set_transform(object.entity, {.location = position}).ok());
     placement = session_.scene().world_transform_matrix(object.entity);
     ASSERT_TRUE(session_.scene().set_texture_mapping(object.entity, {placement}));
     ASSERT_TRUE(editor_.selection().select_object(object).ok());
@@ -802,15 +802,15 @@ TEST_F(UvNativeSamplingTests, CombineRebasesSourceAndSurvivorSamplingIncludingMi
     const auto source = wall("Mapped Source");
     const auto survivor = wall("Mapped Survivor", 7, false);
     ASSERT_TRUE(editor_.scene().set_transform(source.entity,
-        {.position = {3, 2, -1}, .rotation_euler = {0.2f, 0.35f, 0.6f},
+        {.location = {3, 2, -1}, .rotation_euler = {0.2f, 0.35f, 0.6f},
          .scale = {mirrored ? -1.5f : 1.5f, 0.8f, 1.2f}}).ok());
     ASSERT_TRUE(editor_.scene().set_transform(survivor.entity,
-        {.position = {-2, 1, 4}, .rotation_euler = {-0.1f, 0.2f, -0.3f},
+        {.location = {-2, 1, 4}, .rotation_euler = {-0.1f, 0.2f, -0.3f},
          .scale = {0.7f, 1.3f, 1.1f}}).ok());
     const QMat4 source_sampling = compose_transform(QTransform{
-        .position = {0.4f, -0.7f, 0.1f}, .scale = {1.2f, 0.6f, 0.9f}});
+        .location = {0.4f, -0.7f, 0.1f}, .scale = {1.2f, 0.6f, 0.9f}});
     const QMat4 survivor_sampling = compose_transform(QTransform{
-        .position = {-0.2f, 0.5f, 0.3f}, .scale = {0.8f, 1.1f, 1.4f}});
+        .location = {-0.2f, 0.5f, 0.3f}, .scale = {0.8f, 1.1f, 1.4f}});
     ASSERT_TRUE(session_.scene().set_texture_mapping(source.entity, {source_sampling}));
     ASSERT_TRUE(session_.scene().set_texture_mapping(survivor.entity, {survivor_sampling}));
     auto expected = displayed(survivor.entity);
@@ -882,7 +882,7 @@ TEST_F(UvNativeSamplingTests, MirroredCombinePreservesConvexAndConcaveNgonUvInte
       QuaderTransform{.scale = {-1.0F, 1.0F, 1.0F}},
       QuaderTransform{.scale = {1.0F, -1.0F, 1.0F}},
       QuaderTransform{.scale = {1.0F, 1.0F, -1.0F}},
-      QuaderTransform{.position = {-2.0F, 1.0F, 3.0F},
+      QuaderTransform{.location = {-2.0F, 1.0F, 3.0F},
                        .rotation_euler = {0.2F, -0.4F, 0.3F},
                        .scale = {1.0F, 1.0F, -1.0F}}};
   for (const auto &loop : loops) {
@@ -1022,17 +1022,17 @@ TEST_F(UvNativeSamplingTests, CombineUsesActiveInstanceOccurrenceSampling) {
   const auto source = wall("Instance Source");
   const auto survivor = wall("Instance Survivor", 5);
   ASSERT_TRUE(editor_.scene().set_transform(source.entity,
-      {.position = {2, 0, 1}, .rotation_euler = {0, 0.2f, 0.4f}}).ok());
+      {.location = {2, 0, 1}, .rotation_euler = {0, 0.2f, 0.4f}}).ok());
   ASSERT_TRUE(session_.scene().set_texture_mapping(source.entity,
-      {compose_transform(QTransform{.position = {0.3f, -0.8f, 0}})}));
+      {compose_transform(QTransform{.location = {0.3f, -0.8f, 0}})}));
   select_sources(source.entity, survivor.entity);
   ASSERT_TRUE(editor_.modeling().create_instance_from_selection().ok());
   const EntityId occurrence = session_.scene().primary_selection();
   ASSERT_NE(session_.scene().instance_occurrence(occurrence), nullptr);
   ASSERT_TRUE(editor_.scene().set_transform(occurrence,
-      {.position = {9, 4, -3}, .rotation_euler = {0.1f, -0.25f, 0.7f}}).ok());
+      {.location = {9, 4, -3}, .rotation_euler = {0.1f, -0.25f, 0.7f}}).ok());
   ASSERT_TRUE(session_.scene().set_texture_mapping(occurrence,
-      {compose_transform(QTransform{.position = {1, -2, 0.2f},
+      {compose_transform(QTransform{.location = {1, -2, 0.2f},
                                     .scale = {0.8f, 1.2f, 1.1f}})}));
   ASSERT_TRUE(editor_.modeling().enter_instance_edit(occurrence).ok());
   auto expected = displayed(survivor.entity, occurrence);
@@ -1053,9 +1053,9 @@ TEST_F(UvNativeSamplingTests, CombinePublicationFailureRestoresChartsAndSceneRev
   const auto source = wall("Rollback Source");
   const auto survivor = wall("Rollback Survivor", 5);
   ASSERT_TRUE(editor_.scene().set_transform(source.entity,
-      {.position = {2, 3, -1}}).ok());
+      {.location = {2, 3, -1}}).ok());
   ASSERT_TRUE(session_.scene().set_texture_mapping(source.entity,
-      {compose_transform(QTransform{.position = {0.4f, -0.3f, 0}})}));
+      {compose_transform(QTransform{.location = {0.4f, -0.3f, 0}})}));
   const AssetId material = session_.assets().add_material({});
   ASSERT_NE(material, kInvalidAssetId);
   ASSERT_TRUE(session_.scene().set_material(source.entity, {.material = material}));
@@ -1106,7 +1106,7 @@ TEST_F(UvNativeSamplingTests, CombineMergesMaterialTablesWithoutChangingFallback
   // Slot one is intentionally unbound on the survivor and must keep fallback.
   ASSERT_TRUE(editor_.modeling().assign_material_slot_to_face(survivor, 1, 1U).ok());
   ASSERT_TRUE(session_.scene().set_texture_mapping(source.entity,
-      {compose_transform(QTransform{.position = {0.4f, -0.3f, 0}})}));
+      {compose_transform(QTransform{.location = {0.4f, -0.3f, 0}})}));
   const auto survivor_before = *session_.scene().material(survivor.entity);
   auto expected = displayed(survivor.entity);
   const auto source_corners = displayed(source.entity);
@@ -1138,10 +1138,10 @@ TEST_F(UvNativeSamplingTests, OrdinaryArraysHonorTextureLocksAndRecordMappingsFo
         SCOPED_TRACE(::testing::Message() << radial << "/" << lock << "/" << scale_lock);
         const auto source = wall("Array Mapping Source");
         ASSERT_TRUE(editor_.scene().set_transform(source.entity,
-            {.position = {4, 1, 2}, .rotation_euler = {0.2f, 0.3f, -0.1f},
+            {.location = {4, 1, 2}, .rotation_euler = {0.2f, 0.3f, -0.1f},
              .scale = {1.3f, 0.8f, 1.1f}}).ok());
         const QMat4 initial_sampling = compose_transform(QTransform{
-            .position = {0.4f, -0.7f, 0.3f}, .scale = {0.7f, 1.2f, 0.9f}});
+            .location = {0.4f, -0.7f, 0.3f}, .scale = {0.7f, 1.2f, 0.9f}});
         ASSERT_TRUE(session_.scene().set_texture_mapping(source.entity, {initial_sampling}));
         TextureLockSettings settings{lock, scale_lock};
         session_.modeling().set_texture_lock_settings_provider([&] { return settings; });
@@ -1193,7 +1193,7 @@ TEST_F(UvNativeSamplingTests, RectangularNumericRotationMatchesActionAndContinuo
   const auto source = wall("Rectangular Numeric Rotation");
   texture_extent(source.entity, 512, 128);
   ASSERT_TRUE(session_.scene().set_texture_mapping(source.entity,
-      {compose_transform(QTransform{.position = {0.4f, -0.3f, 0},
+      {compose_transform(QTransform{.location = {0.4f, -0.3f, 0},
                                     .scale = {0.8f, 1.2f, 1}})}));
   ASSERT_TRUE(editor_.selection().select_object(source).ok());
   ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());

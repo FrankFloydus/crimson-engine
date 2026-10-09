@@ -4023,7 +4023,7 @@ TEST(SceneMeshOccurrenceProjectionPolicyTests,
   EXPECT_NE(projection_header.find("QMat4 world_from_geometry"),
             std::string::npos);
   EXPECT_NE(projection_header.find("bool selectable"), std::string::npos);
-  EXPECT_NE(projection_header.find("bool effectively_locked"),
+  EXPECT_NE(projection_header.find("bool effectively_selectable"),
             std::string::npos);
   EXPECT_EQ(projection_header.find("assets/"), std::string::npos);
   EXPECT_EQ(projection_header.find("render/"), std::string::npos);

@@ -589,7 +589,7 @@ RenderOverlaySelectionSnapshot build_render_overlay_selection_snapshot_impl(
             document, entity, local_visibility, active_selection_visible),
         .hierarchy_selected = selected_in_hierarchy(document, entity, local_visibility),
         .radius_editable =
-            !document.is_effectively_locked(entity) &&
+            document.is_effectively_selectable(entity) &&
             scene_hierarchy_segment_is_selectable_ignoring_visibility(
                 document, entity),
     });

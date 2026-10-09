@@ -58,7 +58,7 @@ public:
     EXPECT_TRUE(result.ok()) << result.error_message();
     if (!result.ok()) return {};
     EXPECT_TRUE(editor.scene().set_transform(result.value().entity,
-                                             {.position = position}).ok());
+                                             {.location = position}).ok());
     return result.value();
   }
 
@@ -104,7 +104,7 @@ TEST(RadialArrayInstanceTests,
   auto &tool = harness.session.radial_array();
   ASSERT_TRUE(tool.has_valid_center());
   const auto center = tool.center_state().world_position;
-  ASSERT_TRUE(harness.session.scene().set_locked(source.entity, true));
+  ASSERT_TRUE(harness.session.scene().set_selectable(source.entity, false));
 
   const auto failed = harness.editor.tools().activate(ViewportToolId::Move);
   EXPECT_FALSE(failed.ok());
@@ -114,7 +114,7 @@ TEST(RadialArrayInstanceTests,
   EXPECT_EQ(harness.session.scene().entities().size(), 1u);
   EXPECT_FALSE(harness.session.history().can_undo());
 
-  ASSERT_TRUE(harness.session.scene().set_locked(source.entity, false));
+  ASSERT_TRUE(harness.session.scene().set_selectable(source.entity, true));
   ASSERT_TRUE(tool.has_valid_center());
   EXPECT_EQ(tool.center_state().world_position.x, center.x);
   EXPECT_EQ(tool.center_state().world_position.y, center.y);
@@ -370,7 +370,7 @@ TEST(RadialArrayInstanceTests, MultipleSourcesRetainSeparateFamiliesPivotsParent
       {.name = "Transformed Array Parent", .kind = QuaderEntityKind::Empty});
   ASSERT_TRUE(parent.ok());
   ASSERT_TRUE(h.editor.scene().set_transform(parent.value().id,
-      {.position = {3, 2, -1}, .rotation_euler = {0, 0.4f, 0}, .scale = {2, 2, 2}}).ok());
+      {.location = {3, 2, -1}, .rotation_euler = {0, 0.4f, 0}, .scale = {2, 2, 2}}).ok());
   const auto first = h.box("First Family", {4, 0, 0});
   const auto second = h.box("Second Family", {-2, 1, 4});
   ASSERT_TRUE(h.editor.scene().reparent(first.entity, parent.value().id, false).ok());
@@ -618,10 +618,10 @@ TEST(RadialArrayInstanceTests, IndependentShearedCopiesPreservePreviewAndOccurre
   RadialArrayInstanceHarness h;
   const auto member = h.box("Sheared Instance Member");
   ASSERT_TRUE(h.editor.scene().set_transform(member.entity,
-      {.position = {4, 0, 0}, .rotation_euler = {0, 0.7853982f, 0}}).ok());
+      {.location = {4, 0, 0}, .rotation_euler = {0, 0.7853982f, 0}}).ok());
   const EntityId source = h.instance(member);
   ASSERT_TRUE(h.editor.scene().set_transform(source,
-      {.position = {4, 0, 0}, .scale = {2, 1, 1}}).ok());
+      {.location = {4, 0, 0}, .scale = {2, 1, 1}}).ok());
   h.begin({source}, false);
   const auto entities = h.session.scene().entities();
   const auto meshes = h.session.assets().mesh_ids();

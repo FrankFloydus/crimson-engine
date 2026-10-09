@@ -702,7 +702,7 @@ void append_mesh_hits(const SceneSurfaceQuerySnapshot *scene_surfaces,
       .min_distance = interval.minimum,
       .max_distance = interval.maximum,
       .include_backfaces = select_backfaces,
-      .eligibility = SceneSurfaceEligibility::SelectableUnlocked,
+      .eligibility = SceneSurfaceEligibility::EffectivelySelectable,
       .excluded_entities = excluded_entities,
       .excluded_occurrences = excluded_occurrences,
   };
@@ -751,7 +751,7 @@ void append_billboard_hits(const ViewportScenePointHitQuery &query,
   for (const ViewportSceneBillboardPickCandidate &candidate :
        query.billboards) {
     if (candidate.entity == kInvalidEntityId || !candidate.selectable ||
-        candidate.effectively_locked || !finite_vector(candidate.position) ||
+        !candidate.effectively_selectable || !finite_vector(candidate.position) ||
         entity_is_excluded(query.excluded_entities, candidate.entity)) {
       continue;
     }
@@ -1215,7 +1215,7 @@ std::vector<ViewportSceneHitCandidate> collect_viewport_scene_marquee_hits(
   for (const ViewportSceneBillboardPickCandidate &candidate :
        query.billboards) {
     if (candidate.entity == kInvalidEntityId || !candidate.selectable ||
-        candidate.effectively_locked || !finite_vector(candidate.position)) {
+        !candidate.effectively_selectable || !finite_vector(candidate.position)) {
       continue;
     }
     const ViewportScreenPoint screen =
@@ -1527,7 +1527,7 @@ std::vector<ViewportSceneHitCandidate> collect_viewport_scene_lasso_hits(
   for (const auto &candidate : query.billboards) {
     key.push_back(candidate.entity);
     key.push_back(candidate.selectable);
-    key.push_back(candidate.effectively_locked);
+    key.push_back(candidate.effectively_selectable);
     vector(candidate.position);
     scalar(candidate.size_pixels);
   }
@@ -1569,7 +1569,7 @@ std::vector<ViewportSceneHitCandidate> collect_viewport_scene_lasso_hits(
   };
   for (const auto &candidate : query.billboards) {
     if (candidate.entity == kInvalidEntityId || !candidate.selectable ||
-        candidate.effectively_locked || !finite_vector(candidate.position)) {
+        !candidate.effectively_selectable || !finite_vector(candidate.position)) {
       continue;
     }
     eligible(candidate.entity);

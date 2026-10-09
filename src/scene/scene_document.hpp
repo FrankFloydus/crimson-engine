@@ -40,8 +40,8 @@ struct EntityRecord {
   int depth = 0;
   bool visible = true;
   bool effectively_visible = true;
-  bool locked = false;
-  bool effectively_locked = false;
+  bool selectable = true;
+  bool effectively_selectable = true;
   bool selected = false;
   bool active = false;
   bool has_children = false;
@@ -92,7 +92,7 @@ struct SceneHierarchyProjectionRecord {
   std::size_t depth = 0u;
   QMat4 world_transform;
   bool effectively_visible = true;
-  bool effectively_locked = false;
+  bool effectively_selectable = true;
 };
 
 /**
@@ -312,8 +312,10 @@ public:
     bool set_editor_object_id(EntityId id, EditorObjectId editor_object_id);
     bool set_entity_kind(EntityId id, EntityKind kind);
     bool set_visible(EntityId id, bool visible);
+    /** Preserves the independent visibility-component selection eligibility. */
+    bool set_selectability(EntityId id, bool selectable);
+    /** Sets the authored permission formerly persisted as inverse locked state. */
     bool set_selectable(EntityId id, bool selectable);
-    bool set_locked(EntityId id, bool locked);
     bool set_selected(EntityId id, bool selected);
     bool set_active_selection(EntityId id);
     /**
@@ -421,7 +423,7 @@ public:
     const EntityKindComponent *entity_kind(EntityId id) const;
     const HierarchyComponent* hierarchy(EntityId id) const;
     const VisibilityComponent* visibility(EntityId id) const;
-    const LockComponent* lock(EntityId id) const;
+    const SelectableComponent* selectable(EntityId id) const;
     const SelectionComponent* selection(EntityId id) const;
     const ModelingObjectComponent *modeling_object(EntityId id) const;
     const InstanceDefinitionComponent *instance_definition(EntityId id) const;
@@ -465,7 +467,7 @@ public:
                                       bool include_self = true) const;
     std::vector<EntityId> entity_tree_order() const;
     /**
-     * Computes world transforms, inherited visibility/locking, and instance
+     * Computes world transforms, inherited visibility/selectability, and instance
      * containment in one top-down scene traversal.
      */
     [[nodiscard]] std::shared_ptr<const SceneHierarchyProjectionSnapshot>
@@ -509,7 +511,13 @@ public:
     instance_occurrences_for_definition(EntityId definition) const;
     EntityKind kind(EntityId id) const;
     bool is_effectively_visible(EntityId id) const;
-    bool is_effectively_locked(EntityId id) const;
+    /**
+     * Authored permission inherited through parents and layer restrictions.
+     * Missing or invalid entities have no permission and return false.
+     * VisibilityComponent::selectable is an independent eligibility gate that
+     * selection consumers also apply; this query never discards either state.
+     */
+    bool is_effectively_selectable(EntityId id) const;
     QMat4 local_transform_matrix(EntityId id) const;
     QMat4 world_transform_matrix(EntityId id) const;
     void advance_revision_for_replacement(std::uint64_t previous_revision);
@@ -647,7 +655,7 @@ private:
   EntityKindComponent *mutable_entity_kind(EntityId id);
   HierarchyComponent *mutable_hierarchy(EntityId id);
   VisibilityComponent *mutable_visibility(EntityId id);
-  LockComponent *mutable_lock(EntityId id);
+  SelectableComponent *mutable_selectable(EntityId id);
   SelectionComponent *mutable_selection(EntityId id);
 
   void mark_dirty();

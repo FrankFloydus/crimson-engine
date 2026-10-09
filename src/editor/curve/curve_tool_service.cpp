@@ -459,7 +459,7 @@ bool CurveToolService::editable_source(EntityId entity) const {
          assets_.curve(curve->curve) != nullptr &&
          scene_.modeling_object(entity) != nullptr &&
          scene_.is_effectively_visible(entity) &&
-         !scene_.is_effectively_locked(entity) &&
+         scene_.is_effectively_selectable(entity) &&
          !scene_.is_instance_definition_member(entity) &&
          !scene_.is_instance_definition_entity(entity) &&
          (visibility == nullptr || visibility->selectable) &&

@@ -771,7 +771,7 @@ TEST(QtViewportContextMenuTests,
             nullptr);
 
   ASSERT_TRUE(editor.selection().select_face(source.value(), 1).ok());
-  ASSERT_TRUE(editor.scene().set_locked(target.value().entity, true).ok());
+  ASSERT_TRUE(editor.scene().set_selectable(target.value().entity, false).ok());
   const std::size_t locked_history_count = session.history().undo_count();
   const ContextMenuSnapshot locked_source = show_and_snapshot(
       owner, presenter, editor, input_router, localization, {},
@@ -791,7 +791,7 @@ TEST(QtViewportContextMenuTests,
   EXPECT_EQ(read_material(target.value()), quader::MaterialReference{blue.value().id});
   EXPECT_EQ(session.history().undo_count(), locked_history_count);
   EXPECT_TRUE(notifications.empty());
-  ASSERT_TRUE(editor.scene().set_locked(target.value().entity, false).ok());
+  ASSERT_TRUE(editor.scene().set_selectable(target.value().entity, true).ok());
 
   ASSERT_TRUE(editor.selection().select_face(target.value(), 1).ok());
   const ContextMenuSnapshot same_face = show_and_snapshot(

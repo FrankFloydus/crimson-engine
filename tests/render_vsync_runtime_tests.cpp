@@ -564,7 +564,7 @@ public:
     }
     QuaderCreatePointLightArgs args;
     args.name = "Calibration light";
-    args.transform.position = {0, 3, 0};
+    args.transform.location = {0, 3, 0};
     const auto light = api.scene().create_point_light(args);
     if (!light.ok()) {
       ADD_FAILURE() << "Creating calibration light: " << light.error_message();

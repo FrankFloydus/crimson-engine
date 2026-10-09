@@ -128,7 +128,7 @@ TEST(EditorModeToolPolicyTests, WholeObjectAuthoringAndClipboardRejectEditWithou
   const auto original = editor.query().entity(box.entity);
   ASSERT_TRUE(original.has_value());
   quader::QuaderTransform moved;
-  moved.position = {8.0f, 0.0f, 0.0f};
+  moved.location = {8.0f, 0.0f, 0.0f};
   EXPECT_FALSE(editor.scene().create_entity({.name = "Rejected"}).ok());
   EXPECT_FALSE(editor.scene().create_empty().ok());
   EXPECT_FALSE(editor.scene().destroy(box.entity).ok());
@@ -388,9 +388,9 @@ TEST(EditorModeToolPolicyTests, RepeatingComponentExtrusionCannotBecomeAnObjectM
   EXPECT_EQ(editor.revisions().modeling_content_revision, before.modeling_content_revision);
   EXPECT_EQ(editor.history().undo_history().history_revision, history);
   const auto after = editor.query().entity(scenario.entity("box"))->transform;
-  EXPECT_FLOAT_EQ(after.position.x, transform.position.x);
-  EXPECT_FLOAT_EQ(after.position.y, transform.position.y);
-  EXPECT_FLOAT_EQ(after.position.z, transform.position.z);
+  EXPECT_FLOAT_EQ(after.location.x, transform.location.x);
+  EXPECT_FLOAT_EQ(after.location.y, transform.location.y);
+  EXPECT_FLOAT_EQ(after.location.z, transform.location.z);
 }
 
 } // namespace

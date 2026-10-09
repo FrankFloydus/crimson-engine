@@ -138,7 +138,7 @@ TEST_F(ProjectAssetDependencyTests,
   ASSERT_TRUE(scene.set_instance_definition(definition));
   ASSERT_TRUE(scene.set_parent(entity, definition));
   ASSERT_TRUE(scene.set_visible(definition, false));
-  ASSERT_TRUE(scene.set_locked(definition, true));
+  ASSERT_TRUE(scene.set_selectable(definition, false));
   const auto saved = project_.save_as(saved_tab->session_id,
                                       relative_path("Scenes/Saved.qdr"));
   ASSERT_TRUE(saved.ok) << saved.message;

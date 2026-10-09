@@ -68,13 +68,13 @@ TEST_F(ParentingCommandTests,
   ASSERT_TRUE(mesh.ok()) << mesh.error_message();
   const EntityId target = mesh.value().entity;
   ASSERT_TRUE(editor_.scene().set_transform(
-      target, {.position = {10, -3, 2}, .rotation_euler = {0.2F, 0.8F, -0.3F},
+      target, {.location = {10, -3, 2}, .rotation_euler = {0.2F, 0.8F, -0.3F},
                .scale = {-2, 3, 0.75F}}).ok());
   const EntityId first = create("First", QuaderEntityKind::Empty,
-      kInvalidEntityId, {.position = {1, 2, 3},
+      kInvalidEntityId, {.location = {1, 2, 3},
                          .rotation_euler = {0.3F, 0.4F, 0.7F}, .scale = {2, 1, 3}});
   const EntityId nested = create("Nested", QuaderEntityKind::Generic, first,
-      {.position = {4, -1, 2}, .rotation_euler = {0.6F, 0.3F, 0.2F}});
+      {.location = {4, -1, 2}, .rotation_euler = {0.6F, 0.3F, 0.2F}});
   const EntityId existing = create("Existing", QuaderEntityKind::Empty, target);
   const auto light = editor_.scene().create_point_light({.name = "Light"});
   ASSERT_TRUE(light.ok()) << light.error_message();
@@ -104,7 +104,7 @@ TEST_F(ParentingCommandTests,
   for (std::size_t index = 0; index < moved.size(); ++index) {
     const auto *after = session_.scene().transform(moved[index]);
     ASSERT_NE(after, nullptr);
-    expect_channels(after->position, channels[index].position);
+    expect_channels(after->location, channels[index].location);
     expect_channels(after->rotation_euler, channels[index].rotation_euler);
     expect_channels(after->scale, channels[index].scale);
     expect_matrix(moved[index], worlds[index]);
@@ -129,12 +129,12 @@ TEST_F(ParentingCommandTests,
 TEST_F(ParentingCommandTests,
        UnparentDetachesNestedSelectionsIndividuallyAndLeavesRootSelectionAlone) {
   const EntityId parent = create("Parent", QuaderEntityKind::Empty,
-      kInvalidEntityId, {.position = {3, 2, 1}, .rotation_euler = {0.2F, 0.3F, 0.5F},
+      kInvalidEntityId, {.location = {3, 2, 1}, .rotation_euler = {0.2F, 0.3F, 0.5F},
                          .scale = {3, -2, 1}});
   const EntityId child = create("Child", QuaderEntityKind::Empty, parent,
-      {.position = {2, 1, 0}, .rotation_euler = {0.3F, 0.4F, 0.7F}});
+      {.location = {2, 1, 0}, .rotation_euler = {0.3F, 0.4F, 0.7F}});
   const EntityId grandchild = create("Grandchild", QuaderEntityKind::Empty, child,
-      {.position = {1, 2, 3}, .scale = {0, 1, 2}});
+      {.location = {1, 2, 3}, .scale = {0, 1, 2}});
   const EntityId root = create("Root");
   const auto child_world = session_.scene().world_transform_matrix(child);
   const auto grandchild_world = session_.scene().world_transform_matrix(grandchild);
@@ -181,7 +181,7 @@ TEST_F(ParentingCommandTests,
   rejected();
   select({other, parent, singular}, singular);
   rejected();
-  ASSERT_TRUE(editor_.scene().set_locked(child, true).ok());
+  ASSERT_TRUE(editor_.scene().set_selectable(child, false).ok());
   select({parent, other}, other);
   rejected();
 }
@@ -189,15 +189,15 @@ TEST_F(ParentingCommandTests,
 TEST_F(ParentingCommandTests,
        InspectorChannelEditsRetainCompensationAndUnparentedRootOffset) {
   const EntityId target = create("Target", QuaderEntityKind::Empty,
-      kInvalidEntityId, {.position = {4, 3, 2}, .rotation_euler = {0.3F, 0.6F, 0.2F},
+      kInvalidEntityId, {.location = {4, 3, 2}, .rotation_euler = {0.3F, 0.6F, 0.2F},
                          .scale = {-2, 3, 1}});
   const EntityId child = create("Child", QuaderEntityKind::Empty,
-      kInvalidEntityId, {.position = {1, 2, 3}, .rotation_euler = {0.4F, 0.3F, 0.7F}});
+      kInvalidEntityId, {.location = {1, 2, 3}, .rotation_euler = {0.4F, 0.3F, 0.7F}});
   select({child, target}, target);
   ASSERT_TRUE(editor_.scene().parent_selection_to_active().ok());
   const auto offset = session_.scene().transform(child)->parenting_offset;
   auto edited = editor_.query().entity(child)->transform;
-  edited.position = {8, 2, 1};
+  edited.location = {8, 2, 1};
   ASSERT_TRUE(editor_.scene().set_transform(child, edited).ok());
   EXPECT_EQ(session_.scene().transform(child)->parenting_offset.values,
             offset.values);

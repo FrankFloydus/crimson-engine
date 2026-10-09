@@ -1344,7 +1344,8 @@ TEST(RenderSceneSnapshotTests, BuildsVisibleMeshLightAndMaterialRecords) {
   EXPECT_EQ(renderable_entry->material_revision,
             render_material_binding_signature(renderable_entry->material));
   EXPECT_FALSE(renderable_entry->cast_shadows());
-  EXPECT_TRUE(renderable_entry->double_sided());
+  EXPECT_FALSE(renderable_entry->double_sided());
+  EXPECT_TRUE(renderable_entry->mesh_component.double_sided);
   ASSERT_TRUE(renderable_entry->material.present);
   EXPECT_EQ(renderable_entry->material.primary_material.material_id, material);
   const RenderTextureAssetSnapshot *texture_snapshot =
@@ -1524,7 +1525,7 @@ TEST(RenderSceneSnapshotTests,
 
   publish_curve();
   ASSERT_TRUE(document.set_transform(
-      mesh, {.position = {3.0f, 4.0f, 5.0f}}));
+      mesh, {.location = {3.0f, 4.0f, 5.0f}}));
   expect_rejected_and_rebuild("transform");
 
   publish_curve();
@@ -1546,7 +1547,7 @@ TEST(RenderSceneSnapshotTests,
   const EntityId other_mesh =
       document.create_entity("Other Mesh", EntityKind::Mesh);
   ASSERT_TRUE(document.set_mesh(
-      other_mesh, MeshComponent{.mesh = mesh, .double_sided = true}));
+      other_mesh, MeshComponent{.mesh = mesh, .cast_shadows = false}));
   const EntityId persistently_hidden_mesh =
       document.create_entity("Persistently Hidden Local Mesh",
                              EntityKind::Mesh);
@@ -1626,7 +1627,7 @@ TEST(RenderHotPathTests, SceneSnapshotSourceMatchTracksOwnerRevisions) {
                                                     assets));
 
   document.set_transform(
-      entity, TransformComponent{.position = {3.0f, 2.0f, 1.0f}});
+      entity, TransformComponent{.location = {3.0f, 2.0f, 1.0f}});
   EXPECT_FALSE(render_scene_snapshot_matches_sources(snapshot, document,
                                                      assets));
 
@@ -2139,7 +2140,7 @@ TEST(RenderSceneSnapshotTests,
   EXPECT_EQ(resolver.resolve_count, resolutions);
 
   document.set_transform(
-      entity, TransformComponent{.position = {1.0f, 2.0f, 3.0f}});
+      entity, TransformComponent{.location = {1.0f, 2.0f, 3.0f}});
   EXPECT_FALSE(try_refresh_render_scene_snapshot_transforms(
       initial, document, assets, 2u, {}, resolver.revision_value));
 }
@@ -2430,38 +2431,39 @@ TEST(RenderSceneSnapshotTests,
             records.front().material.revision);
 }
 
-TEST(RenderSceneSnapshotTests, ToolPreviewSnapshotsPreserveCullingPolicy) {
+TEST(RenderSceneSnapshotTests, ToolPreviewSnapshotsUseGlobalCullingPolicy) {
   AssetRegistry assets;
   QMat4 mapping;
   mapping.values[12] = 3.0f;
-  const std::vector<RenderToolPreviewMeshRecord> records =
-      build_render_tool_preview_snapshot(
-          {
-              ToolPreviewMesh{.source_entity = 7u,
-                              .mesh = make_overlay_triangle_mesh(),
-                              .sampling_from_local = mapping,
-                              .double_sided = false,
-                              .suppress_source = true},
-              ToolPreviewMesh{.source_entity = 8u,
-                              .mesh = make_overlay_triangle_mesh(),
-                              .instance_transforms = {QMat4{}, QMat4{}},
-                              .instance_sampling_from_local = {mapping, QMat4{}},
-                              .double_sided = true,
-                              .suppress_source = true},
-              ToolPreviewMesh{.source_entity = kInvalidEntityId,
-                              .mesh = make_overlay_triangle_mesh()},
-          },
-          assets);
+  for (const bool culling_enabled : {true, false}) {
+    const std::vector<RenderToolPreviewMeshRecord> records =
+        build_render_tool_preview_snapshot(
+            {
+                ToolPreviewMesh{.source_entity = 7u,
+                                .mesh = make_overlay_triangle_mesh(),
+                                .sampling_from_local = mapping,
+                                .double_sided = false,
+                                .suppress_source = true},
+                ToolPreviewMesh{.source_entity = 8u,
+                                .mesh = make_overlay_triangle_mesh(),
+                                .instance_transforms = {QMat4{}, QMat4{}},
+                                .instance_sampling_from_local = {mapping, QMat4{}},
+                                .double_sided = true,
+                                .suppress_source = true},
+                ToolPreviewMesh{.source_entity = kInvalidEntityId,
+                                .mesh = make_overlay_triangle_mesh()},
+            },
+            assets, nullptr, nullptr, culling_enabled);
 
-  ASSERT_EQ(records.size(), 3u);
-  EXPECT_FALSE(records[0].double_sided);
-  EXPECT_TRUE(records[1].double_sided);
-  EXPECT_TRUE(records[2].double_sided)
-      << "source-less generated previews retain their two-sided default";
-  EXPECT_EQ(records[0].sampling_from_local.values, mapping.values);
-  ASSERT_EQ(records[1].instance_sampling_from_local.size(), 2u);
-  EXPECT_EQ(records[1].instance_sampling_from_local[0].values, mapping.values);
-  EXPECT_EQ(records[1].instance_sampling_from_local[1].values, QMat4{}.values);
+    ASSERT_EQ(records.size(), 3u);
+    for (const auto &record : records) {
+      EXPECT_EQ(record.double_sided, !culling_enabled);
+    }
+    EXPECT_EQ(records[0].sampling_from_local.values, mapping.values);
+    ASSERT_EQ(records[1].instance_sampling_from_local.size(), 2u);
+    EXPECT_EQ(records[1].instance_sampling_from_local[0].values, mapping.values);
+    EXPECT_EQ(records[1].instance_sampling_from_local[1].values, QMat4{}.values);
+  }
 }
 
 TEST(RenderSceneSnapshotTests,
@@ -2669,19 +2671,19 @@ TEST(ViewportInfoStatsTests, CountsOnlyCameraVisibleRenderableMeshes) {
       document.create_entity("Visible Mesh", EntityKind::Mesh);
   document.set_mesh(visible, MeshComponent{.mesh = mesh});
   document.set_transform(
-      visible, TransformComponent{.position = {0.0f, 0.0f, -3.0f}});
+      visible, TransformComponent{.location = {0.0f, 0.0f, -3.0f}});
 
   const EntityId missing =
       document.create_entity("Missing Mesh", EntityKind::Mesh);
   document.set_mesh(missing, MeshComponent{.mesh = mesh + 1000u});
   document.set_transform(
-      missing, TransformComponent{.position = {0.0f, 0.0f, -3.0f}});
+      missing, TransformComponent{.location = {0.0f, 0.0f, -3.0f}});
 
   const EntityId hidden =
       document.create_entity("Hidden Mesh", EntityKind::Mesh);
   document.set_mesh(hidden, MeshComponent{.mesh = mesh});
   document.set_transform(hidden,
-                         TransformComponent{.position = {0.0f, 0.0f, -3.0f}});
+                         TransformComponent{.location = {0.0f, 0.0f, -3.0f}});
   document.set_visible(hidden, false);
 
   const ViewportOverlayCamera camera = test_perspective_overlay_camera();
@@ -2738,9 +2740,9 @@ TEST(ViewportInfoStatsTests,
   ASSERT_TRUE(document.set_instance_occurrence(
       other, InstanceOccurrenceComponent{.definition = definition}));
   ASSERT_TRUE(document.set_transform(
-      isolated, TransformComponent{.position = {0.0f, 0.0f, -3.0f}}));
+      isolated, TransformComponent{.location = {0.0f, 0.0f, -3.0f}}));
   ASSERT_TRUE(document.set_transform(
-      other, TransformComponent{.position = {0.5f, 0.0f, -3.0f}}));
+      other, TransformComponent{.location = {0.5f, 0.0f, -3.0f}}));
 
   ViewportWorkspaceService workspace;
   const std::array<ViewportLocalVisibilityEntityId, 2> baseline{isolated,
@@ -2975,7 +2977,7 @@ TEST(RenderOverlaySnapshotCacheTests,
   ASSERT_TRUE(document.set_curve(curve, CurveComponent{.curve = asset}));
   ASSERT_TRUE(document.set_parent(curve, group, false));
   ASSERT_TRUE(document.set_transform(
-      curve, TransformComponent{.position = {1.0f, 2.0f, 3.0f}}));
+      curve, TransformComponent{.location = {1.0f, 2.0f, 3.0f}}));
   RenderOverlaySnapshotCache cache;
   const auto &initial = cache.selection_snapshot(document, assets);
   ASSERT_EQ(initial.curves.size(), 1u);
@@ -2995,7 +2997,7 @@ TEST(RenderOverlaySnapshotCacheTests,
   EXPECT_EQ(cache.stats().selection_build_count, 1u);
 
   ASSERT_TRUE(document.set_transform(
-      group, TransformComponent{.position = {5.0f, -2.0f, -7.0f}}));
+      group, TransformComponent{.location = {5.0f, -2.0f, -7.0f}}));
   const auto &moved = cache.selection_snapshot(document, assets);
   ASSERT_EQ(moved.curves.size(), 1u);
   EXPECT_EQ(moved.curves.data(), records);
@@ -3211,7 +3213,7 @@ TEST(RenderOverlaySnapshotCacheTests,
     (void)cache.selection_snapshot(document, assets);
   };
   ASSERT_TRUE(document.set_transform(
-      direct_mesh, TransformComponent{.position = {3.0f, 0.0f, 0.0f}}));
+      direct_mesh, TransformComponent{.location = {3.0f, 0.0f, 0.0f}}));
   expect_rejected();
   ASSERT_TRUE(document.set_selected(direct_mesh, false));
   expect_rejected();
@@ -3660,7 +3662,7 @@ TEST(RenderOverlaySnapshotTests,
   const EntityId point_light =
       document.create_entity("Point Light", EntityKind::Light);
   document.set_transform(
-      point_light, TransformComponent{.position = {2.0f, 3.0f, 4.0f}});
+      point_light, TransformComponent{.location = {2.0f, 3.0f, 4.0f}});
   document.set_light(point_light, LightComponent{.type = LightType::Point});
   ASSERT_TRUE(document.set_selected(point_light, true));
 
@@ -3760,11 +3762,11 @@ TEST(RenderOverlaySnapshotTests,
   AssetRegistry assets;
   const EntityId parent = document.create_empty("Scaled Light Parent");
   document.set_transform(parent, TransformComponent{
-      .position = {4.0f, -2.0f, 1.0f}, .scale = {3.0f, 2.0f, 4.0f}});
+      .location = {4.0f, -2.0f, 1.0f}, .scale = {3.0f, 2.0f, 4.0f}});
   const EntityId entity = document.create_entity("Point", EntityKind::Light);
   document.set_light(entity, LightComponent{.type = LightType::Point, .range = 5.0f});
   document.set_transform(entity, TransformComponent{
-      .position = {2.0f, 1.0f, -1.0f}, .scale = {2.0f, 3.0f, 0.5f}});
+      .location = {2.0f, 1.0f, -1.0f}, .scale = {2.0f, 3.0f, 0.5f}});
   ASSERT_TRUE(document.set_parent(entity, parent, false));
   ASSERT_TRUE(document.set_selected(entity, true));
   const EntityId other = document.create_entity("Unselected", EntityKind::Light);
@@ -3844,7 +3846,7 @@ TEST(RenderOverlaySnapshotTests,
   }
 
   document.set_transform(parent, TransformComponent{
-      .position = {1.0f, 4.0f, -2.0f}, .scale = {5.0f, 3.0f, 2.0f}});
+      .location = {1.0f, 4.0f, -2.0f}, .scale = {5.0f, 3.0f, 2.0f}});
   center = transform_point(document.world_transform_matrix(entity), {});
   const auto &moved = cache.selection_snapshot(document, assets);
   const auto moved_frame = ViewportSceneOverlayBuilder::build_selection_frame(
@@ -3861,14 +3863,14 @@ TEST(RenderOverlaySnapshotTests,
   ASSERT_EQ(updated_frame.lines.size(), 360u);
   EXPECT_NEAR(length(updated_frame.lines.front().start - center), 8.0f, 0.00001f);
 
-  ASSERT_TRUE(document.set_locked(parent, true));
+  ASSERT_TRUE(document.set_selectable(parent, false));
   const auto &locked = cache.selection_snapshot(document, assets);
   const auto locked_frame = ViewportSceneOverlayBuilder::build_point_light_radius_frame(
       locked.point_light_gizmos, camera);
   EXPECT_EQ(locked_frame.lines.size(), 120u);
   EXPECT_TRUE(locked_frame.triangles.empty());
-  ASSERT_TRUE(document.set_locked(parent, false));
-  ASSERT_TRUE(document.set_selectable(parent, false));
+  ASSERT_TRUE(document.set_selectable(parent, true));
+  ASSERT_TRUE(document.set_selectability(parent, false));
   const auto &unselectable = cache.selection_snapshot(document, assets);
   EXPECT_TRUE(ViewportSceneOverlayBuilder::build_point_light_radius_frame(
       unselectable.point_light_gizmos, camera).triangles.empty());
@@ -4168,10 +4170,10 @@ TEST(RenderOverlaySnapshotTests,
   const std::uint64_t layer_revision = document.layer_revision();
   ASSERT_TRUE(document.set_layer_locked(layer, true));
   EXPECT_EQ(document.layer_revision(), layer_revision + 1u);
-  ASSERT_NE(document.lock(entity), nullptr);
-  EXPECT_FALSE(document.lock(entity)->locked)
+  ASSERT_NE(document.selectable(entity), nullptr);
+  EXPECT_TRUE(document.selectable(entity)->selectable)
       << "layer locking must not rewrite the local lock component";
-  EXPECT_TRUE(document.is_effectively_locked(entity));
+  EXPECT_FALSE(document.is_effectively_selectable(entity));
   EXPECT_TRUE(build_render_scene_snapshot(document, assets)
                   .live_mesh_entities.contains(entity))
       << "locking affects interaction, not rendering";
@@ -4181,7 +4183,7 @@ TEST(RenderOverlaySnapshotTests,
                   .objects.empty());
 
   ASSERT_TRUE(document.set_layer_locked(layer, false));
-  EXPECT_FALSE(document.is_effectively_locked(entity));
+  EXPECT_TRUE(document.is_effectively_selectable(entity));
   EXPECT_EQ(PickingCacheProjection::scene_transformed_objects_for_picking(
                 modeling_objects, document, object_map, {},
                 ModelingSelectionMode::Object, {})
@@ -4248,7 +4250,7 @@ TEST(RenderOverlaySnapshotCacheTests,
                    .changed());
 
   document.set_transform(
-      entity, TransformComponent{.position = {3.0f, 2.0f, 1.0f}});
+      entity, TransformComponent{.location = {3.0f, 2.0f, 1.0f}});
   const RenderOverlayPersistentSnapshotUpdate transformed =
       cache.update_persistent(document, assets, true, 0x01u, style);
   EXPECT_TRUE(transformed.selected_object_changed);
@@ -4541,14 +4543,14 @@ TEST(RenderOverlaySnapshotCacheTests,
   document.set_mesh(definition_member, MeshComponent{.mesh = mesh});
   document.set_transform(
       definition_member,
-      TransformComponent{.position = {2.0f, 0.0f, 0.0f}});
+      TransformComponent{.location = {2.0f, 0.0f, 0.0f}});
   ASSERT_TRUE(document.set_parent(definition_member, definition, false));
   const EntityId occurrence =
       document.create_entity("Moving Occurrence", EntityKind::Instance);
   ASSERT_TRUE(document.set_instance_occurrence(
       occurrence, InstanceOccurrenceComponent{.definition = definition}));
   document.set_transform(
-      occurrence, TransformComponent{.position = {10.0f, 0.0f, 0.0f}});
+      occurrence, TransformComponent{.location = {10.0f, 0.0f, 0.0f}});
   ASSERT_TRUE(document.set_parent(occurrence, group, false));
   ASSERT_TRUE(document.set_selected(group, true));
 
@@ -4580,25 +4582,25 @@ TEST(RenderOverlaySnapshotCacheTests,
       {
           .entity = group,
           .transform = TransformComponent{
-              .position = {4.0f, -2.0f, 1.0f},
+              .location = {4.0f, -2.0f, 1.0f},
               .rotation_euler = {0.2f, 0.4f, -0.1f},
           },
       },
       {
           .entity = selected_mesh,
           .transform = TransformComponent{
-              .position = {-3.0f, 5.0f, 2.0f},
+              .location = {-3.0f, 5.0f, 2.0f},
               .rotation_euler = {-0.3f, 0.1f, 0.6f},
               .scale = {1.5f, 0.75f, 2.0f},
           },
       },
       {
           .entity = directional_light,
-          .transform = TransformComponent{.position = {7.0f, 8.0f, 9.0f}},
+          .transform = TransformComponent{.location = {7.0f, 8.0f, 9.0f}},
       },
       {
           .entity = point_light,
-          .transform = TransformComponent{.position = {-7.0f, 3.0f, 6.0f}},
+          .transform = TransformComponent{.location = {-7.0f, 3.0f, 6.0f}},
       },
   }};
   document.set_transforms(transforms);
@@ -4710,7 +4712,7 @@ TEST(RenderOverlaySnapshotCacheTests,
   EXPECT_EQ(cache.stats().selection_transform_refresh_count, 0u);
 
   document.set_transform(
-      selected, TransformComponent{.position = {1.0f, 2.0f, 3.0f}});
+      selected, TransformComponent{.location = {1.0f, 2.0f, 3.0f}});
   (void)cache.selection_snapshot(document, assets);
   EXPECT_EQ(cache.stats().selection_build_count, 2u);
   EXPECT_EQ(cache.stats().selection_transform_refresh_count, 1u);
@@ -4761,7 +4763,7 @@ TEST(RenderOverlaySnapshotCacheTests,
   document.set_transform(
       entity,
       TransformComponent{
-          .position = {3.0f, -2.0f, 5.0f},
+          .location = {3.0f, -2.0f, 5.0f},
           .rotation_euler = {0.31f, -0.47f, 0.19f},
           .scale = {1.7f, 0.6f, 2.2f},
       });
@@ -4789,7 +4791,7 @@ TEST(RenderOverlaySnapshotCacheTests,
   document.set_transform(
       entity,
       TransformComponent{
-          .position = {8.0f, 1.0f, -4.0f},
+          .location = {8.0f, 1.0f, -4.0f},
           .rotation_euler = {0.31f, -0.47f, 0.19f},
           .scale = {1.7f, 0.6f, 2.2f},
       });
@@ -4823,12 +4825,12 @@ TEST(RenderOverlaySnapshotCacheTests,
   document.set_transform(
       parent,
       TransformComponent{
-          .position = {1.0f, 2.0f, 3.0f},
+          .location = {1.0f, 2.0f, 3.0f},
           .rotation_euler = {0.2f, -0.3f, 0.4f},
           .scale = {1.5f, 0.8f, 1.2f},
       });
   document.set_transform(
-      child, TransformComponent{.position = {2.0f, -1.0f, 0.5f}});
+      child, TransformComponent{.location = {2.0f, -1.0f, 0.5f}});
   ASSERT_TRUE(document.set_selected(child, true));
 
   RenderOverlaySnapshotCache cache;
@@ -4838,7 +4840,7 @@ TEST(RenderOverlaySnapshotCacheTests,
   document.set_transform(
       parent,
       TransformComponent{
-          .position = {6.0f, -4.0f, 8.0f},
+          .location = {6.0f, -4.0f, 8.0f},
           .rotation_euler = {0.2f, -0.3f, 0.4f},
           .scale = {1.5f, 0.8f, 1.2f},
       });
@@ -4856,7 +4858,7 @@ TEST(RenderOverlaySnapshotCacheTests,
   document.set_transform(
       parent,
       TransformComponent{
-          .position = {6.0f, -4.0f, 8.0f},
+          .location = {6.0f, -4.0f, 8.0f},
           .rotation_euler = {0.5f, -0.1f, 0.25f},
           .scale = {1.5f, 0.8f, 1.2f},
       });
@@ -5031,7 +5033,8 @@ TEST(RenderSceneSnapshotTests, BuildsValueSpanRecordsAndTracksDirtyState) {
   ASSERT_TRUE(renderable_record->material.present);
   EXPECT_EQ(renderable_record->material.component.material, material);
   EXPECT_FALSE(renderable_record->cast_shadows());
-  EXPECT_TRUE(renderable_record->double_sided());
+  EXPECT_FALSE(renderable_record->double_sided());
+  EXPECT_TRUE(renderable_record->mesh_component.double_sided);
   EXPECT_TRUE(initial.live_mesh_entities.contains(renderable));
 
   const auto missing_record =
@@ -5065,7 +5068,7 @@ TEST(RenderSceneSnapshotTests, BuildsValueSpanRecordsAndTracksDirtyState) {
   EXPECT_FALSE(unchanged.lights.front().transform_dirty);
 
   document.set_transform(renderable,
-                         TransformComponent{.position = {2.0f, 0.0f, 0.0f}});
+                         TransformComponent{.location = {2.0f, 0.0f, 0.0f}});
   const RenderSceneSnapshot moved =
       build_render_scene_snapshot(document, assets,
                                   {.previous = &unchanged, .frame_index = 3u});
@@ -5111,7 +5114,7 @@ TEST(SceneDocumentRevisionTests,
 
   const std::uint64_t after_create = document.render_component_revision();
   document.set_transform(
-      entity, TransformComponent{.position = {1.0f, 2.0f, 3.0f}});
+      entity, TransformComponent{.location = {1.0f, 2.0f, 3.0f}});
   EXPECT_EQ(document.render_component_revision(), after_create);
   ASSERT_TRUE(document.set_visible(entity, false));
   EXPECT_EQ(document.render_component_revision(), after_create);
@@ -5225,7 +5228,7 @@ TEST(RenderSceneSnapshotTests,
 
   second_document.set_transform(
       second_entity,
-      TransformComponent{.position = {3.0f, 4.0f, 5.0f}});
+      TransformComponent{.location = {3.0f, 4.0f, 5.0f}});
   EXPECT_FALSE(try_refresh_render_scene_snapshot_transforms(
       second, second_document, second_assets, 2u, first_binding));
   EXPECT_TRUE(try_refresh_render_scene_snapshot_transforms(
@@ -5316,7 +5319,7 @@ TEST(RenderSceneSnapshotTests,
   const EntityId member = document.create_entity("Member", EntityKind::Mesh);
   document.set_mesh(member, MeshComponent{.mesh = mesh});
   ASSERT_TRUE(document.set_parent(member, definition, false));
-  ASSERT_TRUE(document.set_transform(member, {.position = {2.0f, 0.0f, 0.0f}}));
+  ASSERT_TRUE(document.set_transform(member, {.location = {2.0f, 0.0f, 0.0f}}));
   QMat4 member_mapping;
   member_mapping.values[12] = 1.0f;
   ASSERT_TRUE(document.set_texture_mapping(member, {member_mapping}));
@@ -5406,7 +5409,7 @@ TEST(RenderSceneSnapshotTests,
       snapshot, document, assets, 3u));
 
   TransformComponent moved = *document.transform(first);
-  moved.position.x = 3.0f;
+  moved.location.x = 3.0f;
   document.set_transform(first, moved);
   const std::uint64_t retained_scene_revision = snapshot.scene_revision;
   const std::uint64_t retained_frame_index = snapshot.frame_index;
@@ -5516,7 +5519,7 @@ TEST(RenderSceneSnapshotTests,
       snapshot.meshes[1].transform_revision;
 
   document.set_transform(
-      first, TransformComponent{.position = {3.0f, 4.0f, 5.0f}});
+      first, TransformComponent{.location = {3.0f, 4.0f, 5.0f}});
   ASSERT_TRUE(try_refresh_render_scene_snapshot_transforms(
       snapshot, document, assets, 2u));
   EXPECT_EQ(snapshot.frame_index, 2u);
@@ -5543,7 +5546,7 @@ TEST(RenderSceneSnapshotTests,
   const auto expect_rejected_and_rebuild = [&](std::string_view cause) {
     SCOPED_TRACE(std::string(cause));
     TransformComponent moved = *document.transform(first);
-    moved.position.x += 1.0f;
+    moved.location.x += 1.0f;
     document.set_transform(first, moved);
     const std::uint64_t retained_scene_revision = snapshot.scene_revision;
     const std::uint64_t retained_frame_index = snapshot.frame_index;
@@ -5652,11 +5655,11 @@ TEST(RenderSelectionDimensionIntegrationTests,
   const AssetId mesh = assets.add_mesh(make_authored_quad_mesh());
   const EntityId first = scene.create_entity("First Mesh", EntityKind::Mesh);
   ASSERT_TRUE(scene.set_mesh(first, {.mesh = mesh}));
-  ASSERT_TRUE(scene.set_transform(first, {.position = {4.0f, 2.0f, -3.0f},
+  ASSERT_TRUE(scene.set_transform(first, {.location = {4.0f, 2.0f, -3.0f},
                                           .scale = {2.0f, 1.0f, 3.0f}}));
   const EntityId second = scene.create_entity("Second Mesh", EntityKind::Mesh);
   ASSERT_TRUE(scene.set_mesh(second, {.mesh = mesh}));
-  ASSERT_TRUE(scene.set_transform(second, {.position = {-5.0f, -4.0f, 10.0f}}));
+  ASSERT_TRUE(scene.set_transform(second, {.location = {-5.0f, -4.0f, 10.0f}}));
   ASSERT_TRUE(scene.set_selected(first, true));
 
   ViewportOverlaySubmissionCoordinator coordinator;
@@ -5680,25 +5683,25 @@ TEST(RenderSelectionDimensionIntegrationTests,
   const EntityId definition = scene.create_empty("Hidden Definition");
   ASSERT_TRUE(scene.set_instance_definition(definition));
   ASSERT_TRUE(scene.set_visible(definition, false));
-  ASSERT_TRUE(scene.set_transform(definition, {.position = {100.0f, 0.0f, 0.0f}}));
+  ASSERT_TRUE(scene.set_transform(definition, {.location = {100.0f, 0.0f, 0.0f}}));
   const EntityId member = scene.create_entity("Definition Mesh", EntityKind::Mesh);
   ASSERT_TRUE(scene.set_mesh(member, {.mesh = mesh}));
   ASSERT_TRUE(scene.set_parent(member, definition, false));
-  ASSERT_TRUE(scene.set_transform(member, {.position = {1.0f, 0.0f, 0.0f}}));
+  ASSERT_TRUE(scene.set_transform(member, {.location = {1.0f, 0.0f, 0.0f}}));
 
   const EntityId first = scene.create_empty("First Group");
-  ASSERT_TRUE(scene.set_transform(first, {.position = {10.0f, 0.0f, 0.0f}}));
+  ASSERT_TRUE(scene.set_transform(first, {.location = {10.0f, 0.0f, 0.0f}}));
   const EntityId child = scene.create_entity("Group Mesh", EntityKind::Mesh);
   ASSERT_TRUE(scene.set_mesh(child, {.mesh = mesh}));
   ASSERT_TRUE(scene.set_parent(child, first, false));
-  ASSERT_TRUE(scene.set_transform(child, {.position = {2.0f, 1.0f, 0.0f}}));
+  ASSERT_TRUE(scene.set_transform(child, {.location = {2.0f, 1.0f, 0.0f}}));
   const EntityId occurrence = scene.create_entity("Nested Instance", EntityKind::Instance);
   ASSERT_TRUE(scene.set_instance_occurrence(occurrence, {.definition = definition}));
   ASSERT_TRUE(scene.set_parent(occurrence, first, false));
-  ASSERT_TRUE(scene.set_transform(occurrence, {.position = {-4.0f, 3.0f, 5.0f}}));
+  ASSERT_TRUE(scene.set_transform(occurrence, {.location = {-4.0f, 3.0f, 5.0f}}));
 
   const EntityId second = scene.create_empty("Second Group");
-  ASSERT_TRUE(scene.set_transform(second, {.position = {-20.0f, -2.0f, -5.0f}}));
+  ASSERT_TRUE(scene.set_transform(second, {.location = {-20.0f, -2.0f, -5.0f}}));
   const EntityId second_child = scene.create_entity("Second Group Mesh", EntityKind::Mesh);
   ASSERT_TRUE(scene.set_mesh(second_child, {.mesh = mesh}));
   ASSERT_TRUE(scene.set_parent(second_child, second, false));
@@ -5725,20 +5728,20 @@ TEST(RenderSelectionDimensionIntegrationTests,
   const EntityId definition = scene.create_empty("Hidden Definition");
   ASSERT_TRUE(scene.set_instance_definition(definition));
   ASSERT_TRUE(scene.set_visible(definition, false));
-  ASSERT_TRUE(scene.set_transform(definition, {.position = {100.0f, 0.0f, 0.0f}}));
+  ASSERT_TRUE(scene.set_transform(definition, {.location = {100.0f, 0.0f, 0.0f}}));
   for (const QVec3 position : {QVec3{}, QVec3{4.0f, 2.0f, 6.0f}}) {
     const EntityId member = scene.create_entity("Definition Member", EntityKind::Mesh);
     ASSERT_TRUE(scene.set_mesh(member, {.mesh = mesh}));
     ASSERT_TRUE(scene.set_parent(member, definition, false));
-    ASSERT_TRUE(scene.set_transform(member, {.position = position}));
+    ASSERT_TRUE(scene.set_transform(member, {.location = position}));
   }
   const EntityId first = scene.create_entity("First Instance", EntityKind::Instance);
   ASSERT_TRUE(scene.set_instance_occurrence(first, {.definition = definition}));
-  ASSERT_TRUE(scene.set_transform(first, {.position = {10.0f, -3.0f, 5.0f},
+  ASSERT_TRUE(scene.set_transform(first, {.location = {10.0f, -3.0f, 5.0f},
                                           .scale = {2.0f, 1.0f, 3.0f}}));
   const EntityId second = scene.create_entity("Second Instance", EntityKind::Instance);
   ASSERT_TRUE(scene.set_instance_occurrence(second, {.definition = definition}));
-  ASSERT_TRUE(scene.set_transform(second, {.position = {-10.0f, 7.0f, 0.0f}}));
+  ASSERT_TRUE(scene.set_transform(second, {.location = {-10.0f, 7.0f, 0.0f}}));
   ASSERT_TRUE(scene.set_selected(first, true));
 
   ViewportOverlaySubmissionCoordinator coordinator;
@@ -5757,10 +5760,10 @@ TEST(RenderSelectionDimensionIntegrationTests,
   const EntityId child = scene.create_entity("Group Mesh", EntityKind::Mesh);
   ASSERT_TRUE(scene.set_mesh(child, {.mesh = mesh}));
   ASSERT_TRUE(scene.set_parent(child, group, false));
-  ASSERT_TRUE(scene.set_transform(child, {.position = {30.0f, -8.0f, -5.0f}}));
+  ASSERT_TRUE(scene.set_transform(child, {.location = {30.0f, -8.0f, -5.0f}}));
   const EntityId loose_mesh = scene.create_entity("Mixed Mesh", EntityKind::Mesh);
   ASSERT_TRUE(scene.set_mesh(loose_mesh, {.mesh = mesh}));
-  ASSERT_TRUE(scene.set_transform(loose_mesh, {.position = {-30.0f, 12.0f, 40.0f}}));
+  ASSERT_TRUE(scene.set_transform(loose_mesh, {.location = {-30.0f, 12.0f, 40.0f}}));
   ASSERT_TRUE(scene.set_selected(group, true));
   ASSERT_TRUE(scene.set_selected(loose_mesh, true));
   expect_dimension_extents(extract_selection_dimensions(
@@ -5790,7 +5793,7 @@ TEST(RenderSelectionDimensionIntegrationTests,
       QuaderPolygonDocumentInternalAccess::from_backend(polygon), {.name = "Second Faces"});
   ASSERT_TRUE(second.ok()) << second.error_message();
   ASSERT_TRUE(editor.object(second.value()).set_transform(
-      {.position = {10.0f, 5.0f, -4.0f}}).ok());
+      {.location = {10.0f, 5.0f, -4.0f}}).ok());
   ASSERT_TRUE(editor.selection().select_objects(
       {first.value().entity, second.value().entity}, first.value().entity).ok());
   ASSERT_TRUE(enter_selection_context(editor, QuaderSelectionMode::Face).ok());
@@ -6359,7 +6362,7 @@ TEST(ViewportSceneOverlayBuilderTests,
   ASSERT_TRUE(document.set_instance_occurrence(
       occurrence, InstanceOccurrenceComponent{.definition = definition}));
   document.set_transform(
-      occurrence, TransformComponent{.position = {4.0f, 0.0f, 0.0f}});
+      occurrence, TransformComponent{.location = {4.0f, 0.0f, 0.0f}});
   ASSERT_TRUE(document.set_parent(occurrence, group));
 
   ASSERT_TRUE(document.set_selected(child, true));
@@ -6450,7 +6453,7 @@ TEST(ViewportSceneOverlayBuilderTests,
     document.set_transform(
         selected_mesh,
         TransformComponent{
-            .position = {3.0f, 0.5f, -2.0f},
+            .location = {3.0f, 0.5f, -2.0f},
             .rotation_euler = {0.0f, 0.0f, 0.5f},
         });
     ASSERT_TRUE(document.set_selected(selected_mesh, true));
@@ -6504,7 +6507,7 @@ TEST(ViewportSceneOverlayBuilderTests,
   document.set_transform(
       selected_mesh,
       TransformComponent{
-          .position = {3.0f, 0.5f, -2.0f},
+          .location = {3.0f, 0.5f, -2.0f},
           .rotation_euler = {0.0f, 0.78539816339f, 0.0f},
       });
   ASSERT_TRUE(document.set_selected(selected_mesh, true));
@@ -6554,9 +6557,9 @@ TEST(ViewportSceneOverlayBuilderTests,
   ASSERT_TRUE(document.set_mesh(first_member, MeshComponent{.mesh = mesh}));
   ASSERT_TRUE(document.set_mesh(second_member, MeshComponent{.mesh = mesh}));
   document.set_transform(
-      first_member, TransformComponent{.position = {-2.0f, 0.0f, 0.0f}});
+      first_member, TransformComponent{.location = {-2.0f, 0.0f, 0.0f}});
   document.set_transform(
-      second_member, TransformComponent{.position = {4.0f, 0.0f, 0.0f}});
+      second_member, TransformComponent{.location = {4.0f, 0.0f, 0.0f}});
   ASSERT_TRUE(document.set_parent(first_member, definition, false));
   ASSERT_TRUE(document.set_parent(second_member, definition, false));
 
@@ -6565,7 +6568,7 @@ TEST(ViewportSceneOverlayBuilderTests,
   ASSERT_TRUE(document.set_instance_occurrence(
       occurrence, InstanceOccurrenceComponent{.definition = definition}));
   document.set_transform(
-      occurrence, TransformComponent{.position = {10.0f, 1.0f, -3.0f}});
+      occurrence, TransformComponent{.location = {10.0f, 1.0f, -3.0f}});
   ASSERT_TRUE(document.set_selected(occurrence, true));
 
   RenderOverlaySnapshotCache cache;
@@ -6585,7 +6588,7 @@ TEST(ViewportSceneOverlayBuilderTests,
             12u);
 
   document.set_transform(
-      occurrence, TransformComponent{.position = {20.0f, 2.0f, 5.0f}});
+      occurrence, TransformComponent{.location = {20.0f, 2.0f, 5.0f}});
   const RenderOverlaySelectionSnapshot &moved_snapshot =
       cache.selection_snapshot(document, assets);
   ASSERT_EQ(moved_snapshot.selected_mesh_bounds.size(), 1u);
@@ -6599,7 +6602,7 @@ TEST(ViewportSceneOverlayBuilderTests,
   EXPECT_EQ(cache.stats().selection_world_bounds_translation_reuse_count, 1u);
 
   document.set_transform(
-      second_member, TransformComponent{.position = {8.0f, 0.0f, 0.0f}});
+      second_member, TransformComponent{.location = {8.0f, 0.0f, 0.0f}});
   const RenderOverlaySelectionSnapshot &member_moved_snapshot =
       cache.selection_snapshot(document, assets);
   ASSERT_EQ(member_moved_snapshot.selected_mesh_bounds.size(), 1u);
@@ -6616,7 +6619,7 @@ TEST(ViewportSceneOverlayBuilderTests,
       document.create_entity("Selected Ordinary Mesh", EntityKind::Mesh);
   ASSERT_TRUE(document.set_mesh(ordinary, MeshComponent{.mesh = mesh}));
   document.set_transform(
-      ordinary, TransformComponent{.position = {-10.0f, -4.0f, 2.0f}});
+      ordinary, TransformComponent{.location = {-10.0f, -4.0f, 2.0f}});
   ASSERT_TRUE(document.set_selected(ordinary, true));
   const RenderOverlaySelectionSnapshot &mixed_snapshot =
       cache.selection_snapshot(document, assets);
@@ -6647,9 +6650,9 @@ TEST(ViewportSceneOverlayBuilderTests,
     document.set_mesh(first, MeshComponent{.mesh = mesh});
     document.set_mesh(second, MeshComponent{.mesh = mesh});
     document.set_transform(
-        first, TransformComponent{.position = {-3.0f, 1.0f, 2.0f}});
+        first, TransformComponent{.location = {-3.0f, 1.0f, 2.0f}});
     document.set_transform(
-        second, TransformComponent{.position = {4.0f, -2.0f, -1.0f}});
+        second, TransformComponent{.location = {4.0f, -2.0f, -1.0f}});
     ASSERT_TRUE(document.set_selected(first, true));
     ASSERT_TRUE(document.set_selected(second, true));
 
@@ -6727,7 +6730,7 @@ TEST(ViewportSceneOverlayBuilderTests,
     const EntityId light =
         document.create_entity("Point Light", EntityKind::Light);
     document.set_transform(light,
-                           TransformComponent{.position = {2.0f, 3.0f, 4.0f}});
+                           TransformComponent{.location = {2.0f, 3.0f, 4.0f}});
     document.set_light(light, LightComponent{.type = LightType::Point});
     ASSERT_TRUE(document.set_selected(light, true));
     const EntityId unselected_light =
@@ -6785,13 +6788,13 @@ TEST(ViewportSceneOverlayBuilderTests, AddsPointLightBillboardGizmosWhenRequeste
     const EntityId selected_light =
         document.create_entity("Selected Point Light", EntityKind::Light);
     document.set_transform(
-        selected_light, TransformComponent{.position = {2.0f, 3.0f, 4.0f}});
+        selected_light, TransformComponent{.location = {2.0f, 3.0f, 4.0f}});
     document.set_light(selected_light, LightComponent{.type = LightType::Point});
     ASSERT_TRUE(document.set_selected(selected_light, true));
     const EntityId unselected_light =
         document.create_entity("Unselected Point Light", EntityKind::Light);
     document.set_transform(
-        unselected_light, TransformComponent{.position = {-1.0f, 0.5f, 6.0f}});
+        unselected_light, TransformComponent{.location = {-1.0f, 0.5f, 6.0f}});
     document.set_light(unselected_light,
                        LightComponent{.type = LightType::Point});
     const EntityId hidden_light =
@@ -9492,7 +9495,7 @@ TEST(RenderSceneWireframeBatchPlannerTests,
     document.set_transform(
         entity,
         TransformComponent{
-            .position = {static_cast<float>(index) * 2.0f, 0.0f, 0.0f},
+            .location = {static_cast<float>(index) * 2.0f, 0.0f, 0.0f},
         });
   }
 
@@ -9718,7 +9721,7 @@ TEST(RenderSceneWireframeBatchPlannerTests,
   ASSERT_NE(pinned_wires, nullptr);
 
   ASSERT_TRUE(document.set_transform(
-      curve, {.position = {10.0f, 0.0f, 0.0f}}));
+      curve, {.location = {10.0f, 0.0f, 0.0f}}));
   ASSERT_TRUE(document.set_selected(curve, true));
   const auto moved_curve =
       build_render_overlay_scene_wireframe_snapshot(document, assets, 1u);
@@ -9749,7 +9752,7 @@ TEST(RenderSceneWireframeBatchPlannerTests,
   EXPECT_FALSE(scene_wireframe_overlay_mesh_inputs_match(initial.meshes,
                                                          selected.meshes));
   ASSERT_TRUE(document.set_selected(mesh, false));
-  ASSERT_TRUE(document.set_transform(mesh, {.position = {3.0f, 0.0f, 0.0f}}));
+  ASSERT_TRUE(document.set_transform(mesh, {.location = {3.0f, 0.0f, 0.0f}}));
   const auto moved_mesh =
       build_render_overlay_scene_wireframe_snapshot(document, assets, 1u);
   EXPECT_FALSE(scene_wireframe_overlay_mesh_inputs_match(initial.meshes,
@@ -9952,13 +9955,13 @@ TEST(RenderSceneWireframeBatchPlannerTests,
   document.set_mesh(member, MeshComponent{.mesh = mesh});
   ASSERT_TRUE(document.set_parent(member, definition, false));
   document.set_transform(
-      member, TransformComponent{.position = {2.0f, 0.0f, 0.0f}});
+      member, TransformComponent{.location = {2.0f, 0.0f, 0.0f}});
   const EntityId occurrence =
       document.create_entity("Occurrence", EntityKind::Instance);
   ASSERT_TRUE(document.set_instance_occurrence(
       occurrence, InstanceOccurrenceComponent{.definition = definition}));
   document.set_transform(
-      occurrence, TransformComponent{.position = {10.0f, 0.0f, 0.0f}});
+      occurrence, TransformComponent{.location = {10.0f, 0.0f, 0.0f}});
   const SceneLayerId layer =
       document.create_layer("Instance Layer", {0.25f, 0.5f, 0.75f});
   ASSERT_NE(layer, kInvalidSceneLayerId);
@@ -10339,14 +10342,14 @@ TEST(RenderInstanceEditPresentationTests,
   document.set_mesh(member, MeshComponent{.mesh = mesh});
   ASSERT_TRUE(document.set_parent(member, definition, false));
   document.set_transform(
-      member, TransformComponent{.position = {2.0f, 0.0f, 0.0f}});
+      member, TransformComponent{.location = {2.0f, 0.0f, 0.0f}});
 
   const EntityId occurrence =
       document.create_entity("Occurrence", EntityKind::Instance);
   ASSERT_TRUE(document.set_instance_occurrence(
       occurrence, InstanceOccurrenceComponent{.definition = definition}));
   document.set_transform(
-      occurrence, TransformComponent{.position = {10.0f, 0.0f, 0.0f}});
+      occurrence, TransformComponent{.location = {10.0f, 0.0f, 0.0f}});
   ASSERT_TRUE(document.set_selected(occurrence, true));
 
   const RenderOverlaySelectedObjectSnapshot overlay =
@@ -10412,7 +10415,7 @@ TEST(RenderInstanceEditPresentationTests,
     ASSERT_TRUE(document.set_mesh(member, {.mesh = mesh}));
     ASSERT_TRUE(document.set_parent(member, definition, false));
     ASSERT_TRUE(document.set_transform(member, {
-        .position = {static_cast<float>(index) * 2.0f, 0.0f, 0.0f}}));
+        .location = {static_cast<float>(index) * 2.0f, 0.0f, 0.0f}}));
   }
   const EntityId occurrence = document.create_entity("Occurrence", EntityKind::Instance);
   ASSERT_TRUE(document.set_instance_occurrence(occurrence, {.definition = definition}));
@@ -10482,7 +10485,7 @@ TEST(RenderInstanceEditPresentationTests,
     document.set_transform(
         occurrences[index],
         TransformComponent{
-            .position = {static_cast<float>(index) * 10.0f, 0.0f, 0.0f},
+            .location = {static_cast<float>(index) * 10.0f, 0.0f, 0.0f},
         });
   }
 
@@ -10781,14 +10784,14 @@ TEST(RenderInstanceEditPresentationTests,
   document.set_mesh(member, MeshComponent{.mesh = mesh});
   ASSERT_TRUE(document.set_parent(member, definition, false));
   document.set_transform(
-      member, TransformComponent{.position = {2.0f, 0.0f, 0.0f}});
+      member, TransformComponent{.location = {2.0f, 0.0f, 0.0f}});
 
   const EntityId occurrence =
       document.create_entity("Occurrence", EntityKind::Instance);
   ASSERT_TRUE(document.set_instance_occurrence(
       occurrence, InstanceOccurrenceComponent{.definition = definition}));
   document.set_transform(
-      occurrence, TransformComponent{.position = {10.0f, 0.0f, 0.0f}});
+      occurrence, TransformComponent{.location = {10.0f, 0.0f, 0.0f}});
   ASSERT_TRUE(document.set_selected(occurrence, true));
 
   RenderOverlaySnapshotCache cache;
@@ -10809,7 +10812,7 @@ TEST(RenderInstanceEditPresentationTests,
                   12.0f);
 
   document.set_transform(
-      occurrence, TransformComponent{.position = {30.0f, 0.0f, 0.0f}});
+      occurrence, TransformComponent{.location = {30.0f, 0.0f, 0.0f}});
   const RenderOverlayPersistentSnapshotUpdate moved =
       cache.update_persistent(document, assets, true, 0u, {});
   ASSERT_TRUE(moved.selected_object_changed)
@@ -10844,20 +10847,20 @@ TEST(RenderInstanceEditPresentationTests,
       document.create_entity("Definition", EntityKind::Empty);
   ASSERT_TRUE(document.set_instance_definition(definition));
   document.set_transform(
-      definition, TransformComponent{.position = {100.0f, 0.0f, 0.0f}});
+      definition, TransformComponent{.location = {100.0f, 0.0f, 0.0f}});
   ASSERT_TRUE(document.set_visible(definition, false));
   const EntityId member =
       document.create_entity("Canonical Mesh", EntityKind::Mesh);
   document.set_mesh(member, MeshComponent{.mesh = 1u});
   ASSERT_TRUE(document.set_parent(member, definition, false));
   document.set_transform(
-      member, TransformComponent{.position = {2.0f, 0.0f, 0.0f}});
+      member, TransformComponent{.location = {2.0f, 0.0f, 0.0f}});
   const EntityId occurrence =
       document.create_entity("Occurrence", EntityKind::Instance);
   ASSERT_TRUE(document.set_instance_occurrence(
       occurrence, InstanceOccurrenceComponent{.definition = definition}));
   document.set_transform(
-      occurrence, TransformComponent{.position = {10.0f, 0.0f, 0.0f}});
+      occurrence, TransformComponent{.location = {10.0f, 0.0f, 0.0f}});
 
   constexpr int kObjectId = 77;
   ModelingObjectRuntimeMap object_map;
@@ -10898,7 +10901,7 @@ TEST(RenderInstanceEditPresentationTests,
   const EntityId entity =
       document.create_entity("Dimension Context Mesh", EntityKind::Mesh);
   document.set_transform(
-      entity, TransformComponent{.position = {10.0F, 20.0F, 30.0F}});
+      entity, TransformComponent{.location = {10.0F, 20.0F, 30.0F}});
   constexpr int kObjectId = 77;
   ModelingObjectRuntimeMap object_map;
   ASSERT_TRUE(object_map.bind(kObjectId, entity));
@@ -11675,5 +11678,115 @@ TEST(MeshWireGeometrySupportTests, MissingProvenanceUsesStableFaceSupportAndReje
   ASSERT_EQ(degenerate->segments.size(), 4u);
   for (const auto &segment : degenerate->segments) {
     EXPECT_EQ(segment.surface_support_count, 0u);
+  }
+}
+
+TEST(RenderSceneSnapshotTests, GlobalCullingOverridesLegacyMeshFlagsAndRetainsUnchangedExtraction) {
+  SceneDocument document;
+  AssetRegistry assets;
+  const auto mesh = assets.add_mesh(make_overlay_triangle_mesh());
+  const auto ordinary = document.create_entity("Ordinary culling", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(ordinary,
+      {.mesh = mesh, .cast_shadows = false, .double_sided = true}));
+  const auto definition = document.create_entity("Culling definition", EntityKind::Empty);
+  ASSERT_TRUE(document.set_instance_definition(definition));
+  ASSERT_TRUE(document.set_visible(definition, false));
+  const auto member = document.create_entity("Culling member", EntityKind::Mesh);
+  ASSERT_TRUE(document.set_mesh(member, {.mesh = mesh, .double_sided = false}));
+  ASSERT_TRUE(document.set_parent(member, definition, false));
+  const auto occurrence = document.create_entity("Culling occurrence", EntityKind::Instance);
+  ASSERT_TRUE(document.set_instance_occurrence(occurrence, {.definition = definition}));
+  const auto scene_revision = document.revision();
+  const auto asset_revision = assets.revision();
+  const auto initial = build_render_scene_snapshot(document, assets);
+  ASSERT_EQ(initial.meshes.size(), 1u);
+  ASSERT_FALSE(initial.instance_primitives.empty());
+  EXPECT_FALSE(initial.meshes.front().double_sided());
+  EXPECT_TRUE(initial.meshes.front().mesh_component.double_sided);
+  EXPECT_FALSE(initial.instance_primitives.front().key.double_sided);
+
+  const auto two_sided = build_render_scene_snapshot(document, assets,
+      {.previous = &initial, .backface_culling_enabled = false});
+  EXPECT_FALSE(two_sided.reused_previous_records);
+  EXPECT_TRUE(two_sided.dirty.render_components_changed);
+  ASSERT_EQ(two_sided.meshes.size(), 1u);
+  EXPECT_TRUE(two_sided.meshes.front().double_sided());
+  EXPECT_TRUE(two_sided.meshes.front().binding_dirty);
+  EXPECT_EQ(two_sided.meshes.front().mesh.geometry_payload,
+            initial.meshes.front().mesh.geometry_payload);
+  for (const auto &primitive : two_sided.instance_primitives) {
+    EXPECT_TRUE(primitive.key.double_sided);
+  }
+  const auto unchanged = build_render_scene_snapshot(document, assets,
+      {.previous = &two_sided, .backface_culling_enabled = false});
+  EXPECT_TRUE(unchanged.reused_previous_records);
+  EXPECT_FALSE(unchanged.dirty.any_dirty());
+  EXPECT_FALSE(unchanged.meshes.front().binding_dirty);
+  EXPECT_TRUE(render_scene_snapshot_matches_sources(
+      unchanged, document, assets, {}, 0u, {}, nullptr, false));
+  EXPECT_FALSE(render_scene_snapshot_matches_sources(
+      unchanged, document, assets, {}, 0u, {}, nullptr, true));
+  auto refresh_candidate = unchanged;
+  EXPECT_FALSE(try_refresh_render_scene_snapshot_selection(
+      refresh_candidate, document, assets, 0u, {}, 0u, {}, nullptr, true));
+  EXPECT_FALSE(try_refresh_render_scene_snapshot_transforms(
+      refresh_candidate, document, assets, 0u, {}, 0u, {}, nullptr, true));
+  const auto restored = build_render_scene_snapshot(document, assets,
+      {.previous = &unchanged, .backface_culling_enabled = true});
+  EXPECT_FALSE(restored.meshes.front().double_sided());
+  EXPECT_FALSE(restored.instance_primitives.front().key.double_sided);
+  EXPECT_EQ(document.revision(), scene_revision);
+  EXPECT_EQ(assets.revision(), asset_revision);
+  EXPECT_TRUE(document.mesh(ordinary)->double_sided);
+  EXPECT_FALSE(document.mesh(member)->double_sided);
+}
+
+TEST(RenderInstanceBatchPlannerTests, PerObjectTransformsRetainSingletonSlotsBesideBatchedPeers) {
+  for (const bool double_sided : {false, true}) {
+    RenderInstancePrimitiveKey key{
+        .geometry_payload = 101u, .material_payload = 103u,
+        .index_count = 3u, .double_sided = double_sided};
+    const RenderInstanceBounds bounds{
+        .min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}, .present = true};
+    std::array<RenderInstancePrimitiveOccurrence, 6u> occurrences;
+    for (std::size_t index = 0u; index < occurrences.size(); ++index) {
+      occurrences[index] = {.key = key, .occurrence = index + 1u, .local_bounds = bounds};
+      occurrences[index].world_transform.values[12] = static_cast<float>(index) * 4.0f;
+      if (index >= 3u) {
+        occurrences[index].key.presentation_flags = static_cast<std::uint8_t>(
+            RenderInstancePresentationFlag::PerObjectTransform);
+        occurrences[index].world_transform.values[0] = -1.0f;
+      }
+    }
+    const auto initial = plan_render_instance_batches(occurrences, 64u);
+    ASSERT_EQ(initial.chunks.size(), 4u);
+    EXPECT_EQ(initial.chunks.front().occurrences.size(), 3u);
+    for (std::size_t index = 1u; index < initial.chunks.size(); ++index) {
+      EXPECT_EQ(initial.chunks[index].occurrences.size(), 1u);
+    }
+    occurrences.back().world_transform.values[13] = 2.0f;
+    const auto moved = plan_render_instance_batches(occurrences, 64u, &initial);
+    EXPECT_TRUE(moved.work.retained_layout);
+    EXPECT_EQ(classify_instance_batch_update(initial, moved),
+              RenderInstanceBatchUpdateKind::TransformsOnly);
+    occurrences.back().visible = false;
+    const auto suppressed = plan_render_instance_batches(occurrences, 64u, &moved);
+    EXPECT_TRUE(suppressed.work.retained_layout);
+    EXPECT_EQ(suppressed.chunks.size(), 4u);
+    occurrences.back().visible = true;
+    const auto restored = plan_render_instance_batches(occurrences, 64u, &suppressed);
+    EXPECT_TRUE(restored.work.retained_layout);
+    const auto unchanged = plan_render_instance_batches(occurrences, 64u, &restored);
+    EXPECT_EQ(classify_instance_batch_update(restored, unchanged),
+              RenderInstanceBatchUpdateKind::Unchanged);
+    for (auto &occurrence : occurrences) {
+      occurrence.key.presentation_flags = 0u;
+      occurrence.world_transform.values[0] = 1.0f;
+    }
+    const auto merged = plan_render_instance_batches(occurrences, 64u, &unchanged);
+    ASSERT_EQ(merged.chunks.size(), 1u);
+    EXPECT_EQ(merged.chunks.front().occurrences.size(), occurrences.size());
+    EXPECT_EQ(classify_instance_batch_update(unchanged, merged),
+              RenderInstanceBatchUpdateKind::Rebuild);
   }
 }

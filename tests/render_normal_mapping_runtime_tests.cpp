@@ -6,12 +6,17 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/filament_material_library.hpp"
 #include "render/editable_mesh_surface_cache.hpp"
+#include "assets/asset_registry.hpp"
 #include "assets/mesh_geometry_projection.hpp"
 #include "render/material_binding_service.hpp"
 #include "render/mesh_renderable_factory.hpp"
 #include "render/png_texture_loader.hpp"
+#include "render/project_material_resolver.hpp"
+#include "render/scene_render_bridge.hpp"
 #include "render/texture_binding_service.hpp"
 #include "render/tool_preview_renderable_cache.hpp"
+#include "scene/scene_document.hpp"
+#include "scene/scene_transform.hpp"
 #include "viewport/viewport_settings.hpp"
 
 #include <gtest/gtest.h>
@@ -116,6 +121,19 @@ float orientation_sign(const QMat4 &matrix) {
              : 1.0f;
 }
 
+class CullingMaterialResolver final : public RenderProjectMaterialResolver {
+public:
+  std::uint64_t revision() const noexcept override { return 1u; }
+  const RenderMaterialAssetSnapshot *default_material_override() const noexcept override {
+    return &material;
+  }
+  std::optional<RenderProjectMaterialSnapshot> resolve(ProjectAssetId) const override {
+    return std::nullopt;
+  }
+
+  RenderMaterialAssetSnapshot material;
+};
+
 /// Measures the production shader without a window or presentation swapchain.
 class NormalMappingHarness final {
 public:
@@ -128,6 +146,7 @@ public:
     if (proxy_) {
       factory_.destroy(*proxy_);
     }
+    bridge_.reset();
     previews_.shutdown();
     editable_.shutdown();
     factory_.shutdown();
@@ -167,6 +186,7 @@ public:
   }
 
   bool initialize(std::uint32_t target_size = kTargetSize) {
+    using ::operator|;
     target_size_ = target_size;
     engine_ = filament::Engine::create(filament::Engine::Backend::VULKAN);
     if (engine_ == nullptr) {
@@ -358,6 +378,38 @@ public:
   }
 
   RenderMaterialBindingSnapshot preview_material() const { return material_; }
+
+  SceneRenderBridge &scene_bridge() {
+    if (!bridge_) {
+      bridge_ = std::make_unique<SceneRenderBridge>();
+      bridge_->initialize(*engine_, *scene_, library_.quader_mesh(),
+          library_.quader_mesh_lit(), library_.vertex_color_overlay(),
+          library_.instance_selection_fill(), library_.overlay_line(),
+          library_.selected_object_line(), library_.edit_wire_line(),
+          library_.overlay_point(), library_.overlay_icon(), *neutral_,
+          std::filesystem::path(qEnvironmentVariable("QT_PLUGIN_PATH").toStdWString()));
+    }
+    return *bridge_;
+  }
+
+  std::optional<SurfaceGridImage> render_scene_document(
+      const SceneDocument &document, const AssetRegistry &assets,
+      const std::vector<RenderToolPreviewMeshRecord> &previews, bool shaded,
+      bool submit_previews = true) {
+    auto &bridge = scene_bridge();
+    bridge.sync(document, assets, 0u, {.scene_session_id = 1u});
+    if (submit_previews &&
+        bridge.set_tool_preview_meshes(previews) == ToolPreviewSubmissionResult::Failed) {
+      return std::nullopt;
+    }
+    camera_->setProjection(filament::Camera::Projection::ORTHO,
+                           -1.5, 1.5, -1.5, 1.5, 0.1, 20.0);
+    camera_->lookAt({0.0, 0.0, 4.0}, {0.0, 0.0, 0.0}, {0.0, 1.0, 0.0});
+    view_->setVisibleLayers(0xffu, shaded ? kViewportShadedSceneLayerMask
+                                        : kViewportRenderedSceneLayerMask);
+    set_debug_view(6.0f);
+    return read_current_mesh();
+  }
 
   std::optional<SurfaceGridImage> render_debug_surface(
       const RenderMaterialBindingSnapshot &material, float debug_mode,
@@ -760,6 +812,7 @@ private:
   MeshRenderableFactory factory_;
   ToolPreviewRenderableCache previews_;
   EditableMeshSurfaceCache editable_;
+  std::unique_ptr<SceneRenderBridge> bridge_;
   RenderMaterialBindingSnapshot material_;
   std::optional<MeshRenderableProxy> proxy_;
   std::array<MeshVertex, 4u> vertices_{};
@@ -939,6 +992,228 @@ std::vector<RenderToolPreviewMeshRecord> visible_dynamic_occurrences(
   records[1].instance_sampling_from_local = {quarter_turn, mirrored_sampling};
   records[2].transform = transforms[5];
   return records;
+}
+
+TEST(RenderNormalMappingRuntimeTests,
+     GlobalBackfaceCullingUpdatesOrdinaryReflectedAndPreviewPixels) {
+  if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_NORMAL_TESTS") != 1) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_NORMAL_TESTS=1 for Vulkan coverage";
+  }
+  CullingMaterialResolver resolver;
+  NormalMappingHarness harness;
+  ASSERT_TRUE(harness.initialize(kGridTargetSize));
+  SceneDocument document;
+  AssetRegistry assets;
+  std::vector<RenderToolPreviewMeshRecord> previews;
+  std::vector<RenderToolPreviewMeshRecord> ordinary_previews;
+  std::array<std::array<QVec3, 4u>, 4u> centers;
+  std::array<EntityId, 2u> definitions{kInvalidEntityId, kInvalidEntityId};
+  std::array<EntityId, 2u> definition_members{};
+  std::array<EntityId, 4u> ordinary_entities{};
+  std::array<EntityId, 4u> occurrences{};
+  const auto material = harness.preview_material();
+  resolver.material = material.primary_material;
+  harness.scene_bridge().set_project_material_resolver(&resolver);
+  const auto plane = visible_dynamic_occurrences(material).front().mesh;
+  for (std::size_t lane = 0u; lane < centers.size(); ++lane) {
+    for (std::size_t column = 0u; column < centers[lane].size(); ++column) {
+      const bool back_facing = column % 2u != 0u;
+      const bool reflected = column >= 2u;
+      auto mesh = plane;
+      auto geometry = mesh.geometry();
+      // Distinct authored geometry keeps the first lane on ordinary draws.
+      if (lane != 3u) {
+        geometry.vertices.front().position.x += static_cast<float>(column) * 0.001f;
+      }
+      if (back_facing) {
+        for (std::size_t index = 0u; index < geometry.indices.size(); index += 3u) {
+          std::swap(geometry.indices[index + 1u], geometry.indices[index + 2u]);
+        }
+        for (auto &vertex : geometry.vertices) vertex.normal.z = -1.0f;
+      }
+      mesh.replace_geometry(std::move(geometry));
+      const QVec3 center{(static_cast<float>(column) - 1.5f) * 0.65f,
+                         (static_cast<float>(lane) - 1.5f) * 0.65f, 0.0f};
+      centers[lane][column] = center;
+      const TransformComponent transform{
+          .location = center, .scale = {reflected ? -0.22f : 0.22f, 0.22f, 0.22f}};
+      EntityId entity = static_cast<EntityId>(100u + lane * 4u + column);
+      if (lane == 0u) {
+        entity = document.create_entity("Culling witness", EntityKind::Mesh);
+        ordinary_entities[column] = entity;
+        const AssetId mesh_id = assets.add_mesh(mesh);
+        ASSERT_TRUE(document.set_mesh(entity, {.mesh = mesh_id, .double_sided = true}));
+        ASSERT_TRUE(document.set_transform(entity, transform));
+      }
+      if (lane == 3u) {
+        // Each front/back definition has both ordinary and reflected occurrences.
+        // These render through the formal instance cache, without preview takeover.
+        auto &definition = definitions[column % 2u];
+        if (definition == kInvalidEntityId) {
+          definition = document.create_entity("Culling definition", EntityKind::Empty);
+          ASSERT_TRUE(document.set_instance_definition(definition));
+          ASSERT_TRUE(document.set_visible(definition, false));
+          const auto member = document.create_entity("Culling member", EntityKind::Mesh);
+          definition_members[column % 2u] = member;
+          const auto mesh_id = assets.add_mesh(mesh);
+          ASSERT_TRUE(document.set_mesh(member, {.mesh = mesh_id, .double_sided = true}));
+          ASSERT_TRUE(document.set_parent(member, definition, false));
+        }
+        const auto occurrence = document.create_entity("Culling occurrence", EntityKind::Instance);
+        occurrences[column] = occurrence;
+        ASSERT_TRUE(document.set_instance_occurrence(occurrence, {.definition = definition}));
+        ASSERT_TRUE(document.set_transform(occurrence, transform));
+        continue;
+      }
+      RenderToolPreviewMeshRecord preview;
+      preview.source_entity = entity;
+      preview.source_object_id = static_cast<int>(entity);
+      preview.mesh = mesh;
+      preview.material = material;
+      preview.material_reference = material.component.material;
+      preview.transform = scene_local_transform_matrix(transform);
+      preview.double_sided = true;
+      preview.suppress_source = lane == 0u;
+      preview.dynamic_positions = lane != 1u;
+      preview.layout_key = static_cast<std::uint64_t>(entity);
+      preview.position_revision = 1u;
+      if (lane == 0u) ordinary_previews.push_back(std::move(preview));
+      else previews.push_back(std::move(preview));
+    }
+  }
+  const auto scene_revision = document.revision();
+  const auto asset_revision = assets.revision();
+  const auto independent_preview_count = previews.size();
+  auto &bridge = harness.scene_bridge();
+  const auto sample = [&](const SurfaceGridImage &image, QVec3 center) {
+    const auto projected = harness.project_grid_position(center);
+    return image.pixel(static_cast<int>(projected.x), static_cast<int>(projected.y));
+  };
+  const auto expect_coverage = [&](const SurfaceGridImage &image, bool enabled) {
+    for (std::size_t lane = 0u; lane < centers.size(); ++lane) {
+      SCOPED_TRACE(lane);
+      for (std::size_t column = 0u; column < centers[lane].size(); ++column) {
+        SCOPED_TRACE(column);
+        const auto projected = harness.project_grid_position(centers[lane][column]);
+        const auto color = image.pixel(static_cast<int>(projected.x),
+                                       static_cast<int>(projected.y));
+        if (enabled && column % 2u != 0u) EXPECT_LT(length(color), 0.01f);
+        else EXPECT_GT(length(color), 0.1f);
+      }
+    }
+  };
+  const auto expect_formal_normal_parity = [&](const SurfaceGridImage &image, bool enabled) {
+    for (std::size_t column = 0u; column < centers.front().size(); ++column) {
+      SCOPED_TRACE(column);
+      if (enabled && column % 2u != 0u) continue;
+      // The asymmetric normal texel measures the full tangent frame, including
+      // reflected handedness, rather than only the plane's geometric normal.
+      EXPECT_LE(length(sample(image, centers[0u][column]) -
+                       sample(image, centers[3u][column])), 0.015f);
+    }
+  };
+  const auto expect_unchanged_uploads = [&](const MeshRenderableFactory::GeometryCacheStats &before) {
+    const auto after = bridge.mesh_geometry_work_counters();
+    EXPECT_EQ(after.upload_count, before.upload_count);
+    EXPECT_EQ(after.dynamic_geometry_create_count, before.dynamic_geometry_create_count);
+    EXPECT_EQ(after.dynamic_geometry_upload_count, before.dynamic_geometry_upload_count);
+    EXPECT_EQ(after.editable_surface_geometry_create_count, before.editable_surface_geometry_create_count);
+    EXPECT_EQ(after.editable_surface_position_upload_count, before.editable_surface_position_upload_count);
+    EXPECT_EQ(after.editable_surface_attribute_upload_count, before.editable_surface_attribute_upload_count);
+    EXPECT_EQ(after.editable_surface_index_upload_count, before.editable_surface_index_upload_count);
+  };
+  for (const bool retained_editable : {false, true}) {
+    SCOPED_TRACE(retained_editable ? "retained editable" : "ordinary");
+    if (retained_editable) {
+      previews.insert(previews.end(), ordinary_previews.begin(), ordinary_previews.end());
+    }
+    for (const bool shaded : {false, true}) {
+      SCOPED_TRACE(shaded ? "Shaded" : "Rendered");
+      std::optional<SurfaceGridImage> enabled_image;
+      bool first_step = true;
+      for (const bool enabled : {true, false, true}) {
+        SCOPED_TRACE(enabled ? "culling enabled" : "culling disabled");
+        bridge.set_backface_culling_enabled(enabled);
+        const auto image = harness.render_scene_document(
+            document, assets, previews, shaded, first_step);
+        first_step = false;
+        ASSERT_TRUE(image.has_value());
+        expect_coverage(*image, enabled);
+        if (!shaded) expect_formal_normal_parity(*image, enabled);
+        EXPECT_GE(bridge.diagnostics().base_instance_participant_count, 4u);
+        EXPECT_GT(bridge.diagnostics().base_instance_batch_chunk_count, 0u);
+        if (retained_editable) {
+          EXPECT_GT(bridge.editable_surface_work_counters().active_preview_object_count, 0u);
+        }
+        if (enabled) {
+          if (enabled_image) expect_same_pixels(*image, *enabled_image);
+          else enabled_image = image;
+        }
+        const auto geometry = bridge.mesh_geometry_work_counters();
+        const auto preview_work = bridge.tool_preview_work_counters();
+        bridge.set_backface_culling_enabled(enabled);
+        const auto unchanged = harness.render_scene_document(document, assets, previews, shaded);
+        ASSERT_TRUE(unchanged.has_value());
+        expect_same_pixels(*unchanged, *image);
+        expect_unchanged_uploads(geometry);
+        EXPECT_EQ(bridge.tool_preview_work_counters().dynamic_family_group_creations,
+                  preview_work.dynamic_family_group_creations);
+        EXPECT_EQ(document.revision(), scene_revision);
+        EXPECT_EQ(assets.revision(), asset_revision);
+      }
+    }
+  }
+
+  previews.resize(independent_preview_count);
+  bridge.set_backface_culling_enabled(false);
+  for (const float scale_x : {0.22f, -0.22f, 0.22f, 0.0f, -0.22f}) {
+    SCOPED_TRACE(scale_x);
+    TransformComponent placement{
+        .location = centers[0u][2u], .rotation_euler = {0.0f, 0.25f, 0.0f},
+        .scale = {scale_x, 0.22f, 0.33f}};
+    ASSERT_TRUE(document.set_transform(ordinary_entities[2u], placement));
+    placement.location = centers[3u][2u];
+    ASSERT_TRUE(document.set_transform(occurrences[2u], placement));
+    const auto transformed = harness.render_scene_document(document, assets, previews, false);
+    ASSERT_TRUE(transformed.has_value());
+    if (scale_x != 0.0f) {
+      expect_coverage(*transformed, false);
+    } else {
+      EXPECT_LT(length(sample(*transformed, centers[0u][2u])), 0.01f);
+      EXPECT_LT(length(sample(*transformed, centers[3u][2u])), 0.01f);
+    }
+    expect_formal_normal_parity(*transformed, false);
+    const auto geometry = bridge.mesh_geometry_work_counters();
+    const auto unchanged = harness.render_scene_document(document, assets, previews, false);
+    ASSERT_TRUE(unchanged.has_value());
+    expect_same_pixels(*unchanged, *transformed);
+    expect_unchanged_uploads(geometry);
+  }
+
+  const auto before_suppression = harness.render_scene_document(document, assets, previews, false);
+  ASSERT_TRUE(before_suppression.has_value());
+  auto occurrence_preview = ordinary_previews[2u];
+  occurrence_preview.source_entity = definition_members[0u];
+  occurrence_preview.source_object_id = static_cast<int>(definition_members[0u]);
+  occurrence_preview.visibility_entity = occurrences[2u];
+  const QVec3 preview_center = centers[3u][2u] + QVec3{0.3f, 0.0f, 0.0f};
+  occurrence_preview.transform = scene_local_transform_matrix(
+      {.location = preview_center, .scale = {-0.08f, 0.08f, 0.08f}});
+  previews.push_back(std::move(occurrence_preview));
+  const auto suppressed = harness.render_scene_document(document, assets, previews, false);
+  ASSERT_TRUE(suppressed.has_value());
+  EXPECT_LT(length(sample(*suppressed, centers[3u][2u])), 0.01f);
+  EXPECT_GT(length(sample(*suppressed, centers[3u][0u])), 0.1f);
+  EXPECT_GT(length(sample(*suppressed, preview_center)), 0.1f);
+  const auto suppression_geometry = bridge.mesh_geometry_work_counters();
+  const auto unchanged_suppression = harness.render_scene_document(document, assets, previews, false);
+  ASSERT_TRUE(unchanged_suppression.has_value());
+  expect_same_pixels(*unchanged_suppression, *suppressed);
+  expect_unchanged_uploads(suppression_geometry);
+  previews.pop_back();
+  const auto restored = harness.render_scene_document(document, assets, previews, false);
+  ASSERT_TRUE(restored.has_value());
+  expect_same_pixels(*restored, *before_suppression);
 }
 
 TEST(RenderNormalMappingRuntimeTests,
@@ -2289,7 +2564,8 @@ RenderSceneSnapshot editable_base_scene(const std::vector<RenderToolPreviewMeshR
         .mesh = render_mesh_asset_snapshot(record.source_entity, record.mesh, record.geometry_projection),
         .mesh_component = {.cast_shadows = record.cast_shadows, .double_sided = record.double_sided},
         .material = record.material, .world_transform = record.transform,
-        .sampling_from_local = record.sampling_from_local});
+        .sampling_from_local = record.sampling_from_local,
+        .backface_culling_enabled = !record.double_sided});
     result.live_mesh_entities.insert(record.source_entity);
   }
   return result;

@@ -28,7 +28,7 @@ namespace {
 /// Associates one semantic selection path with its material-surface owner.
 struct ScopedMaterialSurfaceTarget final {
   EntityId entity = kInvalidEntityId;
-  bool context_locked = false;
+  bool context_unselectable = false;
 };
 
 /// Stores one exact native material component before and after replacement.
@@ -88,28 +88,29 @@ live_material_slots(const MeshAsset &mesh) {
 
 void append_scoped_material_surface_target(
     std::vector<ScopedMaterialSurfaceTarget> &targets, EntityId entity,
-    bool context_locked) {
+    bool context_unselectable) {
   const auto found = std::ranges::find_if(
       targets, [entity](const ScopedMaterialSurfaceTarget &target) {
         return target.entity == entity;
       });
   if (found == targets.end()) {
     targets.push_back({.entity = entity,
-                       .context_locked = context_locked});
+                       .context_unselectable = context_unselectable});
     return;
   }
-  found->context_locked = found->context_locked || context_locked;
+  found->context_unselectable =
+      found->context_unselectable || context_unselectable;
 }
 
-[[nodiscard]] bool linked_occurrence_is_locked(const SceneDocument &scene,
-                                               EntityId member) {
+[[nodiscard]] bool linked_occurrence_is_unselectable(const SceneDocument &scene,
+                                                    EntityId member) {
   const EntityId definition = scene.containing_instance_definition(member);
   if (definition == kInvalidEntityId || definition == member) {
     return false;
   }
   for (const EntityId occurrence :
        scene.instance_occurrences_for_definition(definition)) {
-    if (scene.is_effectively_locked(occurrence)) {
+    if (!scene.is_effectively_selectable(occurrence)) {
       return true;
     }
   }
@@ -149,7 +150,8 @@ void append_group_target(const SceneDocument &scene, EntityId selected_root,
       if (!scene.is_instance_definition_entity(occurrence->definition)) {
         continue;
       }
-      const bool occurrence_locked = scene.is_effectively_locked(candidate);
+      const bool occurrence_unselectable =
+          !scene.is_effectively_selectable(candidate);
       for (const EntityId member :
            scene.descendants(occurrence->definition, false)) {
         if (scene.containing_instance_definition(member) !=
@@ -159,14 +161,14 @@ void append_group_target(const SceneDocument &scene, EntityId selected_root,
         }
         append_scoped_material_surface_target(
             targets, member,
-            occurrence_locked || scene.is_effectively_locked(member) ||
-                linked_occurrence_is_locked(scene, member));
+            occurrence_unselectable || !scene.is_effectively_selectable(member) ||
+                linked_occurrence_is_unselectable(scene, member));
       }
       continue;
     }
     if (scene_entity_has_material_surface(scene, candidate)) {
       append_scoped_material_surface_target(
-          targets, candidate, scene.is_effectively_locked(candidate));
+          targets, candidate, !scene.is_effectively_selectable(candidate));
     }
   }
 }
@@ -181,8 +183,8 @@ scoped_material_surface_targets(
       if (scene_entity_has_material_surface(scene, entity)) {
         append_scoped_material_surface_target(
             targets, entity,
-            scene.is_effectively_locked(entity) ||
-                linked_occurrence_is_locked(scene, entity));
+            !scene.is_effectively_selectable(entity) ||
+                linked_occurrence_is_unselectable(scene, entity));
       }
     }
     return targets;
@@ -204,7 +206,7 @@ scoped_material_surface_targets(
   for (const EntityId entity : selected) {
     if (scene_entity_has_material_surface(scene, entity)) {
       append_scoped_material_surface_target(
-          targets, entity, scene.is_effectively_locked(entity));
+          targets, entity, !scene.is_effectively_selectable(entity));
     }
   }
   return targets;
@@ -501,14 +503,14 @@ MaterialReferenceService::prepare_replacement(
             resolved_reference(*material, resolve_reference_) != source) {
           continue;
         }
-        if (scene_->is_effectively_locked(object.entity) ||
-            linked_occurrence_is_locked(*scene_, object.entity) ||
+        if (!scene_->is_effectively_selectable(object.entity) ||
+            linked_occurrence_is_unselectable(*scene_, object.entity) ||
             material_target_is_effectively_unselectable(*scene_,
                                                         object.entity)) {
           return {
               .ok = false,
               .message =
-                  "A matching material target is locked or read-only.",
+                  "A matching material target is not selectable or read-only.",
           };
         }
         auto batch = std::ranges::find_if(
@@ -538,13 +540,13 @@ MaterialReferenceService::prepare_replacement(
       if (!desired.has_value()) {
         continue;
       }
-      if (target.context_locked ||
-          scene_->is_effectively_locked(target.entity) ||
+      if (target.context_unselectable ||
+          !scene_->is_effectively_selectable(target.entity) ||
           material_target_is_effectively_unselectable(*scene_,
                                                       target.entity)) {
         return {
             .ok = false,
-            .message = "A matching material target is locked or read-only.",
+            .message = "A matching material target is not selectable or read-only.",
         };
       }
       component_edits.push_back({

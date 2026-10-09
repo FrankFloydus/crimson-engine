@@ -244,7 +244,7 @@ private:
     EntityKind kind = EntityKind::Generic;
     TransformComponent transform;
     VisibilityComponent visibility;
-    LockComponent lock;
+    SelectableComponent selectable;
     SceneLayerId layer_id = kInvalidSceneLayerId;
     std::optional<ModelingObjectComponent> modeling_object;
     std::optional<MeshComponent> mesh;

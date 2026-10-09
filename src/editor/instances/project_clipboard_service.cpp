@@ -80,7 +80,7 @@ CommandResult clipboard_failure(std::string message) {
 
 bool occurrence_is_valid(const SceneDocument &scene, EntityId entity) {
   if (!scene.exists(entity) || scene.kind(entity) != EntityKind::Instance ||
-      scene.has_children(entity) || scene.is_effectively_locked(entity)) {
+      scene.has_children(entity) || !scene.is_effectively_selectable(entity)) {
     return false;
   }
   const InstanceOccurrenceComponent *occurrence =
@@ -407,7 +407,7 @@ public:
     }
     if (!can_copy_instance_selection(project)) {
       return clipboard_failure(
-          "Copying instances requires only unlocked occurrence roots in "
+          "Copying instances requires only selectable occurrence roots in "
           "Object mode with no active tool or edit scope.");
     }
 

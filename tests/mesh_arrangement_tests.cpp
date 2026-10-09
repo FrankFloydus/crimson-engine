@@ -63,9 +63,9 @@ float center_x(const quader::SceneBounds &value) {
 
 void expect_transform_near(const quader::TransformComponent &actual,
                            const quader::TransformComponent &expected) {
-  EXPECT_NEAR(actual.position.x, expected.position.x, kEpsilon);
-  EXPECT_NEAR(actual.position.y, expected.position.y, kEpsilon);
-  EXPECT_NEAR(actual.position.z, expected.position.z, kEpsilon);
+  EXPECT_NEAR(actual.location.x, expected.location.x, kEpsilon);
+  EXPECT_NEAR(actual.location.y, expected.location.y, kEpsilon);
+  EXPECT_NEAR(actual.location.z, expected.location.z, kEpsilon);
   EXPECT_NEAR(actual.rotation_euler.x, expected.rotation_euler.x, kEpsilon);
   EXPECT_NEAR(actual.rotation_euler.y, expected.rotation_euler.y, kEpsilon);
   EXPECT_NEAR(actual.rotation_euler.z, expected.rotation_euler.z, kEpsilon);
@@ -122,13 +122,13 @@ TEST(MeshArrangementTests,
   const quader::QuaderModelingObjectRef active =
       create_box(harness, "Active",
                  {.min = {-1.0f, -2.0f, -1.5f}, .max = {1.0f, 2.0f, 1.5f}},
-                 {.position = {8.0f, 3.0f, 5.0f},
+                 {.location = {8.0f, 3.0f, 5.0f},
                   .rotation_euler = {0.2f, -0.3f, 0.45f},
                   .scale = {1.5f, 0.75f, 2.0f}});
   const quader::QuaderModelingObjectRef other =
       create_box(harness, "Other",
                  {.min = {-2.0f, -1.0f, -3.0f}, .max = {2.0f, 1.0f, 3.0f}},
-                 {.position = {-4.0f, 11.0f, -7.0f},
+                 {.location = {-4.0f, 11.0f, -7.0f},
                   .rotation_euler = {-0.1f, 0.25f, -0.35f},
                   .scale = {0.8f, 1.2f, 0.6f}});
   ASSERT_TRUE(harness.editor.selection()
@@ -168,8 +168,8 @@ TEST(MeshArrangementTests,
   EXPECT_NEAR(bounds(harness, other.entity).max.z, reference_z, kEpsilon);
 
   auto preserved_channels = active_before;
-  preserved_channels.position =
-      harness.session.scene().transform(active.entity)->position;
+  preserved_channels.location =
+      harness.session.scene().transform(active.entity)->location;
   expect_transform_near(*harness.session.scene().transform(active.entity),
                         preserved_channels);
   EXPECT_EQ(harness.editor.selection().summary().selected_object_count, 2u);
@@ -193,14 +193,14 @@ TEST(MeshArrangementTests,
      LegacyDistributionModesShareSignedGapsAndKeepOuterMeshesFixed) {
   ArrangementHarness harness;
   const std::array<float, 4> widths{4.0f, 2.0f, 5.0f, 4.0f};
-  const std::array<float, 4> positions{0.0f, 0.5f, 2.5f, 4.0f};
+  const std::array<float, 4> locations{0.0f, 0.5f, 2.5f, 4.0f};
   std::array<quader::QuaderModelingObjectRef, 4> objects;
   for (std::size_t index = 0; index < objects.size(); ++index) {
     const float half = widths[index] * 0.5f;
     objects[index] =
         create_box(harness, "Distributed",
                    {.min = {-half, -1.0f, -1.0f}, .max = {half, 1.0f, 1.0f}},
-                   {.position = {positions[index], 0.0f, 0.0f}});
+                   {.location = {locations[index], 0.0f, 0.0f}});
   }
   ASSERT_TRUE(harness.editor.selection()
                   .select_objects({objects[0].entity, objects[1].entity,
@@ -265,7 +265,7 @@ TEST(MeshArrangementTests,
         harness, "Selection Reference",
         {.min = {-half_width, -1.0f, -1.0f},
          .max = {half_width, 1.0f, 1.0f}},
-        {.position = {centers[index], 3.0f, -4.0f}});
+        {.location = {centers[index], 3.0f, -4.0f}});
     original_transforms[index] =
         *harness.session.scene().transform(objects[index].entity);
   }
@@ -324,7 +324,7 @@ TEST(MeshArrangementTests,
         harness, "Fractional Distribution",
         {.min = {-half_width, -1.0f, -1.0f},
          .max = {half_width, 1.0f, 1.0f}},
-        {.position = {centers[index], 3.0f, -4.0f}});
+        {.location = {centers[index], 3.0f, -4.0f}});
     original_transforms[index] =
         *harness.session.scene().transform(objects[index].entity);
   }
@@ -407,7 +407,7 @@ TEST(MeshArrangementTests,
           harness, "Snapping Search",
           {.min = {-half_width, -1.0f, -1.0f},
            .max = {half_width, 1.0f, 1.0f}},
-          {.position = {sample.centers[index], 0.0f, 0.0f}});
+          {.location = {sample.centers[index], 0.0f, 0.0f}});
     }
     ASSERT_TRUE(harness.editor.selection().select_objects(
         {objects[0].entity, objects[1].entity, objects[2].entity},
@@ -439,7 +439,7 @@ TEST(MeshArrangementTests,
     EXPECT_DOUBLE_EQ(*snapped.snap_grid_size, sample.expected_grid);
     ASSERT_EQ(snapped.edits.size(), 1u);
     EXPECT_EQ(snapped.edits.front().entity, objects[1].entity);
-    EXPECT_NEAR(snapped.edits.front().after.position.x,
+    EXPECT_NEAR(snapped.edits.front().after.location.x,
                 sample.expected_middle, kEpsilon);
     EXPECT_NEAR(center_x(bounds(harness, objects[1].entity)),
                 sample.centers[1], kEpsilon);
@@ -481,7 +481,7 @@ TEST(MeshArrangementTests,
     objects[index] = create_box(
         harness, "Thirds Distribution",
         {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
-        {.position = {centers[index], 0.0f, 0.0f}});
+        {.location = {centers[index], 0.0f, 0.0f}});
   }
   ASSERT_TRUE(harness.editor.selection().select_objects(
       {objects[3].entity, objects[0].entity, objects[2].entity, objects[1].entity},
@@ -539,7 +539,7 @@ TEST(MeshArrangementTests,
         harness, "Non Grid Distribution",
         {.min = {-half_width, -1.0f, -1.0f},
          .max = {half_width, 1.0f, 1.0f}},
-        {.position = {centers[index], 0.0f, 0.0f}});
+        {.location = {centers[index], 0.0f, 0.0f}});
   }
   ASSERT_TRUE(harness.editor.selection().select_objects(
       {objects[0].entity, objects[1].entity, objects[2].entity},
@@ -596,7 +596,7 @@ TEST(MeshArrangementTests,
         harness, "Crossing Extent",
         {.min = {-half_width, -1.0f, -1.0f},
          .max = {half_width, 1.0f, 1.0f}},
-        {.position = {centers[index], 0.0f, 0.0f}});
+        {.location = {centers[index], 0.0f, 0.0f}});
   }
   ASSERT_TRUE(harness.editor.selection().select_objects(
       {objects[2].entity, objects[0].entity, objects[1].entity},
@@ -636,7 +636,7 @@ TEST(MeshArrangementTests,
         harness, "Unsatisfiable Extent",
         {.min = {-half_width, -1.0f, -1.0f},
          .max = {half_width, 1.0f, 1.0f}},
-        {.position = {centers[index], 0.0f, 0.0f}});
+        {.location = {centers[index], 0.0f, 0.0f}});
     original_transforms[index] =
         *harness.session.scene().transform(objects[index].entity);
   }
@@ -673,7 +673,7 @@ TEST(MeshArrangementTests,
   parent_args.name = "Transform Parent";
   parent_args.kind = quader::QuaderEntityKind::Empty;
   parent_args.transform = {
-      .position = {3.0f, -2.0f, 4.0f},
+      .location = {3.0f, -2.0f, 4.0f},
       .rotation_euler = {0.25f, -0.4f, 0.3f},
       .scale = {1.5f, 0.8f, 2.0f},
   };
@@ -684,11 +684,11 @@ TEST(MeshArrangementTests,
   const quader::QuaderModelingObjectRef active =
       create_box(harness, "Parented Active",
                  {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
-                 {.position = {-2.0f, 5.0f, 7.0f}});
+                 {.location = {-2.0f, 5.0f, 7.0f}});
   const quader::QuaderModelingObjectRef other =
       create_box(harness, "Parented Other",
                  {.min = {-2.0f, -0.5f, -1.5f}, .max = {2.0f, 0.5f, 1.5f}},
-                 {.position = {8.0f, -6.0f, -3.0f},
+                 {.location = {8.0f, -6.0f, -3.0f},
                   .rotation_euler = {-0.2f, 0.35f, 0.15f},
                   .scale = {0.7f, 1.4f, 0.9f}});
   ASSERT_TRUE(harness.editor.scene()
@@ -733,12 +733,12 @@ TEST(MeshArrangementTests,
      DistributionUsesStableEntityTieOrderAndUnchangedCallsAddNoHistory) {
   ArrangementHarness harness;
   std::array<quader::QuaderModelingObjectRef, 4> objects;
-  const std::array<float, 4> positions{0.0f, 5.0f, 5.0f, 12.0f};
+  const std::array<float, 4> locations{0.0f, 5.0f, 5.0f, 12.0f};
   for (std::size_t index = 0; index < objects.size(); ++index) {
     objects[index] =
         create_box(harness, "Tied Distribution",
                    {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
-                   {.position = {positions[index], 0.0f, 0.0f}});
+                   {.location = {locations[index], 0.0f, 0.0f}});
   }
   ASSERT_LT(objects[1].entity, objects[2].entity);
   ASSERT_TRUE(harness.editor.selection()
@@ -793,11 +793,11 @@ TEST(MeshArrangementTests,
   const quader::QuaderModelingObjectRef child =
       create_box(harness, "Child",
                  {.min = {-0.5f, -0.5f, -0.5f}, .max = {0.5f, 0.5f, 0.5f}},
-                 {.position = {2.0f, 0.0f, 0.0f}});
+                 {.location = {2.0f, 0.0f, 0.0f}});
   const quader::QuaderModelingObjectRef other =
       create_box(harness, "Other",
                  {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
-                 {.position = {5.3f, 0.0f, 0.0f}});
+                 {.location = {5.3f, 0.0f, 0.0f}});
   ASSERT_TRUE(
       harness.editor.scene().reparent(child.entity, parent.entity).ok());
   ASSERT_TRUE(harness.editor.selection()
@@ -855,7 +855,7 @@ TEST(MeshArrangementTests,
   const quader::QuaderModelingObjectRef other =
       create_box(harness, "Command Other",
                  {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
-                 {.position = {0.3f, 0.0f, 0.0f}});
+                 {.location = {0.3f, 0.0f, 0.0f}});
   ASSERT_TRUE(harness.editor.selection()
                   .select_objects({active.entity, other.entity}, active.entity)
                   .ok());
@@ -922,13 +922,13 @@ TEST(MeshArrangementTests,
       harness, "Instance Source",
       {.min = {-2.0f, -1.0f, -0.5f}, .max = {2.0f, 1.0f, 0.5f}});
   const quader::EntityId occurrence = create_instance(
-      harness, source, {.position = {8.0f, 3.0f, 5.0f},
+      harness, source, {.location = {8.0f, 3.0f, 5.0f},
                         .rotation_euler = {0.1f, 0.4f, -0.2f},
                         .scale = {1.5f, 0.75f, 2.0f}});
   const auto other = create_box(
       harness, "Ordinary Mesh",
       {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
-      {.position = {-6.0f, -4.0f, 2.0f}});
+      {.location = {-6.0f, -4.0f, 2.0f}});
   ASSERT_TRUE(harness.editor.selection()
                   .select_objects({occurrence, other.entity}, occurrence).ok());
   const auto source_before =
@@ -986,7 +986,7 @@ TEST(MeshArrangementTests,
   std::array<quader::InstanceOccurrenceComponent, 3> components;
   const auto parent = harness.editor.scene().create_entity(
       {.name = "Compensated Parent", .kind = quader::QuaderEntityKind::Empty,
-       .transform = {.position = {3.0f, -2.0f, 4.0f},
+       .transform = {.location = {3.0f, -2.0f, 4.0f},
                      .rotation_euler = {0.25f, -0.4f, 0.3f},
                      .scale = {1.5f, 0.8f, 2.0f}}});
   ASSERT_TRUE(parent.ok()) << parent.error_message();
@@ -996,7 +996,7 @@ TEST(MeshArrangementTests,
         {.min = {-widths[index] * 0.5f, -1.0f, -1.0f},
          .max = {widths[index] * 0.5f, 1.0f, 1.0f}});
     occurrences[index] = create_instance(
-        harness, sources[index], {.position = {centers[index], 0.0f, 0.0f}});
+        harness, sources[index], {.location = {centers[index], 0.0f, 0.0f}});
     if (index == 1u) {
       ASSERT_TRUE(harness.editor.scene()
                       .reparent(occurrences[index], parent.value().id, true).ok());
@@ -1049,12 +1049,12 @@ TEST(MeshArrangementTests,
      CommandsArrangeLightAndEmptyOriginsAndPreserveLightProperties) {
   ArrangementHarness harness;
   const auto point = harness.editor.scene().create_point_light(
-      {.name = "Point", .transform = {.position = {0.0f, 2.0f, 4.0f}}});
+      {.name = "Point", .transform = {.location = {0.0f, 2.0f, 4.0f}}});
   const auto directional = harness.editor.scene().create_directional_light(
-      {.name = "Directional", .transform = {.position = {2.0f, 8.0f, 9.0f}}});
+      {.name = "Directional", .transform = {.location = {2.0f, 8.0f, 9.0f}}});
   const auto empty = harness.editor.scene().create_entity(
       {.name = "Empty", .kind = quader::QuaderEntityKind::Empty,
-       .transform = {.position = {12.0f, -3.0f, 7.0f}}});
+       .transform = {.location = {12.0f, -3.0f, 7.0f}}});
   ASSERT_TRUE(point.ok()) << point.error_message();
   ASSERT_TRUE(directional.ok()) << directional.error_message();
   ASSERT_TRUE(empty.ok()) << empty.error_message();
@@ -1101,15 +1101,15 @@ TEST(MeshArrangementTests,
   ArrangementHarness harness;
   const auto parent = harness.editor.scene().create_entity(
       {.name = "Spatial Parent", .kind = quader::QuaderEntityKind::Empty,
-       .transform = {.position = {1.0f, 2.0f, 3.0f},
+       .transform = {.location = {1.0f, 2.0f, 3.0f},
                      .rotation_euler = {0.2f, -0.3f, 0.4f},
                      .scale = {1.5f, 0.8f, 2.0f}}});
   ASSERT_TRUE(parent.ok()) << parent.error_message();
   const auto child = harness.editor.scene().create_point_light(
       {.name = "Child", .parent = parent.value().id,
-       .transform = {.position = {2.0f, 5.0f, 1.0f}}});
+       .transform = {.location = {2.0f, 5.0f, 1.0f}}});
   const auto active = harness.editor.scene().create_point_light(
-      {.name = "Reference", .transform = {.position = {8.0f, -4.0f, 2.0f}}});
+      {.name = "Reference", .transform = {.location = {8.0f, -4.0f, 2.0f}}});
   ASSERT_TRUE(child.ok()) << child.error_message();
   ASSERT_TRUE(active.ok()) << active.error_message();
   ASSERT_TRUE(harness.editor.selection()
@@ -1151,15 +1151,15 @@ TEST(MeshArrangementTests,
   ASSERT_TRUE(mixed_group.ok()) << mixed_group.error_message();
   const auto first = harness.editor.scene().create_point_light(
       {.name = "First", .parent = light_group.value().id,
-       .transform = {.position = {5.0f, 0.0f, 0.0f}}});
+       .transform = {.location = {5.0f, 0.0f, 0.0f}}});
   const auto second = harness.editor.scene().create_point_light(
       {.name = "Second", .parent = light_group.value().id,
-       .transform = {.position = {15.0f, 0.0f, 0.0f}}});
+       .transform = {.location = {15.0f, 0.0f, 0.0f}}});
   const auto mixed_light = harness.editor.scene().create_point_light(
       {.name = "Mixed Light", .parent = mixed_group.value().id,
-       .transform = {.position = {15.0f, 0.0f, 0.0f}}});
+       .transform = {.location = {15.0f, 0.0f, 0.0f}}});
   const auto active = harness.editor.scene().create_point_light(
-      {.name = "Reference", .transform = {.position = {20.0f, 0.0f, 0.0f}}});
+      {.name = "Reference", .transform = {.location = {20.0f, 0.0f, 0.0f}}});
   ASSERT_TRUE(first.ok()) << first.error_message();
   ASSERT_TRUE(second.ok()) << second.error_message();
   ASSERT_TRUE(mixed_light.ok()) << mixed_light.error_message();
@@ -1167,7 +1167,7 @@ TEST(MeshArrangementTests,
   const auto mesh = create_box(
       harness, "Mixed Mesh",
       {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
-      {.position = {5.0f, 0.0f, 0.0f}});
+      {.location = {5.0f, 0.0f, 0.0f}});
   ASSERT_TRUE(harness.editor.scene()
                   .reparent(mesh.entity, mixed_group.value().id, true).ok());
   ASSERT_TRUE(harness.editor.selection()
@@ -1196,9 +1196,9 @@ TEST(MeshArrangementTests,
       harness, "Locked Instance Source",
       {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}});
   const auto occurrence = create_instance(
-      harness, source, {.position = {4.0f, 0.0f, 0.0f}});
+      harness, source, {.location = {4.0f, 0.0f, 0.0f}});
   const auto light = harness.editor.scene().create_point_light(
-      {.name = "Locked Light", .transform = {.position = {8.0f, 0.0f, 0.0f}}});
+      {.name = "Locked Light", .transform = {.location = {8.0f, 0.0f, 0.0f}}});
   const auto mesh = create_box(
       harness, "Ordinary",
       {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}});
@@ -1212,13 +1212,13 @@ TEST(MeshArrangementTests,
   const auto mesh_before = *harness.session.scene().transform(mesh.entity);
   const auto light_before = *harness.session.scene().transform(light.value().id);
   harness.session.history().clear();
-  ASSERT_TRUE(harness.session.scene().set_locked(light.value().id, true));
+  ASSERT_TRUE(harness.session.scene().set_selectable(light.value().id, false));
   EXPECT_FALSE(harness.editor.modeling().can_align_selected_meshes());
   EXPECT_FALSE(harness.editor.modeling().can_distribute_selected_meshes());
   const auto locked = harness.editor.modeling().align_selected_meshes(
       quader::QuaderTransformAxis::X, quader::QuaderMeshAlignment::Center);
   EXPECT_FALSE(locked.ok());
-  ASSERT_TRUE(harness.session.scene().set_locked(light.value().id, false));
+  ASSERT_TRUE(harness.session.scene().set_selectable(light.value().id, true));
   EXPECT_TRUE(harness.editor.modeling().can_distribute_selected_meshes());
   ASSERT_TRUE(harness.session.scene().set_visible(occurrence, false));
   EXPECT_FALSE(harness.editor.modeling().can_distribute_selected_meshes());

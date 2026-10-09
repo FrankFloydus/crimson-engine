@@ -48,30 +48,30 @@ TEST(SceneMeshOccurrenceProjectionTests,
       scene.create_entity("Direct Mesh", EntityKind::Mesh);
   ASSERT_TRUE(scene.set_mesh(direct, {.mesh = 101u}));
   ASSERT_TRUE(scene.set_transform(
-      direct, TransformComponent{.position = {1.0f, 0.0f, 0.0f}}));
-  ASSERT_TRUE(scene.set_selectable(direct, false));
+      direct, TransformComponent{.location = {1.0f, 0.0f, 0.0f}}));
+  ASSERT_TRUE(scene.set_selectability(direct, false));
 
   const EntityId definition =
       scene.create_entity("Definition", EntityKind::Empty);
   ASSERT_TRUE(scene.set_instance_definition(definition));
   ASSERT_TRUE(scene.set_visible(definition, false));
-  ASSERT_TRUE(scene.set_locked(definition, true));
+  ASSERT_TRUE(scene.set_selectable(definition, false));
 
   const EntityId first_member =
       scene.create_entity("First Member", EntityKind::Mesh);
   ASSERT_TRUE(scene.set_mesh(first_member, {.mesh = 102u}));
   ASSERT_TRUE(scene.set_parent(first_member, definition, false));
   ASSERT_TRUE(scene.set_transform(
-      first_member, TransformComponent{.position = {2.0f, 0.0f, 0.0f}}));
-  ASSERT_TRUE(scene.set_locked(first_member, true));
+      first_member, TransformComponent{.location = {2.0f, 0.0f, 0.0f}}));
+  ASSERT_TRUE(scene.set_selectable(first_member, false));
 
   const EntityId second_member =
       scene.create_entity("Second Member", EntityKind::Mesh);
   ASSERT_TRUE(scene.set_mesh(second_member, {.mesh = 103u}));
   ASSERT_TRUE(scene.set_parent(second_member, definition, false));
   ASSERT_TRUE(scene.set_transform(
-      second_member, TransformComponent{.position = {4.0f, 0.0f, 0.0f}}));
-  ASSERT_TRUE(scene.set_selectable(second_member, false));
+      second_member, TransformComponent{.location = {4.0f, 0.0f, 0.0f}}));
+  ASSERT_TRUE(scene.set_selectability(second_member, false));
 
   const EntityId first_occurrence =
       scene.create_entity("First Occurrence", EntityKind::Instance);
@@ -83,11 +83,11 @@ TEST(SceneMeshOccurrenceProjectionTests,
       second_occurrence, {.definition = definition}));
   ASSERT_TRUE(scene.set_transform(
       first_occurrence,
-      TransformComponent{.position = {10.0f, 0.0f, 0.0f}}));
+      TransformComponent{.location = {10.0f, 0.0f, 0.0f}}));
   ASSERT_TRUE(scene.set_transform(
       second_occurrence,
-      TransformComponent{.position = {20.0f, 0.0f, 0.0f}}));
-  ASSERT_TRUE(scene.set_selectable(second_occurrence, false));
+      TransformComponent{.location = {20.0f, 0.0f, 0.0f}}));
+  ASSERT_TRUE(scene.set_selectability(second_occurrence, false));
 
   SceneMeshOccurrenceProjectionWorkStats work;
   const SceneMeshOccurrenceProjectionSnapshot projection =
@@ -107,10 +107,10 @@ TEST(SceneMeshOccurrenceProjectionTests,
   ASSERT_EQ(first_placements.size(), 2u);
   EXPECT_FLOAT_EQ(first_placements[0].world_from_geometry.values[12], 12.0f);
   EXPECT_FLOAT_EQ(first_placements[1].world_from_geometry.values[12], 14.0f);
-  EXPECT_TRUE(first_placements[0].effectively_locked);
+  EXPECT_FALSE(first_placements[0].effectively_selectable);
   EXPECT_TRUE(first_placements[0].selectable);
   EXPECT_FALSE(first_placements[1].selectable);
-  EXPECT_FALSE(first_placements[1].effectively_locked);
+  EXPECT_TRUE(first_placements[1].effectively_selectable);
   EXPECT_FALSE(projection.records_for_display(second_occurrence)[0].selectable);
   EXPECT_FALSE(projection.records().front().selectable);
 
@@ -162,6 +162,54 @@ TEST(SceneMeshOccurrenceProjectionTests,
        projection.records()) {
     EXPECT_TRUE(record.effectively_visible);
   }
+}
+
+TEST(SceneMeshOccurrenceProjectionTests,
+     RetainsIndependentEligibilityAndInheritedSelectableAcrossCachedProjection) {
+  SceneDocument scene;
+  const EntityId parent = scene.create_entity("Parent", EntityKind::Empty);
+  const EntityId child = scene.create_entity("Child", EntityKind::Mesh);
+  ASSERT_TRUE(scene.set_mesh(child, {.mesh = 101u}));
+  ASSERT_TRUE(scene.set_parent(child, parent, false));
+
+  const auto initial = scene.mesh_occurrence_projection();
+  ASSERT_EQ(initial->records().size(), 1u);
+  EXPECT_TRUE(initial->records().front().selectable);
+  EXPECT_TRUE(initial->records().front().effectively_selectable);
+  EXPECT_EQ(scene.mesh_occurrence_projection(), initial);
+
+  ASSERT_TRUE(scene.set_selectable(parent, false));
+  const auto denied = scene.mesh_occurrence_projection();
+  ASSERT_NE(denied, initial);
+  EXPECT_TRUE(scene.selectable(child)->selectable);
+  EXPECT_TRUE(scene.visibility(child)->selectable);
+  EXPECT_FALSE(scene.is_effectively_selectable(child));
+  EXPECT_TRUE(denied->records().front().selectable);
+  EXPECT_FALSE(denied->records().front().effectively_selectable);
+  EXPECT_EQ(scene.mesh_occurrence_projection(), denied);
+
+  ASSERT_TRUE(scene.set_selectability(child, false));
+  ASSERT_TRUE(scene.set_selectable(parent, true));
+  const auto ineligible = scene.mesh_occurrence_projection();
+  ASSERT_NE(ineligible, denied);
+  EXPECT_FALSE(ineligible->records().front().selectable);
+  EXPECT_TRUE(ineligible->records().front().effectively_selectable);
+
+  const SceneLayerId layer = scene.create_layer("Restricted");
+  ASSERT_NE(layer, kInvalidSceneLayerId);
+  ASSERT_TRUE(scene.set_entity_layer(parent, layer));
+  ASSERT_TRUE(scene.set_layer_locked(layer, true));
+  const auto layer_denied = scene.mesh_occurrence_projection();
+  EXPECT_FALSE(layer_denied->records().front().selectable);
+  EXPECT_FALSE(layer_denied->records().front().effectively_selectable);
+  EXPECT_TRUE(scene.selectable(child)->selectable);
+  EXPECT_TRUE(scene.selectable(parent)->selectable);
+
+  ASSERT_TRUE(scene.set_layer_locked(layer, false));
+  ASSERT_TRUE(scene.set_selectability(child, true));
+  const auto restored = scene.mesh_occurrence_projection();
+  EXPECT_TRUE(restored->records().front().selectable);
+  EXPECT_TRUE(restored->records().front().effectively_selectable);
 }
 
 TEST(SceneMeshOccurrenceProjectionTests,
@@ -273,7 +321,7 @@ TEST(SceneMeshOccurrenceProjectionTests,
   ASSERT_TRUE(scene.set_visible(hidden_parent, false));
   ASSERT_TRUE(scene.set_parent(hidden_by_parent, hidden_parent, false));
   ASSERT_TRUE(scene.set_transform(
-      hidden_parent, TransformComponent{.position = {7.0f, 0.0f, 0.0f}}));
+      hidden_parent, TransformComponent{.location = {7.0f, 0.0f, 0.0f}}));
   const SceneLayerId hidden_layer = scene.create_layer("Hidden Layer");
   ASSERT_NE(hidden_layer, kInvalidSceneLayerId);
   ASSERT_TRUE(scene.set_entity_layer(hidden_by_layer, hidden_layer));
@@ -330,7 +378,7 @@ TEST(SceneMeshOccurrenceProjectionTests,
   for (const EntityId mesh :
        {visible_member, hidden_member, hidden_by_parent_member}) {
     ASSERT_TRUE(scene.set_transform(
-        mesh, TransformComponent{.position = {2.0f, 0.0f, 0.0f}}));
+        mesh, TransformComponent{.location = {2.0f, 0.0f, 0.0f}}));
   }
 
   const EntityId visible_occurrence =
@@ -345,7 +393,7 @@ TEST(SceneMeshOccurrenceProjectionTests,
     ASSERT_TRUE(scene.set_instance_occurrence(
         occurrence, {.definition = definition}));
     ASSERT_TRUE(scene.set_transform(
-        occurrence, TransformComponent{.position = {10.0f, 0.0f, 0.0f}}));
+        occurrence, TransformComponent{.location = {10.0f, 0.0f, 0.0f}}));
   }
   ASSERT_TRUE(scene.set_visible(hidden_occurrence, false));
   ASSERT_TRUE(scene.set_parent(hidden_by_parent_occurrence, occurrence_parent,
@@ -444,14 +492,14 @@ TEST(SceneMeshOccurrenceProjectionTests,
   ASSERT_TRUE(scene.set_visible(definition, false));
   ASSERT_TRUE(scene.set_transform(
       definition,
-      TransformComponent{.position = {100.0f, -50.0f, 7.0f}}));
+      TransformComponent{.location = {100.0f, -50.0f, 7.0f}}));
 
   const EntityId member =
       scene.create_entity("Visible Bounds Member", EntityKind::Mesh);
   ASSERT_TRUE(scene.set_mesh(member, {.mesh = mesh}));
   ASSERT_TRUE(scene.set_parent(member, definition, false));
   ASSERT_TRUE(scene.set_transform(
-      member, TransformComponent{.position = {2.0f, 3.0f, 4.0f}}));
+      member, TransformComponent{.location = {2.0f, 3.0f, 4.0f}}));
 
   const EntityId hidden_member =
       scene.create_entity("Hidden Bounds Member", EntityKind::Mesh);
@@ -459,12 +507,12 @@ TEST(SceneMeshOccurrenceProjectionTests,
   ASSERT_TRUE(scene.set_parent(hidden_member, definition, false));
   ASSERT_TRUE(scene.set_transform(
       hidden_member,
-      TransformComponent{.position = {1000.0f, 0.0f, 0.0f}}));
+      TransformComponent{.location = {1000.0f, 0.0f, 0.0f}}));
   ASSERT_TRUE(scene.set_visible(hidden_member, false));
 
   const EntityId group = scene.create_entity("Occurrence Parent");
   ASSERT_TRUE(scene.set_transform(
-      group, TransformComponent{.position = {5.0f, 0.0f, 0.0f}}));
+      group, TransformComponent{.location = {5.0f, 0.0f, 0.0f}}));
   const EntityId occurrence =
       scene.create_entity("Bounds Occurrence", EntityKind::Instance);
   ASSERT_TRUE(scene.set_instance_occurrence(
@@ -472,7 +520,7 @@ TEST(SceneMeshOccurrenceProjectionTests,
   ASSERT_TRUE(scene.set_parent(occurrence, group, false));
   ASSERT_TRUE(scene.set_transform(
       occurrence,
-      TransformComponent{.position = {10.0f, 20.0f, 30.0f}}));
+      TransformComponent{.location = {10.0f, 20.0f, 30.0f}}));
 
   const SceneBounds expected{
       .min = {16.0f, 21.0f, 31.0f},
@@ -532,14 +580,14 @@ TEST(SceneMeshOccurrenceProjectionTests,
   ASSERT_TRUE(scene.set_mesh(member, {.mesh = mesh}));
   ASSERT_TRUE(scene.set_parent(member, definition, false));
   ASSERT_TRUE(scene.set_transform(
-      member, TransformComponent{.position = {2.0f, 0.0f, 0.0f}}));
+      member, TransformComponent{.location = {2.0f, 0.0f, 0.0f}}));
   const EntityId occurrence =
       scene.create_entity("Shared Occurrence", EntityKind::Instance);
   ASSERT_TRUE(scene.set_instance_occurrence(
       occurrence, {.definition = definition}));
   ASSERT_TRUE(scene.set_transform(
       occurrence,
-      TransformComponent{.position = {10.0f, 0.0f, 0.0f}}));
+      TransformComponent{.location = {10.0f, 0.0f, 0.0f}}));
 
   EXPECT_EQ(scene.spatial_projection_cache_stats().hierarchy_build_count, 0u);
   EXPECT_EQ(
@@ -575,7 +623,7 @@ TEST(SceneMeshOccurrenceProjectionTests,
   EXPECT_EQ(stats.hierarchy_build_count, 1u);
   EXPECT_EQ(stats.mesh_occurrence_build_count, 1u);
 
-  ASSERT_TRUE(scene.set_selectable(member, false));
+  ASSERT_TRUE(scene.set_selectability(member, false));
   (void)scene.mesh_occurrence_projection();
   stats = scene.spatial_projection_cache_stats();
   EXPECT_EQ(stats.hierarchy_build_count, 1u)
@@ -595,7 +643,7 @@ TEST(SceneMeshOccurrenceProjectionTests,
   const EntityId first = scene.create_entity("First", EntityKind::Mesh);
   ASSERT_TRUE(scene.set_mesh(first, {.mesh = 501u}));
   ASSERT_TRUE(scene.set_transform(
-      first, TransformComponent{.position = {1.0f, 0.0f, 0.0f}}));
+      first, TransformComponent{.location = {1.0f, 0.0f, 0.0f}}));
   const auto first_hierarchy = scene.hierarchy_projection();
   const auto first_occurrences = scene.mesh_occurrence_projection();
   const std::array<std::uint64_t, 4> first_revisions{
@@ -614,7 +662,7 @@ TEST(SceneMeshOccurrenceProjectionTests,
   ASSERT_EQ(second, first);
   ASSERT_TRUE(scene.set_mesh(second, {.mesh = 777u}));
   ASSERT_TRUE(scene.set_transform(
-      second, TransformComponent{.position = {9.0f, 0.0f, 0.0f}}));
+      second, TransformComponent{.location = {9.0f, 0.0f, 0.0f}}));
   const std::array<std::uint64_t, 4> second_revisions{
       scene.hierarchy_presentation_revision(), scene.visibility_revision(),
       scene.transform_revision(), scene.mesh_binding_revision()};

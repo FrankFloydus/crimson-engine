@@ -30,8 +30,10 @@ struct QuaderEntitySnapshot {
   /// Affine prefix before the editable channels; absence denotes identity.
   std::optional<QMat4> parenting_offset;
   bool visible = true;
+  /// Independent scene eligibility gate, retained from VisibilityComponent.
+  bool selection_eligible = true;
+  /// Authored object selectability, independent of visibility and eligibility.
   bool selectable = true;
-  bool locked = false;
   bool selected = false;
   bool active = false;
   bool has_mesh = false;

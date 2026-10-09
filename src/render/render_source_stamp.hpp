@@ -38,6 +38,7 @@ enum class RenderSourceDependency : std::uint64_t {
   MaterialCatalogRevision = 1ull << 15u,
   ProjectMaterialRevision = 1ull << 16u,
   InstanceEditScope = 1ull << 17u,
+  BackfaceCulling = 1ull << 18u,
 };
 
 /** Type-safe set of render-source dependencies. */
@@ -103,6 +104,7 @@ struct RenderSourceStamp {
   std::uint64_t material_catalog_revision = 0u;
   std::uint64_t project_material_revision = 0u;
   RenderInstanceEditScope instance_edit_scope;
+  bool backface_culling_enabled = true;
 
   friend bool operator==(const RenderSourceStamp &,
                          const RenderSourceStamp &) = default;
@@ -114,6 +116,7 @@ struct RenderSourceStampCaptureOptions final {
   const ViewportLocalVisibilitySnapshot *local_visibility = nullptr;
   std::uint64_t project_material_revision = 0u;
   RenderInstanceEditScope instance_edit_scope;
+  bool backface_culling_enabled = true;
 };
 
 /** Captures scalar owner revisions only; this function never allocates or hashes. */
@@ -159,6 +162,7 @@ inline constexpr RenderSourceDependencyMask kRenderSourceAllDependencies =
         RenderSourceDependency::MaterialCatalogRevision,
         RenderSourceDependency::ProjectMaterialRevision,
         RenderSourceDependency::InstanceEditScope,
+        RenderSourceDependency::BackfaceCulling,
     });
 
 /** Exact inputs that can invalidate retained main-scene records. */
@@ -179,6 +183,7 @@ inline constexpr RenderSourceDependencyMask
             RenderSourceDependency::MaterialCatalogRevision,
             RenderSourceDependency::ProjectMaterialRevision,
             RenderSourceDependency::InstanceEditScope,
+            RenderSourceDependency::BackfaceCulling,
         });
 
 /** Facts that must stay fixed for a curve-only main-scene stamp refresh. */
@@ -197,6 +202,7 @@ inline constexpr RenderSourceDependencyMask
             RenderSourceDependency::MaterialCatalogRevision,
             RenderSourceDependency::ProjectMaterialRevision,
             RenderSourceDependency::InstanceEditScope,
+            RenderSourceDependency::BackfaceCulling,
         });
 
 inline constexpr RenderSourceDependencyMask
@@ -216,6 +222,7 @@ inline constexpr RenderSourceDependencyMask
             RenderSourceDependency::ProjectMaterialRevision,
             RenderSourceDependency::LocalVisibilityRevision,
             RenderSourceDependency::InstanceEditScope,
+            RenderSourceDependency::BackfaceCulling,
             RenderSourceDependency::VisibilityRevision,
             RenderSourceDependency::TransformRevision,
             RenderSourceDependency::TextureMappingRevision,
@@ -232,6 +239,7 @@ inline constexpr RenderSourceDependencyMask
             RenderSourceDependency::ProjectMaterialRevision,
             RenderSourceDependency::LocalVisibilityRevision,
             RenderSourceDependency::InstanceEditScope,
+            RenderSourceDependency::BackfaceCulling,
             RenderSourceDependency::SelectionRevision,
             RenderSourceDependency::VisibilityRevision,
             RenderSourceDependency::MeshBindingRevision,
@@ -246,6 +254,7 @@ inline constexpr RenderSourceDependencyMask
             RenderSourceDependency::SceneRevision,
             RenderSourceDependency::LocalVisibilityRevision,
             RenderSourceDependency::InstanceEditScope,
+            RenderSourceDependency::BackfaceCulling,
         });
 
 /** Asset-owner facts inspected by the scene-sync narrow fallback. */
@@ -262,6 +271,7 @@ inline constexpr RenderSourceDependencyMask
         RenderSourceDependencyMask::from({
             RenderSourceDependency::SceneBinding,
             RenderSourceDependency::InstanceEditScope,
+            RenderSourceDependency::BackfaceCulling,
         });
 
 /** Persistent selected-object overlay source dependencies. */

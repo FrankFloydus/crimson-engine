@@ -146,6 +146,8 @@ public:
     bool update_editable_surface_presentation(MeshRenderableProxy &proxy,
         const EditableSurfaceUpdate &prepared,
         const RenderInstanceBounds &world_bounds, bool cast_shadows);
+    /// PerObjectTransform presentation uses a singleton entity transform instead
+    /// of an InstanceBuffer so Filament retains reflected winding and normals.
     /// An optional dynamic geometry owner supplies already-created buffers.
     /// The caller guarantees identical geometry for every occurrence; the
     /// owner outlives the returned chunk and owns all subsequent uploads.

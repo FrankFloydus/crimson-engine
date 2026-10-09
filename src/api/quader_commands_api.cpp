@@ -806,7 +806,10 @@ std::string explicit_keybinding_label(std::string_view command_id,
     return "Toggle Viewport Grid";
   }
   if (is(quader_command::kViewportToggleWireframeOnShaded)) {
-    return "Wireframe on Shaded";
+    return "Show Wireframe";
+  }
+  if (is(quader_command::kViewportToggleBackfaceCulling)) {
+    return "Backface Culling";
   }
   if (is(quader_command::kViewportToggleGizmos)) {
     return "Toggle Transform Gizmos";
@@ -1044,6 +1047,9 @@ std::string command_keybinding_localization_key(std::string_view command_id) {
     return stable();
   }
   if (command_id == quader_command::kViewportToggleWireframeOnShaded.string()) {
+    return stable();
+  }
+  if (command_id == quader_command::kViewportToggleBackfaceCulling.string()) {
     return stable();
   }
   if (command_id == quader_command::kViewportToggleGizmos.string()) {
@@ -3562,11 +3568,17 @@ void QuaderCommandsApi::Impl::register_commands() {
                    });
   // Discoverable and remappable; deliberately has no default shortcut.
   register_command(quader_command::kViewportToggleWireframeOnShaded,
-                   "Wireframe on Shaded", [this] {
+                   "Show Wireframe", [this] {
                      return viewports_.set_control(
                          QuaderViewportControl::WireframeOnShaded,
                          !viewports_.control(
                              QuaderViewportControl::WireframeOnShaded));
+                   });
+  // The global culling switch is remappable and deliberately unassigned.
+  register_command(quader_command::kViewportToggleBackfaceCulling,
+                   "Backface Culling", [this] {
+                     return preferences_.set_backface_culling_enabled(
+                         !preferences_.backface_culling_enabled());
                    });
   register_command(quader_command::kViewportToggleGizmos, "Toggle Gizmos",
                    [this] {

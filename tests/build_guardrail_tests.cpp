@@ -5035,17 +5035,22 @@ TEST(BuildGuardrailTests, SceneSelectableMutationStaysSceneOwned) {
       {"src", "scene", "document", "scene_entity_state.cpp"});
 
   expect_contains(scene_header,
+                  "bool set_selectability(EntityId id, bool selectable);");
+  expect_contains(scene_header,
                   "bool set_selectable(EntityId id, bool selectable);");
+  expect_contains(scene_source, "bool SceneDocument::set_selectability");
   expect_contains(scene_source, "bool SceneDocument::set_selectable");
   expect_contains(qdr_codec, "apply_scene_entity_state(");
+  expect_contains(entity_state, "scene.set_selectability(");
   expect_contains(entity_state, "scene.set_selectable(");
-  expect_missing(qdr_codec, "document.scene().set_selectable(");
-  expect_missing(qdr_codec, "->selectable =");
+  expect_missing(qdr_codec, "document.scene().set_selectability(");
+  static const std::regex kSelectableAssignment(R"(->\s*selectable\s*=(?!=))");
+  EXPECT_FALSE(std::regex_search(qdr_codec, kSelectableAssignment));
 
   for (const std::filesystem::path &file :
        source_files_under(source_path("src"))) {
     if (file.filename() != "scene_document.cpp") {
-      EXPECT_EQ(read_file(file).find("->selectable ="), std::string::npos)
+      EXPECT_FALSE(std::regex_search(read_file(file), kSelectableAssignment))
           << file.string();
     }
   }

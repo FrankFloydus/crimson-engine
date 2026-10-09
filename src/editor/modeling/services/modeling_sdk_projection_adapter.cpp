@@ -2829,7 +2829,7 @@ public:
                               : std::nullopt;
       if (!native.has_value() || !entity.has_value() ||
           !scene_.exists(*entity) || scene_.mesh(*entity) == nullptr ||
-          scene_.is_effectively_locked(*entity)) {
+          !scene_.is_effectively_selectable(*entity)) {
         return {.message = "A selected extrusion mesh is not editable."};
       }
       const auto world = modeling_object_world_transform_resolver_
@@ -2894,7 +2894,7 @@ public:
               std::optional{entry.entity} ||
           !scene_.exists(entry.entity) || scene_.mesh(entry.entity) == nullptr ||
           assets_.mesh(scene_.mesh(entry.entity)->mesh) == nullptr ||
-          scene_.is_effectively_locked(entry.entity)) {
+          !scene_.is_effectively_selectable(entry.entity)) {
         return false;
       }
       const auto world = modeling_object_world_transform_resolver_

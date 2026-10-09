@@ -1008,7 +1008,7 @@ TEST(ExtrudeViewportInteractionTests,
       source_handle.world_position);
   ASSERT_TRUE(harness.editor.scene().set_transform(
       harness.object.entity,
-      {.position = QVec3{1.0F, 0.0F, 0.0F} - rotated_center,
+      {.location = QVec3{1.0F, 0.0F, 0.0F} - rotated_center,
        .rotation_euler = rotation}).ok());
   ASSERT_TRUE(harness.editor.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(harness.editor.selection().select_face(harness.object, 1).ok());

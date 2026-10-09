@@ -17,6 +17,11 @@ file except through prior written authorization from Francesco Di Blasi.
   and project workspace lifetime belong to `src/editor/session`.
 - `document/scene_entity_state.*` is the shared component inventory for persistence, history,
   clipboard, and rollback. Do not add a second live object-record store or allocator.
+- Authored `SelectableComponent::selectable` is a positive permission, inherited through
+  hierarchy and layer restrictions. `VisibilityComponent::selectable` remains a separate
+  eligibility gate; selection consumers apply both without merging their authored state.
+  `SceneDocument::set_selectable` edits permission; `set_selectability` edits that independent
+  eligibility gate. QDR retains historical locked bits through explicit inversion in its codec.
 - Authored placement is `parent_world * parenting_offset * editable_TRS`. Use the complete-local
   and compensated-parent helpers in `scene_transform.hpp`; `spatial_transform()` exposes editable
   TRS only. Structural keep-world edits change the affine offset without decomposing or baking it.

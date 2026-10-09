@@ -44,7 +44,7 @@ namespace fb = ::quader::qdr::fb;
   entity.editor_object_id = 21u;
   entity.name = "Hidden locked material owner";
   entity.visibility.visible = false;
-  entity.lock.locked = true;
+  entity.selectable.selectable = false;
   entity.material = MaterialComponent{
       .material = MaterialReference::project(dependency_material_id(0u))};
   entity.material->material_slots.emplace(

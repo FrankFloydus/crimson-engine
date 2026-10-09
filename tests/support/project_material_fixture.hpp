@@ -35,8 +35,8 @@ public:
                                   MaterialComponent material) const;
   [[nodiscard]] bool clear_material(EntityId entity) const;
   [[nodiscard]] bool set_visible(EntityId entity, bool visible) const;
-  [[nodiscard]] bool set_locked(EntityId entity, bool locked) const;
   [[nodiscard]] bool set_selectable(EntityId entity, bool selectable) const;
+  [[nodiscard]] bool set_selectability(EntityId entity, bool selectable) const;
   [[nodiscard]] bool bind_shared_mesh(EntityId entity, AssetId mesh) const;
   [[nodiscard]] bool set_projection_failure(ProjectionFailurePoint point) const;
   /// Supplies a drawn footprint without accepting or assigning its material.

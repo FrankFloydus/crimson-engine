@@ -8,6 +8,7 @@
 #include "api/quader_editor_api.hpp"
 #include "assets/mesh_asset.hpp"
 #include "editor/projection/mesh_projection_service.hpp"
+#include "editor/selection/scene_selection_application.hpp"
 #include "io/mesh/obj_writer.hpp"
 #include "io/qdr/qdr_binary_container.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
@@ -15,6 +16,7 @@
 #include "io/qdr/qdr_project_write_snapshot.hpp"
 #include "io/qdr/qdr_scene_binary_codec.hpp"
 #include "scene/document/scene_content_document.hpp"
+#include "scene/document/scene_entity_state.hpp"
 #include "scene/scene_transform.hpp"
 
 #include "qdr_scene_generated.h"
@@ -331,8 +333,8 @@ void make_legacy_scene_metadata(quader_io::QdrBinaryChunkInput &metadata,
               copied_size - (reinterpret_cast<const std::byte *>(value) -
                              metadata.bytes.data())));
   };
-  const qdr_fb::Vec3 position(wrapper_transform.position.x,
-                             wrapper_transform.position.y, wrapper_transform.position.z);
+  const qdr_fb::Vec3 position(wrapper_transform.location.x,
+                             wrapper_transform.location.y, wrapper_transform.location.z);
   const qdr_fb::Vec3 rotation(wrapper_transform.rotation_euler.x,
                              wrapper_transform.rotation_euler.y, wrapper_transform.rotation_euler.z);
   const qdr_fb::Vec3 scale(wrapper_transform.scale.x,
@@ -415,16 +417,17 @@ void make_legacy_scene_metadata(quader_io::QdrBinaryChunkInput &metadata,
 
 [[nodiscard]] std::vector<std::byte> legacy_object_record_fixture(
     EditorObjectId entity_object_id, EditorObjectId legacy_object_id,
-    bool legacy_visible) {
+    bool legacy_visible, bool locked = false, bool selection_eligible = true) {
   flatbuffers::FlatBufferBuilder builder;
   const auto transform = qdr_fb::CreateTransformComponent(
       builder, nullptr, nullptr, nullptr, false);
   const auto visibility =
-      qdr_fb::CreateVisibilityComponent(builder, true, true);
+      qdr_fb::CreateVisibilityComponent(builder, true, selection_eligible);
+  const auto lock = qdr_fb::CreateLockComponent(builder, locked);
   const auto entity = qdr_fb::CreateEntity(
       builder, 100u, {}, entity_object_id,
       builder.CreateString("Canonical Entity"),
-      qdr_fb::EntityKind::Generic, 0u, transform, visibility);
+      qdr_fb::EntityKind::Generic, 0u, transform, visibility, lock);
   const auto legacy = qdr_fb::CreateObjectRecord(
       builder, legacy_object_id, 100u, 0u, 0u, -1,
       builder.CreateString("Retired Authored Name"), legacy_visible, 7u);
@@ -690,10 +693,10 @@ TEST(QdrBinarySceneCodecTests, LegacyWrapperPromotionPreservesOrderWorldStateAnd
   ASSERT_EQ(scene.create_entity_with_id(300u, "Nested", EntityKind::Empty), 300u);
   ASSERT_TRUE(scene.set_parent(300u, 200u, false));
   ASSERT_TRUE(scene.set_sibling_ordinal(200u, 0u));
-  ASSERT_TRUE(scene.set_transform(100u, {.position = {4.0f, 5.0f, 6.0f},
+  ASSERT_TRUE(scene.set_transform(100u, {.location = {4.0f, 5.0f, 6.0f},
                                        .rotation_euler = {0.25f, 0.0f, 0.5f}}));
   const TransformComponent wrapper{
-      .position = {5.0f, -3.0f, 9.0f}, .rotation_euler = {0.0f, 0.5f, 0.0f},
+      .location = {5.0f, -3.0f, 9.0f}, .rotation_euler = {0.0f, 0.5f, 0.0f},
       .scale = {2.0f, 2.0f, 2.0f}};
   const auto parsed = parse_written_scene(document);
   auto chunks = copy_chunks(parsed);
@@ -712,7 +715,7 @@ TEST(QdrBinarySceneCodecTests, LegacyWrapperPromotionPreservesOrderWorldStateAnd
         compose_transform(wrapper.spatial_transform()), scene.world_transform_matrix(entity));
     EXPECT_TRUE(scene_matrix_near_equal(read.document.scene().world_transform_matrix(entity), expected));
     EXPECT_FALSE(read.document.scene().is_effectively_visible(entity));
-    EXPECT_TRUE(read.document.scene().is_effectively_locked(entity));
+    EXPECT_FALSE(read.document.scene().is_effectively_selectable(entity));
     EXPECT_EQ(read.document.scene().entity_uuid(entity)->uuid, scene.entity_uuid(entity)->uuid);
     EXPECT_EQ(read.document.scene().editor_object_id(entity), scene.editor_object_id(entity));
   }
@@ -782,7 +785,7 @@ TEST(QdrBinarySceneCodecTests, ParentingOffsetsRoundTripAffineAndSingularTransfo
   auto document = simple_scene();
   auto &scene = document.scene();
   ASSERT_EQ(scene.create_entity_with_id(200u, "Compensated parent", EntityKind::Empty), 200u);
-  TransformComponent parent{.position = {7.0f, 2.0f, -5.0f},
+  TransformComponent parent{.location = {7.0f, 2.0f, -5.0f},
                             .rotation_euler = {0.2f, 0.7f, -0.4f},
                             .scale = {-2.0f, 3.0f, 0.5f}};
   parent.parenting_offset.values[8] = 0.375f;
@@ -790,7 +793,7 @@ TEST(QdrBinarySceneCodecTests, ParentingOffsetsRoundTripAffineAndSingularTransfo
   ASSERT_TRUE(scene.set_parent(100u, 200u, false));
   for (const bool singular : {false, true}) {
     SCOPED_TRACE(singular);
-    TransformComponent child{.position = {1.0f, -3.0f, 5.0f},
+    TransformComponent child{.location = {1.0f, -3.0f, 5.0f},
                              .rotation_euler = {0.5f, 0.2f, -0.7f},
                              .scale = {0.75f, 2.0f, -1.0f},
                              .custom_pivot = true};
@@ -804,7 +807,7 @@ TEST(QdrBinarySceneCodecTests, ParentingOffsetsRoundTripAffineAndSingularTransfo
     for (const EntityId id : {100u, 200u}) {
       EXPECT_EQ(read.document.scene().transform(id)->parenting_offset.values,
                 scene.transform(id)->parenting_offset.values);
-      EXPECT_EQ(to_glm(read.document.scene().transform(id)->position), to_glm(scene.transform(id)->position));
+      EXPECT_EQ(to_glm(read.document.scene().transform(id)->location), to_glm(scene.transform(id)->location));
       EXPECT_EQ(to_glm(read.document.scene().transform(id)->rotation_euler), to_glm(scene.transform(id)->rotation_euler));
       EXPECT_EQ(to_glm(read.document.scene().transform(id)->scale), to_glm(scene.transform(id)->scale));
       EXPECT_EQ(read.document.scene().transform(id)->custom_pivot, scene.transform(id)->custom_pivot);
@@ -818,7 +821,7 @@ TEST(QdrBinarySceneCodecTests, ParentingOffsetsRoundTripAffineAndSingularTransfo
 
 TEST(QdrBinarySceneCodecTests, AbsentParentingOffsetsDefaultToIdentityForOldAndNewSchemas) {
   auto document = simple_scene();
-  TransformComponent transform{.position = {1.0f, 2.0f, 3.0f}};
+  TransformComponent transform{.location = {1.0f, 2.0f, 3.0f}};
   transform.parenting_offset.values[12] = 9.0f;
   ASSERT_TRUE(document.scene().set_transform(100u, transform));
   const auto parsed = parse_written_scene(document);
@@ -838,7 +841,7 @@ TEST(QdrBinarySceneCodecTests, AbsentParentingOffsetsDefaultToIdentityForOldAndN
     const auto read = QdrDocumentReader::deserialize_project_document(bytes);
     ASSERT_TRUE(read.ok) << read.message;
     EXPECT_EQ(read.document.scene().transform(100u)->parenting_offset.values, QMat4{}.values);
-    EXPECT_EQ(to_glm(read.document.scene().transform(100u)->position), to_glm(transform.position));
+    EXPECT_EQ(to_glm(read.document.scene().transform(100u)->location), to_glm(transform.location));
     EXPECT_TRUE(QdrDocumentReader::deserialize_project_dependencies(bytes).ok);
   }
 }
@@ -1242,14 +1245,14 @@ TEST(QdrBinarySceneCodecTests,
             7u);
   ASSERT_TRUE(document.scene().set_transform(
       entity, TransformComponent{
-                  .position = {3.0f, 4.0f, 5.0f},
+                  .location = {3.0f, 4.0f, 5.0f},
                   .rotation_euler = {0.1f, 0.2f, 0.3f},
                   .scale = {1.5f, 2.0f, 2.5f},
                   .custom_pivot = true,
               }));
   ASSERT_TRUE(document.scene().set_visible(entity, false));
+  ASSERT_TRUE(document.scene().set_selectability(entity, false));
   ASSERT_TRUE(document.scene().set_selectable(entity, false));
-  ASSERT_TRUE(document.scene().set_locked(entity, true));
   ASSERT_TRUE(document.scene().set_modeling_object(
       entity, ModelingObjectComponent{
                   .object_id = 42,
@@ -1288,9 +1291,9 @@ TEST(QdrBinarySceneCodecTests,
   ASSERT_TRUE(read.ok) << read.message;
   const SceneDocument &scene = read.document.scene();
   ASSERT_NE(scene.transform(entity), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 3.0f);
-  EXPECT_FLOAT_EQ(scene.transform(entity)->position.y, 4.0f);
-  EXPECT_FLOAT_EQ(scene.transform(entity)->position.z, 5.0f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->location.x, 3.0f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->location.y, 4.0f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->location.z, 5.0f);
   EXPECT_FLOAT_EQ(scene.transform(entity)->rotation_euler.x, 0.1f);
   EXPECT_FLOAT_EQ(scene.transform(entity)->rotation_euler.y, 0.2f);
   EXPECT_FLOAT_EQ(scene.transform(entity)->rotation_euler.z, 0.3f);
@@ -1300,7 +1303,7 @@ TEST(QdrBinarySceneCodecTests,
   EXPECT_TRUE(scene.transform(entity)->custom_pivot);
   EXPECT_FALSE(scene.visibility(entity)->visible);
   EXPECT_FALSE(scene.visibility(entity)->selectable);
-  EXPECT_TRUE(scene.lock(entity)->locked);
+  EXPECT_FALSE(scene.selectable(entity)->selectable);
   EXPECT_EQ(scene.modeling_object(entity)->object_id, 42);
   EXPECT_EQ(scene.modeling_object(entity)->material_slot, 3u);
   EXPECT_TRUE(scene.modeling_object(entity)->sdk_owned);
@@ -1391,6 +1394,69 @@ TEST(QdrBinarySceneCodecTests,
 }
 
 TEST(QdrBinarySceneCodecTests,
+     LegacySelectionFlagsRemainIndependentAcrossStateRestoreAndRoundTrip) {
+  for (const bool legacy_locked : {false, true}) {
+    for (const bool legacy_selection_eligible : {false, true}) {
+      SCOPED_TRACE(::testing::Message()
+                   << "locked=" << legacy_locked
+                   << ", visibility.selectable=" << legacy_selection_eligible);
+      auto read = QdrDocumentReader::deserialize_project_document(
+          legacy_object_record_fixture(77u, 77u, true, legacy_locked,
+                                       legacy_selection_eligible));
+      ASSERT_TRUE(read.ok) << read.message;
+      SceneDocument &scene = read.document.scene();
+      constexpr EntityId kEntity = 100u;
+      ASSERT_NE(scene.selectable(kEntity), nullptr);
+      ASSERT_NE(scene.visibility(kEntity), nullptr);
+      EXPECT_EQ(scene.selectable(kEntity)->selectable, !legacy_locked);
+      EXPECT_EQ(scene.visibility(kEntity)->selectable, legacy_selection_eligible);
+      EXPECT_EQ(scene_entity_selectable_for_user_selection(scene, kEntity),
+                !legacy_locked && legacy_selection_eligible);
+
+      const auto captured = capture_scene_entity_state(scene, kEntity);
+      ASSERT_TRUE(captured.has_value());
+      ASSERT_TRUE(scene.set_selectable(kEntity, legacy_locked));
+      ASSERT_TRUE(scene.set_selectability(kEntity, !legacy_selection_eligible));
+      ASSERT_TRUE(apply_scene_entity_state(scene, kEntity, *captured));
+      EXPECT_EQ(scene.selectable(kEntity)->selectable, !legacy_locked);
+      EXPECT_EQ(scene.visibility(kEntity)->selectable, legacy_selection_eligible);
+
+      const auto parsed = parse_written_scene(read.document);
+      ASSERT_TRUE(parsed.ok) << parsed.message;
+      const auto metadata = std::ranges::find_if(
+          parsed.chunks, [](const quader_io::QdrBinaryChunk &chunk) {
+            return chunk.type == static_cast<std::uint32_t>(
+                                     quader_io::QdrBinaryChunkType::SceneMetadata);
+          });
+      ASSERT_NE(metadata, parsed.chunks.end());
+      const auto *payload = qdr_fb::GetScenePayload(metadata->bytes().data());
+      ASSERT_NE(payload->entities(), nullptr);
+      ASSERT_EQ(payload->entities()->size(), 1u);
+      const auto *stored = payload->entities()->Get(0u);
+      ASSERT_NE(stored->lock(), nullptr);
+      ASSERT_NE(stored->visibility(), nullptr);
+      EXPECT_EQ(stored->lock()->locked(), legacy_locked);
+      EXPECT_EQ(stored->visibility()->selectable(), legacy_selection_eligible);
+
+      const auto bytes = quader_io::build_qdr_binary_container(
+          test_uuid(), copy_chunks(parsed));
+      const auto reread = QdrDocumentReader::deserialize_project_document(bytes);
+      ASSERT_TRUE(reread.ok) << reread.message;
+      ASSERT_NE(reread.document.scene().selectable(kEntity), nullptr);
+      ASSERT_NE(reread.document.scene().visibility(kEntity), nullptr);
+      EXPECT_EQ(reread.document.scene().selectable(kEntity)->selectable,
+                !legacy_locked);
+      EXPECT_EQ(reread.document.scene().visibility(kEntity)->selectable,
+                legacy_selection_eligible);
+      EXPECT_EQ(scene_entity_selectable_for_user_selection(
+                    reread.document.scene(), kEntity),
+                !legacy_locked && legacy_selection_eligible);
+      EXPECT_TRUE(QdrDocumentReader::deserialize_project_dependencies(bytes).ok);
+    }
+  }
+}
+
+TEST(QdrBinarySceneCodecTests,
      LegacyObjectRecordOnlySuppliesMissingIdentityWhileEntityStateWins) {
   const std::vector<std::byte> fixture =
       historical_legacy_object_record_fixture();
@@ -1410,12 +1476,12 @@ TEST(QdrBinarySceneCodecTests,
   ASSERT_NE(visibility, nullptr);
   EXPECT_TRUE(visibility->visible);
   EXPECT_FALSE(visibility->selectable);
-  ASSERT_NE(read.document.scene().lock(100u), nullptr);
-  EXPECT_TRUE(read.document.scene().lock(100u)->locked);
+  ASSERT_NE(read.document.scene().selectable(100u), nullptr);
+  EXPECT_FALSE(read.document.scene().selectable(100u)->selectable);
   ASSERT_NE(read.document.scene().transform(100u), nullptr);
-  EXPECT_FLOAT_EQ(read.document.scene().transform(100u)->position.x, 3.0f);
-  EXPECT_FLOAT_EQ(read.document.scene().transform(100u)->position.y, 4.0f);
-  EXPECT_FLOAT_EQ(read.document.scene().transform(100u)->position.z, 5.0f);
+  EXPECT_FLOAT_EQ(read.document.scene().transform(100u)->location.x, 3.0f);
+  EXPECT_FLOAT_EQ(read.document.scene().transform(100u)->location.y, 4.0f);
+  EXPECT_FLOAT_EQ(read.document.scene().transform(100u)->location.z, 5.0f);
   EXPECT_TRUE(read.document.scene().transform(100u)->custom_pivot);
   EXPECT_EQ(read.document.scene().name(100u)->name, "Canonical Entity");
 }
@@ -1818,7 +1884,7 @@ TEST(QdrBinarySceneCodecTests,
                .solidify_resolution = 24,
                .solidify_radius = 1.75F}));
     ASSERT_TRUE(document.scene().set_transform(
-        200u, TransformComponent{.position = {10.0f, -2.0f, 8.0f},
+        200u, TransformComponent{.location = {10.0f, -2.0f, 8.0f},
                                   .scale = {2.0f, 1.0f, 3.0f}}));
     ASSERT_TRUE(document.scene().set_modeling_object(
         200u, {.object_id = 81, .sdk_owned = true,
@@ -1840,7 +1906,7 @@ TEST(QdrBinarySceneCodecTests,
                     1.75F);
     EXPECT_EQ(read.document.scene().uuid(200u), document.scene().uuid(200u));
     EXPECT_EQ(read.document.scene().modeling_object(200u)->object_id, 81);
-    EXPECT_FLOAT_EQ(read.document.scene().transform(200u)->position.x, 10.0f);
+    EXPECT_FLOAT_EQ(read.document.scene().transform(200u)->location.x, 10.0f);
     EXPECT_FLOAT_EQ(read.document.scene().transform(200u)->scale.z, 3.0f);
     const CurveAsset *curve = read.document.assets().curve(20u);
     ASSERT_NE(curve, nullptr);
@@ -2883,9 +2949,9 @@ TEST(QdrBinarySceneCodecTests,
   EXPECT_TRUE(decoded->locked);
   EXPECT_EQ(read.document.scene().entity_layer(100u), layer);
   EXPECT_FALSE(read.document.scene().is_effectively_visible(100u));
-  ASSERT_NE(read.document.scene().lock(100u), nullptr);
-  EXPECT_FALSE(read.document.scene().lock(100u)->locked);
-  EXPECT_TRUE(read.document.scene().is_effectively_locked(100u));
+  ASSERT_NE(read.document.scene().selectable(100u), nullptr);
+  EXPECT_TRUE(read.document.scene().selectable(100u)->selectable);
+  EXPECT_FALSE(read.document.scene().is_effectively_selectable(100u));
 }
 
 TEST(QdrBinarySceneCodecTests, LayerEncodingIsDeterministicByLayerId) {
@@ -2929,7 +2995,7 @@ TEST(QdrBinarySceneCodecTests,
   ASSERT_NE(occurrence, kInvalidEntityId);
   scene.set_transform(
       occurrence,
-      TransformComponent{.position = {3.0f, 2.0f, 1.0f},
+      TransformComponent{.location = {3.0f, 2.0f, 1.0f},
                          .rotation_euler = {0.0f, 0.5f, 0.0f},
                          .scale = {2.0f, 2.0f, 2.0f}});
   ASSERT_TRUE(scene.set_instance_occurrence(
@@ -2960,7 +3026,7 @@ TEST(QdrBinarySceneCodecTests,
   EXPECT_EQ(read.document.scene().kind(occurrence), EntityKind::Instance);
   ASSERT_NE(read.document.scene().transform(occurrence), nullptr);
   EXPECT_FLOAT_EQ(
-      read.document.scene().transform(occurrence)->position.x, 3.0f);
+      read.document.scene().transform(occurrence)->location.x, 3.0f);
   for (const EntityId entity : std::array<EntityId, 2>{100u, member}) {
     ASSERT_NE(read.document.scene().texture_mapping(entity), nullptr);
     EXPECT_EQ(*read.document.scene().texture_mapping(entity), member_mapping);

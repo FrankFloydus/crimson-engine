@@ -95,7 +95,7 @@ struct FixtureCounts {
   std::uint64_t mesh_entities = 0;
   std::uint64_t light_entities = 0;
   std::uint64_t empty_entities = 0;
-  std::uint64_t locked_entities = 0;
+  std::uint64_t authored_unselectable_entities = 0;
   std::uint64_t unselectable_entities = 0;
   std::uint64_t initially_selected_entities = 0;
   std::uint64_t select_all_entities = 0;
@@ -520,8 +520,8 @@ FixtureCounts analyze_fixture(const quader::SceneContentDocument &document) {
     case quader::EntityKind::Generic:
       break;
     }
-    if (scene.is_effectively_locked(entity)) {
-      ++counts.locked_entities;
+    if (!scene.is_effectively_selectable(entity)) {
+      ++counts.authored_unselectable_entities;
     }
     const quader::VisibilityComponent *visibility = scene.visibility(entity);
     const bool selectable = visibility == nullptr || visibility->selectable;
@@ -532,7 +532,7 @@ FixtureCounts analyze_fixture(const quader::SceneContentDocument &document) {
       referenced_meshes.insert(mesh->mesh);
     }
     const bool included_in_select_all =
-        !scene.is_effectively_locked(entity) &&
+        scene.is_effectively_selectable(entity) &&
         selectable;
     if (included_in_select_all) {
       counts.selectable_entities.push_back(entity);
@@ -567,9 +567,9 @@ bool same_float_bits(float left, float right) {
 
 bool same_transform(const quader::TransformComponent &left,
                     const quader::TransformComponent &right) {
-  return same_float_bits(left.position.x, right.position.x) &&
-         same_float_bits(left.position.y, right.position.y) &&
-         same_float_bits(left.position.z, right.position.z) &&
+  return same_float_bits(left.location.x, right.location.x) &&
+         same_float_bits(left.location.y, right.location.y) &&
+         same_float_bits(left.location.z, right.location.z) &&
          same_float_bits(left.rotation_euler.x, right.rotation_euler.x) &&
          same_float_bits(left.rotation_euler.y, right.rotation_euler.y) &&
          same_float_bits(left.rotation_euler.z, right.rotation_euler.z) &&
@@ -621,7 +621,7 @@ transform_checksum(const std::vector<EntityTransformSnapshot> &snapshots) {
     if (!snapshot.present) {
       continue;
     }
-    hash_vec3(checksum, snapshot.transform.position);
+    hash_vec3(checksum, snapshot.transform.location);
     hash_vec3(checksum, snapshot.transform.rotation_euler);
     hash_vec3(checksum, snapshot.transform.scale);
     hash_u64(checksum, snapshot.transform.custom_pivot ? 1U : 0U);
@@ -852,6 +852,12 @@ void hash_overlay_mesh(std::uint64_t &checksum,
 
 void hash_overlay_mesh(std::uint64_t &checksum,
                        const quader::OverlayPointMesh &mesh) {
+  hash_u64(checksum, mesh.vertices.size());
+  hash_u64(checksum, mesh.indices.size());
+}
+
+void hash_overlay_mesh(std::uint64_t &checksum,
+                       const quader::OverlayIconMesh &mesh) {
   hash_u64(checksum, mesh.vertices.size());
   hash_u64(checksum, mesh.indices.size());
 }
@@ -1246,7 +1252,8 @@ std::string report_json(const BenchmarkReport &report) {
          << ",\n";
   stream << "      \"emptyEntities\": " << report.fixture.empty_entities
          << ",\n";
-  stream << "      \"lockedEntities\": " << report.fixture.locked_entities
+  stream << "      \"authoredUnselectableEntities\": "
+         << report.fixture.authored_unselectable_entities
          << ",\n";
   stream << "      \"unselectableEntities\": "
          << report.fixture.unselectable_entities << ",\n";

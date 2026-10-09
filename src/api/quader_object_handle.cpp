@@ -109,11 +109,11 @@ QuaderApiVoidResult QuaderObjectHandle::set_visible(bool visible) {
   return api_->scene().set_visible(ref_.entity, visible);
 }
 
-QuaderApiVoidResult QuaderObjectHandle::set_locked(bool locked) {
+QuaderApiVoidResult QuaderObjectHandle::set_selectable(bool selectable) {
   if (!bound_to_active_scene()) {
     return unavailable_status();
   }
-  return api_->scene().set_locked(ref_.entity, locked);
+  return api_->scene().set_selectable(ref_.entity, selectable);
 }
 
 QuaderApiVoidResult QuaderObjectHandle::move(QVec3 delta) {

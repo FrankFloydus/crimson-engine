@@ -50,6 +50,8 @@ struct MeshRenderableProxy {
     bool owns_mesh_buffers = true;
     bool owns_material_instances = true;
     bool dynamic_geometry = false;
+    /// A singleton instance uses the entity for reflected winding and normals.
+    bool entity_transform_instance = false;
     std::uint32_t vertex_count = 0u;
     std::uint32_t index_count = 0u;
     filament::VertexBuffer *vertex_buffer = nullptr;
@@ -77,6 +79,7 @@ struct MeshRenderableProxy {
       owns_material_instances =
           std::exchange(other.owns_material_instances, true);
       dynamic_geometry = std::exchange(other.dynamic_geometry, false);
+      entity_transform_instance = std::exchange(other.entity_transform_instance, false);
       vertex_count = std::exchange(other.vertex_count, 0u);
       index_count = std::exchange(other.index_count, 0u);
       vertex_buffer = std::exchange(other.vertex_buffer, nullptr);

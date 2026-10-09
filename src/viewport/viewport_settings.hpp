@@ -139,6 +139,7 @@ enum class ViewportBoolSettingId {
     ShowCollisions,
     ShowDimensions,
     WireframeOnShaded,
+    BackfaceCulling,
     Count,
 };
 

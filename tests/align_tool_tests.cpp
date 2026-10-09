@@ -37,7 +37,7 @@ struct AlignHarness final {
   std::array<QuaderModelingObjectRef, 3> objects;
 
   void seed() {
-    constexpr std::array<QVec3, 3> kPositions{{{2, 3, 1}, {5, 9, 7}, {22, 15, 11}}};
+    constexpr std::array<QVec3, 3> kLocations{{{2, 3, 1}, {5, 9, 7}, {22, 15, 11}}};
     for (std::size_t index = 0; index < objects.size(); ++index) {
       const auto created = editor.modeling().create_box(
           {.min = {-1, -1, -1}, .max = {1, 1, 1}},
@@ -45,7 +45,7 @@ struct AlignHarness final {
       ASSERT_TRUE(created.ok()) << created.error_message();
       objects[index] = created.value();
       ASSERT_TRUE(editor.scene().set_transform(
-          objects[index].entity, {.position = kPositions[index]}).ok());
+          objects[index].entity, {.location = kLocations[index]}).ok());
     }
     ASSERT_TRUE(editor.selection().select_objects(
         {objects[0].entity, objects[1].entity, objects[2].entity},
@@ -132,8 +132,8 @@ TEST(AlignToolTests, UndoThenAnotherAxisDoesNotReplayThePreviousAction) {
   ASSERT_TRUE(align.set_alignment(MeshArrangementAxis::Y, MeshAlignmentMode::Center).ok);
   for (std::size_t index = 0; index < 3u; ++index) {
     const auto current = *harness.session.scene().transform(harness.objects[index].entity);
-    EXPECT_FLOAT_EQ(current.position.x, before[index].position.x);
-    EXPECT_FLOAT_EQ(current.position.z, before[index].position.z);
+    EXPECT_FLOAT_EQ(current.location.x, before[index].location.x);
+    EXPECT_FLOAT_EQ(current.location.z, before[index].location.z);
     EXPECT_NEAR(bounds_center(harness.bounds(index)).y, 9.0f, kAlignEpsilon);
   }
   EXPECT_EQ(harness.session.history().undo_count(), 1u);
@@ -179,7 +179,7 @@ TEST(AlignToolTests, ValidSelectionChangesRetainActionsAndInvalidTargetsRetireTh
   }
   EXPECT_EQ(align.work_counters().availability_query_count, availability_queries);
   EXPECT_EQ(align.work_counters().context_validation_count, context_validations);
-  ASSERT_TRUE(harness.session.scene().set_locked(harness.objects[1].entity, true));
+  ASSERT_TRUE(harness.session.scene().set_selectable(harness.objects[1].entity, false));
   EXPECT_GT(align.settings_revision(), revision);
   EXPECT_FALSE(align.can_activate());
   EXPECT_FALSE(align.active());
@@ -190,7 +190,7 @@ TEST(AlignToolTests, ValidSelectionChangesRetainActionsAndInvalidTargetsRetireTh
   EXPECT_TRUE(harness.editor.tools().settings_for_pane(ViewportPaneId::Perspective).tool_id.empty());
   EXPECT_TRUE(harness.session.native_tools().refresh().changed);
   EXPECT_FALSE(harness.session.native_tools().refresh().changed);
-  ASSERT_TRUE(harness.session.scene().set_locked(harness.objects[1].entity, false));
+  ASSERT_TRUE(harness.session.scene().set_selectable(harness.objects[1].entity, true));
   ASSERT_TRUE(harness.session.scene().set_visible(harness.objects[1].entity, false));
   EXPECT_FALSE(align.set_alignment(MeshArrangementAxis::X, MeshAlignmentMode::Minimum).ok);
   expect_same_transforms(harness, accepted);
@@ -320,7 +320,7 @@ TEST(AlignToolTests, UnusableContextsRetireAllPublicSettingsWithoutChangingAutho
       ASSERT_TRUE(harness.session.scene().set_visible(harness.objects[0].entity, false));
       break;
     case ContextChange::LockedRoot:
-      ASSERT_TRUE(harness.session.scene().set_locked(harness.objects[0].entity, true));
+      ASSERT_TRUE(harness.session.scene().set_selectable(harness.objects[0].entity, false));
       break;
     case ContextChange::HiddenLayer:
     case ContextChange::LockedLayer: {
@@ -452,7 +452,7 @@ TEST(AlignToolTests, InvalidIncomingTargetsDoNotSettleAnotherNativeOperation) {
   AlignHarness harness;
   ASSERT_NO_FATAL_FAILURE(harness.seed());
   ASSERT_TRUE(harness.editor.tools().activate(ViewportToolId::LinearArray).ok());
-  ASSERT_TRUE(harness.session.scene().set_locked(harness.objects[1].entity, true));
+  ASSERT_TRUE(harness.session.scene().set_selectable(harness.objects[1].entity, false));
   const auto before = harness.transforms();
   const auto history_count = harness.session.history().undo_count();
   const auto rejected = harness.editor.tools().activate(ViewportToolId::Align);
@@ -508,7 +508,7 @@ TEST(AlignToolTests, SnappingFallbackPreservesEqualSpacingAndTheNextActionClears
   AlignHarness harness;
   ASSERT_NO_FATAL_FAILURE(harness.seed());
   ASSERT_TRUE(harness.editor.scene().set_transform(
-      harness.objects[1].entity, {.position = {5.01f, 9, 7}}).ok());
+      harness.objects[1].entity, {.location = {5.01f, 9, 7}}).ok());
   harness.session.history().clear();
   harness.session.mark_clean();
   ASSERT_TRUE(harness.editor.tools().activate(ViewportToolId::Align).ok());
@@ -536,7 +536,7 @@ TEST(AlignToolTests, ContextRetirementClearsSnappingResultAndRetainsFutureDefaul
   AlignHarness harness;
   ASSERT_NO_FATAL_FAILURE(harness.seed());
   ASSERT_TRUE(harness.editor.scene().set_transform(
-      harness.objects[1].entity, {.position = {5.01f, 9, 7}}).ok());
+      harness.objects[1].entity, {.location = {5.01f, 9, 7}}).ok());
   harness.session.history().clear();
   ASSERT_TRUE(harness.editor.tools().activate(ViewportToolId::Align).ok());
   auto &align = harness.session.align_tool();
@@ -593,9 +593,9 @@ TEST(AlignToolTests, MixedInstanceMeshAndLightActionsKeepInstanceDefinitionsUnch
   const auto instance = harness.session.scene().primary_selection();
   ASSERT_NE(harness.session.scene().instance_occurrence(instance), nullptr);
   const auto occurrence = *harness.session.scene().instance_occurrence(instance);
-  ASSERT_TRUE(harness.editor.scene().set_transform(instance, {.position = {5, 0, 0}}).ok());
+  ASSERT_TRUE(harness.editor.scene().set_transform(instance, {.location = {5, 0, 0}}).ok());
   const auto light = harness.editor.scene().create_point_light(
-      {.name = "Align light", .transform = {.position = {14, 0, 0}}});
+      {.name = "Align light", .transform = {.location = {14, 0, 0}}});
   ASSERT_TRUE(light.ok()) << light.error_message();
   ASSERT_TRUE(harness.editor.selection().select_objects(
       {harness.objects[2].entity, instance, light.value().id}, light.value().id).ok());

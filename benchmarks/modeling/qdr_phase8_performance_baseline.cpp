@@ -334,7 +334,7 @@ NativeSceneFixture make_native_scene(int object_count, int grid_segments) {
         "Phase 8 Mesh " + std::to_string(index + 1), quader::EntityKind::Mesh);
     fixture.document.set_mesh(entity, quader::MeshComponent{.mesh = mesh_id});
     fixture.document.set_transform(entity, quader::TransformComponent{
-                                               .position = {
+                                               .location = {
                                                    static_cast<float>(index % columns) *
                                                        3.0F,
                                                    0.0F,
@@ -387,7 +387,7 @@ void translate_entity_for_iteration(quader::SceneDocument &document,
                                     quader::EntityId entity, int iteration) {
   document.set_transform(
       entity, quader::TransformComponent{
-                  .position = {0.01F * static_cast<float>(iteration + 1), 0.0F,
+                  .location = {0.01F * static_cast<float>(iteration + 1), 0.0F,
                                0.02F * static_cast<float>(iteration + 1)},
               });
 }

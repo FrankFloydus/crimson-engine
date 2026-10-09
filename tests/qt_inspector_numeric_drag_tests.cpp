@@ -42,6 +42,7 @@
 #include <QPixmap>
 #include <QPointer>
 #include <QStyle>
+#include <QSignalBlocker>
 #include <QTimer>
 #include <QToolButton>
 #include <QTreeWidget>
@@ -94,15 +95,15 @@ struct InspectorTransformRuntime {
     ASSERT_TRUE(created.ok()) << created.error_message();
     entity = created.value().entity;
     ASSERT_TRUE(editor.scene()
-                    .set_transform(entity, {.position = {1.0f, 0.5f, -4.5f}})
+                    .set_transform(entity, {.location = {1.0f, 0.5f, -4.5f}})
                     .ok());
     ASSERT_TRUE(editor.selection().select_object(created.value()).ok());
   }
 
-  void expect_position_x(double expected) {
+  void expect_location_x(double expected) {
     const auto snapshot = editor.query().entity(entity);
     ASSERT_TRUE(snapshot.has_value());
-    EXPECT_NEAR(snapshot->transform.position.x, expected, 0.0001);
+    EXPECT_NEAR(snapshot->transform.location.x, expected, 0.0001);
   }
 };
 
@@ -184,7 +185,7 @@ void export_inspector_image(InspectorPanel &panel, const QString &name) {
 
 QtColorSwatchButton *wireframe_color_button(InspectorPanel &panel) {
   return dynamic_cast<QtColorSwatchButton *>(panel.findChild<QPushButton *>(
-      QStringLiteral("inspector.shading.wireframe_color")));
+      QStringLiteral("inspector.viewport.wireframe_color")));
 }
 
 QRect relative_geometry(const QWidget &widget, const QWidget &ancestor) {
@@ -218,9 +219,9 @@ protected:
     QCoreApplication::processEvents();
   }
 
-  QDoubleSpinBox *position_x(InspectorPanel &panel) {
+  QDoubleSpinBox *location_x(InspectorPanel &panel) {
     return panel.findChild<QDoubleSpinBox *>(
-        QStringLiteral("inspector.transform.position.x"));
+        QStringLiteral("inspector.transform.location.x"));
   }
 
   QDoubleSpinBox *scale_axis(InspectorPanel &panel, const char *axis) {
@@ -273,7 +274,7 @@ TEST_F(QtInspectorNumericDragTests,
   EXPECT_TRUE(tree->isHeaderHidden());
   const auto revision = runtime.session.scene().revision();
   const auto undo_count = runtime.session.history().undo_count();
-  QPointer<QDoubleSpinBox> original_field(position_x(panel));
+  QPointer<QDoubleSpinBox> original_field(location_x(panel));
   for (const auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
     panel.setLayoutDirection(direction);
     for (const float scale : {1.0F, 2.0F, 1.0F}) {
@@ -302,14 +303,274 @@ TEST_F(QtInspectorNumericDragTests,
                  Qt::LeftButton, Qt::NoButton);
       settle_inspector_layout(panel);
       EXPECT_EQ(tree->columnWidth(0), before + change);
-      EXPECT_EQ(position_x(panel), original_field.data());
+      EXPECT_EQ(location_x(panel), original_field.data());
       panel.refresh(runtime.context);
       EXPECT_EQ(tree->columnWidth(0), before + change);
     }
   }
   EXPECT_EQ(runtime.session.scene().revision(), revision);
   EXPECT_EQ(runtime.session.history().undo_count(), undo_count);
-  runtime.expect_position_x(1.0);
+  runtime.expect_location_x(1.0);
+  panel.abandon_runtime();
+}
+
+TEST_F(QtInspectorNumericDragTests,
+       MeshPropertiesUsePositiveVisibilityAndLocationSections) {
+  InspectorTransformRuntime runtime;
+  runtime.initialize_box();
+  InspectorPanel panel;
+  show(panel, runtime);
+  const auto refresh = [&] {
+    panel.refresh(runtime.context);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    settle_inspector_layout(panel);
+  };
+  auto *tree = panel.findChild<QTreeWidget *>("inspector.tree");
+  ASSERT_NE(tree, nullptr);
+  ASSERT_GE(tree->topLevelItemCount(), 3);
+  EXPECT_EQ(tree->topLevelItem(0)->data(0, Qt::UserRole).toString(), "general");
+  EXPECT_EQ(tree->topLevelItem(0)->childCount(), 1);
+  EXPECT_EQ(tree->topLevelItem(0)->child(0)->text(0), "Name");
+  EXPECT_EQ(tree->topLevelItem(1)->data(0, Qt::UserRole).toString(), "visibility");
+  EXPECT_EQ(tree->topLevelItem(1)->child(0)->text(0), "Visible");
+  EXPECT_EQ(tree->topLevelItem(1)->child(1)->text(0), "Selectable");
+  EXPECT_EQ(tree->topLevelItem(2)->child(0)->text(0), "Location");
+  auto *viewport_header = panel.findChild<QToolButton *>("inspector.viewport.header");
+  ASSERT_NE(viewport_header, nullptr);
+  EXPECT_EQ(viewport_header->text(), "Viewport");
+  auto *wireframe = panel.findChild<QCheckBox *>("inspector.viewport.wireframe_on_shaded");
+  ASSERT_NE(wireframe, nullptr);
+  EXPECT_EQ(wireframe->parentWidget()->accessibleName(), "Show Wireframe");
+  EXPECT_EQ(panel.findChild<QCheckBox *>("inspector.lighting.double_sided"), nullptr);
+  EXPECT_EQ(wireframe_color_button(panel), nullptr);
+  EXPECT_EQ(panel.findChild<QWidget *>("inspector.viewport.wireframe_color.container"), nullptr);
+
+  const auto visible = [&] {
+    return panel.findChild<QCheckBox *>("inspector.visibility.visible");
+  };
+  const auto selectable = [&] {
+    return panel.findChild<QCheckBox *>("inspector.visibility.selectable");
+  };
+  ASSERT_NE(visible(), nullptr);
+  ASSERT_NE(selectable(), nullptr);
+  EXPECT_TRUE(visible()->isChecked());
+  EXPECT_TRUE(selectable()->isChecked());
+  const auto history_before = runtime.session.history().undo_count();
+  visible()->click();
+  refresh();
+  EXPECT_FALSE(runtime.session.scene().visibility(runtime.entity)->visible);
+  ASSERT_NE(visible(), nullptr);
+  EXPECT_FALSE(visible()->isChecked());
+  ASSERT_NE(selectable(), nullptr);
+  selectable()->click();
+  refresh();
+  EXPECT_FALSE(runtime.editor.query().entity(runtime.entity)->selectable);
+  // Removing viewport selectability also cleans the Object selection; Undo
+  // restores the same captured selection together with the authored property.
+  EXPECT_EQ(selectable(), nullptr);
+  EXPECT_EQ(runtime.session.history().undo_count(), history_before + 2u);
+  ASSERT_TRUE(runtime.editor.history().undo().ok());
+  ASSERT_TRUE(runtime.editor.history().undo().ok());
+  refresh();
+  ASSERT_NE(visible(), nullptr);
+  ASSERT_NE(selectable(), nullptr);
+  EXPECT_TRUE(visible()->isChecked());
+  EXPECT_TRUE(selectable()->isChecked());
+
+  const auto second = runtime.editor.modeling().create_box(
+      {.min = {3, -1, -1}, .max = {5, 1, 1}}, "Mixed visibility");
+  ASSERT_TRUE(second.ok());
+  ASSERT_TRUE(runtime.editor.scene().set_visible(second.value().entity, false).ok());
+  ASSERT_TRUE(runtime.editor.scene().set_selectable(second.value().entity, false).ok());
+  ASSERT_TRUE(runtime.editor.selection().select_objects_for_inspection(
+      {runtime.entity, second.value().entity}, runtime.entity).ok());
+  refresh();
+  ASSERT_NE(visible(), nullptr);
+  ASSERT_NE(selectable(), nullptr);
+  EXPECT_FALSE(visible()->isChecked());
+  EXPECT_FALSE(selectable()->isChecked());
+  EXPECT_NE(panel.findChild<QLabel *>("inspector.visibility.visible.mixed"), nullptr);
+  EXPECT_NE(panel.findChild<QLabel *>("inspector.visibility.selectable.mixed"), nullptr);
+  const auto mixed_history = runtime.session.history().undo_count();
+  visible()->click();
+  refresh();
+  selectable()->click();
+  refresh();
+  EXPECT_TRUE(runtime.editor.query().entity(runtime.entity)->selectable);
+  EXPECT_TRUE(runtime.editor.query().entity(second.value().entity)->selectable);
+  EXPECT_TRUE(runtime.session.scene().visibility(runtime.entity)->visible);
+  EXPECT_TRUE(runtime.session.scene().visibility(second.value().entity)->visible);
+  EXPECT_EQ(runtime.session.history().undo_count(), mixed_history + 2u);
+  ASSERT_TRUE(runtime.editor.history().undo().ok());
+  EXPECT_TRUE(runtime.editor.query().entity(runtime.entity)->selectable);
+  EXPECT_FALSE(runtime.editor.query().entity(second.value().entity)->selectable);
+  panel.abandon_runtime();
+}
+
+TEST_F(QtInspectorNumericDragTests,
+       EditModeKeepsMeshPropertiesEditableWithoutComponentSelection) {
+  apply_qt_obsidian_application_theme(QApplication::style()->standardPalette());
+  QtUiScaleApplicationController scale_controller(application());
+  InspectorTransformRuntime runtime;
+  runtime.initialize_box();
+  const auto object = runtime.editor.query().modeling_object_for_entity(runtime.entity);
+  ASSERT_TRUE(object.has_value());
+  const auto original_mesh = runtime.editor.query().compiled_object_mesh(*object);
+  ASSERT_TRUE(original_mesh.has_value());
+  ASSERT_TRUE(runtime.editor.mode().set(QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(runtime.editor.selection().clear().ok());
+  InspectorPanel panel;
+  scale_controller.add_change_listener(panel, [&](const QtUiScaleMetrics &metrics) {
+    panel.apply_ui_scale(metrics);
+  });
+  show(panel, runtime);
+  const auto refresh = [&] {
+    panel.refresh(runtime.context);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    settle_inspector_layout(panel);
+  };
+  ASSERT_EQ(runtime.editor.selection().summary().selected_vertex_count, 0u);
+  const auto mode_generation = runtime.editor.mode().generation();
+  auto *name = panel.findChild<QLineEdit *>("inspector.general.name");
+  ASSERT_NE(name, nullptr);
+  name->setText("Edited mesh properties");
+  ASSERT_TRUE(QMetaObject::invokeMethod(name, "editingFinished", Qt::DirectConnection));
+  refresh();
+  EXPECT_EQ(runtime.session.scene().name(runtime.entity)->name, "Edited mesh properties");
+  const auto edit_axis = [&](const char *id, double value) {
+    auto *field = panel.findChild<QDoubleSpinBox *>(id);
+    ASSERT_NE(field, nullptr);
+    EXPECT_TRUE(field->isEnabled());
+    const auto history_before = runtime.session.history().undo_count();
+    field->setValue(value);
+    ASSERT_TRUE(QMetaObject::invokeMethod(field, "editingFinished", Qt::DirectConnection));
+    refresh();
+    EXPECT_EQ(runtime.session.history().undo_count(), history_before + 1u);
+  };
+  edit_axis("inspector.transform.location.x", 5.0);
+  runtime.expect_location_x(5.0);
+  edit_axis("inspector.transform.rotation.z", 90.0);
+  EXPECT_NEAR(runtime.session.scene().transform(runtime.entity)->rotation_euler.z,
+              1.5707963F, 0.0001F);
+  edit_axis("inspector.transform.scale.x", 2.0);
+  EXPECT_FLOAT_EQ(runtime.session.scene().transform(runtime.entity)->scale.x, 2.0F);
+  const auto transformed_mesh = runtime.editor.query().compiled_object_mesh(*object);
+  ASSERT_TRUE(transformed_mesh.has_value());
+  ASSERT_EQ(transformed_mesh->vertices.size(), original_mesh->vertices.size());
+  for (std::size_t index = 0; index < original_mesh->vertices.size(); ++index) {
+    const auto &before = original_mesh->vertices[index].position;
+    const auto &after = transformed_mesh->vertices[index].position;
+    EXPECT_FLOAT_EQ(after.x, before.x);
+    EXPECT_FLOAT_EQ(after.y, before.y);
+    EXPECT_FLOAT_EQ(after.z, before.z);
+  }
+  for (const char *id : {"inspector.export.editor_only",
+                         "inspector.lighting.cast_shadows",
+                         "inspector.viewport.wireframe_on_shaded",
+                         "inspector.physics.generate_collisions",
+                         "inspector.physics.display_collision",
+                         "inspector.visibility.visible",
+                         "inspector.visibility.selectable"}) {
+    auto *checkbox = panel.findChild<QCheckBox *>(id);
+    ASSERT_NE(checkbox, nullptr) << id;
+    EXPECT_TRUE(checkbox->isEnabled());
+    const bool before = checkbox->isChecked();
+    const auto history_before = runtime.session.history().undo_count();
+    checkbox->click();
+    refresh();
+    checkbox = panel.findChild<QCheckBox *>(id);
+    ASSERT_NE(checkbox, nullptr) << id;
+    EXPECT_EQ(checkbox->isChecked(), !before);
+    EXPECT_EQ(runtime.session.history().undo_count(), history_before + 1u);
+  }
+  EXPECT_FALSE(runtime.editor.query().entity(runtime.entity)->selectable);
+  EXPECT_FALSE(runtime.session.scene().visibility(runtime.entity)->visible);
+  edit_axis("inspector.transform.location.x", 7.0);
+  runtime.expect_location_x(7.0);
+  EXPECT_EQ(runtime.editor.mode().current(), QuaderEditorMode::Edit);
+  EXPECT_EQ(runtime.editor.mode().generation(), mode_generation);
+  ASSERT_EQ(runtime.editor.mode().state().participants.size(), 1u);
+  EXPECT_EQ(runtime.editor.mode().state().participants.front().id, runtime.entity);
+  EXPECT_EQ(runtime.editor.selection().summary().selected_vertex_count, 0u);
+  EXPECT_EQ(runtime.editor.selection().summary().selected_edge_count, 0u);
+  EXPECT_EQ(runtime.editor.selection().summary().selected_face_count, 0u);
+  int cycle = 0;
+  for (const float factor : {1.0F, 2.0F, 1.0F}) {
+    scale_controller.apply_factor(factor);
+    panel.resize(scale_controller.metrics().size(QSize(320, 1200)));
+    refresh();
+    EXPECT_TRUE(location_x(panel)->isEnabled());
+    auto *tree = panel.findChild<QTreeWidget *>("inspector.tree");
+    ASSERT_NE(tree, nullptr);
+    QModelIndex label_index;
+    QTreeWidgetItem *label_item = nullptr;
+    for (int section_index = 0; section_index < tree->topLevelItemCount(); ++section_index) {
+      auto *section = tree->topLevelItem(section_index);
+      for (int row = 0; row < section->childCount(); ++row) {
+        if (section->child(row)->data(0, Qt::UserRole).toString() ==
+            "inspector.viewport.custom_wireframe_color") {
+          label_index = tree->model()->index(
+              row, 0, tree->model()->index(section_index, 0));
+          label_item = section->child(row);
+        }
+      }
+    }
+    ASSERT_TRUE(label_index.isValid());
+    ASSERT_NE(label_item, nullptr);
+    auto *custom = panel.findChild<QCheckBox *>("inspector.viewport.custom_wireframe_color");
+    ASSERT_NE(custom, nullptr);
+    const QImage with_label = tree->viewport()->grab().toImage();
+    const QRect label_rect = tree->visualRect(label_index);
+    ASSERT_TRUE(label_rect.isValid());
+    const QRect checkbox_rect = relative_geometry(*custom, *tree->viewport());
+    EXPECT_GT(checkbox_rect.left(), label_rect.right());
+    QImage without_label;
+    {
+      // Keep the real retained geometry unchanged while isolating label pixels.
+      const QSignalBlocker blocker(tree->model());
+      const QString text = label_item->text(0);
+      label_item->setText(0, QString{});
+      without_label = tree->viewport()->grab().toImage();
+      label_item->setText(0, text);
+    }
+    ASSERT_EQ(with_label.size(), without_label.size());
+    const qreal device_pixel_ratio = with_label.devicePixelRatio();
+    const QRect label_pixels(qRound(label_rect.left() * device_pixel_ratio),
+                             qRound(label_rect.top() * device_pixel_ratio),
+                             qRound(label_rect.width() * device_pixel_ratio),
+                             qRound(label_rect.height() * device_pixel_ratio));
+    bool painted_outside_label = false;
+    QPoint first_outside_pixel(-1, -1);
+    int label_pixel_count = 0;
+    for (int y = label_pixels.top(); y <= label_pixels.bottom(); ++y) {
+      for (int x = 0; x < with_label.width(); ++x) {
+        if (with_label.pixelColor(x, y) != without_label.pixelColor(x, y)) {
+          if (label_pixels.contains(x, y)) {
+            ++label_pixel_count;
+          } else {
+            if (!painted_outside_label) first_outside_pixel = QPoint(x, y);
+            painted_outside_label = true;
+          }
+        }
+      }
+    }
+    EXPECT_GT(label_pixel_count, 0);
+    const auto rectangle_text = [](const QRect &rect) {
+      return QStringLiteral("%1,%2,%3,%4")
+          .arg(rect.x()).arg(rect.y()).arg(rect.width()).arg(rect.height()).toStdString();
+    };
+    EXPECT_FALSE(painted_outside_label)
+        << "The long property label must not paint into the editor column. factor=" << factor
+        << " header=" << tree->header()->sectionViewportPosition(0)
+        << "," << tree->header()->sectionSize(0)
+        << " visual=" << rectangle_text(label_rect)
+        << " checkbox=" << rectangle_text(checkbox_rect)
+        << " field=" << rectangle_text(relative_geometry(*custom->parentWidget(), *tree->viewport()))
+        << " first_outside=" << first_outside_pixel.x() << "," << first_outside_pixel.y()
+        << " dpr=" << device_pixel_ratio;
+    export_inspector_image(panel, QStringLiteral("inspector-edit-empty-components-%1-%2.png")
+        .arg(qRound(factor * 100)).arg(cycle++));
+  }
   panel.abandon_runtime();
 }
 
@@ -334,7 +595,7 @@ TEST_F(QtInspectorNumericDragTests,
   };
   const auto checkbox = [&] {
     return panel.findChild<QCheckBox *>(
-        QStringLiteral("inspector.shading.wireframe_on_shaded"));
+        QStringLiteral("inspector.viewport.wireframe_on_shaded"));
   };
   ASSERT_NE(checkbox(), nullptr);
   EXPECT_TRUE(checkbox()->isChecked());
@@ -359,7 +620,7 @@ TEST_F(QtInspectorNumericDragTests,
   ASSERT_NE(checkbox(), nullptr);
   EXPECT_FALSE(checkbox()->isChecked());
   EXPECT_NE(panel.findChild<QLabel *>(
-      QStringLiteral("inspector.shading.wireframe_on_shaded.mixed")), nullptr);
+      QStringLiteral("inspector.viewport.wireframe_on_shaded.mixed")), nullptr);
   const auto before_batch = runtime.session.history().undo_count();
   checkbox()->click();
   refresh();
@@ -397,7 +658,14 @@ TEST_F(QtInspectorNumericDragTests,
   export_inspector_image(panel, QStringLiteral("inspector-shading-native-contrast.png"));
   ASSERT_TRUE(runtime.editor.mode().set(QuaderEditorMode::Edit).ok());
   refresh();
-  EXPECT_EQ(checkbox(), nullptr);
+  ASSERT_NE(checkbox(), nullptr);
+  EXPECT_TRUE(checkbox()->isEnabled());
+  const auto edit_history = runtime.session.history().undo_count();
+  checkbox()->click();
+  refresh();
+  EXPECT_FALSE(runtime.session.scene().mesh(runtime.entity)->wireframe_on_shaded);
+  EXPECT_FALSE(runtime.session.scene().mesh(second.value().entity)->wireframe_on_shaded);
+  EXPECT_EQ(runtime.session.history().undo_count(), edit_history + 1u);
   panel.abandon_runtime();
 }
 
@@ -413,22 +681,20 @@ TEST_F(QtInspectorNumericDragTests,
     settle_inspector_layout(panel);
   };
   const auto custom = [&] {
-    return panel.findChild<QCheckBox *>("inspector.shading.custom_wireframe_color");
+    return panel.findChild<QCheckBox *>("inspector.viewport.custom_wireframe_color");
   };
   const auto swatch = [&] {
     return wireframe_color_button(panel);
   };
   ASSERT_NE(custom(), nullptr);
-  ASSERT_NE(swatch(), nullptr);
+  EXPECT_EQ(swatch(), nullptr);
   EXPECT_FALSE(custom()->isChecked());
-  EXPECT_FALSE(swatch()->isEnabled());
-  EXPECT_EQ(swatch()->swatch_color(), QColor(Qt::black));
   EXPECT_FALSE(runtime.session.scene().mesh(runtime.entity)->wireframe_on_shaded_color);
   const auto inherited_history = runtime.session.history().undo_count();
   runtime.viewport_settings.set_color(ViewportColorSettingId::WireframeOnShaded,
                                       {0.2f, 0.4f, 0.6f, 0.3f});
   refresh();
-  EXPECT_EQ(swatch()->swatch_color(), QColor::fromRgbF(0.2f, 0.4f, 0.6f));
+  EXPECT_EQ(swatch(), nullptr);
   EXPECT_EQ(runtime.session.history().undo_count(), inherited_history);
   custom()->click();
   refresh();
@@ -453,8 +719,8 @@ TEST_F(QtInspectorNumericDragTests,
   ASSERT_TRUE(runtime.editor.scene().set_mesh_component(second.value().entity, second_mesh).ok());
   ASSERT_TRUE(runtime.editor.scene().select({runtime.entity, second.value().entity}).ok());
   refresh();
-  EXPECT_NE(panel.findChild<QLabel *>("inspector.shading.custom_wireframe_color.mixed"), nullptr);
-  EXPECT_NE(panel.findChild<QLabel *>("inspector.shading.wireframe_color.mixed"), nullptr);
+  EXPECT_NE(panel.findChild<QLabel *>("inspector.viewport.custom_wireframe_color.mixed"), nullptr);
+  EXPECT_NE(panel.findChild<QLabel *>("inspector.viewport.wireframe_color.mixed"), nullptr);
   EXPECT_FALSE(swatch()->isEnabled());
   const auto before_enable = runtime.session.history().undo_count();
   custom()->click();
@@ -474,7 +740,7 @@ TEST_F(QtInspectorNumericDragTests,
   refresh();
   const auto before_shared_color = runtime.session.history().undo_count();
   QTimer::singleShot(0, &panel, [&] {
-    auto *dialog = panel.findChild<QColorDialog *>("inspector.shading.wireframe_color.dialog");
+    auto *dialog = panel.findChild<QColorDialog *>("inspector.viewport.wireframe_color.dialog");
     EXPECT_NE(dialog, nullptr);
     if (dialog == nullptr) return;
     dialog->setCurrentColor(Qt::white);
@@ -485,7 +751,7 @@ TEST_F(QtInspectorNumericDragTests,
   EXPECT_EQ(runtime.session.history().undo_count(), before_shared_color + 1u);
   EXPECT_FLOAT_EQ(runtime.session.scene().mesh(runtime.entity)->wireframe_on_shaded_color->x, 1.0f);
   EXPECT_FLOAT_EQ(runtime.session.scene().mesh(second.value().entity)->wireframe_on_shaded_color->x, 1.0f);
-  EXPECT_EQ(panel.findChild<QLabel *>("inspector.shading.wireframe_color.mixed"), nullptr);
+  EXPECT_EQ(panel.findChild<QLabel *>("inspector.viewport.wireframe_color.mixed"), nullptr);
   ASSERT_TRUE(runtime.editor.history().undo().ok());
   refresh();
   const auto before_clear = runtime.session.history().undo_count();
@@ -494,11 +760,11 @@ TEST_F(QtInspectorNumericDragTests,
   EXPECT_FALSE(runtime.session.scene().mesh(runtime.entity)->wireframe_on_shaded_color);
   EXPECT_FALSE(runtime.session.scene().mesh(second.value().entity)->wireframe_on_shaded_color);
   EXPECT_EQ(runtime.session.history().undo_count(), before_clear + 1u);
-  EXPECT_EQ(swatch()->swatch_color(), QColor::fromRgbF(0.7f, 0.5f, 0.1f));
+  EXPECT_EQ(swatch(), nullptr);
   ASSERT_TRUE(runtime.editor.history().undo().ok());
   refresh();
   EXPECT_TRUE(custom()->isChecked());
-  EXPECT_NE(panel.findChild<QLabel *>("inspector.shading.wireframe_color.mixed"), nullptr);
+  EXPECT_NE(panel.findChild<QLabel *>("inspector.viewport.wireframe_color.mixed"), nullptr);
   panel.abandon_runtime();
 }
 
@@ -517,7 +783,7 @@ TEST_F(QtInspectorNumericDragTests,
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     settle_inspector_layout(panel);
   };
-  auto *custom = panel.findChild<QCheckBox *>("inspector.shading.custom_wireframe_color");
+  auto *custom = panel.findChild<QCheckBox *>("inspector.viewport.custom_wireframe_color");
   ASSERT_NE(custom, nullptr);
   custom->click();
   refresh();
@@ -529,7 +795,7 @@ TEST_F(QtInspectorNumericDragTests,
     ASSERT_NE(swatch, nullptr);
     bool visited = false;
     QTimer::singleShot(0, &panel, [&] {
-      auto *dialog = panel.findChild<QColorDialog *>("inspector.shading.wireframe_color.dialog");
+      auto *dialog = panel.findChild<QColorDialog *>("inspector.viewport.wireframe_color.dialog");
       EXPECT_NE(dialog, nullptr);
       if (dialog == nullptr) return;
       visited = true;
@@ -572,6 +838,62 @@ TEST_F(QtInspectorNumericDragTests,
 }
 
 TEST_F(QtInspectorNumericDragTests,
+       EditModeWireframeColorUsesCapturedParticipantsAndRejectsModeRoundTrip) {
+  InspectorTransformRuntime runtime;
+  runtime.initialize_box();
+  ASSERT_TRUE(runtime.editor.mode().set(QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(runtime.editor.selection().select_all().ok());
+  InspectorPanel panel;
+  show(panel, runtime);
+  const auto refresh = [&] {
+    panel.refresh(runtime.context);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    settle_inspector_layout(panel);
+  };
+  auto *custom = panel.findChild<QCheckBox *>("inspector.viewport.custom_wireframe_color");
+  ASSERT_NE(custom, nullptr);
+  custom->click();
+  refresh();
+  const auto before_dialog = runtime.session.history().undo_count();
+  QColor accepted_color;
+  QTimer::singleShot(0, &panel, [&] {
+    auto *dialog = panel.findChild<QColorDialog *>("inspector.viewport.wireframe_color.dialog");
+    ASSERT_NE(dialog, nullptr);
+    dialog->setCurrentColor(Qt::green);
+    EXPECT_TRUE(runtime.editor.selection().clear().ok());
+    panel.refresh(runtime.context);
+    dialog->accept();
+    accepted_color = dialog->selectedColor();
+  });
+  ASSERT_NE(wireframe_color_button(panel), nullptr);
+  wireframe_color_button(panel)->click();
+  refresh();
+  ASSERT_TRUE(accepted_color.isValid());
+  ASSERT_TRUE(runtime.session.scene().mesh(runtime.entity)->wireframe_on_shaded_color);
+  EXPECT_FLOAT_EQ(runtime.session.scene().mesh(runtime.entity)->wireframe_on_shaded_color->y,
+                  static_cast<float>(accepted_color.greenF()));
+  EXPECT_GE(runtime.session.history().undo_count(), before_dialog + 1u);
+  EXPECT_EQ(runtime.editor.selection().summary().selected_vertex_count, 0u);
+  const auto history_before_round_trip = runtime.session.history().undo_count();
+  QTimer::singleShot(0, &panel, [&] {
+    auto *dialog = panel.findChild<QColorDialog *>("inspector.viewport.wireframe_color.dialog");
+    ASSERT_NE(dialog, nullptr);
+    dialog->setCurrentColor(Qt::red);
+    EXPECT_TRUE(runtime.editor.mode().set(QuaderEditorMode::Object).ok());
+    EXPECT_TRUE(runtime.editor.mode().set(QuaderEditorMode::Edit).ok());
+    panel.refresh(runtime.context);
+    dialog->accept();
+  });
+  ASSERT_NE(wireframe_color_button(panel), nullptr);
+  wireframe_color_button(panel)->click();
+  refresh();
+  EXPECT_FLOAT_EQ(runtime.session.scene().mesh(runtime.entity)->wireframe_on_shaded_color->y,
+                  static_cast<float>(accepted_color.greenF()));
+  EXPECT_EQ(runtime.session.history().undo_count(), history_before_round_trip);
+  panel.abandon_runtime();
+}
+
+TEST_F(QtInspectorNumericDragTests,
        MeshWireframeColorDialogRejectsStaleModeAndRuntimeResults) {
   InspectorTransformRuntime runtime;
   runtime.initialize_box();
@@ -584,7 +906,7 @@ TEST_F(QtInspectorNumericDragTests,
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     settle_inspector_layout(panel);
   };
-  auto *custom = panel.findChild<QCheckBox *>("inspector.shading.custom_wireframe_color");
+  auto *custom = panel.findChild<QCheckBox *>("inspector.viewport.custom_wireframe_color");
   ASSERT_NE(custom, nullptr);
   custom->click();
   refresh();
@@ -594,7 +916,7 @@ TEST_F(QtInspectorNumericDragTests,
     ASSERT_NE(swatch, nullptr);
     bool visited = false;
     QTimer::singleShot(0, &panel, [&] {
-      auto *dialog = panel.findChild<QColorDialog *>("inspector.shading.wireframe_color.dialog");
+      auto *dialog = panel.findChild<QColorDialog *>("inspector.viewport.wireframe_color.dialog");
       EXPECT_NE(dialog, nullptr);
       if (dialog == nullptr) return;
       visited = true;
@@ -624,7 +946,7 @@ TEST_F(QtInspectorNumericDragTests,
   runtime.initialize_box();
   auto panel = std::make_unique<InspectorPanel>();
   show(*panel, runtime);
-  auto *custom = panel->findChild<QCheckBox *>("inspector.shading.custom_wireframe_color");
+  auto *custom = panel->findChild<QCheckBox *>("inspector.viewport.custom_wireframe_color");
   ASSERT_NE(custom, nullptr);
   custom->click();
   panel->refresh(runtime.context);
@@ -634,7 +956,7 @@ TEST_F(QtInspectorNumericDragTests,
   const auto before_dialog = runtime.session.history().undo_count();
   bool visited = false;
   QTimer::singleShot(0, &application(), [&] {
-    auto *dialog = panel->findChild<QColorDialog *>("inspector.shading.wireframe_color.dialog");
+    auto *dialog = panel->findChild<QColorDialog *>("inspector.viewport.wireframe_color.dialog");
     EXPECT_NE(dialog, nullptr);
     if (dialog == nullptr) return;
     visited = true;
@@ -667,7 +989,7 @@ TEST_F(QtInspectorNumericDragTests,
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     settle_inspector_layout(panel);
   };
-  auto *custom = panel.findChild<QCheckBox *>("inspector.shading.custom_wireframe_color");
+  auto *custom = panel.findChild<QCheckBox *>("inspector.viewport.custom_wireframe_color");
   ASSERT_NE(custom, nullptr);
   custom->click();
   refresh();
@@ -732,6 +1054,7 @@ TEST_F(QtInspectorNumericDragTests,
   saved.body_type = QuaderMeshPhysicsBodyType::RigidBody;
   ASSERT_TRUE(runtime.editor.scene().set_mesh_component(runtime.entity, saved).ok());
   panel.refresh(runtime.context);
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
   settle_inspector_layout(panel);
   expect_controls();
   auto *generate = panel.findChild<QCheckBox *>(QStringLiteral("inspector.physics.generate_collisions"));
@@ -798,7 +1121,7 @@ TEST_F(QtInspectorNumericDragTests,
   runtime.initialize_box();
   ASSERT_TRUE(runtime.editor.scene()
                   .set_transform(runtime.entity,
-                                 {.position = {-123.456F, 0.5F, -4.5F}})
+                                 {.location = {-123.456F, 0.5F, -4.5F}})
                   .ok());
   InspectorPanel panel;
   scale_controller.add_change_listener(
@@ -823,7 +1146,7 @@ TEST_F(QtInspectorNumericDragTests,
       settle_inspector_layout(panel);
       EXPECT_EQ(panel.width(), scale_controller.metrics().px(design_width));
       QRect previous_group_last_axis;
-      for (const char *property : {"position", "rotation", "scale"}) {
+      for (const char *property : {"location", "rotation", "scale"}) {
         const QString row_name =
             QStringLiteral("inspector.transform.%1")
                 .arg(QString::fromLatin1(property));
@@ -905,7 +1228,7 @@ TEST_F(QtInspectorNumericDragTests,
       EXPECT_NEAR(link_rect.center().y(), scale_x_rect.center().y(), 2);
       EXPECT_NEAR(scale_label_rect.center().y(), scale_x_rect.center().y(), 2);
       EXPECT_EQ(scale_x_rect.left(),
-                relative_geometry(*position_x(panel), *tree->viewport()).left());
+                relative_geometry(*location_x(panel), *tree->viewport()).left());
       EXPECT_FALSE(link->toolTip().isEmpty());
       EXPECT_FALSE(link->accessibleName().isEmpty());
       link->click();
@@ -1005,7 +1328,7 @@ TEST_F(QtInspectorNumericDragTests,
   ASSERT_GT(tree->topLevelItemCount(), 1);
   const auto scene_revision = runtime.session.scene().revision();
   const auto undo_count = runtime.session.history().undo_count();
-  auto *field = position_x(panel);
+  auto *field = location_x(panel);
   ASSERT_NE(field, nullptr);
 
   for (const float scale : {1.0F, 1.5F, 2.0F}) {
@@ -1077,7 +1400,7 @@ TEST_F(QtInspectorNumericDragTests,
             << "Section spacing is not part of the disclosure hit target.";
       }
     }
-    EXPECT_EQ(position_x(panel), field);
+    EXPECT_EQ(location_x(panel), field);
   }
   EXPECT_EQ(runtime.session.scene().revision(), scene_revision);
   EXPECT_EQ(runtime.session.history().undo_count(), undo_count);
@@ -1109,7 +1432,7 @@ TEST_F(QtInspectorNumericDragTests,
   const int initial_label_width = tree->columnWidth(0);
   std::array<QPointer<QDoubleSpinBox>, 9> fields;
   std::size_t index = 0;
-  for (const char *property : {"position", "rotation", "scale"}) {
+  for (const char *property : {"location", "rotation", "scale"}) {
     for (const char *axis : {"x", "y", "z"}) {
       fields[index] = panel.findChild<QDoubleSpinBox *>(
           QStringLiteral("inspector.transform.%1.%2")
@@ -1159,6 +1482,35 @@ TEST_F(QtInspectorNumericDragTests,
   EXPECT_EQ(runtime.session.scene().revision(), scene_revision);
   EXPECT_EQ(runtime.session.scene().transform_revision(), transform_revision);
   EXPECT_EQ(runtime.session.history().undo_count(), undo_count);
+  ASSERT_TRUE(runtime.editor.mode().set(QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(runtime.editor.selection().clear().ok());
+  panel.refresh(runtime.context);
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  settle_inspector_layout(panel);
+  const QPointer<QDoubleSpinBox> edit_location(location_x(panel));
+  const QPointer<QToolButton> edit_header(panel.findChild<QToolButton *>(
+      QStringLiteral("inspector.transform.header")));
+  ASSERT_NE(edit_location.data(), nullptr);
+  ASSERT_NE(edit_header.data(), nullptr);
+  const auto edit_scene_revision = runtime.session.scene().revision();
+  const auto edit_undo_count = runtime.session.history().undo_count();
+  int inserted_rows = 0;
+  const auto insertion_connection = QObject::connect(
+      tree->model(), &QAbstractItemModel::rowsInserted, &panel,
+      [&](const QModelIndex &, int first, int last) {
+        inserted_rows += last - first + 1;
+      });
+  for (int frame = 0; frame < 32; ++frame) {
+    panel.refresh(runtime.context);
+    panel.refresh_transform_preview(runtime.context);
+  }
+  EXPECT_EQ(location_x(panel), edit_location.data());
+  EXPECT_EQ(panel.findChild<QToolButton *>(edit_header->objectName()), edit_header.data());
+  EXPECT_EQ(inserted_rows, 0);
+  EXPECT_EQ(runtime.session.scene().revision(), edit_scene_revision);
+  EXPECT_EQ(runtime.session.history().undo_count(), edit_undo_count);
+  EXPECT_EQ(runtime.editor.selection().summary().selected_vertex_count, 0u);
+  QObject::disconnect(insertion_connection);
   panel.abandon_runtime();
 }
 
@@ -1196,7 +1548,7 @@ TEST_F(QtInspectorNumericDragTests,
   auto *section = transform_section(*tree);
   auto *header = panel.findChild<QToolButton *>(
       QStringLiteral("inspector.transform.header"));
-  auto *field = position_x(panel);
+  auto *field = location_x(panel);
   ASSERT_NE(section, nullptr);
   ASSERT_NE(header, nullptr);
   ASSERT_NE(field, nullptr);
@@ -1210,7 +1562,7 @@ TEST_F(QtInspectorNumericDragTests,
   EXPECT_FALSE(header->isChecked());
   EXPECT_EQ(header->arrowType(), Qt::RightArrow);
   EXPECT_FALSE(field->isVisible());
-  EXPECT_EQ(position_x(panel), field);
+  EXPECT_EQ(location_x(panel), field);
 
   application().setActiveWindow(&panel);
   header->setFocus(Qt::TabFocusReason);
@@ -1240,7 +1592,7 @@ TEST_F(QtInspectorNumericDragTests,
   EXPECT_TRUE(header->isChecked());
   EXPECT_EQ(header->arrowType(), Qt::DownArrow);
   EXPECT_TRUE(field->isVisible());
-  EXPECT_EQ(position_x(panel), field);
+  EXPECT_EQ(location_x(panel), field);
   EXPECT_EQ(runtime.session.scene().selected_entities(), selection_before);
   EXPECT_EQ(runtime.session.scene().revision(), revision_before);
   EXPECT_EQ(runtime.session.history().undo_count(), undo_before);
@@ -1261,7 +1613,7 @@ TEST_F(QtInspectorNumericDragTests,
     auto *section = transform_section(*tree);
     auto *header = panel.findChild<QToolButton *>(
         QStringLiteral("inspector.transform.header"));
-    auto *spin = position_x(panel);
+    auto *spin = location_x(panel);
     ASSERT_NE(section, nullptr);
     ASSERT_NE(header, nullptr);
     ASSERT_NE(spin, nullptr);
@@ -1277,7 +1629,7 @@ TEST_F(QtInspectorNumericDragTests,
     ASSERT_TRUE(numeric.is_editing());
     ASSERT_TRUE(spin->hasFocus());
     type_text(*editor, spin->locale().toString(2.5, 'f', 1));
-    runtime.expect_position_x(2.5);
+    runtime.expect_location_x(2.5);
     EXPECT_EQ(runtime.session.history().undo_count(), undo_before);
 
     if (pointer_collapse) {
@@ -1290,24 +1642,24 @@ TEST_F(QtInspectorNumericDragTests,
     EXPECT_FALSE(header->isChecked());
     EXPECT_FALSE(numeric.is_editing());
     EXPECT_FALSE(spin->isVisible());
-    EXPECT_EQ(position_x(panel), spin);
+    EXPECT_EQ(location_x(panel), spin);
     EXPECT_EQ(finishes, 1);
     EXPECT_EQ(runtime.session.history().undo_count(), undo_before + 1u);
     EXPECT_EQ(runtime.session.scene().selected_entities(), selection_before);
     EXPECT_EQ(tree->currentItem(), section);
     EXPECT_TRUE(header->hasFocus());
-    runtime.expect_position_x(2.5);
+    runtime.expect_location_x(2.5);
 
     section->setExpanded(true);
     settle_inspector_layout(panel);
-    EXPECT_EQ(position_x(panel), spin);
+    EXPECT_EQ(location_x(panel), spin);
     EXPECT_EQ(finishes, 1);
     EXPECT_EQ(runtime.session.history().undo_count(), undo_before + 1u);
     ASSERT_TRUE(runtime.editor.history().undo().ok());
-    runtime.expect_position_x(0.0);
+    runtime.expect_location_x(0.0);
     EXPECT_EQ(runtime.session.scene().selected_entities(), selection_before);
     ASSERT_TRUE(runtime.editor.history().redo().ok());
-    runtime.expect_position_x(2.5);
+    runtime.expect_location_x(2.5);
     panel.abandon_runtime();
   }
 }
@@ -1324,7 +1676,7 @@ TEST_F(QtInspectorNumericDragTests,
   auto *tree = panel.findChild<QTreeWidget *>(QStringLiteral("inspector.tree"));
   ASSERT_NE(tree, nullptr);
   auto *section = transform_section(*tree);
-  auto *spin = position_x(panel);
+  auto *spin = location_x(panel);
   ASSERT_NE(section, nullptr);
   ASSERT_NE(spin, nullptr);
   auto *editor = spin->findChild<QLineEdit *>();
@@ -1351,12 +1703,12 @@ TEST_F(QtInspectorNumericDragTests,
   EXPECT_EQ(outgoing.session.history().undo_count(), outgoing_undo + 1u);
   EXPECT_EQ(incoming.session.scene().revision(), incoming_revision);
   EXPECT_EQ(incoming.session.history().undo_count(), incoming_undo);
-  outgoing.expect_position_x(2.5);
-  incoming.expect_position_x(0.0);
+  outgoing.expect_location_x(2.5);
+  incoming.expect_location_x(0.0);
   auto *incoming_section = transform_section(*tree);
   auto *incoming_header = panel.findChild<QToolButton *>(
       QStringLiteral("inspector.transform.header"));
-  auto *incoming_spin = position_x(panel);
+  auto *incoming_spin = location_x(panel);
   ASSERT_NE(incoming_section, nullptr);
   ASSERT_NE(incoming_header, nullptr);
   ASSERT_NE(incoming_spin, nullptr);
@@ -1367,9 +1719,9 @@ TEST_F(QtInspectorNumericDragTests,
   incoming_spin->setValue(4.0);
   ASSERT_TRUE(QMetaObject::invokeMethod(incoming_spin, "editingFinished",
                                       Qt::DirectConnection));
-  incoming.expect_position_x(4.0);
+  incoming.expect_location_x(4.0);
   EXPECT_EQ(incoming.session.history().undo_count(), incoming_undo + 1u);
-  outgoing.expect_position_x(2.5);
+  outgoing.expect_location_x(2.5);
   panel.abandon_runtime();
 }
 
@@ -1383,7 +1735,7 @@ TEST_F(QtInspectorNumericDragTests,
   ASSERT_TRUE(second.ok());
   ASSERT_TRUE(runtime.editor.scene()
                   .set_transform(second.value().id,
-                                 {.position = {2.0f, 0.0f, 0.0f}})
+                                 {.location = {2.0f, 0.0f, 0.0f}})
                   .ok());
   ASSERT_TRUE(runtime.editor.scene()
                   .select({runtime.entity, second.value().id}, runtime.entity)
@@ -1393,9 +1745,9 @@ TEST_F(QtInspectorNumericDragTests,
   panel.resize(320, 760);
   settle_inspector_layout(panel);
   auto *mixed = panel.findChild<QLineEdit *>(
-      QStringLiteral("inspector.transform.position.x"));
+      QStringLiteral("inspector.transform.location.x"));
   auto *editable = panel.findChild<QDoubleSpinBox *>(
-      QStringLiteral("inspector.transform.position.y"));
+      QStringLiteral("inspector.transform.location.y"));
   auto *summary = panel.findChild<QLabel *>(
       QStringLiteral("inspector.transform.selection"));
   ASSERT_NE(mixed, nullptr);
@@ -1701,7 +2053,7 @@ TEST_F(QtInspectorNumericDragTests,
   runtime.initialize();
   InspectorPanel panel;
   show(panel, runtime);
-  auto *spin = position_x(panel);
+  auto *spin = location_x(panel);
   auto *timer = dispatch_timer(panel);
   ASSERT_NE(spin, nullptr);
   ASSERT_NE(timer, nullptr);
@@ -1721,11 +2073,11 @@ TEST_F(QtInspectorNumericDragTests,
     EXPECT_EQ(runtime.session.scene().transform_revision(), revision_before);
   }
   EXPECT_TRUE(timer->isActive());
-  runtime.expect_position_x(0.0);
+  runtime.expect_location_x(0.0);
   EXPECT_EQ(runtime.session.history().undo_count(), undo_before);
 
   deliver_timeout(*timer);
-  runtime.expect_position_x(0.32);
+  runtime.expect_location_x(0.32);
   const auto dispatched_revision = runtime.session.scene().transform_revision();
   EXPECT_GT(dispatched_revision, revision_before);
   EXPECT_EQ(runtime.session.history().undo_count(), undo_before);
@@ -1735,22 +2087,22 @@ TEST_F(QtInspectorNumericDragTests,
   move_drag(*editor, origin, 40);
   move_drag(*editor, origin, 48);
   EXPECT_TRUE(timer->isActive());
-  runtime.expect_position_x(0.32);
+  runtime.expect_location_x(0.32);
   EXPECT_EQ(runtime.session.scene().transform_revision(), dispatched_revision);
   release_drag(*editor, origin, 48);
   EXPECT_FALSE(timer->isActive());
   EXPECT_FALSE(qt_install_numeric_spin_box(*spin).is_dragging());
-  runtime.expect_position_x(0.48);
+  runtime.expect_location_x(0.48);
   EXPECT_EQ(runtime.session.history().undo_count(), undo_before + 1u);
   const auto committed_revision = runtime.session.scene().transform_revision();
   deliver_timeout(*timer);
   EXPECT_EQ(runtime.session.scene().transform_revision(), committed_revision);
 
   ASSERT_TRUE(runtime.editor.history().undo().ok());
-  runtime.expect_position_x(0.0);
+  runtime.expect_location_x(0.0);
   EXPECT_EQ(runtime.session.history().undo_count(), undo_before);
   ASSERT_TRUE(runtime.editor.history().redo().ok());
-  runtime.expect_position_x(0.48);
+  runtime.expect_location_x(0.48);
   panel.abandon_runtime();
 }
 
@@ -1762,7 +2114,7 @@ TEST_F(QtInspectorNumericDragTests,
     runtime.initialize();
     InspectorPanel panel;
     show(panel, runtime);
-    auto *spin = position_x(panel);
+    auto *spin = location_x(panel);
     auto *timer = dispatch_timer(panel);
     ASSERT_NE(spin, nullptr);
     ASSERT_NE(timer, nullptr);
@@ -1773,7 +2125,7 @@ TEST_F(QtInspectorNumericDragTests,
     move_drag(*editor, origin, 16);
     if (dispatch_before_cancel) {
       deliver_timeout(*timer);
-      runtime.expect_position_x(0.16);
+      runtime.expect_location_x(0.16);
     }
     move_drag(*editor, origin, 32);
     ASSERT_TRUE(timer->isActive());
@@ -1782,14 +2134,14 @@ TEST_F(QtInspectorNumericDragTests,
 
     EXPECT_FALSE(timer->isActive());
     EXPECT_FALSE(qt_install_numeric_spin_box(*spin).is_dragging());
-    runtime.expect_position_x(0.0);
+    runtime.expect_location_x(0.0);
     EXPECT_EQ(runtime.session.history().undo_count(), undo_before);
     const auto canceled_revision = runtime.session.scene().transform_revision();
     deliver_timeout(*timer);
     release_drag(*editor, origin, 32);
     EXPECT_EQ(runtime.session.scene().transform_revision(), canceled_revision);
     EXPECT_EQ(runtime.session.history().undo_count(), undo_before);
-    runtime.expect_position_x(0.0);
+    runtime.expect_location_x(0.0);
     panel.abandon_runtime();
   }
 }
@@ -1800,25 +2152,25 @@ TEST_F(QtInspectorNumericDragTests,
   runtime.initialize();
   InspectorPanel panel;
   show(panel, runtime);
-  auto *position = position_x(panel);
+  auto *position = location_x(panel);
   auto *scale = scale_axis(panel, "x");
   ASSERT_NE(position, nullptr);
   ASSERT_NE(scale, nullptr);
   const auto undo_before = runtime.session.history().undo_count();
   position->setValue(2.0);
-  runtime.expect_position_x(2.0);
+  runtime.expect_location_x(2.0);
   EXPECT_EQ(runtime.session.history().undo_count(), undo_before);
   scale->setValue(3.0);
-  runtime.expect_position_x(2.0);
+  runtime.expect_location_x(2.0);
   expect_scale(runtime, runtime.entity, {3.0, 1.0, 1.0});
   EXPECT_EQ(runtime.session.history().undo_count(), undo_before + 1u);
   ASSERT_TRUE(QMetaObject::invokeMethod(scale, "editingFinished", Qt::DirectConnection));
   EXPECT_EQ(runtime.session.history().undo_count(), undo_before + 2u);
   ASSERT_TRUE(runtime.editor.history().undo().ok());
   expect_scale(runtime, runtime.entity, {1.0, 1.0, 1.0});
-  runtime.expect_position_x(2.0);
+  runtime.expect_location_x(2.0);
   ASSERT_TRUE(runtime.editor.history().undo().ok());
-  runtime.expect_position_x(0.0);
+  runtime.expect_location_x(0.0);
   panel.abandon_runtime();
 }
 
@@ -1831,26 +2183,26 @@ TEST_F(QtInspectorNumericDragTests,
   ASSERT_TRUE(runtime.editor.scene().select(runtime.entity).ok());
   InspectorPanel panel;
   show(panel, runtime);
-  auto *position = position_x(panel);
+  auto *position = location_x(panel);
   ASSERT_NE(position, nullptr);
   position->setValue(2.0);
-  runtime.expect_position_x(2.0);
+  runtime.expect_location_x(2.0);
   const auto mode_before_selection = runtime.editor.mode().state();
   ASSERT_TRUE(runtime.editor.scene().select(second.value().id).ok());
   EXPECT_GT(runtime.editor.mode().revision(), mode_before_selection.revision);
   EXPECT_EQ(runtime.editor.mode().generation(), mode_before_selection.generation);
   const auto undo_before_refresh = runtime.session.history().undo_count();
   panel.refresh(runtime.context);
-  runtime.expect_position_x(2.0);
-  EXPECT_FLOAT_EQ(runtime.editor.query().entity(second.value().id)->transform.position.x,
+  runtime.expect_location_x(2.0);
+  EXPECT_FLOAT_EQ(runtime.editor.query().entity(second.value().id)->transform.location.x,
                   0.0f);
   EXPECT_EQ(runtime.session.history().undo_count(), undo_before_refresh + 1u);
   ASSERT_TRUE(runtime.editor.history().undo().ok());
-  runtime.expect_position_x(0.0);
-  EXPECT_FLOAT_EQ(runtime.editor.query().entity(second.value().id)->transform.position.x,
+  runtime.expect_location_x(0.0);
+  EXPECT_FLOAT_EQ(runtime.editor.query().entity(second.value().id)->transform.location.x,
                   0.0f);
   ASSERT_TRUE(runtime.editor.history().redo().ok());
-  runtime.expect_position_x(2.0);
+  runtime.expect_location_x(2.0);
   panel.abandon_runtime();
 }
 
@@ -1860,7 +2212,7 @@ TEST_F(QtInspectorNumericDragTests,
   runtime.initialize();
   InspectorPanel panel;
   show(panel, runtime);
-  auto *spin = position_x(panel);
+  auto *spin = location_x(panel);
   auto *timer = dispatch_timer(panel);
   ASSERT_NE(spin, nullptr);
   ASSERT_NE(timer, nullptr);
@@ -1869,7 +2221,7 @@ TEST_F(QtInspectorNumericDragTests,
   const QPoint origin = begin_drag(*editor);
   move_drag(*editor, origin, 16);
   deliver_timeout(*timer);
-  runtime.expect_position_x(0.16);
+  runtime.expect_location_x(0.16);
   move_drag(*editor, origin, 32);
   ASSERT_TRUE(timer->isActive());
   const auto outgoing_revision = runtime.session.scene().transform_revision();
@@ -1879,12 +2231,12 @@ TEST_F(QtInspectorNumericDragTests,
   EXPECT_FALSE(timer->isActive());
   EXPECT_FALSE(qt_install_numeric_spin_box(*spin).is_dragging());
   EXPECT_EQ(runtime.session.scene().transform_revision(), outgoing_revision);
-  runtime.expect_position_x(0.16);
+  runtime.expect_location_x(0.16);
   deliver_timeout(*timer);
   release_drag(*editor, origin, 32);
   EXPECT_EQ(runtime.session.scene().transform_revision(), outgoing_revision);
   EXPECT_EQ(runtime.session.history().undo_count(), undo_before);
-  runtime.expect_position_x(0.16);
+  runtime.expect_location_x(0.16);
 }
 
 TEST_F(QtInspectorNumericDragTests,
@@ -1895,7 +2247,7 @@ TEST_F(QtInspectorNumericDragTests,
   incoming.initialize();
   InspectorPanel panel;
   show(panel, outgoing);
-  auto *spin = position_x(panel);
+  auto *spin = location_x(panel);
   auto *timer = dispatch_timer(panel);
   ASSERT_NE(spin, nullptr);
   ASSERT_NE(timer, nullptr);
@@ -1920,15 +2272,15 @@ TEST_F(QtInspectorNumericDragTests,
   EXPECT_EQ(incoming.session.scene().transform_revision(), incoming_revision);
   EXPECT_EQ(outgoing.session.history().undo_count(), outgoing_undo);
   EXPECT_EQ(incoming.session.history().undo_count(), incoming_undo);
-  outgoing.expect_position_x(0.16);
-  incoming.expect_position_x(0.0);
+  outgoing.expect_location_x(0.16);
+  incoming.expect_location_x(0.0);
 
   // Fresh text/keyboard updates remain immediate after the binding changes.
-  spin = position_x(panel);
+  spin = location_x(panel);
   ASSERT_NE(spin, nullptr);
   ASSERT_DOUBLE_EQ(spin->value(), 0.0);
   spin->setValue(2.0);
-  incoming.expect_position_x(2.0);
+  incoming.expect_location_x(2.0);
   EXPECT_FALSE(timer->isActive());
   ASSERT_TRUE(
       QMetaObject::invokeMethod(spin, "editingFinished", Qt::DirectConnection));
@@ -1943,7 +2295,7 @@ TEST_F(QtInspectorNumericDragTests,
   runtime.initialize();
   InspectorPanel panel;
   show(panel, runtime);
-  auto *spin = position_x(panel);
+  auto *spin = location_x(panel);
   auto *timer = dispatch_timer(panel);
   ASSERT_NE(spin, nullptr);
   ASSERT_NE(timer, nullptr);
@@ -1963,16 +2315,16 @@ TEST_F(QtInspectorNumericDragTests,
   const auto immediate_revisions = runtime.session.scene().transform_revision() -
                                    immediate_revision_before;
   EXPECT_FALSE(timer->isActive());
-  runtime.expect_position_x(10.0);
+  runtime.expect_location_x(10.0);
   EXPECT_EQ(runtime.session.history().undo_count(), undo_before + 1u);
   ASSERT_TRUE(runtime.editor.history().undo().ok());
-  runtime.expect_position_x(0.0);
+  runtime.expect_location_x(0.0);
   panel.refresh(runtime.context);
   // QTreeWidget releases replaced item widgets through DeferredDelete. Find
   // the rebuilt field only after that boundary, as a real next gesture does.
   QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
   QCoreApplication::processEvents();
-  spin = position_x(panel);
+  spin = location_x(panel);
   ASSERT_NE(spin, nullptr);
   ASSERT_DOUBLE_EQ(spin->value(), 0.0);
   auto *editor = spin->findChild<QLineEdit *>();
@@ -1993,7 +2345,7 @@ TEST_F(QtInspectorNumericDragTests,
                            .count();
   const auto drag_revisions =
       runtime.session.scene().transform_revision() - drag_revision_before;
-  runtime.expect_position_x(10.0);
+  runtime.expect_location_x(10.0);
   EXPECT_EQ(runtime.session.history().undo_count(), undo_before + 1u);
   EXPECT_FALSE(timer->isActive());
   EXPECT_GT(immediate_revisions, 0u);

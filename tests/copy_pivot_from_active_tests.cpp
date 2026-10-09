@@ -147,7 +147,7 @@ void expect_matrix_near(const quader::QMat4 &actual,
 
 void expect_transform_near(const quader::TransformComponent &actual,
                            const quader::TransformComponent &expected) {
-  expect_vec3_near(actual.position, expected.position);
+  expect_vec3_near(actual.location, expected.location);
   expect_vec3_near(actual.rotation_euler, expected.rotation_euler);
   expect_vec3_near(actual.scale, expected.scale);
   EXPECT_EQ(actual.custom_pivot, expected.custom_pivot);
@@ -600,13 +600,13 @@ TEST(CopyPivotFromActiveTests,
   const auto source = create_asymmetric_mesh(harness, "Custom Pivot Source");
   const auto target = create_textured_asymmetric_mesh(harness);
   set_transform(harness, source.entity,
-                {.position = {3.0f, -2.0f, 5.0f}, .custom_pivot = true});
+                {.location = {3.0f, -2.0f, 5.0f}, .custom_pivot = true});
   set_transform(harness, target.entity,
-                {.position = {10.0f, 3.0f, -1.0f},
+                {.location = {10.0f, 3.0f, -1.0f},
                  .rotation_euler = {0.1f, 0.2f, 0.3f},
                  .scale = {1.2f, 0.7f, 1.4f}});
   const quader::TransformComponent sampling_transform{
-      .position = {0.3f, -1.0f, 0.5f},
+      .location = {0.3f, -1.0f, 0.5f},
       .rotation_euler = {0.3f, 1.2f, -0.4f},
       .scale = {1.3f, 0.7f, -1.1f},
   };
@@ -673,7 +673,7 @@ TEST(CopyPivotFromActiveTests, GroupPivotRebaseDoesNotChangeChildTextureMapping)
   const auto grouped = harness.editor.scene().group_selection("Textured Group");
   ASSERT_TRUE(grouped.ok()) << grouped.error_message();
   const quader::TransformComponent sampling{
-      .position = {1.0f, -2.0f, 3.0f},
+      .location = {1.0f, -2.0f, 3.0f},
       .rotation_euler = {0.5f, 0.3f, 0.7f},
   };
   const quader::QMat4 mapping_before =
@@ -829,8 +829,8 @@ TEST(CopyPivotFromActiveTests,
       create_box(harness, "Off-Center Source Child");
   const quader::QuaderModelingObjectRef target =
       create_box(harness, "Hierarchy Pivot Target");
-  set_transform(harness, source_child.entity, {.position = {10.0f, 0.0f, 0.0f}});
-  set_transform(harness, target.entity, {.position = {30.0f, 0.0f, 0.0f}});
+  set_transform(harness, source_child.entity, {.location = {10.0f, 0.0f, 0.0f}});
+  set_transform(harness, target.entity, {.location = {30.0f, 0.0f, 0.0f}});
   ASSERT_TRUE(harness.editor.scene()
                   .reparent(source_child.entity, source.entity, false)
                   .ok());
@@ -886,8 +886,8 @@ TEST(CopyPivotFromActiveTests,
       create_box(harness, "Child-Bearing Target");
   const quader::QuaderModelingObjectRef target_child =
       create_box(harness, "Off-Center Target Child");
-  set_transform(harness, target.entity, {.position = {30.0f, 0.0f, 0.0f}});
-  set_transform(harness, target_child.entity, {.position = {10.0f, 0.0f, 0.0f}});
+  set_transform(harness, target.entity, {.location = {30.0f, 0.0f, 0.0f}});
+  set_transform(harness, target_child.entity, {.location = {10.0f, 0.0f, 0.0f}});
   ASSERT_TRUE(harness.editor.scene()
                   .reparent(target_child.entity, target.entity, false)
                   .ok());
@@ -940,11 +940,11 @@ TEST(CopyPivotFromActiveTests,
   const quader::QuaderModelingObjectRef target =
       create_asymmetric_mesh(harness, "Scaled Target", 1.8f);
   set_transform(harness, source.entity,
-                {.position = {3.0f, -2.0f, 5.0f},
+                {.location = {3.0f, -2.0f, 5.0f},
                  .rotation_euler = {0.3f, -0.45f, 0.2f},
                  .scale = {2.0f, 0.75f, 1.5f}});
   set_transform(harness, target.entity,
-                {.position = {-7.0f, 4.0f, -3.0f},
+                {.location = {-7.0f, 4.0f, -3.0f},
                  .rotation_euler = {-0.25f, 0.6f, -0.35f},
                  .scale = {0.5f, 2.25f, 0.8f}});
   ASSERT_TRUE(harness.editor.selection()
@@ -1051,16 +1051,16 @@ TEST(CopyPivotFromActiveTests,
   ASSERT_TRUE(empty.ok()) << empty.error_message();
 
   set_transform(harness, source.entity,
-                {.position = {6.0f, 2.0f, -4.0f},
+                {.location = {6.0f, 2.0f, -4.0f},
                  .rotation_euler = {0.15f, 0.4f, -0.25f},
                  .scale = {1.75f, 0.6f, 1.1f},
                  .custom_pivot = true});
   set_transform(harness, first.entity,
-                {.position = {-2.0f, -5.0f, 3.0f},
+                {.location = {-2.0f, -5.0f, 3.0f},
                  .rotation_euler = {-0.2f, 0.1f, 0.55f},
                  .scale = {0.9f, 1.8f, 0.7f}});
   set_transform(harness, second.entity,
-                {.position = {9.0f, -1.0f, 2.0f},
+                {.location = {9.0f, -1.0f, 2.0f},
                  .rotation_euler = {0.35f, -0.5f, 0.1f},
                  .scale = {2.2f, 0.8f, 1.3f},
                  .custom_pivot = true});
@@ -1069,7 +1069,7 @@ TEST(CopyPivotFromActiveTests,
                                    empty.value().id},
                                   source.entity)
                   .ok());
-  ASSERT_TRUE(harness.session.scene().set_locked(source.entity, true));
+  ASSERT_TRUE(harness.session.scene().set_selectable(source.entity, false));
 
   const quader::QVec3 first_expected = expected_top_level_target_pivot(
       harness, source.entity, first.entity);
@@ -1099,7 +1099,7 @@ TEST(CopyPivotFromActiveTests,
                        second_vertices_before);
   EXPECT_EQ(harness.session.scene().selected_entities(), selected_before);
   EXPECT_EQ(harness.session.scene().primary_selection(), source.entity);
-  EXPECT_TRUE(harness.session.scene().is_effectively_locked(source.entity));
+  EXPECT_FALSE(harness.session.scene().is_effectively_selectable(source.entity));
   ASSERT_NE(harness.session.history().undo_label(), nullptr);
   EXPECT_EQ(*harness.session.history().undo_label(),
             "Copy Pivot From Active");
@@ -1122,11 +1122,11 @@ TEST(CopyPivotFromActiveTests,
   const quader::QuaderModelingObjectRef target =
       create_asymmetric_mesh(harness, "Authored Target", 1.25f);
   set_transform(harness, source,
-                {.position = {4.0f, -3.0f, 2.0f},
+                {.location = {4.0f, -3.0f, 2.0f},
                  .rotation_euler = {0.25f, -0.35f, 0.15f},
                  .scale = {1.5f, 0.7f, 1.2f}});
   set_transform(harness, target.entity,
-                {.position = {-8.0f, 5.0f, -1.0f},
+                {.location = {-8.0f, 5.0f, -1.0f},
                  .rotation_euler = {-0.2f, 0.45f, -0.1f},
                  .scale = {0.8f, 1.6f, 0.9f}});
   ASSERT_TRUE(harness.editor.selection()
@@ -1165,11 +1165,11 @@ TEST(CopyPivotFromActiveTests,
   const quader::QVec3 shared_rotation{0.2f, -0.35f, 0.45f};
   const quader::QVec3 shared_scale{1.6f, 0.75f, 1.25f};
   set_transform(harness, source.entity,
-                {.position = {3.0f, -4.0f, 2.0f},
+                {.location = {3.0f, -4.0f, 2.0f},
                  .rotation_euler = shared_rotation,
                  .scale = shared_scale});
   set_transform(harness, target.entity,
-                {.position = {-8.0f, 5.0f, -3.0f},
+                {.location = {-8.0f, 5.0f, -3.0f},
                  .rotation_euler = shared_rotation,
                  .scale = shared_scale});
   ASSERT_TRUE(harness.editor.selection()
@@ -1223,15 +1223,15 @@ TEST(CopyPivotFromActiveTests,
   const quader::QVec3 shared_rotation{0.2f, -0.35f, 0.45f};
   const quader::QVec3 shared_scale{1.6f, 0.75f, 1.25f};
   set_transform(harness, source.entity,
-                {.position = {3.0f, -4.0f, 2.0f},
+                {.location = {3.0f, -4.0f, 2.0f},
                  .rotation_euler = shared_rotation,
                  .scale = shared_scale});
   set_transform(harness, unchanged.entity,
-                {.position = {-8.0f, 5.0f, -3.0f},
+                {.location = {-8.0f, 5.0f, -3.0f},
                  .rotation_euler = shared_rotation,
                  .scale = shared_scale});
   set_transform(harness, changed.entity,
-                {.position = {9.0f, 2.0f, -6.0f},
+                {.location = {9.0f, 2.0f, -6.0f},
                  .rotation_euler = {-0.3f, 0.1f, -0.25f},
                  .scale = {0.9f, 1.3f, 0.8f}});
   ASSERT_TRUE(harness.editor.selection()
@@ -1285,12 +1285,12 @@ TEST(CopyPivotFromActiveTests,
   const quader::QuaderModelingObjectRef target =
       create_asymmetric_mesh(harness, "Minimum Scale Target", 1.25f);
   set_transform(harness, source.entity,
-                {.position = {3.0f, -4.0f, 2.0f},
+                {.location = {3.0f, -4.0f, 2.0f},
                  .rotation_euler = {0.2f, -0.35f, 0.45f},
                  .scale = {0.001f, 0.0015f, 0.002f},
                  .custom_pivot = true});
   set_transform(harness, target.entity,
-                {.position = {-8.0f, 5.0f, -3.0f},
+                {.location = {-8.0f, 5.0f, -3.0f},
                  .rotation_euler = {-0.3f, 0.1f, -0.25f},
                  .scale = {0.002f, 0.001f, 0.003f}});
   ASSERT_TRUE(harness.editor.selection()
@@ -1326,16 +1326,16 @@ TEST(CopyPivotFromActiveTests,
   const quader::QuaderModelingObjectRef unselected_sharer =
       create_box(harness, "Unselected Sharer");
   set_transform(harness, source.entity,
-                {.position = {5.0f, 3.0f, -2.0f},
+                {.location = {5.0f, 3.0f, -2.0f},
                  .rotation_euler = {0.2f, 0.3f, -0.4f},
                  .scale = {1.2f, 0.8f, 1.5f},
                  .custom_pivot = true});
   set_transform(harness, target.entity,
-                {.position = {-4.0f, 2.0f, 1.0f},
+                {.location = {-4.0f, 2.0f, 1.0f},
                  .rotation_euler = {-0.1f, 0.25f, 0.2f},
                  .scale = {0.75f, 1.4f, 0.9f}});
   set_transform(harness, unselected_sharer.entity,
-                {.position = {11.0f, -6.0f, 4.0f}});
+                {.location = {11.0f, -6.0f, 4.0f}});
 
   const quader::AssetId shared_mesh = mesh_id(harness, target.entity);
   quader::MeshComponent shared_component =
@@ -1402,21 +1402,21 @@ TEST(CopyPivotFromActiveTests,
       harness.editor.scene().create_entity({
           .name = "Nonselected Direct Child",
           .kind = quader::QuaderEntityKind::Empty,
-          .transform = {.position = {-2.0f, 7.0f, -5.0f},
+          .transform = {.location = {-2.0f, 7.0f, -5.0f},
                         .rotation_euler = {0.3f, -0.1f, 0.2f},
                         .scale = {0.7f, 1.4f, 0.9f}},
       });
   ASSERT_TRUE(nonselected_child.ok()) << nonselected_child.error_message();
   ASSERT_LT(child.entity, parent.entity);
   set_transform(harness, source.entity,
-                {.position = {8.0f, 1.0f, -3.0f},
+                {.location = {8.0f, 1.0f, -3.0f},
                  .custom_pivot = true});
   set_transform(harness, child.entity,
-                {.position = {-5.0f, 6.0f, 2.0f},
+                {.location = {-5.0f, 6.0f, 2.0f},
                  .rotation_euler = {-0.2f, 0.15f, 0.1f},
                  .scale = {0.8f, 1.25f, 0.95f}});
   set_transform(harness, parent.entity,
-                {.position = {3.0f, -4.0f, 1.0f},
+                {.location = {3.0f, -4.0f, 1.0f},
                  .rotation_euler = {0.1f, -0.25f, 0.2f},
                  .scale = {1.15f, 0.9f, 1.1f}});
   ASSERT_TRUE(harness.editor.scene()
@@ -1526,7 +1526,7 @@ TEST(CopyPivotFromActiveTests,
       harness.editor.scene().create_entity({
           .name = "Mirrored Nonuniform Parent",
           .kind = quader::QuaderEntityKind::Empty,
-          .transform = {.position = {-6.0f, 2.0f, 5.0f},
+          .transform = {.location = {-6.0f, 2.0f, 5.0f},
                         .rotation_euler = {0.4f, -0.2f, 0.3f},
                         .scale = {-1.5f, 0.65f, 2.2f}},
       });
@@ -1534,7 +1534,7 @@ TEST(CopyPivotFromActiveTests,
       harness.editor.scene().create_entity({
           .name = "Preserved Direct Child",
           .kind = quader::QuaderEntityKind::Empty,
-          .transform = {.position = {1.1f, -0.7f, 0.4f},
+          .transform = {.location = {1.1f, -0.7f, 0.4f},
                         .rotation_euler = {0.2f, 0.1f, -0.3f},
                         .scale = {0.8f, 1.2f, 0.6f}},
       });
@@ -1542,7 +1542,7 @@ TEST(CopyPivotFromActiveTests,
       harness.editor.scene().create_entity({
           .name = "Preserved Grandchild",
           .kind = quader::QuaderEntityKind::Empty,
-          .transform = {.position = {-0.5f, 1.4f, 2.0f},
+          .transform = {.location = {-0.5f, 1.4f, 2.0f},
                         .rotation_euler = {-0.15f, 0.25f, 0.45f},
                         .scale = {1.1f, 0.7f, 1.3f}},
       });
@@ -1551,12 +1551,12 @@ TEST(CopyPivotFromActiveTests,
   ASSERT_TRUE(grandchild.ok()) << grandchild.error_message();
 
   set_transform(harness, source.entity,
-                {.position = {4.0f, -3.0f, 2.0f},
+                {.location = {4.0f, -3.0f, 2.0f},
                  .rotation_euler = {0.25f, -0.4f, 0.35f},
                  .scale = {1.2f, 0.7f, 1.5f},
                  .custom_pivot = true});
   set_transform(harness, target.entity,
-                {.position = {2.5f, -1.0f, 3.0f},
+                {.location = {2.5f, -1.0f, 3.0f},
                  .rotation_euler = {-0.35f, 0.5f, -0.15f},
                  .scale = {0.8f, 1.3f, 0.55f}});
   ASSERT_TRUE(
@@ -1665,13 +1665,13 @@ void run_invalid_copy_case(InvalidCopyCase copy_case) {
   const quader::QuaderModelingObjectRef invalid_target =
       create_asymmetric_mesh(harness, "Invalid Later Target", 1.2f);
   set_transform(harness, source.entity,
-                {.position = {7.0f, 3.0f, -2.0f},
+                {.location = {7.0f, 3.0f, -2.0f},
                  .rotation_euler = {0.2f, -0.3f, 0.1f},
                  .custom_pivot = true});
   set_transform(harness, valid_target.entity,
-                {.position = {-6.0f, 1.0f, 4.0f}});
+                {.location = {-6.0f, 1.0f, 4.0f}});
   set_transform(harness, invalid_target.entity,
-                {.position = {2.0f, -5.0f, 3.0f}});
+                {.location = {2.0f, -5.0f, 3.0f}});
   ASSERT_LT(valid_target.entity, invalid_target.entity);
   ASSERT_TRUE(harness.editor.selection()
                   .select_objects({source.entity, valid_target.entity,
@@ -1686,7 +1686,7 @@ void run_invalid_copy_case(InvalidCopyCase copy_case) {
     break;
   case InvalidCopyCase::LockedTarget:
     ASSERT_TRUE(
-        harness.session.scene().set_locked(invalid_target.entity, true));
+        harness.session.scene().set_selectable(invalid_target.entity, false));
     break;
   case InvalidCopyCase::MissingTargetMesh: {
     quader::MeshComponent missing =
@@ -1873,12 +1873,12 @@ TEST(CopyPivotFromActiveTests,
   const quader::QuaderModelingObjectRef unselected_sharer =
       create_box(harness, "Rollback Unselected Sharer");
   set_transform(harness, source.entity,
-                {.position = {5.0f, 3.0f, -2.0f},
+                {.location = {5.0f, 3.0f, -2.0f},
                  .rotation_euler = {0.2f, 0.3f, -0.4f},
                  .scale = {1.2f, 0.8f, 1.5f},
                  .custom_pivot = true});
   set_transform(harness, target.entity,
-                {.position = {-4.0f, 2.0f, 1.0f},
+                {.location = {-4.0f, 2.0f, 1.0f},
                  .rotation_euler = {-0.1f, 0.25f, 0.2f},
                  .scale = {0.75f, 1.4f, 0.9f}});
   const quader::AssetId shared_mesh = mesh_id(harness, target.entity);
@@ -1938,7 +1938,7 @@ TEST(CopyPivotFromActiveTests,
   const quader::QuaderModelingObjectRef unselected_sharer =
       create_box(harness, "Undo Rollback Unselected Sharer");
   set_transform(harness, source.entity,
-                {.position = {5.0f, 3.0f, -2.0f},
+                {.location = {5.0f, 3.0f, -2.0f},
                  .rotation_euler = {0.2f, 0.3f, -0.4f},
                  .scale = {1.2f, 0.8f, 1.5f},
                  .custom_pivot = true});
@@ -2016,7 +2016,7 @@ TEST(CopyPivotFromActiveTests,
   const quader::QuaderModelingObjectRef unselected_sharer =
       create_box(harness, "Redo Rollback Unselected Sharer");
   set_transform(harness, source.entity,
-                {.position = {5.0f, 3.0f, -2.0f},
+                {.location = {5.0f, 3.0f, -2.0f},
                  .rotation_euler = {0.2f, 0.3f, -0.4f},
                  .scale = {1.2f, 0.8f, 1.5f},
                  .custom_pivot = true});
@@ -2192,7 +2192,7 @@ TEST(MeshOriginPlacementTests,
   const quader::EntityId target =
       create_asymmetric_mesh(harness, "Area Center").entity;
   const quader::TransformComponent transform{
-      .position = {7.0f, -4.0f, 2.0f},
+      .location = {7.0f, -4.0f, 2.0f},
       .rotation_euler = {0.3f, -0.4f, 0.2f},
       .scale = {-2.0f, 0.5f, 3.0f}};
   set_transform(harness, target, transform);
@@ -2342,11 +2342,11 @@ TEST(MeshOriginPlacementTests,
   const auto parent = create_box(harness, "Centered Parent");
   const auto child = create_box(harness, "Preserved Child");
   set_transform(harness, parent.entity,
-                {.position = {3.0f, -7.0f, 5.0f},
+                {.location = {3.0f, -7.0f, 5.0f},
                  .rotation_euler = {0.37f, -0.29f, 0.53f},
                  .scale = {-1.3f, 0.7f, 2.1f}});
   set_transform(harness, child.entity,
-                {.position = {-2.3f, 4.7f, 1.9f},
+                {.location = {-2.3f, 4.7f, 1.9f},
                  .rotation_euler = {-0.21f, 0.63f, -0.47f},
                  .scale = {0.8f, 1.4f, 0.6f}});
   ASSERT_TRUE(
@@ -2366,9 +2366,9 @@ TEST(MeshOriginPlacementTests,
   EXPECT_TRUE(harness.session.scene().transform(parent.entity)->custom_pivot);
   const auto expect_exact_preservation = [&] {
     const auto &after = *harness.session.scene().transform(child.entity);
-    EXPECT_EQ(after.position.x, child_before.position.x);
-    EXPECT_EQ(after.position.y, child_before.position.y);
-    EXPECT_EQ(after.position.z, child_before.position.z);
+    EXPECT_EQ(after.location.x, child_before.location.x);
+    EXPECT_EQ(after.location.y, child_before.location.y);
+    EXPECT_EQ(after.location.z, child_before.location.z);
     EXPECT_EQ(after.rotation_euler.x, child_before.rotation_euler.x);
     EXPECT_EQ(after.rotation_euler.y, child_before.rotation_euler.y);
     EXPECT_EQ(after.rotation_euler.z, child_before.rotation_euler.z);
@@ -2398,8 +2398,8 @@ TEST(MeshOriginPlacementTests,
   const auto first = create_box(harness, "Left Mesh");
   const auto second = create_box_with_bounds(
       harness, "Right Mesh", {0.0f, -1.0f, -1.0f}, {4.0f, 3.0f, 1.0f});
-  set_transform(harness, first.entity, {.position = {-6.0f, 0.0f, 0.0f}});
-  set_transform(harness, second.entity, {.position = {10.0f, 0.0f, 0.0f}});
+  set_transform(harness, first.entity, {.location = {-6.0f, 0.0f, 0.0f}});
+  set_transform(harness, second.entity, {.location = {10.0f, 0.0f, 0.0f}});
   ASSERT_TRUE(harness.editor.selection()
                   .select_objects({first.entity, second.entity}, first.entity)
                   .ok());
@@ -2449,11 +2449,11 @@ TEST(MeshOriginPlacementTests,
                     .reparent(descendant.entity, child.entity, false)
                     .ok());
     set_transform(harness, parent.entity,
-                  {.position = {5.0f, -2.0f, 3.0f},
+                  {.location = {5.0f, -2.0f, 3.0f},
                    .rotation_euler = {0.2f, -0.3f, 0.4f},
                    .scale = {-1.5f, 0.7f, 2.0f}});
     set_transform(harness, child.entity,
-                  {.position = {-2.0f, 4.0f, 1.0f},
+                  {.location = {-2.0f, 4.0f, 1.0f},
                    .rotation_euler = {-0.4f, 0.1f, 0.3f},
                    .scale = {0.8f, 1.2f, 0.6f}});
     const auto shared_mesh = mesh_id(harness, child.entity);
@@ -2463,7 +2463,7 @@ TEST(MeshOriginPlacementTests,
       ASSERT_TRUE(harness.session.scene().set_mesh(entity, component));
     }
     const quader::TransformComponent mapping_transform{
-        .position = {0.3f, -1.0f, 0.5f},
+        .location = {0.3f, -1.0f, 0.5f},
         .rotation_euler = {0.3f, 1.2f, -0.4f},
         .scale = {1.3f, 0.7f, -1.1f}};
     const auto mapping =
@@ -2605,7 +2605,7 @@ TEST(MeshOriginPlacementTests, InvalidSelectionRejectsBothActionsAtomically) {
     CopyPivotHarness harness;
     const auto valid = create_box(harness, "Valid Earlier Target");
     const auto invalid = create_box(harness, "Invalid Later Target");
-    set_transform(harness, invalid.entity, {.position = {9.0f, 2.0f, 1.0f}});
+    set_transform(harness, invalid.entity, {.location = {9.0f, 2.0f, 1.0f}});
     ASSERT_TRUE(
         harness.editor.selection()
             .select_objects({valid.entity, invalid.entity}, valid.entity)
@@ -2625,7 +2625,7 @@ TEST(MeshOriginPlacementTests, InvalidSelectionRejectsBothActionsAtomically) {
       break;
     }
     case InvalidSelection::Locked:
-      ASSERT_TRUE(harness.session.scene().set_locked(invalid.entity, true));
+      ASSERT_TRUE(harness.session.scene().set_selectable(invalid.entity, false));
       break;
     case InvalidSelection::Hidden:
       ASSERT_TRUE(harness.session.scene().set_visible(invalid.entity, false));
@@ -2768,7 +2768,7 @@ TEST(PivotPerformanceTests,
   const quader::QuaderModelingObjectRef source =
       create_asymmetric_mesh(harness, "Scale Source", 2.0f);
   set_transform(harness, source.entity,
-                {.position = {8.0f, 3.0f, -5.0f}, .custom_pivot = true});
+                {.location = {8.0f, 3.0f, -5.0f}, .custom_pivot = true});
 
   std::vector<quader::QuaderModelingObjectRef> targets;
   targets.reserve(kTargetCount);
@@ -2776,7 +2776,7 @@ TEST(PivotPerformanceTests,
     targets.push_back(
         create_box(harness, "Scale Target " + std::to_string(index)));
     set_transform(harness, targets.back().entity,
-                  {.position = {static_cast<float>(index) * 3.0f,
+                  {.location = {static_cast<float>(index) * 3.0f,
                                 static_cast<float>(index % 5u),
                                 -static_cast<float>(index % 7u)}});
     if (index > 0u) {
@@ -2910,7 +2910,7 @@ TEST(PivotPerformanceTests,
   const quader::QuaderModelingObjectRef source =
       create_asymmetric_mesh(harness, "Indexed Source", 2.0f);
   set_transform(harness, source.entity,
-                {.position = {7.0f, 2.0f, -4.0f},
+                {.location = {7.0f, 2.0f, -4.0f},
                  .custom_pivot = true});
   const quader::QuaderModelingObjectRef target =
       create_box(harness, "Indexed Target");

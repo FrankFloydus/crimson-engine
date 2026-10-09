@@ -40,7 +40,7 @@ bool selected_scene_targets_are_instance_occurrences(
   return !selected.empty() &&
          std::all_of(selected.begin(), selected.end(), [&](EntityId entity) {
            return scene.instance_occurrence(entity) != nullptr &&
-                  !scene.is_effectively_locked(entity);
+                  scene.is_effectively_selectable(entity);
          });
 }
 
@@ -51,7 +51,7 @@ bool selected_scene_targets_support_structural_duplicate(
          std::all_of(selected.begin(), selected.end(), [&](EntityId entity) {
            return scene.exists(entity) &&
                   scene.transform(entity) != nullptr &&
-                  !scene.is_effectively_locked(entity);
+                  scene.is_effectively_selectable(entity);
          });
 }
 
@@ -64,7 +64,7 @@ bool selected_scene_targets_are_sdk_modeling_objects(
                scene.modeling_object(entity);
            return modeling != nullptr && modeling->sdk_owned &&
                   scene.instance_occurrence(entity) == nullptr &&
-                  !scene.is_effectively_locked(entity);
+                  scene.is_effectively_selectable(entity);
          });
 }
 

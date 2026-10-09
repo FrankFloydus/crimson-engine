@@ -142,27 +142,31 @@ build_render_scene_snapshot(const SceneDocument &document,
     RenderSceneBindingKey scene_binding = {},
     std::uint64_t project_material_revision = 0u,
     RenderInstanceEditScope instance_edit_scope = {},
-    const ViewportLocalVisibilitySnapshot *local_visibility = nullptr);
+    const ViewportLocalVisibilitySnapshot *local_visibility = nullptr,
+    bool backface_culling_enabled = true);
 [[nodiscard]] bool try_refresh_render_scene_snapshot_selection(
     RenderSceneSnapshot &snapshot, const SceneDocument &document,
     const AssetRegistry &assets, std::uint64_t frame_index = 0,
     RenderSceneBindingKey scene_binding = {},
     std::uint64_t project_material_revision = 0u,
     RenderInstanceEditScope instance_edit_scope = {},
-    const ViewportLocalVisibilitySnapshot *local_visibility = nullptr);
+    const ViewportLocalVisibilitySnapshot *local_visibility = nullptr,
+    bool backface_culling_enabled = true);
 [[nodiscard]] bool try_refresh_render_scene_snapshot_transforms(
     RenderSceneSnapshot &snapshot, const SceneDocument &document,
     const AssetRegistry &assets, std::uint64_t frame_index = 0,
     RenderSceneBindingKey scene_binding = {},
     std::uint64_t project_material_revision = 0u,
     RenderInstanceEditScope instance_edit_scope = {},
-    const ViewportLocalVisibilitySnapshot *local_visibility = nullptr);
+    const ViewportLocalVisibilitySnapshot *local_visibility = nullptr,
+    bool backface_culling_enabled = true);
 [[nodiscard]] bool render_scene_snapshot_matches_sources(
     const RenderSceneSnapshot &snapshot, const SceneDocument &document,
     const AssetRegistry &assets, RenderSceneBindingKey scene_binding = {},
     std::uint64_t project_material_revision = 0u,
     RenderInstanceEditScope instance_edit_scope = {},
-    const ViewportLocalVisibilitySnapshot *local_visibility = nullptr);
+    const ViewportLocalVisibilitySnapshot *local_visibility = nullptr,
+    bool backface_culling_enabled = true);
 [[nodiscard]] SceneRenderExtractionPlan build_scene_render_extraction_plan(
     const SceneDocument &document, const AssetRegistry &assets);
 [[nodiscard]] std::vector<RenderToolPreviewMeshRecord>
@@ -171,14 +175,16 @@ build_render_tool_preview_snapshot(std::vector<ToolPreviewMesh> meshes,
                                    const ViewportLocalVisibilitySnapshot *
                                        local_visibility = nullptr,
                                    const RenderProjectMaterialResolver *
-                                       project_material_resolver = nullptr);
+                                       project_material_resolver = nullptr,
+                                   bool backface_culling_enabled = true);
 
 [[nodiscard]] RenderToolPreviewSceneSnapshot
 build_render_tool_preview_scene_snapshot(
     ToolPreviewScene preview, const AssetRegistry &assets,
     const ViewportLocalVisibilitySnapshot *local_visibility = nullptr,
     const RenderProjectMaterialResolver *project_material_resolver = nullptr,
-    CurveSolidGeometryCache *curve_solid_geometry_cache = nullptr);
+    CurveSolidGeometryCache *curve_solid_geometry_cache = nullptr,
+    bool backface_culling_enabled = true);
 
 /** Builds camera-independent Curve, Light-marker, and group-marker geometry. */
 [[nodiscard]] ViewportOverlayFrame build_render_tool_preview_overlay_frame(

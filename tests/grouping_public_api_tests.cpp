@@ -29,16 +29,16 @@ QuaderBounds unit_box_bounds() {
   return {.min = {-0.5f, -0.5f, -0.5f}, .max = {0.5f, 0.5f, 0.5f}};
 }
 
-QuaderTransform transform_at(QVec3 position) {
+QuaderTransform transform_at(QVec3 location) {
   QuaderTransform transform;
-  transform.position = position;
+  transform.location = location;
   return transform;
 }
 
 void given_box_at(BehaviorScenario &scenario, std::string_view alias,
-                  std::string name, QVec3 position) {
+                  std::string name, QVec3 location) {
   scenario.given().box(alias, unit_box_bounds(), std::move(name));
-  scenario.given().transform(alias, transform_at(position));
+  scenario.given().transform(alias, transform_at(location));
 }
 
 AssetId create_textured_material(BehaviorScenario &scenario, std::string name,
@@ -268,7 +268,7 @@ TEST(GroupingPublicApiTests,
   scenario.given().entity("singular", "Singular", QuaderEntityKind::Empty,
                           singular);
   scenario.given().entity("locked", "Locked", QuaderEntityKind::Empty);
-  ASSERT_TRUE(scenario.api().scene().set_locked(scenario.entity("locked"), true).ok());
+  ASSERT_TRUE(scenario.api().scene().set_selectable(scenario.entity("locked"), false).ok());
   const EntityId root = scenario.api().query().entity(scenario.entity("group"))->parent;
   const QuaderRevisionStamp before = scenario.api().query().revisions();
   const QuaderHistorySnapshot history = scenario.api().history().snapshot();
@@ -380,12 +380,12 @@ TEST(GroupingPublicApiTests, BehaviorWorldPositionExpectationUsesSceneWorldTrans
   BehaviorScenario scenario = BehaviorScenario::new_project();
 
   QuaderTransform parent_transform;
-  parent_transform.position = {10.0f, -1.0f, 0.0f};
+  parent_transform.location = {10.0f, -1.0f, 0.0f};
   parent_transform.rotation_euler = {0.0f, 0.0f, kHalfPi};
   parent_transform.scale = {2.0f, 3.0f, 1.0f};
 
   QuaderTransform child_transform;
-  child_transform.position = {1.0f, 0.0f, 0.0f};
+  child_transform.location = {1.0f, 0.0f, 0.0f};
 
   scenario.given().entity("parent", "Rotated Parent", QuaderEntityKind::Empty,
                           parent_transform);
@@ -402,7 +402,7 @@ TEST(GroupingPublicApiTests, GroupSelectionParentsSelectedRootsAndUndoRedoRestor
   scenario.given().selected_aliases({"left", "right"}, "right");
 
   QuaderTransform group_transform;
-  group_transform.position = {10.0f, 0.0f, 0.0f};
+  group_transform.location = {10.0f, 0.0f, 0.0f};
   scenario.when().group_selection("group", "Pair", group_transform);
 
   scenario.then().command().ok_changed();
@@ -649,7 +649,7 @@ TEST(GroupingPublicApiTests, UngroupUndoRedoRestoresGroupSelectionAndChildPlacem
   given_box_at(scenario, "second", "Second", {2.0f, 0.0f, 0.0f});
   scenario.given().selected_aliases({"first", "second"}, "first");
   QuaderTransform group_transform;
-  group_transform.position = {5.0f, 0.0f, 0.0f};
+  group_transform.location = {5.0f, 0.0f, 0.0f};
   scenario.when().group_selection("group", "Ungroup Me", group_transform);
 
   scenario.when().ungroup_selection();
@@ -695,7 +695,7 @@ TEST(GroupingPublicApiTests, SceneDestroyGroupUndoRedoRestoresMaterialsTexturesA
 
   scenario.given().selected_aliases({"red", "blue"}, "red");
   QuaderTransform group_transform;
-  group_transform.position = {12.0f, 0.0f, 0.0f};
+  group_transform.location = {12.0f, 0.0f, 0.0f};
   scenario.when().group_selection("group", "Textured Group", group_transform);
 
   scenario.when().destroy("group");
@@ -1079,13 +1079,13 @@ TEST(GroupingPublicApiTests, GroupVisibilityLockAndTransformBatchUndoRedoSurvive
   scenario.when().group_selection("group", "Batch Group");
 
   QuaderTransform moved;
-  moved.position = {2.0f, 3.0f, 0.0f};
-  scenario.when().set_group_flags("group", moved, false, true);
+  moved.location = {2.0f, 3.0f, 0.0f};
+  scenario.when().set_group_flags("group", moved, false, false);
   scenario.then().command().ok_changed();
   scenario.then()
       .scene()
       .visible("group", false)
-      .locked("group", true)
+      .selectable("group", false)
       .entity_transform_near("group", moved)
       .parent("first", "group")
       .parent("second", "group");
@@ -1094,7 +1094,7 @@ TEST(GroupingPublicApiTests, GroupVisibilityLockAndTransformBatchUndoRedoSurvive
   scenario.then()
       .scene()
       .visible("group", true)
-      .locked("group", false)
+      .selectable("group", true)
       .entity_transform_near("group", QuaderTransform{})
       .parent("first", "group")
       .parent("second", "group");
@@ -1103,7 +1103,7 @@ TEST(GroupingPublicApiTests, GroupVisibilityLockAndTransformBatchUndoRedoSurvive
   scenario.then()
       .scene()
       .visible("group", false)
-      .locked("group", true)
+      .selectable("group", false)
       .entity_transform_near("group", moved);
 }
 
@@ -1115,7 +1115,7 @@ TEST(GroupingPublicApiTests, DuplicateSelectedHierarchyCopiesStateSelectsCloneAn
                           parent_transform);
 
   QuaderTransform group_create_transform;
-  group_create_transform.position = {1.0f, 2.0f, 3.0f};
+  group_create_transform.location = {1.0f, 2.0f, 3.0f};
   group_create_transform.rotation_euler = {0.1f, 0.2f, 0.3f};
   scenario.given().entity("group", "Duplicate Source", QuaderEntityKind::Empty,
                           group_create_transform, "parent");
@@ -1135,23 +1135,23 @@ TEST(GroupingPublicApiTests, DuplicateSelectedHierarchyCopiesStateSelectsCloneAn
   scenario.remember_entity_named("child.copy", "Duplicate Child_001");
 
   QuaderTransform group_expected;
-  group_expected.position = group_create_transform.position;
+  group_expected.location = group_create_transform.location;
   group_expected.rotation_euler = group_create_transform.rotation_euler;
   QuaderTransform child_expected;
-  child_expected.position = {4.0f, 5.0f, 6.0f};
+  child_expected.location = {4.0f, 5.0f, 6.0f};
 
   scenario.then()
       .scene()
       .alias_name("group.copy", "Duplicate Source_001")
       .parent("group.copy", "parent")
       .visible("group.copy", false)
-      .locked("group.copy", false)
+      .selectable("group.copy", true)
       .entity_transform_near("group.copy", group_expected)
       .child_count("group.copy", 1u)
       .alias_name("child.copy", "Duplicate Child_001")
       .parent("child.copy", "group.copy")
       .visible("child.copy", false)
-      .locked("child.copy", false)
+      .selectable("child.copy", true)
       .has_mesh("child.copy", child_mesh)
       .has_material("child.copy", material)
       .entity_transform_near("child.copy", child_expected)
@@ -1184,7 +1184,7 @@ TEST(GroupingPublicApiTests, DuplicateMixedMeshAndLightHierarchyCopiesStateAndUn
 
   QuaderCreatePointLightArgs light_args;
   light_args.name = "Mixed Duplicate Light";
-  light_args.transform.position = {3.0f, 1.0f, 0.0f};
+  light_args.transform.location = {3.0f, 1.0f, 0.0f};
   const QuaderApiResult<QuaderEntityRef> light =
       scenario.api().scene().create_point_light(light_args);
   ASSERT_TRUE(light.ok) << light.message;
@@ -1313,7 +1313,7 @@ TEST(GroupingPublicApiTests, DeleteMixedMeshAndLightHierarchyUndoRedoRestoresSce
 
   QuaderCreatePointLightArgs light_args;
   light_args.name = "Mixed Delete Light";
-  light_args.transform.position = {2.0f, 4.0f, 0.0f};
+  light_args.transform.location = {2.0f, 4.0f, 0.0f};
   const QuaderApiResult<QuaderEntityRef> light =
       scenario.api().scene().create_point_light(light_args);
   ASSERT_TRUE(light.ok) << light.message;

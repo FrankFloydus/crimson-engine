@@ -884,7 +884,7 @@ std::span<const ViewportSceneCurvePickCandidate> ViewportCurvePickCache::candida
   for (const auto &entity : hierarchy->records()) {
     const CurveComponent *binding = document.curve(entity.entity);
     if (binding == nullptr || !entity.effectively_visible ||
-        entity.effectively_locked ||
+        !entity.effectively_selectable ||
         entity.containing_instance_definition != kInvalidEntityId ||
         (entity_visible && !entity_visible(entity.entity)) ||
         !scene_hierarchy_segment_is_selectable_ignoring_visibility(

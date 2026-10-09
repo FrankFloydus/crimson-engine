@@ -312,6 +312,8 @@ struct QuaderPreferencesRuntimeHooks {
     std::function<QuaderApiVoidResult(bool)> set_snapping_enabled;
     std::function<bool()> backface_selection_enabled;
     std::function<QuaderApiVoidResult(bool)> set_backface_selection_enabled;
+    std::function<bool()> backface_culling_enabled;
+    std::function<QuaderApiVoidResult(bool)> set_backface_culling_enabled;
     std::function<bool()> grid_visible;
     std::function<QuaderApiVoidResult(bool)> set_grid_visible;
     std::function<bool()> gizmos_visible;

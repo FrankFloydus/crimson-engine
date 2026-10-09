@@ -17,6 +17,15 @@ file except through prior written authorization from Francesco Di Blasi.
   bindings only when the choice changes; unchanged frames perform no image reads.
   Preserve Solid's flat-color shader behavior. See `tests/public_release_render_tests.cpp`
   and the default-material cases in `tests/render_extraction_tests.cpp`.
+- Backface Culling is one shared viewport preference captured in `RenderSourceStamp`.
+  Mesh, instance and preview snapshots derive effective sidedness from it, independently of
+  preserved legacy `MeshComponent::double_sided` values. Refresh retained bindings and depth
+  identity when it changes; unchanged frames reuse them. Generated previews republish their
+  immutable prepared candidate under the existing source/material/visibility stamps, without
+  recompiling SDK geometry for a culling change. CPU rendered occlusion includes Filament's
+  reflected-entity front-face correction. Backface Selection remains independent.
+  Coverage: `tests/scene_surface_query_tests.cpp`, `tests/render_extraction_tests.cpp` and the
+  global-culling pixel test in `tests/render_normal_mapping_runtime_tests.cpp`.
 - `RenderSourceStamp` gates extraction; `RenderSceneSnapshot` feeds `SceneRenderBridge` and caches.
   Put dirty/revision checks before topology hashes, geometry compilation, snapshots, or uploads.
   Snapshot-owned material bindings use exact authored keys and material catalog/project revisions.
@@ -193,6 +202,15 @@ file except through prior written authorization from Francesco Di Blasi.
   combine meshes only within the same active/ordinary class. Color edits update uniforms;
   camera moves never rebuild batches. Retain reflected winding and local origins for precision.
   Non-Vulkan backends preserve per-mesh ordering because they lack the stencil composition path.
+- The pinned Filament `aab101b4c038` computes reflected-entity raster winding and normal correction
+  in `Scene.cpp`, but `InstanceBuffer::prepare` overwrites that normal matrix without its sign
+  correction. Reflected and singular base-instance occurrences therefore use retained singleton
+  entity transforms with shared compiled geometry; positive placements keep explicit batching.
+  Preserve this partition even with culling disabled so normals and tangent-space materials match
+  ordinary meshes. A reflected batch root alone fixes winding but still loses normal parity.
+  `RenderInstancePresentationFlag::PerObjectTransform` owns the planner contract; transforms,
+  suppression and compatible geometry updates retain its proxy just like the batched peers.
+  Coverage: the global-culling pixel test in `tests/render_normal_mapping_runtime_tests.cpp`.
 - Geometry-only instance changes may retain compatible entities, materials and instance buffers.
   Match exact occurrence order, materials, passes, topology and capacity; prepare the entire rebind
   batch before changing a live proxy. Incompatible groups use normal replacement. See

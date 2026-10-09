@@ -12,12 +12,14 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace quader {
 
 class QuaderApi;
 class QuaderRenderApiRuntimeAccess;
+struct RenderToolPreviewSceneSnapshot;
 
 /**
  * Exposes Quader Render API operations through the public Quader API surface.
@@ -70,6 +72,7 @@ public:
     std::uint64_t transform_preview_local_visibility_revision_ = 0;
     bool transform_preview_attempt_failed_ = false;
     const void *generated_tool_preview_sync_bridge_ = nullptr;
+    const void *generated_tool_preview_material_resolver_ = nullptr;
     std::uint64_t generated_tool_preview_bridge_submission_revision_ = 0;
     GeneratedToolPreviewSourceStamp generated_tool_preview_source_;
     bool generated_tool_preview_source_valid_ = false;
@@ -77,6 +80,8 @@ public:
     std::uint64_t generated_tool_preview_asset_revision_ = 0;
     std::uint64_t generated_tool_preview_local_visibility_revision_ = 0;
     bool generated_tool_preview_attempt_failed_ = false;
+    /// Immutable derived candidate, fenced by the generated preview authority stamps.
+    std::shared_ptr<const RenderToolPreviewSceneSnapshot> generated_tool_preview_snapshot_;
     std::uint64_t scene_session_id_ = 1u;
     std::uint64_t activation_generation_ = 1u;
     std::uint64_t scene_binding_revision_ = 1;

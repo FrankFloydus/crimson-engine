@@ -54,7 +54,7 @@ public:
     SceneExpect &active_alias(std::string_view alias);
     SceneExpect &selected_alias_is(std::string_view alias);
     SceneExpect& visible(std::string_view alias, bool expected);
-    SceneExpect& locked(std::string_view alias, bool expected);
+    SceneExpect& selectable(std::string_view alias, bool expected);
     SceneExpect &has_mesh(std::string_view alias, AssetId mesh);
     SceneExpect &has_material(std::string_view alias, AssetId material);
     SceneExpect &world_position_near(std::string_view alias, QVec3 expected,

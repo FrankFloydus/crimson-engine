@@ -2848,7 +2848,7 @@ TEST(ProjectSessionWorkspace,
   ASSERT_TRUE(editor.scene()
                   .set_transform(source_occurrence,
                                  QuaderTransform{
-                                     .position = {7.0f, 2.0f, -5.0f},
+                                     .location = {7.0f, 2.0f, -5.0f},
                                      .rotation_euler = {0.0f, 0.4f, 0.0f},
                                  })
                   .ok());
@@ -2875,7 +2875,7 @@ TEST(ProjectSessionWorkspace,
   const TransformComponent *pasted_transform =
       scene->session->scene().transform(pasted_occurrence);
   ASSERT_NE(pasted_transform, nullptr);
-  expect_vec3_eq(pasted_transform->position, source_transform.position);
+  expect_vec3_eq(pasted_transform->location, source_transform.location);
   expect_vec3_eq(pasted_transform->rotation_euler,
                  source_transform.rotation_euler);
   EXPECT_EQ(editor.query().history().undo_label, "Paste Instances");
@@ -3037,7 +3037,7 @@ TEST(ProjectSessionWorkspace,
   ASSERT_TRUE(editor.scene()
                   .set_transform(source_occurrence,
                                  QuaderTransform{
-                                     .position = {-4.0f, 3.0f, 9.0f},
+                                     .location = {-4.0f, 3.0f, 9.0f},
                                      .rotation_euler = {0.2f, 0.5f, -0.1f},
                                      .scale = {1.5f, 0.75f, 2.0f},
                                  })
@@ -3090,15 +3090,15 @@ TEST(ProjectSessionWorkspace,
       *destination_scene->session->scene().transform(destination_member);
   TransformComponent source_member_transform =
       *source_scene->session->scene().transform(source_member);
-  source_member_transform.position.x += 12.0f;
+  source_member_transform.location.x += 12.0f;
   ASSERT_TRUE(source_scene->session->document_commands()
                   .set_transform(source_member, source_member_transform)
                   .ok);
   const TransformComponent *destination_member_after =
       destination_scene->session->scene().transform(destination_member);
   ASSERT_NE(destination_member_after, nullptr);
-  expect_vec3_eq(destination_member_after->position,
-                 destination_member_transform.position);
+  expect_vec3_eq(destination_member_after->location,
+                 destination_member_transform.location);
   expect_vec3_eq(destination_member_after->rotation_euler,
                  destination_member_transform.rotation_euler);
   expect_vec3_eq(destination_member_after->scale,
@@ -4105,7 +4105,7 @@ TEST(ProjectSessionWorkspace, ClosePromptsIncludeCleanPendingChangesWithoutAccep
     ASSERT_TRUE(read.ok) << read.message;
     const auto *saved_transform = read.document.scene().transform(object.value().entity);
     ASSERT_NE(saved_transform, nullptr);
-    expect_vec3_eq(saved_transform->position, *expected);
+    expect_vec3_eq(saved_transform->location, *expected);
   }
 }
 

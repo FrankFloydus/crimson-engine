@@ -24,8 +24,8 @@ inline void pin_local_pivot_to_world_point(TransformComponent &transform,
                                            QVec3 local_pivot,
                                            QVec3 world_pivot) {
   QTransform spatial = transform.spatial_transform();
-  spatial.position = {};
-  transform.position =
+  spatial.location = {};
+  transform.location =
       transform_point(inverse(transform.parenting_offset), world_pivot) -
       transform_point(compose_transform(spatial), local_pivot);
 }

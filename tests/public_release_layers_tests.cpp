@@ -144,7 +144,7 @@ TEST(PublicReleaseLayersTests, UnassignedMeshesRetainTransformAndClipboardWorkfl
   const auto created = editor.modeling().create_box(
       {.min = {-1.f, -1.f, -1.f}, .max = {1.f, 1.f, 1.f}}, "Unassigned Model");
   ASSERT_TRUE(created.ok()) << created.error_message();
-  ASSERT_TRUE(editor.scene().set_transform(created.value().entity, {.position = {2.f, 0.f, 0.f}}).ok());
+  ASSERT_TRUE(editor.scene().set_transform(created.value().entity, {.location = {2.f, 0.f, 0.f}}).ok());
   ASSERT_TRUE(editor.modeling().copy_selection().ok());
   ASSERT_TRUE(editor.modeling().paste_selection().ok());
   const auto &scene = session.scene();

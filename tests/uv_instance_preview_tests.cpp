@@ -64,11 +64,11 @@ public:
     const EntityId member = created.value().entity;
     const EntityId parent = session.scene().create_entity("UV Array Parent", EntityKind::Empty);
     EXPECT_TRUE(session.scene().set_transform(parent,
-        {.position = {0.5f, 2, -1}, .rotation_euler = {0, 0.2f, 0},
+        {.location = {0.5f, 2, -1}, .rotation_euler = {0, 0.2f, 0},
          .scale = {1.2f, 1.2f, 1.2f}}));
     EXPECT_TRUE(session.scene().set_parent(member, parent, false));
     EXPECT_TRUE(editor.scene().set_transform(member,
-        {.position = {x, 1, 2}, .rotation_euler = {0.2f, 0.35f, -0.1f},
+        {.location = {x, 1, 2}, .rotation_euler = {0.2f, 0.35f, -0.1f},
          .scale = {1.25f, 0.75f, 1.5f}}).ok());
     QMat4 member_mapping;
     member_mapping.values[0] = 1.75f;

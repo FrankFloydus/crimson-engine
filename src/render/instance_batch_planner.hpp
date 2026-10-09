@@ -20,6 +20,8 @@ enum class RenderInstancePresentationFlag : std::uint8_t {
   None = 0u,
   Dimmed = 1u << 0u,
   ShadedWireColorOverride = 1u << 1u,
+  /// Filament must evaluate winding and shading from this occurrence transform.
+  PerObjectTransform = 1u << 2u,
 };
 
 /// Identifies immutable render payloads without scene or asset identities.
@@ -66,7 +68,7 @@ struct RenderInstancePrimitiveOccurrence final {
   bool visible = true;
 };
 
-/// Describes one device-cap-sized indexed-instanced draw.
+/// Describes one device-cap-sized draw or one entity-transform singleton.
 struct RenderInstanceBatchChunk final {
   RenderInstancePrimitiveKey key;
   std::vector<std::uint64_t> occurrences;

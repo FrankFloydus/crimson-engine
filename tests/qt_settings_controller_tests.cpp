@@ -172,10 +172,10 @@ TEST(QtSettingsControllerTests,
      EveryControlMutatesItsOwnerAndNotifiesItsPhase) {
   static_assert(kViewportColorSettingCount == 27u);
   static_assert(kViewportFloatSettingCount == 35u);
-  static_assert(kViewportBoolSettingCount == 16u);
+  static_assert(kViewportBoolSettingCount == 17u);
   static_assert(3u + kViewportColorSettingCount + kViewportFloatSettingCount +
                      kViewportBoolSettingCount ==
-                81u);
+                82u);
 
   UISettings ui_settings = UISettings::defaults();
   ViewportSettings viewport_settings = ViewportSettings::defaults();

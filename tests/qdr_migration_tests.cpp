@@ -189,13 +189,13 @@ TEST(QdrMigrationTests, RetiredAuthoredScenePreservesIdentityOrderComponentsAndD
   EXPECT_EQ(entity.uuid, "11111111-1111-4111-8111-111111111111");
   EXPECT_EQ(entity.parent, kInvalidEntityId);
   EXPECT_EQ(entity.sibling_ordinal, 1u);
-  EXPECT_EQ(entity.transform.position.x, 3.0f);
+  EXPECT_EQ(entity.transform.location.x, 3.0f);
   EXPECT_EQ(entity.transform.rotation_euler.z, 0.4f);
   EXPECT_EQ(entity.transform.scale.y, 3.0f);
   EXPECT_TRUE(entity.transform.custom_pivot);
   EXPECT_FALSE(entity.visibility.visible);
   EXPECT_FALSE(entity.visibility.selectable);
-  EXPECT_TRUE(entity.lock.locked);
+  EXPECT_FALSE(entity.selectable.selectable);
   ASSERT_TRUE(entity.mesh.has_value());
   EXPECT_TRUE(entity.mesh->editor_only);
   EXPECT_TRUE(entity.mesh->cast_shadows);

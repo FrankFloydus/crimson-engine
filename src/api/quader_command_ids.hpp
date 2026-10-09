@@ -138,6 +138,8 @@ inline constexpr QuaderCommandId kViewportViewBack{"viewport.view.back"};
 inline constexpr QuaderCommandId kViewportToggleGrid{"viewport.toggle_grid"};
 inline constexpr QuaderCommandId kViewportToggleWireframeOnShaded{
     "viewport.toggle_wireframe_on_shaded"};
+inline constexpr QuaderCommandId kViewportToggleBackfaceCulling{
+    "viewport.toggle_backface_culling"};
 inline constexpr QuaderCommandId kViewportToggleGizmos{
     "viewport.toggle_gizmos"};
 inline constexpr QuaderCommandId kViewportToggleMeshGrid{
@@ -536,6 +538,7 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kViewportViewBack,
     kViewportToggleGrid,
     kViewportToggleWireframeOnShaded,
+    kViewportToggleBackfaceCulling,
     kViewportToggleGizmos,
     kViewportToggleMeshGrid,
     kViewportToggleOverlays,

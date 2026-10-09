@@ -14,7 +14,7 @@ namespace quader {
  * Tests local selectability along a hierarchy segment without excluding hidden
  * members. An invalid exclusive ancestor tests the entire ancestor chain; an
  * explicit ancestor can exclude hidden, unselectable instance-definition storage.
- * Lock policy is checked separately by callers.
+ * Authored Selectable permission is checked separately by callers.
  */
 [[nodiscard]] inline bool
 scene_hierarchy_segment_is_selectable_ignoring_visibility(
@@ -61,7 +61,7 @@ scene_hierarchy_segment_is_selectable_ignoring_visibility(
 
 /**
  * Applies the same canonical-member segment policy as visibility while also
- * rejecting locally unselectable or locked members and ancestors.
+ * requiring both local selection eligibility and authored Selectable permission.
  */
 [[nodiscard]] inline bool scene_hierarchy_segment_is_selectable(
     const SceneDocument &scene, EntityId entity,
@@ -76,8 +76,8 @@ scene_hierarchy_segment_is_selectable_ignoring_visibility(
         (!visibility->visible || !visibility->selectable)) {
       return false;
     }
-    const LockComponent *lock = scene.lock(current);
-    if (lock != nullptr && lock->locked) {
+    const SelectableComponent *permission = scene.selectable(current);
+    if (permission != nullptr && !permission->selectable) {
       return false;
     }
     current = scene.parent(current);

@@ -330,7 +330,7 @@ Json object_json(const CapturedObject &object) {
       {"uuid", selected.entity_uuid}, {"name", selected.name}, {"selected", selected.selected},
       {"sdk_id", Json{{"index", sdk_id.index}, {"generation", sdk_id.generation}, {"packed", packed_id}}},
       {"mesh_asset_id", object.mesh_asset},
-      {"transform", Json{{"position", vec3_json(object.transform.position)},
+      {"transform", Json{{"location", vec3_json(object.transform.location)},
           {"rotation_euler_radians", vec3_json(object.transform.rotation_euler)},
           {"scale", vec3_json(object.transform.scale)}, {"custom_pivot", object.transform.custom_pivot},
           {"parenting_offset_column_major", object.transform.parenting_offset.values}}},

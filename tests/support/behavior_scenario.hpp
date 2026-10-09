@@ -179,10 +179,10 @@ public:
     BehaviorWhen &set_transform(std::string_view alias,
                                 QuaderTransform transform);
     BehaviorWhen &set_visible(std::string_view alias, bool visible);
-    BehaviorWhen &set_locked(std::string_view alias, bool locked);
+    BehaviorWhen &set_selectable(std::string_view alias, bool selectable);
     BehaviorWhen &set_group_flags(std::string_view alias,
                                   QuaderTransform transform, bool visible,
-                                  bool locked);
+                                  bool selectable);
     BehaviorWhen& undo();
     BehaviorWhen& redo();
 

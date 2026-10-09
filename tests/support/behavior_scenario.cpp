@@ -764,23 +764,23 @@ BehaviorWhen &BehaviorWhen::set_visible(std::string_view alias, bool visible) {
   return *this;
 }
 
-BehaviorWhen &BehaviorWhen::set_locked(std::string_view alias, bool locked) {
+BehaviorWhen &BehaviorWhen::set_selectable(std::string_view alias, bool selectable) {
   const QuaderApiStatus status =
-      scenario_.api().scene().set_locked(scenario_.entity(alias), locked);
+      scenario_.api().scene().set_selectable(scenario_.entity(alias), selectable);
   scenario_.record_status(status);
   return *this;
 }
 
 BehaviorWhen &BehaviorWhen::set_group_flags(std::string_view alias,
                                             QuaderTransform transform,
-                                            bool visible, bool locked) {
+                                            bool visible, bool selectable) {
   const EntityId entity = scenario_.entity(alias);
   const QuaderApiStatus status = scenario_.api()
                                      .scene()
                                      .batch("Group Flags")
                                      .set_transform(entity, transform)
                                      .set_visible(entity, visible)
-                                     .set_locked(entity, locked)
+                                     .set_selectable(entity, selectable)
                                      .commit();
   scenario_.record_status(status);
   return *this;

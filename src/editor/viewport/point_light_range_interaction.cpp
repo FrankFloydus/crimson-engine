@@ -66,7 +66,7 @@ PointLightRangeInteraction::pick_handle(const ViewportInteractionFrame &frame,
   double nearest = static_cast<double>(radius * radius);
   for (const auto &candidate : frame.scene_billboard_pick_candidates) {
     if (!candidate.point_light_range || !candidate.selectable ||
-        candidate.effectively_locked || !std::isfinite(*candidate.point_light_range)) continue;
+        !candidate.effectively_selectable || !std::isfinite(*candidate.point_light_range)) continue;
     const auto tip = frame.camera.project_world_point(
         candidate.position + right * std::max(*candidate.point_light_range, 0.001f));
     if (!tip.visible) continue;
@@ -97,7 +97,7 @@ bool PointLightRangeInteraction::handle_frame(
         frame.scene_billboard_pick_candidates.begin(),
         frame.scene_billboard_pick_candidates.end(), [this](const auto &candidate) {
           return candidate.entity == gesture_->entity && candidate.point_light_range &&
-                 candidate.selectable && !candidate.effectively_locked;
+                 candidate.selectable && candidate.effectively_selectable;
         });
     if (!target_present) {
       // Selection, visibility or locking may already have settled the edit in

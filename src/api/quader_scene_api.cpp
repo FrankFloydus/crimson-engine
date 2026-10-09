@@ -13,6 +13,7 @@
 #include "core/undo_redo_execute_options.hpp"
 #include "editor/commands/scene_structural_lifecycle_service.hpp"
 #include "editor/session/scene_session.hpp"
+#include "editor/modes/editor_mode_service.hpp"
 #include "editor/commands/document/document_command_edits.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
@@ -21,6 +22,7 @@
 #include "scene/scene_bounds.hpp"
 #include "scene/scene_entity_naming.hpp"
 
+#include <algorithm>
 #include <optional>
 #include <string>
 #include <utility>
@@ -38,8 +40,8 @@ std::string batch_label_or_default(std::string label) {
 }
 
 bool is_default_transform(const TransformComponent &transform) {
-  return transform.position.x == 0.0f && transform.position.y == 0.0f &&
-         transform.position.z == 0.0f && transform.rotation_euler.x == 0.0f &&
+  return transform.location.x == 0.0f && transform.location.y == 0.0f &&
+         transform.location.z == 0.0f && transform.rotation_euler.x == 0.0f &&
          transform.rotation_euler.y == 0.0f &&
          transform.rotation_euler.z == 0.0f && transform.scale.x == 1.0f &&
          transform.scale.y == 1.0f && transform.scale.z == 1.0f;
@@ -55,7 +57,7 @@ group_transform_or_selected_bounds_center(SceneSession &session,
 
   if (const std::optional<SceneBounds> bounds =
           selected_world_bounds(session.scene(), session.assets())) {
-    scene_transform.position = bounds_center(*bounds);
+    scene_transform.location = bounds_center(*bounds);
   }
   return scene_transform;
 }
@@ -101,12 +103,12 @@ to_document_visibility_edits(std::span<const QuaderSceneVisibilityEdit> edits) {
   return document_edits;
 }
 
-std::vector<DocumentLockEdit>
-to_document_lock_edits(std::span<const QuaderSceneLockEdit> edits) {
-  std::vector<DocumentLockEdit> document_edits;
+std::vector<DocumentSelectabilityEdit>
+to_document_selectability_edits(std::span<const QuaderSceneSelectabilityEdit> edits) {
+  std::vector<DocumentSelectabilityEdit> document_edits;
   document_edits.reserve(edits.size());
-  for (const QuaderSceneLockEdit &edit : edits) {
-    document_edits.push_back(DocumentLockEdit{
+  for (const QuaderSceneSelectabilityEdit &edit : edits) {
+    document_edits.push_back(DocumentSelectabilityEdit{
         .entity = edit.entity,
         .before = edit.before,
         .after = edit.after,
@@ -191,11 +193,11 @@ QuaderSceneBatch &QuaderSceneBatch::set_visible(EntityId entity, bool visible) {
   return *this;
 }
 
-QuaderSceneBatch &QuaderSceneBatch::set_locked(EntityId entity, bool locked) {
+QuaderSceneBatch &QuaderSceneBatch::set_selectable(EntityId entity, bool selectable) {
   operations_.push_back(Operation{
-      .kind = OperationKind::SetLocked,
+      .kind = OperationKind::SetSelectable,
       .entity = entity,
-      .flag = locked,
+      .flag = selectable,
   });
   return *this;
 }
@@ -367,10 +369,122 @@ QuaderApiVoidResult QuaderSceneApi::set_transforms(
       "Set Transform");
 }
 
-QuaderApiVoidResult QuaderSceneApi::commit_transform_preview(
-    SceneTransformPreviewTransaction &preview, const std::string &label) {
+QuaderInspectorObjectEditContext QuaderSceneApi::inspector_object_edit_context() const {
+  const SceneSession &session = scene_session(session_);
+  QuaderInspectorObjectEditContext context{
+      .scene_session_id = mutations_.scene_session_id(),
+      .document_binding_generation = session.document_binding_generation(),
+      .mode_generation = session.editor_mode().generation(),
+      .selection_revision = session.scene().selection_revision(),
+  };
+  std::vector<EntityId> entities;
+  if (session.editor_mode().mode() == EditorMode::Edit) {
+    for (const auto &participant : session.editor_mode().snapshot().participants) {
+      entities.push_back(participant.entity);
+    }
+  } else {
+    entities = session.scene().selected_entities();
+  }
+  for (const EntityId entity : entities) {
+    context.entities.push_back({
+        .scene_session_id = mutations_.scene_session_id(),
+        .id = entity,
+        .uuid = session.scene().uuid(entity),
+        .editor_object_id = session.scene().editor_object_id(entity),
+    });
+  }
+  return context;
+}
+
+bool QuaderSceneApi::inspector_object_edit_context_valid(
+    const QuaderInspectorObjectEditContext &context) const {
+  return validate_inspector_object_edit_context(context, true);
+}
+
+bool QuaderSceneApi::inspector_object_edit_identity_valid(
+    const QuaderInspectorObjectEditContext &context) const {
+  const SceneSession &session = scene_session(session_);
+  if (context.scene_session_id != mutations_.scene_session_id() ||
+      context.document_binding_generation != session.document_binding_generation() ||
+      context.entities.empty()) {
+    return false;
+  }
+  return std::ranges::all_of(context.entities, [&](const auto &entity) {
+    const EntityUuidComponent *identity = session.scene().entity_uuid(entity.id);
+    return identity != nullptr && identity->uuid == entity.uuid &&
+           session.scene().editor_object_id(entity.id) == entity.editor_object_id;
+  });
+}
+
+bool QuaderSceneApi::validate_inspector_object_edit_context(
+    const QuaderInspectorObjectEditContext &context,
+    bool require_current_selection) const {
+  const SceneSession &session = scene_session(session_);
+  const EditorModeService &mode = session.editor_mode();
+  if (context.mode_generation != mode.generation() ||
+      (require_current_selection && mode.mode() == EditorMode::Object &&
+       context.selection_revision != session.scene().selection_revision())) {
+    return false;
+  }
+  if (!inspector_object_edit_identity_valid(context)) {
+    return false;
+  }
+  // Object previews use their captured selection revision. Finishing a retained
+  // draft may settle its original objects after selection has changed.
+  if (mode.mode() == EditorMode::Object) {
+    return true;
+  }
+  // Borrow the fixed participants: component selection and active-only mode
+  // revisions do not rebuild an object snapshot or retire an Inspector draft.
+  const auto &participants = mode.snapshot().participants;
+  if (participants.size() != context.entities.size()) {
+    return false;
+  }
+  return std::ranges::all_of(participants, [&](const auto &participant) {
+    return std::ranges::any_of(context.entities, [&](const auto &entity) {
+      return entity.id == participant.entity && entity.uuid == participant.uuid;
+    });
+  });
+}
+
+QuaderApiVoidResult QuaderSceneApi::set_inspector_transforms(
+    const QuaderInspectorObjectEditContext &context,
+    std::span<const QuaderSceneTransformEdit> edits) {
+  SceneSession &session = scene_session(session_);
+  if (!inspector_object_edit_context_valid(context) ||
+      std::ranges::any_of(edits, [&](const auto &edit) {
+        return std::ranges::none_of(context.entities, [&](const auto &entity) {
+          return entity.id == edit.entity;
+        });
+      })) {
+    return mutations_.run_document_result(document_command_invalid_request_result(
+        "Inspector object-property context is no longer valid."), "Set Transform");
+  }
   return mutations_.run_document_result(
-      preview.commit(scene_session(session_).history()), label);
+      session.document_commands().set_inspector_transforms(
+          to_document_transform_edits(session, edits), context.mode_generation),
+      "Set Transform");
+}
+
+QuaderApiVoidResult QuaderSceneApi::commit_transform_preview(
+    SceneTransformPreviewTransaction &preview, const std::string &label,
+    const QuaderInspectorObjectEditContext *inspector_context) {
+  SceneSession &session = scene_session(session_);
+  if (inspector_context != nullptr) {
+    if (!validate_inspector_object_edit_context(*inspector_context, false) ||
+        std::ranges::any_of(preview.edits(), [&](const auto &edit) {
+          return std::ranges::none_of(inspector_context->entities, [&](const auto &entity) {
+            return entity.id == edit.entity;
+          });
+        })) {
+      return mutations_.run_document_result(document_command_invalid_request_result(
+          "Inspector object-property context is no longer valid."), label);
+    }
+  } else if (!session.document_commands().object_mode_active()) {
+    return mutations_.run_document_result(document_command_invalid_request_result(
+        "Whole-object editing requires Object Mode."), label);
+  }
+  return mutations_.run_document_result(preview.commit(session.history()), label);
 }
 
 QuaderApiVoidResult QuaderSceneApi::set_visible(EntityId entity, bool visible) {
@@ -388,18 +502,18 @@ QuaderApiVoidResult QuaderSceneApi::set_visibility(
       "Set Visibility");
 }
 
-QuaderApiVoidResult QuaderSceneApi::set_locked(EntityId entity, bool locked) {
+QuaderApiVoidResult QuaderSceneApi::set_selectable(EntityId entity, bool selectable) {
   SceneSession &session = scene_session(session_);
   return mutations_.run_document_result(
-      session.document_commands().set_locked(entity, locked), "Set Lock");
+      session.document_commands().set_selectable(entity, selectable), "Set Selectable");
 }
 
 QuaderApiVoidResult
-QuaderSceneApi::set_locks(std::span<const QuaderSceneLockEdit> edits) {
+QuaderSceneApi::set_selectability(std::span<const QuaderSceneSelectabilityEdit> edits) {
   SceneSession &session = scene_session(session_);
   return mutations_.run_document_result(
-      session.document_commands().set_locks(to_document_lock_edits(edits)),
-      "Set Lock");
+      session.document_commands().set_selectability(to_document_selectability_edits(edits)),
+      "Set Selectable");
 }
 
 QuaderApiVoidResult
@@ -772,8 +886,8 @@ QuaderSceneApi::commit_batch(const QuaderSceneBatch &batch) {
     case QuaderSceneBatch::OperationKind::SetVisible:
       document_operation.kind = DocumentSceneBatchOperationKind::SetVisible;
       break;
-    case QuaderSceneBatch::OperationKind::SetLocked:
-      document_operation.kind = DocumentSceneBatchOperationKind::SetLocked;
+    case QuaderSceneBatch::OperationKind::SetSelectable:
+      document_operation.kind = DocumentSceneBatchOperationKind::SetSelectable;
       break;
     case QuaderSceneBatch::OperationKind::SetMeshComponent:
       document_operation.kind = DocumentSceneBatchOperationKind::SetMeshComponent;

@@ -106,6 +106,8 @@ public:
               const ViewportLocalVisibilitySnapshot *local_visibility =
                   nullptr);
     void sync(RenderSceneSnapshot snapshot);
+    /// Changes shared viewport presentation without changing document state.
+    void set_backface_culling_enabled(bool enabled);
     void update_mesh_surface_grid(float grid_world_spacing,
                                   const ViewportSettings &settings);
     void sync_scene_asset_overlays(
@@ -190,6 +192,7 @@ public:
     SceneRenderSyncService sync_service_;
     CurveSolidGeometryCache curve_solid_geometry_cache_;
     RenderSceneSnapshot previous_scene_snapshot_;
+    bool backface_culling_enabled_ = true;
     bool has_previous_scene_snapshot_ = false;
     bool surface_sync_pending_ = false;
     RenderSceneBindingKey scene_binding_;

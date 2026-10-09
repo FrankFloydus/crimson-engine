@@ -357,7 +357,7 @@ TEST(FaceTextureCanvasApiTests, MixedPresentationRetainsEditScopeAndRejectsToken
 
   // Locking blocks edits without discarding the fixed edit set or its selection.
   // A mixed presentation must still reject its former editing token.
-  ASSERT_TRUE(editor.scene().set_locked(third.entity, true).ok());
+  ASSERT_TRUE(editor.scene().set_selectable(third.entity, false).ok());
   const auto remaining = editor.modeling().face_texture_settings();
   EXPECT_EQ(remaining.selected_face_count, 3u);
   EXPECT_TRUE(remaining.rotation_mixed);
@@ -372,7 +372,7 @@ TEST(FaceTextureCanvasApiTests, MixedPresentationRetainsEditScopeAndRejectsToken
   EXPECT_EQ(harness.projection_stats().face_texture_canvas_build_count,
             before.face_texture_canvas_build_count);
 
-  ASSERT_TRUE(editor.scene().set_locked(third.entity, false).ok());
+  ASSERT_TRUE(editor.scene().set_selectable(third.entity, true).ok());
   ASSERT_TRUE(editor.selection().select_face(first, 1).ok());
   ASSERT_TRUE(editor.modeling().face_texture_canvas().editable);
   const auto reselection = harness.projection_stats();
@@ -718,7 +718,7 @@ TEST(FaceTextureCanvasApiTests, OccurrenceSamplingSurvivesPreviewCommitAndUndo) 
   ASSERT_TRUE(instance.ok()) << instance.error_message();
   const auto occurrence = instance.value().occurrence.root.id;
   ASSERT_TRUE(editor.scene().set_transform(occurrence, {
-      .position = {105.0f, -27.0f, 32.0f}, .scale = {-2.0f, 3.0f, 1.0f}}).ok());
+      .location = {105.0f, -27.0f, 32.0f}, .scale = {-2.0f, 3.0f, 1.0f}}).ok());
   ASSERT_TRUE(editor.modeling().enter_instance_edit(occurrence).ok());
   ASSERT_TRUE(editor.selection().select_object(member).ok());
   ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());

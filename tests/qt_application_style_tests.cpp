@@ -1032,7 +1032,7 @@ TEST_F(QtApplicationStyleTests,
     InspectableMenu menu;
     menu.setAttribute(Qt::WA_DontShowOnScreen, true);
     menu.setPalette(high_contrast ? QPalette{} : light_palette);
-    menu.addAction(QStringLiteral("Bake Position"));
+    menu.addAction(QStringLiteral("Bake Location"));
     menu.addAction(QStringLiteral("Bake Rotation"));
     menu.addAction(QStringLiteral("Bake Scale"));
     menu.addAction(QStringLiteral("Bake All"));

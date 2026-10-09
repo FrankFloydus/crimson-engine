@@ -240,7 +240,7 @@ TEST(CurveSolidRenderExtractionTests,
   EXPECT_EQ(cache.stats().build_count, 1u);
 
   ASSERT_TRUE(document.set_transform(
-      curve, {.position = {3.0f, 4.0f, 5.0f},
+      curve, {.location = {3.0f, 4.0f, 5.0f},
               .scale = {2.0f, 3.0f, 4.0f}}));
   ASSERT_TRUE(try_refresh_render_scene_snapshot_transforms(
       unchanged, document, assets, 3u));
@@ -484,7 +484,7 @@ TEST(CurveSolidBoundsTests,
   ASSERT_TRUE(document.set_transform(
       curve, {.scale = {2.0f, 3.0f, 4.0f}}));
   ASSERT_TRUE(document.set_transform(
-      parent, {.position = {10.0f, 20.0f, 30.0f}}));
+      parent, {.location = {10.0f, 20.0f, 30.0f}}));
 
   const std::optional<SceneBounds> local =
       local_curve_bounds(asset, component);

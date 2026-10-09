@@ -155,7 +155,7 @@ TEST_F(CollisionShapeOverlayTests, ColorAndTransformsReusePinnedGeometry) {
   EXPECT_FLOAT_EQ(recolored.collision->color.a, 0.73f);
   EXPECT_EQ(cache_.stats().collision_build_count, 1u);
   ASSERT_TRUE(document_.set_transform(
-      entity_, TransformComponent{.position = {5.0f, 2.0f, -3.0f}}));
+      entity_, TransformComponent{.location = {5.0f, 2.0f, -3.0f}}));
   const auto moved = update(true, color);
   ASSERT_EQ(moved.collision->meshes.size(), 1u);
   EXPECT_TRUE(moved.collision_changed);

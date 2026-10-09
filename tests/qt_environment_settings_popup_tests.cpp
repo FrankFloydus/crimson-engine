@@ -181,7 +181,7 @@ TEST_F(QtEnvironmentSettingsPopupTests,
   }
   ASSERT_TRUE(runtime_->editor.scene()
                   .set_transform(object.value().id,
-                                 {.position = {3.0f, 4.0f, 5.0f}})
+                                 {.location = {3.0f, 4.0f, 5.0f}})
                   .ok());
   refresh(popup);
   EXPECT_EQ(runtime_->session.scene().scene_settings_revision(), settings_revision);

@@ -44,6 +44,14 @@ files. Portable SDK modeling-document QDR is a separate interchange contract.
 
 Current scene metadata schema is 19; schema versions and defaults are enforced in the codec.
 
+Native Location uses the existing `TransformComponent.position` wire slot. Native
+`SelectableComponent.selectable` is stored as the inverse of the existing
+`LockComponent.locked` field. The separate `VisibilityComponent.selectable` eligibility
+gate is preserved independently: all four historical flag combinations keep their
+selection behavior. These native vocabulary changes do not change schema versions or
+serialized field meanings. The write-only JSON inspection dump uses `location` and the
+positive top-level `selectable` name.
+
 Container 1.2 stores a nonzero minimum product release in the 64-bit header word at byte 56.
 Container 1.0/1.1 retain a zero reserved word and are treated as Internal Full releases.
 Low-level container inspection is unrestricted. Authoring callers pass their executable release

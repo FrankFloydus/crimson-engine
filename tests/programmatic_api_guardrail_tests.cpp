@@ -841,7 +841,7 @@ TEST(ProgrammaticApiGuardrailTests,
       ".set_transform(",
       ".set_transforms(",
       ".set_visible(",
-      ".set_locked(",
+      ".set_selectable(",
       ".set_modeling_object(",
       ".set_mesh(",
       ".set_material(",
@@ -900,7 +900,7 @@ TEST(ProgrammaticApiGuardrailTests, ApiImplementationDoesNotIncludeConcreteDocum
       "\"editor/commands/document/rename_entity_command.hpp\"",
       "\"editor/commands/document/reparent_entity_command.hpp\"",
       "\"editor/commands/document/select_entities_command.hpp\"",
-      "\"editor/commands/document/set_lock_command.hpp\"",
+      "\"editor/commands/document/set_selectable_command.hpp\"",
       "\"editor/commands/document/set_material_command.hpp\"",
       "\"editor/commands/document/set_mesh_component_command.hpp\"",
       "\"editor/commands/document/set_visibility_command.hpp\"",
@@ -1398,7 +1398,7 @@ TEST(ProgrammaticApiGuardrailTests, UiAppAndViewportDoNotAddSceneDocumentMutatio
       "document.clear_selection(",
       "document.set_parent(",
       "document.set_visible(",
-      "document.set_locked(",
+      "document.set_selectable(",
       "document.set_mesh(",
       "document.set_material(",
       "document.set_modeling_object(",
@@ -1411,7 +1411,7 @@ TEST(ProgrammaticApiGuardrailTests, UiAppAndViewportDoNotAddSceneDocumentMutatio
       "context.document.clear_selection(",
       "context.document.set_parent(",
       "context.document.set_visible(",
-      "context.document.set_locked(",
+      "context.document.set_selectable(",
       "context.document.set_mesh(",
       "context.document.set_material(",
       "context.document.set_modeling_object(",
@@ -1898,7 +1898,7 @@ TEST(ProgrammaticApiGuardrailTests, OutlinerUsesDocumentCommandRootSelectionOwne
             std::string::npos);
   EXPECT_NE(outliner.find("editor_->scene().set_visibility("),
             std::string::npos);
-  EXPECT_NE(outliner.find("editor_->scene().set_locks("),
+  EXPECT_NE(outliner.find("editor_->scene().set_selectability("),
             std::string::npos);
   EXPECT_NE(scene_aware_delete_header.find("scene_aware_delete_handles_selection"),
             std::string::npos);
@@ -1912,7 +1912,7 @@ TEST(ProgrammaticApiGuardrailTests, OutlinerUsesDocumentCommandRootSelectionOwne
             std::string::npos);
   EXPECT_EQ(outliner.find("document_->rename_entity("), std::string::npos);
   EXPECT_EQ(outliner.find("document_->set_visible("), std::string::npos);
-  EXPECT_EQ(outliner.find("document_->set_locked("), std::string::npos);
+  EXPECT_EQ(outliner.find("document_->set_selectable("), std::string::npos);
   EXPECT_EQ(outliner.find("ImGuiKey_G"), std::string::npos);
   EXPECT_EQ(modeling_execution.find("shouldUseSceneAwareDelete"),
             std::string::npos);
@@ -2067,17 +2067,17 @@ TEST(ProgrammaticApiGuardrailTests, ScriptHistoryUsesEditorTransactionAsSourceOf
             std::string::npos);
 }
 
-TEST(ProgrammaticApiGuardrailTests, DocumentBatchTransformPlanningUsesSimulatedLockState) {
+TEST(ProgrammaticApiGuardrailTests, DocumentBatchTransformPlanningUsesSimulatedSelectabilityState) {
   const std::string service = read_file(
       source_root() / "src/editor/commands/document_command_service.cpp");
   const std::string batch_source = source_slice(
       service, "DocumentCommandResult DocumentCommandService::apply_scene_batch",
       "\n}\n\n} // namespace quader");
 
-  EXPECT_NE(batch_source.find("simulated_effectively_locked"), std::string::npos);
+  EXPECT_NE(batch_source.find("simulated_effectively_nonselectable"), std::string::npos);
   EXPECT_NE(batch_source.find("simulated_parent"), std::string::npos);
-  EXPECT_NE(batch_source.find("simulated_locked"), std::string::npos);
-  EXPECT_EQ(batch_source.find("scene_.is_effectively_locked(operation.entity)"),
+  EXPECT_NE(batch_source.find("simulated_nonselectable"), std::string::npos);
+  EXPECT_EQ(batch_source.find("scene_.is_effectively_selectable(operation.entity)"),
             std::string::npos);
 }
 

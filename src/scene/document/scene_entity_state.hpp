@@ -33,7 +33,7 @@ struct SceneEntityState {
   std::optional<std::size_t> sibling_ordinal;
   TransformComponent transform;
   VisibilityComponent visibility;
-  LockComponent lock;
+  SelectableComponent selectable;
   SelectionComponent selection;
   bool active_selection = false;
   std::optional<ModelingObjectComponent> modeling_object;

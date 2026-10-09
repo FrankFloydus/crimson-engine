@@ -158,7 +158,7 @@ QMenu *hover_bake_location(QWidget &popup) {
   auto *action = submenu->findChild<QAction *>(
       QStringLiteral("modeling.bake_location"));
   if (action == nullptr || !action->isEnabled()) {
-    ADD_FAILURE() << "Expected the enabled Bake Position submenu command.";
+    ADD_FAILURE() << "Expected the enabled Bake Location submenu command.";
     popup.close();
     return nullptr;
   }
@@ -216,7 +216,7 @@ TEST(QtViewportMarkingMenuTests,
   ASSERT_TRUE(box.ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
   ASSERT_TRUE(editor.scene().set_transform(
-      box.value().entity, {.position = {3.0F, 4.0F, 5.0F}}).ok());
+      box.value().entity, {.location = {3.0F, 4.0F, 5.0F}}).ok());
   ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
   quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective);
   QKeyEvent press(QEvent::KeyPress, Qt::Key_Q, Qt::ShiftModifier,
@@ -247,9 +247,9 @@ TEST(QtViewportMarkingMenuTests,
   }, {}, quader::QtUiScaleMetrics{}, initiating_chord, initiating_key_identity));
   const auto entity = editor.query().entity(box.value().entity);
   ASSERT_TRUE(entity.has_value());
-  EXPECT_FLOAT_EQ(entity->transform.position.x, 0.0F);
-  EXPECT_FLOAT_EQ(entity->transform.position.y, 0.0F);
-  EXPECT_FLOAT_EQ(entity->transform.position.z, 0.0F);
+  EXPECT_FLOAT_EQ(entity->transform.location.x, 0.0F);
+  EXPECT_FLOAT_EQ(entity->transform.location.y, 0.0F);
+  EXPECT_FLOAT_EQ(entity->transform.location.z, 0.0F);
 #endif
 }
 
@@ -298,7 +298,7 @@ TEST(QtViewportMarkingMenuTests,
   for (const auto &case_data : cases) {
     SCOPED_TRACE(case_data.qt_key);
     ASSERT_TRUE(editor.scene().set_transform(
-        box.value().entity, {.position = {3.0F, 4.0F, 5.0F}}).ok());
+        box.value().entity, {.location = {3.0F, 4.0F, 5.0F}}).ok());
     ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
     const quader::QuaderInputChord initiating_chord{
         .shift = true,
@@ -315,9 +315,9 @@ TEST(QtViewportMarkingMenuTests,
     }, {}, quader::QtUiScaleMetrics{}, initiating_chord));
     const auto entity = editor.query().entity(box.value().entity);
     ASSERT_TRUE(entity.has_value());
-    EXPECT_FLOAT_EQ(entity->transform.position.x, 0.0F);
-    EXPECT_FLOAT_EQ(entity->transform.position.y, 0.0F);
-    EXPECT_FLOAT_EQ(entity->transform.position.z, 0.0F);
+    EXPECT_FLOAT_EQ(entity->transform.location.x, 0.0F);
+    EXPECT_FLOAT_EQ(entity->transform.location.y, 0.0F);
+    EXPECT_FLOAT_EQ(entity->transform.location.z, 0.0F);
   }
 #endif
 }
@@ -527,7 +527,7 @@ TEST(QtViewportMarkingMenuTests,
           {{command::kModelingFlipHorizontal, QStringLiteral("Flip Horizontally")},
            {command::kModelingFlipVertical, QStringLiteral("Flip Vertically")}}},
       ExpectedSubmenu{QStringLiteral("bake"), QStringLiteral("Bake"),
-          {{command::kModelingBakeLocation, QStringLiteral("Bake Position")},
+          {{command::kModelingBakeLocation, QStringLiteral("Bake Location")},
            {command::kModelingBakeRotation, QStringLiteral("Bake Rotation")},
            {command::kModelingBakeScale, QStringLiteral("Bake Scale")},
            {command::kModelingBakeTransforms, QStringLiteral("Bake All")}}}};
@@ -677,7 +677,7 @@ TEST(QtViewportMarkingMenuTests, ReleaseDispatchesBakeLocationAndUndoRestoresIt)
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
   ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
   ASSERT_TRUE(editor.scene().set_transform(
-      box.value().entity, {.position = {3.0F, 4.0F, 5.0F}}).ok());
+      box.value().entity, {.location = {3.0F, 4.0F, 5.0F}}).ok());
   const auto command_revision = editor.commands().last_status_revision();
   int action_trigger_count = 0;
   EXPECT_TRUE(show_and_interact(owner, editor, input_router, localization,
@@ -692,21 +692,21 @@ TEST(QtViewportMarkingMenuTests, ReleaseDispatchesBakeLocationAndUndoRestoresIt)
   EXPECT_EQ(editor.commands().last_status_revision(), command_revision + 1U);
   const auto baked = editor.query().entity(box.value().entity);
   ASSERT_TRUE(baked.has_value());
-  EXPECT_EQ(baked->transform.position.x, 0.0F);
-  EXPECT_EQ(baked->transform.position.y, 0.0F);
-  EXPECT_EQ(baked->transform.position.z, 0.0F);
+  EXPECT_EQ(baked->transform.location.x, 0.0F);
+  EXPECT_EQ(baked->transform.location.y, 0.0F);
+  EXPECT_EQ(baked->transform.location.z, 0.0F);
   ASSERT_TRUE(editor.commands().execute(command::kEditUndo).ok());
   const auto restored = editor.query().entity(box.value().entity);
   ASSERT_TRUE(restored.has_value());
-  EXPECT_EQ(restored->transform.position.x, 3.0F);
-  EXPECT_EQ(restored->transform.position.y, 4.0F);
-  EXPECT_EQ(restored->transform.position.z, 5.0F);
+  EXPECT_EQ(restored->transform.location.x, 3.0F);
+  EXPECT_EQ(restored->transform.location.y, 4.0F);
+  EXPECT_EQ(restored->transform.location.z, 5.0F);
   ASSERT_TRUE(editor.history().redo().ok());
   const auto redone = editor.query().entity(box.value().entity);
   ASSERT_TRUE(redone.has_value());
-  EXPECT_EQ(redone->transform.position.x, 0.0F);
-  EXPECT_EQ(redone->transform.position.y, 0.0F);
-  EXPECT_EQ(redone->transform.position.z, 0.0F);
+  EXPECT_EQ(redone->transform.location.x, 0.0F);
+  EXPECT_EQ(redone->transform.location.y, 0.0F);
+  EXPECT_EQ(redone->transform.location.z, 0.0F);
 }
 
 TEST(QtViewportMarkingMenuTests, MixedInstancesAndLightsExposeOneAlignToolLauncher) {
@@ -801,9 +801,9 @@ TEST(QtViewportMarkingMenuTests,
   ASSERT_TRUE(first.ok()) << first.error_message();
   ASSERT_TRUE(second.ok()) << second.error_message();
   ASSERT_TRUE(editor.scene().set_transform(
-      first.value().entity, {.position = {-4.0F, 0.0F, 0.0F}}).ok());
+      first.value().entity, {.location = {-4.0F, 0.0F, 0.0F}}).ok());
   ASSERT_TRUE(editor.scene().set_transform(
-      second.value().entity, {.position = {4.0F, 0.0F, 0.0F}}).ok());
+      second.value().entity, {.location = {4.0F, 0.0F, 0.0F}}).ok());
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
   ASSERT_TRUE(editor.selection().select_objects({first.value(), second.value()}).ok());
   const auto original_pivot = editor.query().selection_transform_pivot();
@@ -874,12 +874,12 @@ TEST(QtViewportMarkingMenuTests,
           ? quader::QVec3{-4.0F, 0.0F, 0.0F} : *original_pivot;
       const quader::QVec3 second_expected = set_center
           ? quader::QVec3{4.0F, 0.0F, 0.0F} : *original_pivot;
-      EXPECT_FLOAT_EQ(first_state->transform.position.x, first_expected.x);
-      EXPECT_FLOAT_EQ(first_state->transform.position.y, first_expected.y);
-      EXPECT_FLOAT_EQ(first_state->transform.position.z, first_expected.z);
-      EXPECT_FLOAT_EQ(second_state->transform.position.x, second_expected.x);
-      EXPECT_FLOAT_EQ(second_state->transform.position.y, second_expected.y);
-      EXPECT_FLOAT_EQ(second_state->transform.position.z, second_expected.z);
+      EXPECT_FLOAT_EQ(first_state->transform.location.x, first_expected.x);
+      EXPECT_FLOAT_EQ(first_state->transform.location.y, first_expected.y);
+      EXPECT_FLOAT_EQ(first_state->transform.location.z, first_expected.z);
+      EXPECT_FLOAT_EQ(second_state->transform.location.x, second_expected.x);
+      EXPECT_FLOAT_EQ(second_state->transform.location.y, second_expected.y);
+      EXPECT_FLOAT_EQ(second_state->transform.location.z, second_expected.z);
     }
     ASSERT_TRUE(editor.history().undo().ok());
     ASSERT_TRUE(editor.history().undo().ok());
@@ -908,7 +908,7 @@ TEST(QtViewportMarkingMenuTests, ChangedSelectionPaneAndRuntimeRejectStaleIntent
   ASSERT_TRUE(box.ok()) << box.error_message();
   ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Object).ok());
   ASSERT_TRUE(editor.scene().set_transform(
-      box.value().entity, {.position = {3.0F, 4.0F, 5.0F}}).ok());
+      box.value().entity, {.location = {3.0F, 4.0F, 5.0F}}).ok());
   std::uint64_t runtime_generation = 9;
   for (int changed_owner = 0; changed_owner < 3; ++changed_owner) {
     SCOPED_TRACE(changed_owner);
@@ -935,9 +935,9 @@ TEST(QtViewportMarkingMenuTests, ChangedSelectionPaneAndRuntimeRejectStaleIntent
     EXPECT_EQ(editor.commands().last_status_revision(), command_revision);
     const auto retained = editor.query().entity(box.value().entity);
     ASSERT_TRUE(retained.has_value());
-    EXPECT_EQ(retained->transform.position.x, 3.0F);
-    EXPECT_EQ(retained->transform.position.y, 4.0F);
-    EXPECT_EQ(retained->transform.position.z, 5.0F);
+    EXPECT_EQ(retained->transform.location.x, 3.0F);
+    EXPECT_EQ(retained->transform.location.y, 4.0F);
+    EXPECT_EQ(retained->transform.location.z, 5.0F);
   }
 }
 
@@ -965,7 +965,7 @@ TEST(QtViewportMarkingMenuTests, SceneSwitchWhileBakeSubmenuIsOpenRejectsItsLeaf
       {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}}, "Original Scene Box");
   ASSERT_TRUE(first.ok());
   ASSERT_TRUE(editor.scene().set_transform(first.value().entity,
-      {.position = {3.0F, 4.0F, 5.0F}}).ok());
+      {.location = {3.0F, 4.0F, 5.0F}}).ok());
   ASSERT_TRUE(editor.selection().select_object(first.value()).ok());
   const auto second_scene = editor.scene_documents().new_scene();
   ASSERT_TRUE(second_scene.ok());
@@ -973,7 +973,7 @@ TEST(QtViewportMarkingMenuTests, SceneSwitchWhileBakeSubmenuIsOpenRejectsItsLeaf
       {.min = {-1.0F, -1.0F, -1.0F}, .max = {1.0F, 1.0F, 1.0F}}, "New Scene Box");
   ASSERT_TRUE(second.ok());
   ASSERT_TRUE(editor.scene().set_transform(second.value().entity,
-      {.position = {6.0F, 7.0F, 8.0F}}).ok());
+      {.location = {6.0F, 7.0F, 8.0F}}).ok());
   ASSERT_TRUE(editor.selection().select_object(second.value()).ok());
   ASSERT_TRUE(editor.scene_documents().activate(*first_scene).ok());
   std::uint64_t command_revision_after_switch = 0;
@@ -990,13 +990,13 @@ TEST(QtViewportMarkingMenuTests, SceneSwitchWhileBakeSubmenuIsOpenRejectsItsLeaf
   EXPECT_EQ(editor.scene_documents().active_scene_id(), second_scene.value());
   const auto second_state = editor.query().entity(second.value().entity);
   ASSERT_TRUE(second_state.has_value());
-  EXPECT_FLOAT_EQ(second_state->transform.position.x, 6.0F);
-  EXPECT_FLOAT_EQ(second_state->transform.position.y, 7.0F);
-  EXPECT_FLOAT_EQ(second_state->transform.position.z, 8.0F);
+  EXPECT_FLOAT_EQ(second_state->transform.location.x, 6.0F);
+  EXPECT_FLOAT_EQ(second_state->transform.location.y, 7.0F);
+  EXPECT_FLOAT_EQ(second_state->transform.location.z, 8.0F);
   ASSERT_TRUE(editor.scene_documents().activate(*first_scene).ok());
   const auto first_state = editor.query().entity(first.value().entity);
   ASSERT_TRUE(first_state.has_value());
-  EXPECT_FLOAT_EQ(first_state->transform.position.x, 3.0F);
-  EXPECT_FLOAT_EQ(first_state->transform.position.y, 4.0F);
-  EXPECT_FLOAT_EQ(first_state->transform.position.z, 5.0F);
+  EXPECT_FLOAT_EQ(first_state->transform.location.x, 3.0F);
+  EXPECT_FLOAT_EQ(first_state->transform.location.y, 4.0F);
+  EXPECT_FLOAT_EQ(first_state->transform.location.z, 5.0F);
 }

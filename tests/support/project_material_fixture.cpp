@@ -46,15 +46,15 @@ bool ProjectMaterialFixture::set_visible(EntityId entity, bool visible) const {
   return scene != nullptr && scene->set_visible(entity, visible);
 }
 
-bool ProjectMaterialFixture::set_locked(EntityId entity, bool locked) const {
-  SceneDocument *scene = active_scene(project_);
-  return scene != nullptr && scene->set_locked(entity, locked);
-}
-
-bool ProjectMaterialFixture::set_selectable(EntityId entity,
-                                            bool selectable) const {
+bool ProjectMaterialFixture::set_selectable(EntityId entity, bool selectable) const {
   SceneDocument *scene = active_scene(project_);
   return scene != nullptr && scene->set_selectable(entity, selectable);
+}
+
+bool ProjectMaterialFixture::set_selectability(EntityId entity,
+                                            bool selectable) const {
+  SceneDocument *scene = active_scene(project_);
+  return scene != nullptr && scene->set_selectability(entity, selectable);
 }
 
 bool ProjectMaterialFixture::bind_shared_mesh(EntityId entity, AssetId mesh) const {

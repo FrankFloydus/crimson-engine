@@ -11,12 +11,12 @@
 namespace quader {
 
 /**
- * Applies Set Lock Command behavior as a command in the editor document command layer.
+ * Applies Set Selectable Command behavior as a command in the editor document command layer.
  */
-class SetLockCommand final : public SceneCommand {
+class SetSelectableCommand final : public SceneCommand {
 public:
-    SetLockCommand(SceneDocument& scene, EntityId entity, bool before, bool after)
-        : SceneCommand(scene, "Set Lock")
+    SetSelectableCommand(SceneDocument& scene, EntityId entity, bool before, bool after)
+        : SceneCommand(scene, "Set Selectable")
         , entity_(entity)
         , before_(before)
         , after_(after) {}
@@ -33,15 +33,15 @@ public:
     }
 
 private:
-    DocumentCommandResult apply(bool locked) {
-      return scene().set_locked(entity_, locked)
+    DocumentCommandResult apply(bool selectable) {
+      return scene().set_selectable(entity_, selectable)
                  ? document_command_changed_result()
                  : document_command_missing_entity_result();
     }
 
     EntityId entity_ = kInvalidEntityId;
-    bool before_ = false;
-    bool after_ = false;
+    bool before_ = true;
+    bool after_ = true;
 };
 
 } // namespace quader

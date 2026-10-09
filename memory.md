@@ -512,11 +512,18 @@ Tests: [primitive service](tests/primitive_creation_tool_service_tests.cpp),
 - Vertex/Edge mesh-body clicks outside component radii never change Edit membership. Empty
   Replace clears components; Add/Remove misses preserve them. Component scope intersects existing
   instance, visibility and lock policy.
-- Selection occlusion matches rendered surface sidedness, including double-sided meshes and
-  reflected occurrences. The hallway regression has a nearer, invisible culled wall in front of
-  the selected planar mesh; a background-wall-only fixture misses this failure. Keep non-edit
+- Selection occlusion follows the shared Backface Culling preference, independently of legacy
+  per-mesh sidedness, and matches Filament's front-face correction for reflected occurrences.
+  The CPU rendered-surface query uses local winding against its inverse-transformed ray; explicit
+  Backface Selection still uses world winding. Culling changes invalidate frozen depth identity
+  while retaining geometry. The hallway regression has a nearer, invisible culled wall in front
+  of the selected planar mesh; a background-wall-only fixture misses this failure. Keep non-edit
   meshes in the occluder query and verify exact CPU/Vulkan results in
-  [runtime selection tests](tests/component_selection_runtime_tests.cpp).
+  [runtime selection tests](tests/component_selection_runtime_tests.cpp) and actual surface pixels in
+  [render tests](tests/render_normal_mapping_runtime_tests.cpp). Pinned Filament `aab101b4c038`
+  overwrites its reflected normal correction in explicit instance buffers; base-instance reflected
+  and singular placements retain singleton entity transforms sharing the geometry cache. Keep
+  positive placements batched and preserve that fallback when culling is disabled.
 - Backface filtering uses authored winding adjusted by the world determinant sign. It is independent
   of depth, select-through, culling, and marquee policy. Viewport requests inject the persisted
   preference; independent tools and public modeling defaults retain their explicit policy.

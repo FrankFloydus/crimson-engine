@@ -540,7 +540,7 @@ TEST(PaintSelectionInteractionTests,
   ASSERT_TRUE(
       harness.editor.scene().set_visible(hidden.object.entity, false).ok());
   ASSERT_TRUE(
-      harness.editor.scene().set_locked(locked.object.entity, true).ok());
+      harness.editor.scene().set_selectable(locked.object.entity, false).ok());
   harness.press({100.0f, 300.0f});
   harness.release(harness.point(front));
   harness.dispatch(true, false, true);
@@ -717,9 +717,9 @@ TEST(PaintSelectionInteractionTests,
     EXPECT_EQ(harness.session.modeling().content_revision(), content_revision);
     const auto transform =
         harness.editor.query().entity(first.object.entity)->transform;
-    EXPECT_FLOAT_EQ(transform.position.x, original_transform.position.x);
-    EXPECT_FLOAT_EQ(transform.position.y, original_transform.position.y);
-    EXPECT_FLOAT_EQ(transform.position.z, original_transform.position.z);
+    EXPECT_FLOAT_EQ(transform.location.x, original_transform.location.x);
+    EXPECT_FLOAT_EQ(transform.location.y, original_transform.location.y);
+    EXPECT_FLOAT_EQ(transform.location.z, original_transform.location.z);
   }
 }
 
@@ -772,8 +772,8 @@ TEST(PaintSelectionInteractionTests,
       for (const auto &quad : {first, middle, last}) {
         const auto transform =
             harness.editor.query().entity(quad.object.entity)->transform;
-        result.push_back({transform.position.x, transform.position.y,
-                          transform.position.z, transform.rotation_euler.x,
+        result.push_back({transform.location.x, transform.location.y,
+                          transform.location.z, transform.rotation_euler.x,
                           transform.rotation_euler.y,
                           transform.rotation_euler.z, transform.scale.x,
                           transform.scale.y, transform.scale.z});
@@ -887,7 +887,7 @@ TEST(PaintSelectionInteractionTests,
   harness.dispatch(false, false, true);
   const auto after =
       harness.editor.query().entity(quad.object.entity)->transform;
-  EXPECT_GT(after.position.x, before.position.x);
+  EXPECT_GT(after.location.x, before.location.x);
   EXPECT_EQ(harness.editor.selection().summary().selection_revision,
             selection_revision);
   EXPECT_EQ(harness.selected_entities(),

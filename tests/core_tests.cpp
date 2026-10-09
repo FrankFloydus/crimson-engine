@@ -29,7 +29,7 @@
 #include "editor/commands/document/rename_entity_command.hpp"
 #include "editor/commands/document/reparent_entity_command.hpp"
 #include "editor/commands/document/select_entities_command.hpp"
-#include "editor/commands/document/set_lock_command.hpp"
+#include "editor/commands/document/set_selectable_command.hpp"
 #include "editor/commands/document/set_visibility_command.hpp"
 #include "editor/commands/document/ungroup_selection_command.hpp"
 #include "editor/commands/document_command_service.hpp"
@@ -1658,10 +1658,11 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
       settings.float_value(ViewportFloatSettingId::DimensionFontSize), 12.0f);
   ASSERT_EQ(viewport_color_settings().size(), 27u);
   ASSERT_EQ(viewport_float_settings().size(), 35u);
-  ASSERT_EQ(viewport_bool_settings().size(), 16u);
+  ASSERT_EQ(viewport_bool_settings().size(), 17u);
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowGrid));
   EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::ShowMeshGrid));
   EXPECT_FALSE(settings.bool_value(ViewportBoolSettingId::WireframeOnShaded));
+  EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::BackfaceCulling));
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowGizmos));
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowOverlays));
   EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::ShowDimensions));
@@ -1699,6 +1700,31 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
   EXPECT_EQ(show_hover_dimensions.label, "Show Dimensions on Hover");
   EXPECT_EQ(show_hover_dimensions.key, "ShowHoverDimensions");
   EXPECT_TRUE(show_hover_dimensions.default_value);
+}
+
+TEST(ViewportSettingsTests,
+     BackfaceCullingDefaultsOnAndPersistsIndependentlyOfBackfaceSelection) {
+  const std::filesystem::path path =
+      std::filesystem::temp_directory_path() /
+      "quader_backface_culling_preferences.ini";
+  {
+    std::ofstream file(path, std::ios::trunc);
+    ASSERT_TRUE(file.is_open());
+    file << "QVertexWorks.Quader.Viewport.BackfaceSelection=True\n";
+  }
+  ViewportSettings settings = ViewportSettings::load(path);
+  EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::BackfaceCulling));
+  EXPECT_TRUE(settings.bool_value(ViewportBoolSettingId::BackfaceSelection));
+  ASSERT_TRUE(settings.set_bool_value(ViewportBoolSettingId::BackfaceCulling, false));
+  EXPECT_FALSE(settings.set_bool_value(ViewportBoolSettingId::BackfaceCulling, false));
+  ASSERT_TRUE(settings.save(path));
+  ViewportSettings loaded = ViewportSettings::load(path);
+  EXPECT_FALSE(loaded.bool_value(ViewportBoolSettingId::BackfaceCulling));
+  EXPECT_TRUE(loaded.bool_value(ViewportBoolSettingId::BackfaceSelection));
+  ASSERT_TRUE(loaded.reset_to_defaults());
+  ASSERT_TRUE(loaded.save(path));
+  EXPECT_TRUE(ViewportSettings::load(path).bool_value(ViewportBoolSettingId::BackfaceCulling));
+  std::filesystem::remove(path);
 }
 
 TEST(ViewportSettingsTests,
@@ -4143,7 +4169,7 @@ TEST(ViewportPointPlacementServiceTests,
   expect_vec3_near(result.world_position, {});
   expect_vec3_near(result.world_normal, {0.0f, 0.0f, 1.0f});
 
-  ASSERT_TRUE(scene.set_locked(entity, true));
+  ASSERT_TRUE(scene.set_selectable(entity, false));
   result = placement.resolve(scene, assets, camera, request);
   ASSERT_TRUE(result.valid);
   EXPECT_EQ(result.snap_kind, ViewportPointSnapKind::Grid);
@@ -4719,9 +4745,9 @@ TEST(ViewportSceneHitPolicyTests,
               "Component silhouette occluder", EntityKind::Mesh);
           EXPECT_TRUE(session.scene().set_mesh(wall, {.mesh = asset}));
           if (locked) {
-            EXPECT_TRUE(session.scene().set_locked(wall, true));
-          } else {
             EXPECT_TRUE(session.scene().set_selectable(wall, false));
+          } else {
+            EXPECT_TRUE(session.scene().set_selectability(wall, false));
           }
           return wall;
         };
@@ -4790,7 +4816,7 @@ TEST(ViewportSceneHitPolicyTests,
 TEST(RadialArrayLayoutTests,
      UsesTotalSweepRotatesOrientationAndOrdersAdditionalRings) {
   const QMat4 source_world = compose_transform(QTransform{
-      .position = {2.0f, 0.0f, 0.0f},
+      .location = {2.0f, 0.0f, 0.0f},
   });
   const RadialArrayLayoutResult partial = build_radial_array_layout({
       .source_world_transform = source_world,
@@ -4852,7 +4878,7 @@ TEST(RadialArrayLayoutTests,
      SpacingUsesNeighborAnglesBeyondOneRevolutionWithoutChangingTotal) {
   RadialArrayLayoutRequest request{
       .source_world_transform = compose_transform(QTransform{
-          .position = {2.0f, 0.0f, 0.0f},
+          .location = {2.0f, 0.0f, 0.0f},
       }),
       .source_pivot_world = {2.0f, 0.0f, 0.0f},
       .degrees = 90.0,
@@ -4903,7 +4929,7 @@ TEST(RadialArrayLayoutTests,
   const QVec3 source_position = {2.0f, -2.0f, 0.0f};
   const RadialArrayLayoutResult tilted = build_radial_array_layout({
       .source_world_transform = compose_transform(QTransform{
-          .position = source_position,
+          .location = source_position,
       }),
       .source_pivot_world = source_position,
       .center_world = {},
@@ -4951,7 +4977,7 @@ TEST(RadialArrayToolServiceTests,
   ASSERT_TRUE(source.ok()) << source.error_message();
   ASSERT_TRUE(editor.scene()
                   .set_transform(source.value().entity,
-                                 {.position = {2.0f, 0.0f, 0.0f}})
+                                 {.location = {2.0f, 0.0f, 0.0f}})
                   .ok());
   ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::RadialArray).ok());
@@ -5027,7 +5053,7 @@ TEST(RadialArrayToolServiceTests,
   ASSERT_TRUE(source.ok()) << source.error_message();
   ASSERT_TRUE(editor.scene()
                   .set_transform(source.value().entity,
-                                 {.position = {3.0f, 0.0f, 0.0f}})
+                                 {.location = {3.0f, 0.0f, 0.0f}})
                   .ok());
   ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::RadialArray).ok());
@@ -5112,10 +5138,10 @@ TEST(RadialArrayToolServiceTests,
           .ok());
   TransformComponent source_transform =
       *session.scene().transform(source.value().entity);
-  source_transform.position = {2.0f, 0.0f, 0.0f};
+  source_transform.location = {2.0f, 0.0f, 0.0f};
   source_transform.custom_pivot = true;
   session.scene().set_transform(source.value().entity, source_transform);
-  ASSERT_TRUE(session.scene().set_selectable(source.value().entity, false));
+  ASSERT_TRUE(session.scene().set_selectability(source.value().entity, false));
   const QuaderApiResult<QuaderAssetRef> material =
       editor.assets().add_material(QuaderMaterialArgs{
           .name = "Radial Durable Material",
@@ -5162,7 +5188,7 @@ TEST(RadialArrayToolServiceTests,
   ASSERT_TRUE(source.ok()) << source.error_message();
   ASSERT_TRUE(editor.scene()
                   .set_transform(source.value().entity,
-                                 {.position = {2.0f, 0.0f, 0.0f}})
+                                 {.location = {2.0f, 0.0f, 0.0f}})
                   .ok());
   ASSERT_TRUE(editor.selection().select_object(source.value()).ok());
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::RadialArray).ok());
@@ -5952,7 +5978,7 @@ TEST(ViewportPointPlacementServiceTests,
   previous_calls = visibility_filter_calls;
 
   ASSERT_TRUE(scene.set_transform(
-      mesh_entities[1], TransformComponent{.position = {2.0f, 0.0f, 0.0f}}));
+      mesh_entities[1], TransformComponent{.location = {2.0f, 0.0f, 0.0f}}));
   EXPECT_TRUE(resolve().valid);
   EXPECT_GT(visibility_filter_calls, previous_calls);
   previous_calls = visibility_filter_calls;
@@ -5962,7 +5988,7 @@ TEST(ViewportPointPlacementServiceTests,
   EXPECT_GT(visibility_filter_calls, previous_calls);
   previous_calls = visibility_filter_calls;
 
-  ASSERT_TRUE(scene.set_locked(mesh_entities[3], true));
+  ASSERT_TRUE(scene.set_selectable(mesh_entities[3], false));
   EXPECT_TRUE(resolve().valid);
   EXPECT_GT(visibility_filter_calls, previous_calls);
   previous_calls = visibility_filter_calls;
@@ -6401,7 +6427,7 @@ TEST(SceneDocumentTests,
   EXPECT_EQ(work.mutation_counter_lookup_count, 1u);
 
   ASSERT_TRUE(scene.set_transform(
-      participant, TransformComponent{.position = {1.0f, 2.0f, 3.0f}}));
+      participant, TransformComponent{.location = {1.0f, 2.0f, 3.0f}}));
   EXPECT_TRUE(fence.matches_current(scene));
 
   ASSERT_TRUE(scene.set_mesh(participant, {.mesh = 11u}));
@@ -6680,7 +6706,7 @@ TEST(SceneDocumentTests,
       scene.capture_scalar_compensation_checkpoint();
   ASSERT_TRUE(scene.set_selected(participant, true));
   ASSERT_TRUE(scene.set_transform(
-      participant, TransformComponent{.position = {2.0f, 3.0f, 4.0f}}));
+      participant, TransformComponent{.location = {2.0f, 3.0f, 4.0f}}));
   ASSERT_TRUE(scene.acknowledge_scalar_compensation_checkpoint(checkpoint));
   ASSERT_TRUE(scene.begin_scalar_compensation_restore(checkpoint));
   ASSERT_TRUE(scene.set_transform(participant, TransformComponent{}));
@@ -6695,7 +6721,7 @@ TEST(SceneDocumentTests,
   ASSERT_TRUE(
       scene.acknowledge_scalar_compensation_checkpoint(callback_scope));
   ASSERT_TRUE(scene.set_transform(
-      unrelated, TransformComponent{.position = {7.0f, 8.0f, 9.0f}}));
+      unrelated, TransformComponent{.location = {7.0f, 8.0f, 9.0f}}));
   EXPECT_FALSE(scene.begin_scalar_compensation_restore(callback_scope));
   EXPECT_TRUE(callback_scope.valid());
   EXPECT_TRUE(scene.discard_scalar_compensation_checkpoint(callback_scope));
@@ -7077,7 +7103,7 @@ TEST(SceneDocumentTests,
 
   ASSERT_TRUE(scene.set_mesh(participant, {.mesh = 11u}));
   TransformComponent unrelated_transform;
-  unrelated_transform.position = {3.0f, 4.0f, 5.0f};
+  unrelated_transform.location = {3.0f, 4.0f, 5.0f};
   ASSERT_TRUE(scene.set_transform(unrelated, unrelated_transform));
   const std::uint64_t revision = scene.revision();
   const std::uint64_t content_revision = scene.content_revision();
@@ -7089,7 +7115,7 @@ TEST(SceneDocumentTests,
   ASSERT_NE(scene.mesh(participant), nullptr);
   EXPECT_EQ(scene.mesh(participant)->mesh, 11u);
   ASSERT_NE(scene.transform(unrelated), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(unrelated)->position.x, 3.0f);
+  EXPECT_FLOAT_EQ(scene.transform(unrelated)->location.x, 3.0f);
   EXPECT_EQ(scene.revision(), revision);
 
   SceneModelingProjectionRestoreWork work;
@@ -7098,9 +7124,9 @@ TEST(SceneDocumentTests,
   ASSERT_NE(scene.mesh(participant), nullptr);
   EXPECT_EQ(scene.mesh(participant)->mesh, 11u);
   ASSERT_NE(scene.transform(unrelated), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(unrelated)->position.x, 3.0f);
-  EXPECT_FLOAT_EQ(scene.transform(unrelated)->position.y, 4.0f);
-  EXPECT_FLOAT_EQ(scene.transform(unrelated)->position.z, 5.0f);
+  EXPECT_FLOAT_EQ(scene.transform(unrelated)->location.x, 3.0f);
+  EXPECT_FLOAT_EQ(scene.transform(unrelated)->location.y, 4.0f);
+  EXPECT_FLOAT_EQ(scene.transform(unrelated)->location.z, 5.0f);
   EXPECT_EQ(scene.revision(), revision);
   EXPECT_EQ(scene.content_revision(), content_revision);
   EXPECT_EQ(scene.mesh_binding_revision(), mesh_revision);
@@ -7137,7 +7163,7 @@ TEST(SceneDocumentTests,
   ASSERT_TRUE(fence.acknowledge_current(scene, created));
 
   ASSERT_TRUE(scene.set_transform(
-      unrelated, TransformComponent{.position = {4.0f, 5.0f, 6.0f}}));
+      unrelated, TransformComponent{.location = {4.0f, 5.0f, 6.0f}}));
   ASSERT_TRUE(scene.set_selected(unrelated, true));
   ASSERT_TRUE(scene.set_active_selection(unrelated));
   const EntityId unrelated_created = scene.create_entity("Unrelated Created");
@@ -7168,7 +7194,7 @@ TEST(SceneDocumentTests,
   EXPECT_FALSE(scene.exists(staged));
   EXPECT_TRUE(scene.exists(unrelated_created));
   ASSERT_NE(scene.transform(unrelated), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(unrelated)->position.x, 4.0f);
+  EXPECT_FLOAT_EQ(scene.transform(unrelated)->location.x, 4.0f);
   EXPECT_EQ(scene.primary_selection(), unrelated);
   EXPECT_GT(scene.revision(), revision_before_restore);
   EXPECT_GT(scene.transform_revision(), transform_revision_before_restore);
@@ -7229,7 +7255,7 @@ TEST(SceneDocumentTests,
   ASSERT_TRUE(fence.acknowledge_current(scene));
   const EntityId unrelated = scene.create_entity("Unrelated Progress");
   ASSERT_TRUE(scene.set_transform(
-      unrelated, TransformComponent{.position = {3.0F, 4.0F, 5.0F}}));
+      unrelated, TransformComponent{.location = {3.0F, 4.0F, 5.0F}}));
   ASSERT_TRUE(fence.matches_current(scene));
   const std::uint64_t material_before_restore =
       scene.material_binding_revision();
@@ -7241,7 +7267,7 @@ TEST(SceneDocumentTests,
   EXPECT_FALSE(scene.curve(curve)->solidify);
   EXPECT_GT(scene.material_binding_revision(), material_before_restore);
   ASSERT_NE(scene.transform(unrelated), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(unrelated)->position.x, 3.0F);
+  EXPECT_FLOAT_EQ(scene.transform(unrelated)->location.x, 3.0F);
 }
 
 TEST(SceneDocumentTests,
@@ -7510,12 +7536,12 @@ TEST(SceneDocumentTests, ComponentAccessorsAreReadOnlyOutsideDocumentMutators) {
   ASSERT_NE(scene.transform(entity), nullptr);
 
   TransformComponent moved = *scene.transform(entity);
-  moved.position.x = 5.0f;
+  moved.location.x = 5.0f;
   scene.set_transform(entity, moved);
 
   EXPECT_GT(scene.revision(), after_create);
   ASSERT_NE(scene.transform(entity), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 5.0f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->location.x, 5.0f);
 }
 
 TEST(SceneDocumentTests, TracksDomainRevisionsForOverlayCacheInvalidation) {
@@ -7538,7 +7564,7 @@ TEST(SceneDocumentTests, TracksDomainRevisionsForOverlayCacheInvalidation) {
 
   const std::uint64_t transform_selection = scene.selection_revision();
   TransformComponent moved;
-  moved.position.x = 3.0f;
+  moved.location.x = 3.0f;
   scene.set_transform(entity, moved);
   EXPECT_GT(scene.transform_revision(), transform_before);
   EXPECT_EQ(scene.selection_revision(), transform_selection);
@@ -7552,11 +7578,11 @@ TEST(SceneDocumentTests, TracksDomainRevisionsForOverlayCacheInvalidation) {
   EXPECT_EQ(scene.visibility_revision(), unchanged_visibility_revision);
 
   const std::uint64_t selectable_revision = scene.visibility_revision();
-  ASSERT_TRUE(scene.set_selectable(entity, false));
+  ASSERT_TRUE(scene.set_selectability(entity, false));
   EXPECT_GT(scene.visibility_revision(), selectable_revision);
   const std::uint64_t unchanged_selectable_revision =
       scene.visibility_revision();
-  ASSERT_TRUE(scene.set_selectable(entity, false));
+  ASSERT_TRUE(scene.set_selectability(entity, false));
   EXPECT_EQ(scene.visibility_revision(), unchanged_selectable_revision);
 
   scene.set_mesh(entity, MeshComponent{.mesh = 7});
@@ -7591,14 +7617,14 @@ TEST(SceneDocumentTests,
   const std::uint64_t presentation_before =
       scene.hierarchy_presentation_revision();
   ASSERT_TRUE(scene.set_transform(
-      entity, TransformComponent{.position = {3.0f, 2.0f, 1.0f}}));
+      entity, TransformComponent{.location = {3.0f, 2.0f, 1.0f}}));
   ASSERT_TRUE(scene.set_modeling_object(
       entity, ModelingObjectComponent{.object_id = 42u}));
   ASSERT_TRUE(scene.set_mesh(entity, MeshComponent{.mesh = 8u}));
   ASSERT_TRUE(scene.set_material(entity, MaterialComponent{.material = 11u}));
   ASSERT_TRUE(scene.notify_mesh_payload_changed(entity));
   ASSERT_TRUE(scene.set_selected(entity, true));
-  ASSERT_TRUE(scene.set_selectable(entity, false));
+  ASSERT_TRUE(scene.set_selectability(entity, false));
 
   const SceneLayerId layer =
       scene.create_layer("Presentation Neutral Layer");
@@ -7630,7 +7656,7 @@ TEST(SceneDocumentTests,
   EXPECT_GT(scene.hierarchy_presentation_revision(), presentation);
   presentation = scene.hierarchy_presentation_revision();
 
-  ASSERT_TRUE(scene.set_locked(entity, true));
+  ASSERT_TRUE(scene.set_selectable(entity, false));
   EXPECT_GT(scene.hierarchy_presentation_revision(), presentation);
   presentation = scene.hierarchy_presentation_revision();
 
@@ -7666,11 +7692,11 @@ TEST(SceneDocumentTests, IdempotentComponentWritesKeepAllRevisionsStable) {
   const LightComponent light{.type = LightType::Point,
                              .intensity = 2.0f};
   TransformComponent transform;
-  transform.position = {1.0f, 2.0f, 3.0f};
+  transform.location = {1.0f, 2.0f, 3.0f};
 
   ASSERT_TRUE(scene.rename_entity(mesh_entity, "Stable Mesh Renamed"));
   ASSERT_TRUE(scene.set_entity_kind(mesh_entity, EntityKind::Mesh));
-  ASSERT_TRUE(scene.set_locked(mesh_entity, true));
+  ASSERT_TRUE(scene.set_selectable(mesh_entity, false));
   ASSERT_TRUE(scene.set_transform(mesh_entity, transform));
   ASSERT_TRUE(scene.set_mesh(mesh_entity, mesh));
   ASSERT_TRUE(scene.set_modeling_object(mesh_entity, modeling));
@@ -7693,7 +7719,7 @@ TEST(SceneDocumentTests, IdempotentComponentWritesKeepAllRevisionsStable) {
 
   EXPECT_TRUE(scene.rename_entity(mesh_entity, "Stable Mesh Renamed"));
   EXPECT_TRUE(scene.set_entity_kind(mesh_entity, EntityKind::Mesh));
-  EXPECT_TRUE(scene.set_locked(mesh_entity, true));
+  EXPECT_TRUE(scene.set_selectable(mesh_entity, false));
   EXPECT_TRUE(scene.set_transform(mesh_entity, transform));
   EXPECT_TRUE(scene.set_mesh(mesh_entity, mesh));
   EXPECT_TRUE(scene.set_modeling_object(mesh_entity, modeling));
@@ -7913,9 +7939,9 @@ TEST(SceneDocumentTests, BatchedTransformAssignmentsDirtyOnceAndSkipNoOps) {
 
   const std::array<SceneTransformAssignment, 2u> assignments{{
       {.entity = first,
-       .transform = TransformComponent{.position = {1.0f, 0.0f, 0.0f}}},
+       .transform = TransformComponent{.location = {1.0f, 0.0f, 0.0f}}},
       {.entity = second,
-       .transform = TransformComponent{.position = {2.0f, 0.0f, 0.0f}}},
+       .transform = TransformComponent{.location = {2.0f, 0.0f, 0.0f}}},
   }};
 
   scene.set_transforms(assignments);
@@ -7923,8 +7949,8 @@ TEST(SceneDocumentTests, BatchedTransformAssignmentsDirtyOnceAndSkipNoOps) {
   EXPECT_EQ(scene.revision(), before + 1u);
   ASSERT_NE(scene.transform(first), nullptr);
   ASSERT_NE(scene.transform(second), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(first)->position.x, 1.0f);
-  EXPECT_FLOAT_EQ(scene.transform(second)->position.x, 2.0f);
+  EXPECT_FLOAT_EQ(scene.transform(first)->location.x, 1.0f);
+  EXPECT_FLOAT_EQ(scene.transform(second)->location.x, 2.0f);
 
   scene.set_transforms(assignments);
   EXPECT_EQ(scene.revision(), before + 1u);
@@ -8090,11 +8116,11 @@ TEST(SceneDocumentTests, TracksHierarchyTreeOrderAndInheritedState) {
   const EntityId sibling = scene.create_entity("Sibling");
 
   scene.set_transform(group,
-                      TransformComponent{.position = {10.0f, 0.0f, 0.0f}});
+                      TransformComponent{.location = {10.0f, 0.0f, 0.0f}});
   scene.set_transform(child,
-                      TransformComponent{.position = {2.0f, 0.0f, 0.0f}});
+                      TransformComponent{.location = {2.0f, 0.0f, 0.0f}});
   scene.set_transform(grandchild,
-                      TransformComponent{.position = {0.0f, 3.0f, 0.0f}});
+                      TransformComponent{.location = {0.0f, 3.0f, 0.0f}});
   ASSERT_TRUE(scene.set_parent(child, group, false));
   ASSERT_TRUE(scene.set_parent(grandchild, child, false));
 
@@ -8126,8 +8152,8 @@ TEST(SceneDocumentTests, TracksHierarchyTreeOrderAndInheritedState) {
   ASSERT_TRUE(scene.set_visible(group, false));
   EXPECT_TRUE(scene.visibility(child)->visible);
   EXPECT_FALSE(scene.is_effectively_visible(child));
-  ASSERT_TRUE(scene.set_locked(group, true));
-  EXPECT_TRUE(scene.is_effectively_locked(grandchild));
+  ASSERT_TRUE(scene.set_selectable(group, false));
+  EXPECT_FALSE(scene.is_effectively_selectable(grandchild));
 }
 
 TEST(SceneDocumentTests,
@@ -8174,13 +8200,13 @@ TEST(SceneDocumentTests,
   }};
   ASSERT_TRUE(scene.replace_hierarchy(hierarchy));
   ASSERT_TRUE(scene.set_transform(
-      root, TransformComponent{.position = {10.0f, 0.0f, 0.0f}}));
+      root, TransformComponent{.location = {10.0f, 0.0f, 0.0f}}));
   ASSERT_TRUE(scene.set_transform(
-      definition, TransformComponent{.position = {2.0f, 0.0f, 0.0f}}));
+      definition, TransformComponent{.location = {2.0f, 0.0f, 0.0f}}));
   ASSERT_TRUE(scene.set_transform(
-      member, TransformComponent{.position = {0.0f, 3.0f, 0.0f}}));
+      member, TransformComponent{.location = {0.0f, 3.0f, 0.0f}}));
   ASSERT_TRUE(scene.set_visible(root, false));
-  ASSERT_TRUE(scene.set_locked(definition, true));
+  ASSERT_TRUE(scene.set_selectable(definition, false));
   ASSERT_TRUE(scene.set_instance_definition(definition));
 
   SceneHierarchyProjectionWorkStats work;
@@ -8201,8 +8227,8 @@ TEST(SceneDocumentTests,
               scene.world_transform_matrix(record.entity).values);
     EXPECT_EQ(record.effectively_visible,
               scene.is_effectively_visible(record.entity));
-    EXPECT_EQ(record.effectively_locked,
-              scene.is_effectively_locked(record.entity));
+    EXPECT_EQ(record.effectively_selectable,
+              scene.is_effectively_selectable(record.entity));
     EXPECT_EQ(record.containing_instance_definition,
               scene.containing_instance_definition(record.entity));
   }
@@ -8267,9 +8293,9 @@ TEST(ViewportSceneProjectionTests,
   const EntityId root = scene.create_empty("Root");
   const EntityId point = scene.create_entity("Point", EntityKind::Light);
   ASSERT_TRUE(scene.set_transform(
-      root, TransformComponent{.position = {10.0f, 0.0f, 0.0f}}));
+      root, TransformComponent{.location = {10.0f, 0.0f, 0.0f}}));
   ASSERT_TRUE(scene.set_transform(
-      point, TransformComponent{.position = {2.0f, 0.0f, 0.0f}}));
+      point, TransformComponent{.location = {2.0f, 0.0f, 0.0f}}));
   ASSERT_TRUE(scene.set_parent(point, root, false));
   ASSERT_TRUE(scene.set_light(
       point, LightComponent{.type = LightType::Point, .intensity = 2.0f}));
@@ -8342,10 +8368,10 @@ TEST(SceneDocumentTests, ReparentCanPreserveWorldTransformAndDestroyChildren) {
   const EntityId leaf = scene.create_entity("Leaf");
 
   scene.set_transform(group,
-                      TransformComponent{.position = {10.0f, 0.0f, 0.0f}});
+                      TransformComponent{.location = {10.0f, 0.0f, 0.0f}});
   scene.set_transform(child,
-                      TransformComponent{.position = {2.0f, 0.0f, 0.0f}});
-  scene.set_transform(leaf, TransformComponent{.position = {1.0f, 0.0f, 0.0f}});
+                      TransformComponent{.location = {2.0f, 0.0f, 0.0f}});
+  scene.set_transform(leaf, TransformComponent{.location = {1.0f, 0.0f, 0.0f}});
   ASSERT_TRUE(scene.set_parent(child, group, false));
 
   const QVec3 before = transform_point(scene.world_transform_matrix(child), {});
@@ -8354,7 +8380,7 @@ TEST(SceneDocumentTests, ReparentCanPreserveWorldTransformAndDestroyChildren) {
   EXPECT_FLOAT_EQ(before.x, after.x);
   EXPECT_FLOAT_EQ(before.y, after.y);
   ASSERT_NE(scene.transform(child), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(child)->position.x, 2.0f);
+  EXPECT_FLOAT_EQ(scene.transform(child)->location.x, 2.0f);
   EXPECT_FLOAT_EQ(scene.transform(child)->parenting_offset.values[12], 10.0f);
   EXPECT_FLOAT_EQ(after.z, before.z);
 
@@ -8375,13 +8401,13 @@ TEST(SceneDocumentTests,
 
   constexpr float kSharedRotation = 0.35f;
   TransformComponent parent_transform;
-  parent_transform.position = {3.0f, -5.0f, 2.0f};
+  parent_transform.location = {3.0f, -5.0f, 2.0f};
   parent_transform.rotation_euler = {0.0f, 0.0f, kSharedRotation};
   parent_transform.scale = {0.001f, 0.002f, 0.004f};
   scene.set_transform(parent, parent_transform);
 
   TransformComponent child_transform;
-  child_transform.position = {-7.0f, 11.0f, 5.0f};
+  child_transform.location = {-7.0f, 11.0f, 5.0f};
   child_transform.rotation_euler = {0.0f, 0.0f, kSharedRotation};
   child_transform.scale = {0.003f, 0.010f, 0.028f};
   child_transform.custom_pivot = true;
@@ -8395,7 +8421,7 @@ TEST(SceneDocumentTests,
                 0.00002f);
   }
   ASSERT_NE(scene.transform(child), nullptr);
-  expect_vec3_near(scene.transform(child)->position, child_transform.position);
+  expect_vec3_near(scene.transform(child)->location, child_transform.location);
   expect_vec3_near(scene.transform(child)->rotation_euler, child_transform.rotation_euler);
   expect_vec3_near(scene.transform(child)->scale, child_transform.scale);
   const auto inverse_parent = try_scene_matrix_inverse(scene.world_transform_matrix(parent));
@@ -8425,13 +8451,13 @@ TEST(SceneDocumentTests,
   ASSERT_NE(child, kInvalidEntityId);
 
   TransformComponent parent_transform;
-  parent_transform.position = {3.0f, -2.0f, 1.0f};
+  parent_transform.location = {3.0f, -2.0f, 1.0f};
   parent_transform.rotation_euler = {0.15f, -0.25f, 0.6f};
   parent_transform.scale = {0.0f, 0.75f, 1.4f};
   scene.set_transform(parent, parent_transform);
 
   TransformComponent child_transform;
-  child_transform.position = {-5.0f, 4.0f, 2.0f};
+  child_transform.location = {-5.0f, 4.0f, 2.0f};
   child_transform.rotation_euler = {-0.2f, 0.35f, -0.4f};
   child_transform.scale = {0.8f, 1.1f, 1.3f};
   child_transform.custom_pivot = true;
@@ -8446,7 +8472,7 @@ TEST(SceneDocumentTests,
 
   EXPECT_EQ(scene.parent(child), kInvalidEntityId);
   ASSERT_NE(scene.transform(child), nullptr);
-  expect_vec3_near(scene.transform(child)->position, local_before.position);
+  expect_vec3_near(scene.transform(child)->location, local_before.location);
   expect_vec3_near(scene.transform(child)->rotation_euler,
                    local_before.rotation_euler);
   expect_vec3_near(scene.transform(child)->scale, local_before.scale);
@@ -8463,7 +8489,7 @@ TEST(SceneBoundsTests, CurveHierarchyBoundsUseAuthoredExtremaAndTransforms) {
   SceneDocument scene;
   const EntityId group = scene.create_empty("Group");
   ASSERT_TRUE(scene.set_transform(
-      group, TransformComponent{.position = {10.0f, 2.0f, 0.0f}}));
+      group, TransformComponent{.location = {10.0f, 2.0f, 0.0f}}));
   const EntityId curve = scene.create_entity("Curve");
   ASSERT_TRUE(scene.set_curve(curve, {.curve = asset_id}));
   ASSERT_TRUE(scene.set_parent(curve, group, false));
@@ -8498,20 +8524,20 @@ TEST(SceneBoundsTests, ComputesSelectedWorldBoundsFromSpatialTransforms) {
   const EntityId mesh_entity = scene.create_entity("Scaled Mesh");
   scene.set_mesh(mesh_entity, MeshComponent{.mesh = cube_mesh});
   scene.set_transform(mesh_entity, TransformComponent{
-                                       .position = {10.0f, 0.0f, 0.0f},
+                                       .location = {10.0f, 0.0f, 0.0f},
                                        .scale = {2.0f, 3.0f, 4.0f},
                                    });
   scene.set_selected(mesh_entity, true);
 
   const EntityId point_entity = scene.create_entity("Light");
   scene.set_transform(point_entity,
-                      TransformComponent{.position = {-4.0f, 5.0f, 2.0f}});
+                      TransformComponent{.location = {-4.0f, 5.0f, 2.0f}});
   scene.set_selected(point_entity, true);
 
   const EntityId hidden_entity = scene.create_entity("Hidden");
   scene.set_transform(
       hidden_entity,
-      TransformComponent{.position = {-100.0f, -100.0f, -100.0f}});
+      TransformComponent{.location = {-100.0f, -100.0f, -100.0f}});
   scene.set_visible(hidden_entity, false);
   scene.set_selected(hidden_entity, true);
 
@@ -8544,7 +8570,7 @@ TEST(SceneBoundsTests, CentersBottomOriginMeshOnItsSelectedWorldBounds) {
   const EntityId entity = scene.create_entity("Bottom Origin Box");
   scene.set_mesh(entity, MeshComponent{.mesh = box_mesh});
   scene.set_transform(entity,
-                      TransformComponent{.position = {0.0f, 0.0f, 0.0f}});
+                      TransformComponent{.location = {0.0f, 0.0f, 0.0f}});
   scene.set_selected(entity, true);
 
   const std::optional<SceneBounds> bounds =
@@ -8573,18 +8599,18 @@ TEST(SceneBoundsTests, IncludesInstanceOccurrenceDescendantsInHierarchyBounds) {
   scene.set_modeling_object(
       member, ModelingObjectComponent{.object_id = 1u, .material_slot = 0u});
   scene.set_transform(
-      member, TransformComponent{.position = {2.0f, 0.0f, 0.0f}});
+      member, TransformComponent{.location = {2.0f, 0.0f, 0.0f}});
   ASSERT_TRUE(scene.set_parent(member, definition, false));
 
   const EntityId group = scene.create_empty("Group");
   scene.set_transform(
-      group, TransformComponent{.position = {100.0f, 0.0f, 0.0f}});
+      group, TransformComponent{.location = {100.0f, 0.0f, 0.0f}});
   const EntityId occurrence =
       scene.create_entity("Occurrence", EntityKind::Instance);
   ASSERT_TRUE(scene.set_instance_occurrence(
       occurrence, InstanceOccurrenceComponent{.definition = definition}));
   scene.set_transform(
-      occurrence, TransformComponent{.position = {10.0f, 5.0f, 0.0f}});
+      occurrence, TransformComponent{.location = {10.0f, 5.0f, 0.0f}});
   ASSERT_TRUE(scene.set_parent(occurrence, group, false));
 
   const std::optional<SceneBounds> bounds =
@@ -8612,8 +8638,8 @@ TEST(TransformPivotTests, KeepsNonOriginVisualPivotFixedDuringRotation) {
   EXPECT_NEAR(pinned_world_pivot.x, world_pivot.x, 0.001f);
   EXPECT_NEAR(pinned_world_pivot.y, world_pivot.y, 0.001f);
   EXPECT_NEAR(pinned_world_pivot.z, world_pivot.z, 0.001f);
-  EXPECT_NEAR(rotated.position.x, 1.0f, 0.001f);
-  EXPECT_NEAR(rotated.position.y, 1.0f, 0.001f);
+  EXPECT_NEAR(rotated.location.x, 1.0f, 0.001f);
+  EXPECT_NEAR(rotated.location.y, 1.0f, 0.001f);
 }
 
 TEST(TransformPivotTests, KeepsNonOriginVisualPivotFixedDuringScale) {
@@ -8630,8 +8656,8 @@ TEST(TransformPivotTests, KeepsNonOriginVisualPivotFixedDuringScale) {
   EXPECT_NEAR(pinned_world_pivot.x, world_pivot.x, 0.001f);
   EXPECT_NEAR(pinned_world_pivot.y, world_pivot.y, 0.001f);
   EXPECT_NEAR(pinned_world_pivot.z, world_pivot.z, 0.001f);
-  EXPECT_NEAR(scaled.position.x, 0.0f, 0.001f);
-  EXPECT_NEAR(scaled.position.y, -2.0f, 0.001f);
+  EXPECT_NEAR(scaled.location.x, 0.0f, 0.001f);
+  EXPECT_NEAR(scaled.location.y, -2.0f, 0.001f);
 }
 
 TEST(TransformPivotTests, AppliesRotationDeltaInGlobalSpace) {
@@ -8698,7 +8724,7 @@ TEST(TransformPivotTests, NormalizesEulerDisplayAnglesToPositiveTurn) {
 
 TEST(MathTypesTests, ComposeTransformRoundTripsPoints) {
   const QTransform transform{
-      .position = {2.0f, 3.0f, 4.0f},
+      .location = {2.0f, 3.0f, 4.0f},
       .rotation = {},
       .scale = {2.0f, 3.0f, 4.0f},
   };
@@ -14740,7 +14766,7 @@ TEST(SceneSessionTests,
   EXPECT_FALSE(editor.project().dirty());
 
   QuaderTransform moved;
-  moved.position = {1.0f, 2.0f, 3.0f};
+  moved.location = {1.0f, 2.0f, 3.0f};
   const QuaderApiVoidResult transformed =
       editor.scene().set_transform(entity.value().id, moved);
   ASSERT_TRUE(transformed.ok()) << transformed.error_message();
@@ -14758,7 +14784,7 @@ TEST(SceneSessionTests,
   EXPECT_FALSE(editor.project().dirty());
 
   const QuaderApiVoidResult locked =
-      editor.scene().set_locked(entity.value().id, true);
+      editor.scene().set_selectable(entity.value().id, false);
   ASSERT_TRUE(locked.ok()) << locked.error_message();
   EXPECT_TRUE(locked.changed());
   EXPECT_TRUE(editor.project().dirty());
@@ -15019,7 +15045,7 @@ TEST(SceneSessionTests,
                                   LightComponent{.type = LightType::Point});
     TransformComponent replacement_transform =
         *replacement.scene().transform(replacement_light);
-    replacement_transform.position = {9.0f, 8.0f, 7.0f};
+    replacement_transform.location = {9.0f, 8.0f, 7.0f};
     replacement.scene().set_transform(replacement_light,
                                       replacement_transform);
 
@@ -15033,7 +15059,7 @@ TEST(SceneSessionTests,
         editor.tools().commit_active_tool_preview();
     EXPECT_FALSE(applied.ok());
     ASSERT_NE(session.scene().transform(replacement_light), nullptr);
-    expect_vec3_near(session.scene().transform(replacement_light)->position,
+    expect_vec3_near(session.scene().transform(replacement_light)->location,
                      {9.0f, 8.0f, 7.0f});
   }
 
@@ -15123,7 +15149,7 @@ TEST(SceneSessionTests,
           test_api_x_move_drag_update_request(2.0f));
   ASSERT_TRUE(update.ok()) << update.error_message();
   ASSERT_NE(session.scene().transform(source.value().entity), nullptr);
-  EXPECT_NEAR(session.scene().transform(source.value().entity)->position.x,
+  EXPECT_NEAR(session.scene().transform(source.value().entity)->location.x,
               2.0f, 0.001f);
 
   SceneContentDocument replacement;
@@ -15132,7 +15158,7 @@ TEST(SceneSessionTests,
   ASSERT_EQ(replacement_entity, source.value().entity);
   TransformComponent replacement_transform =
       *replacement.scene().transform(replacement_entity);
-  replacement_transform.position = {99.0f, 8.0f, 7.0f};
+  replacement_transform.location = {99.0f, 8.0f, 7.0f};
   replacement.scene().set_transform(replacement_entity,
                                     replacement_transform);
 
@@ -15140,7 +15166,7 @@ TEST(SceneSessionTests,
 
   EXPECT_FALSE(session.modeling().transform_drag_active());
   ASSERT_NE(session.scene().transform(replacement_entity), nullptr);
-  expect_vec3_near(session.scene().transform(replacement_entity)->position,
+  expect_vec3_near(session.scene().transform(replacement_entity)->location,
                    {99.0f, 8.0f, 7.0f});
 
   const QuaderApiVoidResult late_cancel =
@@ -15148,7 +15174,7 @@ TEST(SceneSessionTests,
   ASSERT_TRUE(late_cancel.ok()) << late_cancel.error_message();
   EXPECT_FALSE(late_cancel.changed());
   ASSERT_NE(session.scene().transform(replacement_entity), nullptr);
-  expect_vec3_near(session.scene().transform(replacement_entity)->position,
+  expect_vec3_near(session.scene().transform(replacement_entity)->location,
                    {99.0f, 8.0f, 7.0f});
 }
 
@@ -15500,13 +15526,13 @@ TEST(DocumentCommandServiceTests, RecordsUndoRedoForNativeSceneEdits) {
   EXPECT_EQ(scene.name(entity)->name, "Brush_1");
 
   TransformComponent transform;
-  transform.position = {3.0f, 2.0f, 1.0f};
+  transform.location = {3.0f, 2.0f, 1.0f};
   ASSERT_TRUE(commands.set_transform(entity, transform).ok);
   ASSERT_NE(scene.transform(entity), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 3.0f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->location.x, 3.0f);
   EXPECT_TRUE(history.undo().ok);
   ASSERT_NE(scene.transform(entity), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->location.x, 0.0f);
 }
 
 TEST(EditorCommandServiceTests, ExecutesCommandsThroughSharedUndoStack) {
@@ -15651,7 +15677,7 @@ TEST(DocumentCommandTests, CurveComponentsSurviveDuplicateAndDeleteUndoRedo) {
   };
   ASSERT_TRUE(scene.set_curve(curve, component));
   ASSERT_TRUE(scene.set_transform(
-      curve, TransformComponent{.position = {3.0f, 4.0f, 5.0f}}));
+      curve, TransformComponent{.location = {3.0f, 4.0f, 5.0f}}));
   ASSERT_TRUE(scene.set_selected(curve, true));
   UndoRedoManager history;
   auto duplicate = std::make_unique<DuplicateEntityCommand>(scene, curve);
@@ -15661,7 +15687,7 @@ TEST(DocumentCommandTests, CurveComponentsSurviveDuplicateAndDeleteUndoRedo) {
   ASSERT_NE(scene.curve(clone), nullptr);
   EXPECT_EQ(*scene.curve(clone), component);
   EXPECT_EQ(scene.kind(clone), EntityKind::Curve);
-  EXPECT_FLOAT_EQ(scene.transform(clone)->position.x, 3.0f);
+  EXPECT_FLOAT_EQ(scene.transform(clone)->location.x, 3.0f);
   ASSERT_TRUE(history.undo().ok);
   EXPECT_FALSE(scene.exists(clone));
   ASSERT_TRUE(history.redo().ok);
@@ -15685,13 +15711,13 @@ TEST(DocumentCommandTests,
   const EntityId source =
       scene.create_entity("Rich Source", EntityKind::Mesh);
   ASSERT_TRUE(scene.set_transform(
-      source, TransformComponent{.position = {2.0f, 3.0f, 4.0f},
+      source, TransformComponent{.location = {2.0f, 3.0f, 4.0f},
                                  .rotation_euler = {0.1f, 0.2f, 0.3f},
                                  .scale = {1.5f, 1.25f, 0.75f},
                                  .custom_pivot = true}));
   ASSERT_TRUE(scene.set_visible(source, false));
+  ASSERT_TRUE(scene.set_selectability(source, false));
   ASSERT_TRUE(scene.set_selectable(source, false));
-  ASSERT_TRUE(scene.set_locked(source, true));
   const MeshComponent mesh{.mesh = 41u,
                            .editor_only = true,
                            .cast_shadows = false,
@@ -15719,8 +15745,8 @@ TEST(DocumentCommandTests,
     EXPECT_EQ(scene.entity_layer(entity), 7u);
     EXPECT_FALSE(scene.visibility(entity)->visible);
     EXPECT_FALSE(scene.visibility(entity)->selectable);
-    EXPECT_TRUE(scene.lock(entity)->locked);
-    expect_vec3_near(scene.transform(entity)->position,
+    EXPECT_FALSE(scene.selectable(entity)->selectable);
+    expect_vec3_near(scene.transform(entity)->location,
                      {2.0f, 3.0f, 4.0f});
     EXPECT_TRUE(scene.transform(entity)->custom_pivot);
   };
@@ -15767,28 +15793,28 @@ TEST(DocumentCommandTests, TypedCommandsExecuteDirectlyThroughUndoRedoManager) {
 
   TransformComponent before_transform = *scene.transform(entity);
   TransformComponent after_transform = before_transform;
-  after_transform.position = {4.0f, 5.0f, 6.0f};
+  after_transform.location = {4.0f, 5.0f, 6.0f};
 
   std::vector<std::unique_ptr<IUndoableCommand>> batch_commands;
   batch_commands.push_back(
       std::make_unique<SetVisibilityCommand>(scene, entity, true, false));
   batch_commands.push_back(
-      std::make_unique<SetLockCommand>(scene, entity, false, true));
+      std::make_unique<SetSelectableCommand>(scene, entity, true, false));
   batch_commands.push_back(std::make_unique<ApplyEntityTransformCommand>(
       scene, entity, before_transform, after_transform, "Set Transform"));
   result = undo_redo.execute(std::make_unique<BatchDocumentCommand>(
       "Batch Edit", std::move(batch_commands)));
   ASSERT_TRUE(result.ok) << result.message;
   EXPECT_FALSE(scene.visibility(entity)->visible);
-  EXPECT_TRUE(scene.lock(entity)->locked);
-  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 4.0f);
+  EXPECT_FALSE(scene.selectable(entity)->selectable);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->location.x, 4.0f);
   ASSERT_NE(undo_redo.undo_label(), nullptr);
   EXPECT_EQ(*undo_redo.undo_label(), "Batch Edit");
 
   ASSERT_TRUE(undo_redo.undo().ok);
   EXPECT_TRUE(scene.visibility(entity)->visible);
-  EXPECT_FALSE(scene.lock(entity)->locked);
-  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0f);
+  EXPECT_TRUE(scene.selectable(entity)->selectable);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->location.x, 0.0f);
 
   int value = 0;
   result = undo_redo.execute(
@@ -15868,9 +15894,9 @@ TEST(DocumentCommandTests, SceneBeforeAfterCommandsSupportExplicitMergeKeys) {
 
   TransformComponent before = *scene.transform(entity);
   TransformComponent middle = before;
-  middle.position.x = 1.0f;
+  middle.location.x = 1.0f;
   TransformComponent after = before;
-  after.position.x = 2.0f;
+  after.location.x = 2.0f;
 
   UndoRedoResult result =
       undo_redo.execute(std::make_unique<ApplyEntityTransformCommand>(
@@ -15882,18 +15908,18 @@ TEST(DocumentCommandTests, SceneBeforeAfterCommandsSupportExplicitMergeKeys) {
                             scene, entity, middle, after, "Set Transform"),
                         UndoRedoExecuteOptions{.merge_key = "transform.drag"});
   ASSERT_TRUE(result.ok) << result.message;
-  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 2.0f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->location.x, 2.0f);
 
   ASSERT_TRUE(undo_redo.undo().ok);
-  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->location.x, 0.0f);
   EXPECT_FALSE(undo_redo.can_undo());
   ASSERT_TRUE(undo_redo.redo().ok);
-  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 2.0f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->location.x, 2.0f);
 
   TransformComponent third = after;
-  third.position.x = 3.0f;
+  third.location.x = 3.0f;
   TransformComponent fourth = after;
-  fourth.position.x = 4.0f;
+  fourth.location.x = 4.0f;
 
   result = undo_redo.execute(
       std::make_unique<ApplyEntityTransformCommand>(scene, entity, after, third,
@@ -15905,12 +15931,12 @@ TEST(DocumentCommandTests, SceneBeforeAfterCommandsSupportExplicitMergeKeys) {
                                                     fourth, "Set Transform"),
       UndoRedoExecuteOptions{.merge_key = "transform.drag.second"});
   ASSERT_TRUE(result.ok) << result.message;
-  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 4.0f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->location.x, 4.0f);
 
   ASSERT_TRUE(undo_redo.undo().ok);
-  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 2.0f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->location.x, 2.0f);
   ASSERT_TRUE(undo_redo.undo().ok);
-  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->location.x, 0.0f);
 }
 
 TEST(DocumentCommandTests, BatchDocumentCommandRollsBackFailedRedoAndUndo) {
@@ -15988,7 +16014,7 @@ TEST(SceneTextureLockTests, AllFourPoliciesPreserveTheirIndependentTransformScop
       const EntityId entity = create_texture_test_mesh(session, "Texture Policies");
       const std::uint64_t asset_revision = session.assets().revision();
       const std::uint64_t mesh_revision = session.scene().mesh_binding_revision();
-      QuaderTransform after{.position = {3.0f, -2.0f, 1.0f}};
+      QuaderTransform after{.location = {3.0f, -2.0f, 1.0f}};
       ASSERT_TRUE(editor.scene().set_transform(entity, after).ok());
       after.rotation_euler = {0.0f, 0.0f, 1.57079632679f};
       ASSERT_TRUE(editor.scene().set_transform(entity, after).ok());
@@ -16019,7 +16045,7 @@ TEST(SceneTextureLockTests, CombinedAbsoluteEditUsesScaleThenRotationThenTransla
     return TextureLockSettings{false, true};
   });
   const EntityId entity = create_texture_test_mesh(session, "Combined TRS");
-  const QuaderTransform after{.position = {4.0f, -1.0f, 2.0f},
+  const QuaderTransform after{.location = {4.0f, -1.0f, 2.0f},
                               .rotation_euler = {0.2f, 0.4f, 0.7f},
                               .scale = {-2.0f, 3.0f, 0.5f}};
   ASSERT_TRUE(editor.scene().set_transform(entity, after).ok());
@@ -16034,7 +16060,7 @@ TEST(SceneTextureLockTests, GroupPreviewIncludesHiddenLeavesAndCapturesSettingsO
   QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
   SceneDocument &scene = session.scene();
   const EntityId parent = scene.create_empty("Reflected parent");
-  ASSERT_TRUE(scene.set_transform(parent, {.position = {2.0f, -3.0f, 1.0f},
+  ASSERT_TRUE(scene.set_transform(parent, {.location = {2.0f, -3.0f, 1.0f},
                                          .rotation_euler = {0.2f, 0.5f, -0.3f},
                                          .scale = {-2.0f, 0.75f, 3.0f}}));
   const EntityId group = scene.create_empty("Group");
@@ -16089,7 +16115,7 @@ TEST(SceneTextureLockTests, ScalePivotTranslationBelongsToScaleLock) {
     SceneSession session;
     SceneDocument &scene = session.scene();
     const EntityId entity = create_texture_test_mesh(session, "Pivot scale");
-    ASSERT_TRUE(scene.set_transform(entity, {.position = {4.0f, 0.0f, 0.0f}}));
+    ASSERT_TRUE(scene.set_transform(entity, {.location = {4.0f, 0.0f, 0.0f}}));
     ASSERT_TRUE(scene.set_selected(entity, true));
     const QMat4 before = scene.world_transform_matrix(entity);
     SceneTransformDragService drag;
@@ -16100,7 +16126,7 @@ TEST(SceneTextureLockTests, ScalePivotTranslationBelongsToScaleLock) {
     const QMat4 expected = scale_lock ? QMat4{} : scene_transform_multiply(
         *try_scene_matrix_inverse(before), scene.world_transform_matrix(entity));
     expect_texture_matrix_near(texture_mapping_or_identity(scene, entity), expected);
-    EXPECT_NEAR(scene.transform(entity)->position.x, 8.0f, 0.0001f);
+    EXPECT_NEAR(scene.transform(entity)->location.x, 8.0f, 0.0001f);
     if (!scale_lock) {
       EXPECT_NEAR(texture_mapping_or_identity(scene, entity).values[12], 4.0f, 0.0001f);
     }
@@ -16117,7 +16143,7 @@ TEST(SceneTextureLockTests, InstanceOccurrenceCorrectionDoesNotMutateDefinitionO
   const EntityId definition = scene.create_empty("Definition");
   const EntityId member = create_texture_test_mesh(session, "Definition member");
   ASSERT_TRUE(scene.set_parent(member, definition, false));
-  ASSERT_TRUE(scene.set_transform(member, {.position = {1.0f, 2.0f, -1.0f},
+  ASSERT_TRUE(scene.set_transform(member, {.location = {1.0f, 2.0f, -1.0f},
                                          .rotation_euler = {0.1f, 0.4f, 0.2f},
                                          .scale = {-2.0f, 3.0f, 0.5f}}));
   QMat4 member_mapping;
@@ -16129,7 +16155,7 @@ TEST(SceneTextureLockTests, InstanceOccurrenceCorrectionDoesNotMutateDefinitionO
   ASSERT_TRUE(scene.set_instance_occurrence(first, {.definition = definition}));
   ASSERT_TRUE(scene.set_instance_occurrence(second, {.definition = definition}));
   const std::uint64_t asset_revision = session.assets().revision();
-  ASSERT_TRUE(editor.scene().set_transform(first, {.position = {4.0f, -3.0f, 1.0f}}).ok());
+  ASSERT_TRUE(editor.scene().set_transform(first, {.location = {4.0f, -3.0f, 1.0f}}).ok());
   ASSERT_NE(scene.texture_mapping(first), nullptr);
   EXPECT_EQ(scene.texture_mapping(second), nullptr);
   EXPECT_EQ(scene.texture_mapping(member)->sampling_from_local.values, member_mapping.values);
@@ -16182,13 +16208,13 @@ TEST(SceneTextureLockTests, MappingAssignmentsAreAtomicAndCopiesRestoreTheirMapp
   mapping.values[12] = 0.25f;
   ASSERT_TRUE(scene.set_texture_mapping(entity, {mapping}));
   const std::uint64_t revision = scene.revision();
-  const SceneTransformAssignment transform{.entity = entity, .transform = {.position = {8.0f, 0.0f, 0.0f}}};
+  const SceneTransformAssignment transform{.entity = entity, .transform = {.location = {8.0f, 0.0f, 0.0f}}};
   QMat4 invalid = mapping;
   invalid.values[15] = 0.0f;
   const SceneTextureMappingAssignment invalid_mapping{.entity = entity, .mapping = TextureMappingComponent{invalid}};
   EXPECT_FALSE(scene.set_transforms_and_texture_mappings({&transform, 1u}, {&invalid_mapping, 1u}));
   EXPECT_EQ(scene.revision(), revision);
-  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->location.x, 0.0f);
   EXPECT_EQ(scene.texture_mapping(entity)->sampling_from_local.values, mapping.values);
   ASSERT_TRUE(scene.set_texture_mapping(entity, {mapping}));
   EXPECT_EQ(scene.revision(), revision);
@@ -16215,7 +16241,7 @@ TEST(DocumentCommandTests,
   EditorHistoryService history;
 
   TransformComponent preview_transform = *scene.transform(entity);
-  preview_transform.position = {2.0f, 0.0f, 0.0f};
+  preview_transform.location = {2.0f, 0.0f, 0.0f};
   {
     SceneTransformPreviewTransaction transaction(scene, {entity},
                                                  "Move Preview");
@@ -16224,32 +16250,32 @@ TEST(DocumentCommandTests,
     ASSERT_TRUE(result.ok) << result.message;
     EXPECT_TRUE(result.changed);
     ASSERT_NE(scene.transform(entity), nullptr);
-    EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 2.0f);
+    EXPECT_FLOAT_EQ(scene.transform(entity)->location.x, 2.0f);
 
     result = transaction.cancel();
     ASSERT_TRUE(result.ok) << result.message;
     EXPECT_TRUE(result.changed);
     ASSERT_NE(scene.transform(entity), nullptr);
-    EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0f);
+    EXPECT_FLOAT_EQ(scene.transform(entity)->location.x, 0.0f);
   }
 
-  preview_transform.position = {4.0f, 0.0f, 0.0f};
+  preview_transform.location = {4.0f, 0.0f, 0.0f};
   SceneTransformPreviewTransaction transaction(scene, {entity}, "Move Preview");
   ASSERT_TRUE(transaction.preview_transform(entity, preview_transform).ok);
   DocumentCommandResult result = transaction.commit(history);
   ASSERT_TRUE(result.ok) << result.message;
   EXPECT_TRUE(result.changed);
   ASSERT_NE(scene.transform(entity), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 4.0f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->location.x, 4.0f);
   ASSERT_NE(history.undo_label(), nullptr);
   EXPECT_EQ(*history.undo_label(), "Move Preview");
 
   ASSERT_TRUE(history.undo().ok);
   ASSERT_NE(scene.transform(entity), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->location.x, 0.0f);
   ASSERT_TRUE(history.redo().ok);
   ASSERT_NE(scene.transform(entity), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 4.0f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->location.x, 4.0f);
 }
 
 TEST(DocumentCommandTests,
@@ -16262,7 +16288,7 @@ TEST(DocumentCommandTests,
   const std::uint64_t before_transform_revision = scene.transform_revision();
 
   TransformComponent invalid = before;
-  invalid.position.x = std::numeric_limits<float>::quiet_NaN();
+  invalid.location.x = std::numeric_limits<float>::quiet_NaN();
   const DocumentCommandResult invalid_result =
       commands.set_transform(child, invalid);
   EXPECT_FALSE(invalid_result.ok);
@@ -16285,7 +16311,7 @@ TEST(DocumentCommandTests,
   EXPECT_EQ(scene.transform_revision(), reparent_revision);
   ASSERT_NE(scene.transform(child), nullptr);
   EXPECT_TRUE(scene_transform_is_finite(*scene.transform(child)));
-  EXPECT_FLOAT_EQ(scene.transform(child)->position.x, before.position.x);
+  EXPECT_FLOAT_EQ(scene.transform(child)->location.x, before.location.x);
 }
 
 TEST(DocumentCommandTests,
@@ -16298,12 +16324,12 @@ TEST(DocumentCommandTests,
   const EntityId child = scene.create_entity("World Transform Child");
 
   TransformComponent parent_transform;
-  parent_transform.position = {2.0f, -3.0f, 1.0f};
+  parent_transform.location = {2.0f, -3.0f, 1.0f};
   parent_transform.rotation_euler = {0.2f, -0.3f, 0.4f};
   parent_transform.scale = {0.0f, 0.7f, 1.5f};
   scene.set_transform(parent, parent_transform);
   TransformComponent child_transform;
-  child_transform.position = {1.0f, 2.0f, -1.0f};
+  child_transform.location = {1.0f, 2.0f, -1.0f};
   child_transform.rotation_euler = {-0.15f, 0.25f, -0.2f};
   child_transform.scale = {0.8f, 1.1f, 0.9f};
   child_transform.custom_pivot = true;
@@ -16327,7 +16353,7 @@ TEST(DocumentCommandTests,
   EXPECT_FALSE(result.changed);
   EXPECT_EQ(scene.parent(child), parent);
   ASSERT_NE(scene.transform(child), nullptr);
-  expect_vec3_near(scene.transform(child)->position, local_before.position);
+  expect_vec3_near(scene.transform(child)->location, local_before.location);
   expect_vec3_near(scene.transform(child)->rotation_euler,
                    local_before.rotation_euler);
   expect_vec3_near(scene.transform(child)->scale, local_before.scale);
@@ -16349,10 +16375,10 @@ TEST(DocumentCommandTests,
                                                 "Batch Preview");
 
   TransformComponent first_after = *scene.transform(first);
-  first_after.position.x = 4.0f;
+  first_after.location.x = 4.0f;
   TransformComponent second_after = *scene.transform(second);
-  second_after.position.x = 8.0f;
-  ASSERT_TRUE(scene.set_locked(second, true));
+  second_after.location.x = 8.0f;
+  ASSERT_TRUE(scene.set_selectable(second, false));
 
   const DocumentCommandResult preview = transaction.preview_transforms({
       {.entity = first,
@@ -16364,14 +16390,14 @@ TEST(DocumentCommandTests,
   });
   EXPECT_FALSE(preview.ok);
   ASSERT_NE(scene.transform(first), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(first)->position.x, 0.0f);
+  EXPECT_FLOAT_EQ(scene.transform(first)->location.x, 0.0f);
 
-  ASSERT_TRUE(scene.set_locked(second, false));
+  ASSERT_TRUE(scene.set_selectable(second, true));
   const DocumentCommandResult committed = transaction.commit(history);
   ASSERT_TRUE(committed.ok) << committed.message;
   EXPECT_FALSE(committed.changed);
-  EXPECT_FLOAT_EQ(scene.transform(first)->position.x, 0.0f);
-  EXPECT_FLOAT_EQ(scene.transform(second)->position.x, 0.0f);
+  EXPECT_FLOAT_EQ(scene.transform(first)->location.x, 0.0f);
+  EXPECT_FLOAT_EQ(scene.transform(second)->location.x, 0.0f);
   EXPECT_FALSE(history.can_undo());
 }
 
@@ -16384,26 +16410,26 @@ TEST(DocumentCommandTests,
                                                 "Move Preview");
 
   TransformComponent after = *scene.transform(entity);
-  after.position.x = 6.0f;
+  after.location.x = 6.0f;
   ASSERT_TRUE(transaction.preview_transform(entity, after).ok);
-  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 6.0f);
-  ASSERT_TRUE(scene.set_locked(entity, true));
+  EXPECT_FLOAT_EQ(scene.transform(entity)->location.x, 6.0f);
+  ASSERT_TRUE(scene.set_selectable(entity, false));
 
   const DocumentCommandResult committed = transaction.commit(history);
   EXPECT_FALSE(committed.ok);
   EXPECT_TRUE(transaction.active());
   ASSERT_NE(scene.transform(entity), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 6.0f);
-  ASSERT_NE(scene.lock(entity), nullptr);
-  EXPECT_TRUE(scene.lock(entity)->locked);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->location.x, 6.0f);
+  ASSERT_NE(scene.selectable(entity), nullptr);
+  EXPECT_FALSE(scene.selectable(entity)->selectable);
   EXPECT_FALSE(history.can_undo());
-  ASSERT_TRUE(scene.set_locked(entity, false));
+  ASSERT_TRUE(scene.set_selectable(entity, true));
   ASSERT_TRUE(transaction.commit(history).ok);
   EXPECT_FALSE(transaction.active());
   ASSERT_TRUE(history.undo().ok);
-  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->location.x, 0.0f);
   ASSERT_TRUE(history.redo().ok);
-  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 6.0f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->location.x, 6.0f);
 }
 
 TEST(DocumentCommandTests,
@@ -16415,18 +16441,18 @@ TEST(DocumentCommandTests,
   SceneTransformDragService service;
   ASSERT_TRUE(service.begin(scene, {}, true, "Move Preview"));
   TransformComponent after = *scene.transform(entity);
-  after.position.x = 6.0F;
+  after.location.x = 6.0F;
   ASSERT_TRUE(service.preview_transform(entity, after).ok);
-  ASSERT_TRUE(scene.set_locked(entity, true));
+  ASSERT_TRUE(scene.set_selectable(entity, false));
   const auto failed = service.commit(history);
   EXPECT_FALSE(failed.ok);
   EXPECT_TRUE(service.preview_active());
   EXPECT_FALSE(service.targets().empty());
-  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 6.0F);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->location.x, 6.0F);
   EXPECT_FALSE(history.can_undo());
   ASSERT_TRUE(service.cancel().ok);
   EXPECT_FALSE(service.preview_active());
-  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0F);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->location.x, 0.0F);
 }
 
 
@@ -16445,7 +16471,7 @@ TEST(DocumentCommandTests,
   for (std::size_t index = 0; index < entities.size(); ++index) {
     const TransformComponent before = *scene.transform(entities[index]);
     TransformComponent after = before;
-    after.position = {static_cast<float>(index + 1u), 2.0f, 3.0f};
+    after.location = {static_cast<float>(index + 1u), 2.0f, 3.0f};
     edits.push_back({.entity = entities[index],
                      .before = before,
                      .after = after});
@@ -16463,7 +16489,7 @@ TEST(DocumentCommandTests,
     EXPECT_EQ(scene.transform_revision(), cancel_revision + 1u);
     for (const EntityId entity : entities) {
       ASSERT_NE(scene.transform(entity), nullptr);
-      EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0f);
+      EXPECT_FLOAT_EQ(scene.transform(entity)->location.x, 0.0f);
     }
   }
 
@@ -16475,7 +16501,7 @@ TEST(DocumentCommandTests,
     externally_changed.reserve(edits.size());
     for (const DocumentTransformEdit &edit : edits) {
       TransformComponent transform = edit.after;
-      transform.position.y = 99.0f;
+      transform.location.y = 99.0f;
       externally_changed.push_back(
           {.entity = edit.entity, .transform = transform});
     }
@@ -16486,9 +16512,9 @@ TEST(DocumentCommandTests,
     EXPECT_EQ(scene.transform_revision(), accept_revision + 1u);
     for (std::size_t index = 0; index < entities.size(); ++index) {
       ASSERT_NE(scene.transform(entities[index]), nullptr);
-      EXPECT_FLOAT_EQ(scene.transform(entities[index])->position.x,
+      EXPECT_FLOAT_EQ(scene.transform(entities[index])->location.x,
                       static_cast<float>(index + 1u));
-      EXPECT_FLOAT_EQ(scene.transform(entities[index])->position.y, 2.0f);
+      EXPECT_FLOAT_EQ(scene.transform(entities[index])->location.y, 2.0f);
     }
 
     std::vector<SceneTransformAssignment> restore_assignments;
@@ -16517,7 +16543,7 @@ TEST(DocumentCommandTests,
   EXPECT_EQ(scene.transform_revision(), undo_revision + 1u);
   for (const EntityId entity : entities) {
     ASSERT_NE(scene.transform(entity), nullptr);
-    EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0f);
+    EXPECT_FLOAT_EQ(scene.transform(entity)->location.x, 0.0f);
   }
 
   const std::uint64_t redo_revision = scene.transform_revision();
@@ -16525,7 +16551,7 @@ TEST(DocumentCommandTests,
   EXPECT_EQ(scene.transform_revision(), redo_revision + 1u);
   for (std::size_t index = 0; index < entities.size(); ++index) {
     ASSERT_NE(scene.transform(entities[index]), nullptr);
-    EXPECT_FLOAT_EQ(scene.transform(entities[index])->position.x,
+    EXPECT_FLOAT_EQ(scene.transform(entities[index])->location.x,
                     static_cast<float>(index + 1u));
   }
 }
@@ -16551,13 +16577,13 @@ TEST(DocumentCommandTests,
   EXPECT_EQ(service.targets().front().entity, parent);
 
   TransformComponent preview = service.targets().front().transform;
-  preview.position = {2.0f, 0.0f, 0.0f};
+  preview.location = {2.0f, 0.0f, 0.0f};
   DocumentCommandResult preview_result =
       service.preview_transform(parent, preview);
   ASSERT_TRUE(preview_result.ok) << preview_result.message;
   EXPECT_TRUE(preview_result.changed);
   ASSERT_NE(scene.transform(parent), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(parent)->position.x, 2.0f);
+  EXPECT_FLOAT_EQ(scene.transform(parent)->location.x, 2.0f);
 
   DocumentCommandResult cancel_result = service.cancel();
   ASSERT_TRUE(cancel_result.ok) << cancel_result.message;
@@ -16565,11 +16591,11 @@ TEST(DocumentCommandTests,
   EXPECT_FALSE(service.preview_active());
   EXPECT_TRUE(service.targets().empty());
   ASSERT_NE(scene.transform(parent), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(parent)->position.x, 0.0f);
+  EXPECT_FLOAT_EQ(scene.transform(parent)->location.x, 0.0f);
 
   ASSERT_TRUE(service.begin(scene, QVec3{}, true, "Move Preview"));
   preview = service.targets().front().transform;
-  preview.position = {4.0f, 0.0f, 0.0f};
+  preview.location = {4.0f, 0.0f, 0.0f};
   ASSERT_TRUE(service.preview_transform(parent, preview).ok);
   QuaderApiVoidResult commit = service.commit(editor);
   ASSERT_TRUE(commit.ok) << commit.message;
@@ -16577,16 +16603,16 @@ TEST(DocumentCommandTests,
   EXPECT_FALSE(service.preview_active());
   EXPECT_TRUE(service.targets().empty());
   ASSERT_NE(scene.transform(parent), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(parent)->position.x, 4.0f);
+  EXPECT_FLOAT_EQ(scene.transform(parent)->location.x, 4.0f);
   ASSERT_NE(session.history().undo_label(), nullptr);
   EXPECT_EQ(*session.history().undo_label(), "Move Preview");
 
   ASSERT_TRUE(session.history().undo().ok);
   ASSERT_NE(scene.transform(parent), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(parent)->position.x, 0.0f);
+  EXPECT_FLOAT_EQ(scene.transform(parent)->location.x, 0.0f);
   ASSERT_TRUE(session.history().redo().ok);
   ASSERT_NE(scene.transform(parent), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(parent)->position.x, 4.0f);
+  EXPECT_FLOAT_EQ(scene.transform(parent)->location.x, 4.0f);
 }
 
 TEST(DocumentCommandTests,
@@ -16594,14 +16620,14 @@ TEST(DocumentCommandTests,
   const auto build_parented_selection = [](SceneDocument &scene) {
     const EntityId parent = scene.create_entity("Move Parent");
     TransformComponent parent_transform;
-    parent_transform.position = {3.0f, -2.0f, 5.0f};
+    parent_transform.location = {3.0f, -2.0f, 5.0f};
     parent_transform.rotation_euler = {0.35f, -0.55f, 0.8f};
     parent_transform.scale = {2.0f, 0.75f, 1.5f};
     scene.set_transform(parent, parent_transform);
 
     const EntityId child = scene.create_entity("Move Child");
     TransformComponent child_transform;
-    child_transform.position = {1.25f, -3.5f, 2.0f};
+    child_transform.location = {1.25f, -3.5f, 2.0f};
     child_transform.rotation_euler = {-0.25f, 0.4f, 0.65f};
     child_transform.scale = {0.8f, 1.3f, 2.1f};
     child_transform.custom_pivot = true;
@@ -16643,7 +16669,7 @@ TEST(DocumentCommandTests,
       generic_scene.transform(generic_child);
   ASSERT_NE(fast_preview, nullptr);
   ASSERT_NE(generic_preview, nullptr);
-  expect_vec3_near(fast_preview->position, generic_preview->position);
+  expect_vec3_near(fast_preview->location, generic_preview->location);
   expect_vec3_near(fast_preview->rotation_euler,
                    generic_preview->rotation_euler);
   expect_vec3_near(fast_preview->scale, generic_preview->scale);
@@ -16659,8 +16685,8 @@ TEST(DocumentCommandTests,
   ASSERT_TRUE(fast_service.cancel().ok);
   ASSERT_TRUE(generic_service.cancel().ok);
   ASSERT_NE(fast_scene.transform(fast_child), nullptr);
-  expect_vec3_near(fast_scene.transform(fast_child)->position,
-                   original.position);
+  expect_vec3_near(fast_scene.transform(fast_child)->location,
+                   original.location);
   expect_vec3_near(fast_scene.transform(fast_child)->rotation_euler,
                    original.rotation_euler);
   expect_vec3_near(fast_scene.transform(fast_child)->scale, original.scale);
@@ -16679,11 +16705,11 @@ TEST(DocumentCommandTests,
   ASSERT_NE(history.undo_label(), nullptr);
   EXPECT_EQ(*history.undo_label(), "Move Fast Path");
   ASSERT_TRUE(history.undo().ok);
-  expect_vec3_near(fast_scene.transform(fast_child)->position,
-                   original.position);
+  expect_vec3_near(fast_scene.transform(fast_child)->location,
+                   original.location);
   ASSERT_TRUE(history.redo().ok);
-  expect_vec3_near(fast_scene.transform(fast_child)->position,
-                   committed.position);
+  expect_vec3_near(fast_scene.transform(fast_child)->location,
+                   committed.location);
   expect_vec3_near(fast_scene.transform(fast_child)->rotation_euler,
                    committed.rotation_euler);
   expect_vec3_near(fast_scene.transform(fast_child)->scale, committed.scale);
@@ -16702,26 +16728,26 @@ TEST(DocumentCommandTests,
   const EntityId second = scene.create_entity("Second Local Target");
 
   TransformComponent first_parent_transform;
-  first_parent_transform.position = {8.0f, 1.0f, -2.0f};
+  first_parent_transform.location = {8.0f, 1.0f, -2.0f};
   first_parent_transform.rotation_euler = {0.1f, 0.2f, 0.3f};
   first_parent_transform.scale = {2.0f, 0.75f, 1.5f};
   scene.set_transform(first_parent, first_parent_transform);
 
   TransformComponent second_parent_transform;
-  second_parent_transform.position = {-4.0f, 3.0f, 9.0f};
+  second_parent_transform.location = {-4.0f, 3.0f, 9.0f};
   second_parent_transform.rotation_euler = {-0.2f, 0.45f, -0.35f};
   second_parent_transform.scale = {-1.25f, 2.5f, 0.5f};
   scene.set_transform(second_parent, second_parent_transform);
 
   TransformComponent first_before;
-  first_before.position = {2.0f, -3.0f, 4.0f};
+  first_before.location = {2.0f, -3.0f, 4.0f};
   first_before.rotation_euler = {0.25f, -0.4f, 0.6f};
   first_before.scale = {-2.0f, 3.0f, 4.0f};
   first_before.custom_pivot = true;
   scene.set_transform(first, first_before);
 
   TransformComponent second_before;
-  second_before.position = {-5.0f, 6.0f, 7.0f};
+  second_before.location = {-5.0f, 6.0f, 7.0f};
   second_before.rotation_euler = {-0.7f, 0.2f, -0.1f};
   second_before.scale = {5.0f, -6.0f, 7.0f};
   scene.set_transform(second, second_before);
@@ -16764,8 +16790,8 @@ TEST(DocumentCommandTests,
       second_rotated->rotation_euler,
       normalize(quat_from_euler_radians(second_before.rotation_euler) *
                 quat_from_euler_radians(rotation_delta)));
-  expect_vec3_near(first_rotated->position, first_before.position);
-  expect_vec3_near(second_rotated->position, second_before.position);
+  expect_vec3_near(first_rotated->location, first_before.location);
+  expect_vec3_near(second_rotated->location, second_before.location);
   expect_vec3_near(first_rotated->scale, first_before.scale);
   expect_vec3_near(second_rotated->scale, second_before.scale);
   EXPECT_EQ(first_rotated->custom_pivot, first_before.custom_pivot);
@@ -16776,11 +16802,11 @@ TEST(DocumentCommandTests,
   EXPECT_TRUE(rotation_cancel.changed);
   ASSERT_NE(scene.transform(first), nullptr);
   ASSERT_NE(scene.transform(second), nullptr);
-  expect_vec3_near(scene.transform(first)->position, first_before.position);
+  expect_vec3_near(scene.transform(first)->location, first_before.location);
   expect_vec3_near(scene.transform(first)->rotation_euler,
                    first_before.rotation_euler);
   expect_vec3_near(scene.transform(first)->scale, first_before.scale);
-  expect_vec3_near(scene.transform(second)->position, second_before.position);
+  expect_vec3_near(scene.transform(second)->location, second_before.location);
   expect_vec3_near(scene.transform(second)->rotation_euler,
                    second_before.rotation_euler);
   expect_vec3_near(scene.transform(second)->scale, second_before.scale);
@@ -16795,11 +16821,11 @@ TEST(DocumentCommandTests,
 
   const TransformComponent first_scaled = *scene.transform(first);
   const TransformComponent second_scaled = *scene.transform(second);
-  expect_vec3_near(first_scaled.position, first_before.position);
+  expect_vec3_near(first_scaled.location, first_before.location);
   expect_vec3_near(first_scaled.rotation_euler, first_before.rotation_euler);
   expect_vec3_near(first_scaled.scale, {-4.0f, 1.5f, 12.0f});
   EXPECT_EQ(first_scaled.custom_pivot, first_before.custom_pivot);
-  expect_vec3_near(second_scaled.position, second_before.position);
+  expect_vec3_near(second_scaled.location, second_before.location);
   expect_vec3_near(second_scaled.rotation_euler, second_before.rotation_euler);
   expect_vec3_near(second_scaled.scale, {10.0f, -3.0f, 21.0f});
   EXPECT_EQ(second_scaled.custom_pivot, second_before.custom_pivot);
@@ -16812,24 +16838,24 @@ TEST(DocumentCommandTests,
   EXPECT_EQ(*history.undo_label(), "Local Scale Preview");
 
   ASSERT_TRUE(history.undo().ok);
-  expect_vec3_near(scene.transform(first)->position, first_before.position);
+  expect_vec3_near(scene.transform(first)->location, first_before.location);
   expect_vec3_near(scene.transform(first)->rotation_euler,
                    first_before.rotation_euler);
   expect_vec3_near(scene.transform(first)->scale, first_before.scale);
   EXPECT_EQ(scene.transform(first)->custom_pivot, first_before.custom_pivot);
-  expect_vec3_near(scene.transform(second)->position, second_before.position);
+  expect_vec3_near(scene.transform(second)->location, second_before.location);
   expect_vec3_near(scene.transform(second)->rotation_euler,
                    second_before.rotation_euler);
   expect_vec3_near(scene.transform(second)->scale, second_before.scale);
   EXPECT_EQ(scene.transform(second)->custom_pivot, second_before.custom_pivot);
 
   ASSERT_TRUE(history.redo().ok);
-  expect_vec3_near(scene.transform(first)->position, first_scaled.position);
+  expect_vec3_near(scene.transform(first)->location, first_scaled.location);
   expect_vec3_near(scene.transform(first)->rotation_euler,
                    first_scaled.rotation_euler);
   expect_vec3_near(scene.transform(first)->scale, first_scaled.scale);
   EXPECT_EQ(scene.transform(first)->custom_pivot, first_scaled.custom_pivot);
-  expect_vec3_near(scene.transform(second)->position, second_scaled.position);
+  expect_vec3_near(scene.transform(second)->location, second_scaled.location);
   expect_vec3_near(scene.transform(second)->rotation_euler,
                    second_scaled.rotation_euler);
   expect_vec3_near(scene.transform(second)->scale, second_scaled.scale);
@@ -16855,7 +16881,7 @@ TEST(DocumentCommandTests,
 
   const EntityId entity = scene.create_entity("Off-Origin Local Target");
   TransformComponent before;
-  before.position = {3.0f, -2.0f, 4.0f};
+  before.location = {3.0f, -2.0f, 4.0f};
   before.rotation_euler = {0.0f, 0.0f, 0.35f};
   before.scale = {1.25f, 0.75f, 2.0f};
   scene.set_transform(entity, before);
@@ -16879,14 +16905,14 @@ TEST(DocumentCommandTests,
   EXPECT_TRUE(rotation_preview.changed);
   expect_vec3_near(visible_pivot(), pivot);
   ASSERT_NE(scene.transform(entity), nullptr);
-  EXPECT_GT(length_squared(scene.transform(entity)->position - before.position),
+  EXPECT_GT(length_squared(scene.transform(entity)->location - before.location),
             0.001f);
 
   const DocumentCommandResult rotation_cancel = service.cancel();
   ASSERT_TRUE(rotation_cancel.ok) << rotation_cancel.message;
   EXPECT_TRUE(rotation_cancel.changed);
   ASSERT_NE(scene.transform(entity), nullptr);
-  expect_vec3_near(scene.transform(entity)->position, before.position);
+  expect_vec3_near(scene.transform(entity)->location, before.location);
   expect_vec3_near(scene.transform(entity)->rotation_euler,
                    before.rotation_euler);
   expect_vec3_near(scene.transform(entity)->scale, before.scale);
@@ -16899,7 +16925,7 @@ TEST(DocumentCommandTests,
   EXPECT_TRUE(scale_preview.changed);
   expect_vec3_near(visible_pivot(), pivot);
   ASSERT_NE(scene.transform(entity), nullptr);
-  EXPECT_GT(length_squared(scene.transform(entity)->position - before.position),
+  EXPECT_GT(length_squared(scene.transform(entity)->location - before.location),
             0.001f);
   const TransformComponent scaled = *scene.transform(entity);
 
@@ -16912,7 +16938,7 @@ TEST(DocumentCommandTests,
 
   ASSERT_TRUE(history.undo().ok);
   ASSERT_NE(scene.transform(entity), nullptr);
-  expect_vec3_near(scene.transform(entity)->position, before.position);
+  expect_vec3_near(scene.transform(entity)->location, before.location);
   expect_vec3_near(scene.transform(entity)->rotation_euler,
                    before.rotation_euler);
   expect_vec3_near(scene.transform(entity)->scale, before.scale);
@@ -16920,7 +16946,7 @@ TEST(DocumentCommandTests,
 
   ASSERT_TRUE(history.redo().ok);
   ASSERT_NE(scene.transform(entity), nullptr);
-  expect_vec3_near(scene.transform(entity)->position, scaled.position);
+  expect_vec3_near(scene.transform(entity)->location, scaled.location);
   expect_vec3_near(scene.transform(entity)->rotation_euler,
                    scaled.rotation_euler);
   expect_vec3_near(scene.transform(entity)->scale, scaled.scale);
@@ -16934,14 +16960,14 @@ TEST(DocumentCommandTests,
   SceneDocument scene;
   const EntityId parent = scene.create_entity("Custom Pivot Parent");
   TransformComponent parent_transform;
-  parent_transform.position = {7.0f, -4.0f, 2.0f};
+  parent_transform.location = {7.0f, -4.0f, 2.0f};
   parent_transform.rotation_euler = {0.2f, -0.3f, 0.4f};
   parent_transform.scale = {2.0f, 0.75f, 1.5f};
   scene.set_transform(parent, parent_transform);
 
   const EntityId entity = scene.create_entity("Custom Pivot Local Target");
   TransformComponent before;
-  before.position = {3.0f, 5.0f, -2.0f};
+  before.location = {3.0f, 5.0f, -2.0f};
   before.rotation_euler = {-0.1f, 0.35f, 0.6f};
   before.scale = {1.5f, 2.0f, 0.5f};
   before.custom_pivot = true;
@@ -16959,7 +16985,7 @@ TEST(DocumentCommandTests,
                                                 {0.0f, kHalfPi, 0.0f})
                   .ok);
   ASSERT_NE(scene.transform(entity), nullptr);
-  expect_vec3_near(scene.transform(entity)->position, before.position);
+  expect_vec3_near(scene.transform(entity)->location, before.location);
   expect_vec3_near(transform_point(scene.world_transform_matrix(entity), {}),
                    pivot);
   ASSERT_TRUE(service.cancel().ok);
@@ -16967,7 +16993,7 @@ TEST(DocumentCommandTests,
   ASSERT_TRUE(service.begin(scene, pivot, true, "Custom Pivot Scale"));
   ASSERT_TRUE(service.preview_local_scale_delta(scene, {2.0f, 0.5f, 3.0f}).ok);
   ASSERT_NE(scene.transform(entity), nullptr);
-  expect_vec3_near(scene.transform(entity)->position, before.position);
+  expect_vec3_near(scene.transform(entity)->location, before.location);
   expect_vec3_near(transform_point(scene.world_transform_matrix(entity), {}),
                    pivot);
   ASSERT_TRUE(service.cancel().ok);
@@ -16982,7 +17008,7 @@ TEST(DocumentCommandTests,
   AssetRegistry &assets = session.assets();
   const auto expect_transform = [](const TransformComponent &actual,
                                    const TransformComponent &expected) {
-    expect_vec3_near(actual.position, expected.position);
+    expect_vec3_near(actual.location, expected.location);
     expect_vec3_near(actual.rotation_euler, expected.rotation_euler);
     expect_vec3_near(actual.scale, expected.scale);
     EXPECT_EQ(actual.custom_pivot, expected.custom_pivot);
@@ -17001,11 +17027,11 @@ TEST(DocumentCommandTests,
   const EntityId second =
       scene.create_entity("Second Off-Origin Local Target");
   TransformComponent first_before;
-  first_before.position = {-4.0f, 1.0f, 0.0f};
+  first_before.location = {-4.0f, 1.0f, 0.0f};
   first_before.rotation_euler = {0.0f, 0.0f, 0.2f};
   first_before.scale = {1.2f, 0.8f, 1.0f};
   TransformComponent second_before;
-  second_before.position = {5.0f, -3.0f, 2.0f};
+  second_before.location = {5.0f, -3.0f, 2.0f};
   second_before.rotation_euler = {0.4f, -0.2f, 0.7f};
   second_before.scale = {0.6f, 1.4f, 2.0f};
   ASSERT_TRUE(scene.set_transform(first, first_before));
@@ -17037,11 +17063,11 @@ TEST(DocumentCommandTests,
   expect_vec3_near(visible_pivot(second), second_pivot);
   ASSERT_NE(scene.transform(first), nullptr);
   ASSERT_NE(scene.transform(second), nullptr);
-  EXPECT_GT(length_squared(scene.transform(first)->position -
-                           first_before.position),
+  EXPECT_GT(length_squared(scene.transform(first)->location -
+                           first_before.location),
             0.001f);
-  EXPECT_GT(length_squared(scene.transform(second)->position -
-                           second_before.position),
+  EXPECT_GT(length_squared(scene.transform(second)->location -
+                           second_before.location),
             0.001f);
   ASSERT_TRUE(service.cancel().ok);
 
@@ -17086,14 +17112,14 @@ TEST(DocumentCommandTests,
   ASSERT_TRUE(scene.set_active_selection(entity));
 
   SceneTransformDragService service;
-  ASSERT_TRUE(service.begin_move_selected_to_primary_position_preview(
+  ASSERT_TRUE(service.begin_move_selected_to_primary_location_preview(
       scene, entity, "Set Transform"));
-  DocumentCommandResult preview = service.preview_selected_to_primary_position(
+  DocumentCommandResult preview = service.preview_selected_to_primary_location(
       scene, entity, {2.0f, 0.0f, 0.0f});
   ASSERT_TRUE(preview.ok) << preview.message;
   EXPECT_TRUE(preview.changed);
   ASSERT_NE(scene.transform(entity), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 2.0f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->location.x, 2.0f);
 
   QuaderApiVoidResult commit = service.commit(editor);
   ASSERT_TRUE(commit.ok) << commit.message;
@@ -17102,7 +17128,7 @@ TEST(DocumentCommandTests,
   EXPECT_EQ(*session.history().undo_label(), "Set Transform");
   ASSERT_TRUE(session.history().undo().ok);
   ASSERT_NE(scene.transform(entity), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0f);
+  EXPECT_FLOAT_EQ(scene.transform(entity)->location.x, 0.0f);
 
   ASSERT_TRUE(service.begin_rotate_selected_to_primary_euler_preview(
       scene, assets, entity, "Set Transform"));
@@ -17151,12 +17177,12 @@ TEST(DocumentCommandTests,
   ASSERT_TRUE(scene.set_parent(child, parent, false));
 
   TransformComponent child_transform;
-  child_transform.position = {1.0f, 0.0f, 0.0f};
+  child_transform.location = {1.0f, 0.0f, 0.0f};
   scene.set_transform(child, child_transform);
   TransformComponent locked_transform;
-  locked_transform.position = {7.0f, 0.0f, 0.0f};
+  locked_transform.location = {7.0f, 0.0f, 0.0f};
   scene.set_transform(locked, locked_transform);
-  ASSERT_TRUE(scene.set_locked(locked, true));
+  ASSERT_TRUE(scene.set_selectable(locked, false));
 
   ASSERT_TRUE(scene.set_selected(parent, true));
   ASSERT_TRUE(scene.set_selected(child, true));
@@ -17164,7 +17190,7 @@ TEST(DocumentCommandTests,
   ASSERT_TRUE(scene.set_active_selection(parent));
 
   SceneTransformDragService service;
-  const QuaderApiVoidResult result = service.move_selected_to_primary_position(
+  const QuaderApiVoidResult result = service.move_selected_to_primary_location(
       editor, scene, parent, {3.0f, 0.0f, 0.0f}, "Set Transform");
   ASSERT_TRUE(result.ok) << result.message;
   EXPECT_TRUE(result.changed);
@@ -17172,20 +17198,20 @@ TEST(DocumentCommandTests,
   ASSERT_NE(scene.transform(parent), nullptr);
   ASSERT_NE(scene.transform(child), nullptr);
   ASSERT_NE(scene.transform(locked), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(parent)->position.x, 3.0f);
-  EXPECT_FLOAT_EQ(scene.transform(child)->position.x, 1.0f);
-  EXPECT_FLOAT_EQ(scene.transform(locked)->position.x, 7.0f);
+  EXPECT_FLOAT_EQ(scene.transform(parent)->location.x, 3.0f);
+  EXPECT_FLOAT_EQ(scene.transform(child)->location.x, 1.0f);
+  EXPECT_FLOAT_EQ(scene.transform(locked)->location.x, 7.0f);
   ASSERT_NE(session.history().undo_label(), nullptr);
   EXPECT_EQ(*session.history().undo_label(), "Set Transform");
 
   ASSERT_TRUE(session.history().undo().ok);
-  EXPECT_FLOAT_EQ(scene.transform(parent)->position.x, 0.0f);
-  EXPECT_FLOAT_EQ(scene.transform(child)->position.x, 1.0f);
-  EXPECT_FLOAT_EQ(scene.transform(locked)->position.x, 7.0f);
+  EXPECT_FLOAT_EQ(scene.transform(parent)->location.x, 0.0f);
+  EXPECT_FLOAT_EQ(scene.transform(child)->location.x, 1.0f);
+  EXPECT_FLOAT_EQ(scene.transform(locked)->location.x, 7.0f);
   ASSERT_TRUE(session.history().redo().ok);
-  EXPECT_FLOAT_EQ(scene.transform(parent)->position.x, 3.0f);
-  EXPECT_FLOAT_EQ(scene.transform(child)->position.x, 1.0f);
-  EXPECT_FLOAT_EQ(scene.transform(locked)->position.x, 7.0f);
+  EXPECT_FLOAT_EQ(scene.transform(parent)->location.x, 3.0f);
+  EXPECT_FLOAT_EQ(scene.transform(child)->location.x, 1.0f);
+  EXPECT_FLOAT_EQ(scene.transform(locked)->location.x, 7.0f);
 }
 
 TEST(
@@ -17208,12 +17234,12 @@ TEST(
 
   const EntityId parent = scene.create_entity("Parent");
   TransformComponent parent_transform;
-  parent_transform.position = {10.0f, 0.0f, 0.0f};
+  parent_transform.location = {10.0f, 0.0f, 0.0f};
   scene.set_transform(parent, parent_transform);
 
   const EntityId child = scene.create_entity("Child");
   TransformComponent child_transform;
-  child_transform.position = {1.0f, 0.0f, 0.0f};
+  child_transform.location = {1.0f, 0.0f, 0.0f};
   scene.set_transform(child, child_transform);
   scene.set_mesh(child, MeshComponent{.mesh = mesh_id});
   ASSERT_TRUE(scene.set_parent(child, parent, false));
@@ -17239,13 +17265,13 @@ TEST(
   EXPECT_NEAR(pivot_after_rotate.y, pivot_before_rotate.y, 0.001f);
   EXPECT_NEAR(pivot_after_rotate.z, pivot_before_rotate.z, 0.001f);
   ASSERT_NE(scene.transform(child), nullptr);
-  EXPECT_NEAR(scene.transform(child)->position.x, 3.0f, 0.001f);
-  EXPECT_NEAR(scene.transform(child)->position.y, 2.0f, 0.001f);
+  EXPECT_NEAR(scene.transform(child)->location.x, 3.0f, 0.001f);
+  EXPECT_NEAR(scene.transform(child)->location.y, 2.0f, 0.001f);
 
   ASSERT_TRUE(session.history().undo().ok);
   ASSERT_NE(scene.transform(child), nullptr);
-  EXPECT_NEAR(scene.transform(child)->position.x, 1.0f, 0.001f);
-  EXPECT_NEAR(scene.transform(child)->position.y, 0.0f, 0.001f);
+  EXPECT_NEAR(scene.transform(child)->location.x, 1.0f, 0.001f);
+  EXPECT_NEAR(scene.transform(child)->location.y, 0.0f, 0.001f);
 
   const QVec3 pivot_before_scale = selected_pivot();
   QuaderApiVoidResult scale =
@@ -17261,8 +17287,8 @@ TEST(
   EXPECT_NEAR(scene.transform(child)->scale.x, 2.0f, 0.001f);
   EXPECT_NEAR(scene.transform(child)->scale.y, 3.0f, 0.001f);
   EXPECT_NEAR(scene.transform(child)->scale.z, 4.0f, 0.001f);
-  EXPECT_NEAR(scene.transform(child)->position.x, 1.0f, 0.001f);
-  EXPECT_NEAR(scene.transform(child)->position.y, -4.0f, 0.001f);
+  EXPECT_NEAR(scene.transform(child)->location.x, 1.0f, 0.001f);
+  EXPECT_NEAR(scene.transform(child)->location.y, -4.0f, 0.001f);
 }
 
 TEST(DocumentCommandTests,
@@ -17270,12 +17296,12 @@ TEST(DocumentCommandTests,
   SceneDocument scene;
   const EntityId parent = scene.create_entity("Parent");
   TransformComponent parent_transform;
-  parent_transform.position = {10.0f, 0.0f, 0.0f};
+  parent_transform.location = {10.0f, 0.0f, 0.0f};
   scene.set_transform(parent, parent_transform);
 
   const EntityId child = scene.create_entity("Child");
   TransformComponent child_transform;
-  child_transform.position = {1.0f, 0.0f, 0.0f};
+  child_transform.location = {1.0f, 0.0f, 0.0f};
   scene.set_transform(child, child_transform);
   ASSERT_TRUE(scene.set_parent(child, parent, false));
   const QMat4 world_before = scene.world_transform_matrix(child);
@@ -17287,33 +17313,33 @@ TEST(DocumentCommandTests,
   ASSERT_TRUE(result.ok) << result.message;
   EXPECT_EQ(scene.parent(child), kInvalidEntityId);
   ASSERT_NE(scene.transform(child), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(child)->position.x, 1.0f);
+  EXPECT_FLOAT_EQ(scene.transform(child)->location.x, 1.0f);
   EXPECT_FLOAT_EQ(scene.transform(child)->parenting_offset.values[12], 10.0f);
   EXPECT_TRUE(scene_matrix_near_equal(scene.world_transform_matrix(child), world_before));
 
   ASSERT_TRUE(undo_redo.undo().ok);
   EXPECT_EQ(scene.parent(child), parent);
   ASSERT_NE(scene.transform(child), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(child)->position.x, 1.0f);
+  EXPECT_FLOAT_EQ(scene.transform(child)->location.x, 1.0f);
   EXPECT_EQ(scene.transform(child)->parenting_offset.values, QMat4{}.values);
   EXPECT_TRUE(scene_matrix_near_equal(scene.world_transform_matrix(child), world_before));
   ASSERT_TRUE(undo_redo.redo().ok);
   EXPECT_EQ(scene.parent(child), kInvalidEntityId);
-  EXPECT_FLOAT_EQ(scene.transform(child)->position.x, 1.0f);
+  EXPECT_FLOAT_EQ(scene.transform(child)->location.x, 1.0f);
   EXPECT_FLOAT_EQ(scene.transform(child)->parenting_offset.values[12], 10.0f);
   EXPECT_TRUE(scene_matrix_near_equal(scene.world_transform_matrix(child), world_before));
 
   TransformComponent moved = *scene.transform(child);
-  moved.position.y = 4.0f;
+  moved.location.y = 4.0f;
   result = undo_redo.execute(std::make_unique<ApplyEntityTransformCommand>(
       scene, child, *scene.transform(child), moved));
   ASSERT_TRUE(result.ok) << result.message;
-  EXPECT_FLOAT_EQ(scene.transform(child)->position.y, 4.0f);
+  EXPECT_FLOAT_EQ(scene.transform(child)->location.y, 4.0f);
   EXPECT_FLOAT_EQ(scene.transform(child)->parenting_offset.values[12], 10.0f);
   expect_vec3_near(transform_point(scene.world_transform_matrix(child), {}),
                    {11.0f, 4.0f, 0.0f});
   ASSERT_TRUE(undo_redo.undo().ok);
-  EXPECT_FLOAT_EQ(scene.transform(child)->position.y, 0.0f);
+  EXPECT_FLOAT_EQ(scene.transform(child)->location.y, 0.0f);
   EXPECT_TRUE(scene_matrix_near_equal(scene.world_transform_matrix(child), world_before));
 
   result = undo_redo.execute(std::make_unique<SelectEntitiesCommand>(
@@ -17332,7 +17358,7 @@ TEST(DocumentCommandTests, TypedLifecycleCommandsRestoreSceneSnapshots) {
 
   auto create = std::make_unique<CreateEntityCommand>(
       scene, "Created", EntityKind::Light, kInvalidEntityId,
-      TransformComponent{.position = {2.0f, 0.0f, 0.0f}}, true);
+      TransformComponent{.location = {2.0f, 0.0f, 0.0f}}, true);
   CreateEntityCommand *create_command = create.get();
   UndoRedoResult result = undo_redo.execute(std::move(create));
   ASSERT_TRUE(result.ok) << result.message;
@@ -17343,7 +17369,7 @@ TEST(DocumentCommandTests, TypedLifecycleCommandsRestoreSceneSnapshots) {
   EXPECT_TRUE(scene.exists(created));
   EXPECT_EQ(scene.kind(created), EntityKind::Light);
   ASSERT_NE(scene.transform(created), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(created)->position.x, 2.0f);
+  EXPECT_FLOAT_EQ(scene.transform(created)->location.x, 2.0f);
   EXPECT_EQ(scene.primary_selection(), created);
   ASSERT_TRUE(undo_redo.undo().ok);
   EXPECT_FALSE(scene.exists(created));
@@ -17357,11 +17383,11 @@ TEST(DocumentCommandTests, TypedLifecycleCommandsRestoreSceneSnapshots) {
   scene.set_mesh(source, MeshComponent{.mesh = 42});
   scene.set_material(source, MaterialComponent{.material = 7});
   TransformComponent source_transform;
-  source_transform.position = {3.0f, 0.0f, 0.0f};
+  source_transform.location = {3.0f, 0.0f, 0.0f};
   scene.set_transform(source, source_transform);
   const EntityId leaf = scene.create_entity("Leaf");
   TransformComponent leaf_transform;
-  leaf_transform.position = {0.0f, 1.0f, 0.0f};
+  leaf_transform.location = {0.0f, 1.0f, 0.0f};
   scene.set_transform(leaf, leaf_transform);
   ASSERT_TRUE(scene.set_parent(leaf, source, false));
 
@@ -17644,9 +17670,9 @@ TEST(DocumentCommandServiceTests, BatchesVisibilityAndTransforms) {
   EXPECT_FALSE(scene.visibility(second)->visible);
 
   TransformComponent first_after;
-  first_after.position = {1.0f, 0.0f, 0.0f};
+  first_after.location = {1.0f, 0.0f, 0.0f};
   TransformComponent second_after;
-  second_after.position = {0.0f, 2.0f, 0.0f};
+  second_after.location = {0.0f, 2.0f, 0.0f};
   result = commands.set_transforms({
       {.entity = first,
        .before = *scene.transform(first),
@@ -17656,28 +17682,28 @@ TEST(DocumentCommandServiceTests, BatchesVisibilityAndTransforms) {
        .after = second_after},
   });
   ASSERT_TRUE(result.ok) << result.message;
-  EXPECT_FLOAT_EQ(scene.transform(first)->position.x, 1.0f);
-  EXPECT_FLOAT_EQ(scene.transform(second)->position.y, 2.0f);
+  EXPECT_FLOAT_EQ(scene.transform(first)->location.x, 1.0f);
+  EXPECT_FLOAT_EQ(scene.transform(second)->location.y, 2.0f);
 
   ASSERT_TRUE(history.undo().ok);
-  EXPECT_FLOAT_EQ(scene.transform(first)->position.x, 0.0f);
-  EXPECT_FLOAT_EQ(scene.transform(second)->position.y, 0.0f);
+  EXPECT_FLOAT_EQ(scene.transform(first)->location.x, 0.0f);
+  EXPECT_FLOAT_EQ(scene.transform(second)->location.y, 0.0f);
 
-  result = commands.set_locked(locked, true);
+  result = commands.set_selectable(locked, false);
   ASSERT_TRUE(result.ok) << result.message;
   EXPECT_TRUE(result.changed);
-  ASSERT_NE(scene.lock(locked), nullptr);
-  EXPECT_TRUE(scene.lock(locked)->locked);
+  ASSERT_NE(scene.selectable(locked), nullptr);
+  EXPECT_FALSE(scene.selectable(locked)->selectable);
 
   TransformComponent locked_after;
-  locked_after.position = {5.0f, 0.0f, 0.0f};
+  locked_after.location = {5.0f, 0.0f, 0.0f};
   result = commands.set_transform(locked, locked_after);
   ASSERT_TRUE(result.ok) << result.message;
   EXPECT_FALSE(result.changed);
-  EXPECT_FLOAT_EQ(scene.transform(locked)->position.x, 0.0f);
+  EXPECT_FLOAT_EQ(scene.transform(locked)->location.x, 0.0f);
 
   ASSERT_TRUE(history.undo().ok);
-  EXPECT_FALSE(scene.lock(locked)->locked);
+  EXPECT_TRUE(scene.selectable(locked)->selectable);
 }
 
 TEST(DocumentCommandServiceTests,
@@ -17690,21 +17716,21 @@ TEST(DocumentCommandServiceTests,
   DocumentCommandService commands(scene, history);
 
   ASSERT_TRUE(commands.select_entities({parent, child}, child).ok);
-  DocumentCommandResult result = commands.set_locked(parent, true);
+  DocumentCommandResult result = commands.set_selectable(parent, false);
   ASSERT_TRUE(result.ok) << result.message;
   EXPECT_TRUE(result.changed);
-  ASSERT_NE(scene.lock(parent), nullptr);
-  EXPECT_TRUE(scene.lock(parent)->locked);
+  ASSERT_NE(scene.selectable(parent), nullptr);
+  EXPECT_FALSE(scene.selectable(parent)->selectable);
   EXPECT_TRUE(scene.selected_entities().empty());
   EXPECT_EQ(scene.primary_selection(), kInvalidEntityId);
 
   ASSERT_TRUE(history.undo().ok);
-  EXPECT_FALSE(scene.lock(parent)->locked);
+  EXPECT_TRUE(scene.selectable(parent)->selectable);
   EXPECT_EQ(scene.selected_entities().size(), 2u);
   EXPECT_EQ(scene.primary_selection(), child);
 
   ASSERT_TRUE(history.redo().ok);
-  EXPECT_TRUE(scene.lock(parent)->locked);
+  EXPECT_FALSE(scene.selectable(parent)->selectable);
   EXPECT_TRUE(scene.selected_entities().empty());
   EXPECT_EQ(scene.primary_selection(), kInvalidEntityId);
 
@@ -17715,26 +17741,26 @@ TEST(DocumentCommandServiceTests,
       "Batch Lock Parent",
       {
           DocumentSceneBatchOperation{
-              .kind = DocumentSceneBatchOperationKind::SetLocked,
+              .kind = DocumentSceneBatchOperationKind::SetSelectable,
               .entity = parent,
-              .flag = true,
+              .flag = false,
           },
       });
   ASSERT_TRUE(result.ok) << result.message;
   EXPECT_TRUE(result.changed);
   ASSERT_NE(history.undo_label(), nullptr);
   EXPECT_EQ(*history.undo_label(), "Batch Lock Parent");
-  EXPECT_TRUE(scene.lock(parent)->locked);
+  EXPECT_FALSE(scene.selectable(parent)->selectable);
   EXPECT_TRUE(scene.selected_entities().empty());
   EXPECT_EQ(scene.primary_selection(), kInvalidEntityId);
 
   ASSERT_TRUE(history.undo().ok);
-  EXPECT_FALSE(scene.lock(parent)->locked);
+  EXPECT_TRUE(scene.selectable(parent)->selectable);
   EXPECT_EQ(scene.selected_entities().size(), 1u);
   EXPECT_EQ(scene.primary_selection(), child);
 
   ASSERT_TRUE(history.redo().ok);
-  EXPECT_TRUE(scene.lock(parent)->locked);
+  EXPECT_FALSE(scene.selectable(parent)->selectable);
   EXPECT_TRUE(scene.selected_entities().empty());
 }
 
@@ -17792,7 +17818,7 @@ TEST(DocumentCommandServiceTests,
   EditorHistoryService history;
   DocumentCommandService commands(scene, history);
   TransformComponent invalid_transform;
-  invalid_transform.position.x =
+  invalid_transform.location.x =
       (std::numeric_limits<float>::infinity)();
   const std::size_t entity_count = scene.entities().size();
   const std::uint64_t revision = scene.revision();
@@ -17912,7 +17938,7 @@ TEST(DocumentCommandServiceTests,
   DocumentCommandService commands(scene, history);
 
   TransformComponent transform;
-  transform.position = {1.0f, 2.0f, 3.0f};
+  transform.location = {1.0f, 2.0f, 3.0f};
 
   LightComponent light;
   light.type = LightType::Point;
@@ -17929,7 +17955,7 @@ TEST(DocumentCommandServiceTests,
   EXPECT_TRUE(scene.exists(created.entity));
   EXPECT_EQ(scene.kind(created.entity), EntityKind::Light);
   ASSERT_NE(scene.transform(created.entity), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(created.entity)->position.z, 3.0f);
+  EXPECT_FLOAT_EQ(scene.transform(created.entity)->location.z, 3.0f);
   ASSERT_NE(scene.light(created.entity), nullptr);
   EXPECT_EQ(scene.light(created.entity)->type, LightType::Point);
   EXPECT_FLOAT_EQ(scene.light(created.entity)->intensity, 900.0f);
@@ -18060,13 +18086,13 @@ TEST(DocumentCommandServiceTests,
   ASSERT_NE(second, kInvalidEntityId);
 
   TransformComponent first_transform;
-  first_transform.position = {-4.0f, 3.0f, 2.0f};
+  first_transform.location = {-4.0f, 3.0f, 2.0f};
   first_transform.rotation_euler = {0.0f, 0.0f, kSharedRotation};
   first_transform.scale = {0.002f, 0.006f, 0.016f};
   scene.set_transform(first, first_transform);
 
   TransformComponent second_transform;
-  second_transform.position = {7.0f, -6.0f, 5.0f};
+  second_transform.location = {7.0f, -6.0f, 5.0f};
   second_transform.rotation_euler = {0.0f, 0.0f, kSharedRotation};
   second_transform.scale = {0.004f, 0.010f, 0.024f};
   scene.set_transform(second, second_transform);
@@ -18084,7 +18110,7 @@ TEST(DocumentCommandServiceTests,
   };
 
   TransformComponent group_transform;
-  group_transform.position = {2.0f, -1.0f, 4.0f};
+  group_transform.location = {2.0f, -1.0f, 4.0f};
   group_transform.rotation_euler = {0.0f, 0.0f, kSharedRotation};
   group_transform.scale = {0.001f, 0.002f, 0.004f};
   const DocumentGroupSelectionResult grouped =
@@ -18122,13 +18148,13 @@ TEST(DocumentCommandServiceTests,
   ASSERT_LT(representable, sheared);
 
   TransformComponent representable_transform;
-  representable_transform.position = {-4.0f, 2.0f, 1.0f};
+  representable_transform.location = {-4.0f, 2.0f, 1.0f};
   representable_transform.rotation_euler = {0.0f, 0.0f, 0.6f};
   representable_transform.scale = {1.5f, 0.8f, 1.2f};
   scene.set_transform(representable, representable_transform);
 
   TransformComponent sheared_transform;
-  sheared_transform.position = {6.0f, -3.0f, 2.0f};
+  sheared_transform.location = {6.0f, -3.0f, 2.0f};
   sheared_transform.rotation_euler = {0.2f, -0.1f, -0.45f};
   sheared_transform.scale = {0.0f, 1.3f, 0.7f};
   scene.set_transform(sheared, sheared_transform);
@@ -18137,7 +18163,7 @@ TEST(DocumentCommandServiceTests,
   ASSERT_TRUE(scene.set_active_selection(sheared));
 
   TransformComponent group_transform;
-  group_transform.position = {2.0f, -1.0f, 3.0f};
+  group_transform.location = {2.0f, -1.0f, 3.0f};
   group_transform.rotation_euler = {0.0f, 0.0f, 0.6f};
   group_transform.scale = {2.0f, 0.75f, 1.4f};
   const QMat4 representable_world_before =
@@ -18159,11 +18185,11 @@ TEST(DocumentCommandServiceTests,
                                       representable_world_before));
   EXPECT_TRUE(scene_matrix_near_equal(scene.world_transform_matrix(sheared),
                                       sheared_world_before));
-  expect_vec3_near(scene.transform(representable)->position, representable_transform.position);
+  expect_vec3_near(scene.transform(representable)->location, representable_transform.location);
   expect_vec3_near(scene.transform(representable)->rotation_euler,
                    representable_transform.rotation_euler);
   expect_vec3_near(scene.transform(representable)->scale, representable_transform.scale);
-  expect_vec3_near(scene.transform(sheared)->position, sheared_transform.position);
+  expect_vec3_near(scene.transform(sheared)->location, sheared_transform.location);
   expect_vec3_near(scene.transform(sheared)->rotation_euler, sheared_transform.rotation_euler);
   expect_vec3_near(scene.transform(sheared)->scale, sheared_transform.scale);
   const QMat4 grouped_offset = scene.transform(sheared)->parenting_offset;
@@ -18214,22 +18240,22 @@ TEST(DocumentCommandServiceTests,
   ASSERT_LT(valid_group, sheared_group);
 
   TransformComponent valid_group_transform;
-  valid_group_transform.position = {-3.0f, 2.0f, 1.0f};
+  valid_group_transform.location = {-3.0f, 2.0f, 1.0f};
   valid_group_transform.rotation_euler = {0.0f, 0.0f, 0.25f};
   scene.set_transform(valid_group, valid_group_transform);
   TransformComponent valid_child_transform;
-  valid_child_transform.position = {1.0f, 2.0f, -1.0f};
+  valid_child_transform.location = {1.0f, 2.0f, -1.0f};
   valid_child_transform.rotation_euler = {0.1f, -0.15f, -0.2f};
   scene.set_transform(valid_child, valid_child_transform);
   ASSERT_TRUE(scene.set_parent(valid_child, valid_group, false));
 
   TransformComponent sheared_group_transform;
-  sheared_group_transform.position = {5.0f, -4.0f, 2.0f};
+  sheared_group_transform.location = {5.0f, -4.0f, 2.0f};
   sheared_group_transform.rotation_euler = {0.1f, -0.2f, 0.6f};
   sheared_group_transform.scale = {2.0f, 0.7f, 1.5f};
   scene.set_transform(sheared_group, sheared_group_transform);
   TransformComponent sheared_child_transform;
-  sheared_child_transform.position = {-2.0f, 1.0f, 3.0f};
+  sheared_child_transform.location = {-2.0f, 1.0f, 3.0f};
   sheared_child_transform.rotation_euler = {-0.25f, 0.3f, -0.45f};
   sheared_child_transform.scale = {0.0f, 1.2f, 0.9f};
   scene.set_transform(sheared_child, sheared_child_transform);
@@ -18262,14 +18288,14 @@ TEST(DocumentCommandServiceTests,
                                       valid_child_world_before));
   EXPECT_TRUE(scene_matrix_near_equal(scene.world_transform_matrix(sheared_child),
                                       sheared_child_world_before));
-  expect_vec3_near(scene.transform(valid_child)->position,
-                   valid_child_local_before.position);
+  expect_vec3_near(scene.transform(valid_child)->location,
+                   valid_child_local_before.location);
   expect_vec3_near(scene.transform(valid_child)->rotation_euler,
                    valid_child_local_before.rotation_euler);
   expect_vec3_near(scene.transform(valid_child)->scale,
                    valid_child_local_before.scale);
-  expect_vec3_near(scene.transform(sheared_child)->position,
-                   sheared_child_local_before.position);
+  expect_vec3_near(scene.transform(sheared_child)->location,
+                   sheared_child_local_before.location);
   expect_vec3_near(scene.transform(sheared_child)->rotation_euler,
                    sheared_child_local_before.rotation_euler);
   expect_vec3_near(scene.transform(sheared_child)->scale,
@@ -18329,13 +18355,13 @@ TEST(DocumentCommandServiceTests,
   ASSERT_NE(second, kInvalidEntityId);
 
   TransformComponent moved;
-  moved.position = {5.0f, 0.0f, 0.0f};
+  moved.location = {5.0f, 0.0f, 0.0f};
   DocumentCommandResult result = commands.apply_entity_transform(first, moved);
   ASSERT_TRUE(result.ok) << result.message;
   ASSERT_NE(scene.transform(first), nullptr);
-  EXPECT_FLOAT_EQ(scene.transform(first)->position.x, 5.0f);
+  EXPECT_FLOAT_EQ(scene.transform(first)->location.x, 5.0f);
   ASSERT_TRUE(history.undo().ok);
-  EXPECT_FLOAT_EQ(scene.transform(first)->position.x, 0.0f);
+  EXPECT_FLOAT_EQ(scene.transform(first)->location.x, 0.0f);
   ASSERT_TRUE(history.redo().ok);
 
   result = commands.select_entities({first, second}, second);
@@ -18344,7 +18370,7 @@ TEST(DocumentCommandServiceTests,
   EXPECT_EQ(scene.primary_selection(), second);
 
   TransformComponent group_transform;
-  group_transform.position = {2.0f, 0.0f, 0.0f};
+  group_transform.location = {2.0f, 0.0f, 0.0f};
   const DocumentGroupSelectionResult grouped =
       commands.group_selection("Group", group_transform);
   ASSERT_TRUE(grouped.ok) << grouped.message;
@@ -19575,7 +19601,7 @@ TEST(ModelingSessionServiceTests,
   EXPECT_EQ(service.rectangle_pick_facts_build_count(), facts_before + 1u);
   EXPECT_EQ(service.rectangle_pick_facts_reuse_count(), 1u);
 
-  ASSERT_TRUE(scene.set_selectable(mesh.object.entity, false));
+  ASSERT_TRUE(scene.set_selectability(mesh.object.entity, false));
   const ModelingSelectionSummary unselectable =
       service.box_select(request, baseline);
   EXPECT_EQ(unselectable.selected_face_count, 0u);
@@ -19589,7 +19615,7 @@ TEST(ModelingSessionServiceTests,
             resolutions_after_first + 2u);
   EXPECT_EQ(service.rectangle_pick_facts_build_count(), facts_before + 1u);
 
-  ASSERT_TRUE(scene.set_selectable(mesh.object.entity, true));
+  ASSERT_TRUE(scene.set_selectability(mesh.object.entity, true));
   EXPECT_EQ(service.box_select(request, baseline).selected_face_count,
             first.selected_face_count);
   EXPECT_EQ(service.rectangle_pick_facts_build_count(), facts_before + 2u);
@@ -19699,7 +19725,7 @@ TEST(ModelingSessionServiceTests,
   });
   ASSERT_TRUE(box.ok) << box.message;
   TransformComponent transform = *scene.transform(box.object.entity);
-  transform.position = {3.0f, 0.0f, 0.0f};
+  transform.location = {3.0f, 0.0f, 0.0f};
   ASSERT_TRUE(scene.set_transform(box.object.entity, transform));
   ASSERT_TRUE(service
                   .set_object_selection(std::span<const EntityId>{},
@@ -19827,7 +19853,7 @@ TEST(ModelingSessionServiceTests,
   const std::uint64_t rectangle_builds =
       service.rectangle_picking_projection_build_count();
 
-  ASSERT_TRUE(scene.set_locked(mesh.object.entity, true));
+  ASSERT_TRUE(scene.set_selectable(mesh.object.entity, false));
   EXPECT_FALSE(service.pick_object_entity(point_request).has_value());
   EXPECT_TRUE(service.box_pick_object_entities(rectangle_request).empty());
   EXPECT_EQ(service.transformed_picking_projection_build_count(),
@@ -19835,7 +19861,7 @@ TEST(ModelingSessionServiceTests,
   EXPECT_EQ(service.rectangle_picking_projection_build_count(),
             rectangle_builds + 1u);
 
-  ASSERT_TRUE(scene.set_locked(mesh.object.entity, false));
+  ASSERT_TRUE(scene.set_selectable(mesh.object.entity, true));
   const std::optional<EntityId> unlocked_point =
       service.pick_object_entity(point_request);
   ASSERT_TRUE(unlocked_point.has_value());
@@ -19935,7 +19961,7 @@ TEST(ModelingSessionServiceTests,
     const EntityId duplicate = scene.primary_selection();
     ASSERT_NE(duplicate, kInvalidEntityId);
     TransformComponent transform;
-    transform.position = {static_cast<float>(index) * 3.0f, 0.0f, 0.0f};
+    transform.location = {static_cast<float>(index) * 3.0f, 0.0f, 0.0f};
     scene.set_transform(duplicate, transform);
     participants.push_back(duplicate);
   }
@@ -19963,7 +19989,7 @@ TEST(ModelingSessionServiceTests,
             world_bounds_builds_before + participants.size());
 
   TransformComponent moved = *scene.transform(participants.back());
-  moved.position.x = 700.0f;
+  moved.location.x = 700.0f;
   scene.set_transform(participants.back(), moved);
   const std::optional<EntityId> moved_hit =
       service.pick_object_entity(ModelingPickSelectRequest{
@@ -20304,7 +20330,7 @@ TEST(ModelingSessionServiceTests, SelectionHitsApplyOccurrenceTransformExactlyOn
       .name = "Transformed selection hit"});
   ASSERT_TRUE(box.ok);
   TransformComponent transform;
-  transform.position = {4, 1, 2};
+  transform.location = {4, 1, 2};
   transform.scale = {2, 3, 0.5f};
   ASSERT_TRUE(scene.set_transform(box.object.entity, transform));
   const auto world = scene.world_transform_matrix(box.object.entity);
@@ -20459,7 +20485,7 @@ TEST(ModelingSessionServiceTests,
 
   constexpr float kHalfPi = 1.57079632679f;
   TransformComponent transform;
-  transform.position = {8.0f, 6.0f, 2.0f};
+  transform.location = {8.0f, 6.0f, 2.0f};
   transform.rotation_euler = {0.0f, 0.0f, kHalfPi};
   transform.scale = {2.0f, 0.75f, 1.5f};
   scene.set_transform(box.object.entity, transform);
@@ -20518,7 +20544,7 @@ TEST(ModelingSessionServiceTests,
   });
   ASSERT_TRUE(box.ok) << box.message;
   TransformComponent transform;
-  transform.position = {8.0f, 6.0f, 2.0f};
+  transform.location = {8.0f, 6.0f, 2.0f};
   transform.rotation_euler = {0.0f, 0.0f, 1.57079632679f};
   transform.scale = {2.0f, 0.4f, 1.5f};
   scene.set_transform(box.object.entity, transform);
@@ -20998,7 +21024,7 @@ TEST(ModelingSessionServiceTests,
 
   constexpr float kHalfPi = 1.57079632679f;
   TransformComponent transform;
-  transform.position = {5.0f, -4.0f, 2.0f};
+  transform.location = {5.0f, -4.0f, 2.0f};
   transform.rotation_euler = {0.0f, 0.0f, kHalfPi};
   transform.scale = {2.0f, 0.5f, 1.5f};
   scene.set_transform(box.object.entity, transform);
@@ -21065,7 +21091,7 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(box.ok) << box.message;
   ASSERT_TRUE(scene.set_transform(
       box.object.entity,
-      TransformComponent{.position = {4.0f, 2.0f, 3.0f}}));
+      TransformComponent{.location = {4.0f, 2.0f, 3.0f}}));
 
   const auto event_at_front_surface = [](QVec3 surface_point) {
     ModelingToolRayEvent event;
@@ -21122,7 +21148,7 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(box.ok) << box.message;
 
   TransformComponent transform;
-  transform.position = {0.3f, 0.0f, 0.0f};
+  transform.location = {0.3f, 0.0f, 0.0f};
   ASSERT_TRUE(scene.set_transform(box.object.entity, transform));
   const QMat4 world_from_object =
       scene.world_transform_matrix(box.object.entity);
@@ -21177,7 +21203,7 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(box.ok) << box.message;
 
   TransformComponent transform;
-  transform.position = {2.3f, -1.4f, 0.6f};
+  transform.location = {2.3f, -1.4f, 0.6f};
   transform.rotation_euler = {0.0f, 0.0f, 0.78539816339f};
   transform.scale = {2.0f, 1.0f, 1.0f};
   ASSERT_TRUE(scene.set_transform(box.object.entity, transform));
@@ -21238,7 +21264,7 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(box.ok) << box.message;
 
   TransformComponent transform;
-  transform.position = {0.6f, 0.0f, 0.0f};
+  transform.location = {0.6f, 0.0f, 0.0f};
   ASSERT_TRUE(scene.set_transform(box.object.entity, transform));
 
   ModelingCommandResult command =
@@ -21959,7 +21985,7 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(box.ok) << box.message;
 
   TransformComponent transform;
-  transform.position = {0.6f, 0.0f, 0.0f};
+  transform.location = {0.6f, 0.0f, 0.0f};
   ASSERT_TRUE(scene.set_transform(box.object.entity, transform));
 
   ModelingCommandResult command =
@@ -22332,7 +22358,7 @@ TEST(ModelingSessionServiceTests,
             cache_before_first_frame.build_count + 2u);
 
   ASSERT_TRUE(scene.set_transform(
-      box.object.entity, TransformComponent{.position = {0.25f, 0.0f, 0.0f}}));
+      box.object.entity, TransformComponent{.location = {0.25f, 0.0f, 0.0f}}));
   (void)service.volatile_overlay_frame();
   const ModelingSdkProjectionStats after_scene_change =
       service.modeling_sdk_projection_stats_for_tests();
@@ -22898,7 +22924,7 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(box.ok) << box.message;
 
   TransformComponent moved;
-  moved.position = {7.0f, 2.0f, -3.0f};
+  moved.location = {7.0f, 2.0f, -3.0f};
   scene.set_transform(box.object.entity, moved);
   ASSERT_TRUE(
       select_through_editor(editor_selection.selection, {box.object.entity})
@@ -22946,10 +22972,10 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(right.ok) << right.message;
 
   TransformComponent left_transform;
-  left_transform.position = {-4.0f, 0.0f, 0.0f};
+  left_transform.location = {-4.0f, 0.0f, 0.0f};
   scene.set_transform(left.object.entity, left_transform);
   TransformComponent right_transform;
-  right_transform.position = {4.0f, 0.0f, 0.0f};
+  right_transform.location = {4.0f, 0.0f, 0.0f};
   scene.set_transform(right.object.entity, right_transform);
 
   ASSERT_TRUE(service.clear_selection().ok);
@@ -23016,7 +23042,7 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(box.ok) << box.message;
 
   TransformComponent transform;
-  transform.position = {4.0f, 0.0f, 0.0f};
+  transform.location = {4.0f, 0.0f, 0.0f};
   scene.set_transform(box.object.entity, transform);
 
   ASSERT_TRUE(session.editor_mode().set_mode(EditorMode::Edit).ok);
@@ -23674,7 +23700,7 @@ TEST(ModelingSessionServiceTests,
   scene.set_material(box.object.entity,
                      MaterialComponent{.material = default_material});
   TransformComponent source_transform;
-  source_transform.position = {2.0f, 0.0f, -3.0f};
+  source_transform.location = {2.0f, 0.0f, -3.0f};
   source_transform.rotation_euler = {0.25f, 0.75f, 0.0f};
   scene.set_transform(box.object.entity, source_transform);
   const MeshComponent *source_mesh_component = scene.mesh(box.object.entity);
@@ -23718,8 +23744,8 @@ TEST(ModelingSessionServiceTests,
   ASSERT_NE(duplicate_mesh_asset, nullptr);
   EXPECT_EQ(duplicate_mesh_asset->name, "Mesh");
   ASSERT_NE(scene.transform(duplicate_entity), nullptr);
-  expect_vec3_near(scene.transform(duplicate_entity)->position,
-                   source_transform.position);
+  expect_vec3_near(scene.transform(duplicate_entity)->location,
+                   source_transform.location);
   expect_vec3_near(scene.transform(duplicate_entity)->rotation_euler,
                    source_transform.rotation_euler);
   ASSERT_EQ(duplicate_mesh_asset->geometry().vertices.size(),
@@ -24979,14 +25005,14 @@ TEST(ModelingSessionServiceTests,
   EXPECT_NEAR(update.move_delta.x, 2.0f, 0.001f);
   EXPECT_NEAR(update.scene_preview_transform.origin.x, 2.0f, 0.001f);
   ASSERT_NE(scene.transform(box.object.entity), nullptr);
-  EXPECT_NEAR(scene.transform(box.object.entity)->position.x, 2.0f, 0.001f);
+  EXPECT_NEAR(scene.transform(box.object.entity)->location.x, 2.0f, 0.001f);
 
   ModelingTransformDragPreview commit = service.commit_transform_drag();
   ASSERT_TRUE(commit.ok) << commit.message;
   EXPECT_FALSE(commit.preview_driven);
   EXPECT_TRUE(commit.changed);
   ASSERT_NE(scene.transform(box.object.entity), nullptr);
-  EXPECT_NEAR(scene.transform(box.object.entity)->position.x, 2.0f, 0.001f);
+  EXPECT_NEAR(scene.transform(box.object.entity)->location.x, 2.0f, 0.001f);
   const ModelingTransformDragPreview after_commit_update =
       service.update_transform_drag(test_x_move_drag_update_request(3.0f));
   EXPECT_TRUE(after_commit_update.ok);
@@ -25036,7 +25062,7 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(update.ok) << update.message;
   ASSERT_TRUE(update.scene_transform);
   ASSERT_NE(scene.transform(box.object.entity), nullptr);
-  EXPECT_NEAR(scene.transform(box.object.entity)->position.x, 2.0f, 0.001f);
+  EXPECT_NEAR(scene.transform(box.object.entity)->location.x, 2.0f, 0.001f);
 
   const ViewportOverlaySelectionSourceStamp preview_key =
       make_viewport_overlay_key();
@@ -25132,7 +25158,7 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(update.ok) << update.message;
   EXPECT_TRUE(update.value.has_scene_preview_transform);
   ASSERT_NE(session.scene().transform(box.value.entity), nullptr);
-  EXPECT_NEAR(session.scene().transform(box.value.entity)->position.x, 2.0f,
+  EXPECT_NEAR(session.scene().transform(box.value.entity)->location.x, 2.0f,
               0.001f);
 
   QuaderApiResult<QuaderTransformDragPreview> commit =
@@ -25140,14 +25166,14 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(commit.ok) << commit.message;
   EXPECT_TRUE(commit.changed);
   ASSERT_NE(session.scene().transform(box.value.entity), nullptr);
-  EXPECT_NEAR(session.scene().transform(box.value.entity)->position.x, 2.0f,
+  EXPECT_NEAR(session.scene().transform(box.value.entity)->location.x, 2.0f,
               0.001f);
   EXPECT_TRUE(editor.history().can_undo());
 
   const QuaderApiVoidResult undo = editor.history().undo();
   ASSERT_TRUE(undo.ok) << undo.message;
   ASSERT_NE(session.scene().transform(box.value.entity), nullptr);
-  EXPECT_NEAR(session.scene().transform(box.value.entity)->position.x, 0.0f,
+  EXPECT_NEAR(session.scene().transform(box.value.entity)->location.x, 0.0f,
               0.001f);
 }
 
@@ -26205,11 +26231,11 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(right.ok) << right.message;
 
   TransformComponent left_transform;
-  left_transform.position = {4.0f, 0.0f, 0.0f};
+  left_transform.location = {4.0f, 0.0f, 0.0f};
   left_transform.rotation_euler = {0.0f, 0.5f, 0.0f};
   scene.set_transform(left.object.entity, left_transform);
   TransformComponent right_transform;
-  right_transform.position = {6.0f, 0.0f, 2.0f};
+  right_transform.location = {6.0f, 0.0f, 2.0f};
   right_transform.rotation_euler = {0.25f, 0.0f, 0.5f};
   scene.set_transform(right.object.entity, right_transform);
 
@@ -26258,12 +26284,12 @@ TEST(ModelingSessionServiceTests,
   EXPECT_EQ(scene.parent(duplicate_children[1]), duplicate_group);
   ASSERT_NE(scene.transform(duplicate_children[0]), nullptr);
   ASSERT_NE(scene.transform(duplicate_children[1]), nullptr);
-  expect_vec3_near(scene.transform(duplicate_children[0])->position,
-                   source_left_transform.position);
+  expect_vec3_near(scene.transform(duplicate_children[0])->location,
+                   source_left_transform.location);
   expect_vec3_near(scene.transform(duplicate_children[0])->rotation_euler,
                    source_left_transform.rotation_euler);
-  expect_vec3_near(scene.transform(duplicate_children[1])->position,
-                   source_right_transform.position);
+  expect_vec3_near(scene.transform(duplicate_children[1])->location,
+                   source_right_transform.location);
   expect_vec3_near(scene.transform(duplicate_children[1])->rotation_euler,
                    source_right_transform.rotation_euler);
 
@@ -26837,10 +26863,10 @@ TEST(SceneLayerTests,
   ASSERT_NE(layer, kInvalidSceneLayerId);
   ASSERT_TRUE(scene.set_entity_layer(group, layer));
   ASSERT_TRUE(scene.set_selected(child, true));
-  ASSERT_NE(scene.lock(group), nullptr);
-  ASSERT_NE(scene.lock(child), nullptr);
-  EXPECT_FALSE(scene.lock(group)->locked);
-  EXPECT_FALSE(scene.lock(child)->locked);
+  ASSERT_NE(scene.selectable(group), nullptr);
+  ASSERT_NE(scene.selectable(child), nullptr);
+  EXPECT_TRUE(scene.selectable(group)->selectable);
+  EXPECT_TRUE(scene.selectable(child)->selectable);
 
   EditorHistoryService history;
   DocumentCommandService commands(scene, history);
@@ -26851,10 +26877,10 @@ TEST(SceneLayerTests,
   ASSERT_TRUE(locked.changed);
   ASSERT_NE(scene.layer(layer), nullptr);
   EXPECT_TRUE(scene.layer(layer)->locked);
-  EXPECT_TRUE(scene.is_effectively_locked(group));
-  EXPECT_TRUE(scene.is_effectively_locked(child));
-  EXPECT_FALSE(scene.lock(group)->locked);
-  EXPECT_FALSE(scene.lock(child)->locked);
+  EXPECT_FALSE(scene.is_effectively_selectable(group));
+  EXPECT_FALSE(scene.is_effectively_selectable(child));
+  EXPECT_TRUE(scene.selectable(group)->selectable);
+  EXPECT_TRUE(scene.selectable(child)->selectable);
   EXPECT_FALSE(scene.selection(child)->selected);
   EXPECT_EQ(scene.layer_revision(), revision_before + 1u);
   ASSERT_NE(history.undo_label(), nullptr);
@@ -26869,23 +26895,23 @@ TEST(SceneLayerTests,
 
   ASSERT_TRUE(history.undo().ok);
   EXPECT_FALSE(scene.layer(layer)->locked);
-  EXPECT_FALSE(scene.is_effectively_locked(group));
-  EXPECT_FALSE(scene.is_effectively_locked(child));
+  EXPECT_TRUE(scene.is_effectively_selectable(group));
+  EXPECT_TRUE(scene.is_effectively_selectable(child));
   EXPECT_TRUE(scene.selection(child)->selected)
       << "undo must restore selection removed by the layer lock";
   ASSERT_TRUE(history.redo().ok);
   EXPECT_TRUE(scene.layer(layer)->locked);
   EXPECT_FALSE(scene.selection(child)->selected);
 
-  ASSERT_TRUE(scene.set_locked(child, true));
+  ASSERT_TRUE(scene.set_selectable(child, false));
   const DocumentCommandResult unlocked =
       commands.set_layer_locked(layer, false);
   ASSERT_TRUE(unlocked.ok);
   ASSERT_TRUE(unlocked.changed);
   EXPECT_FALSE(scene.layer(layer)->locked);
-  EXPECT_TRUE(scene.lock(child)->locked)
+  EXPECT_FALSE(scene.selectable(child)->selectable)
       << "layer unlock must not rewrite object-local lock state";
-  EXPECT_TRUE(scene.is_effectively_locked(child));
+  EXPECT_FALSE(scene.is_effectively_selectable(child));
 }
 
 TEST(SceneLayerTests,

@@ -83,7 +83,7 @@ TEST(CompensatedTransformConsumerTests,
   auto &scene = harness.session.scene();
   const EntityId parent = scene.create_empty("Parent");
   ASSERT_TRUE(scene.set_transform(parent, {
-      .position = {-2.0f, 4.0f, 1.0f},
+      .location = {-2.0f, 4.0f, 1.0f},
       .rotation_euler = {0.2f, 0.4f, -0.3f},
       .scale = {2.0f, 0.6f, -1.25f},
   }));
@@ -92,7 +92,7 @@ TEST(CompensatedTransformConsumerTests,
   std::array<TransformComponent, 2> captured;
   std::array<QMat4, 2> before;
   for (std::size_t index = 0; index < children.size(); ++index) {
-    captured[index].position = {1.0f, -3.0f, 0.5f};
+    captured[index].location = {1.0f, -3.0f, 0.5f};
     captured[index].rotation_euler = {0.3f, -0.1f, 0.2f};
     captured[index].parenting_offset = affine_offset(index == 0u ? 1.0f : -1.0f);
     ASSERT_TRUE(scene.set_transform(children[index], captured[index]));
@@ -132,7 +132,7 @@ TEST(CompensatedTransformConsumerTests,
   SceneDocument scene;
   const EntityId entity = scene.create_empty("Compensated");
   TransformComponent before{
-      .position = {1.0f, 2.0f, -3.0f},
+      .location = {1.0f, 2.0f, -3.0f},
       .rotation_euler = {0.1f, 0.4f, -0.2f},
       .scale = {1.5f, 0.7f, 2.0f},
   };
@@ -173,7 +173,7 @@ TEST(CompensatedTransformConsumerTests,
       .rotation_euler = {0.2f, 0.35f, -0.1f},
       .scale = {3.0f, 0.5f, -2.0f},
   }));
-  ASSERT_TRUE(scene.set_transform(child, {.position = {2.0f, 3.0f, 1.0f}}));
+  ASSERT_TRUE(scene.set_transform(child, {.location = {2.0f, 3.0f, 1.0f}}));
   ASSERT_TRUE(scene.set_parent(child, parent, true));
   ASSERT_TRUE(scene.set_selected(child, true));
   const QMat4 before = scene.world_transform_matrix(child);
@@ -204,12 +204,12 @@ TEST(CompensatedTransformConsumerTests,
       ASSERT_TRUE(scene.set_transform(object.entity, initial));
       harness.session.document_commands().set_texture_lock_settings_provider(
           [=] { return TextureLockSettings{lock, scale_lock}; });
-      QuaderTransform channels{.position = {3.0f, -2.0f, 1.0f}};
+      QuaderTransform channels{.location = {3.0f, -2.0f, 1.0f}};
       ASSERT_TRUE(harness.editor.scene().set_transform(object.entity, channels).ok());
       channels.rotation_euler = {0.2f, 0.4f, -0.3f};
       ASSERT_TRUE(harness.editor.scene().set_transform(object.entity, channels).ok());
       const QMat4 before_scale = compose_transform(QTransform{
-          .position = channels.position,
+          .location = channels.location,
           .rotation = quat_from_euler_radians(channels.rotation_euler)});
       channels.scale = {-2.0f, 3.0f, 0.5f};
       ASSERT_TRUE(harness.editor.scene().set_transform(object.entity, channels).ok());
@@ -237,17 +237,17 @@ TEST(CompensatedTransformConsumerTests,
   const auto source = harness.box("Pivot Source");
   const auto target = harness.box("Pivot Target");
   ASSERT_TRUE(scene.set_transform(source.entity, {
-      .position = {7.0f, -2.0f, 4.0f}, .custom_pivot = true}));
+      .location = {7.0f, -2.0f, 4.0f}, .custom_pivot = true}));
   ASSERT_TRUE(harness.editor.selection().select_object(source).ok());
   ASSERT_TRUE(harness.editor.tools().activate(ViewportToolId::Pivot).ok());
   ASSERT_TRUE(harness.editor.tools().execute_action("pivot", "pivot.align.top_center").ok());
   ASSERT_TRUE(harness.editor.tools().commit_active_tool_preview().ok());
-  TransformComponent target_transform{.position = {1.0f, 2.0f, 3.0f}};
+  TransformComponent target_transform{.location = {1.0f, 2.0f, 3.0f}};
   target_transform.parenting_offset = affine_offset();
   ASSERT_TRUE(scene.set_transform(target.entity, target_transform));
   const EntityId child = scene.create_empty("Child");
   TransformComponent child_transform{
-      .position = {-2.0f, 1.0f, 0.5f},
+      .location = {-2.0f, 1.0f, 0.5f},
       .rotation_euler = {0.3f, 0.2f, -0.4f},
       .scale = {0.6f, 2.0f, -1.0f},
   };
@@ -269,7 +269,7 @@ TEST(CompensatedTransformConsumerTests,
       expect_vector_near(moved_vertices[index], vertices[index]);
     }
     expect_matrix_near(scene.world_transform_matrix(child), child_world);
-    expect_vector_near(scene.transform(child)->position, child_transform.position);
+    expect_vector_near(scene.transform(child)->location, child_transform.location);
     expect_vector_near(scene.transform(child)->rotation_euler, child_transform.rotation_euler);
     expect_vector_near(scene.transform(child)->scale, child_transform.scale);
     EXPECT_EQ(scene.transform(target.entity)->parenting_offset.values,
@@ -291,8 +291,8 @@ TEST(CompensatedTransformConsumerTests,
   auto &scene = harness.session.scene();
   const auto active = harness.box("Active");
   const auto other = harness.box("Other");
-  ASSERT_TRUE(scene.set_transform(active.entity, {.position = {10.0f, 0.0f, 0.0f}}));
-  TransformComponent before{.position = {-3.0f, 2.0f, 1.0f}};
+  ASSERT_TRUE(scene.set_transform(active.entity, {.location = {10.0f, 0.0f, 0.0f}}));
+  TransformComponent before{.location = {-3.0f, 2.0f, 1.0f}};
   before.parenting_offset = affine_offset();
   ASSERT_TRUE(scene.set_transform(other.entity, before));
   const auto bounds_before = entity_world_bounds(scene, harness.session.assets(), other.entity);
@@ -319,7 +319,7 @@ TEST(CompensatedTransformConsumerTests,
   auto &scene = harness.session.scene();
   const auto object = harness.box("Affine Member");
   TransformComponent original{
-      .position = {2.0f, -1.0f, 3.0f},
+      .location = {2.0f, -1.0f, 3.0f},
       .rotation_euler = {0.2f, -0.3f, 0.4f},
       .scale = {0.75f, 1.5f, -2.0f},
   };
@@ -339,11 +339,11 @@ TEST(CompensatedTransformConsumerTests,
                                  scene.world_transform_matrix(object.entity)));
   };
   expect_matrix_near(visible_world(), before);
-  expect_vector_near(scene.transform(object.entity)->position, original.position);
+  expect_vector_near(scene.transform(object.entity)->location, original.location);
   expect_vector_near(scene.transform(object.entity)->rotation_euler, original.rotation_euler);
   expect_vector_near(scene.transform(object.entity)->scale, original.scale);
   ASSERT_TRUE(harness.editor.scene().set_transform(occurrence, {
-      .position = {5.0f, 1.0f, -3.0f},
+      .location = {5.0f, 1.0f, -3.0f},
       .rotation_euler = {0.4f, -0.15f, 0.3f},
       .scale = {-1.2f, 0.65f, 2.0f},
   }).ok());
@@ -353,7 +353,7 @@ TEST(CompensatedTransformConsumerTests,
   ASSERT_TRUE(flattened.ok()) << flattened.error_message();
   ASSERT_TRUE(flattened.changed());
   expect_matrix_near(scene.world_transform_matrix(object.entity), expected);
-  expect_vector_near(scene.transform(object.entity)->position, original.position);
+  expect_vector_near(scene.transform(object.entity)->location, original.location);
   expect_vector_near(scene.transform(object.entity)->rotation_euler, original.rotation_euler);
   expect_vector_near(scene.transform(object.entity)->scale, original.scale);
   EXPECT_EQ(harness.session.history().undo_count(), 1u);

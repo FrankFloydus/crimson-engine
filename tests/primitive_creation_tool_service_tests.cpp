@@ -741,7 +741,7 @@ TEST(PrimitiveCreationToolServiceTests,
   const EntityId occurrence = instance.value().occurrence.root.id;
   const EntityId definition = instance.value().definition.root.id;
   ASSERT_TRUE(editor.scene().set_transform(occurrence, {
-      .position = {9.0f, 4.0f, -6.0f},
+      .location = {9.0f, 4.0f, -6.0f},
       .rotation_euler = {0.0f, 0.35f, 0.0f},
       .scale = {2.0f, 2.0f, 2.0f},
   }).ok());
@@ -894,7 +894,7 @@ TEST(PrimitiveCreationToolServiceTests,
   const TransformComponent *const transform =
       harness.scene.transform(object.entity);
   ASSERT_NE(transform, nullptr);
-  EXPECT_TRUE(near_point(transform->position, center));
+  EXPECT_TRUE(near_point(transform->location, center));
   EXPECT_TRUE(near_point(transform->scale, {1.0f, 1.0f, 1.0f}));
   const QMat4 world = harness.scene.world_transform_matrix(object.entity);
   EXPECT_TRUE(near_point(normalize(transform_vector(world, {1.0f, 0.0f, 0.0f})),
@@ -2698,7 +2698,7 @@ TEST(PrimitiveCreationToolServiceTests,
   ASSERT_TRUE(box.ok) << box.message;
   ASSERT_TRUE(harness.scene.set_transform(
       box.object.entity,
-      TransformComponent{.position = {10.0f, 0.0f, 0.0f}}));
+      TransformComponent{.location = {10.0f, 0.0f, 0.0f}}));
   ASSERT_TRUE(harness.tool.activate(PrimitiveCreationKind::Box).ok);
 
   const auto event_at_x = [](float x) {
@@ -3065,7 +3065,7 @@ TEST(PrimitiveCreationToolServiceTests,
     ASSERT_TRUE(before.has_value());
     const EntityId entity = *session.modeling().entity_for_modeling_object(before->object_id);
     const TransformComponent transform{
-        .position = {7.0f, 3.0f, -2.0f},
+        .location = {7.0f, 3.0f, -2.0f},
         .rotation_euler = {0.2f, 0.7f, -0.1f},
         .scale = {2.0f, 0.5f, 3.0f},
     };
@@ -3075,7 +3075,7 @@ TEST(PrimitiveCreationToolServiceTests,
     ASSERT_TRUE(placed.has_value());
     EXPECT_GT(placed->revision, before->revision);
     EXPECT_EQ(placed->revision, editor.tools().live_primitive_cube()->revision);
-    EXPECT_TRUE(near_point(placed->world_origin, transform.position));
+    EXPECT_TRUE(near_point(placed->world_origin, transform.location));
     EXPECT_TRUE(near_point(placed->world_x, transform_vector(world, {1.0f, 0.0f, 0.0f})));
     EXPECT_TRUE(near_point(placed->world_y, transform_vector(world, {0.0f, 1.0f, 0.0f})));
     EXPECT_TRUE(near_point(placed->world_z, transform_vector(world, {0.0f, 0.0f, 1.0f})));
@@ -4238,7 +4238,7 @@ TEST(PrimitiveCreationToolServiceTests,
     EXPECT_TRUE(near_point(original->world_x, {0.0f, 0.0f, -1.0f}));
     const EntityId entity = *session.modeling().entity_for_modeling_object(original->object_id);
     const TransformComponent transform{
-        .position = {7.0f, 3.0f, -2.0f},
+        .location = {7.0f, 3.0f, -2.0f},
         .rotation_euler = {0.2f, 0.7f, -0.1f},
         .scale = {2.0f, 0.5f, 3.0f},
     };
@@ -4248,7 +4248,7 @@ TEST(PrimitiveCreationToolServiceTests,
     ASSERT_TRUE(placed.has_value());
     EXPECT_GT(placed->revision, original->revision);
     EXPECT_EQ(editor.tools().live_primitive_creation()->revision, placed->revision);
-    EXPECT_TRUE(near_point(placed->world_origin, transform.position));
+    EXPECT_TRUE(near_point(placed->world_origin, transform.location));
     EXPECT_TRUE(near_point(placed->world_x, transform_vector(world, {1.0f, 0.0f, 0.0f})));
     EXPECT_TRUE(near_point(placed->world_y, transform_vector(world, {0.0f, 1.0f, 0.0f})));
     EXPECT_TRUE(near_point(placed->world_z, transform_vector(world, {0.0f, 0.0f, 1.0f})));
@@ -4830,7 +4830,7 @@ TEST(PrimitiveCreationToolServiceTests,
     EXPECT_FLOAT_EQ(original->local_max.y - original->local_min.y, 4.0f);
     EXPECT_FLOAT_EQ(original->local_max.z - original->local_min.z, 2.0f);
     const auto entity = *session.modeling().entity_for_modeling_object(original->object_id);
-    const TransformComponent transform{.position = {7.0f, 3.0f, -2.0f},
+    const TransformComponent transform{.location = {7.0f, 3.0f, -2.0f},
                                       .rotation_euler = {0.2f, 0.7f, -0.1f},
                                       .scale = {2.0f, 0.5f, 3.0f}};
     ASSERT_TRUE(session.scene().set_transform(entity, transform));
@@ -4994,7 +4994,7 @@ TEST(PrimitiveCreationToolServiceTests,
   const auto entity = *session.modeling().entity_for_modeling_object(
       original->modeling_object_id);
   ASSERT_TRUE(session.scene().set_transform(entity, {
-      .position = {7.0f, 3.0f, -2.0f},
+      .location = {7.0f, 3.0f, -2.0f},
       .rotation_euler = {0.2f, 0.7f, -0.1f},
       .scale = {2.0f, 0.5f, 3.0f}}));
   const auto world = session.scene().world_transform_matrix(entity);

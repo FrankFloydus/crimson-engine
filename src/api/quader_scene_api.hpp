@@ -34,6 +34,15 @@ struct QuaderSceneSettingsEditRef {
   std::uint64_t generation = 0u;
 };
 
+/// Captures the fixed object-property scope and rejects retired scene/mode contexts.
+struct QuaderInspectorObjectEditContext {
+  SceneSessionId scene_session_id;
+  std::uint64_t document_binding_generation = 0u;
+  std::uint64_t mode_generation = 0u;
+  std::uint64_t selection_revision = 0u;
+  std::vector<QuaderEntityRef> entities;
+};
+
 /**
  * Represents a scene transform edit used by the public Quader API surface.
  */
@@ -60,19 +69,19 @@ struct QuaderSceneEditOptions {
 };
 
 /**
- * Represents a scene lock edit used by the public Quader API surface.
+ * Represents a scene selectability edit used by the public Quader API surface.
  */
-struct QuaderSceneLockEdit {
+struct QuaderSceneSelectabilityEdit {
   EntityId entity = kInvalidEntityId;
-  bool before = false;
-  bool after = false;
+  bool before = true;
+  bool after = true;
 };
 
 /**
  * Groups scene mutations into one public API transaction.
  *
  * Use editor.scene().batch("Label") when a user action or script should rename,
- * reparent, transform, hide, or lock several entities and commit them as one
+ * reparent, transform, hide, or change selectability for several entities and commit them as one
  * undoable history entry. The batch records requested editor intent only; the
  * actual validation, ownership invariants, history mutation, and selection of
  * low-level services remain behind QuaderSceneApi::commit_batch().
@@ -94,7 +103,7 @@ public:
                                bool preserve_world_transform = true);
     QuaderSceneBatch &set_transform(EntityId entity, QuaderTransform transform);
     QuaderSceneBatch &set_visible(EntityId entity, bool visible);
-    QuaderSceneBatch &set_locked(EntityId entity, bool locked);
+    QuaderSceneBatch &set_selectable(EntityId entity, bool selectable);
     QuaderSceneBatch &set_mesh_component(EntityId entity,
                                          QuaderMeshComponent mesh);
     QuaderApiVoidResult commit();
@@ -110,7 +119,7 @@ private:
         Reparent,
         SetTransform,
         SetVisible,
-        SetLocked,
+        SetSelectable,
         SetMeshComponent,
     };
 
@@ -179,11 +188,18 @@ public:
                                       QuaderTransform transform);
     QuaderApiVoidResult
     set_transforms(std::span<const QuaderSceneTransformEdit> edits);
+    /// Captures selected objects, or the fixed Edit participants, for Inspector intent.
+    [[nodiscard]] QuaderInspectorObjectEditContext inspector_object_edit_context() const;
+    [[nodiscard]] bool inspector_object_edit_context_valid(
+        const QuaderInspectorObjectEditContext &context) const;
+    QuaderApiVoidResult set_inspector_transforms(
+        const QuaderInspectorObjectEditContext &context,
+        std::span<const QuaderSceneTransformEdit> edits);
     QuaderApiVoidResult set_visible(EntityId entity, bool visible);
     QuaderApiVoidResult
     set_visibility(std::span<const QuaderSceneVisibilityEdit> edits);
-    QuaderApiVoidResult set_locked(EntityId entity, bool locked);
-    QuaderApiVoidResult set_locks(std::span<const QuaderSceneLockEdit> edits);
+    QuaderApiVoidResult set_selectable(EntityId entity, bool selectable);
+    QuaderApiVoidResult set_selectability(std::span<const QuaderSceneSelectabilityEdit> edits);
     QuaderApiVoidResult set_mesh_component(EntityId entity,
                                            QuaderMeshComponent mesh);
     QuaderApiVoidResult
@@ -227,8 +243,14 @@ private:
     friend class QuaderSceneBatch;
     friend class SceneTransformDragService;
 
+    [[nodiscard]] bool inspector_object_edit_identity_valid(
+        const QuaderInspectorObjectEditContext &context) const;
+    [[nodiscard]] bool validate_inspector_object_edit_context(
+        const QuaderInspectorObjectEditContext &context,
+        bool require_current_selection) const;
     QuaderApiVoidResult commit_transform_preview(
-        SceneTransformPreviewTransaction &preview, const std::string &label);
+        SceneTransformPreviewTransaction &preview, const std::string &label,
+        const QuaderInspectorObjectEditContext *inspector_context = nullptr);
 
     QuaderApiVoidResult commit_batch(const QuaderSceneBatch &batch);
 

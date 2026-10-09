@@ -492,7 +492,10 @@ TEST_F(PublicReleaseUiTests, StaleWindowStateCannotRestoreExcludedPanelsAndLaunc
   ASSERT_NE(display_actions[0], nullptr);
   EXPECT_EQ(display_actions[0]->objectName(), QStringLiteral("viewportWireframeOnShaded"));
   EXPECT_FALSE(display_actions[0]->isChecked());
-  EXPECT_EQ(display_actions[3], nullptr);
+  ASSERT_NE(display_actions[1], nullptr);
+  EXPECT_EQ(display_actions[1]->objectName(), QStringLiteral("viewportBackfaceCulling"));
+  EXPECT_TRUE(editor.preferences().backface_culling_enabled());
+  EXPECT_EQ(display_actions[4], nullptr);
   EXPECT_FALSE(release_has_feature(ReleaseFeature::CameraSettings));
   for (const char *pane : {"perspective", "top", "front", "side"}) {
     SCOPED_TRACE(pane);
@@ -601,6 +604,23 @@ TEST_F(PublicReleaseUiTests, StaleWindowStateCannotRestoreExcludedPanelsAndLaunc
   EXPECT_EQ(camera_launchers, 0);
   EXPECT_EQ(ui.main_window()->findChild<QWidget *>(
                 QStringLiteral("environmentSettings")), nullptr);
+  const auto culling_command = editor.commands().descriptor(
+      quader_command::kViewportToggleBackfaceCulling);
+  ASSERT_TRUE(culling_command.has_value());
+  EXPECT_TRUE(culling_command->enabled);
+  EXPECT_TRUE(editor.commands().shortcut_for(
+      quader_command::kViewportToggleBackfaceCulling).empty());
+  ASSERT_TRUE(editor.commands().execute(
+      quader_command::kViewportToggleBackfaceCulling).changed());
+  EXPECT_FALSE(editor.preferences().backface_culling_enabled());
+  for (const char *pane : {"perspective", "top", "front", "side"}) {
+    auto *strip = ui.main_window()->findChild<QWidget *>(
+        QStringLiteral("viewportToolbar_") + QString::fromUtf8(pane));
+    ASSERT_NE(strip, nullptr);
+    auto *culling = strip->findChild<QAction *>(QStringLiteral("viewportBackfaceCulling"));
+    ASSERT_NE(culling, nullptr);
+    EXPECT_FALSE(culling->isChecked());
+  }
   ui.shutdown();
 }
 
@@ -724,7 +744,7 @@ TEST_F(PublicReleaseUiTests,
   ui.shutdown();
 }
 
-TEST_F(PublicReleaseUiTests, MeshInspectorRetainsDoubleSidedWithoutCastShadows) {
+TEST_F(PublicReleaseUiTests, MeshInspectorOmitsUnavailableLightingAndDoubleSided) {
   SceneSession session;
   QuaderEditorApi editor{
       QuaderApiSessionInternalAccess::from_scene_session(session)};
@@ -747,9 +767,10 @@ TEST_F(PublicReleaseUiTests, MeshInspectorRetainsDoubleSidedWithoutCastShadows) 
   panel.refresh(context);
   EXPECT_EQ(panel.findChild<QCheckBox *>(
                 QStringLiteral("inspector.lighting.cast_shadows")), nullptr);
-  auto *double_sided = panel.findChild<QCheckBox *>(
-      QStringLiteral("inspector.lighting.double_sided"));
-  ASSERT_NE(double_sided, nullptr);
+  EXPECT_EQ(panel.findChild<QCheckBox *>(
+                QStringLiteral("inspector.lighting.double_sided")), nullptr);
+  EXPECT_EQ(panel.findChild<QToolButton *>(
+                QStringLiteral("inspector.lighting.header")), nullptr);
   const auto *mesh = session.scene().mesh(box.value().entity);
   ASSERT_NE(mesh, nullptr);
   EXPECT_EQ(panel.findChild<QComboBox *>(
@@ -762,13 +783,14 @@ TEST_F(PublicReleaseUiTests, MeshInspectorRetainsDoubleSidedWithoutCastShadows) 
                 QStringLiteral("inspector.physics.display_collision")), nullptr);
   EXPECT_EQ(mesh->collision_type, MeshCollisionType::Mesh);
   EXPECT_EQ(mesh->body_type, MeshPhysicsBodyType::StaticBody);
-  const bool before_shadows = mesh->cast_shadows;
-  const bool next_double_sided = !mesh->double_sided;
-  double_sided->setChecked(next_double_sided);
-  mesh = session.scene().mesh(box.value().entity);
-  ASSERT_NE(mesh, nullptr);
-  EXPECT_EQ(mesh->double_sided, next_double_sided);
-  EXPECT_EQ(mesh->cast_shadows, before_shadows);
+  EXPECT_NE(panel.findChild<QCheckBox *>(
+                QStringLiteral("inspector.visibility.visible")), nullptr);
+  EXPECT_NE(panel.findChild<QCheckBox *>(
+                QStringLiteral("inspector.visibility.selectable")), nullptr);
+  EXPECT_NE(panel.findChild<QCheckBox *>(
+                QStringLiteral("inspector.viewport.wireframe_on_shaded")), nullptr);
+  EXPECT_EQ(panel.findChild<QPushButton *>(
+                QStringLiteral("inspector.viewport.wireframe_color")), nullptr);
 }
 
 TEST_F(PublicReleaseUiTests, ObjectMenuKeepsPublicGroupsAndNestedCleanUp) {

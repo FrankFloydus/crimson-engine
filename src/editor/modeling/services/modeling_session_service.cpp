@@ -5252,12 +5252,12 @@ public:
       if (!scene_hierarchy_segment_is_selectable(
               scene_, *entity, edit_scope.definition) ||
           !scene_.is_effectively_visible(edit_scope.occurrence) ||
-          scene_.is_effectively_locked(edit_scope.occurrence) ||
+          !scene_.is_effectively_selectable(edit_scope.occurrence) ||
           (scene_.visibility(edit_scope.occurrence) != nullptr &&
            !scene_.visibility(edit_scope.occurrence)->selectable) ||
           !selection_service_.viewport_entity_visible(*entity) ||
           !selection_service_.viewport_entity_visible(edit_scope.occurrence)) {
-        return rejected("The material target mesh is hidden or locked.");
+        return rejected("The material target mesh is hidden or not selectable.");
       }
     } else {
       if (definition != kInvalidEntityId) {
@@ -5267,10 +5267,10 @@ public:
       }
       const VisibilityComponent *visibility = scene_.visibility(*entity);
       if (!scene_.is_effectively_visible(*entity) ||
-          scene_.is_effectively_locked(*entity) ||
+          !scene_.is_effectively_selectable(*entity) ||
           (visibility != nullptr && !visibility->selectable) ||
           !selection_service_.viewport_entity_visible(*entity)) {
-        return rejected("The material target mesh is hidden or locked.");
+        return rejected("The material target mesh is hidden or not selectable.");
       }
     }
 
@@ -5400,9 +5400,9 @@ public:
     const bool is_curve = scene_entity_has_solid_curve_surface(scene_, entity);
     const std::string_view target_name =
         is_curve ? "solidified Curve" : "mesh";
-    if (scene_.is_effectively_locked(entity)) {
+    if (!scene_.is_effectively_selectable(entity)) {
       return rejected("A selected " + std::string(target_name) +
-                      " material surface is locked.");
+                      " material surface is not selectable.");
     }
 
     const EntityId definition = scene_.containing_instance_definition(entity);
@@ -5411,7 +5411,7 @@ public:
           !scene_.exists(edit_scope.occurrence) ||
           !scene_hierarchy_segment_is_selectable(
               scene_, entity, edit_scope.definition) ||
-          scene_.is_effectively_locked(edit_scope.occurrence) ||
+          !scene_.is_effectively_selectable(edit_scope.occurrence) ||
           (scene_.visibility(edit_scope.occurrence) != nullptr &&
            !scene_.visibility(edit_scope.occurrence)->selectable)) {
         return rejected("A selected material surface is outside the active "
@@ -5502,8 +5502,8 @@ public:
       return rejected_material_surface_targets(
           "Select one or more groups containing material surfaces first.");
     }
-    // The shared root helper omits locked roots, so validate the entire selected
-    // set first rather than silently applying only to its unlocked remainder.
+    // The shared root helper omits unselectable roots, so validate the entire selected
+    // set first rather than silently applying only to its selectable remainder.
     for (const EntityId group : selected) {
       if (!scene_.exists(group) ||
           scene_.kind(group) != EntityKind::Empty ||
@@ -5512,9 +5512,9 @@ public:
         return rejected_material_surface_targets(
             "Apply Material in Group mode requires ordinary scene groups.");
       }
-      if (scene_.is_effectively_locked(group)) {
+      if (!scene_.is_effectively_selectable(group)) {
         return rejected_material_surface_targets(
-            "A selected material group is locked.");
+            "A selected material group is not selectable.");
       }
       if (!scene_hierarchy_segment_is_selectable_ignoring_visibility(scene_,
                                                                       group)) {
@@ -9497,7 +9497,7 @@ public:
     const auto entity = object_registry_.entity_for_modeling_object(modeling_object_id);
     if (!entity.has_value() || !scene_.exists(*entity) ||
         scene_.curve(*entity) == nullptr ||
-        scene_.is_effectively_locked(*entity) ||
+        !scene_.is_effectively_selectable(*entity) ||
         !scene_hierarchy_segment_is_selectable_ignoring_visibility(scene_, *entity) ||
         scene_.is_instance_definition_member(*entity) ||
         scene_.is_instance_definition_entity(*entity)) {
@@ -10146,8 +10146,8 @@ public:
               array_edit_scope.definition;
       if ((!active_definition_member &&
            !scene_.is_effectively_visible(source.entity)) ||
-          scene_.is_effectively_locked(source.entity)) {
-        return failure("Linear Array sources must be visible and unlocked.");
+          !scene_.is_effectively_selectable(source.entity)) {
+        return failure("Linear Array sources must be visible and selectable.");
       }
       source_ids.push_back(source.modeling_object_id);
     }
@@ -10343,8 +10343,8 @@ public:
         return failure("Radial Array source is not a live modeling mesh.");
       }
       if (!scene_.is_effectively_visible(source.entity) ||
-          scene_.is_effectively_locked(source.entity)) {
-        return failure("Radial Array sources must be visible and unlocked.");
+          !scene_.is_effectively_selectable(source.entity)) {
+        return failure("Radial Array sources must be visible and selectable.");
       }
       source_object_ids.push_back(source.modeling_object_id);
     }
@@ -10903,12 +10903,12 @@ public:
       return entity != scope.definition && definition == scope.definition &&
              scene_hierarchy_segment_is_selectable(scene_, entity, scope.definition) &&
              scene_.is_effectively_visible(scope.occurrence) &&
-             !scene_.is_effectively_locked(scope.occurrence) &&
+             scene_.is_effectively_selectable(scope.occurrence) &&
              scene_hierarchy_segment_is_selectable_ignoring_visibility(scene_, scope.occurrence) &&
              selection_service_.viewport_entity_visible(scope.occurrence);
     }
     return definition == kInvalidEntityId && scene_.is_effectively_visible(entity) &&
-           !scene_.is_effectively_locked(entity) &&
+           scene_.is_effectively_selectable(entity) &&
            scene_hierarchy_segment_is_selectable_ignoring_visibility(scene_, entity);
   }
 
@@ -11060,7 +11060,7 @@ public:
     ++nudge_selection_eligibility_build_count_;
     const auto editable_entity = [this](EntityId entity) {
       return scene_.exists(entity) && scene_.transform(entity) != nullptr &&
-             !scene_.is_effectively_locked(entity);
+             scene_.is_effectively_selectable(entity);
     };
     const ModelingSelectionMode mode = selection_mode();
     if (mode == ModelingSelectionMode::Object || mode == ModelingSelectionMode::Group) {
@@ -11464,7 +11464,7 @@ private:
     }
     for (const EntityId entity : scene_.selected_entities()) {
       if (scene_.transform(entity) != nullptr &&
-          !scene_.is_effectively_locked(entity)) {
+          scene_.is_effectively_selectable(entity)) {
         return true;
       }
     }

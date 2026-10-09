@@ -23,7 +23,7 @@
 #include "editor/commands/document/reparent_entity_command.hpp"
 #include "editor/commands/document/select_entities_command.hpp"
 #include "editor/commands/document/set_curve_component_command.hpp"
-#include "editor/commands/document/set_lock_command.hpp"
+#include "editor/commands/document/set_selectable_command.hpp"
 #include "editor/commands/document/set_light_component_command.hpp"
 #include "editor/commands/document/set_scene_layer_state_command.hpp"
 #include "editor/commands/document/set_material_command.hpp"
@@ -121,12 +121,12 @@ bool document_command_selected_root_contains_modeling_owned_entity(
 
 std::vector<DocumentTransformEdit>
 normalized_transform_edits(const SceneDocument &scene,
-                           std::vector<DocumentTransformEdit> edits) {
+                           std::vector<DocumentTransformEdit> edits, bool inspector_intent = false) {
   std::vector<DocumentTransformEdit> result;
   result.reserve(edits.size());
   for (const DocumentTransformEdit &edit : edits) {
     if (edit.entity == kInvalidEntityId || !scene.exists(edit.entity) ||
-        scene.is_effectively_locked(edit.entity) ||
+        (!inspector_intent && !scene.is_effectively_selectable(edit.entity)) ||
         document_command_same_transform(edit.before, edit.after)) {
       continue;
     }
@@ -156,12 +156,12 @@ normalized_visibility_edits(const SceneDocument &scene,
   return result;
 }
 
-std::vector<DocumentLockEdit>
-normalized_lock_edits(const SceneDocument &scene,
-                      std::vector<DocumentLockEdit> edits) {
-  std::vector<DocumentLockEdit> result;
+std::vector<DocumentSelectabilityEdit>
+normalized_selectability_edits(const SceneDocument &scene,
+                      std::vector<DocumentSelectabilityEdit> edits) {
+  std::vector<DocumentSelectabilityEdit> result;
   result.reserve(edits.size());
-  for (const DocumentLockEdit &edit : edits) {
+  for (const DocumentSelectabilityEdit &edit : edits) {
     if (edit.entity == kInvalidEntityId || !scene.exists(edit.entity) ||
         edit.before == edit.after) {
       continue;
@@ -174,38 +174,45 @@ normalized_lock_edits(const SceneDocument &scene,
   return result;
 }
 
-bool document_command_effectively_locked_after_edits(
+bool document_command_effectively_selectable_after_edits(
     const SceneDocument &scene, EntityId entity,
-    const std::unordered_map<EntityId, bool> &locked_after_by_entity) {
+    const std::unordered_map<EntityId, bool> &selectable_after_by_entity) {
   while (entity != kInvalidEntityId && scene.exists(entity)) {
-    if (const auto edited = locked_after_by_entity.find(entity);
-        edited != locked_after_by_entity.end()) {
-      if (edited->second) {
-        return true;
+    if (const auto edited = selectable_after_by_entity.find(entity);
+        edited != selectable_after_by_entity.end()) {
+      if (!edited->second) {
+        return false;
       }
-    } else if (const LockComponent *lock = scene.lock(entity);
-               lock != nullptr && lock->locked) {
-      return true;
+    } else if (const SelectableComponent *selectable = scene.selectable(entity);
+               selectable != nullptr && !selectable->selectable) {
+      return false;
+    }
+    const SceneLayerId layer_id = scene.entity_layer(entity);
+    if (layer_id != kInvalidSceneLayerId) {
+      const SceneLayerRecord *layer = scene.layer(layer_id);
+      if (layer == nullptr || layer->locked) {
+        return false;
+      }
     }
     entity = scene.parent(entity);
   }
-  return false;
+  return true;
 }
 
-DocumentSelectionState document_command_selection_after_lock_edits(
-    const SceneDocument &scene, const std::vector<DocumentLockEdit> &edits) {
-  std::unordered_map<EntityId, bool> locked_after_by_entity;
-  locked_after_by_entity.reserve(edits.size());
-  for (const DocumentLockEdit &edit : edits) {
-    locked_after_by_entity[edit.entity] = edit.after;
+DocumentSelectionState document_command_selection_after_selectability_edits(
+    const SceneDocument &scene, const std::vector<DocumentSelectabilityEdit> &edits) {
+  std::unordered_map<EntityId, bool> selectable_after_by_entity;
+  selectable_after_by_entity.reserve(edits.size());
+  for (const DocumentSelectabilityEdit &edit : edits) {
+    selectable_after_by_entity[edit.entity] = edit.after;
   }
 
   DocumentSelectionState after;
   const std::vector<EntityId> before_selected = scene.selected_entities();
   after.selected.reserve(before_selected.size());
   for (const EntityId selected : before_selected) {
-    if (!document_command_effectively_locked_after_edits(
-            scene, selected, locked_after_by_entity)) {
+    if (document_command_effectively_selectable_after_edits(
+            scene, selected, selectable_after_by_entity)) {
       after.selected.push_back(selected);
     }
   }
@@ -219,8 +226,8 @@ DocumentSelectionState document_command_selection_after_lock_edits(
   return after;
 }
 
-void append_selection_cleanup_after_lock_edits(
-    SceneDocument &scene, const std::vector<DocumentLockEdit> &edits,
+void append_selection_cleanup_after_selectability_edits(
+    SceneDocument &scene, const std::vector<DocumentSelectabilityEdit> &edits,
     std::vector<std::unique_ptr<IUndoableCommand>> &commands) {
   if (edits.empty()) {
     return;
@@ -229,7 +236,7 @@ void append_selection_cleanup_after_lock_edits(
   const DocumentSelectionState before =
       document_command_capture_selection(scene);
   const DocumentSelectionState after =
-      document_command_selection_after_lock_edits(scene, edits);
+      document_command_selection_after_selectability_edits(scene, edits);
   if (document_command_same_selection(before, after)) {
     return;
   }
@@ -247,7 +254,7 @@ struct DocumentSceneBatchEntityState {
     EntityId parent = kInvalidEntityId;
     TransformComponent transform;
     bool visible = true;
-    bool locked = false;
+    bool selectable = true;
 };
 
 } // namespace
@@ -422,8 +429,8 @@ DocumentCommandResult DocumentCommandService::parent_selection_to_active() {
     return document_command_invalid_request_result(
         "Select an active parent before parenting entities");
   }
-  if (scene_.is_effectively_locked(active)) {
-    return document_command_invalid_request_result("Parent entity is locked");
+  if (!scene_.is_effectively_selectable(active)) {
+    return document_command_invalid_request_result("Parent entity is not selectable");
   }
   if (mutation_blocked(active)) {
     return document_command_active_tool_entity_result();
@@ -442,7 +449,7 @@ bool DocumentCommandService::can_parent_selection_to_active() const {
   const EntityId active = scene_.primary_selection();
   const SelectionComponent *selection = scene_.selection(active);
   if (selection == nullptr || !selection->selected ||
-      scene_.is_effectively_locked(active) || mutation_blocked(active) ||
+      !scene_.is_effectively_selectable(active) || mutation_blocked(active) ||
       scene_.instance_occurrence(active) != nullptr) {
     return false;
   }
@@ -451,7 +458,7 @@ bool DocumentCommandService::can_parent_selection_to_active() const {
     if (entity == active) {
       continue;
     }
-    if (scene_.is_effectively_locked(entity) || mutation_blocked(entity) ||
+    if (!scene_.is_effectively_selectable(entity) || mutation_blocked(entity) ||
         !scene_.can_set_parent(entity, active)) {
       return false;
     }
@@ -469,7 +476,7 @@ bool DocumentCommandService::can_unparent_selection() const {
     if (scene_.parent(entity) == kInvalidEntityId) {
       continue;
     }
-    if (scene_.is_effectively_locked(entity) || mutation_blocked(entity) ||
+    if (!scene_.is_effectively_selectable(entity) || mutation_blocked(entity) ||
         !scene_.can_set_parent(entity, kInvalidEntityId)) {
       return false;
     }
@@ -485,7 +492,7 @@ bool DocumentCommandService::can_group_selection() const {
   const auto roots = document_command_selected_root_entities(scene_);
   return !roots.empty() && !selected_mutation_blocked() &&
          std::ranges::all_of(roots, [this](EntityId entity) {
-           return !scene_.is_effectively_locked(entity);
+           return scene_.is_effectively_selectable(entity);
          });
 }
 
@@ -502,7 +509,7 @@ bool DocumentCommandService::can_ungroup_selection() const {
         !scene_.has_children(entity)) {
       continue;
     }
-    if (scene_.is_effectively_locked(entity)) {
+    if (!scene_.is_effectively_selectable(entity)) {
       return false;
     }
     has_group = true;
@@ -538,8 +545,8 @@ DocumentCommandResult DocumentCommandService::move_entities_impl(
     return document_command_invalid_request_result(
         "Parent entity does not exist");
   }
-  if (scene_.is_effectively_locked(parent)) {
-    return document_command_invalid_request_result("Parent entity is locked");
+  if (parent != kInvalidEntityId && !scene_.is_effectively_selectable(parent)) {
+    return document_command_invalid_request_result("Parent entity is not selectable");
   }
   if (mutation_blocked(parent)) {
     return document_command_active_tool_entity_result();
@@ -564,8 +571,8 @@ DocumentCommandResult DocumentCommandService::move_entities_impl(
     if (!scene_.exists(entity)) {
       return document_command_missing_entity_result();
     }
-    if (scene_.is_effectively_locked(entity)) {
-      return document_command_invalid_request_result("Moved entity is locked");
+    if (!scene_.is_effectively_selectable(entity)) {
+      return document_command_invalid_request_result("Moved entity is not selectable");
     }
     if (entity == parent || scene_.is_descendant_of(parent, entity)) {
       return document_command_invalid_request_result(
@@ -590,10 +597,10 @@ DocumentCommandResult DocumentCommandService::move_entities_impl(
     if (!retain_subtrees || !selected_ancestor) {
       const auto descendants = scene_.descendants(entity, true);
       if (std::ranges::any_of(descendants, [this](EntityId descendant) {
-            return scene_.is_effectively_locked(descendant);
+            return !scene_.is_effectively_selectable(descendant);
           })) {
         return document_command_invalid_request_result(
-            "Moved hierarchy contains a locked entity");
+            "Moved hierarchy contains an entity that is not selectable");
       }
       if (entities_mutation_blocked(descendants)) {
         return document_command_active_tool_entity_result();
@@ -1128,26 +1135,26 @@ DocumentCommandResult DocumentCommandService::set_visibility(
                                                        std::move(commands)));
 }
 
-DocumentCommandResult DocumentCommandService::set_locked(EntityId entity,
-                                                         bool locked) {
-  const LockComponent *current_lock = scene_.lock(entity);
-  if (!current_lock) {
+DocumentCommandResult DocumentCommandService::set_selectable(EntityId entity,
+                                                         bool selectable) {
+  const SelectableComponent *current_selectable = scene_.selectable(entity);
+  if (!current_selectable) {
     return document_command_missing_entity_result();
   }
-  if (current_lock->locked == locked) {
+  if (current_selectable->selectable == selectable) {
     return document_command_unchanged_result();
   }
 
-  return set_locks({DocumentLockEdit{
+  return set_selectability({DocumentSelectabilityEdit{
       .entity = entity,
-      .before = current_lock->locked,
-      .after = locked,
+      .before = current_selectable->selectable,
+      .after = selectable,
   }});
 }
 
 DocumentCommandResult
-DocumentCommandService::set_locks(std::vector<DocumentLockEdit> edits) {
-  edits = normalized_lock_edits(scene_, std::move(edits));
+DocumentCommandService::set_selectability(std::vector<DocumentSelectabilityEdit> edits) {
+  edits = normalized_selectability_edits(scene_, std::move(edits));
   if (edits.empty()) {
     return document_command_unchanged_result();
   }
@@ -1159,11 +1166,11 @@ DocumentCommandService::set_locks(std::vector<DocumentLockEdit> edits) {
 
   std::vector<std::unique_ptr<IUndoableCommand>> commands;
   commands.reserve(edits.size() + 1u);
-  for (const DocumentLockEdit &edit : edits) {
-    commands.push_back(std::make_unique<SetLockCommand>(
+  for (const DocumentSelectabilityEdit &edit : edits) {
+    commands.push_back(std::make_unique<SetSelectableCommand>(
         scene_, edit.entity, edit.before, edit.after));
   }
-  append_selection_cleanup_after_lock_edits(scene_, edits, commands);
+  append_selection_cleanup_after_selectability_edits(scene_, edits, commands);
   if (entity_property_edit_active()) {
     const auto accepted = accept_active_property_edit();
     if (!accepted.ok) return accepted;
@@ -1171,7 +1178,7 @@ DocumentCommandService::set_locks(std::vector<DocumentLockEdit> edits) {
   return execute_document_command(
       history_, with_checked_selection_publication(
                     scene_, std::make_unique<BatchDocumentCommand>(
-                                "Set Lock", std::move(commands)),
+                                "Set Selectable", std::move(commands)),
                     selection_publication_));
 }
 
@@ -1348,7 +1355,7 @@ DocumentCommandService::begin_point_light_range_edit(EntityId entity) {
   }
   const auto *light = scene_.light(entity);
   if (!light || light->type != LightType::Point ||
-      !std::isfinite(light->range) || scene_.is_effectively_locked(entity) ||
+      !std::isfinite(light->range) || !scene_.is_effectively_selectable(entity) ||
       mutation_blocked(entity)) {
     return document_command_invalid_request_result("Point light cannot be edited");
   }
@@ -1377,7 +1384,7 @@ DocumentCommandResult DocumentCommandService::update_point_light_range_edit(
   const auto *current = scene_.light(entity);
   if (!current || current->type != LightType::Point ||
       scene_.uuid(entity) != property_edit_->uuid || current->range != edit.expected ||
-      scene_.is_effectively_locked(entity) || mutation_blocked(entity)) {
+      !scene_.is_effectively_selectable(entity) || mutation_blocked(entity)) {
     return document_command_invalid_request_result("Point light changed during range edit");
   }
   if (range == edit.expected) return document_command_unchanged_result();
@@ -1416,7 +1423,7 @@ DocumentCommandResult DocumentCommandService::begin_light_color_edit(EntityId en
     return document_command_invalid_request_result("A document property edit is already active");
   }
   const auto *light = scene_.light(entity);
-  if (!light || scene_.is_effectively_locked(entity) || mutation_blocked(entity)) {
+  if (!light || !scene_.is_effectively_selectable(entity) || mutation_blocked(entity)) {
     return document_command_invalid_request_result("Light color cannot be edited");
   }
   const auto accepted = accept_active_property_edit();
@@ -1447,7 +1454,7 @@ DocumentCommandResult DocumentCommandService::update_light_color_edit(
   const auto *current = scene_.light(entity);
   if (!current || scene_.uuid(entity) != property_edit_->uuid ||
       !same_preview_color(current->color, edit.expected.color) || current->color_mode != edit.expected.mode ||
-      current->source_preset != edit.expected.preset || scene_.is_effectively_locked(entity) ||
+      current->source_preset != edit.expected.preset || !scene_.is_effectively_selectable(entity) ||
       mutation_blocked(entity)) {
     return document_command_invalid_request_result("Light changed during color edit");
   }
@@ -1665,9 +1672,9 @@ DocumentCommandResult DocumentCommandService::finish_property_edit(bool cancel) 
   if (!scene_.exists(edit.entity) || scene_.uuid(edit.entity) != edit.uuid) {
     return stale_preview("Entity changed during property edit");
   }
-  if (!cancel && scene_.is_effectively_locked(edit.entity)) {
+  if (!cancel && !scene_.is_effectively_selectable(edit.entity)) {
     return document_command_invalid_request_result(
-        "Unlock the entity before accepting its property edit");
+        "Make the entity selectable before accepting its property edit");
   }
   const auto *current = scene_.light(edit.entity);
   if (!current) {
@@ -1780,6 +1787,25 @@ DocumentCommandService::set_transforms(std::vector<DocumentTransformEdit> edits,
   if (!object_mode_active()) {
     return document_command_invalid_request_result("Whole-object editing requires Object Mode.");
   }
+  return set_transforms_impl(std::move(edits), std::move(label), kind);
+}
+
+DocumentCommandResult DocumentCommandService::set_inspector_transforms(
+    std::vector<DocumentTransformEdit> edits, std::uint64_t mode_generation) {
+  if (!inspector_target_validator_ ||
+      std::ranges::any_of(edits, [&](const auto &edit) {
+        return !inspector_target_validator_(edit.entity, mode_generation);
+      })) {
+    return document_command_invalid_request_result(
+        "Inspector object-property context is no longer valid.");
+  }
+  return set_transforms_impl(std::move(edits), "Set Transform",
+                             SceneTextureTransformKind::Combined, !object_mode_active());
+}
+
+DocumentCommandResult DocumentCommandService::set_transforms_impl(
+    std::vector<DocumentTransformEdit> edits, std::string label,
+    SceneTextureTransformKind kind, bool inspector_intent) {
   if (label.empty()) {
     label = "Set Transform";
   }
@@ -1790,7 +1816,7 @@ DocumentCommandService::set_transforms(std::vector<DocumentTransformEdit> edits,
     return document_command_invalid_request_result(
         "Transform contains non-finite values");
   }
-  edits = normalized_transform_edits(scene_, std::move(edits));
+  edits = normalized_transform_edits(scene_, std::move(edits), inspector_intent);
   if (edits.empty()) {
     return document_command_unchanged_result();
   }
@@ -2228,7 +2254,7 @@ DocumentCommandResult DocumentCommandService::apply_scene_batch(
 
   std::vector<std::unique_ptr<IUndoableCommand>> commands;
   commands.reserve(operations.size() + 1u);
-  std::vector<DocumentLockEdit> lock_edits;
+  std::vector<DocumentSelectabilityEdit> selectability_edits;
   std::unordered_map<EntityId, DocumentSceneBatchEntityState> simulated;
   std::unordered_map<EntityId, MeshComponent> simulated_meshes;
 
@@ -2245,9 +2271,9 @@ DocumentCommandResult DocumentCommandService::apply_scene_batch(
     const NameComponent *name = scene_.name(entity);
     const TransformComponent *transform = scene_.transform(entity);
     const VisibilityComponent *visibility = scene_.visibility(entity);
-    const LockComponent *lock = scene_.lock(entity);
+    const SelectableComponent *selectable = scene_.selectable(entity);
     if (name == nullptr || transform == nullptr || visibility == nullptr ||
-        lock == nullptr) {
+        selectable == nullptr) {
       return std::nullopt;
     }
     auto [inserted, _] =
@@ -2256,7 +2282,7 @@ DocumentCommandResult DocumentCommandService::apply_scene_batch(
                                       .parent = scene_.parent(entity),
                                       .transform = *transform,
                                       .visible = visibility->visible,
-                                      .locked = lock->locked,
+                                      .selectable = selectable->selectable,
                                   });
     return inserted->second;
   };
@@ -2269,22 +2295,22 @@ DocumentCommandResult DocumentCommandService::apply_scene_batch(
     return scene_.parent(entity);
   };
 
-  auto simulated_locked = [&](EntityId entity) {
+  auto simulated_nonselectable = [&](EntityId entity) {
     if (std::optional<std::reference_wrapper<DocumentSceneBatchEntityState>>
             state = simulated_state(entity)) {
-      return state->get().locked;
+      return !state->get().selectable;
     }
-    const LockComponent *lock = scene_.lock(entity);
-    return lock != nullptr && lock->locked;
+    const SelectableComponent *selectable = scene_.selectable(entity);
+    return selectable != nullptr && !selectable->selectable;
   };
 
-  auto simulated_effectively_locked = [&](EntityId entity) {
+  auto simulated_effectively_nonselectable = [&](EntityId entity) {
     std::unordered_set<EntityId> visited;
     while (entity != kInvalidEntityId && scene_.exists(entity)) {
       if (!visited.insert(entity).second) {
         return true;
       }
-      if (simulated_locked(entity)) {
+      if (simulated_nonselectable(entity)) {
         return true;
       }
       const SceneLayerId layer_id = scene_.entity_layer(entity);
@@ -2349,7 +2375,7 @@ DocumentCommandResult DocumentCommandService::apply_scene_batch(
       if (!state.has_value()) {
         return failure("Batch entity has no transform.");
       }
-      if (simulated_effectively_locked(operation.entity) ||
+      if (simulated_effectively_nonselectable(operation.entity) ||
           document_command_same_transform(state->get().transform,
                                           operation.transform)) {
         break;
@@ -2403,29 +2429,29 @@ DocumentCommandResult DocumentCommandService::apply_scene_batch(
       simulated_meshes.insert_or_assign(operation.entity, operation.mesh);
       break;
     }
-    case DocumentSceneBatchOperationKind::SetLocked: {
+    case DocumentSceneBatchOperationKind::SetSelectable: {
       std::optional<std::reference_wrapper<DocumentSceneBatchEntityState>>
           state = simulated_state(operation.entity);
       if (!state.has_value()) {
-        return failure("Batch entity has no lock component.");
+        return failure("Batch entity has no selectable component.");
       }
-      if (state->get().locked == operation.flag) {
+      if (state->get().selectable == operation.flag) {
         break;
       }
-      commands.push_back(std::make_unique<SetLockCommand>(
-          scene_, operation.entity, state->get().locked, operation.flag));
-      lock_edits.push_back(DocumentLockEdit{
+      commands.push_back(std::make_unique<SetSelectableCommand>(
+          scene_, operation.entity, state->get().selectable, operation.flag));
+      selectability_edits.push_back(DocumentSelectabilityEdit{
           .entity = operation.entity,
-          .before = state->get().locked,
+          .before = state->get().selectable,
           .after = operation.flag,
       });
-      state->get().locked = operation.flag;
+      state->get().selectable = operation.flag;
       break;
     }
     }
   }
 
-  append_selection_cleanup_after_lock_edits(scene_, lock_edits, commands);
+  append_selection_cleanup_after_selectability_edits(scene_, selectability_edits, commands);
 
   if (commands.empty()) {
     return document_command_unchanged_result();

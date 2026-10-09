@@ -179,7 +179,7 @@ TEST_F(MeshTransformBakeTests, EachModeResetsOnlyRequestedChannelsAndReplaysOnce
   for (const auto mode : kModes) {
     SCOPED_TRACE(static_cast<int>(mode));
     const auto target = mesh("Bake Mode Mesh");
-    const QuaderTransform before{.position = {7.0f, -3.0f, 5.0f},
+    const QuaderTransform before{.location = {7.0f, -3.0f, 5.0f},
                                  .rotation_euler = {0.3f, -0.6f, 0.8f},
                                  .scale = {-1.5f, 0.75f, 2.25f}};
     ASSERT_TRUE(editor_.scene().set_transform(target.entity, before).ok());
@@ -192,9 +192,9 @@ TEST_F(MeshTransformBakeTests, EachModeResetsOnlyRequestedChannelsAndReplaysOnce
     ASSERT_TRUE(result.ok()) << result.error_message();
     EXPECT_TRUE(result.changed());
     const auto after = editor_.query().entity(target.entity)->transform;
-    expect_exact_vector(after.position,
+    expect_exact_vector(after.location,
         mode == QuaderTransformBakeMode::Transforms || mode == QuaderTransformBakeMode::Location
-            ? QVec3{} : before.position);
+            ? QVec3{} : before.location);
     expect_exact_vector(after.rotation_euler,
         mode == QuaderTransformBakeMode::Transforms || mode == QuaderTransformBakeMode::Rotation
             ? QVec3{} : before.rotation_euler);
@@ -211,14 +211,14 @@ TEST_F(MeshTransformBakeTests, EachModeResetsOnlyRequestedChannelsAndReplaysOnce
     expect_no_change(baked_state);
     ASSERT_TRUE(editor_.history().undo().ok());
     const auto undone = editor_.query().entity(target.entity)->transform;
-    expect_exact_vector(undone.position, before.position);
+    expect_exact_vector(undone.location, before.location);
     expect_exact_vector(undone.rotation_euler, before.rotation_euler);
     expect_exact_vector(undone.scale, before.scale);
     expect_vertices(target.entity, local_before, false);
     expect_vertices(target.entity, world_before);
     ASSERT_TRUE(editor_.history().redo().ok());
     const auto redone = editor_.query().entity(target.entity)->transform;
-    expect_exact_vector(redone.position, after.position);
+    expect_exact_vector(redone.location, after.location);
     expect_exact_vector(redone.rotation_euler, after.rotation_euler);
     expect_exact_vector(redone.scale, after.scale);
     expect_vertices(target.entity, local_after, false);
@@ -234,7 +234,7 @@ TEST_F(MeshTransformBakeTests, SharedMeshUsesStableCopyOnWriteWithoutChangingPee
   shared.mesh = original;
   ASSERT_TRUE(session_.scene().set_mesh(peer.entity, shared));
   ASSERT_TRUE(editor_.scene().set_transform(target.entity,
-      {.position = {4.0f, -3.0f, 2.0f}, .rotation_euler = {0.2f, 0.5f, -0.7f},
+      {.location = {4.0f, -3.0f, 2.0f}, .rotation_euler = {0.2f, 0.5f, -0.7f},
        .scale = {-2.0f, 1.0f, 0.5f}}).ok());
   ASSERT_TRUE(editor_.selection().select_object(target).ok());
   const auto target_before = vertices(target.entity);
@@ -268,13 +268,13 @@ TEST_F(MeshTransformBakeTests, ScaleAtLargeWorldOffsetsUsesAuthoredLocalCoordina
       const auto parent = editor_.scene().create_empty();
       ASSERT_TRUE(parent.ok());
       ASSERT_TRUE(editor_.scene().set_transform(parent.value().id,
-          {.position = {400000.0f, -200000.0f, 900000.0f},
+          {.location = {400000.0f, -200000.0f, 900000.0f},
            .rotation_euler = {0.2f, -0.4f, 0.6f},
            .scale = {1.2f, 0.8f, 1.4f}}).ok());
       ASSERT_TRUE(editor_.scene().reparent(target.entity, parent.value().id, false).ok());
     }
     const QuaderTransform before{
-        .position = {1000000.0f, -700000.0f, 300000.0f},
+        .location = {1000000.0f, -700000.0f, 300000.0f},
         .rotation_euler = {0.0f, 0.0f, 0.7f},
         .scale = {2.0f, 0.75f, 1.5f}};
     ASSERT_TRUE(editor_.scene().set_transform(target.entity, before).ok());
@@ -284,7 +284,7 @@ TEST_F(MeshTransformBakeTests, ScaleAtLargeWorldOffsetsUsesAuthoredLocalCoordina
     ASSERT_TRUE(baked.ok()) << baked.error_message();
     EXPECT_TRUE(baked.changed());
     const auto after = editor_.query().entity(target.entity)->transform;
-    expect_exact_vector(after.position, before.position);
+    expect_exact_vector(after.location, before.location);
     expect_exact_vector(after.rotation_euler, before.rotation_euler);
     expect_exact_vector(after.scale, {1.0f, 1.0f, 1.0f});
     const auto actual = vertices(target.entity, false);
@@ -303,14 +303,14 @@ TEST_F(MeshTransformBakeTests, SelectedChildBeforeParentUsesOriginalWorldFrames)
   ASSERT_LT(child.entity, parent.entity);
   const auto unselected = editor_.scene().create_entity(
       {.name = "Unselected Child", .kind = QuaderEntityKind::Empty,
-       .transform = {.position = {-2.0f, 7.0f, -5.0f},
+       .transform = {.location = {-2.0f, 7.0f, -5.0f},
                      .rotation_euler = {0.2f, 0.3f, -0.4f}}});
   ASSERT_TRUE(unselected.ok());
   ASSERT_TRUE(editor_.scene().set_transform(parent.entity,
-      {.position = {7.0f, -3.0f, 5.0f}, .rotation_euler = {0.3f, -0.6f, 0.8f},
+      {.location = {7.0f, -3.0f, 5.0f}, .rotation_euler = {0.3f, -0.6f, 0.8f},
        .scale = {2.0f, 2.0f, 2.0f}}).ok());
   ASSERT_TRUE(editor_.scene().set_transform(child.entity,
-      {.position = {-2.0f, 1.0f, 4.0f}, .rotation_euler = {-0.2f, 0.4f, 0.1f},
+      {.location = {-2.0f, 1.0f, 4.0f}, .rotation_euler = {-0.2f, 0.4f, 0.1f},
        .scale = {0.5f, 1.25f, 1.5f}}).ok());
   ASSERT_TRUE(editor_.scene().reparent(child.entity, parent.entity, false).ok());
   ASSERT_TRUE(editor_.scene().reparent(unselected.value().id, parent.entity, false).ok());
@@ -323,7 +323,7 @@ TEST_F(MeshTransformBakeTests, SelectedChildBeforeParentUsesOriginalWorldFrames)
   ASSERT_TRUE(baked.ok()) << baked.error_message();
   for (const EntityId entity : {child.entity, parent.entity}) {
     const auto transform = editor_.query().entity(entity)->transform;
-    expect_exact_vector(transform.position, {});
+    expect_exact_vector(transform.location, {});
     expect_exact_vector(transform.rotation_euler, {});
     expect_exact_vector(transform.scale, {1.0f, 1.0f, 1.0f});
   }
@@ -348,7 +348,7 @@ TEST_F(MeshTransformBakeTests, ShearedUnselectedChildRetainsChannelsAndWorldPlac
       {.name = "Rotated Unselected Child", .kind = QuaderEntityKind::Empty,
        .transform = {.rotation_euler = {0.0f, 0.0f, 0.785398163f}}});
   ASSERT_TRUE(child.ok());
-  ASSERT_TRUE(editor_.scene().set_transform(valid.entity, {.position = {5.0f, 0.0f, 0.0f}}).ok());
+  ASSERT_TRUE(editor_.scene().set_transform(valid.entity, {.location = {5.0f, 0.0f, 0.0f}}).ok());
   ASSERT_TRUE(editor_.scene().set_transform(parent.entity, {.scale = {2.0f, 1.0f, 1.0f}}).ok());
   ASSERT_TRUE(editor_.scene().reparent(child.value().id, parent.entity, false).ok());
   ASSERT_TRUE(editor_.selection().select_objects({valid.entity, parent.entity}, parent.entity).ok());
@@ -359,7 +359,7 @@ TEST_F(MeshTransformBakeTests, ShearedUnselectedChildRetainsChannelsAndWorldPlac
   ASSERT_TRUE(baked.ok()) << baked.error_message();
   EXPECT_TRUE(baked.changed());
   const auto after = *session_.scene().transform(child.value().id);
-  expect_exact_vector(after.position, before.position);
+  expect_exact_vector(after.location, before.location);
   expect_exact_vector(after.rotation_euler, before.rotation_euler);
   expect_exact_vector(after.scale, before.scale);
   EXPECT_NE(after.parenting_offset.values, before.parenting_offset.values);
@@ -384,7 +384,7 @@ TEST_F(MeshTransformBakeTests, BakingRetainsShearedParentingCompensation) {
     SCOPED_TRACE(static_cast<int>(mode));
     const auto target = mesh("Compensated Bake", true);
     TransformComponent transform{
-        .position = {2.0f, -3.0f, 1.0f},
+        .location = {2.0f, -3.0f, 1.0f},
         .rotation_euler = {0.2f, -0.4f, 0.7f},
         .scale = {-1.5f, 0.75f, 2.0f}};
     transform.parenting_offset.values[4] = 0.35f;
@@ -411,10 +411,10 @@ TEST_F(MeshTransformBakeTests, BakingRetainsShearedParentingCompensation) {
 TEST_F(MeshTransformBakeTests, MirroredBakePreservesEffectiveUvsNormalsAndFaceSettings) {
   const auto target = mesh("Mirrored Textured Bake", true);
   ASSERT_TRUE(editor_.scene().set_transform(target.entity,
-      {.position = {4.0f, -2.0f, 8.0f}, .rotation_euler = {0.2f, -0.5f, 0.7f},
+      {.location = {4.0f, -2.0f, 8.0f}, .rotation_euler = {0.2f, -0.5f, 0.7f},
        .scale = {-1.5f, 0.75f, 2.0f}}).ok());
   const QMat4 sampling = compose_transform(TransformComponent{
-      .position = {0.3f, -1.0f, 0.5f}, .rotation_euler = {0.3f, 1.2f, -0.4f},
+      .location = {0.3f, -1.0f, 0.5f}, .rotation_euler = {0.3f, 1.2f, -0.4f},
       .scale = {1.3f, 0.7f, -1.1f}}.spatial_transform());
   ASSERT_TRUE(session_.scene().set_texture_mapping(target.entity, {.sampling_from_local = sampling}));
   ASSERT_TRUE(editor_.selection().select_object(target).ok());
@@ -445,7 +445,7 @@ TEST_F(MeshTransformBakeTests, HistoryPreviewRejectionKeepsUndoAndRedoRetryable)
       "Bake History Preview Mesh");
   ASSERT_TRUE(created.ok());
   ASSERT_TRUE(editor_.scene().set_transform(created.value().entity,
-      {.position = {4.0f, 2.0f, -3.0f}}).ok());
+      {.location = {4.0f, 2.0f, -3.0f}}).ok());
   ASSERT_TRUE(editor_.selection().select_object(created.value()).ok());
   ASSERT_TRUE(editor_.modeling().bake_transforms(QuaderTransformBakeMode::Transforms).ok());
   const std::string preview_command =
@@ -470,7 +470,7 @@ TEST_F(MeshTransformBakeTests, HistoryPreviewRejectionKeepsUndoAndRedoRetryable)
 TEST_F(MeshTransformBakeTests, MissingSdkBindingRejectsWithoutLeavingHostChanges) {
   const auto target = mesh("Stale SDK Binding Bake");
   ASSERT_TRUE(editor_.scene().set_transform(target.entity,
-      {.position = {4.0f, -2.0f, 7.0f}, .rotation_euler = {0.2f, -0.3f, 0.5f},
+      {.location = {4.0f, -2.0f, 7.0f}, .rotation_euler = {0.2f, -0.3f, 0.5f},
        .scale = {-1.5f, 0.75f, 2.0f}}).ok());
   ASSERT_TRUE(editor_.selection().select_object(target).ok());
   auto binding = *session_.scene().modeling_object(target.entity);
@@ -496,7 +496,7 @@ TEST(MeshTransformBakePersistenceTests, ReopenedMeshUsesBakedShapeAsTransformZer
   ASSERT_TRUE(created.ok()) << created.error_message();
   auto object = created.value();
   ASSERT_TRUE(editor.scene().set_transform(object.entity,
-      {.position = {4.0f, -2.0f, 7.0f}, .rotation_euler = {0.3f, -0.4f, 0.7f},
+      {.location = {4.0f, -2.0f, 7.0f}, .rotation_euler = {0.3f, -0.4f, 0.7f},
        .scale = {-1.5f, 0.75f, 2.0f}}).ok());
   ASSERT_TRUE(editor.selection().select_object(object).ok());
   const auto baked = editor.modeling().bake_transforms(QuaderTransformBakeMode::Transforms);
@@ -516,7 +516,7 @@ TEST(MeshTransformBakePersistenceTests, ReopenedMeshUsesBakedShapeAsTransformZer
   ASSERT_TRUE(rebound.has_value());
   object = *rebound;
   const auto transform = editor.query().entity(object.entity)->transform;
-  expect_exact_vector(transform.position, {});
+  expect_exact_vector(transform.location, {});
   expect_exact_vector(transform.rotation_euler, {});
   expect_exact_vector(transform.scale, {1.0f, 1.0f, 1.0f});
   const auto expect_baked_shape = [&]() {

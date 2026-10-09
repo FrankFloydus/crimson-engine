@@ -290,7 +290,7 @@ TEST_F(ProjectMaterialDeletionTests,
       {.material = MaterialReference::project(default_material_id()),
        .material_slots = {{91u, MaterialReference::project(deletion_material_id())}}}));
   ASSERT_TRUE(fixture.set_visible(hidden_box.value().entity, false));
-  ASSERT_TRUE(fixture.set_locked(hidden_box.value().entity, true));
+  ASSERT_TRUE(fixture.set_selectable(hidden_box.value().entity, false));
   const auto unsaved_history = editor_.query().history();
   const auto unsaved_selection = project_.active_scene()->session->scene().selected_entities();
 
@@ -328,7 +328,7 @@ TEST_F(ProjectMaterialDeletionTests,
   const auto hidden_info = editor_.query().entity(hidden_box.value().entity);
   ASSERT_TRUE(hidden_info.has_value());
   EXPECT_FALSE(hidden_info->visible);
-  EXPECT_TRUE(hidden_info->locked);
+  EXPECT_FALSE(hidden_info->selectable);
 
   auto on_disk = QdrDocumentReader::read_project_document(root_ / "Scenes/Saved.qdr");
   ASSERT_TRUE(on_disk.ok) << on_disk.message;

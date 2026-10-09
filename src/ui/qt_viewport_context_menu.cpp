@@ -103,7 +103,7 @@ ViewportContextMenuScope context_menu_scope(
       continue;
     }
     any_target = true;
-    const bool editable = entity.selectable && !entity.locked &&
+    const bool editable = entity.selection_eligible && entity.selectable &&
                           !entity.is_instance_definition;
     const bool instance = editable && entity.has_instance_occurrence;
     const bool polygon = editable && entity.has_modeling_object &&
@@ -464,8 +464,8 @@ void QtViewportContextMenuPresenter::show(
           ? editor.query().entity(target->entity) : std::nullopt;
       const auto settings = editor.modeling().face_texture_settings();
       if (!target_entity.has_value() || !target_entity->has_mesh ||
-          target_entity->has_curve || !target_entity->selectable ||
-          target_entity->locked || !settings.editable) {
+          target_entity->has_curve || !target_entity->selection_eligible ||
+          !target_entity->selectable || !settings.editable) {
         return false;
       }
       // Copying a single selected face onto itself has no useful effect.
@@ -484,8 +484,8 @@ void QtViewportContextMenuPresenter::show(
                                                static_cast<qsizetype>(id.size())));
         return action;
       };
-      if (selection.selected_face_count == 1u && target_entity->selectable &&
-          !target_entity->locked) {
+      if (selection.selected_face_count == 1u && target_entity->selection_eligible &&
+          target_entity->selectable) {
         copy_material_to_face = add_transfer(
             "viewport.material.apply_selected_face_to_face",
             "ui.viewport.context_menu.command.copy_material_to_face",

@@ -61,6 +61,12 @@ public:
     [[nodiscard]] bool object_mode_active() const {
       return !object_mode_provider_ || object_mode_provider_();
     }
+    void set_inspector_target_validator(
+        std::function<bool(EntityId, std::uint64_t)> validator) {
+      inspector_target_validator_ = std::move(validator);
+    }
+    DocumentCommandResult set_inspector_transforms(
+        std::vector<DocumentTransformEdit> edits, std::uint64_t mode_generation);
     void set_texture_lock_settings_provider(
         std::function<TextureLockSettings()> provider);
     [[nodiscard]] TextureLockSettings texture_lock_settings() const;
@@ -124,8 +130,8 @@ public:
     DocumentCommandResult set_visible(EntityId entity, bool visible);
     DocumentCommandResult
     set_visibility(std::vector<DocumentVisibilityEdit> edits);
-    DocumentCommandResult set_locked(EntityId entity, bool locked);
-    DocumentCommandResult set_locks(std::vector<DocumentLockEdit> edits);
+    DocumentCommandResult set_selectable(EntityId entity, bool selectable);
+    DocumentCommandResult set_selectability(std::vector<DocumentSelectabilityEdit> edits);
     DocumentCommandResult set_material(EntityId entity, AssetId material);
     DocumentCommandResult set_mesh_component(EntityId entity,
                                              MeshComponent mesh);
@@ -195,6 +201,9 @@ public:
                       std::vector<DocumentSceneBatchOperation> operations);
 
   private:
+    DocumentCommandResult set_transforms_impl(
+        std::vector<DocumentTransformEdit> edits, std::string label,
+        SceneTextureTransformKind kind, bool inspector_intent = false);
     DocumentCommandResult move_entities_impl(
         std::span<const EntityId> entities, EntityId parent,
         EntityId before_sibling, bool retain_subtrees,
@@ -210,6 +219,7 @@ public:
     EntityMutationBlocker entity_mutation_blocker_;
     CheckedSelectionPublication selection_publication_;
     std::function<bool()> object_mode_provider_;
+    std::function<bool(EntityId, std::uint64_t)> inspector_target_validator_;
     std::function<TextureLockSettings()> texture_lock_settings_provider_;
     /// Each preview owns only its named fields; unrelated edits remain intact.
     struct PointLightRangeEdit {

@@ -281,7 +281,7 @@ TEST(ObjExportTests, ModelingMeshExportUsesLocalMeshSpace) {
   const quader::QuaderModelingObjectRef box =
       create_selected_box(editor, "Moved Box");
   quader::QuaderTransform transform;
-  transform.position = {25.0f, -8.0f, 3.0f};
+  transform.location = {25.0f, -8.0f, 3.0f};
   transform.scale = {4.0f, 4.0f, 4.0f};
   ASSERT_TRUE(editor.scene().set_transform(box.entity, transform).ok());
 

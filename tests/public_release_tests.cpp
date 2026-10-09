@@ -721,7 +721,7 @@ TEST(PublicReleaseCommands, ParentingCommandsArePublicAndSupportMeshesAndGroups)
   ASSERT_TRUE(first_group.ok());
   ASSERT_TRUE(second_group.ok());
   ASSERT_TRUE(editor.scene().set_transform(parent.value().entity, {
-      .position = {3.f, -2.f, 1.f}, .rotation_euler = {0.3f, 0.5f, -0.4f},
+      .location = {3.f, -2.f, 1.f}, .rotation_euler = {0.3f, 0.5f, -0.4f},
       .scale = {2.f, 0.5f, -1.f}}).ok());
   ASSERT_TRUE(editor.selection().select_objects(
       {child.value().entity, first_group.value().id, parent.value().entity},

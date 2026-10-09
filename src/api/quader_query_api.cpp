@@ -129,10 +129,10 @@ QuaderEntitySnapshot entity_snapshot_for(const SceneSession &session,
   }
   if (const VisibilityComponent *visibility = scene.visibility(entity)) {
     snapshot.visible = visibility->visible;
-    snapshot.selectable = visibility->selectable;
+    snapshot.selection_eligible = visibility->selectable;
   }
-  if (const LockComponent *lock = scene.lock(entity)) {
-    snapshot.locked = lock->locked;
+  if (const SelectableComponent *selectable = scene.selectable(entity)) {
+    snapshot.selectable = selectable->selectable;
   }
   if (const SelectionComponent *selection = scene.selection(entity)) {
     snapshot.selected = selection->selected;

@@ -604,7 +604,7 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(outliner, "editor_->scene().rename(");
   expect_contains(outliner, "editor_->scene().move_entities(");
   expect_contains(outliner, "editor_->scene().set_visibility(");
-  expect_contains(outliner, "editor_->scene().set_locks(");
+  expect_contains(outliner, "editor_->scene().set_selectability(");
   expect_contains(outliner,
                   "QStringLiteral(\"outliner.action.rename\")");
   expect_contains(outliner,
@@ -808,33 +808,38 @@ TEST(UiLayoutGuardrailTests,
       "QTreeWidgetItem *add_summary_label(");
   ASSERT_FALSE(rebuild.empty());
 
-  const std::size_t component_context = rebuild.find(
-      "if (editor_->mode().current() == QuaderEditorMode::Edit)");
-  const std::size_t face_only = rebuild.find(
-      "if (summary.mode == ModelingSelectionMode::Face)",
-      component_context);
-  const std::size_t ordinary_selection =
-      rebuild.find("} else if (selection_.empty())", face_only);
-  ASSERT_NE(component_context, std::string::npos);
-  ASSERT_NE(face_only, std::string::npos);
-  ASSERT_NE(ordinary_selection, std::string::npos);
-  EXPECT_LT(component_context, face_only);
-  EXPECT_LT(face_only, ordinary_selection);
-
-  const std::string component_branch =
-      rebuild.substr(component_context, ordinary_selection - component_context);
-  expect_missing(component_branch, "build_general_section(");
-  expect_missing(component_branch, "build_transform_section(");
-  expect_missing(component_branch, "build_empty_selection(");
-  EXPECT_EQ(count_occurrences(component_branch, "build_material_section()"), 1u);
-
-  const std::string face_branch =
-      rebuild.substr(face_only, ordinary_selection - face_only);
-  EXPECT_EQ(count_occurrences(face_branch, "build_material_section()"), 1u);
-  expect_missing(face_branch, "build_general_section(");
-  expect_missing(face_branch, "build_transform_section(");
-  expect_missing(face_branch, "build_empty_selection(");
-  expect_missing(face_branch, "build_component_selection_summary(");
+  // Object properties project the scene-owned Edit participants even when no
+  // components are selected; material rows still consume the retained snapshot.
+  const std::string refresh = source_slice(
+      inspector, "void refresh(UIContext &context)",
+      "void refresh_transform_preview(UIContext &context)");
+  expect_contains(refresh, "context.intent.editor.mode().state()");
+  expect_contains(refresh, "mode.participants");
+  const std::size_t target_gate = refresh.find("if (targets_changed)");
+  const std::size_t mode_snapshot =
+      refresh.find("context.intent.editor.mode().state()");
+  const std::size_t selection_snapshot =
+      refresh.find("next_document->selected_entities()");
+  ASSERT_NE(target_gate, std::string::npos);
+  ASSERT_NE(mode_snapshot, std::string::npos);
+  ASSERT_NE(selection_snapshot, std::string::npos);
+  EXPECT_LT(target_gate, mode_snapshot);
+  EXPECT_LT(target_gate, selection_snapshot);
+  expect_contains(refresh, "inspected_mode_revision_ != mode_revision");
+  expect_contains(refresh, "inspected_selection_revision_ != selection_revision");
+  expect_contains(refresh, "selection_changed = targets_changed &&");
+  expect_missing(refresh, "next_selection = selection_");
+  EXPECT_EQ(count_occurrences(refresh, "next_document->selected_entities()"), 1u);
+  EXPECT_EQ(count_occurrences(refresh, "context.intent.editor.mode().state()"), 1u);
+  expect_contains(rebuild, "if (selection_.empty())");
+  EXPECT_EQ(count_occurrences(rebuild, "build_general_section()"), 1u);
+  EXPECT_EQ(count_occurrences(rebuild, "build_visibility_section()"), 1u);
+  EXPECT_EQ(count_occurrences(rebuild, "build_transform_section()"), 1u);
+  EXPECT_EQ(count_occurrences(rebuild, "build_material_section()"), 1u);
+  expect_contains(rebuild, "editor_->mode().current() == QuaderEditorMode::Object ||");
+  expect_contains(rebuild, "summary.mode == ModelingSelectionMode::Face");
+  expect_missing(rebuild, "build_component_selection_summary(");
+  expect_contains(inspector, "begin_inspector_transform_preview(");
 
   const std::string material_rows = source_slice(
       inspector, "void build_material_section()",
@@ -1530,7 +1535,7 @@ TEST(UiLayoutGuardrailTests,
   const std::string grid_command = source_slice(
       read_source_file("src/api/quader_commands_api.cpp"),
       "register_command(quader_command::kViewportToggleGrid,",
-      "register_command(quader_command::kViewportToggleGizmos,");
+      "register_command(quader_command::kViewportToggleWireframeOnShaded,");
   expect_contains(grid_command, "viewports_.set_control(");
   expect_contains(grid_command, "QuaderViewportControl::ShowGrid");
   expect_missing(grid_command, "preferences_.");

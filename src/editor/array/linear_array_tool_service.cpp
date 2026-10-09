@@ -169,7 +169,7 @@ bool LinearArrayToolService::valid_source_selection(
         instances_.is_in_active_definition_scope(source);
     if (!scene_.exists(source) || transform == nullptr ||
         (!active_definition_member && !scene_.is_effectively_visible(source)) ||
-        scene_.is_effectively_locked(source)) {
+        !scene_.is_effectively_selectable(source)) {
       ordered_sources.clear();
       primary_source = kInvalidEntityId;
       return false;
@@ -268,7 +268,7 @@ bool LinearArrayToolService::can_activate_preflight() const {
         instances_.is_in_active_definition_scope(source);
     if (!scene_.exists(source) || scene_.transform(source) == nullptr ||
         (!active_definition_member && !scene_.is_effectively_visible(source)) ||
-        scene_.is_effectively_locked(source)) {
+        !scene_.is_effectively_selectable(source)) {
       return false;
     }
     if (source_is_occurrence) {
@@ -378,7 +378,7 @@ bool LinearArrayToolService::compute_session_sources_are_valid(
         scene_.parent(source.entity) != source.parent ||
         (!active_definition_member &&
          !scene_.is_effectively_visible(source.entity)) ||
-        scene_.is_effectively_locked(source.entity)) {
+        !scene_.is_effectively_selectable(source.entity)) {
       return false;
     }
     const std::optional<QVec3> visible_pivot =
@@ -464,7 +464,7 @@ CommandResult LinearArrayToolService::activate(double fallback_grid_size) {
   if (!valid_source_selection(ordered_sources, primary_source,
                               instance_occurrences)) {
     return command_invalid_result(
-        "Select visible, unlocked meshes or instance occurrences in object "
+        "Select visible, selectable meshes or instance occurrences in object "
         "mode; mixed arrays are not supported.");
   }
 

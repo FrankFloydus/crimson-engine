@@ -4681,8 +4681,8 @@ TEST(InspectorPanelTests,
   application.setQuitOnLastWindowClosed(false);
   constexpr float kDegreesToRadians = 0.017453292519943295f;
   constexpr std::array<const char *, 9> kFields{{
-      "inspector.transform.position.x", "inspector.transform.position.y",
-      "inspector.transform.position.z", "inspector.transform.rotation.x",
+      "inspector.transform.location.x", "inspector.transform.location.y",
+      "inspector.transform.location.z", "inspector.transform.rotation.x",
       "inspector.transform.rotation.y", "inspector.transform.rotation.z",
       "inspector.transform.scale.x", "inspector.transform.scale.y",
       "inspector.transform.scale.z"}};
@@ -4735,7 +4735,7 @@ TEST(InspectorPanelTests,
   }
   const auto expect_fields = [&](const TransformComponent &transform) {
     const std::array<double, 9> expected{{
-        transform.position.x, transform.position.y, transform.position.z,
+        transform.location.x, transform.location.y, transform.location.z,
         transform.rotation_euler.x / kDegreesToRadians,
         transform.rotation_euler.y / kDegreesToRadians,
         transform.rotation_euler.z / kDegreesToRadians,
@@ -4752,11 +4752,11 @@ TEST(InspectorPanelTests,
     EXPECT_EQ(editing_finished_count, 0);
   };
   const std::array<TransformComponent, 2> samples{{
-      {.position = {2.0f, 3.0f, 4.0f},
+      {.location = {2.0f, 3.0f, 4.0f},
        .rotation_euler = {15.0f * kDegreesToRadians, 35.0f * kDegreesToRadians,
                           55.0f * kDegreesToRadians},
        .scale = {1.2f, 1.4f, 1.6f}},
-      {.position = {3.0f, 4.0f, 5.0f},
+      {.location = {3.0f, 4.0f, 5.0f},
        .rotation_euler = {25.0f * kDegreesToRadians, 45.0f * kDegreesToRadians,
                           65.0f * kDegreesToRadians},
        .scale = {2.0f, 3.0f, 4.0f}},
@@ -4807,16 +4807,16 @@ TEST(InspectorPanelTests,
   EXPECT_EQ(session.history().undo_count(), undo_before + 1u);
 
   auto *position_x = panel.findChild<QDoubleSpinBox *>(
-      QStringLiteral("inspector.transform.position.x"));
+      QStringLiteral("inspector.transform.location.x"));
   ASSERT_NE(position_x, nullptr);
   position_x->setValue(7.5);
   position_x->editingFinished();
   refresh();
   const auto edited = editor.query().entity(entity);
   ASSERT_TRUE(edited.has_value());
-  EXPECT_NEAR(edited->transform.position.x, 7.5f, 0.0001f);
-  EXPECT_NEAR(edited->transform.position.y, samples.back().position.y, 0.0001f);
-  EXPECT_NEAR(edited->transform.position.z, samples.back().position.z, 0.0001f);
+  EXPECT_NEAR(edited->transform.location.x, 7.5f, 0.0001f);
+  EXPECT_NEAR(edited->transform.location.y, samples.back().location.y, 0.0001f);
+  EXPECT_NEAR(edited->transform.location.z, samples.back().location.z, 0.0001f);
   EXPECT_EQ(session.history().undo_count(), undo_before + 2u);
   EXPECT_EQ(value_changed_count, 1);
   EXPECT_EQ(editing_finished_count, 1);
@@ -4859,7 +4859,7 @@ TEST(InspectorPanelTests,
   InspectorPanel panel;
   panel.setAttribute(Qt::WA_DontShowOnScreen, true);
   panel.refresh(context);
-  const QString field_name = QStringLiteral("inspector.transform.position.x");
+  const QString field_name = QStringLiteral("inspector.transform.location.x");
   ASSERT_NE(panel.findChild<QDoubleSpinBox *>(field_name), nullptr);
   const auto refresh_live = [&]() {
     panel.refresh_transform_preview(context);
@@ -4868,7 +4868,7 @@ TEST(InspectorPanelTests,
   SceneTransformDragService drag;
   ASSERT_TRUE(drag.begin(session.scene(), {}, true, "Gizmo Transform"));
   ASSERT_TRUE(drag.preview_transform(second.value().id,
-                                    {.position = {2.0f, 0.0f, 0.0f}}).ok);
+                                    {.location = {2.0f, 0.0f, 0.0f}}).ok);
   refresh_live();
   EXPECT_EQ(panel.findChild<QDoubleSpinBox *>(field_name), nullptr);
   auto *mixed = panel.findChild<QLineEdit *>(field_name);
@@ -4886,7 +4886,7 @@ TEST(InspectorPanelTests,
   refresh_live();
   EXPECT_EQ(panel.findChild<QDoubleSpinBox *>(field_name), retained.data());
   ASSERT_TRUE(drag.preview_transform(second.value().id,
-                                    {.position = {3.0f, 0.0f, 0.0f}}).ok);
+                                    {.location = {3.0f, 0.0f, 0.0f}}).ok);
   refresh_live();
   EXPECT_EQ(panel.findChild<QDoubleSpinBox *>(field_name), nullptr);
   ASSERT_NE(panel.findChild<QLineEdit *>(field_name), nullptr);
@@ -5146,13 +5146,13 @@ TEST(InspectorPanelTests,
   }
 
   auto *position_x = panel.findChild<QDoubleSpinBox *>(
-      QStringLiteral("inspector.transform.position.x"));
+      QStringLiteral("inspector.transform.location.x"));
   ASSERT_NE(position_x, nullptr);
   position_x->setValue(4.25);
   const TransformComponent *previewed =
       expired_session->scene().transform(expired_entity.value().id);
   ASSERT_NE(previewed, nullptr);
-  EXPECT_FLOAT_EQ(previewed->position.x, 4.25f);
+  EXPECT_FLOAT_EQ(previewed->location.x, 4.25f);
   ASSERT_NE(expired_session->history().undo_label(), nullptr);
   EXPECT_EQ(*expired_session->history().undo_label(),
             undo_label_before_preview);
@@ -5193,7 +5193,7 @@ TEST(InspectorPanelTests,
   QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 
   position_x = panel.findChild<QDoubleSpinBox *>(
-      QStringLiteral("inspector.transform.position.x"));
+      QStringLiteral("inspector.transform.location.x"));
   ASSERT_NE(position_x, nullptr);
   EXPECT_DOUBLE_EQ(position_x->value(), 0.0);
   panel.abandon_runtime();

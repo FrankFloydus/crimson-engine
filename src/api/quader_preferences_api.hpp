@@ -66,6 +66,9 @@ public:
     [[nodiscard]] bool snapping_enabled() const;
     QuaderApiVoidResult set_backface_selection_enabled(bool enabled);
     [[nodiscard]] bool backface_selection_enabled() const;
+    /// Global surface culling preference shared by every viewport.
+    QuaderApiVoidResult set_backface_culling_enabled(bool enabled);
+    [[nodiscard]] bool backface_culling_enabled() const;
     QuaderApiVoidResult set_grid_visible(bool visible);
     [[nodiscard]] bool grid_visible() const;
     QuaderApiVoidResult set_gizmos_visible(bool visible);

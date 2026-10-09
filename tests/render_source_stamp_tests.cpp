@@ -98,6 +98,7 @@ TEST(RenderSourceStampTests, CaptureIncludesOwnerAndExplicitContextStamps) {
           .local_visibility = &local,
           .project_material_revision = 34u,
           .instance_edit_scope = edit_scope,
+          .backface_culling_enabled = false,
       });
 
   EXPECT_EQ(stamp.scene_binding, scene_binding);
@@ -124,6 +125,7 @@ TEST(RenderSourceStampTests, CaptureIncludesOwnerAndExplicitContextStamps) {
             assets.material_catalog_revision());
   EXPECT_EQ(stamp.project_material_revision, 34u);
   EXPECT_EQ(stamp.instance_edit_scope, edit_scope);
+  EXPECT_FALSE(stamp.backface_culling_enabled);
 }
 
 TEST(RenderSourceStampTests,
@@ -179,3 +181,21 @@ TEST(RenderSourceStampTests,
             initial_stats.selection_transform_refresh_count);
 }
 
+
+TEST(RenderSourceStampTests, GlobalCullingInvalidatesOnlySurfaceConsumers) {
+  const RenderSourceStamp before;
+  RenderSourceStamp after = before;
+  after.backface_culling_enabled = false;
+  EXPECT_FALSE(render_source_dependencies_match(
+      before, after, kRenderSceneSnapshotSourceDependencies));
+  EXPECT_FALSE(render_source_dependencies_match(
+      before, after, kRenderSceneSyncDocumentDependencies));
+  EXPECT_FALSE(render_source_dependencies_match(
+      before, after, kRenderSceneSyncContextDependencies));
+  EXPECT_TRUE(render_source_dependencies_match(
+      before, after, kRenderOverlaySceneWireframeSourceDependencies));
+  EXPECT_TRUE(render_source_dependencies_match(
+      before, after, kRenderOverlaySelectedObjectSourceDependencies));
+  EXPECT_FALSE(render_source_dependencies_advanced_together(
+      before, after, RenderSourceDependency::BackfaceCulling));
+}

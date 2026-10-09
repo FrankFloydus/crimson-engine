@@ -25,35 +25,35 @@ std::size_t hash_combine(std::size_t seed, EntityId value) noexcept {
                  (seed >> 2u));
 }
 
-bool scene_hierarchy_segment_is_locked(
+bool scene_hierarchy_segment_allows_selection(
     const SceneDocument &document, EntityId entity,
     EntityId exclusive_ancestor) {
   if (!document.exists(entity) || !document.exists(exclusive_ancestor)) {
-    return true;
+    return false;
   }
   EntityId current = entity;
   while (current != kInvalidEntityId && current != exclusive_ancestor) {
-    if (const LockComponent *lock = document.lock(current);
-        lock != nullptr && lock->locked) {
-      return true;
+    if (const SelectableComponent *permission = document.selectable(current);
+        permission != nullptr && !permission->selectable) {
+      return false;
     }
     const SceneLayerId layer_id = document.entity_layer(current);
     if (layer_id != kInvalidSceneLayerId) {
       const SceneLayerRecord *layer = document.layer(layer_id);
       if (layer == nullptr || layer->locked) {
-        return true;
+        return false;
       }
     }
     current = document.parent(current);
   }
-  return current != exclusive_ancestor;
+  return current == exclusive_ancestor;
 }
 
 struct DefinitionMemberProjection final {
   EntityId entity = kInvalidEntityId;
   QMat4 definition_from_geometry;
   bool selectable = true;
-  bool effectively_locked = false;
+  bool effectively_selectable = true;
   bool effectively_visible = true;
   std::size_t geometry_group_index = 0u;
 };
@@ -211,7 +211,7 @@ SceneMeshOccurrenceProjectionSnapshot build_scene_mesh_occurrence_projection(
           .selectable =
               scene_hierarchy_segment_is_selectable_ignoring_visibility(
                   document, member, definition),
-          .effectively_locked = scene_hierarchy_segment_is_locked(
+          .effectively_selectable = scene_hierarchy_segment_allows_selection(
               document, member, definition),
           .effectively_visible = member_visible,
           .geometry_group_index = group_index,
@@ -288,8 +288,8 @@ SceneMeshOccurrenceProjectionSnapshot build_scene_mesh_occurrence_projection(
                 occurrence_state->world_transform,
                 member.definition_from_geometry),
             .selectable = occurrence_selectable && member.selectable,
-            .effectively_locked = occurrence_state->effectively_locked ||
-                                  member.effectively_locked,
+            .effectively_selectable = occurrence_state->effectively_selectable &&
+                                      member.effectively_selectable,
             .effectively_visible = occurrence_state->effectively_visible &&
                                    member.effectively_visible,
         });
@@ -317,7 +317,7 @@ SceneMeshOccurrenceProjectionSnapshot build_scene_mesh_occurrence_projection(
         .selectable =
             scene_hierarchy_segment_is_selectable_ignoring_visibility(document,
                                                                        entity),
-        .effectively_locked = state->effectively_locked,
+        .effectively_selectable = state->effectively_selectable,
         .effectively_visible = state->effectively_visible,
     }));
     ++work.ordinary_placement_count;

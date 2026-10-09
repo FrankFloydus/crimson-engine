@@ -134,7 +134,7 @@ inline bool scene_transform_is_finite(const TransformComponent &transform) {
     return std::isfinite(value.x) && std::isfinite(value.y) &&
            std::isfinite(value.z);
   };
-  return finite(transform.position) && finite(transform.rotation_euler) &&
+  return finite(transform.location) && finite(transform.rotation_euler) &&
          finite(transform.scale) && scene_matrix_is_affine(transform.parenting_offset);
 }
 
@@ -328,7 +328,7 @@ inline std::optional<TransformComponent> try_transform_component_from_matrix(
   }
   orientation = glm::normalize(orientation);
   TransformComponent result{
-      .position = from_glm(glm::vec3{translation}),
+      .location = from_glm(glm::vec3{translation}),
       .rotation_euler = euler_radians_from_rotation_closest_to(
           orientation, reference_euler_radians),
       .scale = from_glm(glm::vec3{scale}),

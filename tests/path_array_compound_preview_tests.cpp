@@ -187,18 +187,18 @@ create_mixed_hierarchy(CompoundPreviewHarness &harness) {
     EXPECT_TRUE(scene.set_parent(child, result.root, false));
   }
   EXPECT_TRUE(scene.set_transform(
-      result.mesh, TransformComponent{.position = {1.0F, 0.0F, 0.0F}}));
+      result.mesh, TransformComponent{.location = {1.0F, 0.0F, 0.0F}}));
   EXPECT_TRUE(scene.set_transform(
-      result.curve, TransformComponent{.position = {0.0F, 1.0F, 0.0F}}));
+      result.curve, TransformComponent{.location = {0.0F, 1.0F, 0.0F}}));
   EXPECT_TRUE(scene.set_transform(
-      result.point, TransformComponent{.position = {0.0F, 0.0F, 1.0F}}));
+      result.point, TransformComponent{.location = {0.0F, 0.0F, 1.0F}}));
   EXPECT_TRUE(scene.set_transform(
       result.directional,
-      TransformComponent{.position = {2.0F, 0.0F, 0.0F},
+      TransformComponent{.location = {2.0F, 0.0F, 0.0F},
                          .rotation_euler = {0.1F, 0.2F, 0.3F}}));
   EXPECT_TRUE(scene.set_transform(
       result.spot,
-      TransformComponent{.position = {0.0F, 2.0F, 0.0F},
+      TransformComponent{.location = {0.0F, 2.0F, 0.0F},
                          .rotation_euler = {-0.2F, 0.4F, 0.1F}}));
   EXPECT_TRUE(scene.set_visible(result.hidden_mesh, false));
   EXPECT_TRUE(scene.set_visible(result.hidden_curve, false));

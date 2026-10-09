@@ -189,6 +189,18 @@ bool QuaderPreferencesApi::backface_selection_enabled() const {
              : false;
 }
 
+QuaderApiVoidResult
+QuaderPreferencesApi::set_backface_culling_enabled(bool enabled) {
+  return hooks_.set_backface_culling_enabled
+             ? hooks_.set_backface_culling_enabled(enabled)
+             : unavailable("Preferences runtime is not attached.");
+}
+
+bool QuaderPreferencesApi::backface_culling_enabled() const {
+  return hooks_.backface_culling_enabled ? hooks_.backface_culling_enabled()
+                                       : true;
+}
+
 QuaderApiVoidResult QuaderPreferencesApi::set_grid_visible(bool visible) {
   return hooks_.set_grid_visible
              ? hooks_.set_grid_visible(visible)

@@ -345,13 +345,13 @@ TEST(SelectedMeshOutlineCacheTests, OpenMeshWeldsSplitCornersAndSharesTopologyAc
   EXPECT_EQ(cache.frame(&snapshot, camera, 0).lines.size(), 4u);
   snapshot.meshes.push_back(snapshot.meshes.front());
   snapshot.meshes.back().world_transform = compose_transform(
-      {.position = {4, 0, 0}, .rotation = {0, 0.3826834f, 0, 0.9238795f}, .scale = {-2, 3, 1}});
+      {.location = {4, 0, 0}, .rotation = {0, 0.3826834f, 0, 0.9238795f}, .scale = {-2, 3, 1}});
   ++snapshot.selection_revision;
   const auto &frame = cache.frame(&snapshot, camera, 0);
   EXPECT_EQ(frame.lines.size(), 8u);
   EXPECT_EQ(cache.work_stats().topology_builds, 1u);
   ++snapshot.transform_revision;
-  snapshot.meshes.back().world_transform = compose_transform({.position = {8, 0, 0}});
+  snapshot.meshes.back().world_transform = compose_transform({.location = {8, 0, 0}});
   EXPECT_EQ(cache.frame(&snapshot, camera, 0).lines.size(), 8u);
   EXPECT_EQ(cache.work_stats().topology_builds, 1u);
   cache.reset();
@@ -380,7 +380,7 @@ TEST(SelectedMeshOutlineCacheTests, FramingChangesRetainOrRestoreVisibleOccurren
   RenderOverlaySelectedObjectSnapshot snapshot;
   for (const float x : {0.0f, 10.0f}) {
     snapshot.meshes.push_back({.geometry_payload = payload,
-        .world_transform = compose_transform({.position = {x, 0, 0}}), .selected = true,
+        .world_transform = compose_transform({.location = {x, 0, 0}}), .selected = true,
         .vertices = payload->vertices, .indices = payload->indices});
   }
   auto camera = front_orthographic();
@@ -478,7 +478,7 @@ TEST(SelectedMeshOutlineCacheTests, FrustumMatchesMinimumOrthographicRendererExt
   const auto payload = outline_quad();
   RenderOverlaySelectedObjectSnapshot snapshot;
   snapshot.meshes.push_back({.geometry_payload = payload,
-      .world_transform = compose_transform({.position = {0.000075f, 0, 0},
+      .world_transform = compose_transform({.location = {0.000075f, 0, 0},
                                            .scale = {0.000003f, 0.000003f, 1}}), .selected = true,
       .vertices = payload->vertices, .indices = payload->indices});
   auto camera = front_orthographic();
@@ -497,7 +497,7 @@ TEST(SelectedMeshOutlineCacheTests, ActiveObjectKeepsSilhouetteInsideOtherSelect
       .world_transform = compose_transform({.scale = {3, 3, 1}}), .selected = true,
       .vertices = payload->vertices, .indices = payload->indices});
   snapshot.meshes.push_back({.geometry_payload = payload,
-      .world_transform = compose_transform({.position = {0, 0, 1}}),
+      .world_transform = compose_transform({.location = {0, 0, 1}}),
       .selected = true, .active_selected = true,
       .vertices = payload->vertices, .indices = payload->indices});
   SelectedMeshOutlineCache cache;
@@ -546,7 +546,7 @@ TEST(SelectedMeshOutlineCacheTests, ActivePartialOverlapSplitsOrdinaryBoundary) 
       .world_transform = compose_transform({.scale = {2, 2, 1}}), .selected = true,
       .vertices = payload->vertices, .indices = payload->indices});
   snapshot.meshes.push_back({.geometry_payload = payload,
-      .world_transform = compose_transform({.position = {0, 1, 0}}),
+      .world_transform = compose_transform({.location = {0, 1, 0}}),
       .selected = true, .active_selected = true,
       .vertices = payload->vertices, .indices = payload->indices});
   SelectedMeshOutlineCache cache;
@@ -575,7 +575,7 @@ TEST(SelectedMeshOutlineCacheTests, ActiveOnlySwapPublishesStyleWithoutRebuildin
   RenderOverlaySelectedObjectSnapshot snapshot;
   for (const float x : {-3.0f, 3.0f}) {
     snapshot.meshes.push_back({.geometry_payload = payload,
-        .world_transform = compose_transform({.position = {x, 0, 0}}), .selected = true,
+        .world_transform = compose_transform({.location = {x, 0, 0}}), .selected = true,
         .active_selected = x < 0, .vertices = payload->vertices, .indices = payload->indices});
   }
   SelectedMeshOutlineCache cache;
@@ -895,7 +895,7 @@ TEST(SelectedMeshOutlineCacheTests, SubmissionUsesRasterWidthForOffscreenRibbonP
   const auto payload = outline_quad();
   RenderOverlaySelectedObjectSnapshot snapshot;
   snapshot.meshes.push_back({.geometry_payload = payload,
-      .world_transform = compose_transform({.position = {2.05f, 0, 0}, .scale = {0.01f, 0.5f, 1}}),
+      .world_transform = compose_transform({.location = {2.05f, 0, 0}, .scale = {0.01f, 0.5f, 1}}),
       .selected = true, .active_selected = true,
       .vertices = payload->vertices, .indices = payload->indices});
   ViewportOverlaySubmissionRequest request;
@@ -1013,7 +1013,7 @@ TEST(SelectedMeshOutlineCacheTests, GroupMembersUseOutlinesAndKeepBoundsWithStab
     ASSERT_TRUE(document.set_mesh(child, binding));
     ASSERT_TRUE(document.set_parent(child, group, false));
     auto child_transform = original_transform;
-    child_transform.position.y += 3.0f * i;
+    child_transform.location.y += 3.0f * i;
     ASSERT_TRUE(document.set_transform(child, child_transform));
   }
   document.clear_selection();
@@ -1072,7 +1072,7 @@ TEST(SelectedMeshOutlineCacheTests, GroupMembersUseOutlinesAndKeepBoundsWithStab
     }
     EXPECT_TRUE(coordinator.submit(request, settings, target).camera_only);
   }
-  ASSERT_TRUE(document.set_transform(group, TransformComponent{.position = {10, 0, 0}}));
+  ASSERT_TRUE(document.set_transform(group, TransformComponent{.location = {10, 0, 0}}));
   hierarchy = build_render_overlay_selection_snapshot(document, session.assets());
   const auto &moved = cache.frame(&selected, camera, 0, &hierarchy);
   ASSERT_FALSE(moved.lines.empty());

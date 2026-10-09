@@ -273,7 +273,7 @@ TEST(QdrMaterialUsageTests, HiddenLockedSolidCurvesCountWithoutDormantBindings) 
   ASSERT_TRUE(document.scene().set_material(entity, {
       .material = MaterialReference::project(*ProjectAssetId::parse(kUsedPrimary)),
       .material_slots = {{2u, MaterialReference::project(*ProjectAssetId::parse(kDormant))}}}));
-  ASSERT_TRUE(document.scene().set_locked(entity, true));
+  ASSERT_TRUE(document.scene().set_selectable(entity, false));
   ASSERT_TRUE(document.scene().set_visible(entity, false));
   auto read = QdrDocumentReader::deserialize_project_material_usage(
       QdrDocumentWriter::serialize_project_document_bytes(document));

@@ -173,7 +173,7 @@ SceneEntityState convert_entity(const retired::Entity &source,
     result.visibility = {value->visible(), value->selectable()};
   }
   if (const auto *value = source.lock()) {
-    result.lock = {value->locked()};
+    result.selectable = {.selectable = !value->locked()};
   }
   if (const auto *value = source.modeling_object()) {
     result.modeling_object = ModelingObjectComponent{

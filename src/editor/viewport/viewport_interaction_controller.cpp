@@ -39,7 +39,7 @@ CommandResult place_active_light_at_world_position(
   CommandResult result;
   if (kind == LightCreationKind::Point) {
     QuaderCreatePointLightArgs args;
-    args.transform.position = world_position;
+    args.transform.location = world_position;
     args.select_created = true;
     const QuaderApiResult<QuaderEntityRef> created =
         editor.scene().create_point_light(args);
@@ -50,7 +50,7 @@ CommandResult place_active_light_at_world_position(
     };
   } else {
     QuaderCreateDirectionalLightArgs args;
-    args.transform.position = world_position;
+    args.transform.location = world_position;
     args.select_created = true;
     const QuaderApiResult<QuaderEntityRef> created =
         editor.scene().create_directional_light(args);

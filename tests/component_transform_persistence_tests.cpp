@@ -265,10 +265,10 @@ TEST_P(ComponentNudgePersistenceTests,
   ASSERT_TRUE(second.ok()) << second.error_message();
   const std::array objects{object_, second.value()};
   ASSERT_TRUE(editor_.scene().set_transform(objects[0].entity,
-      {.position = {10, 20, -5}, .rotation_euler = {0.2F, 0.4F, 0.6F},
+      {.location = {10, 20, -5}, .rotation_euler = {0.2F, 0.4F, 0.6F},
        .scale = {2, 0.5F, 3}}).ok());
   ASSERT_TRUE(editor_.scene().set_transform(objects[1].entity,
-      {.position = {-4, 2, 7}, .rotation_euler = {-0.2F, -0.6F, 0.8F},
+      {.location = {-4, 2, 7}, .rotation_euler = {-0.2F, -0.6F, 0.8F},
        .scale = {-1, 2, 0.75F}}).ok());
   auto &session = *project_.active_scene()->session;
   TransformComponent sheared = *session.scene().transform(objects[1].entity);
@@ -443,7 +443,7 @@ protected:
     ASSERT_TRUE(created.ok()) << created.error_message();
     object_ = created.value();
     ASSERT_TRUE(editor_.scene().set_transform(object_.entity,
-        {.position = {10, -3, 4}, .rotation_euler = {0.2F, 0.4F, 0.6F},
+        {.location = {10, -3, 4}, .rotation_euler = {0.2F, 0.4F, 0.6F},
          .scale = {2, 0.5F, 1.5F}}).ok());
     enter_edit_for_all_meshes();
     const auto mode = std::get<0>(GetParam());
@@ -2132,7 +2132,7 @@ TEST_F(ComponentTransformPersistenceTests,
   constexpr std::array<float, 3u> kOrigins{0.0F, 1000.0F, 1000000.0F};
   for (std::size_t index = 0u; index < objects.size(); ++index) {
     ASSERT_TRUE(editor_.scene().set_transform(objects[index].entity,
-        {.position = {kOrigins[index], -kOrigins[index], kOrigins[index]}}).ok());
+        {.location = {kOrigins[index], -kOrigins[index], kOrigins[index]}}).ok());
   }
   enter_edit_for_all_meshes();
   ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Vertex).ok());
@@ -2174,9 +2174,9 @@ TEST_F(ComponentTransformPersistenceTests,
   ASSERT_TRUE(created.ok()) << created.error_message();
   const std::array objects{object_, created.value()};
   ASSERT_TRUE(editor_.scene().set_transform(objects[0].entity,
-      {.position = {1000, 0, 0}}).ok());
+      {.location = {1000, 0, 0}}).ok());
   ASSERT_TRUE(editor_.scene().set_transform(objects[1].entity,
-      {.position = {1000000, 0, 0}, .rotation_euler = {0.2F, 0.4F, 1.1F},
+      {.location = {1000000, 0, 0}, .rotation_euler = {0.2F, 0.4F, 1.1F},
        .scale = {2.0F, 0.5F, 3.0F}}).ok());
   enter_edit_for_all_meshes();
   ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Vertex).ok());

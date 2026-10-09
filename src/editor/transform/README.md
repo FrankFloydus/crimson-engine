@@ -10,7 +10,7 @@ file except through prior written authorization from Francesco Di Blasi.
 
 ## Editable channels and parenting compensation
 
-`TransformComponent` retains editable position, rotation and scale (`TRS`) and
+`TransformComponent` retains editable location, rotation and scale (`TRS`) and
 an identity-default affine `parenting_offset` (`O`). The complete local matrix is
 `O * TRS`; the world matrix is `parent_world * O * TRS`. Use
 `scene_local_transform_matrix` for placement and

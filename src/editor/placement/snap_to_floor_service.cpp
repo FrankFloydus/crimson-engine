@@ -182,7 +182,7 @@ struct ObjectSnapSelection final {
             : scene.is_effectively_visible(source);
     const EntityId display_entity =
         active_member ? edit_state.occurrence : source;
-    if (transform == nullptr || scene.is_effectively_locked(source) ||
+    if (transform == nullptr || !scene.is_effectively_selectable(source) ||
         !source_visible || !local_visibility.allows(display_entity)) {
       return {.message =
                   "Every snapped mesh must be visible, unlocked, and "
@@ -254,7 +254,7 @@ struct ObjectSnapSelection final {
     return std::nullopt;
   }
   TransformComponent after = target.before;
-  after.position += local_delta;
+  after.location += local_delta;
   if (!scene_transform_is_finite(after)) {
     return std::nullopt;
   }
@@ -311,7 +311,7 @@ bool SnapToFloorService::can_snap_selected_meshes_to_floor() const {
         active_member ? edit_state.occurrence : entity;
     const MeshComponent *mesh = scene_.mesh(entity);
     if (!scene_.exists(entity) || scene_.transform(entity) == nullptr ||
-        scene_.is_effectively_locked(entity) || !source_visible ||
+        !scene_.is_effectively_selectable(entity) || !source_visible ||
         !local_visibility_.allows(display_entity) ||
         (mesh != nullptr && assets_.mesh(mesh->mesh) == nullptr)) {
       return false;

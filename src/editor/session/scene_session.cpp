@@ -171,6 +171,18 @@ void SceneSession::rebuild_services() {
   document_commands_->set_object_mode_provider([this] {
     return editor_mode_->mode() == EditorMode::Object;
   });
+  document_commands_->set_inspector_target_validator(
+      [this](EntityId entity, std::uint64_t generation) {
+        if (editor_mode_->generation() != generation ||
+            !document_.scene().exists(entity)) {
+          return false;
+        }
+        if (editor_mode_->mode() == EditorMode::Edit) {
+          return editor_mode_->contains(entity);
+        }
+        const SelectionComponent *selection = document_.scene().selection(entity);
+        return selection != nullptr && selection->selected;
+      });
   structural_lifecycle_ =
       std::make_unique<SceneStructuralLifecycleService>(
           document_.scene(), *history_, *document_commands_, *modeling_,
@@ -316,7 +328,11 @@ void SceneSession::rebuild_services() {
           *native_tools_, viewport_workspace_,
           [this]() { (void)selection_->clear_hover(); });
   scene_surface_query_ = std::make_unique<SceneSurfaceQuery>(
-      document_.scene(), document_.assets(), *viewport_local_visibility_);
+      document_.scene(), document_.assets(), *viewport_local_visibility_,
+      [this] {
+        return viewport_workspace_.effective_settings(viewport_workspace_.focused_pane())
+            .bool_value(ViewportBoolSettingId::BackfaceCulling);
+      });
   point_placement_ = std::make_unique<ViewportPointPlacementService>(
       *scene_surface_query_);
   snap_to_floor_ = std::make_unique<SnapToFloorService>(

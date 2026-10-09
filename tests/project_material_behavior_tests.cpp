@@ -1562,7 +1562,7 @@ TEST(ProjectMaterialBehaviorTests,
   ASSERT_TRUE(fixture.set_visible(curve.value().entity, false));
   requested_material_id = blue.material.id;
 
-  ASSERT_TRUE(fixture.set_locked(curve.value().entity, true));
+  ASSERT_TRUE(fixture.set_selectable(curve.value().entity, false));
   const QuaderHistorySnapshot history_before_locked = editor.query().history();
   const QuaderApiVoidResult locked =
       editor.modeling().apply_material(QuaderMaterialReference::project(requested_material_id));
@@ -1573,7 +1573,7 @@ TEST(ProjectMaterialBehaviorTests,
   expect_primary_material(harness.project(), curve.value().entity,
                           amber.material.id);
   expect_same_history(editor.query().history(), history_before_locked);
-  ASSERT_TRUE(fixture.set_locked(curve.value().entity, false));
+  ASSERT_TRUE(fixture.set_selectable(curve.value().entity, true));
 
   const ModelingSelectionExport selection_before =
       exact_selection(harness.project());
@@ -1800,12 +1800,12 @@ TEST(ProjectMaterialBehaviorTests,
   // Setting flags after selection exercises execution preflight, including a
   // protected root that the shared selected-root helper would otherwise skip.
   for (const EntityId target : {first_group.value().id, second.value().entity}) {
-    ASSERT_TRUE(fixture.set_locked(target, true));
-    expect_unchanged_apply(false);
-    ASSERT_TRUE(fixture.set_locked(target, false));
     ASSERT_TRUE(fixture.set_selectable(target, false));
     expect_unchanged_apply(false);
     ASSERT_TRUE(fixture.set_selectable(target, true));
+    ASSERT_TRUE(fixture.set_selectability(target, false));
+    expect_unchanged_apply(false);
+    ASSERT_TRUE(fixture.set_selectability(target, true));
   }
   ASSERT_TRUE(editor.query().history().can_redo);
 
@@ -2660,18 +2660,18 @@ TEST(ProjectMaterialBehaviorTests,
   ASSERT_TRUE(editor.selection().select_face(source.value(), 1).ok());
 
   const ProjectMaterialFixture fixture(harness.project());
-  ASSERT_TRUE(fixture.set_locked(target.value().entity, true));
-  expect_rejected(target.value().modeling_object_id, 1);
-  ASSERT_TRUE(fixture.set_locked(target.value().entity, false));
-  ASSERT_TRUE(fixture.set_visible(target.value().entity, false));
-  expect_rejected(target.value().modeling_object_id, 1);
-  ASSERT_TRUE(fixture.set_visible(target.value().entity, true));
   ASSERT_TRUE(fixture.set_selectable(target.value().entity, false));
   expect_rejected(target.value().modeling_object_id, 1);
   ASSERT_TRUE(fixture.set_selectable(target.value().entity, true));
-  ASSERT_TRUE(fixture.set_locked(source.value().entity, true));
+  ASSERT_TRUE(fixture.set_visible(target.value().entity, false));
   expect_rejected(target.value().modeling_object_id, 1);
-  ASSERT_TRUE(fixture.set_locked(source.value().entity, false));
+  ASSERT_TRUE(fixture.set_visible(target.value().entity, true));
+  ASSERT_TRUE(fixture.set_selectability(target.value().entity, false));
+  expect_rejected(target.value().modeling_object_id, 1);
+  ASSERT_TRUE(fixture.set_selectability(target.value().entity, true));
+  ASSERT_TRUE(fixture.set_selectable(source.value().entity, false));
+  expect_rejected(target.value().modeling_object_id, 1);
+  ASSERT_TRUE(fixture.set_selectable(source.value().entity, true));
   const auto source_material = *scene_material(harness.project(), source.value().entity);
   ASSERT_TRUE(fixture.clear_material(source.value().entity));
   expect_rejected(target.value().modeling_object_id, 1);
@@ -2746,7 +2746,7 @@ TEST(ProjectMaterialBehaviorTests,
   ASSERT_TRUE(target.ok());
   constexpr float kQuarterTurn = 1.5707963267948966f;
   const auto rotated = editor.scene().set_transform(target.value().entity,
-      {.position = {2.0f, 0.0f, 0.0f},
+      {.location = {2.0f, 0.0f, 0.0f},
        .rotation_euler = {0.0f, kQuarterTurn, 0.0f}});
   ASSERT_TRUE(rotated.ok()) << rotated.error_message();
   const auto consumer = editor.scene().create_entity(
@@ -2820,7 +2820,7 @@ TEST(ProjectMaterialBehaviorTests,
   ASSERT_TRUE(instance.ok()) << instance.error_message();
   const EntityId occurrence = instance.value().occurrence.root.id;
   auto transform = editor.query().entity(occurrence)->transform;
-  transform.position = {7.0f, -3.0f, 5.0f};
+  transform.location = {7.0f, -3.0f, 5.0f};
   transform.rotation_euler = {0.17f, 0.31f, -0.42f};
   transform.scale = {2.0f, 3.0f, 4.0f};
   const auto transformed = editor.scene().set_transform(occurrence, transform);
@@ -2860,12 +2860,12 @@ TEST(ProjectMaterialBehaviorTests,
       outside.value().modeling_object_id, 1).ok());
   expect_same_revisions(editor.query().revisions(), revisions_before_failure);
   expect_same_history(editor.query().history(), history_before_failure);
-  ASSERT_TRUE(fixture.set_locked(occurrence, true));
+  ASSERT_TRUE(fixture.set_selectable(occurrence, false));
   const auto revisions_while_locked = editor.query().revisions();
   EXPECT_FALSE(editor.modeling().transfer_face_texture_to_face(
       target.value().modeling_object_id, 1).ok());
   expect_same_revisions(editor.query().revisions(), revisions_while_locked);
-  ASSERT_TRUE(fixture.set_locked(occurrence, false));
+  ASSERT_TRUE(fixture.set_selectable(occurrence, true));
 
   const auto applied = editor.modeling().transfer_face_texture_to_face(
       target.value().modeling_object_id, 1);
@@ -2982,7 +2982,7 @@ TEST(ProjectMaterialBehaviorTests,
       .texture_lock_enabled = [] { return false; },
       .texture_lock_scale_enabled = [] { return false; }});
   ASSERT_TRUE(editor.scene().set_transform(object.entity,
-      {.position = {5.0F, 0.5F, -21.5F}}).ok());
+      {.location = {5.0F, 0.5F, -21.5F}}).ok());
   const auto placed = editor.query().entity(object.entity);
   ASSERT_TRUE(placed.has_value());
   ASSERT_TRUE(placed->texture_sampling_from_local.has_value());
@@ -3138,7 +3138,7 @@ TEST(ProjectMaterialBehaviorTests,
         .texture_lock_enabled = [] { return false; },
         .texture_lock_scale_enabled = [] { return false; }});
     ASSERT_TRUE(editor.scene().set_transform(object.entity,
-        {.position = {5.0F, 0.5F, -21.5F}}).ok());
+        {.location = {5.0F, 0.5F, -21.5F}}).ok());
     const ProjectMaterialFixture fixture(harness.project());
     ASSERT_TRUE(fixture.set_material(object.entity, {
         .material = MaterialReference::project(blue.material.id),
@@ -3513,14 +3513,14 @@ TEST(ProjectMaterialBehaviorTests,
   const auto selection = editor.modeling().face_texture_settings();
   ASSERT_EQ(selection.selected_face_count, 2u);
   const ProjectMaterialFixture fixture(harness.project());
-  ASSERT_TRUE(fixture.set_locked(box.value().entity, true));
+  ASSERT_TRUE(fixture.set_selectable(box.value().entity, false));
   const auto locked_history = editor.query().history();
   EXPECT_FALSE(editor.modeling().apply_material_to_selected_faces(
       reference, scene_id, selection.selection_token).ok());
   expect_same_history(editor.query().history(), locked_history);
   expect_same_authored_document(
       *authored_document(harness.project(), box.value().entity), initial);
-  ASSERT_TRUE(fixture.set_locked(box.value().entity, false));
+  ASSERT_TRUE(fixture.set_selectable(box.value().entity, true));
   const auto unlocked_selection = editor.modeling().face_texture_settings();
   const auto assigned = editor.modeling().apply_material_to_selected_faces(
       reference, scene_id, unlocked_selection.selection_token);
@@ -4239,7 +4239,7 @@ TEST(ProjectMaterialBehaviorTests,
                    .ok());
   ASSERT_TRUE(fixture.set_visible(box.value().entity, true));
 
-  ASSERT_TRUE(fixture.set_locked(box.value().entity, true));
+  ASSERT_TRUE(fixture.set_selectable(box.value().entity, false));
   EXPECT_FALSE(harness.editor()
                    .modeling()
                    .project_material_for_face(box.value().modeling_object_id,
@@ -4260,7 +4260,7 @@ TEST(ProjectMaterialBehaviorTests,
                    .apply_material_to_face(
                        box.value().modeling_object_id, face, QuaderMaterialReference::project(requested_material_id))
                    .ok());
-  ASSERT_TRUE(fixture.set_locked(box.value().entity, false));
+  ASSERT_TRUE(fixture.set_selectable(box.value().entity, true));
 
   EXPECT_EQ(face_slot_snapshot(harness.project(), box.value().entity),
             slots_before);
@@ -4413,7 +4413,7 @@ TEST(ProjectMaterialBehaviorTests,
   const ProjectMaterialFixture fixture(harness.project());
   const QuaderHistorySnapshot history_before_unselectable =
       harness.editor().query().history();
-  ASSERT_TRUE(fixture.set_selectable(occurrence, false));
+  ASSERT_TRUE(fixture.set_selectability(occurrence, false));
   EXPECT_FALSE(harness.editor()
                    .modeling()
                    .project_material_for_face(
@@ -4426,7 +4426,7 @@ TEST(ProjectMaterialBehaviorTests,
                    .ok());
   expect_same_history(harness.editor().query().history(),
                       history_before_unselectable);
-  ASSERT_TRUE(fixture.set_selectable(occurrence, true));
+  ASSERT_TRUE(fixture.set_selectability(occurrence, true));
   const QuaderApiVoidResult unchanged =
       harness.editor().modeling().apply_face_material_to_mesh(
           member.value().modeling_object_id, face);
@@ -4628,7 +4628,7 @@ TEST(ProjectMaterialReferenceBehaviorTests,
                       history_before_missing);
 
   ASSERT_TRUE(harness.editor().history().undo().ok());
-  ASSERT_TRUE(fixture.set_locked(second.value().entity, true));
+  ASSERT_TRUE(fixture.set_selectable(second.value().entity, false));
   const QuaderHistorySnapshot history_before_locked =
       harness.editor().query().history();
   const QuaderApiVoidResult locked =
@@ -4644,9 +4644,9 @@ TEST(ProjectMaterialReferenceBehaviorTests,
             second_before);
   expect_same_history(harness.editor().query().history(),
                       history_before_locked);
-  ASSERT_TRUE(fixture.set_locked(second.value().entity, false));
+  ASSERT_TRUE(fixture.set_selectable(second.value().entity, true));
 
-  ASSERT_TRUE(fixture.set_selectable(second.value().entity, false));
+  ASSERT_TRUE(fixture.set_selectability(second.value().entity, false));
   const QuaderHistorySnapshot history_before_unselectable =
       harness.editor().query().history();
   const QuaderApiVoidResult unselectable =
@@ -4662,7 +4662,7 @@ TEST(ProjectMaterialReferenceBehaviorTests,
             second_before);
   expect_same_history(harness.editor().query().history(),
                       history_before_unselectable);
-  ASSERT_TRUE(fixture.set_selectable(second.value().entity, true));
+  ASSERT_TRUE(fixture.set_selectability(second.value().entity, true));
 
   ASSERT_TRUE(fixture.set_visible(second.value().entity, false));
   ASSERT_TRUE(harness.editor().selection().select_object(first.value()).ok());
@@ -4837,7 +4837,7 @@ TEST(ProjectMaterialReferenceBehaviorTests,
   EXPECT_EQ(used.value().front(),
             QuaderMaterialReference::project(amber.material.id));
 
-  ASSERT_TRUE(fixture.set_locked(group.value().id, true));
+  ASSERT_TRUE(fixture.set_selectable(group.value().id, false));
   const QuaderHistorySnapshot history_before_locked =
       harness.editor().query().history();
   const QuaderApiVoidResult locked =
@@ -4851,7 +4851,7 @@ TEST(ProjectMaterialReferenceBehaviorTests,
             MaterialReference::project(amber.material.id));
   expect_same_history(harness.editor().query().history(),
                       history_before_locked);
-  ASSERT_TRUE(fixture.set_locked(group.value().id, false));
+  ASSERT_TRUE(fixture.set_selectable(group.value().id, true));
 
   const QuaderApiVoidResult replaced =
       harness.editor().materials().replace_material_references(
@@ -5086,7 +5086,7 @@ TEST(ProjectMaterialReferenceBehaviorTests,
             std::vector<EntityId>{linked_group.value().id});
 
   const ProjectMaterialFixture fixture(harness.project());
-  ASSERT_TRUE(fixture.set_locked(second_occurrence, true));
+  ASSERT_TRUE(fixture.set_selectable(second_occurrence, false));
   const QuaderHistorySnapshot history_before_locked =
       harness.editor().query().history();
   const QuaderApiVoidResult locked =
@@ -5100,9 +5100,9 @@ TEST(ProjectMaterialReferenceBehaviorTests,
             MaterialReference::project(amber.material.id));
   expect_same_history(harness.editor().query().history(),
                       history_before_locked);
-  ASSERT_TRUE(fixture.set_locked(second_occurrence, false));
+  ASSERT_TRUE(fixture.set_selectable(second_occurrence, true));
 
-  ASSERT_TRUE(fixture.set_selectable(linked_group.value().id, false));
+  ASSERT_TRUE(fixture.set_selectability(linked_group.value().id, false));
   const QuaderHistorySnapshot history_before_unselectable_ancestor =
       harness.editor().query().history();
   const QuaderApiVoidResult unselectable_ancestor =
@@ -5116,7 +5116,7 @@ TEST(ProjectMaterialReferenceBehaviorTests,
             MaterialReference::project(amber.material.id));
   expect_same_history(harness.editor().query().history(),
                       history_before_unselectable_ancestor);
-  ASSERT_TRUE(fixture.set_selectable(linked_group.value().id, true));
+  ASSERT_TRUE(fixture.set_selectability(linked_group.value().id, true));
 }
 
 TEST(ProjectMaterialReferenceBehaviorTests,
@@ -5186,7 +5186,7 @@ TEST(ProjectMaterialReferenceBehaviorTests,
       face_slot_snapshot(harness.project(), member.value().entity);
 
   const ProjectMaterialFixture fixture(harness.project());
-  ASSERT_TRUE(fixture.set_locked(second_occurrence, true));
+  ASSERT_TRUE(fixture.set_selectable(second_occurrence, false));
   const QuaderHistorySnapshot history_before =
       harness.editor().query().history();
   const QuaderApiVoidResult locked =
@@ -5204,8 +5204,8 @@ TEST(ProjectMaterialReferenceBehaviorTests,
                                  selection_before);
   expect_same_history(harness.editor().query().history(), history_before);
 
-  ASSERT_TRUE(fixture.set_locked(second_occurrence, false));
-  ASSERT_TRUE(fixture.set_selectable(second_occurrence, false));
+  ASSERT_TRUE(fixture.set_selectable(second_occurrence, true));
+  ASSERT_TRUE(fixture.set_selectability(second_occurrence, false));
   const QuaderHistorySnapshot history_before_unselectable =
       harness.editor().query().history();
   const QuaderApiVoidResult unselectable =
@@ -5223,7 +5223,7 @@ TEST(ProjectMaterialReferenceBehaviorTests,
                                  selection_before);
   expect_same_history(harness.editor().query().history(),
                       history_before_unselectable);
-  ASSERT_TRUE(fixture.set_selectable(second_occurrence, true));
+  ASSERT_TRUE(fixture.set_selectability(second_occurrence, true));
 
   const QuaderApiVoidResult replaced =
       harness.editor().materials().replace_material_references(

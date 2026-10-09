@@ -15,7 +15,7 @@ namespace quader {
  * Represents a QTransform value used by the Quader native app.
  */
 struct QTransform {
-    QVec3 position = {};
+    QVec3 location = {};
     QQuat rotation = {};
     QVec3 scale = {1.0f, 1.0f, 1.0f};
 };

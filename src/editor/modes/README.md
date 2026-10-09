@@ -71,7 +71,14 @@ compatible with every component kind.
 Picking, component operations and retained overlays consume the explicit Edit
 membership, including participants with zero selected components. Clear/Replace
 component selection and Outliner clicks cannot change that membership. Empty
-component selection must never fall back to whole-object transforms.
+component selection must never fall back to whole-object transforms. The Inspector
+has a separate object-property intent: it captures the fixed participants and may
+author their object transforms without selected components, including participants
+made hidden or nonselectable after admission. Its scene, document-binding, mode
+generation and authored-identity fences apply to every sample and commit. Generic
+scene transforms and viewport tools retain their ordinary mode requirements.
+Object-mode Inspector drafts may finish on their captured objects after a selection
+transition; fresh preview samples must still match the current property scope.
 
 Use the revision to invalidate retained mode-dependent presentation and caches.
 Capture the generation with gestures, deferred picks and queued property input;

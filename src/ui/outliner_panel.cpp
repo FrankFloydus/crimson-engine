@@ -163,8 +163,8 @@ bool outliner_projection_matches(std::span<const EntityRecord> left,
     if (a.id != b.id || a.name != b.name || a.kind != b.kind ||
         a.parent != b.parent || a.visible != b.visible ||
         a.effectively_visible != b.effectively_visible ||
-        a.locked != b.locked ||
-        a.effectively_locked != b.effectively_locked ||
+        a.selectable != b.selectable ||
+        a.effectively_selectable != b.effectively_selectable ||
         a.has_children != b.has_children) {
       return false;
     }
@@ -315,7 +315,7 @@ public:
   }
 };
 
-/// Renders hidden and locked entity rows with subdued stock palette text.
+/// Renders hidden and unselectable entity rows with subdued stock palette text.
 class SubduedRowDelegate final : public QStyledItemDelegate {
 public:
   explicit SubduedRowDelegate(QObject *parent = nullptr)
@@ -975,13 +975,13 @@ private:
             light_items_.push_back(name_item);
           }
           name_item->setEditable(true);
-          name_item->setDragEnabled(!entity_record->effectively_locked);
-          name_item->setDropEnabled(!entity_record->effectively_locked &&
+          name_item->setDragEnabled(entity_record->effectively_selectable);
+          name_item->setDropEnabled(entity_record->effectively_selectable &&
                                     !entity_record->has_instance_occurrence);
           name_item->setData(static_cast<qulonglong>(entity_record->id),
                              kEntityIdRole);
           name_item->setData(!entity_record->effectively_visible ||
-                                 entity_record->effectively_locked,
+                                 !entity_record->effectively_selectable,
                              kSubduedRole);
 
           if (parent != nullptr) {
@@ -1241,7 +1241,7 @@ private:
     for (const QModelIndex &index : indexes) {
       const EntityRecord *entity_record = record(entity_id(index));
       if (index.model() != model_ || entity_record == nullptr ||
-          entity_record->effectively_locked) {
+          !entity_record->effectively_selectable) {
         return nullptr;
       }
       data->entities.push_back(entity_record->id);
@@ -1274,7 +1274,7 @@ private:
     if ((destination_record == nullptr &&
          destination != instance_scope_definition_) ||
         (destination_record != nullptr &&
-         (destination_record->effectively_locked ||
+         (!destination_record->effectively_selectable ||
           destination_record->has_instance_occurrence))) {
       return false;
     }
@@ -1422,7 +1422,7 @@ private:
     std::vector<EntityId> selected_objects;
     selected_objects.reserve(selected_entities.size());
     bool all_selected_visible = true;
-    bool all_selected_locked = true;
+    bool any_selected_selectable = false;
     for (const EntityId selected : selected_entities) {
       const EntityRecord *selected_record = record(selected);
       if (selected_record == nullptr) {
@@ -1431,7 +1431,8 @@ private:
       selected_objects.push_back(selected);
       all_selected_visible =
           all_selected_visible && selected_record->visible;
-      all_selected_locked = all_selected_locked && selected_record->locked;
+      any_selected_selectable =
+          any_selected_selectable || selected_record->selectable;
     }
 
     const std::vector<EntityId> mutable_roots =
@@ -1449,7 +1450,7 @@ private:
     QAction *rename_action = nullptr;
     QAction *focus_action = nullptr;
     QAction *visibility_action = nullptr;
-    QAction *lock_action = nullptr;
+    QAction *selectability_action = nullptr;
     QAction *delete_action = nullptr;
     QAction *duplicate_action = nullptr;
     QAction *group_action = nullptr;
@@ -1505,15 +1506,15 @@ private:
             "outliner.action.hide_selected", !selected_objects.empty());
       }
 
-      const bool lock_selected = !all_selected_locked;
-      lock_action = menu.addAction(localized(
-          lock_selected ? "ui.outliner.lock_selected"
-                        : "ui.outliner.unlock_selected",
-          lock_selected ? "Lock Objects" : "Unlock Objects"));
-      lock_action->setObjectName(
-          lock_selected ? QStringLiteral("outliner.action.lock_selected")
-                        : QStringLiteral("outliner.action.unlock_selected"));
-      lock_action->setEnabled(!selected_objects.empty());
+      const bool select_selected = !any_selected_selectable;
+      selectability_action = menu.addAction(localized(
+          select_selected ? "ui.outliner.make_selectable"
+                        : "ui.outliner.make_unselectable",
+          select_selected ? "Make Selectable" : "Make Unselectable"));
+      selectability_action->setObjectName(
+          select_selected ? QStringLiteral("outliner.action.make_selectable")
+                        : QStringLiteral("outliner.action.make_unselectable"));
+      selectability_action->setEnabled(!selected_objects.empty());
       menu.addSeparator();
 
       duplicate_action = add_command_action(
@@ -1593,20 +1594,21 @@ private:
           }
           (void)editor_->scene().set_visibility(edits);
         }
-      } else if (chosen == lock_action) {
-        std::vector<QuaderSceneLockEdit> edits;
+      } else if (chosen == selectability_action) {
+        std::vector<QuaderSceneSelectabilityEdit> edits;
         edits.reserve(selected_objects.size());
         for (const EntityId selected : selected_objects) {
-          const LockComponent *lock = document_->lock(selected);
-          if (lock != nullptr && lock->locked != !all_selected_locked) {
+          const SelectableComponent *selectable = document_->selectable(selected);
+          if (selectable != nullptr &&
+              selectable->selectable != !any_selected_selectable) {
             edits.push_back({
                 .entity = selected,
-                .before = lock->locked,
-                .after = !all_selected_locked,
+                .before = selectable->selectable,
+                .after = !any_selected_selectable,
             });
           }
         }
-        (void)editor_->scene().set_locks(edits);
+        (void)editor_->scene().set_selectability(edits);
       } else if (chosen == delete_action) {
         delete_selection(*editor_, *document_, binding);
       } else if (chosen == duplicate_action) {

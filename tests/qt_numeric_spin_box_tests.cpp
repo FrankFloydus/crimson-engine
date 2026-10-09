@@ -2001,7 +2001,7 @@ TEST_F(QtNumericSpinBoxTests,
   show(panel);
   panel.resize(640, 600);
   QCoreApplication::processEvents();
-  const QString field_name = QStringLiteral("inspector.transform.position.x");
+  const QString field_name = QStringLiteral("inspector.transform.location.x");
   auto *position_x = panel.findChild<QDoubleSpinBox *>(field_name);
   ASSERT_NE(position_x, nullptr);
   auto *line_edit = position_x->findChild<QLineEdit *>();
@@ -2015,7 +2015,7 @@ TEST_F(QtNumericSpinBoxTests,
     process_editor_events();
     const auto live = editor.query().entity(entity.value().id);
     ASSERT_TRUE(live.has_value());
-    EXPECT_NEAR(live->transform.position.x,
+    EXPECT_NEAR(live->transform.location.x,
                 steps * 8.0 * kPositionSensitivity, 0.0001);
     EXPECT_EQ(session.history().undo_count(), undo_before);
   }
@@ -2025,7 +2025,7 @@ TEST_F(QtNumericSpinBoxTests,
   ASSERT_TRUE(editor.history().undo().ok());
   auto snapshot = editor.query().entity(entity.value().id);
   ASSERT_TRUE(snapshot.has_value());
-  EXPECT_FLOAT_EQ(snapshot->transform.position.x, 0.0f);
+  EXPECT_FLOAT_EQ(snapshot->transform.location.x, 0.0f);
   ASSERT_TRUE(editor.history().redo().ok());
   panel.refresh(context);
   QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
@@ -2042,11 +2042,11 @@ TEST_F(QtNumericSpinBoxTests,
   process_editor_events();
   snapshot = editor.query().entity(entity.value().id);
   ASSERT_TRUE(snapshot.has_value());
-  EXPECT_GT(snapshot->transform.position.x, committed_value);
+  EXPECT_GT(snapshot->transform.location.x, committed_value);
   send_key(*line_edit, Qt::Key_Escape);
   snapshot = editor.query().entity(entity.value().id);
   ASSERT_TRUE(snapshot.has_value());
-  EXPECT_NEAR(snapshot->transform.position.x, committed_value, 0.0001);
+  EXPECT_NEAR(snapshot->transform.location.x, committed_value, 0.0001);
   EXPECT_EQ(session.history().undo_count(), undo_before + 1u);
 
   send_mouse(*line_edit, QEvent::MouseButtonRelease,
@@ -2058,7 +2058,7 @@ TEST_F(QtNumericSpinBoxTests,
   EXPECT_EQ(session.history().undo_count(), undo_before + 1u);
   snapshot = editor.query().entity(entity.value().id);
   ASSERT_TRUE(snapshot.has_value());
-  EXPECT_NEAR(snapshot->transform.position.x, committed_value, 0.0001);
+  EXPECT_NEAR(snapshot->transform.location.x, committed_value, 0.0001);
   panel.abandon_runtime();
 }
 

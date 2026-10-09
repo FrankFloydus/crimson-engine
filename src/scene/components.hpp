@@ -118,17 +118,17 @@ struct NameComponent {
  * Represents a Transform Component value used by the scene graph document layer.
  */
 struct TransformComponent {
-    QVec3 position = {};
+    QVec3 location = {};
     QVec3 rotation_euler = {};
     QVec3 scale = {1.0f, 1.0f, 1.0f};
     bool custom_pivot = false;
     // Affine compensation preserves placement across hierarchy changes while
-    // leaving the editable position, rotation and scale channels untouched.
+    // leaving the editable location, rotation and scale channels untouched.
     QMat4 parenting_offset;
 
     QTransform spatial_transform() const {
       return QTransform{
-          .position = position,
+          .location = location,
           .rotation = quat_from_euler_radians(rotation_euler),
           .scale = scale,
       };
@@ -171,10 +171,10 @@ struct VisibilityComponent {
 };
 
 /**
- * Represents a Lock Component value used by the scene graph document layer.
+ * Stores the authored selection permission independently of visibility eligibility.
  */
-struct LockComponent {
-    bool locked = false;
+struct SelectableComponent {
+    bool selectable = true;
 };
 
 /**
