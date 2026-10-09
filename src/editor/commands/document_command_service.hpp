@@ -13,6 +13,7 @@
 #include "editor/selection/scene_selection_application.hpp"
 #include "editor/commands/document/scene_texture_mapping_plan.hpp"
 #include "scene/components.hpp"
+#include "scene/scene_entity_naming.hpp"
 
 #include <functional>
 #include <memory>
@@ -94,7 +95,8 @@ public:
     DocumentDuplicateHierarchyResult duplicate_selected_hierarchy();
     DocumentDuplicateHierarchyResult duplicate_hierarchy_with_existing_clones(
         std::vector<EntityId> roots,
-        std::unordered_map<EntityId, EntityId> existing_clones_by_source);
+        std::unordered_map<EntityId, EntityId> existing_clones_by_source,
+        SceneEntityNamePolicy name_policy = SceneEntityNamePolicy::DuplicateFamily);
     DocumentCreateEntityResult
     create_point_light(std::string name, LightComponent light,
                        EntityId parent = kInvalidEntityId,

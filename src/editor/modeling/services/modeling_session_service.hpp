@@ -369,7 +369,8 @@ public:
       std::span<const EntityId> roots,
       DocumentCommandService &document_commands,
       ModelingSelectionMode result_selection_mode,
-      bool independent_mesh_assets = false);
+      bool independent_mesh_assets = false,
+      SceneEntityNamePolicy name_policy = SceneEntityNamePolicy::DuplicateFamily);
   ModelingCommandResult set_selection_mode(ModelingSelectionMode mode);
   ModelingCommandResult select_all();
   ModelingCommandResult invert_selection();

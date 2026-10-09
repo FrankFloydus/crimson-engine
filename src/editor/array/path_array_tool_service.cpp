@@ -1985,7 +1985,8 @@ CommandResult PathArrayToolService::apply() {
           : ModelingSelectionMode::Object;
   SceneStructuralDuplicateBatchResult duplicated =
       structural_lifecycle_.duplicate_hierarchy_batches_in_transaction(
-          transaction, batches, result_mode, "Path Array", false);
+          transaction, batches, result_mode, "Path Array", false,
+          SceneEntityNamePolicy::Unique);
   if (!duplicated.ok || !duplicated.changed ||
       duplicated.batches.size() != batches.size()) {
     return rollback(CommandResult{

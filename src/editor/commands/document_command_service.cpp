@@ -790,7 +790,8 @@ DocumentCommandService::duplicate_selected_hierarchy() {
 DocumentDuplicateHierarchyResult
 DocumentCommandService::duplicate_hierarchy_with_existing_clones(
     std::vector<EntityId> roots,
-    std::unordered_map<EntityId, EntityId> existing_clones_by_source) {
+    std::unordered_map<EntityId, EntityId> existing_clones_by_source,
+    SceneEntityNamePolicy name_policy) {
   if (!object_mode_active()) {
     DocumentDuplicateHierarchyResult result;
     assign_document_command_status(result, document_command_invalid_request_result("Whole-object editing requires Object Mode."));
@@ -872,7 +873,7 @@ DocumentCommandService::duplicate_hierarchy_with_existing_clones(
 
   auto command = std::make_unique<DuplicateSelectedHierarchyCommand>(
       scene_, std::move(source_snapshots),
-      std::move(existing_clones_by_source));
+      std::move(existing_clones_by_source), name_policy);
   DuplicateSelectedHierarchyCommand *duplicate_command = command.get();
   DocumentDuplicateHierarchyResult result;
   assign_document_command_status(

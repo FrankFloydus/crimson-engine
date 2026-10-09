@@ -1132,7 +1132,7 @@ TEST(GroupingPublicApiTests, DuplicateSelectedHierarchyCopiesStateSelectsCloneAn
   scenario.given().selected_aliases({"group", "child"}, "child");
   scenario.when().duplicate_selected_hierarchy("group.copy");
   scenario.then().command().ok_changed();
-  scenario.remember_entity_named("child.copy", "Duplicate Child_1");
+  scenario.remember_entity_named("child.copy", "Duplicate Child_001");
 
   QuaderTransform group_expected;
   group_expected.position = group_create_transform.position;
@@ -1142,13 +1142,13 @@ TEST(GroupingPublicApiTests, DuplicateSelectedHierarchyCopiesStateSelectsCloneAn
 
   scenario.then()
       .scene()
-      .alias_name("group.copy", "Duplicate Source_1")
+      .alias_name("group.copy", "Duplicate Source_001")
       .parent("group.copy", "parent")
       .visible("group.copy", false)
       .locked("group.copy", false)
       .entity_transform_near("group.copy", group_expected)
       .child_count("group.copy", 1u)
-      .alias_name("child.copy", "Duplicate Child_1")
+      .alias_name("child.copy", "Duplicate Child_001")
       .parent("child.copy", "group.copy")
       .visible("child.copy", false)
       .locked("child.copy", false)
@@ -1169,8 +1169,8 @@ TEST(GroupingPublicApiTests, DuplicateSelectedHierarchyCopiesStateSelectsCloneAn
   scenario.then().history().redo_label("Duplicate Hierarchy");
 
   scenario.when().redo();
-  scenario.remember_entity_named("group.copy", "Duplicate Source_1");
-  scenario.remember_entity_named("child.copy", "Duplicate Child_1");
+  scenario.remember_entity_named("group.copy", "Duplicate Source_001");
+  scenario.remember_entity_named("child.copy", "Duplicate Child_001");
   scenario.then()
       .scene()
       .has_alias("group.copy")

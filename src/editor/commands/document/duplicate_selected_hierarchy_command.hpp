@@ -28,10 +28,13 @@ public:
     DuplicateSelectedHierarchyCommand(
         SceneDocument &scene,
         std::vector<DocumentEntitySnapshot> source_snapshots,
-        std::unordered_map<EntityId, EntityId> existing_clones_by_source)
+        std::unordered_map<EntityId, EntityId> existing_clones_by_source,
+        SceneEntityNamePolicy name_policy =
+            SceneEntityNamePolicy::DuplicateFamily)
         : SceneCommand(scene, "Duplicate Hierarchy"), captured_sources_(true),
           source_snapshots_(std::move(source_snapshots)),
-          existing_clones_by_source_(std::move(existing_clones_by_source)) {}
+          existing_clones_by_source_(std::move(existing_clones_by_source)),
+          name_policy_(name_policy) {}
 
     [[nodiscard]] const std::vector<EntityId> &duplicate_roots() const {
       return duplicate_roots_;
@@ -109,7 +112,7 @@ private:
     QDR_PROFILE_FUNCTION();
     duplicate_snapshots_.clear();
     duplicate_snapshots_.reserve(source_snapshots_.size());
-    SceneEntityNameAllocator name_allocator(scene());
+    SceneEntityNameAllocator name_allocator(scene(), name_policy_);
     for (const DocumentEntitySnapshot &snapshot : source_snapshots_) {
       QDR_PROFILE_SCOPE("Duplicate snapshot tree");
       const EntityId parent = snapshot.parent != kInvalidEntityId &&
@@ -215,6 +218,7 @@ private:
   bool captured_sources_ = false;
   std::vector<DocumentEntitySnapshot> source_snapshots_;
   std::unordered_map<EntityId, EntityId> existing_clones_by_source_;
+  SceneEntityNamePolicy name_policy_ = SceneEntityNamePolicy::DuplicateFamily;
   std::vector<DocumentEntitySnapshot> duplicate_snapshots_;
   std::vector<EntityId> duplicate_roots_;
   DocumentSelectionState before_selection_;

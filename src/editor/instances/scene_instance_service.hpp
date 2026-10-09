@@ -896,7 +896,7 @@ private:
     if (!duplicate_batches.empty()) {
       duplicated = structural_lifecycle_.duplicate_hierarchy_batches_in_transaction(
           transaction, duplicate_batches, ModelingSelectionMode::Object,
-          "Flatten Instance", true);
+          "Flatten Instance", true, SceneEntityNamePolicy::Unique);
       if (!duplicated.ok || !duplicated.changed ||
           duplicated.batches.size() != duplicate_batches.size()) {
         return from_status(CommandResult{

@@ -4307,7 +4307,8 @@ public:
       std::span<const EntityId> roots,
       DocumentCommandService &document_commands,
       ModelingSelectionMode result_selection_mode,
-      bool independent_mesh_assets = false) {
+      bool independent_mesh_assets = false,
+      SceneEntityNamePolicy name_policy = SceneEntityNamePolicy::DuplicateFamily) {
     const ModelingSelectionProjectionSnapshot &projection =
         selection_projection_snapshot();
     return hierarchy_duplicate_service_.duplicate_entity_hierarchy(
@@ -4359,7 +4360,7 @@ public:
                   scene_, entity, kInvalidEntityId);
             },
         },
-        roots, result_selection_mode);
+        roots, result_selection_mode, name_policy);
   }
 
   ModelingCommandResult
@@ -12556,10 +12557,10 @@ ModelingSessionService::duplicate_entity_hierarchy(
     std::span<const EntityId> roots,
     DocumentCommandService &document_commands,
     ModelingSelectionMode result_selection_mode,
-    bool independent_mesh_assets) {
+    bool independent_mesh_assets, SceneEntityNamePolicy name_policy) {
   return impl_->duplicate_entity_hierarchy(
       roots, document_commands, result_selection_mode,
-      independent_mesh_assets);
+      independent_mesh_assets, name_policy);
 }
 
 ModelingCommandResult

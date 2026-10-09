@@ -12,6 +12,7 @@
 #include "editor/modeling/modeling_types.hpp"
 #include "editor/modeling/services/modeling_structural_duplicate.hpp"
 #include "scene/scene_document.hpp"
+#include "scene/scene_entity_naming.hpp"
 
 #include <memory>
 #include <span>
@@ -204,7 +205,8 @@ public:
       std::span<const SceneStructuralDuplicateBatch> batches,
       ModelingSelectionMode result_selection_mode,
       std::string label = "Duplicate Selection",
-      bool independent_mesh_assets = false);
+      bool independent_mesh_assets = false,
+      SceneEntityNamePolicy name_policy = SceneEntityNamePolicy::DuplicateFamily);
 
   CommandResult destroy_entity(EntityId entity);
   CommandResult destroy_selected_hierarchy();

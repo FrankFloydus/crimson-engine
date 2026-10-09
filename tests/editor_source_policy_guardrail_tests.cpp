@@ -1869,7 +1869,7 @@ TEST(ModelingSessionServiceSplitTests,
   EXPECT_NE(document_helpers.find("SceneEntityNameAllocator *name_allocator"),
             std::string::npos);
   EXPECT_NE(duplicate_command.find(
-                "SceneEntityNameAllocator name_allocator(scene())"),
+                "SceneEntityNameAllocator name_allocator(scene(), name_policy_)"),
             std::string::npos);
   EXPECT_NE(duplicate_command.find("&name_allocator"), std::string::npos);
   EXPECT_NE(naming_header.find("next_index_by_base_"), std::string::npos);

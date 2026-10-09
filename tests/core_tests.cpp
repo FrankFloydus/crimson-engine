@@ -24,6 +24,7 @@
 #include "editor/commands/document/create_entity_command.hpp"
 #include "editor/commands/document/destroy_entity_command.hpp"
 #include "editor/commands/document/duplicate_entity_command.hpp"
+#include "editor/commands/document/duplicate_selected_hierarchy_command.hpp"
 #include "editor/commands/document/group_selection_command.hpp"
 #include "editor/commands/document/rename_entity_command.hpp"
 #include "editor/commands/document/reparent_entity_command.hpp"
@@ -7813,6 +7814,95 @@ TEST(SceneEntityNamingTests,
 
   names.reserve_name("Mesh_4");
   EXPECT_EQ(names.next_name_for_kind(SceneEntityKind::Mesh), "Mesh_5");
+}
+
+TEST(SceneEntityNamingTests, DuplicateFamiliesContinueTheLargestSceneSuffix) {
+  SceneDocument scene;
+  const EntityId parent = scene.create_entity("Container");
+  ASSERT_NE(scene.create_entity("Box", EntityKind::Mesh), kInvalidEntityId);
+  ASSERT_NE(scene.create_entity("Box_1"), kInvalidEntityId);
+  ASSERT_NE(scene.create_entity("Box_00007"), kInvalidEntityId);
+  ASSERT_NE(scene.create_entity("box_050"), kInvalidEntityId);
+  ASSERT_NE(scene.create_entity("Box_8_tail"), kInvalidEntityId);
+  const EntityId hidden = scene.create_entity("Box_009", EntityKind::Light);
+  ASSERT_TRUE(scene.set_parent(hidden, parent, false));
+  ASSERT_TRUE(scene.set_visible(hidden, false));
+
+  SceneEntityNameAllocator names(scene, SceneEntityNamePolicy::DuplicateFamily);
+  EXPECT_EQ(names.next_name("Box"), "Box_010");
+  EXPECT_EQ(names.next_name("Box_001"), "Box_011");
+  EXPECT_EQ(names.next_name("Box_7"), "Box_012");
+  EXPECT_EQ(names.next_name("box"), "box_051");
+  EXPECT_EQ(SceneEntityNaming::next_name(
+                scene, "Box_001", SceneEntityNamePolicy::DuplicateFamily),
+            "Box_010");
+}
+
+TEST(SceneEntityNamingTests, DuplicateFamiliesRecognizeOnlyFinalAsciiDigits) {
+  SceneDocument scene;
+  const std::array<std::pair<std::string_view, std::string_view>, 10u> cases{{
+      {"", "Entity_001"},
+      {"Box", "Box_001"},
+      {"Box_000", "Box_001"},
+      {"Box_1_1", "Box_1_002"},
+      {"Box_", "Box__001"},
+      {"_001", "_001_001"},
+      {"Box_+1", "Box_+1_001"},
+      {"Box_-1", "Box_-1_001"},
+      {"Box_1tail", "Box_1tail_001"},
+      {"Box_\xD9\xA1", "Box_\xD9\xA1_001"},
+  }};
+  for (const auto &[source_name, expected] : cases) {
+    SCOPED_TRACE(source_name);
+    EXPECT_EQ(SceneEntityNaming::next_name(
+                  scene, source_name, SceneEntityNamePolicy::DuplicateFamily),
+              expected);
+  }
+}
+
+TEST(SceneEntityNamingTests, DuplicateFamiliesReserveBatchNamesAndSourceMaxima) {
+  SceneDocument scene;
+  SceneEntityNameAllocator names(scene, SceneEntityNamePolicy::DuplicateFamily);
+  EXPECT_EQ(names.next_name("Box"), "Box_001");
+  EXPECT_EQ(names.next_name("Box_001"), "Box_002");
+  EXPECT_EQ(names.next_name("Box_001"), "Box_003");
+  names.reserve_name("Box_00100");
+  EXPECT_EQ(names.next_name("Box"), "Box_101");
+  EXPECT_EQ(names.next_name("Box_150"), "Box_151");
+  EXPECT_EQ(names.next_name("Box_000"), "Box_152");
+}
+
+TEST(SceneEntityNamingTests, DuplicateNumbersGrowBeyondPaddingAndIntegerLimits) {
+  SceneDocument scene;
+  ASSERT_NE(scene.create_entity("Box_999"), kInvalidEntityId);
+  EXPECT_EQ(SceneEntityNaming::next_name(
+                scene, "Box", SceneEntityNamePolicy::DuplicateFamily),
+            "Box_1000");
+
+  const std::string large_number(80u, '9');
+  ASSERT_NE(scene.create_entity("Huge_" + large_number), kInvalidEntityId);
+  SceneEntityNameAllocator names(scene, SceneEntityNamePolicy::DuplicateFamily);
+  EXPECT_EQ(names.next_name("Huge"), "Huge_1" + std::string(80u, '0'));
+  EXPECT_EQ(names.next_name("Huge_001"),
+            "Huge_1" + std::string(79u, '0') + "1");
+  EXPECT_EQ(names.next_name("External_" + large_number),
+            "External_1" + std::string(80u, '0'));
+  EXPECT_EQ(names.next_name("Padded_" + std::string(80u, '0') + "5"),
+            "Padded_006");
+}
+
+TEST(SceneEntityNamingTests, GenericUniquenessKeepsLiteralNamesAndReusesGaps) {
+  SceneDocument scene;
+  ASSERT_NE(scene.create_entity("Box"), kInvalidEntityId);
+  ASSERT_NE(scene.create_entity("Box_2"), kInvalidEntityId);
+  ASSERT_NE(scene.create_entity("Box_001"), kInvalidEntityId);
+  SceneEntityNameAllocator names(scene);
+  EXPECT_EQ(names.next_name("Box"), "Box_1");
+  EXPECT_EQ(names.next_name("Box_001"), "Box_001_1");
+  EXPECT_EQ(names.next_name("Box_007"), "Box_007");
+  EXPECT_EQ(SceneEntityNaming::next_name(scene, "Box"), "Box_1");
+  EXPECT_EQ(SceneEntityNaming::next_name(scene, "Box_001"), "Box_001_1");
+  EXPECT_EQ(SceneEntityNaming::next_name(scene, "Box_007"), "Box_007");
 }
 
 TEST(SceneDocumentTests, BatchedTransformAssignmentsDirtyOnceAndSkipNoOps) {
@@ -17285,7 +17375,7 @@ TEST(DocumentCommandTests, TypedLifecycleCommandsRestoreSceneSnapshots) {
   EXPECT_FALSE(duplicate_uuid.empty());
   EXPECT_NE(duplicate_uuid, scene.uuid(source));
   ASSERT_NE(scene.name(duplicate_root), nullptr);
-  EXPECT_EQ(scene.name(duplicate_root)->name, "Source_1");
+  EXPECT_EQ(scene.name(duplicate_root)->name, "Source_001");
   ASSERT_NE(scene.mesh(duplicate_root), nullptr);
   EXPECT_EQ(scene.mesh(duplicate_root)->mesh, 42u);
   ASSERT_EQ(scene.children(duplicate_root).size(), 1u);
@@ -17340,6 +17430,18 @@ TEST(DocumentCommandTests,
   EXPECT_FALSE(undo_redo.can_undo());
   EXPECT_FALSE(undo_redo.can_redo());
   EXPECT_GT(scene.selection_revision(), before_selection_revision);
+
+  scene.set_editor_object_id_allocator({});
+  auto retry = std::make_unique<DuplicateEntityCommand>(scene, source);
+  DuplicateEntityCommand *retry_command = retry.get();
+  ASSERT_TRUE(undo_redo.execute(std::move(retry)).ok);
+  const EntityId duplicate_root = retry_command->duplicate_entity();
+  ASSERT_NE(scene.name(duplicate_root), nullptr);
+  EXPECT_EQ(scene.name(duplicate_root)->name, "Source_001");
+  ASSERT_EQ(scene.children(duplicate_root).size(), 1u);
+  ASSERT_NE(scene.name(scene.children(duplicate_root).front()), nullptr);
+  EXPECT_EQ(scene.name(scene.children(duplicate_root).front())->name,
+            "Child_001");
 }
 
 TEST(DocumentCommandTests,
@@ -17373,6 +17475,64 @@ TEST(DocumentCommandTests,
   EXPECT_EQ(scene.children(source), std::vector<EntityId>{child});
   EXPECT_FALSE(history.can_undo());
   EXPECT_TRUE(history.can_redo());
+
+  scene.set_editor_object_id_allocator({});
+  ASSERT_TRUE(history.redo().ok);
+  ASSERT_TRUE(scene.exists(duplicate_root));
+  ASSERT_NE(scene.name(duplicate_root), nullptr);
+  EXPECT_EQ(scene.name(duplicate_root)->name, "Source_001");
+  ASSERT_EQ(scene.children(duplicate_root).size(), 1u);
+  ASSERT_NE(scene.name(scene.children(duplicate_root).front()), nullptr);
+  EXPECT_EQ(scene.name(scene.children(duplicate_root).front())->name,
+            "Child_001");
+}
+
+TEST(DocumentCommandTests, DuplicateReusesProvisionalClonesWithoutExtraSuffixes) {
+  SceneDocument scene;
+  const EntityId first = scene.create_entity("Box_001", EntityKind::Mesh);
+  const EntityId second = scene.create_entity("Box_001", EntityKind::Mesh);
+  const auto first_snapshot = document_command_capture_entity_snapshot(scene, first);
+  const auto second_snapshot = document_command_capture_entity_snapshot(scene, second);
+  ASSERT_TRUE(first_snapshot.has_value());
+  ASSERT_TRUE(second_snapshot.has_value());
+  const EntityId first_clone = scene.create_entity("Box_001", EntityKind::Mesh);
+  const EntityId second_clone = scene.create_entity("Box_001", EntityKind::Mesh);
+  DuplicateSelectedHierarchyCommand command(
+      scene, {*first_snapshot, *second_snapshot},
+      {{first, first_clone}, {second, second_clone}});
+
+  ASSERT_TRUE(command.redo().ok);
+  EXPECT_EQ(command.duplicate_roots(),
+            (std::vector<EntityId>{first_clone, second_clone}));
+  EXPECT_EQ(scene.name(first_clone)->name, "Box_002");
+  EXPECT_EQ(scene.name(second_clone)->name, "Box_003");
+  ASSERT_TRUE(command.undo().ok);
+  ASSERT_TRUE(command.redo().ok);
+  EXPECT_EQ(scene.name(first_clone)->name, "Box_002");
+  EXPECT_EQ(scene.name(second_clone)->name, "Box_003");
+}
+
+TEST(DocumentCommandTests, SnapshotImportPolicyRetainsLiteralUniqueNames) {
+  SceneDocument scene;
+  const EntityId source = scene.create_entity("Box_007", EntityKind::Mesh);
+  auto snapshot = document_command_capture_entity_snapshot(scene, source);
+  ASSERT_TRUE(snapshot.has_value());
+  ASSERT_TRUE(scene.destroy_entity(source));
+  DuplicateSelectedHierarchyCommand import_command(
+      scene, {*snapshot}, {}, SceneEntityNamePolicy::Unique);
+  ASSERT_TRUE(import_command.redo().ok);
+  ASSERT_EQ(import_command.duplicate_roots().size(), 1u);
+  const EntityId imported = import_command.duplicate_roots().front();
+  ASSERT_NE(scene.name(imported), nullptr);
+  EXPECT_EQ(scene.name(imported)->name, "Box_007");
+
+  DuplicateSelectedHierarchyCommand paste_command(
+      scene, {*snapshot}, {}, SceneEntityNamePolicy::Unique);
+  ASSERT_TRUE(paste_command.redo().ok);
+  ASSERT_EQ(paste_command.duplicate_roots().size(), 1u);
+  const EntityId pasted = paste_command.duplicate_roots().front();
+  ASSERT_NE(scene.name(pasted), nullptr);
+  EXPECT_EQ(scene.name(pasted)->name, "Box_007_1");
 }
 
 TEST(DocumentCommandTests, DuplicateMintsEditorObjectIdsOnceAndRedoReusesThem) {

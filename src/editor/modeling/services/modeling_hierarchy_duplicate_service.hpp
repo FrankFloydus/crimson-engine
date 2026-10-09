@@ -10,6 +10,7 @@
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
 #include "editor/selection/modeling_selection_projection_snapshot.hpp"
 #include "core/types.hpp"
+#include "scene/scene_entity_naming.hpp"
 
 #include <functional>
 #include <span>
@@ -80,7 +81,8 @@ public:
       DocumentCommandService &document_commands,
       ModelingHierarchyDuplicateRuntime runtime,
       std::span<const EntityId> explicit_roots,
-      ModelingSelectionMode result_selection_mode) const;
+      ModelingSelectionMode result_selection_mode,
+      SceneEntityNamePolicy name_policy = SceneEntityNamePolicy::DuplicateFamily) const;
 };
 
 } // namespace quader

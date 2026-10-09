@@ -104,7 +104,8 @@ PreparedStructuralDuplicate prepare_structural_duplicate(
     DocumentCommandService &document_commands, EditorTransaction &transaction,
     std::span<const SceneStructuralDuplicateBatch> batches,
     ModelingSelectionMode result_selection_mode, const std::string &label,
-    bool independent_mesh_assets, bool contains_modeling_content) {
+    bool independent_mesh_assets, bool contains_modeling_content,
+    SceneEntityNamePolicy name_policy = SceneEntityNamePolicy::DuplicateFamily) {
   PreparedStructuralDuplicate prepared;
   if (document_commands.property_edit_active()) {
     prepared.result = duplicate_batch_failure(command_invalid_result(
@@ -240,7 +241,7 @@ PreparedStructuralDuplicate prepare_structural_duplicate(
     ModelingHierarchyDuplicateResult duplicated =
         modeling.duplicate_entity_hierarchy(
             batch.roots, document_commands, result_selection_mode,
-            independent_mesh_assets);
+            independent_mesh_assets, name_policy);
     prepared.duplicate_roots.insert(prepared.duplicate_roots.end(),
                                     duplicated.duplicate_roots.begin(),
                                     duplicated.duplicate_roots.end());
@@ -690,7 +691,7 @@ SceneStructuralLifecycleService::duplicate_hierarchy_batches_in_transaction(
     EditorTransaction &transaction,
     std::span<const SceneStructuralDuplicateBatch> batches,
     ModelingSelectionMode result_selection_mode, std::string label,
-    bool independent_mesh_assets) {
+    bool independent_mesh_assets, SceneEntityNamePolicy name_policy) {
   for (const SceneStructuralDuplicateBatch &batch : batches) {
     if (!document_command_hierarchy_available_in_release(scene_, batch.roots)) {
       return duplicate_batch_failure(
@@ -735,7 +736,7 @@ SceneStructuralLifecycleService::duplicate_hierarchy_batches_in_transaction(
   PreparedStructuralDuplicate prepared = prepare_structural_duplicate(
       scene_, modeling_, document_commands_, transaction, normalized_batches,
       result_selection_mode, label, independent_mesh_assets,
-      contains_modeling_content);
+      contains_modeling_content, name_policy);
   if (prepared.result.ok && prepared.result.changed &&
       !scene_.discard_scalar_compensation_checkpoint(
           prepared.scalar_checkpoint)) {

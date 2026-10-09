@@ -69,8 +69,11 @@ public:
         if (!snapshot.has_value()) {
           return document_command_missing_entity_result();
         }
+        SceneEntityNameAllocator name_allocator(
+            scene(), SceneEntityNamePolicy::DuplicateFamily);
         duplicate = document_command_duplicate_entity_snapshot_tree(
-            scene(), *snapshot, scene().parent(source_));
+            scene(), *snapshot, scene().parent(source_), false, nullptr,
+            &name_allocator);
         if (duplicate != kInvalidEntityId) {
           duplicate_snapshot_ =
               document_command_capture_entity_snapshot(scene(), duplicate);

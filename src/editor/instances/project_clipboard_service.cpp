@@ -653,7 +653,7 @@ private:
     };
     auto command = std::make_unique<DuplicateSelectedHierarchyCommand>(
         session.scene(), std::move(occurrences),
-        std::unordered_map<EntityId, EntityId>{});
+        std::unordered_map<EntityId, EntityId>{}, SceneEntityNamePolicy::Unique);
     const CommandResult duplicated = transaction.execute(std::move(command));
     if (!duplicated.ok || !duplicated.changed) {
       return rollback(duplicated);
@@ -930,7 +930,7 @@ private:
       auto command = std::make_unique<DuplicateSelectedHierarchyCommand>(
           session.scene(),
           std::vector<DocumentEntitySnapshot>{std::move(definition)},
-          std::move(imported_meshes));
+          std::move(imported_meshes), SceneEntityNamePolicy::Unique);
       DuplicateSelectedHierarchyCommand *definition_command = command.get();
       const CommandResult duplicated = transaction.execute(std::move(command));
       if (!duplicated.ok || !duplicated.changed ||
@@ -979,7 +979,8 @@ private:
     auto occurrence_command =
         std::make_unique<DuplicateSelectedHierarchyCommand>(
             session.scene(), std::move(occurrences),
-            std::unordered_map<EntityId, EntityId>{});
+            std::unordered_map<EntityId, EntityId>{},
+            SceneEntityNamePolicy::Unique);
     const CommandResult occurrences_created =
         transaction.execute(std::move(occurrence_command));
     if (!occurrences_created.ok || !occurrences_created.changed) {

@@ -1077,9 +1077,9 @@ TEST(PathArrayToolServiceTests,
   const QuaderModelingObjectRef path =
       create_path(harness.editor, {10.0F, 0.0F, 0.0F});
   const QuaderEntityRef source_root =
-      create_empty(harness.editor, "Path Array Hierarchy");
+      create_empty(harness.editor, "Path Array Hierarchy_007");
   const QuaderModelingObjectRef child =
-      create_box(harness.editor, "Hierarchy Mesh");
+      create_box(harness.editor, "Hierarchy Mesh_007");
   ASSERT_TRUE(
       harness.editor.scene().reparent(child.entity, source_root.id, false).ok());
   ASSERT_TRUE(harness.editor.scene()
@@ -1137,13 +1137,20 @@ TEST(PathArrayToolServiceTests,
   EXPECT_NE(std::ranges::find(roots, source_root.id), roots.end());
   expect_world_origins_match(roots, harness.session.scene(),
                              preview.root_world_transforms);
+  std::vector<std::string> child_names;
   for (const EntityId root : roots) {
     const std::vector<EntityId> children =
         harness.session.scene().children(root);
     ASSERT_EQ(children.size(), 1U);
     EXPECT_EQ(harness.session.scene().kind(children.front()),
               EntityKind::Mesh);
+    ASSERT_NE(harness.session.scene().name(children.front()), nullptr);
+    child_names.push_back(harness.session.scene().name(children.front())->name);
   }
+  std::ranges::sort(child_names);
+  EXPECT_EQ(child_names,
+            (std::vector<std::string>{"Hierarchy Mesh_007", "Hierarchy Mesh_007_1",
+                                      "Hierarchy Mesh_007_2"}));
 
   std::vector<std::string> uuids;
   std::vector<std::string> names;
@@ -1151,6 +1158,12 @@ TEST(PathArrayToolServiceTests,
     uuids.push_back(harness.session.scene().uuid(root));
     names.push_back(harness.session.scene().name(root)->name);
   }
+  auto allocated_names = names;
+  std::ranges::sort(allocated_names);
+  EXPECT_EQ(allocated_names,
+            (std::vector<std::string>{"Path Array Hierarchy_007",
+                                      "Path Array Hierarchy_007_1",
+                                      "Path Array Hierarchy_007_2"}));
 
   const CommandResult undone = harness.session.history().undo();
   ASSERT_TRUE(undone.ok) << undone.message;

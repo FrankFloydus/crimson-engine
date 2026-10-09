@@ -17668,6 +17668,144 @@ TEST(EditorApiTests, PublicDuplicateSelectionDuplicatesLightEntityThroughSceneHi
     EXPECT_TRUE(duplicate_snapshot->active);
 }
 
+TEST(EditorApiTests, PublicDuplicateSelectionContinuesNameFamilyAndReplaysNames) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const auto source = create_selected_box(editor, "Box");
+  std::vector<quader::EntityId> duplicates;
+  constexpr std::array<std::string_view, 3> kExpectedNames{
+      "Box_001", "Box_002", "Box_003"};
+  for (std::size_t index = 0; index < kExpectedNames.size(); ++index) {
+    if (index == 2U) {
+      ASSERT_TRUE(editor.scene().select(duplicates.front()).ok());
+    }
+    const auto duplicated =
+        editor.commands().execute(quader::quader_command::kDuplicateSelection);
+    ASSERT_TRUE(duplicated.ok()) << duplicated.error_message();
+    ASSERT_TRUE(duplicated.changed());
+    const auto selected = selected_entities(editor);
+    ASSERT_EQ(selected.size(), 1U);
+    const auto snapshot = editor.query().entity(selected.front());
+    ASSERT_TRUE(snapshot.has_value());
+    EXPECT_EQ(snapshot->name, kExpectedNames[index]);
+    EXPECT_NE(snapshot->id, source.entity);
+    duplicates.push_back(snapshot->id);
+  }
+  EXPECT_EQ(editor.query().entity(source.entity)->name, "Box");
+  const auto third_object =
+      editor.query().modeling_object_for_entity(duplicates.back());
+  ASSERT_TRUE(third_object.has_value());
+
+  ASSERT_TRUE(editor.history().undo().ok());
+  EXPECT_FALSE(editor.query().entity(duplicates.back()).has_value());
+  EXPECT_EQ(selected_entities(editor),
+            std::vector<quader::EntityId>{duplicates.front()});
+  ASSERT_TRUE(editor.history().redo().ok());
+  EXPECT_EQ(selected_entities(editor),
+            std::vector<quader::EntityId>{duplicates.back()});
+  for (std::size_t index = 0; index < duplicates.size(); ++index) {
+    const auto restored = editor.query().entity(duplicates[index]);
+    ASSERT_TRUE(restored.has_value());
+    EXPECT_EQ(restored->name, kExpectedNames[index]);
+  }
+  const auto restored_object =
+      editor.query().modeling_object_for_entity(duplicates.back());
+  ASSERT_TRUE(restored_object.has_value());
+  EXPECT_EQ(restored_object->modeling_object_id, third_object->modeling_object_id);
+
+  ASSERT_TRUE(editor.history().undo().ok());
+  ASSERT_TRUE(editor.commands()
+                  .execute(quader::quader_command::kDuplicateSelection)
+                  .ok());
+  const auto branch_selection = selected_entities(editor);
+  ASSERT_EQ(branch_selection.size(), 1U);
+  const auto branch_duplicate = editor.query().entity(branch_selection.front());
+  ASSERT_TRUE(branch_duplicate.has_value());
+  EXPECT_EQ(branch_duplicate->name, "Box_003");
+}
+
+TEST(EditorApiTests, PublicDuplicateSelectionNamesHierarchyAndBatchSceneWide) {
+  CommandTestHarness harness;
+  quader::QuaderEditorApi &editor = harness.editor;
+  const auto first = create_selected_box(editor, "Box");
+  const auto second = create_selected_box(editor, "Box_001");
+  ASSERT_TRUE(editor.selection()
+                  .select_objects({first.entity, second.entity}, first.entity)
+                  .ok());
+  const auto group = editor.scene().group_selection("Assembly");
+  ASSERT_TRUE(group.ok()) << group.error_message();
+  const auto loose = create_selected_box(editor, "Box_003");
+  const auto existing =
+      editor.scene().create_point_light({.name = "Box_007"});
+  ASSERT_TRUE(existing.ok()) << existing.error_message();
+  const auto originals = editor.query().entities();
+  ASSERT_TRUE(editor.selection()
+                  .select_objects({group.value().id, loose.entity}, loose.entity)
+                  .ok());
+
+  const auto duplicated =
+      editor.commands().execute(quader::quader_command::kDuplicateSelection);
+  ASSERT_TRUE(duplicated.ok()) << duplicated.error_message();
+  ASSERT_TRUE(duplicated.changed());
+  EXPECT_EQ(editor.query().entities().size(), originals.size() + 4U);
+  EXPECT_EQ(selected_entities(editor).size(), 2U);
+  const auto duplicate_group = entity_named(editor, "Assembly_001");
+  ASSERT_TRUE(duplicate_group.has_value());
+  EXPECT_EQ(child_count(editor, duplicate_group->id), 2U);
+  std::vector<std::string> duplicate_names;
+  for (const auto &snapshot : editor.query().entities()) {
+    const auto original = std::find_if(
+        originals.begin(), originals.end(), [&](const auto &candidate) {
+          return candidate.id == snapshot.id;
+        });
+    if (original == originals.end()) {
+      duplicate_names.push_back(snapshot.name);
+    } else {
+      EXPECT_EQ(snapshot.name, original->name);
+    }
+  }
+  std::sort(duplicate_names.begin(), duplicate_names.end());
+  EXPECT_EQ(duplicate_names,
+            (std::vector<std::string>{"Assembly_001", "Box_008", "Box_009",
+                                      "Box_010"}));
+}
+
+TEST(EditorApiTests, PublicDuplicateSelectionUsesPersistedNamesAfterReopen) {
+  const auto path = project_test_path("duplicate-name-family");
+  {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi &editor = harness.editor;
+    create_selected_box(editor, "Box");
+    ASSERT_TRUE(editor.commands()
+                    .execute(quader::quader_command::kDuplicateSelection)
+                    .ok());
+    const auto existing = editor.scene().create_entity({.name = "Box_020"});
+    ASSERT_TRUE(existing.ok()) << existing.error_message();
+    ASSERT_TRUE(editor.scene().rename(existing.value().id, "Box_017").ok());
+    EXPECT_EQ(editor.query().entity(existing.value().id)->name, "Box_017");
+    ASSERT_TRUE(save_scene_as_native(editor, path).ok());
+  }
+
+  CommandTestHarness reopened;
+  quader::QuaderEditorApi &editor = reopened.editor;
+  ASSERT_TRUE(open_scene_native(editor, path).ok());
+  const auto source = entity_named(editor, "Box_001");
+  ASSERT_TRUE(source.has_value());
+  EXPECT_TRUE(entity_named(editor, "Box").has_value());
+  EXPECT_TRUE(entity_named(editor, "Box_017").has_value());
+  EXPECT_FALSE(entity_named(editor, "Box_020").has_value());
+  ASSERT_TRUE(editor.scene().select(source->id).ok());
+  const auto duplicated =
+      editor.commands().execute(quader::quader_command::kDuplicateSelection);
+  ASSERT_TRUE(duplicated.ok()) << duplicated.error_message();
+  ASSERT_TRUE(duplicated.changed());
+  const auto selected = selected_entities(editor);
+  ASSERT_EQ(selected.size(), 1U);
+  const auto snapshot = editor.query().entity(selected.front());
+  ASSERT_TRUE(snapshot.has_value());
+  EXPECT_EQ(snapshot->name, "Box_018");
+}
+
 TEST(EditorApiTests, EmptyDocumentSettingsExistWithoutAnyEntitiesOrSelection) {
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
@@ -23941,7 +24079,7 @@ TEST(EditorApiTests,
   CommandTestHarness harness;
   quader::QuaderEditorApi &editor = harness.editor;
   const quader::QuaderModelingObjectRef original =
-      create_selected_box(editor, "Original Definition Member");
+      create_selected_box(editor, "Original Definition Member_007");
   ASSERT_TRUE(editor.modeling().create_instance().ok());
   const quader::EntityId first_occurrence = selected_entities(editor).front();
   const quader::EntityId definition =
@@ -23958,7 +24096,7 @@ TEST(EditorApiTests,
   const auto added_result = editor.modeling().create_box(
       quader::QuaderBounds{.min = {-1.0f, -1.0f, -1.0f},
                            .max = {1.0f, 1.0f, 1.0f}},
-      "Added Definition Member");
+      "Added Definition Member_007");
   ASSERT_TRUE(added_result.ok()) << added_result.error_message();
   const quader::QuaderModelingObjectRef added = added_result.value();
   ASSERT_EQ(editor.query().entity(added.entity)->parent, definition);
@@ -23980,14 +24118,22 @@ TEST(EditorApiTests,
   EXPECT_TRUE(editor.query().entity(definition).has_value());
   ASSERT_EQ(flattened_sibling.value().root_entities.size(), 2u);
   quader::EntityId sibling_added = quader::kInvalidEntityId;
+  std::vector<std::string> flattened_names;
   for (const quader::QuaderEntityRef &root :
        flattened_sibling.value().root_entities) {
+    const auto snapshot = editor.query().entity(root.id);
+    ASSERT_TRUE(snapshot.has_value());
+    flattened_names.push_back(snapshot->name);
     const auto root_world = entity_world_transform(editor, root.id);
     ASSERT_TRUE(root_world.has_value());
     if (std::abs(root_world->values[12] - 12.0f) <= kTestPositionEpsilon) {
       sibling_added = root.id;
     }
   }
+  std::sort(flattened_names.begin(), flattened_names.end());
+  EXPECT_EQ(flattened_names,
+            (std::vector<std::string>{"Added Definition Member_007_1",
+                                      "Original Definition Member_007_1"}));
   ASSERT_NE(sibling_added, quader::kInvalidEntityId)
       << "the sibling flatten must include the member added during edit mode";
   const auto sibling_added_world = entity_world_transform(editor, sibling_added);

@@ -100,7 +100,8 @@ ModelingHierarchyDuplicateService::duplicate_entity_hierarchy(
     DocumentCommandService &document_commands,
     ModelingHierarchyDuplicateRuntime runtime,
     std::span<const EntityId> explicit_roots,
-    ModelingSelectionMode result_selection_mode) const {
+    ModelingSelectionMode result_selection_mode,
+    SceneEntityNamePolicy name_policy) const {
   if (!document_command_hierarchy_available_in_release(scene, explicit_roots)) {
     return ModelingHierarchyDuplicateResult(ModelingCommandResult{
         .ok = false,
@@ -205,7 +206,7 @@ ModelingHierarchyDuplicateService::duplicate_entity_hierarchy(
   const DocumentDuplicateHierarchyResult duplicated = [&]() {
     QDR_PROFILE_SCOPE("Duplicate document hierarchy");
     return document_commands.duplicate_hierarchy_with_existing_clones(
-        roots, clone_by_source);
+        roots, clone_by_source, name_policy);
   }();
   if (!duplicated.ok || duplicated.duplicate_roots.empty()) {
     restore_selection_baseline(scene, selection_before, runtime,
