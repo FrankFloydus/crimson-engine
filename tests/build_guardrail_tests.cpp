@@ -4754,10 +4754,14 @@ TEST(WindowGuardrailTests,
   expect_missing(app_source, "window->showMaximized()");
   expect_contains(ui_system_source, "main_window_->show()");
   EXPECT_EQ(count_occurrences(ui_system_source, "main_window_->show()"), 1u);
+  const std::string prepare_shell = source_slice(
+      app_source, "bool App::prepare_composed_shell()",
+      "bool App::initialize_shell()");
+  ASSERT_FALSE(prepare_shell.empty());
   const std::size_t apply_window_settings =
-      app_source.find("apply_window_settings();");
+      prepare_shell.find("apply_window_settings();");
   const std::size_t reveal_window =
-      app_source.find("ui_.show();", apply_window_settings);
+      prepare_shell.find("ui_.show();", apply_window_settings);
   ASSERT_NE(apply_window_settings, std::string::npos);
   ASSERT_NE(reveal_window, std::string::npos);
   EXPECT_LT(apply_window_settings, reveal_window);

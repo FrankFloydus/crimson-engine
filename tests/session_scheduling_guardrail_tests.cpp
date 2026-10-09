@@ -31,7 +31,7 @@ TEST(SessionSchedulingGuardrailTests,
   const std::string app = read_source_file("src/app/app.cpp");
   const std::string ui = read_source_file("src/ui/ui_system.cpp");
   const std::string initialize =
-      source_slice(app, "bool App::initialize(", "void App::poll_autosave(");
+      source_slice(app, "bool App::initialize(", "bool App::prepare_composed_shell()");
   ASSERT_FALSE(initialize.empty());
   EXPECT_NE(initialize.find("frame_timer_ = std::make_unique<QTimer>()"),
             std::string::npos);
@@ -75,8 +75,9 @@ TEST(SessionSchedulingGuardrailTests,
   const std::string poll =
       source_slice(app, "void App::poll_autosave()", "int App::run()");
   ASSERT_FALSE(poll.empty());
-  expect_before(poll, "if (!running_ || shutdown_complete_)",
-                 "project_session_.autosave().poll(");
+  expect_before(
+      poll, "if (!running_ || shutdown_complete_ || shell_replacement_pending_)",
+      "project_session_.autosave().poll(");
   expect_before(poll, "return;", "project_session_.autosave().poll(");
   for (const std::string_view interaction : {
            "rendering_frame_", "QApplication::activeModalWidget()",
@@ -92,14 +93,18 @@ TEST(SessionSchedulingGuardrailTests,
      ShutdownStopsAutosaveBeforeDestroyingItsUiAndEditorOwners) {
   const std::string app = read_source_file("src/app/app.cpp");
   const std::string shutdown = source_slice(
-      app, "void App::shutdown()", "void App::bind_active_scene(");
+      app, "void App::shutdown()", "void App::retire_shell()");
   ASSERT_FALSE(shutdown.empty());
   expect_before(shutdown, "running_ = false", "autosave_timer_->stop()");
-  expect_before(shutdown, "autosave_timer_->stop()", "ui_.shutdown()");
-  expect_before(shutdown, "set_session_settings_changed_callback({})",
-                 "ui_.shutdown()");
+  expect_before(shutdown, "autosave_timer_->stop()", "retire_shell()");
   expect_before(shutdown, "autosave_timer_->stop()", "autosave_timer_.reset()");
   expect_before(shutdown, "autosave_timer_.reset()", "editor_.reset()");
+  expect_before(shutdown, "retire_shell()", "editor_.reset()");
+  const std::string retire_shell = source_slice(
+      app, "void App::retire_shell()", "void App::replace_shell()");
+  ASSERT_FALSE(retire_shell.empty());
+  expect_before(retire_shell, "set_session_settings_changed_callback({})",
+                 "ui_.shutdown()");
 }
 
 TEST(SessionSchedulingGuardrailTests,
@@ -118,8 +123,10 @@ TEST(SessionSchedulingGuardrailTests,
 
   const std::string app = read_source_file("src/app/app.cpp");
   const std::string binding = source_slice(
-      app, "ui_.set_session_settings_changed_callback(",
-      "editor_ = std::make_unique<QuaderEditorApi>");
+      app, "bool App::initialize_shell()", "void App::poll_autosave()");
+  ASSERT_FALSE(binding.empty());
+  EXPECT_NE(binding.find("ui_.set_session_settings_changed_callback("),
+            std::string::npos);
   EXPECT_NE(binding.find("project_session_.set_history_max_steps("),
             std::string::npos);
   EXPECT_NE(binding.find("settings.undo_steps"), std::string::npos);

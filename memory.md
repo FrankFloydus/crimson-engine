@@ -1002,6 +1002,21 @@ Tests: [render extraction](tests/render_extraction_tests.cpp),
   semaphore; a CPU drain alone does not complete GPU use. Keep the Qt bootstrap anchor/device alive
   through UI render-resource detachment, bridge teardown and Filament destruction. Review the pinned
   Qt private hooks on upgrades. See the [composition contract](thirdparty/filament/README.md#qt-composed-viewport-presentation).
+- A committed project open/switch or return to Home replaces the Qt root and renderer generation,
+  preserving the project session and editor API. The outgoing root must never receive destination
+  placement, even while hidden. Save its placement before changing the path key; queued/coalesced
+  transitions must not save those outgoing bounds under an incoming project. Retire the old root
+  only after its initiating action, loading operation, render batch and modal/popup stacks unwind.
+  Detach render resources, shut down the bridge and Filament, then destroy Qt's borrowed device.
+  Apply final placement to the new root before its first logo paint. A new root can already have
+  correct native/Qt geometry while exposure remains queued and no logo has been painted or
+  submitted. Let native exposure arrive normally and gate synchronous renderer initialization on
+  actual logo submission, without an event pump or timeout fallback. Bind current owners before
+  waiting so dirty-close preflight works; newer project commits invalidate the prepared shell and
+  accepted Close must not restart GPU initialization. Same-project scene switches,
+  cancelled actions and failed loads retain the root; accepted quit must not create Home. Owners:
+  [App shell lifetime](src/app/app.cpp), [UI retirement](src/ui/ui_system.cpp); protect first-paint
+  placement and generation changes in [native workspace tests](tests/qt_project_workspace_tests.cpp).
 - Native-child renderer/tests retain a scene HWND and backing anchored at `(0, 0)` inside a
   growing/shrinking clip host. Gate reserved pixels through render's Vulkan capability and retain
   the patch's `clipped=false`; render the hidden region and extend the grid before reveal.

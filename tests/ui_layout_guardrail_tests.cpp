@@ -401,12 +401,14 @@ TEST(UiLayoutGuardrailTests,
   expect_missing(apply_body, "showNormal(");
   expect_missing(apply_body, "window->show(");
 
-  const std::size_t initialize_app =
-      app_source.find("bool App::initialize(");
+  const std::string prepare_composed_shell = source_slice(
+      app_source, "bool App::prepare_composed_shell()",
+      "bool App::initialize_shell()");
+  ASSERT_FALSE(prepare_composed_shell.empty());
   const std::size_t apply_placement =
-      app_source.find("apply_window_settings();", initialize_app);
-  const std::size_t reveal = app_source.find("ui_.show();", apply_placement);
-  ASSERT_NE(initialize_app, std::string::npos);
+      prepare_composed_shell.find("apply_window_settings();");
+  const std::size_t reveal =
+      prepare_composed_shell.find("ui_.show();", apply_placement);
   ASSERT_NE(apply_placement, std::string::npos);
   ASSERT_NE(reveal, std::string::npos);
   EXPECT_LT(apply_placement, reveal);
@@ -3409,6 +3411,29 @@ TEST(UiLayoutGuardrailTests,
 
 TEST(UiLayoutGuardrailTests,
      ShutdownClearsUiRuntimeHooksBeforeDestroyingTheirCallbackOwner) {
+  const std::string app = read_source_file("src/app/app.cpp");
+  const std::string retire_shell = source_slice(
+      app, "void App::retire_shell()", "void App::replace_shell()");
+  ASSERT_FALSE(retire_shell.empty());
+  const std::size_t detach_borrowers =
+      retire_shell.find("ui_.detach_render_resources()");
+  const std::size_t shutdown_bridge = retire_shell.find("render_bridge_.shutdown()");
+  const std::size_t destroy_resolver =
+      retire_shell.find("project_material_resolver_.reset()");
+  const std::size_t shutdown_renderer =
+      retire_shell.find("render_system_.shutdown()");
+  const std::size_t destroy_shell = retire_shell.find("ui_.shutdown()");
+  ASSERT_NE(detach_borrowers, std::string::npos);
+  ASSERT_NE(shutdown_bridge, std::string::npos);
+  ASSERT_NE(destroy_resolver, std::string::npos);
+  ASSERT_NE(shutdown_renderer, std::string::npos);
+  ASSERT_NE(destroy_shell, std::string::npos);
+  EXPECT_LT(detach_borrowers, shutdown_bridge);
+  EXPECT_LT(shutdown_bridge, destroy_resolver);
+  EXPECT_LT(destroy_resolver, shutdown_renderer);
+  EXPECT_LT(shutdown_renderer, destroy_shell);
+  expect_missing(retire_shell, "editor_.reset()");
+
   const std::string ui_system = read_source_file("src/ui/ui_system.cpp");
   const std::string clear_hooks = source_slice(
       ui_system, "void UISystem::clear_editor_runtime_hooks()",

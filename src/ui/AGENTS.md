@@ -22,6 +22,13 @@ file except through prior written authorization from Francesco Di Blasi.
   binding and stable layout. Reveal a loaded scene after its current visible panes submit
   successfully. Failed loads must release the cover without changing the prior document. Protect
   repeated loads against stale frame callbacks in `tests/qt_project_workspace_tests.cpp`.
+  Committed project changes and returns to Home use a fresh root through `App` after the initiating
+  action returns. Retire outgoing drafts and hide its window without applying destination geometry;
+  keep its composition device until render teardown finishes. The new root receives its final
+  placement before showing the logo. Native exposure can still be queued when `show()` returns;
+  `App` must wait for the actual logo submission before synchronous renderer work. Do not pump
+  events or equate correct geometry with presentation. Scene changes within one project retain
+  their root.
 - [QtMainWindow](qt_main_window.cpp) may repost a root `UpdateRequest` at most twice when native
   `QS_KEY` or QPA keys are pending, covering native-to-QPA delivery without pumping events or taking
   input ownership. The next pass must paint even when user input is excluded; no-key updates paint
@@ -97,8 +104,9 @@ file except through prior written authorization from Francesco Di Blasi.
   drains external command producers before offscreen painting and root `beginCompose`, including
   nested event loops. Review those hooks when changing Qt versions. Qt owns composed-window VSync;
   native previews retain render's native presentation path.
-  The retained bootstrap anchor keeps Qt's device alive across home/workspace changes and until
-  render teardown. Disconnect callbacks and release render resources before destroying that device.
+  The retained bootstrap anchor keeps Qt's device alive for its root generation, including scene
+  changes, and until render teardown. Project/Home replacements use a fresh root/device after
+  disconnecting callbacks and releasing every old render borrower.
   Project placement handoff hides and reshows this same root after App captures the outgoing
   bounds. Retire outgoing UI drafts before hiding, apply the new binding/layout while hidden,
   and restart the accepted-logo timer at the new placement. Keep root flags, native identity and

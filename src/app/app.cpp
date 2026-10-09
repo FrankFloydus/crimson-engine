@@ -295,65 +295,16 @@ bool App::initialize(QApplication &application,
   project_session_.set_resource_root(executable_dir);
   window_settings_path_.clear();
   window_settings_ = AppWindowSettings::defaults();
+  placement_screen_.clear();
 
-  const bool composed_viewports = options.render_backend == RendererBackend::Vulkan;
-  if (composed_viewports) {
-    if (!ui_.initialize(render_system_, executable_dir, true)) {
-      LOG_ERROR("Qt composition shell initialization failed");
-      shutdown();
-      return false;
-    }
-    apply_window_settings();
-    ui_.show();
-    if (ui_.composition_context() == nullptr) {
-      LOG_ERROR("Qt did not initialize the viewport composition device");
-      shutdown();
-      return false;
-    }
-    if (!ui_.loading_logo_presented()) {
-      LOG_ERROR("Qt did not present the loading logo at the native client geometry");
-      shutdown();
-      return false;
-    }
-  }
-
-  if (!render_system_.initialize(
-          nullptr, executable_dir,
-          RenderConfig{.backend = options.render_backend},
-          ui_.composition_context())) {
-    LOG_ERROR("Renderer initialization failed");
+  options_ = options;
+  shell_replacement_pending_ = false;
+  shell_replacement_started_ = false;
+  if (!initialize_shell()) {
     shutdown();
     return false;
   }
 
-  render_system_.initialize_scene_render_bridge(render_bridge_,
-                                                executable_dir);
-  project_material_resolver_ =
-      std::make_unique<ProjectSessionRenderMaterialResolver>(project_session_);
-  render_bridge_.set_project_material_resolver(
-      project_material_resolver_.get());
-
-  if ((!composed_viewports &&
-       !ui_.initialize(render_system_, executable_dir)) ||
-      (composed_viewports && !ui_.initialize_render_resources())) {
-    LOG_ERROR("Qt Widgets UI initialization failed");
-    shutdown();
-    return false;
-  }
-
-  ui_.set_session_settings_changed_callback(
-      [this](const SessionPreferences &settings) {
-        project_session_.set_history_max_steps(
-            static_cast<std::size_t>(settings.undo_steps));
-      });
-  project_material_resolver_->set_default_material_texture(
-      ui_.default_material_texture());
-  ui_.set_default_material_texture_changed_callback(
-      [this](const std::filesystem::path &path) {
-        project_material_resolver_->set_default_material_texture(path);
-      });
-  project_session_.set_history_max_steps(
-      static_cast<std::size_t>(ui_.session_settings().undo_steps));
   editor_ = std::make_unique<QuaderEditorApi>(project_session_);
   QuaderProjectAssetsApiInternalAccess::set_recycle_port(
       editor_->project_assets(), recycle_project_asset_paths);
@@ -421,19 +372,14 @@ bool App::initialize(QApplication &application,
               [this](bool succeeded) { ui_.end_loading_presentation(succeeded); },
       });
 
-  if (!composed_viewports) {
-    apply_window_settings();
-  }
-  ui_.show();
-  ui_.set_composed_frame_prepare_callback([this]() { prepare_composed_frame(); });
-  install_display_refresh_rate_sync();
   frame_timer_ = std::make_unique<QTimer>();
   frame_timer_->setTimerType(Qt::PreciseTimer);
   auto *frame_presentation_gate =
       new AppFramePresentationGate(application, frame_timer_.get());
   QObject::connect(frame_timer_.get(), &QTimer::timeout, application_,
                    [this, frame_presentation_gate]() {
-                     if (running_ && !shutdown_complete_) {
+                     if (running_ && !shutdown_complete_ &&
+                         !shell_replacement_pending_) {
                        if (frame_presentation_gate
                                ->blocks_frame_submission()) {
                          // QDialog::exec() and QMenu::exec() keep this timer
@@ -457,8 +403,6 @@ bool App::initialize(QApplication &application,
                    });
   QObject::connect(application_, &QApplication::aboutToQuit, frame_timer_.get(),
                    [this]() { running_ = false; });
-  ui_.set_viewport_presentation_requested_callback(
-      [this]() { request_viewport_presentation(); });
   autosave_timer_ = std::make_unique<QTimer>();
   autosave_timer_->setTimerType(Qt::CoarseTimer);
   autosave_timer_->setInterval(1000);
@@ -468,8 +412,92 @@ bool App::initialize(QApplication &application,
   return true;
 }
 
+bool App::prepare_composed_shell() {
+  if (!ui_.initialize(render_system_, executable_dir_, true)) {
+    LOG_ERROR("Qt composition shell initialization failed");
+    return false;
+  }
+  if (editor_ != nullptr) {
+    // The new root may receive Close while Qt delivers its initial exposure.
+    // Bind the current project now so its ordinary dirty preflight is ready.
+    bind_current_scene();
+  }
+  apply_window_settings();
+  ui_.show();
+  return true;
+}
+
+bool App::initialize_shell() {
+  const bool composed_viewports = options_.render_backend == RendererBackend::Vulkan;
+  if (composed_viewports) {
+    if (ui_.main_window() == nullptr && !prepare_composed_shell()) {
+      return false;
+    }
+    if (ui_.composition_context() == nullptr) {
+      LOG_ERROR("Qt did not initialize the viewport composition device");
+      return false;
+    }
+    if (!ui_.loading_logo_presented()) {
+      LOG_ERROR("Qt did not present the loading logo at the native client geometry");
+      return false;
+    }
+  }
+
+  if (!render_system_.initialize(
+          nullptr, executable_dir_,
+          RenderConfig{.backend = options_.render_backend},
+          ui_.composition_context())) {
+    LOG_ERROR("Renderer initialization failed");
+    return false;
+  }
+
+  render_system_.initialize_scene_render_bridge(render_bridge_,
+                                                executable_dir_);
+  project_material_resolver_ =
+      std::make_unique<ProjectSessionRenderMaterialResolver>(project_session_);
+  render_bridge_.set_project_material_resolver(
+      project_material_resolver_.get());
+
+  if ((!composed_viewports &&
+       !ui_.initialize(render_system_, executable_dir_)) ||
+      (composed_viewports && !ui_.initialize_render_resources())) {
+    LOG_ERROR("Qt Widgets UI initialization failed");
+    return false;
+  }
+
+  ui_.set_session_settings_changed_callback(
+      [this](const SessionPreferences &settings) {
+        project_session_.set_history_max_steps(
+            static_cast<std::size_t>(settings.undo_steps));
+      });
+  project_material_resolver_->set_default_material_texture(
+      ui_.default_material_texture());
+  ui_.set_default_material_texture_changed_callback(
+      [this](const std::filesystem::path &path) {
+        project_material_resolver_->set_default_material_texture(path);
+      });
+  project_session_.set_history_max_steps(
+      static_cast<std::size_t>(ui_.session_settings().undo_steps));
+  if (editor_ != nullptr) {
+    if (composed_viewports) {
+      ui_.refresh_project_workspace();
+    } else {
+      bind_current_scene();
+    }
+  }
+  if (!composed_viewports) {
+    apply_window_settings();
+  }
+  ui_.show();
+  ui_.set_composed_frame_prepare_callback([this]() { prepare_composed_frame(); });
+  ui_.set_viewport_presentation_requested_callback(
+      [this]() { request_viewport_presentation(); });
+  install_display_refresh_rate_sync();
+  return true;
+}
+
 void App::poll_autosave() {
-  if (!running_ || shutdown_complete_) {
+  if (!running_ || shutdown_complete_ || shell_replacement_pending_) {
     return;
   }
   // Autosave has its own coarse timer. Never serialize in the render loop or
@@ -507,41 +535,130 @@ void App::shutdown() {
 
   shutdown_complete_ = true;
   running_ = false;
-  ui_.set_viewport_presentation_requested_callback({});
-  viewport_presentation_request_ = {};
   if (frame_timer_) {
     frame_timer_->stop();
   }
   if (autosave_timer_) {
     autosave_timer_->stop();
   }
+  if (!shell_replacement_pending_) {
+    save_window_settings();
+  }
+  frame_timer_.reset();
+  autosave_timer_.reset();
+  retire_shell();
+  editor_.reset();
+  shell_replacement_pending_ = false;
+  shell_replacement_started_ = false;
+  application_ = nullptr;
+}
+
+void App::retire_shell() {
+  ui_.set_viewport_presentation_requested_callback({});
+  viewport_presentation_request_ = {};
   ui_.set_session_settings_changed_callback({});
   ui_.set_default_material_texture_changed_callback({});
   QObject::disconnect(window_screen_changed_connection_);
   QObject::disconnect(screen_refresh_rate_changed_connection_);
   display_refresh_screen_ = nullptr;
-  save_window_settings();
   ui_.detach_render_resources();
-  frame_timer_.reset();
-  autosave_timer_.reset();
   render_overlay_snapshot_cache_.reset();
-  editor_.reset();
+  scene_settings_binding_.reset();
   render_bridge_.shutdown();
   project_material_resolver_.reset();
   render_system_.shutdown();
   ui_.shutdown();
-  application_ = nullptr;
+}
+
+void App::replace_shell() {
+  if (!shell_replacement_pending_ || !running_ || shutdown_complete_ ||
+      application_ == nullptr || frame_timer_ == nullptr) {
+    return;
+  }
+  // A queued delivery may run inside an initiating action's modal loop. Keep
+  // that action's widgets and command batch alive until their stacks unwind.
+  if (rendering_frame_ || preparing_composition_ ||
+      ui_.loading_operation_active() ||
+      QApplication::activeModalWidget() != nullptr ||
+      QApplication::activePopupWidget() != nullptr) {
+    QTimer::singleShot(16, frame_timer_.get(), [this]() { replace_shell(); });
+    return;
+  }
+  const bool composed_viewports = options_.render_backend == RendererBackend::Vulkan;
+  if (!shell_replacement_started_) {
+    shell_replacement_started_ = true;
+    const bool quit_on_last_window_closed = application_->quitOnLastWindowClosed();
+    application_->setQuitOnLastWindowClosed(false);
+    retire_shell();
+    const bool prepared = !composed_viewports || prepare_composed_shell();
+    application_->setQuitOnLastWindowClosed(quit_on_last_window_closed);
+    if (!prepared) {
+      LOG_ERROR("Unable to prepare the replacement application window");
+      shutdown();
+      QCoreApplication::exit(1);
+      return;
+    }
+  }
+  if (!shell_replacement_pending_ || !running_ || shutdown_complete_) {
+    return;
+  }
+  if (!shell_replacement_started_) {
+    QTimer::singleShot(0, frame_timer_.get(), [this]() { replace_shell(); });
+    return;
+  }
+  if (composed_viewports &&
+      (ui_.main_window() == nullptr || !ui_.main_window()->isVisible())) {
+    return;
+  }
+  if (composed_viewports && (ui_.composition_context() == nullptr ||
+                            !ui_.loading_logo_presented())) {
+    // A newly shown HWND can have its final client geometry before Qt handles
+    // the queued native exposure. Let that ordinary event paint and submit the
+    // logo before beginning synchronous renderer work; never pump input here.
+    QTimer::singleShot(16, frame_timer_.get(), [this]() { replace_shell(); });
+    return;
+  }
+  const bool initialized = initialize_shell();
+  if (!initialized) {
+    LOG_ERROR("Unable to initialize the replacement application window");
+    shutdown();
+    QCoreApplication::exit(1);
+    return;
+  }
+  shell_replacement_pending_ = false;
+  shell_replacement_started_ = false;
+  frame_clock_.reset();
+  frame_schedule_ = {};
+  frame_timer_->start(0);
+}
+
+void App::bind_current_scene() {
+  const OpenSceneSession *active_scene = project_session_.active_scene();
+  SceneSession &scene = active_scene != nullptr && active_scene->session != nullptr
+                            ? *active_scene->session
+                            : project_session_.fallback_scene();
+  bind_active_scene(scene);
 }
 
 void App::bind_active_scene(SceneSession &scene) {
   const auto next_window_settings_path = AppWindowSettings::resolve_project_path(
       executable_dir_, project_session_.manifest_path());
   const bool project_changed = next_window_settings_path != window_settings_path_;
+  bool queue_shell_replacement = false;
   if (project_changed) {
-    // The committed project binding changed, but the shell still presents the
-    // outgoing placement. Scene/tab replacement within one project skips this.
-    save_window_settings();
-    ui_.begin_window_placement_transition();
+    const bool closing_window = ui_.main_window_close_in_progress();
+    if (!shell_replacement_pending_) {
+      // The visible shell still owns the outgoing placement. Coalesced commits
+      // must never write it into a project that has not received its own shell.
+      save_window_settings();
+      placement_screen_ = active_display_screen(ui_.main_window());
+    }
+    queue_shell_replacement = !closing_window && !shell_replacement_pending_;
+    shell_replacement_pending_ = !closing_window;
+    shell_replacement_started_ = false;
+    if (shell_replacement_pending_) {
+      ui_.prepare_shell_replacement();
+    }
     window_settings_path_ = next_window_settings_path;
     window_settings_ = AppWindowSettings::defaults();
     if (!window_settings_path_.empty()) {
@@ -570,11 +687,11 @@ void App::bind_active_scene(SceneSession &scene) {
         scene.selection(), scene.native_tools(), scene.point_placement(),
         default_material_);
   }
-  if (project_changed) {
-    // Docks and Home content have their new minima before final placement and
-    // first logo submission; no intermediate window geometry is exposed.
-    apply_window_settings();
-    ui_.end_window_placement_transition();
+  if (queue_shell_replacement && frame_timer_ != nullptr) {
+    // Keep domain/UI binding publication synchronous, then retire the old
+    // widgets only after the project action that owns their stack returns.
+    frame_timer_->stop();
+    QTimer::singleShot(0, frame_timer_.get(), [this]() { replace_shell(); });
   }
 }
 
@@ -669,6 +786,9 @@ void App::apply_window_settings() {
     window->setScreen(target_screen);
   }
   window->setGeometry(preliminary_client_rect);
+  if (placement->maximized) {
+    window->setWindowState(Qt::WindowMaximized);
+  }
   (void)window->winId();
   QWindow *native_window = window->windowHandle();
   QMargins margins;
@@ -676,7 +796,9 @@ void App::apply_window_settings() {
     // Hidden QWidget geometry is deferred. Synchronize the native window first
     // so its frame margins reflect the saved monitor and its DPI, without
     // mapping the shell before UISystem::show().
-    native_window->setGeometry(window->geometry());
+    if (!placement->maximized) {
+      native_window->setGeometry(window->geometry());
+    }
     margins = native_window->frameMargins();
   }
   const PlatformWindowChromeFrame frame =
@@ -686,6 +808,9 @@ void App::apply_window_settings() {
            .top = margins.top(),
            .right = margins.right(),
            .bottom = margins.bottom()});
+  if (placement->maximized) {
+    window->setWindowState(Qt::WindowNoState);
+  }
   window->setGeometry(frame.x, frame.y,
                       std::max(kPlatformWindowMinimumWidth, frame.width),
                       std::max(kPlatformWindowMinimumHeight, frame.height));
@@ -706,16 +831,24 @@ void App::apply_home_window_placement() {
     return;
   }
   window->setWindowState(Qt::WindowNoState);
-  QScreen *screen = active_display_screen(window);
+  QScreen *screen = placement_screen_ != nullptr
+                        ? placement_screen_.data()
+                        : active_display_screen(window);
   if (screen == nullptr) {
     window->resize(1200, 740);
     return;
   }
   window->setScreen(screen);
+  const QRect available = screen->availableGeometry();
+  const QSize preliminary_size(std::min(1200, available.width()),
+                               std::min(740, available.height()));
+  window->setGeometry(QRect(available.center() -
+                               QPoint(preliminary_size.width() / 2,
+                                      preliminary_size.height() / 2),
+                           preliminary_size));
   (void)window->winId();
   QWindow *host = window->windowHandle();
   const QMargins margins = host != nullptr ? host->frameMargins() : QMargins{};
-  const QRect available = screen->availableGeometry();
   const int frame_width = std::max(0, margins.left()) + std::max(0, margins.right());
   const int frame_height = std::max(0, margins.top()) + std::max(0, margins.bottom());
   const int maximum_width = std::max(1, available.width() - frame_width);
@@ -761,7 +894,8 @@ void App::save_window_settings() {
 }
 
 void App::prepare_composed_frame() {
-  if (shutdown_complete_ || preparing_composition_ || editor_ == nullptr ||
+  if (shutdown_complete_ || shell_replacement_pending_ || preparing_composition_ ||
+      editor_ == nullptr ||
       project_session_.active_scene() == nullptr) {
     return;
   }
@@ -777,7 +911,7 @@ void App::prepare_composed_frame() {
 
 bool App::render_frame(const FrameTiming &frame_timing) {
   QDR_PROFILE_FUNCTION();
-  if (rendering_frame_ || !editor_) {
+  if (rendering_frame_ || shell_replacement_pending_ || !editor_) {
     return false;
   }
   const auto frame_begin = std::chrono::steady_clock::now();
@@ -794,6 +928,10 @@ bool App::render_frame(const FrameTiming &frame_timing) {
     ui_.process_viewport_input();
   }
   const auto viewport_input_end = std::chrono::steady_clock::now();
+  if (shell_replacement_pending_) {
+    rendering_frame_ = false;
+    return false;
+  }
   // Viewport commands execute synchronously and may close the active scene.
   // Do not retain an OpenSceneSession pointer across that dispatch boundary.
   if (project_session_.active_scene() != nullptr) {
@@ -909,7 +1047,8 @@ bool App::render_frame(const FrameTiming &frame_timing) {
 }
 
 void App::request_viewport_presentation() {
-  if (!frame_timer_ || !running_ || shutdown_complete_) {
+  if (!frame_timer_ || !running_ || shutdown_complete_ ||
+      shell_replacement_pending_) {
     return;
   }
   if (!viewport_presentation_request_.request()) {
@@ -921,7 +1060,8 @@ void App::request_viewport_presentation() {
       frame_timer_.get(),
       [this]() {
         viewport_presentation_request_.deliver();
-        if (!frame_timer_ || !running_ || shutdown_complete_) {
+        if (!frame_timer_ || !running_ || shutdown_complete_ ||
+            shell_replacement_pending_) {
           return;
         }
         if (viewport_presentation_request_.take(rendering_frame_)) {
@@ -932,7 +1072,7 @@ void App::request_viewport_presentation() {
 }
 
 void App::schedule_next_frame(bool submitted) {
-  if (!frame_timer_ || !running_) {
+  if (!frame_timer_ || !running_ || shell_replacement_pending_) {
     return;
   }
   // A nested Qt loop may deliver the queued request during render_frame().

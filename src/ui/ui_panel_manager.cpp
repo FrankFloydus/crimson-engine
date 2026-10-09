@@ -49,6 +49,22 @@ void UIPanelManager::add(UIPanelId id, QDockWidget &dock_widget) {
                    });
 }
 
+void UIPanelManager::clear() {
+  visibility_changed_ = {};
+  presentation_changed_ = {};
+  for (std::size_t slot = 0; slot < docks_.size(); ++slot) {
+    if (QDockWidget *dock_widget = docks_[slot]) {
+      dock_widget->removeEventFilter(this);
+      QObject::disconnect(dock_widget, nullptr, this, nullptr);
+      QObject::disconnect(dock_widget->toggleViewAction(), nullptr, this, nullptr);
+    }
+    docks_[slot] = nullptr;
+    explicit_visibility_[slot] =
+        ui_panel_default_visible(static_cast<UIPanelId>(slot));
+  }
+  presented_.fill(false);
+}
+
 void UIPanelManager::set_visibility_changed_callback(
     VisibilityChangedCallback callback) {
   visibility_changed_ = std::move(callback);

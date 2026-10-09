@@ -2166,7 +2166,8 @@ void UISystem::install_runtime_hooks(
                                             : ViewportToolState{};
         });
     command_event_filter_->set_command_input_owner_provider([this]() {
-      return loading_presentation_active_ || command_palette_open_pending_ ||
+      return shell_replacement_pending_ || loading_presentation_active_ ||
+             command_palette_open_pending_ ||
              qt_foreign_window_owns_command_input(main_window_.get()) ||
              qt_window_owns_command_input(command_palette_) ||
              qt_window_owns_command_input(settings_dialog_) ||
@@ -2219,8 +2220,8 @@ void UISystem::install_runtime_hooks(
 
 void UISystem::refresh_project_workspace(bool force) {
   QDR_PROFILE_SCOPE("UI project workspace refresh");
-  if (editor_ == nullptr || project_home_page_ == nullptr ||
-      scene_workspace_ == nullptr) {
+  if (shell_replacement_pending_ || editor_ == nullptr ||
+      project_home_page_ == nullptr || scene_workspace_ == nullptr) {
     return;
   }
 
@@ -3189,7 +3190,15 @@ void UISystem::synchronize_tool_toolbar(
 void UISystem::show_workspace() {
   const bool presentation_changed = home_visible_;
   if (!viewport_initialized_ && viewport_panel_ != nullptr &&
-      render_system_ != nullptr) {
+      render_system_ != nullptr && !render_system_->initialized() &&
+      composition_anchor_ == nullptr) {
+    // Native surfaces require the renderer before entering the workspace.
+    // Only the composed bootstrap prepares chrome before its Qt device exists.
+    project_workspace_refresh_signal_->store(true, std::memory_order_relaxed);
+    return;
+  }
+  if (!viewport_initialized_ && viewport_panel_ != nullptr &&
+      render_system_ != nullptr && render_system_->initialized()) {
     if (!viewport_panel_->initialize(*render_system_)) {
       LOG_ERROR("Unable to initialize the native viewport surface");
       project_workspace_refresh_signal_->store(true,
@@ -3342,7 +3351,8 @@ bool UISystem::allow_main_window_close() {
 }
 
 void UISystem::show() {
-  if (main_window_ != nullptr && !main_window_->isVisible()) {
+  if (!shell_replacement_pending_ && main_window_ != nullptr &&
+      !main_window_->isVisible()) {
     startup_presentation_pending_ = true;
     prepare_startup_presentation();
     main_window_->show();
@@ -3448,7 +3458,11 @@ void UISystem::detach_render_resources() {
   }
   if (viewport_panel_ != nullptr) {
     viewport_panel_->set_settings_panel(nullptr);
-    viewport_panel_->reset_interactions(editor_, native_tools_);
+    if (shell_replacement_pending_) {
+      viewport_panel_->abandon_interactions();
+    } else {
+      viewport_panel_->reset_interactions(editor_, native_tools_);
+    }
     viewport_panel_->shutdown();
   }
   if (material_preview_surface_ != nullptr) {
@@ -3469,6 +3483,7 @@ void UISystem::detach_render_resources() {
 
 void UISystem::shutdown() {
   detach_render_resources();
+  panels_.clear();
   main_menu_.reset();
   main_window_.reset();
   command_palette_ = nullptr;
@@ -3482,7 +3497,7 @@ void UISystem::shutdown() {
   loading_presentation_active_ = false;
   loading_previous_presentation_pending_ = false;
   startup_presentation_pending_ = false;
-  window_placement_transition_visible_ = false;
+  shell_replacement_pending_ = false;
   viewport_panel_ = nullptr;
   central_stack_ = nullptr;
   composition_anchor_ = nullptr;
@@ -3585,6 +3600,9 @@ void UISystem::shutdown() {
 void UISystem::refresh(const FrameTiming &frame_timing,
                        RenderFramePerformanceStats render_performance) {
   QDR_PROFILE_SCOPE("UI system refresh");
+  if (shell_replacement_pending_) {
+    return;
+  }
   frame_timing_ = frame_timing;
   render_performance_ = render_performance;
   // Keep structural property/command presentation stable during a pointer drag.
@@ -4268,7 +4286,7 @@ void UISystem::begin_loading_presentation() {
     return;
   }
   ++loading_operation_depth_;
-  if (loading_operation_depth_ != 1u) {
+  if (loading_operation_depth_ != 1u || shell_replacement_pending_) {
     return;
   }
   loading_previous_presentation_pending_ = loading_presentation_active_;
@@ -4278,11 +4296,11 @@ void UISystem::begin_loading_presentation() {
   static_cast<QtLoadingCover *>(loading_cover_)->flush_presentation();
 }
 
-void UISystem::begin_window_placement_transition() {
-  if (main_window_ == nullptr) {
+void UISystem::prepare_shell_replacement() {
+  if (main_window_ == nullptr || shell_replacement_pending_) {
     return;
   }
-  window_placement_transition_visible_ = main_window_->isVisible();
+  shell_replacement_pending_ = true;
   if (!home_visible_) {
     capture_workspace_window_state();
   }
@@ -4291,23 +4309,15 @@ void UISystem::begin_window_placement_transition() {
   abandon_scene_backed_panels();
   if (viewport_panel_ != nullptr) {
     viewport_panel_->abandon_interactions();
+    viewport_panel_->set_loading_presentation_blocked(true);
   }
   if (standard_material_editor_window_ != nullptr) {
     standard_material_editor_window_->abandon_interactions();
   }
-  // Hiding this same root preserves Qt's device and the retained anchor.
+  // App retires this root only after the initiating action returns. Keep its
+  // device alive until all render borrowers have been released, without ever
+  // mapping this window at the destination project's placement.
   main_window_->hide();
-  if (loading_cover_ != nullptr) {
-    static_cast<QtLoadingCover *>(loading_cover_)->begin_presentation();
-  }
-}
-
-void UISystem::end_window_placement_transition() {
-  const bool restore_visible = window_placement_transition_visible_;
-  window_placement_transition_visible_ = false;
-  if (restore_visible && !main_window_close_in_progress_) {
-    show();
-  }
 }
 
 bool UISystem::loading_logo_presented() const {
@@ -4321,6 +4331,10 @@ void UISystem::end_loading_presentation(bool succeeded) {
   }
   --loading_operation_depth_;
   if (loading_operation_depth_ != 0u) {
+    return;
+  }
+  if (shell_replacement_pending_) {
+    loading_previous_presentation_pending_ = false;
     return;
   }
   const bool previous_presentation_pending = loading_previous_presentation_pending_;
@@ -4445,7 +4459,6 @@ void UISystem::finish_startup_presentation() {
   }
   loading_presentation_active_ = false;
   startup_presentation_pending_ = false;
-  window_placement_transition_visible_ = false;
   static_cast<QtLoadingCover *>(loading_cover_)->set_input_blocked(false);
   loading_cover_->hide();
   if (loading_previous_focus_ != nullptr && loading_previous_focus_->isVisible() &&

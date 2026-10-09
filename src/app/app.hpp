@@ -51,12 +51,17 @@ public:
   void shutdown();
 
 private:
+  bool prepare_composed_shell();
+  bool initialize_shell();
+  void retire_shell();
+  void replace_shell();
   void apply_window_settings();
   void apply_home_window_placement();
   void install_display_refresh_rate_sync();
   void bind_display_refresh_rate_screen(QScreen *screen);
   void synchronize_display_refresh_rate(QScreen *screen);
   void save_window_settings();
+  void bind_current_scene();
   void bind_active_scene(SceneSession &scene);
   bool render_frame(const FrameTiming &frame_timing);
   void prepare_composed_frame();
@@ -70,6 +75,7 @@ private:
   QMetaObject::Connection window_screen_changed_connection_;
   QMetaObject::Connection screen_refresh_rate_changed_connection_;
   QPointer<QScreen> display_refresh_screen_;
+  QPointer<QScreen> placement_screen_;
   AppFrameClock frame_clock_;
   AppFrameSchedule frame_schedule_;
   AppFramePresentationRequest viewport_presentation_request_;
@@ -83,6 +89,7 @@ private:
   std::filesystem::path executable_dir_;
   std::filesystem::path window_settings_path_;
   AppWindowSettings window_settings_;
+  AppOptions options_;
   AssetId default_material_ = kInvalidAssetId;
   std::optional<QuaderSceneDocumentBinding> scene_settings_binding_;
   std::uint64_t scene_settings_revision_ = 0u;
@@ -90,6 +97,8 @@ private:
   bool shutdown_complete_ = false;
   bool rendering_frame_ = false;
   bool preparing_composition_ = false;
+  bool shell_replacement_pending_ = false;
+  bool shell_replacement_started_ = false;
 };
 
 } // namespace quader

@@ -15,16 +15,26 @@ file except through prior written authorization from Francesco Di Blasi.
   never persisted. Project placement uses `AppWindowSettings::resolve_project_path()` in the
   per-user `project_windows` directory, keyed by canonical manifest path; the legacy global file
   is a read-only fallback for projects without their own file. At a committed project binding
-  change, save the outgoing project's normal/maximized placement before hiding the retained root.
-  Rebind the new content, apply final placement while hidden, then restart and reveal its loading
-  cover. Scene switches within one project do not restore placement. Accepted quit saves the
-  outgoing project before Home and must not reshow the root.
+  change, save the outgoing project's normal/maximized placement before hiding its root. Queue
+  replacement until the initiating action, loading operation, composition and modal/popup stacks
+  have returned. Keep the project session and editor API, but create a fresh UI/render generation;
+  never apply the destination placement to the outgoing window. Apply final placement to the new
+  root before its first show and logo submission. Scene switches within one project, cancelled
+  actions and failed project loads keep their root. Accepted quit saves the outgoing project and
+  must not create or reveal Home.
 - `QApplication` owns the only event loop. The app `QTimer` schedules UI refresh, semantic input,
   scene synchronization and viewport preparation. Vulkan scene panes submit from Qt's composition
   callbacks; native preview and standalone surfaces retain their existing submission path.
 - Vulkan startup first reveals the retained Qt shell and its transparent composition anchor, then
-  lends Qt's initialized device/queue to `RenderSystem`. The anchor survives workspace/home changes.
-  Do not create a second device or destroy Qt's device while Filament still borrows it.
+  lends Qt's initialized device/queue to `RenderSystem`. The anchor survives scene changes within
+  that shell generation. A project/Home replacement retires its render borrowers before destroying
+  the old Qt root/device. Prepare the new shell with current scene bindings and final placement,
+  then let normal native exposure present its logo before synchronous renderer initialization.
+  Matching geometry and a returned `show()` do not prove exposure or submission. The queued
+  replacement waits for that submission without pumping events or using a timeout fallback; a
+  newer project commit invalidates preparation, and an accepted Close must not resume renderer
+  startup. Bind dirty-close preflight before this wait. Never destroy Qt's device while Filament
+  still borrows it.
 - A changed pane geometry revision prepares the current scene/camera before that Qt paint, even
   when layout runs before the next timer. `prepare_composed_frame()` must not consume input twice
   or recursively refresh the UI. Wrap Filament producers in `SharedRenderCommandBatch`; nested

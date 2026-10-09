@@ -154,9 +154,14 @@ public:
   void show_home();
   void show_workspace();
   void show();
-  /// Repositions the retained root between committed project/Home bindings.
-  void begin_window_placement_transition();
-  void end_window_placement_transition();
+  /// Retires visible presentation while App queues a fresh shell generation.
+  void prepare_shell_replacement();
+  [[nodiscard]] bool main_window_close_in_progress() const {
+    return main_window_close_in_progress_;
+  }
+  [[nodiscard]] bool loading_operation_active() const {
+    return loading_operation_depth_ != 0u;
+  }
   /// Covers synchronous document loading through the first current scene frame.
   void begin_loading_presentation();
   void end_loading_presentation(bool succeeded);
@@ -401,7 +406,7 @@ private:
   bool loading_presentation_active_ = false;
   bool loading_previous_presentation_pending_ = false;
   bool startup_presentation_pending_ = false;
-  bool window_placement_transition_visible_ = false;
+  bool shell_replacement_pending_ = false;
   bool retained_message_box_prewarm_scheduled_ = false;
   bool initialized_ = false;
   bool render_resources_detached_ = false;

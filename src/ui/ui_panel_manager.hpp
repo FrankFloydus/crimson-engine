@@ -43,6 +43,8 @@ public:
   UIPanelManager() = default;
 
   void add(UIPanelId id, QDockWidget &dock);
+  /// Retires a shell's registrations while its docks are still alive.
+  void clear();
   void set_visibility_changed_callback(VisibilityChangedCallback callback);
   void set_presentation_changed_callback(PresentationChangedCallback callback);
   void apply_settings(const UISettings &settings);
