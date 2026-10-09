@@ -160,6 +160,8 @@ public:
   [[nodiscard]] bool loading_presentation_active() const {
     return loading_presentation_active_;
   }
+  /// Confirms the current cover's logo reached the native root presentation.
+  [[nodiscard]] bool loading_logo_presented() const;
   /// Releases renderer borrowers while preserving the Qt-owned device.
   void detach_render_resources();
   void shutdown();

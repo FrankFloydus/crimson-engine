@@ -308,6 +308,11 @@ bool App::initialize(QApplication &application,
       shutdown();
       return false;
     }
+    if (!ui_.loading_logo_presented()) {
+      LOG_ERROR("Qt did not present the loading logo at the native client geometry");
+      shutdown();
+      return false;
+    }
   }
 
   if (!render_system_.initialize(
@@ -653,8 +658,8 @@ void App::apply_window_settings() {
   }
   if (placement->maximized) {
     // Configure placement while hidden so UISystem remains the sole owner of
-    // mapping the composed shell and suppresses painting until the native
-    // maximized state and retained dock layout have both stabilized.
+    // mapping the composed shell. Its loading cover admits the logo only once
+    // retained geometry matches this real native client and maximized state.
     window->setWindowState(window->windowState() | Qt::WindowMaximized);
   }
 }

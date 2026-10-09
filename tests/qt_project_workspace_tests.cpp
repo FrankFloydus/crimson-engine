@@ -67,6 +67,7 @@
 #include <QAbstractItemDelegate>
 #include <QAbstractItemView>
 #include <QApplication>
+#include <QBackingStore>
 #include <QBuffer>
 #include <QByteArray>
 #include <QDir>
@@ -3657,8 +3658,10 @@ TEST(QtProjectWorkspaceTests,
   auto *window = ui.main_window();
   ASSERT_NE(window, nullptr);
   window->resize(1000, 740);
+  const QSize saved_normal_extent = window->size();
   window->setWindowState(window->windowState() | Qt::WindowMaximized);
   ui.show();
+  EXPECT_EQ(window->normalGeometry().size(), saved_normal_extent);
   auto *cover = window->findChild<QWidget *>(QStringLiteral("quaderLoadingCover"));
   ASSERT_NE(cover, nullptr);
   EXPECT_TRUE(window->updatesEnabled());
@@ -3678,6 +3681,7 @@ TEST(QtProjectWorkspaceTests,
       quader::kInvalidAssetId);
   ASSERT_TRUE(window->isMaximized());
   ASSERT_TRUE(quader::platform_window_is_maximized(ui.native_window_handle()));
+  EXPECT_EQ(window->normalGeometry().size(), saved_normal_extent);
   // Restore through the native title-bar command while the initial cover is
   // still held. Readiness must follow the new state, not the original maximize.
 #if defined(_WIN32)
@@ -3696,6 +3700,8 @@ TEST(QtProjectWorkspaceTests,
   }
   ASSERT_FALSE(window->isMaximized());
   ASSERT_FALSE(quader::platform_window_is_maximized(ui.native_window_handle()));
+  EXPECT_EQ(window->size(), saved_normal_extent);
+  EXPECT_EQ(window->normalGeometry().size(), saved_normal_extent);
   EXPECT_TRUE(ui.loading_presentation_active());
   EXPECT_TRUE(cover->isVisible());
   const QSize restored_extent = window->size();
@@ -7874,7 +7880,40 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
   int argc = 1;
   char application_name[] = "quader-loading-real-app-test";
   char *argv[] = {application_name, nullptr};
-  QApplication application(argc, argv);
+  class LoadingPaintApplication final : public QApplication {
+  public:
+    using QApplication::QApplication;
+    std::function<void(QWidget *)> cover_painted;
+    std::function<void(QWidget *)> root_updated;
+    std::chrono::steady_clock::time_point cover_paint_started{};
+
+    bool notify(QObject *receiver, QEvent *event) override {
+      const bool cover_paint = event->type() == QEvent::Paint &&
+          receiver->objectName() == QStringLiteral("quaderLoadingCover");
+      const bool root_update = event->type() == QEvent::UpdateRequest &&
+          receiver->objectName() == QStringLiteral("quaderMainWindow");
+      const QPointer<QWidget> widget = cover_paint || root_update
+          ? qobject_cast<QWidget *>(receiver) : nullptr;
+#if defined(_WIN32)
+      if (widget != nullptr && !capture_window_raised_) {
+        auto *root = widget->window();
+        if (root->isVisible() && root->internalWinId() != 0) {
+          capture_window_raised_ = true;
+          EXPECT_NE(SetWindowPos(reinterpret_cast<HWND>(root->internalWinId()),
+              HWND_TOPMOST, 0, 0, 0, 0,
+              SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER), FALSE);
+        }
+      }
+#endif
+      if (cover_paint) cover_paint_started = std::chrono::steady_clock::now();
+      const bool handled = QApplication::notify(receiver, event);
+      if (widget != nullptr && cover_paint && cover_painted) cover_painted(widget);
+      if (widget != nullptr && root_update && root_updated) root_updated(widget);
+      return handled;
+    }
+  private:
+    bool capture_window_raised_ = false;
+  } application(argc, argv);
   application.setQuitOnLastWindowClosed(false);
   application.setApplicationName(QStringLiteral("Quader"));
   application.setOrganizationName(QStringLiteral("Quader"));
@@ -7887,6 +7926,30 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
   const auto executable = std::filesystem::path(
       QCoreApplication::applicationFilePath().toStdWString());
   const auto resources = executable.parent_path();
+  const QString review = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (!review.isEmpty()) ASSERT_TRUE(QDir().mkpath(review));
+  const bool saved_maximized = qEnvironmentVariable(
+      "QUADER_LOADING_APP_MAXIMIZED", QStringLiteral("1")) == QStringLiteral("1");
+  const int scale_percent = qEnvironmentVariable(
+      "QUADER_LOADING_APP_SCALE", QStringLiteral("100")).toInt();
+  ASSERT_TRUE(scale_percent == 100 || scale_percent == 200);
+  const auto screens = application.screens();
+  ASSERT_FALSE(screens.isEmpty());
+  const int screen_index = qEnvironmentVariable(
+      "QUADER_LOADING_APP_SCREEN", screens.size() > 1 ? QStringLiteral("1")
+                                                      : QStringLiteral("0")).toInt();
+  ASSERT_GE(screen_index, 0);
+  ASSERT_LT(screen_index, screens.size());
+  const QRect work_area = screens[screen_index]->availableGeometry();
+  // Match a saved, nearly full-size normal window on a vertically offset display;
+  // the native maximize acknowledgement can arrive after the first Qt paint.
+  auto window_settings = quader::AppWindowSettings::defaults();
+  window_settings.set_placement({
+      .normal_frame = {work_area.x(), work_area.y() + 46,
+                       std::min(1874, work_area.width()),
+                       std::min(986, work_area.height() - 46)},
+      .maximized = saved_maximized});
+  ASSERT_TRUE(window_settings.save(quader::AppWindowSettings::resolve_path(resources)));
   const auto project_root = profile / "Loading Project";
   ASSERT_TRUE(std::filesystem::create_directory(project_root));
   std::filesystem::path manifest_path;
@@ -7915,7 +7978,7 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
     manifest_path = editor.project().manifest_path();
   }
   auto settings = quader::UISettings::defaults();
-  settings.set_interface_scale(1.0f);
+  settings.set_interface_scale(static_cast<float>(scale_percent) / 100.0f);
   settings.set_panel_visible(quader::UIPanelId::AssetBrowser, true);
   ASSERT_TRUE(settings.save(quader::UISettings::resolve_paths(resources).settings_file));
   class LoadingRevealProbe final : public QObject {
@@ -7937,8 +8000,176 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
     }
   } reveal_probe;
   application.installEventFilter(&reveal_probe);
+  const auto purple_bounds = [](const QImage &pixels) {
+    QRect bounds;
+    for (int y = 0; y < pixels.height(); ++y) {
+      for (int x = 0; x < pixels.width(); ++x) {
+        const QColor color = pixels.pixelColor(x, y);
+        if (color.alpha() > 100 && color.red() > color.green() + 20 &&
+            color.blue() > color.green() + 20) {
+          bounds = bounds.united(QRect(x, y, 1, 1));
+        }
+      }
+    }
+    return bounds;
+  };
+  const auto native_client_rect = [](QWidget *widget) {
+    const auto extent = quader::platform_window_client_extent(
+        reinterpret_cast<void *>(widget->internalWinId()));
+    QPoint origin = widget->mapToGlobal(QPoint{});
+#if defined(_WIN32)
+    POINT native_origin{};
+    if (ClientToScreen(reinterpret_cast<HWND>(widget->internalWinId()), &native_origin)) {
+      origin = QPoint(native_origin.x, native_origin.y);
+    }
+#endif
+    return QRect(origin, QSize(extent.width, extent.height));
+  };
+  bool reported_desktop_mismatch = false;
+  const auto desktop_matches_quader = [&](QWidget *root, const QImage &desktop) {
+    auto *store = root->backingStore();
+    auto *device = store != nullptr ? store->paintDevice() : nullptr;
+    if (device == nullptr || device->devType() != QInternal::Image) return false;
+    const auto &painted = *static_cast<const QImage *>(device);
+    const QRect common = painted.rect().intersected(desktop.rect());
+    int compared = 0;
+    int matching = 0;
+    // GPU viewports occupy transparent backing pixels. Compare only opaque Qt
+    // chrome/content, including the full loading cover, to identify our window.
+    for (int y = common.top() + 6; y < common.bottom(); y += 13) {
+      for (int x = common.left() + 6; x < common.right(); x += 13) {
+        const QColor expected = painted.pixelColor(x, y);
+        if (expected.alpha() < 250) continue;
+        const QColor actual = desktop.pixelColor(x, y);
+        ++compared;
+        if (std::abs(expected.red() - actual.red()) <= 3 &&
+            std::abs(expected.green() - actual.green()) <= 3 &&
+            std::abs(expected.blue() - actual.blue()) <= 3) {
+          ++matching;
+        }
+      }
+    }
+    const bool matched = compared >= 100 && matching * 100 >= compared * 98;
+    if (!matched && !reported_desktop_mismatch) {
+      reported_desktop_mismatch = true;
+      std::cout << "native capture not yet Quader: matching_opaque_pixels="
+                << matching << '/' << compared << "; image not saved\n";
+    }
+    return matched;
+  };
+  const auto native_client_is_unoccluded = [&](QWidget *root) {
+#if defined(_WIN32)
+    const auto native_root = reinterpret_cast<HWND>(root->internalWinId());
+    DWORD process_id = 0;
+    GetWindowThreadProcessId(native_root, &process_id);
+    if (process_id != GetCurrentProcessId() || !IsWindowVisible(native_root) ||
+        (GetWindowLongPtrW(native_root, GWL_EXSTYLE) & WS_EX_TOPMOST) == 0) {
+      return false;
+    }
+    const QRect client = native_client_rect(root);
+    for (const qreal y_fraction : {0.05, 0.5, 0.95}) {
+      for (const qreal x_fraction : {0.05, 0.5, 0.95}) {
+        const POINT point{client.x() + qRound(client.width() * x_fraction),
+                          client.y() + qRound(client.height() * y_fraction)};
+        const HWND at_point = WindowFromPoint(point);
+        DWORD point_process_id = 0;
+        GetWindowThreadProcessId(at_point, &point_process_id);
+        if (point_process_id != GetCurrentProcessId() ||
+            GetAncestor(at_point, GA_ROOT) != native_root) {
+          return false;
+        }
+      }
+    }
+    return true;
+#else
+    return false;
+#endif
+  };
+  struct EarlyLoadingFrame {
+    QRect native_client;
+    QSize retained_pixels;
+    QRect cover_pixels;
+    QRect logo_pixels;
+    QPointF authored_offset;
+  };
+  std::vector<EarlyLoadingFrame> early_frames;
+  bool initialization_returned = false;
+  bool observed_early_logo = false;
+  bool recording_early_frames = true;
+  int desktop_frame_count = 0;
+  application.cover_painted = [&](QWidget *painted_cover) {
+    if (!recording_early_frames || (initialization_returned && observed_early_logo)) return;
+    auto *root = painted_cover->window();
+    auto *backing_store = root->backingStore();
+    ASSERT_NE(backing_store, nullptr);
+    auto *device = backing_store->paintDevice();
+    ASSERT_NE(device, nullptr);
+    ASSERT_EQ(device->devType(), QInternal::Image);
+    // Read the completed raster paint directly. QWidget::grab/render would
+    // repaint at a newer geometry and erase the first-frame evidence.
+    const QImage pixels = static_cast<const QImage *>(device)->copy();
+    const qreal ratio = pixels.devicePixelRatio();
+    const QPoint cover_origin = painted_cover->mapTo(root, QPoint{});
+    const QRect cover_pixels(qRound(cover_origin.x() * ratio),
+        qRound(cover_origin.y() * ratio), qRound(painted_cover->width() * ratio),
+        qRound(painted_cover->height() * ratio));
+    const QRect visible_cover = cover_pixels.intersected(pixels.rect());
+    const QRect local_logo = purple_bounds(pixels.copy(visible_cover));
+    const QRect logo_pixels = local_logo.isEmpty() ? QRect{}
+        : local_logo.translated(visible_cover.topLeft());
+    const int logo_extent = qRound(96.0 * scale_percent / 100.0 * ratio);
+    const QImage authored_logo = application.windowIcon().pixmap(
+        QSize(logo_extent, logo_extent)).toImage();
+    const QRect authored_bounds = purple_bounds(authored_logo);
+    ASSERT_FALSE(authored_bounds.isEmpty());
+    const QPointF authored_offset = QRectF(authored_bounds).center() -
+        QRectF(authored_logo.rect()).center();
+    const auto client = native_client_rect(root);
+    early_frames.push_back({client,
+        QSize(qRound(root->width() * ratio), qRound(root->height() * ratio)),
+        cover_pixels, logo_pixels, authored_offset});
+    if (!observed_early_logo && !logo_pixels.isEmpty()) {
+      reveal_probe.first_paint = application.cover_paint_started;
+    }
+    observed_early_logo = observed_early_logo || !logo_pixels.isEmpty();
+    const QString frame_name = QStringLiteral("loading-early-%1-painted")
+        .arg(early_frames.size(), 3, 10, QLatin1Char('0'));
+    std::cout << frame_name.toStdString() << " before_initialize_return="
+              << !initialization_returned << " native_client="
+              << client.x() << ',' << client.y() << ',' << client.width() << ','
+              << client.height() << " retained=" << root->width() << 'x'
+              << root->height() << " cover=" << cover_pixels.width() << 'x'
+              << cover_pixels.height() << " backing=" << pixels.width() << 'x'
+              << pixels.height() << " dpr=" << ratio << " logo=" << logo_pixels.x() << ','
+              << logo_pixels.y() << ',' << logo_pixels.width() << ','
+              << logo_pixels.height() << '\n';
+    if (!review.isEmpty()) {
+      EXPECT_TRUE(pixels.save(QDir(review).filePath(frame_name + QStringLiteral(".png"))));
+    }
+  };
+  application.root_updated = [&](QWidget *root) {
+    if (!recording_early_frames || (initialization_returned && observed_early_logo)) return;
+    ASSERT_NE(root->screen(), nullptr);
+    // Window-DC capture misses Vulkan composition. Qt's desktop capture takes
+    // screen-local logical coordinates and adds the native screen origin itself.
+    const QPoint origin = root->mapToGlobal(QPoint{}) - root->screen()->geometry().topLeft();
+    const QImage pixels = root->screen()->grabWindow(
+        0, origin.x(), origin.y(), root->width(), root->height()).toImage();
+    ASSERT_FALSE(pixels.isNull());
+    const QRect logo = purple_bounds(pixels);
+    const QString frame_name = QStringLiteral("loading-early-%1-desktop")
+        .arg(++desktop_frame_count, 3, 10, QLatin1Char('0'));
+    std::cout << frame_name.toStdString() << " native_pixels=" << pixels.width()
+              << 'x' << pixels.height() << " logo=" << logo.x() << ',' << logo.y()
+              << ',' << logo.width() << ',' << logo.height() << '\n';
+    const bool presented = desktop_matches_quader(root, pixels);
+    if (presented && !review.isEmpty()) {
+      EXPECT_TRUE(pixels.save(QDir(review).filePath(frame_name + QStringLiteral(".png"))));
+    }
+  };
   quader::App app;
   ASSERT_TRUE(app.initialize(application, executable));
+  initialization_returned = true;
   QMainWindow *window = nullptr;
   for (auto *widget : QApplication::topLevelWidgets()) {
     if (widget->objectName() == QStringLiteral("quaderMainWindow")) {
@@ -7993,19 +8224,54 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
       EXPECT_EQ(surface->renderer().height(), extent.y);
     }
   };
-  const QString review = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
-  if (!review.isEmpty()) ASSERT_TRUE(QDir().mkpath(review));
+  bool saved_mismatch_diagnostic = false;
+  bool capture_failed = false;
+  int stable_capture_mismatches = 0;
   const auto capture = [&](const QString &name) {
-    ASSERT_NE(window->screen(), nullptr);
-    const QPoint origin = window->mapToGlobal(QPoint{});
-    const QPixmap image = window->screen()->grabWindow(
-        0, origin.x(), origin.y(), window->width(), window->height());
-    ASSERT_FALSE(image.isNull());
-    if (!review.isEmpty()) EXPECT_TRUE(image.save(QDir(review).filePath(name)));
+    if (window->screen() == nullptr) return false;
+    const QPoint origin = window->mapToGlobal(QPoint{}) -
+        window->screen()->geometry().topLeft();
+    const QImage image = window->screen()->grabWindow(
+        0, origin.x(), origin.y(), window->width(), window->height()).toImage();
+    if (image.isNull() || !desktop_matches_quader(window, image)) {
+      if (!cover->isVisible()) {
+        if (!saved_mismatch_diagnostic && !image.isNull() &&
+            native_client_is_unoccluded(window)) {
+          saved_mismatch_diagnostic = true;
+          auto *device = window->backingStore()->paintDevice();
+          if (device != nullptr && device->devType() == QInternal::Image) {
+            const QImage painted = static_cast<const QImage *>(device)->copy();
+            std::cout << "verified own topmost native HWND at 9 client points; diagnostic "
+                      << name.toStdString() << " desktop=" << image.width() << 'x'
+                      << image.height() << " format=" << image.format()
+                      << " dpr=" << image.devicePixelRatio() << " backing="
+                      << painted.width() << 'x' << painted.height()
+                      << " format=" << painted.format()
+                      << " dpr=" << painted.devicePixelRatio() << '\n';
+            if (!review.isEmpty()) {
+              EXPECT_TRUE(image.save(QDir(review).filePath(
+                  QStringLiteral("diagnostic-native-") + name)));
+              EXPECT_TRUE(painted.save(QDir(review).filePath(
+                  QStringLiteral("diagnostic-backing-") + name)));
+            }
+          }
+        }
+        if (++stable_capture_mismatches >= 3) {
+          capture_failed = true;
+          ADD_FAILURE() << name.toStdString()
+                        << " native pixels differ from the settled Qt backing store";
+          application.quit();
+        }
+      }
+      return false;
+    }
+    stable_capture_mismatches = 0;
+    if (cover->isVisible() && purple_bounds(image).isEmpty()) return false;
+    return review.isEmpty() || image.save(QDir(review).filePath(name));
   };
   enum class Phase {
     InitialHome, FirstProject, FailedWorkspaceOpen, ReturningHome,
-    ReopenedProject, Complete
+    FailedHomeOpen, ReopenedProject, Complete
   };
   Phase phase = Phase::InitialHome;
   bool awaiting_project_reveal = false;
@@ -8016,6 +8282,37 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
   QElapsedTimer reveal_observation;
   reveal_probe.revealed = [&] {
     if (phase != Phase::InitialHome && !awaiting_project_reveal) return;
+    if (phase == Phase::InitialHome) {
+      recording_early_frames = false;
+      const QRect final_client = native_client_rect(window);
+      std::cout << "loading-first-reveal native_client=" << final_client.x() << ','
+                << final_client.y() << ',' << final_client.width() << ','
+                << final_client.height() << " center="
+                << QRectF(final_client).center().x() << ','
+                << QRectF(final_client).center().y() << '\n';
+      EXPECT_EQ(quader::platform_window_is_maximized(
+          reinterpret_cast<void *>(window->internalWinId())), saved_maximized);
+      EXPECT_EQ(window->screen(), screens[screen_index]);
+      EXPECT_TRUE(observed_early_logo) << "must inspect actual logo pixels before reveal";
+      EXPECT_GT(desktop_frame_count, 0);
+      for (std::size_t index = 0; index < early_frames.size(); ++index) {
+        SCOPED_TRACE(index);
+        const auto &frame = early_frames[index];
+        // A transitional frame may contain only the backdrop. Assert geometry
+        // only when pixels prove the logo was actually drawn in this frame.
+        if (frame.logo_pixels.isEmpty()) continue;
+        EXPECT_EQ(frame.retained_pixels, frame.native_client.size());
+        EXPECT_EQ(frame.cover_pixels.size(), frame.native_client.size());
+        const QPointF painted_center = QRectF(frame.logo_pixels).center() +
+            QPointF(frame.native_client.topLeft()) - frame.authored_offset;
+        EXPECT_NEAR(painted_center.x(), QRectF(frame.native_client).center().x(), 2.0);
+        EXPECT_NEAR(painted_center.y(), QRectF(frame.native_client).center().y(), 2.0);
+        EXPECT_NEAR(painted_center.x(), QRectF(final_client).center().x(), 2.0)
+            << "the first visible logo must already have its final screen position";
+        EXPECT_NEAR(painted_center.y(), QRectF(final_client).center().y(), 2.0)
+            << "the first visible logo must already have its final screen position";
+      }
+    }
     if (awaiting_project_reveal) {
       EXPECT_FALSE(quad_layout_pending);
       expect_presented_panes();
@@ -8074,7 +8371,7 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
   QTimer observer(&application);
   observer.setInterval(5);
   QObject::connect(&observer, &QTimer::timeout, &application, [&] {
-    if (observing_transition) return;
+    if (observing_transition || capture_failed) return;
     const QScopedValueRollback observation_guard(observing_transition, true);
     if (cover->isVisible()) {
       uncovered_samples = 0;
@@ -8091,14 +8388,11 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
         }
       }
       if (phase == Phase::InitialHome && !captured_initial_cover) {
-        capture(QStringLiteral("loading-app-initial-cover.png"));
-        captured_initial_cover = true;
+        captured_initial_cover = capture(QStringLiteral("loading-app-initial-cover.png"));
       } else if (phase == Phase::FirstProject && !captured_project_cover) {
-        capture(QStringLiteral("loading-app-project-cover.png"));
-        captured_project_cover = true;
+        captured_project_cover = capture(QStringLiteral("loading-app-project-cover.png"));
       } else if (phase == Phase::ReopenedProject && !captured_reopen_cover) {
-        capture(QStringLiteral("loading-app-reopen-cover.png"));
-        captured_reopen_cover = true;
+        captured_reopen_cover = capture(QStringLiteral("loading-app-reopen-cover.png"));
       }
       return;
     }
@@ -8112,14 +8406,14 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
     uncovered_samples = 0;
     if (phase == Phase::InitialHome) {
       EXPECT_NE(dynamic_cast<quader::QtProjectHomePage *>(stack->currentWidget()), nullptr);
-      capture(QStringLiteral("loading-app-home-ready.png"));
+      if (!capture(QStringLiteral("loading-app-home-ready.png"))) return;
       phase = Phase::FirstProject;
       open_recent();
     } else if (phase == Phase::FirstProject || phase == Phase::ReopenedProject) {
       expect_presented_panes();
-      capture(phase == Phase::FirstProject
+      if (!capture(phase == Phase::FirstProject
           ? QStringLiteral("loading-app-project-ready.png")
-          : QStringLiteral("loading-app-reopen-ready.png"));
+          : QStringLiteral("loading-app-reopen-ready.png"))) return;
       if (phase == Phase::ReopenedProject) {
         phase = Phase::Complete;
         application.quit();
@@ -8176,7 +8470,7 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
       }
     } else if (phase == Phase::FailedWorkspaceOpen) {
       expect_presented_panes();
-      capture(QStringLiteral("loading-app-failed-workspace-open.png"));
+      if (!capture(QStringLiteral("loading-app-failed-workspace-open.png"))) return;
       ASSERT_TRUE(close_project->isEnabled());
       revealed_geometry.clear();
       close_project->trigger();
@@ -8197,11 +8491,13 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
       send_key(*recent, Qt::Key_Return);
       EXPECT_TRUE(cover->isHidden()) << "a failed open must immediately restore Home";
       EXPECT_NE(dynamic_cast<quader::QtProjectHomePage *>(stack->currentWidget()), nullptr);
-      capture(QStringLiteral("loading-app-failed-open.png"));
       {
         std::ofstream restored(manifest_path, std::ios::binary | std::ios::trunc);
         restored << valid_manifest;
       }
+      phase = Phase::FailedHomeOpen;
+    } else if (phase == Phase::FailedHomeOpen) {
+      if (!capture(QStringLiteral("loading-app-failed-open.png"))) return;
       phase = Phase::ReopenedProject;
       open_recent();
     }
@@ -8224,6 +8520,8 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
   EXPECT_EQ(successful_reveals, 3);
   EXPECT_EQ(acknowledged_errors, 2);
   application.removeEventFilter(&reveal_probe);
+  application.cover_painted = {};
+  application.root_updated = {};
   app.shutdown();
 }
 

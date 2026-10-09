@@ -15,11 +15,13 @@ file except through prior written authorization from Francesco Di Blasi.
   and commands; they own only presentation state.
 - Startup and project/scene loading use a retained logo cover while the underlying shell settles.
   Keep Qt's composition anchor and covered viewports painting; disabling the composed window's
-  updates or hiding its stack page prevents readiness. Flush the logo before synchronous loading,
-  retain it for at least two seconds after presentation, and reveal Home after binding and stable
-  layout. Reveal a loaded scene after its current visible panes submit successfully. Failed loads must
-  release the cover without changing the prior document. Protect repeated loads against stale
-  frame callbacks in `tests/qt_project_workspace_tests.cpp`.
+  updates or hiding its stack page prevents readiness. Reconcile Qt's retained geometry with the
+  actual native client before the first logo paint, including saved maximized placement on another
+  display. Verify the first painted pixels, not just the settled screenshot. Flush the logo before
+  synchronous loading, retain it for at least two seconds after presentation, and reveal Home after
+  binding and stable layout. Reveal a loaded scene after its current visible panes submit
+  successfully. Failed loads must release the cover without changing the prior document. Protect
+  repeated loads against stale frame callbacks in `tests/qt_project_workspace_tests.cpp`.
 - [QtMainWindow](qt_main_window.cpp) may repost a root `UpdateRequest` at most twice when native
   `QS_KEY` or QPA keys are pending, covering native-to-QPA delivery without pumping events or taking
   input ownership. The next pass must paint even when user input is excluded; no-key updates paint

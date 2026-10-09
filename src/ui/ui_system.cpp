@@ -95,6 +95,8 @@
 #include <QVBoxLayout>
 #include <QWidget>
 #include <QWindow>
+#include <qpa/qplatformwindow.h>
+#include <qpa/qwindowsysteminterface.h>
 
 #include <algorithm>
 #include <array>
@@ -121,6 +123,9 @@ namespace {
 constexpr int kQtWindowStateVersion = 1;
 constexpr int kDockContentMinimumWidth = 220;
 
+static_assert(QT_VERSION == QT_VERSION_CHECK(6, 10, 3),
+              "Review synchronous native geometry delivery before upgrading Qt.");
+
 /** Covers the shell without suppressing the QRhi children below its paint. */
 class QtLoadingCover final : public QWidget {
 public:
@@ -142,6 +147,24 @@ public:
   }
 
   void flush_presentation() {
+    QWidget *root = window();
+    QWindow *host = root->windowHandle();
+    if (host != nullptr && host->handle() != nullptr &&
+        root->geometry() != host->geometry()) {
+      // Qt may expose the real maximized client before delivering its queued
+      // geometry to QWidget. On the GUI thread this delivers only that report
+      // through Qt's existing adapter, preserving native placement and normal
+      // restore geometry. It does not pump input or resize the native window.
+      QWindowSystemInterface::handleGeometryChange<
+          QWindowSystemInterface::SynchronousDelivery>(
+          host, host->handle()->geometry());
+    }
+    if (QLayout *layout = root->layout()) {
+      (void)layout->activate();
+    }
+    if (geometry() != root->rect()) {
+      setGeometry(root->rect());
+    }
     const auto previous_paint = paint_count_;
     // Repaint the root: in the composed path a cover paint alone is not
     // evidence that Qt submitted the backing store to the native window.
@@ -157,13 +180,19 @@ public:
   void begin_presentation() {
     presentation_begin_paint_count_ = paint_count_;
     first_presented_at_ = {};
+    last_paint_has_logo_ = false;
   }
 
   void note_composited_submission() {
-    if (isVisible() && paint_count_ != presentation_begin_paint_count_ &&
-        first_presented_at_ == std::chrono::steady_clock::time_point{}) {
+    if (first_presented_at_ == std::chrono::steady_clock::time_point{} &&
+        last_paint_has_logo_ && paint_count_ != presentation_begin_paint_count_ &&
+        logo_geometry_ready()) {
       first_presented_at_ = std::chrono::steady_clock::now();
     }
+  }
+
+  [[nodiscard]] bool logo_presented() const {
+    return first_presented_at_ != std::chrono::steady_clock::time_point{};
   }
 
   [[nodiscard]] bool minimum_duration_elapsed() const {
@@ -226,27 +255,57 @@ protected:
   }
 
   void paintEvent(QPaintEvent *) override {
-    ++paint_count_;
-    if (!composed_ && isVisible() && window()->windowHandle() != nullptr &&
-        window()->windowHandle()->isExposed() &&
-        first_presented_at_ == std::chrono::steady_clock::time_point{}) {
-      first_presented_at_ = std::chrono::steady_clock::now();
-    }
+    last_paint_has_logo_ = false;
     QPainter painter(this);
     // An opaque-widget hint would let Qt cull the underlying scene texture.
     painter.fillRect(rect(), palette().brush(QPalette::Window));
+    // Spontaneous show/expose paints can precede Qt's retained resize report.
+    // Keep the same backdrop until the logo's actual client center is valid.
+    if (!logo_geometry_ready()) {
+      return;
+    }
     const QSize extent(logo_extent_, logo_extent_);
     const QRect logo_rect(QPoint((width() - extent.width()) / 2,
                                 (height() - extent.height()) / 2), extent);
     QApplication::windowIcon().paint(&painter, logo_rect);
+    ++paint_count_;
+    last_paint_has_logo_ = true;
+    if (!composed_ && first_presented_at_ == std::chrono::steady_clock::time_point{}) {
+      first_presented_at_ = std::chrono::steady_clock::now();
+    }
   }
 
 private:
+  [[nodiscard]] bool logo_geometry_ready() const {
+    const QWidget *root = window();
+    const QWindow *host = root->windowHandle();
+    if (!isVisible() || host == nullptr || !host->isExposed() ||
+        root->isMinimized() || root->geometry() != host->geometry() ||
+        geometry() != root->rect()) {
+      return false;
+    }
+    void *const native_handle = reinterpret_cast<void *>(
+        static_cast<std::uintptr_t>(host->winId()));
+    const bool requested_maximized =
+        root->windowState().testFlag(Qt::WindowMaximized);
+    if (requested_maximized != platform_window_is_maximized(native_handle)) {
+      return false;
+    }
+    const PlatformWindowClientExtent native_client =
+        platform_window_client_extent(native_handle);
+    const qreal pixel_scale = root->devicePixelRatioF();
+    return qt_startup_client_extents_match(
+        static_cast<int>(std::lround(root->width() * pixel_scale)),
+        static_cast<int>(std::lround(root->height() * pixel_scale)),
+        native_client.width, native_client.height);
+  }
+
   int logo_extent_ = 0;
   std::uint64_t paint_count_ = 0u;
   std::uint64_t presentation_begin_paint_count_ = 0u;
   std::chrono::steady_clock::time_point first_presented_at_{};
   bool composed_ = false;
+  bool last_paint_has_logo_ = false;
 };
 
 /** Keeps the menu/toolbar boundary on the same quiet palette role as the status bar. */
@@ -4215,6 +4274,11 @@ void UISystem::begin_loading_presentation() {
   // Flush only this retained cover; never enter a nested input/event loop
   // while project owners are about to replace the current runtime.
   static_cast<QtLoadingCover *>(loading_cover_)->flush_presentation();
+}
+
+bool UISystem::loading_logo_presented() const {
+  return loading_cover_ != nullptr &&
+         static_cast<const QtLoadingCover *>(loading_cover_)->logo_presented();
 }
 
 void UISystem::end_loading_presentation(bool succeeded) {
