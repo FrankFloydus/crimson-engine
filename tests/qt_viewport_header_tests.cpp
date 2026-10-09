@@ -11,6 +11,8 @@
 #include "editor/session/scene_session.hpp"
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_application_style.hpp"
+#include "ui/qt_snapping_toolbar.hpp"
+#include "ui/qt_tool_toolbar.hpp"
 #include "ui/qt_viewport_control_strip.hpp"
 #include "ui/qt_viewport_chrome_layout.hpp"
 #include "ui/qt_viewport_panel.hpp"
@@ -64,6 +66,32 @@ void send_native_key(QWidget &widget, int key) {
   QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier);
   QApplication::sendEvent(native_host->windowHandle(), &release);
   QCoreApplication::processEvents();
+}
+
+void expect_transform_icon(QWidget &widget, QAction &action,
+                           quader::QuaderTransformSpace space) {
+  const auto render = [&]() {
+    QImage image(widget.size() * widget.devicePixelRatioF(),
+                 QImage::Format_ARGB32_Premultiplied);
+    image.setDevicePixelRatio(widget.devicePixelRatioF());
+    image.fill(Qt::transparent);
+    widget.render(&image);
+    return image;
+  };
+  const QIcon production_icon = action.icon();
+  const QImage actual = render();
+  const bool local = space == quader::QuaderTransformSpace::Local;
+  const QIcon world_icon(QStringLiteral(":/quader/icons/tool_transform_world.png"));
+  const QIcon local_icon(QStringLiteral(":/quader/icons/tool_transform_local.png"));
+  EXPECT_FALSE(world_icon.isNull());
+  EXPECT_FALSE(local_icon.isNull());
+  // Render the native widget with one known resource to verify which artwork
+  // its production stateful icon actually paints, including hover and check.
+  action.setIcon(local ? local_icon : world_icon);
+  EXPECT_EQ(actual, render());
+  action.setIcon(local ? world_icon : local_icon);
+  EXPECT_NE(actual, render());
+  action.setIcon(production_icon);
 }
 
 } // namespace
@@ -206,18 +234,19 @@ TEST(QtViewportChromeLayoutTests,
   ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
   auto &workspace = session.viewport_workspace();
   ASSERT_TRUE(workspace.set_layout(quader::ViewportLayoutId::FourQuad));
+  quader::QtSnappingToolbar snapping;
   quader::QtViewportPanel panel;
   panel.setAttribute(Qt::WA_DontShowOnScreen, true);
   panel.attach_workspace(workspace);
   panel.set_startup_presentation_blocked(false);
   std::vector<QAction *> actions;
   constexpr std::array kNames{"tool_select", "tool_move", "tool_rotate", "tool_scale",
-                             "toggle_transform_space", "backfaceSelection",
+                             "backfaceSelection",
                              "snappingEnabled", "gridSnapping", "vertexSnapping",
                              "rotationSnapping", "viewportGrid", "viewportGizmos",
                              "viewportMeshGrid", "viewportOverlays"};
   constexpr std::array kIcons{"tool_box_select.png", "tool_move.png", "tool_rotate.png",
-                             "tool_scale.png", "tool_transform_local.png",
+                             "tool_scale.png",
                              "selection_backface.png", "snapping_master.png",
                              "snapping_grid.png", "snapping_vertex.png",
                              "snapping_rotation.png", "viewport_grid.png",
@@ -232,6 +261,7 @@ TEST(QtViewportChromeLayoutTests,
                           QString::fromUtf8(kIcons[index])));
     actions.push_back(action);
   }
+  actions.insert(actions.begin() + 4, snapping.viewport_actions().front());
   QAction lasso(QStringLiteral("Lasso Select"), &panel);
   lasso.setObjectName(QStringLiteral("tool_lasso_select"));
   lasso.setCheckable(true);
@@ -508,6 +538,159 @@ TEST(QtViewportChromeLayoutTests,
   EXPECT_TRUE(uv->isChecked());
   EXPECT_FALSE(solid->isChecked());
   EXPECT_EQ(top_shading->text(), QStringLiteral("UV"));
+}
+
+TEST(QtViewportChromeLayoutTests,
+     ProductionTransformIconsShowEachPanesCurrentSpaceAcrossNativeStates) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-transform-space-icons";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  quader::apply_qt_obsidian_application_theme(application.palette());
+  quader::QtUiScaleApplicationController scale_controller(application);
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  ASSERT_TRUE(editor.viewports().set_layout(quader::ViewportLayoutId::FourQuad).ok());
+  quader::QtToolToolbar tools;
+  quader::QtSnappingToolbar snapping;
+  snapping.set_transform_space_toggle_requested_callback([&] {
+    EXPECT_TRUE(editor.commands().execute(
+        quader::quader_command::kViewportToggleTransformSpace).ok());
+  });
+  quader::QtViewportPanel panel;
+  panel.setAttribute(Qt::WA_DontShowOnScreen);
+  panel.attach_workspace(session.viewport_workspace());
+  panel.set_startup_presentation_blocked(false);
+  const auto source_actions = snapping.viewport_actions();
+  std::vector<QAction *> viewport_actions;
+  for (const auto tool : {quader::ViewportToolId::Select, quader::ViewportToolId::Move,
+                          quader::ViewportToolId::Rotate, quader::ViewportToolId::Scale}) {
+    QAction *action = tools.tool_action(tool);
+    ASSERT_NE(action, nullptr);
+    viewport_actions.push_back(action);
+  }
+  viewport_actions.insert(viewport_actions.end(), source_actions.begin(), source_actions.end());
+  panel.set_control_actions(viewport_actions,
+                            tools.tool_action(quader::ViewportToolId::LassoSelect),
+                            tools.tool_action(quader::ViewportToolId::PaintSelect));
+  panel.set_control_action_requested_callback(
+      [](ViewportPaneId, QAction &source) { source.trigger(); });
+  const auto synchronize = [&] {
+    snapping.synchronize(editor);
+    panel.refresh_control_actions(editor);
+    panel.refresh_workspace_layout();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+    application.processEvents();
+  };
+  panel.show();
+  synchronize();
+  std::array<QToolButton *, 4> buttons{};
+  constexpr std::array kPaneNames{"perspective", "top", "front", "side"};
+  constexpr std::array kPanes{ViewportPaneId::Perspective, ViewportPaneId::Top,
+                            ViewportPaneId::Front, ViewportPaneId::Side};
+  for (std::size_t index = 0; index < buttons.size(); ++index) {
+    auto *header = panel.findChild<QWidget *>(QStringLiteral("viewportToolbar_") +
+                                             QString::fromUtf8(kPaneNames[index]));
+    ASSERT_NE(header, nullptr);
+    buttons[index] = header->findChild<QToolButton *>(
+        QStringLiteral("viewportStrip_toggle_transform_space"));
+    ASSERT_NE(buttons[index], nullptr);
+    ASSERT_NE(buttons[index]->defaultAction(), nullptr);
+    EXPECT_NE(buttons[index]->defaultAction(), source_actions.front());
+    if (index != 0) EXPECT_NE(buttons[index]->defaultAction(), buttons[0]->defaultAction());
+  }
+  const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (!review_directory.isEmpty()) ASSERT_TRUE(QDir().mkpath(review_directory));
+  int cycle = 0;
+  for (const float factor : {1.0F, 2.0F, 1.0F}) {
+    SCOPED_TRACE(factor);
+    scale_controller.apply_factor(factor);
+    panel.apply_ui_scale(scale_controller.metrics());
+    panel.resize(scale_controller.metrics().size(QSize(1800, 700)));
+    for (const auto space : {quader::QuaderTransformSpace::Global,
+                             quader::QuaderTransformSpace::Local}) {
+      ASSERT_TRUE(editor.viewports().set_transform_space(kPanes[0], space).ok());
+      ASSERT_TRUE(editor.viewports().set_transform_space(kPanes[1],
+          space == quader::QuaderTransformSpace::Local
+              ? quader::QuaderTransformSpace::Global
+              : quader::QuaderTransformSpace::Local).ok());
+      synchronize();
+      for (std::size_t index = 0; index < buttons.size(); ++index) {
+        SCOPED_TRACE(kPaneNames[index]);
+        auto &button = *buttons[index];
+        ASSERT_TRUE(button.isVisible());
+        const auto pane_space = editor.viewports().transform_space(kPanes[index]);
+        EXPECT_EQ(button.isChecked(), pane_space == quader::QuaderTransformSpace::Local);
+        for (const bool hovered : {false, true}) {
+          SCOPED_TRACE(hovered);
+          button.setAttribute(Qt::WA_UnderMouse, hovered);
+          expect_transform_icon(button, *button.defaultAction(), pane_space);
+        }
+        button.setAttribute(Qt::WA_UnderMouse, false);
+      }
+      if (!review_directory.isEmpty()) {
+        EXPECT_TRUE(buttons[0]->parentWidget()->grab().save(QDir(review_directory).filePath(
+            QStringLiteral("transform-space-%1-%2-%3.png")
+                .arg(qRound(factor * 100)).arg(cycle)
+                .arg(space == quader::QuaderTransformSpace::Local ? "local" : "world"))));
+      }
+    }
+    panel.resize(scale_controller.metrics().size(QSize(640, 500)));
+    synchronize();
+    ASSERT_TRUE(buttons[0]->isHidden());
+    auto *overflow = buttons[0]->parentWidget()->findChild<QMenu *>(
+        QStringLiteral("viewportStripOverflowMenu"));
+    ASSERT_NE(overflow, nullptr);
+    ASSERT_TRUE(overflow->actions().contains(buttons[0]->defaultAction()));
+    overflow->setAttribute(Qt::WA_DontShowOnScreen);
+    overflow->popup(panel.mapToGlobal(QPoint(0, 0)));
+    application.processEvents();
+    ASSERT_TRUE(overflow->isVisible());
+    for (const auto space : {quader::QuaderTransformSpace::Global,
+                             quader::QuaderTransformSpace::Local}) {
+      ASSERT_TRUE(editor.viewports().set_transform_space(kPanes[0], space).ok());
+      synchronize();
+      overflow->setActiveAction(buttons[0]->defaultAction());
+      expect_transform_icon(*overflow, *buttons[0]->defaultAction(), space);
+    }
+    overflow->close();
+    ++cycle;
+  }
+  panel.resize(1800, 700);
+  ASSERT_TRUE(editor.viewports().set_transform_space(kPanes[0],
+      quader::QuaderTransformSpace::Global).ok());
+  synchronize();
+  click_native_widget(*buttons[0]);
+  synchronize();
+  EXPECT_EQ(editor.viewports().transform_space(kPanes[0]), quader::QuaderTransformSpace::Local);
+  EXPECT_EQ(editor.viewports().transform_space(kPanes[1]), quader::QuaderTransformSpace::Global);
+  const auto dispatch = editor.commands().dispatch_viewport_input_binding(
+      {.device = quader::QuaderInputDevice::Keyboard,
+       .key = quader::QuaderKeyCode::T}, {}, true, false);
+  ASSERT_EQ(dispatch.kind, quader::QuaderViewportKeybindingDispatch::Kind::Command);
+  ASSERT_EQ(dispatch.command_id, quader::quader_command::kViewportToggleTransformSpace.string());
+  ASSERT_TRUE(editor.commands().execute(dispatch.command_id).ok());
+  synchronize();
+  EXPECT_EQ(editor.viewports().transform_space(kPanes[0]), quader::QuaderTransformSpace::Global);
+  EXPECT_FALSE(buttons[0]->isChecked());
+  expect_transform_icon(*buttons[0], *buttons[0]->defaultAction(),
+                        quader::QuaderTransformSpace::Global);
+  const auto icon_key = source_actions.front()->icon().cacheKey();
+  int presentation_changes = 0;
+  for (QToolButton *button : buttons) {
+    QObject::connect(button->defaultAction(), &QAction::changed, &panel,
+                     [&] { ++presentation_changes; });
+  }
+  for (int frame = 0; frame < 8; ++frame) synchronize();
+  EXPECT_EQ(presentation_changes, 0);
+  for (QToolButton *button : buttons) {
+    EXPECT_EQ(button->defaultAction()->icon().cacheKey(), icon_key);
+  }
 }
 
 TEST(QtViewportChromeLayoutTests,

@@ -1910,6 +1910,13 @@ if(QUADER_BUILD_TESTS)
         tests/support/project_material_fixture.cpp
     )
     quader_enable_common_pch(quader_tests)
+    # Exercise the production World/Local action with its embedded state artwork.
+    qt_add_resources(quader_tests "quader_transform_space_test_icons"
+        PREFIX "/quader/icons"
+        BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
+        FILES
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_transform_world.png"
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/tool_transform_local.png")
     if(MSVC)
         target_compile_options(quader_tests PRIVATE /bigobj)
         target_link_options(quader_tests PRIVATE
