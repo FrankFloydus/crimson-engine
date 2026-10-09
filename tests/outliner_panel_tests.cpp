@@ -69,6 +69,17 @@
 namespace {
 
 constexpr int kEntityIdRole = Qt::UserRole + 1;
+constexpr int kSubduedRole = Qt::UserRole + 2;
+constexpr int kVisibleRole = Qt::UserRole + 4;
+constexpr int kSelectableRole = Qt::UserRole + 5;
+
+QPoint inline_action_position(QTreeView &tree, const QModelIndex &index,
+                              bool visibility, float scale = 1.0F) {
+  const QRect row = tree.visualRect(index);
+  const int slot_width = qRound(24.0F * scale);
+  return QPoint(row.right() - qRound(4.0F * scale) - slot_width / 2 + 1 -
+                    (visibility ? slot_width : 0), row.center().y());
+}
 
 quader::LocalizationService loaded_localization() {
   quader::LocalizationService localization;
@@ -538,6 +549,388 @@ TEST_F(OutlinerPanelDropTests, EmptySceneHasNoRowAndObjectsAppearAsEditableRoots
   EXPECT_TRUE(index(first).flags().testFlag(Qt::ItemIsDragEnabled));
   EXPECT_EQ(session_.scene().parent(first), quader::kInvalidEntityId);
   EXPECT_EQ(session_.scene().parent(second), quader::kInvalidEntityId);
+}
+
+TEST_F(OutlinerPanelDropTests,
+       InlineActionsTargetOneRowAndRestoreSelectionWithUndoRedo) {
+  const auto first = create("First selected");
+  const auto second = create("Second selected");
+  const auto other = create("Unselected row");
+  for (const bool visibility : {true, false}) {
+    SCOPED_TRACE(visibility ? "visibility" : "selectability");
+    ASSERT_TRUE(editor_.selection()
+                    .select_objects_for_inspection({first, second}, second).ok());
+    refresh();
+    const auto history_count = session_.history().undo_count();
+    const auto target = inline_action_position(*tree_, index(first), visibility);
+    send_mouse(*tree_->viewport(), QEvent::MouseMove, target,
+               Qt::NoButton, Qt::NoButton);
+    click(*tree_->viewport(), target, Qt::LeftButton);
+    refresh();
+    const int role = visibility ? kVisibleRole : kSelectableRole;
+    EXPECT_FALSE(index(first).data(role).toBool());
+    EXPECT_TRUE(index(second).data(role).toBool());
+    EXPECT_TRUE(index(other).data(role).toBool());
+    expect_selection(*tree_, session_.scene(),
+                     visibility ? std::vector{first, second}
+                                : std::vector{second}, second);
+    EXPECT_EQ(session_.history().undo_count(), history_count + 1);
+
+    ASSERT_TRUE(editor_.history().undo().ok());
+    refresh();
+    EXPECT_TRUE(index(first).data(role).toBool());
+    expect_selection(*tree_, session_.scene(), {first, second}, second);
+    ASSERT_TRUE(editor_.history().redo().ok());
+    refresh();
+    EXPECT_FALSE(index(first).data(role).toBool());
+    expect_selection(*tree_, session_.scene(),
+                     visibility ? std::vector{first, second}
+                                : std::vector{second}, second);
+    ASSERT_TRUE(editor_.history().undo().ok());
+    refresh();
+
+    const auto unselected_target =
+        inline_action_position(*tree_, index(other), visibility);
+    send_mouse(*tree_->viewport(), QEvent::MouseMove, unselected_target,
+               Qt::NoButton, Qt::NoButton);
+    click(*tree_->viewport(), unselected_target, Qt::LeftButton,
+          Qt::ControlModifier | Qt::ShiftModifier);
+    refresh();
+    EXPECT_FALSE(index(other).data(role).toBool());
+    expect_selection(*tree_, session_.scene(), {first, second}, second);
+    const QRect row = tree_->visualRect(index(other));
+    const QRect action_strip(row.right() - 51, row.top() + 3,
+                              48, row.height() - 6);
+    const QImage immediately_after_click =
+        tree_->viewport()->grab(action_strip).toImage();
+    EXPECT_LT(count_pixels(immediately_after_click,
+                           immediately_after_click.pixelColor(0, 0)),
+              immediately_after_click.width() * immediately_after_click.height())
+        << "hovered controls remain painted after the action rebuilds rows";
+    send_mouse(*tree_->viewport(), QEvent::MouseMove, unselected_target,
+               Qt::NoButton, Qt::NoButton);
+    EXPECT_EQ(tree_->viewport()->grab(action_strip).toImage(),
+              immediately_after_click)
+        << "a second mouse move must not be needed to restore the controls";
+    click(*tree_->viewport(), unselected_target, Qt::LeftButton);
+    refresh();
+    EXPECT_TRUE(index(other).data(role).toBool());
+    expect_selection(*tree_, session_.scene(), {first, second}, second);
+    EXPECT_EQ(tree_->findChild<QLineEdit *>(), nullptr);
+  }
+}
+
+TEST_F(OutlinerPanelDropTests,
+       InlineActionsEditOwnFlagsWhileOnlyEffectiveVisibilityDimsRows) {
+  const auto parent = create("Hidden locked parent");
+  const auto child = create("Child with independent flags", parent);
+  ASSERT_TRUE(editor_.scene().set_visible(parent, false).ok());
+  ASSERT_TRUE(editor_.scene().set_selectable(parent, false).ok());
+  refresh();
+  tree_->expandAll();
+  QCoreApplication::processEvents();
+  EXPECT_TRUE(index(child).data(kVisibleRole).toBool());
+  EXPECT_TRUE(index(child).data(kSelectableRole).toBool());
+  EXPECT_TRUE(index(child).data(kSubduedRole).toBool());
+
+  for (const bool visibility : {true, false}) {
+    SCOPED_TRACE(visibility ? "visibility" : "selectability");
+    const int role = visibility ? kVisibleRole : kSelectableRole;
+    const auto target = inline_action_position(*tree_, index(child), visibility);
+    send_mouse(*tree_->viewport(), QEvent::MouseMove, target,
+               Qt::NoButton, Qt::NoButton);
+    click(*tree_->viewport(), target, Qt::LeftButton);
+    refresh();
+    EXPECT_FALSE(index(child).data(role).toBool());
+    EXPECT_FALSE(index(parent).data(role).toBool());
+    EXPECT_TRUE(index(child).data(kSubduedRole).toBool());
+    click(*tree_->viewport(), target, Qt::LeftButton);
+    refresh();
+    EXPECT_TRUE(index(child).data(role).toBool());
+    EXPECT_FALSE(index(parent).data(role).toBool());
+    EXPECT_FALSE(session_.scene().is_effectively_visible(child));
+    EXPECT_FALSE(session_.scene().is_effectively_selectable(child));
+  }
+  ASSERT_TRUE(editor_.scene().set_visible(parent, true).ok());
+  refresh();
+  EXPECT_FALSE(index(parent).data(kSubduedRole).toBool());
+  EXPECT_FALSE(index(child).data(kSubduedRole).toBool());
+  EXPECT_FALSE(index(parent).data(kSelectableRole).toBool());
+  EXPECT_TRUE(index(child).data(kSelectableRole).toBool());
+  EXPECT_FALSE(index(child).flags().testFlag(Qt::ItemIsDragEnabled));
+  EXPECT_FALSE(index(child).flags().testFlag(Qt::ItemIsDropEnabled));
+}
+
+TEST_F(OutlinerPanelDropTests,
+       InlineActionGesturesRejectOutsideReleaseStaleRowsAndRuntimeReplacement) {
+  const auto first = create("First");
+  const auto second = create("Second");
+  ASSERT_TRUE(editor_.scene().select(second).ok());
+  refresh();
+  const auto target = inline_action_position(*tree_, index(first), true);
+  send_mouse(*tree_->viewport(), QEvent::MouseMove, target,
+             Qt::NoButton, Qt::NoButton);
+  const auto history_count = session_.history().undo_count();
+  send_mouse(*tree_->viewport(), QEvent::MouseButtonPress, target,
+             Qt::LeftButton, Qt::LeftButton);
+  send_mouse(*tree_->viewport(), QEvent::MouseButtonRelease,
+             tree_->visualRect(index(first)).center(), Qt::LeftButton,
+             Qt::NoButton);
+  refresh();
+  EXPECT_TRUE(index(first).data(kVisibleRole).toBool());
+  EXPECT_EQ(session_.history().undo_count(), history_count);
+  expect_selection(*tree_, session_.scene(), {second}, second);
+
+  for (const bool hide : {false, true}) {
+    send_mouse(*tree_->viewport(), QEvent::MouseButtonPress, target,
+               Qt::LeftButton, Qt::LeftButton);
+    if (hide) {
+      panel_.hide();
+      panel_.show();
+      QCoreApplication::processEvents();
+    } else {
+      QEvent ungrab(QEvent::UngrabMouse);
+      QCoreApplication::sendEvent(tree_->viewport(), &ungrab);
+    }
+    send_mouse(*tree_->viewport(), QEvent::MouseButtonRelease, target,
+               Qt::LeftButton, Qt::NoButton);
+    refresh();
+    EXPECT_TRUE(index(first).data(kVisibleRole).toBool());
+    EXPECT_EQ(session_.history().undo_count(), history_count);
+    expect_selection(*tree_, session_.scene(), {second}, second);
+  }
+
+  send_mouse(*tree_->viewport(), QEvent::MouseButtonPress, target,
+             Qt::LeftButton, Qt::LeftButton);
+  ASSERT_TRUE(editor_.scene().rename(first, "Changed during press").ok());
+  refresh();
+  const auto renamed_history_count = session_.history().undo_count();
+  send_mouse(*tree_->viewport(), QEvent::MouseButtonRelease, target,
+             Qt::LeftButton, Qt::NoButton);
+  refresh();
+  EXPECT_TRUE(index(first).data(kVisibleRole).toBool());
+  EXPECT_EQ(session_.history().undo_count(), renamed_history_count);
+
+  send_mouse(*tree_->viewport(), QEvent::MouseButtonPress, target,
+             Qt::LeftButton, Qt::LeftButton);
+  ASSERT_TRUE(editor_.scene().destroy(first).ok());
+  refresh();
+  const auto removed_history_count = session_.history().undo_count();
+  send_mouse(*tree_->viewport(), QEvent::MouseButtonRelease, target,
+             Qt::LeftButton, Qt::NoButton);
+  refresh();
+  EXPECT_TRUE(index(second).data(kVisibleRole).toBool());
+  EXPECT_EQ(session_.history().undo_count(), removed_history_count);
+
+  const auto replacement_target =
+      inline_action_position(*tree_, index(second), false);
+  send_mouse(*tree_->viewport(), QEvent::MouseButtonPress, replacement_target,
+             Qt::LeftButton, Qt::LeftButton);
+  quader::SceneSession replacement;
+  quader::QuaderEditorApi replacement_editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(replacement));
+  const auto replacement_entity = replacement_editor.scene().create_entity({
+      .name = "Replacement row", .kind = quader::QuaderEntityKind::Empty});
+  ASSERT_TRUE(replacement_entity.ok());
+  quader::UIContext replacement_context{
+      .intent = {.editor = replacement_editor},
+      .scene = {.document = replacement.scene(), .assets = replacement.assets(),
+                .modeling = replacement.modeling(),
+                .selection = replacement.selection()},
+      .preferences = {.ui = ui_settings_, .viewport = viewport_settings_},
+      .localization = localization_,
+  };
+  panel_.abandon_runtime();
+  panel_.refresh(replacement_context);
+  QCoreApplication::processEvents();
+  const auto replacement_history_count = replacement.history().undo_count();
+  send_mouse(*tree_->viewport(), QEvent::MouseButtonRelease, replacement_target,
+             Qt::LeftButton, Qt::NoButton);
+  EXPECT_TRUE(replacement.scene().selectable(replacement_entity.value().id)
+                  ->selectable);
+  EXPECT_EQ(replacement.history().undo_count(), replacement_history_count);
+  EXPECT_EQ(session_.history().undo_count(), removed_history_count);
+  panel_.abandon_runtime();
+}
+
+TEST_F(OutlinerPanelDropTests,
+       RejectedInlineMutationsPreserveFlagsSelectionAndHistory) {
+  const auto entity = create("Mutation blocked object");
+  const auto other = create("Other selected object");
+  ASSERT_TRUE(editor_.selection()
+                  .select_objects_for_inspection({entity, other}, other).ok());
+  refresh();
+  int blocked_attempts = 0;
+  session_.document_commands().set_entity_mutation_blocker(
+      [&](quader::EntityId target) {
+        if (target == entity) {
+          ++blocked_attempts;
+          return true;
+        }
+        return false;
+      });
+  const auto history_count = session_.history().undo_count();
+  const auto revision = session_.scene().hierarchy_presentation_revision();
+  for (const bool visibility : {true, false}) {
+    const auto target = inline_action_position(*tree_, index(entity), visibility);
+    click(*tree_->viewport(), target, Qt::LeftButton);
+    refresh();
+    EXPECT_TRUE(index(entity).data(kVisibleRole).toBool());
+    EXPECT_TRUE(index(entity).data(kSelectableRole).toBool());
+    EXPECT_EQ(session_.history().undo_count(), history_count);
+    EXPECT_EQ(session_.scene().hierarchy_presentation_revision(), revision);
+    expect_selection(*tree_, session_.scene(), {entity, other}, other);
+  }
+  EXPECT_EQ(blocked_attempts, 2);
+  session_.document_commands().set_entity_mutation_blocker({});
+}
+
+TEST_F(OutlinerPanelDropTests,
+       InlineIconsPaintOnlyForHoverOrSelectionAndLeaveRenameSpaceAtEveryScale) {
+  const QPalette native_palette = application_.palette();
+  quader::apply_qt_obsidian_application_theme(native_palette);
+  quader::QtUiScaleApplicationController scale_controller(application_);
+  const auto first = create("Selected object with a long descriptive name");
+  const auto hovered = create("Hovered visible object");
+  const auto hidden = create("Hidden object");
+  const auto locked = create("Visible locked object");
+  ASSERT_TRUE(editor_.scene().set_visible(hidden, false).ok());
+  ASSERT_TRUE(editor_.scene().set_selectable(locked, false).ok());
+  ASSERT_TRUE(editor_.scene().select(first).ok());
+  refresh();
+  const QPersistentModelIndex stable_row(index(first));
+  const auto history_count = session_.history().undo_count();
+  int changed_rows = 0;
+  QObject::connect(tree_->model(), &QAbstractItemModel::dataChanged, &panel_,
+      [&](const QModelIndex &, const QModelIndex &, const QList<int> &) {
+        ++changed_rows;
+      });
+  const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  const auto capture = [&](const QString &suffix) {
+    if (!review_directory.isEmpty()) {
+      ASSERT_TRUE(QDir().mkpath(review_directory));
+      EXPECT_TRUE(panel_.grab().save(QDir(review_directory).filePath(
+          QStringLiteral("outliner-inline-actions-%1.png").arg(suffix))));
+    }
+  };
+  int step = 0;
+  for (const float factor : {1.0F, 2.0F, 1.0F}) {
+    scale_controller.apply_factor(factor);
+    const auto &metrics = scale_controller.metrics();
+    panel_.apply_ui_scale(metrics);
+    panel_.resize(280, metrics.px(250));
+    refresh();
+    const auto paint_strip = [&](QStyle::State state) {
+      QImage image(QSize(280, metrics.px(28)),
+                   QImage::Format_ARGB32_Premultiplied);
+      image.fill(tree_->palette().color(QPalette::Active, QPalette::Base));
+      QPainter painter(&image);
+      QStyleOptionViewItem option;
+      option.initFrom(tree_);
+      option.palette.setCurrentColorGroup(QPalette::Active);
+      option.rect = image.rect();
+      option.state = QStyle::State_Enabled | QStyle::State_Active | state;
+      tree_->itemDelegate()->paint(&painter, option, index(hovered));
+      painter.end();
+      return image.copy(QRect(image.width() - metrics.px(52), 0,
+                              metrics.px(48), image.height()));
+    };
+    const auto plain_strip = paint_strip(QStyle::State_None);
+    EXPECT_EQ(count_pixels(plain_strip, tree_->palette().color(
+                                          QPalette::Active, QPalette::Base)),
+              plain_strip.width() * plain_strip.height());
+    EXPECT_NE(paint_strip(QStyle::State_MouseOver), plain_strip);
+    const auto selected_strip = paint_strip(QStyle::State_Selected);
+    EXPECT_LT(count_pixels(selected_strip, tree_->palette().color(
+                                             QPalette::Active,
+                                             QPalette::Highlight)),
+              selected_strip.width() * selected_strip.height());
+    const auto hover_position =
+        inline_action_position(*tree_, index(hovered), true, factor);
+    for (int frame = 0; frame < 12; ++frame) {
+      send_mouse(*tree_->viewport(), QEvent::MouseMove, hover_position,
+                 Qt::NoButton, Qt::NoButton);
+      refresh();
+    }
+    ASSERT_TRUE(stable_row.isValid());
+    EXPECT_EQ(changed_rows, 0);
+    EXPECT_EQ(session_.history().undo_count(), history_count);
+    expect_selection(*tree_, session_.scene(), {first}, first);
+    capture(QStringLiteral("%1-%2").arg(qRound(factor * 100)).arg(step++));
+    for (const auto entity : {hidden, locked}) {
+      send_mouse(*tree_->viewport(), QEvent::MouseMove,
+                 inline_action_position(*tree_, index(entity), true, factor),
+                 Qt::NoButton, Qt::NoButton);
+      capture(QStringLiteral("%1-%2-%3")
+                  .arg(entity == hidden ? QStringLiteral("hidden")
+                                        : QStringLiteral("locked"))
+                  .arg(qRound(factor * 100)).arg(step));
+    }
+    tree_->edit(index(first));
+    QCoreApplication::processEvents();
+    auto *line_edit = tree_->findChild<QLineEdit *>();
+    ASSERT_NE(line_edit, nullptr);
+    const int actions_left = tree_->visualRect(index(first)).right() -
+                             metrics.px(4) - metrics.px(48) + 1;
+    EXPECT_LT(line_edit->geometry().right(), actions_left);
+    EXPECT_GE(line_edit->width(), tree_->fontMetrics().horizontalAdvance(
+                                     QStringLiteral("Sel")));
+    line_edit->setText(QString(127, QLatin1Char('W')));
+    QCoreApplication::processEvents();
+    EXPECT_LT(line_edit->geometry().right(), actions_left)
+        << "the native expanding editor must retain its bound while typing";
+    send_key(*line_edit, Qt::Key_Escape);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  }
+  panel_.setLayoutDirection(Qt::RightToLeft);
+  refresh();
+  tree_->edit(index(first));
+  QCoreApplication::processEvents();
+  auto *rtl_editor = tree_->findChild<QLineEdit *>();
+  ASSERT_NE(rtl_editor, nullptr);
+  rtl_editor->setText(QString(127, QLatin1Char('W')));
+  QCoreApplication::processEvents();
+  EXPECT_LT(rtl_editor->geometry().right(),
+            tree_->visualRect(index(first)).right() - 51);
+  send_key(*rtl_editor, Qt::Key_Escape);
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  const auto capture_flags = [&](const QString &suffix) {
+    for (const auto entity : {hovered, hidden, locked}) {
+      send_mouse(*tree_->viewport(), QEvent::MouseMove,
+                 inline_action_position(*tree_, index(entity), true),
+                 Qt::NoButton, Qt::NoButton);
+      capture(QStringLiteral("%1-%2").arg(suffix).arg(entity));
+    }
+  };
+  capture_flags(QStringLiteral("rtl"));
+  const auto rtl_target = inline_action_position(*tree_, index(locked), false);
+  click(*tree_->viewport(), rtl_target, Qt::LeftButton);
+  refresh();
+  EXPECT_TRUE(index(locked).data(kSelectableRole).toBool());
+  expect_selection(*tree_, session_.scene(), {first}, first);
+  ASSERT_TRUE(editor_.history().undo().ok());
+  panel_.setLayoutDirection(Qt::LeftToRight);
+  QPalette light_palette = tree_->palette();
+  light_palette.setColor(QPalette::Window, QColor(245, 245, 245));
+  light_palette.setColor(QPalette::WindowText, Qt::black);
+  light_palette.setColor(QPalette::Base, Qt::white);
+  light_palette.setColor(QPalette::AlternateBase, QColor(248, 248, 248));
+  light_palette.setColor(QPalette::Text, Qt::black);
+  light_palette.setColor(QPalette::Button, QColor(240, 240, 240));
+  light_palette.setColor(QPalette::ButtonText, Qt::black);
+  light_palette.setColor(QPalette::Highlight, QColor(210, 225, 247));
+  light_palette.setColor(QPalette::HighlightedText, Qt::black);
+  light_palette.setColor(QPalette::Disabled, QPalette::Text, QColor(120, 120, 120));
+  panel_.setPalette(light_palette);
+  refresh();
+  EXPECT_EQ(tree_->palette().color(QPalette::Active, QPalette::Base), Qt::white);
+  EXPECT_GT(count_pixels(tree_->viewport()->grab().toImage(), Qt::white), 100);
+  capture_flags(QStringLiteral("light"));
+  panel_.setPalette(QPalette{});
+  quader::apply_qt_application_theme_for_contrast_preference(
+      native_palette, Qt::ContrastPreference::HighContrast);
+  refresh();
+  capture_flags(QStringLiteral("native-contrast"));
 }
 
 TEST_F(OutlinerPanelDropTests,
@@ -1378,7 +1771,7 @@ TEST(OutlinerPanelTests,
   ASSERT_TRUE(editor.scene().set_selectable(first.value().id, false).ok());
   panel.refresh(context);
   styled_first = find_entity_index(*tree->model(), first.value().id);
-  EXPECT_TRUE(styled_first.data(Qt::UserRole + 2).toBool());
+  EXPECT_FALSE(styled_first.data(Qt::UserRole + 2).toBool());
   EXPECT_FALSE((styled_first.flags() & Qt::ItemIsDragEnabled) != 0);
   EXPECT_FALSE((styled_first.flags() & Qt::ItemIsDropEnabled) != 0);
   ASSERT_TRUE(editor.scene().set_selectable(first.value().id, true).ok());
@@ -1632,7 +2025,9 @@ TEST(OutlinerPanelTests,
 
 namespace {
 
-void expect_outliner_stops_after_project_rebind(bool drag_drop) {
+enum class OutlinerRebindAction { Group, Drop, Visibility, Selectability };
+
+void expect_outliner_stops_after_project_rebind(OutlinerRebindAction action) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-outliner-reentrant-group-tests";
@@ -1754,7 +2149,7 @@ void expect_outliner_stops_after_project_rebind(bool drag_drop) {
   ASSERT_TRUE(dirty_subscription.valid());
 
   bool action_dispatched = false;
-  if (drag_drop) {
+  if (action == OutlinerRebindAction::Drop) {
     const std::unique_ptr<QMimeData> data(
         tree->model()->mimeData(tree->selectionModel()->selectedRows(0)));
     ASSERT_NE(data, nullptr);
@@ -1763,6 +2158,14 @@ void expect_outliner_stops_after_project_rebind(bool drag_drop) {
     ASSERT_TRUE(destination.isValid());
     action_dispatched = tree->model()->dropMimeData(
         data.get(), Qt::MoveAction, -1, 0, destination);
+  } else if (action == OutlinerRebindAction::Visibility ||
+             action == OutlinerRebindAction::Selectability) {
+    const QPoint position = inline_action_position(
+        *tree, target, action == OutlinerRebindAction::Visibility);
+    send_mouse(*tree->viewport(), QEvent::MouseMove, position,
+               Qt::NoButton, Qt::NoButton);
+    click(*tree->viewport(), position, Qt::LeftButton);
+    action_dispatched = true;
   } else {
     QTimer::singleShot(0, &panel, [&]() {
       auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
@@ -1807,12 +2210,22 @@ void expect_outliner_stops_after_project_rebind(bool drag_drop) {
 
 TEST(OutlinerPanelTests,
      GroupCommandStopsOldDocumentAccessAfterSynchronousProjectRebind) {
-  expect_outliner_stops_after_project_rebind(false);
+  expect_outliner_stops_after_project_rebind(OutlinerRebindAction::Group);
 }
 
 TEST(OutlinerPanelTests,
      DropStopsOldDocumentAccessAfterSynchronousProjectRebind) {
-  expect_outliner_stops_after_project_rebind(true);
+  expect_outliner_stops_after_project_rebind(OutlinerRebindAction::Drop);
+}
+
+TEST(OutlinerPanelTests,
+     InlineVisibilityStopsOldDocumentAccessAfterSynchronousProjectRebind) {
+  expect_outliner_stops_after_project_rebind(OutlinerRebindAction::Visibility);
+}
+
+TEST(OutlinerPanelTests,
+     InlineSelectabilityStopsOldDocumentAccessAfterSynchronousProjectRebind) {
+  expect_outliner_stops_after_project_rebind(OutlinerRebindAction::Selectability);
 }
 
 TEST(OutlinerPanelTests, DoubleClickExpandsGroupsWithoutStartingRename) {

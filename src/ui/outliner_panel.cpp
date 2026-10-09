@@ -87,6 +87,20 @@ namespace {
 constexpr int kEntityIdRole = Qt::UserRole + 1;
 constexpr int kSubduedRole = Qt::UserRole + 2;
 constexpr int kActiveEntityRole = Qt::UserRole + 3;
+constexpr int kVisibleRole = Qt::UserRole + 4;
+constexpr int kSelectableRole = Qt::UserRole + 5;
+
+enum class OutlinerRowAction { Visibility, Selectability };
+
+/// A press targets one authored property in one retained document projection.
+struct OutlinerRowActionToken {
+  EntityId entity = kInvalidEntityId;
+  OutlinerRowAction action = OutlinerRowAction::Visibility;
+  QuaderSceneDocumentBinding document_binding;
+  std::uint64_t runtime_generation = 0;
+  std::uint64_t hierarchy_revision = 0;
+  bool before = false;
+};
 
 /// Keeps the five authored entity symbols shared across retained tree rows.
 enum class OutlinerIcon : std::size_t {
@@ -315,32 +329,163 @@ public:
   }
 };
 
-/// Renders hidden and unselectable entity rows with subdued stock palette text.
+/// Shares the right-side action strip between native painting, editing and input.
+struct OutlinerRowLayout {
+  QRect content;
+  QRect visibility;
+  QRect selectability;
+};
+
+/// Preserves native row presentation while adding authored property controls.
 class SubduedRowDelegate final : public QStyledItemDelegate {
 public:
-  explicit SubduedRowDelegate(QObject *parent = nullptr)
-      : QStyledItemDelegate(parent) {}
+  explicit SubduedRowDelegate(QTreeView &tree)
+      : QStyledItemDelegate(&tree), tree_(tree) {
+    refresh_palette();
+  }
+
+  // Scoped by drawRow because QTreeView replaces MouseOver per cell after its
+  // row hook; direct delegate rendering continues to use the supplied state.
+  std::optional<bool> row_hover_hint;
+
+  bool apply_ui_scale(const QtUiScaleMetrics &metrics) {
+    const int extent = metrics.px(10);
+    const int width = metrics.px(24);
+    const int padding = metrics.px(4);
+    if (action_extent_ == extent && action_width_ == width &&
+        action_padding_ == padding) {
+      return false;
+    }
+    action_extent_ = extent;
+    action_width_ = width;
+    action_padding_ = padding;
+    return true;
+  }
+
+  void refresh_palette() {
+    const QPalette palette = tree_.palette();
+    if (palette_valid_ && palette_.cacheKey() == palette.cacheKey()) {
+      return;
+    }
+    palette_ = palette;
+    palette_valid_ = true;
+    constexpr std::array<QPalette::ColorGroup, 3> kGroups{
+        QPalette::Active, QPalette::Inactive, QPalette::Disabled};
+    constexpr std::array<QPalette::ColorRole, 2> kRoles{
+        QPalette::Text, QPalette::HighlightedText};
+    const std::array<QString, 4> paths{
+        QStringLiteral(":/quader/icons/outliner_show.png"),
+        QStringLiteral(":/quader/icons/outliner_hide.png"),
+        QStringLiteral(":/quader/icons/outliner_selectable.png"),
+        QStringLiteral(":/quader/icons/outliner_unselectable.png")};
+    for (std::size_t group = 0; group < kGroups.size(); ++group) {
+      for (std::size_t role = 0; role < kRoles.size(); ++role) {
+        for (std::size_t icon = 0; icon < paths.size(); ++icon) {
+          action_icons_[group * kRoles.size() + role][icon] =
+              qt_multiresolution_icon(paths[icon],
+                                      palette.color(kGroups[group], kRoles[role]));
+        }
+      }
+    }
+  }
+
+  [[nodiscard]] OutlinerRowLayout row_layout(const QRect &row) const {
+    OutlinerRowLayout layout{.content = row};
+    // Keep the requested physical right placement in RTL as well. visualRect
+    // already excludes the native hierarchy branch area on that side.
+    const int right = row.right() - action_padding_ + 1;
+    layout.selectability = QRect(right - action_width_, row.top(),
+                                  action_width_, row.height());
+    layout.visibility = layout.selectability.translated(-action_width_, 0);
+    layout.content.setRight(layout.visibility.left() - action_padding_ - 1);
+    if (layout.content.width() < 0) {
+      layout.content.setWidth(0);
+    }
+    return layout;
+  }
+
+  QSize sizeHint(const QStyleOptionViewItem &option,
+                  const QModelIndex &index) const override {
+    QSize size = QStyledItemDelegate::sizeHint(option, index);
+    size.rwidth() += action_width_ * 2 + action_padding_ * 2;
+    size.setHeight(std::max(size.height(), action_extent_ + action_padding_ * 2));
+    return size;
+  }
+
+  void updateEditorGeometry(QWidget *editor,
+                             const QStyleOptionViewItem &option,
+                             const QModelIndex &index) const override {
+    QStyleOptionViewItem content_option(option);
+    content_option.rect = row_layout(option.rect).content;
+    QStyledItemDelegate::updateEditorGeometry(editor, content_option, index);
+    // Retain the native height and decoration offset inside the reserved space.
+    QRect geometry = editor->geometry();
+    geometry.setLeft(std::max(geometry.left(), content_option.rect.left()));
+    geometry.setRight(std::min(geometry.right(), content_option.rect.right()));
+    editor->setGeometry(geometry);
+  }
 
   QWidget *createEditor(QWidget *parent,
                         const QStyleOptionViewItem &option,
                         const QModelIndex &index) const override {
-    QWidget *editor = QStyledItemDelegate::createEditor(parent, option, index);
     if (index.column() == column_index(OutlinerColumn::Name)) {
-      if (auto *line_edit = qobject_cast<QLineEdit *>(editor)) {
-        line_edit->setMaxLength(127);
-        line_edit->selectAll();
-      }
+      // Qt's default string editor expands on textChanged to the viewport edge.
+      // A native line edit keeps the delegated geometry when long names scroll.
+      auto *line_edit = new QLineEdit(parent);
+      line_edit->setFrame(line_edit->style()->styleHint(
+          QStyle::SH_ItemView_DrawDelegateFrame, nullptr, line_edit));
+      line_edit->setMaxLength(127);
+      line_edit->selectAll();
+      return line_edit;
     }
-    return editor;
+    return QStyledItemDelegate::createEditor(parent, option, index);
   }
 
   void paint(QPainter *painter, const QStyleOptionViewItem &option,
              const QModelIndex &index) const override {
     QStyleOptionViewItem styled_option(option);
+    initStyleOption(&styled_option, index);
+    if (row_hover_hint) {
+      styled_option.state.setFlag(QStyle::State_MouseOver, *row_hover_hint);
+    }
+    const OutlinerRowLayout layout = row_layout(option.rect);
+    // Draw the native background across the complete row before reserving the
+    // controls' strip from the native entity icon, text and focus geometry.
+    QStyleOptionViewItem background_option(styled_option);
+    background_option.state &= ~QStyle::State_HasFocus;
+    background_option.text.clear();
+    background_option.icon = {};
+    background_option.features &= ~(QStyleOptionViewItem::HasDisplay |
+                                     QStyleOptionViewItem::HasDecoration);
+    tree_.style()->drawControl(QStyle::CE_ItemViewItem, &background_option,
+                               painter, &tree_);
+    styled_option.rect = layout.content;
     if (index.data(kSubduedRole).toBool()) {
       styled_option.state &= ~QStyle::State_Enabled;
     }
     QStyledItemDelegate::paint(painter, styled_option, index);
+    if (!styled_option.state.testFlag(QStyle::State_MouseOver) &&
+        !option.state.testFlag(QStyle::State_Selected)) {
+      return;
+    }
+    const std::size_t group = !option.state.testFlag(QStyle::State_Enabled)
+                                  ? 2u
+                                  : option.state.testFlag(QStyle::State_Active)
+                                        ? 0u
+                                        : 1u;
+    const std::size_t role = option.state.testFlag(QStyle::State_Selected) ? 1u : 0u;
+    const auto &icons = action_icons_[group * 2u + role];
+    const auto paint_action = [&](const QRect &slot, std::size_t icon) {
+      QRect target(0, 0, action_extent_, action_extent_);
+      target.moveCenter(slot.center());
+      icons[icon].paint(painter, target, Qt::AlignCenter, QIcon::Normal);
+    };
+    painter->save();
+    painter->setClipRect(option.rect, Qt::IntersectClip);
+    paint_action(layout.visibility, index.data(kVisibleRole).toBool() ? 0u : 1u);
+    paint_action(layout.selectability,
+                  index.data(kSelectableRole).toBool() ? 2u : 3u);
+    painter->restore();
   }
 
 protected:
@@ -352,6 +497,15 @@ protected:
       option->backgroundBrush = option->palette.brush(QPalette::AlternateBase);
     }
   }
+
+private:
+  QTreeView &tree_;
+  std::array<std::array<QIcon, 4>, 6> action_icons_;
+  QPalette palette_;
+  int action_extent_ = 10;
+  int action_width_ = 24;
+  int action_padding_ = 4;
+  bool palette_valid_ = false;
 };
 
 /// Coalesces mouse selection into one owner transaction, normalizes Qt's
@@ -361,15 +515,32 @@ class OutlinerTreeView final : public QTreeView {
 public:
   using ContextMenuHandler = std::function<void(EntityId, QPoint)>;
   using SelectionGestureFinishedHandler = std::function<void()>;
+  using RowActionBeginHandler = std::function<std::optional<OutlinerRowActionToken>(
+      EntityId, OutlinerRowAction)>;
+  using RowActionHandler = std::function<void(const OutlinerRowActionToken &)>;
   enum class DropHint { None, Parent, Reorder, Root, InstanceScope };
 
   explicit OutlinerTreeView(QWidget *parent = nullptr) : QTreeView(parent) {
     install_qt_tree_relationship_presentation(*this);
+    setMouseTracking(true);
+    row_delegate_ = new SubduedRowDelegate(*this);
+    setItemDelegate(row_delegate_);
   }
 
   ContextMenuHandler context_menu_handler;
   SelectionGestureFinishedHandler selection_gesture_finished_handler;
+  RowActionBeginHandler row_action_begin_handler;
+  RowActionHandler row_action_handler;
   std::uint64_t hint_revision = 0;
+
+  void apply_action_ui_scale(const QtUiScaleMetrics &metrics) {
+    if (row_delegate_->apply_ui_scale(metrics)) {
+      cancel_row_action();
+      doItemsLayout();
+    }
+  }
+
+  void cancel_row_action() noexcept { pressed_action_.reset(); }
 
   [[nodiscard]] bool hint_drag_active() const noexcept {
     return hint_source_drag_ || hint_drag_hovering_;
@@ -428,6 +599,7 @@ public:
 
   void abandon_selection_gesture() noexcept {
     ++interaction_generation_;
+    cancel_row_action();
     selection_gesture_active_ = false;
     resetting_selection_anchor_ = false;
     clear_drag_hints();
@@ -449,7 +621,22 @@ public:
   }
 
 protected:
+  void drawRow(QPainter *painter, const QStyleOptionViewItem &option,
+                 const QModelIndex &index) const override {
+    // Model publication replaces persistent indexes. Keep local pointer hover
+    // at the same viewport position without writing model roles or resampling
+    // the scene, including immediately after an unselected row's toggle.
+    const QScopedValueRollback<std::optional<bool>> hover_guard(
+        row_delegate_->row_hover_hint,
+        hover_position_
+            ? std::optional<bool>(hover_position_->y() >= option.rect.top() &&
+                                  hover_position_->y() <= option.rect.bottom())
+            : std::nullopt);
+    QTreeView::drawRow(painter, option, index);
+  }
+
   void startDrag(Qt::DropActions supported_actions) override {
+    cancel_row_action();
     const std::uint64_t generation = interaction_generation_;
     // A drag can start before mouse release; publish its row selection once
     // before entering QDrag's nested event loop.
@@ -505,7 +692,23 @@ protected:
   }
 
   void mousePressEvent(QMouseEvent *event) override {
+    update_hover_position(event->position().toPoint());
     if (event->button() == Qt::LeftButton) {
+      cancel_row_action();
+      row_action_release_pending_ = false;
+      const QModelIndex clicked = indexAt(event->position().toPoint());
+      const auto action = action_at(clicked, event->position().toPoint());
+      if (action && row_action_begin_handler != nullptr) {
+        row_action_release_pending_ = true;
+        const auto token = row_action_begin_handler(entity_id(clicked), *action);
+        if (token) {
+          pressed_action_ = PressedAction{.index = clicked,
+                                          .token = *token,
+                                          .generation = interaction_generation_};
+        }
+        event->accept();
+        return;
+      }
       selection_gesture_active_ = true;
       if ((event->modifiers() & Qt::ShiftModifier) != 0 &&
           externally_synchronized_anchor_valid_ &&
@@ -532,19 +735,80 @@ protected:
   }
 
   void mouseReleaseEvent(QMouseEvent *event) override {
+    if (event->button() == Qt::LeftButton && row_action_release_pending_) {
+      row_action_release_pending_ = false;
+      const auto pressed = std::exchange(pressed_action_, std::nullopt);
+      event->accept();
+      if (pressed && pressed->index.isValid() &&
+          pressed->generation == interaction_generation_ &&
+          entity_id(pressed->index) == pressed->token.entity &&
+          indexAt(event->position().toPoint()) == pressed->index &&
+          action_at(pressed->index, event->position().toPoint()) ==
+              pressed->token.action &&
+          row_action_handler != nullptr) {
+        // Dispatch can synchronously replace the document or destroy the panel.
+        const auto handler = row_action_handler;
+        handler(pressed->token);
+      }
+      return;
+    }
     QTreeView::mouseReleaseEvent(event);
     if (event->button() == Qt::LeftButton) {
       finish_selection_gesture();
     }
   }
 
+  void mouseMoveEvent(QMouseEvent *event) override {
+    update_hover_position(event->position().toPoint());
+    if (row_action_release_pending_) {
+      if (pressed_action_ &&
+          (indexAt(event->position().toPoint()) != pressed_action_->index ||
+           action_at(pressed_action_->index, event->position().toPoint()) !=
+               pressed_action_->token.action)) {
+        cancel_row_action();
+      }
+      event->accept();
+      return;
+    }
+    QTreeView::mouseMoveEvent(event);
+  }
+
+  void mouseDoubleClickEvent(QMouseEvent *event) override {
+    if (event->button() == Qt::LeftButton &&
+        action_at(indexAt(event->position().toPoint()),
+                    event->position().toPoint())) {
+      mousePressEvent(event);
+      return;
+    }
+    QTreeView::mouseDoubleClickEvent(event);
+  }
+
+  void scrollContentsBy(int dx, int dy) override {
+    cancel_row_action();
+    QTreeView::scrollContentsBy(dx, dy);
+  }
+
   void focusOutEvent(QFocusEvent *event) override {
+    cancel_row_action();
     QTreeView::focusOutEvent(event);
     finish_selection_gesture();
   }
 
   bool event(QEvent *event) override {
+    if (event->type() == QEvent::UngrabMouse ||
+        event->type() == QEvent::WindowDeactivate ||
+        event->type() == QEvent::Hide || event->type() == QEvent::Resize ||
+        event->type() == QEvent::LayoutDirectionChange ||
+        event->type() == QEvent::FontChange ||
+        event->type() == QEvent::StyleChange) {
+      cancel_row_action();
+    }
     const bool handled = QTreeView::event(event);
+    if (row_delegate_ != nullptr &&
+        (event->type() == QEvent::PaletteChange ||
+         event->type() == QEvent::ApplicationPaletteChange)) {
+      row_delegate_->refresh_palette();
+    }
     if (event->type() == QEvent::UngrabMouse ||
         event->type() == QEvent::WindowDeactivate ||
         event->type() == QEvent::Hide) {
@@ -552,6 +816,24 @@ protected:
       clear_drag_hints();
     }
     return handled;
+  }
+
+  bool viewportEvent(QEvent *event) override {
+    if (event->type() == QEvent::Leave || event->type() == QEvent::Hide) {
+      if (hover_position_) {
+        const QModelIndex hovered = indexAt(*hover_position_);
+        hover_position_.reset();
+        if (hovered.isValid()) {
+          viewport()->update(visualRect(hovered));
+        }
+      }
+    }
+    if (event->type() == QEvent::Leave ||
+        event->type() == QEvent::UngrabMouse ||
+        event->type() == QEvent::Hide || event->type() == QEvent::Resize) {
+      cancel_row_action();
+    }
+    return QTreeView::viewportEvent(event);
   }
 
   void contextMenuEvent(QContextMenuEvent *event) override {
@@ -572,6 +854,54 @@ protected:
   }
 
 private:
+  void update_hover_position(QPoint position) {
+    if (hover_position_ == position) {
+      return;
+    }
+    const QModelIndex previous =
+        hover_position_ ? indexAt(*hover_position_) : QModelIndex{};
+    const QModelIndex hovered = indexAt(position);
+    hover_position_ = position;
+    if (previous != hovered) {
+      if (previous.isValid()) {
+        viewport()->update(visualRect(previous));
+      }
+      if (hovered.isValid()) {
+        viewport()->update(visualRect(hovered));
+      }
+    }
+  }
+
+  [[nodiscard]] std::optional<OutlinerRowAction>
+  action_at(const QModelIndex &index, QPoint position) const {
+    if (!index.isValid() || row_delegate_ == nullptr || !isEnabled()) {
+      return std::nullopt;
+    }
+    const QRect row = visualRect(index);
+    if (!row.contains(position)) {
+      return std::nullopt;
+    }
+    const OutlinerRowLayout layout = row_delegate_->row_layout(row);
+    if (layout.visibility.contains(position)) {
+      return OutlinerRowAction::Visibility;
+    }
+    if (layout.selectability.contains(position)) {
+      return OutlinerRowAction::Selectability;
+    }
+    return std::nullopt;
+  }
+
+  struct PressedAction {
+    QPersistentModelIndex index;
+    OutlinerRowActionToken token;
+    std::uint64_t generation = 0;
+  };
+
+  SubduedRowDelegate *row_delegate_ = nullptr;
+  std::optional<PressedAction> pressed_action_;
+  std::optional<QPoint> hover_position_;
+  bool row_action_release_pending_ = false;
+
   void clear_drop_hint() {
     if (hint_kind_ != DropHint::None || !hint_target_.empty()) {
       hint_kind_ = DropHint::None;
@@ -650,7 +980,6 @@ struct OutlinerPanel::Impl {
     tree_->setDragDropOverwriteMode(false);
     tree_->setDropIndicatorShown(true);
     tree_->setAutoExpandDelay(600);
-    tree_->setItemDelegate(new SubduedRowDelegate(tree_));
     panel_.setFocusProxy(tree_);
 
     model_ = new OutlinerItemModel(tree_);
@@ -687,6 +1016,13 @@ struct OutlinerPanel::Impl {
       }
       widget_selection_sync_deferred_ = false;
       handle_widget_selection_changed();
+    };
+    tree_->row_action_begin_handler =
+        [this](EntityId entity, OutlinerRowAction action) {
+          return begin_row_action(entity, action);
+        };
+    tree_->row_action_handler = [this](const OutlinerRowActionToken &token) {
+      handle_row_action(token);
     };
     model_->mime_handler = [this](const QModelIndexList &indexes) {
       return create_drag_data(indexes);
@@ -731,6 +1067,7 @@ struct OutlinerPanel::Impl {
 
   void apply_ui_scale(const QtUiScaleMetrics &metrics) {
     apply_ui_scale_to_qt_tree_relationship_presentation(*tree_, metrics);
+    tree_->apply_action_ui_scale(metrics);
     const QSize icon_size = metrics.size(QSize(16, 16));
     if (tree_->iconSize() != icon_size) {
       tree_->setIconSize(icon_size);
@@ -741,6 +1078,7 @@ struct OutlinerPanel::Impl {
     ++runtime_binding_generation_;
     editor_ = nullptr;
     document_ = nullptr;
+    document_binding_.reset();
     localization_ = nullptr;
     instance_scope_definition_ = kInvalidEntityId;
     cache_ = {};
@@ -761,12 +1099,15 @@ struct OutlinerPanel::Impl {
   }
 
   void refresh(UIContext &context) {
-    if ((editor_ != nullptr && editor_ != &context.intent.editor) ||
+    const auto next_binding = context.intent.editor.query().document_binding();
+    if ((document_binding_ && *document_binding_ != next_binding) ||
+        (editor_ != nullptr && editor_ != &context.intent.editor) ||
         (document_ != nullptr && document_ != &context.scene.document)) {
       abandon_runtime();
     }
     editor_ = &context.intent.editor;
     document_ = &context.scene.document;
+    document_binding_ = next_binding;
     const bool localization_changed =
         localization_ != &context.localization ||
         localized_locale_ != context.localization.current_locale() ||
@@ -792,6 +1133,59 @@ struct OutlinerPanel::Impl {
   }
 
 private:
+  [[nodiscard]] bool binding_is_current() const {
+    return editor_ != nullptr && document_ != nullptr && document_binding_ &&
+           editor_->query().document_binding() == *document_binding_;
+  }
+
+  [[nodiscard]] std::optional<OutlinerRowActionToken>
+  begin_row_action(EntityId entity, OutlinerRowAction action) const {
+    if (!binding_is_current() || !cache_.valid ||
+        cache_.hierarchy_presentation_revision !=
+            document_->hierarchy_presentation_revision()) {
+      return std::nullopt;
+    }
+    const EntityRecord *entity_record = record(entity);
+    if (entity_record == nullptr) {
+      return std::nullopt;
+    }
+    return OutlinerRowActionToken{
+        .entity = entity,
+        .action = action,
+        .document_binding = *document_binding_,
+        .runtime_generation = runtime_binding_generation_,
+        .hierarchy_revision = cache_.hierarchy_presentation_revision,
+        .before = action == OutlinerRowAction::Visibility
+                      ? entity_record->visible
+                      : entity_record->selectable,
+    };
+  }
+
+  void handle_row_action(const OutlinerRowActionToken &token) {
+    if (token.runtime_generation != runtime_binding_generation_ ||
+        !binding_is_current() || *document_binding_ != token.document_binding ||
+        token.hierarchy_revision != document_->hierarchy_presentation_revision() ||
+        record(token.entity) == nullptr) {
+      return;
+    }
+    QPointer<OutlinerPanel> guard(&panel_);
+    const QuaderApiVoidResult result =
+        token.action == OutlinerRowAction::Visibility
+            ? editor_->scene().set_visible(token.entity, !token.before)
+            : editor_->scene().set_selectable(token.entity, !token.before);
+    if (!guard || token.runtime_generation != runtime_binding_generation_ ||
+        !binding_is_current()) {
+      return;
+    }
+    if (!result.ok()) {
+      (void)editor_->ui().notify({.level = QuaderNotificationLevel::Error,
+                                 .message = result.error_message()});
+      return;
+    }
+    refresh_model_if_needed();
+    sync_selection();
+  }
+
   void sync_active_entity() {
     const std::uint64_t revision = editor_->mode().revision();
     if (presented_mode_revision_ == revision &&
@@ -949,6 +1343,7 @@ private:
 
     {
       QDR_PROFILE_SCOPE("Qt outliner rebuild item model");
+      tree_->cancel_row_action();
       tree_->setUpdatesEnabled(false);
       syncing_expansion_ = true;
       syncing_model_ = true;
@@ -980,9 +1375,9 @@ private:
                                     !entity_record->has_instance_occurrence);
           name_item->setData(static_cast<qulonglong>(entity_record->id),
                              kEntityIdRole);
-          name_item->setData(!entity_record->effectively_visible ||
-                                 !entity_record->effectively_selectable,
-                             kSubduedRole);
+          name_item->setData(!entity_record->effectively_visible, kSubduedRole);
+          name_item->setData(entity_record->visible, kVisibleRole);
+          name_item->setData(entity_record->selectable, kSelectableRole);
 
           if (parent != nullptr) {
             parent->appendRow(name_item);
@@ -1642,6 +2037,7 @@ private:
   OutlinerItemModel *model_ = nullptr;
   QuaderEditorApi *editor_ = nullptr;
   const SceneDocument *document_ = nullptr;
+  std::optional<QuaderSceneDocumentBinding> document_binding_;
   LocalizationService *localization_ = nullptr;
   std::string localized_locale_;
   std::uint64_t localized_revision_ = 0u;

@@ -1133,7 +1133,11 @@ qt_add_resources(quader_ui "quader_outliner_icons"
         "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/outliner_curve.png"
         "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/outliner_point_light.png"
         "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/outliner_directional_light.png"
-        "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/outliner_group.png")
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/outliner_group.png"
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/outliner_show.png"
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/outliner_hide.png"
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/outliner_selectable.png"
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/outliner_unselectable.png")
 
 qt_add_resources(quader_ui "quader_project_home_artwork"
     PREFIX "/quader/home"

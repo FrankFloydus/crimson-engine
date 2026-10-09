@@ -26,7 +26,12 @@ file except through prior written authorization from Francesco Di Blasi.
 - Outliner drag/drop uses Qt's native `InternalMove` view and model MIME/drop hooks, with
   `scene().move_entities()` owning atomic hierarchy/order edits and history. The model must not
   apply Qt's trailing source-row removal after the scene has already moved those entities.
-  Names depict visibility/selectability state; the tree has no property checkbox columns.
+  Only effectively hidden names are subdued. Two adjacent right-side icons show
+  each row's authored visibility/selectability while hovered or selected; inline
+  clicks edit that row through the public scene API without changing the input's
+  selection target. Shared scaled geometry reserves native text/editor space;
+  runtime, document and retained-row fences reject abandoned or stale gestures.
+  Hover stays a native retained-view repaint and never queries or rebuilds the scene.
 - `QtAssetBrowser` presents scenes, materials, textures and physical project folders in a bottom
   dock. Mutations go through `QuaderProjectAssetsApi`; owner snapshots supply the resulting tree.
   Drags and clipboard requests carry project and catalog revisions. Recycling requires the public

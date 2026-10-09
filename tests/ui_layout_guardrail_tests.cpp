@@ -593,7 +593,10 @@ TEST(UiLayoutGuardrailTests,
   expect_missing(outliner, "entity_range_selection(");
   expect_missing(outliner, "outliner_anchor_");
   expect_missing(outliner, "row_press_handler");
-  expect_missing(outliner, "property_toggle_handler");
+  // Inline row controls retain scene-API mutation ownership without restoring
+  // the former checkbox columns or replacing Qt's native selection route.
+  expect_contains(outliner, "editor_->scene().set_visible(");
+  expect_contains(outliner, "editor_->scene().set_selectable(");
   expect_missing(outliner, "tree_->setCurrentIndex(");
   expect_contains(outliner,
                   "header->setSectionResizeMode(column_index(OutlinerColumn::Name),");
