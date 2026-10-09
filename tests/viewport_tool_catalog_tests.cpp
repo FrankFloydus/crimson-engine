@@ -90,6 +90,8 @@ public:
   int invalidations = 0;
   int cancellations = 0;
   int cut_mode_cycles = 0;
+  bool accept_plane_drags = false;
+  std::vector<ModelingToolRayEvent> plane_events;
 
   bool claim(ModelingBoxDragState) override { return allow_hover; }
   void invalidate() override { ++invalidations; }
@@ -112,7 +114,8 @@ public:
   }
   ModelingCommandResult
   update_drawn_plane_hover(ModelingViewportTool,
-                           const ModelingToolRayEvent &) override {
+                           const ModelingToolRayEvent &event) override {
+    plane_events.push_back(event);
     return point_hover_result();
   }
 
@@ -166,7 +169,9 @@ public:
   }
   ModelingCommandResult
   begin_drawn_plane_line_drag(ModelingViewportTool,
-                              const ModelingToolRayEvent &) override {
+                              const ModelingToolRayEvent &event) override {
+    plane_events.push_back(event);
+    if (accept_plane_drags) status.cut_dragging = true;
     return {.ok = true};
   }
   ModelingCommandResult
@@ -175,6 +180,7 @@ public:
     return {.ok = true};
   }
   ModelingCommandResult end_drawn_plane_drag(ModelingViewportTool) override {
+    if (accept_plane_drags) status.cut_dragging = false;
     return {.ok = true};
   }
   ModelingCommandResult cycle_cut_mode() override {
@@ -279,6 +285,105 @@ TEST(ViewportToolCatalogTests, ModalPlaneHintsRetainAcceptedHoverWithoutRepeatin
   runtime.populate_operation_input_context(hints);
   EXPECT_FALSE(hints.plane_endpoint_hovered);
   EXPECT_FALSE(hints.plane_body_hovered);
+}
+
+TEST(ViewportToolCatalogTests, CutLineCursorAndTemporaryModifiersFollowSemanticPointerEvents) {
+  ViewportToolRuntime runtime;
+  ViewportToolState state;
+  ASSERT_TRUE(runtime.set_active_tool(state, ViewportToolId::Cut));
+  ViewportCameraController camera;
+  camera.set_viewport_size(640.0F, 480.0F);
+  FailingToolPreviewPorts ports;
+  ports.accept_plane_drags = true;
+  ports.status.cut_points = {{{-1.0F, 0.0F, 0.0F}, {1.0F, 0.0F, 0.0F}, {}}};
+  ports.status.cut_captured_point_count = 2;
+  ports.status.cut_has_line = true;
+  RejectingToolCommitPort commit;
+  ViewportPointToolContext point;
+  point.make_event_at = [](QVec2 local, bool dragging) {
+    return ModelingToolRayEvent{.screen_position = local, .snap_enabled = true,
+                                .constrain_axis = false, .dragging = dragging};
+  };
+  point.hit_drawn_plane_line = [](const auto&, int, bool) { return true; };
+  ViewportToolContext context{
+      .state = state, .camera = camera,
+      .ports = {.hover = &ports, .preview = &ports, .commit = &commit, .cancel = &ports},
+      .point = &point,
+  };
+  ViewportToolEvent event{
+      .kind = ViewportToolEventKind::Frame, .tool = ViewportToolId::Cut,
+      .pointer = {.hovered = true, .can_interact = true,
+                  .mouse_local = camera.project_world_point({}).position},
+  };
+  (void)runtime.handle_active_tool_event(state, context, event);
+  ASSERT_FALSE(ports.plane_events.empty());
+  EXPECT_FALSE(ports.plane_events.back().snap_enabled);
+  EXPECT_EQ(runtime.tool_pointer_cursor(ViewportToolId::Cut), ViewportPointerCursor::OpenHand);
+  const int status_queries = ports.status_queries;
+  ports.allow_hover = false;
+  for (int frame = 0; frame < 10; ++frame) {
+    (void)runtime.handle_active_tool_event(state, context, event);
+    EXPECT_EQ(runtime.tool_pointer_cursor(ViewportToolId::Cut), ViewportPointerCursor::OpenHand);
+  }
+  EXPECT_EQ(ports.status_queries, status_queries);
+
+  const std::array<ViewportPointerButtonEdge, 1> presses{{{
+      .button = QuaderMouseButton::Left, .local = event.pointer.mouse_local, .sequence = 5U,
+      .modifiers = ViewportModifiers{},
+  }}};
+  event.pointer.left_clicked = true;
+  event.pointer.left_down = true;
+  event.pointer.left_click_local = event.pointer.mouse_local;
+  event.pointer.pointer_pressed_edges = presses;
+  (void)runtime.handle_active_tool_event(state, context, event);
+  EXPECT_EQ(runtime.tool_pointer_cursor(ViewportToolId::Cut), ViewportPointerCursor::ClosedHand);
+  event.pointer.left_clicked = false;
+  event.pointer.pointer_pressed_edges = {};
+  for (const bool held : {true, false}) {
+    event.pointer.modifiers = {.primary = held, .shift = held};
+    (void)runtime.handle_active_tool_event(state, context, event);
+    EXPECT_EQ(ports.plane_events.back().snap_enabled, held);
+    EXPECT_EQ(ports.plane_events.back().constrain_axis, held);
+    EXPECT_TRUE(ports.plane_events.back().dragging);
+  }
+  const std::array<ViewportPointerButtonEdge, 1> releases{{{
+      .button = QuaderMouseButton::Left, .local = {345.0F, 251.0F}, .sequence = 6U,
+      .modifiers = ViewportModifiers{.primary = true, .shift = true},
+  }}};
+  event.pointer.left_down = false;
+  event.pointer.left_released = true;
+  event.pointer.pointer_released_edges = releases;
+  (void)runtime.handle_active_tool_event(state, context, event);
+  EXPECT_TRUE(ports.plane_events.back().snap_enabled);
+  EXPECT_TRUE(ports.plane_events.back().constrain_axis);
+  EXPECT_FLOAT_EQ(ports.plane_events.back().screen_position.x, 345.0F);
+  EXPECT_FLOAT_EQ(ports.plane_events.back().screen_position.y, 251.0F);
+  EXPECT_EQ(runtime.tool_pointer_cursor(ViewportToolId::Cut), ViewportPointerCursor::Default);
+}
+
+TEST(ViewportToolCatalogTests, CutModifierPolicyDoesNotChangeMirrorEvents) {
+  ViewportToolRuntime runtime;
+  ViewportToolState state;
+  ASSERT_TRUE(runtime.set_active_tool(state, ViewportToolId::Mirror));
+  ViewportCameraController camera;
+  FailingToolPreviewPorts ports;
+  RejectingToolCommitPort commit;
+  ViewportPointToolContext point;
+  point.make_event_at = [](QVec2, bool) {
+    return ModelingToolRayEvent{.snap_enabled = true, .constrain_axis = false};
+  };
+  ViewportToolContext context{
+      .state = state, .camera = camera,
+      .ports = {.hover = &ports, .preview = &ports, .commit = &commit, .cancel = &ports},
+      .point = &point,
+  };
+  (void)runtime.handle_active_tool_event(state, context, {
+      .kind = ViewportToolEventKind::Frame, .tool = ViewportToolId::Mirror,
+      .pointer = {.hovered = true, .can_interact = true, .modifiers = {.shift = true}},
+  });
+  ASSERT_FALSE(ports.plane_events.empty());
+  EXPECT_TRUE(ports.plane_events.back().snap_enabled);
+  EXPECT_FALSE(ports.plane_events.back().constrain_axis);
 }
 
 TEST(ViewportToolCatalogTests, StrokeClosureHintsFollowOwnerHoverAndClearWhenInterrupted) {
@@ -3156,6 +3261,47 @@ TEST(ViewportToolRuntimeTests,
     EXPECT_EQ(harness.session.history().undo_count(), 1u);
     harness.expect_documents(after);
   }
+}
+
+TEST(ViewportToolRuntimeTests,
+     CutEndpointPressSamplesIdleCursorWithoutRebuildingTheAcceptedPreview) {
+  ModelingPointerHistoryHarness harness;
+  harness.initialize(ViewportToolId::Cut);
+  harness.begin_preview();
+  ASSERT_FALSE(::testing::Test::HasFatalFailure());
+  const auto before = harness.session.modeling().tool_status();
+  ASSERT_EQ(before.cut_captured_point_count, 2);
+  ASSERT_FALSE(before.cut_dragging);
+  const auto overlay = harness.session.modeling().volatile_overlay_snapshot();
+  for (const float x : {0.4F, 0.6F, 0.8F}) {
+    const auto hovered = harness.session.modeling().update_cut_hover(
+        harness.point.make_event_at({x, 0.0F}, false));
+    ASSERT_TRUE(hovered.ok) << hovered.message;
+    EXPECT_FALSE(hovered.changed);
+    const auto retained = harness.session.modeling().volatile_overlay_snapshot();
+    EXPECT_EQ(retained.frame, overlay.frame);
+    EXPECT_EQ(retained.source.publication_revision, overlay.source.publication_revision);
+  }
+  harness.point.hit_drawn_plane_captured_point = [](const auto&, int) {
+    return std::optional<int>{0};
+  };
+  // The press is offset from endpoint zero, after the last idle sample at 0.8.
+  // Its explicit sample must bypass hover throttling and retain -0.1 exactly.
+  ASSERT_TRUE(harness.dispatch({.left_clicked = true, .left_down = true,
+      .can_interact = true, .suppress_hover_work = true,
+      .mouse_local = {-0.1F, 0.0F}, .left_click_local = {-0.1F, 0.0F}}).handled);
+  ASSERT_TRUE(harness.session.modeling().tool_status().cut_dragging);
+  ASSERT_TRUE(harness.dispatch({.left_down = true, .can_interact = true,
+      .mouse_local = {-0.1F, 0.0F}}).handled);
+  auto status = harness.session.modeling().tool_status();
+  EXPECT_NEAR(status.cut_points[0].x, before.cut_points[0].x, 0.00001F);
+  EXPECT_NEAR(status.cut_points[1].x, before.cut_points[1].x, 0.00001F);
+  ASSERT_TRUE(harness.dispatch({.left_down = true, .can_interact = true,
+      .mouse_local = {0.15F, 0.0F}}).handled);
+  status = harness.session.modeling().tool_status();
+  EXPECT_NEAR(status.cut_points[0].x, before.cut_points[0].x + 0.25F, 0.00001F);
+  EXPECT_NEAR(status.cut_points[1].x, before.cut_points[1].x, 0.00001F);
+  EXPECT_EQ(harness.session.history().undo_count(), 0U);
 }
 
 TEST(ViewportToolRuntimeTests,

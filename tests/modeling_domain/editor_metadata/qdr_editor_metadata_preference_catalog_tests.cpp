@@ -81,7 +81,7 @@ void check_float_preference(
 
 TEST(QdrEditorMetadataPreferenceCatalogTests, HostContractPreferenceCatalogExposesViewportSettingDefaultsAsEngineNeutralDescriptors) {
 	const std::span<const qhc::HostPreferenceDescriptor> preferences = qhc::preference_catalog();
-	EXPECT_TRUE(preferences.size() == 49U);
+	EXPECT_TRUE(preferences.size() == 50U);
 
 	const qhc::HostPreferenceDescriptor& background = require_preference("viewport.scene.background_color");
         EXPECT_TRUE(background.scope ==
@@ -221,6 +221,10 @@ TEST(QdrEditorMetadataPreferenceCatalogTests, HostContractOperationPreferencesLi
         EXPECT_TRUE(cut_mode.choices[2].value ==
                     qec::cut_mode_id(qec::CutMode::KeepBoth));
         EXPECT_TRUE(cut_mode.choices[2].default_choice);
+        const auto &cut_cap = require_preference("operation.cut.cap");
+        EXPECT_EQ(cut_cap.value_kind, qhc::HostPreferenceValueKind::Boolean);
+        EXPECT_FALSE(cut_cap.default_bool);
+        EXPECT_TRUE(same_text(cut_cap.group_id, "operation.cut"));
 }
 
 TEST(QdrEditorMetadataPreferenceCatalogTests, HostContractPreferenceGroupsCanDriveCustomEngineSettingsPanes) {
@@ -229,8 +233,9 @@ TEST(QdrEditorMetadataPreferenceCatalogTests, HostContractPreferenceGroupsCanDri
 
 	const qhc::HostPreferenceGroupDescriptor& cut = require_group("operation.cut");
         EXPECT_TRUE(cut.scope == qhc::HostPreferenceScope::Operation);
-        EXPECT_TRUE(cut.preference_ids.size() == 1U);
+        EXPECT_TRUE(cut.preference_ids.size() == 2U);
 	EXPECT_TRUE(group_contains(cut, "operation.cut.keep_mode"));
+        EXPECT_TRUE(group_contains(cut, "operation.cut.cap"));
 
 	const qhc::HostPreferenceGroupDescriptor& half_cut =
 		require_group("operation.half_cut");

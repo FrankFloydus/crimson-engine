@@ -1461,6 +1461,7 @@ primitive.torus.major_segments=Major Segments
 primitive.torus.minor_segments=Minor Segments
 primitive.torus.tube_radius_ratio=Tube Radius Ratio
 operation.cut.keep_mode=Keep Mode
+operation.cut.cap=Cap
 operation.thicken.from_center=From Center
 pivot.align.center=Center
 pivot.align.prev=Prev

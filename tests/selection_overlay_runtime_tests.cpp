@@ -1696,15 +1696,18 @@ public:
   QuaderEditorApi &workflow_editor() { return array_editor(); }
 
   bool present_workflow_pane(std::size_t pane = 0u,
-                             const ViewportSettings *appearance = nullptr) {
+                             const ViewportSettings *appearance = nullptr,
+                             bool dimensions_visible = false) {
     auto &editor = array_editor();
     auto &modeling = session_.modeling();
     auto &view = extrusion_pane_view(pane);
     auto &camera = extrusion_pane_camera(pane);
     capture_pane_ = pane;
     const auto mode = modeling.selection_mode();
-    const bool outline_only = mode == ModelingSelectionMode::Object ||
-        mode == ModelingSelectionMode::Group;
+    const bool selection_visible =
+        modeling.active_viewport_tool() != ModelingViewportTool::Cut;
+    const bool outline_only = selection_visible &&
+        (mode == ModelingSelectionMode::Object || mode == ModelingSelectionMode::Group);
     const auto context = mode == ModelingSelectionMode::Vertex ? ViewportOverlaySelectionContext::Vertex
         : mode == ModelingSelectionMode::Edge ? ViewportOverlaySelectionContext::Edge
         : mode == ModelingSelectionMode::Face ? ViewportOverlaySelectionContext::Face
@@ -1728,7 +1731,7 @@ public:
     // Match Qt's shared persistent routing, including selected-wire demotion.
     if (!QuaderRenderApiRuntimeAccess::sync_scene_asset_overlays(
             editor.render(), bridge_, active_snapshots_,
-            {.selected_object_overlay_visible = outline_only,
+            {.selected_object_overlay_visible = outline_only && selection_visible,
              .scene_wireframe_layer_mask = wire_mask,
              .selected_scene_wire_visible = false,
              .selected_mesh_outline_only = outline_only,
@@ -1741,7 +1744,8 @@ public:
     const bool retained_outlines = bridge_.tool_preview_suppression().empty();
     const bool gpu_outlines = view.update_selected_mesh_outlines(
         outline_only ? active_snapshots_.selected_object_snapshot() : nullptr,
-        outline_only ? &scene : nullptr, style, outline_only && retained_outlines) && retained_outlines;
+        outline_only ? &scene : nullptr, style,
+        outline_only && retained_outlines && selection_visible) && retained_outlines;
     last_submission_ = bridge_.submit_viewport_overlay(
         {.viewport_index = pane,
          .layer_mask = viewport_grid_layer_mask(static_cast<std::uint8_t>(pane)),
@@ -1764,9 +1768,10 @@ public:
          .scene_selection_mode = ViewportToolOverlayProjection::selection_mode(mode),
          .style_selection_context = context,
          .overlays_visible = true,
+         .selection_overlays_visible = selection_visible,
          .scene_overlay_requested = true,
          .wireframe_pane = wireframe,
-         .selection_dimensions_visible = false}, settings);
+         .selection_dimensions_visible = dimensions_visible}, settings);
     return true;
   }
 
@@ -5265,6 +5270,19 @@ int yellow_pixels(const QImage &image, QVec2 center) {
   return count;
 }
 
+int red_pixels(const QImage &image, QVec2 center) {
+  int count = 0;
+  for (int y = int(center.y) - 3; y <= int(center.y) + 3; ++y) {
+    for (int x = int(center.x) - 3; x <= int(center.x) + 3; ++x) {
+      if (x < 0 || y < 0 || x >= image.width() || y >= image.height()) continue;
+      const QColor pixel = image.pixelColor(x, y);
+      if (pixel.red() > 150 && pixel.red() > pixel.green() + 60 &&
+          pixel.red() > pixel.blue() + 60) ++count;
+    }
+  }
+  return count;
+}
+
 int pink_pixels(const QImage &image, QVec2 center) {
   int count = 0;
   for (int y = int(center.y) - 3; y <= int(center.y) + 3; ++y) {
@@ -6586,7 +6604,9 @@ TEST(SelectionOverlayRuntimeTests,
   if (!directory.isEmpty()) ASSERT_TRUE(QDir().mkpath(directory));
 
   SelectionOverlayRuntimeHarness harness;
-  ASSERT_TRUE(harness.initialize(0.0f, false));
+  // Match the application's sRGB composition target so authored orange/red
+  // tool colors are encoded into the readback PNG in their display color space.
+  ASSERT_TRUE(harness.initialize(0.0f, false, ViewportRenderSurface::SrgbSwapchain));
   auto &editor = harness.workflow_editor();
   auto &modeling = harness.modeling();
   ViewportCameraController camera;
@@ -6601,7 +6621,7 @@ TEST(SelectionOverlayRuntimeTests,
   // source material survives preview, commit and history without conflating
   // ordinary selection fill with source-replacing tool presentation.
   const auto capture = [&](const char *phase) {
-    EXPECT_TRUE(harness.present_workflow_pane(0u, &settings));
+    EXPECT_TRUE(harness.present_workflow_pane(0u, &settings, true));
     QImage image = harness.capture();
     EXPECT_FALSE(image.isNull());
     if (!directory.isEmpty()) {
@@ -6617,6 +6637,7 @@ TEST(SelectionOverlayRuntimeTests,
   ASSERT_TRUE(box.ok()) << box.error_message();
   ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
   const QImage source = capture("source");
+  ASSERT_TRUE(harness.last_submission().selection_dimension_bounds.has_value());
   const std::array probes{
       harness.cutting_preview_pixel({0.3f, 1.0f, -0.6f}),
       harness.cutting_preview_pixel({0.3f, 1.0f, 0.6f})};
@@ -6632,8 +6653,14 @@ TEST(SelectionOverlayRuntimeTests,
         << "Both probes must initially cover actual box surfaces.";
   }
   for (const auto probe : outline_probes) EXPECT_GE(yellow_pixels(source, probe), 3);
-  const auto draw_cut = [&] {
+  const auto draw_cut = [&](const char *activation_phase) {
     EXPECT_TRUE(editor.tools().activate(ViewportToolId::Cut).ok());
+    const QImage activated = capture(activation_phase);
+    EXPECT_FALSE(harness.last_submission().selection_dimension_bounds.has_value());
+    for (const auto probe : outline_probes) {
+      EXPECT_EQ(yellow_pixels(activated, probe), 0)
+          << "Ordinary selection disappears immediately, before placing Cut points.";
+    }
     auto start = test::drawn_plane_event(-0.5f);
     start.ray.origin.y = 20.0f;
     start.camera.origin = {0.0f, 20.0f, 10.0f};
@@ -6646,12 +6673,19 @@ TEST(SelectionOverlayRuntimeTests,
     EXPECT_TRUE(modeling.tool_status().cut_preview_valid);
   };
   const auto undo_count = harness.undo_count();
-  draw_cut();
+  draw_cut("activated");
   ASSERT_TRUE(modeling.set_cut_mode(ModelingCutMode::KeepBoth).ok);
   const QImage both = capture("keep-both");
   for (const auto probe : probes) {
     EXPECT_EQ(patch(both, probe), patch(source, probe));
   }
+  const auto contour_probe = harness.cutting_preview_pixel({0.75f, 1.0f, 0.0f});
+  EXPECT_GE(yellow_pixels(both, contour_probe), 3);
+  for (const auto probe : outline_probes) {
+    EXPECT_EQ(yellow_pixels(both, probe), 0);
+    EXPECT_EQ(red_pixels(both, probe), 0);
+  }
+  EXPECT_FALSE(harness.last_submission().selection_dimension_bounds.has_value());
   ASSERT_TRUE(modeling.set_cut_mode(ModelingCutMode::DiscardLeft).ok);
   const QImage first_half = capture("discard-left");
   const std::array retained{
@@ -6663,16 +6697,17 @@ TEST(SelectionOverlayRuntimeTests,
     EXPECT_EQ(patch(first_half, probes[index]),
               patch(retained[index] ? source : background, probes[index]))
         << "Discarded geometry must disappear rather than receive an overlay tint.";
+    EXPECT_EQ(yellow_pixels(first_half, outline_probes[index]), 0);
     if (retained[index]) {
-      EXPECT_GE(yellow_pixels(first_half, outline_probes[index]), 3);
+      EXPECT_EQ(red_pixels(first_half, outline_probes[index]), 0);
     } else {
-      EXPECT_EQ(yellow_pixels(first_half, outline_probes[index]), 0)
-          << "The discarded source silhouette must disappear with its surface.";
+      EXPECT_GE(red_pixels(first_half, outline_probes[index]), 3);
     }
   }
+  EXPECT_GE(yellow_pixels(first_half, contour_probe), 3);
   const auto outline_build_count = harness.tool_preview_outline_build_count();
   EXPECT_EQ(capture("discard-left-retained"), first_half);
-  ASSERT_TRUE(harness.present_workflow_pane(0u, &settings));
+  ASSERT_TRUE(harness.present_workflow_pane(0u, &settings, true));
   EXPECT_EQ(harness.tool_preview_outline_build_count(), outline_build_count)
       << "Unchanged frames must retain the accepted preview outline projection.";
   ASSERT_TRUE(modeling.set_cut_mode(ModelingCutMode::DiscardRight).ok);
@@ -6680,18 +6715,20 @@ TEST(SelectionOverlayRuntimeTests,
   for (std::size_t index = 0; index < probes.size(); ++index) {
     EXPECT_EQ(patch(second_half, probes[index]),
               patch(retained[index] ? background : source, probes[index]));
+    EXPECT_EQ(yellow_pixels(second_half, outline_probes[index]), 0);
     if (retained[index]) {
-      EXPECT_EQ(yellow_pixels(second_half, outline_probes[index]), 0);
+      EXPECT_GE(red_pixels(second_half, outline_probes[index]), 3);
     } else {
-      EXPECT_GE(yellow_pixels(second_half, outline_probes[index]), 3);
+      EXPECT_EQ(red_pixels(second_half, outline_probes[index]), 0);
     }
   }
+  EXPECT_GE(yellow_pixels(second_half, contour_probe), 3);
   EXPECT_EQ(harness.undo_count(), undo_count);
   ASSERT_TRUE(editor.tools().cancel_modal_tool().ok());
   EXPECT_EQ(capture("cancel"), source);
   EXPECT_EQ(harness.undo_count(), undo_count);
 
-  draw_cut();
+  draw_cut("activated-before-commit");
   ASSERT_TRUE(modeling.set_cut_mode(ModelingCutMode::DiscardRight).ok);
   const QImage accepted_preview = capture("accepted-preview");
   for (const auto probe : probes) {
@@ -6708,6 +6745,152 @@ TEST(SelectionOverlayRuntimeTests,
   for (const auto probe : probes) EXPECT_EQ(patch(undone, probe), patch(source, probe));
   ASSERT_TRUE(editor.history().redo().ok());
   EXPECT_EQ(capture("redo"), committed);
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanCutPerspectiveCubeKeepsContourDiscardWirePlaneAndHandles) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-cut-perspective-reference-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  const QString directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (!directory.isEmpty()) ASSERT_TRUE(QDir().mkpath(directory));
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0f, false, ViewportRenderSurface::SrgbSwapchain));
+  ASSERT_TRUE(harness.set_native_project_camera_pose(
+      {.eye = {4.0f, 3.5f, 5.0f}, .target = {}, .up = {0.0f, 1.0f, 0.0f}}));
+  auto &editor = harness.workflow_editor();
+  auto &modeling = harness.modeling();
+  const auto object = editor.modeling().create_box(
+      {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      "Cut perspective cube reference");
+  ASSERT_TRUE(object.ok());
+  ASSERT_TRUE(editor.selection().select_object(object.value()).ok());
+  auto settings = ViewportSettings::defaults();
+  auto fill = settings.color(ViewportColorSettingId::SelectionFace);
+  fill.a = 0.0f;
+  ASSERT_TRUE(settings.set_color(ViewportColorSettingId::SelectionFace, fill));
+  const auto capture = [&](const char *phase) {
+    EXPECT_TRUE(harness.present_workflow_pane(0u, &settings, true));
+    const auto image = harness.capture();
+    EXPECT_FALSE(image.isNull());
+    if (!directory.isEmpty()) {
+      EXPECT_TRUE(image.save(QDir(directory).filePath(
+          QStringLiteral("cut-perspective-%1.png").arg(QString::fromLatin1(phase)))));
+    }
+    return image;
+  };
+  const auto brightness = [&](const QImage &image, QVec3 world) {
+    const auto probe = harness.cutting_preview_pixel(world);
+    int total = 0;
+    for (int y = int(probe.y) - 1; y <= int(probe.y) + 1; ++y) {
+      for (int x = int(probe.x) - 1; x <= int(probe.x) + 1; ++x) {
+        const auto color = image.pixelColor(x, y);
+        total += std::min({color.red(), color.green(), color.blue()});
+      }
+    }
+    return total / 9;
+  };
+  const std::array surface_points{QVec3{0.7f, 1.0f, 0.7f}, QVec3{-0.4f, 1.0f, -0.4f}};
+  const std::array wire_points{QVec3{1.0f, 0.2f, 1.0f}, QVec3{-0.5f, 1.0f, -1.0f}};
+  const std::array contour_points{QVec3{0.5f, 1.0f, 0.5f}, QVec3{0.0f, 0.6f, 1.0f}};
+  const QImage source = capture("source");
+  EXPECT_GE(yellow_pixels(source, harness.cutting_preview_pixel(wire_points[1])), 3);
+  EXPECT_TRUE(harness.last_submission().selection_dimension_bounds.has_value());
+  for (const auto point : surface_points) EXPECT_GT(brightness(source, point), 170);
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::Cut).ok());
+  EXPECT_FALSE(editor.query().tool_status().cut_cap);
+  const QImage activated = capture("activated");
+  EXPECT_FALSE(harness.last_submission().selection_dimension_bounds.has_value());
+  for (const auto point : wire_points) {
+    EXPECT_EQ(yellow_pixels(activated, harness.cutting_preview_pixel(point)), 0);
+  }
+  auto first = test::drawn_plane_event(-0.25f);
+  first.ray.origin = {-0.25f, 20.0f, 1.25f};
+  first.camera.origin = {0.0f, 20.0f, 10.0f};
+  first.snap_enabled = false;
+  auto second = first;
+  second.ray.origin = {1.25f, 20.0f, -0.25f};
+  second.dragging = true;
+  ASSERT_TRUE(modeling.click_cut(first).ok);
+  ASSERT_TRUE(modeling.update_cut_hover(second).ok);
+  ASSERT_TRUE(modeling.end_cut_drag().ok);
+  ASSERT_TRUE(modeling.tool_status().cut_preview_valid);
+  ASSERT_TRUE(modeling.set_cut_mode(ModelingCutMode::KeepBoth).ok);
+  const auto expect_tool_presentation = [&](const QImage &image) {
+    for (const auto point : contour_points) {
+      EXPECT_GE(yellow_pixels(image, harness.cutting_preview_pixel(point)), 3)
+          << "Orange identifies the plane intersection, independently of the keep mode.";
+    }
+    const auto status = modeling.tool_status();
+    ASSERT_EQ(status.cut_point_count, 2);
+    for (int index = 0; index < status.cut_point_count; ++index) {
+      EXPECT_GE(cyan_pixels(image, harness.cutting_preview_pixel(status.cut_points[index])), 3);
+    }
+    EXPECT_FALSE(harness.last_submission().selection_dimension_bounds.has_value());
+  };
+  const QImage both = capture("keep-both");
+  expect_tool_presentation(both);
+  for (const auto point : surface_points) EXPECT_GT(brightness(both, point), 170);
+  for (const auto point : wire_points) {
+    EXPECT_EQ(red_pixels(both, harness.cutting_preview_pixel(point)), 0);
+  }
+  // Probe the translucent plane outside the cube's original raster footprint.
+  // These candidates follow the authored finite plane rather than its infinite support.
+  bool visible_plane_fill = false;
+  const auto overlay = modeling.volatile_overlay_snapshot();
+  ASSERT_NE(overlay.frame, nullptr);
+  for (const auto &triangle : overlay.frame->triangles) {
+    if (triangle.layer != ViewportOverlayLayer::ToolPlane) continue;
+    for (const auto weights : std::array{QVec3{0.7f, 0.15f, 0.15f},
+             QVec3{0.15f, 0.7f, 0.15f}, QVec3{0.15f, 0.15f, 0.7f}}) {
+      const auto point = triangle.a * weights.x + triangle.b * weights.y + triangle.c * weights.z;
+      const auto probe = harness.cutting_preview_pixel(point);
+      const QPoint pixel(int(probe.x), int(probe.y));
+      if (!both.rect().contains(pixel)) continue;
+      const auto original = activated.pixelColor(pixel);
+      const auto color = both.pixelColor(pixel);
+      visible_plane_fill = visible_plane_fill ||
+          (std::max({original.red(), original.green(), original.blue()}) < 60 &&
+           std::min({color.red() - original.red(), color.green() - original.green(),
+                     color.blue() - original.blue()}) > 15 &&
+           std::max({color.red(), color.green(), color.blue()}) < 200);
+    }
+  }
+  EXPECT_TRUE(visible_plane_fill) << "The finite translucent Cut plane must remain visible.";
+  std::array<bool, 2> first_retained{};
+  for (const auto &[mode, phase] : std::array<std::pair<ModelingCutMode, const char *>, 2>{{
+           {ModelingCutMode::DiscardLeft, "discard-left"},
+           {ModelingCutMode::DiscardRight, "discard-right"}}}) {
+    ASSERT_TRUE(modeling.set_cut_mode(mode).ok);
+    const QImage image = capture(phase);
+    expect_tool_presentation(image);
+    const std::array retained{brightness(image, surface_points[0]) > 170,
+                              brightness(image, surface_points[1]) > 170};
+    EXPECT_NE(retained[0], retained[1]) << "One side remains a solid surface; the other becomes wire.";
+    for (std::size_t index = 0; index < retained.size(); ++index) {
+      const auto probe = harness.cutting_preview_pixel(wire_points[index]);
+      if (retained[index]) {
+        EXPECT_EQ(red_pixels(image, probe), 0);
+      } else {
+        EXPECT_GE(red_pixels(image, probe), 3);
+      }
+      if (mode == ModelingCutMode::DiscardRight) {
+        EXPECT_NE(retained[index], first_retained[index]);
+      }
+    }
+    if (mode == ModelingCutMode::DiscardLeft) first_retained = retained;
+    const auto outline_builds = harness.tool_preview_outline_build_count();
+    EXPECT_EQ(capture((std::string(phase) + "-retained").c_str()), image);
+    EXPECT_EQ(harness.tool_preview_outline_build_count(), outline_builds);
+  }
+  ASSERT_TRUE(editor.tools().cancel_modal_tool().ok());
+  EXPECT_EQ(capture("cancel"), source);
 }
 
 TEST(SelectionOverlayRuntimeTests,

@@ -3722,7 +3722,7 @@ Result<OperationResult> PolygonDocument::cut_selected_faces_by_plane(
                          : keep == CutKeepMode::DiscardRight
                                ? quader_poly::PlaneCutMode::KeepFront
                                : quader_poly::PlaneCutMode::KeepBoth,
-             .cap = false});
+             .cap = spec.cap});
       });
   if (result.ok() && result.value().changed) {
     result.value().selection_remap.source.faces = source_selection.faces;

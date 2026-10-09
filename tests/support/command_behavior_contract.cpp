@@ -823,7 +823,7 @@ std::span<const CommandBehaviorContract> command_behavior_contracts() {
                kToolDomains | Domain::Selection | Domain::Overlay,
                Outcome::ChangeRequired, UndoRepeat::None),
       contract(quader_command::kToolsActivateCut,
-               Fixture::ObjectSelection, kToolDomains,
+               Fixture::ObjectSelection, kToolDomains | Domain::Overlay,
                Outcome::SuccessRequired, UndoRepeat::None),
       contract(quader_command::kToolsActivatePoly, Fixture::Viewport,
                kToolDomains, Outcome::SuccessRequired, UndoRepeat::None),

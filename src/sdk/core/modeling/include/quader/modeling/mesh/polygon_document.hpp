@@ -390,7 +390,7 @@ public:
   split_by_plane(const PlaneSplitSpec &spec) const;
   [[nodiscard]] Result<OperationResult>
   cut_surface_by_plane(const PlaneSplitSpec &spec);
-  /// Cuts selected faces in the existing mesh, without creating caps.
+  /// Cuts selected faces in place; optional caps fill newly exposed plane loops.
   [[nodiscard]] Result<OperationResult> cut_selected_faces_by_plane(
       const PlaneSplitSpec &spec, CutKeepMode keep = CutKeepMode::KeepBoth);
   /// Inserts plane intersections into selected edges and their incident loops.

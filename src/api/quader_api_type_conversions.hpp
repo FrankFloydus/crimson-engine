@@ -467,6 +467,7 @@ to_modeling_interaction_settings(const QuaderInteractionSettings &settings) {
       .half_cut_separate_parts = settings.half_cut_separate_parts,
       .half_cut_fill_parts = settings.half_cut_fill_parts,
       .cut_mode = to_modeling_cut_mode(settings.cut_mode),
+      .cut_cap = settings.cut_cap,
   };
 }
 
@@ -976,6 +977,7 @@ inline QuaderToolStatus to_api_tool_status(const ModelingToolStatus &status) {
       .cut_has_line = status.cut_has_line,
       .cut_points = status.cut_points,
       .cut_mode = to_api_cut_mode(status.cut_mode),
+      .cut_cap = status.cut_cap,
       .mirror_active = status.mirror_active,
       .mirror_can_preview = status.mirror_can_preview,
       .mirror_preview_valid = status.mirror_preview_valid,

@@ -111,6 +111,8 @@ cut_ray_settings(const ModelingToolRayEvent &event, bool dragging) {
   settings.ray = to_runtime(event.ray);
   settings.grid_size = event.grid_size;
   settings.dragging = dragging;
+  settings.snap_enabled = event.snap_enabled;
+  settings.constrain_axis = event.constrain_axis;
   return settings;
 }
 

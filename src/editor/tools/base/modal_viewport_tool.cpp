@@ -45,6 +45,7 @@ ModalViewportTool::cancel_active_modal_tool(ViewportToolContext &context,
   if (context.modal_state != nullptr) {
     context.modal_state->insert_edge_loop_drag_active = false;
     context.modal_state->cut_drag_active = false;
+    context.modal_state->cut_line_drag_active = false;
     context.modal_state->mirror_drag_active = false;
   }
   if (context.ports.hover != nullptr) {

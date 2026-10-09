@@ -399,7 +399,8 @@ TEST(OperationInputHintTests, ModelingPhasesDoNotAdvertiseUnavailableApplyOrWron
   const auto closed = viewport_tool_input_hints("poly", {.can_apply = true, .active_stroke = true, .closed = true});
   EXPECT_FALSE(contains_gesture(closed, QuaderOperationInputGesture::Shift));
   EXPECT_FALSE(contains_gesture(closed, QuaderOperationInputGesture::Control));
-  EXPECT_FALSE(contains_gesture(viewport_tool_input_hints("cut"), QuaderOperationInputGesture::Control));
+  EXPECT_TRUE(contains_gesture(viewport_tool_input_hints("cut"), QuaderOperationInputGesture::Control));
+  EXPECT_TRUE(contains_gesture(viewport_tool_input_hints("cut"), QuaderOperationInputGesture::Shift));
   EXPECT_FALSE(contains_gesture(viewport_tool_input_hints("mirror"), QuaderOperationInputGesture::Shift));
   EXPECT_FALSE(contains_gesture(viewport_tool_input_hints("insert_edge_loop"), QuaderOperationInputGesture::PrimaryDrag));
   QuaderOperationInputContext context;
@@ -439,6 +440,29 @@ TEST(OperationInputHintTests, InsertEdgeLoopAdvertisesCtrlSnapIndependentlyOfGlo
         const auto revision = tools.active_input_hints_revision(context);
         for (int frame = 0; frame < 12; ++frame) {
           EXPECT_EQ(tools.active_input_hints_revision(context), revision);
+        }
+      }
+    }
+  }
+}
+
+TEST(OperationInputHintTests, CutTemporaryModifiersAdvertiseHeldStateIndependentOfGlobalSnap) {
+  for (const bool grid_enabled : {false, true}) {
+    for (const bool held : {false, true, false}) {
+      QuaderOperationInputContext context;
+      context.grid_snap_enabled = grid_enabled;
+      context.control = held;
+      context.shift = held;
+      const auto hints = viewport_tool_input_hints("cut", {.dragging = true}, context);
+      for (const auto gesture : {QuaderOperationInputGesture::Control,
+                                QuaderOperationInputGesture::Shift}) {
+        const auto found = std::ranges::find_if(hints, [gesture](const auto& hint) {
+          return hint.gesture == gesture;
+        });
+        ASSERT_NE(found, hints.end());
+        EXPECT_EQ(found->active, held);
+        for (const char* locale : {"en-US", "it-IT"}) {
+          EXPECT_NE(localization_for(locale).text(found->label_key, "missing"), "missing");
         }
       }
     }

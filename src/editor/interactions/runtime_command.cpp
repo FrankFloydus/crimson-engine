@@ -548,6 +548,8 @@ CutRayUpdateInput cut_ray_input(const EditorRuntimeSelectionView& selection,
 		settings.dragging,
 		settings.resolved_surface_hit,
 		settings.surface_hit_resolved,
+		settings.snap_enabled,
+		settings.constrain_axis,
 	};
 }
 
@@ -653,6 +655,11 @@ CommandResult begin_cut_point_drag(
 	const CutToolResult result = runtime.begin_cut_point_drag(settings.point_index);
 	if (!result.ok) {
 		return { false, false, result.message.empty() ? "Cut point drag was rejected." : result.message };
+	}
+	if (runtime.cut_state().pointer_position_valid) {
+		CutToolState state = runtime.cut_state();
+		state.drag_point_offset = state.points[static_cast<std::size_t>(settings.point_index)] - state.pointer_position;
+		runtime.set_cut_state(std::move(state));
 	}
 	(void)runtime.refresh_cut_preview_from_selection(rectangle_selection_for_cut(selection, runtime), selection.objects());
 	const EditorRuntimeStatus after = runtime.status();

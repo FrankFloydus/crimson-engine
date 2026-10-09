@@ -26767,7 +26767,7 @@
     },
     "tools.activate.cut": {
       "fixture": 3,
-      "allowed_domains": 736,
+      "allowed_domains": 744,
       "outcome": 1,
       "undo_repeat": 0,
       "flags": 0,
@@ -26789,7 +26789,7 @@
         }
       },
       "before": "aba33e2e9329a5b775e8fcdd39aaf233",
-      "after": "6afb305c0a98247d5d7976866e68b63a",
+      "after": "040d7a1728da641be892dc3d7ad0e2fa",
       "before_domains": {
         "documents": "c203aebd33ef43901b5476e66d66fde9",
         "scene": "65742581539830e8e96b2b5a17b3b396",
@@ -26808,15 +26808,15 @@
         "scene": "65742581539830e8e96b2b5a17b3b396",
         "geometry": "2971f2760c7cb3cc672da53848b62c2f",
         "selection": "43291c9a01aa9056502077bf616844a1",
-        "overlay": "2d247ba4c61215e52c530ea381f7cc32",
+        "overlay": "4f090192476734c4e2bc9ac45d30f4f1",
         "assets": "fed964b26c70d7b8147ff43a1abb220f",
         "history": "4404c6ffdacf87205e55c2eaa73f0bec",
-        "tools": "1c41a8d0a26cbd4566e89161fe533293",
+        "tools": "e066d4e59f4b690c8242b470911c6d9a",
         "viewports": "b4608cc54768456afd720182716f0c4b",
         "preferences": "d2398ca12f83387456806646b55d7b94",
         "revisions": "ae1ba97cb2ccb27cc69f51db4e77decf"
       },
-      "changed_domains": 1408,
+      "changed_domains": 1424,
       "external_calls_before": 0,
       "external_calls_after": 0,
       "lifecycle": {}
@@ -27270,5 +27270,5 @@
       "lifecycle": {}
     }
   },
-  "approved_change_reason": "Revise mesh Inspector and global viewport culling"
+  "approved_change_reason": "Cut activation intentionally hides ordinary selection overlays and exposes the requested Cap option; preserve selection and document state."
 }

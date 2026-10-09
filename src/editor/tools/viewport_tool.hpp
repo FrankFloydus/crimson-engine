@@ -88,6 +88,7 @@ struct ViewportToolEvent {
 struct ViewportModalToolState {
   bool insert_edge_loop_drag_active = false;
   bool cut_drag_active = false;
+  bool cut_line_drag_active = false;
   bool mirror_drag_active = false;
   bool plane_endpoint_hovered = false;
   bool plane_body_hovered = false;

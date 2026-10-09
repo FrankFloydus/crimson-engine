@@ -369,6 +369,7 @@ TEST(QdrModelingRuntimeToolCutTests, SurfacePlanePersistsForSecondPointAndBothDr
   quader_editor_core::CutRayUpdateInput input;
   input.ray = {{0.2F, 8.0F, 0.2F}, {0.0F, -1.0F, 0.0F}};
   input.grid_size = 1.0;
+  input.snap_enabled = true;
   input.surface_hit_resolved = true;
   input.resolved_surface_hit = quader_editor_core::PickHitRecord{
       .hit = true,
@@ -462,4 +463,145 @@ TEST(QdrModelingRuntimeToolCutTests, RuntimeActivationCapturesComponentsBeforeHo
   EXPECT_TRUE(reactivated.command.ok);
   EXPECT_FALSE(reactivated.command.changed);
   EXPECT_EQ(runtime.cut_state().target_faces.front().face_index, captured_face);
+}
+
+TEST(QdrModelingRuntimeToolCutTests, EndpointDragIsContinuousWithTemporaryGridAndAxisConstraints) {
+  quader_editor_core::EditorRuntimeState runtime;
+  runtime.cut.points = {{0.2F, 3.25F, 0.3F}, {2.2F, 3.25F, 0.3F}};
+  runtime.cut.face_normal = {0.0F, 1.0F, 0.0F};
+  runtime.cut.support_plane_origin = runtime.cut.points.front();
+  runtime.cut.support_plane_valid = true;
+  runtime.cut.scope_captured = true;
+  runtime.cut.target_object_ids = {4};
+  ASSERT_TRUE(quader_editor_core::begin_cut_point_drag(runtime.cut, 1).ok);
+  quader_editor_core::CutRayUpdateInput input;
+  input.ray = {{2.37F, 8.0F, 0.66F}, {0.0F, -1.0F, 0.0F}};
+  input.grid_size = 1.0;
+  input.dragging = true;
+  const auto update = [&] {
+    return quader_editor_core::update_cut_hover_from_ray(runtime, {}, {}, input);
+  };
+  ASSERT_TRUE(update().ok);
+  EXPECT_NEAR(runtime.cut.points[1].x, 2.37F, 0.00001F);
+  EXPECT_NEAR(runtime.cut.points[1].z, 0.66F, 0.00001F);
+  EXPECT_FALSE(update().changed);
+  input.snap_enabled = true;
+  ASSERT_TRUE(update().ok);
+  EXPECT_FLOAT_EQ(runtime.cut.points[1].x, 2.0F);
+  EXPECT_FLOAT_EQ(runtime.cut.points[1].z, 1.0F);
+  input.snap_enabled = false;
+  ASSERT_TRUE(update().ok);
+  EXPECT_NEAR(runtime.cut.points[1].x, 2.37F, 0.00001F);
+  EXPECT_NEAR(runtime.cut.points[1].z, 0.66F, 0.00001F);
+  input.constrain_axis = true;
+  ASSERT_TRUE(update().ok);
+  EXPECT_NEAR(runtime.cut.points[1].x, 2.37F, 0.00001F);
+  EXPECT_NEAR(runtime.cut.points[1].z, 0.3F, 0.00001F);
+  input.snap_enabled = true;
+  ASSERT_TRUE(update().ok);
+  EXPECT_NEAR(runtime.cut.points[1].x, 2.0F, 0.00001F);
+  EXPECT_NEAR(runtime.cut.points[1].z, 0.3F, 0.00001F);
+  EXPECT_FLOAT_EQ(runtime.cut.points[1].y, 3.25F);
+  input.snap_enabled = false;
+  input.constrain_axis = false;
+  ASSERT_TRUE(update().ok);
+  EXPECT_NEAR(runtime.cut.points[1].z, 0.66F, 0.00001F);
+}
+
+TEST(QdrModelingRuntimeToolCutTests, LineDragKeepsCursorOffsetAndDoesNotAccumulateSnapDrift) {
+  quader_editor_core::EditorRuntimeState runtime;
+  runtime.cut.points = {{0.2F, 3.25F, 0.3F}, {2.2F, 3.25F, 0.3F}};
+  runtime.cut.face_normal = {0.0F, 1.0F, 0.0F};
+  runtime.cut.support_plane_origin = runtime.cut.points.front();
+  runtime.cut.support_plane_valid = true;
+  runtime.cut.scope_captured = true;
+  runtime.cut.target_object_ids = {4};
+  quader_editor_core::CutRayUpdateInput input;
+  input.ray = {{1.1F, 8.0F, 0.42F}, {0.0F, -1.0F, 0.0F}};
+  input.grid_size = 1.0;
+  ASSERT_TRUE(quader_editor_core::begin_cut_line_drag_from_ray(runtime, input).ok);
+  input.dragging = true;
+  const auto update = [&] {
+    return quader_editor_core::update_cut_hover_from_ray(runtime, {}, {}, input);
+  };
+  ASSERT_TRUE(update().ok);
+  EXPECT_NEAR(runtime.cut.points[0].z, 0.3F, 0.00001F);
+  input.ray.origin.x += 0.37F;
+  input.ray.origin.z += 0.18F;
+  ASSERT_TRUE(update().ok);
+  EXPECT_NEAR(runtime.cut.points[0].x, 0.57F, 0.00001F);
+  EXPECT_NEAR(runtime.cut.points[0].z, 0.48F, 0.00001F);
+  input.snap_enabled = true;
+  ASSERT_TRUE(update().ok);
+  EXPECT_NEAR(runtime.cut.points[0].x, 1.0F, 0.00001F);
+  EXPECT_NEAR(runtime.cut.points[0].z, 0.0F, 0.00001F);
+  input.snap_enabled = false;
+  ASSERT_TRUE(update().ok);
+  EXPECT_NEAR(runtime.cut.points[0].x, 0.57F, 0.00001F);
+  EXPECT_NEAR(runtime.cut.points[0].z, 0.48F, 0.00001F);
+  EXPECT_NEAR(runtime.cut.points[1].x - runtime.cut.points[0].x, 2.0F, 0.00001F);
+  input.constrain_axis = true;
+  ASSERT_TRUE(update().ok);
+  EXPECT_NEAR(runtime.cut.points[0].x, 0.57F, 0.00001F);
+  EXPECT_NEAR(runtime.cut.points[0].z, 0.3F, 0.00001F);
+  EXPECT_FLOAT_EQ(runtime.cut.points[0].y, 3.25F);
+}
+
+TEST(QdrModelingRuntimeToolCutTests, ParallelAndBehindSupportPlaneRaysPreserveAcceptedPoints) {
+  quader_editor_core::EditorRuntimeState runtime;
+  runtime.cut.points = {{0.0F, 3.25F, 0.0F}, {2.0F, 3.25F, 0.0F}};
+  runtime.cut.face_normal = {0.0F, 1.0F, 0.0F};
+  runtime.cut.scope_captured = true;
+  runtime.cut.target_object_ids = {4};
+  ASSERT_TRUE(quader_editor_core::begin_cut_point_drag(runtime.cut, 1).ok);
+  quader_editor_core::CutRayUpdateInput input;
+  input.ray = {{0.0F, 8.0F, 0.0F}, {1.0F, 0.0F, 0.0F}};
+  input.dragging = true;
+  EXPECT_FALSE(quader_editor_core::update_cut_hover_from_ray(runtime, {}, {}, input).ok);
+  EXPECT_FLOAT_EQ(runtime.cut.points[1].x, 2.0F);
+  EXPECT_FLOAT_EQ(runtime.cut.points[1].y, 3.25F);
+  input.ray.direction = {0.0F, 1.0F, 0.0F};
+  EXPECT_FALSE(quader_editor_core::update_cut_hover_from_ray(runtime, {}, {}, input).ok);
+  EXPECT_FLOAT_EQ(runtime.cut.points[1].x, 2.0F);
+}
+
+TEST(QdrModelingRuntimeToolCutTests, RuntimeEndpointDragRetainsThePressOffset) {
+  quader_editor_core::EditorRuntime runtime;
+  ASSERT_TRUE(runtime.activate_tool({
+      .requested_tool = quader_editor_core::ViewportInteractionTool::Cut,
+      .selected_object_count = 1,
+      .selected_cut_target_object_count = 1,
+  }).applied);
+  quader_editor_core::CutToolState state;
+  state.points = {{0.2F, 3.25F, 0.3F}, {2.2F, 3.25F, 0.3F}};
+  state.face_normal = {0.0F, 1.0F, 0.0F};
+  state.support_plane_origin = state.points.front();
+  state.support_plane_valid = true;
+  state.scope_captured = true;
+  state.target_object_ids = {4};
+  runtime.set_cut_state(state);
+  quader_editor_core::CutRayRuntimeCommandSettings settings;
+  settings.ray = {{0.27F, 8.0F, 0.31F}, {0.0F, -1.0F, 0.0F}};
+  const quader_editor_core::EditorRuntimeSelectionView selection;
+  const auto update = [&] {
+    return quader_editor_core::execute_runtime_command(selection, runtime, {
+        .command_id = quader_editor_core::EditorRuntimeCommandId::UpdateCutHover,
+        .settings = settings,
+    });
+  };
+  ASSERT_TRUE(update().command.ok);
+  ASSERT_TRUE(quader_editor_core::execute_runtime_command(selection, runtime, {
+      .command_id = quader_editor_core::EditorRuntimeCommandId::BeginCutPointDrag,
+      .settings = quader_editor_core::CutPointDragRuntimeCommandSettings{.point_index = 0},
+  }).command.ok);
+  settings.dragging = true;
+  ASSERT_TRUE(update().command.ok);
+  EXPECT_NEAR(runtime.cut_state().points.front().x, 0.2F, 0.00001F);
+  EXPECT_NEAR(runtime.cut_state().points.front().z, 0.3F, 0.00001F);
+  settings.ray.origin.x += 0.37F;
+  settings.ray.origin.z += 0.18F;
+  ASSERT_TRUE(update().command.ok);
+  EXPECT_NEAR(runtime.cut_state().points.front().x, 0.57F, 0.00001F);
+  EXPECT_NEAR(runtime.cut_state().points.front().z, 0.48F, 0.00001F);
+  EXPECT_FLOAT_EQ(runtime.cut_state().points.front().y, 3.25F);
 }

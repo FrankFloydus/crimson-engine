@@ -1356,6 +1356,9 @@ QuaderToolSettingsTarget modeling_tool_settings_target(
         });
     keep_mode.enabled = cut_keep_mode_enabled;
     result.controls.push_back(std::move(keep_mode));
+    auto cap = toggle_control("operation.cut.cap", "Cap", settings.cut_cap);
+    cap.enabled = cut_keep_mode_enabled;
+    result.controls.push_back(std::move(cap));
     break;
   }
   case ModelingToolSettingsTargetKind::EdgeBevel: {
@@ -2831,6 +2834,16 @@ QuaderApiVoidResult QuaderToolsApi::set_setting(std::string_view tool_id,
     ModelingCommandResult result = session.modeling().set_cut_mode(*mode);
     return quader_api_void_status(session, result.ok,
                                   result.changed, std::move(result.message),
+                                  QuaderMutationKind::Modeling,
+                                  "Set Tool Setting");
+  }
+  if ((tool_id.empty() || tool_id == "cut") && name == "operation.cut.cap") {
+    if (value != 0.0 && value != 1.0) {
+      return quader_api_failure_status(session, "Invalid Cut cap setting.");
+    }
+    ModelingCommandResult result = session.modeling().set_cut_cap(value != 0.0);
+    return quader_api_void_status(session, result.ok, result.changed,
+                                  std::move(result.message),
                                   QuaderMutationKind::Modeling,
                                   "Set Tool Setting");
   }

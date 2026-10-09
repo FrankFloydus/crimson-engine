@@ -798,7 +798,7 @@ ViewportOverlaySubmissionResult SceneRenderBridge::submit_viewport_overlay(
   request.array_dimension_scene_snapshot = has_previous_scene_snapshot_
       ? &previous_scene_snapshot_ : nullptr;
   request.selection_dimension_preview_suppression = &tool_preview_suppression_;
-  if (!tool_preview_suppression_.empty() &&
+  if (request.selection_overlays_visible && !tool_preview_suppression_.empty() &&
       request.selected_mesh_outline_snapshot != nullptr && !request.gpu_mesh_outlines) {
     const auto &source = *request.selected_mesh_outline_snapshot;
     const RenderSourceStamp source_stamp = source;

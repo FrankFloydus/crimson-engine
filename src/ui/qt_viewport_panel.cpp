@@ -1659,9 +1659,11 @@ void QtViewportPanel::prepare_viewports(
         return workspace_->effective_settings(placement.pane_id).bool_value(
             ViewportBoolSettingId::ShowOverlays);
       });
-  const bool hover_dimensions_visible =
+  const bool selection_overlays_visible =
+      modeling.active_viewport_tool() != ModelingViewportTool::Cut;
+  const bool hover_dimensions_visible = selection_overlays_visible &&
       settings.bool_value(ViewportBoolSettingId::ShowHoverDimensions);
-  const bool selection_dimensions_visible =
+  const bool selection_dimensions_visible = selection_overlays_visible &&
       settings.bool_value(ViewportBoolSettingId::ShowDimensions);
   const double dimension_font_size_points = static_cast<double>(
       settings.float_value(ViewportFloatSettingId::DimensionFontSize));
@@ -1672,7 +1674,7 @@ void QtViewportPanel::prepare_viewports(
   const ViewportPaneId focused_pane = workspace_->focused_pane();
   const std::optional<bool> array_dimensions =
       editor.tools().active_array_bounding_box_dimensions();
-  const bool pane_dimensions_visible =
+  const bool pane_dimensions_visible = selection_overlays_visible &&
       array_dimensions.value_or(selection_dimensions_visible);
   for (Pane &pane_state : panes_) {
     const bool overlays_visible = workspace_->effective_settings(pane_state.id)
@@ -1682,7 +1684,7 @@ void QtViewportPanel::prepare_viewports(
       pane_state.info_overlay->hide();
     }
     const bool footprint_dimensions_visible =
-        overlays_visible && pane_state.frame->isVisible() &&
+        selection_overlays_visible && overlays_visible && pane_state.frame->isVisible() &&
         active_box_preview_.ok &&
         active_box_preview_.drag_state == ModelingBoxDragState::Footprint &&
         active_box_preview_.footprint_count >= 2U;
@@ -1769,7 +1771,7 @@ void QtViewportPanel::prepare_viewports(
           viewport_grid_layer_mask(viewport_pane_index(placement.pane_id)));
     }
   }
-  const bool selected_mesh_outline_only = !live_primitive_creation &&
+  const bool selected_mesh_outline_only = selection_overlays_visible && !live_primitive_creation &&
       (cached_overlay_mode == ModelingSelectionMode::Object ||
        cached_overlay_mode == ModelingSelectionMode::Group);
   (void)QuaderRenderApiRuntimeAccess::sync_scene_asset_overlays(
@@ -2054,6 +2056,7 @@ void QtViewportPanel::prepare_viewports(
                 .style_selection_context =
                     overlay_selection_context(cached_overlay_mode),
                 .overlays_visible = overlays_visible,
+                .selection_overlays_visible = selection_overlays_visible,
                 .scene_overlay_requested = scene_overlay_requested,
                 .wireframe_pane =
                     shading == ViewportShadingMode::Wireframe,
@@ -2077,7 +2080,7 @@ void QtViewportPanel::prepare_viewports(
             pane_state.id == interaction_pane_id_ &&
             !viewport_interaction_active,
         dimension_font_size_points,
-        &active_box_preview_, overlays_visible && tool_overlay_visible,
+        &active_box_preview_, selection_overlays_visible && overlays_visible && tool_overlay_visible,
         overlay_submission.selection_dimension_bounds
             ? &*overlay_submission.selection_dimension_bounds : nullptr,
         overlay_submission.selection_dimension_signature,

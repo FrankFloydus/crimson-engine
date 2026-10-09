@@ -3307,6 +3307,7 @@ ModelingToolStatus ModelingOverlayService::tool_status(
         from_runtime(cut_overlay_points[static_cast<std::size_t>(index)]);
   }
   status.cut_mode = modeling_cut_mode_from_runtime(cut.mode);
+  status.cut_cap = cut.cap;
 
   status.mirror_active = runtime_status.mirror_active;
   status.mirror_can_preview = runtime_status.mirror_can_preview;
@@ -3394,18 +3395,8 @@ std::uint64_t ModelingOverlayService::selection_overlay_signature(
                              options.suppress_persistent_object_selection);
   mix_overlay_signature_hash(hash, options.suppress_persistent_selection);
   mix_overlay_signature_hash(hash, options.persistent_source_wire_object_id);
-  const auto &cut = runtime.cut_state();
-  const bool suppress_cut_faces =
-      runtime.active_tool() == quader_editor_core::ViewportInteractionTool::Cut &&
-      cut.scope == quader_editor_core::CutScope::Face && cut.scope_captured;
-  mix_overlay_signature_hash(hash, suppress_cut_faces);
-  if (suppress_cut_faces) {
-    mix_overlay_signature_hash(hash,
-        static_cast<std::uint64_t>(cut.target_object_ids.size()));
-    for (const int object_id : cut.target_object_ids) {
-      mix_overlay_signature_hash(hash, object_id);
-    }
-  }
+  mix_overlay_signature_hash(hash,
+      runtime.active_tool() == quader_editor_core::ViewportInteractionTool::Cut);
   return hash;
 }
 
@@ -3436,6 +3427,7 @@ std::uint64_t ModelingOverlayService::tool_preview_signature(
   if (cut_has_mesh) {
     mix_overlay_signature_hash(hash, static_cast<int>(cut.scope));
     mix_overlay_signature_hash(hash, static_cast<int>(cut.mode));
+    mix_overlay_signature_hash(hash, cut.cap);
     mix_overlay_signature_hash(hash, cut.editor_mode_generation);
     mix_overlay_signature_hash(hash,
         static_cast<std::uint64_t>(cut.target_object_ids.size()));
@@ -3605,6 +3597,7 @@ std::uint64_t ModelingOverlayService::volatile_overlay_signature(
   mix_overlay_signature_hash(hash, cut.source_object_id);
   mix_overlay_signature_hash(hash, cut.face_normal);
   mix_overlay_signature_hash(hash, static_cast<int>(cut.mode));
+  mix_overlay_signature_hash(hash, cut.cap);
   mix_overlay_signature_hash(hash, cut.dragging_point_index);
   mix_overlay_signature_hash(hash, cut.dragging_new_point);
   mix_overlay_signature_hash(hash, cut.dragging_line);
@@ -4101,6 +4094,9 @@ ViewportOverlayFrame ModelingOverlayService::selection_overlay_frame(
     const ModelingSelectionService &selection_service,
     const ModelingSdkProjectionAdapter &sdk_projection,
     ModelingSelectionOverlayOptions options) const {
+  if (runtime.active_tool() == quader_editor_core::ViewportInteractionTool::Cut) {
+    return {};
+  }
   const quader_editor_core::SelectionHoverState persistent_hover;
   (void)sdk_projection;
   const std::uint64_t content_revision = session.content_revision();
@@ -4206,25 +4202,6 @@ ViewportOverlayFrame ModelingOverlayService::selection_overlay_frame(
   {
     QDR_PROFILE_SCOPE("Selection overlay store persistent frame");
     ViewportOverlayFrame frame = projected_overlay_base_cache_.frame;
-    const auto &cut = runtime.cut_state();
-    if (runtime.active_tool() ==
-            quader_editor_core::ViewportInteractionTool::Cut &&
-        cut.scope == quader_editor_core::CutScope::Face && cut.scope_captured) {
-      const auto is_cut_target = [&](int object_id) {
-        return std::ranges::find(cut.target_object_ids, object_id) !=
-            cut.target_object_ids.end();
-      };
-      std::erase_if(frame.triangles, [&](const ViewportOverlayTriangle &triangle) {
-        return is_cut_target(triangle.element.object_id) &&
-            (triangle.layer == ViewportOverlayLayer::SelectedVisibleFace ||
-             triangle.layer == ViewportOverlayLayer::SelectedXrayFace ||
-             triangle.layer == ViewportOverlayLayer::SelectedFaceMask);
-      });
-      std::erase_if(frame.lines, [&](const ViewportOverlayLine &line) {
-        return is_cut_target(line.element.object_id) &&
-            line.layer == ViewportOverlayLayer::SelectedFaceEdge;
-      });
-    }
     store_selection_frame(std::move(frame),
                           content_revision, selection_revision,
                           scene_revision, local_visibility_revision,
@@ -4271,7 +4248,8 @@ ViewportOverlayFrame ModelingOverlayService::volatile_overlay_frame(
     // Do not rebuild them on every movement of the cut preview.
     component_hover.candidate_object_id = -1;
   }
-  if (session != nullptr &&
+  if (runtime.active_tool() != quader_editor_core::ViewportInteractionTool::Cut &&
+      session != nullptr &&
       (hover.kind != quader_editor_core::SelectionHoverKind::None ||
        hover.candidate_object_id > 0)) {
     QDR_PROFILE_SCOPE("Volatile overlay project hover frame");
@@ -4356,9 +4334,36 @@ ViewportOverlayFrame ModelingOverlayService::volatile_overlay_frame(
     const std::vector<quader::QVec3> cut_points =
         quader_editor_core::cut_overlay_points(
             cut, runtime.cut_hover().position, runtime.cut_hover().valid);
-    if (cut.scope == quader_editor_core::CutScope::Edge &&
-        quader_editor_core::cut_can_preview(cut) && cut.preview_valid) {
-      const auto &preview = sdk_projection.plane_cut_preview();
+    const auto &preview = sdk_projection.plane_cut_preview();
+    const auto append_segments = [&](const auto &segments,
+                                     ViewportOverlayLayer layer,
+                                     std::uint32_t color,
+                                     ViewportOverlayStyleRole role) {
+      for (const auto &segment : segments) {
+        frame.lines.push_back({
+            .layer = layer,
+            .start = segment[0],
+            .end = segment[1],
+            .color = color,
+            .width_pixels = 0.0f,
+            .style_role = role,
+            .source = ViewportOverlaySource::Tool,
+        });
+      }
+    };
+    append_segments(preview.discarded_segments,
+        ViewportOverlayLayer::ToolPreviewLine,
+        kOverlayCutPreviewDiscardOutlineColor,
+        ViewportOverlayStyleRole::CutPreviewDiscardOutline);
+    append_segments(preview.kept_segments,
+        ViewportOverlayLayer::WireframeBase,
+        kOverlayCutPreviewKeptWireColor,
+        ViewportOverlayStyleRole::ExplicitColor);
+    append_segments(preview.intersection_segments,
+        ViewportOverlayLayer::ToolPreviewSeam,
+        kOverlayCutPreviewSeamColor,
+        ViewportOverlayStyleRole::CutPreviewSeam);
+    if (cut.scope == quader_editor_core::CutScope::Edge) {
       for (const QVec3 point : preview.inserted_points) {
         frame.points.push_back({
             .layer = ViewportOverlayLayer::ToolHandle,
@@ -4569,6 +4574,7 @@ bool ModelingInteractionSettingsService::reset_for_target(
     break;
   case ModelingToolSettingsTargetKind::Cut:
     settings_.cut_mode = defaults.cut_mode;
+    settings_.cut_cap = defaults.cut_cap;
     break;
   case ModelingToolSettingsTargetKind::Bridge:
     settings_.bridge_steps = defaults.bridge_steps;

@@ -1366,7 +1366,7 @@ std::vector<HostPreferenceDescriptor> build_preference_descriptors()
   }};
 
   std::vector<HostPreferenceDescriptor> descriptors;
-  descriptors.reserve(49);
+  descriptors.reserve(50);
   for (const quader_editor_core::EditorOperationOptionDescriptor &option :
        quader_editor_core::operation_option_descriptor_catalog()) {
     descriptors.push_back(operation_preference(option));
@@ -1374,6 +1374,8 @@ std::vector<HostPreferenceDescriptor> build_preference_descriptors()
   descriptors.push_back(choice_preference("operation.cut.keep_mode",
                                           "Keep Mode", kCutModeChoices,
                                           "operation.cut"));
+  descriptors.push_back(bool_preference("operation.cut.cap", "Cap", false,
+                                        "operation.cut"));
 
   descriptors.push_back(color_preference(
       "viewport.scene.background_color", "Background",
@@ -1585,7 +1587,7 @@ HostPreferenceGroupStorage build_preference_group_descriptors()
         }
         add_preference_group(storage, "operation.cut", "Cut",
                              HostPreferenceScope::Operation,
-                             {"operation.cut.keep_mode"});
+                             {"operation.cut.keep_mode", "operation.cut.cap"});
 
         static constexpr std::array<std::string_view, 1>
             kViewportScenePreferences{{

@@ -1562,7 +1562,7 @@ TEST(BuildGuardrailTests,
       "src/sdk/core/modeling/neutral/include/quader/modeling/neutral");
   const std::filesystem::path implementation_mesh =
       source_path("src/sdk/core/modeling/internal/mesh");
-  EXPECT_EQ(files_with_extension(neutral_mesh, ".hpp").size(), 35U);
+  EXPECT_EQ(files_with_extension(neutral_mesh, ".hpp").size(), 36U);
   EXPECT_TRUE(files_with_extension(implementation_mesh, ".hpp").empty());
 
   const std::string retired_include = joined("#include <me", "sh/");

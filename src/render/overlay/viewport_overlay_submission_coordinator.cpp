@@ -27,10 +27,34 @@ namespace quader {
 namespace {
 
 bool uses_mesh_outlines(const ViewportOverlaySubmissionRequest &request) {
-  return request.overlays_visible &&
+  return request.overlays_visible && request.selection_overlays_visible &&
          (request.scene_selection_mode == RenderOverlaySelectionMode::Object ||
           request.scene_selection_mode == RenderOverlaySelectionMode::Group) &&
          request.construction_object_id < 0 && request.selected_mesh_outline_snapshot != nullptr;
+}
+
+void strip_selection_presentation(ViewportOverlayFrame &frame) {
+  const auto is_selection = [](const auto &record) {
+    switch (record.source) {
+    case ViewportOverlaySource::Selection:
+    case ViewportOverlaySource::Hover:
+    case ViewportOverlaySource::HierarchySelection:
+    case ViewportOverlaySource::GroupBounds:
+    case ViewportOverlaySource::ComponentSelection:
+    case ViewportOverlaySource::ComponentHover:
+    case ViewportOverlaySource::MeshOutline:
+    case ViewportOverlaySource::SelectionDimensions:
+      return true;
+    default:
+      return false;
+    }
+  };
+  std::erase_if(frame.lines, is_selection);
+  std::erase_if(frame.triangles, is_selection);
+  std::erase_if(frame.points, is_selection);
+  std::erase_if(frame.icons, is_selection);
+  frame.hover_edge_dimension_context.reset();
+  frame.hover_target_selected = false;
 }
 
 void strip_wireframe_component_sources(ViewportOverlayFrame &frame) {
@@ -669,7 +693,7 @@ ViewportOverlayFrame build_persistent_frame(
     frame = ViewportSceneOverlayBuilder::build_selection_frame(
         std::move(frame), *request.scene_overlay_snapshot,
         request.point_light_gizmos_visible, request.scene_selection_mode,
-        false, request.overlays_visible);
+        false, request.overlays_visible && request.selection_overlays_visible);
     if (request.wireframe_pane) {
       frame = ViewportSceneOverlayBuilder::strip_wireframe_selection_fills(
           std::move(frame), request.scene_selection_mode);
@@ -848,6 +872,7 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
           .add_value(request.construction_object_id)
           .add_bool(uses_mesh_outlines(request))
           .add_bool(request.gpu_mesh_outlines)
+          .add_bool(request.selection_overlays_visible)
           .value();
   const ViewportOverlayFrame empty_mesh_outline;
   const ViewportOverlayFrame &mesh_outline = request.gpu_mesh_outlines
@@ -861,7 +886,8 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
           std::max(settings.float_value(ViewportFloatSettingId::SelectionEdgeLineSize),
                    settings.float_value(ViewportFloatSettingId::ActiveSelectionLineSize))) * request.raster_scale);
   const bool selection_overlay_visible =
-      request.overlays_visible && request.selection_frame_provider != nullptr;
+      request.overlays_visible && request.selection_overlays_visible &&
+      request.selection_frame_provider != nullptr;
   if (selection_overlay_visible) {
     const ViewportOverlaySelectionSourceStamp &source_stamp =
         request.selection_source;
@@ -875,6 +901,7 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
     }
   }
   const bool dimensions_visible = request.overlays_visible &&
+      request.selection_overlays_visible &&
       request.array_dimensions_mode == ViewportArrayDimensionsMode::Inactive &&
       request.selection_dimensions_visible &&
       (request.scene_selection_mode != RenderOverlaySelectionMode::Component ||
@@ -920,7 +947,7 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
     result.selection_dimension_bounds = selection_dimensions_.bounds;
     result.selection_dimension_signature = selection_dimensions_.publication_revision;
   }
-  if (request.overlays_visible &&
+  if (request.overlays_visible && request.selection_overlays_visible &&
       request.array_dimensions_mode == ViewportArrayDimensionsMode::Visible) {
     const auto *scene = request.array_dimension_scene_snapshot;
     const auto scene_identity = reinterpret_cast<std::uintptr_t>(scene);
@@ -998,14 +1025,16 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
       .style_selection_context = request.style_selection_context,
       .projection = request.camera.projection,
       .selection_overlay_visible = selection_overlay_visible,
-      .selection_overlays_visible = request.overlays_visible,
+      .selection_overlays_visible =
+          request.overlays_visible && request.selection_overlays_visible,
       .scene_overlay_requested = request.scene_overlay_requested,
       .wireframe_pane = request.wireframe_pane,
       .point_light_gizmos_visible = request.point_light_gizmos_visible,
       .selection_dimension_box_visible = dimension_box_visible,
   };
   const bool point_light_radius_enabled =
-      request.overlays_visible && request.point_light_gizmos_visible &&
+      request.overlays_visible && request.selection_overlays_visible &&
+      request.point_light_gizmos_visible &&
       request.scene_overlay_requested && request.scene_overlay_snapshot != nullptr;
   const ViewportOverlaySceneSubmissionStamp point_light_source =
       scene_submission_stamp(request.scene_overlay_snapshot,
@@ -1173,6 +1202,9 @@ ViewportOverlaySubmissionResult ViewportOverlaySubmissionCoordinator::submit(
     if (dimension_box_visible)
       strip_replaced_selection_cages(dynamic_frame, request.scene_selection_mode == RenderOverlaySelectionMode::Group);
     append_overlay_frame(dynamic_frame, pane.selection_dimension_frame);
+    if (!request.selection_overlays_visible) {
+      strip_selection_presentation(dynamic_frame);
+    }
     ViewportOverlayStyleResolver::apply(
         dynamic_frame, settings,
         ViewportOverlayStyleContext{

@@ -169,6 +169,16 @@ ViewportToolResult handle_drawn_plane_lifecycle(
   ViewportToolCommitPort &commit_port = *context.ports.commit;
   bool &drag_active = drawn_plane_drag_active(*context.modal_state, kind);
   const std::string_view tool_name = drawn_plane_tool_name(kind);
+  const auto make_plane_event_at = [&](QVec2 local, bool dragging,
+                                       std::optional<ViewportModifiers> modifiers = std::nullopt) {
+    auto ray_event = point_context.make_event_at(local, dragging);
+    if (kind == DrawnPlaneToolKind::Cut) {
+      const auto held = modifiers.value_or(pointer.modifiers);
+      ray_event.snap_enabled = held.primary;
+      ray_event.constrain_axis = held.shift;
+    }
+    return ray_event;
+  };
 
   const auto clear_hover_hint = [&] {
     context.modal_state->plane_endpoint_hovered = false;
@@ -184,7 +194,7 @@ ViewportToolResult handle_drawn_plane_lifecycle(
       hover_port.claim(ModelingBoxDragState::Idle)) {
     const ModelingCommandResult hovered = update_drawn_plane_hover(
         hover_port, kind,
-        point_context.make_event_at(pointer.mouse_local, false));
+        make_plane_event_at(pointer.mouse_local, false));
     handle_result(context, std::string(tool_name) + " hover", hovered);
     clear_hover_hint();
     if (hovered.ok) {
@@ -205,8 +215,18 @@ ViewportToolResult handle_drawn_plane_lifecycle(
     }
   }
   if (pointer.can_interact && pointer.left_clicked) {
+    const auto press = viewport_pointer_gesture_from_latest_edge(
+        pointer.pointer_pressed_edges, QuaderMouseButton::Left,
+        pointer.left_click_local, pointer.mouse_screen, pointer.modifiers,
+        pointer.pointer_drag_threshold_pixels);
     const ModelingToolStatus before = preview_port.tool_status();
     ModelingCommandResult command;
+    if (kind == DrawnPlaneToolKind::Cut) {
+      context.modal_state->cut_line_drag_active = false;
+      // The explicit press owns its exact offset even if hover was cached.
+      (void)update_drawn_plane_hover(hover_port, kind,
+          make_plane_event_at(press.press.local, false, press.modifiers));
+    }
     if (point_context.hit_drawn_plane_captured_point) {
       if (const std::optional<int> point_index =
               point_context.hit_drawn_plane_captured_point(
@@ -227,30 +247,58 @@ ViewportToolResult handle_drawn_plane_lifecycle(
             drawn_plane_has_line(before, kind))) {
       command = begin_drawn_plane_line_drag(
           preview_port, kind,
-          point_context.make_event_at(pointer.left_click_local, true));
+          make_plane_event_at(pointer.left_click_local, true, press.modifiers));
       handle_result(context, std::string(tool_name) + " line drag begin",
                     command, true);
+      if (kind == DrawnPlaneToolKind::Cut) {
+        context.modal_state->cut_line_drag_active = command.ok;
+      }
     } else if (!command.ok && command.message.empty()) {
       command = click_drawn_plane_point(
           preview_port, kind,
-          point_context.make_event_at(pointer.left_click_local, false));
+          make_plane_event_at(pointer.left_click_local, false, press.modifiers));
       handle_result(context, std::string(tool_name) + " point", command, true);
     }
     drag_active = command.ok &&
                   drawn_plane_dragging(preview_port.tool_status(), kind);
+    if (kind == DrawnPlaneToolKind::Cut && drag_active) {
+      context.modal_state->primary_pointer_gesture = press;
+    }
+    if (kind == DrawnPlaneToolKind::Cut && !drag_active) {
+      context.modal_state->cut_line_drag_active = false;
+    }
     clear_hover_hint();
   } else if (pointer.can_interact && pointer.left_down &&
              (drag_active ||
               drawn_plane_dragging(preview_port.tool_status(), kind))) {
     handle_result(context, std::string(tool_name) + " drag update",
                   update_drawn_plane_hover(hover_port, kind,
-                                           point_context.make_event_at(
+                                           make_plane_event_at(
                                                pointer.mouse_local, true)));
     drag_active = drawn_plane_dragging(preview_port.tool_status(), kind);
   }
   if (pointer.left_released &&
       (drag_active ||
        drawn_plane_dragging(preview_port.tool_status(), kind))) {
+    if (kind == DrawnPlaneToolKind::Cut) {
+      const auto& gesture = context.modal_state->primary_pointer_gesture;
+      const auto* release = gesture.has_value()
+          ? viewport_pointer_matching_release(pointer.pointer_released_edges,
+                pointer.pointer_pressed_edges, gesture->press)
+          : viewport_pointer_latest_edge(pointer.pointer_released_edges,
+                                         QuaderMouseButton::Left);
+      if (gesture.has_value() && gesture->press.sequence != 0U && release == nullptr) {
+        return {.handled = true, .consumed = true};
+      }
+      if (pointer.can_interact && !pointer.navigation_active &&
+          !pointer.pointer_interaction_canceled) {
+        (void)update_drawn_plane_hover(hover_port, kind,
+            make_plane_event_at(release != nullptr ? release->local : pointer.mouse_local,
+                true, release != nullptr ? release->modifiers : std::nullopt));
+      }
+      context.modal_state->primary_pointer_gesture.reset();
+      context.modal_state->cut_line_drag_active = false;
+    }
     const ModelingCommandResult command =
         end_drawn_plane_drag(preview_port, kind);
     handle_result(context, std::string(tool_name) + " drag end", command, true);

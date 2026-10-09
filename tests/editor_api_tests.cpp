@@ -513,6 +513,7 @@ void exercise_app_lifetime_tool_options(quader::QuaderEditorApi &editor,
       OptionCase{"radial_array", "radial_array.copies", 8.0, 11.0},
       OptionCase{"pivot", "pivot.snap.grid", 1.0, 0.0},
       OptionCase{"edge_bevel", "operation.edge_bevel.width", 1.0, 0.17},
+      OptionCase{"cut", "operation.cut.cap", 0.0, 1.0},
       OptionCase{"path_array", "path_array.count", 4.0, 6.0},
       OptionCase{"extrude", "extrude.amount", 0.0, 0.25},
       OptionCase{"uv_peel", "uv_peel.u_repeat", 1.0, 2.5},
@@ -565,7 +566,10 @@ void exercise_app_lifetime_tool_options(quader::QuaderEditorApi &editor,
       ASSERT_NE(control, nullptr);
       EXPECT_DOUBLE_EQ(value(*control), option.remembered);
     }
-    ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
+    const auto canceled = option.tool == "cut"
+        ? editor.tools().cancel_modal_tool()
+        : editor.tools().cancel_active_tool_preview();
+    ASSERT_TRUE(canceled.ok()) << canceled.error_message();
     EXPECT_FALSE(editor.tools().active_settings().preview_active);
     EXPECT_EQ(editor.query().modeling_objects().size(), object_count);
   }
@@ -20373,6 +20377,12 @@ TEST(EditorApiTests, ToolsApiSetsCutKeepModeThroughPublicSetting) {
         find_tool_setting_control(cut_settings, "operation.cut.keep_mode");
     ASSERT_NE(keep_mode, nullptr);
     EXPECT_EQ(keep_mode->kind, quader::QuaderToolSettingControlKind::Choice);
+    const auto *cap = find_tool_setting_control(cut_settings, "operation.cut.cap");
+    ASSERT_NE(cap, nullptr);
+    EXPECT_EQ(cap->kind, quader::QuaderToolSettingControlKind::Toggle);
+    EXPECT_TRUE(cap->enabled);
+    EXPECT_FALSE(cap->bool_value);
+    EXPECT_FALSE(editor.query().tool_status().cut_cap);
 
     const quader::QuaderApiVoidResult updated_cut_setting =
         editor.tools().set_setting(
@@ -20383,6 +20393,16 @@ TEST(EditorApiTests, ToolsApiSetsCutKeepModeThroughPublicSetting) {
         << updated_cut_setting.error_message();
   EXPECT_EQ(editor.query().tool_status().cut_mode,
               quader::QuaderCutMode::DiscardRight);
+    ASSERT_TRUE(editor.tools().set_setting("cut", "operation.cut.cap", true).ok());
+    EXPECT_TRUE(editor.query().tool_status().cut_cap);
+    for (double invalid : {-1.0, 0.5, 2.0}) {
+      const auto before = quader::test::capture_command_observable_state(editor);
+      const auto rejected =
+          editor.tools().set_setting("cut", "operation.cut.cap", invalid);
+      EXPECT_FALSE(rejected.ok());
+      EXPECT_FALSE(rejected.changed());
+      EXPECT_EQ(quader::test::capture_command_observable_state(editor), before);
+    }
 
     const std::uint64_t edited_revision =
         editor.tools().active_settings_revision();
@@ -20392,6 +20412,12 @@ TEST(EditorApiTests, ToolsApiSetsCutKeepModeThroughPublicSetting) {
     EXPECT_TRUE(reset.changed());
     EXPECT_EQ(editor.query().tool_status().cut_mode,
               quader::QuaderCutMode::KeepBoth);
+    EXPECT_FALSE(editor.query().tool_status().cut_cap);
+    const auto reset_settings = editor.tools().active_settings();
+    const auto *reset_cap =
+        find_tool_setting_control(reset_settings, "operation.cut.cap");
+    ASSERT_NE(reset_cap, nullptr);
+    EXPECT_FALSE(reset_cap->bool_value);
     const std::uint64_t reset_revision =
         editor.tools().active_settings_revision();
     EXPECT_GT(reset_revision, edited_revision);
@@ -20422,6 +20448,7 @@ TEST(EditorApiTests, CutActivationPreservesSelectedObjectFaceAndEdgeScopes) {
     }
     const auto before = quader::test::capture_command_observable_state(editor);
     const auto selection_before = editor.selection().summary();
+    const auto selected_before = selected_entities(editor);
     ASSERT_TRUE(editor.tools().can_activate(quader::ViewportToolId::Cut));
     const auto descriptor =
         editor.commands().descriptor(quader::quader_command::kToolsActivateCut);
@@ -20447,9 +20474,16 @@ TEST(EditorApiTests, CutActivationPreservesSelectedObjectFaceAndEdgeScopes) {
     EXPECT_EQ(selection_after.active_edge_b, selection_before.active_edge_b);
     EXPECT_EQ(selection_after.active_face_id, selection_before.active_face_id);
     if (mode == quader::QuaderSelectionMode::Face) {
-      // Cut hides selected face overlays; the singleton's durable ID remains selected.
+      // Cut hides selection overlays; check the durable singleton identity.
       EXPECT_EQ(selection_after.selected_face_count, 1u);
       EXPECT_EQ(selection_after.active_face_id, 1);
+    } else if (mode == quader::QuaderSelectionMode::Edge) {
+      EXPECT_EQ(selection_after.selected_edge_count, 1u);
+      EXPECT_EQ(selection_after.active_edge_a, 1);
+      EXPECT_EQ(selection_after.active_edge_b, 2);
+    }
+    EXPECT_EQ(selected_entities(editor), selected_before);
+    if (mode != quader::QuaderSelectionMode::Object) {
       EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Edit);
       const auto edit_mode = editor.mode().state();
       ASSERT_EQ(edit_mode.participants.size(), 1u);
@@ -20458,7 +20492,7 @@ TEST(EditorApiTests, CutActivationPreservesSelectedObjectFaceAndEdgeScopes) {
     EXPECT_TRUE(editor.query().tool_status().cut_active);
     const auto after = quader::test::capture_command_observable_state(editor);
     using Domain = quader::test::CommandObservableDomain;
-    if (mode != quader::QuaderSelectionMode::Face) {
+    if (mode == quader::QuaderSelectionMode::Object) {
       EXPECT_EQ(after.domain(Domain::Selection), before.domain(Domain::Selection));
     }
     EXPECT_EQ(after.domain(Domain::Geometry), before.domain(Domain::Geometry));
@@ -20506,6 +20540,7 @@ TEST(EditorApiTests, EdgeCutDisablesKeepModeAndPreservesRememberedChoice) {
   ASSERT_TRUE(editor.tools().set_setting(
       "cut", "operation.cut.keep_mode",
       static_cast<double>(quader::QuaderCutMode::DiscardRight)).ok());
+  ASSERT_TRUE(editor.tools().set_setting("cut", "operation.cut.cap", true).ok());
   ASSERT_TRUE(editor.tools().cancel_modal_tool().ok());
   enter_edit_mode_for_objects(editor, {box});
 
@@ -20526,6 +20561,11 @@ TEST(EditorApiTests, EdgeCutDisablesKeepModeAndPreservesRememberedChoice) {
         find_tool_setting_control(settings, "operation.cut.keep_mode");
     ASSERT_NE(keep_mode, nullptr);
     EXPECT_EQ(keep_mode->enabled, keep_enabled);
+    const auto *cap = find_tool_setting_control(settings, "operation.cut.cap");
+    ASSERT_NE(cap, nullptr);
+    EXPECT_EQ(cap->enabled, keep_enabled);
+    EXPECT_TRUE(cap->bool_value);
+    EXPECT_EQ(editor.query().tool_status().cut_cap, keep_enabled);
     EXPECT_EQ(settings.can_reset, keep_enabled);
     EXPECT_EQ(keep_mode->choice_value,
               std::to_string(static_cast<int>(quader::QuaderCutMode::DiscardRight)));
@@ -20544,6 +20584,10 @@ TEST(EditorApiTests, EdgeCutDisablesKeepModeAndPreservesRememberedChoice) {
           static_cast<double>(quader::QuaderCutMode::DiscardLeft));
       EXPECT_FALSE(rejected.ok());
       EXPECT_FALSE(rejected.changed());
+      const auto cap_rejected =
+          editor.tools().set_setting("cut", "operation.cut.cap", false);
+      EXPECT_FALSE(cap_rejected.ok());
+      EXPECT_FALSE(cap_rejected.changed());
       EXPECT_FALSE(editor.tools().reset_active_settings().ok());
       EXPECT_EQ(editor.tools().active_settings_revision(), revision);
       EXPECT_EQ(quader::test::capture_command_observable_state(editor), before);

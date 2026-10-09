@@ -1830,7 +1830,7 @@ TEST(ProgrammaticApiGuardrailTests,
             std::string::npos);
   EXPECT_NE(prepare.find("active_box_preview_.footprint_count >= 2U"),
             std::string::npos);
-  EXPECT_NE(prepare.find("&active_box_preview_, overlays_visible"),
+  EXPECT_NE(prepare.find("&active_box_preview_, selection_overlays_visible && overlays_visible"),
             std::string::npos);
   EXPECT_NE(prepare.find("overlays_visible && tool_overlay_visible"),
             std::string::npos);

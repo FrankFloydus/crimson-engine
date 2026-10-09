@@ -826,6 +826,7 @@ struct ModelingToolStatus {
   bool cut_has_line = false;
   std::array<QVec3, 3> cut_points = {};
   ModelingCutMode cut_mode = ModelingCutMode::KeepBoth;
+  bool cut_cap = false;
   bool cut_keep_mode_enabled = true;
   bool mirror_active = false;
   bool mirror_can_preview = false;
@@ -912,6 +913,7 @@ struct ModelingInteractionSettings {
   bool half_cut_separate_parts = false;
   bool half_cut_fill_parts = true;
   ModelingCutMode cut_mode = ModelingCutMode::KeepBoth;
+  bool cut_cap = false;
   bool move_auto_merge_vertices = true;
   bool lasso_select_partial_intersection = false;
 

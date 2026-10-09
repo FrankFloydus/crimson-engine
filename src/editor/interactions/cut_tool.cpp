@@ -84,7 +84,7 @@ CutPlacementPoint cut_placement_point_from_ray(
                 input.ray,
                 state.support_plane_valid ? state.support_plane_origin
                                           : state.points.front(),
-                state.face_normal, input.grid_size),
+                state.face_normal, input.grid_size, false),
             state.source_object_id};
   }
   std::optional<PickHitRecord> hit = input.resolved_surface_hit;
@@ -97,10 +97,34 @@ CutPlacementPoint cut_placement_point_from_ray(
   if (hit.has_value() && !vec3_is_tiny(hit->local_normal)) {
     return {cut_support_plane_point_from_ray(
                 input.ray, hit->local_position, hit->local_normal,
-                input.grid_size),
+                input.grid_size, false),
             hit->object_id};
   }
-  return {cut_grid_point_from_ray(input.camera, input.ray, input.grid_size), -1};
+  return {viewport_grid_point_from_ray(input.camera, input.ray, input.grid_size, false), -1};
+}
+
+quader::QVec3 cut_position_with_modifiers(
+    const CutToolState& state, const CutGridPointResult& placement,
+    const CutRayUpdateInput& input, quader::QVec3 position,
+    std::optional<quader::QVec3> constraint_origin)
+{
+  if (input.constrain_axis && constraint_origin.has_value()) {
+    const auto constrained = constrain_knife_point_to_axis(*constraint_origin, position,
+        placement.plane_normal, input.grid_size, false);
+    const auto snapped = snap_point_to_plane_grid(constrained,
+        state.support_plane_valid ? state.support_plane_origin : placement.position,
+        placement.plane_normal, input.grid_size, input.snap_enabled);
+    const auto delta = constrained - *constraint_origin;
+    if (!input.snap_enabled || !snapped.has_value() || vec3_is_tiny(delta)) {
+      return constrained;
+    }
+    const auto axis = normalized_axis(delta);
+    return *constraint_origin + vec3_scale(axis, vec3_dot(*snapped - *constraint_origin, axis));
+  }
+  const auto snapped = snap_point_to_plane_grid(position,
+      state.support_plane_valid ? state.support_plane_origin : placement.position,
+      placement.plane_normal, input.grid_size, input.snap_enabled);
+  return snapped.value_or(position);
 }
 
 /**
@@ -182,6 +206,7 @@ public:
 					selection.active_edge_vertex_indices[0], selection.active_edge_vertex_indices[1]});
 			}
 			state.mode = CutMode::KeepBoth;
+			state.cap = false;
 		}
 		state.scope_captured = true;
 		state.source_object_id = -1;
@@ -206,6 +231,7 @@ public:
 		if (result.ok && result.changed) {
 			state.support_plane_origin = position;
 			state.support_plane_valid = true;
+			state.drag_point_offset = {};
 			invalidate_cut_plane_preview(state);
 		}
 		return cut_result_from_drawn_plane(result, static_cast<int>(state.target_object_ids.size()));
@@ -216,6 +242,7 @@ public:
 		const DrawnPlaneToolResult result =
 			drawn_plane_tool_logic().capture_second(cut_drawn_plane_ref(state), cut_point_on_support_plane(state, position), label());
 		if (result.ok && result.changed) {
+			state.drag_point_offset = {};
 			invalidate_cut_plane_preview(state);
 		}
 		return cut_result_from_drawn_plane(result);
@@ -223,8 +250,12 @@ public:
 
 	[[nodiscard]] CutToolResult update_dragged_new_point(CutToolState& state, quader::QVec3 position) const
 	{
+		position = cut_point_on_support_plane(state, position);
+		if (state.points.size() == 2U && vec3_distance_squared(state.points[1], position) <= 1.0e-12) {
+			return {true, false};
+		}
 		const DrawnPlaneToolResult result =
-			drawn_plane_tool_logic().update_dragged_new_point(cut_drawn_plane_ref(state), cut_point_on_support_plane(state, position), label());
+			drawn_plane_tool_logic().update_dragged_new_point(cut_drawn_plane_ref(state), position, label());
 		if (result.ok && result.changed) {
 			invalidate_cut_plane_preview(state);
 		}
@@ -233,8 +264,14 @@ public:
 
 	[[nodiscard]] CutToolResult update_dragged_point(CutToolState& state, quader::QVec3 position, quader::QVec3 plane_normal) const
 	{
+		position = cut_point_on_support_plane(state, position);
+		if (state.support_plane_valid && state.dragging_point_index >= 0 &&
+			state.dragging_point_index < static_cast<int>(state.points.size()) &&
+			vec3_distance_squared(state.points[static_cast<std::size_t>(state.dragging_point_index)], position) <= 1.0e-12) {
+			return {true, false};
+		}
 		const DrawnPlaneToolResult result =
-			drawn_plane_tool_logic().update_dragged_point(cut_drawn_plane_ref(state), cut_point_on_support_plane(state, position),
+			drawn_plane_tool_logic().update_dragged_point(cut_drawn_plane_ref(state), position,
 				state.support_plane_valid ? state.face_normal : plane_normal, label());
 		if (result.ok && result.changed) {
 			invalidate_cut_plane_preview(state);
@@ -244,14 +281,24 @@ public:
 
 	[[nodiscard]] CutToolResult begin_point_drag(CutToolState& state, int point_index) const
 	{
-		return cut_result_from_drawn_plane(
-			drawn_plane_tool_logic().begin_point_drag(cut_drawn_plane_ref(state), point_index, label()));
+		const auto result = drawn_plane_tool_logic().begin_point_drag(cut_drawn_plane_ref(state), point_index, label());
+		if (result.ok) {
+			state.drag_point_offset = {};
+		}
+		return cut_result_from_drawn_plane(result);
 	}
 
 	[[nodiscard]] CutToolResult begin_line_drag(CutToolState& state, quader::QVec3 anchor) const
 	{
-		return cut_result_from_drawn_plane(
-			drawn_plane_tool_logic().begin_line_drag(cut_drawn_plane_ref(state), cut_point_on_support_plane(state, anchor), label()));
+		const auto result = drawn_plane_tool_logic().begin_line_drag(
+			cut_drawn_plane_ref(state), cut_point_on_support_plane(state, anchor), label());
+		if (result.ok) {
+			// Retain the cursor itself so the line does not jump inside its hit band.
+			state.drag_line_anchor = cut_point_on_support_plane(state, anchor);
+			state.drag_line_cursor_origin = state.drag_line_anchor;
+			state.drag_line_point_origin = state.points.front();
+		}
+		return cut_result_from_drawn_plane(result);
 	}
 
 	[[nodiscard]] CutToolResult update_dragged_line(CutToolState& state, quader::QVec3 position) const
@@ -461,7 +508,7 @@ public:
 		if (!surface.valid) {
 			return set_preview_result(state, state.mode, false, {}, surface.message);
 		}
-		CutPreviewCounts counts;
+		CutPreviewCounts counts = state.preview_valid ? state.preview_counts : CutPreviewCounts{};
 		counts.target_count = static_cast<int>(state.target_object_ids.size());
 		return set_preview_result(state, state.mode, true, counts, {});
 	}
@@ -494,7 +541,24 @@ public:
 		if (!point.ok) {
 			return { false, false, point.message.empty() ? "Cut needs a valid grid point." : point.message };
 		}
-		const bool hover_changed = update_hover(runtime.cut_hover, true, placement.object_id, point.position, 0.000001);
+		runtime.cut.pointer_position = point.position;
+		runtime.cut.pointer_position_valid = true;
+		quader::QVec3 position = point.position;
+		std::optional<quader::QVec3> constraint_origin;
+		if (!runtime.cut.points.empty()) {
+			constraint_origin = runtime.cut.points.front();
+		}
+		if (input.dragging && runtime.cut.dragging_point_index >= 0) {
+			position += runtime.cut.drag_point_offset;
+			if (runtime.cut.points.size() >= 2U && runtime.cut.dragging_point_index == 0) {
+				constraint_origin = runtime.cut.points[1];
+			}
+		} else if (input.dragging && runtime.cut.dragging_line) {
+			position = runtime.cut.drag_line_point_origin + point.position - runtime.cut.drag_line_cursor_origin;
+			constraint_origin = runtime.cut.drag_line_point_origin;
+		}
+		position = cut_position_with_modifiers(runtime.cut, point, input, position, constraint_origin);
+		const bool hover_changed = update_hover(runtime.cut_hover, true, placement.object_id, position, 0.000001);
 		if (!input.dragging) {
 			(void)refresh_preview(runtime.cut, objects);
 			return { true, hover_changed };
@@ -502,11 +566,12 @@ public:
 
 		CutToolResult result;
 		if (runtime.cut.dragging_new_point) {
-			result = update_dragged_new_point(runtime.cut, point.position);
+			result = update_dragged_new_point(runtime.cut, position);
 		} else if (runtime.cut.dragging_point_index >= 0) {
-			result = update_dragged_point(runtime.cut, point.position, point.plane_normal);
+			result = update_dragged_point(runtime.cut, position, point.plane_normal);
 		} else if (runtime.cut.dragging_line) {
-			result = update_dragged_line(runtime.cut, point.position);
+			result = update_dragged_line(runtime.cut,
+				runtime.cut.drag_line_anchor + position - runtime.cut.points.front());
 		} else {
 			result = { true, hover_changed };
 		}
@@ -533,16 +598,20 @@ public:
 		if (!point.ok) {
 			return { false, false, point.message.empty() ? "Cut needs a valid grid point." : point.message };
 		}
-		(void)update_hover(runtime.cut_hover, true, placement.object_id, point.position, 0.000001);
+		runtime.cut.pointer_position = point.position;
+		runtime.cut.pointer_position_valid = true;
+		const quader::QVec3 position = cut_position_with_modifiers(runtime.cut, point, input, point.position,
+			runtime.cut.points.empty() ? std::optional<quader::QVec3>{} : runtime.cut.points.front());
+		(void)update_hover(runtime.cut_hover, true, placement.object_id, position, 0.000001);
 
 		CutToolResult result;
 		if (runtime.cut.points.empty()) {
-			result = capture_first_point(runtime.cut, selection, point.position, point.plane_normal);
+			result = capture_first_point(runtime.cut, selection, position, point.plane_normal);
 			if (result.ok) {
 				runtime.cut.source_object_id = placement.object_id;
 			}
 		} else if (runtime.cut.points.size() == 1U) {
-			result = capture_second_point(runtime.cut, point.position);
+			result = capture_second_point(runtime.cut, position);
 		} else {
 			result = { true, false };
 		}

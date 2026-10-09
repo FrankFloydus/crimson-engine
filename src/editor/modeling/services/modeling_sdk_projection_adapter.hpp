@@ -197,6 +197,7 @@ struct ModelingSdkPlaneCutRequest {
   std::vector<modeling::FaceId> faces;
   std::vector<modeling::EdgeKey> edges;
   bool all_edges = false;
+  bool cap = false;
 };
 
 /// Renderer-ready host projection of an SDK-owned plane-cut preview.
@@ -205,6 +206,10 @@ struct ModelingSdkPlaneCutPreviewResult {
   std::vector<ModelingToolPreviewMesh> kept_meshes;
   std::vector<ModelingToolPreviewMesh> discarded_meshes;
   std::vector<QVec3> inserted_points;
+  /// Exact accepted plane sections and authored candidate edges in world space.
+  std::vector<std::array<QVec3, 2>> intersection_segments;
+  std::vector<std::array<QVec3, 2>> kept_segments;
+  std::vector<std::array<QVec3, 2>> discarded_segments;
   std::uint64_t revision = 0;
   int target_count = 0;
   int split_count = 0;

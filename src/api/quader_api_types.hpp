@@ -537,6 +537,7 @@ struct QuaderToolStatus {
   bool cut_has_line = false;
   std::array<QVec3, 3> cut_points = {};
   QuaderCutMode cut_mode = QuaderCutMode::KeepBoth;
+  bool cut_cap = false;
   bool mirror_active = false;
   bool mirror_can_preview = false;
   bool mirror_preview_valid = false;
@@ -572,6 +573,7 @@ struct QuaderInteractionSettings {
   bool half_cut_separate_parts = false;
   bool half_cut_fill_parts = true;
   QuaderCutMode cut_mode = QuaderCutMode::KeepBoth;
+  bool cut_cap = false;
 };
 
 /**

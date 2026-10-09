@@ -60,7 +60,13 @@ struct CutToolState {
 	quader::QVec3 face_normal;
 	quader::QVec3 support_plane_origin;
 	bool support_plane_valid = false;
+	quader::QVec3 pointer_position;
+	bool pointer_position_valid = false;
+	quader::QVec3 drag_point_offset;
+	quader::QVec3 drag_line_cursor_origin;
+	quader::QVec3 drag_line_point_origin;
         CutMode mode = CutMode::KeepBoth;
+        bool cap = false;
         int dragging_point_index = -1;
 	bool dragging_new_point = false;
 	bool dragging_line = false;
@@ -127,6 +133,8 @@ struct CutRayUpdateInput {
 	bool dragging = false;
 	std::optional<PickHitRecord> resolved_surface_hit;
 	bool surface_hit_resolved = false;
+	bool snap_enabled = false;
+	bool constrain_axis = false;
 };
 
 CutMode cut_mode_from_id(int id);

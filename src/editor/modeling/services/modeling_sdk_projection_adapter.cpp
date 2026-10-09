@@ -1599,6 +1599,7 @@ public:
           .local_plane_points = local_cut_plane_points(
               *world, *local, {points[0], points[1], points[2]}),
           .scope = state.scope,
+          .cap = state.cap,
       };
       for (const auto face : state.target_faces) {
         if (face.object_id == native_id) {
@@ -1678,7 +1679,8 @@ public:
       const auto &right = requests[index];
       if (left.modeling_object_id != right.modeling_object_id ||
           left.scope != right.scope || left.faces != right.faces ||
-          left.edges != right.edges || left.all_edges != right.all_edges) return false;
+          left.edges != right.edges || left.all_edges != right.all_edges ||
+          left.cap != right.cap) return false;
       for (std::size_t point = 0; point < 3U; ++point) {
         const auto a = left.local_plane_points[point];
         const auto b = right.local_plane_points[point];
@@ -1701,6 +1703,42 @@ public:
     const auto combined = projection.combine_objects(objects);
     if (!combined.ok()) return Result<PolygonDocument>::failure(combined.error());
     return projection.document_copy(first.value());
+  }
+
+  [[nodiscard]] static Result<std::vector<std::array<QVec3, 2>>>
+  plane_cut_preview_segments(
+      std::span<const EdgeKey> edges,
+      std::span<const PolygonDocument *const> documents,
+      const QMat4 &world_from_object) {
+    using Segments = std::vector<std::array<QVec3, 2>>;
+    if (edges.empty()) return Result<Segments>::success({});
+    std::map<VertexId, QVec3> positions;
+    for (const auto *document : documents) {
+      if (document == nullptr) continue;
+      const auto topology = document->authored_topology();
+      if (!topology.ok()) return Result<Segments>::failure(topology.error());
+      for (const auto &vertex : topology.value().vertices) {
+        positions.try_emplace(vertex.id, QVec3{vertex.position.x,
+            vertex.position.y, vertex.position.z});
+      }
+    }
+    Segments segments;
+    segments.reserve(edges.size());
+    std::set<EdgeKey> included;
+    for (const auto edge : edges) {
+      if (!included.insert(modeling::make_edge_key(edge.a, edge.b)).second) continue;
+      const auto first = positions.find(edge.a);
+      const auto second = positions.find(edge.b);
+      if (first == positions.end() || second == positions.end()) {
+        return Result<Segments>::failure(modeling::make_error(
+            modeling::ErrorCode::InternalError,
+            "Cut preview edge is missing from its accepted geometry."));
+      }
+      const auto start = transform_point(world_from_object, first->second);
+      const auto end = transform_point(world_from_object, second->second);
+      if (length_squared(end - start) != 0.0F) segments.push_back({start, end});
+    }
+    return Result<Segments>::success(std::move(segments));
   }
 
   [[nodiscard]] ModelingSdkPlaneCutPreviewResult preview_plane_cut(
@@ -1747,8 +1785,10 @@ public:
       candidate.world_from_object = *world;
       candidate.dormant_selection = source.value().selection();
       const modeling::PlaneSplitSpec plane{.a = to_sdk(points[0]),
-          .b = to_sdk(points[1]), .c = to_sdk(points[2]), .cap = request.scope == Scope::Object};
+          .b = to_sdk(points[1]), .c = to_sdk(points[2]),
+          .cap = request.cap && request.scope != Scope::Edge};
       std::optional<PolygonDocument> discarded;
+      std::vector<EdgeKey> intersection_edges;
       if (request.scope == Scope::Object) {
         auto split = source.value().split_by_plane(plane);
         if (!split.ok()) {
@@ -1759,11 +1799,14 @@ public:
           bool front = false;
           bool back = false;
           const auto unit_normal = normalize_or_zero(normal);
+          // Match the portable plane-side classifier when its tangent result
+          // reaches this whole-object keep/discard fallback.
+          constexpr float kPlaneSideTolerance = 0.0001F;
           for (const auto &vertex : topology.value().vertices) {
             const auto position = vertex.position;
             const float distance = dot(QVec3{position.x, position.y, position.z} - points[0], unit_normal);
-            front = front || distance > 0.00001F;
-            back = back || distance < -0.00001F;
+            front = front || distance > kPlaneSideTolerance;
+            back = back || distance < -kPlaneSideTolerance;
           }
           if (front == back) return rejected_plane_cut_preview(split.error_message());
           const bool keep_source = mode == ModelingCutMode::KeepBoth ||
@@ -1781,6 +1824,7 @@ public:
           }
         } else {
           candidate.receipt = split.value().receipt;
+          intersection_edges = candidate.receipt.affected.edges;
           prepared.preview.split_count += split.value().split_count;
           candidate.kept = mode == ModelingCutMode::DiscardLeft
               ? std::move(split.value().back) : std::move(split.value().front);
@@ -1807,6 +1851,7 @@ public:
             : candidate.kept.cut_selected_edges_by_plane(plane);
         if (!cut.ok()) return rejected_plane_cut_preview(cut.error_message());
         candidate.receipt = std::move(cut).value();
+        if (request.scope == Scope::Face) intersection_edges = candidate.receipt.affected.edges;
         prepared.preview.split_count += static_cast<int>(candidate.receipt.created.vertices.size());
         prepared.preview.removed_count += static_cast<int>(candidate.receipt.deleted.faces.size());
         if (request.scope == Scope::Face && mode != ModelingCutMode::KeepBoth) {
@@ -1832,6 +1877,45 @@ public:
             }
           }
         }
+      }
+      if (request.scope != Scope::Edge) {
+        // The portable receipt identifies actual cut sections, including
+        // existing plane-aligned boundaries. Never infer these from triangles.
+        const std::array<const PolygonDocument *, 4> documents{
+            &candidate.kept,
+            candidate.second.has_value() ? &*candidate.second : nullptr,
+            discarded.has_value() ? &*discarded : nullptr,
+            &source.value(),
+        };
+        auto segments = plane_cut_preview_segments(
+            intersection_edges, documents, *world);
+        if (!segments.ok()) return rejected_plane_cut_preview(segments.error_message());
+        prepared.preview.intersection_segments.insert(
+            prepared.preview.intersection_segments.end(),
+            segments.value().begin(), segments.value().end());
+      }
+      const std::array<const PolygonDocument *, 2> kept_documents{
+          &candidate.kept,
+          candidate.second.has_value() ? &*candidate.second : nullptr,
+      };
+      for (const auto *document : kept_documents) {
+        if (document == nullptr) continue;
+        const auto edges = document->edge_ids();
+        const std::array<const PolygonDocument *, 1> documents{document};
+        auto segments = plane_cut_preview_segments(edges, documents, *world);
+        if (!segments.ok()) return rejected_plane_cut_preview(segments.error_message());
+        prepared.preview.kept_segments.insert(
+            prepared.preview.kept_segments.end(),
+            segments.value().begin(), segments.value().end());
+      }
+      if (discarded.has_value()) {
+        const auto edges = discarded->edge_ids();
+        const std::array<const PolygonDocument *, 1> documents{&*discarded};
+        auto segments = plane_cut_preview_segments(edges, documents, *world);
+        if (!segments.ok()) return rejected_plane_cut_preview(segments.error_message());
+        prepared.preview.discarded_segments.insert(
+            prepared.preview.discarded_segments.end(),
+            segments.value().begin(), segments.value().end());
       }
       const auto *material = scene_.material(*entity);
       const auto *binding = scene_.mesh(*entity);

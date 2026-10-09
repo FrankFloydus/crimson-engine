@@ -226,6 +226,10 @@ Its preview and insertion move continuously by default. Hold Ctrl to snap the lo
 current grid size, independently of the global snapping toggles; releasing Ctrl restores
 continuous positioning. The contextual hint advertises Grid Snap and highlights the held gesture.
 Escape exits to Select, discards transient loop previews, and keeps accepted loops and their history.
+Cut point and line dragging is continuous by default. Hold Ctrl to snap to the current
+grid step, independently of global snapping, and Shift to straighten the point or line
+translation along the retained support plane. The line shows a hand cursor and preserves
+the cursor's initial offset while dragging; neither endpoint is re-picked onto another surface.
 Dragging follows the visible gizmo axis in every extrusion mode. When the axis points
 directly into the view and has no visible direction, dragging upward increases Amount.
 Extrusion dragging is unsnapped by default. Holding Ctrl snaps the total extrusion

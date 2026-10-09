@@ -212,6 +212,10 @@ viewport_tool_input_hints(std::string_view tool_id, const ModelingOperationHintS
     }
   } else if (tool_id == "cut" || tool_id == "mirror") {
     completion(hints, state.can_apply && !state.dragging, "operation.hints.cancel", "Cancel");
+    if (tool_id == "cut") {
+      hints.push_back(gesture(Gesture::Control, "operation.hints.insert_edge_loop.grid_snap", "Grid Snap", context.control, 80));
+      hints.push_back(gesture(Gesture::Shift, "operation.hints.knife.straight", "Straight Cut", context.shift, 80));
+    }
     if (context.plane_endpoint_hovered) hints.push_back(gesture(Gesture::PrimaryDrag, "operation.hints.plane.endpoint", "Drag Endpoint", false, 80));
     else if (context.plane_body_hovered) hints.push_back(gesture(Gesture::PrimaryDrag, "operation.hints.plane.body", "Drag Plane", false, 80));
     if (tool_id == "cut" && state.cut_keep_mode_enabled) hints.push_back(binding("viewport.modal_tool.mode_cycle", "operation.hints.cut.keep_mode", "Cycle Keep Mode"));

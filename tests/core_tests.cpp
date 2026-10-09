@@ -767,6 +767,28 @@ void expect_cut_untouched_face(const quader_poly::Document &document,
   }
 }
 
+std::size_t cut_boundary_edge_count(const quader_poly::Document &document) {
+  std::size_t count = 0u;
+  for (const quader_poly::Face &face : document.faces) {
+    count += quader_poly::face_perimeter_info(document, face.id).open_edges.size();
+  }
+  return count;
+}
+
+std::size_t cut_faces_on_plane_count(const quader_poly::Document &document,
+                                    QVec3 normal, float distance = 0.0f) {
+  return static_cast<std::size_t>(std::ranges::count_if(
+      document.faces, [&](const quader_poly::Face &face) {
+        return !face.vertices.empty() && std::ranges::all_of(
+            face.vertices, [&](quader_poly::ElementId vertex_id) {
+              const quader_poly::Vertex *vertex =
+                  quader_poly::find_vertex(document, vertex_id);
+              return vertex != nullptr &&
+                     std::abs(dot(vertex->position, normal) - distance) < 0.0001f;
+            });
+      }));
+}
+
 /**
  * Stores two independent bridgeable face pairs for bridge preview selection
  * rebuild tests.
@@ -22304,7 +22326,11 @@ TEST(ModelingSessionServiceTests, CutAndMirrorEmitDrawnPlaneOverlay) {
                  line.layer == ViewportOverlayLayer::ToolPreviewSeam;
         }));
     EXPECT_EQ(preview_fills, 0u);
-    EXPECT_EQ(preview_lines, 0u);
+    if (tool == ModelingViewportTool::Cut) {
+      EXPECT_GT(preview_lines, 0u);
+    } else {
+      EXPECT_EQ(preview_lines, 0u);
+    }
     const std::vector<ModelingToolPreviewMesh> preview_meshes =
         service.tool_preview_meshes();
     ASSERT_FALSE(preview_meshes.empty());
@@ -22407,6 +22433,45 @@ TEST(ModelingSessionServiceTests,
   EXPECT_FALSE(service.tool_status().cut_active);
   EXPECT_EQ(first_meshes.size(), 2u);
   EXPECT_FALSE(first_meshes.front().mesh.geometry().indices.empty());
+}
+
+TEST(ModelingSessionServiceTests,
+     CutNearTangentPlaneAcceptsUnchangedWholeObjectPreview) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  const auto box = service.create_box_from_bounds({
+      .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+      .name = "Near Tangent Cut Source",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+  const auto original = service.compile_object_mesh(box.object.modeling_object_id);
+  ASSERT_TRUE(original.has_value());
+  const auto content_revision = service.content_revision();
+  const auto event = [](float x, bool dragging) {
+    auto value = test_drawn_plane_event(x, dragging);
+    value.ray.origin.z = 1.0f - 0.00005f;
+    value.snap_enabled = false;
+    return value;
+  };
+  ASSERT_TRUE(service.activate_viewport_tool(ModelingViewportTool::Cut).ok);
+  ASSERT_TRUE(service.set_cut_mode(ModelingCutMode::KeepBoth).ok);
+  ASSERT_TRUE(service.click_cut(event(-0.5f, false)).ok);
+  const auto dragged = service.update_cut_hover(event(0.5f, true));
+  ASSERT_TRUE(dragged.ok) << dragged.message;
+  ASSERT_TRUE(service.end_cut_drag().ok);
+  ASSERT_TRUE(service.tool_status().cut_preview_valid);
+  const auto preview = service.tool_preview_meshes();
+  ASSERT_EQ(preview.size(), 1u);
+  EXPECT_EQ(preview.front().mesh.geometry_content_id(), original->geometry_content_id());
+  EXPECT_EQ(service.content_revision(), content_revision);
+  const auto committed = service.finalize_cut_tool();
+  ASSERT_TRUE(committed.ok) << committed.message;
+  EXPECT_EQ(scene.entities().size(), 1u);
+  EXPECT_EQ(service.content_revision(), content_revision);
+  const auto after = service.compile_object_mesh(box.object.modeling_object_id);
+  ASSERT_TRUE(after.has_value());
+  EXPECT_EQ(after->geometry_content_id(), original->geometry_content_id());
 }
 
 TEST(ModelingSessionServiceTests,
@@ -22634,6 +22699,7 @@ TEST(ModelingSessionServiceTests,
     const std::uint64_t content_revision = service.content_revision();
     ASSERT_FALSE(session.history().can_undo());
     ASSERT_TRUE(service.set_cut_mode(mode).ok);
+    ASSERT_TRUE(service.set_cut_cap(true).ok);
     const QuaderApiVoidResult activated = editor.tools().activate(ViewportToolId::Cut);
     ASSERT_TRUE(activated.ok()) << activated.error_message();
     EXPECT_EQ(service.selection_mode(), ModelingSelectionMode::Face);
@@ -22670,7 +22736,7 @@ TEST(ModelingSessionServiceTests,
         ASSERT_NE(a, nullptr);
         ASSERT_NE(b, nullptr);
         EXPECT_FLOAT_EQ(a->position.y, 1.0f)
-            << "Face Cut must not create a closing cap";
+            << "An open cut chain cannot form a closing cap";
         twice_area += a->position.x * b->position.z - b->position.x * a->position.z;
       }
       selected_area += std::abs(twice_area) * 0.5f;
@@ -22733,6 +22799,239 @@ TEST(ModelingSessionServiceTests,
     ASSERT_TRUE(redone.has_value());
     EXPECT_EQ(redone->geometry_content_id(), applied->geometry_content_id());
     EXPECT_TRUE(service.tool_preview_meshes().empty());
+  }
+}
+
+TEST(ModelingSessionServiceTests,
+     CutCapTogglesPreviewAndCommitsOnlyExposedClosedBoundaryRings) {
+  for (const ModelingSelectionMode scope : {ModelingSelectionMode::Object,
+                                            ModelingSelectionMode::Face}) {
+    for (const ModelingCutMode mode : {ModelingCutMode::KeepBoth,
+                                       ModelingCutMode::DiscardRight}) {
+      SCOPED_TRACE(static_cast<int>(scope));
+      SCOPED_TRACE(static_cast<int>(mode));
+      SceneSession session;
+      QuaderEditorApi editor(
+          QuaderApiSessionInternalAccess::from_scene_session(session));
+      ModelingSessionService &service = session.modeling();
+      const ModelingCreateBoxResult created = service.create_box_from_bounds({
+          .name = "Cut Cap Boundary Source",
+      });
+      ASSERT_TRUE(created.ok) << created.message;
+      EXPECT_FALSE(service.interaction_settings().cut_cap);
+      const MeshAsset *source = session.assets().mesh(created.object.mesh);
+      ASSERT_NE(source, nullptr);
+      const MeshGeometryContentId source_content = source->geometry_content_id();
+      if (scope == ModelingSelectionMode::Face) {
+        ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
+        ASSERT_TRUE(seed_component_bulk_selection_scope(
+            service, created.object.modeling_object_id, ModelingSelectionMode::Face).ok);
+        ASSERT_TRUE(service.select_all().ok);
+        ASSERT_EQ(service.selection_summary().selected_face_count, 6u);
+      }
+      ASSERT_TRUE(service.set_cut_mode(mode).ok);
+      ASSERT_TRUE(editor.tools().activate(ViewportToolId::Cut).ok());
+      EXPECT_FALSE(editor.query().tool_status().cut_cap);
+      ASSERT_TRUE(service.click_cut(test_drawn_plane_event(0.0f)).ok);
+      ASSERT_TRUE(service.update_cut_hover(test_drawn_plane_event(1.0f, true)).ok);
+      ASSERT_TRUE(service.end_cut_drag().ok);
+      const bool shared_face_seam = scope == ModelingSelectionMode::Face &&
+                                    mode == ModelingCutMode::KeepBoth;
+      const std::vector<ModelingToolPreviewMesh> uncapped = service.tool_preview_meshes();
+      ASSERT_EQ(uncapped.size(), scope == ModelingSelectionMode::Object &&
+                                     mode == ModelingCutMode::KeepBoth ? 2u : 1u);
+      for (const ModelingToolPreviewMesh &mesh : uncapped) {
+        ASSERT_TRUE(mesh.mesh.authored_polygon_document);
+        const quader_poly::Document &document = *mesh.mesh.authored_polygon_document;
+        EXPECT_EQ(cut_boundary_edge_count(document), shared_face_seam ? 0u : 4u);
+        EXPECT_EQ(cut_faces_on_plane_count(document, {0.0f, 0.0f, 1.0f}), 0u);
+      }
+      const QuaderApiVoidResult capped_setting =
+          editor.tools().set_setting("cut", "operation.cut.cap", true);
+      ASSERT_TRUE(capped_setting.ok()) << capped_setting.error_message();
+      EXPECT_TRUE(editor.query().tool_status().cut_cap);
+      const std::vector<ModelingToolPreviewMesh> capped = service.tool_preview_meshes();
+      ASSERT_EQ(capped.size(), uncapped.size());
+      for (const ModelingToolPreviewMesh &mesh : capped) {
+        ASSERT_TRUE(mesh.mesh.authored_polygon_document);
+        const quader_poly::Document &document = *mesh.mesh.authored_polygon_document;
+        EXPECT_EQ(cut_boundary_edge_count(document), 0u);
+        EXPECT_EQ(cut_faces_on_plane_count(document, {0.0f, 0.0f, 1.0f}),
+                  shared_face_seam ? 0u : 1u);
+      }
+      ASSERT_TRUE(editor.tools().set_setting("cut", "operation.cut.cap", false).ok());
+      const std::vector<ModelingToolPreviewMesh> uncapped_again = service.tool_preview_meshes();
+      ASSERT_EQ(uncapped_again.size(), uncapped.size());
+      for (std::size_t index = 0; index < uncapped.size(); ++index) {
+        EXPECT_EQ(uncapped_again[index].mesh.geometry_content_id(),
+                  uncapped[index].mesh.geometry_content_id());
+      }
+      ASSERT_TRUE(editor.tools().set_setting("cut", "operation.cut.cap", true).ok());
+      source = session.assets().mesh(created.object.mesh);
+      ASSERT_NE(source, nullptr);
+      EXPECT_EQ(source->geometry_content_id(), source_content);
+      EXPECT_FALSE(session.history().can_undo());
+
+      const QuaderApiVoidResult committed =
+          editor.tools().commit_modeling_tool(ViewportToolId::Cut);
+      ASSERT_TRUE(committed.ok()) << committed.error_message();
+      EXPECT_TRUE(committed.changed());
+      EXPECT_TRUE(service.tool_preview_meshes().empty());
+      const auto scene_geometry = [&]() {
+        std::vector<std::uint64_t> content_ids;
+        for (const EntityId entity : session.scene().entities()) {
+          const MeshComponent *binding = session.scene().mesh(entity);
+          const MeshAsset *mesh = binding == nullptr ? nullptr
+              : session.assets().mesh(binding->mesh);
+          if (mesh != nullptr) content_ids.push_back(mesh->geometry_content_id().value);
+        }
+        std::sort(content_ids.begin(), content_ids.end());
+        return content_ids;
+      };
+      std::vector<std::uint64_t> preview_content;
+      for (const ModelingToolPreviewMesh &mesh : capped) {
+        preview_content.push_back(mesh.mesh.geometry_content_id().value);
+      }
+      std::sort(preview_content.begin(), preview_content.end());
+      EXPECT_EQ(scene_geometry(), preview_content);
+      ASSERT_TRUE(editor.history().undo().ok());
+      EXPECT_EQ(scene_geometry(), (std::vector<std::uint64_t>{source_content.value}));
+      EXPECT_FALSE(session.history().can_undo());
+      ASSERT_TRUE(editor.history().redo().ok());
+      EXPECT_EQ(scene_geometry(), preview_content);
+    }
+  }
+}
+
+TEST(ModelingSessionServiceTests,
+     CutFaceCapClosesNewPlaneRingAndPreservesPreexistingOffPlaneHole) {
+  SceneSession session;
+  QuaderEditorApi editor(
+      QuaderApiSessionInternalAccess::from_scene_session(session));
+  ModelingSessionService &service = session.modeling();
+  quader_poly::Document source =
+      quader_poly::make_cube(quader_poly::CubePrimitiveSpec{});
+  const auto removed_faces = std::erase_if(source.faces, [&](const quader_poly::Face &face) {
+    return std::ranges::all_of(face.vertices, [&](quader_poly::ElementId vertex_id) {
+      return quader_poly::find_vertex(source, vertex_id)->position.z > 0.9999f;
+    });
+  });
+  ASSERT_EQ(removed_faces, 1u);
+  ASSERT_EQ(cut_boundary_edge_count(source), 4u);
+  const ModelingCreateBoxResult created = service.create_mesh({
+      .document = source,
+      .name = "Cut Face With Existing Opening",
+  });
+  ASSERT_TRUE(created.ok) << created.message;
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
+  ModelingComponentSelectionRequest selection{
+      .modeling_object_id = created.object.modeling_object_id,
+      .mode = ModelingSelectionMode::Face,
+  };
+  for (const quader_poly::Face &face : source.faces) {
+    selection.faces.push_back(static_cast<int>(face.id));
+  }
+  ASSERT_TRUE(service.set_component_selection(selection).ok);
+  ASSERT_TRUE(service.set_cut_mode(ModelingCutMode::DiscardRight).ok);
+  ASSERT_TRUE(service.set_cut_cap(true).ok);
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::Cut).ok());
+  ASSERT_TRUE(service.click_cut(test_drawn_plane_event(0.0f)).ok);
+  const ModelingCommandResult updated =
+      service.update_cut_hover(test_drawn_plane_event(1.0f, true));
+  ASSERT_TRUE(updated.ok) << updated.message;
+  ASSERT_TRUE(service.end_cut_drag().ok);
+  const auto preview = service.tool_preview_meshes();
+  ASSERT_EQ(preview.size(), 1u);
+  ASSERT_TRUE(preview.front().mesh.authored_polygon_document);
+  const auto &document = *preview.front().mesh.authored_polygon_document;
+  EXPECT_EQ(cut_faces_on_plane_count(document, {0.0f, 0.0f, 1.0f}), 1u);
+  EXPECT_EQ(cut_faces_on_plane_count(document, {0.0f, 0.0f, 1.0f}, 1.0f), 0u);
+  EXPECT_EQ(cut_boundary_edge_count(document), 4u);
+  for (const quader_poly::Face &face : document.faces) {
+    for (const quader_poly::Edge edge :
+         quader_poly::face_perimeter_info(document, face.id).open_edges) {
+      const auto *a = quader_poly::find_vertex(document, edge.a);
+      const auto *b = quader_poly::find_vertex(document, edge.b);
+      ASSERT_NE(a, nullptr);
+      ASSERT_NE(b, nullptr);
+      EXPECT_FLOAT_EQ(a->position.z, 1.0f);
+      EXPECT_FLOAT_EQ(b->position.z, 1.0f);
+    }
+  }
+  const QuaderApiVoidResult committed =
+      editor.tools().commit_modeling_tool(ViewportToolId::Cut);
+  ASSERT_TRUE(committed.ok()) << committed.error_message();
+  const auto applied = service.compile_object_mesh(created.object.modeling_object_id);
+  ASSERT_TRUE(applied.has_value());
+  EXPECT_EQ(applied->geometry_content_id(), preview.front().mesh.geometry_content_id());
+}
+
+TEST(ModelingSessionServiceTests,
+     CutUncappedCubeAndExistingEdgeAlignedCubeCanBeCutAgain) {
+  for (const int depth_segments : {1, 2}) {
+    SCOPED_TRACE(depth_segments);
+    SceneSession session;
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session));
+    ModelingSessionService &service = session.modeling();
+    const ModelingCreateBoxResult created = service.create_mesh({
+        .document = quader_poly::make_cube(
+            quader_poly::CubePrimitiveSpec{.depth_segments = depth_segments}),
+        .name = "Repeated Uncapped Cut Source",
+    });
+    ASSERT_TRUE(created.ok) << created.message;
+    ASSERT_TRUE(service.set_cut_cap(false).ok);
+    ASSERT_TRUE(service.set_cut_mode(ModelingCutMode::DiscardRight).ok);
+    ASSERT_TRUE(editor.tools().activate(ViewportToolId::Cut).ok());
+    ASSERT_TRUE(service.click_cut(test_drawn_plane_event(0.0f)).ok);
+    const ModelingCommandResult first_update =
+        service.update_cut_hover(test_drawn_plane_event(1.0f, true));
+    ASSERT_TRUE(first_update.ok) << first_update.message;
+    ASSERT_TRUE(service.end_cut_drag().ok);
+    const auto first_preview = service.tool_preview_meshes();
+    ASSERT_EQ(first_preview.size(), 1u);
+    ASSERT_TRUE(first_preview.front().mesh.authored_polygon_document);
+    const auto &first_document = *first_preview.front().mesh.authored_polygon_document;
+    EXPECT_EQ(cut_boundary_edge_count(first_document), 4u);
+    EXPECT_EQ(cut_faces_on_plane_count(first_document, {0.0f, 0.0f, 1.0f}), 0u);
+    ASSERT_TRUE(editor.tools().commit_modeling_tool(ViewportToolId::Cut).ok());
+
+    ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Object).ok);
+    const std::array<EntityId, 1> selected = {created.object.entity};
+    ASSERT_TRUE(service.set_object_selection(selected, created.object.entity).ok);
+    ASSERT_TRUE(editor.tools().activate(ViewportToolId::Cut).ok());
+    ModelingToolRayEvent first_point = test_drawn_plane_event(0.0f);
+    first_point.ray.origin.z = 0.5f;
+    ModelingToolRayEvent second_point = first_point;
+    second_point.ray.origin.z = 1.0f;
+    second_point.dragging = true;
+    ASSERT_TRUE(service.click_cut(first_point).ok);
+    const ModelingCommandResult second_update = service.update_cut_hover(second_point);
+    ASSERT_TRUE(second_update.ok) << second_update.message;
+    ASSERT_TRUE(service.end_cut_drag().ok);
+    const auto second_preview = service.tool_preview_meshes();
+    ASSERT_EQ(second_preview.size(), 1u);
+    ASSERT_TRUE(second_preview.front().mesh.authored_polygon_document);
+    const auto &second_document = *second_preview.front().mesh.authored_polygon_document;
+    EXPECT_GT(cut_boundary_edge_count(second_document), 0u);
+    EXPECT_EQ(cut_faces_on_plane_count(second_document, {0.0f, 0.0f, 1.0f}), 0u);
+    EXPECT_EQ(cut_faces_on_plane_count(second_document, {1.0f, 0.0f, 0.0f}), 0u);
+    for (const quader_poly::Vertex &vertex : second_document.vertices) {
+      EXPECT_LE(vertex.position.x, 0.0001f);
+      EXPECT_GE(vertex.position.z, -0.0001f);
+    }
+    const QuaderApiVoidResult committed =
+        editor.tools().commit_modeling_tool(ViewportToolId::Cut);
+    ASSERT_TRUE(committed.ok()) << committed.error_message();
+    EXPECT_TRUE(committed.changed());
+    ASSERT_TRUE(editor.history().undo().ok());
+    const auto first_restored = service.compile_object_mesh(created.object.modeling_object_id);
+    ASSERT_TRUE(first_restored.has_value());
+    EXPECT_EQ(first_restored->geometry_content_id(), first_preview.front().mesh.geometry_content_id());
+    ASSERT_TRUE(editor.history().redo().ok());
+    const auto second_restored = service.compile_object_mesh(created.object.modeling_object_id);
+    ASSERT_TRUE(second_restored.has_value());
+    EXPECT_EQ(second_restored->geometry_content_id(), second_preview.front().mesh.geometry_content_id());
   }
 }
 
@@ -22875,6 +23174,7 @@ TEST(ModelingSessionServiceTests,
   });
   ASSERT_TRUE(created.ok) << created.message;
   ASSERT_TRUE(service.set_cut_mode(ModelingCutMode::DiscardLeft).ok);
+  ASSERT_TRUE(service.set_cut_cap(true).ok);
   ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(service.set_component_selection({
       .modeling_object_id = created.object.modeling_object_id,
@@ -22888,9 +23188,13 @@ TEST(ModelingSessionServiceTests,
   EXPECT_EQ(service.selection_mode(), ModelingSelectionMode::Edge);
   EXPECT_FALSE(service.tool_status().cut_keep_mode_enabled);
   EXPECT_EQ(service.tool_status().cut_mode, ModelingCutMode::KeepBoth);
+  EXPECT_FALSE(service.tool_status().cut_cap);
   EXPECT_FALSE(service.set_cut_mode(ModelingCutMode::DiscardRight).ok);
   EXPECT_FALSE(service.cycle_cut_mode().ok);
+  EXPECT_FALSE(service.set_cut_cap(false).ok);
+  EXPECT_FALSE(editor.tools().set_setting("cut", "operation.cut.cap", false).ok());
   EXPECT_EQ(service.interaction_settings().cut_mode, ModelingCutMode::DiscardLeft);
+  EXPECT_TRUE(service.interaction_settings().cut_cap);
   ASSERT_TRUE(service.click_cut(test_drawn_plane_event(0.0f)).ok);
   ASSERT_TRUE(service.update_cut_hover(test_drawn_plane_event(1.0f, true)).ok);
   ASSERT_TRUE(service.end_cut_drag().ok);
@@ -22926,6 +23230,7 @@ TEST(ModelingSessionServiceTests,
   EXPECT_EQ(service.selection_summary().selected_edge_count, 2u);
   EXPECT_EQ(session.scene().entities().size(), 1u);
   EXPECT_EQ(service.interaction_settings().cut_mode, ModelingCutMode::DiscardLeft);
+  EXPECT_TRUE(service.interaction_settings().cut_cap);
   const std::optional<MeshAsset> applied =
       service.compile_object_mesh(created.object.modeling_object_id);
   ASSERT_TRUE(applied.has_value());
@@ -22934,6 +23239,85 @@ TEST(ModelingSessionServiceTests,
   EXPECT_EQ(service.selection_summary().selected_edge_count, 1u);
   ASSERT_TRUE(editor.history().redo().ok());
   EXPECT_EQ(service.selection_summary().selected_edge_count, 2u);
+}
+
+TEST(ModelingSessionServiceTests,
+     CutActivationSuppressesSelectionDisplayWithoutChangingSelectionOrBounds) {
+  for (const ModelingSelectionMode mode : {ModelingSelectionMode::Object,
+                                           ModelingSelectionMode::Face,
+                                           ModelingSelectionMode::Edge}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    SceneSession session;
+    QuaderEditorApi editor(
+        QuaderApiSessionInternalAccess::from_scene_session(session));
+    ModelingSessionService &service = session.modeling();
+    const ModelingCreateBoxResult created = service.create_box_from_bounds({
+        .name = "Hidden Cut Selection Display",
+    });
+    ASSERT_TRUE(created.ok) << created.message;
+    if (mode != ModelingSelectionMode::Object) {
+      ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
+      ASSERT_TRUE(seed_component_bulk_selection_scope(
+          service, created.object.modeling_object_id, mode).ok);
+    }
+    const ViewportOverlayFrame before_frame = service.selection_overlay_frame();
+    ASSERT_FALSE(before_frame.lines.empty() && before_frame.triangles.empty() &&
+                 before_frame.points.empty());
+    const ModelingSelectionExport before = service.export_selection();
+    const auto before_scene_selection = session.scene().selected_entities();
+    const auto expect_unchanged_selection = [&]() {
+      const ModelingSelectionExport current = service.export_selection();
+      EXPECT_EQ(current.summary.mode, before.summary.mode);
+      EXPECT_EQ(current.summary.selected_object_count, before.summary.selected_object_count);
+      EXPECT_EQ(current.summary.selected_face_count, before.summary.selected_face_count);
+      EXPECT_EQ(current.summary.selected_edge_count, before.summary.selected_edge_count);
+      EXPECT_EQ(session.scene().selected_entities(), before_scene_selection);
+      ASSERT_EQ(current.objects.size(), before.objects.size());
+      for (std::size_t index = 0; index < current.objects.size(); ++index) {
+        const auto &actual = current.objects[index];
+        const auto &expected = before.objects[index];
+        EXPECT_EQ(actual.modeling_object_id, expected.modeling_object_id);
+        EXPECT_EQ(actual.selected, expected.selected);
+        EXPECT_EQ(actual.selection.mode, expected.selection.mode);
+        EXPECT_EQ(actual.selection.vertices, expected.selection.vertices);
+        EXPECT_EQ(actual.selection.edges, expected.selection.edges);
+        EXPECT_EQ(actual.selection.faces, expected.selection.faces);
+        EXPECT_EQ(actual.selection.has_active, expected.selection.has_active);
+        EXPECT_EQ(actual.selection.active_kind, expected.selection.active_kind);
+        EXPECT_EQ(actual.selection.active_vertex, expected.selection.active_vertex);
+        EXPECT_EQ(actual.selection.active_edge, expected.selection.active_edge);
+        EXPECT_EQ(actual.selection.active_face, expected.selection.active_face);
+      }
+    };
+    const auto before_bounds = service.selection_bounds();
+    ASSERT_TRUE(before_bounds.has_value());
+    const std::uint64_t selection_signature = service.selection_overlay_signature();
+    const QuaderApiVoidResult activated = editor.tools().activate(ViewportToolId::Cut);
+    ASSERT_TRUE(activated.ok()) << activated.error_message();
+    EXPECT_NE(service.selection_overlay_signature(), selection_signature);
+    expect_unchanged_selection();
+    const ViewportOverlayFrame after_frame = service.selection_overlay_frame();
+    EXPECT_TRUE(after_frame.lines.empty());
+    EXPECT_TRUE(after_frame.triangles.empty());
+    EXPECT_TRUE(after_frame.points.empty());
+    const auto hidden_bounds = service.selection_bounds();
+    ASSERT_TRUE(hidden_bounds.has_value());
+    expect_vec3_near(hidden_bounds->min, before_bounds->min);
+    expect_vec3_near(hidden_bounds->max, before_bounds->max);
+    const ModelingCommandResult hover = service.update_cut_hover(test_drawn_plane_event(0.0f));
+    ASSERT_TRUE(hover.ok) << hover.message;
+    const ViewportOverlayFrame hovered_selection = service.selection_overlay_frame();
+    EXPECT_TRUE(hovered_selection.lines.empty());
+    EXPECT_TRUE(hovered_selection.triangles.empty());
+    EXPECT_TRUE(hovered_selection.points.empty());
+    expect_unchanged_selection();
+    ASSERT_TRUE(service.cancel_active_modal_tool().ok);
+    expect_unchanged_selection();
+    const ViewportOverlayFrame restored_frame = service.selection_overlay_frame();
+    EXPECT_EQ(restored_frame.lines.size(), before_frame.lines.size());
+    EXPECT_EQ(restored_frame.triangles.size(), before_frame.triangles.size());
+    EXPECT_EQ(restored_frame.points.size(), before_frame.points.size());
+  }
 }
 
 TEST(ModelingSessionServiceTests,

@@ -86,6 +86,6 @@ quader_poly::Ray ray_from_viewport_screen_point(const ViewportCameraState& camer
 quader::QVec3 cut_grid_plane_normal_for_camera(const ViewportCameraState& camera);
 CutGridPointResult viewport_grid_point_from_ray(const ViewportCameraState& camera, quader_poly::Ray ray, double grid_size, bool snap_enabled);
 CutGridPointResult cut_grid_point_from_ray(const ViewportCameraState& camera, quader_poly::Ray ray, double grid_size);
-CutGridPointResult cut_support_plane_point_from_ray(quader_poly::Ray ray, quader::QVec3 plane_origin, quader::QVec3 plane_normal, double grid_size);
+CutGridPointResult cut_support_plane_point_from_ray(quader_poly::Ray ray, quader::QVec3 plane_origin, quader::QVec3 plane_normal, double grid_size, bool snap_enabled = true);
 
 } // namespace quader_editor_core

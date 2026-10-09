@@ -116,6 +116,8 @@ struct CutRayRuntimeCommandSettings {
 	bool dragging = false;
 	std::optional<PickHitRecord> resolved_surface_hit;
 	bool surface_hit_resolved = false;
+	bool snap_enabled = false;
+	bool constrain_axis = false;
 };
 
 /**

@@ -6182,9 +6182,22 @@ TEST(QtToolSettingsPanelTests,
         "tool_settings.control.operation.cut.keep_mode.option.discard_left"));
     auto *keep_both = panel.findChild<QRadioButton *>(QStringLiteral(
         "tool_settings.control.operation.cut.keep_mode.option.keep_both"));
+    auto *cap = panel.findChild<QCheckBox *>(QStringLiteral(
+        "tool_settings.control.operation.cut.cap"));
     ASSERT_NE(discard_left, nullptr);
     ASSERT_NE(keep_both, nullptr);
+    ASSERT_NE(cap, nullptr);
+    EXPECT_FALSE(cap->isChecked());
+    EXPECT_FALSE(editor.query().tool_status().cut_cap);
     if (mode != quader::QuaderSelectionMode::Edge) {
+      cap->click();
+      process_events_for(20);
+      panel.refresh();
+      EXPECT_TRUE(editor.query().tool_status().cut_cap);
+      cap->click();
+      process_events_for(20);
+      panel.refresh();
+      EXPECT_FALSE(editor.query().tool_status().cut_cap);
       discard_left->click();
       process_events_for(20);
       panel.refresh();
@@ -6197,8 +6210,10 @@ TEST(QtToolSettingsPanelTests,
     } else {
       const auto before = editor.tools().active_settings().controls.front().choice_value;
       discard_left->click();
+      cap->click();
       panel.refresh();
       EXPECT_EQ(editor.tools().active_settings().controls.front().choice_value, before);
+      EXPECT_FALSE(editor.query().tool_status().cut_cap);
     }
     for (const char *locale : {"en-US", "it-IT"}) {
       ASSERT_TRUE(localization.select_locale(locale));
@@ -6234,6 +6249,15 @@ TEST(QtToolSettingsPanelTests,
             EXPECT_TRUE(panel.rect().contains(
                 QRect(radio->mapTo(&panel, QPoint{}), radio->size())));
           }
+          auto *cap_toggle = panel.findChild<QCheckBox *>(QStringLiteral(
+              "tool_settings.control.operation.cut.cap"));
+          ASSERT_NE(cap_toggle, nullptr);
+          EXPECT_TRUE(cap_toggle->isVisible());
+          EXPECT_FALSE(cap_toggle->isChecked());
+          EXPECT_EQ(cap_toggle->isEnabled(), mode != quader::QuaderSelectionMode::Edge);
+          EXPECT_GE(cap_toggle->height(), cap_toggle->minimumSizeHint().height());
+          EXPECT_TRUE(panel.rect().contains(
+              QRect(cap_toggle->mapTo(&panel, QPoint{}), cap_toggle->size())));
           if (!directory.isEmpty()) {
             QImage image(panel.size(), QImage::Format_ARGB32_Premultiplied);
             image.fill(Qt::transparent);

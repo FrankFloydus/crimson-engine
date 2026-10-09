@@ -8,9 +8,13 @@
 
 #include <quader/modeling/neutral/geometry/bvh.hpp>
 #include <quader/modeling/neutral/geometry/geometry.hpp>
+#include <quader/modeling/neutral/geometry/polygon_triangulation.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
+#include <map>
 #include <vector>
 
 namespace {
@@ -996,6 +1000,88 @@ TEST(QdrGeometryTests, LineLineClosestPointsAreStable) {
 
 TEST(QdrGeometryTests, ProjectedPolygonTriangulationIsStable) {
 	projected_polygon_triangulation_is_stable();
+}
+
+TEST(QdrGeometryTests, RingTriangulationKeepsHolesAndEveryCollinearBoundaryCorner) {
+    const std::vector<std::vector<quader_geometry::QVec2d>> rings{
+        {{-3.0, -3.0}, {0.0, -3.0}, {3.0, -3.0}, {3.0, 3.0}, {-3.0, 3.0}},
+        {{-2.0, -1.0}, {-2.0, 1.0}, {-1.0, 1.0}, {-1.0, -1.0}},
+        {{1.0, -1.0}, {1.0, 1.0}, {2.0, 1.0}, {2.0, -1.0}}};
+    const auto triangles = quader_geometry::triangulate_projected_polygon_rings(rings);
+    ASSERT_FALSE(triangles.empty());
+    std::vector<quader_geometry::QVec2d> points;
+    std::map<std::pair<std::size_t, std::size_t>, unsigned> edge_counts;
+    for (const auto& ring : rings) {
+        points.insert(points.end(), ring.begin(), ring.end());
+    }
+    double area = 0.0;
+    for (const auto triangle : triangles) {
+        for (std::size_t index = 0; index < 3U; ++index) {
+            const std::size_t first = triangle[index];
+            const std::size_t second = triangle[(index + 1U) % 3U];
+            ASSERT_LT(first, points.size());
+            ++edge_counts[{std::min(first, second), std::max(first, second)}];
+        }
+        area += triangle_area_abs(points, triangle);
+        const auto center = (points[triangle[0]] + points[triangle[1]] + points[triangle[2]]) * (1.0 / 3.0);
+        for (std::size_t hole = 1U; hole < rings.size(); ++hole) {
+            EXPECT_FALSE(quader_geometry::point_in_or_on_polygon_2d<double>(center, rings[hole]));
+        }
+    }
+    EXPECT_NEAR(area, 32.0, 0.000001);
+    std::size_t offset = 0U;
+    for (const auto& ring : rings) {
+        for (std::size_t index = 0; index < ring.size(); ++index) {
+            const auto first = offset + index;
+            const auto second = offset + (index + 1U) % ring.size();
+            const auto edge = std::pair{std::min(first, second), std::max(first, second)};
+            ASSERT_TRUE(edge_counts.contains(edge));
+            EXPECT_EQ(edge_counts.at(edge), 1U);
+            edge_counts.erase(edge);
+        }
+        offset += ring.size();
+    }
+    for (const auto& [edge, count] : edge_counts) {
+        (void)edge;
+        EXPECT_EQ(count, 2U);
+    }
+}
+
+TEST(QdrGeometryTests, RingTriangulationRejectsMalformedAndNestedHoleInputs) {
+    const std::vector<quader_geometry::QVec2d> outer{
+        {-3.0, -3.0}, {3.0, -3.0}, {3.0, 3.0}, {-3.0, 3.0}};
+    const std::vector<std::vector<quader_geometry::QVec2d>> bad_holes{
+        {{2.0, -1.0}, {4.0, -1.0}, {4.0, 1.0}, {2.0, 1.0}},
+        {{-1.0, -1.0}, {1.0, 1.0}, {-1.0, 1.0}, {1.0, -1.0}},
+        {{-1.0, -1.0}, {-1.0, -1.0}, {1.0, 1.0}},
+        {{-1.0, -1.0}, {1.0, -1.0}, {std::numeric_limits<double>::infinity(), 1.0}}};
+    for (const auto& hole : bad_holes) {
+        const std::vector rings{outer, hole};
+        EXPECT_TRUE(quader_geometry::triangulate_projected_polygon_rings(rings).empty());
+    }
+    const std::vector<std::vector<quader_geometry::QVec2d>> nested{
+        outer, {{-2.0, -2.0}, {2.0, -2.0}, {2.0, 2.0}, {-2.0, 2.0}},
+        {{-1.0, -1.0}, {1.0, -1.0}, {1.0, 1.0}, {-1.0, 1.0}}};
+    EXPECT_TRUE(quader_geometry::triangulate_projected_polygon_rings(nested).empty());
+}
+
+TEST(QdrGeometryTests, RingTriangulationAcceptsCloselySpacedCornersOnLongBoundaryEdges) {
+    const std::vector<std::vector<quader_geometry::QVec2d>> rings{
+        {{0.0, 0.0}, {1000.0, 0.0}, {1000.0005, 0.0}, {2000.0, 0.0},
+         {2000.0, 100.0}, {0.0, 100.0}}};
+    const auto triangles = quader_geometry::triangulate_projected_polygon_rings(rings);
+    ASSERT_FALSE(triangles.empty());
+    std::array<bool, 6> used{};
+    double area = 0.0;
+    for (const auto triangle : triangles) {
+        area += triangle_area_abs(rings.front(), triangle);
+        for (const auto index : triangle) {
+            ASSERT_LT(index, used.size());
+            used[index] = true;
+        }
+    }
+    EXPECT_TRUE(std::ranges::all_of(used, [](bool value) { return value; }));
+    EXPECT_NEAR(area, 200000.0, 0.0001);
 }
 
 TEST(QdrGeometryTests, RayTriangleContactToleranceClampsSmallNegativeDistance) {

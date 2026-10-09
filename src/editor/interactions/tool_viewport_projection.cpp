@@ -237,7 +237,7 @@ CutGridPointResult cut_grid_point_from_ray(const ViewportCameraState& camera, qu
 
 CutGridPointResult cut_support_plane_point_from_ray(
     quader_poly::Ray ray, quader::QVec3 plane_origin,
-    quader::QVec3 plane_normal, double grid_size)
+    quader::QVec3 plane_normal, double grid_size, bool snap_enabled)
 {
   if (vec3_is_tiny(ray.direction) || vec3_is_tiny(plane_normal)) {
     return {false, "Invalid cut ray or support plane."};
@@ -246,13 +246,20 @@ CutGridPointResult cut_support_plane_point_from_ray(
   const auto plane = to_geometry_plane(plane_origin, plane_normal);
   const auto hit = quader_geometry::intersect_line_plane(
       to_geometry_line(ray), plane, kToolEpsilon);
-  const quader::QVec3 point =
-      hit.type == quader_geometry::QPlaneIntersectionType::Point
-      ? to_poly_vec3(hit.point)
-      : project_poly_point_to_plane(ray.origin, plane);
-  // World-grid quantization must not move a point off its retained surface.
-  const quader::QVec3 snapped = snap_knife_point_to_grid(point, grid_size, true);
-  return {true, {}, project_poly_point_to_plane(snapped, plane), plane_normal};
+  if (hit.type != quader_geometry::QPlaneIntersectionType::Point) {
+    return {false, "Cut ray is parallel to its support plane."};
+  }
+  const quader::QVec3 point = to_poly_vec3(hit.point);
+  if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
+      !std::isfinite(point.z) ||
+      vec3_dot(point - ray.origin, ray.direction) < 0.0) {
+    return {false, "Cut support plane is outside the viewport ray."};
+  }
+  const auto snapped = snap_point_to_plane_grid(
+      point, plane_origin, plane_normal, grid_size, snap_enabled);
+  return snapped.has_value()
+      ? CutGridPointResult{true, {}, *snapped, plane_normal}
+      : CutGridPointResult{false, "Invalid Cut support plane."};
 }
 } // namespace quader_editor_core
 

@@ -61,9 +61,16 @@ Cut captures its Object, Face or Edge targets before plane placement. Its first 
 sets the support plane used by subsequent endpoint and line drags. The SDK projection adapter
 prepares candidates from committed documents and retains the accepted result for surfaces,
 picking and commit. Candidate revisions also invalidate selection topology and depth geometry.
-Face scope clips only captured regions without caps; Edge scope inserts intersection vertices
-without splitting face interiors or applying discard settings. Cancellation retires the candidate
-and restores the captured face highlights without changing selection. See the
+Face scope clips only captured regions; Edge scope inserts intersection vertices without
+splitting face interiors or applying discard settings. Cap is off by default and closes only
+complete newly exposed planar loops when enabled; open chains and unrelated existing holes
+remain open. Nested rings preserve holes through cap triangulation, while disconnected shells
+retain separate caps; branching boundaries reject atomically. Cut hides ordinary selection overlays
+and dimensions from activation without
+changing selection. Accepted candidates show white retained edges, an orange cut contour and
+red discarded edges. Cancellation retires that presentation and restores selection overlays.
+Dragging is continuous unless Ctrl enables grid snapping; Shift straightens within the retained
+support plane. See the
 [scoped operation tests](../../../../tests/modeling_domain/operation/qdr_document_operation_plane_cut_tests.cpp)
 and [retained submission tests](../../../../tests/tool_preview_submission_tests.cpp).
 

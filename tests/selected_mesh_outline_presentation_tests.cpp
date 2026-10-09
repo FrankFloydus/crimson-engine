@@ -22,6 +22,7 @@
 #include "render/overlay/selected_mesh_outline_cache.hpp"
 #include "render/scene_render_bridge.hpp"
 #include "render/scene_render_extraction.hpp"
+#include "render/viewport_overlay_policy.hpp"
 #include "scene/scene_document.hpp"
 #include "ui/qt_command_event_filter.hpp"
 #include "ui/qt_double_spin_box.hpp"
@@ -257,9 +258,14 @@ public:
     ++submissions;
   }
   void submit_dynamic_overlay(std::size_t, std::uint8_t,
-      ViewportOverlayFrame, ViewportOverlayCamera) override {}
+      ViewportOverlayFrame frame, ViewportOverlayCamera) override {
+    dynamic = std::move(frame);
+    ++dynamic_submissions;
+  }
   ViewportOverlayFrame persistent;
+  ViewportOverlayFrame dynamic;
   std::uint64_t submissions = 0u;
+  std::uint64_t dynamic_submissions = 0u;
 };
 
 /// Exercises Face-mode source wires and selected-cap edges with durable assets
@@ -2225,6 +2231,7 @@ struct CuttingToolOutlineHarness {
 
   ViewportOverlaySubmissionResult submit() {
     auto &modeling = session.modeling();
+    const auto volatile_snapshot = modeling.volatile_overlay_snapshot();
     return coordinator.submit({
         .viewport_index = 0u,
         .layer_mask = 1u,
@@ -2238,9 +2245,16 @@ struct CuttingToolOutlineHarness {
             .selection_context = ViewportOverlaySelectionContext::Edge,
         },
         .selection_frame_provider = &provider,
+        .volatile_modeling_overlay_frame = volatile_snapshot.frame.get(),
+        .volatile_modeling_source = {
+            .source_identity = volatile_snapshot.source.source_identity,
+            .publication_revision = volatile_snapshot.source.publication_revision,
+        },
         .scene_selection_mode = RenderOverlaySelectionMode::Component,
         .style_selection_context = ViewportOverlaySelectionContext::Edge,
         .overlays_visible = true,
+        .selection_overlays_visible =
+            modeling.active_viewport_tool() != ModelingViewportTool::Cut,
     }, settings, target);
   }
 
@@ -2282,7 +2296,7 @@ struct CuttingToolOutlineHarness {
 };
 
 TEST(SelectedMeshOutlinePresentationTests,
-     CutFaceCandidateRefreshesSubmittedTopologyAndRestoresSelectedFaces) {
+     CutFacePreviewHidesSelectionAndRefreshesToolContoursBeforeRestoringSelection) {
   CuttingToolOutlineHarness harness;
   const auto source = harness.add_strip(0.0f);
   auto &editor = harness.editor;
@@ -2315,9 +2329,14 @@ TEST(SelectedMeshOutlinePresentationTests,
   };
   const auto baseline_fills = face_fill_count();
   ASSERT_GT(baseline_fills, 0);
+  const auto provider_builds = harness.provider.builds;
   ASSERT_TRUE(editor.tools().activate(ViewportToolId::Cut).ok());
   (void)harness.submit();
   EXPECT_EQ(face_fill_count(), 0);
+  EXPECT_TRUE(harness.target.persistent.lines.empty());
+  EXPECT_TRUE(harness.target.persistent.triangles.empty());
+  EXPECT_TRUE(harness.target.persistent.points.empty());
+  EXPECT_EQ(harness.provider.builds, provider_builds);
   EXPECT_EQ(editor.selection().summary().selected_face_count, selected_faces);
 
   ASSERT_TRUE(modeling.click_cut(cut_event(0.5f, 0.25f)).ok);
@@ -2337,10 +2356,12 @@ TEST(SelectedMeshOutlinePresentationTests,
     }
     (void)harness.submit();
     const auto has_seam = [&](float x) {
-      return std::ranges::any_of(harness.target.persistent.lines,
+      return std::ranges::any_of(harness.target.dynamic.lines,
           [&](const ViewportOverlayLine &line) {
-            return line.layer == ViewportOverlayLayer::SourceWire &&
-                line.element.object_id == source.modeling_object_id &&
+            return line.layer == ViewportOverlayLayer::ToolPreviewSeam &&
+                line.style_role == ViewportOverlayStyleRole::CutPreviewSeam &&
+                line.color == kOverlayCutPreviewSeamColor &&
+                line.source == ViewportOverlaySource::Tool &&
                 std::abs(line.start.x - x) < 0.0001f &&
                 std::abs(line.end.x - x) < 0.0001f &&
                 std::abs(line.start.y - line.end.y) > 0.9f;
@@ -2351,9 +2372,25 @@ TEST(SelectedMeshOutlinePresentationTests,
     EXPECT_EQ(face_fill_count(), 0);
     EXPECT_EQ(modeling.content_revision(), content_revision);
     EXPECT_EQ(harness.session.assets().revision(), asset_revision);
-    EXPECT_NE(harness.depths(source.modeling_object_id), baseline_depths);
+    EXPECT_TRUE(harness.depths(source.modeling_object_id).empty());
+    EXPECT_TRUE(harness.wires(source.modeling_object_id).empty());
+    EXPECT_TRUE(std::ranges::any_of(harness.target.dynamic.lines,
+        [](const auto &line) {
+          return line.source == ViewportOverlaySource::Tool &&
+              line.color == kOverlayCutPreviewKeptWireColor;
+        }));
+    EXPECT_FALSE(std::ranges::any_of(harness.target.dynamic.lines,
+        [](const auto &line) {
+          return line.style_role == ViewportOverlayStyleRole::CutPreviewDiscardOutline;
+        }));
     ASSERT_TRUE(modeling.set_cut_mode(ModelingCutMode::DiscardLeft).ok);
     (void)harness.submit();
+    EXPECT_TRUE(has_seam(plane_x));
+    EXPECT_TRUE(std::ranges::any_of(harness.target.dynamic.lines,
+        [](const auto &line) {
+          return line.style_role == ViewportOverlayStyleRole::CutPreviewDiscardOutline &&
+              line.color == kOverlayCutPreviewDiscardOutlineColor;
+        }));
     const auto kept_bounds = modeling.selection_bounds();
     ASSERT_TRUE(kept_bounds.has_value());
     EXPECT_NEAR(kept_bounds->min.x, selected_bounds->min.x, 0.0001f);
@@ -2364,9 +2401,15 @@ TEST(SelectedMeshOutlinePresentationTests,
     (void)harness.submit();
     const auto builds = harness.provider.builds;
     const auto submissions = harness.target.submissions;
+    const auto dynamic_submissions = harness.target.dynamic_submissions;
+    const auto compile_count =
+        modeling.modeling_sdk_projection_stats_for_tests().mesh_compile_count;
     for (int frame = 0; frame < 8; ++frame) (void)harness.submit();
     EXPECT_EQ(harness.provider.builds, builds);
     EXPECT_EQ(harness.target.submissions, submissions);
+    EXPECT_EQ(harness.target.dynamic_submissions, dynamic_submissions);
+    EXPECT_EQ(modeling.modeling_sdk_projection_stats_for_tests().mesh_compile_count,
+              compile_count);
     previous_x = plane_x;
   }
   ASSERT_TRUE(editor.tools().cancel_modal_tool().ok());

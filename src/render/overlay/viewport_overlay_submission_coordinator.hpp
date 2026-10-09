@@ -241,6 +241,8 @@ struct ViewportOverlaySubmissionRequest final {
   ViewportOverlaySelectionContext style_selection_context =
       ViewportOverlaySelectionContext::Any;
   bool overlays_visible = false;
+  /// Tool-owned presentation may hide selection without changing selection truth.
+  bool selection_overlays_visible = true;
   bool scene_overlay_requested = false;
   bool wireframe_pane = false;
   bool point_light_gizmos_visible = false;

@@ -5729,6 +5729,89 @@ TEST(ModelingSdkConsumerTests, ModelingApiPlaneCutKeepsBothHalves) {
 }
 
 TEST(ModelingSdkConsumerTests,
+     PlaneCutCapOptionClosesSelectedFaceLoopsAndKeepsOpenMeshesCuttable) {
+  auto source = PolygonDocument::make_box({}).or_throw();
+  ASSERT_TRUE(source.select_all_faces().ok());
+  const auto source_identity = source.content_identity();
+  PlaneSplitSpec plane{
+      .a = {0.0F, -2.0F, -2.0F}, .b = {0.0F, 2.0F, -2.0F},
+      .c = {0.0F, -2.0F, 2.0F}, .cap = false};
+  for (const bool cap : {false, true}) {
+    plane.cap = cap;
+    auto selected = source;
+    const auto cut = selected.cut_selected_faces_by_plane(plane, CutKeepMode::DiscardRight);
+    ASSERT_TRUE(cut.ok()) << cut.error_message();
+    ASSERT_TRUE(cut.value().changed);
+    EXPECT_EQ(selected.face_ids().size(), cap ? 6U : 5U);
+    EXPECT_EQ(authored_open_edge_count(selected.authored_payload().or_throw()), cap ? 0U : 4U);
+    EXPECT_EQ(cut.value().affected.edges.size(), 4U);
+    EXPECT_EQ(selected.selection().kind, SelectionKind::Face);
+    auto split = source.split_by_plane(plane);
+    ASSERT_TRUE(split.ok()) << split.error_message();
+    EXPECT_EQ(split.value().front.face_ids().size(), cap ? 6U : 5U);
+    EXPECT_EQ(split.value().back.face_ids().size(), cap ? 6U : 5U);
+    EXPECT_EQ(split.value().receipt.affected.edges.size(), 4U);
+    EXPECT_EQ(source.content_identity(), source_identity);
+  }
+  plane.cap = false;
+  auto first = source.split_by_plane(plane).or_throw();
+  plane.a.x = plane.b.x = plane.c.x = 0.5F;
+  plane.cap = true;
+  const auto repeated = first.front.split_by_plane(plane);
+  ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+  EXPECT_EQ(authored_open_edge_count(repeated.value().front.authored_payload().or_throw()), 0U);
+  EXPECT_EQ(authored_open_edge_count(repeated.value().back.authored_payload().or_throw()), 4U);
+}
+
+TEST(ModelingSdkConsumerTests,
+     TorusPlaneCutCapsCloseBothScopesWithoutFillingTheCenterHole) {
+  const auto material = make_id<MaterialTag>(31U);
+  auto source = PolygonDocument::make_torus({.material = material}).or_throw();
+  ASSERT_TRUE(source.select_all_faces().ok());
+  const auto identity = source.content_identity();
+  const auto source_payload = source.authored_payload().or_throw();
+  const auto source_faces = source.face_ids();
+  const PlaneSplitSpec plane{
+      .a = {-4.0F, 0.0F, 0.0F}, .b = {4.0F, 0.0F, 0.0F},
+      .c = {0.0F, 0.0F, 1.0F}, .cap = true};
+  const auto split = source.split_by_plane(plane);
+  ASSERT_TRUE(split.ok()) << split.error_message();
+  auto selected = source;
+  const auto cut = selected.cut_selected_faces_by_plane(plane, CutKeepMode::DiscardRight);
+  ASSERT_TRUE(cut.ok()) << cut.error_message();
+  EXPECT_EQ(cut.value().affected.edges.size(), 64U);
+  EXPECT_EQ(split.value().receipt.affected.edges.size(), 64U);
+  EXPECT_EQ(source.content_identity(), identity);
+  const double expected_area = 16.0 * std::sin(2.0 * std::acos(-1.0) / 32.0) * 0.64;
+  for (const auto* document : std::array<const PolygonDocument*, 3>{
+           &split.value().front, &split.value().back, &selected}) {
+    const auto payload = document->authored_payload().or_throw();
+    EXPECT_EQ(authored_open_edge_count(payload), 0U);
+    double cap_area = 0.0;
+    for (const auto& face : payload.faces) {
+      EXPECT_EQ(face.material, material);
+      if (std::ranges::find(source_faces, face.id) != source_faces.end()) {
+        continue;
+      }
+      ASSERT_EQ(face.vertices.size(), 3U);
+      const auto a = authored_position(payload, face.vertices[0]).value();
+      const auto b = authored_position(payload, face.vertices[1]).value();
+      const auto c = authored_position(payload, face.vertices[2]).value();
+      cap_area += std::abs((b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x)) * 0.5;
+      const float center_x = (a.x + b.x + c.x) / 3.0F;
+      const float center_z = (a.z + b.z + c.z) / 3.0F;
+      EXPECT_GT(center_x * center_x + center_z * center_z, 0.35F);
+      for (const auto vertex : face.vertices) {
+        const auto original = authored_position(source_payload, vertex);
+        ASSERT_TRUE(original.has_value());
+        EXPECT_NEAR(original->y, 0.0F, 0.0001F);
+      }
+    }
+    EXPECT_NEAR(cap_area, expected_area, 0.0001);
+  }
+}
+
+TEST(ModelingSdkConsumerTests,
      ModelingApiCombinesMeshObjectsIntoTheHandleSurvivor) {
   ModelingApi quader = ModelingApi::create();
   MeshHandle first = quader.create_box({.name = "First"});

@@ -527,6 +527,7 @@ public:
   ModelingCommandResult begin_cut_line_drag(const ModelingToolRayEvent &event);
   ModelingCommandResult end_cut_drag();
   ModelingCommandResult set_cut_mode(ModelingCutMode mode);
+  ModelingCommandResult set_cut_cap(bool enabled);
   ModelingCommandResult cycle_cut_mode();
   [[nodiscard]] bool cut_keep_mode_enabled() const;
   ModelingCommandResult finalize_cut_tool();

@@ -7,6 +7,7 @@
 #include "operation_validation_test_helpers.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <map>
@@ -233,6 +234,31 @@ Document two_cube_document()
 	first.next_vertex_id = 2000;
 	first.next_face_id = 2000;
 	return first;
+}
+
+Document concave_prism_document()
+{
+    const std::vector<QVec3> outline{
+        {-3.0F, -3.0F, 0.0F}, {3.0F, -3.0F, 0.0F},
+        {3.0F, 3.0F, 0.0F}, {1.0F, 3.0F, 0.0F},
+        {1.0F, -1.0F, 0.0F}, {-1.0F, -1.0F, 0.0F},
+        {-1.0F, 3.0F, 0.0F}, {-3.0F, 3.0F, 0.0F}};
+    Document document;
+    std::vector<ElementId> bottom;
+    std::vector<ElementId> top;
+    for (const auto point : outline) {
+        bottom.push_back(quader_poly::add_vertex(document, {point.x, point.y, -1.0F}));
+        top.push_back(quader_poly::add_vertex(document, {point.x, point.y, 1.0F}));
+    }
+    const std::vector<ElementId> bottom_reversed(bottom.rbegin(), bottom.rend());
+    (void)quader_poly::add_face(document, bottom_reversed);
+    (void)quader_poly::add_face(document, top);
+    for (std::size_t index = 0; index < outline.size(); ++index) {
+        const auto next = (index + 1U) % outline.size();
+        const std::array<ElementId, 4> loop{bottom[index], bottom[next], top[next], top[index]};
+        (void)quader_poly::add_face(document, loop);
+    }
+    return document;
 }
 
 std::vector<ElementId> center_x_crossing_faces(const Document& document)
@@ -501,7 +527,7 @@ TEST(QdrDocumentOperationPlaneCutTests,
 }
 
 TEST(QdrDocumentOperationPlaneCutTests,
-     SelectedFaceCutRejectsMultipleIntersectionIntervalsAtomically) {
+     SelectedFaceCutPartitionsMultipleIntervalsWithoutCrossingConcaveGaps) {
     Document document;
     const std::vector<QVec3> positions{
         {-3.0F, -3.0F, 0.0F}, {3.0F, -3.0F, 0.0F},
@@ -516,6 +542,7 @@ TEST(QdrDocumentOperationPlaneCutTests,
         face.vertices.push_back(id);
     }
     document.faces.push_back(face);
+    author_distinct_face_charts(document);
     const auto source = document;
     quader_poly::Selection selection;
     selection.mode = quader_poly::SelectionMode::Face;
@@ -523,13 +550,34 @@ TEST(QdrDocumentOperationPlaneCutTests,
     const auto result = quader_poly::plane_cut_selected_faces(
         document, selection,
         {{-4.0F, 0.0F, 0.0F}, {4.0F, 0.0F, 0.0F}, {0.0F, 0.0F, 1.0F}});
-    EXPECT_FALSE(result.success);
-    EXPECT_FALSE(result.changed);
-    EXPECT_EQ(document.next_vertex_id, source.next_vertex_id);
-    EXPECT_EQ(document.next_face_id, source.next_face_id);
-    EXPECT_EQ(document.faces.front().vertices, source.faces.front().vertices);
-    EXPECT_EQ(document.vertices.size(), source.vertices.size());
-    EXPECT_EQ(selection.faces, std::vector<ElementId>{face.id});
+    ASSERT_TRUE(result.success) << result.message;
+    ASSERT_TRUE(result.changed);
+    qdr_test::expect_valid_polygon_document_after_success(document, result);
+    EXPECT_EQ(document.faces.size(), 3U);
+    EXPECT_EQ(document.vertices.size(), source.vertices.size() + 4U);
+    EXPECT_EQ(selection.faces.size(), 3U);
+    ASSERT_EQ(result.affected.edges.size(), 2U);
+    double total_area = 0.0;
+    for (const auto& output : document.faces) {
+        expect_preserved_face_chart(document, output, source.faces.front());
+        double twice_area = 0.0;
+        for (std::size_t index = 0; index < output.vertices.size(); ++index) {
+            const auto a = quader_poly::find_vertex(document, output.vertices[index])->position;
+            const auto b = quader_poly::find_vertex(
+                document, output.vertices[(index + 1U) % output.vertices.size()])->position;
+            twice_area += static_cast<double>(a.x) * b.y - static_cast<double>(a.y) * b.x;
+        }
+        total_area += std::abs(twice_area) * 0.5;
+    }
+    EXPECT_NEAR(total_area, 28.0, 0.0001);
+    for (const auto edge : result.affected.edges) {
+        const auto first = quader_poly::find_vertex(document, edge.a)->position;
+        const auto second = quader_poly::find_vertex(document, edge.b)->position;
+        EXPECT_NEAR(first.y, 0.0F, 0.0001F);
+        EXPECT_NEAR(second.y, 0.0F, 0.0001F);
+        EXPECT_TRUE((first.x <= -1.0F && second.x <= -1.0F) ||
+                    (first.x >= 1.0F && second.x >= 1.0F));
+    }
 }
 
 TEST(QdrDocumentOperationPlaneCutTests,
@@ -791,22 +839,41 @@ TEST(QdrDocumentOperationPlaneCutTests, PlaneCutSupportsMultipleSimpleCapLoopsIn
 	check_closed_manifold(result.back_document);
 }
 
-TEST(QdrDocumentOperationPlaneCutTests, PlaneCutRejectsInvalidInputsAndUnsupportedMeshesOpenMesh) {
-	{
-		Document plane = qdr_test::make_quad_document().document;
-                const PlaneCutResult result = quader_poly::plane_cut(
-                    plane, center_x_cut(PlaneCutMode::KeepBoth));
-                EXPECT_FALSE(result.changed);
-		EXPECT_TRUE(result.message.find("closed manifold") != std::string::npos);
-	}
+TEST(QdrDocumentOperationPlaneCutTests, PlaneCutAcceptsOpenSurfacesAndLeavesCapChainsOpen) {
+    for (const bool cap : {false, true}) {
+        Document plane = qdr_test::make_quad_document().document;
+        author_distinct_face_charts(plane);
+        auto request = center_x_cut(PlaneCutMode::KeepBoth);
+        request.cap = cap;
+        const auto result = quader_poly::plane_cut(plane, request);
+        ASSERT_TRUE(result.changed) << result.message;
+        qdr_test::expect_valid_polygon_document_after_success(result);
+        EXPECT_EQ(result.front_document.faces.size(), 1U);
+        EXPECT_EQ(result.back_document.faces.size(), 1U);
+        EXPECT_TRUE(result.front_selection.faces.empty());
+        EXPECT_TRUE(result.back_selection.faces.empty());
+        EXPECT_EQ(result.affected.edges.size(), 1U);
+        for (const auto* half : {&result.front_document, &result.back_document}) {
+            expect_preserved_face_chart(*half, half->faces.front(), plane.faces.front());
+        }
+    }
+}
 
-	
-
-	
-
-	
-
-	
+TEST(QdrDocumentOperationPlaneCutTests, PlaneCutRejectsNonmanifoldSourceWithoutCandidates) {
+    Document source = quader_poly::make_cube({});
+    Face duplicate = source.faces.front();
+    duplicate.id = source.next_face_id++;
+    source.faces.push_back(duplicate);
+    for (const bool cap : {false, true}) {
+        auto request = center_x_cut(PlaneCutMode::KeepBoth);
+        request.cap = cap;
+        const auto result = quader_poly::plane_cut(source, request);
+        EXPECT_FALSE(result.changed);
+        EXPECT_NE(result.message.find("nonmanifold"), std::string::npos);
+        EXPECT_TRUE(result.front_document.faces.empty());
+        EXPECT_TRUE(result.back_document.faces.empty());
+        EXPECT_EQ(source.faces.size(), 7U);
+    }
 }
 
 TEST(QdrDocumentOperationPlaneCutTests, PlaneCutRejectsInvalidInputsAndUnsupportedMeshesDegeneratePlane) {
@@ -872,27 +939,269 @@ TEST(QdrDocumentOperationPlaneCutTests, PlaneCutRejectsInvalidInputsAndUnsupport
                                                      PlaneCutMode::KeepBoth,
                                                  });
                 EXPECT_FALSE(result.changed);
-		EXPECT_TRUE(result.message.find("existing face") != std::string::npos);
+		EXPECT_TRUE(result.message.find("interior") != std::string::npos);
 	}
 
 	
 }
 
-TEST(QdrDocumentOperationPlaneCutTests, PlaneCutRejectsInvalidInputsAndUnsupportedMeshesCutPlaneFollowsExistingEdges) {
-	
+TEST(QdrDocumentOperationPlaneCutTests, PlaneCutFollowsExistingEdgesAndPreservesClosedCaps) {
+    const Document source = quader_poly::make_cube({});
+    const auto request = diagonal_on_existing_edges_cut(PlaneCutMode::KeepBoth);
+    const auto result = quader_poly::plane_cut(source, request);
+    ASSERT_TRUE(result.changed) << result.message;
+    qdr_test::expect_valid_polygon_document_after_success(result);
+    check_closed_manifold(result.front_document);
+    check_closed_manifold(result.back_document);
+    EXPECT_EQ(result.front_selection.faces.size(), 1U);
+    EXPECT_EQ(result.back_selection.faces.size(), 1U);
+    EXPECT_EQ(result.affected.edges.size(), 4U);
+}
 
-	
+TEST(QdrDocumentOperationPlaneCutTests, SegmentedCubeCutUsesItsExistingPlaneSeam) {
+    const Document source = quader_poly::make_cube({
+        .width_segments = 2, .height_segments = 2, .depth_segments = 2});
+    for (const bool cap : {false, true}) {
+        auto request = center_x_cut(PlaneCutMode::KeepBoth);
+        request.cap = cap;
+        const auto result = quader_poly::plane_cut(source, request);
+        ASSERT_TRUE(result.changed) << result.message;
+        qdr_test::expect_valid_polygon_document_after_success(result);
+        EXPECT_EQ(result.affected.edges.size(), 8U);
+        for (const auto* half : {&result.front_document, &result.back_document}) {
+            EXPECT_EQ(half->next_vertex_id, source.next_vertex_id);
+            for (const auto& vertex : half->vertices) {
+                EXPECT_NE(quader_poly::find_vertex(source, vertex.id), nullptr);
+            }
+            if (cap) {
+                check_closed_manifold(*half);
+            }
+        }
+    }
+}
 
-	
+TEST(QdrDocumentOperationPlaneCutTests, ConcaveClosedMeshCutCreatesSeparateIntervalCaps) {
+    Document source = concave_prism_document();
+    author_distinct_face_charts(source);
+    check_closed_manifold(source);
+    for (const bool cap : {false, true}) {
+        const PlaneCutRequest request{
+            {-4.0F, 0.0F, 0.0F}, {4.0F, 0.0F, 0.0F}, {0.0F, 0.0F, 1.0F},
+            PlaneCutMode::KeepBoth, cap};
+        const auto result = quader_poly::plane_cut(source, request);
+        ASSERT_TRUE(result.changed) << result.message;
+        qdr_test::expect_valid_polygon_document_after_success(result);
+        EXPECT_EQ(result.affected.edges.size(), 8U);
+        EXPECT_EQ(result.front_selection.faces.size(), cap ? 2U : 0U);
+        EXPECT_EQ(result.back_selection.faces.size(), cap ? 2U : 0U);
+        for (const auto* half : {&result.front_document, &result.back_document}) {
+            if (cap) {
+                check_closed_manifold(*half);
+            }
+            for (const auto& face : half->faces) {
+                const auto* original = quader_poly::find_face(source, face.material_slot);
+                ASSERT_NE(original, nullptr);
+                EXPECT_EQ(face.normal_shading, original->normal_shading);
+                EXPECT_EQ(face.texture_transform, original->texture_transform);
+                if (!face.uvs.empty()) {
+                    expect_preserved_face_chart(*half, face, *original);
+                }
+            }
+        }
+    }
+}
 
-	
+TEST(QdrDocumentOperationPlaneCutTests, OpenCutHalfCanBeCutAgainAndCapsDoNotFillItsOldOpening) {
+    const auto source = quader_poly::make_cube({});
+    auto first_request = center_x_cut(PlaneCutMode::KeepBoth);
+    first_request.cap = false;
+    const auto first = quader_poly::plane_cut(source, first_request);
+    ASSERT_TRUE(first.changed) << first.message;
+    auto second_request = first_request;
+    second_request.first_point.x = second_request.second_point.x =
+        second_request.third_point.x = 0.5F;
+    for (const bool cap : {false, true}) {
+        second_request.cap = cap;
+        const auto second = quader_poly::plane_cut(first.front_document, second_request);
+        ASSERT_TRUE(second.changed) << second.message;
+        qdr_test::expect_valid_polygon_document_after_success(second);
+        EXPECT_EQ(second.front_selection.faces.size(), cap ? 1U : 0U);
+        EXPECT_EQ(second.back_selection.faces.size(), cap ? 1U : 0U);
+        if (cap) {
+            check_closed_manifold(second.front_document);
+        }
+        std::size_t old_open_edges = 0U;
+        for (const auto& [edge, count] : edge_counts(second.back_document)) {
+            const auto a = quader_poly::find_vertex(second.back_document, edge.first)->position;
+            const auto b = quader_poly::find_vertex(second.back_document, edge.second)->position;
+            if (count == 1 && std::abs(a.x) < 0.0001F && std::abs(b.x) < 0.0001F) {
+                ++old_open_edges;
+            }
+        }
+        EXPECT_EQ(old_open_edges, 4U);
+    }
+}
 
-	{
-		Document cube = quader_poly::make_cube({});
-                const PlaneCutResult result = quader_poly::plane_cut(
-                    cube,
-                    diagonal_on_existing_edges_cut(PlaneCutMode::KeepBoth));
-                EXPECT_FALSE(result.changed);
-		EXPECT_FALSE(result.message.empty());
-	}
+TEST(QdrDocumentOperationPlaneCutTests, TorusCapsPreserveAnnularHoleBoundaryIdsAndAttributes) {
+    for (const bool flip : {false, true}) {
+        auto source = quader_poly::make_torus({.flip_faces = flip});
+        author_distinct_face_charts(source);
+        PlaneCutRequest request{
+            {-4.0F, 0.0F, 0.0F}, {4.0F, 0.0F, 0.0F}, {0.0F, 0.0F, 1.0F},
+            PlaneCutMode::KeepBoth, false};
+        const auto open = quader_poly::plane_cut(source, request);
+        ASSERT_TRUE(open.changed) << open.message;
+        qdr_test::expect_valid_polygon_document_after_success(open);
+        EXPECT_EQ(open.affected.edges.size(), 64U);
+        request.cap = true;
+        const auto capped = quader_poly::plane_cut(source, request);
+        ASSERT_TRUE(capped.changed) << capped.message;
+        qdr_test::expect_valid_polygon_document_after_success(capped);
+        EXPECT_EQ(capped.affected.edges, open.affected.edges);
+        const double expected_area = 16.0 * std::sin(2.0 * std::acos(-1.0) / 32.0) * (1.0 - 0.36);
+        for (const auto* candidate : {&capped.front_document, &capped.back_document}) {
+            check_closed_manifold(*candidate);
+            double cap_area = 0.0;
+            std::set<ElementId> cap_vertices;
+            for (const auto& face : candidate->faces) {
+                if (face.id < source.next_face_id) {
+                    const auto* original = quader_poly::find_face(source, face.id);
+                    ASSERT_NE(original, nullptr);
+                    expect_preserved_face_chart(*candidate, face, *original);
+                    continue;
+                }
+                ASSERT_EQ(face.vertices.size(), 3U);
+                const auto a = quader_poly::find_vertex(*candidate, face.vertices[0])->position;
+                const auto b = quader_poly::find_vertex(*candidate, face.vertices[1])->position;
+                const auto c = quader_poly::find_vertex(*candidate, face.vertices[2])->position;
+                cap_area += std::abs((b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x)) * 0.5;
+                const auto center = (a + b + c) * (1.0F / 3.0F);
+                EXPECT_GT(center.x * center.x + center.z * center.z, 0.35F);
+                EXPECT_EQ(face.normal_shading, quader_poly::SurfaceShading::Smooth);
+                EXPECT_FLOAT_EQ(face.texture_transform.rotation_degrees, 17.0F);
+                EXPECT_NE(quader_poly::find_face(source, face.material_slot), nullptr);
+                EXPECT_TRUE(face.uvs.empty()); // Generated caps use the normal projected UV fallback.
+                for (const auto id : face.vertices) {
+                    cap_vertices.insert(id);
+                    const auto* original = quader_poly::find_vertex(source, id);
+                    ASSERT_NE(original, nullptr);
+                    EXPECT_NEAR(original->position.y, 0.0F, 0.0001F);
+                }
+            }
+            EXPECT_NEAR(cap_area, expected_area, 0.0001);
+            EXPECT_EQ(cap_vertices.size(), 64U);
+        }
+    }
+}
+
+TEST(QdrDocumentOperationPlaneCutTests, ConcentricIndependentShellsReceiveSeparateCaps) {
+    auto source = two_cube_document();
+    for (auto& vertex : source.vertices) {
+        if (vertex.id >= 1000U) {
+            vertex.position.y -= 4.0F;
+            vertex.position = vertex.position * 0.5F;
+        }
+    }
+    const auto result = quader_poly::plane_cut(source, center_x_cut(PlaneCutMode::KeepBoth));
+    ASSERT_TRUE(result.changed) << result.message;
+    EXPECT_EQ(result.front_selection.faces.size(), 2U);
+    EXPECT_EQ(result.back_selection.faces.size(), 2U);
+    EXPECT_EQ(result.affected.edges.size(), 8U);
+    check_closed_manifold(result.front_document);
+    check_closed_manifold(result.back_document);
+}
+
+TEST(QdrDocumentOperationPlaneCutTests, NestedTorusShellsAndCentralIslandKeepTheirOwnCapRegions) {
+    auto source = quader_poly::make_torus({.width = 4.0F, .height = 1.0F, .depth = 4.0F});
+    auto inner = quader_poly::make_torus({
+        .width = 3.6F, .height = 0.5F, .depth = 3.6F, .tube_radius_ratio = 1.0F / 9.0F});
+    auto island = quader_poly::make_cube({.width = 0.4F, .height = 0.4F, .depth = 0.4F});
+    const auto append_component = [&](const Document& component, ElementId offset) {
+        for (auto vertex : component.vertices) {
+            vertex.id += offset;
+            source.vertices.push_back(vertex);
+        }
+        for (auto face : component.faces) {
+            face.id += offset;
+            for (auto& vertex : face.vertices) {
+                vertex += offset;
+            }
+            source.faces.push_back(std::move(face));
+        }
+        source.next_vertex_id = std::max(source.next_vertex_id, component.next_vertex_id + offset);
+        source.next_face_id = std::max(source.next_face_id, component.next_face_id + offset);
+    };
+    append_component(inner, 10000U);
+    append_component(island, 20000U);
+    const PlaneCutRequest request{
+        {-4.0F, 0.0F, 0.0F}, {4.0F, 0.0F, 0.0F}, {0.0F, 0.0F, 1.0F},
+        PlaneCutMode::KeepBoth, true};
+    const auto result = quader_poly::plane_cut(source, request);
+    ASSERT_TRUE(result.changed) << result.message;
+    const double expected_area = 16.0 * std::sin(2.0 * std::acos(-1.0) / 32.0) *
+        ((4.0 - 1.44) + (3.24 - 1.96)) + 0.16;
+    for (const auto* candidate : {&result.front_document, &result.back_document}) {
+        check_closed_manifold(*candidate);
+        double cap_area = 0.0;
+        std::size_t island_caps = 0U;
+        for (const auto& face : candidate->faces) {
+            if (face.id < source.next_face_id) {
+                continue;
+            }
+            double area = 0.0;
+            for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+                const auto a = quader_poly::find_vertex(*candidate, face.vertices[index])->position;
+                const auto b = quader_poly::find_vertex(*candidate, face.vertices[(index + 1U) % face.vertices.size()])->position;
+                area += static_cast<double>(a.x) * b.z - static_cast<double>(a.z) * b.x;
+                EXPECT_NEAR(a.y, 0.0F, 0.0001F);
+            }
+            cap_area += std::abs(area) * 0.5;
+            if (face.vertices.size() == 4U) {
+                ++island_caps;
+                EXPECT_NEAR(std::abs(area) * 0.5, 0.16, 0.0001);
+            } else {
+                ASSERT_EQ(face.vertices.size(), 3U);
+                const auto a = quader_poly::find_vertex(*candidate, face.vertices[0])->position;
+                const auto b = quader_poly::find_vertex(*candidate, face.vertices[1])->position;
+                const auto c = quader_poly::find_vertex(*candidate, face.vertices[2])->position;
+                const auto center = (a + b + c) * (1.0F / 3.0F);
+                EXPECT_GT(center.x * center.x + center.z * center.z, 1.4F);
+            }
+        }
+        EXPECT_EQ(island_caps, 1U);
+        EXPECT_NEAR(cap_area, expected_area, 0.0002);
+    }
+}
+
+TEST(QdrDocumentOperationPlaneCutTests, BranchingCapBoundaryRejectsWithoutPublishingPartialCaps) {
+    auto source = two_cube_document();
+    ElementId shared = quader_poly::kInvalidElementId;
+    ElementId duplicate = quader_poly::kInvalidElementId;
+    for (auto& vertex : source.vertices) {
+        if (vertex.id >= 1000U) {
+            vertex.position = vertex.position + QVec3{2.0F, -2.0F, 2.0F};
+        }
+        if (qdr_test::vec_nearly_equal(vertex.position, {1.0F, 1.0F, 1.0F})) {
+            if (vertex.id < 1000U) {
+                shared = vertex.id;
+            } else {
+                duplicate = vertex.id;
+            }
+        }
+    }
+    ASSERT_NE(shared, quader_poly::kInvalidElementId);
+    ASSERT_NE(duplicate, quader_poly::kInvalidElementId);
+    for (auto& face : source.faces) {
+        std::ranges::replace(face.vertices, duplicate, shared);
+    }
+    std::erase_if(source.vertices, [duplicate](const auto& vertex) { return vertex.id == duplicate; });
+    const PlaneCutRequest request{
+        {0.0F, 0.0F, -4.0F}, {0.0F, 0.0F, 4.0F}, {1.0F, 1.0F, 0.0F},
+        PlaneCutMode::KeepBoth, true};
+    const auto result = quader_poly::plane_cut(source, request);
+    EXPECT_FALSE(result.changed);
+    EXPECT_NE(result.message.find("branch"), std::string::npos);
+    EXPECT_TRUE(result.front_document.faces.empty());
+    EXPECT_TRUE(result.back_document.faces.empty());
+    EXPECT_EQ(source.faces.size(), 12U);
 }

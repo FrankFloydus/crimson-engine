@@ -468,6 +468,168 @@ TEST_F(QtViewportEdgeLengthHudTests,
 }
 
 TEST_F(QtViewportEdgeLengthHudTests,
+       IdleCutHidesSelectionAndDimensionsWithoutChangingSelectedGeometry) {
+  for (const auto mode : {quader::QuaderSelectionMode::Object,
+                          quader::QuaderSelectionMode::Face,
+                          quader::QuaderSelectionMode::Edge}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    quader::SceneSession session;
+    quader::QuaderEditorApi editor(
+        quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+    const auto box = editor.modeling().create_box(
+        {.min = {-1.0f, -1.5f, -2.0f}, .max = {1.0f, 1.5f, 2.0f}},
+        "Cut selection presentation");
+    ASSERT_TRUE(box.ok()) << box.error_message();
+    ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+    if (mode != quader::QuaderSelectionMode::Object) {
+      ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+      ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+      ASSERT_TRUE(editor.selection().select_all().ok());
+    }
+    ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Select).ok());
+    ASSERT_TRUE(editor.main_viewport().set_view(quader::ViewportView::Perspective).ok());
+    session.history().clear();
+
+    auto settings = quader::ViewportSettings::defaults();
+    settings.set_bool_value(quader::ViewportBoolSettingId::ShowDimensions, true);
+    parent_->resize(800, 600);
+    quader::QtViewportPanel panel(parent_.get());
+    panel.setGeometry(parent_->rect());
+    panel.attach_workspace(session.viewport_workspace());
+    panel.set_viewport_settings(settings);
+    panel.set_startup_presentation_blocked(false);
+    panel.show();
+    QCoreApplication::processEvents();
+    auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
+    ASSERT_NE(surface, nullptr);
+    quader::test_support::resize_viewport_surface(panel, *surface, {800, 600});
+    session.viewport_workspace().camera(quader::ViewportPaneId::Perspective)
+        .focus_origin(12.0f);
+
+    const std::array label_names{
+        QStringLiteral("viewportSelectionDimensionX_perspective"),
+        QStringLiteral("viewportSelectionDimensionY_perspective"),
+        QStringLiteral("viewportSelectionDimensionZ_perspective")};
+    std::array<QLabel *, 3> dimension_labels{};
+    std::array<EdgeHudWidgetEventCounter, 3> label_events;
+    for (std::size_t axis = 0; axis < dimension_labels.size(); ++axis) {
+      dimension_labels[axis] = panel.findChild<QLabel *>(label_names[axis]);
+      ASSERT_NE(dimension_labels[axis], nullptr);
+      dimension_labels[axis]->installEventFilter(&label_events[axis]);
+    }
+
+    quader::SceneRenderBridge bridge;
+    quader::RenderOverlaySnapshotCache cache;
+    const auto frame = [&] {
+      panel.process_input(editor, session.scene(), session.assets(), session.modeling(), {},
+                          session.native_tools(), &session.point_placement(), 1.0 / 60.0);
+      panel.prepare_viewports(editor, bridge, cache, session.scene(), session.assets(),
+                              session.modeling(), session.native_tools());
+    };
+    const auto expensive_work = [&] {
+      const auto &snapshots = cache.stats();
+      const auto &geometry = session.modeling().selection_overlay_geometry_work_counters();
+      const auto previews = session.modeling().tool_preview_work_stats();
+      return std::array{
+          snapshots.selected_object_build_count, snapshots.scene_wireframe_build_count,
+          snapshots.selection_build_count, snapshots.selection_local_bounds_build_count,
+          snapshots.selection_world_bounds_build_count, geometry.geometry_build_count,
+          geometry.face_triangulation_count, geometry.semantic_aggregate_build_count,
+          geometry.world_projection_build_count, previews.mesh_extraction_count};
+    };
+    const auto empty_frame_signature =
+        quader::RenderSignatureBuilder::overlay_frame_signature({});
+    if (mode == quader::QuaderSelectionMode::Object) {
+      // Dimensions replace the ordinary bounds cage with a dynamic dashed box.
+      // Exercise the original cage separately through the same retained panel.
+      settings.set_bool_value(quader::ViewportBoolSettingId::ShowDimensions, false);
+      frame();
+      const auto bounds_frame = bridge.overlay_stats().frame_signature;
+      ASSERT_NE(bounds_frame, empty_frame_signature);
+      ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Cut).ok());
+      frame();
+      EXPECT_EQ(bridge.overlay_stats().frame_signature, empty_frame_signature);
+      ASSERT_TRUE(editor.tools().cancel_modal_tool().ok());
+      frame();
+      EXPECT_EQ(bridge.overlay_stats().frame_signature, bounds_frame);
+      settings.set_bool_value(quader::ViewportBoolSettingId::ShowDimensions, true);
+    }
+    frame();
+    const auto selection_before = editor.selection().summary();
+    const auto scene_selection_before = session.scene().selected_entities();
+    const auto selected_before = session.modeling().export_selection();
+    const auto persistent_before = bridge.overlay_stats().frame_signature;
+    ASSERT_TRUE(selection_before.has_selection);
+    ASSERT_FALSE(selected_before.objects.empty());
+    if (mode != quader::QuaderSelectionMode::Object) {
+      ASSERT_NE(persistent_before, empty_frame_signature);
+    }
+    ASSERT_NE(cache.selected_object_snapshot(), nullptr);
+    EXPECT_EQ(cache.selected_object_snapshot()->visible,
+              mode == quader::QuaderSelectionMode::Object);
+    std::array<QString, 3> dimension_texts;
+    for (std::size_t axis = 0; axis < dimension_labels.size(); ++axis) {
+      EXPECT_EQ(dimension_labels[axis]->isHidden(),
+                mode == quader::QuaderSelectionMode::Edge);
+      dimension_texts[axis] = dimension_labels[axis]->text();
+    }
+    const auto expect_selection_unchanged = [&] {
+      EXPECT_EQ(editor.selection().summary().selection_revision,
+                selection_before.selection_revision);
+      EXPECT_EQ(editor.selection().summary().content_revision,
+                selection_before.content_revision);
+      EXPECT_EQ(session.scene().selected_entities(), scene_selection_before);
+      const auto selected = session.modeling().export_selection();
+      ASSERT_EQ(selected.objects.size(), selected_before.objects.size());
+      for (std::size_t index = 0; index < selected.objects.size(); ++index) {
+        const auto &before = selected_before.objects[index];
+        const auto &after = selected.objects[index];
+        EXPECT_EQ(after.entity, before.entity);
+        EXPECT_EQ(after.selected, before.selected);
+        EXPECT_EQ(after.selection.vertices, before.selection.vertices);
+        EXPECT_EQ(after.selection.edges, before.selection.edges);
+        EXPECT_EQ(after.selection.faces, before.selection.faces);
+      }
+    };
+
+    ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Cut).ok());
+    frame();
+    EXPECT_EQ(session.modeling().tool_status().cut_captured_point_count, 0);
+    EXPECT_FALSE(session.modeling().tool_status().cut_preview_valid);
+    EXPECT_EQ(bridge.overlay_stats().frame_signature, empty_frame_signature)
+        << "Idle Cut must retire ordinary selection and bounds before any candidate exists.";
+    EXPECT_FALSE(cache.selected_object_snapshot()->visible);
+    std::array<EdgeHudWidgetEventCounter::Counts, 3> hidden_label_events;
+    for (std::size_t axis = 0; axis < dimension_labels.size(); ++axis) {
+      EXPECT_TRUE(dimension_labels[axis]->isHidden());
+      hidden_label_events[axis] = label_events[axis].counts();
+    }
+    expect_selection_unchanged();
+    const auto hidden_work = expensive_work();
+    for (int unchanged = 0; unchanged < 16; ++unchanged) frame();
+    EXPECT_EQ(expensive_work(), hidden_work);
+    EXPECT_EQ(bridge.overlay_stats().frame_signature, empty_frame_signature);
+    for (std::size_t axis = 0; axis < dimension_labels.size(); ++axis) {
+      EXPECT_EQ(label_events[axis].counts(), hidden_label_events[axis]);
+    }
+
+    ASSERT_TRUE(editor.tools().cancel_modal_tool().ok());
+    frame();
+    expect_selection_unchanged();
+    EXPECT_EQ(bridge.overlay_stats().frame_signature, persistent_before);
+    EXPECT_EQ(cache.selected_object_snapshot()->visible,
+              mode == quader::QuaderSelectionMode::Object);
+    for (std::size_t axis = 0; axis < dimension_labels.size(); ++axis) {
+      EXPECT_EQ(dimension_labels[axis]->isHidden(),
+                mode == quader::QuaderSelectionMode::Edge);
+      EXPECT_EQ(dimension_labels[axis]->text(), dimension_texts[axis]);
+    }
+    EXPECT_EQ(session.history().undo_count(), 0u);
+  }
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
        UsesFullWorldSpaceLengthInMapUnitsWithOutlinedShapedLabels) {
   // The 3D length is 13; its screen-plane length is only 5. World endpoints
   // already carry object, instance, and hierarchy transforms from projection.

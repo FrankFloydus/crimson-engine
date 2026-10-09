@@ -155,6 +155,10 @@ bool ViewportToolRuntime::tool_uses_editor_native_lifecycle(
 
 ViewportPointerCursor
 ViewportToolRuntime::tool_pointer_cursor(ViewportToolId tool) const {
+  if (tool == ViewportToolId::Cut) {
+    if (modal_state_.cut_line_drag_active) return ViewportPointerCursor::ClosedHand;
+    if (modal_state_.plane_body_hovered) return ViewportPointerCursor::OpenHand;
+  }
   if (tool == ViewportToolId::CreatePrimitive) {
     const auto cursor = modal_state_.primitive_creation.pointer_cursor(
         modal_state_.primitive_creation_drag_started);
@@ -221,6 +225,7 @@ void ViewportToolRuntime::clear_modal_tool_state() {
 void ViewportToolRuntime::clear_modal_drag_state() {
   modal_state_.insert_edge_loop_drag_active = false;
   modal_state_.cut_drag_active = false;
+  modal_state_.cut_line_drag_active = false;
   modal_state_.mirror_drag_active = false;
   clear_modal_input_hints();
 }

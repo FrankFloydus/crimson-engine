@@ -3571,5 +3571,123 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
   EXPECT_GT(cpu_work.mesh_outline_camera_classification_count, 0u);
 }
 
+TEST(ViewportOverlaySubmissionCoordinatorTests,
+     ToolPresentationHidesSelectionAndDimensionsWithoutChangingSceneOrToolStreams) {
+  ViewportOverlayFrame selection_frame;
+  selection_frame.lines.push_back({
+      .layer = ViewportOverlayLayer::SelectedEdge,
+      .start = {-1, -1, 0}, .end = {1, -1, 0},
+      .source = ViewportOverlaySource::ComponentSelection,
+  });
+  selection_frame.triangles.push_back({
+      .layer = ViewportOverlayLayer::SelectedVisibleFace,
+      .a = {-1, -1, 0}, .b = {1, -1, 0}, .c = {0, 1, 0},
+      .source = ViewportOverlaySource::ComponentSelection,
+  });
+  selection_frame.points.push_back({
+      .layer = ViewportOverlayLayer::SelectedVertex,
+      .position = {-1, -1, 0}, .source = ViewportOverlaySource::Selection,
+  });
+  StaticSelectionFrameProvider provider(selection_frame);
+  RenderOverlaySelectionSnapshot scene;
+  scene.selected_mesh_bounds = {
+      {.entity = 1, .min = {-1, -1, 0}, .max = {1, 1, 0}}};
+  scene.group_bounds = {
+      {.entity = 2, .min = {-2, -2, -1}, .max = {2, 2, 1}}};
+  auto geometry = std::make_shared<MeshGeometryPayload>();
+  geometry->vertices = {{.position = {-1, -1, 0}},
+                        {.position = {1, -1, 0}},
+                        {.position = {0, 1, 0}}};
+  geometry->indices = {0u, 1u, 2u};
+  RenderOverlaySelectedObjectSnapshot selected;
+  selected.selection_revision = 1u;
+  selected.meshes.push_back({
+      .entity = 1u, .mesh_id = 1u, .mesh_revision = 1u,
+      .geometry_payload = geometry, .geometry_content_id = geometry->content_id(),
+      .selected = true, .vertices = geometry->vertices, .indices = geometry->indices,
+  });
+  ViewportOverlayFrame volatile_frame = selection_frame;
+  volatile_frame.lines.push_back({
+      .layer = ViewportOverlayLayer::ToolPreviewSeam,
+      .start = {-1, 0, 0}, .end = {1, 0, 0},
+      .style_role = ViewportOverlayStyleRole::CutPreviewSeam,
+      .source = ViewportOverlaySource::Tool,
+  });
+  volatile_frame.lines.push_back({
+      .layer = ViewportOverlayLayer::WireframeBase,
+      .start = {-2, 0, 0}, .end = {2, 0, 0},
+      .source = ViewportOverlaySource::SceneWireframe,
+  });
+  volatile_frame.triangles.push_back({
+      .layer = ViewportOverlayLayer::SourceWireDepthStamp,
+      .a = {-1, -1, 0}, .b = {1, -1, 0}, .c = {0, 1, 0},
+      .source = ViewportOverlaySource::SceneWireframe,
+  });
+  CurveToolPreviewState curve;
+  auto request = submission_request(provider, scene, volatile_frame, curve);
+  request.dynamic_tool_frame_provider = nullptr;
+  request.scene_selection_mode = RenderOverlaySelectionMode::Object;
+  request.style_selection_context = ViewportOverlaySelectionContext::Object;
+  request.selection_source.selection_context = ViewportOverlaySelectionContext::Object;
+  request.selected_mesh_outline_snapshot = &selected;
+  request.selection_dimensions_visible = true;
+  request.camera = dimension_test_camera();
+  ViewportOverlaySubmissionCoordinator coordinator;
+  RecordingOverlayTarget target;
+  const auto settings = ViewportSettings::defaults();
+  ASSERT_TRUE(coordinator.submit(request, settings, target).selection_dimension_bounds);
+  ASSERT_EQ(provider.build_count, 1);
+  ASSERT_TRUE(std::ranges::any_of(target.dynamic_frame.lines, [](const auto &line) {
+    return line.source == ViewportOverlaySource::MeshOutline;
+  }));
+
+  request.selection_overlays_visible = false;
+  const auto hidden = coordinator.submit(request, settings, target);
+  EXPECT_TRUE(hidden.persistent_submitted);
+  EXPECT_TRUE(hidden.dynamic_submitted);
+  EXPECT_FALSE(hidden.selection_dimension_bounds);
+  EXPECT_TRUE(target.persistent_frame.lines.empty());
+  EXPECT_TRUE(target.persistent_frame.triangles.empty());
+  EXPECT_TRUE(target.persistent_frame.points.empty());
+  ASSERT_EQ(target.dynamic_frame.lines.size(), 2u);
+  EXPECT_EQ(target.dynamic_frame.lines[0].source, ViewportOverlaySource::Tool);
+  EXPECT_EQ(target.dynamic_frame.lines[1].source, ViewportOverlaySource::SceneWireframe);
+  ASSERT_EQ(target.dynamic_frame.triangles.size(), 1u);
+  EXPECT_EQ(target.dynamic_frame.triangles.front().source, ViewportOverlaySource::SceneWireframe);
+  EXPECT_TRUE(target.dynamic_frame.points.empty());
+  const auto work = coordinator.work_counters();
+  for (const float plane_y : {0.25f, -0.5f, 0.75f}) {
+    volatile_frame.lines[1].start.y = plane_y;
+    volatile_frame.lines[1].end.y = plane_y;
+    ++request.volatile_modeling_source.publication_revision;
+    EXPECT_TRUE(coordinator.submit(request, settings, target).dynamic_submitted);
+    ASSERT_EQ(target.dynamic_frame.lines.size(), 2u);
+    EXPECT_FLOAT_EQ(target.dynamic_frame.lines.front().start.y, plane_y);
+    for (int frame_index = 0; frame_index < 8; ++frame_index) {
+      const auto unchanged = coordinator.submit(request, settings, target);
+      EXPECT_FALSE(unchanged.persistent_submitted);
+      EXPECT_FALSE(unchanged.dynamic_submitted);
+      EXPECT_FALSE(unchanged.selection_dimension_bounds);
+    }
+  }
+  EXPECT_EQ(provider.build_count, 1);
+  EXPECT_EQ(coordinator.work_counters().mesh_outline_topology_build_count,
+            work.mesh_outline_topology_build_count);
+  EXPECT_EQ(coordinator.work_counters().selection_dimension_bounds_build_count,
+            work.selection_dimension_bounds_build_count);
+  EXPECT_EQ(selected.meshes.front().geometry_payload, geometry);
+  EXPECT_EQ(scene.selected_mesh_bounds.size(), 1u);
+  EXPECT_EQ(scene.group_bounds.size(), 1u);
+
+  request.selection_overlays_visible = true;
+  EXPECT_TRUE(coordinator.submit(request, settings, target).selection_dimension_bounds);
+  EXPECT_EQ(provider.build_count, 1);
+  EXPECT_FALSE(target.persistent_frame.triangles.empty());
+  EXPECT_FALSE(target.persistent_frame.points.empty());
+  EXPECT_TRUE(std::ranges::any_of(target.dynamic_frame.lines, [](const auto &line) {
+    return line.source == ViewportOverlaySource::MeshOutline;
+  }));
+}
+
 } // namespace
 } // namespace quader

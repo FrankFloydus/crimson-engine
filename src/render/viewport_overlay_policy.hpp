@@ -146,6 +146,7 @@ inline constexpr std::uint32_t kOverlayCutPreviewKeepBothDiscardFillColor = rgba
 inline constexpr std::uint32_t kOverlayCutPreviewDiscardFillColor = rgba8(255, 31, 15, 66);
 inline constexpr std::uint32_t kOverlayCutPreviewKeepBothOutlineColor = rgba8(255, 184, 46, 230);
 inline constexpr std::uint32_t kOverlayCutPreviewDiscardOutlineColor = rgba8(255, 15, 5, 240);
+inline constexpr std::uint32_t kOverlayCutPreviewKeptWireColor = rgba8(255, 255, 255);
 inline constexpr std::uint32_t kOverlayCutPreviewSeamColor = rgba8(255, 122, 5, 255);
 
 inline constexpr float kOverlayLineDepthBias = 1.0f;
