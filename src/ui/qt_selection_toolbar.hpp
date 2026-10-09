@@ -17,7 +17,6 @@
 
 class QAction;
 class QComboBox;
-class QLabel;
 class QWidget;
 
 namespace quader {
@@ -54,7 +53,7 @@ private:
   };
 
   QComboBox *editor_mode_combo_ = nullptr;
-  QLabel *selection_label_ = nullptr;
+  QAction *selection_separator_ = nullptr;
   std::array<ModeAction, 5> mode_actions_{};
   bool synchronization_valid_ = false;
   std::optional<QuaderSelectionMode> presented_mode_;

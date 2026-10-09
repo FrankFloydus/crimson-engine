@@ -25,6 +25,7 @@
 #include "ui/qt_command_palette.hpp"
 #include "ui/qt_settings_dialog.hpp"
 #include "ui/qt_main_menu.hpp"
+#include "ui/qt_multiresolution_icon.hpp"
 #include "ui/qt_application_theme.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
 #include "ui/qt_snapping_toolbar.hpp"
@@ -41,6 +42,7 @@
 
 #include <QAction>
 #include <QAbstractAnimation>
+#include <QAccessible>
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
@@ -201,15 +203,47 @@ TEST_F(PublicReleaseUiTests, ObjectAndEditModesExposeOnlyTheirSelectionDomains) 
   ASSERT_TRUE(first.ok());
   ASSERT_TRUE(second.ok());
   ASSERT_TRUE(editor.selection().select_objects({first.value(), second.value()}).ok());
+  apply_qt_obsidian_application_theme(QApplication::style()->standardPalette());
   QtSelectionToolbar toolbar;
   LocalizationService localization;
   ASSERT_TRUE(localization.load(resource_root() / "locales", "en-US"));
   toolbar.set_localization(localization);
+  // The public test target has no application QRC; use its shipping artwork.
+  const QDir icons(QString::fromStdWString((resource_root() / "icons").wstring()));
+  for (const auto *kind : {"Vertex", "Edge", "Face", "Mesh", "Group"}) {
+    const QString suffix = QString::fromLatin1(kind);
+    auto *action = toolbar.findChild<QAction *>(
+        QStringLiteral("selectionMode%1").arg(suffix));
+    ASSERT_NE(action, nullptr);
+    const QIcon icon = qt_multiresolution_icon(icons.filePath(
+        QStringLiteral("selection_%1.png").arg(suffix.toLower())));
+    ASSERT_FALSE(icon.isNull());
+    action->setIcon(icon);
+  }
   toolbar.synchronize(editor, QuaderSelectionMode::Object);
   auto *combo = toolbar.findChild<QComboBox *>(QStringLiteral("editorModeCombo"));
   ASSERT_NE(combo, nullptr);
   EXPECT_EQ(combo->currentText(), QStringLiteral("Object Mode"));
+  toolbar.setAttribute(Qt::WA_DontShowOnScreen, true);
+  toolbar.show();
+  const auto retained_actions = toolbar.actions();
+  const auto retained_buttons = toolbar.findChildren<QToolButton *>();
   const auto assert_domain = [&](bool edit) {
+    toolbar.adjustSize();
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(combo->isVisible());
+    EXPECT_EQ(toolbar.actions(), retained_actions);
+    EXPECT_EQ(toolbar.findChildren<QToolButton *>(), retained_buttons);
+    int visible_separators = 0;
+    for (const auto *action : toolbar.actions()) {
+      if (action->isSeparator() && action->isVisible()) {
+        ++visible_separators;
+      }
+    }
+    EXPECT_EQ(visible_separators, edit ? 1 : 0);
+    for (const auto *label : toolbar.findChildren<QLabel *>()) {
+      EXPECT_FALSE(label->isVisible());
+    }
     for (const auto *name : {"selectionModeVertex", "selectionModeEdge",
                              "selectionModeFace", "selectionModeMesh",
                              "selectionModeGroup"}) {
@@ -217,16 +251,39 @@ TEST_F(PublicReleaseUiTests, ObjectAndEditModesExposeOnlyTheirSelectionDomains) 
       ASSERT_NE(action, nullptr);
       const bool component = action->objectName() != "selectionModeMesh" &&
           action->objectName() != "selectionModeGroup";
-      EXPECT_EQ(action->isEnabled(), component == edit);
+      if (component && edit) {
+        EXPECT_TRUE(action->isEnabled());
+      }
+      EXPECT_EQ(action->isVisible(), component && edit);
+      EXPECT_FALSE(action->text().isEmpty());
+      EXPECT_TRUE(action->toolTip().startsWith(action->text()));
+      auto *button = qobject_cast<QToolButton *>(toolbar.widgetForAction(action));
+      ASSERT_NE(button, nullptr);
+      EXPECT_EQ(button->defaultAction(), action);
+      EXPECT_EQ(button->isVisible(), component && edit);
+      EXPECT_EQ(button->toolButtonStyle(), Qt::ToolButtonIconOnly);
+      EXPECT_FALSE(button->icon().isNull());
+      const auto *accessible = QAccessible::queryAccessibleInterface(button);
+      ASSERT_NE(accessible, nullptr);
+      EXPECT_EQ(accessible->text(QAccessible::Name), action->text());
+    }
+  };
+  const auto capture_toolbar = [&](const QString &filename) {
+    const QString directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+    if (!directory.isEmpty()) {
+      ASSERT_TRUE(QDir().mkpath(directory));
+      EXPECT_TRUE(toolbar.grab().save(QDir(directory).filePath(filename)));
     }
   };
   assert_domain(false);
+  capture_toolbar(QStringLiteral("selection-toolbar-public-object-100.png"));
   EXPECT_FALSE(editor.selection().set_mode(QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(editor.commands().execute(quader_command::kEditorModeToggleEdit).ok());
   toolbar.synchronize(editor, QuaderSelectionMode::Vertex);
   EXPECT_EQ(combo->currentText(), QStringLiteral("Edit Mode"));
   EXPECT_EQ(editor.mode().state().participants.size(), 2u);
   assert_domain(true);
+  capture_toolbar(QStringLiteral("selection-toolbar-public-edit-100.png"));
   for (const auto mode : {QuaderSelectionMode::Vertex, QuaderSelectionMode::Edge,
                           QuaderSelectionMode::Face}) {
     ASSERT_TRUE(editor.selection().set_mode(mode).ok());

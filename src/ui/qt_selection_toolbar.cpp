@@ -18,7 +18,6 @@
 #include <QActionGroup>
 #include <QComboBox>
 #include <QIcon>
-#include <QLabel>
 #include <QSignalBlocker>
 #include <QSize>
 #include <QSizePolicy>
@@ -71,7 +70,7 @@ QtSelectionToolbar::QtSelectionToolbar(QWidget *parent) : QToolBar(parent) {
   setMovable(true);
   setFloatable(true);
   setIconSize(QSize(32, 32));
-  setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+  setToolButtonStyle(Qt::ToolButtonIconOnly);
 
   editor_mode_combo_ = new QComboBox(this);
   editor_mode_combo_->setObjectName(QStringLiteral("editorModeCombo"));
@@ -87,7 +86,8 @@ QtSelectionToolbar::QtSelectionToolbar(QWidget *parent) : QToolBar(parent) {
   editor_mode_tooltip_ = QStringLiteral("Editor Mode");
   editor_mode_combo_->setAccessibleName(editor_mode_tooltip_);
   addWidget(editor_mode_combo_);
-  addSeparator();
+  selection_separator_ = addSeparator();
+  selection_separator_->setVisible(false);
   QObject::connect(editor_mode_combo_, &QComboBox::activated, this,
                    [this](int index) {
                      if (editor_mode_requested_) {
@@ -95,11 +95,6 @@ QtSelectionToolbar::QtSelectionToolbar(QWidget *parent) : QToolBar(parent) {
                            editor_mode_combo_->itemData(index).toInt()));
                      }
                    });
-
-  selection_label_ = new QLabel(QStringLiteral("Select:"), this);
-  selection_label_->setObjectName(QStringLiteral("selectionToolbarLabel"));
-  addWidget(selection_label_);
-  addSeparator();
 
   auto *action_group = new QActionGroup(this);
   action_group->setExclusive(true);
@@ -112,6 +107,7 @@ QtSelectionToolbar::QtSelectionToolbar(QWidget *parent) : QToolBar(parent) {
     action->setCheckable(true);
     action->setEnabled(spec.mode == QuaderSelectionMode::Object ||
                        spec.mode == QuaderSelectionMode::Group);
+    action->setVisible(false);
     action_group->addAction(action);
     QObject::connect(action, &QAction::triggered, this,
                      [this, mode = spec.mode](bool checked) {
@@ -167,8 +163,6 @@ void QtSelectionToolbar::set_localization(
     const LocalizationService &localization) {
   setWindowTitle(localized_text(localization, "ui.toolbar.selection.title",
                                 "Selection"));
-  selection_label_->setText(localized_text(
-      localization, "ui.toolbar.selection.label", "Select:"));
   editor_mode_combo_->setItemText(0, localized_text(
       localization, "command.editor.mode.object", "Object Mode"));
   editor_mode_combo_->setItemText(1, localized_text(
@@ -213,12 +207,19 @@ void QtSelectionToolbar::synchronize(const QuaderEditorApi &editor,
   if (editor_mode_combo_->toolTip() != mode_tooltip) {
     editor_mode_combo_->setToolTip(mode_tooltip);
   }
+  if (selection_separator_->isVisible() != edit_mode) {
+    selection_separator_->setVisible(edit_mode);
+  }
   for (const ModeAction &entry : mode_actions_) {
     const bool component_mode = entry.mode == QuaderSelectionMode::Vertex ||
         entry.mode == QuaderSelectionMode::Edge ||
         entry.mode == QuaderSelectionMode::Face;
     if (entry.action->isEnabled() != (component_mode == edit_mode)) {
       entry.action->setEnabled(component_mode == edit_mode);
+    }
+    const bool visible = component_mode && edit_mode;
+    if (entry.action->isVisible() != visible) {
+      entry.action->setVisible(visible);
     }
     const std::string target_id =
         editor.commands().keybinding_target_id_for_selection_mode(entry.mode);

@@ -159,7 +159,6 @@ ui.toolbar.modeling_operations.title=Modeling Operations
 ui.toolbar.modeling_operations.merge_vertices=Merge
 ui.toolbar.modeling_operations.snap_vertices=Snap
 ui.toolbar.modeling_operations.bake_transforms=Bake Transforms
-ui.toolbar.selection.label=Select:
 ui.toolbar.selection.vertices=Vertices
 ui.toolbar.selection.edges=Edges
 ui.toolbar.selection.faces=Faces

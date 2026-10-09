@@ -1704,7 +1704,6 @@ TEST(UiLayoutGuardrailTests,
   expect_contains(toolbar, "kSelectionModeButtonHeight = 30");
   expect_contains(toolbar,
                   "button->setFixedHeight(kSelectionModeButtonHeight)");
-  expect_contains(toolbar, "Qt::ToolButtonTextBesideIcon");
   expect_contains(toolbar, "action_group->setExclusive(true)");
   for (std::string_view mode :
        {"QuaderSelectionMode::Vertex", "QuaderSelectionMode::Edge",

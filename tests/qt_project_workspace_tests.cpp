@@ -1004,6 +1004,8 @@ TEST(QtProjectWorkspaceTests,
   // This test target has no application QRC; load the same shipping icons so
   // layout assertions and optional native captures use the real toolbar faces.
   const QDir icons(QStringLiteral(QUADER_SOURCE_DIR "/resources/icons"));
+  QList<QAction *> retained_actions;
+  QList<QToolButton *> retained_buttons;
   for (const auto *kind : {"Vertex", "Edge", "Face", "Mesh", "Group"}) {
     const QString suffix = QString::fromLatin1(kind);
     auto *action = toolbar.findChild<QAction *>(
@@ -1013,16 +1015,29 @@ TEST(QtProjectWorkspaceTests,
         QStringLiteral("selection_%1.png").arg(suffix.toLower())));
     ASSERT_FALSE(icon.isNull());
     action->setIcon(icon);
+    auto *button = qobject_cast<QToolButton *>(toolbar.widgetForAction(action));
+    ASSERT_NE(button, nullptr);
+    retained_actions.push_back(action);
+    retained_buttons.push_back(button);
   }
   auto *combo = toolbar.findChild<QComboBox *>(QStringLiteral("editorModeCombo"));
   ASSERT_NE(combo, nullptr);
   ASSERT_EQ(combo->count(), 2);
   EXPECT_EQ(toolbar.widgetForAction(toolbar.actions().front()), combo);
+  ASSERT_EQ(toolbar.actions().size(), 7);
+  QAction *selection_separator = toolbar.actions()[1];
+  ASSERT_TRUE(selection_separator->isSeparator());
+  EXPECT_EQ(toolbar.findChild<QLabel *>(QStringLiteral("selectionToolbarLabel")), nullptr);
+  EXPECT_EQ(toolbar.toolButtonStyle(), Qt::ToolButtonIconOnly);
   int requests = 0;
+  bool last_mode_request_changed = false;
   toolbar.set_editor_mode_requested_callback([&](quader::QuaderEditorMode mode) {
     ++requests;
-    EXPECT_TRUE(editor.mode().set(mode).ok());
-    toolbar.synchronize(editor, editor.selection().summary().mode);
+    const auto result = editor.mode().set(mode);
+    EXPECT_TRUE(result.ok());
+    last_mode_request_changed = result.changed();
+    // The production callback also restores the owner after a rejected request.
+    toolbar.synchronize(editor, editor.selection().summary().mode, true);
   });
   toolbar.set_mode_requested_callback([&](quader::QuaderSelectionMode mode) {
     EXPECT_TRUE(editor.selection().set_mode(mode).ok());
@@ -1030,14 +1045,24 @@ TEST(QtProjectWorkspaceTests,
   });
   const auto verify_controls = [&](bool edit) {
     EXPECT_EQ(combo->currentIndex(), edit ? 1 : 0);
-    for (const auto *name : {"selectionModeVertex", "selectionModeEdge",
-                             "selectionModeFace", "selectionModeMesh",
-                             "selectionModeGroup"}) {
-      auto *action = toolbar.findChild<QAction *>(QString::fromLatin1(name));
-      ASSERT_NE(action, nullptr);
+    EXPECT_EQ(selection_separator->isVisible(), edit);
+    EXPECT_EQ(toolbar.actions().size(), 7);
+    for (qsizetype index = 0; index < retained_actions.size(); ++index) {
+      QAction *action = retained_actions[index];
+      QToolButton *button = retained_buttons[index];
+      EXPECT_EQ(toolbar.findChild<QAction *>(action->objectName()), action);
+      EXPECT_EQ(toolbar.widgetForAction(action), button);
       const bool component = action->objectName() != "selectionModeMesh" &&
           action->objectName() != "selectionModeGroup";
-      EXPECT_EQ(action->isEnabled(), component == edit);
+      EXPECT_EQ(action->isVisible(), component && edit);
+      if (component && edit) EXPECT_TRUE(action->isEnabled());
+      EXPECT_FALSE(action->text().isEmpty());
+      EXPECT_FALSE(action->toolTip().isEmpty());
+      EXPECT_FALSE(action->icon().isNull());
+      EXPECT_EQ(button->toolButtonStyle(), Qt::ToolButtonIconOnly);
+      EXPECT_EQ(button->accessibleName(), action->text());
+      EXPECT_EQ(button->accessibleDescription(), action->toolTip());
+      EXPECT_EQ(button->focusPolicy(), Qt::StrongFocus);
     }
   };
   const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
@@ -1081,9 +1106,61 @@ TEST(QtProjectWorkspaceTests,
           << combo->itemText(index).toStdString();
     }
     verify_controls(editor.mode().current() == quader::QuaderEditorMode::Edit);
+    EXPECT_EQ(toolbar.widgetForAction(selection_separator)->isVisible(),
+              selection_separator->isVisible());
+    QList<QAction *> overflowed_actions;
+    for (qsizetype index = 0; index < retained_actions.size(); ++index) {
+      QAction *action = retained_actions[index];
+      const QToolButton *button = retained_buttons[index];
+      if (!action->isVisible()) {
+        EXPECT_FALSE(button->isVisible());
+      } else if (!button->isVisible()) {
+        overflowed_actions.push_back(action);
+      }
+      if (button->isVisible()) {
+        EXPECT_EQ(button->height(), metrics.px(30));
+        EXPECT_TRUE(toolbar.rect().contains(button->geometry()));
+      }
+    }
     if (!review_directory.isEmpty()) {
       EXPECT_TRUE(toolbar.grab().save(QDir(review_directory).filePath(
           QStringLiteral("editor-mode-toolbar-%1.png").arg(suffix))));
+    }
+    if (!overflowed_actions.isEmpty()) {
+      auto *extension = toolbar.findChild<QToolButton *>(
+          QStringLiteral("qt_toolbar_ext_button"));
+      ASSERT_NE(extension, nullptr);
+      ASSERT_TRUE(extension->isVisible());
+      ASSERT_TRUE(extension->isEnabled());
+      if (QMenu *menu = extension->menu()) {
+        menu->popup(extension->mapToGlobal(QPoint(0, extension->height())));
+        application.processEvents();
+        ASSERT_TRUE(menu->isVisible());
+        for (QAction *action : overflowed_actions) {
+          EXPECT_TRUE(menu->actions().contains(action));
+          EXPECT_TRUE(action->isEnabled());
+          EXPECT_TRUE(menu->actionGeometry(action).isValid());
+          EXPECT_TRUE(menu->rect().contains(menu->actionGeometry(action)));
+        }
+        if (!review_directory.isEmpty()) {
+          EXPECT_TRUE(menu->grab().save(QDir(review_directory).filePath(
+              QStringLiteral("editor-mode-toolbar-%1-overflow.png").arg(suffix))));
+        }
+        send_key(*menu, Qt::Key_Escape);
+        EXPECT_FALSE(menu->isVisible());
+      } else {
+        click_widget(*extension, extension->rect().center());
+        application.processEvents();
+        for (QAction *action : overflowed_actions) {
+          auto *button = qobject_cast<QToolButton *>(toolbar.widgetForAction(action));
+          ASSERT_NE(button, nullptr);
+          EXPECT_TRUE(retained_buttons.contains(button));
+          EXPECT_TRUE(button->isVisible());
+          EXPECT_TRUE(button->isEnabled());
+        }
+        click_widget(*extension, extension->rect().center());
+        application.processEvents();
+      }
     }
   };
   toolbar.synchronize(editor, quader::QuaderSelectionMode::Object);
@@ -1108,24 +1185,47 @@ TEST(QtProjectWorkspaceTests,
   review_layout(QStringLiteral("edit-narrow-100-down"), 1.0F, 320);
   auto *face = toolbar.findChild<QAction *>(QStringLiteral("selectionModeFace"));
   ASSERT_NE(face, nullptr);
-  face->trigger();
+  auto *face_button = qobject_cast<QToolButton *>(toolbar.widgetForAction(face));
+  ASSERT_NE(face_button, nullptr);
+  review_layout(QStringLiteral("edit-before-keyboard-focus"), 1.0F, 1000);
+  ASSERT_TRUE(face_button->isVisible());
+  face_button->setFocus(Qt::TabFocusReason);
+  send_key(*face_button, Qt::Key_Space);
   EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Face);
   EXPECT_TRUE(face->isChecked());
+  EXPECT_EQ(host.focusWidget(), face_button);
+  review_layout(QStringLiteral("edit-keyboard-focus"), 1.0F, 1000);
   ASSERT_TRUE(editor.preferences().set_shortcut(
       quader::quader_command::kEditorModeToggleEdit, "Ctrl+Alt+F23").ok());
   toolbar.synchronize(editor, quader::QuaderSelectionMode::Face);
   EXPECT_TRUE(combo->toolTip().contains(QStringLiteral("Ctrl+Alt+F23")));
+  ASSERT_TRUE(editor.preferences().set_shortcut(
+      editor.commands().keybinding_target_id_for_selection_mode(
+          quader::QuaderSelectionMode::Face), "Ctrl+Alt+F22").ok());
+  toolbar.synchronize(editor, quader::QuaderSelectionMode::Face);
+  EXPECT_TRUE(face->toolTip().contains(QStringLiteral("Ctrl+Alt+F22")));
+  EXPECT_EQ(face_button->accessibleDescription(), face->toolTip());
   int action_changes = 0;
   for (QAction *action : toolbar.actions()) {
     QObject::connect(action, &QAction::changed, &toolbar,
                      [&] { ++action_changes; });
   }
+  const auto selection_before_refresh = editor.selection().summary();
+  const auto mode_before_refresh = editor.mode().state();
+  const auto undo_count_before_refresh = scene.history().undo_count();
+  const auto redo_count_before_refresh = scene.history().redo_count();
   const auto work_before = scene.modeling().modeling_sdk_projection_stats_for_tests();
   for (int frame = 0; frame < 12; ++frame) {
     toolbar.synchronize(editor, quader::QuaderSelectionMode::Face);
   }
   EXPECT_EQ(action_changes, 0);
   const auto work_after = scene.modeling().modeling_sdk_projection_stats_for_tests();
+  EXPECT_EQ(editor.selection().summary().selection_revision,
+            selection_before_refresh.selection_revision);
+  EXPECT_EQ(editor.mode().generation(), mode_before_refresh.generation);
+  EXPECT_EQ(editor.mode().revision(), mode_before_refresh.revision);
+  EXPECT_EQ(scene.history().undo_count(), undo_count_before_refresh);
+  EXPECT_EQ(scene.history().redo_count(), redo_count_before_refresh);
   EXPECT_EQ(work_after.selection_summary_build_count, work_before.selection_summary_build_count);
   EXPECT_EQ(work_after.selection_topology_build_count, work_before.selection_topology_build_count);
   EXPECT_EQ(work_after.native_object_id_scene_scan_count, work_before.native_object_id_scene_scan_count);
@@ -1144,6 +1244,39 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(combo->layoutDirection(), Qt::RightToLeft);
   review_layout(QStringLiteral("edit-italian-rtl-narrow"), 1.0F, 320);
   toolbar.setLayoutDirection(Qt::LeftToRight);
+  host.removeToolBar(&toolbar);
+  host.addToolBar(Qt::LeftToolBarArea, &toolbar);
+  toolbar.show();
+  EXPECT_EQ(toolbar.orientation(), Qt::Vertical);
+  review_layout(QStringLiteral("edit-vertical-100"), 1.0F, 320);
+  review_layout(QStringLiteral("edit-vertical-200"), 2.0F, 320);
+  review_layout(QStringLiteral("edit-vertical-100-down"), 1.0F, 320);
+  host.removeToolBar(&toolbar);
+  toolbar.setParent(nullptr);
+  toolbar.setWindowFlags(Qt::Tool);
+  toolbar.setAttribute(Qt::WA_DontShowOnScreen, true);
+  toolbar.setOrientation(Qt::Horizontal);
+  toolbar.resize(toolbar.sizeHint());
+  toolbar.show();
+  EXPECT_TRUE(toolbar.isFloating());
+  review_layout(QStringLiteral("edit-floating-100"), 1.0F, 320);
+  toolbar.setParent(&host);
+  toolbar.setWindowFlags(Qt::Widget);
+  host.addToolBar(Qt::TopToolBarArea, &toolbar);
+  toolbar.show();
+  QPalette light_palette = native_palette;
+  light_palette.setColor(QPalette::Window, Qt::white);
+  light_palette.setColor(QPalette::WindowText, Qt::black);
+  light_palette.setColor(QPalette::Button, QColor(240, 240, 240));
+  light_palette.setColor(QPalette::ButtonText, Qt::black);
+  light_palette.setColor(QPalette::Base, Qt::white);
+  light_palette.setColor(QPalette::Text, Qt::black);
+  toolbar.setPalette(light_palette);
+  review_layout(QStringLiteral("edit-explicit-light-fallback"), 1.0F, 320);
+  QStyleOption light_option;
+  light_option.initFrom(&toolbar);
+  EXPECT_FALSE(quader::qt_application_style_active(&light_option));
+  toolbar.setPalette(QPalette{});
   quader::apply_qt_application_theme_for_contrast_preference(
       native_palette, Qt::ContrastPreference::HighContrast);
   review_layout(QStringLiteral("edit-native-high-contrast"), 1.0F, 1000);
@@ -1154,6 +1287,35 @@ TEST(QtProjectWorkspaceTests,
   review_layout(QStringLiteral("object-native-high-contrast"), 1.0F, 1000);
   EXPECT_EQ(requests, 1);
   EXPECT_EQ(editor.selection().summary().selected_object_count, 2u);
+  const int object_toolbar_width = toolbar.sizeHint().width();
+  quader::SceneSession empty_scene;
+  quader::QuaderEditorApi empty_editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(empty_scene));
+  ASSERT_TRUE(empty_editor.commands().set_keybinding_storage_path({}).ok());
+  toolbar.set_editor_mode_requested_callback([&](quader::QuaderEditorMode mode) {
+    ++requests;
+    const auto result = empty_editor.mode().set(mode);
+    EXPECT_TRUE(result.ok());
+    last_mode_request_changed = result.changed();
+    toolbar.synchronize(empty_editor, empty_editor.selection().summary().mode, true);
+  });
+  toolbar.synchronize(empty_editor, quader::QuaderSelectionMode::Object);
+  const auto empty_mode_revision = empty_editor.mode().revision();
+  const auto empty_undo_count = empty_scene.history().undo_count();
+  combo->setFocus(Qt::TabFocusReason);
+  send_key(*combo, Qt::Key_Down);
+  EXPECT_EQ(requests, 2);
+  EXPECT_FALSE(last_mode_request_changed);
+  EXPECT_EQ(empty_editor.mode().current(), quader::QuaderEditorMode::Object);
+  EXPECT_EQ(empty_editor.mode().revision(), empty_mode_revision);
+  EXPECT_EQ(empty_scene.history().undo_count(), empty_undo_count);
+  verify_controls(false);
+  EXPECT_EQ(toolbar.sizeHint().width(), object_toolbar_width);
+  action_changes = 0;
+  for (int frame = 0; frame < 12; ++frame) {
+    toolbar.synchronize(empty_editor, quader::QuaderSelectionMode::Object);
+  }
+  EXPECT_EQ(action_changes, 0);
   std::filesystem::remove(keybindings);
 }
 
