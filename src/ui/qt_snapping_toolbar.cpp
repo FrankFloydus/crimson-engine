@@ -8,6 +8,7 @@
 
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
+#include "ui/qt_downward_popup_combo_box.hpp"
 #include "ui/qt_multiresolution_icon.hpp"
 #include "ui/qt_numeric_format.hpp"
 #include "ui/qt_toolbar_button_presentation.hpp"
@@ -16,14 +17,9 @@
 #include "viewport/viewport_settings.hpp"
 
 #include <QAction>
-#include <QAbstractItemModel>
-#include <QAbstractItemView>
 #include <QComboBox>
-#include <QGuiApplication>
 #include <QIcon>
-#include <QItemSelectionModel>
 #include <QLabel>
-#include <QScreen>
 #include <QSignalBlocker>
 #include <QSize>
 
@@ -36,60 +32,6 @@ namespace quader {
 namespace {
 
 constexpr int kTopToolbarButtonHeight = 30;
-
-/**
- * Keeps Fusion's native combo popup while preferring a conventional dropdown
- * position below the field whenever the complete popup fits on-screen.
- */
-class QtDownwardPopupComboBox final : public QComboBox {
-public:
-  using QComboBox::QComboBox;
-
-  void showPopup() override {
-    QComboBox::showPopup();
-
-    QAbstractItemView *item_view = view();
-    if (item_view != nullptr && currentIndex() >= 0) {
-      const QModelIndex committed_index = model()->index(
-          currentIndex(), modelColumn(), rootModelIndex());
-      if (committed_index.isValid()) {
-        item_view->setCurrentIndex(committed_index);
-        if (QItemSelectionModel *selection = item_view->selectionModel()) {
-          selection->select(
-              committed_index,
-              QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
-        }
-        item_view->scrollTo(committed_index,
-                            QAbstractItemView::PositionAtCenter);
-      }
-    }
-
-    QWidget *popup = item_view != nullptr ? item_view->window() : nullptr;
-    if (popup == nullptr || popup == window() || !popup->isVisible() ||
-        popup->windowType() != Qt::Popup) {
-      return;
-    }
-
-    const QPoint below = mapToGlobal(QPoint(0, height()));
-    QScreen *popup_screen = QGuiApplication::screenAt(below);
-    if (popup_screen == nullptr) {
-      popup_screen = screen();
-    }
-    if (popup_screen == nullptr) {
-      return;
-    }
-
-    QRect popup_geometry = popup->geometry();
-    const QRect available = popup_screen->availableGeometry();
-    const int proposed_bottom = below.y() + popup_geometry.height() - 1;
-    if (below.y() < available.top() || proposed_bottom > available.bottom()) {
-      return;
-    }
-
-    popup_geometry.moveTop(below.y());
-    popup->setGeometry(popup_geometry);
-  }
-};
 
 /// Provides stable indexes for the four retained snapping toggle actions.
 enum ToggleIndex : std::size_t {

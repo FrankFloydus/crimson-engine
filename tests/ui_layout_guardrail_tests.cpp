@@ -1869,6 +1869,8 @@ TEST(UiLayoutGuardrailTests,
       read_source_file("src/ui/qt_snapping_toolbar.hpp");
   const std::string toolbar =
       read_source_file("src/ui/qt_snapping_toolbar.cpp");
+  const std::string popup_combo =
+      read_source_file("src/ui/qt_downward_popup_combo_box.hpp");
   const std::string menu_header =
       read_source_file("src/ui/qt_main_menu.hpp");
   const std::string menu = read_source_file("src/ui/qt_main_menu.cpp");
@@ -1898,9 +1900,9 @@ TEST(UiLayoutGuardrailTests,
   EXPECT_EQ(count_occurrences(toolbar,
                               "new QtDownwardPopupComboBox(this)"),
             2u);
-  expect_contains(toolbar,
+  expect_contains(popup_combo,
                   "class QtDownwardPopupComboBox final : public QComboBox");
-  expect_contains(toolbar, "void showPopup() override");
+  expect_contains(popup_combo, "void showPopup() override");
   expect_contains(toolbar,
                   "grid_size_combo_->setFixedHeight("
                   "kTopToolbarButtonHeight)");

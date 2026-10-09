@@ -8,6 +8,7 @@
 
 #include "api/quader_editor_api.hpp"
 #include "api/quader_command_ids.hpp"
+#include "ui/qt_downward_popup_combo_box.hpp"
 #include "ui/qt_multiresolution_icon.hpp"
 #include "ui/qt_toolbar_button_presentation.hpp"
 #include "ui/qt_ui_scale_metrics.hpp"
@@ -70,7 +71,7 @@ QtSelectionToolbar::QtSelectionToolbar(QWidget *parent) : QToolBar(parent) {
   setIconSize(QSize(32, 32));
   setToolButtonStyle(Qt::ToolButtonIconOnly);
 
-  editor_mode_combo_ = new QComboBox(this);
+  editor_mode_combo_ = new QtDownwardPopupComboBox(this);
   editor_mode_combo_->setObjectName(QStringLiteral("editorModeCombo"));
   editor_mode_combo_->setSizeAdjustPolicy(QComboBox::AdjustToContents);
   // Keep the current native contents width as the toolbar minimum. Qt refreshes

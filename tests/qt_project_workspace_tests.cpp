@@ -993,8 +993,9 @@ TEST(QtProjectWorkspaceTests,
   ASSERT_TRUE(second.ok());
   ASSERT_TRUE(editor.selection().select_objects({first.value(), second.value()}).ok());
   QMainWindow host;
-  host.setAttribute(Qt::WA_DontShowOnScreen, true);
   host.setAnimated(false);
+  ASSERT_NE(application.primaryScreen(), nullptr);
+  host.move(application.primaryScreen()->availableGeometry().topLeft() + QPoint(40, 40));
   quader::QtSelectionToolbar toolbar;
   quader::LocalizationService localization;
   ASSERT_TRUE(localization.load(
@@ -1114,6 +1115,37 @@ TEST(QtProjectWorkspaceTests,
                 combo->fontMetrics().horizontalAdvance(combo->itemText(index)))
           << combo->itemText(index).toStdString();
     }
+    const int requests_before_popup = requests;
+    const auto mode_before_popup = editor.mode().current();
+    expect_popup_restores_committed_combo_item(*combo, application);
+    combo->showPopup();
+    application.processEvents();
+    QWidget *popup = combo->view()->window();
+    ASSERT_NE(popup, nullptr);
+    ASSERT_TRUE(popup->isVisible());
+    const QRect trigger(combo->mapToGlobal(QPoint{}), combo->size());
+    QScreen *popup_screen = QGuiApplication::screenAt(trigger.bottomLeft());
+    ASSERT_NE(popup_screen, nullptr);
+    ASSERT_LE(trigger.bottom() + popup->height(),
+              popup_screen->availableGeometry().bottom());
+    EXPECT_EQ(popup->geometry().top(), trigger.bottom() + 1)
+        << "Object/Edit choices must open below the whole mode field";
+    EXPECT_EQ(combo->view()->layoutDirection(), combo->layoutDirection());
+    EXPECT_TRUE(combo->view()->visualRect(combo->view()->currentIndex()).intersects(
+        combo->view()->viewport()->rect()));
+    if (!review_directory.isEmpty()) {
+      const QRect capture_rect = trigger.united(popup->geometry()).adjusted(-8, -8, 8, 8)
+                                     .intersected(popup_screen->geometry());
+      const QPixmap capture = popup_screen->grabWindow(0, capture_rect.x(), capture_rect.y(),
+                                                       capture_rect.width(), capture_rect.height());
+      ASSERT_FALSE(capture.isNull());
+      EXPECT_TRUE(capture.save(QDir(review_directory).filePath(
+          QStringLiteral("editor-mode-popup-%1.png").arg(suffix))));
+    }
+    send_key(*popup, Qt::Key_Escape);
+    EXPECT_FALSE(popup->isVisible());
+    EXPECT_EQ(requests, requests_before_popup);
+    EXPECT_EQ(editor.mode().current(), mode_before_popup);
     verify_controls(editor.mode().current() == quader::QuaderEditorMode::Edit);
     EXPECT_EQ(toolbar.widgetForAction(selection_separator)->isVisible(),
               selection_separator->isVisible());
@@ -1288,8 +1320,8 @@ TEST(QtProjectWorkspaceTests,
   host.removeToolBar(&toolbar);
   toolbar.setParent(nullptr);
   toolbar.setWindowFlags(Qt::Tool);
-  toolbar.setAttribute(Qt::WA_DontShowOnScreen, true);
   toolbar.setOrientation(Qt::Horizontal);
+  toolbar.move(application.primaryScreen()->availableGeometry().topLeft() + QPoint(40, 40));
   toolbar.resize(toolbar.sizeHint());
   toolbar.show();
   EXPECT_TRUE(toolbar.isFloating());
@@ -1320,6 +1352,32 @@ TEST(QtProjectWorkspaceTests,
   verify_controls(false);
   EXPECT_FALSE(group->isChecked());
   review_layout(QStringLiteral("object-native-high-contrast"), 1.0F, 1000);
+  const QPoint ordinary_host_position = host.pos();
+  const QRect available = host.screen()->availableGeometry();
+  const QPoint ordinary_anchor = combo->mapToGlobal(QPoint(0, combo->height()));
+  host.move(host.x(), host.y() + available.bottom() - 2 - ordinary_anchor.y());
+  application.processEvents();
+  const QPoint edge_anchor = combo->mapToGlobal(QPoint(0, combo->height()));
+  // Sample Qt's own placement on this exact widget/palette. Native popup
+  // placement may use the full screen, including its taskbar-reserved area.
+  combo->QComboBox::showPopup();
+  application.processEvents();
+  const QRect native_fallback_geometry = combo->view()->window()->geometry();
+  combo->hidePopup();
+  combo->showPopup();
+  application.processEvents();
+  QWidget *edge_popup = combo->view()->window();
+  ASSERT_NE(edge_popup, nullptr);
+  ASSERT_TRUE(edge_popup->isVisible());
+  ASSERT_GT(edge_anchor.y() + edge_popup->height() - 1, available.bottom());
+  EXPECT_NE(edge_popup->geometry().top(), edge_anchor.y());
+  EXPECT_EQ(edge_popup->geometry(), native_fallback_geometry)
+      << "when below cannot fit, preserve Qt's native fallback geometry";
+  EXPECT_TRUE(combo->view()->visualRect(combo->view()->currentIndex()).intersects(
+      combo->view()->viewport()->rect()));
+  combo->hidePopup();
+  host.move(ordinary_host_position);
+  application.processEvents();
   EXPECT_EQ(requests, 1);
   EXPECT_EQ(editor.selection().summary().selected_object_count, 2u);
   const int object_toolbar_width = toolbar.sizeHint().width();
