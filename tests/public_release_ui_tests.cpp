@@ -72,6 +72,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <utility>
 
 namespace quader::test {
 namespace {
@@ -221,6 +222,12 @@ TEST_F(PublicReleaseUiTests, ObjectAndEditModesExposeOnlyTheirSelectionDomains) 
     action->setIcon(icon);
   }
   toolbar.synchronize(editor, QuaderSelectionMode::Object);
+  int selection_requests = 0;
+  toolbar.set_mode_requested_callback([&](QuaderSelectionMode mode) {
+    ++selection_requests;
+    EXPECT_TRUE(editor.selection().set_mode(mode).ok());
+    toolbar.synchronize(editor, editor.selection().summary().mode);
+  });
   auto *combo = toolbar.findChild<QComboBox *>(QStringLiteral("editorModeCombo"));
   ASSERT_NE(combo, nullptr);
   EXPECT_EQ(combo->currentText(), QStringLiteral("Object Mode"));
@@ -240,7 +247,7 @@ TEST_F(PublicReleaseUiTests, ObjectAndEditModesExposeOnlyTheirSelectionDomains) 
         ++visible_separators;
       }
     }
-    EXPECT_EQ(visible_separators, edit ? 1 : 0);
+    EXPECT_EQ(visible_separators, 1);
     for (const auto *label : toolbar.findChildren<QLabel *>()) {
       EXPECT_FALSE(label->isVisible());
     }
@@ -251,16 +258,16 @@ TEST_F(PublicReleaseUiTests, ObjectAndEditModesExposeOnlyTheirSelectionDomains) 
       ASSERT_NE(action, nullptr);
       const bool component = action->objectName() != "selectionModeMesh" &&
           action->objectName() != "selectionModeGroup";
-      if (component && edit) {
+      if (component == edit) {
         EXPECT_TRUE(action->isEnabled());
       }
-      EXPECT_EQ(action->isVisible(), component && edit);
+      EXPECT_EQ(action->isVisible(), component == edit);
       EXPECT_FALSE(action->text().isEmpty());
       EXPECT_TRUE(action->toolTip().startsWith(action->text()));
       auto *button = qobject_cast<QToolButton *>(toolbar.widgetForAction(action));
       ASSERT_NE(button, nullptr);
       EXPECT_EQ(button->defaultAction(), action);
-      EXPECT_EQ(button->isVisible(), component && edit);
+      EXPECT_EQ(button->isVisible(), component == edit);
       EXPECT_EQ(button->toolButtonStyle(), Qt::ToolButtonIconOnly);
       EXPECT_FALSE(button->icon().isNull());
       const auto *accessible = QAccessible::queryAccessibleInterface(button);
@@ -277,6 +284,28 @@ TEST_F(PublicReleaseUiTests, ObjectAndEditModesExposeOnlyTheirSelectionDomains) 
   };
   assert_domain(false);
   capture_toolbar(QStringLiteral("selection-toolbar-public-object-100.png"));
+  auto *mesh = toolbar.findChild<QAction *>(QStringLiteral("selectionModeMesh"));
+  auto *group = toolbar.findChild<QAction *>(QStringLiteral("selectionModeGroup"));
+  ASSERT_NE(mesh, nullptr);
+  ASSERT_NE(group, nullptr);
+  EXPECT_TRUE(mesh->isChecked());
+  for (const auto &[action, expected_mode] : {
+           std::pair{group, QuaderSelectionMode::Group},
+           std::pair{mesh, QuaderSelectionMode::Object}}) {
+    auto *button = qobject_cast<QToolButton *>(toolbar.widgetForAction(action));
+    ASSERT_NE(button, nullptr);
+    ASSERT_TRUE(button->isVisible());
+    button->setFocus(Qt::TabFocusReason);
+    QKeyEvent press(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier);
+    QKeyEvent release(QEvent::KeyRelease, Qt::Key_Space, Qt::NoModifier);
+    QCoreApplication::sendEvent(button, &press);
+    QCoreApplication::sendEvent(button, &release);
+    EXPECT_EQ(editor.selection().summary().mode, expected_mode);
+    EXPECT_TRUE(action->isChecked());
+    EXPECT_FALSE((action == group ? mesh : group)->isChecked());
+    assert_domain(false);
+  }
+  EXPECT_EQ(selection_requests, 2);
   EXPECT_FALSE(editor.selection().set_mode(QuaderSelectionMode::Vertex).ok());
   ASSERT_TRUE(editor.commands().execute(quader_command::kEditorModeToggleEdit).ok());
   toolbar.synchronize(editor, QuaderSelectionMode::Vertex);
@@ -297,6 +326,8 @@ TEST_F(PublicReleaseUiTests, ObjectAndEditModesExposeOnlyTheirSelectionDomains) 
   ASSERT_TRUE(editor.commands().execute(quader_command::kEditorModeToggleEdit).ok());
   toolbar.synchronize(editor, QuaderSelectionMode::Object);
   assert_domain(false);
+  EXPECT_TRUE(mesh->isChecked());
+  EXPECT_FALSE(group->isChecked());
   EXPECT_EQ(combo->currentIndex(), 0);
   EXPECT_EQ(editor.selection().summary().selected_object_count, 2u);
 }

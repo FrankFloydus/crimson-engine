@@ -1030,6 +1030,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(toolbar.findChild<QLabel *>(QStringLiteral("selectionToolbarLabel")), nullptr);
   EXPECT_EQ(toolbar.toolButtonStyle(), Qt::ToolButtonIconOnly);
   int requests = 0;
+  int selection_requests = 0;
   bool last_mode_request_changed = false;
   toolbar.set_editor_mode_requested_callback([&](quader::QuaderEditorMode mode) {
     ++requests;
@@ -1040,12 +1041,13 @@ TEST(QtProjectWorkspaceTests,
     toolbar.synchronize(editor, editor.selection().summary().mode, true);
   });
   toolbar.set_mode_requested_callback([&](quader::QuaderSelectionMode mode) {
+    ++selection_requests;
     EXPECT_TRUE(editor.selection().set_mode(mode).ok());
     toolbar.synchronize(editor, editor.selection().summary().mode);
   });
   const auto verify_controls = [&](bool edit) {
     EXPECT_EQ(combo->currentIndex(), edit ? 1 : 0);
-    EXPECT_EQ(selection_separator->isVisible(), edit);
+    EXPECT_TRUE(selection_separator->isVisible());
     EXPECT_EQ(toolbar.actions().size(), 7);
     for (qsizetype index = 0; index < retained_actions.size(); ++index) {
       QAction *action = retained_actions[index];
@@ -1054,8 +1056,8 @@ TEST(QtProjectWorkspaceTests,
       EXPECT_EQ(toolbar.widgetForAction(action), button);
       const bool component = action->objectName() != "selectionModeMesh" &&
           action->objectName() != "selectionModeGroup";
-      EXPECT_EQ(action->isVisible(), component && edit);
-      if (component && edit) EXPECT_TRUE(action->isEnabled());
+      EXPECT_EQ(action->isVisible(), component == edit);
+      if (component == edit) EXPECT_TRUE(action->isEnabled());
       EXPECT_FALSE(action->text().isEmpty());
       EXPECT_FALSE(action->toolTip().isEmpty());
       EXPECT_FALSE(action->icon().isNull());
@@ -1168,6 +1170,28 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(combo->currentText(), QStringLiteral("Object Mode"));
   EXPECT_TRUE(combo->toolTip().contains(QStringLiteral("Tab"), Qt::CaseInsensitive));
   review_layout(QStringLiteral("object-100"), 1.0F, 1000);
+  auto *mesh = toolbar.findChild<QAction *>(QStringLiteral("selectionModeMesh"));
+  auto *group = toolbar.findChild<QAction *>(QStringLiteral("selectionModeGroup"));
+  ASSERT_NE(mesh, nullptr);
+  ASSERT_NE(group, nullptr);
+  auto *mesh_button = qobject_cast<QToolButton *>(toolbar.widgetForAction(mesh));
+  auto *group_button = qobject_cast<QToolButton *>(toolbar.widgetForAction(group));
+  ASSERT_NE(mesh_button, nullptr);
+  ASSERT_NE(group_button, nullptr);
+  ASSERT_TRUE(mesh_button->isVisible());
+  ASSERT_TRUE(group_button->isVisible());
+  EXPECT_TRUE(mesh->isChecked());
+  click_widget(*group_button, group_button->rect().center());
+  EXPECT_EQ(selection_requests, 1);
+  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Group);
+  EXPECT_TRUE(group->isChecked());
+  EXPECT_FALSE(mesh->isChecked());
+  review_layout(QStringLiteral("object-group-selected-100"), 1.0F, 1000);
+  click_widget(*mesh_button, mesh_button->rect().center());
+  EXPECT_EQ(selection_requests, 2);
+  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
+  EXPECT_TRUE(mesh->isChecked());
+  EXPECT_FALSE(group->isChecked());
   review_layout(QStringLiteral("object-200"), 2.0F, 1000);
   review_layout(QStringLiteral("object-narrow-200"), 2.0F, 320);
   review_layout(QStringLiteral("object-narrow-100-down"), 1.0F, 320);
@@ -1284,6 +1308,8 @@ TEST(QtProjectWorkspaceTests,
   ASSERT_TRUE(editor.commands().execute(quader::quader_command::kEditorModeObject).ok());
   toolbar.synchronize(editor, quader::QuaderSelectionMode::Object);
   verify_controls(false);
+  EXPECT_TRUE(mesh->isChecked());
+  EXPECT_FALSE(group->isChecked());
   review_layout(QStringLiteral("object-native-high-contrast"), 1.0F, 1000);
   EXPECT_EQ(requests, 1);
   EXPECT_EQ(editor.selection().summary().selected_object_count, 2u);

@@ -86,8 +86,7 @@ QtSelectionToolbar::QtSelectionToolbar(QWidget *parent) : QToolBar(parent) {
   editor_mode_tooltip_ = QStringLiteral("Editor Mode");
   editor_mode_combo_->setAccessibleName(editor_mode_tooltip_);
   addWidget(editor_mode_combo_);
-  selection_separator_ = addSeparator();
-  selection_separator_->setVisible(false);
+  addSeparator();
   QObject::connect(editor_mode_combo_, &QComboBox::activated, this,
                    [this](int index) {
                      if (editor_mode_requested_) {
@@ -105,9 +104,10 @@ QtSelectionToolbar::QtSelectionToolbar(QWidget *parent) : QToolBar(parent) {
         QString::fromUtf8(spec.fallback.data()));
     action->setObjectName(QString::fromUtf8(spec.object_name));
     action->setCheckable(true);
-    action->setEnabled(spec.mode == QuaderSelectionMode::Object ||
-                       spec.mode == QuaderSelectionMode::Group);
-    action->setVisible(false);
+    const bool object_mode = spec.mode == QuaderSelectionMode::Object ||
+        spec.mode == QuaderSelectionMode::Group;
+    action->setEnabled(object_mode);
+    action->setVisible(object_mode);
     action_group->addAction(action);
     QObject::connect(action, &QAction::triggered, this,
                      [this, mode = spec.mode](bool checked) {
@@ -207,9 +207,6 @@ void QtSelectionToolbar::synchronize(const QuaderEditorApi &editor,
   if (editor_mode_combo_->toolTip() != mode_tooltip) {
     editor_mode_combo_->setToolTip(mode_tooltip);
   }
-  if (selection_separator_->isVisible() != edit_mode) {
-    selection_separator_->setVisible(edit_mode);
-  }
   for (const ModeAction &entry : mode_actions_) {
     const bool component_mode = entry.mode == QuaderSelectionMode::Vertex ||
         entry.mode == QuaderSelectionMode::Edge ||
@@ -217,7 +214,7 @@ void QtSelectionToolbar::synchronize(const QuaderEditorApi &editor,
     if (entry.action->isEnabled() != (component_mode == edit_mode)) {
       entry.action->setEnabled(component_mode == edit_mode);
     }
-    const bool visible = component_mode && edit_mode;
+    const bool visible = component_mode == edit_mode;
     if (entry.action->isVisible() != visible) {
       entry.action->setVisible(visible);
     }
