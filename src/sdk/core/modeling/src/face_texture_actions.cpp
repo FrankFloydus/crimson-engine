@@ -390,7 +390,7 @@ struct TransferChart {
   }
 };
 
-/// A local frame and target-center pullback, independent of chart values or state.
+/// A local frame and reference-point pullback, independent of chart values or state.
 struct ContinuationPlan {
   std::optional<std::array<std::size_t, 3>> source_corners;
   bool rotates = false;
@@ -408,6 +408,7 @@ struct ContinuationEdges {
   std::size_t source_start = 0;
   std::size_t target_start = 0;
   bool shared = false;
+  bool coincident = false;
 };
 
 /// Exact endpoint coincidence distinguishes shared topology from displaced copies.
@@ -422,6 +423,12 @@ struct ContinuationEdges {
     return {};
   }
   return value / magnitude;
+}
+
+/// A corner on another lobe of a concave face must not reverse its fold orientation.
+[[nodiscard]] QVec3d continuation_oriented_normal(QVec3d value, QVec3d face_normal) {
+  const auto normal = continuation_unit_or_zero(value);
+  return quader_geometry::dot(normal, face_normal) < 0.0 ? normal * -1.0 : normal;
 }
 
 /// The proximity policy treats a componentwise tiny direction as its first point.
@@ -486,7 +493,7 @@ struct ContinuationEdges {
       target_displacement, target_direction, target_squared);
 }
 
-/// Shared edges have priority; strict comparisons preserve both perimeter orders.
+/// Topological and geometric seams precede proximity; strict ties retain perimeter order.
 [[nodiscard]] std::optional<ContinuationEdges> find_continuation_edges(
     const TransferPlane &source, const TransferPlane &target,
     std::span<const quader_poly::ElementId> source_vertices,
@@ -501,6 +508,10 @@ struct ContinuationEdges {
       target_vertices.size() == target_count) {
     for (std::size_t source_start = 0; source_start < source_count; ++source_start) {
       const std::size_t source_end = (source_start + 1) % source_count;
+      if (continuation_same_position(source.positions[source_start],
+                                     source.positions[source_end])) {
+        continue;
+      }
       for (std::size_t target_start = 0; target_start < target_count; ++target_start) {
         const std::size_t target_end = (target_start + 1) % target_count;
         const bool forward =
@@ -518,8 +529,31 @@ struct ContinuationEdges {
             continuation_same_position(source.positions[source_end],
                                        target.positions[target_start]);
         if (forward || reverse) {
-          return ContinuationEdges{source_start, target_start, true};
+          return ContinuationEdges{source_start, target_start, true, true};
         }
+      }
+    }
+  }
+
+  // Separate objects can meet at an actual boundary even without shared IDs.
+  // Supporting lines may intersect far outside either segment and score zero,
+  // so they must never displace an exact seam found later in the perimeter.
+  for (std::size_t source_start = 0; source_start < source_count; ++source_start) {
+    const std::size_t source_end = (source_start + 1) % source_count;
+    if (continuation_same_position(source.positions[source_start],
+                                   source.positions[source_end])) {
+      continue;
+    }
+    for (std::size_t target_start = 0; target_start < target_count; ++target_start) {
+      const std::size_t target_end = (target_start + 1) % target_count;
+      const bool forward =
+          continuation_same_position(source.positions[source_start], target.positions[target_start]) &&
+          continuation_same_position(source.positions[source_end], target.positions[target_end]);
+      const bool reverse =
+          continuation_same_position(source.positions[source_start], target.positions[target_end]) &&
+          continuation_same_position(source.positions[source_end], target.positions[target_start]);
+      if (forward || reverse) {
+        return ContinuationEdges{source_start, target_start, false, true};
       }
     }
   }
@@ -583,7 +617,10 @@ continuation_source_corners(const TransferPlane &source, std::size_t source_star
     const double absolute_cosine = std::clamp(std::abs(
         quader_geometry::dot(edge, reach) /
         (std::sqrt(edge_squared) * std::sqrt(reach_squared))), 0.0, 1.0);
-    const double score = edge_squared * reach_squared * (1.0 - absolute_cosine);
+    const auto area = quader_geometry::cross(edge, reach);
+    // Equivalent conditioning score without cancelling 1 - cos for long, thin
+    // source triangles. A real boundary chart must not disappear by rounding.
+    const double score = quader_geometry::dot(area, area) / (1.0 + absolute_cosine);
     if (std::isfinite(score) && score > best_score) {
       best_score = score;
       best = std::array<std::size_t, 3>{source_start, source_end, candidate};
@@ -592,28 +629,28 @@ continuation_source_corners(const TransferPlane &source, std::size_t source_star
   return best;
 }
 
-/// The chosen edge and its first farthest corner determine orientation, even on concave faces.
+/// Conditions the edge plane without letting a concave corner reverse face orientation.
 [[nodiscard]] QVec3d continuation_edge_normal(
     const TransferPlane &plane, std::size_t start) {
-  constexpr double kShortEdgeSquared = 1.0e-5;
   const auto first = plane.positions[start];
   const auto direction = plane.positions[(start + 1) % plane.positions.size()] - first;
   const double direction_squared = quader_geometry::dot(direction, direction);
+  if (!(direction_squared > 0.0) || !std::isfinite(direction_squared)) {
+    return {};
+  }
   double farthest_distance = -1.0;
   QVec3d farthest_displacement{};
   for (const auto position : plane.positions) {
     const auto displacement = position - first;
-    const double distance = direction_squared < kShortEdgeSquared
-        ? quader_geometry::dot(displacement, displacement)
-        : continuation_point_line_distance_squared(
-              displacement, direction, direction_squared);
+    const double distance = continuation_point_line_distance_squared(
+        displacement, direction, direction_squared);
     if (distance > farthest_distance) {
       farthest_distance = distance;
       farthest_displacement = displacement;
     }
   }
-  return continuation_unit_or_zero(
-      quader_geometry::cross(direction, farthest_displacement));
+  return continuation_oriented_normal(
+      quader_geometry::cross(direction, farthest_displacement), plane.normal);
 }
 
 /// A warped face supplies its local chart through a conditioned boundary triangle.
@@ -633,12 +670,12 @@ continuation_local_corners(const TransferPlane &plane,
 
 [[nodiscard]] QVec3d continuation_triangle_normal(
     const TransferPlane &plane, const std::array<std::size_t, 3> &corners) {
-  return continuation_unit_or_zero(quader_geometry::cross(
+  return continuation_oriented_normal(quader_geometry::cross(
       plane.positions[corners[1]] - plane.positions[corners[0]],
-      plane.positions[corners[2]] - plane.positions[corners[0]]));
+      plane.positions[corners[2]] - plane.positions[corners[0]]), plane.normal);
 }
 
-/// Plans seam conditioning and the acute-angle spatial pullback without fitting UVs.
+/// Plans seam conditioning and a plane-aligning spatial pullback without fitting UVs.
 [[nodiscard]] ContinuationPlan make_continuation_plan(
     const TransferPlane &source, const TransferPlane &target,
     std::span<const quader_poly::ElementId> source_vertices,
@@ -647,7 +684,7 @@ continuation_local_corners(const TransferPlane &plane,
   ContinuationPlan plan;
   auto source_normal = source.normal;
   auto target_normal = target.normal;
-  auto source_reference = source.positions.front();
+  auto source_reference = source.center;
   auto target_reference = target.center;
   const auto edges = find_continuation_edges(
       source, target, source_vertices, target_vertices, same_occurrence);
@@ -657,20 +694,20 @@ continuation_local_corners(const TransferPlane &plane,
     }
     source_normal = continuation_edge_normal(source, edges->source_start);
     target_normal = continuation_edge_normal(target, edges->target_start);
-    if (!source.planar || !target.planar) {
-      // The polygon center need not lie on the local plane after vertex edits.
-      // Actual boundary points keep a shared seam fixed during the fold.
-      source_reference = source.positions[edges->source_start];
-      target_reference = target.positions[edges->target_start];
-    }
+    // Even tolerated planarity residuals can move a near-parallel intersection
+    // by whole texture tiles. The selected boundaries always anchor the fold.
+    source_reference = source.positions[edges->source_start];
+    target_reference = target.positions[edges->target_start];
   }
   if (!source.planar) {
     plan.source_corners = continuation_local_corners(
         source, edges ? std::optional{edges->source_start} : std::nullopt);
-    if (plan.source_corners) {
-      source_normal = continuation_triangle_normal(source, *plan.source_corners);
-      source_reference = source.positions[plan.source_corners->front()];
-    }
+  }
+  if (plan.source_corners) {
+    // The sampled chart and fold must use the same plane, including faces that
+    // pass the global planarity tolerance but whose boundary triangle differs.
+    source_normal = continuation_triangle_normal(source, *plan.source_corners);
+    source_reference = source.positions[plan.source_corners->front()];
   }
   if (!target.planar) {
     if (const auto corners = continuation_local_corners(
@@ -680,30 +717,48 @@ continuation_local_corners(const TransferPlane &plane,
     }
   }
 
+  const bool coincident = edges && edges->coincident;
+  const auto seam_axis = coincident ? continuation_unit_or_zero(
+      source.positions[(edges->source_start + 1U) % source.positions.size()] -
+      source.positions[edges->source_start]) : QVec3d{};
   const auto normal_cross = quader_geometry::cross(source_normal, target_normal);
-  const double plane_sine =
-      std::hypot(normal_cross.x, normal_cross.y, normal_cross.z);
+  const double plane_sine = coincident
+      ? quader_geometry::dot(normal_cross, seam_axis)
+      : std::hypot(normal_cross.x, normal_cross.y, normal_cross.z);
   if (!std::isfinite(plane_sine) ||
-      plane_sine < static_cast<double>(std::numeric_limits<float>::epsilon())) {
+      (!coincident &&
+       plane_sine < static_cast<double>(std::numeric_limits<float>::epsilon()))) {
     return plan;
   }
   const double plane_cosine = std::clamp(
       quader_geometry::dot(source_normal, target_normal), -1.0, 1.0);
-  const double angle = std::atan2(plane_sine, std::abs(plane_cosine));
+  const double angle = std::atan2(plane_sine, plane_cosine);
   plan.sine = std::sin(angle);
-  // This half-angle identity avoids subtracting nearly equal values near parallel.
-  plan.one_minus_cosine = plan.sine * plan.sine / (1.0 + std::cos(angle));
+  const double cosine = std::cos(angle);
+  // Align the actual planes: folding an obtuse angle to an unsigned acute angle
+  // leaves a normal component in the chart, shrinking or collapsing its footprint.
+  // Use the half-angle identity only near parallel, where subtraction loses bits.
+  plan.one_minus_cosine = cosine >= 0.0
+      ? plan.sine * plan.sine / (1.0 + cosine)
+      : 1.0 - cosine;
   plan.source_normal = source_normal;
-  plan.source_transverse =
-      quader_geometry::cross(normal_cross / plane_sine, source_normal);
+  plan.source_transverse = quader_geometry::cross(
+      coincident ? seam_axis : normal_cross / plane_sine, source_normal);
   plan.source_reference = source_reference;
-  plan.target_reference = target_reference;
+  plan.target_reference = coincident ? source_reference : target_reference;
+  if (coincident) {
+    // The actual seam supplies a stable hinge even at an exact 180-degree fold.
+    // Its common origin also fixes the UV phase without an ill-conditioned
+    // plane-intersection solve or subtraction between opposite seam endpoints.
+    plan.rotates = true;
+    return plan;
+  }
 
   const auto reference_delta = plan.target_reference - plan.source_reference;
   const double normal_distance = quader_geometry::dot(source_normal, reference_delta);
   const double normal_ratio = plane_cosine / plane_sine;
   // In the (transverse, normal) frame, the true intersection fixes the target
-  // center's transverse distance from the pivot to -normal_ratio*normal_distance.
+  // reference's transverse distance from the pivot to -normal_ratio*normal_distance.
   // Apply the inverse rotation to that displacement without constructing a
   // potentially distant pivot or subtracting large world-space plane constants.
   const double transverse_correction = normal_distance *
@@ -862,13 +917,11 @@ continuation_local_corners(const TransferPlane &plane,
       samples.effective_uvs.push_back(source_face.effective_uvs[corner]);
       sample_plane.positions.push_back(source_plane.positions[corner]);
     }
-    if (!source_plane.planar) {
-      // Fit and transport the same triangle, rather than projecting its chart
-      // back onto the unrelated whole-polygon area normal.
-      samples.normal = geometric_normal(samples.local_positions);
-      sample_plane.normal = continuation_triangle_normal(
-          sample_plane, std::array<std::size_t, 3>{0U, 1U, 2U});
-    }
+    // Sampled endpoints define the seam exactly; projecting their fitted chart
+    // onto the whole polygon's normal would move that seam on tolerated warps.
+    samples.normal = geometric_normal(samples.local_positions);
+    sample_plane.normal = continuation_triangle_normal(
+        sample_plane, std::array<std::size_t, 3>{0U, 1U, 2U});
     if (auto chart = transfer_chart(source, samples, sample_plane)) {
       return chart;
     }

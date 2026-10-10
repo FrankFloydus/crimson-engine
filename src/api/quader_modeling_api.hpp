@@ -674,8 +674,9 @@ public:
   QuaderApiVoidResult
   apply_face_texture_action(const QuaderFaceTextureActionRequest &request);
   /// Continues the sole selected face's material/UV chart onto a target face by
-  /// rotating about the planes' intersection with the folded acute-angle rule.
-  /// Nearly parallel planes retain the chart; the source selection stays intact.
+  /// rotating about the planes' intersection while preserving texture density.
+  /// An actual seam fixes alignment even at opposed normals; disjoint nearly
+  /// parallel planes retain the chart. The source selection stays intact.
   QuaderApiVoidResult transfer_face_texture_to_face(
       QuaderModelingObjectId object_id, QuaderElementId face_id);
   [[nodiscard]] bool face_texture_treat_as_one() const;

@@ -789,9 +789,24 @@ Bindings and scope rules: [INPUT_KEYBINDINGS.md](INPUT_KEYBINDINGS.md).
 - Continue Texture retains the selected source; target material and UVs publish in one history
   step. A shared source/target edge supplies its endpoint UVs plus a conditioned third corner,
   without requiring other source corners to fit that local chart.
-  A geometry-only plan carries the chart through a local frame with the signed acute fold.
-  Planar faces keep the source plane anchored at the first source corner and the target plane
-  at its center, including tolerated planarity residuals; a full normal-alignment rotation differs.
+  Each transfer constrains that source/target seam only. Around a junction whose face angles
+  do not sum to 360 degrees, different continuation routes cannot preserve both all seams
+  and the chart metric. Keep flat-junction route agreement and per-transfer seam/density
+  checks in `FaceTextureWrapTests.JunctionRoutesPreserveEachSeamAndCloseWhenDevelopable`.
+  A geometry-only plan carries the chart through a local frame with the oriented plane angle.
+  Selected boundary edges anchor both fold planes at their own endpoints, including tolerated
+  planarity residuals. A polygon first corner or center can move the hinge off the shared seam;
+  nearly opposed faces amplify that error into a large UV phase jump. Fit and transport a sampled
+  source chart on the same conditioned triangle. Short nonzero edges still measure perpendicular
+  corner distance; a radial-distance fallback can choose a collinear corner and suppress the fold.
+  Orient local normals with the polygon area normal: a farthest corner across a concave lobe
+  must not reverse the chart when the polygon's cyclic start changes. Without matched edges,
+  use both face centers for the planar fallback, not an arbitrary first source vertex.
+  Prioritize exact geometric boundary coincidence after shared topology and before supporting-line
+  proximity, which can tie at remote intersections. A coincident edge supplies the rotation axis
+  and common UV anchor even at 180 degrees; only disjoint near-parallel faces use the no-fold fallback.
+  Preserve transverse density at obtuse folds: an unsigned acute rotation leaves the chart
+  off-plane and can collapse it at 135 degrees.
   Edited, nonplanar faces remain valid texture-transfer inputs. Recover a local chart and fold
   around their actual seam; do not reject a renderable face just because its corners are warped.
   Preserve the seam endpoint UVs, source attributes and geometry in both transfer directions.

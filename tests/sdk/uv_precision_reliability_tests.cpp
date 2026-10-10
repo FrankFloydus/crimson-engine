@@ -192,11 +192,11 @@ TEST(UvPrecisionReliabilityTests,
     double degrees;
     float developed_width;
   };
-  // The 90 -> -20 turn uses Hammer's acute 70-degree wrap. Its projected
-  // advance is 2*cos(40 degrees), and the last panel retains that density.
+  // Every panel has two units of developed width, including the obtuse
+  // 90 -> -20 turn; a continued chart must not accumulate density loss.
   constexpr std::array<WrapStep, 4> kSteps{{
       {37.0, 2.0F}, {90.0, 2.0F},
-      {-20.0, 1.532088886F}, {0.0, 1.532088886F}}};
+      {-20.0, 2.0F}, {0.0, 2.0F}}};
   std::array<Vec2, 4> source_uvs;
   for (std::size_t corner = 0U; corner < source_uvs.size(); ++corner) {
     source_uvs[corner] = strip_uv(kSourcePoints[corner].x, kSourcePoints[corner].y);

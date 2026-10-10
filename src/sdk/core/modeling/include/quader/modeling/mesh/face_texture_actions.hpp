@@ -125,15 +125,22 @@ struct PreparedFaceTextureAction {
 
 /**
  * Continues a source texture chart about the planes' intersection using the
- * acute plane angle. A shared edge in the same document uses its endpoint UVs
+ * oriented plane angle, preserving texture density across obtuse folds too.
+ * A shared edge in the same document uses its endpoint UVs
  * and a geometrically conditioned third corner, preserving that local seam
  * even for non-affine source UVs. Otherwise a planar source must supply an affine
- * chart. The shared edge, or closest aligned pair of boundary-edge lines,
- * orients planar faces using their farthest corner, including concave faces.
- * Warped authored faces use a conditioned local boundary triangle for their
- * chart and fold plane, anchored at that boundary so shared seams remain fixed.
- * Parallel/opposed and float-epsilon near-parallel planes retain world
- * axes and phase. Copies the source face settings and the host-resolved material
+ * chart. Shared topology and exactly coincident boundary edges take priority
+ * over the closest aligned pair of boundary-edge lines. The selected pair
+ * anchors the fold at its boundary endpoints. Sampled source charts and their
+ * fold use the same conditioned triangle even for tolerated planarity residuals.
+ * Other planar faces use their farthest corner from the edge line, including
+ * short edges and concave faces; warped faces use a local boundary triangle.
+ * Local plane orientation follows the polygon winding rather than the chosen
+ * corner's side of a concave boundary. With no matched edge, face centers anchor
+ * the planar fallback.
+ * An actual coincident boundary supplies the hinge even at a 180-degree fold.
+ * Without one, parallel/opposed and float-epsilon near-parallel planes retain
+ * world axes and phase. Copies the source face settings and the host-resolved material
  * slot without changing geometry, component IDs, selection, or sampling.
  * Returns only the immutable target replacement; neither input is modified.
  */

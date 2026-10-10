@@ -7139,14 +7139,15 @@ TEST(ModelingSdkConsumerTests,
     double degrees;
     float outer_source_x;
   };
-  // Hammer rotates the source chart through the acute angle between planes.
-  // Beyond 90 degrees, the two-unit target edge therefore no longer unfolds
-  // to source X = 6; at 135 degrees its projected width is zero.
-  constexpr std::array<WrapCase, 10> kCases{{
+  // The coincident boundary supplies a stable hinge at every angle, including
+  // exactly opposed planes: its two-unit target width unfolds to source X = 6.
+  constexpr std::array<WrapCase, 16> kCases{{
       {90.0, 6.0F}, {37.0, 6.0F}, {-53.0, 6.0F},
-      {120.0, 5.0F}, {135.0, 4.0F}, {150.0, 3.0F},
-      {179.999, 2.0F}, {0.001, 6.0F},
-      {180.0 - 1.0e-10, 2.0F}, {1.0e-10, 6.0F},
+      {120.0, 6.0F}, {135.0, 6.0F}, {150.0, 6.0F},
+      {-120.0, 6.0F}, {-135.0, 6.0F}, {-150.0, 6.0F},
+      {179.999, 6.0F}, {-179.999, 6.0F}, {0.001, 6.0F},
+      {180.0, 6.0F}, {0.0, 6.0F},
+      {180.0 - 1.0e-10, 6.0F}, {1.0e-10, 6.0F},
   }};
   for (const auto &[degrees, outer_source_x] : kCases) {
     SCOPED_TRACE(degrees);

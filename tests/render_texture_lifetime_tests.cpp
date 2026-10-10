@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_editor_api.hpp"
+#include "api/quader_polygon_document_internal_access.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "editor/session/scene_session.hpp"
 #include "render/filament_material_library.hpp"
@@ -120,6 +121,110 @@ private:
       MeshVertex{.position = {0.0f, 1.0f, 0.0f},
                  .normal = {0.0f, 0.0f, 1.0f}, .uv = {0.5f, 1.0f}}};
   std::array<std::uint32_t, 3u> indices_{0u, 1u, 2u};
+};
+
+/// Reads actual bridge submissions from equal-scale, face-on cameras.
+class FaceTextureCapture final {
+public:
+  explicit FaceTextureCapture(filament::Engine &engine) : engine_(engine) {
+    scene_ = engine_.createScene();
+    renderer_ = engine_.createRenderer();
+    swap_chain_ = engine_.createSwapChain(
+        kSize, kSize, filament::SwapChain::CONFIG_READABLE);
+    view_ = engine_.createView();
+    camera_entity_ = utils::EntityManager::get().create();
+    camera_ = engine_.createCamera(camera_entity_);
+    camera_->setProjection(filament::Camera::Projection::ORTHO,
+                           -1.0, 1.0, -1.0, 1.0, 0.1, 20.0);
+    view_->setCamera(camera_);
+    view_->setScene(scene_);
+    view_->setViewport({0u, 0u, kSize, kSize});
+    view_->setVisibleLayers(0xffu, kViewportRenderedSceneLayerMask);
+    view_->setPostProcessingEnabled(false);
+    view_->setShadowingEnabled(false);
+    view_->setAntiAliasing(filament::View::AntiAliasing::NONE);
+    view_->setDithering(filament::View::Dithering::NONE);
+    view_->setTemporalAntiAliasingOptions({.enabled = false});
+    view_->setMultiSampleAntiAliasingOptions({.enabled = false});
+    // Albedo diagnostic removes lighting differences between the face normals.
+    view_->setMaterialGlobal(0u, {3.0f, 0.0f, 0.0f, 1.0f});
+    renderer_->setClearOptions(
+        {.clearColor = {0.0f, 0.0f, 0.0f, 1.0f}, .clear = true});
+  }
+
+  ~FaceTextureCapture() {
+    (void)engine_.flushAndWait(10'000'000'000ull);
+    engine_.pumpMessageQueues();
+    engine_.destroy(view_);
+    engine_.destroyCameraComponent(camera_entity_);
+    utils::EntityManager::get().destroy(camera_entity_);
+    engine_.destroy(renderer_);
+    engine_.destroy(swap_chain_);
+    engine_.destroy(scene_);
+  }
+
+  QImage capture(QVec3 center, QVec3 normal, QVec3 up) {
+    scene_->removeEntities(entities_.data(), entities_.size());
+    const auto &renderables = engine_.getRenderableManager();
+    entities_.assign(renderables.getEntities(),
+                     renderables.getEntities() + renderables.getComponentCount());
+    scene_->addEntities(entities_.data(), entities_.size());
+    const auto eye = center + normal * 4.0f;
+    camera_->lookAt({eye.x, eye.y, eye.z}, {center.x, center.y, center.z},
+                    {up.x, up.y, up.z});
+    auto readback = std::make_shared<Readback>();
+    readback->pixels.resize(kSize * kSize * 4u);
+    for (int frame = 0; frame < 4; ++frame) {
+      bool begun = false;
+      for (int attempt = 0; attempt < 32 && !begun; ++attempt) {
+        begun = renderer_->beginFrame(swap_chain_);
+        if (!begun && !engine_.flushAndWait(10'000'000'000ull)) return {};
+      }
+      if (!begun) return {};
+      renderer_->render(view_);
+      if (frame == 3) {
+        auto *owner = new std::shared_ptr<Readback>(readback);
+        renderer_->readPixels(
+            0u, 0u, kSize, kSize,
+            filament::backend::PixelBufferDescriptor(
+                readback->pixels.data(), readback->pixels.size(),
+                filament::backend::PixelDataFormat::RGBA,
+                filament::backend::PixelDataType::UBYTE,
+                [](void *, std::size_t, void *user) {
+                  auto *holder = static_cast<std::shared_ptr<Readback> *>(user);
+                  (*holder)->complete.store(true, std::memory_order_release);
+                  delete holder;
+                }, owner));
+      }
+      renderer_->endFrame();
+      if (!engine_.flushAndWait(10'000'000'000ull)) return {};
+      engine_.pumpMessageQueues();
+    }
+    for (int attempt = 0; attempt < 10 &&
+         !readback->complete.load(std::memory_order_acquire); ++attempt) {
+      if (!engine_.flushAndWait(1'000'000'000ull)) return {};
+      engine_.pumpMessageQueues();
+    }
+    if (!readback->complete.load(std::memory_order_acquire)) return {};
+    return QImage(readback->pixels.data(), static_cast<int>(kSize),
+                  static_cast<int>(kSize), QImage::Format_RGBA8888).copy();
+  }
+
+private:
+  struct Readback final {
+    std::vector<unsigned char> pixels;
+    std::atomic<bool> complete{false};
+  };
+
+  static constexpr std::uint32_t kSize = 256u;
+  filament::Engine &engine_;
+  filament::Scene *scene_ = nullptr;
+  filament::Renderer *renderer_ = nullptr;
+  filament::SwapChain *swap_chain_ = nullptr;
+  filament::View *view_ = nullptr;
+  filament::Camera *camera_ = nullptr;
+  utils::Entity camera_entity_;
+  std::vector<utils::Entity> entities_;
 };
 
 TEST(RenderTextureLifetimeTests,
@@ -1002,6 +1107,146 @@ TEST(RenderTextureLifetimeTests, VulkanLargeWireRetirementReleasesPrunedAndLiveR
             << std::chrono::duration<double, std::milli>(
                    std::chrono::steady_clock::now() - retirement_start).count()
             << std::endl;
+}
+
+TEST(RenderTextureLifetimeTests,
+     VulkanTextureContinuationPreservesSlopedFaceDensityAndHistoryPixels) {
+  if (qEnvironmentVariable("QUADER_RUN_VULKAN_TEXTURE_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_TEXTURE_TESTS=1 for texture "
+                    "continuation pixel verification.";
+  }
+  QTemporaryDir directory;
+  ASSERT_TRUE(directory.isValid());
+  const QString texture_path = directory.filePath(QStringLiteral("checker.png"));
+  QImage checker(64, 64, QImage::Format_RGBA8888);
+  for (int y = 0; y < checker.height(); ++y) {
+    for (int x = 0; x < checker.width(); ++x) {
+      const int intensity = ((x / 8) + (y / 8)) % 2 == 0 ? 32 : 224;
+      checker.setPixelColor(x, y, QColor(intensity, intensity, intensity));
+    }
+  }
+  ASSERT_TRUE(checker.save(texture_path));
+
+  for (const float target_cosine : {0.5f, -0.5f}) {
+    SCOPED_TRACE(target_cosine > 0.0f ? "60 degree fold" : "120 degree fold");
+    TextureLifetimeHarness harness;
+    ASSERT_TRUE(harness.initialize(filament::Engine::Backend::VULKAN));
+    harness.initialize_scene_bridge();
+    SceneSession session;
+    QuaderEditorApi editor{
+        QuaderApiSessionInternalAccess::from_scene_session(session)};
+    const auto texture = editor.assets().add_texture({
+        .name = "Continuation checker", .usage = QuaderTextureUsage::BaseColor,
+        .color_space = QuaderTextureColorSpace::Srgb, .width = 64u, .height = 64u,
+        .source_path = texture_path.toStdString()});
+    ASSERT_TRUE(texture.ok()) << texture.error_message();
+    const auto material = editor.assets().add_material(QuaderMaterialArgs{
+        .name = "Continuation checker"});
+    ASSERT_TRUE(material.ok()) << material.error_message();
+    ASSERT_TRUE(editor.assets().set_material_texture(
+        material.value().id, material_texture_slot::kBaseColor,
+        texture.value().id).ok());
+
+    constexpr float kSine = 0.8660254037844386f;
+    const QVec3 target_up{0.0f, -kSine, -target_cosine};
+    const QVec3 target_normal{0.0f, target_cosine, -kSine};
+    quader_poly::Document document;
+    const std::array<QVec3, 6u> positions{{
+        {-1.0f, 0.0f, 2.0f}, {1.0f, 0.0f, 2.0f},
+        {1.0f, 0.0f, 0.0f}, {-1.0f, 0.0f, 0.0f},
+        QVec3{1.0f, 0.0f, 0.0f} + target_up * 2.0f,
+        QVec3{-1.0f, 0.0f, 0.0f} + target_up * 2.0f}};
+    std::array<quader_poly::ElementId, 6u> vertices;
+    for (std::size_t index = 0u; index < positions.size(); ++index) {
+      vertices[index] = quader_poly::add_vertex(document, positions[index]);
+    }
+    const auto source_face = quader_poly::add_face(document,
+        std::array{vertices[0u], vertices[1u], vertices[2u], vertices[3u]});
+    const auto target_face = quader_poly::add_face(document,
+        std::array{vertices[3u], vertices[2u], vertices[4u], vertices[5u]});
+    ASSERT_NE(source_face, quader_poly::kInvalidElementId);
+    ASSERT_NE(target_face, quader_poly::kInvalidElementId);
+    document.faces[0u].uvs = {
+        {0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f}, {0.0f, 1.0f}};
+    document.faces[1u].uvs = {
+        {0.0f, 0.0f}, {0.25f, 0.0f}, {0.25f, 0.25f}, {0.0f, 0.25f}};
+    const auto object = editor.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+        {.name = "Top and sloped front",
+         .material = QuaderMaterialReference::embedded(material.value().id)});
+    ASSERT_TRUE(object.ok()) << object.error_message();
+    ASSERT_TRUE(editor.selection().select_object(object.value()).ok());
+    ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
+    ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+    ASSERT_TRUE(editor.selection().select_face(object.value(), source_face).ok());
+    const auto synchronize = [&] {
+      const auto result = QuaderRenderApiRuntimeAccess::sync_scene(
+          editor.render(), harness.bridge());
+      EXPECT_TRUE(result.ok()) << result.error_message();
+    };
+    const auto different_interior_pixels = [](const QImage &first,
+                                               const QImage &second) {
+      std::size_t difference = 0u;
+      if (first.isNull() || second.isNull() || first.size() != second.size()) {
+        return static_cast<std::size_t>(256u * 256u);
+      }
+      for (int y = 16; y < first.height() - 16; ++y) {
+        for (int x = 16; x < first.width() - 16; ++x) {
+          if (std::abs(qRed(first.pixel(x, y)) - qRed(second.pixel(x, y))) > 8) {
+            ++difference;
+          }
+        }
+      }
+      return difference;
+    };
+    FaceTextureCapture capture(harness.engine());
+    synchronize();
+    const auto source = capture.capture(
+        {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, -1.0f});
+    const auto before = capture.capture(target_up, target_normal, target_up);
+    ASSERT_FALSE(source.isNull());
+    ASSERT_FALSE(before.isNull());
+    std::size_t dark_pixels = 0u;
+    std::size_t bright_pixels = 0u;
+    for (int y = 16; y < source.height() - 16; ++y) {
+      for (int x = 16; x < source.width() - 16; ++x) {
+        const int intensity = qRed(source.pixel(x, y));
+        dark_pixels += intensity < 50;
+        bright_pixels += intensity > 100;
+      }
+    }
+    ASSERT_GT(dark_pixels, 1000u);
+    ASSERT_GT(bright_pixels, 1000u)
+        << "The GPU must sample the authored checker instead of a fallback.";
+    ASSERT_GT(different_interior_pixels(source, before), 10000u);
+
+    const auto transferred = editor.modeling().transfer_face_texture_to_face(
+        object.value().modeling_object_id, target_face);
+    ASSERT_TRUE(transferred.ok()) << transferred.error_message();
+    ASSERT_TRUE(transferred.changed());
+    synchronize();
+    const auto continued = capture.capture(target_up, target_normal, target_up);
+    ASSERT_FALSE(continued.isNull());
+    // Both faces cover the same world dimensions. Continuing across the seam
+    // advances by one complete image repeat, so equal face-on pixels prove
+    // both interior texel density and phase without reimplementing UV math.
+    EXPECT_LT(different_interior_pixels(source, continued), 500u);
+    const auto uploads = harness.bridge().diagnostics().gpu_geometry_upload_count;
+    synchronize();
+    EXPECT_EQ(capture.capture(target_up, target_normal, target_up), continued);
+    EXPECT_EQ(harness.bridge().diagnostics().gpu_geometry_upload_count, uploads);
+    ASSERT_TRUE(editor.history().undo().ok());
+    synchronize();
+    EXPECT_EQ(capture.capture(target_up, target_normal, target_up), before);
+    ASSERT_TRUE(editor.history().redo().ok());
+    synchronize();
+    EXPECT_EQ(capture.capture(target_up, target_normal, target_up), continued);
+    std::cout << "Texture continuation GPU fold_cosine=" << target_cosine
+              << " matching_interior_pixels="
+              << 224u * 224u - different_interior_pixels(source, continued)
+              << '/' << 224u * 224u << std::endl;
+  }
 }
 
 TEST(RenderTextureLifetimeTests, VulkanSingleEdgeBevelSettingsUpdateScenePixels) {

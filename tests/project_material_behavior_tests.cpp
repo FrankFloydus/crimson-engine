@@ -2461,8 +2461,8 @@ TEST(ProjectMaterialBehaviorTests,
 }
 
 TEST(ProjectMaterialBehaviorTests,
-     FaceTextureTransferMatchesHammerObtuseWrapWithExactHistory) {
-  ProjectMaterialBehaviorHarness harness("face-transfer-hammer-obtuse");
+     FaceTextureTransferPreservesDensityAroundObtuseFoldWithExactHistory) {
+  ProjectMaterialBehaviorHarness harness("face-transfer-obtuse-density");
   harness.create();
   auto &editor = harness.editor();
   const auto source = editor.modeling().create_mesh(
@@ -2513,10 +2513,10 @@ TEST(ProjectMaterialBehaviorTests,
   EXPECT_EQ(after.faces.front().texture_transform, source_before.faces.front().texture_transform);
   const auto uv = effective_face_corner_uvs(harness.project(), target.value().entity, 1);
   ASSERT_EQ(uv.size(), 4U);
-  // Hammer folds the 120-degree normal angle to 60 degrees. The target's
-  // transverse UV advance is one half, while both seam endpoints stay fixed.
+  // Unfolding the 120-degree crease retains its full transverse width and
+  // fixes both seam endpoints, including the reflected source chart.
   constexpr std::array<QVec2, 4> kExpectedBase{{
-      {1.0F, 0.0F}, {1.5F, 0.0F}, {1.5F, 1.0F}, {1.0F, 1.0F}}};
+      {1.0F, 0.0F}, {2.0F, 0.0F}, {2.0F, 1.0F}, {1.0F, 1.0F}}};
   for (std::size_t corner = 0; corner < uv.size(); ++corner) {
     const QVec2 expected = source_uv[0] +
         (source_uv[1] - source_uv[0]) * kExpectedBase[corner].x +
@@ -2540,6 +2540,160 @@ TEST(ProjectMaterialBehaviorTests,
       *authored_document(harness.project(), target.value().entity), after);
   EXPECT_EQ(*scene_material(harness.project(), target.value().entity), material_after);
   expect_same_selection_identity(exact_selection(harness.project()), selection_before);
+}
+
+TEST(ProjectMaterialBehaviorTests,
+     FaceTextureTransferPreservesSavedEditedBoxFrontDensityAndHistory) {
+  for (const quader_poly::ElementId target_id : {1, 20}) {
+    SCOPED_TRACE(target_id);
+    ProjectMaterialBehaviorHarness harness("face-transfer-saved-box-front");
+    harness.create();
+    auto &editor = harness.editor();
+    // Reduced top/front from the reported edited Box. Both polygons are warped;
+    // the common boundary and each adjacent conditioned triangle define the fold.
+    quader_poly::Document document;
+    document.vertices = {
+        {9, {1.685585141F, -0.948392928F, 0.937446594F}},
+        {10, {1.935584188F, -0.387061238F, 1.242050171F}},
+        {17, {0.935583234F, 0.909887314F, 1.242052078F}},
+        {18, {1.935581326F, 0.909889936F, -0.062553406F}},
+        {19, {0.935579419F, 0.919828653F, -0.770998001F}},
+        {21, {1.935578465F, 0.051608682F, -1.062553406F}},
+        {22, {1.228471875F, 0.051607132F, -1.355445862F}},
+        {62, {-1.379130244F, 0.909882307F, 1.242056847F}},
+        {63, {-1.182339072F, -0.948399067F, 0.937452435F}},
+        {65, {-0.018673539F, 0.916664779F, -0.863734245F}}};
+    document.faces = {
+        {.id = 5, .vertices = {19, 65, 62, 17, 18},
+         .uvs = {{0.343605638F, 7.661472797F}, {0.582168877F, 7.684656620F},
+                 {0.922282994F, 7.158208847F}, {0.343604594F, 7.158209801F},
+                 {0.093605153F, 7.484361649F}},
+         .material_slot = 6,
+         .texture_transform = {.scale = {0.324999988F, 0.324999988F}}},
+        {.id = 1, .vertices = {17, 62, 63, 9, 10},
+         .uvs = {{0.811396480F, -0.375003666F}, {0.232718080F, -0.374999940F},
+                 {0.281917870F, 0.089570127F}, {0.998898923F, 0.089565501F},
+                 {1.061398149F, -0.050767608F}},
+         .material_slot = 5,
+         .texture_transform = {.scale = {0.125F, 0.125F}}},
+        {.id = 20, .vertices = {22, 19, 18, 21},
+         .uvs = {{-0.582972348F, 8.967743874F}, {-0.474721730F, 8.774317741F},
+                 {-0.704624951F, 8.569500923F}, {-0.781284034F, 8.923951149F}},
+         .material_slot = 6,
+         .texture_transform = {.scale = {0.324999988F, 0.324999988F}}}};
+    document.next_vertex_id = 66;
+    document.next_face_id = 21;
+    const auto created = editor.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(document),
+        {.name = "Edited Box top and front"});
+    ASSERT_TRUE(created.ok()) << created.error_message();
+    const auto object = created.value();
+    ASSERT_TRUE(editor.scene().set_transform(object.entity,
+        {.location = {0.438815951F, 1.090114355F, 19.0F}}).ok());
+    QMat4 sampling;
+    sampling.values = {
+        -1.0F, -4.298979092709487e-6F, -8.742517820792273e-8F, 0.0F,
+        -4.298979092709487e-6F, 1.0F, 1.095820834962069e-6F, 0.0F,
+        8.742063073441386e-8F, 1.0958211760225822e-6F, -1.0F, 0.0F,
+        1.8711882829666138F, 0.49999773502349854F, 10.874887466430664F, 1.0F};
+    ASSERT_TRUE(harness.project().active_scene()->session->scene().set_texture_mapping(
+        object.entity, {.sampling_from_local = sampling}));
+    const auto source_material = editor.assets().add_material(
+        QuaderMaterialArgs{.name = "Source stone grid"});
+    ASSERT_TRUE(source_material.ok());
+    auto binding = *scene_material(harness.project(), object.entity);
+    binding.material_slots.emplace(6U, source_material.value().id);
+    ASSERT_TRUE(ProjectMaterialFixture(harness.project()).set_material(object.entity, binding));
+    enter_material_edit(editor, {object});
+    ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
+    ASSERT_TRUE(editor.selection().select_face(object, 5).ok());
+    const auto before = *authored_document(harness.project(), object.entity);
+    const auto selected = exact_selection(harness.project());
+    const auto history_before = editor.query().history();
+    const auto source_uv = effective_face_corner_uvs(harness.project(), object.entity, 5);
+    ASSERT_EQ(source_uv.size(), 5U);
+    const auto position = [&](quader_poly::ElementId id) {
+      return quader_poly::find_vertex(before, id)->position;
+    };
+    const bool obtuse_front = target_id == 1;
+    const auto origin_id = obtuse_front ? 62 : 18;
+    const auto end_id = obtuse_front ? 17 : 19;
+    const auto source_other_id = obtuse_front ? 19 : 62;
+    const auto target_other_id = obtuse_front ? 63 : 21;
+    const std::size_t source_origin_corner = obtuse_front ? 2U : 4U;
+    const std::size_t source_end_corner = obtuse_front ? 3U : 0U;
+    const std::size_t source_other_corner = obtuse_front ? 0U : 2U;
+    const std::size_t target_origin_corner = obtuse_front ? 1U : 2U;
+    const std::size_t target_end_corner = obtuse_front ? 0U : 1U;
+    const std::size_t target_other_corner = obtuse_front ? 2U : 3U;
+    const auto seam = position(end_id) - position(origin_id);
+    const float seam_length = length(seam);
+    const auto along_seam = seam * (1.0F / seam_length);
+    const auto source_reach = position(source_other_id) - position(origin_id);
+    const float source_along = dot(source_reach, along_seam);
+    const float source_distance = length(source_reach - along_seam * source_along);
+    const auto seam_uv = source_uv[source_end_corner] - source_uv[source_origin_corner];
+    const auto transverse_gradient =
+        (source_uv[source_other_corner] - source_uv[source_origin_corner] -
+         seam_uv * (source_along / seam_length)) *
+        (1.0F / source_distance);
+    const auto target_reach = position(target_other_id) - position(origin_id);
+    const float target_along = dot(target_reach, along_seam);
+    const float target_distance = length(target_reach - along_seam * target_along);
+    // The front unfolds across the seam from the top. Its perpendicular UV
+    // advance must retain the measured source density over its actual distance.
+    const auto expected_front = source_uv[source_origin_corner] +
+                                seam_uv * (target_along / seam_length) -
+                                transverse_gradient * target_distance;
+
+    const auto applied = editor.modeling().transfer_face_texture_to_face(
+        object.modeling_object_id, target_id);
+    ASSERT_TRUE(applied.ok()) << applied.error_message();
+    if (obtuse_front) EXPECT_TRUE(applied.changed());
+    const auto target_uv = effective_face_corner_uvs(harness.project(), object.entity, target_id);
+    ASSERT_EQ(target_uv.size(), obtuse_front ? 5U : 4U);
+    for (const auto [target_corner, source_corner] :
+         {std::pair{target_origin_corner, source_origin_corner},
+          std::pair{target_end_corner, source_end_corner}}) {
+      EXPECT_NEAR(target_uv[target_corner].x, source_uv[source_corner].x, 0.0002F);
+      EXPECT_NEAR(target_uv[target_corner].y, source_uv[source_corner].y, 0.0002F);
+    }
+    EXPECT_NEAR(target_uv[target_other_corner].x, expected_front.x, 0.0002F);
+    EXPECT_NEAR(target_uv[target_other_corner].y, expected_front.y, 0.0002F);
+    const auto after = *authored_document(harness.project(), object.entity);
+    auto expected_document = before;
+    *quader_poly::find_face(expected_document, target_id) =
+        *quader_poly::find_face(after, target_id);
+    expect_same_authored_document(after, expected_document);
+    EXPECT_EQ(quader_poly::find_face(after, target_id)->texture_transform,
+              quader_poly::find_face(before, 5)->texture_transform);
+    EXPECT_EQ(scene_material(harness.project(), object.entity)->material_for_slot(
+                  quader_poly::find_face(after, target_id)->material_slot),
+              source_material.value().id);
+    expect_same_selection_identity(exact_selection(harness.project()), selected);
+    EXPECT_EQ(editor.query().entity(object.entity)->texture_sampling_from_local->values,
+              sampling.values);
+    const auto history_after = editor.query().history();
+    const auto revisions_after = editor.query().revisions();
+    const auto repeated = editor.modeling().transfer_face_texture_to_face(
+        object.modeling_object_id, target_id);
+    ASSERT_TRUE(repeated.ok()) << repeated.error_message();
+    EXPECT_FALSE(repeated.changed());
+    expect_same_history(editor.query().history(), history_after);
+    expect_same_revisions(editor.query().revisions(), revisions_after);
+    if (!applied.changed()) {
+      expect_same_authored_document(after, before);
+      expect_same_history(history_after, history_before);
+      continue;
+    }
+    ASSERT_TRUE(editor.history().undo().ok());
+    expect_same_authored_document(*authored_document(harness.project(), object.entity), before);
+    EXPECT_EQ(*scene_material(harness.project(), object.entity), binding);
+    EXPECT_EQ(editor.query().history().undo_label, history_before.undo_label);
+    ASSERT_TRUE(editor.history().redo().ok());
+    expect_same_authored_document(*authored_document(harness.project(), object.entity), after);
+    expect_same_selection_identity(exact_selection(harness.project()), selected);
+  }
 }
 
 TEST(ProjectMaterialBehaviorTests,
