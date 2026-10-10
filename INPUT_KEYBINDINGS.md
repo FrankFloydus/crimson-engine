@@ -207,20 +207,27 @@ starts a new operation from the selected caps; accepted geometry is never adjust
 Repeated E retains the current pending operation instead of accepting it implicitly.
 Object/Edit Mode is a scene-owned context separate from selection kind. The remappable Tab
 command toggles it from a focused viewport; panel/text-field Tab traversal and Ctrl+Tab scene
-switching retain their owners. Vertex/Edge/Face selection commands require Edit Mode; Mesh/Group
-commands require Object Mode. Changing selection kind never implicitly enters or exits Edit.
+switching retain their owners. Vertex/Edge/Face selection commands enter Edit Mode through the
+mode owner when needed, including with no selected mesh, then select the requested component kind.
+Object selection returns to Object Mode through the same owner; direct Group selection retains
+its Object Mode requirement.
 `select.toggle_group_selection` is the canonical Object Mode toggle, default Shift+G.
 It switches the existing selection owner between Object and Group: enabled uses the current
 group picking and hierarchy promotion; disabled restores ordinary object selection. The toolbar
-shows one checkable Groups icon in Object Mode and only Vertex/Edge/Face icons in Edit Mode.
-Object selection has no separate toolbar button. Exiting Edit Mode restores Object selection,
-so Groups is unchecked. Explicit Object/Group semantic selection targets remain remappable,
-but their former compiled 4/5 defaults are deliberately unassigned; preserve stored user overrides.
-When Object selection is empty, Edit entry may use the retained active mesh if it is eligible;
+always shows Vertex/Edge/Face/Object buttons and an independent checkable Groups icon, with no
+Object/Edit dropdown. The compiled selection defaults are 1/2/3/4 respectively. Exiting Edit Mode
+restores Object selection, so Groups is unchecked. Explicit Object/Group semantic selection
+targets remain remappable; Group has no compiled 5 default. Preserve stored user overrides.
+When Object selection is empty, explicit Tab/API Edit entry may use the retained active mesh if it is eligible;
 selected objects take precedence, and a retained group does not expand. No eligible target leaves
 the mode unchanged without settling pending work or showing a disabled-command error.
-Insert Edge Loop and Knife activation require Edit Mode and enter Edge selection within its
-fixed participant set, including through Shift+R and C respectively.
+Direct component choices still enter an empty Edit context when that fallback has no target.
+Component hover and selection can target eligible scene meshes independently of prior object
+selection; committed selection updates the mode participants, while hover changes presentation only.
+The retained candidate survives empty space and viewport leave. Blank clicks and completed regions
+clear immediate highlighting; gizmo ownership also clears the candidate, preserving selected components.
+Insert Edge Loop and Knife activation require Edit Mode and enter Edge selection, including through
+Shift+R and C respectively. Their surface acquisition and commit validation allow eligible peer meshes.
 Insert Edge Loop reserves canonical Cancel while active, including idle and hover-only states.
 Its preview and insertion move continuously by default. Hold Ctrl to snap the loop to the
 current grid size, independently of the global snapping toggles; releasing Ctrl restores
@@ -369,7 +376,8 @@ Ctrl taking precedence; unmodified input replaces. Modified Edge double-click bo
 valid loop using the pre-first-click selection and clicked edge when those seeds are separated;
 an already contiguous seed chain expands to the full loop. Adjacent Face anchors select the
 whole strip; separated anchors bound an interval. Closed intervals minimize element count,
-with a stable tie rule, rather than searching arbitrary mesh paths. None changes Edit membership.
+with a stable tie rule, rather than searching arbitrary mesh paths. Committed selections update
+the participating meshes through the ordinary selection publication owner.
 Capture the anchor and selection before the first click publishes, then resolve one logical
 double-click result against that context. Fence it by scene, Edit generation, selection kind,
 gesture and intervening selection changes; cancellation must retain an already published
@@ -389,7 +397,7 @@ Paint Select uses those ordered samples with their event-time modifiers. Its pre
 unmodified input replaces once, then accumulates, Shift adds and Ctrl removes (including when both
 are held). Releasing a modifier never clears the stroke again. Interpolate pointer segments through
 the existing point-picking policy, stop at the matching release, and ignore later coalesced motion.
-Painting never changes Edit membership. Explicit Paint activation bypasses transform handles;
+Painting can enroll eligible peer meshes. Explicit Paint activation bypasses transform handles;
 Paint fallback honors the active tool's press precedence before capture. Both bypass click-only
 traversal once a paint stroke begins; an initial Alt traversal press remains a one-shot
 selection gesture. Scene, mode, tool, selection-kind and camera changes retire its capture. An interruption retains the

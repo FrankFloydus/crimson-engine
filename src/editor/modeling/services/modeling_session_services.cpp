@@ -351,6 +351,28 @@ void remove_source_wire_for_object(
       frame.triangles.end());
 }
 
+ViewportOverlayFrame suppress_fallback_source_wire(
+    ViewportOverlayFrame frame, int object_id) {
+  if (object_id <= 0) {
+    return frame;
+  }
+  std::erase_if(frame.lines, [object_id](const ViewportOverlayLine &line) {
+    return line.element.object_id == object_id &&
+           line.layer == ViewportOverlayLayer::SourceWire;
+  });
+  std::erase_if(frame.triangles,
+               [object_id](const ViewportOverlayTriangle &triangle) {
+                 return triangle.element.object_id == object_id &&
+                        triangle.layer ==
+                            ViewportOverlayLayer::SourceWireDepthStamp;
+               });
+  std::erase_if(frame.points, [object_id](const ViewportOverlayPoint &point) {
+    return point.element.object_id == object_id &&
+           point.layer == ViewportOverlayLayer::UnselectedVertex;
+  });
+  return frame;
+}
+
 void append_viewport_overlay_frame(ViewportOverlayFrame &target,
                                    const ViewportOverlayFrame &source) {
   target.triangles.reserve(target.triangles.size() + source.triangles.size());
@@ -1150,6 +1172,8 @@ ModelingSelectionService::cached_local_picking_objects(
   const bool scene_hierarchy_changed =
       !cache.objects_valid ||
       cache.scene_hierarchy_revision != scene_hierarchy_revision;
+  // Component selection changes metadata, not the eligible picking universe.
+  // Keep selection-only revisions out of the geometry cache key.
   const bool local_participants_changed =
       modeling_content_changed || scene_hierarchy_changed ||
       cache.scene_visibility_revision != scene_visibility_revision ||
@@ -1159,7 +1183,6 @@ ModelingSelectionService::cached_local_picking_objects(
       cache.viewport_visibility_revision !=
           local_visibility_revision ||
       cache.object_map_revision != object_map_revision ||
-      cache.editor_mode_revision != editor_mode_revision() ||
       cache.instance_edit_scope != edit_scope ||
       cache.app_selection_mode != participant_mode;
   const bool geometry_changed =
@@ -1172,7 +1195,6 @@ ModelingSelectionService::cached_local_picking_objects(
       cache.viewport_visibility_revision !=
           local_visibility_revision ||
       cache.object_map_revision != object_map_revision ||
-      cache.editor_mode_revision != editor_mode_revision() ||
       cache.instance_edit_scope != edit_scope ||
       cache.app_selection_mode != participant_mode;
   if (!geometry_changed &&
@@ -1198,12 +1220,7 @@ ModelingSelectionService::cached_local_picking_objects(
               return instance_participant_id(occurrence, session);
             },
             [&](EntityId entity) {
-              return viewport_entity_visible(entity) &&
-                     (participant_mode == ModelingSelectionMode::Object ||
-                      participant_mode == ModelingSelectionMode::Group ||
-                      editor_mode_service_ == nullptr ||
-                      editor_mode_service_->contains(entity) ||
-                      (edit_scope.active() && entity == edit_scope.occurrence));
+              return viewport_entity_visible(entity);
             });
     cache.objects = std::move(projection.objects);
     cache.object_transforms =
@@ -1259,7 +1276,6 @@ ModelingSelectionService::cached_local_picking_objects(
   cache.scene_mesh_binding_revision = scene_mesh_binding_revision;
   cache.viewport_visibility_revision = local_visibility_revision;
   cache.object_map_revision = object_map_revision;
-  cache.editor_mode_revision = editor_mode_revision();
   cache.instance_edit_scope = edit_scope;
   cache.app_selection_mode = participant_mode;
   cache.objects_valid = true;
@@ -1809,20 +1825,15 @@ ModelingSelectionService::selection_hover(
       quader_editor_core::selection_pick_options_from_radii(
           request.vertex_radius, request.edge_radius,
           request.select_backfaces);
-  auto immediate_hover = current_hover;
-  immediate_hover.candidate_object_id = -1;
-  auto result = quader_editor_core::update_selection_hover(
+  return quader_editor_core::update_selection_hover(
       cached_local_picking_objects(session, scene, object_map),
-      session.selection_mode(), immediate_hover, to_runtime_ray(request.ray),
+      session.selection_mode(), current_hover, to_runtime_ray(request.ray),
       request.selected_modifier_pressed, pick_options,
       cached_pick_object_bounds(session, scene, object_map),
       cached_local_pick_face_geometry(session, scene, object_map,
                                       pick_options),
       request.face_plane_hover,
       cached_local_picking_transforms(session, scene, object_map));
-  result.hover.candidate_object_id = -1;
-  result.changed = !SelectionOverlayCache::hover_matches(current_hover, result.hover);
-  return result;
 }
 
 quader_editor_core::RectangleSelectionState
@@ -1837,27 +1848,61 @@ std::optional<ModelingSelectionProjectionCommandResult>
 ModelingSelectionService::select_all_in_constrained_component_scope(
     const ModelingSelectionProjectionSnapshot &session,
     const SceneDocument &scene,
-    const ModelingObjectRuntimeMap &object_map) const {
+    const ModelingObjectRuntimeMap &object_map,
+    int sticky_component_object_id) const {
+  const bool instance_scope_active = instance_edit_scope().active();
+  const bool viewport_scope_active = viewport_visibility_active();
   if (session.selection_mode() == quader_editor_core::SelectionMode::Object ||
       app_selection_mode() == ModelingSelectionMode::Group) {
     return std::nullopt;
   }
-  const auto &picking_objects =
+  const bool sticky_scope_requested = sticky_component_object_id > 0;
+  if (!instance_scope_active && !viewport_scope_active &&
+      !sticky_scope_requested) {
+    return std::nullopt;
+  }
+
+  const std::vector<quader_editor_core::PolygonObject> &picking_objects =
       cached_local_picking_objects(session, scene, object_map);
+  const bool sticky_scope_active =
+      sticky_scope_requested &&
+      std::ranges::any_of(
+          picking_objects,
+          [sticky_component_object_id](
+              const quader_editor_core::PolygonObject &object) {
+            return object.id == sticky_component_object_id;
+          });
+  if (!instance_scope_active && !viewport_scope_active &&
+      !sticky_scope_active) {
+    return std::nullopt;
+  }
+
+  // Local visibility and instance edit deliberately restrict the whole
+  // component universe. Ordinary sticky selection only validates its added
+  // target through the pickable universe; existing component-selected meshes
+  // keep the same full-session scope used by the SDK fallback.
+  const std::span<const quader_editor_core::PolygonObject> source_objects =
+      instance_scope_active || viewport_scope_active
+          ? std::span<const quader_editor_core::PolygonObject>(picking_objects)
+          : session.objects();
   std::vector<quader_editor_core::PolygonObject> scoped_objects(
-      picking_objects.begin(), picking_objects.end());
+      source_objects.begin(), source_objects.end());
   int active_object_id = session.active_object_id();
   std::vector<std::size_t> target_indices;
   target_indices.reserve(scoped_objects.size());
   for (std::size_t index = 0; index < scoped_objects.size(); ++index) {
-    if (editor_mode_service_ != nullptr || scoped_objects[index].selected ||
-        scoped_objects[index].component_edit_target) {
+    if (quader_editor_core::component_selection_has_mode_components(
+            scoped_objects[index].selection, session.selection_mode()) ||
+        (sticky_scope_active &&
+         scoped_objects[index].id == sticky_component_object_id)) {
       target_indices.push_back(index);
     }
   }
   if (target_indices.empty()) {
     return ModelingSelectionProjectionCommandResult{
-        .command = {.ok = true, .message = "Selection unchanged."},
+        .command = {.ok = true,
+                    .changed = false,
+                    .message = "Selection unchanged."},
         .projection = session,
     };
   }
@@ -2330,7 +2375,6 @@ ModelingSelectionService::rectangle_selection_universe(
       rectangle_universe_cache_.object_map_revision == object_map_revision &&
       rectangle_universe_cache_.viewport_visibility_revision ==
           local_visibility_revision &&
-      rectangle_universe_cache_.editor_mode_revision == editor_mode_revision() &&
       rectangle_universe_cache_.instance_edit_scope == edit_scope &&
       rectangle_universe_cache_.selection_mode == selection_mode) {
     QDR_PROFILE_SCOPE("Box selection rectangle universe cache hit");
@@ -2381,7 +2425,6 @@ ModelingSelectionService::rectangle_selection_universe(
   rectangle_universe_cache_.object_map_revision = object_map_revision;
   rectangle_universe_cache_.viewport_visibility_revision =
       local_visibility_revision;
-  rectangle_universe_cache_.editor_mode_revision = editor_mode_revision();
   rectangle_universe_cache_.instance_edit_scope = edit_scope;
   rectangle_universe_cache_.selection_mode = selection_mode;
   rectangle_universe_cache_.universe = std::move(universe);
@@ -2794,7 +2837,6 @@ ModelingSelectionService::cached_rectangle_projected_hits_request(
       projection_cache.object_map_revision != object_map_revision ||
       projection_cache.viewport_visibility_revision !=
           local_visibility_revision ||
-      projection_cache.editor_mode_revision != editor_mode_revision() ||
       projection_cache.instance_edit_scope != edit_scope ||
       projection_cache.app_selection_mode !=
           participant_mode ||
@@ -2823,7 +2865,6 @@ ModelingSelectionService::cached_rectangle_projected_hits_request(
     projection_cache.object_map_revision = object_map_revision;
     projection_cache.viewport_visibility_revision =
         local_visibility_revision;
-    projection_cache.editor_mode_revision = editor_mode_revision();
     projection_cache.instance_edit_scope = edit_scope;
     projection_cache.app_selection_mode =
         participant_mode;
@@ -3362,7 +3403,8 @@ ModelingOverlayService::accepted_coordinate_base_frame(
     const ModelingAcceptedOverlayCoordinates &coordinates,
     std::uint64_t local_visibility_revision,
     ModelingSelectionOverlayOptions options,
-    std::uint64_t editor_mode_revision) const {
+    std::uint64_t editor_mode_revision,
+    int suppressed_fallback_source_wire_object_id) const {
   const auto &base = projected_overlay_base_cache_;
   if (!base.populated || base.editor_mode_revision != editor_mode_revision ||
       base.content_revision != coordinates.source_content_revision ||
@@ -3383,18 +3425,50 @@ ModelingOverlayService::accepted_coordinate_base_frame(
   ++geometry_work_.accepted_coordinate_handoff_count;
   QDR_PROFILE_PLOT("Accepted overlay handoff count",
                    static_cast<std::int64_t>(geometry_work_.accepted_coordinate_handoff_count));
-  return base.frame;
+  return suppress_fallback_source_wire(
+      base.frame, suppressed_fallback_source_wire_object_id);
+}
+
+int ModelingOverlayService::fallback_active_source_wire_object_id(
+    const ModelingSelectionProjectionSnapshot &selection) {
+  if (selection.selection_mode() == quader_editor_core::SelectionMode::Object ||
+      selection.active_object_id() <= 0) {
+    return -1;
+  }
+  const auto *active_object = find_polygon_object_by_id(
+      selection.objects(), selection.active_object_id());
+  return active_object != nullptr && active_object->selected &&
+                 !active_object->component_edit_target &&
+                 !quader_editor_core::component_selection_has_any_components(
+                     active_object->selection)
+             ? active_object->id
+             : -1;
+}
+
+int ModelingOverlayService::suppressed_fallback_source_wire_object_id(
+    int fallback_object_id,
+    const quader_editor_core::SelectionHoverState &hover,
+    ModelingSelectionOverlayOptions options) {
+  return !options.suppress_persistent_selection && fallback_object_id > 0 &&
+                 hover.candidate_object_id > 0 &&
+                 hover.candidate_object_id != fallback_object_id &&
+                 options.persistent_source_wire_object_id != fallback_object_id
+             ? fallback_object_id
+             : -1;
 }
 
 std::uint64_t ModelingOverlayService::selection_overlay_signature(
     const quader_editor_core::EditorRuntime &runtime,
-    ModelingSelectionOverlayOptions options) const {
-  // Persistent geometry is owned by explicit participant selection revisions.
+    ModelingSelectionOverlayOptions options,
+    int suppressed_fallback_source_wire_object_id) const {
+  // Only candidate changes that retire the active fallback affect this stream.
+  // Component hits and cursor motion retain the persistent geometry.
   std::uint64_t hash = 1469598103934665603ULL;
   mix_overlay_signature_hash(hash,
                              options.suppress_persistent_object_selection);
   mix_overlay_signature_hash(hash, options.suppress_persistent_selection);
   mix_overlay_signature_hash(hash, options.persistent_source_wire_object_id);
+  mix_overlay_signature_hash(hash, suppressed_fallback_source_wire_object_id);
   mix_overlay_signature_hash(hash,
       runtime.active_tool() == quader_editor_core::ViewportInteractionTool::Cut);
   return hash;
@@ -3775,6 +3849,14 @@ ModelingOverlayService::selection_overlay_base_frame(
     }
   }
   const bool active_selection_visible = selected_element_count > 1u;
+  const bool has_component_source_targets =
+      selection_mode != quader_editor_core::SelectionMode::Object &&
+      std::ranges::any_of(session.objects(), [](const auto &object) {
+        return object.selected && object.id > 0 &&
+               (object.component_edit_target ||
+                quader_editor_core::component_selection_has_any_components(
+                    object.selection));
+      });
 
   const bool previous_suppressed_persistent_object_selection =
       overlay_base_cache_.suppress_persistent_object_selection;
@@ -3834,7 +3916,11 @@ ModelingOverlayService::selection_overlay_base_frame(
                 *geometry_document)));
       const bool active_source_wire_object =
           selection_mode != quader_editor_core::SelectionMode::Object &&
-          object.id > 0 && object.selected;
+          object.id > 0 && object.selected &&
+          (object.component_edit_target ||
+           quader_editor_core::component_selection_has_any_components(
+               object.selection) ||
+           (!has_component_source_targets && object.id == active_object_id));
       const bool tool_source_wire_object =
           object.id > 0 &&
           object.id == options.persistent_source_wire_object_id;
@@ -4082,6 +4168,18 @@ ModelingOverlayService::selection_overlay_current_frame(
   }
 
   quader_editor_core::SelectionOverlayFrame frame = base;
+  const int suppressed_object_id = suppressed_fallback_source_wire_object_id(
+      fallback_active_source_wire_object_id(session), hover, options);
+  if (suppressed_object_id > 0) {
+    remove_source_wire_for_object(frame, suppressed_object_id);
+    std::erase_if(frame.points,
+                 [suppressed_object_id](
+                     const quader_editor_core::SelectionOverlayPoint &point) {
+                   return point.object_id == suppressed_object_id &&
+                          point.layer == quader_editor_core::SelectionOverlayLayer::
+                                             UnselectedVertex;
+                 });
+  }
   append_overlay_frame(frame, hover_frame);
   append_runtime_tool_overlay(frame);
   return frame;
@@ -4109,7 +4207,10 @@ ViewportOverlayFrame ModelingOverlayService::selection_overlay_frame(
   const ModelingInstanceEditScope instance_edit_scope =
       selection_service.overlay_instance_edit_scope();
   const std::uint64_t object_map_revision = object_registry.revision();
-  std::uint64_t overlay_signature = selection_overlay_signature(runtime, options);
+  const int suppressed_object_id = suppressed_fallback_source_wire_object_id(
+      fallback_active_source_wire_object_id(session), runtime.hover(), options);
+  std::uint64_t overlay_signature =
+      selection_overlay_signature(runtime, options, suppressed_object_id);
   mix_overlay_signature_hash(overlay_signature, selection_service.editor_mode_revision());
   mix_overlay_signature_hash(overlay_signature, session.active_object_id());
   mix_overlay_signature_hash(overlay_signature, object_map_revision);
@@ -4201,7 +4302,8 @@ ViewportOverlayFrame ModelingOverlayService::selection_overlay_frame(
 
   {
     QDR_PROFILE_SCOPE("Selection overlay store persistent frame");
-    ViewportOverlayFrame frame = projected_overlay_base_cache_.frame;
+    ViewportOverlayFrame frame = suppress_fallback_source_wire(
+        projected_overlay_base_cache_.frame, suppressed_object_id);
     store_selection_frame(std::move(frame),
                           content_revision, selection_revision,
                           scene_revision, local_visibility_revision,

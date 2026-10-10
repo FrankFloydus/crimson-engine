@@ -357,7 +357,7 @@ TEST(PaintSelectionInteractionTests,
 }
 
 TEST(PaintSelectionInteractionTests,
-     ComponentStrokeAccumulatesExactElementsWithinTheFixedEditParticipants) {
+     ComponentStrokeAccumulatesExactElementsAcrossUnselectedMeshes) {
   for (const auto &mode : kComponentModes) {
     SCOPED_TRACE(static_cast<int>(mode.api_mode));
     PaintSelectionHarness harness;
@@ -381,8 +381,9 @@ TEST(PaintSelectionInteractionTests,
     harness.dispatch(false, false, true);
     EXPECT_EQ(harness.selected_components(),
               (std::vector<ElementKey>{harness.element(left, mode.api_mode),
+                                       harness.element(outsider, mode.api_mode),
                                        harness.element(right, mode.api_mode)}));
-    EXPECT_EQ(harness.editor.mode().state().participants.size(), 2u);
+    EXPECT_EQ(harness.editor.mode().state().participants.size(), 3u);
     EXPECT_EQ(harness.editor.mode().state().generation, generation);
     EXPECT_EQ(harness.session.modeling().content_revision(), content_revision);
     EXPECT_EQ(harness.session.history().undo_count(), 0u);
@@ -809,7 +810,7 @@ TEST(PaintSelectionInteractionTests,
 }
 
 TEST(PaintSelectionInteractionTests,
-     RememberedPaintUnderMoveKeepsExactComponentsAndFixedEditParticipants) {
+     RememberedPaintUnderMoveAccumulatesExactComponentsAcrossUnselectedMeshes) {
   for (const auto &mode : kComponentModes) {
     SCOPED_TRACE(static_cast<int>(mode.api_mode));
     PaintSelectionHarness harness;
@@ -836,8 +837,9 @@ TEST(PaintSelectionInteractionTests,
     harness.dispatch(false, false, true);
     EXPECT_EQ(harness.selected_components(),
               (std::vector<ElementKey>{harness.element(left, mode.api_mode),
+                                       harness.element(outsider, mode.api_mode),
                                        harness.element(right, mode.api_mode)}));
-    EXPECT_EQ(harness.editor.mode().state().participants.size(), 2u);
+    EXPECT_EQ(harness.editor.mode().state().participants.size(), 3u);
     EXPECT_EQ(harness.editor.mode().generation(), generation);
     EXPECT_EQ(harness.editor.tools().active_tool(), "move");
     EXPECT_EQ(harness.session.modeling().content_revision(), content_revision);

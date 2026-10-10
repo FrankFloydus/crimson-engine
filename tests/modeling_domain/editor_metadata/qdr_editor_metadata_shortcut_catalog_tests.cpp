@@ -96,7 +96,7 @@ TEST(QdrEditorMetadataShortcutCatalogTests, HostContractSelectionModeCatalogExpo
 
 TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutTargetsResolveToDescriptorOnlyCatalogs) {
 	const std::span<const qhc::HostShortcutDescriptor> shortcuts = qhc::shortcut_catalog();
-	EXPECT_EQ(shortcuts.size(), 38U);
+	EXPECT_EQ(shortcuts.size(), 39U);
 	EXPECT_FALSE(has_shortcut("select_tool"));
 
 	for (const qhc::HostShortcutDescriptor& shortcut : shortcuts) {
@@ -327,7 +327,8 @@ TEST(QdrEditorMetadataShortcutCatalogTests, HostContractShortcutCatalogIncludesV
 	EXPECT_TRUE(same_text(require_shortcut("face_selection").target_id, "face"));
 	EXPECT_FALSE(has_shortcut("face_selection_keypad"));
 
-	EXPECT_FALSE(has_shortcut("object_selection"));
+	EXPECT_TRUE(same_text(require_shortcut("object_selection").key, "4"));
+	EXPECT_TRUE(same_text(require_shortcut("object_selection").target_id, "object"));
 	EXPECT_FALSE(has_shortcut("object_selection_keypad"));
 
 	EXPECT_FALSE(has_shortcut("group_selection"));

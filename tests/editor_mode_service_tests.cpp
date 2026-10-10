@@ -12,11 +12,13 @@
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/session/scene_session.hpp"
 #include "editor/transform/scene_transform_drag_service.hpp"
+#include "support/viewport_overlay_test_helpers.hpp"
 
 #include <QTemporaryDir>
 #include <gtest/gtest.h>
 
 #include <array>
+#include <algorithm>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -235,13 +237,15 @@ TEST_F(EditorModeServiceTests, InspectorObjectDraftSettlesCapturedTargetsAfterSe
   EXPECT_EQ(session_.scene().primary_selection(), second.entity);
 }
 
-TEST_F(EditorModeServiceTests, InspectorContextUsesIdentityAndFixedParticipantsBeyondSelectionRevisions) {
+TEST_F(EditorModeServiceTests, InspectorContextUsesIdentityBeyondComponentSelectionRevisions) {
   const auto first = create_box("First");
   const auto second = create_box("Second");
   ASSERT_TRUE(editor_.scene().select({first.entity, second.entity}, first.entity).ok());
   ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
-  const auto context = editor_.scene().inspector_object_edit_context();
   ASSERT_TRUE(editor_.selection().select_vertex(first, 1).ok());
+  ASSERT_TRUE(editor_.selection().select_vertex(second, 1, QuaderSelectionEdit::Add).ok());
+  const auto context = editor_.scene().inspector_object_edit_context();
+  ASSERT_TRUE(editor_.selection().select_vertex(second, 2, QuaderSelectionEdit::Add).ok());
   for (int sample = 0; sample < 10; ++sample) {
     EXPECT_TRUE(editor_.scene().inspector_object_edit_context_valid(context));
   }
@@ -250,6 +254,8 @@ TEST_F(EditorModeServiceTests, InspectorContextUsesIdentityAndFixedParticipantsB
   EXPECT_FALSE(editor_.scene().inspector_object_edit_context_valid(context));
   ASSERT_TRUE(session_.scene().set_entity_uuid(second.entity, second_identity));
   EXPECT_TRUE(editor_.scene().inspector_object_edit_context_valid(context));
+  ASSERT_TRUE(editor_.selection().select_vertex(first, 1).ok());
+  EXPECT_FALSE(editor_.scene().inspector_object_edit_context_valid(context));
 }
 
 TEST_F(EditorModeServiceTests, InspectorContextRejectsReplacedDocument) {
@@ -318,10 +324,46 @@ TEST_F(EditorModeServiceTests, NewSceneStartsInObjectWithoutEditableComponents) 
   EXPECT_EQ(session_.modeling().selection_mode(), ModelingSelectionMode::Object);
   EXPECT_TRUE(session_.editor_mode().snapshot().participants.empty());
   EXPECT_FALSE(editor_.mode().can_set(QuaderEditorMode::Edit));
-  EXPECT_FALSE(editor_.selection().set_mode(QuaderSelectionMode::Vertex).ok());
-  EXPECT_FALSE(editor_.selection().set_mode(QuaderSelectionMode::Edge).ok());
-  EXPECT_FALSE(editor_.selection().set_mode(QuaderSelectionMode::Face).ok());
   EXPECT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Group).ok());
+}
+
+TEST_F(EditorModeServiceTests, DirectComponentModesPermitAnEmptySceneWithoutHistory) {
+  const auto history_revision = session_.history().revision();
+  const auto content = session_.content_revision_stamp();
+  for (const auto kind : {QuaderSelectionMode::Vertex,
+                          QuaderSelectionMode::Edge,
+                          QuaderSelectionMode::Face}) {
+    const auto result = editor_.selection().set_mode(kind);
+    ASSERT_TRUE(result.ok()) << result.error_message();
+    EXPECT_TRUE(result.changed());
+    EXPECT_EQ(editor_.mode().current(), QuaderEditorMode::Edit);
+    EXPECT_EQ(editor_.selection().summary().mode, kind);
+    EXPECT_FALSE(editor_.selection().summary().has_selection);
+    EXPECT_TRUE(session_.editor_mode().snapshot().participants.empty());
+    EXPECT_EQ(session_.history().revision(), history_revision);
+    EXPECT_EQ(session_.content_revision_stamp(), content);
+  }
+  ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Object).ok());
+  EXPECT_EQ(editor_.mode().current(), QuaderEditorMode::Object);
+}
+
+TEST_F(EditorModeServiceTests, DirectComponentEntryIgnoresDeselectedActiveWhileExplicitEntryRetainsIt) {
+  const auto mesh = create_box("Deselected Active Mesh");
+  ASSERT_TRUE(editor_.selection().clear().ok());
+  ASSERT_EQ(editor_.mode().state().active_entity.id, mesh.entity);
+  const auto history_revision = session_.history().revision();
+  ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Face).ok());
+  EXPECT_TRUE(editor_.mode().state().participants.empty());
+  EXPECT_TRUE(session_.scene().selected_entities().empty());
+  EXPECT_FALSE(editor_.selection().summary().has_selection);
+  EXPECT_EQ(session_.history().revision(), history_revision);
+
+  ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Object).ok());
+  ASSERT_TRUE(editor_.selection().select_object(mesh).ok());
+  ASSERT_TRUE(editor_.selection().clear().ok());
+  ASSERT_TRUE(editor_.commands().execute(quader_command::kEditorModeToggleEdit).ok());
+  ASSERT_EQ(editor_.mode().state().participants.size(), 1u);
+  EXPECT_EQ(editor_.mode().state().participants.front().id, mesh.entity);
 }
 
 TEST_F(EditorModeServiceTests, EmptyEditRequestsAreSilentWithoutSettlingOrChangingRevisions) {
@@ -397,7 +439,7 @@ TEST_F(EditorModeServiceTests, ObjectDeselectionRetainsActiveMeshForExplicitEdit
     ASSERT_EQ(outside_preview.target.object_id, outside.modeling_object_id);
     EXPECT_EQ(outside_preview.target.kind, QuaderActiveSelectionKind::Face);
     ASSERT_TRUE(editor_.selection().hover({.ray = outside_ray}).ok());
-    EXPECT_FALSE(editor_.selection().hover_face(outside, 1).ok());
+    EXPECT_TRUE(editor_.selection().hover_face(outside, 1).ok());
     EXPECT_EQ(session_.editor_mode().snapshot(), before_hover);
     EXPECT_TRUE(session_.scene().selected_entities().empty());
     const auto history_count = session_.history().undo_count();
@@ -584,6 +626,7 @@ TEST_F(EditorModeServiceTests, EntryFailureRetainsObjectSelectionAndModeContext)
   const auto before = session_.editor_mode().snapshot();
   const auto history_count = session_.history().undo_count();
   EXPECT_FALSE(editor_.mode().set(QuaderEditorMode::Edit).ok());
+  EXPECT_FALSE(editor_.selection().set_mode(QuaderSelectionMode::Face).ok());
   EXPECT_EQ(session_.editor_mode().snapshot(), before);
   EXPECT_EQ(session_.scene().selected_entities(), std::vector<EntityId>{mesh.entity});
   EXPECT_EQ(session_.history().undo_count(), history_count);
@@ -630,11 +673,192 @@ TEST_F(EditorModeServiceTests, FailedExitRetainsComponentsMembershipAndInputGene
     return command_invalid_result("Component draft cannot be accepted.");
   });
   EXPECT_FALSE(editor_.mode().set(QuaderEditorMode::Object).ok());
+  EXPECT_FALSE(editor_.selection().set_mode(QuaderSelectionMode::Object).ok());
   EXPECT_EQ(session_.editor_mode().snapshot(), before);
   EXPECT_EQ(session_.selection().summary().selected_vertex_count, 1u);
   EXPECT_EQ(session_.selection().summary().active_vertex_id, 1);
   EXPECT_EQ(session_.modeling().selection_mode(), ModelingSelectionMode::Vertex);
   EXPECT_EQ(session_.history().undo_count(), history_count);
+}
+
+TEST_F(EditorModeServiceTests, DirectSelectionModesRetainObjectsComponentsAndHistory) {
+  const auto first = create_box("First");
+  const auto second = create_box("Second");
+  ASSERT_TRUE(editor_.selection().select_objects(
+      {first.entity, second.entity}, second.entity).ok());
+  session_.mark_clean();
+  const auto content = session_.content_revision_stamp();
+  for (const auto kind : {QuaderSelectionMode::Vertex,
+                          QuaderSelectionMode::Edge,
+                          QuaderSelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(kind));
+    const auto entry_history = session_.history().revision();
+    const auto entered = editor_.selection().set_mode(kind);
+    ASSERT_TRUE(entered.ok()) << entered.error_message();
+    EXPECT_TRUE(entered.changed());
+    EXPECT_EQ(editor_.mode().current(), QuaderEditorMode::Edit);
+    EXPECT_EQ(editor_.selection().summary().mode, kind);
+    EXPECT_TRUE(session_.editor_mode().contains(first.entity));
+    EXPECT_TRUE(session_.editor_mode().contains(second.entity));
+    EXPECT_EQ(session_.editor_mode().snapshot().participants.size(), 2u);
+    EXPECT_EQ(session_.editor_mode().snapshot().active_entity, second.entity);
+    EXPECT_EQ(session_.history().revision(), entry_history);
+    ASSERT_TRUE(editor_.selection().select_all().ok());
+    const auto selected = editor_.selection().summary();
+    const auto history_revision = session_.history().revision();
+
+    const auto exited = editor_.selection().set_mode(QuaderSelectionMode::Object);
+    ASSERT_TRUE(exited.ok()) << exited.error_message();
+    EXPECT_TRUE(exited.changed());
+    EXPECT_EQ(editor_.mode().current(), QuaderEditorMode::Object);
+    EXPECT_EQ(editor_.selection().summary().mode, QuaderSelectionMode::Object);
+    EXPECT_EQ(session_.scene().selected_entities(),
+              (std::vector<EntityId>{first.entity, second.entity}));
+    EXPECT_EQ(session_.scene().primary_selection(), second.entity);
+    EXPECT_EQ(session_.history().revision(), history_revision);
+
+    const auto reentered = editor_.selection().set_mode(kind);
+    ASSERT_TRUE(reentered.ok()) << reentered.error_message();
+    EXPECT_TRUE(reentered.changed());
+    const auto restored = editor_.selection().summary();
+    EXPECT_EQ(restored.selected_vertex_count, selected.selected_vertex_count);
+    EXPECT_EQ(restored.selected_edge_count, selected.selected_edge_count);
+    EXPECT_EQ(restored.selected_face_count, selected.selected_face_count);
+    EXPECT_EQ(session_.history().revision(), history_revision);
+    const auto before_unchanged = session_.editor_mode().snapshot();
+    const auto unchanged = editor_.selection().set_mode(kind);
+    EXPECT_TRUE(unchanged.ok());
+    EXPECT_FALSE(unchanged.changed());
+    EXPECT_EQ(session_.editor_mode().snapshot(), before_unchanged);
+    EXPECT_EQ(session_.content_revision_stamp(), content);
+    EXPECT_FALSE(session_.dirty());
+    ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Object).ok());
+  }
+}
+
+TEST_F(EditorModeServiceTests, ComponentHoverTransfersStickyWireAcrossEligibleMeshesWithoutSelection) {
+  for (const auto kind : {QuaderSelectionMode::Vertex,
+                          QuaderSelectionMode::Edge,
+                          QuaderSelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(kind));
+    session_.replace_document(SceneContentDocument{});
+    const auto first = create_box("First");
+    const auto second = create_box("Second");
+    ASSERT_TRUE(editor_.scene().set_transform(second.entity,
+        {.location = {5.0f, 0.0f, 0.0f}}).ok());
+    ASSERT_TRUE(editor_.selection().select_object(first).ok());
+    ASSERT_TRUE(editor_.selection().set_mode(kind).ok());
+    ASSERT_TRUE(editor_.selection().clear().ok());
+    const auto component_point = kind == QuaderSelectionMode::Vertex
+        ? QVec3{1.0f, 1.0f, 5.0f}
+        : kind == QuaderSelectionMode::Edge ? QVec3{1.0f, 0.0f, 5.0f}
+                                           : QVec3{0.0f, 0.0f, 5.0f};
+    const QuaderHoverRequest first_hover{
+        .ray = {.origin = component_point, .direction = {0.0f, 0.0f, -1.0f}}};
+    auto second_hover = first_hover;
+    second_hover.ray.origin.x += 5.0f;
+    const QuaderHoverRequest miss{
+        .ray = {.origin = {100.0f, 100.0f, 5.0f},
+                .direction = {0.0f, 0.0f, -1.0f}}};
+    const auto wire_count = [&](int object_id) {
+      const auto frame = test_support::visible_modeling_overlay_frame(session_.modeling());
+      return std::ranges::count_if(frame.lines, [&](const auto &line) {
+        return line.element.object_id == object_id &&
+            (line.layer == ViewportOverlayLayer::SourceWire ||
+             line.layer == ViewportOverlayLayer::SelectedEdge ||
+             line.layer == ViewportOverlayLayer::SelectedFaceEdge);
+      });
+    };
+    const auto selection_revision = editor_.selection().summary().selection_revision;
+    const auto history_revision = session_.history().revision();
+    const auto participants = session_.editor_mode().snapshot().participants;
+    ASSERT_TRUE(editor_.selection().hover(first_hover).ok());
+    ASSERT_GT(wire_count(first.modeling_object_id), 0);
+    EXPECT_EQ(wire_count(second.modeling_object_id), 0);
+    EXPECT_EQ(editor_.selection().preview_hover(second_hover).target.object_id,
+              second.modeling_object_id);
+    ASSERT_TRUE(editor_.selection().hover(second_hover).ok());
+    EXPECT_EQ(editor_.selection().hover_summary().target.object_id,
+              second.modeling_object_id);
+    EXPECT_EQ(wire_count(first.modeling_object_id), 0);
+    EXPECT_GT(wire_count(second.modeling_object_id), 0);
+    ASSERT_TRUE(editor_.selection().hover(miss).ok());
+    EXPECT_EQ(editor_.selection().hover_summary().target.kind,
+              QuaderActiveSelectionKind::None);
+    EXPECT_EQ(session_.modeling().selection_hover_summary().candidate_object_id,
+              second.modeling_object_id);
+    EXPECT_GT(wire_count(second.modeling_object_id), 0);
+    EXPECT_EQ(editor_.selection().summary().selection_revision, selection_revision);
+    EXPECT_EQ(session_.history().revision(), history_revision);
+    EXPECT_EQ(session_.editor_mode().snapshot().participants, participants);
+
+    ASSERT_TRUE(editor_.selection().pick_select({.ray = first_hover.ray}).ok());
+    const auto selected = editor_.selection().summary();
+    EXPECT_EQ(selected.selected_vertex_count + selected.selected_edge_count +
+                  selected.selected_face_count, 1u);
+    ASSERT_TRUE(editor_.selection().hover(second_hover).ok());
+    ASSERT_TRUE(editor_.selection().hover(miss).ok());
+    EXPECT_GT(wire_count(first.modeling_object_id), 0);
+    EXPECT_GT(wire_count(second.modeling_object_id), 0);
+    EXPECT_EQ(editor_.selection().summary().selection_revision, selected.selection_revision);
+    ASSERT_TRUE(editor_.selection().pick_select({.ray = miss.ray}).ok());
+    EXPECT_FALSE(editor_.selection().summary().has_selection);
+    EXPECT_EQ(session_.modeling().selection_hover_summary().candidate_object_id,
+              second.modeling_object_id);
+    EXPECT_EQ(wire_count(first.modeling_object_id), 0);
+    EXPECT_GT(wire_count(second.modeling_object_id), 0);
+  }
+}
+
+TEST_F(EditorModeServiceTests, ComponentHoverSkipsHiddenAndLockedPeersWithoutReplacingCandidate) {
+  const auto visible = create_box("Visible");
+  const auto hidden = create_box("Hidden");
+  const auto locked = create_box("Locked");
+  ASSERT_TRUE(editor_.scene().set_transform(hidden.entity,
+      {.location = {4.0f, 0.0f, 0.0f}}).ok());
+  ASSERT_TRUE(editor_.scene().set_transform(locked.entity,
+      {.location = {8.0f, 0.0f, 0.0f}}).ok());
+  ASSERT_TRUE(editor_.scene().set_visible(hidden.entity, false).ok());
+  ASSERT_TRUE(editor_.scene().set_selectable(locked.entity, false).ok());
+  ASSERT_TRUE(editor_.selection().select_object(visible).ok());
+  ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Face).ok());
+  ASSERT_TRUE(editor_.selection().clear().ok());
+  ASSERT_TRUE(editor_.selection().hover_face(visible, 1).ok());
+  const auto selection_revision = editor_.selection().summary().selection_revision;
+  const auto history_revision = session_.history().revision();
+  for (const float x : {4.0f, 8.0f}) {
+    const QuaderHoverRequest request{
+        .ray = {.origin = {x, 0.0f, 5.0f}, .direction = {0.0f, 0.0f, -1.0f}}};
+    EXPECT_EQ(editor_.selection().preview_hover(request).target.kind,
+              QuaderActiveSelectionKind::None);
+    ASSERT_TRUE(editor_.selection().hover(request).ok());
+    EXPECT_EQ(editor_.selection().hover_summary().target.kind,
+              QuaderActiveSelectionKind::None);
+    EXPECT_EQ(session_.modeling().selection_hover_summary().candidate_object_id,
+              visible.modeling_object_id);
+  }
+  EXPECT_EQ(editor_.selection().summary().selection_revision, selection_revision);
+  EXPECT_EQ(session_.history().revision(), history_revision);
+}
+
+TEST_F(EditorModeServiceTests, DirectPeerSelectionSurvivesObjectAndComponentModeRoundTrip) {
+  const auto first = create_box("Initial Edit Mesh");
+  const auto peer = create_box("Initially Unselected Peer");
+  ASSERT_TRUE(editor_.selection().select_object(first).ok());
+  ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Face).ok());
+  ASSERT_FALSE(session_.editor_mode().contains(peer.entity));
+  ASSERT_TRUE(editor_.selection().select_face(peer, 1).ok());
+  ASSERT_EQ(editor_.selection().summary().selected_face_count, 1u);
+  ASSERT_EQ(editor_.selection().summary().active_object_id, peer.modeling_object_id);
+  const auto history_revision = session_.history().revision();
+
+  ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Object).ok());
+  EXPECT_EQ(session_.scene().selected_entities(), std::vector<EntityId>{peer.entity});
+  ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Face).ok());
+  EXPECT_EQ(editor_.selection().summary().selected_face_count, 1u);
+  EXPECT_EQ(editor_.selection().summary().active_object_id, peer.modeling_object_id);
+  EXPECT_EQ(editor_.selection().summary().active_face_id, 1);
+  EXPECT_EQ(session_.history().revision(), history_revision);
 }
 
 TEST_F(EditorModeServiceTests, SelectingMeshParentDoesNotEnrollItsUnselectedMeshChild) {
@@ -748,7 +972,7 @@ TEST_F(EditorModeServiceTests, HiddenInstanceOccurrenceCannotAdmitItsSelectedCan
   EXPECT_EQ(session_.editor_mode().snapshot(), before);
 }
 
-TEST_F(EditorModeServiceTests, ComponentClearAndSceneClicksNeverReplaceEditMembership) {
+TEST_F(EditorModeServiceTests, ComponentClearReleasesParticipantsWithoutAcceptingObjectIntents) {
   const auto first = create_box("First");
   const auto second = create_box("Second");
   const auto outside = create_box("Outside");
@@ -760,15 +984,20 @@ TEST_F(EditorModeServiceTests, ComponentClearAndSceneClicksNeverReplaceEditMembe
   for (const auto kind : kKinds) {
     SCOPED_TRACE(static_cast<int>(kind));
     ASSERT_TRUE(editor_.selection().set_mode(kind).ok());
-    const auto participants = session_.editor_mode().snapshot().participants;
+    const auto hovered = kind == QuaderSelectionMode::Vertex
+        ? editor_.selection().hover_vertex(first, 1)
+        : kind == QuaderSelectionMode::Edge
+            ? editor_.selection().hover_edge(first, 1, 2)
+            : editor_.selection().hover_face(first, 1);
+    ASSERT_TRUE(hovered.ok());
     ASSERT_TRUE(editor_.selection().select_all().ok());
     ASSERT_TRUE(editor_.selection().clear().ok());
-    EXPECT_EQ(session_.editor_mode().snapshot().participants, participants);
+    EXPECT_TRUE(session_.editor_mode().snapshot().participants.empty());
+    EXPECT_EQ(editor_.mode().current(), QuaderEditorMode::Edit);
     EXPECT_FALSE(editor_.selection().select_object(outside).ok());
     EXPECT_FALSE(editor_.selection().select_objects_for_inspection(
         {outside.entity}).ok());
-    EXPECT_EQ(session_.editor_mode().snapshot().participants, participants);
-    EXPECT_FALSE(editor_.selection().set_mode(QuaderSelectionMode::Object).ok());
+    EXPECT_TRUE(session_.editor_mode().snapshot().participants.empty());
     EXPECT_FALSE(editor_.selection().set_mode(QuaderSelectionMode::Group).ok());
   }
 }

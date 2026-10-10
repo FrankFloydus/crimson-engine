@@ -408,7 +408,7 @@ TEST_F(QtInspectorNumericDragTests,
 }
 
 TEST_F(QtInspectorNumericDragTests,
-       EditModeKeepsMeshPropertiesEditableWithoutComponentSelection) {
+       ComponentSelectionKeepsSelectedMeshPropertiesEditable) {
   apply_qt_obsidian_application_theme(QApplication::style()->standardPalette());
   QtUiScaleApplicationController scale_controller(application());
   InspectorTransformRuntime runtime;
@@ -417,8 +417,8 @@ TEST_F(QtInspectorNumericDragTests,
   ASSERT_TRUE(object.has_value());
   const auto original_mesh = runtime.editor.query().compiled_object_mesh(*object);
   ASSERT_TRUE(original_mesh.has_value());
-  ASSERT_TRUE(runtime.editor.mode().set(QuaderEditorMode::Edit).ok());
-  ASSERT_TRUE(runtime.editor.selection().clear().ok());
+  ASSERT_TRUE(runtime.editor.selection().set_mode(QuaderSelectionMode::Vertex).ok());
+  ASSERT_TRUE(runtime.editor.selection().select_vertex(*object, 1u).ok());
   InspectorPanel panel;
   scale_controller.add_change_listener(panel, [&](const QtUiScaleMetrics &metrics) {
     panel.apply_ui_scale(metrics);
@@ -429,7 +429,7 @@ TEST_F(QtInspectorNumericDragTests,
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     settle_inspector_layout(panel);
   };
-  ASSERT_EQ(runtime.editor.selection().summary().selected_vertex_count, 0u);
+  ASSERT_EQ(runtime.editor.selection().summary().selected_vertex_count, 1u);
   const auto mode_generation = runtime.editor.mode().generation();
   auto *name = panel.findChild<QLineEdit *>("inspector.general.name");
   ASSERT_NE(name, nullptr);
@@ -491,7 +491,7 @@ TEST_F(QtInspectorNumericDragTests,
   EXPECT_EQ(runtime.editor.mode().generation(), mode_generation);
   ASSERT_EQ(runtime.editor.mode().state().participants.size(), 1u);
   EXPECT_EQ(runtime.editor.mode().state().participants.front().id, runtime.entity);
-  EXPECT_EQ(runtime.editor.selection().summary().selected_vertex_count, 0u);
+  EXPECT_EQ(runtime.editor.selection().summary().selected_vertex_count, 1u);
   EXPECT_EQ(runtime.editor.selection().summary().selected_edge_count, 0u);
   EXPECT_EQ(runtime.editor.selection().summary().selected_face_count, 0u);
   int cycle = 0;
@@ -568,7 +568,7 @@ TEST_F(QtInspectorNumericDragTests,
         << " field=" << rectangle_text(relative_geometry(*custom->parentWidget(), *tree->viewport()))
         << " first_outside=" << first_outside_pixel.x() << "," << first_outside_pixel.y()
         << " dpr=" << device_pixel_ratio;
-    export_inspector_image(panel, QStringLiteral("inspector-edit-empty-components-%1-%2.png")
+    export_inspector_image(panel, QStringLiteral("inspector-selected-component-properties-%1-%2.png")
         .arg(qRound(factor * 100)).arg(cycle++));
   }
   panel.abandon_runtime();
@@ -838,7 +838,7 @@ TEST_F(QtInspectorNumericDragTests,
 }
 
 TEST_F(QtInspectorNumericDragTests,
-       EditModeWireframeColorUsesCapturedParticipantsAndRejectsModeRoundTrip) {
+       ComponentWireframeColorUsesCapturedSelectionAndRejectsModeRoundTrip) {
   InspectorTransformRuntime runtime;
   runtime.initialize_box();
   ASSERT_TRUE(runtime.editor.mode().set(QuaderEditorMode::Edit).ok());
@@ -874,6 +874,11 @@ TEST_F(QtInspectorNumericDragTests,
                   static_cast<float>(accepted_color.greenF()));
   EXPECT_GE(runtime.session.history().undo_count(), before_dialog + 1u);
   EXPECT_EQ(runtime.editor.selection().summary().selected_vertex_count, 0u);
+  EXPECT_EQ(wireframe_color_button(panel), nullptr);
+  const auto object = runtime.editor.query().modeling_object_for_entity(runtime.entity);
+  ASSERT_TRUE(object.has_value());
+  ASSERT_TRUE(runtime.editor.selection().select_vertex(*object, 1u).ok());
+  refresh();
   const auto history_before_round_trip = runtime.session.history().undo_count();
   QTimer::singleShot(0, &panel, [&] {
     auto *dialog = panel.findChild<QColorDialog *>("inspector.viewport.wireframe_color.dialog");
@@ -1482,8 +1487,10 @@ TEST_F(QtInspectorNumericDragTests,
   EXPECT_EQ(runtime.session.scene().revision(), scene_revision);
   EXPECT_EQ(runtime.session.scene().transform_revision(), transform_revision);
   EXPECT_EQ(runtime.session.history().undo_count(), undo_count);
-  ASSERT_TRUE(runtime.editor.mode().set(QuaderEditorMode::Edit).ok());
-  ASSERT_TRUE(runtime.editor.selection().clear().ok());
+  const auto object = runtime.editor.query().modeling_object_for_entity(runtime.entity);
+  ASSERT_TRUE(object.has_value());
+  ASSERT_TRUE(runtime.editor.selection().set_mode(QuaderSelectionMode::Vertex).ok());
+  ASSERT_TRUE(runtime.editor.selection().select_vertex(*object, 1u).ok());
   panel.refresh(runtime.context);
   QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
   settle_inspector_layout(panel);
@@ -1509,8 +1516,15 @@ TEST_F(QtInspectorNumericDragTests,
   EXPECT_EQ(inserted_rows, 0);
   EXPECT_EQ(runtime.session.scene().revision(), edit_scene_revision);
   EXPECT_EQ(runtime.session.history().undo_count(), edit_undo_count);
-  EXPECT_EQ(runtime.editor.selection().summary().selected_vertex_count, 0u);
+  EXPECT_EQ(runtime.editor.selection().summary().selected_vertex_count, 1u);
   QObject::disconnect(insertion_connection);
+  ASSERT_TRUE(runtime.editor.selection().clear().ok());
+  panel.refresh(runtime.context);
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  EXPECT_EQ(location_x(panel), nullptr);
+  EXPECT_EQ(panel.findChild<QToolButton *>(
+                QStringLiteral("inspector.transform.header")), nullptr);
+  EXPECT_TRUE(runtime.editor.mode().state().participants.empty());
   panel.abandon_runtime();
 }
 

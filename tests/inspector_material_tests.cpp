@@ -1234,34 +1234,58 @@ TEST(InspectorMaterialTests,
   EXPECT_NE(find_top_level_item(*tree, QStringLiteral("general")), nullptr);
   EXPECT_NE(find_top_level_item(*tree, QStringLiteral("material")), nullptr);
 
-  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Face).ok());
   ASSERT_TRUE(editor.selection().select_face(first.value(), 1u).ok());
   ASSERT_EQ(editor.selection().summary().selected_face_count, 1u);
   set_presentation(4u);
   panel.refresh(context);
-  const auto expect_edit_properties = [&] {
-    EXPECT_EQ(find_top_level_item(*tree, QStringLiteral("general")), nullptr);
+  const auto expect_component_properties = [&](bool multiple_meshes) {
+    if (multiple_meshes) {
+      EXPECT_EQ(find_top_level_item(*tree, QStringLiteral("general")), nullptr);
+      EXPECT_NE(find_top_level_item(*tree, QStringLiteral("components")), nullptr);
+    } else {
+      EXPECT_NE(find_top_level_item(*tree, QStringLiteral("general")), nullptr);
+      EXPECT_EQ(find_top_level_item(*tree, QStringLiteral("components")), nullptr);
+    }
     EXPECT_NE(find_top_level_item(*tree, QStringLiteral("visibility")), nullptr);
     EXPECT_NE(find_top_level_item(*tree, QStringLiteral("transform")), nullptr);
     EXPECT_NE(find_top_level_item(*tree, QStringLiteral("viewport")), nullptr);
     EXPECT_NE(find_top_level_item(*tree, QStringLiteral("physics")), nullptr);
-    EXPECT_NE(find_top_level_item(*tree, QStringLiteral("components")), nullptr);
   };
-  expect_edit_properties();
+  expect_component_properties(false);
+  EXPECT_NE(find_top_level_item(*tree, QStringLiteral("material")), nullptr);
+
+  ASSERT_TRUE(editor.selection()
+                  .select_face(second.value(), 1u, QuaderSelectionEdit::Add)
+                  .ok());
+  ASSERT_EQ(editor.selection().summary().selected_face_count, 2u);
+  panel.refresh(context);
+  expect_component_properties(true);
   EXPECT_NE(find_top_level_item(*tree, QStringLiteral("material")), nullptr);
 
   ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Vertex).ok());
+  ASSERT_TRUE(editor.selection().select_vertex(first.value(), 1u).ok());
   set_presentation(5u);
   panel.refresh(context);
-  expect_edit_properties();
+  expect_component_properties(false);
   EXPECT_EQ(find_top_level_item(*tree, QStringLiteral("material")), nullptr);
 
   ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Edge).ok());
+  ASSERT_TRUE(editor.selection().select_edge(first.value(), 1u, 2u).ok());
   set_presentation(6u);
   panel.refresh(context);
-  expect_edit_properties();
+  expect_component_properties(false);
   EXPECT_EQ(find_top_level_item(*tree, QStringLiteral("material")), nullptr);
+
+  ASSERT_TRUE(editor.selection().clear().ok());
+  panel.refresh(context);
+  EXPECT_EQ(find_top_level_item(*tree, QStringLiteral("general")), nullptr);
+  EXPECT_EQ(find_top_level_item(*tree, QStringLiteral("transform")), nullptr);
+  EXPECT_EQ(find_top_level_item(*tree, QStringLiteral("material")), nullptr);
+  auto *empty_selection = find_top_level_item(
+      *tree, QStringLiteral("inspector.summary.no_selection"));
+  ASSERT_NE(empty_selection, nullptr);
+  EXPECT_EQ(empty_selection->text(0), QStringLiteral("No selection"));
 }
 
 TEST(InspectorMaterialTests,

@@ -32,15 +32,18 @@ scene, SDK, publication and history owners without copying Blender source.
 `EditorModeService::snapshot()` is a borrowed immutable view of mode, revision,
 generation, component kind, active entity, participants and structural object
 results. Each participant carries its authored UUID and current scene/modeling
-identities. Membership is not inferred from hover or nonempty component selection.
-SDK documents remain the sole owners of geometry and component selection.
+identities. Initial entry resolves selected meshes; later committed component
+selection synchronizes participants through this owner. Hover never changes
+membership. SDK documents remain the sole owners of geometry and component selection.
 
 Object Mode retains the active object's UUID independently of the selected set.
 A new nonempty selection updates it to the selected primary; deselection preserves
 it, and identity removal clears it. Only an entirely empty object selection may
 fall back to that active mesh on Edit entry, subject to ordinary eligibility.
-An active group is not expanded by this fallback. No eligible target means a
-successful unchanged transition, without settling drafts or reporting an error.
+An active group is not expanded by this fallback. Explicit mode entry through
+Tab or the mode API with no eligible target is a successful unchanged transition,
+without settling drafts or reporting an error. Direct component-kind requests
+permit an empty Edit context, so 1/2/3 work before selecting any mesh.
 
 Entry resolves the selected eligible meshes, recursively expanding groups and
 skipping hidden, locked, nonselectable and non-mesh objects. Viewport-local
@@ -66,15 +69,34 @@ Component-kind transitions also retire incompatible tools to Select across all
 panes. Knife and Insert Edge Loop require Edge; Select/Move/Rotate/Scale remain
 compatible with every component kind.
 
+Direct Vertex/Edge/Face selection requests enter Edit through this owner when
+needed, then select the requested kind. Direct Object selection returns through
+the same transition owner. The toolbar exposes all four choices in both contexts
+with defaults 1/2/3/4 and retains the independent Groups toggle; it has no separate
+mode dropdown. Tab still toggles the scene context with its remembered component
+kind. These entry points preserve settlement and the existing first-entry policy.
+
 ## Consumers and publication
 
-Picking, component operations and retained overlays consume the explicit Edit
-membership, including participants with zero selected components. Clear/Replace
-component selection and Outliner clicks cannot change that membership. Empty
-component selection must never fall back to whole-object transforms. The Inspector
-has a separate object-property intent: it captures the fixed participants and may
-author their object transforms without selected components, including participants
-made hidden or nonselectable after admission. Its scene, document-binding, mode
+Component picking and surface acquisition use eligible scene meshes, independently
+of the participant list. Point, region, paint and traversal selection can enroll
+another eligible mesh. Committed component selection synchronizes participants;
+clearing components normally clears that list, while explicit mesh-body adoption
+can retain an empty target. Entry from selected objects can also begin with empty
+component targets. Outliner clicks retain their Object Mode requirement.
+
+Retained component presentation combines meshes with selected components and the
+last eligible hover candidate. Empty-space hover and pointer leave keep that
+candidate; hovering another mesh transfers it without changing selection. Clear
+the immediate highlight after a blank click or completed region while retaining
+the candidate. Gizmo ownership clears both hover and candidate, without removing
+selected components. The candidate is presentation state, never an editing lock or
+another selection owner. See the [runtime projection contract](../modeling/runtime/README.md#component-candidate-presentation).
+
+Empty component selection must never fall back to whole-object transforms. The
+Inspector has a separate object-property intent: it captures the current
+participants and may author their object transforms without selected components,
+including participants made hidden or nonselectable after admission. Its scene, document-binding, mode
 generation and authored-identity fences apply to every sample and commit. Generic
 scene transforms and viewport tools retain their ordinary mode requirements.
 Object-mode Inspector drafts may finish on their captured objects after a selection
@@ -91,7 +113,8 @@ Component geometry previews must also satisfy the existing
 
 Structural publication remaps consumed participants only to the operation's
 survivor and preserves unrelated participants. Extracted outputs are registered
-as object results and remain outside Edit. Include mode state in the existing
+as object results and are not enrolled automatically; subsequent component selection
+may target them directly. Include mode state in the existing
 publication checkpoint so failure compensation restores it with the other owners.
 State restoration alone does not publish selection or presentation; the enclosing
 publication owner performs that projection.

@@ -24092,7 +24092,7 @@ TEST(ModelingSessionServiceTests,
 }
 
 TEST(ModelingSessionServiceTests,
-     EmptyEditParticipantVertexPointsRespectSceneTransforms) {
+     StickyCandidateVertexPointsRespectSceneTransforms) {
   SceneSession session;
   SceneDocument &scene = session.scene();
   ModelingSessionService &service = session.modeling();
@@ -24121,8 +24121,10 @@ TEST(ModelingSessionServiceTests,
       });
   ASSERT_TRUE(hover.ok) << hover.message;
 
-  ASSERT_EQ(session.editor_mode().snapshot().participants.size(), 1u);
-  EXPECT_TRUE(session.editor_mode().contains(box.object.entity));
+  EXPECT_TRUE(session.editor_mode().snapshot().participants.empty());
+  EXPECT_FALSE(session.editor_mode().contains(box.object.entity));
+  EXPECT_EQ(service.selection_summary().selected_object_count, 0U);
+  EXPECT_EQ(service.selection_summary().selected_vertex_count, 0U);
   const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   std::optional<SceneBounds> point_bounds;
   for (const ViewportOverlayPoint &point : frame.points) {
@@ -25403,7 +25405,7 @@ TEST(ModelingSessionServiceTests,
 }
 
 TEST(ModelingSessionServiceTests,
-     ComponentTransformCommitKeepsEmptyParticipantHandlesOnCommittedGeometry) {
+     ComponentTransformCommitKeepsStickyCandidateHandlesOnCommittedGeometry) {
   SceneSession session;
   SceneDocument &scene = session.scene();
   ModelingSessionService &service = session.modeling();
@@ -25438,8 +25440,10 @@ TEST(ModelingSessionServiceTests,
       });
   ASSERT_TRUE(hover.ok) << hover.message;
 
-  ASSERT_EQ(session.editor_mode().snapshot().participants.size(), 1u);
-  EXPECT_TRUE(session.editor_mode().contains(box.object.entity));
+  EXPECT_TRUE(session.editor_mode().snapshot().participants.empty());
+  EXPECT_FALSE(session.editor_mode().contains(box.object.entity));
+  EXPECT_EQ(service.selection_summary().selected_object_count, 0U);
+  EXPECT_EQ(service.selection_summary().selected_vertex_count, 0U);
   const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   std::optional<SceneBounds> point_bounds;
   for (const ViewportOverlayPoint &point : frame.points) {
@@ -25558,8 +25562,10 @@ TEST(ModelingSessionServiceTests,
       });
   ASSERT_TRUE(hover.ok) << hover.message;
 
-  ASSERT_EQ(session.editor_mode().snapshot().participants.size(), 1u);
-  EXPECT_TRUE(session.editor_mode().contains(box.object.entity));
+  EXPECT_TRUE(session.editor_mode().snapshot().participants.empty());
+  EXPECT_FALSE(session.editor_mode().contains(box.object.entity));
+  EXPECT_EQ(service.selection_summary().selected_object_count, 0U);
+  EXPECT_EQ(service.selection_summary().selected_vertex_count, 0U);
   const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   std::optional<SceneBounds> point_bounds;
   for (const ViewportOverlayPoint &point : frame.points) {
@@ -27470,7 +27476,7 @@ TEST(ModelingSessionServiceTests,
 }
 
 TEST(ModelingSessionServiceTests,
-     ComponentModeSourceWireIncludesEveryEditParticipant) {
+     ComponentModeSourceWireIncludesSelectedMeshesAndStickyCandidate) {
   SceneSession session;
   SceneDocument &scene = session.scene();
   ModelingSessionService &service = session.modeling();
@@ -27498,10 +27504,24 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(service.set_object_selection(participants, second.object.entity).ok);
   ASSERT_TRUE(session.editor_mode().set_mode(EditorMode::Edit).ok);
   ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Edge).ok);
+  ASSERT_TRUE(seed_component_bulk_selection_scope(
+      service, first.object.modeling_object_id, ModelingSelectionMode::Edge,
+      ModelingSelectionEdit::Replace).ok);
+  ASSERT_TRUE(service.update_selection_hover({
+      .ray = {.origin = {5.0F, 0.0F, 5.0F},
+              .direction = {0.0F, 0.0F, -1.0F}}}).ok);
+  ASSERT_TRUE(service.update_selection_hover({
+      .ray = {.origin = {10.0F, 0.0F, 5.0F},
+              .direction = {0.0F, 0.0F, -1.0F}}}).ok);
   const ModelingSelectionSummary summary = service.selection_summary();
-  ASSERT_EQ(summary.active_object_id, second.object.modeling_object_id);
+  EXPECT_EQ(summary.active_object_id, first.object.modeling_object_id);
+  EXPECT_EQ(summary.selected_object_count, 1U);
+  EXPECT_EQ(summary.selected_edge_count, 1U);
+  ASSERT_EQ(session.editor_mode().snapshot().participants.size(), 1U);
+  EXPECT_TRUE(session.editor_mode().contains(first.object.entity));
+  EXPECT_FALSE(session.editor_mode().contains(second.object.entity));
 
-  const ViewportOverlayFrame frame = service.selection_overlay_frame();
+  const ViewportOverlayFrame frame = visible_modeling_overlay_frame(service);
   const auto source_wire_count_for_object = [&](int object_id) {
     return static_cast<std::size_t>(
         std::count_if(frame.lines.begin(), frame.lines.end(),

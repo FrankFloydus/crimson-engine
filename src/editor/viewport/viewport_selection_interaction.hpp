@@ -127,12 +127,21 @@ private:
   /// Avoids republishing empty hover on every unchanged frame.
   enum class HoverClearState : std::uint8_t {
     Armed,
+    SpatialCandidatePreserved,
     FullyCleared,
   };
 
   /// Invalidates queued input even if a mode round trip restores its kind.
   bool synchronize_mode_context(QuaderEditorApi &editor,
                                 const ViewportInteractionFrame &frame);
+
+  /// A component marquee's release is not a new spatial hover sample.
+  struct ComponentMarqueeHoverBarrier {
+    QVec2 local;
+    QuaderSelectionMode mode;
+    ViewportToolId tool;
+    SceneSessionId scene_session_id;
+  };
 
   /// Preserves the first click's selection while its native double is pending.
   struct DepthClickBaseline {
@@ -242,6 +251,7 @@ private:
   bool curve_control_box_active_ = false;
   std::optional<ViewportSelectionMarquee> committed_marquee_;
   std::optional<ResolvedSelectionTarget> hover_suppressed_target_;
+  std::optional<ComponentMarqueeHoverBarrier> component_marquee_hover_barrier_;
   std::optional<SceneSessionId> mode_context_scene_;
   std::uint64_t mode_context_generation_ = 0;
   QuaderSelectionMode mode_context_selection_kind_ = QuaderSelectionMode::Object;

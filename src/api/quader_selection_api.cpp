@@ -426,8 +426,16 @@ QuaderApiVoidResult QuaderSelectionApi::set_mode(QuaderSelectionMode mode) {
   if (mode == QuaderSelectionMode::Vertex || mode == QuaderSelectionMode::Edge ||
       mode == QuaderSelectionMode::Face) {
     return mutations_.run_runtime_result(
-        session.editor_mode().set_component_kind(to_modeling_selection_mode(mode)),
+        session.editor_mode().enter_component_selection(to_modeling_selection_mode(mode)),
         "Set Component Selection Kind");
+  }
+  if (mode != QuaderSelectionMode::Object && mode != QuaderSelectionMode::Group) {
+    return quader_api_failure_status(session, "Unknown selection mode.");
+  }
+  if (mode == QuaderSelectionMode::Object &&
+      session.editor_mode().mode() == EditorMode::Edit) {
+    return mutations_.run_runtime_result(
+        session.editor_mode().set_mode(EditorMode::Object), "Set Selection Mode");
   }
   if (session.editor_mode().mode() != EditorMode::Object) {
     return quader_api_failure_status(session,

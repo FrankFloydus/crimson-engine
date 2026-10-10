@@ -1010,7 +1010,7 @@ TEST_F(ModelingComponentMergeTests, EdgeConnectAndDissolveRejectTwoComponentPart
     ASSERT_TRUE(editor_.selection().select_edge(
         object, face.vertices[2], face.vertices[3], QuaderSelectionEdit::Add).ok());
   }
-  ASSERT_EQ(editor_.selection().summary().selected_object_count, 3U);
+  ASSERT_EQ(editor_.selection().summary().selected_object_count, 2U);
   ASSERT_EQ(editor_.selection().summary().selected_edge_count, 4U);
   expect_component_operation_availability(
       quader_command::kModelingConnectEdges, "connect_edges", false);
@@ -1043,7 +1043,7 @@ TEST_F(ModelingComponentMergeTests, EdgeConnectAndDissolveRejectTwoComponentPart
       first, interior_edges[0].a, interior_edges[0].b).ok());
   ASSERT_TRUE(editor_.selection().select_edge(
       second, interior_edges[1].a, interior_edges[1].b, QuaderSelectionEdit::Add).ok());
-  ASSERT_EQ(editor_.selection().summary().selected_object_count, 3U);
+  ASSERT_EQ(editor_.selection().summary().selected_object_count, 2U);
   ASSERT_EQ(editor_.selection().summary().selected_edge_count, 2U);
   expect_component_operation_availability(
       quader_command::kModelingDissolveEdges, "dissolve_edges", false);

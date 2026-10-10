@@ -485,6 +485,11 @@ TEST_F(QtViewportEdgeLengthHudTests,
     if (mode != quader::QuaderSelectionMode::Object) {
       ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
       ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+      if (mode == quader::QuaderSelectionMode::Face) {
+        ASSERT_TRUE(editor.selection().select_face(box.value(), 1).ok());
+      } else {
+        ASSERT_TRUE(editor.selection().select_edge(box.value(), 1, 2).ok());
+      }
       ASSERT_TRUE(editor.selection().select_all().ok());
     }
     ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Select).ok());

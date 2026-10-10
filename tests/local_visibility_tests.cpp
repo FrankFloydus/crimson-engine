@@ -171,25 +171,23 @@ TEST(LocalVisibilityTests,
 }
 
 TEST(LocalVisibilityTests,
-     EmptyComponentsRetainEditMeshScopeForLocalVisibility) {
+     EmptyComponentsCannotEnterLocalVisibilityAfterSelectionClear) {
   quader::QuaderStandaloneEditor standalone =
       quader::create_standalone_editor();
   quader::QuaderEditorApi &editor = standalone.editor();
-  const auto owner = create_box(editor, "Empty Component Owner");
+  (void)create_box(editor, "Empty Component Owner");
   ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
   ASSERT_TRUE(editor.selection().clear().ok());
   ASSERT_EQ(editor.selection().summary().selected_vertex_count, 0u);
-  ASSERT_EQ(editor.mode().state().participants.size(), 1u);
-  EXPECT_EQ(editor.mode().state().participants.front().id, owner.entity);
+  ASSERT_TRUE(editor.mode().state().participants.empty());
+  EXPECT_FALSE(editor.selection().summary().has_selection);
 
-  EXPECT_TRUE(editor.viewports().can_enter_local_visibility());
-  const quader::QuaderApiVoidResult entered =
+  EXPECT_FALSE(editor.viewports().can_enter_local_visibility());
+  const quader::QuaderApiVoidResult rejected =
       editor.viewports().toggle_local_visibility();
-  ASSERT_TRUE(entered.ok()) << entered.error_message();
-  EXPECT_TRUE(entered.changed());
-  EXPECT_TRUE(editor.viewports().local_visibility_active());
-  EXPECT_TRUE(quader::QuaderViewportApiRuntimeAccess::workspace(editor.viewports())
-                  .local_visibility_snapshot().allows(owner.entity));
+  EXPECT_FALSE(rejected.ok());
+  EXPECT_FALSE(rejected.changed());
+  EXPECT_FALSE(editor.viewports().local_visibility_active());
 }
 
 TEST(LocalVisibilityTests,
@@ -446,14 +444,13 @@ TEST(LocalVisibilityTests,
     EXPECT_EQ(editor.selection().summary().selected_vertex_count, 0u);
 
     EXPECT_FALSE(editor.selection().hover_vertex(outside, 1).changed());
-    ASSERT_EQ(editor.mode().state().participants.size(), 1u);
-    EXPECT_EQ(editor.mode().state().participants.front().id, local.entity);
+    EXPECT_TRUE(editor.mode().state().participants.empty());
     const quader::QuaderApiVoidResult outside_hover_select_all =
         editor.selection().select_all();
     ASSERT_TRUE(outside_hover_select_all.ok())
         << outside_hover_select_all.error_message();
-    EXPECT_TRUE(outside_hover_select_all.changed());
-    EXPECT_EQ(editor.selection().summary().selected_vertex_count, 8u);
+    EXPECT_FALSE(outside_hover_select_all.changed());
+    EXPECT_EQ(editor.selection().summary().selected_vertex_count, 0u);
 
     ASSERT_TRUE(editor.selection().clear().ok());
     ASSERT_TRUE(editor.selection().hover_vertex(local, 1).ok());

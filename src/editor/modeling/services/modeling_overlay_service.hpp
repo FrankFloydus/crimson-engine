@@ -80,14 +80,22 @@ public:
       const ModelingAcceptedOverlayCoordinates &coordinates,
       std::uint64_t local_visibility_revision,
       ModelingSelectionOverlayOptions options,
-      std::uint64_t editor_mode_revision) const;
+      std::uint64_t editor_mode_revision,
+      int suppressed_fallback_source_wire_object_id = -1) const;
+  [[nodiscard]] static int fallback_active_source_wire_object_id(
+      const ModelingSelectionProjectionSnapshot &selection);
+  [[nodiscard]] static int suppressed_fallback_source_wire_object_id(
+      int fallback_object_id,
+      const quader_editor_core::SelectionHoverState &hover,
+      ModelingSelectionOverlayOptions options);
   [[nodiscard]] const quader_editor_core::SelectionOverlayGeometryWorkCounters &
   selection_overlay_geometry_work_counters() const {
     return geometry_work_;
   }
   [[nodiscard]] std::uint64_t selection_overlay_signature(
       const quader_editor_core::EditorRuntime &runtime,
-      ModelingSelectionOverlayOptions options = {}) const;
+      ModelingSelectionOverlayOptions options = {},
+      int suppressed_fallback_source_wire_object_id = -1) const;
   [[nodiscard]] std::uint64_t volatile_overlay_signature(
       const quader_editor_core::EditorRuntime &runtime) const;
   /// Hashes generated mesh-preview inputs without projecting or compiling them.

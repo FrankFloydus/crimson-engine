@@ -4860,6 +4860,7 @@ TEST(QtViewportSurfaceInputTests,
       target = vertex.position;
       ASSERT_TRUE(editor.selection().select_vertex(box.value(), vertex.id).ok());
     } else if (mode == quader::QuaderSelectionMode::Face) {
+      ASSERT_TRUE(editor.selection().select_face(box.value(), 1).ok());
       ASSERT_TRUE(editor.selection().select_all().ok());
       ASSERT_EQ(editor.selection().summary().selected_face_count, 6u);
     }
@@ -5034,13 +5035,8 @@ TEST(QtViewportSurfaceInputTests,
       EXPECT_EQ(editor.selection().hover_summary().target.kind,
                 quader::QuaderActiveSelectionKind::None);
       EXPECT_FALSE(session.selection().resolved_hover_target().has_value());
-      const auto edit = editor.mode().state();
-      if (mode == quader::QuaderSelectionMode::Object) {
-        EXPECT_TRUE(edit.participants.empty());
-      } else {
-        ASSERT_EQ(edit.participants.size(), 1u);
-        EXPECT_EQ(edit.participants.front().id, box.value().entity);
-      }
+      EXPECT_TRUE(editor.mode().state().participants.empty());
+      EXPECT_EQ(session.modeling().selection_hover_summary().candidate_object_id, -1);
     };
     QEnterEvent enter(original_local, original_local,
                       original_local + QPointF{100, 100});
@@ -5099,14 +5095,12 @@ TEST(QtViewportSurfaceInputTests,
     // Hover becomes eligible again when the real pointer reaches the mesh.
     mouse(QEvent::MouseMove, center_local, Qt::NoButton, Qt::NoButton);
     process_input();
-    if (mode == quader::QuaderSelectionMode::Object) {
-      EXPECT_EQ(editor.selection().hover_summary().target.object_id,
+    EXPECT_EQ(editor.selection().hover_summary().target.object_id,
+              box.value().modeling_object_id);
+    EXPECT_TRUE(editor.mode().state().participants.empty());
+    if (mode != quader::QuaderSelectionMode::Object) {
+      EXPECT_EQ(session.modeling().selection_hover_summary().candidate_object_id,
                 box.value().modeling_object_id);
-    } else {
-      EXPECT_EQ(editor.selection().hover_summary().target.object_id,
-                box.value().modeling_object_id);
-      ASSERT_EQ(editor.mode().state().participants.size(), 1u);
-      EXPECT_EQ(editor.mode().state().participants.front().id, box.value().entity);
     }
     EXPECT_FALSE(editor.selection().summary().has_selection);
     EXPECT_EQ(editor.selection().summary().selection_revision,
@@ -6127,7 +6121,7 @@ TEST(QtViewportSurfaceInputTests,
 }
 
 TEST(QtViewportSurfaceInputTests,
-     ComponentShortcutsRequireExplicitEditEntryAndCannotExitIt) {
+     SelectionShortcutsEnterComponentsAndReturnToObjectsDirectly) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
   char application_name[] = "quader-component-mode-shortcut-input-tests";
@@ -6139,29 +6133,26 @@ TEST(QtViewportSurfaceInputTests,
       {.min = {-1, -1, -1}, .max = {1, 1, 1}});
   ASSERT_TRUE(box.ok());
   ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
-  const auto generation = editor.mode().generation();
-  for (const int key : {Qt::Key_1, Qt::Key_2, Qt::Key_3}) {
-    context.key(key);
-    EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Object);
-    EXPECT_EQ(editor.mode().generation(), generation);
-    EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
-    EXPECT_EQ(editor.selection().summary().selected_object_count, 1u);
-  }
-  context.key(Qt::Key_Tab);
-  ASSERT_EQ(editor.mode().current(), quader::QuaderEditorMode::Edit);
   for (const auto [key, mode] : {
            std::pair{Qt::Key_1, quader::QuaderSelectionMode::Vertex},
            std::pair{Qt::Key_2, quader::QuaderSelectionMode::Edge},
            std::pair{Qt::Key_3, quader::QuaderSelectionMode::Face}}) {
+    const auto generation = editor.mode().generation();
     context.key(key);
+    ASSERT_EQ(editor.mode().current(), quader::QuaderEditorMode::Edit);
+    EXPECT_GT(editor.mode().generation(), generation);
     EXPECT_EQ(editor.selection().summary().mode, mode);
-  }
-  for (const int key : {Qt::Key_4, Qt::Key_5}) {
-    context.key(key);
-    EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Edit);
-    EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Face);
     ASSERT_EQ(editor.mode().state().participants.size(), 1u);
     EXPECT_EQ(editor.mode().state().participants.front().id, box.value().entity);
+    const auto edit_generation = editor.mode().generation();
+    context.key(Qt::Key_5);
+    EXPECT_EQ(editor.mode().generation(), edit_generation);
+    EXPECT_EQ(editor.selection().summary().mode, mode);
+    context.key(Qt::Key_4);
+    ASSERT_EQ(editor.mode().current(), quader::QuaderEditorMode::Object);
+    EXPECT_GT(editor.mode().generation(), edit_generation);
+    EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
+    EXPECT_EQ(editor.selection().summary().selected_object_count, 1u);
   }
 }
 
@@ -6331,6 +6322,12 @@ TEST(QtViewportSurfaceInputTests,
     QKeyEvent release(QEvent::KeyRelease, Qt::Key_Tab, Qt::NoModifier);
     send_visible_viewport_event(context.surface, &release);
     context.process();
+    if (key_first) {
+      ASSERT_TRUE(editor.selection().hover_vertex(box.value(), 1).ok());
+      ASSERT_EQ(context.session.modeling().selection_hover_summary().candidate_object_id,
+                box.value().modeling_object_id);
+      ASSERT_EQ(editor.selection().summary().selected_vertex_count, 0u);
+    }
     context.mouse(QEvent::MouseButtonPress, {100, 100}, Qt::LeftButton, Qt::LeftButton);
     context.mouse(QEvent::MouseMove, {700, 500}, Qt::NoButton, Qt::LeftButton);
     context.mouse(QEvent::MouseButtonRelease, {700, 500}, Qt::LeftButton, Qt::NoButton);

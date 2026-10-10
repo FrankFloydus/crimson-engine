@@ -1554,6 +1554,14 @@ class ModelingSessionService::Impl : private ModelingTransformDragPort {
     std::uint64_t reuse_count = 0u;
   };
 
+  struct ComponentSourceWireFallbackCache final {
+    bool valid = false;
+    std::uint64_t content_revision = 0;
+    std::uint64_t selection_revision = 0;
+    std::uint64_t object_map_revision = 0;
+    int object_id = -1;
+  };
+
   /// Fixed-size Knife cursor facts consumed by the volatile overlay builder.
   struct KnifeHoverOverlayKey final {
     quader_editor_core::KnifeToolStatus status =
@@ -3584,7 +3592,7 @@ public:
     options.persistent_source_wire_object_id =
         persistent_tool_source_wire_object_id();
     return overlay_service_.selection_overlay_signature(
-               runtime_, options) ^
+               runtime_, options, suppressed_fallback_source_wire_object_id(options)) ^
            selection_service_.editor_mode_revision() ^
            sdk_projection_adapter_.selection_overlay_preview_signature();
   }
@@ -3706,7 +3714,8 @@ public:
           persistent_tool_source_wire_object_id();
       if (auto base = overlay_service_.accepted_coordinate_base_frame(
               *coordinates, selection_service_.viewport_visibility_revision(),
-              options, selection_service_.editor_mode_revision())) {
+              options, selection_service_.editor_mode_revision(),
+              suppressed_fallback_source_wire_object_id(options))) {
         return std::move(*base);
       }
     }
@@ -4531,7 +4540,7 @@ public:
         selection_projection_snapshot();
     if (const std::optional<ModelingSelectionProjectionCommandResult> scoped =
             selection_service_.select_all_in_constrained_component_scope(
-                projection, scene_, object_registry_)) {
+                projection, scene_, object_registry_, runtime_.hover().candidate_object_id)) {
       if (!scoped->command.ok) {
         return scoped->command;
       }
@@ -10989,9 +10998,83 @@ public:
     return set_component_selection(component);
   }
 
+  [[nodiscard]] bool resolved_component_body_target_eligible(
+      int modeling_object_id, EntityId source_occurrence) const {
+    const std::optional<EntityId> entity =
+        object_registry_.entity_for_modeling_object(modeling_object_id);
+    if (!entity.has_value() || !component_target_is_editable(*entity)) {
+      return false;
+    }
+    const EntityId definition =
+        scene_.containing_instance_definition(*entity);
+    const ModelingInstanceEditScope edit_scope =
+        instance_edit_scope_provider_ ? instance_edit_scope_provider_()
+                                      : ModelingInstanceEditScope{};
+    const bool active_instance_edit =
+        edit_scope.occurrence != kInvalidEntityId &&
+        edit_scope.definition != kInvalidEntityId;
+    if (definition != kInvalidEntityId) {
+      return active_instance_edit && definition == edit_scope.definition &&
+             source_occurrence == edit_scope.occurrence;
+    }
+    return !active_instance_edit && source_occurrence == *entity;
+  }
+
+  ModelingCommandResult apply_resolved_component_body_selection(
+      const ModelingResolvedComponentBodySelectionRequest &request) {
+    const ModelingSelectionProjectionSnapshot &projection =
+        selection_projection_snapshot();
+    const auto object_it = std::find_if(
+        projection.objects().begin(), projection.objects().end(),
+        [&](const quader_editor_core::PolygonObject &object) {
+          return object.id == request.modeling_object_id;
+        });
+    if (object_it == projection.objects().end()) {
+      return {.ok = false,
+              .message = "Resolved component body owner is no longer live."};
+    }
+    if (request.mode == ModelingSelectionMode::Object ||
+        request.mode == ModelingSelectionMode::Group ||
+        request.mode != app_selection_mode_) {
+      return {
+          .ok = false,
+          .message =
+              "Resolved component body does not match the current selection mode.",
+      };
+    }
+    if (!resolved_component_body_target_eligible(
+            request.modeling_object_id, request.source_occurrence)) {
+      return {
+          .ok = false,
+          .message =
+              "Resolved component body is outside the active edit scope.",
+      };
+    }
+    if (request.edit == ModelingSelectionEdit::Remove ||
+        request.edit == ModelingSelectionEdit::Toggle) {
+      return {.ok = true, .changed = false};
+    }
+    if (request.preserve_existing_component_selection_on_hit &&
+        ModelingSelectionService::has_component_selection(
+            selection_summary())) {
+      return {.ok = true, .changed = false};
+    }
+    if (request.preserve_selection_on_selected_hit &&
+        (object_it->selected || object_it->component_edit_target)) {
+      return {.ok = true, .changed = false};
+    }
+
+    ModelingComponentSelectionRequest component{
+        .modeling_object_id = request.modeling_object_id,
+        .mode = request.mode,
+        .edit = request.edit,
+        .retain_component_edit_target = true,
+    };
+    return set_component_selection(component);
+  }
+
   [[nodiscard]] bool component_target_is_editable(EntityId entity) const {
-    if (!scene_.exists(entity) || !selection_service_.viewport_entity_visible(entity) ||
-        (editor_mode_service_ != nullptr && !editor_mode_service_->contains(entity))) {
+    if (!scene_.exists(entity) || !selection_service_.viewport_entity_visible(entity)) {
       return false;
     }
     const ModelingInstanceEditScope scope = instance_edit_scope();
@@ -11419,11 +11502,13 @@ public:
         request.kind == ModelingActiveSelectionKind::Face;
     if (component_hover && editor_mode_service_ != nullptr) {
       const auto entity = object_registry_.entity_for_modeling_object(request.modeling_object_id);
-      if (!entity.has_value() || !editor_mode_service_->contains(*entity)) {
+      if (!entity.has_value() || !component_target_is_editable(*entity)) {
         return {.ok = false, .message = "Component hover is outside the edit set."};
       }
     }
-    hover.candidate_object_id = -1;
+    hover.candidate_object_id = request.candidate_object_id > 0
+                                   ? request.candidate_object_id
+                                   : component_hover ? request.modeling_object_id : -1;
     switch (request.kind) {
     case ModelingActiveSelectionKind::Object:
       hover.kind = quader_editor_core::SelectionHoverKind::Object;
@@ -11467,6 +11552,32 @@ public:
   }
 
 private:
+  [[nodiscard]] int suppressed_fallback_source_wire_object_id(
+      ModelingSelectionOverlayOptions options) const {
+    if (options.suppress_persistent_selection ||
+        runtime_.hover().candidate_object_id <= 0 ||
+        !is_component_selection_mode(sdk_projection_adapter_.selection_mode())) {
+      return -1;
+    }
+    auto &cache = component_source_wire_fallback_cache_;
+    const std::uint64_t current_content_revision = content_revision();
+    const std::uint64_t current_selection_revision = selection_revision();
+    const std::uint64_t current_object_map_revision = object_registry_.revision();
+    if (!cache.valid || cache.content_revision != current_content_revision ||
+        cache.selection_revision != current_selection_revision ||
+        cache.object_map_revision != current_object_map_revision) {
+      cache.object_id =
+          ModelingOverlayService::fallback_active_source_wire_object_id(
+              selection_projection_snapshot());
+      cache.content_revision = current_content_revision;
+      cache.selection_revision = current_selection_revision;
+      cache.object_map_revision = current_object_map_revision;
+      cache.valid = true;
+    }
+    return ModelingOverlayService::suppressed_fallback_source_wire_object_id(
+        cache.object_id, runtime_.hover(), options);
+  }
+
   bool set_cutting_tool_hover_candidate(int object_id) {
     auto hover = runtime_.hover();
     if (hover.candidate_object_id == object_id) return false;
@@ -11516,6 +11627,7 @@ private:
   }
 
   void invalidate_selection_overlay_caches() const override {
+    component_source_wire_fallback_cache_.valid = false;
     overlay_service_.invalidate();
     invalidate_volatile_overlay_cache();
   }
@@ -11985,6 +12097,7 @@ private:
   mutable ViewportCurvePickCache curve_box_pick_cache_;
   SelectionProjectionService selection_projection_service_;
   mutable ModelingOverlayService overlay_service_;
+  mutable ComponentSourceWireFallbackCache component_source_wire_fallback_cache_;
   mutable VolatileOverlayCache volatile_overlay_cache_;
   mutable std::uint64_t volatile_overlay_runtime_revision_ = 0u;
   mutable ModelingToolPreviewWorkStats tool_preview_work_stats_;
@@ -13691,6 +13804,18 @@ ModelingCommandResult ModelingSessionService::apply_resolved_component_selection
     return {.ok = false, .message = "Component click edit context is stale."};
   }
   return impl_->apply_resolved_component_selection(request, baseline ? baseline->impl_.get() : nullptr);
+}
+
+bool ModelingSessionService::resolved_component_body_target_eligible(
+    int modeling_object_id, EntityId source_occurrence) const {
+  return impl_->resolved_component_body_target_eligible(modeling_object_id,
+                                                        source_occurrence);
+}
+
+ModelingCommandResult
+ModelingSessionService::apply_resolved_component_body_selection(
+    const ModelingResolvedComponentBodySelectionRequest &request) {
+  return impl_->apply_resolved_component_body_selection(request);
 }
 
 ModelingCommandResult ModelingSessionService::set_component_selections(

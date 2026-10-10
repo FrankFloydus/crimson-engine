@@ -609,7 +609,8 @@ TEST(PublicReleaseSelection, DoubleClicksUseTypedExpansionAndBoundedEdgeSelectio
     actual.erase(std::unique(actual.begin(), actual.end()), actual.end());
     std::sort(expected.begin(), expected.end());
     EXPECT_EQ(actual, expected);
-    EXPECT_EQ(session.editor_mode().snapshot().participants, context.participants);
+    ASSERT_EQ(session.editor_mode().snapshot().participants.size(), 1u);
+    EXPECT_TRUE(session.editor_mode().contains(created.value().entity));
     EXPECT_EQ(session.editor_mode().snapshot().generation, context.generation);
     EXPECT_EQ(editor.selection().summary().content_revision, content_revision);
     EXPECT_EQ(session.history().undo_count(), 0u);
@@ -636,7 +637,7 @@ TEST(PublicReleaseSelection, ExplicitEditModeSupportsMultipleMeshesAndKeepsObjec
                           QuaderSelectionMode::Face}) {
     ASSERT_TRUE(editor.selection().set_mode(kind).ok());
     ASSERT_TRUE(editor.selection().clear().ok());
-    EXPECT_EQ(editor.mode().state().participants.size(), 2U);
+    EXPECT_TRUE(editor.mode().state().participants.empty());
   }
   const auto before = capture_command_observable_state(editor);
   EXPECT_FALSE(editor.selection().set_mode(QuaderSelectionMode::Group).ok());
@@ -646,7 +647,7 @@ TEST(PublicReleaseSelection, ExplicitEditModeSupportsMultipleMeshesAndKeepsObjec
   ASSERT_TRUE(editor.commands().execute(quader_command::kEditorModeToggleEdit).ok());
   EXPECT_EQ(editor.mode().current(), QuaderEditorMode::Object);
   EXPECT_EQ(editor.selection().summary().mode, QuaderSelectionMode::Object);
-  EXPECT_EQ(editor.selection().summary().selected_object_count, 2U);
+  EXPECT_EQ(editor.selection().summary().selected_object_count, 0U);
 }
 
 TEST(PublicReleaseSelection, ComponentModeConversionIgnoresDormantMeshPayload) {

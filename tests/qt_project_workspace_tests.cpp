@@ -62,6 +62,7 @@
 #include "viewport/viewport_settings.hpp"
 
 #include <QAction>
+#include <QActionGroup>
 #include <QAbstractNativeEventFilter>
 #include <QAbstractAnimation>
 #include <QAbstractItemModel>
@@ -795,7 +796,7 @@ TEST(QtProjectWorkspaceTests,
 
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(32, 32));
-  EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 4);
+  EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 5);
   EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 14);
   QToolButton *scale_metric_probe = nullptr;
   for (QToolButton *candidate :
@@ -815,7 +816,7 @@ TEST(QtProjectWorkspaceTests,
   tool_toolbar.apply_ui_scale(quader::QtUiScaleMetrics(2.0F, 1U));
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(64, 64));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(64, 64));
-  EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 60), 4);
+  EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 60), 5);
   EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 80), 14);
   EXPECT_EQ(scale_metric_probe->style()->pixelMetric(
                 QStyle::PM_ButtonMargin, nullptr, scale_metric_probe),
@@ -826,7 +827,7 @@ TEST(QtProjectWorkspaceTests,
   tool_toolbar.apply_ui_scale(quader::QtUiScaleMetrics(1.0F, 2U));
   EXPECT_EQ(selection_toolbar.iconSize(), QSize(32, 32));
   EXPECT_EQ(tool_toolbar.iconSize(), QSize(32, 32));
-  EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 4);
+  EXPECT_EQ(expect_persistent_button_faces(selection_toolbar, 30), 5);
   EXPECT_EQ(expect_persistent_button_faces(tool_toolbar, 40), 14);
   EXPECT_EQ(scale_metric_probe->style()->pixelMetric(
                 QStyle::PM_ButtonMargin, nullptr, scale_metric_probe),
@@ -973,10 +974,10 @@ TEST(QtProjectWorkspaceTests,
 }
 
 TEST(QtProjectWorkspaceTests,
-     EditorModeDropdownProjectsOwnerModesAndRetainsUnchangedControls) {
+     SelectionToolbarKeepsAllModesAvailableAndRetainsUnchangedControls) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
-  char application_name[] = "quader-editor-mode-toolbar-test";
+  char application_name[] = "quader-selection-toolbar-test";
   char *argv[] = {application_name, nullptr};
   QApplication application(argc, argv);
   application.setQuitOnLastWindowClosed(false);
@@ -1013,7 +1014,7 @@ TEST(QtProjectWorkspaceTests,
   const QDir icons(QStringLiteral(QUADER_SOURCE_DIR "/resources/icons"));
   QList<QAction *> retained_actions;
   QList<QToolButton *> retained_buttons;
-  for (const auto *kind : {"Vertex", "Edge", "Face", "Group"}) {
+  for (const auto *kind : {"Vertex", "Edge", "Face", "Mesh", "Group"}) {
     const QString suffix = QString::fromLatin1(kind);
     auto *action = toolbar.findChild<QAction *>(
         QStringLiteral("selectionMode%1").arg(suffix));
@@ -1027,27 +1028,12 @@ TEST(QtProjectWorkspaceTests,
     retained_actions.push_back(action);
     retained_buttons.push_back(button);
   }
-  auto *combo = toolbar.findChild<QComboBox *>(QStringLiteral("editorModeCombo"));
-  ASSERT_NE(combo, nullptr);
-  ASSERT_EQ(combo->count(), 2);
-  EXPECT_EQ(toolbar.widgetForAction(toolbar.actions().front()), combo);
-  ASSERT_EQ(toolbar.actions().size(), 6);
-  QAction *selection_separator = toolbar.actions()[1];
-  ASSERT_TRUE(selection_separator->isSeparator());
+  EXPECT_EQ(toolbar.findChild<QComboBox *>(QStringLiteral("editorModeCombo")), nullptr);
+  ASSERT_EQ(toolbar.actions().size(), 5);
   EXPECT_EQ(toolbar.findChild<QLabel *>(QStringLiteral("selectionToolbarLabel")), nullptr);
   EXPECT_EQ(toolbar.toolButtonStyle(), Qt::ToolButtonIconOnly);
-  int requests = 0;
   int selection_requests = 0;
   int group_toggle_requests = 0;
-  bool last_mode_request_changed = false;
-  toolbar.set_editor_mode_requested_callback([&](quader::QuaderEditorMode mode) {
-    ++requests;
-    const auto result = editor.mode().set(mode);
-    EXPECT_TRUE(result.ok());
-    last_mode_request_changed = result.changed();
-    // The production callback also restores the owner after a rejected request.
-    toolbar.synchronize(editor, editor.selection().summary().mode, true);
-  });
   toolbar.set_mode_requested_callback([&](quader::QuaderSelectionMode mode) {
     ++selection_requests;
     EXPECT_TRUE(editor.selection().set_mode(mode).ok());
@@ -1059,19 +1045,25 @@ TEST(QtProjectWorkspaceTests,
         quader::quader_command::kSelectToggleGroupSelection).ok());
     toolbar.synchronize(editor, editor.selection().summary().mode, true);
   });
-  const auto verify_controls = [&](bool edit) {
-    EXPECT_EQ(combo->currentIndex(), edit ? 1 : 0);
-    EXPECT_TRUE(selection_separator->isVisible());
-    EXPECT_EQ(toolbar.actions().size(), 6);
-    EXPECT_EQ(toolbar.findChild<QAction *>(QStringLiteral("selectionModeMesh")), nullptr);
+  const auto verify_controls = [&]() {
+    EXPECT_EQ(toolbar.actions().size(), 5);
+    const auto mode = editor.selection().summary().mode;
+    int checked_mode_actions = 0;
     for (qsizetype index = 0; index < retained_actions.size(); ++index) {
       QAction *action = retained_actions[index];
       QToolButton *button = retained_buttons[index];
       EXPECT_EQ(toolbar.findChild<QAction *>(action->objectName()), action);
       EXPECT_EQ(toolbar.widgetForAction(action), button);
-      const bool component = action->objectName() != "selectionModeGroup";
-      EXPECT_EQ(action->isVisible(), component == edit);
-      if (component == edit) EXPECT_TRUE(action->isEnabled());
+      EXPECT_TRUE(action->isVisible());
+      const bool group = action->objectName() == "selectionModeGroup";
+      EXPECT_EQ(action->isEnabled(), !group ||
+          editor.mode().current() == quader::QuaderEditorMode::Object);
+      if (!group && action->isChecked()) {
+        ++checked_mode_actions;
+      }
+      if (group) {
+        EXPECT_EQ(action->isChecked(), mode == quader::QuaderSelectionMode::Group);
+      }
       EXPECT_FALSE(action->text().isEmpty());
       EXPECT_FALSE(action->toolTip().isEmpty());
       EXPECT_FALSE(action->icon().isNull());
@@ -1080,6 +1072,7 @@ TEST(QtProjectWorkspaceTests,
       EXPECT_EQ(button->accessibleDescription(), action->toolTip());
       EXPECT_EQ(button->focusPolicy(), Qt::StrongFocus);
     }
+    EXPECT_EQ(checked_mode_actions, 1);
   };
   const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
   if (!review_directory.isEmpty()) {
@@ -1101,60 +1094,7 @@ TEST(QtProjectWorkspaceTests,
       toolbar.layout()->invalidate();
       toolbar.layout()->activate();
     }
-    EXPECT_EQ(combo->height(), metrics.px(30));
-    EXPECT_GE(combo->width(), combo->minimumSizeHint().width());
-    EXPECT_GE(combo->width(), combo->sizeHint().width());
-    EXPECT_TRUE(combo->isVisible());
-    EXPECT_TRUE(toolbar.rect().contains(combo->geometry()));
-    QStyleOptionComboBox combo_option;
-    combo_option.initFrom(combo);
-    combo_option.currentText = combo->currentText();
-    combo_option.frame = combo->hasFrame();
-    const QRect text_rect = combo->style()->subControlRect(
-        QStyle::CC_ComboBox, &combo_option, QStyle::SC_ComboBoxEditField, combo);
-    const QRect arrow_rect = combo->style()->subControlRect(
-        QStyle::CC_ComboBox, &combo_option, QStyle::SC_ComboBoxArrow, combo);
-    EXPECT_TRUE(arrow_rect.isValid());
-    EXPECT_FALSE(text_rect.intersects(arrow_rect));
-    for (int index = 0; index < combo->count(); ++index) {
-      EXPECT_GE(text_rect.width(),
-                combo->fontMetrics().horizontalAdvance(combo->itemText(index)))
-          << combo->itemText(index).toStdString();
-    }
-    const int requests_before_popup = requests;
-    const auto mode_before_popup = editor.mode().current();
-    expect_popup_restores_committed_combo_item(*combo, application);
-    combo->showPopup();
-    application.processEvents();
-    QWidget *popup = combo->view()->window();
-    ASSERT_NE(popup, nullptr);
-    ASSERT_TRUE(popup->isVisible());
-    const QRect trigger(combo->mapToGlobal(QPoint{}), combo->size());
-    QScreen *popup_screen = QGuiApplication::screenAt(trigger.bottomLeft());
-    ASSERT_NE(popup_screen, nullptr);
-    ASSERT_LE(trigger.bottom() + popup->height(),
-              popup_screen->availableGeometry().bottom());
-    EXPECT_EQ(popup->geometry().top(), trigger.bottom() + 1)
-        << "Object/Edit choices must open below the whole mode field";
-    EXPECT_EQ(combo->view()->layoutDirection(), combo->layoutDirection());
-    EXPECT_TRUE(combo->view()->visualRect(combo->view()->currentIndex()).intersects(
-        combo->view()->viewport()->rect()));
-    if (!review_directory.isEmpty()) {
-      const QRect capture_rect = trigger.united(popup->geometry()).adjusted(-8, -8, 8, 8)
-                                     .intersected(popup_screen->geometry());
-      const QPixmap capture = popup_screen->grabWindow(0, capture_rect.x(), capture_rect.y(),
-                                                       capture_rect.width(), capture_rect.height());
-      ASSERT_FALSE(capture.isNull());
-      EXPECT_TRUE(capture.save(QDir(review_directory).filePath(
-          QStringLiteral("editor-mode-popup-%1.png").arg(suffix))));
-    }
-    send_key(*popup, Qt::Key_Escape);
-    EXPECT_FALSE(popup->isVisible());
-    EXPECT_EQ(requests, requests_before_popup);
-    EXPECT_EQ(editor.mode().current(), mode_before_popup);
-    verify_controls(editor.mode().current() == quader::QuaderEditorMode::Edit);
-    EXPECT_EQ(toolbar.widgetForAction(selection_separator)->isVisible(),
-              selection_separator->isVisible());
+    verify_controls();
     QList<QAction *> overflowed_actions;
     for (qsizetype index = 0; index < retained_actions.size(); ++index) {
       QAction *action = retained_actions[index];
@@ -1171,7 +1111,7 @@ TEST(QtProjectWorkspaceTests,
     }
     if (!review_directory.isEmpty()) {
       EXPECT_TRUE(toolbar.grab().save(QDir(review_directory).filePath(
-          QStringLiteral("editor-mode-toolbar-%1.png").arg(suffix))));
+          QStringLiteral("selection-toolbar-%1.png").arg(suffix))));
     }
     if (!overflowed_actions.isEmpty()) {
       auto *extension = toolbar.findChild<QToolButton *>(
@@ -1185,13 +1125,12 @@ TEST(QtProjectWorkspaceTests,
         ASSERT_TRUE(menu->isVisible());
         for (QAction *action : overflowed_actions) {
           EXPECT_TRUE(menu->actions().contains(action));
-          EXPECT_TRUE(action->isEnabled());
           EXPECT_TRUE(menu->actionGeometry(action).isValid());
           EXPECT_TRUE(menu->rect().contains(menu->actionGeometry(action)));
         }
         if (!review_directory.isEmpty()) {
           EXPECT_TRUE(menu->grab().save(QDir(review_directory).filePath(
-              QStringLiteral("editor-mode-toolbar-%1-overflow.png").arg(suffix))));
+              QStringLiteral("selection-toolbar-%1-overflow.png").arg(suffix))));
         }
         send_key(*menu, Qt::Key_Escape);
         EXPECT_FALSE(menu->isVisible());
@@ -1203,7 +1142,6 @@ TEST(QtProjectWorkspaceTests,
           ASSERT_NE(button, nullptr);
           EXPECT_TRUE(retained_buttons.contains(button));
           EXPECT_TRUE(button->isVisible());
-          EXPECT_TRUE(button->isEnabled());
         }
         click_widget(*extension, extension->rect().center());
         application.processEvents();
@@ -1211,9 +1149,14 @@ TEST(QtProjectWorkspaceTests,
     }
   };
   toolbar.synchronize(editor, quader::QuaderSelectionMode::Object);
-  verify_controls(false);
-  EXPECT_EQ(combo->currentText(), QStringLiteral("Object Mode"));
-  EXPECT_TRUE(combo->toolTip().contains(QStringLiteral("Tab"), Qt::CaseInsensitive));
+  verify_controls();
+  auto *object = toolbar.findChild<QAction *>(QStringLiteral("selectionModeMesh"));
+  ASSERT_NE(object, nullptr);
+  EXPECT_TRUE(object->isChecked());
+  EXPECT_TRUE(object->toolTip().contains(QStringLiteral("[4]")));
+  ASSERT_NE(object->actionGroup(), nullptr);
+  EXPECT_EQ(object->actionGroup()->actions().size(), 4);
+  EXPECT_EQ(object->actionGroup()->checkedAction(), object);
   review_layout(QStringLiteral("object-100"), 1.0F, 1000);
   auto *group = toolbar.findChild<QAction *>(QStringLiteral("selectionModeGroup"));
   ASSERT_NE(group, nullptr);
@@ -1228,6 +1171,7 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_EQ(selection_requests, 0);
   EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Group);
   EXPECT_TRUE(group->isChecked());
+  EXPECT_TRUE(object->isChecked());
   review_layout(QStringLiteral("object-group-selected-100"), 1.0F, 1000);
   click_widget(*group_button, group_button->rect().center());
   EXPECT_EQ(group_toggle_requests, 2);
@@ -1243,14 +1187,14 @@ TEST(QtProjectWorkspaceTests,
   review_layout(QStringLiteral("object-200"), 2.0F, 1000);
   review_layout(QStringLiteral("object-narrow-200"), 2.0F, 320);
   review_layout(QStringLiteral("object-narrow-100-down"), 1.0F, 320);
-  combo->setCurrentIndex(1);
-  EXPECT_EQ(requests, 0) << "Programmatic presentation cannot enter Edit";
-  ASSERT_TRUE(QMetaObject::invokeMethod(combo, "activated", Qt::DirectConnection,
-                                      Q_ARG(int, 1)));
-  EXPECT_EQ(requests, 1);
+  auto *vertex = toolbar.findChild<QAction *>(QStringLiteral("selectionModeVertex"));
+  ASSERT_NE(vertex, nullptr);
+  vertex->trigger();
+  EXPECT_EQ(selection_requests, 1);
+  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Vertex);
   EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Edit);
   EXPECT_EQ(editor.mode().state().participants.size(), 2u);
-  verify_controls(true);
+  verify_controls();
   review_layout(QStringLiteral("edit-100"), 1.0F, 1000);
   review_layout(QStringLiteral("edit-200"), 2.0F, 1000);
   review_layout(QStringLiteral("edit-narrow-200"), 2.0F, 320);
@@ -1267,10 +1211,6 @@ TEST(QtProjectWorkspaceTests,
   EXPECT_TRUE(face->isChecked());
   EXPECT_EQ(host.focusWidget(), face_button);
   review_layout(QStringLiteral("edit-keyboard-focus"), 1.0F, 1000);
-  ASSERT_TRUE(editor.preferences().set_shortcut(
-      quader::quader_command::kEditorModeToggleEdit, "Ctrl+Alt+F23").ok());
-  toolbar.synchronize(editor, quader::QuaderSelectionMode::Face);
-  EXPECT_TRUE(combo->toolTip().contains(QStringLiteral("Ctrl+Alt+F23")));
   ASSERT_TRUE(editor.preferences().set_shortcut(
       editor.commands().keybinding_target_id_for_selection_mode(
           quader::QuaderSelectionMode::Face), "Ctrl+Alt+F22").ok());
@@ -1304,7 +1244,6 @@ TEST(QtProjectWorkspaceTests,
   ASSERT_TRUE(localization.select_locale("it-IT"));
   toolbar.set_localization(localization);
   toolbar.synchronize(editor, quader::QuaderSelectionMode::Face);
-  EXPECT_EQ(combo->currentText(), QString::fromUtf8("Modalità Modifica"));
   int scale_cycle = 0;
   for (const float factor : {1.0F, 2.0F, 1.0F}) {
     review_layout(QStringLiteral("edit-italian-narrow-%1-%2")
@@ -1313,7 +1252,6 @@ TEST(QtProjectWorkspaceTests,
   }
   toolbar.setLayoutDirection(Qt::RightToLeft);
   review_layout(QStringLiteral("edit-italian-rtl"), 1.0F, 1000);
-  EXPECT_EQ(combo->layoutDirection(), Qt::RightToLeft);
   review_layout(QStringLiteral("edit-italian-rtl-narrow"), 1.0F, 320);
   toolbar.setLayoutDirection(Qt::LeftToRight);
   host.removeToolBar(&toolbar);
@@ -1353,68 +1291,40 @@ TEST(QtProjectWorkspaceTests,
       native_palette, Qt::ContrastPreference::HighContrast);
   review_layout(QStringLiteral("edit-native-high-contrast"), 1.0F, 1000);
   EXPECT_EQ(application.palette().resolveMask(), 0u);
-  ASSERT_TRUE(editor.commands().execute(quader::quader_command::kEditorModeObject).ok());
+  object->trigger();
+  EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
+  EXPECT_EQ(editor.mode().current(), quader::QuaderEditorMode::Object);
   toolbar.synchronize(editor, quader::QuaderSelectionMode::Object);
-  verify_controls(false);
+  verify_controls();
   EXPECT_FALSE(group->isChecked());
   review_layout(QStringLiteral("object-native-high-contrast"), 1.0F, 1000);
-  const QPoint ordinary_host_position = host.pos();
-  const QRect available = host.screen()->availableGeometry();
-  const QPoint ordinary_anchor = combo->mapToGlobal(QPoint(0, combo->height()));
-  host.move(host.x(), host.y() + available.bottom() - 2 - ordinary_anchor.y());
-  application.processEvents();
-  const QPoint edge_anchor = combo->mapToGlobal(QPoint(0, combo->height()));
-  // Sample Qt's own placement on this exact widget/palette. Native popup
-  // placement may use the full screen, including its taskbar-reserved area.
-  combo->QComboBox::showPopup();
-  application.processEvents();
-  const QRect native_fallback_geometry = combo->view()->window()->geometry();
-  combo->hidePopup();
-  combo->showPopup();
-  application.processEvents();
-  QWidget *edge_popup = combo->view()->window();
-  ASSERT_NE(edge_popup, nullptr);
-  ASSERT_TRUE(edge_popup->isVisible());
-  ASSERT_GT(edge_anchor.y() + edge_popup->height() - 1, available.bottom());
-  EXPECT_NE(edge_popup->geometry().top(), edge_anchor.y());
-  EXPECT_EQ(edge_popup->geometry(), native_fallback_geometry)
-      << "when below cannot fit, preserve Qt's native fallback geometry";
-  EXPECT_TRUE(combo->view()->visualRect(combo->view()->currentIndex()).intersects(
-      combo->view()->viewport()->rect()));
-  combo->hidePopup();
-  host.move(ordinary_host_position);
-  application.processEvents();
-  EXPECT_EQ(requests, 1);
   EXPECT_EQ(editor.selection().summary().selected_object_count, 2u);
   const int object_toolbar_width = toolbar.sizeHint().width();
   quader::SceneSession empty_scene;
   quader::QuaderEditorApi empty_editor(
       quader::QuaderApiSessionInternalAccess::from_scene_session(empty_scene));
   ASSERT_TRUE(empty_editor.commands().set_keybinding_storage_path({}).ok());
-  toolbar.set_editor_mode_requested_callback([&](quader::QuaderEditorMode mode) {
-    ++requests;
-    const auto result = empty_editor.mode().set(mode);
-    EXPECT_TRUE(result.ok());
-    last_mode_request_changed = result.changed();
+  toolbar.set_mode_requested_callback([&](quader::QuaderSelectionMode mode) {
+    EXPECT_TRUE(empty_editor.selection().set_mode(mode).ok());
     toolbar.synchronize(empty_editor, empty_editor.selection().summary().mode, true);
   });
   toolbar.synchronize(empty_editor, quader::QuaderSelectionMode::Object);
-  const auto empty_mode_revision = empty_editor.mode().revision();
-  const auto empty_undo_count = empty_scene.history().undo_count();
-  combo->setFocus(Qt::TabFocusReason);
-  send_key(*combo, Qt::Key_Down);
-  EXPECT_EQ(requests, 2);
-  EXPECT_FALSE(last_mode_request_changed);
-  EXPECT_EQ(empty_editor.mode().current(), quader::QuaderEditorMode::Object);
-  EXPECT_EQ(empty_editor.mode().revision(), empty_mode_revision);
-  EXPECT_EQ(empty_scene.history().undo_count(), empty_undo_count);
-  verify_controls(false);
   EXPECT_EQ(toolbar.sizeHint().width(), object_toolbar_width);
   action_changes = 0;
   for (int frame = 0; frame < 12; ++frame) {
     toolbar.synchronize(empty_editor, quader::QuaderSelectionMode::Object);
   }
   EXPECT_EQ(action_changes, 0);
+  vertex->trigger();
+  EXPECT_EQ(empty_editor.selection().summary().mode, quader::QuaderSelectionMode::Vertex);
+  EXPECT_TRUE(vertex->isChecked());
+  EXPECT_FALSE(object->isChecked());
+  EXPECT_EQ(object->actionGroup()->checkedAction(), vertex);
+  EXPECT_TRUE(object->isVisible());
+  EXPECT_TRUE(group->isVisible());
+  object->trigger();
+  EXPECT_EQ(empty_editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
+  EXPECT_TRUE(object->isChecked());
   std::filesystem::remove(keybindings);
 }
 
@@ -6182,7 +6092,7 @@ TEST(QtProjectWorkspaceTests,
   ASSERT_NE(vertex_mode_action, nullptr);
   ASSERT_NE(face_mode_action, nullptr);
   ASSERT_NE(group_mode_action, nullptr);
-  EXPECT_EQ(ui.main_window()->findChild<QAction *>(
+  EXPECT_NE(ui.main_window()->findChild<QAction *>(
       QStringLiteral("selectionModeMesh")), nullptr);
   EXPECT_EQ(separator->frameShape(), QFrame::VLine);
 
@@ -6315,7 +6225,7 @@ TEST(QtProjectWorkspaceTests,
     ASSERT_TRUE(editor.selection().set_mode(mode).ok());
     ASSERT_TRUE(editor.selection().clear().ok());
     ASSERT_EQ(editor.selection().summary().mode, mode);
-    ASSERT_EQ(editor.mode().state().participants.size(), 1u);
+    ASSERT_TRUE(editor.mode().state().participants.empty());
     ASSERT_EQ(scene.modeling().selection_mode(),
               mode == quader::QuaderSelectionMode::Face
                   ? quader::ModelingSelectionMode::Face
@@ -6677,9 +6587,12 @@ TEST(QtProjectWorkspaceTests,
   ASSERT_NE(edit_location, nullptr);
   EXPECT_TRUE(edit_location->isEnabled());
   EXPECT_NEAR(edit_location->value(), settled_transform.location.x, 0.0001);
-  auto *combo = ui.main_window()->findChild<QComboBox *>(QStringLiteral("editorModeCombo"));
-  ASSERT_NE(combo, nullptr);
-  EXPECT_EQ(combo->currentIndex(), 1);
+  EXPECT_EQ(ui.main_window()->findChild<QComboBox *>(
+      QStringLiteral("editorModeCombo")), nullptr);
+  auto *vertex_action = ui.main_window()->findChild<QAction *>(
+      QStringLiteral("selectionModeVertex"));
+  ASSERT_NE(vertex_action, nullptr);
+  EXPECT_TRUE(vertex_action->isChecked());
   capture_inspector(QStringLiteral("edit-stale-samples-rejected"));
   ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
   ui.refresh({}, {});

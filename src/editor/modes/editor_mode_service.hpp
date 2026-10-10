@@ -43,6 +43,8 @@ public:
   [[nodiscard]] bool can_enter_edit() const;
   [[nodiscard]] bool can_set_mode(EditorMode mode) const;
   [[nodiscard]] CommandResult set_mode(EditorMode mode);
+  /// Direct component choices also work before any mesh is selected.
+  [[nodiscard]] CommandResult enter_component_selection(ModelingSelectionMode kind);
   [[nodiscard]] CommandResult toggle();
   [[nodiscard]] CommandResult
   set_component_kind(ModelingSelectionMode kind);
@@ -62,6 +64,9 @@ public:
   /** Structural outputs remain outside Edit and join object selection on exit. */
   void register_object_result(EntityId entity);
   void set_active_participant(EntityId entity);
+  /// Selection publication supplies its committed SDK/scene targets, never hover.
+  void synchronize_component_participants(std::span<const EntityId> entities,
+                                          EntityId active);
   /// Successful Object selection publication updates active identity; clear retains it.
   void synchronize_object_active_entity();
   /// Successful component publication updates this metadata without re-entering modeling.
@@ -74,7 +79,9 @@ public:
   void reset_for_document_replacement();
 
 private:
-  [[nodiscard]] std::vector<EditorModeParticipant> entry_participants() const;
+  [[nodiscard]] CommandResult transition_mode(EditorMode mode, bool allow_empty);
+  [[nodiscard]] std::vector<EditorModeParticipant>
+  entry_participants(bool use_active_fallback = true) const;
   [[nodiscard]] EditorModeParticipant participant_for(EntityId entity) const;
   void assign_active_entity(EntityId entity);
   void normalize_tools();

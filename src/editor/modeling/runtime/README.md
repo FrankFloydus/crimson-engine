@@ -23,6 +23,32 @@ The local `quader_editor_core` namespace does not make it the SDK boundary.
 Use the matching `tests/modeling_domain/tool` and runtime suites for host interaction, and SDK
 consumer/parity tests for portable behavior. Real window/GPU output follows the root smoke workflow.
 
+## Component candidate presentation
+
+Component hover and picking use eligible scene meshes rather than a fixed Edit
+participant list. Retain the last eligible hovered mesh as a presentation candidate
+without mutating SDK component selection or scene membership. Its component wire,
+and Vertex-mode points, persist across empty-space hover and viewport leave. A new
+eligible mesh replaces the candidate; meshes with selected components remain
+additive. An empty target carried from object selection must not keep a stale wire
+when a different candidate takes over.
+
+Keep immediate component highlighting separate from the retained candidate. Blank
+clicks and finished box/lasso selection clear the immediate highlight but preserve
+the candidate. Gizmo ownership performs a hard clear of both while leaving selected
+components visible. Tool surface acquisition can target eligible peers through the
+same pick universe; operation validation must not reinstate a fixed-participant
+gate after a valid peer hit.
+
+Candidate changes and clears must reach persistent and volatile retained submission
+gates, including points. Preserve the existing wire colors, user settings, depth
+classification and Wireframe suppression policy. Verify actual submitted wire and
+point data and GPU output; a fresh semantic overlay alone cannot prove the visible
+transition. Coverage lives in
+[interaction tests](../../../../tests/viewport_interaction_controller_tests.cpp),
+[retained presentation tests](../../../../tests/selected_mesh_outline_presentation_tests.cpp)
+and [GPU overlay tests](../../../../tests/selection_overlay_runtime_tests.cpp).
+
 ## Live preview projection contract
 
 Before adding or changing an operation that displays temporary geometry, trace its candidate

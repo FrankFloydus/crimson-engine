@@ -1373,21 +1373,6 @@ void UISystem::install_runtime_hooks(
   bind_scene_backed_panels();
   bind_project_workspace_events(editor);
 
-  selection_toolbar_->set_editor_mode_requested_callback(
-      [this](QuaderEditorMode mode) {
-        if (editor_ == nullptr || modeling_ == nullptr) {
-          return;
-        }
-        const auto generation = runtime_binding_generation_;
-        present_lifecycle_result(editor_->mode().set(mode));
-        if (editor_ == nullptr || modeling_ == nullptr ||
-            generation != runtime_binding_generation_) {
-          return;
-        }
-        selection_toolbar_->synchronize(*editor_,
-            to_api_selection_mode(modeling_->selection_mode()), true);
-        synchronize_tool_toolbar(editor_->selection().summary(), true);
-      });
   selection_toolbar_->set_mode_requested_callback(
       [this](QuaderSelectionMode mode) {
         if (editor_ == nullptr || modeling_ == nullptr) {

@@ -194,7 +194,7 @@ TEST_F(PublicReleaseUiTests, MeshMarkingMenuRetainsOnlyThePublicNormalDirection)
   EXPECT_TRUE(inspected);
 }
 
-TEST_F(PublicReleaseUiTests, ObjectAndEditModesExposeOnlyTheirSelectionDomains) {
+TEST_F(PublicReleaseUiTests, SelectionToolbarExposesAllModesWithoutAnEditorModeDropdown) {
   SceneSession scene;
   QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(scene));
   const auto first = editor.modeling().create_box(
@@ -211,7 +211,7 @@ TEST_F(PublicReleaseUiTests, ObjectAndEditModesExposeOnlyTheirSelectionDomains) 
   toolbar.set_localization(localization);
   // The public test target has no application QRC; use its shipping artwork.
   const QDir icons(QString::fromStdWString((resource_root() / "icons").wstring()));
-  for (const auto *kind : {"Vertex", "Edge", "Face", "Group"}) {
+  for (const auto *kind : {"Vertex", "Edge", "Face", "Mesh", "Group"}) {
     const QString suffix = QString::fromLatin1(kind);
     auto *action = toolbar.findChild<QAction *>(
         QStringLiteral("selectionMode%1").arg(suffix));
@@ -234,20 +234,20 @@ TEST_F(PublicReleaseUiTests, ObjectAndEditModesExposeOnlyTheirSelectionDomains) 
     EXPECT_TRUE(editor.commands().execute(quader_command::kSelectToggleGroupSelection).ok());
     toolbar.synchronize(editor, editor.selection().summary().mode, true);
   });
-  auto *combo = toolbar.findChild<QComboBox *>(QStringLiteral("editorModeCombo"));
-  ASSERT_NE(combo, nullptr);
-  EXPECT_EQ(combo->currentText(), QStringLiteral("Object Mode"));
+  EXPECT_EQ(toolbar.findChild<QComboBox *>(QStringLiteral("editorModeCombo")), nullptr);
+  auto *object = toolbar.findChild<QAction *>(QStringLiteral("selectionModeMesh"));
+  ASSERT_NE(object, nullptr);
+  EXPECT_TRUE(object->isChecked());
+  EXPECT_TRUE(object->toolTip().contains(QStringLiteral("[4]")));
   toolbar.setAttribute(Qt::WA_DontShowOnScreen, true);
   toolbar.show();
   const auto retained_actions = toolbar.actions();
   const auto retained_buttons = toolbar.findChildren<QToolButton *>();
-  const auto assert_domain = [&](bool edit) {
+  const auto assert_controls = [&]() {
     toolbar.adjustSize();
     QCoreApplication::processEvents();
-    EXPECT_TRUE(combo->isVisible());
     EXPECT_EQ(toolbar.actions(), retained_actions);
-    EXPECT_EQ(toolbar.actions().size(), 6);
-    EXPECT_EQ(toolbar.findChild<QAction *>(QStringLiteral("selectionModeMesh")), nullptr);
+    EXPECT_EQ(toolbar.actions().size(), 5);
     EXPECT_EQ(toolbar.findChildren<QToolButton *>(), retained_buttons);
     int visible_separators = 0;
     for (const auto *action : toolbar.actions()) {
@@ -255,25 +255,25 @@ TEST_F(PublicReleaseUiTests, ObjectAndEditModesExposeOnlyTheirSelectionDomains) 
         ++visible_separators;
       }
     }
-    EXPECT_EQ(visible_separators, 1);
+    EXPECT_EQ(visible_separators, 0);
     for (const auto *label : toolbar.findChildren<QLabel *>()) {
       EXPECT_FALSE(label->isVisible());
     }
     for (const auto *name : {"selectionModeVertex", "selectionModeEdge",
-                             "selectionModeFace", "selectionModeGroup"}) {
+                             "selectionModeFace", "selectionModeMesh",
+                             "selectionModeGroup"}) {
       auto *action = toolbar.findChild<QAction *>(QString::fromLatin1(name));
       ASSERT_NE(action, nullptr);
-      const bool component = action->objectName() != "selectionModeGroup";
-      if (component == edit) {
-        EXPECT_TRUE(action->isEnabled());
-      }
-      EXPECT_EQ(action->isVisible(), component == edit);
+      const bool group = action->objectName() == "selectionModeGroup";
+      EXPECT_EQ(action->isEnabled(), !group ||
+          editor.mode().current() == QuaderEditorMode::Object);
+      EXPECT_TRUE(action->isVisible());
       EXPECT_FALSE(action->text().isEmpty());
       EXPECT_TRUE(action->toolTip().startsWith(action->text()));
       auto *button = qobject_cast<QToolButton *>(toolbar.widgetForAction(action));
       ASSERT_NE(button, nullptr);
       EXPECT_EQ(button->defaultAction(), action);
-      EXPECT_EQ(button->isVisible(), component == edit);
+      EXPECT_TRUE(button->isVisible());
       EXPECT_EQ(button->toolButtonStyle(), Qt::ToolButtonIconOnly);
       EXPECT_FALSE(button->icon().isNull());
       const auto *accessible = QAccessible::queryAccessibleInterface(button);
@@ -288,7 +288,7 @@ TEST_F(PublicReleaseUiTests, ObjectAndEditModesExposeOnlyTheirSelectionDomains) 
       EXPECT_TRUE(toolbar.grab().save(QDir(directory).filePath(filename)));
     }
   };
-  assert_domain(false);
+  assert_controls();
   capture_toolbar(QStringLiteral("selection-toolbar-public-object-100.png"));
   auto *group = toolbar.findChild<QAction *>(QStringLiteral("selectionModeGroup"));
   ASSERT_NE(group, nullptr);
@@ -307,33 +307,40 @@ TEST_F(PublicReleaseUiTests, ObjectAndEditModesExposeOnlyTheirSelectionDomains) 
     QCoreApplication::sendEvent(button, &release);
     EXPECT_EQ(editor.selection().summary().mode, expected_mode);
     EXPECT_EQ(group->isChecked(), expected_mode == QuaderSelectionMode::Group);
-    assert_domain(false);
+    EXPECT_TRUE(object->isChecked());
+    assert_controls();
   }
   EXPECT_EQ(group_toggle_requests, 2);
   EXPECT_EQ(selection_requests, 0);
-  EXPECT_FALSE(editor.selection().set_mode(QuaderSelectionMode::Vertex).ok());
-  ASSERT_TRUE(editor.commands().execute(quader_command::kEditorModeToggleEdit).ok());
-  toolbar.synchronize(editor, QuaderSelectionMode::Vertex);
-  EXPECT_EQ(combo->currentText(), QStringLiteral("Edit Mode"));
+  auto *vertex = toolbar.findChild<QAction *>(QStringLiteral("selectionModeVertex"));
+  ASSERT_NE(vertex, nullptr);
+  vertex->trigger();
+  EXPECT_EQ(selection_requests, 1);
+  EXPECT_EQ(editor.selection().summary().mode, QuaderSelectionMode::Vertex);
+  EXPECT_EQ(editor.mode().current(), QuaderEditorMode::Edit);
   EXPECT_EQ(editor.mode().state().participants.size(), 2u);
-  assert_domain(true);
+  EXPECT_TRUE(vertex->isChecked());
+  EXPECT_FALSE(object->isChecked());
+  assert_controls();
   capture_toolbar(QStringLiteral("selection-toolbar-public-edit-100.png"));
   for (const auto mode : {QuaderSelectionMode::Vertex, QuaderSelectionMode::Edge,
                           QuaderSelectionMode::Face}) {
     ASSERT_TRUE(editor.selection().set_mode(mode).ok());
     ASSERT_TRUE(editor.selection().clear().ok());
     toolbar.synchronize(editor, mode);
-    EXPECT_EQ(editor.mode().state().participants.size(), 2u);
-    assert_domain(true);
+    EXPECT_TRUE(editor.mode().state().participants.empty());
+    EXPECT_EQ(editor.selection().summary().selected_object_count, 0u);
+    assert_controls();
   }
   EXPECT_FALSE(editor.selection().set_mode(QuaderSelectionMode::Group).ok());
-  EXPECT_FALSE(editor.selection().set_mode(QuaderSelectionMode::Object).ok());
-  ASSERT_TRUE(editor.commands().execute(quader_command::kEditorModeToggleEdit).ok());
-  toolbar.synchronize(editor, QuaderSelectionMode::Object);
-  assert_domain(false);
+  object->trigger();
+  EXPECT_EQ(selection_requests, 2);
+  EXPECT_EQ(editor.selection().summary().mode, QuaderSelectionMode::Object);
+  EXPECT_EQ(editor.mode().current(), QuaderEditorMode::Object);
+  assert_controls();
   EXPECT_FALSE(group->isChecked());
-  EXPECT_EQ(combo->currentIndex(), 0);
-  EXPECT_EQ(editor.selection().summary().selected_object_count, 2u);
+  EXPECT_TRUE(object->isChecked());
+  EXPECT_EQ(editor.selection().summary().selected_object_count, 0u);
 }
 
 TEST_F(PublicReleaseUiTests, AssetBrowserOpensAtItsFinalDockGeometry) {

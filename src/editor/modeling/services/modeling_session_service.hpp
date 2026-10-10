@@ -633,6 +633,10 @@ public:
   ModelingCommandResult apply_resolved_component_selection(
       const ModelingResolvedComponentSelectionRequest &request,
       const ModelingSelectionBoxBaseline *baseline = nullptr);
+  [[nodiscard]] bool resolved_component_body_target_eligible(
+      int modeling_object_id, EntityId source_occurrence) const;
+  ModelingCommandResult apply_resolved_component_body_selection(
+      const ModelingResolvedComponentBodySelectionRequest &request);
   ModelingCommandResult set_component_selections(
       std::span<const ModelingComponentSelectionRequest> requests);
   ModelingCommandResult apply_resolved_component_selections(

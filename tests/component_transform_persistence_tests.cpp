@@ -176,6 +176,31 @@ protected:
     }
   }
 
+  void seed_component_selection(QuaderModelingObjectRef object,
+                                QuaderSelectionMode mode,
+                                const quader_poly::Document &document) {
+    if (mode == QuaderSelectionMode::Face) {
+      ASSERT_FALSE(document.faces.empty());
+      ASSERT_TRUE(editor_.selection().select_face(
+          object, static_cast<QuaderElementId>(document.faces.front().id),
+          QuaderSelectionEdit::Add).ok());
+    } else if (mode == QuaderSelectionMode::Edge) {
+      ASSERT_FALSE(document.faces.empty());
+      const auto &vertices = document.faces.front().vertices;
+      ASSERT_GE(vertices.size(), 2U);
+      ASSERT_TRUE(editor_.selection().select_edge(
+          object, static_cast<QuaderElementId>(vertices[0]),
+          static_cast<QuaderElementId>(vertices[1]),
+          QuaderSelectionEdit::Add).ok());
+    } else {
+      ASSERT_EQ(mode, QuaderSelectionMode::Vertex);
+      ASSERT_FALSE(document.vertices.empty());
+      ASSERT_TRUE(editor_.selection().select_vertex(
+          object, static_cast<QuaderElementId>(document.vertices.front().id),
+          QuaderSelectionEdit::Add).ok());
+    }
+  }
+
   void select_positive_x_face() {
     const auto document = topology();
     const auto face = std::ranges::find_if(document.faces, [&](const auto &face) {
@@ -286,6 +311,9 @@ TEST_P(ComponentNudgePersistenceTests,
                           session.scene().world_transform_matrix(objects[1].entity)};
   enter_edit_for_all_meshes();
   ASSERT_TRUE(editor_.selection().set_mode(GetParam()).ok());
+  for (std::size_t index = 0; index < objects.size(); ++index) {
+    seed_component_selection(objects[index], GetParam(), before[index]);
+  }
   ASSERT_TRUE(editor_.selection().select_all().ok());
   ASSERT_TRUE(editor_.tools().activate(ViewportToolId::Scale).ok());
   ASSERT_TRUE(editor_.modeling().can_nudge_selection());
@@ -1688,6 +1716,7 @@ TEST_P(ComponentGridSnapPersistenceTests,
   const auto [mode, direction] = GetParam();
   enter_edit_for_all_meshes();
   ASSERT_TRUE(editor_.selection().set_mode(mode).ok());
+  seed_component_selection(object_, mode, topology());
   ASSERT_TRUE(editor_.selection().select_all().ok());
   const float anchor = direction * 6.0F;
   ASSERT_TRUE(editor_.modeling().move_selection({anchor, 0, 0}).ok());
@@ -1786,6 +1815,7 @@ TEST_F(ComponentTransformPersistenceTests,
   ASSERT_NE(second, unit_box.vertices.end());
   enter_edit_for_all_meshes();
   ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Vertex).ok());
+  seed_component_selection(object_, QuaderSelectionMode::Vertex, unit_box);
   ASSERT_TRUE(editor_.selection().select_all().ok());
   const QuaderTransform3 orientation{
       .x_axis = {-1, 0, 0}, .y_axis = {0.5F, 1, 0},

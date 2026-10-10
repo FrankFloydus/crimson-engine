@@ -930,8 +930,9 @@ public:
         QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
         {.name = "Unselected cutting tool topology pixel regression"});
     if (!object.ok() ||
-        !enter_selection_context(editor, QuaderSelectionMode::Edge).ok() ||
-        !editor.selection().clear().ok() || !editor.tools().activate(tool).ok()) {
+        !editor.selection().clear().ok() ||
+        !editor.selection().set_mode(QuaderSelectionMode::Edge).ok() ||
+        !editor.tools().activate(tool).ok()) {
       return false;
     }
     tool_topology_object_ = object.value();
@@ -6894,6 +6895,126 @@ TEST(SelectionOverlayRuntimeTests,
 }
 
 TEST(SelectionOverlayRuntimeTests,
+     VulkanComponentStickyTopologyTransfersAndRetainsSelectedMeshes) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char name[] = "quader-sticky-topology-pixel-test";
+  char *argv[] = {name, nullptr};
+  QCoreApplication application(argc, argv);
+  QString output = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (output.isEmpty()) {
+    output = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(
+        QStringLiteral("../selection_features_visual"));
+  }
+  ASSERT_TRUE(QDir().mkpath(output));
+  for (const auto mode : {QuaderSelectionMode::Vertex, QuaderSelectionMode::Edge,
+                         QuaderSelectionMode::Face}) {
+    SCOPED_TRACE(static_cast<int>(mode));
+    SelectionOverlayRuntimeHarness harness;
+    ASSERT_TRUE(harness.initialize(0.0F, false));
+    ASSERT_TRUE(harness.prepare_overlay_audit_camera(4.0F, ViewportProjection::Orthographic));
+    auto &editor = harness.workflow_editor();
+    const auto add_strip = [&](float left) {
+      quader_poly::Document document;
+      const std::array pixels{QVec2{left, 150}, QVec2{left + 90, 150},
+          QVec2{left + 180, 150}, QVec2{left + 180, 330},
+          QVec2{left + 90, 330}, QVec2{left, 330}};
+      std::array<quader_poly::ElementId, 6> vertices;
+      for (std::size_t index = 0u; index < pixels.size(); ++index) {
+        vertices[index] = quader_poly::add_vertex(
+            document, harness.overlay_audit_world_point(pixels[index], 0.0F));
+      }
+      (void)quader_poly::add_face(document,
+          std::array{vertices[0], vertices[5], vertices[4], vertices[1]});
+      (void)quader_poly::add_face(document,
+          std::array{vertices[1], vertices[4], vertices[3], vertices[2]});
+      return editor.modeling().create_mesh(
+          QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+          {.name = "Sticky topology pixel strip"});
+    };
+    const auto first = add_strip(80.0F);
+    const auto second = add_strip(380.0F);
+    ASSERT_TRUE(first.ok());
+    ASSERT_TRUE(second.ok());
+    const auto hover = [&](QVec2 pixel) {
+      const auto point = harness.overlay_audit_world_point(pixel, 0.0F);
+      return harness.modeling().update_selection_hover({
+          .ray = {.origin = point + QVec3{0, 0, 6}, .direction = {0, 0, -1}},
+          .select_backfaces = true,
+      });
+    };
+    ViewportSettings settings = ViewportSettings::defaults();
+    (void)settings.set_color(ViewportColorSettingId::SourceWire, {0, 1, 1, 1});
+    (void)settings.set_color(ViewportColorSettingId::SelectionWire, {1, 1, 0, 0.5F});
+    const auto context = mode == QuaderSelectionMode::Vertex
+        ? ViewportOverlaySelectionContext::Vertex
+        : mode == QuaderSelectionMode::Edge ? ViewportOverlaySelectionContext::Edge
+                                           : ViewportOverlaySelectionContext::Face;
+    int cycle = 0;
+    for (const float scale : {1.0F, 2.0F, 1.0F}) {
+      SCOPED_TRACE(scale);
+      ASSERT_TRUE(editor.selection().set_mode(QuaderSelectionMode::Object).ok());
+      ASSERT_TRUE(editor.selection().clear().ok());
+      ASSERT_TRUE(editor.selection().set_mode(mode).ok());
+      const auto capture = [&](const char *phase) {
+        EXPECT_TRUE(harness.present_component_sample(context, scale, settings));
+        const auto image = harness.capture();
+        EXPECT_FALSE(image.isNull());
+        EXPECT_TRUE(image.save(QDir(output).filePath(
+            QStringLiteral("sticky_topology_%1_%2_%3_%4.png")
+                .arg(static_cast<int>(mode)).arg(qRound(scale * 100))
+                .arg(cycle).arg(QString::fromLatin1(phase)))));
+        const auto builds = harness.selection_frame_builds();
+        EXPECT_TRUE(harness.present_component_sample(context, scale, settings));
+        EXPECT_FALSE(harness.last_submission().persistent_submitted);
+        EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+        EXPECT_EQ(harness.selection_frame_builds(), builds);
+        EXPECT_EQ(harness.capture(), image);
+        return image;
+      };
+      ASSERT_TRUE(hover({610, 400}).ok);
+      const auto clear = capture("clear");
+      EXPECT_EQ(cyan_pixels(clear, {260, 240}), 0);
+      EXPECT_EQ(cyan_pixels(clear, {560, 240}), 0);
+      ASSERT_TRUE(hover({120, 240}).ok);
+      const auto first_hover = capture("first_hover");
+      EXPECT_GT(cyan_pixels(first_hover, {260, 240}), 0);
+      EXPECT_EQ(cyan_pixels(first_hover, {560, 240}), 0);
+      ASSERT_TRUE(hover({610, 400}).ok);
+      const auto miss = capture("miss_retained");
+      EXPECT_GT(cyan_pixels(miss, {260, 240}), 0);
+      EXPECT_EQ(cyan_pixels(miss, {560, 240}), 0);
+      ASSERT_TRUE(hover({420, 240}).ok);
+      const auto transferred = capture("second_hover");
+      EXPECT_EQ(cyan_pixels(transferred, {260, 240}), 0);
+      EXPECT_GT(cyan_pixels(transferred, {560, 240}), 0);
+      switch (mode) {
+      case QuaderSelectionMode::Vertex:
+        ASSERT_TRUE(editor.selection().select_vertex(first.value(), 1).ok());
+        break;
+      case QuaderSelectionMode::Edge:
+        ASSERT_TRUE(editor.selection().select_edge(first.value(), 1, 2).ok());
+        break;
+      case QuaderSelectionMode::Face:
+        ASSERT_TRUE(editor.selection().select_face(first.value(), 1).ok());
+        break;
+      default:
+        FAIL() << "Expected component selection mode.";
+      }
+      ASSERT_TRUE(hover({420, 240}).ok);
+      const auto additive = capture("selected_and_candidate");
+      EXPECT_GT(cyan_pixels(additive, {260, 240}), 0);
+      EXPECT_GT(cyan_pixels(additive, {560, 240}), 0);
+      ++cycle;
+    }
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests,
      VulkanCuttingToolHoverShowsUnselectedAuthoredTopologyWithoutSelecting) {
   if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
       QStringLiteral("1")) {
@@ -6923,7 +7044,7 @@ TEST(SelectionOverlayRuntimeTests,
     const auto before = harness.tool_topology_selection();
     ASSERT_EQ(before.mode, QuaderSelectionMode::Edge);
     ASSERT_FALSE(before.has_selection);
-    ASSERT_GT(before.selected_object_count, 0u);
+    ASSERT_EQ(before.selected_object_count, 0u);
     const auto history_before = harness.undo_count();
     const auto probe = harness.tool_topology_internal_edge_pixel();
     const QRect probe_region(int(probe.x) - 10, int(probe.y) - 10, 21, 21);
@@ -6988,8 +7109,8 @@ TEST(SelectionOverlayRuntimeTests,
       const QImage clear = harness.capture();
       ASSERT_FALSE(clear.isNull());
       save(clear, scale_label, "clear");
-      EXPECT_GE(cyan_pixels(clear, probe), 3)
-          << "Edit topology remains visible without tool hover.";
+      EXPECT_EQ(cyan_pixels(clear, probe), 0)
+          << "The unselected coplanar internal edge is absent without tool hover.";
       expect_unselected();
       expect_retained(scale);
 
@@ -7012,9 +7133,9 @@ TEST(SelectionOverlayRuntimeTests,
       const QImage left = harness.capture();
       ASSERT_FALSE(left.isNull());
       save(left, scale_label, "hover_left");
-      EXPECT_GE(cyan_pixels(left, probe), 3);
+      EXPECT_EQ(cyan_pixels(left, probe), 0);
       EXPECT_EQ(left.copy(probe_region), clear.copy(probe_region))
-          << "Leaving preserves Edit topology independently of the retained cut preview.";
+          << "Leaving retires transient topology independently of the retained cut preview.";
       expect_unselected();
       expect_retained(scale);
     }
@@ -7032,7 +7153,7 @@ TEST(SelectionOverlayRuntimeTests,
       save(selected, scale_label, "selected_reference");
       EXPECT_GE(cyan_pixels(selected, probe), 3);
       EXPECT_EQ(selected.copy(probe_region), hovered_regions[index])
-          << "Edit topology retains the same source-wire rendering across explicit re-entry.";
+          << "Transient topology matches the selected mesh's source-wire rendering.";
       expect_retained(scale);
       if (tool == ViewportToolId::InsertEdgeLoop) {
         ASSERT_TRUE(harness.update_tool_topology_hover({1.0f, -0.25f, 0.0f}));

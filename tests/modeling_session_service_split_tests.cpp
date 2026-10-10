@@ -5439,9 +5439,10 @@ TEST(ModelingSessionServiceSplitTests,
 }
 
 TEST(ModelingSessionServiceSplitTests,
-     KnifePrelockSourceWireCacheRetainsAllEditParticipants) {
-  SceneSession session;
-  ModelingSessionService &service = session.modeling();
+     KnifePrelockSourceWireCacheTracksActiveSelectedObject) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
   const ModelingCreateBoxResult first = service.create_box_from_bounds({
       .bounds = {.min = {-3.0f, -1.0f, -1.0f},
                  .max = {-1.0f, 1.0f, 1.0f}},
@@ -5456,7 +5457,6 @@ TEST(ModelingSessionServiceSplitTests,
   ASSERT_TRUE(second.ok) << second.message;
   const std::array selected{first.object.entity, second.object.entity};
   ASSERT_TRUE(service.set_object_selection(selected, first.object.entity).ok);
-  ASSERT_TRUE(session.editor_mode().set_mode(EditorMode::Edit).ok);
   ASSERT_TRUE(
       service.activate_viewport_tool(ModelingViewportTool::Knife).ok);
 
@@ -5476,20 +5476,19 @@ TEST(ModelingSessionServiceSplitTests,
             12);
   EXPECT_EQ(source_wire_count(first_frame,
                               second.object.modeling_object_id),
-            12);
+            0);
 
   const ModelingCommandResult switched =
       service.set_object_selection(selected, second.object.entity);
-  EXPECT_FALSE(switched.ok);
-  EXPECT_FALSE(switched.changed);
-  ASSERT_EQ(session.editor_mode().snapshot().participants.size(), 2u);
+  ASSERT_TRUE(switched.ok) << switched.message;
+  ASSERT_TRUE(switched.changed);
   const std::uint64_t second_signature =
       service.selection_overlay_signature();
-  EXPECT_EQ(second_signature, first_signature);
+  EXPECT_NE(second_signature, first_signature);
   const ViewportOverlayFrame second_frame = service.selection_overlay_frame();
   EXPECT_EQ(source_wire_count(second_frame,
                               first.object.modeling_object_id),
-            12);
+            0);
   EXPECT_EQ(source_wire_count(second_frame,
                               second.object.modeling_object_id),
             12);
@@ -7054,17 +7053,15 @@ TEST_F(ModelingSelectionProjectionRollbackTests,
        ComponentInverseFailureBoundariesRestoreExactSelectionAndOverlay) {
   const QuaderModelingObjectRef first = create_box(editor_);
   const QuaderModelingObjectRef second = create_box(editor_);
-  ASSERT_TRUE(editor_.selection().select_objects(
-      {first.entity, second.entity}, first.entity).ok());
-  ASSERT_TRUE(editor_.mode().set(QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(editor_.selection().select_object(first).ok());
   ASSERT_TRUE(editor_.selection().set_mode(QuaderSelectionMode::Edge).ok());
   ASSERT_TRUE(editor_.selection().select_edge(first, 1, 2).ok());
   ASSERT_TRUE(editor_.selection()
                   .select_edge(first, 2, 3, QuaderSelectionEdit::Add)
                   .ok());
 
-  // Both meshes are fixed participants even though only the first has selected
-  // edges. Inversion includes the empty participant without enrolling a new mesh.
+  // The constrained scope includes the unselected second mesh for inversion.
+  // Publishing its new selection exercises the Scene rollback boundary.
   session_.modeling().set_viewport_visibility_filter(
       [first_entity = first.entity,
        second_entity = second.entity](EntityId entity) {
@@ -7125,7 +7122,7 @@ TEST_F(ModelingSelectionProjectionRollbackTests,
   const EntityId primary_scene_selection_before =
       session_.scene().primary_selection();
   ASSERT_EQ(selected_scene_entities_before,
-            (std::vector<EntityId>{first.entity, second.entity}));
+            (std::vector<EntityId>{first.entity}));
   ASSERT_EQ(primary_scene_selection_before, first.entity);
 
   const QuaderRevisionStamp revisions_before = editor_.revisions();
@@ -7675,8 +7672,10 @@ TEST_F(CurveModelingProjectionTests,
               baseline_signature);
   }
 
-  EXPECT_FALSE(
-      editor_.selection().set_mode(QuaderSelectionMode::Face).ok());
+  const auto unchanged_selection =
+      editor_.selection().set_mode(QuaderSelectionMode::Object);
+  EXPECT_TRUE(unchanged_selection.ok());
+  EXPECT_FALSE(unchanged_selection.changed());
   const ViewportOverlayFrame after_selection =
       session_.modeling().selection_overlay_frame();
   EXPECT_EQ(overlay_frame_fingerprint(after_selection), baseline_fingerprint);

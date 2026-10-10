@@ -324,8 +324,7 @@ constexpr std::string_view editor_command_keybinding_context() {
 
 std::string selection_kind_keybinding_context(std::string_view kind) {
   return std::string(editor_command_keybinding_context()) +
-         ((kind == "object" || kind == "group") ? " && editorMode.object"
-                                                : " && editorMode.edit");
+         (kind == "group" ? " && editorMode.object" : "");
 }
 
 bool editor_panel_can_apply_shortcut(std::string_view target_id) {
@@ -2321,11 +2320,9 @@ bool QuaderCommandsApi::Impl::viewport_input_target_available(
                                              shortcut)) {
     return registered;
   }
-  if (shortcut.kind == ViewportShortcutKind::SetSelectionMode) {
-    const bool component = shortcut.selection_mode == ViewportSelectionMode::Vertex ||
-                           shortcut.selection_mode == ViewportSelectionMode::Edge ||
-                           shortcut.selection_mode == ViewportSelectionMode::Face;
-    return component == (mode_.current() == QuaderEditorMode::Edit);
+  if (shortcut.kind == ViewportShortcutKind::SetSelectionMode &&
+      shortcut.selection_mode == ViewportSelectionMode::Group) {
+    return mode_.current() == QuaderEditorMode::Object;
   }
   return true;
 }
@@ -4051,8 +4048,11 @@ void QuaderCommandsApi::Impl::register_viewport_default_keybindings() {
   keybindings_.add_default_keybinding(
       viewport_selection_mode_target_id("face"), "3",
       selection_kind_keybinding_context("face"), 5);
-  // Explicit Object/Group targets remain bindable for existing overrides.
-  // Their defaults are unassigned; Group Selection now has its own toggle.
+  keybindings_.add_default_keybinding(
+      viewport_selection_mode_target_id("object"), "4",
+      selection_kind_keybinding_context("object"), 5);
+  // The explicit Group target remains bindable without a default; Group
+  // Selection has its own toggle.
 
   const std::vector<ViewportGridShortcutBindingDescriptor> presets =
       viewport_grid_shortcut_binding_catalog();
