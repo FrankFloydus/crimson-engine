@@ -17,6 +17,10 @@ class QDockWidget;
 
 namespace quader {
 
+/** Removes panel title-button geometry without disabling native docking. */
+inline constexpr auto kQtDockTitleButtonsHiddenProperty =
+    "quaderDockTitleButtonsHidden";
+
 enum class QtDockTitleGlyph { Close, Float };
 
 /** Returns whether one dock-title surface needs a light foreground glyph. */

@@ -790,26 +790,33 @@ bool authored_face_chord_is_valid(
     for (std::size_t index = 0; index < positions.size(); ++index) {
         normal = normal + quader_geometry::cross(positions[index], positions[(index + 1U) % positions.size()]);
     }
-    const auto magnitudes = std::array{std::abs(normal.x), std::abs(normal.y), std::abs(normal.z)};
-    const std::size_t dropped_axis = static_cast<std::size_t>(std::distance(magnitudes.begin(), std::ranges::max_element(magnitudes)));
-    if (magnitudes[dropped_axis] <= 1.0e-12) {
+    const std::size_t first_index = static_cast<std::size_t>(std::distance(face.vertices.begin(), first));
+    const std::size_t second_index = static_cast<std::size_t>(std::distance(face.vertices.begin(), second));
+    constexpr double kChordEpsilon = 1.0e-10;
+    constexpr double kNormalEpsilon = 1.0e-12;
+    const auto chord = positions[second_index] - positions[first_index];
+    const double chord_length = quader_geometry::length(chord);
+    const double normal_length = quader_geometry::length(normal);
+    if (chord_length <= kChordEpsilon || normal_length <= kNormalEpsilon) {
         return false;
     }
+    // Keep the chord in the projection plane. Dropping a coordinate axis can make a
+    // warped face's distant boundary cross the chord only in that projection.
+    const auto along_chord = chord / chord_length;
+    const auto transverse = quader_geometry::cross(normal / normal_length, along_chord);
+    const double transverse_length = quader_geometry::length(transverse);
+    if (transverse_length <= kNormalEpsilon) {
+        return false;
+    }
+    const auto across_chord = transverse / transverse_length;
     std::vector<quader_geometry::QVec2d> projected;
     projected.reserve(positions.size());
     for (const auto position : positions) {
-        projected.push_back(dropped_axis == 0U ? quader_geometry::QVec2d{position.y, position.z}
-            : dropped_axis == 1U ? quader_geometry::QVec2d{position.x, position.z}
-                                 : quader_geometry::QVec2d{position.x, position.y});
+        projected.push_back({quader_geometry::dot(position, along_chord),
+            quader_geometry::dot(position, across_chord)});
     }
-    const std::size_t first_index = static_cast<std::size_t>(std::distance(face.vertices.begin(), first));
-    const std::size_t second_index = static_cast<std::size_t>(std::distance(face.vertices.begin(), second));
     const auto a = projected[first_index];
     const auto b = projected[second_index];
-    constexpr double kChordEpsilon = 1.0e-10;
-    if (quader_geometry::length_squared(a - b) <= kChordEpsilon * kChordEpsilon) {
-        return false;
-    }
     for (std::size_t index = 0; index < projected.size(); ++index) {
         const std::size_t next = (index + 1U) % projected.size();
         const auto intersection = quader_geometry::intersect_segments_2d(a, b, projected[index], projected[next], kChordEpsilon);
@@ -821,8 +828,30 @@ bool authored_face_chord_is_valid(
             return false;
         }
     }
-    return quader_geometry::point_in_or_on_polygon_2d((a + b) * 0.5,
-        std::span<const quader_geometry::QVec2d>(projected), kChordEpsilon);
+    const VertexLookupIndex vertex_lookup(document);
+    const auto triangles = triangulate_face_local_indices(document, face, vertex_lookup);
+    if (!triangulation_preserves_face_boundary(face, vertex_lookup, triangles)) {
+        return false;
+    }
+    // A folded face need not contain the chord's midpoint in its flattened outline.
+    // Test the authored face's complete tessellation in each triangle's own plane;
+    // this also lets a displayed interior diagonal become an authored edge.
+    constexpr double kTriangleAreaEpsilon = 1.0e-12;
+    constexpr double kBarycentricEpsilon = 1.0e-9;
+    for (const double fraction : {1.0 / 3.0, 2.0 / 3.0}) {
+        const auto sample = positions[first_index] + chord * fraction;
+        for (const auto& indices : triangles) {
+            const quader_geometry::QTriangle3<double> triangle{
+                positions[indices.a], positions[indices.b], positions[indices.c]};
+            const auto coordinates = quader_geometry::barycentric_coordinates(
+                sample, triangle, kTriangleAreaEpsilon);
+            if (coordinates.valid && coordinates.u >= -kBarycentricEpsilon &&
+                coordinates.v >= -kBarycentricEpsilon && coordinates.w >= -kBarycentricEpsilon) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 ElementId mapped_vertex_for_merge(ElementId vertex_id, const std::set<ElementId>& merge_vertex_ids, ElementId active_vertex_id)

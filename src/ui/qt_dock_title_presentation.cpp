@@ -290,6 +290,7 @@ QDockWidget::float-button:pressed {
 }
 
 void install_palette_aware_dock_title_presentation(QDockWidget &dock) {
+  dock.setProperty(kQtDockTitleButtonsHiddenProperty, true);
   QObject::connect(qApp, &QGuiApplication::paletteChanged, &dock,
                    [&dock](const QPalette &palette) {
                      apply_palette_aware_dock_title_presentation(dock,
