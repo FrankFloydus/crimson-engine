@@ -13,6 +13,7 @@
 
 namespace crimson {
 struct ModelAsset;
+struct ParticleEffectAsset;
 
 using EntityId = uint64_t;
 inline constexpr EntityId NoEntity = 0;
@@ -23,6 +24,9 @@ struct Identity { EntityId id{}; std::string name; };
 struct Transform { Mat4 local{}; };
 struct Relationship { EntityId parent{}; uint32_t order{}; };
 struct ModelReference { AssetRef<ModelAsset> assetId; };
+// Authored identity only. Playback is transient and reconciled by document
+// generation plus persistent EntityId, never by an EnTT handle.
+struct ParticleReference { AssetRef<ParticleEffectAsset> assetId; };
 struct SceneDirectionalLight {
     Vec3 color{1.0f, 0.96f, 0.9f};
     float intensity{2.0f};
@@ -49,6 +53,9 @@ struct EntityRecord {
     std::optional<SceneDirectionalLight> directional;
     std::optional<ScenePointLight> point;
     std::optional<SceneEnvironment> environment;
+    // A present empty reference retains an editable emitter marker after an
+    // explicit asset clear/deletion. A missing nonempty asset keeps its ID.
+    std::optional<AssetRef<ParticleEffectAsset>> particle;
 };
 struct SceneProperties {
     EntityId activeEnvironment{NoEntity};

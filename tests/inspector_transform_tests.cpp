@@ -11,6 +11,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 namespace {
 using namespace crimson;
@@ -215,6 +216,61 @@ void diagnosticAppearanceKeepsUndo(){
         require(ui.sceneUndo&&ui.matrix()==ui.baseline&&ui.document.history().size()==1,"A reappearing diagnostic blocked the second Undo or created extra history.");
     }
 }
+
+void particleShortcutOwnership(){
+    struct ContextLifetime {
+        ImGuiContext* value{ImGui::CreateContext()};
+        ~ContextLifetime(){ImGui::DestroyContext(value);}
+    } lifetime;
+    auto& io=ImGui::GetIO();io.IniFilename=nullptr;io.DisplaySize={960,640};io.DeltaTime=1.f/60;
+    io.ConfigInputTrickleEventQueue=false;
+    unsigned char* pixels{};int width{},height{};io.Fonts->GetTexDataAsRGBA32(&pixels,&width,&height);
+    io.Fonts->SetTexID(static_cast<ImTextureID>(1));
+    const auto tick=[&](SceneShortcutContext ownership,const char* focus) {
+        ImGui::NewFrame();
+        for(const auto* name:{"Inspector","Particle effect###ParticleEffect"}) {
+            ImGui::SetNextWindowPos(std::string_view(name)=="Inspector" ? ImVec2(20,20):ImVec2(440,20));
+            ImGui::SetNextWindowSize({380,400});
+            ImGui::Begin(name,nullptr,ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoFocusOnAppearing);
+            if(focus && std::string_view(name)==focus)ImGui::SetWindowFocus();
+            ImGui::TextUnformatted(name);ImGui::End();
+        }
+        const auto result=readSceneShortcuts(ownership);ImGui::Render();return result;
+    };
+    tick({},nullptr);
+    const auto press=[&](ImGuiKey key,SceneShortcutContext ownership,const char* focus,bool control=true,bool shift=false) {
+        io.AddKeyEvent(ImGuiMod_Ctrl,control);io.AddKeyEvent(ImGuiMod_Shift,shift);io.AddKeyEvent(key,true);
+        const auto result=tick(ownership,focus);
+        io.AddKeyEvent(key,false);io.AddKeyEvent(ImGuiMod_Ctrl,false);io.AddKeyEvent(ImGuiMod_Shift,false);tick(ownership,focus);
+        return result;
+    };
+    constexpr auto* particle="Particle effect###ParticleEffect";
+    const SceneShortcutContext owner{.particleDocumentFocus=true};
+    auto result=press(ImGuiKey_Z,owner,particle);
+    require(result.undo && !result.redo,"Particle focus did not emit its document Undo shortcut.");
+    result=press(ImGuiKey_Z,owner,particle,true,true);
+    require(result.redo && !result.undo,"Particle Ctrl+Shift+Z did not emit Redo.");
+    require(press(ImGuiKey_Y,owner,particle).redo,"Particle Ctrl+Y did not emit Redo.");
+    require(press(ImGuiKey_S,owner,particle).save,"Particle Ctrl+S did not emit Save.");
+    require(press(ImGuiKey_S,owner,particle,true,true).saveAs,"Particle Ctrl+Shift+S did not emit Save As.");
+    for(const auto key:{ImGuiKey_D,ImGuiKey_Delete,ImGuiKey_F}) {
+        result=press(key,owner,particle,key==ImGuiKey_D);
+        require(!result.duplicate && !result.eraseSelection && !result.focusSelection,"Particle document emitted a scene entity command.");
+    }
+    auto blocked=owner;blocked.preferencesKeyboard=true;
+    require(!press(ImGuiKey_Z,blocked,particle).undo,"Preferences input ownership leaked particle Undo.");
+    blocked=owner;blocked.transactionActive=true;
+    require(!press(ImGuiKey_Z,blocked,particle).undo,"An active document transaction leaked Undo.");
+    blocked=owner;blocked.modelDropPending=true;
+    require(!press(ImGuiKey_Z,blocked,particle).undo,"A same-frame asset delivery leaked document Undo.");
+    blocked=owner;blocked.navigationActive=true;
+    require(!press(ImGuiKey_S,blocked,particle).save,"Navigation input ownership leaked particle Save.");
+    require(!press(ImGuiKey_Z,{},particle).undo,"An unrelated focused window emitted scene Undo.");
+    require(press(ImGuiKey_Z,{},"Inspector").undo,"Returning to Inspector lost scene Undo.");
+    require(press(ImGuiKey_D,{},"Inspector").duplicate,"Returning to Inspector lost scene Duplicate.");
+    require(press(ImGuiKey_Delete,{},"Inspector",false).eraseSelection,"Returning to Inspector lost scene Delete.");
+    require(press(ImGuiKey_F,{},"Inspector",false).focusSelection,"Returning to Inspector lost scene Focus.");
+}
 }
 int main(){
     unsigned failures{};
@@ -228,5 +284,6 @@ int main(){
     run("clipped scalar finalizes without deactivation",missedDeactivationReleasesOwnership);
     run("zero scale drag and release",dragReleaseCommits);
     run("diagnostics preserve real Ctrl+Z after zero-scale drag (floating/docked, XYZ)",diagnosticAppearanceKeepsUndo);
+    run("particle document shortcuts preserve scene-only commands and input ownership",particleShortcutOwnership);
     return failures?1:0;
 }

@@ -20,6 +20,7 @@ constexpr const char* ModelBatchPayload="CC_MODEL_ASSETS";
 constexpr const char* TexturePayload="CC_TEXTURE_ASSET";
 constexpr const char* ScenePayload="CC_SCENE_ASSET";
 constexpr const char* MaterialPayload="CC_MATERIAL_ASSET";
+constexpr const char* ParticlePayload="CC_PARTICLE_ASSET";
 constexpr const char* FolderPayload="CC_ASSET_FOLDER";
 constexpr const char* ParentCard="##parent-folder";
 
@@ -43,6 +44,11 @@ void sceneIcon(ImDrawList& draw,ImVec2 minimum,ImVec2 maximum,ImU32 color) {
     draw.AddRect(a,b,color,2,0,1.5f);
     for (float y:{.37f,.5f,.63f}) draw.AddLine({minimum.x+w*.37f,minimum.y+h*y},{minimum.x+w*.63f,minimum.y+h*y},color,1.5f);
 }
+void particleIcon(ImDrawList& draw,ImVec2 a,ImVec2 b,ImU32 color) {
+    const float w=b.x-a.x,h=b.y-a.y;
+    for (const auto& p:std::array<ImVec2,5>{{{.5f,.72f},{.35f,.5f},{.65f,.45f},{.46f,.28f},{.62f,.18f}}})
+        draw.AddCircleFilled({a.x+w*p.x,a.y+h*p.y},std::max(2.0f,w*.045f),color,12);
+}
 std::string elide(std::string text,float width) {
     if (ImGui::CalcTextSize(text.c_str()).x<=width) return text;
     while (!text.empty() && ImGui::CalcTextSize((text+"...").c_str()).x>width) {
@@ -57,6 +63,7 @@ const char* payloadType(const BrowserItem& item) {
     if (item.kind==AssetKind::Model) return ModelPayload;
     if (item.kind==AssetKind::Scene) return ScenePayload;
     if (item.kind==AssetKind::Material) return MaterialPayload;
+    if (item.kind==AssetKind::Particle) return ParticlePayload;
     return TexturePayload;
 }
 bool sameName(const std::string& a,const std::string& b) {
@@ -86,7 +93,7 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
     std::optional<Move> move;
     const auto receiveMove=[&](const std::string& destination) {
         if (!ImGui::BeginDragDropTarget()) return;
-        for (const char* type:{ModelPayload,ModelBatchPayload,TexturePayload,ScenePayload,MaterialPayload,FolderPayload}) {
+        for (const char* type:{ModelPayload,ModelBatchPayload,TexturePayload,ScenePayload,MaterialPayload,ParticlePayload,FolderPayload}) {
             if (const auto* payload=ImGui::AcceptDragDropPayload(type,ImGuiDragDropFlags_AcceptBeforeDelivery)) {
                 if (!payload->IsDelivery() || payload->DataSize<1) continue;
                 const auto* bytes=static_cast<const char*>(payload->Data);
@@ -119,6 +126,14 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
 
     if (ImGui::Begin("Asset Browser")) {
         if (ImGui::Button("Import")) assets.requestImport(window,folder_);
+        ImGui::SameLine();
+        if (ImGui::Button("Create")) ImGui::OpenPopup("Create native asset");
+        if (ImGui::BeginPopup("Create native asset")) {
+            if (ImGui::MenuItem("Particle Effect")) { actions.createParticle=true;actions.particleFolder=folder_; }
+            if (ImGui::MenuItem("Scene")) actions.newScene=true;
+            if (ImGui::MenuItem("Folder")) createFolder();
+            ImGui::EndPopup();
+        }
         ImGui::SameLine();
         if (ImGui::Button("New Folder")) createFolder();
         ImGui::SameLine();
@@ -205,6 +220,7 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
                 if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                     if (item.folder) navigate=parentCard ? catalog.parent(folder_) : item.id;
                     else if (item.kind==AssetKind::Scene) actions.openScene=item.id;
+                    else if (item.kind==AssetKind::Particle) actions.openParticle=item.id;
                 }
                 if (!parentCard && !editing && ImGui::BeginDragDropSource()) {
                     if (dragPrimary_!=item.id || dragIds_.empty()) {
@@ -244,6 +260,7 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
                     if (!item.folder && item.kind==AssetKind::Scene) {
                         if (ImGui::MenuItem("Open scene")) actions.openScene=item.id;
                     }
+                    if (!item.folder && item.kind==AssetKind::Particle && ImGui::MenuItem("Open particle effect")) actions.openParticle=item.id;
                     if (ImGui::MenuItem("Delete selected...","Delete")) actions.deleteAssetIds=selection.ids();
                     if (ImGui::MenuItem("Rename","F2",false,selection.ids().size()==1)) beginRename(item.id,item.name);
                     if (ImGui::MenuItem("New Folder")) createFolder();
@@ -274,11 +291,12 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
                     draw->AddImage(ImGuiBgfx::textureId(image->thumbnail),a,{a.x+width,a.y+height});
                 } else if (item.folder) folderIcon(*draw,well,wellEnd);
                 else if (item.kind==AssetKind::Scene) sceneIcon(*draw,well,wellEnd,textColor);
+                else if (item.kind==AssetKind::Particle) particleIcon(*draw,well,wellEnd,textColor);
                 else cubeIcon(*draw,well,wellEnd,textColor);
                 const ImVec2 label(origin.x+padding,wellEnd.y+3);
                 const auto shortName=elide(item.name,thumbnail);
                 if (!editing) draw->AddText(label,textColor,shortName.c_str());
-                std::string details=item.folder ? "Folder" : item.kind==AssetKind::Scene ? "Scene" : item.kind==AssetKind::Material ? "Material" : model ? model->format : "Image";
+                std::string details=item.folder ? "Folder" : item.kind==AssetKind::Scene ? "Scene" : item.kind==AssetKind::Particle ? "Particle Effect" : item.kind==AssetKind::Material ? "Material" : model ? model->format : "Image";
                 if (image) details=std::to_string(image->width)+" x "+std::to_string(image->height)+(image->hdr ? " HDR" : "");
                 draw->AddText({label.x,label.y+font+1},ImGui::GetColorU32(ImGuiCol_TextDisabled),elide(details,thumbnail).c_str());
                 if (!parentCard && selection.contains(item.id)) draw->AddRect(origin,end,ImGui::GetColorU32(ImGuiCol_HeaderActive),3,0,1.0f);
@@ -327,6 +345,7 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
         if (ImGui::BeginPopupContextWindow("Create asset",ImGuiPopupFlags_MouseButtonRight|ImGuiPopupFlags_NoOpenOverItems)) {
             if (ImGui::MenuItem("New Folder")) createFolder();
             if (ImGui::MenuItem("New scene")) actions.newScene=true;
+            if (ImGui::MenuItem("Particle Effect")) { actions.createParticle=true;actions.particleFolder=folder_; }
             ImGui::EndPopup();
         }
         ImGui::EndChild();

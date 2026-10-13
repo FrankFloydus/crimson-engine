@@ -364,7 +364,49 @@ void environmentsAndMigration() {
     require(migrated.records.size()==snapshot.records.size()+1 && readText(project.root/oldId)==contents,"Legacy migration rewrote its source.");
     SceneDocument opened(project.root); require(opened.load(oldId),opened.status());
     require(!opened.dirty() && resolveEnvironment(opened.scene()).exposure==1.7f,"Legacy migration lost settings or marked an equivalent load dirty.");
-    require(opened.save(),opened.status()); require(Json::parse(readText(project.root/oldId)).at("version")==2,"Explicit save did not write scene version 2.");
+    require(opened.save(),opened.status()); require(Json::parse(readText(project.root/oldId)).at("version")==3,"Explicit save did not write scene version 3.");
+}
+void particleReferencesAndPersistence() {
+    TempProject project;SceneDocument document(project.root);
+    const std::string effect="assets/particles/missing.crimson-particle";
+    Mat4 local=math::translation({3,2,-1})*math::scaling({-2,3,4});local[4]=.7f;
+    const auto documentGeneration=document.documentGeneration();
+    const auto particle=document.createParticle(effect,"Sparks",local);
+    require(particle && document.scene().find(particle)->particle->id==effect,"Particle placement lost its authored unresolved reference.");
+    require(document.documentGeneration()==documentGeneration,"Particle placement replaced the document lifetime.");
+    const auto group=document.createEmpty("Parent");auto parent=*document.scene().find(group);
+    parent.local=math::translation({-4,1,5})*math::scaling({2,3,.5f});
+    require(document.updateEntity(group,parent),document.status());document.select({particle});
+    require(document.reparentSelection(group),document.status());nearMatrix(*document.scene().worldTransform(particle),local);
+    const auto child=document.createEmpty("Attached child");document.select({child});
+    require(document.reparentSelection(particle),document.status());document.select({particle});
+    require(!document.ungroupSelection(),"A particle emitter with children was treated as an empty group.");
+    require(document.duplicateSelection(),document.status());const auto duplicate=document.selection().primary;
+    require(duplicate!=particle && document.scene().find(duplicate)->particle==document.scene().find(particle)->particle,"Particle duplication did not retain the shared asset reference.");
+    require(document.eraseSelection(),document.status());require(document.undo(),document.status());
+    require(document.scene().find(duplicate)->particle->id==effect,"Undo did not restore particle identity and reference.");
+    const auto historyReferences=document.historicalParticleReferences();
+    require(historyReferences.size()==1 && historyReferences.front()==effect,"History omitted or duplicated particle asset references.");
+    const auto before=document.scene().records();const auto history=document.history().size();
+    auto invalid=*document.scene().find(particle);invalid.particle=AssetRef<ParticleEffectAsset>{"assets/textures/wrong.png"};
+    require(!document.updateEntity(particle,invalid),"A foreign typed particle asset path was accepted.");
+    sameRecords(before,document.scene().records());require(document.history().size()==history,"Rejected particle reference modified history.");
+    invalid.particle=AssetRef<ParticleEffectAsset>{"assets/particles/../bad.crimson-particle"};
+    require(!document.updateEntity(particle,invalid),"Particle traversal was accepted.");
+    require(document.save("Particles"),document.status());const auto savedId=document.assetId();
+    const auto serialized=Json::parse(readText(project.root/savedId));require(serialized.at("version")==3,"Particle scene version was not bumped.");
+    SceneDocument reopened(project.root);require(reopened.load(savedId),reopened.status());sameRecords(document.scene().records(),reopened.scene().records());
+    require(!reopened.dirty() && reopened.scene().find(particle)->particle->id==effect,"Missing particle asset prevented clean scene reopening.");
+    auto cleared=*reopened.scene().find(particle);cleared.particle=AssetRef<ParticleEffectAsset>{};
+    require(reopened.updateEntity(particle,cleared) && reopened.save(),reopened.status());
+    SceneDocument emptyReference(project.root);require(emptyReference.load(savedId),emptyReference.status());
+    require(emptyReference.scene().find(particle)->particle && emptyReference.scene().find(particle)->particle->empty(),"An explicitly cleared emitter lost its marker component.");
+    auto versionTwo=serialized;versionTwo["version"]=2;for(auto& entity:versionTwo["entities"])entity.erase("particle");
+    const std::string legacy="assets/scenes/version-two.crimson-scene";writeText(project.root/legacy,versionTwo.dump());
+    const auto oldBytes=readText(project.root/legacy);SceneDocument old(project.root);require(old.load(legacy),old.status());
+    require(!old.dirty() && readText(project.root/legacy)==oldBytes,"Version-two load rewrote its source or became dirty.");
+    for(const auto& record:old.scene().records())require(!record.particle,"Version-two migration invented a particle component.");
+    require(old.save(),old.status());require(Json::parse(readText(project.root/legacy)).at("version")==3,"Explicit version-two save did not migrate to version three.");
 }
 void externalSceneChanges() {
     TempProject project; SceneDocument document(project.root);
@@ -587,8 +629,8 @@ int main() {
         dirtyTokensAndFailure();
         limitsAndHistoryBound();
         groupingAndBatchPlacement();
-        environmentsAndMigration(); externalSceneChanges();preparedSceneOpening();preparedGlobalChanges();inspectorAffineTransactions();inspectorZeroScaleHistory();
-        std::cout << "Scene core: 14 groups passed.\n";
+        environmentsAndMigration();particleReferencesAndPersistence();externalSceneChanges();preparedSceneOpening();preparedGlobalChanges();inspectorAffineTransactions();inspectorZeroScaleHistory();
+        std::cout << "Scene core: 15 groups passed.\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "Scene core failed: " << error.what() << '\n';

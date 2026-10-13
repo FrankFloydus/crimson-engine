@@ -1,6 +1,7 @@
 #pragma once
 #include "tools/Tools.h"
 #include "scene/SceneDocument.h"
+#include "scene/SceneExtraction.h"
 #include <vector>
 
 namespace crimson {
@@ -10,6 +11,7 @@ public:
     void cancel(SceneDocument&, Renderer&);
     bool interacting() const { return dragging_; }
     void focus(Camera&, const SceneDocument&, const AssetLibrary&, float aspect);
+    void setParticleBoundsQuery(ParticleBoundsQuery query) { particleBounds_=std::move(query); }
 private:
     struct DragRoot { EntityId id; Mat4 local, world, parentInverse; };
     int operation_{1 | 2 | 4}; // ImGuizmo::TRANSLATE, kept out of public headers.
@@ -22,6 +24,7 @@ private:
     uint32_t pickX_{},pickY_{};
     bool pickIntent_{};
     std::vector<DragRoot> roots_;
+    ParticleBoundsQuery particleBounds_;
     void select(SceneDocument&, EntityId, bool toggle, bool append);
 };
 }

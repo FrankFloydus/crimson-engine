@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RenderTypes.h"
+#include "ParticleRenderTypes.h"
 #include "assets/ModelAsset.h"
 #include "resources/StreamingModel.h"
 #include "resources/TextureMipCache.h"
@@ -66,7 +67,7 @@ struct ThumbnailResult {
     std::uint64_t signature{};
     DecodedImage image;
 };
-enum class RendererProgram { Sphere, Model, Picking, Present, Grid, Encode };
+enum class RendererProgram { Sphere, Model, Picking, Present, Grid, Encode, Particle };
 struct RendererShaderPair { RendererProgram program; std::vector<std::uint8_t> vertex,fragment; };
 
 struct RenderScene {
@@ -79,6 +80,7 @@ struct RenderScene {
     std::span<const PointLight> pointLights;
     bool sceneMode{false}; // A scene with no instances is empty; legacy mode previews a sphere.
     std::shared_ptr<const void> pinned;
+    std::span<const RenderParticle> particles;
 };
 
 // Owns the bgfx lifetime. Destroy ImGui's GPU resources before this object.
@@ -91,6 +93,15 @@ public:
     Renderer& operator=(const Renderer&) = delete;
     void resize(std::uint32_t width, std::uint32_t height);
     void resizeViewport(std::uint32_t width, std::uint32_t height);
+    // Independent reusable preview; submission shares the application's one
+    // bgfx frame and never modifies the main viewport targets or picking.
+    void resizeParticlePreview(std::uint32_t width, std::uint32_t height);
+    void renderParticlePreview(const SceneSettings&, std::span<const RenderParticle>);
+    bgfx::TextureHandle particlePreviewTexture() const noexcept;
+    void releaseParticlePreview();
+    const ParticleRenderStats& particleStats() const noexcept;
+    const ParticleRenderStats& particlePreviewStats() const noexcept;
+    const std::string& particleStatus() const;
     // Called at startup or on source assignment, outside ordinary frame submission.
     bool prepareEnvironment(const std::filesystem::path& projectRoot, const std::string& sourceId);
     bool publishEnvironment(const PreparedEnvironment&);

@@ -53,6 +53,13 @@ target_link_libraries(crimson-scene PUBLIC crimson-math crimson-storage EnTT::En
 target_compile_definitions(crimson-scene PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(crimson-scene PRIVATE /W4 /permissive- /utf-8)
 
+add_library(crimson-particles src/assets/ParticleAsset.cpp src/editor/ParticleDocument.cpp
+    src/particles/CpuParticleSystem.cpp src/editor/SceneParticles.cpp)
+target_include_directories(crimson-particles PUBLIC src)
+target_link_libraries(crimson-particles PUBLIC crimson-math crimson-storage crimson-scene nlohmann_json::nlohmann_json)
+target_compile_definitions(crimson-particles PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(crimson-particles PRIVATE /W4 /permissive- /utf-8)
+
 set(CC_GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
 set(CC_RENDERER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/crimson-renderer")
 set(CC_SHADER_DIR "${CC_RENDERER_DIR}/shaders")
@@ -88,6 +95,8 @@ cc_shader(vs_pbr vertex varying.def.sc)
 cc_shader(fs_pbr fragment varying.def.sc)
 cc_shader(vs_model vertex model.varying.def.sc)
 cc_shader(fs_model fragment model.varying.def.sc)
+cc_shader(vs_particle vertex particle.varying.def.sc)
+cc_shader(fs_particle fragment particle.varying.def.sc)
 cc_shader(vs_pick vertex model.varying.def.sc)
 cc_shader(fs_pick fragment model.varying.def.sc)
 cc_shader(vs_present vertex varying.def.sc)
@@ -114,10 +123,12 @@ add_executable(crimson-renderer WIN32
     src/crimson-renderer/ModelGpuCache.cpp src/crimson-renderer/ShaderPreflight.cpp
     src/crimson-renderer/Environment.h src/crimson-renderer/Environment.cpp
     src/crimson-renderer/ImGuiBgfx.h src/crimson-renderer/ImGuiBgfx.cpp
+    src/crimson-renderer/PlatformSurface.cpp
     src/tools/Tools.h src/tools/Tools.cpp
     src/tools/ScenePanels.cpp src/tools/SceneDiagnostics.cpp
     src/tools/InspectorTransform.cpp
     src/tools/AssetBrowser.cpp
+    src/tools/ParticleEditor.cpp
     src/input/Navigation.h src/input/Navigation.cpp
     src/assets/AssetLibrary.h src/assets/AssetLibrary.cpp
     src/assets/MaterialAsset.cpp src/assets/AssetReferenceManager.cpp src/assets/AsyncImports.cpp src/assets/ImageImportStage.cpp src/assets/DeletionPreparation.cpp
@@ -131,7 +142,7 @@ target_compile_definitions(crimson-renderer PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX
 target_compile_definitions(crimson-renderer PRIVATE CC_PROJECT_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(crimson-renderer PRIVATE CC_SHADER_SOURCE_DIR="${CC_SHADER_DIR}" CC_SHADER_INCLUDE_DIR="${CC_BGFX_SHADER_INCLUDE}" CC_SHADERC_PATH="$<TARGET_FILE:bgfx::shaderc>")
 target_compile_options(crimson-renderer PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:/W4;/permissive-;/utf-8>")
-target_link_libraries(crimson-renderer PRIVATE crimson-resources crimson-math crimson-scene imguizmo::imguizmo SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace meshoptimizer::meshoptimizer)
+target_link_libraries(crimson-renderer PRIVATE crimson-resources crimson-math crimson-scene crimson-particles imguizmo::imguizmo SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace meshoptimizer::meshoptimizer)
 
 find_program(CC_POWERSHELL NAMES powershell.exe REQUIRED)
 add_custom_command(TARGET crimson-renderer POST_BUILD
@@ -146,6 +157,10 @@ add_custom_command(TARGET crimson-renderer POST_BUILD
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(particle_tests tests/particle_tests.cpp)
+    target_link_libraries(particle_tests PRIVATE crimson-particles)
+    target_compile_options(particle_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME particle_core COMMAND particle_tests)
     add_executable(render_tests tests/render_tests.cpp src/crimson-renderer/Mesh.cpp src/crimson-renderer/RenderTypes.cpp src/input/Navigation.cpp)
     target_include_directories(render_tests PRIVATE src)
     target_compile_options(render_tests PRIVATE /W4 /permissive- /utf-8)
@@ -201,7 +216,7 @@ if(BUILD_TESTING)
     target_include_directories(asset_resource_tests PRIVATE src tests "${CC_CGLTF_INCLUDE}")
     target_compile_definitions(asset_resource_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_compile_options(asset_resource_tests PRIVATE /W4 /permissive- /utf-8)
-    target_link_libraries(asset_resource_tests PRIVATE crimson-resources crimson-storage bgfx::bimg_decode bgfx::bimg bgfx::bx lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace)
+    target_link_libraries(asset_resource_tests PRIVATE crimson-resources crimson-storage crimson-particles bgfx::bimg_decode bgfx::bimg bgfx::bx lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace)
     add_test(NAME asset_resource_core COMMAND asset_resource_tests)
 
     add_executable(editor_preferences_tests tests/editor_preferences_tests.cpp src/editor/EditorPreferences.cpp)
@@ -233,6 +248,7 @@ if(BUILD_TESTING)
     add_executable(native_resource_tests tests/native_resource_tests.cpp
         src/crimson-renderer/Renderer.cpp src/crimson-renderer/RenderTypes.cpp src/crimson-renderer/Mesh.cpp
         src/crimson-renderer/Environment.cpp src/crimson-renderer/ImGuiBgfx.cpp src/crimson-renderer/ShaderPreflight.cpp
+        src/crimson-renderer/PlatformSurface.cpp
         src/crimson-renderer/ModelGpuCache.cpp src/resources/TextureStreamer.cpp src/resources/ShaderReloadSession.cpp
         src/assets/MaterialPreviewGeometry.cpp
         ${CC_SHADER_HEADERS})
@@ -254,7 +270,7 @@ if(BUILD_TESTING)
     target_include_directories(asset_library_deletion_tests PRIVATE src tests "${CC_CGLTF_INCLUDE}")
     target_compile_definitions(asset_library_deletion_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_compile_options(asset_library_deletion_tests PRIVATE /W4 /permissive- /utf-8)
-    target_link_libraries(asset_library_deletion_tests PRIVATE crimson-resources crimson-scene SDL3::SDL3 bgfx::bgfx bgfx::bimg_decode bgfx::bimg bgfx::bx lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace)
+    target_link_libraries(asset_library_deletion_tests PRIVATE crimson-resources crimson-scene crimson-particles SDL3::SDL3 bgfx::bgfx bgfx::bimg_decode bgfx::bimg bgfx::bx lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace)
     add_test(NAME asset_library_deletion_core COMMAND asset_library_deletion_tests)
     set_tests_properties(asset_library_deletion_core PROPERTIES TIMEOUT 90)
 
@@ -265,7 +281,7 @@ if(BUILD_TESTING)
     target_include_directories(import_identity_tests PRIVATE src tests "${CC_CGLTF_INCLUDE}")
     target_compile_definitions(import_identity_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_compile_options(import_identity_tests PRIVATE /W4 /permissive- /utf-8)
-    target_link_libraries(import_identity_tests PRIVATE crimson-resources crimson-scene SDL3::SDL3 bgfx::bgfx bgfx::bimg_decode bgfx::bimg bgfx::bx lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace)
+    target_link_libraries(import_identity_tests PRIVATE crimson-resources crimson-scene crimson-particles SDL3::SDL3 bgfx::bgfx bgfx::bimg_decode bgfx::bimg bgfx::bx lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace)
     add_test(NAME import_identity_core COMMAND import_identity_tests)
     set_tests_properties(import_identity_core PROPERTIES TIMEOUT 90)
 

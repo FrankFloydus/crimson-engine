@@ -27,6 +27,10 @@ struct EditorFrame {
     Vec2 placementPreviewPosition{};
     std::vector<std::string> visiblePreviewIds;
     bool documentReplaced{false};
+    std::string particleDropId, openParticle, particleFolder;
+    Vec2 particleDropPosition{};
+    bool createParticle{false};
+    std::uint64_t playParticleEntity{};
 };
 
 struct BrowserActions {
@@ -35,6 +39,8 @@ struct BrowserActions {
     std::vector<std::string> deleteAssetIds;
     std::vector<std::string> visiblePreviewIds;
     int previewSize{128};
+    bool createParticle{false};
+    std::string openParticle, particleFolder;
 };
 
 BrowserActions drawAssetBrowser(AssetLibrary& assets, SDL_Window* window);

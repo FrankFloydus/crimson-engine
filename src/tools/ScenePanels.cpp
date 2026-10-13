@@ -68,6 +68,7 @@ bool selected(const SceneDocument& document, EntityId id) {
 }
 const char* kind(const EntityRecord& record) {
     if (record.model) return "Model";
+    if (record.particle) return "Particle effect";
     if (record.directional) return "Directional light";
     if (record.point) return "Point light";
     if (record.environment) return "Environment";
@@ -418,7 +419,8 @@ void drawSceneOutliner(SceneDocument& document, bool allowEdits) {
     ImGui::End();
 }
 
-void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer& renderer, bool allowEdits) {
+void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer& renderer, bool allowEdits,
+                        std::uint64_t* playParticle,std::string* openParticle) {
     auto& state=stateFor(document);
     const bool canceled=cancelPanelEdit(document,state,Panel::Inspector,allowEdits);
     if (!ImGui::Begin("Inspector")) {
@@ -442,6 +444,42 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
         if (record->directional && ImGui::CollapsingHeader("Directional light",ImGuiTreeNodeFlags_DefaultOpen)) lightControls(document,state,record->id,true);
         if (record->point && ImGui::CollapsingHeader("Point light",ImGuiTreeNodeFlags_DefaultOpen)) lightControls(document,state,record->id,false);
         if (record->model && ImGui::CollapsingHeader("Model",ImGuiTreeNodeFlags_DefaultOpen)) modelInformation(*record,assets);
+        if(record->particle && ImGui::CollapsingHeader("Particle effect",ImGuiTreeNodeFlags_DefaultOpen)) {
+            auto assigned=record->particle->id;
+            const auto resolved=assets.references().resolve(assigned);
+            const auto effect=assets.findParticle(assigned);
+            bool changed=false;
+            const auto height=ImGui::GetFrameHeight(),gap=ImGui::GetStyle().ItemInnerSpacing.x;
+            const auto width=std::max(height,ImGui::GetContentRegionAvail().x-2*height-2*gap);
+            const auto label=effect?assets.displayName(resolved):assigned.empty()?std::string("None (Particle Effect)"):std::string("Missing: ")+assigned;
+            if(ImGui::Button(label.c_str(),{width,height})) { if(openParticle && effect)*openParticle=resolved; }
+            if(ImGui::BeginDragDropTarget()) {
+                if(const auto* payload=ImGui::AcceptDragDropPayload("CC_PARTICLE_ASSET"))
+                    if(payload->Data && payload->DataSize>1 && static_cast<const char*>(payload->Data)[payload->DataSize-1]=='\0') {
+                        const std::string id(static_cast<const char*>(payload->Data),static_cast<size_t>(payload->DataSize-1));
+                        if(assets.findParticle(id)) { assigned=id;changed=true; }
+                    }
+                ImGui::EndDragDropTarget();
+            }
+            ImGui::SameLine(0,gap);
+            if(ImGui::Button("...##effect-picker",{height,height})) ImGui::OpenPopup("Select particle effect");
+            ImGui::SameLine(0,gap);
+            if(ImGui::Button("X##clear-effect",{height,height})) { assigned.clear();changed=true; }
+            if(ImGui::BeginPopup("Select particle effect")) {
+                static ImGuiTextFilter filter;filter.Draw("Search");
+                for(const auto& entry:assets.catalog()) if(entry.kind==AssetKind::Particle && filter.PassFilter(assets.displayName(entry.id).c_str()))
+                    if(ImGui::Selectable(assets.displayName(entry.id).c_str(),assigned==entry.id)) { assigned=entry.id;changed=true;ImGui::CloseCurrentPopup(); }
+                ImGui::EndPopup();
+            }
+            if(changed) { auto next=*record;next.particle=AssetRef<ParticleEffectAsset>{assigned};document.updateEntity(record->id,next,"Assign particle effect"); }
+            ImGui::BeginDisabled(!effect);
+            if(ImGui::Button("Play Effect") && playParticle) *playParticle=record->id;
+            ImGui::SameLine();if(ImGui::Button("Edit Effect") && openParticle) *openParticle=resolved;
+            ImGui::EndDisabled();
+            const auto diagnostic=assets.particleDiagnostic(assigned);
+            if(!diagnostic.empty()) ImGui::TextWrapped("%s",diagnostic.c_str());
+            ImGui::TextDisabled("Starts automatically. Moving the emitter preserves world-space particles.");
+        }
         if (record->environment && ImGui::CollapsingHeader("Environment",ImGuiTreeNodeFlags_DefaultOpen)) {
             if (document.scene().properties().activeEnvironment==record->id) ImGui::TextUnformatted("Active environment");
             else if (ImGui::Button("Make Active")) document.setActiveEnvironment(record->id);

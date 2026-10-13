@@ -15,6 +15,7 @@ namespace {
 using namespace crimson;
 namespace fs=std::filesystem;
 const std::string firstModel="assets/models/first/manifest.json",secondModel="assets/models/second/manifest.json";
+const std::string particleEffect="assets/particles/drop.crimson-particle";
 void require(bool condition,const char* message) { if (!condition) throw std::runtime_error(message); }
 std::vector<char> payload(const std::vector<std::string>& ids) {
     std::vector<char> result;
@@ -25,7 +26,7 @@ struct Project {
     fs::path root=fs::temp_directory_path()/
         ("crimson-drop-focus-test-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     Project() {
-        for (const auto& id:{firstModel,secondModel}) {
+        for (const auto& id:{firstModel,secondModel,particleEffect}) {
             fs::create_directories((root/id).parent_path()); std::ofstream(root/id)<<"Managed model remains owned by the browser.";
         }
     }
@@ -144,17 +145,30 @@ void malformedPayloads() {
     auto emptyItem=good; emptyItem.push_back('\0');
     const std::vector<std::pair<std::string,std::vector<char>>> cases{
         {"CC_MODEL_ASSET",{}},{"CC_MODEL_ASSET",{'\0'}},{"CC_MODEL_ASSET",{'a','b'}},{"CC_MODEL_ASSET",embedded},
-        {"CC_MODEL_ASSETS",missing},{"CC_MODEL_ASSETS",emptyItem},{"CC_TEXTURE_ASSET",good}};
+        {"CC_MODEL_ASSETS",missing},{"CC_MODEL_ASSETS",emptyItem},{"CC_TEXTURE_ASSET",good},
+        {"CC_PARTICLE_ASSET",{}},{"CC_PARTICLE_ASSET",{'a','b'}},{"CC_PARTICLE_ASSET",embedded}};
     for (const auto& [type,bytes]:cases) {
         Project project; Harness ui(project.root); ui.source(type,bytes); const auto result=ui.drag();
-        require(result.frame.modelDropId.empty() && result.frame.modelDropIds.empty() && result.frame.placementPreviewIds.empty(),
+        require(result.frame.modelDropId.empty() && result.frame.modelDropIds.empty() && result.frame.placementPreviewIds.empty() && result.frame.particleDropId.empty(),
             "Malformed or incompatible payload published a partial model drop.");
         require(result.focused=="Asset Browser","An invalid model payload transferred keyboard focus.");
     }
 }
+void particleDeliveryAndDelete() {
+    Project project;Harness ui(project.root);ui.source("CC_PARTICLE_ASSET",payload({particleEffect}));
+    const auto delivered=ui.drag();
+    require(delivered.focused=="Viewport","Delivered particle effect retained browser focus.");
+    require(delivered.frame.particleDropId==particleEffect && delivered.frame.particleDropPosition==Vec2{500,100},"Particle delivery lost its reference or cursor position.");
+    require(delivered.frame.modelDropId.empty() && delivered.frame.modelDropIds.empty() && delivered.frame.placementPreviewIds.empty(),"Particle delivery published a model placement.");
+    const auto created=ui.document.createParticle(particleEffect,"Dropped particle");
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Delete,true);const auto result=ui.tick();
+    require(result.entityDelete && !result.assetDelete && !ui.document.scene().contains(created),"Delete after particle delivery targeted the source asset.");
+    require(fs::exists(project.root/particleEffect),"Deleting a placed effect deleted its source asset.");
+    require(ui.document.undo() && ui.document.scene().find(created)->particle->id==particleEffect,"Undo particle-instance deletion lost its shared asset reference.");
+}
 }
 int main() {
-    try { deliveryAndDelete(false); deliveryAndDelete(true); delayedPlacementDoesNotStealFocus(); malformedPayloads();
+    try { deliveryAndDelete(false); deliveryAndDelete(true); delayedPlacementDoesNotStealFocus(); malformedPayloads();particleDeliveryAndDelete();
         std::cout<<"Viewport asset drop: focus, Delete routing, undo, delayed placement and malformed payloads passed.\n"; return 0;
     } catch (const std::exception& error) { std::cerr<<error.what()<<'\n'; return 1; }
 }

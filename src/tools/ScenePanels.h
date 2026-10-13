@@ -1,4 +1,6 @@
 #pragma once
+#include <cstdint>
+#include <string>
 
 namespace crimson {
 class SceneDocument;
@@ -9,5 +11,6 @@ class Renderer;
 // Viewport gestures have different ownership and are never committed here.
 bool finishScenePanelEdit(SceneDocument& document);
 void drawSceneOutliner(SceneDocument& document, bool allowEdits = true);
-void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer& renderer, bool allowEdits = true);
+void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer& renderer, bool allowEdits = true,
+                        std::uint64_t* playParticle = nullptr,std::string* openParticle = nullptr);
 } // namespace crimson

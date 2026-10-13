@@ -4,6 +4,7 @@
 #include "assets/AtomicFile.h"
 #include "assets/AsyncImports.h"
 #include "assets/DeletionPreparation.h"
+#include "assets/ParticleAsset.h"
 #include "model_fixtures.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -181,6 +182,70 @@ void backgroundDeletionValidation(){
     wait([&]{return entered.load();});manager.forget("import:delete/stale");release=true;wait([&]{return manager.idle();});
     require(!stale.snapshot()&&read(p.root/model->id)==before,"Canceled validation accepted a stale result or changed source files.");
 }
+void particleReferencesAndDeletionValidation(){
+    Project p;const auto first=createParticleAsset(p.root,"First"),second=createParticleAsset(p.root,"Second");
+    AssetReferenceManager references(p.root);
+    const std::array<AssetEntry,1> selected{{{first.id,first.name,AssetKind::Particle}}};
+    references.setUsages({{first.id,"assets/scenes/placed.crimson-scene","Scene","Sparks"},
+                          {first.id,"active","Untitled","Particle history",true,true}});
+    require(references.users(first.id).size()==2,"Particle reference scan omitted saved or historical users.");
+    const auto authored=references.authoredUsers(first.id);
+    require(authored.size()==1 && authored.front().ownerId=="assets/scenes/placed.crimson-scene",
+            "Particle undo history was counted as a surviving authored dependency.");
+    const std::array<std::string,1> removedScene{{"assets/scenes/placed.crimson-scene"}};
+    require(references.authoredUsers(first.id,removedScene).empty(),
+            "A saved scene removed with its particle effect still triggered a dependency warning.");
+    references.replace(selected,{{first.id,second.id}});
+    require(references.resolveParticle(first.id)==second.id,"Typed particle replacement did not resolve.");
+    const auto before=references.serialize();
+    rejects([&]{references.replace(selected,{{first.id,"assets/textures/foreign.png"}});},"Particle replacement accepted a texture.");
+    rejects([&]{references.replace(selected,{{first.id,GrayTextureId}});},"Particle replacement accepted a built-in texture.");
+    require(references.serialize()==before,"Rejected typed replacement altered the policy.");
+    references.save();AssetReferenceManager reopened(p.root);
+    require(reopened.resolveParticle(first.id)==second.id,"Particle replacement was not persistent.");
+    require(reopened.resolveParticle("assets/particles/unresolved.crimson-particle")=="assets/particles/unresolved.crimson-particle",
+            "An unresolved authored effect ID was discarded.");
+    const std::array<AssetEntry,1> survivors{{{second.id,second.name,AssetKind::Particle}}};
+    auto progress=std::make_shared<DeletionProgress>();progress->total=1;
+    const auto validation=validateAssetDeletion(p.root,{},reopened,{},progress,survivors);
+    require(validation->models.empty() && progress->completed.load()==1 && deletionValidationCurrent(*validation),
+            "Particle deletion validation did not complete or track its file snapshot.");
+    require(std::find(validation->dependencies.begin(),validation->dependencies.end(),particleAssetPath(p.root,second.id))!=validation->dependencies.end(),
+            "Particle validation did not pin its surviving definition dependency.");
+    const auto original=read(p.root/second.id);writeFileAtomically(p.root/second.id,original+" ");
+    require(!deletionValidationCurrent(*validation),"A particle asset change did not invalidate pending deletion.");
+    writeFileAtomically(p.root/second.id,"{invalid");
+    rejects([&]{validateAssetDeletion(p.root,{},reopened,{}, {},survivors);},"Malformed surviving particle definition passed deletion validation.");
+    require(read(p.root/first.id)==serializeParticleAsset(first),"Particle validation modified a managed source.");
+    reopened.replace(survivors,{});
+    require(reopened.resolveParticle(second.id).empty() && reopened.resolveParticle(first.id).empty(),
+            "Deleting a replacement target did not disable old particle aliases.");
+    reopened.save();AssetReferenceManager cleared(p.root);
+    require(cleared.resolveParticle(first.id).empty() && cleared.resolveParticle(second.id).empty(),
+            "Cleared particle replacement chains did not survive reopening.");
+    std::stop_source cancel;cancel.request_stop();
+    rejects([&]{validateAssetDeletion(p.root,{},reopened,cancel.get_token(),{},survivors);},"Canceled particle deletion validation proceeded.");
 }
-int main(){try{policies();authoredWarningClassification();transactionAndRecovery();managedMaterialsAndImages();stagedImages();materialTangentBasis();backgroundDeletionValidation();std::cout<<"Asset reference, material and managed transaction checks passed.\n";return 0;}
+void particleReplacementStateValidation(){
+    Project p;
+    const std::string first="assets/particles/first.crimson-particle",second="assets/particles/second.crimson-particle";
+    const auto state=Json{{"version",1},{"deleted",Json::array({first})},{"replacements",{{first,"assets/textures/foreign.png"}}}}.dump(2);
+    writeFileAtomically(p.root/"assets/references.json",state);AssetReferenceManager damaged(p.root);
+    require(!damaged.status().empty(),"Persisted particle replacement accepted a texture target.");
+    rejects([&]{damaged.replace(std::array<AssetEntry,1>{{{second,"Second",AssetKind::Particle}}},{});},
+            "Destructive operations remained enabled after incompatible persisted particle replacement.");
+    require(read(p.root/"assets/references.json")==state,"Invalid persisted particle policy was overwritten.");
+    writeFileAtomically(p.root/"assets/references.json",Json{{"version",1},{"deleted",Json::array()},{"replacements",Json::object()}}.dump(2));
+    AssetReferenceManager references(p.root);
+    references.replace(std::array<AssetEntry,1>{{{first,"First",AssetKind::Particle}}},{{first,second}});
+    const auto previous=references.serialize();const auto revision=references.revision();
+    // Revalidating every source also protects old particle aliases when an
+    // incompatible later policy update targets the end of their chain.
+    rejects([&]{references.replace(std::array<AssetEntry,1>{{{second,"Wrong kind",AssetKind::Texture}}},{});},
+            "A later fallback changed an existing particle alias into a built-in texture.");
+    require(references.serialize()==previous && references.revision()==revision && references.resolveParticle(first)==second,
+            "Rejected particle replacement-chain update mutated the previous policy.");
+}
+}
+int main(){try{policies();authoredWarningClassification();transactionAndRecovery();managedMaterialsAndImages();stagedImages();materialTangentBasis();backgroundDeletionValidation();particleReferencesAndDeletionValidation();particleReplacementStateValidation();std::cout<<"Asset reference, material and managed transaction checks passed.\n";return 0;}
     catch(const std::exception& e){std::cerr<<"Asset resource test failed: "<<e.what()<<'\n';return 1;}}

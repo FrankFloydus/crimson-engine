@@ -32,11 +32,12 @@ bool visibleBounds(const Aabb& local,const Mat4& world,const Camera& camera,floa
 }
 }
 EditorSession::EditorSession(const std::filesystem::path& root, AssetLibrary& assets, Renderer& renderer)
-    : root_(root),document_(root),resources_(*assets.resources()),prepared_(assets,renderer,resources_,root) {
+    : root_(root),document_(root),particleEditor_(root),resources_(*assets.resources()),prepared_(assets,renderer,resources_,root) {
     restoreSession(assets);
     documentEpoch_=document_.documentGeneration();
     previews_=std::make_unique<AssetPreviews>(root,assets,resources_,renderer,prepared_);
     preparedEnvironment_="<unprepared>";
+    editor_.setParticleBoundsQuery([this](EntityId id){return particles_.bounds(id);});
 }
 EditorSession::~EditorSession() { saveSession(); }
 void EditorSession::restoreSession(AssetLibrary& assets) {
@@ -103,6 +104,7 @@ void EditorSession::saveSession() noexcept {
     } catch (...) { /* Session state is expendable; authored scenes were saved explicitly. */ }
 }
 void EditorSession::filesChanged(std::span<const std::filesystem::path> paths) {
+    particleEditor_.filesChanged(paths);
     changedFiles_.insert(changedFiles_.end(),paths.begin(),paths.end());
     for(const auto& path:paths) {
         const auto relative=path.lexically_relative(root_).generic_u8string();
@@ -147,13 +149,18 @@ void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::ui
     if(auto snapshot=environment_.snapshot()) if(snapshot.revision()!=environmentRevision_ && renderer.publishEnvironment(*snapshot)) environmentRevision_=snapshot.revision();
     previews_->pump(bgfxFrame,visiblePreviewIds_);
 }
-void EditorSession::cancelInteraction(Renderer& renderer) { editor_.cancelInteraction(document_,renderer); }
+void EditorSession::cancelInteraction(Renderer& renderer) { editor_.cancelInteraction(document_,renderer);particleEditor_.cancelInteraction();skipSimulationTime_=true; }
 void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& navigation, SDL_Window* window,
                           uint32_t bgfxFrame, bool quitRequested) {
     const auto previousAsset=document_.assetId();
+    const float simulationSeconds=simulationSuspended_ || skipSimulationTime_?0.f:ImGui::GetIO().DeltaTime;
+    skipSimulationTime_=false;
     const auto previousCamera=settings_.camera;
     document_.setPreviewCamera(settings_.camera);
-    const auto frame=editor_.draw(document_,settings_,assets,renderer,window,navigation.active(),bgfxFrame,quitRequested);
+    const auto frame=editor_.draw(document_,settings_,assets,renderer,window,navigation.active(),bgfxFrame,quitRequested,particleEditor_);
+    if(frame.createParticle) particleEditor_.requestCreate(frame.particleFolder,assets);
+    if(!frame.openParticle.empty()) particleEditor_.requestOpen(frame.openParticle,assets);
+    particleEditor_.draw(assets,renderer,simulationSeconds);
     status_=startupStatus_;
     if (frame.documentReplaced || document_.assetId() != cameraScene_ || document_.documentGeneration()!=documentEpoch_) {
         if (!previousAsset.empty()) cameras_[previousAsset]=previousCamera;
@@ -176,6 +183,8 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
         return position;
     };
     if(!dropped.empty()) pendingDrops_.push_back({std::move(dropped),placement(frame.modelDropPosition),documentEpoch_});
+    if(!frame.particleDropId.empty() && assets.findParticle(frame.particleDropId))
+        document_.createParticle(frame.particleDropId,assets.displayName(frame.particleDropId),math::translation(placement(frame.particleDropPosition)));
     navigation.update(settings_.camera,frame.viewport,ImGui::GetIO().DeltaTime,false);
     const auto environment=resolveEnvironment(document_.scene());settings_.environment=environment.environment;settings_.exposure=environment.exposure;
     settings_.environment.map=assets.references().resolveEnvironment(settings_.environment.map);
@@ -192,6 +201,11 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
         document_.createModels(placements);renderer.cancelPicking();iterator=pendingDrops_.erase(iterator);
     }
     const auto extracted=extractScene(document_.scene());
+    particles_.reconcile(document_.documentGeneration(),extracted.particles,[&](const std::string& id) {
+        return ParticleDefinitionVersion{assets.findParticle(id),assets.particleRevision(id),assets.particleDiagnostic(id)};
+    },simulationSeconds,frame.playParticleEntity);
+    particlePackets_.clear();particlePackets_.reserve(particles_.presentation().size());
+    for(const auto& p:particles_.presentation())particlePackets_.push_back({p.position,p.size,p.color});
     std::vector<RenderModelInstance> instances;
     struct FramePins { std::vector<std::shared_ptr<const PreparedEditorModel>> models; };
     auto pins=std::make_shared<FramePins>();std::uint64_t signature=14695981039346656037ull;
@@ -211,7 +225,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     renderer.setExternalResourceSignature(signature);
     renderer.setAppearance(editor_.appearance());
     if (frame.viewport.width > 0 && frame.viewport.height > 0)
-        renderer.render(RenderScene{settings_,{},nullptr,nullptr,instances,extracted.directional,extracted.points,true,pins});
+        renderer.render(RenderScene{settings_,{},nullptr,nullptr,instances,extracted.directional,extracted.points,true,pins,particlePackets_});
     visiblePreviewIds_=frame.visiblePreviewIds;viewportRegion_=frame.viewport;
     if(!document_.assetId().empty() && !document_.dirty()) try {
         const auto fingerprint=sceneFileFingerprint(root_,document_.assetId());
@@ -221,6 +235,11 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     const auto retained=renderer.modelResidentBytes()+renderer.thumbnailResidentBytes();
     assets.trimTextureCache(retained>=resources_.config().gpuRetentionBytes?0:resources_.config().gpuRetentionBytes-retained);
     if(!prepared_.status().empty())status_+=prepared_.status();
+    if(!particles_.status().empty())status_+=particles_.status();
+    if(!renderer.particleStatus().empty())status_+=renderer.particleStatus();
+    const auto& particleDraw=renderer.particleStats();
+    if(frame.viewport.width>0 && (particleDraw.dropped || particleDraw.invalid))
+        status_+="Particle rendering omitted "+std::to_string(particleDraw.dropped)+" packets; "+std::to_string(particleDraw.invalid)+" were invalid.\n";
     if(!previews_->status().empty())status_+=previews_->status();
     if(environment_.state()==ResourceState::Failed)status_+=environment_.diagnostic();
     if(!resourceStatus_.empty()) { if(!status_.empty())status_+='\n';status_+=resourceStatus_; }

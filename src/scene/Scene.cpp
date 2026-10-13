@@ -31,7 +31,7 @@ template<class T> void validateLight(const std::optional<T>& light) {
 
 bool sameEntity(const EntityRecord& a, const EntityRecord& b) {
     return a.id == b.id && a.name == b.name && a.parent == b.parent && a.order == b.order &&
-        a.local == b.local && a.model == b.model && sameLight(a.directional,b.directional) && sameLight(a.point,b.point) &&
+        a.local == b.local && a.model == b.model && a.particle == b.particle && sameLight(a.directional,b.directional) && sameLight(a.point,b.point) &&
         a.environment.has_value()==b.environment.has_value() && (!a.environment || sameEnvironment(*a.environment,*b.environment));
 }
 bool sameProperties(const SceneProperties& a, const SceneProperties& b) {
@@ -58,6 +58,7 @@ std::optional<EntityRecord> Scene::find(EntityId id) const {
     const auto& relation = registry_.get<Relationship>(entity);
     EntityRecord record{id,identity.name,relation.parent,relation.order,registry_.get<Transform>(entity).local};
     if (const auto* model = registry_.try_get<ModelReference>(entity)) record.model = model->assetId;
+    if (const auto* particle = registry_.try_get<ParticleReference>(entity)) record.particle = particle->assetId;
     if (const auto* light = registry_.try_get<SceneDirectionalLight>(entity)) record.directional = *light;
     if (const auto* light = registry_.try_get<ScenePointLight>(entity)) record.point = *light;
     if (const auto* environment = registry_.try_get<SceneEnvironment>(entity)) record.environment = *environment;
@@ -149,6 +150,11 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             throw std::runtime_error("Entity local transform must be a finite affine matrix.");
         if (record.model && !safeReference(record.model->id))
             throw std::runtime_error("Model asset reference must be a nonempty project-relative path.");
+        if (record.particle && !record.particle->empty()) {
+            const auto path=std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(record.particle->id.data()),record.particle->id.size()));
+            if (!safeReference(record.particle->id) || path.parent_path()!=std::filesystem::path("assets/particles") || path.extension()!=".crimson-particle")
+                throw std::runtime_error("Particle asset reference must be a managed .crimson-particle path under assets/particles.");
+        }
         validateLight(record.directional); validateLight(record.point);
         if (record.environment) {
             const auto& environment=*record.environment;
@@ -194,6 +200,7 @@ void Scene::apply(const std::vector<EntityRecord>& records, const ScenePropertie
         candidate.emplace<Transform>(entity,record.local);
         candidate.emplace<Relationship>(entity,record.parent,record.order);
         if (record.model) candidate.emplace<ModelReference>(entity,*record.model);
+        if (record.particle) candidate.emplace<ParticleReference>(entity,*record.particle);
         if (record.directional) candidate.emplace<SceneDirectionalLight>(entity,*record.directional);
         if (record.point) candidate.emplace<ScenePointLight>(entity,*record.point);
         if (record.environment) candidate.emplace<SceneEnvironment>(entity,*record.environment);

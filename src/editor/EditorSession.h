@@ -2,6 +2,8 @@
 #include "SceneEditor.h"
 #include "EditorResources.h"
 #include "assets/AssetLibrary.h"
+#include "tools/ParticleEditor.h"
+#include "SceneParticles.h"
 #include <filesystem>
 #include <unordered_map>
 
@@ -15,6 +17,7 @@ public:
     EditorSession(const std::filesystem::path&, AssetLibrary&, Renderer&);
     ~EditorSession();
     void cancelInteraction(Renderer&);
+    void setSimulationSuspended(bool suspended) { if(simulationSuspended_ && !suspended)skipSimulationTime_=true;simulationSuspended_=suspended; }
     void frame(AssetLibrary&, Renderer&, Navigation&, SDL_Window*, uint32_t bgfxFrame, bool quitRequested);
     void prepareFrame(AssetLibrary&,Renderer&,std::uint32_t bgfxFrame);
     void filesChanged(std::span<const std::filesystem::path>);
@@ -24,6 +27,9 @@ private:
     std::filesystem::path root_;
     SceneDocument document_;
     SceneEditor editor_;
+    ParticleEditor particleEditor_;
+    SceneParticles particles_;
+    std::vector<RenderParticle> particlePackets_;
     SceneSettings settings_;
     ResourceManager& resources_;
     EditorResources prepared_;
@@ -39,6 +45,7 @@ private:
     std::unordered_map<std::string,Camera> cameras_;
     std::string cameraScene_, preparedEnvironment_, status_, unresolvedScene_, startupStatus_, resourceStatus_;
     bool recoveredLegacy_{false};
+    bool simulationSuspended_{},skipSimulationTime_{true};
     void restoreSession(AssetLibrary&);
     void saveSession() noexcept;
 };

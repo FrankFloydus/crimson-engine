@@ -38,6 +38,7 @@ public:
     std::string resolve(const std::string& id) const;
     std::string resolveTexture(const std::string& id, bool normal=false) const;
     std::string resolveEnvironment(const std::string& id) const;
+    std::string resolveParticle(const std::string& id) const;
     bool deleted(const std::string& id) const { return deleted_.contains(id); }
     uint64_t revision() const { return revision_; }
     const std::string& status() const { return status_; }

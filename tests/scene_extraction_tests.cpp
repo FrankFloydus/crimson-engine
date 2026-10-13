@@ -145,8 +145,35 @@ void gizmoAffineRotation() {
         require(inverseDelta && close(*inverseDelta*resultWorld,originalWorld),"Gizmo rotation discarded affine scale/shear.");
     }
 }
+void particleExtraction() {
+    Scene scene;
+    auto parent=entity(1,"Parent",0,math::translation({4,2,-3})*math::scaling({-2,3,.5f}));
+    Mat4 shear;shear[4]=.7f;shear[8]=-.2f;
+    auto particle=entity(7,"Particle",1,math::translation({1,2,3})*shear);
+    particle.particle=AssetRef<ParticleEffectAsset>{"assets/particles/shared.crimson-particle"};
+    auto missing=entity(9,"Unresolved",0,math::translation({-5,0,4}));
+    missing.particle=AssetRef<ParticleEffectAsset>{"assets/particles/missing.crimson-particle"};
+    auto cleared=entity(8,"Cleared",0,math::translation({7,1,2}));cleared.particle=AssetRef<ParticleEffectAsset>{};
+    scene.apply({missing,particle,parent,cleared},{});
+    const auto extracted=extractScene(scene);
+    require(extracted.particles.size()==3 && extracted.particles[0].id==7 && extracted.particles[1].id==8 && extracted.particles[2].id==9,
+            "Particle extraction omitted cleared/missing markers or lost deterministic ordering.");
+    require(close(extracted.particles[0].world,parent.local*particle.local),"Particle extraction lost affine parent transforms.");
+    require(extracted.particles[2].assetId==missing.particle->id && extracted.particles[1].assetId.empty(),"Particle extraction resolved or discarded authored identities.");
+    const std::array<EntityId,1> selection{9};const auto bounds=selectionBounds(scene,selection,{});
+    require(bounds.valid && close(bounds.minimum,{-5.5f,-.5f,3.5f}),"Missing effect marker could not be focused.");
+    const std::array<EntityId,2> nestedSelection{1,7};size_t queried{};
+    const Aabb live{{-8,-2,-5},{13,8,10},true};
+    const auto liveBounds=selectionBounds(scene,nestedSelection,{},[&](EntityId id)->std::optional<Aabb> {++queried;return id==7?std::optional<Aabb>{live}:std::nullopt;});
+    require(queried==1 && liveBounds.valid && close(liveBounds.minimum,live.minimum) && close(liveBounds.maximum,live.maximum),
+            "Particle focus duplicated selected descendants or transformed world-space live bounds again.");
+    const auto fallback=selectionBounds(scene,selection,{},[](EntityId)->std::optional<Aabb>{return Aabb{};});
+    require(close(fallback.minimum,bounds.minimum) && close(fallback.maximum,bounds.maximum),"Invalid live bounds removed the authored marker fallback.");
+    auto copied=extracted;particle.local=math::translation({100,0,0});scene.apply({particle,parent},{});
+    require(close(copied.particles[0].world,extracted.particles[0].world),"An extracted particle frame retained mutable scene storage.");
+}
 }
 int main() {
-    try { run(); lightOrientation(); gizmoAffineRotation(); std::cout<<"Scene extraction checks passed.\n"; return 0; }
+    try { run(); lightOrientation(); gizmoAffineRotation();particleExtraction();std::cout<<"Scene extraction checks passed.\n"; return 0; }
     catch (const std::exception& error) { std::cerr<<error.what()<<'\n'; return 1; }
 }

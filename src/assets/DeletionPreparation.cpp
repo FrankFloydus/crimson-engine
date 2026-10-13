@@ -1,5 +1,6 @@
 #include "DeletionPreparation.h"
 #include "MaterialAsset.h"
+#include "ParticleAsset.h"
 #include "resources/Paths.h"
 #include "resources/ResourceManager.h"
 #include "resources/StreamingModel.h"
@@ -42,8 +43,11 @@ std::vector<std::filesystem::path> dependencies(const std::filesystem::path& roo
 }
 }
 std::shared_ptr<DeletionValidation> validateAssetDeletion(const std::filesystem::path& root,std::span<const AssetEntry> models,const AssetReferenceManager& policy,
-    std::stop_token stop,const std::shared_ptr<DeletionProgress>& progress){
+    std::stop_token stop,const std::shared_ptr<DeletionProgress>& progress,std::span<const AssetEntry> particles){
     canceled(stop);auto result=std::make_shared<DeletionValidation>();result->dependencies=dependencies(root,models,policy);
+    for(const auto& particle:particles)result->dependencies.push_back(checkedManagedAssetPath(root,particle.id));
+    std::sort(result->dependencies.begin(),result->dependencies.end());
+    result->dependencies.erase(std::unique(result->dependencies.begin(),result->dependencies.end()),result->dependencies.end());
     const auto before=fingerprintFileStates(result->dependencies);
     const ModelResolvers resolvers{[policy](const auto& id){return policy.resolveTexture(id);},[policy,root](const auto& id)->std::optional<ModelMaterial>{
         const auto target=policy.resolve(id);if(target==DefaultMaterialId)return defaultMaterialAsset().surface;
@@ -57,8 +61,13 @@ std::shared_ptr<DeletionValidation> validateAssetDeletion(const std::filesystem:
         result->bytes+=sizeof(ModelAsset)+model->nodes.size()*sizeof(ModelNode)+model->draws.size()*sizeof(ModelDraw)+model->materials.size()*sizeof(ModelMaterial)+model->primitives.size()*sizeof(ModelPrimitive);
         result->models.push_back(std::move(model));if(progress)progress->completed.fetch_add(1);
     }
+    for(const auto& entry:particles){
+        canceled(stop);const auto definition=loadParticleAsset(root,entry.id);canceled(stop);
+        result->bytes+=sizeof(ParticleEffectAsset)+definition.id.size()+definition.name.size();
+        if(progress)progress->completed.fetch_add(1);
+    }
     canceled(stop);result->fileStateFingerprint=fingerprintFileStates(result->dependencies);
-    if(before!=result->fileStateFingerprint)throw std::runtime_error("Model dependencies changed during deletion validation.");
+    if(before!=result->fileStateFingerprint)throw std::runtime_error("Asset dependencies changed during deletion validation.");
     return result;
 }
 bool deletionValidationCurrent(const DeletionValidation& validation){try{return fingerprintFileStates(validation.dependencies)==validation.fileStateFingerprint;}catch(...){return false;}}

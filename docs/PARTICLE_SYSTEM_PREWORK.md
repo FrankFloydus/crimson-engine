@@ -1,12 +1,12 @@
 # Crimson Engine particle system: pre-work specification
 
-Status: agreed design; engine implementation has not started. Prepared 13 October 2026.
+Status: Step 1 implemented and integrated into the main checkout; broader user acceptance pending. Steps 2–14 and GPU simulation remain planned. Prepared 13 October 2026; integration updated 14 October 2026.
 
 This document specifies the particle system's functionality, authoring workflow, engineering boundaries, research rationale, and implementation sequence. It supplements [ENGINE_ARCHITECTURE.md](ENGINE_ARCHITECTURE.md); that guide remains authoritative for engine ownership and implementation status. [README.md](../README.md) remains the entry point for controls that have actually landed.
 
 **Every implementation step must leave a working, usable, saveable particle system.** Build the smallest complete feature at each handoff. Infrastructure belongs inside the feature that needs it, rather than in a series of invisible foundation milestones. Complete each authorized step, run its required checks, report the result, and leave visual feature acceptance to the user.
 
-All steps below are planned. Their numbering defines the particle implementation sequence; it does not replace the architecture guide's current **Next** milestone. This document does not authorize implementing the complete system in one change.
+Step 1 below is the delivered baseline; the remaining steps are planned. Their numbering defines the particle implementation sequence; it does not replace the architecture guide's current **Next** milestone. This document does not authorize implementing the complete system in one change.
 
 ## 1. Product direction and scope
 
@@ -50,7 +50,7 @@ The initial starter values are engineering defaults, not performance limits:
 | Shape | Point |
 | Emission | Continuous, 30 particles/s |
 | Lifetime | 1.25 seconds |
-| Initial velocity | `(0, 6, 0)` m/s |
+| Initial velocity | `(0, 0, 0)` m/s; start at rest |
 | Gravity | `(0, -9.81, 0)` m/s² |
 | Size | 0.08 m |
 | Color / intensity | White / 1 |
@@ -58,7 +58,7 @@ The initial starter values are engineering defaults, not performance limits:
 | Capacity | 256 particles |
 | Space / preview seed | World / retained seed 1 |
 
-The isolated preview places the origin where the rise and fall are visible. Its grid is a visual aid, not a collider. The starter must work before imported textures, sophisticated modules, or Jolt exist.
+The isolated preview frames the constant-velocity/gravity trajectory over the authored lifetime, including the emitter origin and any turning point. The falling starter begins at rest; an explicitly positive initial Y velocity produces an upward launch before gravity reverses it. Its grid is a visual aid, not a collider. The starter must work before imported textures, sophisticated modules, or Jolt exist.
 
 Creation failure leaves existing documents and the browser intact. It must not publish a broken catalog entry or overwrite another asset.
 
@@ -76,7 +76,7 @@ Module authoring groups work by purpose and stage: scheduling, initialization, m
 
 An emitter can feed multiple compatible renderers when that capability lands, such as a sprite plus its trail. Users should not need to duplicate a simulation to draw the same particles in two supported ways.
 
-Emitter duplication and later starter presets produce ordinary editable definitions. Presets are copies, not hidden behavior or a new linked-template system. Keep Dear ImGui's default colors, font, sizing, and the user's docking state. This specification defines interactions without prescribing a panel arrangement.
+Emitter duplication and later starter presets produce ordinary editable definitions. Presets are copies, not hidden behavior or a new linked-template system. Keep Dear ImGui's default colors, font, sizing, and the user's docking state. The particle editor is a floating, non-dockable window: dragging its title bar outside the main window creates a native platform window that can move to another monitor. Preserve the other panels' docking state, route input to the owning window, and use the host monitor's built-in DPI scaling. This specification defines interactions without prescribing a panel arrangement.
 
 ### 2.3 Playback
 
@@ -107,14 +107,27 @@ A property drag, curve edit, or timeline drag forms one transaction. Escape rest
 Keep these three operations distinct:
 
 1. During an active transaction, valid intermediate values update the isolated preview. They do not publish incomplete definitions to scene instances.
-2. A successful commit publishes a complete valid in-memory definition revision and restarts scene instances using that effect. Cancel restores the previous preview from its retained seed. Invalid commits retain the last valid runtime definition.
+2. A successful commit publishes a complete valid in-memory definition revision and updates scene instances using the field's execution stage without restarting ordinary playback. Cancel restores previous authored values in the preview without rewinding simulation. Invalid commits retain the last valid runtime definition.
 3. Save atomically writes the committed revision. Save does not cause another restart. Failure retains the previous disk file, working revision, and dirty state.
 
 Closing a dirty particle document, replacing its contents, or exiting uses Save/Discard/Cancel. Discard restores the saved definition and updates affected instances. Preserve the repository's external-change/conflict behavior when wiring the resource manager and file watcher; do not silently overwrite a changed asset.
 
 The committed working definition is authoritative for open dirty documents until Save, Discard, or an explicitly accepted external reload. A disk watcher or background load must not replace it with an older saved payload. Publish its complete immutable snapshot through the existing resource mechanism and retain the last valid published payload on preparation failure.
 
-Scene-instance exposed parameters apply by stage: spawn inputs affect newborns, update inputs apply on the next tick, and rendering inputs apply on the next extraction. Structural definition changes require preparation/publication and restart. Parameter renaming preserves bindings through stable IDs; type incompatibility is diagnosed without discarding authored overrides.
+Step 1 applies the following live-edit policy in both preview and scene instances. Undo/redo and cancellation follow the same policy; document history does not snapshot or rewind live particles.
+
+| Field or operation | Effect on an existing instance |
+| --- | --- |
+| Color, size, intensity | Apply to existing and new particles on the next presentation extraction, even while paused |
+| Gravity | Apply to existing particles on the next fixed simulation tick |
+| Rate, emitter enabled | Apply on subsequent emission scheduling; preserve phase and allow existing particles to drain |
+| Initial velocity, lifetime | Apply at birth; existing particles retain their cached birth values |
+| Capacity | Prepare replacement storage and clear live particles, retaining clock, emission phase, spawn identities and playback state; count cleared particles |
+| Seed | Update the seed for future births without resetting the clock; ordinary Restart repeats the retained seed |
+| New asset/emitter identity, document replacement, explicit Restart or Play Effect | Clear live state and restart from zero |
+| Save | Atomically store the revision without changing simulation state |
+
+Scene-instance exposed parameters later follow these same stages: spawn inputs affect newborns, update inputs apply on the next tick, and rendering inputs apply on the next extraction. Future structural changes require prepared publication and an explicit compatibility policy; identity changes restart, while capacity replacement clears storage without resetting time. Do not make every new definition revision an implicit restart. Parameter renaming preserves bindings through stable IDs; type incompatibility is diagnosed without discarding authored overrides.
 
 ### 2.5 Usability exercises
 
@@ -159,9 +172,9 @@ Public math uses Crimson vectors, matrices, bounds, and rays. Serialize authored
 
 ### 3.2 Current-checkout integration baseline
 
-The architecture guide and current working tree are not identical snapshots. At preparation time, the tree contains typed references, resource workers/publications, material assets, asset replacement/deletion machinery, and streaming geometry. Their completed integration must be rechecked before implementation; this document does not claim all in-progress changes have landed.
+At preparation time, the working tree included typed references, resource workers/publications, material assets, asset replacement/deletion machinery and streaming geometry under active development. Step 1 was implemented against an isolated snapshot after rechecking those owners and their existing APIs, then integrated into the main checkout after the concurrent work was committed. The integration retains the current affine Inspector controls, model import identity/reuse, material previews, surviving-owner deletion warnings and nonmodal Preferences input routing. Later steps must recheck the actual resource/editor owners and APIs they start from.
 
-The current scene writer produces version 2 with environment entities; its reader accepts versions 1 and 2. Extend that actual versioned path for particle/collider components and retain older inputs. Do not implement particle persistence against the guide's historical version-1 shape or assume old synchronous asset preparation remains authoritative.
+The planning baseline wrote scene version 2 and read versions 1 and 2. Step 1 adds typed particle references in version 3 and continues reading versions 1 and 2. Extend that actual versioned path for later collider/components and retain older inputs. Do not implement later persistence against the guide's historical version-1 shape or assume old synchronous model/image preparation remains authoritative.
 
 `SceneDocument::documentGeneration()` changes on document replacement. `Scene::generation()` also changes during ordinary registry rebuilding. Own scene particle instances by document generation plus persistent entity ID, and reconcile changed values. Resetting on every registry generation would restart effects during Inspector edits and gizmo motion. The same rule prevents unrelated collider recooking.
 
@@ -203,7 +216,7 @@ CPU simulation does not imply CPU-expanded sprite geometry. Use shared static qu
 
 Draw opaque/cutout mesh particles with scene depth writes. Transparent particles depth-test against opaque geometry without writing depth. Sort their visible presentation packets back to front across emitters and renderer types, with stable ties. Alpha and additive packets interleave when foreground smoke must cover emission. Batch only consecutive compatible packets; regrouping by emitter or texture must not destroy ordering. Center/segment sorting cannot perfectly order crossing meshes or strips; record that limit.
 
-Keep the sequence **linear HDR scene/particles -> exposure/Reinhard -> neutral grid -> sRGB viewport -> ImGui**. The current `fs_present.sc` uses a binary alpha threshold for empty background, which would hide low-alpha and additive effects. Step 1 must correct that integration, not defer it as polish.
+Keep the sequence **linear HDR scene/particles -> exposure/Reinhard -> neutral grid -> sRGB viewport -> ImGui**. The planning baseline's `fs_present.sc` used a binary alpha threshold for empty background, which would hide low-alpha and additive effects. Step 1 replaces it with continuous coverage and the following additive resolve; later rendering features must preserve that integration.
 
 Use unexposed premultiplied color `C` and continuous covered fraction `c` in a validated, blend-capable `RGBA32F` target. Clear both to zero; opaque/cutout writes coverage one. Keep `RGBA16F` for the tone-mapped linear display/grid target. For source radiance `L` and final opacity `a`:
 
@@ -274,6 +287,8 @@ All handoffs include relevant CPU/persistence checks, one integration build afte
 
 ### Step 1: Complete gravity-effect workflow
 
+Implemented baseline: native version-1 effect assets, independent effect documents/history, one constant point emitter, procedural unlit additive sprites, world-space 60 Hz CPU playback, isolated preview in a floating multi-viewport editor, scene placement/markers/live focus bounds, scene version-3 persistence (with version-1/2 reading), and typed reference/deletion handling. Ordinary edits apply in place by the stage policy in Section 2.4. The retained seed has no random influence until variation lands. Current limits are 65,536 configured particles per emitter, 256 scene instances, 262,144 aggregate configured scene slots (plus at most one 65,536-slot transactional restart/capacity replacement reservation and separate reusable presentation buffers), eight catch-up ticks per frame, and 65,536 rendering packets per view plus available GPU transient capacity. Diagnostics report omitted work and particles cleared by capacity changes. The application suspends simulation when all editor windows lose focus or none can draw, and skips elapsed suspension time on resume. Close the effect document before deleting that asset through the global deletion transaction. These are implementation limits and workflow behavior, not measured performance guarantees. The acceptance exercise below remains for the user.
+
 **Goal:** a small, complete particle authoring feature, usable without any later step.
 
 Implementation actions:
@@ -285,7 +300,7 @@ Implementation actions:
 - Add typed scene references, placement, an emitter marker/bounds for selection/focus, transforms/hierarchy participation, duplicate/delete/undo, scene save/reopen, automatic start, and selected **Play Effect**.
 - Add scene -> effect reference handling and document-generation reconciliation. Do not include external textures, shape libraries, curves, multiple emitters, seeking, or Jolt.
 
-Acceptance: create the effect, change gravity and observe the fall, undo the edit, save/reopen, place two independently playing instances, save/reopen the scene, and duplicate/delete/undo an instance. Moving one instance and editing an unrelated entity preserve playback. Preview actions remain transient. Saving and failure paths retain prior files and working state. Opaque-only rendering, additive particles over empty space, exposure extremes, resize, and shutdown remain correct.
+Acceptance: create the effect, change gravity and observe the fall, undo the edit, save/reopen, place two independently playing instances, save/reopen the scene, and duplicate/delete/undo an instance. Moving one instance and editing an unrelated entity preserve playback. Change color/size while paused and confirm immediate appearance changes with unchanged time/live identities. Resume and confirm gravity changes affect live motion without restart; verify velocity/lifetime changes only affect later births. Capacity replacement clears live particles while retaining time and Pause/Play state. Drag the floating editor onto another monitor, navigate its preview without moving the scene camera, and close it through the normal dirty-document flow. Preview actions remain transient. Saving and failure paths retain prior files and working state. Opaque-only rendering, additive particles over empty space, exposure extremes, resize, and shutdown remain correct.
 
 Focused checks: seeded restart, emission/lifetime integration, fractional birth time, compaction identity, bounded capacity/catch-up, asset round-trip/failure, scene round-trip/history, and resolve equations. This step's broad integration serves one deliberately small emitter, not the whole particle system.
 
@@ -425,6 +440,10 @@ The following primary projects, original articles, conference slides, and papers
 
 Evidence: contiguous particle records, initialization/update separation, fixed-FPS remainder, seeded restart, and fractional birth integration. Adopt those timing/storage lessons. Crimson adds stable spawn identity under compaction and explicit presentation interpolation. Godot's CPU implementation is hard-coded, not a reorderable module system; its synchronous preprocessing is not the bounded preview replay chosen here. The [process-material generator](https://github.com/godotengine/godot/blob/4.5.2-stable/scene/resources/particle_process_material.cpp) generates GPU shaders and must not be cited as CPU feature parity.
 
+Follow-up inspection on 14 October 2026 used the user's local `godot-master` checkout at `C:\Users\Drako\Desktop\_QUADER_DEV\resources\_SOURCE_CODE\godot-master`, identified by `version.py` as 4.7 beta. In `scene/3d/cpu_particles_3d.cpp`, ordinary color/parameter/gravity/seed setters assign values without calling `restart()`. Color and scale are reevaluated for live records; gravity enters the next update, while initial speed/direction/spawn shape initialize births. `set_amount()` reallocates and marks particles inactive without resetting time/cycle/remainder; explicit `restart()` clears those scheduling values. The editor's Restart Emission command calls restart explicitly rather than restarting every Inspector property change. Godot CPU gravity is integrated directly and does not use a physics server or Jolt. These are verified CPU behaviors, not claims about its GPU backend.
+
+Crimson adapts that behavior to its separate particles/s emission rate: lifetime is cached at birth and affects only new particles, whereas Godot also uses emitter lifetime in its global cycle scheduling. Color/size/intensity extraction, transactional immutable revisions, stable IDs under compaction, preserved paused/stopped state and cleared-capacity counters are Crimson choices. The local inspection supports the stage policy in Section 2.4; it does not establish feature parity or a shared backend.
+
 ### R2. The project's pinned bgfx CPU example
 
 [Particle helper](https://github.com/bkaradzic/bgfx/blob/7a70927d2af7ffcc5cef9c9e8f4c821e31fcb099/examples/common/ps/particle_system.cpp) and [example 32](https://github.com/bkaradzic/bgfx/blob/7a70927d2af7ffcc5cef9c9e8f4c821e31fcb099/examples/32-particles/particles.cpp), at bgfx commit `7a70927d2af7ffcc5cef9c9e8f4c821e31fcb099`. This is the inspected upstream snapshot of installed `1.129.8940-496#1`; the [wrapper release](https://github.com/bkaradzic/bgfx.cmake/releases/tag/v1.129.8940-496) dates to 24 November 2025.
@@ -531,7 +550,7 @@ User acceptance performs the short authoring exercise at each handoff. Report ac
 
 ### Known limits and assumptions
 
-- This is the agreed particle roadmap, not a change to the engine's current Next milestone or evidence that particles are implemented.
+- Step 1 is implemented with user acceptance pending; the remainder is the agreed particle roadmap. Neither changes the engine's current Next milestone.
 - CPU simulation is the first backend; GPU simulation is planned separately after profiling.
 - Seeded replay assumes fixed definitions/inputs within the same implementation; it cannot reconstruct arbitrary edited scene history.
 - Primitive/segment transparency sorting remains approximate for crossing meshes and strips.

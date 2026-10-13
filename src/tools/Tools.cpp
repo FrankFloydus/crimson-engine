@@ -316,7 +316,8 @@ EditorFrame drawEditor(SceneSettings& settings, Renderer& renderer, AssetLibrary
     if (ImGui::Begin("Viewport", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
         const ImVec2 available = ImGui::GetContentRegionAvail();
         if (available.x >= 1.0f && available.y >= 1.0f) {
-            const ImVec2 scale = ImGui::GetIO().DisplayFramebufferScale;
+            const auto* host=ImGui::GetWindowViewport();
+            const ImVec2 scale = host->FramebufferScale;
             const auto width = static_cast<uint32_t>(std::max(1.0f, std::round(available.x * scale.x)));
             const auto height = static_cast<uint32_t>(std::max(1.0f, std::round(available.y * scale.y)));
             renderer.resizeViewport(width, height);
@@ -325,6 +326,7 @@ EditorFrame drawEditor(SceneSettings& settings, Renderer& renderer, AssetLibrary
             ImGui::Image(ImTextureRef(ImGuiBgfx::textureId(texture)), available);
             frame.viewport = {position.x, position.y, available.x, available.y, ImGui::IsItemHovered(),
                 ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup) || ImGui::GetDragDropPayload() != nullptr};
+            frame.viewport.windowId=static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(host->PlatformHandle));
             if (ImGui::BeginDragDropTarget()) {
                 if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(ModelPayload)) {
                     if (payload->DataSize > 0) {

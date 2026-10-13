@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <memory>
 #include <stdexcept>
+#include <cstdint>
 namespace crimson {
 namespace {
 class SdlLifetime {
@@ -32,7 +33,9 @@ public:
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         auto& io = ImGui::GetIO();
-        io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+        io.ConfigFlags |= ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_ViewportsEnable;
+        io.ConfigDpiScaleFonts=true;
+        io.ConfigDpiScaleViewports=true;
         const auto ini = (root / "crimson_ui.ini").u8string();
         iniFilename_.assign(reinterpret_cast<const char*>(ini.data()), ini.size());
         io.IniFilename = iniFilename_.c_str();
@@ -48,6 +51,24 @@ public:
 private:
     std::string iniFilename_;
 };
+
+SDL_Window* platformWindow(const ImGuiViewport* viewport) {
+    return viewport?SDL_GetWindowFromID(static_cast<SDL_WindowID>(reinterpret_cast<std::uintptr_t>(viewport->PlatformHandle))):nullptr;
+}
+bool editorHasFocus(SDL_Window* mainWindow) {
+    auto* focused=SDL_GetKeyboardFocus();
+    if(!focused)return false;
+    if(focused==mainWindow)return true;
+    return ImGui::FindViewportByPlatformHandle(reinterpret_cast<void*>(static_cast<std::uintptr_t>(SDL_GetWindowID(focused))))!=nullptr;
+}
+bool secondaryWindowDrawable() {
+    const auto& viewports=ImGui::GetPlatformIO().Viewports;
+    for(int index=1;index<viewports.Size;++index)if(auto* window=platformWindow(viewports[index])) {
+        const auto flags=SDL_GetWindowFlags(window);int width{},height{};
+        if(!(flags&(SDL_WINDOW_MINIMIZED|SDL_WINDOW_HIDDEN)) && SDL_GetWindowSizeInPixels(window,&width,&height) && width>0 && height>0)return true;
+    }
+    return false;
+}
 
 }
 int run(const AppOptions& options) {
@@ -75,10 +96,11 @@ int run(const AppOptions& options) {
         ResourceManager resources;
         Renderer renderer(window.get(), &diagnostics);
         ImGuiLifetime imgui(window.get(), root);
-        ImGuiBgfx toolsRenderer;
+        ImGuiBgfx toolsRenderer([&diagnostics](const std::string& message){diagnostics.log(message);});
         const bool diagnosticMode = options.scenario != "default" || options.editorSmoke || options.iblSmoke || options.modelSmoke;
         AssetLibrary assets(root,diagnosticMode?nullptr:&resources);
         Navigation navigation(window.get());
+        navigation.setDesktopCoordinates((ImGui::GetIO().ConfigFlags&ImGuiConfigFlags_ViewportsEnable)!=0);
         applyToolsStyle();
         std::unique_ptr<ResourceRuntime> resourceRuntime;
         if(!diagnosticMode)resourceRuntime=std::make_unique<ResourceRuntime>(root,resources,assets,renderer,toolsRenderer);
@@ -91,14 +113,18 @@ int run(const AppOptions& options) {
         uint64_t cycleRestoreTime=0;
         while (running && (!options.frameLimit || frame < options.frameLimit)) {
             SDL_Event event;
+            bool focusLossEvent=false;
             while (SDL_PollEvent(&event)) {
                 ImGui_ImplSDL3_ProcessEvent(&event);
                 navigation.handleEvent(event);
                 if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_HIDDEN) {
-                    if (editor) editor->cancelInteraction(renderer);
+                    focusLossEvent=true;
                 }
-                if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) pendingQuit=true;
+                if (event.type == SDL_EVENT_QUIT || (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
+                    event.window.windowID==SDL_GetWindowID(window.get()))) pendingQuit=true;
             }
+            const bool focused=editorHasFocus(window.get());
+            if(editor && focusLossEvent && !focused)editor->cancelInteraction(renderer);
             if (pendingQuit && diagnosticMode) break;
             if (options.windowCycle && frame == 10 && !cycleMinimized) {
                 SDL_MinimizeWindow(window.get());
@@ -115,17 +141,25 @@ int run(const AppOptions& options) {
             if (options.resizeWidth && frame == 10) {
                 SDL_SetWindowSize(window.get(), static_cast<int>(options.resizeWidth), static_cast<int>(options.resizeHeight));
             }
+            // Exit may need the scene/effect dirty-document dialogs. Restore
+            // the host instead of leaving the request behind a minimized loop.
+            if (pendingQuit && editor && (SDL_GetWindowFlags(window.get()) & SDL_WINDOW_MINIMIZED))
+                SDL_RestoreWindow(window.get());
             int pixelWidth = 0, pixelHeight = 0;
             SDL_GetWindowSizeInPixels(window.get(), &pixelWidth, &pixelHeight);
             const bool minimized = (SDL_GetWindowFlags(window.get()) & SDL_WINDOW_MINIMIZED) != 0;
-            if (minimized || pixelWidth <= 0 || pixelHeight <= 0) {
+            const bool mainDrawable=!minimized && pixelWidth>0 && pixelHeight>0;
+            const bool anyDrawable=mainDrawable || secondaryWindowDrawable();
+            if(editor)editor->setSimulationSuspended(!anyDrawable || !focused);
+            if (!anyDrawable) {
                 SDL_Delay(16);
                 continue;
             }
-            renderer.resize(static_cast<uint32_t>(pixelWidth), static_cast<uint32_t>(pixelHeight));
+            renderer.resize(mainDrawable?static_cast<uint32_t>(pixelWidth):0,mainDrawable?static_cast<uint32_t>(pixelHeight):0);
             if(resourceRuntime)resourceRuntime->preFrame(editor.get(),bgfxFrame);
             else assets.processImports();
 
+            toolsRenderer.newFrame(bgfxFrame);
             ImGui_ImplSDL3_NewFrame();
             ImGui::NewFrame();
             if (editor) {
@@ -136,10 +170,14 @@ int run(const AppOptions& options) {
             ImGui::Render();
             bgfx::setViewClear(ToolsView,BGFX_CLEAR_COLOR,0x202020ff);
             toolsRenderer.render(ImGui::GetDrawData());
+            ImGui::UpdatePlatformWindows();
+            ImGui::RenderPlatformWindowsDefault();
             if (!captureRequested && !options.capture.empty() && frame+5 >= options.frameLimit) {
                 bgfx::requestScreenShot(BGFX_INVALID_HANDLE,options.capture.c_str()); captureRequested=true;
             }
             bgfxFrame=bgfx::frame();
+            const bool nativeSynchronized=toolsRenderer.postFrame(bgfxFrame,!mainDrawable);
+            if(!mainDrawable && !nativeSynchronized)SDL_Delay(16);
             ++frame;
         }
         if(resourceRuntime)resourceRuntime->stop();else resources.stop();
@@ -147,6 +185,11 @@ int run(const AppOptions& options) {
         // Let asynchronous screenshot requests and resource destruction finish before shutdown.
         if (captureRequested) {
             for (int flush = 0; flush < 8 && !diagnostics.captureSucceeded() && !diagnostics.captureFailed(); ++flush) bgfx::frame();
+        }
+        toolsRenderer.shutdown();
+        for (unsigned drain=0;drain<8 && toolsRenderer.hasPendingRetirements();++drain) {
+            bgfxFrame=bgfx::frame();
+            toolsRenderer.postFrame(bgfxFrame);
         }
         diagnostics.log("Rendered " + std::to_string(frame) + " frames at " + std::to_string(renderer.width()) +
                         "x" + std::to_string(renderer.height()) + ".");

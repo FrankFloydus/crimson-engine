@@ -9,18 +9,20 @@
 #include <unordered_map>
 
 namespace crimson {
+class ParticleEditor;
 struct PanelVisibility { bool outliner{true}, inspector{true}, assetBrowser{true}; };
 // Authoring UI and document transitions. It does not own GPU resources or the world.
 class SceneEditor {
 public:
     EditorFrame draw(SceneDocument&, SceneSettings&, AssetLibrary&, Renderer&, SDL_Window*,
-                     bool navigationActive, uint32_t bgfxFrame, bool quitRequested);
+                     bool navigationActive, uint32_t bgfxFrame, bool quitRequested, ParticleEditor&);
     void cancelInteraction(SceneDocument&, Renderer&);
     bool exitAccepted() const { return exitAccepted_; }
     const ViewportAppearance& appearance() const { return preferences_.values().appearance; }
     const PanelVisibility& panels() const { return panels_; }
     void setPanels(const PanelVisibility& panels) { panels_=panels; }
     void notifyExternalSceneChange(SceneSnapshot snapshot) { externalScene_=std::move(snapshot); }
+    void setParticleBoundsQuery(ParticleBoundsQuery query) { viewport_.setParticleBoundsQuery(std::move(query)); }
 private:
     enum class Pending { None, New, Open, Exit };
     SceneViewport viewport_;
@@ -40,6 +42,7 @@ private:
     uint64_t openingGeneration_{},openingRevision_{};
     std::array<char,256> sceneName_{};
     bool dirtyPopup_{}, savePopup_{}, deletePopup_{}, saveConflictPopup_{}, externalPopup_{}, openingPopup_{}, saveAs_{}, continueAfterSave_{}, exitAccepted_{}, documentReplaced_{};
+    bool particleCommandTarget_{};
     void cancelOpen();
     void pumpOpen(SceneDocument&,Renderer&);
     void request(Pending, const std::string&, SceneDocument&, Camera&, Renderer&);

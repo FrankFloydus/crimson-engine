@@ -25,6 +25,8 @@ ExtractedScene extractScene(const Scene& scene) {
         if (!world) continue;
         if (const auto* model = registry.try_get<ModelReference>(entity))
             result.models.push_back({id,model->assetId.id,*world});
+        if (const auto* particle = registry.try_get<ParticleReference>(entity))
+            result.particles.push_back({id,particle->assetId.id,*world});
         if (const auto* light = registry.try_get<SceneDirectionalLight>(entity)) {
             result.directional.push_back({directionalLightDirection(*world),light->color,light->intensity,light->enabled});
         }
@@ -37,7 +39,7 @@ ExtractedScene extractScene(const Scene& scene) {
 }
 
 Aabb selectionBounds(const Scene& scene, std::span<const EntityId> selection,
-                     const ModelBoundsQuery& modelBounds) {
+                     const ModelBoundsQuery& modelBounds,const ParticleBoundsQuery& particleBounds) {
     Aabb result;
     const std::vector<EntityId> selected(selection.begin(),selection.end());
     for (auto root : scene.topmost(selected)) {
@@ -51,6 +53,11 @@ Aabb selectionBounds(const Scene& scene, std::span<const EntityId> selection,
                     const auto bounds = math::transformBounds(*local,*world);
                     math::include(result,bounds);
                     hasBounds = bounds.valid;
+                }
+            }
+            if (record->particle && particleBounds) {
+                if (const auto bounds=particleBounds(id);bounds && bounds->valid && math::finite(bounds->minimum) && math::finite(bounds->maximum)) {
+                    math::include(result,*bounds);hasBounds=true;
                 }
             }
             if (!hasBounds || record->directional || record->point) {

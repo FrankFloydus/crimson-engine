@@ -107,6 +107,7 @@ public:
     uint64_t loadedFingerprint() const { return loadedFingerprint_; }
     uint64_t documentGeneration() const { return documentGeneration_; }
     std::vector<std::string> historicalModelReferences() const;
+    std::vector<std::string> historicalParticleReferences() const;
     // Global resource deletion is outside scene undo. Install its complete
     // validated candidate and remove history that could resurrect deleted IDs.
     bool applyExternalAssetChanges(const std::vector<EntityRecord>& records, const SceneProperties& properties,
@@ -125,6 +126,7 @@ public:
     bool redo();
     EntityId createEmpty(const std::string& name = "Entity");
     EntityId createModel(const std::string& assetId, const std::string& name, const Mat4& local = Mat4{});
+    EntityId createParticle(const std::string& assetId, const std::string& name = "Particle Effect", const Mat4& local = Mat4{});
     std::vector<EntityId> createModels(const std::vector<ModelPlacement>& models);
     EntityId createDirectionalLight(const std::string& name = "Directional Light");
     EntityId createPointLight(const std::string& name = "Point Light");

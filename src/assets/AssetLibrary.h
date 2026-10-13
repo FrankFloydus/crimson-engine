@@ -4,6 +4,7 @@
 #include "ModelAsset.h"
 #include "BrowserCatalog.h"
 #include "MaterialAsset.h"
+#include "ParticleAsset.h"
 #include "AssetReferenceManager.h"
 #include "resources/ResourceManager.h"
 #include "resources/Paths.h"
@@ -45,6 +46,13 @@ public:
     const TextureAsset* find(const std::string& id) const;
     std::shared_ptr<const ModelAsset> findModel(const std::string& id) const;
     std::shared_ptr<const MaterialAsset> findMaterial(const std::string& id) const;
+    const std::filesystem::path& projectRoot() const { return projectRoot_; }
+    std::shared_ptr<const ParticleEffectAsset> findParticle(const std::string& id) const;
+    std::uint64_t particleRevision(const std::string& id) const;
+    std::string particleDiagnostic(const std::string& id) const;
+    void publishParticle(std::shared_ptr<const ParticleEffectAsset>);
+    void refreshParticles();
+    void protectParticleDocument(std::string id) { particleDocumentId_=std::move(id); }
     ResourceManager* resources() const { return resources_; }
     std::uint64_t modelRevision(const std::string& id) const;
     std::uint64_t modelFingerprint(const std::string& id) const;
@@ -107,6 +115,10 @@ private:
     struct ImportQueue;
     std::shared_ptr<ImportQueue> imports_;
     std::filesystem::path projectRoot_;
+    struct ParticleVersion { std::shared_ptr<const ParticleEffectAsset> definition;std::uint64_t revision{};std::string diagnostic; };
+    std::unordered_map<std::string,ParticleVersion> particles_;
+    std::uint64_t nextParticleRevision_{1};
+    std::string particleDocumentId_;
     ResourceManager* resources_{};
     std::unique_ptr<AsyncImports> asyncImports_;
     std::unique_ptr<TextureStreamer> textureStreamer_;

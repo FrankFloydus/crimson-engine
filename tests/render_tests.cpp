@@ -1,7 +1,9 @@
 #include "crimson-renderer/Mesh.h"
 #include "crimson-renderer/RenderTypes.h"
 #include "crimson-renderer/ModelTransform.h"
+#include "crimson-renderer/ParticleRenderTypes.h"
 #include "input/Navigation.h"
+#include <SDL3/SDL_init.h>
 
 #include <cmath>
 #include <algorithm>
@@ -11,6 +13,7 @@
 #include <initializer_list>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <numbers>
 #include <stdexcept>
 #include <string>
@@ -206,10 +209,11 @@ void cameraNonfiniteInput() {
     camera.flyLook(1,1); const auto f = camera.forward(); require(std::isfinite(f[0]) && std::isfinite(f[1]) && std::isfinite(f[2]),"Camera did not repair its invalid basis"); near(length(f[0],f[1],f[2]),1);
 }
 
-SDL_Event button(uint32_t type,uint8_t which,float x,float y) { SDL_Event e{}; e.type=type; e.button.button=which; e.button.x=x; e.button.y=y; return e; }
-SDL_Event motion(float x,float y,float dx=0,float dy=0) { SDL_Event e{}; e.type=SDL_EVENT_MOUSE_MOTION; e.motion.x=x; e.motion.y=y; e.motion.xrel=dx; e.motion.yrel=dy; return e; }
-SDL_Event key(uint32_t type,SDL_Scancode code) { SDL_Event e{}; e.type=type; e.key.scancode=code; return e; }
-SDL_Event wheel(float steps) { SDL_Event e{}; e.type=SDL_EVENT_MOUSE_WHEEL; e.wheel.y=steps; return e; }
+SDL_Event button(uint32_t type,uint8_t which,float x,float y,SDL_WindowID windowId=0) { SDL_Event e{}; e.type=type; e.button.windowID=windowId; e.button.button=which; e.button.x=x; e.button.y=y; return e; }
+SDL_Event motion(float x,float y,float dx=0,float dy=0,SDL_WindowID windowId=0) { SDL_Event e{}; e.type=SDL_EVENT_MOUSE_MOTION; e.motion.windowID=windowId; e.motion.x=x; e.motion.y=y; e.motion.xrel=dx; e.motion.yrel=dy; return e; }
+SDL_Event key(uint32_t type,SDL_Scancode code,SDL_WindowID windowId=0) { SDL_Event e{}; e.type=type; e.key.windowID=windowId; e.key.scancode=code; return e; }
+SDL_Event wheel(float steps,SDL_WindowID windowId=0) { SDL_Event e{}; e.type=SDL_EVENT_MOUSE_WHEEL; e.wheel.windowID=windowId; e.wheel.y=steps; return e; }
+SDL_Event windowEvent(uint32_t type,SDL_WindowID windowId) { SDL_Event e{}; e.type=type; e.window.windowID=windowId; return e; }
 crimson::ViewportRegion viewport() { return {0,0,800,600,true,false}; }
 void same(const crimson::Vec3& a,const crimson::Vec3& b) { for (size_t i=0;i<3;++i) near(a[i],b[i]); }
 
@@ -219,6 +223,13 @@ void navigationOwnershipAndAnchor() {
     nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_DOWN,SDL_BUTTON_MIDDLE,400,300)); nav.update(camera,region,.1f); require(!nav.active(),"Blocked UI acquired navigation"); same(camera.eye(),initial.eye());
     region.inputBlocked=false;
     nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_DOWN,SDL_BUTTON_MIDDLE,900,300)); nav.update(camera,region,.1f); require(!nav.active(),"Outside-image press acquired navigation");
+    region.hovered=false;
+    for (const auto mouseButton : std::array<std::uint8_t,2>{SDL_BUTTON_MIDDLE,SDL_BUTTON_RIGHT}) {
+        nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_DOWN,mouseButton,400,300)); nav.update(camera,region,.1f);
+        require(!nav.active(),"Occluded viewport acquired navigation from a geometric hit.");
+        same(camera.eye(),initial.eye()); same(camera.target,initial.target);
+    }
+    region.hovered=true;
     nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_DOWN,SDL_BUTTON_MIDDLE,400,300)); nav.update(camera,region,.1f); require(nav.active(),"Viewport press failed to acquire orbit"); same(camera.eye(),initial.eye()); same(camera.target,initial.target);
     nav.handleEvent(motion(410,300)); nav.update(camera,region,.01f); near(camera.distance(),4,1e-4); require(camera.position[0] < 0,"Sphere anchor was not used on the first orbit motion");
     region.hovered=false; nav.handleEvent(motion(850,300)); nav.update(camera,region,.01f); require(nav.active(),"Leaving viewport ended an owned gesture");
@@ -298,6 +309,101 @@ void collapsedModelTransforms() {
         "A non-affine imported transform was accepted.");
 }
 
+void navigationForeignWindowEvents() {
+    crimson::Camera camera; crimson::Navigation nav(nullptr); auto region=viewport(); const auto initial=camera;
+    constexpr SDL_WindowID foreign=17;
+    nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_DOWN,SDL_BUTTON_MIDDLE,400,300,foreign));
+    nav.handleEvent(wheel(2,foreign)); nav.update(camera,region,.1f,false);
+    require(!nav.active(),"Another native window acquired scene navigation."); same(camera.eye(),initial.eye());
+    nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_DOWN,SDL_BUTTON_RIGHT,400,300)); nav.update(camera,region,.1f,false);
+    require(nav.flying(),"Windowless own event failed to acquire navigation.");
+    nav.handleEvent(key(SDL_EVENT_KEY_DOWN,SDL_SCANCODE_W,foreign));
+    nav.handleEvent(key(SDL_EVENT_KEY_DOWN,SDL_SCANCODE_ESCAPE,foreign));
+    nav.handleEvent(motion(600,500,200,200,foreign)); nav.handleEvent(wheel(30,foreign));
+    nav.handleEvent(windowEvent(SDL_EVENT_WINDOW_FOCUS_LOST,foreign));
+    nav.handleEvent(windowEvent(SDL_EVENT_WINDOW_HIDDEN,foreign)); nav.update(camera,region,.1f,false);
+    require(nav.flying(),"Another native window canceled an owned gesture.");
+    same(camera.eye(),initial.eye()); same(camera.target,initial.target); near(nav.flySpeed(),25);
+    nav.handleEvent(key(SDL_EVENT_KEY_DOWN,SDL_SCANCODE_W)); nav.update(camera,region,.1f,false);
+    const auto moved=camera.eye(); near(crimson::math::length(crimson::math::subtract(moved,initial.eye())),2.5,1e-4);
+    nav.handleEvent(key(SDL_EVENT_KEY_UP,SDL_SCANCODE_W,foreign));
+    nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_UP,SDL_BUTTON_RIGHT,400,300,foreign)); nav.update(camera,region,.1f,false);
+    require(nav.flying(),"Another native window released an owned mouse button.");
+    near(crimson::math::length(crimson::math::subtract(camera.eye(),moved)),2.5,1e-4);
+    nav.handleEvent(key(SDL_EVENT_KEY_UP,SDL_SCANCODE_W));
+    nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_UP,SDL_BUTTON_RIGHT,400,300)); nav.update(camera,region,0,false);
+    require(!nav.active(),"Own release failed after foreign events.");
+    nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_DOWN,SDL_BUTTON_MIDDLE,400,300)); nav.update(camera,region,0,false);
+    require(nav.active(),"Own orbit failed after foreign events."); nav.setDesktopCoordinates(true);
+    require(!nav.active(),"Coordinate-space switch retained an old gesture.");
+}
+
+void navigationDesktopCoordinatesAndWindowLifetime() {
+    require(SDL_InitSubSystem(SDL_INIT_VIDEO),"Hidden-window navigation check could not initialize SDL video.");
+    struct VideoLifetime { ~VideoLifetime() { SDL_QuitSubSystem(SDL_INIT_VIDEO); } } video;
+    using Window=std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)>;
+    Window main(SDL_CreateWindow("Navigation hidden owner",800,600,SDL_WINDOW_HIDDEN),&SDL_DestroyWindow);
+    Window peer(SDL_CreateWindow("Navigation hidden peer",800,600,SDL_WINDOW_HIDDEN),&SDL_DestroyWindow);
+    require(main && peer,"Hidden-window navigation check could not create SDL windows.");
+    require(SDL_SetWindowPosition(main.get(),1200,900),"Hidden owner position could not be set.");
+    require(SDL_SetWindowPosition(peer.get(),-1200,-900),"Hidden peer position could not be set.");
+    int mainX{},mainY{},peerX{},peerY{};
+    require(SDL_GetWindowPosition(main.get(),&mainX,&mainY) && SDL_GetWindowPosition(peer.get(),&peerX,&peerY),"Hidden window positions could not be read.");
+    const auto mainId=SDL_GetWindowID(main.get()),peerId=SDL_GetWindowID(peer.get());
+    crimson::Camera camera; crimson::Navigation nav(main.get()); nav.setDesktopCoordinates(true);
+    auto region=viewport(); region.x=static_cast<float>(mainX); region.y=static_cast<float>(mainY); region.windowId=mainId;
+    // Local (20,20) must hit the image at its desktop origin, including negative origins.
+    nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_DOWN,SDL_BUTTON_MIDDLE,20,20,mainId)); nav.update(camera,region,0,false);
+    require(nav.active(),"SDL window-local press missed a desktop-space viewport.");
+    nav.handleEvent(motion(40,30,20,10,mainId)); nav.update(camera,region,0,false); const auto moved=camera;
+    nav.handleEvent(windowEvent(SDL_EVENT_WINDOW_FOCUS_LOST,peerId));
+    nav.handleEvent(motion(300,300,200,200,peerId)); nav.update(camera,region,0,false);
+    require(nav.active(),"Peer focus change canceled native owner navigation."); same(camera.eye(),moved.eye()); same(camera.target,moved.target);
+    region.x=static_cast<float>(peerX); region.y=static_cast<float>(peerY); region.windowId=peerId;
+    nav.update(camera,region,0,false); require(!nav.active(),"Viewport window switch retained an old gesture.");
+    nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_DOWN,SDL_BUTTON_MIDDLE,20,20,peerId)); nav.update(camera,region,0,false);
+    require(nav.active(),"Navigation failed to acquire the replacement desktop viewport.");
+    peer.reset(); nav.update(camera,region,0,false);
+    require(!nav.active(),"Destroyed SDL viewport retained capture ownership."); same(camera.eye(),moved.eye());
+}
+
+void particlePresentationValidation() {
+    crimson::RenderParticle particle;
+    require(crimson::particle_rendering::valid(particle),"Starter particle should be renderable.");
+    particle.color={crimson::MaxParticleRadiance,1,0,.25f};
+    require(crimson::particle_rendering::valid(particle),"HDR radiance is independent of opacity.");
+    particle.color[0]=std::numeric_limits<float>::infinity();
+    require(!crimson::particle_rendering::valid(particle),"Nonfinite particle radiance must be rejected before upload.");
+    particle.color={1,1,1,1}; particle.position[1]=std::numeric_limits<float>::quiet_NaN();
+    require(!crimson::particle_rendering::valid(particle),"Nonfinite particle position must be rejected before upload.");
+    particle.position={0,0,0}; particle.size=0;
+    require(!crimson::particle_rendering::valid(particle),"Zero-width particle should be rejected.");
+    particle.size=.08f; particle.color[3]=2;
+    require(!crimson::particle_rendering::valid(particle),"Opacity outside the covered-fraction contract should be rejected.");
+}
+
+void particleHdrResolveContract() {
+    const auto resolve=[](double radiance,double coverage,double exposure,double matte) {
+        return 1-1/(1+std::max(0.0,radiance)*exposure+(1-std::clamp(coverage,0.0,1.0))*matte);
+    };
+    const auto encode=[](double linear) { return linear<=.0031308 ? linear*12.92 : 1.055*std::pow(linear,1/2.4)-.055; };
+    for (const float background:{0.f,21.f/255,.5f,.999f,1.f}) {
+        const auto matte=crimson::particle_rendering::backgroundRadiance({background,background,background});
+        require(crimson::math::finite(matte),"Editor background inverse tone map must remain finite at white.");
+        for (const auto exposure:{0.,1.,100.}) {
+            const auto empty=resolve(0,0,exposure,matte[0]);
+            near(encode(empty),background,2e-6);
+            near(resolve(3,1,exposure,matte[0]),3*exposure/(1+3*exposure),1e-8);
+        }
+        const auto uncovered=resolve(0,0,1,matte[0]);
+        require(resolve(.25,0,1,matte[0])>uncovered,"Additive emission must remain visible over uncovered background.");
+        near(resolve(.25,0,0,matte[0]),uncovered,1e-8);
+        const double overlap=double(crimson::MaxParticleRadiance)*crimson::MaxParticleDrawCount;
+        const auto bright=resolve(overlap,0,100,matte[0]);
+        require(std::isfinite(bright) && bright>=0 && bright<=1,"Supported additive overlap must resolve to finite display color.");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -321,9 +427,13 @@ int main() {
     run("navigation latched pan and same-frame pointer edges", navigationPanAndShortEdges);
     run("navigation fly speed, relative start and keyboard gating", navigationFlySpeedAndMovement);
     run("navigation cancellation precedes motion and wheel is viewport-scoped", navigationCancellationAndWheel);
+    run("navigation ignores foreign native window input and cancellation", navigationForeignWindowEvents);
+    run("navigation translates desktop coordinates and releases destroyed window ownership", navigationDesktopCoordinatesAndWindowLifetime);
     run("model framing preserves bounds and navigation ignores hidden sphere", modelPreviewFramingAndNavigation);
     run("collapsed model transforms are legal and recover without invalid-data diagnostics", collapsedModelTransforms);
+    run("particle presentation rejects nonfinite and unsupported upload inputs", particlePresentationValidation);
+    run("particle HDR resolve preserves background and additive emission", particleHdrResolveContract);
     if (failures) std::cerr << failures << " renderer-core check(s) failed.\n";
-    else std::cout << "All 16 renderer-core checks passed.\n";
+    else std::cout << "All renderer-core checks passed.\n";
     return failures ? 1 : 0;
 }

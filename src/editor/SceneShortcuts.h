@@ -3,6 +3,7 @@
 namespace crimson {
 struct SceneShortcutContext {
     bool actionPending{}, preferencesKeyboard{}, navigationActive{}, transactionActive{}, modelDropPending{};
+    bool particleDocumentFocus{};
 };
 struct SceneShortcutRequests {
     bool toggleAssetBrowser{}, save{}, saveAs{}, undo{}, redo{}, duplicate{}, eraseSelection{}, focusSelection{};

@@ -128,13 +128,13 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
     const auto contents=readText(path);
     const Json json=Json::parse(contents);
     const auto version=json.at("version").get<int>();
-    if ((version!=1 && version!=2) || json.at("type") != "crimson-scene")
+    if ((version!=1 && version!=2 && version!=3) || json.at("type") != "crimson-scene")
         throw std::runtime_error("Unsupported scene file type or version.");
     SceneSnapshot result; result.fingerprint=fingerprint(contents);
     result.name = json.at("name").get<std::string>();
     if (result.name.empty() || result.name.size() > 1024) throw std::runtime_error("Scene name is invalid.");
     const auto& settings = json.at("settings");
-    if (version==2) result.properties.activeEnvironment=parseId(settings.at("activeEnvironment"));
+    if (version>=2) result.properties.activeEnvironment=parseId(settings.at("activeEnvironment"));
     const auto& entities = json.at("entities");
     if (!entities.is_array() || entities.size() > 100000) throw std::runtime_error("Invalid scene entity array.");
     result.records.reserve(entities.size());
@@ -151,7 +151,8 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
         if (entity.contains("model")) record.model=entity.at("model").get<AssetRef<ModelAsset>>();
         if (entity.contains("directional")) record.directional = readLight<SceneDirectionalLight>(entity.at("directional"));
         if (entity.contains("point")) record.point = readLight<ScenePointLight>(entity.at("point"));
-        if (version==2 && entity.contains("environment")) record.environment=readEnvironment(entity.at("environment"));
+        if (version>=2 && entity.contains("environment")) record.environment=readEnvironment(entity.at("environment"));
+        if (version>=3 && entity.contains("particle")) record.particle=entity.at("particle").get<AssetRef<ParticleEffectAsset>>();
         result.records.push_back(std::move(record));
     }
     if (version==1) {
@@ -182,12 +183,13 @@ Json writeScene(const SceneSnapshot& snapshot) {
         Json entity{{"id",hexId(record.id)}, {"name",record.name}, {"parent",hexId(record.parent)},
             {"order",record.order}, {"local",record.local}};
         if (record.model) entity["model"] = *record.model;
+        if (record.particle) entity["particle"] = *record.particle;
         if (record.directional) entity["directional"] = lightJson(*record.directional);
         if (record.point) entity["point"] = lightJson(*record.point);
         if (record.environment) entity["environment"]=environmentJson(*record.environment);
         entities.push_back(std::move(entity));
     }
-    Json result{{"version",2},{"type","crimson-scene"},{"name",snapshot.name},{"entities",std::move(entities)},
+    Json result{{"version",3},{"type","crimson-scene"},{"name",snapshot.name},{"entities",std::move(entities)},
         {"settings",{{"activeEnvironment",hexId(snapshot.properties.activeEnvironment)}}}};
     if (snapshot.previewCamera) {
         if (!validCamera(*snapshot.previewCamera)) throw std::runtime_error("Scene preview camera is invalid.");
@@ -363,6 +365,18 @@ bool SceneDocument::reloadFromDisk() {
     if (!load(id)) return false;
     selection_=selection; sanitizeSelection(); return true;
 }
+std::vector<std::string> SceneDocument::historicalParticleReferences() const {
+    std::unordered_set<std::string> references;
+    const auto add=[&](const EntityRecord& record) {
+        if (record.particle && !record.particle->empty()) references.insert(record.particle->id);
+    };
+    for (const auto& command:history_.commands_) for (const auto& change:command.entities) {
+        if (change.before) add(*change.before); if (change.after) add(*change.after);
+    }
+    if (transaction_) for (const auto& record:transaction_->before) add(record);
+    std::vector<std::string> result(references.begin(),references.end());
+    std::sort(result.begin(),result.end()); return result;
+}
 bool SceneDocument::applyReloadSnapshot(const SceneSnapshot& snapshot,bool preserveSelection) {
     return applyPreparedSnapshot(snapshot,preserveSelection,false);
 }
@@ -488,6 +502,10 @@ EntityId SceneDocument::createEmpty(const std::string& name) {
 EntityId SceneDocument::createModel(const std::string& assetId, const std::string& name, const Mat4& local) {
     EntityRecord record; record.name = name; record.model=AssetRef<ModelAsset>{assetId}; record.local = local;
     return create(std::move(record),"Place model");
+}
+EntityId SceneDocument::createParticle(const std::string& assetId, const std::string& name, const Mat4& local) {
+    EntityRecord record; record.name=name; record.particle=AssetRef<ParticleEffectAsset>{assetId}; record.local=local;
+    return create(std::move(record),"Place particle effect");
 }
 std::vector<EntityId> SceneDocument::createModels(const std::vector<ModelPlacement>& models) {
     if (models.empty() || !begin("Place models")) return {};
@@ -633,7 +651,7 @@ bool SceneDocument::ungroupSelection() {
     std::vector<EntityId> groups;
     for (const auto id : scene_.topmost(selection_.ids)) {
         const auto record=scene_.find(id);
-        if (record && !record->model && !record->directional && !record->point && !record->environment && !scene_.children(id).empty()) groups.push_back(id);
+        if (record && !record->model && !record->particle && !record->directional && !record->point && !record->environment && !scene_.children(id).empty()) groups.push_back(id);
     }
     if (groups.empty()) { status_="Select a group to ungroup."; return false; }
     struct ChildMove { EntityId id,parent; Mat4 local; };

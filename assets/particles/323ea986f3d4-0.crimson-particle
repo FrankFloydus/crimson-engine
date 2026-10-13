@@ -1,0 +1,37 @@
+{
+  "defaultSeed": "1",
+  "emitters": [
+    {
+      "capacity": 256,
+      "color": [
+        0.9803921580314636,
+        0.6239116191864014,
+        0.048058465123176575
+      ],
+      "colorSpace": "srgb",
+      "enabled": true,
+      "gravity": [
+        0.0,
+        -9.0,
+        0.0
+      ],
+      "id": "1",
+      "initialVelocity": [
+        0.0,
+        2.0,
+        0.0
+      ],
+      "intensity": 9.399999618530273,
+      "lifetime": 0.6299999952316284,
+      "name": "Emitter 1",
+      "rate": 8.0,
+      "renderer": "procedural-additive",
+      "size": 0.019999999552965164,
+      "space": "world"
+    }
+  ],
+  "id": "assets/particles/323ea986f3d4-0.crimson-particle",
+  "name": "New Particle Effect 2",
+  "type": "crimson-particle",
+  "version": 1
+}

@@ -11,11 +11,11 @@
 
 namespace crimson {
 namespace {
-Aabb boundsOf(const SceneDocument& document, const AssetLibrary& assets) {
+Aabb boundsOf(const SceneDocument& document, const AssetLibrary& assets,const ParticleBoundsQuery& particles) {
     return selectionBounds(document.scene(), document.selection().ids, [&](const std::string& id)->std::optional<Aabb> {
         const auto model = assets.findModel(id);
         return model ? std::optional<Aabb>{model->bounds} : std::nullopt;
-    });
+    },particles);
 }
 bool selected(const SceneDocument& document, EntityId id) {
     const auto& ids = document.selection().ids;
@@ -78,7 +78,7 @@ void SceneViewport::cancel(SceneDocument& document, Renderer& renderer) {
     pickIntent_=false;
 }
 void SceneViewport::focus(Camera& camera, const SceneDocument& document, const AssetLibrary& assets, float aspect) {
-    const auto bounds = boundsOf(document,assets);
+    const auto bounds = boundsOf(document,assets,particleBounds_);
     if (bounds.valid) camera.frameBounds(bounds.minimum,bounds.maximum,aspect);
 }
 EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLibrary& assets,
@@ -105,7 +105,8 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             navigationActive || ImGui::IsMouseDown(ImGuiMouseButton_Right) || ImGui::IsMouseDown(ImGuiMouseButton_Middle);
         const ImVec2 size = ImGui::GetContentRegionAvail();
         if (size.x > 0 && size.y > 0) {
-            const auto scale = ImGui::GetIO().DisplayFramebufferScale;
+            const auto* host=ImGui::GetWindowViewport();
+            const auto scale = host->FramebufferScale;
             renderer.resizeViewport(static_cast<uint32_t>(std::max(1.0f,std::round(size.x*scale.x))),
                                     static_cast<uint32_t>(std::max(1.0f,std::round(size.y*scale.y))));
             const auto origin = ImGui::GetCursorScreenPos();
@@ -113,6 +114,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             const bool imageHovered = ImGui::IsItemHovered();
             frame.viewport = {origin.x,origin.y,size.x,size.y,imageHovered,
                 ImGui::GetIO().WantTextInput || ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup)};
+            frame.viewport.windowId=static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(host->PlatformHandle));
             acceptViewportModelDrop(frame);
             const bool editorFocus = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
             if (!keyboardBlocked && !blockKeys && !document.transactionActive() && (imageHovered || editorFocus)) {
@@ -146,7 +148,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                 const auto mouse=ImGui::GetIO().MousePos;
                 draw->AddText(ImVec2(mouse.x+16,mouse.y+18),ImGui::GetColorU32(ImGuiCol_Text),label.c_str());
             }
-            const auto selectionBounds=boundsOf(document,assets);
+            const auto selectionBounds=boundsOf(document,assets,particleBounds_);
             if (selectionBounds.valid) {
                 std::array<std::optional<Vec3>,8> corners;
                 for (unsigned i=0;i<8;++i) corners[i]=math::project({
@@ -160,7 +162,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             if (!waitForRelease_ && !document.selection().ids.empty() && !navigationActive && (!document.transactionActive() || dragging_)) {
                 if (!dragging_) {
                     const auto top = document.scene().topmost(document.selection().ids);
-                    const auto bounds = boundsOf(document,assets);
+                    const auto bounds = boundsOf(document,assets,particleBounds_);
                     if (document.selection().ids.size() == 1) {
                         const auto world = document.scene().worldTransform(top.front()).value_or(Mat4{});
                         proxy_ = math::translation(math::transformPoint(world,{0,0,0}));
@@ -207,7 +209,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             // heading and the light submitted later in the frame agree exactly.
             EntityId iconHit{}; float iconDistance = 15.0f;
             for (const auto& record : document.scene().records()) {
-                if (!record.directional && !record.point && (record.model || record.parent)) continue;
+                if (!record.directional && !record.point && !record.particle && (record.model || record.parent)) continue;
                 const auto world = document.scene().worldTransform(record.id);
                 if (!world) continue;
                 const auto position = math::transformPoint(*world,{0,0,0});
@@ -219,6 +221,11 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                 float distance = std::hypot(center.x-ImGui::GetIO().MousePos.x,center.y-ImGui::GetIO().MousePos.y);
                 if (record.directional) distance=directionalMarker(*draw,camera,*world,vp,viewport,center,color,ImGui::GetIO().MousePos);
                 else if (record.point) draw->AddCircle(center,7,color,12,2);
+                else if (record.particle) {
+                    draw->AddCircle(center,6,color,12,1.5f);
+                    draw->AddCircleFilled({center.x-5,center.y-9},2,color,8);
+                    draw->AddCircleFilled({center.x+5,center.y-13},2,color,8);
+                }
                 else draw->AddRect(ImVec2(center.x-5,center.y-5),ImVec2(center.x+5,center.y+5),color);
                 if (selected(document,record.id)) draw->AddCircle(center,11,color,16);
                 if (distance < iconDistance) { iconDistance=distance; iconHit=record.id; }

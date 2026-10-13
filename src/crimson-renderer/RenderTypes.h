@@ -67,6 +67,7 @@ struct ViewportRegion {
     float x{}, y{}, width{}, height{};
     bool hovered{false};
     bool inputBlocked{false};
+    std::uint32_t windowId{}; // SDL platform-window owner; zero retains the main-window default.
 };
 
 struct SceneSettings {
@@ -94,6 +95,6 @@ inline constexpr uint16_t SceneView = 0;
 inline constexpr uint16_t PresentView = 1;
 inline constexpr uint16_t GridView = 2;
 inline constexpr uint16_t EncodeView = 3;
-inline constexpr uint16_t ToolsView = 4;
+inline constexpr uint16_t ToolsView = 8; // Particle preview occupies views 4..7.
 
 } // namespace crimson

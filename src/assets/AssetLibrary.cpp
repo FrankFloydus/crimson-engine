@@ -213,6 +213,7 @@ AssetLibrary::AssetLibrary(std::filesystem::path root,ResourceManager* resources
     }
     refreshMaterials();
     refreshScenes();
+    refreshParticles();
 }
 
 AssetLibrary::~AssetLibrary() {
@@ -239,6 +240,50 @@ BrowserCatalog& AssetLibrary::browserCatalog() {
         browserRevision_ = catalogRevision_;
     }
     return browserCatalog_;
+}
+
+void AssetLibrary::refreshParticles() {
+    std::unordered_map<std::string,std::string> previous;
+    for(const auto& entry:catalog_) if(entry.kind==AssetKind::Particle)previous.emplace(entry.id,entry.name);
+    std::erase_if(catalog_,[](const AssetEntry& entry){return entry.kind==AssetKind::Particle;});
+    const auto directory=projectRoot_/"assets/particles";
+    std::filesystem::create_directories(directory);
+    std::unordered_set<std::string> present;
+    for(const auto& file:std::filesystem::directory_iterator(directory)) {
+        if(!file.is_regular_file() || file.path().extension()!=".crimson-particle") continue;
+        const auto id=utf8(file.path().lexically_relative(projectRoot_));
+        if(references_.deleted(id)) continue;
+        present.insert(id);
+        std::string name=previous.contains(id)?previous.at(id):utf8(file.path().stem());
+        if(id==particleDocumentId_ && particles_.contains(id)) name=particles_.at(id).definition->name;
+        else try {
+            auto effect=std::make_shared<ParticleEffectAsset>(loadParticleAsset(projectRoot_,id));name=effect->name;publishParticle(std::move(effect));
+        } catch(const std::exception& error) { particles_[id].diagnostic=error.what(); }
+        catalog_.push_back({id,std::move(name),AssetKind::Particle});
+    }
+    std::erase_if(particles_,[&](const auto& entry){return !present.contains(entry.first) && entry.first!=particleDocumentId_;});
+    ++catalogRevision_;
+}
+std::shared_ptr<const ParticleEffectAsset> AssetLibrary::findParticle(const std::string& id) const {
+    const auto resolved=references_.resolveParticle(id);
+    const auto found=particles_.find(resolved);
+    return found==particles_.end()?nullptr:found->second.definition;
+}
+std::uint64_t AssetLibrary::particleRevision(const std::string& id) const {
+    const auto found=particles_.find(references_.resolveParticle(id));
+    return found==particles_.end()?0:found->second.revision;
+}
+std::string AssetLibrary::particleDiagnostic(const std::string& id) const {
+    if(id.empty()) return "No particle effect assigned.";
+    const auto found=particles_.find(references_.resolveParticle(id));
+    return found==particles_.end()?"Unresolved particle effect: "+id:found->second.diagnostic;
+}
+void AssetLibrary::publishParticle(std::shared_ptr<const ParticleEffectAsset> effect) {
+    if(!effect) return;
+    validateParticleAsset(*effect);
+    auto& version=particles_[effect->id];
+    if(version.definition && serializeParticleAsset(*version.definition)==serializeParticleAsset(*effect)) { version.diagnostic.clear();return; }
+    version.definition=std::move(effect);version.revision=nextParticleRevision_++;version.diagnostic.clear();
 }
 
 std::string AssetLibrary::displayName(const std::string& id) const {
@@ -433,6 +478,7 @@ void AssetLibrary::onFileChanged(const std::filesystem::path& changed) {
     }
     if(changed.extension()==".crimson-scene") refreshScenes();
     if(changed.extension()==".crimson-material") refreshMaterials();
+    if(changed.extension()==".crimson-particle") refreshParticles();
 }
 void AssetLibrary::setTextureDemand(std::uint32_t edge,bool nativeQuality) { textureDemand_=std::max(1u,edge);nativeTextures_=nativeQuality; }
 std::size_t AssetLibrary::textureResidentBytes() const { return textureStreamer_ ? textureStreamer_->residentBytes() : 0; }
@@ -871,7 +917,7 @@ uint64_t mix(uint64_t value,uint64_t input){return (value^input)*1099511628211ul
 uint64_t deletionRevision(const std::filesystem::path& root,const AssetReferenceManager& references,uint64_t catalogRevision,const SceneDocument* active){
     auto result=mix(1469598103934665603ull,references.revision());result=mix(result,catalogRevision);
     if(active){result=mix(result,active->scene().revision());result=mix(result,active->scene().generation());result=mix(result,active->history().size());}
-    for(const auto& directory:{root/"assets/scenes",root/"assets/materials",root/"assets/models",root/"assets/textures"})if(std::filesystem::exists(directory))
+    for(const auto& directory:{root/"assets/scenes",root/"assets/materials",root/"assets/models",root/"assets/textures",root/"assets/particles"})if(std::filesystem::exists(directory))
         for(const auto& item:std::filesystem::recursive_directory_iterator(directory))if(item.is_regular_file()){
             for(const auto c:utf8(item.path().lexically_relative(root)))result=mix(result,static_cast<uint8_t>(c));
             result=mix(result,item.file_size());result=mix(result,static_cast<uint64_t>(item.last_write_time().time_since_epoch().count()));}
@@ -903,6 +949,14 @@ size_t removeDeletedModels(SceneSnapshot& snapshot,const AssetReferenceManager& 
     }
     Scene::validate(snapshot.records,snapshot.properties);return removed.size();
 }
+size_t replaceDeletedParticles(SceneSnapshot& snapshot,const AssetReferenceManager& previous,const AssetReferenceManager& next,const std::unordered_set<std::string>& deletedParticles){
+    size_t changed{};
+    for(auto& record:snapshot.records)if(record.particle&&!record.particle->empty()&&deletedParticles.contains(previous.resolveParticle(record.particle->id))){
+        const auto replacement=next.resolveParticle(record.particle->id);
+        if(record.particle->id!=replacement){record.particle=AssetRef<ParticleEffectAsset>{replacement};++changed;}
+    }
+    Scene::validate(snapshot.records,snapshot.properties);return changed;
+}
 }
 void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
     std::vector<AssetUsage> usages;
@@ -931,11 +985,13 @@ void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
     }
     const auto addScene=[&](const std::vector<EntityRecord>& records,const std::string& id,const std::string& name,bool isActive){
         for(const auto& record:records){if(record.model)usages.push_back({record.model->id,id,name,record.name,isActive,false});
+            if(record.particle&&!record.particle->empty())usages.push_back({record.particle->id,id,name,record.name+" / Particle effect",isActive,false});
             if(record.environment&&!record.environment->environment.map.empty())usages.push_back({record.environment->environment.map,id,name,record.name+" / Environment",isActive,false});}
     };
     for(const auto& scene:savedScenes(projectRoot_))addScene(scene.records,scene.id,scene.name,false);
     if(active){addScene(active->scene().records(),active->assetId(),active->displayName(),true);
-        for(const auto& id:active->historicalModelReferences())usages.push_back({id,active->assetId(),active->displayName(),"Undo / redo history",true,true});}
+        for(const auto& id:active->historicalModelReferences())usages.push_back({id,active->assetId(),active->displayName(),"Undo / redo history",true,true});
+        for(const auto& id:active->historicalParticleReferences())usages.push_back({id,active->assetId(),active->displayName(),"Particle undo / redo history",true,true});}
     for(const auto& file:{"material.json","environment.json","preview.json","editor-session.json"}){
         const auto source=projectRoot_/"assets"/file;if(!std::filesystem::exists(source))continue;
         try{std::ifstream input(source);const auto j=nlohmann::json::parse(input);
@@ -953,10 +1009,10 @@ AssetDeletionPlan AssetLibrary::planDeletion(const std::vector<std::string>& ids
     try{auto& browser=browserCatalog();std::unordered_set<std::string> expanded;
         for(const auto& id:ids){if(!browser.contains(id))throw std::runtime_error("A selected asset no longer exists.");expanded.insert(id);
             if(browser.isFolder(id))for(const auto& child:browser.descendants(id))expanded.insert(child);}
-        std::unordered_set<std::string> models;
+        std::unordered_set<std::string> models,particles;
         for(const auto& id:expanded){if(browser.isFolder(id)){plan.folderIds.push_back(id);continue;}
             const auto entry=std::find_if(catalog_.begin(),catalog_.end(),[&](const auto& a){return a.id==id;});if(entry==catalog_.end())throw std::runtime_error("Asset deletion target is unavailable.");
-            plan.assetIds.push_back(id);if(entry->kind==AssetKind::Model)models.insert(id);}
+            plan.assetIds.push_back(id);if(entry->kind==AssetKind::Model)models.insert(id);if(entry->kind==AssetKind::Particle)particles.insert(id);}
         refreshReferenceIndex(active);
         std::unordered_set<std::string> usableOwners;
         for(const auto& entry:catalog_)if(std::filesystem::is_regular_file(projectRoot_/fromUtf8(entry.id)))usableOwners.insert(entry.id);
@@ -965,10 +1021,13 @@ AssetDeletionPlan AssetLibrary::planDeletion(const std::vector<std::string>& ids
         const auto scenes=savedScenes(projectRoot_);for(const auto& scene:scenes)usableOwners.insert(scene.id);
         for(const auto& id:plan.assetIds){const auto users=references_.users(id);plan.usages.insert(plan.usages.end(),users.begin(),users.end());
             const auto authored=references_.authoredUsers(id,plan.assetIds);for(const auto& usage:authored)if(usableOwners.contains(usage.ownerId))plan.warningUsages.push_back(usage);}
-        for(const auto& scene:scenes){size_t count=0;for(const auto& entity:scene.records)if(entity.model&&models.contains(references_.resolve(entity.model->id)))++count;
+        for(const auto& scene:scenes){size_t count=0;for(const auto& entity:scene.records)
+            if((entity.model&&models.contains(references_.resolve(entity.model->id)))||(entity.particle&&!entity.particle->empty()&&particles.contains(references_.resolveParticle(entity.particle->id))))++count;
             if(count)plan.scenes.push_back({scene.id,scene.name,count});}
         if(active){for(const auto& entity:active->scene().records())if(entity.model&&models.contains(references_.resolve(entity.model->id)))plan.clearsActiveHistory=true;
-            for(const auto& id:active->historicalModelReferences())if(models.contains(references_.resolve(id)))plan.clearsActiveHistory=true;}
+            for(const auto& id:active->historicalModelReferences())if(models.contains(references_.resolve(id)))plan.clearsActiveHistory=true;
+            for(const auto& entity:active->scene().records())if(entity.particle&&!entity.particle->empty()&&particles.contains(references_.resolveParticle(entity.particle->id)))plan.clearsActiveHistory=true;
+            for(const auto& id:active->historicalParticleReferences())if(particles.contains(references_.resolveParticle(id)))plan.clearsActiveHistory=true;}
         std::sort(plan.assetIds.begin(),plan.assetIds.end());std::sort(plan.folderIds.begin(),plan.folderIds.end());
         plan.revision=deletionRevision(projectRoot_,references_,catalogRevision_,active);
     }catch(const std::exception& e){plan.error=e.what();}return plan;
@@ -1005,38 +1064,46 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
         if(pendingDeletion_&&(pendingDeletion_->active!=active||(active&&pendingDeletion_->documentGeneration!=active->documentGeneration())||
             pendingDeletion_->plan.revision!=plan.revision||pendingDeletion_->plan.assetIds!=plan.assetIds||pendingDeletion_->replacements!=replacements))
             throw std::runtime_error("The document or deletion choices changed while validation was pending.");
-        std::vector<AssetEntry> deleted;std::unordered_set<std::string> deletedModels,deletedIds(plan.assetIds.begin(),plan.assetIds.end());
+        std::vector<AssetEntry> deleted;std::unordered_set<std::string> deletedModels,deletedParticles,deletedIds(plan.assetIds.begin(),plan.assetIds.end());
+        if(!particleDocumentId_.empty()&&deletedIds.contains(particleDocumentId_))throw std::runtime_error("Close the particle document before deleting its asset.");
         for(const auto& id:plan.assetIds){const auto entry=std::find_if(catalog_.begin(),catalog_.end(),[&](const auto& a){return a.id==id;});if(entry==catalog_.end())throw std::runtime_error("Deletion target disappeared.");
-            deleted.push_back(*entry);if(entry->kind==AssetKind::Model)deletedModels.insert(id);
+            deleted.push_back(*entry);if(entry->kind==AssetKind::Model)deletedModels.insert(id);if(entry->kind==AssetKind::Particle)deletedParticles.insert(id);
             if(const auto chosen=replacements.find(id);chosen!=replacements.end()&&!chosen->second.empty()){
                 const auto options=fallbackCandidates(id);if(std::none_of(options.begin(),options.end(),[&](const auto& option){return option.id==chosen->second;}))throw std::runtime_error("Fallback has an incompatible asset type.");}}
         auto nextReferences=references_;nextReferences.replace(deleted,replacements);
         std::vector<std::shared_ptr<const ModelAsset>> nextModels;
         std::vector<AssetEntry> surviving;for(const auto& entry:catalog_)if(entry.kind==AssetKind::Model&&!deletedModels.contains(entry.id))surviving.push_back(entry);
+        std::vector<AssetEntry> survivingParticles;for(const auto& entry:catalog_)if(entry.kind==AssetKind::Particle&&!deletedParticles.contains(entry.id))survivingParticles.push_back(entry);
         if(resources_){
             if(!pendingDeletion_){
                 static std::atomic_uint64_t sequence{};auto pending=std::make_shared<PendingDeletion>();pending->plan=plan;pending->replacements=replacements;
                 pending->active=active;pending->documentGeneration=active?active->documentGeneration():0;pending->key="import:delete/"+std::to_string(sequence.fetch_add(1));
-                pending->progress=std::make_shared<DeletionProgress>();pending->progress->total=surviving.size();
+                pending->progress=std::make_shared<DeletionProgress>();pending->progress->total=surviving.size()+survivingParticles.size();
                 ResourceRequestOptions options;options.priority=ResourcePriority::Selected;options.retainLoader=false;
                 const auto root=projectRoot_;const auto policy=nextReferences;const auto progress=pending->progress;
-                pending->validation=resources_->request<DeletionValidation>(AssetRef<DeletionValidation>{pending->key},[root,surviving,policy,progress](std::stop_token stop){
-                    auto result=validateAssetDeletion(root,surviving,policy,stop,progress);return ResourceLoadResult<DeletionValidation>{result,result->bytes,result->fileStateFingerprint,result->dependencies};
+                pending->validation=resources_->request<DeletionValidation>(AssetRef<DeletionValidation>{pending->key},[root,surviving,survivingParticles,policy,progress](std::stop_token stop){
+                    auto result=validateAssetDeletion(root,surviving,policy,stop,progress,survivingParticles);return ResourceLoadResult<DeletionValidation>{result,result->bytes,result->fileStateFingerprint,result->dependencies};
                 },options);
                 pendingDeletion_=std::move(pending);status_="Preparing asset deletion...";return false;
             }
             if(pendingDeletion_->validation.state()==ResourceState::Failed)throw std::runtime_error(pendingDeletion_->validation.diagnostic());
             const auto validation=pendingDeletion_->validation.snapshot();
-            if(!validation){status_="Preparing asset deletion: "+std::to_string(pendingDeletion_->progress->completed.load())+" / "+std::to_string(pendingDeletion_->progress->total)+" model packages validated.";return false;}
+            if(!validation){status_="Preparing asset deletion: "+std::to_string(pendingDeletion_->progress->completed.load())+" / "+std::to_string(pendingDeletion_->progress->total)+" assets validated.";return false;}
             if(!deletionValidationCurrent(*validation))throw std::runtime_error("Resource files changed while deletion was validating. Review the deletion again.");
             nextModels=validation->models;
-        }else nextModels=validateAssetDeletion(projectRoot_,surviving,nextReferences)->models;
+        }else nextModels=validateAssetDeletion(projectRoot_,surviving,nextReferences,{}, {},survivingParticles)->models;
         std::vector<AssetFileChange> changes;
-        for(auto scene:savedScenes(projectRoot_))if(!deletedIds.contains(scene.id)&&removeDeletedModels(scene,references_,nextReferences,deletedModels))changes.push_back({scene.id,serializeSceneSnapshot(scene)});
+        for(auto scene:savedScenes(projectRoot_))if(!deletedIds.contains(scene.id)){
+            const auto removed=removeDeletedModels(scene,references_,nextReferences,deletedModels);
+            const auto replaced=replaceDeletedParticles(scene,references_,nextReferences,deletedParticles);
+            if(removed||replaced)changes.push_back({scene.id,serializeSceneSnapshot(scene)});
+        }
         SceneSnapshot activeCandidate;bool activeChanged=false,clearHistory=false,activeDeleted=active&&deletedIds.contains(active->assetId());const bool wasDirty=active&&active->dirty();
         if(active&&!activeDeleted){activeCandidate.records=active->scene().records();activeCandidate.properties=active->scene().properties();
             activeChanged=removeDeletedModels(activeCandidate,references_,nextReferences,deletedModels)!=0;
-            for(const auto& id:active->historicalModelReferences())if(deletedModels.contains(references_.resolve(id))&&nextReferences.resolve(id).empty())clearHistory=true;}
+            activeChanged=replaceDeletedParticles(activeCandidate,references_,nextReferences,deletedParticles)!=0||activeChanged;
+            for(const auto& id:active->historicalModelReferences())if(deletedModels.contains(references_.resolve(id))&&nextReferences.resolve(id).empty())clearHistory=true;
+            for(const auto& id:active->historicalParticleReferences())if(deletedParticles.contains(references_.resolveParticle(id)))clearHistory=true;}
         for(const auto& entry:deleted){if(entry.kind==AssetKind::Model){const auto package=checkedManagedAssetPath(projectRoot_,entry.id).parent_path();
                 for(const auto& file:std::filesystem::recursive_directory_iterator(package))if(file.is_regular_file()){
                     const auto relative=file.path().lexically_relative(package);if(relative.begin()!=relative.end()&&*relative.begin()=="images")continue;
@@ -1046,9 +1113,10 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
         std::vector<AssetFileChange> unique;std::unordered_set<std::string> files;for(auto& change:changes)if(files.insert(change.id).second)unique.push_back(std::move(change));
         unique.push_back({"assets/references.json",nextReferences.serialize()});auto browserIds=plan.assetIds;browserIds.insert(browserIds.end(),plan.folderIds.begin(),plan.folderIds.end());
         unique.push_back({"assets/browser.json",browserCatalog().serializeWithout(browserIds)});
-        auto preparedBrowser=browserCatalog().prepareErase(browserIds);auto preparedCatalog=catalog_;auto preparedMaterials=materials_;
+        auto preparedBrowser=browserCatalog().prepareErase(browserIds);auto preparedCatalog=catalog_;auto preparedMaterials=materials_;auto preparedParticles=particles_;
         std::erase_if(preparedCatalog,[&](const auto& entry){return deletedIds.contains(entry.id);});
         std::erase_if(preparedMaterials,[&](const auto& entry){return deletedIds.contains(entry->id);});
+        std::erase_if(preparedParticles,[&](const auto& entry){return deletedIds.contains(entry.first);});
         const auto retiredCount=std::count_if(assets_.begin(),assets_.end(),[&](const auto& asset){return deletedIds.contains(asset.id);});
         retiredTextures_.reserve(retiredTextures_.size()+static_cast<size_t>(retiredCount));
         std::optional<SceneDocument::PreparedExternalChange> preparedScene;
@@ -1065,7 +1133,7 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
         // authored document immediately; cache maintenance cannot roll it back.
         if(preparedScene) { const auto committed=active->commitExternalAssetChanges(std::move(*preparedScene));if(!committed)std::terminate(); }
         references_=std::move(nextReferences);models_=std::move(nextModels);
-        browserCatalog_=std::move(preparedBrowser);catalog_=std::move(preparedCatalog);materials_=std::move(preparedMaterials);++catalogRevision_;browserRevision_=catalogRevision_;
+        browserCatalog_=std::move(preparedBrowser);catalog_=std::move(preparedCatalog);materials_=std::move(preparedMaterials);particles_=std::move(preparedParticles);++catalogRevision_;browserRevision_=catalogRevision_;
         for(auto it=assets_.begin();it!=assets_.end();)if(deletedIds.contains(it->id)){retiredTextures_.push_back(std::move(*it));it=assets_.erase(it);}else ++it;
         browserSelection_.clear();
         if(resources_) {

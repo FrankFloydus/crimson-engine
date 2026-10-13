@@ -8,7 +8,7 @@
 
 namespace crimson {
 
-enum class AssetKind { Texture, Environment, Model, Scene, Material };
+enum class AssetKind { Texture, Environment, Model, Scene, Material, Particle };
 struct AssetEntry { std::string id, name; AssetKind kind{AssetKind::Texture}; };
 struct BrowserFolder { std::string id, parent, name; };
 struct BrowserItem {

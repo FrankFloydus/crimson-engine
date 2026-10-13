@@ -16,6 +16,7 @@ struct DeletionValidation {
 // Worker-only complete validation of every surviving package under the proposed
 // replacement policy. No scene, catalog, GPU or managed-source publication.
 std::shared_ptr<DeletionValidation> validateAssetDeletion(const std::filesystem::path& root,std::span<const AssetEntry> survivingModels,
-    const AssetReferenceManager& proposed,std::stop_token stop={},const std::shared_ptr<DeletionProgress>& progress={});
+    const AssetReferenceManager& proposed,std::stop_token stop={},const std::shared_ptr<DeletionProgress>& progress={},
+    std::span<const AssetEntry> survivingParticles={});
 bool deletionValidationCurrent(const DeletionValidation& validation);
 }
