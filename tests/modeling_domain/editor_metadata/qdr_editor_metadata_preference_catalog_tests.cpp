@@ -10,6 +10,7 @@
 #include <editor/interactions/cut_tool.hpp>
 #include <editor/metadata/host_contract.hpp>
 
+#include <array>
 #include <cmath>
 #include <span>
 #include <string_view>
@@ -81,7 +82,7 @@ void check_float_preference(
 
 TEST(QdrEditorMetadataPreferenceCatalogTests, HostContractPreferenceCatalogExposesViewportSettingDefaultsAsEngineNeutralDescriptors) {
 	const std::span<const qhc::HostPreferenceDescriptor> preferences = qhc::preference_catalog();
-	EXPECT_TRUE(preferences.size() == 50U);
+	EXPECT_EQ(preferences.size(), 52U);
 
 	const qhc::HostPreferenceDescriptor& background = require_preference("viewport.scene.background_color");
         EXPECT_TRUE(background.scope ==
@@ -179,6 +180,26 @@ TEST(QdrEditorMetadataPreferenceCatalogTests, HostContractOperationPreferencesLi
 	EXPECT_TRUE(steps.minimum_integer == bridge.steps.minimum);
 	EXPECT_TRUE(steps.maximum_integer == bridge.steps.maximum);
 	EXPECT_TRUE(steps.integer_step == bridge.steps.step);
+        const auto &start_tension = require_preference("operation.bridge.start_tension");
+        const auto &end_tension = require_preference("operation.bridge.end_tension");
+        EXPECT_EQ(start_tension.id, "operation.bridge.start_tension");
+        EXPECT_EQ(end_tension.id, "operation.bridge.end_tension");
+        EXPECT_EQ(start_tension.label, "Start Tension");
+        EXPECT_EQ(end_tension.label, "End Tension");
+        EXPECT_EQ(start_tension.related_option_id, bridge.start_tension.id);
+        EXPECT_EQ(end_tension.related_option_id, bridge.end_tension.id);
+        for (const auto *tension : std::array{&start_tension, &end_tension}) {
+          EXPECT_EQ(tension->scope, qhc::HostPreferenceScope::Operation);
+          EXPECT_EQ(tension->value_kind, qhc::HostPreferenceValueKind::Floating);
+          EXPECT_EQ(tension->related_operation_id, bridge.operation_id);
+          EXPECT_EQ(tension->group_id, "operation.bridge");
+          EXPECT_DOUBLE_EQ(tension->default_number, 1.0);
+          EXPECT_DOUBLE_EQ(tension->minimum_number, 0.0);
+          EXPECT_DOUBLE_EQ(tension->maximum_number, 3.0);
+          EXPECT_DOUBLE_EQ(tension->number_step, 0.01);
+          EXPECT_TRUE(tension->visible);
+          EXPECT_TRUE(tension->hard_limits);
+        }
 
 	const qec::HalfCutOperationSchema half_cut = qec::half_cut_operation_schema();
 	const qhc::HostPreferenceDescriptor& half_cut_axis =
@@ -245,6 +266,14 @@ TEST(QdrEditorMetadataPreferenceCatalogTests, HostContractPreferenceGroupsCanDri
 	EXPECT_TRUE(group_contains(half_cut,
 	                           "operation.half_cut.separate_parts"));
 	EXPECT_TRUE(group_contains(half_cut, "operation.half_cut.fill_parts"));
+
+        const auto &bridge = require_group("operation.bridge");
+        EXPECT_EQ(bridge.label, "Bridge");
+        EXPECT_EQ(bridge.scope, qhc::HostPreferenceScope::Operation);
+        ASSERT_EQ(bridge.preference_ids.size(), 3U);
+        EXPECT_EQ(bridge.preference_ids[0], "operation.bridge.steps");
+        EXPECT_EQ(bridge.preference_ids[1], "operation.bridge.start_tension");
+        EXPECT_EQ(bridge.preference_ids[2], "operation.bridge.end_tension");
 
 	const qhc::HostPreferenceGroupDescriptor& grid = require_group("viewport.grid");
 	EXPECT_TRUE(same_text(grid.label, "Grid"));

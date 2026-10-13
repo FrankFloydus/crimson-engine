@@ -1267,6 +1267,9 @@ bool ViewportInteractionController::cancel_active_drag(
 bool ViewportInteractionController::cancel_active_drag(
     QuaderEditorApi &editor, NativeViewportToolCoordinator &native_tools) {
   interaction_cursor_ = ViewportPointerCursor::Default;
+  if (native_tools.bridge_pointer_dragging()) {
+    return native_tools.cancel_bridge_pointer_drag().ok;
+  }
   if (selection_.cancel_lasso_drag() || selection_.cancel_paint_drag() ||
       selection_.cancel_traversal_click()) return true;
   if (primitive_creation_pointer_active()) return cancel_active_drag(editor);

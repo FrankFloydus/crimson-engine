@@ -164,8 +164,10 @@ presentation-hidden alias of Create Box in the same keybinding action group; pre
 stored assignments, removals and sequences. Both alias and canonical command dispatch to the
 shape-specific owner route, including when a different primitive is already active.
 `B` invokes the immediate Bridge action in Edge/Face mode, using one straight span regardless of
-remembered interpolated Bridge steps. The edge/face menus expose the interpolated Bridge preview;
+remembered Bridge preview steps. The edge/face menus expose the Bridge preview;
 its remembered settings stay independent. Canonical quick-Bridge aliases share the remappable binding.
+Preview command renames migrate stored assignments and removals at the keybinding-file boundary,
+preserving sequences and declaration-order precedence without retaining runtime command aliases.
 Tool Settings Apply/Cancel uses the same canonical lifecycle bindings from the viewport
 and from every settings control: Space applies, Escape cancels by default. Focus on a
 button must not turn Space into a different action, including activating Cancel.

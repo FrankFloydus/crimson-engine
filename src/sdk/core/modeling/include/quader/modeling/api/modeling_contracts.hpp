@@ -236,13 +236,6 @@ struct BoxToolOptions {
 };
 
 /**
- * Configures bridge operations.
- */
-struct BridgeOptions {
-  int steps = 1;
-};
-
-/**
  * Configures edge bevel operations.
  */
 struct EdgeBevelOptions {

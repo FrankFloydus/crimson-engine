@@ -18995,11 +18995,11 @@ TEST(ModelingSessionServiceTests,
   EXPECT_EQ(bevel->operation_id, "edge_bevel");
   EXPECT_EQ(bevel->preview_kind, ModelingActionPreviewKind::EdgeBevel);
 
-  const ModelingActionItem *interpolated_bridge =
-      find_action_item(*edge_panel, "interpolated_bridge_edges");
-  ASSERT_NE(interpolated_bridge, nullptr);
-  EXPECT_EQ(interpolated_bridge->operation_id, "bridge");
-  EXPECT_EQ(interpolated_bridge->preview_kind,
+  const ModelingActionItem *preview_bridge =
+      find_action_item(*edge_panel, "preview_bridge_edges");
+  ASSERT_NE(preview_bridge, nullptr);
+  EXPECT_EQ(preview_bridge->operation_id, "bridge");
+  EXPECT_EQ(preview_bridge->preview_kind,
             ModelingActionPreviewKind::Bridge);
 
   const ModelingActionItem *split =
@@ -19342,7 +19342,7 @@ TEST(ModelingSessionServiceTests,
   ASSERT_TRUE(selected.changed);
 
   const ModelingCommandResult begin =
-      service.execute_context_action("interpolated_bridge_faces");
+      service.execute_context_action("preview_bridge_faces");
   ASSERT_TRUE(begin.ok) << begin.message;
   const std::optional<MeshAsset> first_preview =
       service.compile_object_mesh(mesh.object.modeling_object_id);
@@ -19368,7 +19368,7 @@ TEST(ModelingSessionServiceTests,
 }
 
 TEST(ModelingSessionServiceTests,
-     NormalBridgeFacesIgnoresInterpolatedBridgeSteps) {
+     ImmediateBridgeFacesIgnoresPreviewBridgeSteps) {
   SceneDocument scene;
   AssetRegistry assets;
   ModelingSessionService service(scene, assets);
@@ -20321,11 +20321,11 @@ TEST(ModelingSessionServiceTests,
   EXPECT_EQ(bridge->operation_id, "bridge");
   EXPECT_EQ(bridge->visibility, ModelingActionVisibility::Disabled);
 
-  const ModelingActionItem *interpolated_bridge =
-      find_action_item(*face_panel, "interpolated_bridge_faces");
-  ASSERT_NE(interpolated_bridge, nullptr);
-  EXPECT_EQ(interpolated_bridge->operation_id, "bridge");
-  EXPECT_EQ(interpolated_bridge->preview_kind,
+  const ModelingActionItem *preview_bridge =
+      find_action_item(*face_panel, "preview_bridge_faces");
+  ASSERT_NE(preview_bridge, nullptr);
+  EXPECT_EQ(preview_bridge->operation_id, "bridge");
+  EXPECT_EQ(preview_bridge->preview_kind,
             ModelingActionPreviewKind::Bridge);
 
   const ModelingCommandResult executed =

@@ -901,6 +901,8 @@ struct ModelingToolSettingsTarget {
  */
 struct ModelingInteractionSettings {
   int bridge_steps = 1;
+  double bridge_start_tension = 1.0;
+  double bridge_end_tension = 1.0;
   double edge_bevel_width = 1.0;
   double edge_bevel_profile = 0.5;
   int edge_bevel_segments = 1;
@@ -919,6 +921,16 @@ struct ModelingInteractionSettings {
 
   [[nodiscard]] bool
   operator==(const ModelingInteractionSettings &) const = default;
+};
+
+/// Accepted Bridge guide in world space; generation fences handle gestures.
+struct BridgePreviewHandleState {
+  std::uint64_t generation = 0;
+  std::array<QVec3, 4> control_points{};
+  QVec3 start_handle_axis{};
+  QVec3 end_handle_axis{};
+  double start_tension = 1.0;
+  double end_tension = 1.0;
 };
 
 /**

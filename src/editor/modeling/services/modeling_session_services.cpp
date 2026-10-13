@@ -4603,11 +4603,15 @@ ModelingInteractionSettings ModelingInteractionSettingsService::settings() const
 ModelingInteractionSettings ModelingInteractionSettingsService::normalize(
         const ModelingInteractionSettings& settings) const {
     ModelingInteractionSettings normalized = settings;
-    normalized.bridge_steps =
+    const auto bridge =
         quader_editor_core::normalize_bridge_operation_settings(
             quader_editor_core::BridgeOperationSettings{
-                .steps = normalized.bridge_steps})
-            .steps;
+                .steps = normalized.bridge_steps,
+                .start_tension = normalized.bridge_start_tension,
+                .end_tension = normalized.bridge_end_tension});
+    normalized.bridge_steps = bridge.steps;
+    normalized.bridge_start_tension = bridge.start_tension;
+    normalized.bridge_end_tension = bridge.end_tension;
     const quader_editor_core::EdgeBevelOperationSettings edge_bevel =
         quader_editor_core::normalize_edge_bevel_operation_settings({
             .width = normalized.edge_bevel_width,
@@ -4680,6 +4684,8 @@ bool ModelingInteractionSettingsService::reset_for_target(
     break;
   case ModelingToolSettingsTargetKind::Bridge:
     settings_.bridge_steps = defaults.bridge_steps;
+    settings_.bridge_start_tension = defaults.bridge_start_tension;
+    settings_.bridge_end_tension = defaults.bridge_end_tension;
     break;
   case ModelingToolSettingsTargetKind::EdgeBevel:
     settings_.edge_bevel_width = defaults.edge_bevel_width;

@@ -13,6 +13,7 @@
 #include "editor/input/viewport_input_binding_adapter.hpp"
 #include "editor/metadata/command_presentation_catalog.hpp"
 #include "editor/session/project_session.hpp"
+#include "editor/session/scene_session.hpp"
 #include "math/glm_bridge.hpp"
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 #include "support/behavior_scenario.hpp"
@@ -13287,11 +13288,285 @@ TEST(EditorApiTests,
 }
 
 TEST(EditorApiTests,
-     BridgeShortcutCreatesOneStraightSpanAfterRememberedInterpolatedPreview) {
+     NativeBridgePreviewArgumentsUpdateBothEndpointsThroughOnePreview) {
+  constexpr std::array kCommands{
+      quader::quader_command::kModelingPreviewBridgeEdges,
+      quader::quader_command::kModelingPreviewBridgeFaces};
+  for (const auto command : kCommands) {
+    SCOPED_TRACE(command.string());
+    const bool faces = command.string() == kCommands[1].string();
+    const auto *contract =
+        quader::test::find_command_behavior_contract(command.string());
+    ASSERT_NE(contract, nullptr);
+    auto fixture = quader::test::CommandBehaviorFixture::create(*contract);
+    auto &editor = fixture->editor();
+    const auto object = editor.query().modeling_object_for_id(
+        editor.selection().summary().active_object_id);
+    ASSERT_TRUE(object.has_value());
+    const auto mesh = editor.modeling().mesh(*object);
+    ASSERT_TRUE(mesh.valid());
+    std::vector<quader::QuaderElementId> selected_faces;
+    std::vector<quader::QuaderEdgeRef> selected_edges;
+    const auto overlay = editor.query().selection_overlay();
+    for (const auto &triangle : overlay.triangles) {
+      if (triangle.element.object_id == object->modeling_object_id &&
+          triangle.layer == quader::QuaderOverlayLayer::SelectedVisibleFace &&
+          std::ranges::find(selected_faces, triangle.element.face_id) ==
+              selected_faces.end()) {
+        selected_faces.push_back(triangle.element.face_id);
+      }
+    }
+    for (const auto &line : overlay.lines) {
+      if (line.element.object_id == object->modeling_object_id &&
+          line.layer == quader::QuaderOverlayLayer::SelectedEdge) {
+        selected_edges.push_back({line.element.edge_a, line.element.edge_b});
+      }
+    }
+    if (faces) ASSERT_EQ(selected_faces.size(), 2u);
+    else ASSERT_EQ(selected_edges.size(), 2u);
+    const auto begin = [&](quader::QuaderBridgeArgs args) {
+      return faces ? mesh.faces().only(selected_faces).begin_bridge_preview(args)
+                   : mesh.edges().only(selected_edges).begin_bridge_preview(args);
+    };
+    using Domain = quader::test::CommandObservableDomain;
+    ASSERT_TRUE(editor.tools().set_setting(
+        "bridge", "operation.bridge.steps", 3.0).ok());
+    ASSERT_TRUE(editor.tools().set_setting(
+        "bridge", "operation.bridge.start_tension", 0.75).ok());
+    ASSERT_TRUE(editor.tools().set_setting(
+        "bridge", "operation.bridge.end_tension", 1.25).ok());
+    const auto different_selection = faces
+        ? mesh.faces().only({selected_faces.front()}).replace()
+        : mesh.edges().only({selected_edges.front()}).replace();
+    ASSERT_TRUE(different_selection.ok()) << different_selection.error_message();
+    const auto before_rejection = quader::test::capture_command_observable_state(editor);
+    const auto history_before = editor.history().undo_history();
+    constexpr std::array kRejectedInitialArgs{
+        quader::QuaderBridgeArgs{
+            .steps = 4, .start_tension = std::numeric_limits<double>::quiet_NaN(),
+            .end_tension = 2.5},
+        quader::QuaderBridgeArgs{
+            .steps = 4, .start_tension = 2.5,
+            .end_tension = std::numeric_limits<double>::infinity()}};
+    for (const auto args : kRejectedInitialArgs) {
+      const auto rejected_begin = begin(args);
+      EXPECT_FALSE(rejected_begin.begin_result().ok());
+      EXPECT_FALSE(rejected_begin.begin_result().changed());
+      EXPECT_FALSE(rejected_begin.valid());
+      EXPECT_FALSE(editor.tools().active_settings().preview_active);
+      EXPECT_EQ(editor.history().undo_history().history_revision,
+                history_before.history_revision);
+      const auto after_rejection = quader::test::capture_command_observable_state(editor);
+      const auto unchanged = quader::test::diff_command_observable_state(
+          before_rejection, after_rejection, quader::test::kAllCommandObservableDomains);
+      EXPECT_TRUE(unchanged.empty()) << unchanged.summary;
+      constexpr std::array kRememberedBridgeOptions{
+          std::pair<std::string_view, double>{"operation.bridge.steps", 3.0},
+          std::pair<std::string_view, double>{"operation.bridge.start_tension", 0.75},
+          std::pair<std::string_view, double>{"operation.bridge.end_tension", 1.25}};
+      for (const auto &[setting, value] : kRememberedBridgeOptions) {
+        const auto retained = editor.tools().set_setting("bridge", setting, value);
+        ASSERT_TRUE(retained.ok()) << retained.error_message();
+        EXPECT_FALSE(retained.changed())
+            << "Rejected initial arguments must retain the remembered Bridge option: " << setting;
+      }
+    }
+    const auto restored_selection = faces
+        ? mesh.faces().only(selected_faces).replace()
+        : mesh.edges().only(selected_edges).replace();
+    ASSERT_TRUE(restored_selection.ok()) << restored_selection.error_message();
+    const auto before = quader::test::capture_command_observable_state(editor);
+    auto preview = begin({.steps = 4, .start_tension = 0.25, .end_tension = 2.0});
+    ASSERT_TRUE(preview.begin_result().ok()) << preview.begin_result().error_message();
+    ASSERT_TRUE(editor.tools().active_settings().preview_active);
+    const auto initial = quader::test::capture_command_observable_state(editor);
+    EXPECT_NE(initial.domain(Domain::Geometry), before.domain(Domain::Geometry));
+    const auto updated = preview.update(
+        quader::QuaderBridgeArgs{.steps = 4, .start_tension = 1.75,
+                                .end_tension = 0.5});
+    ASSERT_TRUE(updated.ok()) << updated.error_message();
+    EXPECT_TRUE(updated.changed());
+    const auto accepted = quader::test::capture_command_observable_state(editor);
+    EXPECT_NE(accepted.domain(Domain::Geometry), initial.domain(Domain::Geometry));
+    const auto settings = editor.tools().active_settings();
+    const auto *steps = find_tool_setting_control(settings, "operation.bridge.steps");
+    const auto *start = find_tool_setting_control(settings, "operation.bridge.start_tension");
+    const auto *end = find_tool_setting_control(settings, "operation.bridge.end_tension");
+    ASSERT_NE(steps, nullptr);
+    ASSERT_NE(start, nullptr);
+    ASSERT_NE(end, nullptr);
+    EXPECT_DOUBLE_EQ(steps->number_value, 4.0);
+    EXPECT_DOUBLE_EQ(start->number_value, 1.75);
+    EXPECT_DOUBLE_EQ(end->number_value, 0.5);
+    const auto settings_revision = editor.tools().active_settings_revision();
+    const auto rejected = preview.update(quader::QuaderBridgeArgs{
+        .steps = 4, .start_tension = std::numeric_limits<double>::quiet_NaN(),
+        .end_tension = 0.5});
+    EXPECT_FALSE(rejected.ok());
+    EXPECT_FALSE(rejected.changed());
+    EXPECT_EQ(editor.tools().active_settings_revision(), settings_revision);
+    EXPECT_EQ(quader::test::capture_command_observable_state(editor).domain(Domain::Geometry),
+              accepted.domain(Domain::Geometry));
+    const auto committed = preview.commit("Bridge API preview");
+    ASSERT_TRUE(committed.ok()) << committed.error_message();
+    EXPECT_TRUE(committed.changed());
+    EXPECT_FALSE(editor.tools().active_settings().preview_active);
+    EXPECT_EQ(quader::test::capture_command_observable_state(editor).domain(Domain::Geometry),
+              accepted.domain(Domain::Geometry));
+    ASSERT_TRUE(editor.history().undo().ok());
+    const auto undone = quader::test::capture_command_observable_state(editor);
+    const auto restored = quader::test::diff_command_observable_state(
+        before, undone, Domain::Geometry | Domain::Selection);
+    EXPECT_TRUE(restored.empty()) << restored.summary;
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_EQ(quader::test::capture_command_observable_state(editor).domain(Domain::Geometry),
+              accepted.domain(Domain::Geometry));
+    ASSERT_TRUE(editor.history().undo().ok());
+    auto canceled = begin({.steps = 4, .start_tension = 2.5, .end_tension = 0.25});
+    ASSERT_TRUE(canceled.begin_result().ok()) << canceled.begin_result().error_message();
+    ASSERT_TRUE(canceled.cancel().ok());
+    const auto after_cancel = quader::test::capture_command_observable_state(editor);
+    const auto canceled_state = quader::test::diff_command_observable_state(
+        before, after_cancel, Domain::Geometry | Domain::Selection);
+    EXPECT_TRUE(canceled_state.empty()) << canceled_state.summary;
+  }
+}
+
+TEST(EditorApiTests,
+     NativeBridgePreviewArgumentsPreserveUnrelatedRememberedSettings) {
+  constexpr std::array kCommands{
+      quader::quader_command::kModelingPreviewBridgeEdges,
+      quader::quader_command::kModelingPreviewBridgeFaces};
+  for (const auto command : kCommands) {
+    SCOPED_TRACE(command.string());
+    const bool faces = command.string() == kCommands[1].string();
+    const auto *contract =
+        quader::test::find_command_behavior_contract(command.string());
+    ASSERT_NE(contract, nullptr);
+    auto fixture = quader::test::CommandBehaviorFixture::create(*contract);
+    auto &editor = fixture->editor();
+    const auto object = editor.query().modeling_object_for_id(
+        editor.selection().summary().active_object_id);
+    ASSERT_TRUE(object);
+    const auto mesh = editor.modeling().mesh(*object);
+    ASSERT_TRUE(mesh.valid());
+    std::vector<quader::QuaderElementId> selected_faces;
+    std::vector<quader::QuaderEdgeRef> selected_edges;
+    const auto overlay = editor.query().selection_overlay();
+    for (const auto &triangle : overlay.triangles) {
+      if (triangle.element.object_id == object->modeling_object_id &&
+          triangle.layer == quader::QuaderOverlayLayer::SelectedVisibleFace &&
+          std::ranges::find(selected_faces, triangle.element.face_id) == selected_faces.end()) {
+        selected_faces.push_back(triangle.element.face_id);
+      }
+    }
+    for (const auto &line : overlay.lines) {
+      if (line.element.object_id == object->modeling_object_id &&
+          line.layer == quader::QuaderOverlayLayer::SelectedEdge) {
+        selected_edges.push_back({line.element.edge_a, line.element.edge_b});
+      }
+    }
+    if (faces) ASSERT_EQ(selected_faces.size(), 2u);
+    else ASSERT_EQ(selected_edges.size(), 2u);
+
+    // Cut's scope allows these options in Object Mode; Edge Mode remembers
+    // them even though an edge cut cannot edit them.
+    ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
+    ASSERT_TRUE(editor.tools().set_setting(
+        "cut", "operation.cut.keep_mode",
+        static_cast<double>(quader::QuaderCutMode::DiscardRight)).ok());
+    ASSERT_TRUE(editor.tools().set_setting("cut", "operation.cut.cap", true).ok());
+    ASSERT_TRUE(editor.tools().set_setting("move", "auto_merge_vertices", false).ok());
+    ASSERT_TRUE(editor.tools().set_setting(
+        "lasso_select", "select_partial_intersection", true).ok());
+    ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+    ASSERT_TRUE(editor.selection().set_mode(faces ? quader::QuaderSelectionMode::Face
+                                                 : quader::QuaderSelectionMode::Edge).ok());
+    const auto restored = faces ? mesh.faces().only(selected_faces).replace()
+                                : mesh.edges().only(selected_edges).replace();
+    ASSERT_TRUE(restored.ok()) << restored.error_message();
+    const auto expect_unrelated_settings = [&]() {
+      EXPECT_TRUE(editor.tools().lasso_select_partial_intersection());
+    };
+    ASSERT_NO_FATAL_FAILURE(expect_unrelated_settings());
+    using Domain = quader::test::CommandObservableDomain;
+    const auto before = quader::test::capture_command_observable_state(editor);
+    const auto expect_bridge_settings = [&](quader::QuaderBridgeArgs args) {
+      const auto target = editor.tools().active_settings();
+      ASSERT_TRUE(target.preview_active);
+      const auto *steps = find_tool_setting_control(target, "operation.bridge.steps");
+      const auto *start = find_tool_setting_control(target, "operation.bridge.start_tension");
+      const auto *end = find_tool_setting_control(target, "operation.bridge.end_tension");
+      ASSERT_NE(steps, nullptr);
+      ASSERT_NE(start, nullptr);
+      ASSERT_NE(end, nullptr);
+      EXPECT_DOUBLE_EQ(steps->number_value, static_cast<double>(args.steps));
+      EXPECT_DOUBLE_EQ(start->number_value, args.start_tension);
+      EXPECT_DOUBLE_EQ(end->number_value, args.end_tension);
+      expect_unrelated_settings();
+    };
+    const auto expect_remembered_settings = [&]() {
+      ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Cut).ok());
+      const auto cut_settings = editor.tools().active_settings();
+      const auto *keep_mode = find_tool_setting_control(
+          cut_settings, "operation.cut.keep_mode");
+      const auto *cap = find_tool_setting_control(cut_settings, "operation.cut.cap");
+      ASSERT_NE(keep_mode, nullptr);
+      ASSERT_NE(cap, nullptr);
+      EXPECT_EQ(keep_mode->choice_value,
+                std::to_string(static_cast<int>(quader::QuaderCutMode::DiscardRight)));
+      EXPECT_TRUE(cap->bool_value);
+      ASSERT_TRUE(editor.tools().cancel_modal_tool().ok());
+      // The remembered Move option is presented in Vertex Mode. Cut's runtime
+      // status reports the current gesture, so read its retained controls above.
+      ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Vertex).ok());
+      ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Move).ok());
+      const auto target = editor.tools().active_settings();
+      const auto *auto_merge = find_tool_setting_control(target, "auto_merge_vertices");
+      ASSERT_NE(auto_merge, nullptr);
+      EXPECT_FALSE(auto_merge->bool_value);
+      expect_unrelated_settings();
+      ASSERT_TRUE(editor.selection().set_mode(faces ? quader::QuaderSelectionMode::Face
+                                                   : quader::QuaderSelectionMode::Edge).ok());
+    };
+    constexpr quader::QuaderBridgeArgs kInitial{
+        .steps = 4, .start_tension = 0.25, .end_tension = 2.0};
+    auto preview = faces ? mesh.faces().only(selected_faces).begin_bridge_preview(kInitial)
+                         : mesh.edges().only(selected_edges).begin_bridge_preview(kInitial);
+    ASSERT_TRUE(preview.begin_result().ok()) << preview.begin_result().error_message();
+    ASSERT_NO_FATAL_FAILURE(expect_bridge_settings(kInitial));
+    const auto initial = quader::test::capture_command_observable_state(editor);
+    EXPECT_NE(initial.domain(Domain::Geometry), before.domain(Domain::Geometry));
+    constexpr quader::QuaderBridgeArgs kUpdated{
+        .steps = 6, .start_tension = 1.75, .end_tension = 0.5};
+    const auto updated = preview.update(kUpdated);
+    ASSERT_TRUE(updated.ok()) << updated.error_message();
+    ASSERT_NO_FATAL_FAILURE(expect_bridge_settings(kUpdated));
+    const auto accepted = quader::test::capture_command_observable_state(editor);
+    EXPECT_NE(accepted.domain(Domain::Geometry), initial.domain(Domain::Geometry));
+    ASSERT_TRUE(preview.cancel().ok());
+    EXPECT_EQ(quader::test::capture_command_observable_state(editor).domain(Domain::Geometry),
+              before.domain(Domain::Geometry));
+    ASSERT_NO_FATAL_FAILURE(expect_remembered_settings());
+
+    auto integer_preview = faces ? mesh.faces().only(selected_faces).begin_bridge_preview(3)
+                                 : mesh.edges().only(selected_edges).begin_bridge_preview(3);
+    ASSERT_TRUE(integer_preview.begin_result().ok())
+        << integer_preview.begin_result().error_message();
+    ASSERT_NO_FATAL_FAILURE(expect_bridge_settings({.steps = 3}));
+    EXPECT_NE(quader::test::capture_command_observable_state(editor).domain(Domain::Geometry),
+              before.domain(Domain::Geometry));
+    ASSERT_TRUE(integer_preview.cancel().ok());
+    ASSERT_NO_FATAL_FAILURE(expect_remembered_settings());
+  }
+}
+
+TEST(EditorApiTests,
+     BridgeShortcutCreatesOneStraightSpanAfterRememberedBridgePreview) {
   using quader::quader_command::kModelingBridgeEdges;
   using quader::quader_command::kModelingBridgeFaces;
-  using quader::quader_command::kModelingInterpolatedBridgeEdges;
-  using quader::quader_command::kModelingInterpolatedBridgeFaces;
+  using quader::quader_command::kModelingPreviewBridgeEdges;
+  using quader::quader_command::kModelingPreviewBridgeFaces;
   for (const auto command : {kModelingBridgeEdges, kModelingBridgeFaces}) {
     SCOPED_TRACE(command.string());
     const bool faces = command.string() == kModelingBridgeFaces.string();
@@ -13313,16 +13588,22 @@ TEST(EditorApiTests,
     // four side quads per step; the edge pair adds one quad per step.
     const std::size_t indices_per_bridge_step = (faces ? 4u : 1u) * 6u;
 
-    const auto preview_command = faces ? kModelingInterpolatedBridgeFaces
-                                       : kModelingInterpolatedBridgeEdges;
+    const auto preview_command = faces ? kModelingPreviewBridgeFaces
+                                      : kModelingPreviewBridgeEdges;
     ASSERT_TRUE(editor.commands().execute(preview_command).ok());
     ASSERT_TRUE(editor.tools()
                     .set_setting({}, "operation.bridge.steps", 4.0)
                     .ok());
+    ASSERT_TRUE(editor.tools()
+                    .set_setting({}, "operation.bridge.start_tension", 2.5)
+                    .ok());
+    ASSERT_TRUE(editor.tools()
+                    .set_setting({}, "operation.bridge.end_tension", 0.25)
+                    .ok());
     ASSERT_TRUE(editor.tools().active_settings().preview_active);
-    const auto interpolated = editor.query().compiled_object_mesh(*object);
-    ASSERT_TRUE(interpolated.has_value());
-    EXPECT_EQ(interpolated->indices.size(),
+    const auto preview_mesh = editor.query().compiled_object_mesh(*object);
+    ASSERT_TRUE(preview_mesh.has_value());
+    EXPECT_EQ(preview_mesh->indices.size(),
               initial_mesh->indices.size() + 4u * indices_per_bridge_step);
     ASSERT_TRUE(editor.modeling().cancel_preview().ok());
 
@@ -13374,6 +13655,14 @@ TEST(EditorApiTests,
         find_tool_setting_control(settings, "operation.bridge.steps");
     ASSERT_NE(steps, nullptr);
     EXPECT_DOUBLE_EQ(steps->number_value, 4.0);
+    const auto *start_tension =
+        find_tool_setting_control(settings, "operation.bridge.start_tension");
+    const auto *end_tension =
+        find_tool_setting_control(settings, "operation.bridge.end_tension");
+    ASSERT_NE(start_tension, nullptr);
+    ASSERT_NE(end_tension, nullptr);
+    EXPECT_DOUBLE_EQ(start_tension->number_value, 2.5);
+    EXPECT_DOUBLE_EQ(end_tension->number_value, 0.25);
     ASSERT_TRUE(editor.modeling().cancel_preview().ok());
   }
 }
@@ -13412,6 +13701,180 @@ TEST(EditorApiTests, BridgeShortcutPreservesRemappingAndDeliberateUnassignment) 
             quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
   EXPECT_EQ(resolve("Ctrl+Alt+B").kind,
             quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+  std::filesystem::remove(path);
+}
+
+TEST(EditorApiTests,
+     BridgePreviewRenamesMigrateStoredSequencesAndCurrentScopes) {
+  constexpr std::string_view kSequence = "Ctrl+Alt+F23 Ctrl+Alt+F24";
+  constexpr auto kFocus = quader::quader_command::kViewportFocusAll;
+  constexpr std::array kCommands{
+      quader::quader_command::kModelingPreviewBridgeEdges,
+      quader::quader_command::kModelingPreviewBridgeFaces};
+  constexpr std::array<std::string_view, 2> kLegacyIds{
+      "modeling.interpolated_bridge_edges",
+      "modeling.interpolated_bridge_faces"};
+  for (std::size_t index = 0; index < kCommands.size(); ++index) {
+    const auto command = kCommands[index];
+    const auto legacy_id = kLegacyIds[index];
+    SCOPED_TRACE(legacy_id);
+    const auto *contract =
+        quader::test::find_command_behavior_contract(command.string());
+    ASSERT_NE(contract, nullptr);
+    auto fixture = quader::test::CommandBehaviorFixture::create(*contract);
+    auto &editor = fixture->editor();
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+    const auto initial_catalog = editor.commands().keybinding_catalog();
+    const auto *initial =
+        find_keybinding_catalog_entry(initial_catalog, command.string());
+    ASSERT_NE(initial, nullptr);
+    const std::string canonical_when = initial->when;
+    const auto path = keybinding_test_path(
+        index == 0u ? "bridge-preview-edge-migration"
+                    : "bridge-preview-face-migration");
+    {
+      std::ofstream stored(path);
+      ASSERT_TRUE(stored.is_open());
+      stored << "[{\"command\":\"" << legacy_id
+             << "\",\"key\":\"" << kSequence
+             << "\",\"when\":\"false\"},"
+             << "{\"command\":\"" << kFocus.string()
+             << "\",\"key\":\"Ctrl+Alt+F22\"}]";
+    }
+    const std::string legacy_file = read_text_file(path);
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+    EXPECT_EQ(read_text_file(path), legacy_file);
+    const auto catalog = editor.commands().keybinding_catalog();
+    const auto *entry = find_keybinding_catalog_entry(catalog, command.string());
+    ASSERT_NE(entry, nullptr);
+    EXPECT_EQ(entry->action_id, "modeling.preview.bridge");
+    EXPECT_EQ(entry->when, canonical_when);
+    EXPECT_EQ(entry->shortcut, kSequence);
+    EXPECT_TRUE(entry->default_shortcut.empty());
+    EXPECT_FALSE(editor.commands().descriptor(legacy_id).has_value());
+    EXPECT_EQ(find_keybinding_catalog_entry(catalog, legacy_id), nullptr);
+    for (const auto preview_command : kCommands) {
+      EXPECT_EQ(editor.commands().shortcut_for(preview_command), kSequence);
+      EXPECT_FALSE(has_keybinding_when(editor.commands().keybindings(),
+                                      preview_command.string(), kSequence,
+                                      "false"));
+    }
+    EXPECT_EQ(editor.commands().shortcut_for(kFocus), "Ctrl+Alt+F22");
+    EXPECT_EQ(editor.commands().shortcut_for(
+                  quader::quader_command::kModelingBridge), "B");
+    quader::ViewportToolState state;
+    state.selection_mode = index == 0u ? quader::ViewportSelectionMode::Edge
+                                      : quader::ViewportSelectionMode::Face;
+    const auto prefix = editor.commands().dispatch_viewport_input_binding(
+        single_input_chord("Ctrl+Alt+F23"), state, true, false);
+    EXPECT_EQ(prefix.kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::PendingChord);
+    const auto dispatch = editor.commands().dispatch_viewport_input_binding(
+        single_input_chord("Ctrl+Alt+F24"), state, true, false);
+    ASSERT_EQ(dispatch.kind,
+              quader::QuaderViewportKeybindingDispatch::Kind::Command);
+    EXPECT_EQ(dispatch.command_id, command.string());
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+    EXPECT_EQ(read_text_file(path), legacy_file);
+    ASSERT_TRUE(editor.commands().set_shortcut(kFocus, "Ctrl+Alt+F21").ok());
+    const std::string canonical_file = read_text_file(path);
+    for (const auto old_id : kLegacyIds) {
+      EXPECT_EQ(canonical_file.find(old_id), std::string::npos);
+    }
+    for (const auto preview_command : kCommands) {
+      EXPECT_NE(canonical_file.find(preview_command.string()), std::string::npos);
+    }
+    EXPECT_NE(canonical_file.find(kSequence), std::string::npos);
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+    EXPECT_EQ(editor.commands().shortcut_for(command), kSequence);
+    EXPECT_EQ(editor.commands().shortcut_for(kFocus), "Ctrl+Alt+F21");
+    std::filesystem::remove(path);
+  }
+}
+
+TEST(EditorApiTests,
+     BridgePreviewMigrationKeepsLatestAssignmentsAndDeliberateUnassignment) {
+  struct MigrationCase final {
+    std::string_view json;
+    std::string_view shortcut;
+  };
+  constexpr std::array kCases{
+      MigrationCase{
+          R"([{"command":"modeling.interpolated_bridge_edges","key":"Ctrl+Alt+F20"},{"command":"modeling.interpolated_bridge_faces","key":"Ctrl+Alt+F23 Ctrl+Alt+F24"}])",
+          "Ctrl+Alt+F23 Ctrl+Alt+F24"},
+      MigrationCase{
+          R"([{"command":"modeling.preview_bridge_edges","key":"Ctrl+Alt+F20"},{"command":"-modeling.interpolated_bridge_faces"}])",
+          {}},
+      MigrationCase{
+          R"([{"command":"-modeling.interpolated_bridge_edges"},{"command":"modeling.preview_bridge_faces","key":"Ctrl+Alt+F23 Ctrl+Alt+F24"}])",
+          "Ctrl+Alt+F23 Ctrl+Alt+F24"},
+      MigrationCase{
+          R"([{"command":"modeling.interpolated_bridge_edges","key":"Ctrl+Alt+F20"},{"command":"-modeling.preview_bridge_edges"}])",
+          {}},
+      MigrationCase{
+          R"([{"command":"-modeling.preview_bridge_faces"},{"command":"modeling.interpolated_bridge_faces","key":"Ctrl+Alt+F23 Ctrl+Alt+F24"}])",
+          "Ctrl+Alt+F23 Ctrl+Alt+F24"},
+  };
+  const auto path = keybinding_test_path("bridge-preview-migration-precedence");
+  for (const auto &migration : kCases) {
+    SCOPED_TRACE(migration.json);
+    {
+      std::ofstream stored(path);
+      ASSERT_TRUE(stored.is_open());
+      stored << migration.json;
+    }
+    CommandTestHarness harness;
+    auto &editor = harness.editor;
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+    EXPECT_EQ(read_text_file(path), migration.json);
+    for (const auto command : {
+             quader::quader_command::kModelingPreviewBridgeEdges,
+             quader::quader_command::kModelingPreviewBridgeFaces}) {
+      EXPECT_EQ(editor.commands().shortcut_for(command), migration.shortcut);
+    }
+    const auto catalog = editor.commands().keybinding_catalog();
+    const auto *entry = find_keybinding_catalog_entry(
+        catalog, quader::quader_command::kModelingPreviewBridgeEdges.string());
+    ASSERT_NE(entry, nullptr);
+    EXPECT_EQ(entry->unassigned, migration.shortcut.empty());
+    EXPECT_EQ(editor.commands().shortcut_for(
+                  quader::quader_command::kModelingBridge), "B");
+    ASSERT_TRUE(editor.commands().set_shortcut(
+        quader::quader_command::kViewportFocusAll, "Ctrl+Alt+F21").ok());
+    const std::string canonical_file = read_text_file(path);
+    EXPECT_EQ(canonical_file.find("interpolated_bridge"), std::string::npos);
+    if (migration.shortcut.empty()) {
+      EXPECT_EQ(canonical_file.find("modeling.preview_bridge_edges"),
+                std::string::npos);
+      EXPECT_EQ(canonical_file.find("modeling.preview_bridge_faces"),
+                std::string::npos);
+    }
+    ASSERT_TRUE(editor.commands().set_keybinding_storage_path(path).ok());
+    EXPECT_EQ(editor.commands().shortcut_for(
+                  quader::quader_command::kModelingPreviewBridgeEdges),
+              migration.shortcut);
+    std::filesystem::remove(path);
+  }
+}
+
+TEST(EditorApiTests, BridgePreviewMigrationRejectsUnrelatedUnknownTargets) {
+  const auto path = keybinding_test_path("bridge-preview-migration-unknown");
+  {
+    std::ofstream stored(path);
+    ASSERT_TRUE(stored.is_open());
+    stored << R"([{"command":"modeling.interpolated_bridge_edges","key":"Ctrl+Alt+F20"},{"command":"modeling.interpolated_bridge_unknown","key":"Ctrl+Alt+F21"}])";
+  }
+  CommandTestHarness harness;
+  auto &editor = harness.editor;
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  ASSERT_TRUE(editor.commands().set_shortcut(
+      quader::quader_command::kModelingPreviewBridgeEdges, "Ctrl+Alt+F22").ok());
+  const auto result = editor.commands().set_keybinding_storage_path(path);
+  EXPECT_FALSE(result.ok());
+  EXPECT_NE(result.error_message().find("unknown command id"), std::string::npos);
+  EXPECT_EQ(editor.commands().shortcut_for(
+                quader::quader_command::kModelingPreviewBridgeEdges),
+            "Ctrl+Alt+F22");
   std::filesystem::remove(path);
 }
 
@@ -25762,21 +26225,21 @@ TEST(EditorApiTests,
   EXPECT_NE(cycle_cut_keep_mode->when.find("activeTool.cut"),
             std::string::npos);
 
-  const quader::QuaderKeybindingCatalogEntry *interpolated_bridge_edges =
+  const quader::QuaderKeybindingCatalogEntry *preview_bridge_edges =
       find_keybinding_catalog_entry(
           catalog,
           editor.commands().command_id_for_modeling_action(
-              "interpolated_bridge_edges"));
-  const quader::QuaderKeybindingCatalogEntry *interpolated_bridge_faces =
+              "preview_bridge_edges"));
+  const quader::QuaderKeybindingCatalogEntry *preview_bridge_faces =
       find_keybinding_catalog_entry(
           catalog,
           editor.commands().command_id_for_modeling_action(
-              "interpolated_bridge_faces"));
-  ASSERT_NE(interpolated_bridge_edges, nullptr);
-  ASSERT_NE(interpolated_bridge_faces, nullptr);
-  EXPECT_EQ(interpolated_bridge_edges, interpolated_bridge_faces);
-  EXPECT_EQ(interpolated_bridge_edges->action_id,
-            "modeling.preview.interpolated_bridge");
+              "preview_bridge_faces"));
+  ASSERT_NE(preview_bridge_edges, nullptr);
+  ASSERT_NE(preview_bridge_faces, nullptr);
+  EXPECT_EQ(preview_bridge_edges, preview_bridge_faces);
+  EXPECT_EQ(preview_bridge_edges->action_id,
+            "modeling.preview.bridge");
 
   const quader::QuaderKeybindingCatalogEntry *spawn_viewport_window =
       find_keybinding_catalog_entry(

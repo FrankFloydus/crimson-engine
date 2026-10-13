@@ -1006,7 +1006,7 @@ TEST_F(PublicReleaseUiTests, AdvancedSelectionDisappearsOnlyFromDiscoverySurface
                   QStringLiteral("command_modeling_bridge_") + component + 's'),
               nullptr);
     EXPECT_NE(component_menu->findChild<QAction *>(
-                  QStringLiteral("command_modeling_interpolated_bridge_") + component + 's'),
+                  QStringLiteral("command_modeling_preview_bridge_") + component + 's'),
               nullptr);
   }
   palette.reject();

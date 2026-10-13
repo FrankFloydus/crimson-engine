@@ -9,6 +9,7 @@
 #include <editor/modeling/operations/operation_schema.hpp>
 #include <editor/metadata/host_contract.hpp>
 
+#include <array>
 #include <string_view>
 
 namespace qhc = quader_host_contract;
@@ -112,8 +113,25 @@ void check_option_descriptor(
 TEST(QdrEditorMetadataSchemaMirrorTests, HostContractExposesEditorCoreOperationOptionSchemasAsDescriptors) {
 	const qec::BridgeOperationSchema bridge = qec::bridge_operation_schema();
 	const qhc::HostOperationDescriptor& bridge_descriptor = require_operation(bridge.operation_id);
-	EXPECT_TRUE(bridge_descriptor.options.size() == 1U);
+	ASSERT_EQ(bridge_descriptor.options.size(), 3U);
+	EXPECT_EQ(bridge_descriptor.options[0].id, "steps");
+	EXPECT_EQ(bridge_descriptor.options[1].id, "start_tension");
+	EXPECT_EQ(bridge_descriptor.options[2].id, "end_tension");
 	check_int_option(require_option(bridge_descriptor, bridge.steps.id), bridge.steps);
+        const auto &start_tension = bridge_descriptor.options[1];
+        const auto &end_tension = bridge_descriptor.options[2];
+        check_float_option(start_tension, bridge.start_tension);
+        check_float_option(end_tension, bridge.end_tension);
+        EXPECT_EQ(start_tension.label, "Start Tension");
+        EXPECT_EQ(end_tension.label, "End Tension");
+        for (const auto *tension : std::array{&start_tension, &end_tension}) {
+          EXPECT_EQ(tension->value_kind, qhc::HostOptionValueKind::Floating);
+          EXPECT_DOUBLE_EQ(tension->default_number, 1.0);
+          EXPECT_DOUBLE_EQ(tension->minimum_number, 0.0);
+          EXPECT_DOUBLE_EQ(tension->maximum_number, 3.0);
+          EXPECT_DOUBLE_EQ(tension->number_step, 0.01);
+          EXPECT_TRUE(tension->hard_limits);
+        }
 
 	const qec::EdgeBevelOperationSchema edge_bevel = qec::edge_bevel_operation_schema();
 	const qhc::HostOperationDescriptor& edge_bevel_descriptor = require_operation(edge_bevel.operation_id);

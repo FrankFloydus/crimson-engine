@@ -103,7 +103,7 @@ public:
   [[nodiscard]] PreviewHandle bevel(EdgeBevelOptions options = {}) const;
   [[nodiscard]] OperationReceipt bridge(BridgeOptions options = {}) const;
   [[nodiscard]] PreviewHandle
-  interpolated_bridge(BridgeOptions options = {}) const;
+  begin_bridge_preview(BridgeOptions options = {}) const;
   [[nodiscard]] OperationReceipt bridge_pairs(BridgeOptions options = {}) const;
   [[nodiscard]] OperationReceipt
   bridge_boundaries(BridgeOptions options = {}) const;
@@ -130,7 +130,7 @@ public:
   [[nodiscard]] std::span<const FaceId> faces() const;
   [[nodiscard]] OperationReceipt bridge(BridgeOptions options = {}) const;
   [[nodiscard]] PreviewHandle
-  interpolated_bridge(BridgeOptions options = {}) const;
+  begin_bridge_preview(BridgeOptions options = {}) const;
   [[nodiscard]] OperationReceipt flip_normals() const;
   [[nodiscard]] OperationReceipt
   recalculate_normals(RecalculateNormalsOptions options = {}) const;

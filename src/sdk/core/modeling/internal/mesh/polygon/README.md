@@ -32,6 +32,32 @@ malformed faces. Fill Hole and Combine Faces require the complete-boundary check
 so that fallback cannot authorize a new cap or merge. Combine Faces command
 availability uses the same check.
 
+Bridge samples and its editable guide share prepared rail cubics. Independent start and end
+tensions scale their existing endpoint tangents; one preserves the established circular and
+fallback behavior, while zero collapses the corresponding cubic control to its endpoint.
+Missing tangent frames retain linear interpolation and report zero handle axes. The guide usually
+averages the actual rail controls and their tension derivatives, so asymmetric rails agree with the
+accepted ring centers rather than a separately reconstructed centroid curve. Symmetric boundaries
+can have nonzero rail derivatives that cancel in the mean. When either mean derivative cancels
+relative to the largest rail derivative, the owner chooses the first stable rail with both supported
+endpoint frames and publishes that rail's exact cubic with `representative_rail` set. This fallback
+describes a real surface rail rather than claiming to remain the center. Genuinely unavailable
+frames do not enable the fallback.
+
+Accepted operation receipts carry the guide in local coordinates, including a one-span bridge
+whose mesh does not change when tension changes. SDK preview publication advances the accepted
+revision for these guide-only edits while retaining compiled geometry. Independently prepared
+documents need exact matching IDs, ordered topology, coordinates, UVs, material and normal state,
+and selection before they can reuse that cache; geometry equivalence alone is insufficient.
+Accepted incoming allocation cursors still advance the session's identity high-water. Checkpoint
+snapshots remain free of compiled buffers, while restoration can move an accepted cache whose
+inputs match the restored document. Failed preparation preserves the accepted guide; cross-object
+publication reads the nonremoved survivor's receipt even when a removed lower-ID source comes
+first in the compatibility summary. Geometry and lifecycle regressions live in
+[Bridge edge tests](../../../../../../../tests/modeling_domain/operation/qdr_document_operation_bridge_edges_tests.cpp)
+and [closed-boundary tests](../../../../../../../tests/modeling_domain/operation/qdr_document_operation_bridge_edge_boundaries_tests.cpp)
+and [SDK component workflows](../../../../../../../tests/sdk/component_operation_workflow_tests.cpp).
+
 ## Internal Decomposition
 
 Both targets use `QUADER_CANONICAL_POLYGON_SOURCES` in root `cmake/QuaderModeling.cmake`.

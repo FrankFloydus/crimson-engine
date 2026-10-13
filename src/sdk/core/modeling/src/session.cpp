@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <diagnostics/profile.hpp>
 #include <iterator>
@@ -539,8 +540,86 @@ selection_mode_for_kind(SelectionKind kind) {
          same_polygon_selection(left_polygon, right_polygon);
 }
 
-[[nodiscard]] bool preview_object_changed(
-    const PreviewTransactionObject &object) {
+/** Proves equal Bridge payload inputs across independently prepared storage. */
+[[nodiscard]] bool same_bridge_preview_payload(const SessionDocument &left,
+                                               const SessionDocument &right) {
+  const auto *first = std::get_if<PolygonDocument>(&left);
+  const auto *second = std::get_if<PolygonDocument>(&right);
+  if (first == nullptr || second == nullptr)
+    return false;
+  const auto &first_selection = PolygonDocumentNativeAccess::selection(*first);
+  const auto &second_selection =
+      PolygonDocumentNativeAccess::selection(*second);
+  if (first_selection.mode != second_selection.mode ||
+      first_selection.vertices != second_selection.vertices ||
+      first_selection.edges != second_selection.edges ||
+      first_selection.faces != second_selection.faces ||
+      first_selection.has_active != second_selection.has_active ||
+      first_selection.active_kind != second_selection.active_kind ||
+      first_selection.active_vertex != second_selection.active_vertex ||
+      first_selection.active_edge != second_selection.active_edge ||
+      first_selection.active_face != second_selection.active_face)
+    return false;
+  const auto &first_document = PolygonDocumentNativeAccess::document(*first);
+  const auto &second_document = PolygonDocumentNativeAccess::document(*second);
+  if (first_document.hard_normal_edges != second_document.hard_normal_edges ||
+      first_document.soft_normal_edges != second_document.soft_normal_edges)
+    return false;
+  const auto same_float = [](float first_value, float second_value) {
+    return std::bit_cast<std::uint32_t>(first_value) ==
+           std::bit_cast<std::uint32_t>(second_value);
+  };
+  const auto same_vertex =
+      [same_float](const quader_poly::Vertex &first_vertex,
+                   const quader_poly::Vertex &second_vertex) {
+        return first_vertex.id == second_vertex.id &&
+               same_float(first_vertex.position.x, second_vertex.position.x) &&
+               same_float(first_vertex.position.y, second_vertex.position.y) &&
+               same_float(first_vertex.position.z, second_vertex.position.z);
+      };
+  const auto same_face = [same_float](const quader_poly::Face &first_face,
+                                      const quader_poly::Face &second_face) {
+    return first_face.id == second_face.id &&
+           first_face.vertices == second_face.vertices &&
+           first_face.material_slot == second_face.material_slot &&
+           first_face.normal_shading == second_face.normal_shading &&
+           same_float(first_face.texture_transform.scale.x,
+                      second_face.texture_transform.scale.x) &&
+           same_float(first_face.texture_transform.scale.y,
+                      second_face.texture_transform.scale.y) &&
+           same_float(first_face.texture_transform.shift_uv.x,
+                      second_face.texture_transform.shift_uv.x) &&
+           same_float(first_face.texture_transform.shift_uv.y,
+                      second_face.texture_transform.shift_uv.y) &&
+           same_float(first_face.texture_transform.rotation_degrees,
+                      second_face.texture_transform.rotation_degrees) &&
+           std::ranges::equal(
+               first_face.uvs, second_face.uvs,
+               [same_float](quader::QVec2 first_uv, quader::QVec2 second_uv) {
+                 return same_float(first_uv.x, second_uv.x) &&
+                        same_float(first_uv.y, second_uv.y);
+               });
+  };
+  // Allocation cursors are not mesh/overlay inputs; the accepted incoming
+  // document still carries them and the session records their high-water mark.
+  return std::ranges::equal(first_document.vertices, second_document.vertices,
+                            same_vertex) &&
+         std::ranges::equal(first_document.faces, second_document.faces,
+                            same_face);
+}
+
+/** Restamps retained buffers without re-extracting their proven-equal inputs.
+ */
+void refresh_cached_preview_payload_stamp(PreviewTransactionObject &object) {
+  if (!object.payload_valid)
+    return;
+  object.payload.mesh.content_revision = object.payload_revision;
+  object.payload.overlay.selection_revision =
+      document_selection_revision(object.preview_document);
+}
+
+[[nodiscard]] bool
+preview_object_changed(const PreviewTransactionObject &object) {
   if (object.action != SessionPreviewAction::ReplaceExisting) {
     return true;
   }
@@ -917,18 +996,20 @@ inverse_merge_metric(Transform3 transform) {
                                          : std::nullopt;
 }
 
-[[nodiscard]] Result<SessionBridgePreviewCandidate> prepare_bridge_candidate(
-    PolygonDocument survivor, const PolygonDocument &source,
-    Transform3 survivor_from_source, SelectionKind selection_kind, int steps) {
+[[nodiscard]] Result<SessionBridgePreviewCandidate>
+prepare_bridge_candidate(PolygonDocument survivor,
+                         const PolygonDocument &source,
+                         Transform3 survivor_from_source,
+                         SelectionKind selection_kind, BridgeOptions options) {
   const quader_poly::Selection survivor_selection =
       PolygonDocumentNativeAccess::selection(survivor);
   const quader_poly::Selection source_selection =
       PolygonDocumentNativeAccess::selection(source);
   const bool face_bridge = selection_kind == SelectionKind::Face;
-  if ((face_bridge && (survivor_selection.faces.empty() ||
-                       source_selection.faces.empty())) ||
-      (!face_bridge && (survivor_selection.edges.empty() ||
-                        source_selection.edges.empty()))) {
+  if ((face_bridge &&
+       (survivor_selection.faces.empty() || source_selection.faces.empty())) ||
+      (!face_bridge &&
+       (survivor_selection.edges.empty() || source_selection.edges.empty()))) {
     return Result<SessionBridgePreviewCandidate>::failure(make_error(
         ErrorCode::InvalidArgument,
         face_bridge ? "Bridge Faces needs selected faces on both objects."
@@ -972,9 +1053,9 @@ inverse_merge_metric(Transform3 transform) {
     for (quader_poly::ElementId id : source_selection.faces) {
       const auto mapped = appended.value().face_ids.find(id);
       if (mapped == appended.value().face_ids.end()) {
-        return Result<SessionBridgePreviewCandidate>::failure(make_error(
-            ErrorCode::InternalError,
-            "Bridge Faces could not remap a source face."));
+        return Result<SessionBridgePreviewCandidate>::failure(
+            make_error(ErrorCode::InternalError,
+                       "Bridge Faces could not remap a source face."));
       }
       bridge_selection.faces.push_back(mapped->second);
     }
@@ -1007,8 +1088,7 @@ inverse_merge_metric(Transform3 transform) {
       if (a == appended.value().vertex_ids.end() ||
           b == appended.value().vertex_ids.end()) {
         return Result<SessionBridgePreviewCandidate>::failure(make_error(
-            ErrorCode::InternalError,
-            "Bridge could not remap a source edge."));
+            ErrorCode::InternalError, "Bridge could not remap a source edge."));
       }
       bridge_selection.edges.push_back(
           quader_poly::make_edge(a->second, b->second));
@@ -1041,10 +1121,18 @@ inverse_merge_metric(Transform3 transform) {
 
   const quader_poly::OperationResult native_result =
       face_bridge
-          ? quader_poly::bridge_selected_faces(survivor_document,
-                                               bridge_selection, steps)
-          : quader_poly::bridge_selected_edges(survivor_document,
-                                               bridge_selection, steps);
+          ? quader_poly::bridge_selected_faces(
+                survivor_document, bridge_selection,
+                quader_poly::BridgeOptions{.steps = options.steps,
+                                           .start_tension =
+                                               options.start_tension,
+                                           .end_tension = options.end_tension})
+          : quader_poly::bridge_selected_edges(
+                survivor_document, bridge_selection,
+                quader_poly::BridgeOptions{.steps = options.steps,
+                                           .start_tension =
+                                               options.start_tension,
+                                           .end_tension = options.end_tension});
   if (!native_result.success) {
     return Result<SessionBridgePreviewCandidate>::failure(
         make_error(ErrorCode::ValidationFailed, native_result.message));
@@ -1058,19 +1146,37 @@ inverse_merge_metric(Transform3 transform) {
     });
   }
 
-  OperationResult receipt = session_result(
-      true, face_bridge ? "Faces bridged." : "Edges bridged.");
+  OperationResult receipt =
+      session_result(true, face_bridge ? "Faces bridged." : "Edges bridged.");
   receipt.dirty.topology = true;
   receipt.created = appended.value().created;
   append_native_delta(receipt.created, native_result.created);
   append_native_delta(receipt.deleted, native_result.deleted);
   append_native_delta(receipt.affected, native_result.affected);
   receipt.modified = receipt.affected;
+  if (native_result.bridge_shape.has_value()) {
+    BridgeShapeFeedback feedback;
+    const auto adapt_vector = [](quader::QVec3 value) {
+      return Vec3{value.x, value.y, value.z};
+    };
+    for (std::size_t index = 0; index < feedback.controls.size(); ++index) {
+      feedback.controls[index] =
+          adapt_vector(native_result.bridge_shape->controls[index]);
+    }
+    feedback.start_handle_axis =
+        adapt_vector(native_result.bridge_shape->start_handle_axis);
+    feedback.end_handle_axis =
+        adapt_vector(native_result.bridge_shape->end_handle_axis);
+    feedback.start_tension = native_result.bridge_shape->start_tension;
+    feedback.end_tension = native_result.bridge_shape->end_tension;
+    feedback.representative_rail = native_result.bridge_shape->representative_rail;
+    receipt.bridge_shape = feedback;
+  }
 
   PolygonDocumentNativeAccess::replace_document(survivor,
                                                 std::move(survivor_document));
-  PolygonDocumentNativeAccess::replace_selection(
-      survivor, std::move(bridge_selection));
+  PolygonDocumentNativeAccess::replace_selection(survivor,
+                                                 std::move(bridge_selection));
   PolygonDocumentImpl &survivor_impl =
       PolygonDocumentNativeAccess::impl(survivor);
   ++survivor_impl.content_revision;
@@ -1205,8 +1311,8 @@ materialize_preview_payload(PreviewTransactionObject &preview) {
       return payload;
     }
     preview.payload = std::move(payload).value();
-    preview.payload.mesh.content_revision = preview.payload_revision;
     preview.payload_valid = true;
+    refresh_cached_preview_payload_stamp(preview);
   }
   return Result<ToolPreviewPayload>::success(preview.payload);
 }
@@ -3437,14 +3543,27 @@ ModelingSession::combine_objects(std::span<const ObjectId> object_ids,
   return Result<OperationResult>::success(std::move(result));
 }
 
-Result<SessionBridgePreviewCandidate>
-ModelingSession::prepare_bridge_documents(
-    ObjectId survivor_id, ObjectId source_id,
-    Transform3 survivor_from_source, SelectionKind selection_kind,
-    int steps) const {
-  if (survivor_id == source_id ||
-      (selection_kind != SelectionKind::Edge &&
-       selection_kind != SelectionKind::Face)) {
+Result<SessionBridgePreviewCandidate> ModelingSession::prepare_bridge_documents(
+    ObjectId survivor_id, ObjectId source_id, Transform3 survivor_from_source,
+    SelectionKind selection_kind, int steps) const {
+  return prepare_bridge_documents(survivor_id, source_id, survivor_from_source,
+                                  selection_kind,
+                                  BridgeOptions{.steps = steps});
+}
+
+Result<SessionBridgePreviewCandidate> ModelingSession::prepare_bridge_documents(
+    ObjectId survivor_id, ObjectId source_id, Transform3 survivor_from_source,
+    SelectionKind selection_kind, BridgeOptions options) const {
+  if (!std::isfinite(options.start_tension) ||
+      !std::isfinite(options.end_tension) || options.start_tension < 0.0F ||
+      options.start_tension > 3.0F || options.end_tension < 0.0F ||
+      options.end_tension > 3.0F) {
+    return Result<SessionBridgePreviewCandidate>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Bridge tensions must be finite and between zero and three."));
+  }
+  if (survivor_id == source_id || (selection_kind != SelectionKind::Edge &&
+                                   selection_kind != SelectionKind::Face)) {
     return Result<SessionBridgePreviewCandidate>::failure(make_error(
         ErrorCode::InvalidArgument,
         "Bridge needs two distinct objects with edge or face selections."));
@@ -3466,7 +3585,7 @@ ModelingSession::prepare_bridge_documents(
   impl_->reconcile_topology_identity(survivor_id, survivor_working);
   return prepare_bridge_candidate(
       std::move(survivor_working), source->polygon_document(),
-      survivor_from_source, selection_kind, steps);
+      survivor_from_source, selection_kind, options);
 }
 
 Result<SessionMergePreviewCandidate> ModelingSession::prepare_merge_documents(
@@ -3762,6 +3881,12 @@ Result<OperationResult>
 ModelingSession::bridge_objects(ObjectId survivor_id, ObjectId source_id,
                                 Transform3 survivor_from_source,
                                 SelectionKind selection_kind, int steps) {
+  return bridge_objects(survivor_id, source_id, survivor_from_source, selection_kind,
+      BridgeOptions{.steps = steps});
+}
+
+Result<OperationResult> ModelingSession::bridge_objects(ObjectId survivor_id, ObjectId source_id,
+    Transform3 survivor_from_source, SelectionKind selection_kind, BridgeOptions options) {
   if (impl_->mutation_checkpoint_active()) {
     return Result<OperationResult>::failure(
         mutation_checkpoint_lifecycle_error(*impl_));
@@ -3777,7 +3902,7 @@ ModelingSession::bridge_objects(ObjectId survivor_id, ObjectId source_id,
   }
 
   Result<SessionBridgePreviewCandidate> prepared = prepare_bridge_documents(
-      survivor_id, source_id, survivor_from_source, selection_kind, steps);
+      survivor_id, source_id, survivor_from_source, selection_kind, options);
   if (!prepared.ok()) {
     return Result<OperationResult>::failure(prepared.error());
   }
@@ -4385,6 +4510,7 @@ Result<OperationResult> ModelingSession::update_preview_transaction(
     std::optional<SessionDocument> document;
     OperationResult receipt;
     bool publication_changed = false;
+    bool guide_only = false;
     bool feedback_changed = false;
     std::optional<EdgeBevelWidthFeedback> edge_bevel_width;
   };
@@ -4414,11 +4540,43 @@ Result<OperationResult> ModelingSession::update_preview_transaction(
     if (!identity.ok()) {
       return identity;
     }
+    const bool equivalent_bridge =
+        std::holds_alternative<PolygonDocument>(current.preview_document) &&
+        current.receipt.bridge_shape.has_value() &&
+        update.receipt.bridge_shape.has_value();
     const bool candidate_changed =
-        !same_preview_candidate(current.preview_document, update.document);
+        !same_preview_candidate(current.preview_document, update.document) &&
+        !(equivalent_bridge && same_bridge_preview_payload(
+                                   current.preview_document, update.document));
     if (!candidate_changed) {
+      bool bridge_identity_changed = false;
+      if (equivalent_bridge) {
+        const auto current_identity =
+            PolygonDocumentNativeAccess::identity_high_water(
+                std::get<PolygonDocument>(current.preview_document));
+        const auto incoming_identity =
+            PolygonDocumentNativeAccess::identity_high_water(
+                std::get<PolygonDocument>(update.document));
+        bridge_identity_changed =
+            current_identity.next_vertex_id !=
+                incoming_identity.next_vertex_id ||
+            current_identity.next_face_id != incoming_identity.next_face_id;
+      }
+      if (current.receipt.bridge_shape != update.receipt.bridge_shape ||
+          bridge_identity_changed) {
+        StagedPreviewUpdate next;
+        next.document.emplace(std::move(update.document));
+        next.receipt = current.receipt;
+        next.receipt.bridge_shape = update.receipt.bridge_shape;
+        next.receipt.dirty.overlays = true;
+        next.publication_changed = true;
+        next.guide_only = true;
+        staged.push_back(std::move(next));
+        continue;
+      }
       staged.push_back({
-          .feedback_changed = current.receipt.edge_bevel_width != update.receipt.edge_bevel_width,
+          .feedback_changed = current.receipt.edge_bevel_width !=
+                              update.receipt.edge_bevel_width,
           .edge_bevel_width = update.receipt.edge_bevel_width,
       });
       continue;
@@ -4477,10 +4635,15 @@ Result<OperationResult> ModelingSession::update_preview_transaction(
     object.preview_document = std::move(*update.document);
     object.receipt = std::move(update.receipt);
     object.dirty = object.receipt.dirty;
-    object.payload = {};
-    object.payload_valid = false;
+    if (!update.guide_only) {
+      object.payload = {};
+      object.payload_valid = false;
+    }
     object.payload_revision = impl_->advance_preview_payload_revision(
         document_content_revision(object.preview_document));
+    if (update.guide_only && object.payload_valid) {
+      refresh_cached_preview_payload_stamp(object);
+    }
   }
   refresh_preview_object_summaries(impl_->preview);
   for (std::size_t index = 0; index < staged.size(); ++index) {
@@ -4589,20 +4752,33 @@ Result<OperationResult> ModelingSession::restore_preview_checkpoint(
     return Result<OperationResult>::success(std::move(result));
   }
 
+  PreviewTransaction previous = std::move(impl_->preview);
   impl_->preview = saved;
   OperationResult restored;
   restored.changed = true;
-  for (PreviewTransactionObject &object : impl_->preview.objects) {
+  for (std::size_t index = 0; index < impl_->preview.objects.size(); ++index) {
+    PreviewTransactionObject &object = impl_->preview.objects[index];
+    PreviewTransactionObject &accepted = previous.objects[index];
     impl_->reconcile_topology_identity(object.object_id,
                                        object.preview_document);
+    if (accepted.payload_valid &&
+        (same_preview_candidate(accepted.preview_document,
+                                object.preview_document) ||
+         (accepted.receipt.bridge_shape.has_value() &&
+          object.receipt.bridge_shape.has_value() &&
+          same_bridge_preview_payload(accepted.preview_document,
+                                      object.preview_document)))) {
+      object.payload = std::move(accepted.payload);
+      object.payload_valid = true;
+      refresh_cached_preview_payload_stamp(object);
+    }
     merge_dirty(restored.dirty, object.dirty);
   }
   restored.message = "Preview checkpoint restored.";
   return Result<OperationResult>::success(std::move(restored));
 }
 
-Result<SessionMutationCheckpoint>
-ModelingSession::capture_mutation_checkpoint(
+Result<SessionMutationCheckpoint> ModelingSession::capture_mutation_checkpoint(
     std::span<const ObjectId> participants) {
   if (impl_->preview.active || impl_->batch_transaction_active) {
     return Result<SessionMutationCheckpoint>::failure(make_error(
@@ -5874,6 +6050,19 @@ PreviewTransactionSummary ModelingSession::preview_summary() const {
 std::optional<EdgeBevelWidthFeedback>
 ModelingSession::preview_edge_bevel_width() const noexcept {
   return impl_->preview.active ? impl_->preview.edge_bevel_width : std::nullopt;
+}
+
+std::optional<BridgeShapeFeedback>
+ModelingSession::preview_bridge_shape() const noexcept {
+  if (!impl_->preview.active)
+    return std::nullopt;
+  for (const PreviewTransactionObject &object : impl_->preview.objects) {
+    if (object.action != SessionPreviewAction::RemoveExisting &&
+        document_kind(object.preview_document) == SessionObjectKind::Mesh &&
+        object.receipt.bridge_shape.has_value())
+      return object.receipt.bridge_shape;
+  }
+  return std::nullopt;
 }
 
 SessionPreviewWorkStats ModelingSession::preview_work_stats() const {

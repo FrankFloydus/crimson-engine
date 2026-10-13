@@ -392,6 +392,18 @@ adapt_operation_result(const quader_poly::OperationResult &result) {
         .support_limited = result.edge_bevel_width->support_limited,
     };
   }
+  if (result.bridge_shape.has_value()) {
+    BridgeShapeFeedback feedback;
+    for (std::size_t index = 0; index < feedback.controls.size(); ++index) {
+      feedback.controls[index] = from_native(result.bridge_shape->controls[index]);
+    }
+    feedback.start_handle_axis = from_native(result.bridge_shape->start_handle_axis);
+    feedback.end_handle_axis = from_native(result.bridge_shape->end_handle_axis);
+    feedback.start_tension = result.bridge_shape->start_tension;
+    feedback.end_tension = result.bridge_shape->end_tension;
+    feedback.representative_rail = result.bridge_shape->representative_rail;
+    sdk_result.bridge_shape = feedback;
+  }
   return sdk_result;
 }
 
@@ -3253,12 +3265,29 @@ PolygonDocument::bevel_selected_edges(EdgeBevelSpec settings) {
 }
 
 Result<OperationResult> PolygonDocument::bridge_selected_edges(int steps) {
-  return apply_operation(
-      *impl_,
-      [steps](quader_poly::Document &document,
-              quader_poly::Selection &selection) {
-        return quader_poly::bridge_selected_edges(document, selection, steps);
-      });
+  return bridge_selected_edges(BridgeOptions{.steps = steps});
+}
+
+Result<OperationResult>
+PolygonDocument::bridge_selected_edges(BridgeOptions options) {
+  if (!std::isfinite(options.start_tension) ||
+      !std::isfinite(options.end_tension) || options.start_tension < 0.0F ||
+      options.start_tension > 3.0F || options.end_tension < 0.0F ||
+      options.end_tension > 3.0F) {
+    return Result<OperationResult>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Bridge tensions must be finite and between zero and three."));
+  }
+  const quader_poly::BridgeOptions native_options{
+      .steps = options.steps,
+      .start_tension = options.start_tension,
+      .end_tension = options.end_tension};
+  return apply_operation(*impl_,
+                         [native_options](quader_poly::Document &document,
+                                          quader_poly::Selection &selection) {
+                           return quader_poly::bridge_selected_edges(
+                               document, selection, native_options);
+                         });
 }
 
 Result<OperationResult> PolygonDocument::combine_selected_faces() {
@@ -3753,12 +3782,29 @@ PolygonDocument::cut_selected_edges_by_plane(const PlaneSplitSpec &spec) {
 }
 
 Result<OperationResult> PolygonDocument::bridge_selected_faces(int steps) {
-  return apply_operation(
-      *impl_,
-      [steps](quader_poly::Document &document,
-              quader_poly::Selection &selection) {
-        return quader_poly::bridge_selected_faces(document, selection, steps);
-      });
+  return bridge_selected_faces(BridgeOptions{.steps = steps});
+}
+
+Result<OperationResult>
+PolygonDocument::bridge_selected_faces(BridgeOptions options) {
+  if (!std::isfinite(options.start_tension) ||
+      !std::isfinite(options.end_tension) || options.start_tension < 0.0F ||
+      options.start_tension > 3.0F || options.end_tension < 0.0F ||
+      options.end_tension > 3.0F) {
+    return Result<OperationResult>::failure(make_error(
+        ErrorCode::InvalidArgument,
+        "Bridge tensions must be finite and between zero and three."));
+  }
+  const quader_poly::BridgeOptions native_options{
+      .steps = options.steps,
+      .start_tension = options.start_tension,
+      .end_tension = options.end_tension};
+  return apply_operation(*impl_,
+                         [native_options](quader_poly::Document &document,
+                                          quader_poly::Selection &selection) {
+                           return quader_poly::bridge_selected_faces(
+                               document, selection, native_options);
+                         });
 }
 
 Result<OperationResult>

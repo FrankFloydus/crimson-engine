@@ -26,22 +26,22 @@ namespace {
  */
 class BridgeFacesOperation final : public PolyOperation {
 public:
-    explicit BridgeFacesOperation(int steps = 1);
+    explicit BridgeFacesOperation(BridgeOptions options = {});
 
     [[nodiscard]] std::string_view id() const override { return poly_operation_descriptor(PolyOperationKey::BridgeSelectedFaces).id; }
     [[nodiscard]] std::string_view label() const override { return poly_operation_descriptor(PolyOperationKey::BridgeSelectedFaces).label; }
     [[nodiscard]] OperationResult apply(Document& document, Selection& selection) const override;
 
 private:
-    int steps_ = 1;
+    BridgeOptions options_;
 };
 
-BridgeFacesOperation::BridgeFacesOperation(int steps)
-    : steps_(steps)
+BridgeFacesOperation::BridgeFacesOperation(BridgeOptions options)
+    : options_(options)
 {
 }
 
-OperationResult bridge_selected_faces_impl(Document& document, Selection& selection, int steps)
+OperationResult bridge_selected_faces_impl(Document& document, Selection& selection, BridgeOptions options)
 {
   if (selection.mode != SelectionMode::Face || selection.faces.size() < 2) {
     return OperationResult::failure("Bridge Faces needs two selected faces or face islands.");
@@ -78,8 +78,9 @@ OperationResult bridge_selected_faces_impl(Document& document, Selection& select
             });
         }
 
+        BridgeShapeFeedback feedback;
         std::vector<ElementId> bridge_face_ids;
-        bridge_face_ids.reserve(first_vertices.size() * static_cast<std::size_t>(std::clamp(steps, 1, 64)));
+        bridge_face_ids.reserve(first_vertices.size() * static_cast<std::size_t>(options.steps));
         if (!append_bridge_faces_between_loops(
                 candidate,
                 first_vertices,
@@ -87,10 +88,10 @@ OperationResult bridge_selected_faces_impl(Document& document, Selection& select
                 face_normal(document, first_face),
                 face_normal(document, second_face),
                 first_face.material_slot,
-                steps,
+                options,
                 bridge_face_ids,
                 true,
-                first_face.texture_transform)) {
+                first_face.texture_transform, feedback)) {
             return OperationResult::failure("Bridge Faces could not create valid bridge geometry.");
         }
 
@@ -105,7 +106,7 @@ OperationResult bridge_selected_faces_impl(Document& document, Selection& select
         selection.mode = SelectionMode::Face;
         selection.faces = std::move(bridge_face_ids);
         activate_last_selection(selection);
-        return { true, {} };
+        return {.changed = true, .bridge_shape = feedback};
     }
 
     const std::vector<FaceIslandBoundary> islands = selected_face_island_boundaries(document, selected_faces);
@@ -137,8 +138,9 @@ OperationResult bridge_selected_faces_impl(Document& document, Selection& select
         });
     }
 
+    BridgeShapeFeedback feedback;
     std::vector<ElementId> bridge_face_ids;
-    bridge_face_ids.reserve(first.edges.size() * static_cast<std::size_t>(std::clamp(steps, 1, 64)));
+    bridge_face_ids.reserve(first.edges.size() * static_cast<std::size_t>(options.steps));
     if (!append_bridge_faces_between_loops(
             candidate,
             first.vertices,
@@ -146,10 +148,10 @@ OperationResult bridge_selected_faces_impl(Document& document, Selection& select
             first.normal,
             second.normal,
             first.material_slot,
-            steps,
+            options,
             bridge_face_ids,
             false,
-            first.texture_transform)) {
+            first.texture_transform, feedback)) {
         return OperationResult::failure("Bridge Faces could not create valid bridge geometry.");
     }
 
@@ -164,19 +166,28 @@ OperationResult bridge_selected_faces_impl(Document& document, Selection& select
     selection.mode = SelectionMode::Face;
     selection.faces = std::move(bridge_face_ids);
     activate_last_selection(selection);
-    return { true, {} };
+    return {.changed = true, .bridge_shape = feedback};
 }
 
 OperationResult BridgeFacesOperation::apply(Document& document, Selection& selection) const
 {
-    return bridge_selected_faces_impl(document, selection, steps_);
+    return bridge_selected_faces_impl(document, selection, options_);
 }
 
 } // namespace
 
-OperationResult bridge_selected_faces(Document& document, Selection& selection, int steps)
-{
-    return BridgeFacesOperation(steps).apply(document, selection);
+OperationResult bridge_selected_faces(Document &document, Selection &selection,
+                                      BridgeOptions options) {
+  const auto normalized = normalized_bridge_options(options);
+  if (!normalized.has_value())
+    return OperationResult::failure("Bridge tensions must be finite.");
+  options = *normalized;
+  return BridgeFacesOperation(options).apply(document, selection);
 }
 
+OperationResult bridge_selected_faces(Document &document, Selection &selection,
+                                      int steps) {
+  return bridge_selected_faces(document, selection,
+                               BridgeOptions{.steps = steps});
+}
 } // namespace quader_poly

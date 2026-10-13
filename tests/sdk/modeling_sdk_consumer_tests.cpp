@@ -2204,6 +2204,7 @@ TEST(ModelingSdkConsumerTests,
                                        SelectionKind::Face, 3);
   ASSERT_TRUE(preview_candidate.ok()) << preview_candidate.error_message();
   ASSERT_TRUE(preview_candidate.value().receipt.changed);
+  ASSERT_TRUE(preview_candidate.value().receipt.bridge_shape.has_value());
   EXPECT_EQ(session.objects().size(), 2U);
   EXPECT_EQ(session.content_revision(), before_preview);
   EXPECT_EQ(session.undo_depth(), history_before_preview);
@@ -2227,10 +2228,13 @@ TEST(ModelingSdkConsumerTests,
           .begin_preview_transaction("modeling.bridge.preview",
                                      std::move(request))
           .or_throw();
+  EXPECT_EQ(session.preview_summary().object_id, first.value());
+  EXPECT_EQ(session.preview_bridge_shape(), preview_candidate.value().receipt.bridge_shape);
   Result<SessionBridgePreviewCandidate> repeated_candidate =
       session.prepare_bridge_documents(first.value(), second.value(),
                                        survivor_from_source,
-                                       SelectionKind::Face, 3);
+                                       SelectionKind::Face,
+                                       BridgeOptions{.steps = 3, .start_tension = 0.5F, .end_tension = 2.0F});
   ASSERT_TRUE(repeated_candidate.ok()) << repeated_candidate.error_message();
   std::vector<SessionPreviewDocumentUpdate> updates;
   updates.push_back({
@@ -2242,12 +2246,17 @@ TEST(ModelingSdkConsumerTests,
                   .update_preview_transaction(begun.preview_id,
                                               std::move(updates))
                   .ok());
+  ASSERT_TRUE(session.preview_bridge_shape().has_value());
+  EXPECT_EQ(session.preview_bridge_shape(), repeated_candidate.value().receipt.bridge_shape);
+  EXPECT_FLOAT_EQ(session.preview_bridge_shape()->start_tension, 0.5F);
+  EXPECT_FLOAT_EQ(session.preview_bridge_shape()->end_tension, 2.0F);
   const SessionPreviewCommitResult preview_commit =
       session.commit_preview_transaction(begun.preview_id).or_throw();
   EXPECT_EQ(preview_commit.active_object, first.value());
   ASSERT_EQ(preview_commit.selected_objects.size(), 1U);
   EXPECT_EQ(preview_commit.selected_objects.front(), first.value());
   EXPECT_EQ(session.objects().size(), 1U);
+  EXPECT_FALSE(session.preview_bridge_shape().has_value());
   EXPECT_EQ(session.undo_depth(), history_before_preview + 1U);
   ASSERT_TRUE(session.undo().ok());
   EXPECT_EQ(session.objects().size(), 2U);

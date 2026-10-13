@@ -197,7 +197,7 @@ public:
   [[nodiscard]] PreviewHandle bevel_edges(EdgeBevelOptions options = {});
   [[nodiscard]] OperationReceipt bridge_edges(BridgeOptions options = {});
   [[nodiscard]] PreviewHandle
-  interpolated_bridge_edges(BridgeOptions options = {});
+  begin_bridge_edges_preview(BridgeOptions options = {});
   [[nodiscard]] OperationReceipt dissolve_edges();
   [[nodiscard]] OperationReceipt merge_edges();
   [[nodiscard]] OperationReceipt collapse_edges();
@@ -205,7 +205,7 @@ public:
   [[nodiscard]] OperationReceipt radial_align_edges();
   [[nodiscard]] OperationReceipt bridge_faces(BridgeOptions options = {});
   [[nodiscard]] PreviewHandle
-  interpolated_bridge_faces(BridgeOptions options = {});
+  begin_bridge_faces_preview(BridgeOptions options = {});
   [[nodiscard]] OperationReceipt invert_faces();
   [[nodiscard]] OperationReceipt combine_faces();
   [[nodiscard]] OperationReceipt collapse_faces();
@@ -361,7 +361,7 @@ public:
   bevel_edges(EdgeBevelOptions options = {});
   [[nodiscard]] Result<OperationReceipt> bridge_edges(BridgeOptions options = {});
   [[nodiscard]] Result<PreviewHandle>
-  interpolated_bridge_edges(BridgeOptions options = {});
+  begin_bridge_edges_preview(BridgeOptions options = {});
   [[nodiscard]] Result<OperationReceipt> dissolve_edges();
   [[nodiscard]] Result<OperationReceipt> merge_edges();
   [[nodiscard]] Result<OperationReceipt> collapse_edges();
@@ -369,7 +369,7 @@ public:
   [[nodiscard]] Result<OperationReceipt> radial_align_edges();
   [[nodiscard]] Result<OperationReceipt> bridge_faces(BridgeOptions options = {});
   [[nodiscard]] Result<PreviewHandle>
-  interpolated_bridge_faces(BridgeOptions options = {});
+  begin_bridge_faces_preview(BridgeOptions options = {});
   [[nodiscard]] Result<OperationReceipt> invert_faces();
   [[nodiscard]] Result<OperationReceipt> combine_faces();
   [[nodiscard]] Result<OperationReceipt> collapse_faces();

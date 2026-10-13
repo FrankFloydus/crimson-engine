@@ -18,6 +18,7 @@
 #include "editor/session/project_session.hpp"
 #include "editor/tools/extrude_tool_service.hpp"
 #include "editor/tools/extrude_handle_layout.hpp"
+#include "editor/tools/bridge_preview_handle_layout.hpp"
 #include "editor/viewport/viewport_tool_overlay_projection.hpp"
 #include "render/filament_material_library.hpp"
 #include "render/overlay/selected_mesh_outline_mask_cache.hpp"
@@ -61,6 +62,7 @@
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <thread>
 #include <unordered_set>
 #include <utility>
@@ -863,6 +865,112 @@ public:
     camera.set_viewport_size(width, height);
     view.resize(width, height);
     view.update_camera(camera);
+  }
+
+  bool create_bridge_sample() {
+    auto &editor = array_editor();
+    quader_poly::Document document;
+    const std::array first{
+        quader_poly::add_vertex(document, {-0.75f, -0.75f, -1.0f}),
+        quader_poly::add_vertex(document, {0.75f, -0.75f, -1.0f}),
+        quader_poly::add_vertex(document, {0.75f, 0.75f, -1.0f}),
+        quader_poly::add_vertex(document, {-0.75f, 0.75f, -1.0f})};
+    const std::array second{
+        quader_poly::add_vertex(document, {0.25f, -0.25f, 1.0f}),
+        quader_poly::add_vertex(document, {1.75f, -0.25f, 1.0f}),
+        quader_poly::add_vertex(document, {1.75f, 1.25f, 1.0f}),
+        quader_poly::add_vertex(document, {0.25f, 1.25f, 1.0f})};
+    const auto first_face = quader_poly::add_face(document, first);
+    const auto second_face = quader_poly::add_face(
+        document, std::array{second[3], second[2], second[1], second[0]});
+    const auto object = editor.modeling().create_mesh(
+        QuaderPolygonDocumentInternalAccess::from_backend(std::move(document)),
+        {.name = "Bridge curve and handle pixel regression"});
+    if (!object.ok() || !editor.selection().select_object(object.value()).ok() ||
+        !enter_selection_context(editor, QuaderSelectionMode::Face).ok() ||
+        !editor.selection().select_faces(object.value(),
+            {static_cast<int>(first_face), static_cast<int>(second_face)}).ok()) return false;
+    auto settings = session_.modeling().interaction_settings();
+    settings.bridge_steps = 6;
+    if (!session_.modeling().set_interaction_settings(settings).ok ||
+        !editor.modeling().begin_preview("preview_bridge_faces").ok()) return false;
+    camera_.focus_origin(6.0f);
+    camera_.set_view_direction({-0.6f, -0.35f, -0.72f});
+    view_.update_camera(camera_);
+    view_.update_ground_grid(camera_, 1.0f, ViewportSettings::defaults(), false);
+    return session_.modeling().bridge_preview_handle_state().has_value();
+  }
+
+  bool present_bridge_pane(std::size_t pane, bool visible, float scale) {
+    capture_pane_ = pane;
+    auto &camera = extrusion_pane_camera(pane);
+    auto &view = extrusion_pane_view(pane);
+    auto &editor = array_editor();
+    if (!QuaderRenderApiRuntimeAccess::sync_scene(editor.render(), bridge_).ok() ||
+        !QuaderRenderApiRuntimeAccess::sync_tool_previews(editor.render(), bridge_).ok()) return false;
+    const auto overlay_camera = ViewportCameraAdapter::overlay_camera(
+        camera, {static_cast<float>(view.width()), static_cast<float>(view.height())});
+    const auto handle = session_.modeling().bridge_preview_handle_state();
+    const ViewportToolOverlaySource source({
+        .source_identity = reinterpret_cast<std::uintptr_t>(&session_.modeling()),
+        .raster_scale = scale,
+        .overlay_camera = &overlay_camera,
+        .viewport_camera = &camera,
+        .bridge_handle = visible && handle ? &*handle : nullptr,
+        .interaction_pane = pane == 0u,
+        .gizmos_visible = visible,
+        .overlays_visible = true});
+    const SelectionRuntimeToolFrame provider(source, tool_frame_builds_);
+    const auto &modeling = session_.modeling();
+    last_submission_ = bridge_.submit_viewport_overlay(
+        {.viewport_index = pane,
+         .layer_mask = viewport_grid_layer_mask(static_cast<std::uint8_t>(pane)),
+         .raster_scale = scale,
+         .camera = overlay_camera,
+         .selection_source = {
+             .source_identity = reinterpret_cast<std::uintptr_t>(&modeling),
+             .content_revision = modeling.content_revision(),
+             .selection_revision = modeling.selection_revision(),
+             .scene_revision = session_.scene().revision(),
+             .asset_revision = session_.assets().revision(),
+             .overlay_signature = modeling.selection_overlay_signature(),
+             .selection_context = ViewportOverlaySelectionContext::Face},
+         .selection_frame_provider = this,
+         .dynamic_tool_source = source.source_stamp(),
+         .dynamic_tool_frame_provider = &provider,
+         .scene_selection_mode = RenderOverlaySelectionMode::Component,
+         .style_selection_context = ViewportOverlaySelectionContext::Face,
+         .overlays_visible = true,
+         .selection_dimensions_visible = false}, ViewportSettings::defaults());
+    return true;
+  }
+
+  std::optional<QVec2> bridge_handle_pixel(std::size_t pane, std::size_t index,
+                                          float scale) {
+    const auto handle = session_.modeling().bridge_preview_handle_state();
+    if (!handle) return std::nullopt;
+    const auto layout = build_bridge_preview_handle_layout(
+        extrusion_pane_camera(pane), *handle, scale);
+    if (index >= layout.visible.size() || !layout.visible[index]) return std::nullopt;
+    auto pixel = layout.screen_centers[index];
+    pixel.y = static_cast<float>(extrusion_pane_view(pane).height() - 1u) - pixel.y;
+    return pixel;
+  }
+
+  std::optional<QVec2> bridge_curve_pixel(std::size_t pane, float parameter) {
+    const auto handle = session_.modeling().bridge_preview_handle_state();
+    if (!handle) return std::nullopt;
+    const float inverse = 1.0f - parameter;
+    const auto &controls = handle->control_points;
+    const QVec3 point = controls[0] * (inverse * inverse * inverse) +
+        controls[1] * (3.0f * inverse * inverse * parameter) +
+        controls[2] * (3.0f * inverse * parameter * parameter) +
+        controls[3] * (parameter * parameter * parameter);
+    const auto projected = extrusion_pane_camera(pane).project_world_point(point);
+    if (!projected.visible) return std::nullopt;
+    auto pixel = projected.position;
+    pixel.y = static_cast<float>(extrusion_pane_view(pane).height() - 1u) - pixel.y;
+    return pixel;
   }
 
   bool create_edge_loop_sample() {
@@ -8250,6 +8358,172 @@ TEST(SelectionOverlayRuntimeTests,
         SelectionOverlayRuntimeHarness::kWidth, SelectionOverlayRuntimeHarness::kHeight);
     ASSERT_TRUE(harness.present_extrusion_pane(kResizedPane, false, true, scale));
     EXPECT_EQ(harness.capture(false), initial_images[kResizedPane]);
+  }
+}
+
+TEST(SelectionOverlayRuntimeTests,
+     VulkanBridgeCurveAndIndependentHandlesTrackAcceptedShapeInEveryPane) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-bridge-curve-pane-test";
+  char *argv[] = {application_name, nullptr};
+  QCoreApplication application(argc, argv);
+  QString directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (directory.isEmpty()) {
+    directory = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(
+        QStringLiteral("../task29-review"));
+  }
+  ASSERT_TRUE(QDir().mkpath(directory));
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0f, false));
+  ASSERT_TRUE(harness.create_bridge_sample());
+  harness.initialize_extrusion_panes(true);
+  const auto initial_undo = harness.undo_count();
+  const auto initial_generation = harness.modeling().bridge_preview_handle_state()->generation;
+  std::array<std::array<QVec2, 2>, 4> initial_pixels{};
+  std::array<std::array<QVec2, 2>, 4> zero_pixels{};
+  std::array<QImage, 4> initial_images;
+  std::array<std::array<int, 2>, 4> filled_area_at_100{};
+  const auto changed_circle_pixels = [](const QImage &image,
+                                        const QImage &hidden,
+                                        QVec2 center, float radius) {
+    int count = 0;
+    const int first_x = std::max(0, static_cast<int>(std::floor(center.x - radius - 1.0f)));
+    const int last_x = std::min(image.width() - 1,
+        static_cast<int>(std::ceil(center.x + radius + 1.0f)));
+    const int first_y = std::max(0, static_cast<int>(std::floor(center.y - radius - 1.0f)));
+    const int last_y = std::min(image.height() - 1,
+        static_cast<int>(std::ceil(center.y + radius + 1.0f)));
+    for (int y = first_y; y <= last_y; ++y) {
+      for (int x = first_x; x <= last_x; ++x) {
+        const float dx = x + 0.5f - center.x;
+        const float dy = y + 0.5f - center.y;
+        if (dx * dx + dy * dy > radius * radius) continue;
+        const auto pixel = image.pixelColor(x, y);
+        const auto background = hidden.pixelColor(x, y);
+        const int delta = std::max({std::abs(pixel.red() - background.red()),
+            std::abs(pixel.green() - background.green()),
+            std::abs(pixel.blue() - background.blue())});
+        count += delta >= 64 ? 1 : 0;
+      }
+    }
+    return count;
+  };
+
+  for (const float scale : {1.0f, 2.0f}) {
+    SCOPED_TRACE(scale);
+    auto settings = harness.modeling().interaction_settings();
+    settings.bridge_start_tension = 1.0;
+    settings.bridge_end_tension = 1.0;
+    ASSERT_TRUE(harness.modeling().set_interaction_settings(settings).ok);
+    const auto capture_panes = [&](const char *phase) {
+      QImage first;
+      for (std::size_t pane = 0u; pane < initial_images.size(); ++pane) {
+        SCOPED_TRACE(pane);
+        ASSERT_TRUE(harness.present_bridge_pane(pane, false, scale));
+        const QImage hidden = harness.capture(false);
+        ASSERT_FALSE(hidden.isNull());
+        ASSERT_TRUE(harness.present_bridge_pane(pane, true, scale));
+        const QImage image = harness.capture(false);
+        ASSERT_FALSE(image.isNull());
+        const auto guide = harness.bridge_curve_pixel(pane, 0.35f);
+        ASSERT_TRUE(guide);
+        EXPECT_GE(cyan_pixels(image, *guide), 3)
+            << "The central cubic guide must reach the actual Vulkan target.";
+        EXPECT_GT(cyan_pixels(image, *guide), cyan_pixels(hidden, *guide));
+        for (std::size_t index = 0u; index < initial_pixels[pane].size(); ++index) {
+          const auto pixel = harness.bridge_handle_pixel(pane, index, scale);
+          ASSERT_TRUE(pixel);
+          ASSERT_GE(pixel->x, 18.0f);
+          ASSERT_GE(pixel->y, 18.0f);
+          ASSERT_LT(pixel->x, image.width() - 18.0f);
+          ASSERT_LT(pixel->y, image.height() - 18.0f);
+          // Stems render above the fill and occupy a larger fraction of a
+          // fixed 7x7 core at 200%. Measure the complete expected disk against
+          // this same frame without the HUD: a line cannot satisfy its area.
+          constexpr double kPi = 3.14159265358979323846;
+          const float radius = 7.0f * scale;
+          const double disk_area = kPi * radius * radius;
+          const int filled_pixels = changed_circle_pixels(image, hidden, *pixel, radius);
+          EXPECT_GE(filled_pixels, static_cast<int>(disk_area * 0.65))
+              << "Both filled handle disks must cover their expected GPU pixel area.";
+          std::cout << "BRIDGE_DISK_PIXELS scale=" << scale << " pane=" << pane
+                    << " phase=" << phase << " handle=" << index
+                    << " changed=" << filled_pixels << " expected_area=" << disk_area << '\n';
+          if (std::string_view(phase) == "initial") {
+            initial_pixels[pane][index] = *pixel;
+            if (scale == 1.0f) filled_area_at_100[pane][index] = filled_pixels;
+            else EXPECT_GT(filled_pixels, filled_area_at_100[pane][index] * 3)
+                << "Doubling the disk radius must more than triple its visible filled area.";
+          } else if (std::string_view(phase) == "moved_start") {
+            if (index == 0u) {
+              EXPECT_GT(std::hypot(pixel->x - initial_pixels[pane][index].x,
+                                   pixel->y - initial_pixels[pane][index].y), 20.0f);
+              const int old_area = changed_circle_pixels(
+                  image, hidden, initial_pixels[pane][index], radius);
+              EXPECT_LT(old_area, static_cast<int>(disk_area * 0.35))
+                  << "A crossing guide may remain, but the old filled disk must retire.";
+            } else {
+              EXPECT_FLOAT_EQ(pixel->x, initial_pixels[pane][index].x);
+              EXPECT_FLOAT_EQ(pixel->y, initial_pixels[pane][index].y);
+            }
+          } else {
+            zero_pixels[pane][index] = *pixel;
+          }
+        }
+        if (pane == 0u) first = image;
+        else EXPECT_EQ(image, first)
+            << "Passive pane layers must show the same owner-derived Bridge guide and handles.";
+        if (std::string_view(phase) == "initial") initial_images[pane] = image;
+        else EXPECT_NE(image, initial_images[pane]);
+        const auto builds = harness.tool_frame_builds();
+        const auto selection_builds = harness.selection_frame_builds();
+        ASSERT_TRUE(harness.present_bridge_pane(pane, true, scale));
+        EXPECT_EQ(harness.tool_frame_builds(), builds);
+        EXPECT_EQ(harness.selection_frame_builds(), selection_builds);
+        EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+        EXPECT_FALSE(harness.last_submission().persistent_submitted);
+        EXPECT_EQ(harness.capture(false), image);
+        const QString path = QDir(directory).filePath(
+            QStringLiteral("bridge_%1_pane_%2_%3.png")
+                .arg(static_cast<int>(scale * 100.0f)).arg(pane)
+                .arg(QString::fromLatin1(phase)));
+        EXPECT_TRUE(image.save(path));
+        std::cout << "Bridge guide GPU png=" << path.toStdString() << '\n';
+      }
+    };
+    ASSERT_NO_FATAL_FAILURE(capture_panes("initial"));
+    settings.bridge_start_tension = 2.25;
+    ASSERT_TRUE(harness.modeling().set_interaction_settings(settings).ok);
+    EXPECT_EQ(harness.modeling().bridge_preview_handle_state()->generation, initial_generation);
+    ASSERT_NO_FATAL_FAILURE(capture_panes("moved_start"));
+    settings.bridge_start_tension = 0.0;
+    settings.bridge_end_tension = 0.0;
+    ASSERT_TRUE(harness.modeling().set_interaction_settings(settings).ok);
+    const auto zero = *harness.modeling().bridge_preview_handle_state();
+    EXPECT_FLOAT_EQ(length(zero.control_points[0] - zero.control_points[1]), 0.0f);
+    EXPECT_FLOAT_EQ(length(zero.control_points[2] - zero.control_points[3]), 0.0f);
+    ASSERT_NO_FATAL_FAILURE(capture_panes("zero"));
+    EXPECT_EQ(harness.undo_count(), initial_undo);
+  }
+  ASSERT_TRUE(harness.modeling().cancel_active_operation_preview().ok);
+  EXPECT_FALSE(harness.modeling().bridge_preview_handle_state());
+  EXPECT_EQ(harness.undo_count(), initial_undo);
+  for (std::size_t pane = 0u; pane < zero_pixels.size(); ++pane) {
+    SCOPED_TRACE(pane);
+    ASSERT_TRUE(harness.present_bridge_pane(pane, true, 2.0f));
+    const QImage canceled = harness.capture(false);
+    ASSERT_FALSE(canceled.isNull());
+    for (const QVec2 pixel : zero_pixels[pane]) {
+      EXPECT_LT(cyan_pixels(canceled, pixel), 3)
+          << "Cancel must retire both retained Bridge handle disks.";
+    }
+    EXPECT_TRUE(canceled.save(QDir(directory).filePath(
+        QStringLiteral("bridge_canceled_pane_%1.png").arg(pane))));
   }
 }
 

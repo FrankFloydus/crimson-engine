@@ -5124,8 +5124,23 @@ public:
     return interaction_settings_service_.settings();
   }
 
+  [[nodiscard]] std::optional<BridgePreviewHandleState>
+  bridge_preview_handle_state() const {
+    auto state = sdk_projection_adapter_.bridge_preview_handle_state();
+    if (state.has_value()) {
+      const auto settings = interaction_settings_service_.settings();
+      state->start_tension = settings.bridge_start_tension;
+      state->end_tension = settings.bridge_end_tension;
+    }
+    return state;
+  }
+
   ModelingCommandResult
   set_interaction_settings(const ModelingInteractionSettings &settings) {
+    if (!std::isfinite(settings.bridge_start_tension) ||
+        !std::isfinite(settings.bridge_end_tension)) {
+      return {.ok = false, .message = "Bridge tensions must be finite."};
+    }
     const ModelingToolSettingsTarget active_target = tool_settings_target();
     const ModelingInteractionSettings previous =
         interaction_settings_service_.settings();
@@ -13020,6 +13035,11 @@ ModelingLiveStatus ModelingSessionService::live_status() const {
 
 bool ModelingSessionService::operation_preview_active() const {
   return impl_->operation_preview_active();
+}
+
+std::optional<BridgePreviewHandleState>
+ModelingSessionService::bridge_preview_handle_state() const {
+  return impl_->bridge_preview_handle_state();
 }
 
 ModelingToolSettingsTarget

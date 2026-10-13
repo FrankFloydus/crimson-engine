@@ -59,6 +59,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <limits>
+#include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -410,9 +412,9 @@ struct ExtrudeOutlineHarness {
 };
 
 TEST(SelectedMeshOutlinePresentationTests,
-     SameDocumentBridgeStepsRefreshRetainedWiresAndCancelRestoresThem) {
-  for (const auto command : {quader_command::kModelingInterpolatedBridgeEdges,
-                             quader_command::kModelingInterpolatedBridgeFaces}) {
+     BridgeOwnerSignatureRefreshesSubmittedWiresWhileAuthoringStaysUncommitted) {
+  for (const auto command : {quader_command::kModelingPreviewBridgeEdges,
+                             quader_command::kModelingPreviewBridgeFaces}) {
     SCOPED_TRACE(command.string());
     const auto *contract = test::find_command_behavior_contract(command.string());
     ASSERT_NE(contract, nullptr);
@@ -425,19 +427,31 @@ TEST(SelectedMeshOutlinePresentationTests,
     ViewportOverlaySubmissionCoordinator coordinator;
     const auto settings = ViewportSettings::defaults();
     const auto context = command.string() ==
-                                 quader_command::kModelingInterpolatedBridgeEdges.string()
+                                 quader_command::kModelingPreviewBridgeEdges.string()
         ? ViewportOverlaySelectionContext::Edge
         : ViewportOverlaySelectionContext::Face;
+    // Bridge updates the live MeshAsset and scene projection during preview.
+    // Hold the other outer stamp channels fixed to isolate the public owner's
+    // signature gate rather than letting those projection revisions refresh it.
+    const auto frozen_content_revision = modeling.content_revision();
+    const auto frozen_selection_revision = modeling.selection_revision();
+    const auto frozen_scene_revision = session.scene().revision();
+    const auto frozen_asset_revision = session.assets().revision();
+    bool isolate_preview_signature = true;
     const auto submit = [&] {
       return coordinator.submit({
           .viewport_index = 0u,
           .layer_mask = 1u,
           .selection_source = {
               .source_identity = reinterpret_cast<std::uintptr_t>(&modeling),
-              .content_revision = modeling.content_revision(),
-              .selection_revision = modeling.selection_revision(),
-              .scene_revision = session.scene().revision(),
-              .asset_revision = session.assets().revision(),
+              .content_revision = isolate_preview_signature
+                  ? frozen_content_revision : modeling.content_revision(),
+              .selection_revision = isolate_preview_signature
+                  ? frozen_selection_revision : modeling.selection_revision(),
+              .scene_revision = isolate_preview_signature
+                  ? frozen_scene_revision : session.scene().revision(),
+              .asset_revision = isolate_preview_signature
+                  ? frozen_asset_revision : session.assets().revision(),
               .overlay_signature = modeling.selection_overlay_signature(),
               .selection_context = context,
           },
@@ -447,9 +461,76 @@ TEST(SelectedMeshOutlinePresentationTests,
           .overlays_visible = true,
       }, settings, target);
     };
+    const auto submitted_wires = [&] {
+      std::vector<std::array<float, 6>> wires;
+      for (const auto &line : target.persistent.lines) {
+        std::array<float, 3> first{line.start.x, line.start.y, line.start.z};
+        std::array<float, 3> second{line.end.x, line.end.y, line.end.z};
+        if (second < first) std::swap(first, second);
+        wires.push_back({first[0], first[1], first[2],
+                         second[0], second[1], second[2]});
+      }
+      std::ranges::sort(wires);
+      return wires;
+    };
+    const auto expect_accepted_endpoints = [&] {
+      std::vector<QVec3> positions;
+      const auto previews = modeling.tool_preview_meshes();
+      for (const auto &preview : previews) {
+        for (std::size_t index = 0; index < preview.mesh.geometry().vertices.size();
+             ++index) {
+          const QVec3 local = preview.dynamic_position_payload
+              ? (*preview.dynamic_position_payload)[index]
+              : preview.mesh.geometry().vertices[index].position;
+          positions.push_back(transform_point(preview.transform, local));
+        }
+      }
+      if (positions.empty()) {
+        for (const auto &object : editor.query().modeling_objects()) {
+          const auto reference =
+              editor.query().modeling_object_for_id(object.modeling_object_id);
+          ASSERT_TRUE(reference.has_value());
+          const auto mesh = editor.query().compiled_object_mesh(*reference);
+          ASSERT_TRUE(mesh.has_value());
+          for (const auto &vertex : mesh->vertices) positions.push_back(vertex.position);
+        }
+      }
+      ASSERT_FALSE(positions.empty());
+      for (const auto &line : target.persistent.lines) {
+        for (const auto endpoint : {line.start, line.end}) {
+          EXPECT_TRUE(std::ranges::any_of(positions, [&](QVec3 accepted) {
+            return length_squared(accepted - endpoint) < 1.0e-12F;
+          })) << "Submitted Bridge endpoint differs from the accepted candidate: "
+              << endpoint.x << ", " << endpoint.y << ", " << endpoint.z;
+        }
+      }
+    };
+    const auto expect_unchanged_frames = [&] {
+      const auto builds = provider.builds;
+      const auto submissions = target.submissions;
+      const auto projection = modeling.modeling_sdk_projection_stats_for_tests();
+      const auto work = modeling.tool_preview_work_stats();
+      for (int frame = 0; frame < 8; ++frame) {
+        const auto stable = submit();
+        EXPECT_FALSE(stable.selection_source_refreshed);
+        EXPECT_FALSE(stable.persistent_submitted);
+        EXPECT_FALSE(stable.dynamic_submitted);
+      }
+      EXPECT_EQ(provider.builds, builds);
+      EXPECT_EQ(target.submissions, submissions);
+      EXPECT_EQ(modeling.modeling_sdk_projection_stats_for_tests()
+                    .native_selection_projection_build_count,
+                projection.native_selection_projection_build_count);
+      EXPECT_EQ(modeling.tool_preview_work_stats().signature_enumeration_count,
+                work.signature_enumeration_count);
+      EXPECT_EQ(modeling.tool_preview_work_stats().mesh_extraction_count,
+                work.mesh_extraction_count);
+    };
     ASSERT_TRUE(submit().persistent_submitted);
-    const auto original_lines = target.persistent.lines.size();
-    ASSERT_GT(original_lines, 0u);
+    const auto original_wires = submitted_wires();
+    ASSERT_FALSE(original_wires.empty());
+    const auto undo_before = session.history().undo_count();
+    const auto redo_before = session.history().redo_count();
     ASSERT_TRUE(editor.commands().execute(command).ok());
     ASSERT_TRUE(submit().persistent_submitted);
     const auto initial_lines = target.persistent.lines.size();
@@ -458,19 +539,73 @@ TEST(SelectedMeshOutlinePresentationTests,
     ASSERT_TRUE(updated.ok()) << updated.error_message();
     ASSERT_TRUE(submit().persistent_submitted);
     EXPECT_GT(target.persistent.lines.size(), initial_lines);
-    const auto builds = provider.builds;
-    const auto submissions = target.submissions;
-    for (int frame = 0; frame < 4; ++frame) {
-      const auto stable = submit();
-      EXPECT_FALSE(stable.selection_source_refreshed);
-      EXPECT_FALSE(stable.persistent_submitted);
+    const auto content_revision = modeling.content_revision();
+    auto previous_wires = submitted_wires();
+    for (const auto &[setting, value] :
+         std::array<std::pair<std::string_view, double>, 3>{
+             {{"operation.bridge.start_tension", 0.25},
+              {"operation.bridge.end_tension", 2.5},
+              {"operation.bridge.start_tension", 1.75}}}) {
+      SCOPED_TRACE(setting);
+      ASSERT_TRUE(editor.tools().set_setting("bridge", setting, value).ok());
+      EXPECT_EQ(modeling.content_revision(), content_revision);
+      EXPECT_EQ(session.history().undo_count(), undo_before);
+      EXPECT_EQ(session.history().redo_count(), redo_before);
+      ASSERT_TRUE(submit().persistent_submitted);
+      const auto current_wires = submitted_wires();
+      EXPECT_EQ(current_wires.size(), previous_wires.size());
+      EXPECT_NE(current_wires, previous_wires);
+      ASSERT_NO_FATAL_FAILURE(expect_accepted_endpoints());
+      ASSERT_NO_FATAL_FAILURE(expect_unchanged_frames());
+      previous_wires = current_wires;
     }
-    EXPECT_EQ(provider.builds, builds);
-    EXPECT_EQ(target.submissions, submissions);
+    const auto accepted_settings = modeling.interaction_settings();
+    const auto settings_revision = editor.tools().active_settings_revision();
+    const auto revision_values = [&] {
+      const auto revisions = editor.revisions();
+      return std::array{revisions.project_revision, revisions.scene_revision,
+          revisions.scene_layer_revision, revisions.scene_settings_revision,
+          revisions.asset_revision, revisions.modeling_content_revision,
+          revisions.modeling_selection_revision};
+    };
+    const auto revisions_before_rejection = revision_values();
+    EXPECT_FALSE(editor.tools().set_setting(
+        "bridge", "operation.bridge.start_tension",
+        std::numeric_limits<double>::quiet_NaN()).ok());
+    EXPECT_EQ(modeling.interaction_settings(), accepted_settings);
+    EXPECT_EQ(editor.tools().active_settings_revision(), settings_revision);
+    EXPECT_EQ(revision_values(), revisions_before_rejection);
+    EXPECT_EQ(session.history().undo_count(), undo_before);
+    EXPECT_EQ(session.history().redo_count(), redo_before);
+    EXPECT_EQ(submitted_wires(), previous_wires);
+    ASSERT_NO_FATAL_FAILURE(expect_unchanged_frames());
     ASSERT_TRUE(editor.commands().execute_native_tool_settings_intent(
         QuaderNativeToolSettingsIntent::Cancel).ok());
     ASSERT_TRUE(submit().persistent_submitted);
-    EXPECT_EQ(target.persistent.lines.size(), original_lines);
+    EXPECT_EQ(submitted_wires(), original_wires);
+    EXPECT_EQ(session.history().undo_count(), undo_before);
+    EXPECT_EQ(session.history().redo_count(), redo_before);
+    ASSERT_NO_FATAL_FAILURE(expect_unchanged_frames());
+    ASSERT_TRUE(editor.commands().execute(command).ok());
+    ASSERT_TRUE(submit().persistent_submitted);
+    const auto committed_wires = submitted_wires();
+    EXPECT_EQ(committed_wires, previous_wires);
+    // After acceptance, Undo/Redo uses the production authoring/source revision
+    // channels. An inactive preview signature does not own committed history.
+    isolate_preview_signature = false;
+    ASSERT_TRUE(editor.commands().execute_native_tool_settings_intent(
+        QuaderNativeToolSettingsIntent::Apply).ok());
+    (void)submit();
+    EXPECT_EQ(submitted_wires(), committed_wires);
+    EXPECT_EQ(session.history().undo_count(), undo_before + 1u);
+    ASSERT_TRUE(editor.history().undo().ok());
+    ASSERT_TRUE(submit().persistent_submitted);
+    EXPECT_EQ(submitted_wires(), original_wires);
+    ASSERT_TRUE(editor.history().redo().ok());
+    ASSERT_TRUE(submit().persistent_submitted);
+    EXPECT_EQ(submitted_wires(), committed_wires);
+    ASSERT_NO_FATAL_FAILURE(expect_accepted_endpoints());
+    ASSERT_NO_FATAL_FAILURE(expect_unchanged_frames());
   }
 }
 

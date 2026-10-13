@@ -49,9 +49,9 @@ apply_preview_operation(const ModelingPreviewState &state,
 
   switch (state.kind) {
   case ModelingPreviewKind::BridgeEdges:
-    return document.bridge_selected_edges(state.bridge.steps);
+    return document.bridge_selected_edges(state.bridge);
   case ModelingPreviewKind::BridgeFaces:
-    return document.bridge_selected_faces(state.bridge.steps);
+    return document.bridge_selected_faces(state.bridge);
   case ModelingPreviewKind::EdgeBevel:
     return document.bevel_selected_edges({
         .width = state.edge_bevel.width,

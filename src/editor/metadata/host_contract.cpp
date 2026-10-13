@@ -291,7 +291,7 @@ std::span<const HostActionDescriptor> action_descriptors()
                                            HostActiveSelectionKind::None,
                                            false, 2)),
       operation_action(
-          "interpolated_bridge_edges", "Bridge Edges", "bridge",
+          "preview_bridge_edges", "Bridge Edges", "bridge",
           action_availability(HostSelectionMode::Edge, 0, 2,
                               HostActiveSelectionKind::None, false, 2),
           HostPreviewKind::Bridge),
@@ -320,7 +320,7 @@ std::span<const HostActionDescriptor> action_descriptors()
                                            HostActiveSelectionKind::None, false,
                                            0, 2)),
       operation_action(
-          "interpolated_bridge_faces", "Bridge Faces", "bridge",
+          "preview_bridge_faces", "Bridge Faces", "bridge",
           action_availability(HostSelectionMode::Face, 0, 0,
                               HostActiveSelectionKind::None, false, 0, 2),
           HostPreviewKind::Bridge),
@@ -391,7 +391,7 @@ std::span<const HostOperationPanelDescriptor> operation_panel_descriptors()
       "soften_edge_normals",
       "bevel_edges",
       "bridge_edges",
-      "interpolated_bridge_edges",
+      "preview_bridge_edges",
       "dissolve_edges",
       "merge_edges",
       "collapse_edges",
@@ -400,7 +400,7 @@ std::span<const HostOperationPanelDescriptor> operation_panel_descriptors()
   }};
   static constexpr std::array<std::string_view, 10> kFaceActions{{
       "bridge_faces",
-      "interpolated_bridge_faces",
+      "preview_bridge_faces",
       "invert_faces",
       "combine_faces",
       "collapse_faces",
@@ -559,8 +559,8 @@ std::span<const HostUiPlacementDescriptor> ui_placement_descriptors()
                               "path_array", 110),
       viewport_tool_placement("toolbar_uv_peel_tool", "modal_modeling_tools",
                               "uv_peel", 120, true),
-      {"settings_interpolated_bridge", "tool_settings_panel",
-       "operation_settings", "Interpolated Bridge",
+      {"settings_bridge", "tool_settings_panel",
+       "operation_settings", "Bridge",
        HostUiPlacementTargetKind::PreferenceGroup, "operation.bridge", 0, false,
        HostUiVisibilityCondition::BridgePreviewActive},
       {"settings_edge_bevel", "tool_settings_panel", "operation_settings",

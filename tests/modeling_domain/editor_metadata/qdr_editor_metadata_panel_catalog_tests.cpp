@@ -120,7 +120,7 @@ TEST(QdrEditorMetadataPanelCatalogTests, HostContractOperationPanelPreservesNati
 		"soften_edge_normals",
 		"bevel_edges",
 		"bridge_edges",
-		"interpolated_bridge_edges",
+		"preview_bridge_edges",
 		"dissolve_edges",
 		"merge_edges",
 		"collapse_edges",
@@ -130,7 +130,7 @@ TEST(QdrEditorMetadataPanelCatalogTests, HostContractOperationPanelPreservesNati
 
 	check_action_order(require_panel("face_operations"), std::array<std::string_view, 10> {{
 		"bridge_faces",
-		"interpolated_bridge_faces",
+		"preview_bridge_faces",
 		"invert_faces",
 		"combine_faces",
 		"collapse_faces",

@@ -30,7 +30,7 @@ TEST(QdrDocumentOperationBridgeFacesTests, BridgeFacesConnectsTwoOpenFaceIslands
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
 }
 
-TEST(QdrDocumentOperationBridgeFacesTests, InterpolatedBridgeFacesCreatesOneRingPerStep) {
+TEST(QdrDocumentOperationBridgeFacesTests, BridgeFacesCreatesOneRingPerStep) {
 	Document document = qdr_test::make_parallel_quad_document();
 	Selection selection = qdr_test::all_face_selection(document);
 

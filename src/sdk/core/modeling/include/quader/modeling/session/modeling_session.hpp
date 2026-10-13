@@ -469,6 +469,8 @@ public:
   bridge_objects(ObjectId survivor_id, ObjectId source_id,
                  Transform3 survivor_from_source, SelectionKind selection_kind,
                  int steps = 1);
+  [[nodiscard]] Result<OperationResult> bridge_objects(ObjectId survivor_id, ObjectId source_id,
+      Transform3 survivor_from_source, SelectionKind selection_kind, BridgeOptions options);
   /**
    * Builds the exact Bridge survivor document without mutating session state.
    * The caller can stage it as ReplaceExisting beside a RemoveExisting source.
@@ -477,6 +479,8 @@ public:
   prepare_bridge_documents(ObjectId survivor_id, ObjectId source_id,
                            Transform3 survivor_from_source,
                            SelectionKind selection_kind, int steps = 1) const;
+  [[nodiscard]] Result<SessionBridgePreviewCandidate> prepare_bridge_documents(ObjectId survivor_id,
+      ObjectId source_id, Transform3 survivor_from_source, SelectionKind selection_kind, BridgeOptions options) const;
   /**
    * Prepares vertex or edge merging without changing session state.
    * Sources exclude the survivor and each operand must have selected elements.
@@ -671,6 +675,8 @@ public:
   /// Absent outside bevel previews or when participants use different widths.
   [[nodiscard]] std::optional<EdgeBevelWidthFeedback>
   preview_edge_bevel_width() const noexcept;
+  /** Returns the first accepted nonremoved mesh participant's Bridge guide. */
+  [[nodiscard]] std::optional<BridgeShapeFeedback> preview_bridge_shape() const noexcept;
   [[nodiscard]] SessionPreviewWorkStats preview_work_stats() const;
   [[nodiscard]] SessionMutationCheckpointWorkStats
   mutation_checkpoint_work_stats() const;

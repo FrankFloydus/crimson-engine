@@ -1162,7 +1162,7 @@ private:
         pair &&
         (command_id_ == quader_command::kModelingBridgeFaces.string() ||
          command_id_ ==
-             quader_command::kModelingInterpolatedBridgeFaces.string());
+             quader_command::kModelingPreviewBridgeFaces.string());
     const bool isolated_face =
         !pair &&
         (command_id_ == quader_command::kModelingThickenFaces.string() ||

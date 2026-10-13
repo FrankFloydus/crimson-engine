@@ -432,6 +432,9 @@ NativeViewportToolCoordinator::presentation_snapshot() const {
       .linear_array_handle = linear_array_.handle_state(),
       .radial_array_center = radial_array_.center_state(),
       .extrusion_handle = extrusion,
+      .bridge_handle = modeling_.bridge_preview_handle_state(),
+      .bridge_hovered_part = bridge_interaction_.hovered_part(),
+      .bridge_dragging = bridge_interaction_.dragging(),
       .curve_preview = &curve_.preview_state(),
       .curve_controls_editable = curve_.controls_editable(),
       .curve_dragging = curve_.dragging(),
@@ -478,6 +481,12 @@ NativeViewportToolCoordinator::handle_pointer_frame(
   if (extrude_.active() || extrude_interaction_.dragging() ||
       extrude_interaction_.suppressing_release()) {
     return extrude_interaction_.handle_frame(extrude_, camera, frame, &modeling_);
+  }
+  if (bridge_interaction_.dragging() || bridge_interaction_.suppressing_release() ||
+      modeling_.bridge_preview_handle_state().has_value()) {
+    return bridge_interaction_.handle_frame(modeling_, camera, frame, [this] {
+      return settle_modeling_(creation_material_);
+    });
   }
   if (align_.active()) {
     if (frame.input_result.cancel_requested) {
@@ -526,17 +535,26 @@ NativeViewportToolCoordinator::handle_pointer_frame(
 void NativeViewportToolCoordinator::clear_pointer_drag_state() {
   interaction_.clear_drag_state();
   extrude_interaction_.clear_drag_state();
+  bridge_interaction_.clear_drag_state();
   (void)extrude_.cancel_drag();
   (void)curve_.set_preset_hover(std::nullopt);
 }
 
 bool NativeViewportToolCoordinator::pointer_dragging() const {
-  return interaction_.dragging() || extrude_interaction_.dragging();
+  return interaction_.dragging() || extrude_interaction_.dragging() ||
+         bridge_interaction_.dragging();
+}
+
+CommandResult NativeViewportToolCoordinator::cancel_bridge_pointer_drag() {
+  return bridge_interaction_.cancel_drag(modeling_);
 }
 
 ViewportPointerCursor NativeViewportToolCoordinator::pointer_cursor() const {
   if (extrude_.active()) {
     return extrude_interaction_.pointer_cursor();
+  }
+  if (modeling_.bridge_preview_handle_state().has_value()) {
+    return bridge_interaction_.pointer_cursor();
   }
   if (light_creation_.active()) {
     return ViewportPointerCursor::PrecisionCross;
@@ -693,6 +711,7 @@ CommandResult NativeViewportToolCoordinator::settle_transient_state() {
   }
   interaction_.clear_drag_state();
   extrude_interaction_.clear_drag_state();
+  bridge_interaction_.clear_drag_state();
   return result;
 }
 
@@ -741,6 +760,7 @@ CommandResult NativeViewportToolCoordinator::cancel_transient_state() {
   }
   interaction_.clear_drag_state();
   extrude_interaction_.clear_drag_state();
+  bridge_interaction_.clear_drag_state();
   return {
       .ok = true,
       .changed = modeling_cancel.changed || native_cancel.changed ||
@@ -754,6 +774,7 @@ CommandResult NativeViewportToolCoordinator::commit_active() {
   if (result.ok) {
     interaction_.clear_drag_state();
     extrude_interaction_.clear_drag_state();
+    bridge_interaction_.clear_drag_state();
   }
   return result;
 }
@@ -788,6 +809,7 @@ CommandResult NativeViewportToolCoordinator::cancel_active() {
   if (result.ok) {
     interaction_.clear_drag_state();
     extrude_interaction_.clear_drag_state();
+    bridge_interaction_.clear_drag_state();
   }
   return result;
 }

@@ -5136,11 +5136,11 @@ TEST(ModelingSessionServiceSplitTests,
             quader_editor_core::EditorOperationId::Bridge);
   const auto &bridge_settings =
       std::get<quader_editor_core::BridgeOperationSettings>(bridge->settings);
-  const auto interpolated_bridge =
+  const auto preview_bridge =
       std::get<quader_editor_core::BridgeOperationSettings>(
           settings_for_operation(quader_editor_core::EditorOperationId::Bridge,
                                  interaction_settings));
-  EXPECT_EQ(interpolated_bridge.steps, 4);
+  EXPECT_EQ(preview_bridge.steps, 4);
   EXPECT_EQ(bridge_settings.steps, 1);
 
   const std::optional<quader_editor_core::EditorOperationCommand> bevel =

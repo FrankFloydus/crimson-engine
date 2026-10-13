@@ -3680,10 +3680,10 @@ void QuaderCommandsApi::Impl::register_commands() {
       set_keybinding_action_id(
           command_id,
           "modeling.operation." + std::string(tool->operation_id()));
-    } else if (tool->id() == "interpolated_bridge_edges" ||
-               tool->id() == "interpolated_bridge_faces") {
+    } else if (tool->id() == "preview_bridge_edges" ||
+               tool->id() == "preview_bridge_faces") {
       set_keybinding_action_id(command_id,
-                               "modeling.preview.interpolated_bridge");
+                               "modeling.preview.bridge");
     }
   }
   set_keybinding_selection_modes(

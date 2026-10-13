@@ -186,6 +186,8 @@ struct BridgeOperationSchema {
   std::string_view operation_id = "bridge";
   std::string_view label = "Bridge";
   IntOperationOptionSchema steps;
+  FloatOperationOptionSchema start_tension;
+  FloatOperationOptionSchema end_tension;
 };
 
 /**
@@ -286,6 +288,8 @@ struct DuplicateMeshesOperationSchema {
  */
 struct BridgeOperationSettings {
   int steps = 1;
+  double start_tension = 1.0;
+  double end_tension = 1.0;
 };
 
 /**
@@ -392,6 +396,8 @@ inline constexpr BridgeOperationSchema bridge_operation_schema() {
           quader::modeling::OperationKind::Bridge);
   constexpr quader::modeling::OperationParameterDescriptor kSteps =
       kOperation->parameters[0];
+  constexpr auto kStartTension = kOperation->parameters[1];
+  constexpr auto kEndTension = kOperation->parameters[2];
   return {
       EditorOperationId::Bridge,
       kOperation->id,
@@ -399,6 +405,12 @@ inline constexpr BridgeOperationSchema bridge_operation_schema() {
       {kSteps.id, "Steps", static_cast<int>(kSteps.default_value),
        static_cast<int>(kSteps.minimum), static_cast<int>(kSteps.maximum),
        static_cast<int>(kSteps.step), kSteps.hard_limits},
+      {kStartTension.id, "Start Tension", kStartTension.default_value,
+       kStartTension.minimum, kStartTension.maximum, kStartTension.step,
+       kStartTension.hard_limits},
+      {kEndTension.id, "End Tension", kEndTension.default_value,
+       kEndTension.minimum, kEndTension.maximum, kEndTension.step,
+       kEndTension.hard_limits},
   };
 }
 
@@ -625,10 +637,16 @@ operation_option_descriptor_catalog() {
       merge_by_distance_operation_schema();
   constexpr HalfCutOperationSchema kHalfCut = half_cut_operation_schema();
 
-  static constexpr std::array<EditorOperationOptionDescriptor, 12> kDescriptors{{
+  static constexpr std::array<EditorOperationOptionDescriptor, 14> kDescriptors{{
       operation_option_descriptor(kBridge.id, kBridge.operation_id,
                                   kBridge.label, "operation.bridge",
                                   "operation.bridge.steps", kBridge.steps),
+      operation_option_descriptor(kBridge.id, kBridge.operation_id,
+                                  kBridge.label, "operation.bridge",
+                                  "operation.bridge.start_tension", kBridge.start_tension),
+      operation_option_descriptor(kBridge.id, kBridge.operation_id,
+                                  kBridge.label, "operation.bridge",
+                                  "operation.bridge.end_tension", kBridge.end_tension),
       operation_option_descriptor(kEdgeBevel.id, kEdgeBevel.operation_id,
                                   kEdgeBevel.label, "operation.edge_bevel",
                                   "operation.edge_bevel.width",
@@ -783,6 +801,9 @@ inline BridgeOperationSettings
 normalize_bridge_operation_settings(BridgeOperationSettings settings) {
   settings.steps =
       normalize_operation_int(bridge_operation_schema().steps, settings.steps);
+  const auto schema = bridge_operation_schema();
+  settings.start_tension = normalize_operation_float(schema.start_tension, settings.start_tension);
+  settings.end_tension = normalize_operation_float(schema.end_tension, settings.end_tension);
   return settings;
 }
 

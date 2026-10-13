@@ -57,8 +57,30 @@ std::optional<std::size_t> directed_face_edge_index(const Face& face, ElementId 
 std::optional<std::pair<ElementId, ElementId>> oriented_edge_in_face(const Face& face, Edge edge);
 std::optional<OpenBridgeEdgeInfo> open_bridge_edge_info( const Document& document, Edge edge, const std::map<std::pair<ElementId, ElementId>, int>& incidence_counts);
 quader::QVec3 bridge_edge_outward_direction(const Document& document, const OpenBridgeEdgeInfo& edge_info);
-quader::QVec3 curved_bridge_position( quader::QVec3 start, quader::QVec3 end, quader::QVec3 start_outward, quader::QVec3 end_outward, int step_index, int step_count);
-std::vector<ElementId> unique_bridge_vertices(Edge first_edge, Edge second_edge);
+/** Retains the accepted cubic coefficients shared by rail geometry and guide.
+ */
+struct BridgeRailCurve {
+  quader::QVec3 start{};
+  quader::QVec3 end{};
+  quader::QVec3 start_tangent{};
+  quader::QVec3 end_tangent{};
+  quader::QVec3 start_handle_axis{};
+  quader::QVec3 end_handle_axis{};
+  bool linear = true;
+};
+std::optional<BridgeOptions> normalized_bridge_options(BridgeOptions options);
+BridgeRailCurve prepare_bridge_rail_curve(quader::QVec3 start,
+                                          quader::QVec3 end,
+                                          quader::QVec3 start_outward,
+                                          quader::QVec3 end_outward,
+                                          const BridgeOptions &options);
+quader::QVec3 evaluate_bridge_rail_curve(const BridgeRailCurve &curve,
+                                         int step_index, int step_count);
+BridgeShapeFeedback
+bridge_shape_feedback(std::span<const BridgeRailCurve> curves,
+                      const BridgeOptions &options);
+std::vector<ElementId> unique_bridge_vertices(Edge first_edge,
+                                              Edge second_edge);
 bool face_contains_reversed_bridge_edge(const Face& face, const OpenBridgeEdgeInfo& edge_info);
 std::optional<std::vector<ElementId>> bridge_face_loop_from_open_edges( const Document& document, const OpenBridgeEdgeInfo& first_edge, const OpenBridgeEdgeInfo& second_edge);
 std::tuple<ElementId, ElementId, ElementId> edge_bevel_side_key(ElementId face_id, Edge edge);
@@ -129,6 +151,6 @@ std::vector<ElementId> aligned_loop_vertices( const Document& document, std::spa
 quader::QVec3 vertex_position_or_zero(const Document& document, ElementId vertex_id);
 quader::QVec3 vertex_loop_centroid(const Document& document, std::span<const ElementId> vertex_ids);
 bool append_bridge_face(Document& document, std::vector<ElementId> vertices, std::uint32_t material_slot, quader::QVec3 expected_normal, std::vector<ElementId>& bridge_face_ids, const FaceTextureTransform& texture_transform = {});
-bool append_bridge_faces_between_loops( Document& document, std::span<const ElementId> first_vertices, std::span<const ElementId> second_vertices, quader::QVec3 first_normal, quader::QVec3 second_normal, std::uint32_t material_slot, int steps, std::vector<ElementId>& bridge_face_ids, bool skip_degenerate_faces, const FaceTextureTransform& texture_transform = {});
+bool append_bridge_faces_between_loops( Document& document, std::span<const ElementId> first_vertices, std::span<const ElementId> second_vertices, quader::QVec3 first_normal, quader::QVec3 second_normal, std::uint32_t material_slot, BridgeOptions options, std::vector<ElementId>& bridge_face_ids, bool skip_degenerate_faces, const FaceTextureTransform& texture_transform, BridgeShapeFeedback& feedback);
 quader::QVec3 face_centroid(const Document& document, const Face& face);
 } // namespace quader_poly::document_internal

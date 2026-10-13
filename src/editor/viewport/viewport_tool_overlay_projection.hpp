@@ -7,6 +7,7 @@
 #pragma once
 
 #include "editor/modeling/modeling_types.hpp"
+#include "editor/tools/bridge_preview_handle_layout.hpp"
 #include "render/overlay/viewport_overlay_submission_coordinator.hpp"
 #include "render/overlay/viewport_scene_overlay_builder.hpp"
 #include "render/viewport_overlay_frame.hpp"
@@ -64,6 +65,9 @@ struct ViewportToolOverlaySourceInputs final {
   const PivotHandleState *pivot_handle = nullptr;
   const LinearArrayHandleState *linear_array_handle = nullptr;
   const ExtrudeHandleState *extrusion_handle = nullptr;
+  const BridgePreviewHandleState *bridge_handle = nullptr;
+  BridgePreviewHandlePart bridge_hovered_part = BridgePreviewHandlePart::None;
+  bool bridge_dragging = false;
   const RadialArrayCenterState *radial_array_center = nullptr;
   ViewportToolOverlaySourceRevisions revisions;
   /// Restricts pointer-local snap feedback and selection marquee to their pane.
@@ -123,6 +127,11 @@ public:
   static void append_extrusion_handle(
       ViewportOverlayFrame &frame, const ViewportCameraController &camera,
       const ExtrudeHandleState &handle, float raster_scale = 1.0F);
+  static void append_bridge_handles(
+      ViewportOverlayFrame &frame, const ViewportCameraController &camera,
+      const BridgePreviewHandleState &handle,
+      BridgePreviewHandlePart hovered_part = BridgePreviewHandlePart::None,
+      bool dragging = false, float raster_scale = 1.0F);
   static void append_radial_array_center(
       ViewportOverlayFrame &frame, const RadialArrayCenterState &center);
 

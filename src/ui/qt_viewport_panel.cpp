@@ -1957,6 +1957,7 @@ void QtViewportPanel::prepare_viewports(
         .native_tool_overlay_visible =
             linear_array_handle.visible || radial_array_center_visible ||
             extrusion_handle.active ||
+            (gizmos_visible && native_presentation.bridge_handle.has_value()) ||
             (native_presentation.curve_preview != nullptr &&
              native_presentation.curve_preview->active) ||
             assets.curve_count() != 0u,
@@ -2025,6 +2026,12 @@ void QtViewportPanel::prepare_viewports(
             .pivot_handle = &pivot_handle,
             .linear_array_handle = &linear_array_handle,
             .extrusion_handle = &extrusion_handle,
+            .bridge_handle = native_presentation.bridge_handle
+                ? &*native_presentation.bridge_handle : nullptr,
+            .bridge_hovered_part = pane_state.id == interaction_pane_id_
+                ? native_presentation.bridge_hovered_part : BridgePreviewHandlePart::None,
+            .bridge_dragging = pane_state.id == interaction_pane_id_ &&
+                               native_presentation.bridge_dragging,
             .radial_array_center = &radial_array_center,
             .revisions = pane_tool_revisions,
             .interaction_pane = pane_state.id == interaction_pane_id_,

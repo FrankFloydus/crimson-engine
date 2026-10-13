@@ -570,7 +570,7 @@ CapturedSelection capture_selection(const SceneSession &session, const ProjectSe
   }
   constexpr std::array<std::string_view, 11> kOperationNames{
       "connect_vertices", "merge_vertices", "merge_vertices_at_center", "merge_by_distance",
-      "merge_edges", "split_edges", "connect_edges", "bridge_edges", "interpolated_bridge_edges",
+      "merge_edges", "split_edges", "connect_edges", "bridge_edges", "preview_bridge_edges",
       "dissolve_vertices", "dissolve_edges"};
   const ModelingActionQuery query{.suppress_when_modal_tool_owns_viewport = false, .include_disabled = true, .include_hidden = true};
   for (const auto name : kOperationNames) {
@@ -582,7 +582,7 @@ CapturedSelection capture_selection(const SceneSession &session, const ProjectSe
         else if (name == "dissolve_vertices") operation->disabled_reason = "Selected vertices do not belong to an authored face.";
         else if (name == "split_edges" || name == "dissolve_edges") operation->disabled_reason = "Selected edges must each have exactly two incident authored faces.";
         else if (name == "connect_edges") operation->disabled_reason = "Selected edges do not belong to authored faces.";
-        else if (name == "bridge_edges" || name == "interpolated_bridge_edges") operation->disabled_reason = "Selected edges cannot form the required bridge pair.";
+        else if (name == "bridge_edges" || name == "preview_bridge_edges") operation->disabled_reason = "Selected edges cannot form the required bridge pair.";
         else operation->disabled_reason = "This operation is unavailable for the current selection mode or topology.";
       }
       capture.operations.push_back(std::move(*operation));

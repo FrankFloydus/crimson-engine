@@ -333,10 +333,10 @@ inline constexpr QuaderCommandId kModelingBridgeFaces{"modeling.bridge_faces"};
 inline constexpr QuaderCommandId kModelingRadialAlignFaces{
     "modeling.radial_align_faces"};
 inline constexpr QuaderCommandId kModelingBevelEdges{"modeling.bevel_edges"};
-inline constexpr QuaderCommandId kModelingInterpolatedBridgeEdges{
-    "modeling.interpolated_bridge_edges"};
-inline constexpr QuaderCommandId kModelingInterpolatedBridgeFaces{
-    "modeling.interpolated_bridge_faces"};
+inline constexpr QuaderCommandId kModelingPreviewBridgeEdges{
+    "modeling.preview_bridge_edges"};
+inline constexpr QuaderCommandId kModelingPreviewBridgeFaces{
+    "modeling.preview_bridge_faces"};
 inline constexpr QuaderCommandId kModelingThickenFaces{
     "modeling.thicken_faces"};
 inline constexpr QuaderCommandId kModelingCreateOuterHull{
@@ -647,8 +647,8 @@ inline constexpr QuaderCommandId kTypedCommandIds[] = {
     kModelingBridgeFaces,
     kModelingRadialAlignFaces,
     kModelingBevelEdges,
-    kModelingInterpolatedBridgeEdges,
-    kModelingInterpolatedBridgeFaces,
+    kModelingPreviewBridgeEdges,
+    kModelingPreviewBridgeFaces,
     kModelingThickenFaces,
     kModelingCreateOuterHull,
     kModelingHalfCut,

@@ -75,6 +75,13 @@ using quader::modeling::Vec3;
 using quader::modeling::VertexId;
 using quader::modeling::VertexPositionUpdate;
 
+[[nodiscard]] modeling::BridgeOptions sdk_bridge_options(
+    const quader_editor_core::BridgeOperationSettings &settings) {
+  return {.steps = settings.steps,
+          .start_tension = static_cast<float>(settings.start_tension),
+          .end_tension = static_cast<float>(settings.end_tension)};
+}
+
 template <typename ResultType>
 [[nodiscard]] ResultType rollback_publication_result(
     ModelingHostPublicationTransaction &publication, ResultType result) {
@@ -1472,7 +1479,12 @@ public:
     // Retain the transaction identity so begin/end and replacement still refresh.
     const std::uint64_t semantic_revision =
         has_acknowledged_affine_transform_preview() ? 0U : fence.polygon_content_revision;
-    return (signature ^ semantic_revision) * 1099511628211ULL;
+    signature = (signature ^ semantic_revision) * 1099511628211ULL;
+    if (active_preview_operation_ == quader_editor_core::EditorOperationId::Bridge) {
+      // Handle edits remain visible even when a one-span mesh stays identical.
+      signature = (signature ^ fence.preview_content_revision) * 1099511628211ULL;
+    }
+    return signature;
   }
 
   /// Read the visible extrusion candidate without replacing its durable asset.
@@ -3717,7 +3729,7 @@ public:
           quader_editor_core::normalize_bridge_operation_settings(
               value != nullptr ? *value
                                : quader_editor_core::BridgeOperationSettings{});
-      return bridge_selected_components(normalized.steps);
+      return bridge_selected_components(sdk_bridge_options(normalized));
     }
     if (operation == Id::MergeVerticesToActive) {
       const auto active = active_sdk_object();
@@ -3785,8 +3797,8 @@ public:
                                : quader_editor_core::BridgeOperationSettings{});
       mutation = [this, normalized](PolygonDocument &document) {
         return selection_mode_ == ModelingSelectionMode::Face
-                   ? document.bridge_selected_faces(normalized.steps)
-                   : document.bridge_selected_edges(normalized.steps);
+                   ? document.bridge_selected_faces(sdk_bridge_options(normalized))
+                   : document.bridge_selected_edges(sdk_bridge_options(normalized));
       };
       break;
     }
@@ -4461,7 +4473,7 @@ public:
             .message = "Half-Cut preview updated."};
   }
 
-  [[nodiscard]] ModelingCommandResult begin_bridge_preview(int steps) {
+  [[nodiscard]] ModelingCommandResult begin_bridge_preview(modeling::BridgeOptions options) {
     if (selection_mode_ != ModelingSelectionMode::Edge &&
         selection_mode_ != ModelingSelectionMode::Face) {
       return failure("Bridge works only in edge or face mode.");
@@ -4506,7 +4518,7 @@ public:
             selection_mode_ == ModelingSelectionMode::Face
                 ? SelectionKind::Face
                 : SelectionKind::Edge,
-            steps);
+            options);
     if (!candidate.ok()) {
       return failure(candidate.error_message());
     }
@@ -4585,7 +4597,7 @@ public:
             .message = "Bridge preview started."};
   }
 
-  [[nodiscard]] ModelingCommandResult update_bridge_preview(int steps) {
+  [[nodiscard]] ModelingCommandResult update_bridge_preview(modeling::BridgeOptions options) {
     const modeling::PreviewTransactionSummary preview =
         session_.preview_summary();
     if (!structural_preview_host_state_.has_value() ||
@@ -4607,7 +4619,7 @@ public:
             selection_mode_ == ModelingSelectionMode::Face
                 ? SelectionKind::Face
                 : SelectionKind::Edge,
-            steps);
+            options);
     if (!candidate.ok()) {
       return failure(candidate.error_message());
     }
@@ -5024,7 +5036,7 @@ public:
       }
       const auto normalized =
           quader_editor_core::normalize_bridge_operation_settings(*bridge);
-      ModelingCommandResult result = begin_bridge_preview(normalized.steps);
+      ModelingCommandResult result = begin_bridge_preview(sdk_bridge_options(normalized));
       if (result.ok) {
         active_preview_settings_ = settings;
       }
@@ -5106,7 +5118,7 @@ public:
       const auto normalized =
           quader_editor_core::normalize_bridge_operation_settings(*bridge);
       ModelingCommandResult result =
-          update_bridge_preview(normalized.steps);
+          update_bridge_preview(sdk_bridge_options(normalized));
       if (result.ok) {
         active_preview_settings_ = settings;
       }
@@ -5151,6 +5163,48 @@ public:
   [[nodiscard]] std::optional<quader_editor_core::EditorOperationId>
   active_preview_operation() const noexcept {
     return active_preview_operation_;
+  }
+
+  [[nodiscard]] std::optional<BridgePreviewHandleState>
+  bridge_preview_handle_state() const {
+    if (active_preview_operation_ != quader_editor_core::EditorOperationId::Bridge ||
+        !mesh_preview_host_baseline_.has_value() ||
+        !mesh_preview_host_baseline_->fence_acknowledged ||
+        !session_.preview_active(mesh_preview_host_baseline_->preview_id)) {
+      return std::nullopt;
+    }
+    const auto feedback = session_.preview_bridge_shape();
+    const auto &fence = mesh_preview_host_baseline_->acknowledged_sdk;
+    const auto participant = std::ranges::find(
+        fence.preview_objects, modeling::SessionPreviewAction::ReplaceExisting,
+        &PreviewSdkObjectFence::action);
+    if (!feedback.has_value() || participant == fence.preview_objects.end()) {
+      return std::nullopt;
+    }
+    const auto native = native_object(participant->object);
+    const auto entity = native.has_value()
+        ? object_map_.entity_for_modeling_object(*native) : std::nullopt;
+    if (!native.has_value() || !entity.has_value() || !scene_.exists(*entity)) {
+      return std::nullopt;
+    }
+    const auto world = modeling_object_world_transform_resolver_
+        ? modeling_object_world_transform_resolver_(*native)
+        : std::optional<QMat4>{scene_.world_transform_matrix(*entity)};
+    if (!world.has_value()) return std::nullopt;
+    const auto native_vector = [](modeling::Vec3 value) {
+      return QVec3{value.x, value.y, value.z};
+    };
+    BridgePreviewHandleState state;
+    state.generation = (static_cast<std::uint64_t>(fence.preview.generation) << 32U) |
+                       fence.preview.index;
+    for (std::size_t index = 0; index < state.control_points.size(); ++index) {
+      state.control_points[index] = transform_point(*world, native_vector(feedback->controls[index]));
+    }
+    state.start_handle_axis = transform_vector(*world, native_vector(feedback->start_handle_axis));
+    state.end_handle_axis = transform_vector(*world, native_vector(feedback->end_handle_axis));
+    state.start_tension = feedback->start_tension;
+    state.end_tension = feedback->end_tension;
+    return state;
   }
 
   [[nodiscard]] std::optional<double>
@@ -13221,7 +13275,7 @@ private:
         "Snap vertices to floor failed.", false, true, true, true);
   }
 
-  [[nodiscard]] ModelingCommandResult bridge_selected_components(int steps) {
+  [[nodiscard]] ModelingCommandResult bridge_selected_components(modeling::BridgeOptions options) {
     if (selection_mode_ != ModelingSelectionMode::Edge &&
         selection_mode_ != ModelingSelectionMode::Face) {
       return failure("Bridge works only in edge or face mode.");
@@ -13313,7 +13367,7 @@ private:
         survivor, merged, to_sdk(survivor_from_merged),
         selection_mode_ == ModelingSelectionMode::Face ? SelectionKind::Face
                                                         : SelectionKind::Edge,
-        steps);
+        options);
     if (!bridged.ok() || !bridged.value().success ||
         !bridged.value().changed) {
       return rollback(bridged.ok() ? bridged.value().message
@@ -15517,8 +15571,8 @@ private:
       const ModelingSelectionMode mode = selection_mode_;
       return [normalized, mode](PolygonDocument &document) {
         return mode == ModelingSelectionMode::Face
-                   ? document.bridge_selected_faces(normalized.steps)
-                   : document.bridge_selected_edges(normalized.steps);
+                   ? document.bridge_selected_faces(sdk_bridge_options(normalized))
+                   : document.bridge_selected_edges(sdk_bridge_options(normalized));
       };
     }
     case Id::EdgeBevel: {
@@ -17029,6 +17083,11 @@ std::uint64_t ModelingSdkProjectionAdapter::content_revision() const {
 
 std::uint64_t ModelingSdkProjectionAdapter::selection_overlay_preview_signature() const noexcept {
   return impl_->selection_overlay_preview_signature();
+}
+
+std::optional<BridgePreviewHandleState>
+ModelingSdkProjectionAdapter::bridge_preview_handle_state() const {
+  return impl_->bridge_preview_handle_state();
 }
 
 std::uint64_t ModelingSdkProjectionAdapter::selection_revision() const {

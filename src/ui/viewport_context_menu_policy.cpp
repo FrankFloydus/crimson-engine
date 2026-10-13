@@ -72,7 +72,7 @@ constexpr CommandScope kCommandScopes[]{
     {quader_command::kModelingConnectEdges, kEdge, Operand::Selection},
     {quader_command::kModelingSplitEdges, kEdge, Operand::Selection},
     {quader_command::kModelingFillHole, kEdge, Operand::Selection},
-    {quader_command::kModelingInterpolatedBridgeEdges, kEdge, Operand::Selection},
+    {quader_command::kModelingPreviewBridgeEdges, kEdge, Operand::Selection},
     {quader_command::kModelingBevelEdges, kEdge, Operand::Selection},
     {quader_command::kModelingSnapEdgesToActive, kEdge, Operand::Selection},
     {quader_command::kModelingRadialAlignEdges, kEdge, Operand::Selection},
@@ -85,7 +85,7 @@ constexpr CommandScope kCommandScopes[]{
     {quader_command::kModelingExtractFaces, kFace, Operand::Selection},
     {quader_command::kModelingDetachFaces, kFace, Operand::Selection},
     {quader_command::kModelingCombineFaces, kFace, Operand::Selection},
-    {quader_command::kModelingInterpolatedBridgeFaces, kFace, Operand::Selection},
+    {quader_command::kModelingPreviewBridgeFaces, kFace, Operand::Selection},
     {quader_command::kModelingSliceQuad, kFace, Operand::Selection},
     {quader_command::kModelingThickenFaces, kFace, Operand::Selection},
     {quader_command::kModelingRadialAlignFaces, kFace, Operand::Selection},
@@ -221,14 +221,14 @@ viewport_context_menu_action_disposition(QuaderSelectionMode mode,
     break;
   case QuaderSelectionMode::Edge:
     if (action_id == "bevel_edges" || action_id == "bridge_edges" ||
-        action_id == "interpolated_bridge_edges" ||
+        action_id == "preview_bridge_edges" ||
         action_id == "connect_edges" || action_id == "fill_hole") {
       return ViewportContextMenuActionDisposition::Primary;
     }
     break;
   case QuaderSelectionMode::Face:
     if (action_id == "thicken_faces" || action_id == "bridge_faces" ||
-        action_id == "interpolated_bridge_faces" ||
+        action_id == "preview_bridge_faces" ||
         action_id == "combine_faces" || action_id == "extract_faces") {
       return ViewportContextMenuActionDisposition::Primary;
     }
@@ -272,7 +272,7 @@ std::uint32_t viewport_context_menu_primary_rank(QuaderSelectionMode mode,
     if (action_id == "bevel_edges") {
       return 10U;
     }
-    if (action_id == "bridge_edges" || action_id == "interpolated_bridge_edges") {
+    if (action_id == "bridge_edges" || action_id == "preview_bridge_edges") {
       return 20U;
     }
     if (action_id == "connect_edges") {
@@ -286,7 +286,7 @@ std::uint32_t viewport_context_menu_primary_rank(QuaderSelectionMode mode,
     if (action_id == "thicken_faces") {
       return 10U;
     }
-    if (action_id == "bridge_faces" || action_id == "interpolated_bridge_faces") {
+    if (action_id == "bridge_faces" || action_id == "preview_bridge_faces") {
       return 20U;
     }
     if (action_id == "combine_faces") {

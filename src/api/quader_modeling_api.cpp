@@ -53,6 +53,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <iterator>
 #include <memory>
 #include <span>
@@ -336,10 +337,24 @@ QuaderPreviewSettings preview_settings(QuaderMergeByDistanceArgs args) {
   return settings;
 }
 
-QuaderPreviewSettings bridge_preview_settings(int steps) {
+QuaderPreviewSettings bridge_preview_settings(QuaderBridgeArgs args) {
   QuaderPreviewSettings settings;
-  settings.interaction.bridge_steps = steps;
+  settings.interaction.bridge_steps = args.steps;
+  settings.interaction.bridge_start_tension = args.start_tension;
+  settings.interaction.bridge_end_tension = args.end_tension;
   return settings;
+}
+
+QuaderApiVoidResult update_bridge_preview_settings(
+    QuaderApiSession session, QuaderApiMutationRunner &mutations,
+    QuaderBridgeArgs args) {
+  auto &modeling = scene_session(session).modeling();
+  auto settings = modeling.interaction_settings();
+  settings.bridge_steps = args.steps;
+  settings.bridge_start_tension = args.start_tension;
+  settings.bridge_end_tension = args.end_tension;
+  return mutations.run_modeling_result(modeling.set_interaction_settings(settings),
+                                        "Update Operation Preview");
 }
 
 std::vector<QuaderElementId>
@@ -920,6 +935,17 @@ QuaderApiVoidResult QuaderPreviewHandle::update(QuaderEdgeBevelArgs args) {
   return update(preview_settings(args));
 }
 
+QuaderApiVoidResult QuaderPreviewHandle::update(QuaderBridgeArgs args) {
+  if (mutations_ != nullptr &&
+      !mutations_->belongs_to_active_scene(scene_session_id_)) {
+    return mutations_->stale_scene_reference_status("Preview handle");
+  }
+  if (!valid()) {
+    return begin_status_;
+  }
+  return update_bridge_preview_settings(*session_, *mutations_, args);
+}
+
 QuaderApiVoidResult QuaderPreviewHandle::update(QuaderThickenArgs args) {
   return update(preview_settings(args));
 }
@@ -1060,6 +1086,19 @@ QuaderApiVoidResult QuaderModelingSelection::execute_after_replace(
 QuaderPreviewHandle QuaderModelingSelection::begin_preview_after_replace(
     std::string_view action_id, const QuaderPreviewSettings &settings,
     std::string default_label) const {
+  const bool bridge = action_id == "preview_bridge_edges" ||
+                      action_id == "preview_bridge_faces";
+  if (bridge &&
+      (!std::isfinite(settings.interaction.bridge_start_tension) ||
+       !std::isfinite(settings.interaction.bridge_end_tension))) {
+    const auto status = invalid_api_status(session_, "Bridge tensions must be finite.");
+    if (mutations_ == nullptr) {
+      QuaderPreviewHandle rejected;
+      rejected.begin_status_ = status;
+      return rejected;
+    }
+    return QuaderPreviewHandle(session_, *mutations_, std::move(default_label), status);
+  }
   if (!release_allows_action(action_id) ||
       !release_allows_operation(action_id)) {
     if (mutations_ == nullptr) {
@@ -1081,7 +1120,12 @@ QuaderPreviewHandle QuaderModelingSelection::begin_preview_after_replace(
   QuaderModelingApi modeling(*session_, *mutations_);
   QuaderApiVoidResult began = modeling.begin_preview(action_id);
   if (began.ok()) {
-    QuaderApiVoidResult updated = modeling.update_preview(settings);
+    QuaderApiVoidResult updated = bridge
+        ? update_bridge_preview_settings(*session_, *mutations_,
+            {.steps = settings.interaction.bridge_steps,
+             .start_tension = settings.interaction.bridge_start_tension,
+             .end_tension = settings.interaction.bridge_end_tension})
+        : modeling.update_preview(settings);
     if (!updated.ok()) {
       began = std::move(updated);
     }
@@ -1252,10 +1296,14 @@ QuaderApiVoidResult QuaderEdgeSelection::bridge() const {
   return execute_after_replace("bridge_edges");
 }
 
-QuaderPreviewHandle QuaderEdgeSelection::interpolated_bridge(int steps) const {
-  return begin_preview_after_replace("interpolated_bridge_edges",
-                                     bridge_preview_settings(steps),
-                                     "Interpolated Bridge Edges");
+QuaderPreviewHandle QuaderEdgeSelection::begin_bridge_preview(int steps) const {
+  return begin_bridge_preview(QuaderBridgeArgs{.steps = steps});
+}
+
+QuaderPreviewHandle QuaderEdgeSelection::begin_bridge_preview(QuaderBridgeArgs args) const {
+  return begin_preview_after_replace("preview_bridge_edges",
+                                     bridge_preview_settings(args),
+                                     "Bridge Edges");
 }
 
 QuaderApiVoidResult QuaderEdgeSelection::dissolve() const {
@@ -1294,10 +1342,14 @@ QuaderApiVoidResult QuaderFaceSelection::bridge() const {
   return execute_after_replace("bridge_faces");
 }
 
-QuaderPreviewHandle QuaderFaceSelection::interpolated_bridge(int steps) const {
-  return begin_preview_after_replace("interpolated_bridge_faces",
-                                     bridge_preview_settings(steps),
-                                     "Interpolated Bridge Faces");
+QuaderPreviewHandle QuaderFaceSelection::begin_bridge_preview(int steps) const {
+  return begin_bridge_preview(QuaderBridgeArgs{.steps = steps});
+}
+
+QuaderPreviewHandle QuaderFaceSelection::begin_bridge_preview(QuaderBridgeArgs args) const {
+  return begin_preview_after_replace("preview_bridge_faces",
+                                     bridge_preview_settings(args),
+                                     "Bridge Faces");
 }
 
 QuaderApiVoidResult QuaderFaceSelection::invert() const {

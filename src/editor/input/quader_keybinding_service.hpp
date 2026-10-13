@@ -1302,9 +1302,16 @@ public:
         }
 
         const bool removal = command.starts_with("-");
-        const std::string target_id = removal ? command.substr(1u) : command;
+        std::string target_id = removal ? command.substr(1u) : command;
         if (target_id.empty()) {
           return "Removal keybinding must include a command id.";
+        }
+        // Bridge preview renames are migrated only at the persistence boundary.
+        // Assignments and removals keep their original declaration order.
+        if (target_id == "modeling.interpolated_bridge_edges") {
+          target_id = "modeling.preview_bridge_edges";
+        } else if (target_id == "modeling.interpolated_bridge_faces") {
+          target_id = "modeling.preview_bridge_faces";
         }
         // Retired targets must not invalidate unrelated
         // overrides. Match exact IDs, including their removal entries.

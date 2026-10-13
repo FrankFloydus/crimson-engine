@@ -21,6 +21,13 @@
 
 namespace quader::modeling {
 
+/** Configures bridge sampling and independent unitless endpoint tensions. */
+struct BridgeOptions {
+  int steps = 1;
+  float start_tension = 1.0F;
+  float end_tension = 1.0F;
+};
+
 struct PolygonDocumentImpl;
 class PolygonDocumentNativeAccess;
 class PolygonDocumentReadSnapshot;
@@ -341,6 +348,7 @@ public:
   bevel_selected_edges(EdgeBevelSpec settings = {});
   [[nodiscard]] Result<OperationResult>
   bridge_selected_edges(int steps = 1);
+  [[nodiscard]] Result<OperationResult> bridge_selected_edges(BridgeOptions options);
   [[nodiscard]] Result<OperationResult> combine_selected_faces();
   [[nodiscard]] Result<OperationResult> collapse_selected_faces();
   [[nodiscard]] Result<OperationResult> radial_align_selection();
@@ -398,6 +406,7 @@ public:
   cut_selected_edges_by_plane(const PlaneSplitSpec &spec);
   [[nodiscard]] Result<OperationResult>
   bridge_selected_faces(int steps = 1);
+  [[nodiscard]] Result<OperationResult> bridge_selected_faces(BridgeOptions options);
   [[nodiscard]] Result<OperationResult>
   thicken_selected_faces(float thickness = 0.25F,
                          bool from_center = false);

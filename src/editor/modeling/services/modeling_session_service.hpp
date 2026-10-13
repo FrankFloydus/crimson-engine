@@ -437,6 +437,8 @@ public:
   [[nodiscard]] ModelingToolStatus tool_status() const;
   [[nodiscard]] ModelingLiveStatus live_status() const;
   [[nodiscard]] bool operation_preview_active() const;
+  [[nodiscard]] std::optional<BridgePreviewHandleState>
+  bridge_preview_handle_state() const;
   [[nodiscard]] ModelingToolSettingsTarget tool_settings_target() const;
   [[nodiscard]] std::uint64_t tool_settings_revision() const;
   [[nodiscard]] ModelingInteractionSettings interaction_settings() const;
