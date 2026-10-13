@@ -1266,8 +1266,10 @@ Tests: [render source stamps](tests/render_source_stamp_tests.cpp),
 - Fusion generatedIconPixmap needs a real QStyleOption/palette. Custom stroke QIconEngine::pixmap
   must clear its image first; default uninitialized pixmaps produce random opaque glyph tiles.
 - Dimension HUDs use ordinary widgets in composed panes and non-layered masked child windows above
-  native-child Vulkan panes. Raster and region share a cached
-  binary glyph mask/DPI revision; position changes do not rebuild masks. Keep edge-face context so
+  native-child Vulkan panes. Cache grayscale glyph coverage at the actual monitor DPR, with a
+  premultiplied image and coverage-based outline. Composed labels paint without a widget mask;
+  native labels retain conservative opaque support for their masked window. Retain the glyph
+  raster/DPI revision across position changes. Keep edge-face context so
   labels choose the exterior. Retire their accepted native projection before a native ancestor
   moves or resizes; ordinary Qt Move/Resize notifications arrive after native geometry changes.
   Cache accepted glyph footprints in top-level logical coordinates, because widget coordinates

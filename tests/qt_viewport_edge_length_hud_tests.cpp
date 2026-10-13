@@ -162,6 +162,79 @@ quader::ViewportOverlayFrame hover_edge_frame_with_inside_reference(
   return frame;
 }
 
+QImage render_dimension_label(QLabel &label,
+                              const QColor &background = Qt::transparent) {
+  const qreal ratio = label.devicePixelRatioF();
+  QImage image(
+      QSize{std::max(1, static_cast<int>(std::ceil(label.width() * ratio))),
+            std::max(1, static_cast<int>(std::ceil(label.height() * ratio)))},
+      QImage::Format_ARGB32_Premultiplied);
+  image.setDevicePixelRatio(ratio);
+  image.fill(background);
+  label.render(&image, QPoint{}, QRegion{}, QWidget::DrawChildren);
+  return image;
+}
+
+void expect_antialiased_dimension_raster(const QImage &image,
+                                        const QColor &glyph_color,
+                                        bool native_label) {
+  int transparent_pixels = 0;
+  int opaque_black_pixels = 0;
+  int antialiased_glyph_pixels = 0;
+  int fractional_alpha_pixels = 0;
+  int glyph_pixels = 0;
+  const int color_maximum =
+      std::max({glyph_color.red(), glyph_color.green(), glyph_color.blue()});
+  const int bright_threshold = color_maximum * glyph_color.alpha() / 255;
+  int bright_pixels = 0;
+  for (int y = 0; y < image.height(); ++y) {
+    for (int x = 0; x < image.width(); ++x) {
+      const QColor pixel = image.pixelColor(x, y);
+      transparent_pixels += pixel.alpha() == 0 ? 1 : 0;
+      fractional_alpha_pixels +=
+          pixel.alpha() > 0 && pixel.alpha() < 255 ? 1 : 0;
+      const int maximum =
+          std::max({pixel.red(), pixel.green(), pixel.blue()});
+      opaque_black_pixels +=
+          pixel.alpha() == 255 && maximum == 0 ? 1 : 0;
+      if (pixel.alpha() == 0 || maximum == 0) {
+        continue;
+      }
+      ++glyph_pixels;
+      antialiased_glyph_pixels += maximum < bright_threshold - 3 ? 1 : 0;
+      bright_pixels += maximum >= bright_threshold - 3 ? 1 : 0;
+      // Compare premultiplied channels so even a barely covered edge cannot
+      // acquire a colored ClearType fringe through alpha unpremultiplication.
+      const QRgb premultiplied = image.pixel(x, y);
+      const int channel_maximum = std::max(
+          {qRed(premultiplied), qGreen(premultiplied), qBlue(premultiplied)});
+      EXPECT_LE(std::abs(qRed(premultiplied) * color_maximum -
+                         channel_maximum * glyph_color.red()),
+                2 * color_maximum);
+      EXPECT_LE(std::abs(qGreen(premultiplied) * color_maximum -
+                         channel_maximum * glyph_color.green()),
+                2 * color_maximum);
+      EXPECT_LE(std::abs(qBlue(premultiplied) * color_maximum -
+                         channel_maximum * glyph_color.blue()),
+                2 * color_maximum);
+    }
+  }
+  EXPECT_GT(transparent_pixels, 0);
+  EXPECT_GT(opaque_black_pixels, 0);
+  EXPECT_GT(glyph_pixels, 5);
+  EXPECT_GT(antialiased_glyph_pixels, 0)
+      << "Small glyph interiors must retain grayscale coverage.";
+  EXPECT_GT(bright_pixels, 0)
+      << "Antialiasing must retain a bright glyph core.";
+  if (native_label) {
+    EXPECT_EQ(fractional_alpha_pixels, 0)
+        << "A native child flattens glyph coverage over opaque black support.";
+  } else {
+    EXPECT_GT(fractional_alpha_pixels, 0)
+        << "Composed labels must retain transparent outline fringes.";
+  }
+}
+
 #if defined(_WIN32)
 /// Observes the old native rectangle after HUD filters retire its glyph pixels,
 /// but before Windows applies the ancestor's proposed geometry.
@@ -1047,7 +1120,7 @@ TEST_F(QtViewportEdgeLengthHudTests,
 }
 
 TEST_F(QtViewportEdgeLengthHudTests,
-       UsesFullWorldSpaceLengthInMapUnitsWithOutlinedShapedLabels) {
+       UsesFullWorldSpaceLengthInMapUnitsWithAntialiasedNativeLabels) {
   // The 3D length is 13; its screen-plane length is only 5. World endpoints
   // already carry object, instance, and hierarchy transforms from projection.
   present(hover_edge_frame({-1.5f, -2.0f, -6.0f}, {1.5f, 2.0f, 6.0f}));
@@ -1077,92 +1150,210 @@ TEST_F(QtViewportEdgeLengthHudTests,
   EXPECT_EQ(QFontInfo(label_->font()).family(),
             QFontInfo(application_font).family());
   EXPECT_DOUBLE_EQ(label_->font().pointSizeF(), 12.0);
-  EXPECT_EQ(label_->font().styleStrategy(), application_font.styleStrategy());
+  EXPECT_NE(label_->font().styleStrategy() & QFont::PreferAntialias, 0);
+  EXPECT_NE(label_->font().styleStrategy() & QFont::NoSubpixelAntialias, 0);
   EXPECT_EQ(label_->font().hintingPreference(),
             application_font.hintingPreference());
   EXPECT_TRUE(label_->testAttribute(Qt::WA_NativeWindow));
   EXPECT_TRUE(label_->testAttribute(Qt::WA_TransparentForMouseEvents));
   EXPECT_EQ(label_->focusPolicy(), Qt::NoFocus);
 
-  QImage painted(label_->size(), QImage::Format_ARGB32_Premultiplied);
-  painted.fill(Qt::transparent);
-  label_->render(&painted);
-  int opaque_black_pixels = 0;
-  int opaque_white_pixels = 0;
-  int blended_or_colored_pixels = 0;
-  QColor first_blended_or_colored_pixel;
-  bool found_transparent = false;
-  for (int y = 0; y < painted.height(); ++y) {
-    for (int x = 0; x < painted.width(); ++x) {
-      const QColor pixel = painted.pixelColor(x, y);
-      found_transparent = found_transparent || pixel.alpha() == 0;
-      if (pixel.alpha() == 255 && pixel.red() == 0 && pixel.green() == 0 &&
-          pixel.blue() == 0) {
-        ++opaque_black_pixels;
-      }
-      if (pixel.alpha() == 255 && pixel.red() >= 250 &&
-          pixel.green() >= 250 && pixel.blue() >= 250) {
-        ++opaque_white_pixels;
-      }
-      if (pixel.alpha() != 0) {
-        const bool exact_black =
-            pixel.alpha() == 255 && pixel.red() == 0 && pixel.green() == 0 &&
-            pixel.blue() == 0;
-        const bool exact_white = pixel.alpha() == 255 && pixel.red() == 255 &&
-                                 pixel.green() == 255 && pixel.blue() == 255;
-        if (!exact_black && !exact_white) {
-          if (blended_or_colored_pixels == 0) {
-            first_blended_or_colored_pixel = pixel;
+  expect_antialiased_dimension_raster(render_dimension_label(*label_),
+                                      QColor(Qt::white), true);
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
+       SmallDimensionsCompositeAntialiasedCoverageAcrossColorsAndUiScales) {
+  const quader::ViewportSelectionDimensionBounds bounds{
+      .min = {-2, -1, -3}, .max = {2, 3, 1}};
+  ASSERT_TRUE(camera_.restore_perspective_pose(
+      {.eye = {8, 6, 10}, .target = {}, .up = {0, 1, 0}}));
+  // Keep every span parallel to the camera plane: even the long measurement
+  // crosses the view at a constant visible depth, with its midpoint at origin.
+  const auto pose = camera_.pose();
+  const auto dimension_tangent =
+      quader::normalize(quader::cross(pose.target - pose.eye, pose.up));
+  constexpr std::array kPointSizes{6.0, 8.0, 10.0, 12.0};
+  constexpr std::array kValues{12345.67, 890.12, 64.25};
+  const std::array backgrounds{QColor(128, 128, 128), QColor(242, 242, 242),
+                               QColor(23, 24, 25)};
+  const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  for (const bool native_labels : {false, true}) {
+    QWidget pane;
+    pane.resize(800, 600);
+    pane.setAttribute(Qt::WA_DontShowOnScreen);
+    pane.show();
+    quader::QtViewportEdgeLengthHud hud(
+        pane, quader::ViewportPaneId::Perspective, native_labels);
+    const std::array names{
+        QStringLiteral("viewportEdgeLength_perspective"),
+        QStringLiteral("viewportSelectionDimensionX_perspective"),
+        QStringLiteral("viewportSelectionDimensionY_perspective"),
+        QStringLiteral("viewportSelectionDimensionZ_perspective")};
+    std::array<QLabel *, 4> labels{};
+    for (std::size_t index = 0U; index < labels.size(); ++index) {
+      labels[index] = pane.findChild<QLabel *>(names[index]);
+      ASSERT_NE(labels[index], nullptr);
+    }
+    camera_.set_viewport_size(1600, 1200);
+    constexpr std::array kScales{1.0F, 2.0F, 1.0F};
+    for (std::size_t scale_index = 0U; scale_index < kScales.size();
+         ++scale_index) {
+      const float scale = kScales[scale_index];
+      hud.apply_ui_scale(quader::QtUiScaleMetrics{scale, scale_index + 1U});
+      QImage review(QSize{1620, 1080}, QImage::Format_ARGB32_Premultiplied);
+      review.fill(QColor(23, 24, 25));
+      QPainter review_painter(&review);
+      int row = 0;
+      for (const double point_size : kPointSizes) {
+        for (const double value : kValues) {
+          SCOPED_TRACE(::testing::Message()
+                       << "native=" << native_labels << " scale=" << scale
+                       << " points=" << point_size << " value=" << value
+                       << " DPR=" << pane.devicePixelRatioF());
+          const float half_span = static_cast<float>(
+              value / quader::viewport_host_defaults().map_units_per_world_unit *
+              0.5);
+          const auto frame = hover_edge_frame(dimension_tangent * -half_span,
+                                               dimension_tangent * half_span);
+          ASSERT_TRUE(camera_.project_visible_world_segment(
+              frame.lines.front().start, frame.lines.front().end).has_value());
+          hud.present(frame,
+                      quader::RenderSignatureBuilder::overlay_frame_signature(frame),
+                      camera_, pane.rect(), true, point_size, nullptr, false,
+                      &bounds, 1U, true);
+          for (QLabel *label : labels) {
+            ASSERT_FALSE(label->isHidden());
+            EXPECT_EQ(label->mask().isEmpty(), !native_labels);
+            EXPECT_NE(label->font().styleStrategy() & QFont::NoSubpixelAntialias,
+                      0);
+            EXPECT_DOUBLE_EQ(label->font().pointSizeF(), point_size * scale);
+            const QImage source = render_dimension_label(*label);
+            EXPECT_EQ(label->property("quaderDimensionRasterPixelSize").toSize(),
+                      source.size());
+            EXPECT_DOUBLE_EQ(
+                label->property("quaderDimensionRasterDevicePixelRatio").toReal(),
+                label->devicePixelRatioF());
+            expect_antialiased_dimension_raster(
+                source, label->palette().color(label->foregroundRole()),
+                native_labels);
+            for (const QColor &background : backgrounds) {
+              const QImage actual = render_dimension_label(*label, background);
+              QImage expected(source.size(), source.format());
+              expected.setDevicePixelRatio(source.devicePixelRatio());
+              expected.fill(background);
+              {
+                QPainter painter(&expected);
+                painter.drawImage(QPoint{}, source);
+              }
+              int incorrect_pixels = 0;
+              for (int y = 0; y < actual.height(); ++y) {
+                for (int x = 0; x < actual.width(); ++x) {
+                  const QColor pixel = actual.pixelColor(x, y);
+                  const QColor expected_pixel = expected.pixelColor(x, y);
+                  incorrect_pixels +=
+                      pixel.alpha() != 255 ||
+                              std::abs(pixel.red() - expected_pixel.red()) > 1 ||
+                              std::abs(pixel.green() - expected_pixel.green()) > 1 ||
+                              std::abs(pixel.blue() - expected_pixel.blue()) > 1
+                          ? 1
+                          : 0;
+                }
+              }
+              EXPECT_EQ(incorrect_pixels, 0)
+                  << "Painting onto the viewport must preserve source-over coverage.";
+            }
           }
-          ++blended_or_colored_pixels;
+          for (std::size_t column = 0U; column < backgrounds.size(); ++column) {
+            const int left = static_cast<int>(column) * 540;
+            const int top = row * 90;
+            review_painter.fillRect(QRect{left, top, 540, 90},
+                                    backgrounds[column]);
+            review_painter.setPen(column == 2U ? Qt::white : Qt::black);
+            review_painter.drawText(
+                QPoint{left + 12, top + 20},
+                QStringLiteral("%1 pt (%2 pt effective), %3")
+                    .arg(point_size).arg(point_size * scale).arg(labels[0]->text()));
+            int label_left = left + 12;
+            for (QLabel *label : labels) {
+              review_painter.drawImage(QPoint{label_left, top + 32},
+                                        render_dimension_label(*label,
+                                                                backgrounds[column]));
+              label_left += label->width() + 16;
+            }
+          }
+          ++row;
         }
       }
-    }
-  }
-  EXPECT_GT(opaque_black_pixels, 20)
-      << "The outline must contain a substantial pitch-black opaque border.";
-  EXPECT_GT(opaque_white_pixels, 8)
-      << "The glyph must contain a substantial bright opaque core.";
-  EXPECT_EQ(blended_or_colored_pixels, 0)
-      << "Dimension labels must contain only exact opaque black or white; "
-         "gray antialiasing fringes make them blurry over the viewport. "
-      << "First unexpected RGBA pixel: ("
-      << first_blended_or_colored_pixel.red() << ", "
-      << first_blended_or_colored_pixel.green() << ", "
-      << first_blended_or_colored_pixel.blue() << ", "
-      << first_blended_or_colored_pixel.alpha() << ").";
-  EXPECT_TRUE(found_transparent);
-
-  for (const qreal scale : {1.25, 1.5, 2.0}) {
-    QImage scaled(
-        QSize{static_cast<int>(std::ceil(label_->width() * scale)),
-              static_cast<int>(std::ceil(label_->height() * scale))},
-        QImage::Format_ARGB32_Premultiplied);
-    scaled.fill(Qt::transparent);
-    {
-      QPainter painter(&scaled);
-      painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
-      painter.scale(scale, scale);
-      label_->render(&painter);
-    }
-    int scaled_non_binary_pixels = 0;
-    for (int y = 0; y < scaled.height(); ++y) {
-      for (int x = 0; x < scaled.width(); ++x) {
-        const QColor pixel = scaled.pixelColor(x, y);
-        const bool transparent = pixel.alpha() == 0;
-        const bool exact_black =
-            pixel.alpha() == 255 && pixel.red() == 0 && pixel.green() == 0 &&
-            pixel.blue() == 0;
-        const bool exact_white = pixel.alpha() == 255 && pixel.red() == 255 &&
-                                 pixel.green() == 255 && pixel.blue() == 255;
-        scaled_non_binary_pixels +=
-            !transparent && !exact_black && !exact_white ? 1 : 0;
+      review_painter.end();
+      if (!review_directory.isEmpty()) {
+        ASSERT_TRUE(QDir{}.mkpath(review_directory));
+        const QString name = QStringLiteral("dimension-fonts-%1-%2-dpr-%3.png")
+                                 .arg(native_labels ? "native" : "composed")
+                                 .arg(scale_index)
+                                 .arg(pane.devicePixelRatioF());
+        ASSERT_TRUE(review.save(QDir(review_directory).filePath(name)));
       }
     }
-    EXPECT_EQ(scaled_non_binary_pixels, 0)
-        << "Nearest-neighbor dimension output must stay binary at a "
-        << scale << "x device scale.";
   }
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
+       ComposedDimensionsRetainRasterAcrossStableAndPositionOnlyFrames) {
+  QWidget pane;
+  pane.resize(400, 300);
+  pane.setAttribute(Qt::WA_DontShowOnScreen);
+  pane.show();
+  quader::QtViewportEdgeLengthHud hud(
+      pane, quader::ViewportPaneId::Perspective, false);
+  QLabel *label = pane.findChild<QLabel *>(
+      QStringLiteral("viewportEdgeLength_perspective"));
+  ASSERT_NE(label, nullptr);
+  EdgeHudWidgetEventCounter events;
+  label->installEventFilter(&events);
+  auto frame = hover_edge_frame({-2, 0, 0}, {2, 0, 0});
+  const auto present_composed = [&] {
+    hud.present(frame,
+                quader::RenderSignatureBuilder::overlay_frame_signature(frame),
+                camera_, pane.rect(), true, 8.0);
+  };
+  present_composed();
+  QCoreApplication::processEvents();
+  ASSERT_FALSE(label->isHidden());
+  ASSERT_TRUE(label->mask().isEmpty());
+  const int raster_revision =
+      label->property("quaderDimensionRasterRevision").toInt();
+  ASSERT_GT(raster_revision, 0);
+  const auto initial = events.counts();
+  for (int repetition = 0; repetition < 64; ++repetition) {
+    present_composed();
+  }
+  QCoreApplication::processEvents();
+  EXPECT_EQ(events.counts(), initial);
+  EXPECT_EQ(label->property("quaderDimensionRasterRevision").toInt(),
+            raster_revision);
+  frame.lines.front().start.x += 2.0F;
+  frame.lines.front().end.x += 2.0F;
+  present_composed();
+  QCoreApplication::processEvents();
+  EXPECT_GT(events.counts().move, initial.move);
+  EXPECT_EQ(label->property("quaderDimensionRasterRevision").toInt(),
+            raster_revision);
+  QPalette palette = label->palette();
+  palette.setColor(label->foregroundRole(), QColor(135, 214, 3, 230));
+  label->setPalette(palette);
+  present_composed();
+  (void)render_dimension_label(*label);
+  EXPECT_EQ(label->property("quaderDimensionRasterRevision").toInt(),
+            raster_revision + 1);
+  EXPECT_TRUE(label->mask().isEmpty());
+  QEvent screen_change{QEvent::ScreenChangeInternal};
+  QCoreApplication::sendEvent(label, &screen_change);
+  present_composed();
+  EXPECT_EQ(label->property("quaderDimensionRasterRevision").toInt(),
+            raster_revision + 2);
+  EXPECT_TRUE(label->mask().isEmpty());
+  label->removeEventFilter(&events);
 }
 
 TEST_F(QtViewportEdgeLengthHudTests,
@@ -2266,19 +2457,21 @@ TEST_F(QtViewportEdgeLengthHudTests,
                           static_cast<int>((packed >> 16U) & 0xffU),
                           static_cast<int>((packed >> 24U) & 0xffU)};
     EXPECT_EQ(label.palette().color(label.foregroundRole()), expected);
-    QImage painted(label.size(), QImage::Format_ARGB32);
-    painted.fill(Qt::transparent);
-    label.render(&painted);
+    const QImage painted = render_dimension_label(label);
+    const QColor native_core{qRound(expected.red() * expected.alpha() / 255.0),
+                             qRound(expected.green() * expected.alpha() / 255.0),
+                             qRound(expected.blue() * expected.alpha() / 255.0),
+                             255};
     int colored_pixels = 0;
     int outline_pixels = 0;
     for (int y = 0; y < painted.height(); ++y) {
       for (int x = 0; x < painted.width(); ++x) {
         const QColor pixel = painted.pixelColor(x, y);
         colored_pixels +=
-            pixel.alpha() == expected.alpha() &&
-                    std::abs(pixel.red() - expected.red()) <= 1 &&
-                    std::abs(pixel.green() - expected.green()) <= 1 &&
-                    std::abs(pixel.blue() - expected.blue()) <= 1
+            pixel.alpha() == native_core.alpha() &&
+                    std::abs(pixel.red() - native_core.red()) <= 1 &&
+                    std::abs(pixel.green() - native_core.green()) <= 1 &&
+                    std::abs(pixel.blue() - native_core.blue()) <= 1
                 ? 1
                 : 0;
         outline_pixels += pixel == QColor(0, 0, 0, 255) ? 1 : 0;
@@ -2286,6 +2479,7 @@ TEST_F(QtViewportEdgeLengthHudTests,
     }
     EXPECT_GT(colored_pixels, 8);
     EXPECT_GT(outline_pixels, 20);
+    expect_antialiased_dimension_raster(painted, expected, true);
   }
 
   // Camera-only motion selects a new corner without needing a geometry revision.

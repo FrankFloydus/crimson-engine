@@ -9551,6 +9551,26 @@ TEST(QtProjectWorkspaceTests, KnifeRealAppShowsHintAngleAndLengthOnTopFace) {
   ASSERT_TRUE(viewport_settings.save(settings_paths.viewport_settings_file));
   const QString review = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
   if (!review.isEmpty()) ASSERT_TRUE(QDir{}.mkpath(review));
+  const bool dimension_review = qEnvironmentVariableIntValue(
+      "QUADER_KNIFE_APP_DIMENSION_REVIEW") == 1;
+  ASSERT_FALSE(dimension_review && review.isEmpty())
+      << "Dimension review requires QUADER_UI_REVIEW_DIR for desktop captures.";
+  constexpr std::array kDimensionReviewFontPoints{6.0F, 8.0F, 10.0F, 12.0F};
+  constexpr std::array kDimensionReviewScales{1.0F, 2.0F, 1.0F};
+  constexpr std::size_t kDimensionReviewCount =
+      kDimensionReviewFontPoints.size() * kDimensionReviewScales.size();
+  const auto review_screens = QGuiApplication::screens();
+  const std::size_t screen_review_count = review_screens.size() >= 2 ? 2U : 0U;
+  const bool screen_review_only = dimension_review &&
+      qEnvironmentVariableIntValue("QUADER_KNIFE_APP_SCREEN_REVIEW_ONLY") == 1;
+  std::size_t dimension_review_index = screen_review_only ? kDimensionReviewCount : 0U;
+  QPointer<QScreen> original_review_screen;
+  QPointer<QScreen> requested_review_screen;
+  bool dimension_review_pending = false;
+  if (dimension_review && screen_review_count == 0U) {
+    std::cout << "DIMENSION_APP_SCREEN_REVIEW skipped: fewer than two physical screens."
+              << std::endl;
+  }
   quader::App app;
   ASSERT_TRUE(app.initialize(application, executable));
   QPointer<QMainWindow> window;
@@ -9712,6 +9732,114 @@ TEST(QtProjectWorkspaceTests, KnifeRealAppShowsHintAngleAndLengthOnTopFace) {
     case 2: {
       // Outliner selection publishes through a queued owner callback. Enter
       // component mode only after a later App frame has received that selection.
+      if (dimension_review &&
+          dimension_review_index < kDimensionReviewCount + screen_review_count) {
+        const bool screen_review = dimension_review_index >= kDimensionReviewCount;
+        const std::size_t scale_index = screen_review ? 2U :
+            dimension_review_index / kDimensionReviewFontPoints.size();
+        const float font_points = screen_review ? 12.0F : kDimensionReviewFontPoints[
+            dimension_review_index % kDimensionReviewFontPoints.size()];
+        const float scale = kDimensionReviewScales[scale_index];
+        if (!dimension_review_pending) {
+          if (screen_review) {
+            if (original_review_screen == nullptr) original_review_screen = window->screen();
+            QScreen *target = original_review_screen;
+            if (dimension_review_index == kDimensionReviewCount) {
+              for (auto *candidate : review_screens) {
+                if (candidate != original_review_screen) {
+                  target = candidate;
+                  break;
+                }
+              }
+            }
+            ASSERT_NE(target, nullptr);
+            requested_review_screen = target;
+            window->showNormal();
+            window->windowHandle()->setScreen(target);
+            window->setGeometry(target->availableGeometry());
+            window->showMaximized();
+          } else {
+            // Commit through the retained Settings owner so the real App applies
+            // both its font preference and scale to the composed viewport.
+            ASSERT_TRUE(viewport_settings.set_float_value(
+                quader::ViewportFloatSettingId::DimensionFontSize, font_points));
+            auto *settings_action = window->findChild<QAction *>(
+                QStringLiteral("action_settings"));
+            ASSERT_NE(settings_action, nullptr);
+            settings_action->trigger();
+            auto *dialog = window->findChild<QDialog *>(
+                QStringLiteral("settingsDialog"));
+            ASSERT_NE(dialog, nullptr);
+            ASSERT_TRUE(dialog->isVisible());
+            auto *font_setting = dialog->findChild<QDoubleSpinBox *>(
+                QStringLiteral("viewportSetting_DimensionFontSize"));
+            auto *scale_setting = dialog->findChild<QSpinBox *>(
+                QStringLiteral("settingsInterfaceScale"));
+            auto *accept = dialog->findChild<QPushButton *>(
+                QStringLiteral("settingsOk"));
+            ASSERT_NE(font_setting, nullptr);
+            ASSERT_NE(scale_setting, nullptr);
+            ASSERT_NE(accept, nullptr);
+            font_setting->setValue(viewport_settings.float_value(
+                quader::ViewportFloatSettingId::DimensionFontSize));
+            scale_setting->setValue(qRound(100.0F * scale));
+            accept->click();
+            ASSERT_FALSE(dialog->isVisible());
+          }
+          window->raise();
+          QApplication::setActiveWindow(window);
+          dimension_review_pending = true;
+          phase_started = clock.elapsed();
+          phase_submission = submitted;
+          return;
+        }
+        const QString name = screen_review
+            ? QStringLiteral("dimensions-12pt-screen-transition%1")
+                  .arg(dimension_review_index - kDimensionReviewCount)
+            : QStringLiteral("dimensions-%1pt-scale%2-pass%3")
+                  .arg(qRound(font_points)).arg(qRound(scale)).arg(scale_index);
+        const QImage pixels = capture(name.toUtf8().constData());
+        const double ratio = static_cast<double>(pixels.width()) / window->width();
+        ASSERT_NE(window->screen(), nullptr);
+        if (screen_review) EXPECT_EQ(window->screen(), requested_review_screen);
+        const qreal screen_pixel_ratio = window->screen()->devicePixelRatio();
+        int visible_dimensions = 0;
+        for (const QString &axis : {QStringLiteral("X"), QStringLiteral("Y"),
+                                    QStringLiteral("Z")}) {
+          auto *label = viewport->findChild<QLabel *>(
+              QStringLiteral("viewportSelectionDimension%1_perspective").arg(axis));
+          ASSERT_NE(label, nullptr);
+          if (!label->isVisible()) continue;
+          ++visible_dimensions;
+          EXPECT_DOUBLE_EQ(label->font().pointSizeF(), font_points * scale);
+          EXPECT_EQ(label->internalWinId(), 0U);
+          EXPECT_TRUE(label->mask().isEmpty());
+          EXPECT_DOUBLE_EQ(label->devicePixelRatioF(), screen_pixel_ratio);
+          EXPECT_DOUBLE_EQ(label->property("quaderDimensionRasterDevicePixelRatio").toReal(),
+                           screen_pixel_ratio);
+          const QPoint origin = label->mapTo(window, QPoint{});
+          const QRect bounds(qRound(origin.x() * ratio), qRound(origin.y() * ratio),
+              qRound(label->width() * ratio), qRound(label->height() * ratio));
+          EXPECT_TRUE(pixels.copy(bounds.intersected(pixels.rect())).save(
+              QDir(review).filePath(QStringLiteral("knife-real-app-%1-%2.png")
+                  .arg(name, axis))));
+          std::cout << "DIMENSION_APP_REVIEW font_pt=" << font_points
+                    << " scale=" << scale << " pass=" << scale_index
+                    << " axis=" << axis.toStdString()
+                    << " screen=" << window->screen()->name().toStdString()
+                    << " screen_dpr=" << screen_pixel_ratio
+                    << " dpr=" << label->devicePixelRatioF()
+                    << " qt_scale_factor=" << qEnvironmentVariable(
+                        "QT_SCALE_FACTOR", QStringLiteral("unset")).toStdString()
+                    << std::endl;
+        }
+        EXPECT_GE(visible_dimensions, 2);
+        ++dimension_review_index;
+        dimension_review_pending = false;
+        phase_started = clock.elapsed();
+        phase_submission = submitted;
+        return;
+      }
       auto *face_mode = window->findChild<QAction *>(QStringLiteral("selectionModeFace"));
       ASSERT_NE(face_mode, nullptr);
       ASSERT_TRUE(face_mode->isEnabled());
@@ -9802,6 +9930,10 @@ TEST(QtProjectWorkspaceTests, KnifeRealAppShowsHintAngleAndLengthOnTopFace) {
   EXPECT_EQ(app.run(), 0);
   observer.stop();
   EXPECT_EQ(phase, 11);
+  if (dimension_review) {
+    EXPECT_EQ(dimension_review_index, kDimensionReviewCount + screen_review_count);
+    if (screen_review_count > 0U) EXPECT_EQ(window->screen(), original_review_screen);
+  }
   app.shutdown();
 }
 
