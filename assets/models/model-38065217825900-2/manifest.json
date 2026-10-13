@@ -1,0 +1,27 @@
+{
+  "dependencies": [
+    {
+      "index": 0,
+      "kind": "buffer",
+      "path": "buffers/0.bin",
+      "source": "GLB binary chunk"
+    },
+    {
+      "index": 0,
+      "kind": "image",
+      "path": "images/0.png",
+      "source": "buffer view"
+    },
+    {
+      "index": 1,
+      "kind": "image",
+      "path": "images/1.png",
+      "source": "buffer view"
+    }
+  ],
+  "document": "model.gltf",
+  "format": "GLB",
+  "name": "vent_4",
+  "original": "source.glb",
+  "version": 1
+}
