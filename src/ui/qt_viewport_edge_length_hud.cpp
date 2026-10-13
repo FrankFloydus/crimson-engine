@@ -431,13 +431,14 @@ QtViewportEdgeLengthHud::QtViewportEdgeLengthHud(
   const std::string_view pane_name = viewport_pane_stable_id(pane_id);
   const QString pane = QString::fromUtf8(
       pane_name.data(), static_cast<qsizetype>(pane_name.size()));
-  const std::array<QString, 6> object_names{
+  const std::array<QString, 7> object_names{
       QStringLiteral("viewportEdgeLength_%1").arg(pane),
       QStringLiteral("viewportFootprintDimension0_%1").arg(pane),
       QStringLiteral("viewportFootprintDimension1_%1").arg(pane),
       QStringLiteral("viewportSelectionDimensionX_%1").arg(pane),
       QStringLiteral("viewportSelectionDimensionY_%1").arg(pane),
       QStringLiteral("viewportSelectionDimensionZ_%1").arg(pane),
+      QStringLiteral("viewportKnifeAngle_%1").arg(pane),
   };
   for (std::size_t index = 0; index < labels_.size(); ++index) {
     QLabel *label = new QtViewportEdgeLengthLabel(&parent);
@@ -451,12 +452,16 @@ QtViewportEdgeLengthHud::QtViewportEdgeLengthHud(
     label->setAutoFillBackground(false);
     label->setAttribute(Qt::WA_NoSystemBackground);
     label->setFont(dimension_font(kDefaultDimensionFontSizePoints));
-    QPalette palette = label->palette();
-    palette.setColor(QPalette::WindowText,
-                     index < 3U ? QColor(255, 255, 255, 255)
-                                : dimension_axis_color(index - 3U));
-    label->setPalette(palette);
-    label->setForegroundRole(QPalette::WindowText);
+    if (index < 6U) {
+      QPalette palette = label->palette();
+      palette.setColor(QPalette::WindowText,
+                       index < 3U ? QColor(255, 255, 255, 255)
+                                  : dimension_axis_color(index - 3U));
+      label->setPalette(palette);
+      label->setForegroundRole(QPalette::WindowText);
+    } else {
+      label->setForegroundRole(QPalette::Text);
+    }
     label->setFocusPolicy(Qt::NoFocus);
     label->setAttribute(Qt::WA_NativeWindow, native_labels_);
     // This Qt attribute handles widget routing; the label's native hit-test
@@ -510,7 +515,8 @@ void QtViewportEdgeLengthHud::present(
     double font_size_points,
     const ModelingBoxPreview *footprint_preview, bool footprint_enabled,
     const ViewportSelectionDimensionBounds *selection_bounds,
-    std::uint64_t selection_signature, bool selection_enabled) {
+    std::uint64_t selection_signature, bool selection_enabled,
+    bool knife_angle_enabled) {
   if (native_cleanup_active_ ||
       (native_cleanup_pending_ && !clean_native_footprint())) {
     return;
@@ -683,7 +689,34 @@ void QtViewportEdgeLengthHud::present(
   if (dimensions_changed) {
     view_valid_ = false;
   }
-  if (std::none_of(dimensions_.begin(), dimensions_.end(),
+  if (!knife_angle_enabled || !knife_signature_valid_ ||
+      knife_signature_ != frame_signature) {
+    knife_angle_ = knife_angle_enabled ? frame.knife_angle_context : std::nullopt;
+    const auto finite_point = [](QVec3 point) {
+      return std::isfinite(point.x) && std::isfinite(point.y) &&
+             std::isfinite(point.z);
+    };
+    if (knife_angle_ &&
+        (!finite_point(knife_angle_->start) ||
+         !finite_point(knife_angle_->reference_end) ||
+         !finite_point(knife_angle_->cut_point) ||
+         !std::isfinite(knife_angle_->angle_degrees) ||
+         knife_angle_->angle_degrees < 0.0 ||
+         knife_angle_->angle_degrees > 90.0)) {
+      knife_angle_.reset();
+    }
+    const QString text = knife_angle_
+        ? QString::number(knife_angle_->angle_degrees, 'f', 1) + QChar(0x00b0)
+        : QString{};
+    if (knife_angle_text_ != text || knife_signature_ != frame_signature ||
+        knife_signature_valid_ != knife_angle_enabled) {
+      view_valid_ = false;
+    }
+    knife_angle_text_ = text;
+    knife_signature_ = frame_signature;
+    knife_signature_valid_ = knife_angle_enabled;
+  }
+  if (!knife_angle_ && std::none_of(dimensions_.begin(), dimensions_.end(),
                    [](const std::optional<Dimension> &dimension) {
                      return dimension.has_value();
                    })) {
@@ -708,7 +741,7 @@ void QtViewportEdgeLengthHud::present(
 
   std::array<QRect, 3> selection_label_geometries;
   std::size_t selection_label_count = 0U;
-  for (std::size_t index = 0; index < labels_.size(); ++index) {
+  for (std::size_t index = 0; index < dimensions_.size(); ++index) {
     QLabel *label = labels_[index];
     const std::optional<Dimension> &dimension = dimensions_[index];
     if (!dimension.has_value() || dimension_texts_[index].isEmpty()) {
@@ -851,6 +884,47 @@ void QtViewportEdgeLengthHud::present(
     }
     present_label_geometry(*label, geometry);
     retain_native_footprint(*label);
+  }
+  QLabel &angle_label = *labels_.back();
+  if (knife_angle_) {
+    const auto seed = camera.project_world_point(knife_angle_->start);
+    const auto reference = camera.project_world_point(knife_angle_->reference_end);
+    const auto cut = camera.project_world_point(knife_angle_->cut_point);
+    if (visible_in_viewport(seed, render_size) && reference.visible && cut.visible) {
+      if (angle_label.text() != knife_angle_text_) {
+        angle_label.setText(knife_angle_text_);
+        static_cast<QtViewportEdgeLengthLabel &>(angle_label).invalidate_shape();
+      }
+      const QPoint anchor = logical_point(seed.position, render_size, logical_viewport_bounds);
+      const QPoint reference_point = logical_point(reference.position, render_size, logical_viewport_bounds);
+      const QPoint cut_point = logical_point(cut.position, render_size, logical_viewport_bounds);
+      const QPointF a = reference_point - anchor;
+      const QPointF b = cut_point - anchor;
+      const double a_length = std::hypot(a.x(), a.y());
+      const double b_length = std::hypot(b.x(), b.y());
+      const QSize size = angle_label.sizeHint();
+      if (a_length > 0.001 && b_length > 0.001 &&
+          size.width() <= logical_viewport_bounds.width() &&
+          size.height() <= logical_viewport_bounds.height()) {
+        QPointF direction = a / a_length + b / b_length;
+        const double direction_length = std::hypot(direction.x(), direction.y());
+        direction = direction_length > 0.001
+            ? direction / direction_length : QPointF{-a.y(), a.x()} / a_length;
+        const double distance = ui_scale_metrics_.px(28) +
+            0.5 * std::hypot(size.width(), size.height());
+        const QRect geometry = clamped_label_geometry(
+            centered_label_geometry(QPointF(anchor) + direction * distance, size),
+            logical_viewport_bounds);
+        present_label_geometry(angle_label, geometry);
+        retain_native_footprint(angle_label);
+      } else {
+        angle_label.hide();
+      }
+    } else {
+      angle_label.hide();
+    }
+  } else if (!angle_label.isHidden()) {
+    angle_label.hide();
   }
 }
 

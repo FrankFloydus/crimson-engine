@@ -57,7 +57,8 @@ public:
                bool footprint_enabled = false,
                const ViewportSelectionDimensionBounds *selection_bounds = nullptr,
                std::uint64_t selection_signature = 0u,
-               bool selection_enabled = false);
+               bool selection_enabled = false,
+               bool knife_angle_enabled = false);
   void hide();
   void raise();
 
@@ -78,11 +79,15 @@ private:
   bool clean_native_footprint();
   void refresh_geometry_ancestors();
 
-  std::array<QLabel *, 6> labels_ = {};
+  std::array<QLabel *, 7> labels_ = {};
   std::vector<QPointer<QWidget>> geometry_ancestors_;
   QtUiScaleMetrics ui_scale_metrics_;
   std::array<std::optional<Dimension>, 6> dimensions_ = {};
   std::array<QString, 6> dimension_texts_ = {};
+  std::optional<ViewportKnifeAngleContext> knife_angle_;
+  QString knife_angle_text_;
+  std::uint64_t knife_signature_ = 0;
+  bool knife_signature_valid_ = false;
   std::optional<ViewportSelectionDimensionBounds> selection_bounds_;
   std::array<double, 3> selection_lengths_ = {};
   QRect logical_viewport_bounds_;

@@ -16,6 +16,10 @@ namespace quader {
 class CutTool final : public DrawnPlaneTool {
 public:
   CutTool() : DrawnPlaneTool(viewport_tool_descriptor(ViewportToolId::Cut)) {}
+
+  [[nodiscard]] ViewportPointerCursor pointer_cursor() const override {
+    return ViewportPointerCursor::BoxCutter;
+  }
 };
 
 } // namespace quader

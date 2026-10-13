@@ -83,6 +83,15 @@ retained overlays, when reporting viewport performance.
 Regression examples: [submitted extrusion wires](../../../../tests/selected_mesh_outline_presentation_tests.cpp)
 and [Vulkan outline pixels](../../../../tests/selection_overlay_runtime_tests.cpp).
 
+Knife publishes a world-space straight reference from the accepted seed to the first boundary
+of its eligible face. Edge seeds use the face-plane perpendicular to that edge; other seeds use
+the existing face directions. The smaller unsigned line angle (0–90 degrees) is independent of
+the camera and does not change Shift constraints, snapping, accepted points or history. The
+volatile source carries both the orange reference and angle context through retained submission;
+the shared dimension HUD gates only the label with Show Dimensions. Hover clear and stroke
+teardown retire both. See the [Knife submission tests](../../../../tests/viewport_overlay_submission_coordinator_tests.cpp)
+and [HUD tests](../../../../tests/qt_viewport_edge_length_hud_tests.cpp).
+
 Cut captures its Object, Face or Edge targets before plane placement. Its first surface hit
 sets the support plane used by subsequent endpoint and line drags. The SDK projection adapter
 prepares candidates from committed documents and retains the accepted result for surfaces,

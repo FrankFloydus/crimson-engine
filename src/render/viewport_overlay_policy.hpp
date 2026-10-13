@@ -83,6 +83,7 @@ inline constexpr std::uint32_t kOverlaySourceWireColor = 0xebffe05cU;
 inline constexpr std::uint32_t kOverlayOpenEdgeColor = 0xff00ffffU;
 inline constexpr std::uint32_t kOverlayDiagnosticEdgeColor = 0xff0000ffU;
 inline constexpr std::uint32_t kOverlayGroupBoundsColor = rgba8(255, 230, 0, 255);
+inline constexpr std::uint32_t kOverlayKnifeReferenceColor = rgba8(255, 143, 24);
 inline constexpr std::uint32_t kOverlayHoverFaceColor = 0x161fff66U;
 inline constexpr std::uint32_t kOverlayHoverWireColor = 0xff00ff51U;
 inline constexpr std::uint32_t kOverlayFacePlaneHoverFaceColor =

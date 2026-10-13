@@ -22,6 +22,7 @@ enum class ViewportPointerCursor {
   SelectionDefault,
   SelectionAdd,
   SelectionSubtract,
+  BoxCutter,
   PrecisionCross,
   OpenHand,
   ClosedHand,

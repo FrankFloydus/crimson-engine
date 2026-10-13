@@ -437,6 +437,8 @@ ViewportOverlayStyleResolver::color_for(ViewportOverlayStyleRole role,
     return kOverlayToolPlaneLineColor;
   case ViewportOverlayStyleRole::ToolHandle:
     return kOverlayToolHandleColor;
+  case ViewportOverlayStyleRole::KnifeReferenceLine:
+    return kOverlayKnifeReferenceColor;
   case ViewportOverlayStyleRole::CutPreviewKeepFill:
     return kOverlayCutPreviewKeepFillColor;
   case ViewportOverlayStyleRole::CutPreviewKeepBothDiscardFill:

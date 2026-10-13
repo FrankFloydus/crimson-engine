@@ -201,6 +201,35 @@ TEST(QtApplicationCursorTests,
 }
 
 TEST(QtApplicationCursorTests,
+     BoxCutterKeepsTheAuthoredSizeAndBladeTipAcrossDevicePixelRatios) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-box-cutter-cursor-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+
+  using Variant = quader::QtApplicationCursorVariant;
+  const QPixmap original =
+      quader::qt_application_cursor_pixmap(Variant::BoxCutter, 1.0);
+  const QPixmap authored(QStringLiteral(":/quader/cursors/box_cutter.png"));
+  ASSERT_FALSE(original.isNull());
+  ASSERT_FALSE(authored.isNull());
+  EXPECT_EQ(original.toImage(), authored.toImage());
+  EXPECT_EQ(original.size(), QSize(24, 24));
+  EXPECT_GT(original.toImage().pixelColor(0, 23).alpha(), 0);
+
+  for (const qreal scale : {1.0, 1.5, 2.0}) {
+    SCOPED_TRACE(scale);
+    const QCursor cursor = quader::qt_application_cursor(Variant::BoxCutter, scale);
+    EXPECT_EQ(cursor.shape(), Qt::BitmapCursor);
+    EXPECT_EQ(cursor.pixmap().size(), QSize(qRound(24 * scale), qRound(24 * scale)));
+    EXPECT_DOUBLE_EQ(cursor.pixmap().devicePixelRatio(), scale);
+    EXPECT_EQ(cursor.hotSpot(), QPoint(0, 23));
+    EXPECT_GT(cursor.pixmap().toImage().pixelColor(0, qRound(23 * scale)).alpha(), 0);
+  }
+}
+
+TEST(QtApplicationCursorTests,
      InstallsTheAuthoredDefaultForAllWindowsAndPreservesSpecialCursors) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;

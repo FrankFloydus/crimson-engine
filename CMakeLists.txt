@@ -1098,6 +1098,12 @@ qt_add_resources(quader_ui "quader_selection_cursors"
         "${CMAKE_CURRENT_SOURCE_DIR}/resources/cursors/selection_add.png"
         "${CMAKE_CURRENT_SOURCE_DIR}/resources/cursors/selection_subtract.png")
 
+qt_add_resources(quader_ui "quader_box_cutter_cursor"
+    PREFIX "/quader/cursors"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
+    FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/box_cutter.png")
+
 qt_add_resources(quader_ui "quader_material_browser_icons"
     PREFIX "/quader/icons"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"

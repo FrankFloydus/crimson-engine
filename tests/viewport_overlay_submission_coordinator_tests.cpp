@@ -1098,6 +1098,105 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
 }
 
 TEST(ViewportOverlaySubmissionCoordinatorTests,
+     KnifeGuideAndAngleReachRetainedSubmissionAndRetireWithoutHistory) {
+  SceneSession session;
+  QuaderEditorApi editor(QuaderApiSessionInternalAccess::from_scene_session(session));
+  auto &modeling = session.modeling();
+  const auto box = editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Knife guide submission");
+  ASSERT_TRUE(box.ok());
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::Knife).ok());
+  session.history().clear();
+  const auto event = [](QVec3 point) {
+    return ModelingToolRayEvent{
+        .screen_position = {400 + point.x * 150, 300 - point.y * 150},
+        .ray = {.origin = {point.x, point.y, 6}, .direction = {0, 0, -1}},
+        .camera = {.orthographic = true, .origin = {0, 0, 6},
+                   .x_axis = {1, 0, 0}, .y_axis = {0, 1, 0},
+                   .z_axis = {0, 0, 1}, .viewport_size = {800, 600},
+                   .orthographic_size = 4.0},
+        .grid_size = 0.5, .vertex_radius = 0.001, .edge_radius = 0.01,
+        .snap_enabled = false};
+  };
+  ASSERT_TRUE(modeling.accept_knife_point(event({0, 1, 1})).ok);
+  const auto content_revision = modeling.content_revision();
+  const auto history_revision = session.history().revision();
+  ViewportOverlaySubmissionCoordinator coordinator;
+  RecordingOverlayTarget target;
+  StaticSelectionFrameProvider selection({});
+  StaticDynamicToolFrameProvider tools({});
+  RenderOverlaySelectionSnapshot scene;
+  CurveToolPreviewState curve;
+  const auto settings = ViewportSettings::defaults();
+  const auto submit = [&](ViewportPaneId pane) {
+    const auto snapshot = modeling.volatile_overlay_snapshot();
+    auto request = submission_request(selection, scene, *snapshot.frame, curve);
+    request.viewport_index = static_cast<std::size_t>(pane);
+    request.volatile_modeling_source = {
+        .source_identity = snapshot.source.source_identity,
+        .publication_revision = snapshot.source.publication_revision};
+    request.dynamic_tool_frame_provider = &tools;
+    request.dynamic_tool_source = {
+        .source_identity = reinterpret_cast<std::uintptr_t>(&tools),
+        .publication_revision = 1u};
+    return coordinator.submit(request, settings, target);
+  };
+  ASSERT_TRUE(modeling.update_knife_hover(event({0.5f, 0, 1})).ok);
+  ASSERT_TRUE(submit(ViewportPaneId::Perspective).dynamic_submitted);
+  ASSERT_TRUE(target.dynamic_frame.knife_angle_context.has_value());
+  const auto first_angle = target.dynamic_frame.knife_angle_context->angle_degrees;
+  EXPECT_GT(first_angle, 0.0);
+  EXPECT_LE(first_angle, 90.0);
+  EXPECT_EQ(std::ranges::count_if(target.dynamic_frame.lines, [](const auto &line) {
+    return line.style_role == ViewportOverlayStyleRole::KnifeReferenceLine &&
+           line.color == kOverlayKnifeReferenceColor;
+  }), 1);
+  EXPECT_EQ(std::ranges::count_if(target.dynamic_frame.lines, [](const auto &line) {
+    return line.layer == ViewportOverlayLayer::ToolPreviewLine;
+  }), 1);
+  ASSERT_TRUE(submit(ViewportPaneId::Front).dynamic_submitted);
+  ASSERT_TRUE(target.dynamic_frame.knife_angle_context.has_value());
+  EXPECT_DOUBLE_EQ(target.dynamic_frame.knife_angle_context->angle_degrees, first_angle);
+  const auto cache = modeling.volatile_overlay_cache_stats();
+  const auto work = coordinator.work_counters();
+  for (int idle = 0; idle < 8; ++idle) {
+    EXPECT_TRUE(submit(ViewportPaneId::Perspective).camera_only);
+    EXPECT_TRUE(submit(ViewportPaneId::Front).camera_only);
+  }
+  EXPECT_EQ(modeling.volatile_overlay_cache_stats().build_count, cache.build_count);
+  EXPECT_EQ(coordinator.work_counters().dynamic_source_compose_count,
+            work.dynamic_source_compose_count);
+  ASSERT_TRUE(modeling.update_knife_hover(event({0.25f, 0, 1})).ok);
+  ASSERT_TRUE(submit(ViewportPaneId::Perspective).dynamic_submitted);
+  ASSERT_TRUE(target.dynamic_frame.knife_angle_context.has_value());
+  EXPECT_NE(target.dynamic_frame.knife_angle_context->angle_degrees, first_angle);
+  ASSERT_TRUE(editor.scene().set_visible(box.value().entity, false).ok());
+  ASSERT_TRUE(submit(ViewportPaneId::Perspective).dynamic_submitted);
+  EXPECT_FALSE(target.dynamic_frame.knife_angle_context.has_value());
+  EXPECT_EQ(std::ranges::count_if(target.dynamic_frame.lines, [](const auto &line) {
+    return line.style_role == ViewportOverlayStyleRole::KnifeReferenceLine;
+  }), 0);
+  ASSERT_TRUE(editor.scene().set_visible(box.value().entity, true).ok());
+  ASSERT_TRUE(submit(ViewportPaneId::Perspective).dynamic_submitted);
+  ASSERT_TRUE(target.dynamic_frame.knife_angle_context.has_value());
+  session.history().clear();
+  const auto restored_history_revision = session.history().revision();
+  ASSERT_TRUE(modeling.clear_knife_hover().ok);
+  for (const auto pane : {ViewportPaneId::Perspective, ViewportPaneId::Front}) {
+    EXPECT_TRUE(submit(pane).dynamic_submitted);
+    EXPECT_FALSE(target.dynamic_frame.knife_angle_context.has_value());
+    EXPECT_EQ(std::ranges::count_if(target.dynamic_frame.lines, [](const auto &line) {
+      return line.style_role == ViewportOverlayStyleRole::KnifeReferenceLine;
+    }), 0);
+  }
+  EXPECT_EQ(modeling.content_revision(), content_revision);
+  EXPECT_GT(restored_history_revision, history_revision);
+  EXPECT_EQ(session.history().revision(), restored_history_revision);
+  EXPECT_EQ(session.history().undo_count(), 0u);
+}
+
+TEST(ViewportOverlaySubmissionCoordinatorTests,
      ComposesStreamsAndKeepsCurvesOutOfHudAndSourceHash) {
   ViewportOverlaySubmissionCoordinator coordinator;
   RecordingOverlayTarget target;

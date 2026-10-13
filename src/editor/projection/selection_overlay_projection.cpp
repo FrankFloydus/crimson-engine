@@ -445,6 +445,16 @@ QVec3 transform_object_point(const ProjectionObjectState &state, QVec3 point) {
 
 } // namespace
 
+std::optional<QMat4> SelectionOverlayProjection::visible_object_world_transform(
+    int object_id, const ModelingObjectRuntimeMap &object_registry,
+    const SceneDocument &scene, ModelingInstanceEditScope instance_edit_scope,
+    const std::function<bool(EntityId)> &entity_visible) {
+  ProjectionObjectStateCache cache(instance_edit_scope, entity_visible);
+  const auto &state = cache.state_for(object_id, object_registry, scene);
+  return state.visible && state.has_world_transform
+      ? std::optional<QMat4>{state.world_transform} : std::nullopt;
+}
+
 ViewportOverlayFrame
 SelectionOverlayProjection::project_selection_overlay_frame(
     const quader_editor_core::SelectionOverlayFrame &frame,

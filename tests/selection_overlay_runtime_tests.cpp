@@ -7305,6 +7305,94 @@ TEST(SelectionOverlayRuntimeTests,
 }
 
 TEST(SelectionOverlayRuntimeTests,
+     VulkanKnifeReferenceIsOrangeBesideTheAuthoredYellowCutAndRetainsPixels) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-knife-reference-pixel-test";
+  char *argv[] = {application_name, nullptr};
+  QCoreApplication application(argc, argv);
+  const QString directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (!directory.isEmpty()) ASSERT_TRUE(QDir().mkpath(directory));
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0f, false, ViewportRenderSurface::SrgbSwapchain));
+  ASSERT_TRUE(harness.create_tool_topology_sample(ViewportToolId::Knife));
+  ASSERT_TRUE(harness.pan_face_fill_camera(0.0f));
+  auto &modeling = harness.modeling();
+  ASSERT_TRUE(modeling.accept_knife_point(
+      harness.tool_topology_event({-1.0f, -0.25f, 0.0f})).ok);
+  ASSERT_TRUE(modeling.accept_knife_point(
+      harness.tool_topology_event({0.0f, -0.25f, 0.0f})).ok);
+  ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Edge));
+  const QImage without_hover = harness.capture();
+  ASSERT_FALSE(without_hover.isNull());
+  ASSERT_TRUE(harness.update_tool_topology_hover({1.0f, 0.25f, 0.0f}));
+
+  const QVec2 reference_pixel = harness.cutting_preview_pixel({0.5f, -0.25f, 0.0f});
+  const QVec2 cut_pixel = harness.cutting_preview_pixel({0.5f, 0.0f, 0.0f});
+  const auto color_pixels = [](const QImage &image, QVec2 center, bool orange) {
+    int count = 0;
+    for (int y = int(center.y) - 3; y <= int(center.y) + 3; ++y) {
+      for (int x = int(center.x) - 3; x <= int(center.x) + 3; ++x) {
+        if (!image.rect().contains(x, y)) continue;
+        const QColor color = image.pixelColor(x, y);
+        const bool warm = color.red() > 130 && color.green() > 80 &&
+                          color.green() > color.blue() + 35;
+        const bool matching = orange
+            ? warm && color.red() > color.green() + 70
+            : warm && color.green() > 180 &&
+                  std::abs(color.red() - color.green()) < 65;
+        if (matching) ++count;
+      }
+    }
+    return count;
+  };
+  const auto save_capture = [&](const QImage &image, const char *phase) {
+    if (!directory.isEmpty()) {
+      EXPECT_TRUE(image.save(QDir(directory).filePath(
+          QStringLiteral("knife-reference-%1.png").arg(QString::fromLatin1(phase)))));
+    }
+  };
+  QImage initial;
+  for (const auto &[scale, phase] : std::array<std::pair<float, const char *>, 3>{{
+           {1.0f, "100"}, {2.0f, "200"}, {1.0f, "down"}}}) {
+    SCOPED_TRACE(phase);
+    ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Edge, scale));
+    const QImage image = harness.capture();
+    ASSERT_FALSE(image.isNull());
+    EXPECT_GE(color_pixels(image, reference_pixel, true), 3)
+        << "The straight reference needs orange pixels on the rendered incident face.";
+    EXPECT_EQ(color_pixels(image, reference_pixel, false), 0);
+    EXPECT_GE(color_pixels(image, cut_pixel, false), 3)
+        << "The authored current Knife segment must keep its yellow presentation.";
+    EXPECT_EQ(color_pixels(image, cut_pixel, true), 0);
+    save_capture(image, phase);
+    if (initial.isNull()) initial = image;
+    else if (scale == 1.0f) EXPECT_EQ(image, initial);
+    const auto builds = modeling.volatile_overlay_cache_stats().build_count;
+    ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Edge, scale));
+    EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+    EXPECT_EQ(modeling.volatile_overlay_cache_stats().build_count, builds);
+    EXPECT_EQ(harness.capture(), image);
+  }
+  ASSERT_TRUE(modeling.clear_knife_hover().ok);
+  ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Edge));
+  const QImage cleared = harness.capture();
+  ASSERT_FALSE(cleared.isNull());
+  EXPECT_EQ(color_pixels(cleared, reference_pixel, true), 0);
+  EXPECT_EQ(color_pixels(cleared, cut_pixel, false), 0);
+  const auto patch = [](const QImage &image, QVec2 center) {
+    return image.copy(QRect(int(center.x) - 3, int(center.y) - 3, 7, 7));
+  };
+  EXPECT_EQ(patch(cleared, reference_pixel), patch(without_hover, reference_pixel));
+  EXPECT_EQ(patch(cleared, cut_pixel), patch(without_hover, cut_pixel));
+  save_capture(cleared, "cleared");
+}
+
+TEST(SelectionOverlayRuntimeTests,
      VulkanCuttingPreviewsRemainWorldAnchoredDuringCameraOnlyFrames) {
   if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
       QStringLiteral("1")) {

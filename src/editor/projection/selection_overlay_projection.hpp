@@ -42,6 +42,11 @@ public:
       ViewportOverlayLineOcclusionStyle occlusion_style =
           ViewportOverlayLineOcclusionStyle::Default,
       quader_poly::DocumentReadView surface_document = {});
+  /// Applies the same visibility and occurrence policy as tool primitives.
+  static std::optional<QMat4> visible_object_world_transform(
+      int object_id, const ModelingObjectRuntimeMap &object_registry,
+      const SceneDocument &scene, ModelingInstanceEditScope instance_edit_scope,
+      const std::function<bool(EntityId)> &entity_visible);
   static void append_projected_overlay_points(
       ViewportOverlayFrame &frame,
       const std::vector<quader_editor_core::SelectionOverlayPoint> &points,

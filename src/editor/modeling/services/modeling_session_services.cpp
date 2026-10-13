@@ -390,6 +390,9 @@ void append_viewport_overlay_frame(ViewportOverlayFrame &target,
   if (source.hover_edge_dimension_context.has_value()) {
     target.hover_edge_dimension_context = source.hover_edge_dimension_context;
   }
+  if (source.knife_angle_context.has_value()) {
+    target.knife_angle_context = source.knife_angle_context;
+  }
   target.hover_target_selected =
       target.hover_target_selected || source.hover_target_selected;
 }
@@ -3579,6 +3582,13 @@ std::uint64_t ModelingOverlayService::volatile_overlay_signature(
   mix_knife_target_signature_hash(hash, knife.current_target);
   mix_overlay_signature_hash(hash, knife.current_point);
   mix_overlay_signature_hash(hash, knife.face_normal);
+  mix_overlay_signature_hash(hash, knife.straight_guide.valid);
+  if (knife.straight_guide.valid) {
+    mix_overlay_signature_hash(hash, knife.straight_guide.start);
+    mix_overlay_signature_hash(hash, knife.straight_guide.end);
+    mix_overlay_signature_hash(hash, knife.straight_guide.cut_point);
+    mix_overlay_signature_hash(hash, knife.straight_guide.angle_degrees);
+  }
   mix_overlay_signature_hash(
       hash, static_cast<std::uint64_t>(knife.active_stroke_start));
   mix_overlay_signature_hash(
@@ -4332,7 +4342,8 @@ ViewportOverlayFrame ModelingOverlayService::volatile_overlay_frame(
     const SceneDocument &scene, const ModelingObjectRuntimeMap &object_registry,
     const ModelingSelectionService &selection_service,
     const ModelingSdkProjectionAdapter &sdk_projection,
-    int persistent_source_wire_object_id) const {
+    int persistent_source_wire_object_id,
+    const quader_editor_core::KnifeStraightGuide *knife_guide_override) const {
   QDR_PROFILE_FUNCTION();
   const ModelingInstanceEditScope instance_edit_scope =
       selection_service.overlay_instance_edit_scope();
@@ -4421,6 +4432,31 @@ ViewportOverlayFrame ModelingOverlayService::volatile_overlay_frame(
       ViewportOverlayLayer::ToolHandle,
       ViewportOverlayStyleRole::ExplicitColor, ViewportOverlaySource::Tool,
       instance_edit_scope, entity_visible);
+  const auto &knife = runtime.knife_state();
+  const auto &guide = knife_guide_override != nullptr
+      ? *knife_guide_override : knife.straight_guide;
+  if (knife.active && knife.has_active_stroke && knife.has_current &&
+      guide.valid &&
+      SelectionOverlayProjection::visible_object_world_transform(
+          knife.target_object_id, object_registry, scene,
+          instance_edit_scope, entity_visible).has_value()) {
+    frame.lines.push_back({
+        .layer = ViewportOverlayLayer::ToolPlaneLine,
+        .start = guide.start,
+        .end = guide.end,
+        .color = kOverlayKnifeReferenceColor,
+        .width_pixels = 1.0f,
+        .style_role = ViewportOverlayStyleRole::KnifeReferenceLine,
+        .source = ViewportOverlaySource::Tool,
+        .element = {.object_id = knife.target_object_id},
+    });
+    frame.knife_angle_context = ViewportKnifeAngleContext{
+        .start = guide.start,
+        .reference_end = guide.end,
+        .cut_point = guide.cut_point,
+        .angle_degrees = guide.angle_degrees,
+    };
+  }
   SelectionOverlayProjection::append_projected_overlay_lines(
       frame, runtime.knife_state().preview_lines, object_registry, scene,
       ViewportOverlayLayer::ToolPreviewLine,

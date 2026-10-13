@@ -151,7 +151,8 @@ public:
       const ModelingObjectRuntimeMap &object_registry,
       const ModelingSelectionService &selection_service,
       const ModelingSdkProjectionAdapter &sdk_projection,
-      int persistent_source_wire_object_id) const;
+      int persistent_source_wire_object_id,
+      const quader_editor_core::KnifeStraightGuide *knife_guide_override = nullptr) const;
   [[nodiscard]] std::vector<ModelingToolPreviewMesh>
   tool_preview_meshes(
       const quader_editor_core::EditorRuntime &runtime,

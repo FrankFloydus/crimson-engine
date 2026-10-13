@@ -1585,11 +1585,23 @@ class ModelingSessionService::Impl : private ModelingTransformDragPort {
     float normal_x = 0.0f;
     float normal_y = 0.0f;
     float normal_z = 0.0f;
+    bool straight_guide_valid = false;
+    quader_poly::ElementId straight_guide_face_id = quader_poly::kInvalidElementId;
+    std::array<float, 9U> straight_guide_positions{};
+    double straight_guide_angle_degrees = 0.0;
     std::size_t preview_line_count = 0u;
     std::size_t preview_point_count = 0u;
 
     friend bool operator==(const KnifeHoverOverlayKey &,
                            const KnifeHoverOverlayKey &) = default;
+  };
+
+  /// Retains transformed guide geometry without mutating accepted Knife state.
+  struct KnifeStraightGuideProjectionCache final {
+    bool valid = false;
+    QMat4 world_from_object;
+    KnifeHoverOverlayKey source;
+    quader_editor_core::KnifeStraightGuide guide;
   };
 
   /// Shared host inputs for retained texture presentation and target validity.
@@ -3761,11 +3773,13 @@ public:
          hover.candidate_object_id > 0 ||
          !runtime_.insert_edge_loop_state().preview_lines.empty());
     const auto *projected = needs_geometry ? &selection_projection_snapshot() : nullptr;
+    const quader_editor_core::KnifeStraightGuide knife_guide =
+        projected_knife_straight_guide();
     ViewportOverlayFrame frame = overlay_service_.volatile_overlay_frame(
         projected, app_selection_mode_to_runtime(selection_mode()),
         runtime_, scene_, object_registry_, selection_service_,
         sdk_projection_adapter_,
-        persistent_tool_source_wire_object_id());
+        persistent_tool_source_wire_object_id(), &knife_guide);
     volatile_overlay_cache_.key = source_key;
     volatile_overlay_cache_.frame =
         std::make_shared<const ViewportOverlayFrame>(std::move(frame));
@@ -8948,9 +8962,121 @@ public:
         .normal_x = state.face_normal.x,
         .normal_y = state.face_normal.y,
         .normal_z = state.face_normal.z,
+        .straight_guide_valid = state.straight_guide.valid,
+        .straight_guide_face_id = state.straight_guide.face_id,
+        .straight_guide_positions = {
+            state.straight_guide.start.x, state.straight_guide.start.y,
+            state.straight_guide.start.z, state.straight_guide.end.x,
+            state.straight_guide.end.y, state.straight_guide.end.z,
+            state.straight_guide.cut_point.x, state.straight_guide.cut_point.y,
+            state.straight_guide.cut_point.z},
+        .straight_guide_angle_degrees = state.straight_guide.angle_degrees,
         .preview_line_count = state.preview_lines.size(),
         .preview_point_count = state.preview_points.size(),
     };
+  }
+
+  [[nodiscard]] quader_editor_core::KnifeStraightGuide
+  build_knife_straight_guide_snapshot() const {
+    const quader_editor_core::KnifeToolState &knife = runtime_.knife_state();
+    if (!knife.active || !knife.has_active_stroke || !knife.has_current ||
+        !knife.current_target_valid) {
+      return {};
+    }
+    const auto &world_objects = cached_scene_transformed_objects_for_picking();
+    const auto object = std::ranges::find_if(
+        world_objects, [&knife](const auto &candidate) {
+          return candidate.id == knife.target_object_id;
+        });
+    const std::optional<QMat4> world_from_object =
+        modeling_object_world_transform(knife.target_object_id);
+    if (object == world_objects.end() || !world_from_object.has_value()) {
+      return {};
+    }
+    quader_editor_core::PickHitRecord hit;
+    hit.object_id = knife.target_object_id;
+    hit.face_id = knife.current_target.face_id;
+    hit.vertex_id = knife.current_target.vertex_id;
+    hit.edge = knife.current_target.edge;
+    hit.local_position = transform_point(*world_from_object, knife.current_point);
+    switch (knife.current_target.kind) {
+    case quader_poly::KnifePointTargetKind::ExistingVertex:
+    case quader_poly::KnifePointTargetKind::InsertedVertex:
+      hit.kind = quader_poly::ElementKind::Vertex;
+      break;
+    case quader_poly::KnifePointTargetKind::ExistingEdge:
+      hit.kind = quader_poly::ElementKind::Edge;
+      break;
+    case quader_poly::KnifePointTargetKind::FacePoint:
+      hit.kind = quader_poly::ElementKind::Face;
+      break;
+    }
+    const std::optional<KnifeStraightConstraint> constraint =
+        knife_straight_constraint(*object, hit, hit.local_position, 0.0, false);
+    if (!constraint.has_value()) {
+      return {};
+    }
+    QVec3 reference_direction = constraint->direction;
+    const auto &previous = knife.points[knife.previous_point_index];
+    if (previous.kind == quader_poly::KnifePointTargetKind::ExistingEdge) {
+      const quader_poly::Face *face =
+          quader_poly::find_face(object->document, constraint->face_id);
+      const quader_poly::Vertex *first =
+          quader_poly::find_vertex(object->document, previous.edge.a);
+      const quader_poly::Vertex *second =
+          quader_poly::find_vertex(object->document, previous.edge.b);
+      if (face == nullptr || first == nullptr || second == nullptr) {
+        return {};
+      }
+      // The reference enters this face perpendicular to the accepted seed
+      // edge. It does not replace the existing Shift constraint direction.
+      reference_direction = normalize(cross(
+          quader_poly::face_normal(object->document, *face),
+          second->position - first->position));
+    }
+    return quader_editor_core::build_knife_straight_guide(
+        object->document, constraint->face_id, constraint->previous,
+        hit.local_position, reference_direction);
+  }
+
+  void update_knife_straight_guide() {
+    knife_guide_source_world_transform_ =
+        modeling_object_world_transform(runtime_.knife_state().target_object_id);
+    runtime_.set_knife_straight_guide(build_knife_straight_guide_snapshot());
+    knife_guide_projection_cache_.valid = false;
+  }
+
+  [[nodiscard]] quader_editor_core::KnifeStraightGuide
+  projected_knife_straight_guide() const {
+    const auto &knife = runtime_.knife_state();
+    if (!knife.active || !knife.has_active_stroke || !knife.has_current ||
+        !knife.current_target_valid) {
+      return {};
+    }
+    const auto world_from_object =
+        modeling_object_world_transform(knife.target_object_id);
+    if (!world_from_object.has_value()) {
+      return {};
+    }
+    // Compare the captured transform before obtaining world geometry. Other
+    // scene edits and unchanged frames reuse the accepted guide directly.
+    if (knife_guide_source_world_transform_.has_value() &&
+        knife_guide_source_world_transform_->values == world_from_object->values) {
+      return knife.straight_guide;
+    }
+    const KnifeHoverOverlayKey source = knife_hover_overlay_key(knife);
+    if (knife_guide_projection_cache_.valid &&
+        knife_guide_projection_cache_.world_from_object.values == world_from_object->values &&
+        knife_guide_projection_cache_.source == source) {
+      return knife_guide_projection_cache_.guide;
+    }
+    knife_guide_projection_cache_ = {
+        .valid = true,
+        .world_from_object = *world_from_object,
+        .source = source,
+        .guide = build_knife_straight_guide_snapshot(),
+    };
+    return knife_guide_projection_cache_.guide;
   }
 
   ModelingCommandResult clear_knife_hover() {
@@ -9027,6 +9153,8 @@ public:
     }
     if (!target_valid) {
       runtime_.clear_knife_hover();
+    } else {
+      update_knife_straight_guide();
     }
     // A surface can expose its topology before it is a valid first Knife point.
     auto hover = runtime_.hover();
@@ -9126,6 +9254,7 @@ public:
     }
     quader_editor_core::KnifeToolState invalid = state;
     invalid.status = quader_editor_core::KnifeToolStatus::InvalidTarget;
+    invalid.straight_guide = {};
     runtime_.set_knife_state(std::move(invalid));
     return result;
   }
@@ -12114,6 +12243,8 @@ private:
   mutable ModelingOverlayService overlay_service_;
   mutable ComponentSourceWireFallbackCache component_source_wire_fallback_cache_;
   mutable VolatileOverlayCache volatile_overlay_cache_;
+  std::optional<QMat4> knife_guide_source_world_transform_;
+  mutable KnifeStraightGuideProjectionCache knife_guide_projection_cache_;
   mutable std::uint64_t volatile_overlay_runtime_revision_ = 0u;
   mutable ModelingToolPreviewWorkStats tool_preview_work_stats_;
   ModelingCommandExecutor command_executor_;

@@ -1693,6 +1693,9 @@ void QtViewportPanel::prepare_viewports(
       settings.bool_value(ViewportBoolSettingId::ShowHoverDimensions);
   const bool selection_dimensions_visible = selection_overlays_visible &&
       settings.bool_value(ViewportBoolSettingId::ShowDimensions);
+  const bool knife_angle_visible =
+      settings.bool_value(ViewportBoolSettingId::ShowDimensions) &&
+      modeling.active_viewport_tool() == ModelingViewportTool::Knife;
   const double dimension_font_size_points = static_cast<double>(
       settings.float_value(ViewportFloatSettingId::DimensionFontSize));
   const bool viewport_info_visible =
@@ -1722,7 +1725,8 @@ void QtViewportPanel::prepare_viewports(
          !pane_state.frame->isVisible()) &&
         !footprint_dimensions_visible &&
         !(pane_dimensions_visible && overlays_visible &&
-          pane_state.frame->isVisible())) {
+          pane_state.frame->isVisible()) &&
+        !(knife_angle_visible && overlays_visible && pane_state.frame->isVisible())) {
       pane_state.edge_length_hud->hide();
     }
   }
@@ -2119,7 +2123,8 @@ void QtViewportPanel::prepare_viewports(
         overlay_submission.selection_dimension_bounds
             ? &*overlay_submission.selection_dimension_bounds : nullptr,
         overlay_submission.selection_dimension_signature,
-        pane_dimensions_visible && overlays_visible);
+        pane_dimensions_visible && overlays_visible,
+        knife_angle_visible && overlays_visible);
     sync_pane_control_selection(pane_state);
   }
   composed_prepared_geometry_revision_ = composed_geometry_revision_;

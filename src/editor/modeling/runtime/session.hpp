@@ -157,6 +157,16 @@ enum class KnifeToolStatus {
   InvalidTarget = 5,
 };
 
+/** World-space face-clipped reference and unsigned line angle for one Knife segment. */
+struct KnifeStraightGuide {
+  bool valid = false;
+  quader_poly::ElementId face_id = quader_poly::kInvalidElementId;
+  quader::QVec3 start;
+  quader::QVec3 end;
+  quader::QVec3 cut_point;
+  double angle_degrees = 0.0;
+};
+
 /**
  * Stores the Knife Tool State data contract used by the modeling runtime
  * domain.
@@ -178,6 +188,7 @@ struct KnifeToolState {
   std::vector<quader::QVec3> point_positions;
   std::vector<quader_poly::KnifeStrokeSegment> segments;
   KnifeToolStatus status = KnifeToolStatus::Idle;
+  KnifeStraightGuide straight_guide;
   std::vector<SelectionOverlayLine> preview_lines;
   std::vector<SelectionOverlayPoint> preview_points;
 };
@@ -200,6 +211,7 @@ struct KnifeToolPreview {
   std::uint32_t segment_count = 0;
   bool can_commit = false;
   KnifeToolStatus status = KnifeToolStatus::Idle;
+  KnifeStraightGuide straight_guide;
 };
 
 /**
@@ -1382,6 +1394,10 @@ bool update_insert_edge_loop_drag_factor(
     SelectionHoverState &hover, const quader_poly::Ray &ray, double grid_size,
     bool snap_enabled);
 KnifeToolPreview knife_tool_preview(const KnifeToolState &state);
+KnifeStraightGuide build_knife_straight_guide(
+    const quader_poly::Document &world_document,
+    quader_poly::ElementId face_id, quader::QVec3 previous,
+    quader::QVec3 current, quader::QVec3 reference_direction);
 void reset_knife_tool(KnifeToolState &state);
 void clear_knife_hover(KnifeToolState &state, SelectionHoverState &hover);
 void rebuild_knife_overlay(KnifeToolState &state);

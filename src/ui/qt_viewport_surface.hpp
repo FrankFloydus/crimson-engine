@@ -45,6 +45,7 @@ enum class QtViewportCursorPresentation {
   SelectionDefault,
   SelectionAdd,
   SelectionSubtract,
+  BoxCutter,
   PrecisionCross,
   OpenHand,
   ClosedHand,

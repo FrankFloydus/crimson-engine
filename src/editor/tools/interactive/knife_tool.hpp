@@ -17,6 +17,10 @@ class KnifeTool final : public PointSequenceTool {
 public:
   KnifeTool()
       : PointSequenceTool(viewport_tool_descriptor(ViewportToolId::Knife)) {}
+
+  [[nodiscard]] ViewportPointerCursor pointer_cursor() const override {
+    return ViewportPointerCursor::BoxCutter;
+  }
 };
 
 } // namespace quader

@@ -905,6 +905,15 @@ TEST(QtViewportSurfaceCursorPolicyTests,
   EXPECT_EQ(quader::qt_viewport_cursor_presentation(
                 Cursor::Default, true, true),
             Presentation::Hidden);
+  EXPECT_EQ(quader::qt_viewport_cursor_presentation(
+                Cursor::BoxCutter, true, false),
+            Presentation::BoxCutter);
+  EXPECT_EQ(quader::qt_viewport_cursor_presentation(
+                Cursor::BoxCutter, false, false),
+            Presentation::Default);
+  EXPECT_EQ(quader::qt_viewport_cursor_presentation(
+                Cursor::BoxCutter, true, true),
+            Presentation::Hidden);
   for (const auto cursor : {Cursor::OpenHand, Cursor::ClosedHand}) {
     EXPECT_EQ(quader::qt_viewport_cursor_presentation(cursor, true, false),
               cursor == Cursor::OpenHand ? Presentation::OpenHand
@@ -1217,6 +1226,68 @@ TEST(QtViewportSurfaceInputTests,
 }
 
 TEST(QtViewportSurfaceInputTests,
+     BoxCutterUsesTheBladeTipOnNativeAndComposedHostsAndCachesUpdates) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-box-cutter-surface-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  for (const bool composed : {false, true}) {
+    SCOPED_TRACE(composed);
+    QWidget host;
+    host.resize(800, 600);
+    quader::QtViewportSurface surface(quader::ViewportPaneId::Perspective, composed);
+    surface.resize(800, 600);
+    if (composed) {
+      surface.set_visible_host(host);
+    }
+    QObject *input_target = composed ? static_cast<QObject *>(&host)
+                                    : static_cast<QObject *>(&surface);
+    const auto presented_cursor = [&]() {
+      return composed ? host.cursor() : surface.cursor();
+    };
+    surface.set_interaction_cursor(quader::ViewportPointerCursor::BoxCutter);
+    EXPECT_EQ(presented_cursor().shape(), Qt::ArrowCursor);
+    EXPECT_EQ(surface.pointer_cursor_presentation_revision(), 0u);
+
+    QEnterEvent enter(QPointF{40, 40}, QPointF{40, 40}, QPointF{40, 40});
+    QApplication::sendEvent(input_target, &enter);
+    const qreal scale = std::max<qreal>(
+        1.0, composed ? host.devicePixelRatioF() : surface.devicePixelRatio());
+    const QPixmap expected = quader::qt_application_cursor_pixmap(
+        quader::QtApplicationCursorVariant::BoxCutter, scale);
+    EXPECT_EQ(presented_cursor().shape(), Qt::BitmapCursor);
+    EXPECT_EQ(presented_cursor().pixmap().toImage(), expected.toImage());
+    EXPECT_DOUBLE_EQ(presented_cursor().pixmap().devicePixelRatio(), scale);
+    EXPECT_EQ(presented_cursor().hotSpot(), QPoint(0, 23));
+    const auto stable_revision = surface.pointer_cursor_presentation_revision();
+    surface.set_interaction_cursor(quader::ViewportPointerCursor::BoxCutter);
+    surface.set_interaction_cursor(quader::ViewportPointerCursor::BoxCutter);
+    QEvent same_dpi(QEvent::DevicePixelRatioChange);
+    QApplication::sendEvent(input_target, &same_dpi);
+    EXPECT_EQ(surface.pointer_cursor_presentation_revision(), stable_revision);
+
+    QFocusEvent focus_out(QEvent::FocusOut);
+    QApplication::sendEvent(input_target, &focus_out);
+    EXPECT_EQ(presented_cursor().shape(), Qt::BitmapCursor);
+    QEvent leave(QEvent::Leave);
+    QApplication::sendEvent(input_target, &leave);
+    EXPECT_EQ(presented_cursor().shape(), Qt::ArrowCursor);
+    QApplication::sendEvent(input_target, &enter);
+    EXPECT_EQ(presented_cursor().shape(), Qt::BitmapCursor);
+    surface.abandon_input();
+    EXPECT_EQ(presented_cursor().shape(), Qt::ArrowCursor);
+    EXPECT_EQ(surface.interaction_cursor(), quader::ViewportPointerCursor::Default);
+    if (composed) {
+      EXPECT_EQ(surface.handle(), nullptr);
+      EXPECT_EQ(host.internalWinId(), 0u);
+    }
+  }
+}
+
+TEST(QtViewportSurfaceInputTests,
      HandCursorUsesNativeShapesCachesSettersAndRestoresOnAbandonment) {
   ASSERT_EQ(QCoreApplication::instance(), nullptr);
   int argc = 1;
@@ -1526,6 +1597,80 @@ TEST(QtViewportSurfaceInputTests,
   ASSERT_TRUE(editor.tools().cancel_active_tool_preview().ok());
   process_input();
   EXPECT_EQ(surface->cursor().shape(), Qt::BitmapCursor);
+}
+
+TEST(QtViewportSurfaceInputTests,
+     ProductionPanelRoutesKnifeAndIdleCutThroughTheAuthoredCursor) {
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-cutting-cursor-panel-tests";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+
+  quader::SceneSession session;
+  quader::QuaderEditorApi editor(
+      quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+  ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+  const auto box = editor.modeling().create_box(
+      {.min = {-1, -1, -1}, .max = {1, 1, 1}}, "Cutting cursor box");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(editor.selection().set_mode(quader::QuaderSelectionMode::Edge).ok());
+  quader::QtViewportPanel panel;
+  panel.attach_workspace(session.viewport_workspace());
+  auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
+  ASSERT_NE(surface, nullptr);
+  resize_viewport_surface(panel, *surface, {800, 600});
+  const QPointF local{400, 300};
+  const QPointF global{500, 400};
+  QEnterEvent enter(local, local, global);
+  QFocusEvent focus(QEvent::FocusIn);
+  send_visible_viewport_event(surface, &enter);
+  send_visible_viewport_event(surface, &focus);
+  const auto process_input = [&]() {
+    panel.process_input(
+        editor, session.scene(), session.assets(), session.modeling(), {},
+        session.native_tools(), &session.point_placement(), 1.0 / 60.0);
+  };
+  for (const auto tool : {quader::ViewportToolId::Knife,
+                          quader::ViewportToolId::Cut}) {
+    SCOPED_TRACE(static_cast<int>(tool));
+    if (tool == quader::ViewportToolId::Cut) {
+      ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Object).ok());
+      ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+    }
+    const auto activated = editor.tools().activate(tool);
+    ASSERT_TRUE(activated.ok()) << activated.error_message();
+    process_input();
+    EXPECT_EQ(surface->interaction_cursor(), quader::ViewportPointerCursor::BoxCutter);
+    EXPECT_EQ(surface->cursor().shape(), Qt::BitmapCursor);
+    EXPECT_EQ(surface->cursor().hotSpot(), QPoint(0, 23));
+    EXPECT_EQ(surface->cursor().pixmap().toImage(),
+              quader::qt_application_cursor_pixmap(
+                  quader::QtApplicationCursorVariant::BoxCutter,
+                  std::max<qreal>(1.0, surface->input_device_pixel_ratio())).toImage());
+    const auto stable_revision = surface->pointer_cursor_presentation_revision();
+    process_input();
+    EXPECT_EQ(surface->pointer_cursor_presentation_revision(), stable_revision);
+
+    QMouseEvent orbit_press(QEvent::MouseButtonPress, local, global,
+                            Qt::MiddleButton, Qt::MiddleButton, Qt::NoModifier);
+    send_visible_viewport_event(surface, &orbit_press);
+    process_input();
+    EXPECT_EQ(surface->cursor().shape(), Qt::ArrowCursor);
+    QMouseEvent orbit_release(QEvent::MouseButtonRelease, local, global,
+                              Qt::MiddleButton, Qt::NoButton, Qt::NoModifier);
+    send_visible_viewport_event(surface, &orbit_release);
+    process_input();
+    EXPECT_EQ(surface->cursor().shape(), Qt::BitmapCursor);
+    EXPECT_EQ(surface->cursor().hotSpot(), QPoint(0, 23));
+  }
+  ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Select).ok());
+  process_input();
+  EXPECT_EQ(surface->cursor().shape(), Qt::BitmapCursor);
+  EXPECT_EQ(surface->cursor().hotSpot(), QPoint(0, 0));
 }
 
 TEST(QtViewportSurfaceInputTests,
