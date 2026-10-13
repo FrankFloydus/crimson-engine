@@ -248,8 +248,13 @@ TEST(RenderTextureLifetimeTests,
                               QPoint(center_right, center_bottom)}) {
     EXPECT_EQ(texture.pixelColor(sample), neutral_gray);
   }
-  EXPECT_NE(texture.pixelColor(0, 0), neutral_gray)
-      << "Solid must sample the neutral center instead of the authored border";
+  // The current built-in texture is uniformly neutral; authored grid borders
+  // were removed when the default material image changed.
+  for (int row = 0; row < texture.height(); ++row) {
+    for (int column = 0; column < texture.width(); ++column) {
+      ASSERT_EQ(texture.pixelColor(column, row), neutral_gray);
+    }
+  }
 }
 
 TEST(RenderTextureLifetimeTests,
