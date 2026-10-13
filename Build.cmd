@@ -46,9 +46,11 @@ if /I "%~2"=="configure" (
 )
 cmake --build --preset windows-%CC_CONFIGURATION%
 if errorlevel 1 goto :failure
+if not errorlevel 0 goto :failure
 if /I "%~2"=="test" (
     ctest --preset windows-%CC_CONFIGURATION%
     if errorlevel 1 goto :failure
+    if not errorlevel 0 goto :failure
 )
 echo crimson-renderer ready: build\%CC_CONFIGURATION%\bin\crimson-renderer.exe
 popd

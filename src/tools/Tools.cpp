@@ -1,4 +1,5 @@
 #include "Tools.h"
+#include "AssetBrowser.h"
 #include "crimson-renderer/ImGuiBgfx.h"
 #include "assets/AssetLibrary.h"
 #include "crimson-renderer/Renderer.h"
@@ -8,14 +9,13 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <utility>
 
 namespace crimson {
 namespace {
 
-constexpr ImVec4 Bone{0.91f, 0.88f, 0.83f, 1.0f};
-constexpr ImVec4 Muted{0.48f, 0.50f, 0.53f, 1.0f};
-constexpr ImVec4 Accent{0.81f, 0.40f, 0.34f, 1.0f};
 constexpr const char* TexturePayload = "CC_TEXTURE_ASSET";
+constexpr const char* ModelPayload = "CC_MODEL_ASSET";
 
 ImVec2 thumbnailSize(const TextureAsset& asset, float maximum) {
     const float longest = static_cast<float>(std::max(1u, std::max(asset.width, asset.height)));
@@ -34,12 +34,12 @@ void help(const char* text) {
 
 void sectionTitle(const char* label) {
     ImGui::Spacing();
-    ImGui::TextColored(Accent, "%s", label);
+    ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_Text], "%s", label);
     ImGui::Separator();
     ImGui::Spacing();
 }
 
-void drawAssetLabel(const TextureAsset* asset, const char* fallback, ImVec2 minimum, ImVec2 maximum, float padding) {
+void drawAssetLabel(const AssetLibrary& assets, const TextureAsset* asset, const char* fallback, ImVec2 minimum, ImVec2 maximum, float padding) {
     ImDrawList* draw = ImGui::GetWindowDrawList();
     float textX = minimum.x + padding;
     if (asset && bgfx::isValid(asset->thumbnail)) {
@@ -52,7 +52,8 @@ void drawAssetLabel(const TextureAsset* asset, const char* fallback, ImVec2 mini
     }
     const ImVec2 textMinimum(textX, minimum.y + (maximum.y - minimum.y - ImGui::GetFontSize()) * 0.5f);
     draw->PushClipRect(ImVec2(textX, minimum.y), ImVec2(maximum.x - padding, maximum.y), true);
-    draw->AddText(textMinimum, ImGui::GetColorU32(asset ? ImGuiCol_Text : ImGuiCol_TextDisabled), asset ? asset->name.c_str() : fallback);
+    const auto name = asset ? assets.displayName(asset->id) : std::string(fallback);
+    draw->AddText(textMinimum, ImGui::GetColorU32(asset ? ImGuiCol_Text : ImGuiCol_TextDisabled), name.c_str());
     draw->PopClipRect();
 }
 
@@ -71,7 +72,7 @@ bool assetSlot(AssetLibrary& assets, const char* title, const char* interpretati
     draw->AddRectFilled(minimum, maximum, ImGui::GetColorU32(ImGui::IsItemHovered() ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg),
                         ImGui::GetStyle().FrameRounding);
     draw->AddRect(minimum, maximum, ImGui::GetColorU32(ImGuiCol_Border), ImGui::GetStyle().FrameRounding);
-    drawAssetLabel(assets.find(assignedId), assignedId.empty() ? emptyLabel : "Missing (Texture)", minimum, maximum, 3.0f);
+    drawAssetLabel(assets, assets.find(assignedId), assignedId.empty() ? emptyLabel : "Missing (Texture)", minimum, maximum, 3.0f);
     help(interpretation);
     ImGui::SameLine(0.0f, gap);
     openPicker |= ImGui::Button("##picker", ImVec2(height, height));
@@ -110,13 +111,13 @@ bool assetSlot(AssetLibrary& assets, const char* title, const char* interpretati
             ImGui::CloseCurrentPopup();
         }
         for (const TextureAsset& asset : assets.assets()) {
-            if ((!allowHdr && asset.hdr) || !filter.PassFilter(asset.name.c_str())) continue;
+            if ((!allowHdr && asset.hdr) || !filter.PassFilter(assets.displayName(asset.id).c_str())) continue;
             ImGui::PushID(asset.id.c_str());
             if (ImGui::Selectable("##texture", asset.id == assignedId, ImGuiSelectableFlags_None, ImVec2(0, height))) {
                 changed |= assign(asset.id);
                 ImGui::CloseCurrentPopup();
             }
-            drawAssetLabel(&asset, "", ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), 3.0f);
+            drawAssetLabel(assets, &asset, "", ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), 3.0f);
             ImGui::PopID();
         }
         if (assets.assets().empty()) ImGui::TextDisabled("Import textures in the Asset Browser.");
@@ -212,13 +213,51 @@ void lightControls(SceneSettings& settings) {
     }
 }
 
-void viewControls(SceneSettings& settings) {
+void viewControls(SceneSettings& settings, EditorFrame& frame, bool hasModel) {
     sectionTitle("VIEW");
     ImGui::SliderFloat("Exposure", &settings.exposure, 0.05f, 8.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
     help("Exposure affects the HDR scene before tone mapping. The editor stays at normal brightness.");
     ImGui::SliderFloat("Field of view", &settings.camera.fov, 25.0f, 90.0f, "%.1f deg");
     ImGui::Spacing();
-    if (ImGui::Button("Reset camera", ImVec2(-1, 0))) settings.camera = Camera{};
+    if (ImGui::Button("Reset camera", ImVec2(-1, 0))) {
+        settings.camera = Camera{};
+        frame.frameModel = hasModel;
+    }
+}
+
+void modelControls(const ModelAsset& model, EditorFrame& frame) {
+    sectionTitle("MODEL PREVIEW");
+    ImGui::TextWrapped("%s", model.name.c_str());
+    ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_TextDisabled], "%s / %zu meshes / %zu primitives", model.format.c_str(), model.meshes.size(), model.primitives.size());
+    ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_TextDisabled], "%zu nodes / %zu materials", model.nodes.size(), model.materials.size());
+    size_t vertices = 0, triangles = 0;
+    for (const auto& primitive : model.primitives) {
+        vertices += primitive.vertices.size();
+        triangles += primitive.indices.size() / 3;
+    }
+    ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_TextDisabled], "%zu vertices / %zu triangles", vertices, triangles);
+    ImGui::TextWrapped("Imported materials are read-only. Drag another model into the viewport to replace this preview.");
+    if (ImGui::Button("Show default sphere", ImVec2(-1, 0))) frame.showSphere = true;
+    if (!model.warnings.empty()) {
+        sectionTitle("IMPORT WARNINGS");
+        for (const auto& warning : model.warnings) ImGui::TextWrapped("%s", warning.c_str());
+    }
+    sectionTitle("MATERIALS");
+    for (size_t index = 0; index < model.materials.size(); ++index) {
+        ImGui::PushID(static_cast<int>(index));
+        const auto& material = model.materials[index];
+        const auto title = material.name.empty() ? "Material " + std::to_string(index + 1) : material.name;
+        if (ImGui::TreeNode(title.c_str())) {
+            ImGui::Text("Base color: %.3f, %.3f, %.3f", material.baseColor[0], material.baseColor[1], material.baseColor[2]);
+            ImGui::Text("Alpha: %.3f / %s", material.baseColor[3], material.alphaMask ? "Mask" : "Opaque");
+            ImGui::Text("Metallic: %.3f / Roughness: %.3f", material.metallic, material.roughness);
+            ImGui::Text("Normal scale: %.3f / Occlusion: %.3f", material.normalScale, material.occlusionStrength);
+            ImGui::Text("Emissive: %.3f, %.3f, %.3f", material.emissive[0], material.emissive[1], material.emissive[2]);
+            ImGui::TextUnformatted(material.doubleSided ? "Double sided" : "Single sided");
+            ImGui::TreePop();
+        }
+        ImGui::PopID();
+    }
 }
 
 void seedLayout(ImGuiID dockId, const ImGuiViewport* viewport) {
@@ -235,111 +274,29 @@ void seedLayout(ImGuiID dockId, const ImGuiViewport* viewport) {
     ImGui::DockBuilderFinish(dockId);
 }
 
-void assetBrowser(AssetLibrary& assets, SDL_Window* window) {
-    if (ImGui::Begin("Asset Browser")) {
-        if (ImGui::Button("Import textures...")) assets.requestImport(window);
-        ImGui::SameLine();
-        ImGui::TextColored(Muted, "PNG / JPG / TGA / BMP / HDR");
-        if (!assets.status().empty()) ImGui::TextWrapped("%s", assets.status().c_str());
-        ImGui::BeginChild("Texture library", ImVec2(0, 0), ImGuiChildFlags_None);
-        if (assets.assets().empty()) {
-            ImGui::TextColored(Muted, "Import images, then drag a thumbnail onto a material or environment slot.");
-        } else {
-            const float thumbnailExtent = ImGui::GetFontSize() * 5.5f;
-            const float cardWidth = thumbnailExtent + ImGui::GetStyle().FramePadding.x * 2 + ImGui::GetStyle().ItemSpacing.x;
-            const int columns = std::clamp(static_cast<int>(ImGui::GetContentRegionAvail().x / cardWidth), 1, 64);
-            if (ImGui::BeginTable("Texture grid", columns, ImGuiTableFlags_SizingFixedFit)) {
-                for (const TextureAsset& asset : assets.assets()) {
-                    ImGui::TableNextColumn();
-                    ImGui::PushID(asset.id.c_str());
-                    const TextureAsset* selected = assets.selected();
-                    const bool isSelected = selected && selected->id == asset.id;
-                    if (isSelected) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.38f, 0.23f, 0.21f, 1.0f));
-                    const ImTextureRef texture(ImGuiBgfx::textureId(asset.thumbnail));
-                    const ImVec2 previewSize = thumbnailSize(asset, thumbnailExtent);
-                    if (ImGui::ImageButton("thumbnail", texture, previewSize)) assets.select(asset.id);
-                    if (isSelected) ImGui::PopStyleColor();
-                    if (ImGui::BeginDragDropSource()) {
-                        ImGui::SetDragDropPayload(TexturePayload, asset.id.c_str(), asset.id.size() + 1);
-                        ImGui::Image(texture, previewSize);
-                        ImGui::TextUnformatted(asset.name.c_str());
-                        ImGui::EndDragDropSource();
-                    }
-                    help(asset.id.c_str());
-                    std::string shortName = asset.name;
-                    const float labelWidth = cardWidth - ImGui::GetStyle().ItemSpacing.x;
-                    if (ImGui::CalcTextSize(shortName.c_str()).x > labelWidth) {
-                        while (!shortName.empty() && ImGui::CalcTextSize((shortName + "...").c_str()).x > labelWidth) {
-                            size_t last = shortName.size() - 1;
-                            while (last > 0 && (static_cast<unsigned char>(shortName[last]) & 0xc0) == 0x80) --last;
-                            shortName.resize(last);
-                        }
-                        shortName += "...";
-                    }
-                    ImGui::TextUnformatted(shortName.c_str());
-                    ImGui::TextColored(Muted, "%u x %u%s", asset.width, asset.height, asset.hdr ? " HDR" : "");
-                    ImGui::PopID();
-                }
-                ImGui::EndTable();
-            }
-        }
-        ImGui::EndChild();
-    }
-    ImGui::End();
-}
 
 } // namespace
 
-void applyToolsStyle(float dpiScale) {
-    dpiScale = std::clamp(dpiScale, 0.75f, 3.0f);
-    ImGuiStyle& style = ImGui::GetStyle();
-    style = ImGuiStyle{};
-    ImGui::StyleColorsDark(&style);
-    style.WindowPadding = ImVec2(18, 17);
-    style.FramePadding = ImVec2(9, 6);
-    style.ItemSpacing = ImVec2(9, 9);
-    style.ItemInnerSpacing = ImVec2(8, 5);
-    style.WindowRounding = 7.0f;
-    style.ChildRounding = 4.0f;
-    style.FrameRounding = 3.0f;
-    style.PopupRounding = 5.0f;
-    style.GrabRounding = 3.0f;
-    style.ScrollbarRounding = 5.0f;
-    style.WindowBorderSize = 1.0f;
-    style.FrameBorderSize = 0.0f;
-    style.TabRounding = 3.0f;
-    style.ScrollbarSize = 12.0f;
-    style.Colors[ImGuiCol_Text] = Bone;
-    style.Colors[ImGuiCol_TextDisabled] = Muted;
-    style.Colors[ImGuiCol_WindowBg] = ImVec4(0.075f, 0.079f, 0.090f, 0.98f);
-    style.Colors[ImGuiCol_ChildBg] = ImVec4(0.075f, 0.079f, 0.090f, 0.0f);
-    style.Colors[ImGuiCol_PopupBg] = ImVec4(0.10f, 0.11f, 0.13f, 0.99f);
-    style.Colors[ImGuiCol_Border] = ImVec4(0.26f, 0.25f, 0.25f, 0.68f);
-    style.Colors[ImGuiCol_FrameBg] = ImVec4(0.145f, 0.155f, 0.18f, 1.0f);
-    style.Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.22f, 0.235f, 0.27f, 1.0f);
-    style.Colors[ImGuiCol_FrameBgActive] = ImVec4(0.29f, 0.25f, 0.26f, 1.0f);
-    style.Colors[ImGuiCol_Button] = ImVec4(0.19f, 0.20f, 0.23f, 1.0f);
-    style.Colors[ImGuiCol_ButtonHovered] = ImVec4(0.30f, 0.25f, 0.25f, 1.0f);
-    style.Colors[ImGuiCol_ButtonActive] = ImVec4(0.43f, 0.28f, 0.26f, 1.0f);
-    style.Colors[ImGuiCol_Header] = ImVec4(0.17f, 0.18f, 0.21f, 1.0f);
-    style.Colors[ImGuiCol_HeaderHovered] = ImVec4(0.27f, 0.24f, 0.25f, 1.0f);
-    style.Colors[ImGuiCol_HeaderActive] = ImVec4(0.37f, 0.26f, 0.25f, 1.0f);
-    style.Colors[ImGuiCol_CheckMark] = Accent;
-    style.Colors[ImGuiCol_SliderGrab] = ImVec4(0.66f, 0.31f, 0.27f, 1.0f);
-    style.Colors[ImGuiCol_SliderGrabActive] = Accent;
-    style.Colors[ImGuiCol_Tab] = ImVec4(0.14f, 0.15f, 0.18f, 1.0f);
-    style.Colors[ImGuiCol_TabHovered] = ImVec4(0.42f, 0.28f, 0.26f, 1.0f);
-    style.Colors[ImGuiCol_TabSelected] = ImVec4(0.29f, 0.22f, 0.22f, 1.0f);
-    style.Colors[ImGuiCol_TabSelectedOverline] = Accent;
-    style.ScaleAllSizes(dpiScale);
-    style.FontScaleDpi = dpiScale;
+void applyToolsStyle(float) {
+    ImGui::GetStyle() = ImGuiStyle{};
+    ImGui::StyleColorsDark();
 }
 
-EditorFrame drawEditor(SceneSettings& settings, Renderer& renderer, AssetLibrary& assets, SDL_Window* window) {
+BrowserActions drawAssetBrowser(AssetLibrary& assets, SDL_Window* window) {
+    static AssetBrowserPanel diagnosticBrowser;
+    return diagnosticBrowser.draw(assets, window);
+}
+
+bool drawEnvironmentControls(EnvironmentSettings& environment, AssetLibrary& assets, const Renderer& renderer) {
+    return environmentControls(environment, assets, renderer);
+}
+
+EditorFrame drawEditor(SceneSettings& settings, Renderer& renderer, AssetLibrary& assets, SDL_Window* window,
+                       const ModelInstance* model, const std::string& previewStatus) {
     EditorFrame frame;
     bool resetLayout = false;
     if (ImGui::BeginMainMenuBar()) {
-        ImGui::TextColored(Accent, "CRIMSON ENGINE");
+        ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_Text], "CRIMSON ENGINE");
         if (ImGui::BeginMenu("Layout")) {
             resetLayout = ImGui::MenuItem("Reset layout");
             ImGui::EndMenu();
@@ -364,7 +321,17 @@ EditorFrame drawEditor(SceneSettings& settings, Renderer& renderer, AssetLibrary
             ImGui::Image(ImTextureRef(ImGuiBgfx::textureId(texture)), available);
             frame.viewport = {position.x, position.y, available.x, available.y, ImGui::IsItemHovered(),
                 ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup) || ImGui::GetDragDropPayload() != nullptr};
-            if (frame.viewport.hovered && (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+            if (ImGui::BeginDragDropTarget()) {
+                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(ModelPayload)) {
+                    if (payload->DataSize > 0) {
+                        const auto* id = static_cast<const char*>(payload->Data);
+                        const auto size = static_cast<size_t>(payload->DataSize);
+                        if (id[size - 1] == '\0') frame.modelDropId.assign(id, size - 1);
+                    }
+                }
+                ImGui::EndDragDropTarget();
+            }
+            if (frame.viewport.hovered && !frame.viewport.inputBlocked && (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
                 ImGui::IsMouseClicked(ImGuiMouseButton_Right) || ImGui::IsMouseClicked(ImGuiMouseButton_Middle))) ImGui::SetWindowFocus();
         }
     }
@@ -374,13 +341,17 @@ EditorFrame drawEditor(SceneSettings& settings, Renderer& renderer, AssetLibrary
     if (ImGui::Begin("Settings")) {
         const ImGuiIO& io = ImGui::GetIO();
         ImGui::Text("%.0f FPS / %.2f ms", io.Framerate, io.Framerate > 0 ? 1000.0f / io.Framerate : 0.0f);
-        ImGui::TextColored(Muted, "%s", renderer.backendName());
+        ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_TextDisabled], "%s", renderer.backendName());
+        if (!previewStatus.empty()) ImGui::TextWrapped("%s", previewStatus.c_str());
+        if (model && model->asset && !renderer.modelStatus().empty() && renderer.modelStatus() != previewStatus)
+            ImGui::TextWrapped("%s", renderer.modelStatus().c_str());
         ImGui::Separator();
         ImGui::BeginChild("Properties", ImVec2(0, -ImGui::GetFrameHeightWithSpacing()), ImGuiChildFlags_None);
         ImGui::PushItemWidth(std::max(80.0f, ImGui::GetContentRegionAvail().x * 0.58f));
         if (ImGui::BeginTabBar("Render settings")) {
             if (ImGui::BeginTabItem("Material")) {
-                frame.materialChanged |= materialControls(settings.material, assets);
+                if (model && model->asset) modelControls(*model->asset, frame);
+                else frame.materialChanged |= materialControls(settings.material, assets);
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Lights")) {
@@ -388,7 +359,7 @@ EditorFrame drawEditor(SceneSettings& settings, Renderer& renderer, AssetLibrary
                 lightControls(settings);
                 ImGui::EndTabItem();
             }
-            if (ImGui::BeginTabItem("View")) { viewControls(settings); ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("View")) { viewControls(settings, frame, model && model->asset); ImGui::EndTabItem(); }
             ImGui::EndTabBar();
         }
         ImGui::PopItemWidth();
@@ -397,10 +368,11 @@ EditorFrame drawEditor(SceneSettings& settings, Renderer& renderer, AssetLibrary
             settings = SceneSettings{};
             frame.materialChanged = true;
             frame.environmentChanged = true;
+            frame.showSphere = true;
         }
     }
     ImGui::End();
-    assetBrowser(assets, window);
+    drawAssetBrowser(assets, window);
     // A popup/asset drag may have been opened by a later panel this same frame.
     frame.viewport.inputBlocked |= ImGui::GetIO().WantTextInput ||
         ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup) || ImGui::GetDragDropPayload() != nullptr;

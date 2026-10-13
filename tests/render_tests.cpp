@@ -3,12 +3,14 @@
 #include "input/Navigation.h"
 
 #include <cmath>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <initializer_list>
 #include <iostream>
 #include <limits>
+#include <numbers>
 #include <stdexcept>
 #include <string>
 
@@ -229,6 +231,29 @@ void navigationPanAndShortEdges() {
     require(!nav.active(),"Release within a frame was lost"); same(camera.forward(),f); require(camera.position[0] < 0 && camera.position[1] > 1,"Latched Shift pan changed mode after modifier release"); near(camera.distance(),5);
     const auto before=camera; nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_DOWN,SDL_BUTTON_MIDDLE,400,300)); nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_UP,SDL_BUTTON_MIDDLE,400,300)); nav.update(camera,region,.01f); same(camera.eye(),before.eye()); same(camera.target,before.target);
 }
+void modelPreviewFramingAndNavigation() {
+    crimson::Camera camera;
+    for (const float aspect : {.4f, 1.0f, 2.0f}) {
+        const crimson::Vec3 minimum{-4,-2,-1}, maximum{8,6,3};
+        require(camera.frameBounds(minimum,maximum,aspect),"Model bounds could not be framed");
+        same(camera.target,{2,2,1});
+        const float radius = std::sqrt(56.0f);
+        const float vertical = camera.verticalFov(aspect)*std::numbers::pi_v<float>/360;
+        const float horizontal = std::atan(std::tan(vertical)*aspect);
+        require(camera.distance()*std::sin(std::min(vertical,horizontal)) > radius,"Bounds clipped by framed viewport");
+        require(camera.nearPlane < camera.distance()-radius && camera.farPlane > camera.distance()+radius,"Bounds clipped by depth range");
+    }
+    const auto before = camera;
+    require(!camera.frameBounds({1,0,0},{-1,0,0},1),"Invalid bounds accepted");
+    same(camera.eye(),before.eye());
+    camera.position={0,1,5}; camera.target={0,1,0};
+    crimson::Navigation nav(nullptr); auto region=viewport();
+    nav.handleEvent(button(SDL_EVENT_MOUSE_BUTTON_DOWN,SDL_BUTTON_MIDDLE,400,300));
+    nav.handleEvent(motion(410,300));
+    nav.update(camera,region,.01f,false);
+    near(camera.distance(),5,1e-4); same(camera.target,{0,1,0});
+    nav.cancel();
+}
 void navigationFlySpeedAndMovement() {
     crimson::Camera camera; crimson::Navigation nav(nullptr); auto region=viewport(); const auto initial=camera;
     nav.handleEvent(key(SDL_EVENT_KEY_DOWN,SDL_SCANCODE_W)); nav.update(camera,region,.1f); same(camera.eye(),initial.eye());
@@ -271,7 +296,8 @@ int main() {
     run("navigation latched pan and same-frame pointer edges", navigationPanAndShortEdges);
     run("navigation fly speed, relative start and keyboard gating", navigationFlySpeedAndMovement);
     run("navigation cancellation precedes motion and wheel is viewport-scoped", navigationCancellationAndWheel);
+    run("model framing preserves bounds and navigation ignores hidden sphere", modelPreviewFramingAndNavigation);
     if (failures) std::cerr << failures << " renderer-core check(s) failed.\n";
-    else std::cout << "All 14 renderer-core checks passed.\n";
+    else std::cout << "All 15 renderer-core checks passed.\n";
     return failures ? 1 : 0;
 }

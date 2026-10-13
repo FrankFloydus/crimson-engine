@@ -15,6 +15,7 @@ struct AppOptions {
     bool windowCycle{false};
     bool editorSmoke{false};
     bool iblSmoke{false};
+    bool modelSmoke{false};
     float uiScale{0.0f}; // Zero follows Windows; explicit values are for DPI regression checks.
     std::string capture;
     std::string scenario{"default"};

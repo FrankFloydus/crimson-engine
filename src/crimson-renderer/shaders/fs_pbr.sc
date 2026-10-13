@@ -5,10 +5,11 @@ $input v_worldPosition, v_normal, v_texcoord0, v_tangent
 uniform vec4 u_baseColorMetallic;
 uniform vec4 u_roughness;
 uniform vec4 u_cameraPos;
-uniform vec4 u_direction;
-uniform vec4 u_directionColor;
-uniform vec4 u_pointPosition[2];
-uniform vec4 u_pointColor[2];
+uniform vec4 u_direction[4];
+uniform vec4 u_directionColor[4];
+uniform vec4 u_pointPosition[16];
+uniform vec4 u_pointColor[16];
+uniform vec4 u_lightCounts;
 uniform vec4 u_textureFlags;
 uniform vec4 u_environment; // Intensity, Y rotation in radians, highest specular mip.
 SAMPLER2D(s_albedo, 0);
@@ -115,10 +116,16 @@ void main()
     if (u_textureFlags.z > 0.5) metallic *= texture2D(s_metallic, v_texcoord0).r;
     roughness = clamp(roughness, 0.045, 1.0);
     metallic = clamp(metallic, 0.0, 1.0);
-    vec3 color = evaluateLight(N, V, normalize(-u_direction.xyz),
-        u_directionColor.rgb * u_direction.w, base, metallic, roughness);
-    for (int i = 0; i < 2; ++i)
+    vec3 color = vec3_splat(0.0);
+    for (int i = 0; i < 4; ++i)
     {
+        if (float(i) >= u_lightCounts.x) break;
+        color += evaluateLight(N, V, normalize(-u_direction[i].xyz),
+            u_directionColor[i].rgb * u_direction[i].w, base, metallic, roughness);
+    }
+    for (int i = 0; i < 16; ++i)
+    {
+        if (float(i) >= u_lightCounts.y) break;
         vec3 delta = u_pointPosition[i].xyz - v_worldPosition;
         float distanceSquared = max(dot(delta, delta), 0.000001);
         vec3 L = delta * inversesqrt(distanceSquared);

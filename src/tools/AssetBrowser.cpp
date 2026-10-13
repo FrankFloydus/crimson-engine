@@ -1,0 +1,291 @@
+#include "AssetBrowser.h"
+#include "assets/AssetLibrary.h"
+#include "crimson-renderer/ImGuiBgfx.h"
+
+#include <imgui.h>
+#include <algorithm>
+#include <cmath>
+#include <cctype>
+#include <cstring>
+#include <exception>
+#include <optional>
+#include <utility>
+
+namespace crimson {
+namespace {
+constexpr const char* ModelPayload="CC_MODEL_ASSET";
+constexpr const char* ModelBatchPayload="CC_MODEL_ASSETS";
+constexpr const char* TexturePayload="CC_TEXTURE_ASSET";
+constexpr const char* ScenePayload="CC_SCENE_ASSET";
+constexpr const char* FolderPayload="CC_ASSET_FOLDER";
+
+void cubeIcon(ImDrawList& draw,ImVec2 minimum,ImVec2 maximum,ImU32 color) {
+    const float cx=(minimum.x+maximum.x)*.5f,cy=(minimum.y+maximum.y)*.5f;
+    const float r=std::min(maximum.x-minimum.x,maximum.y-minimum.y)*.28f;
+    const ImVec2 top(cx,cy-r),left(cx-r,cy-r*.45f),right(cx+r,cy-r*.45f),middle(cx,cy),bottom(cx,cy+r),lowerLeft(left.x,cy+r*.55f),lowerRight(right.x,lowerLeft.y);
+    for (const auto& edge:{std::pair{top,left},std::pair{top,right},std::pair{left,middle},std::pair{right,middle},
+             std::pair{left,lowerLeft},std::pair{right,lowerRight},std::pair{middle,bottom},std::pair{lowerLeft,bottom},std::pair{lowerRight,bottom}})
+        draw.AddLine(edge.first,edge.second,color,1.5f);
+}
+void folderIcon(ImDrawList& draw,ImVec2 minimum,ImVec2 maximum) {
+    const float w=maximum.x-minimum.x,h=maximum.y-minimum.y;
+    const ImU32 color=IM_COL32(214,177,85,255);
+    draw.AddRectFilled({minimum.x+w*.15f,minimum.y+h*.25f},{minimum.x+w*.46f,minimum.y+h*.44f},color,3);
+    draw.AddRectFilled({minimum.x+w*.15f,minimum.y+h*.35f},{minimum.x+w*.85f,minimum.y+h*.77f},color,3);
+}
+void sceneIcon(ImDrawList& draw,ImVec2 minimum,ImVec2 maximum,ImU32 color) {
+    const float w=maximum.x-minimum.x,h=maximum.y-minimum.y;
+    const ImVec2 a(minimum.x+w*.27f,minimum.y+h*.19f),b(minimum.x+w*.73f,minimum.y+h*.82f);
+    draw.AddRect(a,b,color,2,0,1.5f);
+    for (float y:{.37f,.5f,.63f}) draw.AddLine({minimum.x+w*.37f,minimum.y+h*y},{minimum.x+w*.63f,minimum.y+h*y},color,1.5f);
+}
+std::string elide(std::string text,float width) {
+    if (ImGui::CalcTextSize(text.c_str()).x<=width) return text;
+    while (!text.empty() && ImGui::CalcTextSize((text+"...").c_str()).x>width) {
+        auto last=text.size()-1;
+        while (last && (static_cast<unsigned char>(text[last])&0xc0)==0x80) --last;
+        text.resize(last);
+    }
+    return text+"...";
+}
+const char* payloadType(const BrowserItem& item) {
+    if (item.folder) return FolderPayload;
+    if (item.kind==AssetKind::Model) return ModelPayload;
+    if (item.kind==AssetKind::Scene) return ScenePayload;
+    return TexturePayload;
+}
+bool sameName(const std::string& a,const std::string& b) {
+    return a.size()==b.size() && std::equal(a.begin(),a.end(),b.begin(),[](unsigned char x,unsigned char y){
+        return std::tolower(x)==std::tolower(y);
+    });
+}
+}
+
+void AssetBrowserPanel::beginRename(const std::string& id,const std::string& name) {
+    renameId_=id; renameText_.fill(0);
+    std::memcpy(renameText_.data(),name.data(),std::min(name.size(),renameText_.size()-1));
+    focusRename_=true; message_.clear();
+}
+
+BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window) {
+    BrowserActions actions;
+    if (library_!=&assets) {
+        library_=&assets; folder_.clear(); renameId_.clear(); message_.clear(); dragIds_.clear(); deferredClick_.clear();
+    }
+    auto& catalog=assets.browserCatalog();
+    auto& selection=assets.browserSelection();
+    if (!folder_.empty() && !catalog.isFolder(folder_)) folder_.clear();
+    std::optional<std::string> navigate;
+    struct Move { std::vector<std::string> ids; std::string destination; };
+    std::optional<Move> move;
+    const auto receiveMove=[&](const std::string& destination) {
+        if (!ImGui::BeginDragDropTarget()) return;
+        for (const char* type:{ModelPayload,ModelBatchPayload,TexturePayload,ScenePayload,FolderPayload}) {
+            if (const auto* payload=ImGui::AcceptDragDropPayload(type,ImGuiDragDropFlags_AcceptBeforeDelivery)) {
+                if (!payload->IsDelivery() || payload->DataSize<1) continue;
+                const auto* bytes=static_cast<const char*>(payload->Data);
+                if (bytes[payload->DataSize-1]!='\0') continue;
+                if (payload->IsDataType(ModelBatchPayload)) {
+                    std::vector<std::string> ids;
+                    const auto* end=bytes+payload->DataSize;
+                    for (auto* cursor=bytes;cursor<end;) {
+                        const auto* zero=std::find(cursor,end,'\0');
+                        if (zero==cursor || zero==end) { ids.clear(); break; }
+                        ids.emplace_back(cursor,zero); cursor=zero+1;
+                    }
+                    if (!ids.empty()) move=Move{std::move(ids),destination};
+                    continue;
+                }
+                const std::string id(bytes,static_cast<size_t>(payload->DataSize-1));
+                if (catalog.contains(id)) move=Move{id==dragPrimary_ && !dragIds_.empty() ? dragIds_ : std::vector<std::string>{id},destination};
+            }
+        }
+        ImGui::EndDragDropTarget();
+    };
+    const auto createFolder=[&] {
+        try {
+            const auto current=catalog.items(folder_);
+            auto name=std::string("New Folder"); unsigned suffix=2;
+            while (std::any_of(current.begin(),current.end(),[&](const auto& item){return item.folder && sameName(item.name,name);})) name="New Folder "+std::to_string(suffix++);
+            const auto id=catalog.createFolder(folder_,name); selection.set(id); beginRename(id,name);
+        } catch (const std::exception& error) { message_=error.what(); }
+    };
+
+    if (ImGui::Begin("Asset Browser")) {
+        if (ImGui::Button("Import")) assets.requestImport(window,folder_);
+        ImGui::SameLine();
+        if (ImGui::Button("New Folder")) createFolder();
+        ImGui::SameLine();
+        ImGui::TextDisabled("%zu selected",selection.ids().size());
+        if (!assets.status().empty()) {
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Import results")) ImGui::OpenPopup("Import results details");
+            if (ImGui::BeginPopup("Import results details")) {
+                ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+ImGui::GetFontSize()*38);
+                ImGui::TextUnformatted(assets.status().c_str()); ImGui::PopTextWrapPos(); ImGui::EndPopup();
+            }
+        }
+        ImGui::BeginDisabled(folder_.empty());
+        if (ImGui::SmallButton("Up")) navigate=catalog.parent(folder_);
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Assets")) navigate=std::string{};
+        receiveMove({});
+        for (const auto& breadcrumb:catalog.breadcrumbs(folder_)) {
+            ImGui::SameLine(); ImGui::TextDisabled("/"); ImGui::SameLine();
+            ImGui::PushID(breadcrumb.id.c_str());
+            if (ImGui::SmallButton(breadcrumb.name.c_str())) navigate=breadcrumb.id;
+            receiveMove(breadcrumb.id); ImGui::PopID();
+        }
+        if (!catalog.status().empty()) ImGui::TextWrapped("%s",catalog.status().c_str());
+        if (!message_.empty()) ImGui::TextWrapped("%s",message_.c_str());
+        ImGui::BeginChild("Asset library",ImVec2(0,0),ImGuiChildFlags_None);
+        auto items=catalog.items(folder_);
+        std::vector<std::string> visible;
+        visible.reserve(items.size());
+        for (const auto& item:items) visible.push_back(item.id);
+        selection.retain(visible);
+        const bool keys=ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::GetIO().WantTextInput &&
+            !ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup);
+        if (keys && renameId_.empty()) {
+            if (ImGui::IsKeyPressed(ImGuiKey_Backspace,false) && !folder_.empty()) navigate=catalog.parent(folder_);
+            if (ImGui::IsKeyPressed(ImGuiKey_F2,false) && selection.ids().size()==1) beginRename(selection.primary(),catalog.name(selection.primary()));
+            if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A,false)) {
+                selection.clear(); for (const auto& id:visible) selection.click(id,visible,true,false);
+            }
+        }
+        const float font=ImGui::GetFontSize(),padding=font*.4f,thumbnail=font*5.5f;
+        const ImVec2 cardSize(thumbnail+padding*2,thumbnail+padding*2+font*2+4);
+        const int columns=std::clamp(static_cast<int>(ImGui::GetContentRegionAvail().x/(cardSize.x+ImGui::GetStyle().ItemSpacing.x)),1,64);
+        if (keys && renameId_.empty() && !visible.empty()) {
+            const auto found=std::find(visible.begin(),visible.end(),selection.primary());
+            int target=found==visible.end() ? 0 : static_cast<int>(found-visible.begin()),delta=0;
+            if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) delta=-1;
+            if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) delta=1;
+            if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) delta=-columns;
+            if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) delta=columns;
+            if (delta) selection.click(visible[static_cast<size_t>(std::clamp(target+delta,0,static_cast<int>(visible.size())-1))],visible,ImGui::GetIO().KeyCtrl,ImGui::GetIO().KeyShift);
+        }
+        bool anyHovered=false;
+        if (ImGui::BeginTable("Asset grid",columns,ImGuiTableFlags_SizingFixedFit)) {
+            for (const auto& item:items) {
+                ImGui::TableNextColumn(); ImGui::PushID(item.id.c_str());
+                const auto origin=ImGui::GetCursorScreenPos();
+                const ImVec2 end(origin.x+cardSize.x,origin.y+cardSize.y);
+                const bool editing=renameId_==item.id;
+                if (editing) ImGui::Dummy(cardSize);
+                else ImGui::InvisibleButton("card",cardSize);
+                const auto after=ImGui::GetCursorScreenPos();
+                const bool hovered=!editing && ImGui::IsItemHovered();
+                anyHovered|=hovered;
+                if (!editing && ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+                    ImGui::SetWindowFocus();
+                    const auto& io=ImGui::GetIO();
+                    if (!io.KeyShift && selection.contains(item.id)) {
+                        deferredClick_=item.id; deferredControl_=io.KeyCtrl; deferredShift_=io.KeyShift;
+                    }
+                    else { selection.click(item.id,visible,io.KeyCtrl,io.KeyShift); deferredClick_.clear(); }
+                }
+                if (hovered && ImGui::IsMouseReleased(ImGuiMouseButton_Left) && deferredClick_==item.id) {
+                    if (ImGui::GetDragDropPayload()==nullptr) selection.click(item.id,visible,deferredControl_,deferredShift_);
+                    deferredClick_.clear();
+                }
+                if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    if (item.folder) navigate=item.id;
+                    else if (item.kind==AssetKind::Scene) actions.openScene=item.id;
+                }
+                if (!editing && ImGui::BeginDragDropSource()) {
+                    if (dragPrimary_!=item.id || dragIds_.empty()) {
+                        selection.beginDrag(item.id); deferredClick_.clear();
+                        dragPrimary_=item.id; dragIds_=selection.ids(); dragPayload_.clear();
+                        dragModelsBatch_=dragIds_.size()>1 && std::all_of(dragIds_.begin(),dragIds_.end(),[&](const auto& id){
+                            const auto found=std::find_if(assets.catalog().begin(),assets.catalog().end(),[&](const auto& asset){return asset.id==id;});
+                            return found!=assets.catalog().end() && found->kind==AssetKind::Model;
+                        });
+                        if (dragModelsBatch_) for (const auto& id:dragIds_) { dragPayload_.insert(dragPayload_.end(),id.begin(),id.end()); dragPayload_.push_back('\0'); }
+                    }
+                    if (dragModelsBatch_) ImGui::SetDragDropPayload(ModelBatchPayload,dragPayload_.data(),dragPayload_.size());
+                    else ImGui::SetDragDropPayload(payloadType(item),item.id.c_str(),item.id.size()+1);
+                    ImGui::TextUnformatted(item.name.c_str());
+                    if (dragIds_.size()>1) ImGui::Text("%zu selected assets",dragIds_.size());
+                    ImGui::EndDragDropSource();
+                }
+                if (item.folder) receiveMove(item.id);
+                if (ImGui::BeginPopupContextItem("Asset actions")) {
+                    if (!selection.contains(item.id)) selection.set(item.id);
+                    if (item.folder && ImGui::MenuItem("Open folder")) navigate=item.id;
+                    if (!item.folder && item.kind==AssetKind::Scene) {
+                        if (ImGui::MenuItem("Open scene")) actions.openScene=item.id;
+                        if (ImGui::MenuItem("Delete scene...")) actions.deleteScene=item.id;
+                    }
+                    if (ImGui::MenuItem("Rename","F2",false,selection.ids().size()==1)) beginRename(item.id,item.name);
+                    if (ImGui::MenuItem("New Folder")) createFolder();
+                    ImGui::EndPopup();
+                }
+                auto* draw=ImGui::GetWindowDrawList();
+                if (hovered) {
+                    auto color=ImGui::GetStyleColorVec4(ImGuiCol_HeaderHovered); color.w*=.2f;
+                    draw->AddRectFilled(origin,end,ImGui::GetColorU32(color),3);
+                }
+                // Every card has the same footprint and the same square image
+                // well. Images are letterboxed; unselected cards have no border.
+                const ImVec2 well(origin.x+padding,origin.y+padding),wellEnd(well.x+thumbnail,well.y+thumbnail);
+                const auto* image=item.folder ? nullptr : assets.find(item.id);
+                const auto model=item.kind==AssetKind::Model && !item.folder ? assets.findModel(item.id) : nullptr;
+                const auto textColor=ImGui::GetColorU32(ImGuiCol_Text);
+                if (image && bgfx::isValid(image->thumbnail)) {
+                    const float longest=static_cast<float>(std::max({1u,image->width,image->height}));
+                    const float width=thumbnail*static_cast<float>(image->width)/longest;
+                    const float height=thumbnail*static_cast<float>(image->height)/longest;
+                    const ImVec2 a(well.x+(thumbnail-width)*.5f,well.y+(thumbnail-height)*.5f);
+                    draw->AddImage(ImGuiBgfx::textureId(image->thumbnail),a,{a.x+width,a.y+height});
+                } else if (item.folder) folderIcon(*draw,well,wellEnd);
+                else if (item.kind==AssetKind::Scene) sceneIcon(*draw,well,wellEnd,textColor);
+                else cubeIcon(*draw,well,wellEnd,textColor);
+                const ImVec2 label(origin.x+padding,wellEnd.y+3);
+                const auto shortName=elide(item.name,thumbnail);
+                if (!editing) draw->AddText(label,textColor,shortName.c_str());
+                std::string details=item.folder ? "Folder" : item.kind==AssetKind::Scene ? "Scene" : model ? model->format : "Image";
+                if (image) details=std::to_string(image->width)+" x "+std::to_string(image->height)+(image->hdr ? " HDR" : "");
+                draw->AddText({label.x,label.y+font+1},ImGui::GetColorU32(ImGuiCol_TextDisabled),elide(details,thumbnail).c_str());
+                if (selection.contains(item.id)) draw->AddRect(origin,end,ImGui::GetColorU32(ImGuiCol_HeaderActive),3,0,1.0f);
+                if (hovered && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+                    ImGui::BeginTooltip(); ImGui::TextUnformatted(item.name.c_str());
+                    ImGui::TextDisabled("%s",item.id.c_str());
+                    if (model) for (const auto& warning:model->warnings) ImGui::TextWrapped("%s",warning.c_str());
+                    ImGui::EndTooltip();
+                }
+                if (editing) {
+                    ImGui::SetCursorScreenPos(label); ImGui::SetNextItemWidth(thumbnail);
+                    if (focusRename_) { ImGui::SetKeyboardFocusHere(); focusRename_=false; }
+                    const bool commit=ImGui::InputText("##rename",renameText_.data(),renameText_.size(),ImGuiInputTextFlags_EnterReturnsTrue|ImGuiInputTextFlags_AutoSelectAll);
+                    const bool cancel=ImGui::IsKeyPressed(ImGuiKey_Escape,false);
+                    if (commit || (!cancel && ImGui::IsItemDeactivatedAfterEdit())) {
+                        try { catalog.rename(item.id,renameText_.data()); renameId_.clear(); message_.clear(); }
+                        catch (const std::exception& error) { message_=error.what(); focusRename_=true; }
+                    } else if (cancel || (ImGui::IsItemDeactivated() && !ImGui::IsItemDeactivatedAfterEdit())) renameId_.clear();
+                    ImGui::SetCursorScreenPos(after);
+                }
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
+        if (items.empty()) ImGui::TextDisabled("No assets in this folder.");
+        if (ImGui::IsWindowHovered() && !anyHovered && !ImGui::IsAnyItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && renameId_.empty()) selection.clear();
+        if (ImGui::BeginPopupContextWindow("Create asset",ImGuiPopupFlags_MouseButtonRight|ImGuiPopupFlags_NoOpenOverItems)) {
+            if (ImGui::MenuItem("New Folder")) createFolder();
+            if (ImGui::MenuItem("New scene")) actions.newScene=true;
+            ImGui::EndPopup();
+        }
+        ImGui::EndChild();
+    }
+    ImGui::End();
+    if (move) {
+        try { catalog.move(move->ids,move->destination); selection.clear(); message_.clear(); }
+        catch (const std::exception& error) { message_=error.what(); }
+    }
+    if (navigate) { folder_=*navigate; selection.clear(); renameId_.clear(); deferredClick_.clear(); }
+    if (!ImGui::GetDragDropPayload()) { dragIds_.clear(); dragPrimary_.clear(); }
+    return actions;
+}
+} // namespace crimson

@@ -9,25 +9,20 @@
 
 namespace crimson {
 namespace {
-Vec3 add(const Vec3& a,const Vec3& b) { return {a[0]+b[0],a[1]+b[1],a[2]+b[2]}; }
-Vec3 sub(const Vec3& a,const Vec3& b) { return {a[0]-b[0],a[1]-b[1],a[2]-b[2]}; }
-Vec3 scale(const Vec3& a,float s) { return {a[0]*s,a[1]*s,a[2]*s}; }
-float dot(const Vec3& a,const Vec3& b) { return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
-Vec3 cross(const Vec3& a,const Vec3& b) { return {a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]}; }
+using math::add;
+using math::scale;
+Vec3 sub(const Vec3& a,const Vec3& b) { return math::subtract(a,b); }
 bool contains(const ViewportRegion& region,float x,float y) { return region.width > 0 && region.height > 0 && std::isfinite(x) && std::isfinite(y) && x >= region.x && y >= region.y && x < region.x+region.width && y < region.y+region.height; }
 std::optional<Vec3> sphereAnchor(const Camera& camera,const ViewportRegion& region,float x,float y) {
-    const float aspect = region.width/region.height;
-    const float tangent = std::tan(camera.verticalFov(aspect)*std::numbers::pi_v<float>/360);
-    const Vec3 f = camera.forward(), r = camera.right(), u = cross(r,f);
-    Vec3 ray = add(add(f,scale(r,((x-region.x)/region.width*2-1)*aspect*tangent)),scale(u,(1-(y-region.y)/region.height*2)*tangent));
-    const float norm = std::sqrt(dot(ray,ray)); if (!(norm > 0) || !std::isfinite(norm)) return {};
-    ray = scale(ray,1/norm);
+    const auto screenRay=camera.screenRay(x,y,region);
+    if (!screenRay) return {};
+    const auto& ray=screenRay->direction;
     const Vec3 offset = sub(camera.eye(),{0,1,0});
-    const float b = dot(offset,ray), discriminant = b*b-dot(offset,offset)+1;
+    const double b = math::dot(offset,ray), discriminant = b*b-math::dot(offset,offset)+1;
     if (discriminant < 0 || !std::isfinite(discriminant)) return {};
-    const float root = std::sqrt(discriminant);
-    const float nearest = -b-root, farthest = -b+root;
-    const float distance = nearest > .0001f ? nearest : farthest;
+    const double root = std::sqrt(discriminant);
+    const double nearest = -b-root, farthest = -b+root;
+    const double distance = nearest > .0001f ? nearest : farthest;
     return distance > .0001f ? std::optional<Vec3>{add(camera.eye(),scale(ray,distance))} : std::nullopt;
 }
 }
@@ -56,7 +51,7 @@ void Navigation::motion(Camera& camera,const ViewportRegion& region,float x,floa
     if (!std::isfinite(dx) || !std::isfinite(dy) || (std::abs(dx) < 1e-6f && std::abs(dy) < 1e-6f)) return;
     if (anchorPending_) {
         anchorPending_ = false;
-        const float depth = dot(sub(anchor_,camera.eye()),camera.forward());
+        const double depth = math::dot(sub(anchor_,camera.eye()),camera.forward());
         if (std::isfinite(depth) && depth > .0001f && depth <= camera.distance()+1e-5f) {
             camera.target = add(camera.eye(),scale(camera.forward(),depth));
             pivot_ = mode_ == Mode::Orbit ? anchor_ : camera.target;
@@ -65,7 +60,7 @@ void Navigation::motion(Camera& camera,const ViewportRegion& region,float x,floa
     if (mode_ == Mode::Orbit) camera.orbit(dx,dy,pivot_);
     else if (mode_ == Mode::Pan) camera.pan(dx,dy,region.width,region.height);
 }
-void Navigation::update(Camera& camera,const ViewportRegion& region,float dt) {
+void Navigation::update(Camera& camera,const ViewportRegion& region,float dt,bool sphereVisible) {
     if (cancelRequested_ || region.width <= 0 || region.height <= 0 || (active() && region.inputBlocked)) { cancel(); return; }
     bool flyStarted = false;
     auto queued = std::move(events_); events_.clear();
@@ -92,7 +87,9 @@ void Navigation::update(Camera& camera,const ViewportRegion& region,float dt) {
                     for (const auto key : {SDL_SCANCODE_W,SDL_SCANCODE_A,SDL_SCANCODE_S,SDL_SCANCODE_D}) keys_[key] = current[key];
                 }
             } else {
-                if (const auto hit = sphereAnchor(camera,region,lastX_,lastY_)) { anchor_ = *hit; anchorPending_ = true; }
+                if (sphereVisible) {
+                    if (const auto hit = sphereAnchor(camera,region,lastX_,lastY_)) { anchor_ = *hit; anchorPending_ = true; }
+                }
                 if (window_) SDL_CaptureMouse(true);
             }
         } else if (event.type == SDL_EVENT_MOUSE_MOTION) {

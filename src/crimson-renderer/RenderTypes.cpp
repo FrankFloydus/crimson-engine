@@ -9,17 +9,14 @@ namespace {
 constexpr Vec3 DefaultPosition{0.0f, 1.6276402f, 4.1528387f};
 constexpr Vec3 DefaultTarget{0.0f, 1.0f, 0.0f};
 constexpr Vec3 WorldUp{0.0f, 1.0f, 0.0f};
-bool finite(const Vec3& v) { return std::isfinite(v[0]) && std::isfinite(v[1]) && std::isfinite(v[2]); }
-Vec3 add(const Vec3& a, const Vec3& b) { return {a[0]+b[0],a[1]+b[1],a[2]+b[2]}; }
-Vec3 sub(const Vec3& a, const Vec3& b) { return {a[0]-b[0],a[1]-b[1],a[2]-b[2]}; }
-Vec3 scale(const Vec3& v, double s) { return {static_cast<float>(v[0]*s),static_cast<float>(v[1]*s),static_cast<float>(v[2]*s)}; }
-double dot(const Vec3& a, const Vec3& b) { return double(a[0])*b[0]+double(a[1])*b[1]+double(a[2])*b[2]; }
-Vec3 cross(const Vec3& a, const Vec3& b) { return {a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]}; }
-Vec3 normalized(const Vec3& v, const Vec3& fallback) { const double n = std::sqrt(dot(v,v)); return finite(v) && n > 1e-8 ? scale(v,1/n) : fallback; }
-Vec3 rotate(const Vec3& v, const Vec3& axis, double angle) {
-    const double c = std::cos(angle), s = std::sin(angle);
-    return add(add(scale(v,c),scale(cross(axis,v),s)),scale(axis,dot(axis,v)*(1-c)));
-}
+using math::finite;
+using math::add;
+using math::scale;
+using math::dot;
+using math::cross;
+using math::normalized;
+using math::rotate;
+Vec3 sub(const Vec3& a, const Vec3& b) { return math::subtract(a,b); }
 void prepare(Camera& camera) {
     if (!finite(camera.position)) camera.position = DefaultPosition;
     if (!finite(camera.target)) camera.target = DefaultTarget;
@@ -60,6 +57,44 @@ float Camera::verticalFov(float aspect) const {
     const double degrees = std::isfinite(fov) ? std::clamp(double(fov),15.0,100.0) : 45.0;
     const double ratio = std::isfinite(aspect) && aspect > 0 ? aspect : 1;
     return static_cast<float>(2*std::atan(std::tan(degrees*radians*.5)/std::min(1.0,ratio))/radians);
+}
+Mat4 Camera::viewMatrix() const { return math::lookAt(eye(),eye()+forward(),math::cross(right(),forward())); }
+Mat4 Camera::projectionMatrix(float aspect, ClipDepth depth) const {
+    const float nearValue=std::isfinite(nearPlane) ? std::clamp(nearPlane,1e-7f,1e8f) : .01f;
+    const float farValue=std::max(nearValue*2,std::isfinite(farPlane) ? std::clamp(farPlane,1e-6f,1e12f) : 2048.0f);
+    const float ratio=std::isfinite(aspect) && aspect>0 ? aspect : 1;
+    return math::perspective(verticalFov(ratio)*std::numbers::pi/180,ratio,nearValue,farValue,depth);
+}
+std::optional<Ray> Camera::screenRay(float x, float y, const ViewportRegion& viewport) const {
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(viewport.width) || !std::isfinite(viewport.height) || viewport.width<=0 || viewport.height<=0) return {};
+    const auto ray=math::rayFromScreen(x,y,projectionMatrix(viewport.width/viewport.height,ClipDepth::ZeroToOne)*viewMatrix(),
+        {viewport.x,viewport.y,viewport.width,viewport.height},ClipDepth::ZeroToOne);
+    if (!ray) return {};
+    return Ray{eye(),ray->direction};
+}
+bool Camera::frameBounds(const Vec3& minimum, const Vec3& maximum, float aspect) {
+    if (!finite(minimum) || !finite(maximum) || !std::isfinite(aspect) || aspect <= 0) return false;
+    Vec3 center{};
+    double radiusSquared = 0;
+    for (size_t i = 0; i < 3; ++i) {
+        if (maximum[i] < minimum[i]) return false;
+        center[i] = static_cast<float>((double(minimum[i]) + maximum[i]) * .5);
+        const double half = (double(maximum[i]) - minimum[i]) * .5;
+        radiusSquared += half * half;
+    }
+    const double radius = std::max(.001, std::sqrt(radiusSquared));
+    const double vertical = verticalFov(aspect) * std::numbers::pi / 360;
+    const double horizontal = std::atan(std::tan(vertical) * aspect);
+    const double viewDistance = radius * 1.15 / std::sin(std::min(vertical, horizontal));
+    const auto newPosition = sub(center, scale(forward(), viewDistance));
+    const double farDistance = std::max(2048.0, viewDistance + radius * 4);
+    if (!finite(newPosition) || farDistance > std::numeric_limits<float>::max()) return false;
+    position = newPosition;
+    target = center;
+    nearPlane = static_cast<float>(std::max(.00001, radius * .001));
+    farPlane = static_cast<float>(farDistance);
+    prepare(*this);
+    return true;
 }
 void Camera::orbit(float dx, float dy, const Vec3& pivot) {
     if (!std::isfinite(dx) || !std::isfinite(dy) || !finite(pivot)) return;

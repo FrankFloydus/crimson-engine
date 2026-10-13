@@ -1,6 +1,6 @@
 #pragma once
 
-#include "RenderTypes.h"
+#include "math/Math.h"
 #include <bgfx/bgfx.h>
 #include <array>
 #include <filesystem>

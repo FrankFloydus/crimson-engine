@@ -1,6 +1,6 @@
 #include "ImGuiBgfx.h"
 
-#include <bx/math.h>
+#include "math/Math.h"
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -160,14 +160,16 @@ void ImGuiBgfx::updateTexture(ImTextureData* texture) {
 }
 
 void ImGuiBgfx::setupView(const RenderState& state) {
-    float projection[16];
     const ImDrawData& data = *state.drawData;
-    bx::mtxOrtho(projection, data.DisplayPos.x, data.DisplayPos.x + data.DisplaySize.x,
-        data.DisplayPos.y + data.DisplaySize.y, data.DisplayPos.y, 0.0f, 100.0f, 0.0f, bgfx::getCaps()->homogeneousDepth);
+    // ImGui uses the legacy left-handed screen-space Z convention. Reflect only
+    // that adapter axis; engine world/camera matrices remain right-handed.
+    const auto projection=math::orthographic(data.DisplayPos.x,data.DisplayPos.x+data.DisplaySize.x,
+        data.DisplayPos.y+data.DisplaySize.y,data.DisplayPos.y,0,100,
+        bgfx::getCaps()->homogeneousDepth ? ClipDepth::NegativeOneToOne : ClipDepth::ZeroToOne)*math::scaling({1,1,-1});
     bgfx::setViewName(state.viewId, "ImGui tools");
     bgfx::setViewMode(state.viewId, bgfx::ViewMode::Sequential);
     bgfx::setViewRect(state.viewId, 0, 0, state.width, state.height);
-    bgfx::setViewTransform(state.viewId, nullptr, projection);
+    bgfx::setViewTransform(state.viewId, nullptr, projection.data());
 }
 
 void ImGuiBgfx::resetRenderState(const ImDrawList*, const ImDrawCmd*) {

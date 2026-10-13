@@ -1,12 +1,13 @@
 #pragma once
 
+#include "math/Math.h"
 #include <array>
 #include <cstdint>
 #include <string>
 
 namespace crimson {
 
-using Vec3 = std::array<float, 3>;
+struct ViewportRegion;
 
 struct Material {
     Vec3 baseColor{0.65f, 0.08f, 0.055f}; // Editor color is sRGB; renderer converts to linear.
@@ -45,16 +46,21 @@ struct Camera {
     Vec3 target{0.0f, 1.0f, 0.0f};
     Vec3 up{0.0f, 1.0f, 0.0f};
     float fov{45.0f};
+    float nearPlane{0.01f}, farPlane{2048.0f};
     Vec3 eye() const;
     Vec3 forward() const;
     Vec3 right() const;
     float distance() const;
     float verticalFov(float aspect) const;
+    Mat4 viewMatrix() const;
+    Mat4 projectionMatrix(float aspect, ClipDepth depth) const;
+    std::optional<Ray> screenRay(float x, float y, const ViewportRegion& viewport) const;
     void orbit(float deltaX, float deltaY, const Vec3& pivot);
     void pan(float deltaX, float deltaY, float viewportWidth, float viewportHeight);
     void flyLook(float deltaX, float deltaY);
     void flyMove(float forwardInput, float horizontalInput, float dt, float speed);
     void zoom(float wheel);
+    bool frameBounds(const Vec3& minimum, const Vec3& maximum, float aspect);
 };
 
 struct ViewportRegion {

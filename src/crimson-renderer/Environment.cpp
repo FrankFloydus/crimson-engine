@@ -23,17 +23,9 @@ constexpr float RoughnessFloor = 0.045f;
 constexpr uint64_t FnvOffset = 14695981039346656037ull, FnvPrime = 1099511628211ull;
 constexpr uint64_t Sampler = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_W_CLAMP;
 
-float dot(const Vec3& a, const Vec3& b) { return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
-Vec3 normalize(Vec3 value) {
-    const float squared = dot(value, value);
-    if (!std::isfinite(squared) || squared < 1e-12f) return {0,1,0};
-    const float reciprocal = 1/std::sqrt(squared);
-    for (float& v : value) v *= reciprocal;
-    return value;
-}
-Vec3 cross(const Vec3& a, const Vec3& b) {
-    return {a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]};
-}
+float dot(const Vec3& a, const Vec3& b) { return math::dotFloat(a,b); }
+Vec3 normalize(Vec3 value) { return math::normalizedFloat(value); }
+using math::cross;
 float finiteRadiance(float value) { return std::isfinite(value) ? std::clamp(value, 0.0f, 60000.0f) : 0.0f; }
 float roughnessValue(float value) { return std::isfinite(value) ? std::clamp(value, RoughnessFloor, 1.0f) : 1.0f; }
 float radicalInverse(uint32_t bits) {

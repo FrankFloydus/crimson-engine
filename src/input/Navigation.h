@@ -11,7 +11,7 @@ public:
     explicit Navigation(SDL_Window* window) : window_(window) {}
     ~Navigation() { cancel(); }
     void handleEvent(const SDL_Event& event);
-    void update(Camera& camera, const ViewportRegion& region, float dt);
+    void update(Camera& camera, const ViewportRegion& region, float dt, bool sphereVisible = true);
     void cancel();
     bool active() const { return mode_ != Mode::None; }
     bool flying() const { return mode_ == Mode::Fly; }

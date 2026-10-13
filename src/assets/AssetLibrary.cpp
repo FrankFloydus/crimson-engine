@@ -1,4 +1,6 @@
 #include "AssetLibrary.h"
+#include "scene/SceneDocument.h"
+#include "math/Json.h"
 
 #include <SDL3/SDL.h>
 #include <bimg/decode.h>
@@ -13,6 +15,7 @@
 #include <fstream>
 #include <limits>
 #include <mutex>
+#include <set>
 #include <stdexcept>
 
 namespace crimson {
@@ -146,13 +149,14 @@ void destroyTexture(bgfx::TextureHandle handle) { if (bgfx::isValid(handle)) bgf
 } // namespace
 
 struct AssetLibrary::ImportQueue {
+    struct Batch { std::vector<std::string> paths; std::string destination; };
     std::mutex mutex;
-    std::vector<std::string> paths;
+    std::vector<Batch> batches;
     std::string error;
 };
 
 AssetLibrary::AssetLibrary(std::filesystem::path root)
-    : imports_(std::make_shared<ImportQueue>()), projectRoot_(std::filesystem::absolute(std::move(root)).lexically_normal()) {
+    : imports_(std::make_shared<ImportQueue>()), projectRoot_(std::filesystem::absolute(std::move(root)).lexically_normal()), browserCatalog_(projectRoot_) {
     const auto directory = projectRoot_ / "assets" / "textures";
     std::filesystem::create_directories(directory);
     std::vector<std::filesystem::path> files;
@@ -161,15 +165,64 @@ AssetLibrary::AssetLibrary(std::filesystem::path root)
     }
     std::sort(files.begin(), files.end());
     for (const auto& file : files) {
-        try { assets_.push_back(makeAsset(file)); }
-        catch (const std::exception& error) { status_ = error.what(); }
+        try { addTexture(makeAsset(file)); }
+        catch (const std::exception& error) { status_ += std::string(error.what()) + '\n'; }
     }
+    const auto modelsDirectory = projectRoot_ / "assets" / "models";
+    std::filesystem::create_directories(modelsDirectory);
+    files.clear();
+    for (const auto& entry : std::filesystem::directory_iterator(modelsDirectory)) {
+        if (entry.is_directory() && !utf8(entry.path().filename()).starts_with(".staging-model-") &&
+            std::filesystem::exists(entry.path() / "manifest.json"))
+            files.push_back(entry.path() / "manifest.json");
+    }
+    std::sort(files.begin(), files.end());
+    for (const auto& file : files) {
+        try { registerModel(loadModelPackage(file, projectRoot_)); }
+        catch (const std::exception& error) {
+            status_ += "Model load failed (" + utf8(file.parent_path().filename()) + "): " + error.what() + '\n';
+        }
+    }
+    refreshScenes();
 }
 
 AssetLibrary::~AssetLibrary() {
     for (const auto& asset : assets_) {
         destroyTexture(asset.thumbnail); destroyTexture(asset.colorTexture); destroyTexture(asset.dataTexture);
     }
+}
+
+void AssetLibrary::refreshScenes() {
+    std::erase_if(catalog_, [](const AssetEntry& entry) { return entry.kind == AssetKind::Scene; });
+    std::vector<std::string> errors;
+    for (const auto& scene : scanSceneAssets(projectRoot_, &errors))
+        catalog_.push_back({scene.id, scene.name, AssetKind::Scene});
+    for (const auto& error : errors) status_ += error + '\n';
+    ++catalogRevision_;
+}
+
+BrowserCatalog& AssetLibrary::browserCatalog() {
+    if (browserRevision_ != catalogRevision_) {
+        browserCatalog_.synchronize(catalog_);
+        browserRevision_ = catalogRevision_;
+    }
+    return browserCatalog_;
+}
+
+std::string AssetLibrary::displayName(const std::string& id) const {
+    const auto name=browserCatalog_.name(id);
+    if (!name.empty()) return name;
+    const auto found=std::find_if(catalog_.begin(),catalog_.end(),[&](const auto& entry){return entry.id==id;});
+    return found==catalog_.end() ? id : found->name;
+}
+
+bool AssetLibrary::deleteScene(const std::string& id) {
+    std::string error;
+    if (!deleteSceneAsset(projectRoot_, id, error)) { status_ = error; return false; }
+    if (selectedId() == id) browserSelection_.clear();
+    refreshScenes();
+    status_ = "Scene deleted.";
+    return true;
 }
 
 const TextureAsset* AssetLibrary::find(const std::string& id) const {
@@ -179,6 +232,59 @@ const TextureAsset* AssetLibrary::find(const std::string& id) const {
 TextureAsset* AssetLibrary::findMutable(const std::string& id) {
     const auto found = std::find_if(assets_.begin(), assets_.end(), [&](const auto& asset) { return asset.id == id; });
     return found == assets_.end() ? nullptr : &*found;
+}
+
+std::shared_ptr<const ModelAsset> AssetLibrary::findModel(const std::string& id) const {
+    const auto found = std::find_if(models_.begin(), models_.end(), [&](const auto& model) { return model->id == id; });
+    return found == models_.end() ? nullptr : *found;
+}
+
+void AssetLibrary::addTexture(TextureAsset asset) {
+    AssetEntry entry;
+    try {
+        entry = {asset.id, asset.name, asset.hdr ? AssetKind::Environment : AssetKind::Texture};
+        assets_.reserve(assets_.size() + 1);
+        catalog_.reserve(catalog_.size() + 1);
+    } catch (...) {
+        destroyTexture(asset.thumbnail); destroyTexture(asset.colorTexture); destroyTexture(asset.dataTexture);
+        throw;
+    }
+    catalog_.push_back(std::move(entry));
+    ++catalogRevision_;
+    assets_.push_back(std::move(asset));
+}
+
+void AssetLibrary::registerModel(std::shared_ptr<const ModelAsset> model) {
+    if (!model || findModel(model->id)) return;
+    // Model-package image paths stay in their package. They share the ordinary
+    // texture owner and remain usable in the editor's compatible image pickers.
+    std::set<std::string> imageIds;
+    for (const auto& image : model->images) if (!image.empty() && !find(image)) imageIds.insert(image);
+    for (const auto& material : model->materials) {
+        for (const auto* texture : {&material.baseColorTexture, &material.metallicRoughnessTexture,
+                &material.normalTexture, &material.occlusionTexture, &material.emissiveTexture}) {
+            if (!texture->image.empty() && !find(texture->image)) imageIds.insert(texture->image);
+        }
+    }
+    std::vector<TextureAsset> pending;
+    try {
+        pending.reserve(imageIds.size());
+        for (const auto& id : imageIds) {
+            auto image = makeAsset(projectRoot_ / fromUtf8(id));
+            image.name = model->name + " / " + image.name;
+            pending.push_back(std::move(image));
+        }
+        assets_.reserve(assets_.size() + pending.size());
+        catalog_.reserve(catalog_.size() + pending.size() + 1);
+        models_.reserve(models_.size() + 1);
+    } catch (...) {
+        for (const auto& image : pending) destroyTexture(image.thumbnail);
+        throw;
+    }
+    for (auto& image : pending) addTexture(std::move(image));
+    catalog_.push_back({model->id, model->name, AssetKind::Model});
+    ++catalogRevision_;
+    models_.push_back(std::move(model));
 }
 
 TextureAsset AssetLibrary::makeAsset(const std::filesystem::path& path) {
@@ -202,13 +308,14 @@ const TextureAsset* AssetLibrary::importTexture(const std::filesystem::path& sou
         auto destination = folder / source.filename();
         if (std::filesystem::exists(destination) && std::filesystem::equivalent(source, destination)) {
             const auto id = utf8(std::filesystem::relative(destination, projectRoot_));
+            if (!find(id)) addTexture(makeAsset(destination));
             select(id);
+            status_ = "Imported " + utf8(destination.filename());
             return find(id);
         }
         for (uint32_t suffix = 2; std::filesystem::exists(destination); ++suffix) {
             destination = folder / (source.stem().native() + L"-" + std::to_wstring(suffix) + source.extension().native());
         }
-        std::filesystem::copy_file(source, destination);
         TextureAsset asset;
         asset.id = utf8(std::filesystem::relative(destination, projectRoot_));
         asset.name = utf8(destination.filename());
@@ -216,32 +323,101 @@ const TextureAsset* AssetLibrary::importTexture(const std::filesystem::path& sou
         asset.hdr = extension(destination) == ".hdr";
         asset.thumbnail = upload(thumbnail(pixels), false);
         bgfx::setName(asset.thumbnail, asset.name.c_str());
-        assets_.push_back(std::move(asset));
-        selectedId_ = assets_.back().id;
+        try { std::filesystem::copy_file(source, destination); }
+        catch (...) { destroyTexture(asset.thumbnail); throw; }
+        addTexture(std::move(asset));
+        select(assets_.back().id);
         status_ = "Imported " + assets_.back().name;
         return &assets_.back();
     } catch (const std::exception& error) { status_ = error.what(); return nullptr; }
 }
 
-void AssetLibrary::requestImport(SDL_Window* window) {
-    static const SDL_DialogFileFilter filters[]{{"Textures and environments", "png;jpg;jpeg;tga;bmp;hdr"}};
-    auto* callbackOwner = new std::shared_ptr<ImportQueue>(imports_);
+std::shared_ptr<const ModelAsset> AssetLibrary::importModel(const std::filesystem::path& source) {
+    try {
+        auto model = importModelPackage(source, projectRoot_);
+        registerModel(model);
+        select(model->id);
+        status_ = "Imported " + model->name;
+        return model;
+    } catch (const std::exception& error) { status_ = error.what(); return nullptr; }
+}
+
+size_t AssetLibrary::importFiles(const std::vector<std::filesystem::path>& sources, const std::string& destinationFolder) {
+    std::set<std::string> previous;
+    if (!destinationFolder.empty()) for (const auto& asset:catalog_) previous.insert(asset.id);
+    size_t succeeded = 0;
+    std::string failures;
+    for (const auto& source : sources) {
+        const auto type = extension(source);
+        bool imported = false;
+        if (type == ".gltf" || type == ".glb") imported = static_cast<bool>(importModel(source));
+        else if (textureFile(source)) imported = importTexture(source) != nullptr;
+        else status_ = "Unsupported asset format. Choose PNG, JPEG, TGA, BMP, HDR, glTF or GLB.";
+        if (imported) ++succeeded;
+        else failures += "\n" + utf8(source.filename()) + ": " + status_;
+    }
+    status_ = "Imported " + std::to_string(succeeded) + " of " + std::to_string(sources.size()) + " assets." + failures;
+    if (!destinationFolder.empty()) {
+        std::vector<std::string> added;
+        for (const auto& asset:catalog_) if (!previous.contains(asset.id)) added.push_back(asset.id);
+        if (!added.empty()) try { browserCatalog().move(added,destinationFolder); }
+        catch (const std::exception& error) { status_ += "\nAssets imported into the browser root: " + std::string(error.what()); }
+    }
+    return succeeded;
+}
+
+void AssetLibrary::requestImport(SDL_Window* window, const std::string& destinationFolder) {
+    static const SDL_DialogFileFilter filters[]{{"Supported assets", "png;jpg;jpeg;tga;bmp;hdr;gltf;glb"}};
+    struct Request { std::shared_ptr<ImportQueue> queue; std::string destination; };
+    auto* callbackOwner = new Request{imports_,destinationFolder};
     SDL_ShowOpenFileDialog([](void* data, const char* const* files, int) {
-        std::unique_ptr<std::shared_ptr<ImportQueue>> owner(static_cast<std::shared_ptr<ImportQueue>*>(data));
-        std::lock_guard lock((*owner)->mutex);
-        if (!files) { (*owner)->error = SDL_GetError(); return; }
-        for (size_t index = 0; files[index]; ++index) (*owner)->paths.emplace_back(files[index]);
+        std::unique_ptr<Request> owner(static_cast<Request*>(data));
+        std::lock_guard lock(owner->queue->mutex);
+        if (!files) { owner->queue->error = SDL_GetError(); return; }
+        ImportQueue::Batch batch;
+        batch.destination=owner->destination;
+        for (size_t index = 0; files[index]; ++index) batch.paths.emplace_back(files[index]);
+        if (!batch.paths.empty()) owner->queue->batches.push_back(std::move(batch));
     }, callbackOwner, window, filters, 1, nullptr, true);
 }
 
 void AssetLibrary::processImports() {
-    std::vector<std::string> paths;
+    std::vector<ImportQueue::Batch> batches;
     {
         std::lock_guard lock(imports_->mutex);
-        paths.swap(imports_->paths);
+        batches.swap(imports_->batches);
         if (!imports_->error.empty()) { status_ = std::move(imports_->error); imports_->error.clear(); }
     }
-    for (const auto& path : paths) importTexture(fromUtf8(path));
+    for (const auto& batch:batches) {
+        std::vector<std::filesystem::path> sources;
+        sources.reserve(batch.paths.size());
+        for (const auto& path : batch.paths) sources.push_back(fromUtf8(path));
+        importFiles(sources,batch.destination);
+    }
+}
+
+std::string AssetLibrary::loadPreview() {
+    const auto file = projectRoot_ / "assets" / "preview.json";
+    if (!std::filesystem::exists(file)) return {};
+    try {
+        std::ifstream input(file);
+        const auto json = nlohmann::json::parse(input);
+        if (json.at("version").get<int>() != 1) throw std::runtime_error("Unsupported preview version.");
+        return json.at("model").get<std::string>();
+    } catch (const std::exception& error) {
+        status_ = std::string("Preview load failed: ") + error.what();
+        return {};
+    }
+}
+
+bool AssetLibrary::savePreview(const std::string& modelId) {
+    try {
+        const nlohmann::json json{{"version", 1}, {"model", modelId}};
+        std::ofstream output(projectRoot_ / "assets" / "preview.json");
+        output << json.dump(2) << '\n';
+        if (!output) throw std::runtime_error("Could not write preview.json.");
+        return true;
+    } catch (const std::exception& error) { status_ = error.what(); return false; }
 }
 
 bool AssetLibrary::assign(Material& material, MaterialSlot slot, const std::string& id) {
@@ -283,6 +459,34 @@ MaterialTextures AssetLibrary::bindings(const Material& material) {
         if (auto* asset = findMutable(material.normalMap)) textures.normal = fullTexture(*asset, false);
     } catch (const std::exception& error) { status_ = error.what(); }
     return textures;
+}
+
+std::vector<ModelMaterialTextures> AssetLibrary::modelBindings(const ModelAsset& model) {
+    std::vector<ModelMaterialTextures> result(model.materials.size());
+    for (size_t materialIndex = 0; materialIndex < model.materials.size(); ++materialIndex) {
+        const auto& material = model.materials[materialIndex];
+        const std::array<const ModelTexture*, 5> slots{&material.baseColorTexture, &material.metallicRoughnessTexture,
+            &material.normalTexture, &material.occlusionTexture, &material.emissiveTexture};
+        for (size_t slot = 0; slot < slots.size(); ++slot) {
+            const auto& source = *slots[slot];
+            if (source.image.empty()) continue;
+            auto* image = findMutable(source.image);
+            if (!image) throw std::runtime_error("Model image is unavailable: " + source.image);
+            auto& target = result[materialIndex];
+            target.handles[slot] = fullTexture(*image, slot == 0 || slot == 4);
+            if (!bgfx::isValid(target.handles[slot]))
+                throw std::runtime_error("Model image GPU upload failed: " + source.image);
+            uint32_t flags = 0;
+            if (source.wrapU == ModelWrap::Clamp) flags |= BGFX_SAMPLER_U_CLAMP;
+            else if (source.wrapU == ModelWrap::Mirror) flags |= BGFX_SAMPLER_U_MIRROR;
+            if (source.wrapV == ModelWrap::Clamp) flags |= BGFX_SAMPLER_V_CLAMP;
+            else if (source.wrapV == ModelWrap::Mirror) flags |= BGFX_SAMPLER_V_MIRROR;
+            if (source.minFilter == ModelFilter::Nearest) flags |= BGFX_SAMPLER_MIN_POINT;
+            if (source.magFilter == ModelFilter::Nearest) flags |= BGFX_SAMPLER_MAG_POINT;
+            target.flags[slot] = flags;
+        }
+    }
+    return result;
 }
 
 void AssetLibrary::loadMaterial(Material& material) {
