@@ -423,13 +423,86 @@ TEST_F(QtViewportEdgeLengthHudTests,
 }
 
 TEST_F(QtViewportEdgeLengthHudTests,
+       KnifeLengthTracksWorldSegmentWithoutAReferenceAndRetainsWidgets) {
+  quader::ViewportOverlayFrame frame;
+  frame.knife_segment_context = quader::ViewportKnifeSegmentContext{
+      .start = {-1, 1, 0}, .end = {1, -1, 0}};
+  auto *length = parent_->findChild<QLabel *>(QStringLiteral("viewportKnifeLength_perspective"));
+  ASSERT_NE(length, nullptr);
+  const auto present_length = [&](bool enabled = true) {
+    hud_->present(frame, quader::RenderSignatureBuilder::overlay_frame_signature(frame),
+                  camera_, parent_->rect(), false, 12.0,
+                  nullptr, false, nullptr, 0U, false, enabled);
+  };
+  present_length();
+  ASSERT_FALSE(length->isHidden());
+  EXPECT_EQ(length->text(), QStringLiteral("90.51"));
+  EXPECT_EQ(length->foregroundRole(), QPalette::Text);
+  EXPECT_TRUE(parent_->rect().contains(length->geometry()));
+  const auto endpoint = camera_.project_world_point(frame.knife_segment_context->end);
+  const QPoint logical_endpoint{
+      qRound(endpoint.position.x * parent_->width() / camera_.viewport_size().x),
+      qRound(endpoint.position.y * parent_->height() / camera_.viewport_size().y)};
+  EXPECT_GT(length->geometry().left(), logical_endpoint.x());
+  EXPECT_LE(std::abs(length->geometry().top() - logical_endpoint.y()), 4);
+  EdgeHudWidgetEventCounter counter;
+  length->installEventFilter(&counter);
+  QCoreApplication::processEvents();
+  const auto events = counter.counts();
+  const auto mask_revision = length->property("quaderDimensionMaskRevision");
+  for (int idle = 0; idle < 16; ++idle) present_length();
+  QCoreApplication::processEvents();
+  EXPECT_EQ(counter.counts(), events);
+  EXPECT_EQ(length->property("quaderDimensionMaskRevision"), mask_revision);
+  camera_.unlock_orthographic_view();
+  present_length();
+  ASSERT_FALSE(length->isHidden());
+  EXPECT_EQ(length->text(), QStringLiteral("90.51"));
+  frame.knife_segment_context->end = {1, 1, 0};
+  present_length();
+  EXPECT_EQ(length->text(), QStringLiteral("64"));
+  present_length(false);
+  EXPECT_TRUE(length->isHidden());
+  present_length();
+  EXPECT_FALSE(length->isHidden());
+  parent_->hide();
+  EXPECT_TRUE(length->isHidden());
+  parent_->show();
+  QCoreApplication::processEvents();
+  EXPECT_TRUE(length->isHidden());
+  present_length();
+  EXPECT_FALSE(length->isHidden());
+  parent_->resize(2, 2);
+  camera_.set_viewport_size(4, 4);
+  present_length();
+  EXPECT_TRUE(length->isHidden());
+  parent_->resize(400, 300);
+  camera_.set_viewport_size(800, 600);
+  present_length();
+  EXPECT_FALSE(length->isHidden());
+  frame.knife_segment_context->end = frame.knife_segment_context->start;
+  present_length();
+  EXPECT_TRUE(length->isHidden());
+  frame.knife_segment_context->end.x = std::numeric_limits<float>::quiet_NaN();
+  present_length();
+  EXPECT_TRUE(length->isHidden());
+  frame.knife_segment_context.reset();
+  present_length();
+  EXPECT_TRUE(length->isHidden());
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
        KnifeAngleUsesSharedScaleAndStaysInsideNarrowPane) {
   quader::ViewportOverlayFrame frame;
   frame.knife_angle_context = quader::ViewportKnifeAngleContext{
       .start = {-1, 1, 0}, .reference_end = {-1, -1, 0},
       .cut_point = {1, -1, 0}, .angle_degrees = 45.0};
+  frame.knife_segment_context = quader::ViewportKnifeSegmentContext{
+      .start = {-1, 1, 0}, .end = {1, -1, 0}};
   auto *angle = parent_->findChild<QLabel *>(QStringLiteral("viewportKnifeAngle_perspective"));
+  auto *length = parent_->findChild<QLabel *>(QStringLiteral("viewportKnifeLength_perspective"));
   ASSERT_NE(angle, nullptr);
+  ASSERT_NE(length, nullptr);
   const auto present_angle = [&] {
     hud_->present(frame, 1u, camera_, parent_->rect(), false, 12.0,
                   nullptr, false, nullptr, 0u, false, true);
@@ -443,24 +516,33 @@ TEST_F(QtViewportEdgeLengthHudTests,
   };
   present_angle();
   ASSERT_FALSE(angle->isHidden());
+  ASSERT_FALSE(length->isHidden());
+  EXPECT_FALSE(angle->geometry().intersects(length->geometry()));
   const QSize baseline = angle->size();
+  const QSize length_baseline = length->size();
   capture(QStringLiteral("knife-angle-100.png"));
   hud_->apply_ui_scale(quader::QtUiScaleMetrics{2.0F, 1u});
   present_angle();
   ASSERT_FALSE(angle->isHidden());
   EXPECT_GT(angle->width(), baseline.width());
   EXPECT_DOUBLE_EQ(angle->font().pointSizeF(), 24.0);
+  EXPECT_GT(length->width(), length_baseline.width());
+  EXPECT_DOUBLE_EQ(length->font().pointSizeF(), 24.0);
   capture(QStringLiteral("knife-angle-200.png"));
   parent_->resize(180, 220);
   camera_.set_viewport_size(360, 440);
   present_angle();
   ASSERT_FALSE(angle->isHidden());
   EXPECT_TRUE(parent_->rect().contains(angle->geometry()));
+  ASSERT_FALSE(length->isHidden());
+  EXPECT_TRUE(parent_->rect().contains(length->geometry()));
+  EXPECT_FALSE(angle->geometry().intersects(length->geometry()));
   capture(QStringLiteral("knife-angle-narrow-200.png"));
   hud_->apply_ui_scale(quader::QtUiScaleMetrics{1.0F, 2u});
   present_angle();
   ASSERT_FALSE(angle->isHidden());
   EXPECT_EQ(angle->size(), baseline);
+  EXPECT_EQ(length->size(), length_baseline);
   EXPECT_TRUE(parent_->rect().contains(angle->geometry()));
   capture(QStringLiteral("knife-angle-narrow-100.png"));
   parent_->setAutoFillBackground(true);
@@ -473,13 +555,151 @@ TEST_F(QtViewportEdgeLengthHudTests,
     parent_->setPalette(palette);
     present_angle();
     ASSERT_FALSE(angle->isHidden());
+    ASSERT_FALSE(length->isHidden());
     EXPECT_EQ(angle->foregroundRole(), QPalette::Text);
+    EXPECT_EQ(length->foregroundRole(), QPalette::Text);
     for (const auto group : {QPalette::Active, QPalette::Inactive, QPalette::Disabled}) {
       EXPECT_EQ(angle->palette().color(group, QPalette::Text),
+                palette.color(group, QPalette::Text));
+      EXPECT_EQ(length->palette().color(group, QPalette::Text),
                 palette.color(group, QPalette::Text));
     }
     capture(light ? QStringLiteral("knife-angle-narrow-light.png")
                   : QStringLiteral("knife-angle-narrow-high-contrast.png"));
+  }
+}
+
+TEST_F(QtViewportEdgeLengthHudTests,
+       ProductionKnifePointerGestureShowsGuideAndAngleWithGridSnap) {
+  constexpr std::array kTransforms{
+      quader::QuaderTransform{},
+      quader::QuaderTransform{.location = {4096, -2048, 8192},
+                              .rotation_euler = {0.23F, 0.47F, -0.16F},
+                              .scale = {64, 40, 72}}};
+  for (std::size_t variant = 0U; variant < kTransforms.size(); ++variant) {
+    SCOPED_TRACE(variant);
+    const auto &transform = kTransforms[variant];
+    for (const bool vertex_seed : {false, true}) {
+      SCOPED_TRACE(vertex_seed);
+      quader::SceneSession session;
+      quader::QuaderEditorApi editor(
+          quader::QuaderApiSessionInternalAccess::from_scene_session(session));
+      ASSERT_TRUE(editor.commands().set_keybinding_storage_path({}).ok());
+      const auto box = editor.modeling().create_box(
+          {.min = {-2, -1, -2}, .max = {2, 1, 2}}, "Knife pointer HUD");
+      ASSERT_TRUE(box.ok()) << box.error_message();
+      ASSERT_TRUE(editor.scene().set_transform(box.value().entity, transform).ok());
+      const auto world_from_object = session.scene().world_transform_matrix(box.value().entity);
+      const auto world_point = [&](quader::QVec3 local) {
+        return quader::transform_point(world_from_object, local);
+      };
+      ASSERT_TRUE(editor.mode().set(quader::QuaderEditorMode::Edit).ok());
+      ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Knife).ok());
+      ASSERT_TRUE(editor.main_viewport().set_control(
+          quader::QuaderViewportControl::SnappingEnabled, true).ok());
+      ASSERT_TRUE(editor.main_viewport().set_control(
+          quader::QuaderViewportControl::GridSnap, true).ok());
+      session.history().clear();
+      auto settings = quader::ViewportSettings::defaults();
+      settings.set_bool_value(quader::ViewportBoolSettingId::ShowDimensions, true);
+      settings.set_bool_value(quader::ViewportBoolSettingId::ShowHoverDimensions, false);
+      parent_->resize(800, 600);
+      quader::QtViewportPanel panel(parent_.get());
+      panel.setGeometry(parent_->rect());
+      panel.attach_workspace(session.viewport_workspace());
+      panel.set_viewport_settings(settings);
+      panel.set_startup_presentation_blocked(false);
+      panel.show();
+      QCoreApplication::processEvents();
+      auto *surface = panel.surface(quader::ViewportPaneId::Perspective);
+      ASSERT_NE(surface, nullptr);
+      quader::test_support::resize_viewport_surface(panel, *surface, {800, 600});
+      auto &camera = session.viewport_workspace().camera(quader::ViewportPaneId::Perspective);
+      ASSERT_TRUE(camera.restore_perspective_pose(
+          {.eye = world_point({6, 7, 9}), .target = world_point({0, 1, 0}),
+           .up = quader::normalize(world_point({0, 1, 0}) - world_point({}))}));
+      QEnterEvent enter({400, 300}, {400, 300}, {500, 400});
+      QFocusEvent focus(QEvent::FocusIn);
+      const auto deliver = [&](QEvent &event) {
+        quader::test_support::send_visible_viewport_event(surface, &event);
+      };
+      deliver(enter);
+      deliver(focus);
+      quader::SceneRenderBridge bridge;
+      quader::RenderOverlaySnapshotCache cache;
+      const auto frame = [&] {
+        panel.process_input(editor, session.scene(), session.assets(), session.modeling(), {},
+                            session.native_tools(), &session.point_placement(), 1.0 / 60.0);
+        panel.prepare_viewports(editor, bridge, cache, session.scene(), session.assets(),
+                                session.modeling(), session.native_tools());
+      };
+      frame();
+      const auto pointer = [&](QEvent::Type type, quader::QVec3 local_point,
+                                Qt::MouseButton button, Qt::MouseButtons buttons) {
+        const auto projected = camera.project_world_point(world_point(local_point));
+        EXPECT_TRUE(projected.visible);
+        const QPointF local{static_cast<qreal>(qRound(projected.position.x / surface->input_device_pixel_ratio())),
+                            static_cast<qreal>(qRound(projected.position.y / surface->input_device_pixel_ratio()))};
+        QMouseEvent event(type, local, QPointF(surface->visible_local_to_global(local.toPoint())),
+                          button, buttons, Qt::NoModifier);
+        deliver(event);
+        frame();
+      };
+      // Seed the far edge of the top face, then move right and inward as in the report.
+      const quader::QVec3 seed = vertex_seed ? quader::QVec3{-2, 1, -2}
+                                            : quader::QVec3{0, 1, -2};
+      pointer(QEvent::MouseMove, seed, Qt::NoButton, Qt::NoButton);
+      pointer(QEvent::MouseButtonPress, seed, Qt::LeftButton, Qt::LeftButton);
+      pointer(QEvent::MouseButtonRelease, seed, Qt::LeftButton, Qt::NoButton);
+      ASSERT_TRUE(session.modeling().tool_status().knife_has_active_stroke);
+      pointer(QEvent::MouseMove, vertex_seed ? quader::QVec3{-0.75F, 1, 0}
+                                            : quader::QVec3{1, 1, 0},
+              Qt::NoButton, Qt::NoButton);
+      const auto overlay = session.modeling().volatile_overlay_frame();
+      ASSERT_TRUE(overlay.knife_angle_context.has_value());
+      ASSERT_TRUE(overlay.knife_segment_context.has_value());
+      EXPECT_EQ(std::count_if(overlay.lines.begin(), overlay.lines.end(), [](const auto &line) {
+        return line.style_role == quader::ViewportOverlayStyleRole::KnifeReferenceLine;
+      }), 1);
+      auto *angle = panel.findChild<QLabel *>(QStringLiteral("viewportKnifeAngle_perspective"));
+      auto *length = panel.findChild<QLabel *>(QStringLiteral("viewportKnifeLength_perspective"));
+      ASSERT_NE(angle, nullptr);
+      ASSERT_NE(length, nullptr);
+      EXPECT_FALSE(angle->isHidden());
+      EXPECT_FALSE(length->isHidden());
+      for (int idle = 0; idle < 8; ++idle) frame();
+      EXPECT_FALSE(angle->isHidden());
+      EXPECT_FALSE(length->isHidden());
+      const QString review_directory = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+      if (!review_directory.isEmpty()) {
+        ASSERT_TRUE(QDir{}.mkpath(review_directory));
+        ASSERT_TRUE(parent_->grab().save(
+            QDir(review_directory).filePath(QStringLiteral("knife-pointer-top-%1-vertex-%2.png")
+                                             .arg(static_cast<int>(variant))
+                                               .arg(vertex_seed ? 1 : 0))));
+      }
+      settings.set_bool_value(quader::ViewportBoolSettingId::ShowDimensions, false);
+      panel.set_viewport_settings(settings);
+      frame();
+      EXPECT_TRUE(angle->isHidden());
+      EXPECT_TRUE(length->isHidden());
+      const auto dimensions_hidden_overlay = session.modeling().volatile_overlay_frame();
+      EXPECT_EQ(std::count_if(dimensions_hidden_overlay.lines.begin(),
+                             dimensions_hidden_overlay.lines.end(), [](const auto &line) {
+        return line.style_role == quader::ViewportOverlayStyleRole::KnifeReferenceLine;
+      }), 1);
+      settings.set_bool_value(quader::ViewportBoolSettingId::ShowDimensions, true);
+      panel.set_viewport_settings(settings);
+      frame();
+      EXPECT_FALSE(angle->isHidden());
+      EXPECT_FALSE(length->isHidden());
+      ASSERT_TRUE(editor.tools().cancel_modal_tool().ok());
+      ASSERT_TRUE(editor.tools().activate(quader::ViewportToolId::Select).ok());
+      frame();
+      EXPECT_TRUE(angle->isHidden());
+      EXPECT_TRUE(length->isHidden());
+      EXPECT_EQ(session.history().undo_count(), 0U);
+    }
   }
 }
 
@@ -536,14 +756,18 @@ TEST_F(QtViewportEdgeLengthHudTests,
   ASSERT_TRUE(session.modeling().update_knife_hover(hover).ok);
   prepare();
   auto *angle = panel.findChild<QLabel *>(QStringLiteral("viewportKnifeAngle_perspective"));
+  auto *length = panel.findChild<QLabel *>(QStringLiteral("viewportKnifeLength_perspective"));
   ASSERT_NE(angle, nullptr);
+  ASSERT_NE(length, nullptr);
   ASSERT_FALSE(angle->isHidden());
+  ASSERT_FALSE(length->isHidden());
   const auto text = angle->text();
   const auto source = session.modeling().volatile_overlay_snapshot().source.publication_revision;
   settings.set_bool_value(quader::ViewportBoolSettingId::ShowDimensions, false);
   panel.set_viewport_settings(settings);
   prepare();
   EXPECT_TRUE(angle->isHidden());
+  EXPECT_TRUE(length->isHidden());
   const auto frame = session.modeling().volatile_overlay_frame();
   EXPECT_TRUE(frame.knife_angle_context.has_value());
   EXPECT_EQ(std::count_if(frame.lines.begin(), frame.lines.end(), [](const auto &line) {
@@ -554,11 +778,13 @@ TEST_F(QtViewportEdgeLengthHudTests,
   panel.set_viewport_settings(settings);
   prepare();
   EXPECT_FALSE(angle->isHidden());
+  EXPECT_FALSE(length->isHidden());
   EXPECT_EQ(angle->text(), text);
   ASSERT_TRUE(editor.main_viewport().set_control(
       quader::QuaderViewportControl::ShowOverlays, false).ok());
   prepare();
   EXPECT_TRUE(angle->isHidden());
+  EXPECT_TRUE(length->isHidden());
   EXPECT_EQ(session.history().undo_count(), 0u);
 }
 

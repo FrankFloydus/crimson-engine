@@ -240,14 +240,45 @@ KnifeStraightGuide build_knife_straight_guide(
 	// real planar region before treating that axis as a guide support plane.
 	const double face_area =
 		quader_poly::document_internal::knife_signed_area_2d(projected_loop);
+	// Accepted points and face vertices reach world space through separate
+	// float transforms. Test boundary distance in world units so their rounding
+	// does not masquerade as an outside point in a fixed signed-area tolerance.
+	const auto inside_face = [&](quader::QVec3 position) {
+		const auto point = quader_poly::document_internal::knife_project_point(
+			position, dropped_axis);
+		if (quader_poly::document_internal::knife_point_in_or_on_polygon_2d(
+			point, projected_loop)) {
+			return true;
+		}
+		for (std::size_t index = 0U; index < projected_loop.size(); ++index) {
+			const auto &first = projected_loop[index];
+			const auto &second = projected_loop[(index + 1U) % projected_loop.size()];
+			const double edge_x = second[0] - first[0];
+			const double edge_y = second[1] - first[1];
+			const double edge_length_squared = edge_x * edge_x + edge_y * edge_y;
+			const double coordinate_size = std::max({
+				std::abs(point[0]), std::abs(point[1]), std::abs(first[0]),
+				std::abs(first[1]), std::abs(second[0]), std::abs(second[1])});
+			const double tolerance = std::max({0.000001,
+				std::sqrt(edge_length_squared) * 0.000001,
+				coordinate_size * std::numeric_limits<float>::epsilon() * 4.0});
+			const double point_x = point[0] - first[0];
+			const double point_y = point[1] - first[1];
+			const double factor = edge_length_squared > 0.0
+				? std::clamp((point_x * edge_x + point_y * edge_y) /
+					edge_length_squared, 0.0, 1.0) : 0.0;
+			const double distance_x = point_x - edge_x * factor;
+			const double distance_y = point_y - edge_y * factor;
+			if (distance_x * distance_x + distance_y * distance_y <=
+				tolerance * tolerance) {
+				return true;
+			}
+		}
+		return false;
+	};
 	if (projected_loop.size() != face->vertices.size() ||
 		!std::isfinite(face_area) || std::abs(face_area) <= 0.000000000001 ||
-		!quader_poly::document_internal::knife_point_in_or_on_polygon_2d(
-			quader_poly::document_internal::knife_project_point(previous, dropped_axis),
-			projected_loop) ||
-		!quader_poly::document_internal::knife_point_in_or_on_polygon_2d(
-			quader_poly::document_internal::knife_project_point(current, dropped_axis),
-			projected_loop)) {
+		!inside_face(previous) || !inside_face(current)) {
 		return {};
 	}
 	if (quader::dot(direction, delta) < 0.0F) {
@@ -311,10 +342,7 @@ KnifeStraightGuide build_knife_straight_guide(
 		}
 		const quader::QVec3 endpoint = previous + axis * static_cast<float>(exit_distance);
 		const quader::QVec3 midpoint = previous + axis * static_cast<float>(exit_distance * 0.5);
-		if (!finite_point(endpoint) ||
-			!quader_poly::document_internal::knife_point_in_or_on_polygon_2d(
-				quader_poly::document_internal::knife_project_point(midpoint, dropped_axis),
-				projected_loop)) {
+		if (!finite_point(endpoint) || !inside_face(midpoint)) {
 			return std::nullopt;
 		}
 		return endpoint;

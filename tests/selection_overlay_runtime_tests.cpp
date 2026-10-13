@@ -7393,6 +7393,188 @@ TEST(SelectionOverlayRuntimeTests,
 }
 
 TEST(SelectionOverlayRuntimeTests,
+     VulkanKnifeFirstEdgeSeedOnPerspectiveTopFacePublishesGuideAngleAndLength) {
+  if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
+      QStringLiteral("1")) {
+    GTEST_SKIP() << "Set QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS=1 for production Vulkan captures.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  int argc = 1;
+  char application_name[] = "quader-knife-top-face-pixel-test";
+  char *argv[] = {application_name, nullptr};
+  QCoreApplication application(argc, argv);
+  const QString directory = qEnvironmentVariable("QUADER_SELECTION_OVERLAY_OUTPUT_DIR");
+  if (!directory.isEmpty()) ASSERT_TRUE(QDir().mkpath(directory));
+  SelectionOverlayRuntimeHarness harness;
+  ASSERT_TRUE(harness.initialize(0.0f, false, ViewportRenderSurface::SrgbSwapchain));
+  auto &editor = harness.workflow_editor();
+  auto &modeling = harness.modeling();
+  const auto box = editor.modeling().create_box(
+      {.min = {-16.0f, -8.0f, -16.0f}, .max = {16.0f, 0.0f, 16.0f}},
+      "Knife first edge seed on perspective top face");
+  ASSERT_TRUE(box.ok()) << box.error_message();
+  ASSERT_TRUE(editor.selection().select_object(box.value()).ok());
+  ASSERT_TRUE(editor.mode().set(QuaderEditorMode::Edit).ok());
+  ASSERT_TRUE(editor.tools().activate(ViewportToolId::Knife).ok());
+  ViewportCameraController camera;
+  camera.set_viewport_size(SelectionOverlayRuntimeHarness::kWidth,
+                           SelectionOverlayRuntimeHarness::kHeight);
+  ASSERT_TRUE(camera.restore_perspective_pose({
+      .eye = {0.0f, 32.0f, 48.0f}, .target = {}, .up = {0.0f, 1.0f, 0.0f}}));
+  camera.set_clip_planes(0.001f, 200.0f);
+  harness.set_sample_camera(camera);
+  // Native pointer samples have integral physical pixels. Keep the default
+  // grid snapping and face-plane picking that the reported first segment uses.
+  const auto pointer_event = [&](QVec3 world) {
+    const auto projected = camera.project_world_point(world);
+    const QVec2 pixel{std::round(projected.position.x),
+                     std::round(projected.position.y)};
+    const auto ray = camera.ray_from_viewport_point(pixel);
+    return ModelingToolRayEvent{
+        .screen_position = pixel,
+        .ray = {.origin = ray.origin, .direction = ray.direction},
+        .camera = ViewportCameraAdapter::modeling_camera(camera,
+            {SelectionOverlayRuntimeHarness::kWidth, SelectionOverlayRuntimeHarness::kHeight}),
+        .vertex_screen_radius = 4.0,
+        .edge_screen_radius = 4.0,
+    };
+  };
+  ASSERT_TRUE(modeling.accept_knife_point(pointer_event({-8.0f, 0.0f, -16.0f})).ok);
+  ASSERT_EQ(modeling.selection_hover_summary().target.kind,
+            ModelingActiveSelectionKind::Edge);
+  // Accept retains the seed edge's ordinary hover highlight. Compare cleanup
+  // against an equally hover-free frame while retaining the placed seed.
+  ASSERT_TRUE(modeling.clear_knife_hover().ok);
+  ASSERT_EQ(modeling.selection_hover_summary().target.kind,
+            ModelingActiveSelectionKind::None);
+  ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Edge));
+  const QImage without_hover = harness.capture();
+  ASSERT_FALSE(without_hover.isNull());
+  if (!directory.isEmpty()) {
+    EXPECT_TRUE(without_hover.save(QDir(directory).filePath(
+        QStringLiteral("knife-top-face-without-hover.png"))));
+  }
+  ASSERT_TRUE(modeling.update_knife_hover(pointer_event({8.0f, 0.0f, 0.0f})).ok);
+  const auto frozen = modeling.volatile_overlay_snapshot();
+  ASSERT_NE(frozen.frame, nullptr);
+  ASSERT_TRUE(frozen.frame->knife_angle_context.has_value());
+  ASSERT_TRUE(frozen.frame->knife_segment_context.has_value());
+  const auto &angle = *frozen.frame->knife_angle_context;
+  const auto &segment = *frozen.frame->knife_segment_context;
+  EXPECT_NEAR(angle.start.x, -8.0f, 0.001f);
+  EXPECT_NEAR(angle.start.y, 0.0f, 0.001f);
+  EXPECT_NEAR(angle.start.z, -16.0f, 0.001f);
+  EXPECT_NEAR(angle.reference_end.x, -8.0f, 0.001f);
+  EXPECT_NEAR(angle.reference_end.y, 0.0f, 0.001f);
+  EXPECT_NEAR(angle.reference_end.z, 16.0f, 0.001f)
+      << "The first edge seed's perpendicular reference must reach the opposite top-face edge.";
+  EXPECT_NEAR(angle.cut_point.x, 8.0f, 0.001f);
+  EXPECT_NEAR(angle.cut_point.y, 0.0f, 0.001f);
+  EXPECT_NEAR(angle.cut_point.z, 0.0f, 0.001f);
+  EXPECT_NEAR(angle.angle_degrees, 45.0, 0.001);
+  EXPECT_NEAR(length(segment.start - angle.start), 0.0f, 0.001f);
+  EXPECT_NEAR(length(segment.end - angle.cut_point), 0.0f, 0.001f);
+  EXPECT_NEAR(length(segment.end - segment.start), std::sqrt(512.0f), 0.001f)
+      << "The endpoint measurement must describe the live segment, independently of its longer guide.";
+  const auto color_pixels = [](const QImage &image, QVec2 center, bool orange) {
+    int count = 0;
+    for (int y = int(center.y) - 3; y <= int(center.y) + 3; ++y) {
+      for (int x = int(center.x) - 3; x <= int(center.x) + 3; ++x) {
+        if (!image.rect().contains(x, y)) continue;
+        const QColor color = image.pixelColor(x, y);
+        const bool warm = color.red() > 130 && color.green() > 80 &&
+                          color.green() > color.blue() + 35;
+        const bool matching = orange
+            ? warm && color.red() > color.green() + 70
+            : warm && color.green() > 180 &&
+                  std::abs(color.red() - color.green()) < 65;
+        if (matching) ++count;
+      }
+    }
+    return count;
+  };
+  const std::array guide_probes{QVec3{-8.0f, 0.0f, -8.0f},
+      QVec3{-8.0f, 0.0f, 0.0f}, QVec3{-8.0f, 0.0f, 8.0f},
+      QVec3{-8.0f, 0.0f, 14.0f}};
+  const QVec3 cut_probe{0.0f, 0.0f, -8.0f};
+  const auto save_capture = [&](const QImage &image, const char *phase) {
+    if (!directory.isEmpty()) {
+      EXPECT_TRUE(image.save(QDir(directory).filePath(
+          QStringLiteral("knife-top-face-%1.png").arg(QString::fromLatin1(phase)))));
+    }
+  };
+  const auto expect_lines = [&](const QImage &image) {
+    for (const auto world : guide_probes) {
+      const auto probe = harness.cutting_preview_pixel(world);
+      EXPECT_GE(color_pixels(image, probe, true), 3)
+          << "The long orange reference must remain visible on the actual top surface.";
+      EXPECT_EQ(color_pixels(image, probe, false), 0);
+    }
+    const auto probe = harness.cutting_preview_pixel(cut_probe);
+    EXPECT_GE(color_pixels(image, probe, false), 3);
+    EXPECT_EQ(color_pixels(image, probe, true), 0);
+  };
+  QImage initial;
+  for (const auto &[scale, phase] : std::array<std::pair<float, const char *>, 3>{{
+           {1.0f, "100"}, {2.0f, "200"}, {1.0f, "down"}}}) {
+    SCOPED_TRACE(phase);
+    ASSERT_TRUE(harness.present_component_sample(
+        ViewportOverlaySelectionContext::Edge, scale,
+        ViewportSettings::defaults(), false, nullptr, true));
+    const QImage image = harness.capture();
+    ASSERT_FALSE(image.isNull());
+    expect_lines(image);
+    save_capture(image, phase);
+    if (initial.isNull()) initial = image;
+    else if (scale == 1.0f) EXPECT_EQ(image, initial);
+    const auto builds = modeling.volatile_overlay_cache_stats().build_count;
+    ASSERT_TRUE(harness.present_component_sample(
+        ViewportOverlaySelectionContext::Edge, scale,
+        ViewportSettings::defaults(), false, nullptr, true));
+    EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+    EXPECT_EQ(modeling.volatile_overlay_cache_stats().build_count, builds);
+    EXPECT_EQ(harness.capture(), image);
+  }
+  const auto volatile_builds = modeling.volatile_overlay_cache_stats().build_count;
+  for (const auto &[offset, phase] : std::array<std::pair<float, const char *>, 3>{{
+           {4.0f, "camera-right"}, {-3.0f, "camera-left"}, {0.0f, "camera-restored"}}}) {
+    SCOPED_TRACE(phase);
+    ASSERT_TRUE(camera.restore_perspective_pose({
+        .eye = {offset, 32.0f, 48.0f}, .target = {offset, 0.0f, 0.0f},
+        .up = {0.0f, 1.0f, 0.0f}}));
+    harness.set_sample_camera(camera);
+    ASSERT_TRUE(harness.present_component_sample(
+        ViewportOverlaySelectionContext::Edge, 1.0f,
+        ViewportSettings::defaults(), false, nullptr, true));
+    const QImage image = harness.capture();
+    ASSERT_FALSE(image.isNull());
+    expect_lines(image);
+    save_capture(image, phase);
+    if (offset == 0.0f) EXPECT_EQ(image, initial);
+    else EXPECT_NE(image, initial);
+    const auto retained = modeling.volatile_overlay_snapshot();
+    EXPECT_EQ(retained.frame, frozen.frame);
+    EXPECT_EQ(retained.source.publication_revision, frozen.source.publication_revision);
+    EXPECT_EQ(modeling.volatile_overlay_cache_stats().build_count, volatile_builds);
+    EXPECT_FALSE(harness.last_submission().dynamic_submitted);
+  }
+  ASSERT_TRUE(modeling.clear_knife_hover().ok);
+  ASSERT_TRUE(harness.present_component_sample(ViewportOverlaySelectionContext::Edge));
+  const auto cleared_frame = modeling.volatile_overlay_snapshot();
+  ASSERT_NE(cleared_frame.frame, nullptr);
+  EXPECT_FALSE(cleared_frame.frame->knife_angle_context.has_value());
+  EXPECT_FALSE(cleared_frame.frame->knife_segment_context.has_value());
+  const QImage cleared = harness.capture();
+  ASSERT_FALSE(cleared.isNull());
+  for (const auto world : guide_probes) {
+    EXPECT_EQ(color_pixels(cleared, harness.cutting_preview_pixel(world), true), 0);
+  }
+  EXPECT_EQ(color_pixels(cleared, harness.cutting_preview_pixel(cut_probe), false), 0);
+  EXPECT_EQ(cleared, without_hover);
+  save_capture(cleared, "cleared");
+}
+
+TEST(SelectionOverlayRuntimeTests,
      VulkanCuttingPreviewsRemainWorldAnchoredDuringCameraOnlyFrames) {
   if (qEnvironmentVariable("QUADER_RUN_SELECTION_OVERLAY_RUNTIME_TESTS") !=
       QStringLiteral("1")) {

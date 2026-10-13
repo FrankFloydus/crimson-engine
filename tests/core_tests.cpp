@@ -22127,6 +22127,188 @@ TEST(ModelingSessionServiceTests,
 }
 
 TEST(ModelingSessionServiceTests,
+     KnifeSnappedTopFaceGuideSurvivesRepeatedPerspectiveHover) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  const auto box = service.create_box_from_bounds({
+      .bounds = {.min = {-128.0f, -128.0f, -128.0f},
+                 .max = {128.0f, 128.0f, 128.0f}},
+      .name = "Knife Snapped Top Face Source",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+  ASSERT_TRUE(service.activate_viewport_tool(ModelingViewportTool::Knife).ok);
+
+  auto camera = test_orthographic_viewport_camera();
+  camera.orthographic = false;
+  camera.origin = {350.0f, 640.0f, 700.0f};
+  camera.z_axis = normalize(camera.origin - QVec3{0.0f, 128.0f, 0.0f});
+  camera.x_axis = normalize(cross(QVec3{0.0f, 1.0f, 0.0f}, camera.z_axis));
+  camera.y_axis = normalize(cross(camera.z_axis, camera.x_axis));
+  camera.viewport_size = {800.0f, 600.0f};
+  const auto event_at = [&](QVec3 position) {
+    auto event = test_tool_screen_event(camera, position, 0.0f);
+    event.grid_size = 16.0;
+    event.snap_enabled = true;
+    return event;
+  };
+  const auto seed = event_at({-61.0f, 128.0f, -128.0f});
+  ASSERT_TRUE(service.accept_knife_point(seed).ok);
+  ASSERT_TRUE(service.tool_status().knife_has_active_stroke);
+  const auto current = event_at({61.0f, 128.0f, 3.0f});
+  ASSERT_TRUE(service.update_knife_hover(current).ok);
+  ASSERT_TRUE(service.tool_status().knife_has_current);
+  const auto initial = service.volatile_overlay_snapshot();
+  ASSERT_NE(initial.frame, nullptr);
+  ASSERT_TRUE(initial.frame->knife_angle_context.has_value());
+  const auto &guide = *initial.frame->knife_angle_context;
+  EXPECT_LT(length_squared(guide.start - QVec3{-64.0f, 128.0f, -128.0f}),
+            0.0001f);
+  EXPECT_LT(length_squared(guide.reference_end - QVec3{-64.0f, 128.0f, 128.0f}),
+            0.0001f);
+  EXPECT_LT(length_squared(guide.cut_point - QVec3{64.0f, 128.0f, 0.0f}),
+            0.0001f);
+  EXPECT_NEAR(guide.angle_degrees, 45.0, 0.001);
+  const auto cache = service.volatile_overlay_cache_stats();
+  for (int hover = 0; hover < 4; ++hover) {
+    const auto repeated = service.update_knife_hover(current);
+    ASSERT_TRUE(repeated.ok) << repeated.message;
+    EXPECT_FALSE(repeated.changed);
+    EXPECT_EQ(service.volatile_overlay_snapshot().frame, initial.frame);
+  }
+  EXPECT_EQ(service.volatile_overlay_cache_stats().build_count, cache.build_count);
+}
+
+TEST(ModelingSessionServiceTests,
+     KnifeTransformedTopFaceKeepsAcceptedEdgeGuideAtWorldScale) {
+  SceneDocument scene;
+  AssetRegistry assets;
+  ModelingSessionService service(scene, assets);
+  const auto box = service.create_box_from_bounds({
+      .bounds = {.min = {-128.0f, -128.0f, -128.0f},
+                 .max = {128.0f, 128.0f, 128.0f}},
+      .name = "Knife Transformed Top Face Source",
+  });
+  ASSERT_TRUE(box.ok) << box.message;
+  TransformComponent transform;
+  transform.location = {1234.5f, 1234.5f, 1234.5f};
+  transform.rotation_euler = {0.0f, -0.1f, 0.0f};
+  ASSERT_TRUE(scene.set_transform(box.object.entity, transform));
+  const QMat4 world_from_object = scene.world_transform_matrix(box.object.entity);
+  const QVec3 surface_normal = normalize(
+      transform_vector(world_from_object, {0.0f, 1.0f, 0.0f}));
+  const auto event_at = [&](QVec3 local, bool snap_enabled) {
+    const QVec3 world = transform_point(world_from_object, local);
+    ModelingToolRayEvent event;
+    event.ray = {.origin = world + surface_normal * 512.0f,
+                 .direction = surface_normal * -1.0f};
+    event.camera = test_orthographic_viewport_camera();
+    event.camera.origin = event.ray.origin;
+    event.vertex_radius = 0.001;
+    event.edge_radius = 0.01;
+    event.grid_size = 16.0;
+    event.snap_enabled = snap_enabled;
+    return event;
+  };
+  ASSERT_TRUE(service.activate_viewport_tool(ModelingViewportTool::Knife).ok);
+  ASSERT_TRUE(service.accept_knife_point(
+      event_at({-61.0f, 128.0f, -128.0f}, true)).ok);
+  ASSERT_TRUE(service.tool_status().knife_has_active_stroke);
+  const auto current = event_at({64.0f, 128.0f, 0.0f}, false);
+  ASSERT_TRUE(service.update_knife_hover(current).ok);
+  ASSERT_TRUE(service.tool_status().knife_has_current);
+  const auto snapshot = service.volatile_overlay_snapshot();
+  ASSERT_NE(snapshot.frame, nullptr);
+  ASSERT_TRUE(snapshot.frame->knife_angle_context.has_value());
+  const auto &guide = *snapshot.frame->knife_angle_context;
+  const QVec3 expected_start = transform_point(
+      world_from_object, {-64.0f, 128.0f, -128.0f});
+  const QVec3 expected_end = transform_point(
+      world_from_object, {-64.0f, 128.0f, 128.0f});
+  const QVec3 expected_cut = transform_point(
+      world_from_object, {64.0f, 128.0f, 0.0f});
+  EXPECT_LT(length_squared(guide.start - expected_start), 0.00001f);
+  EXPECT_LT(length_squared(guide.reference_end - expected_end), 0.00001f);
+  EXPECT_LT(length_squared(guide.cut_point - expected_cut), 0.00001f);
+  EXPECT_NEAR(guide.angle_degrees, 45.0, 0.001);
+  EXPECT_TRUE(std::ranges::any_of(snapshot.frame->lines, [&](const auto &line) {
+    return length_squared(line.start - expected_start) < 0.00001f &&
+           length_squared(line.end - expected_end) < 0.00001f;
+  }));
+  const auto repeated = service.update_knife_hover(current);
+  ASSERT_TRUE(repeated.ok) << repeated.message;
+  EXPECT_FALSE(repeated.changed);
+  EXPECT_EQ(service.volatile_overlay_snapshot().frame, snapshot.frame);
+}
+
+TEST(ModelingSessionServiceTests,
+     KnifePeerMeshOutsideEditParticipantsPublishesGuideAndDimensions) {
+  SceneSession session;
+  auto &service = session.modeling();
+  const auto participant = service.create_box_from_bounds({
+      .bounds = {.min = {512.0f, -128.0f, -128.0f},
+                 .max = {768.0f, 128.0f, 128.0f}},
+      .name = "Knife Selected Participant",
+  });
+  ASSERT_TRUE(participant.ok) << participant.message;
+  const auto peer = service.create_box_from_bounds({
+      .bounds = {.min = {-128.0f, -128.0f, -128.0f},
+                 .max = {128.0f, 128.0f, 128.0f}},
+      .name = "Knife Eligible Peer",
+  });
+  ASSERT_TRUE(peer.ok) << peer.message;
+  const std::array selected{participant.object.entity};
+  ASSERT_TRUE(service.set_object_selection(selected, participant.object.entity).ok);
+  ASSERT_TRUE(session.editor_mode().set_mode(EditorMode::Edit).ok);
+  ASSERT_TRUE(service.set_selection_mode(ModelingSelectionMode::Edge).ok);
+  ASSERT_TRUE(session.editor_mode().contains(participant.object.entity));
+  ASSERT_FALSE(session.editor_mode().contains(peer.object.entity));
+  const auto event_at = [](QVec3 position) {
+    ModelingToolRayEvent event;
+    event.ray = {.origin = position + QVec3{0.0f, 512.0f, 0.0f},
+                 .direction = {0.0f, -1.0f, 0.0f}};
+    event.camera = test_orthographic_viewport_camera();
+    event.camera.origin = event.ray.origin;
+    event.vertex_radius = 0.001;
+    event.edge_radius = 0.01;
+    event.grid_size = 16.0;
+    event.snap_enabled = true;
+    return event;
+  };
+  ASSERT_TRUE(service.update_selection_hover({
+      .ray = event_at({640.0f, 128.0f, -128.0f}).ray}).ok);
+  (void)service.selection_overlay_frame();
+  ASSERT_TRUE(service.activate_viewport_tool(ModelingViewportTool::Knife).ok);
+  ASSERT_TRUE(service.accept_knife_point(
+      event_at({-64.0f, 128.0f, -128.0f})).ok);
+  ASSERT_TRUE(service.tool_status().knife_has_active_stroke);
+  const auto current = event_at({64.0f, 128.0f, 0.0f});
+  ASSERT_TRUE(service.update_knife_hover(current).ok);
+  ASSERT_TRUE(service.tool_status().knife_has_current);
+  const auto initial = service.volatile_overlay_snapshot();
+  ASSERT_NE(initial.frame, nullptr);
+  ASSERT_TRUE(initial.frame->knife_angle_context.has_value());
+  ASSERT_TRUE(initial.frame->knife_segment_context.has_value());
+  const auto &guide = *initial.frame->knife_angle_context;
+  EXPECT_LT(length_squared(guide.start - QVec3{-64.0f, 128.0f, -128.0f}),
+            0.0001f);
+  EXPECT_LT(length_squared(guide.reference_end - QVec3{-64.0f, 128.0f, 128.0f}),
+            0.0001f);
+  EXPECT_NEAR(guide.angle_degrees, 45.0, 0.001);
+  EXPECT_TRUE(std::ranges::any_of(initial.frame->lines, [&](const auto &line) {
+    return line.style_role == ViewportOverlayStyleRole::KnifeReferenceLine &&
+           line.element.object_id == peer.object.modeling_object_id;
+  }));
+  (void)service.selection_overlay_frame();
+  const auto repeated = service.update_knife_hover(current);
+  ASSERT_TRUE(repeated.ok) << repeated.message;
+  EXPECT_FALSE(repeated.changed);
+  EXPECT_EQ(service.volatile_overlay_snapshot().frame, initial.frame);
+  EXPECT_TRUE(session.editor_mode().contains(participant.object.entity));
+  EXPECT_FALSE(session.editor_mode().contains(peer.object.entity));
+}
+
+TEST(ModelingSessionServiceTests,
      KnifeStraightGuidePublishesWorldAnglesAfterNonuniformAndReflectedTransforms) {
   for (const float scale_x : {2.0f, -2.0f}) {
     SCOPED_TRACE(scale_x);

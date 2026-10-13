@@ -156,6 +156,12 @@ struct ViewportKnifeAngleContext {
     double angle_degrees = 0.0;
 };
 
+/** The live authored Knife segment, independent of reference availability. */
+struct ViewportKnifeSegmentContext {
+    QVec3 start;
+    QVec3 end;
+};
+
 constexpr std::uint32_t rgba8(std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t a = 255u) {
     return static_cast<std::uint32_t>(r) |
             (static_cast<std::uint32_t>(g) << 8u) |
@@ -289,6 +295,7 @@ struct ViewportOverlayFrame {
         hover_edge_dimension_context;
     bool hover_target_selected = false;
     std::optional<ViewportKnifeAngleContext> knife_angle_context;
+    std::optional<ViewportKnifeSegmentContext> knife_segment_context;
 };
 
 } // namespace quader

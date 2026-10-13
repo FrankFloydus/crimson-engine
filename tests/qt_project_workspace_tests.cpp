@@ -9496,6 +9496,315 @@ TEST(QtProjectWorkspaceTests, LoadingCoverRealAppWaitsForComposedProjectFrames) 
   }
 }
 
+TEST(QtProjectWorkspaceTests, KnifeRealAppShowsHintAngleAndLengthOnTopFace) {
+  if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_KNIFE_APP_TESTS") != 1) {
+    GTEST_SKIP() << "Set QUADER_RUN_VULKAN_KNIFE_APP_TESTS=1 for the real App Knife presentation.";
+  }
+  ASSERT_EQ(QCoreApplication::instance(), nullptr);
+  const auto profile = std::filesystem::temp_directory_path() /
+      ("quader-knife-app-" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+  ScopedIsolatedLocalAppData scoped_profile(profile);
+  ASSERT_TRUE(scoped_profile.active());
+  int argc = 1;
+  char application_name[] = "quader-knife-real-app-test";
+  char *argv[] = {application_name, nullptr};
+  QApplication application(argc, argv);
+  application.setQuitOnLastWindowClosed(false);
+  application.setApplicationName(QStringLiteral("Quader"));
+  application.setOrganizationName(QStringLiteral("Quader"));
+  QApplication::setStyle(QStringLiteral("Fusion"));
+  quader::apply_qt_obsidian_application_theme(QApplication::style()->standardPalette());
+  quader::install_qt_application_default_cursor(application);
+  const auto executable = std::filesystem::path(
+      QCoreApplication::applicationFilePath().toStdWString());
+  const auto resources = executable.parent_path();
+  const quader::ViewportCameraPose pose{
+      .eye = {6, 7, 9}, .target = {0, 1, 0}, .up = {0, 1, 0}};
+  const auto project_root = profile / "Knife Project";
+  ASSERT_TRUE(std::filesystem::create_directory(project_root));
+  {
+    quader::ProjectSession project;
+    project.set_resource_root(resources);
+    quader::QuaderEditorApi editor(project);
+    ASSERT_TRUE(editor.project().create(project_root).ok());
+    ASSERT_TRUE(editor.viewports().set_layout(quader::ViewportLayoutId::Single).ok());
+    ASSERT_TRUE(editor.viewports().set_shading_mode(
+        quader::ViewportPaneId::Perspective, quader::QuaderShadingMode::Shaded).ok());
+    ASSERT_TRUE(editor.modeling().create_box(
+        {.min = {-2, -1, -2}, .max = {2, 1, 2}}, "Knife App box").ok());
+    ASSERT_TRUE(project.active_scene()->session->restore_persisted_viewport_camera_pose(pose));
+    const auto scene = editor.scene_documents().active_scene_id();
+    ASSERT_TRUE(scene.has_value());
+    const auto path = quader::ProjectRelativePath::parse_portable("Knife.qdr");
+    ASSERT_TRUE(path.ok());
+    ASSERT_TRUE(editor.scene_documents().save_as(*scene, path.value()).ok());
+  }
+  const auto settings_paths = quader::UISettings::resolve_paths(resources);
+  auto settings = quader::UISettings::defaults();
+  settings.set_interface_scale(1.0F);
+  settings.set_panel_visible(quader::UIPanelId::AssetBrowser, false);
+  ASSERT_TRUE(settings.save(settings_paths.settings_file));
+  auto viewport_settings = quader::ViewportSettings::defaults();
+  viewport_settings.set_bool_value(quader::ViewportBoolSettingId::ShowDimensions, true);
+  viewport_settings.set_bool_value(quader::ViewportBoolSettingId::ShowHoverDimensions, false);
+  ASSERT_TRUE(viewport_settings.save(settings_paths.viewport_settings_file));
+  const QString review = qEnvironmentVariable("QUADER_UI_REVIEW_DIR");
+  if (!review.isEmpty()) ASSERT_TRUE(QDir{}.mkpath(review));
+  quader::App app;
+  ASSERT_TRUE(app.initialize(application, executable));
+  QPointer<QMainWindow> window;
+  QPointer<quader::QtVulkanCompositionWidget> host;
+  quader::QtViewportPanel *viewport = nullptr;
+  quader::QtViewportSurface *surface = nullptr;
+  quader::ViewportCameraController camera;
+  ASSERT_TRUE(camera.restore_perspective_pose(pose));
+  std::uint64_t submitted = 0U;
+  std::uint64_t phase_submission = 0U;
+  int phase = 0;
+  QElapsedTimer clock;
+  clock.start();
+  qint64 phase_started = 0;
+  QRect angle_pixels;
+  QRect length_pixels;
+  const auto advance = [&] {
+    ++phase;
+    phase_started = clock.elapsed();
+    phase_submission = submitted;
+    std::cout << "KNIFE_APP_PHASE " << phase << " submitted=" << submitted << std::endl;
+  };
+  const auto key = [&](int value) {
+    QKeyEvent press(QEvent::KeyPress, value, Qt::NoModifier);
+    QKeyEvent release(QEvent::KeyRelease, value, Qt::NoModifier);
+    QApplication::sendEvent(host, &press);
+    QApplication::sendEvent(host, &release);
+  };
+  const auto local_point = [&](quader::QVec3 world) {
+    const auto point = camera.project_world_point(world);
+    EXPECT_TRUE(point.visible);
+    return QPoint{qRound(point.position.x / surface->input_device_pixel_ratio()),
+                  qRound(point.position.y / surface->input_device_pixel_ratio())};
+  };
+  const auto warm_pixels = [&](const QImage &image, quader::QVec3 world, bool orange) {
+    const auto point = camera.project_world_point(world);
+    const QRect patch(qRound(point.position.x) - 5, qRound(point.position.y) - 5, 11, 11);
+    int count = 0;
+    for (int y = patch.top(); y <= patch.bottom(); ++y) {
+      for (int x = patch.left(); x <= patch.right(); ++x) {
+        if (!image.rect().contains(x, y)) continue;
+        const QColor color = image.pixelColor(x, y);
+        const bool warm = color.red() > 130 && color.green() > 80 &&
+                          color.green() > color.blue() + 35;
+        count += orange ? warm && color.red() > color.green() + 70
+                        : warm && color.green() > 180 && std::abs(color.red() - color.green()) < 65;
+      }
+    }
+    return count;
+  };
+  const auto glyph_pixels = [](const QImage &image, QRect bounds) {
+    int count = 0;
+    bounds = bounds.intersected(image.rect());
+    for (int y = bounds.top(); y <= bounds.bottom(); ++y) {
+      for (int x = bounds.left(); x <= bounds.right(); ++x) {
+        const auto color = image.pixelColor(x, y);
+        count += color.red() > 195 && color.green() > 195 && color.blue() > 195;
+      }
+    }
+    return count;
+  };
+  const auto capture = [&](const char *name) {
+    const QPoint origin = window->mapToGlobal(QPoint{}) - window->screen()->geometry().topLeft();
+    const QImage pixels = window->screen()->grabWindow(
+        0, origin.x(), origin.y(), window->width(), window->height()).toImage();
+    EXPECT_FALSE(pixels.isNull());
+    if (!review.isEmpty()) EXPECT_TRUE(pixels.save(QDir(review).filePath(
+        QStringLiteral("knife-real-app-%1.png").arg(QString::fromLatin1(name)))));
+    return pixels;
+  };
+  const auto trigger = [&](quader::QuaderCommandId id) {
+    for (auto *action : window->findChildren<QAction *>()) {
+      if (action->property("quaderCommandId").toString() !=
+          QString::fromUtf8(id.string().data(), static_cast<qsizetype>(id.string().size()))) continue;
+      if (auto *menu = qobject_cast<QMenu *>(action->parent())) {
+        while (auto *parent = qobject_cast<QMenu *>(menu->parent())) menu = parent;
+        EXPECT_TRUE(QMetaObject::invokeMethod(menu, "aboutToShow", Qt::DirectConnection));
+      }
+      std::cout << "KNIFE_APP_COMMAND " << id.string()
+                << " enabled=" << action->isEnabled() << " phase=" << phase << std::endl;
+      if (!action->isEnabled()) {
+        ADD_FAILURE() << "Disabled App command " << id.string() << " at phase " << phase;
+        capture("disabled-command");
+        application.quit();
+        return false;
+      }
+      action->trigger();
+      return true;
+    }
+    ADD_FAILURE() << "Missing App command action " << id.string();
+    capture("missing-command");
+    application.quit();
+    return false;
+  };
+  QTimer observer(&application);
+  observer.setInterval(25);
+  QObject::connect(&observer, &QTimer::timeout, &application, [&] {
+    if (::testing::Test::HasFailure()) {
+      if (window) capture("failed");
+      observer.stop();
+      application.quit();
+      return;
+    }
+    for (auto *widget : QApplication::topLevelWidgets()) {
+      if (widget->objectName() != QStringLiteral("quaderMainWindow") || !widget->isVisible()) continue;
+      auto *root = qobject_cast<QMainWindow *>(widget);
+      if (window == root) break;
+      window = root;
+      viewport = dynamic_cast<quader::QtViewportPanel *>(root->findChild<QWidget *>(QStringLiteral("viewportWorkspace")));
+      ASSERT_NE(viewport, nullptr);
+      surface = viewport->surface(quader::ViewportPaneId::Perspective);
+      host = dynamic_cast<quader::QtVulkanCompositionWidget *>(root->findChild<QWidget *>(
+          QStringLiteral("viewportSurfaceContainer_perspective")));
+      ASSERT_NE(host, nullptr);
+      QObject::connect(host, &QRhiWidget::frameSubmitted, &application, [&] { ++submitted; });
+      root->raise();
+      QApplication::setActiveWindow(root);
+#if defined(_WIN32)
+      ASSERT_NE(SetWindowPos(reinterpret_cast<HWND>(root->internalWinId()), HWND_TOPMOST,
+          0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE), FALSE);
+#endif
+      break;
+    }
+    if (!window || !host) return;
+    auto *cover = window->findChild<QWidget *>(QStringLiteral("quaderLoadingCover"));
+    if (cover == nullptr || cover->isVisible()) return;
+    if (phase == 0) {
+      auto *recent = window->findChild<QTableView *>(QStringLiteral("projectHome.recentProjects.view"));
+      ASSERT_NE(recent, nullptr);
+      ASSERT_EQ(recent->model()->rowCount(), 1);
+      ASSERT_TRUE(QMetaObject::invokeMethod(recent, "activated", Qt::DirectConnection,
+          Q_ARG(QModelIndex, recent->model()->index(0, 0))));
+      advance();
+      return;
+    }
+    if (!surface->ready_to_render() || submitted < phase_submission + 2U ||
+        clock.elapsed() - phase_started < 200) return;
+    const auto extent = surface->render_size_pixels();
+    camera.set_viewport_size(extent.x, extent.y);
+    auto *angle = viewport->findChild<QLabel *>(QStringLiteral("viewportKnifeAngle_perspective"));
+    auto *length = viewport->findChild<QLabel *>(QStringLiteral("viewportKnifeLength_perspective"));
+    ASSERT_NE(angle, nullptr);
+    ASSERT_NE(length, nullptr);
+    switch (phase) {
+    case 1: {
+      auto *tree = window->findChild<QTreeView *>(QStringLiteral("outliner.tree"));
+      ASSERT_NE(tree, nullptr);
+      const auto matches = tree->model()->match(tree->model()->index(0, 0),
+          Qt::DisplayRole, QStringLiteral("Knife App box"), 1,
+          Qt::MatchExactly | Qt::MatchRecursive);
+      ASSERT_EQ(matches.size(), 1);
+      tree->selectionModel()->setCurrentIndex(matches.front(),
+          QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+      EXPECT_EQ(tree->selectionModel()->selectedRows().size(), 1);
+      std::cout << "KNIFE_APP_TARGET name=" << matches.front().data().toString().toStdString()
+                << " entity=" << matches.front().data(Qt::UserRole + 1).toULongLong() << std::endl;
+      break;
+    }
+    case 2: {
+      // Outliner selection publishes through a queued owner callback. Enter
+      // component mode only after a later App frame has received that selection.
+      auto *face_mode = window->findChild<QAction *>(QStringLiteral("selectionModeFace"));
+      ASSERT_NE(face_mode, nullptr);
+      ASSERT_TRUE(face_mode->isEnabled());
+      face_mode->trigger();
+      ASSERT_TRUE(face_mode->isChecked());
+      host->setFocus(Qt::OtherFocusReason);
+      QEnterEvent enter(QPointF(host->rect().center()), QPointF(host->rect().center()),
+          QPointF(host->mapToGlobal(host->rect().center())));
+      QApplication::sendEvent(host, &enter);
+      break;
+    }
+    case 3:
+      if (!trigger(quader::quader_command::kToolsActivateKnife)) return;
+      break;
+    case 4: {
+      auto *knife = window->findChild<QAction *>(QStringLiteral("tool_knife"));
+      ASSERT_NE(knife, nullptr);
+      ASSERT_TRUE(knife->isChecked());
+      send_mouse_event(*host, QEvent::MouseMove, local_point({0, 1, -2}), Qt::NoButton, Qt::NoButton);
+      send_mouse_event(*host, QEvent::MouseButtonPress, local_point({0, 1, -2}), Qt::LeftButton, Qt::LeftButton);
+      break;
+    }
+    case 5:
+      send_mouse_event(*host, QEvent::MouseButtonRelease, local_point({0, 1, -2}), Qt::LeftButton, Qt::NoButton);
+      break;
+    case 6:
+      send_mouse_event(*host, QEvent::MouseMove, local_point({1, 1, 0}), Qt::NoButton, Qt::NoButton);
+      break;
+    case 7: {
+      ASSERT_TRUE(angle->isVisible());
+      ASSERT_TRUE(length->isVisible());
+      EXPECT_TRUE(angle->text().endsWith(QChar(0x00b0)));
+      EXPECT_GT(length->text().toDouble(), 0.0);
+      EXPECT_EQ(angle->internalWinId(), 0U);
+      EXPECT_EQ(length->internalWinId(), 0U);
+      const QImage viewport_pixels = host->grabFramebuffer();
+      EXPECT_GE(warm_pixels(viewport_pixels, {0, 1, 1}, true), 3);
+      EXPECT_GE(warm_pixels(viewport_pixels, {0.5F, 1, -1}, false), 3);
+      const QImage pixels = capture("live");
+      const double ratio = static_cast<double>(pixels.width()) / window->width();
+      const auto glyph_bounds = [&](QLabel &label) {
+        const QPoint origin = label.mapTo(window, QPoint{});
+        return QRect(qRound(origin.x() * ratio), qRound(origin.y() * ratio),
+                     qRound(label.width() * ratio), qRound(label.height() * ratio));
+      };
+      angle_pixels = glyph_bounds(*angle);
+      length_pixels = glyph_bounds(*length);
+      EXPECT_GT(glyph_pixels(pixels, angle_pixels), 5);
+      EXPECT_GT(glyph_pixels(pixels, length_pixels), 5);
+      if (!trigger(quader::quader_command::kViewportToggleDimensions)) return;
+      break;
+    }
+    case 8: {
+      EXPECT_TRUE(angle->isHidden());
+      EXPECT_TRUE(length->isHidden());
+      EXPECT_GE(warm_pixels(host->grabFramebuffer(), {0, 1, 1}, true), 3);
+      const QImage pixels = capture("dimensions-off");
+      EXPECT_EQ(glyph_pixels(pixels, angle_pixels), 0);
+      EXPECT_EQ(glyph_pixels(pixels, length_pixels), 0);
+      if (!trigger(quader::quader_command::kViewportToggleDimensions)) return;
+      break;
+    }
+    case 9:
+      EXPECT_TRUE(angle->isVisible());
+      EXPECT_TRUE(length->isVisible());
+      key(Qt::Key_Escape);
+      break;
+    case 10: {
+      EXPECT_TRUE(angle->isHidden());
+      EXPECT_TRUE(length->isHidden());
+      const QImage viewport_pixels = host->grabFramebuffer();
+      EXPECT_EQ(warm_pixels(viewport_pixels, {0, 1, 1}, true), 0);
+      EXPECT_EQ(warm_pixels(viewport_pixels, {0.5F, 1, -1}, false), 0);
+      capture("cancelled");
+      advance();
+      observer.stop();
+      application.quit();
+      return;
+    }
+    }
+    advance();
+  });
+  QTimer::singleShot(45000, &application, [&] {
+    ADD_FAILURE() << "Knife App presentation timed out at phase " << phase;
+    application.quit();
+  });
+  observer.start();
+  EXPECT_EQ(app.run(), 0);
+  observer.stop();
+  EXPECT_EQ(phase, 11);
+  app.shutdown();
+}
+
 TEST(QtProjectWorkspaceTests, AssetBrowserRealAppFrameLoopAfterSettledToggle) {
   if (qEnvironmentVariableIntValue("QUADER_RUN_VULKAN_ASSET_BROWSER_APP_TESTS") != 1) {
     GTEST_SKIP() << "Set QUADER_RUN_VULKAN_ASSET_BROWSER_APP_TESTS=1 for the real App frame loop";

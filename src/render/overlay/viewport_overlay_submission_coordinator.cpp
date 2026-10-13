@@ -169,6 +169,9 @@ void append_overlay_frame(ViewportOverlayFrame &target,
   if (source.knife_angle_context.has_value()) {
     target.knife_angle_context = source.knife_angle_context;
   }
+  if (source.knife_segment_context.has_value()) {
+    target.knife_segment_context = source.knife_segment_context;
+  }
   target.hover_target_selected =
       target.hover_target_selected || source.hover_target_selected;
 }

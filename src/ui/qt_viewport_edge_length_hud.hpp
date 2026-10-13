@@ -30,7 +30,7 @@ class ViewportCameraController;
 struct ModelingBoxPreview;
 
 /**
- * Presents compact world-space edge, footprint, and selection dimensions in
+ * Presents compact world-space edge, footprint, selection, and Knife dimensions in
  * map units. Borrows existing semantic state; never queries scene meshes.
  * Owns retirement of accepted native glyph pixels before ancestor geometry
  * changes, including their historical positions in the shared backing store.
@@ -58,7 +58,7 @@ public:
                const ViewportSelectionDimensionBounds *selection_bounds = nullptr,
                std::uint64_t selection_signature = 0u,
                bool selection_enabled = false,
-               bool knife_angle_enabled = false);
+               bool knife_dimensions_enabled = false);
   void hide();
   void raise();
 
@@ -79,13 +79,15 @@ private:
   bool clean_native_footprint();
   void refresh_geometry_ancestors();
 
-  std::array<QLabel *, 7> labels_ = {};
+  std::array<QLabel *, 8> labels_ = {};
   std::vector<QPointer<QWidget>> geometry_ancestors_;
   QtUiScaleMetrics ui_scale_metrics_;
   std::array<std::optional<Dimension>, 6> dimensions_ = {};
   std::array<QString, 6> dimension_texts_ = {};
   std::optional<ViewportKnifeAngleContext> knife_angle_;
   QString knife_angle_text_;
+  std::optional<ViewportKnifeSegmentContext> knife_segment_;
+  QString knife_length_text_;
   std::uint64_t knife_signature_ = 0;
   bool knife_signature_valid_ = false;
   std::optional<ViewportSelectionDimensionBounds> selection_bounds_;

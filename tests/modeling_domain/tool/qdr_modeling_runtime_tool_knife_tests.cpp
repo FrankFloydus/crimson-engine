@@ -924,6 +924,36 @@ TEST(QdrModelingRuntimeToolKnifeTests, StraightGuideStopsAtFirstConcaveBoundary)
 	EXPECT_NEAR(guide.angle_degrees, 45.0, 0.0001);
 }
 
+TEST(QdrModelingRuntimeToolKnifeTests, StraightGuideKeepsTransformedBoundarySeedsAtWorldScale)
+{
+	const float cosine = std::cos(0.1F);
+	const float sine = std::sin(0.1F);
+	const auto world_point = [cosine, sine](quader::QVec3 local) {
+		return quader::QVec3{
+			cosine * local.x - sine * local.y + 1234.5F,
+			sine * local.x + cosine * local.y + 1234.5F,
+			local.z};
+	};
+	quader_poly::Document document;
+	std::vector<quader_poly::ElementId> vertices;
+	for (const quader::QVec3 local : std::array<quader::QVec3, 4U>{
+		quader::QVec3{ -128.0F, -128.0F, 0.0F }, { 128.0F, -128.0F, 0.0F },
+		{ 128.0F, 128.0F, 0.0F }, { -128.0F, 128.0F, 0.0F }}) {
+		vertices.push_back(quader_poly::add_vertex(document, world_point(local)));
+	}
+	const auto face = quader_poly::add_face(document, vertices);
+	const auto guide = quader_editor_core::build_knife_straight_guide(
+		document, face, world_point({ -64.0F, -128.0F, 0.0F }),
+		world_point({ 64.0F, 0.0F, 0.0F }), { -sine, cosine, 0.0F });
+	ASSERT_TRUE(guide.valid);
+	EXPECT_LT(quader::length_squared(guide.end - world_point({ -64.0F, 128.0F, 0.0F })),
+		0.000001F);
+	EXPECT_NEAR(guide.angle_degrees, 45.0, 0.001);
+	EXPECT_FALSE(quader_editor_core::build_knife_straight_guide(
+		document, face, world_point({ -64.0F, -129.0F, 0.0F }),
+		world_point({ 64.0F, 0.0F, 0.0F }), { -sine, cosine, 0.0F }).valid);
+}
+
 TEST(QdrModelingRuntimeToolKnifeTests, StraightGuideRejectsNonfiniteZeroAndOffPlaneInputs)
 {
 	const KnifeIncidentFaceMesh mesh = make_knife_incident_face_mesh();

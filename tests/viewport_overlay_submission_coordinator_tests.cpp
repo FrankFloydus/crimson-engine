@@ -1145,6 +1145,9 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
   ASSERT_TRUE(modeling.update_knife_hover(event({0.5f, 0, 1})).ok);
   ASSERT_TRUE(submit(ViewportPaneId::Perspective).dynamic_submitted);
   ASSERT_TRUE(target.dynamic_frame.knife_angle_context.has_value());
+  ASSERT_TRUE(target.dynamic_frame.knife_segment_context.has_value());
+  EXPECT_LT(length_squared(target.dynamic_frame.knife_segment_context->start - QVec3{0, 1, 1}), 0.000001f);
+  EXPECT_LT(length_squared(target.dynamic_frame.knife_segment_context->end - QVec3{0.5f, 0, 1}), 0.000001f);
   const auto first_angle = target.dynamic_frame.knife_angle_context->angle_degrees;
   EXPECT_GT(first_angle, 0.0);
   EXPECT_LE(first_angle, 90.0);
@@ -1157,6 +1160,7 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
   }), 1);
   ASSERT_TRUE(submit(ViewportPaneId::Front).dynamic_submitted);
   ASSERT_TRUE(target.dynamic_frame.knife_angle_context.has_value());
+  ASSERT_TRUE(target.dynamic_frame.knife_segment_context.has_value());
   EXPECT_DOUBLE_EQ(target.dynamic_frame.knife_angle_context->angle_degrees, first_angle);
   const auto cache = modeling.volatile_overlay_cache_stats();
   const auto work = coordinator.work_counters();
@@ -1174,6 +1178,7 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
   ASSERT_TRUE(editor.scene().set_visible(box.value().entity, false).ok());
   ASSERT_TRUE(submit(ViewportPaneId::Perspective).dynamic_submitted);
   EXPECT_FALSE(target.dynamic_frame.knife_angle_context.has_value());
+  EXPECT_FALSE(target.dynamic_frame.knife_segment_context.has_value());
   EXPECT_EQ(std::ranges::count_if(target.dynamic_frame.lines, [](const auto &line) {
     return line.style_role == ViewportOverlayStyleRole::KnifeReferenceLine;
   }), 0);
@@ -1186,6 +1191,7 @@ TEST(ViewportOverlaySubmissionCoordinatorTests,
   for (const auto pane : {ViewportPaneId::Perspective, ViewportPaneId::Front}) {
     EXPECT_TRUE(submit(pane).dynamic_submitted);
     EXPECT_FALSE(target.dynamic_frame.knife_angle_context.has_value());
+    EXPECT_FALSE(target.dynamic_frame.knife_segment_context.has_value());
     EXPECT_EQ(std::ranges::count_if(target.dynamic_frame.lines, [](const auto &line) {
       return line.style_role == ViewportOverlayStyleRole::KnifeReferenceLine;
     }), 0);

@@ -88,7 +88,10 @@ of its eligible face. Edge seeds use the face-plane perpendicular to that edge; 
 the existing face directions. The smaller unsigned line angle (0–90 degrees) is independent of
 the camera and does not change Shift constraints, snapping, accepted points or history. The
 volatile source carries both the orange reference and angle context through retained submission;
-the shared dimension HUD gates only the label with Show Dimensions. Hover clear and stroke
+the shared dimension HUD gates the angle and live-segment length with Show Dimensions. The
+segment endpoints remain independent of reference availability, and length is placed beside
+the current endpoint. Boundary validation accounts for world-space float rounding without
+changing topology or snapping tolerances. Hover clear and stroke
 teardown retire both. See the [Knife submission tests](../../../../tests/viewport_overlay_submission_coordinator_tests.cpp)
 and [HUD tests](../../../../tests/qt_viewport_edge_length_hud_tests.cpp).
 

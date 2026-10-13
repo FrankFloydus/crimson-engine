@@ -393,6 +393,9 @@ void append_viewport_overlay_frame(ViewportOverlayFrame &target,
   if (source.knife_angle_context.has_value()) {
     target.knife_angle_context = source.knife_angle_context;
   }
+  if (source.knife_segment_context.has_value()) {
+    target.knife_segment_context = source.knife_segment_context;
+  }
   target.hover_target_selected =
       target.hover_target_selected || source.hover_target_selected;
 }
@@ -4435,11 +4438,28 @@ ViewportOverlayFrame ModelingOverlayService::volatile_overlay_frame(
   const auto &knife = runtime.knife_state();
   const auto &guide = knife_guide_override != nullptr
       ? *knife_guide_override : knife.straight_guide;
+  const auto knife_world_transform =
+      knife.active && knife.has_active_stroke && knife.has_current &&
+              knife.current_target_valid
+          ? SelectionOverlayProjection::visible_object_world_transform(
+                knife.target_object_id, object_registry, scene,
+                instance_edit_scope, entity_visible)
+          : std::nullopt;
+  if (knife_world_transform &&
+      knife.previous_point_index < knife.point_positions.size()) {
+    const QVec3 start = transform_point(
+        *knife_world_transform, knife.point_positions[knife.previous_point_index]);
+    const QVec3 end = transform_point(*knife_world_transform, knife.current_point);
+    const auto finite_point = [](QVec3 point) {
+      return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z);
+    };
+    if (finite_point(start) && finite_point(end) &&
+        length_squared(end - start) > 0.000000000001F) {
+      frame.knife_segment_context = ViewportKnifeSegmentContext{start, end};
+    }
+  }
   if (knife.active && knife.has_active_stroke && knife.has_current &&
-      guide.valid &&
-      SelectionOverlayProjection::visible_object_world_transform(
-          knife.target_object_id, object_registry, scene,
-          instance_edit_scope, entity_visible).has_value()) {
+      guide.valid && knife_world_transform.has_value()) {
     frame.lines.push_back({
         .layer = ViewportOverlayLayer::ToolPlaneLine,
         .start = guide.start,
