@@ -1,0 +1,7 @@
+/build/
+/captures/
+/assets/cache/
+/imgui.ini
+/crimson_ui.ini
+/renderer.log
+/.vs/

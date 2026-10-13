@@ -1,0 +1,45 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "windows-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "environment": {
+        "VCPKG_DOWNLOADS": "${sourceDir}/build/vcpkg_downloads",
+        "VCPKG_REGISTRIES_CACHE": "${sourceDir}/build/vcpkg_registries",
+        "VCPKG_BINARY_SOURCES": "clear;files,$env{LOCALAPPDATA}/vcpkg/archives,read;files,${sourceDir}/build/vcpkg_cache,readwrite"
+      },
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "VCPKG_HOST_TRIPLET": "x64-windows",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/vcpkg_installed",
+        "VCPKG_INSTALL_OPTIONS": "--x-buildtrees-root=${sourceDir}/build/vcpkg_buildtrees;--x-packages-root=${sourceDir}/build/vcpkg_packages",
+        "CMAKE_CXX_STANDARD": "20"
+      }
+    },
+    {
+      "name": "windows-Debug",
+      "inherits": "windows-base",
+      "binaryDir": "${sourceDir}/build/Debug",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "windows-Release",
+      "inherits": "windows-base",
+      "binaryDir": "${sourceDir}/build/Release",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "windows-Debug", "configurePreset": "windows-Debug", "jobs": 8 },
+    { "name": "windows-Release", "configurePreset": "windows-Release", "jobs": 8 }
+  ],
+  "testPresets": [
+    { "name": "windows-Debug", "configurePreset": "windows-Debug", "output": { "outputOnFailure": true } },
+    { "name": "windows-Release", "configurePreset": "windows-Release", "output": { "outputOnFailure": true } }
+  ]
+}

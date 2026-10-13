@@ -1,0 +1,3 @@
+// The first icon resource is used by Explorer and SDL's Windows window class.
+// SDL leaves the small class icon unset so Windows selects it for the current DPI.
+101 ICON "@CMAKE_CURRENT_SOURCE_DIR@/assets/branding/crimson-engine.ico"
