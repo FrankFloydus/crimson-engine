@@ -52,14 +52,15 @@ void drawAssetLabel(const AssetLibrary& assets, const TextureAsset* asset, const
     }
     const ImVec2 textMinimum(textX, minimum.y + (maximum.y - minimum.y - ImGui::GetFontSize()) * 0.5f);
     draw->PushClipRect(ImVec2(textX, minimum.y), ImVec2(maximum.x - padding, maximum.y), true);
-    const auto name = asset ? assets.displayName(asset->id) : std::string(fallback);
+    const auto name = !asset ? std::string(fallback) : asset->id==GrayTextureId ? std::string("Default gray") :
+        asset->id==NeutralNormalTextureId ? std::string("Neutral normal") : assets.displayName(asset->id);
     draw->AddText(textMinimum, ImGui::GetColorU32(asset ? ImGuiCol_Text : ImGuiCol_TextDisabled), name.c_str());
     draw->PopClipRect();
 }
 
 template<typename Assign, typename Clear>
 bool assetSlot(AssetLibrary& assets, const char* title, const char* interpretation, const std::string& assignedId,
-               ImGuiTextFilter& filter, bool allowHdr, const char* emptyLabel, Assign assign, Clear clear) {
+               ImGuiTextFilter& filter, bool allowHdr, const char* emptyLabel, Assign assign, Clear clear, bool normal = false) {
     bool changed = false, openPicker = false;
     ImGui::PushID(title);
     ImGui::BeginGroup();
@@ -72,7 +73,10 @@ bool assetSlot(AssetLibrary& assets, const char* title, const char* interpretati
     draw->AddRectFilled(minimum, maximum, ImGui::GetColorU32(ImGui::IsItemHovered() ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg),
                         ImGui::GetStyle().FrameRounding);
     draw->AddRect(minimum, maximum, ImGui::GetColorU32(ImGuiCol_Border), ImGui::GetStyle().FrameRounding);
-    drawAssetLabel(assets, assets.find(assignedId), assignedId.empty() ? emptyLabel : "Missing (Texture)", minimum, maximum, 3.0f);
+    const auto displayedId=allowHdr ? assets.references().resolveEnvironment(assignedId) : assets.references().resolveTexture(assignedId,normal);
+    const char* fallback=displayedId.empty() ? emptyLabel : displayedId==GrayTextureId ? "Default gray" :
+        displayedId==NeutralNormalTextureId ? "Neutral normal" : "Missing (Texture)";
+    drawAssetLabel(assets, assets.find(displayedId), fallback, minimum, maximum, 3.0f);
     help(interpretation);
     ImGui::SameLine(0.0f, gap);
     openPicker |= ImGui::Button("##picker", ImVec2(height, height));
@@ -106,14 +110,14 @@ bool assetSlot(AssetLibrary& assets, const char* title, const char* interpretati
         ImGui::SetNextItemWidth(-1);
         if (ImGui::InputTextWithHint("##search", "Search textures...", filter.InputBuf, IM_ARRAYSIZE(filter.InputBuf))) filter.Build();
         ImGui::BeginChild("Choices", ImVec2(0, ImGui::GetFontSize() * 14.0f), ImGuiChildFlags_None);
-        if (ImGui::Selectable(emptyLabel, assignedId.empty())) {
+        if (ImGui::Selectable(emptyLabel, displayedId.empty())) {
             if (!assignedId.empty()) { clear(); changed = true; }
             ImGui::CloseCurrentPopup();
         }
         for (const TextureAsset& asset : assets.assets()) {
             if ((!allowHdr && asset.hdr) || !filter.PassFilter(assets.displayName(asset.id).c_str())) continue;
             ImGui::PushID(asset.id.c_str());
-            if (ImGui::Selectable("##texture", asset.id == assignedId, ImGuiSelectableFlags_None, ImVec2(0, height))) {
+            if (ImGui::Selectable("##texture", asset.id == displayedId, ImGuiSelectableFlags_None, ImVec2(0, height))) {
                 changed |= assign(asset.id);
                 ImGui::CloseCurrentPopup();
             }
@@ -132,7 +136,7 @@ bool textureSlot(Material& material, AssetLibrary& assets, MaterialSlot slot, co
                  const std::string& assignedId) {
     static ImGuiTextFilter filters[4];
     return assetSlot(assets, title, interpretation, assignedId, filters[static_cast<size_t>(slot)], false, "None (Texture)",
-        [&](const std::string& id) { return assets.assign(material, slot, id); }, [&] { assets.clear(material, slot); });
+        [&](const std::string& id) { return assets.assign(material, slot, id); }, [&] { assets.clear(material, slot); },slot==MaterialSlot::Normal);
 }
 
 bool materialControls(Material& material, AssetLibrary& assets) {
@@ -166,7 +170,7 @@ bool materialControls(Material& material, AssetLibrary& assets) {
     return changed;
 }
 
-bool environmentControls(EnvironmentSettings& environment, AssetLibrary& assets, const Renderer& renderer) {
+bool environmentControls(EnvironmentSettings& environment, AssetLibrary& assets, const Renderer& renderer, bool persistLegacy = true) {
     bool changed = false;
     static ImGuiTextFilter filter;
     sectionTitle("ENVIRONMENT");
@@ -174,7 +178,7 @@ bool environmentControls(EnvironmentSettings& environment, AssetLibrary& assets,
     ImGui::TextUnformatted("Environment image");
     changed |= assetSlot(assets, "Environment image", "Equirectangular panorama. HDR is linear radiance; PNG/JPEG/TGA/BMP are sRGB.",
         environment.map, filter, true, "Built-in studio",
-        [&](const std::string& id) { return assets.assignEnvironment(environment, id); }, [&] { assets.clearEnvironment(environment); });
+        [&](const std::string& id) { return assets.assignEnvironment(environment, id, persistLegacy); }, [&] { assets.clearEnvironment(environment,persistLegacy); });
     changed |= ImGui::SliderFloat("Intensity##environment", &environment.intensity, 0.0f, 10.0f, "%.2f");
     changed |= ImGui::SliderFloat("Rotation##environment", &environment.rotation, -180.0f, 180.0f, "%.1f deg");
     help("Rotate environment lighting around the world Y axis.");
@@ -287,8 +291,8 @@ BrowserActions drawAssetBrowser(AssetLibrary& assets, SDL_Window* window) {
     return diagnosticBrowser.draw(assets, window);
 }
 
-bool drawEnvironmentControls(EnvironmentSettings& environment, AssetLibrary& assets, const Renderer& renderer) {
-    return environmentControls(environment, assets, renderer);
+bool drawEnvironmentControls(EnvironmentSettings& environment, AssetLibrary& assets, const Renderer& renderer, bool persistLegacy) {
+    return environmentControls(environment, assets, renderer,persistLegacy);
 }
 
 EditorFrame drawEditor(SceneSettings& settings, Renderer& renderer, AssetLibrary& assets, SDL_Window* window,

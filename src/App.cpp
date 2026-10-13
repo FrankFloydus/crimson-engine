@@ -7,6 +7,8 @@
 #include "platform/WindowIcon.h"
 #include "tools/Tools.h"
 #include "editor/EditorSession.h"
+#include "editor/ResourceRuntime.h"
+#include "resources/ResourceManager.h"
 #include "app/DiagnosticSession.h"
 #include <SDL3/SDL.h>
 #include <imgui.h>
@@ -70,13 +72,16 @@ int run(const AppOptions& options) {
     }
 
     {
+        ResourceManager resources;
         Renderer renderer(window.get(), &diagnostics);
         ImGuiLifetime imgui(window.get(), root);
         ImGuiBgfx toolsRenderer;
-        AssetLibrary assets(root);
+        const bool diagnosticMode = options.scenario != "default" || options.editorSmoke || options.iblSmoke || options.modelSmoke;
+        AssetLibrary assets(root,diagnosticMode?nullptr:&resources);
         Navigation navigation(window.get());
         applyToolsStyle();
-        const bool diagnosticMode = options.scenario != "default" || options.editorSmoke || options.iblSmoke || options.modelSmoke;
+        std::unique_ptr<ResourceRuntime> resourceRuntime;
+        if(!diagnosticMode)resourceRuntime=std::make_unique<ResourceRuntime>(root,resources,assets,renderer,toolsRenderer);
         std::unique_ptr<EditorSession> editor;
         std::unique_ptr<DiagnosticSession> diagnostic;
         if (diagnosticMode) diagnostic=std::make_unique<DiagnosticSession>(options,root,assets,renderer,diagnostics);
@@ -118,7 +123,8 @@ int run(const AppOptions& options) {
                 continue;
             }
             renderer.resize(static_cast<uint32_t>(pixelWidth), static_cast<uint32_t>(pixelHeight));
-            assets.processImports();
+            if(resourceRuntime)resourceRuntime->preFrame(editor.get(),bgfxFrame);
+            else assets.processImports();
 
             ImGui_ImplSDL3_NewFrame();
             ImGui::NewFrame();
@@ -136,6 +142,8 @@ int run(const AppOptions& options) {
             bgfxFrame=bgfx::frame();
             ++frame;
         }
+        if(resourceRuntime)resourceRuntime->stop();else resources.stop();
+        bgfxFrame=renderer.drainPending(bgfxFrame);
         // Let asynchronous screenshot requests and resource destruction finish before shutdown.
         if (captureRequested) {
             for (int flush = 0; flush < 8 && !diagnostics.captureSucceeded() && !diagnostics.captureFailed(); ++flush) bgfx::frame();

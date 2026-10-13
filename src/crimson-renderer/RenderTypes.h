@@ -81,6 +81,15 @@ struct SceneSettings {
     EnvironmentSettings environment{};
 };
 
+// Editor appearance is display-referred and independent of scene exposure.
+struct ViewportAppearance {
+    Vec3 backgroundSrgb{21.f/255,21.f/255,21.f/255};
+    Vec4 gridMinorSrgb{76.f/255,76.f/255,76.f/255,1};
+    Vec4 gridMajorSrgb{114.f/255,114.f/255,114.f/255,1};
+    float gridMinorWidth{.325f},gridMajorWidth{.250f};
+    bool operator==(const ViewportAppearance&) const = default;
+};
+
 inline constexpr uint16_t SceneView = 0;
 inline constexpr uint16_t PresentView = 1;
 inline constexpr uint16_t GridView = 2;

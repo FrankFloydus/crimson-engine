@@ -10,6 +10,7 @@ Vec3 directionalLightDirection(const Mat4& world) {
 
 ExtractedScene extractScene(const Scene& scene) {
     ExtractedScene result;
+    result.environment=resolveEnvironment(scene);
     const auto& registry = scene.registry();
     const auto view = registry.view<const Identity,const Transform>();
     std::vector<entt::entity> ordered;
@@ -23,7 +24,7 @@ ExtractedScene extractScene(const Scene& scene) {
         const auto world = scene.worldTransform(id);
         if (!world) continue;
         if (const auto* model = registry.try_get<ModelReference>(entity))
-            result.models.push_back({id,model->assetId,*world});
+            result.models.push_back({id,model->assetId.id,*world});
         if (const auto* light = registry.try_get<SceneDirectionalLight>(entity)) {
             result.directional.push_back({directionalLightDirection(*world),light->color,light->intensity,light->enabled});
         }
@@ -46,7 +47,7 @@ Aabb selectionBounds(const Scene& scene, std::span<const EntityId> selection,
             if (!record || !world) continue;
             bool hasBounds = false;
             if (record->model && modelBounds) {
-                if (const auto local = modelBounds(*record->model)) {
+                if (const auto local = modelBounds(record->model->id)) {
                     const auto bounds = math::transformBounds(*local,*world);
                     math::include(result,bounds);
                     hasBounds = bounds.valid;

@@ -1,4 +1,5 @@
 #include "SceneViewport.h"
+#include "ViewportAssetDrop.h"
 #include "assets/AssetLibrary.h"
 #include "crimson-renderer/ImGuiBgfx.h"
 #include "scene/SceneExtraction.h"
@@ -57,6 +58,7 @@ float directionalMarker(ImDrawList& draw, const Camera& camera, const Mat4& worl
 }
 }
 void SceneViewport::select(SceneDocument& document, EntityId id, bool toggle, bool append) {
+    pickIntent_=false;
     if (document.transactionActive()) return;
     auto ids = document.selection().ids;
     if (!toggle && !append) ids.clear();
@@ -73,13 +75,14 @@ void SceneViewport::cancel(SceneDocument& document, Renderer& renderer) {
     waitForRelease_ = waitForRelease_ || dragging_;
     ImGuizmo::Enable(false);
     dragging_ = false; roots_.clear(); renderer.cancelPicking(); ++serial_;
+    pickIntent_=false;
 }
 void SceneViewport::focus(Camera& camera, const SceneDocument& document, const AssetLibrary& assets, float aspect) {
     const auto bounds = boundsOf(document,assets);
     if (bounds.valid) camera.frameBounds(bounds.minimum,bounds.maximum,aspect);
 }
 EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLibrary& assets,
-                                Renderer& renderer, bool navigationActive, uint32_t bgfxFrame) {
+                                Renderer& renderer, bool navigationActive, uint32_t bgfxFrame, bool keyboardBlocked) {
     EditorFrame frame;
     ImGuizmo::BeginFrame();
     // Keep the handles, without floating operation/value text during a drag.
@@ -90,6 +93,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
     if (previousSelection_ != document.selection().ids || previousView_ != cameraView ||
         (!dragging_ && selectionGeneration_ != document.scene().generation())) {
         renderer.cancelPicking(); ++serial_;
+        pickIntent_=false;
     }
     previousSelection_ = document.selection().ids;
     previousView_ = cameraView;
@@ -109,34 +113,9 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             const bool imageHovered = ImGui::IsItemHovered();
             frame.viewport = {origin.x,origin.y,size.x,size.y,imageHovered,
                 ImGui::GetIO().WantTextInput || ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup)};
-            if (ImGui::BeginDragDropTarget()) {
-                if (const auto* payload = ImGui::AcceptDragDropPayload("CC_MODEL_ASSETS")) {
-                    std::vector<std::string> ids;
-                    bool valid=payload->Data && payload->DataSize>0;
-                    if (valid) {
-                        const auto* next=static_cast<const char*>(payload->Data);
-                        const auto* end=next+payload->DataSize;
-                        while (next!=end) {
-                            const auto* terminator=std::find(next,end,'\0');
-                            if (terminator==end || terminator==next) { valid=false; break; }
-                            ids.emplace_back(next,terminator);
-                            next=terminator+1;
-                        }
-                    }
-                    if (valid && !ids.empty()) {
-                        frame.modelDropIds=std::move(ids);
-                        frame.modelDropPosition={ImGui::GetIO().MousePos.x,ImGui::GetIO().MousePos.y};
-                    }
-                } else if (const auto* singlePayload = ImGui::AcceptDragDropPayload("CC_MODEL_ASSET")) {
-                    if (singlePayload->DataSize > 0 && static_cast<const char*>(singlePayload->Data)[singlePayload->DataSize-1] == '\0') {
-                        frame.modelDropId.assign(static_cast<const char*>(singlePayload->Data),static_cast<size_t>(singlePayload->DataSize-1));
-                        frame.modelDropPosition = {ImGui::GetIO().MousePos.x,ImGui::GetIO().MousePos.y};
-                    }
-                }
-                ImGui::EndDragDropTarget();
-            }
+            acceptViewportModelDrop(frame);
             const bool editorFocus = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
-            if (!blockKeys && !document.transactionActive() && (imageHovered || editorFocus)) {
+            if (!keyboardBlocked && !blockKeys && !document.transactionActive() && (imageHovered || editorFocus)) {
                 if (ImGui::IsKeyPressed(ImGuiKey_T,false)) operation_ = ImGuizmo::TRANSLATE;
                 if (ImGui::IsKeyPressed(ImGuiKey_R,false)) operation_ = ImGuizmo::ROTATE;
                 if (ImGui::IsKeyPressed(ImGuiKey_E,false)) operation_ = ImGuizmo::SCALE;
@@ -147,12 +126,26 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             const auto projection = camera.projectionMatrix(size.x/size.y,ClipDepth::NegativeOneToOne);
             if (pendingPick && pickSize_ == Vec2{size.x,size.y} && pickProjection_ == projection && pickView_ == view &&
                 pendingPick->generation == document.scene().generation() && pendingPick->revision == document.scene().revision() &&
-                pendingPick->serial == serial_ && !blockKeys && !document.transactionActive())
-                select(document,pendingPick->entityId,pickCtrl_,pickShift_);
+                pendingPick->serial == serial_ && !blockKeys && !document.transactionActive()) {
+                renderer.cancelPicking(); select(document,pendingPick->entityId,pickCtrl_,pickShift_);
+            }
+            if (pickIntent_) {
+                if (blockKeys || document.transactionActive() || ImGui::GetDragDropPayload() ||
+                    pickSize_!=Vec2{size.x,size.y} || pickProjection_!=projection || pickView_!=view ||
+                    intentGeneration_!=document.scene().generation() || intentRevision_!=document.scene().revision() || intentSerial_!=serial_)
+                    pickIntent_=false;
+                else renderer.requestPick({intentGeneration_,intentRevision_,intentSerial_,pickX_,pickY_,renderer.streamingSignature()});
+            }
             const auto vp = projection*view;
             const Vec4 viewport{origin.x,origin.y,size.x,size.y};
             auto* draw = ImGui::GetWindowDrawList();
             draw->PushClipRect(origin,ImVec2(origin.x+size.x,origin.y+size.y),true);
+            if (!frame.placementPreviewIds.empty()) {
+                auto label=assets.displayName(frame.placementPreviewIds.front());
+                if (frame.placementPreviewIds.size()>1) label+=" +"+std::to_string(frame.placementPreviewIds.size()-1);
+                const auto mouse=ImGui::GetIO().MousePos;
+                draw->AddText(ImVec2(mouse.x+16,mouse.y+18),ImGui::GetColorU32(ImGuiCol_Text),label.c_str());
+            }
             const auto selectionBounds=boundsOf(document,assets);
             if (selectionBounds.valid) {
                 std::array<std::optional<Vec3>,8> corners;
@@ -183,6 +176,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                     ImGuizmo::WORLD,proxy_.data());
                 overGizmo = front && ImGuizmo::IsOver();
                 if (ImGuizmo::IsUsing() && !dragging_) {
+                    ImGui::SetWindowFocus();
                     roots_.clear();
                     for (const auto id : document.scene().topmost(document.selection().ids)) {
                         const auto record = document.scene().find(id);
@@ -192,7 +186,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                         if (!record || !world || !inv) { roots_.clear(); break; }
                         roots_.push_back({id,record->local,*world,*inv});
                     }
-                    if (!roots_.empty() && document.begin("Transform selection")) { dragging_=true; renderer.cancelPicking(); ++serial_; }
+                    if (!roots_.empty() && document.begin("Transform selection")) { dragging_=true; pickIntent_=false; renderer.cancelPicking(); ++serial_; }
                 }
                 if (dragging_ && changed) {
                     const auto inverse = math::inverse(startProxy_);
@@ -233,14 +227,15 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             if (imageHovered && !blockKeys && !overGizmo && !dragging_ && !document.transactionActive() &&
                 ImGui::GetDragDropPayload() == nullptr && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                 ImGui::SetWindowFocus();
-                if (iconHit) select(document,iconHit,ImGui::GetIO().KeyCtrl,ImGui::GetIO().KeyShift);
+                if (iconHit) { renderer.cancelPicking(); select(document,iconHit,ImGui::GetIO().KeyCtrl,ImGui::GetIO().KeyShift); }
                 else {
                     pickCtrl_ = ImGui::GetIO().KeyCtrl; pickShift_ = ImGui::GetIO().KeyShift;
                     pickProjection_ = projection; pickView_ = view; pickSize_ = {size.x,size.y};
                     const auto mouse=ImGui::GetIO().MousePos;
-                    renderer.requestPick({document.scene().generation(),document.scene().revision(),++serial_,
-                        static_cast<uint32_t>(std::clamp((mouse.x-origin.x)/size.x*renderer.width(),0.0f,static_cast<float>(renderer.width()-1))),
-                        static_cast<uint32_t>(std::clamp((mouse.y-origin.y)/size.y*renderer.height(),0.0f,static_cast<float>(renderer.height()-1)))});
+                    pickX_=static_cast<uint32_t>(std::clamp((mouse.x-origin.x)/size.x*renderer.width(),0.0f,static_cast<float>(renderer.width()-1)));
+                    pickY_=static_cast<uint32_t>(std::clamp((mouse.y-origin.y)/size.y*renderer.height(),0.0f,static_cast<float>(renderer.height()-1)));
+                    intentGeneration_=document.scene().generation(); intentRevision_=document.scene().revision(); intentSerial_=++serial_;
+                    pickIntent_=renderer.requestPick({intentGeneration_,intentRevision_,intentSerial_,pickX_,pickY_,renderer.streamingSignature()});
                 }
             }
             frame.viewport.inputBlocked |= dragging_ || (overGizmo && !blockKeys) || document.transactionActive() || ImGui::GetDragDropPayload() != nullptr;

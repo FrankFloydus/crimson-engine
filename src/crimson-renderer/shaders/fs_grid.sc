@@ -10,6 +10,7 @@ uniform vec4 u_gridMajor;
 uniform vec4 u_gridAxisU;
 uniform vec4 u_gridAxisV;
 uniform vec4 u_gridParams;
+uniform vec4 u_gridWidths;
     struct GridPixelFootprint {
         float inverse_gradient;
         float long_interval;
@@ -177,14 +178,14 @@ uniform vec4 u_gridParams;
         // power-of-two spacings give exactly max(base, 2).
         float major_spacing = base_spacing * max(1.0, ceil(2.0 / base_spacing));
         vec2 spacings = vec2(base_spacing, major_spacing);
-        vec3 normalized_widths = max(vec3_splat(1.0), vec3_splat(0.0));
+        vec3 normalized_widths = max(u_gridWidths.xyz, vec3_splat(0.0));
         // Width is measured perpendicular to each screen-space line. The default
         // minor occupies exactly one pixel of integrated area when fully resolved.
         // Slightly broader parent lines/axes remain distinguishable at equal alpha.
         vec3 widths = vec3(
             normalized_widths.x,
-            1.25 * normalized_widths.y,
-            1.5 * normalized_widths.z);
+            normalized_widths.y,
+            normalized_widths.z);
         GridPixelFootprint u_footprint = grid_pixel_footprint(vec2(derivative_x.x, derivative_y.x));
         GridPixelFootprint v_footprint = grid_pixel_footprint(vec2(derivative_x.y, derivative_y.y));
         vec3 u_coverage = grid_family_coverages(coords.x, u_footprint, spacings, widths);

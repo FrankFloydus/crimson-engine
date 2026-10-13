@@ -1,7 +1,10 @@
 #include "Renderer.h"
+#include "ModelTransform.h"
 #include "Mesh.h"
 #include "Environment.h"
 #include "Picking.h"
+#include "ModelGpuCache.h"
+#include "ShaderPreflight.h"
 
 #include <SDL3/SDL.h>
 #include <bgfx/platform.h>
@@ -22,6 +25,7 @@
 #include <array>
 #include <cstddef>
 #include <cmath>
+#include <deque>
 #include <limits>
 #include <numbers>
 #include <stdexcept>
@@ -31,6 +35,14 @@
 namespace crimson {
 namespace {
 constexpr bgfx::ViewId PickView = 5, PickReadView = 6;
+struct RenderViews { bgfx::ViewId scene,present,grid,encode; };
+inline constexpr RenderViews MainViews{SceneView,PresentView,GridView,EncodeView};
+inline constexpr RenderViews ThumbnailViews{7,8,9,10};
+inline constexpr bgfx::ViewId ThumbnailReadView=11;
+std::uint64_t shaderContentHash(std::span<const std::uint8_t> vertex,std::span<const std::uint8_t> fragment) {
+    std::uint64_t hash=14695981039346656037ull;
+    for (const auto bytes:{vertex,fragment}) for (const auto byte:bytes) {hash^=byte;hash*=1099511628211ull;} return hash;
+}
 float finiteOr(float value, float fallback) { return std::isfinite(value) ? value : fallback; }
 float bounded(float value, float fallback, float lo, float hi) { return std::clamp(finiteOr(value, fallback), lo, hi); }
 float toLinear(float value) {
@@ -101,18 +113,6 @@ struct GpuModel {
     ~GpuModel() { for (auto& primitive : primitives) primitive.reset(); }
 };
 
-// glTF matrices are column-major. The normal transform is the inverse transpose
-// of the combined instance/node linear transform, with no translation component.
-bool modelMatrices(const ModelMatrix& root, const ModelMatrix& node, ModelMatrix& world,
-                   ModelMatrix& normal, float& handedness) {
-    world = math::multiply(root,node);
-    const auto inverseTranspose = math::normalMatrix(world);
-    if (!inverseTranspose) return false;
-    normal = *inverseTranspose;
-    handedness = math::handedness(world);
-    if (handedness == 0) return false;
-    return true;
-}
 template<std::size_t V, std::size_t F>
 bgfx::ProgramHandle program(const std::uint8_t (&vs)[V], const std::uint8_t (&fs)[F], const char* name) {
     auto vertex = bgfx::createShader(bgfx::copy(vs, static_cast<std::uint32_t>(V)));
@@ -196,6 +196,21 @@ struct PendingPick {
     // Dense draw IDs keep full 64-bit persistent entity IDs out of shader floats.
     picking::EntityIds entities;
     std::shared_ptr<PickTargets> targets;
+    std::vector<std::shared_ptr<const ResidentModelLod>> resources;
+    std::shared_ptr<const void> pinned;
+};
+struct PendingThumbnail {
+    std::string id; std::uint64_t signature{}; std::uint32_t readyFrame{};
+    DecodedImage image;
+    std::unique_ptr<ViewportTargets> targets;
+    bgfx::TextureHandle readback{BGFX_INVALID_HANDLE};
+    std::shared_ptr<const void> pinned;
+    std::vector<std::shared_ptr<const ResidentModelLod>> resources;
+    ~PendingThumbnail() { destroyHandle(readback); }
+};
+struct CachedThumbnail {
+    std::uint64_t signature{},lastUsed{}; std::size_t bytes{}; bgfx::TextureHandle texture{BGFX_INVALID_HANDLE};
+    ~CachedThumbnail() { destroyHandle(texture); }
 };
 } // namespace
 
@@ -204,6 +219,9 @@ struct Renderer::Impl {
     std::uint32_t windowWidth{1}, windowHeight{1}, width{1}, height{1};
     GpuMesh sphere, fullscreen, grid;
     std::unordered_map<std::string,std::unique_ptr<GpuModel>> models;
+    std::unique_ptr<ModelGpuCache> streamModels{std::make_unique<ModelGpuCache>()};
+    std::uint64_t externalSignature{},programRevision{1},environmentRevision{1};
+    ViewportAppearance appearance;
     std::string modelStatus;
     std::shared_ptr<PickTargets> pickTargets;
     std::optional<PickRequest> requestedPick;
@@ -212,6 +230,15 @@ struct Renderer::Impl {
     std::string pickingStatus;
     std::unique_ptr<ViewportTargets> targets;
     std::unique_ptr<EnvironmentLighting> environment;
+    std::unique_ptr<EnvironmentLighting> thumbnailEnvironment;
+    std::unique_ptr<PendingThumbnail> pendingThumbnail;
+    std::unordered_map<std::string,std::unique_ptr<CachedThumbnail>> thumbnails;
+    mutable std::uint64_t thumbnailClock{};
+    std::string shaderStatus,thumbnailStatus;
+    std::array<std::uint64_t,6> programHashes{};
+    struct LodSelection { std::uint32_t level{}; std::uint64_t frame{}; };
+    std::unordered_map<std::uint64_t,LodSelection> lodSelections;
+    std::uint64_t renderFrame{};
     bgfx::TextureHandle white{BGFX_INVALID_HANDLE};
     bgfx::ProgramHandle pbr{BGFX_INVALID_HANDLE}, present{BGFX_INVALID_HANDLE}, gridProgram{BGFX_INVALID_HANDLE}, encode{BGFX_INVALID_HANDLE};
     bgfx::ProgramHandle modelProgram{BGFX_INVALID_HANDLE};
@@ -225,16 +252,21 @@ struct Renderer::Impl {
     bgfx::UniformHandle cameraPos{BGFX_INVALID_HANDLE}, direction{BGFX_INVALID_HANDLE}, directionColor{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle pointPosition{BGFX_INVALID_HANDLE}, pointColor{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle presentParams{BGFX_INVALID_HANDLE}, hdrSampler{BGFX_INVALID_HANDLE}, compositeSampler{BGFX_INVALID_HANDLE};
+    bgfx::UniformHandle background{BGFX_INVALID_HANDLE},gridWidths{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle albedoSampler{BGFX_INVALID_HANDLE}, roughnessSampler{BGFX_INVALID_HANDLE}, metallicSampler{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle normalSampler{BGFX_INVALID_HANDLE}, irradianceSampler{BGFX_INVALID_HANDLE}, prefilteredSampler{BGFX_INVALID_HANDLE}, brdfSampler{BGFX_INVALID_HANDLE}, environmentParams{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle gridMinor{BGFX_INVALID_HANDLE}, gridMajor{BGFX_INVALID_HANDLE}, gridAxisU{BGFX_INVALID_HANDLE}, gridAxisV{BGFX_INVALID_HANDLE}, gridParams{BGFX_INVALID_HANDLE};
+    void renderTo(const RenderScene&,ViewportTargets&,EnvironmentLighting&,std::uint16_t,std::uint16_t,RenderViews,bool,bool,std::vector<std::shared_ptr<const ResidentModelLod>>* = nullptr);
     ~Impl() {
         if (!initialized) return;
-        sphere.reset(); fullscreen.reset(); grid.reset(); models.clear(); targets.reset(); pickTargets.reset();
+        sphere.reset(); fullscreen.reset(); grid.reset(); models.clear(); streamModels.reset(); targets.reset(); pickTargets.reset(); thumbnails.clear();
         // Keep readback destination memory alive through the final bgfx frame,
         // but release every GPU handle before bgfx shutdown.
         if (pendingPick) pendingPick->targets.reset();
+        if (pendingPick) { pendingPick->resources.clear(); pendingPick->pinned.reset(); }
+        if (pendingThumbnail) { pendingThumbnail->targets.reset(); destroyHandle(pendingThumbnail->readback); pendingThumbnail->pinned.reset(); pendingThumbnail->resources.clear(); }
         environment.reset();
+        thumbnailEnvironment.reset();
         destroyHandle(white);
         destroyHandle(pbr); destroyHandle(present); destroyHandle(gridProgram); destroyHandle(encode);
         destroyHandle(modelProgram); destroyHandle(modelBase); destroyHandle(modelSurface); destroyHandle(modelEmissive);
@@ -245,6 +277,7 @@ struct Renderer::Impl {
         destroyHandle(cameraPos); destroyHandle(direction); destroyHandle(directionColor);
         destroyHandle(pointPosition); destroyHandle(pointColor);
         destroyHandle(presentParams); destroyHandle(hdrSampler); destroyHandle(compositeSampler);
+        destroyHandle(background); destroyHandle(gridWidths);
         destroyHandle(albedoSampler); destroyHandle(roughnessSampler); destroyHandle(metallicSampler);
         destroyHandle(normalSampler); destroyHandle(irradianceSampler); destroyHandle(prefilteredSampler); destroyHandle(brdfSampler); destroyHandle(environmentParams);
         destroyHandle(gridMinor); destroyHandle(gridMajor); destroyHandle(gridAxisU); destroyHandle(gridAxisV); destroyHandle(gridParams);
@@ -298,6 +331,8 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
     impl_->present = program(cc_vs_present,cc_fs_present,"Linear Reinhard tone map");
     impl_->gridProgram = program(cc_vs_grid,cc_fs_grid,"Quader analytic construction grid");
     impl_->encode = program(cc_vs_present,cc_fs_encode,"Viewport sRGB encoding");
+    impl_->programHashes={shaderContentHash(cc_vs_pbr,cc_fs_pbr),shaderContentHash(cc_vs_model,cc_fs_model),shaderContentHash(cc_vs_pick,cc_fs_pick),
+        shaderContentHash(cc_vs_present,cc_fs_present),shaderContentHash(cc_vs_grid,cc_fs_grid),shaderContentHash(cc_vs_present,cc_fs_encode)};
     impl_->baseColorMetallic = uniform("u_baseColorMetallic");
     impl_->roughness = uniform("u_roughness");
     impl_->textureFlags = uniform("u_textureFlags");
@@ -308,6 +343,8 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
     impl_->pointColor = uniform("u_pointColor",bgfx::UniformType::Vec4,static_cast<std::uint16_t>(MaxPointLights));
     impl_->lightCounts = uniform("u_lightCounts");
     impl_->presentParams = uniform("u_presentParams");
+    impl_->background=uniform("u_background");
+    impl_->gridWidths=uniform("u_gridWidths");
     impl_->hdrSampler = uniform("s_hdrColor",bgfx::UniformType::Sampler);
     impl_->compositeSampler = uniform("s_compositeColor",bgfx::UniformType::Sampler);
     impl_->albedoSampler = uniform("s_albedo",bgfx::UniformType::Sampler);
@@ -319,6 +356,7 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
     impl_->brdfSampler = uniform("s_brdfLut",bgfx::UniformType::Sampler);
     impl_->environmentParams = uniform("u_environment");
     impl_->environment = std::make_unique<EnvironmentLighting>();
+    impl_->thumbnailEnvironment=std::make_unique<EnvironmentLighting>();
     impl_->gridMinor = uniform("u_gridMinor");
     impl_->gridMajor = uniform("u_gridMajor");
     impl_->gridAxisU = uniform("u_gridAxisU");
@@ -347,14 +385,18 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
     // with decoded view IDs. Moving PickReadView ahead of a lower-numbered
     // visible pass would copy the ID texture before its model draws complete.
     // Picking is offscreen, so it can follow the complete visible frame.
-    const bgfx::ViewId order[]{SceneView,PresentView,GridView,EncodeView,ToolsView,PickView,PickReadView};
+    const bgfx::ViewId order[]{SceneView,PresentView,GridView,EncodeView,ToolsView,PickView,PickReadView,7,8,9,10,11};
     bgfx::setViewOrder(SceneView,static_cast<std::uint16_t>(std::size(order)),order);
     for (const auto id : order) bgfx::setViewMode(id,bgfx::ViewMode::Sequential);
 }
 Renderer::~Renderer() = default;
 
 bool Renderer::prepareEnvironment(const std::filesystem::path& projectRoot, const std::string& sourceId) {
-    return impl_->environment->prepare(projectRoot, sourceId);
+    const bool result=impl_->environment->prepare(projectRoot, sourceId); if (result) ++impl_->environmentRevision; return result;
+}
+bool Renderer::publishEnvironment(const PreparedEnvironment& data) { const bool result=impl_->environment->publish(data); if (result) ++impl_->environmentRevision; return result; }
+bool Renderer::publishThumbnailEnvironment(const PreparedEnvironment& data) {
+    const bool result=impl_->thumbnailEnvironment->publish(data);impl_->thumbnailStatus=result ? std::string{}:impl_->thumbnailEnvironment->status();return result;
 }
 const std::string& Renderer::environmentStatus() const { return impl_->environment->status(); }
 
@@ -388,6 +430,141 @@ bool Renderer::prepareModel(const ModelAsset& model) {
 void Renderer::clearModel() { cancelPicking(); impl_->models.clear(); impl_->modelStatus.clear(); }
 const std::string& Renderer::modelStatus() const { return impl_->modelStatus; }
 
+void Renderer::configureModelStream(const std::string& id,std::uint64_t revision,const streaming::ModelStream& descriptor) { impl_->streamModels->configure(id,revision,descriptor); }
+bool Renderer::queueModelLod(const std::string& id,std::uint64_t revision,std::shared_ptr<const ModelGeometryLevel> level) {
+    const bool result=impl_->streamModels->queue(id,revision,std::move(level));
+    if(!result) impl_->modelStatus=impl_->streamModels->status().empty() ? "Model LOD request does not match its streaming descriptor." : impl_->streamModels->status();
+    return result;
+}
+void Renderer::advanceStreaming(std::size_t bytes,double milliseconds) {
+    impl_->streamModels->advance(bytes,milliseconds);
+    if (!impl_->streamModels->status().empty()) impl_->modelStatus=impl_->streamModels->status();
+}
+bool Renderer::modelStreamReady(const std::string& id,std::uint64_t revision) const { return impl_->streamModels->ready(id,revision); }
+bool Renderer::modelLodReady(const std::string& id,std::uint64_t revision,std::uint32_t primitive,std::uint32_t level) const {
+    const auto resident=impl_->streamModels->resident(id,revision,primitive,level);return resident && resident->level==level;
+}
+void Renderer::evictModel(const std::string& id) {
+    const bool legacy=impl_->models.erase(id)!=0;
+    const auto prior=impl_->streamModels->signature(); impl_->streamModels->evict(id);
+    if(legacy || prior!=impl_->streamModels->signature()) cancelPicking();
+}
+std::uint64_t Renderer::streamingSignature() const {
+    std::uint64_t value=14695981039346656037ull;
+    for (const auto item:{impl_->streamModels->signature(),impl_->externalSignature,impl_->programRevision,impl_->environmentRevision}) { value^=item; value*=1099511628211ull; }
+    return value;
+}
+void Renderer::setExternalResourceSignature(std::uint64_t value) { impl_->externalSignature=value; }
+std::size_t Renderer::modelResidentBytes() const { return impl_->streamModels->bytes(); }
+void Renderer::trimModelCache(std::size_t bytes,std::span<const std::string> live) { impl_->streamModels->trim(bytes,live); }
+void Renderer::setAppearance(const ViewportAppearance& appearance) { impl_->appearance=appearance; }
+bool Renderer::thumbnailBusy() const { return !!impl_->pendingThumbnail; }
+bool Renderer::renderThumbnail(const std::string& id,std::uint64_t signature,const RenderScene& scene,std::uint16_t size,std::shared_ptr<const void> pinned) {
+    if (impl_->pendingThumbnail || id.empty() || !size || size>512 ||
+        (bgfx::getCaps()->supported&(BGFX_CAPS_TEXTURE_BLIT|BGFX_CAPS_TEXTURE_READ_BACK))!=(BGFX_CAPS_TEXTURE_BLIT|BGFX_CAPS_TEXTURE_READ_BACK)) return false;
+    try {
+        auto pending=std::make_unique<PendingThumbnail>(); pending->id=id; pending->signature=signature; pending->pinned=pinned ? std::move(pinned):scene.pinned;
+        pending->targets=std::make_unique<ViewportTargets>(); pending->targets->create(size,size);
+        pending->readback=bgfx::createTexture2D(size,size,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK);
+        if (!bgfx::isValid(pending->readback)) return false;
+        pending->image={size,size,std::vector<std::uint8_t>(static_cast<std::size_t>(size)*size*4)};
+        const bool ready=bgfx::isValid(impl_->thumbnailEnvironment->diffuse());
+        struct RestoreAppearance { ViewportAppearance& destination; ViewportAppearance saved; ~RestoreAppearance(){destination=saved;} } restore{impl_->appearance,impl_->appearance};
+        impl_->appearance=ViewportAppearance{};
+        impl_->renderTo(scene,*pending->targets,ready ? *impl_->thumbnailEnvironment:*impl_->environment,size,size,ThumbnailViews,false,false,&pending->resources);
+        bgfx::blit(ThumbnailReadView,pending->readback,0,0,pending->targets->display,0,0,size,size);
+        pending->readyFrame=bgfx::readTexture(pending->readback,pending->image.rgba.data());
+        impl_->pendingThumbnail=std::move(pending);impl_->thumbnailStatus.clear(); return true;
+    } catch (const std::exception& error) { impl_->thumbnailStatus=std::string("Thumbnail: ")+error.what(); return false; }
+}
+std::optional<ThumbnailResult> Renderer::pollThumbnail(std::uint32_t frame) {
+    if (!impl_->pendingThumbnail || !picking::frameReady(frame,impl_->pendingThumbnail->readyFrame)) return {};
+    auto pending=std::move(impl_->pendingThumbnail);
+    if (bgfx::getCaps()->originBottomLeft) {
+        const auto pitch=static_cast<std::size_t>(pending->image.width)*4;
+        for (std::uint32_t y=0;y<pending->image.height/2;++y) {
+            auto top=pending->image.rgba.begin()+y*pitch,bottom=pending->image.rgba.begin()+(pending->image.height-1-y)*pitch;
+            std::swap_ranges(top,top+pitch,bottom);
+        }
+    }
+    return ThumbnailResult{std::move(pending->id),pending->signature,std::move(pending->image)};
+}
+bool Renderer::setThumbnail(const std::string& id,std::uint64_t signature,const DecodedImage& image) {
+    if (id.empty() || !image.width || !image.height || image.width>512 || image.height>512 || image.rgba.size()!=static_cast<std::size_t>(image.width)*image.height*4) return false;
+    if (const auto found=impl_->thumbnails.find(id);found!=impl_->thumbnails.end() && found->second->signature==signature) return true;
+    auto next=std::make_unique<CachedThumbnail>(); next->signature=signature; next->bytes=image.rgba.size(); next->lastUsed=++impl_->thumbnailClock;
+    next->texture=bgfx::createTexture2D(static_cast<std::uint16_t>(image.width),static_cast<std::uint16_t>(image.height),false,1,bgfx::TextureFormat::RGBA8,
+        BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP,bgfx::copy(image.rgba.data(),static_cast<std::uint32_t>(image.rgba.size())));
+    if (!bgfx::isValid(next->texture)) return false;
+    impl_->thumbnails.insert_or_assign(id,std::move(next));
+    const auto total=[&] { std::size_t bytes=0; for (const auto& [key,value]:impl_->thumbnails) { (void)key; bytes+=value->bytes; } return bytes; };
+    while (total()>64*1024*1024 && impl_->thumbnails.size()>1) {
+        const auto victim=std::min_element(impl_->thumbnails.begin(),impl_->thumbnails.end(),[](const auto& a,const auto& b){return a.second->lastUsed<b.second->lastUsed;});
+        impl_->thumbnails.erase(victim);
+    }
+    return true;
+}
+bgfx::TextureHandle Renderer::thumbnailTexture(const std::string& id,std::uint64_t signature) const {
+    const auto found=impl_->thumbnails.find(id);
+    if (found==impl_->thumbnails.end() || (signature && found->second->signature!=signature)) return BGFX_INVALID_HANDLE;
+    found->second->lastUsed=++impl_->thumbnailClock; return found->second->texture;
+}
+void Renderer::evictThumbnail(const std::string& id) { impl_->thumbnails.erase(id); }
+std::size_t Renderer::thumbnailResidentBytes() const {
+    std::size_t bytes=0;
+    for (const auto& [id,value]:impl_->thumbnails) { (void)id;bytes+=value->bytes; }
+    if (impl_->pendingThumbnail) bytes+=static_cast<std::size_t>(impl_->pendingThumbnail->image.width)*impl_->pendingThumbnail->image.height*28;
+    return bytes;
+}
+void Renderer::trimThumbnailCache(std::size_t target) {
+    while (!impl_->thumbnails.empty() && thumbnailResidentBytes()>target) {
+        const auto victim=std::min_element(impl_->thumbnails.begin(),impl_->thumbnails.end(),[](const auto& a,const auto& b){return a.second->lastUsed<b.second->lastUsed;});
+        impl_->thumbnails.erase(victim);
+    }
+}
+const std::string& Renderer::thumbnailStatus() const { return impl_->thumbnailStatus; }
+bool Renderer::reloadPrograms(std::span<const RendererShaderPair> pairs) {
+    std::vector<std::pair<bgfx::ProgramHandle*,bgfx::ProgramHandle>> candidates;
+    std::vector<std::pair<std::size_t,std::uint64_t>> hashes;
+    try {
+        for (const auto& pair:pairs) {
+            bgfx::ProgramHandle* target{}; std::span<const std::uint8_t> contractV,contractF;
+            switch (pair.program) {
+            case RendererProgram::Sphere: target=&impl_->pbr; contractV=cc_vs_pbr; contractF=cc_fs_pbr; break;
+            case RendererProgram::Model: target=&impl_->modelProgram; contractV=cc_vs_model; contractF=cc_fs_model; break;
+            case RendererProgram::Picking: target=&impl_->pickProgram; contractV=cc_vs_pick; contractF=cc_fs_pick; break;
+            case RendererProgram::Present: target=&impl_->present; contractV=cc_vs_present; contractF=cc_fs_present; break;
+            case RendererProgram::Grid: target=&impl_->gridProgram; contractV=cc_vs_grid; contractF=cc_fs_grid; break;
+            case RendererProgram::Encode: target=&impl_->encode; contractV=cc_vs_present; contractF=cc_fs_encode; break;
+            }
+            if (!target || std::any_of(candidates.begin(),candidates.end(),[&](const auto& value){return value.first==target;})) throw std::runtime_error("Shader reload batch has an invalid or duplicated program.");
+            std::string diagnostic;
+            if (!preflightShaderPair(pair.vertex,pair.fragment,contractV,contractF,diagnostic)) throw std::runtime_error(diagnostic);
+            const auto vertex=bgfx::createShader(bgfx::copy(pair.vertex.data(),static_cast<std::uint32_t>(pair.vertex.size())));
+            const auto fragment=bgfx::createShader(bgfx::copy(pair.fragment.data(),static_cast<std::uint32_t>(pair.fragment.size())));
+            if (!bgfx::isValid(vertex) || !bgfx::isValid(fragment)) {
+                auto v=vertex,f=fragment; destroyHandle(v); destroyHandle(f); throw std::runtime_error("Hot-reload shader allocation failed.");
+            }
+            const auto program=bgfx::createProgram(vertex,fragment,true);
+            if (!bgfx::isValid(program)) throw std::runtime_error("Hot-reload program creation failed.");
+            candidates.emplace_back(target,program);
+            hashes.emplace_back(static_cast<std::size_t>(pair.program),shaderContentHash(pair.vertex,pair.fragment));
+        }
+        for (auto& [target,candidate]:candidates) { destroyHandle(*target); *target=candidate; }
+        for (const auto& [index,hash]:hashes) impl_->programHashes[index]=hash;
+        if (!candidates.empty()) { ++impl_->programRevision; cancelPicking(); }
+        impl_->shaderStatus.clear(); return true;
+    } catch (const std::exception& error) {
+        for (auto& [target,candidate]:candidates) { (void)target; destroyHandle(candidate); }
+        impl_->shaderStatus=error.what(); return false;
+    }
+}
+const std::string& Renderer::shaderStatus() const { return impl_->shaderStatus; }
+std::uint64_t Renderer::shaderSignature() const {
+    std::uint64_t hash=14695981039346656037ull;
+    for (const auto value:impl_->programHashes) {hash^=value;hash*=1099511628211ull;} return hash;
+}
+
 bool Renderer::requestPick(const PickRequest& request) {
     const auto required = BGFX_CAPS_TEXTURE_BLIT | BGFX_CAPS_TEXTURE_READ_BACK;
     if ((bgfx::getCaps()->supported & required) != required) {
@@ -407,6 +584,7 @@ bool Renderer::requestPick(const PickRequest& request) {
     }
     impl_->latestPickSerial = request.serial;
     impl_->requestedPick = request;
+    if (!impl_->requestedPick->resourceSignature) impl_->requestedPick->resourceSignature=streamingSignature();
     impl_->pickingStatus.clear();
     return true;
 }
@@ -420,10 +598,18 @@ std::optional<PickResult> Renderer::pollPick(std::uint32_t bgfxFrame) {
         impl_->pickingStatus = "Viewport picking returned an invalid entity ID.";
         return {};
     }
-    return PickResult{pending->request.generation,pending->request.revision,pending->request.serial,*entity};
+    if (pending->request.resourceSignature && pending->request.resourceSignature!=streamingSignature()) return {};
+    return PickResult{pending->request.generation,pending->request.revision,pending->request.serial,*entity,pending->request.resourceSignature};
 }
 
 void Renderer::cancelPicking() { ++impl_->pickEpoch; impl_->requestedPick.reset(); }
+std::uint32_t Renderer::drainPending(std::uint32_t frame,std::uint32_t maximum) {
+    cancelPicking();
+    for(std::uint32_t count=0;count<maximum && (impl_->pendingPick || impl_->pendingThumbnail);++count) {
+        frame=bgfx::frame();(void)pollPick(frame);(void)pollThumbnail(frame);
+    }
+    return frame;
+}
 const std::string& Renderer::pickingStatus() const { return impl_->pickingStatus; }
 
 void Renderer::resize(std::uint32_t width, std::uint32_t height) {
@@ -450,36 +636,44 @@ void Renderer::render(const SceneSettings& settings, const MaterialTextures& tex
 }
 void Renderer::render(const RenderScene& scene) {
     if (!drawable()) return;
+    impl_->renderTo(scene,*impl_->targets,*impl_->environment,static_cast<std::uint16_t>(impl_->width),static_cast<std::uint16_t>(impl_->height),MainViews,true,true);
+}
+void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,EnvironmentLighting& lighting,
+    std::uint16_t w,std::uint16_t h,RenderViews views,bool drawGrid,bool allowPicking,std::vector<std::shared_ptr<const ResidentModelLod>>* pinnedGeometry) {
+    if (allowPicking) {
+        ++renderFrame;
+        streamModels->beginMainView();
+        if (renderFrame%120==0) std::erase_if(lodSelections,[&](const auto& item){return renderFrame-item.second.frame>120;});
+    }
     const auto& settings = scene.settings;
     const auto& textures = scene.sphereTextures;
     const auto* caps = bgfx::getCaps();
-    const auto w = static_cast<std::uint16_t>(impl_->width), h = static_cast<std::uint16_t>(impl_->height);
-    bgfx::setViewFrameBuffer(SceneView,impl_->targets->hdrBuffer);
-    bgfx::setViewRect(SceneView,0,0,w,h);
-    bgfx::setViewClear(SceneView,BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH,0x030405ffu,1.0f,0);
-    bgfx::touch(SceneView); // Also clear when every model draw has a singular transform.
+    bgfx::setViewFrameBuffer(views.scene,target.hdrBuffer);
+    bgfx::setViewRect(views.scene,0,0,w,h);
+    bgfx::setViewClear(views.scene,BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH,0u,1.0f,0);
+    bgfx::touch(views.scene); // Also clear when every model draw has a singular transform.
     ModelMatrix model;
     const auto eye = settings.camera.eye();
     const float aspect = static_cast<float>(w)/static_cast<float>(h);
     const auto view = settings.camera.viewMatrix();
     const auto projection = settings.camera.projectionMatrix(aspect,caps->homogeneousDepth ? ClipDepth::NegativeOneToOne : ClipDepth::ZeroToOne);
-    bgfx::setViewTransform(SceneView,view.data(),projection.data());
+    bgfx::setViewTransform(views.scene,view.data(),projection.data());
     const float camera[]{eye[0],eye[1],eye[2],0};
-    const float environment[]{settings.environment.enabled ? bounded(settings.environment.intensity,1,0,10) : 0,
+    const float environmentValues[]{settings.environment.enabled ? bounded(settings.environment.intensity,1,0,10) : 0,
         bounded(settings.environment.rotation,0,-180,180) * std::numbers::pi_v<float> / 180.0f,
-        impl_->environment->maxSpecularLod(),0};
+        lighting.maxSpecularLod(),0};
     const std::span<const DirectionalLight> directional = scene.sceneMode ? scene.directionalLights : std::span<const DirectionalLight>(&settings.directional,1);
     const std::span<const PointLight> points = scene.sceneMode ? scene.pointLights : std::span<const PointLight>(settings.points);
     const auto directionalCount = std::min(directional.size(),MaxDirectionalLights);
     const auto pointCount = std::min(points.size(),MaxPointLights);
     if (directional.size() > MaxDirectionalLights || points.size() > MaxPointLights)
-        impl_->modelStatus = "Scene exceeds the renderer budget of 4 directional and 16 point lights.";
+        modelStatus = "Scene exceeds the renderer budget of 4 directional and 16 point lights.";
     std::array<float,MaxDirectionalLights*4> directions{},directionColors{};
     std::array<float,MaxPointLights*4> pointPositions{},pointColors{};
     for (std::size_t i=0;i<directionalCount;++i) {
         const auto& light = directional[i];
-        const auto direction = math::normalized(light.direction,{-.5f,-.8f,-.6f});
-        for (std::size_t j=0;j<3;++j) { directions[i*4+j]=direction[j]; directionColors[i*4+j]=toLinear(light.color[j]); }
+        const auto lightDirection = math::normalized(light.direction,{-.5f,-.8f,-.6f});
+        for (std::size_t j=0;j<3;++j) { directions[i*4+j]=lightDirection[j]; directionColors[i*4+j]=toLinear(light.color[j]); }
         directions[i*4+3]=light.enabled ? bounded(light.intensity,0,0,10000) : 0;
     }
     for (std::size_t i=0;i<pointCount;++i) {
@@ -487,27 +681,28 @@ void Renderer::render(const RenderScene& scene) {
         for (std::size_t j=0;j<3;++j) {pointPositions[i*4+j]=finiteOr(light.position[j],0);pointColors[i*4+j]=toLinear(light.color[j]);}
         pointPositions[i*4+3]=light.enabled ? bounded(light.intensity,0,0,10000) : 0;
     }
-    const float lightCounts[]{static_cast<float>(directionalCount),static_cast<float>(pointCount),0,0};
+    const float lightCountValues[]{static_cast<float>(directionalCount),static_cast<float>(pointCount),0,0};
     const auto bindLighting = [&](std::uint8_t firstEnvironmentSlot) {
-        bgfx::setUniform(impl_->cameraPos,camera); bgfx::setUniform(impl_->direction,directions.data(),static_cast<std::uint16_t>(MaxDirectionalLights));
-        bgfx::setUniform(impl_->directionColor,directionColors.data(),static_cast<std::uint16_t>(MaxDirectionalLights));
-        bgfx::setUniform(impl_->pointPosition,pointPositions.data(),static_cast<std::uint16_t>(MaxPointLights));
-        bgfx::setUniform(impl_->pointColor,pointColors.data(),static_cast<std::uint16_t>(MaxPointLights));
-        bgfx::setUniform(impl_->lightCounts,lightCounts);
-        bgfx::setUniform(impl_->environmentParams,environment);
-        bgfx::setTexture(firstEnvironmentSlot,impl_->irradianceSampler,impl_->environment->diffuse());
-        bgfx::setTexture(firstEnvironmentSlot+1,impl_->prefilteredSampler,impl_->environment->specular());
-        bgfx::setTexture(firstEnvironmentSlot+2,impl_->brdfSampler,impl_->environment->brdf());
+        bgfx::setUniform(cameraPos,camera); bgfx::setUniform(direction,directions.data(),static_cast<std::uint16_t>(MaxDirectionalLights));
+        bgfx::setUniform(directionColor,directionColors.data(),static_cast<std::uint16_t>(MaxDirectionalLights));
+        bgfx::setUniform(pointPosition,pointPositions.data(),static_cast<std::uint16_t>(MaxPointLights));
+        bgfx::setUniform(pointColor,pointColors.data(),static_cast<std::uint16_t>(MaxPointLights));
+        bgfx::setUniform(lightCounts,lightCountValues);
+        bgfx::setUniform(environmentParams,environmentValues);
+        bgfx::setTexture(firstEnvironmentSlot,irradianceSampler,lighting.diffuse());
+        bgfx::setTexture(firstEnvironmentSlot+1,prefilteredSampler,lighting.specular());
+        bgfx::setTexture(firstEnvironmentSlot+2,brdfSampler,lighting.brdf());
     };
-    if (!scene.sceneMode && impl_->requestedPick) cancelPicking();
-    const bool capturePick = scene.sceneMode && impl_->requestedPick && !impl_->pendingPick && impl_->pickTargets;
+    if (allowPicking && !scene.sceneMode && requestedPick) { ++pickEpoch; requestedPick.reset(); }
+    const bool capturePick = allowPicking && scene.sceneMode && requestedPick && !pendingPick && pickTargets;
     if (capturePick) {
-        impl_->pendingPick = std::make_unique<PendingPick>();
-        impl_->pendingPick->request = *impl_->requestedPick;
-        impl_->pendingPick->epoch = impl_->pickEpoch;
-        impl_->pendingPick->targets = impl_->pickTargets;
-        impl_->requestedPick.reset();
-        bgfx::setViewFrameBuffer(PickView,impl_->pickTargets->framebuffer);
+        pendingPick = std::make_unique<PendingPick>();
+        pendingPick->request = *requestedPick;
+        pendingPick->epoch = pickEpoch;
+        pendingPick->targets = pickTargets;
+        pendingPick->pinned=scene.pinned;
+        requestedPick.reset();
+        bgfx::setViewFrameBuffer(PickView,pickTargets->framebuffer);
         bgfx::setViewRect(PickView,0,0,w,h);
         bgfx::setViewTransform(PickView,view.data(),projection.data());
         bgfx::setViewClear(PickView,BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH,0,1.0f,0);
@@ -519,26 +714,50 @@ void Renderer::render(const RenderScene& scene) {
         legacy[0] = {0,*scene.model,scene.modelTextures};
         instances = legacy;
     }
-    std::size_t skipped = 0, missing = 0;
+    std::size_t skipped = 0, collapsed = 0, missing = 0;
     for (const auto& instance : instances) {
         if (!instance.model.asset) { ++missing; continue; }
         const auto& asset = *instance.model.asset;
-        const auto found = impl_->models.find(asset.id);
-        if (found == impl_->models.end()) {
+        const auto found = models.find(asset.id);
+        const auto* stream=streamModels->descriptor(asset.id,instance.resourceRevision);
+        if (found == models.end() && !(stream && streamModels->ready(asset.id,instance.resourceRevision))) {
             ++missing;
         } else {
+            if (allowPicking && stream) streamModels->markRendered(asset.id,instance.resourceRevision);
             std::array<float,4> pickColor{};
-            if (capturePick) {
-                pickColor = picking::color(impl_->pendingPick->entities.add(instance.entityId));
+            if (capturePick && instance.pickable && instance.entityId) {
+                pickColor = picking::color(pendingPick->entities.add(instance.entityId));
             }
-            const std::array<bgfx::UniformHandle, 5> samplers{impl_->albedoSampler, impl_->metallicRoughnessSampler,
-                impl_->normalSampler, impl_->occlusionSampler, impl_->emissiveSampler};
+            const std::array<bgfx::UniformHandle, 5> samplers{albedoSampler, metallicRoughnessSampler,
+                normalSampler, occlusionSampler, emissiveSampler};
+            std::uint32_t drawIndex=0;
             for (const auto& draw : asset.draws) {
+                const auto currentDraw=drawIndex++;
                 ModelMatrix world, normal;
                 float handedness = 1;
-                if (!modelMatrices(instance.model.transform,draw.transform,world,normal,handedness)) { ++skipped; continue; }
+                const auto transform=prepareModelMatrices(instance.model.transform,draw.transform,world,normal,handedness);
+                if (transform==ModelTransformStatus::Collapsed) { ++collapsed; continue; }
+                if (transform==ModelTransformStatus::Invalid) { ++skipped; continue; }
+                std::shared_ptr<const ResidentModelLod> resident;
+                if (stream && draw.primitive<stream->primitives.size()) {
+                    const auto& primitive=stream->primitives[draw.primitive];
+                    auto desired=instance.forceFullDetail ? 0u : streaming::chooseModelLod(primitive.levels,world,primitive.bounds,eye,
+                        settings.camera.verticalFov(aspect)*std::numbers::pi_v<float>/180,h);
+                    if (allowPicking && instance.entityId && !instance.forceFullDetail) {
+                        const auto key=(instance.entityId*1099511628211ull)^currentDraw;
+                        const auto previous=lodSelections.find(key);
+                        if (previous!=lodSelections.end() && previous->second.level!=desired)
+                            desired=streaming::chooseModelLod(primitive.levels,world,primitive.bounds,eye,settings.camera.verticalFov(aspect)*std::numbers::pi_v<float>/180,h,
+                                desired>previous->second.level ? .8f:1.2f);
+                        lodSelections[key]={desired,renderFrame};
+                    }
+                    resident=streamModels->resident(asset.id,instance.resourceRevision,draw.primitive,desired);
+                }
+                if (!resident && (found==models.end() || draw.primitive>=found->second->primitives.size())) { ++missing; continue; }
+                if (resident && pinnedGeometry) pinnedGeometry->push_back(resident);
+                const auto bindGeometry=[&] { if (resident) resident->bind(); else found->second->primitives[draw.primitive].bind(); };
                 const auto materialIndex = asset.primitives[draw.primitive].material;
-                const auto& material = asset.materials[materialIndex];
+                const auto& material=instance.materials && materialIndex<instance.materials->size() ? (*instance.materials)[materialIndex]:asset.materials[materialIndex];
                 const ModelMaterialTextures emptyBindings;
                 const auto& bindings = instance.textures && materialIndex < instance.textures->size()
                     ? (*instance.textures)[materialIndex] : emptyBindings;
@@ -546,7 +765,7 @@ void Renderer::render(const RenderScene& scene) {
                 for (std::uint8_t slot = 0; slot < samplers.size(); ++slot) {
                     const bool valid = bgfx::isValid(bindings.handles[slot]);
                     if (slot < 4) mapFlags[slot] = valid ? 1.0f : 0.0f;
-                    bgfx::setTexture(slot,samplers[slot],valid ? bindings.handles[slot] : impl_->white,bindings.flags[slot]);
+                    bgfx::setTexture(slot,samplers[slot],valid ? bindings.handles[slot] : white,bindings.flags[slot]);
                 }
                 const float surface[]{material.metallic,material.roughness,material.normalScale,material.occlusionStrength};
                 const float emissive[]{material.emissive[0],material.emissive[1],material.emissive[2],material.alphaCutoff};
@@ -556,44 +775,48 @@ void Renderer::render(const RenderScene& scene) {
                     material.doubleSided ? 1.0f : 0.0f,handedness};
                 const float emissiveMap[]{bgfx::isValid(bindings.handles[4]) ? 1.0f : 0.0f,0,0,0};
                 bgfx::setTransform(world.data());
-                bgfx::setUniform(impl_->modelNormalMatrix,normal.data());
-                bgfx::setUniform(impl_->modelBase,material.baseColor.data());
-                bgfx::setUniform(impl_->modelSurface,surface); bgfx::setUniform(impl_->modelEmissive,emissive);
-                bgfx::setUniform(impl_->modelUv,uv); bgfx::setUniform(impl_->modelOptions,options);
-                bgfx::setUniform(impl_->modelMaps,mapFlags); bgfx::setUniform(impl_->modelEmissiveMap,emissiveMap);
+                bgfx::setUniform(modelNormalMatrix,normal.data());
+                bgfx::setUniform(modelBase,material.baseColor.data());
+                bgfx::setUniform(modelSurface,surface); bgfx::setUniform(modelEmissive,emissive);
+                bgfx::setUniform(modelUv,uv); bgfx::setUniform(modelOptions,options);
+                bgfx::setUniform(modelMaps,mapFlags); bgfx::setUniform(modelEmissiveMap,emissiveMap);
                 bindLighting(5);
-                found->second->primitives[draw.primitive].bind();
+                bindGeometry();
                 const std::uint64_t cull = material.doubleSided ? BGFX_STATE_NONE : handedness < 0 ? BGFX_STATE_CULL_CCW : BGFX_STATE_CULL_CW;
                 bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS | cull);
-                bgfx::submit(SceneView,impl_->modelProgram);
-                if (capturePick) {
+                bgfx::submit(views.scene,modelProgram);
+                if (capturePick && instance.pickable && instance.entityId) {
+                    if (resident) pendingPick->resources.push_back(resident);
                     // This pass deliberately shares model transforms, winding,
                     // base-color UV/filter flags, vertex alpha and mask cutoff.
                     // It never writes to the visible scene depth or HDR targets.
                     bgfx::setTransform(world.data());
-                    bgfx::setUniform(impl_->modelBase,material.baseColor.data());
-                    bgfx::setUniform(impl_->modelEmissive,emissive);
-                    bgfx::setUniform(impl_->modelUv,uv);
-                    bgfx::setUniform(impl_->modelOptions,options);
-                    bgfx::setUniform(impl_->modelMaps,mapFlags);
-                    bgfx::setUniform(impl_->pickId,pickColor.data());
-                    bgfx::setTexture(0,impl_->albedoSampler,bgfx::isValid(bindings.handles[0]) ? bindings.handles[0] : impl_->white,bindings.flags[0]);
-                    found->second->primitives[draw.primitive].bind();
+                    bgfx::setUniform(modelBase,material.baseColor.data());
+                    bgfx::setUniform(modelEmissive,emissive);
+                    bgfx::setUniform(modelUv,uv);
+                    bgfx::setUniform(modelOptions,options);
+                    bgfx::setUniform(modelMaps,mapFlags);
+                    bgfx::setUniform(pickId,pickColor.data());
+                    bgfx::setTexture(0,albedoSampler,bgfx::isValid(bindings.handles[0]) ? bindings.handles[0] : white,bindings.flags[0]);
+                    bindGeometry();
                     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS | cull);
-                    bgfx::submit(PickView,impl_->pickProgram);
+                    bgfx::submit(PickView,pickProgram);
                 }
             }
         }
     }
-    if (missing) impl_->modelStatus = "Scene has " + std::to_string(missing) + " model instance(s) without prepared resources.";
-    else if (skipped) impl_->modelStatus = "Skipped " + std::to_string(skipped) + " draw(s) with singular or nonfinite transforms.";
-    else if (impl_->modelStatus.starts_with("Skipped ") || impl_->modelStatus.starts_with("Scene has ")) impl_->modelStatus.clear();
+    if (allowPicking) {
+        if (missing) modelStatus = "Scene has " + std::to_string(missing) + " model instance(s) without prepared resources.";
+        else if (skipped) modelStatus = "Skipped " + std::to_string(skipped) + " draw(s) with invalid or nonfinite transforms.";
+        else if (collapsed) modelStatus = "Hidden " + std::to_string(collapsed) + " draw(s) with a collapsed transform (for example, zero scale).";
+        else if (modelStatus.starts_with("Skipped ") || modelStatus.starts_with("Hidden ") || modelStatus.starts_with("Scene has ")) modelStatus.clear();
+    }
     if (capturePick) {
-        auto& pending = *impl_->pendingPick;
+        auto& pending = *pendingPick;
         const auto x = static_cast<std::uint16_t>(pending.request.x);
-        const auto y = static_cast<std::uint16_t>(caps->originBottomLeft ? impl_->height-1-pending.request.y : pending.request.y);
-        bgfx::blit(PickReadView,impl_->pickTargets->readback,0,0,impl_->pickTargets->color,x,y,1,1);
-        pending.readyFrame = bgfx::readTexture(impl_->pickTargets->readback,pending.pixel.data());
+        const auto y = static_cast<std::uint16_t>(caps->originBottomLeft ? height-1-pending.request.y : pending.request.y);
+        bgfx::blit(PickReadView,pickTargets->readback,0,0,pickTargets->color,x,y,1,1);
+        pending.readyFrame = bgfx::readTexture(pickTargets->readback,pending.pixel.data());
     }
     if (!scene.sceneMode && !(scene.model && scene.model->asset)) {
         model = math::translation({0,1,0}); // Radius-one sphere rests on the ground plane.
@@ -603,53 +826,60 @@ void Renderer::render(const RenderScene& scene) {
         // The shared perceptual-roughness floor is applied after map multiplication.
         const float rough[]{bounded(m.roughness,.35f,0,1),bounded(m.normalStrength,1,0,2),0,0};
         const float mapFlags[]{bgfx::isValid(textures.albedo)?1.0f:0.0f,bgfx::isValid(textures.roughness)?1.0f:0.0f,bgfx::isValid(textures.metallic)?1.0f:0.0f,bgfx::isValid(textures.normal)?1.0f:0.0f};
-        bgfx::setUniform(impl_->baseColorMetallic,base); bgfx::setUniform(impl_->roughness,rough); bgfx::setUniform(impl_->textureFlags,mapFlags);
-        bgfx::setTexture(0,impl_->albedoSampler,bgfx::isValid(textures.albedo)?textures.albedo:impl_->white);
-        bgfx::setTexture(1,impl_->roughnessSampler,bgfx::isValid(textures.roughness)?textures.roughness:impl_->white);
-        bgfx::setTexture(2,impl_->metallicSampler,bgfx::isValid(textures.metallic)?textures.metallic:impl_->white);
-        bgfx::setTexture(3,impl_->normalSampler,bgfx::isValid(textures.normal)?textures.normal:impl_->white);
+        bgfx::setUniform(baseColorMetallic,base); bgfx::setUniform(roughness,rough); bgfx::setUniform(textureFlags,mapFlags);
+        bgfx::setTexture(0,albedoSampler,bgfx::isValid(textures.albedo)?textures.albedo:white);
+        bgfx::setTexture(1,roughnessSampler,bgfx::isValid(textures.roughness)?textures.roughness:white);
+        bgfx::setTexture(2,metallicSampler,bgfx::isValid(textures.metallic)?textures.metallic:white);
+        bgfx::setTexture(3,normalSampler,bgfx::isValid(textures.normal)?textures.normal:white);
         bindLighting(4);
-        impl_->sphere.bind();
+        sphere.bind();
         bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_CULL_CW);
-        bgfx::submit(SceneView,impl_->pbr);
+        bgfx::submit(views.scene,pbr);
     }
 
     const float params[]{bounded(settings.exposure,1,0,100),caps->originBottomLeft?1.0f:0.0f,0,0};
-    bgfx::setViewFrameBuffer(PresentView,impl_->targets->compositeBuffer);
-    bgfx::setViewRect(PresentView,0,0,w,h);
-    bgfx::setViewClear(PresentView,BGFX_CLEAR_NONE);
-    bgfx::setViewTransform(PresentView,nullptr,nullptr);
-    bgfx::setUniform(impl_->presentParams,params);
-    bgfx::setTexture(0,impl_->hdrSampler,impl_->targets->hdr);
-    impl_->fullscreen.bind(); bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-    bgfx::submit(PresentView,impl_->present);
+    bgfx::setViewFrameBuffer(views.present,target.compositeBuffer);
+    bgfx::setViewRect(views.present,0,0,w,h);
+    bgfx::setViewClear(views.present,BGFX_CLEAR_NONE);
+    bgfx::setViewTransform(views.present,nullptr,nullptr);
+    bgfx::setUniform(presentParams,params);
+    const float backgroundValue[]{toLinear(appearance.backgroundSrgb[0]),toLinear(appearance.backgroundSrgb[1]),toLinear(appearance.backgroundSrgb[2]),1};
+    bgfx::setUniform(background,backgroundValue);
+    bgfx::setTexture(0,hdrSampler,target.hdr);
+    fullscreen.bind(); bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+    bgfx::submit(views.present,present);
 
-    bgfx::setViewFrameBuffer(GridView,impl_->targets->compositeBuffer);
-    bgfx::setViewRect(GridView,0,0,w,h);
-    bgfx::setViewClear(GridView,BGFX_CLEAR_NONE); // Preserve scene depth and the tone-mapped color.
-    bgfx::setViewTransform(GridView,view.data(),projection.data());
+    if (drawGrid) {
+    bgfx::setViewFrameBuffer(views.grid,target.compositeBuffer);
+    bgfx::setViewRect(views.grid,0,0,w,h);
+    bgfx::setViewClear(views.grid,BGFX_CLEAR_NONE); // Preserve scene depth and the tone-mapped color.
+    bgfx::setViewTransform(views.grid,view.data(),projection.data());
     model = ModelIdentity; bgfx::setTransform(model.data());
-    const float minor[]{toLinear(76.0f/255),toLinear(76.0f/255),toLinear(76.0f/255),1};
-    const float major[]{toLinear(114.0f/255),toLinear(114.0f/255),toLinear(114.0f/255),1};
+    const float minor[]{toLinear(appearance.gridMinorSrgb[0]),toLinear(appearance.gridMinorSrgb[1]),toLinear(appearance.gridMinorSrgb[2]),bounded(appearance.gridMinorSrgb[3],1,0,1)};
+    const float major[]{toLinear(appearance.gridMajorSrgb[0]),toLinear(appearance.gridMajorSrgb[1]),toLinear(appearance.gridMajorSrgb[2]),bounded(appearance.gridMajorSrgb[3],1,0,1)};
     const float axisU[]{toLinear(1),toLinear(.239f),toLinear(0),.72f};
     const float axisV[]{toLinear(.059f),toLinear(.612f),toLinear(1),.72f};
-    const float gridParams[]{1,1,.005f,caps->homogeneousDepth?1.0f:0.0f};
-    bgfx::setUniform(impl_->gridMinor,minor); bgfx::setUniform(impl_->gridMajor,major);
-    bgfx::setUniform(impl_->gridAxisU,axisU); bgfx::setUniform(impl_->gridAxisV,axisV); bgfx::setUniform(impl_->gridParams,gridParams);
-    impl_->grid.bind();
+    const float gridParameterValues[]{1,1,.005f,caps->homogeneousDepth?1.0f:0.0f};
+    const float gridWidthValues[]{bounded(appearance.gridMinorWidth,.325f,0,8),bounded(appearance.gridMajorWidth,.250f,0,8),1.5f,0};
+    bgfx::setUniform(gridMinor,minor); bgfx::setUniform(gridMajor,major);
+    bgfx::setUniform(gridAxisU,axisU); bgfx::setUniform(gridAxisV,axisV); bgfx::setUniform(gridParams,gridParameterValues);
+    bgfx::setUniform(gridWidths,gridWidthValues);
+    grid.bind();
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LEQUAL |
         BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_INV_SRC_ALPHA));
-    bgfx::submit(GridView,impl_->gridProgram);
+    bgfx::submit(views.grid,gridProgram);
+    }
 
-    bgfx::setViewFrameBuffer(EncodeView,impl_->targets->displayBuffer);
-    bgfx::setViewRect(EncodeView,0,0,w,h);
-    bgfx::setViewClear(EncodeView,BGFX_CLEAR_NONE);
-    bgfx::setViewTransform(EncodeView,nullptr,nullptr);
-    bgfx::setUniform(impl_->presentParams,params);
-    bgfx::setTexture(0,impl_->compositeSampler,impl_->targets->composite);
-    impl_->fullscreen.bind(); bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-    bgfx::submit(EncodeView,impl_->encode);
+    bgfx::setViewFrameBuffer(views.encode,target.displayBuffer);
+    bgfx::setViewRect(views.encode,0,0,w,h);
+    bgfx::setViewClear(views.encode,BGFX_CLEAR_NONE);
+    bgfx::setViewTransform(views.encode,nullptr,nullptr);
+    bgfx::setUniform(presentParams,params);
+    bgfx::setTexture(0,compositeSampler,target.composite);
+    fullscreen.bind(); bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+    bgfx::submit(views.encode,encode);
 }
+
 bgfx::TextureHandle Renderer::viewportTexture() const noexcept {
     if (impl_->targets) return impl_->targets->display;
     return BGFX_INVALID_HANDLE;

@@ -31,12 +31,21 @@ template<class T> void validateLight(const std::optional<T>& light) {
 
 bool sameEntity(const EntityRecord& a, const EntityRecord& b) {
     return a.id == b.id && a.name == b.name && a.parent == b.parent && a.order == b.order &&
-        a.local == b.local && a.model == b.model && sameLight(a.directional,b.directional) && sameLight(a.point,b.point);
+        a.local == b.local && a.model == b.model && sameLight(a.directional,b.directional) && sameLight(a.point,b.point) &&
+        a.environment.has_value()==b.environment.has_value() && (!a.environment || sameEnvironment(*a.environment,*b.environment));
 }
 bool sameProperties(const SceneProperties& a, const SceneProperties& b) {
+    return a.activeEnvironment == b.activeEnvironment;
+}
+bool sameEnvironment(const SceneEnvironment& a, const SceneEnvironment& b) {
     return a.exposure == b.exposure && a.environment.map == b.environment.map &&
         a.environment.enabled == b.environment.enabled && a.environment.intensity == b.environment.intensity &&
         a.environment.rotation == b.environment.rotation;
+}
+SceneEnvironment resolveEnvironment(const Scene& scene) {
+    if (const auto active=scene.find(scene.properties().activeEnvironment); active && active->environment)
+        return *active->environment;
+    return {};
 }
 
 Scene::Scene() : generation_(nextGeneration.fetch_add(1)) {}
@@ -51,6 +60,7 @@ std::optional<EntityRecord> Scene::find(EntityId id) const {
     if (const auto* model = registry_.try_get<ModelReference>(entity)) record.model = model->assetId;
     if (const auto* light = registry_.try_get<SceneDirectionalLight>(entity)) record.directional = *light;
     if (const auto* light = registry_.try_get<ScenePointLight>(entity)) record.point = *light;
+    if (const auto* environment = registry_.try_get<SceneEnvironment>(entity)) record.environment = *environment;
     return record;
 }
 
@@ -128,12 +138,6 @@ std::vector<EntityId> Scene::topmost(const std::vector<EntityId>& selection) con
 
 void Scene::validate(const std::vector<EntityRecord>& records, const SceneProperties& properties) {
     if (records.size() > 100000) throw std::runtime_error("Scene exceeds the 100000 entity limit.");
-    if (!std::isfinite(properties.exposure) || properties.exposure <= 0 ||
-        !std::isfinite(properties.environment.intensity) || properties.environment.intensity < 0 ||
-        !std::isfinite(properties.environment.rotation))
-        throw std::runtime_error("Scene lighting settings must be finite and exposure must be positive.");
-    if (!properties.environment.map.empty() && !safeReference(properties.environment.map))
-        throw std::runtime_error("Environment asset reference must stay inside the project.");
     std::unordered_map<EntityId,EntityId> parents;
     size_t directionalCount{}, pointCount{};
     for (const auto& record : records) {
@@ -143,13 +147,25 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             throw std::runtime_error("Entity names must contain 1 to 1024 UTF-8 bytes.");
         if (!math::finite(record.local) || !math::isAffine(record.local))
             throw std::runtime_error("Entity local transform must be a finite affine matrix.");
-        if (record.model && !safeReference(*record.model))
+        if (record.model && !safeReference(record.model->id))
             throw std::runtime_error("Model asset reference must be a nonempty project-relative path.");
         validateLight(record.directional); validateLight(record.point);
+        if (record.environment) {
+            const auto& environment=*record.environment;
+            if (!std::isfinite(environment.exposure) || environment.exposure<=0 ||
+                !std::isfinite(environment.environment.intensity) || environment.environment.intensity<0 ||
+                !std::isfinite(environment.environment.rotation))
+                throw std::runtime_error("Environment settings must be finite and exposure must be positive.");
+            if (!environment.environment.map.empty() && !safeReference(environment.environment.map))
+                throw std::runtime_error("Environment asset reference must stay inside the project.");
+        }
         directionalCount += record.directional.has_value(); pointCount += record.point.has_value();
     }
     if (directionalCount > MaximumDirectionalLights || pointCount > MaximumPointLights)
         throw std::runtime_error("Scenes support at most 4 directional lights and 16 point lights.");
+    if (properties.activeEnvironment && std::none_of(records.begin(),records.end(),[&](const auto& record) {
+        return record.id==properties.activeEnvironment && record.environment.has_value();
+    })) throw std::runtime_error("The active environment must identify an Environment entity.");
     std::unordered_map<EntityId,uint8_t> colors;
     for (const auto& [id,parent] : parents) {
         if (parent && !parents.contains(parent)) throw std::runtime_error("Scene references a missing parent entity.");
@@ -180,6 +196,7 @@ void Scene::apply(const std::vector<EntityRecord>& records, const ScenePropertie
         if (record.model) candidate.emplace<ModelReference>(entity,*record.model);
         if (record.directional) candidate.emplace<SceneDirectionalLight>(entity,*record.directional);
         if (record.point) candidate.emplace<ScenePointLight>(entity,*record.point);
+        if (record.environment) candidate.emplace<SceneEnvironment>(entity,*record.environment);
         entities.emplace(record.id,entity);
     }
     SceneProperties prepared = properties;
@@ -188,6 +205,10 @@ void Scene::apply(const std::vector<EntityRecord>& records, const ScenePropertie
     properties_ = std::move(prepared);
     generation_ = nextGeneration.fetch_add(1);
     ++revision_;
+}
+void Scene::adoptPrepared(Scene& candidate) noexcept {
+    registry_.swap(candidate.registry_);entities_.swap(candidate.entities_);properties_=candidate.properties_;
+    generation_=candidate.generation_;++revision_;
 }
 
 } // namespace crimson

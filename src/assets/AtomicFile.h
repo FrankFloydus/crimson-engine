@@ -8,5 +8,6 @@ namespace crimson {
 // Write a complete sibling temporary file, then replace the destination atomically.
 // Throws on failure; an existing destination is retained until publication succeeds.
 void writeFileAtomically(const std::filesystem::path& path, std::string_view contents);
+void copyFileAtomically(const std::filesystem::path& source,const std::filesystem::path& destination);
 
 } // namespace crimson

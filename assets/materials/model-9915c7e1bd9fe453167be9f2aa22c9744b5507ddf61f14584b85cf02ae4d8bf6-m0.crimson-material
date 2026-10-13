@@ -1,0 +1,65 @@
+{
+  "alphaCutoff": 0.5,
+  "alphaMask": false,
+  "baseColor": [
+    1.0,
+    1.0,
+    1.0,
+    1.0
+  ],
+  "baseColorTexture": {
+    "image": "assets/models/model-9915c7e1bd9fe453167be9f2aa22c9744b5507ddf61f14584b85cf02ae4d8bf6/images/1.jpg",
+    "magFilter": 0,
+    "minFilter": 5,
+    "uv": 0,
+    "wrapU": 0,
+    "wrapV": 0
+  },
+  "doubleSided": true,
+  "emissive": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "emissiveTexture": {
+    "image": "",
+    "magFilter": 0,
+    "minFilter": 0,
+    "uv": 0,
+    "wrapU": 0,
+    "wrapV": 0
+  },
+  "id": "assets/materials/model-9915c7e1bd9fe453167be9f2aa22c9744b5507ddf61f14584b85cf02ae4d8bf6-m0.crimson-material",
+  "metallic": 1.0,
+  "metallicRoughnessTexture": {
+    "image": "assets/models/model-9915c7e1bd9fe453167be9f2aa22c9744b5507ddf61f14584b85cf02ae4d8bf6/images/2.png",
+    "magFilter": 0,
+    "minFilter": 5,
+    "uv": 0,
+    "wrapU": 0,
+    "wrapV": 0
+  },
+  "name": "tripo_mat_e2d9edc9-a284-40c0-a603-a929041cabe3",
+  "normalScale": 1.0,
+  "normalTexture": {
+    "image": "assets/models/model-9915c7e1bd9fe453167be9f2aa22c9744b5507ddf61f14584b85cf02ae4d8bf6/images/0.jpg",
+    "magFilter": 0,
+    "minFilter": 5,
+    "uv": 0,
+    "wrapU": 0,
+    "wrapV": 0
+  },
+  "occlusionStrength": 1.0,
+  "occlusionTexture": {
+    "image": "",
+    "magFilter": 0,
+    "minFilter": 0,
+    "uv": 0,
+    "wrapU": 0,
+    "wrapV": 0
+  },
+  "originModel": "assets/models/model-9915c7e1bd9fe453167be9f2aa22c9744b5507ddf61f14584b85cf02ae4d8bf6/manifest.json",
+  "roughness": 1.0,
+  "type": "crimson-material",
+  "version": 1
+}

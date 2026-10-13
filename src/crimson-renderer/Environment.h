@@ -4,6 +4,7 @@
 #include <bgfx/bgfx.h>
 #include <array>
 #include <filesystem>
+#include <memory>
 #include <span>
 #include <vector>
 
@@ -61,6 +62,15 @@ bool writeCache(const std::filesystem::path& path, uint64_t key, const Settings&
 
 } // namespace ibl
 
+struct PreparedEnvironment {
+    ibl::Bake data;
+    ibl::Settings settings;
+    std::uint64_t key{};
+    std::string status;
+};
+// Worker-safe: source IO, decoding, preprocessing and derived-cache writes only.
+std::shared_ptr<const PreparedEnvironment> prepareEnvironmentCpu(const std::filesystem::path&,const std::string&);
+
 // Renderer-owned; prepare at initialization or on assignment, never inside render.
 // Construction performs no GPU work. Destroy before bgfx::shutdown().
 class EnvironmentLighting {
@@ -70,6 +80,7 @@ public:
     EnvironmentLighting(const EnvironmentLighting&) = delete;
     EnvironmentLighting& operator=(const EnvironmentLighting&) = delete;
     bool prepare(const std::filesystem::path& projectRoot, const std::string& sourceId);
+    bool publish(const PreparedEnvironment&);
     bgfx::TextureHandle diffuse() const { return diffuse_; }
     bgfx::TextureHandle specular() const { return specular_; }
     bgfx::TextureHandle brdf() const { return brdf_; }

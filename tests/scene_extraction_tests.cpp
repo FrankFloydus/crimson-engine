@@ -25,11 +25,11 @@ void run() {
     const auto rotation = math::rotation(math::axisAngle({0,1,0},std::numbers::pi/2));
     auto parent=entity(1,"Parent",0,math::translation({10,2,3})*rotation);
     auto model=entity(2,"Nested model",1,math::translation({2,0,0})*math::scaling({-2,3,4}));
-    model.model="assets/models/first/manifest.json";
+    model.model=AssetRef<ModelAsset>{"assets/models/first/manifest.json"};
     auto other=entity(3,"Repeated model",0,math::translation({-5,0,0}));
     other.model=model.model;
     auto missing=entity(4,"Missing model",0,math::translation({7,0,0}));
-    missing.model="assets/models/missing/manifest.json";
+    missing.model=AssetRef<ModelAsset>{"assets/models/missing/manifest.json"};
     Mat4 shear;
     shear[4]=.8f; shear[8]=.2f; shear[9]=.7f;
     auto sun=entity(5,"Sun",1,shear*math::scaling({2,3,4}));
@@ -43,7 +43,7 @@ void run() {
             "Extraction ordering must be deterministic across registry allocation order.");
     require(extracted.models[0].assetId==extracted.models[1].assetId,"Repeated models lost their shared asset identity.");
     require(close(extracted.models[0].world,parent.local*model.local),"Nested model did not accumulate its parent transform.");
-    require(extracted.models[2].assetId==*missing.model,"An unresolved asset reference was discarded.");
+    require(extracted.models[2].assetId==missing.model->id,"An unresolved asset reference was discarded.");
     require(extracted.directional.size()==1 && extracted.points.size()==1,"Light components were not extracted.");
     require(close(extracted.directional[0].direction,math::normalized({-1,-.7f,.2f})),
             "Directional light discarded its authored forward axis under affine parenting.");
@@ -53,7 +53,7 @@ void run() {
     require(extracted.points[0].intensity==23 && extracted.points[0].enabled,"Point transform scale changed its physical properties.");
 
     const ModelBoundsQuery query=[&](const std::string& id)->std::optional<Aabb> {
-        if (id==*model.model) return Aabb{{-1,-1,-1},{1,1,1},true};
+        if (id==model.model->id) return Aabb{{-1,-1,-1},{1,1,1},true};
         return {};
     };
     const std::array<EntityId,1> modelSelection{2};

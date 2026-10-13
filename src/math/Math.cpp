@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <numbers>
 #include <stdexcept>
 
 namespace crimson::math {
@@ -83,6 +84,9 @@ Mat4 rotation(const Quat& value) {
 }
 Mat4 scaling(const Vec3& value) { return own(glm::scale(glm::dmat4(1),native(value))); }
 Vec3 transformPoint(const Mat4& matrix, const Vec3& value) { return own(glm::dvec3(native(matrix)*glm::dvec4(native(value),1))); }
+Vec4 transformHomogeneous(const Mat4& matrix,const Vec4& value) {
+    const auto result=native(matrix)*glm::dvec4(value[0],value[1],value[2],value[3]);return {result.x,result.y,result.z,result.w};
+}
 Vec3 transformDirection(const Mat4& matrix, const Vec3& value) { return own(glm::dvec3(native(matrix)*glm::dvec4(native(value),0))); }
 bool isAffine(const Mat4& matrix, double tolerance) {
     return finite(matrix) && std::abs(matrix[3])<=tolerance && std::abs(matrix[7])<=tolerance &&
@@ -114,6 +118,127 @@ Mat4 orthonormalFrame(const Mat4& matrix) {
     const auto y=normalized(originalY-x*dot(x,originalY),fallback);
     const auto z=normalized(cross(x,y),{0,0,1});
     return {x[0],x[1],x[2],0, y[0],y[1],y[2],0, z[0],z[1],z[2],0, matrix[12],matrix[13],matrix[14],1};
+}
+namespace {
+glm::dmat3 eulerBasis(const Vec3& angles) {return glm::mat3_cast(glm::dquat(native(angles)));}
+glm::dvec3 perpendicular(const glm::dvec3& unit,const glm::dvec3& preferred) {
+    auto result=preferred-unit*glm::dot(preferred,unit);double magnitude=glm::length(result);
+    if(!(magnitude>1e-10)) {
+        glm::dvec3 axis(0);const auto smallest=std::abs(unit.x)<=std::abs(unit.y) && std::abs(unit.x)<=std::abs(unit.z) ? 0:std::abs(unit.y)<=std::abs(unit.z) ? 1:2;
+        axis[smallest]=1;result=axis-unit*glm::dot(axis,unit);magnitude=glm::length(result);
+    }
+    return result/magnitude;
+}
+glm::dmat3 editableBasis(const glm::dmat3& linear,const glm::dmat3& hint) {
+    const double xLength=glm::length(linear[0]),yLength=glm::length(linear[1]),zLength=glm::length(linear[2]);
+    glm::dvec3 x,y,z;
+    if(xLength>0) {
+        x=linear[0]/xLength;
+        const auto remainder=linear[1]-x*glm::dot(x,linear[1]);
+        if(glm::length(remainder)>yLength*1e-10 && yLength>0)y=glm::normalize(remainder);
+        else {
+            const auto remainingZ=linear[2]-x*glm::dot(x,linear[2]);
+            y=zLength>0 && glm::length(remainingZ)>zLength*1e-10 ? glm::normalize(glm::cross(remainingZ,x)):perpendicular(x,hint[1]);
+        }
+        z=glm::normalize(glm::cross(x,y));y=glm::normalize(glm::cross(z,x));
+    } else if(yLength>0) {
+        y=linear[1]/yLength;const auto remainder=linear[2]-y*glm::dot(y,linear[2]);
+        if(zLength>0 && glm::length(remainder)>zLength*1e-10){z=glm::normalize(remainder);x=glm::normalize(glm::cross(y,z));}
+        else {x=perpendicular(y,hint[0]);z=glm::normalize(glm::cross(x,y));}
+    } else if(zLength>0) {
+        z=linear[2]/zLength;x=perpendicular(z,hint[0]);y=glm::normalize(glm::cross(z,x));
+    } else return hint;
+    glm::dmat3 result(x,y,z);
+    // Matrix storage cannot identify the originally mirrored axis. With no
+    // history the canonical reflection is placed on X; a reference may retain
+    // any equivalent pair of sign flips without changing the affine matrix.
+    if(glm::dot(result[2],linear[2])<0) {result[0]=-result[0];result[2]=-result[2];}
+    return result;
+}
+Vec3 closestEuler(const glm::dmat3& basis,const Vec3& reference) {
+    constexpr double pi=std::numbers::pi,tau=2*pi;
+    const auto wrap=[](double angle,double near){return angle+tau*std::round((near-angle)/tau);};
+    const double cosine=std::hypot(basis[0][0],basis[0][1]);
+    if(cosine<=1e-6) {
+        const double sign=basis[0][2]<0 ? 1.0:-1.0;
+        const double wanted=reference[0]-sign*reference[2];
+        const double coupled=wrap(std::atan2(-basis[2][1],basis[1][1]),wanted);
+        const double adjustment=.5*(coupled-wanted);
+        return {reference[0]+adjustment,wrap(sign*pi*.5,reference[1]),reference[2]-sign*adjustment};
+    }
+    const glm::dvec3 base{std::atan2(basis[1][2],basis[2][2]),std::atan2(-basis[0][2],cosine),std::atan2(basis[0][1],basis[0][0])};
+    const auto near=[&](glm::dvec3 value){for(int i=0;i<3;++i)value[i]=wrap(value[i],reference[static_cast<std::size_t>(i)]);return value;};
+    const auto a=near(base),b=near({base.x+pi,pi-base.y,base.z+pi});
+    const auto referenceNative=native(reference);
+    return own(glm::dot(b-referenceNative,b-referenceNative)<glm::dot(a-referenceNative,a-referenceNative) ? b:a);
+}
+std::optional<glm::dmat3> capturedBasis(const AffineTransformFields& fields) {
+    if(!isAffine(fields.rotation) || !finite(fields.rotationRadians) || !finite(fields.scale))return {};
+    const glm::dmat3 raw(native(fields.rotation));
+    for(int i=0;i<3;++i) {
+        if(std::abs(glm::length(raw[i])-1)>1e-4)return {};
+        for(int j=i+1;j<3;++j)if(std::abs(glm::dot(raw[i],raw[j]))>1e-4)return {};
+    }
+    if(glm::determinant(raw)<=0)return {};
+    const auto x=glm::normalize(raw[0]),y=glm::normalize(raw[1]-x*glm::dot(x,raw[1]));
+    return glm::dmat3(x,y,glm::normalize(glm::cross(x,y)));
+}
+}
+Mat4 eulerRotationXYZ(const Vec3& angles) {return finite(angles) ? own(glm::dmat4(eulerBasis(angles))):Mat4{};}
+std::optional<AffineTransformFields> affineTransformFields(const Mat4& matrix,const AffineTransformFields* reference) {
+    if(!isAffine(matrix))return {};
+    const bool hinted=reference && finite(reference->rotationRadians);
+    const glm::dmat3 linear(native(matrix)),hint=hinted ? eulerBasis(reference->rotationRadians):glm::dmat3(1);
+    auto basis=editableBasis(linear,hint);
+    if(hinted) {
+        glm::dmat3 chosen=basis;double best=-std::numeric_limits<double>::infinity();
+        for(const auto& signs:std::array<glm::dvec3,4>{{{1,1,1},{1,-1,-1},{-1,1,-1},{-1,-1,1}}}) {
+            auto candidate=basis;double score=0;for(int axis=0;axis<3;++axis){candidate[axis]*=signs[axis];score+=glm::dot(candidate[axis],hint[axis]);}
+            if(score>best){best=score;chosen=candidate;}
+        }
+        basis=chosen;
+    }
+    AffineTransformFields fields;fields.position={matrix[12],matrix[13],matrix[14]};fields.rotation=own(glm::dmat4(basis));
+    fields.rotationRadians=closestEuler(basis,hinted ? reference->rotationRadians:Vec3{});fields.singular=handedness(matrix)==0;
+    for(int axis=0;axis<3;++axis) {
+        const double size=glm::length(linear[axis]);const double orientation=glm::dot(basis[axis],linear[axis]);
+        fields.scale[static_cast<std::size_t>(axis)]=static_cast<float>(orientation<0 ? -size:size);
+        for(int other=axis+1;other<3;++other) {
+            const double relative=size*glm::length(linear[other]);
+            if(relative>0 && std::abs(glm::dot(linear[axis],linear[other]))>relative*2e-5)fields.sheared=true;
+        }
+    }
+    return finite(fields.scale) && finite(fields.rotationRadians) ? std::optional{fields}:std::nullopt;
+}
+std::optional<Mat4> withAffinePosition(const Mat4& matrix,const Vec3& position) {
+    if(!isAffine(matrix) || !finite(position))return {};
+    if(position==Vec3{matrix[12],matrix[13],matrix[14]})return matrix;
+    auto result=matrix;for(std::size_t axis=0;axis<3;++axis)result[12+axis]=position[axis];return result;
+}
+std::optional<Mat4> withAffineRotation(const Mat4& matrix,const AffineTransformFields& captured,const Vec3& angles) {
+    if(!isAffine(matrix) || !finite(angles))return {};
+    if(angles==captured.rotationRadians)return matrix;
+    const auto old=capturedBasis(captured);if(!old)return {};
+    const glm::dmat3 linear(native(matrix));const auto changed=eulerBasis(angles)*glm::transpose(*old)*linear;
+    auto result=matrix;for(int column=0;column<3;++column)for(int row=0;row<3;++row)result.at(row,column)=static_cast<float>(changed[column][row]);
+    return finite(result) ? std::optional{result}:std::nullopt;
+}
+std::optional<Mat4> withAffineScale(const Mat4& matrix,const AffineTransformFields& captured,const Vec3& requested) {
+    if(!isAffine(matrix) || !finite(requested) || !finite(captured.scale))return {};
+    if(requested==captured.scale)return matrix;
+    const auto basis=capturedBasis(captured);if(!basis)return {};
+    const glm::dmat3 linear(native(matrix));auto result=matrix;
+    for(int axis=0;axis<3;++axis) {
+        const auto index=static_cast<std::size_t>(axis);if(requested[index]==captured.scale[index])continue;
+        glm::dvec3 column;
+        if(captured.scale[index]!=0)column=linear[axis]*(static_cast<double>(requested[index])/captured.scale[index]);
+        else {
+            if(glm::length(linear[axis])!=0)return {}; // Invalid captured fields must not erase a nonzero column.
+            column=(*basis)[axis]*static_cast<double>(requested[index]);
+        }
+        for(int row=0;row<3;++row)result.at(row,axis)=static_cast<float>(column[row]);
+    }
+    return finite(result) ? std::optional{result}:std::nullopt;
 }
 void include(Aabb& bounds, const Vec3& point) {
     if (!finite(point)) return;

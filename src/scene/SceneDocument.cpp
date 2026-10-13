@@ -1,16 +1,20 @@
 #include "SceneDocument.h"
 #include "assets/AtomicFile.h"
 #include "math/Json.h"
+#include "resources/AssetRefJson.h"
 
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <charconv>
+#include <cmath>
 #include <fstream>
 #include <iomanip>
+#include <iterator>
 #include <limits>
 #include <random>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -88,29 +92,49 @@ template<class Light> Light readLight(const Json& json) {
     result.enabled = json.at("enabled").get<bool>();
     return result;
 }
-struct StoredScene {
-    std::string name;
-    std::vector<EntityRecord> records;
-    SceneProperties properties;
-};
-StoredScene readScene(const std::filesystem::path& path) {
+uint64_t fingerprint(std::string_view contents) {
+    uint64_t result=14695981039346656037ull;
+    for (const auto character:contents) { result^=static_cast<unsigned char>(character); result*=1099511628211ull; }
+    return result;
+}
+std::string readText(const std::filesystem::path& path) {
     const auto size = std::filesystem::file_size(path);
     if (!size || size > 64u*1024u*1024u) throw std::runtime_error("Scene file is empty or larger than 64 MiB.");
     std::ifstream input(path,std::ios::binary);
     if (!input) throw std::runtime_error("Cannot read scene asset.");
-    const Json json = Json::parse(input);
-    if (json.at("version") != 1 || json.at("type") != "crimson-scene")
+    return std::string(std::istreambuf_iterator<char>(input),{});
+}
+SceneEnvironment readEnvironment(const Json& json) {
+    SceneEnvironment result;
+    result.exposure=json.at("exposure").get<float>();
+    const auto& environment=json.at("environment");
+    result.environment.map=environment.at("map").get<std::string>();
+    result.environment.enabled=environment.at("enabled").get<bool>();
+    result.environment.intensity=environment.at("intensity").get<float>();
+    result.environment.rotation=environment.at("rotation").get<float>();
+    return result;
+}
+Json environmentJson(const SceneEnvironment& value) {
+    const auto& environment=value.environment;
+    return {{"exposure",value.exposure},{"environment",{{"map",environment.map},
+        {"enabled",environment.enabled},{"intensity",environment.intensity},{"rotation",environment.rotation}}}};
+}
+bool validCamera(const Camera& camera) {
+    return math::finite(camera.position) && math::finite(camera.target) && math::finite(camera.up) &&
+        std::isfinite(camera.fov) && camera.fov>0 && camera.fov<180 && std::isfinite(camera.nearPlane) &&
+        std::isfinite(camera.farPlane) && camera.nearPlane>0 && camera.farPlane>camera.nearPlane;
+}
+SceneSnapshot readScene(const std::filesystem::path& path) {
+    const auto contents=readText(path);
+    const Json json=Json::parse(contents);
+    const auto version=json.at("version").get<int>();
+    if ((version!=1 && version!=2) || json.at("type") != "crimson-scene")
         throw std::runtime_error("Unsupported scene file type or version.");
-    StoredScene result;
+    SceneSnapshot result; result.fingerprint=fingerprint(contents);
     result.name = json.at("name").get<std::string>();
     if (result.name.empty() || result.name.size() > 1024) throw std::runtime_error("Scene name is invalid.");
     const auto& settings = json.at("settings");
-    result.properties.exposure = settings.at("exposure").get<float>();
-    const auto& environment = settings.at("environment");
-    result.properties.environment.map = environment.at("map").get<std::string>();
-    result.properties.environment.enabled = environment.at("enabled").get<bool>();
-    result.properties.environment.intensity = environment.at("intensity").get<float>();
-    result.properties.environment.rotation = environment.at("rotation").get<float>();
+    if (version==2) result.properties.activeEnvironment=parseId(settings.at("activeEnvironment"));
     const auto& entities = json.at("entities");
     if (!entities.is_array() || entities.size() > 100000) throw std::runtime_error("Invalid scene entity array.");
     result.records.reserve(entities.size());
@@ -124,29 +148,54 @@ StoredScene readScene(const std::filesystem::path& path) {
             throw std::runtime_error("Scene has an invalid sibling order.");
         record.order = order.get<uint32_t>();
         record.local = entity.at("local").get<Mat4>();
-        if (entity.contains("model")) record.model = entity.at("model").get<std::string>();
+        if (entity.contains("model")) record.model=entity.at("model").get<AssetRef<ModelAsset>>();
         if (entity.contains("directional")) record.directional = readLight<SceneDirectionalLight>(entity.at("directional"));
         if (entity.contains("point")) record.point = readLight<ScenePointLight>(entity.at("point"));
+        if (version==2 && entity.contains("environment")) record.environment=readEnvironment(entity.at("environment"));
         result.records.push_back(std::move(record));
+    }
+    if (version==1) {
+        // The old scene-level settings become one ordinary entity. Choosing the
+        // first unused positive ID makes reopening old files deterministic.
+        EntityRecord environment; environment.id=1; environment.name="Environment";
+        while (std::any_of(result.records.begin(),result.records.end(),[&](const auto& record){return record.id==environment.id;})) ++environment.id;
+        environment.order=nextOrder(result.records,NoEntity);
+        environment.environment=readEnvironment(settings);
+        result.properties.activeEnvironment=environment.id;
+        result.records.push_back(std::move(environment));
+    }
+    if (json.contains("previewCamera")) {
+        const auto& source=json.at("previewCamera"); Camera camera;
+        camera.position=source.at("position").get<Vec3>(); camera.target=source.at("target").get<Vec3>();
+        camera.up=source.at("up").get<Vec3>(); camera.fov=source.at("fov").get<float>();
+        camera.nearPlane=source.at("near").get<float>(); camera.farPlane=source.at("far").get<float>();
+        if (!validCamera(camera)) throw std::runtime_error("Scene preview camera is invalid.");
+        result.previewCamera=camera;
     }
     Scene::validate(result.records,result.properties);
     return result;
 }
-Json writeScene(const std::string& name, const Scene& scene) {
-    const auto& properties = scene.properties();
-    const auto& environment = properties.environment;
+Json writeScene(const SceneSnapshot& snapshot) {
+    Scene::validate(snapshot.records,snapshot.properties);
     Json entities = Json::array();
-    for (const auto& record : scene.records()) {
+    for (const auto& record : snapshot.records) {
         Json entity{{"id",hexId(record.id)}, {"name",record.name}, {"parent",hexId(record.parent)},
             {"order",record.order}, {"local",record.local}};
         if (record.model) entity["model"] = *record.model;
         if (record.directional) entity["directional"] = lightJson(*record.directional);
         if (record.point) entity["point"] = lightJson(*record.point);
+        if (record.environment) entity["environment"]=environmentJson(*record.environment);
         entities.push_back(std::move(entity));
     }
-    return {{"version",1}, {"type","crimson-scene"}, {"name",name}, {"entities",std::move(entities)},
-        {"settings",{{"exposure",properties.exposure},{"environment",{{"map",environment.map},
-        {"enabled",environment.enabled},{"intensity",environment.intensity},{"rotation",environment.rotation}}}}}};
+    Json result{{"version",2},{"type","crimson-scene"},{"name",snapshot.name},{"entities",std::move(entities)},
+        {"settings",{{"activeEnvironment",hexId(snapshot.properties.activeEnvironment)}}}};
+    if (snapshot.previewCamera) {
+        if (!validCamera(*snapshot.previewCamera)) throw std::runtime_error("Scene preview camera is invalid.");
+        const auto& camera=*snapshot.previewCamera;
+        result["previewCamera"]={{"position",camera.position},{"target",camera.target},{"up",camera.up},
+            {"fov",camera.fov},{"near",camera.nearPlane},{"far",camera.farPlane}};
+    }
+    return result;
 }
 SceneCommand difference(const std::string& label, const std::vector<EntityRecord>& before,
                         const std::vector<EntityRecord>& after, const SceneProperties& beforeProperties,
@@ -174,6 +223,21 @@ SceneCommand difference(const std::string& label, const std::vector<EntityRecord
     return command;
 }
 }
+
+std::filesystem::path sceneAssetPath(const std::filesystem::path& root,const std::string& id) { return scenePath(root,id); }
+SceneSnapshot readSceneSnapshot(const std::filesystem::path& root,const std::string& id) {
+    auto result=readScene(scenePath(root,id)); result.id=id; return result;
+}
+std::string serializeSceneSnapshot(const SceneSnapshot& snapshot) {
+    if (snapshot.name.empty() || snapshot.name.size()>1024 || snapshot.name.find_first_not_of(" \t\r\n")==std::string::npos)
+        throw std::runtime_error("Scene name must contain 1 to 1024 UTF-8 bytes.");
+    return writeScene(snapshot).dump(2)+"\n";
+}
+void saveSceneSnapshot(const std::filesystem::path& root,const std::string& id,const SceneSnapshot& snapshot) {
+    writeFileAtomically(scenePath(root,id),serializeSceneSnapshot(snapshot));
+}
+uint64_t sceneFileFingerprint(const std::filesystem::path& root,const std::string& id) { return fingerprint(readText(scenePath(root,id))); }
+uint64_t sceneTextFingerprint(std::string_view contents) noexcept { return fingerprint(contents); }
 
 std::vector<SceneAssetEntry> scanSceneAssets(const std::filesystem::path& root, std::vector<std::string>* diagnostics) {
     std::vector<SceneAssetEntry> entries;
@@ -244,19 +308,18 @@ void SceneDocument::newScene() {
     scene_.apply({},SceneProperties{});
     history_.reset(false); transaction_.reset(); selection_ = {};
     assetId_.clear(); name_ = "Untitled"; status_ = "New unsaved scene.";
+    previewCamera_.reset(); loadedFingerprint_=0;
+    ++documentGeneration_;
 }
 bool SceneDocument::load(const std::string& id) {
     try {
-        auto stored = readScene(scenePath(projectRoot_,id));
-        std::string preparedId = id;
-        scene_.apply(stored.records,stored.properties);
-        transaction_.reset(); history_.reset(true); selection_ = {};
-        assetId_ = std::move(preparedId); name_ = std::move(stored.name);
-        status_ = "Opened scene: " + name_;
-        return true;
+        return openPreparedSnapshot(readSceneSnapshot(projectRoot_,id));
     } catch (const std::exception& error) { status_ = "Could not open scene: " + std::string(error.what()); return false; }
 }
-bool SceneDocument::save(const std::string& name, bool saveAs) {
+bool SceneDocument::openPreparedSnapshot(const SceneSnapshot& snapshot) {
+    return applyPreparedSnapshot(snapshot,false,true);
+}
+bool SceneDocument::save(const std::string& name, bool saveAs, bool overwriteExternal) {
     if (transaction_ && !commit()) return false;
     try {
         std::string savedName = name.empty() ? name_ : name;
@@ -267,13 +330,90 @@ bool SceneDocument::save(const std::string& name, bool saveAs) {
             do { savedId = "assets/scenes/" + uniqueToken() + ".crimson-scene"; }
             while (std::filesystem::exists(scenePath(projectRoot_,savedId)));
         }
-        const auto contents = writeScene(savedName,scene_).dump(2) + "\n";
+        if (!saveAs && !assetId_.empty() && !overwriteExternal && externalFileChanged())
+            throw std::runtime_error("The scene file changed outside the editor. Reload, Save As, or explicitly overwrite it.");
+        const SceneSnapshot snapshot{savedId,savedName,scene_.records(),scene_.properties(),previewCamera_};
+        const auto contents=serializeSceneSnapshot(snapshot);
         writeFileAtomically(scenePath(projectRoot_,savedId),contents);
         assetId_ = std::move(savedId); name_ = std::move(savedName);
         history_.savedState_ = history_.state_;
+        loadedFingerprint_=fingerprint(contents);
         status_ = "Saved scene: " + name_;
         return true;
     } catch (const std::exception& error) { status_ = "Could not save scene: " + std::string(error.what()); return false; }
+}
+bool SceneDocument::externalFileChanged() const {
+    if (assetId_.empty()) return false;
+    try { return sceneFileFingerprint(projectRoot_,assetId_)!=loadedFingerprint_; }
+    catch (...) { return true; }
+}
+std::vector<std::string> SceneDocument::historicalModelReferences() const {
+    std::unordered_set<std::string> references;
+    const auto add=[&](const EntityRecord& record) { if (record.model) references.insert(record.model->id); };
+    for (const auto& command:history_.commands_) for (const auto& change:command.entities) {
+        if (change.before) add(*change.before); if (change.after) add(*change.after);
+    }
+    if (transaction_) for (const auto& record:transaction_->before) add(record);
+    std::vector<std::string> result(references.begin(),references.end());
+    std::sort(result.begin(),result.end()); return result;
+}
+bool SceneDocument::reloadFromDisk() {
+    if (assetId_.empty()) return false;
+    const auto selection=selection_; const auto id=assetId_;
+    if (!load(id)) return false;
+    selection_=selection; sanitizeSelection(); return true;
+}
+bool SceneDocument::applyReloadSnapshot(const SceneSnapshot& snapshot,bool preserveSelection) {
+    return applyPreparedSnapshot(snapshot,preserveSelection,false);
+}
+bool SceneDocument::applyPreparedSnapshot(const SceneSnapshot& snapshot,bool preserveSelection,bool opening) {
+    try {
+        if (snapshot.id.empty()) throw std::runtime_error("Reloaded scene has no asset identity.");
+        scenePath(projectRoot_,snapshot.id);
+        std::string preparedId=snapshot.id, preparedName=snapshot.name;
+        if (preparedName.empty() || preparedName.size()>1024) throw std::runtime_error("Scene name is invalid.");
+        if (snapshot.previewCamera && !validCamera(*snapshot.previewCamera)) throw std::runtime_error("Scene preview camera is invalid.");
+        scene_.apply(snapshot.records,snapshot.properties);
+        assetId_=std::move(preparedId); name_=std::move(preparedName); previewCamera_=snapshot.previewCamera;
+        loadedFingerprint_=snapshot.fingerprint; transaction_.reset(); history_.reset(true);
+        ++documentGeneration_;
+        if (!preserveSelection) selection_={};
+        sanitizeSelection(); status_=std::string(opening ? "Opened scene: " : "Reloaded scene: ")+name_; return true;
+    } catch (const std::exception& error) { status_=std::string(opening ? "Could not open scene: " : "Could not reload scene: ")+error.what(); return false; }
+}
+bool SceneDocument::applyExternalAssetChanges(const std::vector<EntityRecord>& records,const SceneProperties& properties,
+                                             const std::string& label,bool wasDirty) {
+    try {
+        auto saved=loadedFingerprint_;if(!assetId_.empty())try{saved=sceneFileFingerprint(projectRoot_,assetId_);}catch(...){saved=0;}
+        auto prepared=prepareExternalAssetChanges(records,properties,label,wasDirty,saved);return commitExternalAssetChanges(std::move(prepared));
+    } catch (const std::exception& error) { status_=error.what(); return false; }
+}
+SceneDocument::PreparedExternalChange SceneDocument::prepareExternalAssetChanges(const std::vector<EntityRecord>& records,const SceneProperties& properties,
+                                                                               const std::string& label,bool wasDirty,uint64_t savedFingerprint) const {
+    if(transaction_)throw std::runtime_error("Finish the active scene edit before deleting project assets.");
+    PreparedExternalChange prepared;prepared.scene=std::make_unique<Scene>();prepared.scene->apply(records,properties);
+    prepared.selection=selection_;std::unordered_set<EntityId> seen;
+    std::erase_if(prepared.selection.ids,[&](EntityId id){return !prepared.scene->contains(id)||!seen.insert(id).second;});
+    if(std::find(prepared.selection.ids.begin(),prepared.selection.ids.end(),prepared.selection.primary)==prepared.selection.ids.end())
+        prepared.selection.primary=prepared.selection.ids.empty()?NoEntity:prepared.selection.ids.back();
+    prepared.owner=this;prepared.expectedId=assetId_;prepared.expectedGeneration=documentGeneration_;prepared.expectedRevision=scene_.revision();
+    prepared.expectedState=history_.state_;prepared.expectedSavedState=history_.savedState_;prepared.expectedFingerprint=loadedFingerprint_;
+    prepared.status=label;prepared.wasDirty=wasDirty;prepared.savedFingerprint=savedFingerprint;return prepared;
+}
+SceneDocument::PreparedExternalChange SceneDocument::prepareNewSceneAfterAssetDeletion() const {
+    auto prepared=prepareExternalAssetChanges({},SceneProperties{},"Deleted scene; new unsaved scene.",true,0);
+    prepared.newDocument=true;prepared.selection={};prepared.name="Untitled";return prepared;
+}
+bool SceneDocument::canCommitExternalAssetChanges(const PreparedExternalChange& p)const noexcept {
+    return p.owner==this&&p.scene&&!transaction_&&p.expectedId==assetId_&&p.expectedGeneration==documentGeneration_&&p.expectedRevision==scene_.revision()&&
+        p.expectedState==history_.state_&&p.expectedSavedState==history_.savedState_&&p.expectedFingerprint==loadedFingerprint_;
+}
+bool SceneDocument::commitExternalAssetChanges(PreparedExternalChange&& p)noexcept {
+    if(!canCommitExternalAssetChanges(p))return false;
+    scene_.adoptPrepared(*p.scene);selection_.ids.swap(p.selection.ids);selection_.primary=p.selection.primary;
+    history_.reset(!p.wasDirty);transaction_.reset();loadedFingerprint_=p.savedFingerprint;status_.swap(p.status);
+    if(p.newDocument){assetId_.clear();name_.swap(p.name);previewCamera_.reset();++documentGeneration_;}
+    p.owner=nullptr;return true;
 }
 bool SceneDocument::begin(const std::string& label) {
     if (transaction_) { status_ = "Finish the active edit first."; return false; }
@@ -346,7 +486,7 @@ EntityId SceneDocument::createEmpty(const std::string& name) {
     EntityRecord record; record.name = name; return create(std::move(record),"Create entity");
 }
 EntityId SceneDocument::createModel(const std::string& assetId, const std::string& name, const Mat4& local) {
-    EntityRecord record; record.name = name; record.model = assetId; record.local = local;
+    EntityRecord record; record.name = name; record.model=AssetRef<ModelAsset>{assetId}; record.local = local;
     return create(std::move(record),"Place model");
 }
 std::vector<EntityId> SceneDocument::createModels(const std::vector<ModelPlacement>& models) {
@@ -355,7 +495,7 @@ std::vector<EntityId> SceneDocument::createModels(const std::vector<ModelPlaceme
     if (!update([&](auto& records,auto&) {
         for (const auto& model : models) {
             EntityRecord record;
-            record.id=unusedId(records); record.name=model.name; record.model=model.assetId; record.local=model.local;
+            record.id=unusedId(records); record.name=model.name; record.model=AssetRef<ModelAsset>{model.assetId}; record.local=model.local;
             record.order=nextOrder(records,NoEntity); ids.push_back(record.id); records.push_back(std::move(record));
         }
     })) { cancel(); return {}; }
@@ -371,6 +511,18 @@ EntityId SceneDocument::createPointLight(const std::string& name) {
     EntityRecord record; record.name = name; record.point.emplace();
     return create(std::move(record),"Create point light");
 }
+EntityId SceneDocument::createEnvironment(const std::string& name) {
+    if (!begin("Create environment")) return NoEntity;
+    EntityRecord record; record.id=unusedId(scene_.records()); record.name=name; record.environment.emplace();
+    if (!update([&](auto& records,auto& properties) {
+        record.order=nextOrder(records,NoEntity); records.push_back(record);
+        if (!properties.activeEnvironment) properties.activeEnvironment=record.id;
+    })) { cancel(); return NoEntity; }
+    selection_={{record.id},record.id}; commit(); return record.id;
+}
+bool SceneDocument::setActiveEnvironment(EntityId id) {
+    return edit("Activate environment",[id](auto&,auto& properties){properties.activeEnvironment=id;});
+}
 bool SceneDocument::updateEntity(EntityId id, const EntityRecord& record, const std::string& label) {
     return edit(label,[&](auto& records,auto&) {
         const auto found = std::find_if(records.begin(),records.end(),[&](const auto& value) { return value.id == id; });
@@ -383,8 +535,9 @@ bool SceneDocument::eraseSelection() {
     if (roots.empty() || !begin("Delete entities")) return false;
     std::unordered_set<EntityId> removed;
     for (auto root : roots) for (auto id : scene_.subtree(root)) removed.insert(id);
-    if (!update([&](auto& records,auto&) {
+    if (!update([&](auto& records,auto& properties) {
         std::erase_if(records,[&](const auto& record) { return removed.contains(record.id); });
+        if (removed.contains(properties.activeEnvironment)) properties.activeEnvironment=NoEntity;
     })) { cancel(); return false; }
     selection_ = {}; return commit();
 }
@@ -480,7 +633,7 @@ bool SceneDocument::ungroupSelection() {
     std::vector<EntityId> groups;
     for (const auto id : scene_.topmost(selection_.ids)) {
         const auto record=scene_.find(id);
-        if (record && !record->model && !record->directional && !record->point && !scene_.children(id).empty()) groups.push_back(id);
+        if (record && !record->model && !record->directional && !record->point && !record->environment && !scene_.children(id).empty()) groups.push_back(id);
     }
     if (groups.empty()) { status_="Select a group to ungroup."; return false; }
     struct ChildMove { EntityId id,parent; Mat4 local; };

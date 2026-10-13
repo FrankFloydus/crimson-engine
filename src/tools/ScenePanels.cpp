@@ -1,4 +1,5 @@
 #include "ScenePanels.h"
+#include "InspectorTransform.h"
 #include "Tools.h"
 #include "scene/SceneDocument.h"
 #include "assets/AssetLibrary.h"
@@ -18,16 +19,16 @@ namespace crimson {
 namespace {
 constexpr const char* EntityPayload = "CRIMSON_SCENE_ENTITIES";
 enum class Edit { None, Name, InlineName,
-    Matrix00, Matrix01, Matrix02, Matrix03, Matrix10, Matrix11, Matrix12, Matrix13, Matrix20, Matrix21, Matrix22, Matrix23,
+    PositionX, PositionY, PositionZ, RotationX, RotationY, RotationZ, ScaleX, ScaleY, ScaleZ,
     DirectionEnabled, DirectionColor, DirectionIntensity,
     PointEnabled, PointColor, PointIntensity, Exposure, Environment };
-enum class Panel { None, Outliner, Inspector, Settings };
+enum class Panel { None, Outliner, Inspector };
 Panel owner(Edit edit) {
     if (edit==Edit::None) return Panel::None;
     if (edit==Edit::InlineName) return Panel::Outliner;
-    if (edit==Edit::Name || (edit>=Edit::Matrix00 && edit<=Edit::Matrix23)) return Panel::Inspector;
-    return Panel::Settings;
+    return Panel::Inspector;
 }
+bool transformEdit(Edit edit) { return edit>=Edit::PositionX && edit<=Edit::ScaleZ; }
 struct PanelsState {
     SceneDocument* document{};
     std::vector<EntityId> visible;
@@ -39,6 +40,7 @@ struct PanelsState {
     std::array<char,1025> name{};
     std::array<char,1025> rename{};
     Edit active{Edit::None};
+    InspectorTransformState transform;
 };
 PanelsState& stateFor(SceneDocument& document) {
     static PanelsState state;
@@ -47,6 +49,13 @@ PanelsState& stateFor(SceneDocument& document) {
         // An editor-level cancel/open can end our transaction before this panel
         // runs. Never revive the buffered inline rename after that boundary.
         if (state.active==Edit::InlineName) { state.renameId=NoEntity; state.renameFocus=false; }
+        if (state.transform.editing) {
+            const auto current=document.scene().find(state.transform.entity);
+            if (current && current->local==state.transform.baseline) {
+                state.transform.fields=state.transform.captured; state.transform.degrees=state.transform.capturedDegrees;
+            }
+            state.transform.editing=false; state.transform.refresh=true;
+        }
         state.active=Edit::None;
     }
     if (state.anchor && !document.scene().contains(state.anchor)) state.anchor=NoEntity;
@@ -61,6 +70,7 @@ const char* kind(const EntityRecord& record) {
     if (record.model) return "Model";
     if (record.directional) return "Directional light";
     if (record.point) return "Point light";
+    if (record.environment) return "Environment";
     return "Empty";
 }
 void selectRow(SceneDocument& document, PanelsState& state, EntityId id, bool toggle, bool range) {
@@ -86,6 +96,7 @@ void addMenu(SceneDocument& document) {
     if (ImGui::MenuItem("Empty / group")) document.createEmpty("Group");
     if (ImGui::MenuItem("Directional light")) document.createDirectionalLight();
     if (ImGui::MenuItem("Point light")) document.createPointLight();
+    if (ImGui::MenuItem("Environment")) document.createEnvironment();
 }
 struct DraggedEntities { const SceneDocument* document{}; uint64_t generation{}; EntityId source{}; };
 void reparentTarget(SceneDocument& document, PanelsState& state, EntityId parent, std::function<void()>& action) {
@@ -119,6 +130,7 @@ bool beginEdit(SceneDocument& document, PanelsState& state, Edit edit, const cha
 void finishEdit(SceneDocument& document, PanelsState& state, Edit edit) {
     if (state.active!=edit) return;
     document.commit(); state.active=Edit::None;
+    if (transformEdit(edit)) { state.transform.editing=false; state.transform.refresh=true; }
 }
 void propertyEdit(SceneDocument& document, PanelsState& state, Edit edit, const char* label,
                   bool changed, const SceneDocument::Mutation& mutation) {
@@ -174,18 +186,27 @@ void lightControls(SceneDocument& document, PanelsState& state, EntityId id, boo
     ImGui::PopID();
 }
 void modelInformation(const EntityRecord& record, const AssetLibrary& assets) {
-    const auto model=assets.findModel(*record.model);
+    const auto model=assets.findModel(record.model->id);
     if (!model) {
-        ImGui::TextWrapped("Model unavailable: %s",record.model->c_str());
+        ImGui::TextWrapped("Model unavailable: %s",record.model->id.c_str());
         ImGui::TextWrapped("The asset reference is preserved when this scene is saved."); return;
     }
     ImGui::Text("%s (%s)",model->name.c_str(),model->format.c_str());
     ImGui::Text("%zu meshes, %zu primitives, %zu materials",model->meshes.size(),model->primitives.size(),model->materials.size());
     ImGui::Text("%zu nodes, %zu draws",model->nodes.size(),model->draws.size());
+    uint64_t vertices{},indices{};
+    for (const auto& primitive:model->primitives) {
+        vertices+=primitive.sourceVertexCount ? primitive.sourceVertexCount : primitive.vertices.size();
+        indices+=primitive.sourceIndexCount ? primitive.sourceIndexCount : primitive.indices.size();
+    }
+    ImGui::Text("%llu source vertices, %llu triangles",static_cast<unsigned long long>(vertices),static_cast<unsigned long long>(indices/3));
     for (const auto& warning:model->warnings) ImGui::TextWrapped("%s",warning.c_str());
     if (ImGui::TreeNode("Imported materials (read-only)")) {
-        for (std::size_t index=0;index<model->materials.size();++index) {
-            const auto& material=model->materials[index];
+        auto materials=model->materials;
+        try { materials=assets.resolvedModelMaterials(*model); }
+        catch (const std::exception& error) { ImGui::TextWrapped("Material unavailable: %s",error.what()); }
+        for (std::size_t index=0;index<materials.size();++index) {
+            const auto& material=materials[index];
             ImGui::PushID(static_cast<int>(index));
             if (ImGui::TreeNode("material","%s",material.name.c_str())) {
                 ImGui::Text("Base color: %.3f, %.3f, %.3f, %.3f",material.baseColor[0],material.baseColor[1],material.baseColor[2],material.baseColor[3]);
@@ -196,8 +217,12 @@ void modelInformation(const EntityRecord& record, const AssetLibrary& assets) {
                 const std::array<std::pair<const char*,const ModelTexture*>,5> slots{{
                     {"Base color",&material.baseColorTexture},{"Metallic / roughness",&material.metallicRoughnessTexture},
                     {"Normal",&material.normalTexture},{"Occlusion",&material.occlusionTexture},{"Emissive",&material.emissiveTexture}}};
-                for (const auto& [label,texture]:slots) if (!texture->image.empty())
-                    ImGui::TextWrapped("%s (UV%u): %s",label,texture->texCoord,texture->image.c_str());
+                for (const auto& [label,texture]:slots) if (!texture->image.empty()) {
+                    const auto resolved=assets.references().resolveTexture(texture->image.id,texture==&material.normalTexture);
+                    const auto name=resolved==GrayTextureId ? std::string("Default gray") : resolved==NeutralNormalTextureId ?
+                        std::string("Neutral normal") : assets.displayName(resolved);
+                    ImGui::TextWrapped("%s (UV%u): %s",label,texture->texCoord,name.c_str());
+                }
                 ImGui::TreePop();
             }
             ImGui::PopID();
@@ -211,6 +236,10 @@ namespace {
 bool cancelPanelEdit(SceneDocument& document, PanelsState& state, Panel panel, bool allowEdits) {
     if (owner(state.active)!=panel || (allowEdits && !ImGui::IsKeyPressed(ImGuiKey_Escape,false) && !ImGui::GetIO().AppFocusLost)) return false;
     document.cancel(); state.active=Edit::None; state.nameId=NoEntity;
+    if (state.transform.editing) {
+        state.transform.fields=state.transform.captured; state.transform.degrees=state.transform.capturedDegrees;
+        state.transform.editing=false; state.transform.refresh=true;
+    }
     state.renameId=NoEntity; state.renameFocus=false; state.pendingClick=NoEntity;
     return true;
 }
@@ -249,36 +278,21 @@ void inlineRename(SceneDocument& document, PanelsState& state, EntityId id, ImVe
     ImGui::PopID(); ImGui::PopID();
     ImGui::SetCursorScreenPos(next);
 }
-void matrixControls(SceneDocument& document, PanelsState& state, const EntityRecord& record) {
-    ImGui::SeparatorText("Local transform");
-    if (!ImGui::BeginTable("Affine matrix",4,ImGuiTableFlags_SizingStretchSame|ImGuiTableFlags_BordersInnerV)) return;
-    ImGui::TableSetupColumn("X"); ImGui::TableSetupColumn("Y"); ImGui::TableSetupColumn("Z"); ImGui::TableSetupColumn("Position");
-    ImGui::TableHeadersRow();
-    for (std::size_t row=0;row<4;++row) {
-        ImGui::TableNextRow();
-        for (std::size_t column=0;column<4;++column) {
-            ImGui::TableSetColumnIndex(static_cast<int>(column));
-            ImGui::PushID(static_cast<int>(row*4+column));
-            if (row==3) ImGui::TextDisabled(column==3 ? "1" : "0");
-            else {
-                auto value=record.local.at(row,column);
-                ImGui::SetNextItemWidth(-1);
-                const bool changed=ImGui::DragFloat("##coefficient",&value,.01f,0,0,"%.4g");
-                const auto edit=static_cast<Edit>(static_cast<int>(Edit::Matrix00)+static_cast<int>(row*4+column));
-                propertyEdit(document,state,edit,"Edit local transform",changed,
-                    changeEntity(record.id,[row,column,value](auto& entity){entity.local.at(row,column)=value;}));
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Local matrix row %zu, column %zu. Ctrl+click to type.",row+1,column+1);
-            }
-            ImGui::PopID();
-        }
-    }
-    ImGui::EndTable();
-    ImGui::TextDisabled("Affine row: 0, 0, 0, 1");
-    if (math::handedness(record.local)==0)
-        ImGui::TextWrapped("This transform is singular. Adjust the matrix to restore an invertible transform.");
-    if (!document.status().empty()) ImGui::TextWrapped("%s",document.status().c_str());
-}
+
 } // namespace
+
+bool finishScenePanelEdit(SceneDocument& document) {
+    auto& state=stateFor(document);
+    if (state.active==Edit::None || !document.transactionActive()) return false;
+    const bool transform=transformEdit(state.active);
+    if (transform) {
+        if (!finishInspectorTransform(document,state.transform)) return false;
+    } else if (!document.commit()) return false;
+    state.active=Edit::None; state.nameId=NoEntity;
+    if (transform) { state.transform.editing=false; state.transform.refresh=true; }
+    state.renameId=NoEntity; state.renameFocus=false;
+    return true;
+}
 
 void drawSceneOutliner(SceneDocument& document, bool allowEdits) {
     auto& state=stateFor(document);
@@ -359,10 +373,13 @@ void drawSceneOutliner(SceneDocument& document, bool allowEdits) {
             bool canUngroup=false;
             for (auto root:document.scene().topmost(document.selection().ids)) {
                 const auto group=document.scene().find(root);
-                if (group && !group->model && !group->directional && !group->point && !document.scene().children(root).empty()) canUngroup=true;
+                if (group && !group->model && !group->directional && !group->point && !group->environment && !document.scene().children(root).empty()) canUngroup=true;
             }
             if (ImGui::MenuItem("Ungroup",nullptr,false,canUngroup)) action=[&document]{document.ungroupSelection();};
             if (ImGui::MenuItem("Unparent",nullptr,false,record.parent!=NoEntity)) action=[&document]{document.reparentSelection(NoEntity);};
+            if (record.environment && ImGui::MenuItem("Make active environment",nullptr,false,
+                document.scene().properties().activeEnvironment!=record.id))
+                action=[&document,id=record.id]{document.setActiveEnvironment(id);};
             ImGui::Separator();
             if (ImGui::BeginMenu("Add")) { addMenu(document); ImGui::EndMenu(); }
             ImGui::EndPopup();
@@ -402,7 +419,6 @@ void drawSceneOutliner(SceneDocument& document, bool allowEdits) {
 }
 
 void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer& renderer, bool allowEdits) {
-    static_cast<void>(assets); static_cast<void>(renderer);
     auto& state=stateFor(document);
     const bool canceled=cancelPanelEdit(document,state,Panel::Inspector,allowEdits);
     if (!ImGui::Begin("Inspector")) {
@@ -415,38 +431,33 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
         if (document.selection().ids.size()>1)
             ImGui::TextWrapped("%zu selected. These fields edit only the primary entity: %s",document.selection().ids.size(),record->name.c_str());
         drawName(document,state,*record);
-        matrixControls(document,state,*record);
-    } else ImGui::TextUnformatted("No selection");
-    ImGui::EndDisabled();
-    ImGui::End();
-}
-
-void drawSceneSettings(SceneDocument& document, AssetLibrary& assets, Renderer& renderer, bool allowEdits) {
-    auto& state=stateFor(document);
-    const bool canceled=cancelPanelEdit(document,state,Panel::Settings,allowEdits);
-    if (!ImGui::Begin("Settings")) {
-        if (owner(state.active)==Panel::Settings) { document.commit(); state.active=Edit::None; }
-        ImGui::End(); return;
-    }
-    const bool blocked=!allowEdits || canceled || (document.transactionActive() && owner(state.active)!=Panel::Settings);
-    ImGui::BeginDisabled(blocked);
-    if (const auto record=document.scene().find(document.selection().primary)) {
+        const InspectorTransformTransactions transformTransactions{
+            [&](unsigned field,const char* label) {
+                return beginEdit(document,state,static_cast<Edit>(static_cast<unsigned>(Edit::PositionX)+field),label);
+            },
+            [&](unsigned field) {
+                finishEdit(document,state,static_cast<Edit>(static_cast<unsigned>(Edit::PositionX)+field));
+            }};
+        drawInspectorTransform(document,state.transform,*record,transformTransactions);
         if (record->directional && ImGui::CollapsingHeader("Directional light",ImGuiTreeNodeFlags_DefaultOpen)) lightControls(document,state,record->id,true);
         if (record->point && ImGui::CollapsingHeader("Point light",ImGuiTreeNodeFlags_DefaultOpen)) lightControls(document,state,record->id,false);
         if (record->model && ImGui::CollapsingHeader("Model",ImGuiTreeNodeFlags_DefaultOpen)) modelInformation(*record,assets);
-    }
-    if (ImGui::CollapsingHeader("Scene lighting",ImGuiTreeNodeFlags_DefaultOpen)) {
-        auto properties=document.scene().properties();
-        const bool exposureChanged=ImGui::SliderFloat("Exposure",&properties.exposure,.05f,8.0f,"%.2f",ImGuiSliderFlags_Logarithmic);
-        propertyEdit(document,state,Edit::Exposure,"Change exposure",exposureChanged,
-            [value=properties.exposure](auto&,auto& settings){settings.exposure=value;});
-        ImGui::BeginGroup();
-        const bool environmentChanged=drawEnvironmentControls(properties.environment,assets,renderer);
-        ImGui::EndGroup();
-        if (environmentChanged && beginEdit(document,state,Edit::Environment,"Change environment"))
-            document.update([environment=properties.environment](auto&,auto& settings){settings.environment=environment;});
-        if (state.active==Edit::Environment && !ImGui::IsAnyItemActive()) finishEdit(document,state,Edit::Environment);
-    }
+        if (record->environment && ImGui::CollapsingHeader("Environment",ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (document.scene().properties().activeEnvironment==record->id) ImGui::TextUnformatted("Active environment");
+            else if (ImGui::Button("Make Active")) document.setActiveEnvironment(record->id);
+            auto environment=*record->environment;
+            const bool exposureChanged=ImGui::SliderFloat("Exposure",&environment.exposure,.05f,8.0f,"%.2f",ImGuiSliderFlags_Logarithmic);
+            propertyEdit(document,state,Edit::Exposure,"Change exposure",exposureChanged,
+                changeEntity(record->id,[value=environment.exposure](auto& entity){entity.environment->exposure=value;}));
+            ImGui::BeginGroup();
+            const bool environmentChanged=drawEnvironmentControls(environment.environment,assets,renderer,false);
+            ImGui::EndGroup();
+            if (environmentChanged && beginEdit(document,state,Edit::Environment,"Change environment"))
+                document.update(changeEntity(record->id,[value=environment.environment](auto& entity){entity.environment->environment=value;}));
+            if (state.active==Edit::Environment && !ImGui::IsAnyItemActive()) finishEdit(document,state,Edit::Environment);
+            ImGui::TextDisabled("Environment lighting is global; its entity transform is independent.");
+        }
+    } else ImGui::TextUnformatted("No selection");
     ImGui::EndDisabled();
     ImGui::End();
 }

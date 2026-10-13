@@ -18,6 +18,21 @@
 
 namespace crimson {
 
+void copyFileAtomically(const std::filesystem::path& source,const std::filesystem::path& destination) {
+    if(!destination.parent_path().empty())std::filesystem::create_directories(destination.parent_path());
+    static std::atomic<uint64_t> sequence{};auto temporary=destination;
+    do{temporary=destination;temporary+=".restore-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())+"-"+std::to_string(sequence.fetch_add(1))+".tmp";}while(std::filesystem::exists(temporary));
+    try{
+        std::filesystem::copy_file(source,temporary);
+#ifdef _WIN32
+        if(!MoveFileExW(temporary.c_str(),destination.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))
+            throw std::runtime_error("Could not restore the asset file (Windows error "+std::to_string(GetLastError())+").");
+#else
+        std::filesystem::rename(temporary,destination);
+#endif
+    }catch(...){std::error_code ignored;std::filesystem::remove(temporary,ignored);throw;}
+}
+
 void writeFileAtomically(const std::filesystem::path& path, std::string_view contents) {
     if (!path.parent_path().empty()) std::filesystem::create_directories(path.parent_path());
     static std::atomic<uint64_t> sequence{0};

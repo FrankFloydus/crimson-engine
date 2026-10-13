@@ -158,11 +158,27 @@ void selectionPolicy() {
     selection.set("");
     require(selection.ids().empty() && selection.primary().empty(),"Clearing selection retained a primary ID.");
 }
+void folderDeletion() {
+    TemporaryProject project;BrowserCatalog catalog(project.root);catalog.synchronize(assets);
+    const auto parent=catalog.createFolder({},"Art"),child=catalog.createFolder(parent,"Models");
+    catalog.move(std::array{assets[1].id},child);catalog.move(std::array{assets[0].id},parent);
+    const auto nested=catalog.descendants(parent);require(nested.size()==3,"Folder deletion did not expand nested folders and assets.");
+    const auto before=read(project.root/"assets/browser.json");
+    rejects([&]{catalog.erase(std::array{parent});},"Incomplete folder deletion was accepted.");
+    require(read(project.root/"assets/browser.json")==before&&catalog.contains(parent),"Failed folder deletion changed metadata.");
+    auto all=nested;all.push_back(parent);const auto candidate=catalog.serializeWithout(all);
+    require(read(project.root/"assets/browser.json")==before&&!candidate.empty(),"Preparing deletion prematurely wrote browser metadata.");
+    catalog.erase(all);require(!catalog.contains(parent)&&!catalog.contains(child)&&catalog.items().size()==2,"Complete folder deletion retained cards.");
+    BrowserCatalog reopened(project.root);reopened.synchronize(std::array{assets[2],assets[3]});require(reopened.items().size()==2,"Deleted folders reappeared on reopen.");
+    const auto stale=reopened.createFolder({},"Missing asset folder");reopened.synchronize(assets);reopened.move(std::array{assets[0].id},stale);
+    reopened.synchronize(std::array{assets[2],assets[3]});reopened.erase(std::array{stale});
+    BrowserCatalog final(project.root);final.synchronize(std::array{assets[2],assets[3]});require(final.status().empty(),"Missing asset's stale presentation corrupted metadata when deleting its folder.");
+}
 }
 
 int main() {
     try {
-        metadataAndIdentity(); atomicMoves(); invalidMetadataAndWriteFailure(); selectionPolicy();
+        metadataAndIdentity(); atomicMoves(); invalidMetadataAndWriteFailure(); selectionPolicy();folderDeletion();
         std::cout<<"Asset browser metadata and selection checks passed.\n";
         return 0;
     } catch (const std::exception& error) {

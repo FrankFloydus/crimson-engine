@@ -7,7 +7,7 @@
 namespace crimson {
 class AssetBrowserPanel {
 public:
-    BrowserActions draw(AssetLibrary& assets, SDL_Window* window);
+    BrowserActions draw(AssetLibrary& assets, SDL_Window* window, int previewSize = 128, Renderer* renderer = nullptr);
 private:
     const AssetLibrary* library_{};
     std::string folder_, renameId_, message_, deferredClick_, dragPrimary_;

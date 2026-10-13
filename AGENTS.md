@@ -48,6 +48,7 @@ Run from this project root in PowerShell. `Build.cmd` initializes MSVC x64; use 
 | `src/crimson-renderer/shaders/` | Shader sources and varying definitions; matching bgfx `shaderc` generates embedded headers |
 | `src/tools/` | Docked editor panels and property controls |
 | `src/assets/` | Managed asset imports and persistence; current texture ownership is documented in the architecture |
+| `src/resources/` | CPU resource stores, immutable versions, workers, dependency watching, mip/LOD caches and shader compilation; GPU texture streaming remains AssetLibrary-owned |
 | `src/input/` | Editor navigation and input handling |
 | `tests/`, `docs/` | Focused automated checks, authoritative architecture and user documentation |
 
@@ -57,11 +58,13 @@ Run from this project root in PowerShell. `Build.cmd` initializes MSVC x64; use 
 - Keep `App` a composition/lifetime/frame-loop boundary. Scene editing belongs in `src/editor/`, dock views in `src/tools/`, and CPU world/history/storage in `src/scene/`; do not accumulate those implementations in the application loop.
 - Public math values use Crimson types. GLM is an implementation detail behind `src/math/`; do not expose GLM, bx, bgfx, EnTT entity handles or ImGui types in serialized scene data. Keep explicit RAII owners and concrete dependencies rather than introducing a service locator or engine framework.
 - Preserve imported assets, material factors/assignments, and `crimson_ui.ini`. Changes to their storage must retain existing project data.
-- Application branding lives in `assets/branding`; `src/platform/CrimsonResources.rc.in` embeds the ICO. SDL owns the native window-class icon lifetime. Keep branding out of the managed texture library.
+- Application branding lives in `assets/branding`; `src/platform/CrimsonResources.rc.in` embeds the ICO. A user-supplied ICO is authoritative: embed it unchanged, and do not overwrite it by running the PNG converter. Use conversion only when the user requests generation from a PNG. SDL owns the native window-class icon lifetime. Keep branding out of the managed texture library.
 - Treat generated headers and cached dependency sources under `build/` as read-only to manual edits. Change project sources/manifests/build configuration and let tools regenerate outputs.
 - Rendering changes must preserve linear HDR lighting, one final sRGB encoding, and the grid/tools' independence from scene exposure. Texture roles determine color decoding and channels; follow the material contract in the architecture.
 - Environment preprocessing belongs outside frame submission. Its derived cache is disposable; update preprocessing/BRDF versions when their equations or output conventions change. Preserve the managed source and `assets/environment.json`.
 - Preserve explicit GPU/resource owners and release their resources before bgfx shutdown. Keep viewport input ownership explicit so editor widgets, navigation, and future player controls do not consume the same gesture.
+- Construct ResourceManager before GPU owners. Worker jobs never call bgfx/ImGui or mutate documents; publish coherent CPU/GPU replacements on the main thread. Persistent AssetRef values are separate from live handles/snapshots and GPU leases. Count pending/retired allocations and drain readbacks before shutdown.
+- Keep authored reference/deletion policy separate from runtime residency. Deletion is a staged project transaction; preserve stable IDs, protected role-correct defaults, project-wide saved-scene updates and unrelated unsaved edits. Legacy material/environment/preview files and virtual browser organization remain compatible.
 - Use familiar asset fields adjacent to their property: picker, thumbnail/name, clear, and drag-and-drop with immediate assignment.
 - Keep one Asset Browser catalog and one **Import** button for supported imports. Models, textures, environments and native scene assets share the browser; typed asset fields filter compatible assets.
 - Scene entity IDs are persistent; EnTT handles are temporary. Preserve full affine local matrices and imported model hierarchies. Scene edits use transactional undo/redo, and scene saves atomically replace only the selected managed scene file.

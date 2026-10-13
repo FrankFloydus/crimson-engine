@@ -1,22 +1,28 @@
 #pragma once
 
 #include "math/Math.h"
+#include "resources/AssetRef.h"
+#include "ModelImportIdentity.h"
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace crimson {
+struct DecodedImage;
+namespace streaming { struct ModelStream; }
 
 using ModelMatrix = Mat4;
 inline constexpr ModelMatrix ModelIdentity{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
 enum class ModelWrap { Repeat, Clamp, Mirror };
-enum class ModelFilter { Linear, Nearest };
+enum class ModelFilter { Linear, Nearest, NearestMipmapNearest, LinearMipmapNearest, NearestMipmapLinear, LinearMipmapLinear };
 
 struct ModelTexture {
-    std::string image; // Managed, project-relative image path; empty means no texture.
+    AssetRef<DecodedImage> image; // Managed image identity; no loaded-data ownership.
     uint32_t texCoord{};
     ModelWrap wrapU{ModelWrap::Repeat}, wrapV{ModelWrap::Repeat};
     ModelFilter minFilter{ModelFilter::Linear}, magFilter{ModelFilter::Linear};
@@ -39,6 +45,9 @@ struct ModelPrimitive {
     std::vector<ModelVertex> vertices;
     std::vector<uint32_t> indices;
     uint32_t material{};
+    uint8_t uvMask{}; // Authored UV availability; default-valued GPU fields do not imply a present set.
+    uint8_t tangentUv{0xff}; // UV basis for authored/generated tangent data, or unknown.
+    uint64_t sourceVertexCount{}, sourceIndexCount{};
 };
 struct ModelMesh { std::string name; std::vector<uint32_t> primitives; };
 struct ModelNode {
@@ -57,9 +66,11 @@ struct ModelAsset {
     std::vector<uint32_t> roots;
     std::vector<ModelDraw> draws;
     std::vector<ModelMaterial> materials;
+    std::vector<std::string> materialIds; // Stable imported material asset identities, parallel to materials.
     std::vector<std::string> images; // All managed package images, including unreferenced images.
     ModelBounds bounds;
     std::vector<std::string> warnings;
+    std::shared_ptr<const streaming::ModelStream> stream;
 };
 struct ModelInstance {
     std::shared_ptr<const ModelAsset> asset;
@@ -67,7 +78,30 @@ struct ModelInstance {
 };
 
 // CPU-only, transactional managed import. Throws a descriptive error on failure.
+struct ModelImportStage {
+    std::filesystem::path root,staging;
+    mutable std::filesystem::path destination;
+    std::string contentIdentity,sourceName;
+    std::vector<ModelImportFileStamp> reuseFiles,inputFiles;
+    std::shared_ptr<ModelAsset> asset;
+    mutable bool published{},reused{};
+    ModelImportStage()=default;
+    ~ModelImportStage();
+    ModelImportStage(const ModelImportStage&)=delete;
+    ModelImportStage& operator=(const ModelImportStage&)=delete;
+};
+std::shared_ptr<ModelImportStage> stageModelImport(const std::filesystem::path& source,const std::filesystem::path& projectRoot);
+std::shared_ptr<ModelAsset> publishModelImport(const std::shared_ptr<const ModelImportStage>& stage,
+    const std::function<bool(const std::string&)>& reservedId = {});
 std::shared_ptr<ModelAsset> importModelPackage(const std::filesystem::path& source, const std::filesystem::path& projectRoot);
-std::shared_ptr<ModelAsset> loadModelPackage(const std::filesystem::path& manifest, const std::filesystem::path& projectRoot);
+struct ModelResolvers {
+    // Empty means an intentionally deleted image using the engine's role-aware built-in fallback.
+    std::function<std::string(const std::string&)> image;
+    std::function<std::optional<ModelMaterial>(const std::string&)> material;
+};
+std::shared_ptr<ModelAsset> loadModelPackage(const std::filesystem::path& manifest, const std::filesystem::path& projectRoot,
+                                           const ModelResolvers& resolvers = {});
+std::shared_ptr<ModelAsset> loadModelMaterialMetadata(const std::filesystem::path& manifest,const std::filesystem::path& projectRoot,
+                                                    const ModelResolvers& resolvers = {});
 
 } // namespace crimson

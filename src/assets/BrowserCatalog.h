@@ -8,7 +8,7 @@
 
 namespace crimson {
 
-enum class AssetKind { Texture, Environment, Model, Scene };
+enum class AssetKind { Texture, Environment, Model, Scene, Material };
 struct AssetEntry { std::string id, name; AssetKind kind{AssetKind::Texture}; };
 struct BrowserFolder { std::string id, parent, name; };
 struct BrowserItem {
@@ -32,6 +32,10 @@ public:
     std::string createFolder(const std::string& parent, std::string name);
     void rename(const std::string& id, std::string name);
     void move(std::span<const std::string> ids, const std::string& destination);
+    std::vector<std::string> descendants(const std::string& folder) const;
+    void erase(std::span<const std::string> ids);
+    std::string serializeWithout(std::span<const std::string> ids) const;
+    BrowserCatalog prepareErase(std::span<const std::string> ids) const;
     const std::string& status() const { return status_; }
 private:
     struct Presentation { std::string folder, name; };

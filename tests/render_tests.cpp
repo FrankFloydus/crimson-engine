@@ -1,5 +1,6 @@
 #include "crimson-renderer/Mesh.h"
 #include "crimson-renderer/RenderTypes.h"
+#include "crimson-renderer/ModelTransform.h"
 #include "input/Navigation.h"
 
 #include <cmath>
@@ -273,6 +274,30 @@ void navigationCancellationAndWheel() {
     region.hovered=true; nav.handleEvent(wheel(1)); nav.update(camera,region,.01f); near(camera.distance(),d/1.18); nav.handleEvent(wheel(-1)); nav.update(camera,region,.01f); near(camera.distance(),d);
 }
 
+void collapsedModelTransforms() {
+    using namespace crimson;
+    const auto rotation=math::eulerRotationXYZ({.4f,-.6f,.8f});
+    const auto node=math::translation({1,2,3})*math::eulerRotationXYZ({-.7f,.2f,.5f});
+    const auto original=math::translation({2,-1,4})*rotation*math::scaling({-2,3,4});
+    Mat4 world,normal;float handedness{};
+    for(std::size_t axis=0;axis<3;++axis) {
+        Vec3 scale{-2,3,4};scale[axis]=0;
+        const auto collapsed=math::translation({2,-1,4})*rotation*math::scaling(scale);
+        require(prepareModelMatrices(collapsed,node,world,normal,handedness)==ModelTransformStatus::Collapsed,
+            "A zero scale was confused with invalid data after an imported node rotation.");
+        require(prepareModelMatrices(original,node,world,normal,handedness)==ModelTransformStatus::Ready,
+            "Restoring a model after zero scale did not restore its prepared draw.");
+    }
+    require(prepareModelMatrices(original,math::scaling({1,0,1}),world,normal,handedness)==ModelTransformStatus::Collapsed,
+        "A collapsed imported node was not classified as an intentional hidden draw.");
+    auto invalid=original;invalid[0]=std::numeric_limits<float>::quiet_NaN();
+    require(prepareModelMatrices(invalid,node,world,normal,handedness)==ModelTransformStatus::Invalid,
+        "Nonfinite model data was classified as an ordinary zero scale.");
+    invalid=Mat4{};invalid[3]=1;
+    require(prepareModelMatrices(original,invalid,world,normal,handedness)==ModelTransformStatus::Invalid,
+        "A non-affine imported transform was accepted.");
+}
+
 } // namespace
 
 int main() {
@@ -297,7 +322,8 @@ int main() {
     run("navigation fly speed, relative start and keyboard gating", navigationFlySpeedAndMovement);
     run("navigation cancellation precedes motion and wheel is viewport-scoped", navigationCancellationAndWheel);
     run("model framing preserves bounds and navigation ignores hidden sphere", modelPreviewFramingAndNavigation);
+    run("collapsed model transforms are legal and recover without invalid-data diagnostics", collapsedModelTransforms);
     if (failures) std::cerr << failures << " renderer-core check(s) failed.\n";
-    else std::cout << "All 15 renderer-core checks passed.\n";
+    else std::cout << "All 16 renderer-core checks passed.\n";
     return failures ? 1 : 0;
 }

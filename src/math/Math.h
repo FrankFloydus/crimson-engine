@@ -102,6 +102,7 @@ Mat4 translation(const Vec3& value);
 Mat4 rotation(const Quat& value);
 Mat4 scaling(const Vec3& value);
 Vec3 transformPoint(const Mat4& matrix, const Vec3& value);
+Vec4 transformHomogeneous(const Mat4& matrix,const Vec4& value);
 Vec3 transformDirection(const Mat4& matrix, const Vec3& value);
 bool isAffine(const Mat4& matrix, double tolerance = 1e-6);
 // Returns -1/+1 for an invertible linear transform, zero for singular/invalid.
@@ -109,6 +110,24 @@ float handedness(const Mat4& matrix);
 std::optional<Mat4> inverse(const Mat4& matrix);
 std::optional<Mat4> normalMatrix(const Mat4& matrix);
 Mat4 orthonormalFrame(const Mat4& matrix);
+// Inspector presentation, never authoritative scene storage. Euler XYZ means
+// Rz * Ry * Rx for column vectors; angles are radians. Scale is the signed
+// length of each original linear column, so sheared columns retain their angle.
+// A reference keeps equivalent Euler/sign branches stable between edits.
+struct AffineTransformFields {
+    Vec3 position{},rotationRadians{},scale{1,1,1};
+    Mat4 rotation{};
+    bool sheared{},singular{};
+};
+std::optional<AffineTransformFields> affineTransformFields(const Mat4& matrix,const AffineTransformFields* reference=nullptr);
+Mat4 eulerRotationXYZ(const Vec3& radians);
+// Compute edits from the exact matrix and fields captured at gesture start.
+// Position preserves the linear block exactly; rotation applies a rigid delta;
+// scale changes only edited columns. A collapsed column is restored along its
+// captured rotation axis. Invalid/non-affine inputs return an explicit failure.
+std::optional<Mat4> withAffinePosition(const Mat4& matrix,const Vec3& position);
+std::optional<Mat4> withAffineRotation(const Mat4& matrix,const AffineTransformFields& captured,const Vec3& radians);
+std::optional<Mat4> withAffineScale(const Mat4& matrix,const AffineTransformFields& captured,const Vec3& scale);
 void include(Aabb& bounds, const Vec3& point);
 void include(Aabb& bounds, const Aabb& other);
 Aabb transformBounds(const Aabb& bounds, const Mat4& matrix);

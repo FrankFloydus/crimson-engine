@@ -1,0 +1,37 @@
+{
+  "dependencies": [
+    {
+      "index": 0,
+      "kind": "buffer",
+      "path": "buffers/0.bin",
+      "source": "GLB binary chunk"
+    },
+    {
+      "index": 0,
+      "kind": "image",
+      "path": "images/0.jpg",
+      "source": "buffer view"
+    },
+    {
+      "index": 1,
+      "kind": "image",
+      "path": "images/1.jpg",
+      "source": "buffer view"
+    },
+    {
+      "index": 2,
+      "kind": "image",
+      "path": "images/2.png",
+      "source": "buffer view"
+    }
+  ],
+  "document": "model.gltf",
+  "format": "GLB",
+  "importIdentity": {
+    "sha256": "9915c7e1bd9fe453167be9f2aa22c9744b5507ddf61f14584b85cf02ae4d8bf6",
+    "version": 1
+  },
+  "name": "dark+fantasy+demon+3d+model",
+  "original": "source.glb",
+  "version": 1
+}

@@ -1,4 +1,6 @@
 #include "ModelAsset.h"
+#include "MaterialAsset.h"
+#include "resources/StreamingModel.h"
 
 // cgltf is header-only. Keep its implementation in the CPU asset boundary.
 #define CGLTF_IMPLEMENTATION
@@ -17,6 +19,8 @@
 #include <fstream>
 #include <limits>
 #include <numeric>
+#include <mutex>
+#include <deque>
 #include <set>
 #include <span>
 #include <stdexcept>
@@ -168,14 +172,17 @@ Json stageDocument(const fs::path& source, const fs::path& stage, const Bytes& o
     check(json.is_object() && json.contains("asset") && json["asset"].value("version",std::string{})=="2.0", "expected a glTF 2.0 asset");
     if (json.contains("extensionsRequired") && !json["extensionsRequired"].empty())
         fail("unsupported required extension: " + json["extensionsRequired"][0].get<std::string>());
-    Json dependencies=Json::array(); std::vector<Bytes> buffers;
+    Json dependencies=Json::array(),sourceBufferExtras=Json::array(); std::vector<Bytes> buffers;
     for (auto& buffer : json["buffers"]) {
         const size_t index=buffers.size(), size=number(buffer,"byteLength");
         check(size>0 && size<=MaxBytes,"invalid buffer byteLength");
         const std::string uri=buffer.value("uri",std::string{});
         auto bytes=uri.empty() ? parsed.bin : readUri(source.parent_path(),uri);
         check(!uri.empty() || (binary && index==0),"buffer is missing its URI");
-        check(bytes.size()>=size,"buffer is shorter than its declared byteLength"); bytes.resize(size);
+        check(bytes.size()>=size,"buffer is shorter than its declared byteLength");
+        if(bytes.size()!=size && !uri.empty() && !uri.starts_with("data:"))
+            sourceBufferExtras.push_back({{"index",index},{"bytes",bytes.size()},{"sha256",modelImportDataDigest(bytes)}});
+        bytes.resize(size);
         const auto file="buffers/"+std::to_string(index)+".bin"; write(stage/path(file),bytes); buffer["uri"]=file;
         dependencies.push_back({{"kind","buffer"},{"index",index},{"path",file},{"source",uri.empty()?"GLB binary chunk":uri.starts_with("data:")?"data URI":uri}});
         buffers.push_back(std::move(bytes));
@@ -210,8 +217,10 @@ Json stageDocument(const fs::path& source, const fs::path& stage, const Bytes& o
     if (json["images"].is_null()) json.erase("images");
     writeJson(stage/"model.gltf",json);
     const auto originalName=binary?"source.glb":"source.gltf"; write(stage/originalName,original);
-    return {{"version",1},{"name",utf8(source.stem())},{"format",binary?"GLB":"glTF"},
+    Json manifest={{"version",1},{"name",utf8(source.stem())},{"format",binary?"GLB":"glTF"},
             {"document","model.gltf"},{"original",originalName},{"dependencies",std::move(dependencies)}};
+    if(!sourceBufferExtras.empty())manifest["sourceBufferExtras"]=std::move(sourceBufferExtras);
+    return manifest;
 }
 
 uint32_t unsignedValue(const uint8_t* p, cgltf_component_type type) {
@@ -309,17 +318,23 @@ ModelWrap wrap(cgltf_wrap_mode value) {
     fail("unsupported sampler wrapping mode");
 }
 ModelFilter filter(cgltf_filter_type value,bool minification,ModelAsset& asset) {
+    (void)asset;
     if (value==cgltf_filter_type_undefined || value==cgltf_filter_type_linear) return ModelFilter::Linear;
     if (value==cgltf_filter_type_nearest) return ModelFilter::Nearest;
     check(minification && value>=cgltf_filter_type_nearest_mipmap_nearest && value<=cgltf_filter_type_linear_mipmap_linear,"invalid texture filter");
-    warn(asset,"Mipmap filters use their nearest/linear base-level equivalent; imported textures have no mip chain in this preview.");
-    return value==cgltf_filter_type_nearest_mipmap_nearest || value==cgltf_filter_type_nearest_mipmap_linear ? ModelFilter::Nearest : ModelFilter::Linear;
+    switch(value) {
+    case cgltf_filter_type_nearest_mipmap_nearest:return ModelFilter::NearestMipmapNearest;
+    case cgltf_filter_type_linear_mipmap_nearest:return ModelFilter::LinearMipmapNearest;
+    case cgltf_filter_type_nearest_mipmap_linear:return ModelFilter::NearestMipmapLinear;
+    case cgltf_filter_type_linear_mipmap_linear:return ModelFilter::LinearMipmapLinear;
+    default:fail("invalid texture filter");
+    }
 }
 ModelTexture texture(const cgltf_texture_view& view,const cgltf_data& data,const std::vector<std::string>& images,ModelAsset& asset) {
     ModelTexture result; if (!view.texture) return result;
     check(view.texture->image!=nullptr,"texture has no supported core image fallback");
     check(view.texcoord>=0 && view.texcoord<=1,"material references a UV set beyond UV1");
-    result.image=images.at(static_cast<size_t>(view.texture->image-data.images)); result.texCoord=static_cast<uint32_t>(view.texcoord);
+    result.image=AssetRef<DecodedImage>{images.at(static_cast<size_t>(view.texture->image-data.images))}; result.texCoord=static_cast<uint32_t>(view.texcoord);
     check(!result.image.empty(),"core material texture has no supported PNG/JPEG image");
     if (view.has_transform) warn(asset,"Optional KHR_texture_transform ignored; core texture coordinates are used.");
     if (const auto* sampler=view.texture->sampler) {
@@ -331,7 +346,7 @@ ModelTexture texture(const cgltf_texture_view& view,const cgltf_data& data,const
 void materials(const cgltf_data& data,const std::vector<std::string>& images,ModelAsset& asset) {
     asset.materials.reserve(data.materials_count+1);
     for (size_t i=0;i<data.materials_count;++i) {
-        const auto& source=data.materials[i]; ModelMaterial m; m.name=source.name?source.name:"Material "+std::to_string(i+1);
+        const auto& source=data.materials[i]; ModelMaterial m; m.name=source.name&&source.name[0]?source.name:"Material "+std::to_string(i+1);
         check(source.alpha_mode!=cgltf_alpha_mode_blend,"alpha-blended materials are unsupported: "+m.name);
         if (source.has_pbr_metallic_roughness) {
             const auto& p=source.pbr_metallic_roughness; std::copy_n(p.base_color_factor,4,m.baseColor.begin());
@@ -394,8 +409,16 @@ void geometry(const cgltf_data& data,ModelAsset& asset) {
             const auto* colors=attribute(source,cgltf_attribute_type_color);
             ModelPrimitive p; p.material=source.material?static_cast<uint32_t>(source.material-data.materials):static_cast<uint32_t>(data.materials_count);
             const auto& material=asset.materials[p.material];
-            for (const auto* slot:{&material.baseColorTexture,&material.metallicRoughnessTexture,&material.normalTexture,&material.occlusionTexture,&material.emissiveTexture})
+            p.uvMask=static_cast<uint8_t>((uv0?1:0)|(uv1?2:0));
+            const auto authoredTangentUv=source.material&&source.material->normal_texture.texture?static_cast<uint32_t>(source.material->normal_texture.texcoord):0u;
+            if(!material.normalTexture.image.empty()&&material.normalTexture.texCoord!=authoredTangentUv){
+                if(tangents)warn(asset,"Normal-map UV selection changed; authored tangents were regenerated.");tangents=nullptr;
+            }
+            p.tangentUv=tangents?static_cast<uint8_t>(authoredTangentUv):material.normalTexture.image.empty()?0xff:static_cast<uint8_t>(material.normalTexture.texCoord);
+            for (const auto* slot:{&material.baseColorTexture,&material.metallicRoughnessTexture,&material.normalTexture,&material.occlusionTexture,&material.emissiveTexture}) {
+                check(slot->texCoord<=1,"material references a UV set beyond UV1");
                 check(slot->image.empty() || (slot->texCoord?uv1:uv0),"material references a missing UV set");
+            }
             const auto positionValues=floats(*positions); p.vertices.resize(positions->count);
             for (size_t v=0;v<positions->count;++v) std::copy_n(positionValues.data()+v*3,3,p.vertices[v].position.begin());
             auto apply=[&](const cgltf_accessor* a,size_t components,auto assignment) {
@@ -453,6 +476,7 @@ void geometry(const cgltf_data& data,ModelAsset& asset) {
                     if (inserted) p.vertices.push_back(v); p.indices.push_back(it->second);
                 }
             }
+            p.sourceVertexCount=p.vertices.size();p.sourceIndexCount=p.indices.size();
             target.primitives.push_back(static_cast<uint32_t>(asset.primitives.size())); asset.primitives.push_back(std::move(p));
         }
         asset.meshes.push_back(std::move(target));
@@ -506,7 +530,7 @@ void hierarchy(const cgltf_data& data,ModelAsset& asset) {
     if (asset.draws.empty()) warn(asset,"The selected scene has no drawable geometry.");
 }
 
-std::shared_ptr<ModelAsset> load(const fs::path& manifestFile,const fs::path& root,const fs::path& identityDirectory) {
+std::shared_ptr<ModelAsset> load(const fs::path& manifestFile,const fs::path& root,const fs::path& identityDirectory,const ModelResolvers& resolvers={},bool metadataOnly=false) {
     const auto bytes=read(manifestFile); const auto manifest=Json::parse(bytes);
     check(manifest.value("version",0)==1,"unsupported model package version");
     const auto directory=manifestFile.parent_path(), documentPath=managedPath(directory,manifest.at("document").get<std::string>());
@@ -524,10 +548,12 @@ std::shared_ptr<ModelAsset> load(const fs::path& manifestFile,const fs::path& ro
     std::vector<Bytes> buffers(data->buffers_count);
     for (size_t i=0;i<data->buffers_count;++i) {
         auto& buffer=data->buffers[i]; check(buffer.uri && dependencies.contains(buffer.uri),"buffer is not a declared managed dependency");
-        buffers[i]=read(managedPath(directory,buffer.uri)); check(buffer.size>0 && buffers[i].size()==buffer.size,"managed buffer size mismatch");
+        const auto source=managedPath(directory,buffer.uri);check(fs::is_regular_file(source)&&buffer.size>0&&fs::file_size(source)==buffer.size,"managed buffer size mismatch");
+        if(metadataOnly)continue;
+        buffers[i]=read(source); check(buffers[i].size()==buffer.size,"managed buffer size mismatch");
         buffer.data=buffers[i].data(); buffer.data_free_method=cgltf_data_free_method_none;
     }
-    validateAccessors(*data);
+    if(!metadataOnly)validateAccessors(*data);
     auto asset=std::make_shared<ModelAsset>(); asset->name=manifest.at("name").get<std::string>(); asset->format=manifest.at("format").get<std::string>();
     asset->id=utf8((identityDirectory/"manifest.json").lexically_relative(root));
     for (size_t i=0;i<data->extensions_used_count;++i) warn(*asset,"Optional extension ignored: "+std::string(data->extensions_used[i]));
@@ -536,20 +562,39 @@ std::shared_ptr<ModelAsset> load(const fs::path& manifestFile,const fs::path& ro
     std::vector<std::string> images; images.reserve(data->images_count);
     for (size_t i=0;i<data->images_count;++i) {
         const auto& image=data->images[i]; check(image.uri && dependencies.contains(image.uri),"image is not a declared managed dependency");
-        const auto source=managedPath(directory,image.uri); const auto imageBytes=read(source);
-        if (imageExtension(imageBytes).empty()) {
+        const auto id=utf8((identityDirectory/path(image.uri)).lexically_relative(root));
+        const auto replacement=resolvers.image?resolvers.image(id):id;
+        if(replacement.empty() || replacement.starts_with("builtin:")) { images.push_back(id);asset->images.push_back(id);continue; }
+        auto source=managedPath(directory,image.uri);
+        if(replacement!=id) { source=fs::weakly_canonical(root/path(replacement));check(inside(source,root/"assets"),"replacement image escapes managed assets"); }
+        if(metadataOnly){check(fs::is_regular_file(source),"managed material image is missing");const auto ext=lower(utf8(source.extension()));
+            if(ext==".png"||ext==".jpg"||ext==".jpeg"||ext==".tga"||ext==".bmp"){images.push_back(id);asset->images.push_back(id);}
+            else{images.emplace_back();warn(*asset,"An image used only by an unsupported optional extension is retained but not displayed.");}continue;}
+        const auto imageBytes=read(source);
+        if (replacement==id && imageExtension(imageBytes).empty()) {
             images.emplace_back(); warn(*asset,"An image used only by an unsupported optional extension is retained but not displayed.");
         } else {
-            validateImage(imageBytes); const auto id=utf8((identityDirectory/path(image.uri)).lexically_relative(root));
+            validateImage(imageBytes);
             images.push_back(id); asset->images.push_back(id);
         }
     }
-    materials(*data,images,*asset); geometry(*data,*asset); hierarchy(*data,*asset); return asset;
+    materials(*data,images,*asset);
+    for(size_t i=0;i<asset->materials.size();++i) { const auto id=importedMaterialId(asset->id,i);asset->materialIds.push_back(id);
+        if(resolvers.material)if(auto replacement=resolvers.material(id))asset->materials[i]=std::move(*replacement);
+    }
+    if(!metadataOnly){geometry(*data,*asset);hierarchy(*data,*asset);}return asset;
 }
 
 } // namespace
 
-std::shared_ptr<ModelAsset> importModelPackage(const fs::path& source,const fs::path& projectRoot) {
+ModelImportStage::~ModelImportStage() {
+    if((published&&!reused)||staging.empty())return;
+    try {const auto resolved=fs::weakly_canonical(staging),parent=fs::weakly_canonical(root/"assets/models");
+        if(resolved.parent_path()!=parent||!utf8(resolved.filename()).starts_with(".staging-model-"))return;
+        std::error_code ignored;fs::remove_all(resolved,ignored);
+    }catch(...) { /* A staged package has no published identity. Never widen cleanup. */ }
+}
+std::shared_ptr<ModelImportStage> stageModelImport(const fs::path& source,const fs::path& projectRoot) {
     const auto ext=lower(utf8(source.extension())); check(ext==".gltf" || ext==".glb","unsupported model extension");
     const auto root=fs::weakly_canonical(fs::absolute(projectRoot)); const auto models=root/"assets"/"models";
     fs::create_directories(models); static std::atomic<uint64_t> sequence{};
@@ -558,20 +603,108 @@ std::shared_ptr<ModelAsset> importModelPackage(const fs::path& source,const fs::
         id="model-"+std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count())+"-"+std::to_string(sequence.fetch_add(1));
         destination=models/path(id); stage=models/path(".staging-"+id);
     } while (fs::exists(destination) || fs::exists(stage));
-    fs::create_directory(stage);
-    try {
-        const auto original=read(source); auto manifest=stageDocument(source,stage,original,ext==".glb");
-        writeJson(stage/"manifest.json",manifest); auto asset=load(stage/"manifest.json",root,destination);
-        fs::rename(stage,destination); return asset;
-    } catch (...) {
-        // This uniquely created staging directory is the only rollback target.
-        std::error_code ignored; fs::remove_all(stage,ignored); throw;
+    check(fs::create_directory(stage),"could not create a unique model staging directory");
+    auto result=std::make_shared<ModelImportStage>();result->root=root;result->staging=stage;result->destination=destination;result->sourceName=utf8(source.stem());
+    const auto original=read(source);auto manifest=stageDocument(source,stage,original,ext==".glb");
+    writeJson(stage/"manifest.json",manifest);
+    auto identity=identifyModelImport(stage);result->contentIdentity=identity.digest;result->inputFiles=std::move(identity.files);
+    manifest["importIdentity"]={{"version",1},{"sha256",result->contentIdentity}};writeJson(stage/"manifest.json",manifest);
+    result->inputFiles.back()={stage/"manifest.json",fs::file_size(stage/"manifest.json"),fs::last_write_time(stage/"manifest.json")};
+    const auto reserved=reservedModelImportIds(root);
+    const auto matching=findMatchingModelImport(root,result->contentIdentity,reserved);
+    if(matching) {destination=matching->directory;result->reuseFiles=matching->files;}
+    else {
+        const auto base="model-"+result->contentIdentity;
+        for(std::uint32_t suffix=0;;++suffix) {
+            destination=models/path(base+(suffix?"-"+std::to_string(suffix):std::string{}));
+            if(!fs::exists(destination) && !reserved.contains(utf8((destination/"manifest.json").lexically_relative(root))))break;
+        }
     }
+    result->destination=destination;result->asset=load(stage/"manifest.json",root,destination);
+    if(matching)result->asset->name=matching->name;
+    return result;
 }
-std::shared_ptr<ModelAsset> loadModelPackage(const fs::path& manifest,const fs::path& projectRoot) {
+namespace {
+void retargetImport(ModelAsset& asset,const fs::path& root,const fs::path& directory) {
+    const auto previous=path(asset.id).parent_path();const auto next=directory.lexically_relative(root);
+    const auto remap=[&](std::string& id) {
+        if(id.empty())return;const auto relative=path(id).lexically_relative(previous);
+        if(!relative.empty() && *relative.begin()!=fs::path(".."))id=utf8(next/relative);
+    };
+    asset.id=utf8(next/"manifest.json");
+    for(auto& id:asset.images)remap(id);
+    for(auto& material:asset.materials)
+        for(auto* texture:{&material.baseColorTexture,&material.metallicRoughnessTexture,&material.normalTexture,&material.occlusionTexture,&material.emissiveTexture})remap(texture->image.id);
+    for(std::size_t i=0;i<asset.materialIds.size();++i)asset.materialIds[i]=importedMaterialId(asset.id,i);
+    if(asset.stream) {auto stream=std::make_shared<streaming::ModelStream>(*asset.stream);stream->id=asset.id;asset.stream=std::move(stream);}
+}
+bool importReserved(const ModelAsset& asset,const std::function<bool(const std::string&)>& reserved) {
+    if(reserved(asset.id))return true;
+    for(const auto& id:asset.images)if(reserved(id))return true;
+    for(const auto& id:asset.materialIds)if(reserved(id))return true;
+    return false;
+}
+}
+std::shared_ptr<ModelAsset> publishModelImport(const std::shared_ptr<const ModelImportStage>& stage,const std::function<bool(const std::string&)>& reservedId) {
+    check(stage&&stage->asset,"model import stage is unavailable");
+    static std::mutex publication;const std::lock_guard lock(publication);
+    struct Published {std::string digest;std::vector<ModelImportFileStamp> files;};
+    static std::unordered_map<std::string,Published> published;
+    static std::deque<std::string> recent;
+    if(stage->published)return stage->asset;
+    const auto root=fs::weakly_canonical(stage->root),models=fs::weakly_canonical(root/"assets/models");
+    const auto staging=fs::weakly_canonical(stage->staging);auto destination=fs::weakly_canonical(stage->destination);
+    check(staging.parent_path()==destination.parent_path()&&utf8(staging.filename()).starts_with(".staging-model-"),"model import staging path is invalid");
+    check(staging.parent_path()==models,"model import publication escapes the managed library");
+    check(modelImportFilesUnchanged(stage->inputFiles),"model import staging files changed before publication");
+    const auto reserved=reservedId?std::unordered_set<std::string>{}:reservedModelImportIds(root);
+    const std::function<bool(const std::string&)> unavailable=reservedId?reservedId:[&](const auto& id){return reserved.contains(id);};
+    const auto workerDestination=destination;
+    const auto reuse=[&](const fs::path& candidate) {
+        if(!fs::is_directory(candidate))return false;
+        const auto trusted=published.find(lower(utf8(candidate)));
+        const bool verified=candidate==workerDestination && !stage->reuseFiles.empty()
+            ? modelImportFilesUnchanged(stage->reuseFiles)
+            : trusted!=published.end() && trusted->second.digest==stage->contentIdentity && modelImportFilesUnchanged(trusted->second.files);
+        if(!verified)return false;
+        retargetImport(*stage->asset,root,candidate);if(importReserved(*stage->asset,unavailable))return false;
+        // Another worker may have prepared this exact package concurrently. Only
+        // the publication thread decides identity; no existing file is replaced.
+        std::ifstream input(candidate/"manifest.json");const auto metadata=Json::parse(input);stage->asset->name=metadata.at("name").get<std::string>();
+        stage->destination=candidate;fs::remove_all(staging);stage->reused=true;stage->published=true;return true;
+    };
+    if(reuse(destination))return stage->asset;
+    const auto base="model-"+stage->contentIdentity;
+    for(std::uint32_t suffix=0;;++suffix) {
+        destination=models/path(base+(suffix?"-"+std::to_string(suffix):std::string{}));
+        if(reuse(destination))return stage->asset;
+        if(fs::exists(destination))continue;
+        retargetImport(*stage->asset,root,destination);if(importReserved(*stage->asset,unavailable))continue;
+        break;
+    }
+    stage->asset->name=stage->sourceName;
+    auto inputs=stage->inputFiles;for(auto& input:inputs)input.file=destination/input.file.lexically_relative(staging);
+    const auto key=lower(utf8(destination));stage->destination=destination;
+    std::erase(recent,key);recent.push_back(key);
+    try {published[key]={stage->contentIdentity,std::move(inputs)};fs::rename(staging,destination);}
+    catch(...) {published.erase(key);recent.pop_back();throw;}
+    // This bridge covers overlapping staged jobs; normal later imports validate
+    // managed bytes on a worker. It is not an unbounded residency cache.
+    while(recent.size()>256) {published.erase(recent.front());recent.pop_front();}
+    stage->published=true;return stage->asset;
+}
+std::shared_ptr<ModelAsset> importModelPackage(const fs::path& source,const fs::path& projectRoot) {
+    return publishModelImport(stageModelImport(source,projectRoot));
+}
+std::shared_ptr<ModelAsset> loadModelPackage(const fs::path& manifest,const fs::path& projectRoot,const ModelResolvers& resolvers) {
     const auto root=fs::weakly_canonical(fs::absolute(projectRoot)); const auto file=fs::weakly_canonical(manifest.is_absolute()?manifest:root/manifest);
     check(file.filename()=="manifest.json" && inside(file,fs::weakly_canonical(root/"assets"/"models")),"model manifest is outside the managed model library");
-    return load(file,root,file.parent_path());
+    return load(file,root,file.parent_path(),resolvers);
+}
+std::shared_ptr<ModelAsset> loadModelMaterialMetadata(const fs::path& manifest,const fs::path& projectRoot,const ModelResolvers& resolvers) {
+    const auto root=fs::weakly_canonical(fs::absolute(projectRoot));const auto file=fs::weakly_canonical(manifest.is_absolute()?manifest:root/manifest);
+    check(file.filename()=="manifest.json"&&inside(file,fs::weakly_canonical(root/"assets/models")),"model manifest is outside the managed model library");
+    return load(file,root,file.parent_path(),resolvers,true);
 }
 
 } // namespace crimson

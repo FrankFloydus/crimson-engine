@@ -22,16 +22,23 @@ struct EditorFrame {
     bool showSphere{false};
     bool frameModel{false};
     Vec2 modelDropPosition{};
+    // Transient placement and visible thumbnail demands do not mutate a scene.
+    std::vector<std::string> placementPreviewIds;
+    Vec2 placementPreviewPosition{};
+    std::vector<std::string> visiblePreviewIds;
     bool documentReplaced{false};
 };
 
 struct BrowserActions {
     bool newScene{false};
     std::string openScene, deleteScene;
+    std::vector<std::string> deleteAssetIds;
+    std::vector<std::string> visiblePreviewIds;
+    int previewSize{128};
 };
 
 BrowserActions drawAssetBrowser(AssetLibrary& assets, SDL_Window* window);
-bool drawEnvironmentControls(EnvironmentSettings& environment, AssetLibrary& assets, const Renderer& renderer);
+bool drawEnvironmentControls(EnvironmentSettings& environment, AssetLibrary& assets, const Renderer& renderer, bool persistLegacy = false);
 
 // Call once after creating the ImGui context. DPI is supplied by the host;
 // this does not change window/framebuffer coordinates or SDL input scaling.

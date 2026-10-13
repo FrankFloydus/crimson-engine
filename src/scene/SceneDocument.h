@@ -3,8 +3,10 @@
 #include "Scene.h"
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace crimson {
@@ -15,6 +17,19 @@ struct SceneSelection {
 };
 struct SceneAssetEntry { std::string id, name; };
 struct ModelPlacement { std::string assetId, name; Mat4 local{}; };
+struct SceneSnapshot {
+    std::string id, name;
+    std::vector<EntityRecord> records;
+    SceneProperties properties;
+    std::optional<Camera> previewCamera;
+    uint64_t fingerprint{};
+};
+std::filesystem::path sceneAssetPath(const std::filesystem::path& projectRoot, const std::string& id);
+SceneSnapshot readSceneSnapshot(const std::filesystem::path& projectRoot, const std::string& id);
+std::string serializeSceneSnapshot(const SceneSnapshot& snapshot);
+void saveSceneSnapshot(const std::filesystem::path& projectRoot, const std::string& id, const SceneSnapshot& snapshot);
+uint64_t sceneFileFingerprint(const std::filesystem::path& projectRoot, const std::string& id);
+uint64_t sceneTextFingerprint(std::string_view text) noexcept;
 std::vector<SceneAssetEntry> scanSceneAssets(const std::filesystem::path& projectRoot,
                                            std::vector<std::string>* diagnostics = nullptr);
 bool deleteSceneAsset(const std::filesystem::path& projectRoot, const std::string& id, std::string& error);
@@ -51,6 +66,22 @@ private:
 
 class SceneDocument {
 public:
+    class PreparedExternalChange {
+    public:
+        PreparedExternalChange(PreparedExternalChange&&) noexcept=default;
+        PreparedExternalChange& operator=(PreparedExternalChange&&) noexcept=default;
+        PreparedExternalChange(const PreparedExternalChange&)=delete;
+        PreparedExternalChange& operator=(const PreparedExternalChange&)=delete;
+    private:
+        friend class SceneDocument;
+        PreparedExternalChange()=default;
+        std::unique_ptr<Scene> scene;
+        SceneSelection selection;
+        const SceneDocument* owner{};
+        std::string expectedId,status,name;
+        uint64_t expectedGeneration{},expectedRevision{},expectedState{},expectedSavedState{},expectedFingerprint{},savedFingerprint{};
+        bool wasDirty{},newDocument{};
+    };
     using Mutation = std::function<void(std::vector<EntityRecord>&, SceneProperties&)>;
     explicit SceneDocument(std::filesystem::path projectRoot);
     const Scene& scene() const { return scene_; }
@@ -58,6 +89,7 @@ public:
     const SceneSelection& selection() const { return selection_; }
     void select(std::vector<EntityId> ids, EntityId primary = NoEntity);
     const std::string& assetId() const { return assetId_; }
+    const std::filesystem::path& projectRoot() const { return projectRoot_; }
     const std::string& displayName() const { return name_; }
     const std::string& status() const { return status_; }
     bool dirty() const;
@@ -65,7 +97,25 @@ public:
 
     void newScene();
     bool load(const std::string& id);
-    bool save(const std::string& name = {}, bool saveAs = false);
+    bool openPreparedSnapshot(const SceneSnapshot& snapshot);
+    bool save(const std::string& name = {}, bool saveAs = false, bool overwriteExternal = false);
+    bool reloadFromDisk();
+    bool applyReloadSnapshot(const SceneSnapshot& snapshot, bool preserveSelection = true);
+    bool externalFileChanged() const;
+    void setPreviewCamera(const Camera& camera) { previewCamera_=camera; }
+    const std::optional<Camera>& previewCamera() const { return previewCamera_; }
+    uint64_t loadedFingerprint() const { return loadedFingerprint_; }
+    uint64_t documentGeneration() const { return documentGeneration_; }
+    std::vector<std::string> historicalModelReferences() const;
+    // Global resource deletion is outside scene undo. Install its complete
+    // validated candidate and remove history that could resurrect deleted IDs.
+    bool applyExternalAssetChanges(const std::vector<EntityRecord>& records, const SceneProperties& properties,
+                                   const std::string& label, bool wasDirty);
+    PreparedExternalChange prepareExternalAssetChanges(const std::vector<EntityRecord>& records,const SceneProperties& properties,
+                                                       const std::string& label,bool wasDirty,uint64_t savedFingerprint) const;
+    PreparedExternalChange prepareNewSceneAfterAssetDeletion() const;
+    bool canCommitExternalAssetChanges(const PreparedExternalChange& prepared) const noexcept;
+    bool commitExternalAssetChanges(PreparedExternalChange&& prepared) noexcept;
     bool edit(const std::string& label, const Mutation& mutation);
     bool begin(const std::string& label);
     bool update(const Mutation& mutation);
@@ -78,6 +128,8 @@ public:
     std::vector<EntityId> createModels(const std::vector<ModelPlacement>& models);
     EntityId createDirectionalLight(const std::string& name = "Directional Light");
     EntityId createPointLight(const std::string& name = "Point Light");
+    EntityId createEnvironment(const std::string& name = "Environment");
+    bool setActiveEnvironment(EntityId id);
     bool updateEntity(EntityId id, const EntityRecord& record, const std::string& label = "Edit entity");
     bool eraseSelection();
     bool duplicateSelection();
@@ -86,6 +138,7 @@ public:
     bool ungroupSelection();
     bool setProperties(const SceneProperties& properties, const std::string& label = "Edit scene settings");
 private:
+    bool applyPreparedSnapshot(const SceneSnapshot&,bool preserveSelection,bool opening);
     struct Transaction {
         std::string label;
         std::vector<EntityRecord> before;
@@ -97,6 +150,9 @@ private:
     UndoRedoManager history_;
     SceneSelection selection_;
     std::string assetId_, name_{"Untitled"}, status_;
+    std::optional<Camera> previewCamera_;
+    uint64_t loadedFingerprint_{};
+    uint64_t documentGeneration_{};
     std::optional<Transaction> transaction_;
     EntityId create(EntityRecord record, const std::string& label);
     bool applyHistory(const SceneCommand& command, bool forward);

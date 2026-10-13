@@ -19,17 +19,18 @@ Project root: `C:\Users\Drako\Desktop\_CRIMSON_ENGINE\crimson-engine`. The offic
 | Editor | Dear ImGui 1.92.8 docking inside the SDL window | Implemented |
 | Entities | EnTT storage with explicitly ordered Crimson systems | Implemented scene authoring; runtime simulation remains planned |
 | Math | Engine-owned packed values and helpers; GLM private implementation | Implemented |
-| Physics | Jolt rigid-body world; controlled actors and dynamic props | Agreed; integrate with the character milestone |
-| Models | Static glTF 2.0 / GLB first | Managed import and independent scene instances implemented |
+| Physics | Jolt rigid-body world; controlled actors and dynamic props | Agreed; character/dynamic simulation remains planned; particle collision may introduce static queries first |
+| Models | Static glTF 2.0 / GLB first | Managed import, independent instances and derived LOD streaming implemented |
+| Resources | Typed CPU versions, asynchronous preparation, explicit GPU owners | Implemented; user acceptance pending |
 | Game UI | Custom UI authored in C++ initially | Future work |
 | Scale | Design for several hundred active actors | Future profiling target |
 
-Keep the manifest baseline `d0c191d142b7bc048141ddfb618aa9ae5dba0233`. EnTT, ImGuizmo and GLM support the scene-authoring slice. Jolt remains planned for the character milestone. Preserve the incremental build and fast launch workflow.
+Keep the manifest baseline `d0c191d142b7bc048141ddfb618aa9ae5dba0233`. EnTT, ImGuizmo and GLM support the scene-authoring slice. Jolt remains unimplemented: the planned particle collision step may introduce its static query foundation before character movement and dynamic physics. Preserve the incremental build and fast launch workflow.
 
 ### Implemented today
 
-- Native scene assets with independent model entities, empty entities and directional/point-light entities; environment and exposure belong to the scene.
-- A docked Viewport, rootless Outliner, Inspector, Settings panel and Asset Browser with saved layout and Dear ImGui's default colors, font and sizing.
+- Native scene assets with independent model entities, empty entities, directional/point lights and Environment entities; one persistent scene ID selects the active Environment.
+- A docked Viewport, rootless Outliner, Inspector and Asset Browser with saved layout/visibility and Dear ImGui's default colors, font and sizing. Inspector contains component/environment controls; Settings has been removed.
 - A flat crimson application emblem: transparent 512×512 source PNG and a multi-resolution ICO embedded in the Windows executable. SDL owns the native window-class icons; the application also assigns those borrowed handles explicitly to the window with `WM_SETICON`. The window is destroyed before SDL releases the class icons. Successful links and desktop-shortcut updates send a targeted Windows Shell icon refresh so cached artwork can be reloaded.
 - Quader-derived perspective orbit, pan, fly, zoom, and an XZ ground grid.
 - Managed PNG, JPEG, TGA, BMP and Radiance HDR imports with thumbnails and adjacent asset pickers. HDR sources are environment-only.
@@ -40,8 +41,12 @@ Keep the manifest baseline `d0c191d142b7bc048141ddfb618aa9ae5dba0233`. EnTT, ImG
 - Scene-level environment lighting with a built-in studio or imported equirectangular panorama, diffuse irradiance, roughness-prefiltered specular lighting and a two-channel BRDF lookup.
 - Environment enable/intensity/Y rotation and separate project-relative persistence in `assets/environment.json`.
 - Offscreen HDR scene rendering, exposure/Reinhard tone mapping, grid compositing, final sRGB encoding, and ImGui presentation.
+- CPU-only typed ResourceManager stores, immutable exact-version snapshots, two-worker preparation, dependency invalidation and soft retention policies; revision-aware model/texture GPU caches remain with their explicit owners.
+- Progressive role-correct texture mip allocations, compact meshoptimizer LOD caches, coherent visible/picking snapshots and managed asset/shader hot reload that retains working versions on failure.
+- First-class read-only imported material assets and reference-aware multi-asset/folder deletion with protected defaults, project-wide scene updates, journal rollback and interrupted-operation recovery.
+- File/View menus, live application Preferences, Ctrl+Space browser visibility, automatic single-pane tab hiding, parent-folder cards, preview-size ticks, multi-drag feedback and rendered model/material/scene thumbnails.
 
-The scene-authoring implementation awaits user acceptance. Imported-material editing, Jolt, Play/Stop and a player controller remain unimplemented. The procedural sphere, its saved material and the older model-preview persistence remain available to legacy diagnostics without becoming mandatory content in every authored scene.
+Scene authoring and the resource-management/editor slice await broader user acceptance. The user tested and accepted material sphere previews on 2026-10-13. Imported-material editing, Jolt, Play/Stop and a player controller remain unimplemented. The procedural sphere, its saved material and older model-preview persistence remain available to legacy diagnostics without becoming mandatory content in authored scenes.
 
 ### Immediate progression
 
@@ -50,10 +55,15 @@ The scene-authoring implementation awaits user acceptance. Imported-material edi
 | 1. IBL and normal maps | Implemented | Environment lighting and normal maps in the working sphere editor |
 | 2a. Managed glTF/GLB import and preview | Implemented | Unified import, managed dependencies, authored materials/hierarchy, single model replacement and reopening |
 | 2b. Scene authoring | Implemented; user acceptance pending | Native scene assets, EnTT entities, lights, hierarchy, multiple selection, transform gizmos and undo/redo |
+| Resource and editor foundation | Implemented; user acceptance pending | Async/versioned resources, streaming, hot reload, material identity/deletion, Environment entities, Preferences and previews |
 | 2c. Imported-material editing | **Next** | Editable material inspection with explicit shared-material versus per-instance behavior |
 | 3. Imported player visual and controller | Planned | Static imported character, controlled collision, WASD movement, mouse aiming, and isometric Play camera |
 
 The first controllable character uses a static model. Define a focused skeletal-animation slice after milestone 3 works. The architecture does not prescribe ability, combat, inventory, or progression behavior.
+
+### Planned particle-system design
+
+[Particle system pre-work](PARTICLE_SYSTEM_PREWORK.md) defines the agreed CPU-first effect assets, dedicated authoring workflow, research rationale, and staged implementation. Its first step delivers a usable asset/editor/scene workflow with simple gravity particles; later steps add common functionality before specialized behavior. Every step retains working saved effects. The particle collision step may introduce a Jolt static query world with explicit colliders; character movement, dynamic bodies, and gameplay Play/Stop remain separate. This is planned work and does not replace milestone 2c as **Next** or mark any particle feature implemented.
 
 ## 2. Engine boundaries and interfaces
 
@@ -62,7 +72,8 @@ Introduce these boundaries incrementally as their features land. Start with conc
 | Boundary | Responsibility |
 | --- | --- |
 | Application / Platform | Thin SDL window/events, explicit service lifetime, project paths and frame loop |
-| Assets | Managed source files and dependencies, import/decoding, shared CPU data, material definitions, identity, and persistence |
+| Assets | Managed files/catalog/import publication, material identity, authored references/deletion and image GPU ownership |
+| Resources | Immutable CPU payloads, worker preparation, dependency/source epochs, requests, shared caches and retention |
 | Scene / World | EnTT entities, affine hierarchy, model references and lights; document/history/storage and CPU render extraction |
 | Math | Packed Crimson vectors, matrices, quaternions, rays and bounds; backend conversion stays private |
 | Renderer | bgfx resources, GPU caches, PBR/IBL, targets, and rendering scene instances |
@@ -73,7 +84,7 @@ Introduce these boundaries incrementally as their features land. Start with conc
 
 ### Target interfaces
 
-`ModelAsset`, `ModelInstance`, `RenderScene`, `Scene`, `SceneDocument` and the scene undo manager now serve authored scenes. `ModelMaterial` supplies read-only imported material definitions; editable material assets and runtime gameplay services remain planned.
+`ModelAsset`, `ModelInstance`, `RenderScene`, `Scene`, `SceneDocument` and the scene undo manager serve authored scenes. `MaterialAsset` gives read-only imported definitions their own persistent identity; editable material controls and runtime gameplay services remain planned.
 
 | Interface | Contract |
 | --- | --- |
@@ -92,24 +103,44 @@ Keep environment, exposure, lights and editor camera settings separate from indi
 
 ### Concrete editor and math boundaries
 
-`App` constructs owners, initializes the native window/renderer, forwards events and drives frames. `EditorSession` handles scene/session persistence and document actions. `SceneEditor` coordinates editor commands with the document and asset library; `SceneViewport` owns picking, gizmos, focus and navigation input arbitration. `ScenePanels` contains docked Outliner/Inspector/Settings views and applies document commands. `AssetBrowserPanel` owns browser interaction state; its CPU `BrowserCatalog` stores virtual folder/display-name metadata while preserving managed asset IDs and paths. Keep these ordinary concrete classes with explicit dependencies; do not move their implementation back into `App` or introduce a service locator, plugin framework, generic message bus or speculative scheduler.
+`App` constructs owners, initializes the window/renderer, forwards events and drives frames. `ResourceRuntime` publishes worker results, acknowledges self-writes, dispatches watched changes and coordinates shader replacement before editor drawing. `EditorSession` owns document/session actions, `EditorResources` freezes coherent prepared model groups, and `AssetPreviews` schedules isolated thumbnails/readbacks/cache writes. `SceneEditor` coordinates editor commands; `SceneViewport` owns picking, gizmos, focus and navigation input arbitration. `ScenePanels` contains Outliner/Inspector views and document commands. `AssetBrowserPanel` owns browser interaction; its CPU `BrowserCatalog` stores virtual folders/aliases without changing managed IDs. Keep these concrete dependencies out of `App`; no service locator or general job graph is required.
 
 Engine public interfaces use `Vec2/3/4`, `Quat`, `Mat3/4`, `Ray` and `Aabb` from `src/math`. Matrices are column-major, multiply column vectors and default to identity; accumulation uses explicit zero matrices. GLM is private to the math implementation. Serialization writes packed scalar arrays, while renderer and ImGuizmo adapters use explicit `.data()` boundaries. No GLM, bx, ImGui or GPU-specific math type becomes persistent scene data.
 
 ### Dependencies and resource ownership
 
 - The application constructs services and passes explicit dependencies. Controller and gameplay code do not call ImGui or bgfx.
-- Scene components carry asset references and runtime handles, not ownership of shared GPU resources.
+- Scene components/history carry persistent typed asset references, not residency handles or GPU ownership.
 - The rendering boundary owns GPU meshes, material textures, environment resources, and targets. The tools adapter owns its ImGui GPU resources under the same bgfx lifetime.
 - Physics owns Jolt worlds, bodies, shapes, constraints, and body-to-entity mappings. Actor/controller code uses the engine-owned adapter.
 - Background decoding returns completed CPU results through publication queues. It does not create GPU resources or modify the world directly.
 - The main thread initially owns authoritative world mutation and application-side render submission. Jolt may execute internal jobs; its callbacks collect facts rather than changing EnTT.
 
-Current ownership is smaller and partly combined: `AssetLibrary` owns material texture/thumbnail GPU resources and managed source/persistence data, `Renderer` owns scene meshes/targets/programs and derived environment GPU resources, and `ImGuiBgfx` owns tool rendering resources. The renderer-owned environment object releases its resources before bgfx shutdown. Environment CPU preprocessing/cache preparation is invoked explicitly when a source changes, outside ordinary rendering. Separate asset decoding/storage from GPU caches when the relevant slice needs it; do not present that full separation as already implemented.
+| Owner | Current responsibility |
+| --- | --- |
+| `ResourceManager` | Immutable CPU model metadata/geometry, decoded images, materials, scene snapshots, environment bakes, shader binaries and derived-cache descriptors; workers, dependencies and retention |
+| `AssetLibrary` | Managed imports/catalog/storage, authored reference policy and transactions; `TextureStreamer` owns image/material texture and image-thumbnail GPU allocations |
+| `Renderer` | Revision-aware shared model buffers, environment resources, scene programs, picking and isolated model/scene preview targets |
+| `ImGuiBgfx` | ImGui program and font GPU resources |
+| `SceneDocument` | Mutable CPU scene, selection, immutable semantic edit patches and saved-state tracking |
 
-Model parsing, validation and package creation are CPU-only, using cgltf and MikkTSpace from the pinned manifest. The file-dialog callback queues paths; AssetLibrary processes imports on the main thread. Model images use AssetLibrary's existing texture ownership, with color/data image resources shared independently of per-binding sampler flags. Renderer prepares and caches GPU model resources outside frame submission, keyed by shared model identity, and reuses primitive buffers across scene instances and imported node references. Failed preparation reports diagnostics while retaining working resources. Scene/history records hold asset IDs rather than GPU ownership.
+`AssetRef<T>` preserves serialized IDs without keeping payloads resident. RAII `ResourceHandle<T>` expresses live interest; `ResourceSnapshot<T>` leases an immutable exact version. Publishing a replacement leaves old readers valid. Entries track source epoch, job generation, dependency fingerprint, published revision, state and diagnostics. Failed replacements retain the last working payload. Cache keys include identity/type/processing variant; image source decoding is shared while color/data/normal and mip policies remain distinct. CPU payload and GPU leases are separate; uploaded textures do not pin source pixels.
 
-Every resource has a named owner. Shutdown cancels pending work, waits for outstanding jobs, releases runtime/physics state and GPU-owning services, then shuts down bgfx and SDL. Async results carry a project/world generation so stopped or replaced sessions cannot receive stale results.
+Two CPU workers serve a bounded deduplicated priority queue. Selected/visible content and placement take priority over browser previews. Imports stage complete packages on workers, then publish files/catalog entries on the main thread. Workers also decode images, process cgltf/MikkTSpace geometry, generate mip/LOD caches, bake environments and compile shaders. They never call bgfx/ImGui or mutate documents. Completed jobs carry generations/epochs and exact dependencies; stale work is rejected. Model/material/texture groups become visible only when coherent candidates are prepared before drawing. Existing working groups survive failed replacements.
+
+The default soft targets are 512 MiB CPU and 512 MiB aggregate managed GPU resources, including a 64 MiB thumbnail sublimit. Idle retention is five seconds; pressure trims unpinned least-recently-used resources immediately. Pending and leased retired allocations count toward accounting. Live leases remain valid above soft limits. Model/image uploads are chunked toward 4 MiB and roughly 2 ms per frame; an individual backend call can exceed that time target. Browser requests only visible card resources. Editor/library metadata interests expire, and submitted draws/readbacks pin their actual CPU/GPU versions.
+
+Shutdown stops watchers/new requests, cancels and joins workers/compiler processes, drains pending readbacks, releases editor/library/renderer/ImGui GPU owners before bgfx, then releases CPU caches and SDL. Async picks also carry document generation/request identity and the actual main-view resource signature; unrelated thumbnail changes do not invalidate them.
+
+### Streaming and hot reload
+
+Versioned texture-cache indices address independently readable, CRC-checked levels. Warm requests read required levels without full-source decoding. Cold requests first publish complete coarse physical textures whose longest edge is at most 64 pixels, then swap fully uploaded sharper allocations with valid mip tails. Color RGB filters in linear light; alpha/data stay linear; normal mips renormalize safely. All six glTF minification modes, magnification, wrapping and UV selection survive; non-mip variants are single level. Demand derives from projected bounds/UV use, shared consumers request the highest detail, selected models request native resolution, and invisible models do not refine. Picking and color rendering use identical resident alpha-cutout textures.
+
+meshoptimizer 1.1 creates up to three compact attribute-aware LODs at half, quarter and eighth source triangle counts, capped at 1% source-relative error. LOD0 stays exact. Material boundaries, seams, normals, colors and tangent handedness constrain simplification; unsafe/useless reductions stop. Metadata/hierarchy/material references/bounds load independently from CRC-checked vertex/index payloads. Conservative affine-projected error chooses levels at one pixel with 20% hysteresis; selected models request LOD0. Complete candidates publish after chunked uploads, preserving previous buffers on failure.
+
+A Windows watcher debounces managed sources and engine shader sources/includes for 200 ms, excluding caches/staging/archived import originals. Self-writes are acknowledged; worker fingerprinting invalidates transitive dependencies. Texture/model/material/environment/scene candidates preserve working resources on invalid changes or unexpected disappearance. Clean active scenes reload between gestures while preserving camera/surviving selection; dirty scenes offer Reload/Keep editing/Save As, and overwrite requires resolving an external-save conflict.
+
+Shader workers use the pinned shaderc build configuration with discovered include dependencies and a versioned cache. Binary structure, reflection/uniform/sampler/layout/stage contracts and private DX11 bytecode preflight are checked before GPU creation. Renderer program families and ImGui publish together, including model/picking parity. Embedded programs are startup fallback; failed compilation/interface/preflight retains the current complete program group.
 
 ### Identity and persistence
 
@@ -121,17 +152,35 @@ Current material persistence writes version 2 of `assets/material.json`, adding 
 
 Model IDs are project-relative paths to versioned package manifests under `assets/models/<unique-id>/manifest.json`. Packages retain the original document and normalized managed geometry/image dependencies, so reopening never depends on the source folder. The older version-1 `assets/preview.json` remains preserved for the legacy single-model path; ordinary scene authoring uses native scene assets.
 
-Version-1 scene files live at `assets/scenes/<unique-id>.crimson-scene`. They contain a display name, scene environment/exposure and entity records: persistent 64-bit IDs encoded as hexadecimal strings, names, parent IDs, sibling order, full local matrices and optional model/light components. Paths are managed and project-relative. Loading validates the complete candidate before replacing the active scene; malformed data, cycles, missing parents, invalid matrices and light-limit violations leave the current document intact. Missing model/environment asset references remain in the document and receive diagnostics when resolved. Saving writes a complete temporary file and atomically replaces the selected scene asset through the shared CPU file helper; a failed write retains the prior file, identity and dirty state. Scene deletion only removes the selected native scene file, never its shared imports. `assets/editor-session.json` stores the last saved scene, per-scene editor camera and legacy-preview recovery state separately from authored scene content. New scenes start empty with the default environment.
+Model import identity is a worker-computed SHA-256 over the original document, normalized document and all managed buffer/image bytes. Unchanged complete inputs reuse a surviving package and its stable model/image/material IDs, including legacy packages without identity metadata. New packages use content-derived identities; main-thread publication rechecks worker-verified candidates and resolves concurrent duplicate requests before catalog registration. Changed content creates a distinct asset instead of implicitly replacing existing scene references. Tombstoned identities are not reused. Existing duplicate packages are never consolidated automatically, and reuse preserves browser folders/aliases.
+
+Version-2 scene files live at `assets/scenes/<unique-id>.crimson-scene`. They contain a display name, active Environment ID, optional saved preview camera and entity records: persistent 64-bit IDs encoded as hexadecimal strings, names, parent IDs, sibling order, full local matrices and optional model/light/Environment components. Version-1 scene-level environment/exposure migrates into an active Environment in memory; only explicit Save writes version 2. Paths remain managed/project-relative. Complete validation precedes document replacement; malformed data, cycles, missing parents, invalid matrices and light-budget violations preserve the current document/history. Missing asset references remain identifiable and survive saves. Atomic saves preserve prior identity/dirty state on failure. `assets/editor-session.json` keeps the last scene, editor cameras, panel visibility and legacy-preview recovery separately. New scenes remain empty; no active Environment uses studio and exposure 1. Additional Environment nodes/duplicates remain inactive until Make Active; deleting the active node clears activation, and undo restores both.
 
 The `Scene` owns the EnTT registry. Persistent entity IDs are independent of registry handles; validated registry replacements invalidate runtime handles through a generation and increment the scene revision. Components contain identity, parent/order, a full affine local matrix, model reference and optional light data. Imported model nodes remain read-only asset internals instead of becoming editable EnTT entities. Light extraction supports up to four directional and sixteen point lights; creation, duplication and loading enforce those limits.
 
 Reparenting computes `inverse(newParentWorld) * oldWorld`, retaining shear, reflection and nonuniform scale. Cycles and singular parents are rejected atomically. Multiple selection operates on topmost selected roots, so selected descendants are transformed, deleted or duplicated once. ImGuizmo manipulates a stable orthonormal proxy; its delta applies to the original world matrices, then converts back through the parent inverse. A single root uses its origin as pivot; a group uses its union-bounds center. The UI must not decompose/recompose persistent matrices through Euler angles or discard shear silently.
 
-Outliner selection follows Quader's retained multi-selection drag and Ctrl/Shift range conventions. F2 edits names inline. Empty background is the unparent target; no common root is displayed. Group/Ungroup are atomic document commands, retaining world matrices and stable IDs. Inspector edits the primary entity's name and 12 affine matrix coefficients without decomposing the matrix. Its bottom row stays 0,0,0,1. Viewport gizmos use T/R/E/F without an operation toolbar or drag-status text.
+Outliner selection follows Quader's retained multi-selection drag and Ctrl/Shift range conventions. F2 edits names inline. Empty background is the unparent target; no common root is displayed. Group/Ungroup are atomic document commands, retaining world matrices and stable IDs. Inspector edits the primary entity's name and local Position/Rotation/Scale through explicit X/Y/Z fields, following Quader's property layout and gesture boundaries. UI rotation is in degrees with Quader's XYZ Euler convention (`Rz * Ry * Rx`); engine math uses radians. Full affine local matrices remain authoritative. Viewing a transform never recomposes it, and channel edits preserve the unedited translation/stretch/reflection rather than replacing the entire matrix with a lossy TRS approximation. Captured gesture values keep numeric rotation stable during edits and commit one undo command. Raw matrix coefficients are not ordinary Inspector controls. Viewport gizmos use T/R/E/F without an operation toolbar or drag-status text.
 
 Directional lights and their viewport arrows both transform the authored local -Z vector through the accumulated world matrix and normalize it. They must not reconstruct forward from cross(X,Y), which loses authored forward under reflection/shear. Quader's direct-axis policy is the reference; its -Y asset convention is not adopted by Crimson.
 
-Browser cards have one common footprint and a letterboxed square thumbnail. Selection borders appear only for selected entries. `assets/browser.json` stores versioned virtual folders and display aliases; moving/renaming browser entries never moves managed model dependencies or breaks scene/material IDs. Mixed folder moves validate atomically; malformed metadata is preserved with diagnostics. Typed drags retain image assignment, and multiple model drags place one selected batch through scene history.
+`InspectorTransform` owns buffered transform fields, captured gesture matrices and the active ImGui scalar identity. A released, deactivated or clipped field finalizes its owned transaction rather than relying only on one-frame deactivation events. Opening Edit explicitly finishes an owned panel edit before querying history, and releases that field's text buffer so it cannot reapply a value after Undo. Viewport gestures retain separate ownership. Zero scales are valid finite scene data and participate in normal history/save/reopen behavior; the renderer hides collapsed draws with a dedicated diagnostic rather than conflating them with nonfinite data. Restoring the transform restores drawing and clears that diagnostic.
+
+`SceneShortcuts` reads the production ImGui focus/input guards for scene commands; tests use that same routing rather than a second shortcut implementation. `SceneDiagnostics` merges renderer/resource messages into a dockable panel with `NoFocusOnAppearing`. Asynchronous diagnostics, including a zero-scale draw becoming hidden, must not take keyboard focus from the Inspector and block the next scene Undo.
+
+Browser cards share a footprint with a letterboxed square thumbnail and selection-only borders. Size ticks are 16/32/64/128/256/512, default 128. The synthetic parent **..** card accepts navigation/moves, while remaining outside rename/delete/selection/payload operations. Multi-drags show a count card; bounded tooltips are suppressed during drag/context/modal interaction. `assets/browser.json` stores virtual folders/display aliases without moving dependencies or changing IDs. Mixed moves validate atomically. Typed drags retain compatible image assignment; viewport model ghosts use delivery's grid intersection/fallback, have no persistent/pick IDs, and prepared delivery commits one batch command. Document replacement cancels pending placements.
+
+Successful model-payload delivery explicitly transfers keyboard focus from the source browser to the viewport. Scene Delete remains an undoable document command; Browser Delete is a separate asset-file action restricted to browser focus with no active widget or drag. Deferred preparation does not steal focus back if the user subsequently chooses another panel.
+
+Model thumbnails render with isolated studio lighting and a bounds-framed three-quarter camera. Material thumbnails apply native linear material definitions/bindings to one shared radius-1 sphere, with UV0/UV1 and analytic tangents. Godot's `EditorMaterialPreviewPlugin` is the setup reference: camera (0,0,3), 45-degree field of view, fixed key/fill directional lighting. The sphere shares tracked renderer geometry; material previews do not use legacy sphere assignment functions. Saved-scene thumbnails use the persisted editor camera; older scenes use combined bounds. Isolated targets/readbacks share the scheduler and retain leases through completion. Source/dependency/version signatures key GPU/PNG previews; cache writes run on workers. Capture requires texture versions matching the fingerprinted sources. Preview activity does not alter scene content or the active render environment.
+
+`AssetReferenceManager` indexes authored usages independently of residency. Stable read-only imported materials live under `assets/materials`; primitive indices retain parallel material references. A versioned `assets/references.json` records deliberate deletion/replacement mappings. Missing original bytes are bypassed only by these explicit mappings; unexpected disappearance remains corruption. Deleted sidecars are not regenerated, and retained package images/materials remain independently discoverable after model deletion.
+
+Browser multi-delete includes recursive virtual-folder contents, shows affected usages/scenes and compatible fallbacks, excludes candidates and rejects cycles/wrong kinds. Defaults are gray image, neutral tangent normal, studio environment and linear gray/roughness-1/metallic-0 opaque material without maps/emission. Replacement materials validate UV availability and tangent basis for every affected model; workers prepare regenerated geometry where needed. Without model replacement, all saved scenes and the active document remove referencing entities independently, promoting unrelated descendants with exact world placement. Affected active history resets with disclosure while retaining its previous clean/dirty state; unrelated unsaved edits are never written into saved files. Scene-file deletion stays outside entity undo. Staged files, same-volume quarantine and a recovery journal support rollback/recovery. The complete impact and active registry replacement are validated/prepared before durable commit; publication invalidates references, resources, picks and previews.
+
+Deletion impact and warning policy are distinct. Full usages retain active-document/history effects for safe transactions; `warningUsages` contains only surviving usable persisted direct owner resources, deduplicated per deleted asset/owner with merged slots. Unsaved runtime usages, history, editor-session/preview bookmarks and archived legacy sphere material/environment configuration do not trigger the stronger dependency warning, and owners removed in the same batch are excluded. Native material owners must be usable catalog resources; embedded material references without a usable sidecar belong to their surviving model file. This follows Godot's `DependencyRemoveDialog` filesystem-index/deletion-set check. Confirmation shows only counts, omitting zero categories and the selected-file list. Real cross-resource dependencies expose a collapsed details section containing only affected targets and their fallback controls. Deletion progress/errors are scoped to that operation rather than displaying unrelated import status.
+
+Preferences use a normal draggable, resizable floating window without a modal overlay or editor-wide input block. Its focused controls/drag gestures own their input; clicking back into the viewport restores scene interaction while Preferences stays open. Application-wide viewport background and grid colors/widths update immediately. Defaults follow Quader: background #151515, minor #4C4C4C/0.325 and major #727272/0.250, width range 0.25–8. Background is composited after tone mapping; analytic grid filtering and one final sRGB encoding remain unchanged. File replaces Scene; View owns panel visibility/reset layout and Ctrl+Space toggles Asset Browser under existing input guards. Single-panel panes auto-hide tabs while stacked panes keep them.
 
 The document history holds up to 256 semantic commands as immutable before/after patches of affected entity values, scene properties and selection IDs. A continuous gizmo/property drag has begin/update/commit/cancel boundaries and contributes one command; cancel restores the exact original values. Delete/duplicate preserve subtree relationships and IDs across undo/redo, with newly allocated IDs reused by redo. Failed and unchanged edits do not clear redo. Unique state tokens track the saved state through undo and branching; failed saves never mark a document clean. Opening/new scenes reset history after success. Selection, camera navigation, focusing and asset import are outside scene history.
 
@@ -148,7 +197,7 @@ Keep the current roughness floor of `0.045` and numerical safeguards until a mea
 ### Color and texture meaning
 
 - Accumulate lighting in linear HDR. Apply exposure and tone mapping once; encode the final image to sRGB once.
-- Preserve the editor sequence: **HDR scene -> exposure/Reinhard into linear display color -> grid -> sRGB viewport image -> ImGui tools**. The grid and tools remain independent of scene exposure.
+- Preserve the editor sequence: **HDR scene -> exposure/Reinhard into linear display color + exposure-independent background -> grid -> sRGB viewport image -> ImGui tools**. Grid, background and tools remain independent of scene exposure.
 - Texture roles specify decoding and channel selection. Albedo is sRGB color; roughness, metalness, and normal maps are linear data.
 - Environment panoramas use linear radiance for Radiance HDR and sRGB decoding for PNG/JPEG/TGA/BMP. HDR thumbnails are tone-mapped display previews; preprocessing reads the original HDR source. HDR sources cannot be assigned to material slots.
 - Standalone roughness/metalness maps retain their current red-channel behavior. glTF imports preserve packed roughness in green and metalness in blue through explicit channel metadata.
@@ -194,7 +243,7 @@ Managed import feeds **independent scene entities**. One Import button accepts i
 
 Supported geometry includes indexed/nonindexed triangles, converted strips/fans, 8/16/32-bit indices, interleaved/normalized and sparse attributes, UV0/UV1 and vertex colors. Missing normals use flat faces; normal-mapped primitives without tangents use MikkTSpace with corner splits. Selected scene roots use the declared default scene, otherwise the first scene, otherwise parentless nodes. Hierarchy transforms are preserved with inverse-transpose normals, mirrored winding and tangent handedness; singular transformed draws are skipped with diagnostics.
 
-Imported material factors are linear and separate from the sphere's editor-sRGB factors. Core metallic-roughness materials support base color/alpha, packed G/B roughness/metallic, normal scale, emissive, AO applied to indirect light, double-sided rendering and OPAQUE/MASK. Color textures decode sRGB while scalar/normal textures remain linear. Each texture binding retains UV-set selection and wrap/filter flags. Mipmap minification currently uses a warned non-mipmapped nearest/linear fallback. Missing referenced UV sets or sets beyond UV1 are rejected.
+Imported material factors are linear and separate from the sphere's editor-sRGB factors. Core metallic-roughness supports base color/alpha, packed G/B roughness/metallic, normal scale, emissive, indirect AO, double-sided rendering and OPAQUE/MASK. Color textures decode sRGB while scalar/normal maps remain linear. Texture bindings preserve UV selection/wrap/magnification and all six glTF minification modes through role-correct mip streaming. Missing UVs or sets beyond UV1 are rejected.
 
 BLEND materials, skins, morph targets, points/lines and unsupported required extensions fail import. Animations, imported cameras/lights and optional unsupported extensions produce warnings while core static content remains usable. Managed imports stage and validate complete dependencies before publication; failed files in a mixed batch do not prevent other valid imports. GPU preparation failures retain usable scene resources and report diagnostics.
 
@@ -204,7 +253,7 @@ BLEND materials, skins, morph targets, points/lines and unsupported required ext
 
 ### Milestone 3: imported player visual and controller
 
-Use the existing EnTT scene foundation for an entity with a transform, character motor, player controller and static model instance imported through milestone 2. Introduce Jolt and the runtime components when this slice starts; scene authoring itself does not require physics.
+Use the existing EnTT scene foundation for an entity with a transform, character motor, player controller and static model instance imported through milestone 2. Introduce the character/runtime Jolt components when this slice starts, reusing the static query foundation if the planned particle collision step has already landed; scene authoring itself does not require physics.
 
 Use controlled Jolt movement and an explicit collision shape. Attach the visual through a local transform for scale, forward-axis correction, and alignment. The visual follows the collision-resolved player pose; the mesh itself is not the motor or collision shape.
 
@@ -243,6 +292,7 @@ Computer control, including mouse/keyboard automation and interaction with the u
 | IBL / normal maps | Environment-only metal/dielectric response; roughness-dependent reflections; neutral/detailed normals; seams/poles; stable valid extremes; exposure-independent grid/tools; assignment persistence |
 | Model import | `.gltf` and `.glb`; multiple primitives/materials; nested transforms; 16/32-bit index needs; managed texture/buffer dependencies; independent instances; unsupported-feature diagnostics; reopening |
 | Scene authoring | Scene save/open/delete and missing references; multiple placement/selection; selectable model/light gizmos; T/R/E/F; affine parenting; grouped undo/redo; dirty-state branches; default ImGui visuals |
+| Resources/editor | Immutable versions and stale/cancelled work; cache/retirement/shutdown; warm mip/LOD residency; render/pick parity; last-good hot reload/conflicts; deletion fallbacks/rollback/project-wide updates; Environment activation/history; Preferences/docking; thumbnails and drag previews |
 | Player controller | Normalized diagonal movement; camera-relative directions; mouse facing while stationary/moving; ground targeting; coincident/missing aim; obstacle collision; camera follow; input capture/focus loss; repeated Play/Stop |
 
 After the controllable static character works, define the skeletal-animation slice. Further ARPG foundations—additional actors, gameplay, audio, shadows, VFX, game UI, and dense-scene profiling—receive their own scopes and acceptance criteria.
@@ -276,6 +326,7 @@ The recursive review covered the overview, sections 1–7, section 9 and their l
 | 9. Advanced topics | Later reference for measured lighting, visibility, streaming, and renderer work |
 
 - [Khronos: Building a Simple Engine](https://docs.vulkan.org/tutorial/latest/Building_a_Simple_Engine/introduction.html).
+- [Khronos: Resource Management](https://docs.vulkan.org/tutorial/latest/Building_a_Simple_Engine/Engine_Architecture/04_resource_management.html), for typed lifetime, caching, asynchronous loading, streaming and hot reload; adapted to explicit bgfx owners.
 - [EnTT: Entity Component System](https://github.com/skypjack/entt/wiki/Entity-Component-System), for entity lifetime, components, registries and views; serialized identity remains engine-owned.
 - [ImGuizmo](https://github.com/CedricGuillemet/ImGuizmo), for the transform manipulation widget; picking and input ownership remain editor responsibilities.
 - [Brian Karis: Real Shading in Unreal Engine 4](https://blog.selfshadow.com/publications/s2013-shading-course/karis/s2013_pbs_epic_notes_v2.pdf), especially pages 3–8 for BRDF conventions and split-sum IBL.

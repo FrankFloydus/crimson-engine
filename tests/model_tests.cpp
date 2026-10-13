@@ -79,20 +79,20 @@ void hierarchyAndManagedReopening(const fs::path& base) {
     near(asset->materials[0].normalScale,.5f); near(asset->materials[0].occlusionStrength,.7f); near(asset->materials[1].emissive[2],.025f);
     require(asset->materials[1].baseColorTexture.texCoord==1,"Per-slot UV selection lost");
     require(asset->materials[0].baseColorTexture.wrapV==crimson::ModelWrap::Mirror && asset->materials[0].baseColorTexture.magFilter==crimson::ModelFilter::Nearest,"Sampler state lost");
-    require(warning(*asset,"Mipmap") && warning(*asset,"MikkTSpace"),"Import warnings missing");
+    require(asset->materials[0].baseColorTexture.minFilter==crimson::ModelFilter::LinearMipmapLinear && warning(*asset,"MikkTSpace"),"Mipmap sampler mode or generated-tangent diagnostic missing");
     require(asset->images.size()==3,"Managed image catalog incomplete");
     require(asset->materials[0].metallicRoughnessTexture.image==asset->materials[0].occlusionTexture.image,"Packed texture identity not shared");
     near(asset->primitives[0].vertices[0].normal[2],1); near(asset->primitives[0].vertices[0].color[0],1);
     for (const auto& p:asset->primitives) for (const auto& v:p.vertices) {
         near(std::abs(v.tangent[3]),1); require(std::isfinite(v.tangent[0]),"Generated tangents invalid");
     }
-    const auto second=crimson::importModelPackage(fixtures.gltf,project); require(second->id!=asset->id,"Repeated imports overwrite existing asset IDs");
+    const auto second=crimson::importModelPackage(fixtures.gltf,project); require(second->id==asset->id,"Identical complete imports must reuse their stable asset ID");
     const auto glb=crimson::importModelPackage(fixtures.glb,project); require(glb->draws.size()==2 && glb->format=="GLB" && glb->images.size()==3,"Embedded GLB import failed");
     fs::rename(sources,base/"source-removed");
     const auto reopened=crimson::loadModelPackage(asset->id,project); require(reopened->id==asset->id && reopened->draws.size()==4,"Managed reopen used original source");
     const auto reopenedGlb=crimson::loadModelPackage(glb->id,project); require(reopenedGlb->images.size()==3,"Embedded GLB reopen failed");
     for (const auto& image:reopened->images) require(fs::is_regular_file(project/image),"Managed image file missing");
-    require(packages(project)==3,"Unexpected model package count");
+    require(packages(project)==2,"Unexpected model package count");
     const auto image=project/reopened->images[0]; fs::rename(image,image.string()+".removed");
     rejects([&]{crimson::loadModelPackage(asset->id,project);},"cannot read file");
 }

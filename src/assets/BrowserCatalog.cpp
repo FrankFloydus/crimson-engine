@@ -169,6 +169,34 @@ void BrowserCatalog::move(std::span<const std::string> ids,const std::string& de
     } catch (...) { folders_=oldFolders; presentation_=oldPresentation; throw; }
 }
 
+std::vector<std::string> BrowserCatalog::descendants(const std::string& folder) const {
+    validateFolder(folder);std::vector<std::string> result,pending{folder};
+    while(!pending.empty()) { const auto current=pending.back();pending.pop_back();
+        for(const auto& item:items(current)) { result.push_back(item.id);if(item.folder)pending.push_back(item.id); }
+    }
+    return result;
+}
+std::string BrowserCatalog::serializeWithout(std::span<const std::string> ids) const {
+    if(!writable_)throw std::runtime_error(status_);
+    const std::unordered_set<std::string> erased(ids.begin(),ids.end());
+    for(const auto& id:erased)if(isFolder(id))for(const auto& descendant:descendants(id))
+        if(!erased.contains(descendant))throw std::runtime_error("Folder deletion must include its complete contents.");
+    Json folders=Json::array(),assets=Json::object();std::vector<std::string> keys;
+    for(const auto& [id,folder]:folders_){(void)folder;if(!erased.contains(id))keys.push_back(id);}std::sort(keys.begin(),keys.end());
+    for(const auto& id:keys){const auto& f=folders_.at(id);folders.push_back({{"id",id},{"parent",f.parent},{"name",f.name}});}
+    for(const auto& [id,p]:presentation_)if(!erased.contains(id)&&!erased.contains(p.folder))assets[id]={{"folder",p.folder},{"name",p.name}};
+    return Json{{"version",1},{"folders",folders},{"assets",assets}}.dump(2)+"\n";
+}
+void BrowserCatalog::erase(std::span<const std::string> ids) {
+    const auto contents=serializeWithout(ids);auto prepared=prepareErase(ids);writeFileAtomically(file_,contents);*this=std::move(prepared);
+}
+BrowserCatalog BrowserCatalog::prepareErase(std::span<const std::string> ids)const {
+    (void)serializeWithout(ids);auto prepared=*this;
+    const std::unordered_set<std::string> erased(ids.begin(),ids.end());
+    std::erase_if(prepared.presentation_,[&](const auto& item){return erased.contains(item.first)||erased.contains(item.second.folder);});
+    for(const auto& id:ids){prepared.folders_.erase(id);prepared.assets_.erase(id);}return prepared;
+}
+
 bool BrowserSelection::contains(const std::string& id) const { return std::find(ids_.begin(),ids_.end(),id)!=ids_.end(); }
 void BrowserSelection::clear() { ids_.clear(); primary_.clear(); anchor_.clear(); }
 void BrowserSelection::set(const std::string& id) { clear(); if (!id.empty()) { ids_.push_back(id); primary_=anchor_=id; } }

@@ -16,6 +16,7 @@ struct ExtractedScene {
     std::vector<ExtractedModel> models;
     std::vector<DirectionalLight> directional;
     std::vector<PointLight> points;
+    SceneEnvironment environment;
 };
 
 // The scene owns ECS traversal. Rendering receives copied presentation values,

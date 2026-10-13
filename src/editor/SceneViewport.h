@@ -6,7 +6,7 @@
 namespace crimson {
 class SceneViewport {
 public:
-    EditorFrame draw(Camera&, SceneDocument&, AssetLibrary&, Renderer&, bool navigationActive, uint32_t bgfxFrame);
+    EditorFrame draw(Camera&, SceneDocument&, AssetLibrary&, Renderer&, bool navigationActive, uint32_t bgfxFrame, bool keyboardBlocked=false);
     void cancel(SceneDocument&, Renderer&);
     bool interacting() const { return dragging_; }
     void focus(Camera&, const SceneDocument&, const AssetLibrary&, float aspect);
@@ -18,6 +18,9 @@ private:
     std::vector<EntityId> previousSelection_;
     Mat4 proxy_{}, startProxy_{}, previousView_{}, pickProjection_{}, pickView_{};
     Vec2 pickSize_{};
+    uint64_t intentGeneration_{},intentRevision_{},intentSerial_{};
+    uint32_t pickX_{},pickY_{};
+    bool pickIntent_{};
     std::vector<DragRoot> roots_;
     void select(SceneDocument&, EntityId, bool toggle, bool append);
 };

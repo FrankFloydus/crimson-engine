@@ -1,0 +1,65 @@
+{
+  "alphaCutoff": 0.5,
+  "alphaMask": false,
+  "baseColor": [
+    1.0,
+    1.0,
+    1.0,
+    1.0
+  ],
+  "baseColorTexture": {
+    "image": "",
+    "magFilter": 0,
+    "minFilter": 0,
+    "uv": 0,
+    "wrapU": 0,
+    "wrapV": 0
+  },
+  "doubleSided": false,
+  "emissive": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "emissiveTexture": {
+    "image": "",
+    "magFilter": 0,
+    "minFilter": 0,
+    "uv": 0,
+    "wrapU": 0,
+    "wrapV": 0
+  },
+  "id": "assets/materials/model-9915c7e1bd9fe453167be9f2aa22c9744b5507ddf61f14584b85cf02ae4d8bf6-m1.crimson-material",
+  "metallic": 1.0,
+  "metallicRoughnessTexture": {
+    "image": "",
+    "magFilter": 0,
+    "minFilter": 0,
+    "uv": 0,
+    "wrapU": 0,
+    "wrapV": 0
+  },
+  "name": "Default material",
+  "normalScale": 1.0,
+  "normalTexture": {
+    "image": "",
+    "magFilter": 0,
+    "minFilter": 0,
+    "uv": 0,
+    "wrapU": 0,
+    "wrapV": 0
+  },
+  "occlusionStrength": 1.0,
+  "occlusionTexture": {
+    "image": "",
+    "magFilter": 0,
+    "minFilter": 0,
+    "uv": 0,
+    "wrapU": 0,
+    "wrapV": 0
+  },
+  "originModel": "assets/models/model-9915c7e1bd9fe453167be9f2aa22c9744b5507ddf61f14584b85cf02ae4d8bf6/manifest.json",
+  "roughness": 1.0,
+  "type": "crimson-material",
+  "version": 1
+}

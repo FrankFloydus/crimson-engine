@@ -1,6 +1,7 @@
 #include "ImGuiBgfx.h"
 
 #include "math/Math.h"
+#include "ShaderPreflight.h"
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -106,6 +107,24 @@ ImGuiBgfx::ImGuiBgfx() {
 }
 
 ImGuiBgfx::~ImGuiBgfx() { shutdown(); }
+
+bgfx::ProgramHandle ImGuiBgfx::prepareProgramReload(std::span<const std::uint8_t> vertexCode,std::span<const std::uint8_t> fragmentCode,std::string& diagnostic) {
+    if (!preflightShaderPair(vertexCode,fragmentCode,cc_vs_imgui,cc_fs_imgui,diagnostic)) return BGFX_INVALID_HANDLE;
+    const auto vertex=bgfx::createShader(bgfx::copy(vertexCode.data(),static_cast<std::uint32_t>(vertexCode.size())));
+    const auto fragment=bgfx::createShader(bgfx::copy(fragmentCode.data(),static_cast<std::uint32_t>(fragmentCode.size())));
+    if (!bgfx::isValid(vertex) || !bgfx::isValid(fragment)) {
+        if (bgfx::isValid(vertex)) bgfx::destroy(vertex); if (bgfx::isValid(fragment)) bgfx::destroy(fragment);
+        diagnostic="ImGui shader candidate allocation failed."; return BGFX_INVALID_HANDLE;
+    }
+    const auto candidate=bgfx::createProgram(vertex,fragment,true);
+    if (!bgfx::isValid(candidate)) diagnostic="ImGui shader candidate link failed.";
+    return candidate;
+}
+void ImGuiBgfx::publishProgramReload(bgfx::ProgramHandle candidate) {
+    if (!bgfx::isValid(candidate)) return;
+    if (bgfx::isValid(program_)) bgfx::destroy(program_);
+    program_=candidate;
+}
 
 ImTextureID ImGuiBgfx::textureId(bgfx::TextureHandle texture) {
     return bgfx::isValid(texture) ? static_cast<ImTextureID>(texture.idx) + 1 : ImTextureID_Invalid;

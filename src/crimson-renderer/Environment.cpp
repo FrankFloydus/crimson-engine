@@ -476,26 +476,36 @@ bool writeCache(const std::filesystem::path& path, uint64_t key, const Settings&
 } // namespace ibl
 
 EnvironmentLighting::~EnvironmentLighting() { destroyTexture(diffuse_); destroyTexture(specular_); destroyTexture(brdf_); }
-bool EnvironmentLighting::prepare(const std::filesystem::path& projectRoot, const std::string& sourceId) {
-    bgfx::TextureHandle diffuse{BGFX_INVALID_HANDLE}, specular{BGFX_INVALID_HANDLE}, brdf{BGFX_INVALID_HANDLE};
+std::shared_ptr<const PreparedEnvironment> prepareEnvironmentCpu(const std::filesystem::path& projectRoot,const std::string& sourceId) {
+    constexpr std::string_view BuiltinSource="Crimson studio environment v1;512x256;linear HDR";
+    const auto source=sourceId.empty() ? std::vector<uint8_t>(BuiltinSource.begin(),BuiltinSource.end()) : readSource(projectRoot,sourceId);
+    auto prepared=std::make_shared<PreparedEnvironment>();
+    prepared->key=ibl::cacheKey(source,prepared->settings);
+    std::ostringstream name; name << std::hex << std::setfill('0') << std::setw(16) << prepared->key << ".ibl";
+    const auto cache=projectRoot/"assets"/"cache"/"ibl"/name.str();
+    const bool cached=ibl::readCache(cache,prepared->key,prepared->settings,prepared->data);
+    bool saved=true;
+    if (!cached) {
+        prepared->data=ibl::bake(sourceId.empty() ? studio() : ibl::decode(source),prepared->settings);
+        saved=ibl::writeCache(cache,prepared->key,prepared->settings,prepared->data);
+    }
+    prepared->status=(sourceId.empty() ? "Studio environment" : "Environment")+std::string(cached ? " loaded from cache." : " prepared and cached.");
+    if (!saved) prepared->status="Environment prepared; cache could not be saved.";
+    return prepared;
+}
+bool EnvironmentLighting::prepare(const std::filesystem::path& projectRoot,const std::string& sourceId) {
+    try { return publish(*prepareEnvironmentCpu(projectRoot,sourceId)); }
+    catch (const std::exception& error) { status_=std::string("Environment: ")+error.what(); return false; }
+}
+bool EnvironmentLighting::publish(const PreparedEnvironment& prepared) {
+    if (prepared.key==key_ && bgfx::isValid(diffuse_) && bgfx::isValid(specular_) && bgfx::isValid(brdf_)) { status_=prepared.status; return true; }
+    bgfx::TextureHandle diffuse{BGFX_INVALID_HANDLE},specular{BGFX_INVALID_HANDLE},brdf{BGFX_INVALID_HANDLE};
     try {
-        constexpr std::string_view BuiltinSource="Crimson studio environment v1;512x256;linear HDR";
-        const auto source=sourceId.empty() ? std::vector<uint8_t>(BuiltinSource.begin(),BuiltinSource.end()) : readSource(projectRoot,sourceId);
-        const ibl::Settings settings{};
-        const auto key=ibl::cacheKey(source,settings);
-        if (key==key_ && bgfx::isValid(diffuse_) && bgfx::isValid(specular_) && bgfx::isValid(brdf_)) {
-            status_=sourceId.empty() ? "Studio environment ready." : "Environment ready.";
-            return true;
-        }
-        std::ostringstream name; name << std::hex << std::setfill('0') << std::setw(16) << key << ".ibl";
-        const auto cache=projectRoot/"assets"/"cache"/"ibl"/name.str();
-        ibl::Bake data;
-        const bool cached=ibl::readCache(cache,key,settings,data);
-        bool saved=true;
-        if (!cached) {
-            data=ibl::bake(sourceId.empty() ? studio() : ibl::decode(source),settings);
-            saved=ibl::writeCache(cache,key,settings,data);
-        }
+        const auto& data=prepared.data; const auto& settings=prepared.settings;
+        if (data.specular.empty() || data.diffuse.size!=settings.diffuseSize ||
+            data.diffuse.rgba.size()!=static_cast<std::size_t>(settings.diffuseSize)*settings.diffuseSize*6*4 ||
+            data.brdf.size()!=static_cast<std::size_t>(settings.lutSize)*settings.lutSize*2)
+            throw std::runtime_error("Prepared IBL data is incomplete.");
         if (!bgfx::isTextureValid(0,true,1,bgfx::TextureFormat::RGBA32F,Sampler) ||
             !bgfx::isTextureValid(0,false,1,bgfx::TextureFormat::RG32F,Sampler))
             throw std::runtime_error("GPU does not support the linear HDR IBL texture formats.");
@@ -507,9 +517,8 @@ bool EnvironmentLighting::prepare(const std::filesystem::path& projectRoot, cons
         bgfx::setName(diffuse,"Environment irradiance / pi"); bgfx::setName(specular,"Environment GGX prefilter"); bgfx::setName(brdf,"Correlated Smith BRDF LUT");
         destroyTexture(diffuse_); destroyTexture(specular_); destroyTexture(brdf_);
         diffuse_=diffuse; specular_=specular; brdf_=brdf;
-        key_=key; maxSpecularLod_=static_cast<float>(data.specular.size()-1);
-        status_=(sourceId.empty() ? "Studio environment" : "Environment")+std::string(cached ? " loaded from cache." : " prepared and cached.");
-        if (!saved) status_="Environment prepared; cache could not be saved.";
+        key_=prepared.key; maxSpecularLod_=static_cast<float>(data.specular.size()-1);
+        status_=prepared.status;
         return true;
     } catch (const std::exception& error) {
         destroyTexture(diffuse); destroyTexture(specular); destroyTexture(brdf);

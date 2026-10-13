@@ -5,6 +5,8 @@
 #include <bgfx/bgfx.h>
 #include <imgui.h>
 #include <vector>
+#include <span>
+#include <string>
 
 namespace crimson {
 
@@ -19,6 +21,8 @@ public:
 
     void render(ImDrawData* drawData, uint16_t viewId = ToolsView);
     void shutdown();
+    bgfx::ProgramHandle prepareProgramReload(std::span<const std::uint8_t>,std::span<const std::uint8_t>,std::string& diagnostic);
+    void publishProgramReload(bgfx::ProgramHandle candidate);
 
     // ImGui's invalid ID is zero; bgfx texture handle zero remains usable.
     static ImTextureID textureId(bgfx::TextureHandle texture);

@@ -23,6 +23,7 @@ find_package(imgui CONFIG REQUIRED)
 find_package(lodepng CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(mikktspace CONFIG REQUIRED)
+find_package(meshoptimizer CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
 find_package(EnTT CONFIG REQUIRED)
 find_package(imguizmo CONFIG REQUIRED)
@@ -33,9 +34,22 @@ target_include_directories(crimson-math PUBLIC src)
 target_link_libraries(crimson-math PRIVATE glm::glm)
 target_compile_options(crimson-math PRIVATE /W4 /permissive- /utf-8)
 
-add_library(crimson-scene src/scene/Scene.cpp src/scene/SceneDocument.cpp src/scene/SceneExtraction.cpp src/assets/AtomicFile.cpp)
+add_library(crimson-storage src/assets/AtomicFile.cpp)
+target_include_directories(crimson-storage PUBLIC src)
+target_compile_definitions(crimson-storage PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(crimson-storage PRIVATE /W4 /permissive- /utf-8)
+
+add_library(crimson-resources
+    src/resources/ResourceManager.cpp src/resources/FileWatcher.cpp src/resources/ImageDecoder.cpp
+    src/resources/ShaderCompiler.cpp src/resources/StreamingModel.cpp src/resources/ModelMetadataCache.cpp src/resources/TextureMipCache.cpp)
+target_include_directories(crimson-resources PUBLIC src)
+target_compile_definitions(crimson-resources PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(crimson-resources PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(crimson-resources PUBLIC crimson-math PRIVATE crimson-storage meshoptimizer::meshoptimizer nlohmann_json::nlohmann_json bgfx::bimg_decode bgfx::bimg bgfx::bx)
+
+add_library(crimson-scene src/scene/Scene.cpp src/scene/SceneDocument.cpp src/scene/SceneExtraction.cpp)
 target_include_directories(crimson-scene PUBLIC src)
-target_link_libraries(crimson-scene PUBLIC crimson-math EnTT::EnTT nlohmann_json::nlohmann_json)
+target_link_libraries(crimson-scene PUBLIC crimson-math crimson-storage EnTT::EnTT nlohmann_json::nlohmann_json)
 target_compile_definitions(crimson-scene PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(crimson-scene PRIVATE /W4 /permissive- /utf-8)
 
@@ -88,29 +102,36 @@ add_executable(crimson-renderer WIN32
     src/main.cpp
     src/App.cpp src/App.h
     src/app/Options.cpp src/app/DiagnosticSession.cpp
-    src/editor/EditorSession.cpp src/editor/SceneEditor.cpp src/editor/SceneViewport.cpp
+    src/editor/EditorSession.cpp src/editor/SceneEditor.cpp src/editor/SceneViewport.cpp src/editor/ViewportAssetDrop.cpp
+    src/editor/EditorPreferences.cpp src/editor/EditorResources.cpp src/editor/AssetPreviews.cpp
+    src/editor/ResourceRuntime.cpp src/editor/SceneShortcuts.cpp
+    src/resources/ShaderReloadSession.cpp src/resources/TextureStreamer.cpp
     src/platform/WindowIcon.cpp src/platform/WindowIcon.h
     src/crimson-renderer/Diagnostics.cpp src/crimson-renderer/Diagnostics.h
     src/crimson-renderer/RenderTypes.h src/crimson-renderer/RenderTypes.cpp
     src/crimson-renderer/Mesh.h src/crimson-renderer/Mesh.cpp
     src/crimson-renderer/Renderer.h src/crimson-renderer/Renderer.cpp
+    src/crimson-renderer/ModelGpuCache.cpp src/crimson-renderer/ShaderPreflight.cpp
     src/crimson-renderer/Environment.h src/crimson-renderer/Environment.cpp
     src/crimson-renderer/ImGuiBgfx.h src/crimson-renderer/ImGuiBgfx.cpp
     src/tools/Tools.h src/tools/Tools.cpp
-    src/tools/ScenePanels.cpp
+    src/tools/ScenePanels.cpp src/tools/SceneDiagnostics.cpp
+    src/tools/InspectorTransform.cpp
     src/tools/AssetBrowser.cpp
     src/input/Navigation.h src/input/Navigation.cpp
     src/assets/AssetLibrary.h src/assets/AssetLibrary.cpp
+    src/assets/MaterialAsset.cpp src/assets/AssetReferenceManager.cpp src/assets/AsyncImports.cpp src/assets/ImageImportStage.cpp src/assets/DeletionPreparation.cpp
     src/assets/BrowserCatalog.cpp
-    src/assets/ModelAsset.h src/assets/ModelAsset.cpp
+    src/assets/ModelAsset.h src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp src/assets/MaterialPreviewGeometry.cpp
     "${CC_GENERATED_DIR}/CrimsonResources.rc"
     ${CC_SHADER_HEADERS}
 )
 target_include_directories(crimson-renderer PRIVATE src tests "${CC_GENERATED_DIR}" "${CC_CGLTF_INCLUDE}")
 target_compile_definitions(crimson-renderer PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_definitions(crimson-renderer PRIVATE CC_PROJECT_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_definitions(crimson-renderer PRIVATE CC_SHADER_SOURCE_DIR="${CC_SHADER_DIR}" CC_SHADER_INCLUDE_DIR="${CC_BGFX_SHADER_INCLUDE}" CC_SHADERC_PATH="$<TARGET_FILE:bgfx::shaderc>")
 target_compile_options(crimson-renderer PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:/W4;/permissive-;/utf-8>")
-target_link_libraries(crimson-renderer PRIVATE crimson-math crimson-scene imguizmo::imguizmo SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace)
+target_link_libraries(crimson-renderer PRIVATE crimson-resources crimson-math crimson-scene imguizmo::imguizmo SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace meshoptimizer::meshoptimizer)
 
 find_program(CC_POWERSHELL NAMES powershell.exe REQUIRED)
 add_custom_command(TARGET crimson-renderer POST_BUILD
@@ -136,11 +157,11 @@ if(BUILD_TESTING)
     target_compile_options(environment_tests PRIVATE /W4 /permissive- /utf-8)
     target_link_libraries(environment_tests PRIVATE crimson-math bgfx::bgfx bgfx::bx bgfx::bimg_decode)
     add_test(NAME environment_core COMMAND environment_tests)
-    add_executable(model_tests tests/model_tests.cpp src/assets/ModelAsset.cpp)
+    add_executable(model_tests tests/model_tests.cpp src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp src/assets/MaterialAsset.cpp)
     target_include_directories(model_tests PRIVATE src tests "${CC_CGLTF_INCLUDE}")
     target_compile_definitions(model_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_compile_options(model_tests PRIVATE /W4 /permissive- /utf-8)
-    target_link_libraries(model_tests PRIVATE crimson-math bgfx::bimg_decode bgfx::bimg bgfx::bx lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace)
+    target_link_libraries(model_tests PRIVATE crimson-math crimson-storage bgfx::bimg_decode bgfx::bimg bgfx::bx lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace)
     add_test(NAME model_core COMMAND model_tests)
     add_executable(math_tests tests/math_tests.cpp src/crimson-renderer/RenderTypes.cpp)
     target_include_directories(math_tests PRIVATE src)
@@ -164,4 +185,100 @@ if(BUILD_TESTING)
     target_compile_options(asset_browser_tests PRIVATE /W4 /permissive- /utf-8)
     target_link_libraries(asset_browser_tests PRIVATE nlohmann_json::nlohmann_json)
     add_test(NAME asset_browser_core COMMAND asset_browser_tests)
+
+    add_executable(resource_tests tests/resource_tests.cpp)
+    target_link_libraries(resource_tests PRIVATE crimson-resources)
+    target_compile_options(resource_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME resource_core COMMAND resource_tests)
+
+    add_executable(streaming_tests tests/streaming_tests.cpp src/assets/MaterialPreviewGeometry.cpp)
+    target_link_libraries(streaming_tests PRIVATE crimson-resources nlohmann_json::nlohmann_json meshoptimizer::meshoptimizer)
+    target_compile_options(streaming_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME streaming_core COMMAND streaming_tests)
+
+    add_executable(asset_resource_tests tests/asset_resource_tests.cpp src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp src/assets/MaterialAsset.cpp
+        src/assets/AssetReferenceManager.cpp src/assets/BrowserCatalog.cpp src/assets/ImageImportStage.cpp src/assets/DeletionPreparation.cpp)
+    target_include_directories(asset_resource_tests PRIVATE src tests "${CC_CGLTF_INCLUDE}")
+    target_compile_definitions(asset_resource_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(asset_resource_tests PRIVATE /W4 /permissive- /utf-8)
+    target_link_libraries(asset_resource_tests PRIVATE crimson-resources crimson-storage bgfx::bimg_decode bgfx::bimg bgfx::bx lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace)
+    add_test(NAME asset_resource_core COMMAND asset_resource_tests)
+
+    add_executable(editor_preferences_tests tests/editor_preferences_tests.cpp src/editor/EditorPreferences.cpp)
+    target_include_directories(editor_preferences_tests PRIVATE src)
+    target_compile_definitions(editor_preferences_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(editor_preferences_tests PRIVATE /W4 /permissive- /utf-8)
+    target_link_libraries(editor_preferences_tests PRIVATE crimson-math crimson-storage SDL3::SDL3 imgui::imgui nlohmann_json::nlohmann_json)
+    add_test(NAME editor_preferences_core COMMAND editor_preferences_tests)
+
+    add_executable(shader_preflight_tests tests/shader_preflight_tests.cpp src/crimson-renderer/ShaderPreflight.cpp ${CC_SHADER_HEADERS})
+    target_include_directories(shader_preflight_tests PRIVATE src "${CC_GENERATED_DIR}")
+    target_compile_definitions(shader_preflight_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(shader_preflight_tests PRIVATE /W4 /permissive- /utf-8)
+    target_link_libraries(shader_preflight_tests PRIVATE bgfx::bgfx)
+    add_test(NAME shader_preflight_core COMMAND shader_preflight_tests)
+
+    add_executable(shader_compiler_tests tests/shader_compiler_tests.cpp)
+    target_compile_options(shader_compiler_tests PRIVATE /W4 /permissive- /utf-8)
+    target_link_libraries(shader_compiler_tests PRIVATE crimson-resources)
+    add_test(NAME shader_compiler_core COMMAND shader_compiler_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
+
+    add_executable(gpu_streaming_tests tests/gpu_streaming_tests.cpp src/resources/TextureStreamer.cpp src/crimson-renderer/ModelGpuCache.cpp)
+    target_include_directories(gpu_streaming_tests PRIVATE src)
+    target_compile_definitions(gpu_streaming_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(gpu_streaming_tests PRIVATE /W4 /permissive- /utf-8)
+    target_link_libraries(gpu_streaming_tests PRIVATE crimson-resources bgfx::bgfx bgfx::bimg_decode bgfx::bx lodepng meshoptimizer::meshoptimizer nlohmann_json::nlohmann_json)
+    add_test(NAME gpu_streaming_core COMMAND gpu_streaming_tests)
+
+    add_executable(native_resource_tests tests/native_resource_tests.cpp
+        src/crimson-renderer/Renderer.cpp src/crimson-renderer/RenderTypes.cpp src/crimson-renderer/Mesh.cpp
+        src/crimson-renderer/Environment.cpp src/crimson-renderer/ImGuiBgfx.cpp src/crimson-renderer/ShaderPreflight.cpp
+        src/crimson-renderer/ModelGpuCache.cpp src/resources/TextureStreamer.cpp src/resources/ShaderReloadSession.cpp
+        src/assets/MaterialPreviewGeometry.cpp
+        ${CC_SHADER_HEADERS})
+    target_include_directories(native_resource_tests PRIVATE src "${CC_GENERATED_DIR}")
+    target_compile_definitions(native_resource_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(native_resource_tests PRIVATE /W4 /permissive- /utf-8)
+    target_link_libraries(native_resource_tests PRIVATE crimson-resources SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng)
+    add_test(NAME native_resource_core COMMAND native_resource_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
+    set_tests_properties(native_resource_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 90)
+    add_executable(preview_dependencies_tests tests/preview_dependencies_tests.cpp)
+    target_include_directories(preview_dependencies_tests PRIVATE src)
+    target_compile_options(preview_dependencies_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME preview_dependencies_core COMMAND preview_dependencies_tests)
+
+    add_executable(asset_library_deletion_tests tests/asset_library_deletion_tests.cpp
+        src/assets/AssetLibrary.cpp src/assets/AsyncImports.cpp src/resources/TextureStreamer.cpp
+        src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp src/assets/MaterialAsset.cpp src/assets/AssetReferenceManager.cpp
+        src/assets/BrowserCatalog.cpp src/assets/ImageImportStage.cpp src/assets/DeletionPreparation.cpp)
+    target_include_directories(asset_library_deletion_tests PRIVATE src tests "${CC_CGLTF_INCLUDE}")
+    target_compile_definitions(asset_library_deletion_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(asset_library_deletion_tests PRIVATE /W4 /permissive- /utf-8)
+    target_link_libraries(asset_library_deletion_tests PRIVATE crimson-resources crimson-scene SDL3::SDL3 bgfx::bgfx bgfx::bimg_decode bgfx::bimg bgfx::bx lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace)
+    add_test(NAME asset_library_deletion_core COMMAND asset_library_deletion_tests)
+    set_tests_properties(asset_library_deletion_core PROPERTIES TIMEOUT 90)
+
+    add_executable(import_identity_tests tests/import_identity_tests.cpp
+        src/assets/AssetLibrary.cpp src/assets/AsyncImports.cpp src/resources/TextureStreamer.cpp
+        src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp src/assets/MaterialAsset.cpp src/assets/AssetReferenceManager.cpp
+        src/assets/BrowserCatalog.cpp src/assets/ImageImportStage.cpp src/assets/DeletionPreparation.cpp)
+    target_include_directories(import_identity_tests PRIVATE src tests "${CC_CGLTF_INCLUDE}")
+    target_compile_definitions(import_identity_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(import_identity_tests PRIVATE /W4 /permissive- /utf-8)
+    target_link_libraries(import_identity_tests PRIVATE crimson-resources crimson-scene SDL3::SDL3 bgfx::bgfx bgfx::bimg_decode bgfx::bimg bgfx::bx lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace)
+    add_test(NAME import_identity_core COMMAND import_identity_tests)
+    set_tests_properties(import_identity_core PROPERTIES TIMEOUT 90)
+
+    add_executable(viewport_asset_drop_tests tests/viewport_asset_drop_tests.cpp src/editor/ViewportAssetDrop.cpp)
+    target_include_directories(viewport_asset_drop_tests PRIVATE src)
+    target_compile_options(viewport_asset_drop_tests PRIVATE /W4 /permissive- /utf-8)
+    target_link_libraries(viewport_asset_drop_tests PRIVATE crimson-scene imgui::imgui)
+    add_test(NAME viewport_asset_drop_core COMMAND viewport_asset_drop_tests)
+
+    add_executable(inspector_transform_tests tests/inspector_transform_tests.cpp
+        src/tools/InspectorTransform.cpp src/tools/SceneDiagnostics.cpp src/editor/SceneShortcuts.cpp)
+    target_include_directories(inspector_transform_tests PRIVATE src)
+    target_compile_options(inspector_transform_tests PRIVATE /W4 /permissive- /utf-8)
+    target_link_libraries(inspector_transform_tests PRIVATE crimson-scene imgui::imgui)
+    add_test(NAME inspector_transform_core COMMAND inspector_transform_tests)
 endif()

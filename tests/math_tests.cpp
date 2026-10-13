@@ -104,6 +104,79 @@ void transformedBounds() {
     same(combined.maximum,{100,100,100});
     require(!math::transformBounds({{1,0,0},{-1,0,0},true},transform).valid,"Invalid source bounds accepted");
 }
+void affineInspectorFields() {
+    const Vec3 angles{.3f,-.4f,.7f},position{3,-2,9};
+    const auto rotation=math::eulerRotationXYZ(angles);
+    const auto explicitOrder=math::rotation(math::axisAngle({0,0,1},angles[2]))*
+        math::rotation(math::axisAngle({0,1,0},angles[1]))*math::rotation(math::axisAngle({1,0,0},angles[0]));
+    same(rotation,explicitOrder,2e-6);
+    for(const Vec3 scale:{Vec3{2,3,4},Vec3{-2,3,4}}) {
+        const auto original=math::translation(position)*rotation*math::scaling(scale);
+        const auto fields=math::affineTransformFields(original);require(fields.has_value(),"Ordinary affine inspector presentation failed");
+        same(fields->position,position,0);same(fields->scale,scale);same(fields->rotationRadians,angles);
+        require(!fields->sheared&&!fields->singular,"Ordinary mirrored TRS was classified as sheared or singular");
+        same(math::translation(fields->position)*fields->rotation*math::scaling(fields->scale),original,3e-6);
+        require(*math::withAffinePosition(original,fields->position)==original && *math::withAffineRotation(original,*fields,fields->rotationRadians)==original &&
+            *math::withAffineScale(original,*fields,fields->scale)==original,"Unchanged inspector edits must retain the exact matrix");
+        const auto moved=math::withAffinePosition(original,{8,6,-3});require(moved.has_value(),"Inspector position edit failed");
+        for(std::size_t i=0;i<16;++i)if(i<12||i>14)near((*moved)[i],original[i],0);
+        const Vec3 requested{-.2f,.6f,-.4f};const auto rotated=math::withAffineRotation(original,*fields,requested);
+        require(rotated.has_value(),"Inspector rotation edit failed");same(*rotated,math::translation(position)*math::eulerRotationXYZ(requested)*math::scaling(scale),4e-6);
+        auto wanted=fields->scale;wanted[1]=-5;const auto scaled=math::withAffineScale(original,*fields,wanted);
+        require(scaled.has_value(),"Signed inspector scale edit failed");same(*scaled,math::translation(position)*rotation*math::scaling({scale[0],-5,scale[2]}),4e-6);
+        for(std::size_t i=0;i<16;++i)if(i<4||i>=8)near((*scaled)[i],original[i],0);
+    }
+    math::AffineTransformFields hint;hint.rotationRadians=angles;
+    const auto mirroredY=math::translation(position)*rotation*math::scaling({2,-3,4});
+    const auto retained=math::affineTransformFields(mirroredY,&hint);require(retained.has_value(),"Reflected inspector hint failed");
+    same(retained->rotationRadians,angles);same(retained->scale,{2,-3,4});
+    Mat4 shear;shear[4]=.65f;shear[8]=-.3f;shear[9]=.4f;
+    const auto affine=math::translation(position)*rotation*shear*math::scaling({-2,3,4});const auto fields=math::affineTransformFields(affine);
+    require(fields&&fields->sheared&&!fields->singular,"Inspector did not identify full affine shear/reflection");
+    const auto turned=math::withAffineRotation(affine,*fields,{.8f,.1f,-.2f});require(turned.has_value(),"Sheared inspector rotation failed");
+    const auto column=[](const Mat4& matrix,std::size_t axis){return Vec3{matrix[axis*4],matrix[axis*4+1],matrix[axis*4+2]};};
+    for(std::size_t a=0;a<3;++a)for(std::size_t b=0;b<3;++b)near(math::dot(column(*turned,a),column(*turned,b)),math::dot(column(affine,a),column(affine,b)),6e-5);
+    require(math::handedness(*turned)==math::handedness(affine),"Inspector rotation changed reflection handedness");
+    same({(*turned)[12],(*turned)[13],(*turned)[14]},position,0);
+    auto wanted=fields->scale;wanted[2]*=-.5f;const auto resized=math::withAffineScale(affine,*fields,wanted);
+    require(resized.has_value(),"Sheared inspector scale failed");
+    same(column(*resized,0),column(affine,0),0);same(column(*resized,1),column(affine,1),0);same(column(*resized,2),column(affine,2)*-.5f,2e-6);
+    require(math::handedness(*resized)==-math::handedness(affine),"Negative inspector scale did not change reflection");
+}
+void inspectorEulerAndCollapsedAxes() {
+    constexpr float pi=std::numbers::pi_v<float>;
+    for(float sign:{-1.0f,1.0f})for(float offset:{-.00001f,-.0000001f,0.0f,.0000001f,.00001f}) {
+        const Vec3 angles{.73f,sign*pi*.5f+offset,-.42f};const auto original=math::eulerRotationXYZ(angles);
+        math::AffineTransformFields reference;reference.rotationRadians=angles;
+        const auto fields=math::affineTransformFields(original,&reference);require(fields.has_value(),"Gimbal-adjacent inspector presentation failed");
+        same(math::eulerRotationXYZ(fields->rotationRadians),original,3e-6);
+        same(fields->rotationRadians,angles,3e-5);
+        reference.rotationRadians={angles[0]+4*pi,angles[1]-2*pi,angles[2]+6*pi};
+        const auto unwrapped=math::affineTransformFields(original,&reference);require(unwrapped.has_value(),"Unwrapped inspector Euler hint failed");
+        same(unwrapped->rotationRadians,reference.rotationRadians,4e-5);same(math::eulerRotationXYZ(unwrapped->rotationRadians),original,4e-6);
+    }
+    const Vec3 angles{.4f,-.6f,.8f};math::AffineTransformFields reference;reference.rotationRadians=angles;
+    const auto basis=math::eulerRotationXYZ(angles);
+    for(const Vec3 scale:{Vec3{0,2,3},Vec3{2,0,3},Vec3{2,3,0},Vec3{0,0,0}}) {
+        const auto original=math::translation({1,2,3})*basis*math::scaling(scale);
+        const auto fields=math::affineTransformFields(original,&reference);require(fields&&fields->singular,"Collapsed inspector matrix must remain explicitly editable");
+        const auto moved=math::withAffinePosition(original,{4,5,6});require(moved.has_value(),"Singular matrices must permit exact position edits");
+        for(std::size_t i=0;i<12;++i)near((*moved)[i],original[i],0);
+        auto wanted=fields->scale;for(std::size_t i=0;i<3;++i)if(wanted[i]==0)wanted[i]=-1;
+        const auto recovered=math::withAffineScale(original,*fields,wanted);require(recovered&&math::handedness(*recovered)!=0,"Inspector scale must recover collapsed columns along its displayed frame");
+        same(*recovered,math::translation({1,2,3})*basis*math::scaling(wanted),4e-6);
+    }
+    auto tiny=math::eulerRotationXYZ(angles)*math::scaling({1e-20f,2e-20f,3e-20f});
+    const auto small=math::affineTransformFields(tiny);require(small&&!small->singular,"Scale-relative inspector presentation rejected tiny invertible transforms");
+    auto invalid=Mat4{};invalid[3]=1;
+    require(!math::affineTransformFields(invalid)&&!math::withAffinePosition(invalid,{1,2,3}),"Projective matrices must fail inspector edits explicitly");
+    invalid=Mat4{};invalid[0]=std::numeric_limits<float>::infinity();
+    require(!math::affineTransformFields(invalid),"Nonfinite inspector matrix accepted");
+    const auto identity=math::affineTransformFields(Mat4{});require(identity.has_value(),"Identity inspector presentation missing");
+    require(!math::withAffinePosition(Mat4{},{std::numeric_limits<float>::quiet_NaN(),0,0}) &&
+        !math::withAffineRotation(Mat4{},*identity,{0,std::numeric_limits<float>::infinity(),0}) &&
+        !math::withAffineScale(Mat4{},*identity,{0,0,std::numeric_limits<float>::infinity()}),"Nonfinite inspector input must fail atomically");
+}
 void projectionParityAndRays() {
     Camera camera; camera.position={3,4,8}; camera.target={-1,2,-3};
     const auto eye=camera.eye(), forward=camera.forward(), up=math::cross(camera.right(),forward);
@@ -156,6 +229,8 @@ int main() {
     run("vector math and robust fallbacks",vectorsAndRobustFallbacks);
     run("affine inverse, shear, reflection and normal matrices",affineTransformsAndNormals);
     run("transformed bounds",transformedBounds);
+    run("affine inspector presentation and preserving edits",affineInspectorFields);
+    run("inspector Euler continuity, singular matrices and scale recovery",inspectorEulerAndCollapsedAxes);
     run("projection parity, unprojection and screen rays",projectionParityAndRays);
     return failures ? 1 : 0;
 }

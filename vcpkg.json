@@ -10,6 +10,7 @@
     "lodepng",
     "cgltf",
     "mikktspace",
+    "meshoptimizer",
     "glm",
     "entt",
     "imguizmo"
