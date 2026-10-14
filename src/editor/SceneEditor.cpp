@@ -178,7 +178,6 @@ void SceneEditor::modals(SceneDocument& document, Camera& camera, AssetLibrary& 
     if (saveConflictPopup_) { ImGui::OpenPopup("Scene changed on disk"); saveConflictPopup_=false; }
     if (ImGui::BeginPopupModal("Scene changed on disk",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextUnformatted("The saved scene changed or was removed outside the editor.");
-        ImGui::TextUnformatted("Choose how to preserve the version you are editing.");
         if (ImGui::Button("Overwrite")) {
             if (document.save({},false,true)) {
                 assets.noteAssetWrite(document.assetId()); assets.refreshScenes(); ImGui::CloseCurrentPopup();
@@ -244,7 +243,7 @@ void SceneEditor::modals(SceneDocument& document, Camera& camera, AssetLibrary& 
             else
                 ImGui::Text("Delete %zu asset%s?",assetCount,assetCount==1 ? "" : "s");
             ImGui::PushTextWrapPos(ImGui::GetCursorPosX()+540.0f);
-            if (referenced) ImGui::TextUnformatted("Resources outside this deletion still use some selected assets. Expand the details to review replacements, or delete using the defaults.");
+            if (referenced) ImGui::TextUnformatted("Referenced by other saved resources.");
             if (std::find(deletion_->assetIds.begin(),deletion_->assetIds.end(),document.assetId())!=deletion_->assetIds.end() && document.dirty())
                 ImGui::TextWrapped("The active scene's unsaved edits will be discarded.");
             if (deletion_->clearsActiveHistory) ImGui::TextWrapped("This global asset operation clears the active scene's undo history.");
@@ -390,13 +389,25 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
             ImGui::MenuItem("Asset Browser","Ctrl+Space",&panels_.assetBrowser);
             ImGui::MenuItem("Game",nullptr,&panels_.game);
             ImGui::Separator();
+            ImGui::MenuItem("Collisions",nullptr,&overlays_.collisions);
+            ImGui::MenuItem("Grid",nullptr,&overlays_.grid);
+            ImGui::MenuItem("Transform Gizmo",nullptr,&overlays_.transformGizmo);
+            ImGui::Separator();
             if (ImGui::MenuItem("Reset layout")) resetLayout=true;
             ImGui::EndMenu();
         }
-        ImGui::BeginDisabled(document.transactionActive() || opening_ || deletion_ || pending_!=Pending::None || ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup));
-        if(ImGui::Button(document.transient()?"Stop":"Play"))togglePlay=true;
-        ImGui::EndDisabled();ImGui::SameLine();
+        const char* playLabel=document.transient()?"Stop":"Play";
+        const float playWidth=ImGui::CalcTextSize(playLabel).x+ImGui::GetStyle().FramePadding.x*2;
+        const float playPosition=ImGui::GetWindowWidth()-playWidth-ImGui::GetStyle().WindowPadding.x;
+        const auto titlePosition=ImGui::GetCursorScreenPos();
+        ImGui::PushClipRect(titlePosition,{ImGui::GetWindowPos().x+playPosition-ImGui::GetStyle().ItemSpacing.x,
+            titlePosition.y+ImGui::GetFrameHeight()},true);
         ImGui::Text("%s%s%s",document.displayName().c_str(),document.transient()?" (Play)":"",document.dirty() ? " *" : "");
+        ImGui::PopClipRect();
+        ImGui::SameLine(playPosition);
+        ImGui::BeginDisabled(document.transactionActive() || opening_ || deletion_ || pending_!=Pending::None || ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup));
+        if(ImGui::Button(playLabel))togglePlay=true;
+        ImGui::EndDisabled();
         ImGui::EndMainMenuBar();
     }
     if (((previousPanels.inspector && !panels_.inspector) || (previousPanels.outliner && !panels_.outliner)) &&
@@ -416,7 +427,8 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     std::uint64_t playParticle{};std::string openParticle;
     if (panels_.inspector) drawSceneInspector(document,assets,renderer,!viewport_.interacting() && !actionPending,&playParticle,&openParticle);
     if (panels_.outliner) drawSceneOutliner(document,!viewport_.interacting() && !actionPending);
-    auto frame=viewport_.draw(settings.camera,document,assets,renderer,navigationActive || actionPending || preferencesMouse,bgfxFrame,preferencesKeyboard);
+    auto frame=viewport_.draw(settings.camera,document,assets,renderer,navigationActive || actionPending || preferencesMouse,bgfxFrame,preferencesKeyboard,
+        overlays_.collisions,overlays_.transformGizmo);
     BrowserActions browser;
     if (panels_.assetBrowser) {
         browser=browser_.draw(assets,window,preferences_.values().browserPreviewSize,&renderer);

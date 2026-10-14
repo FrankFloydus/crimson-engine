@@ -2,6 +2,9 @@
 #include "ModelTransform.h"
 #include "Mesh.h"
 #include "Environment.h"
+#include "ProceduralSkyGpu.h"
+#include "EnvironmentPresentation.h"
+#include "Fog.h"
 #include "Picking.h"
 #include "ModelGpuCache.h"
 #include "ShaderPreflight.h"
@@ -27,6 +30,7 @@
 #include "vs_particle.h"
 #include "fs_particle.h"
 #include "fs_sky.h"
+#include "cs_procedural_filter.h"
 #include "vs_point_shadow.h"
 #include "fs_point_shadow.h"
 
@@ -273,6 +277,7 @@ struct Renderer::Impl {
     std::unique_ptr<ModelGpuCache> streamModels{std::make_unique<ModelGpuCache>()};
     std::uint64_t externalSignature{},programRevision{1},environmentRevision{1};
     ViewportAppearance appearance;
+    bool gridVisible{true};
     std::string modelStatus;
     std::shared_ptr<PickTargets> pickTargets;
     std::optional<PickRequest> requestedPick;
@@ -283,13 +288,16 @@ struct Renderer::Impl {
     std::unique_ptr<EnvironmentLighting> environment;
     std::unique_ptr<EnvironmentLighting> thumbnailEnvironment;
     std::unique_ptr<EnvironmentLighting> materialPreviewEnvironment;
+    std::unique_ptr<ProceduralSkyGpu> proceduralEnvironment,thumbnailProceduralEnvironment;
+    std::uint64_t proceduralFrame{UINT64_MAX};
+    bool proceduralActive{};
     std::unique_ptr<PendingThumbnail> pendingThumbnail;
     std::unordered_map<std::string,std::unique_ptr<CachedThumbnail>> thumbnails;
     mutable std::uint64_t thumbnailClock{};
     std::string shaderStatus,thumbnailStatus;
     std::string shadowStatus;
     std::unique_ptr<PointShadowRenderer> shadows,thumbnailShadows;
-    std::array<std::uint64_t,11> programHashes{};
+    std::array<std::uint64_t,12> programHashes{};
     std::string glowProgramFailure;
     mutable std::string glowStatusCache;
     struct LodSelection { std::uint32_t level{}; std::uint64_t frame{}; };
@@ -317,13 +325,20 @@ struct Renderer::Impl {
     bgfx::UniformHandle cameraPos{BGFX_INVALID_HANDLE}, direction{BGFX_INVALID_HANDLE}, directionColor{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle pointPosition{BGFX_INVALID_HANDLE}, pointColor{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle presentParams{BGFX_INVALID_HANDLE}, hdrSampler{BGFX_INVALID_HANDLE}, compositeSampler{BGFX_INVALID_HANDLE};
+    bgfx::UniformHandle debandingParams{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle background{BGFX_INVALID_HANDLE},gridWidths{BGFX_INVALID_HANDLE};
+    bgfx::UniformHandle fogColorDensity{BGFX_INVALID_HANDLE},fogDepth{BGFX_INVALID_HANDLE},fogHeight{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle albedoSampler{BGFX_INVALID_HANDLE}, roughnessSampler{BGFX_INVALID_HANDLE}, metallicSampler{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle normalSampler{BGFX_INVALID_HANDLE}, irradianceSampler{BGFX_INVALID_HANDLE}, prefilteredSampler{BGFX_INVALID_HANDLE}, brdfSampler{BGFX_INVALID_HANDLE}, environmentParams{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle gridMinor{BGFX_INVALID_HANDLE}, gridMajor{BGFX_INVALID_HANDLE}, gridAxisU{BGFX_INVALID_HANDLE}, gridAxisV{BGFX_INVALID_HANDLE}, gridParams{BGFX_INVALID_HANDLE};
-    void renderParticles(std::span<const RenderParticle>,std::span<const RenderParticleMaterial>,const Camera&,bgfx::ViewId,ParticleRenderStats*);
+    void renderParticles(std::span<const RenderParticle>,std::span<const RenderParticleMaterial>,const Camera&,const fog::Parameters&,bgfx::ViewId,ParticleRenderStats*);
     void renderShadows(const RenderScene&,PointShadowRenderer&,bgfx::ViewId);
     bool renderGlow(const SceneSettings&,ViewportTargets&,std::uint16_t,std::uint16_t,RenderViews);
+    void bindFog(const fog::Parameters& values) {
+        bgfx::setUniform(fogColorDensity,values.colorDensity.data());
+        bgfx::setUniform(fogDepth,values.depth.data());
+        bgfx::setUniform(fogHeight,values.height.data());
+    }
     void bindMaterialMapping(const Vec3& scale,const Vec3& offset,const Vec3& rotation,bool triplanar,bool world=false) {
         const Vec4 scaleValue{scale[0],scale[1],scale[2],triplanar?1.f:0.f};
         const Vec4 offsetValue{offset[0],offset[1],offset[2],triplanar && world?1.f:0.f};
@@ -343,6 +358,7 @@ struct Renderer::Impl {
         if (pendingThumbnail) { pendingThumbnail->targets.reset(); destroyHandle(pendingThumbnail->readback); pendingThumbnail->pinned.reset(); pendingThumbnail->resources.clear(); }
         environment.reset();
         thumbnailEnvironment.reset();
+        proceduralEnvironment.reset();thumbnailProceduralEnvironment.reset();
         materialPreviewTargets.reset();materialPreviewEnvironment.reset();
         destroyHandle(skyProgram);destroyHandle(skyRight);destroyHandle(skyUp);destroyHandle(skyForward);destroyHandle(skySampler);
         destroyHandle(white);
@@ -361,7 +377,9 @@ struct Renderer::Impl {
         destroyHandle(cameraPos); destroyHandle(direction); destroyHandle(directionColor);
         destroyHandle(pointPosition); destroyHandle(pointColor);
         destroyHandle(presentParams); destroyHandle(hdrSampler); destroyHandle(compositeSampler);
+        destroyHandle(debandingParams);
         destroyHandle(background); destroyHandle(gridWidths);
+        destroyHandle(fogColorDensity);destroyHandle(fogDepth);destroyHandle(fogHeight);
         destroyHandle(albedoSampler); destroyHandle(roughnessSampler); destroyHandle(metallicSampler);
         destroyHandle(normalSampler); destroyHandle(irradianceSampler); destroyHandle(prefilteredSampler); destroyHandle(brdfSampler); destroyHandle(environmentParams);
         destroyHandle(gridMinor); destroyHandle(gridMajor); destroyHandle(gridAxisU); destroyHandle(gridAxisV); destroyHandle(gridParams);
@@ -392,7 +410,7 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
     if (!bgfx::init(init)) throw std::runtime_error("bgfx could not initialize Direct3D 11.");
     impl_->initialized = true;
     if (bgfx::getRendererType() != bgfx::RendererType::Direct3D11) throw std::runtime_error("Direct3D 11 was requested but another backend was selected.");
-    if(bgfx::getCaps()->limits.maxViews<FirstPlatformView)throw std::runtime_error("This renderer requires at least 228 view slots for point shadows, Glow and editor previews.");
+    if(bgfx::getCaps()->limits.maxViews<FirstPlatformView)throw std::runtime_error("This renderer requires at least 229 view slots for sky generation, point shadows, Glow and editor previews.");
     if (!bgfx::isTextureValid(0,false,1,bgfx::TextureFormat::RGBA32F,BGFX_TEXTURE_RT) ||
         !bgfx::isTextureValid(0,false,1,bgfx::TextureFormat::RGBA16F,BGFX_TEXTURE_RT) ||
         !bgfx::isTextureValid(0,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_RT) ||
@@ -452,7 +470,7 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
     impl_->programHashes={shaderContentHash(cc_vs_pbr,cc_fs_pbr),shaderContentHash(cc_vs_model,cc_fs_model),shaderContentHash(cc_vs_pick,cc_fs_pick),
         shaderContentHash(cc_vs_present,cc_fs_present),shaderContentHash(cc_vs_grid,cc_fs_grid),shaderContentHash(cc_vs_present,cc_fs_encode),
         shaderContentHash(cc_vs_particle,cc_fs_particle),shaderContentHash(cc_vs_present,cc_fs_sky),shaderContentHash(cc_vs_point_shadow,cc_fs_point_shadow),
-        shaderContentHash(cc_vs_present,cc_fs_glow_extract),shaderContentHash(cc_vs_present,cc_fs_glow_blur)};
+        shaderContentHash(cc_vs_present,cc_fs_glow_extract),shaderContentHash(cc_vs_present,cc_fs_glow_blur),shaderContentHash({},cc_cs_procedural_filter)};
     impl_->baseColorMetallic = uniform("u_baseColorMetallic");
     impl_->roughness = uniform("u_roughness");
     impl_->textureFlags = uniform("u_textureFlags");
@@ -463,6 +481,7 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
     impl_->pointColor = uniform("u_pointColor",bgfx::UniformType::Vec4,static_cast<std::uint16_t>(MaxPointLights));
     impl_->lightCounts = uniform("u_lightCounts");
     impl_->presentParams = uniform("u_presentParams");
+    impl_->debandingParams = uniform("u_debandingParams");
     impl_->background=uniform("u_background");
     impl_->gridWidths=uniform("u_gridWidths");
     impl_->hdrSampler = uniform("s_hdrColor",bgfx::UniformType::Sampler);
@@ -475,9 +494,14 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
     impl_->prefilteredSampler = uniform("s_prefiltered",bgfx::UniformType::Sampler);
     impl_->brdfSampler = uniform("s_brdfLut",bgfx::UniformType::Sampler);
     impl_->environmentParams = uniform("u_environment");
+    impl_->fogColorDensity = uniform("u_fogColorDensity");
+    impl_->fogDepth = uniform("u_fogDepth");
+    impl_->fogHeight = uniform("u_fogHeight");
     impl_->environment = std::make_unique<EnvironmentLighting>();
     impl_->thumbnailEnvironment=std::make_unique<EnvironmentLighting>();
     impl_->materialPreviewEnvironment=std::make_unique<EnvironmentLighting>();
+    impl_->proceduralEnvironment=std::make_unique<ProceduralSkyGpu>();
+    impl_->thumbnailProceduralEnvironment=std::make_unique<ProceduralSkyGpu>();
     impl_->gridMinor = uniform("u_gridMinor");
     impl_->gridMajor = uniform("u_gridMajor");
     impl_->gridAxisU = uniform("u_gridAxisU");
@@ -546,7 +570,13 @@ bool Renderer::publishEnvironment(const PreparedEnvironment& data) { const bool 
 bool Renderer::publishThumbnailEnvironment(const PreparedEnvironment& data) {
     const bool result=impl_->thumbnailEnvironment->publish(data);impl_->thumbnailStatus=result ? std::string{}:impl_->thumbnailEnvironment->status();return result;
 }
-const std::string& Renderer::environmentStatus() const { return impl_->environment->status(); }
+const std::string& Renderer::environmentStatus() const {
+    return impl_->proceduralActive?impl_->proceduralEnvironment->status():impl_->environment->status();
+}
+std::size_t Renderer::environmentResidentBytes() const {
+    return impl_->environment->residentBytes()+impl_->thumbnailEnvironment->residentBytes()+impl_->materialPreviewEnvironment->residentBytes()+
+        impl_->proceduralEnvironment->residentBytes()+impl_->thumbnailProceduralEnvironment->residentBytes();
+}
 
 bool Renderer::prepareModel(const ModelAsset& model) {
     if (impl_->models.contains(model.id)) {
@@ -618,6 +648,7 @@ void Renderer::setExternalResourceSignature(std::uint64_t value) { impl_->extern
 std::size_t Renderer::modelResidentBytes() const { return impl_->streamModels->bytes(); }
 void Renderer::trimModelCache(std::size_t bytes,std::span<const std::string> live) { impl_->streamModels->trim(bytes,live); }
 void Renderer::setAppearance(const ViewportAppearance& appearance) { impl_->appearance=appearance; }
+void Renderer::setGridVisible(bool visible) { impl_->gridVisible=visible; }
 bool Renderer::thumbnailBusy() const { return !!impl_->pendingThumbnail; }
 bool Renderer::renderThumbnail(const std::string& id,std::uint64_t signature,const RenderScene& scene,std::uint16_t size,std::shared_ptr<const void> pinned) {
     if (impl_->pendingThumbnail || id.empty() || !size || size>512 ||
@@ -683,10 +714,23 @@ void Renderer::trimThumbnailCache(std::size_t target) {
     }
 }
 const std::string& Renderer::thumbnailStatus() const { return impl_->thumbnailStatus; }
-bool Renderer::reloadPrograms(std::span<const RendererShaderPair> pairs) {
+bool Renderer::reloadPrograms(std::span<const RendererShaderPair> pairs,std::span<const std::uint8_t> proceduralCompute) {
     std::vector<std::pair<bgfx::ProgramHandle*,bgfx::ProgramHandle>> candidates;
     std::vector<std::pair<std::size_t,std::uint64_t>> hashes;
+    bgfx::ProgramHandle worldCompute{BGFX_INVALID_HANDLE},thumbnailCompute{BGFX_INVALID_HANDLE};
     try {
+        const auto sky=std::find_if(pairs.begin(),pairs.end(),[](const auto& pair){return pair.program==RendererProgram::Sky;});
+        if(sky!=pairs.end() && proceduralCompute.empty() &&
+            shaderContentHash(sky->vertex,sky->fragment)!=impl_->programHashes[static_cast<std::size_t>(RendererProgram::Sky)])
+            throw std::runtime_error("Sky reload requires its matching environment compute shader.");
+        if(!proceduralCompute.empty() && shaderContentHash({},proceduralCompute)!=impl_->programHashes.back()) {
+            if(sky==pairs.end())throw std::runtime_error("Environment compute reload requires its matching visible sky shader.");
+            std::string diagnostic;
+            worldCompute=impl_->proceduralEnvironment->prepareProgramReload(proceduralCompute,diagnostic);
+            if(!bgfx::isValid(worldCompute))throw std::runtime_error(diagnostic);
+            thumbnailCompute=impl_->thumbnailProceduralEnvironment->prepareProgramReload(proceduralCompute,diagnostic);
+            if(!bgfx::isValid(thumbnailCompute))throw std::runtime_error(diagnostic);
+        }
         for (const auto& pair:pairs) {
             bgfx::ProgramHandle* target{}; std::span<const std::uint8_t> contractV,contractF;
             switch (pair.program) {
@@ -716,12 +760,20 @@ bool Renderer::reloadPrograms(std::span<const RendererShaderPair> pairs) {
             hashes.emplace_back(static_cast<std::size_t>(pair.program),shaderContentHash(pair.vertex,pair.fragment));
         }
         for (auto& [target,candidate]:candidates) { destroyHandle(*target); *target=candidate; }
+        if(bgfx::isValid(worldCompute)) {
+            impl_->proceduralEnvironment->publishProgramReload(worldCompute);
+            impl_->thumbnailProceduralEnvironment->publishProgramReload(thumbnailCompute);
+            worldCompute=BGFX_INVALID_HANDLE;thumbnailCompute=BGFX_INVALID_HANDLE;
+            impl_->programHashes.back()=shaderContentHash({},proceduralCompute);
+            impl_->proceduralFrame=UINT64_MAX;
+        }
         for (const auto& [index,hash]:hashes) impl_->programHashes[index]=hash;
         if(bgfx::isValid(impl_->glowExtractProgram) && bgfx::isValid(impl_->glowBlurProgram))impl_->glowProgramFailure.clear();
         if (!candidates.empty()) { ++impl_->programRevision; impl_->shadows->invalidate();impl_->thumbnailShadows->invalidate();cancelPicking(); }
         impl_->shaderStatus.clear(); return true;
     } catch (const std::exception& error) {
         for (auto& [target,candidate]:candidates) { (void)target; destroyHandle(candidate); }
+        destroyHandle(worldCompute);destroyHandle(thumbnailCompute);
         impl_->shaderStatus=error.what(); return false;
     }
 }
@@ -905,10 +957,10 @@ void Renderer::render(const SceneSettings& settings, const MaterialTextures& tex
 }
 void Renderer::render(const RenderScene& scene) {
     if (!drawable()) { impl_->particles={scene.particles.size(),0,0,scene.particles.size()}; return; }
-    impl_->renderTo(scene,*impl_->targets,*impl_->environment,static_cast<std::uint16_t>(impl_->width),static_cast<std::uint16_t>(impl_->height),MainViews,true,true,nullptr,&impl_->particles);
+    impl_->renderTo(scene,*impl_->targets,*impl_->environment,static_cast<std::uint16_t>(impl_->width),static_cast<std::uint16_t>(impl_->height),MainViews,impl_->gridVisible,true,nullptr,&impl_->particles);
 }
 void Renderer::Impl::renderParticles(std::span<const RenderParticle> input,std::span<const RenderParticleMaterial> materials,
-                                    const Camera& camera,bgfx::ViewId view,ParticleRenderStats* result) {
+                                    const Camera& camera,const fog::Parameters& fogValues,bgfx::ViewId view,ParticleRenderStats* result) {
     ParticleRenderStats stats; stats.requested=input.size();
     if (input.empty()) { if (result) *result=stats; return; }
     if (!(bgfx::getCaps()->supported & BGFX_CAPS_INSTANCING)) {
@@ -965,9 +1017,10 @@ void Renderer::Impl::renderParticles(std::span<const RenderParticle> input,std::
             submittedPins.push_back(material.pinned);pinned[materialIndex]=true;
         }
         const bool textured=bgfx::isValid(material.colorTexture);
-        const float options[]{textured?1.f:0.f,0,0,0};
+        const float options[]{textured?1.f:0.f,material.blend==ParticleBlendMode::Additive?1.f:0.f,0,0};
         bgfx::setUniform(particleBaseColor,material.baseColor.data());
         bgfx::setUniform(particleParams,options);
+        bindFog(fogValues);
         bindMaterialMapping(material.uvScale,material.uvOffset,material.uvRotation,false);
         bgfx::setTexture(0,particleSampler,textured?material.colorTexture:white,material.samplerFlags);
         particleQuad.bind(); bgfx::setInstanceDataBuffer(&instances);
@@ -1125,6 +1178,28 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
     if(sceneView) {shadowContext=shadows.get();renderShadows(scene,*shadowContext,PointShadowView);}
     else if(views.scene==ThumbnailViews.scene) {shadowContext=thumbnailShadows.get();renderShadows(scene,*shadowContext,ThumbnailPointShadowView);}
     const auto& settings = scene.settings;
+    const bool savedScene=views.scene==ThumbnailViews.scene && scene.sceneMode;
+    const bool authoredEnvironment=sceneView || savedScene;
+    const auto presentation=environmentPresentation(settings.environment,appearance,authoredEnvironment,drawEnvironment);
+    drawEnvironment=presentation.showBackground;
+    ProceduralSkyGpu* procedural=nullptr;
+    if(sceneView)proceduralActive=settings.environment.source==EnvironmentSource::ProceduralSky;
+    if(presentation.procedural) {
+        auto& owner=sceneView?*proceduralEnvironment:*thumbnailProceduralEnvironment;
+        // Both world views consume one frozen generation. Camera motion never
+        // changes the direction-only sky key, and thumbnail ownership is separate.
+        if(!sceneView || proceduralFrame!=renderFrame) {
+            const bool prepared=owner.prepare(settings.environment.procedural,settings.proceduralSun,EnvironmentComputeView);
+            // Never cache a different saved scene's last-good lighting under
+            // this thumbnail's signature when its own preparation has failed.
+            if(!sceneView && !prepared)throw std::runtime_error(owner.status());
+            if(sceneView)proceduralFrame=renderFrame;
+        }
+        if(bgfx::isValid(owner.specular()))procedural=&owner;
+    }
+    const auto diffuse=procedural?procedural->diffuse():lighting.diffuse();
+    const auto specular=procedural?procedural->specular():lighting.specular();
+    const auto fogValues=fog::parameters(presentation.fog,settings.camera.farPlane);
     const auto& textures = scene.sphereTextures;
     const auto* caps = bgfx::getCaps();
     bgfx::setViewFrameBuffer(views.scene,target.hdrBuffer);
@@ -1138,7 +1213,7 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
     const auto view = settings.camera.viewMatrix();
     const auto projection = settings.camera.projectionMatrix(aspect,caps->homogeneousDepth ? ClipDepth::NegativeOneToOne : ClipDepth::ZeroToOne);
     bgfx::setViewTransform(views.scene,view.data(),projection.data());
-    if(drawEnvironment && bgfx::isValid(lighting.specular())) {
+    if(drawEnvironment && bgfx::isValid(specular)) {
         const auto forward=math::normalized(settings.camera.target-eye,{0,0,-1});
         const auto right=math::normalized(math::cross(forward,settings.camera.up),{1,0,0});
         const auto up=math::normalized(math::cross(right,forward),{0,1,0});
@@ -1146,16 +1221,17 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
         const Vec4 rightValue{right[0]*tangent*aspect,right[1]*tangent*aspect,right[2]*tangent*aspect,0};
         const Vec4 upValue{up[0]*tangent,up[1]*tangent,up[2]*tangent,0};
         const Vec4 forwardValue{forward[0],forward[1],forward[2],0};
-        const float env[]{settings.environment.enabled?bounded(settings.environment.intensity,1,0,10):0,
-            bounded(settings.environment.rotation,0,-180,180)*std::numbers::pi_v<float>/180,0,0};
+        const float env[]{bounded(settings.environment.intensity,1,0,10),
+            procedural?0.f:bounded(settings.environment.rotation,0,-180,180)*std::numbers::pi_v<float>/180,0,procedural?1.f:0.f};
         bgfx::setUniform(skyRight,rightValue.data());bgfx::setUniform(skyUp,upValue.data());bgfx::setUniform(skyForward,forwardValue.data());
-        bgfx::setUniform(environmentParams,env);bgfx::setTexture(0,skySampler,lighting.specular());
+        bgfx::setUniform(environmentParams,env);bgfx::setTexture(0,skySampler,specular);
+        if(procedural)procedural->bindBackground();
         fullscreen.bind();bgfx::setState(BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A);bgfx::submit(views.scene,skyProgram);
     }
     const float camera[]{eye[0],eye[1],eye[2],0};
     const float environmentValues[]{settings.environment.enabled ? bounded(settings.environment.intensity,1,0,10) : 0,
-        bounded(settings.environment.rotation,0,-180,180) * std::numbers::pi_v<float> / 180.0f,
-        lighting.maxSpecularLod(),0};
+        procedural?0.f:bounded(settings.environment.rotation,0,-180,180) * std::numbers::pi_v<float> / 180.0f,
+        procedural?procedural->maxSpecularLod():lighting.maxSpecularLod(),0};
     const std::span<const DirectionalLight> directional = scene.sceneMode ? scene.directionalLights : std::span<const DirectionalLight>(&settings.directional,1);
     const std::span<const PointLight> points = scene.sceneMode ? scene.pointLights : std::span<const PointLight>(settings.points);
     const auto directionalCount = std::min(directional.size(),MaxDirectionalLights);
@@ -1185,8 +1261,9 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
         bgfx::setUniform(pointColor,pointColors.data(),static_cast<std::uint16_t>(MaxPointLights));
         bgfx::setUniform(lightCounts,lightCountValues);
         bgfx::setUniform(environmentParams,environmentValues);
-        bgfx::setTexture(firstEnvironmentSlot,irradianceSampler,lighting.diffuse());
-        bgfx::setTexture(firstEnvironmentSlot+1,prefilteredSampler,lighting.specular());
+        bindFog(fogValues);
+        bgfx::setTexture(firstEnvironmentSlot,irradianceSampler,diffuse);
+        bgfx::setTexture(firstEnvironmentSlot+1,prefilteredSampler,specular);
         bgfx::setTexture(firstEnvironmentSlot+2,brdfSampler,lighting.brdf());
     };
     if (allowPicking && !scene.sceneMode && requestedPick) { ++pickEpoch; requestedPick.reset(); }
@@ -1272,7 +1349,8 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
                     static_cast<float>(material.normalTexture.texCoord),static_cast<float>(material.occlusionTexture.texCoord)};
                 const float options[]{static_cast<float>(material.emissiveTexture.texCoord),material.alphaMask ? 1.0f : 0.0f,
                     material.doubleSided ? 1.0f : 0.0f,handedness};
-                const float emissiveMap[]{bgfx::isValid(bindings.handles[4]) ? 1.0f : 0.0f,instance.shading==MaterialShading::Unlit?1.f:0.f,instance.receiveShadows?1.f:0.f,0};
+                const float emissiveMap[]{bgfx::isValid(bindings.handles[4]) ? 1.0f : 0.0f,instance.shading==MaterialShading::Unlit?1.f:0.f,instance.receiveShadows?1.f:0.f,
+                    instance.blend==MaterialBlend::Additive?2.f:instance.blend==MaterialBlend::Alpha?1.f:0.f};
                 bgfx::setTransform(world.data());
                 bgfx::setUniform(modelNormalMatrix,normal.data());
                 bgfx::setUniform(modelBase,material.baseColor.data());
@@ -1342,7 +1420,7 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
         bgfx::submit(views.scene,pbr);
     }
 
-    renderParticles(scene.particles,scene.particleMaterials,settings.camera,views.scene,particleStats);
+    renderParticles(scene.particles,scene.particleMaterials,settings.camera,fogValues,views.scene,particleStats);
 
     const bool glowing=renderGlow(settings,target,w,h,views);
     const float params[]{bounded(settings.exposure,1,0,100),caps->originBottomLeft?1.0f:0.0f,
@@ -1352,7 +1430,7 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
     bgfx::setViewClear(views.present,BGFX_CLEAR_NONE);
     bgfx::setViewTransform(views.present,nullptr,nullptr);
     bgfx::setUniform(presentParams,params);
-    const auto matte=particle_rendering::backgroundLinear(appearance.backgroundSrgb);
+    const auto matte=particle_rendering::backgroundLinear(presentation.matte);
     const float backgroundValue[]{matte[0],matte[1],matte[2],1};
     bgfx::setUniform(background,backgroundValue);
     bgfx::setTexture(0,hdrSampler,target.hdr);
@@ -1388,7 +1466,9 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
     bgfx::setViewRect(views.encode,0,0,w,h);
     bgfx::setViewClear(views.encode,BGFX_CLEAR_NONE);
     bgfx::setViewTransform(views.encode,nullptr,nullptr);
+    const float debandingValues[]{static_cast<float>(w),static_cast<float>(h),presentation.debanding?1.0f:0.0f,0};
     bgfx::setUniform(presentParams,params);
+    bgfx::setUniform(debandingParams,debandingValues);
     bgfx::setTexture(0,compositeSampler,target.composite);
     fullscreen.bind(); bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
     bgfx::submit(views.encode,encode);

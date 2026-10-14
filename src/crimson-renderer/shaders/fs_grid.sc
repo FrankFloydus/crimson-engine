@@ -1,6 +1,7 @@
 $input v_worldPosition
 
 #include <bgfx_shader.sh>
+#include "grid_depth.sh"
 
 // Port of the user's Quader resources/materials/ground_grid.mat perspective helpers.
 // Coverage integration and hierarchy are retained; only the renderer bindings change.
@@ -235,6 +236,11 @@ void main()
     vec4 grid = perspective_grid_coverage(coords, dFdx(coords), dFdy(coords));
     float alpha = clamp(grid.a * u_gridParams.y, 0.0, 1.0);
     if (alpha < 0.002) discard;
+    // The large plane crosses the eye at ordinary orbit angles. Reproject the
+    // interpolated world position instead of trusting rasterized forward depth
+    // after those clipping intersections; retain depth-tested mesh occlusion.
+    vec4 clip = mul(u_viewProj, vec4(v_worldPosition, 1.0));
+    gl_FragDepth = gridFragmentDepth(clip.z, clip.w, u_gridParams.z, u_gridParams.w);
     // ONE / ONE_MINUS_SRC_ALPHA into the linear post-tone-map target.
     gl_FragColor = vec4(grid.rgb * alpha, alpha);
 }

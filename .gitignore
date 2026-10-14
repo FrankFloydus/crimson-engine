@@ -3,5 +3,6 @@
 /assets/cache/
 /imgui.ini
 /crimson_ui.ini
+/crimson_window.json
 /renderer.log
 /.vs/

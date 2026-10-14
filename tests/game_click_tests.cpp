@@ -64,6 +64,8 @@ void displayedImageDestination() {
         // ray. This is the same boundary as follow/resize/camera-switch events.
         auto unrelatedCamera=displayed;unrelatedCamera.position[0]+=25;unrelatedCamera.target[0]+=25;
         play.advance(PlaySession::FixedStep,input,unrelatedCamera);
+        require(!play.remainingPath().empty() && play.remainingPath().size()<=play.path().size(),
+            "The clicked route did not expose its remaining navigation corners.");
         for(int frame=0;frame<240;++frame) {
             displayed=*resolveGameCamera(play.presentationScene());
             input.setProjection(displayed,layout.width,layout.height);
@@ -73,6 +75,7 @@ void displayedImageDestination() {
         const auto final=math::transformPoint(*play.document().scene().worldTransform(Player),{});
         require(std::hypot(final[0]-destination[0],final[2]-destination[2])<.06f,
             "Character did not stop at the original clicked world point in the moving detached view.");
+        require(play.remainingPath().empty(),"The arrived route retained stale navigation lines.");
         const auto pose=*play.document().scene().worldTransform(Player);
         input.submitUiPointer(visiblePixel(displayed,{-3,Ground,2},layout.image,layout.width,layout.height),false);
         for(int frame=0;frame<30;++frame)play.advance(PlaySession::FixedStep,input,displayed);

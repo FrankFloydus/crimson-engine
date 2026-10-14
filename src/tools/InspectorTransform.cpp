@@ -24,7 +24,14 @@ bool finishInspectorTransform(SceneDocument& document,InspectorTransformState& c
 }
 void drawInspectorTransform(SceneDocument& document, InspectorTransformState& cache, const EntityRecord& record,
                             const InspectorTransformTransactions& transactions) {
-    ImGui::SeparatorText("Local transform");
+    if (!ImGui::CollapsingHeader("Transform",ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (cache.editing) {
+            if (cache.activeItem==ImGui::GetActiveID()) ImGui::ClearActiveID();
+            transactions.finish(cache.activeField);
+            cache.editing=false; cache.refresh=true;
+        }
+        return;
+    }
     const auto inDegrees=[](const Vec3& radians) {
         Vec3 degrees;
         for (size_t axis=0;axis<3;++axis)
@@ -46,25 +53,35 @@ void drawInspectorTransform(SceneDocument& document, InspectorTransformState& ca
         cache.sceneGeneration=document.scene().generation(); cache.sceneRevision=document.scene().revision();
         cache.shownMatrix=record.local; cache.refresh=false;
     }
-    if (cache.valid && ImGui::BeginTable("Transform properties",2,ImGuiTableFlags_SizingStretchProp)) {
-        ImGui::TableSetupColumn("Property",ImGuiTableColumnFlags_WidthFixed,ImGui::CalcTextSize("Rotation (deg)").x);
-        ImGui::TableSetupColumn("Value",ImGuiTableColumnFlags_WidthStretch);
+    if (cache.valid) {
+        ImGui::PushID("Transform properties");
         const std::array<const char*,3> labels{"Position","Rotation (deg)","Scale"};
         const std::array<const char*,3> commandLabels{"Change local position","Change local rotation","Change local scale"};
         const std::array<const char*,3> axes{"X","Y","Z"};
+        const std::array<ImU32,3> axisColors{IM_COL32(170,0,0,255),IM_COL32(0,170,0,255),IM_COL32(0,0,170,255)};
         const std::array<float,3> speeds{.05f,.5f,.02f};
         for (size_t property=0;property<3;++property) {
-            ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted(labels[property]);
-            ImGui::TableSetColumnIndex(1); ImGui::PushID(static_cast<int>(property));
-            if (ImGui::BeginTable("Axes",2,ImGuiTableFlags_SizingStretchProp)) {
-                ImGui::TableSetupColumn("Axis",ImGuiTableColumnFlags_WidthFixed,ImGui::GetFontSize());
-                ImGui::TableSetupColumn("Value",ImGuiTableColumnFlags_WidthStretch);
+            ImGui::PushID(static_cast<int>(property));
+            ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted(labels[property]);
+            if (property==2) {
+                const float width=ImGui::GetFrameHeight()+ImGui::GetStyle().ItemInnerSpacing.x+ImGui::CalcTextSize("Lock proportions").x;
+                const float right=ImGui::GetCursorPosX()+ImGui::GetContentRegionAvail().x-width;
+                ImGui::SameLine(std::max(ImGui::GetItemRectMax().x-ImGui::GetWindowPos().x+ImGui::GetStyle().ItemSpacing.x,right));
+                ImGui::Checkbox("Lock proportions",&cache.scaleLinked);
+            }
+            if (ImGui::BeginTable("Axes",3,ImGuiTableFlags_SizingStretchSame)) {
+                for (const auto* axis:axes) ImGui::TableSetupColumn(axis,ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableNextRow();
                 for (size_t axis=0;axis<3;++axis) {
-                    ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted(axes[axis]);
-                    ImGui::TableSetColumnIndex(1); ImGui::PushID(static_cast<int>(axis)); ImGui::SetNextItemWidth(-1);
+                    ImGui::TableSetColumnIndex(static_cast<int>(axis)); ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted(axes[axis]);
+                    ImGui::SameLine(0,ImGui::GetStyle().ItemInnerSpacing.x);
+                    ImGui::PushID(static_cast<int>(axis)); ImGui::SetNextItemWidth(-1);
                     const auto field=static_cast<unsigned>(property*3+axis);
                     auto value=property==0 ? cache.fields.position[axis] : property==1 ? cache.degrees[axis] : cache.fields.scale[axis];
                     const bool changed=ImGui::DragFloat("##value",&value,speeds[property],0,0,"%.3f");
+                    const auto minimum=ImGui::GetItemRectMin(),maximum=ImGui::GetItemRectMax();
+                    const float stripWidth=std::max(1.f,ImGui::GetFontSize()*.15f);
+                    ImGui::GetWindowDrawList()->AddRectFilled({minimum.x,minimum.y},{minimum.x+stripWidth,maximum.y},ImGui::GetColorU32(axisColors[axis]));
                     if ((ImGui::IsItemActivated() || changed) && (!cache.editing || cache.activeField!=field || !document.transactionActive())) {
                         // Another field can finish earlier in this same draw.
                         // Capture the document's current matrix and rotation
@@ -74,6 +91,7 @@ void drawInspectorTransform(SceneDocument& document, InspectorTransformState& ca
                         if (captured && transactions.begin(field,commandLabels[property])) {
                             cache.baseline=current->local; cache.fields=*captured; cache.degrees=inDegrees(captured->rotationRadians);
                             cache.captured=*captured; cache.capturedDegrees=cache.degrees; cache.editing=true;
+                            cache.capturedScaleLinked=cache.scaleLinked;
                             cache.activeField=field; cache.activeItem=ImGui::GetItemID();
                             cache.shownMatrix=current->local; cache.sceneGeneration=document.scene().generation();
                             cache.sceneRevision=document.scene().revision(); cache.refresh=false;
@@ -82,6 +100,19 @@ void drawInspectorTransform(SceneDocument& document, InspectorTransformState& ca
                     if (changed && cache.editing && cache.activeField==field && document.transactionActive()) {
                         auto requested=property==0 ? cache.captured.position : property==1 ? cache.captured.rotationRadians : cache.captured.scale;
                         requested[axis]=property==1 ? static_cast<float>(static_cast<double>(value)*(std::numbers::pi_v<double>/180.0)) : value;
+                        if (property==2 && cache.capturedScaleLinked) {
+                            // Always derive the ratio from the gesture baseline,
+                            // including when a drag crosses through zero. A zero
+                            // initial component has no ratio; match the material
+                            // editor's additive fallback so collapsed axes can grow.
+                            if (cache.captured.scale[axis]!=0)
+                                requested=cache.captured.scale*(static_cast<double>(value)/cache.captured.scale[axis]);
+                            else {
+                                const float delta=value-cache.captured.scale[axis];
+                                requested=cache.captured.scale+Vec3{delta,delta,delta};
+                            }
+                            requested[axis]=value;
+                        }
                         const auto candidate=property==0 ? math::withAffinePosition(cache.baseline,requested) : property==1 ?
                             math::withAffineRotation(cache.baseline,cache.captured,requested) : math::withAffineScale(cache.baseline,cache.captured,requested);
                         if (candidate && document.update(changeEntity(record.id,[matrix=*candidate](auto& entity){entity.local=matrix;}))) {
@@ -101,7 +132,7 @@ void drawInspectorTransform(SceneDocument& document, InspectorTransformState& ca
             }
             ImGui::PopID();
         }
-        ImGui::EndTable();
+        ImGui::PopID();
     }
     // A scalar can lose ownership after its submission (another window, a
     // clipped field, or a menu). Do not depend on observing its one-frame

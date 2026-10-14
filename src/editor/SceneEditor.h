@@ -13,6 +13,7 @@ namespace crimson {
 class ParticleEditor;
 class MaterialEditor;
 struct PanelVisibility { bool outliner{true}, inspector{true}, assetBrowser{true}, game{false}; };
+struct OverlayVisibility { bool collisions{true}, grid{true}, transformGizmo{true}; };
 // Authoring UI and document transitions. It does not own GPU resources or the world.
 class SceneEditor {
 public:
@@ -24,7 +25,13 @@ public:
     std::uint16_t pointShadowResolution() const { return static_cast<std::uint16_t>(preferences_.values().pointShadowResolution); }
     const PanelVisibility& panels() const { return panels_; }
     void setPanels(const PanelVisibility& panels) { panels_=panels; }
+    const OverlayVisibility& overlays() const { return overlays_; }
+    void setOverlays(const OverlayVisibility& overlays) { overlays_=overlays; }
     bool needsAuthoringDocument() const { return deferred_!=Pending::None || !deferredDeletion_.empty(); }
+    bool playTransitionBlocked() const {
+        return opening_ || deletion_ || pending_!=Pending::None || needsAuthoringDocument() ||
+            dirtyPopup_ || savePopup_ || deletePopup_ || saveConflictPopup_ || externalPopup_ || openingPopup_;
+    }
     void showGame() { panels_.game=true; }
     void hideGame() { panels_.game=false; }
     void notifyExternalSceneChange(SceneSnapshot snapshot) { externalScene_=std::move(snapshot); }
@@ -35,6 +42,7 @@ private:
     AssetBrowserPanel browser_;
     EditorPreferences preferences_;
     PanelVisibility panels_;
+    OverlayVisibility overlays_;
     Pending pending_{Pending::None};
     Pending deferred_{Pending::None};
     std::string deferredAsset_;

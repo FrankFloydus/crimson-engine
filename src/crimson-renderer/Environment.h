@@ -85,6 +85,7 @@ public:
     bgfx::TextureHandle specular() const { return specular_; }
     bgfx::TextureHandle brdf() const { return brdf_; }
     float maxSpecularLod() const { return maxSpecularLod_; }
+    std::size_t residentBytes() const { return residentBytes_; }
     const std::string& status() const { return status_; }
 
 private:
@@ -93,6 +94,7 @@ private:
     bgfx::TextureHandle brdf_{BGFX_INVALID_HANDLE};
     uint64_t key_{};
     float maxSpecularLod_{};
+    std::size_t residentBytes_{};
     std::string status_;
 };
 

@@ -1,6 +1,7 @@
 $input v_worldPosition, v_normal, v_texcoord0, v_tangent
 
 #include <bgfx_shader.sh>
+#include "fog.sh"
 #include "point_light.sh"
 
 uniform vec4 u_baseColorMetallic;
@@ -138,5 +139,6 @@ void main()
     }
     color += evaluateEnvironment(N, V, base, metallic, roughness);
     // Keep extreme near-light highlights finite in half-float HDR storage.
+    color = applyDistanceFog(color, length(u_cameraPos.xyz - v_worldPosition), v_worldPosition.y, 0.0);
     gl_FragColor = vec4(clamp(color, vec3_splat(0.0), vec3_splat(60000.0)), 1.0);
 }

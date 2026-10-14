@@ -1,4 +1,5 @@
 #include "AssetPreviews.h"
+#include "crimson-renderer/EnvironmentPresentation.h"
 #include "EditorResources.h"
 #include "assets/AssetLibrary.h"
 #include "assets/MaterialPreviewGeometry.h"
@@ -22,7 +23,7 @@
 
 namespace crimson {
 namespace {
-constexpr uint32_t PreviewVersion=5,PreviewSize=512;
+constexpr uint32_t PreviewVersion=7,PreviewSize=512;
 using streaming::detail::hash;
 uint64_t textHash(std::string_view text) { auto result=streaming::detail::HashSeed; hash(result,text.data(),text.size()); return result; }
 void materialHash(uint64_t& value,const ModelMaterial& material) {
@@ -210,6 +211,7 @@ struct AssetPreviews::Impl {
             Scene candidate; candidate.apply(snapshot->records,snapshot->properties); auto extracted=extractScene(candidate);
             models=std::move(extracted.models); directions=std::move(extracted.directional); points=std::move(extracted.points);
             settings.environment=extracted.environment.environment; settings.exposure=extracted.environment.exposure;
+            settings.proceduralSun=extracted.proceduralSun;
             if (snapshot->previewCamera) settings.camera=*snapshot->previewCamera;
         } else if (entry.kind==AssetKind::Material) {
             materialAsset=assets.findMaterial(id);
@@ -275,10 +277,11 @@ struct AssetPreviews::Impl {
         // Browser thumbnails deliberately omit post-process halos. Their cache
         // stays stable when a scene's Glow is tuned in its full-size views.
         settings.environment.glow.enabled=false;
-        const auto source=assets.references().resolveEnvironment(settings.environment.map);
+        const auto source=settings.environment.source==EnvironmentSource::Hdri?
+            assets.references().resolveEnvironment(settings.environment.map):std::string{};
         auto bake=environment(source,entry); if (!bake) return;
-        hash(sourceKey,bake->key); hash(sourceKey,settings.exposure); hash(sourceKey,settings.environment.intensity); hash(sourceKey,settings.environment.rotation); hash(sourceKey,settings.environment.enabled);
-        hash(sourceKey,settings.environment.toneMapping);
+        hash(sourceKey,bake->key);hash(sourceKey,settings.exposure);
+        hash(sourceKey,thumbnailEnvironmentKey(settings.environment,settings.proceduralSun));
         if (entry.kind==AssetKind::Model || (entry.kind==AssetKind::Scene && !sceneSnapshot->previewCamera)) {
             if (bounds.valid) settings.camera.frameBounds(bounds.minimum,bounds.maximum,1);
         }

@@ -75,7 +75,7 @@ void ShaderReloadSession::pump() {
     std::string diagnostic;
     const auto ui=tools_.prepareProgramReload(ready.at("vs_imgui")->bytes,ready.at("fs_imgui")->bytes,diagnostic);
     if (!bgfx::isValid(ui)) { pending_=false; status_="ImGui shader reload: "+diagnostic; return; }
-    if (!renderer_.reloadPrograms(pairs)) {
+    if (!renderer_.reloadPrograms(pairs,ready.at("cs_procedural_filter")->bytes)) {
         bgfx::destroy(ui); pending_=false; status_="Shader reload: "+renderer_.shaderStatus(); return;
     }
     // The renderer accepted its whole candidate group; this commit cannot fail.

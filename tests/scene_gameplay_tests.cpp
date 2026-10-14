@@ -46,7 +46,7 @@ void componentsAndStorage(){
     auto characterRecord=*document.scene().find(character);characterRecord.character->moveSpeed=7;require(document.updateEntity(character,characterRecord),document.status());
     require(document.save("Gameplay"),document.status());
     const auto snapshot=readSceneSnapshot(project.root,document.assetId());
-    require(Json::parse(serializeSceneSnapshot(snapshot)).at("version")==5,"Scene writer did not use version 5.");
+    require(Json::parse(serializeSceneSnapshot(snapshot)).at("version")==8,"Scene writer did not use version 8.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(document.scene().records(),reopened.scene().records());
     require(sameProperties(document.scene().properties(),reopened.scene().properties()),"Gameplay scene properties did not round-trip.");
     auto legacy=Json::parse(serializeSceneSnapshot(snapshot));legacy["version"]=3;legacy["settings"].erase("activeCamera");legacy["settings"].erase("playerCharacter");
@@ -61,6 +61,60 @@ void componentsAndStorage(){
     invalid=*document.scene().find(camera);invalid.camera->verticalFov=.5f;require(!document.updateEntity(camera,invalid),"Out-of-contract camera FOV accepted.");
     invalid=*document.scene().find(box);invalid.model=AssetRef<ModelAsset>{"builtin:unknown"};require(!document.updateEntity(box,invalid),"Unknown builtin model identity accepted.");
     require(!document.setActiveCamera(character) && !document.setPlayerCharacter(camera),"Wrong component activation accepted.");
+}
+
+void collisionDisplayStorageAndHistory(){
+    TempProject project;SceneDocument document(project.root);
+    const auto character=document.createCharacter(),collider=document.createCollider();
+    for(const auto color:{document.scene().find(character)->character->collisionColor,document.scene().find(collider)->collider->collisionColor})
+        require(std::lround(color[0]*255)==0x39 && std::lround(color[1]*255)==0xaf &&
+            std::lround(color[2]*255)==0xdd && color[3]==1,"New collision colors must default to #39AFDDFF.");
+    require(document.scene().find(character)->character->showRoute &&
+        !document.scene().find(character)->character->showCollisionInGame &&
+        !document.scene().find(collider)->collider->showCollisionInGame,"New entities have unexpected debug visibility defaults.");
+    auto actor=*document.scene().find(character);
+    actor.character->showRoute=false;actor.character->showCollisionInGame=true;actor.character->collisionColor={.9f,.1f,.3f,.25f};
+    require(document.updateEntity(character,actor),document.status());
+    require(document.undo() && document.scene().find(character)->character->showRoute &&
+        !document.scene().find(character)->character->showCollisionInGame,"Undo did not restore character debug display.");
+    require(document.redo() && document.scene().find(character)->character==actor.character,"Redo lost character debug display.");
+    auto box=*document.scene().find(collider);box.collider->showCollisionInGame=true;box.collider->collisionColor={.2f,.4f,.8f,.75f};
+    require(document.updateEntity(collider,box),document.status());
+    require(document.save("Collision display"),document.status());
+    SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
+    same(document.scene().records(),reopened.scene().records());
+    auto legacy=Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,document.assetId())));
+    const std::string legacyId="assets/scenes/legacy-collision-display.crimson-scene";
+    for(auto& record:legacy["entities"])for(const auto* component:{"character","collider"})if(record.contains(component))
+        record[component]["collisionColor"].erase(3);
+    {std::ofstream output(project.root/legacyId);output<<legacy.dump();}
+    require(reopened.load(legacyId),reopened.status());
+    require(reopened.scene().find(character)->character->collisionColor==Vec4{.9f,.1f,.3f,1} &&
+        reopened.scene().find(collider)->collider->collisionColor==Vec4{.2f,.4f,.8f,1},
+        "RGB collision colors did not preserve their channels and opaque wire alpha.");
+    for(auto& record:legacy["entities"])for(const auto* component:{"character","collider"})if(record.contains(component)) {
+        record[component].erase("showRoute");record[component].erase("showCollisionInGame");record[component].erase("collisionColor");
+    }
+    {std::ofstream output(project.root/legacyId);output<<legacy.dump();}
+    require(reopened.load(legacyId),reopened.status());
+    require(reopened.scene().find(character)->character->showRoute &&
+        !reopened.scene().find(character)->character->showCollisionInGame &&
+        reopened.scene().find(character)->character->collisionColor==SceneCharacter{}.collisionColor &&
+        !reopened.scene().find(collider)->collider->showCollisionInGame &&
+        reopened.scene().find(collider)->collider->collisionColor==SceneCollider{}.collisionColor,
+        "Legacy scenes did not retain default route/collision display.");
+    auto invalid=actor;invalid.character->collisionColor[0]=std::numeric_limits<float>::infinity();
+    require(!document.updateEntity(character,invalid),"Nonfinite character collision color was accepted.");
+    invalid=box;invalid.collider->collisionColor[1]=-1;
+    require(!document.updateEntity(collider,invalid),"Negative collider color was accepted.");
+    invalid=box;invalid.collider->collisionColor[2]=2;
+    require(!document.updateEntity(collider,invalid),"Out-of-range collider color was accepted.");
+    invalid=actor;invalid.character->collisionColor[3]=std::numeric_limits<float>::quiet_NaN();
+    require(!document.updateEntity(character,invalid),"Nonfinite collision alpha was accepted.");
+    invalid=box;invalid.collider->collisionColor[3]=1.01f;
+    require(!document.updateEntity(collider,invalid),"Out-of-range collision alpha was accepted.");
+    invalid=box;invalid.collider->collisionColor[3]=0;
+    require(document.updateEntity(collider,invalid),"Fully transparent collision color was rejected.");
 }
 
 void runtimePatches(){
@@ -234,7 +288,7 @@ void shadowSettingsStorageHistoryAndExtraction(){
     require(document.save("Point shadows"),document.status());
     const auto snapshot=readSceneSnapshot(project.root,document.assetId());
     auto serialized=Json::parse(serializeSceneSnapshot(snapshot));
-    require(serialized.at("version")==5,"Scene writer did not retain the current version.");
+    require(serialized.at("version")==8,"Scene writer did not retain the current version.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(document.scene().records(),reopened.scene().records());
     for(const int version:{1,2,3,4}) {
         auto legacy=serialized;legacy["version"]=version;
@@ -361,4 +415,4 @@ void environmentToneMappingStorageAndRuntime() {
         "Starting Play again retained runtime Glow, tone mapping or history.");
 }
 }
-int main(){try{componentsAndStorage();runtimePatches();followAndHierarchy();followDependenciesAndAtomicFailure();parentFollowKeepsWorldOffset();boxMaterialAndPointRadius();shadowSettingsStorageHistoryAndExtraction();environmentToneMappingStorageAndRuntime();std::cout<<"Gameplay scene tests passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+int main(){try{componentsAndStorage();collisionDisplayStorageAndHistory();runtimePatches();followAndHierarchy();followDependenciesAndAtomicFailure();parentFollowKeepsWorldOffset();boxMaterialAndPointRadius();shadowSettingsStorageHistoryAndExtraction();environmentToneMappingStorageAndRuntime();std::cout<<"Gameplay scene tests passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

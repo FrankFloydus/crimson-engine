@@ -1,9 +1,12 @@
 #include "scene/SceneExtraction.h"
+#include "editor/CollisionWire.h"
 
 #include <array>
 #include <cmath>
 #include <iostream>
+#include <map>
 #include <numbers>
+#include <set>
 #include <stdexcept>
 #include <utility>
 
@@ -113,6 +116,40 @@ void lightOrientation() {
     require(close(directionalLightDirection(math::scaling({1,1,0})),{0,0,-1}),
             "Degenerate light axis did not use its finite fallback.");
 }
+void proceduralSunExtraction() {
+    Scene scene;
+    auto parent=entity(1,"Sun parent",0,math::translation({10,20,30})*math::rotation(math::axisAngle({1,0,0},.6)));
+    auto sun=entity(2,"Linked sun",1,math::rotation(math::axisAngle({0,1,0},.8))*math::scaling({2,3,4}));
+    sun.directional=SceneDirectionalLight{{.8f,.6f,.4f},7,true};
+    auto environment=entity(3,"Sky",0,Mat4{});environment.environment.emplace();
+    environment.environment->sun=sun.id;environment.environment->environment.source=EnvironmentSource::ProceduralSky;
+    auto otherEnvironment=entity(4,"Unlinked sky",0,Mat4{});otherEnvironment.environment.emplace();
+    auto otherSun=entity(5,"Other light",0,Mat4{});otherSun.directional.emplace();
+    scene.apply({otherSun,environment,parent,otherEnvironment,sun},{environment.id});
+    auto extracted=extractScene(scene);
+    require(extracted.environment.sun==sun.id && extracted.proceduralSun.enabled &&
+        close(extracted.proceduralSun.direction,directionalLightDirection(parent.local*sun.local)*-1.f),
+        "Procedural sun did not use the explicitly linked light's world direction toward the sun.");
+    require(extracted.proceduralSun.color==sun.directional->color && extracted.proceduralSun.intensity==7,
+        "Sun extraction changed authored color/energy or applied scale to intensity.");
+    const auto initial=extracted.proceduralSun;
+    sun.local=math::translation({-100,300,400})*sun.local;
+    scene.apply({otherSun,environment,parent,otherEnvironment,sun},{environment.id});
+    require(extractScene(scene).proceduralSun==initial,"Sun translation moved an infinitely distant procedural sun.");
+    const std::array updates{ScenePoseUpdate{parent.id,math::rotation(math::axisAngle({1,0,0},1.2))}};
+    scene.applyRuntimePoses(updates);extracted=extractScene(scene);
+    require(!close(extracted.proceduralSun.direction,initial.direction) &&
+        close(extracted.proceduralSun.direction,directionalLightDirection(*scene.worldTransform(sun.id))*-1.f),
+        "Runtime sun rotation did not update the extracted frame value.");
+    sun.directional->enabled=false;
+    scene.apply({otherSun,environment,parent,otherEnvironment,sun},{environment.id});extracted=extractScene(scene);
+    require(!extracted.proceduralSun.enabled && extracted.environment.sun==sun.id && extracted.proceduralSun.intensity==7,
+        "Disabling a linked sun dropped its authored link or retained visible sunlight.");
+    scene.apply({otherSun,environment,parent,otherEnvironment,sun},{otherEnvironment.id});
+    require(!extractScene(scene).proceduralSun.enabled,"An unlinked active Environment implicitly selected a directional light.");
+    scene.apply({otherSun,environment,parent,otherEnvironment,sun},{});
+    require(!extractScene(scene).proceduralSun.enabled,"No active Environment inherited another Environment's sun.");
+}
 void gizmoAffineRotation() {
     Mat4 shear; shear[4]=.4f; shear[8]=-.2f; shear[9]=.7f;
     const Mat4 parent=math::translation({7,3,-5})*math::rotation(math::axisAngle({0,1,0},.7))*math::scaling({-2,.5f,3});
@@ -169,11 +206,124 @@ void particleExtraction() {
             "Particle focus duplicated selected descendants or transformed world-space live bounds again.");
     const auto fallback=selectionBounds(scene,selection,{},[](EntityId)->std::optional<Aabb>{return Aabb{};});
     require(close(fallback.minimum,bounds.minimum) && close(fallback.maximum,bounds.maximum),"Invalid live bounds removed the authored marker fallback.");
+    // Parent selection wires/pivots use authored bounds. Live particles may
+    // move far away, expire or restart without changing that selection box.
+    const auto authored=selectionBounds(scene,nestedSelection,{});
+    const Aabb expanded{{-80,-20,-50},{130,80,100},true};
+    const auto framed=selectionBounds(scene,nestedSelection,{},[&](EntityId)->std::optional<Aabb>{return expanded;});
+    const auto stable=selectionBounds(scene,nestedSelection,{});
+    require(close(authored.minimum,stable.minimum) && close(authored.maximum,stable.maximum) &&
+        framed.maximum[0]>stable.maximum[0],"Live particle framing changed the stable authored selection bounds.");
     auto copied=extracted;particle.local=math::translation({100,0,0});scene.apply({particle,parent},{});
     require(close(copied.particles[0].world,extracted.particles[0].world),"An extracted particle frame retained mutable scene storage.");
 }
+void collisionPicking() {
+    Scene scene;
+    auto parent=entity(1,"Parent",0,math::translation({3,0,-5})*math::scaling({2,3,.5f}));
+    auto box=entity(2,"Box collider",1,Mat4{});box.collider=SceneCollider{{2,2,2}};
+    auto distant=entity(3,"Distant collider",0,math::translation({3,0,-9}));distant.collider=SceneCollider{{2,2,2}};
+    scene.apply({parent,box,distant},{});
+    require(pickCollisionShape(scene,{{3,0,0},{0,0,-1}},100)==2,"Clicking a box interior did not pick the closest affine collider.");
+    require(!pickCollisionShape(scene,{{3,0,0},{0,0,-1}},4),"Collision picking exceeded the camera far distance.");
+    require(!pickCollisionShape(scene,{{7,0,0},{0,0,-1}},100),"A ray outside the box selected its collider.");
+    require(pickCollisionShape(scene,{{3,0,-5},{1,0,0}},100)==2,"A camera inside a collider could not select it.");
+    box.local=math::scaling({0,1,1});scene.apply({parent,box,distant},{});
+    require(pickCollisionShape(scene,{{3,0,0},{0,0,-1}},100)==3,"A collapsed collider blocked the valid hit behind it.");
+
+    auto character=entity(4,"Capsule",0,math::translation({0,0,-4}));character.character=SceneCharacter{};
+    character.character->height=2;character.character->radius=.5f;scene.apply({character},{});
+    require(pickCollisionShape(scene,{{0,1,0},{0,0,-1}},100)==4,"Capsule cylinder interior was not selectable.");
+    require(pickCollisionShape(scene,{{0,1.9f,0},{0,0,-1}},100)==4,"Capsule hemisphere was not selectable.");
+    require(!pickCollisionShape(scene,{{.49f,1.99f,0},{0,0,-1}},100),"Capsule picking incorrectly used a box at the rounded corner.");
+    require(!pickCollisionShape(scene,{{0,1,0},{0,0,1}},100),"Collision shapes behind the camera remained selectable.");
+}
+void clippedSelectionWires() {
+    const Vec4 viewport{20,30,800,600};
+    for(const auto depth:{ClipDepth::NegativeOneToOne,ClipDepth::ZeroToOne}) {
+        const auto projection=math::perspective(std::numbers::pi/2,4.0/3,1,20,depth);
+        const auto crossing=projectClippedSegment({0,0,1},{.5f,0,-5},projection,viewport,depth);
+        require(crossing.has_value(),"A selection edge crossing the camera/near plane disappeared entirely.");
+        const auto wide=projectClippedSegment({-100,0,-4},{100,0,-4},projection,viewport,depth);
+        require(wide && std::abs((*wide)[0][0]-20)<1e-3 && std::abs((*wide)[1][0]-820)<1e-3,
+                "Selection edges were not clipped to both viewport sides before projection.");
+        require(!projectClippedSegment({0,0,1},{0,1,2},projection,viewport,depth),"A selection edge wholly behind the camera was drawn.");
+        require(!projectClippedSegment({0,0,-30},{0,1,-40},projection,viewport,depth),"An edge beyond the far plane was drawn.");
+        require(!projectClippedSegment({0,0,-4},{0,1,-4},projection,{0,0,0,600},depth),"A zero-width viewport produced a line.");
+    }
+}
+void collisionFaces() {
+    const Vec4 viewport{20,30,800,600};
+    for(const auto depth:{ClipDepth::NegativeOneToOne,ClipDepth::ZeroToOne}) {
+        const auto projection=math::perspective(std::numbers::pi/2,4.0/3,1,20,depth);
+        const auto crossing=projectClippedTriangle({0,2,1},{-2,-1,-5},{2,-1,-5},projection,viewport,depth);
+        require(crossing.count>=3,"A collision fill crossing the camera near plane disappeared.");
+        for(unsigned i=0;i<crossing.count;++i)require(math::finite(crossing.vertices[i]) &&
+            crossing.vertices[i][0]>=19.99f && crossing.vertices[i][0]<=820.01f &&
+            crossing.vertices[i][1]>=29.99f && crossing.vertices[i][1]<=630.01f,
+            "Clipped collision fill escaped the viewport or produced a nonfinite vertex.");
+        require(!projectClippedTriangle({0,0,1},{1,0,1},{0,1,1},projection,viewport,depth).count,
+            "Collision fill behind the camera was retained.");
+        require(!projectClippedTriangle({0,0,-21},{1,0,-21},{0,1,-21},projection,viewport,depth).count,
+            "Collision fill past the far plane was retained.");
+        require(!projectClippedTriangle({0,0,-4},{1,0,-4},{0,1,-4},projection,{0,0,0,600},depth).count,
+            "An empty viewport retained collision fill.");
+    }
+    const auto closed=[](const CollisionDebugMesh& mesh,auto point,const Vec3& center) {
+        std::map<std::array<std::uint16_t,2>,unsigned> edgeUses;
+        for(const auto& triangle:mesh.triangles) {
+            const auto a=point(mesh.vertices.at(triangle[0])),b=point(mesh.vertices.at(triangle[1])),c=point(mesh.vertices.at(triangle[2]));
+            require(math::dot(math::cross(b-a,c-a),(a+b+c)/3-center)>0,
+                "Collision fill has an inward-facing or degenerate triangle.");
+            for(unsigned i=0;i<3;++i) {
+                const auto x=triangle[i],y=triangle[(i+1)%3];++edgeUses[{std::min(x,y),std::max(x,y)}];
+            }
+        }
+        for(const auto& [edge,uses]:edgeUses)require(uses==2,"Collision fill is not closed along a triangle edge.");
+    };
+    const auto& box=boxCollisionMesh();
+    require(box.triangles.size()==12 && box.edges.size()==18,"Box collision wire omitted its face diagonals.");
+    closed(box,[](const Vec3& point){return point;},{});
+    for(const auto height:{2.f,5.f}) {
+        const auto& capsule=capsuleCollisionMesh(height,1);
+        closed(capsule,[&](const Vec3& point){return capsuleCollisionPoint(point,height,1);},{0,height*.5f,0});
+        for(const auto& vertex:capsule.vertices) {
+            const auto point=capsuleCollisionPoint(vertex,height,1);
+            const auto center=Vec3{0,std::clamp(point[1],1.f,height-1),0};
+            require(std::abs(math::length(point-center)-1)<1e-5,"Collision debug capsule diverged from the physical capsule.");
+        }
+        require(capsule.edges.size()==(height==2?384u:516u),"Capsule wires must contain Godot's contours, not fill triangle edges.");
+        unsigned rings=0,sides=0,caps=0;
+        std::set<std::array<long,6>> uniqueSegments;
+        for(const auto& edge:capsule.edges) {
+            const auto a=capsuleCollisionPoint(capsule.wireVertices.at(edge[0]),height,1);
+            const auto b=capsuleCollisionPoint(capsule.wireVertices.at(edge[1]),height,1);
+            require(math::length(b-a)>1e-6,"Capsule wire contains a zero-length side.");
+            for(const auto point:{a,b}) {
+                const auto center=Vec3{0,std::clamp(point[1],1.f,height-1),0};
+                require(std::abs(math::length(point-center)-1)<1e-5,"Capsule contour left the collision surface.");
+            }
+            if(a[1]==b[1] && (a[1]==1 || a[1]==height-1))++rings;
+            else if(a[0]==b[0] && a[2]==b[2]) {
+                require(a[1]==1 && b[1]==height-1 && (std::abs(a[0])==1 || std::abs(a[2])==1),
+                    "Capsule cylinder contains a non-cardinal or subdivided side.");
+                ++sides;
+            } else {
+                require((a[0]==0 && b[0]==0) || (a[2]==0 && b[2]==0),"Capsule cap contains a diagonal triangulation wire.");
+                require((a[1]<=1 && b[1]<=1) || (a[1]>=height-1 && b[1]>=height-1),"Capsule arc crossed its cylinder.");
+                ++caps;
+            }
+            std::array<long,3> first{},last{};
+            for(unsigned axis=0;axis<3;++axis) {first[axis]=std::lround(a[axis]*100000);last[axis]=std::lround(b[axis]*100000);}
+            if(last<first)std::swap(first,last);
+            require(uniqueSegments.insert({first[0],first[1],first[2],last[0],last[1],last[2]}).second,
+                "Capsule wire overdraws a duplicate contour.");
+        }
+        require(rings==(height==2?128u:256u) && sides==(height==2?0u:4u) && caps==256,
+            "Capsule lost an equator ring, cardinal side or hemisphere contour.");
+    }
+}
 }
 int main() {
-    try { run(); lightOrientation(); gizmoAffineRotation();particleExtraction();std::cout<<"Scene extraction checks passed.\n"; return 0; }
+    try { run(); lightOrientation(); proceduralSunExtraction();gizmoAffineRotation();particleExtraction();collisionPicking();clippedSelectionWires();collisionFaces();std::cout<<"Scene extraction checks passed.\n"; return 0; }
     catch (const std::exception& error) { std::cerr<<error.what()<<'\n'; return 1; }
 }

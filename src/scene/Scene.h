@@ -54,13 +54,18 @@ struct ScenePointLight {
 struct SceneEnvironment {
     EnvironmentSettings environment{};
     float exposure{1.0f};
+    EntityId sun{NoEntity}; // Optional explicit directional-light reference.
 };
 struct SceneCharacter {
     float height{1.8f}, radius{.3f}, moveSpeed{5.f};
+    bool showRoute{true},showCollisionInGame{false};
+    Vec4 collisionColor{57.f/255.f,175.f/255.f,221.f/255.f,1.f};
     bool operator==(const SceneCharacter&) const = default;
 };
 struct SceneCollider {
     Vec3 size{1,1,1};
+    bool showCollisionInGame{false};
+    Vec4 collisionColor{57.f/255.f,175.f/255.f,221.f/255.f,1.f};
     bool operator==(const SceneCollider&) const = default;
 };
 struct SceneCamera {

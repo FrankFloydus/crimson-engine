@@ -1,4 +1,6 @@
 #include "scene/SceneDocument.h"
+#include "scene/EnvironmentSerialization.h"
+#include "editor/ViewportSelection.h"
 #include "assets/AtomicFile.h"
 #include "math/Json.h"
 
@@ -170,6 +172,51 @@ void transactionsAndSelection() {
     require(document.history().canRedo(),"Rejected transaction discarded redo.");
     sameRecords(document.scene().records(),before);
     require(document.redo(),"Redo after no-op failed.");
+}
+
+void viewportParentSelection() {
+    TempProject project; SceneDocument document(project.root);
+    const auto parent=document.createEmpty("Object");
+    const auto branch=document.createEmpty("Visual branch");
+    document.select({branch});require(document.reparentSelection(parent),document.status());
+    const auto model=document.createModel("assets/models/viewport/manifest.json","Model");
+    document.select({model});require(document.reparentSelection(branch),document.status());
+    const auto collider=document.createCollider("Collision",model);
+    const auto particle=document.createParticle("assets/particles/viewport.crimson-particle","Particles");
+    const auto light=document.createPointLight();
+    const auto camera=document.createCamera();
+    document.select({particle,light,camera});require(document.reparentSelection(branch),document.status());
+    const auto other=document.createEmpty("Other object");
+    const auto character=document.createCharacter();
+    document.select({character});require(document.reparentSelection(other),document.status());
+    require(parent && branch && model && collider && particle && light && camera && other && character,"Viewport selection fixture failed.");
+    require(viewportSelectionRoot(document.scene(),NoEntity)==NoEntity && viewportSelectionRoot(document.scene(),999)==NoEntity,
+        "Empty or stale viewport hits resolved to a selection.");
+    const auto history=document.history().size();
+    for(const auto hit:std::array<EntityId,7>{parent,branch,model,collider,particle,light,camera}) {
+        require(selectViewportHit(document,hit,false,false),"Viewport selection was blocked.");
+        require(document.selection().ids==std::vector<EntityId>{parent} && document.selection().primary==parent,
+            "A viewport model, collision or marker hit selected a child instead of the top-level parent.");
+    }
+    require(selectViewportHit(document,character,false,true) && document.selection().ids==std::vector<EntityId>({parent,other}) &&
+        document.selection().primary==other,"Shift-click did not append the hit's top-level parent.");
+    require(selectViewportHit(document,collider,false,true) && document.selection().ids==std::vector<EntityId>({parent,other}) &&
+        document.selection().primary==parent,"Shift-click duplicated an already selected parent.");
+    require(selectViewportHit(document,model,true,false) && document.selection().ids==std::vector<EntityId>{other},
+        "Ctrl-click did not toggle the parent off through its child.");
+    require(selectViewportHit(document,particle,true,true) && document.selection().ids==std::vector<EntityId>({other,parent}),
+        "Ctrl+Shift-click did not retain toggle behavior.");
+    require(selectViewportHit(document,NoEntity,false,true) && document.selection().ids==std::vector<EntityId>({other,parent}),
+        "Shift-clicking the background cleared selection.");
+    require(selectViewportHit(document,NoEntity,false,false) && document.selection().ids.empty(),"Background click did not clear selection.");
+    document.select({collider},collider);
+    require(document.selection().primary==collider && document.selection().ids==std::vector<EntityId>{collider},
+        "Explicit Outliner-style selection no longer addresses a child.");
+    require(document.begin("Active transform"),document.status());
+    require(!selectViewportHit(document,model,false,false) && document.selection().primary==collider,
+        "Viewport selection changed during an active document edit.");
+    document.cancel();
+    require(document.history().size()==history,"Viewport selection added authored history.");
 }
 
 void subtreeCommands() {
@@ -364,7 +411,7 @@ void environmentsAndMigration() {
     require(migrated.records.size()==snapshot.records.size()+1 && readText(project.root/oldId)==contents,"Legacy migration rewrote its source.");
     SceneDocument opened(project.root); require(opened.load(oldId),opened.status());
     require(!opened.dirty() && resolveEnvironment(opened.scene()).exposure==1.7f,"Legacy migration lost settings or marked an equivalent load dirty.");
-    require(opened.save(),opened.status()); require(Json::parse(readText(project.root/oldId)).at("version")==5,"Explicit save did not write scene version 5.");
+    require(opened.save(),opened.status()); require(Json::parse(readText(project.root/oldId)).at("version")==8,"Explicit save did not write scene version 8.");
 }
 void environmentGlowHistoryAndMigration() {
     TempProject project;SceneDocument document(project.root);
@@ -408,6 +455,211 @@ void environmentGlowHistoryAndMigration() {
     require(!reopened.load(invalidAsset),"Malformed Glow settings replaced a working scene.");
     sameRecords(before,reopened.scene().records());
 }
+void environmentModesPersistenceAndValidation() {
+    TempProject project;SceneDocument document(project.root);
+    const auto fallback=resolveEnvironment(document.scene());
+    require(fallback.environment.source==EnvironmentSource::Hdri && !fallback.environment.background.show &&
+        !fallback.environment.fog.enabled && !fallback.environment.debanding && !fallback.sun,"Empty-scene fallback changed its appearance.");
+    const auto id=document.createEnvironment("Sky"),sun=document.createDirectionalLight("Sun");
+    const auto original=*document.scene().find(id);
+    require(original.environment->environment.background.show && !original.environment->environment.debanding,
+        "New Environment did not show its background or enabled Debanding by default.");
+    auto edited=original;auto& environment=edited.environment->environment;
+    edited.environment->sun=sun;edited.environment->exposure=1.8f;
+    environment.source=EnvironmentSource::ProceduralSky;environment.map="assets/textures/retained.hdr";
+    environment.enabled=false;environment.intensity=2.75f;environment.rotation=37;
+    environment.procedural={{.1f,.2f,.3f},{.4f,.5f,.6f},{.7f,.6f,.5f},{.3f,.2f,.1f},.8f,.4f,1.2f,17.f,.6f};
+    environment.background={false,true,{.02f,.04f,.08f}};
+    environment.fog={true,{.5f,.6f,.7f},.04f};
+    environment.fog.mode=FogMode::Depth;environment.fog.depthBegin=12;environment.fog.depthEnd=160;
+    environment.fog.depthCurve=1.7f;environment.fog.depthOpacity=.65f;
+    environment.fog.height=-3.5f;environment.fog.heightDensity=-.08f;environment.fog.lightEnergy=2.25f;
+    environment.debanding=true;
+    const auto history=document.history().size();
+    require(document.begin("Tune environment"),document.status());
+    const auto update=[&](auto& records,auto&){for(auto& record:records)if(record.id==id)record=edited;};
+    require(document.update(update),document.status());environment.fog.density=.06f;
+    require(document.update(update) && document.commit() && document.history().size()==history+1,document.status());
+    require(document.undo() && sameEnvironment(*document.scene().find(id)->environment,*original.environment),"Undo lost environment defaults.");
+    require(document.redo() && sameEnvironment(resolveEnvironment(document.scene()),*edited.environment),"Redo lost sky, background, fog or sun settings.");
+    auto withoutDebanding=edited;withoutDebanding.environment->environment.debanding=false;
+    require(document.updateEntity(id,withoutDebanding) && !resolveEnvironment(document.scene()).environment.debanding,
+        "Debanding toggle did not update the scene.");
+    require(document.undo() && sameEnvironment(resolveEnvironment(document.scene()),*edited.environment),"Undo lost Debanding settings.");
+    require(document.redo() && sameEnvironment(resolveEnvironment(document.scene()),*withoutDebanding.environment),"Redo lost Debanding settings.");
+    require(document.undo(),document.status());
+    auto hdri=edited;hdri.environment->environment.source=EnvironmentSource::Hdri;
+    require(document.updateEntity(id,hdri),document.status());
+    require(document.scene().find(id)->environment->environment.procedural==environment.procedural &&
+        document.scene().find(id)->environment->sun==sun,"Switching source discarded the inactive procedural settings or sun.");
+    require(document.undo(),document.status());
+    auto exponential=edited;exponential.environment->environment.fog.mode=FogMode::Exponential;
+    require(document.updateEntity(id,exponential),document.status());
+    require(document.scene().find(id)->environment->environment.fog==exponential.environment->environment.fog &&
+        readEnvironmentSettings(environmentSettingsJson(exponential.environment->environment))==exponential.environment->environment,
+        "Switching fog mode discarded inactive depth or exponential settings.");
+    require(document.undo() && sameEnvironment(resolveEnvironment(document.scene()),*edited.environment),"Undo did not restore the fog mode and settings.");
+    require(document.begin("Cancel fog") && document.update([&](auto& records,auto&){
+        for(auto& record:records)if(record.id==id) {
+            record.environment->environment.debanding=false;
+            auto& fog=record.environment->environment.fog;fog.color={1,0,0};fog.mode=FogMode::Exponential;
+            fog.height=8;fog.heightDensity=.3f;fog.lightEnergy=5;
+        }
+    }),document.status());document.cancel();
+    require(sameEnvironment(resolveEnvironment(document.scene()),*edited.environment),"Canceled fog edit changed authored settings.");
+    require(readEnvironmentSettings(environmentSettingsJson(environment))==environment,"Shared environment JSON changed settings.");
+    for(const auto invalidDebanding:{Json(0),Json(1),Json(1.5),Json("true"),Json(nullptr),Json::array(),Json::object()})
+        rejects([&]{auto json=environmentSettingsJson(environment);json["debanding"]=invalidDebanding;(void)readEnvironmentSettings(json);});
+    for(const auto invalidSource:{Json(2),Json(-1),Json(1.5),Json("ProceduralSky")})
+        rejects([&]{auto json=environmentSettingsJson(environment);json["source"]=invalidSource;(void)readEnvironmentSettings(json);});
+    for(const auto invalidMode:{Json(2),Json(-1),Json(1.5),Json(true),Json("Depth"),Json(nullptr)})
+        rejects([&]{auto json=environmentSettingsJson(environment);json["fog"]["mode"]=invalidMode;(void)readEnvironmentSettings(json);});
+    for(const auto* field:{"density","depthBegin","depthEnd","depthCurve","depthOpacity","height","heightDensity","lightEnergy"})
+        for(const auto invalidValue:{Json(true),Json("1"),Json(nullptr)})
+            rejects([&]{auto json=environmentSettingsJson(environment);json["fog"][field]=invalidValue;(void)readEnvironmentSettings(json);});
+    require(document.save("Environment modes"),document.status());
+    const auto saved=readText(project.root/document.assetId());
+    require(Json::parse(saved).at("version")==8,"Environment writer did not use scene v8.");
+    SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
+    require(!reopened.dirty() && sameEnvironment(resolveEnvironment(reopened.scene()),*edited.environment),"Environment settings did not survive reopening.");
+    SceneDocument play(project.root);require(play.resetTransientFrom(document),play.status());
+    require(play.transient() && sameEnvironment(resolveEnvironment(play.scene()),*edited.environment),"Play clone lost environment settings or sun link.");
+    for(int version=1;version<=5;++version) {
+        auto legacy=Json::parse(saved);legacy["version"]=version;
+        if(version==1) {
+            for(const auto& record:legacy["entities"])if(record.contains("environment"))legacy["settings"]=record["environment"];
+            for(auto& record:legacy["entities"])record.erase("environment");
+        }
+        const auto asset="assets/scenes/environment-v"+std::to_string(version)+".crimson-scene";
+        const auto contents=legacy.dump();writeText(project.root/asset,contents);
+        require(reopened.load(asset),reopened.status());const auto migrated=resolveEnvironment(reopened.scene());
+        require(!reopened.dirty() && readText(project.root/asset)==contents,"Migration rewrote a scene or marked it dirty.");
+        require(migrated.environment.source==EnvironmentSource::Hdri && !migrated.environment.background.show &&
+            !migrated.environment.background.overrideColor && migrated.environment.fog==FogSettings{} && !migrated.environment.debanding && migrated.sun==NoEntity,
+            "Old scene gained a sky background, fog or sun link.");
+        require(migrated.environment.map==environment.map && migrated.exposure==edited.environment->exposure &&
+            migrated.environment.intensity==environment.intensity,"Migration changed existing HDRI settings.");
+    }
+    auto versionSix=Json::parse(saved);versionSix["version"]=6;
+    for(auto& record:versionSix["entities"])if(record.contains("environment")) {
+        record["environment"]["environment"].erase("debanding");
+        for(const auto* field:{"mode","depthBegin","depthEnd","depthCurve","depthOpacity","height","heightDensity","lightEnergy"})
+            record["environment"]["environment"]["fog"].erase(field);
+    }
+    const auto versionSixId="assets/scenes/environment-v6.crimson-scene";const auto versionSixText=versionSix.dump();
+    writeText(project.root/versionSixId,versionSixText);require(reopened.load(versionSixId),reopened.status());
+    auto versionSixExpected=*edited.environment;
+    versionSixExpected.environment.debanding=false;
+    versionSixExpected.environment.fog={environment.fog.enabled,environment.fog.color,environment.fog.density};
+    require(!reopened.dirty() && sameEnvironment(resolveEnvironment(reopened.scene()),versionSixExpected) && readText(project.root/versionSixId)==versionSixText,
+        "Scene v6 migration changed existing fog or enabled new depth/height/energy behavior.");
+    auto versionSeven=Json::parse(saved);versionSeven["version"]=7;
+    for(auto& record:versionSeven["entities"])if(record.contains("environment"))record["environment"]["environment"].erase("debanding");
+    const auto versionSevenId="assets/scenes/environment-v7.crimson-scene";const auto versionSevenText=versionSeven.dump();
+    writeText(project.root/versionSevenId,versionSevenText);require(reopened.load(versionSevenId),reopened.status());
+    auto versionSevenExpected=*edited.environment;versionSevenExpected.environment.debanding=false;
+    require(!reopened.dirty() && sameEnvironment(resolveEnvironment(reopened.scene()),versionSevenExpected) && readText(project.root/versionSevenId)==versionSevenText,
+        "Scene v7 migration changed existing settings or enabled Debanding.");
+    auto minimal=Json::parse(saved);
+    for(auto& record:minimal["entities"])if(record.contains("environment")) {
+        auto& component=record["environment"];component.erase("sun");auto& settings=component["environment"];
+        for(const auto* field:{"source","procedural","background","fog","debanding"})settings.erase(field);
+    }
+    const auto minimalId="assets/scenes/environment-optional.crimson-scene";writeText(project.root/minimalId,minimal.dump());
+    require(reopened.load(minimalId),reopened.status());
+    require(!resolveEnvironment(reopened.scene()).environment.background.show && !resolveEnvironment(reopened.scene()).environment.debanding && !resolveEnvironment(reopened.scene()).sun,
+        "Absent optional environment fields did not keep compatibility defaults.");
+    require(reopened.load(document.assetId()),reopened.status());const auto before=reopened.scene().records();
+    for(const auto invalidDebanding:{Json(0),Json(1),Json("false"),Json(nullptr)}) {
+        auto invalid=Json::parse(saved);
+        for(auto& record:invalid["entities"])if(record.contains("environment"))record["environment"]["environment"]["debanding"]=invalidDebanding;
+        const auto invalidId="assets/scenes/invalid-debanding.crimson-scene";writeText(project.root/invalidId,invalid.dump());
+        require(!reopened.load(invalidId),"Invalid stored Debanding replaced a working scene.");sameRecords(before,reopened.scene().records());
+    }
+    const auto rejectEdit=[&](const auto& change) {
+        auto candidate=edited;change(*candidate.environment);
+        require(!reopened.updateEntity(id,candidate),"Invalid environment edit was accepted.");sameRecords(before,reopened.scene().records());
+    };
+    rejectEdit([](auto& value){value.environment.source=static_cast<EnvironmentSource>(99);});
+    rejectEdit([](auto& value){value.environment.fog.mode=static_cast<FogMode>(99);});
+    rejectEdit([](auto& value){value.sun=std::numeric_limits<EntityId>::max();});
+    rejectEdit([&](auto& value){value.sun=id;});
+    for(float invalid:{-1.f,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()}) {
+        rejectEdit([&](auto& value){value.environment.fog.density=invalid;});
+        rejectEdit([&](auto& value){value.environment.procedural.sunDiameter=invalid;});
+    }
+    for(float invalid:{0.f,-1.f,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()}) {
+        rejectEdit([&](auto& value){value.environment.procedural.skyCurve=invalid;});
+        rejectEdit([&](auto& value){value.environment.procedural.groundCurve=invalid;});
+        rejectEdit([&](auto& value){value.environment.procedural.sunHaloCurve=invalid;});
+    }
+    for(float invalid:{-1.f,1.1f,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()}) {
+        rejectEdit([&](auto& value){value.environment.procedural.skyTop[0]=invalid;});
+        rejectEdit([&](auto& value){value.environment.procedural.skyHorizon[1]=invalid;});
+        rejectEdit([&](auto& value){value.environment.procedural.groundBottom[2]=invalid;});
+        rejectEdit([&](auto& value){value.environment.procedural.groundHorizon[0]=invalid;});
+        rejectEdit([&](auto& value){value.environment.background.color[0]=invalid;});
+        rejectEdit([&](auto& value){value.environment.fog.color[0]=invalid;});
+    }
+    rejectEdit([](auto& value){value.environment.procedural.sunHaloExtent=value.environment.procedural.sunDiameter*.5f;});
+    rejectEdit([](auto& value){value.environment.procedural.sunHaloExtent=181;});
+    rejectEdit([](auto& value){value.environment.procedural.sunHaloExtent=std::numeric_limits<float>::quiet_NaN();});
+    for(const auto member:{&FogSettings::depthBegin,&FogSettings::depthEnd,&FogSettings::depthCurve,&FogSettings::depthOpacity,
+            &FogSettings::height,&FogSettings::heightDensity,&FogSettings::lightEnergy})
+        for(float invalid:{std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()})
+            rejectEdit([&](auto& value){value.environment.fog.*member=invalid;});
+    rejectEdit([](auto& value){value.environment.fog.depthBegin=-1;});
+    rejectEdit([](auto& value){value.environment.fog.depthEnd=-1;});
+    rejectEdit([](auto& value){value.environment.fog.depthEnd=value.environment.fog.depthBegin;});
+    rejectEdit([](auto& value){value.environment.fog.depthEnd=value.environment.fog.depthBegin-1;});
+    rejectEdit([](auto& value){value.environment.fog.depthCurve=0;});
+    rejectEdit([](auto& value){value.environment.fog.depthCurve=-1;});
+    rejectEdit([](auto& value){value.environment.fog.depthOpacity=-.1f;});
+    rejectEdit([](auto& value){value.environment.fog.depthOpacity=1.1f;});
+    rejectEdit([](auto& value){value.environment.fog.lightEnergy=-1;});
+    auto boundary=environment;boundary.fog.density=0;boundary.procedural.sunDiameter=0;boundary.procedural.sunHaloExtent=180;
+    boundary.fog.depthBegin=200;boundary.fog.depthEnd=0;boundary.fog.depthOpacity=0;boundary.fog.lightEnergy=0;boundary.fog.heightDensity=.2f;
+    require(readEnvironmentSettings(environmentSettingsJson(boundary))==boundary,"Valid zero density/diameter or maximum halo angle was rejected.");
+    auto invalid=Json::parse(saved);
+    for(auto& record:invalid["entities"])if(record.contains("environment"))record["environment"]["environment"]["fog"]["density"]=-1;
+    const auto invalidId="assets/scenes/invalid-environment.crimson-scene";writeText(project.root/invalidId,invalid.dump());
+    require(!reopened.load(invalidId),"Invalid stored fog replaced a working scene.");sameRecords(before,reopened.scene().records());
+    for(bool wrongType:{false,true}) {
+        auto dangling=Json::parse(saved);
+        for(auto& record:dangling["entities"])if(record.contains("environment"))record["environment"]["sun"]=wrongType?record["id"]:Json("ffffffffffffffff");
+        const auto danglingId="assets/scenes/dangling-sun.crimson-scene";const auto contents=dangling.dump();writeText(project.root/danglingId,contents);
+        require(reopened.load(danglingId),reopened.status());
+        require(!reopened.dirty() && !resolveEnvironment(reopened.scene()).sun && readText(project.root/danglingId)==contents,
+            "An invalid optional sun did not safely clear without rewriting the source.");
+    }
+}
+void environmentSunHistoryAndDuplication() {
+    TempProject project;SceneDocument document(project.root);
+    const auto group=document.createEmpty("Sky group"),environmentId=document.createEnvironment("Environment"),sun=document.createDirectionalLight("Sun");
+    document.select({environmentId,sun});require(document.reparentSelection(group),document.status());
+    auto environment=*document.scene().find(environmentId);environment.environment->sun=sun;
+    require(document.updateEntity(environmentId,environment),document.status());
+    document.select({environmentId});require(document.duplicateSelection(),document.status());
+    const auto externalLink=document.selection().primary;
+    require(document.scene().find(externalLink)->environment->sun==sun,"Duplicating only Environment lost its external sun reference.");
+    document.select({group});require(document.duplicateSelection(),document.status());const auto copiedGroup=document.selection().primary;
+    EntityId copiedEnvironment{},copiedSun{};
+    for(auto child:document.scene().children(copiedGroup)) {
+        const auto record=document.scene().find(child);
+        if(record->directional)copiedSun=child;
+        if(record->environment && child!=externalLink)copiedEnvironment=child;
+    }
+    require(copiedEnvironment && copiedSun && copiedSun!=sun && document.scene().find(copiedEnvironment)->environment->sun==copiedSun,
+        "Subtree duplication did not remap an internal sun link.");
+    require(document.scene().find(environmentId)->environment->sun==sun,"Subtree duplication rewrote the original sun link.");
+    document.select({sun});const auto history=document.history().size();require(document.eraseSelection(),document.status());
+    require(document.history().size()==history+1 && document.scene().find(environmentId)->environment->sun==NoEntity &&
+        document.scene().find(externalLink)->environment->sun==NoEntity,"Deleting a sun did not clear all links in one transaction.");
+    require(document.scene().find(copiedEnvironment)->environment->sun==copiedSun,"Deleting the original sun altered the copy's sun.");
+    require(document.undo() && document.scene().find(environmentId)->environment->sun==sun &&
+        document.scene().find(externalLink)->environment->sun==sun,"Undo did not restore sun identity and dependent links.");
+    require(document.redo() && !document.scene().find(environmentId)->environment->sun,"Redo did not clear the sun link again.");
+}
 void particleReferencesAndPersistence() {
     TempProject project;SceneDocument document(project.root);
     const std::string effect="assets/particles/missing.crimson-particle";
@@ -436,7 +688,7 @@ void particleReferencesAndPersistence() {
     invalid.particle=AssetRef<ParticleEffectAsset>{"assets/particles/../bad.crimson-particle"};
     require(!document.updateEntity(particle,invalid),"Particle traversal was accepted.");
     require(document.save("Particles"),document.status());const auto savedId=document.assetId();
-    const auto serialized=Json::parse(readText(project.root/savedId));require(serialized.at("version")==5,"Particle scene writer did not use version 5.");
+    const auto serialized=Json::parse(readText(project.root/savedId));require(serialized.at("version")==8,"Particle scene writer did not use version 8.");
     SceneDocument reopened(project.root);require(reopened.load(savedId),reopened.status());sameRecords(document.scene().records(),reopened.scene().records());
     require(!reopened.dirty() && reopened.scene().find(particle)->particle->id==effect,"Missing particle asset prevented clean scene reopening.");
     auto cleared=*reopened.scene().find(particle);cleared.particle=AssetRef<ParticleEffectAsset>{};
@@ -448,7 +700,7 @@ void particleReferencesAndPersistence() {
     const auto oldBytes=readText(project.root/legacy);SceneDocument old(project.root);require(old.load(legacy),old.status());
     require(!old.dirty() && readText(project.root/legacy)==oldBytes,"Version-two load rewrote its source or became dirty.");
     for(const auto& record:old.scene().records())require(!record.particle,"Version-two migration invented a particle component.");
-    require(old.save(),old.status());require(Json::parse(readText(project.root/legacy)).at("version")==5,"Explicit version-two save did not migrate to version five.");
+    require(old.save(),old.status());require(Json::parse(readText(project.root/legacy)).at("version")==8,"Explicit version-two save did not migrate to version eight.");
 }
 void externalSceneChanges() {
     TempProject project; SceneDocument document(project.root);
@@ -666,13 +918,15 @@ int main() {
         registryAndHierarchy();
         reparentPreservesAffine();
         transactionsAndSelection();
+        viewportParentSelection();
         subtreeCommands();
         persistenceAndCatalog();
         dirtyTokensAndFailure();
         limitsAndHistoryBound();
         groupingAndBatchPlacement();
-        environmentsAndMigration();environmentGlowHistoryAndMigration();particleReferencesAndPersistence();externalSceneChanges();preparedSceneOpening();preparedGlobalChanges();inspectorAffineTransactions();inspectorZeroScaleHistory();
-        std::cout << "Scene core: 16 groups passed.\n";
+        environmentsAndMigration();environmentGlowHistoryAndMigration();environmentModesPersistenceAndValidation();environmentSunHistoryAndDuplication();
+        particleReferencesAndPersistence();externalSceneChanges();preparedSceneOpening();preparedGlobalChanges();inspectorAffineTransactions();inspectorZeroScaleHistory();
+        std::cout << "Scene core: 19 groups passed.\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "Scene core failed: " << error.what() << '\n';

@@ -5,6 +5,7 @@
 #include "assets/AssetLibrary.h"
 #include "input/Navigation.h"
 #include "platform/WindowIcon.h"
+#include "platform/WindowPlacement.h"
 #include "tools/Tools.h"
 #include "editor/EditorSession.h"
 #include "editor/ResourceRuntime.h"
@@ -46,6 +47,14 @@ public:
             ImGui::DestroyContext();
             throw std::runtime_error("Could not initialize ImGui SDL3 input.");
         }
+        // Dock builders must see the saved nodes before the first editor frame.
+        ImGui::LoadIniSettingsFromDisk(iniFilename_.c_str());
+    }
+    void saveLayout() {
+        ImGui::SaveIniSettingsToDisk(iniFilename_.c_str());
+        // The native viewports are destroyed before the ImGui context. Keep
+        // their final live layout rather than saving a second shutdown state.
+        ImGui::GetIO().IniFilename=nullptr;
     }
     ~ImGuiLifetime() {
         ImGui_ImplSDL3_Shutdown();
@@ -85,8 +94,11 @@ int run(const AppOptions& options) {
     Diagnostics diagnostics;
     diagnostics.log("crimson-renderer starting (Crimson Engine, Direct3D 11).");
     SdlLifetime sdl;
+    const bool diagnosticMode = options.scenario != "default" || options.editorSmoke || options.iblSmoke || options.modelSmoke;
+    const bool persistWindow=!diagnosticMode && !options.hidden && !options.frameLimit && !options.windowCycle && !options.resizeWidth;
+    const auto windowPlacement=root/"crimson_window.json";
     const auto windowFlags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY |
-        (options.hidden ? SDL_WINDOW_HIDDEN : 0);
+        (options.hidden || persistWindow ? SDL_WINDOW_HIDDEN : 0);
     std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window(
         SDL_CreateWindow("crimson-renderer | Crimson Engine", static_cast<int>(options.width),
                          static_cast<int>(options.height), windowFlags), &SDL_DestroyWindow);
@@ -95,13 +107,16 @@ int run(const AppOptions& options) {
     if (!applyWindowClassIcons(window.get())) {
         diagnostics.log("Window icon assignment incomplete; Windows class icon fallback remains available.");
     }
+    if (persistWindow) {
+        if (!restoreWindowPlacement(window.get(),windowPlacement)) SDL_ShowWindow(window.get());
+        SDL_SyncWindow(window.get());
+    }
 
     {
         ResourceManager resources;
         Renderer renderer(window.get(), &diagnostics);
         ImGuiLifetime imgui(window.get(), root);
         ImGuiBgfx toolsRenderer([&diagnostics](const std::string& message){diagnostics.log(message);});
-        const bool diagnosticMode = options.scenario != "default" || options.editorSmoke || options.iblSmoke || options.modelSmoke;
         AssetLibrary assets(root,diagnosticMode?nullptr:&resources);
         Navigation navigation(window.get());
         navigation.setDesktopCoordinates((ImGui::GetIO().ConfigFlags&ImGuiConfigFlags_ViewportsEnable)!=0);
@@ -185,6 +200,9 @@ int run(const AppOptions& options) {
             ++frame;
         }
         if(resourceRuntime)resourceRuntime->stop();else resources.stop();
+        if (persistWindow && !saveWindowPlacement(window.get(),windowPlacement))
+            diagnostics.log("Could not save editor window placement.");
+        imgui.saveLayout();
         bgfxFrame=renderer.drainPending(bgfxFrame);
         // Let asynchronous screenshot requests and resource destruction finish before shutdown.
         if (captureRequested) {

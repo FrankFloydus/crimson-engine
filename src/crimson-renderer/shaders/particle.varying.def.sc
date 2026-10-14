@@ -4,4 +4,5 @@ vec4 i_data1 : TEXCOORD6;
 vec4 i_data2 : TEXCOORD5;
 
 vec2 v_particleUv : TEXCOORD0;
+vec4 v_particleViewPosition : TEXCOORD1;
 vec4 v_particleColor : COLOR0;

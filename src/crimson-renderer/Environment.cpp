@@ -518,6 +518,8 @@ bool EnvironmentLighting::publish(const PreparedEnvironment& prepared) {
         destroyTexture(diffuse_); destroyTexture(specular_); destroyTexture(brdf_);
         diffuse_=diffuse; specular_=specular; brdf_=brdf;
         key_=prepared.key; maxSpecularLod_=static_cast<float>(data.specular.size()-1);
+        residentBytes_=(data.diffuse.rgba.size()+data.brdf.size())*sizeof(float);
+        for(const auto& mip:data.specular)residentBytes_+=mip.rgba.size()*sizeof(float);
         status_=prepared.status;
         return true;
     } catch (const std::exception& error) {

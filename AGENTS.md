@@ -6,6 +6,8 @@ Native Windows x64 ARPG engine foundation: C++20, MSVC, CMake, SDL3, bgfx/Direct
 
 - Use the relevant sections of [ENGINE_ARCHITECTURE.md](docs/ENGINE_ARCHITECTURE.md) for renderer, asset, scene, controller/input, simulation, and lifetime changes. It is authoritative for ownership contracts, implementation status, and the milestone marked **Next**.
 - Keep work within the requested slice. Add later systems when their slice needs them; a planned interface is not evidence that it already exists.
+- Implement only features and UI the user requested. Do not add unsolicited features or explanatory text to panel bodies. When help is necessary, use a short tooltip; omit long explanations or put them in documentation.
+- Follow [Editor UI conventions](docs/ENGINE_ARCHITECTURE.md#editor-ui-conventions) for every new or modified editor. Reuse the shared document-editor menu component; keep File/Edit actions, property sections and shortcuts consistent across editors.
 - Use [README.md](README.md) for setup and user-facing controls. `docs/VERIFICATION.md` is historical evidence, not an active workflow or a required handoff document.
 
 ## Build, run, and verify

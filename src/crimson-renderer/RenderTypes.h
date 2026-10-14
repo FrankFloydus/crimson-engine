@@ -22,6 +22,36 @@ struct Material {
     float normalStrength{1.0f};
 };
 
+enum class EnvironmentSource { Hdri, ProceduralSky };
+struct ProceduralSkySettings {
+    Vec3 skyTop{.385f,.454f,.55f},skyHorizon{.6463f,.6558f,.6708f};
+    Vec3 groundBottom{.2f,.169f,.133f},groundHorizon{.6463f,.6558f,.6708f};
+    float skyCurve{.15f},groundCurve{.02f};
+    float sunDiameter{.5f},sunHaloExtent{30.f},sunHaloCurve{.15f}; // Degrees; size is a diameter.
+    bool operator==(const ProceduralSkySettings&) const = default;
+};
+struct EnvironmentBackground {
+    bool show{false},overrideColor{false};
+    Vec3 color{21.f/255.f,21.f/255.f,21.f/255.f}; // Display-referred, independent of exposure.
+    bool operator==(const EnvironmentBackground&) const = default;
+};
+enum class FogMode { Exponential, Depth };
+struct FogSettings {
+    bool enabled{false};
+    Vec3 color{.6463f,.6558f,.6708f}; // Display-referred input, decoded before HDR composition.
+    float density{.01f}; // Inverse meters.
+    FogMode mode{FogMode::Exponential};
+    float depthBegin{10.f},depthEnd{100.f},depthCurve{1.f},depthOpacity{1.f}; // End zero follows the camera far plane.
+    float height{0.f},heightDensity{0.f},lightEnergy{1.f};
+    bool operator==(const FogSettings&) const = default;
+};
+// Resolved frame value, never serialized. Direction points TOWARD the sun.
+struct ProceduralSun {
+    Vec3 direction{0,1,0},color{1,1,1};
+    float intensity{0};
+    bool enabled{false};
+    bool operator==(const ProceduralSun&) const = default;
+};
 struct EnvironmentSettings {
     std::string map; // Empty selects the built-in studio environment.
     float intensity{1.0f};
@@ -29,6 +59,12 @@ struct EnvironmentSettings {
     bool enabled{true};
     ToneMapping toneMapping{ToneMapping::Reinhard}; // Legacy appearance until explicitly changed.
     GlowSettings glow{};
+    EnvironmentSource source{EnvironmentSource::Hdri};
+    ProceduralSkySettings procedural{};
+    EnvironmentBackground background{};
+    FogSettings fog{};
+    bool debanding{false};
+    bool operator==(const EnvironmentSettings&) const = default;
 };
 
 struct DirectionalLight {
@@ -95,6 +131,7 @@ struct SceneSettings {
     Camera camera{};
     float exposure{1.0f};
     EnvironmentSettings environment{};
+    ProceduralSun proceduralSun{};
 };
 
 // Editor appearance is display-referred and independent of scene exposure.
@@ -115,22 +152,23 @@ struct PointShadowStats {
 // Numeric order is execution order: the pinned D3D11 blit backend must not
 // receive a nonidentity view remapping. Both independent shadow worlds reserve
 // all six faces for all sixteen point lights before their dependent draws.
-inline constexpr uint16_t PointShadowView = 0;
-inline constexpr uint16_t SceneView = 96;
-inline constexpr uint16_t PresentView = 100;
-inline constexpr uint16_t GridView = 101;
-inline constexpr uint16_t EncodeView = 102;
-inline constexpr uint16_t ParticlePreviewView = 103;
-inline constexpr uint16_t PickView = 111;
-inline constexpr uint16_t PickReadView = 112;
-inline constexpr uint16_t ThumbnailPointShadowView = 113;
-inline constexpr uint16_t ThumbnailSceneView = 209;
-inline constexpr uint16_t ThumbnailReadView = 213;
-inline constexpr uint16_t MaterialPreviewView = 214;
-inline constexpr uint16_t GameSceneView = 221;
-inline constexpr uint16_t GamePresentView = 225;
-inline constexpr uint16_t GameEncodeView = 226;
-inline constexpr uint16_t ToolsView = 227;
-inline constexpr uint16_t FirstPlatformView = 228;
+inline constexpr uint16_t EnvironmentComputeView = 0;
+inline constexpr uint16_t PointShadowView = 1;
+inline constexpr uint16_t SceneView = 97;
+inline constexpr uint16_t PresentView = 101;
+inline constexpr uint16_t GridView = 102;
+inline constexpr uint16_t EncodeView = 103;
+inline constexpr uint16_t ParticlePreviewView = 104;
+inline constexpr uint16_t PickView = 112;
+inline constexpr uint16_t PickReadView = 113;
+inline constexpr uint16_t ThumbnailPointShadowView = 114;
+inline constexpr uint16_t ThumbnailSceneView = 210;
+inline constexpr uint16_t ThumbnailReadView = 214;
+inline constexpr uint16_t MaterialPreviewView = 215;
+inline constexpr uint16_t GameSceneView = 222;
+inline constexpr uint16_t GamePresentView = 226;
+inline constexpr uint16_t GameEncodeView = 227;
+inline constexpr uint16_t ToolsView = 228;
+inline constexpr uint16_t FirstPlatformView = 229;
 
 } // namespace crimson

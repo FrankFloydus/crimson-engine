@@ -36,6 +36,7 @@ public:
     const std::optional<Vec3>& destination() const{return destination_;}
     const std::optional<Vec3>& lastClickedGround() const{return lastClickedGround_;}
     std::span<const Vec3> path() const{return controller_.path();}
+    std::span<const Vec3> remainingPath() const{return controller_.path().subspan(controller_.cornerIndex());}
 private:
     std::filesystem::path projectRoot_;
     std::unique_ptr<SceneDocument> document_;

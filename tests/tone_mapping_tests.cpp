@@ -1,4 +1,5 @@
 #include "crimson-renderer/ToneMapping.h"
+#include "crimson-renderer/Debanding.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -53,8 +54,42 @@ void continuityAndEncoding() {
     const float gray=toneMap({.18f,.18f,.18f},ToneMapping::AgX)[0];
     check(std::abs(gray-.18f)<1e-6f && std::abs(gray-.461f)>.2f,"AgX applied an extra display transfer function.");
 }
+void displayDebanding() {
+    const Vec3 encoded{24.25f/255,45.75f/255,80.4f/255};
+    Vec3 linear;
+    for(std::size_t c=0;c<3;++c)linear[c]=std::pow((encoded[c]+.055f)/1.055f,2.4f);
+    std::array<double,3> quantizedSum{};
+    std::array<int,3> minimum{255,255,255},maximum{};
+    constexpr int side=128;
+    for(int y=0;y<side;++y)for(int x=0;x<side;++x) {
+        const float px=float(x)+.5f,py=float(y)+.5f;
+        check(debanding::apply(linear,encoded,px,py,false)==encoded,"Disabled debanding changed the existing encoding path.");
+        const auto dithered=debanding::apply(linear,encoded,px,py,true);
+        check(dithered==debanding::apply(linear,encoded,px,py,true),"Debanding is not stable at a fixed screen pixel.");
+        for(std::size_t c=0;c<3;++c) {
+            check(std::abs(dithered[c]-encoded[c])<=.5001f/255,"Debanding exceeded half an 8-bit code step.");
+            const auto quantized=static_cast<int>(std::lround(dithered[c]*255));
+            minimum[c]=std::min(minimum[c],quantized);maximum[c]=std::max(maximum[c],quantized);
+            quantizedSum[c]+=quantized;
+        }
+        for(float endpoint:{0.f,1.f}) {
+            const Vec3 solid{endpoint,endpoint,endpoint};
+            const float transfer=endpoint<=.0031308f?endpoint*12.92f:1.055f*std::pow(endpoint,1.f/2.4f)-.055f;
+            const Vec3 encodedSolid{transfer,transfer,transfer};
+            check(debanding::apply(solid,encodedSolid,px,py,true)==solid,"Debanding altered exact display black or white after sRGB rounding.");
+            check(debanding::apply(solid,encodedSolid,px,py,false)==encodedSolid,"Endpoint protection changed disabled encoding.");
+        }
+    }
+    // A flat, fractional code value must distribute between its two adjacent
+    // output codes while preserving its spatial mean, rather than form a band.
+    for(std::size_t c=0;c<3;++c) {
+        check(maximum[c]-minimum[c]==1,"Debanding did not distribute neighboring output codes.");
+        check(std::abs(quantizedSum[c]/(side*side)-encoded[c]*255)<.025,
+            "Debanding shifted the spatial average of an 8-bit gradient.");
+    }
+}
 }
 int main() {
-    try {references();continuityAndEncoding();std::cout<<"Tone mapping checks passed.\n";return 0;}
+    try {references();continuityAndEncoding();displayDebanding();std::cout<<"Tone mapping and debanding checks passed.\n";return 0;}
     catch (const std::exception& error) {std::cerr<<error.what()<<'\n';return 1;}
 }

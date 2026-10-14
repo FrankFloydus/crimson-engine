@@ -7,7 +7,8 @@
 namespace crimson {
 class SceneViewport {
 public:
-    EditorFrame draw(Camera&, SceneDocument&, AssetLibrary&, Renderer&, bool navigationActive, uint32_t bgfxFrame, bool keyboardBlocked=false);
+    EditorFrame draw(Camera&, SceneDocument&, AssetLibrary&, Renderer&, bool navigationActive, uint32_t bgfxFrame, bool keyboardBlocked=false,
+                     bool showCollisions=true, bool showTransformGizmo=true);
     void cancel(SceneDocument&, Renderer&);
     bool interacting() const { return dragging_; }
     void focus(Camera&, const SceneDocument&, const AssetLibrary&, float aspect);
@@ -22,6 +23,7 @@ private:
     Vec2 pickSize_{};
     uint64_t intentGeneration_{},intentRevision_{},intentSerial_{};
     uint32_t pickX_{},pickY_{};
+    EntityId pickCollisionFallback_{};
     bool pickIntent_{};
     std::vector<DragRoot> roots_;
     ParticleBoundsQuery particleBounds_;

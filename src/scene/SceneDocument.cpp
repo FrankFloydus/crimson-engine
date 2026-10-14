@@ -1,5 +1,6 @@
 #include "SceneDocument.h"
 #include "BuiltinModels.h"
+#include "EnvironmentSerialization.h"
 #include "assets/AtomicFile.h"
 #include "math/Json.h"
 #include "resources/AssetRefJson.h"
@@ -116,29 +117,27 @@ std::string readText(const std::filesystem::path& path) {
     if (!input) throw std::runtime_error("Cannot read scene asset.");
     return std::string(std::istreambuf_iterator<char>(input),{});
 }
-SceneEnvironment readEnvironment(const Json& json) {
+Vec4 readCollisionColor(const Json& component,const Vec4& fallback) {
+    const auto found=component.find("collisionColor");
+    if(found==component.end())return fallback;
+    // The first collision display documents stored RGB. Preserve their wire opacity.
+    if(found->is_array() && found->size()==3) {
+        const auto rgb=found->get<Vec3>();
+        return {rgb[0],rgb[1],rgb[2],1.f};
+    }
+    return found->get<Vec4>();
+}
+SceneEnvironment readEnvironment(const Json& json,bool extended=false) {
     SceneEnvironment result;
     result.exposure=json.at("exposure").get<float>();
     const auto& environment=json.at("environment");
-    result.environment.map=environment.at("map").get<std::string>();
-    result.environment.enabled=environment.at("enabled").get<bool>();
-    result.environment.intensity=environment.at("intensity").get<float>();
-    result.environment.rotation=environment.at("rotation").get<float>();
-    result.environment.toneMapping=static_cast<ToneMapping>(environment.value("toneMapping",0));
-    if (environment.contains("glow")) {
-        const auto& glow=environment.at("glow");
-        result.environment.glow={glow.at("enabled").get<bool>(),glow.at("strength").get<float>(),
-            glow.at("radius").get<float>(),glow.at("threshold").get<float>()};
-    }
+    for (const auto* field:{"map","enabled","intensity","rotation"}) (void)environment.at(field);
+    result.environment=readEnvironmentSettings(environment,extended);
+    if (extended && json.contains("sun")) result.sun=parseId(json.at("sun"));
     return result;
 }
 Json environmentJson(const SceneEnvironment& value) {
-    const auto& environment=value.environment;
-    return {{"exposure",value.exposure},{"environment",{{"map",environment.map},
-        {"enabled",environment.enabled},{"intensity",environment.intensity},{"rotation",environment.rotation},
-        {"toneMapping",static_cast<int>(environment.toneMapping)},
-        {"glow",{{"enabled",environment.glow.enabled},{"strength",environment.glow.strength},
-            {"radius",environment.glow.radius},{"threshold",environment.glow.threshold}}}}}};
+    return {{"exposure",value.exposure},{"sun",hexId(value.sun)},{"environment",environmentSettingsJson(value.environment)}};
 }
 bool validCamera(const Camera& camera) {
     return math::finite(camera.position) && math::finite(camera.target) && math::finite(camera.up) &&
@@ -149,7 +148,7 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
     const auto contents=readText(path);
     const Json json=Json::parse(contents);
     const auto version=json.at("version").get<int>();
-    if ((version<1 || version>5) || json.at("type") != "crimson-scene")
+    if ((version<1 || version>8) || json.at("type") != "crimson-scene")
         throw std::runtime_error("Unsupported scene file type or version.");
     SceneSnapshot result; result.fingerprint=fingerprint(contents);
     result.name = json.at("name").get<std::string>();
@@ -178,13 +177,21 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
         record.castShadows=entity.value("castShadows",true);record.receiveShadows=entity.value("receiveShadows",true);
         if (entity.contains("directional")) record.directional = readLight<SceneDirectionalLight>(entity.at("directional"));
         if (entity.contains("point")) record.point = readLight<ScenePointLight>(entity.at("point"));
-        if (version>=2 && entity.contains("environment")) record.environment=readEnvironment(entity.at("environment"));
+        if (version>=2 && entity.contains("environment")) record.environment=readEnvironment(entity.at("environment"),version>=6);
         if (version>=3 && entity.contains("particle")) record.particle=entity.at("particle").get<AssetRef<ParticleEffectAsset>>();
         if (version>=4 && entity.contains("character")) {
             const auto& c=entity.at("character");
             record.character=SceneCharacter{c.at("height").get<float>(),c.at("radius").get<float>(),c.at("moveSpeed").get<float>()};
+            record.character->showRoute=c.value("showRoute",true);
+            record.character->showCollisionInGame=c.value("showCollisionInGame",false);
+            record.character->collisionColor=readCollisionColor(c,record.character->collisionColor);
         }
-        if (version>=4 && entity.contains("collider")) record.collider=SceneCollider{entity.at("collider").at("size").get<Vec3>()};
+        if (version>=4 && entity.contains("collider")) {
+            const auto& c=entity.at("collider");
+            record.collider=SceneCollider{c.at("size").get<Vec3>()};
+            record.collider->showCollisionInGame=c.value("showCollisionInGame",false);
+            record.collider->collisionColor=readCollisionColor(c,record.collider->collisionColor);
+        }
         if (version>=4 && entity.contains("camera")) {
             const auto& c=entity.at("camera");
             record.camera=SceneCamera{c.at("verticalFov").get<float>(),c.at("near").get<float>(),c.at("far").get<float>(),
@@ -202,6 +209,12 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
         result.properties.activeEnvironment=environment.id;
         result.records.push_back(std::move(environment));
     }
+    // The optional visual sun reference never prevents an otherwise valid
+    // scene from opening after its target was removed or changed externally.
+    std::unordered_set<EntityId> directionalIds;
+    for (const auto& record:result.records) if(record.directional) directionalIds.insert(record.id);
+    for (auto& record:result.records) if(record.environment && !directionalIds.contains(record.environment->sun))
+        record.environment->sun=NoEntity;
     if (json.contains("previewCamera")) {
         const auto& source=json.at("previewCamera"); Camera camera;
         camera.position=source.at("position").get<Vec3>(); camera.target=source.at("target").get<Vec3>();
@@ -228,13 +241,15 @@ Json writeScene(const SceneSnapshot& snapshot) {
         if (record.directional) entity["directional"] = lightJson(*record.directional);
         if (record.point) entity["point"] = lightJson(*record.point);
         if (record.environment) entity["environment"]=environmentJson(*record.environment);
-        if (record.character) { const auto& c=*record.character;entity["character"]={{"height",c.height},{"radius",c.radius},{"moveSpeed",c.moveSpeed}}; }
-        if (record.collider) entity["collider"]={{"size",record.collider->size}};
+        if (record.character) { const auto& c=*record.character;entity["character"]={{"height",c.height},{"radius",c.radius},{"moveSpeed",c.moveSpeed},
+            {"showRoute",c.showRoute},{"showCollisionInGame",c.showCollisionInGame},{"collisionColor",c.collisionColor}}; }
+        if (record.collider) { const auto& c=*record.collider;entity["collider"]={{"size",c.size},
+            {"showCollisionInGame",c.showCollisionInGame},{"collisionColor",c.collisionColor}}; }
         if (record.camera) { const auto& c=*record.camera;entity["camera"]={{"verticalFov",c.verticalFov},{"near",c.nearPlane},{"far",c.farPlane},
             {"followTarget",hexId(c.followTarget)},{"followOffset",c.followOffset}}; }
         entities.push_back(std::move(entity));
     }
-    Json result{{"version",5},{"type","crimson-scene"},{"name",snapshot.name},{"entities",std::move(entities)},
+    Json result{{"version",8},{"type","crimson-scene"},{"name",snapshot.name},{"entities",std::move(entities)},
         {"settings",{{"activeEnvironment",hexId(snapshot.properties.activeEnvironment)},
             {"activeCamera",hexId(snapshot.properties.activeCamera)},{"playerCharacter",hexId(snapshot.properties.playerCharacter)}}}};
     if (snapshot.previewCamera) {
@@ -722,6 +737,7 @@ EntityId SceneDocument::createPointLight(const std::string& name) {
 EntityId SceneDocument::createEnvironment(const std::string& name) {
     if (!begin("Create environment")) return NoEntity;
     EntityRecord record; record.id=unusedId(scene_.records()); record.name=name; record.environment.emplace();
+    record.environment->environment.background.show=true;
     if (!update([&](auto& records,auto& properties) {
         record.order=nextOrder(records,NoEntity); records.push_back(record);
         if (!properties.activeEnvironment) properties.activeEnvironment=record.id;
@@ -811,6 +827,7 @@ bool SceneDocument::eraseSelection() {
             // reference leaves the visible camera pose and its children intact.
             record.camera->followTarget=NoEntity;record.camera->followOffset={};
         }
+        for(auto& record:records)if(record.environment && removed.contains(record.environment->sun))record.environment->sun=NoEntity;
     })) { cancel(); return false; }
     selection_ = {}; return commit();
 }
@@ -834,8 +851,9 @@ bool SceneDocument::duplicateSelection() {
             record.order = nextOrder(records,record.parent);
             records.push_back(std::move(record));
         }
-        for(auto& record:records)if(copiedIds.contains(record.id) && record.camera) {
-            if(const auto target=copied.find(record.camera->followTarget);target!=copied.end())record.camera->followTarget=target->second;
+        for(auto& record:records)if(copiedIds.contains(record.id)) {
+            if(record.camera)if(const auto target=copied.find(record.camera->followTarget);target!=copied.end())record.camera->followTarget=target->second;
+            if(record.environment)if(const auto sun=copied.find(record.environment->sun);sun!=copied.end())record.environment->sun=sun->second;
         }
     })) { cancel(); return false; }
     selection_ = {};

@@ -10,6 +10,7 @@
 #include <imgui.h>
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdio>
 #include <functional>
 #include <limits>
@@ -25,8 +26,18 @@ enum class Edit { None, Name, InlineName,
     PositionX, PositionY, PositionZ, RotationX, RotationY, RotationZ, ScaleX, ScaleY, ScaleZ,
     DirectionEnabled, DirectionColor, DirectionIntensity,
     PointEnabled, PointColor, PointIntensity, PointRadius, PointShadows, PointDepthBias, PointNormalBias,
-    ModelCastShadows, ModelReceiveShadows, Exposure, Environment,
-    CharacterHeight, CharacterRadius, CharacterSpeed, ColliderSize, CameraFov, CameraNear, CameraFar };
+    ModelCastShadows, ModelReceiveShadows,
+    Exposure, EnvironmentSource, EnvironmentEnabled, EnvironmentIntensity, EnvironmentImage, EnvironmentRotation,
+    EnvironmentSkyTop, EnvironmentSkyHorizon, EnvironmentSkyCurve,
+    EnvironmentGroundBottom, EnvironmentGroundHorizon, EnvironmentGroundCurve,
+    EnvironmentSun, EnvironmentSunDiameter, EnvironmentSunHaloExtent, EnvironmentSunHaloCurve,
+    EnvironmentBackgroundShow, EnvironmentBackgroundOverride, EnvironmentBackgroundColor,
+    EnvironmentFogEnabled, EnvironmentFogMode, EnvironmentFogColor, EnvironmentFogLightEnergy, EnvironmentFogDensity,
+    EnvironmentFogDepthBegin, EnvironmentFogDepthEnd, EnvironmentFogDepthCurve, EnvironmentFogDepthOpacity,
+    EnvironmentFogHeight, EnvironmentFogHeightDensity,
+    EnvironmentToneMapping, EnvironmentDebanding, EnvironmentGlowEnabled, EnvironmentGlowStrength, EnvironmentGlowSize, EnvironmentGlowThreshold,
+    CharacterHeight, CharacterRadius, CharacterSpeed, CharacterRoute, CharacterCollisionVisible, CharacterCollisionColor,
+    ColliderSize, ColliderVisible, ColliderColor, CameraFov, CameraNear, CameraFar };
 enum class Panel { None, Outliner, Inspector };
 Panel owner(Edit edit) {
     if (edit==Edit::None) return Panel::None;
@@ -34,6 +45,7 @@ Panel owner(Edit edit) {
     return Panel::Inspector;
 }
 bool transformEdit(Edit edit) { return edit>=Edit::PositionX && edit<=Edit::ScaleZ; }
+bool environmentEdit(Edit edit) { return edit>=Edit::Exposure && edit<=Edit::EnvironmentGlowThreshold; }
 struct PanelsState {
     SceneDocument* document{};
     std::vector<EntityId> visible;
@@ -196,13 +208,11 @@ void lightControls(SceneDocument& document, PanelsState& state, EntityId id, boo
     const bool intensityChanged=ImGui::DragFloat("Intensity",&intensity,directional ? .02f : .1f,0,10000,"%.2f",ImGuiSliderFlags_AlwaysClamp);
     propertyEdit(document,state,directional ? Edit::DirectionIntensity : Edit::PointIntensity,"Change light intensity",intensityChanged,
         changeEntity(id,[directional,intensity](auto& entity){if (directional) entity.directional->intensity=intensity; else entity.point->intensity=intensity;}));
-    if (directional) ImGui::TextWrapped("Rotate the entity to aim the light along its local -Z axis.");
-    else {
+    if (!directional) {
         auto radius=record->point->radius;
         const bool changed=ImGui::DragFloat("Radius (m)",&radius,.1f,.01f,100000.f,"%.2f",ImGuiSliderFlags_AlwaysClamp);
         propertyEdit(document,state,Edit::PointRadius,"Change point light radius",changed,
             changeEntity(id,[radius](auto& entity){entity.point->radius=radius;}));
-        ImGui::TextWrapped("Light fades smoothly to zero at this world-space radius. Entity scale does not change its range.");
         auto shadows=record->point->castShadows;
         const bool shadowChanged=ImGui::Checkbox("Cast Shadows",&shadows);
         propertyEdit(document,state,Edit::PointShadows,"Toggle point shadows",shadowChanged,
@@ -276,17 +286,8 @@ void modelInformation(const EntityRecord& record, const AssetLibrary& assets) {
     const auto model=assets.findModel(record.model->id);
     if (!model) {
         ImGui::TextWrapped("Model unavailable: %s",record.model->id.c_str());
-        ImGui::TextWrapped("The asset reference is preserved when this scene is saved."); return;
+        return;
     }
-    ImGui::Text("%s (%s)",model->name.c_str(),model->format.c_str());
-    ImGui::Text("%zu meshes, %zu primitives, %zu materials",model->meshes.size(),model->primitives.size(),model->materials.size());
-    ImGui::Text("%zu nodes, %zu draws",model->nodes.size(),model->draws.size());
-    uint64_t vertices{},indices{};
-    for (const auto& primitive:model->primitives) {
-        vertices+=primitive.sourceVertexCount ? primitive.sourceVertexCount : primitive.vertices.size();
-        indices+=primitive.sourceIndexCount ? primitive.sourceIndexCount : primitive.indices.size();
-    }
-    ImGui::Text("%llu source vertices, %llu triangles",static_cast<unsigned long long>(vertices),static_cast<unsigned long long>(indices/3));
     for (const auto& warning:model->warnings) ImGui::TextWrapped("%s",warning.c_str());
     if (model->format!="BUILTIN" && ImGui::TreeNode("Imported materials (read-only)")) {
         auto materials=model->materials;
@@ -317,29 +318,197 @@ void modelInformation(const EntityRecord& record, const AssetLibrary& assets) {
         ImGui::TreePop();
     }
 }
-void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRecord& record) {
-    if(record.character && ImGui::CollapsingHeader("Character",ImGuiTreeNodeFlags_DefaultOpen)) {
-        if(document.scene().properties().playerCharacter==record.id)ImGui::TextUnformatted("Player Character");
-        else if(ImGui::Button("Make Player"))document.setPlayerCharacter(record.id);
-        auto value=*record.character;
-        const bool height=ImGui::DragFloat("Height (m)",&value.height,.02f,2*value.radius,100.f,"%.3f",ImGuiSliderFlags_AlwaysClamp);
-        propertyEdit(document,state,Edit::CharacterHeight,"Change character height",height,
-            changeEntity(record.id,[v=value.height](auto& entity){entity.character->height=v;}));
-        const bool radius=ImGui::DragFloat("Radius (m)",&value.radius,.01f,.01f,value.height*.5f,"%.3f",ImGuiSliderFlags_AlwaysClamp);
-        propertyEdit(document,state,Edit::CharacterRadius,"Change character radius",radius,
-            changeEntity(record.id,[v=value.radius](auto& entity){entity.character->radius=v;}));
-        const bool speed=ImGui::DragFloat("Speed (m/s)",&value.moveSpeed,.1f,0,1000,"%.2f",ImGuiSliderFlags_AlwaysClamp);
-        propertyEdit(document,state,Edit::CharacterSpeed,"Change movement speed",speed,
-            changeEntity(record.id,[v=value.moveSpeed](auto& entity){entity.character->moveSpeed=v;}));
-        ImGui::TextWrapped("Parent visuals beneath this entity. The capsule origin is at its feet; keep its world scale at one.");
+void sceneEnvironmentControls(SceneDocument& document,PanelsState& state,const EntityRecord& record,
+                              AssetLibrary& assets,const Renderer& renderer) {
+    auto environment=*record.environment;
+    auto& value=environment.environment;
+    bool activeFieldDrawn=false;
+    const auto field=[&](Edit property,const char* label,bool changed) {
+        propertyEdit(document,state,property,label,changed,
+            changeEntity(record.id,[environment](auto& entity){entity.environment=environment;}));
+        activeFieldDrawn|=state.active==property;
+    };
+    ImGui::PushID("Scene environment");
+    if(document.scene().properties().activeEnvironment!=record.id && ImGui::Button("Make Active")) {
+        if(!document.transactionActive() || finishScenePanelEdit(document))document.setActiveEnvironment(record.id);
     }
-    if(record.collider && ImGui::CollapsingHeader("Collider",ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::TextUnformatted("Shape: Box");
-        auto size=record.collider->size;
-        const bool changed=ImGui::DragFloat3("Size (m)",size.data(),.02f,.001f,10000,"%.3f",ImGuiSliderFlags_AlwaysClamp);
+    int source=static_cast<int>(value.source);
+    const char* sources[]{"HDRI / IBL","Procedural Sky"};
+    const bool sourceChanged=ImGui::Combo("Source",&source,sources,2);
+    if(sourceChanged)value.source=static_cast<EnvironmentSource>(source);
+    field(Edit::EnvironmentSource,"Change environment source",sourceChanged);
+    field(Edit::EnvironmentEnabled,"Toggle environment lighting",ImGui::Checkbox("Lighting",&value.enabled));
+    field(Edit::EnvironmentIntensity,"Change environment intensity",
+        ImGui::SliderFloat("Intensity",&value.intensity,0,10,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+    if(value.source==EnvironmentSource::Hdri) {
+        if(ImGui::CollapsingHeader("HDRI",ImGuiTreeNodeFlags_DefaultOpen)) {
+            field(Edit::EnvironmentImage,"Assign environment image",drawEnvironmentImageField(value,assets));
+            field(Edit::EnvironmentRotation,"Rotate environment",
+                ImGui::SliderFloat("Rotation",&value.rotation,-180,180,"%.1f deg",ImGuiSliderFlags_AlwaysClamp));
+        }
+    } else if(ImGui::CollapsingHeader("Procedural Sky",ImGuiTreeNodeFlags_DefaultOpen)) {
+        auto& sky=value.procedural;
+        ImGui::Indent();
+        ImGui::PushID("Procedural");
+        if(ImGui::CollapsingHeader("Sky",ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::PushID("Sky");
+            field(Edit::EnvironmentSkyTop,"Change sky top color",ImGui::ColorEdit3("Top Color",sky.skyTop.data(),ImGuiColorEditFlags_Float));
+            field(Edit::EnvironmentSkyHorizon,"Change sky horizon color",ImGui::ColorEdit3("Horizon Color",sky.skyHorizon.data(),ImGuiColorEditFlags_Float));
+            field(Edit::EnvironmentSkyCurve,"Change sky curve",
+                ImGui::DragFloat("Curve",&sky.skyCurve,.005f,.001f,10,"%.3f",ImGuiSliderFlags_AlwaysClamp));
+            ImGui::PopID();
+        }
+        if(ImGui::CollapsingHeader("Ground",ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::PushID("Ground");
+            field(Edit::EnvironmentGroundBottom,"Change ground bottom color",ImGui::ColorEdit3("Bottom Color",sky.groundBottom.data(),ImGuiColorEditFlags_Float));
+            field(Edit::EnvironmentGroundHorizon,"Change ground horizon color",ImGui::ColorEdit3("Horizon Color",sky.groundHorizon.data(),ImGuiColorEditFlags_Float));
+            field(Edit::EnvironmentGroundCurve,"Change ground curve",
+                ImGui::DragFloat("Curve",&sky.groundCurve,.005f,.001f,10,"%.3f",ImGuiSliderFlags_AlwaysClamp));
+            ImGui::PopID();
+        }
+        if(ImGui::CollapsingHeader("Sun",ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::PushID("Sun");
+            const auto linked=document.scene().find(environment.sun);
+            const bool linkedDirectional=linked && linked->directional;
+            bool sunChanged=false;
+            if(ImGui::BeginCombo("Directional light",linkedDirectional?linked->name.c_str():"None")) {
+                if(ImGui::Selectable("None",!linkedDirectional)) {sunChanged=environment.sun!=NoEntity;environment.sun=NoEntity;}
+                for(const auto& candidate:document.scene().records())if(candidate.directional) {
+                    ImGui::PushID(static_cast<int>(candidate.id>>32));ImGui::PushID(static_cast<int>(candidate.id));
+                    if(ImGui::Selectable(candidate.name.c_str(),environment.sun==candidate.id)) {
+                        sunChanged=environment.sun!=candidate.id;environment.sun=candidate.id;
+                    }
+                    ImGui::PopID();ImGui::PopID();
+                }
+                ImGui::EndCombo();
+            }
+            field(Edit::EnvironmentSun,"Assign sky sun",sunChanged);
+            field(Edit::EnvironmentSunDiameter,"Change sun diameter",
+                ImGui::DragFloat("Size (deg)",&sky.sunDiameter,.01f,0,std::nextafter(2*sky.sunHaloExtent,0.f),"%.2f",ImGuiSliderFlags_AlwaysClamp));
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Angular diameter in degrees.");
+            field(Edit::EnvironmentSunHaloExtent,"Change sun halo extent",
+                ImGui::DragFloat("Halo Extent",&sky.sunHaloExtent,.1f,std::nextafter(sky.sunDiameter*.5f,180.f),180,"%.2f deg",ImGuiSliderFlags_AlwaysClamp));
+            field(Edit::EnvironmentSunHaloCurve,"Change sun halo curve",
+                ImGui::DragFloat("Halo Curve",&sky.sunHaloCurve,.005f,.001f,10,"%.3f",ImGuiSliderFlags_AlwaysClamp));
+            ImGui::PopID();
+        }
+        ImGui::PopID();
+        ImGui::Unindent();
+    }
+    if(ImGui::CollapsingHeader("Background",ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::PushID("Background");
+        field(Edit::EnvironmentBackgroundShow,"Toggle environment background",ImGui::Checkbox("Show Background",&value.background.show));
+        if(!value.background.show) {
+            field(Edit::EnvironmentBackgroundOverride,"Toggle custom background color",ImGui::Checkbox("Custom Color",&value.background.overrideColor));
+            if(value.background.overrideColor)
+                field(Edit::EnvironmentBackgroundColor,"Change background color",ImGui::ColorEdit3("Color",value.background.color.data(),ImGuiColorEditFlags_Float));
+        }
+        ImGui::PopID();
+    }
+    if(ImGui::CollapsingHeader("Fog",ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::PushID("Fog");
+        auto& fog=value.fog;
+        field(Edit::EnvironmentFogEnabled,"Toggle fog",ImGui::Checkbox("Enabled",&fog.enabled));
+        ImGui::BeginDisabled(!fog.enabled);
+        int mode=static_cast<int>(fog.mode);
+        const char* modes[]{"Exponential","Depth"};
+        const bool modeChanged=ImGui::Combo("Mode",&mode,modes,2);
+        if(modeChanged)fog.mode=static_cast<FogMode>(mode);
+        field(Edit::EnvironmentFogMode,"Change fog mode",modeChanged);
+        field(Edit::EnvironmentFogColor,"Change fog color",ImGui::ColorEdit3("Color",fog.color.data(),ImGuiColorEditFlags_Float));
+        field(Edit::EnvironmentFogLightEnergy,"Change fog light energy",
+            ImGui::DragFloat("Light Energy",&fog.lightEnergy,.01f,0,std::numeric_limits<float>::max(),"%.2f",ImGuiSliderFlags_AlwaysClamp));
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Brightness of the fog color.");
+        if(fog.mode==FogMode::Exponential) {
+            field(Edit::EnvironmentFogDensity,"Change fog density",
+                ImGui::DragFloat("Density",&fog.density,.0001f,0,1000,"%.4f",ImGuiSliderFlags_AlwaysClamp));
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Inverse meters (m^-1).");
+        } else {
+            const float beginMaximum=std::nextafter(fog.depthEnd>0?fog.depthEnd:std::numeric_limits<float>::max(),0.f);
+            const bool beginChanged=ImGui::DragFloat("Start (m)",&fog.depthBegin,.1f,0,beginMaximum,"%.2f",ImGuiSliderFlags_AlwaysClamp);
+            if(beginChanged)fog.depthBegin=std::clamp(fog.depthBegin,0.f,beginMaximum);
+            field(Edit::EnvironmentFogDepthBegin,"Change fog start",beginChanged);
+            const bool endChanged=ImGui::DragFloat("End (m)",&fog.depthEnd,.1f,0,std::numeric_limits<float>::max(),"%.2f",ImGuiSliderFlags_AlwaysClamp);
+            if(endChanged && fog.depthEnd>0 && fog.depthEnd<=fog.depthBegin) {
+                fog.depthEnd=std::nextafter(fog.depthBegin,std::numeric_limits<float>::max());
+                if(fog.depthEnd==fog.depthBegin)fog.depthEnd=0;
+            }
+            field(Edit::EnvironmentFogDepthEnd,"Change fog end",endChanged);
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("0 uses the camera far plane.");
+            field(Edit::EnvironmentFogDepthCurve,"Change fog depth curve",
+                ImGui::DragFloat("Curve",&fog.depthCurve,.01f,.001f,std::numeric_limits<float>::max(),"%.3f",ImGuiSliderFlags_AlwaysClamp));
+            field(Edit::EnvironmentFogDepthOpacity,"Change fog max opacity",
+                ImGui::SliderFloat("Max Opacity",&fog.depthOpacity,0,1,"%.3f",ImGuiSliderFlags_AlwaysClamp));
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Maximum opacity of depth fog.");
+        }
+        field(Edit::EnvironmentFogHeight,"Change fog height",ImGui::DragFloat("Height (m)",&fog.height,.01f,0,0,"%.2f"));
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("World-space level. Requires nonzero Height Density.");
+        field(Edit::EnvironmentFogHeightDensity,"Change fog height density",ImGui::DragFloat("Height Density",&fog.heightDensity,.0001f,0,0,"%.4f"));
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Positive fills below Height; negative above. 0 disables height fog.");
+        ImGui::EndDisabled();
+        ImGui::PopID();
+    }
+    if(ImGui::CollapsingHeader("Post-processing",ImGuiTreeNodeFlags_DefaultOpen)) {
+        field(Edit::Exposure,"Change exposure",
+            ImGui::SliderFloat("Exposure",&environment.exposure,.05f,8,"%.2f",ImGuiSliderFlags_Logarithmic));
+        field(Edit::EnvironmentToneMapping,"Change tone mapping",drawToneMappingControl(value.toneMapping));
+        field(Edit::EnvironmentDebanding,"Toggle debanding",ImGui::Checkbox("Debanding",&value.debanding));
+        drawGlowControls(value.glow,[&](GlowControl control,bool changed) {
+            constexpr std::array<Edit,4> properties{Edit::EnvironmentGlowEnabled,Edit::EnvironmentGlowStrength,Edit::EnvironmentGlowSize,Edit::EnvironmentGlowThreshold};
+            constexpr std::array<const char*,4> labels{"Toggle glow","Change glow strength","Change glow size","Change glow threshold"};
+            const auto index=static_cast<std::size_t>(control);field(properties[index],labels[index],changed);
+        });
+        if(!renderer.glowStatus().empty())ImGui::TextWrapped("%s",renderer.glowStatus().c_str());
+    }
+    ImGui::PopID();
+    // Collapsing a section or switching sources removes its active widget.
+    if(environmentEdit(state.active) && (!activeFieldDrawn || !ImGui::IsAnyItemActive()))finishEdit(document,state,state.active);
+}
+void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRecord& record) {
+    if(record.character) {
+        if(document.scene().properties().playerCharacter!=record.id && ImGui::Button("Make Player"))document.setPlayerCharacter(record.id);
+        auto value=*record.character;
+        if(ImGui::CollapsingHeader("Movement",ImGuiTreeNodeFlags_DefaultOpen)) {
+            const bool speed=ImGui::DragFloat("Speed (m/s)",&value.moveSpeed,.1f,0,1000,"%.2f",ImGuiSliderFlags_AlwaysClamp);
+            propertyEdit(document,state,Edit::CharacterSpeed,"Change movement speed",speed,
+                changeEntity(record.id,[v=value.moveSpeed](auto& entity){entity.character->moveSpeed=v;}));
+            const bool route=ImGui::Checkbox("Show Route",&value.showRoute);
+            propertyEdit(document,state,Edit::CharacterRoute,"Toggle character route",route,
+                changeEntity(record.id,[v=value.showRoute](auto& entity){entity.character->showRoute=v;}));
+        } else if(state.active==Edit::CharacterSpeed || state.active==Edit::CharacterRoute) {
+            finishEdit(document,state,state.active);
+        }
+        if(ImGui::CollapsingHeader("Collision",ImGuiTreeNodeFlags_DefaultOpen)) {
+            const bool height=ImGui::DragFloat("Capsule Height (m)",&value.height,.02f,2*value.radius,100.f,"%.3f",ImGuiSliderFlags_AlwaysClamp);
+            propertyEdit(document,state,Edit::CharacterHeight,"Change character height",height,
+                changeEntity(record.id,[v=value.height](auto& entity){entity.character->height=v;}));
+            const bool radius=ImGui::DragFloat("Capsule Radius (m)",&value.radius,.01f,.01f,value.height*.5f,"%.3f",ImGuiSliderFlags_AlwaysClamp);
+            propertyEdit(document,state,Edit::CharacterRadius,"Change character radius",radius,
+                changeEntity(record.id,[v=value.radius](auto& entity){entity.character->radius=v;}));
+            const bool visible=ImGui::Checkbox("Show in Game",&value.showCollisionInGame);
+            propertyEdit(document,state,Edit::CharacterCollisionVisible,"Toggle character collision display",visible,
+                changeEntity(record.id,[v=value.showCollisionInGame](auto& entity){entity.character->showCollisionInGame=v;}));
+            const bool color=ImGui::ColorEdit4("Color",value.collisionColor.data(),ImGuiColorEditFlags_Float|ImGuiColorEditFlags_AlphaBar);
+            propertyEdit(document,state,Edit::CharacterCollisionColor,"Change character collision color",color,
+                changeEntity(record.id,[v=value.collisionColor](auto& entity){entity.character->collisionColor=v;}));
+        } else if(state.active==Edit::CharacterHeight || state.active==Edit::CharacterRadius ||
+            state.active==Edit::CharacterCollisionVisible || state.active==Edit::CharacterCollisionColor) {
+            finishEdit(document,state,state.active);
+        }
+    }
+    if(record.collider && ImGui::CollapsingHeader("Collision",ImGuiTreeNodeFlags_DefaultOpen)) {
+        auto value=*record.collider;
+        const bool changed=ImGui::DragFloat3("Box Size (m)",value.size.data(),.02f,.001f,10000,"%.3f",ImGuiSliderFlags_AlwaysClamp);
         propertyEdit(document,state,Edit::ColliderSize,"Resize collider",changed,
-            changeEntity(record.id,[size](auto& entity){entity.collider->size=size;}));
-        ImGui::TextWrapped("Static collision. Size is local; parent scale also applies. Outline is visible only in Scene view.");
+            changeEntity(record.id,[v=value.size](auto& entity){entity.collider->size=v;}));
+        const bool visible=ImGui::Checkbox("Show in Game",&value.showCollisionInGame);
+        propertyEdit(document,state,Edit::ColliderVisible,"Toggle collider display",visible,
+            changeEntity(record.id,[v=value.showCollisionInGame](auto& entity){entity.collider->showCollisionInGame=v;}));
+        const bool color=ImGui::ColorEdit4("Color",value.collisionColor.data(),ImGuiColorEditFlags_Float|ImGuiColorEditFlags_AlphaBar);
+        propertyEdit(document,state,Edit::ColliderColor,"Change collider color",color,
+            changeEntity(record.id,[v=value.collisionColor](auto& entity){entity.collider->collisionColor=v;}));
+    } else if(record.collider && (state.active==Edit::ColliderSize || state.active==Edit::ColliderVisible || state.active==Edit::ColliderColor)) {
+        finishEdit(document,state,state.active);
     }
     if(record.camera && ImGui::CollapsingHeader("Camera",ImGuiTreeNodeFlags_DefaultOpen)) {
         if(document.scene().properties().activeCamera==record.id)ImGui::TextUnformatted("Active Camera");
@@ -379,7 +548,6 @@ void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRec
             }
             ImGui::EndPopup();
         }
-        ImGui::TextWrapped("Follow keeps your camera angle. Move the camera to change its offset; View > Game previews the active camera.");
     }
 }
 }
@@ -582,8 +750,6 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
     const bool blocked=!allowEdits || canceled || (document.transactionActive() && owner(state.active)!=Panel::Inspector);
     ImGui::BeginDisabled(blocked);
     if (const auto record=document.scene().find(document.selection().primary)) {
-        if (document.selection().ids.size()>1)
-            ImGui::TextWrapped("%zu selected. These fields edit only the primary entity: %s",document.selection().ids.size(),record->name.c_str());
         drawName(document,state,*record);
         const InspectorTransformTransactions transformTransactions{
             [&](unsigned field,const char* label) {
@@ -605,7 +771,6 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
             const bool receiveChanged=ImGui::Checkbox("Receive Shadows",&receiveShadows);
             propertyEdit(document,state,Edit::ModelReceiveShadows,"Toggle model shadow receiving",receiveChanged,
                 changeEntity(record->id,[receiveShadows](auto& entity){entity.receiveShadows=receiveShadows;}));
-            ImGui::TextDisabled("Shadow settings apply to this model only, not its children.");
             modelInformation(*record,assets);
         }
         if(record->particle && ImGui::CollapsingHeader("Particle effect",ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -642,22 +807,11 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
             ImGui::EndDisabled();
             const auto diagnostic=assets.particleDiagnostic(assigned);
             if(!diagnostic.empty()) ImGui::TextWrapped("%s",diagnostic.c_str());
-            ImGui::TextDisabled("Starts automatically. Moving the emitter preserves world-space particles.");
         }
-        if (record->environment && ImGui::CollapsingHeader("Environment",ImGuiTreeNodeFlags_DefaultOpen)) {
-            if (document.scene().properties().activeEnvironment==record->id) ImGui::TextUnformatted("Active environment");
-            else if (ImGui::Button("Make Active")) document.setActiveEnvironment(record->id);
-            auto environment=*record->environment;
-            const bool exposureChanged=ImGui::SliderFloat("Exposure",&environment.exposure,.05f,8.0f,"%.2f",ImGuiSliderFlags_Logarithmic);
-            propertyEdit(document,state,Edit::Exposure,"Change exposure",exposureChanged,
-                changeEntity(record->id,[value=environment.exposure](auto& entity){entity.environment->exposure=value;}));
-            ImGui::BeginGroup();
-            const bool environmentChanged=drawEnvironmentControls(environment.environment,assets,renderer,false);
-            ImGui::EndGroup();
-            if (environmentChanged && beginEdit(document,state,Edit::Environment,"Change environment"))
-                document.update(changeEntity(record->id,[value=environment.environment](auto& entity){entity.environment->environment=value;}));
-            if (state.active==Edit::Environment && !ImGui::IsAnyItemActive()) finishEdit(document,state,Edit::Environment);
-            ImGui::TextDisabled("Environment lighting is global; its entity transform is independent.");
+        if(record->environment) {
+            if(ImGui::CollapsingHeader("Environment",ImGuiTreeNodeFlags_DefaultOpen))
+                sceneEnvironmentControls(document,state,*record,assets,renderer);
+            else if(environmentEdit(state.active))finishEdit(document,state,state.active);
         }
     } else ImGui::TextUnformatted("No selection");
     ImGui::EndDisabled();

@@ -1,5 +1,6 @@
 #include "Scene.h"
 #include "BuiltinModels.h"
+#include "EnvironmentSerialization.h"
 #include "assets/MaterialAsset.h"
 
 #include <algorithm>
@@ -61,10 +62,7 @@ bool sameProperties(const SceneProperties& a, const SceneProperties& b) {
     return a.activeEnvironment == b.activeEnvironment && a.activeCamera==b.activeCamera && a.playerCharacter==b.playerCharacter;
 }
 bool sameEnvironment(const SceneEnvironment& a, const SceneEnvironment& b) {
-    return a.exposure == b.exposure && a.environment.map == b.environment.map &&
-        a.environment.enabled == b.environment.enabled && a.environment.intensity == b.environment.intensity &&
-        a.environment.rotation == b.environment.rotation && a.environment.toneMapping == b.environment.toneMapping &&
-        a.environment.glow == b.environment.glow;
+    return a.exposure==b.exposure && a.sun==b.sun && a.environment==b.environment;
 }
 SceneEnvironment resolveEnvironment(const Scene& scene) {
     if (const auto active=scene.find(scene.properties().activeEnvironment); active && active->environment)
@@ -210,6 +208,12 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
         if (record.collider && (!math::finite(record.collider->size) ||
             std::any_of(record.collider->size.begin(),record.collider->size.end(),[](float size){return size<=0;})))
             throw std::runtime_error("Box collider size must be finite and positive on every axis.");
+        const auto validCollisionColor=[](const Vec4& color) {
+            return math::finite(color) && std::all_of(color.begin(),color.end(),[](float value){return value>=0 && value<=1;});
+        };
+        if ((record.character && !validCollisionColor(record.character->collisionColor)) ||
+            (record.collider && !validCollisionColor(record.collider->collisionColor)))
+            throw std::runtime_error("Collision color must have finite RGBA values between zero and one.");
         if (record.camera) {
             const auto& c=*record.camera;
             if (!std::isfinite(c.verticalFov) || c.verticalFov<1 || c.verticalFov>179 ||
@@ -219,13 +223,9 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
         }
         if (record.environment) {
             const auto& environment=*record.environment;
-            if (!std::isfinite(environment.exposure) || environment.exposure<=0 ||
-                !std::isfinite(environment.environment.intensity) || environment.environment.intensity<0 ||
-                !std::isfinite(environment.environment.rotation) || !validToneMapping(environment.environment.toneMapping) ||
-                !validGlowSettings(environment.environment.glow))
-                throw std::runtime_error("Environment settings must be finite, exposure positive, and tone mapping and Glow valid.");
-            if (!environment.environment.map.empty() && !safeReference(environment.environment.map))
-                throw std::runtime_error("Environment asset reference must stay inside the project.");
+            if (!std::isfinite(environment.exposure) || environment.exposure<=0)
+                throw std::runtime_error("Environment exposure must be finite and positive.");
+            validateEnvironmentSettings(environment.environment);
         }
         directionalCount += record.directional.has_value(); pointCount += record.point.has_value();
     }
@@ -260,6 +260,11 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
     std::unordered_map<EntityId,EntityId> follows;
     std::unordered_map<EntityId,const EntityRecord*> indexed;
     for(const auto& record:records)indexed.emplace(record.id,&record);
+    for (const auto& record:records) if(record.environment && record.environment->sun) {
+        const auto sun=indexed.find(record.environment->sun);
+        if (sun==indexed.end() || !sun->second->directional)
+            throw std::runtime_error("Environment sun must identify a directional light entity.");
+    }
     for (const auto& record:records) if(record.camera && record.camera->followTarget) {
         if (!parents.contains(record.camera->followTarget)) throw std::runtime_error("Camera follow target does not exist.");
         Mat4 parentWorld;auto parent=record.parent;

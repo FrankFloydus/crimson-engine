@@ -1,10 +1,12 @@
 #pragma once
 #include "crimson-renderer/RenderTypes.h"
 #include <optional>
+#include <span>
 
 struct ImDrawList;
 namespace crimson {
 class SceneDocument;
+class Scene;
 class Renderer;
 struct GameViewFrame {
     ViewportRegion viewport;
@@ -15,9 +17,10 @@ struct GameViewFrame {
 class GameView {
 public:
     GameViewFrame draw(SceneDocument&,Renderer&,bool& open,bool playing,bool focus=false);
-    void drawClickMarker(const Camera&,const Vec3& groundPoint);
+    void drawRoute(const Camera&,const std::optional<Vec3>& clickedGround,std::span<const Vec3> route,
+                   const std::optional<Vec3>& characterPosition);
+    void drawCollisions(const Camera&,const Scene&,bool enabled);
 private:
-    bool clickMarker_{true};
     ImDrawList* imageDrawList_{};
     ViewportRegion imageRegion_;
     std::uint32_t imageWidth_{},imageHeight_{};
