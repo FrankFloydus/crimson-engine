@@ -1,6 +1,7 @@
 #pragma once
 
 #include "particles/ParticleTypes.h"
+#include <array>
 #include <memory>
 
 namespace crimson {
@@ -24,7 +25,8 @@ struct ParticleGradientWidgetState;
 struct ParticleGradientEditorState {
     uint64_t selected{},dragging{};
     Vec2 barMinimum{},barMaximum{};
-    Vec2 colorIntensityMinimum{},colorIntensityMaximum{},colorOpacityMinimum{},colorOpacityMaximum{};
+    std::array<Vec2,3> colorChannelMinimum{},colorChannelMaximum{};
+    Vec2 colorOpacityMinimum{},colorOpacityMaximum{};
     std::shared_ptr<ParticleGradientWidgetState> widget;
     void cancel();
     size_t cachedColorEditors() const;

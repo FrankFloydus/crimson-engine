@@ -14,6 +14,7 @@
 
 namespace crimson {
 struct DecodedImage;
+struct MaterialGraph;
 namespace streaming { struct ModelStream; }
 
 using ModelMatrix = Mat4;
@@ -36,6 +37,7 @@ struct ModelMaterial {
     std::string name;
     Vec4 baseColor{1,1,1,1}; // Linear factors, including alpha.
     float metallic{1}, roughness{1}, normalScale{1}, occlusionStrength{1};
+    float specular{.5f}; // Derived graph transport; imported materials default to dielectric F0 .04.
     Vec3 emissive{0,0,0};
     bool alphaMask{false}, doubleSided{false};
     float alphaCutoff{0.5f};
@@ -45,6 +47,8 @@ struct ModelMaterial {
     // Missing only for preserved imported/legacy per-slot sampler settings.
     std::optional<ModelSampler> sharedSampler;
     bool triplanarWorld{false}; // World-anchored projection; otherwise mesh-local coordinates.
+    // Derived runtime transport only; imported model metadata remains unchanged.
+    std::shared_ptr<const MaterialGraph> graph;
 };
 struct ModelVertex {
     Vec3 position{}, normal{0,1,0};

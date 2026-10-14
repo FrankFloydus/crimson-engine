@@ -297,7 +297,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
             }
             if(found->second==UINT32_MAX)continue;
             for(std::size_t offset=group.first;offset<group.first+group.count;++offset) {
-                const auto& p=presentation[offset];particlePackets_.push_back({p.position,p.size,p.color,found->second,p.rotation});
+                const auto& p=presentation[offset];particlePackets_.push_back({p.position,p.size,p.color,found->second,p.rotation,p.billboardMode,p.right,p.up});
             }
         } catch(const std::exception& error) {
             status_+="Particle material "+group.materialId+": "+error.what()+"\n";

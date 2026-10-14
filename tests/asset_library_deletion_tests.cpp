@@ -1,9 +1,12 @@
+#include "material_fixtures.h"
 #include "assets/AssetLibrary.h"
 #include "assets/AtomicFile.h"
 #include "assets/MaterialAsset.h"
 #include "assets/BuiltinGeometry.h"
+#include "crimson-renderer/MaterialGraphGpu.h"
 #include "scene/SceneDocument.h"
 #include "model_fixtures.h"
+#include <bgfx/platform.h>
 
 #include <algorithm>
 #include <array>
@@ -239,7 +242,7 @@ void fallbackReopening(){
     Project p;const auto model=seedModel(p);const auto fixtures=model_test::writeModelFixtures(p.root/"fallback-source");
     fs::create_directories(p.root/"assets/textures");fs::copy_file(fixtures.image,p.root/"assets/textures/replacement.png");
     const std::string imageFallback="assets/textures/replacement.png";
-    auto material=loadMaterialAsset(p.root,model->materialIds.front());material.id="assets/materials/replacement.crimson-material";material.name="Replacement material";
+    auto material=loadMaterialAsset(p.root,model->materialIds.front());material.id="assets/materials/replacement.crimson-material";material.name="Replacement material";material_test::legacyFixture(material);
     material.surface.baseColor={.25f,.5f,.75f,1};material.surface.baseColorTexture.image=AssetRef<DecodedImage>{imageFallback};saveMaterialAsset(p.root,material);
     {
         ResourceManager resources;AssetLibrary library(p.root,&resources);
@@ -298,7 +301,7 @@ void activeSceneAndFolderDeletion(){
 }
 void particleMaterialDeletionAndAuthority(){
     Project p;auto material=createMaterialAsset(p.root,"Shared sprite");auto effect=createParticleAsset(p.root,"Sparks");
-    material.shading=MaterialShading::Unlit;material.blend=MaterialBlend::Additive;saveMaterialAsset(p.root,material);
+    material_test::legacyFixture(material);material.shading=MaterialShading::Unlit;material.blend=MaterialBlend::Additive;saveMaterialAsset(p.root,material);
     effect.emitter.material=AssetRef<MaterialAsset>{material.id};saveParticleAsset(p.root,effect);
     SceneDocument scene(p.root);const auto entity=scene.createParticle(effect.id,"Placed effect",math::translation({2,3,4}));require(scene.save("Particle scene"),scene.status());
     const auto sceneBytes=read(p.root/scene.assetId());ResourceManager resources;AssetLibrary library(p.root,&resources);
@@ -312,11 +315,11 @@ void particleMaterialDeletionAndAuthority(){
         library.references().resolveParticleMaterial(material.id)==DefaultParticleMaterialId,"Material deletion did not atomically install the protected sprite fallback.");
     require(scene.scene().contains(entity)&&scene.scene().find(entity)->particle->id==effect.id&&read(p.root/scene.assetId())==sceneBytes,
         "Deleting a sprite material removed its effect instance or modified the scene file.");
-    const auto fallback=library.preparedParticleMaterial(material.id);require(fallback->ready&&fallback->render.baseColor==Vec4{1,1,1,1}&&fallback->render.blend==ParticleBlendMode::Additive&&!bgfx::isValid(fallback->render.colorTexture),
+    const auto fallback=library.preparedParticleMaterial(material.id);require(fallback->ready&&fallback->render.baseColor==Vec4{1,1,1,1}&&fallback->render.blend==MaterialBlend::Additive&&!bgfx::isValid(fallback->render.colorTexture),
         "Deleted sprite material did not prepare the original white procedural appearance.");
     library.protectParticleDocument({});library.setParticleDocumentReferences({},{});
     const auto user=library.createMaterial("Live sprite");require(bool(user),library.status());library.protectMaterialDocument(user->id);
-    auto committed=*user;committed.shading=MaterialShading::Unlit;committed.blend=MaterialBlend::Additive;committed.surface.baseColor={.2f,.3f,.4f,.5f};
+    auto committed=*user;material_test::legacyFixture(committed);committed.shading=MaterialShading::Unlit;committed.blend=MaterialBlend::Additive;committed.surface.baseColor={.2f,.3f,.4f,.5f};
     committed.surface.uvScale={2,3,4};committed.surface.uvOffset={.2f,.3f,.4f};committed.surface.uvRotation={0,0,30};library.publishMaterial(std::make_shared<MaterialAsset>(committed));
     const auto revision=library.materialRevision(user->id);const auto first=library.preparedParticleMaterial(user->id);require(first->ready&&first->render.baseColor==committed.surface.baseColor,"Committed open material was not immediately visible.");
     require(first->render.uvScale==committed.surface.uvScale && first->render.uvOffset==committed.surface.uvOffset && first->render.uvRotation==committed.surface.uvRotation,
@@ -333,33 +336,80 @@ void particleMaterialDeletionAndAuthority(){
 void spriteImageDeletionAndIncompatibleMaterial(){
     Project p;const auto fixtures=model_test::writeModelFixtures(p.root/"source");const std::string image="assets/textures/sprite.png";
     fs::create_directories(p.root/"assets/textures");fs::copy_file(fixtures.image,p.root/image);
-    auto sprite=createMaterialAsset(p.root,"Textured");sprite.shading=MaterialShading::Unlit;sprite.blend=MaterialBlend::Alpha;sprite.surface.baseColorTexture.image=AssetRef<DecodedImage>{image};saveMaterialAsset(p.root,sprite);
+    auto sprite=createMaterialAsset(p.root,"Textured");material_test::legacyFixture(sprite);sprite.shading=MaterialShading::Unlit;sprite.blend=MaterialBlend::Alpha;sprite.surface.baseColorTexture.image=AssetRef<DecodedImage>{image};saveMaterialAsset(p.root,sprite);
+    auto expectedGraph=loadMaterialAsset(p.root,sprite.id).graph;
+    rewriteMaterialGraphTextures(expectedGraph,[&](const auto& id,MaterialTextureRole role){
+        return id==image?std::string(role==MaterialTextureRole::Normal?NeutralNormalTextureId:GrayTextureId):id;
+    });
     auto effect=createParticleAsset(p.root,"Smoke");effect.emitter.material=AssetRef<MaterialAsset>{sprite.id};saveParticleAsset(p.root,effect);
     ResourceManager resources;AssetLibrary library(p.root,&resources);const auto plan=library.planDeletion({image});
     require(plan.error.empty()&&plan.warningUsages.size()==1&&plan.warningUsages.front().ownerId==sprite.id,
         "Sprite image warnings counted transitive effects as direct image owners.");
     finishDeletion(library,resources,plan);const auto cleared=loadMaterialAsset(p.root,sprite.id);
-    require(cleared.surface.baseColorTexture.image.empty()&&cleared.blend==MaterialBlend::Alpha&&library.references().resolveParticleTexture(image).empty(),
-        "Sprite image deletion lost blending or failed to persist procedural fallback.");
-    require(library.preparedParticleMaterial(sprite.id)->ready,"Cleared sprite image did not become a usable procedural material.");
+    require(cleared.surface.baseColorTexture.image.id==GrayTextureId&&cleared.blend==MaterialBlend::Alpha&&library.references().resolveTexture(image)==GrayTextureId,
+        "Shared texture deletion lost blending or failed to persist the role-correct fallback.");
+    const auto published=library.findMaterial(sprite.id);
+    require(published&&particleMaterialCompatible(*published)&&modelMaterialCompatible(*published)&&
+        serializeMaterialGraph(cleared.graph)==serializeMaterialGraph(expectedGraph)&&
+        serializeMaterialGraph(published->graph)==serializeMaterialGraph(expectedGraph),
+        "Texture deletion changed the authored graph or failed to publish its shared role-correct replacement.");
     auto pbr=defaultMaterialAsset();pbr.id="assets/materials/pbr.crimson-material";pbr.name="PBR";saveMaterialAsset(p.root,pbr);library.refreshMaterials();
-    const auto before=read(p.root/effect.id);const auto deletion=library.planDeletion({sprite.id});
-    const auto candidates=library.fallbackCandidates(sprite.id);require(std::none_of(candidates.begin(),candidates.end(),[&](const auto& entry){return entry.id==pbr.id;}),"Sprite deletion offered an incompatible PBR fallback.");
-    require(!library.deleteAssets(deletion,{{sprite.id,pbr.id}}),"Incompatible material fallback was published.");
-    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(20);
-    while(library.deletionPending()&&std::chrono::steady_clock::now()<deadline){resources.pump();(void)library.pumpDeletion(nullptr);std::this_thread::sleep_for(std::chrono::milliseconds(1));}
-    require(!library.deletionPending()&&fs::exists(p.root/sprite.id)&&read(p.root/effect.id)==before&&library.references().resolveMaterial(sprite.id)==sprite.id,
-        "Incompatible sprite material fallback changed authored files or the published policy.");
-    require(!library.preparedParticleMaterial(pbr.id)->ready&&!library.preparedParticleMaterial(pbr.id)->diagnostic.empty(),"Explicit unsupported PBR sprite assignment was silently treated as a particle default.");
-    const auto model=seedModel(p,true);library.refreshMaterials();require(library.modelMaterialsReady(*model),"Synchronously authored imported material metadata did not satisfy model readiness.");
-    auto unsupported=loadMaterialAsset(p.root,model->materialIds.front());unsupported.shading=MaterialShading::Unlit;unsupported.blend=MaterialBlend::Additive;library.publishMaterial(std::make_shared<MaterialAsset>(unsupported));
-    require(!library.modelMaterialsReady(*model)&&!library.modelMaterialsDiagnostic(*model).empty(),"Model renderer silently accepted a sprite-only material mode.");
+    const auto deletion=library.planDeletion({sprite.id});
+    const auto candidates=library.fallbackCandidates(sprite.id);
+    require(std::any_of(candidates.begin(),candidates.end(),[&](const auto& entry){return entry.id==pbr.id;}),"Shared material deletion excluded a valid Lit/Opaque replacement.");
+    finishDeletion(library,resources,deletion,{{sprite.id,pbr.id}});
+    require(!fs::exists(p.root/sprite.id)&&loadParticleAsset(p.root,effect.id).emitter.material.id==pbr.id&&library.references().resolveMaterial(sprite.id)==pbr.id,
+        "Shared material replacement failed to update the saved particle assignment.");
+    const auto shared=library.preparedParticleMaterial(pbr.id);
+    require(shared->ready&&shared->current&&shared->diagnostic.empty()&&shared->render.baseColor==pbr.surface.baseColor,
+        "Lit/Opaque material failed to prepare for a sprite consumer.");
+    const auto model=seedModel(p,true);library.refreshMaterials();require(library.modelMaterialsReady(*model),"Imported material metadata did not satisfy model readiness.");
+    auto unified=loadMaterialAsset(p.root,model->materialIds.front());materialOutputNode(unified.graph).output.shading=MaterialShading::Unlit;
+    materialOutputNode(unified.graph).output.blend=MaterialBlend::Additive;canonicalizeMaterialAsset(unified);library.publishMaterial(std::make_shared<MaterialAsset>(unified));
+    require(library.modelMaterialsReady(*model)&&library.modelMaterialsDiagnostic(*model).empty()&&
+        library.resolvedModelMaterials(*model).front().baseColor==unified.surface.baseColor,"Shared additive material was replaced by a mesh fallback.");
+
+}
+void changedUsagePreservesConsumerAssignments() {
+    Project p;auto meshMaterial=createMaterialAsset(p.root,"Changing Surface");
+    auto particleMaterial=copyMaterialAsset(p.root,defaultParticleMaterialAsset(),"Changing Particle");
+    SceneDocument scene(p.root);const auto box=scene.createBox();auto entity=*scene.scene().find(box);entity.modelMaterial.id=meshMaterial.id;
+    require(scene.updateEntity(box,entity)&&scene.save("Usage scene"),scene.status());
+    auto effect=createParticleAsset(p.root,"Usage effect");effect.emitter.material.id=particleMaterial.id;saveParticleAsset(p.root,effect);
+    const auto sceneBytes=read(p.root/scene.assetId()),effectBytes=read(p.root/effect.id);
+    ResourceManager resources;AssetLibrary library(p.root,&resources);const auto geometry=library.findModel(BuiltinBoxModelId);
+    require(geometry&&library.modelMaterialsDiagnostic(*geometry,meshMaterial.id).empty(),"Surface fixture was not compatible before Usage changed.");
+    require(library.preparedParticleMaterial(particleMaterial.id)->ready,"Particle fixture was not usable before Usage changed.");
+    const auto savedSurface=meshMaterial,savedParticle=particleMaterial;
+    materialOutputNode(meshMaterial.graph).output.shading=MaterialShading::Unlit;
+    materialOutputNode(meshMaterial.graph).output.blend=MaterialBlend::Additive;canonicalizeMaterialAsset(meshMaterial);
+    saveMaterialAsset(p.root,meshMaterial);library.publishMaterial(std::make_shared<MaterialAsset>(meshMaterial));
+    const auto modelPacket=library.resolvedModelMaterials(*geometry,meshMaterial.id);
+    require(library.modelMaterialsReady(*geometry,meshMaterial.id)&&library.modelMaterialsDiagnostic(*geometry,meshMaterial.id).empty()&&
+        modelPacket.front().baseColor==meshMaterial.surface.baseColor,"Shared mesh shader/blend edit installed an unrelated fallback.");
+    materialOutputNode(particleMaterial.graph).output.shading=MaterialShading::StandardPbr;
+    materialOutputNode(particleMaterial.graph).output.blend=MaterialBlend::Mask;canonicalizeMaterialAsset(particleMaterial);
+    saveMaterialAsset(p.root,particleMaterial);library.publishMaterial(std::make_shared<MaterialAsset>(particleMaterial));
+    const auto particlePacket=library.preparedParticleMaterial(particleMaterial.id);
+    require(particlePacket->ready&&particlePacket->current&&particlePacket->diagnostic.empty()&&
+        particlePacket->render.blend==MaterialBlend::Mask&&particlePacket->render.shading==MaterialShading::StandardPbr,
+        "Sprite did not retain the assigned Lit/Masked material.");
+    require(scene.scene().find(box)->modelMaterial.id==meshMaterial.id&&record(readSceneSnapshot(p.root,scene.assetId()),box).modelMaterial.id==meshMaterial.id&&
+        loadParticleAsset(p.root,effect.id).emitter.material.id==particleMaterial.id&&read(p.root/scene.assetId())==sceneBytes&&read(p.root/effect.id)==effectBytes&&
+        library.references().resolveMaterial(meshMaterial.id)==meshMaterial.id&&library.references().resolveParticleMaterial(particleMaterial.id)==particleMaterial.id,
+        "Shader/blend edit rewrote saved/live consumer references, source files or deletion aliases.");
+    saveMaterialAsset(p.root,savedSurface);library.publishMaterial(std::make_shared<MaterialAsset>(savedSurface));
+    saveMaterialAsset(p.root,savedParticle);library.publishMaterial(std::make_shared<MaterialAsset>(savedParticle));
+    require(library.modelMaterialsDiagnostic(*geometry,meshMaterial.id).empty()&&
+        library.resolvedModelMaterials(*geometry,meshMaterial.id).front().baseColor==savedSurface.surface.baseColor&&
+        library.preparedParticleMaterial(particleMaterial.id)->ready&&library.preparedParticleMaterial(particleMaterial.id)->diagnostic.empty(),
+        "Restoring shader/blend did not resume the existing saved assignments or clear compatibility diagnostics.");
 }
 void boxMaterialDeletionAndPublication(){
     Project p;
     auto red=defaultMaterialAsset();red.id="assets/materials/red.crimson-material";red.name="Red";red.surface.baseColor={1,.1f,.1f,1};saveMaterialAsset(p.root,red);
     auto blue=red;blue.id="assets/materials/blue.crimson-material";blue.name="Blue";blue.surface.baseColor={.1f,.1f,1,1};saveMaterialAsset(p.root,blue);
-    auto sprite=createMaterialAsset(p.root,"Unsupported sprite");sprite.shading=MaterialShading::Unlit;sprite.blend=MaterialBlend::Additive;saveMaterialAsset(p.root,sprite);
+    auto sprite=createMaterialAsset(p.root,"Unsupported sprite");material_test::legacyFixture(sprite);sprite.shading=MaterialShading::Unlit;sprite.blend=MaterialBlend::Additive;saveMaterialAsset(p.root,sprite);
     SceneDocument active(p.root);const auto box=active.createBox();auto entity=*active.scene().find(box);entity.modelMaterial=AssetRef<MaterialAsset>{red.id};
     require(active.updateEntity(box,entity) && active.save("Box scene"),active.status());
     SceneDocument other(p.root);const auto otherBox=other.createBox();entity=*other.scene().find(otherBox);entity.modelMaterial=AssetRef<MaterialAsset>{red.id};
@@ -381,8 +431,7 @@ void boxMaterialDeletionAndPublication(){
     require(plan.error.empty() && plan.warningUsages.size()==2 && plan.scenes.size()==2 && plan.clearsActiveHistory,"Box material deletion did not discover saved/live/history references.");
     const auto candidates=library.fallbackCandidates(red.id);
     require(std::any_of(candidates.begin(),candidates.end(),[&](const auto& value){return value.id==blue.id;}) &&
-        std::none_of(candidates.begin(),candidates.end(),[&](const auto& value){return value.id==sprite.id;}),"Box material deletion offered an incompatible sprite fallback.");
-    require(!library.deleteAssets(plan,{{red.id,sprite.id}},&active) && fs::exists(p.root/red.id),"Incompatible Box material deletion modified files.");
+        std::any_of(candidates.begin(),candidates.end(),[&](const auto& value){return value.id==sprite.id;}),"Box material deletion excluded a valid shared additive replacement.");
     finishDeletion(library,resources,plan,{{red.id,blue.id}},&active);
     const auto saved=readSceneSnapshot(p.root,active.assetId()),otherSaved=readSceneSnapshot(p.root,other.assetId());
     require(record(saved,box).modelMaterial.id==blue.id && record(otherSaved,otherBox).modelMaterial.id==blue.id,"Material deletion did not update every saved scene.");
@@ -393,6 +442,81 @@ void boxMaterialDeletionAndPublication(){
     require(active.scene().find(box)->modelMaterial.id==DefaultMaterialId && record(readSceneSnapshot(p.root,other.assetId()),otherBox).modelMaterial.id==DefaultMaterialId,
         "Default Box material fallback was not durable.");
     require(geometry->materials.front().baseColor==original && library.resolvedModelMaterials(*geometry,red.id).front().baseColor==original,"Deleted override damaged shared geometry/default material.");
+}
+void dormantGraphTextureDeletion(){
+    Project p;const auto fixtures=model_test::writeModelFixtures(p.root/"source");const std::string image="assets/textures/dormant.png";
+    fs::create_directories(p.root/"assets/textures");fs::copy_file(fixtures.image,p.root/image);
+    std::array<std::string,2> ids;
+    std::array<std::array<MaterialNodeId,2>,2> textureNodes{};
+    for(std::size_t index=0;index<2;++index) {
+        auto material=createMaterialAsset(p.root,index?"Dormant sprite":"Dormant mesh");ids[index]=material.id;
+        for(std::size_t role=0;role<2;++role) {
+            const auto id=addMaterialNode(material.graph,MaterialNodeKind::Texture2D).id;textureNodes[index][role]=id;
+            auto& texture=findMaterialNode(material.graph,id)->texture;texture.image.id=image;
+            texture.role=role?MaterialTextureRole::Normal:MaterialTextureRole::Color;
+            // The normal branch remains authored on a now-inactive Output pin;
+            // the color node is completely disconnected.
+            if(role)connectMaterialNodes(material.graph,id,MaterialPin::Normal,materialOutputNode(material.graph).id,MaterialPin::Normal);
+        }
+        materialOutputNode(material.graph).output.shading=MaterialShading::Unlit;
+        if(index)materialOutputNode(material.graph).output.blend=MaterialBlend::Alpha;
+        saveMaterialAsset(p.root,material);
+        require(nlohmann::json::parse(read(p.root/material.id)).at("version")==6,"Dormant deletion fixture was not authored as a graph.");
+    }
+    ResourceManager resources;AssetLibrary library(p.root,&resources);
+    library.setMaterialDocumentReferences({}, {image});
+    const auto plan=library.planDeletion({image});
+    require(plan.error.empty()&&plan.warningUsages.size()==2,"Dormant graph textures were omitted or duplicate roles inflated authored deletion owners.");
+    require(std::any_of(plan.usages.begin(),plan.usages.end(),[](const auto& use){return use.historical;}),"Graph texture deletion omitted the open material's undo dependency.");
+    finishDeletion(library,resources,plan);
+    require(!fs::exists(p.root/image),"Graph texture deletion did not remove the managed image.");
+    for(std::size_t index=0;index<2;++index) {
+        const auto restored=loadMaterialAsset(p.root,ids[index]);
+        const auto* color=findMaterialNode(restored.graph,textureNodes[index][0]);
+        const auto* normal=findMaterialNode(restored.graph,textureNodes[index][1]);
+        require(color&&normal&&normal->texture.image.id==NeutralNormalTextureId&&
+            color->texture.image.id==GrayTextureId,"Dormant graph deletion lost nodes or installed a fallback with the wrong texture role.");
+        require(materialInputLink(restored.graph,materialOutputNode(restored.graph).id,MaterialPin::Normal)!=nullptr,"Graph deletion dropped an inactive shader-model link.");
+    }
+    library.setMaterialDocumentReferences({},{});
+    AssetLibrary reopened(p.root);
+    require(reopened.references().resolveTexture(image,true)==NeutralNormalTextureId&&reopened.references().resolveTexture(image)==GrayTextureId,"Role-correct graph fallback policy did not survive reopening.");
+}
+void pendingGraphKeepsCoverageExplicit() {
+    Project p;const auto fixtures=model_test::writeModelFixtures(p.root/"source");
+    const std::string image="assets/textures/alpha-color.png";
+    fs::create_directories(p.root/"assets/textures");fs::copy_file(fixtures.image,p.root/image);
+    auto material=createMaterialAsset(p.root,"Color without alpha coverage");
+    auto& graph=material.graph;const auto output=materialOutputNode(graph).id;
+    materialOutputNode(graph).output.blend=MaterialBlend::Alpha;materialOutputNode(graph).output.opacity=.7f;
+    const auto texture=addMaterialNode(graph,MaterialNodeKind::Texture2D).id;
+    findMaterialNode(graph,texture)->texture.image.id=image;
+    connectMaterialNodes(graph,texture,MaterialPin::RGB,output,MaterialPin::BaseColor);
+    canonicalizeMaterialAsset(material);saveMaterialAsset(p.root,material);
+    bgfx::renderFrame();bgfx::Init init;init.type=bgfx::RendererType::Noop;init.resolution.width=init.resolution.height=1;
+    require(bgfx::init(init),"Could not initialize scoped Noop graph-fallback check.");
+    try {
+        {
+            ResourceManager resources;
+            ShaderCompileConfig config;config.compiler=p.root/"missing-shaderc.exe";config.sourceDirectory=p.root/"missing-shaders";
+            config.includeDirectory=p.root/"missing-includes";config.cacheDirectory=p.root/"shader-cache";
+            MaterialGraphPrograms programs(resources,config);AssetLibrary library(p.root,&resources);library.setMaterialGraphPrograms(&programs);
+            const auto preview=library.materialPreviewBindings(material);
+            require(preview.graphPending&&!preview.graph&&!preview.diagnostic.empty()&&
+                std::all_of(preview.handles.begin(),preview.handles.end(),[](const auto handle){return !bgfx::isValid(handle);}),
+                "Unavailable graph compiler exposed a legacy texture/alpha approximation in preview bindings.");
+            const auto particle=library.preparedParticleMaterial(material.id);
+            require(particle->ready&&!particle->current&&!particle->diagnostic.empty()&&!particle->render.graph&&
+                !bgfx::isValid(particle->render.colorTexture)&&particle->render.baseColor[3]==.7f,
+                "Pending sprite graph used implicit texture alpha or claimed to be a complete current packet.");
+            materialOutputNode(material.graph).output.opacity=.2f;canonicalizeMaterialAsset(material);
+            library.publishMaterial(std::make_shared<MaterialAsset>(material));
+            const auto changed=library.preparedParticleMaterial(material.id);
+            require(changed->ready&&!changed->current&&!changed->render.graph&&changed->render.baseColor[3]==.2f,
+                "A pending fallback was retained as though it were a prior complete graph bundle.");
+        }
+        bgfx::shutdown();
+    }catch(...){bgfx::shutdown();throw;}
 }
 void boxMaterialHistoryOnlyDeletion(){
     Project p;auto material=defaultMaterialAsset();material.id="assets/materials/history.crimson-material";material.name="History material";saveMaterialAsset(p.root,material);
@@ -407,9 +531,8 @@ void boxMaterialHistoryOnlyDeletion(){
 }
 
 int main(){try{
-    // No renderer is initialized and no GPU preparation is advanced. The public
-    // runtime AssetLibrary path, reference index and worker deletion pipeline
-    // operate on disposable managed data and immutable CPU resources only.
-    warningQueries();legacyEnvironmentGlowPersistence();archivedLegacyWarnings();embeddedMaterialWarningOwners();removeModelAcrossScenes(false);removeModelAcrossScenes(true);fallbackReopening();cancelAndStaleDeletion();activeSceneAndFolderDeletion();particleMaterialDeletionAndAuthority();spriteImageDeletionAndIncompatibleMaterial();boxMaterialDeletionAndPublication();boxMaterialHistoryOnlyDeletion();
+    // Public deletion checks use disposable CPU data; the final fallback check
+    // opens a scoped Noop device without a native application window.
+    warningQueries();legacyEnvironmentGlowPersistence();archivedLegacyWarnings();embeddedMaterialWarningOwners();removeModelAcrossScenes(false);removeModelAcrossScenes(true);fallbackReopening();cancelAndStaleDeletion();activeSceneAndFolderDeletion();particleMaterialDeletionAndAuthority();spriteImageDeletionAndIncompatibleMaterial();changedUsagePreservesConsumerAssignments();boxMaterialDeletionAndPublication();boxMaterialHistoryOnlyDeletion();dormantGraphTextureDeletion();pendingGraphKeepsCoverageExplicit();
     std::cout<<"Public AssetLibrary deletion, warning, fallback and document integration checks passed.\n";return 0;
 }catch(const std::exception& error){std::cerr<<"AssetLibrary deletion test failed: "<<error.what()<<'\n';return 1;}}

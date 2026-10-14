@@ -2,6 +2,7 @@
 #include "crimson-renderer/EnvironmentPresentation.h"
 #include "EditorResources.h"
 #include "assets/AssetLibrary.h"
+#include "assets/MaterialGraphReferences.h"
 #include "assets/MaterialPreviewGeometry.h"
 #include "assets/AtomicFile.h"
 #include "crimson-renderer/Environment.h"
@@ -23,10 +24,11 @@
 
 namespace crimson {
 namespace {
-constexpr uint32_t PreviewVersion=7,PreviewSize=512;
+constexpr uint32_t PreviewVersion=8,PreviewSize=512;
 using streaming::detail::hash;
 uint64_t textHash(std::string_view text) { auto result=streaming::detail::HashSeed; hash(result,text.data(),text.size()); return result; }
 void materialHash(uint64_t& value,const ModelMaterial& material) {
+    if(material.graph){hash(value,materialGraphRenderHash(material));return;}
     hash(value,material.baseColor); hash(value,material.metallic); hash(value,material.roughness); hash(value,material.normalScale);
     hash(value,material.occlusionStrength); hash(value,material.emissive); hash(value,material.alphaMask); hash(value,material.alphaCutoff); hash(value,material.doubleSided);
     hash(value,material.uvScale); hash(value,material.uvOffset); hash(value,material.uvRotation); hash(value,material.triplanar);
@@ -58,6 +60,20 @@ bool texturesMatchSources(const AssetLibrary& assets,const std::filesystem::path
     std::unordered_map<std::string,uint64_t>& refreshedSources) {
     if (materials.size()!=bindings.size()) return false;
     for (size_t m=0;m<materials.size();++m) {
+        if(const auto graph=bindings[m].graph) {
+            for(const auto& source:graph->sources) {
+                const auto& target=source.image.id;
+                if(target.empty() || target.starts_with("builtin:"))continue;
+                const auto file=root/pathFromUtf8(target);
+                if(!expected.sourceMatches(file,graph->sourceFingerprints[source.slot])) {
+                    if(const auto fingerprint=expected.sourceFingerprint(file);fingerprint && refreshedSources[resourcePathKey(file)]!=*fingerprint) {
+                        refreshedSources[resourcePathKey(file)]=*fingerprint;resources.invalidatePath(file);
+                    }
+                    return false;
+                }
+            }
+            continue;
+        }
         const auto& material=materials[m]; size_t slot{};
         for (const auto* texture:{&material.baseColorTexture,&material.metallicRoughnessTexture,&material.normalTexture,&material.occlusionTexture,&material.emissiveTexture}) {
             if (!texture->image.empty()) {
@@ -204,7 +220,7 @@ struct AssetPreviews::Impl {
         std::shared_ptr<const ModelAsset> materialGeometry;
         bool spriteMaterial=false;
         std::vector<std::filesystem::path> files;
-        uint64_t sourceKey=streaming::detail::HashSeed; hash(sourceKey,PreviewVersion); hash(sourceKey,id.data(),id.size()); hash(sourceKey,renderer.shaderSignature());
+        uint64_t sourceKey=streaming::detail::HashSeed; hash(sourceKey,PreviewVersion); hash(sourceKey,id.data(),id.size()); hash(sourceKey,renderer.shaderSignature());hash(sourceKey,assets.materialShaderRevision());
         if (entry.kind==AssetKind::Scene) {
             const auto snapshot=scene(id,entry); if (!snapshot) return;
             sceneSnapshot=snapshot.shared(); hash(sourceKey,snapshot->fingerprint);
@@ -216,7 +232,7 @@ struct AssetPreviews::Impl {
         } else if (entry.kind==AssetKind::Material) {
             materialAsset=assets.findMaterial(id);
             if (!materialAsset) { entry.error="Material is unavailable."; return; }
-            spriteMaterial=particleMaterialCompatible(*materialAsset);
+            spriteMaterial=materialAsset->id==DefaultParticleMaterialId;
             if (!spriteMaterial) {
                 ModelAsset probe; probe.materialIds={id};
                 if (!assets.modelMaterialsReady(probe)) {
@@ -226,23 +242,25 @@ struct AssetPreviews::Impl {
                 }
                 materialGeometry=materialPreviewGeometry();
             }
-            const uint32_t materialPreviewVersion=1; hash(sourceKey,materialPreviewVersion);
+            const uint32_t materialPreviewVersion=2; hash(sourceKey,materialPreviewVersion);
             hash(sourceKey,materialAsset->shading);hash(sourceKey,materialAsset->blend);
             materialHash(sourceKey,materialAsset->surface);
-            if (!id.starts_with("builtin:")) files.push_back(root/pathFromUtf8(id));
+            if (!id.starts_with("builtin:") && materialAsset->graph.empty()) files.push_back(root/pathFromUtf8(id));
             const auto& material=materialAsset->surface;
-            for (const auto* texture:{&material.baseColorTexture,&material.metallicRoughnessTexture,&material.normalTexture,&material.occlusionTexture,&material.emissiveTexture}) {
-                if (texture->image.empty()) continue;
-                const auto target=assets.references().resolveTexture(texture->image.id,texture==&material.normalTexture);
+            visitMaterialTextures(material,true,[&](const auto& image,MaterialTextureRole role) {
+                const auto target=assets.references().resolveTexture(image,role==MaterialTextureRole::Normal);
                 hash(sourceKey,target.data(),target.size());
-                if (!target.empty() && !target.starts_with("builtin:")) files.push_back(root/pathFromUtf8(target));
-            }
+                if(!target.empty() && !target.starts_with("builtin:"))files.push_back(root/pathFromUtf8(target));
+            });
             settings.camera.position={0,0,3}; settings.camera.target={0,0,0}; settings.camera.up={0,1,0};
             settings.camera.fov=45; settings.camera.nearPlane=.1f; settings.camera.farPlane=10;
             directions={DirectionalLight{{-1,-1,-1},{1,1,1},1,true},DirectionalLight{{0,1,0},{.7f,.7f,.7f},1,true}};
         } else {
             models.push_back({0,id,Mat4{}}); settings.camera.position={4,3,5}; settings.camera.target={0,0,0};
         }
+        // Generated shader inputs participate in the persistent thumbnail key;
+        // a graph-only template edit need not change an ordinary engine program.
+        const auto shaderFiles=assets.materialShaderDependencies();files.insert(files.end(),shaderFiles.begin(),shaderFiles.end());
         bool loaded=true;
         for (const auto& model:models) {
             const auto asset=assets.findModel(model.assetId);
@@ -261,12 +279,11 @@ struct AssetPreviews::Impl {
             }
             for (const auto& material:materials) {
                 materialHash(sourceKey,material);
-                for (const auto* texture:{&material.baseColorTexture,&material.metallicRoughnessTexture,&material.normalTexture,&material.occlusionTexture,&material.emissiveTexture}) {
-                    if (texture->image.empty()) continue;
-                    const auto target=assets.references().resolveTexture(texture->image.id,texture==&material.normalTexture);
+                visitMaterialTextures(material,true,[&](const auto& image,MaterialTextureRole role) {
+                    const auto target=assets.references().resolveTexture(image,role==MaterialTextureRole::Normal);
                     hash(sourceKey,target.data(),target.size());
-                    if (!target.empty() && !target.starts_with("builtin:")) files.push_back(root/pathFromUtf8(target));
-                }
+                    if(!target.empty() && !target.starts_with("builtin:"))files.push_back(root/pathFromUtf8(target));
+                });
             }
             math::include(bounds,math::transformBounds(asset->bounds,model.world));
         }
@@ -325,7 +342,7 @@ struct AssetPreviews::Impl {
             const auto material=assets.preparedParticleMaterial(id);
             if(!material || !material->ready || !material->current) { entry.error=material?material->diagnostic:"Sprite material is unavailable.";return; }
             const auto& image=materialAsset->surface.baseColorTexture.image;
-            if(!image.empty()) {
+            if(!material->render.graph && !image.empty()) {
                 const auto target=assets.references().resolveTexture(image.id,false);
                 if(!target.empty() && !target.starts_with("builtin:")) {
                     const auto file=root/pathFromUtf8(target);
@@ -337,8 +354,14 @@ struct AssetPreviews::Impl {
                     }
                 }
             }
+            if(material->render.graph) {
+                const ModelMaterialTextures graphTextures{material->render.graph};
+                const std::array<ModelMaterial,1> surfaces{materialAsset->surface};
+                const std::array<ModelMaterialTextures,1> textures{graphTextures};
+                if(!texturesMatchSources(assets,root,*dependencies,surfaces,textures,resources,refreshedSources))return;
+            }
             pins->particle=material;particleMaterials.push_back(material->render);
-            particles.push_back({{0,0,0},2,{1,1,1,1},0});
+            particles.push_back({{0,0,0},2,{1,1,1,1},0,0,ParticleBillboardMode::Enabled});
             if(!material->diagnostic.empty())entry.error=material->diagnostic;
         }
         if (materialAsset && !spriteMaterial) {
@@ -346,7 +369,7 @@ struct AssetPreviews::Impl {
             auto candidate=std::make_shared<PreparedEditorModel>(); candidate->asset=materialGeometry;
             candidate->materials={materialAsset->surface}; candidate->textures=assets.modelBindings(*materialGeometry,candidate->materials);
             if (!assets.modelBindingsReady(candidate->textures) || std::any_of(candidate->textures.begin(),candidate->textures.end(),[](const auto& binding) {
-                return !binding.complete || !binding.sourceReady;
+                return binding.graphPending || !binding.complete || !binding.sourceReady;
             })) return;
             if (!texturesMatchSources(assets,root,*dependencies,candidate->materials,candidate->textures,resources,refreshedSources)) return;
             std::unordered_map<std::string,uint64_t> versions;

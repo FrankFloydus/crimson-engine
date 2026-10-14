@@ -1,6 +1,7 @@
 #pragma once
 
 #include "math/Math.h"
+#include "particles/ParticleOrientation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -10,16 +11,17 @@
 
 namespace crimson {
 
-enum class ParticleBlendMode { Alpha, Additive };
-
-// Copied presentation values. RGB is linear radiance with intensity applied;
-// alpha is opacity. Size is the full square billboard width in world meters.
+// Copied presentation values, exposed only by Particle Color graph nodes. RGB
+// is linear radiance with brightness applied; alpha is authored particle opacity.
+// Neither implicitly affects a material. Size is the full quad width in metres.
 struct RenderParticle {
     Vec3 position{};
     float size{.08f};
     Vec4 color{1,1,1,1};
     std::uint32_t materialIndex{}; // Index into this render frame's prepared material table.
-    float rotation{}; // Radians about the camera-facing billboard center.
+    float rotation{}; // Radians in the chosen orientation's right/up plane.
+    ParticleBillboardMode billboardMode{ParticleBillboardMode::Disabled};
+    Vec3 right{1,0,0},up{0,1,0}; // Orthonormal world-space directions, independent of size.
 };
 
 struct ParticleRenderStats {
@@ -35,6 +37,10 @@ inline constexpr float MaxParticleRadiance = 1e11f; // HDR color (1e6) times ret
 namespace particle_rendering {
 inline bool valid(const RenderParticle& particle) {
     return math::finite(particle.position) && math::finite(particle.color) &&
+        math::finite(particle.right) && math::finite(particle.up) &&
+        static_cast<unsigned>(particle.billboardMode)<=static_cast<unsigned>(ParticleBillboardMode::FixedY) &&
+        std::abs(math::dot(particle.right,particle.right)-1.0)<=.001 &&
+        std::abs(math::dot(particle.up,particle.up)-1.0)<=.001 && std::abs(math::dot(particle.right,particle.up))<=.001 &&
         std::isfinite(particle.size) && particle.size > 0 && particle.size <= 1e6f && std::isfinite(particle.rotation) &&
         std::all_of(particle.position.values.begin(),particle.position.values.end(),[](float value){return std::abs(value)<=1e9f;}) &&
         std::all_of(particle.color.values.begin(),particle.color.values.begin()+3,[](float value){return value>=0 && value<=MaxParticleRadiance;}) &&
@@ -52,6 +58,11 @@ inline Vec3 backgroundLinear(const Vec3& srgb) {
     return result;
 }
 
+// A shared queue preserves mesh/particle ordering, including material-run boundaries.
+struct TransparentSortKey { std::size_t index{}; double depth{}; bool mesh{}; };
+inline void sortTransparentBackToFront(std::vector<TransparentSortKey>& keys) {
+    std::stable_sort(keys.begin(),keys.end(),[](const auto& a,const auto& b){return a.depth>b.depth;});
+}
 struct SortKey { std::size_t index{}; double depth{}; };
 inline double viewDepth(const Vec3& position,const Vec3& eye,const Vec3& forward) {
     double depth{};

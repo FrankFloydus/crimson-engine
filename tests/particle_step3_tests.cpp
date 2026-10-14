@@ -230,6 +230,70 @@ void affineSpacesAndLiveEdits() {
     local.stop();effect.emitter.delay=.2f;local.updateDefinition(effect);
     require(local.state()==ParticlePlaybackState::Stopped && local.elapsed()==0,"Timing edit restarted a stopped effect.");
 }
+void spriteOrientation() {
+    auto effect=pulse();auto& e=effect.emitter;
+    require(e.billboardMode==ParticleBillboardMode::Disabled && e.orientation==Vec3{},"New effects must begin without billboarding or an orientation offset.");
+    const auto rotationZ=math::rotation(math::axisAngle({0,0,1},std::numbers::pi/2));
+    const auto rotationY=math::rotation(math::axisAngle({0,1,0},std::numbers::pi/2));
+    auto birthTransform=math::translation({3,4,5})*rotationZ*math::scaling({2,3,4});
+    // Capture the emitter frame even while camera-facing so a live switch can
+    // recover the correct world birth orientation without respawning particles.
+    e.billboardMode=ParticleBillboardMode::Enabled;e.rotation=30;
+    CpuParticleSystem world;world.restart(effect,77,birthTransform);world.tick();world.pause();
+    const auto record=world.particles().front();const auto storage=world.particles().data();
+    const auto elapsed=world.elapsed();const auto ticks=world.stats().ticks;
+    require(world.setTransform(rotationY),"Valid emitter orientation was rejected.");
+    e.billboardMode=ParticleBillboardMode::Disabled;world.updateDefinition(effect);
+    std::vector<ParticlePresentation> shown;world.appendPresentation(shown,1);
+    require(shown.size()==1 && shown.front().billboardMode==ParticleBillboardMode::Disabled,"Disabled billboard mode did not reach presentation.");
+    near(shown.front().right,{0,1,0},"World sprite followed current emitter rotation rather than its birth frame.");
+    near(shown.front().up,{-1,0,0},"World sprite lost its birth up vector.");
+    near(shown.front().size,e.size,"Rigid sprite orientation inherited transform scale.");
+    near(shown.front().rotation,std::numbers::pi/6,"Scalar roll was consumed into the plane or lost its radians conversion.");
+    e.orientation={90,0,0};world.updateDefinition(effect);shown.clear();world.appendPresentation(shown,1);
+    near(shown.front().right,{0,1,0},"Authored XYZ orientation is not relative to the birth frame.");
+    near(shown.front().up,{0,0,1},"Authored X orientation did not tilt the sprite plane.");
+    near(shown.front().rotation,std::numbers::pi/6,"XYZ orientation unexpectedly rewrote scalar roll.");
+    require(world.particles().data()==storage && world.particles().size()==1 && world.elapsed()==elapsed && world.stats().ticks==ticks &&
+        world.state()==ParticlePlaybackState::Paused && world.particles().front().position==record.position &&
+        world.particles().front().birthRight==record.birthRight && world.particles().front().birthUp==record.birthUp,
+        "Live orientation changed authoritative particles, allocation, playback or birth frames.");
+    for(auto mode:{ParticleBillboardMode::Enabled,ParticleBillboardMode::FixedY,ParticleBillboardMode::Disabled}) {
+        e.billboardMode=mode;world.updateDefinition(effect);shown.clear();world.appendPresentation(shown,1);
+        require(shown.front().billboardMode==mode && world.elapsed()==elapsed && world.particles().data()==storage,
+            "Billboard mode changes restarted playback or failed presentation.");
+    }
+    e.space=ParticleSpace::Local;e.orientation={};
+    CpuParticleSystem local;local.restart(effect,77,birthTransform);local.tick();local.setTransform(rotationY);
+    shown.clear();local.appendPresentation(shown,1);
+    near(shown.front().right,{0,0,-1},"Local sprites did not follow current emitter rotation.");
+    near(shown.front().up,{0,1,0},"Local sprite up vector is incorrect.");
+    const auto displayRotation=math::rotation(math::axisAngle({0,0,1},std::numbers::pi/4));
+    shown.clear();local.appendPresentation(shown,.5,&displayRotation);
+    near(shown.front().right,{std::sqrt(.5),std::sqrt(.5),0},"Local sprites ignored the interpolated presentation frame.");
+    near(shown.front().up,{-std::sqrt(.5),std::sqrt(.5),0},"Interpolated local up vector is incorrect.");
+    require(local.particles().front().birthRight==record.birthRight,"Presentation extraction mutated authoritative orientation.");
+    // Existing affine decomposition supplies a proper rigid frame for signed
+    // scales and shear; collapsed axes have a deterministic finite fallback.
+    auto sheared=rotationZ*math::scaling({-2,3,4});sheared[4]+=.7f;sheared[8]-=.4f;
+    auto collinear=Mat4{};collinear[4]=2;collinear[5]=0;collinear[10]=0;
+    for(const auto& transform:{birthTransform,sheared,collinear,math::scaling({0,0,0}),math::scaling({0,0,2}),
+        math::scaling({-1,1,1}),math::scaling({1,-1,1}),math::scaling({1,1,-1})}) {
+        local.setTransform(transform);shown.clear();local.appendPresentation(shown,1);
+        require(shown.size()==1 && math::finite(shown.front().right) && math::finite(shown.front().up),"Degenerate transform produced invalid sprite orientation.");
+        const auto& p=shown.front();
+        near(math::length(p.right),1,"Sprite right vector retained scale or collapsed.");
+        near(math::length(p.up),1,"Sprite up vector retained scale or collapsed.");
+        near(math::dot(p.right,p.up),0,"Sprite orientation retained shear.");
+        near(math::length(math::cross(p.right,p.up)),1,"Sprite plane normal is degenerate.");
+        near(p.size,e.size,"Reflected or singular transforms changed sprite size.");
+    }
+    local.setTransform(Mat4{});e.orientation={27,-39,51};local.updateDefinition(effect);
+    shown.clear();local.appendPresentation(shown,1);
+    const auto expected=math::eulerRotationXYZ(e.orientation*(std::numbers::pi/180));
+    near(shown.front().right,math::transformDirection(expected,{1,0,0}),"Combined orientation did not use scene Euler XYZ order.");
+    near(shown.front().up,math::transformDirection(expected,{0,1,0}),"Combined XYZ up orientation is incorrect.");
+}
 void forcesAndDrag() {
     auto effect=pulse();auto& e=effect.emitter;e.initialVelocity={6,3,-2};e.gravityBehavior={true,true};e.gravity={0,-8,0};
     e.accelerationBehavior={true,true};e.acceleration={2,1,4};e.dragBehavior={true,true};e.drag=3;
@@ -275,7 +339,7 @@ void schedulingBudgets() {
 }
 int main() {
     try {
-        shapeBoundsAndSeed();burstTimingAndCompletion();directionFlatness();chronologicalRateAndBursts();affineSpacesAndLiveEdits();forcesAndDrag();schedulingBudgets();
+        shapeBoundsAndSeed();burstTimingAndCompletion();directionFlatness();chronologicalRateAndBursts();affineSpacesAndLiveEdits();spriteOrientation();forcesAndDrag();schedulingBudgets();
         std::cout<<"Particle Step 3 sampling, scheduling, lifecycle, spaces, live edits and force checks passed.\n";return 0;
     } catch (const std::exception& error) { std::cerr<<error.what()<<'\n';return 1; }
 }

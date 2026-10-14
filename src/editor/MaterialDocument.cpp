@@ -17,6 +17,17 @@ uint64_t fileFingerprint(const std::filesystem::path& root,const std::string& id
     if (input.bad()) throw std::runtime_error("Could not fingerprint the complete material file.");
     return hash;
 }
+std::optional<uint64_t> matchingFileFingerprint(const std::filesystem::path& root,const std::string& id,const std::string& expected) {
+    if(id.starts_with("builtin:"))return {};
+    std::ifstream input(materialAssetPath(root,id),std::ios::binary);
+    if(!input)return {};
+    std::string bytes(expected.size(),'\0');
+    input.read(bytes.data(),static_cast<std::streamsize>(bytes.size()));
+    if(input.gcount()!=static_cast<std::streamsize>(bytes.size()) || bytes!=expected || input.peek()!=std::char_traits<char>::eof() || input.bad())return {};
+    uint64_t hash=14695981039346656037ull;
+    for(const unsigned char byte:bytes){hash^=byte;hash*=1099511628211ull;}
+    return hash;
+}
 }
 
 MaterialDocument::MaterialDocument(std::filesystem::path projectRoot)
@@ -31,13 +42,55 @@ bool MaterialDocument::editable() const {
 std::vector<std::string> MaterialDocument::historicalTextureReferences() const {
     std::vector<std::string> result;
     const auto append=[&](const MaterialAsset& a) {
-        for (const auto* t:{&a.surface.baseColorTexture,&a.surface.emissiveTexture,&a.surface.metallicRoughnessTexture,&a.surface.normalTexture,&a.surface.occlusionTexture})
-            if (!t->image.id.empty() && std::find(result.begin(),result.end(),t->image.id)==result.end()) result.push_back(t->image.id);
+        for(const auto& id:materialTextureReferences(a))if(std::find(result.begin(),result.end(),id)==result.end())result.push_back(id);
     };
     append(saved_);
     if(transaction_)append(transaction_->before);
     for(const auto& command:history_){append(command.before);append(command.after);}
     return result;
+}
+bool MaterialDocument::reconcileTextureReferences(const TextureReferenceResolver& resolve) {
+    if(!open_)return true;
+    try {
+        auto working=working_,saved=saved_;
+        auto history=history_;auto transaction=transaction_;
+        auto committed=committed_;
+        const auto rewrite=[&](MaterialAsset& material) {
+            bool changed=false;
+            for(auto& node:material.graph.nodes)if(node.kind==MaterialNodeKind::Texture2D && !node.texture.image.empty()) {
+                auto replacement=resolve(node.texture.image.id,node.texture.role);
+                if(replacement!=node.texture.image.id){node.texture.image.id=std::move(replacement);changed=true;}
+            }
+            if(changed){canonicalizeMaterialAsset(material);validateMaterialAsset(material);}
+            return changed;
+        };
+        const bool workingChanged=rewrite(working),savedChanged=rewrite(saved);
+        bool changed=workingChanged||savedChanged,committedChanged=false;
+        for(auto& command:history){changed|=rewrite(command.before);changed|=rewrite(command.after);}
+        if(transaction)changed|=rewrite(transaction->before);
+        if(committed) {
+            auto candidate=*committed;
+            committedChanged=rewrite(candidate);changed|=committedChanged;
+            if(committedChanged)committed=std::make_shared<const MaterialAsset>(std::move(candidate));
+        }
+        if(!changed)return true;
+        auto fingerprint=fingerprint_;
+        if(savedChanged) {
+            // Accept only the exact saved rewrite performed by asset deletion.
+            // An unrelated external edit must still produce a save conflict.
+            try {if(const auto matched=matchingFileFingerprint(root_,saved.id,serializeMaterialAsset(saved)))fingerprint=*matched;}
+            catch(const std::exception&) { /* An unavailable file remains an external conflict. */ }
+        }
+        // Every allocation, resolver call and validation completed above. These
+        // swaps install the complete replacement while retaining history tokens.
+        std::swap(working_,working);std::swap(saved_,saved);history_.swap(history);transaction_.swap(transaction);committed_.swap(committed);
+        fingerprint_=fingerprint;
+        if(workingChanged)++previewRevision_;
+        if(committedChanged)++revision_;
+        if(!transaction_ || !transaction_->invalid)status_.clear();return true;
+    } catch(const std::exception& error) {
+        status_="Could not reconcile deleted material textures: "+std::string(error.what());return false;
+    }
 }
 std::string MaterialDocument::undoLabel() const { return canUndo()?history_[cursor_-1].label:std::string{}; }
 std::string MaterialDocument::redoLabel() const { return canRedo()?history_[cursor_].label:std::string{}; }
@@ -47,6 +100,7 @@ void MaterialDocument::publish() {
 }
 void MaterialDocument::install(MaterialAsset asset,bool saved) {
     validateMaterialAsset(asset);
+    canonicalizeMaterialAsset(asset);
     auto prepared=std::make_shared<const MaterialAsset>(asset);
     const auto fingerprint=saved?fileFingerprint(root_,asset.id):0;
     working_=std::move(asset); saved_=working_; committed_=std::move(prepared);
@@ -125,9 +179,9 @@ bool MaterialDocument::update(const Mutation& mutation) {
         auto candidate=working_; mutation(candidate);
         if (candidate.id!=transaction_->before.id) throw std::runtime_error("A material edit cannot change its managed identity; use Save As.");
         if (candidate.originModel!=transaction_->before.originModel) throw std::runtime_error("A material edit cannot change its imported origin.");
-        if (!particleMaterialCompatible(candidate) && !modelMaterialCompatible(candidate)) throw std::runtime_error("The material shading and blend modes are incompatible.");
-        candidate.surface.name=candidate.name;
         validateMaterialAsset(candidate);
+        canonicalizeMaterialAsset(candidate);
+        if (!particleMaterialCompatible(candidate) && !modelMaterialCompatible(candidate)) throw std::runtime_error("The material shading and blend modes are incompatible.");
         transaction_->invalid=false;
         if (!equal(candidate,working_)) { working_=std::move(candidate); ++previewRevision_; }
         status_.clear(); return true;

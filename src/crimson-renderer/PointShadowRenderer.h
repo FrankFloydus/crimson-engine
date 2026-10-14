@@ -22,8 +22,8 @@ public:
     void advance(std::uint64_t frame);
     void render(std::span<const PointLight>,std::span<const std::uint64_t> casterSignatures,
         std::uint64_t world,std::uint16_t resolution,std::uint64_t frame,bgfx::ViewId firstView,const DrawFace&);
-    void bind(bool receiving=true) const;
-    void bindDisabled() const;
+    void bind(bool receiving=true,std::uint8_t samplerSlot=8) const;
+    void bindDisabled(std::uint8_t samplerSlot=8) const;
     void setCasterCount(std::size_t count){stats_.casters=static_cast<std::uint32_t>(count);}
     void invalidate();
     void release();

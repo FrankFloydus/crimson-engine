@@ -2,6 +2,7 @@
 #include "crimson-renderer/ToneMapping.h"
 #include "crimson-renderer/Environment.h"
 #include "crimson-renderer/ImGuiBgfx.h"
+#include "crimson-renderer/MaterialGraphGpu.h"
 #include "crimson-renderer/Picking.h"
 #include "resources/TextureStreamer.h"
 #include "resources/ShaderReloadSession.h"
@@ -24,6 +25,7 @@
 #include <cstring>
 #include <unordered_map>
 #include <algorithm>
+#include <functional>
 
 namespace {
 using namespace crimson;
@@ -97,6 +99,64 @@ std::shared_ptr<ModelAsset> quad() {
 }
 double component(const DecodedImage& image,unsigned x,unsigned y,unsigned channel) {return image.rgba[(static_cast<std::size_t>(y)*image.width+x)*4+channel];}
 
+// These fixtures deliberately author particle attributes and coverage through
+// the same graph API as a user. The ordinary fallback shader has no implicit
+// emitter tint, texture alpha or soft-disc behavior.
+class ParticleGraphFixtures {
+public:
+    ParticleGraphFixtures(ResourceManager& resources,const ShaderCompileConfig& config,std::function<void()> tick)
+        :programs_(resources,config),tick_(std::move(tick)){}
+    RenderParticleMaterial prepare(RenderParticleMaterial packet={},bool softDisc=false) {
+        // Invalid-packet checks must reach renderer validation rather than the
+        // authoring validator. Drop any earlier complete graph for that case.
+        if(!math::finite(packet.baseColor)){packet.graph.reset();return packet;}
+        MaterialAsset material;auto& graph=material.graph;
+        const auto output=addMaterialNode(graph,MaterialNodeKind::Output).id;
+        auto& settings=findMaterialNode(graph,output)->output;settings.shading=MaterialShading::Unlit;settings.blend=packet.blend;
+        const auto particle=addMaterialNode(graph,MaterialNodeKind::ParticleColor).id;
+        const auto factor=addMaterialNode(graph,MaterialNodeKind::Color).id;findMaterialNode(graph,factor)->color=packet.baseColor;
+        const auto product=[&](MaterialNodeId left,MaterialPin leftPin,MaterialNodeId right,MaterialPin rightPin) {
+            const auto multiply=addMaterialNode(graph,MaterialNodeKind::Multiply).id;
+            connectMaterialNodes(graph,left,leftPin,multiply,MaterialPin::Left);
+            connectMaterialNodes(graph,right,rightPin,multiply,MaterialPin::Right);return multiply;
+        };
+        auto radiance=product(particle,MaterialPin::RGB,factor,MaterialPin::RGB);
+        auto opacity=product(particle,MaterialPin::A,factor,MaterialPin::A);
+        if(bgfx::isValid(packet.colorTexture)) {
+            const auto texture=addMaterialNode(graph,MaterialNodeKind::Texture2D).id;
+            findMaterialNode(graph,texture)->texture.image.id="assets/textures/native-explicit-particle-image.png";
+            radiance=product(radiance,MaterialPin::Value,texture,MaterialPin::RGB);
+            opacity=product(opacity,MaterialPin::Value,texture,MaterialPin::A);
+        }
+        if(softDisc) {
+            const auto radial=addMaterialNode(graph,MaterialNodeKind::RadialGradient).id;
+            opacity=product(opacity,MaterialPin::Value,radial,MaterialPin::Value);
+        }
+        connectMaterialNodes(graph,radiance,MaterialPin::Value,output,MaterialPin::BaseColor);
+        if(packet.blend!=MaterialBlend::Opaque)
+            connectMaterialNodes(graph,opacity,MaterialPin::Value,output,packet.blend==MaterialBlend::Mask?MaterialPin::OpacityMask:MaterialPin::Opacity);
+        const auto shader=generateMaterialGraphShader(material);
+        auto result=programs_.request(shader);
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(30);
+        while(!result.current && result.diagnostic=="Compiling material graph..." && std::chrono::steady_clock::now()<deadline) {
+            tick_();result=programs_.request(shader);
+        }
+        check(result.current&&result.programs,"Explicit particle fixture: "+result.diagnostic);
+        auto prepared=std::make_shared<PreparedGraphMaterial>();prepared->programs=result.programs;
+        prepared->uniforms=shader.uniforms;prepared->sources=shader.textures;
+        prepared->shading=MaterialShading::Unlit;prepared->blend=packet.blend;
+        prepared->signature=materialGraphValueHash(graph,MaterialShading::Unlit,packet.blend)^result.programs->signature;
+        for(const auto& source:shader.textures) {
+            prepared->textures[source.slot]=packet.colorTexture;prepared->flags[source.slot]=packet.samplerFlags;
+            prepared->leases[source.slot]=packet.pinned;
+        }
+        packet.graph=std::move(prepared);return packet;
+    }
+private:
+    MaterialGraphPrograms programs_;
+    std::function<void()> tick_;
+};
+
 // Keep readbacks after the renderer's offscreen passes and the small number of
 // native platform windows opened by this fixture. Numeric view order is used.
 constexpr bgfx::ViewId MainReadbackView=252,ParticleReadbackView=253,MaterialReadbackView=254;
@@ -130,11 +190,12 @@ DecodedImage readTarget(bgfx::TextureHandle source,std::uint16_t width,std::uint
 }
 
 template<class Copy>
-void exerciseParticles(Renderer& renderer,Copy&& copy) {
+void exerciseParticles(Renderer& renderer,Copy&& copy,ParticleGraphFixtures& graphs) {
     check(renderer.particleStatus().empty(),renderer.particleStatus());
     SceneSettings settings;settings.camera.position={0,0,3};settings.camera.target={0,0,0};settings.environment.enabled=false;
     ViewportAppearance appearance;appearance.backgroundSrgb={.2f,.4f,.6f};renderer.setAppearance(appearance);
     RenderScene scene{settings,{}};scene.sceneMode=true;
+    const std::array materials{graphs.prepare({},true)};scene.particleMaterials=materials;
     const auto mainImage=[&] {
         renderer.render(scene);
         return copy(renderer.viewportTexture(),std::uint16_t(renderer.width()),std::uint16_t(renderer.height()),MainReadbackView);
@@ -148,7 +209,7 @@ void exerciseParticles(Renderer& renderer,Copy&& copy) {
         check(std::abs(component(background,64,64,channel)-appearance.backgroundSrgb[channel]*255)<=1,"Native particle viewport background has incorrect color encoding.");
 
     settings.exposure=1;
-    std::array<RenderParticle,1> red{{{{0,0,0},1.5f,{8,0,0,1}}}};
+    std::array<RenderParticle,1> red{{{{0,0,0},1.5f,{8,0,0,1}}}};red[0].billboardMode=ParticleBillboardMode::Enabled;
     scene.particles=red;
     const auto additive=mainImage();
     check(component(additive,64,64,0)>component(background,64,64,0)+100,"Instanced additive particle was invisible over empty background.");
@@ -173,11 +234,11 @@ void exerciseParticles(Renderer& renderer,Copy&& copy) {
     check(component(inFront,64,64,0)>component(opaque,64,64,0)+100,"Particle in front of opaque geometry did not pass depth testing.");
     scene.instances={};red[0].position={0,0,0};renderer.evictModel(occluder->id);
 
-    std::array<RenderParticle,1> green{{{{0,0,0},1.5f,{0,8,0,1}}}};
+    std::array<RenderParticle,1> green{{{{0,0,0},1.5f,{0,8,0,1}}}};green[0].billboardMode=ParticleBillboardMode::Enabled;
     renderer.resizeParticlePreview(128,128);
     const auto originalMain=renderer.viewportTexture();
     check(bgfx::isValid(renderer.particlePreviewTexture()) && renderer.particlePreviewTexture().idx!=originalMain.idx,"Particle preview must own a separate display target.");
-    renderer.render(scene);renderer.renderParticlePreview(settings,green);
+    renderer.render(scene);renderer.renderParticlePreview(settings,green,materials);
     const auto independentMain=copy(renderer.viewportTexture(),128,128,MainReadbackView);
     const auto independentPreview=copy(renderer.particlePreviewTexture(),128,128,ParticleReadbackView);
     check(component(independentMain,64,64,0)>200 && component(independentMain,64,64,1)<150,"Preview rendering overwrote main particle color.");
@@ -188,7 +249,7 @@ void exerciseParticles(Renderer& renderer,Copy&& copy) {
     check(renderer.drawable() && renderer.viewportTexture().idx==originalMain.idx &&
         renderer.particlePreviewTexture().idx==originalPreview.idx,"Disabling the main backbuffer disabled or replaced detached viewport targets.");
     // Swap the colors so stale pixels cannot pass this detached-render check.
-    scene.particles=green;renderer.render(scene);renderer.renderParticlePreview(settings,red);
+    scene.particles=green;renderer.render(scene);renderer.renderParticlePreview(settings,red,materials);
     const auto detachedMain=copy(renderer.viewportTexture(),128,128,MainReadbackView);
     const auto detachedPreview=copy(renderer.particlePreviewTexture(),128,128,ParticleReadbackView);
     check(component(detachedMain,64,64,1)>200 && component(detachedMain,64,64,0)<100 && renderer.particleStats().submitted==1,
@@ -200,13 +261,13 @@ void exerciseParticles(Renderer& renderer,Copy&& copy) {
         "Restoring the main backbuffer replaced detached viewport targets.");
     renderer.resizeParticlePreview(96,64);
     check(renderer.viewportTexture().idx==originalMain.idx,"Resizing preview replaced the main viewport target.");
-    renderer.render(scene);renderer.renderParticlePreview(settings,green);
+    renderer.render(scene);renderer.renderParticlePreview(settings,green,materials);
     const auto resizedPreview=copy(renderer.particlePreviewTexture(),96,64,ParticleReadbackView);
     check(component(resizedPreview,48,32,1)>200,"Resized preview lost particle rendering.");
     const auto previewTarget=renderer.particlePreviewTexture();
     renderer.resizeViewport(160,96);
     check(renderer.particlePreviewTexture().idx==previewTarget.idx,"Resizing the main viewport replaced the preview target.");
-    renderer.render(scene);renderer.renderParticlePreview(settings,green);
+    renderer.render(scene);renderer.renderParticlePreview(settings,green,materials);
     const auto resizedMain=copy(renderer.viewportTexture(),160,96,MainReadbackView);
     check(component(resizedMain,80,48,0)>200,"Resized main viewport lost particle rendering.");
     renderer.releaseParticlePreview();
@@ -227,14 +288,15 @@ void exerciseParticles(Renderer& renderer,Copy&& copy) {
 }
 
 template<class Copy,class Tick>
-void exerciseGlow(Renderer& renderer,Copy&& copy,Tick&& tick,const PreparedEnvironment& lighting,std::uint32_t& frame) {
+void exerciseGlow(Renderer& renderer,Copy&& copy,Tick&& tick,const PreparedEnvironment& lighting,std::uint32_t& frame,ParticleGraphFixtures& graphs) {
     phase("HDR Glow extraction, isolated targets and resource lifetime");
     renderer.releaseGameViewport();renderer.releaseParticlePreview();renderer.releaseMaterialPreview();renderer.resizeViewport(127,129);
     check(renderer.glowResidentBytes()==0,"Glow allocated scratch before it was enabled.");
     ViewportAppearance appearance;appearance.backgroundSrgb={.1f,.15f,.2f};renderer.setAppearance(appearance);
     SceneSettings settings;settings.camera.position={0,0,3};settings.camera.target={0,0,0};settings.environment.enabled=false;
-    std::array<RenderParticle,1> particles{{{{0,0,0},.2f,{64,0,0,1}}}};
+    std::array<RenderParticle,1> particles{{{{0,0,0},.2f,{64,0,0,1}}}};particles[0].billboardMode=ParticleBillboardMode::Enabled;
     RenderScene scene{settings,{}};scene.sceneMode=true;scene.particles=particles;
+    const std::array materials{graphs.prepare({},true)};scene.particleMaterials=materials;
     const auto main=[&] {renderer.render(scene);return copy(renderer.viewportTexture(),127,129,MainReadbackView);};
     const auto baseline=main();
     settings.environment.glow={true,1,1,1};const auto glowing=main();
@@ -268,7 +330,7 @@ void exerciseGlow(Renderer& renderer,Copy&& copy,Tick&& tick,const PreparedEnvir
     settings.environment.glow.enabled=false;check(main().rgba==empty.rgba,"Empty-background color contributed to Glow extraction.");
     scene.particles=particles;settings.environment.glow.enabled=true;
     renderer.resizeViewport(128,128);renderer.resizeGameViewport(128,128);renderer.resizeParticlePreview(128,128);
-    renderer.render(scene);renderer.renderGame(scene);renderer.renderParticlePreview(settings,particles);
+    renderer.render(scene);renderer.renderGame(scene);renderer.renderParticlePreview(settings,particles,materials);
     const auto mainImage=copy(renderer.viewportTexture(),128,128,MainReadbackView);
     const auto gameImage=copy(renderer.gameViewportTexture(),128,128,MainReadbackView);
     const auto previewImage=copy(renderer.particlePreviewTexture(),128,128,ParticleReadbackView);
@@ -316,8 +378,8 @@ void exerciseParticleRotation(Renderer& renderer,Copy&& copy) {
     check(bgfx::isValid(texture.value),"Could not prepare the asymmetric particle rotation texture.");
     SceneSettings settings;settings.camera.position={0,0,3};settings.camera.target={0,0,0};settings.environment.enabled=false;
     settings.environment.toneMapping=ToneMapping::Linear;
-    std::array<RenderParticle,1> particles{{{{0,0,0},1.5f,{1,1,1,1}}}};
-    std::array<RenderParticleMaterial,1> materials;materials[0].blend=ParticleBlendMode::Alpha;
+    std::array<RenderParticle,1> particles{{{{0,0,0},1.5f,{1,1,1,1}}}};particles[0].billboardMode=ParticleBillboardMode::Enabled;
+    std::array<RenderParticleMaterial,1> materials;materials[0].blend=MaterialBlend::Alpha;
     materials[0].colorTexture=texture.value;materials[0].samplerFlags=sampling;
     RenderScene scene{settings,{}};scene.sceneMode=true;scene.particles=particles;scene.particleMaterials=materials;
     const auto capture=[&]{renderer.render(scene);return copy(renderer.viewportTexture(),128,128,MainReadbackView);};
@@ -330,17 +392,20 @@ void exerciseParticleRotation(Renderer& renderer,Copy&& copy) {
     check(renderer.particleStats().invalid==1 && renderer.particleStats().submitted==0,"Invalid particle rotation was not rejected before GPU upload.");
 }
 template<class Copy>
-void exerciseParticleMaterials(Renderer& renderer,Copy&& copy,const PreparedTexture& color,std::uint32_t& frame) {
+void exerciseParticleMaterials(Renderer& renderer,Copy&& copy,const PreparedTexture& color,std::uint32_t& frame,ParticleGraphFixtures& graphs) {
     SceneSettings settings;settings.camera.position={0,0,3};settings.camera.target={0,0,0};settings.environment.enabled=false;
     ViewportAppearance appearance;appearance.backgroundSrgb={0,0,0};renderer.setAppearance(appearance);
     std::array<RenderParticleMaterial,3> materials;
-    materials[0].blend=ParticleBlendMode::Alpha;
+    materials[0].blend=MaterialBlend::Alpha;
     materials[0].baseColor={.5f,.75f,.25f,.5f};materials[0].colorTexture=color.handle;
     materials[0].samplerFlags=BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP|BGFX_SAMPLER_MIN_POINT|BGFX_SAMPLER_MAG_POINT;
     materials[0].pinned=color.lease;
-    std::array<RenderParticle,1> sprite{{{{0,0,0},2,{1,1,1,.5f},0}}};
+    std::array<RenderParticle,1> sprite{{{{0,0,0},2,{1,1,1,.5f},0}}};sprite[0].billboardMode=ParticleBillboardMode::Enabled;
     RenderScene scene{settings,{}};scene.sceneMode=true;scene.particles=sprite;scene.particleMaterials=materials;
-    const auto capture=[&] {renderer.render(scene);return copy(renderer.viewportTexture(),128,128,MainReadbackView);};
+    const auto capture=[&] {
+        for(auto& packet:materials)packet=graphs.prepare(std::move(packet));
+        renderer.render(scene);return copy(renderer.viewportTexture(),128,128,MainReadbackView);
+    };
     const auto linear=[](double value){return value<=.04045?value/12.92:std::pow((value+.055)/1.055,2.4);};
     const auto encoded=[](double value){value=std::clamp(value,0.,1.);return 255*(value<=.0031308?value*12.92:1.055*std::pow(value,1/2.4)-.055);};
     const auto textured=capture();
@@ -367,7 +432,7 @@ void exerciseParticleMaterials(Renderer& renderer,Copy&& copy,const PreparedText
     check(std::abs(component(thumbnail->image,96,64,0)-encoded(thumbnailHdr/(1+thumbnailHdr)+.75*linear(21./255)))<=2,
         "Sprite material thumbnail used a lit PBR sphere or different sprite factors.");
     materials[0].colorTexture=BGFX_INVALID_HANDLE;materials[0].pinned.reset();
-    check(component(capture(),32,64,0)>2,"Clearing a sprite texture did not restore the procedural sprite.");
+    check(component(capture(),32,64,0)>2,"An untextured explicit color/opacity graph did not cover the sprite quad.");
 
     struct TextureOwner {
         bgfx::TextureHandle handle{BGFX_INVALID_HANDLE};
@@ -388,8 +453,8 @@ void exerciseParticleMaterials(Renderer& renderer,Copy&& copy,const PreparedText
     white->handle=bgfx::createTexture2D(1,1,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_SRGB,bgfx::copy(opaqueWhite.data(),4));
     check(bgfx::isValid(white->handle),"Could not create native particle opaque coverage fixture.");
     for(auto& material:materials) {material.colorTexture=white->handle;material.pinned=white;}
-    materials[0].blend=ParticleBlendMode::Alpha;materials[0].baseColor={0,0,0,.5f};
-    materials[1].blend=ParticleBlendMode::Additive;materials[2].blend=ParticleBlendMode::Alpha;
+    materials[0].blend=MaterialBlend::Alpha;materials[0].baseColor={0,0,0,.5f};
+    materials[1].blend=MaterialBlend::Additive;materials[2].blend=MaterialBlend::Alpha;
     sprite[0].color={1,1,1,1};
     for(const float background:{0.f,.5f,1.f}) {
         appearance.backgroundSrgb={background,background,background};renderer.setAppearance(appearance);
@@ -407,7 +472,7 @@ void exerciseParticleMaterials(Renderer& renderer,Copy&& copy,const PreparedText
         }
     }
     settings.exposure=1;appearance.backgroundSrgb={0,0,0};renderer.setAppearance(appearance);
-    std::array<RenderParticle,2> layered{{{{0,0,.5f},2,{1,1,1,1},0},{{0,0,-.5f},2,{1,0,0,1},1}}};
+    std::array<RenderParticle,2> layered{{{{0,0,.5f},2,{1,1,1,1},0},{{0,0,-.5f},2,{1,0,0,1},1}}};for(auto& item:layered)item.billboardMode=ParticleBillboardMode::Enabled;
     scene.particles=layered;
     const auto behind=capture();
     check(std::abs(component(behind,64,64,0)-encoded(.5/1.5))<=2,"Near alpha smoke did not attenuate a farther additive sprite from another material.");
@@ -440,7 +505,7 @@ void exerciseParticleMaterials(Renderer& renderer,Copy&& copy,const PreparedText
     sprite[0].position[2]=.5f;const auto frontAlpha=capture();
     check(component(frontAlpha,64,64,0)<component(opaque,64,64,0)-20,"Near alpha smoke did not attenuate opaque HDR lighting.");
     scene.instances={};sprite[0].position={};renderer.evictModel(occluder->id);
-    std::vector<RenderParticle> alternating(MaxParticleDrawCalls+2,RenderParticle{{0,0,0},.01f,{0,0,0,0},0});
+    std::vector<RenderParticle> alternating(MaxParticleDrawCalls+2,RenderParticle{{0,0,0},.01f,{0,0,0,0},0});for(auto& item:alternating)item.billboardMode=ParticleBillboardMode::Enabled;
     for(std::size_t i=0;i<alternating.size();++i)alternating[i].materialIndex=static_cast<std::uint32_t>(i%2);
     scene.particles=alternating;(void)capture();const auto stats=renderer.particleStats();
     check(stats.drawCalls==MaxParticleDrawCalls && stats.submitted==MaxParticleDrawCalls && stats.dropped==2 && stats.invalid==0,
@@ -497,9 +562,9 @@ void exerciseToneMapping(Renderer& renderer,Copy&& copy,Tick&& tick,std::uint32_
     auto white=std::make_shared<TextureOwner>();const std::array<std::uint8_t,4> whitePixel{255,255,255,255};
     white->handle=bgfx::createTexture2D(1,1,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_SRGB,bgfx::copy(whitePixel.data(),4));
     check(bgfx::isValid(white->handle),"Tone fixture could not allocate the opaque particle sprite.");
-    RenderParticleMaterial particleMaterial;particleMaterial.blend=ParticleBlendMode::Alpha;
+    RenderParticleMaterial particleMaterial;particleMaterial.blend=MaterialBlend::Alpha;
     particleMaterial.colorTexture=white->handle;particleMaterial.pinned=white;
-    RenderParticle particle{{0,0,0},2,{1,1,1,1},0};
+    RenderParticle particle{{0,0,0},2,{1,1,1,1},0};particle.billboardMode=ParticleBillboardMode::Enabled;
     std::uint64_t thumbnailSerial=100;
     const auto thumbnail=[&] {
         check(renderer.renderThumbnail("native-tone",++thumbnailSerial,scene,128,scene.pinned),renderer.thumbnailStatus());
@@ -513,7 +578,7 @@ void exerciseToneMapping(Renderer& renderer,Copy&& copy,Tick&& tick,std::uint32_
         for(const auto radiance:inputs) {
             settings.exposure=radiance[0]<1?1.f:2.5f;
             surfaces[0].emissive=radiance;material.surface=surfaces[0];
-            particle.color={radiance[0],radiance[1],radiance[2],1};
+            particleMaterial.baseColor={radiance[0],radiance[1],radiance[2],1};
             const auto expected=toneMap(radiance*settings.exposure,mode);
             const auto label=std::string(toneMappingName(mode));
             renderer.render(scene);renderer.renderGame(scene);
@@ -586,7 +651,7 @@ void exerciseToneMapping(Renderer& renderer,Copy&& copy,Tick&& tick,std::uint32_
     // Interleave independent contexts with different tone modes in one frame.
     bindings[0]={};scene.pinned.reset();instance.shading=MaterialShading::StandardPbr;
     surfaces[0].baseColor={0,0,0,1};surfaces[0].emissive={.18f,.18f,.18f};material.surface=surfaces[0];
-    particle.color={.18f,.18f,.18f,1};
+    particleMaterial.baseColor={.18f,.18f,.18f,1};
     SceneSettings gameSettings=settings,particleSettings=settings,materialSettings=settings;
     gameSettings.environment.toneMapping=ToneMapping::ACES;particleSettings.environment.toneMapping=ToneMapping::AgX;
     materialSettings.environment.toneMapping=ToneMapping::Reinhard;
@@ -628,8 +693,9 @@ void exerciseMaterialPreview(Renderer& renderer,Copy&& copy,Tick&& tick,const Pr
     const auto mainCapture=[&] {renderer.render(mainScene);return copy(mainTarget,128,128,MainReadbackView);};
     const auto mainBaseline=mainCapture();
     SceneSettings particleSettings;particleSettings.camera.position={0,0,3};particleSettings.camera.target={0,0,0};particleSettings.environment.enabled=false;
-    std::array<RenderParticle,1> greenParticle{{{{0,0,0},1.5f,{0,8,0,1}}}};
-    renderer.renderParticlePreview(particleSettings,greenParticle);
+    std::array<RenderParticle,1> greenParticle{{{{0,0,0},1.5f,{0,8,0,1}}}};greenParticle[0].billboardMode=ParticleBillboardMode::Enabled;
+    std::array<RenderParticleMaterial,1> greenMaterial;greenMaterial[0].baseColor={0,8,0,1};
+    renderer.renderParticlePreview(particleSettings,greenParticle,greenMaterial);
     const auto particleBaseline=copy(particleTarget,128,128,ParticleReadbackView);
 
     auto material=defaultParticleMaterialAsset();material.id="native-live-material-preview";material.blend=MaterialBlend::Alpha;
@@ -712,10 +778,11 @@ void exercisePlatformWindows(Renderer& renderer,ImGuiBgfx& tools,ScreenshotCallb
     platform.Platform_ShowWindow=[](ImGuiViewport*){};
     io.ConfigViewportsNoAutoMerge=true;
     SceneSettings settings;settings.camera.position={0,0,3};settings.camera.target={0,0,0};settings.environment.enabled=false;
-    std::array<RenderParticle,1> red{{{{0,0,0},1.5f,{8,0,0,1}}}},green{{{{0,0,0},1.5f,{0,8,0,1}}}};
+    std::array<RenderParticle,1> red{{{{0,0,0},1.5f,{8,0,0,1}}}},green{{{{0,0,0},1.5f,{0,8,0,1}}}};red[0].billboardMode=green[0].billboardMode=ParticleBillboardMode::Enabled;
     std::array<RenderParticleMaterial,1> previewMaterials;
-    previewMaterials[0].blend=ParticleBlendMode::Alpha;previewMaterials[0].baseColor[3]=.75f;
+    previewMaterials[0].blend=MaterialBlend::Alpha;previewMaterials[0].baseColor={0,8,0,.75f};
     RenderScene scene{settings,{}};scene.sceneMode=true;scene.particles=red;
+    std::array<RenderParticleMaterial,1> mainMaterials;mainMaterials[0].baseColor={8,0,0,1};scene.particleMaterials=mainMaterials;
     renderer.resizeParticlePreview(128,128);
     const auto originalMain=renderer.viewportTexture(),originalPreview=renderer.particlePreviewTexture();
     ImGuiID collapseViewportId{};
@@ -867,6 +934,7 @@ void exercise(const std::filesystem::path& root,const ShaderCompileConfig& shade
     const auto copy=[&](bgfx::TextureHandle texture,std::uint16_t width,std::uint16_t height,bgfx::ViewId view) {
         return readTarget(texture,width,height,view,frame,tick,readbackDestinations);
     };
+    ParticleGraphFixtures particleGraphs(resources,shaderConfig,tick);
     PreparedTexture color,normal;const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{20};
     do {
         textures.beginFrame();color=textures.request("native-image",source,streaming::TextureRole::Color,false,256,ResourcePriority::Selected);
@@ -937,19 +1005,19 @@ void exercise(const std::filesystem::path& root,const ShaderCompileConfig& shade
     const auto materialGreen=capture("material-green");
     check(component(materialGreen,64,64,1)>component(materialGreen,64,64,0)+30 && materialGreen.rgba!=materialRed.rgba,"Material previews must use individual surfaces without reallocating sphere geometry.");
     check(renderer.modelResidentBytes()==sphereBytes,"Multiple material captures must retain shared geometry accounting.");
-    phase("particle readbacks");exerciseParticles(renderer,copy);
-    exerciseGlow(renderer,copy,tick,lighting,frame);
+    phase("particle readbacks");exerciseParticles(renderer,copy,particleGraphs);
+    exerciseGlow(renderer,copy,tick,lighting,frame,particleGraphs);
     exerciseParticleRotation(renderer,copy);
-    phase("textured alpha/material readbacks");exerciseParticleMaterials(renderer,copy,color,frame);
+    phase("textured alpha/material readbacks");exerciseParticleMaterials(renderer,copy,color,frame,particleGraphs);
     phase("isolated live material mini-viewport readbacks");exerciseMaterialPreview(renderer,copy,tick,lighting);
     phase("cross-context tone mapping and texture color roles");exerciseToneMapping(renderer,copy,tick,frame,textures,source,color);
     SceneSettings particleSettings;particleSettings.camera.position={0,0,3};particleSettings.camera.target={0,0,0};particleSettings.environment.enabled=false;
     particleSettings.environment.toneMapping=ToneMapping::AgX;
     particleSettings.environment.glow={true,.8f,1,1};
-    std::array<RenderParticle,1> reloadParticle{{{{0,0,0},1.5f,{8,0,0,1}}}};
+    std::array<RenderParticle,1> reloadParticle{{{{0,0,0},1.5f,{8,0,0,1}}}};reloadParticle[0].billboardMode=ParticleBillboardMode::Enabled;
     RenderScene particleScene{particleSettings,{}};particleScene.sceneMode=true;particleScene.particles=reloadParticle;
     std::array<RenderParticleMaterial,1> reloadMaterials;
-    reloadMaterials[0].blend=ParticleBlendMode::Alpha;reloadMaterials[0].baseColor[3]=.5f;
+    reloadMaterials[0].blend=MaterialBlend::Alpha;reloadMaterials[0].baseColor={8,0,0,.5f};
     reloadMaterials[0].colorTexture=color.handle;reloadMaterials[0].samplerFlags=bindings[0].flags[0];reloadMaterials[0].pinned=color.lease;
     particleScene.particleMaterials=reloadMaterials;
     const auto particleCapture=[&] {

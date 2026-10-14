@@ -5,9 +5,19 @@
 #include <numbers>
 #include <numeric>
 #include <stdexcept>
+#include <utility>
 
 namespace crimson {
 namespace {
+Mat4 rigidRotation(const Mat4& transform) {
+    // The shared affine inspector decomposition has a deterministic proper
+    // rotation for reflected, sheared and collapsed transforms as well as TRS.
+    const auto fields=math::affineTransformFields(transform);
+    return fields ? fields->rotation : Mat4{};
+}
+Vec3 column(const Mat4& matrix,std::size_t index) {
+    return {matrix.at(0,index),matrix.at(1,index),matrix.at(2,index)};
+}
 void integrate(ParticleState& particle,const Vec3& acceleration,double drag,double step) {
     if (drag<=0) {
         particle.position=particle.position+particle.velocity*step+acceleration*(0.5*step*step);
@@ -118,11 +128,11 @@ void CpuParticleSystem::restartInternal(const ParticleEffectAsset& definition,ui
     auto preparedAppearance=prepareParticleAppearance(prepared.emitter);
     std::vector<ParticleState> preparedParticles;
     preparedParticles.reserve(prepared.emitter.capacity);
-    definition_=std::move(prepared); world_=world; seed_=seed;
+    definition_=std::move(prepared); world_=world; worldRotation_=rigidRotation(world); seed_=seed;
     burstOrder_=std::move(preparedBursts);
     appearance_=std::move(preparedAppearance);appearanceSeed_=particleAppearanceSeed(seed_,definition_.emitter.id);
     particles_.swap(preparedParticles); stats_={}; nextSpawnOrdinal_=0;
-    elapsed_=remainder_=emissionRemainder_=0;
+    elapsed_=remainder_=emissionRemainder_=0;explosiveRunActive_=false;
     // Decimal UI values such as 0.1 or 4.05 seconds can land a float ULP above
     // an exact tick. Remove only that representational noise before ceiling.
     const auto rawTicks=preprocess?static_cast<double>(definition_.preprocessSeconds)*60:0;
@@ -151,7 +161,7 @@ void CpuParticleSystem::updateDefinition(const ParticleEffectAsset& definition) 
     const bool preprocessChanged=prepared.preprocessSeconds!=definition_.preprocessSeconds;
     const auto& old=definition_.emitter;const auto& next=prepared.emitter;
     const bool scheduleChanged=old.space!=next.space || old.delay!=next.delay || old.finiteDuration!=next.finiteDuration ||
-        old.duration!=next.duration || old.loop!=next.loop || old.bursts!=next.bursts;
+        old.duration!=next.duration || old.loop!=next.loop || old.explosiveness!=next.explosiveness || old.bursts!=next.bursts;
     if (seedChanged || scheduleChanged || preprocessChanged) {
         const auto oldState=state_;
         restartInternal(prepared,seedChanged?prepared.defaultSeed:seed_,world_,oldState!=ParticlePlaybackState::Stopped);
@@ -177,13 +187,14 @@ void CpuParticleSystem::pause() {
     if (state_==ParticlePlaybackState::Running) state_=ParticlePlaybackState::Paused;
 }
 void CpuParticleSystem::stop() {
-    particles_.clear(); elapsed_=remainder_=emissionRemainder_=0;
+    particles_.clear(); elapsed_=remainder_=emissionRemainder_=0;explosiveRunActive_=false;
     nextSpawnOrdinal_=0; stats_={}; state_=ParticlePlaybackState::Stopped;
     presentCurrentTick_=false;
 }
 bool CpuParticleSystem::setTransform(const Mat4& world) {
     if (!math::finite(world) || !math::isAffine(world)) return false;
     world_=world;
+    worldRotation_=rigidRotation(world);
     return true;
 }
 bool CpuParticleSystem::emissionFinished() const {
@@ -228,6 +239,7 @@ void CpuParticleSystem::emitBatch(uint64_t count,double offset,double spacing) {
     for (uint64_t i=0;i<allowed;++i) {
         if (particles_.size()>=emitter.capacity) { stats_.droppedSpawns+=allowed-i;break; }
         ParticleState particle;
+        particle.birthRight=column(worldRotation_,0);particle.birthUp=column(worldRotation_,1);
         particle.spawnOrdinal=firstOrdinal+i;
         const auto localPosition=samplePosition(emitter,spawn_.seed,particle.spawnOrdinal);
         const auto localVelocity=sampleVelocity(emitter,localPosition,spawn_.seed,particle.spawnOrdinal,
@@ -270,25 +282,81 @@ void CpuParticleSystem::scheduleSegment(double begin,double end,double cycleStar
     }
     if (scheduled>emittedRate) emitBatch(scheduled-emittedRate,rateOffset+static_cast<double>(emittedRate)/rate,1/rate);
 }
+uint64_t CpuParticleSystem::compressedRateCount(double begin,double end) {
+    const auto& emitter=definition_.emitter;
+    const double duration=emitter.duration,compression=1-static_cast<double>(emitter.explosiveness),rate=emitter.rate;
+    const auto clock=[&](double time) {
+        const auto relative=std::max(0.0,time-emitter.delay);
+        if(compression==0)return std::pair{std::max(0.0,std::ceil(relative/duration-1e-10)),0.0};
+        const auto cycle=std::floor(relative/duration+1e-10);
+        const auto phase=relative-cycle*duration;
+        return std::pair{cycle,phase<=0?0:phase>=duration*compression?duration:phase/compression};
+    };
+    if(!explosiveRunActive_||std::abs(begin-explosiveRunEnd_)>1e-12||rate!=explosiveRunRate_) {
+        const auto start=clock(begin);
+        explosiveRunActive_=true;explosiveRunRate_=rate;explosiveRunRemainder_=emissionRemainder_;
+        explosiveRunCycle_=start.first;explosiveRunPartial_=start.second;explosiveRunScheduled_=0;
+    }
+    const auto finish=clock(end);
+    // Compute cumulative mass once per contiguous enabled/rate run, instead
+    // of summing rounded partial windows. Splitting at ticks or work caps must
+    // not move a threshold crossing or discard the fractional cycle budget.
+    const auto amount=explosiveRunRemainder_+(finish.first-explosiveRunCycle_)*(rate*duration)+
+        rate*(finish.second-explosiveRunPartial_);
+    const auto total=scheduledCount(amount);
+    const auto scheduled=total>=explosiveRunScheduled_?total-explosiveRunScheduled_:0;
+    explosiveRunScheduled_=total;explosiveRunEnd_=end;
+    emissionRemainder_=std::max(0.0,amount-static_cast<double>(total));
+    return scheduled;
+}
+void CpuParticleSystem::scheduleExplosiveSegment(double begin,double end,double cycleStart) {
+    const auto& emitter=definition_.emitter;
+    const double compression=1-static_cast<double>(emitter.explosiveness);
+    const auto previousRemainder=emissionRemainder_;
+    const auto activeBegin=std::max(begin,cycleStart);
+    const bool instant=compression==0;
+    const double rate=instant?0:static_cast<double>(emitter.rate)/compression;
+    const auto scheduled=compressedRateCount(begin,end);
+    const auto spacing=rate>0?1/rate:0;
+    const auto rateOffset=instant?cycleStart-elapsed_:activeBegin-elapsed_+(rate>0?(1-previousRemainder)/rate:0);
+    uint64_t emittedRate{};
+    // Historical continuous bursts remain one-shot, even when the new rate
+    // distribution repeats; explicitly looping legacy bursts still repeat.
+    const auto burstOrigin=emitter.finiteDuration&&emitter.loop?cycleStart:static_cast<double>(emitter.delay);
+    for(const auto index:burstOrder_) {
+        const auto& burst=emitter.bursts[index];const auto time=burstOrigin+burst.time;
+        if(time+1e-12<begin||time>=end-1e-12)continue;
+        const auto prefix=instant?(time>cycleStart+1e-12?scheduled:0):static_cast<uint64_t>(std::clamp(
+            std::ceil(previousRemainder+rate*(time-activeBegin)-1e-10)-1,0.0,static_cast<double>(scheduled)));
+        if(prefix>emittedRate){emitBatch(prefix-emittedRate,rateOffset+static_cast<double>(emittedRate)*spacing,spacing);emittedRate=prefix;}
+        emitBatch(burst.count,time-elapsed_,0);++stats_.burstsFired;
+    }
+    if(scheduled>emittedRate)emitBatch(scheduled-emittedRate,rateOffset+static_cast<double>(emittedRate)*spacing,spacing);
+}
 void CpuParticleSystem::dropSchedule(double begin,double end) {
     const auto& emitter=definition_.emitter;
-    const auto amount=emissionRemainder_+emitter.rate*(end-begin);
-    auto dropped=scheduledCount(amount);
-    emissionRemainder_=std::max(0.0,amount-static_cast<double>(dropped));
-    if (emitter.finiteDuration && emitter.loop) {
+    const bool cycling=emitter.finiteDuration?emitter.loop:emitter.explosiveness>0;
+    uint64_t dropped{};
+    if(emitter.explosiveness>0)dropped=compressedRateCount(begin,end);
+    else {
+        const auto amount=emissionRemainder_+emitter.rate*(end-begin);
+        dropped=scheduledCount(amount);
+        emissionRemainder_=std::max(0.0,amount-static_cast<double>(dropped));
+    }
+    if (cycling) {
         const double duration=emitter.duration;
         const auto firstCycle=std::floor((begin-emitter.delay)/duration+1e-10);
         const auto lastCycle=std::ceil((end-emitter.delay)/duration-1e-10)-1;
         stats_.droppedScheduleSegments+=static_cast<uint64_t>(std::max(0.0,lastCycle-firstCycle+1));
-        for (const auto& burst:emitter.bursts) {
+        if(emitter.finiteDuration&&emitter.loop)for (const auto& burst:emitter.bursts) {
             const auto origin=static_cast<double>(emitter.delay)+burst.time;
             const auto first=std::max(0.0,std::ceil((begin-origin)/duration-1e-10));
             const auto last=std::ceil((end-origin)/duration-1e-10)-1;
             const auto crossings=static_cast<uint64_t>(std::max(0.0,last-first+1));
             dropped+=crossings*burst.count;
         }
-    } else {
-        ++stats_.droppedScheduleSegments;
+    } else ++stats_.droppedScheduleSegments;
+    if(!(emitter.finiteDuration&&emitter.loop)) {
         for (const auto& burst:emitter.bursts) {
             const auto time=static_cast<double>(emitter.delay)+burst.time;
             if (time+1e-12>=begin && time<end-1e-12) dropped+=burst.count;
@@ -331,12 +399,13 @@ void CpuParticleSystem::simulateTick() {
         while (begin<emissionEnd-1e-12) {
             if (segments++>=limits_.maximumScheduleSegmentsPerTick) { dropSchedule(begin,emissionEnd);break; }
             double cycleStart=emitter.delay,segmentEnd=emissionEnd;
-            if (emitter.finiteDuration && emitter.loop) {
+            if (emitter.finiteDuration?emitter.loop:emitter.explosiveness>0) {
                 const auto cycle=std::floor((begin-emitter.delay)/emitter.duration+1e-10);
                 cycleStart=static_cast<double>(emitter.delay)+cycle*emitter.duration;
                 segmentEnd=std::min(segmentEnd,cycleStart+emitter.duration);
             }
-            scheduleSegment(begin,segmentEnd,cycleStart);
+            if(emitter.explosiveness>0)scheduleExplosiveSegment(begin,segmentEnd,cycleStart);
+            else scheduleSegment(begin,segmentEnd,cycleStart);
             begin=segmentEnd;
         }
     }
@@ -347,6 +416,10 @@ void CpuParticleSystem::appendPresentation(std::vector<ParticlePresentation>& ou
     const bool interpolate=state_!=ParticlePlaybackState::Stopped && !presentCurrentTick_;
     const auto alpha=std::clamp(interpolationOverride.value_or(interpolation()),0.0,1.0);
     const auto displayTime=interpolate?std::max(0.0,elapsed_-ParticleFixedStep+alpha*ParticleFixedStep):elapsed_;
+    const auto authoredRotation=math::eulerRotationXYZ(emitter.orientation*(std::numbers::pi/180));
+    const bool local=emitter.space==ParticleSpace::Local;
+    const auto localRotation=(presentationWorld?rigidRotation(*presentationWorld):worldRotation_)*authoredRotation;
+    const auto authoredRight=column(authoredRotation,0),authoredUp=column(authoredRotation,1);
     for (const auto& particle:particles_) {
         if (particle.birthTime>displayTime+1e-12) continue;
         double factor=alpha;
@@ -361,7 +434,15 @@ void CpuParticleSystem::appendPresentation(std::vector<ParticlePresentation>& ou
         const auto normalizedAge=std::clamp((displayTime-particle.birthTime)/particle.lifetime,0.0,1.0);
         const auto appearance=appearance_.sample(normalizedAge,appearanceSeed_,particle.spawnOrdinal);
         if(appearance.size<=0)continue; // Authored disappearance is not a simulation overflow.
-        out.push_back({position,appearance.size,appearance.color,particle.spawnOrdinal,appearance.rotation});
+        Vec3 right=column(localRotation,0),up=column(localRotation,1);
+        if (!local) {
+            const auto normal=math::cross(particle.birthRight,particle.birthUp);
+            const auto orient=[&](const Vec3& axis) {
+                return particle.birthRight*axis[0]+particle.birthUp*axis[1]+normal*axis[2];
+            };
+            right=orient(authoredRight);up=orient(authoredUp);
+        }
+        out.push_back({position,appearance.size,appearance.color,particle.spawnOrdinal,appearance.rotation,emitter.billboardMode,right,up});
     }
 }
 

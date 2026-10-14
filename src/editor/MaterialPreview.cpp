@@ -1,5 +1,6 @@
 #include "MaterialPreview.h"
 #include "assets/AssetLibrary.h"
+#include "assets/MaterialGraphReferences.h"
 #include "crimson-renderer/Environment.h"
 #include "crimson-renderer/ImGuiBgfx.h"
 #include "tools/Tools.h"
@@ -9,6 +10,11 @@
 #include <stdexcept>
 
 namespace crimson {
+void MaterialPreview::setNodePreview(std::optional<MaterialGraphPreviewTarget> target) {
+    if(nodePreview_==target)return;
+    nodePreview_=target;nodeDefinitionKey_.clear();
+    if(!target)nodeCurrent_.reset();
+}
 void MaterialPreview::environmentMenu(AssetLibrary& assets) {
     ImGui::PushItemWidth(260);
     ImGui::Checkbox("Environment lighting",&environment_.enabled);
@@ -25,7 +31,7 @@ void MaterialPreview::environmentMenu(AssetLibrary& assets) {
 void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManager& resources,const MaterialAsset& material,double) {
     status_.clear();
     if(current_ && current_->material.id!=material.id) {
-        current_.reset();definitionKey_.clear();navigation_.reset();mesh_=MaterialPreviewMesh::Sphere;cancelInteraction();
+        current_.reset();nodeCurrent_.reset();nodePreview_.reset();nodeDefinitionKey_.clear();definitionKey_.clear();navigation_.reset();mesh_=MaterialPreviewMesh::Sphere;cancelInteraction();
     }
     const auto source=assets.references().resolveEnvironment(environment_.map);
     const auto requestId=source.empty()?std::string(StudioEnvironmentId):source;
@@ -52,19 +58,41 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
     const auto diagnose=[&](const std::string& message){if(!status_.empty())status_+='\n';status_+=message;};
     try {
         auto bindings=assets.materialPreviewBindings(material);
-        if(bindings.sourceReady && bindings.complete) {
-            auto key=serializeMaterialAsset(material);
+        if(bindings.graphPending)diagnose(bindings.diagnostic);
+        if(bindings.sourceReady && bindings.complete && (!bindings.graphPending || !current_ || !current_->bindings.graph)) {
+            auto key=material.surface.graph?std::to_string(materialGraphRenderHash(material.surface)):serializeMaterialAsset(material);
             if(!current_ || definitionKey_!=key || !std::equal(current_->bindings.handles.begin(),current_->bindings.handles.end(),bindings.handles.begin(),[](auto a,auto b){return a.idx==b.idx;}) ||
                 current_->bindings.flags!=bindings.flags || current_->bindings.signatures!=bindings.signatures ||
-                current_->bindings.sourceFingerprints!=bindings.sourceFingerprints) {
+                current_->bindings.sourceFingerprints!=bindings.sourceFingerprints ||
+                (current_->bindings.graph?current_->bindings.graph->signature:0)!=(bindings.graph?bindings.graph->signature:0)) {
                 current_=std::make_shared<Prepared>(Prepared{material,std::move(bindings)});definitionKey_=std::move(key);
             }
-        } else diagnose("Preparing material textures...");
+        } else if(!bindings.graphPending)diagnose("Preparing material textures...");
     } catch(const std::exception& error) {diagnose(error.what());}
-    constexpr const char* names[]{"Sphere","Cube","Rounded Cube","Cylinder","Plane"};
+    if(nodePreview_) {
+        const auto* node=findMaterialNode(material.graph,nodePreview_->node);
+        const auto outputs=node?materialNodeOutputs(material.graph,*node):std::vector<MaterialPinDefinition>{};
+        if(!node || std::none_of(outputs.begin(),outputs.end(),[&](const auto& pin){return pin.pin==nodePreview_->pin;}))setNodePreview({});
+    }
+    if(nodePreview_)try {
+        if(!nodePrograms_)nodePrograms_=assets.createMaterialNodePreviewPrograms();
+        if(!nodePrograms_)throw std::runtime_error("Node preview shader compilation is unavailable.");
+        auto bindings=assets.materialNodePreviewBindings(*nodePrograms_,material,*nodePreview_);
+        if(bindings.graphPending)diagnose(bindings.diagnostic);
+        if(bindings.sourceReady && bindings.complete && !bindings.graphPending && bindings.graph) {
+            const auto key=std::to_string(materialGraphRenderHash(material.surface))+":"+std::to_string(nodePreview_->node)+":"+std::to_string(static_cast<unsigned>(nodePreview_->pin));
+            if(!nodeCurrent_ || nodeDefinitionKey_!=key || nodeCurrent_->bindings.graph->signature!=bindings.graph->signature) {
+                nodeCurrent_=std::make_shared<Prepared>(Prepared{material,std::move(bindings)});nodeDefinitionKey_=key;
+            }
+        }
+        nodePrograms_->trim();
+    } catch(const std::exception& error) {diagnose(error.what());}
+    const auto displayed=nodePreview_ && nodeCurrent_?nodeCurrent_:current_;
+    const bool particlePreview=displayed && usesParticleMaterialPreview(mesh_,displayed->bindings);
+    constexpr const char* names[]{"Sphere","Cube","Rounded Cube","Cylinder","Plane","Sprite"};
     auto selected=static_cast<int>(mesh_);
     ImGui::SetNextItemWidth(std::min(180.f,ImGui::GetContentRegionAvail().x));
-    if(ImGui::Combo("##Preview mesh",&selected,names,5))mesh_=static_cast<MaterialPreviewMesh>(selected);
+    if(ImGui::Combo("##Preview mesh",&selected,names,6))mesh_=static_cast<MaterialPreviewMesh>(selected);
     ImGui::SameLine();if(ImGui::Button("Reset view")){navigation_.reset();cancelInteraction();}
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))ImGui::SetTooltip("MMB tumble · Shift+MMB pan · Ctrl+MMB rotate environment\nWheel zoom · Double-click MMB resets view and environment rotation");
     if(!status_.empty())ImGui::TextWrapped("%s",status_.c_str());
@@ -78,15 +106,16 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
     const auto texture=renderer.materialPreviewTexture();
     // The main tools view precedes the preview views. Do not sample a freshly
     // allocated target until its first submitted preview frame has completed.
-    if(bgfx::isValid(texture) && texture.idx==displayedTarget_ && current_ && environmentRevision_)ImGui::Image(ImTextureRef(ImGuiBgfx::textureId(texture)),size);
+    if(bgfx::isValid(texture) && texture.idx==displayedTarget_ && displayed && environmentRevision_)ImGui::Image(ImTextureRef(ImGuiBgfx::textureId(texture)),size);
     else ImGui::Dummy(size);
     displayedTarget_=texture.idx;
     auto& io=ImGui::GetIO();
     const bool ownsInput=!io.WantTextInput && !ImGui::IsAnyItemActive() &&
         !ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup) && !ImGui::IsKeyPressed(ImGuiKey_Escape,false);
     if(ownsInput && ImGui::IsItemHovered()) {
+        if(ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyCtrl && !io.KeyShift && !io.KeyAlt)selectMaterial_=true;
         if(ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Middle)) {navigation_.reset();environment_.rotation=0;cancelInteraction();}
-        else if(ImGui::IsMouseClicked(ImGuiMouseButton_Middle)){ImGui::SetWindowFocus();gesture_=io.KeyCtrl?3:io.KeyShift?2:1;}
+        else if(ImGui::IsMouseClicked(ImGuiMouseButton_Middle)){ImGui::SetWindowFocus();gesture_=io.KeyCtrl?3:io.KeyShift?2:particlePreview?0:1;}
         if(io.MouseWheel)navigation_.zoom(io.MouseWheel);
     }
     if(!ownsInput || !ImGui::IsMouseDown(ImGuiMouseButton_Middle) || !ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))cancelInteraction();
@@ -94,14 +123,14 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
     if(gesture_==1)navigation_.tumble(delta);
     if(gesture_==2)navigation_.translate(delta);
     if(gesture_==3)environment_.rotation=MaterialPreviewNavigation::rotateEnvironment(environment_.rotation,delta[0]);
-    if(!current_)return;
+    if(!displayed)return;
     SceneSettings settings;settings.camera.position={navigation_.pan[0],navigation_.pan[1],navigation_.distance};
     settings.camera.target={navigation_.pan[0],navigation_.pan[1],0};settings.camera.nearPlane=.1f;settings.camera.farPlane=30;
     settings.exposure=1;settings.environment=environment_;
-    renderer.renderMaterialPreview(settings,current_->material,current_->bindings,mesh_,navigation_.objectTransform(),showBackground_ && environment_.enabled,current_);
+    renderer.renderMaterialPreview(settings,displayed->material,displayed->bindings,mesh_,navigation_.objectTransform(),showBackground_ && environment_.enabled,displayed);
 }
 void MaterialPreview::release(Renderer& renderer) {
-    cancelInteraction();renderer.releaseMaterialPreview();current_.reset();definitionKey_.clear();environmentHandle_={};
+    cancelInteraction();renderer.releaseMaterialPreview();current_.reset();nodeCurrent_.reset();nodePrograms_.reset();nodePreview_.reset();nodeDefinitionKey_.clear();definitionKey_.clear();environmentHandle_={};
     requestedEnvironment_.clear();environmentRevision_=0;displayedTarget_=UINT16_MAX;navigation_.reset();mesh_=MaterialPreviewMesh::Sphere;
 }
 }

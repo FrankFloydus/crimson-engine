@@ -1,27 +1,28 @@
-$input v_particleUv, v_particleColor, v_particleViewPosition
-
+$input v_worldPosition, v_normal, v_texcoord0, v_texcoord1, v_tangent, v_color0, v_localPosition, v_localNormal
 #include <bgfx_shader.sh>
-
+#define CC_GRAPH_SURFACE 0
+#define CC_GRAPH_PARTICLE 1
+#define CC_GRAPH_LIT 1
+uniform vec4 u_graphParams[208];
+uniform vec4 u_particleParams; // RGB texture presence only; alpha is explicitly authored.
+uniform mat4 u_modelNormalMatrix;
+uniform vec4 u_modelUv;
 SAMPLER2D(s_particleColor, 0);
-uniform vec4 u_particleBaseColor;
-uniform vec4 u_particleParams;
+#include "material_graph_common.sh"
 #include "material_mapping.sh"
-#include "fog.sh"
-
-void main()
+GraphMaterial ccEvaluateGraph(GraphContext context)
 {
-    vec2 radial = v_particleUv * 2.0 - 1.0;
-    float edge = max(1.0 - dot(radial, radial), 0.0);
-    // Color-role textures decode RGB in the sampler; alpha remains linear.
-    // A supplied sprite replaces the procedural mask rather than multiplying it.
-    // Billboards retain their 2D UV domain even when the shared material uses
-    // triplanar mapping on 3D meshes; its XY transform and sampler still apply.
-    vec4 sprite = texture2D(s_particleColor, materialUv(v_particleUv));
-    sprite = mix(vec4(1.0, 1.0, 1.0, edge * edge), sprite, u_particleParams.x);
-    float opacity = sprite.a * u_particleBaseColor.a * v_particleColor.a;
-    vec3 radiance = sprite.rgb * u_particleBaseColor.rgb * v_particleColor.rgb;
-    radiance = applyDistanceFog(radiance, length(v_particleViewPosition.xyz), v_particleViewPosition.w, u_particleParams.y);
-    // Premultiply once. Alpha OVER accumulates coverage; Additive preserves it.
-    gl_FragColor = vec4(fogPremultipliedChannel(radiance.x, opacity),
-        fogPremultipliedChannel(radiance.y, opacity), fogPremultipliedChannel(radiance.z, opacity), opacity);
+    GraphMaterial result;
+    result.baseColor = u_graphParams[0].rgb;
+    if (u_particleParams.x > 0.5)
+        result.baseColor *= ccGraphSample(s_particleColor, context, u_materialUvScale, u_materialUvOffset, u_materialUvRotation, vec4(0.0, 1.0, 0.0, 0.0)).rgb;
+    result.opacity = clamp(u_graphParams[0].a, 0.0, 1.0);
+    result.roughness = u_graphParams[1].x;
+    result.metallic = u_graphParams[1].y;
+    result.occlusion = u_graphParams[1].z;
+    result.emission = u_graphParams[2].rgb;
+    result.specular = u_graphParams[4].x;
+    result.normal = context.normal;
+    return result;
 }
+#include "material_graph_particle.sh"

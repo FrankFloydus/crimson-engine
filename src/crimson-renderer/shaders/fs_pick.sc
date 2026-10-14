@@ -7,6 +7,7 @@ uniform vec4 u_modelEmissive;
 uniform vec4 u_modelUv;
 uniform vec4 u_modelOptions;
 uniform vec4 u_modelMaps;
+uniform vec4 u_modelEmissiveMap;
 uniform vec4 u_pickId;
 SAMPLER2D(s_albedo, 0);
 #include "material_mapping.sh"
@@ -22,5 +23,6 @@ void main()
         alpha *= materialSample(s_albedo, uv, position, normal).a;
     }
     if (u_modelOptions.y > 0.5 && alpha < u_modelEmissive.w) discard;
+    if (u_modelEmissiveMap.w > 0.5 && alpha < 0.01) discard;
     gl_FragColor = u_pickId;
 }

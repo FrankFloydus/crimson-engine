@@ -8,6 +8,7 @@ Native Windows x64 ARPG engine foundation: C++20, MSVC, CMake, SDL3, bgfx/Direct
 - Keep work within the requested slice. Add later systems when their slice needs them; a planned interface is not evidence that it already exists.
 - Implement only features and UI the user requested. Do not add unsolicited features or explanatory text to panel bodies. When help is necessary, use a short tooltip; omit long explanations or put them in documentation.
 - Follow [Editor UI conventions](docs/ENGINE_ARCHITECTURE.md#editor-ui-conventions) for every new or modified editor. Reuse the shared document-editor menu component; keep File/Edit actions, property sections and shortcuts consistent across editors.
+- Follow [Material node authoring conventions](docs/MATERIAL_NODE_AUTHORING.md) for material graph nodes, inline controls, color editing, typed inputs and preview behavior.
 - Use [README.md](README.md) for setup and user-facing controls. `docs/VERIFICATION.md` is historical evidence, not an active workflow or a required handoff document.
 
 ## Build, run, and verify
@@ -31,6 +32,7 @@ Run from this project root in PowerShell. `Build.cmd` initializes MSVC x64; use 
 - `test` and `configure` are alternative second arguments, not combinable flags. The executable is `build/Release/bin/crimson-renderer.exe`.
 - The launcher builds only if its executable is missing. It does not check source freshness; build changed code before launching it.
 - `Dev.cmd` builds/launches Debug. Use Release for ordinary handoffs and Debug when the task needs it. Close the running renderer before rebuilding its executable.
+- Ask the user to save and close a running renderer only when implementation is finished and the integration build is ready to start. Never ask at task start or while implementation is still underway; the user may continue using the editor during that work.
 - For code changes, use one incremental integration build after implementation owners finish, followed by focused CPU tests. Expand or repeat checks when failures or unresolved concerns justify them. The user performs feature acceptance after the implementation is ready.
 - Computer control, including mouse/keyboard automation and interacting with the user's applications, requires the user's permission. Noninteractive screenshots are allowed. Do not run routine native acceptance/capture suites or maintain `VERIFICATION.md` as part of feature completion.
 - Documentation-only changes need consistency/link checks, not an application build. Routine handoffs do not need Debug/Release matrices, UI scaling matrices, or broad image suites.

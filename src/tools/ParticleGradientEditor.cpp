@@ -142,7 +142,7 @@ ParticleAppearanceEdit drawParticleGradientEditor(ParticleColorGradient& gradien
         Vec3 rgb{color.x,color.y,color.z};float opacity=color.w;
         ImGui::PushID(live.control.selected_mark().as_imgui_id());
         const auto changes=drawHdrColorControl("Stop color",rgb,&opacity,editor,true,MaximumParticleColor);
-        state.colorIntensityMinimum=editor.intensityMinimum;state.colorIntensityMaximum=editor.intensityMaximum;
+        state.colorChannelMinimum=editor.channelMinimum;state.colorChannelMaximum=editor.channelMaximum;
         state.colorOpacityMinimum=editor.opacityMinimum;state.colorOpacityMaximum=editor.opacityMaximum;
         ImGui::PopID();
         interactionActive|=changes.active;

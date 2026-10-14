@@ -137,10 +137,54 @@ void sceneHoldsMovedEdges() {
     near(retimed.color[3],.5,"Live movement of the first gradient stop did not update scene opacity.");
     near(scene.instance(11)->maxPresentationSize(),.8,"Moving key ages lost conservative value bounds.");
 }
+void orientationUsesScenePresentationTransforms() {
+    const auto vectorNear=[](const Vec3& actual,const Vec3& expected,const char* message) {
+        for(std::size_t axis=0;axis<3;++axis)near(actual[axis],expected[axis],message);
+    };
+    for(const auto space:{ParticleSpace::World,ParticleSpace::Local}) {
+        auto asset=effect();auto& emitter=asset->emitter;
+        emitter.space=space;emitter.size=2;emitter.orientation={15,35,20};emitter.rotation=30;
+        require(emitter.billboardMode==ParticleBillboardMode::Disabled,"New scene effect unexpectedly enables billboarding.");
+        uint64_t revision=1;
+        const auto query=[&](const std::string&)->ParticleDefinitionVersion{return {asset,revision,{}};};
+        const auto birthRotation=math::eulerRotationXYZ({0,.3f,0});
+        std::vector<ExtractedParticle> authored{{11,asset->id,math::translation({2,3,4})*birthRotation}};
+        SceneParticles scene;scene.reconcile(1,authored,query,ParticleFixedStep,NoEntity,1);
+        const Snapshot before(*scene.instance(11));
+        authored[0].world=math::translation({5,6,7})*math::eulerRotationXYZ({0,1,0});
+        const auto displayRotation=math::eulerRotationXYZ({0,.7f,0});
+        const std::vector<ExtractedParticle> displayed{{11,asset->id,math::translation({4,5,6})*displayRotation}};
+        scene.reconcile(1,authored,query,0,NoEntity,1,displayed);
+        before.unchanged(*scene.instance(11));
+        const auto shown=packet(scene,11);
+        const auto orientation=math::eulerRotationXYZ(emitter.orientation*(std::numbers::pi/180));
+        const auto expected=(space==ParticleSpace::World?birthRotation:displayRotation)*orientation;
+        vectorNear(shown.right,math::transformDirection(expected,{1,0,0}),"Scene particle right axis ignored its birth/local presentation frame.");
+        vectorNear(shown.up,math::transformDirection(expected,{0,1,0}),"Scene particle up axis ignored its authored XYZ orientation.");
+        near(shown.rotation,std::numbers::pi/6,"Scene orientation consumed the independent rotation track.");
+        const auto bounds=scene.bounds(11);require(bounds.has_value(),"Oriented scene particle lost selection bounds.");
+        const auto right=shown.right*std::cos(shown.rotation)+shown.up*std::sin(shown.rotation);
+        const auto up=shown.up*std::cos(shown.rotation)-shown.right*std::sin(shown.rotation);
+        for(const auto x:{-1,1})for(const auto y:{-1,1}) {
+            const auto corner=shown.position+(right*x+up*y)*(shown.size*.5);
+            for(std::size_t axis=0;axis<3;++axis)
+                require(corner[axis]>=bounds->minimum[axis]-1e-5 && corner[axis]<=bounds->maximum[axis]+1e-5,
+                    "Selection bounds clipped an oriented particle corner.");
+        }
+        emitter.billboardMode=ParticleBillboardMode::Enabled;++revision;
+        scene.reconcile(1,authored,query,0,NoEntity,1,displayed);
+        before.unchanged(*scene.instance(11));
+        require(packet(scene,11).billboardMode==ParticleBillboardMode::Enabled,"Billboard mode revision did not reach the scene packet.");
+        emitter.billboardMode=ParticleBillboardMode::Disabled;++revision;
+        scene.reconcile(1,authored,query,0,NoEntity,1,displayed);
+        before.unchanged(*scene.instance(11));
+        vectorNear(packet(scene,11).right,shown.right,"Billboard mode switching lost inactive orientation.");
+    }
+}
 }
 int main() {
     try {
-        liveRevisionsPreserveIndependentInstances();boundsCoverSelectedAppearanceModes();sceneHoldsMovedEdges();
+        liveRevisionsPreserveIndependentInstances();boundsCoverSelectedAppearanceModes();sceneHoldsMovedEdges();orientationUsesScenePresentationTransforms();
         std::cout<<"Step 4 scene appearance revisions, independent clocks, rotation packets and conservative bounds checks passed.\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

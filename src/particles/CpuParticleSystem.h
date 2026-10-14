@@ -47,6 +47,7 @@ private:
     ParticleEffectAsset definition_;
     ParticleSimulationLimits limits_;
     Mat4 world_;
+    Mat4 worldRotation_; // Scale/shear-free emitter frame; never changes particle size.
     std::vector<ParticleState> particles_;
     ParticleStats stats_;
     PreparedParticleAppearance appearance_;
@@ -54,6 +55,9 @@ private:
     ParticlePlaybackState state_{ParticlePlaybackState::Stopped};
     uint64_t seed_{1}, nextSpawnOrdinal_{};
     double elapsed_{}, remainder_{}, emissionRemainder_{};
+    bool explosiveRunActive_{};
+    double explosiveRunEnd_{},explosiveRunRate_{},explosiveRunRemainder_{},explosiveRunCycle_{},explosiveRunPartial_{};
+    uint64_t explosiveRunScheduled_{};
     bool presentCurrentTick_{}; // Show the warmed final state until an ordinary tick advances it.
     std::vector<size_t> burstOrder_; // Authored identities remain stable; only this execution index is sorted.
     struct PreparedSpawn {
@@ -68,6 +72,8 @@ private:
     void simulateTick();
     void emitBatch(uint64_t count,double offset,double spacing);
     void scheduleSegment(double begin,double end,double cycleStart);
+    void scheduleExplosiveSegment(double begin,double end,double cycleStart);
+    uint64_t compressedRateCount(double begin,double end);
     void dropSchedule(double begin,double end);
 };
 

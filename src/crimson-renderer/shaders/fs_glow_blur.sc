@@ -1,6 +1,7 @@
 $input v_texcoord0
 
 #include <bgfx_shader.sh>
+#include "glow_kernel.sh"
 
 SAMPLER2D(s_glowSource,0);
 uniform vec4 u_glowParams; // Exposure, threshold, vertical orientation, Size.
@@ -12,16 +13,16 @@ void main()
     uv.y = mix(uv.y,1.0-uv.y,u_glowParams.z);
     // Source and destination have the same dimensions, so integer offsets hit
     // texel centers exactly. Contiguous taps prevent holes around tiny sparks.
-    // Size 1 uses 17 fetches; the maximum Size 8 is bounded at 129 per pass.
-    float sigma = max(0.25,3.25*u_glowParams.w);
-    int radius = int(min(64.0,ceil(8.0*u_glowParams.w)));
-    float inverseTwoVariance = 0.5/(sigma*sigma);
+    // Preserve the authored Gaussian width, including its HDR-visible tail.
+    // Size 1 uses 51 fetches; the maximum Size 8 is bounded at 391 per pass.
+    float sigma = glowKernelSigma(u_glowParams.w);
+    int radius = glowKernelRadius(sigma);
     vec3 color = vec3_splat(0.0);
     float totalWeight = 0.0;
     for (int offset=-radius;offset<=radius;++offset)
     {
         float distance = float(offset);
-        float weight = exp(-distance*distance*inverseTwoVariance);
+        float weight = glowKernelWeight(distance,sigma);
         color += texture2D(s_glowSource,uv+u_glowTexel.zw*distance).rgb*weight;
         totalWeight += weight;
     }

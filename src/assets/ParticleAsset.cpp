@@ -95,6 +95,20 @@ ParticleSpace readSpace(const std::string& space) {
     if (space=="local") return ParticleSpace::Local;
     throw std::runtime_error("Unsupported particle simulation space.");
 }
+const char* billboardName(ParticleBillboardMode mode) {
+    switch (mode) {
+    case ParticleBillboardMode::Disabled: return "disabled";
+    case ParticleBillboardMode::Enabled: return "enabled";
+    case ParticleBillboardMode::FixedY: return "fixed-y";
+    }
+    throw std::runtime_error("Unsupported particle billboard mode.");
+}
+ParticleBillboardMode readBillboardMode(const std::string& name) {
+    if (name=="disabled") return ParticleBillboardMode::Disabled;
+    if (name=="enabled") return ParticleBillboardMode::Enabled;
+    if (name=="fixed-y") return ParticleBillboardMode::FixedY;
+    throw std::runtime_error("Unsupported particle billboard mode.");
+}
 const char* velocityName(ParticleVelocityMode mode) {
     switch (mode) { case ParticleVelocityMode::Vector: return "vector"; case ParticleVelocityMode::DirectionSpeed: return "direction-speed"; }
     throw std::runtime_error("Unsupported particle initial velocity mode.");
@@ -254,6 +268,7 @@ void validateParticleAsset(const ParticleEffectAsset& asset) {
         throw std::runtime_error("Particle effect and emitter require valid names and a persistent emitter identity.");
     if (!math::finite(emitter.rate) || emitter.rate<0 || emitter.rate>MaximumParticleRate)
         throw std::runtime_error("Emission rate must be finite and between 0 and 100000 particles/s.");
+    boundedFloat(emitter.explosiveness,0,1,"Emitter explosiveness");
     if (!math::finite(emitter.lifetime) || emitter.lifetime<0.001f || emitter.lifetime>3600)
         throw std::runtime_error("Particle lifetime must be finite and between 0.001 and 3600 seconds.");
     if (!math::finite(emitter.size) || emitter.size<0.0001f || emitter.size>10000)
@@ -297,6 +312,8 @@ void validateParticleAsset(const ParticleEffectAsset& asset) {
         throw std::runtime_error("Particle acceleration must contain finite supported values.");
     boundedFloat(emitter.drag,0,MaximumParticleDrag,"Particle drag");
     boundedFloat(emitter.rotation,-MaximumParticleRotation,MaximumParticleRotation,"Particle rotation");
+    (void)billboardName(emitter.billboardMode);
+    for (float angle:emitter.orientation) boundedFloat(angle,-MaximumParticleRotation,MaximumParticleRotation,"Particle orientation");
     validateScalarTrack(emitter.sizeTrack,0,10000,"Size appearance");
     validateScalarTrack(emitter.intensityTrack,0,100000,"Intensity appearance");
     validateScalarTrack(emitter.rotationTrack,-MaximumParticleRotation,MaximumParticleRotation,"Rotation appearance");
@@ -306,6 +323,30 @@ void validateParticleAsset(const ParticleEffectAsset& asset) {
         for (std::size_t channel=0;channel<3;++channel) boundedFloat(stop.color[channel],0,MaximumParticleColor,"Particle gradient linear HDR RGB");
         boundedFloat(stop.color[3],0,1,"Particle gradient opacity");
     }
+}
+bool setParticleExplosiveness(ParticleEmitterDefinition& emitter,float value) {
+    boundedFloat(value,0,1,"Emitter explosiveness");
+    ParticleEffectAsset candidate;
+    candidate.emitter=emitter;
+    validateParticleAsset(candidate);
+    auto& changed=candidate.emitter;
+    if (!changed.bursts.empty()) {
+        uint64_t count{};
+        for (const auto& burst:changed.bursts) {
+            count+=burst.count;
+            if (!changed.finiteDuration) changed.duration=std::max(changed.duration,burst.time);
+        }
+        const double rate=static_cast<double>(changed.rate)+static_cast<double>(count)/changed.duration;
+        if (rate>MaximumParticleRate)
+            throw std::runtime_error("Explosiveness cannot adopt this legacy schedule: its combined emission rate exceeds 100000 particles/s.");
+        changed.rate=static_cast<float>(rate);
+        changed.bursts.clear();
+    }
+    changed.explosiveness=value;
+    validateParticleAsset(candidate);
+    if (changed==emitter) return false;
+    emitter=std::move(changed);
+    return true;
 }
 std::filesystem::path particleAssetPath(const std::filesystem::path& root,const std::string& id) {
     validateId(id);
@@ -322,25 +363,28 @@ std::string serializeParticleAsset(const ParticleEffectAsset& asset) {
     const auto& e=asset.emitter;
     Json bursts=Json::array();
     for (const auto& burst:e.bursts) bursts.push_back({{"id",hex(burst.id)},{"time",burst.time},{"count",burst.count}});
-    return Json{{"version",7},{"type","crimson-particle"},{"id",asset.id},{"name",asset.name},{"defaultSeed",hex(asset.defaultSeed)},
+    Json result={{"version",9},{"type","crimson-particle"},{"id",asset.id},{"name",asset.name},{"defaultSeed",hex(asset.defaultSeed)},
         {"preprocessSeconds",asset.preprocessSeconds},
-        {"emitters",Json::array({Json{{"id",hex(e.id)},{"name",e.name},{"enabled",e.enabled},{"rate",e.rate},{"lifetime",e.lifetime},
+        {"emitters",Json::array({Json{{"id",hex(e.id)},{"name",e.name},{"enabled",e.enabled},{"rate",e.rate},{"explosiveness",e.explosiveness},{"lifetime",e.lifetime},
             {"initialVelocity",e.initialVelocity},{"gravity",e.gravity},{"size",e.size},{"color",e.color},{"intensity",e.intensity},
             {"capacity",e.capacity},{"material",e.material.id},{"opacity",e.opacity},{"space",spaceName(e.space)},
             {"shape",shapeName(e.shape)},{"radius",e.radius},{"boxSize",e.boxSize},{"lifetimeRange",rangeJson(e.lifetimeRange)},
             {"velocityMode",velocityName(e.velocityMode)},{"direction",e.direction},{"directionMode",directionName(e.directionMode)},
             {"directionSpread",e.directionSpread},{"directionFlatness",e.directionFlatness},{"speed",e.speed},{"speedRange",rangeJson(e.speedRange)},
             {"timing",{{"delay",e.delay},{"finiteDuration",e.finiteDuration},{"duration",e.duration},{"loop",e.loop}}},
-            {"bursts",std::move(bursts)},{"acceleration",e.acceleration},{"drag",e.drag},
+            {"acceleration",e.acceleration},{"drag",e.drag},
             {"behaviors",{{"gravity",behaviorJson(e.gravityBehavior)},{"acceleration",behaviorJson(e.accelerationBehavior)},{"drag",behaviorJson(e.dragBehavior)}}},
+            {"billboardMode",billboardName(e.billboardMode)},{"orientation",e.orientation},
             {"rotation",e.rotation},{"appearanceTracks",{{"size",scalarTrackJson(e.sizeTrack)},{"intensity",scalarTrackJson(e.intensityTrack)},
                 {"rotation",scalarTrackJson(e.rotationTrack)},{"color",colorTrackJson(e)}}},
-            {"renderer","sprite"},{"colorSpace","linear-hdr"}}})}}.dump(2)+"\n";
+            {"renderer","sprite"},{"colorSpace","linear-hdr"}}})}};
+    if (!bursts.empty()) result["emitters"][0]["legacyBursts"]=std::move(bursts);
+    return result.dump(2)+"\n";
 }
 ParticleEffectAsset deserializeParticleAsset(std::string_view text,const std::string& expectedId) {
     if (text.size()>MaximumParticleAssetBytes) throw std::runtime_error("Particle asset exceeds 1 MiB.");
     const auto json=Json::parse(text);
-    if (!json.at("version").is_number_integer() || (json.at("version")!=1&&json.at("version")!=2&&json.at("version")!=3&&json.at("version")!=4&&json.at("version")!=5&&json.at("version")!=6&&json.at("version")!=7) || json.at("type")!="crimson-particle")
+    if (!json.at("version").is_number_integer() || json.at("version")<1 || json.at("version")>9 || json.at("type")!="crimson-particle")
         throw std::runtime_error("Unsupported particle asset type or version.");
     ParticleEffectAsset asset;
     asset.id=json.at("id").get<std::string>();
@@ -360,13 +404,26 @@ ParticleEffectAsset deserializeParticleAsset(std::string_view text,const std::st
     const bool flatnessVersion=json.at("version")>=4;
     const bool appearanceVersion=json.at("version")>=5;
     const bool hdrVersion=json.at("version")>=6;
+    const bool explosivenessVersion=json.at("version")>=8;
     const std::string renderer=legacy?"procedural-additive":"sprite";
     if ((!extended && source.value("space",std::string{"world"})!="world") || source.value("renderer",renderer)!=renderer ||
         source.value("colorSpace",std::string{hdrVersion?"linear-hdr":"srgb"})!=(hdrVersion?"linear-hdr":"srgb"))
         throw std::runtime_error("Unsupported particle space, renderer or authored color convention.");
     auto& e=asset.emitter;
+    // All previous sprite versions faced the camera unconditionally. Retain
+    // that appearance in memory; only an explicit save writes the new fields.
+    e.billboardMode=ParticleBillboardMode::Enabled;
+    if (json.at("version")>=9) {
+        e.billboardMode=readBillboardMode(source.at("billboardMode").get<std::string>());
+        e.orientation=source.at("orientation").get<Vec3>();
+    }
     e.id=readHex(source.at("id")); e.name=source.at("name").get<std::string>(); e.enabled=source.at("enabled").get<bool>();
     e.rate=source.at("rate").get<float>(); e.lifetime=source.at("lifetime").get<float>();
+    if (explosivenessVersion) {
+        const auto& value=source.at("explosiveness");
+        if (!value.is_number()) throw std::runtime_error("Emitter explosiveness must be a number.");
+        e.explosiveness=value.get<float>();
+    }
     e.initialVelocity=source.at("initialVelocity").get<Vec3>(); e.gravity=source.at("gravity").get<Vec3>();
     e.size=source.at("size").get<float>(); e.color=source.at("color").get<Vec3>(); e.intensity=source.at("intensity").get<float>();
     if(!legacy){e.material=AssetRef<MaterialAsset>{source.at("material").get<std::string>()};e.opacity=source.at("opacity").get<float>();}
@@ -390,10 +447,12 @@ ParticleEffectAsset deserializeParticleAsset(std::string_view text,const std::st
         const auto& timing=source.at("timing");
         e.delay=timing.at("delay").get<float>(); e.finiteDuration=timing.at("finiteDuration").get<bool>();
         e.duration=timing.at("duration").get<float>(); e.loop=timing.at("loop").get<bool>();
-        const auto& bursts=source.at("bursts");
-        if (!bursts.is_array() || bursts.size()>MaximumParticleBursts) throw std::runtime_error("An emitter supports an array of at most 64 bursts.");
-        e.bursts.reserve(bursts.size());
-        for (const auto& burst:bursts) e.bursts.push_back({readHex(burst.at("id")),burst.at("time").get<float>(),boundedCount(burst.at("count"),MaximumParticleCapacity,"Burst count")});
+        if (!explosivenessVersion || source.contains("legacyBursts")) {
+            const auto& bursts=source.at(explosivenessVersion?"legacyBursts":"bursts");
+            if (!bursts.is_array() || bursts.size()>MaximumParticleBursts) throw std::runtime_error("An emitter supports an array of at most 64 legacy bursts.");
+            e.bursts.reserve(bursts.size());
+            for (const auto& burst:bursts) e.bursts.push_back({readHex(burst.at("id")),burst.at("time").get<float>(),boundedCount(burst.at("count"),MaximumParticleCapacity,"Burst count")});
+        }
         e.acceleration=source.at("acceleration").get<Vec3>(); e.drag=source.at("drag").get<float>();
         const auto& behaviors=source.at("behaviors");
         if (!behaviors.is_object() || behaviors.size()!=3) throw std::runtime_error("Only the implemented gravity, acceleration and drag behaviors are supported.");

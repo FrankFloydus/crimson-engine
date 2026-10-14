@@ -86,7 +86,7 @@ std::optional<Aabb> SceneParticles::bounds(EntityId id) const {
     if(found==instances_.end() || found->second.simulation.particles().empty())return std::nullopt;
     const auto* simulation=&found->second.simulation;
     Aabb bounds;
-    // A camera-plane square can rotate about its center. Use its half diagonal
+    // A square can rotate in any plane about its center. Use its half diagonal
     // and the prepared lifetime maximum for conservative selection bounds.
     const auto radius=simulation->maxPresentationSize()*.7071067812f;
     for(const auto& p:simulation->particles()) {

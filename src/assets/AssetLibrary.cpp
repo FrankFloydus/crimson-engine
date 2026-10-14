@@ -8,6 +8,8 @@
 #include "AtomicFile.h"
 #include "resources/TextureStreamer.h"
 #include "resources/StreamingModel.h"
+#include "resources/CacheIO.h"
+#include "MaterialGraphReferences.h"
 
 #include <SDL3/SDL.h>
 #include <bimg/decode.h>
@@ -354,7 +356,7 @@ std::shared_ptr<const ModelAsset> AssetLibrary::findModel(const std::string& id)
                     bool incompatible=false;
                     for(const auto& primitive:data->primitives) if(primitive.material<data->materials.size()) {
                         const auto& material=data->materials[primitive.material];
-                        if(!material.triplanar && !material.normalTexture.image.empty() && primitive.tangentUv!=material.normalTexture.texCoord) incompatible=true;
+                        if(!material.graph && !material.triplanar && !material.normalTexture.image.empty() && primitive.tangentUv!=material.normalTexture.texCoord) incompatible=true;
                     }
                     if(incompatible) data.reset();
                 }
@@ -385,8 +387,13 @@ std::shared_ptr<const ModelAsset> AssetLibrary::findModel(const std::string& id)
     return found == models_.end() ? nullptr : *found;
 }
 std::shared_ptr<const MaterialAsset> AssetLibrary::findMaterial(const std::string& id)const {
-    const auto resolved=references_.resolve(id);if(resolved==DefaultMaterialId)return std::make_shared<MaterialAsset>(defaultMaterialAsset());
-    if(resolved==DefaultParticleMaterialId)return std::make_shared<MaterialAsset>(defaultParticleMaterialAsset());
+    const auto resolved=references_.resolve(id);
+    if(resolved==DefaultMaterialId) {
+        static const auto value=[] {auto material=defaultMaterialAsset();canonicalizeMaterialAsset(material);return std::make_shared<const MaterialAsset>(std::move(material));}();return value;
+    }
+    if(resolved==DefaultParticleMaterialId) {
+        static const auto value=[] {auto material=defaultParticleMaterialAsset();canonicalizeMaterialAsset(material);return std::make_shared<const MaterialAsset>(std::move(material));}();return value;
+    }
     materialInterest_[resolved]=std::chrono::steady_clock::now();
     if(const auto authored=authoredMaterials_.find(resolved);authored!=authoredMaterials_.end()&&authored->second.definition)return authored->second.definition;
     if(resources_ && !resolved.empty()) {
@@ -417,7 +424,9 @@ std::string AssetLibrary::materialDiagnostic(const std::string& id) const {
     return "Unresolved material: "+id;
 }
 void AssetLibrary::publishMaterial(std::shared_ptr<const MaterialAsset> material) {
-    if(!material)return;validateMaterialAsset(*material);
+    if(!material)return;
+    auto canonical=std::make_shared<MaterialAsset>(*material);canonicalizeMaterialAsset(*canonical);material=std::move(canonical);
+    validateMaterialAsset(*material);
     if(material->id.starts_with("builtin:")||references_.deleted(material->id))throw std::runtime_error("Protected or deleted material cannot be published.");
     (void)materialAssetPath(projectRoot_,material->id);auto& version=authoredMaterials_[material->id];
     if(version.definition&&serializeMaterialAsset(*version.definition)==serializeMaterialAsset(*material)){version.diagnostic.clear();return;}
@@ -442,8 +451,8 @@ ModelResolvers AssetLibrary::modelResolvers()const {
     const auto policy=references_;const auto root=projectRoot_;
     return {[policy](const auto& id){return policy.resolveTexture(id);},[policy,root](const auto& id)->std::optional<ModelMaterial>{
         const auto resolved=policy.resolveMaterial(id);if(resolved==DefaultMaterialId)return defaultMaterialAsset().surface;
-        if(resolved==DefaultParticleMaterialId)throw std::runtime_error("Particle material is unsupported by the model renderer.");
-        if(!resolved.empty()&&std::filesystem::exists(root/fromUtf8(resolved))){const auto material=loadMaterialAsset(root,resolved);if(!modelMaterialCompatible(material))throw std::runtime_error("Model material requires Standard PBR with Opaque or Mask blending: "+material.name);return material.surface;}return {};
+        if(resolved==DefaultParticleMaterialId){auto material=defaultParticleMaterialAsset();canonicalizeMaterialAsset(material);return material.surface;}
+        if(!resolved.empty()&&std::filesystem::exists(root/fromUtf8(resolved))){const auto material=loadMaterialAsset(root,resolved);return modelMaterialCompatible(material)?material.surface:defaultMaterialAsset().surface;}return {};
     }};
 }
 std::vector<ModelMaterial> AssetLibrary::resolvedModelMaterials(const ModelAsset& model,const std::string& materialOverride)const {
@@ -451,11 +460,25 @@ std::vector<ModelMaterial> AssetLibrary::resolvedModelMaterials(const ModelAsset
     if(!materialOverride.empty() && !isBuiltinModel(model.id))throw std::runtime_error("Instance materials are supported only on built-in Box models.");
     for(size_t i=0;i<result.size();++i) {
         const auto id=!materialOverride.empty()?materialOverride:i<model.materialIds.size()?model.materialIds[i]:importedMaterialId(model.id,i);
-        if(auto material=findMaterial(id)){if(!modelMaterialCompatible(*material))throw std::runtime_error("Model material requires Standard PBR with Opaque or Mask blending: "+material->name);result[i]=material->surface;}
+        if(auto material=findMaterial(id))result[i]=modelMaterialCompatible(*material)?material->surface:defaultMaterialAsset().surface;
     }
     for(const auto& primitive:model.primitives) {
         if(primitive.material>=result.size()) throw std::runtime_error("Model has an invalid material reference.");
         const auto& material=result[primitive.material];
+        if(material.graph) {
+            const auto& output=materialOutputNode(*material.graph).output;
+            for(const auto nodeId:materialGraphOrder(*material.graph,output.shading,output.blend)) {
+                const auto* node=findMaterialNode(*material.graph,nodeId);
+                if(node->kind!=MaterialNodeKind::Texture2D || node->texture.image.empty())continue;
+                auto mode=MaterialUvMode::UV0;
+                if(const auto* link=materialInputLink(*material.graph,nodeId,MaterialPin::UV))mode=findMaterialNode(*material.graph,link->fromNode)->uv.mode;
+                if(mode==MaterialUvMode::UV0 || mode==MaterialUvMode::UV1) {
+                    const auto uv=mode==MaterialUvMode::UV1?1u:0u;
+                    if(!(primitive.uvMask&(1u<<uv)))throw std::runtime_error("Texture node "+std::to_string(nodeId)+" requires unavailable UV"+std::to_string(uv)+": "+material.name);
+                }
+            }
+            continue; // The graph normal path reconstructs a basis for a different UV set.
+        }
         if(material.triplanar)continue; // Local projection does not consume mesh UVs or tangents.
         for(const auto* slot:{&material.baseColorTexture,&material.metallicRoughnessTexture,&material.normalTexture,&material.occlusionTexture,&material.emissiveTexture})
             if(!slot->image.empty() && (slot->texCoord>1 || !(primitive.uvMask&(1u<<slot->texCoord))))
@@ -528,12 +551,20 @@ void AssetLibrary::onFileChanged(const std::filesystem::path& changed) {
     if(changed.extension()==".crimson-material") refreshMaterials();
     if(changed.extension()==".crimson-particle") refreshParticles();
 }
+std::uint64_t AssetLibrary::materialShaderRevision()const {return graphPrograms_?graphPrograms_->revision():0;}
+std::vector<std::filesystem::path> AssetLibrary::materialShaderDependencies() const {return graphPrograms_?graphPrograms_->sourceDependencies():std::vector<std::filesystem::path>{};}
 void AssetLibrary::setTextureDemand(std::uint32_t edge,bool nativeQuality) { textureDemand_=std::max(1u,edge);nativeTextures_=nativeQuality; }
-std::size_t AssetLibrary::textureResidentBytes() const { return textureStreamer_ ? textureStreamer_->residentBytes() : 0; }
-void AssetLibrary::trimTextureCache(std::size_t bytes) { if(textureStreamer_) textureStreamer_->trim(bytes); }
+std::size_t AssetLibrary::textureResidentBytes() const { return (textureStreamer_ ? textureStreamer_->residentBytes() : 0)+(graphPrograms_?graphPrograms_->residentBytes():0); }
+void AssetLibrary::trimTextureCache(std::size_t bytes) {
+    const auto programs=graphPrograms_?graphPrograms_->residentBytes():0;
+    if(textureStreamer_)textureStreamer_->trim(programs>=bytes?0:bytes-programs);
+}
 bool AssetLibrary::modelBindingsReady(const std::vector<ModelMaterialTextures>& bindings) const {
-    for(const auto& material:bindings) for(size_t slot=0;slot<material.handles.size();++slot)
-        if(material.flags[slot]!=UINT32_MAX && !bgfx::isValid(material.handles[slot])) return false;
+    for(const auto& material:bindings) {
+        if(material.graph)for(const auto& source:material.graph->sources)if(!bgfx::isValid(material.graph->textures[source.slot]))return false;
+        for(size_t slot=0;slot<material.handles.size();++slot)
+            if(material.flags[slot]!=UINT32_MAX && !bgfx::isValid(material.handles[slot]))return false;
+    }
     return true;
 }
 bool AssetLibrary::modelMaterialsReady(const ModelAsset& model,const std::string& materialOverride) const {
@@ -543,7 +574,7 @@ bool AssetLibrary::modelMaterialsReady(const ModelAsset& model,const std::string
         const auto target=references_.resolveMaterial(id);
         if(target==DefaultMaterialId || target.empty()) continue;
         const auto material=findMaterial(target);
-        if(!material||!modelMaterialCompatible(*material)||!materialDiagnostic(target).empty())return false;
+        if(!material||!materialDiagnostic(target).empty())return false;
     }
     return true;
 }
@@ -553,7 +584,7 @@ std::string AssetLibrary::modelMaterialsDiagnostic(const ModelAsset& model,const
     for(const auto& id:ids) {
         const auto target=references_.resolveMaterial(id);
         if(target.empty() || target==DefaultMaterialId) continue;
-        if(const auto material=findMaterial(target);material&&!modelMaterialCompatible(*material))return "Model material requires Standard PBR with Opaque or Mask blending: "+material->name;
+        if(const auto material=findMaterial(target);material&&!modelMaterialCompatible(*material))return "Mesh material is invalid: "+material->name;
         const auto diagnostic=materialDiagnostic(target);if(!diagnostic.empty())return diagnostic;
     }
     return {};
@@ -844,9 +875,10 @@ MaterialTextures AssetLibrary::bindings(const Material& material) {
 std::vector<ModelMaterialTextures> AssetLibrary::modelBindings(const ModelAsset& model,std::span<const ModelMaterial> materials) {
     if(materials.empty())materials=model.materials;
     std::vector<ModelMaterialTextures> result;result.reserve(materials.size());
-    for(const auto& material:materials)result.push_back(materialBindings(material,false));return result;
+    for(const auto& material:materials)result.push_back(materialBindings(material));return result;
 }
-ModelMaterialTextures AssetLibrary::materialBindings(const ModelMaterial& material,bool particle) const {
+ModelMaterialTextures AssetLibrary::materialBindings(const ModelMaterial& material) const {
+        if(material.graph && graphPrograms_)return graphMaterialBindings(material.graph);
         ModelMaterialTextures target;
         const std::array<const ModelTexture*, 5> slots{&material.baseColorTexture, &material.metallicRoughnessTexture,
             &material.normalTexture, &material.occlusionTexture, &material.emissiveTexture};
@@ -854,7 +886,7 @@ ModelMaterialTextures AssetLibrary::materialBindings(const ModelMaterial& materi
             const auto& source = *slots[slot];
             const auto sampler=materialSampler(material,source);
             if (source.image.empty()) continue;
-            const auto resolved=particle?references_.resolveParticleTexture(source.image.id):references_.resolveTexture(source.image.id,slot==2);
+            const auto resolved=references_.resolveTexture(source.image.id,slot==2);
             if(resolved.empty())continue;
             auto* image = findMutable(resolved);
             if (!image) throw std::runtime_error("Material image is unavailable: " + source.image.id);
@@ -868,7 +900,6 @@ ModelMaterialTextures AssetLibrary::materialBindings(const ModelMaterial& materi
                 target.handles[slot]=view.handle;target.leases[slot]=view.lease;
                 target.sourceFingerprints[slot]=view.sourceFingerprint;target.signatures[slot]=view.signature;
                 target.complete &=view.complete;target.sourceReady &=view.sourceReady;
-                if(particle&&!view.diagnostic.empty())throw std::runtime_error("Particle color texture "+source.image.id+": "+view.diagnostic);
                 if(!bgfx::isValid(view.handle) && !view.diagnostic.empty()) throw std::runtime_error(view.diagnostic);
             } else target.handles[slot] = fullTexture(*image, slot == 0 || slot == 4);
             if (!textureStreamer_ && !bgfx::isValid(target.handles[slot]))
@@ -885,6 +916,75 @@ ModelMaterialTextures AssetLibrary::materialBindings(const ModelMaterial& materi
         }
     return target;
 }
+ModelMaterialTextures AssetLibrary::graphMaterialBindings(const std::shared_ptr<const MaterialGraph>& graph) const {
+    if(graphShaderCache_.size()>128)std::erase_if(graphShaderCache_,[](const auto& entry){return entry.second.source.expired();});
+    auto& cached=graphShaderCache_[graph.get()];
+    if(cached.source.expired()) {
+        MaterialAsset source;source.id=DefaultMaterialId;source.name="Material graph";source.graph=*graph;
+        canonicalizeMaterialAsset(source);
+        cached={graph,std::make_shared<MaterialGraphShader>(generateMaterialGraphShader(source))};
+    }
+    return preparedGraphBindings(*graphPrograms_,*cached.shader,*graph);
+}
+ModelMaterialTextures AssetLibrary::preparedGraphBindings(MaterialGraphPrograms& owner,const MaterialGraphShader& generated,const MaterialGraph& graph) const {
+    const auto programs=owner.request(generated);
+    if(!programs.current || !programs.programs) {
+        // A legacy texture-slot approximation silently couples color alpha to
+        // coverage. Until the complete graph is ready use an untextured fallback;
+        // consumers with a published graph keep that entire previous packet.
+        ModelMaterialTextures fallback;fallback.graphPending=true;
+        fallback.diagnostic=programs.diagnostic.empty()?"Compiling material graph...":programs.diagnostic;
+        return fallback;
+    }
+    ModelMaterialTextures result;
+    auto packet=std::make_shared<PreparedGraphMaterial>();
+    packet->programs=programs.programs;packet->uniforms=generated.uniforms;packet->sources=generated.textures;
+    const auto& output=materialOutputNode(graph).output;
+    packet->shading=generated.nodePreview?MaterialShading::Unlit:output.shading;
+    packet->blend=generated.nodePreview?MaterialBlend::Opaque:output.blend;
+    packet->nodePreview=generated.nodePreview;
+    packet->signature=programs.programs->signature;
+    std::unordered_map<std::string,std::uint64_t> sourceVersions;
+    for(auto& binding:packet->sources) {
+        const bool normal=binding.role==MaterialGraphTextureRole::Normal;
+        auto resolved=references_.resolveTexture(binding.image.id,normal);
+        if(binding.image.empty() || resolved.empty())packet->uniforms[binding.settingsRow][1]=0;
+        if(resolved.empty())resolved=normal?NeutralNormalTextureId:GrayTextureId;
+        auto* image=findMutable(resolved);
+        if(!image || image->hdr)throw std::runtime_error("Material texture is unavailable or unsupported: "+binding.image.id);
+        const auto role=normal?streaming::TextureRole::Normal:binding.role==MaterialGraphTextureRole::Color?streaming::TextureRole::Color:streaming::TextureRole::Data;
+        const auto& sampler=binding.sampler;const auto slot=binding.slot;
+        if(textureStreamer_) {
+            const bool mips=sampler.minFilter!=ModelFilter::Linear && sampler.minFilter!=ModelFilter::Nearest;
+            const auto texture=textureStreamer_->request(resolved,projectRoot_/fromUtf8(resolved),role,mips,
+                nativeTextures_?UINT32_MAX:textureDemand_,nativeTextures_?ResourcePriority::Selected:ResourcePriority::Visible);
+            packet->textures[slot]=texture.handle;packet->leases[slot]=texture.lease;
+            packet->sourceFingerprints[slot]=texture.sourceFingerprint;packet->textureSignatures[slot]=texture.signature;
+            result.complete &=texture.complete;result.sourceReady &=texture.sourceReady;
+            if(!bgfx::isValid(texture.handle) && !texture.diagnostic.empty())throw std::runtime_error(texture.diagnostic);
+            if(texture.sourceFingerprint) {
+                const auto [entry,inserted]=sourceVersions.emplace(resolved,texture.sourceFingerprint);
+                if(!inserted && entry->second!=texture.sourceFingerprint)result.sourceReady=false;
+            }
+        } else {
+            packet->textures[slot]=fullTexture(*image,role==streaming::TextureRole::Color);
+            result.complete &=bgfx::isValid(packet->textures[slot]);result.sourceReady &=result.complete;
+        }
+        std::uint32_t flags{};
+        if(sampler.wrapU==ModelWrap::Clamp)flags|=BGFX_SAMPLER_U_CLAMP;
+        else if(sampler.wrapU==ModelWrap::Mirror)flags|=BGFX_SAMPLER_U_MIRROR;
+        if(sampler.wrapV==ModelWrap::Clamp)flags|=BGFX_SAMPLER_V_CLAMP;
+        else if(sampler.wrapV==ModelWrap::Mirror)flags|=BGFX_SAMPLER_V_MIRROR;
+        if(sampler.minFilter==ModelFilter::Nearest||sampler.minFilter==ModelFilter::NearestMipmapNearest||sampler.minFilter==ModelFilter::NearestMipmapLinear)flags|=BGFX_SAMPLER_MIN_POINT;
+        if(sampler.minFilter==ModelFilter::NearestMipmapNearest||sampler.minFilter==ModelFilter::LinearMipmapNearest)flags|=BGFX_SAMPLER_MIP_POINT;
+        if(sampler.magFilter==ModelFilter::Nearest)flags|=BGFX_SAMPLER_MAG_POINT;
+        packet->flags[slot]=flags;binding.image.id=resolved;
+        streaming::detail::hash(packet->signature,flags);streaming::detail::hash(packet->signature,packet->textures[slot].idx);
+        streaming::detail::hash(packet->signature,packet->textureSignatures[slot]);streaming::detail::hash(packet->signature,packet->sourceFingerprints[slot]);
+    }
+    for(const auto& row:packet->uniforms)streaming::detail::hash(packet->signature,row);
+    result.graph=std::move(packet);return result;
+}
 std::shared_ptr<const PreparedParticleMaterial> AssetLibrary::preparedParticleMaterial(const std::string& id) const {
     std::string resolved;
     try{resolved=references_.resolveParticleMaterial(id);}catch(const std::exception& error){auto failed=std::make_shared<PreparedParticleMaterial>();failed->diagnostic=error.what();return failed;}
@@ -899,20 +999,32 @@ std::shared_ptr<const PreparedParticleMaterial> AssetLibrary::preparedParticleMa
     const auto previous=preparedParticleMaterials_.find(resolved);
     try{
         const auto material=findMaterial(resolved);if(!material)throw std::runtime_error("Unresolved particle material: "+id);
-        if(!particleMaterialCompatible(*material))throw std::runtime_error("Particle material requires Unlit Alpha/Additive, base color at UV0, and no unsupported texture slots: "+material->name);
+        if(!particleMaterialCompatible(*material)) {
+            auto fallback=preparedParticleMaterial(DefaultParticleMaterialId);
+            *result=*fallback;result->current=false;
+            result->diagnostic="Sprite material is invalid: "+material->name;
+            return result;
+        }
         const auto diagnostic=materialDiagnostic(resolved);if(!diagnostic.empty())throw std::runtime_error(diagnostic);
-        auto textures=materialBindings(material->surface,true);
-        if(!textures.sourceReady||(textures.flags[0]!=UINT32_MAX&&!bgfx::isValid(textures.handles[0])))throw std::runtime_error("Preparing particle color texture: "+material->surface.baseColorTexture.image.id);
+        auto textures=materialBindings(material->surface);
+        if(textures.graphPending && previous!=preparedParticleMaterials_.end() && previous->second->ready && previous->second->render.graph)throw std::runtime_error(textures.diagnostic);
+        const auto graphPending=textures.graphPending;const auto graphDiagnostic=textures.diagnostic;
+        if(!textures.sourceReady||!textures.complete||(textures.flags[0]!=UINT32_MAX&&!bgfx::isValid(textures.handles[0])))throw std::runtime_error("Preparing particle material textures.");
         struct Pins {std::shared_ptr<const MaterialAsset> material;ModelMaterialTextures textures;};
         const auto pins=std::make_shared<Pins>(Pins{material,std::move(textures)});
-        result->render.baseColor=material->surface.baseColor;result->render.blend=material->blend==MaterialBlend::Alpha?ParticleBlendMode::Alpha:ParticleBlendMode::Additive;
-        result->render.uvScale=material->surface.uvScale;result->render.uvOffset=material->surface.uvOffset;result->render.uvRotation=material->surface.uvRotation;result->render.triplanar=material->surface.triplanar;
+        result->render.baseColor=material->surface.baseColor;result->render.blend=material->blend;
+        result->render.shading=material->shading;result->render.roughness=material->surface.roughness;
+        result->render.metallic=material->surface.metallic;result->render.specular=material->surface.specular;
+        result->render.occlusion=1;result->render.alphaCutoff=material->surface.alphaCutoff;
+        result->render.emission=material->surface.emissive;result->render.doubleSided=material->surface.doubleSided;
+        result->render.uvScale=material->surface.uvScale;result->render.uvOffset=material->surface.uvOffset;result->render.uvRotation=material->surface.uvRotation;result->render.triplanar=material->surface.triplanar;result->render.triplanarWorld=material->surface.triplanarWorld;
         result->render.colorTexture=pins->textures.handles[0];result->render.samplerFlags=pins->textures.flags[0];result->render.pinned=pins;
-        result->ready=true;result->current=true;result->sourceFingerprint=pins->textures.sourceFingerprints[0];
+        result->render.graph=pins->textures.graph;
+        if(result->render.graph)result->render.baseColor={1,1,1,1};
+        result->ready=true;result->current=!graphPending;result->diagnostic=graphDiagnostic;result->sourceFingerprint=pins->textures.sourceFingerprints[0];
         result->signature=1469598103934665603ull;for(const auto value:serializeMaterialAsset(*material))result->signature=(result->signature^static_cast<uint8_t>(value))*1099511628211ull;
         result->signature=(result->signature^pins->textures.signatures[0])*1099511628211ull;
-        if(!material->surface.baseColorTexture.image.empty()&&references_.resolveParticleTexture(material->surface.baseColorTexture.image.id).empty())
-            result->diagnostic="Deleted particle color texture uses the procedural fallback: "+material->surface.baseColorTexture.image.id;
+        if(pins->textures.graph){result->signature=pins->textures.graph->signature;result->sourceFingerprint=result->signature;}
         if(cacheable)preparedParticleMaterials_[resolved]=result;
     }catch(const std::exception& error){
         if(previous!=preparedParticleMaterials_.end()&&previous->second->ready)*result=*previous->second;
@@ -923,7 +1035,13 @@ std::shared_ptr<const PreparedParticleMaterial> AssetLibrary::preparedParticleMa
 }
 ModelMaterialTextures AssetLibrary::materialPreviewBindings(const MaterialAsset& material) const {
     validateMaterialAsset(material);
-    return materialBindings(material.surface,particleMaterialCompatible(material));
+    return materialBindings(material.surface);
+}
+std::unique_ptr<MaterialGraphPrograms> AssetLibrary::createMaterialNodePreviewPrograms() const {
+    return graphPrograms_?graphPrograms_->createSibling():nullptr;
+}
+ModelMaterialTextures AssetLibrary::materialNodePreviewBindings(MaterialGraphPrograms& owner,const MaterialAsset& material,MaterialGraphPreviewTarget target) const {
+    return preparedGraphBindings(owner,generateMaterialGraphPreviewShader(material,target),material.graph);
 }
 
 void AssetLibrary::loadMaterial(Material& material) {
@@ -1070,7 +1188,7 @@ size_t replaceDeletedModelMaterials(SceneSnapshot& snapshot,const AssetReference
     for(auto& record:snapshot.records)if(!record.modelMaterial.empty() && deletedMaterials.contains(previous.resolveMaterial(record.modelMaterial.id))) {
         const auto replacement=next.resolveModelMaterial(record.modelMaterial.id);
         const auto material=loadMaterialAsset(root,replacement);
-        if(!modelMaterialCompatible(material))throw std::runtime_error("Box material replacement requires Standard PBR with Opaque or Mask blending: "+material.name);
+        if(!modelMaterialCompatible(material))throw std::runtime_error("Box material is invalid: "+material.name);
         if(record.modelMaterial.id!=replacement){record.modelMaterial=AssetRef<MaterialAsset>{replacement};++changed;}
     }
     Scene::validate(snapshot.records,snapshot.properties);return changed;
@@ -1081,9 +1199,9 @@ void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
     std::unordered_set<std::string> usableMaterials;
     for(const auto& entry:catalog_)if(entry.kind==AssetKind::Material&&std::filesystem::is_regular_file(projectRoot_/fromUtf8(entry.id)))usableMaterials.insert(entry.id);
     for(const auto& stored:materials_){const auto material=stored->id==materialDocumentId_?std::make_shared<MaterialAsset>(loadMaterialAsset(projectRoot_,stored->id)):stored;
-        const auto& m=material->surface;const std::array<std::pair<const char*,const ModelTexture*>,5> slots{{
-        {"Base color",&m.baseColorTexture},{"Metallic / roughness",&m.metallicRoughnessTexture},{"Normal",&m.normalTexture},{"Occlusion",&m.occlusionTexture},{"Emissive",&m.emissiveTexture}}};
-        for(const auto& [slot,texture]:slots)if(!texture->image.empty())usages.push_back({texture->image.id,material->id,material->name,slot,false,false,!usableMaterials.contains(material->id)});
+        visitMaterialTextures(material->surface,false,[&](const auto& id,MaterialTextureRole role){
+            usages.push_back({id,material->id,material->name,role==MaterialTextureRole::Normal?"Normal texture":"Graph texture",false,false,!usableMaterials.contains(material->id)});
+        });
     }
     for(const auto& entry:catalog_)if(entry.kind==AssetKind::Particle){const auto effect=loadParticleAsset(projectRoot_,entry.id);
         if(!effect.emitter.material.empty()&&!effect.emitter.material.id.starts_with("builtin:"))usages.push_back({effect.emitter.material.id,effect.id,effect.name,"Particle material"});}
@@ -1233,11 +1351,14 @@ bool AssetLibrary::deleteAssets(const AssetDeletionPlan& plan,const std::unorder
         auto preparedMaterials=materials_;auto preparedAuthoredMaterials=authoredMaterials_;auto preparedParticles=particles_;
         auto preparedMaterialRevision=nextMaterialRevision_,preparedParticleRevision=nextParticleRevision_;
         for(const auto& entry:catalog_)if(entry.kind==AssetKind::Material&&!deletedIds.contains(entry.id)){
-            auto material=loadMaterialAsset(projectRoot_,entry.id);bool changed=false;const bool sprite=particleMaterialCompatible(material);
-            const std::array<ModelTexture*,5> slots{{&material.surface.baseColorTexture,&material.surface.metallicRoughnessTexture,&material.surface.normalTexture,&material.surface.occlusionTexture,&material.surface.emissiveTexture}};
-            for(size_t slot=0;slot<slots.size();++slot)if(!slots[slot]->image.empty()&&deletedIds.contains(references_.resolve(slots[slot]->image.id))){
-                const auto replacement=sprite?nextReferences.resolveParticleTexture(slots[slot]->image.id):nextReferences.resolveTexture(slots[slot]->image.id,slot==2);
-                if(replacement!=slots[slot]->image.id){slots[slot]->image=AssetRef<DecodedImage>{replacement};changed=true;}}
+            auto material=loadMaterialAsset(projectRoot_,entry.id);bool changed=false;
+            canonicalizeMaterialAsset(material);
+            rewriteMaterialGraphTextures(material.graph,[&](const auto& id,MaterialTextureRole role){
+                if(!deletedIds.contains(references_.resolve(id)))return id;
+                const auto replacement=nextReferences.resolveTexture(id,role==MaterialTextureRole::Normal);
+                changed|=replacement!=id;return replacement;
+            });
+            if(changed)canonicalizeMaterialAsset(material);
             if(changed){changes.push_back({entry.id,serializeMaterialAsset(material)});
                 if(entry.id!=materialDocumentId_){auto definition=std::make_shared<MaterialAsset>(std::move(material));preparedAuthoredMaterials[entry.id]={definition,preparedMaterialRevision++,{}};
                     for(auto& cached:preparedMaterials)if(cached->id==entry.id)cached=definition;}}

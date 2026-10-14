@@ -1,0 +1,144 @@
+{
+  "graph": {
+    "links": [
+      {
+        "fromNode": 7,
+        "fromPin": 7,
+        "id": 6,
+        "toNode": 8,
+        "toPin": 7
+      },
+      {
+        "fromNode": 11,
+        "fromPin": 1,
+        "id": 11,
+        "toNode": 1,
+        "toPin": 11
+      },
+      {
+        "fromNode": 7,
+        "fromPin": 7,
+        "id": 12,
+        "toNode": 11,
+        "toPin": 7
+      },
+      {
+        "fromNode": 8,
+        "fromPin": 1,
+        "id": 13,
+        "toNode": 1,
+        "toPin": 10
+      }
+    ],
+    "nextLinkId": 14,
+    "nextNodeId": 12,
+    "nodes": [
+      {
+        "id": 1,
+        "kind": 0,
+        "name": "Output",
+        "output": {
+          "alphaCutoff": 0.5,
+          "baseColor": [
+            0.21404114365577698,
+            0.21404114365577698,
+            0.21404114365577698
+          ],
+          "blend": 0,
+          "doubleSided": false,
+          "emission": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "metallic": 0.0,
+          "occlusion": 1.0,
+          "occlusionStrength": 1.0,
+          "opacity": 1.0,
+          "opacityMask": 1.0,
+          "roughness": 1.0,
+          "shading": 0,
+          "specular": 0.527999997138977
+        },
+        "position": [
+          419.0,
+          -77.0
+        ]
+      },
+      {
+        "id": 7,
+        "kind": 1,
+        "name": "UV",
+        "position": [
+          -333.0,
+          -86.0
+        ],
+        "uv": {
+          "mode": 3,
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "scaleLinked": true
+        }
+      },
+      {
+        "id": 8,
+        "kind": 2,
+        "name": "Texture 2D",
+        "position": [
+          51.0,
+          -332.0
+        ],
+        "texture": {
+          "image": "assets/textures/str_stonebrk1.png",
+          "normalStrength": 1.0,
+          "role": 0,
+          "sampler": {
+            "magFilter": 0,
+            "minFilter": 5,
+            "wrapU": 0,
+            "wrapV": 0
+          }
+        }
+      },
+      {
+        "id": 11,
+        "kind": 2,
+        "name": "Texture 2D",
+        "position": [
+          67.3502197265625,
+          29.45306396484375
+        ],
+        "texture": {
+          "image": "assets/textures/0b21c54a-61bd-4a5a-a0a9-693d6ad4f15f_roughness_linear-2.png",
+          "normalStrength": 1.0,
+          "role": 1,
+          "sampler": {
+            "magFilter": 0,
+            "minFilter": 5,
+            "wrapU": 0,
+            "wrapV": 0
+          }
+        }
+      }
+    ],
+    "version": 3
+  },
+  "id": "assets/materials/815649f6d3c8-0.crimson-material",
+  "name": "New Material 5",
+  "originModel": "",
+  "type": "crimson-material",
+  "version": 6
+}

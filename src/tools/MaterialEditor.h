@@ -1,6 +1,8 @@
 #pragma once
 #include "editor/MaterialDocument.h"
 #include "editor/MaterialPreview.h"
+#include "MaterialGraphEditor.h"
+#include "HdrColorEditor.h"
 #include <array>
 #include <span>
 namespace crimson {
@@ -28,21 +30,27 @@ public:
     bool canSaveAs() const { return document_.isOpen() && (particleMaterialCompatible(document_.definition()) || modelMaterialCompatible(document_.definition())); }
     void draw(AssetLibrary&,Renderer&,ResourceManager&,double dt);
     void filesChanged(std::span<const std::filesystem::path>);
-    void cancelInteraction() { document_.cancel();preview_.cancelInteraction(); }
+    void cancelInteraction() { document_.cancel();preview_.cancelInteraction();graph_.cancelInteraction();propertyEditing_=false;colorEditor_.cancel();emissionEditor_.cancel(); }
 private:
     enum class Pending { None,Open,Create,Close,Exit };
     MaterialDocument document_;
     MaterialPreview preview_;
-    std::string pendingId_,pendingFolder_,message_,publishedId_;
+    MaterialGraphEditor graph_;
+    HdrColorEditorState colorEditor_,emissionEditor_;
+    MaterialNodeId propertyNode_{};
+    MaterialNodeId texturePickerNode_{};
+    float previewHeight_{260};
+    std::string pendingId_,pendingFolder_,message_,publishedId_,referenceDocumentId_;
     Pending pending_{Pending::None};
-    std::uint64_t publishedRevision_{};
+    std::uint64_t publishedRevision_{},referenceRevision_{},referenceMaterialRevision_{};
     std::array<char,256> saveName_{};
     Vec3 uvScaleBaseline_{1,1,1};
     bool dirtyPopup_{},savePopup_{},continueAfterSave_{},exitReady_{},externalChanged_{},externalPopup_{},focusNext_{};
-    bool suppressFinalizedUpdate_{};
+    bool suppressFinalizedUpdate_{},propertyEditing_{};
     void request(Pending,std::string,AssetLibrary*);
     void perform(AssetLibrary&);
     void publish(AssetLibrary&);
+    bool reconcileReferences(AssetLibrary&,bool force=false);
     void modals(AssetLibrary&);
     void properties(AssetLibrary&);
 };
