@@ -27,6 +27,45 @@ float segmentDistance(ImVec2 point, ImVec2 start, ImVec2 end) {
     const float t=lengthSquared>0 ? std::clamp(((point.x-start.x)*x+(point.y-start.y)*y)/lengthSquared,0.0f,1.0f) : 0;
     return std::hypot(point.x-start.x-t*x,point.y-start.y-t*y);
 }
+float gameplayMarker(ImDrawList& draw,const EntityRecord& record,const Mat4& world,const Mat4& vp,
+                     const Vec4& viewport,ImU32 color,ImVec2 mouse) {
+    float distance=1e9f;
+    const auto line=[&](Vec3 a,Vec3 b) {
+        const auto p=math::project(math::transformPoint(world,a),vp,viewport,ClipDepth::NegativeOneToOne);
+        const auto q=math::project(math::transformPoint(world,b),vp,viewport,ClipDepth::NegativeOneToOne);
+        if(!p || !q || (*p)[2]<0 || (*p)[2]>1 || (*q)[2]<0 || (*q)[2]>1)return;
+        const ImVec2 start((*p)[0],(*p)[1]),end((*q)[0],(*q)[1]);
+        draw.AddLine(start,end,color,1.5f);distance=std::min(distance,segmentDistance(mouse,start,end));
+    };
+    if(record.collider) {
+        const auto half=record.collider->size*.5f;
+        std::array<Vec3,8> corners;
+        for(unsigned i=0;i<8;++i)corners[i]={i&1?half[0]:-half[0],i&2?half[1]:-half[1],i&4?half[2]:-half[2]};
+        for(unsigned i=0;i<8;++i)for(unsigned bit=1;bit<=4;bit*=2)if(!(i&bit))line(corners[i],corners[i|bit]);
+    }
+    if(record.character) {
+        const auto radius=record.character->radius,height=record.character->height;
+        constexpr unsigned segments=32;
+        for(unsigned plane=0;plane<2;++plane)for(unsigned i=0;i<segments;++i) {
+            const auto point=[&](unsigned index) {
+                const auto angle=index*2*std::numbers::pi_v<float>/segments;
+                const auto horizontal=radius*std::cos(angle),vertical=std::sin(angle);
+                return Vec3{plane?0.f:horizontal,(vertical>=0?height-radius:radius)+radius*vertical,plane?horizontal:0.f};
+            };
+            line(point(i),point(i+1));
+        }
+        for(const auto y:{radius,height-radius})for(unsigned i=0;i<segments;++i) {
+            const float a=i*2*std::numbers::pi_v<float>/segments,b=(i+1)*2*std::numbers::pi_v<float>/segments;
+            line({radius*std::cos(a),y,radius*std::sin(a)},{radius*std::cos(b),y,radius*std::sin(b)});
+        }
+        line({0,height*.5f,0},{0,height*.5f,-radius*2});
+    }
+    if(record.camera) {
+        const std::array<Vec3,4> corners{{{-.5f,-.3f,-.8f},{.5f,-.3f,-.8f},{.5f,.3f,-.8f},{-.5f,.3f,-.8f}}};
+        for(unsigned i=0;i<4;++i) { line({},corners[i]);line(corners[i],corners[(i+1)%4]); }
+    }
+    return distance;
+}
 float directionalMarker(ImDrawList& draw, const Camera& camera, const Mat4& world, const Mat4& viewProjection,
                         const Vec4& viewport, ImVec2 center, ImU32 color, ImVec2 mouse) {
     const Vec3 position=math::transformPoint(world,{0,0,0});
@@ -188,7 +227,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                         if (!record || !world || !inv) { roots_.clear(); break; }
                         roots_.push_back({id,record->local,*world,*inv});
                     }
-                    if (!roots_.empty() && document.begin("Transform selection")) { dragging_=true; pickIntent_=false; renderer.cancelPicking(); ++serial_; }
+                    if (!roots_.empty() && document.beginTransform("Transform selection",document.scene().topmost(document.selection().ids))) { dragging_=true; pickIntent_=false; renderer.cancelPicking(); ++serial_; }
                 }
                 if (dragging_ && changed) {
                     const auto inverse = math::inverse(startProxy_);
@@ -209,7 +248,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             // heading and the light submitted later in the frame agree exactly.
             EntityId iconHit{}; float iconDistance = 15.0f;
             for (const auto& record : document.scene().records()) {
-                if (!record.directional && !record.point && !record.particle && (record.model || record.parent)) continue;
+                if (!record.directional && !record.point && !record.particle && !record.collider && !record.character && !record.camera && (record.model || record.parent)) continue;
                 const auto world = document.scene().worldTransform(record.id);
                 if (!world) continue;
                 const auto position = math::transformPoint(*world,{0,0,0});
@@ -219,7 +258,9 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                 const ImVec2 center((*screen)[0],(*screen)[1]);
                 const auto color = ImGui::GetColorU32(selected(document,record.id) ? ImGuiCol_HeaderActive : ImGuiCol_Text);
                 float distance = std::hypot(center.x-ImGui::GetIO().MousePos.x,center.y-ImGui::GetIO().MousePos.y);
-                if (record.directional) distance=directionalMarker(*draw,camera,*world,vp,viewport,center,color,ImGui::GetIO().MousePos);
+                if (record.collider || record.character || record.camera)
+                    distance=std::min(distance,gameplayMarker(*draw,record,*world,vp,viewport,color,ImGui::GetIO().MousePos));
+                else if (record.directional) distance=directionalMarker(*draw,camera,*world,vp,viewport,center,color,ImGui::GetIO().MousePos);
                 else if (record.point) draw->AddCircle(center,7,color,12,2);
                 else if (record.particle) {
                     draw->AddCircle(center,6,color,12,1.5f);

@@ -41,6 +41,10 @@ LookRotation lookRotation(const Camera& camera, float dx, float dy, double sensi
     return rotation;
 }
 }
+float PointLight::inverseRadiusSquared() const {
+    const auto safeRadius=std::isfinite(radius)?std::clamp(radius,.01f,100000.f):20.f;
+    return 1.f/(safeRadius*safeRadius);
+}
 Vec3 Camera::eye() const { return finite(position) ? position : DefaultPosition; }
 Vec3 Camera::forward() const { return normalized(sub(finite(target) ? target : DefaultTarget,eye()),{0,0,-1}); }
 Vec3 Camera::right() const {
@@ -54,7 +58,9 @@ float Camera::distance() const {
 }
 float Camera::verticalFov(float aspect) const {
     constexpr double radians = std::numbers::pi / 180;
-    const double degrees = std::isfinite(fov) ? std::clamp(double(fov),15.0,100.0) : 45.0;
+    const bool vertical = fovAxis == CameraFovAxis::Vertical;
+    const double degrees = std::isfinite(fov) ? std::clamp(double(fov),vertical ? 1.0 : 15.0,vertical ? 179.0 : 100.0) : 45.0;
+    if (vertical) return static_cast<float>(degrees);
     const double ratio = std::isfinite(aspect) && aspect > 0 ? aspect : 1;
     return static_cast<float>(2*std::atan(std::tan(degrees*radians*.5)/std::min(1.0,ratio))/radians);
 }

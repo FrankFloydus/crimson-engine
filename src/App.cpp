@@ -116,7 +116,7 @@ int run(const AppOptions& options) {
             bool focusLossEvent=false;
             while (SDL_PollEvent(&event)) {
                 ImGui_ImplSDL3_ProcessEvent(&event);
-                navigation.handleEvent(event);
+                if(!editor || !editor->handleEvent(event))navigation.handleEvent(event);
                 if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_HIDDEN) {
                     focusLossEvent=true;
                 }
@@ -166,7 +166,7 @@ int run(const AppOptions& options) {
                 editor->frame(assets,renderer,navigation,window.get(),bgfxFrame,pendingQuit);
                 pendingQuit=false;
                 running=!editor->exitAccepted();
-            } else diagnostic->frame(assets,renderer,navigation,window.get());
+            } else { renderer.advanceStreaming();diagnostic->frame(assets,renderer,navigation,window.get()); }
             ImGui::Render();
             bgfx::setViewClear(ToolsView,BGFX_CLEAR_COLOR,0x202020ff);
             toolsRenderer.render(ImGui::GetDrawData());

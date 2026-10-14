@@ -39,7 +39,11 @@ struct PointLight {
     Vec3 color{1.0f, 0.45f, 0.2f};
     float intensity{35.0f};
     bool enabled{true};
+    float radius{20.0f}; // World-space influence range in meters; unaffected by entity scale.
+    float inverseRadiusSquared() const;
 };
+
+enum class CameraFovAxis { ShorterDimension, Vertical };
 
 struct Camera {
     Vec3 position{0.0f, 1.6276402f, 4.1528387f};
@@ -47,6 +51,9 @@ struct Camera {
     Vec3 up{0.0f, 1.0f, 0.0f};
     float fov{45.0f};
     float nearPlane{0.01f}, farPlane{2048.0f};
+    // Editor navigation preserves its shorter-axis framing. Scene cameras use
+    // a true vertical FOV, independent of the Game window's aspect ratio.
+    CameraFovAxis fovAxis{CameraFovAxis::ShorterDimension};
     Vec3 eye() const;
     Vec3 forward() const;
     Vec3 right() const;
@@ -95,6 +102,13 @@ inline constexpr uint16_t SceneView = 0;
 inline constexpr uint16_t PresentView = 1;
 inline constexpr uint16_t GridView = 2;
 inline constexpr uint16_t EncodeView = 3;
-inline constexpr uint16_t ToolsView = 8; // Particle preview occupies views 4..7.
+// Preserve natural view ordering for the pinned D3D11 blit/readback backend.
+// Particle preview: 4..7; 8 is reserved; picking: 9..10; thumbnail: 11..15;
+// material preview: 16..19. Game omits the editor grid and needs three passes.
+inline constexpr uint16_t GameSceneView = 20;
+inline constexpr uint16_t GamePresentView = 21;
+inline constexpr uint16_t GameEncodeView = 22;
+inline constexpr uint16_t ToolsView = 23;
+inline constexpr uint16_t FirstPlatformView = 24;
 
 } // namespace crimson

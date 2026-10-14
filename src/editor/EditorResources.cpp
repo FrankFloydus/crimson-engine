@@ -46,8 +46,9 @@ bool coherent(const AssetLibrary& assets,std::span<const ModelMaterial> material
     }
     return true;
 }
-float verticalFov(const Camera& camera,const Renderer& renderer,ResourcePriority priority) {
-    const auto aspect=priority==ResourcePriority::Preview || !renderer.height() ? 1.0f :
+float verticalFov(const Camera& camera,const Renderer& renderer,ResourcePriority priority,float requestedAspect) {
+    const auto aspect=std::isfinite(requestedAspect) && requestedAspect>0 ? requestedAspect :
+        priority==ResourcePriority::Preview || !renderer.height() ? 1.0f :
         static_cast<float>(renderer.width())/static_cast<float>(renderer.height());
     return camera.verticalFov(aspect)*std::numbers::pi_v<float>/180;
 }
@@ -91,7 +92,7 @@ void EditorResources::endFrame() {
         if (entry.wanted) {
             if (entry.current) live.push_back(entry.current->asset->id);
             if (!entry.geometryAssetId.empty()) live.push_back(entry.geometryAssetId);
-            if (!entry.diagnostic.empty()) status_+=assets_.displayName(id)+": "+entry.diagnostic+"\n";
+            if (!entry.diagnostic.empty()) status_+=assets_.displayName(entry.sourceId)+": "+entry.diagnostic+"\n";
         }
     }
     std::erase_if(entries_,[&](const auto& pair){return !pair.second.wanted && now-pair.second.used>resources_.config().idleGrace;});
@@ -126,8 +127,11 @@ void EditorResources::requestGeometry(Entry& entry,const ModelAsset& asset,uint6
         if (!renderer_.queueModelLod(asset.id,revision,data.shared())) { entry.diagnostic=renderer_.modelStatus(); entry.failed=true; }
 }
 std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::string& id,const Mat4& world,const Camera& camera,
-    uint32_t height,bool selected,ResourcePriority priority) {
-    auto& entry=entries_[id]; entry.wanted=true; entry.used=std::chrono::steady_clock::now();
+    uint32_t height,bool selected,ResourcePriority priority,float aspect,const std::string& materialOverride) {
+    // Geometry identity remains shared. Immutable binding packets are keyed by
+    // instance material identity so two Boxes cannot overwrite each other's material.
+    const auto key=id+std::string(1,'\0')+materialOverride;
+    auto& entry=entries_[key];entry.sourceId=id;entry.wanted=true; entry.used=std::chrono::steady_clock::now();
     entry.failed=false;
     const auto retain=[&](std::shared_ptr<const PreparedEditorModel> model) {
         if (model) framePins_.push_back(model); return model;
@@ -140,7 +144,7 @@ std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::s
     const auto revision=std::max<uint64_t>(1,assets_.modelRevision(id));
     entry.geometryAssetId=asset->id;
     try {
-        const auto fov=verticalFov(camera,renderer_,priority);
+        const auto fov=verticalFov(camera,renderer_,priority,aspect);
         bool refined=true;
         if (asset->stream) {
             if (entry.geometryRevision!=revision) { entry.geometry.clear(); entry.geometryRevision=revision; }
@@ -161,9 +165,9 @@ std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::s
             }
             if (!renderer_.modelStreamReady(asset->id,revision)) return retain(entry.current);
         } else if (!renderer_.prepareModel(*asset)) { entry.diagnostic=renderer_.modelStatus(); entry.failed=true; return retain(entry.current); }
-        auto materials=assets_.resolvedModelMaterials(*asset);
-        if (!assets_.modelMaterialsReady(*asset)) {
-            const auto error=assets_.modelMaterialsDiagnostic(*asset);
+        auto materials=assets_.resolvedModelMaterials(*asset,materialOverride);
+        if (!assets_.modelMaterialsReady(*asset,materialOverride)) {
+            const auto error=assets_.modelMaterialsDiagnostic(*asset,materialOverride);
             if (!error.empty()) { entry.diagnostic=error; entry.failed=true; }
             return retain(entry.current);
         }
@@ -182,10 +186,10 @@ std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::s
     } catch (const std::exception& error) { entry.diagnostic=error.what(); entry.failed=true; return retain(entry.current); }
 }
 void EditorResources::invalidate(const std::string& id) {
-    if (const auto found=entries_.find(id); found!=entries_.end()) { found->second.geometry.clear(); found->second.geometryRevision=0; }
+    for(auto& [key,entry]:entries_)if(entry.sourceId==id) {entry.geometry.clear();entry.geometryRevision=0;}
 }
 void EditorResources::clear() { entries_.clear(); framePins_.clear(); externalModels_.clear(); status_.clear(); }
 bool EditorResources::failed(const std::string& id) const {
-    const auto found=entries_.find(id); return found!=entries_.end() && found->second.failed;
+    const auto found=entries_.find(id+std::string(1,'\0')); return found!=entries_.end() && found->second.failed;
 }
 } // namespace crimson

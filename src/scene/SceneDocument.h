@@ -37,11 +37,13 @@ bool deleteSceneAsset(const std::filesystem::path& projectRoot, const std::strin
 struct EntityChange {
     EntityId id{};
     std::optional<EntityRecord> before, after;
+    uint32_t fields{};
 };
 struct SceneCommand {
     std::string label;
     std::vector<EntityChange> entities;
     std::optional<SceneProperties> beforeProperties, afterProperties;
+    uint32_t propertyFields{};
     SceneSelection beforeSelection, afterSelection;
     uint64_t beforeState{}, afterState{};
 };
@@ -94,6 +96,12 @@ public:
     const std::string& status() const { return status_; }
     bool dirty() const;
     bool transactionActive() const { return transaction_.has_value(); }
+    bool transient() const { return transient_; }
+    bool resetTransientFrom(const SceneDocument& source);
+    bool applyRuntimePoses(std::span<const ScenePoseUpdate> poses);
+    bool beginTransform(const std::string& label, std::vector<EntityId> roots);
+    void setTransformEditRoots(std::vector<EntityId> roots);
+    const std::vector<EntityId>& transformEditRoots() const;
 
     void newScene();
     bool load(const std::string& id);
@@ -108,6 +116,7 @@ public:
     uint64_t documentGeneration() const { return documentGeneration_; }
     std::vector<std::string> historicalModelReferences() const;
     std::vector<std::string> historicalParticleReferences() const;
+    std::vector<std::string> historicalMaterialReferences() const;
     // Global resource deletion is outside scene undo. Install its complete
     // validated candidate and remove history that could resurrect deleted IDs.
     bool applyExternalAssetChanges(const std::vector<EntityRecord>& records, const SceneProperties& properties,
@@ -131,7 +140,15 @@ public:
     EntityId createDirectionalLight(const std::string& name = "Directional Light");
     EntityId createPointLight(const std::string& name = "Point Light");
     EntityId createEnvironment(const std::string& name = "Environment");
+    EntityId createCharacter(const std::string& name = "Character");
+    EntityId createCollider(const std::string& name = "Collider", EntityId parent = NoEntity);
+    EntityId createCamera(const std::string& name = "Camera");
+    EntityId createBox(const std::string& name = "Box");
     bool setActiveEnvironment(EntityId id);
+    bool setActiveCamera(EntityId id);
+    bool setPlayerCharacter(EntityId id);
+    bool setCameraFollowTarget(EntityId camera, EntityId target);
+    bool setCameraFollow(EntityId camera, EntityId target) { return setCameraFollowTarget(camera,target); }
     bool updateEntity(EntityId id, const EntityRecord& record, const std::string& label = "Edit entity");
     bool eraseSelection();
     bool duplicateSelection();
@@ -142,10 +159,8 @@ public:
 private:
     bool applyPreparedSnapshot(const SceneSnapshot&,bool preserveSelection,bool opening);
     struct Transaction {
-        std::string label;
-        std::vector<EntityRecord> before;
-        SceneProperties properties;
-        SceneSelection selection;
+        SceneCommand command;
+        std::vector<EntityId> transformRoots;
     };
     std::filesystem::path projectRoot_;
     Scene scene_;
@@ -156,6 +171,7 @@ private:
     uint64_t loadedFingerprint_{};
     uint64_t documentGeneration_{};
     std::optional<Transaction> transaction_;
+    bool transient_{};
     EntityId create(EntityRecord record, const std::string& label);
     bool applyHistory(const SceneCommand& command, bool forward);
     void sanitizeSelection();

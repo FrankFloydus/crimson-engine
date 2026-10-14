@@ -364,7 +364,7 @@ void environmentsAndMigration() {
     require(migrated.records.size()==snapshot.records.size()+1 && readText(project.root/oldId)==contents,"Legacy migration rewrote its source.");
     SceneDocument opened(project.root); require(opened.load(oldId),opened.status());
     require(!opened.dirty() && resolveEnvironment(opened.scene()).exposure==1.7f,"Legacy migration lost settings or marked an equivalent load dirty.");
-    require(opened.save(),opened.status()); require(Json::parse(readText(project.root/oldId)).at("version")==3,"Explicit save did not write scene version 3.");
+    require(opened.save(),opened.status()); require(Json::parse(readText(project.root/oldId)).at("version")==4,"Explicit save did not write scene version 4.");
 }
 void particleReferencesAndPersistence() {
     TempProject project;SceneDocument document(project.root);
@@ -394,7 +394,7 @@ void particleReferencesAndPersistence() {
     invalid.particle=AssetRef<ParticleEffectAsset>{"assets/particles/../bad.crimson-particle"};
     require(!document.updateEntity(particle,invalid),"Particle traversal was accepted.");
     require(document.save("Particles"),document.status());const auto savedId=document.assetId();
-    const auto serialized=Json::parse(readText(project.root/savedId));require(serialized.at("version")==3,"Particle scene version was not bumped.");
+    const auto serialized=Json::parse(readText(project.root/savedId));require(serialized.at("version")==4,"Particle scene version was not bumped.");
     SceneDocument reopened(project.root);require(reopened.load(savedId),reopened.status());sameRecords(document.scene().records(),reopened.scene().records());
     require(!reopened.dirty() && reopened.scene().find(particle)->particle->id==effect,"Missing particle asset prevented clean scene reopening.");
     auto cleared=*reopened.scene().find(particle);cleared.particle=AssetRef<ParticleEffectAsset>{};
@@ -406,7 +406,7 @@ void particleReferencesAndPersistence() {
     const auto oldBytes=readText(project.root/legacy);SceneDocument old(project.root);require(old.load(legacy),old.status());
     require(!old.dirty() && readText(project.root/legacy)==oldBytes,"Version-two load rewrote its source or became dirty.");
     for(const auto& record:old.scene().records())require(!record.particle,"Version-two migration invented a particle component.");
-    require(old.save(),old.status());require(Json::parse(readText(project.root/legacy)).at("version")==3,"Explicit version-two save did not migrate to version three.");
+    require(old.save(),old.status());require(Json::parse(readText(project.root/legacy)).at("version")==4,"Explicit version-two save did not migrate to version four.");
 }
 void externalSceneChanges() {
     TempProject project; SceneDocument document(project.root);

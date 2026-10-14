@@ -4,7 +4,7 @@
 
 namespace crimson {
 void SceneParticles::reconcile(std::uint64_t generation,std::span<const ExtractedParticle> authored,
-                              const DefinitionQuery& query,double seconds,EntityId restart) {
+                              const DefinitionQuery& query,double seconds,EntityId restart,std::optional<double> interpolationOverride) {
     if(generation_!=generation) { instances_.clear();generation_=generation; }
     status_.clear();presentation_.clear();groups_.clear();
     struct Admission { const ExtractedParticle* source;ParticleDefinitionVersion version;bool updated{}; };
@@ -54,7 +54,7 @@ void SceneParticles::reconcile(std::uint64_t generation,std::span<const Extracte
         }
         instance.assetId=source.assetId;instance.revision=definition.revision;
         instance.simulation.advance(seconds);
-        const auto first=presentation_.size();instance.simulation.appendPresentation(presentation_);
+        const auto first=presentation_.size();instance.simulation.appendPresentation(presentation_,interpolationOverride);
         groups_.push_back({source.id,next.emitter.material.id,first,presentation_.size()-first});
         const auto& stats=instance.simulation.stats();
         if(stats.droppedSpawns || stats.droppedCatchUpTicks)

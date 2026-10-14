@@ -1,4 +1,5 @@
 #include "AssetReferenceManager.h"
+#include "scene/BuiltinModels.h"
 #include "MaterialAsset.h"
 #include "AtomicFile.h"
 #include <nlohmann/json.hpp>
@@ -18,7 +19,7 @@ using Json=nlohmann::json;
 std::filesystem::path path(const std::string& id){return std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(id.data()),id.size()));}
 std::string text(const std::filesystem::path& file){std::ifstream in(file,std::ios::binary);if(!in)throw std::runtime_error("Cannot read asset transaction file.");return {std::istreambuf_iterator<char>(in),{}};}
 bool builtin(const std::string& id){return id.starts_with("builtin:");}
-bool knownBuiltin(const std::string& id){return id==GrayTextureId||id==NeutralNormalTextureId||id==DefaultMaterialId||id==DefaultParticleMaterialId||id==StudioEnvironmentId;}
+bool knownBuiltin(const std::string& id){return id==GrayTextureId||id==NeutralNormalTextureId||id==DefaultMaterialId||id==DefaultParticleMaterialId||id==StudioEnvironmentId||isBuiltinModel(id);}
 bool particleIdentity(const std::string& id){const auto relative=path(id);return relative.parent_path()==std::filesystem::path("assets/particles")&&relative.extension()==".crimson-particle";}
 bool materialIdentity(const std::string& id){const auto relative=path(id);return relative.parent_path()==std::filesystem::path("assets/materials")&&relative.extension()==".crimson-material";}
 void validateMaterialTarget(const std::string& target){if(!target.empty()&&target!=DefaultMaterialId&&target!=DefaultParticleMaterialId&&!materialIdentity(target))throw std::runtime_error("Material replacement must reference a managed material or protected material default.");}
@@ -102,6 +103,11 @@ std::string AssetReferenceManager::resolve(const std::string& id)const{
 }
 std::string AssetReferenceManager::resolveTexture(const std::string& id,bool normal)const{auto result=resolve(id);if(!id.empty()&&(result.empty()||result==GrayTextureId))return normal?NeutralNormalTextureId:GrayTextureId;return result;}
 std::string AssetReferenceManager::resolveMaterial(const std::string& id)const{const auto result=resolve(id);validateMaterialTarget(result);return result;}
+std::string AssetReferenceManager::resolveModelMaterial(const std::string& id)const{
+    const auto result=resolveMaterial(id);
+    if(result==DefaultParticleMaterialId)throw std::runtime_error("Box material replacement requires a Standard PBR material.");
+    return result.empty()?std::string(DefaultMaterialId):result;
+}
 std::string AssetReferenceManager::resolveEnvironment(const std::string& id)const{const auto result=resolve(id);return result==StudioEnvironmentId?std::string{}:result;}
 std::string AssetReferenceManager::resolveParticle(const std::string& id)const{
     auto result=resolve(id);if(result.empty())return result;

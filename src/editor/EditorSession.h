@@ -5,6 +5,9 @@
 #include "tools/ParticleEditor.h"
 #include "tools/MaterialEditor.h"
 #include "SceneParticles.h"
+#include "runtime/PlaySession.h"
+#include "runtime/GameInput.h"
+#include "tools/GameView.h"
 #include <filesystem>
 #include <unordered_map>
 
@@ -18,7 +21,11 @@ public:
     EditorSession(const std::filesystem::path&, AssetLibrary&, Renderer&);
     ~EditorSession();
     void cancelInteraction(Renderer&);
-    void setSimulationSuspended(bool suspended) { if(simulationSuspended_ && !suspended)skipSimulationTime_=true;simulationSuspended_=suspended; }
+    void setSimulationSuspended(bool suspended) { if(simulationSuspended_ && !suspended)skipSimulationTime_=true;simulationSuspended_=suspended;if(suspended)gameInput_.cancel(); }
+    bool handleEvent(const SDL_Event& event) {
+        if(event.type==SDL_EVENT_KEY_DOWN && event.key.scancode==SDL_SCANCODE_ESCAPE)focusGame_=false;
+        return gameInput_.handleEvent(event);
+    }
     void frame(AssetLibrary&, Renderer&, Navigation&, SDL_Window*, uint32_t bgfxFrame, bool quitRequested);
     void prepareFrame(AssetLibrary&,Renderer&,std::uint32_t bgfxFrame);
     void filesChanged(std::span<const std::filesystem::path>);
@@ -27,6 +34,9 @@ public:
 private:
     std::filesystem::path root_;
     SceneDocument document_;
+    PlaySession play_;
+    GameInput gameInput_;
+    GameView gameView_;
     SceneEditor editor_;
     ParticleEditor particleEditor_;
     MaterialEditor materialEditor_;
@@ -49,6 +59,12 @@ private:
     std::string cameraScene_, preparedEnvironment_, status_, unresolvedScene_, startupStatus_, resourceStatus_;
     bool recoveredLegacy_{false};
     bool simulationSuspended_{},skipSimulationTime_{true};
+    bool togglePlayPending_{},focusGame_{},deferredSceneReload_{};
+    Camera editCameraBeforePlay_;
+    std::string playStatus_;
+    SceneDocument& activeDocument() { return play_.playing()?play_.document():document_; }
+    const SceneDocument& activeDocument() const { return play_.playing()?play_.document():document_; }
+    void transitionPlay(Renderer&,Navigation&,bool stop);
     void restoreSession(AssetLibrary&);
     void saveSession() noexcept;
 };

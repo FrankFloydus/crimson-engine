@@ -242,10 +242,10 @@ struct AssetPreviews::Impl {
                 continue;
             }
             const auto fingerprint=assets.modelFingerprint(model.assetId); hash(sourceKey,fingerprint); hash(sourceKey,model.world);
-            const auto materials=assets.resolvedModelMaterials(*asset);
-            if (!assets.modelMaterialsReady(*asset)) {
+            const auto materials=assets.resolvedModelMaterials(*asset,model.materialId);
+            if (!assets.modelMaterialsReady(*asset,model.materialId)) {
                 loaded=false;
-                const auto diagnostic=assets.modelMaterialsDiagnostic(*asset);
+                const auto diagnostic=assets.modelMaterialsDiagnostic(*asset,model.materialId);
                 if (!diagnostic.empty()) entry.error=diagnostic;
                 continue;
             }
@@ -348,7 +348,7 @@ struct AssetPreviews::Impl {
         }
         for (const auto& model:models) {
             if (!assets.findModel(model.assetId) && !assets.modelLoading(model.assetId)) continue;
-            const auto ready=prepared.prepare(model.assetId,model.world,settings.camera,PreviewSize,false,ResourcePriority::Preview);
+            const auto ready=prepared.prepare(model.assetId,model.world,settings.camera,PreviewSize,false,ResourcePriority::Preview,0,model.materialId);
             if (!ready || !ready->ready || !ready->refined) return;
             if (!texturesMatchSources(assets,root,*dependencies,ready->materials,ready->textures,resources,refreshedSources)) return;
             pins->models.push_back(ready);

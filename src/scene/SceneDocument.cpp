@@ -1,4 +1,5 @@
 #include "SceneDocument.h"
+#include "BuiltinModels.h"
 #include "assets/AtomicFile.h"
 #include "math/Json.h"
 #include "resources/AssetRefJson.h"
@@ -83,13 +84,16 @@ EntityId unusedId(const std::vector<EntityRecord>& records) {
     return result;
 }
 template<class Light> Json lightJson(const Light& light) {
-    return { {"color",light.color}, {"intensity",light.intensity}, {"enabled",light.enabled} };
+    Json result{{"color",light.color}, {"intensity",light.intensity}, {"enabled",light.enabled}};
+    if constexpr(requires { light.radius; })result["radius"]=light.radius;
+    return result;
 }
 template<class Light> Light readLight(const Json& json) {
     Light result;
     result.color = json.at("color").get<Vec3>();
     result.intensity = json.at("intensity").get<float>();
     result.enabled = json.at("enabled").get<bool>();
+    if constexpr(requires { result.radius; })result.radius=json.value("radius",20.f);
     return result;
 }
 uint64_t fingerprint(std::string_view contents) {
@@ -128,13 +132,17 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
     const auto contents=readText(path);
     const Json json=Json::parse(contents);
     const auto version=json.at("version").get<int>();
-    if ((version!=1 && version!=2 && version!=3) || json.at("type") != "crimson-scene")
+    if ((version<1 || version>4) || json.at("type") != "crimson-scene")
         throw std::runtime_error("Unsupported scene file type or version.");
     SceneSnapshot result; result.fingerprint=fingerprint(contents);
     result.name = json.at("name").get<std::string>();
     if (result.name.empty() || result.name.size() > 1024) throw std::runtime_error("Scene name is invalid.");
     const auto& settings = json.at("settings");
     if (version>=2) result.properties.activeEnvironment=parseId(settings.at("activeEnvironment"));
+    if (version>=4) {
+        result.properties.activeCamera=parseId(settings.at("activeCamera"));
+        result.properties.playerCharacter=parseId(settings.at("playerCharacter"));
+    }
     const auto& entities = json.at("entities");
     if (!entities.is_array() || entities.size() > 100000) throw std::runtime_error("Invalid scene entity array.");
     result.records.reserve(entities.size());
@@ -149,10 +157,21 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
         record.order = order.get<uint32_t>();
         record.local = entity.at("local").get<Mat4>();
         if (entity.contains("model")) record.model=entity.at("model").get<AssetRef<ModelAsset>>();
+        if (entity.contains("modelMaterial")) record.modelMaterial=entity.at("modelMaterial").get<AssetRef<MaterialAsset>>();
         if (entity.contains("directional")) record.directional = readLight<SceneDirectionalLight>(entity.at("directional"));
         if (entity.contains("point")) record.point = readLight<ScenePointLight>(entity.at("point"));
         if (version>=2 && entity.contains("environment")) record.environment=readEnvironment(entity.at("environment"));
         if (version>=3 && entity.contains("particle")) record.particle=entity.at("particle").get<AssetRef<ParticleEffectAsset>>();
+        if (version>=4 && entity.contains("character")) {
+            const auto& c=entity.at("character");
+            record.character=SceneCharacter{c.at("height").get<float>(),c.at("radius").get<float>(),c.at("moveSpeed").get<float>()};
+        }
+        if (version>=4 && entity.contains("collider")) record.collider=SceneCollider{entity.at("collider").at("size").get<Vec3>()};
+        if (version>=4 && entity.contains("camera")) {
+            const auto& c=entity.at("camera");
+            record.camera=SceneCamera{c.at("verticalFov").get<float>(),c.at("near").get<float>(),c.at("far").get<float>(),
+                parseId(c.at("followTarget")),c.at("followOffset").get<Vec3>()};
+        }
         result.records.push_back(std::move(record));
     }
     if (version==1) {
@@ -183,14 +202,20 @@ Json writeScene(const SceneSnapshot& snapshot) {
         Json entity{{"id",hexId(record.id)}, {"name",record.name}, {"parent",hexId(record.parent)},
             {"order",record.order}, {"local",record.local}};
         if (record.model) entity["model"] = *record.model;
+        if (!record.modelMaterial.empty()) entity["modelMaterial"]=record.modelMaterial;
         if (record.particle) entity["particle"] = *record.particle;
         if (record.directional) entity["directional"] = lightJson(*record.directional);
         if (record.point) entity["point"] = lightJson(*record.point);
         if (record.environment) entity["environment"]=environmentJson(*record.environment);
+        if (record.character) { const auto& c=*record.character;entity["character"]={{"height",c.height},{"radius",c.radius},{"moveSpeed",c.moveSpeed}}; }
+        if (record.collider) entity["collider"]={{"size",record.collider->size}};
+        if (record.camera) { const auto& c=*record.camera;entity["camera"]={{"verticalFov",c.verticalFov},{"near",c.nearPlane},{"far",c.farPlane},
+            {"followTarget",hexId(c.followTarget)},{"followOffset",c.followOffset}}; }
         entities.push_back(std::move(entity));
     }
-    Json result{{"version",3},{"type","crimson-scene"},{"name",snapshot.name},{"entities",std::move(entities)},
-        {"settings",{{"activeEnvironment",hexId(snapshot.properties.activeEnvironment)}}}};
+    Json result{{"version",4},{"type","crimson-scene"},{"name",snapshot.name},{"entities",std::move(entities)},
+        {"settings",{{"activeEnvironment",hexId(snapshot.properties.activeEnvironment)},
+            {"activeCamera",hexId(snapshot.properties.activeCamera)},{"playerCharacter",hexId(snapshot.properties.playerCharacter)}}}};
     if (snapshot.previewCamera) {
         if (!validCamera(*snapshot.previewCamera)) throw std::runtime_error("Scene preview camera is invalid.");
         const auto& camera=*snapshot.previewCamera;
@@ -198,6 +223,43 @@ Json writeScene(const SceneSnapshot& snapshot) {
             {"fov",camera.fov},{"near",camera.nearPlane},{"far",camera.farPlane}};
     }
     return result;
+}
+enum EntityField : uint32_t {
+    Name=1u<<0, Parent=1u<<1, Order=1u<<2, Local=1u<<3, Model=1u<<4, Particle=1u<<5,
+    Directional=1u<<6, Point=1u<<7, Environment=1u<<8, Character=1u<<9, Collider=1u<<10, CameraField=1u<<11,
+    ModelMaterialField=1u<<12, AllEntityFields=(1u<<13)-1
+};
+enum PropertyField : uint32_t { ActiveEnvironment=1u<<0,ActiveCamera=1u<<1,PlayerCharacter=1u<<2 };
+template<class T> bool equalLight(const std::optional<T>& a,const std::optional<T>& b) {
+    return a.has_value()==b.has_value() && (!a || (a->color==b->color && a->intensity==b->intensity && a->enabled==b->enabled &&
+        [&]{if constexpr(requires { a->radius; })return a->radius==b->radius;else return true;}()));
+}
+uint32_t changedFields(const EntityRecord& a,const EntityRecord& b) {
+    uint32_t fields=0;
+    if(a.name!=b.name)fields|=Name;if(a.parent!=b.parent)fields|=Parent;if(a.order!=b.order)fields|=Order;
+    if(a.local!=b.local)fields|=Local;if(a.model!=b.model)fields|=Model;if(a.particle!=b.particle)fields|=Particle;
+    if(!equalLight(a.directional,b.directional))fields|=Directional;if(!equalLight(a.point,b.point))fields|=Point;
+    if(a.environment.has_value()!=b.environment.has_value() || (a.environment && !sameEnvironment(*a.environment,*b.environment)))fields|=Environment;
+    if(a.character!=b.character)fields|=Character;if(a.collider!=b.collider)fields|=Collider;if(a.camera!=b.camera)fields|=CameraField;
+    if(a.modelMaterial!=b.modelMaterial)fields|=ModelMaterialField;
+    return fields;
+}
+void copyFields(EntityRecord& target,const EntityRecord& source,uint32_t fields) {
+    if(fields&Name)target.name=source.name;if(fields&Parent)target.parent=source.parent;if(fields&Order)target.order=source.order;
+    if(fields&Local)target.local=source.local;if(fields&Model)target.model=source.model;if(fields&Particle)target.particle=source.particle;
+    if(fields&Directional)target.directional=source.directional;if(fields&Point)target.point=source.point;
+    if(fields&Environment)target.environment=source.environment;if(fields&Character)target.character=source.character;
+    if(fields&Collider)target.collider=source.collider;if(fields&CameraField)target.camera=source.camera;
+    if(fields&ModelMaterialField)target.modelMaterial=source.modelMaterial;
+}
+uint32_t changedProperties(const SceneProperties& a,const SceneProperties& b) {
+    return (a.activeEnvironment!=b.activeEnvironment?ActiveEnvironment:0u) |
+        (a.activeCamera!=b.activeCamera?ActiveCamera:0u) | (a.playerCharacter!=b.playerCharacter?PlayerCharacter:0u);
+}
+void copyProperties(SceneProperties& target,const SceneProperties& source,uint32_t fields) {
+    if(fields&ActiveEnvironment)target.activeEnvironment=source.activeEnvironment;
+    if(fields&ActiveCamera)target.activeCamera=source.activeCamera;
+    if(fields&PlayerCharacter)target.playerCharacter=source.playerCharacter;
 }
 SceneCommand difference(const std::string& label, const std::vector<EntityRecord>& before,
                         const std::vector<EntityRecord>& after, const SceneProperties& beforeProperties,
@@ -211,18 +273,78 @@ SceneCommand difference(const std::string& label, const std::vector<EntityRecord
     for (const auto& record : before) previous.emplace(record.id,&record);
     for (const auto& record : after) {
         const auto found = previous.find(record.id);
-        if (found == previous.end()) command.entities.push_back({record.id,std::nullopt,record});
+        if (found == previous.end()) command.entities.push_back({record.id,std::nullopt,record,AllEntityFields});
         else {
-            if (!sameEntity(*found->second,record)) command.entities.push_back({record.id,*found->second,record});
+            if (const auto fields=changedFields(*found->second,record)) command.entities.push_back({record.id,*found->second,record,fields});
             previous.erase(found);
         }
     }
-    for (const auto& [id,record] : previous) command.entities.push_back({id,*record,std::nullopt});
+    for (const auto& [id,record] : previous) command.entities.push_back({id,*record,std::nullopt,AllEntityFields});
     std::sort(command.entities.begin(),command.entities.end(),[](const auto& a,const auto& b) { return a.id < b.id; });
     if (!sameProperties(beforeProperties,afterProperties)) {
         command.beforeProperties = beforeProperties; command.afterProperties = afterProperties;
+        command.propertyFields=changedProperties(beforeProperties,afterProperties);
     }
     return command;
+}
+void mergeCommand(SceneCommand& accumulated,const SceneCommand& step) {
+    for(const auto& next:step.entities) {
+        auto current=std::find_if(accumulated.entities.begin(),accumulated.entities.end(),[&](const auto& change){return change.id==next.id;});
+        if(current==accumulated.entities.end()){accumulated.entities.push_back(next);continue;}
+        if(!next.after) {
+            if(!current->before){accumulated.entities.erase(current);continue;}
+            auto restored=*next.before;copyFields(restored,*current->before,current->fields);
+            current->before=std::move(restored);current->after.reset();current->fields=AllEntityFields;
+        } else if(!next.before || !current->after) {
+            current->after=next.after;current->fields=current->before?changedFields(*current->before,*current->after):AllEntityFields;
+        } else {
+            if(current->before)copyFields(*current->before,*next.before,next.fields&~current->fields);
+            copyFields(*current->after,*next.after,next.fields);current->fields|=next.fields;
+        }
+    }
+    if(step.beforeProperties) {
+        if(!accumulated.beforeProperties){accumulated.beforeProperties=step.beforeProperties;accumulated.afterProperties=step.afterProperties;}
+        else {
+            copyProperties(*accumulated.beforeProperties,*step.beforeProperties,step.propertyFields&~accumulated.propertyFields);
+            copyProperties(*accumulated.afterProperties,*step.afterProperties,step.propertyFields);
+        }
+        accumulated.propertyFields|=step.propertyFields;
+    }
+    accumulated.afterSelection=step.afterSelection;
+}
+void pruneCommand(SceneCommand& command) {
+    for(auto& change:command.entities) if(change.before && change.after)change.fields&=changedFields(*change.before,*change.after);
+    std::erase_if(command.entities,[](const auto& change){return !change.fields;});
+    if(command.beforeProperties && command.afterProperties)command.propertyFields&=changedProperties(*command.beforeProperties,*command.afterProperties);
+    if(!command.propertyFields){command.beforeProperties.reset();command.afterProperties.reset();}
+}
+void updateFollowOffsets(const Scene& previous,std::vector<EntityRecord>& records,const SceneProperties& properties) {
+    if(std::none_of(records.begin(),records.end(),[](const auto& record){return record.camera && record.camera->followTarget;}))return;
+    Scene::validate(records,properties);
+    std::unordered_map<EntityId,const EntityRecord*> indexed;
+    for(const auto& record:records)indexed.emplace(record.id,&record);
+    const auto rawWorld=[&](EntityId id) {
+        Mat4 world;
+        while(id){const auto& record=*indexed.at(id);world=record.local*world;id=record.parent;}
+        return world;
+    };
+    for(auto& record:records) {
+        if(!record.camera || !record.camera->followTarget)continue;
+        const auto before=previous.find(record.id);
+        if(!before || !before->camera || before->camera->followTarget!=record.camera->followTarget ||
+            before->camera->followOffset!=record.camera->followOffset)continue;
+        // Follow owns world translation. An ancestor rotation/scale must not
+        // rotate its world-space offset; only a deliberate camera position edit
+        // changes that offset. World-preserving reparenting retains it too.
+        if(before->parent!=record.parent || math::transformPoint(before->local,{0,0,0})==math::transformPoint(record.local,{0,0,0}))continue;
+        const auto oldWorld=previous.worldTransform(record.id);
+        if(!oldWorld)continue;
+        const auto delta=math::transformPoint(rawWorld(record.id),{0,0,0})-math::transformPoint(*oldWorld,{0,0,0});
+        if(delta==Vec3{})continue;
+        const auto oldTarget=previous.worldTransform(record.camera->followTarget);
+        const auto targetDelta=oldTarget?math::transformPoint(rawWorld(record.camera->followTarget),{0,0,0})-math::transformPoint(*oldTarget,{0,0,0}):Vec3{};
+        record.camera->followOffset=record.camera->followOffset+delta-targetDelta;
+    }
 }
 }
 
@@ -299,12 +421,36 @@ void SceneDocument::select(std::vector<EntityId> ids, EntityId primary) {
 bool SceneDocument::dirty() const {
     if (history_.dirty()) return true;
     if (!transaction_) return false;
-    if (!sameProperties(transaction_->properties,scene_.properties())) return true;
-    const auto current = scene_.records();
-    if (current.size() != transaction_->before.size()) return true;
-    for (size_t index=0;index<current.size();++index)
-        if (!sameEntity(current[index],transaction_->before[index])) return true;
-    return false;
+    const auto& command=transaction_->command;
+    if(command.beforeProperties && (changedProperties(*command.beforeProperties,*command.afterProperties)&command.propertyFields))return true;
+    return std::any_of(command.entities.begin(),command.entities.end(),[](const auto& change){
+        return !change.before || !change.after || (changedFields(*change.before,*change.after)&change.fields)!=0;
+    });
+}
+bool SceneDocument::resetTransientFrom(const SceneDocument& source) {
+    if(&source==this){status_="Cannot clone a runtime document into itself.";return false;}
+    try {
+        auto candidate=std::make_unique<Scene>();candidate->apply(source.scene().records(),source.scene().properties());
+        auto selection=source.selection_;auto id=source.assetId_;auto name=source.name_;
+        scene_.adoptPrepared(*candidate);selection_=std::move(selection);assetId_=std::move(id);name_=std::move(name);
+        previewCamera_=source.previewCamera_;loadedFingerprint_=source.loadedFingerprint_;transaction_.reset();history_.reset(true);
+        transient_=true;++documentGeneration_;status_.clear();return true;
+    }catch(const std::exception& error){status_=error.what();return false;}
+}
+bool SceneDocument::applyRuntimePoses(std::span<const ScenePoseUpdate> poses) {
+    if(!transient_){status_="Simulation poses require a transient Play document.";return false;}
+    try{scene_.applyRuntimePoses(poses);return true;}catch(const std::exception& error){status_=error.what();return false;}
+}
+bool SceneDocument::beginTransform(const std::string& label,std::vector<EntityId> roots) {
+    if(!begin(label))return false;
+    setTransformEditRoots(std::move(roots));return true;
+}
+void SceneDocument::setTransformEditRoots(std::vector<EntityId> roots) {
+    if(transaction_)transaction_->transformRoots=scene_.topmost(roots);
+}
+const std::vector<EntityId>& SceneDocument::transformEditRoots() const {
+    static const std::vector<EntityId> empty;
+    return transaction_?transaction_->transformRoots:empty;
 }
 void SceneDocument::newScene() {
     scene_.apply({},SceneProperties{});
@@ -322,6 +468,7 @@ bool SceneDocument::openPreparedSnapshot(const SceneSnapshot& snapshot) {
     return applyPreparedSnapshot(snapshot,false,true);
 }
 bool SceneDocument::save(const std::string& name, bool saveAs, bool overwriteExternal) {
+    if(transient_){status_="Stop Play before saving a scene.";return false;}
     if (transaction_ && !commit()) return false;
     try {
         std::string savedName = name.empty() ? name_ : name;
@@ -355,7 +502,7 @@ std::vector<std::string> SceneDocument::historicalModelReferences() const {
     for (const auto& command:history_.commands_) for (const auto& change:command.entities) {
         if (change.before) add(*change.before); if (change.after) add(*change.after);
     }
-    if (transaction_) for (const auto& record:transaction_->before) add(record);
+    if (transaction_) for (const auto& change:transaction_->command.entities) {if(change.before)add(*change.before);if(change.after)add(*change.after);}
     std::vector<std::string> result(references.begin(),references.end());
     std::sort(result.begin(),result.end()); return result;
 }
@@ -373,9 +520,18 @@ std::vector<std::string> SceneDocument::historicalParticleReferences() const {
     for (const auto& command:history_.commands_) for (const auto& change:command.entities) {
         if (change.before) add(*change.before); if (change.after) add(*change.after);
     }
-    if (transaction_) for (const auto& record:transaction_->before) add(record);
+    if (transaction_) for (const auto& change:transaction_->command.entities) {if(change.before)add(*change.before);if(change.after)add(*change.after);}
     std::vector<std::string> result(references.begin(),references.end());
     std::sort(result.begin(),result.end()); return result;
+}
+std::vector<std::string> SceneDocument::historicalMaterialReferences() const {
+    std::unordered_set<std::string> references;
+    const auto add=[&](const EntityRecord& record) {if(!record.modelMaterial.empty())references.insert(record.modelMaterial.id);};
+    for(const auto& command:history_.commands_)for(const auto& change:command.entities) {
+        if(change.before)add(*change.before);if(change.after)add(*change.after);
+    }
+    if(transaction_)for(const auto& change:transaction_->command.entities) {if(change.before)add(*change.before);if(change.after)add(*change.after);}
+    std::vector<std::string> result(references.begin(),references.end());std::sort(result.begin(),result.end());return result;
 }
 bool SceneDocument::applyReloadSnapshot(const SceneSnapshot& snapshot,bool preserveSelection) {
     return applyPreparedSnapshot(snapshot,preserveSelection,false);
@@ -431,29 +587,35 @@ bool SceneDocument::commitExternalAssetChanges(PreparedExternalChange&& p)noexce
 }
 bool SceneDocument::begin(const std::string& label) {
     if (transaction_) { status_ = "Finish the active edit first."; return false; }
-    transaction_ = Transaction{label,scene_.records(),scene_.properties(),selection_};
+    transaction_.emplace();transaction_->command.label=label;
+    transaction_->command.beforeSelection=transaction_->command.afterSelection=selection_;
     status_.clear(); return true;
 }
 bool SceneDocument::update(const Mutation& mutation) {
     if (!transaction_) { status_ = "There is no active edit."; return false; }
     try {
-        auto records = scene_.records(); auto properties = scene_.properties();
+        const auto before=scene_.records();const auto beforeProperties=scene_.properties();
+        auto records = before; auto properties = beforeProperties;
         mutation(records,properties);
+        updateFollowOffsets(scene_,records,properties);
+        auto command=transaction_->command;
+        mergeCommand(command,difference(command.label,before,records,beforeProperties,properties,selection_,selection_));
         scene_.apply(records,properties);
+        transaction_->command=std::move(command);
         sanitizeSelection(); status_.clear(); return true;
     } catch (const std::exception& error) { status_ = error.what(); return false; }
 }
 bool SceneDocument::commit() {
     if (!transaction_) return true;
-    auto command = difference(transaction_->label,transaction_->before,scene_.records(),transaction_->properties,
-                              scene_.properties(),transaction_->selection,selection_);
+    auto command = transaction_->command;command.afterSelection=selection_;pruneCommand(command);
     if (!command.entities.empty() || command.beforeProperties) history_.push(std::move(command));
     transaction_.reset(); return true;
 }
 void SceneDocument::cancel() {
     if (!transaction_) return;
-    scene_.apply(transaction_->before,transaction_->properties);
-    selection_ = transaction_->selection; transaction_.reset(); sanitizeSelection();
+    const auto previousStatus=status_;
+    auto command=transaction_->command;pruneCommand(command);
+    if(applyHistory(command,false)){transaction_.reset();status_=previousStatus;}
 }
 bool SceneDocument::edit(const std::string& label, const Mutation& mutation) {
     if (!begin(label)) return false;
@@ -464,12 +626,18 @@ bool SceneDocument::applyHistory(const SceneCommand& command, bool forward) {
     try {
         auto records = scene_.records(); auto properties = scene_.properties();
         for (const auto& change : command.entities) {
-            std::erase_if(records,[&](const auto& record) { return record.id == change.id; });
             const auto& restored = forward ? change.after : change.before;
-            if (restored) records.push_back(*restored);
+            const auto current=std::find_if(records.begin(),records.end(),[&](const auto& record){return record.id==change.id;});
+            if(change.before && change.after) {
+                if(current==records.end())throw std::runtime_error("Edited entity no longer exists.");
+                copyFields(*current,*restored,change.fields);
+            } else {
+                if(current!=records.end())records.erase(current);
+                if(restored)records.push_back(*restored);
+            }
         }
         const auto& restoredProperties = forward ? command.afterProperties : command.beforeProperties;
-        if (restoredProperties) properties = *restoredProperties;
+        if (restoredProperties) copyProperties(properties,*restoredProperties,command.propertyFields);
         scene_.apply(records,properties);
         selection_ = forward ? command.afterSelection : command.beforeSelection;
         sanitizeSelection(); status_.clear(); return true;
@@ -538,8 +706,66 @@ EntityId SceneDocument::createEnvironment(const std::string& name) {
     })) { cancel(); return NoEntity; }
     selection_={{record.id},record.id}; commit(); return record.id;
 }
+EntityId SceneDocument::createCharacter(const std::string& name) {
+    if(!begin("Create character"))return NoEntity;
+    EntityRecord record;record.id=unusedId(scene_.records());record.name=name;record.character.emplace();
+    if(!update([&](auto& records,auto& properties){
+        record.order=nextOrder(records,NoEntity);records.push_back(record);
+        if(!properties.playerCharacter)properties.playerCharacter=record.id;
+    })){cancel();return NoEntity;}
+    selection_={{record.id},record.id};commit();return record.id;
+}
+EntityId SceneDocument::createCollider(const std::string& name,EntityId parent) {
+    EntityRecord record;record.name=name;record.parent=parent;record.collider.emplace();
+    return create(std::move(record),"Create box collider");
+}
+EntityId SceneDocument::createCamera(const std::string& name) {
+    if(!begin("Create camera"))return NoEntity;
+    EntityRecord record;record.id=unusedId(scene_.records());record.name=name;record.camera.emplace();
+    const auto selected=scene_.worldTransform(selection_.primary);
+    const auto target=selected?math::transformPoint(*selected,{0,0,0}):Vec3{};
+    record.local=math::inverse(math::lookAt(target+Vec3{8,10,8},target)).value_or(Mat4{});
+    if(!update([&](auto& records,auto& properties){
+        record.order=nextOrder(records,NoEntity);records.push_back(record);
+        if(!properties.activeCamera)properties.activeCamera=record.id;
+    })){cancel();return NoEntity;}
+    selection_={{record.id},record.id};commit();return record.id;
+}
+EntityId SceneDocument::createBox(const std::string& name) {
+    return createModel(BuiltinBoxModelId,name);
+}
 bool SceneDocument::setActiveEnvironment(EntityId id) {
     return edit("Activate environment",[id](auto&,auto& properties){properties.activeEnvironment=id;});
+}
+bool SceneDocument::setActiveCamera(EntityId id) {
+    return edit("Activate camera",[id](auto&,auto& properties){properties.activeCamera=id;});
+}
+bool SceneDocument::setPlayerCharacter(EntityId id) {
+    return edit("Set player character",[id](auto&,auto& properties){properties.playerCharacter=id;});
+}
+bool SceneDocument::setCameraFollowTarget(EntityId cameraId,EntityId target) {
+    const auto record=scene_.find(cameraId);
+    const auto world=scene_.worldTransform(cameraId);
+    if(!record || !record->camera || !world){status_="Choose an existing Camera entity.";return false;}
+    auto position=math::transformPoint(*world,{0,0,0});
+    if(record->camera->followTarget)if(const auto oldTarget=scene_.worldTransform(record->camera->followTarget))
+        position=math::transformPoint(*oldTarget,{0,0,0})+record->camera->followOffset;
+    auto updated=*record;
+    updated.camera->followTarget=target;
+    if(target) {
+        const auto targetWorld=scene_.worldTransform(target);
+        if(!targetWorld){status_="Camera follow target no longer exists.";return false;}
+        updated.camera->followOffset=position-math::transformPoint(*targetWorld,{0,0,0});
+    } else {
+        const auto parent=record->parent?scene_.worldTransform(record->parent):std::optional<Mat4>{Mat4{}};
+        const auto inverse=parent?math::inverse(*parent):std::nullopt;
+        if(!inverse){status_="Cannot clear camera follow under a singular parent.";return false;}
+        const auto localPosition=math::transformPoint(*inverse,position);
+        const auto local=math::withAffinePosition(updated.local,localPosition);
+        if(!local){status_="Camera position is not finite under this parent.";return false;}
+        updated.local=*local;updated.camera->followOffset={};
+    }
+    return updateEntity(cameraId,updated,"Change camera follow target");
 }
 bool SceneDocument::updateEntity(EntityId id, const EntityRecord& record, const std::string& label) {
     return edit(label,[&](auto& records,auto&) {
@@ -556,6 +782,13 @@ bool SceneDocument::eraseSelection() {
     if (!update([&](auto& records,auto& properties) {
         std::erase_if(records,[&](const auto& record) { return removed.contains(record.id); });
         if (removed.contains(properties.activeEnvironment)) properties.activeEnvironment=NoEntity;
+        if (removed.contains(properties.activeCamera)) properties.activeCamera=NoEntity;
+        if (removed.contains(properties.playerCharacter)) properties.playerCharacter=NoEntity;
+        for(auto& record:records)if(record.camera && removed.contains(record.camera->followTarget)) {
+            // Follow is already materialized in the local matrix. Clearing the
+            // reference leaves the visible camera pose and its children intact.
+            record.camera->followTarget=NoEntity;record.camera->followOffset={};
+        }
     })) { cancel(); return false; }
     selection_ = {}; return commit();
 }
@@ -568,14 +801,19 @@ bool SceneDocument::duplicateSelection() {
         const auto branch = scene_.subtree(root); originals.insert(originals.end(),branch.begin(),branch.end());
     }
     std::unordered_map<EntityId,EntityId> copied;
+    std::unordered_set<EntityId> copiedIds;
     if (!update([&](auto& records,auto&) {
         for (auto original : originals) {
             auto record = *scene_.find(original);
             record.id = unusedId(records); copied.emplace(original,record.id);
+            copiedIds.insert(record.id);
             if (const auto parent = copied.find(record.parent); parent != copied.end()) record.parent = parent->second;
             else record.name += " Copy";
             record.order = nextOrder(records,record.parent);
             records.push_back(std::move(record));
+        }
+        for(auto& record:records)if(copiedIds.contains(record.id) && record.camera) {
+            if(const auto target=copied.find(record.camera->followTarget);target!=copied.end())record.camera->followTarget=target->second;
         }
     })) { cancel(); return false; }
     selection_ = {};
@@ -651,7 +889,8 @@ bool SceneDocument::ungroupSelection() {
     std::vector<EntityId> groups;
     for (const auto id : scene_.topmost(selection_.ids)) {
         const auto record=scene_.find(id);
-        if (record && !record->model && !record->particle && !record->directional && !record->point && !record->environment && !scene_.children(id).empty()) groups.push_back(id);
+        if (record && !record->model && !record->particle && !record->directional && !record->point && !record->environment &&
+            !record->character && !record->collider && !record->camera && !scene_.children(id).empty()) groups.push_back(id);
     }
     if (groups.empty()) { status_="Select a group to ungroup."; return false; }
     struct ChildMove { EntityId id,parent; Mat4 local; };
@@ -675,6 +914,9 @@ bool SceneDocument::ungroupSelection() {
             record.parent=move.parent; record.order=order; record.local=move.local;
         }
         std::erase_if(records,[&](const auto& r){return std::find(groups.begin(),groups.end(),r.id)!=groups.end();});
+        for(auto& record:records)if(record.camera && std::find(groups.begin(),groups.end(),record.camera->followTarget)!=groups.end()) {
+            record.camera->followTarget=NoEntity;record.camera->followOffset={};
+        }
     })) { cancel(); return false; }
     selection_={};
     for (const auto& move : moves) selection_.ids.push_back(move.id);

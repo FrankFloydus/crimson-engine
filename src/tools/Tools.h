@@ -15,6 +15,7 @@ struct ModelInstance;
 
 struct EditorFrame {
     ViewportRegion viewport;
+    bool togglePlay{false};
     bool materialChanged{false};
     bool environmentChanged{false};
     std::string modelDropId;

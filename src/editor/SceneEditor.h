@@ -11,7 +11,7 @@
 namespace crimson {
 class ParticleEditor;
 class MaterialEditor;
-struct PanelVisibility { bool outliner{true}, inspector{true}, assetBrowser{true}; };
+struct PanelVisibility { bool outliner{true}, inspector{true}, assetBrowser{true}, game{false}; };
 // Authoring UI and document transitions. It does not own GPU resources or the world.
 class SceneEditor {
 public:
@@ -22,6 +22,9 @@ public:
     const ViewportAppearance& appearance() const { return preferences_.values().appearance; }
     const PanelVisibility& panels() const { return panels_; }
     void setPanels(const PanelVisibility& panels) { panels_=panels; }
+    bool needsAuthoringDocument() const { return deferred_!=Pending::None || !deferredDeletion_.empty(); }
+    void showGame() { panels_.game=true; }
+    void hideGame() { panels_.game=false; }
     void notifyExternalSceneChange(SceneSnapshot snapshot) { externalScene_=std::move(snapshot); }
     void setParticleBoundsQuery(ParticleBoundsQuery query) { viewport_.setParticleBoundsQuery(std::move(query)); }
 private:
@@ -31,6 +34,9 @@ private:
     EditorPreferences preferences_;
     PanelVisibility panels_;
     Pending pending_{Pending::None};
+    Pending deferred_{Pending::None};
+    std::string deferredAsset_;
+    std::vector<std::string> deferredDeletion_;
     std::string pendingAsset_;
     std::optional<AssetDeletionPlan> deletion_;
     std::unordered_map<std::string,std::string> replacements_;
@@ -43,7 +49,7 @@ private:
     uint64_t openingGeneration_{},openingRevision_{};
     std::array<char,256> sceneName_{};
     bool dirtyPopup_{}, savePopup_{}, deletePopup_{}, saveConflictPopup_{}, externalPopup_{}, openingPopup_{}, saveAs_{}, continueAfterSave_{}, exitAccepted_{}, documentReplaced_{};
-    enum class CommandTarget { Scene,Particle,Material };
+    enum class CommandTarget { Scene,Particle,Material,Game };
     CommandTarget commandTarget_{CommandTarget::Scene};
     void cancelOpen();
     void pumpOpen(SceneDocument&,Renderer&);

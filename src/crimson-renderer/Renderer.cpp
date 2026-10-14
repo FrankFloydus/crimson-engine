@@ -45,6 +45,9 @@ inline constexpr RenderViews MainViews{SceneView,PresentView,GridView,EncodeView
 inline constexpr RenderViews ParticlePreviewViews{4,5,6,7};
 inline constexpr RenderViews ThumbnailViews{11,12,13,14};
 inline constexpr RenderViews MaterialPreviewViews{16,17,18,19};
+// The grid slot is deliberately unused for Game. Its scene is display-ready
+// after the same HDR/tone-map/encode path as the editor image.
+inline constexpr RenderViews GameViews{GameSceneView,GamePresentView,UINT16_MAX,GameEncodeView};
 inline constexpr bgfx::ViewId ThumbnailReadView=15;
 std::uint64_t shaderContentHash(std::span<const std::uint8_t> vertex,std::span<const std::uint8_t> fragment) {
     std::uint64_t hash=14695981039346656037ull;
@@ -230,10 +233,13 @@ struct Renderer::Impl {
     std::unique_ptr<ViewportTargets> materialPreviewTargets;
     std::uint32_t materialPreviewWidth{},materialPreviewHeight{};
     bool materialPreviewDrawable{};
-    ParticleRenderStats particles,previewParticles;
+    std::unique_ptr<ViewportTargets> gameTargets;
+    std::uint32_t gameWidth{},gameHeight{};
+    bool gameDrawable{};
+    ParticleRenderStats particles,previewParticles,gameParticles;
     std::string particleStatus;
     std::vector<particle_rendering::SortKey> particleScratch;
-    std::vector<std::shared_ptr<const void>> particlePins,previousParticlePins;
+    std::vector<std::shared_ptr<const void>> submittedPins,previousSubmittedPins;
     std::unordered_map<std::string,std::unique_ptr<GpuModel>> models;
     std::unique_ptr<ModelGpuCache> streamModels{std::make_unique<ModelGpuCache>()};
     std::uint64_t externalSignature{},programRevision{1},environmentRevision{1};
@@ -254,7 +260,8 @@ struct Renderer::Impl {
     std::string shaderStatus,thumbnailStatus;
     std::array<std::uint64_t,8> programHashes{};
     struct LodSelection { std::uint32_t level{}; std::uint64_t frame{}; };
-    std::unordered_map<std::uint64_t,LodSelection> lodSelections;
+    // Scene and Game may show the same entity at different projected sizes.
+    std::array<std::unordered_map<std::uint64_t,LodSelection>,2> lodSelections;
     std::uint64_t renderFrame{};
     bgfx::TextureHandle white{BGFX_INVALID_HANDLE};
     bgfx::ProgramHandle pbr{BGFX_INVALID_HANDLE}, present{BGFX_INVALID_HANDLE}, gridProgram{BGFX_INVALID_HANDLE}, encode{BGFX_INVALID_HANDLE};
@@ -281,7 +288,7 @@ struct Renderer::Impl {
     void renderTo(const RenderScene&,ViewportTargets&,EnvironmentLighting&,std::uint16_t,std::uint16_t,RenderViews,bool,bool,std::vector<std::shared_ptr<const ResidentModelLod>>* = nullptr,ParticleRenderStats* = nullptr,bool drawEnvironment=false);
     ~Impl() {
         if (!initialized) return;
-        sphere.reset(); fullscreen.reset(); grid.reset(); particleQuad.reset(); models.clear(); streamModels.reset(); targets.reset(); particlePreviewTargets.reset(); pickTargets.reset(); thumbnails.clear();
+        sphere.reset(); fullscreen.reset(); grid.reset(); particleQuad.reset(); models.clear(); streamModels.reset(); targets.reset(); particlePreviewTargets.reset(); gameTargets.reset(); pickTargets.reset(); thumbnails.clear();
         // Keep readback destination memory alive through the final bgfx frame,
         // but release every GPU handle before bgfx shutdown.
         if (pendingPick) pendingPick->targets.reset();
@@ -295,7 +302,7 @@ struct Renderer::Impl {
         destroyHandle(pbr); destroyHandle(present); destroyHandle(gridProgram); destroyHandle(encode);
         destroyHandle(particleProgram);
         destroyHandle(particleBaseColor); destroyHandle(particleParams); destroyHandle(particleSampler);
-        particlePins.clear(); previousParticlePins.clear();
+        submittedPins.clear(); previousSubmittedPins.clear();
         destroyHandle(modelProgram); destroyHandle(modelBase); destroyHandle(modelSurface); destroyHandle(modelEmissive);
         destroyHandle(pickProgram); destroyHandle(pickId); destroyHandle(lightCounts);
         destroyHandle(modelUv); destroyHandle(modelOptions); destroyHandle(modelMaps); destroyHandle(modelEmissiveMap); destroyHandle(modelNormalMatrix);
@@ -440,11 +447,17 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
     bgfx::setViewName(ParticlePreviewViews.present,"05: Particle preview tone map");
     bgfx::setViewName(ParticlePreviewViews.grid,"06: Particle preview grid");
     bgfx::setViewName(ParticlePreviewViews.encode,"07: Particle preview sRGB");
+    bgfx::setViewName(GameViews.scene,"20: Game scene HDR");
+    bgfx::setViewName(GameViews.present,"21: Game tone map");
+    bgfx::setViewName(GameViews.encode,"22: Game sRGB");
+    bgfx::setViewName(ToolsView,"23: Editor tools");
     // Keep natural view IDs: this pinned bgfx backend compares blit order keys
     // with decoded view IDs. Moving PickReadView ahead of a lower-numbered
     // visible pass would copy the ID texture before its model draws complete.
-    // Picking is offscreen, so it can follow the complete visible frame.
-    const bgfx::ViewId order[]{SceneView,PresentView,GridView,EncodeView,4,5,6,7,ToolsView,PickView,PickReadView,11,12,13,14,15,16,17,18,19};
+    // Keep the unused former UI slot 8 in the identity mapping. Every image
+    // encode now precedes tools/native UI without remapping readback indices.
+    const bgfx::ViewId order[]{SceneView,PresentView,GridView,EncodeView,4,5,6,7,8,PickView,PickReadView,11,12,13,14,15,16,17,18,19,
+        GameSceneView,GamePresentView,GameEncodeView,ToolsView};
     bgfx::setViewOrder(SceneView,static_cast<std::uint16_t>(std::size(order)),order);
     for (const auto id : order) bgfx::setViewMode(id,bgfx::ViewMode::Sequential);
 }
@@ -497,11 +510,17 @@ bool Renderer::queueModelLod(const std::string& id,std::uint64_t revision,std::s
 }
 void Renderer::advanceStreaming(std::size_t bytes,double milliseconds) {
     // This boundary runs once per application owner frame. Retain the previous
-    // submitted material leases for an additional frame, including test callers
+    // submitted scene/material/geometry leases for an additional frame, including test callers
     // that advance immediately before processing that frame's queued draws.
-    impl_->previousParticlePins.clear();
-    impl_->previousParticlePins.swap(impl_->particlePins);
+    impl_->previousSubmittedPins.clear();
+    impl_->previousSubmittedPins.swap(impl_->submittedPins);
     impl_->streamModels->advance(bytes,milliseconds);
+    // Advance uploads against last frame's visible set, then collect the union
+    // of Scene and Game for the new frame. A second view must not clear it.
+    impl_->streamModels->beginMainView();
+    ++impl_->renderFrame;
+    if (impl_->renderFrame%120==0) for (auto& selections:impl_->lodSelections)
+        std::erase_if(selections,[&](const auto& item){return impl_->renderFrame-item.second.frame>120;});
     if (!impl_->streamModels->status().empty()) impl_->modelStatus=impl_->streamModels->status();
 }
 bool Renderer::modelStreamReady(const std::string& id,std::uint64_t revision) const { return impl_->streamModels->ready(id,revision); }
@@ -698,6 +717,31 @@ void Renderer::resizeViewport(std::uint32_t width, std::uint32_t height) {
     impl_->width = width; impl_->height = height; impl_->viewportDrawable = true;
 }
 
+void Renderer::resizeGameViewport(std::uint32_t width,std::uint32_t height) {
+    if (!width || !height) { impl_->gameDrawable=false; return; }
+    if (impl_->gameTargets && width==impl_->gameWidth && height==impl_->gameHeight) {
+        impl_->gameDrawable=true; return;
+    }
+    auto targets=std::make_unique<ViewportTargets>(); targets->create(width,height);
+    impl_->gameTargets=std::move(targets);
+    impl_->gameWidth=width; impl_->gameHeight=height; impl_->gameDrawable=true;
+}
+void Renderer::renderGame(const RenderScene& scene) {
+    if (!impl_->gameDrawable || !impl_->gameTargets) {
+        impl_->gameParticles={scene.particles.size(),0,0,scene.particles.size()}; return;
+    }
+    impl_->renderTo(scene,*impl_->gameTargets,*impl_->environment,static_cast<std::uint16_t>(impl_->gameWidth),
+        static_cast<std::uint16_t>(impl_->gameHeight),GameViews,false,false,nullptr,&impl_->gameParticles);
+}
+bgfx::TextureHandle Renderer::gameViewportTexture() const noexcept {
+    return impl_->gameDrawable && impl_->gameTargets ? impl_->gameTargets->display : bgfx::TextureHandle{bgfx::kInvalidHandle};
+}
+void Renderer::releaseGameViewport() {
+    impl_->gameTargets.reset(); impl_->gameDrawable=false;
+    impl_->gameWidth=impl_->gameHeight=0; impl_->gameParticles={};
+}
+const ParticleRenderStats& Renderer::gameParticleStats() const noexcept { return impl_->gameParticles; }
+
 void Renderer::resizeParticlePreview(std::uint32_t width,std::uint32_t height) {
     if (!width || !height) { impl_->particlePreviewDrawable=false; return; }
     if (impl_->particlePreviewTargets && width==impl_->particlePreviewWidth && height==impl_->particlePreviewHeight) {
@@ -752,7 +796,6 @@ void Renderer::renderMaterialPreview(const SceneSettings& settings,const Materia
     struct PreviewPins {std::shared_ptr<const void> material;std::vector<std::shared_ptr<const ResidentModelLod>> geometry;};
     auto framePins=std::make_shared<PreviewPins>();framePins->material=std::move(pins);
     RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances={&instance,1};scene.pinned=framePins;
-    impl_->particlePins.push_back(framePins);
     impl_->renderTo(scene,*impl_->materialPreviewTargets,*impl_->materialPreviewEnvironment,
         static_cast<std::uint16_t>(impl_->materialPreviewWidth),static_cast<std::uint16_t>(impl_->materialPreviewHeight),MaterialPreviewViews,false,false,&framePins->geometry,nullptr,showEnvironment);
 }
@@ -821,7 +864,7 @@ void Renderer::Impl::renderParticles(std::span<const RenderParticle> input,std::
             std::memcpy(instances.data+i*Stride,&value,sizeof(value));
         }
         if(!pinned[materialIndex] && material.pinned) {
-            particlePins.push_back(material.pinned);pinned[materialIndex]=true;
+            submittedPins.push_back(material.pinned);pinned[materialIndex]=true;
         }
         const bool textured=bgfx::isValid(material.colorTexture);
         const float options[]{textured?1.f:0.f,0,0,0};
@@ -841,11 +884,9 @@ void Renderer::Impl::renderParticles(std::span<const RenderParticle> input,std::
 }
 void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,EnvironmentLighting& lighting,
     std::uint16_t w,std::uint16_t h,RenderViews views,bool drawGrid,bool allowPicking,std::vector<std::shared_ptr<const ResidentModelLod>>* pinnedGeometry,ParticleRenderStats* particleStats,bool drawEnvironment) {
-    if (allowPicking) {
-        ++renderFrame;
-        streamModels->beginMainView();
-        if (renderFrame%120==0) std::erase_if(lodSelections,[&](const auto& item){return renderFrame-item.second.frame>120;});
-    }
+    const bool sceneView=views.scene==MainViews.scene || views.scene==GameViews.scene;
+    auto& viewLods=lodSelections[views.scene==GameViews.scene ? 1 : 0];
+    if (scene.pinned) submittedPins.push_back(scene.pinned);
     const auto& settings = scene.settings;
     const auto& textures = scene.sphereTextures;
     const auto* caps = bgfx::getCaps();
@@ -896,6 +937,7 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
         const auto& light = points[i];
         for (std::size_t j=0;j<3;++j) {pointPositions[i*4+j]=finiteOr(light.position[j],0);pointColors[i*4+j]=toLinear(light.color[j]);}
         pointPositions[i*4+3]=light.enabled ? bounded(light.intensity,0,0,10000) : 0;
+        pointColors[i*4+3]=light.inverseRadiusSquared();
     }
     const float lightCountValues[]{static_cast<float>(directionalCount),static_cast<float>(pointCount),0,0};
     const auto bindLighting = [&](std::uint8_t firstEnvironmentSlot) {
@@ -939,7 +981,7 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
         if (found == models.end() && !(stream && streamModels->ready(asset.id,instance.resourceRevision))) {
             ++missing;
         } else {
-            if (allowPicking && stream) streamModels->markRendered(asset.id,instance.resourceRevision);
+            if (sceneView && stream) streamModels->markRendered(asset.id,instance.resourceRevision);
             std::array<float,4> pickColor{};
             if (capturePick && instance.pickable && instance.entityId) {
                 pickColor = picking::color(pendingPick->entities.add(instance.entityId));
@@ -959,18 +1001,21 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
                     const auto& primitive=stream->primitives[draw.primitive];
                     auto desired=instance.forceFullDetail ? 0u : streaming::chooseModelLod(primitive.levels,world,primitive.bounds,eye,
                         settings.camera.verticalFov(aspect)*std::numbers::pi_v<float>/180,h);
-                    if (allowPicking && instance.entityId && !instance.forceFullDetail) {
+                    if (sceneView && instance.entityId && !instance.forceFullDetail) {
                         const auto key=(instance.entityId*1099511628211ull)^currentDraw;
-                        const auto previous=lodSelections.find(key);
-                        if (previous!=lodSelections.end() && previous->second.level!=desired)
+                        const auto previous=viewLods.find(key);
+                        if (previous!=viewLods.end() && previous->second.level!=desired)
                             desired=streaming::chooseModelLod(primitive.levels,world,primitive.bounds,eye,settings.camera.verticalFov(aspect)*std::numbers::pi_v<float>/180,h,
                                 desired>previous->second.level ? .8f:1.2f);
-                        lodSelections[key]={desired,renderFrame};
+                        viewLods[key]={desired,renderFrame};
                     }
                     resident=streamModels->resident(asset.id,instance.resourceRevision,draw.primitive,desired);
                 }
                 if (!resident && (found==models.end() || draw.primitive>=found->second->primitives.size())) { ++missing; continue; }
-                if (resident && pinnedGeometry) pinnedGeometry->push_back(resident);
+                if (resident) {
+                    submittedPins.push_back(resident);
+                    if (pinnedGeometry) pinnedGeometry->push_back(resident);
+                }
                 const auto bindGeometry=[&] { if (resident) resident->bind(); else found->second->primitives[draw.primitive].bind(); };
                 const auto materialIndex = asset.primitives[draw.primitive].material;
                 const auto& material=instance.materials && materialIndex<instance.materials->size() ? (*instance.materials)[materialIndex]:asset.materials[materialIndex];
@@ -1024,7 +1069,7 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
             }
         }
     }
-    if (allowPicking) {
+    if (sceneView) {
         if (missing) modelStatus = "Scene has " + std::to_string(missing) + " model instance(s) without prepared resources.";
         else if (skipped) modelStatus = "Skipped " + std::to_string(skipped) + " draw(s) with invalid or nonfinite transforms.";
         else if (collapsed) modelStatus = "Hidden " + std::to_string(collapsed) + " draw(s) with a collapsed transform (for example, zero scale).";

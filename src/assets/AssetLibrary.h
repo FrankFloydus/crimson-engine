@@ -87,15 +87,15 @@ public:
     void noteAssetWrite(const std::string& id) { ownWrites_.push_back(projectRoot_/pathFromUtf8(id)); }
     std::vector<std::filesystem::path> takeOwnWrites() { auto result=std::move(ownWrites_);ownWrites_.clear();return result; }
     bool modelBindingsReady(const std::vector<ModelMaterialTextures>&) const;
-    bool modelMaterialsReady(const ModelAsset&) const;
-    std::string modelMaterialsDiagnostic(const ModelAsset&) const;
+    bool modelMaterialsReady(const ModelAsset&,const std::string& materialOverride={}) const;
+    std::string modelMaterialsDiagnostic(const ModelAsset&,const std::string& materialOverride={}) const;
     void rebuildModelCache(const std::string& id);
     void setTextureDemand(std::uint32_t edge,bool nativeQuality=false);
     void setThumbnailDemand(std::uint32_t edge) { thumbnailDemand_=edge; }
     std::size_t textureResidentBytes() const;
     void trimTextureCache(std::size_t bytes);
     ModelResolvers modelResolvers() const;
-    std::vector<ModelMaterial> resolvedModelMaterials(const ModelAsset& model) const;
+    std::vector<ModelMaterial> resolvedModelMaterials(const ModelAsset& model,const std::string& materialOverride={}) const;
     AssetReferenceManager& references() { return references_; }
     const AssetReferenceManager& references() const { return references_; }
     AssetDeletionPlan planDeletion(const std::vector<std::string>& ids,const SceneDocument* active=nullptr);

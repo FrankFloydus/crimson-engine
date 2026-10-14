@@ -111,6 +111,7 @@ void SceneEditor::perform(SceneDocument& document, Camera& camera, Renderer& ren
 }
 void SceneEditor::request(Pending operation, const std::string& asset, SceneDocument& document,
                           Camera& camera, Renderer& renderer) {
+    if(document.transient()) { deferred_=operation;deferredAsset_=asset;return; }
     if (pending_ != Pending::None) return;
     if (opening_ || !openingError_.empty() || deletion_) {
         cancelOpen();
@@ -124,6 +125,7 @@ void SceneEditor::request(Pending operation, const std::string& asset, SceneDocu
     else perform(document,camera,renderer);
 }
 void SceneEditor::save(SceneDocument& document, AssetLibrary& assets, bool saveAs) {
+    if(document.transient())return;
     if (viewport_.interacting()) return;
     if (document.transactionActive()) document.commit();
     if (saveAs || document.assetId().empty()) {
@@ -310,9 +312,18 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
                               uint32_t bgfxFrame, bool quitRequested, ParticleEditor& particles, MaterialEditor& materials) {
     documentReplaced_=false;
     editingAssets_=&assets;
+    if(!document.transient() && deferred_!=Pending::None) {
+        const auto operation=deferred_;const auto asset=std::move(deferredAsset_);deferred_=Pending::None;
+        request(operation,asset,document,settings.camera,renderer);
+    }
+    if(!document.transient() && !deferredDeletion_.empty()) {
+        cancelInteraction(document,renderer);deletion_=assets.planDeletion(deferredDeletion_,&document);
+        deferredDeletion_.clear();replacements_.clear();deletionStatus_.clear();deletePopup_=true;
+    }
     pumpOpen(document,renderer);
     const auto previousPanels=panels_;
     bool resetLayout=false;
+    bool togglePlay=false;
     document.setPreviewCamera(settings.camera);
     // Resolve one document at a time so modal ownership and Cancel remain clear.
     if (quitRequested) materials.requestExit();
@@ -324,7 +335,9 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
         else if(const auto* focused=ImGui::GetCurrentContext()->NavWindow) {
             const std::string_view name=focused->RootWindow->Name;
             if(name=="Viewport" || name=="Outliner" || name=="Inspector")commandTarget_=CommandTarget::Scene;
-        }
+            else if(name=="Game")commandTarget_=CommandTarget::Game;
+            else if(commandTarget_==CommandTarget::Game)commandTarget_=CommandTarget::Scene;
+        } else if(commandTarget_==CommandTarget::Game)commandTarget_=CommandTarget::Scene;
         if((commandTarget_==CommandTarget::Particle && !particles.isOpen()) ||
            (commandTarget_==CommandTarget::Material && !materials.isOpen()))commandTarget_=CommandTarget::Scene;
     };
@@ -351,8 +364,8 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("New scene")) request(Pending::New,{},document,settings.camera,renderer);
-            if (ImGui::MenuItem("Save","Ctrl+S",false,!viewport_.interacting() && (!materialFocus || materials.canSave()))) { saveTarget(false); }
-            if (ImGui::MenuItem("Save as...","Ctrl+Shift+S",false,!viewport_.interacting() && (!materialFocus || materials.canSaveAs()))) { saveTarget(true); }
+            if (ImGui::MenuItem("Save","Ctrl+S",false,!viewport_.interacting() && (materialFocus || particleFocus || !document.transient()) && (!materialFocus || materials.canSave()))) { saveTarget(false); }
+            if (ImGui::MenuItem("Save as...","Ctrl+Shift+S",false,!viewport_.interacting() && (materialFocus || particleFocus || !document.transient()) && (!materialFocus || materials.canSaveAs()))) { saveTarget(true); }
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Edit")) {
@@ -375,11 +388,15 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
             ImGui::MenuItem("Outliner",nullptr,&panels_.outliner);
             ImGui::MenuItem("Inspector",nullptr,&panels_.inspector);
             ImGui::MenuItem("Asset Browser","Ctrl+Space",&panels_.assetBrowser);
+            ImGui::MenuItem("Game",nullptr,&panels_.game);
             ImGui::Separator();
             if (ImGui::MenuItem("Reset layout")) resetLayout=true;
             ImGui::EndMenu();
         }
-        ImGui::Text("%s%s",document.displayName().c_str(),document.dirty() ? " *" : "");
+        ImGui::BeginDisabled(document.transactionActive() || opening_ || deletion_ || pending_!=Pending::None || ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup));
+        if(ImGui::Button(document.transient()?"Stop":"Play"))togglePlay=true;
+        ImGui::EndDisabled();ImGui::SameLine();
+        ImGui::Text("%s%s%s",document.displayName().c_str(),document.transient()?" (Play)":"",document.dirty() ? " *" : "");
         ImGui::EndMainMenuBar();
     }
     if (((previousPanels.inspector && !panels_.inspector) || (previousPanels.outliner && !panels_.outliner)) &&
@@ -393,7 +410,8 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     };
     const bool preferencesMouse=preferencesWindow(context->HoveredWindow) ||
         (context->ActiveId && preferencesWindow(context->ActiveIdWindow)) || preferencesWindow(context->MovingWindow);
-    const bool preferencesKeyboard=preferencesMouse || preferencesWindow(context->NavWindow);
+    const bool gameKeyboard=context->NavWindow && std::string_view(context->NavWindow->RootWindow->Name)=="Game";
+    const bool preferencesKeyboard=preferencesMouse || preferencesWindow(context->NavWindow) || gameKeyboard;
     const bool actionPending=opening_ || openingPopup_ || deletePopup_;
     std::uint64_t playParticle{};std::string openParticle;
     if (panels_.inspector) drawSceneInspector(document,assets,renderer,!viewport_.interacting() && !actionPending,&playParticle,&openParticle);
@@ -413,16 +431,19 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     if (browser.newScene) request(Pending::New,{},document,settings.camera,renderer);
     if (!browser.openScene.empty()) request(Pending::Open,browser.openScene,document,settings.camera,renderer);
     if (!browser.deleteAssetIds.empty()) {
-        cancelOpen();
-        cancelInteraction(document,renderer); deletion_=assets.planDeletion(browser.deleteAssetIds,&document);
-        replacements_.clear(); deletionStatus_.clear(); deletePopup_=true;
+        if(document.transient())deferredDeletion_=browser.deleteAssetIds;
+        else {
+            cancelOpen();
+            cancelInteraction(document,renderer); deletion_=assets.planDeletion(browser.deleteAssetIds,&document);
+            replacements_.clear(); deletionStatus_.clear(); deletePopup_=true;
+        }
     }
     const auto& io=ImGui::GetIO();
     updateCommandTarget();
     const bool particleKeyboardTarget=commandTarget_==CommandTarget::Particle;
     const bool materialKeyboardTarget=commandTarget_==CommandTarget::Material;
     const bool targetTransaction=materialKeyboardTarget?materials.transactionActive():particleKeyboardTarget?particles.transactionActive():document.transactionActive();
-    const auto shortcuts=readSceneShortcuts({actionPending,preferencesKeyboard,navigationActive,
+    const auto shortcuts=readSceneShortcuts({actionPending,preferencesKeyboard || commandTarget_==CommandTarget::Game,navigationActive,
         targetTransaction,!frame.modelDropId.empty() || !frame.modelDropIds.empty() || !frame.particleDropId.empty(),particleKeyboardTarget,materialKeyboardTarget});
     if (shortcuts.toggleAssetBrowser) panels_.assetBrowser=!panels_.assetBrowser;
     if (shortcuts.save)saveTarget(shortcuts.saveAs);
@@ -433,7 +454,7 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     if (shortcuts.focusSelection && !frame.viewport.hovered && frame.viewport.height > 0)
         viewport_.focus(settings.camera,document,assets,frame.viewport.width/frame.viewport.height);
     if (externalScene_ && externalScene_->id!=document.assetId()) externalScene_.reset();
-    if (externalScene_ && !viewport_.interacting() && !document.transactionActive() &&
+    if (externalScene_ && !document.transient() && !viewport_.interacting() && !document.transactionActive() &&
         !ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup)) {
         if (externalScene_->fingerprint==document.loadedFingerprint()) externalScene_.reset();
         else if (document.dirty()) externalPopup_=true;
@@ -446,6 +467,7 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     frame.viewport.inputBlocked |= io.WantTextInput || ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup) ||
         ImGui::GetDragDropPayload() != nullptr || document.transactionActive() || actionPending || preferencesMouse;
     frame.documentReplaced=documentReplaced_;
+    frame.togglePlay=togglePlay;
     return frame;
 }
 }

@@ -37,6 +37,7 @@ public:
     explicit AssetReferenceManager(std::filesystem::path projectRoot);
     std::string resolve(const std::string& id) const;
     std::string resolveMaterial(const std::string& id) const;
+    std::string resolveModelMaterial(const std::string& id) const;
     std::string resolveTexture(const std::string& id, bool normal=false) const;
     std::string resolveEnvironment(const std::string& id) const;
     std::string resolveParticle(const std::string& id) const;

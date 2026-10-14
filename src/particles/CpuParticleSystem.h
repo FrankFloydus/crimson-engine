@@ -1,6 +1,7 @@
 #pragma once
 
 #include "assets/ParticleAsset.h"
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -31,7 +32,7 @@ public:
     size_t reservedCapacity() const { return particles_.capacity(); }
     const ParticleEffectAsset& definition() const { return definition_; }
     // Append presentation packets without disturbing authoritative particle order.
-    void appendPresentation(std::vector<ParticlePresentation>& out) const;
+    void appendPresentation(std::vector<ParticlePresentation>& out,std::optional<double> interpolationOverride = {}) const;
 private:
     ParticleEffectAsset definition_;
     ParticleSimulationLimits limits_;

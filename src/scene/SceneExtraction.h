@@ -11,6 +11,7 @@ struct ExtractedModel {
     EntityId id{};
     std::string assetId;
     Mat4 world{};
+    std::string materialId;
 };
 struct ExtractedParticle {
     EntityId id{};
@@ -28,6 +29,9 @@ struct ExtractedScene {
 // The scene owns ECS traversal. Rendering receives copied presentation values,
 // with no EnTT handles, registry pointers, component pointers, or GPU ownership.
 ExtractedScene extractScene(const Scene& scene);
+// Resolves the active entity camera, including positional follow. Editor camera
+// and persisted thumbnail preview camera remain independent.
+std::optional<Camera> resolveGameCamera(const Scene& scene);
 
 // Direction in which emitted light travels. Use the authored local -Z axis,
 // including affine parent transforms; scale affects its length, not intensity.

@@ -2,6 +2,7 @@
 #include "crimson-renderer/RenderTypes.h"
 #include "crimson-renderer/ModelTransform.h"
 #include "crimson-renderer/ParticleRenderTypes.h"
+#include "crimson-renderer/shaders/point_light.sh"
 #include "input/Navigation.h"
 #include <SDL3/SDL_init.h>
 
@@ -38,6 +39,34 @@ void throws(Function&& function) {
 }
 
 double length(double x, double y, double z) { return std::sqrt(x*x + y*y + z*z); }
+
+void pointLightRadiusContract() {
+    using namespace crimson;
+    using point_lighting::pointLightAttenuation;
+    PointLight light;near(light.radius,20);
+    const auto attenuation=[&](float distance){return pointLightAttenuation(distance*distance,light.inverseRadiusSquared());};
+    near(light.inverseRadiusSquared(),1.f/400.f);
+    near(attenuation(0),100); // Existing finite inverse-square source cap.
+    require(attenuation(5)*25>.99f,"Default radius unexpectedly changed near-field legacy illumination.");
+    float previous=attenuation(0);
+    for(unsigned index=1;index<=200;++index) {
+        const auto value=attenuation(static_cast<float>(index)*.1f);
+        require(std::isfinite(value) && value>=0 && value<=previous,"Point-light attenuation is not finite, positive and monotonic.");
+        previous=value;
+    }
+    near(attenuation(20),0);near(attenuation(21),0);near(attenuation(1000),0);
+    const float nearEdge=attenuation(19.99f),fartherFromEdge=attenuation(19.98f);
+    require(nearEdge>0 && fartherFromEdge>0 && nearEdge<fartherFromEdge*.3f,
+        "Point-light radius did not approach zero with a smooth zero-slope boundary.");
+    const auto smallRadius=attenuation(10);light.radius=40;
+    require(attenuation(10)>smallRadius && attenuation(30)>0,"Increasing radius did not extend and brighten its influence region.");
+    near(attenuation(40),0);
+    for(const float radius:{.01f,100000.f,0.f,-1.f,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()}) {
+        light.radius=radius;const auto inverse=light.inverseRadiusSquared();
+        require(std::isfinite(inverse) && inverse>0 && std::isfinite(pointLightAttenuation(0,inverse)),
+            "Point-light radius packing generated a nonfinite shader parameter.");
+    }
+}
 
 void checkSphere(uint32_t segments, uint32_t rings, float radius) {
     const auto mesh = crimson::makeUvSphere(segments, rings, radius);
@@ -165,6 +194,34 @@ void cameraCoordinateContract() {
     near(eye[0],0); near(eye[1],1); near(eye[2],4);
     near(forward[0],0); near(forward[1],0); near(forward[2],-1); near(right[0],1);
     near(camera.verticalFov(2),45); require(camera.verticalFov(.5f) > 45,"Narrow viewport must preserve its shorter-dimension FOV");
+}
+
+void gameCameraVerticalFraming() {
+    using namespace crimson;
+    Camera camera; camera.position={0,0,5}; camera.target={0,0,0}; camera.up={0,1,0};
+    camera.fov=60; camera.fovAxis=CameraFovAxis::Vertical;
+    const double expectedVertical=1/std::tan(std::numbers::pi_v<double>/6);
+    for (const float aspect:{.5f,1.f,2.f}) {
+        near(camera.verticalFov(aspect),60);
+        for (const auto depth:{ClipDepth::ZeroToOne,ClipDepth::NegativeOneToOne}) {
+            const auto projection=camera.projectionMatrix(aspect,depth);
+            near(projection.at(1,1),expectedVertical);
+            near(projection.at(0,0),expectedVertical/aspect);
+            const float halfHeight=static_cast<float>(5*std::tan(std::numbers::pi_v<double>/6));
+            const auto top=math::project({0,halfHeight,0},projection*camera.viewMatrix(),{20,30,600*aspect,600},depth);
+            require(top.has_value(),"Game camera could not project its vertical frustum edge.");
+            near((*top)[1],30,1e-4);
+        }
+        const ViewportRegion region{20,30,600*aspect,600,true,false};
+        const auto ray=camera.screenRay(20+300*aspect,30,region);
+        require(ray.has_value(),"Portrait/landscape Game camera lost its screen ray.");
+        near(math::dot(ray->direction,camera.up)/math::dot(ray->direction,camera.forward()),
+            std::tan(std::numbers::pi_v<double>/6),1e-5);
+    }
+    camera.fov=120; near(camera.verticalFov(.5f),120);
+    camera.fov=std::numeric_limits<float>::quiet_NaN(); near(camera.verticalFov(.5f),45);
+    camera.fovAxis=CameraFovAxis::ShorterDimension; camera.fov=60;
+    require(camera.verticalFov(.5f)>60,"Game FOV policy changed the existing editor framing convention.");
 }
 
 void cameraOrbitAndZoomBounds() {
@@ -443,6 +500,8 @@ int main() {
     run("sphere input validation", sphereRejectsInvalidInput);
     run("sphere uint16 index capacity and overflow rejection", sphereIndexCapacity);
     run("camera Y-up coordinate contract", cameraCoordinateContract);
+    run("point-light radius bounds inverse-square influence with smooth finite falloff", pointLightRadiusContract);
+    run("Game vertical FOV preserves projection and rays across window aspects", gameCameraVerticalFraming);
     run("camera orbit signs, upright lock and reversible soft zoom", cameraOrbitAndZoomBounds);
     run("camera pan, fly look and normalized time-based movement", cameraPanAndFly);
     run("camera finite-input handling and stored-state fallback", cameraNonfiniteInput);

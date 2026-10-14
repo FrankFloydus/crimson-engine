@@ -108,6 +108,13 @@ public:
     Renderer& operator=(const Renderer&) = delete;
     void resize(std::uint32_t width, std::uint32_t height);
     void resizeViewport(std::uint32_t width, std::uint32_t height);
+    // Independent camera view. It shares scene resources and the one bgfx
+    // frame, but never changes editor picking, overlays or viewport targets.
+    void resizeGameViewport(std::uint32_t width,std::uint32_t height);
+    void renderGame(const RenderScene&);
+    bgfx::TextureHandle gameViewportTexture() const noexcept;
+    void releaseGameViewport();
+    const ParticleRenderStats& gameParticleStats() const noexcept;
     // Independent reusable preview; submission shares the application's one
     // bgfx frame and never modifies the main viewport targets or picking.
     void resizeParticlePreview(std::uint32_t width, std::uint32_t height);

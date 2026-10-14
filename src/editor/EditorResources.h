@@ -26,7 +26,8 @@ public:
     void beginFrame();
     void endFrame();
     std::shared_ptr<const PreparedEditorModel> prepare(const std::string& id,const Mat4& world,const Camera&,
-        uint32_t viewportHeight,bool selected,ResourcePriority priority=ResourcePriority::Visible);
+        uint32_t viewportHeight,bool selected,ResourcePriority priority=ResourcePriority::Visible,float viewportAspect=0,
+        const std::string& materialOverride={});
     void invalidate(const std::string& id);
     void clear();
     const std::string& status() const { return status_; }
@@ -38,6 +39,7 @@ private:
         uint64_t geometryRevision{};
         uint64_t repairRevision{};
         std::string geometryAssetId;
+        std::string sourceId;
         std::unordered_map<std::string,ResourceHandle<ModelGeometryLevel>> geometry;
         std::chrono::steady_clock::time_point used;
         bool wanted{};

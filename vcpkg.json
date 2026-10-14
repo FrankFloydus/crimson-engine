@@ -13,6 +13,8 @@
     "meshoptimizer",
     "glm",
     "entt",
+    "joltphysics",
+    "recastnavigation",
     "imguizmo"
   ]
 }

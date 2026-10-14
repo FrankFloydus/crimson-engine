@@ -2,8 +2,10 @@
 #include "InspectorTransform.h"
 #include "Tools.h"
 #include "scene/SceneDocument.h"
+#include "scene/BuiltinModels.h"
 #include "assets/AssetLibrary.h"
 #include "crimson-renderer/Renderer.h"
+#include "crimson-renderer/ImGuiBgfx.h"
 
 #include <imgui.h>
 #include <algorithm>
@@ -21,7 +23,8 @@ constexpr const char* EntityPayload = "CRIMSON_SCENE_ENTITIES";
 enum class Edit { None, Name, InlineName,
     PositionX, PositionY, PositionZ, RotationX, RotationY, RotationZ, ScaleX, ScaleY, ScaleZ,
     DirectionEnabled, DirectionColor, DirectionIntensity,
-    PointEnabled, PointColor, PointIntensity, Exposure, Environment };
+    PointEnabled, PointColor, PointIntensity, PointRadius, Exposure, Environment,
+    CharacterHeight, CharacterRadius, CharacterSpeed, ColliderSize, CameraFov, CameraNear, CameraFar };
 enum class Panel { None, Outliner, Inspector };
 Panel owner(Edit edit) {
     if (edit==Edit::None) return Panel::None;
@@ -41,6 +44,7 @@ struct PanelsState {
     std::array<char,1025> rename{};
     Edit active{Edit::None};
     InspectorTransformState transform;
+    std::string materialDiagnostic;
 };
 PanelsState& stateFor(SceneDocument& document) {
     static PanelsState state;
@@ -67,6 +71,9 @@ bool selected(const SceneDocument& document, EntityId id) {
     return std::find(ids.begin(),ids.end(),id)!=ids.end();
 }
 const char* kind(const EntityRecord& record) {
+    if (record.character) return "Character";
+    if (record.collider) return "Collider";
+    if (record.camera) return "Camera";
     if (record.model) return "Model";
     if (record.particle) return "Particle effect";
     if (record.directional) return "Directional light";
@@ -93,7 +100,12 @@ void selectRow(SceneDocument& document, PanelsState& state, EntityId id, bool to
     } else document.select({id},id);
     state.anchor=id;
 }
-void addMenu(SceneDocument& document) {
+void addMenu(SceneDocument& document,EntityId parent=NoEntity) {
+    if (ImGui::MenuItem("Box")) document.createBox();
+    if (ImGui::MenuItem("Collider")) document.createCollider("Collider",parent);
+    if (ImGui::MenuItem("Character")) document.createCharacter();
+    if (ImGui::MenuItem("Camera")) document.createCamera();
+    ImGui::Separator();
     if (ImGui::MenuItem("Empty / group")) document.createEmpty("Group");
     if (ImGui::MenuItem("Directional light")) document.createDirectionalLight();
     if (ImGui::MenuItem("Point light")) document.createPointLight();
@@ -125,7 +137,7 @@ bool beginEdit(SceneDocument& document, PanelsState& state, Edit edit, const cha
     if (state.active==edit && document.transactionActive()) return true;
     if (state.active!=Edit::None && document.transactionActive()) document.commit();
     state.active=Edit::None;
-    if (!document.begin(label)) return false;
+    if (!(transformEdit(edit) ? document.beginTransform(label,{document.selection().primary}) : document.begin(label))) return false;
     state.active=edit; return true;
 }
 void finishEdit(SceneDocument& document, PanelsState& state, Edit edit) {
@@ -183,8 +195,66 @@ void lightControls(SceneDocument& document, PanelsState& state, EntityId id, boo
     propertyEdit(document,state,directional ? Edit::DirectionIntensity : Edit::PointIntensity,"Change light intensity",intensityChanged,
         changeEntity(id,[directional,intensity](auto& entity){if (directional) entity.directional->intensity=intensity; else entity.point->intensity=intensity;}));
     if (directional) ImGui::TextWrapped("Rotate the entity to aim the light along its local -Z axis.");
-    else ImGui::TextWrapped("Position controls the light location. Intensity uses inverse-square attenuation.");
+    else {
+        auto radius=record->point->radius;
+        const bool changed=ImGui::DragFloat("Radius (m)",&radius,.1f,.01f,100000.f,"%.2f",ImGuiSliderFlags_AlwaysClamp);
+        propertyEdit(document,state,Edit::PointRadius,"Change point light radius",changed,
+            changeEntity(id,[radius](auto& entity){entity.point->radius=radius;}));
+        ImGui::TextWrapped("Light fades smoothly to zero at this world-space radius. Entity scale does not change its range.");
+    }
     ImGui::PopID();
+}
+void builtinMaterialControls(SceneDocument& document,PanelsState& state,const EntityRecord& record,AssetLibrary& assets,const Renderer& renderer) {
+    const auto assigned=record.modelMaterial.id;
+    const auto materialId=assigned.empty()?std::string(DefaultMaterialId):assets.references().resolveMaterial(assigned);
+    const auto material=assets.findMaterial(materialId);
+    const auto model=assets.findModel(record.model->id);
+    const auto assign=[&](const std::string& id) {
+        if(!id.empty()) {
+            const auto candidate=assets.findMaterial(id);
+            if(!candidate || !modelMaterialCompatible(*candidate)){state.materialDiagnostic="Choose a Standard PBR material with Opaque or Mask blending.";return;}
+            try {if(model)(void)assets.resolvedModelMaterials(*model,id);}
+            catch(const std::exception& error){state.materialDiagnostic=error.what();return;}
+        }
+        if(document.transactionActive() && !finishScenePanelEdit(document))return;
+        if(document.edit("Assign Box material",changeEntity(record.id,[id](auto& entity){entity.modelMaterial=AssetRef<MaterialAsset>{id};})))state.materialDiagnostic.clear();
+    };
+    ImGui::TextUnformatted("Material");
+    const float height=ImGui::GetFrameHeight(),gap=ImGui::GetStyle().ItemInnerSpacing.x;
+    const float width=std::max(height,ImGui::GetContentRegionAvail().x-2*height-2*gap);
+    ImGui::BeginGroup();bool picker=ImGui::InvisibleButton("Box material",{width,height});
+    const auto minimum=ImGui::GetItemRectMin(),maximum=ImGui::GetItemRectMax();auto* draw=ImGui::GetWindowDrawList();
+    draw->AddRectFilled(minimum,maximum,ImGui::GetColorU32(ImGui::IsItemHovered()?ImGuiCol_FrameBgHovered:ImGuiCol_FrameBg),ImGui::GetStyle().FrameRounding);
+    const auto thumbnail=renderer.thumbnailTexture(materialId);
+    if(bgfx::isValid(thumbnail))draw->AddImage(ImGuiBgfx::textureId(thumbnail),{minimum.x+3,minimum.y+3},{minimum.x+height-3,maximum.y-3});
+    else if(material) {const auto& c=material->surface.baseColor;draw->AddRectFilled({minimum.x+3,minimum.y+3},{minimum.x+height-3,maximum.y-3},ImGui::ColorConvertFloat4ToU32({c[0],c[1],c[2],1}));}
+    const auto label=assigned.empty()?std::string("Default PBR"):material?assets.displayName(materialId):"Missing: "+assets.displayName(assigned);
+    draw->PushClipRect({minimum.x+height,minimum.y},{maximum.x-3,maximum.y},true);
+    draw->AddText({minimum.x+height,minimum.y+(height-ImGui::GetFontSize())*.5f},ImGui::GetColorU32(ImGuiCol_Text),label.c_str());draw->PopClipRect();
+    ImGui::SameLine(0,gap);picker|=ImGui::Button("...##Box material",{height,height});
+    ImGui::SameLine(0,gap);ImGui::BeginDisabled(assigned.empty());if(ImGui::Button("x##Box material",{height,height}))assign({});ImGui::EndDisabled();
+    ImGui::EndGroup();
+    if(ImGui::BeginDragDropTarget()) {
+        if(const auto* payload=ImGui::AcceptDragDropPayload("CC_MATERIAL_ASSET")) {
+            const auto* bytes=static_cast<const char*>(payload->Data);
+            if(bytes && payload->DataSize>1 && bytes[payload->DataSize-1]=='\0' && std::find(bytes,bytes+payload->DataSize-1,'\0')==bytes+payload->DataSize-1)
+                assign(std::string(bytes,static_cast<size_t>(payload->DataSize-1)));
+        }
+        ImGui::EndDragDropTarget();
+    }
+    static ImGuiTextFilter filter;
+    if(picker){filter.Clear();ImGui::OpenPopup("Select Box material");}
+    if(ImGui::BeginPopup("Select Box material")) {
+        filter.Draw("Search");ImGui::BeginChild("Material choices",{320,ImGui::GetFontSize()*12});
+        if(ImGui::Selectable("Default PBR",assigned.empty())){assign({});ImGui::CloseCurrentPopup();}
+        for(const auto& entry:assets.catalog())if(entry.kind==AssetKind::Material && filter.PassFilter(assets.displayName(entry.id).c_str())) {
+            const auto candidate=assets.findMaterial(entry.id);if(!candidate || !modelMaterialCompatible(*candidate))continue;
+            ImGui::PushID(entry.id.c_str());if(ImGui::Selectable(assets.displayName(entry.id).c_str(),entry.id==materialId)){assign(entry.id);ImGui::CloseCurrentPopup();}ImGui::PopID();
+        }
+        ImGui::EndChild();ImGui::EndPopup();
+    }
+    if(!state.materialDiagnostic.empty())ImGui::TextWrapped("%s",state.materialDiagnostic.c_str());
+    if(model && !assigned.empty() && !assets.modelMaterialsReady(*model,assigned))ImGui::TextWrapped("%s",assets.modelMaterialsDiagnostic(*model,assigned).c_str());
 }
 void modelInformation(const EntityRecord& record, const AssetLibrary& assets) {
     const auto model=assets.findModel(record.model->id);
@@ -202,7 +272,7 @@ void modelInformation(const EntityRecord& record, const AssetLibrary& assets) {
     }
     ImGui::Text("%llu source vertices, %llu triangles",static_cast<unsigned long long>(vertices),static_cast<unsigned long long>(indices/3));
     for (const auto& warning:model->warnings) ImGui::TextWrapped("%s",warning.c_str());
-    if (ImGui::TreeNode("Imported materials (read-only)")) {
+    if (model->format!="BUILTIN" && ImGui::TreeNode("Imported materials (read-only)")) {
         auto materials=model->materials;
         try { materials=assets.resolvedModelMaterials(*model); }
         catch (const std::exception& error) { ImGui::TextWrapped("Material unavailable: %s",error.what()); }
@@ -229,6 +299,71 @@ void modelInformation(const EntityRecord& record, const AssetLibrary& assets) {
             ImGui::PopID();
         }
         ImGui::TreePop();
+    }
+}
+void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRecord& record) {
+    if(record.character && ImGui::CollapsingHeader("Character",ImGuiTreeNodeFlags_DefaultOpen)) {
+        if(document.scene().properties().playerCharacter==record.id)ImGui::TextUnformatted("Player Character");
+        else if(ImGui::Button("Make Player"))document.setPlayerCharacter(record.id);
+        auto value=*record.character;
+        const bool height=ImGui::DragFloat("Height (m)",&value.height,.02f,2*value.radius,100.f,"%.3f",ImGuiSliderFlags_AlwaysClamp);
+        propertyEdit(document,state,Edit::CharacterHeight,"Change character height",height,
+            changeEntity(record.id,[v=value.height](auto& entity){entity.character->height=v;}));
+        const bool radius=ImGui::DragFloat("Radius (m)",&value.radius,.01f,.01f,value.height*.5f,"%.3f",ImGuiSliderFlags_AlwaysClamp);
+        propertyEdit(document,state,Edit::CharacterRadius,"Change character radius",radius,
+            changeEntity(record.id,[v=value.radius](auto& entity){entity.character->radius=v;}));
+        const bool speed=ImGui::DragFloat("Speed (m/s)",&value.moveSpeed,.1f,0,1000,"%.2f",ImGuiSliderFlags_AlwaysClamp);
+        propertyEdit(document,state,Edit::CharacterSpeed,"Change movement speed",speed,
+            changeEntity(record.id,[v=value.moveSpeed](auto& entity){entity.character->moveSpeed=v;}));
+        ImGui::TextWrapped("Parent visuals beneath this entity. The capsule origin is at its feet; keep its world scale at one.");
+    }
+    if(record.collider && ImGui::CollapsingHeader("Collider",ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::TextUnformatted("Shape: Box");
+        auto size=record.collider->size;
+        const bool changed=ImGui::DragFloat3("Size (m)",size.data(),.02f,.001f,10000,"%.3f",ImGuiSliderFlags_AlwaysClamp);
+        propertyEdit(document,state,Edit::ColliderSize,"Resize collider",changed,
+            changeEntity(record.id,[size](auto& entity){entity.collider->size=size;}));
+        ImGui::TextWrapped("Static collision. Size is local; parent scale also applies. Outline is visible only in Scene view.");
+    }
+    if(record.camera && ImGui::CollapsingHeader("Camera",ImGuiTreeNodeFlags_DefaultOpen)) {
+        if(document.scene().properties().activeCamera==record.id)ImGui::TextUnformatted("Active Camera");
+        else if(ImGui::Button("Make Active"))document.setActiveCamera(record.id);
+        auto value=*record.camera;
+        const bool fov=ImGui::DragFloat("Vertical FOV",&value.verticalFov,.2f,1,179,"%.1f deg",ImGuiSliderFlags_AlwaysClamp);
+        propertyEdit(document,state,Edit::CameraFov,"Change camera FOV",fov,
+            changeEntity(record.id,[v=value.verticalFov](auto& entity){entity.camera->verticalFov=v;}));
+        const bool nearChanged=ImGui::DragFloat("Near (m)",&value.nearPlane,.01f,.001f,value.farPlane-.001f,"%.3f",ImGuiSliderFlags_AlwaysClamp);
+        propertyEdit(document,state,Edit::CameraNear,"Change camera clipping",nearChanged,
+            changeEntity(record.id,[v=value.nearPlane](auto& entity){entity.camera->nearPlane=v;}));
+        const bool farChanged=ImGui::DragFloat("Far (m)",&value.farPlane,1,value.nearPlane+.001f,100000,"%.1f",ImGuiSliderFlags_AlwaysClamp);
+        propertyEdit(document,state,Edit::CameraFar,"Change camera clipping",farChanged,
+            changeEntity(record.id,[v=value.farPlane](auto& entity){entity.camera->farPlane=v;}));
+        ImGui::TextUnformatted("Follow Target");
+        const auto target=document.scene().find(value.followTarget);
+        const auto height=ImGui::GetFrameHeight(),gap=ImGui::GetStyle().ItemInnerSpacing.x;
+        const auto width=std::max(height,ImGui::GetContentRegionAvail().x-2*height-2*gap);
+        if(ImGui::Button(target?target->name.c_str():"None (Entity)",{width,height}))ImGui::OpenPopup("Choose follow target");
+        if(ImGui::BeginDragDropTarget()) {
+            if(const auto* payload=ImGui::AcceptDragDropPayload(EntityPayload))if(payload->DataSize==sizeof(DraggedEntities)) {
+                const auto dragged=*static_cast<const DraggedEntities*>(payload->Data);
+                if(dragged.document==&document && dragged.generation==document.scene().generation())document.setCameraFollow(record.id,dragged.source);
+            }
+            ImGui::EndDragDropTarget();
+        }
+        ImGui::SameLine(0,gap);if(ImGui::Button("...##camera-target",{height,height}))ImGui::OpenPopup("Choose follow target");
+        ImGui::SameLine(0,gap);if(ImGui::Button("X##camera-target",{height,height}))document.setCameraFollow(record.id,NoEntity);
+        if(ImGui::BeginPopup("Choose follow target")) {
+            static ImGuiTextFilter filter;filter.Draw("Search");
+            for(const auto& candidate:document.scene().records())if(candidate.id!=record.id && filter.PassFilter(candidate.name.c_str())) {
+                ImGui::PushID(static_cast<int>(candidate.id>>32));ImGui::PushID(static_cast<int>(candidate.id));
+                if(ImGui::Selectable(candidate.name.c_str(),candidate.id==value.followTarget)) {
+                    if(document.setCameraFollow(record.id,candidate.id))ImGui::CloseCurrentPopup();
+                }
+                ImGui::PopID();ImGui::PopID();
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::TextWrapped("Follow keeps your camera angle. Move the camera to change its offset; View > Game previews the active camera.");
     }
 }
 }
@@ -374,7 +509,8 @@ void drawSceneOutliner(SceneDocument& document, bool allowEdits) {
             bool canUngroup=false;
             for (auto root:document.scene().topmost(document.selection().ids)) {
                 const auto group=document.scene().find(root);
-                if (group && !group->model && !group->directional && !group->point && !group->environment && !document.scene().children(root).empty()) canUngroup=true;
+                if (group && !group->model && !group->particle && !group->directional && !group->point && !group->environment &&
+                    !group->character && !group->collider && !group->camera && !document.scene().children(root).empty()) canUngroup=true;
             }
             if (ImGui::MenuItem("Ungroup",nullptr,false,canUngroup)) action=[&document]{document.ungroupSelection();};
             if (ImGui::MenuItem("Unparent",nullptr,false,record.parent!=NoEntity)) action=[&document]{document.reparentSelection(NoEntity);};
@@ -382,7 +518,7 @@ void drawSceneOutliner(SceneDocument& document, bool allowEdits) {
                 document.scene().properties().activeEnvironment!=record.id))
                 action=[&document,id=record.id]{document.setActiveEnvironment(id);};
             ImGui::Separator();
-            if (ImGui::BeginMenu("Add")) { addMenu(document); ImGui::EndMenu(); }
+            if (ImGui::BeginMenu("Add")) { addMenu(document,record.id); ImGui::EndMenu(); }
             ImGui::EndPopup();
         }
         if (!blocked && state.pendingClick==record.id && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
@@ -441,9 +577,13 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
                 finishEdit(document,state,static_cast<Edit>(static_cast<unsigned>(Edit::PositionX)+field));
             }};
         drawInspectorTransform(document,state.transform,*record,transformTransactions);
+        gameplayControls(document,state,*record);
         if (record->directional && ImGui::CollapsingHeader("Directional light",ImGuiTreeNodeFlags_DefaultOpen)) lightControls(document,state,record->id,true);
         if (record->point && ImGui::CollapsingHeader("Point light",ImGuiTreeNodeFlags_DefaultOpen)) lightControls(document,state,record->id,false);
-        if (record->model && ImGui::CollapsingHeader("Model",ImGuiTreeNodeFlags_DefaultOpen)) modelInformation(*record,assets);
+        if (record->model && ImGui::CollapsingHeader("Model",ImGuiTreeNodeFlags_DefaultOpen)) {
+            if(isBuiltinModel(record->model->id))builtinMaterialControls(document,state,*record,assets,renderer);
+            modelInformation(*record,assets);
+        }
         if(record->particle && ImGui::CollapsingHeader("Particle effect",ImGuiTreeNodeFlags_DefaultOpen)) {
             auto assigned=record->particle->id;
             const auto resolved=assets.references().resolve(assigned);

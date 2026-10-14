@@ -1,6 +1,7 @@
 #include "assets/AssetLibrary.h"
 #include "assets/AtomicFile.h"
 #include "assets/MaterialAsset.h"
+#include "assets/BuiltinGeometry.h"
 #include "scene/SceneDocument.h"
 #include "model_fixtures.h"
 
@@ -275,12 +276,61 @@ void spriteImageDeletionAndIncompatibleMaterial(){
     auto unsupported=loadMaterialAsset(p.root,model->materialIds.front());unsupported.shading=MaterialShading::Unlit;unsupported.blend=MaterialBlend::Additive;library.publishMaterial(std::make_shared<MaterialAsset>(unsupported));
     require(!library.modelMaterialsReady(*model)&&!library.modelMaterialsDiagnostic(*model).empty(),"Model renderer silently accepted a sprite-only material mode.");
 }
+void boxMaterialDeletionAndPublication(){
+    Project p;
+    auto red=defaultMaterialAsset();red.id="assets/materials/red.crimson-material";red.name="Red";red.surface.baseColor={1,.1f,.1f,1};saveMaterialAsset(p.root,red);
+    auto blue=red;blue.id="assets/materials/blue.crimson-material";blue.name="Blue";blue.surface.baseColor={.1f,.1f,1,1};saveMaterialAsset(p.root,blue);
+    const auto sprite=createMaterialAsset(p.root,"Unsupported sprite");
+    SceneDocument active(p.root);const auto box=active.createBox();auto entity=*active.scene().find(box);entity.modelMaterial=AssetRef<MaterialAsset>{red.id};
+    require(active.updateEntity(box,entity) && active.save("Box scene"),active.status());
+    SceneDocument other(p.root);const auto otherBox=other.createBox();entity=*other.scene().find(otherBox);entity.modelMaterial=AssetRef<MaterialAsset>{red.id};
+    require(other.updateEntity(otherBox,entity) && other.save("Other Box scene"),other.status());
+    entity=*active.scene().find(box);entity.name="Unsaved local name";require(active.updateEntity(box,entity),active.status());
+    ResourceManager resources;AssetLibrary library(p.root,&resources);
+    const auto geometry=library.findModel(BuiltinBoxModelId);require(bool(geometry),"Built-in Box was unavailable.");
+    const auto original=geometry->materials.front().baseColor;
+    require(library.resolvedModelMaterials(*geometry,red.id).front().baseColor==red.surface.baseColor && library.resolvedModelMaterials(*geometry,blue.id).front().baseColor==blue.surface.baseColor,
+        "Per-instance Box material identities collided.");
+    require(geometry->materials.front().baseColor==original && library.findModel(BuiltinBoxModelId)==geometry,"Instance assignment mutated or copied protected geometry.");
+    library.protectMaterialDocument(red.id);auto committed=red;committed.surface.roughness=.31f;library.publishMaterial(std::make_shared<MaterialAsset>(committed));
+    require(library.resolvedModelMaterials(*geometry,red.id).front().roughness==.31f,"Committed material changes did not reach Box bindings.");
+    auto external=red;external.surface.roughness=.87f;saveMaterialAsset(p.root,external);library.onFileChanged(p.root/red.id);
+    require(library.resolvedModelMaterials(*geometry,red.id).front().roughness==.31f,"Disk hot reload replaced open material authority.");
+    library.protectMaterialDocument({});library.refreshMaterials();
+    require(library.resolvedModelMaterials(*geometry,red.id).front().roughness==.87f,"Closed material document did not resume resource publication.");
+    const auto plan=library.planDeletion({red.id},&active);
+    require(plan.error.empty() && plan.warningUsages.size()==2 && plan.scenes.size()==2 && plan.clearsActiveHistory,"Box material deletion did not discover saved/live/history references.");
+    const auto candidates=library.fallbackCandidates(red.id);
+    require(std::any_of(candidates.begin(),candidates.end(),[&](const auto& value){return value.id==blue.id;}) &&
+        std::none_of(candidates.begin(),candidates.end(),[&](const auto& value){return value.id==sprite.id;}),"Box material deletion offered an incompatible sprite fallback.");
+    require(!library.deleteAssets(plan,{{red.id,sprite.id}},&active) && fs::exists(p.root/red.id),"Incompatible Box material deletion modified files.");
+    finishDeletion(library,resources,plan,{{red.id,blue.id}},&active);
+    const auto saved=readSceneSnapshot(p.root,active.assetId()),otherSaved=readSceneSnapshot(p.root,other.assetId());
+    require(record(saved,box).modelMaterial.id==blue.id && record(otherSaved,otherBox).modelMaterial.id==blue.id,"Material deletion did not update every saved scene.");
+    require(record(saved,box).name=="Box" && active.scene().find(box)->name=="Unsaved local name" && active.dirty(),"Material deletion saved or discarded unrelated live edits.");
+    require(active.scene().find(box)->modelMaterial.id==blue.id && active.history().size()==0 && active.scene().contains(box),"Material deletion lost the entity or allowed deleted material undo.");
+    require(library.resolvedModelMaterials(*geometry,red.id).front().baseColor==blue.surface.baseColor,"Deleted material redirect did not resolve its replacement.");
+    finishDeletion(library,resources,library.planDeletion({blue.id},&active),{},&active);
+    require(active.scene().find(box)->modelMaterial.id==DefaultMaterialId && record(readSceneSnapshot(p.root,other.assetId()),otherBox).modelMaterial.id==DefaultMaterialId,
+        "Default Box material fallback was not durable.");
+    require(geometry->materials.front().baseColor==original && library.resolvedModelMaterials(*geometry,red.id).front().baseColor==original,"Deleted override damaged shared geometry/default material.");
+}
+void boxMaterialHistoryOnlyDeletion(){
+    Project p;auto material=defaultMaterialAsset();material.id="assets/materials/history.crimson-material";material.name="History material";saveMaterialAsset(p.root,material);
+    SceneDocument scene(p.root);const auto box=scene.createBox();require(scene.save("Default Box"),scene.status());const auto saved=read(p.root/scene.assetId());
+    auto entity=*scene.scene().find(box);entity.modelMaterial=AssetRef<MaterialAsset>{material.id};require(scene.updateEntity(box,entity),scene.status());
+    entity.modelMaterial={};require(scene.updateEntity(box,entity),scene.status());ResourceManager resources;AssetLibrary library(p.root,&resources);
+    const auto plan=library.planDeletion({material.id},&scene);require(plan.error.empty() && !plan.needsReferenceWarning() && plan.clearsActiveHistory,"History-only Box material impact was missing or treated as a saved dependency.");
+    finishDeletion(library,resources,plan,{},&scene);
+    require(scene.history().size()==0 && scene.dirty() && scene.scene().find(box)->modelMaterial.empty() && read(p.root/scene.assetId())==saved,
+        "History-only material deletion changed saved content or retained resurrectable references.");
+}
 }
 
 int main(){try{
     // No renderer is initialized and no GPU preparation is advanced. The public
     // runtime AssetLibrary path, reference index and worker deletion pipeline
     // operate on disposable managed data and immutable CPU resources only.
-    warningQueries();archivedLegacyWarnings();embeddedMaterialWarningOwners();removeModelAcrossScenes(false);removeModelAcrossScenes(true);fallbackReopening();cancelAndStaleDeletion();activeSceneAndFolderDeletion();particleMaterialDeletionAndAuthority();spriteImageDeletionAndIncompatibleMaterial();
+    warningQueries();archivedLegacyWarnings();embeddedMaterialWarningOwners();removeModelAcrossScenes(false);removeModelAcrossScenes(true);fallbackReopening();cancelAndStaleDeletion();activeSceneAndFolderDeletion();particleMaterialDeletionAndAuthority();spriteImageDeletionAndIncompatibleMaterial();boxMaterialDeletionAndPublication();boxMaterialHistoryOnlyDeletion();
     std::cout<<"Public AssetLibrary deletion, warning, fallback and document integration checks passed.\n";return 0;
 }catch(const std::exception& error){std::cerr<<"AssetLibrary deletion test failed: "<<error.what()<<'\n';return 1;}}

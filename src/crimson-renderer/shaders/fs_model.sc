@@ -1,6 +1,7 @@
 $input v_worldPosition, v_normal, v_texcoord0, v_texcoord1, v_tangent, v_color0
 
 #include <bgfx_shader.sh>
+#include "point_light.sh"
 
 uniform vec4 u_modelBase;
 uniform vec4 u_modelSurface; // Metallic, roughness, normal scale, occlusion strength.
@@ -13,7 +14,7 @@ uniform vec4 u_cameraPos;
 uniform vec4 u_direction[4];
 uniform vec4 u_directionColor[4];
 uniform vec4 u_pointPosition[16];
-uniform vec4 u_pointColor[16];
+uniform vec4 u_pointColor[16]; // Linear color, inverse squared influence radius.
 uniform vec4 u_lightCounts;
 uniform vec4 u_environment;
 SAMPLER2D(s_albedo, 0);
@@ -153,7 +154,7 @@ void main()
         vec3 delta = u_pointPosition[i].xyz - v_worldPosition;
         float distanceSquared = max(dot(delta, delta), 0.000001);
         vec3 L = delta * inversesqrt(distanceSquared);
-        vec3 radiance = u_pointColor[i].rgb * (u_pointPosition[i].w / max(distanceSquared, 0.01));
+        vec3 radiance = u_pointColor[i].rgb * (u_pointPosition[i].w * pointLightAttenuation(distanceSquared, u_pointColor[i].w));
         color += evaluateLight(N, V, L, radiance, base, metallic, roughness);
     }
     float occlusion = 1.0;

@@ -26,7 +26,7 @@ public:
     // A transactional restart can additionally hold one replacement emitter
     // reservation (at most MaximumParticleCapacity) before retiring its old buffer.
     void reconcile(std::uint64_t documentGeneration,std::span<const ExtractedParticle>,const DefinitionQuery&,
-                   double seconds,EntityId restart=NoEntity);
+                   double seconds,EntityId restart=NoEntity,std::optional<double> interpolationOverride = {});
     std::span<const ParticlePresentation> presentation() const { return presentation_; }
     std::span<const SceneParticleGroup> groups() const { return groups_; }
     std::optional<Aabb> bounds(EntityId) const;
