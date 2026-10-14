@@ -86,6 +86,10 @@ EntityId unusedId(const std::vector<EntityRecord>& records) {
 template<class Light> Json lightJson(const Light& light) {
     Json result{{"color",light.color}, {"intensity",light.intensity}, {"enabled",light.enabled}};
     if constexpr(requires { light.radius; })result["radius"]=light.radius;
+    if constexpr(requires { light.castShadows; }) {
+        result["castShadows"]=light.castShadows;
+        result["shadowDepthBias"]=light.shadowDepthBias;result["shadowNormalBias"]=light.shadowNormalBias;
+    }
     return result;
 }
 template<class Light> Light readLight(const Json& json) {
@@ -94,6 +98,10 @@ template<class Light> Light readLight(const Json& json) {
     result.intensity = json.at("intensity").get<float>();
     result.enabled = json.at("enabled").get<bool>();
     if constexpr(requires { result.radius; })result.radius=json.value("radius",20.f);
+    if constexpr(requires { result.castShadows; }) {
+        result.castShadows=json.value("castShadows",false);
+        result.shadowDepthBias=json.value("shadowDepthBias",.005f);result.shadowNormalBias=json.value("shadowNormalBias",1.f);
+    }
     return result;
 }
 uint64_t fingerprint(std::string_view contents) {
@@ -158,6 +166,7 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
         record.local = entity.at("local").get<Mat4>();
         if (entity.contains("model")) record.model=entity.at("model").get<AssetRef<ModelAsset>>();
         if (entity.contains("modelMaterial")) record.modelMaterial=entity.at("modelMaterial").get<AssetRef<MaterialAsset>>();
+        record.castShadows=entity.value("castShadows",true);record.receiveShadows=entity.value("receiveShadows",true);
         if (entity.contains("directional")) record.directional = readLight<SceneDirectionalLight>(entity.at("directional"));
         if (entity.contains("point")) record.point = readLight<ScenePointLight>(entity.at("point"));
         if (version>=2 && entity.contains("environment")) record.environment=readEnvironment(entity.at("environment"));
@@ -201,7 +210,10 @@ Json writeScene(const SceneSnapshot& snapshot) {
     for (const auto& record : snapshot.records) {
         Json entity{{"id",hexId(record.id)}, {"name",record.name}, {"parent",hexId(record.parent)},
             {"order",record.order}, {"local",record.local}};
-        if (record.model) entity["model"] = *record.model;
+        if (record.model) {
+            entity["model"] = *record.model;
+            entity["castShadows"]=record.castShadows;entity["receiveShadows"]=record.receiveShadows;
+        }
         if (!record.modelMaterial.empty()) entity["modelMaterial"]=record.modelMaterial;
         if (record.particle) entity["particle"] = *record.particle;
         if (record.directional) entity["directional"] = lightJson(*record.directional);
@@ -227,12 +239,11 @@ Json writeScene(const SceneSnapshot& snapshot) {
 enum EntityField : uint32_t {
     Name=1u<<0, Parent=1u<<1, Order=1u<<2, Local=1u<<3, Model=1u<<4, Particle=1u<<5,
     Directional=1u<<6, Point=1u<<7, Environment=1u<<8, Character=1u<<9, Collider=1u<<10, CameraField=1u<<11,
-    ModelMaterialField=1u<<12, AllEntityFields=(1u<<13)-1
+    ModelMaterialField=1u<<12, CastShadows=1u<<13, ReceiveShadows=1u<<14, AllEntityFields=(1u<<15)-1
 };
 enum PropertyField : uint32_t { ActiveEnvironment=1u<<0,ActiveCamera=1u<<1,PlayerCharacter=1u<<2 };
 template<class T> bool equalLight(const std::optional<T>& a,const std::optional<T>& b) {
-    return a.has_value()==b.has_value() && (!a || (a->color==b->color && a->intensity==b->intensity && a->enabled==b->enabled &&
-        [&]{if constexpr(requires { a->radius; })return a->radius==b->radius;else return true;}()));
+    return a==b;
 }
 uint32_t changedFields(const EntityRecord& a,const EntityRecord& b) {
     uint32_t fields=0;
@@ -242,6 +253,7 @@ uint32_t changedFields(const EntityRecord& a,const EntityRecord& b) {
     if(a.environment.has_value()!=b.environment.has_value() || (a.environment && !sameEnvironment(*a.environment,*b.environment)))fields|=Environment;
     if(a.character!=b.character)fields|=Character;if(a.collider!=b.collider)fields|=Collider;if(a.camera!=b.camera)fields|=CameraField;
     if(a.modelMaterial!=b.modelMaterial)fields|=ModelMaterialField;
+    if(a.castShadows!=b.castShadows)fields|=CastShadows;if(a.receiveShadows!=b.receiveShadows)fields|=ReceiveShadows;
     return fields;
 }
 void copyFields(EntityRecord& target,const EntityRecord& source,uint32_t fields) {
@@ -251,6 +263,7 @@ void copyFields(EntityRecord& target,const EntityRecord& source,uint32_t fields)
     if(fields&Environment)target.environment=source.environment;if(fields&Character)target.character=source.character;
     if(fields&Collider)target.collider=source.collider;if(fields&CameraField)target.camera=source.camera;
     if(fields&ModelMaterialField)target.modelMaterial=source.modelMaterial;
+    if(fields&CastShadows)target.castShadows=source.castShadows;if(fields&ReceiveShadows)target.receiveShadows=source.receiveShadows;
 }
 uint32_t changedProperties(const SceneProperties& a,const SceneProperties& b) {
     return (a.activeEnvironment!=b.activeEnvironment?ActiveEnvironment:0u) |

@@ -25,7 +25,11 @@ inline constexpr size_t MaximumPointLights = 16;
 struct Identity { EntityId id{}; std::string name; };
 struct Transform { Mat4 local{}; };
 struct Relationship { EntityId parent{}; uint32_t order{}; };
-struct ModelReference { AssetRef<ModelAsset> assetId; AssetRef<MaterialAsset> material; };
+struct ModelReference {
+    AssetRef<ModelAsset> assetId;
+    AssetRef<MaterialAsset> material;
+    bool castShadows{true},receiveShadows{true};
+};
 // Authored identity only. Playback is transient and reconciled by document
 // generation plus persistent EntityId, never by an EnTT handle.
 struct ParticleReference { AssetRef<ParticleEffectAsset> assetId; };
@@ -33,12 +37,17 @@ struct SceneDirectionalLight {
     Vec3 color{1.0f, 0.96f, 0.9f};
     float intensity{2.0f};
     bool enabled{true};
+    bool operator==(const SceneDirectionalLight&) const = default;
 };
 struct ScenePointLight {
     Vec3 color{1.0f, 1.0f, 1.0f};
     float intensity{35.0f};
     bool enabled{true};
     float radius{20.f}; // World-space meters, independent of entity scale.
+    bool castShadows{false};
+    float shadowDepthBias{.005f}; // World-space meters.
+    float shadowNormalBias{1.f}; // Shadow-map texels.
+    bool operator==(const ScenePointLight&) const = default;
 };
 // Global lighting settings are authored on ordinary entities. Spatial transforms
 // remain part of their hierarchy but do not alter these global settings.
@@ -79,6 +88,8 @@ struct EntityRecord {
     // Empty uses the shared model material. This slice permits overrides only
     // on built-in Box instances; the protected geometry remains immutable.
     AssetRef<MaterialAsset> modelMaterial;
+    // Per rendered model entity; these settings are never inherited by children.
+    bool castShadows{true},receiveShadows{true};
 };
 struct SceneProperties {
     EntityId activeEnvironment{NoEntity};

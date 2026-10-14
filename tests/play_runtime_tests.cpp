@@ -157,6 +157,13 @@ void pointerCollisionAndNoFloor() {
     play.document().edit("Remove wall",[](auto& records,auto&){std::erase_if(records,[](const auto& record){return record.id==9;});});
     for(int i=0;i<60;++i)play.advance(PlaySession::FixedStep,input,view);
     require(play.navigationRevision()==navigationRevision+1,"Live wall deletion did not rebuild navigation once.");
+    input.submitPointer(screenPoint(view,viewport,{-4,0,0}),true);play.advance(PlaySession::FixedStep,input,view);
+    const auto beforeFloorDeletion=x(play.document().scene());
+    play.document().edit("Remove support",[](auto& records,auto&){std::erase_if(records,[](const auto& record){return record.collider.has_value();});});
+    for(int i=0;i<60;++i)play.advance(PlaySession::FixedStep,input,view);
+    require(std::abs(x(play.document().scene())-beforeFloorDeletion)<1e-4 && play.path().empty() &&
+        !play.destination() && (*play.document().scene().worldTransform(2))[13]<-3,
+        "Deleting support geometry retained a stale route or invented a floor.");
     authored.edit("No floor",[](auto& records,auto&){std::erase_if(records,[](const auto& record){return record.collider.has_value();});});
     play.stop();require(play.start(authored),"Cannot restart without colliders.");input.cancel();input.acquire();input.submitPointer(screenPoint(view,viewport,{4,0,0}),true);
     for(int i=0;i<60;++i)play.advance(PlaySession::FixedStep,input,view);
@@ -173,7 +180,8 @@ void unreachableAndReplanning() {
     auto view=camera();view.position={0,10,8};const ViewportRegion viewport{0,0,800,600,true,false,9};
     GameInput input;input.setViewport(viewport,true,false);input.acquire();input.submitPointer(screenPoint(view,viewport,{4,0,0}),true);
     for(int i=0;i<30;++i)play.advance(PlaySession::FixedStep,input,view);
-    require(std::abs(x(play.document().scene()))<.001f && play.path().empty() && play.destination(),"Unreachable click followed a partial route.");
+    require(x(play.document().scene())>.1f && x(play.document().scene())<.65f && play.path().empty() && !play.destination(),
+        "Blocked ground click did not approach and stop safely on this side of the wall.");
     require(play.lastClickedGround() && math::length(*play.lastClickedGround()-Vec3{4,0,0})<.001,"Unreachable ground click lost its debug hit point.");
     play.document().edit("Open route",[](auto& records,auto&){std::erase_if(records,[](const auto& record){return record.id==9;});});
     for(int i=0;i<60;++i)play.advance(PlaySession::FixedStep,input,view);
@@ -183,7 +191,8 @@ void unreachableAndReplanning() {
         wall.collider=SceneCollider{{.2f,2,24}};wall.local=math::translation({1,1,0});records.push_back(wall);});
     const float before=x(play.document().scene());
     for(int i=0;i<30;++i)play.advance(PlaySession::FixedStep,input,view);
-    require(std::abs(x(play.document().scene())-before)<.001f && play.path().empty(),"Inserted collider did not invalidate an active route safely.");
+    require(x(play.document().scene())<before-.5f && x(play.document().scene())>1.4f && x(play.document().scene())<2 && play.path().empty(),
+        "Inserted collider did not replace the active route with a safe approach point.");
     input.cancel();input.acquire();play.advance(PlaySession::FixedStep,input,view);
     require(!play.destination() && play.lastClickedGround(),"Focus cancellation erased the debug marker or retained movement.");
 }
@@ -237,10 +246,13 @@ void heldStationaryCursorFollowsDisplayedProjection() {
     for(int i=0;i<60;++i)play.advance(PlaySession::FixedStep,input,view);
     require(std::abs(x(play.document().scene())-4)<.06f && play.routeQueryCount()==2,"A camera change after release moved the last held destination.");
 }
-void heldInvalidTargetsRetainRoute() {
+void heldProjectedTargetsAndMisses() {
     const auto root=std::filesystem::temp_directory_path()/"crimson-play-cpu-unused";SceneDocument authored(root);fixture(authored);
     authored.edit("Divided floor",[](auto& records,auto&){
-        for(auto& record:records)if(record.id==1)record.collider->size={20,1,20};
+        for(auto& record:records) {
+            if(record.id==1)record.collider->size={20,1,20};
+            if(record.id==2)record.local=math::translation({-4,.05f,0});
+        }
         EntityRecord wall;wall.id=9;wall.name="Wall";wall.collider=SceneCollider{{.2f,2,24}};wall.local=math::translation({1,1,0});records.push_back(wall);
     });
     PlaySession play(root);require(play.start(authored),"Cannot start held-unreachable runtime.");
@@ -249,17 +261,49 @@ void heldInvalidTargetsRetainRoute() {
     input.submitUiPointer(screenPoint(view,viewport,{-5,0,0}),true,true);play.advance(PlaySession::FixedStep,input,view);
     input.submitUiPointer(screenPoint(view,viewport,{4,0,0}),false,true);
     for(int i=0;i<6;++i)play.advance(PlaySession::FixedStep,input,view);
-    require(play.destination() && math::length(*play.destination()-Vec3{-5,0,0})<.001 && !play.path().empty(),"Unreachable held ground discarded the previous accepted route.");
-    require(play.lastClickedGround() && math::length(*play.lastClickedGround()-Vec3{4,0,0})<.001 && play.routeQueryCount()==2,"Rejected held ground lost its debug marker or repeated the same route query.");
+    require(play.destination() && (*play.destination())[0]>.1f && (*play.destination())[0]<.65f && !play.path().empty(),
+        "Blocked held ground did not replace the old route with a reachable approach point.");
+    const auto approach=*play.destination();
+    require(play.lastClickedGround() && math::length(*play.lastClickedGround()-Vec3{4,0,0})<.001 && play.routeQueryCount()==2,"Projected held ground lost its debug marker or repeated the same route query.");
     input.submitUiPointer({400,1},false,true);
     for(int i=0;i<6;++i)play.advance(PlaySession::FixedStep,input,view);
-    require(play.destination() && math::length(*play.destination()-Vec3{-5,0,0})<.001 && play.routeQueryCount()==2,"Empty-space held ray discarded or replaced the last accepted route.");
+    require(play.destination() && math::length(*play.destination()-approach)<.001 && play.routeQueryCount()==2,"Empty-space held ray discarded or replaced the last accepted route.");
     viewport.hovered=false;input.setViewport(viewport,true,false);
     for(int i=0;i<6;++i)play.advance(PlaySession::FixedStep,input,view);
     require(play.destination() && input.ownsKeyboard() && play.routeQueryCount()==2,"Leaving the image canceled the accepted route or continued retargeting.");
     viewport.hovered=true;input.setViewport(viewport,true,false);input.submitUiPointer(screenPoint(view,viewport,{-4,0,0}),false,true);
     for(int i=0;i<3;++i)play.advance(PlaySession::FixedStep,input,view);
     require(play.destination() && math::length(*play.destination()-Vec3{-4,0,0})<.001 && play.routeQueryCount()==3,"Reentering the image failed to resume the owned held gesture.");
+}
+void obstacleSurfaceClicks() {
+    const auto root=std::filesystem::temp_directory_path()/"crimson-play-cpu-unused";SceneDocument authored(root);fixture(authored);
+    authored.edit("Box obstacle",[](auto& records,auto&){
+        for(auto& record:records)if(record.id==1)record.collider->size={20,1,20};
+        EntityRecord box;box.id=9;box.name="Box";box.collider=SceneCollider{{2,2,2}};
+        box.local=math::translation({4,1,0});records.push_back(box);
+    });
+    auto view=camera();view.position={0,10,8};view.fovAxis=CameraFovAxis::Vertical;
+    const ViewportRegion viewport{100,200,800,600,true,false,9};
+    for(const auto target:{Vec3{4,1,1},Vec3{4,2,0}}) for(const bool held:{false,true}) {
+        PlaySession play(root);require(play.start(authored),"Cannot start obstacle click runtime.");
+        GameInput input;input.setViewport(viewport,true,false);input.acquire();input.setProjection(view,1600,1200);
+        input.submitUiPointer(screenPoint(view,viewport,target),true,held);play.advance(PlaySession::FixedStep,input,view);
+        require(play.destination() && !play.path().empty(),"Clicking a box wall or roof did not create an approach route.");
+        const auto endpoint=*play.destination();
+        require(endpoint[1]<.15f && (endpoint[0]<2.7f || endpoint[0]>5.3f || std::abs(endpoint[2])>1.3f),
+            "Box click selected its disconnected roof or an endpoint inside the capsule clearance.");
+        require(play.lastClickedGround() && math::length(*play.lastClickedGround()-target)<.001,
+            "Projected box click changed the debug hit away from the actual surface.");
+        for(int i=0;i<150;++i)play.advance(PlaySession::FixedStep,input,view);
+        const auto position=math::transformPoint(*play.document().scene().worldTransform(2),{});
+        require(std::hypot(position[0]-endpoint[0],position[2]-endpoint[2])<.04f && position[1]<.1f && !play.destination(),
+            "Character did not reach the box approach point and stop on the floor.");
+        require(play.routeQueryCount()==1,"Stationary held box click repeatedly replanned after reaching its approach point.");
+        input.submitUiPointer(screenPoint(view,viewport,target),false,false);
+        const auto stopped=position;for(int i=0;i<15;++i)play.advance(PlaySession::FixedStep,input,view);
+        require(math::length(math::transformPoint(*play.document().scene().worldTransform(2),{})-stopped)<.001,
+            "Releasing an arrived box click restarted movement.");
+    }
 }
 void heldEditsRequireFreshPress() {
     const auto root=std::filesystem::temp_directory_path()/"crimson-play-cpu-unused";SceneDocument authored(root);fixture(authored);
@@ -293,4 +337,4 @@ void heldEditsRequireFreshPress() {
     require(!play.destination() && !input.heldMoveRay(view),"Cancel/reacquire in one frame retained a held route.");
 }
 }
-int main(){try{lifecycleAndEditing();fixedTimingAndInterpolation();particlesUseRuntimeClock();followCameraTransformLocks();pointerMovementAndFacing();pointerCollisionAndNoFloor();unreachableAndReplanning();heldTargetsAndQueryBudget();heldStationaryCursorFollowsDisplayedProjection();heldInvalidTargetsRetainRoute();heldEditsRequireFreshPress();std::cout<<"Play runtime checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+int main(){try{lifecycleAndEditing();fixedTimingAndInterpolation();particlesUseRuntimeClock();followCameraTransformLocks();pointerMovementAndFacing();pointerCollisionAndNoFloor();unreachableAndReplanning();heldTargetsAndQueryBudget();heldStationaryCursorFollowsDisplayedProjection();heldProjectedTargetsAndMisses();obstacleSurfaceClicks();heldEditsRequireFreshPress();std::cout<<"Play runtime checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

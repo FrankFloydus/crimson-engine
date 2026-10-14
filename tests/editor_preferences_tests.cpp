@@ -27,6 +27,7 @@ void run() {
     Temp temp; const auto file=temp.root/"preferences.json";
     EditorPreferences preferences(file);
     require(preferences.values().browserPreviewSize==128,"Wrong default preview size.");
+    require(preferences.values().pointShadowResolution==1024,"Wrong default point shadow resolution.");
     require(preferences.values().appearance.gridMinorWidth==.325f && preferences.values().appearance.gridMajorWidth==.25f,"Quader grid defaults changed.");
     auto values=preferences.values(); values.appearance.backgroundSrgb={.2f,.3f,.4f};
     values.appearance.gridMajorSrgb={1,.5f,.25f,.8f}; values.appearance.gridMinorWidth=2.125f;
@@ -44,6 +45,18 @@ void run() {
     require(!reopened.setValues(invalid),"Nonfinite color was accepted.");
     invalid=before; invalid.appearance.gridMinorSrgb[3]=1.2f; require(!reopened.setValues(invalid),"Invalid alpha was accepted.");
     invalid=before; invalid.browserPreviewSize=127; require(!reopened.setValues(invalid),"Non-tick browser size was accepted.");
+    invalid=before;invalid.pointShadowResolution=768;require(!reopened.setValues(invalid) && reopened.values().pointShadowResolution==before.pointShadowResolution,
+        "Unsupported point shadow resolution changed preferences.");
+    for(const auto resolution:PointShadowResolutions) {
+        auto changed=reopened.values();changed.pointShadowResolution=resolution;
+        require(reopened.setValues(changed),"Cannot persist a supported point shadow resolution.");
+        EditorPreferences roundTrip(file);require(roundTrip.values().pointShadowResolution==resolution,"Point shadow resolution did not round-trip.");
+    }
+    nlohmann::json legacy;{std::ifstream input(file);input>>legacy;}legacy.erase("pointShadowResolution");
+    const auto old=temp.root/"legacy.json";{std::ofstream output(old);output<<legacy.dump();}
+    EditorPreferences oldPreferences(old);
+    require(oldPreferences.values().pointShadowResolution==1024 && oldPreferences.values().appearance==reopened.values().appearance,
+        "Loading older preferences changed viewport settings or shadow defaults.");
     const auto bad=temp.root/"damaged.json"; { std::ofstream out(bad); out<<"{ broken"; }
     EditorPreferences damaged(bad);
     require(!damaged.status().empty() && damaged.values().browserPreviewSize==128,"Damaged preferences lacked a safe default/diagnostic.");

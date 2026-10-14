@@ -196,5 +196,91 @@ void boxMaterialAndPointRadius(){
     const auto references=runtime.historicalMaterialReferences();require(std::find(references.begin(),references.end(),red)!=references.end() && std::find(references.begin(),references.end(),blue)!=references.end(),"Material assignment history lost a dependency.");
     require(document.scene().find(first)->modelMaterial.id==red && !document.dirty(),"Runtime material changed the authored document.");
 }
+void shadowSettingsStorageHistoryAndExtraction(){
+    TempProject project;SceneDocument document(project.root);
+    const auto parent=document.createBox("Parent"),child=document.createBox("Child"),light=document.createPointLight();
+    require(parent && child && light,document.status());
+    document.select({child});require(document.reparentSelection(parent),document.status());
+    auto parentRecord=*document.scene().find(parent),lightRecord=*document.scene().find(light);
+    require(parentRecord.castShadows && parentRecord.receiveShadows && !lightRecord.point->castShadows &&
+        lightRecord.point->shadowDepthBias==.005f && lightRecord.point->shadowNormalBias==1.f,"New shadow settings have incompatible defaults.");
+    parentRecord.castShadows=false;parentRecord.receiveShadows=false;
+    require(document.updateEntity(parent,parentRecord),document.status());
+    lightRecord.point->castShadows=true;lightRecord.point->shadowDepthBias=.013f;lightRecord.point->shadowNormalBias=2.5f;
+    lightRecord.local=math::translation({2,3,4})*math::scaling({4,2,3});
+    require(document.updateEntity(light,lightRecord),document.status());
+    auto extracted=extractScene(document.scene());
+    require(extracted.points.size()==1 && extracted.points.front().entityId==light && extracted.points.front().castShadows &&
+        extracted.points.front().shadowDepthBias==.013f && extracted.points.front().shadowNormalBias==2.5f,
+        "Light extraction lost persistent identity or transformed shadow bias units.");
+    for(const auto& model:extracted.models) {
+        require(model.castShadows==(model.id!=parent) && model.receiveShadows==(model.id!=parent),
+            "Model extraction inherited parent shadow flags or lost a local setting.");
+    }
+    require(document.undo() && !document.scene().find(light)->point->castShadows && document.scene().find(light)->point->shadowDepthBias==.005f,
+        "Point shadow settings did not participate in history equality.");
+    require(document.redo(),document.status());
+    document.select({parent,light});require(document.duplicateSelection(),document.status());
+    bool copiedModel=false,copiedLight=false;
+    for(const auto& record:document.scene().records()) {
+        if(record.id!=parent && record.name==parentRecord.name+" Copy") {
+            copiedModel=true;require(!record.castShadows && !record.receiveShadows,"Duplication lost model shadow flags.");
+        }
+        if(record.id!=light && record.point) {
+            copiedLight=true;require(*record.point==*lightRecord.point,"Duplication lost point shadow settings.");
+        }
+    }
+    require(copiedModel && copiedLight,"Shadow duplicate fixture did not copy both components.");
+    require(document.save("Point shadows"),document.status());
+    const auto snapshot=readSceneSnapshot(project.root,document.assetId());
+    auto serialized=Json::parse(serializeSceneSnapshot(snapshot));
+    require(serialized.at("version")==4,"Optional shadow settings changed the scene file version.");
+    SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(document.scene().records(),reopened.scene().records());
+    for(const int version:{1,2,3,4}) {
+        auto legacy=serialized;legacy["version"]=version;
+        for(auto& entity:legacy["entities"]) {
+            entity.erase("castShadows");entity.erase("receiveShadows");
+            if(entity.contains("point")) {
+                entity["point"].erase("castShadows");entity["point"].erase("shadowDepthBias");entity["point"].erase("shadowNormalBias");
+            }
+        }
+        if(version==1)legacy["settings"]={{"exposure",1.f},{"environment",{{"map",""},{"enabled",true},{"intensity",1.f},{"rotation",0.f}}}};
+        const auto id="assets/scenes/legacy-shadows-"+std::to_string(version)+".crimson-scene";
+        {std::ofstream stream(project.root/id);stream<<legacy.dump();}
+        require(reopened.load(id),reopened.status());
+        for(const auto& record:reopened.scene().records()) {
+            require(record.castShadows && record.receiveShadows,"An older scene did not default model shadows to enabled.");
+            if(record.point)require(!record.point->castShadows && record.point->shadowDepthBias==.005f && record.point->shadowNormalBias==1.f,
+                "An older scene enabled point shadows or changed default bias units.");
+        }
+    }
+    for(const float invalid:{-1.f,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()}) {
+        auto record=*document.scene().find(light);record.point->shadowDepthBias=invalid;
+        require(!document.updateEntity(light,record),"Invalid depth bias entered the scene.");
+        record=*document.scene().find(light);record.point->shadowNormalBias=invalid;
+        require(!document.updateEntity(light,record),"Invalid normal bias entered the scene.");
+    }
+    const auto authored=document.scene().records();const auto authoredHistory=document.history().size();
+    SceneDocument runtime(project.root);require(runtime.resetTransientFrom(document),runtime.status());
+    require(runtime.begin("Runtime shadows"),runtime.status());
+    require(runtime.update([&](auto& records,auto&){for(auto& record:records) {
+        if(record.id==child)record.castShadows=false;
+        if(record.id==light)record.point->shadowNormalBias=4.f;
+    }}),runtime.status());
+    pose(runtime,child,{9,0,0});pose(runtime,light,{7,5,2});require(runtime.commit(),runtime.status());
+    require(runtime.undo() && runtime.scene().find(child)->castShadows && runtime.scene().find(light)->point->shadowNormalBias==2.5f,
+        "Runtime shadow undo did not restore only authored fields.");
+    near(position(runtime.scene(),child),{9,0,0});near(position(runtime.scene(),light),{7,5,2});
+    require(runtime.redo() && !runtime.scene().find(child)->castShadows && runtime.scene().find(light)->point->shadowNormalBias==4.f,
+        "Runtime shadow redo lost field patches.");
+    near(position(runtime.scene(),child),{9,0,0});near(position(runtime.scene(),light),{7,5,2});
+    require(runtime.begin("Cancel receive setting"),runtime.status());
+    require(runtime.update([&](auto& records,auto&){for(auto& record:records)if(record.id==child)record.receiveShadows=false;}),runtime.status());
+    pose(runtime,child,{12,0,0});runtime.cancel();
+    require(!runtime.scene().find(child)->castShadows && runtime.scene().find(child)->receiveShadows,"Cancel restored an unrelated shadow field.");
+    near(position(runtime.scene(),child),{12,0,0});
+    same(authored,document.scene().records());require(document.history().size()==authoredHistory && !document.dirty(),"Runtime shadow editing changed authored state.");
+    require(runtime.resetTransientFrom(document),runtime.status());same(authored,runtime.scene().records());
 }
-int main(){try{componentsAndStorage();runtimePatches();followAndHierarchy();followDependenciesAndAtomicFailure();parentFollowKeepsWorldOffset();boxMaterialAndPointRadius();std::cout<<"Gameplay scene tests passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+}
+int main(){try{componentsAndStorage();runtimePatches();followAndHierarchy();followDependenciesAndAtomicFailure();parentFollowKeepsWorldOffset();boxMaterialAndPointRadius();shadowSettingsStorageHistoryAndExtraction();std::cout<<"Gameplay scene tests passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

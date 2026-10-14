@@ -22,7 +22,7 @@
 
 namespace crimson {
 namespace {
-constexpr uint32_t PreviewVersion=4,PreviewSize=512;
+constexpr uint32_t PreviewVersion=5,PreviewSize=512;
 using streaming::detail::hash;
 uint64_t textHash(std::string_view text) { auto result=streaming::detail::HashSeed; hash(result,text.data(),text.size()); return result; }
 void materialHash(uint64_t& value,const ModelMaterial& material) {
@@ -43,6 +43,7 @@ struct PreviewPins {
     std::vector<std::shared_ptr<const PreparedEditorModel>> models;
     std::shared_ptr<const PreparedEnvironment> environment;
     std::shared_ptr<const PreparedParticleMaterial> particle;
+    std::shared_ptr<const PreparedEditorShadows> shadows;
 };
 bool texturesMatchSources(const AssetLibrary& assets,const std::filesystem::path& root,const PreviewDependencies& expected,
     std::span<const ModelMaterial> materials,std::span<const ModelMaterialTextures> bindings,ResourceManager& resources,
@@ -294,6 +295,14 @@ struct AssetPreviews::Impl {
         if (warmCache(id,entry,signature)) { if (entry.published==signature) entry.saveRequested=false; return; }
         if (renderer.thumbnailBusy() || entry.rendering==signature) return;
         auto pins=std::make_shared<PreviewPins>(); pins->scene=sceneSnapshot; pins->material=materialAsset; pins->environment=bake;
+        if(sceneSnapshot) {
+            ExtractedScene shadowScene;shadowScene.models=models;shadowScene.points=points;
+            std::erase_if(shadowScene.models,[&](const auto& model){return !assets.findModel(model.assetId) && !assets.modelLoading(model.assetId);});
+            pins->shadows=prepared.prepareShadows(shadowScene,256,ResourcePriority::Preview);
+            if(!pins->shadows->refined)return;
+            for(const auto& model:pins->shadows->models)
+                if(!texturesMatchSources(assets,root,*dependencies,model->materials,model->textures,resources,refreshedSources))return;
+        }
         std::vector<RenderModelInstance> instances;
         std::vector<RenderParticle> particles;
         std::vector<RenderParticleMaterial> particleMaterials;
@@ -352,13 +361,19 @@ struct AssetPreviews::Impl {
             if (!ready || !ready->ready || !ready->refined) return;
             if (!texturesMatchSources(assets,root,*dependencies,ready->materials,ready->textures,resources,refreshedSources)) return;
             pins->models.push_back(ready);
-            instances.push_back({0,{ready->asset,model.world},&ready->textures,ready->revision,false,false,&ready->materials});
+            instances.push_back({model.id,{ready->asset,model.world},&ready->textures,ready->revision,false,false,&ready->materials});
+            instances.back().castShadows=model.castShadows;instances.back().receiveShadows=model.receiveShadows;
         }
         if (thumbnailEnvironment!=bake->key) {
             if (!renderer.publishThumbnailEnvironment(*bake)) { entry.error=renderer.thumbnailStatus(); return; }
             thumbnailEnvironment=bake->key;
         }
-        if (renderer.renderThumbnail(id,signature,RenderScene{settings,{},nullptr,nullptr,instances,directions,points,true,pins,particles,particleMaterials},PreviewSize,pins)) entry.rendering=signature;
+        RenderScene renderScene{settings,{},nullptr,nullptr,instances,directions,points,true,pins,particles,particleMaterials};
+        if(pins->shadows) {
+            renderScene.shadowInstances=pins->shadows->instances;
+            renderScene.shadowWorldId=textHash(id);renderScene.shadowResolution=256;
+        }
+        if (renderer.renderThumbnail(id,signature,renderScene,PreviewSize,pins)) entry.rendering=signature;
         else { entry.error=renderer.thumbnailStatus().empty() ? "This renderer cannot create asset previews." : renderer.thumbnailStatus(); entry.failed=true; }
     }
 };

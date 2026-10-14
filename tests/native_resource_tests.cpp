@@ -96,10 +96,15 @@ std::shared_ptr<ModelAsset> quad() {
 }
 double component(const DecodedImage& image,unsigned x,unsigned y,unsigned channel) {return image.rgba[(static_cast<std::size_t>(y)*image.width+x)*4+channel];}
 
+// Keep readbacks after the renderer's offscreen passes and the small number of
+// native platform windows opened by this fixture. Numeric view order is used.
+constexpr bgfx::ViewId MainReadbackView=252,ParticleReadbackView=253,MaterialReadbackView=254;
+static_assert(MainReadbackView>FirstPlatformView);
+
 template<class Tick>
 DecodedImage readTarget(bgfx::TextureHandle source,std::uint16_t width,std::uint16_t height,bgfx::ViewId view,
     std::uint32_t& frame,Tick&& tick,std::vector<std::shared_ptr<DecodedImage>>& destinations) {
-    check(view>=64,"Native readback view overlaps an editor rendering pass.");
+    check(view>=MainReadbackView && view<=MaterialReadbackView,"Native readback view overlaps an editor rendering pass.");
     check(bgfx::isValid(source),"Native readback source is unavailable.");
     struct ReadbackTexture {
         bgfx::TextureHandle handle{BGFX_INVALID_HANDLE};
@@ -131,7 +136,7 @@ void exerciseParticles(Renderer& renderer,Copy&& copy) {
     RenderScene scene{settings,{}};scene.sceneMode=true;
     const auto mainImage=[&] {
         renderer.render(scene);
-        return copy(renderer.viewportTexture(),std::uint16_t(renderer.width()),std::uint16_t(renderer.height()),64);
+        return copy(renderer.viewportTexture(),std::uint16_t(renderer.width()),std::uint16_t(renderer.height()),MainReadbackView);
     };
     settings.exposure=0;const auto background=mainImage();
     for(const float exposure:{1.f,100.f}) {
@@ -172,8 +177,8 @@ void exerciseParticles(Renderer& renderer,Copy&& copy) {
     const auto originalMain=renderer.viewportTexture();
     check(bgfx::isValid(renderer.particlePreviewTexture()) && renderer.particlePreviewTexture().idx!=originalMain.idx,"Particle preview must own a separate display target.");
     renderer.render(scene);renderer.renderParticlePreview(settings,green);
-    const auto independentMain=copy(renderer.viewportTexture(),128,128,64);
-    const auto independentPreview=copy(renderer.particlePreviewTexture(),128,128,65);
+    const auto independentMain=copy(renderer.viewportTexture(),128,128,MainReadbackView);
+    const auto independentPreview=copy(renderer.particlePreviewTexture(),128,128,ParticleReadbackView);
     check(component(independentMain,64,64,0)>200 && component(independentMain,64,64,1)<150,"Preview rendering overwrote main particle color.");
     check(component(independentPreview,64,64,1)>200 && component(independentPreview,64,64,0)<100,"Preview particle shader/target did not produce independent green pixels.");
     check(renderer.particlePreviewStats().submitted==1,"Independent preview did not submit its particle.");
@@ -183,8 +188,8 @@ void exerciseParticles(Renderer& renderer,Copy&& copy) {
         renderer.particlePreviewTexture().idx==originalPreview.idx,"Disabling the main backbuffer disabled or replaced detached viewport targets.");
     // Swap the colors so stale pixels cannot pass this detached-render check.
     scene.particles=green;renderer.render(scene);renderer.renderParticlePreview(settings,red);
-    const auto detachedMain=copy(renderer.viewportTexture(),128,128,64);
-    const auto detachedPreview=copy(renderer.particlePreviewTexture(),128,128,65);
+    const auto detachedMain=copy(renderer.viewportTexture(),128,128,MainReadbackView);
+    const auto detachedPreview=copy(renderer.particlePreviewTexture(),128,128,ParticleReadbackView);
     check(component(detachedMain,64,64,1)>200 && component(detachedMain,64,64,0)<100 && renderer.particleStats().submitted==1,
         "Offscreen scene rendering stopped while the main backbuffer was disabled.");
     check(component(detachedPreview,64,64,0)>200 && component(detachedPreview,64,64,1)<150 && renderer.particlePreviewStats().submitted==1,
@@ -195,13 +200,13 @@ void exerciseParticles(Renderer& renderer,Copy&& copy) {
     renderer.resizeParticlePreview(96,64);
     check(renderer.viewportTexture().idx==originalMain.idx,"Resizing preview replaced the main viewport target.");
     renderer.render(scene);renderer.renderParticlePreview(settings,green);
-    const auto resizedPreview=copy(renderer.particlePreviewTexture(),96,64,65);
+    const auto resizedPreview=copy(renderer.particlePreviewTexture(),96,64,ParticleReadbackView);
     check(component(resizedPreview,48,32,1)>200,"Resized preview lost particle rendering.");
     const auto previewTarget=renderer.particlePreviewTexture();
     renderer.resizeViewport(160,96);
     check(renderer.particlePreviewTexture().idx==previewTarget.idx,"Resizing the main viewport replaced the preview target.");
     renderer.render(scene);renderer.renderParticlePreview(settings,green);
-    const auto resizedMain=copy(renderer.viewportTexture(),160,96,64);
+    const auto resizedMain=copy(renderer.viewportTexture(),160,96,MainReadbackView);
     check(component(resizedMain,80,48,0)>200,"Resized main viewport lost particle rendering.");
     renderer.releaseParticlePreview();
     check(!bgfx::isValid(renderer.particlePreviewTexture()),"Released particle preview retained its display target.");
@@ -231,7 +236,7 @@ void exerciseParticleMaterials(Renderer& renderer,Copy&& copy,const PreparedText
     materials[0].pinned=color.lease;
     std::array<RenderParticle,1> sprite{{{{0,0,0},2,{1,1,1,.5f},0}}};
     RenderScene scene{settings,{}};scene.sceneMode=true;scene.particles=sprite;scene.particleMaterials=materials;
-    const auto capture=[&] {renderer.render(scene);return copy(renderer.viewportTexture(),128,128,64);};
+    const auto capture=[&] {renderer.render(scene);return copy(renderer.viewportTexture(),128,128,MainReadbackView);};
     const auto linear=[](double value){return value<=.04045?value/12.92:std::pow((value+.055)/1.055,2.4);};
     const auto encoded=[](double value){value=std::clamp(value,0.,1.);return 255*(value<=.0031308?value*12.92:1.055*std::pow(value,1/2.4)-.055);};
     const auto textured=capture();
@@ -244,7 +249,7 @@ void exerciseParticleMaterials(Renderer& renderer,Copy&& copy,const PreparedText
     }
     renderer.resizeParticlePreview(128,128);
     renderer.render(scene);renderer.renderParticlePreview(settings,sprite,materials);
-    const auto main=copy(renderer.viewportTexture(),128,128,64),preview=copy(renderer.particlePreviewTexture(),128,128,65);
+    const auto main=copy(renderer.viewportTexture(),128,128,MainReadbackView),preview=copy(renderer.particlePreviewTexture(),128,128,ParticleReadbackView);
     check(main.rgba==preview.rgba,"Prepared particle material differed between scene and isolated preview.");
     check(renderer.renderThumbnail("particle-material",1,scene,128,color.lease),renderer.thumbnailStatus());
     // The copy advances the existing owner frame and waits for the thumbnail too.
@@ -375,12 +380,12 @@ void exerciseMaterialPreview(Renderer& renderer,Copy&& copy,Tick&& tick,const Pr
     const auto sphere=materialPreviewGeometry();
     RenderModelInstance mainInstance{991,{sphere,{}},nullptr,1,true,false,&mainMaterials};
     RenderScene mainScene{mainSettings,{}};mainScene.sceneMode=true;mainScene.instances=std::span(&mainInstance,1);
-    const auto mainCapture=[&] {renderer.render(mainScene);return copy(mainTarget,128,128,64);};
+    const auto mainCapture=[&] {renderer.render(mainScene);return copy(mainTarget,128,128,MainReadbackView);};
     const auto mainBaseline=mainCapture();
     SceneSettings particleSettings;particleSettings.camera.position={0,0,3};particleSettings.camera.target={0,0,0};particleSettings.environment.enabled=false;
     std::array<RenderParticle,1> greenParticle{{{{0,0,0},1.5f,{0,8,0,1}}}};
     renderer.renderParticlePreview(particleSettings,greenParticle);
-    const auto particleBaseline=copy(particleTarget,128,128,65);
+    const auto particleBaseline=copy(particleTarget,128,128,ParticleReadbackView);
 
     auto material=defaultParticleMaterialAsset();material.id="native-live-material-preview";material.blend=MaterialBlend::Alpha;
     material.surface.baseColor={.8f,.02f,.01f,1};
@@ -388,7 +393,7 @@ void exerciseMaterialPreview(Renderer& renderer,Copy&& copy,Tick&& tick,const Pr
     const ModelMaterialTextures bindings;
     const auto capture=[&](MaterialPreviewMesh mesh,const Mat4& transform=Mat4{},bool background=false,std::uint16_t width=128,std::uint16_t height=128) {
         renderer.renderMaterialPreview(settings,material,bindings,mesh,transform,background);
-        return copy(renderer.materialPreviewTexture(),width,height,66);
+        return copy(renderer.materialPreviewTexture(),width,height,MaterialReadbackView);
     };
     for(const auto shape:shapes) {
         const auto image=capture(shape);
@@ -396,7 +401,7 @@ void exerciseMaterialPreview(Renderer& renderer,Copy&& copy,Tick&& tick,const Pr
         for(std::size_t pixel=0;pixel<image.rgba.size();pixel+=4)
             if(image.rgba[pixel]>image.rgba[pixel+1]+20 && image.rgba[pixel]>image.rgba[pixel+2]+20)++colored;
         check(colored>64,"A selected mini-viewport mesh did not render the live unlit material.");
-        check(mainCapture().rgba==mainBaseline.rgba && copy(particleTarget,128,128,65).rgba==particleBaseline.rgba,
+        check(mainCapture().rgba==mainBaseline.rgba && copy(particleTarget,128,128,ParticleReadbackView).rgba==particleBaseline.rgba,
             "Rendering a material preview overwrote the main viewport or particle preview.");
     }
     const auto red=capture(MaterialPreviewMesh::Sphere);const auto bytes=renderer.modelResidentBytes();
@@ -427,7 +432,7 @@ void exerciseMaterialPreview(Renderer& renderer,Copy&& copy,Tick&& tick,const Pr
     double lightingIncrease{};
     for(unsigned channel=0;channel<3;++channel)lightingIncrease+=component(lit,64,64,channel)-component(dark,64,64,channel);
     check(lightingIncrease>5,"Lit material preview ignored its independent environment intensity.");
-    check(mainCapture().rgba==mainBaseline.rgba && copy(particleTarget,128,128,65).rgba==particleBaseline.rgba,
+    check(mainCapture().rgba==mainBaseline.rgba && copy(particleTarget,128,128,ParticleReadbackView).rgba==particleBaseline.rgba,
         "Material preview camera/environment edits changed another viewport's image.");
 
     renderer.resizeMaterialPreview(96,64);
@@ -438,7 +443,7 @@ void exerciseMaterialPreview(Renderer& renderer,Copy&& copy,Tick&& tick,const Pr
     check(component(resized,48,32,1)>component(resized,48,32,0)+30,"Resizing material preview lost its rendering.");
     renderer.releaseMaterialPreview();
     check(!bgfx::isValid(renderer.materialPreviewTexture()),"Released material preview retained its display target.");
-    check(mainCapture().rgba==mainBaseline.rgba && copy(particleTarget,128,128,65).rgba==particleBaseline.rgba,
+    check(mainCapture().rgba==mainBaseline.rgba && copy(particleTarget,128,128,ParticleReadbackView).rgba==particleBaseline.rgba,
         "Releasing material preview disturbed another viewport.");
     renderer.resizeMaterialPreview(128,128);
     check(component(capture(MaterialPreviewMesh::Sphere),64,64,1)>30,"Material preview could not reopen after releasing its targets.");
@@ -698,7 +703,7 @@ void exercise(const std::filesystem::path& root,const ShaderCompileConfig& shade
     reloadMaterials[0].colorTexture=color.handle;reloadMaterials[0].samplerFlags=bindings[0].flags[0];reloadMaterials[0].pinned=color.lease;
     particleScene.particleMaterials=reloadMaterials;
     const auto particleCapture=[&] {
-        renderer.render(particleScene);return copy(renderer.viewportTexture(),128,128,64);
+        renderer.render(particleScene);return copy(renderer.viewportTexture(),128,128,MainReadbackView);
     };
     const auto beforeReloadParticles=particleCapture();
     phase("shader reload");ShaderReloadSession shaders(resources,renderer,tools,shaderConfig);

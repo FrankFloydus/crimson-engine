@@ -12,6 +12,7 @@
 #include <array>
 #include <cstdio>
 #include <functional>
+#include <limits>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -23,7 +24,8 @@ constexpr const char* EntityPayload = "CRIMSON_SCENE_ENTITIES";
 enum class Edit { None, Name, InlineName,
     PositionX, PositionY, PositionZ, RotationX, RotationY, RotationZ, ScaleX, ScaleY, ScaleZ,
     DirectionEnabled, DirectionColor, DirectionIntensity,
-    PointEnabled, PointColor, PointIntensity, PointRadius, Exposure, Environment,
+    PointEnabled, PointColor, PointIntensity, PointRadius, PointShadows, PointDepthBias, PointNormalBias,
+    ModelCastShadows, ModelReceiveShadows, Exposure, Environment,
     CharacterHeight, CharacterRadius, CharacterSpeed, ColliderSize, CameraFov, CameraNear, CameraFar };
 enum class Panel { None, Outliner, Inspector };
 Panel owner(Edit edit) {
@@ -201,6 +203,20 @@ void lightControls(SceneDocument& document, PanelsState& state, EntityId id, boo
         propertyEdit(document,state,Edit::PointRadius,"Change point light radius",changed,
             changeEntity(id,[radius](auto& entity){entity.point->radius=radius;}));
         ImGui::TextWrapped("Light fades smoothly to zero at this world-space radius. Entity scale does not change its range.");
+        auto shadows=record->point->castShadows;
+        const bool shadowChanged=ImGui::Checkbox("Cast Shadows",&shadows);
+        propertyEdit(document,state,Edit::PointShadows,"Toggle point shadows",shadowChanged,
+            changeEntity(id,[shadows](auto& entity){entity.point->castShadows=shadows;}));
+        ImGui::BeginDisabled(!shadows);
+        auto depthBias=record->point->shadowDepthBias;
+        const bool depthChanged=ImGui::DragFloat("Depth Bias (m)",&depthBias,.001f,0,std::numeric_limits<float>::max(),"%.4f",ImGuiSliderFlags_AlwaysClamp);
+        propertyEdit(document,state,Edit::PointDepthBias,"Change point shadow depth bias",depthChanged,
+            changeEntity(id,[depthBias](auto& entity){entity.point->shadowDepthBias=depthBias;}));
+        auto normalBias=record->point->shadowNormalBias;
+        const bool normalChanged=ImGui::DragFloat("Normal Bias (texels)",&normalBias,.05f,0,std::numeric_limits<float>::max(),"%.2f",ImGuiSliderFlags_AlwaysClamp);
+        propertyEdit(document,state,Edit::PointNormalBias,"Change point shadow normal bias",normalChanged,
+            changeEntity(id,[normalBias](auto& entity){entity.point->shadowNormalBias=normalBias;}));
+        ImGui::EndDisabled();
     }
     ImGui::PopID();
 }
@@ -582,6 +598,14 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
         if (record->point && ImGui::CollapsingHeader("Point light",ImGuiTreeNodeFlags_DefaultOpen)) lightControls(document,state,record->id,false);
         if (record->model && ImGui::CollapsingHeader("Model",ImGuiTreeNodeFlags_DefaultOpen)) {
             if(isBuiltinModel(record->model->id))builtinMaterialControls(document,state,*record,assets,renderer);
+            auto castShadows=record->castShadows,receiveShadows=record->receiveShadows;
+            const bool castChanged=ImGui::Checkbox("Cast Shadows",&castShadows);
+            propertyEdit(document,state,Edit::ModelCastShadows,"Toggle model shadow casting",castChanged,
+                changeEntity(record->id,[castShadows](auto& entity){entity.castShadows=castShadows;}));
+            const bool receiveChanged=ImGui::Checkbox("Receive Shadows",&receiveShadows);
+            propertyEdit(document,state,Edit::ModelReceiveShadows,"Toggle model shadow receiving",receiveChanged,
+                changeEntity(record->id,[receiveShadows](auto& entity){entity.receiveShadows=receiveShadows;}));
+            ImGui::TextDisabled("Shadow settings apply to this model only, not its children.");
             modelInformation(*record,assets);
         }
         if(record->particle && ImGui::CollapsingHeader("Particle effect",ImGuiTreeNodeFlags_DefaultOpen)) {

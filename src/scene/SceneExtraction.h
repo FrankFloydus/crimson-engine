@@ -12,6 +12,7 @@ struct ExtractedModel {
     std::string assetId;
     Mat4 world{};
     std::string materialId;
+    bool castShadows{true},receiveShadows{true};
 };
 struct ExtractedParticle {
     EntityId id{};

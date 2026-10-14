@@ -133,7 +133,10 @@ const streaming::ModelStream* ModelGpuCache::descriptor(const std::string& id,st
     const auto found=impl_->models.find(resourceKey(id,revision)); return found!=impl_->models.end() ? &found->second.descriptor:nullptr;
 }
 void ModelGpuCache::beginMainView() { impl_->mainView.clear(); }
-void ModelGpuCache::markRendered(const std::string& id,std::uint64_t revision) { impl_->mainView.insert(id);impl_->renderedRevisions[id]=revision; }
+void ModelGpuCache::markRendered(const std::string& id,std::uint64_t revision,bool affectsPicking) {
+    if(affectsPicking)impl_->mainView.insert(id);
+    impl_->renderedRevisions[id]=revision;
+}
 void ModelGpuCache::evict(const std::string& id) {
     std::erase_if(impl_->uploads,[&](const auto& upload){return upload.id==id;});
     if(std::erase_if(impl_->models,[&](const auto& entry){return entry.second.descriptor.id==id;}) && impl_->mainView.contains(id)) ++impl_->signature;

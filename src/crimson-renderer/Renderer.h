@@ -64,6 +64,7 @@ struct RenderModelInstance {
     const std::vector<ModelMaterial>* materials{nullptr};
     MaterialShading shading{MaterialShading::StandardPbr};
     MaterialBlend blend{MaterialBlend::Opaque};
+    bool castShadows{true},receiveShadows{true};
 };
 
 struct PickRequest {
@@ -81,7 +82,7 @@ struct ThumbnailResult {
     std::uint64_t signature{};
     DecodedImage image;
 };
-enum class RendererProgram { Sphere, Model, Picking, Present, Grid, Encode, Particle, Sky };
+enum class RendererProgram { Sphere, Model, Picking, Present, Grid, Encode, Particle, Sky, PointShadow };
 struct RendererShaderPair { RendererProgram program; std::vector<std::uint8_t> vertex,fragment; };
 
 struct RenderScene {
@@ -96,6 +97,11 @@ struct RenderScene {
     std::shared_ptr<const void> pinned;
     std::span<const RenderParticle> particles;
     std::span<const RenderParticleMaterial> particleMaterials; // Empty uses procedural additive material 0.
+    // Complete light-range caster set, independent of Scene/Game camera culling.
+    // A zero world ID explicitly disables shadows for isolated material previews.
+    std::span<const RenderModelInstance> shadowInstances;
+    std::uint64_t shadowWorldId{};
+    std::uint16_t shadowResolution{1024};
 };
 
 // Owns the bgfx lifetime. Destroy ImGui's GPU resources before this object.
@@ -131,6 +137,9 @@ public:
     const ParticleRenderStats& particleStats() const noexcept;
     const ParticleRenderStats& particlePreviewStats() const noexcept;
     const std::string& particleStatus() const;
+    std::size_t shadowResidentBytes() const;
+    const PointShadowStats& shadowStats() const;
+    const std::string& shadowStatus() const;
     // Called at startup or on source assignment, outside ordinary frame submission.
     bool prepareEnvironment(const std::filesystem::path& projectRoot, const std::string& sourceId);
     bool publishEnvironment(const PreparedEnvironment&);

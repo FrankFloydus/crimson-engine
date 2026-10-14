@@ -22,7 +22,7 @@ bool same(const EditorPreferenceValues& a,const EditorPreferenceValues& b) {
     return a.appearance.backgroundSrgb==b.appearance.backgroundSrgb &&
         a.appearance.gridMinorSrgb==b.appearance.gridMinorSrgb && a.appearance.gridMajorSrgb==b.appearance.gridMajorSrgb &&
         a.appearance.gridMinorWidth==b.appearance.gridMinorWidth && a.appearance.gridMajorWidth==b.appearance.gridMajorWidth &&
-        a.browserPreviewSize==b.browserPreviewSize;
+        a.browserPreviewSize==b.browserPreviewSize && a.pointShadowResolution==b.pointShadowResolution;
 }
 bool valid(const EditorPreferenceValues& value) {
     const auto color=[](const auto& channels) {
@@ -31,7 +31,8 @@ bool valid(const EditorPreferenceValues& value) {
     return color(value.appearance.backgroundSrgb) && color(value.appearance.gridMinorSrgb) && color(value.appearance.gridMajorSrgb) &&
         std::isfinite(value.appearance.gridMinorWidth) && value.appearance.gridMinorWidth>=.25f && value.appearance.gridMinorWidth<=8 &&
         std::isfinite(value.appearance.gridMajorWidth) && value.appearance.gridMajorWidth>=.25f && value.appearance.gridMajorWidth<=8 &&
-        std::find(BrowserPreviewSizes.begin(),BrowserPreviewSizes.end(),value.browserPreviewSize)!=BrowserPreviewSizes.end();
+        std::find(BrowserPreviewSizes.begin(),BrowserPreviewSizes.end(),value.browserPreviewSize)!=BrowserPreviewSizes.end() &&
+        std::find(PointShadowResolutions.begin(),PointShadowResolutions.end(),value.pointShadowResolution)!=PointShadowResolutions.end();
 }
 }
 EditorPreferences::EditorPreferences(std::filesystem::path file) {
@@ -48,7 +49,8 @@ EditorPreferences::EditorPreferences(std::filesystem::path file) {
         candidate.appearance.gridMinorWidth=appearance.at("gridMinorWidth").get<float>();
         candidate.appearance.gridMajorWidth=appearance.at("gridMajorWidth").get<float>();
         candidate.browserPreviewSize=json.value("browserPreviewSize",128);
-        if (!valid(candidate)) throw std::runtime_error("Preferences contain invalid colors, widths, or preview size.");
+        candidate.pointShadowResolution=json.value("pointShadowResolution",1024);
+        if (!valid(candidate)) throw std::runtime_error("Preferences contain invalid colors, widths, preview size or shadow resolution.");
         values_=candidate;
     } catch (const std::exception& error) { status_=error.what(); }
 }
@@ -68,7 +70,7 @@ bool EditorPreferences::setBrowserPreviewSize(int size) {
 bool EditorPreferences::save() {
     try {
         const auto& appearance=values_.appearance;
-        const nlohmann::json json{{"version",1},{"browserPreviewSize",values_.browserPreviewSize},
+        const nlohmann::json json{{"version",1},{"browserPreviewSize",values_.browserPreviewSize},{"pointShadowResolution",values_.pointShadowResolution},
             {"viewport",{{"background",appearance.backgroundSrgb},{"gridMinorColor",appearance.gridMinorSrgb},
                 {"gridMajorColor",appearance.gridMajorSrgb},{"gridMinorWidth",appearance.gridMinorWidth},{"gridMajorWidth",appearance.gridMajorWidth}}}};
         writeFileAtomically(file_,json.dump(2)+"\n"); status_.clear(); return true;
@@ -87,6 +89,17 @@ void EditorPreferences::draw() {
         changed|=ImGui::DragFloat("Major line width",&appearance.gridMajorWidth,.025f,.25f,8,"%.3f",ImGuiSliderFlags_AlwaysClamp);
         changed|=ImGui::ColorEdit4("Minor line color",appearance.gridMinorSrgb.data());
         changed|=ImGui::DragFloat("Minor line width",&appearance.gridMinorWidth,.025f,.25f,8,"%.3f",ImGuiSliderFlags_AlwaysClamp);
+        ImGui::SeparatorText("Rendering");
+        const auto resolutionLabel=std::to_string(candidate.pointShadowResolution);
+        if (ImGui::BeginCombo("Point shadow resolution",resolutionLabel.c_str())) {
+            for (const auto resolution:PointShadowResolutions) {
+                const bool selected=resolution==candidate.pointShadowResolution;
+                const auto label=std::to_string(resolution);
+                if (ImGui::Selectable(label.c_str(),selected)) { candidate.pointShadowResolution=resolution;changed=true; }
+                if (selected) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
         if (changed) setValues(candidate);
         if (!status_.empty()) ImGui::TextWrapped("%s",status_.c_str());
         if (ImGui::Button("Close")) open_=false;

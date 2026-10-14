@@ -37,7 +37,7 @@ target_link_libraries(crimson-math PRIVATE glm::glm)
 target_compile_options(crimson-math PRIVATE /W4 /permissive- /utf-8)
 
 # Camera projection/rays are CPU data shared by rendering and player control.
-add_library(crimson-camera src/crimson-renderer/RenderTypes.cpp)
+add_library(crimson-camera src/crimson-renderer/RenderTypes.cpp src/crimson-renderer/PointShadowMath.cpp)
 target_link_libraries(crimson-camera PUBLIC crimson-math)
 target_compile_options(crimson-camera PRIVATE /W4 /permissive- /utf-8)
 
@@ -114,6 +114,7 @@ function(cc_shader NAME TYPE VARYING)
             -i "${CC_BGFX_SHADER_INCLUDE}"
         DEPENDS "${CC_SHADER_DIR}/${NAME}.sc" "${CC_SHADER_DIR}/${VARYING}"
                 "${CC_SHADER_DIR}/point_light.sh"
+                "${CC_SHADER_DIR}/point_shadow.sh"
                 "${CC_BGFX_SHADER_INCLUDE}/bgfx_shader.sh"
         COMMENT "Compiling ${NAME} for Direct3D 11"
         VERBATIM
@@ -129,6 +130,8 @@ cc_shader(vs_particle vertex particle.varying.def.sc)
 cc_shader(fs_particle fragment particle.varying.def.sc)
 cc_shader(vs_pick vertex model.varying.def.sc)
 cc_shader(fs_pick fragment model.varying.def.sc)
+cc_shader(vs_point_shadow vertex model.varying.def.sc)
+cc_shader(fs_point_shadow fragment model.varying.def.sc)
 cc_shader(vs_present vertex varying.def.sc)
 cc_shader(fs_present fragment varying.def.sc)
 cc_shader(fs_sky fragment varying.def.sc)
@@ -152,6 +155,7 @@ add_executable(crimson-renderer WIN32
     src/crimson-renderer/RenderTypes.h
     src/crimson-renderer/Mesh.h src/crimson-renderer/Mesh.cpp
     src/crimson-renderer/Renderer.h src/crimson-renderer/Renderer.cpp
+    src/crimson-renderer/PointShadowRenderer.cpp
     src/crimson-renderer/ModelGpuCache.cpp src/crimson-renderer/ShaderPreflight.cpp
     src/crimson-renderer/Environment.h src/crimson-renderer/Environment.cpp
     src/crimson-renderer/ImGuiBgfx.h src/crimson-renderer/ImGuiBgfx.cpp
@@ -317,7 +321,8 @@ if(BUILD_TESTING)
     target_link_libraries(shader_preflight_tests PRIVATE bgfx::bgfx)
     add_test(NAME shader_preflight_core COMMAND shader_preflight_tests)
 
-    add_executable(shader_compiler_tests tests/shader_compiler_tests.cpp)
+    add_executable(shader_compiler_tests tests/shader_compiler_tests.cpp src/crimson-renderer/ShaderPreflight.cpp)
+    target_compile_definitions(shader_compiler_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_compile_options(shader_compiler_tests PRIVATE /W4 /permissive- /utf-8)
     target_link_libraries(shader_compiler_tests PRIVATE crimson-resources)
     add_test(NAME shader_compiler_core COMMAND shader_compiler_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
@@ -331,6 +336,7 @@ if(BUILD_TESTING)
 
     add_executable(native_resource_tests tests/native_resource_tests.cpp
         src/crimson-renderer/Renderer.cpp src/crimson-renderer/Mesh.cpp
+        src/crimson-renderer/PointShadowRenderer.cpp
         src/crimson-renderer/Environment.cpp src/crimson-renderer/ImGuiBgfx.cpp src/crimson-renderer/ShaderPreflight.cpp
         src/crimson-renderer/PlatformSurface.cpp
         src/crimson-renderer/ModelGpuCache.cpp src/resources/TextureStreamer.cpp src/resources/ShaderReloadSession.cpp
@@ -342,6 +348,24 @@ if(BUILD_TESTING)
     target_link_libraries(native_resource_tests PRIVATE crimson-resources crimson-materials crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng)
     add_test(NAME native_resource_core COMMAND native_resource_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
     set_tests_properties(native_resource_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 90)
+
+    add_executable(point_shadow_math_tests tests/point_shadow_math_tests.cpp)
+    target_compile_options(point_shadow_math_tests PRIVATE /W4 /permissive- /utf-8)
+    target_link_libraries(point_shadow_math_tests PRIVATE crimson-camera)
+    add_test(NAME point_shadow_math_core COMMAND point_shadow_math_tests)
+
+    add_executable(point_shadow_render_tests tests/point_shadow_render_tests.cpp
+        src/crimson-renderer/Renderer.cpp src/crimson-renderer/Mesh.cpp src/crimson-renderer/PointShadowRenderer.cpp
+        src/crimson-renderer/Environment.cpp src/crimson-renderer/ImGuiBgfx.cpp src/crimson-renderer/ShaderPreflight.cpp
+        src/crimson-renderer/PlatformSurface.cpp src/crimson-renderer/ModelGpuCache.cpp
+        src/resources/TextureStreamer.cpp src/resources/ShaderReloadSession.cpp
+        src/assets/MaterialPreviewGeometry.cpp ${CC_SHADER_HEADERS})
+    target_include_directories(point_shadow_render_tests PRIVATE src "${CC_GENERATED_DIR}")
+    target_compile_definitions(point_shadow_render_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(point_shadow_render_tests PRIVATE /W4 /permissive- /utf-8)
+    target_link_libraries(point_shadow_render_tests PRIVATE crimson-resources crimson-materials crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng)
+    add_test(NAME point_shadow_render_core COMMAND point_shadow_render_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
+    set_tests_properties(point_shadow_render_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 180)
     add_executable(preview_dependencies_tests tests/preview_dependencies_tests.cpp)
     target_include_directories(preview_dependencies_tests PRIVATE src)
     target_compile_options(preview_dependencies_tests PRIVATE /W4 /permissive- /utf-8)

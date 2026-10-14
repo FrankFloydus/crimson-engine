@@ -40,7 +40,7 @@ ExtractedScene extractScene(const Scene& scene) {
         const auto world = scene.worldTransform(id);
         if (!world) continue;
         if (const auto* model = registry.try_get<ModelReference>(entity))
-            result.models.push_back({id,model->assetId.id,*world,model->material.id});
+            result.models.push_back({id,model->assetId.id,*world,model->material.id,model->castShadows,model->receiveShadows});
         if (const auto* particle = registry.try_get<ParticleReference>(entity))
             result.particles.push_back({id,particle->assetId.id,*world});
         if (const auto* light = registry.try_get<SceneDirectionalLight>(entity)) {
@@ -48,7 +48,8 @@ ExtractedScene extractScene(const Scene& scene) {
         }
         if (const auto* light = registry.try_get<ScenePointLight>(entity)) {
             const auto position = math::transformPoint(*world,{0,0,0});
-            result.points.push_back({position,light->color,light->intensity,light->enabled,light->radius});
+            result.points.push_back({position,light->color,light->intensity,light->enabled,light->radius,id,
+                light->castShadows,light->shadowDepthBias,light->shadowNormalBias});
         }
     }
     return result;

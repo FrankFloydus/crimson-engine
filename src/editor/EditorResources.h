@@ -9,6 +9,7 @@
 
 namespace crimson {
 class AssetLibrary;
+struct ExtractedScene;
 struct PreparedEditorModel {
     std::shared_ptr<const ModelAsset> asset;
     std::vector<ModelMaterial> materials;
@@ -17,6 +18,13 @@ struct PreparedEditorModel {
     bool ready{};
     bool refined{}; // Requested detail is resident (including pressure policy).
     std::shared_ptr<const void> pinned;
+};
+// One world-wide caster set shared by Scene and Game. Its immutable packets
+// keep alpha textures and model versions alive through queued shadow draws.
+struct PreparedEditorShadows {
+    std::vector<RenderModelInstance> instances;
+    std::vector<std::shared_ptr<const PreparedEditorModel>> models;
+    bool refined{true};
 };
 // Session-level resource preparation. It schedules CPU payloads, requests
 // bounded uploads and publishes coherent immutable render bindings.
@@ -28,6 +36,8 @@ public:
     std::shared_ptr<const PreparedEditorModel> prepare(const std::string& id,const Mat4& world,const Camera&,
         uint32_t viewportHeight,bool selected,ResourcePriority priority=ResourcePriority::Visible,float viewportAspect=0,
         const std::string& materialOverride={});
+    std::shared_ptr<const PreparedEditorShadows> prepareShadows(const ExtractedScene&,std::uint16_t resolution,
+        ResourcePriority priority=ResourcePriority::Visible);
     void invalidate(const std::string& id);
     void clear();
     const std::string& status() const { return status_; }

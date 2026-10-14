@@ -24,7 +24,9 @@ public:
     std::shared_ptr<const ResidentModelLod> resident(const std::string&,std::uint64_t,std::uint32_t primitive,std::uint32_t desired) const;
     const streaming::ModelStream* descriptor(const std::string&,std::uint64_t) const;
     void beginMainView();
-    void markRendered(const std::string&,std::uint64_t);
+    // Every consumer protects its version; only Scene color/picking advances
+    // the picking signature when its resident geometry changes.
+    void markRendered(const std::string&,std::uint64_t,bool affectsPicking=true);
     void evict(const std::string&);
     void trim(std::size_t,std::span<const std::string> liveIds);
     std::size_t bytes() const;

@@ -25,6 +25,7 @@ SAMPLER2D(s_emissive, 4);
 SAMPLERCUBE(s_irradiance, 5);
 SAMPLERCUBE(s_prefiltered, 6);
 SAMPLER2D(s_brdfLut, 7);
+#include "point_shadow.sh"
 
 CONST(float PI = 3.141592653589793);
 
@@ -119,6 +120,7 @@ vec3 evaluateLight(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 base, float metal
 
 void main()
 {
+    vec3 shadowPlaneNormal = pointShadowPlaneNormal(v_worldPosition, v_normal);
     vec4 uv = vec4(v_texcoord0, v_texcoord1);
     vec4 baseColor = u_modelBase * v_color0;
     if (u_modelMaps.x > 0.5) baseColor *= texture2D(s_albedo, slotUv(uv, u_modelUv.x));
@@ -155,6 +157,9 @@ void main()
         float distanceSquared = max(dot(delta, delta), 0.000001);
         vec3 L = delta * inversesqrt(distanceSquared);
         vec3 radiance = u_pointColor[i].rgb * (u_pointPosition[i].w * pointLightAttenuation(distanceSquared, u_pointColor[i].w));
+        vec3 shadowNormal = safeNormalize(v_normal, vec3(0.0, 1.0, 0.0));
+        if (u_modelOptions.z > 0.5) shadowNormal *= (gl_FrontFacing ? -1.0 : 1.0) * u_modelOptions.w;
+        if (u_modelEmissiveMap.z > 0.5) radiance *= pointShadowVisibility(i, v_worldPosition, shadowNormal, shadowPlaneNormal);
         color += evaluateLight(N, V, L, radiance, base, metallic, roughness);
     }
     float occlusion = 1.0;

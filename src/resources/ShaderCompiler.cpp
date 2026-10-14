@@ -19,6 +19,7 @@ const std::map<std::string,std::string> varying{
     {"vs_particle","particle.varying.def.sc"},{"fs_particle","particle.varying.def.sc"},
     {"vs_pbr","varying.def.sc"},{"fs_pbr","varying.def.sc"},{"vs_model","model.varying.def.sc"},{"fs_model","model.varying.def.sc"},
     {"vs_pick","model.varying.def.sc"},{"fs_pick","model.varying.def.sc"},{"vs_present","varying.def.sc"},{"fs_present","varying.def.sc"},
+    {"vs_point_shadow","model.varying.def.sc"},{"fs_point_shadow","model.varying.def.sc"},
     {"vs_grid","varying.def.sc"},{"fs_grid","varying.def.sc"},{"fs_encode","varying.def.sc"},{"fs_sky","varying.def.sc"},{"vs_imgui","imgui.varying.def.sc"},{"fs_imgui","imgui.varying.def.sc"}};
 struct NativeHandle { HANDLE value{INVALID_HANDLE_VALUE}; ~NativeHandle(){if(value && value!=INVALID_HANDLE_VALUE) CloseHandle(value);} };
 std::string utf8(const std::filesystem::path& path) {

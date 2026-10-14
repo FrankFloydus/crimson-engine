@@ -46,6 +46,9 @@ private:
     SceneParticles::DefinitionQuery particleDefinitions_;
     std::vector<ScenePoseUpdate> previous_,current_;
     PlayerController controller_;
+    // Keep the original hit for live-geometry replanning; destination_ is the
+    // reachable endpoint returned by navigation, which can be beside a box.
+    std::optional<Vec3> requestedDestination_;
     std::optional<Vec3> destination_;
     std::optional<Vec3> lastClickedGround_;
     std::optional<Vec3> lastHeldTarget_;

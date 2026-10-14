@@ -2,6 +2,8 @@
 #include "assets/AssetLibrary.h"
 #include "resources/StreamingModel.h"
 #include "resources/CacheIO.h"
+#include "scene/SceneExtraction.h"
+#include "crimson-renderer/PointShadowMath.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -96,7 +98,8 @@ void EditorResources::endFrame() {
         }
     }
     std::erase_if(entries_,[&](const auto& pair){return !pair.second.wanted && now-pair.second.used>resources_.config().idleGrace;});
-    renderer_.trimModelCache(resources_.config().gpuRetentionBytes,live);
+    const auto reserved=renderer_.shadowResidentBytes()+renderer_.thumbnailResidentBytes();
+    renderer_.trimModelCache(reserved>=resources_.config().gpuRetentionBytes?0:resources_.config().gpuRetentionBytes-reserved,live);
 }
 void EditorResources::requestGeometry(Entry& entry,const ModelAsset& asset,uint64_t revision,uint32_t primitive,uint32_t level,ResourcePriority priority) {
     if (!asset.stream || primitive>=asset.stream->primitives.size() || level>=asset.stream->primitives[primitive].levels.size()) return;
@@ -184,6 +187,33 @@ std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::s
         for (const auto& binding:candidate->textures) for (const auto& texture:binding.leases) if (texture) pins->textures.push_back(texture);
         candidate->pinned=std::move(pins); entry.current=std::move(candidate); return retain(entry.current);
     } catch (const std::exception& error) { entry.diagnostic=error.what(); entry.failed=true; return retain(entry.current); }
+}
+std::shared_ptr<const PreparedEditorShadows> EditorResources::prepareShadows(const ExtractedScene& scene,std::uint16_t resolution,
+    ResourcePriority priority) {
+    auto result=std::make_shared<PreparedEditorShadows>();
+    if(std::none_of(scene.points.begin(),scene.points.end(),[](const auto& light){return light.enabled && light.castShadows;}))return result;
+    for(const auto& model:scene.models) {
+        if(!model.castShadows)continue;
+        const auto asset=assets_.findModel(model.assetId);
+        const auto bounds=asset?math::transformBounds(asset->bounds,model.world):Aabb{};
+        std::shared_ptr<const PreparedEditorModel> packet;
+        for(const auto& light:scene.points) {
+            if(!light.enabled || !light.castShadows)continue;
+            if(!point_shadow::intersectsLight(bounds,light.position,light.radius))continue;
+            const auto camera=point_shadow::faceCamera(light.position,light.radius,0,resolution);
+            // All six faces have the same footprint. Each light requests its
+            // detail once; renderer selection remains independent per light.
+            auto prepared=prepare(model.assetId,model.world,camera,resolution+4,false,priority,1,model.materialId);
+            if(prepared) { packet=prepared;result->models.push_back(prepared); }
+            result->refined&=prepared && prepared->ready && prepared->refined;
+        }
+        if(packet) {
+            RenderModelInstance instance{model.id,{packet->asset,model.world},&packet->textures,packet->revision,false,false,&packet->materials};
+            instance.castShadows=model.castShadows;instance.receiveShadows=model.receiveShadows;
+            result->instances.push_back(instance);
+        }
+    }
+    return result;
 }
 void EditorResources::invalidate(const std::string& id) {
     for(auto& [key,entry]:entries_)if(entry.sourceId==id) {entry.geometry.clear();entry.geometryRevision=0;}

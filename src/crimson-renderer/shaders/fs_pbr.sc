@@ -20,6 +20,7 @@ SAMPLER2D(s_normal, 3);
 SAMPLERCUBE(s_irradiance, 4);
 SAMPLERCUBE(s_prefiltered, 5);
 SAMPLER2D(s_brdfLut, 6);
+#include "point_shadow.sh"
 
 // CONST is static const on HLSL: a plain global const becomes an unset uniform.
 CONST(float PI = 3.141592653589793);
@@ -107,6 +108,7 @@ vec3 evaluateLight(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 base, float metal
 
 void main()
 {
+    vec3 shadowPlaneNormal = pointShadowPlaneNormal(v_worldPosition, v_normal);
     vec3 N = materialNormal(v_normal, v_tangent, v_texcoord0);
     vec3 V = safeNormalize(u_cameraPos.xyz - v_worldPosition, N);
     vec3 base = u_baseColorMetallic.rgb;
@@ -131,6 +133,7 @@ void main()
         float distanceSquared = max(dot(delta, delta), 0.000001);
         vec3 L = delta * inversesqrt(distanceSquared);
         vec3 radiance = u_pointColor[i].rgb * (u_pointPosition[i].w * pointLightAttenuation(distanceSquared, u_pointColor[i].w));
+        radiance *= pointShadowVisibility(i, v_worldPosition, safeNormalize(v_normal, vec3(0.0, 1.0, 0.0)), shadowPlaneNormal);
         color += evaluateLight(N, V, L, radiance, base, metallic, roughness);
     }
     color += evaluateEnvironment(N, V, base, metallic, roughness);

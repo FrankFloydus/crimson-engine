@@ -295,8 +295,12 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     struct FramePins {
         std::vector<std::shared_ptr<const PreparedEditorModel>> models;
         std::vector<std::shared_ptr<const PreparedParticleMaterial>> particles;
+        std::shared_ptr<const PreparedEditorShadows> shadows;
     };
     auto pins=std::make_shared<FramePins>();pins->particles=std::move(particlePins);
+    // Prepare from the full interpolated world before either camera culls its
+    // receivers. Scene and Game submit the same pinned caster set this frame.
+    pins->shadows=prepared_.prepareShadows(extracted,editor_.pointShadowResolution());
     std::uint64_t signature=14695981039346656037ull;
     for(const auto& material:pins->particles)signature=(signature^material->signature)*1099511628211ull;
     for(const auto& model:extracted.models) {
@@ -306,30 +310,35 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
         if(auto prepared=prepared_.prepare(model.assetId,model.world,settings_.camera,renderer.height(),selected,ResourcePriority::Visible,
             std::max(1.f,frame.viewport.width)/std::max(1.f,frame.viewport.height),model.materialId)) {
             instances.push_back({model.id,{prepared->asset,model.world},&prepared->textures,prepared->revision,selected,true,&prepared->materials});
+            instances.back().castShadows=model.castShadows;instances.back().receiveShadows=model.receiveShadows;
             pins->models.push_back(prepared);signature=(signature^prepared->signature)*1099511628211ull;
         }
     }
     for(const auto& id:frame.placementPreviewIds) if(auto prepared=prepared_.prepare(id,math::translation(placement(frame.placementPreviewPosition)),settings_.camera,
         renderer.height(),false,ResourcePriority::Placement,std::max(1.f,frame.viewport.width)/std::max(1.f,frame.viewport.height))) {
-        instances.push_back({0,{prepared->asset,math::translation(placement(frame.placementPreviewPosition))},&prepared->textures,prepared->revision,false,false,&prepared->materials});pins->models.push_back(prepared);
+        instances.push_back({0,{prepared->asset,math::translation(placement(frame.placementPreviewPosition))},&prepared->textures,prepared->revision,false,false,&prepared->materials});
+        instances.back().castShadows=false;instances.back().receiveShadows=false;pins->models.push_back(prepared);
     }
     renderer.setExternalResourceSignature(signature);
     renderer.setAppearance(editor_.appearance());
     if (frame.viewport.width > 0 && frame.viewport.height > 0)
-        renderer.render(RenderScene{settings_,{},nullptr,nullptr,instances,extracted.directional,extracted.points,true,pins,particlePackets_,particleMaterials_});
+        renderer.render(RenderScene{settings_,{},nullptr,nullptr,instances,extracted.directional,extracted.points,true,pins,particlePackets_,particleMaterials_,
+            pins->shadows->instances,document.documentGeneration(),editor_.pointShadowResolution()});
     if(gameOpen && game.pixelWidth && game.pixelHeight && gameCamera) {
         SceneSettings gameSettings=settings_;gameSettings.camera=*gameCamera;
         const auto aspect=static_cast<float>(game.pixelWidth)/game.pixelHeight;
         std::vector<RenderModelInstance> gameInstances;
-        auto gamePins=std::make_shared<FramePins>();gamePins->particles=pins->particles;
+        auto gamePins=std::make_shared<FramePins>();gamePins->particles=pins->particles;gamePins->shadows=pins->shadows;
         for(const auto& model:extracted.models) {
             if(const auto metadata=assets.findModel(model.assetId))if(!visibleBounds(metadata->bounds,model.world,*gameCamera,aspect))continue;
             if(auto prepared=prepared_.prepare(model.assetId,model.world,*gameCamera,game.pixelHeight,false,ResourcePriority::Visible,aspect,model.materialId)) {
                 gameInstances.push_back({model.id,{prepared->asset,model.world},&prepared->textures,prepared->revision,false,true,&prepared->materials});
+                gameInstances.back().castShadows=model.castShadows;gameInstances.back().receiveShadows=model.receiveShadows;
                 gamePins->models.push_back(prepared);
             }
         }
-        renderer.renderGame(RenderScene{gameSettings,{},nullptr,nullptr,gameInstances,extracted.directional,extracted.points,true,gamePins,particlePackets_,particleMaterials_});
+        renderer.renderGame(RenderScene{gameSettings,{},nullptr,nullptr,gameInstances,extracted.directional,extracted.points,true,gamePins,particlePackets_,particleMaterials_,
+            pins->shadows->instances,document.documentGeneration(),editor_.pointShadowResolution()});
         gameInput_.setProjection(*gameCamera,game.pixelWidth,game.pixelHeight);
         if(play_.playing() && play_.lastClickedGround())gameView_.drawClickMarker(*gameCamera,*play_.lastClickedGround());
     }
@@ -339,7 +348,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
         if(fingerprint!=savedPreviewFingerprint_) { savedPreviewFingerprint_=fingerprint;previews_->requestSceneSave(document.assetId()); }
     } catch(const std::exception& error){status_=error.what();}
     prepared_.endFrame();
-    const auto retained=renderer.modelResidentBytes()+renderer.thumbnailResidentBytes();
+    const auto retained=renderer.modelResidentBytes()+renderer.thumbnailResidentBytes()+renderer.shadowResidentBytes();
     assets.trimTextureCache(retained>=resources_.config().gpuRetentionBytes?0:resources_.config().gpuRetentionBytes-retained);
     if(!prepared_.status().empty())status_+=prepared_.status();
     if(!sceneParticles.status().empty())status_+=sceneParticles.status();
@@ -348,12 +357,13 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
         if(!document.scene().properties().playerCharacter)status_+="No Player Character. Select a Character and choose Make Player.\n";
     }
     if(!renderer.particleStatus().empty())status_+=renderer.particleStatus();
+    if(!renderer.shadowStatus().empty())status_+=renderer.shadowStatus();
     const auto& particleDraw=renderer.particleStats();
     if(frame.viewport.width>0 && (particleDraw.dropped || particleDraw.invalid))
         status_+="Particle rendering omitted "+std::to_string(particleDraw.dropped)+" packets; "+std::to_string(particleDraw.invalid)+" were invalid.\n";
     if(!previews_->status().empty())status_+=previews_->status();
     if(environment_.state()==ResourceState::Failed)status_+=environment_.diagnostic();
     if(!resourceStatus_.empty()) { if(!status_.empty())status_+='\n';status_+=resourceStatus_; }
-    drawSceneDiagnostics(status_,renderer.pickingStatus(),renderer.modelStatus());
+    drawSceneDiagnostics(status_,renderer.pickingStatus(),renderer.modelStatus(),&renderer.shadowStats());
 }
 }

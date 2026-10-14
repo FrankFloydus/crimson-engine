@@ -7,9 +7,11 @@
 
 namespace crimson {
 inline constexpr std::array<int,6> BrowserPreviewSizes{16,32,64,128,256,512};
+inline constexpr std::array<int,3> PointShadowResolutions{256,512,1024};
 struct EditorPreferenceValues {
     ViewportAppearance appearance{};
     int browserPreviewSize{128};
+    int pointShadowResolution{1024};
 };
 // Application preferences are independent from authored scenes and dock state.
 class EditorPreferences {

@@ -5,6 +5,7 @@
 #include "assets/AssetReferenceManager.h"
 #include "resources/ResourceManager.h"
 #include <array>
+#include <cstdint>
 #include <optional>
 #include <unordered_map>
 
@@ -20,6 +21,7 @@ public:
     void cancelInteraction(SceneDocument&, Renderer&);
     bool exitAccepted() const { return exitAccepted_; }
     const ViewportAppearance& appearance() const { return preferences_.values().appearance; }
+    std::uint16_t pointShadowResolution() const { return static_cast<std::uint16_t>(preferences_.values().pointShadowResolution); }
     const PanelVisibility& panels() const { return panels_; }
     void setPanels(const PanelVisibility& panels) { panels_=panels; }
     bool needsAuthoringDocument() const { return deferred_!=Pending::None || !deferredDeletion_.empty(); }

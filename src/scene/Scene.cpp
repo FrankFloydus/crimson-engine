@@ -20,9 +20,7 @@ bool safeReference(const std::string& id) {
     return true;
 }
 template<class T> bool sameLight(const std::optional<T>& a, const std::optional<T>& b) {
-    return a.has_value() == b.has_value() && (!a ||
-        (a->color == b->color && a->intensity == b->intensity && a->enabled == b->enabled &&
-            [&]{if constexpr(requires { a->radius; })return a->radius==b->radius;else return true;}()));
+    return a==b;
 }
 template<class T> void validateLight(const std::optional<T>& light) {
     if (!light) return;
@@ -56,7 +54,8 @@ bool sameEntity(const EntityRecord& a, const EntityRecord& b) {
     return a.id == b.id && a.name == b.name && a.parent == b.parent && a.order == b.order &&
         a.local == b.local && a.model == b.model && a.particle == b.particle && sameLight(a.directional,b.directional) && sameLight(a.point,b.point) &&
         a.environment.has_value()==b.environment.has_value() && (!a.environment || sameEnvironment(*a.environment,*b.environment)) &&
-        a.character==b.character && a.collider==b.collider && a.camera==b.camera && a.modelMaterial==b.modelMaterial;
+        a.character==b.character && a.collider==b.collider && a.camera==b.camera && a.modelMaterial==b.modelMaterial &&
+        a.castShadows==b.castShadows && a.receiveShadows==b.receiveShadows;
 }
 bool sameProperties(const SceneProperties& a, const SceneProperties& b) {
     return a.activeEnvironment == b.activeEnvironment && a.activeCamera==b.activeCamera && a.playerCharacter==b.playerCharacter;
@@ -81,7 +80,10 @@ std::optional<EntityRecord> Scene::find(EntityId id) const {
     const auto& identity = registry_.get<Identity>(entity);
     const auto& relation = registry_.get<Relationship>(entity);
     EntityRecord record{id,identity.name,relation.parent,relation.order,registry_.get<Transform>(entity).local};
-    if (const auto* model = registry_.try_get<ModelReference>(entity)) { record.model = model->assetId;record.modelMaterial=model->material; }
+    if (const auto* model = registry_.try_get<ModelReference>(entity)) {
+        record.model=model->assetId;record.modelMaterial=model->material;
+        record.castShadows=model->castShadows;record.receiveShadows=model->receiveShadows;
+    }
     if (const auto* particle = registry_.try_get<ParticleReference>(entity)) record.particle = particle->assetId;
     if (const auto* light = registry_.try_get<SceneDirectionalLight>(entity)) record.directional = *light;
     if (const auto* light = registry_.try_get<ScenePointLight>(entity)) record.point = *light;
@@ -177,6 +179,8 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             throw std::runtime_error("Entity local transform must be a finite affine matrix.");
         if (record.model && !isBuiltinModel(record.model->id) && (record.model->id.starts_with("builtin:") || !safeReference(record.model->id)))
             throw std::runtime_error("Model asset reference must be a nonempty project-relative path.");
+        if (!record.model && (!record.castShadows || !record.receiveShadows))
+            throw std::runtime_error("Model shadow settings require a model entity.");
         if (!record.modelMaterial.empty()) {
             if (!record.model || !isBuiltinModel(record.model->id))
                 throw std::runtime_error("Instance material assignment is supported only on built-in Box models.");
@@ -193,6 +197,9 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
         validateLight(record.directional); validateLight(record.point);
         if (record.point && (!std::isfinite(record.point->radius) || record.point->radius<.01f || record.point->radius>100000.f))
             throw std::runtime_error("Point light radius must be finite and between 0.01 and 100000 meters.");
+        if (record.point && (!std::isfinite(record.point->shadowDepthBias) || record.point->shadowDepthBias<0 ||
+            !std::isfinite(record.point->shadowNormalBias) || record.point->shadowNormalBias<0))
+            throw std::runtime_error("Point shadow biases must be finite and nonnegative.");
         if (record.character) {
             const auto& c=*record.character;
             if (!std::isfinite(c.height) || !std::isfinite(c.radius) || !std::isfinite(c.moveSpeed) ||
@@ -285,7 +292,7 @@ void Scene::apply(const std::vector<EntityRecord>& records, const ScenePropertie
         candidate.emplace<Identity>(entity,record.id,record.name);
         candidate.emplace<Transform>(entity,record.local);
         candidate.emplace<Relationship>(entity,record.parent,record.order);
-        if (record.model) candidate.emplace<ModelReference>(entity,*record.model,record.modelMaterial);
+        if (record.model) candidate.emplace<ModelReference>(entity,*record.model,record.modelMaterial,record.castShadows,record.receiveShadows);
         if (record.particle) candidate.emplace<ParticleReference>(entity,*record.particle);
         if (record.directional) candidate.emplace<SceneDirectionalLight>(entity,*record.directional);
         if (record.point) candidate.emplace<ScenePointLight>(entity,*record.point);

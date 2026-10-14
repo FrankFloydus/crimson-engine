@@ -40,6 +40,10 @@ struct PointLight {
     float intensity{35.0f};
     bool enabled{true};
     float radius{20.0f}; // World-space influence range in meters; unaffected by entity scale.
+    std::uint64_t entityId{}; // Persistent scene identity, independent of extraction order.
+    bool castShadows{false};
+    float shadowDepthBias{.005f}; // World-space meters.
+    float shadowNormalBias{1.f}; // Shadow-map texels.
     float inverseRadiusSquared() const;
 };
 
@@ -98,17 +102,31 @@ struct ViewportAppearance {
     bool operator==(const ViewportAppearance&) const = default;
 };
 
-inline constexpr uint16_t SceneView = 0;
-inline constexpr uint16_t PresentView = 1;
-inline constexpr uint16_t GridView = 2;
-inline constexpr uint16_t EncodeView = 3;
-// Preserve natural view ordering for the pinned D3D11 blit/readback backend.
-// Particle preview: 4..7; 8 is reserved; picking: 9..10; thumbnail: 11..15;
-// material preview: 16..19. Game omits the editor grid and needs three passes.
-inline constexpr uint16_t GameSceneView = 20;
-inline constexpr uint16_t GamePresentView = 21;
-inline constexpr uint16_t GameEncodeView = 22;
-inline constexpr uint16_t ToolsView = 23;
-inline constexpr uint16_t FirstPlatformView = 24;
+struct PointShadowStats {
+    std::uint32_t activeLights{},renderedLights{},renderedFaces{},drawCalls{},cacheHits{},casters{};
+    std::uint16_t resolution{},capacity{};
+    std::size_t allocatedBytes{};
+    std::uint64_t worldId{};
+};
+// Numeric order is execution order: the pinned D3D11 blit backend must not
+// receive a nonidentity view remapping. Both independent shadow worlds reserve
+// all six faces for all sixteen point lights before their dependent draws.
+inline constexpr uint16_t PointShadowView = 0;
+inline constexpr uint16_t SceneView = 96;
+inline constexpr uint16_t PresentView = 97;
+inline constexpr uint16_t GridView = 98;
+inline constexpr uint16_t EncodeView = 99;
+inline constexpr uint16_t ParticlePreviewView = 100;
+inline constexpr uint16_t PickView = 105;
+inline constexpr uint16_t PickReadView = 106;
+inline constexpr uint16_t ThumbnailPointShadowView = 107;
+inline constexpr uint16_t ThumbnailSceneView = 203;
+inline constexpr uint16_t ThumbnailReadView = 207;
+inline constexpr uint16_t MaterialPreviewView = 208;
+inline constexpr uint16_t GameSceneView = 212;
+inline constexpr uint16_t GamePresentView = 213;
+inline constexpr uint16_t GameEncodeView = 214;
+inline constexpr uint16_t ToolsView = 215;
+inline constexpr uint16_t FirstPlatformView = 216;
 
 } // namespace crimson

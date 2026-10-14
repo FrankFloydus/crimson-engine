@@ -36,21 +36,23 @@ void PlaySession::stop() {
     presentation_.apply({},{});remainder_=0;ticks_=droppedTicks_=routeQueries_=0;editRevision_=0;suspended_=failed_=false;status_.clear();
     clearRoute();lastClickedGround_.reset();controlled_=NoEntity;inputCancellation_=0;lastControlledPose_.reset();
 }
-void PlaySession::clearRoute(){controller_.reset();destination_.reset();routeActive_=false;routeStatus_.clear();lastHeldTarget_.reset();heldRetargetRemaining_=0;}
+void PlaySession::clearRoute(){controller_.reset();requestedDestination_.reset();destination_.reset();routeActive_=false;routeStatus_.clear();lastHeldTarget_.reset();heldRetargetRemaining_=0;}
 void PlaySession::planRoute(const Vec3& start) {
-    controller_.reset();routeActive_=false;routeStatus_.clear();
-    if(!destination_)return;
+    controller_.reset();destination_.reset();routeActive_=false;routeStatus_.clear();
+    if(!requestedDestination_)return;
     ++routeQueries_;
-    if(auto route=navigation_->findPath(start,*destination_)) {
+    if(auto route=navigation_->findReachablePath(start,*requestedDestination_)) {
+        destination_=route->corners.back();
         controller_.setPath(std::move(route->corners));routeActive_=true;
-    } else routeStatus_="The clicked destination is not reachable by this Character.\n";
+    } else routeStatus_="No reachable walking surface is available for this Character.\n";
 }
 void PlaySession::retargetHeld(const Vec3& start,const Vec3& target) {
     lastClickedGround_=target;
     if(lastHeldTarget_ && math::length(target-*lastHeldTarget_)<HeldRetargetDistance)return;
     lastHeldTarget_=target;++routeQueries_;
-    if(auto route=navigation_->findPath(start,target)) {
-        controller_.setPath(std::move(route->corners));destination_=target;
+    if(auto route=navigation_->findReachablePath(start,target)) {
+        requestedDestination_=target;destination_=route->corners.back();
+        controller_.setPath(std::move(route->corners));
         routeActive_=true;routeStatus_.clear();
     } else routeStatus_="Held destination is unreachable; retaining the previous destination.\n";
 }
@@ -95,19 +97,20 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
             const auto ray=input->consumeMoveRay(camera);
             if(character && character->character && navigation_->reconcile(*physics_,*character->character)) {
                 lastHeldTarget_.reset();
-                if(controlledPose && destination_ && !ray)planRoute(math::transformPoint(*controlledPose,{}));
+                if(controlledPose && requestedDestination_ && !ray)planRoute(math::transformPoint(*controlledPose,{}));
                 heldRetargetRemaining_=HeldRetargetInterval;
             }
             if(ray) {
                 const auto hit=physics_->raycast(*ray,camera.farPlane);
-                // Click destinations need actual walkable collision geometry.
-                // A wall face or empty space cannot create an implicit floor.
+                // Any actual collider hit expresses movement intent. Navigation
+                // resolves walls and disconnected roofs to reachable ground;
+                // a ray miss still cannot invent a floor.
                 clearRoute();
                 lastClickedGround_.reset();
-                if(hit && hit->normal[1]>=std::cos(std::numbers::pi/4)-1e-5) {
+                if(hit) {
                     lastClickedGround_=hit->position;lastHeldTarget_=hit->position;
                     if(controlledPose && character && character->character) {
-                        destination_=hit->position;planRoute(math::transformPoint(*controlledPose,{}));
+                        requestedDestination_=hit->position;planRoute(math::transformPoint(*controlledPose,{}));
                     }
                 }
                 heldRetargetRemaining_=HeldRetargetInterval;
@@ -118,7 +121,7 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
                 if(const auto heldRay=input->heldMoveRay(camera)) {
                     heldRetargetRemaining_=HeldRetargetInterval;
                     const auto hit=physics_->raycast(*heldRay,camera.farPlane);
-                    if(hit && hit->normal[1]>=std::cos(std::numbers::pi/4)-1e-5 && controlledPose && character && character->character)
+                    if(hit && controlledPose && character && character->character)
                         retargetHeld(math::transformPoint(*controlledPose,{}),hit->position);
                 }
             }
@@ -141,7 +144,14 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
                     const auto command=controller_.update(position,math::transformDirection(*world,{0,0,-1}),speed,FixedStep);
                     velocity=command.velocity;
                     CharacterMotor(*physics_,controlled).face(command.facing);
-                    if(routeActive_ && !controller_.destination()){destination_.reset();routeActive_=false;}
+                    if(routeActive_ && !controller_.destination()) {
+                        // An approach point can become reachable farther along
+                        // after a live wall edit. Retain that request dormant,
+                        // without querying again until navigation changes.
+                        if(requestedDestination_ && destination_ && math::length(*requestedDestination_-*destination_)<1e-4)
+                            requestedDestination_.reset();
+                        destination_.reset();routeActive_=false;
+                    }
                 } else velocity={};
             }
             const auto poses=physics_->step(document_->scene(),controlled,velocity,static_cast<float>(FixedStep),document_->transformEditRoots());
