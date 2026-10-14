@@ -290,6 +290,73 @@ void MaterialEditor::properties(AssetLibrary& assets) {
             control("Change metallic",[](auto& asset){return ImGui::SliderFloat("Metallic",&asset.surface.metallic,0,1,"%.3f");});
             control("Change double-sided rendering",[](auto& asset){return ImGui::Checkbox("Double sided",&asset.surface.doubleSided);});
         }
+        ImGui::SeparatorText("UV mapping");
+        control("Link UV scale",[](auto& asset){return ImGui::Checkbox("Link scale XYZ",&asset.surface.uvScaleLinked);});
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))ImGui::SetTooltip("Lock the ratio between the three scale components.");
+        control("Change UV scale",[&](auto& asset) {
+            const auto before=asset.surface.uvScale;
+            const bool changed=ImGui::DragFloat3("Scale",asset.surface.uvScale.data(),.01f,0,0,"%.3f");
+            if(ImGui::IsItemActivated())uvScaleBaseline_=before;
+            if(changed && asset.surface.uvScaleLinked) {
+                const auto baseline=ImGui::IsItemActive()?uvScaleBaseline_:before;
+                for(unsigned axis=0;axis<3;++axis)if(asset.surface.uvScale[axis]!=before[axis]) {
+                    const auto value=asset.surface.uvScale[axis];
+                    if(std::abs(baseline[axis])>1e-8f)asset.surface.uvScale=baseline*(static_cast<double>(value)/baseline[axis]);
+                    else asset.surface.uvScale=before+Vec3{value-before[axis],value-before[axis],value-before[axis]};
+                    break;
+                }
+            }
+            return changed;
+        });
+        control("Change UV offset",[](auto& asset){return ImGui::DragFloat3("Offset",asset.surface.uvOffset.data(),.01f,0,0,"%.3f");});
+        control("Change UV rotation",[](auto& asset){return ImGui::DragFloat3("Rotation (deg)",asset.surface.uvRotation.data(),.5f,0,0,"%.2f");});
+        control("Change triplanar mapping",[](auto& asset){return ImGui::Checkbox("Triplanar",&asset.surface.triplanar);});
+        ImGui::BeginDisabled(sprite || !document_.definition().surface.triplanar);
+        control("Change triplanar space",[](auto& asset){return ImGui::Checkbox("World Triplanar",&asset.surface.triplanarWorld);});
+        ImGui::EndDisabled();
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Project in world coordinates so scaling a mesh adds texture repeats.\nThe texture stays fixed in the world when the mesh moves or rotates.\nDisabled uses mesh-local coordinates, which stretch with entity scale.");
+        ImGui::TextWrapped("%s",sprite?
+            "Sprites use XY scale and offset, and Z rotation. Triplanar projection applies to 3D surfaces.":
+            "UV mapping uses XY scale and offset, and Z rotation. Triplanar uses local or world XYZ coordinates. Transform order: scale, rotate, offset.");
+        ImGui::SeparatorText("Sampler");
+        const auto samplerSeed=[](const ModelMaterial& surface) {
+            for(const auto* slot:{&surface.baseColorTexture,&surface.metallicRoughnessTexture,&surface.normalTexture,&surface.occlusionTexture,&surface.emissiveTexture})
+                if(!slot->image.empty())return materialSampler(surface,*slot);
+            return materialSampler(surface,surface.baseColorTexture);
+        };
+        if(!document_.definition().surface.sharedSampler) {
+            const auto& surface=document_.definition().surface;const auto seed=samplerSeed(surface);
+            bool mixed=false;
+            for(const auto* slot:{&surface.baseColorTexture,&surface.metallicRoughnessTexture,&surface.normalTexture,&surface.occlusionTexture,&surface.emissiveTexture})
+                if(!slot->image.empty() && materialSampler(surface,*slot)!=seed)mixed=true;
+            ImGui::TextDisabled("%s",mixed?"Mixed legacy samplers":"Legacy samplers (preserved)");
+            ImGui::TextWrapped("Changing this sampler applies it to every texture. Existing sampling stays unchanged until then.");
+            if(ImGui::Button("Use one sampler") && editable) {
+                if(!document_.transactionActive() || document_.commit())
+                    document_.edit("Use shared material sampler",[&](auto& asset){asset.surface.sharedSampler=samplerSeed(asset.surface);});
+            }
+        }
+        control("Change material horizontal wrapping",[&](auto& asset) {
+            auto sampler=samplerSeed(asset.surface);int mode=static_cast<int>(sampler.wrapU);
+            const bool changed=ImGui::Combo("Wrap U",&mode,"Repeat\0Clamp\0Mirror\0");
+            if(changed){sampler.wrapU=static_cast<ModelWrap>(mode);asset.surface.sharedSampler=sampler;}return changed;
+        });
+        control("Change material vertical wrapping",[&](auto& asset) {
+            auto sampler=samplerSeed(asset.surface);int mode=static_cast<int>(sampler.wrapV);
+            const bool changed=ImGui::Combo("Wrap V",&mode,"Repeat\0Clamp\0Mirror\0");
+            if(changed){sampler.wrapV=static_cast<ModelWrap>(mode);asset.surface.sharedSampler=sampler;}return changed;
+        });
+        control("Change material filtering",[&](auto& asset) {
+            auto sampler=samplerSeed(asset.surface);const bool nearest=sampler.magFilter==ModelFilter::Nearest;bool changed=false;
+            if(ImGui::BeginCombo("Filtering",nearest?"Nearest":"Linear")) {
+                if(ImGui::Selectable("Nearest",nearest)){sampler.magFilter=ModelFilter::Nearest;sampler.minFilter=ModelFilter::NearestMipmapNearest;changed=true;}
+                if(ImGui::Selectable("Linear",!nearest)){sampler.magFilter=ModelFilter::Linear;sampler.minFilter=ModelFilter::LinearMipmapLinear;changed=true;}
+                ImGui::EndCombo();
+            }
+            if(changed)asset.surface.sharedSampler=sampler;return changed;
+        });
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))ImGui::SetTooltip("Nearest keeps individual texture pixels sharp. Linear blends neighboring pixels.\nThis filter applies to every texture channel at all texture sizes.");
         const auto texture=[&](const char* title,ModelTexture ModelMaterial::* slot,bool normal=false) {
             ImGui::PushID(title);
             auto textureId=(document_.definition().surface.*slot).image.id;
@@ -297,27 +364,10 @@ void MaterialEditor::properties(AssetLibrary& assets) {
                 if(!document_.transactionActive() || document_.commit())
                     document_.edit(std::string("Assign ")+title,[&](auto& asset){(asset.surface.*slot).image.id=textureId;});
             }
-            if(ImGui::TreeNodeEx("Sampler",ImGuiTreeNodeFlags_DefaultOpen)) {
-                if(!sprite)control("Change texture UV set",[&](auto& asset){auto& sampler=asset.surface.*slot;int coordinate=static_cast<int>(sampler.texCoord);const bool changed=ImGui::Combo("UV set",&coordinate,"UV0\0UV1\0");if(changed)sampler.texCoord=static_cast<uint32_t>(coordinate);return changed;});
-                control("Change horizontal wrapping",[&](auto& asset){auto& sampler=asset.surface.*slot;int mode=static_cast<int>(sampler.wrapU);const bool changed=ImGui::Combo("Wrap U",&mode,"Repeat\0Clamp\0Mirror\0");if(changed)sampler.wrapU=static_cast<ModelWrap>(mode);return changed;});
-                control("Change vertical wrapping",[&](auto& asset){auto& sampler=asset.surface.*slot;int mode=static_cast<int>(sampler.wrapV);const bool changed=ImGui::Combo("Wrap V",&mode,"Repeat\0Clamp\0Mirror\0");if(changed)sampler.wrapV=static_cast<ModelWrap>(mode);return changed;});
-                control("Change texture filtering",[&](auto& asset) {
-                    auto& sampler=asset.surface.*slot;
-                    const bool nearest=sampler.magFilter==ModelFilter::Nearest;
-                    bool changed=false;
-                    if(ImGui::BeginCombo("Filtering",nearest?"Nearest":"Linear")) {
-                        if(ImGui::Selectable("Nearest",nearest)) {
-                            sampler.magFilter=ModelFilter::Nearest;sampler.minFilter=ModelFilter::NearestMipmapNearest;changed=true;
-                        }
-                        if(ImGui::Selectable("Linear",!nearest)) {
-                            sampler.magFilter=ModelFilter::Linear;sampler.minFilter=ModelFilter::LinearMipmapLinear;changed=true;
-                        }
-                        ImGui::EndCombo();
-                    }
-                    return changed;
-                });
-                if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))ImGui::SetTooltip("Nearest keeps individual texture pixels sharp. Linear blends neighboring pixels.\nChoosing a filter applies it at all texture sizes.");
-                ImGui::TreePop();
+            if(!sprite) {
+                ImGui::BeginDisabled(document_.definition().surface.triplanar);
+                control("Change texture UV set",[&](auto& asset){auto& source=asset.surface.*slot;int coordinate=static_cast<int>(source.texCoord);const bool changed=ImGui::Combo("UV set",&coordinate,"UV0\0UV1\0");if(changed)source.texCoord=static_cast<uint32_t>(coordinate);return changed;});
+                ImGui::EndDisabled();
             }
             ImGui::PopID();
         };

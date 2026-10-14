@@ -41,6 +41,15 @@ ModelTexture readTexture(const Json& j) {
     if(u<0||u>2||v<0||v>2||min<0||min>5||mag<0||mag>1) throw std::runtime_error("Material sampler is invalid.");
     t.wrapU=static_cast<ModelWrap>(u);t.wrapV=static_cast<ModelWrap>(v);t.minFilter=static_cast<ModelFilter>(min);t.magFilter=static_cast<ModelFilter>(mag);return t;
 }
+Json samplerJson(const ModelSampler& sampler) {
+    return {{"wrapU",static_cast<int>(sampler.wrapU)},{"wrapV",static_cast<int>(sampler.wrapV)},
+        {"minFilter",static_cast<int>(sampler.minFilter)},{"magFilter",static_cast<int>(sampler.magFilter)}};
+}
+ModelSampler readSampler(const Json& j) {
+    const int u=j.at("wrapU").get<int>(),v=j.at("wrapV").get<int>(),min=j.at("minFilter").get<int>(),mag=j.at("magFilter").get<int>();
+    if(u<0||u>2||v<0||v>2||min<0||min>5||mag<0||mag>1)throw std::runtime_error("Material sampler is invalid.");
+    return {static_cast<ModelWrap>(u),static_cast<ModelWrap>(v),static_cast<ModelFilter>(min),static_cast<ModelFilter>(mag)};
+}
 const char* shadingName(MaterialShading shading) {
     switch(shading){case MaterialShading::StandardPbr:return "standard-pbr";case MaterialShading::Unlit:return "unlit";}
     throw std::runtime_error("Unsupported material shading mode.");
@@ -101,11 +110,15 @@ bool particleMaterialCompatible(const MaterialAsset& material) {
 bool modelMaterialCompatible(const MaterialAsset& material) {
     return material.shading==MaterialShading::StandardPbr&&(material.blend==MaterialBlend::Opaque||material.blend==MaterialBlend::Mask);
 }
+ModelSampler materialSampler(const ModelMaterial& material,const ModelTexture& texture) {
+    return material.sharedSampler.value_or(ModelSampler{texture.wrapU,texture.wrapV,texture.minFilter,texture.magFilter});
+}
 void validateMaterialAsset(const MaterialAsset& a) {
     (void)shadingName(a.shading);(void)blendName(a.blend);
     const auto& m=a.surface;
     if(a.id.empty()||a.name.empty()||a.name.size()>1024||!math::finite(m.baseColor)||!math::finite(m.emissive)||
-        !math::finite(m.metallic)||!math::finite(m.roughness)||!math::finite(m.normalScale)||!math::finite(m.occlusionStrength)||!math::finite(m.alphaCutoff))
+        !math::finite(m.metallic)||!math::finite(m.roughness)||!math::finite(m.normalScale)||!math::finite(m.occlusionStrength)||!math::finite(m.alphaCutoff)||
+        !math::finite(m.uvScale)||!math::finite(m.uvOffset)||!math::finite(m.uvRotation))
         throw std::runtime_error("Material contains invalid identity or nonfinite factors.");
     if(m.metallic<0||m.metallic>1||m.roughness<0||m.roughness>1||m.occlusionStrength<0||m.occlusionStrength>1||m.alphaCutoff<0||
         std::any_of(m.baseColor.begin(),m.baseColor.end(),[](float x){return x<0||x>1;})||std::any_of(m.emissive.begin(),m.emissive.end(),[](float x){return x<0;}))
@@ -115,12 +128,15 @@ void validateMaterialAsset(const MaterialAsset& a) {
         const int u=static_cast<int>(t->wrapU),v=static_cast<int>(t->wrapV),min=static_cast<int>(t->minFilter),mag=static_cast<int>(t->magFilter);
         if(u<0||u>2||v<0||v>2||min<0||min>5||mag<0||mag>1)throw std::runtime_error("Material sampler is invalid.");
     }
+    if(m.sharedSampler)(void)readSampler(samplerJson(*m.sharedSampler));
 }
 std::string serializeMaterialAsset(const MaterialAsset& a) {
     validateMaterialAsset(a);const auto& m=a.surface;
     const auto blend=a.blend==MaterialBlend::Opaque&&m.alphaMask?MaterialBlend::Mask:a.blend;
-    return Json{{"version",2},{"type","crimson-material"},{"id",a.id},{"name",a.name},{"originModel",a.originModel},
+    return Json{{"version",3},{"type","crimson-material"},{"id",a.id},{"name",a.name},{"originModel",a.originModel},
         {"shading",shadingName(a.shading)},{"blend",blendName(blend)},
+        {"uvScale",m.uvScale},{"uvOffset",m.uvOffset},{"uvRotation",m.uvRotation},{"triplanar",m.triplanar},{"triplanarWorld",m.triplanarWorld},{"uvScaleLinked",m.uvScaleLinked},
+        {"sharedSampler",m.sharedSampler?samplerJson(*m.sharedSampler):Json(nullptr)},
         {"baseColor",m.baseColor},{"metallic",m.metallic},{"roughness",m.roughness},{"normalScale",m.normalScale},
         {"occlusionStrength",m.occlusionStrength},{"emissive",m.emissive},{"alphaMask",blend==MaterialBlend::Mask},{"doubleSided",m.doubleSided},{"alphaCutoff",m.alphaCutoff},
         {"baseColorTexture",textureJson(m.baseColorTexture)},{"metallicRoughnessTexture",textureJson(m.metallicRoughnessTexture)},
@@ -131,12 +147,17 @@ MaterialAsset loadMaterialAsset(const std::filesystem::path& root,const std::str
     if(id==DefaultParticleMaterialId)return defaultParticleMaterialAsset();
     const auto file=materialPath(root,id);if(std::filesystem::file_size(file)>1024u*1024u)throw std::runtime_error("Material file exceeds 1 MiB.");
     std::ifstream input(file,std::ios::binary);if(!input)throw std::runtime_error("Cannot read material asset.");const auto j=Json::parse(input);
-    if(!j.at("version").is_number_integer()||(j.at("version")!=1&&j.at("version")!=2)||j.at("type")!="crimson-material"||j.at("id")!=id)throw std::runtime_error("Material type, version or identity is invalid.");
+    if(!j.at("version").is_number_integer()||(j.at("version")!=1&&j.at("version")!=2&&j.at("version")!=3)||j.at("type")!="crimson-material"||j.at("id")!=id)throw std::runtime_error("Material type, version or identity is invalid.");
     MaterialAsset a;a.id=id;a.name=j.at("name").get<std::string>();a.originModel=j.value("originModel",std::string{});auto& m=a.surface;m.name=a.name;
     m.baseColor=j.at("baseColor").get<Vec4>();m.metallic=j.at("metallic").get<float>();m.roughness=j.at("roughness").get<float>();m.normalScale=j.at("normalScale").get<float>();
     m.occlusionStrength=j.at("occlusionStrength").get<float>();m.emissive=j.at("emissive").get<Vec3>();m.alphaMask=j.at("alphaMask").get<bool>();m.doubleSided=j.at("doubleSided").get<bool>();m.alphaCutoff=j.at("alphaCutoff").get<float>();
     if(j.at("version")==1)a.blend=m.alphaMask?MaterialBlend::Mask:MaterialBlend::Opaque;
     else {a.shading=readShading(j.at("shading").get<std::string>());a.blend=readBlend(j.at("blend").get<std::string>());m.alphaMask=a.blend==MaterialBlend::Mask;}
+    if(j.at("version")==3) {
+        m.uvScale=j.at("uvScale").get<Vec3>();m.uvOffset=j.at("uvOffset").get<Vec3>();m.uvRotation=j.at("uvRotation").get<Vec3>();
+        m.triplanar=j.at("triplanar").get<bool>();m.triplanarWorld=j.value("triplanarWorld",false);m.uvScaleLinked=j.at("uvScaleLinked").get<bool>();
+        if(!j.at("sharedSampler").is_null())m.sharedSampler=readSampler(j.at("sharedSampler"));
+    }
     m.baseColorTexture=readTexture(j.at("baseColorTexture"));m.metallicRoughnessTexture=readTexture(j.at("metallicRoughnessTexture"));m.normalTexture=readTexture(j.at("normalTexture"));
     m.occlusionTexture=readTexture(j.at("occlusionTexture"));m.emissiveTexture=readTexture(j.at("emissiveTexture"));validateMaterialAsset(a);return a;
 }
@@ -145,7 +166,9 @@ void saveMaterialAsset(const std::filesystem::path& root,const MaterialAsset& a)
     writeFileAtomically(materialPath(root,a.id),serializeMaterialAsset(a));
 }
 MaterialAsset createMaterialAsset(const std::filesystem::path& root,const std::string& name) {
-    auto material=defaultParticleMaterialAsset();material.id=uniqueId(root);material.name=uniqueName(root,name);material.surface.name=material.name;
+    auto material=defaultMaterialAsset();material.id=uniqueId(root);material.name=uniqueName(root,name);material.surface.name=material.name;
+    constexpr float midgrayLinear=.21404114f;material.surface.baseColor={midgrayLinear,midgrayLinear,midgrayLinear,1};
+    material.surface.sharedSampler=ModelSampler{ModelWrap::Repeat,ModelWrap::Repeat,ModelFilter::LinearMipmapLinear,ModelFilter::Linear};
     saveMaterialAsset(root,material);return material;
 }
 MaterialAsset copyMaterialAsset(const std::filesystem::path& root,const MaterialAsset& source,const std::string& name) {

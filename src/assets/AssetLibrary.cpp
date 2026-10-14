@@ -352,7 +352,7 @@ std::shared_ptr<const ModelAsset> AssetLibrary::findModel(const std::string& id)
                     bool incompatible=false;
                     for(const auto& primitive:data->primitives) if(primitive.material<data->materials.size()) {
                         const auto& material=data->materials[primitive.material];
-                        if(!material.normalTexture.image.empty() && primitive.tangentUv!=material.normalTexture.texCoord) incompatible=true;
+                        if(!material.triplanar && !material.normalTexture.image.empty() && primitive.tangentUv!=material.normalTexture.texCoord) incompatible=true;
                     }
                     if(incompatible) data.reset();
                 }
@@ -454,6 +454,7 @@ std::vector<ModelMaterial> AssetLibrary::resolvedModelMaterials(const ModelAsset
     for(const auto& primitive:model.primitives) {
         if(primitive.material>=result.size()) throw std::runtime_error("Model has an invalid material reference.");
         const auto& material=result[primitive.material];
+        if(material.triplanar)continue; // Local projection does not consume mesh UVs or tangents.
         for(const auto* slot:{&material.baseColorTexture,&material.metallicRoughnessTexture,&material.normalTexture,&material.occlusionTexture,&material.emissiveTexture})
             if(!slot->image.empty() && (slot->texCoord>1 || !(primitive.uvMask&(1u<<slot->texCoord))))
                 throw std::runtime_error("Material replacement requires an unavailable UV set: "+material.name);
@@ -849,6 +850,7 @@ ModelMaterialTextures AssetLibrary::materialBindings(const ModelMaterial& materi
             &material.normalTexture, &material.occlusionTexture, &material.emissiveTexture};
         for (size_t slot = 0; slot < slots.size(); ++slot) {
             const auto& source = *slots[slot];
+            const auto sampler=materialSampler(material,source);
             if (source.image.empty()) continue;
             const auto resolved=particle?references_.resolveParticleTexture(source.image.id):references_.resolveTexture(source.image.id,slot==2);
             if(resolved.empty())continue;
@@ -858,7 +860,7 @@ ModelMaterialTextures AssetLibrary::materialBindings(const ModelMaterial& materi
             if(!textureStreamer_&&!image->id.starts_with("builtin:")&&!std::filesystem::is_regular_file(projectRoot_/fromUtf8(image->id)))throw std::runtime_error("Material image is missing: "+source.image.id);
             if(textureStreamer_) {
                 const auto role=slot==2?streaming::TextureRole::Normal:(slot==0||slot==4?streaming::TextureRole::Color:streaming::TextureRole::Data);
-                const bool mips=source.minFilter!=ModelFilter::Linear && source.minFilter!=ModelFilter::Nearest;
+                const bool mips=sampler.minFilter!=ModelFilter::Linear && sampler.minFilter!=ModelFilter::Nearest;
                 const auto view=textureStreamer_->request(image->id,projectRoot_/fromUtf8(image->id),role,mips,nativeTextures_?UINT32_MAX:textureDemand_,
                     nativeTextures_?ResourcePriority::Selected:ResourcePriority::Visible);
                 target.handles[slot]=view.handle;target.leases[slot]=view.lease;
@@ -870,13 +872,13 @@ ModelMaterialTextures AssetLibrary::materialBindings(const ModelMaterial& materi
             if (!textureStreamer_ && !bgfx::isValid(target.handles[slot]))
                 throw std::runtime_error("Model image GPU upload failed: " + source.image.id);
             uint32_t flags = 0;
-            if (source.wrapU == ModelWrap::Clamp) flags |= BGFX_SAMPLER_U_CLAMP;
-            else if (source.wrapU == ModelWrap::Mirror) flags |= BGFX_SAMPLER_U_MIRROR;
-            if (source.wrapV == ModelWrap::Clamp) flags |= BGFX_SAMPLER_V_CLAMP;
-            else if (source.wrapV == ModelWrap::Mirror) flags |= BGFX_SAMPLER_V_MIRROR;
-            if (source.minFilter == ModelFilter::Nearest||source.minFilter==ModelFilter::NearestMipmapNearest||source.minFilter==ModelFilter::NearestMipmapLinear) flags |= BGFX_SAMPLER_MIN_POINT;
-            if(source.minFilter==ModelFilter::NearestMipmapNearest||source.minFilter==ModelFilter::LinearMipmapNearest)flags|=BGFX_SAMPLER_MIP_POINT;
-            if (source.magFilter == ModelFilter::Nearest) flags |= BGFX_SAMPLER_MAG_POINT;
+            if (sampler.wrapU == ModelWrap::Clamp) flags |= BGFX_SAMPLER_U_CLAMP;
+            else if (sampler.wrapU == ModelWrap::Mirror) flags |= BGFX_SAMPLER_U_MIRROR;
+            if (sampler.wrapV == ModelWrap::Clamp) flags |= BGFX_SAMPLER_V_CLAMP;
+            else if (sampler.wrapV == ModelWrap::Mirror) flags |= BGFX_SAMPLER_V_MIRROR;
+            if (sampler.minFilter == ModelFilter::Nearest||sampler.minFilter==ModelFilter::NearestMipmapNearest||sampler.minFilter==ModelFilter::NearestMipmapLinear) flags |= BGFX_SAMPLER_MIN_POINT;
+            if(sampler.minFilter==ModelFilter::NearestMipmapNearest||sampler.minFilter==ModelFilter::LinearMipmapNearest)flags|=BGFX_SAMPLER_MIP_POINT;
+            if (sampler.magFilter == ModelFilter::Nearest) flags |= BGFX_SAMPLER_MAG_POINT;
             target.flags[slot] = flags;
         }
     return target;
@@ -902,6 +904,7 @@ std::shared_ptr<const PreparedParticleMaterial> AssetLibrary::preparedParticleMa
         struct Pins {std::shared_ptr<const MaterialAsset> material;ModelMaterialTextures textures;};
         const auto pins=std::make_shared<Pins>(Pins{material,std::move(textures)});
         result->render.baseColor=material->surface.baseColor;result->render.blend=material->blend==MaterialBlend::Alpha?ParticleBlendMode::Alpha:ParticleBlendMode::Additive;
+        result->render.uvScale=material->surface.uvScale;result->render.uvOffset=material->surface.uvOffset;result->render.uvRotation=material->surface.uvRotation;result->render.triplanar=material->surface.triplanar;
         result->render.colorTexture=pins->textures.handles[0];result->render.samplerFlags=pins->textures.flags[0];result->render.pinned=pins;
         result->ready=true;result->current=true;result->sourceFingerprint=pins->textures.sourceFingerprints[0];
         result->signature=1469598103934665603ull;for(const auto value:serializeMaterialAsset(*material))result->signature=(result->signature^static_cast<uint8_t>(value))*1099511628211ull;
@@ -985,6 +988,8 @@ void AssetLibrary::loadEnvironment(EnvironmentSettings& environment) {
         restored.enabled = json.value("enabled", restored.enabled);
         restored.intensity = json.value("intensity", restored.intensity);
         restored.rotation = json.value("rotation", restored.rotation);
+        restored.toneMapping = static_cast<ToneMapping>(json.value("toneMapping", 0));
+        if (!validToneMapping(restored.toneMapping)) throw std::runtime_error("Invalid environment tone mapping.");
         restored.intensity = std::isfinite(restored.intensity) ? std::clamp(restored.intensity, 0.0f, 10.0f) : 1.0f;
         restored.rotation = std::isfinite(restored.rotation) ? std::clamp(restored.rotation, -180.0f, 180.0f) : 0.0f;
         // Only IDs enumerated from the managed assets folder can be assigned.
@@ -999,7 +1004,8 @@ void AssetLibrary::loadEnvironment(EnvironmentSettings& environment) {
 void AssetLibrary::saveEnvironment(const EnvironmentSettings& environment) {
     try {
         const nlohmann::json json{{"version", 1}, {"map", environment.map}, {"enabled", environment.enabled},
-            {"intensity", environment.intensity}, {"rotation", environment.rotation}};
+            {"intensity", environment.intensity}, {"rotation", environment.rotation},
+            {"toneMapping", static_cast<int>(environment.toneMapping)}};
         std::ofstream output(projectRoot_ / "assets" / "environment.json");
         output << json.dump(2) << '\n';
         if (!output) throw std::runtime_error("Could not write environment.json.");

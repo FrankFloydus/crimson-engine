@@ -1,5 +1,6 @@
 #include "ParticleEditor.h"
 #include "MaterialEditor.h"
+#include "Tools.h"
 #include "assets/AssetLibrary.h"
 #include "crimson-renderer/ImGuiBgfx.h"
 #include <imgui.h>
@@ -316,6 +317,8 @@ void ParticleEditor::draw(AssetLibrary& assets,Renderer& renderer,double dt,Mate
             ImGui::SameLine();if(ImGui::Button("Restart")) simulation_.restart(document_.definition(),document_.definition().defaultSeed);
             ImGui::SameLine();if(ImGui::Button("Stop")) simulation_.stop();
             ImGui::SameLine();if(ImGui::Button("Frame")) framePreview();
+            ImGui::SetNextItemWidth(180);
+            drawToneMappingControl(preview_.environment.toneMapping);
             simulation_.advance(dt);
             const auto& stats=simulation_.stats();
             ImGui::Text("%.2f s · %zu live / %u · Seed %llu",simulation_.elapsed(),stats.live,document_.definition().emitter.capacity,static_cast<unsigned long long>(simulation_.seed()));

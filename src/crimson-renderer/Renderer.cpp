@@ -279,6 +279,7 @@ struct Renderer::Impl {
     bgfx::UniformHandle modelBase{BGFX_INVALID_HANDLE}, modelSurface{BGFX_INVALID_HANDLE}, modelEmissive{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle modelUv{BGFX_INVALID_HANDLE}, modelOptions{BGFX_INVALID_HANDLE}, modelMaps{BGFX_INVALID_HANDLE}, modelEmissiveMap{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle modelNormalMatrix{BGFX_INVALID_HANDLE};
+    bgfx::UniformHandle materialUvScale{BGFX_INVALID_HANDLE},materialUvOffset{BGFX_INVALID_HANDLE},materialUvRotation{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle metallicRoughnessSampler{BGFX_INVALID_HANDLE}, occlusionSampler{BGFX_INVALID_HANDLE}, emissiveSampler{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle baseColorMetallic{BGFX_INVALID_HANDLE}, roughness{BGFX_INVALID_HANDLE}, textureFlags{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle cameraPos{BGFX_INVALID_HANDLE}, direction{BGFX_INVALID_HANDLE}, directionColor{BGFX_INVALID_HANDLE};
@@ -290,6 +291,13 @@ struct Renderer::Impl {
     bgfx::UniformHandle gridMinor{BGFX_INVALID_HANDLE}, gridMajor{BGFX_INVALID_HANDLE}, gridAxisU{BGFX_INVALID_HANDLE}, gridAxisV{BGFX_INVALID_HANDLE}, gridParams{BGFX_INVALID_HANDLE};
     void renderParticles(std::span<const RenderParticle>,std::span<const RenderParticleMaterial>,const Camera&,bgfx::ViewId,ParticleRenderStats*);
     void renderShadows(const RenderScene&,PointShadowRenderer&,bgfx::ViewId);
+    void bindMaterialMapping(const Vec3& scale,const Vec3& offset,const Vec3& rotation,bool triplanar,bool world=false) {
+        const Vec4 scaleValue{scale[0],scale[1],scale[2],triplanar?1.f:0.f};
+        const Vec4 offsetValue{offset[0],offset[1],offset[2],triplanar && world?1.f:0.f};
+        constexpr float radians=std::numbers::pi_v<float>/180;
+        const Vec4 rotationValue{rotation[0]*radians,rotation[1]*radians,rotation[2]*radians,0};
+        bgfx::setUniform(materialUvScale,scaleValue.data());bgfx::setUniform(materialUvOffset,offsetValue.data());bgfx::setUniform(materialUvRotation,rotationValue.data());
+    }
     void renderTo(const RenderScene&,ViewportTargets&,EnvironmentLighting&,std::uint16_t,std::uint16_t,RenderViews,bool,bool,std::vector<std::shared_ptr<const ResidentModelLod>>* = nullptr,ParticleRenderStats* = nullptr,bool drawEnvironment=false);
     ~Impl() {
         if (!initialized) return;
@@ -312,6 +320,7 @@ struct Renderer::Impl {
         destroyHandle(modelProgram); destroyHandle(modelBase); destroyHandle(modelSurface); destroyHandle(modelEmissive);
         destroyHandle(pickProgram); destroyHandle(pickId); destroyHandle(lightCounts);
         destroyHandle(modelUv); destroyHandle(modelOptions); destroyHandle(modelMaps); destroyHandle(modelEmissiveMap); destroyHandle(modelNormalMatrix);
+        destroyHandle(materialUvScale);destroyHandle(materialUvOffset);destroyHandle(materialUvRotation);
         destroyHandle(metallicRoughnessSampler); destroyHandle(occlusionSampler); destroyHandle(emissiveSampler);
         destroyHandle(baseColorMetallic); destroyHandle(roughness); destroyHandle(textureFlags);
         destroyHandle(cameraPos); destroyHandle(direction); destroyHandle(directionColor);
@@ -379,6 +388,7 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
     impl_->modelMaps = uniform("u_modelMaps");
     impl_->modelEmissiveMap = uniform("u_modelEmissiveMap");
     impl_->modelNormalMatrix = uniform("u_modelNormalMatrix",bgfx::UniformType::Mat4);
+    impl_->materialUvScale=uniform("u_materialUvScale");impl_->materialUvOffset=uniform("u_materialUvOffset");impl_->materialUvRotation=uniform("u_materialUvRotation");
     impl_->metallicRoughnessSampler = uniform("s_metallicRoughness",bgfx::UniformType::Sampler);
     impl_->occlusionSampler = uniform("s_occlusion",bgfx::UniformType::Sampler);
     impl_->emissiveSampler = uniform("s_emissive",bgfx::UniformType::Sampler);
@@ -846,7 +856,7 @@ void Renderer::Impl::renderParticles(std::span<const RenderParticle> input,std::
     const auto materialAt=[&](std::size_t index)->const RenderParticleMaterial& {return materials.empty()?defaultMaterial:materials[index];};
     for(std::size_t i=0;i<materialCount;++i) {
         const auto& material=materialAt(i);
-        usable[i]=math::finite(material.baseColor) &&
+        usable[i]=math::finite(material.baseColor) && math::finite(material.uvScale) && math::finite(material.uvOffset) && math::finite(material.uvRotation) &&
             std::all_of(material.baseColor.begin(),material.baseColor.end(),[](float value){return value>=0 && value<=1;}) &&
             (material.blend==ParticleBlendMode::Alpha || material.blend==ParticleBlendMode::Additive);
     }
@@ -890,6 +900,7 @@ void Renderer::Impl::renderParticles(std::span<const RenderParticle> input,std::
         const float options[]{textured?1.f:0.f,0,0,0};
         bgfx::setUniform(particleBaseColor,material.baseColor.data());
         bgfx::setUniform(particleParams,options);
+        bindMaterialMapping(material.uvScale,material.uvOffset,material.uvRotation,false);
         bgfx::setTexture(0,particleSampler,textured?material.colorTexture:white,material.samplerFlags);
         particleQuad.bind(); bgfx::setInstanceDataBuffer(&instances);
         const auto blend=material.blend==ParticleBlendMode::Alpha ?
@@ -905,6 +916,7 @@ void Renderer::Impl::renderParticles(std::span<const RenderParticle> input,std::
 void Renderer::Impl::renderShadows(const RenderScene& scene,PointShadowRenderer& owner,bgfx::ViewId firstView) {
     struct CasterDraw {
         ModelMatrix world;
+        ModelMatrix normal;
         Aabb bounds;
         const ModelMaterial* material{};
         const ModelMaterialTextures* textures{};
@@ -939,8 +951,8 @@ void Renderer::Impl::renderShadows(const RenderScene& scene,PointShadowRenderer&
             if(stream)streamModels->markRendered(asset.id,instance.resourceRevision,false);
             for(const auto& draw:asset.draws) {
                 if(draw.primitive>=asset.primitives.size())continue;
-                CasterDraw candidate;ModelMatrix normal;
-                if(prepareModelMatrices(instance.model.transform,draw.transform,candidate.world,normal,candidate.handedness)!=ModelTransformStatus::Ready)continue;
+                CasterDraw candidate;
+                if(prepareModelMatrices(instance.model.transform,draw.transform,candidate.world,candidate.normal,candidate.handedness)!=ModelTransformStatus::Ready)continue;
                 Aabb localBounds;
                 if(stream && draw.primitive<stream->primitives.size()) {
                     const auto& primitive=stream->primitives[draw.primitive];localBounds=primitive.bounds;
@@ -966,6 +978,7 @@ void Renderer::Impl::renderShadows(const RenderScene& scene,PointShadowRenderer&
                 hashValue(signature,material.alphaMask);hashValue(signature,material.doubleSided);
                 if(material.alphaMask) {
                     hashValue(signature,material.alphaCutoff);hashValue(signature,material.baseColor[3]);hashValue(signature,material.baseColorTexture.texCoord);
+                    hashValue(signature,material.uvScale);hashValue(signature,material.uvOffset);hashValue(signature,material.uvRotation);hashValue(signature,material.triplanar);hashValue(signature,material.triplanarWorld);
                     if(candidate.textures) {
                         hashValue(signature,candidate.textures->handles[0].idx);hashValue(signature,candidate.textures->flags[0]);
                         hashValue(signature,candidate.textures->signatures[0]);hashValue(signature,candidate.textures->sourceFingerprints[0]);
@@ -992,8 +1005,10 @@ void Renderer::Impl::renderShadows(const RenderScene& scene,PointShadowRenderer&
                 const Vec4 options{0,material.alphaMask?1.f:0.f,material.doubleSided?1.f:0.f,draw.handedness};
                 const Vec4 maps{textured?1.f:0.f,0,0,0};
                 bgfx::setTransform(draw.world.data());
+                bgfx::setUniform(modelNormalMatrix,draw.normal.data());
                 bgfx::setUniform(modelBase,material.baseColor.data());bgfx::setUniform(modelEmissive,emissive.data());
                 bgfx::setUniform(modelUv,uv.data());bgfx::setUniform(modelOptions,options.data());bgfx::setUniform(modelMaps,maps.data());
+                bindMaterialMapping(material.uvScale,material.uvOffset,material.uvRotation,material.triplanar,material.triplanarWorld);
                 bgfx::setTexture(0,albedoSampler,textured?draw.textures->handles[0]:white,textured?draw.textures->flags[0]:UINT32_MAX);
                 if(draw.resident)draw.resident->bind();else draw.legacy->bind();
                 const std::uint64_t cull=material.doubleSided?BGFX_STATE_NONE:draw.handedness<0?BGFX_STATE_CULL_CCW:BGFX_STATE_CULL_CW;
@@ -1168,6 +1183,7 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
                 bgfx::setUniform(modelBase,material.baseColor.data());
                 bgfx::setUniform(modelSurface,surface); bgfx::setUniform(modelEmissive,emissive);
                 bgfx::setUniform(modelUv,uv); bgfx::setUniform(modelOptions,options);
+                bindMaterialMapping(material.uvScale,material.uvOffset,material.uvRotation,material.triplanar,material.triplanarWorld);
                 bgfx::setUniform(modelMaps,mapFlags); bgfx::setUniform(modelEmissiveMap,emissiveMap);
                 bindLighting(5);
                 bindGeometry();
@@ -1183,9 +1199,11 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
                     // base-color UV/filter flags, vertex alpha and mask cutoff.
                     // It never writes to the visible scene depth or HDR targets.
                     bgfx::setTransform(world.data());
+                    bgfx::setUniform(modelNormalMatrix,normal.data());
                     bgfx::setUniform(modelBase,material.baseColor.data());
                     bgfx::setUniform(modelEmissive,emissive);
                     bgfx::setUniform(modelUv,uv);
+                    bindMaterialMapping(material.uvScale,material.uvOffset,material.uvRotation,material.triplanar,material.triplanarWorld);
                     bgfx::setUniform(modelOptions,options);
                     bgfx::setUniform(modelMaps,mapFlags);
                     bgfx::setUniform(pickId,pickColor.data());
@@ -1231,7 +1249,7 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
 
     renderParticles(scene.particles,scene.particleMaterials,settings.camera,views.scene,particleStats);
 
-    const float params[]{bounded(settings.exposure,1,0,100),caps->originBottomLeft?1.0f:0.0f,0,0};
+    const float params[]{bounded(settings.exposure,1,0,100),caps->originBottomLeft?1.0f:0.0f,static_cast<float>(settings.environment.toneMapping),0};
     bgfx::setViewFrameBuffer(views.present,target.compositeBuffer);
     bgfx::setViewRect(views.present,0,0,w,h);
     bgfx::setViewClear(views.present,BGFX_CLEAR_NONE);

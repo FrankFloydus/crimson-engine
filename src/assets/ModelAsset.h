@@ -21,6 +21,11 @@ inline constexpr ModelMatrix ModelIdentity{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
 enum class ModelWrap { Repeat, Clamp, Mirror };
 enum class ModelFilter { Linear, Nearest, NearestMipmapNearest, LinearMipmapNearest, NearestMipmapLinear, LinearMipmapLinear };
 
+struct ModelSampler {
+    ModelWrap wrapU{ModelWrap::Repeat}, wrapV{ModelWrap::Repeat};
+    ModelFilter minFilter{ModelFilter::Linear}, magFilter{ModelFilter::Linear};
+    bool operator==(const ModelSampler&) const = default;
+};
 struct ModelTexture {
     AssetRef<DecodedImage> image; // Managed image identity; no loaded-data ownership.
     uint32_t texCoord{};
@@ -35,6 +40,11 @@ struct ModelMaterial {
     bool alphaMask{false}, doubleSided{false};
     float alphaCutoff{0.5f};
     ModelTexture baseColorTexture, metallicRoughnessTexture, normalTexture, occlusionTexture, emissiveTexture;
+    Vec3 uvScale{1,1,1}, uvOffset{}, uvRotation{}; // Rotation in degrees; ordinary UVs use Z.
+    bool triplanar{false}, uvScaleLinked{true};
+    // Missing only for preserved imported/legacy per-slot sampler settings.
+    std::optional<ModelSampler> sharedSampler;
+    bool triplanarWorld{false}; // World-anchored projection; otherwise mesh-local coordinates.
 };
 struct ModelVertex {
     Vec3 position{}, normal{0,1,0};

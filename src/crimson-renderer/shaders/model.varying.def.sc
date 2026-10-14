@@ -4,6 +4,8 @@ vec2 v_texcoord0 : TEXCOORD2;
 vec4 v_tangent : TEXCOORD3;
 vec2 v_texcoord1 : TEXCOORD4;
 vec4 v_color0 : COLOR0;
+vec3 v_localPosition : TEXCOORD5;
+vec3 v_localNormal : TEXCOORD6;
 
 vec3 a_position : POSITION;
 vec3 a_normal : NORMAL;

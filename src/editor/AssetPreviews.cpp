@@ -28,6 +28,13 @@ uint64_t textHash(std::string_view text) { auto result=streaming::detail::HashSe
 void materialHash(uint64_t& value,const ModelMaterial& material) {
     hash(value,material.baseColor); hash(value,material.metallic); hash(value,material.roughness); hash(value,material.normalScale);
     hash(value,material.occlusionStrength); hash(value,material.emissive); hash(value,material.alphaMask); hash(value,material.alphaCutoff); hash(value,material.doubleSided);
+    hash(value,material.uvScale); hash(value,material.uvOffset); hash(value,material.uvRotation); hash(value,material.triplanar);
+    hash(value,material.triplanarWorld);
+    hash(value,material.sharedSampler.has_value());
+    if(material.sharedSampler) {
+        hash(value,material.sharedSampler->wrapU); hash(value,material.sharedSampler->wrapV);
+        hash(value,material.sharedSampler->minFilter); hash(value,material.sharedSampler->magFilter);
+    }
     for (const auto* texture:{&material.baseColorTexture,&material.metallicRoughnessTexture,&material.normalTexture,&material.occlusionTexture,&material.emissiveTexture}) {
         hash(value,texture->image.id.data(),texture->image.id.size()); hash(value,texture->texCoord); hash(value,texture->wrapU); hash(value,texture->wrapV);
         hash(value,texture->minFilter); hash(value,texture->magFilter);
@@ -268,6 +275,7 @@ struct AssetPreviews::Impl {
         const auto source=assets.references().resolveEnvironment(settings.environment.map);
         auto bake=environment(source,entry); if (!bake) return;
         hash(sourceKey,bake->key); hash(sourceKey,settings.exposure); hash(sourceKey,settings.environment.intensity); hash(sourceKey,settings.environment.rotation); hash(sourceKey,settings.environment.enabled);
+        hash(sourceKey,settings.environment.toneMapping);
         if (entry.kind==AssetKind::Model || (entry.kind==AssetKind::Scene && !sceneSnapshot->previewCamera)) {
             if (bounds.valid) settings.camera.frameBounds(bounds.minimum,bounds.maximum,1);
         }

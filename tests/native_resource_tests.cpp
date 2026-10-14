@@ -1,4 +1,5 @@
 #include "crimson-renderer/Renderer.h"
+#include "crimson-renderer/ToneMapping.h"
 #include "crimson-renderer/Environment.h"
 #include "crimson-renderer/ImGuiBgfx.h"
 #include "crimson-renderer/Picking.h"
@@ -358,6 +359,147 @@ double cornerDifference(const DecodedImage& a,const DecodedImage& b) {
     return difference;
 }
 template<class Copy,class Tick>
+void exerciseToneMapping(Renderer& renderer,Copy&& copy,Tick&& tick,std::uint32_t& frame,
+                         TextureStreamer& textures,const std::filesystem::path& source,const PreparedTexture& color) {
+    const auto encoded=[](double value) {
+        value=std::clamp(value,0.,1.);
+        return 255*(value<=.0031308?12.92*value:1.055*std::pow(value,1/2.4)-.055);
+    };
+    const auto verify=[&](const DecodedImage& image,const Vec3& linear,const std::string& context,unsigned x=64,unsigned y=64) {
+        for(unsigned channel=0;channel<3;++channel)
+            check(std::abs(component(image,x,y,channel)-encoded(linear[channel]))<=2,
+                context+" has incorrect tone/color encoding, channel "+std::to_string(channel)+
+                ": actual="+std::to_string(component(image,x,y,channel))+", expected="+std::to_string(encoded(linear[channel])));
+    };
+    ViewportAppearance appearance;appearance.backgroundSrgb={.2f,.4f,.6f};renderer.setAppearance(appearance);
+    renderer.resizeViewport(128,128);renderer.resizeGameViewport(128,128);
+    renderer.resizeParticlePreview(128,128);renderer.resizeMaterialPreview(128,128);
+    auto asset=quad();asset->id="native-tone-emissive";asset->materials[0].baseColor={0,0,0,1};
+    check(renderer.prepareModel(*asset),renderer.modelStatus());
+    std::vector<ModelMaterial> surfaces=asset->materials;
+    std::vector<ModelMaterialTextures> bindings(1);
+    RenderModelInstance instance{1101,{asset,{}},&bindings,0,true,false,&surfaces};
+    SceneSettings settings;settings.camera.position={0,0,3};settings.camera.target={0,0,0};settings.environment.enabled=false;
+    RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=std::span(&instance,1);
+    auto material=defaultMaterialAsset();material.id="native-tone-material";material.surface=surfaces[0];
+    const auto sphere=materialPreviewGeometry();
+    renderer.configureModelStream(sphere->id,1,*sphere->stream);
+    check(renderer.queueModelLod(sphere->id,1,materialPreviewGeometryLevel()),"Tone fixture could not queue material preview geometry.");
+    for(unsigned i=0;i<100 && !renderer.modelStreamReady(sphere->id,1);++i)tick();
+    check(renderer.modelStreamReady(sphere->id,1),"Tone fixture material preview geometry was not ready.");
+    struct TextureOwner {
+        bgfx::TextureHandle handle{BGFX_INVALID_HANDLE};
+        ~TextureOwner(){if(bgfx::isValid(handle))bgfx::destroy(handle);}
+    };
+    auto white=std::make_shared<TextureOwner>();const std::array<std::uint8_t,4> whitePixel{255,255,255,255};
+    white->handle=bgfx::createTexture2D(1,1,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_SRGB,bgfx::copy(whitePixel.data(),4));
+    check(bgfx::isValid(white->handle),"Tone fixture could not allocate the opaque particle sprite.");
+    RenderParticleMaterial particleMaterial;particleMaterial.blend=ParticleBlendMode::Alpha;
+    particleMaterial.colorTexture=white->handle;particleMaterial.pinned=white;
+    RenderParticle particle{{0,0,0},2,{1,1,1,1},0};
+    std::uint64_t thumbnailSerial=100;
+    const auto thumbnail=[&] {
+        check(renderer.renderThumbnail("native-tone",++thumbnailSerial,scene,128,scene.pinned),renderer.thumbnailStatus());
+        for(unsigned i=0;i<120;++i) {tick();if(auto result=renderer.pollThumbnail(frame))return result->image;}
+        throw std::runtime_error("Tone fixture thumbnail readback did not complete.");
+    };
+    constexpr std::array modes{ToneMapping::Reinhard,ToneMapping::Linear,ToneMapping::ACES,ToneMapping::AgX};
+    const std::array<Vec3,3> inputs{{{.18f,.18f,.18f},{4,.5f,.1f},{16,1,0}}};
+    for(const auto mode:modes) {
+        settings.environment.toneMapping=mode;
+        for(const auto radiance:inputs) {
+            settings.exposure=radiance[0]<1?1.f:2.5f;
+            surfaces[0].emissive=radiance;material.surface=surfaces[0];
+            particle.color={radiance[0],radiance[1],radiance[2],1};
+            const auto expected=toneMap(radiance*settings.exposure,mode);
+            const auto label=std::string(toneMappingName(mode));
+            renderer.render(scene);renderer.renderGame(scene);
+            renderer.renderParticlePreview(settings,std::span(&particle,1),std::span(&particleMaterial,1));
+            renderer.renderMaterialPreview(settings,material,bindings[0],MaterialPreviewMesh::Sphere,{},false);
+            const auto main=copy(renderer.viewportTexture(),128,128,MainReadbackView);
+            const auto game=copy(renderer.gameViewportTexture(),128,128,MainReadbackView);
+            const auto preview=copy(renderer.particlePreviewTexture(),128,128,ParticleReadbackView);
+            const auto surface=copy(renderer.materialPreviewTexture(),128,128,MaterialReadbackView);
+            const auto card=thumbnail();
+            verify(main,expected,"Scene "+label);verify(game,expected,"Game "+label);
+            verify(preview,expected,"Particle preview "+label);verify(surface,expected,"Material preview "+label);
+            verify(card,expected,"Asset Browser rendered thumbnail "+label);
+            // A cached PNG contains final display pixels. Publication must retain
+            // them verbatim, and the UI samples this texture without sRGB decode.
+            check(renderer.setThumbnail("native-tone-cache",thumbnailSerial,card),"Tone fixture cached thumbnail upload failed.");
+            const auto cached=copy(renderer.thumbnailTexture("native-tone-cache",thumbnailSerial),128,128,MainReadbackView);
+            check(cached.rgba==card.rgba,"Rendered thumbnail cache changed its display-encoded pixels.");
+        }
+        // A zero HDR sample stays exactly black before the independent matte.
+        // In particular, the ACES fit's small negative zero must not dim it.
+        scene.instances={};
+        for(const float exposure:{0.f,1.f,100.f}) {
+            settings.exposure=exposure;
+            renderer.render(scene);renderer.renderGame(scene);renderer.renderParticlePreview(settings,{});
+            const auto main=copy(renderer.viewportTexture(),128,128,MainReadbackView);
+            const auto game=copy(renderer.gameViewportTexture(),128,128,MainReadbackView);
+            const auto preview=copy(renderer.particlePreviewTexture(),128,128,ParticleReadbackView);
+            for(const auto* image:{&main,&game,&preview})for(unsigned channel=0;channel<3;++channel)
+                check(std::abs(component(*image,64,64,channel)-appearance.backgroundSrgb[channel]*255)<=1,
+                    "Tone mode or exposure changed the independent editor display matte.");
+        }
+        scene.instances=std::span(&instance,1);
+    }
+
+    const auto originalCamera=settings.camera;
+    settings.camera.position={3,4,5};settings.camera.target={0,0,0};scene.instances={};
+    settings.environment.toneMapping=ToneMapping::Reinhard;settings.exposure=0;
+    renderer.render(scene);const auto neutralGrid=copy(renderer.viewportTexture(),128,128,MainReadbackView);
+    for(const auto mode:modes)for(const float exposure:{0.f,100.f}) {
+        settings.environment.toneMapping=mode;settings.exposure=exposure;renderer.render(scene);
+        check(copy(renderer.viewportTexture(),128,128,MainReadbackView).rgba==neutralGrid.rgba,
+            "Tone mode or exposure changed the display-referred editor grid.");
+    }
+    settings.camera=originalCamera;scene.instances=std::span(&instance,1);
+
+    // Sample the same source through the actual Color, Data, and UI-thumbnail
+    // allocations. Linear + an unlit model isolates hardware sRGB decode.
+    PreparedTexture data,ui;
+    for(unsigned i=0;i<1000 && (!data.complete || !ui.complete);++i) {
+        textures.beginFrame();
+        data=textures.request("native-image",source,streaming::TextureRole::Data,false,256,ResourcePriority::Selected);
+        ui=textures.request("native-image",source,streaming::TextureRole::Color,false,256,ResourcePriority::Preview,true);
+        tick();
+    }
+    check(data.complete && ui.complete,"Color audit texture roles did not become ready.");
+    settings.environment.toneMapping=ToneMapping::Linear;settings.exposure=1;
+    instance.shading=MaterialShading::Unlit;surfaces[0]=ModelMaterial{};surfaces[0].baseColor={1,1,1,1};
+    const Vec3 encodedSource{180.f/255,70.f/255,40.f/255};
+    const auto linearSource=particle_rendering::backgroundLinear(encodedSource);
+    const std::array<const PreparedTexture*,3> roles{&color,&data,&ui};
+    for(const auto* texture:roles) {
+        bindings[0].handles[0]=texture->handle;bindings[0].leases[0]=texture->lease;
+        bindings[0].flags[0]=BGFX_SAMPLER_MIN_POINT|BGFX_SAMPLER_MAG_POINT;
+        scene.pinned=texture->lease;
+        renderer.render(scene);const auto result=copy(renderer.viewportTexture(),128,128,MainReadbackView);
+        verify(result,texture==&color?linearSource:encodedSource,
+            texture==&color?"Color-role decode":texture==&data?"Data-role linear sampling":"Browser thumbnail must not decode sRGB",96,64);
+    }
+    // Interleave independent contexts with different tone modes in one frame.
+    bindings[0]={};scene.pinned.reset();instance.shading=MaterialShading::StandardPbr;
+    surfaces[0].baseColor={0,0,0,1};surfaces[0].emissive={.18f,.18f,.18f};material.surface=surfaces[0];
+    particle.color={.18f,.18f,.18f,1};
+    SceneSettings gameSettings=settings,particleSettings=settings,materialSettings=settings;
+    gameSettings.environment.toneMapping=ToneMapping::ACES;particleSettings.environment.toneMapping=ToneMapping::AgX;
+    materialSettings.environment.toneMapping=ToneMapping::Reinhard;
+    RenderScene gameScene{gameSettings,{}};gameScene.sceneMode=true;gameScene.instances=scene.instances;
+    renderer.render(scene);renderer.renderGame(gameScene);
+    renderer.renderParticlePreview(particleSettings,std::span(&particle,1),std::span(&particleMaterial,1));
+    renderer.renderMaterialPreview(materialSettings,material,bindings[0],MaterialPreviewMesh::Sphere,{},false);
+    verify(copy(renderer.viewportTexture(),128,128,MainReadbackView),{.18f,.18f,.18f},"Independent Scene Linear");
+    verify(copy(renderer.gameViewportTexture(),128,128,MainReadbackView),toneMap({.18f,.18f,.18f},ToneMapping::ACES),"Independent Game ACES");
+    verify(copy(renderer.particlePreviewTexture(),128,128,ParticleReadbackView),toneMap({.18f,.18f,.18f},ToneMapping::AgX),"Independent Particle AgX");
+    verify(copy(renderer.materialPreviewTexture(),128,128,MaterialReadbackView),toneMap({.18f,.18f,.18f},ToneMapping::Reinhard),"Independent Material Reinhard");
+    renderer.evictThumbnail("native-tone-cache");renderer.evictModel(asset->id);
+    renderer.releaseGameViewport();renderer.releaseParticlePreview();renderer.releaseMaterialPreview();renderer.setAppearance({});
+}
+
+template<class Copy,class Tick>
 void exerciseMaterialPreview(Renderer& renderer,Copy&& copy,Tick&& tick,const PreparedEnvironment& initialEnvironment) {
     constexpr std::array shapes{MaterialPreviewMesh::Sphere,MaterialPreviewMesh::Cube,MaterialPreviewMesh::RoundedCube,MaterialPreviewMesh::Cylinder,MaterialPreviewMesh::Plane};
     const auto signature=renderer.streamingSignature();
@@ -695,7 +837,9 @@ void exercise(const std::filesystem::path& root,const ShaderCompileConfig& shade
     phase("particle readbacks");exerciseParticles(renderer,copy);
     phase("textured alpha/material readbacks");exerciseParticleMaterials(renderer,copy,color,frame);
     phase("isolated live material mini-viewport readbacks");exerciseMaterialPreview(renderer,copy,tick,lighting);
+    phase("cross-context tone mapping and texture color roles");exerciseToneMapping(renderer,copy,tick,frame,textures,source,color);
     SceneSettings particleSettings;particleSettings.camera.position={0,0,3};particleSettings.camera.target={0,0,0};particleSettings.environment.enabled=false;
+    particleSettings.environment.toneMapping=ToneMapping::AgX;
     std::array<RenderParticle,1> reloadParticle{{{{0,0,0},1.5f,{8,0,0,1}}}};
     RenderScene particleScene{particleSettings,{}};particleScene.sceneMode=true;particleScene.particles=reloadParticle;
     std::array<RenderParticleMaterial,1> reloadMaterials;

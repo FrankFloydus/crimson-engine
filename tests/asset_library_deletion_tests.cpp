@@ -223,6 +223,7 @@ void activeSceneAndFolderDeletion(){
 }
 void particleMaterialDeletionAndAuthority(){
     Project p;auto material=createMaterialAsset(p.root,"Shared sprite");auto effect=createParticleAsset(p.root,"Sparks");
+    material.shading=MaterialShading::Unlit;material.blend=MaterialBlend::Additive;saveMaterialAsset(p.root,material);
     effect.emitter.material=AssetRef<MaterialAsset>{material.id};saveParticleAsset(p.root,effect);
     SceneDocument scene(p.root);const auto entity=scene.createParticle(effect.id,"Placed effect",math::translation({2,3,4}));require(scene.save("Particle scene"),scene.status());
     const auto sceneBytes=read(p.root/scene.assetId());ResourceManager resources;AssetLibrary library(p.root,&resources);
@@ -240,9 +241,12 @@ void particleMaterialDeletionAndAuthority(){
         "Deleted sprite material did not prepare the original white procedural appearance.");
     library.protectParticleDocument({});library.setParticleDocumentReferences({},{});
     const auto user=library.createMaterial("Live sprite");require(bool(user),library.status());library.protectMaterialDocument(user->id);
-    auto committed=*user;committed.surface.baseColor={.2f,.3f,.4f,.5f};library.publishMaterial(std::make_shared<MaterialAsset>(committed));
+    auto committed=*user;committed.shading=MaterialShading::Unlit;committed.blend=MaterialBlend::Additive;committed.surface.baseColor={.2f,.3f,.4f,.5f};
+    committed.surface.uvScale={2,3,4};committed.surface.uvOffset={.2f,.3f,.4f};committed.surface.uvRotation={0,0,30};library.publishMaterial(std::make_shared<MaterialAsset>(committed));
     const auto revision=library.materialRevision(user->id);const auto first=library.preparedParticleMaterial(user->id);require(first->ready&&first->render.baseColor==committed.surface.baseColor,"Committed open material was not immediately visible.");
-    auto external=*user;external.surface.baseColor={.8f,.7f,.6f,1};saveMaterialAsset(p.root,external);library.onFileChanged(p.root/user->id);
+    require(first->render.uvScale==committed.surface.uvScale && first->render.uvOffset==committed.surface.uvOffset && first->render.uvRotation==committed.surface.uvRotation,
+        "Prepared particle material discarded committed texture mapping.");
+    auto external=committed;external.surface.baseColor={.8f,.7f,.6f,1};saveMaterialAsset(p.root,external);library.onFileChanged(p.root/user->id);
     require(library.materialRevision(user->id)==revision&&library.findMaterial(user->id)->surface.baseColor==committed.surface.baseColor,
         "Background reload replaced open material document authority.");
     library.protectMaterialDocument({});library.refreshMaterials();require(library.findMaterial(user->id)->surface.baseColor==external.surface.baseColor,"Closing material authority did not allow reload.");
@@ -254,7 +258,7 @@ void particleMaterialDeletionAndAuthority(){
 void spriteImageDeletionAndIncompatibleMaterial(){
     Project p;const auto fixtures=model_test::writeModelFixtures(p.root/"source");const std::string image="assets/textures/sprite.png";
     fs::create_directories(p.root/"assets/textures");fs::copy_file(fixtures.image,p.root/image);
-    auto sprite=createMaterialAsset(p.root,"Textured");sprite.blend=MaterialBlend::Alpha;sprite.surface.baseColorTexture.image=AssetRef<DecodedImage>{image};saveMaterialAsset(p.root,sprite);
+    auto sprite=createMaterialAsset(p.root,"Textured");sprite.shading=MaterialShading::Unlit;sprite.blend=MaterialBlend::Alpha;sprite.surface.baseColorTexture.image=AssetRef<DecodedImage>{image};saveMaterialAsset(p.root,sprite);
     auto effect=createParticleAsset(p.root,"Smoke");effect.emitter.material=AssetRef<MaterialAsset>{sprite.id};saveParticleAsset(p.root,effect);
     ResourceManager resources;AssetLibrary library(p.root,&resources);const auto plan=library.planDeletion({image});
     require(plan.error.empty()&&plan.warningUsages.size()==1&&plan.warningUsages.front().ownerId==sprite.id,
@@ -280,7 +284,7 @@ void boxMaterialDeletionAndPublication(){
     Project p;
     auto red=defaultMaterialAsset();red.id="assets/materials/red.crimson-material";red.name="Red";red.surface.baseColor={1,.1f,.1f,1};saveMaterialAsset(p.root,red);
     auto blue=red;blue.id="assets/materials/blue.crimson-material";blue.name="Blue";blue.surface.baseColor={.1f,.1f,1,1};saveMaterialAsset(p.root,blue);
-    const auto sprite=createMaterialAsset(p.root,"Unsupported sprite");
+    auto sprite=createMaterialAsset(p.root,"Unsupported sprite");sprite.shading=MaterialShading::Unlit;sprite.blend=MaterialBlend::Additive;saveMaterialAsset(p.root,sprite);
     SceneDocument active(p.root);const auto box=active.createBox();auto entity=*active.scene().find(box);entity.modelMaterial=AssetRef<MaterialAsset>{red.id};
     require(active.updateEntity(box,entity) && active.save("Box scene"),active.status());
     SceneDocument other(p.root);const auto otherBox=other.createBox();entity=*other.scene().find(otherBox);entity.modelMaterial=AssetRef<MaterialAsset>{red.id};

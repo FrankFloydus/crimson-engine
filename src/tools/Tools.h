@@ -51,6 +51,7 @@ struct BrowserActions {
 BrowserActions drawAssetBrowser(AssetLibrary& assets, SDL_Window* window);
 bool drawEnvironmentControls(EnvironmentSettings& environment, AssetLibrary& assets, const Renderer& renderer, bool persistLegacy = false);
 bool drawEnvironmentImageField(EnvironmentSettings&, AssetLibrary&);
+bool drawToneMappingControl(ToneMapping&);
 
 // Call once after creating the ImGui context. DPI is supplied by the host;
 // this does not change window/framebuffer coordinates or SDL input scaling.

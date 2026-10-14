@@ -176,6 +176,27 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     casterTextures[0].flags[0]=BGFX_SAMPLER_MIN_POINT|BGFX_SAMPLER_MAG_POINT|BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP;
     casterMaterials[0].alphaMask=true;casterMaterials[0].baseColorTexture.texCoord=1;
     const auto masked=capture();check(brightness(masked,settings.camera,center+right*.5)>brightness(masked,settings.camera,center-right*.5)+60,"Masked caster did not preserve its UV1 transparent silhouette.");
+    casterMaterials[0].uvScale={-1,1,1};casterMaterials[0].uvOffset={1,0,0};const auto uvMirrored=capture();
+    check(submittedStats.renderedFaces==6 && brightness(uvMirrored,settings.camera,center-right*.5)>brightness(uvMirrored,settings.camera,center+right*.5)+60,
+        "Shared UV scale/offset did not invalidate and transform masked shadows.");
+    casterMaterials[0].uvScale={1,1,1};casterMaterials[0].uvRotation={0,0,180};casterMaterials[0].uvOffset={1,1,0};const auto uvRotated=capture();
+    check(submittedStats.renderedFaces==6 && brightness(uvRotated,settings.camera,center-right*.5)>brightness(uvRotated,settings.camera,center+right*.5)+60,
+        "Shared UV rotation was absent from shadow alpha sampling.");
+    casterMaterials[0].triplanar=true;casterMaterials[0].uvRotation={};casterMaterials[0].uvOffset={.5f,.5f,0};const auto triplanarMask=capture();
+    check(submittedStats.renderedFaces==6 && brightness(triplanarMask,settings.camera,center-right*.5)>brightness(triplanarMask,settings.camera,center+right*.5)+60,
+        "Triplanar shadows did not use local-space mask coordinates.");
+    casterMaterials[0].uvRotation={0,0,180};const auto triplanarRotated=capture();
+    check(brightness(triplanarRotated,settings.camera,center+right*.5)>brightness(triplanarRotated,settings.camera,center-right*.5)+60,
+        "Triplanar rotation did not change the masked shadow silhouette.");
+    casterMaterials[0].uvRotation={};casterMaterials[0].uvOffset={.35f,0,0};const auto localDomain=capture();
+    casterMaterials[0].triplanarWorld=true;const auto worldDomain=capture();
+    check(submittedStats.renderedFaces==6 && brightness(worldDomain,settings.camera,center+right*.2)>brightness(localDomain,settings.camera,center+right*.2)+60,
+        "World triplanar shadow mode did not invalidate and use accumulated world-space mask coordinates.");
+    caster.model.transform=math::translation(right*.3)*caster.model.transform;const auto worldMoved=capture();
+    check(std::abs(brightness(worldMoved,settings.camera,center+right*.2)-brightness(worldDomain,settings.camera,center+right*.2))<5,
+        "World triplanar shadow mask moved with the caster instead of remaining world-anchored.");
+    orient(5);casterMaterials[0].triplanarWorld=false;
+    casterMaterials[0].triplanar=false;casterMaterials[0].uvOffset={};casterMaterials[0].uvRotation={};
     caster.model.transform=caster.model.transform*math::scaling({-1,1,1});const auto mirrored=capture();
     check(brightness(mirrored,settings.camera,center-right*.5)>brightness(mirrored,settings.camera,center+right*.5)+60,"Mirrored caster lost alpha/culling parity.");
     casterMaterials[0].baseColor[3]=.25f;const auto factor=capture();

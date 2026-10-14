@@ -124,12 +124,14 @@ SceneEnvironment readEnvironment(const Json& json) {
     result.environment.enabled=environment.at("enabled").get<bool>();
     result.environment.intensity=environment.at("intensity").get<float>();
     result.environment.rotation=environment.at("rotation").get<float>();
+    result.environment.toneMapping=static_cast<ToneMapping>(environment.value("toneMapping",0));
     return result;
 }
 Json environmentJson(const SceneEnvironment& value) {
     const auto& environment=value.environment;
     return {{"exposure",value.exposure},{"environment",{{"map",environment.map},
-        {"enabled",environment.enabled},{"intensity",environment.intensity},{"rotation",environment.rotation}}}};
+        {"enabled",environment.enabled},{"intensity",environment.intensity},{"rotation",environment.rotation},
+        {"toneMapping",static_cast<int>(environment.toneMapping)}}}};
 }
 bool validCamera(const Camera& camera) {
     return math::finite(camera.position) && math::finite(camera.target) && math::finite(camera.up) &&

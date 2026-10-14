@@ -182,6 +182,7 @@ bool environmentControls(EnvironmentSettings& environment, AssetLibrary& assets,
     changed |= ImGui::SliderFloat("Intensity##environment", &environment.intensity, 0.0f, 10.0f, "%.2f");
     changed |= ImGui::SliderFloat("Rotation##environment", &environment.rotation, -180.0f, 180.0f, "%.1f deg");
     help("Rotate environment lighting around the world Y axis.");
+    changed |= drawToneMappingControl(environment.toneMapping);
     if (!renderer.environmentStatus().empty()) ImGui::TextWrapped("%s", renderer.environmentStatus().c_str());
     ImGui::Spacing();
     if (ImGui::Button("Reset environment", ImVec2(-1, 0))) { environment = EnvironmentSettings{}; changed = true; }
@@ -298,6 +299,15 @@ bool drawEnvironmentImageField(EnvironmentSettings& environment, AssetLibrary& a
     static ImGuiTextFilter filter;
     return assetSlot(assets,"HDRI","Equirectangular HDR or color panorama.",environment.map,filter,true,"Built-in studio",
         [&](const std::string& id){return assets.assignEnvironment(environment,id,false);},[&]{assets.clearEnvironment(environment,false);});
+}
+bool drawToneMappingControl(ToneMapping& mode) {
+    int selected=static_cast<int>(mode);
+    const char* names[]{"Reinhard (legacy)","Linear","ACES","AgX"};
+    const bool changed=ImGui::Combo("Tone mapping",&selected,names,4);
+    if(changed)mode=static_cast<ToneMapping>(selected);
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+        ImGui::SetTooltip("Applied after exposure. Linear clips highlights; ACES adds filmic contrast; AgX softens bright saturated colors.\nReinhard preserves the original renderer appearance. Lighting calculations remain linear HDR.");
+    return changed;
 }
 
 EditorFrame drawEditor(SceneSettings& settings, Renderer& renderer, AssetLibrary& assets, SDL_Window* window,

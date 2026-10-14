@@ -52,13 +52,27 @@ ModelTexture texture(const Json& value) {
 }
 Json material(const ModelMaterial& value) {
     auto slots=Json::array(); for (const auto* slot:{&value.baseColorTexture,&value.metallicRoughnessTexture,&value.normalTexture,&value.occlusionTexture,&value.emissiveTexture}) slots.push_back(texture(*slot));
+    Json sampler=nullptr;
+    if(value.sharedSampler)sampler={{"u",static_cast<int>(value.sharedSampler->wrapU)},{"v",static_cast<int>(value.sharedSampler->wrapV)},
+        {"min",static_cast<int>(value.sharedSampler->minFilter)},{"mag",static_cast<int>(value.sharedSampler->magFilter)}};
     return {{"name",value.name},{"base",value.baseColor},{"metal",value.metallic},{"rough",value.roughness},{"normal",value.normalScale},{"occlusion",value.occlusionStrength},
-        {"emissive",value.emissive},{"mask",value.alphaMask},{"double",value.doubleSided},{"cutoff",value.alphaCutoff},{"textures",std::move(slots)}};
+        {"emissive",value.emissive},{"mask",value.alphaMask},{"double",value.doubleSided},{"cutoff",value.alphaCutoff},{"textures",std::move(slots)},
+        {"uvScale",value.uvScale},{"uvOffset",value.uvOffset},{"uvRotation",value.uvRotation},{"triplanar",value.triplanar},{"triplanarWorld",value.triplanarWorld},{"uvScaleLinked",value.uvScaleLinked},{"sharedSampler",std::move(sampler)}};
 }
 ModelMaterial material(const Json& value) {
     ModelMaterial result; result.name=value.at("name").get<std::string>(); result.baseColor=value.at("base").get<Vec4>(); result.metallic=value.at("metal").get<float>(); result.roughness=value.at("rough").get<float>();
     result.normalScale=value.at("normal").get<float>(); result.occlusionStrength=value.at("occlusion").get<float>(); result.emissive=value.at("emissive").get<Vec3>();
     result.alphaMask=value.at("mask").get<bool>(); result.doubleSided=value.at("double").get<bool>(); result.alphaCutoff=value.at("cutoff").get<float>();
+    // Old metadata contains imported identity mapping and per-slot samplers.
+    // Geometry payloads are unchanged and remain usable without a cache rebuild.
+    result.uvScale=value.value("uvScale",Vec3{1,1,1});result.uvOffset=value.value("uvOffset",Vec3{});result.uvRotation=value.value("uvRotation",Vec3{});
+    result.triplanar=value.value("triplanar",false);result.triplanarWorld=value.value("triplanarWorld",false);result.uvScaleLinked=value.value("uvScaleLinked",true);
+    if(!math::finite(result.uvScale)||!math::finite(result.uvOffset)||!math::finite(result.uvRotation))throw std::runtime_error("Cached material mapping is invalid.");
+    if(value.contains("sharedSampler") && !value.at("sharedSampler").is_null()) {
+        const auto& sampler=value.at("sharedSampler");const auto u=sampler.at("u").get<int>(),v=sampler.at("v").get<int>(),min=sampler.at("min").get<int>(),mag=sampler.at("mag").get<int>();
+        if(u<0||u>2||v<0||v>2||min<0||min>5||mag<0||mag>1)throw std::runtime_error("Cached material sampler is invalid.");
+        result.sharedSampler=ModelSampler{static_cast<ModelWrap>(u),static_cast<ModelWrap>(v),static_cast<ModelFilter>(min),static_cast<ModelFilter>(mag)};
+    }
     const auto& slots=value.at("textures"); if (slots.size()!=5) throw std::runtime_error("Cached model material slots are invalid.");
     std::array<ModelTexture*,5> targets{&result.baseColorTexture,&result.metallicRoughnessTexture,&result.normalTexture,&result.occlusionTexture,&result.emissiveTexture};
     for (std::size_t i=0;i<5;++i) *targets[i]=texture(slots[i]); return result;

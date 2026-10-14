@@ -20,6 +20,13 @@ uint64_t signature(const ModelAsset& asset,uint64_t revision,std::span<const Mod
         hash(result,material.baseColor); hash(result,material.metallic); hash(result,material.roughness);
         hash(result,material.normalScale); hash(result,material.occlusionStrength); hash(result,material.emissive);
         hash(result,material.alphaMask); hash(result,material.alphaCutoff); hash(result,material.doubleSided);
+        hash(result,material.uvScale); hash(result,material.uvOffset); hash(result,material.uvRotation); hash(result,material.triplanar);
+        hash(result,material.triplanarWorld);
+        hash(result,material.sharedSampler.has_value());
+        if(material.sharedSampler) {
+            hash(result,material.sharedSampler->wrapU); hash(result,material.sharedSampler->wrapV);
+            hash(result,material.sharedSampler->minFilter); hash(result,material.sharedSampler->magFilter);
+        }
         for (const auto* slot:{&material.baseColorTexture,&material.metallicRoughnessTexture,&material.normalTexture,&material.occlusionTexture,&material.emissiveTexture}) {
             hash(result,slot->image.id.data(),slot->image.id.size()); hash(result,slot->texCoord); hash(result,slot->wrapU); hash(result,slot->wrapV);
             hash(result,slot->minFilter); hash(result,slot->magFilter);
@@ -62,15 +69,52 @@ uint32_t textureDemand(const ModelAsset& asset,std::span<const ModelMaterial> ma
     const double distance=math::length(camera.eye()-center)-radius;
     if (distance<=.001) return 16384;
     double span=std::numeric_limits<double>::infinity();
-    if (asset.stream) for (const auto& primitive:asset.stream->primitives) {
+    const auto scaleSpan=[](const ModelMaterial& material) {
+        // Rotation and offset do not change sampling density. Use the smallest
+        // axis scale conservatively so anisotropic mapping cannot lose detail.
+        float scale=std::min(std::abs(material.uvScale[0]),std::abs(material.uvScale[1]));
+        if(material.triplanar)scale=std::min(scale,std::abs(material.uvScale[2]));
+        return std::max(1e-6f,scale);
+    };
+    const auto worldMappingScale=[](const Mat4& transform) {
+        // A lower bound on the smallest world-space stretch. The inverse's
+        // Frobenius norm is conservative for rotations, reflections and shear;
+        // underestimating the span requests more detail, never blurrier mips.
+        const auto inverse=math::inverse(transform);
+        if(!inverse)return 1e-6;
+        double squared{};
+        for(size_t row=0;row<3;++row)for(size_t column=0;column<3;++column) {
+            const double value=inverse->at(row,column);squared+=value*value;
+        }
+        return squared>0 && std::isfinite(squared)?std::max(1e-6,1/std::sqrt(squared)):1e-6;
+    };
+    if (asset.stream) for (const auto& draw:asset.draws) {
+        if(draw.primitive>=asset.stream->primitives.size())continue;
+        const auto& primitive=asset.stream->primitives[draw.primitive];
         if (primitive.material>=materials.size()) continue;
         const auto& material=materials[primitive.material];
+        const double transformScale=material.triplanar && material.triplanarWorld?worldMappingScale(world*draw.transform):1;
         for (const auto* slot:{&material.baseColorTexture,&material.metallicRoughnessTexture,&material.normalTexture,&material.occlusionTexture,&material.emissiveTexture}) {
             if (slot->image.empty() || slot->texCoord>1) continue;
             const auto& uv=primitive.uvSpan[slot->texCoord];
-            const double used=std::max<double>(uv[0],uv[1]);
-            if (used>1e-6) span=std::min(span,used);
+            double used=std::max<double>(uv[0],uv[1]);
+            if(material.triplanar) {
+                const auto extent=primitive.bounds.maximum-primitive.bounds.minimum;
+                used=std::numeric_limits<double>::infinity();
+                for(const float axis:extent)if(axis>1e-6f)used=std::min(used,static_cast<double>(axis));
+                if(!std::isfinite(used))used=1;
+            }
+            used*=scaleSpan(material)*transformScale;
+            if (used>0) span=std::min(span,std::max(1e-6,used));
         }
+    }
+    else for(const auto& material:materials) {
+        double transformScale=1;
+        if(material.triplanar && material.triplanarWorld) {
+            transformScale=worldMappingScale(world);
+            for(const auto& draw:asset.draws)transformScale=std::min(transformScale,worldMappingScale(world*draw.transform));
+        }
+        span=std::min(span,scaleSpan(material)*transformScale);
     }
     if (!std::isfinite(span)) span=1;
     const double diameter=radius*height/(distance*std::tan(fov*.5f));

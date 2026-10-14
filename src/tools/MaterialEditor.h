@@ -37,6 +37,7 @@ private:
     Pending pending_{Pending::None};
     std::uint64_t publishedRevision_{};
     std::array<char,256> saveName_{};
+    Vec3 uvScaleBaseline_{1,1,1};
     bool dirtyPopup_{},savePopup_{},continueAfterSave_{},exitReady_{},externalChanged_{},externalPopup_{},focusNext_{};
     void request(Pending,std::string,AssetLibrary*);
     void perform(AssetLibrary&);

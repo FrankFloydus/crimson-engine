@@ -27,12 +27,16 @@ MaterialAsset defaultMaterialAsset();
 MaterialAsset defaultParticleMaterialAsset();
 bool particleMaterialCompatible(const MaterialAsset& material);
 bool modelMaterialCompatible(const MaterialAsset& material);
+// One native sampler overrides all channels; legacy/imported materials keep
+// their original slot samplers until an explicit shared-sampler edit.
+ModelSampler materialSampler(const ModelMaterial&, const ModelTexture&);
 std::filesystem::path materialAssetPath(const std::filesystem::path& projectRoot, const std::string& id);
 void validateMaterialAsset(const MaterialAsset& material);
 MaterialAsset loadMaterialAsset(const std::filesystem::path& projectRoot, const std::string& id);
 std::string serializeMaterialAsset(const MaterialAsset& material);
 void saveMaterialAsset(const std::filesystem::path& projectRoot, const MaterialAsset& material);
-// User-owned sprite materials start white, unlit and additive. Copies retain
+// New materials start Lit/Opaque with sRGB midgray, roughness 1 and metallic 0.
+// Copies retain
 // authored factors/slots but receive a new identity and no imported origin.
 MaterialAsset createMaterialAsset(const std::filesystem::path& projectRoot, const std::string& name="New Material");
 MaterialAsset copyMaterialAsset(const std::filesystem::path& projectRoot, const MaterialAsset& source, const std::string& name={});

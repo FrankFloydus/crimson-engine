@@ -1,6 +1,7 @@
 #pragma once
 
 #include "math/Math.h"
+#include "ToneMapping.h"
 #include <array>
 #include <cstdint>
 #include <string>
@@ -25,6 +26,7 @@ struct EnvironmentSettings {
     float intensity{1.0f};
     float rotation{0.0f}; // Degrees around world +Y; renderer converts to radians.
     bool enabled{true};
+    ToneMapping toneMapping{ToneMapping::Reinhard}; // Legacy appearance until explicitly changed.
 };
 
 struct DirectionalLight {

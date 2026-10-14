@@ -50,6 +50,8 @@ struct RenderParticleMaterial {
     bgfx::TextureHandle colorTexture{BGFX_INVALID_HANDLE};
     std::uint32_t samplerFlags{UINT32_MAX};
     std::shared_ptr<const void> pinned; // Material definition and texture leases.
+    Vec3 uvScale{1,1,1},uvOffset{},uvRotation{};
+    bool triplanar{false}; // Sprite rendering intentionally remains two-dimensional.
 };
 
 inline constexpr std::size_t MaxDirectionalLights = 4;

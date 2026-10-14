@@ -37,7 +37,7 @@ target_link_libraries(crimson-math PRIVATE glm::glm)
 target_compile_options(crimson-math PRIVATE /W4 /permissive- /utf-8)
 
 # Camera projection/rays are CPU data shared by rendering and player control.
-add_library(crimson-camera src/crimson-renderer/RenderTypes.cpp src/crimson-renderer/PointShadowMath.cpp)
+add_library(crimson-camera src/crimson-renderer/RenderTypes.cpp src/crimson-renderer/PointShadowMath.cpp src/crimson-renderer/ToneMapping.cpp)
 target_link_libraries(crimson-camera PUBLIC crimson-math)
 target_compile_options(crimson-camera PRIVATE /W4 /permissive- /utf-8)
 
@@ -115,6 +115,8 @@ function(cc_shader NAME TYPE VARYING)
         DEPENDS "${CC_SHADER_DIR}/${NAME}.sc" "${CC_SHADER_DIR}/${VARYING}"
                 "${CC_SHADER_DIR}/point_light.sh"
                 "${CC_SHADER_DIR}/point_shadow.sh"
+                "${CC_SHADER_DIR}/material_mapping.sh"
+                "${CC_SHADER_DIR}/tone_mapping.sh"
                 "${CC_BGFX_SHADER_INCLUDE}/bgfx_shader.sh"
         COMMENT "Compiling ${NAME} for Direct3D 11"
         VERBATIM
@@ -241,6 +243,10 @@ if(BUILD_TESTING)
     target_link_libraries(material_document_tests PRIVATE crimson-materials)
     target_compile_options(material_document_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME material_document_core COMMAND material_document_tests)
+    add_executable(tone_mapping_tests tests/tone_mapping_tests.cpp)
+    target_link_libraries(tone_mapping_tests PRIVATE crimson-camera)
+    target_compile_options(tone_mapping_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME tone_mapping_core COMMAND tone_mapping_tests)
     add_executable(material_preview_navigation_tests tests/material_preview_navigation_tests.cpp src/editor/MaterialPreviewNavigation.cpp)
     target_link_libraries(material_preview_navigation_tests PRIVATE crimson-math)
     target_compile_options(material_preview_navigation_tests PRIVATE /W4 /permissive- /utf-8)
@@ -366,6 +372,18 @@ if(BUILD_TESTING)
     target_link_libraries(point_shadow_render_tests PRIVATE crimson-resources crimson-materials crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng)
     add_test(NAME point_shadow_render_core COMMAND point_shadow_render_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
     set_tests_properties(point_shadow_render_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 180)
+    add_executable(material_mapping_render_tests tests/material_mapping_render_tests.cpp
+        src/crimson-renderer/Renderer.cpp src/crimson-renderer/Mesh.cpp src/crimson-renderer/PointShadowRenderer.cpp
+        src/crimson-renderer/Environment.cpp src/crimson-renderer/ImGuiBgfx.cpp src/crimson-renderer/ShaderPreflight.cpp
+        src/crimson-renderer/PlatformSurface.cpp src/crimson-renderer/ModelGpuCache.cpp
+        src/resources/TextureStreamer.cpp src/resources/ShaderReloadSession.cpp
+        src/assets/MaterialPreviewGeometry.cpp ${CC_SHADER_HEADERS})
+    target_include_directories(material_mapping_render_tests PRIVATE src "${CC_GENERATED_DIR}")
+    target_compile_definitions(material_mapping_render_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(material_mapping_render_tests PRIVATE /W4 /permissive- /utf-8)
+    target_link_libraries(material_mapping_render_tests PRIVATE crimson-resources crimson-materials crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng)
+    add_test(NAME material_mapping_render_core COMMAND material_mapping_render_tests)
+    set_tests_properties(material_mapping_render_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 180)
     add_executable(preview_dependencies_tests tests/preview_dependencies_tests.cpp)
     target_include_directories(preview_dependencies_tests PRIVATE src)
     target_compile_options(preview_dependencies_tests PRIVATE /W4 /permissive- /utf-8)

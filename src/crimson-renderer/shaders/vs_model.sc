@@ -1,5 +1,5 @@
 $input a_position, a_normal, a_texcoord0, a_texcoord1, a_tangent, a_color0
-$output v_worldPosition, v_normal, v_texcoord0, v_texcoord1, v_tangent, v_color0
+$output v_worldPosition, v_normal, v_texcoord0, v_texcoord1, v_tangent, v_color0, v_localPosition, v_localNormal
 
 #include <bgfx_shader.sh>
 
@@ -17,5 +17,7 @@ void main()
     v_texcoord0 = a_texcoord0;
     v_texcoord1 = a_texcoord1;
     v_color0 = a_color0;
+    v_localPosition = a_position;
+    v_localNormal = a_normal;
     gl_Position = mul(u_viewProj, world);
 }

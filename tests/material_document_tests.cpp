@@ -26,7 +26,7 @@ struct Project {
 void publicationAndHistory(){
     Project project;MaterialDocument document(project.root);
     require(document.create(),"Could not create a saved starter material.");
-    require(document.isOpen() && document.editable() && !document.dirty(),"Starter is not a clean editable sprite material.");
+    require(document.isOpen() && document.editable() && !document.dirty(),"Starter is not a clean editable material.");
     const auto original=document.definition();const auto committed=document.committed();const auto revision=document.revision();
     require(document.begin("Color gesture") && document.update([](auto& a){a.surface.baseColor={.1f,.2f,.3f,.5f};}) &&
         document.update([](auto& a){a.surface.baseColor={.2f,.3f,.4f,.6f};}),"Valid color gesture failed.");
@@ -41,7 +41,7 @@ void publicationAndHistory(){
     require(!document.edit("Invalid color",[](auto& a){a.surface.baseColor[0]=std::numeric_limits<float>::quiet_NaN();}),"Nonfinite material edit was accepted.");
     require(document.revision()==version && same(document.definition(),valid) && !document.dirty(),"Rejected material edit changed its working/committed state.");
     require(!document.edit("Identity",[](auto& a){a.id="assets/materials/other.crimson-material";}),"Material edit changed managed identity.");
-    require(!document.edit("Incompatible shading",[](auto& a){a.shading=MaterialShading::StandardPbr;}),"PBR with additive blending was accepted.");
+    require(!document.edit("Incompatible shading",[](auto& a){a.shading=MaterialShading::Unlit;}),"Unlit with opaque blending was accepted.");
     require(document.begin("Cancel") && document.update([](auto& a){a.surface.baseColor[3]=.1f;}),"Could not prepare cancel.");
     document.cancel();require(same(document.definition(),valid) && document.revision()==version && !document.dirty(),"Cancel published a shared revision or changed data.");
     require(!document.load("assets/materials/missing.crimson-material") && same(document.definition(),valid),"Failed load replaced the working material.");
@@ -59,9 +59,9 @@ void identityAndExternalAuthority(){
     require(document.undo() && document.assetId()==copyId && document.dirty(),"Save As Undo resurrected the original identity.");
     require(document.redo() && document.assetId()==copyId && document.definition().name=="Copy" && !document.dirty(),"Save As Redo lost copied identity or saved state.");
     require(text(materialAssetPath(project.root,sourceId))==sourceText,"Save As modified the original file.");
-    require(document.edit("Unsaved blend",[](auto& a){a.blend=MaterialBlend::Alpha;}),"Blend edit failed.");
+    require(document.edit("Unsaved blend",[](auto& a){a.blend=MaterialBlend::Mask;}),"Blend edit failed.");
     auto external=loadMaterialAsset(project.root,copyId);external.surface.baseColor[3]=.15f;saveMaterialAsset(project.root,external);
-    require(document.externalFileChanged() && document.definition().blend==MaterialBlend::Alpha && document.dirty(),"External write replaced the current document authority.");
+    require(document.externalFileChanged() && document.definition().blend==MaterialBlend::Mask && document.dirty(),"External write replaced the current document authority.");
     require(document.load(copyId) && !document.dirty() && same(document.definition(),external) && !document.externalFileChanged(),"Explicit external reload failed.");
     require(document.edit("Unsaved",[](auto& a){a.surface.baseColor[3]=.75f;}) && document.discard() && !document.dirty() && same(document.definition(),external),"Discard did not restore last saved values.");
     const auto before=document.definition();std::ofstream bad(materialAssetPath(project.root,copyId));bad<<"{}";bad.close();
@@ -102,6 +102,30 @@ void readOnlyAndCopy(){
     require(document.undo() && document.redo() && same(document.definition(),saved) && !document.dirty(),"PBR material undo/redo lost its saved state.");
     require(document.load(saved.id) && same(document.definition(),saved) && text(materialAssetPath(project.root,imported.id))==original,"Native PBR roundtrip changed the imported original.");
 }
+void mappingAndSamplerTransactions() {
+    Project project;MaterialDocument document(project.root);require(document.create("Mapped"),"Mapped material create failed.");
+    const auto before=document.definition();const auto published=document.committed();const auto revision=document.revision();
+    require(document.begin("UV gesture") && document.update([](auto& a){a.surface.uvScale={2,3,4};a.surface.uvOffset={-.2f,.3f,1};a.surface.uvRotation={10,20,45};a.surface.triplanar=true;a.surface.uvScaleLinked=false;}),
+        "UV gesture failed.");
+    require(document.committed()==published && document.revision()==revision && same(*published,before),"Working UV values leaked to shared material users.");
+    require(document.commit() && document.undo() && same(document.definition(),before) && document.redo(),"UV gesture did not form one undoable command.");
+    const auto local=document.definition();
+    require(!local.surface.triplanarWorld && document.edit("World Triplanar",[](auto& a){a.surface.triplanarWorld=true;}) &&
+        document.definition().surface.triplanarWorld && document.committed()->surface.triplanarWorld,
+        "World Triplanar was not an independently committed material edit.");
+    require(document.undo() && same(document.definition(),local) && document.redo() && document.definition().surface.triplanarWorld,
+        "World Triplanar undo/redo changed other mapping settings or lost its projection space.");
+    require(document.edit("Shared sampler",[](auto& a){a.surface.sharedSampler=ModelSampler{ModelWrap::Mirror,ModelWrap::Clamp,ModelFilter::NearestMipmapNearest,ModelFilter::Nearest};}),
+        "Shared sampler edit failed.");
+    const auto mapped=document.definition();require(document.save() && document.load(mapped.id) && same(document.definition(),mapped),"Mapping and shared sampler did not survive Save/reopen.");
+    const auto savedRevision=document.revision();
+    require(document.begin("Cancel UV") && document.update([](auto& a){a.surface.uvOffset[0]=5;a.surface.uvScaleLinked=true;a.surface.triplanarWorld=false;}),"UV cancellation setup failed.");
+    document.cancel();require(same(document.definition(),mapped) && document.revision()==savedRevision && !document.dirty(),"Cancel changed committed UV mapping or link state.");
+    require(!document.edit("Invalid mapping",[](auto& a){a.surface.uvRotation[1]=std::numeric_limits<float>::infinity();}) && same(document.definition(),mapped),"Invalid UV mapping replaced the last valid document.");
+    require(document.edit("Unlit transition",[](auto& a){a.shading=MaterialShading::Unlit;a.blend=MaterialBlend::Alpha;}) && particleMaterialCompatible(document.definition()),
+        "New Lit default could not become a sprite material through an explicit mode change.");
+    require(document.undo() && same(document.definition(),mapped),"Shading transition lost UV mapping or sampler on undo.");
 }
-int main(){try{publicationAndHistory();identityAndExternalAuthority();boundedHistoryAndRedo();readOnlyAndCopy();std::cout<<"Material document transactions, history, storage and authority checks passed.\n";return 0;}
+}
+int main(){try{publicationAndHistory();identityAndExternalAuthority();boundedHistoryAndRedo();readOnlyAndCopy();mappingAndSamplerTransactions();std::cout<<"Material document transactions, history, storage and authority checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

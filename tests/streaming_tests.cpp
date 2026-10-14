@@ -90,6 +90,9 @@ void geometry(const std::filesystem::path& root) {
     auto asset=model(); const auto package=root/"assets"/"models"/"fixture"; std::filesystem::create_directories(package);
     writeFileAtomically(package/"manifest.json",R"({"document":"model.gltf","dependencies":[{"kind":"buffer","path":"buffer.bin"}]})");
     writeFileAtomically(package/"model.gltf","{}"); writeFileAtomically(package/"buffer.bin","fixture");
+    asset.materials[0].uvScale={2,3,-4};asset.materials[0].uvOffset={.1f,.2f,.3f};asset.materials[0].uvRotation={15,30,45};
+    asset.materials[0].triplanar=true;asset.materials[0].triplanarWorld=true;asset.materials[0].uvScaleLinked=false;
+    asset.materials[0].sharedSampler=ModelSampler{ModelWrap::Mirror,ModelWrap::Clamp,ModelFilter::NearestMipmapLinear,ModelFilter::Nearest};
     const auto stream=streaming::buildModelCache(asset,root);
     check(stream.primitives.size()==1 && stream.primitives[0].levels.size()>1,"Continuous geometry should generate compact streaming LODs.");
     const auto& levels=stream.primitives[0].levels;
@@ -102,6 +105,10 @@ void geometry(const std::filesystem::path& root) {
     check(warm && warm->stream && warm->primitives[0].vertices.empty() && warm->primitives[0].sourceVertexCount==asset.primitives[0].vertices.size(),"Warm model load must retain metadata without full geometry.");
     check(warm->draws[0].transform==asset.draws[0].transform && warm->materialIds==asset.materialIds,"Warm cache must preserve transforms and material identities.");
     check(warm->stream->primitives[0].uvSpan[0]==Vec2{1,1},"Warm metadata must retain UV density extents.");
+    const auto& sourceMaterial=asset.materials[0];const auto& cachedMaterial=warm->materials[0];
+    check(cachedMaterial.uvScale==sourceMaterial.uvScale && cachedMaterial.uvOffset==sourceMaterial.uvOffset && cachedMaterial.uvRotation==sourceMaterial.uvRotation &&
+        cachedMaterial.triplanar && cachedMaterial.triplanarWorld && !cachedMaterial.uvScaleLinked && cachedMaterial.sharedSampler==sourceMaterial.sharedSampler,
+        "Warm metadata dropped material mapping, scale linkage, or the shared sampler.");
     check(streaming::chooseModelLod(levels,{},asset.bounds,{0,0,.5f},std::numbers::pi_v<float>/4,1080)==0,"Near geometry should request authored detail.");
     check(streaming::chooseModelLod(levels,{},asset.bounds,{0,0,1000},std::numbers::pi_v<float>/4,1080)>0,"Distant geometry should choose bounded-error coarse detail.");
     auto curved=asset;curved.id="curved-fixture";

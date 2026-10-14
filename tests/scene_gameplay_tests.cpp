@@ -283,4 +283,40 @@ void shadowSettingsStorageHistoryAndExtraction(){
     require(runtime.resetTransientFrom(document),runtime.status());same(authored,runtime.scene().records());
 }
 }
-int main(){try{componentsAndStorage();runtimePatches();followAndHierarchy();followDependenciesAndAtomicFailure();parentFollowKeepsWorldOffset();boxMaterialAndPointRadius();shadowSettingsStorageHistoryAndExtraction();std::cout<<"Gameplay scene tests passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+namespace {
+void environmentToneMappingStorageAndRuntime() {
+    TempProject project;SceneDocument document(project.root);
+    const auto environment=document.createEnvironment(),actor=document.createCharacter();
+    require(environment && actor,document.status());
+    require(resolveEnvironment(document.scene()).environment.toneMapping==ToneMapping::Reinhard,"New environment changed legacy appearance.");
+    auto record=*document.scene().find(environment);record.environment->environment.toneMapping=ToneMapping::AgX;
+    require(document.updateEntity(environment,record),document.status());
+    require(document.undo() && resolveEnvironment(document.scene()).environment.toneMapping==ToneMapping::Reinhard,"Tone mapping equality omitted history.");
+    require(document.redo() && document.save("Tone mapping"),document.status());
+    SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
+    require(resolveEnvironment(reopened.scene()).environment.toneMapping==ToneMapping::AgX,"Tone mapping did not round-trip.");
+    document.select({environment});require(document.duplicateSelection(),document.status());
+    for(const auto& entity:document.scene().records())if(entity.environment)
+        require(entity.environment->environment.toneMapping==ToneMapping::AgX,"Environment duplication lost tone mapping.");
+    auto legacy=Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,document.assetId())));
+    for(auto& entity:legacy["entities"])if(entity.contains("environment"))entity["environment"]["environment"].erase("toneMapping");
+    const std::string legacyId="assets/scenes/legacy-tone.crimson-scene";
+    {std::ofstream output(project.root/legacyId);output<<legacy.dump();}
+    require(reopened.load(legacyId),reopened.status());
+    require(resolveEnvironment(reopened.scene()).environment.toneMapping==ToneMapping::Reinhard,"Missing tone mapping did not preserve old scenes.");
+    record.environment->environment.toneMapping=static_cast<ToneMapping>(99);
+    require(!document.updateEntity(environment,record),"Invalid tone mapping entered the scene.");
+    const auto authored=document.scene().records();const auto history=document.history().size();
+    SceneDocument runtime(project.root);require(runtime.resetTransientFrom(document),runtime.status());
+    require(runtime.begin("Tone mapping during Play"),runtime.status());
+    require(runtime.update([&](auto& records,auto&){for(auto& entity:records)if(entity.id==environment)entity.environment->environment.toneMapping=ToneMapping::ACES;}),runtime.status());
+    pose(runtime,actor,{7,0,2});require(runtime.commit(),runtime.status());
+    require(runtime.undo() && resolveEnvironment(runtime.scene()).environment.toneMapping==ToneMapping::AgX,"Runtime tone mapping undo failed.");
+    near(position(runtime.scene(),actor),{7,0,2});
+    require(runtime.redo() && resolveEnvironment(runtime.scene()).environment.toneMapping==ToneMapping::ACES,"Runtime tone mapping redo failed.");
+    near(position(runtime.scene(),actor),{7,0,2});
+    same(authored,document.scene().records());require(document.history().size()==history,"Runtime tone mapping changed authored history.");
+    require(runtime.resetTransientFrom(document),runtime.status());same(authored,runtime.scene().records());
+}
+}
+int main(){try{componentsAndStorage();runtimePatches();followAndHierarchy();followDependenciesAndAtomicFailure();parentFollowKeepsWorldOffset();boxMaterialAndPointRadius();shadowSettingsStorageHistoryAndExtraction();environmentToneMappingStorageAndRuntime();std::cout<<"Gameplay scene tests passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

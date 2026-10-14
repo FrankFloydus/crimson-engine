@@ -411,13 +411,13 @@ void geometry(const cgltf_data& data,ModelAsset& asset) {
             const auto& material=asset.materials[p.material];
             p.uvMask=static_cast<uint8_t>((uv0?1:0)|(uv1?2:0));
             const auto authoredTangentUv=source.material&&source.material->normal_texture.texture?static_cast<uint32_t>(source.material->normal_texture.texcoord):0u;
-            if(!material.normalTexture.image.empty()&&material.normalTexture.texCoord!=authoredTangentUv){
+            if(!material.triplanar&&!material.normalTexture.image.empty()&&material.normalTexture.texCoord!=authoredTangentUv){
                 if(tangents)warn(asset,"Normal-map UV selection changed; authored tangents were regenerated.");tangents=nullptr;
             }
-            p.tangentUv=tangents?static_cast<uint8_t>(authoredTangentUv):material.normalTexture.image.empty()?0xff:static_cast<uint8_t>(material.normalTexture.texCoord);
+            p.tangentUv=tangents?static_cast<uint8_t>(authoredTangentUv):material.normalTexture.image.empty()||material.triplanar?0xff:static_cast<uint8_t>(material.normalTexture.texCoord);
             for (const auto* slot:{&material.baseColorTexture,&material.metallicRoughnessTexture,&material.normalTexture,&material.occlusionTexture,&material.emissiveTexture}) {
                 check(slot->texCoord<=1,"material references a UV set beyond UV1");
-                check(slot->image.empty() || (slot->texCoord?uv1:uv0),"material references a missing UV set");
+                check(material.triplanar || slot->image.empty() || (slot->texCoord?uv1:uv0),"material references a missing UV set");
             }
             const auto positionValues=floats(*positions); p.vertices.resize(positions->count);
             for (size_t v=0;v<positions->count;++v) std::copy_n(positionValues.data()+v*3,3,p.vertices[v].position.begin());
@@ -453,7 +453,7 @@ void geometry(const cgltf_data& data,ModelAsset& asset) {
                 }
                 check(!p.indices.empty(),"primitive has no nondegenerate triangles");
             }
-            const bool needTangents=!material.normalTexture.image.empty() && !tangents;
+            const bool needTangents=!material.triplanar && !material.normalTexture.image.empty() && !tangents;
             if (!normals || needTangents) {
                 std::vector<ModelVertex> corners; corners.reserve(p.indices.size());
                 for (auto index:p.indices) corners.push_back(p.vertices[index]);

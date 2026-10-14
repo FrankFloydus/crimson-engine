@@ -93,6 +93,23 @@ void run(const std::filesystem::path& compiler,const std::filesystem::path& sour
     const auto disguised=samplerEnvelopeSlot(moved.bytes,"s_albedo",0);
     require(!preflightShaderPair(vertex.bytes,disguised,vertex.bytes,fragment.bytes,diagnostic),"DXBC sampler relocation escaped validation when its bgfx metadata retained slot zero.");
     const auto modelVertex=compileShader(shadows,"vs_model"),modelFragment=compileShader(shadows,"fs_model");
+    const auto dependency=[](const auto& compiled,const char* name){return std::any_of(compiled.dependencies.begin(),compiled.dependencies.end(),[&](const auto& path){return path.filename()==name;});};
+    require(dependency(modelFragment,"material_mapping.sh") && dependency(fragment,"material_mapping.sh"),"Shared material mapping was absent from color/caster reload dependencies.");
+    const auto pickFragment=compileShader(shadows,"fs_pick"),particleFragment=compileShader(shadows,"fs_particle"),presentFragment=compileShader(shadows,"fs_present");
+    require(dependency(pickFragment,"material_mapping.sh") && dependency(particleFragment,"material_mapping.sh"),"Shared material mapping was absent from picking/sprite reload dependencies.");
+    require(dependency(presentFragment,"tone_mapping.sh"),"Tone mapping include was absent from runtime reload dependencies.");
+    auto mapping=read(shadowSource/"material_mapping.sh");const auto originalMapping=mapping;
+    auto modelSource=read(shadowSource/"fs_model.sc");const auto originalModelSource=modelSource;
+    const std::string originalName="u_materialUvOffset",replacementName="u_rejectedMaterialOffset";
+    // Rename declaration and consumers so compilation succeeds and this tests
+    // renderer uniform-contract rejection, rather than undefined shader syntax.
+    for(auto* text:{&mapping,&modelSource})
+        for(std::size_t pos=0;(pos=text->find(originalName,pos))!=std::string::npos;pos+=replacementName.size())text->replace(pos,originalName.size(),replacementName);
+    write(shadowSource/"material_mapping.sh",mapping);write(shadowSource/"fs_model.sc",modelSource);
+    const auto wrongMapping=compileShader(shadows,"fs_model");
+    require(!preflightShaderPair(modelVertex.bytes,wrongMapping.bytes,modelVertex.bytes,modelFragment.bytes,diagnostic),"Changing material mapping uniforms escaped renderer contract validation.");
+    write(shadowSource/"material_mapping.sh",originalMapping);
+    write(shadowSource/"fs_model.sc",originalModelSource);
     auto receiver=read(shadowSource/"point_shadow.sh");const auto receiverSampler=receiver.find("SAMPLER2DSHADOW(s_pointShadow, 8)");
     require(receiverSampler!=std::string::npos,"Receiver fixture cannot find shadow sampler eight.");
     receiver.replace(receiverSampler,std::string("SAMPLER2DSHADOW(s_pointShadow, 8)").size(),"SAMPLER2DSHADOW(s_pointShadow, 9)");
