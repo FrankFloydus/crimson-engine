@@ -16,11 +16,11 @@ inline float floor(float value) {return std::floor(value);}
 
 // Reference for the final display-space stage. The shader's input has already
 // been tone mapped and encoded once; dither must not enter HDR or IBL inputs.
-inline Vec3 apply(const Vec3& encoded,float pixelX,float pixelY,bool enabled) {
+inline Vec3 apply(const Vec3& linear,const Vec3& encoded,float pixelX,float pixelY,bool enabled) {
     constexpr Vec3 divisors{103,71,97};
     Vec3 result;
     for(std::size_t c=0;c<3;++c)
-        result[c]=equations::debandingChannel(encoded[c],equations::debandingNoise(pixelX,pixelY,divisors[c]),enabled?1.f:0.f);
+        result[c]=equations::debandingChannel(linear[c],encoded[c],equations::debandingNoise(pixelX,pixelY,divisors[c]),enabled?1.f:0.f);
     return result;
 }
 } // namespace crimson::debanding

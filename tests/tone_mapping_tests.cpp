@@ -56,14 +56,16 @@ void continuityAndEncoding() {
 }
 void displayDebanding() {
     const Vec3 encoded{24.25f/255,45.75f/255,80.4f/255};
+    Vec3 linear;
+    for(std::size_t c=0;c<3;++c)linear[c]=std::pow((encoded[c]+.055f)/1.055f,2.4f);
     std::array<double,3> quantizedSum{};
     std::array<int,3> minimum{255,255,255},maximum{};
     constexpr int side=128;
     for(int y=0;y<side;++y)for(int x=0;x<side;++x) {
         const float px=float(x)+.5f,py=float(y)+.5f;
-        check(debanding::apply(encoded,px,py,false)==encoded,"Disabled debanding changed the existing encoding path.");
-        const auto dithered=debanding::apply(encoded,px,py,true);
-        check(dithered==debanding::apply(encoded,px,py,true),"Debanding is not stable at a fixed screen pixel.");
+        check(debanding::apply(linear,encoded,px,py,false)==encoded,"Disabled debanding changed the existing encoding path.");
+        const auto dithered=debanding::apply(linear,encoded,px,py,true);
+        check(dithered==debanding::apply(linear,encoded,px,py,true),"Debanding is not stable at a fixed screen pixel.");
         for(std::size_t c=0;c<3;++c) {
             check(std::abs(dithered[c]-encoded[c])<=.5001f/255,"Debanding exceeded half an 8-bit code step.");
             const auto quantized=static_cast<int>(std::lround(dithered[c]*255));
@@ -72,7 +74,10 @@ void displayDebanding() {
         }
         for(float endpoint:{0.f,1.f}) {
             const Vec3 solid{endpoint,endpoint,endpoint};
-            check(debanding::apply(solid,px,py,true)==solid,"Debanding altered exact display black or white.");
+            const float transfer=endpoint<=.0031308f?endpoint*12.92f:1.055f*std::pow(endpoint,1.f/2.4f)-.055f;
+            const Vec3 encodedSolid{transfer,transfer,transfer};
+            check(debanding::apply(solid,encodedSolid,px,py,true)==solid,"Debanding altered exact display black or white after sRGB rounding.");
+            check(debanding::apply(solid,encodedSolid,px,py,false)==encodedSolid,"Endpoint protection changed disabled encoding.");
         }
     }
     // A flat, fractional code value must distribute between its two adjacent

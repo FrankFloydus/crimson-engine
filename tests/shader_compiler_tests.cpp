@@ -54,6 +54,7 @@ void run(const std::filesystem::path& compiler,const std::filesystem::path& sour
     const auto first=compileShader(config,"fs_encode");
     require(first.bytes.size()>16 && first.bytes[0]=='F' && first.bytes[1]=='S' && first.bytes[2]=='H' && first.bytes[3]==11,"Pinned shader compilation produced the wrong envelope.");
     require(std::any_of(first.dependencies.begin(),first.dependencies.end(),[](const auto& file){return file.filename()=="reload-extra.sc";}),"Compiler-reported macro include was lost.");
+    require(std::any_of(first.dependencies.begin(),first.dependencies.end(),[](const auto& file){return file.filename()=="debanding.sh";}),"Debanding was absent from runtime shader dependencies.");
     const auto discovered=shaderDependencies(config,"fs_encode");
     require(std::any_of(discovered.begin(),discovered.end(),[](const auto& file){return file.filename()=="reload-extra.sc";}),"Actual dependency index was not reused.");
     const auto warm=compileShader(config,"fs_encode");

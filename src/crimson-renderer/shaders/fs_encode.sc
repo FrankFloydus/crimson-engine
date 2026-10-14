@@ -23,7 +23,7 @@ void main()
     if (u_debandingParams.z > 0.0)
     {
         vec2 pixel = floor(v_texcoord0 * u_debandingParams.xy) + vec2_splat(0.5);
-        encoded = debandEncoded(encoded, pixel, u_debandingParams.z);
+        encoded = debandEncoded(color, encoded, pixel, u_debandingParams.z);
     }
     gl_FragColor = vec4(encoded, 1.0);
 }

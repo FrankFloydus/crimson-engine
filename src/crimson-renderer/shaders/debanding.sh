@@ -19,19 +19,22 @@ CC_DEBANDING_INLINE float debandingNoise(float pixelX, float pixelY, float divis
     return (phase - floor(phase) - halfValue) / codeValues;
 }
 
-CC_DEBANDING_INLINE float debandingChannel(float encoded, float noise, float enabled)
+CC_DEBANDING_INLINE float debandingChannel(float linearValue, float encoded, float noise, float enabled)
 {
-    // Preserve exact black/white and the disabled path, including solid mattes.
-    if (enabled <= 0.0 || encoded <= 0.0 || encoded >= 1.0) return encoded;
+    if (enabled <= 0.0) return encoded;
+    // Test the original endpoints: the sRGB expression can round white just
+    // below 1, which would otherwise let half-code dither darken it by one code.
+    if (linearValue <= 0.0) return 0.0;
+    if (linearValue >= 1.0) return 1.0;
     return min(max(encoded + noise, 0.0), 1.0);
 }
 
 #ifndef CC_DEBANDING_CPU
-vec3 debandEncoded(vec3 encoded, vec2 pixel, float enabled)
+vec3 debandEncoded(vec3 linearColor, vec3 encoded, vec2 pixel, float enabled)
 {
-    return vec3(debandingChannel(encoded.r, debandingNoise(pixel.x, pixel.y, 103.0), enabled),
-                debandingChannel(encoded.g, debandingNoise(pixel.x, pixel.y, 71.0), enabled),
-                debandingChannel(encoded.b, debandingNoise(pixel.x, pixel.y, 97.0), enabled));
+    return vec3(debandingChannel(linearColor.r, encoded.r, debandingNoise(pixel.x, pixel.y, 103.0), enabled),
+                debandingChannel(linearColor.g, encoded.g, debandingNoise(pixel.x, pixel.y, 71.0), enabled),
+                debandingChannel(linearColor.b, encoded.b, debandingNoise(pixel.x, pixel.y, 97.0), enabled));
 }
 #endif
 
