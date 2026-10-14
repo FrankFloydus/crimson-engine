@@ -19,7 +19,7 @@ struct InspectorTransformState {
     Mat4 shownMatrix{},baseline{};
     uint32_t activeItem{};
     unsigned activeField{};
-    bool valid{},editing{},refresh{};
+    bool valid{},editing{},refresh{},scaleLinked{},capturedScaleLinked{};
     std::string error;
 };
 

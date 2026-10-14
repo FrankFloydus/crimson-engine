@@ -1,6 +1,8 @@
 #include "SceneExtraction.h"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 namespace crimson {
 
@@ -44,7 +46,10 @@ ExtractedScene extractScene(const Scene& scene) {
         if (const auto* particle = registry.try_get<ParticleReference>(entity))
             result.particles.push_back({id,particle->assetId.id,*world});
         if (const auto* light = registry.try_get<SceneDirectionalLight>(entity)) {
-            result.directional.push_back({directionalLightDirection(*world),light->color,light->intensity,light->enabled});
+            const auto direction=directionalLightDirection(*world);
+            result.directional.push_back({direction,light->color,light->intensity,light->enabled});
+            if (id==result.environment.sun)
+                result.proceduralSun={direction*-1.f,light->color,light->intensity,light->enabled};
         }
         if (const auto* light = registry.try_get<ScenePointLight>(entity)) {
             const auto position = math::transformPoint(*world,{0,0,0});
@@ -89,6 +94,62 @@ Aabb selectionBounds(const Scene& scene, std::span<const EntityId> selection,
                 {-record->character->radius,0,-record->character->radius},
                 {record->character->radius,record->character->height,record->character->radius},true},*world));
         }
+    }
+    return result;
+}
+
+std::optional<EntityId> pickCollisionShape(const Scene& scene,const Ray& ray,float maximumDistance) {
+    if(!math::finite(ray.origin) || !math::finite(ray.direction) || !math::finite(maximumDistance) || maximumDistance<=0)return {};
+    double closest=maximumDistance;
+    std::optional<EntityId> result;
+    for(const auto& record:scene.records()) {
+        if(!record.collider && !record.character)continue;
+        const auto world=scene.worldTransform(record.id);
+        const auto inverse=world?math::inverse(*world):std::nullopt;
+        if(!inverse)continue;
+        const Ray local{math::transformPoint(*inverse,ray.origin),math::transformDirection(*inverse,ray.direction)};
+        if(!math::finite(local.origin) || !math::finite(local.direction))continue;
+        // Keep the transformed direction unnormalized, so all hit parameters
+        // remain comparable world-ray distances under affine/nonuniform parents.
+        double hit=std::numeric_limits<double>::infinity();
+        if(record.collider) {
+            double first=0,last=closest;
+            const auto half=record.collider->size*.5f;
+            for(unsigned axis=0;axis<3 && first<=last;++axis) {
+                const double direction=local.direction[axis],origin=local.origin[axis];
+                if(std::abs(direction)<1e-12) {
+                    if(origin < -half[axis] || origin > half[axis])last=-1;
+                    continue;
+                }
+                auto near=(-half[axis]-origin)/direction,far=(half[axis]-origin)/direction;
+                if(near>far)std::swap(near,far);
+                first=std::max(first,near);last=std::min(last,far);
+            }
+            if(first<=last)hit=first;
+        }
+        if(record.character) {
+            const double radius=record.character->radius;
+            const double lower=radius,upper=record.character->height-radius;
+            const double axisY=std::clamp<double>(local.origin[1],lower,upper);
+            const auto offset=local.origin-Vec3{0,axisY,0};
+            if(math::dot(offset,offset)<=radius*radius)hit=0;
+            const auto roots=[&](double a,double b,double c,const auto& accept) {
+                const double discriminant=b*b-a*c;
+                if(a<=1e-24 || discriminant<0)return;
+                const double root=std::sqrt(discriminant);
+                for(const double t:{(-b-root)/a,(-b+root)/a})if(t>=0 && t<hit && accept(t))hit=t;
+            };
+            roots(double(local.direction[0])*local.direction[0]+double(local.direction[2])*local.direction[2],
+                  double(local.origin[0])*local.direction[0]+double(local.origin[2])*local.direction[2],
+                  double(local.origin[0])*local.origin[0]+double(local.origin[2])*local.origin[2]-radius*radius,
+                  [&](double t){const auto y=local.origin[1]+t*local.direction[1];return y>=lower && y<=upper;});
+            for(const double y:{lower,upper}) {
+                const auto sphereOffset=local.origin-Vec3{0,y,0};
+                roots(math::dot(local.direction,local.direction),math::dot(sphereOffset,local.direction),
+                      math::dot(sphereOffset,sphereOffset)-radius*radius,[](double){return true;});
+            }
+        }
+        if(hit<closest) {closest=hit;result=record.id;}
     }
     return result;
 }

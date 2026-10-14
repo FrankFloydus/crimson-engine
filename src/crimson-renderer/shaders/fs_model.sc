@@ -1,6 +1,7 @@
 $input v_worldPosition, v_normal, v_texcoord0, v_texcoord1, v_tangent, v_color0, v_localPosition, v_localNormal
 
 #include <bgfx_shader.sh>
+#include "fog.sh"
 #include "point_light.sh"
 
 uniform vec4 u_modelBase;
@@ -149,7 +150,8 @@ void main()
     if (u_modelOptions.y > 0.5 && baseColor.a < u_modelEmissive.w) discard;
     if (u_modelEmissiveMap.y > 0.5)
     {
-        gl_FragColor = vec4(baseColor.rgb * baseColor.a, baseColor.a);
+        vec3 color = applyDistanceFog(baseColor.rgb, length(u_cameraPos.xyz - v_worldPosition), v_worldPosition.y, u_modelEmissiveMap.w > 1.5 ? 1.0 : 0.0);
+        gl_FragColor = vec4(clamp(color, vec3_splat(0.0), vec3_splat(60000.0)) * baseColor.a, baseColor.a);
         return;
     }
     float metallic = u_modelSurface.x;
@@ -191,5 +193,7 @@ void main()
     vec3 emissive = u_modelEmissive.rgb;
     if (u_modelEmissiveMap.x > 0.5) emissive *= materialSample(s_emissive, slotUv(uv, u_modelOptions.x), mappingPosition, mappingNormal).rgb;
     color += emissive;
-    gl_FragColor = vec4(clamp(color, vec3_splat(0.0), vec3_splat(60000.0)), 1.0);
+    color = applyDistanceFog(color, length(u_cameraPos.xyz - v_worldPosition), v_worldPosition.y, u_modelEmissiveMap.w > 1.5 ? 1.0 : 0.0);
+    float coverage = u_modelEmissiveMap.w > 0.5 ? baseColor.a : 1.0;
+    gl_FragColor = vec4(clamp(color, vec3_splat(0.0), vec3_splat(60000.0)) * coverage, coverage);
 }

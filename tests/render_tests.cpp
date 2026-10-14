@@ -3,11 +3,13 @@
 #include "crimson-renderer/ModelTransform.h"
 #include "crimson-renderer/ParticleRenderTypes.h"
 #include "crimson-renderer/shaders/point_light.sh"
+#include "crimson-renderer/shaders/grid_depth.sh"
 #include "input/Navigation.h"
 #include <SDL3/SDL_init.h>
 
 #include <cmath>
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -18,6 +20,8 @@
 #include <numbers>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -39,6 +43,131 @@ void throws(Function&& function) {
 }
 
 double length(double x, double y, double z) { return std::sqrt(x*x + y*y + z*z); }
+
+// Project shader inputs in float, then clip in double: sequential CPU float
+// intersections introduce artificial seam cracks and are not a hardware clipper
+// model. A giant ground quad can cross the eye while visible fragments remain
+// well inside the near/far planes.
+crimson::Vec4 shaderProject(const crimson::Mat4& matrix,const crimson::Vec3& point) {
+    crimson::Vec4 result;
+    for(unsigned row=0;row<4;++row)
+        result[row]=matrix.at(row,0)*point[0]+matrix.at(row,1)*point[1]+matrix.at(row,2)*point[2]+matrix.at(row,3);
+    return result;
+}
+struct ClippedGridVertex {
+    std::array<double,4> clip{};std::array<double,3> world{};
+    ClippedGridVertex()=default;
+    ClippedGridVertex(const crimson::Vec4& position,const crimson::Vec3& varying)
+        :clip{position[0],position[1],position[2],position[3]},world{varying[0],varying[1],varying[2]} {}
+};
+std::vector<ClippedGridVertex> clipGridTriangle(std::vector<ClippedGridVertex> polygon,crimson::ClipDepth depth) {
+    const std::array<crimson::Vec4,6> planes{{{1,0,0,1},{-1,0,0,1},{0,1,0,1},{0,-1,0,1},
+        {0,0,1,depth==crimson::ClipDepth::ZeroToOne?0.f:1.f},{0,0,-1,1}}};
+    for(const auto& plane:planes) {
+        if(polygon.empty())break;
+        const auto distance=[&](const auto& vertex) {
+            double value=0;for(unsigned i=0;i<4;++i)value+=vertex.clip[i]*plane[i];return value;
+        };
+        std::vector<ClippedGridVertex> clipped;
+        auto previous=polygon.back();double before=distance(previous);
+        for(const auto& current:polygon) {
+            const double after=distance(current);
+            if((before>=0)!=(after>=0)) {
+                const double t=before/(before-after);ClippedGridVertex intersection;
+                for(unsigned i=0;i<4;++i)intersection.clip[i]=previous.clip[i]+t*(current.clip[i]-previous.clip[i]);
+                for(unsigned i=0;i<3;++i)intersection.world[i]=previous.world[i]+t*(current.world[i]-previous.world[i]);
+                clipped.push_back(intersection);
+            }
+            if(after>=0)clipped.push_back(current);
+            previous=current;before=after;
+        }
+        polygon=std::move(clipped);
+    }
+    return polygon;
+}
+template<class Sample> void sampleGridPolygon(const std::vector<ClippedGridVertex>& polygon,const crimson::Vec2& ndc,Sample sample) {
+    for(std::size_t index=1;index+1<polygon.size();++index) {
+        const std::array<ClippedGridVertex,3> triangle{polygon[0],polygon[index],polygon[index+1]};
+        std::array<std::array<double,2>,3> screen;
+        bool valid=true;
+        for(unsigned i=0;i<3;++i) {
+            if(triangle[i].clip[3]<=0) {valid=false;break;}
+            screen[i]={double(triangle[i].clip[0])/triangle[i].clip[3],double(triangle[i].clip[1])/triangle[i].clip[3]};
+        }
+        if(!valid)continue;
+        const auto& a=screen[0];const auto& b=screen[1];const auto& c=screen[2];
+        const double determinant=(b[1]-c[1])*(a[0]-c[0])+(c[0]-b[0])*(a[1]-c[1]);
+        if(std::abs(determinant)<1e-14)continue;
+        const double first=((b[1]-c[1])*(ndc[0]-c[0])+(c[0]-b[0])*(ndc[1]-c[1]))/determinant;
+        const double second=((c[1]-a[1])*(ndc[0]-c[0])+(a[0]-c[0])*(ndc[1]-c[1]))/determinant;
+        const std::array<double,3> barycentric{first,second,1-first-second};
+        if(*std::min_element(barycentric.begin(),barycentric.end())<-1e-6)continue;
+        double total=0;std::array<double,3> world{};double rasterDepth=0;
+        for(unsigned i=0;i<3;++i) {
+            const double weight=barycentric[i]/triangle[i].clip[3];total+=weight;
+            for(unsigned axis=0;axis<3;++axis)world[axis]+=weight*triangle[i].world[axis];
+            rasterDepth+=barycentric[i]*triangle[i].clip[2]/triangle[i].clip[3];
+        }
+        sample(crimson::Vec3{world[0]/total,world[1]/total,world[2]/total},rasterDepth);
+    }
+}
+void gridDepthSurvivesEyeCrossing() {
+    using namespace crimson;
+    using grid_rendering::gridFragmentDepth;
+    const std::array<Vec3,4> corners{{{-512,0,-512},{512,0,-512},{512,0,512},{-512,0,512}}};
+    const std::array<std::array<unsigned,3>,2> triangles{{{0,2,1},{0,3,2}}};
+    unsigned samples=0,oldOcclusionFailures=0;
+    for(const auto depth:{ClipDepth::ZeroToOne,ClipDepth::NegativeOneToOne})
+    for(const float nearPlane:{.00001f,.000866f,.01f})for(const float distance:{4.f,10.f,50.f})
+    for(int pitch=5;pitch<=85;pitch+=20)for(int yaw=0;yaw<360;yaw+=15) {
+        const double elevation=pitch*std::numbers::pi/180,azimuth=yaw*std::numbers::pi/180;
+        Camera camera;camera.nearPlane=nearPlane;camera.farPlane=2048;camera.target={};camera.up={0,1,0};
+        camera.position={distance*std::cos(elevation)*std::sin(azimuth),distance*std::sin(elevation),distance*std::cos(elevation)*std::cos(azimuth)};
+        const auto view=camera.viewMatrix(),projection=camera.projectionMatrix(1.6f,depth);
+        Mat4 matrix=Mat4::zero();
+        for(unsigned row=0;row<4;++row)for(unsigned column=0;column<4;++column)for(unsigned i=0;i<4;++i)
+            matrix.at(row,column)+=projection.at(row,i)*view.at(i,column);
+        const float homogeneous=depth==ClipDepth::NegativeOneToOne?1.f:0.f;
+        // Stay inside one original triangle; the shared diagonal's raster
+        // ownership is independent from the depth behavior under regression.
+        const Vec3 point{.5f,0,-.25f};
+        const auto projected=shaderProject(matrix,point);const Vec2 ndc{projected[0]/projected[3],projected[1]/projected[3]};
+        // The same viewing ray reaches this plane AFTER reaching the grid.
+        const auto lower=shaderProject(matrix,point+(point-camera.position)*(.118f/camera.position[1]));
+        const double floorDepth=(lower[2]/lower[3])*(1-.5*homogeneous)+.5*homogeneous;
+        std::array<ClippedGridVertex,4> vertices,oldVertices;
+        for(unsigned i=0;i<4;++i) {
+            auto clip=shaderProject(matrix,corners[i]);vertices[i]={clip,corners[i]};
+            // Frozen regression: the old vertex-depth bias is not sufficient
+            // after clipping amplifies forward-depth rounding at some angles.
+            const float normalized=(clip[2]/clip[3])*(1-.5f*homogeneous)+.5f*homogeneous;
+            const float bias=.000001f+(.005f-.000001f)*(1-std::clamp(normalized,0.f,1.f));
+            clip[2]-=clip[3]*bias*(1+homogeneous);
+            oldVertices[i]={clip,corners[i]};
+        }
+        unsigned visibleSamples=0;
+        for(const auto& triangle:triangles) {
+            sampleGridPolygon(clipGridTriangle({vertices[triangle[0]],vertices[triangle[1]],vertices[triangle[2]]},depth),ndc,
+                [&](const Vec3& world,double) {
+                    const auto clip=shaderProject(matrix,world);
+                    const float corrected=gridFragmentDepth(clip[2],clip[3],.005f,homogeneous);
+                    require(std::isfinite(corrected)&&corrected>=0&&corrected<=1,"Grid fragment depth left the hardware depth range.");
+                    require(corrected<floorDepth,"A physically lower floor occluded the grid after clipping.");
+                    ++visibleSamples;++samples;
+                });
+            sampleGridPolygon(clipGridTriangle({oldVertices[triangle[0]],oldVertices[triangle[1]],oldVertices[triangle[2]]},depth),ndc,
+                [&](const Vec3&,double raster) {if(raster*(1-.5*homogeneous)+.5*homogeneous>floorDepth)++oldOcclusionFailures;});
+        }
+        require(visibleSamples>0,"The angular regression did not cover its interior grid sample: depth="+std::to_string(static_cast<int>(depth))+
+            ", near="+std::to_string(nearPlane)+", distance="+std::to_string(distance)+", pitch="+std::to_string(pitch)+", yaw="+std::to_string(yaw));
+    }
+    require(samples>2000&&oldOcclusionFailures>0,"The grid regression did not exercise the original clipping-depth loss.");
+    // Preserve occlusion by a genuinely nearer surface; this is not an always-on-top grid.
+    Camera camera;camera.position={0,5,10};camera.target={};camera.nearPlane=.01f;
+    const auto matrix=camera.projectionMatrix(1.6f,ClipDepth::ZeroToOne)*camera.viewMatrix();
+    const auto grid=shaderProject(matrix,{}),foreground=shaderProject(matrix,camera.position*.5);
+    require(gridFragmentDepth(grid[2],grid[3],.005f,0)>foreground[2]/foreground[3],"Grid bias pierced a foreground surface.");
+}
 
 void pointLightRadiusContract() {
     using namespace crimson;
@@ -505,6 +634,7 @@ int main() {
     run("sphere uint16 index capacity and overflow rejection", sphereIndexCapacity);
     run("camera Y-up coordinate contract", cameraCoordinateContract);
     run("point-light radius bounds inverse-square influence with smooth finite falloff", pointLightRadiusContract);
+    run("grid depth survives eye-crossing clips and retains foreground occlusion", gridDepthSurvivesEyeCrossing);
     run("Game vertical FOV preserves projection and rays across window aspects", gameCameraVerticalFraming);
     run("camera orbit signs, upright lock and reversible soft zoom", cameraOrbitAndZoomBounds);
     run("camera pan, fly look and normalized time-based movement", cameraPanAndFly);

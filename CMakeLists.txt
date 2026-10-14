@@ -44,7 +44,8 @@ target_link_libraries(crimson-math PRIVATE glm::glm)
 target_compile_options(crimson-math PRIVATE /W4 /permissive- /utf-8)
 
 # Camera projection/rays are CPU data shared by rendering and player control.
-add_library(crimson-camera src/crimson-renderer/RenderTypes.cpp src/crimson-renderer/PointShadowMath.cpp src/crimson-renderer/ToneMapping.cpp)
+add_library(crimson-camera src/crimson-renderer/RenderTypes.cpp src/crimson-renderer/PointShadowMath.cpp src/crimson-renderer/ToneMapping.cpp
+    src/crimson-renderer/ProceduralSky.cpp)
 target_link_libraries(crimson-camera PUBLIC crimson-math)
 target_compile_options(crimson-camera PRIVATE /W4 /permissive- /utf-8)
 
@@ -125,6 +126,10 @@ function(cc_shader NAME TYPE VARYING)
                 "${CC_SHADER_DIR}/material_mapping.sh"
                 "${CC_SHADER_DIR}/tone_mapping.sh"
                 "${CC_SHADER_DIR}/glow_sampling.sh"
+                "${CC_SHADER_DIR}/grid_depth.sh"
+                "${CC_SHADER_DIR}/fog.sh"
+                "${CC_SHADER_DIR}/debanding.sh"
+                "${CC_SHADER_DIR}/procedural_sky.sh"
                 "${CC_BGFX_SHADER_INCLUDE}/bgfx_shader.sh"
         COMMENT "Compiling ${NAME} for Direct3D 11"
         VERBATIM
@@ -147,6 +152,7 @@ cc_shader(fs_present fragment varying.def.sc)
 cc_shader(fs_glow_extract fragment varying.def.sc)
 cc_shader(fs_glow_blur fragment varying.def.sc)
 cc_shader(fs_sky fragment varying.def.sc)
+cc_shader(cs_procedural_filter compute varying.def.sc)
 cc_shader(vs_grid vertex varying.def.sc)
 cc_shader(fs_grid fragment varying.def.sc)
 cc_shader(fs_encode fragment varying.def.sc)
@@ -160,9 +166,10 @@ add_executable(crimson-renderer WIN32
     src/editor/EditorSession.cpp src/editor/SceneEditor.cpp src/editor/SceneViewport.cpp src/editor/ViewportAssetDrop.cpp
     src/editor/EditorPreferences.cpp src/editor/EditorResources.cpp src/editor/AssetPreviews.cpp
     src/editor/MaterialPreview.cpp src/editor/MaterialPreviewNavigation.cpp
-    src/editor/ResourceRuntime.cpp src/editor/SceneShortcuts.cpp
+    src/editor/ResourceRuntime.cpp src/editor/SceneShortcuts.cpp src/editor/PlayShortcuts.cpp
     src/resources/ShaderReloadSession.cpp src/resources/TextureStreamer.cpp
     src/platform/WindowIcon.cpp src/platform/WindowIcon.h
+    src/platform/WindowPlacement.cpp src/platform/WindowPlacement.h
     src/crimson-renderer/Diagnostics.cpp src/crimson-renderer/Diagnostics.h
     src/crimson-renderer/RenderTypes.h
     src/crimson-renderer/Mesh.h src/crimson-renderer/Mesh.cpp
@@ -211,6 +218,14 @@ add_custom_command(TARGET crimson-renderer POST_BUILD
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(procedural_sky_tests tests/procedural_sky_tests.cpp)
+    target_link_libraries(procedural_sky_tests PRIVATE crimson-camera)
+    target_compile_options(procedural_sky_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME procedural_sky_core COMMAND procedural_sky_tests)
+    add_executable(environment_presentation_tests tests/environment_presentation_tests.cpp)
+    target_link_libraries(environment_presentation_tests PRIVATE crimson-camera)
+    target_compile_options(environment_presentation_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME environment_presentation_core COMMAND environment_presentation_tests)
     add_executable(scene_gameplay_tests tests/scene_gameplay_tests.cpp)
     target_link_libraries(scene_gameplay_tests PRIVATE crimson-scene)
     target_compile_options(scene_gameplay_tests PRIVATE /W4 /permissive- /utf-8)
@@ -239,6 +254,11 @@ if(BUILD_TESTING)
     target_link_libraries(game_input_tests PRIVATE crimson-runtime)
     target_compile_options(game_input_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME game_input_core COMMAND game_input_tests)
+    add_executable(play_shortcut_tests tests/play_shortcut_tests.cpp src/editor/PlayShortcuts.cpp)
+    target_include_directories(play_shortcut_tests PRIVATE src)
+    target_link_libraries(play_shortcut_tests PRIVATE SDL3::SDL3 imgui::imgui)
+    target_compile_options(play_shortcut_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME play_shortcut_core COMMAND play_shortcut_tests)
     add_executable(game_view_input_tests tests/game_view_input_tests.cpp src/tools/GameViewInteraction.cpp)
     target_include_directories(game_view_input_tests PRIVATE src)
     target_link_libraries(game_view_input_tests PRIVATE crimson-runtime imgui::imgui)
@@ -469,3 +489,9 @@ if(BUILD_TESTING)
     target_link_libraries(inspector_transform_tests PRIVATE crimson-scene imgui::imgui)
     add_test(NAME inspector_transform_core COMMAND inspector_transform_tests)
 endif()
+
+foreach(CC_TARGET crimson-renderer native_resource_tests point_shadow_render_tests material_mapping_render_tests)
+    if(TARGET ${CC_TARGET})
+        target_sources(${CC_TARGET} PRIVATE src/crimson-renderer/ProceduralSkyGpu.cpp)
+    endif()
+endforeach()

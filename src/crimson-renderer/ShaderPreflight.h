@@ -8,4 +8,6 @@ namespace crimson {
 // Runs without a renderer/device; failed candidates must never reach bgfx.
 bool preflightShaderPair(std::span<const std::uint8_t> vertex,std::span<const std::uint8_t> fragment,
     std::span<const std::uint8_t> contractVertex,std::span<const std::uint8_t> contractFragment,std::string& diagnostic);
+bool preflightComputeShader(std::span<const std::uint8_t> candidate,
+    std::span<const std::uint8_t> contract,std::string& diagnostic);
 }

@@ -7,6 +7,7 @@
 #include <imgui_internal.h>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
@@ -44,7 +45,7 @@ public:
         tick();tick();
     }
     ~Inspector(){ImGui::DestroyContext(context_);}
-    void tick(bool menuUndo=false,bool clippedAfterFocusLoss=false) {
+    void tick(bool menuUndo=false,bool clippedAfterFocusLoss=false,bool collapseTransform=false) {
         ImGui::NewFrame();
         if(docked_)layout();
         // IniFilename=nullptr isolates persistence. NoSavedSettings would also
@@ -69,15 +70,15 @@ public:
             // deactivation. The gesture must still release document ownership.
             ImGui::ClearActiveID();window->SkipItems=true;
         }
+        if(collapseTransform)ImGui::SetNextItemOpen(false,ImGuiCond_Always);
         drawInspectorTransform(document,state,*document.scene().find(entity),transactions);
         window->SkipItems=skipped;
         for(unsigned property=0;property<3;++property){
             const auto id=axesTableId(property);const auto* table=ImGui::GetCurrentContext()->Tables.GetByKey(id);
             if(!table)continue;
-            const float rowHeight=table->RowPosY2-table->RowPosY1;
             for(unsigned axis=0;axis<3;++axis)centers[property*3+axis]={
-                (table->Columns[1].WorkMinX+table->Columns[1].WorkMaxX)*.5f,
-                table->OuterRect.Min.y+table->RowCellPaddingY+ImGui::GetFrameHeight()*.5f+axis*rowHeight};
+                (table->Columns[axis].WorkMinX+ImGui::CalcTextSize("X").x+ImGui::GetStyle().ItemInnerSpacing.x+table->Columns[axis].WorkMaxX)*.5f,
+                table->OuterRect.Min.y+table->RowCellPaddingY+ImGui::GetFrameHeight()*.5f};
         }
         ImGui::End();
         if(docked_){
@@ -109,6 +110,16 @@ public:
     }
     void activate(unsigned field){activation_=static_cast<int>(field);tick();require(state.editing&&document.transactionActive(),"The production numeric field did not start a gesture.");}
     void zero(){ImGui::GetIO().AddInputCharactersUTF8("0");tick();}
+    void type(const char* text){ImGui::GetIO().AddInputCharactersUTF8(text);tick();}
+    void replaceText(const char* text){
+        key(ImGuiMod_Ctrl,true);key(ImGuiKey_A,true);tick();
+        key(ImGuiKey_A,false);key(ImGuiMod_Ctrl,false);tick();type(text);
+    }
+    void setTransform(const Mat4& matrix){
+        auto record=*document.scene().find(entity);record.local=matrix;
+        require(document.updateEntity(entity,record)&&document.save()&&document.load(document.assetId()),"Cannot prepare the isolated transform fixture.");
+        document.select({entity},entity);baseline=matrix;tick();tick();
+    }
     void enter(){key(ImGuiKey_Enter,true);tick();key(ImGuiKey_Enter,false);tick();tick();}
     void key(ImGuiKey key,bool down){ImGui::GetIO().AddKeyEvent(key,down);}
     void undo(){key(ImGuiMod_Ctrl,true);key(ImGuiKey_Z,true);tick();key(ImGuiKey_Z,false);key(ImGuiMod_Ctrl,false);tick();tick();}
@@ -185,6 +196,12 @@ void missedDeactivationReleasesOwnership(){
     require(!ui.document.transactionActive()&&!ui.state.editing&&ui.document.history().size()==1,"A clipped field with no deactivation event stranded the scene transaction.");
     require(ui.document.undo()&&ui.matrix()==ui.baseline,"Undo remained blocked after a clipped numeric field lost focus.");
 }
+void collapsedTransformReleasesOwnership(){
+    Project project;Inspector ui(project.root);ui.activate(8);ui.zero();ui.tick(false,false,true);
+    require(!ui.document.transactionActive()&&!ui.state.editing&&ui.document.history().size()==1,
+        "Collapsing Transform stranded its active numeric transaction.");
+    ui.undo();require(ui.sceneUndo&&ui.matrix()==ui.baseline,"A collapsed Transform section blocked scene Undo.");
+}
 void dragReleaseCommits(){
     Project project;Inspector ui(project.root);const auto start=ui.centers[6];
     ui.mouse(start,true);ui.mouse({start[0]-25,start[1]},true);ui.mouse({start[0]-50,start[1]},true);
@@ -215,6 +232,47 @@ void diagnosticAppearanceKeepsUndo(){
         ui.sceneUndo=false;ui.undo();
         require(ui.sceneUndo&&ui.matrix()==ui.baseline&&ui.document.history().size()==1,"A reappearing diagnostic blocked the second Undo or created extra history.");
     }
+}
+
+void horizontalTransformRows(){
+    Project project;Inspector ui(project.root);
+    for(unsigned property=0;property<3;++property){
+        const auto& x=ui.centers[property*3];const auto& y=ui.centers[property*3+1];const auto& z=ui.centers[property*3+2];
+        require(x[0]<y[0]&&y[0]<z[0]&&x[1]==y[1]&&y[1]==z[1],"Transform axes are not arranged in a horizontal XYZ row.");
+        if(property)require(x[1]>ui.centers[(property-1)*3][1],"Transform property rows overlap.");
+    }
+}
+void linkedScalePreservesAffineAndHistory(){
+    Project project;Inspector ui(project.root);
+    auto shear=Mat4{};shear.at(0,1)=.35f;shear.at(1,2)=-.2f;
+    ui.setTransform(math::translation({7,-3,9})*math::eulerRotationXYZ({.2f,-.5f,.7f})*shear*math::scaling({-2,3,5}));
+    ui.state.scaleLinked=true;
+    const auto target=std::to_string(ui.state.fields.scale[0]*2);
+    ui.activate(6);ui.type(target.c_str());
+    const auto scaled=ui.matrix();
+    for(unsigned column=0;column<3;++column)for(unsigned row=0;row<3;++row)
+        require(std::abs(scaled.at(row,column)-2*ui.baseline.at(row,column))<1e-5f,"Linked scale lost a reflected or sheared column's ratio.");
+    for(unsigned row=0;row<4;++row)require(scaled.at(row,3)==ui.baseline.at(row,3),"Linked scale changed translation.");
+    ui.enter();require(ui.document.history().size()==1&&!ui.document.transactionActive(),"Linked scale did not commit one gesture.");
+    ui.tick();require(ui.matrix()==scaled,"Idle transform drawing recomposed the affine matrix.");
+    ui.undo();require(ui.sceneUndo&&ui.matrix()==ui.baseline&&!ui.document.dirty(),"Linked scale Undo did not restore the exact affine matrix.");
+    ui.redo();require(ui.sceneRedo&&ui.matrix()==scaled,"Linked scale Redo did not restore all three columns.");
+}
+void linkedScaleCrossesZeroAndRecovers(){
+    Project project;Inspector ui(project.root);ui.setTransform(math::translation({1,2,3})*math::scaling({2,3,5}));
+    ui.state.scaleLinked=true;ui.activate(6);ui.zero();
+    for(unsigned column=0;column<3;++column)for(unsigned row=0;row<3;++row)
+        require(ui.matrix().at(row,column)==0,"Linked zero did not collapse every scale axis.");
+    ui.replaceText("-2");
+    require(ui.matrix()==math::translation({1,2,3})*math::scaling({-2,-3,-5}),"Crossing zero lost the linked gesture's original proportions.");
+    ui.enter();require(ui.document.history().size()==1,"A linked zero crossing split one numeric gesture into several commands.");
+    ui.undo();require(ui.matrix()==ui.baseline,"A linked zero crossing could not recover its initial transform.");
+
+    ui.setTransform(math::translation({1,2,3})*math::scaling({0,0,0}));
+    ui.activate(7);ui.type("2");ui.enter();
+    require(ui.matrix()==math::translation({1,2,3})*math::scaling({2,2,2}),"Linked scale could not recover from an initially collapsed matrix.");
+    require(ui.document.history().size()==1,"Recovering linked zero scale did not create one command.");
+    ui.undo();require(ui.matrix()==ui.baseline,"Undo after linked zero recovery lost the collapsed baseline.");
 }
 
 void particleShortcutOwnership(){
@@ -284,8 +342,12 @@ int main(){
     run("active numeric text keeps its own Undo",numericTextOwnsUndo);
     run("menu Undo finalizes and does not reapply text",menuFinishesAndDoesNotReapply);
     run("clipped scalar finalizes without deactivation",missedDeactivationReleasesOwnership);
+    run("collapsing Transform finalizes its active numeric field",collapsedTransformReleasesOwnership);
     run("zero scale drag and release",dragReleaseCommits);
     run("diagnostics preserve real Ctrl+Z after zero-scale drag (floating/docked, XYZ)",diagnosticAppearanceKeepsUndo);
+    run("transform properties use horizontal XYZ rows",horizontalTransformRows);
+    run("linked scale preserves affine ratios and one undo gesture",linkedScalePreservesAffineAndHistory);
+    run("linked scale crosses zero and recovers collapsed axes",linkedScaleCrossesZeroAndRecovers);
     run("particle/material document shortcuts preserve scene-only commands and input ownership",particleShortcutOwnership);
     return failures?1:0;
 }

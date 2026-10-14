@@ -116,6 +116,40 @@ void run(const std::filesystem::path& compiler,const std::filesystem::path& sour
     write(shadowSource/"point_shadow.sh",receiver);const auto wrongReceiver=compileShader(shadows,"fs_model");
     require(!preflightShaderPair(modelVertex.bytes,wrongReceiver.bytes,modelVertex.bytes,modelFragment.bytes,diagnostic),"Moving shadow comparison sampler to slot nine was accepted.");
     require(std::any_of(modelFragment.dependencies.begin(),modelFragment.dependencies.end(),[](const auto& path){return path.filename()=="point_shadow.sh";}),"Shadow receiver include was not tracked for reload.");
+
+    require(std::find(names.begin(),names.end(),"cs_procedural_filter")!=names.end(),"Procedural compute is absent from atomic shader discovery.");
+    const auto compute=compileShader(shadows,"cs_procedural_filter");
+    require(compute.bytes.size()>16 && compute.bytes[0]=='C' && !compute.vertex,"Runtime shader compiler did not compile the compute stage.");
+    require(preflightComputeShader(compute.bytes,compute.bytes,diagnostic),"Valid procedural compute contract failed preflight.");
+    require(dependency(compute,"procedural_sky.sh"),"Procedural sky evaluator was absent from compute dependencies.");
+    const auto skyFragment=compileShader(shadows,"fs_sky");
+    require(dependency(skyFragment,"procedural_sky.sh"),"Visible sky did not share the compute evaluator dependency.");
+    auto computeSource=read(shadowSource/"cs_procedural_filter.sc");const auto originalComputeSource=computeSource;
+    const std::string group="NUM_THREADS(8, 8, 1)";
+    const auto groupPosition=computeSource.find(group);require(groupPosition!=std::string::npos,"Compute fixture has no expected thread group.");
+    computeSource.replace(groupPosition,group.size(),"NUM_THREADS(4, 8, 1)");
+    write(shadowSource/"cs_procedural_filter.sc",computeSource);
+    const auto wrongGroup=compileShader(shadows,"cs_procedural_filter");
+    require(!preflightComputeShader(wrongGroup.bytes,compute.bytes,diagnostic),"Changed dispatch thread-group dimensions were accepted.");
+    computeSource=originalComputeSource;
+    const std::string image="IMAGE2D_ARRAY_WO(s_proceduralOutput, rgba16f, 0)";
+    const auto imagePosition=computeSource.find(image);require(imagePosition!=std::string::npos,"Compute fixture has no expected output image.");
+    computeSource.replace(imagePosition,image.size(),"IMAGE2D_ARRAY_WO(s_proceduralOutput, rgba16f, 1)");
+    write(shadowSource/"cs_procedural_filter.sc",computeSource);
+    const auto wrongImage=compileShader(shadows,"cs_procedural_filter");
+    // Pinned shaderc removes RDEF and does not include image slots in its bgfx
+    // uniform envelope. The executable dcl_uav declaration must still be checked.
+    require(wrongImage.bytes!=compute.bytes,"Moving the compute UAV did not change the executable fixture.");
+    require(!preflightComputeShader(wrongImage.bytes,compute.bytes,diagnostic),"Changed compute output image slot was accepted.");
+    write(shadowSource/"cs_procedural_filter.sc",originalComputeSource);
+    auto skyShared=read(shadowSource/"procedural_sky.sh");
+    const std::string skyUniform="u_proceduralSky",wrongSkyUniform="u_wrongProceduralSky";
+    for (std::size_t pos=0;(pos=skyShared.find(skyUniform,pos))!=std::string::npos;pos+=wrongSkyUniform.size())
+        skyShared.replace(pos,skyUniform.size(),wrongSkyUniform);
+    write(shadowSource/"procedural_sky.sh",skyShared);
+    const auto wrongSky=compileShader(shadows,"cs_procedural_filter");
+    require(wrongSky.fingerprint!=compute.fingerprint && !preflightComputeShader(wrongSky.bytes,compute.bytes,diagnostic),
+        "Changed shared sky uniforms did not invalidate the cache and fail compute preflight.");
 }
 }
 int main(int argc,char** argv) {

@@ -5,6 +5,7 @@
 #include "tools/ParticleEditor.h"
 #include "tools/MaterialEditor.h"
 #include "SceneParticles.h"
+#include "PlayShortcuts.h"
 #include "runtime/PlaySession.h"
 #include "runtime/GameInput.h"
 #include "tools/GameView.h"
@@ -21,8 +22,13 @@ public:
     EditorSession(const std::filesystem::path&, AssetLibrary&, Renderer&);
     ~EditorSession();
     void cancelInteraction(Renderer&);
-    void setSimulationSuspended(bool suspended) { if(simulationSuspended_ && !suspended)skipSimulationTime_=true;simulationSuspended_=suspended;if(suspended)gameInput_.cancel(); }
+    void setSimulationSuspended(bool suspended) {
+        if(simulationSuspended_ && !suspended)skipSimulationTime_=true;
+        simulationSuspended_=suspended;
+        if(suspended) { gameInput_.cancel();playShortcuts_.cancel();playActionPending_=PlayAction::None; }
+    }
     bool handleEvent(const SDL_Event& event) {
+        playShortcuts_.handleEvent(event);
         if(event.type==SDL_EVENT_KEY_DOWN && event.key.scancode==SDL_SCANCODE_ESCAPE)focusGame_=false;
         return gameInput_.handleEvent(event);
     }
@@ -35,6 +41,7 @@ private:
     std::filesystem::path root_;
     SceneDocument document_;
     PlaySession play_;
+    PlayShortcuts playShortcuts_;
     GameInput gameInput_;
     GameView gameView_;
     SceneEditor editor_;
@@ -59,7 +66,8 @@ private:
     std::string cameraScene_, preparedEnvironment_, status_, unresolvedScene_, startupStatus_, resourceStatus_;
     bool recoveredLegacy_{false};
     bool simulationSuspended_{},skipSimulationTime_{true};
-    bool togglePlayPending_{},focusGame_{},deferredSceneReload_{};
+    PlayAction playActionPending_{PlayAction::None};
+    bool focusGame_{},deferredSceneReload_{};
     Camera editCameraBeforePlay_;
     std::string playStatus_;
     SceneDocument& activeDocument() { return play_.playing()?play_.document():document_; }

@@ -16,6 +16,7 @@
 namespace crimson {
 namespace {
 const std::map<std::string,std::string> varying{
+    {"cs_procedural_filter","varying.def.sc"},
     {"vs_particle","particle.varying.def.sc"},{"fs_particle","particle.varying.def.sc"},
     {"vs_pbr","varying.def.sc"},{"fs_pbr","varying.def.sc"},{"vs_model","model.varying.def.sc"},{"fs_model","model.varying.def.sc"},
     {"vs_pick","model.varying.def.sc"},{"fs_pick","model.varying.def.sc"},{"vs_present","varying.def.sc"},{"fs_present","varying.def.sc"},
@@ -35,7 +36,7 @@ std::vector<std::filesystem::path> sortedDependencies(std::vector<std::filesyste
 std::filesystem::path indexPath(const ShaderCompileConfig& config,const std::string& name) { return config.cacheDirectory/(name+".dependencies.json"); }
 uint64_t compileFingerprint(const ShaderCompileConfig& config,const std::string& name,const std::vector<std::filesystem::path>& dependencies) {
     auto result=fingerprintFiles(dependencies);
-    const auto contract=config.buildContract+";"+name+";"+varying.at(name)+";"+(name.starts_with("vs_") ? "vertex" : "fragment");
+    const auto contract=config.buildContract+";"+name+";"+varying.at(name)+";"+(name.starts_with("cs_") ? "compute" : name.starts_with("vs_") ? "vertex" : "fragment");
     for (const unsigned char byte:contract) { result^=byte; result*=1099511628211ull; }
     return result;
 }
@@ -157,7 +158,7 @@ ShaderBinary compileShader(const ShaderCompileConfig& config,const std::string& 
     const auto stage=config.cacheDirectory/(name+"-"+std::to_string(sequence.fetch_add(1))+".tmp");
     try {
         const auto command=L"-f "+quoted(config.sourceDirectory/(name+".sc"))+L" -o "+quoted(stage)+L" --platform windows --type "+
-            (name.starts_with("vs_") ? std::wstring(L"vertex") : std::wstring(L"fragment"))+L" --profile s_5_0 -O 3 --depends --varyingdef "+
+            (name.starts_with("cs_") ? std::wstring(L"compute") : name.starts_with("vs_") ? std::wstring(L"vertex") : std::wstring(L"fragment"))+L" --profile s_5_0 -O 3 --depends --varyingdef "+
             quoted(config.sourceDirectory/varying.at(name))+L" -i "+quoted(config.includeDirectory);
         runCompiler(config.compiler,command,token);
         if(token.stop_requested()) throw std::runtime_error("Shader compilation canceled.");

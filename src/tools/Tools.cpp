@@ -124,7 +124,7 @@ bool assetSlot(AssetLibrary& assets, const char* title, const char* interpretati
             drawAssetLabel(assets, &asset, "", ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), 3.0f);
             ImGui::PopID();
         }
-        if (assets.assets().empty()) ImGui::TextDisabled("Import textures in the Asset Browser.");
+        if (assets.assets().empty()) ImGui::TextDisabled("No textures");
         ImGui::EndChild();
         ImGui::EndPopup();
     }
@@ -235,15 +235,6 @@ void viewControls(SceneSettings& settings, EditorFrame& frame, bool hasModel) {
 void modelControls(const ModelAsset& model, EditorFrame& frame) {
     sectionTitle("MODEL PREVIEW");
     ImGui::TextWrapped("%s", model.name.c_str());
-    ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_TextDisabled], "%s / %zu meshes / %zu primitives", model.format.c_str(), model.meshes.size(), model.primitives.size());
-    ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_TextDisabled], "%zu nodes / %zu materials", model.nodes.size(), model.materials.size());
-    size_t vertices = 0, triangles = 0;
-    for (const auto& primitive : model.primitives) {
-        vertices += primitive.vertices.size();
-        triangles += primitive.indices.size() / 3;
-    }
-    ImGui::TextColored(ImGui::GetStyle().Colors[ImGuiCol_TextDisabled], "%zu vertices / %zu triangles", vertices, triangles);
-    ImGui::TextWrapped("Imported materials are read-only. Drag another model into the viewport to replace this preview.");
     if (ImGui::Button("Show default sphere", ImVec2(-1, 0))) frame.showSphere = true;
     if (!model.warnings.empty()) {
         sectionTitle("IMPORT WARNINGS");
@@ -308,23 +299,27 @@ bool drawToneMappingControl(ToneMapping& mode) {
     const bool changed=ImGui::Combo("Tone mapping",&selected,names,4);
     if(changed)mode=static_cast<ToneMapping>(selected);
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-        ImGui::SetTooltip("Applied after exposure. Linear clips highlights; ACES adds filmic contrast; AgX softens bright saturated colors.\nReinhard preserves the original renderer appearance. Lighting calculations remain linear HDR.");
+        ImGui::SetTooltip("Maps scene brightness to the display after exposure.");
     return changed;
 }
 
-bool drawGlowControls(GlowSettings& glow) {
+bool drawGlowControls(GlowSettings& glow, const GlowControlEdit& edit) {
     bool changed=false;
+    const auto field=[&](GlowControl control,bool updated) {
+        changed|=updated;
+        if(edit)edit(control,updated);
+    };
     ImGui::PushID("Glow");
     if (ImGui::CollapsingHeader("Glow",ImGuiTreeNodeFlags_DefaultOpen)) {
-        changed|=ImGui::Checkbox("Enabled##glow",&glow.enabled);
-        help("Adds a halo around bright rendered colors. Independent of environment lighting and HDRI intensity.");
+        field(GlowControl::Enabled,ImGui::Checkbox("Enabled##glow",&glow.enabled));
+        help("Adds a halo around bright colors.");
         ImGui::BeginDisabled(!glow.enabled);
-        changed|=ImGui::SliderFloat("Strength",&glow.strength,0,10,"%.2f",ImGuiSliderFlags_AlwaysClamp);
-        changed|=ImGui::SliderFloat("Size",&glow.radius,0,8,"%.2f",ImGuiSliderFlags_AlwaysClamp);
+        field(GlowControl::Strength,ImGui::SliderFloat("Strength",&glow.strength,0,10,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+        field(GlowControl::Size,ImGui::SliderFloat("Size",&glow.radius,0,8,"%.2f",ImGuiSliderFlags_AlwaysClamp));
         help("Screen-space halo spread. Zero disables the halo.");
         if (ImGui::TreeNode("Advanced")) {
-            changed|=ImGui::DragFloat("Threshold",&glow.threshold,.02f,0,100000,"%.2f",ImGuiSliderFlags_AlwaysClamp);
-            help("Brightness after exposure needed to glow. A soft transition avoids a hard cutoff; lower values include dimmer colors.");
+            field(GlowControl::Threshold,ImGui::DragFloat("Threshold",&glow.threshold,.02f,0,100000,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+            help("Minimum brightness after exposure that contributes to glow.");
             ImGui::TreePop();
         }
         ImGui::EndDisabled();

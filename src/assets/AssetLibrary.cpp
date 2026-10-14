@@ -1,4 +1,5 @@
 #include "AssetLibrary.h"
+#include "scene/EnvironmentSerialization.h"
 #include "BuiltinGeometry.h"
 #include "scene/SceneDocument.h"
 #include "math/Json.h"
@@ -984,21 +985,12 @@ void AssetLibrary::loadEnvironment(EnvironmentSettings& environment) {
     try {
         std::ifstream input(file);
         const auto json = nlohmann::json::parse(input);
-        EnvironmentSettings restored;
-        restored.map = json.value("map", std::string{});
-        restored.enabled = json.value("enabled", restored.enabled);
-        restored.intensity = json.value("intensity", restored.intensity);
-        restored.rotation = json.value("rotation", restored.rotation);
-        restored.toneMapping = static_cast<ToneMapping>(json.value("toneMapping", 0));
-        if (!validToneMapping(restored.toneMapping)) throw std::runtime_error("Invalid environment tone mapping.");
-        if (json.contains("glow")) {
-            const auto& glow=json.at("glow");
-            restored.glow={glow.at("enabled").get<bool>(),glow.at("strength").get<float>(),
-                glow.at("radius").get<float>(),glow.at("threshold").get<float>()};
-            if (!validGlowSettings(restored.glow)) throw std::runtime_error("Invalid environment Glow settings.");
-        }
-        restored.intensity = std::isfinite(restored.intensity) ? std::clamp(restored.intensity, 0.0f, 10.0f) : 1.0f;
-        restored.rotation = std::isfinite(restored.rotation) ? std::clamp(restored.rotation, -180.0f, 180.0f) : 0.0f;
+        auto compatible=json;
+        // Retain the legacy file's bounded intensity/rotation recovery behavior.
+        const auto intensity=json.value("intensity",1.f),rotation=json.value("rotation",0.f);
+        compatible["intensity"]=std::isfinite(intensity)?std::clamp(intensity,0.f,10.f):1.f;
+        compatible["rotation"]=std::isfinite(rotation)?std::clamp(rotation,-180.f,180.f):0.f;
+        auto restored=readEnvironmentSettings(compatible);
         // Only IDs enumerated from the managed assets folder can be assigned.
         if (!restored.map.empty() && !find(restored.map)) {
             status_ = "Environment image is missing; using the built-in studio.";
@@ -1010,13 +1002,7 @@ void AssetLibrary::loadEnvironment(EnvironmentSettings& environment) {
 
 void AssetLibrary::saveEnvironment(const EnvironmentSettings& environment) {
     try {
-        if (!validGlowSettings(environment.glow) || !validToneMapping(environment.toneMapping))
-            throw std::runtime_error("Invalid environment Glow or tone mapping settings.");
-        const nlohmann::json json{{"version", 1}, {"map", environment.map}, {"enabled", environment.enabled},
-            {"intensity", environment.intensity}, {"rotation", environment.rotation},
-            {"toneMapping", static_cast<int>(environment.toneMapping)},
-            {"glow",{{"enabled",environment.glow.enabled},{"strength",environment.glow.strength},
-                {"radius",environment.glow.radius},{"threshold",environment.glow.threshold}}}};
+        auto json=environmentSettingsJson(environment);json["version"]=4;
         writeFileAtomically(projectRoot_ / "assets" / "environment.json",json.dump(2)+'\n');
     } catch (const std::exception& error) { status_ = error.what(); }
 }

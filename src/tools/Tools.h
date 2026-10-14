@@ -2,6 +2,8 @@
 
 #include "crimson-renderer/RenderTypes.h"
 #include <cstdint>
+#include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -15,6 +17,9 @@ struct ModelInstance;
 
 struct EditorFrame {
     ViewportRegion viewport;
+    // Pose used by this frame's overlays and pick requests. Navigation may
+    // advance the editor camera after current-frame UI ownership is resolved.
+    std::optional<Camera> viewportCamera;
     bool togglePlay{false};
     bool materialChanged{false};
     bool environmentChanged{false};
@@ -52,7 +57,9 @@ BrowserActions drawAssetBrowser(AssetLibrary& assets, SDL_Window* window);
 bool drawEnvironmentControls(EnvironmentSettings& environment, AssetLibrary& assets, const Renderer& renderer, bool persistLegacy = false);
 bool drawEnvironmentImageField(EnvironmentSettings&, AssetLibrary&);
 bool drawToneMappingControl(ToneMapping&);
-bool drawGlowControls(GlowSettings&);
+enum class GlowControl { Enabled, Strength, Size, Threshold };
+using GlowControlEdit = std::function<void(GlowControl,bool)>;
+bool drawGlowControls(GlowSettings&, const GlowControlEdit& edit = {});
 
 // Call once after creating the ImGui context. DPI is supplied by the host;
 // this does not change window/framebuffer coordinates or SDL input scaling.

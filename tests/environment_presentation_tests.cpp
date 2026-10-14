@@ -1,0 +1,202 @@
+#include "crimson-renderer/EnvironmentPresentation.h"
+#include "crimson-renderer/Fog.h"
+#include <cmath>
+#include <iostream>
+#include <limits>
+#include <stdexcept>
+
+namespace {
+using namespace crimson;
+void check(bool ok,const char* message) {if(!ok)throw std::runtime_error(message);}
+void near(float actual,float expected) {check(std::isfinite(actual) && std::abs(actual-expected)<2e-6f,"Fog equation mismatch.");}
+void fogComposition() {
+    FogSettings settings;settings.enabled=true;settings.color={.5f,.5f,.5f};settings.density=0;
+    auto params=fog::parameters(settings,1000);const Vec3 source{4,2,1};
+    const auto identity=fog::premultiplied(source,.4f,params,100,0,false);
+    near(identity[0],1.6f);near(identity[1],.8f);near(identity[2],.4f);near(identity[3],.4f);
+    near(fog::equations::fogTransmittance(0,std::numeric_limits<float>::infinity()),1);
+    settings.density=.01f;params=fog::parameters(settings,1000);
+    near(params.colorDensity[0],.21404114f);near(fog::transmittance(params,100,0),std::exp(-1.f));
+    near(fog::transmittance(params,0,0),1);
+    const auto opaque=fog::premultiplied(source,1,params,100,0,false);
+    near(opaque[0],4*std::exp(-1.f)+params.colorDensity[0]*(1-std::exp(-1.f)));
+    const auto far=fog::premultiplied(source,1,params,10000,0,false);
+    near(far[0],params.colorDensity[0]);near(far[1],params.colorDensity[1]);near(far[3],1);
+    const auto alpha=fog::premultiplied(source,.25f,params,100,0,false);
+    for(std::size_t c=0;c<3;++c)near(alpha[c],opaque[c]*.25f);
+    near(alpha[3],.25f);
+    for(bool additive:{false,true}) {
+        const auto invisible=fog::premultiplied(source,0,params,100,0,additive);
+        for(float value:invisible)near(value,0);
+    }
+    const auto additive=fog::premultiplied(source,.25f,params,100,0,true);
+    for(std::size_t c=0;c<3;++c)near(additive[c],source[c]*.25f*std::exp(-1.f));
+    near(additive[3],.25f);
+    const auto blackAdditive=fog::premultiplied({0,0,0},1,params,1000,0,true);
+    for(std::size_t c=0;c<3;++c)near(blackAdditive[c],0);
+    // Off-axis billboard fragments have a longer optical path than their center.
+    check(fog::transmittance(params,std::sqrt(125.f),0)<
+        fog::transmittance(params,10,0),"Fog must use each fragment's distance, not center depth.");
+    settings.enabled=false;near(fog::parameters(settings,1000).colorDensity[3],0);
+}
+void depthAndHeightFog() {
+    FogSettings settings;settings.enabled=true;settings.mode=FogMode::Depth;settings.depthOpacity=.75f;
+    auto params=fog::parameters(settings,1000);
+    near(fog::transmittance(params,0,0),1);
+    near(fog::transmittance(params,10,0),1);
+    near(fog::transmittance(params,55,0),.625f);
+    near(fog::transmittance(params,100,0),.25f);
+    near(fog::transmittance(params,1000,0),.25f);
+    settings.depthCurve=2;params=fog::parameters(settings,1000);
+    near(fog::transmittance(params,55,0),.8125f);
+    // Exponential density and Depth opacity are separate, persistent controls.
+    settings.density=100;near(fog::transmittance(fog::parameters(settings,1000),55,0),.8125f);
+    settings.depthOpacity=0;params=fog::parameters(settings,1000);
+    near(fog::transmittance(params,1000,0),1);
+    settings.mode=FogMode::Exponential;settings.density=.02f;
+    near(fog::transmittance(fog::parameters(settings,1000),50,0),std::exp(-1.f));
+
+    settings.mode=FogMode::Depth;settings.depthCurve=1;settings.depthOpacity=1;settings.depthEnd=0;
+    params=fog::parameters(settings,1000);
+    near(params.depth[0],10);near(params.depth[1],1000);near(fog::transmittance(params,1000,0),0);
+    settings.depthBegin=100;
+    params=fog::parameters(settings,5);
+    near(params.depth[0],4.999f);near(params.depth[1],5);
+    near(fog::transmittance(params,4.999f,0),1);near(fog::transmittance(params,5,0),0);
+    near(settings.depthBegin,100);near(settings.depthEnd,0);
+    near(fog::equations::fogDepthTransmittance(10,10,1,.7f,9),1);
+    near(fog::equations::fogDepthTransmittance(10,10,1,.7f,10),.3f);
+
+    settings.depthBegin=10;settings.depthEnd=100;settings.depthOpacity=0;
+    settings.height=10;settings.heightDensity=.1f;
+    params=fog::parameters(settings,1000);
+    near(fog::transmittance(params,0,20),1);near(fog::transmittance(params,0,10),1);
+    near(fog::transmittance(params,0,0),std::exp(-1.f));
+    settings.heightDensity=-.1f;params=fog::parameters(settings,1000);
+    near(fog::transmittance(params,0,0),1);near(fog::transmittance(params,0,20),std::exp(-1.f));
+    settings.heightDensity=.1f;settings.depthOpacity=.8f;params=fog::parameters(settings,1000);
+    near(fog::transmittance(params,55,10),.6f);
+    near(fog::transmittance(params,55,8),.6f);
+    near(fog::transmittance(params,55,0),std::exp(-1.f));
+    settings.mode=FogMode::Exponential;settings.density=.01f;params=fog::parameters(settings,1000);
+    near(fog::transmittance(params,100,10),std::exp(-1.f));
+    near(fog::transmittance(params,100,-10),std::exp(-2.f));
+    settings.density=0;near(fog::transmittance(fog::parameters(settings,1000),100,-10),std::exp(-2.f));
+
+    for(auto mode:{FogMode::Exponential,FogMode::Depth}) {
+        settings.mode=mode;settings.enabled=false;
+        near(fog::transmittance(fog::parameters(settings,1000),1000,-1000),1);
+        settings.enabled=true;params=fog::parameters(settings,1000);
+        const Vec3 source{4,2,1};const float transmission=fog::transmittance(params,55,0);
+        const auto opaque=fog::premultiplied(source,1,params,55,0,false);
+        const auto alpha=fog::premultiplied(source,.25f,params,55,0,false);
+        const auto additive=fog::premultiplied(source,.25f,params,55,0,true);
+        for(std::size_t c=0;c<3;++c) {near(alpha[c],opaque[c]*.25f);near(additive[c],source[c]*transmission*.25f);}
+        near(alpha[3],.25f);near(additive[3],.25f);
+        for(bool add:{false,true})for(float channel:fog::premultiplied(source,0,params,55,0,add))near(channel,0);
+    }
+}
+void fogLightEnergy() {
+    FogSettings settings;settings.enabled=true;settings.color={.5f,.5f,.5f};settings.lightEnergy=4;
+    const auto params=fog::parameters(settings,1000);
+    near(params.colorDensity[0],.21404114f*4);
+    near(fog::transmittance(params,100,0),std::exp(-1.f));
+    const auto lit=fog::premultiplied({0,0,0},.3f,params,100,0,false);
+    near(lit[0],.21404114f*4*(1-std::exp(-1.f))*.3f);near(lit[3],.3f);
+    settings.lightEnergy=0;
+    const auto dark=fog::premultiplied({4,2,1},.3f,fog::parameters(settings,1000),100,0,false);
+    near(dark[0],4*std::exp(-1.f)*.3f);near(dark[3],.3f);
+    settings.color={1,1,1};settings.lightEnergy=std::numeric_limits<float>::max();
+    const auto extremeParams=fog::parameters(settings,1000);
+    for(float opacity:{0.f,.25f,1.f}) {
+        const auto extreme=fog::premultiplied({0,0,0},opacity,extremeParams,1000,0,false);
+        for(std::size_t c=0;c<3;++c)near(extreme[c],60000.f*opacity);
+        near(extreme[3],opacity);
+    }
+}
+void independentPresentation() {
+    EnvironmentSettings environment;ViewportAppearance appearance;
+    environment.source=EnvironmentSource::ProceduralSky;environment.fog.enabled=true;
+    environment.debanding=true;
+    environment.fog.mode=FogMode::Depth;environment.fog.heightDensity=-.3f;environment.fog.lightEnergy=2;
+    environment.background.show=true;environment.background.overrideColor=true;environment.background.color={.4f,.2f,.8f};
+    environment.enabled=false;
+    auto presentation=environmentPresentation(environment,appearance,true);
+    check(presentation.showBackground && presentation.procedural && presentation.fog.enabled,"Disabling IBL also disabled background or fog.");
+    check(presentation.debanding,"Disabling environment lighting also disabled Debanding.");
+    check(presentation.fog==environment.fog,"Authored fog parameters were lost during presentation extraction.");
+    environment.enabled=true;environment.background.show=false;
+    presentation=environmentPresentation(environment,appearance,true);
+    check(!presentation.showBackground && presentation.procedural && presentation.matte==environment.background.color,"Hidden sky lost its independent matte or lighting source.");
+    environment.background.overrideColor=false;
+    check(environmentPresentation(environment,appearance,true).matte==appearance.backgroundSrgb,"Absent background override must use editor preference.");
+    environment.background.overrideColor=true;
+    for(bool previewSky:{false,true}) {
+        const auto preview=environmentPresentation(environment,appearance,false,previewSky);
+        check(preview.showBackground==previewSky && !preview.procedural && !preview.fog.enabled && !preview.debanding && preview.matte==appearance.backgroundSrgb,
+            "Asset previews inherited scene background, fog or linked sky.");
+        near(fog::transmittance(fog::parameters(preview.fog,1000),1000,-1000),1);
+    }
+    EnvironmentSettings fallback;
+    check(!environmentPresentation(fallback,appearance,true).showBackground && fallback.enabled && fallback.source==EnvironmentSource::Hdri,
+        "Absent Environment must retain studio lighting and editor matte.");
+}
+void thumbnailInvalidation() {
+    EnvironmentSettings environment;ProceduralSun sun{{0,1,0},{1,1,1},2,true};
+    auto signature=thumbnailEnvironmentKey(environment,sun);
+    environment.procedural.skyTop={1,0,0};sun.direction={1,1,0};
+    check(thumbnailEnvironmentKey(environment,sun)==signature,"Inactive procedural settings changed HDRI thumbnail.");
+    environment.source=EnvironmentSource::ProceduralSky;
+    signature=thumbnailEnvironmentKey(environment,sun);
+    environment.map="assets/textures/inactive.hdr";environment.rotation=45;
+    check(thumbnailEnvironmentKey(environment,sun)==signature,"Inactive HDRI changed procedural thumbnail.");
+    const auto lighting=procedural::cacheKey(environment.procedural,sun);
+    environment.debanding=true;
+    check(thumbnailEnvironmentKey(environment,sun)!=signature,"Debanding did not invalidate thumbnail.");
+    check(procedural::cacheKey(environment.procedural,sun)==lighting,"Debanding changed procedural lighting inputs.");
+    signature=thumbnailEnvironmentKey(environment,sun);
+    environment.fog.enabled=true;
+    check(thumbnailEnvironmentKey(environment,sun)!=signature,"Fog did not invalidate thumbnail.");
+    signature=thumbnailEnvironmentKey(environment,sun);environment.background.overrideColor=true;environment.background.color={1,0,0};
+    check(thumbnailEnvironmentKey(environment,sun)!=signature,"Custom background did not invalidate thumbnail.");
+    check(procedural::cacheKey(environment.procedural,sun)==lighting,"Presentation edits changed procedural lighting inputs.");
+    signature=thumbnailEnvironmentKey(environment,sun);sun.direction={0,1,0};
+    check(thumbnailEnvironmentKey(environment,sun)!=signature,"Linked-sun rotation did not invalidate thumbnail.");
+    signature=thumbnailEnvironmentKey(environment,sun);sun.color={1,0,0};
+    check(thumbnailEnvironmentKey(environment,sun)!=signature,"Linked-sun color did not invalidate thumbnail.");
+    signature=thumbnailEnvironmentKey(environment,sun);sun.intensity=4;
+    check(thumbnailEnvironmentKey(environment,sun)!=signature,"Linked-sun intensity did not invalidate thumbnail.");
+    signature=thumbnailEnvironmentKey(environment,sun);sun.enabled=false;
+    check(thumbnailEnvironmentKey(environment,sun)!=signature,"Disabling linked sun did not invalidate thumbnail.");
+}
+void fogThumbnailInvalidation() {
+    EnvironmentSettings environment;ProceduralSun sun;
+    auto key=thumbnailEnvironmentKey(environment,sun);
+    environment.fog.mode=FogMode::Depth;environment.fog.depthBegin=20;environment.fog.heightDensity=-.1f;environment.fog.lightEnergy=2;
+    check(thumbnailEnvironmentKey(environment,sun)==key,"Disabled fog settings changed thumbnail key.");
+    environment.fog.enabled=true;key=thumbnailEnvironmentKey(environment,sun);
+    environment.fog.density=.4f;
+    check(thumbnailEnvironmentKey(environment,sun)==key,"Inactive exponential density changed Depth fog thumbnail.");
+    for(const auto member:{&FogSettings::depthBegin,&FogSettings::depthEnd,&FogSettings::depthCurve,&FogSettings::depthOpacity,
+            &FogSettings::height,&FogSettings::heightDensity,&FogSettings::lightEnergy}) {
+        auto changed=environment;changed.fog.*member+=.1f;
+        check(thumbnailEnvironmentKey(changed,sun)!=key,"Active Depth/height/light-energy control did not invalidate thumbnail.");
+    }
+    environment.fog.mode=FogMode::Exponential;
+    check(thumbnailEnvironmentKey(environment,sun)!=key,"Fog mode did not invalidate thumbnail.");
+    key=thumbnailEnvironmentKey(environment,sun);
+    environment.fog.depthBegin+=1;environment.fog.depthEnd+=1;environment.fog.depthCurve+=1;environment.fog.depthOpacity=.5f;
+    check(thumbnailEnvironmentKey(environment,sun)==key,"Inactive Depth controls changed exponential fog thumbnail.");
+    environment.fog.density+=.1f;
+    check(thumbnailEnvironmentKey(environment,sun)!=key,"Exponential density did not invalidate thumbnail.");
+    environment.fog.heightDensity=0;key=thumbnailEnvironmentKey(environment,sun);environment.fog.height+=5;
+    check(thumbnailEnvironmentKey(environment,sun)==key,"Disabled height fog changed thumbnail key.");
+    environment.fog.heightDensity=-.1f;key=thumbnailEnvironmentKey(environment,sun);environment.fog.heightDensity=.1f;
+    check(thumbnailEnvironmentKey(environment,sun)!=key,"Height density sign did not invalidate thumbnail.");
+}
+}
+int main() {
+    try {fogComposition();depthAndHeightFog();fogLightEnergy();independentPresentation();thumbnailInvalidation();fogThumbnailInvalidation();
+        std::cout<<"Environment presentation and fog checks passed.\n";return 0;}
+    catch(const std::exception& error) {std::cerr<<error.what()<<'\n';return 1;}
+}

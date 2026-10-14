@@ -1,4 +1,5 @@
 #include "MaterialEditor.h"
+#include "DocumentEditorMenu.h"
 #include "assets/AssetLibrary.h"
 #include "crimson-renderer/ImGuiBgfx.h"
 #include <imgui.h>
@@ -78,9 +79,16 @@ bool MaterialEditor::canRedo() const { return document_.canRedo(); }
 void MaterialEditor::undo() { document_.undo(); }
 void MaterialEditor::redo() { document_.redo(); }
 void MaterialEditor::finishInteraction(AssetLibrary* assets) {
-    if(document_.transactionActive() && !document_.commit())return;
-    const auto* active=ImGui::GetCurrentContext()->ActiveIdWindow;
-    if(active && active->RootWindow->ID==ImHashStr("###SpriteMaterial"))ImGui::ClearActiveID();
+    const bool editing=document_.transactionActive();
+    if(editing && !document_.commit())return;
+    if(editing) {
+        const auto* active=ImGui::GetCurrentContext()->ActiveIdWindow;
+        for(auto* window=active;window;window=window->ParentWindow)
+            if(window->RootWindow->ID==ImHashStr("###SpriteMaterial")){ImGui::ClearActiveID();break;}
+        // InputText can deliver its last buffer after releasing focus. A menu
+        // Undo may already have restored another value before properties draw.
+        suppressFinalizedUpdate_=true;
+    }
     if(assets)publish(*assets);
 }
 void MaterialEditor::request(Pending pending,std::string id,AssetLibrary* assets) {
@@ -199,7 +207,7 @@ void MaterialEditor::modals(AssetLibrary& assets) {
     }
     if(externalPopup_) { ImGui::OpenPopup("Material changed on disk");externalPopup_=false; }
     if(ImGui::BeginPopupModal("Material changed on disk",nullptr,ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextWrapped("The material changed outside this editor. The working revision is retained until you choose to reload.");
+        ImGui::TextUnformatted("The material changed on disk.");
         if(ImGui::Button("Overwrite")) {
             if(document_.save()) {
                 assets.noteAssetWrite(document_.assetId());assets.refreshMaterials();message_.clear();
@@ -225,145 +233,144 @@ void MaterialEditor::modals(AssetLibrary& assets) {
 }
 void MaterialEditor::properties(AssetLibrary& assets) {
     const bool editable=document_.editable();
-    ImGui::SeparatorText("Material");
     const auto& material=document_.definition();
-    if(!editable)ImGui::TextWrapped("%s",material.id.starts_with("builtin:")?"Built-in material. Use File > Save As to create an editable material.":
-        !material.originModel.empty()?"Imported material properties are read-only.":"This material's properties are read-only.");
-    const bool canceled=document_.transactionActive() && ImGui::IsKeyPressed(ImGuiKey_Escape,false);
-    if(canceled)document_.cancel();
+    if(!editable)ImGui::TextDisabled("Read-only");
+    const bool escape=document_.transactionActive() && ImGui::IsKeyPressed(ImGuiKey_Escape,false);
+    const bool canceled=suppressFinalizedUpdate_ || escape;
+    suppressFinalizedUpdate_=false;
+    if(escape)document_.cancel();
     if(particleMaterialCompatible(material) || modelMaterialCompatible(material)) {
-        ImGui::BeginDisabled(!editable);
         const auto control=[&](const char* label,const auto& draw) {
             auto candidate=document_.definition();
+            ImGui::BeginDisabled(!editable);
             const bool changed=draw(candidate);
+            ImGui::EndDisabled();
             if(!editable)return;
             if(!canceled && (ImGui::IsItemActivated() || changed) && !document_.transactionActive())document_.begin(label);
             if(!canceled && changed)document_.update([&](auto& asset){asset=candidate;});
             if(ImGui::IsItemDeactivated() && document_.transactionActive())document_.commit();
         };
-        control("Change material shading",[](auto& asset) {
-            bool changed=false;
-            const auto& surface=asset.surface;
-            const bool unlitReady=surface.metallicRoughnessTexture.image.empty() && surface.normalTexture.image.empty() &&
-                surface.occlusionTexture.image.empty() && surface.emissiveTexture.image.empty() &&
-                (surface.baseColorTexture.image.empty() || surface.baseColorTexture.texCoord==0);
-            if(ImGui::BeginCombo("Shading",asset.shading==MaterialShading::Unlit?"Unlit":"Lit")) {
-                ImGui::BeginDisabled(!unlitReady);
-                if(ImGui::Selectable("Unlit",asset.shading==MaterialShading::Unlit) && asset.shading!=MaterialShading::Unlit) {
-                    asset.shading=MaterialShading::Unlit;asset.blend=MaterialBlend::Alpha;asset.surface.alphaMask=false;changed=true;
+        if(ImGui::CollapsingHeader("Material",ImGuiTreeNodeFlags_DefaultOpen)) {
+            control("Change material shading",[](auto& asset) {
+                bool changed=false;
+                const auto& surface=asset.surface;
+                const bool unlitReady=surface.metallicRoughnessTexture.image.empty() && surface.normalTexture.image.empty() &&
+                    surface.occlusionTexture.image.empty() && surface.emissiveTexture.image.empty() &&
+                    (surface.baseColorTexture.image.empty() || surface.baseColorTexture.texCoord==0);
+                if(ImGui::BeginCombo("Shading",asset.shading==MaterialShading::Unlit?"Unlit":"Lit")) {
+                    ImGui::BeginDisabled(!unlitReady);
+                    if(ImGui::Selectable("Unlit",asset.shading==MaterialShading::Unlit) && asset.shading!=MaterialShading::Unlit) {
+                        asset.shading=MaterialShading::Unlit;asset.blend=MaterialBlend::Alpha;asset.surface.alphaMask=false;changed=true;
+                    }
+                    ImGui::EndDisabled();
+                    if(!unlitReady && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled|ImGuiHoveredFlags_DelayShort))
+                        ImGui::SetTooltip("Requires empty lighting textures and base color UV0.");
+                    if(ImGui::Selectable("Lit",asset.shading==MaterialShading::StandardPbr) && asset.shading!=MaterialShading::StandardPbr) {
+                        asset.shading=MaterialShading::StandardPbr;asset.blend=MaterialBlend::Opaque;asset.surface.alphaMask=false;changed=true;
+                    }
+                    ImGui::EndCombo();
+                }
+                return changed;
+            });
+        }
+        const bool sprite=document_.definition().shading==MaterialShading::Unlit;
+        if(ImGui::CollapsingHeader("Appearance",ImGuiTreeNodeFlags_DefaultOpen)) {
+            control("Change material color",[](auto& asset) {
+                auto color=asset.surface.baseColor;for(size_t channel=0;channel<3;++channel)color[channel]=toSrgb(color[channel]);
+                const bool changed=ImGui::ColorEdit4("Color / opacity",color.data());
+                if(changed){for(size_t channel=0;channel<3;++channel)color[channel]=toLinear(std::clamp(color[channel],0.f,1.f));asset.surface.baseColor=color;}
+                return changed;
+            });
+            control("Change material blend",[&](auto& asset) {
+                int mode=sprite?(asset.blend==MaterialBlend::Alpha?0:1):(asset.blend==MaterialBlend::Opaque?0:1);
+                const bool changed=ImGui::Combo("Blend",&mode,sprite?"Alpha\0Additive\0":"Opaque\0Mask\0");
+                if(changed) {
+                    asset.blend=sprite?(mode==0?MaterialBlend::Alpha:MaterialBlend::Additive):(mode==0?MaterialBlend::Opaque:MaterialBlend::Mask);
+                    asset.surface.alphaMask=asset.blend==MaterialBlend::Mask;
+                }
+                return changed;
+            });
+            if(!sprite) {
+                if(document_.definition().blend==MaterialBlend::Mask)
+                    control("Change alpha cutoff",[](auto& asset){return ImGui::SliderFloat("Alpha cutoff",&asset.surface.alphaCutoff,0,1,"%.3f");});
+                control("Change roughness",[](auto& asset){return ImGui::SliderFloat("Roughness",&asset.surface.roughness,0,1,"%.3f");});
+                control("Change metallic",[](auto& asset){return ImGui::SliderFloat("Metallic",&asset.surface.metallic,0,1,"%.3f");});
+                control("Change double-sided rendering",[](auto& asset){return ImGui::Checkbox("Double sided",&asset.surface.doubleSided);});
+            }
+        }
+        if(ImGui::CollapsingHeader("UV mapping")) {
+            control("Link UV scale",[](auto& asset){return ImGui::Checkbox("Link scale XYZ",&asset.surface.uvScaleLinked);});
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))ImGui::SetTooltip("Lock the ratio between the three scale components.");
+            control("Change UV scale",[&](auto& asset) {
+                const auto before=asset.surface.uvScale;
+                const bool changed=ImGui::DragFloat3("Scale",asset.surface.uvScale.data(),.01f,0,0,"%.3f");
+                if(ImGui::IsItemActivated())uvScaleBaseline_=before;
+                if(changed && asset.surface.uvScaleLinked) {
+                    const auto baseline=ImGui::IsItemActive()?uvScaleBaseline_:before;
+                    for(unsigned axis=0;axis<3;++axis)if(asset.surface.uvScale[axis]!=before[axis]) {
+                        const auto value=asset.surface.uvScale[axis];
+                        if(std::abs(baseline[axis])>1e-8f)asset.surface.uvScale=baseline*(static_cast<double>(value)/baseline[axis]);
+                        else asset.surface.uvScale=before+Vec3{value-before[axis],value-before[axis],value-before[axis]};
+                        break;
+                    }
+                }
+                return changed;
+            });
+            control("Change UV offset",[](auto& asset){return ImGui::DragFloat3("Offset",asset.surface.uvOffset.data(),.01f,0,0,"%.3f");});
+            control("Change UV rotation",[](auto& asset){return ImGui::DragFloat3("Rotation (deg)",asset.surface.uvRotation.data(),.5f,0,0,"%.2f");});
+            control("Change triplanar mapping",[](auto& asset){return ImGui::Checkbox("Triplanar",&asset.surface.triplanar);});
+            ImGui::BeginDisabled(sprite || !document_.definition().surface.triplanar);
+            control("Change triplanar space",[](auto& asset){return ImGui::Checkbox("World Triplanar",&asset.surface.triplanarWorld);});
+            ImGui::EndDisabled();
+        }
+        if(ImGui::CollapsingHeader("Sampler")) {
+            const auto samplerSeed=[](const ModelMaterial& surface) {
+                for(const auto* slot:{&surface.baseColorTexture,&surface.metallicRoughnessTexture,&surface.normalTexture,&surface.occlusionTexture,&surface.emissiveTexture})
+                    if(!slot->image.empty())return materialSampler(surface,*slot);
+                return materialSampler(surface,surface.baseColorTexture);
+            };
+            if(!document_.definition().surface.sharedSampler) {
+                const auto& surface=document_.definition().surface;const auto seed=samplerSeed(surface);
+                bool mixed=false;
+                for(const auto* slot:{&surface.baseColorTexture,&surface.metallicRoughnessTexture,&surface.normalTexture,&surface.occlusionTexture,&surface.emissiveTexture})
+                    if(!slot->image.empty() && materialSampler(surface,*slot)!=seed)mixed=true;
+                ImGui::TextDisabled("%s",mixed?"Mixed samplers":"Per-texture sampler");
+                ImGui::BeginDisabled(!editable);
+                if(ImGui::Button("Use one sampler") && editable) {
+                    if(!document_.transactionActive() || document_.commit())
+                        document_.edit("Use shared material sampler",[&](auto& asset){asset.surface.sharedSampler=samplerSeed(asset.surface);});
                 }
                 ImGui::EndDisabled();
-                if(!unlitReady && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled|ImGuiHoveredFlags_DelayShort))
-                    ImGui::SetTooltip("Clear the lighting texture slots and use base color UV0 before switching to Unlit.");
-                if(ImGui::Selectable("Lit",asset.shading==MaterialShading::StandardPbr) && asset.shading!=MaterialShading::StandardPbr) {
-                    asset.shading=MaterialShading::StandardPbr;asset.blend=MaterialBlend::Opaque;asset.surface.alphaMask=false;changed=true;
+            }
+            control("Change material horizontal wrapping",[&](auto& asset) {
+                auto sampler=samplerSeed(asset.surface);int mode=static_cast<int>(sampler.wrapU);
+                const bool changed=ImGui::Combo("Wrap U",&mode,"Repeat\0Clamp\0Mirror\0");
+                if(changed){sampler.wrapU=static_cast<ModelWrap>(mode);asset.surface.sharedSampler=sampler;}return changed;
+            });
+            control("Change material vertical wrapping",[&](auto& asset) {
+                auto sampler=samplerSeed(asset.surface);int mode=static_cast<int>(sampler.wrapV);
+                const bool changed=ImGui::Combo("Wrap V",&mode,"Repeat\0Clamp\0Mirror\0");
+                if(changed){sampler.wrapV=static_cast<ModelWrap>(mode);asset.surface.sharedSampler=sampler;}return changed;
+            });
+            control("Change material filtering",[&](auto& asset) {
+                auto sampler=samplerSeed(asset.surface);const bool nearest=sampler.magFilter==ModelFilter::Nearest;bool changed=false;
+                if(ImGui::BeginCombo("Filtering",nearest?"Nearest":"Linear")) {
+                    if(ImGui::Selectable("Nearest",nearest)){sampler.magFilter=ModelFilter::Nearest;sampler.minFilter=ModelFilter::NearestMipmapNearest;changed=true;}
+                    if(ImGui::Selectable("Linear",!nearest)){sampler.magFilter=ModelFilter::Linear;sampler.minFilter=ModelFilter::LinearMipmapLinear;changed=true;}
+                    ImGui::EndCombo();
                 }
-                ImGui::EndCombo();
-            }
-            return changed;
-        });
-        const bool sprite=document_.definition().shading==MaterialShading::Unlit;
-        ImGui::SeparatorText("Appearance");
-        control("Change material color",[](auto& asset) {
-            auto color=asset.surface.baseColor;for(size_t channel=0;channel<3;++channel)color[channel]=toSrgb(color[channel]);
-            const bool changed=ImGui::ColorEdit4("Color / opacity",color.data());
-            if(changed){for(size_t channel=0;channel<3;++channel)color[channel]=toLinear(std::clamp(color[channel],0.f,1.f));asset.surface.baseColor=color;}
-            return changed;
-        });
-        if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))ImGui::SetTooltip("%s",sprite?
-            "Color is edited in sRGB and stored in linear space. Alpha is linear.\nMultiplied by the effect's tint, opacity and intensity.":
-            "Color is edited in sRGB and stored in linear space. Alpha is linear.\nAn assigned base color texture is multiplied by this color.");
-        control("Change material blend",[&](auto& asset) {
-            int mode=sprite?(asset.blend==MaterialBlend::Alpha?0:1):(asset.blend==MaterialBlend::Opaque?0:1);
-            const bool changed=ImGui::Combo("Blend",&mode,sprite?"Alpha\0Additive\0":"Opaque\0Mask\0");
-            if(changed) {
-                asset.blend=sprite?(mode==0?MaterialBlend::Alpha:MaterialBlend::Additive):(mode==0?MaterialBlend::Opaque:MaterialBlend::Mask);
-                asset.surface.alphaMask=asset.blend==MaterialBlend::Mask;
-            }
-            return changed;
-        });
-        if(sprite && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))ImGui::SetTooltip("Alpha covers the scene behind the sprite. Additive adds light.\nBoth use texture alpha, material alpha and effect opacity.");
-        if(!sprite) {
-            if(document_.definition().blend==MaterialBlend::Mask)
-                control("Change alpha cutoff",[](auto& asset){return ImGui::SliderFloat("Alpha cutoff",&asset.surface.alphaCutoff,0,1,"%.3f");});
-            control("Change roughness",[](auto& asset){return ImGui::SliderFloat("Roughness",&asset.surface.roughness,0,1,"%.3f");});
-            control("Change metallic",[](auto& asset){return ImGui::SliderFloat("Metallic",&asset.surface.metallic,0,1,"%.3f");});
-            control("Change double-sided rendering",[](auto& asset){return ImGui::Checkbox("Double sided",&asset.surface.doubleSided);});
+                if(changed)asset.surface.sharedSampler=sampler;return changed;
+            });
         }
-        ImGui::SeparatorText("UV mapping");
-        control("Link UV scale",[](auto& asset){return ImGui::Checkbox("Link scale XYZ",&asset.surface.uvScaleLinked);});
-        if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))ImGui::SetTooltip("Lock the ratio between the three scale components.");
-        control("Change UV scale",[&](auto& asset) {
-            const auto before=asset.surface.uvScale;
-            const bool changed=ImGui::DragFloat3("Scale",asset.surface.uvScale.data(),.01f,0,0,"%.3f");
-            if(ImGui::IsItemActivated())uvScaleBaseline_=before;
-            if(changed && asset.surface.uvScaleLinked) {
-                const auto baseline=ImGui::IsItemActive()?uvScaleBaseline_:before;
-                for(unsigned axis=0;axis<3;++axis)if(asset.surface.uvScale[axis]!=before[axis]) {
-                    const auto value=asset.surface.uvScale[axis];
-                    if(std::abs(baseline[axis])>1e-8f)asset.surface.uvScale=baseline*(static_cast<double>(value)/baseline[axis]);
-                    else asset.surface.uvScale=before+Vec3{value-before[axis],value-before[axis],value-before[axis]};
-                    break;
-                }
-            }
-            return changed;
-        });
-        control("Change UV offset",[](auto& asset){return ImGui::DragFloat3("Offset",asset.surface.uvOffset.data(),.01f,0,0,"%.3f");});
-        control("Change UV rotation",[](auto& asset){return ImGui::DragFloat3("Rotation (deg)",asset.surface.uvRotation.data(),.5f,0,0,"%.2f");});
-        control("Change triplanar mapping",[](auto& asset){return ImGui::Checkbox("Triplanar",&asset.surface.triplanar);});
-        ImGui::BeginDisabled(sprite || !document_.definition().surface.triplanar);
-        control("Change triplanar space",[](auto& asset){return ImGui::Checkbox("World Triplanar",&asset.surface.triplanarWorld);});
-        ImGui::EndDisabled();
-        if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Project in world coordinates so scaling a mesh adds texture repeats.\nThe texture stays fixed in the world when the mesh moves or rotates.\nDisabled uses mesh-local coordinates, which stretch with entity scale.");
-        ImGui::TextWrapped("%s",sprite?
-            "Sprites use XY scale and offset, and Z rotation. Triplanar projection applies to 3D surfaces.":
-            "UV mapping uses XY scale and offset, and Z rotation. Triplanar uses local or world XYZ coordinates. Transform order: scale, rotate, offset.");
-        ImGui::SeparatorText("Sampler");
-        const auto samplerSeed=[](const ModelMaterial& surface) {
-            for(const auto* slot:{&surface.baseColorTexture,&surface.metallicRoughnessTexture,&surface.normalTexture,&surface.occlusionTexture,&surface.emissiveTexture})
-                if(!slot->image.empty())return materialSampler(surface,*slot);
-            return materialSampler(surface,surface.baseColorTexture);
-        };
-        if(!document_.definition().surface.sharedSampler) {
-            const auto& surface=document_.definition().surface;const auto seed=samplerSeed(surface);
-            bool mixed=false;
-            for(const auto* slot:{&surface.baseColorTexture,&surface.metallicRoughnessTexture,&surface.normalTexture,&surface.occlusionTexture,&surface.emissiveTexture})
-                if(!slot->image.empty() && materialSampler(surface,*slot)!=seed)mixed=true;
-            ImGui::TextDisabled("%s",mixed?"Mixed legacy samplers":"Legacy samplers (preserved)");
-            ImGui::TextWrapped("Changing this sampler applies it to every texture. Existing sampling stays unchanged until then.");
-            if(ImGui::Button("Use one sampler") && editable) {
-                if(!document_.transactionActive() || document_.commit())
-                    document_.edit("Use shared material sampler",[&](auto& asset){asset.surface.sharedSampler=samplerSeed(asset.surface);});
-            }
-        }
-        control("Change material horizontal wrapping",[&](auto& asset) {
-            auto sampler=samplerSeed(asset.surface);int mode=static_cast<int>(sampler.wrapU);
-            const bool changed=ImGui::Combo("Wrap U",&mode,"Repeat\0Clamp\0Mirror\0");
-            if(changed){sampler.wrapU=static_cast<ModelWrap>(mode);asset.surface.sharedSampler=sampler;}return changed;
-        });
-        control("Change material vertical wrapping",[&](auto& asset) {
-            auto sampler=samplerSeed(asset.surface);int mode=static_cast<int>(sampler.wrapV);
-            const bool changed=ImGui::Combo("Wrap V",&mode,"Repeat\0Clamp\0Mirror\0");
-            if(changed){sampler.wrapV=static_cast<ModelWrap>(mode);asset.surface.sharedSampler=sampler;}return changed;
-        });
-        control("Change material filtering",[&](auto& asset) {
-            auto sampler=samplerSeed(asset.surface);const bool nearest=sampler.magFilter==ModelFilter::Nearest;bool changed=false;
-            if(ImGui::BeginCombo("Filtering",nearest?"Nearest":"Linear")) {
-                if(ImGui::Selectable("Nearest",nearest)){sampler.magFilter=ModelFilter::Nearest;sampler.minFilter=ModelFilter::NearestMipmapNearest;changed=true;}
-                if(ImGui::Selectable("Linear",!nearest)){sampler.magFilter=ModelFilter::Linear;sampler.minFilter=ModelFilter::LinearMipmapLinear;changed=true;}
-                ImGui::EndCombo();
-            }
-            if(changed)asset.surface.sharedSampler=sampler;return changed;
-        });
-        if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))ImGui::SetTooltip("Nearest keeps individual texture pixels sharp. Linear blends neighboring pixels.\nThis filter applies to every texture channel at all texture sizes.");
         const auto texture=[&](const char* title,ModelTexture ModelMaterial::* slot,bool normal=false) {
             ImGui::PushID(title);
             auto textureId=(document_.definition().surface.*slot).image.id;
+            ImGui::BeginDisabled(!editable);
             if(textureField(assets,title,textureId,message_,sprite,normal) && editable) {
                 if(!document_.transactionActive() || document_.commit())
                     document_.edit(std::string("Assign ")+title,[&](auto& asset){(asset.surface.*slot).image.id=textureId;});
             }
+            ImGui::EndDisabled();
             if(!sprite) {
                 ImGui::BeginDisabled(document_.definition().surface.triplanar);
                 control("Change texture UV set",[&](auto& asset){auto& source=asset.surface.*slot;int coordinate=static_cast<int>(source.texCoord);const bool changed=ImGui::Combo("UV set",&coordinate,"UV0\0UV1\0");if(changed)source.texCoord=static_cast<uint32_t>(coordinate);return changed;});
@@ -371,40 +378,44 @@ void MaterialEditor::properties(AssetLibrary& assets) {
             }
             ImGui::PopID();
         };
-        ImGui::SeparatorText("Textures");
-        texture(sprite?"Texture":"Base color texture",&ModelMaterial::baseColorTexture);
-        if(!sprite) {
-            if(ImGui::CollapsingHeader("Metallic / roughness texture")) {
-                texture("Metallic / roughness texture",&ModelMaterial::metallicRoughnessTexture);
-                ImGui::TextWrapped("Roughness uses the green channel; metallic uses the blue channel.");
-            }
-            if(ImGui::CollapsingHeader("Normal texture")) {
-                control("Change normal strength",[](auto& asset){return ImGui::DragFloat("Strength##normal",&asset.surface.normalScale,.01f,0,10,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
-                texture("Normal texture",&ModelMaterial::normalTexture,true);
-            }
-            if(ImGui::CollapsingHeader("Occlusion texture")) {
-                control("Change occlusion strength",[](auto& asset){return ImGui::SliderFloat("Strength##occlusion",&asset.surface.occlusionStrength,0,1,"%.3f");});
-                texture("Occlusion texture",&ModelMaterial::occlusionTexture);
-            }
-            if(ImGui::CollapsingHeader("Emission")) {
-                control("Change emissive color",[](auto& asset) {
-                    auto color=asset.surface.emissive;for(auto& channel:color)channel=toSrgb(channel);
-                    const bool changed=ImGui::ColorEdit3("Emissive color",color.data(),ImGuiColorEditFlags_HDR|ImGuiColorEditFlags_Float);
-                    if(changed){for(auto& channel:color)channel=toLinear(std::max(channel,0.f));asset.surface.emissive=color;}
-                    return changed;
-                });
-                texture("Emissive texture",&ModelMaterial::emissiveTexture);
+        if(ImGui::CollapsingHeader("Textures",ImGuiTreeNodeFlags_DefaultOpen)) {
+            texture(sprite?"Texture":"Base color texture",&ModelMaterial::baseColorTexture);
+            if(!sprite) {
+                if(ImGui::TreeNodeEx("Metallic / roughness texture",ImGuiTreeNodeFlags_SpanAvailWidth)) {
+                    texture("Metallic / roughness texture",&ModelMaterial::metallicRoughnessTexture);
+                    ImGui::TreePop();
+                }
+                if(ImGui::TreeNodeEx("Normal texture",ImGuiTreeNodeFlags_SpanAvailWidth)) {
+                    control("Change normal strength",[](auto& asset){return ImGui::DragFloat("Strength##normal",&asset.surface.normalScale,.01f,0,10,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+                    texture("Normal texture",&ModelMaterial::normalTexture,true);
+                    ImGui::TreePop();
+                }
+                if(ImGui::TreeNodeEx("Occlusion texture",ImGuiTreeNodeFlags_SpanAvailWidth)) {
+                    control("Change occlusion strength",[](auto& asset){return ImGui::SliderFloat("Strength##occlusion",&asset.surface.occlusionStrength,0,1,"%.3f");});
+                    texture("Occlusion texture",&ModelMaterial::occlusionTexture);
+                    ImGui::TreePop();
+                }
+                if(ImGui::TreeNodeEx("Emission",ImGuiTreeNodeFlags_SpanAvailWidth)) {
+                    control("Change emissive color",[](auto& asset) {
+                        auto color=asset.surface.emissive;for(auto& channel:color)channel=toSrgb(channel);
+                        const bool changed=ImGui::ColorEdit3("Emissive color",color.data(),ImGuiColorEditFlags_HDR|ImGuiColorEditFlags_Float);
+                        if(changed){for(auto& channel:color)channel=toLinear(std::max(channel,0.f));asset.surface.emissive=color;}
+                        return changed;
+                    });
+                    texture("Emissive texture",&ModelMaterial::emissiveTexture);
+                    ImGui::TreePop();
+                }
             }
         }
-        ImGui::EndDisabled();
         if(document_.transactionActive() && !ImGui::IsAnyItemActive())document_.commit();
     } else {
-        ImGui::SeparatorText("Appearance");
-        ImGui::Text("Color: %.3f, %.3f, %.3f / alpha %.3f",toSrgb(material.surface.baseColor[0]),toSrgb(material.surface.baseColor[1]),toSrgb(material.surface.baseColor[2]),material.surface.baseColor[3]);
-        ImGui::Text("Roughness: %.3f",material.surface.roughness);
-        ImGui::Text("Metallic: %.3f",material.surface.metallic);
-        const auto& image=material.surface.baseColorTexture.image.id;
-        ImGui::TextWrapped("Texture: %s",image.empty()?"None":assets.displayName(image).c_str());
+        if(ImGui::CollapsingHeader("Appearance",ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Text("Color: %.3f, %.3f, %.3f / alpha %.3f",toSrgb(material.surface.baseColor[0]),toSrgb(material.surface.baseColor[1]),toSrgb(material.surface.baseColor[2]),material.surface.baseColor[3]);
+            ImGui::Text("Roughness: %.3f",material.surface.roughness);
+            ImGui::Text("Metallic: %.3f",material.surface.metallic);
+            const auto& image=material.surface.baseColorTexture.image.id;
+            ImGui::TextWrapped("Texture: %s",image.empty()?"None":assets.displayName(image).c_str());
+        }
     }
     const auto diagnostic=assets.materialDiagnostic(document_.assetId());
     if(!diagnostic.empty())ImGui::TextWrapped("%s",diagnostic.c_str());
@@ -430,29 +441,19 @@ void MaterialEditor::draw(AssetLibrary& assets,Renderer& renderer,ResourceManage
     ImGui::SetNextWindowSizeConstraints({720,420},{FLT_MAX,FLT_MAX});
     bool visible=true;
     const auto title="Material Editor - "+document_.definition().name+(document_.dirty()?" *":"")+"###SpriteMaterial";
-    const bool contents=ImGui::Begin(title.c_str(),&visible,ImGuiWindowFlags_NoDocking|ImGuiWindowFlags_MenuBar);
+    const bool contents=ImGui::Begin(title.c_str(),&visible,DocumentEditorWindowFlags);
     if(!visible)request(Pending::Close,{},&assets);
     if(contents && isOpen()) {
-        if(ImGui::BeginMenuBar()) {
-            if(ImGui::BeginMenu("File")) {
-                if(ImGui::MenuItem("Save","Ctrl+S",false,canSave()))save(assets);
-                if(ImGui::MenuItem("Save As...","Ctrl+Shift+S",false,canSaveAs()))save(assets,true);
-                if(ImGui::MenuItem("Close"))request(Pending::Close,{},&assets);
-                ImGui::EndMenu();
-            }
-            if(ImGui::BeginMenu("Edit")) {
-                finishInteraction(&assets);
-                const auto undoLabel=canUndo()?"Undo "+document_.undoLabel():"Undo";
-                const auto redoLabel=canRedo()?"Redo "+document_.redoLabel():"Redo";
-                if(ImGui::MenuItem(undoLabel.c_str(),"Ctrl+Z",false,canUndo()))undo();
-                if(ImGui::MenuItem(redoLabel.c_str(),"Ctrl+Y",false,canRedo()))redo();
-                ImGui::EndMenu();
-            }
-            if(ImGui::BeginMenu("Environment")) {
-                preview_.environmentMenu(assets);
-                ImGui::EndMenu();
-            }
-            ImGui::EndMenuBar();
+        const auto action=drawDocumentEditorMenuBar([&]{finishInteraction(&assets);},[&] {
+            return DocumentEditorMenuState{canSave(),canSaveAs(),canUndo(),canRedo(),document_.undoLabel(),document_.redoLabel()};
+        },[&]{preview_.environmentMenu(assets);});
+        switch(action) {
+        case DocumentEditorAction::Save:save(assets);break;
+        case DocumentEditorAction::SaveAs:save(assets,true);break;
+        case DocumentEditorAction::Close:request(Pending::Close,{},&assets);break;
+        case DocumentEditorAction::Undo:undo();break;
+        case DocumentEditorAction::Redo:redo();break;
+        case DocumentEditorAction::None:break;
         }
         if(isOpen() && ImGui::BeginTable("Material workspace",2,ImGuiTableFlags_Resizable|ImGuiTableFlags_BordersInnerV)) {
             ImGui::TableSetupColumn("Properties",ImGuiTableColumnFlags_WidthFixed,340);

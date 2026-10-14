@@ -24,6 +24,7 @@ struct ExtractedScene {
     std::vector<DirectionalLight> directional;
     std::vector<PointLight> points;
     SceneEnvironment environment;
+    ProceduralSun proceduralSun;
     std::vector<ExtractedParticle> particles;
 };
 
@@ -41,11 +42,16 @@ Vec3 directionalLightDirection(const Mat4& world);
 
 using ModelBoundsQuery = std::function<std::optional<Aabb>(const std::string&)>;
 // Live particle bounds are already in world space and belong to the transient
-// runtime. Missing/stopped effects fall back to their authored marker position.
+// runtime. Use these for explicit focus/framing, not selection wires or pivots.
+// Missing/stopped effects fall back to their authored marker position.
 using ParticleBoundsQuery = std::function<std::optional<Aabb>(EntityId)>;
 // Parent selections include descendants once. Missing models, empty entities
 // and lights get a small, fixed world-space box around their world position.
 Aabb selectionBounds(const Scene& scene, std::span<const EntityId> selection,
                      const ModelBoundsQuery& modelBounds,const ParticleBoundsQuery& particleBounds = {});
+
+// Collision interiors are editor-selectable even without a rendered model.
+// Used only when the material-aware GPU model pick reports background.
+std::optional<EntityId> pickCollisionShape(const Scene& scene,const Ray& ray,float maximumDistance);
 
 } // namespace crimson

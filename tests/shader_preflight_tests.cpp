@@ -17,6 +17,8 @@
 #include "fs_sky.h"
 #include "vs_point_shadow.h"
 #include "fs_point_shadow.h"
+#include "cs_procedural_filter.h"
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 #include <vector>
@@ -38,6 +40,19 @@ int main() {
         check(!crimson::preflightShaderPair(cc_vs_particle,cc_fs_particle,cc_vs_model,cc_fs_model,diagnostic),"Instanced particle inputs must not replace the model program contract.");
         auto wrong=std::vector<std::uint8_t>(std::begin(cc_vs_model),std::end(cc_vs_model)); wrong[0]='F';
         check(!crimson::preflightShaderPair(wrong,cc_fs_model,cc_vs_model,cc_fs_model,diagnostic),"Wrong shader stage should fail safely.");
+        check(crimson::preflightComputeShader(cc_cs_procedural_filter,cc_cs_procedural_filter,diagnostic),diagnostic);
+        std::vector<std::uint8_t> compute(std::begin(cc_cs_procedural_filter),std::end(cc_cs_procedural_filter));
+        auto cutCompute=compute;cutCompute.pop_back();
+        check(!crimson::preflightComputeShader(cutCompute,cc_cs_procedural_filter,diagnostic),"Truncated compute trailer should fail safely.");
+        auto wrongCompute=compute;wrongCompute[0]='F';
+        check(!crimson::preflightComputeShader(wrongCompute,cc_cs_procedural_filter,diagnostic),"Wrong compute envelope stage was accepted.");
+        auto forgedCompute=std::vector<std::uint8_t>(std::begin(cc_fs_sky),std::end(cc_fs_sky));forgedCompute[0]='C';
+        check(!crimson::preflightComputeShader(forgedCompute,cc_cs_procedural_filter,diagnostic),"Pixel bytecode disguised as compute was accepted.");
+        const std::string uniform="u_proceduralSky";
+        const auto name=std::search(compute.begin(),compute.end(),uniform.begin(),uniform.end());
+        check(name!=compute.end(),"Compute fixture is missing its shared sky uniforms.");
+        *name='q';
+        check(!crimson::preflightComputeShader(compute,cc_cs_procedural_filter,diagnostic),"Changed compute uniform name was accepted.");
         std::cout<<"Shader container/reflection/interface checks passed.\n"; return 0;
     } catch (const std::exception& error) {std::cerr<<error.what()<<'\n';return 1;}
 }

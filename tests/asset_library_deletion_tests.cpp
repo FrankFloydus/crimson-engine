@@ -84,18 +84,74 @@ void legacyEnvironmentGlowPersistence(){
     Project p;ResourceManager resources;AssetLibrary library(p.root,&resources);
     const auto file=p.root/"assets/environment.json";
     writeFileAtomically(file,R"({"version":1,"map":"","enabled":false,"intensity":2.5,"rotation":35,"toneMapping":3})");
-    EnvironmentSettings environment;environment.glow={true,4,2,3};library.loadEnvironment(environment);
+    EnvironmentSettings environment;environment.glow={true,4,2,3};environment.source=EnvironmentSource::ProceduralSky;
+    environment.background={true,true,{1,0,0}};environment.fog={true,{1,0,0},.5f};
+    environment.fog.mode=FogMode::Depth;environment.fog.height=5;environment.fog.heightDensity=.3f;environment.fog.lightEnergy=4;
+    environment.debanding=true;
+    library.loadEnvironment(environment);
     require(!environment.glow.enabled && environment.glow==GlowSettings{} && environment.toneMapping==ToneMapping::AgX && environment.intensity==2.5f,
         "Legacy environment without Glow did not retain its old appearance and default Glow off.");
-    environment.glow={true,2.25f,3.5f,4.75f};library.saveEnvironment(environment);const auto saved=read(file);
+    require(environment.source==EnvironmentSource::Hdri && environment.procedural==ProceduralSkySettings{} &&
+        environment.background==EnvironmentBackground{} && environment.fog==FogSettings{} && !environment.debanding,
+        "Legacy environment gained procedural lighting, a visible/custom background or fog.");
+    environment.glow={true,2.25f,3.5f,4.75f};environment.source=EnvironmentSource::ProceduralSky;
+    environment.procedural={{.1f,.2f,.3f},{.3f,.4f,.5f},{.6f,.7f,.8f},{.8f,.6f,.4f},.7f,.4f,1.5f,45.f,.6f};
+    environment.background={false,true,{.12f,.23f,.34f}};environment.fog={true,{.4f,.5f,.6f},.025f};
+    environment.fog.mode=FogMode::Depth;environment.fog.depthBegin=15;environment.fog.depthEnd=0;
+    environment.fog.depthCurve=.7f;environment.fog.depthOpacity=.8f;
+    environment.fog.height=-4;environment.fog.heightDensity=-.025f;environment.fog.lightEnergy=2.5f;
+    environment.debanding=true;
+    library.saveEnvironment(environment);const auto saved=read(file);
     EnvironmentSettings reopened;library.loadEnvironment(reopened);
-    require(reopened.glow==environment.glow && reopened.intensity==environment.intensity && reopened.rotation==environment.rotation,
-        "Legacy environment Glow settings failed save/reopen.");
+    require(reopened==environment,"Legacy environment expanded settings failed exact save/reopen.");
+    require(nlohmann::json::parse(saved).at("version")==4,"Expanded legacy environment did not save the current file version.");
+    auto versionTwo=nlohmann::json::parse(saved);versionTwo["version"]=2;versionTwo.erase("debanding");
+    for(const auto* field:{"mode","depthBegin","depthEnd","depthCurve","depthOpacity","height","heightDensity","lightEnergy"})versionTwo["fog"].erase(field);
+    const auto versionTwoText=versionTwo.dump();writeFileAtomically(file,versionTwoText);
+    auto versionTwoExpected=environment;versionTwoExpected.fog={environment.fog.enabled,environment.fog.color,environment.fog.density};versionTwoExpected.debanding=false;
+    library.loadEnvironment(reopened);
+    require(reopened==versionTwoExpected && read(file)==versionTwoText,"Legacy v2 migration changed exponential fog or enabled depth/height/energy effects.");
+    auto versionThree=nlohmann::json::parse(saved);versionThree["version"]=3;versionThree.erase("debanding");
+    const auto versionThreeText=versionThree.dump();writeFileAtomically(file,versionThreeText);
+    auto versionThreeExpected=environment;versionThreeExpected.debanding=false;
+    library.loadEnvironment(reopened);
+    require(reopened==versionThreeExpected && read(file)==versionThreeText,"Legacy v3 migration changed existing settings or enabled Debanding.");
+    writeFileAtomically(file,saved);library.loadEnvironment(reopened);
+    require(reopened==environment,"Restoring extended fog after legacy load lost authored settings.");
     auto invalid=environment;invalid.glow.radius=9;library.saveEnvironment(invalid);
     require(read(file)==saved,"Invalid Glow settings replaced the saved legacy environment file.");
+    invalid=environment;invalid.fog.density=-.1f;library.saveEnvironment(invalid);
+    require(read(file)==saved,"Invalid fog density replaced the saved legacy environment file.");
+    invalid=environment;invalid.procedural.sunHaloExtent=invalid.procedural.sunDiameter*.5f;library.saveEnvironment(invalid);
+    require(read(file)==saved,"Invalid procedural sun shape replaced the saved legacy environment file.");
+    invalid=environment;invalid.background.color[0]=1.1f;library.saveEnvironment(invalid);
+    require(read(file)==saved,"Invalid background color replaced the saved legacy environment file.");
+    invalid=environment;invalid.fog.depthEnd=invalid.fog.depthBegin;library.saveEnvironment(invalid);
+    require(read(file)==saved,"Invalid depth range replaced the saved legacy environment file.");
+    invalid=environment;invalid.fog.depthOpacity=1.1f;library.saveEnvironment(invalid);
+    require(read(file)==saved,"Invalid depth opacity replaced the saved legacy environment file.");
+    invalid=environment;invalid.fog.lightEnergy=-1;library.saveEnvironment(invalid);
+    require(read(file)==saved,"Invalid fog light energy replaced the saved legacy environment file.");
     auto corrupt=nlohmann::json::parse(saved);corrupt["glow"]["strength"]=-1;writeFileAtomically(file,corrupt.dump());
     auto working=environment;library.loadEnvironment(working);
-    require(working.glow==environment.glow && working.rotation==environment.rotation,"Invalid legacy Glow load replaced working environment values.");
+    require(working==environment,"Invalid legacy Glow load replaced working environment values.");
+    for(const auto invalidDebanding:{nlohmann::json(0),nlohmann::json(1),nlohmann::json("true"),nlohmann::json(nullptr)}) {
+        corrupt=nlohmann::json::parse(saved);corrupt["debanding"]=invalidDebanding;
+        const auto invalidText=corrupt.dump();writeFileAtomically(file,invalidText);library.loadEnvironment(working);
+        require(working==environment && read(file)==invalidText,"Invalid Debanding load replaced working values or rewrote its source.");
+    }
+    corrupt=nlohmann::json::parse(saved);corrupt["fog"]["density"]=-1;writeFileAtomically(file,corrupt.dump());
+    library.loadEnvironment(working);require(working==environment,"Invalid legacy fog load replaced working environment values.");
+    corrupt=nlohmann::json::parse(saved);corrupt["procedural"]["skyCurve"]=0;writeFileAtomically(file,corrupt.dump());
+    library.loadEnvironment(working);require(working==environment,"Invalid legacy sky load replaced working environment values.");
+    corrupt=nlohmann::json::parse(saved);corrupt["fog"]["mode"]=1.5;writeFileAtomically(file,corrupt.dump());
+    library.loadEnvironment(working);require(working==environment,"Invalid legacy fog mode type replaced working environment values.");
+    corrupt=nlohmann::json::parse(saved);corrupt["fog"]["heightDensity"]="0.2";writeFileAtomically(file,corrupt.dump());
+    library.loadEnvironment(working);require(working==environment,"Invalid legacy height density type replaced working environment values.");
+    corrupt=nlohmann::json::parse(saved);corrupt["fog"]["depthCurve"]=0;writeFileAtomically(file,corrupt.dump());
+    library.loadEnvironment(working);require(working==environment,"Invalid legacy depth curve replaced working environment values.");
+    writeFileAtomically(file,saved);library.loadEnvironment(working);
+    require(working==environment && read(file)==saved,"Restoring a valid legacy file changed values or rewrote its source.");
 }
 
 void archivedLegacyWarnings(){
@@ -111,9 +167,10 @@ void archivedLegacyWarnings(){
     require(unused.error.empty()&&!unused.needsReferenceWarning(),"Archived sphere material/environment files triggered an asset dependency warning.");
     require(std::count_if(unused.usages.begin(),unused.usages.end(),[](const auto& use){return use.editorState;})==2,"Archived references were removed from full impact tracking.");
     const auto environment=active.createEnvironment();auto record=*active.scene().find(environment);record.environment->environment.map=image;
+    record.environment->environment.source=EnvironmentSource::ProceduralSky;
     require(active.updateEntity(environment,record),active.status());require(active.save(),active.status());library.refreshScenes();
     const auto used=library.planDeletion({image},&active);
-    require(used.error.empty()&&used.warningUsages.size()==1&&used.warningUsages.front().ownerId==active.assetId(),"A saved environment entity's actual image dependency was hidden with legacy settings.");
+    require(used.error.empty()&&used.warningUsages.size()==1&&used.warningUsages.front().ownerId==active.assetId(),"A procedural Environment's retained HDRI dependency was hidden with legacy settings.");
     std::vector<std::string> all;for(const auto& asset:library.catalog())all.push_back(asset.id);
     const auto deletingAll=library.planDeletion(all,&active);
     require(deletingAll.error.empty()&&!deletingAll.needsReferenceWarning(),"Selecting all usable browser assets left a legacy or same-batch owner warning.");

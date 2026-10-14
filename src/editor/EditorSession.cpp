@@ -54,6 +54,7 @@ void EditorSession::restoreSession(AssetLibrary& assets) {
             if (saved.at("version") != 1) throw std::runtime_error("Unsupported editor session version.");
             recoveredLegacy_=saved.value("recoveredLegacyPreview",false);
             if(saved.contains("panels")) { const auto& panels=saved.at("panels");editor_.setPanels({panels.value("outliner",true),panels.value("inspector",true),panels.value("assetBrowser",true),panels.value("game",false)}); }
+            if(saved.contains("overlays")) { const auto& overlays=saved.at("overlays");editor_.setOverlays({overlays.value("collisions",true),overlays.value("grid",true),overlays.value("transformGizmo",true)}); }
             const auto active=saved.value("scene",std::string{});
             if (!active.empty() && !document_.load(active)) { status_=document_.status(); unresolvedScene_=active; }
             if (saved.contains("cameras")) for (auto it=saved["cameras"].begin();it!=saved["cameras"].end();++it) {
@@ -106,7 +107,8 @@ void EditorSession::saveSession() noexcept {
             {"fov",camera.fov},{"near",camera.nearPlane},{"far",camera.farPlane}};
         writeFileAtomically(root_/"assets"/"editor-session.json",Json{{"version",1},{"scene",unresolvedScene_.empty() ? document_.assetId() : unresolvedScene_},
             {"recoveredLegacyPreview",recoveredLegacy_},{"cameras",std::move(cameras)},
-            {"panels",{{"outliner",editor_.panels().outliner},{"inspector",editor_.panels().inspector},{"assetBrowser",editor_.panels().assetBrowser},{"game",editor_.panels().game}}}}.dump(2));
+            {"panels",{{"outliner",editor_.panels().outliner},{"inspector",editor_.panels().inspector},{"assetBrowser",editor_.panels().assetBrowser},{"game",editor_.panels().game}}},
+            {"overlays",{{"collisions",editor_.overlays().collisions},{"grid",editor_.overlays().grid},{"transformGizmo",editor_.overlays().transformGizmo}}}}.dump(2));
     } catch (...) { /* Session state is expendable; authored scenes were saved explicitly. */ }
 }
 void EditorSession::filesChanged(std::span<const std::filesystem::path> paths) {
@@ -140,7 +142,8 @@ void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::ui
         }
     }
     const auto environment=resolveEnvironment(activeDocument().scene());
-    const auto map=assets.references().resolveEnvironment(environment.environment.map);
+    const auto map=environment.environment.source==EnvironmentSource::Hdri?
+        assets.references().resolveEnvironment(environment.environment.map):std::string{};
     if(preparedEnvironment_!=map || !environment_) {
         preparedEnvironment_=map; environmentRevision_=0;
         ResourceRequestOptions options;options.variant="ibl";
@@ -159,6 +162,7 @@ void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::ui
 }
 void EditorSession::cancelInteraction(Renderer& renderer) {
     editor_.cancelInteraction(activeDocument(),renderer);particleEditor_.cancelInteraction();materialEditor_.cancelInteraction();gameInput_.cancel();focusGame_=false;skipSimulationTime_=true;
+    playShortcuts_.cancel();playActionPending_=PlayAction::None;
 }
 void EditorSession::transitionPlay(Renderer& renderer,Navigation& navigation,bool stop) {
     editor_.cancelInteraction(activeDocument(),renderer);navigation.cancel();gameInput_.cancel();
@@ -177,8 +181,9 @@ void EditorSession::transitionPlay(Renderer& renderer,Navigation& navigation,boo
 void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& navigation, SDL_Window* window,
                           uint32_t bgfxFrame, bool quitRequested) {
     const bool forceStop=editor_.needsAuthoringDocument() || quitRequested || (play_.playing() && !editor_.panels().game);
-    if(togglePlayPending_ || (forceStop && play_.playing()))transitionPlay(renderer,navigation,forceStop);
-    togglePlayPending_=false;
+    if(play_.playing() && (forceStop || playActionPending_==PlayAction::Stop))transitionPlay(renderer,navigation,true);
+    else if(!play_.playing() && !forceStop && playActionPending_==PlayAction::Start)transitionPlay(renderer,navigation,false);
+    playActionPending_=PlayAction::None;
     auto& document=activeDocument();
     const auto previousAsset=document.assetId();
     const float simulationSeconds=simulationSuspended_ || skipSimulationTime_?0.f:ImGui::GetIO().DeltaTime;
@@ -186,7 +191,8 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     const auto previousCamera=settings_.camera;
     document.setPreviewCamera(settings_.camera);
     const auto frame=editor_.draw(document,settings_,assets,renderer,window,navigation.active(),bgfxFrame,quitRequested,particleEditor_,materialEditor_);
-    togglePlayPending_=frame.togglePlay;
+    const auto sceneCamera=frame.viewportCamera.value_or(settings_.camera);
+    if(frame.togglePlay)playActionPending_=play_.playing()?PlayAction::Stop:PlayAction::Start;
     if(frame.createParticle) particleEditor_.requestCreate(frame.particleFolder,assets);
     if(!frame.openParticle.empty()) particleEditor_.requestOpen(frame.openParticle,assets);
     if(frame.createMaterial)materialEditor_.requestCreate(frame.materialFolder,assets);
@@ -209,8 +215,8 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     auto dropped=frame.modelDropIds;
     if (!frame.modelDropId.empty()) dropped.push_back(frame.modelDropId);
     const auto placement=[&](const Vec2& mouse) {
-        auto position=settings_.camera.target;position[1]=0;
-        if(const auto ray=settings_.camera.screenRay(mouse[0],mouse[1],frame.viewport))
+        auto position=sceneCamera.target;position[1]=0;
+        if(const auto ray=sceneCamera.screenRay(mouse[0],mouse[1],frame.viewport))
             if(const auto hit=math::intersectPlane(*ray,{0,0,0},{0,1,0}))position=*hit;
         return position;
     };
@@ -219,7 +225,10 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
         document.createParticle(frame.particleDropId,assets.displayName(frame.particleDropId),math::translation(placement(frame.particleDropPosition)));
     bool gameOpen=editor_.panels().game;
     const auto game=gameView_.draw(document,renderer,gameOpen,play_.playing(),focusGame_);
-    if(!gameOpen) { editor_.hideGame();renderer.releaseGameViewport();if(play_.playing())togglePlayPending_=true; }
+    if(!gameOpen) { editor_.hideGame();renderer.releaseGameViewport();if(play_.playing())playActionPending_=PlayAction::Stop; }
+    const auto playShortcut=playShortcuts_.consume({play_.playing(),quitRequested || editor_.playTransitionBlocked(),
+        navigation.active() || document.transactionActive() || particleEditor_.transactionActive() || materialEditor_.transactionActive()});
+    if(playShortcut!=PlayAction::None)playActionPending_=playShortcut;
     auto gameCamera=resolveGameCamera(document.scene());
     auto* gameWindow=game.viewport.windowId?SDL_GetWindowFromID(game.viewport.windowId):nullptr;
     // ImGui focus selects the dock/tab; a detached Game also needs native
@@ -234,15 +243,15 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     focusGame_=focusGame_ && gameOpen && play_.playing() && !focusComplete;
     if(gameInput_.ownsKeyboard())navigation.cancel();
     auto sceneRegion=frame.viewport;sceneRegion.inputBlocked|=gameInput_.ownsKeyboard();
+    // Input still uses current-frame panel ownership. Its new pose becomes
+    // visible next frame, keeping this image aligned with its overlays/picks.
     navigation.update(settings_.camera,sceneRegion,ImGui::GetIO().DeltaTime,false);
-    const auto environment=resolveEnvironment(document.scene());settings_.environment=environment.environment;settings_.exposure=environment.exposure;
-    settings_.environment.map=assets.references().resolveEnvironment(settings_.environment.map);
     for(auto iterator=pendingDrops_.begin();iterator!=pendingDrops_.end();) {
         if(iterator->documentEpoch!=documentEpoch_) { iterator=pendingDrops_.erase(iterator);continue; }
         std::vector<ModelPlacement> placements;bool waiting=false;
         for(const auto& id:iterator->ids) {
             if(assets.references().resolve(id).empty()) { status_+="Dropped model was deleted: "+id+"\n";continue; }
-            const auto prepared=prepared_.prepare(id,math::translation(iterator->position),settings_.camera,renderer.height(),false,ResourcePriority::Placement,
+            const auto prepared=prepared_.prepare(id,math::translation(iterator->position),sceneCamera,renderer.height(),false,ResourcePriority::Placement,
                 std::max(1.f,frame.viewport.width)/std::max(1.f,frame.viewport.height));
             if(prepared && prepared->ready) placements.push_back({id,assets.displayName(id),math::translation(iterator->position)});
             else if(!prepared_.failed(id)) waiting=true;
@@ -258,6 +267,9 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     }
     const auto& renderScene=play_.playing()?play_.presentationScene():document.scene();
     const auto extracted=extractScene(renderScene);
+    settings_.environment=extracted.environment.environment;settings_.exposure=extracted.environment.exposure;
+    settings_.proceduralSun=extracted.proceduralSun;
+    settings_.environment.map=assets.references().resolveEnvironment(settings_.environment.map);
     gameCamera=resolveGameCamera(renderScene);
     auto& sceneParticles=play_.playing()?play_.particles():particles_;
     if(!play_.playing() || frame.playParticleEntity)sceneParticles.reconcile(document.documentGeneration(),extracted.particles,[&](const std::string& id) {
@@ -306,23 +318,25 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     for(const auto& model:extracted.models) {
         const bool selected=std::find(document.selection().ids.begin(),document.selection().ids.end(),model.id)!=document.selection().ids.end();
         if(!selected) if(const auto metadata=assets.findModel(model.assetId))
-            if(!visibleBounds(metadata->bounds,model.world,settings_.camera,std::max(1.0f,frame.viewport.width)/std::max(1.0f,frame.viewport.height)))continue;
-        if(auto prepared=prepared_.prepare(model.assetId,model.world,settings_.camera,renderer.height(),selected,ResourcePriority::Visible,
+            if(!visibleBounds(metadata->bounds,model.world,sceneCamera,std::max(1.0f,frame.viewport.width)/std::max(1.0f,frame.viewport.height)))continue;
+        if(auto prepared=prepared_.prepare(model.assetId,model.world,sceneCamera,renderer.height(),selected,ResourcePriority::Visible,
             std::max(1.f,frame.viewport.width)/std::max(1.f,frame.viewport.height),model.materialId)) {
             instances.push_back({model.id,{prepared->asset,model.world},&prepared->textures,prepared->revision,selected,true,&prepared->materials});
             instances.back().castShadows=model.castShadows;instances.back().receiveShadows=model.receiveShadows;
             pins->models.push_back(prepared);signature=(signature^prepared->signature)*1099511628211ull;
         }
     }
-    for(const auto& id:frame.placementPreviewIds) if(auto prepared=prepared_.prepare(id,math::translation(placement(frame.placementPreviewPosition)),settings_.camera,
+    for(const auto& id:frame.placementPreviewIds) if(auto prepared=prepared_.prepare(id,math::translation(placement(frame.placementPreviewPosition)),sceneCamera,
         renderer.height(),false,ResourcePriority::Placement,std::max(1.f,frame.viewport.width)/std::max(1.f,frame.viewport.height))) {
         instances.push_back({0,{prepared->asset,math::translation(placement(frame.placementPreviewPosition))},&prepared->textures,prepared->revision,false,false,&prepared->materials});
         instances.back().castShadows=false;instances.back().receiveShadows=false;pins->models.push_back(prepared);
     }
     renderer.setExternalResourceSignature(signature);
     renderer.setAppearance(editor_.appearance());
+    renderer.setGridVisible(editor_.overlays().grid);
+    auto sceneSettings=settings_;sceneSettings.camera=sceneCamera;
     if (frame.viewport.width > 0 && frame.viewport.height > 0)
-        renderer.render(RenderScene{settings_,{},nullptr,nullptr,instances,extracted.directional,extracted.points,true,pins,particlePackets_,particleMaterials_,
+        renderer.render(RenderScene{sceneSettings,{},nullptr,nullptr,instances,extracted.directional,extracted.points,true,pins,particlePackets_,particleMaterials_,
             pins->shadows->instances,document.documentGeneration(),editor_.pointShadowResolution()});
     if(gameOpen && game.pixelWidth && game.pixelHeight && gameCamera) {
         SceneSettings gameSettings=settings_;gameSettings.camera=*gameCamera;
@@ -340,7 +354,15 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
         renderer.renderGame(RenderScene{gameSettings,{},nullptr,nullptr,gameInstances,extracted.directional,extracted.points,true,gamePins,particlePackets_,particleMaterials_,
             pins->shadows->instances,document.documentGeneration(),editor_.pointShadowResolution()});
         gameInput_.setProjection(*gameCamera,game.pixelWidth,game.pixelHeight);
-        if(play_.playing() && play_.lastClickedGround())gameView_.drawClickMarker(*gameCamera,*play_.lastClickedGround());
+        gameView_.drawCollisions(*gameCamera,renderScene,editor_.overlays().collisions);
+        if(play_.playing()) {
+            const auto player=renderScene.find(renderScene.properties().playerCharacter);
+            if(player && player->character && player->character->showRoute) {
+                std::optional<Vec3> position;
+                if(const auto world=renderScene.worldTransform(player->id))position=math::transformPoint(*world,{0,0,0});
+                gameView_.drawRoute(*gameCamera,play_.lastClickedGround(),play_.remainingPath(),position);
+            }
+        }
     }
     visiblePreviewIds_=frame.visiblePreviewIds;viewportRegion_=frame.viewport;
     if(!play_.playing() && !document.assetId().empty() && !document.dirty()) try {
@@ -348,7 +370,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
         if(fingerprint!=savedPreviewFingerprint_) { savedPreviewFingerprint_=fingerprint;previews_->requestSceneSave(document.assetId()); }
     } catch(const std::exception& error){status_=error.what();}
     prepared_.endFrame();
-    const auto retained=renderer.modelResidentBytes()+renderer.thumbnailResidentBytes()+renderer.shadowResidentBytes()+renderer.glowResidentBytes();
+    const auto retained=renderer.modelResidentBytes()+renderer.thumbnailResidentBytes()+renderer.shadowResidentBytes()+renderer.glowResidentBytes()+renderer.environmentResidentBytes();
     assets.trimTextureCache(retained>=resources_.config().gpuRetentionBytes?0:resources_.config().gpuRetentionBytes-retained);
     if(!prepared_.status().empty())status_+=prepared_.status();
     if(!sceneParticles.status().empty())status_+=sceneParticles.status();
@@ -363,6 +385,9 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
         status_+="Particle rendering omitted "+std::to_string(particleDraw.dropped)+" packets; "+std::to_string(particleDraw.invalid)+" were invalid.\n";
     if(!previews_->status().empty())status_+=previews_->status();
     if(environment_.state()==ResourceState::Failed)status_+=environment_.diagnostic();
+    const auto& environmentStatus=renderer.environmentStatus();
+    if(environmentStatus.starts_with("Procedural sky") || environmentStatus.starts_with("Environment:"))
+        status_+=environmentStatus+'\n';
     if(!resourceStatus_.empty()) { if(!status_.empty())status_+='\n';status_+=resourceStatus_; }
     drawSceneDiagnostics(status_,renderer.pickingStatus(),renderer.modelStatus(),&renderer.shadowStats());
 }

@@ -1,5 +1,10 @@
 {
-  "assets": {},
+  "assets": {
+    "assets/materials/55f2270f21c4-0.crimson-material": {
+      "folder": "",
+      "name": "Ground"
+    }
+  },
   "folders": [],
   "version": 1
 }

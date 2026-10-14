@@ -149,6 +149,7 @@ public:
     bool publishEnvironment(const PreparedEnvironment&);
     bool publishThumbnailEnvironment(const PreparedEnvironment&);
     const std::string& environmentStatus() const;
+    std::size_t environmentResidentBytes() const;
     // Transactional GPU preparation outside frame submission. Failed preparation
     // preserves cached assets. Instances with the same ID share one GPU bundle.
     bool prepareModel(const ModelAsset& model);
@@ -177,6 +178,7 @@ public:
     void render(const RenderScene& scene);
     void render(const SceneSettings& settings, const MaterialTextures& textures = {});
     void setAppearance(const ViewportAppearance&);
+    void setGridVisible(bool visible);
     // Consumes the scene immediately; the pinned owner survives asynchronous readback.
     bool renderThumbnail(const std::string& id,std::uint64_t signature,const RenderScene&,
         std::uint16_t size = 512,std::shared_ptr<const void> pinned = {});
@@ -189,7 +191,7 @@ public:
     void trimThumbnailCache(std::size_t targetBytes);
     const std::string& thumbnailStatus() const;
     // Every candidate is created before any live program is replaced.
-    bool reloadPrograms(std::span<const RendererShaderPair>);
+    bool reloadPrograms(std::span<const RendererShaderPair>,std::span<const std::uint8_t> proceduralCompute={});
     const std::string& shaderStatus() const;
     std::uint64_t shaderSignature() const;
     bgfx::TextureHandle viewportTexture() const noexcept;
