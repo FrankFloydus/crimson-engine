@@ -220,12 +220,67 @@ void activeSceneAndFolderDeletion(){
     require(fs::exists(p.root/model->id)&&hasAsset(library,model->id),"Deleting a scene deleted a referenced model asset.");
     BrowserCatalog reopened(p.root);reopened.synchronize(library.catalog());require(!reopened.contains(folder)&&!reopened.contains(sceneId),"Deleted folder contents reappeared on reopening.");
 }
+void particleMaterialDeletionAndAuthority(){
+    Project p;auto material=createMaterialAsset(p.root,"Shared sprite");auto effect=createParticleAsset(p.root,"Sparks");
+    effect.emitter.material=AssetRef<MaterialAsset>{material.id};saveParticleAsset(p.root,effect);
+    SceneDocument scene(p.root);const auto entity=scene.createParticle(effect.id,"Placed effect",math::translation({2,3,4}));require(scene.save("Particle scene"),scene.status());
+    const auto sceneBytes=read(p.root/scene.assetId());ResourceManager resources;AssetLibrary library(p.root,&resources);
+    library.protectParticleDocument(effect.id);library.setParticleDocumentReferences({material.id},{material.id});
+    const auto plan=library.planDeletion({material.id},&scene);
+    require(plan.error.empty()&&plan.warningUsages.size()==1&&plan.warningUsages.front().ownerId==effect.id,
+        "Saved effect material dependency was missing, counted per scene instance, or inflated by active/history usages.");
+    require(std::any_of(plan.usages.begin(),plan.usages.end(),[](const auto& usage){return usage.historical;}),"Material deletion lost active particle history impact.");
+    finishDeletion(library,resources,plan,{},&scene);
+    require(!fs::exists(p.root/material.id)&&loadParticleAsset(p.root,effect.id).emitter.material.id==DefaultParticleMaterialId&&
+        library.references().resolveParticleMaterial(material.id)==DefaultParticleMaterialId,"Material deletion did not atomically install the protected sprite fallback.");
+    require(scene.scene().contains(entity)&&scene.scene().find(entity)->particle->id==effect.id&&read(p.root/scene.assetId())==sceneBytes,
+        "Deleting a sprite material removed its effect instance or modified the scene file.");
+    const auto fallback=library.preparedParticleMaterial(material.id);require(fallback->ready&&fallback->render.baseColor==Vec4{1,1,1,1}&&fallback->render.blend==ParticleBlendMode::Additive&&!bgfx::isValid(fallback->render.colorTexture),
+        "Deleted sprite material did not prepare the original white procedural appearance.");
+    library.protectParticleDocument({});library.setParticleDocumentReferences({},{});
+    const auto user=library.createMaterial("Live sprite");require(bool(user),library.status());library.protectMaterialDocument(user->id);
+    auto committed=*user;committed.surface.baseColor={.2f,.3f,.4f,.5f};library.publishMaterial(std::make_shared<MaterialAsset>(committed));
+    const auto revision=library.materialRevision(user->id);const auto first=library.preparedParticleMaterial(user->id);require(first->ready&&first->render.baseColor==committed.surface.baseColor,"Committed open material was not immediately visible.");
+    auto external=*user;external.surface.baseColor={.8f,.7f,.6f,1};saveMaterialAsset(p.root,external);library.onFileChanged(p.root/user->id);
+    require(library.materialRevision(user->id)==revision&&library.findMaterial(user->id)->surface.baseColor==committed.surface.baseColor,
+        "Background reload replaced open material document authority.");
+    library.protectMaterialDocument({});library.refreshMaterials();require(library.findMaterial(user->id)->surface.baseColor==external.surface.baseColor,"Closing material authority did not allow reload.");
+    const auto good=library.preparedParticleMaterial(user->id);writeFileAtomically(p.root/user->id,"{invalid");library.refreshMaterials();const auto retained=library.preparedParticleMaterial(user->id);
+    require(good->current&&retained->ready&&!retained->current&&!retained->diagnostic.empty()&&retained->signature==good->signature&&retained->render.baseColor==good->render.baseColor,
+        "Failed material reload lost the immutable last-good renderer packet or its diagnostic.");
+    saveMaterialAsset(p.root,external);library.refreshMaterials();require(library.preparedParticleMaterial(user->id)->diagnostic.empty(),"Corrected material reload retained a stale failure diagnostic.");
+}
+void spriteImageDeletionAndIncompatibleMaterial(){
+    Project p;const auto fixtures=model_test::writeModelFixtures(p.root/"source");const std::string image="assets/textures/sprite.png";
+    fs::create_directories(p.root/"assets/textures");fs::copy_file(fixtures.image,p.root/image);
+    auto sprite=createMaterialAsset(p.root,"Textured");sprite.blend=MaterialBlend::Alpha;sprite.surface.baseColorTexture.image=AssetRef<DecodedImage>{image};saveMaterialAsset(p.root,sprite);
+    auto effect=createParticleAsset(p.root,"Smoke");effect.emitter.material=AssetRef<MaterialAsset>{sprite.id};saveParticleAsset(p.root,effect);
+    ResourceManager resources;AssetLibrary library(p.root,&resources);const auto plan=library.planDeletion({image});
+    require(plan.error.empty()&&plan.warningUsages.size()==1&&plan.warningUsages.front().ownerId==sprite.id,
+        "Sprite image warnings counted transitive effects as direct image owners.");
+    finishDeletion(library,resources,plan);const auto cleared=loadMaterialAsset(p.root,sprite.id);
+    require(cleared.surface.baseColorTexture.image.empty()&&cleared.blend==MaterialBlend::Alpha&&library.references().resolveParticleTexture(image).empty(),
+        "Sprite image deletion lost blending or failed to persist procedural fallback.");
+    require(library.preparedParticleMaterial(sprite.id)->ready,"Cleared sprite image did not become a usable procedural material.");
+    auto pbr=defaultMaterialAsset();pbr.id="assets/materials/pbr.crimson-material";pbr.name="PBR";saveMaterialAsset(p.root,pbr);library.refreshMaterials();
+    const auto before=read(p.root/effect.id);const auto deletion=library.planDeletion({sprite.id});
+    const auto candidates=library.fallbackCandidates(sprite.id);require(std::none_of(candidates.begin(),candidates.end(),[&](const auto& entry){return entry.id==pbr.id;}),"Sprite deletion offered an incompatible PBR fallback.");
+    require(!library.deleteAssets(deletion,{{sprite.id,pbr.id}}),"Incompatible material fallback was published.");
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(20);
+    while(library.deletionPending()&&std::chrono::steady_clock::now()<deadline){resources.pump();(void)library.pumpDeletion(nullptr);std::this_thread::sleep_for(std::chrono::milliseconds(1));}
+    require(!library.deletionPending()&&fs::exists(p.root/sprite.id)&&read(p.root/effect.id)==before&&library.references().resolveMaterial(sprite.id)==sprite.id,
+        "Incompatible sprite material fallback changed authored files or the published policy.");
+    require(!library.preparedParticleMaterial(pbr.id)->ready&&!library.preparedParticleMaterial(pbr.id)->diagnostic.empty(),"Explicit unsupported PBR sprite assignment was silently treated as a particle default.");
+    const auto model=seedModel(p,true);library.refreshMaterials();require(library.modelMaterialsReady(*model),"Synchronously authored imported material metadata did not satisfy model readiness.");
+    auto unsupported=loadMaterialAsset(p.root,model->materialIds.front());unsupported.shading=MaterialShading::Unlit;unsupported.blend=MaterialBlend::Additive;library.publishMaterial(std::make_shared<MaterialAsset>(unsupported));
+    require(!library.modelMaterialsReady(*model)&&!library.modelMaterialsDiagnostic(*model).empty(),"Model renderer silently accepted a sprite-only material mode.");
+}
 }
 
 int main(){try{
     // No renderer is initialized and no GPU preparation is advanced. The public
     // runtime AssetLibrary path, reference index and worker deletion pipeline
     // operate on disposable managed data and immutable CPU resources only.
-    warningQueries();archivedLegacyWarnings();embeddedMaterialWarningOwners();removeModelAcrossScenes(false);removeModelAcrossScenes(true);fallbackReopening();cancelAndStaleDeletion();activeSceneAndFolderDeletion();
+    warningQueries();archivedLegacyWarnings();embeddedMaterialWarningOwners();removeModelAcrossScenes(false);removeModelAcrossScenes(true);fallbackReopening();cancelAndStaleDeletion();activeSceneAndFolderDeletion();particleMaterialDeletionAndAuthority();spriteImageDeletionAndIncompatibleMaterial();
     std::cout<<"Public AssetLibrary deletion, warning, fallback and document integration checks passed.\n";return 0;
 }catch(const std::exception& error){std::cerr<<"AssetLibrary deletion test failed: "<<error.what()<<'\n';return 1;}}

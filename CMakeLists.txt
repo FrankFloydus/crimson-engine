@@ -53,10 +53,16 @@ target_link_libraries(crimson-scene PUBLIC crimson-math crimson-storage EnTT::En
 target_compile_definitions(crimson-scene PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(crimson-scene PRIVATE /W4 /permissive- /utf-8)
 
+add_library(crimson-materials src/assets/MaterialAsset.cpp src/editor/MaterialDocument.cpp)
+target_include_directories(crimson-materials PUBLIC src)
+target_link_libraries(crimson-materials PUBLIC crimson-math crimson-storage nlohmann_json::nlohmann_json)
+target_compile_definitions(crimson-materials PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(crimson-materials PRIVATE /W4 /permissive- /utf-8)
+
 add_library(crimson-particles src/assets/ParticleAsset.cpp src/editor/ParticleDocument.cpp
     src/particles/CpuParticleSystem.cpp src/editor/SceneParticles.cpp)
 target_include_directories(crimson-particles PUBLIC src)
-target_link_libraries(crimson-particles PUBLIC crimson-math crimson-storage crimson-scene nlohmann_json::nlohmann_json)
+target_link_libraries(crimson-particles PUBLIC crimson-math crimson-storage crimson-scene crimson-materials nlohmann_json::nlohmann_json)
 target_compile_definitions(crimson-particles PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(crimson-particles PRIVATE /W4 /permissive- /utf-8)
 
@@ -101,6 +107,7 @@ cc_shader(vs_pick vertex model.varying.def.sc)
 cc_shader(fs_pick fragment model.varying.def.sc)
 cc_shader(vs_present vertex varying.def.sc)
 cc_shader(fs_present fragment varying.def.sc)
+cc_shader(fs_sky fragment varying.def.sc)
 cc_shader(vs_grid vertex varying.def.sc)
 cc_shader(fs_grid fragment varying.def.sc)
 cc_shader(fs_encode fragment varying.def.sc)
@@ -113,6 +120,7 @@ add_executable(crimson-renderer WIN32
     src/app/Options.cpp src/app/DiagnosticSession.cpp
     src/editor/EditorSession.cpp src/editor/SceneEditor.cpp src/editor/SceneViewport.cpp src/editor/ViewportAssetDrop.cpp
     src/editor/EditorPreferences.cpp src/editor/EditorResources.cpp src/editor/AssetPreviews.cpp
+    src/editor/MaterialPreview.cpp src/editor/MaterialPreviewNavigation.cpp
     src/editor/ResourceRuntime.cpp src/editor/SceneShortcuts.cpp
     src/resources/ShaderReloadSession.cpp src/resources/TextureStreamer.cpp
     src/platform/WindowIcon.cpp src/platform/WindowIcon.h
@@ -129,9 +137,10 @@ add_executable(crimson-renderer WIN32
     src/tools/InspectorTransform.cpp
     src/tools/AssetBrowser.cpp
     src/tools/ParticleEditor.cpp
+    src/tools/MaterialEditor.cpp
     src/input/Navigation.h src/input/Navigation.cpp
     src/assets/AssetLibrary.h src/assets/AssetLibrary.cpp
-    src/assets/MaterialAsset.cpp src/assets/AssetReferenceManager.cpp src/assets/AsyncImports.cpp src/assets/ImageImportStage.cpp src/assets/DeletionPreparation.cpp
+    src/assets/AssetReferenceManager.cpp src/assets/AsyncImports.cpp src/assets/ImageImportStage.cpp src/assets/DeletionPreparation.cpp
     src/assets/BrowserCatalog.cpp
     src/assets/ModelAsset.h src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp src/assets/MaterialPreviewGeometry.cpp
     "${CC_GENERATED_DIR}/CrimsonResources.rc"
@@ -161,6 +170,18 @@ if(BUILD_TESTING)
     target_link_libraries(particle_tests PRIVATE crimson-particles)
     target_compile_options(particle_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME particle_core COMMAND particle_tests)
+    add_executable(material_document_tests tests/material_document_tests.cpp)
+    target_link_libraries(material_document_tests PRIVATE crimson-materials)
+    target_compile_options(material_document_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME material_document_core COMMAND material_document_tests)
+    add_executable(material_preview_navigation_tests tests/material_preview_navigation_tests.cpp src/editor/MaterialPreviewNavigation.cpp)
+    target_link_libraries(material_preview_navigation_tests PRIVATE crimson-math)
+    target_compile_options(material_preview_navigation_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME material_preview_navigation_core COMMAND material_preview_navigation_tests)
+    add_executable(material_preview_geometry_tests tests/material_preview_geometry_tests.cpp src/assets/MaterialPreviewGeometry.cpp)
+    target_link_libraries(material_preview_geometry_tests PRIVATE crimson-resources)
+    target_compile_options(material_preview_geometry_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME material_preview_geometry_core COMMAND material_preview_geometry_tests)
     add_executable(render_tests tests/render_tests.cpp src/crimson-renderer/Mesh.cpp src/crimson-renderer/RenderTypes.cpp src/input/Navigation.cpp)
     target_include_directories(render_tests PRIVATE src)
     target_compile_options(render_tests PRIVATE /W4 /permissive- /utf-8)
@@ -172,11 +193,11 @@ if(BUILD_TESTING)
     target_compile_options(environment_tests PRIVATE /W4 /permissive- /utf-8)
     target_link_libraries(environment_tests PRIVATE crimson-math bgfx::bgfx bgfx::bx bgfx::bimg_decode)
     add_test(NAME environment_core COMMAND environment_tests)
-    add_executable(model_tests tests/model_tests.cpp src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp src/assets/MaterialAsset.cpp)
+    add_executable(model_tests tests/model_tests.cpp src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp)
     target_include_directories(model_tests PRIVATE src tests "${CC_CGLTF_INCLUDE}")
     target_compile_definitions(model_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_compile_options(model_tests PRIVATE /W4 /permissive- /utf-8)
-    target_link_libraries(model_tests PRIVATE crimson-math crimson-storage bgfx::bimg_decode bgfx::bimg bgfx::bx lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace)
+    target_link_libraries(model_tests PRIVATE crimson-math crimson-storage crimson-materials bgfx::bimg_decode bgfx::bimg bgfx::bx lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace)
     add_test(NAME model_core COMMAND model_tests)
     add_executable(math_tests tests/math_tests.cpp src/crimson-renderer/RenderTypes.cpp)
     target_include_directories(math_tests PRIVATE src)
@@ -211,7 +232,7 @@ if(BUILD_TESTING)
     target_compile_options(streaming_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME streaming_core COMMAND streaming_tests)
 
-    add_executable(asset_resource_tests tests/asset_resource_tests.cpp src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp src/assets/MaterialAsset.cpp
+    add_executable(asset_resource_tests tests/asset_resource_tests.cpp src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp
         src/assets/AssetReferenceManager.cpp src/assets/BrowserCatalog.cpp src/assets/ImageImportStage.cpp src/assets/DeletionPreparation.cpp)
     target_include_directories(asset_resource_tests PRIVATE src tests "${CC_CGLTF_INCLUDE}")
     target_compile_definitions(asset_resource_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -255,7 +276,7 @@ if(BUILD_TESTING)
     target_include_directories(native_resource_tests PRIVATE src "${CC_GENERATED_DIR}")
     target_compile_definitions(native_resource_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_compile_options(native_resource_tests PRIVATE /W4 /permissive- /utf-8)
-    target_link_libraries(native_resource_tests PRIVATE crimson-resources SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng)
+    target_link_libraries(native_resource_tests PRIVATE crimson-resources crimson-materials SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng)
     add_test(NAME native_resource_core COMMAND native_resource_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
     set_tests_properties(native_resource_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 90)
     add_executable(preview_dependencies_tests tests/preview_dependencies_tests.cpp)
@@ -265,7 +286,7 @@ if(BUILD_TESTING)
 
     add_executable(asset_library_deletion_tests tests/asset_library_deletion_tests.cpp
         src/assets/AssetLibrary.cpp src/assets/AsyncImports.cpp src/resources/TextureStreamer.cpp
-        src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp src/assets/MaterialAsset.cpp src/assets/AssetReferenceManager.cpp
+        src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp src/assets/AssetReferenceManager.cpp
         src/assets/BrowserCatalog.cpp src/assets/ImageImportStage.cpp src/assets/DeletionPreparation.cpp)
     target_include_directories(asset_library_deletion_tests PRIVATE src tests "${CC_CGLTF_INCLUDE}")
     target_compile_definitions(asset_library_deletion_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -276,7 +297,7 @@ if(BUILD_TESTING)
 
     add_executable(import_identity_tests tests/import_identity_tests.cpp
         src/assets/AssetLibrary.cpp src/assets/AsyncImports.cpp src/resources/TextureStreamer.cpp
-        src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp src/assets/MaterialAsset.cpp src/assets/AssetReferenceManager.cpp
+        src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp src/assets/AssetReferenceManager.cpp
         src/assets/BrowserCatalog.cpp src/assets/ImageImportStage.cpp src/assets/DeletionPreparation.cpp)
     target_include_directories(import_identity_tests PRIVATE src tests "${CC_CGLTF_INCLUDE}")
     target_compile_definitions(import_identity_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)

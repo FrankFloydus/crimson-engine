@@ -22,7 +22,7 @@
 
 namespace crimson {
 namespace {
-constexpr uint32_t PreviewVersion=3,PreviewSize=512;
+constexpr uint32_t PreviewVersion=4,PreviewSize=512;
 using streaming::detail::hash;
 uint64_t textHash(std::string_view text) { auto result=streaming::detail::HashSeed; hash(result,text.data(),text.size()); return result; }
 void materialHash(uint64_t& value,const ModelMaterial& material) {
@@ -42,6 +42,7 @@ struct PreviewPins {
     std::shared_ptr<const MaterialAsset> material;
     std::vector<std::shared_ptr<const PreparedEditorModel>> models;
     std::shared_ptr<const PreparedEnvironment> environment;
+    std::shared_ptr<const PreparedParticleMaterial> particle;
 };
 bool texturesMatchSources(const AssetLibrary& assets,const std::filesystem::path& root,const PreviewDependencies& expected,
     std::span<const ModelMaterial> materials,std::span<const ModelMaterialTextures> bindings,ResourceManager& resources,
@@ -192,6 +193,7 @@ struct AssetPreviews::Impl {
         std::shared_ptr<const SceneSnapshot> sceneSnapshot; Aabb bounds;
         std::shared_ptr<const MaterialAsset> materialAsset;
         std::shared_ptr<const ModelAsset> materialGeometry;
+        bool spriteMaterial=false;
         std::vector<std::filesystem::path> files;
         uint64_t sourceKey=streaming::detail::HashSeed; hash(sourceKey,PreviewVersion); hash(sourceKey,id.data(),id.size()); hash(sourceKey,renderer.shaderSignature());
         if (entry.kind==AssetKind::Scene) {
@@ -204,14 +206,18 @@ struct AssetPreviews::Impl {
         } else if (entry.kind==AssetKind::Material) {
             materialAsset=assets.findMaterial(id);
             if (!materialAsset) { entry.error="Material is unavailable."; return; }
-            ModelAsset probe; probe.materialIds={id};
-            if (!assets.modelMaterialsReady(probe)) {
-                const auto diagnostic=assets.modelMaterialsDiagnostic(probe);
-                if (!diagnostic.empty()) entry.error=diagnostic;
-                return;
+            spriteMaterial=particleMaterialCompatible(*materialAsset);
+            if (!spriteMaterial) {
+                ModelAsset probe; probe.materialIds={id};
+                if (!assets.modelMaterialsReady(probe)) {
+                    const auto diagnostic=assets.modelMaterialsDiagnostic(probe);
+                    if (!diagnostic.empty()) entry.error=diagnostic;
+                    return;
+                }
+                materialGeometry=materialPreviewGeometry();
             }
-            materialGeometry=materialPreviewGeometry();
             const uint32_t materialPreviewVersion=1; hash(sourceKey,materialPreviewVersion);
+            hash(sourceKey,materialAsset->shading);hash(sourceKey,materialAsset->blend);
             materialHash(sourceKey,materialAsset->surface);
             if (!id.starts_with("builtin:")) files.push_back(root/pathFromUtf8(id));
             const auto& material=materialAsset->surface;
@@ -289,7 +295,30 @@ struct AssetPreviews::Impl {
         if (renderer.thumbnailBusy() || entry.rendering==signature) return;
         auto pins=std::make_shared<PreviewPins>(); pins->scene=sceneSnapshot; pins->material=materialAsset; pins->environment=bake;
         std::vector<RenderModelInstance> instances;
-        if (materialAsset) {
+        std::vector<RenderParticle> particles;
+        std::vector<RenderParticleMaterial> particleMaterials;
+        if (spriteMaterial) {
+            assets.setTextureDemand(PreviewSize);
+            const auto material=assets.preparedParticleMaterial(id);
+            if(!material || !material->ready || !material->current) { entry.error=material?material->diagnostic:"Sprite material is unavailable.";return; }
+            const auto& image=materialAsset->surface.baseColorTexture.image;
+            if(!image.empty()) {
+                const auto target=assets.references().resolveTexture(image.id,false);
+                if(!target.empty() && !target.starts_with("builtin:")) {
+                    const auto file=root/pathFromUtf8(target);
+                    if(!dependencies->sourceMatches(file,material->sourceFingerprint)) {
+                        if(const auto fingerprint=dependencies->sourceFingerprint(file);fingerprint && refreshedSources[resourcePathKey(file)]!=*fingerprint) {
+                            refreshedSources[resourcePathKey(file)]=*fingerprint;resources.invalidatePath(file);
+                        }
+                        return;
+                    }
+                }
+            }
+            pins->particle=material;particleMaterials.push_back(material->render);
+            particles.push_back({{0,0,0},2,{1,1,1,1},0});
+            if(!material->diagnostic.empty())entry.error=material->diagnostic;
+        }
+        if (materialAsset && !spriteMaterial) {
             assets.setTextureDemand(PreviewSize);
             auto candidate=std::make_shared<PreparedEditorModel>(); candidate->asset=materialGeometry;
             candidate->materials={materialAsset->surface}; candidate->textures=assets.modelBindings(*materialGeometry,candidate->materials);
@@ -329,7 +358,7 @@ struct AssetPreviews::Impl {
             if (!renderer.publishThumbnailEnvironment(*bake)) { entry.error=renderer.thumbnailStatus(); return; }
             thumbnailEnvironment=bake->key;
         }
-        if (renderer.renderThumbnail(id,signature,RenderScene{settings,{},nullptr,nullptr,instances,directions,points,true,pins},PreviewSize,pins)) entry.rendering=signature;
+        if (renderer.renderThumbnail(id,signature,RenderScene{settings,{},nullptr,nullptr,instances,directions,points,true,pins,particles,particleMaterials},PreviewSize,pins)) entry.rendering=signature;
         else { entry.error=renderer.thumbnailStatus().empty() ? "This renderer cannot create asset previews." : renderer.thumbnailStatus(); entry.failed=true; }
     }
 };

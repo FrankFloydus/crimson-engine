@@ -3,6 +3,8 @@
 #include "RenderTypes.h"
 #include "ParticleRenderTypes.h"
 #include "assets/ModelAsset.h"
+#include "assets/MaterialAsset.h"
+#include "assets/MaterialPreviewGeometry.h"
 #include "resources/StreamingModel.h"
 #include "resources/TextureMipCache.h"
 
@@ -40,6 +42,16 @@ struct ModelMaterialTextures {
     bool sourceReady{true};
 };
 
+// Prepared renderer values only. The color texture uses TextureStreamer's Color
+// role (hardware sRGB RGB decode, linear alpha); an absent texture is procedural.
+struct RenderParticleMaterial {
+    Vec4 baseColor{1,1,1,1}; // Linear factors, including opacity.
+    ParticleBlendMode blend{ParticleBlendMode::Additive};
+    bgfx::TextureHandle colorTexture{BGFX_INVALID_HANDLE};
+    std::uint32_t samplerFlags{UINT32_MAX};
+    std::shared_ptr<const void> pinned; // Material definition and texture leases.
+};
+
 inline constexpr std::size_t MaxDirectionalLights = 4;
 inline constexpr std::size_t MaxPointLights = 16;
 
@@ -50,6 +62,8 @@ struct RenderModelInstance {
     std::uint64_t resourceRevision{};
     bool forceFullDetail{false},pickable{true};
     const std::vector<ModelMaterial>* materials{nullptr};
+    MaterialShading shading{MaterialShading::StandardPbr};
+    MaterialBlend blend{MaterialBlend::Opaque};
 };
 
 struct PickRequest {
@@ -67,7 +81,7 @@ struct ThumbnailResult {
     std::uint64_t signature{};
     DecodedImage image;
 };
-enum class RendererProgram { Sphere, Model, Picking, Present, Grid, Encode, Particle };
+enum class RendererProgram { Sphere, Model, Picking, Present, Grid, Encode, Particle, Sky };
 struct RendererShaderPair { RendererProgram program; std::vector<std::uint8_t> vertex,fragment; };
 
 struct RenderScene {
@@ -81,6 +95,7 @@ struct RenderScene {
     bool sceneMode{false}; // A scene with no instances is empty; legacy mode previews a sphere.
     std::shared_ptr<const void> pinned;
     std::span<const RenderParticle> particles;
+    std::span<const RenderParticleMaterial> particleMaterials; // Empty uses procedural additive material 0.
 };
 
 // Owns the bgfx lifetime. Destroy ImGui's GPU resources before this object.
@@ -96,7 +111,14 @@ public:
     // Independent reusable preview; submission shares the application's one
     // bgfx frame and never modifies the main viewport targets or picking.
     void resizeParticlePreview(std::uint32_t width, std::uint32_t height);
-    void renderParticlePreview(const SceneSettings&, std::span<const RenderParticle>);
+    void resizeMaterialPreview(std::uint32_t width,std::uint32_t height);
+    void renderMaterialPreview(const SceneSettings&,const MaterialAsset&,const ModelMaterialTextures&,
+        MaterialPreviewMesh,const Mat4& objectTransform,bool showEnvironment,std::shared_ptr<const void> pins={});
+    bgfx::TextureHandle materialPreviewTexture() const noexcept;
+    void releaseMaterialPreview();
+    bool publishMaterialPreviewEnvironment(const PreparedEnvironment&);
+    void renderParticlePreview(const SceneSettings&, std::span<const RenderParticle>,
+                               std::span<const RenderParticleMaterial> = {});
     bgfx::TextureHandle particlePreviewTexture() const noexcept;
     void releaseParticlePreview();
     const ParticleRenderStats& particleStats() const noexcept;
@@ -112,6 +134,8 @@ public:
     bool prepareModel(const ModelAsset& model);
     void configureModelStream(const std::string&,std::uint64_t revision,const streaming::ModelStream&);
     bool queueModelLod(const std::string&,std::uint64_t revision,std::shared_ptr<const ModelGeometryLevel>);
+    // Once per owner frame, before submission; also rotates submitted material
+    // leases so GPU inputs survive completion of their queued rendering frame.
     void advanceStreaming(std::size_t uploadBytes = 4*1024*1024,double milliseconds = 2);
     bool modelStreamReady(const std::string&,std::uint64_t revision) const;
     bool modelLodReady(const std::string&,std::uint64_t revision,std::uint32_t primitive,std::uint32_t level) const;

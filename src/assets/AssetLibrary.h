@@ -33,6 +33,13 @@ struct TextureAsset {
     bgfx::TextureHandle dataTexture{BGFX_INVALID_HANDLE};
     bool colorAttempted{false}, dataAttempted{false};
 };
+struct PreparedParticleMaterial {
+    RenderParticleMaterial render;
+    bool ready{false};
+    bool current{false}; // A retained last-good packet is usable but not the requested revision.
+    std::uint64_t signature{},sourceFingerprint{};
+    std::string diagnostic;
+};
 
 class AssetLibrary {
 public:
@@ -46,6 +53,23 @@ public:
     const TextureAsset* find(const std::string& id) const;
     std::shared_ptr<const ModelAsset> findModel(const std::string& id) const;
     std::shared_ptr<const MaterialAsset> findMaterial(const std::string& id) const;
+    std::uint64_t materialRevision(const std::string& id) const;
+    std::string materialDiagnostic(const std::string& id) const;
+    std::shared_ptr<const PreparedParticleMaterial> preparedParticleMaterial(const std::string& id) const;
+    ModelMaterialTextures materialPreviewBindings(const MaterialAsset& material) const;
+    void publishMaterial(std::shared_ptr<const MaterialAsset>);
+    void protectMaterialDocument(std::string id) { materialDocumentId_=std::move(id); }
+    void refreshMaterials();
+    std::shared_ptr<const MaterialAsset> createMaterial(const std::string& name="New Material");
+    std::shared_ptr<const MaterialAsset> copyMaterial(const std::string& id,const std::string& name={});
+    void setParticleDocumentReferences(std::vector<std::string> active,std::vector<std::string> history) {
+        if(active!=particleDocumentReferences_||history!=particleDocumentHistory_)++catalogRevision_;
+        particleDocumentReferences_=std::move(active);particleDocumentHistory_=std::move(history);
+    }
+    void setMaterialDocumentReferences(std::vector<std::string> active,std::vector<std::string> history) {
+        if(active!=materialDocumentReferences_||history!=materialDocumentHistory_)++catalogRevision_;
+        materialDocumentReferences_=std::move(active);materialDocumentHistory_=std::move(history);
+    }
     const std::filesystem::path& projectRoot() const { return projectRoot_; }
     std::shared_ptr<const ParticleEffectAsset> findParticle(const std::string& id) const;
     std::uint64_t particleRevision(const std::string& id) const;
@@ -119,6 +143,12 @@ private:
     std::unordered_map<std::string,ParticleVersion> particles_;
     std::uint64_t nextParticleRevision_{1};
     std::string particleDocumentId_;
+    struct MaterialVersion { std::shared_ptr<const MaterialAsset> definition;std::uint64_t revision{};std::string diagnostic; };
+    std::unordered_map<std::string,MaterialVersion> authoredMaterials_;
+    mutable std::unordered_map<std::string,std::shared_ptr<const PreparedParticleMaterial>> preparedParticleMaterials_;
+    std::uint64_t nextMaterialRevision_{1};
+    std::string materialDocumentId_;
+    std::vector<std::string> particleDocumentReferences_,particleDocumentHistory_,materialDocumentReferences_,materialDocumentHistory_;
     ResourceManager* resources_{};
     std::unique_ptr<AsyncImports> asyncImports_;
     std::unique_ptr<TextureStreamer> textureStreamer_;
@@ -143,12 +173,12 @@ private:
     std::vector<AssetEntry> catalog_;
     std::string status_;
     std::vector<std::filesystem::path> ownWrites_;
-    TextureAsset* findMutable(const std::string& id);
+    TextureAsset* findMutable(const std::string& id) const;
     TextureAsset makeAsset(const std::filesystem::path& path);
-    bgfx::TextureHandle fullTexture(TextureAsset& asset, bool srgb);
+    bgfx::TextureHandle fullTexture(TextureAsset& asset, bool srgb) const;
+    ModelMaterialTextures materialBindings(const ModelMaterial&,bool particle) const;
     void registerModel(std::shared_ptr<const ModelAsset> model);
     void addTexture(TextureAsset asset);
-    void refreshMaterials();
     void refreshReferenceIndex(const SceneDocument* active);
 };
 

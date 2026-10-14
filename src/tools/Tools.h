@@ -31,6 +31,8 @@ struct EditorFrame {
     Vec2 particleDropPosition{};
     bool createParticle{false};
     std::uint64_t playParticleEntity{};
+    bool createMaterial{false};
+    std::string openMaterial, materialFolder;
 };
 
 struct BrowserActions {
@@ -41,10 +43,13 @@ struct BrowserActions {
     int previewSize{128};
     bool createParticle{false};
     std::string openParticle, particleFolder;
+    bool createMaterial{false};
+    std::string openMaterial, materialFolder;
 };
 
 BrowserActions drawAssetBrowser(AssetLibrary& assets, SDL_Window* window);
 bool drawEnvironmentControls(EnvironmentSettings& environment, AssetLibrary& assets, const Renderer& renderer, bool persistLegacy = false);
+bool drawEnvironmentImageField(EnvironmentSettings&, AssetLibrary&);
 
 // Call once after creating the ImGui context. DPI is supplied by the host;
 // this does not change window/framebuffer coordinates or SDL input scaling.

@@ -129,6 +129,7 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
         ImGui::SameLine();
         if (ImGui::Button("Create")) ImGui::OpenPopup("Create native asset");
         if (ImGui::BeginPopup("Create native asset")) {
+            if (ImGui::MenuItem("Material")) { actions.createMaterial=true;actions.materialFolder=folder_; }
             if (ImGui::MenuItem("Particle Effect")) { actions.createParticle=true;actions.particleFolder=folder_; }
             if (ImGui::MenuItem("Scene")) actions.newScene=true;
             if (ImGui::MenuItem("Folder")) createFolder();
@@ -221,6 +222,7 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
                     if (item.folder) navigate=parentCard ? catalog.parent(folder_) : item.id;
                     else if (item.kind==AssetKind::Scene) actions.openScene=item.id;
                     else if (item.kind==AssetKind::Particle) actions.openParticle=item.id;
+                    else if (item.kind==AssetKind::Material) actions.openMaterial=item.id;
                 }
                 if (!parentCard && !editing && ImGui::BeginDragDropSource()) {
                     if (dragPrimary_!=item.id || dragIds_.empty()) {
@@ -261,6 +263,7 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
                         if (ImGui::MenuItem("Open scene")) actions.openScene=item.id;
                     }
                     if (!item.folder && item.kind==AssetKind::Particle && ImGui::MenuItem("Open particle effect")) actions.openParticle=item.id;
+                    if (!item.folder && item.kind==AssetKind::Material && ImGui::MenuItem("Open material")) actions.openMaterial=item.id;
                     if (ImGui::MenuItem("Delete selected...","Delete")) actions.deleteAssetIds=selection.ids();
                     if (ImGui::MenuItem("Rename","F2",false,selection.ids().size()==1)) beginRename(item.id,item.name);
                     if (ImGui::MenuItem("New Folder")) createFolder();
@@ -345,6 +348,7 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
         if (ImGui::BeginPopupContextWindow("Create asset",ImGuiPopupFlags_MouseButtonRight|ImGuiPopupFlags_NoOpenOverItems)) {
             if (ImGui::MenuItem("New Folder")) createFolder();
             if (ImGui::MenuItem("New scene")) actions.newScene=true;
+            if (ImGui::MenuItem("Material")) { actions.createMaterial=true;actions.materialFolder=folder_; }
             if (ImGui::MenuItem("Particle Effect")) { actions.createParticle=true;actions.particleFolder=folder_; }
             ImGui::EndPopup();
         }

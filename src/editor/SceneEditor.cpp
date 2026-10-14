@@ -4,6 +4,7 @@
 #include "tools/AssetBrowser.h"
 #include "assets/AssetLibrary.h"
 #include "tools/ParticleEditor.h"
+#include "tools/MaterialEditor.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <algorithm>
@@ -306,39 +307,66 @@ void SceneEditor::modals(SceneDocument& document, Camera& camera, AssetLibrary& 
 }
 EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, AssetLibrary& assets,
                               Renderer& renderer, SDL_Window* window, bool navigationActive,
-                              uint32_t bgfxFrame, bool quitRequested, ParticleEditor& particles) {
+                              uint32_t bgfxFrame, bool quitRequested, ParticleEditor& particles, MaterialEditor& materials) {
     documentReplaced_=false;
     editingAssets_=&assets;
     pumpOpen(document,renderer);
     const auto previousPanels=panels_;
     bool resetLayout=false;
     document.setPreviewCamera(settings.camera);
-    if (quitRequested) particles.requestExit();
-    if(particles.takeExitRequest()) request(Pending::Exit,{},document,settings.camera,renderer);
-    if(particles.focused()) particleCommandTarget_=true;
-    else if(const auto* focused=ImGui::GetCurrentContext()->NavWindow) {
-        const std::string_view name=focused->RootWindow->Name;
-        if(name=="Viewport" || name=="Outliner" || name=="Inspector") particleCommandTarget_=false;
-    }
-    if(!particles.isOpen())particleCommandTarget_=false;
-    const bool particleFocus=particleCommandTarget_;
+    // Resolve one document at a time so modal ownership and Cancel remain clear.
+    if (quitRequested) materials.requestExit();
+    if (materials.takeExitRequest()) particles.requestExit();
+    if (particles.takeExitRequest()) request(Pending::Exit,{},document,settings.camera,renderer);
+    const auto updateCommandTarget=[&] {
+        if(materials.focused())commandTarget_=CommandTarget::Material;
+        else if(particles.focused())commandTarget_=CommandTarget::Particle;
+        else if(const auto* focused=ImGui::GetCurrentContext()->NavWindow) {
+            const std::string_view name=focused->RootWindow->Name;
+            if(name=="Viewport" || name=="Outliner" || name=="Inspector")commandTarget_=CommandTarget::Scene;
+        }
+        if((commandTarget_==CommandTarget::Particle && !particles.isOpen()) ||
+           (commandTarget_==CommandTarget::Material && !materials.isOpen()))commandTarget_=CommandTarget::Scene;
+    };
+    updateCommandTarget();
+    const bool particleFocus=commandTarget_==CommandTarget::Particle;
+    const bool materialFocus=commandTarget_==CommandTarget::Material;
+    const auto saveTarget=[&](bool saveAs) {
+        if(commandTarget_==CommandTarget::Material) {
+            if(saveAs?materials.canSaveAs():materials.canSave())materials.save(assets,saveAs);
+        }
+        else if(commandTarget_==CommandTarget::Particle)particles.save(assets,saveAs);
+        else save(document,assets,saveAs);
+    };
+    const auto undoTarget=[&] {
+        if(commandTarget_==CommandTarget::Material)materials.undo();
+        else if(commandTarget_==CommandTarget::Particle)particles.undo();
+        else document.undo();
+    };
+    const auto redoTarget=[&] {
+        if(commandTarget_==CommandTarget::Material)materials.redo();
+        else if(commandTarget_==CommandTarget::Particle)particles.redo();
+        else document.redo();
+    };
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("New scene")) request(Pending::New,{},document,settings.camera,renderer);
-            if (ImGui::MenuItem("Save","Ctrl+S",false,!viewport_.interacting())) { if(particleFocus)particles.save(assets);else save(document,assets,false); }
-            if (ImGui::MenuItem("Save as...","Ctrl+Shift+S",false,!viewport_.interacting())) { if(particleFocus)particles.save(assets,true);else save(document,assets,true); }
+            if (ImGui::MenuItem("Save","Ctrl+S",false,!viewport_.interacting() && (!materialFocus || materials.canSave()))) { saveTarget(false); }
+            if (ImGui::MenuItem("Save as...","Ctrl+Shift+S",false,!viewport_.interacting() && (!materialFocus || materials.canSaveAs()))) { saveTarget(true); }
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Edit")) {
             // Opening the menu ends a property gesture before its Undo label
             // and enabled state are queried. Viewport gestures keep ownership.
-            if (!particleFocus) finishScenePanelEdit(document);
-            const auto undo=particleFocus ? std::string("Undo particle edit") : "Undo " + document.history().undoLabel();
-            const auto redo=particleFocus ? std::string("Redo particle edit") : "Redo " + document.history().redoLabel();
-            if (ImGui::MenuItem(undo.c_str(),"Ctrl+Z",false,particleFocus ? particles.canUndo() : document.history().canUndo() && !document.transactionActive())) { if(particleFocus)particles.undo();else document.undo(); }
-            if (ImGui::MenuItem(redo.c_str(),"Ctrl+Y",false,particleFocus ? particles.canRedo() : document.history().canRedo() && !document.transactionActive())) { if(particleFocus)particles.redo();else document.redo(); }
-            if (ImGui::MenuItem("Duplicate selection","Ctrl+D",false,!particleFocus && !document.selection().ids.empty() && !document.transactionActive())) document.duplicateSelection();
-            if (ImGui::MenuItem("Delete selection","Delete",false,!particleFocus && !document.selection().ids.empty() && !document.transactionActive())) document.eraseSelection();
+            if (materialFocus) materials.finishInteraction();
+            else if(particleFocus) particles.finishInteraction();
+            else finishScenePanelEdit(document);
+            const auto undo=materialFocus ? std::string("Undo material edit") : particleFocus ? std::string("Undo particle edit") : "Undo " + document.history().undoLabel();
+            const auto redo=materialFocus ? std::string("Redo material edit") : particleFocus ? std::string("Redo particle edit") : "Redo " + document.history().redoLabel();
+            if (ImGui::MenuItem(undo.c_str(),"Ctrl+Z",false,materialFocus ? materials.canUndo() : particleFocus ? particles.canUndo() : document.history().canUndo() && !document.transactionActive())) { undoTarget(); }
+            if (ImGui::MenuItem(redo.c_str(),"Ctrl+Y",false,materialFocus ? materials.canRedo() : particleFocus ? particles.canRedo() : document.history().canRedo() && !document.transactionActive())) { redoTarget(); }
+            if (ImGui::MenuItem("Duplicate selection","Ctrl+D",false,!particleFocus && !materialFocus && !document.selection().ids.empty() && !document.transactionActive())) document.duplicateSelection();
+            if (ImGui::MenuItem("Delete selection","Delete",false,!particleFocus && !materialFocus && !document.selection().ids.empty() && !document.transactionActive())) document.eraseSelection();
             ImGui::Separator();
             if (ImGui::MenuItem("Preferences...")) preferences_.open();
             ImGui::EndMenu();
@@ -380,6 +408,8 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     frame.createParticle=browser.createParticle;frame.particleFolder=std::move(browser.particleFolder);
     frame.openParticle=browser.openParticle.empty()?std::move(openParticle):std::move(browser.openParticle);
     frame.playParticleEntity=playParticle;
+    frame.createMaterial=browser.createMaterial;frame.materialFolder=std::move(browser.materialFolder);
+    frame.openMaterial=std::move(browser.openMaterial);
     if (browser.newScene) request(Pending::New,{},document,settings.camera,renderer);
     if (!browser.openScene.empty()) request(Pending::Open,browser.openScene,document,settings.camera,renderer);
     if (!browser.deleteAssetIds.empty()) {
@@ -388,18 +418,16 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
         replacements_.clear(); deletionStatus_.clear(); deletePopup_=true;
     }
     const auto& io=ImGui::GetIO();
-    if(particles.focused())particleCommandTarget_=true;
-    else if(const auto* focused=ImGui::GetCurrentContext()->NavWindow) {
-        const std::string_view name=focused->RootWindow->Name;
-        if(name=="Viewport" || name=="Outliner" || name=="Inspector")particleCommandTarget_=false;
-    }
-    const bool particleKeyboardTarget=particleCommandTarget_ && particles.isOpen();
+    updateCommandTarget();
+    const bool particleKeyboardTarget=commandTarget_==CommandTarget::Particle;
+    const bool materialKeyboardTarget=commandTarget_==CommandTarget::Material;
+    const bool targetTransaction=materialKeyboardTarget?materials.transactionActive():particleKeyboardTarget?particles.transactionActive():document.transactionActive();
     const auto shortcuts=readSceneShortcuts({actionPending,preferencesKeyboard,navigationActive,
-        !particleKeyboardTarget && document.transactionActive(),!frame.modelDropId.empty() || !frame.modelDropIds.empty() || !frame.particleDropId.empty(),particleKeyboardTarget});
+        targetTransaction,!frame.modelDropId.empty() || !frame.modelDropIds.empty() || !frame.particleDropId.empty(),particleKeyboardTarget,materialKeyboardTarget});
     if (shortcuts.toggleAssetBrowser) panels_.assetBrowser=!panels_.assetBrowser;
-    if (shortcuts.save) { if(particleKeyboardTarget)particles.save(assets,shortcuts.saveAs);else save(document,assets,shortcuts.saveAs); }
-    if (shortcuts.undo) { if(particleKeyboardTarget)particles.undo();else document.undo(); }
-    if (shortcuts.redo) { if(particleKeyboardTarget)particles.redo();else document.redo(); }
+    if (shortcuts.save)saveTarget(shortcuts.saveAs);
+    if (shortcuts.undo)undoTarget();
+    if (shortcuts.redo)redoTarget();
     if (shortcuts.duplicate) document.duplicateSelection();
     if (shortcuts.eraseSelection) document.eraseSelection();
     if (shortcuts.focusSelection && !frame.viewport.hovered && frame.viewport.height > 0)

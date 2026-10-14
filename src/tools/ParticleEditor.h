@@ -10,6 +10,7 @@
 
 namespace crimson {
 class AssetLibrary;
+class MaterialEditor;
 // Owns one asset document and its isolated preview. Scene playback has a separate owner.
 class ParticleEditor {
 public:
@@ -26,7 +27,9 @@ public:
     void redo();
     bool canUndo() const;
     bool canRedo() const;
-    void draw(AssetLibrary&,Renderer&,float dt);
+    void draw(AssetLibrary&,Renderer&,double dt,MaterialEditor&);
+    bool transactionActive() const { return document_.transactionActive(); }
+    void finishInteraction();
     void filesChanged(std::span<const std::filesystem::path>);
     void cancelInteraction() { document_.cancel();previewGesture_=0; }
 private:
@@ -36,7 +39,7 @@ private:
     SceneSettings preview_;
     std::vector<ParticlePresentation> presentation_;
     std::vector<RenderParticle> packets_;
-    std::string pendingId_,pendingFolder_,message_,publishedId_;
+    std::string pendingId_,pendingFolder_,message_,publishedId_,materialDiagnostic_;
     Pending pending_{Pending::None};
     std::uint64_t previewRevision_{},publishedRevision_{};
     std::array<char,256> saveName_{};
@@ -47,5 +50,6 @@ private:
     void publish(AssetLibrary&);
     void modals(AssetLibrary&);
     void framePreview();
+    void materialControls(AssetLibrary&,MaterialEditor&);
 };
 }

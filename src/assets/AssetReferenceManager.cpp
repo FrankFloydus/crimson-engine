@@ -18,8 +18,10 @@ using Json=nlohmann::json;
 std::filesystem::path path(const std::string& id){return std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(id.data()),id.size()));}
 std::string text(const std::filesystem::path& file){std::ifstream in(file,std::ios::binary);if(!in)throw std::runtime_error("Cannot read asset transaction file.");return {std::istreambuf_iterator<char>(in),{}};}
 bool builtin(const std::string& id){return id.starts_with("builtin:");}
-bool knownBuiltin(const std::string& id){return id==GrayTextureId||id==NeutralNormalTextureId||id==DefaultMaterialId||id==StudioEnvironmentId;}
+bool knownBuiltin(const std::string& id){return id==GrayTextureId||id==NeutralNormalTextureId||id==DefaultMaterialId||id==DefaultParticleMaterialId||id==StudioEnvironmentId;}
 bool particleIdentity(const std::string& id){const auto relative=path(id);return relative.parent_path()==std::filesystem::path("assets/particles")&&relative.extension()==".crimson-particle";}
+bool materialIdentity(const std::string& id){const auto relative=path(id);return relative.parent_path()==std::filesystem::path("assets/materials")&&relative.extension()==".crimson-material";}
+void validateMaterialTarget(const std::string& target){if(!target.empty()&&target!=DefaultMaterialId&&target!=DefaultParticleMaterialId&&!materialIdentity(target))throw std::runtime_error("Material replacement must reference a managed material or protected material default.");}
 bool equalFiles(const std::filesystem::path& a,const std::filesystem::path& b){
     if(!std::filesystem::is_regular_file(a)||!std::filesystem::is_regular_file(b)||std::filesystem::file_size(a)!=std::filesystem::file_size(b))return false;
     std::ifstream left(a,std::ios::binary),right(b,std::ios::binary);std::array<char,4096> l{},r{};
@@ -89,7 +91,7 @@ AssetReferenceManager::AssetReferenceManager(std::filesystem::path root):root_(s
             if(!deleted_.contains(it.key()))throw std::runtime_error("Replacement source is not a deleted managed asset.");
             if(builtin(replacement)&&!knownBuiltin(replacement))throw std::runtime_error("Replacement references an unknown built-in resource.");
             if(!replacement.empty()&&!builtin(replacement))checkedManagedAssetPath(root_,replacement);replacements_.emplace(it.key(),replacement);}
-        for(const auto& [id,target]:replacements_){(void)target;if(particleIdentity(id))resolveParticle(id);else resolve(id);}
+        for(const auto& [id,target]:replacements_){(void)target;if(particleIdentity(id))resolveParticle(id);else if(materialIdentity(id))validateMaterialTarget(resolve(id));else resolve(id);}
     }catch(const std::exception& e){deleted_.clear();replacements_.clear();writable_=false;status_="Asset reference state could not be loaded: "+std::string(e.what())+" The existing file was preserved; destructive asset operations are disabled.";}
 }
 std::string AssetReferenceManager::resolve(const std::string& id)const{
@@ -99,12 +101,20 @@ std::string AssetReferenceManager::resolve(const std::string& id)const{
     return {};
 }
 std::string AssetReferenceManager::resolveTexture(const std::string& id,bool normal)const{auto result=resolve(id);if(!id.empty()&&(result.empty()||result==GrayTextureId))return normal?NeutralNormalTextureId:GrayTextureId;return result;}
+std::string AssetReferenceManager::resolveMaterial(const std::string& id)const{const auto result=resolve(id);validateMaterialTarget(result);return result;}
 std::string AssetReferenceManager::resolveEnvironment(const std::string& id)const{const auto result=resolve(id);return result==StudioEnvironmentId?std::string{}:result;}
 std::string AssetReferenceManager::resolveParticle(const std::string& id)const{
     auto result=resolve(id);if(result.empty())return result;
     if(!particleIdentity(result))
         throw std::runtime_error("Particle replacement must reference a managed particle effect.");
     checkedManagedAssetPath(root_,result);return result;
+}
+std::string AssetReferenceManager::resolveParticleMaterial(const std::string& id)const{
+    const auto result=resolve(id);if(result.empty()||(result==DefaultMaterialId&&deleted_.contains(id)))return DefaultParticleMaterialId;
+    validateMaterialTarget(result);if(!builtin(result))checkedManagedAssetPath(root_,result);return result;
+}
+std::string AssetReferenceManager::resolveParticleTexture(const std::string& id)const{
+    const auto result=resolve(id);return result==GrayTextureId?std::string{}:result;
 }
 void AssetReferenceManager::setUsages(std::vector<AssetUsage> usages){usages_=std::move(usages);}
 std::vector<AssetUsage> AssetReferenceManager::users(const std::string& id)const{
@@ -155,14 +165,15 @@ void AssetReferenceManager::replace(std::span<const AssetEntry> assets,const std
             if(!particleIdentity(target))
                 throw std::runtime_error("Particle replacement must reference another managed particle effect.");
         }
+        if(a.kind==AssetKind::Material)validateMaterialTarget(target);
         if(builtin(target)&&(!knownBuiltin(target)||(a.kind==AssetKind::Texture&&target!=GrayTextureId&&target!=NeutralNormalTextureId)||
-            (a.kind==AssetKind::Environment&&target!=StudioEnvironmentId)||(a.kind==AssetKind::Material&&target!=DefaultMaterialId)||a.kind==AssetKind::Model||a.kind==AssetKind::Scene||a.kind==AssetKind::Particle))
+            (a.kind==AssetKind::Environment&&target!=StudioEnvironmentId)||(a.kind==AssetKind::Material&&target!=DefaultMaterialId&&target!=DefaultParticleMaterialId)||a.kind==AssetKind::Model||a.kind==AssetKind::Scene||a.kind==AssetKind::Particle))
             throw std::runtime_error("Built-in replacement has an incompatible asset kind.");
         if(target.empty()){switch(a.kind){case AssetKind::Texture:target=GrayTextureId;break;case AssetKind::Environment:target=StudioEnvironmentId;break;case AssetKind::Material:target=DefaultMaterialId;break;default:break;}}
         deleted.insert(a.id);redirects[a.id]=std::move(target);
     }
     auto previousDeleted=std::move(deleted_);auto previousRedirects=std::move(replacements_);deleted_=std::move(deleted);replacements_=std::move(redirects);
-    try{for(const auto& [id,target]:replacements_){(void)target;if(particleIdentity(id))resolveParticle(id);else resolve(id);}}
+    try{for(const auto& [id,target]:replacements_){(void)target;if(particleIdentity(id))resolveParticle(id);else if(materialIdentity(id))validateMaterialTarget(resolve(id));else resolve(id);}}
     catch(...){deleted_=std::move(previousDeleted);replacements_=std::move(previousRedirects);throw;}++revision_;
 }
 std::string AssetReferenceManager::serialize()const{std::vector<std::string> deleted(deleted_.begin(),deleted_.end());std::sort(deleted.begin(),deleted.end());return Json{{"version",1},{"deleted",deleted},{"replacements",replacements_}}.dump(2)+"\n";}

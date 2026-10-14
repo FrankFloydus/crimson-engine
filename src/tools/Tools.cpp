@@ -294,6 +294,11 @@ BrowserActions drawAssetBrowser(AssetLibrary& assets, SDL_Window* window) {
 bool drawEnvironmentControls(EnvironmentSettings& environment, AssetLibrary& assets, const Renderer& renderer, bool persistLegacy) {
     return environmentControls(environment, assets, renderer,persistLegacy);
 }
+bool drawEnvironmentImageField(EnvironmentSettings& environment, AssetLibrary& assets) {
+    static ImGuiTextFilter filter;
+    return assetSlot(assets,"HDRI","Equirectangular HDR or color panorama.",environment.map,filter,true,"Built-in studio",
+        [&](const std::string& id){return assets.assignEnvironment(environment,id,false);},[&]{assets.clearEnvironment(environment,false);});
+}
 
 EditorFrame drawEditor(SceneSettings& settings, Renderer& renderer, AssetLibrary& assets, SDL_Window* window,
                        const ModelInstance* model, const std::string& previewStatus) {

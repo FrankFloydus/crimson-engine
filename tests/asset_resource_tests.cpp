@@ -246,6 +246,53 @@ void particleReplacementStateValidation(){
     require(references.serialize()==previous && references.revision()==revision && references.resolveParticle(first)==second,
             "Rejected particle replacement-chain update mutated the previous policy.");
 }
+void spriteMaterialStorageAndMigration(){
+    Project p;const auto original=createMaterialAsset(p.root,"Smoke"),other=createMaterialAsset(p.root,"Smoke");
+    require(original.id!=other.id&&original.name=="Smoke"&&other.name=="Smoke 2"&&original.originModel.empty(),"User materials did not receive unique native identities and names.");
+    require(original.shading==MaterialShading::Unlit&&original.blend==MaterialBlend::Additive&&particleMaterialCompatible(original)&&!modelMaterialCompatible(original),"New sprite material has unsupported defaults.");
+    require(original.surface.baseColor==Vec4{1,1,1,1}&&original.surface.baseColorTexture.image.empty()&&original.surface.baseColorTexture.wrapU==ModelWrap::Clamp,
+            "New sprite material changed the procedural appearance or default edge sampling.");
+    auto alpha=original;alpha.blend=MaterialBlend::Alpha;alpha.surface.baseColor={.2f,.4f,.6f,.35f};alpha.surface.baseColorTexture.image=AssetRef<DecodedImage>{"assets/textures/unresolved.png"};
+    alpha.surface.baseColorTexture.wrapU=ModelWrap::Mirror;alpha.surface.baseColorTexture.minFilter=ModelFilter::NearestMipmapLinear;saveMaterialAsset(p.root,alpha);
+    const auto reopened=loadMaterialAsset(p.root,alpha.id);require(reopened.blend==MaterialBlend::Alpha&&reopened.surface.baseColor==alpha.surface.baseColor&&reopened.surface.baseColorTexture.image==alpha.surface.baseColorTexture.image&&reopened.surface.baseColorTexture.wrapU==ModelWrap::Mirror&&reopened.surface.baseColorTexture.minFilter==ModelFilter::NearestMipmapLinear,"Native sprite factors, unresolved map or sampler did not round-trip.");
+    const auto bytes=read(p.root/alpha.id);auto imported=alpha;imported.originModel="assets/models/origin/manifest.json";
+    const auto copy=copyMaterialAsset(p.root,imported);require(copy.id!=alpha.id&&copy.originModel.empty()&&copy.surface.baseColor==alpha.surface.baseColor&&read(p.root/alpha.id)==bytes,"Making an editable material copy changed its read-only source.");
+    auto legacy=Json::parse(serializeMaterialAsset(alpha));legacy["version"]=1;legacy.erase("shading");legacy.erase("blend");legacy["alphaMask"]=true;
+    writeFileAtomically(p.root/alpha.id,legacy.dump(2));const auto migrated=loadMaterialAsset(p.root,alpha.id);
+    require(migrated.shading==MaterialShading::StandardPbr&&migrated.blend==MaterialBlend::Mask&&migrated.surface.alphaMask&&modelMaterialCompatible(migrated),"Legacy alphaMask did not migrate to PBR Mask.");
+    require(Json::parse(serializeMaterialAsset(migrated)).at("version")==2,"Explicit material saving did not use native version 2.");
+    auto unsupported=alpha;unsupported.surface.baseColorTexture.texCoord=1;require(!particleMaterialCompatible(unsupported),"Sprite material accepted a UV1 color map.");
+    unsupported=alpha;unsupported.surface.normalTexture.image=AssetRef<DecodedImage>{"assets/textures/normal.png"};require(!particleMaterialCompatible(unsupported),"Sprite material accepted a tangent-space slot.");
+    unsupported=alpha;unsupported.surface.baseColorTexture.wrapV=static_cast<ModelWrap>(99);rejects([&]{validateMaterialAsset(unsupported);},"Native material accepted an invalid sampler.");
+    rejects([&]{saveMaterialAsset(p.root,defaultParticleMaterialAsset());},"Protected particle default was writable.");
+    unsupported=alpha;unsupported.surface.baseColor[0]=-1;const auto previous=read(p.root/alpha.id);rejects([&]{saveMaterialAsset(p.root,unsupported);},"Invalid material was written.");require(read(p.root/alpha.id)==previous,"Failed material save overwrote the previous source.");
 }
-int main(){try{policies();authoredWarningClassification();transactionAndRecovery();managedMaterialsAndImages();stagedImages();materialTangentBasis();backgroundDeletionValidation();particleReferencesAndDeletionValidation();particleReplacementStateValidation();std::cout<<"Asset reference, material and managed transaction checks passed.\n";return 0;}
+void particleMaterialStorageAndDependencies(){
+    Project p;auto effect=createParticleAsset(p.root,"Sprite");auto material=createMaterialAsset(p.root,"Sprite material");
+    effect.emitter.material=AssetRef<MaterialAsset>{material.id};effect.emitter.opacity=.3f;saveParticleAsset(p.root,effect);
+    require(loadParticleAsset(p.root,effect.id)==effect,"Particle v2 material and opacity did not round-trip.");
+    auto legacy=Json::parse(serializeParticleAsset(effect));legacy["version"]=1;legacy["emitters"][0]["renderer"]="procedural-additive";legacy["emitters"][0].erase("material");legacy["emitters"][0].erase("opacity");
+    const auto migrated=deserializeParticleAsset(legacy.dump(),effect.id);require(migrated.emitter.material.id==DefaultParticleMaterialId&&migrated.emitter.opacity==1,"Particle v1 migration changed the procedural appearance.");
+    auto invalid=effect;invalid.emitter.opacity=1.1f;rejects([&]{validateParticleAsset(invalid);},"Particle accepted opacity above one.");
+    invalid=effect;invalid.emitter.material=AssetRef<MaterialAsset>{"assets/materials/../../foreign.crimson-material"};rejects([&]{validateParticleAsset(invalid);},"Particle accepted an escaping material reference.");
+    const auto fixtures=model_test::writeModelFixtures(p.root/"source");fs::create_directories(p.root/"assets/textures");fs::copy_file(fixtures.image,p.root/"assets/textures/sprite.png");
+    material.surface.baseColorTexture.image=AssetRef<DecodedImage>{"assets/textures/sprite.png"};saveMaterialAsset(p.root,material);
+    AssetReferenceManager policy(p.root);const std::array<AssetEntry,1> effects{{{effect.id,effect.name,AssetKind::Particle}}};
+    const auto validation=validateAssetDeletion(p.root,{},policy,{}, {},effects);
+    require(std::find(validation->dependencies.begin(),validation->dependencies.end(),materialAssetPath(p.root,material.id))!=validation->dependencies.end()&&std::find(validation->dependencies.begin(),validation->dependencies.end(),checkedManagedAssetPath(p.root,"assets/textures/sprite.png"))!=validation->dependencies.end(),"Deletion validation omitted sprite material or color image dependencies.");
+    writeFileAtomically(p.root/material.id,read(p.root/material.id)+" ");require(!deletionValidationCurrent(*validation),"A changed particle material did not invalidate deletion preparation.");
+    policy.replace(std::array<AssetEntry,1>{{{material.id,material.name,AssetKind::Material}}},{});
+    require(policy.resolveMaterial(material.id)==DefaultMaterialId&&policy.resolveParticleMaterial(material.id)==DefaultParticleMaterialId&&policy.resolveParticleMaterial(DefaultMaterialId)==DefaultMaterialId,"Material defaults lost context or an explicit PBR assignment became a particle material.");
+    (void)validateAssetDeletion(p.root,{},policy,{}, {},effects);
+    policy.replace(std::array<AssetEntry,1>{{{"assets/textures/sprite.png","Sprite",AssetKind::Texture}}},{});
+    require(policy.resolveParticleTexture("assets/textures/sprite.png").empty()&&policy.resolveTexture("assets/textures/sprite.png")==GrayTextureId,"Deleted sprite images did not use the procedural fallback without changing model defaults.");
+    policy.save();AssetReferenceManager reopened(p.root);require(reopened.resolveParticleMaterial(material.id)==DefaultParticleMaterialId,"Role-correct material deletion did not survive reopening.");
+    const auto previous=reopened.serialize();rejects([&]{reopened.replace(std::array<AssetEntry,1>{{{material.id,material.name,AssetKind::Material}}},{{material.id,effect.id}});},"Material replacement accepted a particle-effect target.");
+    require(reopened.serialize()==previous,"Rejected material-kind replacement changed the reference policy.");
+    const auto damaged=Json{{"version",1},{"deleted",Json::array({material.id})},{"replacements",{{material.id,GrayTextureId}}}}.dump(2);
+    writeFileAtomically(p.root/"assets/references.json",damaged);AssetReferenceManager invalidPolicy(p.root);
+    require(!invalidPolicy.status().empty()&&read(p.root/"assets/references.json")==damaged,"Incompatible persisted material chain was accepted or overwritten.");
+}
+}
+int main(){try{policies();authoredWarningClassification();transactionAndRecovery();managedMaterialsAndImages();stagedImages();materialTangentBasis();backgroundDeletionValidation();particleReferencesAndDeletionValidation();particleReplacementStateValidation();spriteMaterialStorageAndMigration();particleMaterialStorageAndDependencies();std::cout<<"Asset reference, material and managed transaction checks passed.\n";return 0;}
     catch(const std::exception& e){std::cerr<<"Asset resource test failed: "<<e.what()<<'\n';return 1;}}

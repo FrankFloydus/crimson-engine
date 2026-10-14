@@ -23,6 +23,7 @@
 #include "fs_encode.h"
 #include "vs_particle.h"
 #include "fs_particle.h"
+#include "fs_sky.h"
 
 #include <algorithm>
 #include <array>
@@ -43,6 +44,7 @@ struct RenderViews { bgfx::ViewId scene,present,grid,encode; };
 inline constexpr RenderViews MainViews{SceneView,PresentView,GridView,EncodeView};
 inline constexpr RenderViews ParticlePreviewViews{4,5,6,7};
 inline constexpr RenderViews ThumbnailViews{11,12,13,14};
+inline constexpr RenderViews MaterialPreviewViews{16,17,18,19};
 inline constexpr bgfx::ViewId ThumbnailReadView=15;
 std::uint64_t shaderContentHash(std::span<const std::uint8_t> vertex,std::span<const std::uint8_t> fragment) {
     std::uint64_t hash=14695981039346656037ull;
@@ -225,9 +227,13 @@ struct Renderer::Impl {
     GpuMesh sphere, fullscreen, grid, particleQuad;
     std::uint32_t particlePreviewWidth{},particlePreviewHeight{};
     std::unique_ptr<ViewportTargets> particlePreviewTargets;
+    std::unique_ptr<ViewportTargets> materialPreviewTargets;
+    std::uint32_t materialPreviewWidth{},materialPreviewHeight{};
+    bool materialPreviewDrawable{};
     ParticleRenderStats particles,previewParticles;
     std::string particleStatus;
-    std::vector<RenderParticle> particleScratch;
+    std::vector<particle_rendering::SortKey> particleScratch;
+    std::vector<std::shared_ptr<const void>> particlePins,previousParticlePins;
     std::unordered_map<std::string,std::unique_ptr<GpuModel>> models;
     std::unique_ptr<ModelGpuCache> streamModels{std::make_unique<ModelGpuCache>()};
     std::uint64_t externalSignature{},programRevision{1},environmentRevision{1};
@@ -241,11 +247,12 @@ struct Renderer::Impl {
     std::unique_ptr<ViewportTargets> targets;
     std::unique_ptr<EnvironmentLighting> environment;
     std::unique_ptr<EnvironmentLighting> thumbnailEnvironment;
+    std::unique_ptr<EnvironmentLighting> materialPreviewEnvironment;
     std::unique_ptr<PendingThumbnail> pendingThumbnail;
     std::unordered_map<std::string,std::unique_ptr<CachedThumbnail>> thumbnails;
     mutable std::uint64_t thumbnailClock{};
     std::string shaderStatus,thumbnailStatus;
-    std::array<std::uint64_t,7> programHashes{};
+    std::array<std::uint64_t,8> programHashes{};
     struct LodSelection { std::uint32_t level{}; std::uint64_t frame{}; };
     std::unordered_map<std::uint64_t,LodSelection> lodSelections;
     std::uint64_t renderFrame{};
@@ -254,6 +261,9 @@ struct Renderer::Impl {
     bgfx::ProgramHandle modelProgram{BGFX_INVALID_HANDLE};
     bgfx::ProgramHandle pickProgram{BGFX_INVALID_HANDLE};
     bgfx::ProgramHandle particleProgram{BGFX_INVALID_HANDLE};
+    bgfx::ProgramHandle skyProgram{BGFX_INVALID_HANDLE};
+    bgfx::UniformHandle skyRight{BGFX_INVALID_HANDLE},skyUp{BGFX_INVALID_HANDLE},skyForward{BGFX_INVALID_HANDLE},skySampler{BGFX_INVALID_HANDLE};
+    bgfx::UniformHandle particleBaseColor{BGFX_INVALID_HANDLE},particleParams{BGFX_INVALID_HANDLE},particleSampler{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle pickId{BGFX_INVALID_HANDLE}, lightCounts{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle modelBase{BGFX_INVALID_HANDLE}, modelSurface{BGFX_INVALID_HANDLE}, modelEmissive{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle modelUv{BGFX_INVALID_HANDLE}, modelOptions{BGFX_INVALID_HANDLE}, modelMaps{BGFX_INVALID_HANDLE}, modelEmissiveMap{BGFX_INVALID_HANDLE};
@@ -267,8 +277,8 @@ struct Renderer::Impl {
     bgfx::UniformHandle albedoSampler{BGFX_INVALID_HANDLE}, roughnessSampler{BGFX_INVALID_HANDLE}, metallicSampler{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle normalSampler{BGFX_INVALID_HANDLE}, irradianceSampler{BGFX_INVALID_HANDLE}, prefilteredSampler{BGFX_INVALID_HANDLE}, brdfSampler{BGFX_INVALID_HANDLE}, environmentParams{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle gridMinor{BGFX_INVALID_HANDLE}, gridMajor{BGFX_INVALID_HANDLE}, gridAxisU{BGFX_INVALID_HANDLE}, gridAxisV{BGFX_INVALID_HANDLE}, gridParams{BGFX_INVALID_HANDLE};
-    void renderParticles(std::span<const RenderParticle>,bgfx::ViewId,ParticleRenderStats*);
-    void renderTo(const RenderScene&,ViewportTargets&,EnvironmentLighting&,std::uint16_t,std::uint16_t,RenderViews,bool,bool,std::vector<std::shared_ptr<const ResidentModelLod>>* = nullptr,ParticleRenderStats* = nullptr);
+    void renderParticles(std::span<const RenderParticle>,std::span<const RenderParticleMaterial>,const Camera&,bgfx::ViewId,ParticleRenderStats*);
+    void renderTo(const RenderScene&,ViewportTargets&,EnvironmentLighting&,std::uint16_t,std::uint16_t,RenderViews,bool,bool,std::vector<std::shared_ptr<const ResidentModelLod>>* = nullptr,ParticleRenderStats* = nullptr,bool drawEnvironment=false);
     ~Impl() {
         if (!initialized) return;
         sphere.reset(); fullscreen.reset(); grid.reset(); particleQuad.reset(); models.clear(); streamModels.reset(); targets.reset(); particlePreviewTargets.reset(); pickTargets.reset(); thumbnails.clear();
@@ -279,9 +289,13 @@ struct Renderer::Impl {
         if (pendingThumbnail) { pendingThumbnail->targets.reset(); destroyHandle(pendingThumbnail->readback); pendingThumbnail->pinned.reset(); pendingThumbnail->resources.clear(); }
         environment.reset();
         thumbnailEnvironment.reset();
+        materialPreviewTargets.reset();materialPreviewEnvironment.reset();
+        destroyHandle(skyProgram);destroyHandle(skyRight);destroyHandle(skyUp);destroyHandle(skyForward);destroyHandle(skySampler);
         destroyHandle(white);
         destroyHandle(pbr); destroyHandle(present); destroyHandle(gridProgram); destroyHandle(encode);
         destroyHandle(particleProgram);
+        destroyHandle(particleBaseColor); destroyHandle(particleParams); destroyHandle(particleSampler);
+        particlePins.clear(); previousParticlePins.clear();
         destroyHandle(modelProgram); destroyHandle(modelBase); destroyHandle(modelSurface); destroyHandle(modelEmissive);
         destroyHandle(pickProgram); destroyHandle(pickId); destroyHandle(lightCounts);
         destroyHandle(modelUv); destroyHandle(modelOptions); destroyHandle(modelMaps); destroyHandle(modelEmissiveMap); destroyHandle(modelNormalMatrix);
@@ -357,10 +371,16 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
     impl_->present = program(cc_vs_present,cc_fs_present,"Linear Reinhard tone map");
     impl_->gridProgram = program(cc_vs_grid,cc_fs_grid,"Quader analytic construction grid");
     impl_->encode = program(cc_vs_present,cc_fs_encode,"Viewport sRGB encoding");
-    impl_->particleProgram = program(cc_vs_particle,cc_fs_particle,"Procedural additive particle billboards");
+    impl_->particleProgram = program(cc_vs_particle,cc_fs_particle,"Unlit textured alpha/additive particle billboards");
+    impl_->particleBaseColor=uniform("u_particleBaseColor");
+    impl_->particleParams=uniform("u_particleParams");
+    impl_->particleSampler=uniform("s_particleColor",bgfx::UniformType::Sampler);
+    impl_->skyProgram=program(cc_vs_present,cc_fs_sky,"Material preview HDRI background");
+    impl_->skyRight=uniform("u_skyRight");impl_->skyUp=uniform("u_skyUp");impl_->skyForward=uniform("u_skyForward");
+    impl_->skySampler=uniform("s_skyEnvironment",bgfx::UniformType::Sampler);
     impl_->programHashes={shaderContentHash(cc_vs_pbr,cc_fs_pbr),shaderContentHash(cc_vs_model,cc_fs_model),shaderContentHash(cc_vs_pick,cc_fs_pick),
         shaderContentHash(cc_vs_present,cc_fs_present),shaderContentHash(cc_vs_grid,cc_fs_grid),shaderContentHash(cc_vs_present,cc_fs_encode),
-        shaderContentHash(cc_vs_particle,cc_fs_particle)};
+        shaderContentHash(cc_vs_particle,cc_fs_particle),shaderContentHash(cc_vs_present,cc_fs_sky)};
     impl_->baseColorMetallic = uniform("u_baseColorMetallic");
     impl_->roughness = uniform("u_roughness");
     impl_->textureFlags = uniform("u_textureFlags");
@@ -385,6 +405,7 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
     impl_->environmentParams = uniform("u_environment");
     impl_->environment = std::make_unique<EnvironmentLighting>();
     impl_->thumbnailEnvironment=std::make_unique<EnvironmentLighting>();
+    impl_->materialPreviewEnvironment=std::make_unique<EnvironmentLighting>();
     impl_->gridMinor = uniform("u_gridMinor");
     impl_->gridMajor = uniform("u_gridMajor");
     impl_->gridAxisU = uniform("u_gridAxisU");
@@ -423,7 +444,7 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
     // with decoded view IDs. Moving PickReadView ahead of a lower-numbered
     // visible pass would copy the ID texture before its model draws complete.
     // Picking is offscreen, so it can follow the complete visible frame.
-    const bgfx::ViewId order[]{SceneView,PresentView,GridView,EncodeView,4,5,6,7,ToolsView,PickView,PickReadView,11,12,13,14,15};
+    const bgfx::ViewId order[]{SceneView,PresentView,GridView,EncodeView,4,5,6,7,ToolsView,PickView,PickReadView,11,12,13,14,15,16,17,18,19};
     bgfx::setViewOrder(SceneView,static_cast<std::uint16_t>(std::size(order)),order);
     for (const auto id : order) bgfx::setViewMode(id,bgfx::ViewMode::Sequential);
 }
@@ -475,6 +496,11 @@ bool Renderer::queueModelLod(const std::string& id,std::uint64_t revision,std::s
     return result;
 }
 void Renderer::advanceStreaming(std::size_t bytes,double milliseconds) {
+    // This boundary runs once per application owner frame. Retain the previous
+    // submitted material leases for an additional frame, including test callers
+    // that advance immediately before processing that frame's queued draws.
+    impl_->previousParticlePins.clear();
+    impl_->previousParticlePins.swap(impl_->particlePins);
     impl_->streamModels->advance(bytes,milliseconds);
     if (!impl_->streamModels->status().empty()) impl_->modelStatus=impl_->streamModels->status();
 }
@@ -575,6 +601,7 @@ bool Renderer::reloadPrograms(std::span<const RendererShaderPair> pairs) {
             case RendererProgram::Grid: target=&impl_->gridProgram; contractV=cc_vs_grid; contractF=cc_fs_grid; break;
             case RendererProgram::Encode: target=&impl_->encode; contractV=cc_vs_present; contractF=cc_fs_encode; break;
             case RendererProgram::Particle: target=&impl_->particleProgram; contractV=cc_vs_particle; contractF=cc_fs_particle; break;
+              case RendererProgram::Sky: target=&impl_->skyProgram; contractV=cc_vs_present; contractF=cc_fs_sky; break;
             }
             if (!target || std::any_of(candidates.begin(),candidates.end(),[&](const auto& value){return value.first==target;})) throw std::runtime_error("Shader reload batch has an invalid or duplicated program.");
             std::string diagnostic;
@@ -681,12 +708,13 @@ void Renderer::resizeParticlePreview(std::uint32_t width,std::uint32_t height) {
     impl_->particlePreviewTargets=std::move(next);
     impl_->particlePreviewWidth=width; impl_->particlePreviewHeight=height; impl_->particlePreviewDrawable=true;
 }
-void Renderer::renderParticlePreview(const SceneSettings& settings,std::span<const RenderParticle> particles) {
+void Renderer::renderParticlePreview(const SceneSettings& settings,std::span<const RenderParticle> particles,
+                                    std::span<const RenderParticleMaterial> materials) {
     if (!impl_->particlePreviewDrawable || !impl_->particlePreviewTargets) {
         impl_->previewParticles={particles.size(),0,0,particles.size()}; return;
     }
     RenderScene scene{settings,{}};
-    scene.sceneMode=true; scene.particles=particles;
+    scene.sceneMode=true; scene.particles=particles; scene.particleMaterials=materials;
     struct RestoreStatus { std::string& destination; std::string saved; ~RestoreStatus(){destination=std::move(saved);} } restore{impl_->modelStatus,impl_->modelStatus};
     impl_->renderTo(scene,*impl_->particlePreviewTargets,*impl_->environment,
         static_cast<std::uint16_t>(impl_->particlePreviewWidth),static_cast<std::uint16_t>(impl_->particlePreviewHeight),
@@ -704,6 +732,33 @@ const ParticleRenderStats& Renderer::particleStats() const noexcept { return imp
 const ParticleRenderStats& Renderer::particlePreviewStats() const noexcept { return impl_->previewParticles; }
 const std::string& Renderer::particleStatus() const { return impl_->particleStatus; }
 
+void Renderer::resizeMaterialPreview(std::uint32_t width,std::uint32_t height) {
+    if(!width || !height) {impl_->materialPreviewDrawable=false;return;}
+    if(impl_->materialPreviewTargets && width==impl_->materialPreviewWidth && height==impl_->materialPreviewHeight) {impl_->materialPreviewDrawable=true;return;}
+    auto target=std::make_unique<ViewportTargets>();target->create(width,height);
+    impl_->materialPreviewTargets=std::move(target);impl_->materialPreviewWidth=width;impl_->materialPreviewHeight=height;impl_->materialPreviewDrawable=true;
+}
+bool Renderer::publishMaterialPreviewEnvironment(const PreparedEnvironment& data) { return impl_->materialPreviewEnvironment->publish(data); }
+void Renderer::renderMaterialPreview(const SceneSettings& settings,const MaterialAsset& material,const ModelMaterialTextures& bindings,
+                                    MaterialPreviewMesh mesh,const Mat4& transform,bool showEnvironment,std::shared_ptr<const void> pins) {
+    if(!impl_->materialPreviewDrawable || !impl_->materialPreviewTargets || !bgfx::isValid(impl_->materialPreviewEnvironment->diffuse()))return;
+    struct RestoreStatus {std::string& target;std::string old;~RestoreStatus(){target=std::move(old);}} restore{impl_->modelStatus,impl_->modelStatus};
+    const auto geometry=materialPreviewGeometry(mesh);
+    configureModelStream(geometry->id,1,*geometry->stream);
+    if(!modelLodReady(geometry->id,1,0,0))queueModelLod(geometry->id,1,materialPreviewGeometryLevel(mesh));
+    std::vector<ModelMaterial> surfaces{material.surface};surfaces.front().alphaMask=material.blend==MaterialBlend::Mask;
+    std::vector<ModelMaterialTextures> textures{bindings};
+    RenderModelInstance instance{0,{geometry,transform},&textures,1,true,false,&surfaces,material.shading,material.blend};
+    struct PreviewPins {std::shared_ptr<const void> material;std::vector<std::shared_ptr<const ResidentModelLod>> geometry;};
+    auto framePins=std::make_shared<PreviewPins>();framePins->material=std::move(pins);
+    RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances={&instance,1};scene.pinned=framePins;
+    impl_->particlePins.push_back(framePins);
+    impl_->renderTo(scene,*impl_->materialPreviewTargets,*impl_->materialPreviewEnvironment,
+        static_cast<std::uint16_t>(impl_->materialPreviewWidth),static_cast<std::uint16_t>(impl_->materialPreviewHeight),MaterialPreviewViews,false,false,&framePins->geometry,nullptr,showEnvironment);
+}
+bgfx::TextureHandle Renderer::materialPreviewTexture() const noexcept { return impl_->materialPreviewDrawable && impl_->materialPreviewTargets ? impl_->materialPreviewTargets->display:bgfx::TextureHandle{bgfx::kInvalidHandle}; }
+void Renderer::releaseMaterialPreview() { impl_->materialPreviewTargets.reset();impl_->materialPreviewDrawable=false;impl_->materialPreviewWidth=impl_->materialPreviewHeight=0; }
+
 void Renderer::render(const SceneSettings& settings, const MaterialTextures& textures) {
     render(RenderScene{settings, textures});
 }
@@ -711,7 +766,8 @@ void Renderer::render(const RenderScene& scene) {
     if (!drawable()) { impl_->particles={scene.particles.size(),0,0,scene.particles.size()}; return; }
     impl_->renderTo(scene,*impl_->targets,*impl_->environment,static_cast<std::uint16_t>(impl_->width),static_cast<std::uint16_t>(impl_->height),MainViews,true,true,nullptr,&impl_->particles);
 }
-void Renderer::Impl::renderParticles(std::span<const RenderParticle> input,bgfx::ViewId view,ParticleRenderStats* result) {
+void Renderer::Impl::renderParticles(std::span<const RenderParticle> input,std::span<const RenderParticleMaterial> materials,
+                                    const Camera& camera,bgfx::ViewId view,ParticleRenderStats* result) {
     ParticleRenderStats stats; stats.requested=input.size();
     if (input.empty()) { if (result) *result=stats; return; }
     if (!(bgfx::getCaps()->supported & BGFX_CAPS_INSTANCING)) {
@@ -720,31 +776,71 @@ void Renderer::Impl::renderParticles(std::span<const RenderParticle> input,bgfx:
     const auto inspected=std::min(input.size(),MaxParticleDrawCount);
     stats.dropped=input.size()-inspected;
     particleScratch.clear();
-    for (const auto& particle:input.first(inspected)) {
-        if (!particle_rendering::valid(particle)) { ++stats.invalid; continue; }
-        particleScratch.push_back(particle);
+    const RenderParticleMaterial defaultMaterial;
+    std::array<bool,MaxParticleMaterialCount> usable{},pinned{};
+    const auto requestedMaterials=materials.empty() ? std::size_t{1}:materials.size();
+    const auto materialCount=std::min(requestedMaterials,MaxParticleMaterialCount);
+    const auto materialAt=[&](std::size_t index)->const RenderParticleMaterial& {return materials.empty()?defaultMaterial:materials[index];};
+    for(std::size_t i=0;i<materialCount;++i) {
+        const auto& material=materialAt(i);
+        usable[i]=math::finite(material.baseColor) &&
+            std::all_of(material.baseColor.begin(),material.baseColor.end(),[](float value){return value>=0 && value<=1;}) &&
+            (material.blend==ParticleBlendMode::Alpha || material.blend==ParticleBlendMode::Additive);
     }
-    static_assert(sizeof(RenderParticle)==32 && offsetof(RenderParticle,color)==16);
+    const auto eye=camera.eye(),forward=camera.forward();
+    for (std::size_t i=0;i<inspected;++i) {
+        const auto& particle=input[i];
+        if (!particle_rendering::valid(particle) || particle.materialIndex>=requestedMaterials) {
+            ++stats.invalid; continue;
+        }
+        if(particle.materialIndex>=materialCount) {++stats.dropped;continue;}
+        if(!usable[particle.materialIndex]) {++stats.invalid;continue;}
+        const auto depth=particle_rendering::viewDepth(particle.position,eye,forward);
+        if(!std::isfinite(depth)) {++stats.invalid;continue;}
+        particleScratch.push_back({i,depth});
+    }
+    particle_rendering::sortBackToFront(particleScratch);
+    struct GpuInstance {Vec3 position;float size;Vec4 color;};
+    static_assert(sizeof(GpuInstance)==32 && offsetof(GpuInstance,color)==16);
     constexpr std::uint32_t BatchSize=4096;
-    constexpr auto Stride=static_cast<std::uint16_t>(sizeof(RenderParticle));
-    while (stats.submitted<particleScratch.size()) {
-        const auto count=static_cast<std::uint32_t>(std::min<std::size_t>(BatchSize,particleScratch.size()-stats.submitted));
+    constexpr auto Stride=static_cast<std::uint16_t>(sizeof(GpuInstance));
+    while (stats.submitted<particleScratch.size() && stats.drawCalls<MaxParticleDrawCalls) {
+        const auto materialIndex=input[particleScratch[stats.submitted].index].materialIndex;
+        const auto& material=materialAt(materialIndex);
+        const auto limit=std::min(particleScratch.size(),stats.submitted+BatchSize);
+        auto runEnd=stats.submitted+1;
+        while(runEnd<limit && input[particleScratch[runEnd].index].materialIndex==materialIndex)++runEnd;
+        const auto count=static_cast<std::uint32_t>(runEnd-stats.submitted);
         const auto available=bgfx::getAvailInstanceDataBuffer(count,Stride);
         if (!available) break;
         bgfx::InstanceDataBuffer instances;
         bgfx::allocInstanceDataBuffer(&instances,available,Stride);
-        std::memcpy(instances.data,particleScratch.data()+stats.submitted,available*sizeof(RenderParticle));
+        for(std::uint32_t i=0;i<available;++i) {
+            const auto& particle=input[particleScratch[stats.submitted+i].index];
+            const GpuInstance value{particle.position,particle.size,particle.color};
+            std::memcpy(instances.data+i*Stride,&value,sizeof(value));
+        }
+        if(!pinned[materialIndex] && material.pinned) {
+            particlePins.push_back(material.pinned);pinned[materialIndex]=true;
+        }
+        const bool textured=bgfx::isValid(material.colorTexture);
+        const float options[]{textured?1.f:0.f,0,0,0};
+        bgfx::setUniform(particleBaseColor,material.baseColor.data());
+        bgfx::setUniform(particleParams,options);
+        bgfx::setTexture(0,particleSampler,textured?material.colorTexture:white,material.samplerFlags);
         particleQuad.bind(); bgfx::setInstanceDataBuffer(&instances);
-        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LESS |
-            BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_ZERO,BGFX_STATE_BLEND_ONE));
+        const auto blend=material.blend==ParticleBlendMode::Alpha ?
+            BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_INV_SRC_ALPHA):
+            BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_ZERO,BGFX_STATE_BLEND_ONE);
+        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LESS | blend);
         bgfx::submit(view,particleProgram);
-        stats.submitted+=available;
+        stats.submitted+=available;++stats.drawCalls;
     }
     stats.dropped+=particleScratch.size()-stats.submitted;
     if (result) *result=stats;
 }
 void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,EnvironmentLighting& lighting,
-    std::uint16_t w,std::uint16_t h,RenderViews views,bool drawGrid,bool allowPicking,std::vector<std::shared_ptr<const ResidentModelLod>>* pinnedGeometry,ParticleRenderStats* particleStats) {
+    std::uint16_t w,std::uint16_t h,RenderViews views,bool drawGrid,bool allowPicking,std::vector<std::shared_ptr<const ResidentModelLod>>* pinnedGeometry,ParticleRenderStats* particleStats,bool drawEnvironment) {
     if (allowPicking) {
         ++renderFrame;
         streamModels->beginMainView();
@@ -754,6 +850,7 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
     const auto& textures = scene.sphereTextures;
     const auto* caps = bgfx::getCaps();
     bgfx::setViewFrameBuffer(views.scene,target.hdrBuffer);
+    bgfx::setViewMode(views.scene,bgfx::ViewMode::Sequential); // Opaque draws, then globally sorted particles.
     bgfx::setViewRect(views.scene,0,0,w,h);
     bgfx::setViewClear(views.scene,BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH,0u,1.0f,0);
     bgfx::touch(views.scene); // Also clear when every model draw has a singular transform.
@@ -763,6 +860,20 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
     const auto view = settings.camera.viewMatrix();
     const auto projection = settings.camera.projectionMatrix(aspect,caps->homogeneousDepth ? ClipDepth::NegativeOneToOne : ClipDepth::ZeroToOne);
     bgfx::setViewTransform(views.scene,view.data(),projection.data());
+    if(drawEnvironment && bgfx::isValid(lighting.specular())) {
+        const auto forward=math::normalized(settings.camera.target-eye,{0,0,-1});
+        const auto right=math::normalized(math::cross(forward,settings.camera.up),{1,0,0});
+        const auto up=math::normalized(math::cross(right,forward),{0,1,0});
+        const auto tangent=std::tan(settings.camera.verticalFov(aspect)*std::numbers::pi_v<float>/360);
+        const Vec4 rightValue{right[0]*tangent*aspect,right[1]*tangent*aspect,right[2]*tangent*aspect,0};
+        const Vec4 upValue{up[0]*tangent,up[1]*tangent,up[2]*tangent,0};
+        const Vec4 forwardValue{forward[0],forward[1],forward[2],0};
+        const float env[]{settings.environment.enabled?bounded(settings.environment.intensity,1,0,10):0,
+            bounded(settings.environment.rotation,0,-180,180)*std::numbers::pi_v<float>/180,0,0};
+        bgfx::setUniform(skyRight,rightValue.data());bgfx::setUniform(skyUp,upValue.data());bgfx::setUniform(skyForward,forwardValue.data());
+        bgfx::setUniform(environmentParams,env);bgfx::setTexture(0,skySampler,lighting.specular());
+        fullscreen.bind();bgfx::setState(BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A);bgfx::submit(views.scene,skyProgram);
+    }
     const float camera[]{eye[0],eye[1],eye[2],0};
     const float environmentValues[]{settings.environment.enabled ? bounded(settings.environment.intensity,1,0,10) : 0,
         bounded(settings.environment.rotation,0,-180,180) * std::numbers::pi_v<float> / 180.0f,
@@ -878,7 +989,7 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
                     static_cast<float>(material.normalTexture.texCoord),static_cast<float>(material.occlusionTexture.texCoord)};
                 const float options[]{static_cast<float>(material.emissiveTexture.texCoord),material.alphaMask ? 1.0f : 0.0f,
                     material.doubleSided ? 1.0f : 0.0f,handedness};
-                const float emissiveMap[]{bgfx::isValid(bindings.handles[4]) ? 1.0f : 0.0f,0,0,0};
+                const float emissiveMap[]{bgfx::isValid(bindings.handles[4]) ? 1.0f : 0.0f,instance.shading==MaterialShading::Unlit?1.f:0.f,0,0};
                 bgfx::setTransform(world.data());
                 bgfx::setUniform(modelNormalMatrix,normal.data());
                 bgfx::setUniform(modelBase,material.baseColor.data());
@@ -888,7 +999,10 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
                 bindLighting(5);
                 bindGeometry();
                 const std::uint64_t cull = material.doubleSided ? BGFX_STATE_NONE : handedness < 0 ? BGFX_STATE_CULL_CCW : BGFX_STATE_CULL_CW;
-                bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS | cull);
+                const bool transparent=instance.blend==MaterialBlend::Alpha || instance.blend==MaterialBlend::Additive;
+                const auto blending=instance.blend==MaterialBlend::Alpha?BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_INV_SRC_ALPHA):
+                    instance.blend==MaterialBlend::Additive?BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_ZERO,BGFX_STATE_BLEND_ONE):0;
+                bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | (transparent?0:BGFX_STATE_WRITE_Z) | BGFX_STATE_DEPTH_TEST_LESS | cull | blending);
                 bgfx::submit(views.scene,modelProgram);
                 if (capturePick && instance.pickable && instance.entityId) {
                     if (resident) pendingPick->resources.push_back(resident);
@@ -942,7 +1056,7 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
         bgfx::submit(views.scene,pbr);
     }
 
-    renderParticles(scene.particles,views.scene,particleStats);
+    renderParticles(scene.particles,scene.particleMaterials,settings.camera,views.scene,particleStats);
 
     const float params[]{bounded(settings.exposure,1,0,100),caps->originBottomLeft?1.0f:0.0f,0,0};
     bgfx::setViewFrameBuffer(views.present,target.compositeBuffer);
@@ -950,7 +1064,7 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
     bgfx::setViewClear(views.present,BGFX_CLEAR_NONE);
     bgfx::setViewTransform(views.present,nullptr,nullptr);
     bgfx::setUniform(presentParams,params);
-    const auto matte=particle_rendering::backgroundRadiance(appearance.backgroundSrgb);
+    const auto matte=particle_rendering::backgroundLinear(appearance.backgroundSrgb);
     const float backgroundValue[]{matte[0],matte[1],matte[2],1};
     bgfx::setUniform(background,backgroundValue);
     bgfx::setTexture(0,hdrSampler,target.hdr);

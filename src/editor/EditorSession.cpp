@@ -13,6 +13,7 @@
 #include <fstream>
 #include <algorithm>
 #include <cmath>
+#include <exception>
 
 namespace crimson {
 using Json=nlohmann::json;
@@ -32,7 +33,7 @@ bool visibleBounds(const Aabb& local,const Mat4& world,const Camera& camera,floa
 }
 }
 EditorSession::EditorSession(const std::filesystem::path& root, AssetLibrary& assets, Renderer& renderer)
-    : root_(root),document_(root),particleEditor_(root),resources_(*assets.resources()),prepared_(assets,renderer,resources_,root) {
+    : root_(root),document_(root),particleEditor_(root),materialEditor_(root),resources_(*assets.resources()),prepared_(assets,renderer,resources_,root) {
     restoreSession(assets);
     documentEpoch_=document_.documentGeneration();
     previews_=std::make_unique<AssetPreviews>(root,assets,resources_,renderer,prepared_);
@@ -105,6 +106,7 @@ void EditorSession::saveSession() noexcept {
 }
 void EditorSession::filesChanged(std::span<const std::filesystem::path> paths) {
     particleEditor_.filesChanged(paths);
+    materialEditor_.filesChanged(paths);
     changedFiles_.insert(changedFiles_.end(),paths.begin(),paths.end());
     for(const auto& path:paths) {
         const auto relative=path.lexically_relative(root_).generic_u8string();
@@ -149,7 +151,9 @@ void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::ui
     if(auto snapshot=environment_.snapshot()) if(snapshot.revision()!=environmentRevision_ && renderer.publishEnvironment(*snapshot)) environmentRevision_=snapshot.revision();
     previews_->pump(bgfxFrame,visiblePreviewIds_);
 }
-void EditorSession::cancelInteraction(Renderer& renderer) { editor_.cancelInteraction(document_,renderer);particleEditor_.cancelInteraction();skipSimulationTime_=true; }
+void EditorSession::cancelInteraction(Renderer& renderer) {
+    editor_.cancelInteraction(document_,renderer);particleEditor_.cancelInteraction();materialEditor_.cancelInteraction();skipSimulationTime_=true;
+}
 void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& navigation, SDL_Window* window,
                           uint32_t bgfxFrame, bool quitRequested) {
     const auto previousAsset=document_.assetId();
@@ -157,10 +161,13 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     skipSimulationTime_=false;
     const auto previousCamera=settings_.camera;
     document_.setPreviewCamera(settings_.camera);
-    const auto frame=editor_.draw(document_,settings_,assets,renderer,window,navigation.active(),bgfxFrame,quitRequested,particleEditor_);
+    const auto frame=editor_.draw(document_,settings_,assets,renderer,window,navigation.active(),bgfxFrame,quitRequested,particleEditor_,materialEditor_);
     if(frame.createParticle) particleEditor_.requestCreate(frame.particleFolder,assets);
     if(!frame.openParticle.empty()) particleEditor_.requestOpen(frame.openParticle,assets);
-    particleEditor_.draw(assets,renderer,simulationSeconds);
+    if(frame.createMaterial)materialEditor_.requestCreate(frame.materialFolder,assets);
+    if(!frame.openMaterial.empty())materialEditor_.requestOpen(frame.openMaterial,assets);
+    particleEditor_.draw(assets,renderer,simulationSeconds,materialEditor_);
+    materialEditor_.draw(assets,renderer,resources_,simulationSeconds);
     status_=startupStatus_;
     if (frame.documentReplaced || document_.assetId() != cameraScene_ || document_.documentGeneration()!=documentEpoch_) {
         if (!previousAsset.empty()) cameras_[previousAsset]=previousCamera;
@@ -205,10 +212,41 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
         return ParticleDefinitionVersion{assets.findParticle(id),assets.particleRevision(id),assets.particleDiagnostic(id)};
     },simulationSeconds,frame.playParticleEntity);
     particlePackets_.clear();particlePackets_.reserve(particles_.presentation().size());
-    for(const auto& p:particles_.presentation())particlePackets_.push_back({p.position,p.size,p.color});
+    particleMaterials_.clear();particleMaterials_.push_back({});
+    std::unordered_map<std::string,std::uint32_t> materialIndices;
+    std::vector<std::shared_ptr<const PreparedParticleMaterial>> particlePins;
+    const auto presentation=particles_.presentation();
+    for(const auto& group:particles_.groups()) {
+        try {
+            const auto id=assets.references().resolveParticleMaterial(group.materialId);
+            auto found=materialIndices.find(id);
+            if(found==materialIndices.end()) {
+                const auto material=assets.preparedParticleMaterial(group.materialId);
+                if(!material || !material->ready) {
+                    status_+="Particle material "+group.materialId+": "+(material?material->diagnostic:"unavailable")+"\n";
+                    materialIndices.emplace(id,UINT32_MAX);continue;
+                }
+                if(!material->diagnostic.empty())status_+=material->diagnostic+"\n";
+                const auto index=static_cast<std::uint32_t>(particleMaterials_.size());
+                particleMaterials_.push_back(material->render);particlePins.push_back(material);
+                found=materialIndices.emplace(id,index).first;
+            }
+            if(found->second==UINT32_MAX)continue;
+            for(std::size_t offset=group.first;offset<group.first+group.count;++offset) {
+                const auto& p=presentation[offset];particlePackets_.push_back({p.position,p.size,p.color,found->second});
+            }
+        } catch(const std::exception& error) {
+            status_+="Particle material "+group.materialId+": "+error.what()+"\n";
+        }
+    }
     std::vector<RenderModelInstance> instances;
-    struct FramePins { std::vector<std::shared_ptr<const PreparedEditorModel>> models; };
-    auto pins=std::make_shared<FramePins>();std::uint64_t signature=14695981039346656037ull;
+    struct FramePins {
+        std::vector<std::shared_ptr<const PreparedEditorModel>> models;
+        std::vector<std::shared_ptr<const PreparedParticleMaterial>> particles;
+    };
+    auto pins=std::make_shared<FramePins>();pins->particles=std::move(particlePins);
+    std::uint64_t signature=14695981039346656037ull;
+    for(const auto& material:pins->particles)signature=(signature^material->signature)*1099511628211ull;
     for(const auto& model:extracted.models) {
         const bool selected=std::find(document_.selection().ids.begin(),document_.selection().ids.end(),model.id)!=document_.selection().ids.end();
         if(!selected) if(const auto metadata=assets.findModel(model.assetId))
@@ -225,7 +263,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     renderer.setExternalResourceSignature(signature);
     renderer.setAppearance(editor_.appearance());
     if (frame.viewport.width > 0 && frame.viewport.height > 0)
-        renderer.render(RenderScene{settings_,{},nullptr,nullptr,instances,extracted.directional,extracted.points,true,pins,particlePackets_});
+        renderer.render(RenderScene{settings_,{},nullptr,nullptr,instances,extracted.directional,extracted.points,true,pins,particlePackets_,particleMaterials_});
     visiblePreviewIds_=frame.visiblePreviewIds;viewportRegion_=frame.viewport;
     if(!document_.assetId().empty() && !document_.dirty()) try {
         const auto fingerprint=sceneFileFingerprint(root_,document_.assetId());

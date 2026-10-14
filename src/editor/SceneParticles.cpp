@@ -6,7 +6,7 @@ namespace crimson {
 void SceneParticles::reconcile(std::uint64_t generation,std::span<const ExtractedParticle> authored,
                               const DefinitionQuery& query,double seconds,EntityId restart) {
     if(generation_!=generation) { instances_.clear();generation_=generation; }
-    status_.clear();presentation_.clear();
+    status_.clear();presentation_.clear();groups_.clear();
     struct Admission { const ExtractedParticle* source;ParticleDefinitionVersion version;bool updated{}; };
     std::vector<Admission> admitted;admitted.reserve(std::min(authored.size(),MaximumInstances));
     std::unordered_set<EntityId> retained;
@@ -53,7 +53,9 @@ void SceneParticles::reconcile(std::uint64_t generation,std::span<const Extracte
             if(!entry.updated && instance.revision!=definition.revision)instance.simulation.updateDefinition(next);
         }
         instance.assetId=source.assetId;instance.revision=definition.revision;
-        instance.simulation.advance(seconds);instance.simulation.appendPresentation(presentation_);
+        instance.simulation.advance(seconds);
+        const auto first=presentation_.size();instance.simulation.appendPresentation(presentation_);
+        groups_.push_back({source.id,next.emitter.material.id,first,presentation_.size()-first});
         const auto& stats=instance.simulation.stats();
         if(stats.droppedSpawns || stats.droppedCatchUpTicks)
             status_+="Particle entity "+std::to_string(source.id)+": dropped "+std::to_string(stats.droppedSpawns)+" births, "+std::to_string(stats.droppedCatchUpTicks)+" catch-up ticks.\n";

@@ -1,4 +1,5 @@
 #include "ParticleDocument.h"
+#include <algorithm>
 #include <fstream>
 #include <stdexcept>
 
@@ -23,6 +24,16 @@ bool ParticleEffectDocument::dirty() const {
 }
 std::string ParticleEffectDocument::undoLabel() const { return canUndo()?history_[cursor_-1].label:std::string{}; }
 std::string ParticleEffectDocument::redoLabel() const { return canRedo()?history_[cursor_].label:std::string{}; }
+std::vector<std::string> ParticleEffectDocument::historicalMaterialReferences() const {
+    std::vector<std::string> references;
+    const auto append=[&](const ParticleEffectAsset& definition) {
+        const auto& id=definition.emitter.material.id;
+        if (!id.empty() && std::find(references.begin(),references.end(),id)==references.end()) references.push_back(id);
+    };
+    for (const auto& command:history_) { append(command.before);append(command.after); }
+    if (transaction_) append(transaction_->before);
+    return references;
+}
 void ParticleEffectDocument::publish() {
     committed_=std::make_shared<const ParticleEffectAsset>(working_);
     ++revision_;

@@ -10,6 +10,6 @@ void main()
     vec3 position = mul(u_view, vec4(i_data0.xyz, 1.0)).xyz;
     position.xy += a_position.xy * i_data0.w;
     gl_Position = mul(u_proj, vec4(position, 1.0));
-    v_particleUv = a_position.xy * 2.0;
+    v_particleUv = vec2(a_position.x + 0.5, 0.5 - a_position.y);
     v_particleColor = i_data1;
 }

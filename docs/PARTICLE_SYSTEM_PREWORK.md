@@ -1,12 +1,48 @@
 # Crimson Engine particle system: pre-work specification
 
-Status: Step 1 implemented and integrated into the main checkout; broader user acceptance pending. Steps 2–14 and GPU simulation remain planned. Prepared 13 October 2026; integration updated 14 October 2026.
+Status: Steps 1 and 2 implemented in the main checkout and checked in Release; broader authoring acceptance remains as described below. The next particle implementation milestone is Step 3, Common emission and motion. Steps 3–14 and GPU simulation remain planned. Prepared 13 October 2026; implementation checkpoint updated 14 October 2026.
 
 This document specifies the particle system's functionality, authoring workflow, engineering boundaries, research rationale, and implementation sequence. It supplements [ENGINE_ARCHITECTURE.md](ENGINE_ARCHITECTURE.md); that guide remains authoritative for engine ownership and implementation status. [README.md](../README.md) remains the entry point for controls that have actually landed.
 
 **Every implementation step must leave a working, usable, saveable particle system.** Build the smallest complete feature at each handoff. Infrastructure belongs inside the feature that needs it, rather than in a series of invisible foundation milestones. Complete each authorized step, run its required checks, report the result, and leave visual feature acceptance to the user.
 
-Step 1 below is the delivered baseline; the remaining steps are planned. Their numbering defines the particle implementation sequence; it does not replace the architecture guide's current **Next** milestone. This document does not authorize implementing the complete system in one change.
+Steps 1 and 2 below are the delivered baseline; the remaining steps are planned. Their numbering defines the particle implementation sequence; it does not replace the architecture guide's current **Next** milestone. This document does not authorize implementing the complete system in one change.
+
+## Current checkpoint — 14 October 2026
+
+### What is implemented
+
+The usable baseline is the complete **asset -> editor -> preview -> scene -> save/reopen** workflow from Step 1, plus the material and transparency work from Step 2:
+
+- Create a saved particle effect in the shared Asset Browser, open its floating non-dockable editor, and place independently playing instances in a scene. Effect, material and scene documents have separate save state and transactional undo/redo. Both asset editors support native windows on other monitors.
+- Simulate one point emitter on the CPU at 60 Hz, with constant rate, lifetime, initial velocity, gravity, size, tint, intensity, opacity and capacity. The starter begins at rest and falls under negative Y gravity. Gravity is integrated directly by the particle subsystem; Jolt is not part of this baseline.
+- Play, Pause/Resume, Restart and Stop in the isolated preview, and restart a selected scene instance with Play Effect. Moving an emitter retains playback; existing world-space particles stay detached. Appearance changes retain particles and clocks. Capacity changes clear live records while preserving playback time/state; spawn properties affect later births and gravity applies on subsequent simulation ticks.
+- Assign an ordinary compatible material asset through the effect's picker or drag-and-drop field; clear restores the protected procedural default. Create materials in the Asset Browser and open them with Edit Material or by opening the asset. The material owns its texture, sampler, color/opacity and Alpha/Additive blend mode. Definitions and prepared texture leases remain coherent across replacement, deletion and preparation failures.
+- Edit native materials in a floating window with File/Edit menus, a properties sidebar and live Sphere/Cube/Rounded Cube/Cylinder/Plane previews. The Environment menu controls an independent transient HDRI, intensity, rotation and background. Quader's material-preview tumble, pan, zoom and environment-rotation gestures are implemented. Filtering exposes Linear/Nearest beside Wrap U/V and preserves older sampler settings until explicitly changed.
+- Render procedural or textured unlit Alpha/Additive sprites, with premultiplied output and stable back-to-front ordering across effects. Native Lit PBR Opaque/Mask materials can also be authored and previewed; **particle materials remain Unlit Alpha/Additive**. Imported originals remain read-only, and Save As creates an editable native material.
+
+The five material-preview meshes are presentation choices, not particle emission shapes or mesh-particle support. Each effect still has exactly one point emitter. Random ranges, bursts, delay/duration/loop scheduling, local-space simulation, acceleration/drag modules and module-stack authoring have not landed. The seed is retained for restart compatibility but currently does not drive variation and has no authoring control. Curves/gradients, multiple emitters, timeline/Step/seek, exposed parameters, flipbooks, stretched sprites, soft intersections, particle lighting, collision, trails/ribbons/beams, mesh particles, events and GPU simulation remain later milestones. Master/child materials and material graphs also remain planned.
+
+### Validation and current limits
+
+The most recent implementation handoff passed an incremental **Release build and 22 focused checks**. Coverage includes particle and material document/storage/history behavior, scene extraction, reference replacement/deletion, transparency math, shader compilation/preflight, preview geometry/navigation and native Direct3D 11 rendering. Native checks cover all five preview meshes, live material changes, independent environment lighting and render targets, resize/release/reopen, and secondary-window collapse/restore and resource lifetime. The documented authoring exercises still belong to user acceptance; automated checks do not claim to have exercised every effect or monitor arrangement.
+
+The limits and omission counters in Steps 1–2 are implemented bounds, not measured particle-count performance promises. CPU profiling at 1k/10k/50k particles remains part of the later profiling work. Center-depth sorting cannot exactly resolve intersecting transparent geometry, and the single HDR resolve can saturate intense transparent emission at display white; Section 3.6 records those rendering limits. The full implementation retains existing project assets and docking state.
+
+### Next particle handoff: Step 3 — Common emission and motion
+
+The next user outcome is to author a **fountain, a one-shot impact and a directional spray** through ordinary controls. Implement Step 3 in usable substeps, extending the existing saved format compatibly. Each substep must support editing, saving/reopening, undo/redo, isolated preview and scene instances before continuing.
+
+| Substep | Working result and necessary actions | Focused acceptance |
+| --- | --- | --- |
+| 3a. Shapes and variation | Add cone, sphere and box emission plus constant/random-range lifetime, speed and direction controls. Introduce seeded sampling and the native initialization/stage preparation needed by those features. Earlier effects retain point emission and their existing constant values. | Tune a fountain and cone spray; samples stay within the authored shape/ranges, saved settings reopen, and Restart repeats the same seed. |
+| 3b. Bursts and emitter timing | Add bounded burst records, emitter delay, duration and loop controls, scheduler boundary handling and one-shot completion/draining. Provide numeric timing controls now; the timeline remains Step 5. Preserve continuous playback for earlier assets. | Make an impact burst that fires once per crossed boundary. Pause/Resume does not duplicate it; delayed starts, loop crossings and draining behave at different render rates. |
+| 3c. Forces and simulation space | Add acceleration and drag alongside gravity, and explicit local/world simulation. Define and document force, velocity and transform-space semantics, including parenting/full affine transforms. Keep physics queries outside this step. | Tune a spray with drag and compare moving/parented emitters in local and world space. Save/reopen and undo preserve the selected behavior without affecting another instance. |
+| 3d. Module authoring | Complete add/remove/enable and valid-stage reordering for the delivered native modules. Stable module identities, validation and prepared execution lists belong inside the first feature that needs them; this substep completes their authoring controls rather than delaying required runtime infrastructure. Show only implemented modules. | Assemble, disable, reorder and restore the demonstrated effects. Invalid dependencies are explained; accepted edits remain saveable and undoable, and Steps 1–2 effects still work. |
+
+Before implementation, recheck the asset/resource/document owners and schema in the actual checkout. Keep simulation in the focused CPU subsystem, resolve shared values outside per-particle loops, preserve fractional newborn integration and bounded catch-up, and add limits with burst/scheduling features. After implementation owners finish, use one integration build and relevant focused checks for sampling, deterministic restart, timing crossings, ranges, stage validation, transforms, history and format migration.
+
+Step 4 remains curves and gradients; multiple emitters/timeline are Step 5. Jolt first arrives with static collision in Step 9. This particle sequence does not change the engine architecture's **Next** milestone, **2c: imported-material editing and selected model-material assignment**.
 
 ## 1. Product direction and scope
 
@@ -68,7 +104,15 @@ Show controls that the current implementation supports. Introduce advanced contr
 
 Use readable property names and units: particles/s, seconds, meters, m/s, m/s², and degrees. Place a diagnostic beside its field or emitter. Do not expose persistence IDs, GPU terminology, or resource-cache details as ordinary authoring controls.
 
-Use the engine's adjacent picker, thumbnail/name, clear, and drag-and-drop conventions. Typed fields filter compatible assets and assign immediately. A cleared optional sprite texture uses the documented procedural sprite. An unresolved assigned reference retains its identity and a visible diagnostic; retain a last valid prepared resource when possible, otherwise suspend the affected renderer/emitter until it resolves or is cleared/replaced. A missing root effect retains its scene component and overrides while playback is unavailable.
+Use the engine's adjacent picker, thumbnail/name, clear, and drag-and-drop conventions. Typed fields filter compatible assets and assign immediately. A cleared optional sprite texture uses the documented procedural sprite. An unresolved assigned reference retains its identity and a visible diagnostic; retain a last valid prepared resource when possible, otherwise suspend the affected renderer/emitter until it resolves or is cleared/replaced. A missing root effect retains its scene component while playback is unavailable; retain instance overrides as well when Step 7 introduces them.
+
+The sprite renderer assigns an ordinary material asset through a typed `AssetRef<MaterialAsset>` slot. The material owns its texture/sampler, linear base-color RGBA, and Alpha/Additive mode; emission, motion, size and per-particle tint/intensity/opacity remain on the effect. Step 2 extends the existing `.crimson-material` system with unlit sprite-compatible settings. It does not introduce a separate particle-material asset format. A protected white procedural additive material keeps creation immediately useful. Pick or drop an existing compatible material, clear to the protected default, and use Edit Material to open its independent document. Create materials through the shared Asset Browser's Create → Material action, then assign them. Material commits publish valid complete definitions to referencing effects without restarting playback.
+
+The material editor is a floating, non-dockable document with a replaceable properties sidebar and live 3D preview. Its File menu provides Save, Save As and Close; Edit provides material Undo/Redo. Native Unlit Alpha/Additive and Lit PBR Opaque/Mask materials are editable. Imported originals are read-only; explicit Save As creates a native material with independent identity and no imported origin. Sprite assignment still filters Unlit Alpha/Additive profiles. Imported-original editing and model-material assignment remain the architecture's Next milestone.
+
+The preview offers Sphere by default, Cube, Rounded Cube, Cylinder and Plane. Its Environment panel has HDRI pick/drop/clear, enable, intensity, rotation and Show background. Preview camera, mesh and environment remain transient and independent of scene lighting and authored material/effect files. Quader material mini-viewport gestures are MMB object tumble, Shift+MMB pan, Ctrl+MMB environment rotation, wheel zoom and MMB double-click to reset the view and environment rotation. Texture fields keep their adjacent picker, thumbnail/name, clear and drag-and-drop. Wrap U/V remain explicit beside one Filtering selector, Nearest or Linear; existing sampler values stay preserved until that selector is deliberately used.
+
+Material graphs, master materials and child material parameter overrides remain planned. The current property view is a replaceable authoring surface; it does not implement graph nodes, a graph compiler or material inheritance.
 
 For compatible scalar properties, offer **Constant**, **Random Range**, and **Curve** beside the property when each mode is implemented. Changing the mode reveals the corresponding controls. Color uses a gradient with opacity. Curve/gradient edits operate next to the property and use ordinary field editing conventions.
 
@@ -90,9 +134,9 @@ Emitter duplication and later starter presets produce ordinary editable definiti
 | Step, from Step 5 | Advance one fixed tick while paused |
 | Seek, from Step 5 | Reset/replay the isolated preview toward the requested time with bounded work and cancellation |
 
-Step 1 displays elapsed time and live counts without a scrub control. Seeking arrives with its implementation. Changing the seed is an explicit way to vary an effect; ordinary Restart repeats it.
+Step 1 displays elapsed time and live counts without a scrub control. Seeking arrives with its implementation. Seed variation controls arrive with random sampling; the baseline only retains the seed and ordinary Restart reuses it.
 
-Scene effects start on successful placement and scene opening. Looping effects continue; one-shot effects finish and remain selectable for replay. Selection changes do not restart effects. Moving, parenting, or editing an unrelated entity must not restart the scene's particle system.
+Scene effects start on successful placement and scene opening. Step 3 introduces authored loop/one-shot timing: looping effects continue, while one-shot effects finish and remain selectable for replay. The current baseline emits continuously. Selection changes do not restart effects. Moving, parenting, or editing an unrelated entity must not restart the scene's particle system.
 
 World space is the default: newly spawned particles use the updated emitter transform, while existing particles remain detached. Local space, introduced in Step 3, makes existing particles follow the emitter. Document force-space and size-inheritance choices beside their supported controls; preserve the full affine authored matrix rather than decomposing and replacing it with TRS.
 
@@ -100,7 +144,7 @@ Preview playback is transient. Play, Pause, Restart, camera navigation, and seek
 
 ### 2.4 Document editing, publication, and saving
 
-Particle assets have independent dirty state and undo/redo from scene instances. **Ctrl+S**, **Ctrl+Z**, **Ctrl+Y**, the equivalent redo shortcut, and menu actions target the document that owns focus. Editing an effect must not accidentally save or undo its scene.
+Particle assets, native materials and scenes have independent dirty state and undo/redo. **Ctrl+S**, **Ctrl+Z**, **Ctrl+Y**, the equivalent redo shortcut, and menu actions target the document that owns focus. Material assignment belongs to effect history; material property edits belong to material history. Editing either asset must not accidentally save or undo its scene. Exit resolves material, effect and scene dirty-document prompts in sequence.
 
 A property drag, curve edit, or timeline drag forms one transaction. Escape restores the prior values. Temporarily incomplete text is editable; constrain ordinary numeric fields where practical and show invalid values locally.
 
@@ -118,7 +162,8 @@ Step 1 applies the following live-edit policy in both preview and scene instance
 
 | Field or operation | Effect on an existing instance |
 | --- | --- |
-| Color, size, intensity | Apply to existing and new particles on the next presentation extraction, even while paused |
+| Color, size, intensity, opacity | Apply to existing and new particles on the next presentation extraction, even while paused |
+| Material assignment or committed material appearance | Prepare coherent bindings and update rendering without clearing particle records or changing playback time |
 | Gravity | Apply to existing particles on the next fixed simulation tick |
 | Rate, emitter enabled | Apply on subsequent emission scheduling; preserve phase and allow existing particles to drain |
 | Initial velocity, lifetime | Apply at birth; existing particles retain their cached birth values |
@@ -150,17 +195,18 @@ Preview navigation owns its accepted mouse gestures and focus commands. Property
 
 ### 3.1 Concrete owners and interfaces
 
-These names describe the planned contracts, not existing particle implementations:
+These contracts cover the implemented baseline and later extensions. The milestone descriptions distinguish delivered capabilities from planned ones:
 
 | Boundary / interface | Responsibility |
 | --- | --- |
 | `ParticleEffectAsset` | Versioned authored emitters, built-in module settings, renderer settings, parameters, stable identities, and managed dependencies |
+| `MaterialAsset` / `MaterialDocument` | Native material appearance, compatible sprite/PBR profiles, material-owned image dependencies, atomic storage and independent authored history |
 | `ParticleEffectDocument` | Working definition, transactions, history, dirty state, validation, and atomic save/reload |
 | Prepared emitter/module data | Validated native stage lists, immutable curve data, resolved parameter bindings, and required storage streams |
 | `CpuParticleSystem` / effect instances | Scheduling, seed/run identity, pooled live state, motion, events, completion, and work limits |
 | `SceneParticleEmitter` | Typed effect reference, seed/playback defaults, exposed overrides, and authored attachment through the scene transform |
 | `ParticleRenderFrame` | Copied presentation data and render indices, with no ECS pointers or authoritative simulation mutation |
-| Editor preview/session | Isolated instance/clock, document operations, preview collision fixtures, and scene reconciliation |
+| Editor preview/session | Isolated instance/clock, document operations, material preview camera/HDRI, preview collision fixtures when implemented, and scene reconciliation |
 | Renderer particle resources | Programs, quad/mesh/ribbon buffers, bindings, targets, ordering, and explicit GPU release |
 | `SceneCollider` / `SceneCollisionWorld` | Authored static collision settings and an explicit Jolt owner with Crimson query values |
 
@@ -186,7 +232,7 @@ Loading validates a complete candidate before replacing a working definition. Sa
 
 Scene history contains the effect reference and authored instance settings. Effect history contains definitions. Neither stores live particles. Restoring a deleted instance through scene undo creates a fresh transient instance from its authored settings; undo does not resurrect an old simulation buffer.
 
-Add dependency support with each feature: scene -> effect in Step 1, effect -> texture in Step 2, effect -> model in Step 11, and event source/target emitter validation in Step 12. Include active documents, saved assets, and history in reference scanning as required by the existing policy. Replacement is typed and transactional. Deleting a particle instance never deletes its shared asset or dependencies.
+Add dependency support with each feature: scene -> effect in Step 1, effect -> material -> texture in Step 2, effect -> model in Step 11, and event source/target emitter validation in Step 12. Include active documents, saved assets, and history in reference scanning as required by the existing policy. Replacement is typed and transactional. Particle material deletion falls back to the protected procedural particle material; model material deletion keeps its PBR default. Sprite texture clearing/deletion uses the procedural fallback. An unresolved unexpected reference retains its identity and diagnostics. Deleting a particle instance never deletes its shared asset or dependencies.
 
 ### 3.4 CPU storage and module execution
 
@@ -216,7 +262,7 @@ CPU simulation does not imply CPU-expanded sprite geometry. Use shared static qu
 
 Draw opaque/cutout mesh particles with scene depth writes. Transparent particles depth-test against opaque geometry without writing depth. Sort their visible presentation packets back to front across emitters and renderer types, with stable ties. Alpha and additive packets interleave when foreground smoke must cover emission. Batch only consecutive compatible packets; regrouping by emitter or texture must not destroy ordering. Center/segment sorting cannot perfectly order crossing meshes or strips; record that limit.
 
-Keep the sequence **linear HDR scene/particles -> exposure/Reinhard -> neutral grid -> sRGB viewport -> ImGui**. The planning baseline's `fs_present.sc` used a binary alpha threshold for empty background, which would hide low-alpha and additive effects. Step 1 replaces it with continuous coverage and the following additive resolve; later rendering features must preserve that integration.
+Keep the sequence **linear HDR scene/particles -> exposure/Reinhard and display-matte composition -> neutral grid -> sRGB viewport -> ImGui**. The planning baseline's `fs_present.sc` used a binary alpha threshold for empty background. Step 1 introduced continuous coverage with an inverse-Reinhard background term. Step 2 replaces that term with an exposure-independent display matte so partially transparent dark smoke also attenuates white backgrounds.
 
 Use unexposed premultiplied color `C` and continuous covered fraction `c` in a validated, blend-capable `RGBA32F` target. Clear both to zero; opaque/cutout writes coverage one. Keep `RGBA16F` for the tone-mapped linear display/grid target. For source radiance `L` and final opacity `a`:
 
@@ -227,16 +273,16 @@ Additive: C_next = a * L + C
           c_next = c
 
 E = scene exposure
-B = linear editor background, clamped per channel to [0, 1 - 1e-6]
-H = E * C + (1 - clamp(c, 0, 1)) * B / (1 - B)
-Display = 1 - 1 / (1 + max(H, 0))
+B = linear editor background in [0, 1], including exact white
+H = E * max(C, 0)
+Display = 1 - 1 / (1 + H) + (1 - clamp(c, 0, 1)) * B
 ```
 
-Alpha blending uses `ONE / INV_SRC_ALPHA` for RGB and coverage. Additive uses `ONE / ONE` for RGB and `ZERO / ONE` for coverage. Apply exposure once in resolve. The finite background clamp keeps exact white inputs representable and must preserve the final 8-bit white result. Float32 accumulation prevents ordinary supported high-overlap effects from exceeding half-float headroom; validate target support and finite supported input ranges.
+Alpha blending uses `ONE / INV_SRC_ALPHA` for RGB and coverage. Additive uses `ONE / ONE` for RGB and `ZERO / ONE` for coverage. Apply exposure once in resolve, then add uncovered display-linear background. Exact white requires no inverse or epsilon convention. Float32 accumulation prevents ordinary supported high-overlap effects from exceeding half-float headroom; validate target support and finite supported input ranges. Clamp the display gamut during final encoding.
 
-The inverse-Reinhard background term is a Crimson-specific derivation for its editor contract, not a technique attributed to the reference engines. Verify empty background at exposures 0/1/100, opacity approaching zero, additive emission, opaque-only regression, alpha over emission, high overlap, and preview/scene consistency.
+This compositor is Crimson's chosen adaptation for its editor contract, not an equation attributed to the reference engines. Verify empty background at exposures 0/1/100, opacity approaching zero, additive emission, opaque-only regression, alpha over emission, high overlap, and preview/scene consistency.
 
-This is nonlinear background integration, not conventional display-matte alpha blending. Its white endpoint has a concrete limitation: with zero particle radiance and background clamped to `1 - 1e-6`, opacity 0.5 or 0.99 still resolves to the final 8-bit white value. The clamp prevents undefined/overflowing input; it does not provide ordinary dark-smoke attenuation over white. Treat this formula as the Step 1 additive integration candidate, not as proof of the Step 2 alpha result. Step 2 must test dark particles against dark, mid-grey, near-white, and white backgrounds and make partial opacity visibly attenuate the matte. Revisit the resolve convention within that usable step if needed; retain linear scene accumulation, one tone map/sRGB encode, and exposure-independent uncovered background/grid/tools.
+The retired inverse-Reinhard background convention kept 0.5/0.99-opacity black particles white over a white matte. The Step 2 convention resolves zero-radiance smoke to `(1 - opacity) * background`. Tone mapping the combined premultiplied HDR color once is an approximation to independently tone-mapping and compositing each layer: intense transparent emission can saturate at display white. It does not promise exact per-surface display blending. That limitation is explicit; retain linear scene accumulation, one tone map/sRGB encode, and exposure-independent uncovered background/grid/tools.
 
 Step 8a makes opaque depth readable and copies positive camera-space depth into a separate `R32F` texture while the source depth is detached from depth-stencil output. Transparent rendering then attaches the original depth for hardware testing and samples the copy. Merely removing `RT_WRITE_ONLY` is not sufficient to sample a depth attachment simultaneously through the pinned D3D11 path. Reconstruct depth using the actual projection conventions, and multiply both opacity and premultiplied color by the soft fade. Each preview/viewport owns compatible targets and ordered views.
 
@@ -304,13 +350,15 @@ Acceptance: create the effect, change gravity and observe the fall, undo the edi
 
 Focused checks: seeded restart, emission/lifetime integration, fractional birth time, compaction identity, bounded capacity/catch-up, asset round-trip/failure, scene round-trip/history, and resolve equations. This step's broad integration serves one deliberately small emitter, not the whole particle system.
 
-### Step 2: Textured sprites and transparency
+### Step 2: Particle materials, textured sprites and transparency
 
 **Goal:** author recognizable smoke, dust, and embers with ordinary managed images.
 
-Add typed texture fields, sampler/color-role handling, alpha mode beside additive mode, premultiplied shader output, and globally ordered transparent packets. Keep clear-to-procedural behavior. Add effect -> texture reference scanning/replacement/deletion and unresolved assignments as this reference type arrives.
+Implemented baseline: material-version-2 unlit Alpha/Additive settings with version-1 PBR compatibility; effect-version-2 material references and opacity with Step 1 migration; independent native material documents; ordinary compatible material pick/drop/clear assignment and Edit Material; creation in the shared Asset Browser; material-owned texture/sampler/color controls and a floating live 3D editor; pinned coherent texture bindings; global stable back-to-front alpha/additive ordering and consecutive compatible batches. The material editor also authors native Lit PBR Opaque/Mask profiles and creates native assets through explicit Save As from read-only imported originals. Particle compatibility remains Unlit Alpha/Additive; imported-original editing, particle lighting, shader graphs, flipbooks and additional emission shapes remain outside this step. Per view, material entries are limited to 512 and particle submissions to 1,024 draw calls in addition to the existing packet/transient limits; omissions are diagnosed.
 
-Acceptance: assign/drop/replace/clear smoke imagery, overlap two effects, view particles over empty background and opaque/cutout models, then save/reopen and undo. Diagnose missing textures without losing the assignment. Smoke can cover sparks behind it, and partial dark opacity visibly attenuates dark/mid-grey/near-white/white editor backgrounds. Complete any necessary resolve adjustment described in Section 3.6 within this handoff. Check sorting order and alpha/coverage equations through CPU data tests; visual acceptance belongs to the user.
+Implementation actions: extend the existing material envelope and dependency/resource owners; add minimal sprite material authoring and independent document actions; prepare material texture slots without fabricating model assets; add effect -> material -> texture scanning/replacement/deletion; preserve live simulation under appearance changes; implement premultiplied output and ordered batching; replace the old background convention with the display matte described in Section 3.6. Clearing a texture returns to procedural sprites, and clearing a material selects the protected default.
+
+Acceptance: create a material in the Asset Browser, assign it through the effect's picker or drop field, edit its texture/color/blend, and save/reopen/undo through its own document. Switch material preview meshes, move the editor onto another monitor and use its Quader mini-viewport gestures; HDRI/intensity/rotation/background changes remain transient and leave scene lighting intact. Existing sampler settings survive ordinary edits until Filtering is explicitly selected. Assign/drop/replace/clear smoke imagery, overlap two effects, and view particles over empty background and opaque/cutout models. Diagnose missing textures without losing the assignment. Smoke can cover sparks behind it, and partial dark opacity visibly attenuates dark/mid-grey/near-white/white editor backgrounds. Complete any necessary resolve adjustment described in Section 3.6 within this handoff. Check sorting order and alpha/coverage equations through CPU data tests; visual acceptance belongs to the user.
 
 ### Step 3: Common emission and motion
 
@@ -366,7 +414,7 @@ Acceptance: smoke approaches a floor/wall cleanly, remains occluded behind it, a
 
 Add compatible lit sprite modes using existing directional/point lights and diffuse IBL, plus normal-texture controls where supported. Apply the same lighting path to strips when Step 10 introduces them. Keep intensity/emission separate from opacity and use the existing color contract. Reuse engine PBR conventions for mesh particles when Step 11 lands rather than introducing another BRDF.
 
-Acceptance: light/environment changes affect lit effects predictably; unlit mode restores their authored appearance. Normal assignments are typed linear data. Save/reopen and mode switching remain stable. This step adds no shadows, volumetric scattering, particle-generated lights, or general material editor.
+Acceptance: light/environment changes affect lit effects predictably; unlit mode restores their authored appearance. Normal assignments are typed linear data. Save/reopen and mode switching remain stable. Shadows, volumetric scattering, particle-generated lights and material graphs retain separate scopes.
 
 ### Step 9: Jolt static collision
 
@@ -443,6 +491,12 @@ Evidence: contiguous particle records, initialization/update separation, fixed-F
 Follow-up inspection on 14 October 2026 used the user's local `godot-master` checkout at `C:\Users\Drako\Desktop\_QUADER_DEV\resources\_SOURCE_CODE\godot-master`, identified by `version.py` as 4.7 beta. In `scene/3d/cpu_particles_3d.cpp`, ordinary color/parameter/gravity/seed setters assign values without calling `restart()`. Color and scale are reevaluated for live records; gravity enters the next update, while initial speed/direction/spawn shape initialize births. `set_amount()` reallocates and marks particles inactive without resetting time/cycle/remainder; explicit `restart()` clears those scheduling values. The editor's Restart Emission command calls restart explicitly rather than restarting every Inspector property change. Godot CPU gravity is integrated directly and does not use a physics server or Jolt. These are verified CPU behaviors, not claims about its GPU backend.
 
 Crimson adapts that behavior to its separate particles/s emission rate: lifetime is cached at birth and affects only new particles, whereas Godot also uses emitter lifetime in its global cycle scheduling. Color/size/intensity extraction, transactional immutable revisions, stable IDs under compaction, preserved paused/stopped state and cleared-capacity counters are Crimson choices. The local inspection supports the stage policy in Section 2.4; it does not establish feature parity or a shared backend.
+
+### R1c. Materials and particle appearance
+
+[Godot CPU particle color/material documentation](https://docs.godotengine.org/en/stable/classes/class_cpuparticles3d.html#class-cpuparticles3d-property-color) verifies that CPU particle color is consumed by the drawn mesh's BaseMaterial3D or ShaderMaterial. The inspected local `cpu_particles_3d.cpp` selects mesh materials/material overrides; it does not put gravity into the surface material. [Godot's process/draw explanation](https://docs.godotengine.org/en/stable/tutorials/3d/particles/creating_a_3d_particle_system.html) distinguishes GPU simulation process materials from draw-pass surface materials. [Niagara's sprite renderer reference](https://dev.epicgames.com/documentation/en-us/unreal-engine/render-module-reference-for-niagara-effects-in-unreal-engine?application_version=5.6) verifies a renderer Material assignment with particle color/other attribute bindings.
+
+Crimson adapts that separation through the existing native MaterialAsset envelope: simulation and per-particle values remain effect-owned, textures/blending are material-owned, and resource preparation/render submission stay in their existing owners. The unlit-only Step 2 sprite profile, procedural default, ordinary asset-reference assignment, Asset Browser material creation, separate material history and supported-mode validation are Crimson decisions, not claims of feature parity. A material graph and GPU process-material architecture are not required for this CPU slice.
 
 ### R2. The project's pinned bgfx CPU example
 
@@ -532,7 +586,7 @@ Evidence: large smoke can be fill-rate limited, lower-resolution rendering trade
 
 [Morgan McGuire and Louis Bavoil: Weighted Blended Order-Independent Transparency](https://jcgt.org/published/0002/02/09/), JCGT, 19 December 2013; [paper](https://jcgt.org/published/0002/02/09/paper-lowres.pdf).
 
-Evidence: premultiplied coverage, emissive contributions, ordered OVER, bounded-memory approximate OIT, and crossing-geometry limitations. Adopt premultiplication and honest ordering limits; soften both radiance and coverage. Weighted blended OIT changes the compositing approximation and remains a later evaluated alternative. The inverse-Reinhard editor-background integration is Crimson's derivation, not a claim from this paper.
+Evidence: premultiplied coverage, emissive contributions, ordered OVER, bounded-memory approximate OIT, and crossing-geometry limitations. Adopt premultiplication and honest ordering limits; soften both radiance and coverage. Weighted blended OIT changes the compositing approximation and remains a later evaluated alternative. The editor display-matte integration in Step 2 is Crimson's adaptation, not a claim from this paper.
 
 ## 6. Checks, handoff, and completion
 
@@ -550,11 +604,11 @@ User acceptance performs the short authoring exercise at each handoff. Report ac
 
 ### Known limits and assumptions
 
-- Step 1 is implemented with user acceptance pending; the remainder is the agreed particle roadmap. Neither changes the engine's current Next milestone.
+- Steps 1 and 2 are implemented with broader user acceptance pending; the remainder is the agreed particle roadmap. Neither changes the engine's current Next milestone.
 - CPU simulation is the first backend; GPU simulation is planned separately after profiling.
 - Seeded replay assumes fixed definitions/inputs within the same implementation; it cannot reconstruct arbitrary edited scene history.
 - Primitive/segment transparency sorting remains approximate for crossing meshes and strips.
-- The proposed inverse-Reinhard background integration has a nonlinear white-matte alpha limit; Step 2 includes the required visible-opacity test and resolve adjustment before alpha sprites are considered complete.
+- Step 2 replaces the inverse-Reinhard background term with a display matte and tests visible dark-smoke attenuation at exact white. Single-tone-map premultiplied HDR remains an explicit compositing approximation.
 - Initial collision is a static Jolt query world with explicit colliders; dynamic actors/props and gameplay authority remain separate.
 - Optional lighting reuses existing lights/IBL without new shadows, volumetric scattering, or effect lights.
 - The current resource/asset refactor and pinned API/dependency versions must be rechecked before the relevant implementation step.

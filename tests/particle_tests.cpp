@@ -192,7 +192,8 @@ void liveAppearanceAndDocumentChanges() {
     std::vector<ParticlePresentation> original; preview.appendPresentation(original);
     require(!original.empty(),"Live-update fixture has no visible particles.");
     require(document.begin("Appearance drag") && document.update([](auto& asset) {
-        asset.emitter.color={.5f,.2f,.1f}; asset.emitter.size=.2f; asset.emitter.intensity=2;
+        asset.emitter.color={.5f,.2f,.1f}; asset.emitter.size=.2f; asset.emitter.intensity=2;asset.emitter.opacity=.4f;
+        asset.emitter.material=AssetRef<MaterialAsset>{"assets/materials/appearance.crimson-material"};
     }),"Cannot update live appearance transaction.");
     preview.updateDefinition(document.definition());
     preservesLiveState(preview,baseline);
@@ -200,6 +201,7 @@ void liveAppearanceAndDocumentChanges() {
     require(changed.size()==original.size() && changed.front().position==original.front().position,"Paused appearance update moved or removed visible particles.");
     expectNear(changed.front().color[0],particleSrgbToLinear(.5f)*2,"Live color/intensity did not affect existing particles.");
     expectNear(changed.front().size,.2,"Live size did not affect existing particles.");
+    expectNear(changed.front().color[3],.4,"Opacity did not update paused live particles.");
     require(document.commit(),"Cannot commit live appearance transaction.");
     preview.updateDefinition(*document.committed()); preservesLiveState(preview,baseline);
     require(document.undo(),"Cannot undo live appearance.");
@@ -298,7 +300,14 @@ void persistenceAndValidation() {
     require(readText(particleAssetPath(project.root,effect.id))==original,"Save As changed its source file.");
     auto malformed=nlohmann::json::parse(original); malformed["emitters"][0]["capacity"]=1.5;
     rejects([&]{deserializeParticleAsset(malformed.dump(),effect.id);});
-    malformed=nlohmann::json::parse(original); malformed["version"]=2;
+    malformed=nlohmann::json::parse(original); malformed["version"]=3;
+    rejects([&]{deserializeParticleAsset(malformed.dump(),effect.id);});
+    auto legacy=nlohmann::json::parse(original);legacy["version"]=1;
+    legacy["emitters"][0].erase("material");legacy["emitters"][0].erase("opacity");
+    legacy["emitters"][0]["renderer"]="procedural-additive";
+    const auto migrated=deserializeParticleAsset(legacy.dump(),effect.id);
+    require(migrated==effect,"Step 1 migration changed the saved particle definition.");
+    malformed=nlohmann::json::parse(original);malformed["emitters"][0]["opacity"]=-.1f;
     rejects([&]{deserializeParticleAsset(malformed.dump(),effect.id);});
     rejects([&]{loadParticleAsset(project.root,"assets/particles/../material.json");});
     rejects([&]{deserializeParticleAsset(original,second.id);});
@@ -367,6 +376,11 @@ void sceneReconciliation() {
     };
     std::vector<ExtractedParticle> sources{{1,effect->id,math::translation({0,0,0})},{2,effect->id,math::translation({5,0,0})}};
     SceneParticles runtime; runtime.reconcile(7,sources,query,ParticleFixedStep*2);
+    require(runtime.groups().size()==2 && runtime.groups()[0].entity==1 && runtime.groups()[1].entity==2 &&
+        runtime.groups()[0].materialId==effect->emitter.material.id && runtime.groups()[0].first==0 &&
+        runtime.groups()[1].first==runtime.groups()[0].count &&
+        runtime.groups()[1].first+runtime.groups()[1].count==runtime.presentation().size(),
+        "Scene particle material groups lost stable entity order or presentation ranges.");
     require(runtime.instance(1) && runtime.instance(2) && runtime.instance(1)!=runtime.instance(2),"Scene effect instances are not independent.");
     const auto first=runtime.instance(1)->particles().front(); const auto elapsed=runtime.instance(1)->elapsed();
     sources[0].world=math::translation({20,0,0});

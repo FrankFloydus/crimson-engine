@@ -1,13 +1,15 @@
 #pragma once
 
 #include "math/Math.h"
+#include "resources/AssetRef.h"
 #include <cstddef>
 #include <cstdint>
 #include <string>
 
 namespace crimson {
+struct MaterialAsset;
 
-// Step 1 intentionally supports one point emitter with constant values.
+// The baseline supports one point emitter with constant emission/motion values.
 // Its persistent identity is independent of particle storage order.
 struct ParticleEmitterDefinition {
     uint64_t id{1};
@@ -21,6 +23,8 @@ struct ParticleEmitterDefinition {
     Vec3 color{1,1,1}; // Authored sRGB picker values; presentation converts to linear.
     float intensity{1.0f};
     uint32_t capacity{256};
+    AssetRef<MaterialAsset> material{"builtin:material/particle"};
+    float opacity{1.0f};
     bool operator==(const ParticleEmitterDefinition&) const = default;
 };
 

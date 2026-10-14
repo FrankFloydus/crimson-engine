@@ -10,12 +10,13 @@
 
 namespace crimson {
 class ParticleEditor;
+class MaterialEditor;
 struct PanelVisibility { bool outliner{true}, inspector{true}, assetBrowser{true}; };
 // Authoring UI and document transitions. It does not own GPU resources or the world.
 class SceneEditor {
 public:
     EditorFrame draw(SceneDocument&, SceneSettings&, AssetLibrary&, Renderer&, SDL_Window*,
-                     bool navigationActive, uint32_t bgfxFrame, bool quitRequested, ParticleEditor&);
+                     bool navigationActive, uint32_t bgfxFrame, bool quitRequested, ParticleEditor&, MaterialEditor&);
     void cancelInteraction(SceneDocument&, Renderer&);
     bool exitAccepted() const { return exitAccepted_; }
     const ViewportAppearance& appearance() const { return preferences_.values().appearance; }
@@ -42,7 +43,8 @@ private:
     uint64_t openingGeneration_{},openingRevision_{};
     std::array<char,256> sceneName_{};
     bool dirtyPopup_{}, savePopup_{}, deletePopup_{}, saveConflictPopup_{}, externalPopup_{}, openingPopup_{}, saveAs_{}, continueAfterSave_{}, exitAccepted_{}, documentReplaced_{};
-    bool particleCommandTarget_{};
+    enum class CommandTarget { Scene,Particle,Material };
+    CommandTarget commandTarget_{CommandTarget::Scene};
     void cancelOpen();
     void pumpOpen(SceneDocument&,Renderer&);
     void request(Pending, const std::string&, SceneDocument&, Camera&, Renderer&);

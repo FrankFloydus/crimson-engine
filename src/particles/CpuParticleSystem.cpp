@@ -124,7 +124,7 @@ void CpuParticleSystem::simulateTick() {
 void CpuParticleSystem::appendPresentation(std::vector<ParticlePresentation>& out) const {
     const auto& emitter=definition_.emitter;
     const Vec4 radiance{particleSrgbToLinear(emitter.color[0])*emitter.intensity,
-        particleSrgbToLinear(emitter.color[1])*emitter.intensity,particleSrgbToLinear(emitter.color[2])*emitter.intensity,1};
+        particleSrgbToLinear(emitter.color[1])*emitter.intensity,particleSrgbToLinear(emitter.color[2])*emitter.intensity,emitter.opacity};
     const bool interpolate=state_!=ParticlePlaybackState::Stopped;
     const auto displayTime=interpolate?std::max(0.0,elapsed_-ParticleFixedStep+remainder_):elapsed_;
     const auto alpha=std::clamp(interpolation(),0.0,1.0);

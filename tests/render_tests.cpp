@@ -384,24 +384,47 @@ void particlePresentationValidation() {
 
 void particleHdrResolveContract() {
     const auto resolve=[](double radiance,double coverage,double exposure,double matte) {
-        return 1-1/(1+std::max(0.0,radiance)*exposure+(1-std::clamp(coverage,0.0,1.0))*matte);
+        const auto hdr=std::max(0.0,radiance)*exposure;
+        return std::clamp(1-1/(1+hdr)+(1-std::clamp(coverage,0.0,1.0))*matte,0.0,1.0);
     };
     const auto encode=[](double linear) { return linear<=.0031308 ? linear*12.92 : 1.055*std::pow(linear,1/2.4)-.055; };
     for (const float background:{0.f,21.f/255,.5f,.999f,1.f}) {
-        const auto matte=crimson::particle_rendering::backgroundRadiance({background,background,background});
-        require(crimson::math::finite(matte),"Editor background inverse tone map must remain finite at white.");
+        const auto matte=crimson::particle_rendering::backgroundLinear({background,background,background});
+        require(crimson::math::finite(matte),"Editor display matte must remain finite at white.");
         for (const auto exposure:{0.,1.,100.}) {
             const auto empty=resolve(0,0,exposure,matte[0]);
             near(encode(empty),background,2e-6);
             near(resolve(3,1,exposure,matte[0]),3*exposure/(1+3*exposure),1e-8);
+            near(resolve(0,.5,exposure,matte[0]),.5*matte[0],1e-8);
+            near(resolve(0,.99,exposure,matte[0]),.01*matte[0],1e-8);
         }
         const auto uncovered=resolve(0,0,1,matte[0]);
-        require(resolve(.25,0,1,matte[0])>uncovered,"Additive emission must remain visible over uncovered background.");
+        if(background<1)require(resolve(.25,0,1,matte[0])>uncovered,"Additive emission must remain visible until the display matte saturates.");
         near(resolve(.25,0,0,matte[0]),uncovered,1e-8);
         const double overlap=double(crimson::MaxParticleRadiance)*crimson::MaxParticleDrawCount;
         const auto bright=resolve(overlap,0,100,matte[0]);
         require(std::isfinite(bright) && bright>=0 && bright<=1,"Supported additive overlap must resolve to finite display color.");
     }
+}
+
+void particleGlobalOrdering() {
+    using namespace crimson;
+    const Vec3 eye{0,0,3},forward{0,0,-1};
+    const std::array<RenderParticle,5> particles{{
+        {{0,0,.5f},1,{0,0,0,.5f},0},{{0,0,-.5f},1,{1,0,0,1},1},
+        {{0,0,.5f},1,{0,0,1,.5f},2},{{0,0,-1},1,{1,1,1,1},1},
+        {{100,0,1},1,{1,1,1,1},0}}};
+    std::vector<particle_rendering::SortKey> keys;
+    for(std::size_t i=0;i<particles.size();++i)keys.push_back({i,particle_rendering::viewDepth(particles[i].position,eye,forward)});
+    particle_rendering::sortBackToFront(keys);
+    require(keys[0].index==3 && keys[1].index==1 && keys[2].index==0 && keys[3].index==2 && keys[4].index==4,
+        "Transparency ordering grouped by material, used radial distance, or lost stable center-depth ties.");
+    // Looking in the opposite direction must reverse depth priority, while
+    // retaining the two equal-depth particles' extraction order.
+    for(auto& key:keys)key.depth=particle_rendering::viewDepth(particles[key.index].position,{},Vec3{0,0,1});
+    particle_rendering::sortBackToFront(keys);
+    require(keys[0].index==4 && keys[1].index==0 && keys[2].index==2 && keys[3].index==1 && keys[4].index==3,
+        "Particle ordering did not follow camera forward or stable equal-depth input order.");
 }
 
 } // namespace
@@ -433,6 +456,7 @@ int main() {
     run("collapsed model transforms are legal and recover without invalid-data diagnostics", collapsedModelTransforms);
     run("particle presentation rejects nonfinite and unsupported upload inputs", particlePresentationValidation);
     run("particle HDR resolve preserves background and additive emission", particleHdrResolveContract);
+    run("particle global center-depth ordering preserves material interleaving and stable ties", particleGlobalOrdering);
     if (failures) std::cerr << failures << " renderer-core check(s) failed.\n";
     else std::cout << "All renderer-core checks passed.\n";
     return failures ? 1 : 0;

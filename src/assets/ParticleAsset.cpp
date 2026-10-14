@@ -1,5 +1,6 @@
 #include "ParticleAsset.h"
 #include "AtomicFile.h"
+#include "MaterialAsset.h"
 #include "math/Json.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -71,6 +72,11 @@ ParticleEffectAsset defaultParticleEffect(const std::string& name) {
 void validateParticleAsset(const ParticleEffectAsset& asset) {
     if (!asset.id.empty()) validateId(asset.id);
     const auto& emitter=asset.emitter;
+    const auto material=fromUtf8(emitter.material.id);
+    if(!emitter.material.empty()&&emitter.material.id!=DefaultParticleMaterialId&&
+        (material.has_root_path()||material.parent_path()!=std::filesystem::path("assets/materials")||material.extension()!=".crimson-material"||emitter.material.id.find(':')!=std::string::npos))
+        throw std::runtime_error("Particle material must reference a managed material or the protected particle default.");
+    if(!math::finite(emitter.opacity)||emitter.opacity<0||emitter.opacity>1)throw std::runtime_error("Particle opacity must be finite and between 0 and 1.");
     if (asset.name.empty() || asset.name.size()>1024 || !emitter.id || emitter.name.empty() || emitter.name.size()>1024)
         throw std::runtime_error("Particle effect and emitter require valid names and a persistent emitter identity.");
     if (!math::finite(emitter.rate) || emitter.rate<0 || emitter.rate>MaximumParticleRate)
@@ -102,15 +108,15 @@ std::filesystem::path particleAssetPath(const std::filesystem::path& root,const 
 std::string serializeParticleAsset(const ParticleEffectAsset& asset) {
     validateParticleAsset(asset); validateId(asset.id);
     const auto& e=asset.emitter;
-    return Json{{"version",1},{"type","crimson-particle"},{"id",asset.id},{"name",asset.name},{"defaultSeed",hex(asset.defaultSeed)},
+    return Json{{"version",2},{"type","crimson-particle"},{"id",asset.id},{"name",asset.name},{"defaultSeed",hex(asset.defaultSeed)},
         {"emitters",Json::array({Json{{"id",hex(e.id)},{"name",e.name},{"enabled",e.enabled},{"rate",e.rate},{"lifetime",e.lifetime},
             {"initialVelocity",e.initialVelocity},{"gravity",e.gravity},{"size",e.size},{"color",e.color},{"intensity",e.intensity},
-            {"capacity",e.capacity},{"space","world"},{"renderer","procedural-additive"},{"colorSpace","srgb"}}})}}.dump(2)+"\n";
+            {"capacity",e.capacity},{"material",e.material.id},{"opacity",e.opacity},{"space","world"},{"renderer","sprite"},{"colorSpace","srgb"}}})}}.dump(2)+"\n";
 }
 ParticleEffectAsset deserializeParticleAsset(std::string_view text,const std::string& expectedId) {
     if (text.size()>MaximumParticleAssetBytes) throw std::runtime_error("Particle asset exceeds 1 MiB.");
     const auto json=Json::parse(text);
-    if (!json.at("version").is_number_integer() || json.at("version")!=1 || json.at("type")!="crimson-particle")
+    if (!json.at("version").is_number_integer() || (json.at("version")!=1&&json.at("version")!=2) || json.at("type")!="crimson-particle")
         throw std::runtime_error("Unsupported particle asset type or version.");
     ParticleEffectAsset asset;
     asset.id=json.at("id").get<std::string>();
@@ -120,7 +126,9 @@ ParticleEffectAsset deserializeParticleAsset(std::string_view text,const std::st
     const auto& emitters=json.at("emitters");
     if (!emitters.is_array() || emitters.size()!=1) throw std::runtime_error("This particle asset version requires exactly one emitter.");
     const auto& source=emitters.at(0);
-    if (source.value("space",std::string{"world"})!="world" || source.value("renderer",std::string{"procedural-additive"})!="procedural-additive" ||
+    const bool legacy=json.at("version")==1;
+    const std::string renderer=legacy?"procedural-additive":"sprite";
+    if (source.value("space",std::string{"world"})!="world" || source.value("renderer",renderer)!=renderer ||
         source.value("colorSpace",std::string{"srgb"})!="srgb")
         throw std::runtime_error("Unsupported particle space, renderer or authored color convention.");
     auto& e=asset.emitter;
@@ -128,6 +136,7 @@ ParticleEffectAsset deserializeParticleAsset(std::string_view text,const std::st
     e.rate=source.at("rate").get<float>(); e.lifetime=source.at("lifetime").get<float>();
     e.initialVelocity=source.at("initialVelocity").get<Vec3>(); e.gravity=source.at("gravity").get<Vec3>();
     e.size=source.at("size").get<float>(); e.color=source.at("color").get<Vec3>(); e.intensity=source.at("intensity").get<float>();
+    if(!legacy){e.material=AssetRef<MaterialAsset>{source.at("material").get<std::string>()};e.opacity=source.at("opacity").get<float>();}
     const auto& capacity=source.at("capacity");
     if (!capacity.is_number_integer() || (capacity.is_number_integer() && !capacity.is_number_unsigned() && capacity.get<int64_t>()<1) ||
         capacity.get<uint64_t>()>MaximumParticleCapacity)

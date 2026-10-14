@@ -1,0 +1,47 @@
+#pragma once
+#include "editor/MaterialDocument.h"
+#include "editor/MaterialPreview.h"
+#include <array>
+#include <span>
+namespace crimson {
+class AssetLibrary;
+class Renderer;
+class ResourceManager;
+// One independent material document and its replaceable property-editor view.
+class MaterialEditor {
+public:
+    explicit MaterialEditor(const std::filesystem::path& root):document_(root) {}
+    bool focused() const;
+    bool isOpen() const { return document_.isOpen(); }
+    bool transactionActive() const { return document_.transactionActive(); }
+    bool takeExitRequest() { const bool ready=exitReady_;exitReady_=false;return ready; }
+    void requestExit();
+    void requestOpen(std::string id,AssetLibrary&);
+    void requestCreate(std::string folder,AssetLibrary&);
+    void save(AssetLibrary&,bool saveAs=false);
+    void undo();
+    void redo();
+    void finishInteraction(AssetLibrary* assets=nullptr);
+    bool canUndo() const;
+    bool canRedo() const;
+    bool canSave() const { return document_.editable(); }
+    bool canSaveAs() const { return document_.isOpen() && (particleMaterialCompatible(document_.definition()) || modelMaterialCompatible(document_.definition())); }
+    void draw(AssetLibrary&,Renderer&,ResourceManager&,double dt);
+    void filesChanged(std::span<const std::filesystem::path>);
+    void cancelInteraction() { document_.cancel();preview_.cancelInteraction(); }
+private:
+    enum class Pending { None,Open,Create,Close,Exit };
+    MaterialDocument document_;
+    MaterialPreview preview_;
+    std::string pendingId_,pendingFolder_,message_,publishedId_;
+    Pending pending_{Pending::None};
+    std::uint64_t publishedRevision_{};
+    std::array<char,256> saveName_{};
+    bool dirtyPopup_{},savePopup_{},continueAfterSave_{},exitReady_{},externalChanged_{},externalPopup_{},focusNext_{};
+    void request(Pending,std::string,AssetLibrary*);
+    void perform(AssetLibrary&);
+    void publish(AssetLibrary&);
+    void modals(AssetLibrary&);
+    void properties(AssetLibrary&);
+};
+}

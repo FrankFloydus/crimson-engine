@@ -19,13 +19,14 @@ SceneShortcutRequests readSceneShortcuts(const SceneShortcutContext& context) {
     const auto* rootWindow=navWindow ? navWindow->RootWindow : nullptr;
     const bool entityFocus=rootWindow && (std::string_view(rootWindow->Name)=="Viewport" ||
         std::string_view(rootWindow->Name)=="Outliner" || std::string_view(rootWindow->Name)=="Inspector");
-    if ((!entityFocus && !context.particleDocumentFocus) || context.transactionActive || context.modelDropPending) return requests;
+    const bool assetDocumentFocus=context.particleDocumentFocus || context.materialDocumentFocus;
+    if ((!entityFocus && !assetDocumentFocus) || context.transactionActive || context.modelDropPending) return requests;
 
     const bool controlZ=io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z,false);
     requests.undo=controlZ && !io.KeyShift;
     requests.redo=(controlZ && io.KeyShift) || (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y,false));
-    // A particle document owns its own history; entity operations remain scene-only.
-    if (!entityFocus || context.particleDocumentFocus) return requests;
+    // Asset documents own their own history; entity operations remain scene-only.
+    if (!entityFocus || assetDocumentFocus) return requests;
     requests.duplicate=io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D,false);
     requests.eraseSelection=ImGui::IsKeyPressed(ImGuiKey_Delete,false);
     requests.focusSelection=ImGui::IsKeyPressed(ImGuiKey_F,false);

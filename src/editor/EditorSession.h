@@ -3,6 +3,7 @@
 #include "EditorResources.h"
 #include "assets/AssetLibrary.h"
 #include "tools/ParticleEditor.h"
+#include "tools/MaterialEditor.h"
 #include "SceneParticles.h"
 #include <filesystem>
 #include <unordered_map>
@@ -28,8 +29,10 @@ private:
     SceneDocument document_;
     SceneEditor editor_;
     ParticleEditor particleEditor_;
+    MaterialEditor materialEditor_;
     SceneParticles particles_;
     std::vector<RenderParticle> particlePackets_;
+    std::vector<RenderParticleMaterial> particleMaterials_;
     SceneSettings settings_;
     ResourceManager& resources_;
     EditorResources prepared_;

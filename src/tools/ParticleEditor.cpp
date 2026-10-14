@@ -1,4 +1,5 @@
 #include "ParticleEditor.h"
+#include "MaterialEditor.h"
 #include "assets/AssetLibrary.h"
 #include "crimson-renderer/ImGuiBgfx.h"
 #include <imgui.h>
@@ -17,6 +18,11 @@ bool ParticleEditor::canUndo() const { return document_.canUndo(); }
 bool ParticleEditor::canRedo() const { return document_.canRedo(); }
 void ParticleEditor::undo() { document_.undo(); }
 void ParticleEditor::redo() { document_.redo(); }
+void ParticleEditor::finishInteraction() {
+    if(document_.transactionActive() && !document_.commit())return;
+    const auto* active=ImGui::GetCurrentContext()->ActiveIdWindow;
+    if(active && active->RootWindow->ID==ImHashStr("###ParticleEffect"))ImGui::ClearActiveID();
+}
 void ParticleEditor::framePreview() {
     preview_.camera=Camera{};
     const auto& emitter=document_.definition().emitter;
@@ -37,7 +43,8 @@ void ParticleEditor::framePreview() {
 }
 void ParticleEditor::request(Pending pending,std::string id,AssetLibrary* assets) {
     if(pending_!=Pending::None) return;
-    document_.commit();pending_=pending;pendingId_=std::move(id);
+    if(document_.transactionActive() && !document_.commit()) { message_=document_.status();return; }
+    pending_=pending;pendingId_=std::move(id);
     if(document_.isOpen() && document_.dirty()) dirtyPopup_=true;
     else if(assets) perform(*assets);
     else if(pending==Pending::Exit) { pending_=Pending::None;exitReady_=true; }
@@ -54,11 +61,12 @@ void ParticleEditor::perform(AssetLibrary& assets) {
     const auto pending=pending_;
     pending_=Pending::None;
     continueAfterSave_=false;
-    if(pending==Pending::Close || pending==Pending::Exit) {
-        document_.close();simulation_.stop();assets.protectParticleDocument({});
-        if(pending==Pending::Exit) exitReady_=true;
+    if(pending==Pending::Exit){exitReady_=true;return;}
+    if(pending==Pending::Close) {
+        document_.close();simulation_.stop();assets.protectParticleDocument({});assets.setParticleDocumentReferences({},{});assets.refreshParticles();
         return;
     }
+    message_.clear();
     bool loaded=false;
     if(pending==Pending::Open) loaded=document_.load(pendingId_);
     if(pending==Pending::Create) {
@@ -76,19 +84,21 @@ void ParticleEditor::perform(AssetLibrary& assets) {
     }
     if(loaded) {
         assets.protectParticleDocument(document_.assetId());publishedRevision_=0;previewRevision_=0;
-        publish(assets);framePreview();focusNext_=true;externalChanged_=false;
+        publish(assets);assets.refreshParticles();framePreview();focusNext_=true;externalChanged_=false;materialDiagnostic_.clear();
     } else message_=document_.status();
     pendingId_.clear();pendingFolder_.clear();
 }
 void ParticleEditor::publish(AssetLibrary& assets) {
     if(!document_.isOpen()) return;
+    assets.setParticleDocumentReferences({document_.definition().emitter.material.id},document_.historicalMaterialReferences());
     if(publishedRevision_!=document_.revision() || publishedId_!=document_.assetId()) {
         assets.publishParticle(document_.committed());publishedRevision_=document_.revision();publishedId_=document_.assetId();
     }
 }
 void ParticleEditor::save(AssetLibrary& assets,bool saveAs) {
     if(!document_.isOpen()) return;
-    document_.commit();publish(assets);
+    if(document_.transactionActive() && !document_.commit()) { message_=document_.status();return; }
+    publish(assets);
     if(saveAs) {
         std::snprintf(saveName_.data(),saveName_.size(),"%s",document_.definition().name.c_str());savePopup_=true;return;
     }
@@ -166,12 +176,65 @@ void ParticleEditor::modals(AssetLibrary& assets) {
         ImGui::EndPopup();
     }
 }
-void ParticleEditor::draw(AssetLibrary& assets,Renderer& renderer,float dt) {
+void ParticleEditor::materialControls(AssetLibrary& assets,MaterialEditor& materials) {
+    ImGui::TextUnformatted("Material");
+    const auto materialId=assets.references().resolveParticleMaterial(document_.definition().emitter.material.id);
+    const auto material=assets.findMaterial(materialId);
+    const auto assign=[&](const std::string& id) {
+        const auto candidate=assets.findMaterial(id);
+        if(!candidate || !particleMaterialCompatible(*candidate)){message_="Choose an unlit Alpha or Additive sprite material.";return;}
+        if(document_.transactionActive() && !document_.commit())return;
+        document_.edit("Assign particle material",[&](auto& asset){asset.emitter.material.id=id;});message_.clear();
+    };
+    ImGui::BeginGroup();
+    const float height=ImGui::GetFrameHeight(),gap=ImGui::GetStyle().ItemInnerSpacing.x;
+    const float width=std::max(height,ImGui::GetContentRegionAvail().x-height*2-gap*2);
+    bool picker=ImGui::InvisibleButton("Particle material",{width,height});
+    const auto minimum=ImGui::GetItemRectMin(),maximum=ImGui::GetItemRectMax();auto* draw=ImGui::GetWindowDrawList();
+    draw->AddRectFilled(minimum,maximum,ImGui::GetColorU32(ImGui::IsItemHovered()?ImGuiCol_FrameBgHovered:ImGuiCol_FrameBg),ImGui::GetStyle().FrameRounding);
+    float textX=minimum.x+3;
+    if(material) {
+        const auto imageId=assets.references().resolveParticleTexture(material->surface.baseColorTexture.image.id);const auto* image=assets.find(imageId);
+        if(image && bgfx::isValid(image->thumbnail)){draw->AddImage(ImGuiBgfx::textureId(image->thumbnail),{minimum.x+3,minimum.y+3},{minimum.x+height-3,maximum.y-3});textX+=height;}
+    }
+    const auto label=material?assets.displayName(materialId):"Missing: "+assets.displayName(document_.definition().emitter.material.id);
+    draw->PushClipRect({textX,minimum.y},{maximum.x-3,maximum.y},true);
+    draw->AddText({textX,minimum.y+(height-ImGui::GetFontSize())*.5f},ImGui::GetColorU32(ImGuiCol_Text),label.c_str());draw->PopClipRect();
+    ImGui::SameLine(0,gap);picker|=ImGui::Button("...##material",{height,height});
+    ImGui::SameLine(0,gap);ImGui::BeginDisabled(document_.definition().emitter.material.id==DefaultParticleMaterialId);
+    if(ImGui::Button("x##material",{height,height}))assign(DefaultParticleMaterialId);
+    ImGui::EndDisabled();ImGui::EndGroup();
+    if(ImGui::BeginDragDropTarget()) {
+        if(const auto* payload=ImGui::AcceptDragDropPayload("CC_MATERIAL_ASSET")) {
+            const auto* bytes=static_cast<const char*>(payload->Data);
+            if(payload->DataSize>1 && bytes && bytes[payload->DataSize-1]=='\0' && std::find(bytes,bytes+payload->DataSize-1,'\0')==bytes+payload->DataSize-1)
+                assign(std::string(bytes,static_cast<size_t>(payload->DataSize-1)));
+            else message_="The material payload is invalid.";
+        }
+        ImGui::EndDragDropTarget();
+    }
+    static ImGuiTextFilter filter;
+    if(picker){filter.Clear();ImGui::OpenPopup("Select sprite material");}
+    if(ImGui::BeginPopup("Select sprite material")) {
+        filter.Draw("Search");ImGui::BeginChild("Material choices",{320,ImGui::GetFontSize()*12});
+        for(const auto& entry:assets.catalog())if(entry.kind==AssetKind::Material && filter.PassFilter(assets.displayName(entry.id).c_str())) {
+            const auto candidate=assets.findMaterial(entry.id);if(!candidate || !particleMaterialCompatible(*candidate))continue;
+            ImGui::PushID(entry.id.c_str());
+            if(ImGui::Selectable(assets.displayName(entry.id).c_str(),entry.id==materialId)){assign(entry.id);ImGui::CloseCurrentPopup();}
+            ImGui::PopID();
+        }
+        ImGui::EndChild();ImGui::EndPopup();
+    }
+    ImGui::BeginDisabled(!material);
+    if(ImGui::SmallButton("Edit Material"))materials.requestOpen(materialId,assets);
+    ImGui::EndDisabled();
+}
+void ParticleEditor::draw(AssetLibrary& assets,Renderer& renderer,double dt,MaterialEditor& materials) {
     if(pending_==Pending::Exit && !document_.dirty()) perform(assets);
     if(document_.isOpen() && assets.references().deleted(document_.assetId())) {
-        document_.close();assets.protectParticleDocument({});simulation_.stop();message_="The open particle asset was deleted.";
+        document_.close();assets.protectParticleDocument({});assets.setParticleDocumentReferences({},{});simulation_.stop();message_="The open particle asset was deleted.";
     }
-    if(document_.isOpen() && externalChanged_ && !document_.transactionActive()) {
+    if(document_.isOpen() && externalChanged_ && !document_.transactionActive() && pending_==Pending::None) {
         externalChanged_=false;
         if(document_.externalFileChanged()) {
             if(document_.dirty()) externalPopup_=true;
@@ -193,7 +256,6 @@ void ParticleEditor::draw(AssetLibrary& assets,Renderer& renderer,float dt) {
         ImGui::SameLine();if(ImGui::Button("Save As...")) save(assets,true);
         ImGui::SameLine();ImGui::BeginDisabled(!canUndo());if(ImGui::Button("Undo")) undo();ImGui::EndDisabled();
         ImGui::SameLine();ImGui::BeginDisabled(!canRedo());if(ImGui::Button("Redo")) redo();ImGui::EndDisabled();
-        ImGui::TextDisabled("%s",document_.assetId().c_str());
         const bool canceled=document_.transactionActive() && ImGui::IsKeyPressed(ImGuiKey_Escape,false);
         if(canceled) document_.cancel();
         if(ImGui::BeginTable("Particle authoring",2,ImGuiTableFlags_Resizable)) {
@@ -230,14 +292,16 @@ void ParticleEditor::draw(AssetLibrary& assets,Renderer& renderer,float dt) {
                     ImGui::SetTooltip("Continuous acceleration in world space. Negative Y pulls downward.\nGravity changes velocity over time; it does not replace the launch velocity.");
             }
             if(ImGui::CollapsingHeader("Render",ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::TextDisabled("Procedural sprite · Unlit · Additive");
+                materialControls(assets,materials);
                 control("Change particle size",[](auto& e){return ImGui::DragFloat("Size (m)",&e.size,.005f,.001f,1000,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
-                control("Change particle color",[](auto& e){return ImGui::ColorEdit3("Color",e.color.data());});
+                control("Change particle color",[](auto& e){return ImGui::ColorEdit3("Tint",e.color.data());});
+                control("Change particle opacity",[](auto& e){return ImGui::SliderFloat("Opacity",&e.opacity,0,1,"%.3f");});
                 control("Change particle intensity",[](auto& e){return ImGui::DragFloat("Intensity",&e.intensity,.05f,0,10000,"%.2f",ImGuiSliderFlags_AlwaysClamp);});
             }
             if(document_.transactionActive() && !ImGui::IsAnyItemActive()) document_.commit();
             if(!document_.status().empty()) ImGui::TextWrapped("%s",document_.status().c_str());
             if(!message_.empty()) ImGui::TextWrapped("%s",message_.c_str());
+            if(!materialDiagnostic_.empty())ImGui::TextWrapped("%s",materialDiagnostic_.c_str());
             ImGui::EndChild();
             ImGui::TableNextColumn();
             if(previewRevision_!=document_.previewRevision()) {
@@ -283,7 +347,10 @@ void ParticleEditor::draw(AssetLibrary& assets,Renderer& renderer,float dt) {
                 if(previewGesture_==2) preview_.camera.pan(io.MouseDelta.x,io.MouseDelta.y,size.x,size.y);
                 presentation_.clear();simulation_.appendPresentation(presentation_);packets_.clear();packets_.reserve(presentation_.size());
                 for(const auto& p:presentation_) packets_.push_back({p.position,p.size,p.color});
-                renderer.renderParticlePreview(preview_,packets_);
+                const auto binding=assets.preparedParticleMaterial(document_.definition().emitter.material.id);
+                if(!binding || !binding->ready)packets_.clear();
+                materialDiagnostic_=binding?binding->diagnostic:"Particle material is unavailable.";
+                renderer.renderParticlePreview(preview_,packets_,binding?std::span<const RenderParticleMaterial>(&binding->render,1):std::span<const RenderParticleMaterial>{});
             }
             ImGui::EndTable();
         }

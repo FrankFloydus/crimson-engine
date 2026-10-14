@@ -12,6 +12,7 @@
 #include "fs_imgui.h"
 #include "vs_particle.h"
 #include "fs_particle.h"
+#include "fs_sky.h"
 #include <iostream>
 #include <stdexcept>
 #include <vector>
@@ -22,6 +23,7 @@ int main() {
         const auto pair=[&](auto& vertex,auto& fragment){check(crimson::preflightShaderPair(vertex,fragment,vertex,fragment,diagnostic),diagnostic);};
         pair(cc_vs_model,cc_fs_model); pair(cc_vs_pick,cc_fs_pick); pair(cc_vs_present,cc_fs_present); pair(cc_vs_grid,cc_fs_grid); pair(cc_vs_present,cc_fs_encode); pair(cc_vs_imgui,cc_fs_imgui);
         pair(cc_vs_particle,cc_fs_particle);
+        pair(cc_vs_present,cc_fs_sky);
         std::vector<std::uint8_t> truncated(std::begin(cc_fs_model),std::end(cc_fs_model)); truncated.resize(20);
         check(!crimson::preflightShaderPair(cc_vs_model,truncated,cc_vs_model,cc_fs_model,diagnostic),"Truncated shader should fail safely.");
         check(!crimson::preflightShaderPair(cc_vs_model,cc_fs_imgui,cc_vs_model,cc_fs_model,diagnostic),"Changed shader interface should fail before GPU creation.");

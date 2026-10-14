@@ -12,6 +12,11 @@ struct ParticleDefinitionVersion {
     std::uint64_t revision{};
     std::string diagnostic;
 };
+struct SceneParticleGroup {
+    EntityId entity{};
+    std::string materialId;
+    std::size_t first{}, count{};
+};
 // Live scene state uses persistent IDs and document replacement generation.
 // Ordinary registry rebuilds, selection and transform edits preserve playback.
 class SceneParticles {
@@ -23,6 +28,7 @@ public:
     void reconcile(std::uint64_t documentGeneration,std::span<const ExtractedParticle>,const DefinitionQuery&,
                    double seconds,EntityId restart=NoEntity);
     std::span<const ParticlePresentation> presentation() const { return presentation_; }
+    std::span<const SceneParticleGroup> groups() const { return groups_; }
     std::optional<Aabb> bounds(EntityId) const;
     const CpuParticleSystem* instance(EntityId) const;
     const std::string& status() const { return status_; }
@@ -31,6 +37,7 @@ private:
     std::unordered_map<EntityId,Instance> instances_;
     std::uint64_t generation_{};
     std::vector<ParticlePresentation> presentation_;
+    std::vector<SceneParticleGroup> groups_;
     std::string status_;
 };
 }

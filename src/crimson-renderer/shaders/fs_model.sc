@@ -122,6 +122,11 @@ void main()
     vec4 baseColor = u_modelBase * v_color0;
     if (u_modelMaps.x > 0.5) baseColor *= texture2D(s_albedo, slotUv(uv, u_modelUv.x));
     if (u_modelOptions.y > 0.5 && baseColor.a < u_modelEmissive.w) discard;
+    if (u_modelEmissiveMap.y > 0.5)
+    {
+        gl_FragColor = vec4(baseColor.rgb * baseColor.a, baseColor.a);
+        return;
+    }
     float metallic = u_modelSurface.x;
     float roughness = u_modelSurface.y;
     if (u_modelMaps.y > 0.5)

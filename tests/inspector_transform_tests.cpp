@@ -228,7 +228,7 @@ void particleShortcutOwnership(){
     io.Fonts->SetTexID(static_cast<ImTextureID>(1));
     const auto tick=[&](SceneShortcutContext ownership,const char* focus) {
         ImGui::NewFrame();
-        for(const auto* name:{"Inspector","Particle effect###ParticleEffect"}) {
+        for(const auto* name:{"Inspector","Particle effect###ParticleEffect","Sprite material###SpriteMaterial"}) {
             ImGui::SetNextWindowPos(std::string_view(name)=="Inspector" ? ImVec2(20,20):ImVec2(440,20));
             ImGui::SetNextWindowSize({380,400});
             ImGui::Begin(name,nullptr,ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoFocusOnAppearing);
@@ -244,28 +244,30 @@ void particleShortcutOwnership(){
         io.AddKeyEvent(key,false);io.AddKeyEvent(ImGuiMod_Ctrl,false);io.AddKeyEvent(ImGuiMod_Shift,false);tick(ownership,focus);
         return result;
     };
-    constexpr auto* particle="Particle effect###ParticleEffect";
-    const SceneShortcutContext owner{.particleDocumentFocus=true};
-    auto result=press(ImGuiKey_Z,owner,particle);
-    require(result.undo && !result.redo,"Particle focus did not emit its document Undo shortcut.");
-    result=press(ImGuiKey_Z,owner,particle,true,true);
-    require(result.redo && !result.undo,"Particle Ctrl+Shift+Z did not emit Redo.");
-    require(press(ImGuiKey_Y,owner,particle).redo,"Particle Ctrl+Y did not emit Redo.");
-    require(press(ImGuiKey_S,owner,particle).save,"Particle Ctrl+S did not emit Save.");
-    require(press(ImGuiKey_S,owner,particle,true,true).saveAs,"Particle Ctrl+Shift+S did not emit Save As.");
-    for(const auto key:{ImGuiKey_D,ImGuiKey_Delete,ImGuiKey_F}) {
-        result=press(key,owner,particle,key==ImGuiKey_D);
-        require(!result.duplicate && !result.eraseSelection && !result.focusSelection,"Particle document emitted a scene entity command.");
+    for(const bool material:{false,true}) {
+        const auto* assetWindow=material?"Sprite material###SpriteMaterial":"Particle effect###ParticleEffect";
+        const SceneShortcutContext owner{.particleDocumentFocus=!material,.materialDocumentFocus=material};
+        auto result=press(ImGuiKey_Z,owner,assetWindow);
+        require(result.undo && !result.redo,"Asset-document focus did not emit its Undo shortcut.");
+        result=press(ImGuiKey_Z,owner,assetWindow,true,true);
+        require(result.redo && !result.undo,"Asset-document Ctrl+Shift+Z did not emit Redo.");
+        require(press(ImGuiKey_Y,owner,assetWindow).redo,"Asset-document Ctrl+Y did not emit Redo.");
+        require(press(ImGuiKey_S,owner,assetWindow).save,"Asset-document Ctrl+S did not emit Save.");
+        require(press(ImGuiKey_S,owner,assetWindow,true,true).saveAs,"Asset-document Ctrl+Shift+S did not emit Save As.");
+        for(const auto key:{ImGuiKey_D,ImGuiKey_Delete,ImGuiKey_F}) {
+            result=press(key,owner,assetWindow,key==ImGuiKey_D);
+            require(!result.duplicate && !result.eraseSelection && !result.focusSelection,"An asset document emitted a scene entity command.");
+        }
+        auto blocked=owner;blocked.preferencesKeyboard=true;
+        require(!press(ImGuiKey_Z,blocked,assetWindow).undo,"Preferences input ownership leaked asset-document Undo.");
+        blocked=owner;blocked.transactionActive=true;
+        require(!press(ImGuiKey_Z,blocked,assetWindow).undo,"An active document transaction leaked Undo.");
+        blocked=owner;blocked.modelDropPending=true;
+        require(!press(ImGuiKey_Z,blocked,assetWindow).undo,"A same-frame asset delivery leaked document Undo.");
+        blocked=owner;blocked.navigationActive=true;
+        require(!press(ImGuiKey_S,blocked,assetWindow).save,"Navigation input ownership leaked asset-document Save.");
+        require(!press(ImGuiKey_Z,{},assetWindow).undo,"An unrelated focused window emitted scene Undo.");
     }
-    auto blocked=owner;blocked.preferencesKeyboard=true;
-    require(!press(ImGuiKey_Z,blocked,particle).undo,"Preferences input ownership leaked particle Undo.");
-    blocked=owner;blocked.transactionActive=true;
-    require(!press(ImGuiKey_Z,blocked,particle).undo,"An active document transaction leaked Undo.");
-    blocked=owner;blocked.modelDropPending=true;
-    require(!press(ImGuiKey_Z,blocked,particle).undo,"A same-frame asset delivery leaked document Undo.");
-    blocked=owner;blocked.navigationActive=true;
-    require(!press(ImGuiKey_S,blocked,particle).save,"Navigation input ownership leaked particle Save.");
-    require(!press(ImGuiKey_Z,{},particle).undo,"An unrelated focused window emitted scene Undo.");
     require(press(ImGuiKey_Z,{},"Inspector").undo,"Returning to Inspector lost scene Undo.");
     require(press(ImGuiKey_D,{},"Inspector").duplicate,"Returning to Inspector lost scene Duplicate.");
     require(press(ImGuiKey_Delete,{},"Inspector",false).eraseSelection,"Returning to Inspector lost scene Delete.");
@@ -284,6 +286,6 @@ int main(){
     run("clipped scalar finalizes without deactivation",missedDeactivationReleasesOwnership);
     run("zero scale drag and release",dragReleaseCommits);
     run("diagnostics preserve real Ctrl+Z after zero-scale drag (floating/docked, XYZ)",diagnosticAppearanceKeepsUndo);
-    run("particle document shortcuts preserve scene-only commands and input ownership",particleShortcutOwnership);
+    run("particle/material document shortcuts preserve scene-only commands and input ownership",particleShortcutOwnership);
     return failures?1:0;
 }

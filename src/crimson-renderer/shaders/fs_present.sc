@@ -12,9 +12,11 @@ void main()
     uv.y = mix(uv.y, 1.0 - uv.y, u_presentParams.y);
     vec4 sampleColor=texture2D(s_hdrColor,uv);
     float uncovered = 1.0 - clamp(sampleColor.a, 0.0, 1.0);
-    vec3 hdr = max(sampleColor.rgb, vec3_splat(0.0)) * u_presentParams.x
-        + uncovered * u_background.rgb;
+    vec3 hdr = max(sampleColor.rgb, vec3_splat(0.0)) * u_presentParams.x;
     vec3 mapped = vec3_splat(1.0) - vec3_splat(1.0) / (vec3_splat(1.0) + hdr);
+    // The editor background is a display matte, outside scene exposure/tone map.
+    // Tone mapping premultiplied HDR once approximates per-surface display OVER;
+    // bright emission can exceed display white and is clamped by final encoding.
     // Retain linear values for the neutral post-tone-map grid blend.
-    gl_FragColor = vec4(mapped, 1.0);
+    gl_FragColor = vec4(mapped + uncovered * u_background.rgb, 1.0);
 }

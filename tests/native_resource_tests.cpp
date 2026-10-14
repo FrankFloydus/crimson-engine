@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <unordered_map>
+#include <algorithm>
 
 namespace {
 using namespace crimson;
@@ -98,27 +99,28 @@ double component(const DecodedImage& image,unsigned x,unsigned y,unsigned channe
 template<class Tick>
 DecodedImage readTarget(bgfx::TextureHandle source,std::uint16_t width,std::uint16_t height,bgfx::ViewId view,
     std::uint32_t& frame,Tick&& tick,std::vector<std::shared_ptr<DecodedImage>>& destinations) {
-    check(bgfx::isValid(source),"Particle readback source is unavailable.");
+    check(view>=64,"Native readback view overlaps an editor rendering pass.");
+    check(bgfx::isValid(source),"Native readback source is unavailable.");
     struct ReadbackTexture {
         bgfx::TextureHandle handle{BGFX_INVALID_HANDLE};
         ~ReadbackTexture(){if(bgfx::isValid(handle))bgfx::destroy(handle);}
     } staging;
     staging.handle=bgfx::createTexture2D(width,height,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK);
-    check(bgfx::isValid(staging.handle),"Could not allocate particle pixel readback.");
+    check(bgfx::isValid(staging.handle),"Could not allocate native pixel readback.");
     auto image=std::make_shared<DecodedImage>(DecodedImage{width,height,std::vector<std::uint8_t>(std::size_t(width)*height*4)});
     // This pool is declared before Renderer: even a timeout keeps pending CPU
     // destinations alive through bgfx shutdown rather than freeing a read target.
     destinations.push_back(image);
-    bgfx::setViewName(view,"Native particle pixel readback");
+    bgfx::setViewName(view,"Native offscreen pixel readback");
     bgfx::setViewMode(view,bgfx::ViewMode::Sequential);
     bgfx::blit(view,staging.handle,0,0,source,0,0,width,height);
     const auto ready=bgfx::readTexture(staging.handle,image->rgba.data());
-    check(ready!=UINT32_MAX,"Particle readback is unsupported by this adapter.");
+    check(ready!=UINT32_MAX,"Native readback is unsupported by this adapter.");
     for(unsigned i=0;i<120;++i) {
         tick();
         if(picking::frameReady(frame,ready))return *image;
     }
-    throw std::runtime_error("Particle pixel readback did not complete.");
+    throw std::runtime_error("Native pixel readback did not complete.");
 }
 
 template<class Copy>
@@ -129,7 +131,7 @@ void exerciseParticles(Renderer& renderer,Copy&& copy) {
     RenderScene scene{settings,{}};scene.sceneMode=true;
     const auto mainImage=[&] {
         renderer.render(scene);
-        return copy(renderer.viewportTexture(),std::uint16_t(renderer.width()),std::uint16_t(renderer.height()),16);
+        return copy(renderer.viewportTexture(),std::uint16_t(renderer.width()),std::uint16_t(renderer.height()),64);
     };
     settings.exposure=0;const auto background=mainImage();
     for(const float exposure:{1.f,100.f}) {
@@ -170,8 +172,8 @@ void exerciseParticles(Renderer& renderer,Copy&& copy) {
     const auto originalMain=renderer.viewportTexture();
     check(bgfx::isValid(renderer.particlePreviewTexture()) && renderer.particlePreviewTexture().idx!=originalMain.idx,"Particle preview must own a separate display target.");
     renderer.render(scene);renderer.renderParticlePreview(settings,green);
-    const auto independentMain=copy(renderer.viewportTexture(),128,128,16);
-    const auto independentPreview=copy(renderer.particlePreviewTexture(),128,128,17);
+    const auto independentMain=copy(renderer.viewportTexture(),128,128,64);
+    const auto independentPreview=copy(renderer.particlePreviewTexture(),128,128,65);
     check(component(independentMain,64,64,0)>200 && component(independentMain,64,64,1)<150,"Preview rendering overwrote main particle color.");
     check(component(independentPreview,64,64,1)>200 && component(independentPreview,64,64,0)<100,"Preview particle shader/target did not produce independent green pixels.");
     check(renderer.particlePreviewStats().submitted==1,"Independent preview did not submit its particle.");
@@ -181,8 +183,8 @@ void exerciseParticles(Renderer& renderer,Copy&& copy) {
         renderer.particlePreviewTexture().idx==originalPreview.idx,"Disabling the main backbuffer disabled or replaced detached viewport targets.");
     // Swap the colors so stale pixels cannot pass this detached-render check.
     scene.particles=green;renderer.render(scene);renderer.renderParticlePreview(settings,red);
-    const auto detachedMain=copy(renderer.viewportTexture(),128,128,16);
-    const auto detachedPreview=copy(renderer.particlePreviewTexture(),128,128,17);
+    const auto detachedMain=copy(renderer.viewportTexture(),128,128,64);
+    const auto detachedPreview=copy(renderer.particlePreviewTexture(),128,128,65);
     check(component(detachedMain,64,64,1)>200 && component(detachedMain,64,64,0)<100 && renderer.particleStats().submitted==1,
         "Offscreen scene rendering stopped while the main backbuffer was disabled.");
     check(component(detachedPreview,64,64,0)>200 && component(detachedPreview,64,64,1)<150 && renderer.particlePreviewStats().submitted==1,
@@ -193,13 +195,13 @@ void exerciseParticles(Renderer& renderer,Copy&& copy) {
     renderer.resizeParticlePreview(96,64);
     check(renderer.viewportTexture().idx==originalMain.idx,"Resizing preview replaced the main viewport target.");
     renderer.render(scene);renderer.renderParticlePreview(settings,green);
-    const auto resizedPreview=copy(renderer.particlePreviewTexture(),96,64,17);
+    const auto resizedPreview=copy(renderer.particlePreviewTexture(),96,64,65);
     check(component(resizedPreview,48,32,1)>200,"Resized preview lost particle rendering.");
     const auto previewTarget=renderer.particlePreviewTexture();
     renderer.resizeViewport(160,96);
     check(renderer.particlePreviewTexture().idx==previewTarget.idx,"Resizing the main viewport replaced the preview target.");
     renderer.render(scene);renderer.renderParticlePreview(settings,green);
-    const auto resizedMain=copy(renderer.viewportTexture(),160,96,16);
+    const auto resizedMain=copy(renderer.viewportTexture(),160,96,64);
     check(component(resizedMain,80,48,0)>200,"Resized main viewport lost particle rendering.");
     renderer.releaseParticlePreview();
     check(!bgfx::isValid(renderer.particlePreviewTexture()),"Released particle preview retained its display target.");
@@ -216,6 +218,231 @@ void exerciseParticles(Renderer& renderer,Copy&& copy) {
     check(stats.requested==bounded.size() && stats.submitted<=MaxParticleDrawCount && stats.dropped>=1 &&
         stats.requested==stats.submitted+stats.invalid+stats.dropped,"Native particle capacity omission was not bounded and fully counted.");
     renderer.setAppearance({});
+}
+
+template<class Copy>
+void exerciseParticleMaterials(Renderer& renderer,Copy&& copy,const PreparedTexture& color,std::uint32_t& frame) {
+    SceneSettings settings;settings.camera.position={0,0,3};settings.camera.target={0,0,0};settings.environment.enabled=false;
+    ViewportAppearance appearance;appearance.backgroundSrgb={0,0,0};renderer.setAppearance(appearance);
+    std::array<RenderParticleMaterial,3> materials;
+    materials[0].blend=ParticleBlendMode::Alpha;
+    materials[0].baseColor={.5f,.75f,.25f,.5f};materials[0].colorTexture=color.handle;
+    materials[0].samplerFlags=BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP|BGFX_SAMPLER_MIN_POINT|BGFX_SAMPLER_MAG_POINT;
+    materials[0].pinned=color.lease;
+    std::array<RenderParticle,1> sprite{{{{0,0,0},2,{1,1,1,.5f},0}}};
+    RenderScene scene{settings,{}};scene.sceneMode=true;scene.particles=sprite;scene.particleMaterials=materials;
+    const auto capture=[&] {renderer.render(scene);return copy(renderer.viewportTexture(),128,128,64);};
+    const auto linear=[](double value){return value<=.04045?value/12.92:std::pow((value+.055)/1.055,2.4);};
+    const auto encoded=[](double value){value=std::clamp(value,0.,1.);return 255*(value<=.0031308?value*12.92:1.055*std::pow(value,1/2.4)-.055);};
+    const auto textured=capture();
+    for(unsigned channel=0;channel<3;++channel) {
+        check(component(textured,32,64,channel)<2,"Particle sprite ignored transparent texture alpha or its UV orientation.");
+        const std::array<double,3> source{{180./255,70./255,40./255}};
+        const auto hdr=linear(source[channel])*materials[0].baseColor[channel]*.25;
+        check(std::abs(component(textured,96,64,channel)-encoded(hdr/(1+hdr)))<=2,
+            "Particle color was decoded twice, alpha was decoded as sRGB, or sprite/tint/opacity was premultiplied incorrectly.");
+    }
+    renderer.resizeParticlePreview(128,128);
+    renderer.render(scene);renderer.renderParticlePreview(settings,sprite,materials);
+    const auto main=copy(renderer.viewportTexture(),128,128,64),preview=copy(renderer.particlePreviewTexture(),128,128,65);
+    check(main.rgba==preview.rgba,"Prepared particle material differed between scene and isolated preview.");
+    check(renderer.renderThumbnail("particle-material",1,scene,128,color.lease),renderer.thumbnailStatus());
+    // The copy advances the existing owner frame and waits for the thumbnail too.
+    (void)capture();
+    // A thumbnail can complete after more than one frame on some adapters. Its
+    // target is already submitted; ordinary readback ticks provide the owner fence.
+    std::optional<ThumbnailResult> thumbnail;
+    for(unsigned i=0;i<8 && !thumbnail;++i) { (void)capture();thumbnail=renderer.pollThumbnail(frame); }
+    check(thumbnail.has_value(),"Sprite material thumbnail did not finish.");
+    const auto thumbnailHdr=linear(180./255)*.5*.25;
+    check(std::abs(component(thumbnail->image,96,64,0)-encoded(thumbnailHdr/(1+thumbnailHdr)+.75*linear(21./255)))<=2,
+        "Sprite material thumbnail used a lit PBR sphere or different sprite factors.");
+    materials[0].colorTexture=BGFX_INVALID_HANDLE;materials[0].pinned.reset();
+    check(component(capture(),32,64,0)>2,"Clearing a sprite texture did not restore the procedural sprite.");
+
+    struct TextureOwner {
+        bgfx::TextureHandle handle{BGFX_INVALID_HANDLE};
+        ~TextureOwner(){if(bgfx::isValid(handle))bgfx::destroy(handle);}
+    };
+    auto halfTexture=std::make_shared<TextureOwner>();const std::array<std::uint8_t,4> pixels{{128,128,128,128}};
+    halfTexture->handle=bgfx::createTexture2D(1,1,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_SRGB,bgfx::copy(pixels.data(),4));
+    check(bgfx::isValid(halfTexture->handle),"Could not create native particle half-alpha fixture.");
+    for(auto& material:materials) {material.baseColor={1,1,1,1};material.colorTexture=halfTexture->handle;material.pinned=halfTexture;}
+    sprite[0].color={1,1,1,1};
+    const auto halfAlpha=capture();const auto halfHdr=linear(128./255)*(128./255);
+    check(std::abs(component(halfAlpha,64,64,0)-encoded(halfHdr/(1+halfHdr)))<=2,
+        "sRGB sprite texture alpha was decoded as color or premultiplied twice.");
+    const std::array<std::uint8_t,4> opaqueWhite{{255,255,255,255}};
+    // Initial-data bgfx textures are immutable. Publish a distinct opaque fixture
+    // and keep the previous owner alive instead of attempting an invalid update.
+    auto white=std::make_shared<TextureOwner>();
+    white->handle=bgfx::createTexture2D(1,1,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_SRGB,bgfx::copy(opaqueWhite.data(),4));
+    check(bgfx::isValid(white->handle),"Could not create native particle opaque coverage fixture.");
+    for(auto& material:materials) {material.colorTexture=white->handle;material.pinned=white;}
+    materials[0].blend=ParticleBlendMode::Alpha;materials[0].baseColor={0,0,0,.5f};
+    materials[1].blend=ParticleBlendMode::Additive;materials[2].blend=ParticleBlendMode::Alpha;
+    sprite[0].color={1,1,1,1};
+    for(const float background:{0.f,.5f,1.f}) {
+        appearance.backgroundSrgb={background,background,background};renderer.setAppearance(appearance);
+        scene.particles={};settings.exposure=0;const auto empty=capture();
+        for(const float exposure:{1.f,100.f}) {settings.exposure=exposure;check(capture().rgba==empty.rgba,"Empty display matte changed with exposure after alpha integration.");}
+        scene.particles=sprite;
+        for(const float exposure:{0.f,1.f,100.f}) {
+            settings.exposure=exposure;const auto smoke=capture();
+            const auto expected=encoded(.5*linear(background));
+            for(unsigned channel=0;channel<3;++channel)check(std::abs(component(smoke,64,64,channel)-expected)<=2,
+                "Partial black opacity did not attenuate the exact editor display matte, including white: background="+
+                std::to_string(background)+", exposure="+std::to_string(exposure)+", expected="+std::to_string(expected)+
+                ", actual RGB="+std::to_string(component(smoke,64,64,0))+","+std::to_string(component(smoke,64,64,1))+","+
+                std::to_string(component(smoke,64,64,2))+".");
+        }
+    }
+    settings.exposure=1;appearance.backgroundSrgb={0,0,0};renderer.setAppearance(appearance);
+    std::array<RenderParticle,2> layered{{{{0,0,.5f},2,{1,1,1,1},0},{{0,0,-.5f},2,{1,0,0,1},1}}};
+    scene.particles=layered;
+    const auto behind=capture();
+    check(std::abs(component(behind,64,64,0)-encoded(.5/1.5))<=2,"Near alpha smoke did not attenuate a farther additive sprite from another material.");
+    std::swap(layered[0].position[2],layered[1].position[2]);const auto inFront=capture();
+    check(std::abs(component(inFront,64,64,0)-encoded(.5))<=2 && component(inFront,64,64,0)>component(behind,64,64,0)+20,
+        "Global alpha/additive sorting did not follow camera depth across input/material order.");
+    layered[0].position[2]=layered[1].position[2]=0;const auto equalDepth=capture();
+    std::swap(layered[0],layered[1]);const auto reversedTie=capture();
+    check(component(equalDepth,64,64,0)>component(reversedTie,64,64,0)+20,"Equal-depth transparent particles lost stable extraction order or bgfx reordered draws.");
+    materials[0].baseColor={1,0,0,.5f};materials[2].baseColor={0,0,1,.5f};
+    layered={{{{0,0,.5f},2,{1,1,1,1},2},{{0,0,-.5f},2,{1,1,1,1},0}}};
+    const auto alphaOver=capture();
+    check(component(alphaOver,64,64,2)>component(alphaOver,64,64,0)+25,"Different alpha materials were grouped instead of globally ordered.");
+    const auto goodIndex=layered[0].materialIndex;layered[0].materialIndex=UINT32_MAX;(void)capture();
+    check(renderer.particleStats().submitted==1 && renderer.particleStats().invalid==1,"Invalid particle material index was not bounded/diagnosed.");
+    std::vector<RenderParticleMaterial> excessMaterials(MaxParticleMaterialCount+1);
+    layered[0].materialIndex=static_cast<std::uint32_t>(MaxParticleMaterialCount);scene.particleMaterials=excessMaterials;(void)capture();
+    check(renderer.particleStats().submitted==1 && renderer.particleStats().dropped==1 && renderer.particleStats().invalid==0,
+        "Valid material packets outside the per-view material budget were not counted as omitted work.");
+    scene.particleMaterials=materials;
+    layered[0].materialIndex=goodIndex;materials[0].baseColor[0]=std::numeric_limits<float>::quiet_NaN();(void)capture();
+    check(renderer.particleStats().submitted==1 && renderer.particleStats().invalid==1,"Nonfinite particle material factors reached native blending.");
+    materials[0].baseColor={0,0,0,.5f};
+    auto occluder=quad();occluder->id="native-alpha-occluder";occluder->materials[0].emissive={1,1,1};occluder->materials[0].doubleSided=true;
+    check(renderer.prepareModel(*occluder),renderer.modelStatus());
+    RenderModelInstance opaqueInstance{92,{occluder,{}},nullptr,0,true,false};
+    scene.instances=std::span(&opaqueInstance,1);scene.particles={};const auto opaque=capture();
+    sprite[0].position[2]=-.5f;scene.particles=sprite;const auto hiddenAlpha=capture();
+    check(hiddenAlpha.rgba==opaque.rgba,"Alpha sprites behind opaque geometry modified its color or coverage.");
+    sprite[0].position[2]=.5f;const auto frontAlpha=capture();
+    check(component(frontAlpha,64,64,0)<component(opaque,64,64,0)-20,"Near alpha smoke did not attenuate opaque HDR lighting.");
+    scene.instances={};sprite[0].position={};renderer.evictModel(occluder->id);
+    std::vector<RenderParticle> alternating(MaxParticleDrawCalls+2,RenderParticle{{0,0,0},.01f,{0,0,0,0},0});
+    for(std::size_t i=0;i<alternating.size();++i)alternating[i].materialIndex=static_cast<std::uint32_t>(i%2);
+    scene.particles=alternating;(void)capture();const auto stats=renderer.particleStats();
+    check(stats.drawCalls==MaxParticleDrawCalls && stats.submitted==MaxParticleDrawCalls && stats.dropped==2 && stats.invalid==0,
+        "Alternating material runs exceeded the draw-call budget or lost omitted-particle accounting.");
+    renderer.releaseParticlePreview();renderer.setAppearance({});
+}
+
+PreparedEnvironment previewEnvironment() {
+    PreparedEnvironment result;result.settings={2,8,8,16,16,32};result.key=67890;result.status="Native patterned material preview environment.";
+    ibl::Image source{16,8,std::vector<Vec3>(16*8)};
+    for(std::uint32_t y=0;y<source.height;++y)for(std::uint32_t x=0;x<source.width;++x)
+        source.pixels[std::size_t(y)*source.width+x]={.1f+static_cast<float>(x)/15,.1f+static_cast<float>(y)/7,.15f};
+    result.data=ibl::bake(source,result.settings);return result;
+}
+double cornerDifference(const DecodedImage& a,const DecodedImage& b) {
+    double difference{};
+    for(unsigned y=0;y<8;++y)for(unsigned x=0;x<8;++x)for(unsigned channel=0;channel<3;++channel)
+        difference+=std::abs(component(a,x,y,channel)-component(b,x,y,channel));
+    return difference;
+}
+template<class Copy,class Tick>
+void exerciseMaterialPreview(Renderer& renderer,Copy&& copy,Tick&& tick,const PreparedEnvironment& initialEnvironment) {
+    constexpr std::array shapes{MaterialPreviewMesh::Sphere,MaterialPreviewMesh::Cube,MaterialPreviewMesh::RoundedCube,MaterialPreviewMesh::Cylinder,MaterialPreviewMesh::Plane};
+    const auto signature=renderer.streamingSignature();
+    for(const auto kind:shapes) {
+        const auto geometry=materialPreviewGeometry(kind);
+        renderer.configureModelStream(geometry->id,1,*geometry->stream);
+        check(renderer.queueModelLod(geometry->id,1,materialPreviewGeometryLevel(kind)),"Material editor preview geometry could not enter the tracked GPU cache.");
+        for(unsigned i=0;i<100 && !renderer.modelStreamReady(geometry->id,1);++i)tick();
+        check(renderer.modelStreamReady(geometry->id,1),"Material editor preview geometry did not publish its GPU buffers.");
+    }
+    check(renderer.streamingSignature()==signature,"Loading mini-viewport meshes invalidated the main scene's picking signature.");
+
+    check(renderer.publishMaterialPreviewEnvironment(initialEnvironment),"Material preview could not prepare its initial lighting environment.");
+    renderer.resizeViewport(128,128);renderer.resizeParticlePreview(128,128);renderer.resizeMaterialPreview(128,128);
+    const auto mainTarget=renderer.viewportTexture(),particleTarget=renderer.particlePreviewTexture(),materialTarget=renderer.materialPreviewTexture();
+    check(bgfx::isValid(materialTarget) && materialTarget.idx!=mainTarget.idx && materialTarget.idx!=particleTarget.idx,
+        "Material editor preview must own a display target independent of scene and particle previews.");
+    SceneSettings mainSettings;mainSettings.camera.position={0,0,3.2f};mainSettings.camera.target={0,0,0};mainSettings.environment.enabled=true;
+    std::vector<ModelMaterial> mainMaterials{defaultMaterialAsset().surface};mainMaterials.front().baseColor={.6f,.05f,.02f,1};
+    const auto sphere=materialPreviewGeometry();
+    RenderModelInstance mainInstance{991,{sphere,{}},nullptr,1,true,false,&mainMaterials};
+    RenderScene mainScene{mainSettings,{}};mainScene.sceneMode=true;mainScene.instances=std::span(&mainInstance,1);
+    const auto mainCapture=[&] {renderer.render(mainScene);return copy(mainTarget,128,128,64);};
+    const auto mainBaseline=mainCapture();
+    SceneSettings particleSettings;particleSettings.camera.position={0,0,3};particleSettings.camera.target={0,0,0};particleSettings.environment.enabled=false;
+    std::array<RenderParticle,1> greenParticle{{{{0,0,0},1.5f,{0,8,0,1}}}};
+    renderer.renderParticlePreview(particleSettings,greenParticle);
+    const auto particleBaseline=copy(particleTarget,128,128,65);
+
+    auto material=defaultParticleMaterialAsset();material.id="native-live-material-preview";material.blend=MaterialBlend::Alpha;
+    material.surface.baseColor={.8f,.02f,.01f,1};
+    SceneSettings settings;settings.camera.position={0,0,3.2f};settings.camera.target={0,0,0};settings.environment.enabled=false;
+    const ModelMaterialTextures bindings;
+    const auto capture=[&](MaterialPreviewMesh mesh,const Mat4& transform=Mat4{},bool background=false,std::uint16_t width=128,std::uint16_t height=128) {
+        renderer.renderMaterialPreview(settings,material,bindings,mesh,transform,background);
+        return copy(renderer.materialPreviewTexture(),width,height,66);
+    };
+    for(const auto shape:shapes) {
+        const auto image=capture(shape);
+        std::size_t colored{};
+        for(std::size_t pixel=0;pixel<image.rgba.size();pixel+=4)
+            if(image.rgba[pixel]>image.rgba[pixel+1]+20 && image.rgba[pixel]>image.rgba[pixel+2]+20)++colored;
+        check(colored>64,"A selected mini-viewport mesh did not render the live unlit material.");
+        check(mainCapture().rgba==mainBaseline.rgba && copy(particleTarget,128,128,65).rgba==particleBaseline.rgba,
+            "Rendering a material preview overwrote the main viewport or particle preview.");
+    }
+    const auto red=capture(MaterialPreviewMesh::Sphere);const auto bytes=renderer.modelResidentBytes();
+    material.surface.baseColor={.02f,.8f,.01f,1};const auto green=capture(MaterialPreviewMesh::Sphere);
+    check(green.rgba!=red.rgba && component(green,64,64,1)>component(green,64,64,0)+30,
+        "Material preview did not apply a live definition change without publication.");
+    check(renderer.modelResidentBytes()==bytes,"Live material changes reallocated shared preview geometry.");
+    const auto cube=capture(MaterialPreviewMesh::Cube);
+    const auto tumble=capture(MaterialPreviewMesh::Cube,math::eulerRotationXYZ({.3f,.7f,0}));
+    check(cube.rgba!=tumble.rgba,"Mini-viewport object transform did not tumble the mesh.");
+
+    const auto lighting=previewEnvironment();
+    check(renderer.publishMaterialPreviewEnvironment(lighting),"Material preview could not publish its isolated environment.");
+    check(mainCapture().rgba==mainBaseline.rgba,"Publishing a material preview environment changed scene environment lighting.");
+    settings.environment.enabled=true;
+    const auto noBackground=capture(MaterialPreviewMesh::Sphere);
+    const auto sky=capture(MaterialPreviewMesh::Sphere,{},true);
+    check(cornerDifference(noBackground,sky)>100,"Material preview background toggle did not show its environment.");
+    settings.environment.rotation=90;const auto rotatedSky=capture(MaterialPreviewMesh::Sphere,{},true);
+    check(cornerDifference(sky,rotatedSky)>100,"Material preview environment rotation did not update the visible sky.");
+    settings.environment.rotation=0;settings.camera.position={0,1.8f,3.2f};const auto tiltedSky=capture(MaterialPreviewMesh::Sphere,{},true);
+    check(cornerDifference(sky,tiltedSky)>100,"Material preview sky did not use the actual camera tilt.");
+    settings.camera.position={0,0,3.2f};settings.environment.intensity=.2f;const auto dimSky=capture(MaterialPreviewMesh::Sphere,{},true);
+    check(cornerDifference(sky,dimSky)>100,"Material preview environment intensity did not update its visible background.");
+    material=defaultMaterialAsset();material.id="native-lit-material-preview";material.surface.baseColor={.5f,.5f,.5f,1};
+    settings.environment.intensity=0;const auto dark=capture(MaterialPreviewMesh::Sphere);
+    settings.environment.intensity=3;const auto lit=capture(MaterialPreviewMesh::Sphere);
+    double lightingIncrease{};
+    for(unsigned channel=0;channel<3;++channel)lightingIncrease+=component(lit,64,64,channel)-component(dark,64,64,channel);
+    check(lightingIncrease>5,"Lit material preview ignored its independent environment intensity.");
+    check(mainCapture().rgba==mainBaseline.rgba && copy(particleTarget,128,128,65).rgba==particleBaseline.rgba,
+        "Material preview camera/environment edits changed another viewport's image.");
+
+    renderer.resizeMaterialPreview(96,64);
+    check(renderer.viewportTexture().idx==mainTarget.idx && renderer.particlePreviewTexture().idx==particleTarget.idx,
+        "Resizing the material preview replaced another viewport's target.");
+    material=defaultParticleMaterialAsset();material.blend=MaterialBlend::Alpha;material.surface.baseColor={.02f,.8f,.01f,1};
+    const auto resized=capture(MaterialPreviewMesh::Sphere,{},false,96,64);
+    check(component(resized,48,32,1)>component(resized,48,32,0)+30,"Resizing material preview lost its rendering.");
+    renderer.releaseMaterialPreview();
+    check(!bgfx::isValid(renderer.materialPreviewTexture()),"Released material preview retained its display target.");
+    check(mainCapture().rgba==mainBaseline.rgba && copy(particleTarget,128,128,65).rgba==particleBaseline.rgba,
+        "Releasing material preview disturbed another viewport.");
+    renderer.resizeMaterialPreview(128,128);
+    check(component(capture(MaterialPreviewMesh::Sphere),64,64,1)>30,"Material preview could not reopen after releasing its targets.");
+    renderer.releaseMaterialPreview();renderer.releaseParticlePreview();
 }
 
 template<class Tick>
@@ -236,6 +463,8 @@ void exercisePlatformWindows(Renderer& renderer,ImGuiBgfx& tools,ScreenshotCallb
     io.ConfigViewportsNoAutoMerge=true;
     SceneSettings settings;settings.camera.position={0,0,3};settings.camera.target={0,0,0};settings.environment.enabled=false;
     std::array<RenderParticle,1> red{{{{0,0,0},1.5f,{8,0,0,1}}}},green{{{{0,0,0},1.5f,{0,8,0,1}}}};
+    std::array<RenderParticleMaterial,1> previewMaterials;
+    previewMaterials[0].blend=ParticleBlendMode::Alpha;previewMaterials[0].baseColor[3]=.75f;
     RenderScene scene{settings,{}};scene.sceneMode=true;scene.particles=red;
     renderer.resizeParticlePreview(128,128);
     const auto originalMain=renderer.viewportTexture(),originalPreview=renderer.particlePreviewTexture();
@@ -260,7 +489,7 @@ void exercisePlatformWindows(Renderer& renderer,ImGuiBgfx& tools,ScreenshotCallb
             ImGui::Image(ImGuiBgfx::textureId(renderer.particlePreviewTexture()),{64,48});
         }
         ImGui::End();ImGui::Render();
-        renderer.render(scene);if(visible)renderer.renderParticlePreview(settings,green);
+        renderer.render(scene);if(visible)renderer.renderParticlePreview(settings,green,previewMaterials);
         bgfx::setViewClear(ToolsView,BGFX_CLEAR_COLOR,0x202020ff);tools.render(ImGui::GetDrawData());
         ImGui::UpdatePlatformWindows();ImGui::RenderPlatformWindowsDefault();
         viewport=ImGui::FindViewportByID(collapseViewportId);
@@ -327,7 +556,7 @@ void exercisePlatformWindows(Renderer& renderer,ImGuiBgfx& tools,ScreenshotCallb
         list->AddCallback(platform.DrawCallback_ResetRenderState,nullptr);
         list->AddRectFilled({pos.x+width*.5f+8,pos.y+8},{pos.x+width-8,pos.y+height-8},IM_COL32(0,0,255,255));
         ImGui::End();ImGui::Render();
-        renderer.render(scene);renderer.renderParticlePreview(settings,green);
+        renderer.render(scene);renderer.renderParticlePreview(settings,green,previewMaterials);
         bgfx::setViewClear(ToolsView,BGFX_CLEAR_COLOR,0x202020ff);tools.render(ImGui::GetDrawData());
         ImGui::UpdatePlatformWindows();ImGui::RenderPlatformWindowsDefault();
         viewport=ImGui::FindViewportByID(viewportId);
@@ -459,11 +688,17 @@ void exercise(const std::filesystem::path& root,const ShaderCompileConfig& shade
     check(component(materialGreen,64,64,1)>component(materialGreen,64,64,0)+30 && materialGreen.rgba!=materialRed.rgba,"Material previews must use individual surfaces without reallocating sphere geometry.");
     check(renderer.modelResidentBytes()==sphereBytes,"Multiple material captures must retain shared geometry accounting.");
     phase("particle readbacks");exerciseParticles(renderer,copy);
+    phase("textured alpha/material readbacks");exerciseParticleMaterials(renderer,copy,color,frame);
+    phase("isolated live material mini-viewport readbacks");exerciseMaterialPreview(renderer,copy,tick,lighting);
     SceneSettings particleSettings;particleSettings.camera.position={0,0,3};particleSettings.camera.target={0,0,0};particleSettings.environment.enabled=false;
     std::array<RenderParticle,1> reloadParticle{{{{0,0,0},1.5f,{8,0,0,1}}}};
     RenderScene particleScene{particleSettings,{}};particleScene.sceneMode=true;particleScene.particles=reloadParticle;
+    std::array<RenderParticleMaterial,1> reloadMaterials;
+    reloadMaterials[0].blend=ParticleBlendMode::Alpha;reloadMaterials[0].baseColor[3]=.5f;
+    reloadMaterials[0].colorTexture=color.handle;reloadMaterials[0].samplerFlags=bindings[0].flags[0];reloadMaterials[0].pinned=color.lease;
+    particleScene.particleMaterials=reloadMaterials;
     const auto particleCapture=[&] {
-        renderer.render(particleScene);return copy(renderer.viewportTexture(),128,128,16);
+        renderer.render(particleScene);return copy(renderer.viewportTexture(),128,128,64);
     };
     const auto beforeReloadParticles=particleCapture();
     phase("shader reload");ShaderReloadSession shaders(resources,renderer,tools,shaderConfig);
@@ -495,6 +730,6 @@ int main(int argc,char** argv) {
         std::filesystem::copy(std::filesystem::path(argv[3]),config.includeDirectory,std::filesystem::copy_options::recursive);
         SdlOwner sdl;std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(SDL_CreateWindow("Crimson native resource checks",320,240,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);
         check(!!window,SDL_GetError());exercise(root,config,window.get());window.reset();cleanup(root);
-        std::cout<<"Hidden native DX11 streaming/shader/normal/cutout/material-thumbnail/particle/platform-window checks passed.\n";return 0;
+        std::cout<<"Hidden native DX11 streaming/shader/normal/cutout/material-thumbnail/live-material-preview/particle/platform-window checks passed.\n";return 0;
     }catch(const std::exception& exception){std::error_code ignored;if(std::filesystem::exists(root,ignored))try{cleanup(root);}catch(...){}std::cerr<<exception.what()<<'\n';return 1;}
 }

@@ -29,6 +29,7 @@ public:
     bool canRedo() const { return cursor_ < history_.size() && !transaction_; }
     std::string undoLabel() const;
     std::string redoLabel() const;
+    std::vector<std::string> historicalMaterialReferences() const;
     bool create(const std::string& name = "New Particle Effect");
     bool load(const std::string& id);
     bool save(const std::string& name = {}, bool saveAs = false);
