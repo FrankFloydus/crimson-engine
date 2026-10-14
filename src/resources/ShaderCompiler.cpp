@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <fstream>
 #include <map>
 #include <regex>
@@ -196,5 +197,124 @@ ShaderBinary compileShader(const ShaderCompileConfig& config,const std::string& 
     } catch(...) {
         std::error_code ignored; std::filesystem::remove(stage,ignored); std::filesystem::remove(std::filesystem::path(stage.wstring()+L".d"),ignored); throw;
     }
+}
+
+namespace {
+std::string recipeIdentity(const ShaderCompileRecipe& recipe) {
+    if(recipe.name.empty() || recipe.name.size()>128 || recipe.name.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")!=std::string::npos)
+        throw std::runtime_error("Generated shader recipe has an invalid name.");
+    if(recipe.source.empty() || recipe.source.size()>2*1024*1024) throw std::runtime_error("Generated shader source is empty or exceeds its limit.");
+    std::uint64_t hash=14695981039346656037ull;
+    const auto add=[&](const std::string& value){for(unsigned char ch:value){hash^=ch;hash*=1099511628211ull;}hash^=0xff;hash*=1099511628211ull;};
+    add(recipe.name);add(recipe.source);add(recipe.contract);add(std::to_string(static_cast<unsigned>(recipe.stage)));add(resourcePathKey(recipe.varyingDefinition));
+    for(const auto& directory:recipe.includeDirectories)add(resourcePathKey(directory));
+    return recipe.name+"-"+std::to_string(hash);
+}
+std::filesystem::path recipeInclude(const ShaderCompileConfig& config,const ShaderCompileRecipe& recipe,
+    const std::filesystem::path& parent,const std::string& name) {
+    if(!parent.empty() && std::filesystem::is_regular_file(parent/name))return parent/name;
+    for(const auto& directory:recipe.includeDirectories)if(std::filesystem::is_regular_file(directory/name))return directory/name;
+    if(std::filesystem::is_regular_file(config.sourceDirectory/name))return config.sourceDirectory/name;
+    if(std::filesystem::is_regular_file(config.includeDirectory/name))return config.includeDirectory/name;
+    return {};
+}
+std::uint64_t recipeFingerprint(const ShaderCompileConfig& config,const std::string& identity,const std::vector<std::filesystem::path>& dependencies) {
+    auto hash=fingerprintFiles(dependencies);
+    for(unsigned char ch:config.buildContract+";recipe-v1;"+identity+";"+resourcePathKey(config.sourceDirectory)+";"+resourcePathKey(config.includeDirectory))
+        {hash^=ch;hash*=1099511628211ull;}
+    return hash;
+}
+}
+std::vector<std::filesystem::path> shaderDependencies(const ShaderCompileConfig& config,const ShaderCompileRecipe& recipe) {
+    const auto identity=recipeIdentity(recipe);
+    std::vector<std::filesystem::path> pending{recipe.varyingDefinition};
+    std::vector<std::filesystem::path> result;
+    std::set<std::string> known;
+    const std::regex include(R"(^\s*#\s*include\s*[<"]([^>"]+)[>"])");
+    const auto scan=[&](std::istream& input,const std::filesystem::path& parent) {
+        std::string line;
+        while(std::getline(input,line)) {
+            std::smatch match;if(!std::regex_search(line,match,include))continue;
+            const auto child=recipeInclude(config,recipe,parent,match[1].str());
+            if(child.empty())throw std::runtime_error("Generated shader include is missing: "+match[1].str());
+            pending.push_back(child);
+        }
+    };
+    try {
+        std::ifstream input(config.cacheDirectory/(identity+".recipe.json"));
+        if(input) {
+            const auto metadata=nlohmann::json::parse(input);
+            if(metadata.at("version")==1 && metadata.at("contract")==config.buildContract && metadata.at("compiler")==resourcePathKey(config.compiler) &&
+                metadata.at("source")==resourcePathKey(config.sourceDirectory) && metadata.at("include")==resourcePathKey(config.includeDirectory)) {
+                const auto& dependencies=metadata.at("dependencies");
+                if(!dependencies.is_array() || dependencies.size()>256)throw std::runtime_error("Generated shader dependency index is invalid.");
+                for(const auto& value:dependencies) {
+                    const auto file=pathFromUtf8(value.get<std::string>());
+                    if(std::filesystem::is_regular_file(file))pending.push_back(file);
+                }
+                pending.push_back(config.compiler);return sortedDependencies(std::move(pending));
+            }
+        }
+    } catch(...) { /* A disposable dependency index can be reconstructed. */ }
+    std::istringstream source(recipe.source);scan(source,{});
+    for(std::size_t i=0;i<pending.size();++i) {
+        if(pending.size()>256)throw std::runtime_error("Generated shader include graph exceeds its limit.");
+        const auto file=pending[i];if(!known.insert(resourcePathKey(file)).second)continue;
+        if(!std::filesystem::is_regular_file(file))throw std::runtime_error("Generated shader varying/include is unavailable.");
+        result.push_back(file);std::ifstream input(file);scan(input,file.parent_path());
+    }
+    result.push_back(config.compiler);return sortedDependencies(std::move(result));
+}
+ShaderBinary compileShader(const ShaderCompileConfig& config,const ShaderCompileRecipe& recipe,std::stop_token token) {
+    if(token.stop_requested())throw std::runtime_error("Shader compilation canceled.");
+    if(!std::filesystem::is_regular_file(config.compiler))throw std::runtime_error("Pinned shader compiler is unavailable.");
+    const auto identity=recipeIdentity(recipe);
+    auto dependencies=shaderDependencies(config,recipe);
+    auto fingerprint=recipeFingerprint(config,identity,dependencies);
+    std::filesystem::create_directories(config.cacheDirectory);
+    auto target=config.cacheDirectory/(identity+"-"+std::to_string(fingerprint)+".bin");
+    if(std::filesystem::is_regular_file(target))return {recipe.name,recipe.stage==ShaderStage::Vertex,readBinary(target),std::move(dependencies),fingerprint};
+    static std::atomic_uint64_t sequence{};
+    const auto stage=config.cacheDirectory/(identity+"-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(sequence.fetch_add(1))+".tmp");
+    const auto source=std::filesystem::path(stage.wstring()+L".sc");
+    const auto dependencyFile=std::filesystem::path(stage.wstring()+L".d");
+    const auto clean=[&]{std::error_code ignored;std::filesystem::remove(stage,ignored);std::filesystem::remove(source,ignored);std::filesystem::remove(dependencyFile,ignored);};
+    try {
+        writeFileAtomically(source,recipe.source);
+        const auto type=recipe.stage==ShaderStage::Vertex?L"vertex":recipe.stage==ShaderStage::Compute?L"compute":L"fragment";
+        std::wstring includeArguments;
+        const auto addDirectory=[&](const std::filesystem::path& directory){if(!directory.empty())includeArguments+=L" -i "+quoted(directory);};
+        for(const auto& directory:recipe.includeDirectories)addDirectory(directory);
+        addDirectory(config.sourceDirectory);addDirectory(config.includeDirectory);
+        const auto command=L"-f "+quoted(source)+L" -o "+quoted(stage)+L" --platform windows --type "+type+
+            L" --profile s_5_0 -O 3 --depends --varyingdef "+quoted(recipe.varyingDefinition)+includeArguments;
+        const auto initial=fingerprintFiles(dependencies);
+        runCompiler(config.compiler,command,token);
+        if(token.stop_requested() || fingerprintFiles(dependencies)!=initial)throw std::runtime_error("Generated shader dependencies changed during compilation.");
+        const auto discover=[&] {
+            auto actual=parseShaderDependencyFile(dependencyFile);
+            std::erase_if(actual,[&](const auto& file){return resourcePathKey(file)==resourcePathKey(source);});
+            for(auto& file:actual)if(file.is_relative()) {
+                const auto resolved=recipeInclude(config,recipe,{},utf8(file));if(!resolved.empty())file=resolved;
+            }
+            actual.push_back(recipe.varyingDefinition);actual.push_back(config.compiler);
+            return sortedDependencies(std::move(actual));
+        };
+        auto actual=discover();const auto before=fingerprintFiles(actual);
+        if(actual!=dependencies) {
+            runCompiler(config.compiler,command,token);
+            if(discover()!=actual)throw std::runtime_error("Generated shader include graph changed during compilation.");
+        }
+        if(token.stop_requested() || fingerprintFiles(actual)!=before)throw std::runtime_error("Generated shader dependencies changed during compilation.");
+        dependencies=std::move(actual);fingerprint=recipeFingerprint(config,identity,dependencies);
+        target=config.cacheDirectory/(identity+"-"+std::to_string(fingerprint)+".bin");
+        auto data=readBinary(stage);std::error_code error;std::filesystem::rename(stage,target,error);
+        if(error && !std::filesystem::is_regular_file(target))throw std::runtime_error("Could not publish generated shader cache.");
+        nlohmann::json paths=nlohmann::json::array();for(const auto& file:dependencies)paths.push_back(utf8(file));
+        writeFileAtomically(config.cacheDirectory/(identity+".recipe.json"),nlohmann::json{{"version",1},{"contract",config.buildContract},
+            {"compiler",resourcePathKey(config.compiler)},{"source",resourcePathKey(config.sourceDirectory)},
+            {"include",resourcePathKey(config.includeDirectory)},{"dependencies",paths}}.dump());
+        clean();return {recipe.name,recipe.stage==ShaderStage::Vertex,std::move(data),std::move(dependencies),fingerprint};
+    } catch(...) {clean();throw;}
 }
 }

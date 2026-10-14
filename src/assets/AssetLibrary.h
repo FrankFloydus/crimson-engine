@@ -21,6 +21,7 @@ namespace crimson {
 class SceneDocument;
 class AsyncImports;
 class TextureStreamer;
+class MaterialGraphPrograms;
 
 enum class MaterialSlot { Albedo, Roughness, Metallic, Normal };
 struct TextureAsset {
@@ -57,6 +58,8 @@ public:
     std::string materialDiagnostic(const std::string& id) const;
     std::shared_ptr<const PreparedParticleMaterial> preparedParticleMaterial(const std::string& id) const;
     ModelMaterialTextures materialPreviewBindings(const MaterialAsset& material) const;
+    std::unique_ptr<MaterialGraphPrograms> createMaterialNodePreviewPrograms() const;
+    ModelMaterialTextures materialNodePreviewBindings(MaterialGraphPrograms&,const MaterialAsset&,MaterialGraphPreviewTarget) const;
     void publishMaterial(std::shared_ptr<const MaterialAsset>);
     void protectMaterialDocument(std::string id) { materialDocumentId_=std::move(id); }
     void refreshMaterials();
@@ -78,6 +81,9 @@ public:
     void refreshParticles();
     void protectParticleDocument(std::string id) { particleDocumentId_=std::move(id); }
     ResourceManager* resources() const { return resources_; }
+    void setMaterialGraphPrograms(MaterialGraphPrograms* programs) { graphPrograms_=programs; }
+    std::vector<std::filesystem::path> materialShaderDependencies() const;
+    std::uint64_t materialShaderRevision() const;
     std::uint64_t modelRevision(const std::string& id) const;
     std::uint64_t modelFingerprint(const std::string& id) const;
     bool modelLoading(const std::string& id) const;
@@ -176,7 +182,12 @@ private:
     TextureAsset* findMutable(const std::string& id) const;
     TextureAsset makeAsset(const std::filesystem::path& path);
     bgfx::TextureHandle fullTexture(TextureAsset& asset, bool srgb) const;
-    ModelMaterialTextures materialBindings(const ModelMaterial&,bool particle) const;
+    ModelMaterialTextures materialBindings(const ModelMaterial&) const;
+    ModelMaterialTextures graphMaterialBindings(const std::shared_ptr<const MaterialGraph>&) const;
+    ModelMaterialTextures preparedGraphBindings(MaterialGraphPrograms&,const MaterialGraphShader&,const MaterialGraph&) const;
+    struct GraphShaderCache {std::weak_ptr<const MaterialGraph> source;std::shared_ptr<const MaterialGraphShader> shader;};
+    mutable std::unordered_map<const MaterialGraph*,GraphShaderCache> graphShaderCache_;
+    MaterialGraphPrograms* graphPrograms_{};
     void registerModel(std::shared_ptr<const ModelAsset> model);
     void addTexture(TextureAsset asset);
     void refreshReferenceIndex(const SceneDocument* active);

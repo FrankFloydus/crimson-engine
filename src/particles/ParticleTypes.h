@@ -1,6 +1,7 @@
 #pragma once
 
 #include "math/Math.h"
+#include "ParticleOrientation.h"
 #include "resources/AssetRef.h"
 #include <cstddef>
 #include <cstdint>
@@ -84,10 +85,11 @@ struct ParticleEmitterDefinition {
     std::string name{"Emitter 1"};
     bool enabled{true};
     float rate{30.0f};
+    float explosiveness{}; // 0=continuous; 1=the cycle's full rate budget at its start.
     float lifetime{1.25f};
     Vec3 initialVelocity{0,0,0}; // Emitter-coordinate launch velocity at birth.
     Vec3 gravity{0,-9.81f,0}; // Acceleration in the selected simulation space, m/s^2.
-    float size{0.08f}; // Full billboard width/height in world meters.
+    float size{0.08f}; // Full square sprite width/height in world meters.
     Vec3 color{1,1,1}; // Straight linear HDR RGB; picker hue/intensity are a view.
     float intensity{1.0f}; // Compatibility overall brightness multiplier.
     uint32_t capacity{256};
@@ -108,13 +110,15 @@ struct ParticleEmitterDefinition {
     float delay{};
     bool finiteDuration{false}; // False retains continuous legacy emission.
     float duration{1};
-    bool loop{false}; // Applies only to a finite duration; delay occurs once.
-    std::vector<ParticleBurst> bursts;
+    bool loop{false}; // Finite-duration repetition; explosive continuous emission also repeats duration.
+    std::vector<ParticleBurst> bursts; // Read-only legacy schedules; new authoring uses explosiveness.
     ParticleBehavior gravityBehavior{true,true};
     ParticleBehavior accelerationBehavior{},dragBehavior{};
     Vec3 acceleration{}; // Gravity/acceleration use the selected simulation space.
     float drag{1}; // Exponential damping coefficient, in 1/s.
-    float rotation{}; // Absolute billboard rotation, degrees in its camera plane.
+    ParticleBillboardMode billboardMode{ParticleBillboardMode::Disabled};
+    Vec3 orientation{}; // Euler XYZ degrees relative to the emitter's rigid frame.
+    float rotation{}; // In-plane sprite roll, degrees, after facing/orientation.
     ParticleScalarTrack sizeTrack{},intensityTrack{},rotationTrack{};
     ParticleColorMode colorMode{ParticleColorMode::Constant};
     ParticleColorGradient colorGradient; // Replaces effect tint/opacity in Gradient mode.
@@ -125,6 +129,7 @@ struct ParticleState {
     uint64_t spawnOrdinal{};
     Vec3 previousPosition{}, position{}, velocity{};
     double age{}, lifetime{}, birthTime{};
+    Vec3 birthRight{1,0,0},birthUp{0,1,0}; // Rigid emitter frame captured at world-space birth.
 };
 
 struct ParticlePresentation {
@@ -133,6 +138,8 @@ struct ParticlePresentation {
     Vec4 color{1,1,1,1};
     uint64_t spawnOrdinal{};
     float rotation{}; // Radians, copied presentation only.
+    ParticleBillboardMode billboardMode{ParticleBillboardMode::Disabled};
+    Vec3 right{1,0,0},up{0,1,0}; // World-space oriented plane before its in-plane roll.
 };
 
 enum class ParticlePlaybackState { Stopped, Running, Paused };

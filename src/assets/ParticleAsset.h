@@ -21,10 +21,16 @@ struct ParticleAssetEntry { std::string id, name; };
 
 ParticleEffectAsset defaultParticleEffect(const std::string& name = "New Particle Effect");
 void validateParticleAsset(const ParticleEffectAsset& asset);
+// Explicitly adopts the Explosiveness control. Legacy burst counts are folded
+// into rate over duration; continuous emitters extend that duration through the
+// last legacy burst. Clears those records only after the complete candidate is
+// valid. Returns whether values changed; invalid input/rate overflow throws and
+// leaves the emitter untouched. Calling with zero also adopts legacy schedules.
+bool setParticleExplosiveness(ParticleEmitterDefinition& emitter, float value);
 std::filesystem::path particleAssetPath(const std::filesystem::path& projectRoot, const std::string& id);
-// Writers publish native v7 with effect-level preprocess seconds and linear HDR
-// colors. Readers retain v1-v6 behavior with preprocessing disabled, decoding
-// v1-v5 authored sRGB exactly once. Loading never rewrites older files.
+// Writers publish native v8 with Explosiveness and optional legacyBursts. Readers
+// retain v1-v7 emission schedules with Explosiveness zero, v1-v6 preprocessing
+// disabled, and decode v1-v5 authored sRGB once. Loading never rewrites files.
 std::string serializeParticleAsset(const ParticleEffectAsset& asset);
 ParticleEffectAsset deserializeParticleAsset(std::string_view text, const std::string& expectedId = {});
 ParticleEffectAsset loadParticleAsset(const std::filesystem::path& projectRoot, const std::string& id);

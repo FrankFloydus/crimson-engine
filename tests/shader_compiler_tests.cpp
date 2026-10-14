@@ -100,6 +100,11 @@ void run(const std::filesystem::path& compiler,const std::filesystem::path& sour
     const auto pickFragment=compileShader(shadows,"fs_pick"),particleFragment=compileShader(shadows,"fs_particle"),presentFragment=compileShader(shadows,"fs_present");
     require(dependency(pickFragment,"material_mapping.sh") && dependency(particleFragment,"material_mapping.sh"),"Shared material mapping was absent from picking/sprite reload dependencies.");
     require(dependency(presentFragment,"tone_mapping.sh"),"Tone mapping include was absent from runtime reload dependencies.");
+    const auto glowFragment=compileShader(shadows,"fs_glow_blur");
+    require(dependency(glowFragment,"glow_kernel.sh"),"Glow kernel was absent from runtime reload dependencies.");
+    const auto warmGlow=compileShader(shadows,"fs_glow_blur");
+    require(warmGlow.bytes==glowFragment.bytes && warmGlow.fingerprint==glowFragment.fingerprint,
+        "Warm Glow shader cache changed code or fingerprint.");
     auto mapping=read(shadowSource/"material_mapping.sh");const auto originalMapping=mapping;
     auto modelSource=read(shadowSource/"fs_model.sc");const auto originalModelSource=modelSource;
     const std::string originalName="u_materialUvOffset",replacementName="u_rejectedMaterialOffset";

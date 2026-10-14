@@ -2,6 +2,7 @@
 
 #include "RenderTypes.h"
 #include "ParticleRenderTypes.h"
+#include "MaterialGraphGpu.h"
 #include "assets/ModelAsset.h"
 #include "assets/MaterialAsset.h"
 #include "assets/MaterialPreviewGeometry.h"
@@ -33,6 +34,7 @@ struct MaterialTextures {
 // Base color, packed metallic/roughness, normal, occlusion, emissive.
 // Textures are borrowed from AssetLibrary; sampler overrides belong to each slot.
 struct ModelMaterialTextures {
+    std::shared_ptr<const PreparedGraphMaterial> graph;
     std::array<bgfx::TextureHandle, 5> handles{{BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE,
         BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE}};
     std::array<std::uint32_t, 5> flags{{UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX}};
@@ -40,18 +42,30 @@ struct ModelMaterialTextures {
     std::array<std::uint64_t,5> sourceFingerprints{},signatures{};
     bool complete{true};
     bool sourceReady{true};
+    bool graphPending{};
+    std::string diagnostic;
 };
 
-// Prepared renderer values only. The color texture uses TextureStreamer's Color
-// role (hardware sRGB RGB decode, linear alpha); an absent texture is procedural.
+// Geometry is a transient preview choice, independent of material authorship.
+inline bool usesParticleMaterialPreview(MaterialPreviewMesh mesh,const ModelMaterialTextures& bindings) {
+    return mesh==MaterialPreviewMesh::Sprite && !(bindings.graph && bindings.graph->nodePreview);
+}
+
+// Prepared renderer values. Fallback coverage is explicit; an RGB texture never
+// supplies opacity implicitly. Complete graph packets own all authored behavior.
 struct RenderParticleMaterial {
+    std::shared_ptr<const PreparedGraphMaterial> graph;
     Vec4 baseColor{1,1,1,1}; // Linear factors, including opacity.
-    ParticleBlendMode blend{ParticleBlendMode::Additive};
+    MaterialBlend blend{MaterialBlend::Additive};
+    MaterialShading shading{MaterialShading::Unlit};
+    float roughness{1},metallic{},specular{.5f},occlusion{1},alphaCutoff{.5f};
+    Vec3 emission{};
+    bool doubleSided{};
     bgfx::TextureHandle colorTexture{BGFX_INVALID_HANDLE};
     std::uint32_t samplerFlags{UINT32_MAX};
     std::shared_ptr<const void> pinned; // Material definition and texture leases.
     Vec3 uvScale{1,1,1},uvOffset{},uvRotation{};
-    bool triplanar{false}; // Sprite rendering intentionally remains two-dimensional.
+    bool triplanar{false},triplanarWorld{false};
 };
 
 inline constexpr std::size_t MaxDirectionalLights = 4;
@@ -98,7 +112,7 @@ struct RenderScene {
     bool sceneMode{false}; // A scene with no instances is empty; legacy mode previews a sphere.
     std::shared_ptr<const void> pinned;
     std::span<const RenderParticle> particles;
-    std::span<const RenderParticleMaterial> particleMaterials; // Empty uses procedural additive material 0.
+    std::span<const RenderParticleMaterial> particleMaterials; // Empty uses a neutral additive fallback.
     // Complete light-range caster set, independent of Scene/Game camera culling.
     // A zero world ID explicitly disables shadows for isolated material previews.
     std::span<const RenderModelInstance> shadowInstances;

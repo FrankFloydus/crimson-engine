@@ -9,6 +9,8 @@
 #include <fstream>
 #include <stdexcept>
 #include <unordered_set>
+#include <optional>
+#include <map>
 
 namespace crimson {
 namespace {
@@ -30,10 +32,6 @@ bool safeImage(const std::string& id) {
     if (relative.has_root_path() || relative.empty() || id.find(':')!=std::string::npos) return false;
     for(const auto& part:relative) if(part=="..") return false;
     return relative.begin()!=relative.end() && *relative.begin()=="assets";
-}
-Json textureJson(const ModelTexture& t) {
-    return {{"image",t.image.id},{"uv",t.texCoord},{"wrapU",static_cast<int>(t.wrapU)},{"wrapV",static_cast<int>(t.wrapV)},
-        {"minFilter",static_cast<int>(t.minFilter)},{"magFilter",static_cast<int>(t.magFilter)}};
 }
 ModelTexture readTexture(const Json& j) {
     ModelTexture t; t.image=AssetRef<DecodedImage>{j.at("image").get<std::string>()}; t.texCoord=j.at("uv").get<uint32_t>();
@@ -91,6 +89,175 @@ std::string importedMaterialId(const std::string& modelId,std::size_t index) {
     if(token.empty()) throw std::runtime_error("Model package identity is empty.");
     return "assets/materials/"+std::string(reinterpret_cast<const char*>(token.data()),token.size())+"-m"+std::to_string(index)+".crimson-material";
 }
+MaterialGraph materialGraphFromLegacy(const ModelMaterial& surface,MaterialShading shading,MaterialBlend blend) {
+    MaterialGraph graph;graph.nodes.reserve(32);graph.links.reserve(40);
+    const auto outputId=addMaterialNode(graph,MaterialNodeKind::Output,{700,80}).id;
+    auto& settings=materialOutputNode(graph).output;settings.shading=shading;
+    settings.blend=blend==MaterialBlend::Opaque&&surface.alphaMask?MaterialBlend::Mask:blend;
+    const bool sprite=shading==MaterialShading::Unlit&&(settings.blend==MaterialBlend::Alpha||settings.blend==MaterialBlend::Additive);
+    settings.baseColor={surface.baseColor[0],surface.baseColor[1],surface.baseColor[2]};settings.opacity=surface.baseColor[3];
+    settings.opacityMask=surface.baseColor[3];settings.specular=surface.specular;
+    settings.roughness=surface.roughness;settings.metallic=surface.metallic;settings.emission=surface.emissive;
+    settings.occlusionStrength=surface.occlusionStrength;settings.alphaCutoff=surface.alphaCutoff;settings.doubleSided=surface.doubleSided;
+    const auto link=[&](MaterialNodeId from,MaterialPin fromPin,MaterialNodeId to,MaterialPin toPin) {
+        graph.links.push_back({graph.nextLinkId++,from,to,fromPin,toPin});
+    };
+    const auto mapping=[&](uint32_t uv,float y) {
+        // Legacy sprites always sampled UV0 with the ordinary XY/Z transform,
+        // even when the shared material carried a triplanar projection flag.
+        MaterialUvMapping value;value.mode=sprite?MaterialUvMode::UV0:surface.triplanar?
+            (surface.triplanarWorld?MaterialUvMode::WorldTriplanar:MaterialUvMode::LocalTriplanar):(uv?MaterialUvMode::UV1:MaterialUvMode::UV0);
+        value.scale=surface.uvScale;value.offset=surface.uvOffset;value.rotation=surface.uvRotation;value.scaleLinked=surface.uvScaleLinked;
+        for(const auto& n:graph.nodes)if(n.kind==MaterialNodeKind::UV&&n.uv==value)return n.id;
+        auto& n=addMaterialNode(graph,MaterialNodeKind::UV,{-750,y});n.uv=value;return n.id;
+    };
+    const auto texture=[&](const ModelTexture& slot,MaterialTextureRole role,float y)->MaterialNodeId {
+        if(slot.image.empty())return 0;
+        const auto uvId=mapping(slot.texCoord,y);const auto sampler=materialSampler(surface,slot);
+        for(const auto& n:graph.nodes)if(n.kind==MaterialNodeKind::Texture2D&&n.texture.image==slot.image&&n.texture.role==role&&
+            n.texture.sampler==sampler&&(role!=MaterialTextureRole::Normal||n.texture.normalStrength==surface.normalScale)) {
+            const auto* input=materialInputLink(graph,n.id,MaterialPin::UV);if(input&&input->fromNode==uvId)return n.id;
+        }
+        auto& n=addMaterialNode(graph,MaterialNodeKind::Texture2D,{-450,y});n.texture.image=slot.image;n.texture.role=role;n.texture.sampler=sampler;
+        if(role==MaterialTextureRole::Normal)n.texture.normalStrength=surface.normalScale;
+        const auto id=n.id;link(uvId,MaterialPin::UV,id,MaterialPin::UV);return id;
+    };
+    const auto parameter=[&](MaterialPin target,const Vec4& value,bool color,MaterialNodeId image,MaterialPin channel,float y) {
+        const auto title=std::string(materialPinName(target));
+        const bool neutral=color?(value[0]==1&&value[1]==1&&value[2]==1):value[0]==1;
+        if(image&&neutral){link(image,channel,outputId,target);return;}
+        auto& constant=addMaterialNode(graph,color?MaterialNodeKind::Color:MaterialNodeKind::Scalar,{-120,y+90});
+        constant.name=title+(image?" factor":"");constant.color=value;constant.scalar=value[0];
+        if(value[0]<0)constant.scalarRange[0]=std::min(-1.f,value[0]);
+        if(value[0]>1)constant.scalarRange[1]=value[0];
+        const auto id=constant.id;const auto pin=color?MaterialPin::RGB:MaterialPin::Value;
+        if(!image){link(id,pin,outputId,target);return;}
+        auto& multiply=addMaterialNode(graph,MaterialNodeKind::Multiply,{300,y});multiply.name=title+" × factor";
+        const auto product=multiply.id;link(image,channel,product,MaterialPin::Left);link(id,pin,product,MaterialPin::Right);
+        link(product,MaterialPin::Value,outputId,target);
+    };
+    const auto base=texture(surface.baseColorTexture,MaterialTextureRole::Color,0);
+    parameter(MaterialPin::BaseColor,surface.baseColor,true,base,MaterialPin::RGB,0);
+    const auto packed=texture(surface.metallicRoughnessTexture,MaterialTextureRole::Data,300);
+    parameter(MaterialPin::Roughness,{surface.roughness,surface.roughness,surface.roughness,surface.roughness},false,packed,MaterialPin::G,300);
+    parameter(MaterialPin::Metallic,{surface.metallic,surface.metallic,surface.metallic,surface.metallic},false,packed,MaterialPin::B,530);
+    if(const auto normal=texture(surface.normalTexture,MaterialTextureRole::Normal,760))link(normal,MaterialPin::Normal,outputId,MaterialPin::Normal);
+    else if(surface.normalScale!=1) {
+        const auto uvId=mapping(surface.normalTexture.texCoord,760);
+        auto& normalNode=addMaterialNode(graph,MaterialNodeKind::Texture2D,{-450,760});normalNode.name="Normal (unassigned)";
+        normalNode.texture.role=MaterialTextureRole::Normal;normalNode.texture.normalStrength=surface.normalScale;normalNode.texture.sampler=materialSampler(surface,surface.normalTexture);
+        link(uvId,MaterialPin::UV,normalNode.id,MaterialPin::UV);
+    }
+    if(const auto occlusion=texture(surface.occlusionTexture,MaterialTextureRole::Data,990))link(occlusion,MaterialPin::R,outputId,MaterialPin::Occlusion);
+    const auto emission=texture(surface.emissiveTexture,MaterialTextureRole::Color,1220);
+    parameter(MaterialPin::Emission,{surface.emissive[0],surface.emissive[1],surface.emissive[2],1},true,emission,MaterialPin::RGB,1220);
+    parameter(settings.blend==MaterialBlend::Opaque||settings.blend==MaterialBlend::Mask?MaterialPin::OpacityMask:MaterialPin::Opacity,
+        {surface.baseColor[3],surface.baseColor[3],surface.baseColor[3],surface.baseColor[3]},false,base,MaterialPin::A,1450);
+    // An untextured material can still have authored mapping ready to reuse.
+    if(std::none_of(graph.nodes.begin(),graph.nodes.end(),[](const auto& n){return n.kind==MaterialNodeKind::UV;}))(void)mapping(0,0);
+    if(sprite)migrateLegacyParticleGraph(graph,true);
+    validateMaterialGraph(graph);return graph;
+}
+namespace {
+struct LegacyExpression {Vec4 factor{1,1,1,1};const MaterialNode* texture{};MaterialPin channel{MaterialPin::RGB};bool representable{true};};
+using LegacyExpressionCache=std::map<std::pair<MaterialNodeId,MaterialPin>,LegacyExpression>;
+LegacyExpression legacyExpression(const MaterialGraph& graph,MaterialNodeId id,MaterialPin pin,LegacyExpressionCache& cache) {
+    const auto key=std::pair{id,pin};
+    if(const auto found=cache.find(key);found!=cache.end())return found->second;
+    const auto expression=[&] {
+    const auto& n=*findMaterialNode(graph,id);LegacyExpression result;
+    // Particle Color is neutral on meshes and in legacy fallback transport.
+    if(n.kind==MaterialNodeKind::ParticleColor)return result;
+    if(n.kind==MaterialNodeKind::Texture2D){result.texture=&n;result.channel=pin;return result;}
+    if(n.kind==MaterialNodeKind::Scalar){result.factor={n.scalar,n.scalar,n.scalar,n.scalar};return result;}
+    if(n.kind==MaterialNodeKind::Vector2) {
+        if(pin==MaterialPin::XY)result.factor={n.vector2[0],n.vector2[1],0,0};
+        else {const auto value=n.vector2[pin==MaterialPin::X?0:1];result.factor={value,value,value,value};}
+        return result;
+    }
+    if(n.kind==MaterialNodeKind::Color) {
+        if(pin==MaterialPin::RGB)result.factor=n.color;
+        else {const auto index=pin==MaterialPin::R?0:pin==MaterialPin::G?1:pin==MaterialPin::B?2:3;const auto v=n.color[index];result.factor={v,v,v,v};}
+        return result;
+    }
+    if(n.kind==MaterialNodeKind::Saturate) {
+        // Only a uniform clamp can be represented by the legacy factor slots.
+        // Keep textured saturation in the authoritative graph, not an incorrect
+        // texture-times-factor approximation that changes coverage.
+        if(materialExpressionUniform(graph,id,MaterialPin::Value))result.factor=evaluateMaterialUniform(graph,id,MaterialPin::Value).value;
+        else result.representable=false;
+        return result;
+    }
+    if(n.kind==MaterialNodeKind::Multiply) {
+        const auto input=[&](MaterialPin inputPin,const MaterialValue& fallback) {
+            if(const auto* l=materialInputLink(graph,id,inputPin))return legacyExpression(graph,l->fromNode,l->fromPin,cache);
+            LegacyExpression e;e.factor=fallback.type==MaterialValueType::Scalar?Vec4{fallback.value[0],fallback.value[0],fallback.value[0],fallback.value[0]}:fallback.value;return e;
+        };
+        const auto a=input(MaterialPin::Left,n.left),b=input(MaterialPin::Right,n.right);
+        for(size_t i=0;i<4;++i)result.factor[i]=a.factor[i]*b.factor[i];
+        result.texture=a.texture?a.texture:b.texture;result.channel=a.texture?a.channel:b.channel;
+        result.representable=a.representable&&b.representable&&!(a.texture&&b.texture);return result;
+    }
+    result.representable=false;return result;
+    }();
+    cache.emplace(key,expression);return expression;
+}
+}
+ModelMaterial materialGraphLegacySurface(const MaterialGraph& graph,const std::string& name) {
+    validateMaterialGraph(graph);const auto& root=materialOutputNode(graph);const auto& output=root.output;
+    const auto coverage=output.blend==MaterialBlend::Mask?MaterialPin::OpacityMask:MaterialPin::Opacity;
+    ModelMaterial surface;surface.name=name;surface.baseColor={output.baseColor[0],output.baseColor[1],output.baseColor[2],output.blend==MaterialBlend::Mask?output.opacityMask:output.opacity};
+    surface.specular=output.specular;
+    surface.roughness=output.roughness;surface.metallic=output.metallic;surface.emissive=output.emission;
+    surface.occlusionStrength=output.occlusionStrength;surface.alphaCutoff=output.alphaCutoff;surface.doubleSided=output.doubleSided;surface.alphaMask=output.blend==MaterialBlend::Mask;
+    bool mappingSet=false;
+    const auto applyTexture=[&](const MaterialNode* texture,ModelTexture& target) {
+        if(!texture)return;target.image=texture->texture.image;const auto& sampler=texture->texture.sampler;
+        target.wrapU=sampler.wrapU;target.wrapV=sampler.wrapV;target.minFilter=sampler.minFilter;target.magFilter=sampler.magFilter;
+        const auto mapping=materialTextureMapping(graph,texture->id);
+        target.texCoord=mapping.mode==MaterialUvMode::UV1?1u:0u;
+        if(!mappingSet){surface.uvScale=mapping.scale;surface.uvOffset=mapping.offset;surface.uvRotation=mapping.rotation;surface.uvScaleLinked=mapping.scaleLinked;
+            surface.triplanar=mapping.mode==MaterialUvMode::LocalTriplanar||mapping.mode==MaterialUvMode::WorldTriplanar;
+            surface.triplanarWorld=mapping.mode==MaterialUvMode::WorldTriplanar;mappingSet=true;}
+    };
+    LegacyExpressionCache expressionCache;
+    const auto activeInputs=materialOutputInputs(output.shading,output.blend);
+    const auto expression=[&](MaterialPin pin)->std::optional<LegacyExpression> {
+        if(std::none_of(activeInputs.begin(),activeInputs.end(),[&](const auto& input){return input.pin==pin;}))return {};
+        const auto* link=materialInputLink(graph,root.id,pin);if(!link)return {};
+        auto value=legacyExpression(graph,link->fromNode,link->fromPin,expressionCache);
+        if(materialInputDefault(root,pin).type==MaterialValueType::Scalar&&materialOutputType(graph,link->fromNode,link->fromPin)==MaterialValueType::Color) {
+            const auto red=value.factor[0];value.factor={red,red,red,red};
+            if(value.channel==MaterialPin::RGB)value.channel=MaterialPin::R;
+        }
+        return value.representable?std::optional{value}:std::nullopt;
+    };
+    if(const auto e=expression(MaterialPin::BaseColor)){for(size_t i=0;i<3;++i)surface.baseColor[i]=e->factor[i];applyTexture(e->texture,surface.baseColorTexture);}
+    if(const auto e=expression(coverage)){surface.baseColor[3]=e->factor[0];if(e->channel==MaterialPin::A&&surface.baseColorTexture.image.empty())applyTexture(e->texture,surface.baseColorTexture);}
+    if(const auto e=expression(MaterialPin::Specular))surface.specular=e->factor[0];
+    if(const auto e=expression(MaterialPin::Roughness)){surface.roughness=e->factor[0];if(e->channel==MaterialPin::G)applyTexture(e->texture,surface.metallicRoughnessTexture);}
+    if(const auto e=expression(MaterialPin::Metallic)){surface.metallic=e->factor[0];if(e->channel==MaterialPin::B&&surface.metallicRoughnessTexture.image.empty())applyTexture(e->texture,surface.metallicRoughnessTexture);}
+    if(const auto e=expression(MaterialPin::Normal)){applyTexture(e->texture,surface.normalTexture);if(e->texture)surface.normalScale=e->texture->texture.normalStrength;}
+    else for(const auto& n:graph.nodes)if(n.kind==MaterialNodeKind::Texture2D&&n.texture.role==MaterialTextureRole::Normal&&n.texture.image.empty()){surface.normalScale=n.texture.normalStrength;break;}
+    if(const auto e=expression(MaterialPin::Occlusion))applyTexture(e->texture,surface.occlusionTexture);
+    if(const auto e=expression(MaterialPin::Emission)){for(size_t i=0;i<3;++i)surface.emissive[i]=e->factor[i];applyTexture(e->texture,surface.emissiveTexture);}
+    if(!mappingSet)for(const auto& n:graph.nodes)if(n.kind==MaterialNodeKind::UV){const auto mapping=resolveMaterialUvMapping(graph,n.id);
+        surface.uvScale=mapping.scale;surface.uvOffset=mapping.offset;surface.uvRotation=mapping.rotation;surface.uvScaleLinked=mapping.scaleLinked;
+        surface.triplanar=mapping.mode==MaterialUvMode::LocalTriplanar||mapping.mode==MaterialUvMode::WorldTriplanar;surface.triplanarWorld=mapping.mode==MaterialUvMode::WorldTriplanar;break;}
+    surface.graph=std::make_shared<const MaterialGraph>(graph);return surface;
+}
+void canonicalizeMaterialAsset(MaterialAsset& material) {
+    if(material.graph.empty())material.graph=materialGraphFromLegacy(material.surface,material.shading,material.blend);
+    const auto& output=materialOutputNode(material.graph).output;material.shading=output.shading;material.blend=output.blend;
+    material.surface=materialGraphLegacySurface(material.graph,material.name);
+}
+std::vector<std::string> materialTextureReferences(const MaterialAsset& material) {
+    if(!material.graph.empty())return materialGraphTextureReferences(material.graph);
+    std::vector<std::string> result;
+    for(const auto* slot:{&material.surface.baseColorTexture,&material.surface.metallicRoughnessTexture,&material.surface.normalTexture,&material.surface.occlusionTexture,&material.surface.emissiveTexture})
+        if(!slot->image.empty()&&std::find(result.begin(),result.end(),slot->image.id)==result.end())result.push_back(slot->image.id);
+    return result;
+}
 MaterialAsset defaultMaterialAsset() {
     MaterialAsset m; m.id=DefaultMaterialId;m.name="Default material";m.surface.name=m.name;
     m.surface.baseColor={.5f,.5f,.5f,1};m.surface.roughness=1;m.surface.metallic=0;return m;
@@ -99,25 +266,43 @@ MaterialAsset defaultParticleMaterialAsset() {
     MaterialAsset material;material.id=DefaultParticleMaterialId;material.name="Default particle material";material.surface.name=material.name;
     material.surface.baseColor={1,1,1,1};material.surface.metallic=0;material.surface.roughness=1;
     material.surface.baseColorTexture.wrapU=material.surface.baseColorTexture.wrapV=ModelWrap::Clamp;
-    material.shading=MaterialShading::Unlit;material.blend=MaterialBlend::Additive;return material;
+    material.shading=MaterialShading::Unlit;material.blend=MaterialBlend::Additive;
+    auto& graph=material.graph;
+    const auto output=addMaterialNode(graph,MaterialNodeKind::Output,{500,0}).id;
+    materialOutputNode(graph).output.shading=MaterialShading::Unlit;
+    materialOutputNode(graph).output.blend=MaterialBlend::Additive;
+    materialOutputNode(graph).output.baseColor={1,1,1};
+    const auto color=addMaterialNode(graph,MaterialNodeKind::ParticleColor,{-350,0}).id;
+    const auto radial=addMaterialNode(graph,MaterialNodeKind::RadialGradient,{-350,230}).id;
+    const auto opacity=addMaterialNode(graph,MaterialNodeKind::Multiply,{70,200}).id;
+    connectMaterialNodes(graph,color,MaterialPin::RGB,output,MaterialPin::BaseColor);
+    connectMaterialNodes(graph,color,MaterialPin::A,opacity,MaterialPin::Left);
+    connectMaterialNodes(graph,radial,MaterialPin::Value,opacity,MaterialPin::Right);
+    connectMaterialNodes(graph,opacity,MaterialPin::Value,output,MaterialPin::Opacity);
+    canonicalizeMaterialAsset(material);return material;
 }
 bool particleMaterialCompatible(const MaterialAsset& material) {
-    const auto& surface=material.surface;
-    return material.shading==MaterialShading::Unlit&&(material.blend==MaterialBlend::Alpha||material.blend==MaterialBlend::Additive)&&
-        surface.metallicRoughnessTexture.image.empty()&&surface.normalTexture.image.empty()&&surface.occlusionTexture.image.empty()&&surface.emissiveTexture.image.empty()&&
-        (surface.baseColorTexture.image.empty()||surface.baseColorTexture.texCoord==0);
+    return modelMaterialCompatible(material);
 }
 bool modelMaterialCompatible(const MaterialAsset& material) {
-    return material.shading==MaterialShading::StandardPbr&&(material.blend==MaterialBlend::Opaque||material.blend==MaterialBlend::Mask);
+    try {
+        // Consumer compatibility is a graph property, independent of shading,
+        // blending, or the geometry that eventually supplies its inputs.
+        if(!material.graph.empty())validateMaterialGraph(material.graph);
+        else {validateMaterialAsset(material);(void)materialGraphFromLegacy(material.surface,material.shading,material.blend);}
+        return true;
+    }catch(const std::exception&){return false;}
 }
 ModelSampler materialSampler(const ModelMaterial& material,const ModelTexture& texture) {
     return material.sharedSampler.value_or(ModelSampler{texture.wrapU,texture.wrapV,texture.minFilter,texture.magFilter});
 }
 void validateMaterialAsset(const MaterialAsset& a) {
+    if(a.id.empty()||a.name.empty()||a.name.size()>1024)throw std::runtime_error("Material contains invalid identity or name.");
+    if(!a.graph.empty()){validateMaterialGraph(a.graph);return;}
     (void)shadingName(a.shading);(void)blendName(a.blend);
     const auto& m=a.surface;
     if(a.id.empty()||a.name.empty()||a.name.size()>1024||!math::finite(m.baseColor)||!math::finite(m.emissive)||
-        !math::finite(m.metallic)||!math::finite(m.roughness)||!math::finite(m.normalScale)||!math::finite(m.occlusionStrength)||!math::finite(m.alphaCutoff)||
+        !math::finite(m.metallic)||!math::finite(m.roughness)||!math::finite(m.specular)||!math::finite(m.normalScale)||!math::finite(m.occlusionStrength)||!math::finite(m.alphaCutoff)||
         !math::finite(m.uvScale)||!math::finite(m.uvOffset)||!math::finite(m.uvRotation))
         throw std::runtime_error("Material contains invalid identity or nonfinite factors.");
     if(m.metallic<0||m.metallic>1||m.roughness<0||m.roughness>1||m.occlusionStrength<0||m.occlusionStrength>1||m.alphaCutoff<0||
@@ -131,24 +316,18 @@ void validateMaterialAsset(const MaterialAsset& a) {
     if(m.sharedSampler)(void)readSampler(samplerJson(*m.sharedSampler));
 }
 std::string serializeMaterialAsset(const MaterialAsset& a) {
-    validateMaterialAsset(a);const auto& m=a.surface;
-    const auto blend=a.blend==MaterialBlend::Opaque&&m.alphaMask?MaterialBlend::Mask:a.blend;
-    return Json{{"version",3},{"type","crimson-material"},{"id",a.id},{"name",a.name},{"originModel",a.originModel},
-        {"shading",shadingName(a.shading)},{"blend",blendName(blend)},
-        {"uvScale",m.uvScale},{"uvOffset",m.uvOffset},{"uvRotation",m.uvRotation},{"triplanar",m.triplanar},{"triplanarWorld",m.triplanarWorld},{"uvScaleLinked",m.uvScaleLinked},
-        {"sharedSampler",m.sharedSampler?samplerJson(*m.sharedSampler):Json(nullptr)},
-        {"baseColor",m.baseColor},{"metallic",m.metallic},{"roughness",m.roughness},{"normalScale",m.normalScale},
-        {"occlusionStrength",m.occlusionStrength},{"emissive",m.emissive},{"alphaMask",blend==MaterialBlend::Mask},{"doubleSided",m.doubleSided},{"alphaCutoff",m.alphaCutoff},
-        {"baseColorTexture",textureJson(m.baseColorTexture)},{"metallicRoughnessTexture",textureJson(m.metallicRoughnessTexture)},
-        {"normalTexture",textureJson(m.normalTexture)},{"occlusionTexture",textureJson(m.occlusionTexture)},{"emissiveTexture",textureJson(m.emissiveTexture)}}.dump(2)+"\n";
+    validateMaterialAsset(a);auto canonical=a;canonicalizeMaterialAsset(canonical);
+    return Json{{"version",6},{"type","crimson-material"},{"id",a.id},{"name",a.name},{"originModel",a.originModel},
+        {"graph",Json::parse(serializeMaterialGraph(canonical.graph))}}.dump(2)+"\n";
 }
 MaterialAsset loadMaterialAsset(const std::filesystem::path& root,const std::string& id) {
-    if(id==DefaultMaterialId)return defaultMaterialAsset();
-    if(id==DefaultParticleMaterialId)return defaultParticleMaterialAsset();
+    if(id==DefaultMaterialId){auto a=defaultMaterialAsset();canonicalizeMaterialAsset(a);return a;}
+    if(id==DefaultParticleMaterialId){auto a=defaultParticleMaterialAsset();canonicalizeMaterialAsset(a);return a;}
     const auto file=materialPath(root,id);if(std::filesystem::file_size(file)>1024u*1024u)throw std::runtime_error("Material file exceeds 1 MiB.");
     std::ifstream input(file,std::ios::binary);if(!input)throw std::runtime_error("Cannot read material asset.");const auto j=Json::parse(input);
-    if(!j.at("version").is_number_integer()||(j.at("version")!=1&&j.at("version")!=2&&j.at("version")!=3)||j.at("type")!="crimson-material"||j.at("id")!=id)throw std::runtime_error("Material type, version or identity is invalid.");
+    if(!j.at("version").is_number_integer()||(j.at("version")!=1&&j.at("version")!=2&&j.at("version")!=3&&j.at("version")!=4&&j.at("version")!=5&&j.at("version")!=6)||j.at("type")!="crimson-material"||j.at("id")!=id)throw std::runtime_error("Material type, version or identity is invalid.");
     MaterialAsset a;a.id=id;a.name=j.at("name").get<std::string>();a.originModel=j.value("originModel",std::string{});auto& m=a.surface;m.name=a.name;
+    if(j.at("version")==4||j.at("version")==5||j.at("version")==6){a.graph=parseMaterialGraph(j.at("graph").dump());canonicalizeMaterialAsset(a);validateMaterialAsset(a);return a;}
     m.baseColor=j.at("baseColor").get<Vec4>();m.metallic=j.at("metallic").get<float>();m.roughness=j.at("roughness").get<float>();m.normalScale=j.at("normalScale").get<float>();
     m.occlusionStrength=j.at("occlusionStrength").get<float>();m.emissive=j.at("emissive").get<Vec3>();m.alphaMask=j.at("alphaMask").get<bool>();m.doubleSided=j.at("doubleSided").get<bool>();m.alphaCutoff=j.at("alphaCutoff").get<float>();
     if(j.at("version")==1)a.blend=m.alphaMask?MaterialBlend::Mask:MaterialBlend::Opaque;
@@ -159,7 +338,7 @@ MaterialAsset loadMaterialAsset(const std::filesystem::path& root,const std::str
         if(!j.at("sharedSampler").is_null())m.sharedSampler=readSampler(j.at("sharedSampler"));
     }
     m.baseColorTexture=readTexture(j.at("baseColorTexture"));m.metallicRoughnessTexture=readTexture(j.at("metallicRoughnessTexture"));m.normalTexture=readTexture(j.at("normalTexture"));
-    m.occlusionTexture=readTexture(j.at("occlusionTexture"));m.emissiveTexture=readTexture(j.at("emissiveTexture"));validateMaterialAsset(a);return a;
+    m.occlusionTexture=readTexture(j.at("occlusionTexture"));m.emissiveTexture=readTexture(j.at("emissiveTexture"));validateMaterialAsset(a);canonicalizeMaterialAsset(a);return a;
 }
 void saveMaterialAsset(const std::filesystem::path& root,const MaterialAsset& a) {
     if(a.id.starts_with("builtin:"))throw std::runtime_error("Built-in materials cannot be edited.");
@@ -169,11 +348,12 @@ MaterialAsset createMaterialAsset(const std::filesystem::path& root,const std::s
     auto material=defaultMaterialAsset();material.id=uniqueId(root);material.name=uniqueName(root,name);material.surface.name=material.name;
     constexpr float midgrayLinear=.21404114f;material.surface.baseColor={midgrayLinear,midgrayLinear,midgrayLinear,1};
     material.surface.sharedSampler=ModelSampler{ModelWrap::Repeat,ModelWrap::Repeat,ModelFilter::LinearMipmapLinear,ModelFilter::Linear};
+    canonicalizeMaterialAsset(material);
     saveMaterialAsset(root,material);return material;
 }
 MaterialAsset copyMaterialAsset(const std::filesystem::path& root,const MaterialAsset& source,const std::string& name) {
     validateMaterialAsset(source);auto material=source;material.id=uniqueId(root);material.name=uniqueName(root,name.empty()?source.name:name);
-    material.surface.name=material.name;material.originModel.clear();saveMaterialAsset(root,material);return material;
+    material.surface.name=material.name;material.originModel.clear();canonicalizeMaterialAsset(material);saveMaterialAsset(root,material);return material;
 }
 void promoteModelMaterials(const std::filesystem::path& root,const ModelAsset& model,const std::function<bool(const std::string&)>& deleted) {
     for(std::size_t i=0;i<model.materials.size();++i){const auto id=importedMaterialId(model.id,i);

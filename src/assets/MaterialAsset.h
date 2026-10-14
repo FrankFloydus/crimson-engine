@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ModelAsset.h"
+#include "MaterialGraph.h"
 #include <filesystem>
 #include <string>
 
@@ -12,15 +12,21 @@ inline constexpr const char* GrayTextureId = "builtin:texture/gray";
 inline constexpr const char* NeutralNormalTextureId = "builtin:texture/normal";
 inline constexpr const char* StudioEnvironmentId = "builtin:environment/studio";
 
-enum class MaterialShading { StandardPbr, Unlit };
-enum class MaterialBlend { Opaque, Mask, Alpha, Additive };
-
 struct MaterialAsset {
     std::string id, name, originModel;
     ModelMaterial surface;
     MaterialShading shading{MaterialShading::StandardPbr};
     MaterialBlend blend{MaterialBlend::Opaque};
+    MaterialGraph graph; // Authored authority; empty only at the legacy/import boundary.
 };
+
+// Upgrade an empty legacy graph, then refresh read-only compatibility values and
+// the immutable graph transport attached to ModelMaterial. Never imports stale
+// .surface edits when a graph already exists.
+void canonicalizeMaterialAsset(MaterialAsset&);
+MaterialGraph materialGraphFromLegacy(const ModelMaterial&,MaterialShading,MaterialBlend);
+ModelMaterial materialGraphLegacySurface(const MaterialGraph&,const std::string& name={});
+std::vector<std::string> materialTextureReferences(const MaterialAsset&);
 
 std::string importedMaterialId(const std::string& modelId, std::size_t index);
 MaterialAsset defaultMaterialAsset();

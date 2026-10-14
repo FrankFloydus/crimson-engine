@@ -6,6 +6,9 @@
 #include <cctype>
 #include <cstring>
 #include <memory>
+#include <map>
+#include <set>
+#include <regex>
 #include <sstream>
 #include <stdexcept>
 #include <vector>
@@ -134,5 +137,70 @@ bool preflightShaderPair(std::span<const std::uint8_t> vertex,std::span<const st
             throw std::runtime_error("Hot reload changed shader uniforms, sampler bindings, vertex attributes or varyings; restart with a rebuilt engine for interface changes.");
         diagnostic.clear(); return true;
     } catch (const std::exception& error) { diagnostic=error.what(); return false; }
+}
+bool preflightGeneratedShaderPair(std::span<const std::uint8_t> vertex,std::span<const std::uint8_t> fragment,
+    std::span<const std::uint8_t> contractVertex,std::span<const ShaderUniformContract> fragmentManifest,std::string& diagnostic) {
+    try {
+        const auto v=inspect(vertex,'V'),f=inspect(fragment,'F'),original=inspect(contractVertex,'V');
+        if(v.bindings!=original.bindings || v.resources!=original.resources || v.executableResources!=original.executableResources ||
+            v.attributes!=original.attributes || v.input!=original.input || v.output!=original.output)
+            throw std::runtime_error("Generated material vertex program changed the engine contract.");
+        if(v.output!=f.input)throw std::runtime_error("Generated material vertex/fragment varyings differ.");
+        std::map<std::string,ShaderUniformContract> allowed;std::set<unsigned> samplerSlots,activeSlots;
+        std::map<unsigned,ShaderUniformContract> samplerContracts;
+        for(const auto& binding:fragmentManifest) {
+            if(binding.name.empty() || !binding.count || binding.count>255 || !allowed.emplace(binding.name,binding).second)
+                throw std::runtime_error("Generated material binding manifest is invalid.");
+            if(binding.kind==ShaderUniformKind::Sampler && (binding.samplerSlot>=16 || binding.count!=1 || !samplerSlots.insert(binding.samplerSlot).second))
+                throw std::runtime_error("Generated material sampler manifest exceeds or aliases the Direct3D binding budget.");
+            if(binding.kind==ShaderUniformKind::Sampler)samplerContracts.emplace(binding.samplerSlot,binding);
+        }
+        for(const auto& binding:f.bindings) {
+            const auto expected=allowed.find(binding.name);
+            // HLSL reflection reports Elements=0 for a non-array uniform, and
+            // the pinned shaderc stores that value verbatim in its envelope.
+            const auto count=std::max<unsigned>(1,binding.count);
+            if(expected==allowed.end() || binding.type!=static_cast<std::uint8_t>(expected->second.kind) || count>expected->second.count)
+                throw std::runtime_error("Generated material has an undeclared or mismatched uniform: "+binding.name);
+            if(binding.type==0) {
+                if(binding.samplerSlot!=expected->second.samplerSlot || binding.samplerCount!=1)
+                    throw std::runtime_error("Generated material sampler slot differs from its manifest: "+binding.name);
+                activeSlots.insert(binding.samplerSlot);
+            } else {
+                const unsigned rows=binding.type==4?4:binding.type==3?3:1;
+                if(binding.constantRegisters>expected->second.count*rows)
+                    throw std::runtime_error("Generated material uniform allocation exceeds its manifest: "+binding.name);
+            }
+        }
+        for(const auto& [name,binding]:allowed)if(binding.required && std::none_of(f.bindings.begin(),f.bindings.end(),[&](const auto& entry){return entry.name==name;}))
+            throw std::runtime_error("Generated material is missing a required uniform: "+name);
+        // Shaderc can strip reflection resources. Match executable SM5 resource
+        // declarations to the envelope/manifest so a forged envelope cannot hide
+        // an undeclared texture slot or UAV from preflight.
+        const std::regex registerSlot(R"(([ts])([0-9]+)(?:\[[^\]]*\])?(?:,mode_(?:default|comparison))?$)");
+        for(const auto& declaration:f.executableResources) {
+            if(declaration.starts_with("dcl_uav"))throw std::runtime_error("Generated fragment contains an unordered-access resource.");
+            std::smatch match;
+            if(!std::regex_search(declaration,match,registerSlot))throw std::runtime_error("Generated fragment resource declaration is unsupported: "+declaration);
+            const auto slot=static_cast<unsigned>(std::stoul(match[2].str()));
+            if(!activeSlots.contains(slot))throw std::runtime_error("Generated fragment executable uses an undeclared sampler slot.");
+            const auto& expected=samplerContracts.at(slot);
+            if(declaration.starts_with("dcl_resource")) {
+                const std::string dimension=expected.textureDimension==ShaderTextureDimension::Cube?"texturecube":"texture2d";
+                if(declaration!="dcl_resource_"+dimension+"(float,float,float,float)t"+std::to_string(slot))
+                    throw std::runtime_error("Generated fragment texture dimension or format differs from its manifest.");
+            } else if(declaration!="dcl_samplers"+std::to_string(slot)+(expected.comparisonSampler?",mode_comparison":",mode_default"))
+                throw std::runtime_error("Generated fragment comparison sampler differs from its manifest.");
+        }
+        for(const auto& binding:f.resources) {
+            if((binding.type!=D3D_SIT_TEXTURE && binding.type!=D3D_SIT_SAMPLER) || binding.count!=1 || !activeSlots.contains(binding.slot))
+                throw std::runtime_error("Generated fragment resource reflection differs from its manifest.");
+            const auto& expected=samplerContracts.at(binding.slot);
+            if(binding.type==D3D_SIT_TEXTURE && (binding.returnType!=D3D_RETURN_TYPE_FLOAT ||
+                binding.dimension!=(expected.textureDimension==ShaderTextureDimension::Cube?D3D_SRV_DIMENSION_TEXTURECUBE:D3D_SRV_DIMENSION_TEXTURE2D)))
+                throw std::runtime_error("Generated fragment reflected texture type differs from its manifest.");
+        }
+        diagnostic.clear();return true;
+    } catch(const std::exception& error){diagnostic=error.what();return false;}
 }
 }

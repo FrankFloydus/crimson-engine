@@ -1,5 +1,6 @@
 #include "tools/ParticleAppearanceEditor.h"
 #include "tools/HdrColorEditor.h"
+#include "tools/ParticleEmissionEditor.h"
 #include "editor/ParticleDocument.h"
 #include "particles/ParticleAppearance.h"
 #include <imgui.h>
@@ -286,16 +287,19 @@ void hdrColorMathAndPassiveFrames() {
     }
     HdrColorDecomposition dim{{1,.5f,.25f},-4};const auto dimmed=composeHdrColor(dim);
     near(dimmed[0],1.f/16,"Negative EV did not dim linear brightness.");
+    const auto white=hdrColorDisplay({1,1,1,1});near(white[0],1,"Ordinary white swatches were incorrectly tone mapped.");
     Project project;AppearanceUi ui(project.root);
     for(int frame=0;frame<20;++frame)ui.tick();
     require(ui.document.definition()==ui.baseline && !ui.document.dirty() && !ui.document.canUndo(),
         "Showing HDR controls or their normalized hue drifted the canonical authored color.");
 }
-void hdrIntensityAndOpacityTransactions() {
+void hdrChannelAndOpacityTransactions() {
     for(const bool opacity:{false,true}) {
         Project project;AppearanceUi ui(project.root);
-        const auto start=numericPoint(opacity?ui.hdr.opacityMinimum:ui.hdr.intensityMinimum,
-            opacity?ui.hdr.opacityMaximum:ui.hdr.intensityMaximum);
+        ui.hdr.expanded=true;ui.tick();
+        require(ui.document.definition()==ui.baseline && !ui.document.canUndo(),"Expanding color channels changed the authored value.");
+        const auto start=numericPoint(opacity?ui.hdr.opacityMinimum:ui.hdr.channelMinimum[0],
+            opacity?ui.hdr.opacityMaximum:ui.hdr.channelMaximum[0]);
         const auto revision=ui.document.revision();ui.mouse(start,false);ui.mouse(start,true);
         require(ui.hdrChanges.active && ui.document.transactionActive(),"HDR numeric control did not own its edit gesture.");
         ui.mouse({start[0]+25,start[1]},true);ui.mouse({start[0]+55,start[1]},true);
@@ -305,13 +309,12 @@ void hdrIntensityAndOpacityTransactions() {
             require(modified.emitter.color==ui.baseline.emitter.color,"Opacity changed HDR RGB or intensity.");
         } else {
             require(modified.emitter.color[0]>ui.baseline.emitter.color[0] && modified.emitter.color[0]>1,
-                "HDR intensity was clamped to SDR or did not edit.");
-            near(modified.emitter.color[0]/modified.emitter.color[1],4,"HDR exposure editing changed hue ratios.");
-            near(modified.emitter.opacity,ui.baseline.emitter.opacity,"HDR intensity changed opacity.");
-            const auto ev=ui.hdr.decomposition.intensityEv;
+                "HDR channel was clamped to SDR or did not edit.");
+            near(modified.emitter.color[1],ui.baseline.emitter.color[1],"Editing R changed G.");
+            near(modified.emitter.color[2],ui.baseline.emitter.color[2],"Editing R changed B.");
+            near(modified.emitter.opacity,ui.baseline.emitter.opacity,"HDR channel changed opacity.");
             for(int frame=0;frame<4;++frame)ui.tick();
-            require(ui.document.definition()==modified && ui.hdr.decomposition.intensityEv==ev,
-                "A stable HDR gesture repeatedly decomposed its color or drifted intensity.");
+            require(ui.document.definition()==modified,"A stable HDR gesture drifted its linear channels.");
         }
         require(ui.document.revision()==revision,"An HDR numeric drag published history before release.");
         ui.mouse({start[0]+55,start[1]},false);
@@ -320,22 +323,23 @@ void hdrIntensityAndOpacityTransactions() {
         require(ui.document.redo() && ui.document.definition()==modified,"HDR numeric redo lost its canonical color/opacity.");
     }
     Project project;AppearanceUi ui(project.root);
-    const auto start=numericPoint(ui.hdr.intensityMinimum,ui.hdr.intensityMaximum);
+    ui.hdr.expanded=true;ui.tick();
+    const auto start=numericPoint(ui.hdr.channelMinimum[0],ui.hdr.channelMaximum[0]);
     ui.mouse(start,false);ui.mouse(start,true);ui.mouse({start[0]+50,start[1]},true);
     require(ui.document.definition()!=ui.baseline && ui.document.transactionActive(),"HDR Escape fixture did not produce a draft.");
     ui.escape();ui.mouse({start[0]+70,start[1]},false);ui.tick();
     require(ui.document.definition()==ui.baseline && !ui.document.canUndo() && !ui.document.dirty() && !ui.hdr.activeItem,
-        "Escape did not restore HDR intensity or retained an active/stale picker edit.");
+        "Escape did not restore HDR channels or retained an active/stale picker edit.");
 }
 void gradientHdrPickerTransactions() {
     for(const bool cancel:{false,true}) {
         Project project;AppearanceUi ui(project.root);const auto stop=ui.gradientPoint(1);
         ui.mouse(stop,false);for(int frame=0;frame<4;++frame)ui.tick();ui.doubleClick(stop);ui.tick();
-        const auto start=numericPoint(ui.gradient.colorIntensityMinimum,ui.gradient.colorIntensityMaximum);
-        require(start[0]>0 && start[1]>0,"Gradient stop popup did not expose an HDR intensity field.");
+        const auto start=numericPoint(ui.gradient.colorChannelMinimum[1],ui.gradient.colorChannelMaximum[1]);
+        require(start[0]>0 && start[1]>0,"Gradient stop popup did not expose linear channel fields.");
         ui.mouse(start,false);ui.mouse(start,true);ui.mouse({start[0]+50,start[1]},true);
         require(ui.gradientChanges.active && ui.document.transactionActive() && ui.document.definition().emitter.colorGradient.stops[1].color[1]>16,
-            "The selected gradient stop's HDR intensity did not retain a live compound transaction.");
+            "The selected gradient stop's HDR channel did not retain a live compound transaction.");
         if(cancel) {
             ui.escape();ui.mouse({start[0]+60,start[1]},false);ui.tick();
             require(ui.document.definition()==ui.baseline && !ui.document.canUndo() && !ui.document.dirty(),
@@ -343,7 +347,7 @@ void gradientHdrPickerTransactions() {
         } else {
             const auto modified=ui.document.definition();ui.mouse({start[0]+50,start[1]},false);
             require(!ui.document.transactionActive() && ui.document.undo() && ui.document.definition()==ui.baseline && !ui.document.canUndo(),
-                "Gradient HDR intensity did not form exactly one undo command.");
+                "Gradient HDR channel did not form exactly one undo command.");
             require(ui.document.redo() && ui.document.definition()==modified,"Gradient HDR redo lost stop color or identity.");
         }
     }
@@ -365,12 +369,74 @@ void gradientPickerCacheChurn() {
             "Adding an untouched stop inherited a deleted stop's HDR picker state.");
     }
 }
+
+void explosivenessTransactions() {
+    Project project;Context context;ParticleEffectDocument document(project.root);
+    auto& io=ImGui::GetIO();io.IniFilename=nullptr;io.DisplaySize={700,400};io.DeltaTime=1.f/60;
+    io.ConfigInputTrickleEventQueue=false;
+    unsigned char* pixels{};int width{},height{};io.Fonts->GetTexDataAsRGBA32(&pixels,&width,&height);io.Fonts->SetTexID(static_cast<ImTextureID>(1));
+    require(document.create("Explosiveness widget"),"Could not create emission fixture.");
+    require(document.edit("Legacy schedule",[](auto& asset) {
+        auto& emitter=asset.emitter;emitter.duration=2;emitter.rate=10;emitter.bursts={{1,.2f,10}};
+    })&&document.save()&&document.load(document.assetId()),"Could not configure legacy emission fixture.");
+    auto baseline=document.definition();ImVec2 minimum{},maximum{};std::string diagnostic;bool durationMode{};
+    const auto frame=[&] {
+        ImGui::NewFrame();const bool canceled=document.transactionActive()&&ImGui::IsKeyPressed(ImGuiKey_Escape,false);
+        if(canceled){document.cancel();ImGui::ClearActiveID();}
+        ImGui::SetNextWindowPos({20,20});ImGui::SetNextWindowSize({600,200});
+        ImGui::Begin("Emission fixture",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoSavedSettings);
+        auto candidate=document.definition();ImGui::SetNextItemWidth(400);
+        const bool changed=durationMode?drawParticleDuration(candidate.emitter):drawParticleExplosiveness(candidate.emitter,diagnostic);
+        minimum=ImGui::GetItemRectMin();maximum=ImGui::GetItemRectMax();
+        if(!canceled&&(ImGui::IsItemActivated()||changed)&&!document.transactionActive())document.begin("Change emission explosiveness");
+        if(!canceled&&changed)require(document.update([&](auto& asset){asset=candidate;}),"Explosiveness widget candidate failed validation.");
+        if(ImGui::IsItemDeactivated()&&document.transactionActive())require(document.commit(),"Explosiveness widget failed to complete its transaction.");
+        ImGui::End();ImGui::Render();require(ImGui::GetDrawData()->Valid,"Explosiveness widget produced invalid draw data.");
+    };
+    frame();frame();require(document.definition()==baseline&&!document.dirty()&&!document.canUndo(),"Passive Explosiveness display converted legacy emission.");
+    const auto move=[&](float fraction) {io.AddMousePosEvent(minimum.x+400*fraction,(minimum.y+maximum.y)*.5f);frame();};
+    move(.4f);io.AddMouseButtonEvent(ImGuiMouseButton_Left,true);frame();move(.8f);
+    require(document.transactionActive()&&document.definition().emitter.bursts.empty()&&document.definition().emitter.explosiveness>.7f,
+        "Explosiveness drag did not author a converted emission schedule.");
+    near(document.definition().emitter.rate,15,"Explosiveness drag converted legacy burst count more than once.");
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left,false);frame();const auto edited=document.definition();
+    require(!document.transactionActive()&&document.undo()&&document.definition()==baseline&&!document.canUndo(),
+        "Explosiveness drag did not preserve the entire old schedule in one undo command.");
+    require(document.redo()&&document.definition()==edited&&document.undo(),"Explosiveness conversion failed to redo completely.");frame();
+    move(.3f);io.AddMouseButtonEvent(ImGuiMouseButton_Left,true);frame();move(.6f);
+    io.AddKeyEvent(ImGuiKey_Escape,true);frame();io.AddKeyEvent(ImGuiKey_Escape,false);io.AddMouseButtonEvent(ImGuiMouseButton_Left,false);frame();
+    require(document.definition()==baseline&&!document.transactionActive()&&!document.canUndo(),"Escape failed to restore the legacy schedule and explosiveness.");
+
+    require(document.edit("Overflow schedule",[](auto& asset){asset.emitter.rate=MaximumParticleRate;})&&document.save()&&document.load(document.assetId()),
+        "Could not configure overflow rejection fixture.");baseline=document.definition();frame();
+    move(.5f);io.AddMouseButtonEvent(ImGuiMouseButton_Left,true);frame();io.AddMouseButtonEvent(ImGuiMouseButton_Left,false);frame();
+    require(!diagnostic.empty()&&document.definition()==baseline&&!document.transactionActive()&&!document.canUndo(),
+        "Rejected legacy conversion escaped the widget, changed values or left history active.");
+
+    require(document.edit("Finite legacy timing",[](auto& asset){asset.emitter.finiteDuration=true;})&&document.save()&&document.load(document.assetId()),
+        "Could not configure legacy duration widget.");baseline=document.definition();durationMode=true;
+    // The preceding slider click uses the same screen position. Let it age out
+    // before testing a drag, rather than double-clicking into numeric entry.
+    for(int index=0;index<30;++index)frame();
+    move(.5f);io.AddMouseButtonEvent(ImGuiMouseButton_Left,true);frame();
+    io.AddMousePosEvent(minimum.x-1000,(minimum.y+maximum.y)*.5f);frame();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left,false);frame();
+    const auto& bounded=document.definition().emitter;
+    require(bounded.bursts==baseline.emitter.bursts&&bounded.duration==particleDurationLowerBound(baseline.emitter)&&
+        bounded.duration>bounded.bursts.front().time&&!document.transactionActive(),
+        "Reducing Duration shifted retained legacy events instead of bounding the cycle end.");
+    require(document.undo()&&document.definition()==baseline&&!document.canUndo(),"Duration bound did not preserve legacy records in one undo step.");
+    const auto records=baseline.emitter.bursts;
+    auto maximumTime=baseline.emitter;maximumTime.bursts.front().time=MaximumParticleTime;
+    require(particleDurationLowerBound(maximumTime)>MaximumParticleTime&&baseline.emitter.bursts==records,
+        "Maximum-time legacy events were silently shifted to fit a finite duration.");
+}
 }
 int main() {
     try {
         curveDragOneTransaction();gradientDragOneTransaction();escapeRestoresDrafts();edgePointsMoveAndUndo();gradientLibraryMatchesRuntime();
         directInsertionRemovalAndNarrowLayout();plotNavigationAndKeyboardFocus();gradientPickerSelection();
-        hdrColorMathAndPassiveFrames();hdrIntensityAndOpacityTransactions();gradientHdrPickerTransactions();gradientPickerCacheChurn();
+        hdrColorMathAndPassiveFrames();hdrChannelAndOpacityTransactions();gradientHdrPickerTransactions();gradientPickerCacheChurn();explosivenessTransactions();
         std::cout<<"Particle library widget transactions, movable edges, linear HDR color/gradient compatibility and Escape checks passed.\n";return 0;
     } catch(const std::exception& error) { std::cerr<<error.what()<<'\n';return 1; }
 }

@@ -1,5 +1,6 @@
 #include "EditorResources.h"
 #include "assets/AssetLibrary.h"
+#include "assets/MaterialGraphReferences.h"
 #include "resources/StreamingModel.h"
 #include "resources/CacheIO.h"
 #include "scene/SceneExtraction.h"
@@ -17,6 +18,7 @@ uint64_t signature(const ModelAsset& asset,uint64_t revision,std::span<const Mod
                    std::span<const ModelMaterialTextures> textures) {
     auto result=streaming::detail::HashSeed; hash(result,revision); hash(result,asset.id.data(),asset.id.size());
     for (const auto& material:materials) {
+        if(material.graph){hash(result,materialGraphRenderHash(material));continue;}
         hash(result,material.baseColor); hash(result,material.metallic); hash(result,material.roughness);
         hash(result,material.normalScale); hash(result,material.occlusionStrength); hash(result,material.emissive);
         hash(result,material.alphaMask); hash(result,material.alphaCutoff); hash(result,material.doubleSided);
@@ -32,6 +34,7 @@ uint64_t signature(const ModelAsset& asset,uint64_t revision,std::span<const Mod
             hash(result,slot->minFilter); hash(result,slot->magFilter);
         }
     }
+    for(const auto& binding:textures)if(binding.graph)hash(result,binding.graph->signature);
     for (const auto& binding:textures) for (size_t slot=0;slot<binding.handles.size();++slot) {
         hash(result,binding.handles[slot].idx); hash(result,binding.flags[slot]);
         hash(result,binding.signatures[slot]); hash(result,binding.sourceFingerprints[slot]);
@@ -42,6 +45,14 @@ bool coherent(const AssetLibrary& assets,std::span<const ModelMaterial> material
     if (materials.size()!=bindings.size()) return false;
     std::unordered_map<std::string,uint64_t> versions;
     for (size_t m=0;m<materials.size();++m) {
+        if(const auto graph=bindings[m].graph) {
+            for(const auto& source:graph->sources) {
+                const auto fingerprint=graph->sourceFingerprints[source.slot];if(!fingerprint)continue;
+                const auto [found,inserted]=versions.emplace(source.image.id,fingerprint);
+                if(!inserted && found->second!=fingerprint)return false;
+            }
+            continue;
+        }
         const auto& material=materials[m]; const std::array<const ModelTexture*,5> slots{
             &material.baseColorTexture,&material.metallicRoughnessTexture,&material.normalTexture,&material.occlusionTexture,&material.emissiveTexture};
         for (size_t slot=0;slot<slots.size();++slot) {
@@ -69,11 +80,27 @@ uint32_t textureDemand(const ModelAsset& asset,std::span<const ModelMaterial> ma
     const double distance=math::length(camera.eye()-center)-radius;
     if (distance<=.001) return 16384;
     double span=std::numeric_limits<double>::infinity();
-    const auto scaleSpan=[](const ModelMaterial& material) {
-        // Rotation and offset do not change sampling density. Use the smallest
-        // axis scale conservatively so anisotropic mapping cannot lose detail.
-        float scale=std::min(std::abs(material.uvScale[0]),std::abs(material.uvScale[1]));
-        if(material.triplanar)scale=std::min(scale,std::abs(material.uvScale[2]));
+    const auto mappings=[](const ModelMaterial& material,const auto& visit) {
+        if(material.graph) {
+            const auto& graph=*material.graph;const auto& output=materialOutputNode(graph).output;
+            for(const auto id:materialGraphOrder(graph,output.shading,output.blend)) {
+                const auto* node=findMaterialNode(graph,id);if(node->kind!=MaterialNodeKind::Texture2D || node->texture.image.empty())continue;
+                MaterialUvMapping mapping;
+                mapping=materialTextureMapping(graph,id);
+                visit(mapping);
+            }
+        } else {
+            for(const auto* slot:{&material.baseColorTexture,&material.metallicRoughnessTexture,&material.normalTexture,&material.occlusionTexture,&material.emissiveTexture}) {
+                if(slot->image.empty())continue;
+                MaterialUvMapping mapping;mapping.scale=material.uvScale;
+                mapping.mode=material.triplanar?(material.triplanarWorld?MaterialUvMode::WorldTriplanar:MaterialUvMode::LocalTriplanar):
+                    slot->texCoord==1?MaterialUvMode::UV1:MaterialUvMode::UV0;visit(mapping);
+            }
+        }
+    };
+    const auto scaleSpan=[](const MaterialUvMapping& mapping) {
+        float scale=std::min(std::abs(mapping.scale[0]),std::abs(mapping.scale[1]));
+        if(mapping.mode==MaterialUvMode::LocalTriplanar || mapping.mode==MaterialUvMode::WorldTriplanar)scale=std::min(scale,std::abs(mapping.scale[2]));
         return std::max(1e-6f,scale);
     };
     const auto worldMappingScale=[](const Mat4& transform) {
@@ -93,29 +120,28 @@ uint32_t textureDemand(const ModelAsset& asset,std::span<const ModelMaterial> ma
         const auto& primitive=asset.stream->primitives[draw.primitive];
         if (primitive.material>=materials.size()) continue;
         const auto& material=materials[primitive.material];
-        const double transformScale=material.triplanar && material.triplanarWorld?worldMappingScale(world*draw.transform):1;
-        for (const auto* slot:{&material.baseColorTexture,&material.metallicRoughnessTexture,&material.normalTexture,&material.occlusionTexture,&material.emissiveTexture}) {
-            if (slot->image.empty() || slot->texCoord>1) continue;
-            const auto& uv=primitive.uvSpan[slot->texCoord];
+        mappings(material,[&](const MaterialUvMapping& mapping) {
+            const double transformScale=mapping.mode==MaterialUvMode::WorldTriplanar?worldMappingScale(world*draw.transform):1;
+            const auto& uv=primitive.uvSpan[mapping.mode==MaterialUvMode::UV1?1:0];
             double used=std::max<double>(uv[0],uv[1]);
-            if(material.triplanar) {
+            if(mapping.mode==MaterialUvMode::LocalTriplanar || mapping.mode==MaterialUvMode::WorldTriplanar) {
                 const auto extent=primitive.bounds.maximum-primitive.bounds.minimum;
                 used=std::numeric_limits<double>::infinity();
                 for(const float axis:extent)if(axis>1e-6f)used=std::min(used,static_cast<double>(axis));
                 if(!std::isfinite(used))used=1;
             }
-            used*=scaleSpan(material)*transformScale;
-            if (used>0) span=std::min(span,std::max(1e-6,used));
-        }
+            used*=scaleSpan(mapping)*transformScale;
+            if(used>0)span=std::min(span,std::max(1e-6,used));
+        });
     }
-    else for(const auto& material:materials) {
+    else for(const auto& material:materials)mappings(material,[&](const MaterialUvMapping& mapping) {
         double transformScale=1;
-        if(material.triplanar && material.triplanarWorld) {
+        if(mapping.mode==MaterialUvMode::WorldTriplanar) {
             transformScale=worldMappingScale(world);
             for(const auto& draw:asset.draws)transformScale=std::min(transformScale,worldMappingScale(world*draw.transform));
         }
-        span=std::min(span,scaleSpan(material)*transformScale);
-    }
+        span=std::min(span,scaleSpan(mapping)*transformScale);
+    });
     if (!std::isfinite(span)) span=1;
     const double diameter=radius*height/(distance*std::tan(fov*.5f));
     return static_cast<uint32_t>(std::clamp(std::ceil(diameter/span),64.0,16384.0));
@@ -218,8 +244,14 @@ std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::s
             if (!error.empty()) { entry.diagnostic=error; entry.failed=true; }
             return retain(entry.current);
         }
+        if(const auto diagnostic=assets_.modelMaterialsDiagnostic(*asset,materialOverride);!diagnostic.empty())entry.diagnostic=diagnostic;
         assets_.setTextureDemand(textureDemand(*asset,materials,world,camera,fov,height),selected);
         auto textures=assets_.modelBindings(*asset,materials);
+        for(const auto& binding:textures)if(binding.graphPending) {
+            entry.diagnostic=binding.diagnostic;refined=false;
+            if(entry.current && std::none_of(entry.current->textures.begin(),entry.current->textures.end(),
+                [](const auto& previous){return previous.graphPending;}))return retain(entry.current);
+        }
         if (!assets_.modelBindingsReady(textures) || !coherent(assets_,materials,textures)) return retain(entry.current);
         if (std::any_of(textures.begin(),textures.end(),[](const auto& binding){return !binding.sourceReady;})) return retain(entry.current);
         refined&=std::all_of(textures.begin(),textures.end(),[](const auto& binding){return binding.complete;});

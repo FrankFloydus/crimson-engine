@@ -2,14 +2,122 @@
   "defaultSeed": "1",
   "emitters": [
     {
-      "capacity": 256,
-      "color": [
+      "acceleration": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "appearanceTracks": {
+        "color": {
+          "gradient": {
+            "interpolation": "linear",
+            "stops": [
+              {
+                "age": 0.0,
+                "color": [
+                  0.6489917039871216,
+                  0.047901324927806854,
+                  0.0,
+                  1.0
+                ],
+                "id": "1"
+              },
+              {
+                "age": 1.0,
+                "color": [
+                  1.0,
+                  0.1502484530210495,
+                  0.0,
+                  1.0
+                ],
+                "id": "2"
+              }
+            ]
+          },
+          "mode": "gradient"
+        },
+        "intensity": {
+          "curve": {
+            "interpolation": "linear",
+            "keys": []
+          },
+          "mode": "constant",
+          "range": null
+        },
+        "rotation": {
+          "curve": {
+            "interpolation": "linear",
+            "keys": []
+          },
+          "mode": "constant",
+          "range": null
+        },
+        "size": {
+          "curve": {
+            "interpolation": "linear",
+            "keys": [
+              {
+                "age": 0.005489614326506853,
+                "id": "1",
+                "value": 0.034825731068849564
+              },
+              {
+                "age": 0.42655786871910095,
+                "id": "7d56ef3c6c0c",
+                "value": 0.07545575499534607
+              },
+              {
+                "age": 1.0,
+                "id": "2",
+                "value": 0.032397057861089706
+              }
+            ]
+          },
+          "mode": "curve",
+          "range": {
+            "maximum": 0.07999999821186066,
+            "minimum": 0.07999999821186066
+          }
+        }
+      },
+      "behaviors": {
+        "acceleration": {
+          "enabled": true,
+          "present": false
+        },
+        "drag": {
+          "enabled": true,
+          "present": false
+        },
+        "gravity": {
+          "enabled": true,
+          "present": true
+        }
+      },
+      "billboardMode": "enabled",
+      "boxSize": [
         1.0,
         1.0,
         1.0
       ],
-      "colorSpace": "srgb",
+      "capacity": 256,
+      "color": [
+        1.0,
+        0.1502484530210495,
+        0.0
+      ],
+      "colorSpace": "linear-hdr",
+      "direction": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "directionFlatness": 0.0,
+      "directionMode": "random-cone",
+      "directionSpread": 10.699999809265137,
+      "drag": 1.0,
       "enabled": true,
+      "explosiveness": 0.0,
       "gravity": [
         0.0,
         -9.8100004196167,
@@ -21,17 +129,46 @@
         6.0,
         0.0
       ],
-      "intensity": 1.0,
-      "lifetime": 1.25,
+      "intensity": 5.320000171661377,
+      "lifetime": 1.2610000371932983,
+      "lifetimeRange": {
+        "enabled": false,
+        "maximum": 1.25,
+        "minimum": 1.25
+      },
+      "material": "assets/materials/79aa81e7e99c-0.crimson-material",
       "name": "Emitter 1",
+      "opacity": 1.0,
+      "orientation": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "radius": 0.25,
       "rate": 30.0,
-      "renderer": "procedural-additive",
+      "renderer": "sprite",
+      "rotation": 0.0,
+      "shape": "point",
       "size": 0.07999999821186066,
-      "space": "world"
+      "space": "world",
+      "speed": 4.0,
+      "speedRange": {
+        "enabled": false,
+        "maximum": 1.0,
+        "minimum": 1.0
+      },
+      "timing": {
+        "delay": 0.0,
+        "duration": 1.3109999895095825,
+        "finiteDuration": true,
+        "loop": true
+      },
+      "velocityMode": "direction-speed"
     }
   ],
   "id": "assets/particles/31b2100915e8-0.crimson-particle",
   "name": "New Particle Effect",
+  "preprocessSeconds": 0.0,
   "type": "crimson-particle",
-  "version": 1
+  "version": 9
 }

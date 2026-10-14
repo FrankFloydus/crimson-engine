@@ -14,7 +14,7 @@ private:
     std::array<char,512> renameText_{};
     std::vector<std::string> dragIds_;
     std::vector<char> dragPayload_;
-    bool focusRename_{}, dragModelsBatch_{}, deferredControl_{}, deferredShift_{};
+    bool focusRename_{}, dragModelsBatch_{}, dragTexturesBatch_{}, deferredControl_{}, deferredShift_{};
     void beginRename(const std::string& id, const std::string& name);
 };
 } // namespace crimson

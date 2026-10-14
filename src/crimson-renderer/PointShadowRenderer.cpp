@@ -6,7 +6,9 @@
 
 namespace crimson {
 namespace {
-template<class Handle> void destroy(Handle& handle) {
+// Keep this name distinct from bgfx::destroy: ADL would prefer its unguarded
+// non-template overload for bgfx handles, including invalid lazy allocations.
+template<class Handle> void destroyHandle(Handle& handle) {
     if(bgfx::isValid(handle))bgfx::destroy(handle);
     handle=BGFX_INVALID_HANDLE;
 }
@@ -18,7 +20,7 @@ struct PointShadowRenderer::Atlas {
     point_shadow::AtlasLayout layout;
     bgfx::TextureHandle depth{BGFX_INVALID_HANDLE};
     bgfx::FrameBufferHandle framebuffer{BGFX_INVALID_HANDLE};
-    ~Atlas(){destroy(framebuffer);destroy(depth);}
+    ~Atlas(){destroyHandle(framebuffer);destroyHandle(depth);}
 };
 struct PointShadowRenderer::Retired {std::unique_ptr<Atlas> atlas;std::uint64_t after{};};
 PointShadowRenderer::PointShadowRenderer() {
@@ -29,7 +31,7 @@ PointShadowRenderer::PointShadowRenderer() {
     for(auto& value:parameters_)value={-1,0,0,0};
 }
 PointShadowRenderer::~PointShadowRenderer() {
-    atlas_.reset();retired_.clear();destroy(sampler_);destroy(parametersUniform_);destroy(atlasUniform_);destroy(layoutUniform_);
+    atlas_.reset();retired_.clear();destroyHandle(sampler_);destroyHandle(parametersUniform_);destroyHandle(atlasUniform_);destroyHandle(layoutUniform_);
 }
 void PointShadowRenderer::advance(std::uint64_t frame) {
     frame_=frame;
@@ -128,19 +130,19 @@ void PointShadowRenderer::render(std::span<const PointLight> lights,std::span<co
     }
     lastRenderedFrame_=frame;
 }
-void PointShadowRenderer::bindDisabled() const {
+void PointShadowRenderer::bindDisabled(std::uint8_t samplerSlot) const {
     std::array<Vec4,16> disabled;for(auto& value:disabled)value={-1,0,0,0};
     bgfx::setUniform(parametersUniform_,disabled.data(),16);
     const Vec4 zero{};bgfx::setUniform(atlasUniform_,zero.data());bgfx::setUniform(layoutUniform_,zero.data());
-    if(atlas_)bgfx::setTexture(8,sampler_,atlas_->depth,static_cast<std::uint32_t>(Sampling));
+    if(atlas_)bgfx::setTexture(samplerSlot,sampler_,atlas_->depth,static_cast<std::uint32_t>(Sampling));
 }
-void PointShadowRenderer::bind(bool receiving) const {
-    if(!receiving || !atlas_){bindDisabled();return;}
+void PointShadowRenderer::bind(bool receiving,std::uint8_t samplerSlot) const {
+    if(!receiving || !atlas_){bindDisabled(samplerSlot);return;}
     const auto& layout=atlas_->layout;
     const Vec4 atlas{1.f/layout.width,1.f/layout.height,static_cast<float>(layout.resolution),static_cast<float>(layout.pitch)};
     const Vec4 dimensions{static_cast<float>(layout.columns),static_cast<float>(layout.pitch)/layout.resolution,0,0};
     bgfx::setUniform(parametersUniform_,parameters_.data(),16);
     bgfx::setUniform(atlasUniform_,atlas.data());bgfx::setUniform(layoutUniform_,dimensions.data());
-    bgfx::setTexture(8,sampler_,atlas_->depth,static_cast<std::uint32_t>(Sampling));
+    bgfx::setTexture(samplerSlot,sampler_,atlas_->depth,static_cast<std::uint32_t>(Sampling));
 }
 }

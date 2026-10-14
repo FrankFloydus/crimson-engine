@@ -18,6 +18,7 @@ namespace {
 constexpr const char* ModelPayload="CC_MODEL_ASSET";
 constexpr const char* ModelBatchPayload="CC_MODEL_ASSETS";
 constexpr const char* TexturePayload="CC_TEXTURE_ASSET";
+constexpr const char* TextureBatchPayload="CC_TEXTURE_ASSETS";
 constexpr const char* ScenePayload="CC_SCENE_ASSET";
 constexpr const char* MaterialPayload="CC_MATERIAL_ASSET";
 constexpr const char* ParticlePayload="CC_PARTICLE_ASSET";
@@ -93,12 +94,12 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
     std::optional<Move> move;
     const auto receiveMove=[&](const std::string& destination) {
         if (!ImGui::BeginDragDropTarget()) return;
-        for (const char* type:{ModelPayload,ModelBatchPayload,TexturePayload,ScenePayload,MaterialPayload,ParticlePayload,FolderPayload}) {
+        for (const char* type:{ModelPayload,ModelBatchPayload,TexturePayload,TextureBatchPayload,ScenePayload,MaterialPayload,ParticlePayload,FolderPayload}) {
             if (const auto* payload=ImGui::AcceptDragDropPayload(type,ImGuiDragDropFlags_AcceptBeforeDelivery)) {
                 if (!payload->IsDelivery() || payload->DataSize<1) continue;
                 const auto* bytes=static_cast<const char*>(payload->Data);
                 if (bytes[payload->DataSize-1]!='\0') continue;
-                if (payload->IsDataType(ModelBatchPayload)) {
+                if (payload->IsDataType(ModelBatchPayload) || payload->IsDataType(TextureBatchPayload)) {
                     std::vector<std::string> ids;
                     const auto* end=bytes+payload->DataSize;
                     for (auto* cursor=bytes;cursor<end;) {
@@ -232,9 +233,14 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
                             const auto found=std::find_if(assets.catalog().begin(),assets.catalog().end(),[&](const auto& asset){return asset.id==id;});
                             return found!=assets.catalog().end() && found->kind==AssetKind::Model;
                         });
-                        if (dragModelsBatch_) for (const auto& id:dragIds_) { dragPayload_.insert(dragPayload_.end(),id.begin(),id.end()); dragPayload_.push_back('\0'); }
+                        dragTexturesBatch_=dragIds_.size()>1 && std::all_of(dragIds_.begin(),dragIds_.end(),[&](const auto& id){
+                            const auto found=std::find_if(assets.catalog().begin(),assets.catalog().end(),[&](const auto& asset){return asset.id==id;});
+                            return found!=assets.catalog().end() && found->kind==AssetKind::Texture;
+                        });
+                        if (dragModelsBatch_ || dragTexturesBatch_) for (const auto& id:dragIds_) { dragPayload_.insert(dragPayload_.end(),id.begin(),id.end()); dragPayload_.push_back('\0'); }
                     }
                     if (dragModelsBatch_) ImGui::SetDragDropPayload(ModelBatchPayload,dragPayload_.data(),dragPayload_.size());
+                    else if(dragTexturesBatch_) ImGui::SetDragDropPayload(TextureBatchPayload,dragPayload_.data(),dragPayload_.size());
                     else ImGui::SetDragDropPayload(payloadType(item),item.id.c_str(),item.id.size()+1);
                     if (dragIds_.size()>1) {
                         const auto p=ImGui::GetCursorScreenPos(); const float extent=64;

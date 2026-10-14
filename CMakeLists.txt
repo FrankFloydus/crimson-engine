@@ -34,6 +34,7 @@ find_path(CC_CGLTF_INCLUDE cgltf.h REQUIRED)
 
 # Pinned RGBA editing widget. Crimson definitions and interpolation semantics
 # stay with the particle owners; the vendor directory records local patches.
+add_subdirectory(third_party/imgui_node_editor)
 add_subdirectory(third_party/imgui_gradient)
 target_link_libraries(imgui_gradient PUBLIC imgui::imgui)
 target_compile_definitions(imgui_gradient PRIVATE IMGUI_DEFINE_MATH_OPERATORS)
@@ -68,7 +69,7 @@ target_link_libraries(crimson-scene PUBLIC crimson-math crimson-storage EnTT::En
 target_compile_definitions(crimson-scene PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(crimson-scene PRIVATE /W4 /permissive- /utf-8)
 
-add_library(crimson-materials src/assets/MaterialAsset.cpp src/editor/MaterialDocument.cpp)
+add_library(crimson-materials src/assets/MaterialGraph.cpp src/assets/MaterialAsset.cpp src/editor/MaterialDocument.cpp src/editor/MaterialGraphActions.cpp)
 target_include_directories(crimson-materials PUBLIC src)
 target_link_libraries(crimson-materials PUBLIC crimson-math crimson-storage nlohmann_json::nlohmann_json)
 target_compile_definitions(crimson-materials PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -112,6 +113,10 @@ endif()
 
 function(cc_shader NAME TYPE VARYING)
     set(HEADER "${CC_GENERATED_DIR}/${NAME}.h")
+    set(EXTRA_DEPENDENCIES)
+    if(NAME STREQUAL "fs_glow_blur")
+        list(APPEND EXTRA_DEPENDENCIES "${CC_SHADER_DIR}/glow_kernel.sh")
+    endif()
     add_custom_command(
         OUTPUT "${HEADER}"
         COMMAND bgfx::shaderc
@@ -120,10 +125,12 @@ function(cc_shader NAME TYPE VARYING)
             --platform windows --type ${TYPE} --profile s_5_0 -O 3
             --varyingdef "${CC_SHADER_DIR}/${VARYING}"
             -i "${CC_BGFX_SHADER_INCLUDE}"
-        DEPENDS "${CC_SHADER_DIR}/${NAME}.sc" "${CC_SHADER_DIR}/${VARYING}"
+        DEPENDS "${CC_SHADER_DIR}/${NAME}.sc" "${CC_SHADER_DIR}/${VARYING}" ${EXTRA_DEPENDENCIES}
                 "${CC_SHADER_DIR}/point_light.sh"
                 "${CC_SHADER_DIR}/point_shadow.sh"
                 "${CC_SHADER_DIR}/material_mapping.sh"
+                "${CC_SHADER_DIR}/material_mapping_functions.sh"
+                "${CC_SHADER_DIR}/model_lighting.sh"
                 "${CC_SHADER_DIR}/tone_mapping.sh"
                 "${CC_SHADER_DIR}/glow_sampling.sh"
                 "${CC_SHADER_DIR}/grid_depth.sh"
@@ -159,6 +166,16 @@ cc_shader(fs_encode fragment varying.def.sc)
 cc_shader(vs_imgui vertex imgui.varying.def.sc)
 cc_shader(fs_imgui fragment imgui.varying.def.sc)
 
+# CPU lowering and interface validation are independent of GPU publication.
+add_library(crimson-material-shaders src/crimson-renderer/MaterialGraphShader.cpp src/crimson-renderer/ShaderPreflight.cpp)
+target_link_libraries(crimson-material-shaders PUBLIC crimson-materials crimson-resources)
+target_compile_definitions(crimson-material-shaders PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(crimson-material-shaders PRIVATE /W4 /permissive- /utf-8)
+add_library(crimson-material-gpu src/crimson-renderer/MaterialGraphGpu.cpp ${CC_SHADER_HEADERS})
+target_include_directories(crimson-material-gpu PRIVATE "${CC_GENERATED_DIR}")
+target_link_libraries(crimson-material-gpu PUBLIC crimson-material-shaders bgfx::bgfx)
+target_compile_options(crimson-material-gpu PRIVATE /W4 /permissive- /utf-8)
+
 add_executable(crimson-renderer WIN32
     src/main.cpp
     src/App.cpp src/App.h
@@ -175,7 +192,7 @@ add_executable(crimson-renderer WIN32
     src/crimson-renderer/Mesh.h src/crimson-renderer/Mesh.cpp
     src/crimson-renderer/Renderer.h src/crimson-renderer/Renderer.cpp
     src/crimson-renderer/PointShadowRenderer.cpp
-    src/crimson-renderer/ModelGpuCache.cpp src/crimson-renderer/ShaderPreflight.cpp
+    src/crimson-renderer/ModelGpuCache.cpp
     src/crimson-renderer/Environment.h src/crimson-renderer/Environment.cpp
     src/crimson-renderer/ImGuiBgfx.h src/crimson-renderer/ImGuiBgfx.cpp
     src/crimson-renderer/PlatformSurface.cpp
@@ -189,7 +206,7 @@ add_executable(crimson-renderer WIN32
     src/tools/ParticleAppearanceEditor.cpp
     src/tools/ParticleGradientEditor.cpp
     src/tools/HdrColorEditor.cpp
-    src/tools/MaterialEditor.cpp
+    src/tools/MaterialEditor.cpp src/tools/MaterialGraphEditor.cpp
     src/input/Navigation.h src/input/Navigation.cpp
     src/assets/AssetLibrary.h src/assets/AssetLibrary.cpp
     src/assets/AssetReferenceManager.cpp src/assets/AsyncImports.cpp src/assets/ImageImportStage.cpp src/assets/DeletionPreparation.cpp
@@ -201,13 +218,17 @@ add_executable(crimson-renderer WIN32
 target_include_directories(crimson-renderer PRIVATE src tests "${CC_GENERATED_DIR}" "${CC_CGLTF_INCLUDE}")
 target_compile_definitions(crimson-renderer PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_definitions(crimson-renderer PRIVATE CC_PROJECT_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
-target_compile_definitions(crimson-renderer PRIVATE CC_SHADER_SOURCE_DIR="${CC_SHADER_DIR}" CC_SHADER_INCLUDE_DIR="${CC_BGFX_SHADER_INCLUDE}" CC_SHADERC_PATH="$<TARGET_FILE:bgfx::shaderc>")
+target_compile_definitions(crimson-renderer PRIVATE CC_SHADER_SOURCE_DIR="${CC_SHADER_DIR}" CC_SHADER_INCLUDE_DIR="${CC_BGFX_SHADER_INCLUDE}" CC_SHADERC_PATH="$<TARGET_FILE_DIR:crimson-renderer>/shader-tools/shaderc.exe" CC_STAGED_SHADER_DIR="$<TARGET_FILE_DIR:crimson-renderer>/shader-tools/shaders" CC_STAGED_SHADER_INCLUDE_DIR="$<TARGET_FILE_DIR:crimson-renderer>/shader-tools/include")
 target_compile_options(crimson-renderer PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:/W4;/permissive-;/utf-8>")
-target_link_libraries(crimson-renderer PRIVATE crimson-resources crimson-math crimson-scene crimson-particles crimson-runtime imguizmo::imguizmo SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui implot::implot imgui_gradient::imgui_gradient lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace meshoptimizer::meshoptimizer)
+target_link_libraries(crimson-renderer PRIVATE crimson-material-gpu crimson-node-editor crimson-resources crimson-math crimson-scene crimson-particles crimson-runtime imguizmo::imguizmo SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui implot::implot imgui_gradient::imgui_gradient lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace meshoptimizer::meshoptimizer)
 
 find_program(CC_POWERSHELL NAMES powershell.exe REQUIRED)
 add_custom_command(TARGET crimson-renderer POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:crimson-renderer> $<TARGET_FILE_DIR:crimson-renderer>
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:crimson-renderer>/shader-tools"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:bgfx::shaderc>" "$<TARGET_FILE_DIR:crimson-renderer>/shader-tools/shaderc.exe"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CC_SHADER_DIR}" "$<TARGET_FILE_DIR:crimson-renderer>/shader-tools/shaders"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CC_BGFX_SHADER_INCLUDE}" "$<TARGET_FILE_DIR:crimson-renderer>/shader-tools/include"
     COMMAND "${CC_POWERSHELL}" -NoProfile -NonInteractive -ExecutionPolicy Bypass
         -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/Refresh-AppIcon.ps1"
         -ExecutablePath "$<TARGET_FILE:crimson-renderer>"
@@ -292,6 +313,10 @@ if(BUILD_TESTING)
     target_link_libraries(particle_preprocess_tests PRIVATE crimson-particles)
     target_compile_options(particle_preprocess_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME particle_preprocess_core COMMAND particle_preprocess_tests)
+    add_executable(particle_explosiveness_tests tests/particle_explosiveness_tests.cpp)
+    target_link_libraries(particle_explosiveness_tests PRIVATE crimson-particles)
+    target_compile_options(particle_explosiveness_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME particle_explosiveness_core COMMAND particle_explosiveness_tests)
     add_executable(particle_step4_asset_tests tests/particle_step4_asset_tests.cpp)
     target_link_libraries(particle_step4_asset_tests PRIVATE crimson-particles)
     target_compile_options(particle_step4_asset_tests PRIVATE /W4 /permissive- /utf-8)
@@ -304,6 +329,30 @@ if(BUILD_TESTING)
     target_link_libraries(particle_appearance_editor_tests PRIVATE crimson-particles imgui::imgui implot::implot imgui_gradient::imgui_gradient)
     target_compile_options(particle_appearance_editor_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME particle_appearance_editor_core COMMAND particle_appearance_editor_tests)
+    add_executable(material_graph_tests tests/material_graph_tests.cpp)
+    target_include_directories(material_graph_tests PRIVATE tests)
+    target_link_libraries(material_graph_tests PRIVATE crimson-materials)
+    target_compile_options(material_graph_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME material_graph_core COMMAND material_graph_tests "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_executable(material_graph_actions_tests tests/material_graph_actions_tests.cpp)
+    target_link_libraries(material_graph_actions_tests PRIVATE crimson-materials)
+    target_compile_options(material_graph_actions_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME material_graph_actions_core COMMAND material_graph_actions_tests)
+    add_executable(material_graph_editor_tests tests/material_graph_editor_tests.cpp src/tools/MaterialGraphEditor.cpp src/tools/HdrColorEditor.cpp)
+    target_link_libraries(material_graph_editor_tests PRIVATE crimson-materials crimson-node-editor)
+    target_compile_options(material_graph_editor_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME material_graph_editor_core COMMAND material_graph_editor_tests)
+    add_executable(material_graph_publication_tests tests/material_graph_publication_tests.cpp)
+    target_link_libraries(material_graph_publication_tests PRIVATE crimson-material-gpu)
+    target_compile_definitions(material_graph_publication_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(material_graph_publication_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME material_graph_publication_core COMMAND material_graph_publication_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
+    set_tests_properties(material_graph_publication_core PROPERTIES TIMEOUT 240 RUN_SERIAL TRUE)
+    add_executable(material_graph_shader_tests tests/material_graph_shader_tests.cpp)
+    target_link_libraries(material_graph_shader_tests PRIVATE crimson-material-shaders)
+    target_compile_options(material_graph_shader_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME material_graph_shader_core COMMAND material_graph_shader_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
+    set_tests_properties(material_graph_shader_core PROPERTIES TIMEOUT 240)
     add_executable(material_document_tests tests/material_document_tests.cpp)
     target_link_libraries(material_document_tests PRIVATE crimson-materials)
     target_compile_options(material_document_tests PRIVATE /W4 /permissive- /utf-8)
@@ -385,17 +434,17 @@ if(BUILD_TESTING)
     target_link_libraries(editor_preferences_tests PRIVATE crimson-math crimson-storage SDL3::SDL3 imgui::imgui nlohmann_json::nlohmann_json)
     add_test(NAME editor_preferences_core COMMAND editor_preferences_tests)
 
-    add_executable(shader_preflight_tests tests/shader_preflight_tests.cpp src/crimson-renderer/ShaderPreflight.cpp ${CC_SHADER_HEADERS})
+    add_executable(shader_preflight_tests tests/shader_preflight_tests.cpp ${CC_SHADER_HEADERS})
     target_include_directories(shader_preflight_tests PRIVATE src "${CC_GENERATED_DIR}")
     target_compile_definitions(shader_preflight_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_compile_options(shader_preflight_tests PRIVATE /W4 /permissive- /utf-8)
-    target_link_libraries(shader_preflight_tests PRIVATE bgfx::bgfx)
+    target_link_libraries(shader_preflight_tests PRIVATE crimson-material-shaders bgfx::bgfx)
     add_test(NAME shader_preflight_core COMMAND shader_preflight_tests)
 
-    add_executable(shader_compiler_tests tests/shader_compiler_tests.cpp src/crimson-renderer/ShaderPreflight.cpp)
+    add_executable(shader_compiler_tests tests/shader_compiler_tests.cpp)
     target_compile_definitions(shader_compiler_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_compile_options(shader_compiler_tests PRIVATE /W4 /permissive- /utf-8)
-    target_link_libraries(shader_compiler_tests PRIVATE crimson-resources)
+    target_link_libraries(shader_compiler_tests PRIVATE crimson-material-shaders crimson-resources)
     add_test(NAME shader_compiler_core COMMAND shader_compiler_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
 
     add_executable(gpu_streaming_tests tests/gpu_streaming_tests.cpp src/resources/TextureStreamer.cpp src/crimson-renderer/ModelGpuCache.cpp)
@@ -408,7 +457,7 @@ if(BUILD_TESTING)
     add_executable(native_resource_tests tests/native_resource_tests.cpp
         src/crimson-renderer/Renderer.cpp src/crimson-renderer/Mesh.cpp
         src/crimson-renderer/PointShadowRenderer.cpp
-        src/crimson-renderer/Environment.cpp src/crimson-renderer/ImGuiBgfx.cpp src/crimson-renderer/ShaderPreflight.cpp
+        src/crimson-renderer/Environment.cpp src/crimson-renderer/ImGuiBgfx.cpp
         src/crimson-renderer/PlatformSurface.cpp
         src/crimson-renderer/ModelGpuCache.cpp src/resources/TextureStreamer.cpp src/resources/ShaderReloadSession.cpp
         src/assets/MaterialPreviewGeometry.cpp
@@ -416,7 +465,7 @@ if(BUILD_TESTING)
     target_include_directories(native_resource_tests PRIVATE src "${CC_GENERATED_DIR}")
     target_compile_definitions(native_resource_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_compile_options(native_resource_tests PRIVATE /W4 /permissive- /utf-8)
-    target_link_libraries(native_resource_tests PRIVATE crimson-resources crimson-materials crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng)
+    target_link_libraries(native_resource_tests PRIVATE crimson-material-gpu crimson-resources crimson-materials crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng)
     add_test(NAME native_resource_core COMMAND native_resource_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
     set_tests_properties(native_resource_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 90)
 
@@ -427,27 +476,27 @@ if(BUILD_TESTING)
 
     add_executable(point_shadow_render_tests tests/point_shadow_render_tests.cpp
         src/crimson-renderer/Renderer.cpp src/crimson-renderer/Mesh.cpp src/crimson-renderer/PointShadowRenderer.cpp
-        src/crimson-renderer/Environment.cpp src/crimson-renderer/ImGuiBgfx.cpp src/crimson-renderer/ShaderPreflight.cpp
+        src/crimson-renderer/Environment.cpp src/crimson-renderer/ImGuiBgfx.cpp
         src/crimson-renderer/PlatformSurface.cpp src/crimson-renderer/ModelGpuCache.cpp
         src/resources/TextureStreamer.cpp src/resources/ShaderReloadSession.cpp
         src/assets/MaterialPreviewGeometry.cpp ${CC_SHADER_HEADERS})
     target_include_directories(point_shadow_render_tests PRIVATE src "${CC_GENERATED_DIR}")
     target_compile_definitions(point_shadow_render_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_compile_options(point_shadow_render_tests PRIVATE /W4 /permissive- /utf-8)
-    target_link_libraries(point_shadow_render_tests PRIVATE crimson-resources crimson-materials crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng)
+    target_link_libraries(point_shadow_render_tests PRIVATE crimson-material-gpu crimson-resources crimson-materials crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng)
     add_test(NAME point_shadow_render_core COMMAND point_shadow_render_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
     set_tests_properties(point_shadow_render_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 180)
     add_executable(material_mapping_render_tests tests/material_mapping_render_tests.cpp
         src/crimson-renderer/Renderer.cpp src/crimson-renderer/Mesh.cpp src/crimson-renderer/PointShadowRenderer.cpp
-        src/crimson-renderer/Environment.cpp src/crimson-renderer/ImGuiBgfx.cpp src/crimson-renderer/ShaderPreflight.cpp
+        src/crimson-renderer/Environment.cpp src/crimson-renderer/ImGuiBgfx.cpp
         src/crimson-renderer/PlatformSurface.cpp src/crimson-renderer/ModelGpuCache.cpp
         src/resources/TextureStreamer.cpp src/resources/ShaderReloadSession.cpp
         src/assets/MaterialPreviewGeometry.cpp ${CC_SHADER_HEADERS})
     target_include_directories(material_mapping_render_tests PRIVATE src "${CC_GENERATED_DIR}")
     target_compile_definitions(material_mapping_render_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_compile_options(material_mapping_render_tests PRIVATE /W4 /permissive- /utf-8)
-    target_link_libraries(material_mapping_render_tests PRIVATE crimson-resources crimson-materials crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng)
-    add_test(NAME material_mapping_render_core COMMAND material_mapping_render_tests)
+    target_link_libraries(material_mapping_render_tests PRIVATE crimson-material-gpu crimson-resources crimson-materials crimson-camera SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng)
+    add_test(NAME material_mapping_render_core COMMAND material_mapping_render_tests "$<TARGET_FILE:bgfx::shaderc>" "${CC_SHADER_DIR}" "${CC_BGFX_SHADER_INCLUDE}")
     set_tests_properties(material_mapping_render_core PROPERTIES RUN_SERIAL TRUE TIMEOUT 180)
     add_executable(preview_dependencies_tests tests/preview_dependencies_tests.cpp)
     target_include_directories(preview_dependencies_tests PRIVATE src)
@@ -461,7 +510,7 @@ if(BUILD_TESTING)
     target_include_directories(asset_library_deletion_tests PRIVATE src tests "${CC_CGLTF_INCLUDE}")
     target_compile_definitions(asset_library_deletion_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_compile_options(asset_library_deletion_tests PRIVATE /W4 /permissive- /utf-8)
-    target_link_libraries(asset_library_deletion_tests PRIVATE crimson-resources crimson-scene crimson-particles SDL3::SDL3 bgfx::bgfx bgfx::bimg_decode bgfx::bimg bgfx::bx lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace)
+    target_link_libraries(asset_library_deletion_tests PRIVATE crimson-material-gpu crimson-resources crimson-scene crimson-particles SDL3::SDL3 bgfx::bgfx bgfx::bimg_decode bgfx::bimg bgfx::bx lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace)
     add_test(NAME asset_library_deletion_core COMMAND asset_library_deletion_tests)
     set_tests_properties(asset_library_deletion_core PROPERTIES TIMEOUT 90)
 
@@ -472,7 +521,7 @@ if(BUILD_TESTING)
     target_include_directories(import_identity_tests PRIVATE src tests "${CC_CGLTF_INCLUDE}")
     target_compile_definitions(import_identity_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     target_compile_options(import_identity_tests PRIVATE /W4 /permissive- /utf-8)
-    target_link_libraries(import_identity_tests PRIVATE crimson-resources crimson-scene crimson-particles SDL3::SDL3 bgfx::bgfx bgfx::bimg_decode bgfx::bimg bgfx::bx lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace)
+    target_link_libraries(import_identity_tests PRIVATE crimson-material-gpu crimson-resources crimson-scene crimson-particles SDL3::SDL3 bgfx::bgfx bgfx::bimg_decode bgfx::bimg bgfx::bx lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace)
     add_test(NAME import_identity_core COMMAND import_identity_tests)
     set_tests_properties(import_identity_core PROPERTIES TIMEOUT 90)
 

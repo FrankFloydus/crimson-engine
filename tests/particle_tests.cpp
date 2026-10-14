@@ -300,7 +300,7 @@ void persistenceAndValidation() {
     require(readText(particleAssetPath(project.root,effect.id))==original,"Save As changed its source file.");
     auto malformed=nlohmann::json::parse(original); malformed["emitters"][0]["capacity"]=1.5;
     rejects([&]{deserializeParticleAsset(malformed.dump(),effect.id);});
-    malformed=nlohmann::json::parse(original); malformed["version"]=8;
+    malformed=nlohmann::json::parse(original); malformed["version"]=10;
     rejects([&]{deserializeParticleAsset(malformed.dump(),effect.id);});
     auto legacy=nlohmann::json::parse(original);legacy["version"]=1;
     legacy["emitters"][0].erase("material");legacy["emitters"][0].erase("opacity");
@@ -308,6 +308,7 @@ void persistenceAndValidation() {
     legacy["emitters"][0]["colorSpace"]="srgb";
     const auto migrated=deserializeParticleAsset(legacy.dump(),effect.id);
     auto expectedLegacy=effect;for(auto& channel:expectedLegacy.emitter.color)channel=particleSrgbToLinear(channel);
+    expectedLegacy.emitter.billboardMode=ParticleBillboardMode::Enabled;
     require(migrated==expectedLegacy,"Step 1 migration changed the saved particle appearance.");
     malformed=nlohmann::json::parse(original);malformed["emitters"][0]["opacity"]=-.1f;
     rejects([&]{deserializeParticleAsset(malformed.dump(),effect.id);});

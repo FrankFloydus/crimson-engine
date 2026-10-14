@@ -42,6 +42,11 @@ std::string read(const std::filesystem::path& file) {
     std::ifstream input(file,std::ios::binary);
     return {std::istreambuf_iterator<char>(input),std::istreambuf_iterator<char>()};
 }
+void legacyEmissionFields(Json& source) {
+    auto& emitter=source["emitters"][0];
+    emitter["bursts"]=emitter.value("legacyBursts",Json::array());
+    emitter.erase("legacyBursts"); emitter.erase("explosiveness");
+}
 ParticleEffectAsset authoredEffect() {
     auto effect=defaultParticleEffect("Growing smoke");
     effect.id="assets/particles/smoke.crimson-particle";
@@ -66,7 +71,7 @@ ParticleEffectAsset authoredEffect() {
 void modesAndPersistence() {
     Project project; auto effect=authoredEffect();
     const auto encoded=serializeParticleAsset(effect);
-    require(Json::parse(encoded).at("version")==7,"Appearance assets do not use native v7.");
+    require(Json::parse(encoded).at("version")==9,"Appearance assets do not use native v9.");
     require(deserializeParticleAsset(encoded,effect.id)==effect,"Appearance modes, stable keys or RGBA stops did not round-trip.");
     saveParticleAsset(project.root,effect);
     require(loadParticleAsset(project.root,effect.id)==effect,"Saved appearance tracks did not reopen exactly.");
@@ -106,6 +111,7 @@ void priorVersions() {
         auto expected=defaultParticleEffect("Legacy effect"); expected.id="assets/particles/legacy.crimson-particle";
         expected.defaultSeed=0xffffffffffffffffull;
         auto& e=expected.emitter;
+        e.billboardMode=ParticleBillboardMode::Enabled;
         e.id=0xabcdef; e.rate=75; e.lifetime=2; e.initialVelocity={2,5,-1}; e.gravity={1,-8,2};
         e.size=.7f; e.intensity=3; e.color={.4f,.5f,.6f}; e.opacity=.3f;
         e.material=AssetRef<MaterialAsset>{"assets/materials/legacy.crimson-material"};
@@ -115,7 +121,7 @@ void priorVersions() {
             e.delay=.2f; e.finiteDuration=true; e.duration=2; e.loop=true; e.bursts={{12,.5f,30}};
             e.dragBehavior={true,true}; e.drag=.6f;
         }
-        auto source=Json::parse(serializeParticleAsset(expected)); source["version"]=version;
+        auto source=Json::parse(serializeParticleAsset(expected)); source["version"]=version; legacyEmissionFields(source);
         auto& emitter=source["emitters"][0];
         emitter["colorSpace"]="srgb";
         for (auto& channel:e.color) channel=particleSrgbToLinear(channel);
@@ -136,8 +142,8 @@ void priorVersions() {
         require(migrated==expected,"v1-v4 migration changed decoded appearance, material or preexisting behavior.");
         require(read(project.root/expected.id)==encoded,"Loading an earlier effect rewrote its source.");
         saveParticleAsset(project.root,migrated);
-        require(Json::parse(read(project.root/expected.id)).at("version")==7 && loadParticleAsset(project.root,expected.id)==expected,
-            "Explicit v7 upgrade did not preserve earlier appearance.");
+        require(Json::parse(read(project.root/expected.id)).at("version")==9 && loadParticleAsset(project.root,expected.id)==expected,
+            "Explicit v9 upgrade did not preserve earlier appearance.");
     }
 }
 void hdrMigrationAndPersistence() {
@@ -150,11 +156,12 @@ void hdrMigrationAndPersistence() {
             e.intensityTrack.range=ParticleAppearanceRange{2,5};
             e.intensityTrack.curve={ParticleInterpolation::Linear,{{1,0,2},{2,1,4}}};
             e.colorGradient={ParticleInterpolation::Linear,{{11,.25f,{.5f,0,1,.2f}},{22,.75f,{1,.5f,0,.8f}}}};
-            auto json=Json::parse(serializeParticleAsset(legacy));json["version"]=5;json["emitters"][0]["colorSpace"]="srgb";
+            auto json=Json::parse(serializeParticleAsset(legacy));json["version"]=5;legacyEmissionFields(json);json["emitters"][0]["colorSpace"]="srgb";
             const auto bytes=json.dump(2)+"\n";
             std::filesystem::create_directories(project.root/"assets/particles");
             std::ofstream(project.root/legacy.id,std::ios::binary)<<bytes;
             auto expected=legacy;auto& converted=expected.emitter;
+            converted.billboardMode=ParticleBillboardMode::Enabled;
             converted.color={particleSrgbToLinear(.5f),particleSrgbToLinear(.04045f),1};
             for(auto& stop:converted.colorGradient.stops)
                 for(std::size_t channel=0;channel<3;++channel)stop.color[channel]=particleSrgbToLinear(stop.color[channel]);
@@ -176,8 +183,8 @@ void hdrMigrationAndPersistence() {
             }
             saveParticleAsset(project.root,migrated);
             const auto saved=Json::parse(read(project.root/legacy.id));
-            require(saved.at("version")==7 && saved["emitters"][0]["colorSpace"]=="linear-hdr" &&
-                loadParticleAsset(project.root,legacy.id)==expected,"Explicit v7 save reinterpreted already migrated RGB.");
+            require(saved.at("version")==9 && saved["emitters"][0]["colorSpace"]=="linear-hdr" &&
+                loadParticleAsset(project.root,legacy.id)==expected,"Explicit v9 save reinterpreted already migrated RGB.");
             auto malformed=json;malformed["emitters"][0]["color"][0]=1.1f;
             rejects([&]{deserializeParticleAsset(malformed.dump());},"Legacy RGB above one bypassed its original validation.");
             malformed=json;malformed["emitters"][0]["appearanceTracks"]["color"]["gradient"]["stops"][0]["color"][2]=2;
@@ -186,7 +193,7 @@ void hdrMigrationAndPersistence() {
     Project project;auto hdr=authoredEffect();hdr.emitter.color={.5f,12,MaximumParticleColor};
     hdr.emitter.colorGradient.stops[0].color={0,32,2,.25f};hdr.emitter.colorGradient.stops[1].color={MaximumParticleColor,0,0,.75f};
     saveParticleAsset(project.root,hdr);
-    require(loadParticleAsset(project.root,hdr.id)==hdr,"HDR RGB or opacity was lost in native v7 round-trip.");
+    require(loadParticleAsset(project.root,hdr.id)==hdr,"HDR RGB or opacity was lost in native v9 round-trip.");
     ParticleEffectDocument document(project.root);require(document.load(hdr.id),"HDR document did not reopen.");
     require(document.begin("HDR stop intensity") && document.update([](auto& asset){asset.emitter.colorGradient.stops[0].color[1]=64;}) &&
         document.update([](auto& asset){asset.emitter.colorGradient.stops[0].color[1]=128;}) && document.commit() &&
@@ -204,7 +211,7 @@ void preprocessPersistenceMigrationAndHistory() {
     require(defaultParticleEffect().preprocessSeconds==0,"A new effect unexpectedly preprocesses before playback.");
     Project project;auto effect=authoredEffect();effect.preprocessSeconds=2.5f;
     const auto encoded=serializeParticleAsset(effect);const auto json=Json::parse(encoded);
-    require(json.at("version")==7 && json.at("preprocessSeconds")==2.5f &&
+    require(json.at("version")==9 && json.at("preprocessSeconds")==2.5f &&
         json["emitters"][0]["colorSpace"]=="linear-hdr" && deserializeParticleAsset(encoded)==effect,
         "Native preprocessing did not retain effect-level seconds, HDR colors and authored values.");
     saveParticleAsset(project.root,effect);
@@ -219,10 +226,11 @@ void preprocessPersistenceMigrationAndHistory() {
     for(int version:{1,2,3,4,5,6}) {
         auto original=defaultParticleEffect("Old effect");original.id="assets/particles/old-preprocess.crimson-particle";
         original.preprocessSeconds=4;original.emitter.color={.5f,.25f,1};original.emitter.intensity=3;
-        auto source=Json::parse(serializeParticleAsset(original));source["version"]=version;source.erase("preprocessSeconds");
+        auto source=Json::parse(serializeParticleAsset(original));source["version"]=version;legacyEmissionFields(source);source.erase("preprocessSeconds");
         if(version<6)source["emitters"][0]["colorSpace"]="srgb";
         if(version==1) {source["emitters"][0]["renderer"]="procedural-additive";source["emitters"][0].erase("material");source["emitters"][0].erase("opacity");}
         auto expected=original;expected.preprocessSeconds=0;
+        expected.emitter.billboardMode=ParticleBillboardMode::Enabled;
         if(version<6)for(auto& channel:expected.emitter.color)channel=particleSrgbToLinear(channel);
         const auto bytes=source.dump(2)+"\n";
         std::ofstream(project.root/original.id,std::ios::binary)<<bytes;
@@ -231,7 +239,7 @@ void preprocessPersistenceMigrationAndHistory() {
         source["preprocessSeconds"]="unknown future field";
         require(deserializeParticleAsset(source.dump())==expected,"An unknown old-version field unexpectedly enabled preprocessing.");
         saveParticleAsset(project.root,expected);
-        require(Json::parse(read(project.root/original.id)).at("version")==7 && loadParticleAsset(project.root,original.id)==expected,
+        require(Json::parse(read(project.root/original.id)).at("version")==9 && loadParticleAsset(project.root,original.id)==expected,
             "Explicit v1-v6 upgrade changed disabled preprocessing or rendered appearance.");
     }
     for(float seconds:{-.001f,MaximumParticlePreprocessSeconds+1,std::numeric_limits<float>::infinity(),
@@ -261,6 +269,69 @@ void preprocessPersistenceMigrationAndHistory() {
     require(!document.edit("Invalid preprocess",[](auto& asset){asset.preprocessSeconds=MaximumParticlePreprocessSeconds+1;}) &&
         document.definition()==committed,"Rejected preprocess edit changed the working revision.");
     require(document.save() && loadParticleAsset(project.root,effect.id)==committed,"Committed preprocessing did not survive save/reopen.");
+}
+void orientationPersistenceMigrationAndHistory() {
+    require(ParticleEmitterDefinition{}.billboardMode==ParticleBillboardMode::Disabled &&
+        defaultParticleEffect().emitter.billboardMode==ParticleBillboardMode::Disabled,"New emitters or effects enable billboarding implicitly.");
+    Project project;auto effect=authoredEffect();
+    effect.emitter.orientation={27,-43,91};
+    for(auto mode:{ParticleBillboardMode::Disabled,ParticleBillboardMode::Enabled,ParticleBillboardMode::FixedY}) {
+        effect.emitter.billboardMode=mode;
+        require(deserializeParticleAsset(serializeParticleAsset(effect))==effect,"A billboard mode or retained orientation failed v9 round-trip.");
+    }
+    // Earlier versions ignored all future orientation fields. Reading one
+    // must preserve its original camera-facing rendering and its exact bytes.
+    for(int version=1;version<=8;++version) {
+        auto expected=defaultParticleEffect("Legacy facing");expected.id="assets/particles/facing.crimson-particle";
+        auto source=Json::parse(serializeParticleAsset(expected));source["version"]=version;
+        auto& emitter=source["emitters"][0];
+        if(version<8)legacyEmissionFields(source);
+        if(version<7)source.erase("preprocessSeconds");
+        if(version<6)emitter["colorSpace"]="srgb";
+        if(version==1){emitter["renderer"]="procedural-additive";emitter.erase("material");emitter.erase("opacity");}
+        emitter["billboardMode"]="unknown future value";emitter["orientation"]="not a legacy property";
+        const auto bytes=source.dump(2)+"\n";
+        std::filesystem::create_directories(project.root/"assets/particles");
+        std::ofstream(project.root/expected.id,std::ios::binary)<<bytes;
+        expected.emitter.billboardMode=ParticleBillboardMode::Enabled;
+        require(loadParticleAsset(project.root,expected.id)==expected && read(project.root/expected.id)==bytes,
+            "v1-v8 facing migration changed authored properties or rewrote its source.");
+        ParticleEffectDocument legacy(project.root);
+        require(legacy.load(expected.id) && !legacy.dirty() && !legacy.canUndo(),"Legacy billboard migration dirtied the effect document.");
+        saveParticleAsset(project.root,expected);
+        require(Json::parse(read(project.root/expected.id)).at("version")==9 && loadParticleAsset(project.root,expected.id)==expected,
+            "Explicit v9 upgrade lost migrated camera-facing behavior.");
+    }
+    saveParticleAsset(project.root,effect);const auto before=read(project.root/effect.id);
+    const auto invalid=[&](const auto& mutate) {
+        auto value=effect;mutate(value.emitter);
+        rejects([&]{validateParticleAsset(value);},"Invalid orientation data entered a valid effect.");
+        rejects([&]{saveParticleAsset(project.root,value);},"Invalid orientation replaced the saved effect.");
+        require(read(project.root/effect.id)==before,"Failed orientation save changed its source.");
+    };
+    invalid([](auto& e){e.billboardMode=static_cast<ParticleBillboardMode>(99);});
+    invalid([](auto& e){e.orientation[1]=MaximumParticleRotation+1;});
+    for(float value:{std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity(),-std::numeric_limits<float>::infinity()})
+        invalid([&](auto& e){e.orientation[0]=value;});
+    const auto json=Json::parse(serializeParticleAsset(effect));
+    const auto malformed=[&](const auto& mutate){auto source=json;mutate(source["emitters"][0]);rejects([&]{deserializeParticleAsset(source.dump());},"Malformed v9 orientation was accepted.");};
+    malformed([](auto& e){e["billboardMode"]="camera-ish";});
+    malformed([](auto& e){e["billboardMode"]=1;});
+    malformed([](auto& e){e.erase("billboardMode");});
+    malformed([](auto& e){e.erase("orientation");});
+    malformed([](auto& e){e["orientation"]={0,0};});
+    malformed([](auto& e){e["orientation"]={0,nullptr,0};});
+    ParticleEffectDocument document(project.root);require(document.load(effect.id),"Cannot load orientation history fixture.");
+    require(document.edit("Facing",[](auto& a){a.emitter.billboardMode=ParticleBillboardMode::Disabled;}) && document.undo() &&
+        document.definition()==effect && document.redo(),"Facing changes did not retain inactive XYZ through undo/redo.");
+    const auto beforeDrag=document.definition();
+    require(document.begin("Orientation drag") && document.update([](auto& a){a.emitter.orientation[0]=10;}) &&
+        document.update([](auto& a){a.emitter.orientation[0]=20;}) && document.commit() && document.undo() &&
+        document.definition()==beforeDrag && document.redo(),"Orientation drag failed its single transaction.");
+    const auto committed=document.definition();
+    require(document.begin("Cancel orientation") && document.update([](auto& a){a.emitter.orientation={};}),"Cannot begin orientation cancellation.");
+    document.cancel();require(document.definition()==committed,"Cancellation lost the prior XYZ orientation.");
+    require(document.save() && loadParticleAsset(project.root,effect.id)==committed,"Orientation history result did not survive reopening.");
 }
 void validation() {
     const auto valid=authoredEffect();
@@ -320,7 +391,7 @@ void validation() {
     validateParticleAsset(precise); // Neighbor+spacing must survive float rounding.
     const auto encoded=Json::parse(serializeParticleAsset(valid));
     const auto malformed=[&](const auto& mutation,const char* message) { auto source=encoded; mutation(source); rejects([&]{deserializeParticleAsset(source.dump());},message); };
-    malformed([](auto& j){j["version"]=8;},"Unknown next version accepted.");
+    malformed([](auto& j){j["version"]=10;},"Unknown next version accepted.");
     malformed([](auto& j){j["emitters"][0]["appearanceTracks"]["size"]["mode"]="noise";},"Unknown serialized scalar mode accepted.");
     malformed([](auto& j){j["emitters"][0]["appearanceTracks"]["size"]["curve"]["interpolation"]="cubic";},"Unimplemented curve interpolation accepted.");
     malformed([](auto& j){j["emitters"][0]["appearanceTracks"]["color"]["mode"]="curve";},"Unknown serialized color mode accepted.");
@@ -368,7 +439,7 @@ void documentHistory() {
 void movableEndpointsPersistenceAndHistory() {
     Project project;const auto original=authoredEffect();saveParticleAsset(project.root,original);
     const auto savedNative=read(project.root/original.id);
-    require(Json::parse(savedNative).at("version")==7 && loadParticleAsset(project.root,original.id)==original,
+    require(Json::parse(savedNative).at("version")==9 && loadParticleAsset(project.root,original.id)==original,
         "Native HDR endpoint tracks no longer load unchanged.");
     require(read(project.root/original.id)==savedNative,"Loading a saved HDR track rewrote the source.");
     ParticleEffectDocument document(project.root);require(document.load(original.id),"Cannot load movable-endpoint document.");
@@ -398,8 +469,8 @@ void movableEndpointsPersistenceAndHistory() {
         "Moving gradient edge stops replaced their stable identities.");
     require(document.save(),"Movable edge tracks could not be saved.");
     const auto encoded=read(project.root/original.id);
-    require(Json::parse(encoded).at("version")==7 && deserializeParticleAsset(encoded)==result && loadParticleAsset(project.root,original.id)==result,
-        "Movable edge ages failed native v7 round-trip or reopening.");
+    require(Json::parse(encoded).at("version")==9 && deserializeParticleAsset(encoded)==result && loadParticleAsset(project.root,original.id)==result,
+        "Movable edge ages failed native v9 round-trip or reopening.");
     ParticleEffectDocument reopened(project.root);require(reopened.load(original.id) && reopened.definition()==result,
         "Movable curve/gradient edges were not retained across document reopening.");
     auto edge=original;edge.emitter.sizeTrack.curve.keys={{1,.4f,0},{2,.4f+MinimumParticleKeySpacing,2}};
@@ -410,7 +481,7 @@ void movableEndpointsPersistenceAndHistory() {
 
 int main() {
     try {
-        modesAndPersistence(); priorVersions();hdrMigrationAndPersistence();preprocessPersistenceMigrationAndHistory(); validation(); documentHistory();movableEndpointsPersistenceAndHistory();
+        modesAndPersistence(); priorVersions();hdrMigrationAndPersistence();preprocessPersistenceMigrationAndHistory();orientationPersistenceMigrationAndHistory(); validation(); documentHistory();movableEndpointsPersistenceAndHistory();
         std::cout<<"Particle Step 4 appearance schema, compatibility, validation and history checks passed.\n";
         return 0;
     } catch (const std::exception& error) { std::cerr<<error.what()<<'\n'; return 1; }

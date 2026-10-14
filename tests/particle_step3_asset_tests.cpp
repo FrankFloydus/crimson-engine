@@ -40,6 +40,11 @@ std::string read(const std::filesystem::path& file) {
     std::ifstream input(file,std::ios::binary);
     return {std::istreambuf_iterator<char>(input),std::istreambuf_iterator<char>()};
 }
+void legacyEmissionFields(Json& source) {
+    auto& emitter=source["emitters"][0];
+    emitter["bursts"]=emitter.value("legacyBursts",Json::array());
+    emitter.erase("legacyBursts"); emitter.erase("explosiveness");
+}
 ParticleEffectAsset authoredEffect() {
     auto effect=defaultParticleEffect("Fountain variation");
     effect.id="assets/particles/fountain.crimson-particle";
@@ -66,7 +71,7 @@ void versionFourPersistence() {
         "New point effects do not use neutral spread/flatness defaults.");
     auto effect=authoredEffect();
     const auto encoded=serializeParticleAsset(effect);
-    require(Json::parse(encoded).at("version")==7,"New particle definitions do not use schema v7.");
+    require(Json::parse(encoded).at("version")==9,"New particle definitions do not use schema v9.");
     require(deserializeParticleAsset(encoded,effect.id)==effect,"v4 lost timing, ranges, behavior settings or identities.");
     saveParticleAsset(project.root,effect);
     require(loadParticleAsset(project.root,effect.id)==effect,"Saved v4 effect did not reopen identically.");
@@ -100,12 +105,14 @@ void priorVersionMigration() {
         // not introduce a fan or spread into an existing vector-velocity effect.
         json["emitters"][0]["directionSpread"]=50;
         json["emitters"][0]["directionFlatness"]=.8f;
+        json["emitters"][0]["explosiveness"]=1;
         const auto source=json.dump(2)+"\n";
         std::filesystem::create_directories(project.root/"assets/particles");
         std::ofstream(project.root/"assets/particles/old.crimson-particle",std::ios::binary)<<source;
         const auto migrated=loadParticleAsset(project.root,"assets/particles/old.crimson-particle");
         auto expected=defaultParticleEffect("Old effect"); expected.id=migrated.id; expected.defaultSeed=0xabcdef1234567890ull;
         auto& e=expected.emitter;
+        e.billboardMode=ParticleBillboardMode::Enabled;
         e.id=0xae12; e.name="Old impact"; e.enabled=false; e.rate=83.5f; e.lifetime=2.7f; e.initialVelocity={1,7,-2};
         e.gravity={1,-15,4}; e.size=.21f; e.color={particleSrgbToLinear(.2f),particleSrgbToLinear(.3f),particleSrgbToLinear(.4f)}; e.intensity=2.5f; e.capacity=151;
         if (version==2) { e.material=AssetRef<MaterialAsset>{"assets/materials/legacy.crimson-material"}; e.opacity=.35f; }
@@ -116,7 +123,7 @@ void priorVersionMigration() {
             !migrated.emitter.dragBehavior.present,"Legacy migration changed point/world/continuous/gravity behavior.");
         require(read(project.root/migrated.id)==source,"Reading a legacy effect rewrote its file.");
         saveParticleAsset(project.root,migrated);
-        require(Json::parse(read(project.root/migrated.id)).at("version")==7 && loadParticleAsset(project.root,migrated.id)==expected,
+        require(Json::parse(read(project.root/migrated.id)).at("version")==9 && loadParticleAsset(project.root,migrated.id)==expected,
             "Explicit save did not upgrade legacy data without changing behavior.");
     }
 }
@@ -125,13 +132,14 @@ void versionThreeLaunchMigration() {
         for (auto velocity:{ParticleVelocityMode::Vector,ParticleVelocityMode::DirectionSpeed}) {
             Project project;
             auto expected=authoredEffect(); expected.emitter.directionMode=mode; expected.emitter.velocityMode=velocity;
-            auto source=Json::parse(serializeParticleAsset(expected)); source["version"]=3;
+            auto source=Json::parse(serializeParticleAsset(expected)); source["version"]=3; legacyEmissionFields(source);
             source["emitters"][0]["colorSpace"]="srgb";
             source["emitters"][0].erase("directionFlatness");
             const auto encoded=source.dump(2)+"\n";
             std::filesystem::create_directories(project.root/"assets/particles");
             std::ofstream(project.root/expected.id,std::ios::binary)<<encoded;
             expected.emitter.directionFlatness=0;
+            expected.emitter.billboardMode=ParticleBillboardMode::Enabled;
             if (mode==ParticleDirectionMode::Outward) expected.emitter.directionSpread=0;
             const auto migrated=loadParticleAsset(project.root,expected.id);
             require(migrated==expected,"v3 migration changed active cone spread or retained formerly ignored outward spread.");
@@ -139,7 +147,7 @@ void versionThreeLaunchMigration() {
             source["emitters"][0]["directionFlatness"]=.9f;
             require(deserializeParticleAsset(source.dump(),expected.id)==expected,"Unknown v3 flatness field changed legacy launch behavior.");
             saveParticleAsset(project.root,migrated);
-            require(Json::parse(read(project.root/expected.id)).at("version")==7 && loadParticleAsset(project.root,expected.id)==expected,
+            require(Json::parse(read(project.root/expected.id)).at("version")==9 && loadParticleAsset(project.root,expected.id)==expected,
                 "Explicit v3 upgrade did not preserve migrated launch settings in v4.");
         }
 }
@@ -203,7 +211,7 @@ void boundsAndMalformedInput() {
     require(deserializeParticleAsset(serializeParticleAsset(bounds))==bounds,"Valid documented bounds did not save and reopen.");
     const auto encoded=Json::parse(serializeParticleAsset(valid));
     const auto malformed=[&](const auto& mutation,const char* message) { auto source=encoded; mutation(source); rejects([&]{deserializeParticleAsset(source.dump());},message); };
-    malformed([](auto& j){j["version"]=8;},"Unknown format version accepted.");
+    malformed([](auto& j){j["version"]=10;},"Unknown format version accepted.");
     malformed([](auto& j){j["version"]=4.0;},"Fractional version type accepted.");
     malformed([](auto& j){j["emitters"][0]["shape"]="capsule";},"Unimplemented shape name accepted.");
     malformed([](auto& j){j["emitters"][0]["space"]="camera";},"Unimplemented space name accepted.");
@@ -211,12 +219,12 @@ void boundsAndMalformedInput() {
     malformed([](auto& j){j["emitters"][0]["directionMode"]="spline";},"Unimplemented direction mode accepted.");
     malformed([](auto& j){j["emitters"][0].erase("directionFlatness");},"v4 definition without flatness accepted.");
     malformed([](auto& j){j["emitters"][0]["directionFlatness"]="flat";},"Nonnumeric direction flatness accepted.");
-    malformed([](auto& j){j["emitters"][0]["bursts"][0]["count"]=1.5;},"Fractional burst count silently truncated.");
-    malformed([](auto& j){j["emitters"][0]["bursts"][0]["count"]=-1;},"Negative burst count wrapped.");
-    malformed([](auto& j){j["emitters"][0]["bursts"][0]["count"]=std::numeric_limits<uint64_t>::max();},"Large burst count narrowed.");
-    malformed([](auto& j){j["emitters"][0]["bursts"][0]["id"]="10000000000000000";},"Overflowing burst identity accepted.");
-    malformed([](auto& j){j["emitters"][0]["bursts"]=Json::object();},"Object burst list accepted.");
-    malformed([](auto& j){j["emitters"][0]["bursts"]=Json::array(); for(size_t i=0;i<=MaximumParticleBursts;++i)j["emitters"][0]["bursts"].push_back({{"id",std::to_string(i+1)},{"time",0},{"count",1}});},"Oversized burst list accepted.");
+    malformed([](auto& j){j["emitters"][0]["legacyBursts"][0]["count"]=1.5;},"Fractional burst count silently truncated.");
+    malformed([](auto& j){j["emitters"][0]["legacyBursts"][0]["count"]=-1;},"Negative burst count wrapped.");
+    malformed([](auto& j){j["emitters"][0]["legacyBursts"][0]["count"]=std::numeric_limits<uint64_t>::max();},"Large burst count narrowed.");
+    malformed([](auto& j){j["emitters"][0]["legacyBursts"][0]["id"]="10000000000000000";},"Overflowing burst identity accepted.");
+    malformed([](auto& j){j["emitters"][0]["legacyBursts"]=Json::object();},"Object burst list accepted.");
+    malformed([](auto& j){j["emitters"][0]["legacyBursts"]=Json::array(); for(size_t i=0;i<=MaximumParticleBursts;++i)j["emitters"][0]["legacyBursts"].push_back({{"id",std::to_string(i+1)},{"time",0},{"count",1}});},"Oversized burst list accepted.");
     malformed([](auto& j){j["emitters"][0]["behaviors"]["collision"]={{"present",true},{"enabled",true}};},"Unknown behavior was silently discarded.");
     malformed([](auto& j){j["emitters"][0]["lifetimeRange"]["enabled"]=1;},"Nonboolean range flag accepted.");
     malformed([](auto& j){j["emitters"][0]["material"]="assets/materials/../../escaped.crimson-material";},"Escaping material dependency accepted.");
@@ -268,11 +276,110 @@ void historyAndDependencies() {
         "Document Save As lost timing, random ranges, behavior identities or material assignment.");
     require(read(project.root/original.id)==source,"Document Save As replaced source effect.");
 }
+void explosivenessPersistenceAndAdoption() {
+    Project project;
+    auto effect=defaultParticleEffect("Explosive emission"); effect.id="assets/particles/explosive.crimson-particle";
+    require(effect.emitter.explosiveness==0,"New effects do not default to continuous emission.");
+    for (float value:{0.f,.4f,1.f}) {
+        effect.emitter.explosiveness=value;
+        const auto source=Json::parse(serializeParticleAsset(effect)); const auto& emitter=source["emitters"][0];
+        require(source.at("version")==9 && emitter.at("explosiveness")==value &&
+            !emitter.contains("bursts") && !emitter.contains("legacyBursts") && deserializeParticleAsset(source.dump())==effect,
+            "Native v9 emission lost Explosiveness or serialized a new burst schedule.");
+    }
+    const auto encoded=Json::parse(serializeParticleAsset(effect));
+    const auto malformed=[&](const auto& mutation) {
+        auto source=encoded;mutation(source["emitters"][0]);
+        rejects([&]{deserializeParticleAsset(source.dump());},"Malformed Explosiveness was accepted.");
+    };
+    malformed([](auto& e){e.erase("explosiveness");});
+    malformed([](auto& e){e["explosiveness"]=false;});
+    malformed([](auto& e){e["explosiveness"]=".5";});
+    malformed([](auto& e){e["explosiveness"]=nullptr;});
+    malformed([](auto& e){e["explosiveness"]=-.1f;});
+    malformed([](auto& e){e["explosiveness"]=1.1f;});
+    for (float invalid:{-.1f,1.1f,std::numeric_limits<float>::infinity(),
+        -std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()}) {
+        auto candidate=effect;candidate.emitter.explosiveness=invalid;
+        rejects([&]{validateParticleAsset(candidate);},"Invalid Explosiveness passed asset validation.");
+        auto emitter=effect.emitter;
+        rejects([&]{setParticleExplosiveness(emitter,invalid);},"Invalid Explosiveness was silently clamped by adoption.");
+        require(emitter==effect.emitter,"Rejected Explosiveness changed the emitter.");
+    }
+    // Existing extended schemas retain their original schedules and source bytes.
+    for (int version:{3,4,5,6,7}) {
+        auto legacy=authoredEffect();legacy.emitter.color={1,0,1};legacy.emitter.directionFlatness=0;
+        legacy.emitter.billboardMode=ParticleBillboardMode::Enabled;
+        legacy.preprocessSeconds=version==7?2.f:0.f;
+        auto source=Json::parse(serializeParticleAsset(legacy));source["version"]=version;legacyEmissionFields(source);
+        if (version<6) source["emitters"][0]["colorSpace"]="srgb";
+        if (version<7) source.erase("preprocessSeconds");
+        source["emitters"][0]["explosiveness"]=1; // An unknown newer field cannot change old schedules.
+        const auto bytes=source.dump(2)+"\n";
+        std::filesystem::create_directories(project.root/"assets/particles");
+        std::ofstream(project.root/legacy.id,std::ios::binary)<<bytes;
+        const auto loaded=loadParticleAsset(project.root,legacy.id);
+        require(loaded==legacy && loaded.emitter.explosiveness==0 && read(project.root/legacy.id)==bytes,
+            "Loading v3-v7 changed a legacy schedule or rewrote its source.");
+        ParticleEffectDocument document(project.root);
+        require(document.load(legacy.id) && !document.dirty() && !document.canUndo(),"Legacy emission migration dirtied a document.");
+        const auto native=Json::parse(serializeParticleAsset(loaded));
+        require(!native["emitters"][0].contains("bursts") && native["emitters"][0].at("legacyBursts")==source["emitters"][0]["bursts"] &&
+            deserializeParticleAsset(native.dump())==legacy,"v8 compatibility save lost legacy burst counts, times or stable identities.");
+    }
+    auto legacy=authoredEffect();const auto original=legacy.emitter;
+    require(setParticleExplosiveness(legacy.emitter,.5f) && legacy.emitter.bursts.empty() &&
+        legacy.emitter.rate==53.5f && legacy.emitter.duration==2 && legacy.emitter.explosiveness==.5f,
+        "Explosiveness adoption failed to fold rate plus all finite burst counts.");
+    require(!setParticleExplosiveness(legacy.emitter,.5f) && legacy.emitter.rate==53.5f,
+        "Repeated unchanged Explosiveness adoption changed rate twice.");
+    auto restored=original;require(setParticleExplosiveness(restored,0) && restored.rate==53.5f && restored.bursts.empty(),
+        "Explicit zero did not adopt the legacy schedule.");
+    auto continuous=original;continuous.finiteDuration=false;continuous.loop=false;continuous.duration=1;
+    continuous.bursts={{1,4,20},{2,0,4}};
+    require(setParticleExplosiveness(continuous,1) && continuous.duration==4 && continuous.rate==36 && continuous.bursts.empty(),
+        "Continuous adoption failed to extend through the last legacy burst and retain its count.");
+    auto overflow=original;overflow.rate=MaximumParticleRate;const auto unchanged=overflow;
+    rejects([&]{setParticleExplosiveness(overflow,.5f);},"Legacy adoption silently dropped counts above the maximum rate.");
+    require(overflow==unchanged,"Failed adoption partially changed rate, duration or burst identities.");
+    auto boundary=original;boundary.rate=MaximumParticleRate-1;boundary.duration=2;boundary.bursts={{1,0,2}};
+    require(setParticleExplosiveness(boundary,1) && boundary.rate==MaximumParticleRate,
+        "Exact maximum-rate adoption was rejected.");
+    // v8 may retain imported mixed schedules; ordinary load/save never adopts them.
+    auto mixed=authoredEffect();mixed.emitter.explosiveness=.75f;
+    require(deserializeParticleAsset(serializeParticleAsset(mixed))==mixed,"A mixed imported v8 schedule was destructively rewritten.");
+}
+void explosivenessHistoryAndCancellation() {
+    Project project;const auto original=authoredEffect();saveParticleAsset(project.root,original);
+    const auto bytes=read(project.root/original.id);
+    ParticleEffectDocument document(project.root);require(document.load(original.id),"Cannot load legacy schedule history fixture.");
+    const auto revision=document.revision();const auto published=document.committed();
+    require(document.begin("Explosiveness") && document.update([](auto& a){setParticleExplosiveness(a.emitter,.25f);}) &&
+        document.update([](auto& a){setParticleExplosiveness(a.emitter,.75f);}),"Valid Explosiveness gesture failed.");
+    require(document.definition().emitter.rate==53.5f && document.definition().emitter.bursts.empty() &&
+        document.revision()==revision && document.committed()==published,"Explosiveness drag refolded counts or published before commit.");
+    document.cancel();require(document.definition()==original && !document.dirty(),"Cancel did not restore legacy burst identities and schedule.");
+    require(document.begin("Explosiveness") && document.update([](auto& a){setParticleExplosiveness(a.emitter,.5f);}) &&
+        document.update([](auto& a){setParticleExplosiveness(a.emitter,1);}) && document.commit(),"Cannot commit Explosiveness adoption.");
+    const auto adopted=document.definition();
+    require(document.undo() && document.definition()==original && !document.canUndo() && document.redo() && document.definition()==adopted,
+        "Explosiveness and legacy adoption did not form one reversible command.");
+    require(!document.edit("Invalid Explosiveness",[](auto& a){setParticleExplosiveness(a.emitter,2);}) &&
+        document.definition()==adopted && read(project.root/original.id)==bytes,"Rejected Explosiveness edit changed state or source bytes.");
+    require(document.save() && loadParticleAsset(project.root,original.id)==adopted,"Adopted Explosiveness did not survive save/reopen.");
+    const auto saved=read(project.root/original.id);
+    require(document.save("Explosive copy",true) && document.assetId()!=original.id && document.definition().emitter==adopted.emitter &&
+        read(project.root/original.id)==saved,"Explosiveness Save As changed its source or authored emitter.");
+    auto overflow=original;overflow.emitter.rate=MaximumParticleRate;saveParticleAsset(project.root,overflow);
+    require(document.load(overflow.id) && !document.edit("Adopt overflowing schedule",[](auto& a){setParticleExplosiveness(a.emitter,.5f);}) &&
+        document.definition()==overflow && !document.dirty() && !document.canUndo(),"Failed legacy adoption left a partial history entry.");
+}
 }
 
 int main() {
     try {
         versionFourPersistence(); priorVersionMigration(); versionThreeLaunchMigration(); boundsAndMalformedInput(); historyAndDependencies();
+        explosivenessPersistenceAndAdoption();explosivenessHistoryAndCancellation();
         std::cout<<"Particle Step 3 schema, migration, validation and document checks passed.\n";
         return 0;
     } catch (const std::exception& error) { std::cerr<<error.what()<<'\n'; return 1; }

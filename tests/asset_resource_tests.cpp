@@ -1,3 +1,4 @@
+#include "material_fixtures.h"
 #include "assets/AssetReferenceManager.h"
 #include "assets/MaterialAsset.h"
 #include "assets/ModelAsset.h"
@@ -113,7 +114,7 @@ void managedMaterialsAndImages(){
     require(model->materialIds.size()==model->materials.size()&&model->primitives[0].uvMask==3,"Imported material identity or authored UV metadata missing.");
     promoteModelMaterials(p.root,*model);const auto materialId=model->materialIds[0];const auto promoted=loadMaterialAsset(p.root,materialId);
     require(promoted.id==materialId&&promoted.surface.baseColor==model->materials[0].baseColor&&promoted.surface.baseColorTexture.minFilter==ModelFilter::LinearMipmapLinear,"Material promotion changed factors or sampler state.");
-    auto changed=promoted;changed.surface.roughness=.91f;changed.surface.alphaCutoff=2;saveMaterialAsset(p.root,changed);promoteModelMaterials(p.root,*model);
+    auto changed=promoted;material_test::legacyFixture(changed);changed.surface.roughness=.91f;changed.surface.alphaCutoff=2;saveMaterialAsset(p.root,changed);promoteModelMaterials(p.root,*model);
     const auto preserved=loadMaterialAsset(p.root,materialId);
     require(preserved.surface.roughness==.91f&&preserved.surface.alphaCutoff==2,"Idempotent promotion overwrote authored factors or rejected a valid glTF cutoff.");
     const auto standard=defaultMaterialAsset();require(standard.surface.baseColor==Vec4{.5f,.5f,.5f,1}&&standard.surface.roughness==1&&standard.surface.metallic==0,"Default material factors differ from requested values.");
@@ -279,28 +280,28 @@ void particleReplacementStateValidation(){
 void spriteMaterialStorageAndMigration(){
     Project p;const auto original=createMaterialAsset(p.root,"Smoke"),other=createMaterialAsset(p.root,"Smoke");
     require(original.id!=other.id&&original.name=="Smoke"&&other.name=="Smoke 2"&&original.originModel.empty(),"User materials did not receive unique native identities and names.");
-    require(original.shading==MaterialShading::StandardPbr&&original.blend==MaterialBlend::Opaque&&modelMaterialCompatible(original)&&!particleMaterialCompatible(original),"New material is not Lit/Opaque.");
-    require(original.surface.baseColor==Vec4{.21404114f,.21404114f,.21404114f,1}&&original.surface.roughness==1&&original.surface.metallic==0&&original.surface.baseColorTexture.image.empty()&&original.surface.sharedSampler.has_value(),
-            "New material did not use sRGB midgray, roughness 1, metallic 0 and a shared sampler.");
+    require(original.shading==MaterialShading::StandardPbr&&original.blend==MaterialBlend::Opaque&&modelMaterialCompatible(original)&&particleMaterialCompatible(original),"New material is not Lit/Opaque.");
+    require(original.surface.baseColor==Vec4{.21404114f,.21404114f,.21404114f,1}&&original.surface.roughness==1&&original.surface.metallic==0&&original.surface.baseColorTexture.image.empty()&&!original.graph.empty(),
+            "New material did not use sRGB midgray, roughness 1, metallic 0 and a material graph.");
     require(defaultMaterialAsset().surface.baseColor==Vec4{.5f,.5f,.5f,1} && defaultParticleMaterialAsset().surface.baseColor==Vec4{1,1,1,1},"New material defaults altered protected fallbacks.");
-    auto alpha=original;alpha.shading=MaterialShading::Unlit;alpha.blend=MaterialBlend::Alpha;alpha.surface.sharedSampler.reset();alpha.surface.baseColor={.2f,.4f,.6f,.35f};alpha.surface.baseColorTexture.image=AssetRef<DecodedImage>{"assets/textures/unresolved.png"};
+    auto alpha=original;material_test::legacyFixture(alpha);alpha.shading=MaterialShading::Unlit;alpha.blend=MaterialBlend::Alpha;alpha.surface.sharedSampler.reset();alpha.surface.baseColor={.2f,.4f,.6f,.35f};alpha.surface.baseColorTexture.image=AssetRef<DecodedImage>{"assets/textures/unresolved.png"};
     alpha.surface.baseColorTexture.wrapU=ModelWrap::Mirror;alpha.surface.baseColorTexture.minFilter=ModelFilter::NearestMipmapLinear;saveMaterialAsset(p.root,alpha);
     const auto reopened=loadMaterialAsset(p.root,alpha.id);require(reopened.blend==MaterialBlend::Alpha&&reopened.surface.baseColor==alpha.surface.baseColor&&reopened.surface.baseColorTexture.image==alpha.surface.baseColorTexture.image&&reopened.surface.baseColorTexture.wrapU==ModelWrap::Mirror&&reopened.surface.baseColorTexture.minFilter==ModelFilter::NearestMipmapLinear,"Native sprite factors, unresolved map or sampler did not round-trip.");
     const auto bytes=read(p.root/alpha.id);auto imported=alpha;imported.originModel="assets/models/origin/manifest.json";
     const auto copy=copyMaterialAsset(p.root,imported);require(copy.id!=alpha.id&&copy.originModel.empty()&&copy.surface.baseColor==alpha.surface.baseColor&&read(p.root/alpha.id)==bytes,"Making an editable material copy changed its read-only source.");
-    auto legacy=Json::parse(serializeMaterialAsset(alpha));legacy["version"]=1;legacy.erase("shading");legacy.erase("blend");legacy["alphaMask"]=true;
+    auto legacy=material_test::legacyMaterialJson(alpha);legacy["version"]=1;legacy.erase("shading");legacy.erase("blend");legacy["alphaMask"]=true;
     writeFileAtomically(p.root/alpha.id,legacy.dump(2));const auto migrated=loadMaterialAsset(p.root,alpha.id);
     require(migrated.shading==MaterialShading::StandardPbr&&migrated.blend==MaterialBlend::Mask&&migrated.surface.alphaMask&&modelMaterialCompatible(migrated),"Legacy alphaMask did not migrate to PBR Mask.");
-    require(Json::parse(serializeMaterialAsset(migrated)).at("version")==3,"Explicit material saving did not use native version 3.");
-    auto unsupported=alpha;unsupported.surface.baseColorTexture.texCoord=1;require(!particleMaterialCompatible(unsupported),"Sprite material accepted a UV1 color map.");
-    unsupported=alpha;unsupported.surface.normalTexture.image=AssetRef<DecodedImage>{"assets/textures/normal.png"};require(!particleMaterialCompatible(unsupported),"Sprite material accepted a tangent-space slot.");
+    require(Json::parse(serializeMaterialAsset(migrated)).at("version")==6,"Explicit material saving did not use native version 6.");
+    auto unsupported=alpha;unsupported.surface.baseColorTexture.texCoord=1;require(particleMaterialCompatible(unsupported),"Unified sprite material rejected a UV1 color map.");
+    unsupported=alpha;unsupported.surface.normalTexture.image=AssetRef<DecodedImage>{"assets/textures/normal.png"};require(particleMaterialCompatible(unsupported),"Unified sprite material rejected a normal map.");
     unsupported=alpha;unsupported.surface.baseColorTexture.wrapV=static_cast<ModelWrap>(99);rejects([&]{validateMaterialAsset(unsupported);},"Native material accepted an invalid sampler.");
     rejects([&]{saveMaterialAsset(p.root,defaultParticleMaterialAsset());},"Protected particle default was writable.");
     unsupported=alpha;unsupported.surface.baseColor[0]=-1;const auto previous=read(p.root/alpha.id);rejects([&]{saveMaterialAsset(p.root,unsupported);},"Invalid material was written.");require(read(p.root/alpha.id)==previous,"Failed material save overwrote the previous source.");
 }
 void particleMaterialStorageAndDependencies(){
     Project p;auto effect=createParticleAsset(p.root,"Sprite");auto material=createMaterialAsset(p.root,"Sprite material");
-    material.shading=MaterialShading::Unlit;material.blend=MaterialBlend::Additive;
+    material_test::legacyFixture(material);material.shading=MaterialShading::Unlit;material.blend=MaterialBlend::Additive;
     effect.emitter.material=AssetRef<MaterialAsset>{material.id};effect.emitter.opacity=.3f;saveParticleAsset(p.root,effect);
     require(loadParticleAsset(p.root,effect.id)==effect,"Particle v2 material and opacity did not round-trip.");
     auto legacy=Json::parse(serializeParticleAsset(effect));legacy["version"]=1;
@@ -335,31 +336,32 @@ void particleMaterialStorageAndDependencies(){
     require(!invalidPolicy.status().empty()&&read(p.root/"assets/references.json")==damaged,"Incompatible persisted material chain was accepted or overwritten.");
 }
 void materialMappingAndSharedSamplerStorage() {
-    Project p;auto material=createMaterialAsset(p.root,"Mapped");auto& surface=material.surface;
+    Project p;auto material=createMaterialAsset(p.root,"Mapped");material_test::legacyFixture(material);auto& surface=material.surface;
     require(!surface.triplanarWorld,"New materials must preserve local triplanar as the default.");
     surface.uvScale={2,-3,0};surface.uvOffset={.25f,-.75f,4};surface.uvRotation={10,-30,90};surface.triplanar=true;surface.triplanarWorld=true;surface.uvScaleLinked=false;
     surface.baseColorTexture.texCoord=1;surface.normalTexture.texCoord=0;
+    surface.baseColorTexture.image.id="assets/textures/color.png";surface.normalTexture.image.id="assets/textures/normal.png";
     surface.sharedSampler=ModelSampler{ModelWrap::Mirror,ModelWrap::Clamp,ModelFilter::NearestMipmapLinear,ModelFilter::Nearest};
     surface.baseColorTexture.wrapU=ModelWrap::Clamp;surface.normalTexture.wrapU=ModelWrap::Repeat;
     saveMaterialAsset(p.root,material);const auto serialized=read(p.root/material.id);const auto loaded=loadMaterialAsset(p.root,material.id);
-    require(serializeMaterialAsset(loaded)==serializeMaterialAsset(material) && Json::parse(serialized).at("version")==3,
-        "Native v3 mapping, linkage, shared sampler or per-slot UV selection did not round-trip.");
-    for(const auto* slot:{&loaded.surface.baseColorTexture,&loaded.surface.metallicRoughnessTexture,&loaded.surface.normalTexture,&loaded.surface.occlusionTexture,&loaded.surface.emissiveTexture})
-        require(materialSampler(loaded.surface,*slot)==*surface.sharedSampler,"A texture channel ignored the shared material sampler.");
+    require(serializeMaterialAsset(loaded)==serializeMaterialAsset(material) && Json::parse(serialized).at("version")==6,
+        "Native graph mapping, linkage and sampler state did not round-trip.");
+    for(const auto& node:loaded.graph.nodes)if(node.kind==MaterialNodeKind::Texture2D)
+        require(node.texture.sampler==*surface.sharedSampler,"Migration ignored the shared material sampler.");
     const auto copied=copyMaterialAsset(p.root,material,"Mapped copy");
     require(copied.surface.uvScale==surface.uvScale && copied.surface.uvOffset==surface.uvOffset && copied.surface.uvRotation==surface.uvRotation &&
-        copied.surface.triplanar && copied.surface.triplanarWorld && !copied.surface.uvScaleLinked && copied.surface.sharedSampler==surface.sharedSampler && read(p.root/material.id)==serialized,
+        copied.surface.triplanar && copied.surface.triplanarWorld && !copied.surface.uvScaleLinked && read(p.root/material.id)==serialized,
         "Copy lost mapping/sampler state or modified its source.");
-    auto earlierV3=Json::parse(serialized);earlierV3.erase("triplanarWorld");
+    auto earlierV3=material_test::legacyMaterialJson(material);earlierV3.erase("triplanarWorld");
     writeFileAtomically(p.root/material.id,earlierV3.dump());const auto earlierBytes=read(p.root/material.id);
     const auto earlier=loadMaterialAsset(p.root,material.id);auto expectedEarlier=material;expectedEarlier.surface.triplanarWorld=false;
     require(serializeMaterialAsset(earlier)==serializeMaterialAsset(expectedEarlier) && read(p.root/material.id)==earlierBytes,
         "Opening an earlier v3 material changed local triplanar mapping or rewrote its file.");
-    auto invalidSpace=Json::parse(serialized);invalidSpace["triplanarWorld"]="world";
+    auto invalidSpace=material_test::legacyMaterialJson(material);invalidSpace["triplanarWorld"]="world";
     writeFileAtomically(p.root/material.id,invalidSpace.dump());
     rejects([&]{loadMaterialAsset(p.root,material.id);},"A malformed World Triplanar field was accepted.");
     for(const int version:{1,2}) {
-        auto legacy=Json::parse(serialized);legacy["version"]=version;
+        auto legacy=material_test::legacyMaterialJson(material);legacy["version"]=version;
         for(const auto* field:{"uvScale","uvOffset","uvRotation","triplanar","triplanarWorld","uvScaleLinked","sharedSampler"})legacy.erase(field);
         if(version==1){legacy.erase("shading");legacy.erase("blend");}
         writeFileAtomically(p.root/material.id,legacy.dump());const auto before=read(p.root/material.id);
@@ -378,6 +380,29 @@ void materialMappingAndSharedSamplerStorage() {
     invalid=material;invalid.surface.sharedSampler->magFilter=ModelFilter::LinearMipmapLinear;
     rejects([&]{validateMaterialAsset(invalid);},"Invalid shared magnification filter was accepted.");
 }
+void deletionValidationRetainsIncompatibleUsage() {
+    Project p;const auto fixtures=model_test::writeModelFixtures(p.root/"usage-source");
+    const auto model=importModelPackage(fixtures.glb,p.root);promoteModelMaterials(p.root,*model);
+    auto meshMaterial=loadMaterialAsset(p.root,model->materialIds.front());materialOutputNode(meshMaterial.graph).output.shading=MaterialShading::Unlit;materialOutputNode(meshMaterial.graph).output.blend=MaterialBlend::Additive;canonicalizeMaterialAsset(meshMaterial);
+    saveMaterialAsset(p.root,meshMaterial);
+    auto surface=createMaterialAsset(p.root,"Surface used by saved effect");
+    const std::string image="assets/textures/dormant-usage.png";fs::create_directories(p.root/"assets/textures");fs::copy_file(fixtures.image,p.root/image);
+    addMaterialNode(surface.graph,MaterialNodeKind::Texture2D).texture.image.id=image;saveMaterialAsset(p.root,surface);
+    auto effect=createParticleAsset(p.root,"Retained assignment");effect.emitter.material.id=surface.id;saveParticleAsset(p.root,effect);
+    const auto meshBytes=read(p.root/meshMaterial.id),surfaceBytes=read(p.root/surface.id),effectBytes=read(p.root/effect.id);
+    AssetReferenceManager policy(p.root);const std::array<AssetEntry,1> models{{{model->id,model->name,AssetKind::Model}}};
+    const std::array<AssetEntry,1> effects{{{effect.id,effect.name,AssetKind::Particle}}};
+    const auto prepared=validateAssetDeletion(p.root,models,policy,{}, {},effects);
+    require(prepared&&prepared->models.size()==1&&prepared->models.front()->materials.front().baseColor==meshMaterial.surface.baseColor,
+        "Deletion validation rejected a shared Unlit/Additive mesh material or changed its authored color.");
+    for(const auto& id:{meshMaterial.id,surface.id,image})
+        require(std::find(prepared->dependencies.begin(),prepared->dependencies.end(),checkedManagedAssetPath(p.root,id))!=prepared->dependencies.end(),
+            "Fallback preparation forgot an authored material or disconnected texture dependency.");
+    require(read(p.root/meshMaterial.id)==meshBytes&&read(p.root/surface.id)==surfaceBytes&&read(p.root/effect.id)==effectBytes&&
+        loadParticleAsset(p.root,effect.id).emitter.material.id==surface.id&&policy.resolveMaterial(meshMaterial.id)==meshMaterial.id,
+        "Deletion validation rewrote shared assignments or material files.");
+    require(deletionValidationCurrent(*prepared),"Stable shared-material dependencies immediately invalidated preparation.");
 }
-int main(){try{policies();authoredWarningClassification();transactionAndRecovery();managedMaterialsAndImages();stagedImages();materialTangentBasis();triplanarWithoutMeshUvs();backgroundDeletionValidation();particleReferencesAndDeletionValidation();particleReplacementStateValidation();spriteMaterialStorageAndMigration();particleMaterialStorageAndDependencies();materialMappingAndSharedSamplerStorage();std::cout<<"Asset reference, material and managed transaction checks passed.\n";return 0;}
+}
+int main(){try{policies();authoredWarningClassification();transactionAndRecovery();managedMaterialsAndImages();stagedImages();materialTangentBasis();triplanarWithoutMeshUvs();backgroundDeletionValidation();particleReferencesAndDeletionValidation();particleReplacementStateValidation();spriteMaterialStorageAndMigration();particleMaterialStorageAndDependencies();materialMappingAndSharedSamplerStorage();deletionValidationRetainsIncompatibleUsage();std::cout<<"Asset reference, material and managed transaction checks passed.\n";return 0;}
     catch(const std::exception& e){std::cerr<<"Asset resource test failed: "<<e.what()<<'\n';return 1;}}

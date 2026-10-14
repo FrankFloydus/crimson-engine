@@ -66,7 +66,7 @@ vec3 evaluateEnvironment(vec3 N, vec3 V, vec3 base, float metallic, float roughn
 {
     if (u_environment.x <= 0.0) return vec3_splat(0.0);
     float NoV = clamp(dot(N, V), 0.00001, 1.0);
-    vec3 F0 = mix(vec3_splat(0.04), base, metallic);
+    vec3 F0 = mix(vec3_splat(0.08 * clamp(u_roughness.z, 0.0, 1.0)), base, metallic);
     vec3 F = F0 + (vec3_splat(1.0) - F0) * pow(1.0 - NoV, 5.0);
     // Preprocessing stores irradiance / PI, so its normalization is applied once.
     vec3 diffuse = textureCube(s_irradiance, environmentDirection(N)).rgb;
@@ -91,7 +91,7 @@ vec3 evaluateLight(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 base, float metal
     vec3 H = halfSum * inversesqrt(max(dot(halfSum, halfSum), 0.00000001));
     float NoH = clamp(dot(N, H), 0.0, 1.0);
     float VoH = clamp(dot(V, H), 0.0, 1.0);
-    vec3 F0 = mix(vec3_splat(0.04), base, metallic);
+    vec3 F0 = mix(vec3_splat(0.08 * clamp(u_roughness.z, 0.0, 1.0)), base, metallic);
     vec3 F = F0 + (vec3_splat(1.0) - F0) * pow(1.0 - VoH, 5.0);
 
     // Perceptual roughness -> GGX alpha. Smith's correlated visibility includes 1/(4 NoL NoV).

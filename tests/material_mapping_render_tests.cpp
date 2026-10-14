@@ -1,6 +1,11 @@
 #include "crimson-renderer/Renderer.h"
 #include "crimson-renderer/Environment.h"
 #include "crimson-renderer/Picking.h"
+#include "resources/ResourceManager.h"
+#include "resources/ImageDecoder.h"
+#include <chrono>
+#include <filesystem>
+#include <thread>
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
@@ -32,15 +37,16 @@ std::array<int,3> sample(const DecodedImage& image,const Camera& camera,Vec3 wor
     std::array<int,3> result{};for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx)for(unsigned c=0;c<3;++c)result[c]+=image.rgba[(std::size_t(y+dy)*Size+x+dx)*4+c];
     for(auto& value:result)value/=9;return result;
 }
+void disconnectMaterialInput(MaterialGraph& graph,MaterialNodeId node,MaterialPin pin){if(const auto* link=materialInputLink(graph,node,pin))removeMaterialLink(graph,link->id);}
 int difference(std::array<int,3> a,std::array<int,3> b){return std::abs(a[0]-b[0])+std::abs(a[1]-b[1])+std::abs(a[2]-b[2]);}
-void exercise(SDL_Window* window){
+void exercise(SDL_Window* window,const ShaderCompileConfig& config){
     // Outstanding readback destinations must outlive Renderer on failure.
-    std::vector<std::shared_ptr<DecodedImage>> destinations;Renderer renderer(window);renderer.resizeViewport(Size,Size);renderer.resizeGameViewport(Size,Size);
+    std::vector<std::shared_ptr<DecodedImage>> destinations;ResourceManager resources;Renderer renderer(window);MaterialGraphPrograms programs(resources,config);renderer.resizeViewport(Size,Size);renderer.resizeGameViewport(Size,Size);
     ViewportAppearance appearance;appearance.backgroundSrgb={};renderer.setAppearance(appearance);
     PreparedEnvironment environment;environment.settings={2,8,8,16,16,32};environment.key=902;
     environment.data=ibl::bake({4,2,std::vector<Vec3>(8,Vec3{.5f,.5f,.5f})},environment.settings);
     check(renderer.publishEnvironment(environment),renderer.environmentStatus());
-    std::uint32_t frame{};const auto tick=[&]{renderer.advanceStreaming();frame=bgfx::frame();};
+    std::uint32_t frame{};const auto tick=[&]{resources.pump();renderer.advanceStreaming();frame=bgfx::frame();};
     const auto read=[&](bgfx::TextureHandle target){
         Texture staging{bgfx::createTexture2D(Size,Size,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_BLIT_DST|BGFX_TEXTURE_READ_BACK)};
         check(bgfx::isValid(staging.handle),"Mapping readback allocation failed.");
@@ -166,13 +172,265 @@ void exercise(SDL_Window* window){
     instance.model.transform=math::scaling({2,3,1});material.triplanarWorld=false;
     check(picked({.7f,.3f,0})==0,"Local triplanar picking mask lost its authored local domain.");
     instance.model.transform={};
-    // Sprite materials deliberately keep a 2D domain while sharing XY mapping.
+    // Sprite UV mapping shares the same scale/rotation/offset behavior.
     scene.instances={};scene.directionalLights={};settings.environment.enabled=false;
     RenderParticleMaterial sprite; sprite.colorTexture=color.handle;sprite.samplerFlags=point;
-    std::array<RenderParticle,1> particles{{{{0,0,0},2,{1,1,1,1},0}}};scene.particles=particles;scene.particleMaterials=std::span(&sprite,1);
-    expect(position,0,"Sprite identity UV mapping changed.");sprite.uvOffset={.5f,0,0};sprite.triplanar=true;
+    std::array<RenderParticle,1> particles{{{{0,0,0},2,{1,1,1,1},0}}};particles[0].billboardMode=ParticleBillboardMode::Enabled;
+    scene.particles=particles;scene.particleMaterials=std::span(&sprite,1);
+    expect(position,0,"Sprite identity UV mapping changed.");sprite.uvOffset={.5f,0,0};
     expect(position,1,"Sprite material did not retain its shared 2D offset.");
+    // A shared transparency queue must interleave meshes with particles rather
+    // than submitting all sprites last. Linear presentation gives known OVER
+    // channel values: half-opacity front=.5, half-opacity rear=.25.
+    reset();bindings[0].handles.fill(BGFX_INVALID_HANDLE);material.alphaMask=false;
+    material.baseColor={1,0,0,.5f};instance.shading=MaterialShading::Unlit;instance.blend=MaterialBlend::Alpha;
+    instance.model.transform={};scene.instances=std::span(&instance,1);
+    sprite=RenderParticleMaterial{};sprite.baseColor={0,0,1,.5f};sprite.blend=MaterialBlend::Alpha;
+    settings.environment.toneMapping=ToneMapping::Linear;settings.environment.background.overrideColor=true;
+    settings.environment.background.color={};settings.environment.background.show=false;
+    particles[0].position={0,0,.5f};
+    const auto particleFront=sample(capture(),settings.camera,{});
+    check(std::abs(particleFront[0]-137)<=4 && std::abs(particleFront[2]-188)<=4,
+        "Front particle did not composite once over the rear translucent mesh.");
+    instance.model.transform=math::translation({0,0,.5f});particles[0].position={};
+    const auto meshFront=sample(capture(),settings.camera,{});
+    check(std::abs(meshFront[0]-188)<=4 && std::abs(meshFront[2]-137)<=4,
+        "Transparent queue submitted particles after a nearer translucent mesh.");
+    // Equal-depth stable ties place the mesh first. The particle must still
+    // pass LESS: writing mesh depth would suppress the following blue sprite.
+    instance.model.transform={};
+    const auto equalDepth=sample(capture(),settings.camera,{});
+    check(equalDepth[2]>equalDepth[0]+35,"A translucent mesh wrote visible depth and rejected an equal-depth particle.");
+    material.baseColor[3]=.005f;
+    check(picked({})==0,"Transparent mesh picking retained coverage below 0.01.");
+    material.baseColor[3]=.5f;
+    check(picked({})==instance.entityId,"Transparent mesh picking discarded visible coverage.");
+    // Opaque geometry is submitted first even when extraction lists a near
+    // transparent object before its opaque background.
+    auto opaqueSurfaces=surfaces;opaqueSurfaces[0].baseColor={0,1,0,1};
+    auto back=instance;back.materials=&opaqueSurfaces;back.blend=MaterialBlend::Opaque;back.model.transform=math::translation({0,0,-.5f});
+    const std::array mixedInstances{instance,back};scene.instances=mixedInstances;scene.particles={};
+    const auto overOpaque=sample(capture(),settings.camera,{});
+    check(std::abs(overOpaque[0]-188)<=4 && std::abs(overOpaque[1]-188)<=4,
+        "Opaque extraction order overwrote the queued transparent surface.");
+    // Additive RGB must leave coverage alone. A green display matte reveals
+    // accidental alpha accumulation without needing access to the HDR target.
+    settings.environment.background.color={0,.5f,0};scene.instances={};
+    const auto emptyMatte=sample(capture(),settings.camera,{});
+    instance.blend=MaterialBlend::Additive;sprite.blend=MaterialBlend::Additive;
+    scene.instances=std::span(&instance,1);scene.particles=particles;
+    const auto additive=sample(capture(),settings.camera,{});
+    check(std::abs(additive[1]-emptyMatte[1])<=2 && additive[0]>180 && additive[2]>180,
+        "Additive mesh/particle blending changed destination coverage or premultiplied twice.");
+    // Reproduce New Material 2: smoke_07 RGB * a linear Constant, with alpha
+    // connected and disconnected explicitly. Source assets are only read.
+    const auto project=config.sourceDirectory.parent_path().parent_path().parent_path();
+    const auto smokeImage=decodeManagedImage(project/"assets/textures/smoke_07.png");
+    check(smokeImage.width && smokeImage.height,"Smoke alpha regression image is unavailable.");
+    const auto maximumAlpha=[&]{unsigned result{};for(std::size_t i=3;i<smokeImage.rgba.size();i+=4)result=std::max(result,unsigned(smokeImage.rgba[i]));return result;}();
+    check(maximumAlpha>0 && maximumAlpha<255,"Smoke regression image no longer has partial real alpha.");
+    Texture smoke{bgfx::createTexture2D(static_cast<std::uint16_t>(smokeImage.width),static_cast<std::uint16_t>(smokeImage.height),false,1,
+        bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_SRGB,bgfx::copy(smokeImage.rgba.data(),static_cast<std::uint32_t>(smokeImage.rgba.size())))};
+    check(bgfx::isValid(smoke.handle),"Smoke regression texture allocation failed.");
+    MaterialAsset authored;authored.id="native-explicit-sprite";
+    const auto root=addMaterialNode(authored.graph,MaterialNodeKind::Output).id;
+    auto& output=materialOutputNode(authored.graph).output;output.shading=MaterialShading::Unlit;output.blend=MaterialBlend::Alpha;
+    const auto texture=addMaterialNode(authored.graph,MaterialNodeKind::Texture2D).id;
+    findMaterialNode(authored.graph,texture)->texture.image.id="assets/textures/smoke_07.png";
+    const auto factor=addMaterialNode(authored.graph,MaterialNodeKind::Color).id;
+    findMaterialNode(authored.graph,factor)->color={.8355646729469299f,.3041378855705261f,.3041378855705261f,1};
+    const auto product=addMaterialNode(authored.graph,MaterialNodeKind::Multiply).id;
+    connectMaterialNodes(authored.graph,texture,MaterialPin::RGB,product,MaterialPin::Left);
+    connectMaterialNodes(authored.graph,factor,MaterialPin::RGB,product,MaterialPin::Right);
+    connectMaterialNodes(authored.graph,product,MaterialPin::Value,root,MaterialPin::BaseColor);
+    const auto prepare=[&](const MaterialAsset& source,bgfx::TextureHandle image=BGFX_INVALID_HANDLE) {
+        const auto generated=generateMaterialGraphShader(source);
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(90);
+        MaterialGraphProgramResult published;
+        do {
+            tick();published=programs.request(generated);
+            if(!published.current && published.diagnostic!="Compiling material graph...")throw std::runtime_error(published.diagnostic);
+            if(!published.current)std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }while(!published.current && std::chrono::steady_clock::now()<deadline);
+        check(published.current && published.programs,"Generated sprite shader timed out.");
+        auto packet=std::make_shared<PreparedGraphMaterial>();packet->programs=published.programs;packet->uniforms=generated.uniforms;
+        packet->sources=generated.textures;packet->shading=materialOutputNode(source.graph).output.shading;packet->blend=materialOutputNode(source.graph).output.blend;
+        packet->signature=published.programs->signature;
+        for(const auto& binding:generated.textures){check(bgfx::isValid(image),"Regression graph needs a supplied image.");packet->textures[binding.slot]=image;packet->flags[binding.slot]=point|BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP;}
+        return packet;
+    };
+    settings.environment.background.color={};settings.environment.enabled=false;scene.directionalLights={};scene.pointLights={};scene.instances={};
+    particles[0].position={};particles[0].color={0,1,0,0};sprite=RenderParticleMaterial{};
+    scene.particles=particles;scene.particleMaterials=std::span(&sprite,1);
+    sprite.graph=prepare(authored,smoke.handle);const auto disconnected=capture();
+    connectMaterialNodes(authored.graph,texture,MaterialPin::A,root,MaterialPin::Opacity);
+    sprite.graph=prepare(authored,smoke.handle);const auto connected=capture();
+    std::uint64_t disconnectedRed{},connectedRed{};
+    for(std::size_t i=0;i<connected.rgba.size();i+=4){disconnectedRed+=disconnected.rgba[i];connectedRed+=connected.rgba[i];}
+    check(disconnectedRed>10000 && connectedRed<disconnectedRed*.85,"Smoke texture alpha connection did not reduce generated sprite coverage.");
+    disconnectMaterialInput(authored.graph,root,MaterialPin::Opacity);
+    sprite.graph=prepare(authored,smoke.handle);check(capture().rgba==disconnected.rgba,"Disconnecting smoke alpha did not restore the same authored RGB-only material.");
+    // Plain constants are complete quads and ignore instance color/opacity.
+    disconnectMaterialInput(authored.graph,root,MaterialPin::BaseColor);
+    materialOutputNode(authored.graph).output.baseColor={1,1,1};
+    sprite.graph=prepare(authored);const auto plain=capture();
+    const auto corner=sample(plain,settings.camera,{.7f,.7f,0});
+    check(corner[0]>250 && corner[1]>250 && corner[2]>250,"Constant sprite retained implicit color, opacity or procedural-disc behavior.");
+    sprite.graph.reset();sprite.baseColor={1,1,1,1};sprite.blend=MaterialBlend::Alpha;
+    const auto fallbackCorner=sample(capture(),settings.camera,{.7f,.7f,0});
+    check(fallbackCorner[0]>250 && fallbackCorner[1]>250 && fallbackCorner[2]>250,"Plain fallback implicitly culled or tinted zero-alpha particle input.");
+    // The same Particle Color graph evaluates to white on ordinary geometry.
+    const auto pc=addMaterialNode(authored.graph,MaterialNodeKind::ParticleColor).id;
+    connectMaterialNodes(authored.graph,pc,MaterialPin::RGB,root,MaterialPin::BaseColor);
+    connectMaterialNodes(authored.graph,pc,MaterialPin::A,root,MaterialPin::Opacity);
+    const auto saturate=addMaterialNode(authored.graph,MaterialNodeKind::Saturate).id;
+    findMaterialNode(authored.graph,saturate)->left.value[0]=2;
+    const auto clampedAlpha=addMaterialNode(authored.graph,MaterialNodeKind::Multiply).id;
+    connectMaterialNodes(authored.graph,saturate,MaterialPin::Value,clampedAlpha,MaterialPin::Left);
+    connectMaterialNodes(authored.graph,pc,MaterialPin::A,clampedAlpha,MaterialPin::Right);
+    connectMaterialNodes(authored.graph,clampedAlpha,MaterialPin::Value,root,MaterialPin::Opacity);
+    sprite.graph=prepare(authored);particles[0].color={1,0,0,.25f};
+    const auto explicitColor=sample(capture(),settings.camera,{});
+    check(std::abs(explicitColor[0]-137)<=3 && explicitColor[1]<3 && explicitColor[2]<3,"Explicit Particle Color RGB/alpha did not produce a single premultiplication.");
+    bindings[0].graph=sprite.graph;material.baseColor={1,1,1,1};instance.model.transform={};scene.particles={};scene.instances=std::span(&instance,1);
+    const auto meshColor=sample(capture(),settings.camera,{});
+    check(meshColor[0]>250 && meshColor[1]>250 && meshColor[2]>250,"Particle Color was not neutral white on a mesh.");
+    bindings[0].graph.reset();scene.instances={};scene.particles=particles;
+    disconnectMaterialInput(authored.graph,root,MaterialPin::BaseColor);disconnectMaterialInput(authored.graph,root,MaterialPin::Opacity);
+    const auto radial=addMaterialNode(authored.graph,MaterialNodeKind::RadialGradient).id;
+    materialOutputNode(authored.graph).output.blend=MaterialBlend::Mask;
+    connectMaterialNodes(authored.graph,radial,MaterialPin::Value,root,MaterialPin::OpacityMask);
+    sprite.graph=prepare(authored);const auto masked=capture();
+    check(sample(masked,settings.camera,{})[0]>250 && sample(masked,settings.camera,{.7f,.7f,0})[0]<3,"Explicit radial Opacity Mask did not cut the sprite quad.");
+    // Sparks keeps Lit/Masked coverage: its particle alpha modulates the radial
+    // mask, and the cutoff discards the complete surface, including emission.
+    // Reuse one prepared packet throughout so only instance alpha changes.
+    {
+        auto sparks=authored;
+        auto& sparksOutput=materialOutputNode(sparks.graph).output;
+        sparksOutput.shading=MaterialShading::StandardPbr;sparksOutput.alphaCutoff=.5f;sparksOutput.emission={2,.2f,0};
+        connectMaterialNodes(sparks.graph,pc,MaterialPin::RGB,root,MaterialPin::BaseColor);
+        const auto particleMask=addMaterialNode(sparks.graph,MaterialNodeKind::Multiply).id;
+        connectMaterialNodes(sparks.graph,radial,MaterialPin::Value,particleMask,MaterialPin::Left);
+        connectMaterialNodes(sparks.graph,pc,MaterialPin::A,particleMask,MaterialPin::Right);
+        connectMaterialNodes(sparks.graph,particleMask,MaterialPin::Value,root,MaterialPin::OpacityMask);
+        const auto previousGraph=sprite.graph;const auto previousColor=particles[0].color;
+        sprite.graph=prepare(sparks);const auto sparksProgram=sprite.graph->programs;
+        scene.particles={};const auto empty=capture();scene.particles=particles;
+        particles[0].color={1,.25f,.05f,0};
+        check(capture().rgba==empty.rgba,"Zero particle alpha left visible Lit/Masked Sparks emission.");
+        particles[0].color[3]=1;const auto visible=capture();
+        check(sample(visible,settings.camera,{})[0]>250 && sample(visible,settings.camera,{.7f,.7f,0})[0]<3,
+            "Full particle alpha did not preserve the Lit/Masked Sparks center and clipped corners.");
+        particles[0].color[3]=.49f;
+        check(capture().rgba==empty.rgba,"Particle alpha below the Sparks mask cutoff did not discard the entire sprite.");
+        particles[0].color[3]=1;
+        check(capture().rgba==visible.rgba && sprite.graph->programs==sparksProgram,
+            "Changing Sparks particle alpha did not restore coverage using the same compiled program.");
+        // Without the radial connection, particle alpha controls the entire
+        // billboard. Its shape must remain the user's authored full quad.
+        connectMaterialNodes(sparks.graph,pc,MaterialPin::A,root,MaterialPin::OpacityMask);
+        sprite.graph=prepare(sparks);const auto directProgram=sprite.graph->programs;
+        particles[0].color[3]=0;
+        check(capture().rgba==empty.rgba,"Zero direct particle alpha left visible Lit/Masked Sparks emission.");
+        particles[0].color[3]=1;const auto fullQuad=capture();
+        check(sample(fullQuad,settings.camera,{})[0]>250 && sample(fullQuad,settings.camera,{.7f,.7f,0})[0]>250,
+            "Direct particle alpha retained an unauthored radial sprite shape.");
+        particles[0].color[3]=.49f;
+        check(capture().rgba==empty.rgba,"Direct particle alpha below the mask cutoff did not discard the full quad.");
+        particles[0].color[3]=1;
+        check(capture().rgba==fullQuad.rgba && sprite.graph->programs==directProgram,
+            "Direct particle alpha edits did not restore full coverage using the same compiled program.");
+        sprite.graph=previousGraph;particles[0].color=previousColor;
+    }
+    materialOutputNode(authored.graph).output.blend=MaterialBlend::Opaque;
+    sprite.graph=prepare(authored);check(sample(capture(),settings.camera,{.7f,.7f,0})[0]>250,"Opaque sprite incorrectly evaluated its inactive mask branch.");
+    // Lit sprites use the same direct lighting and normal mapping as meshes.
+    materialOutputNode(authored.graph).output.shading=MaterialShading::StandardPbr;
+    sprite.graph=prepare(authored);const auto darkSprite=sample(capture(),settings.camera,{});
+    scene.directionalLights=lights;
+    const auto litSprite=sample(capture(),settings.camera,{});
+    check(litSprite[0]>darkSprite[0]+30,"Lit sprite did not receive directional lighting.");
+    const auto normalNode=addMaterialNode(authored.graph,MaterialNodeKind::Texture2D).id;
+    auto* normalDefinition=findMaterialNode(authored.graph,normalNode);normalDefinition->texture.role=MaterialTextureRole::Normal;normalDefinition->texture.image.id="assets/textures/native-normal.png";
+    connectMaterialNodes(authored.graph,normalNode,MaterialPin::Normal,root,MaterialPin::Normal);
+    sprite.graph=prepare(authored,flat.handle);check(difference(litSprite,sample(capture(),settings.camera,{}))<=3,"Flat sprite normal map altered the facing normal.");
+    sprite.graph=prepare(authored,tilted.handle);check(difference(litSprite,sample(capture(),settings.camera,{}))>20,"Sprite normal mapping did not affect lighting.");
+    // Opaque sprite depth rejects later transparent meshes behind the billboard.
+    scene.directionalLights={};materialOutputNode(authored.graph).output.shading=MaterialShading::Unlit;materialOutputNode(authored.graph).output.baseColor={0,0,1};
+    sprite.graph=prepare(authored);instance.model.transform=math::translation({0,0,-.5f});instance.blend=MaterialBlend::Alpha;material.baseColor={1,0,0,.5f};
+    scene.instances=std::span(&instance,1);const auto depth=sample(capture(),settings.camera,{});
+    check(depth[2]>250 && depth[0]<3,"Opaque sprite did not write visible depth before transparent mesh submission.");
+    // Facing is an instance geometry choice, independent of material program.
+    // Exercise both embedded fallback and generated programs using the same
+    // camera changes; Disabled must retain the world plane, not follow the eye.
+    scene.instances={};scene.directionalLights={};scene.pointLights={};
+    MaterialAsset oriented;oriented.id="native-oriented-sprite";
+    const auto orientedRoot=addMaterialNode(oriented.graph,MaterialNodeKind::Output).id;
+    auto& orientedOutput=materialOutputNode(oriented.graph).output;
+    orientedOutput.shading=MaterialShading::Unlit;orientedOutput.blend=MaterialBlend::Opaque;orientedOutput.baseColor={1,1,1};
+    sprite=RenderParticleMaterial{};sprite.blend=MaterialBlend::Opaque;sprite.baseColor={1,1,1,1};
+    const auto covered=[](const DecodedImage& image){std::size_t result{};for(std::size_t i=0;i<image.rgba.size();i+=4)if(image.rgba[i]>8)++result;return result;};
+    for(const bool generated:{false,true}) {
+        sprite.graph=generated?prepare(oriented):nullptr;
+        particles[0].position={};particles[0].right={1,0,0};particles[0].up={0,1,0};particles[0].rotation=0;
+        particles[0].billboardMode=ParticleBillboardMode::Disabled;
+        settings.camera.position={0,0,3};settings.camera.target={};
+        const auto front=covered(capture());check(front>3000,"World-plane particle did not render from its front.");
+        settings.camera.position={3,0,0};
+        check(covered(capture())<front/100,"Disabled billboarding still turned the quad toward the camera.");
+        particles[0].billboardMode=ParticleBillboardMode::Enabled;
+        const auto facing=capture();check(covered(facing)>front*.95,"Enabled billboard failed to follow a side camera.");
+        particles[0].right={0,1,0};particles[0].up={0,0,1};
+        check(capture().rgba==facing.rgba,"Enabled billboard inherited an authored emitter orientation.");
+        particles[0].billboardMode=ParticleBillboardMode::Disabled;particles[0].right={0,0,-1};particles[0].up={0,1,0};
+        check(covered(capture())>front*.95,"Disabled quad ignored its explicit world-space orientation.");
+        particles[0].billboardMode=ParticleBillboardMode::FixedY;
+        check(covered(capture())>front*.95,"Fixed-Y billboard did not turn around the vertical axis.");
+        settings.camera.position={3,3,0};
+        const auto fixedSlope=covered(capture());particles[0].billboardMode=ParticleBillboardMode::Enabled;
+        const auto fullSlope=covered(capture());
+        check(fixedSlope>500 && fixedSlope<fullSlope*.85,"Fixed-Y billboard tilted with the camera instead of keeping world Y upright.");
+        particles[0].billboardMode=ParticleBillboardMode::FixedY;settings.camera.position={0,3,0};
+        check(covered(capture())<10,"Fixed-Y pole fallback produced nonfinite or expanded geometry.");
+        settings.camera.position={3,0,0};
+        check(covered(capture())>front*.95,"Fixed-Y billboard failed to recover after a vertical camera pole.");
+    }
+    // Rotate a textured Disabled quad in its own plane; UVs follow the same
+    // rotation and local triplanar normals retain that rotated tangent frame.
+    particles[0].billboardMode=ParticleBillboardMode::Disabled;particles[0].right={0,0,-1};particles[0].up={0,1,0};
+    const auto orientedTexture=addMaterialNode(oriented.graph,MaterialNodeKind::Texture2D).id;
+    findMaterialNode(oriented.graph,orientedTexture)->texture.image.id="assets/textures/orientation-fixture.png";
+    connectMaterialNodes(oriented.graph,orientedTexture,MaterialPin::RGB,orientedRoot,MaterialPin::BaseColor);
+    for(const bool generated:{false,true}) {
+        sprite.graph=generated?prepare(oriented,color.handle):nullptr;sprite.colorTexture=color.handle;sprite.samplerFlags=point;
+        particles[0].rotation=0;expect({0,.54f,.66f},0,"Oriented sprite UVs lost the authored right/up basis.");
+        particles[0].rotation=std::numbers::pi_v<float>*.5f;
+        expect({0,.54f,.66f},1,"Rotation did not spin a Disabled sprite within its world plane.");
+    }
+    disconnectMaterialInput(oriented.graph,orientedRoot,MaterialPin::BaseColor);
+    materialOutputNode(oriented.graph).output.shading=MaterialShading::StandardPbr;
+    materialOutputNode(oriented.graph).output.baseColor={.5f,.5f,.5f};
+    particles[0].rotation=0;lights[0].direction={-1,0,-1};lights[0].intensity=1;scene.directionalLights=lights;
+    sprite.graph=prepare(oriented);const auto orientedLit=sample(capture(),settings.camera,{});
+    check(orientedLit[0]>40,"Lit Disabled sprite did not use its world-facing surface normal.");
+    const auto orientedUv=addMaterialNode(oriented.graph,MaterialNodeKind::UV).id;
+    findMaterialNode(oriented.graph,orientedUv)->uv.mode=MaterialUvMode::LocalTriplanar;
+    findMaterialNode(oriented.graph,orientedTexture)->texture.role=MaterialTextureRole::Normal;
+    connectMaterialNodes(oriented.graph,orientedUv,MaterialPin::UV,orientedTexture,MaterialPin::UV);
+    connectMaterialNodes(oriented.graph,orientedTexture,MaterialPin::Normal,orientedRoot,MaterialPin::Normal);
+    sprite.graph=prepare(oriented,flat.handle);
+    check(difference(orientedLit,sample(capture(),settings.camera,{}))<=3,"Neutral local-triplanar normal changed an oriented sprite's world normal.");
+    sprite.graph=prepare(oriented,tilted.handle);const auto orientedTilt=sample(capture(),settings.camera,{});
+    particles[0].rotation=std::numbers::pi_v<float>;
+    check(difference(orientedTilt,sample(capture(),settings.camera,{}))>10,"Local-triplanar normal did not rotate with the Disabled sprite basis.");
+    scene.instances={};scene.particles={};sprite.graph.reset();resources.stop();
     frame=renderer.drainPending(frame);
 }
 }
-int main(){try{Sdl sdl;std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(SDL_CreateWindow("Crimson material mapping checks",320,240,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);check(bool(window),SDL_GetError());exercise(window.get());std::cout<<"Material UV, triplanar, normal, slot, mask/pick and sprite checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+int main(int argc,char** argv){try{
+    check(argc==4,"Pass shaderc, source and include directories.");
+    const auto temporary=std::filesystem::temp_directory_path()/("crimson-mapping-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    struct Cleanup {std::filesystem::path path;~Cleanup(){std::error_code error;const auto resolved=std::filesystem::weakly_canonical(path,error);const auto parent=std::filesystem::weakly_canonical(std::filesystem::temp_directory_path(),error);if(!error && resolved.parent_path()==parent && resolved.filename().string().starts_with("crimson-mapping-"))std::filesystem::remove_all(resolved,error);}} cleanup{temporary};
+    ShaderCompileConfig config{argv[1],argv[2],argv[3],temporary};
+    Sdl sdl;std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(SDL_CreateWindow("Crimson material mapping checks",320,240,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);check(bool(window),SDL_GetError());exercise(window.get(),config);std::cout<<"Material mapping, coverage/picking, mixed mesh/particle ordering, depth and additive checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

@@ -238,7 +238,7 @@ void builtinMaterialControls(SceneDocument& document,PanelsState& state,const En
     const auto assign=[&](const std::string& id) {
         if(!id.empty()) {
             const auto candidate=assets.findMaterial(id);
-            if(!candidate || !modelMaterialCompatible(*candidate)){state.materialDiagnostic="Choose a Standard PBR material with Opaque or Mask blending.";return;}
+            if(!candidate || !modelMaterialCompatible(*candidate)){state.materialDiagnostic="Choose a valid material.";return;}
             try {if(model)(void)assets.resolvedModelMaterials(*model,id);}
             catch(const std::exception& error){state.materialDiagnostic=error.what();return;}
         }

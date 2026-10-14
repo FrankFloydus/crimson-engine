@@ -2,6 +2,7 @@
 #include "EditorSession.h"
 #include "assets/AssetLibrary.h"
 #include "crimson-renderer/ImGuiBgfx.h"
+#include "crimson-renderer/MaterialGraphGpu.h"
 #include "resources/FileWatcher.h"
 #include "resources/ShaderReloadSession.h"
 #include "resources/Paths.h"
@@ -18,8 +19,9 @@ std::vector<std::filesystem::path> watchedRoots(const std::filesystem::path& roo
     return {root/"assets",std::filesystem::path(CC_SHADER_SOURCE_DIR),std::filesystem::path(CC_SHADER_INCLUDE_DIR)};
 }
 ShaderCompileConfig shaderConfig(const std::filesystem::path& root) {
-    return {std::filesystem::path(CC_SHADERC_PATH),std::filesystem::path(CC_SHADER_SOURCE_DIR),
-        std::filesystem::path(CC_SHADER_INCLUDE_DIR),root/"assets"/"cache"/"shaders"};
+    const auto sources=std::filesystem::is_directory(CC_SHADER_SOURCE_DIR)?std::filesystem::path(CC_SHADER_SOURCE_DIR):std::filesystem::path(CC_STAGED_SHADER_DIR);
+    const auto includes=std::filesystem::is_directory(CC_SHADER_INCLUDE_DIR)?std::filesystem::path(CC_SHADER_INCLUDE_DIR):std::filesystem::path(CC_STAGED_SHADER_INCLUDE_DIR);
+    return {std::filesystem::path(CC_SHADERC_PATH),sources,includes,root/"assets"/"cache"/"shaders"};
 }
 std::uint64_t fingerprint(const std::filesystem::path& file) {
     std::error_code error;if(!std::filesystem::is_regular_file(file,error))return 0;
@@ -33,13 +35,15 @@ struct ResourceRuntime::Impl {
     Renderer& renderer;
     FileWatcher watcher;
     ShaderReloadSession shaders;
+    MaterialGraphPrograms materialPrograms;
     std::unordered_map<std::string,AssetKind> catalog;
     std::unordered_map<std::string,std::uint64_t> ownFingerprints;
     std::string error;
     bool stopped{};
     Impl(const std::filesystem::path& project,ResourceManager& manager,AssetLibrary& library,Renderer& graphics,ImGuiBgfx& tools)
         :root(std::filesystem::absolute(project).lexically_normal()),resources(manager),assets(library),renderer(graphics),
-        watcher(watchedRoots(root)),shaders(manager,graphics,tools,shaderConfig(root)) {
+        watcher(watchedRoots(root)),shaders(manager,graphics,tools,shaderConfig(root)),materialPrograms(manager,shaderConfig(root)) {
+        assets.setMaterialGraphPrograms(&materialPrograms);
         for(const auto& entry:assets.catalog())catalog.emplace(entry.id,entry.kind);
     }
     void acknowledgeFile(const std::filesystem::path& file) {
@@ -92,7 +96,7 @@ struct ResourceRuntime::Impl {
 };
 ResourceRuntime::ResourceRuntime(const std::filesystem::path& root,ResourceManager& manager,AssetLibrary& assets,Renderer& renderer,ImGuiBgfx& tools)
     :impl_(std::make_unique<Impl>(root,manager,assets,renderer,tools)) {}
-ResourceRuntime::~ResourceRuntime(){stop();}
+ResourceRuntime::~ResourceRuntime(){stop();impl_->assets.setMaterialGraphPrograms(nullptr);}
 void ResourceRuntime::preFrame(EditorSession* editor,std::uint32_t frame) {
     if(impl_->stopped)return;
     impl_->resources.pump();
@@ -111,6 +115,9 @@ void ResourceRuntime::preFrame(EditorSession* editor,std::uint32_t frame) {
     impl_->observeCatalog(false);
     if(editor && !assetChanges.empty())editor->filesChanged(assetChanges);
     impl_->shaders.changed(changed);
+    impl_->materialPrograms.changed(changed);
+    for(const auto& file:changed)if(!inside(file,impl_->root/"assets"))impl_->resources.invalidatePath(file);
+    impl_->materialPrograms.trim();
     impl_->assets.processImports();
     impl_->assets.updateResources(frame);
     impl_->observeCatalog(true);

@@ -1,0 +1,121 @@
+{
+  "graph": {
+    "links": [
+      {
+        "fromNode": 15,
+        "fromPin": 1,
+        "id": 25,
+        "toNode": 1,
+        "toPin": 14
+      },
+      {
+        "fromNode": 19,
+        "fromPin": 0,
+        "id": 26,
+        "toNode": 20,
+        "toPin": 8
+      },
+      {
+        "fromNode": 15,
+        "fromPin": 5,
+        "id": 27,
+        "toNode": 20,
+        "toPin": 9
+      },
+      {
+        "fromNode": 20,
+        "fromPin": 0,
+        "id": 28,
+        "toNode": 1,
+        "toPin": 15
+      }
+    ],
+    "nextLinkId": 29,
+    "nextNodeId": 21,
+    "nodes": [
+      {
+        "id": 1,
+        "kind": 0,
+        "name": "Output",
+        "output": {
+          "alphaCutoff": 0.5,
+          "baseColor": [
+            0.21404114365577698,
+            0.21404114365577698,
+            0.21404114365577698
+          ],
+          "blend": 2,
+          "doubleSided": false,
+          "emission": [
+            3.700000047683716,
+            0.17598187923431396,
+            0.0
+          ],
+          "metallic": 0.0,
+          "occlusion": 1.0,
+          "occlusionStrength": 1.0,
+          "opacity": 1.0,
+          "opacityMask": 1.0,
+          "roughness": 1.0,
+          "shading": 0,
+          "specular": 0.5
+        },
+        "position": [
+          723.0,
+          -111.0
+        ]
+      },
+      {
+        "id": 15,
+        "kind": 7,
+        "name": "Particle Color",
+        "position": [
+          257.4000244140625,
+          17.0
+        ]
+      },
+      {
+        "id": 19,
+        "kind": 8,
+        "name": "Radial Gradient",
+        "position": [
+          195.64874267578125,
+          248.55096435546875
+        ]
+      },
+      {
+        "id": 20,
+        "kind": 5,
+        "left": {
+          "type": 0,
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "name": "Multiply",
+        "position": [
+          483.5927734375,
+          312.08251953125
+        ],
+        "right": {
+          "type": 0,
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      }
+    ],
+    "version": 3
+  },
+  "id": "assets/materials/79aa81e7e99c-0.crimson-material",
+  "name": "New Material 4",
+  "originModel": "",
+  "type": "crimson-material",
+  "version": 6
+}

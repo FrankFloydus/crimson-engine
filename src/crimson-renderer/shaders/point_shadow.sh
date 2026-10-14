@@ -3,7 +3,11 @@
 uniform vec4 u_pointShadow[16]; // Atlas slot (-1 disables), near, bias(m), normal bias(texels).
 uniform vec4 u_shadowAtlas; // Reciprocal atlas extent, inner face resolution, guarded pitch.
 uniform vec4 u_shadowLayout; // Tile columns, guarded tan(half FOV), reserved.
+#ifdef CC_POINT_SHADOW_SLOT
+SAMPLER2DSHADOW(s_pointShadow, CC_POINT_SHADOW_SLOT);
+#else
 SAMPLER2DSHADOW(s_pointShadow, 8);
+#endif
 
 // Evaluate before discard or divergent lighting branches. The triangle plane
 // must remain independent of smooth vertex normals and normal-map shading.

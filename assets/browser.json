@@ -3,6 +3,18 @@
     "assets/materials/55f2270f21c4-0.crimson-material": {
       "folder": "",
       "name": "Ground"
+    },
+    "assets/materials/79aa81e7e99c-0.crimson-material": {
+      "folder": "",
+      "name": "particle"
+    },
+    "assets/materials/815649f6d3c8-0.crimson-material": {
+      "folder": "",
+      "name": "Wall"
+    },
+    "assets/particles/31b2100915e8-0.crimson-particle": {
+      "folder": "",
+      "name": "sparks"
     }
   },
   "folders": [],

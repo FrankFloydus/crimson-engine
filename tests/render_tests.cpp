@@ -8,6 +8,7 @@
 #include <SDL3/SDL_init.h>
 
 #include <cmath>
+#include "crimson-renderer/shaders/glow_kernel.sh"
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -194,6 +195,113 @@ void pointLightRadiusContract() {
         light.radius=radius;const auto inverse=light.inverseRadiusSquared();
         require(std::isfinite(inverse) && inverse>0 && std::isfinite(pointLightAttenuation(0,inverse)),
             "Point-light radius packing generated a nonfinite shader parameter.");
+    }
+}
+
+double glowDisplayCode(double hdr) {
+    // The scene's Reinhard presentation followed by its one sRGB encoding.
+    const double mapped=hdr/(1+hdr);
+    return 255*(mapped<=.0031308 ? 12.92*mapped : 1.055*std::pow(mapped,1/2.4)-.055);
+}
+
+void glowGaussianKernelContract() {
+    using namespace crimson::glow_rendering;
+    std::vector<float> sizes{.01f,.1f,.5f,1.f,1.69f,8.f};
+    for(unsigned i=1;i<=800;++i)sizes.push_back(static_cast<float>(i)*.01f);
+    // Just below/at/above each support-size change catches the worst tail,
+    // including tiny kernels whose normalized central sample is nearly one.
+    for(unsigned edge=2;edge<=195;++edge) {
+        const float size=static_cast<float>(edge)/(7.5f*3.25f);
+        for(const float offset:{-0.000001f,0.f,0.000001f})
+            if(size+offset>0 && size+offset<=8)sizes.push_back(size+offset);
+    }
+    constexpr double BrightMeshImpulse=60000.0*100.0*10.0;
+    for(const float size:sizes) {
+        const float sigma=glowKernelSigma(size);
+        const int radius=glowKernelRadius(sigma);
+        require(std::isfinite(sigma) && sigma>=.25f && radius>=2 && radius<=195,
+            "Glow Size escaped its finite Gaussian support/tap bound.");
+        near(sigma,std::max(.25f,3.25f*size));
+        std::vector<double> weights(static_cast<std::size_t>(radius*2+1));
+        double total=0,previous=1;
+        for(int offset=-radius;offset<=radius;++offset) {
+            const double weight=glowKernelWeight(static_cast<float>(offset),sigma);
+            require(std::isfinite(weight) && weight>=0 && weight<=1,"Glow kernel weight is nonfinite or negative.");
+            near(weight,glowKernelWeight(static_cast<float>(-offset),sigma),0);
+            near(weight,std::exp(-.5*std::pow(static_cast<double>(offset)/sigma,2)),2e-7);
+            if(offset>=0) {
+                require(weight<=previous,"Glow kernel introduced a separated bright lobe.");
+                previous=weight;
+            }
+            weights[static_cast<std::size_t>(offset+radius)]=weight;
+            total+=weight;
+        }
+        double normalizedSum=0,mean=0,variance=0;
+        for(int offset=-radius;offset<=radius;++offset) {
+            auto& weight=weights[static_cast<std::size_t>(offset+radius)];
+            weight/=total;normalizedSum+=weight;mean+=offset*weight;variance+=offset*offset*weight;
+        }
+        near(normalizedSum,1,1e-12);near(normalizedSum*normalizedSum,1,1e-12);near(mean,0,1e-12);
+        // A sampled Gaussian at sigma >= 1 agrees with the continuous variance;
+        // this protects Size/core width against narrowing the blur to hide its edge.
+        if(sigma>=1)near(variance,static_cast<double>(sigma)*sigma,1e-5*static_cast<double>(sigma)*sigma);
+        const double edgeHdr=BrightMeshImpulse*weights.back()*weights[static_cast<std::size_t>(radius)];
+        require(glowDisplayCode(edgeHdr)<1,
+            "Glow's last supported tap still creates a visible cutoff for a bright mesh sample.");
+        const int oldRadius=std::min(64,static_cast<int>(std::ceil(8.f*size)));
+        double oldTotal=0;
+        for(int offset=-oldRadius;offset<=oldRadius;++offset)
+            oldTotal+=std::exp(-.5*std::pow(static_cast<double>(offset)/sigma,2));
+        require(oldTotal/total>.98 && oldTotal/total<=1.0000001,
+            "Extending Glow tails unexpectedly changed central energy instead of preserving its Gaussian.");
+    }
+    near(glowKernelRadius(glowKernelSigma(8)),195,0);
+    const float sigma=glowKernelSigma(1.69f);
+    const int oldRadius=static_cast<int>(std::ceil(8.f*1.69f));
+    double oldTotal=0;
+    for(int offset=-oldRadius;offset<=oldRadius;++offset)
+        oldTotal+=std::exp(-.5*std::pow(static_cast<double>(offset)/sigma,2));
+    const double oldEdge=15000*std::exp(-.5*std::pow(static_cast<double>(oldRadius)/sigma,2))/(oldTotal*oldTotal);
+    require(glowDisplayCode(oldEdge)>200,
+        "The bright-impulse regression no longer exercises the old square Glow cutoff.");
+}
+
+void glowGaussianContours() {
+    using namespace crimson::glow_rendering;
+    for(const float size:{.5f,1.f,1.69f,8.f}) {
+        const float sigma=glowKernelSigma(size);
+        const int radius=glowKernelRadius(sigma);
+        std::vector<double> weights(static_cast<std::size_t>(radius+1));
+        double total=0;
+        for(int i=0;i<=radius;++i) {
+            weights[static_cast<std::size_t>(i)]=glowKernelWeight(static_cast<float>(i),sigma);
+            total+=weights[static_cast<std::size_t>(i)]*(i==0?1:2);
+        }
+        const auto sample=[&](double x) {
+            x=std::abs(x);const auto index=static_cast<int>(std::floor(x));const double blend=x-index;
+            const double a=index<=radius?weights[static_cast<std::size_t>(index)]/total:0;
+            const double b=index+1<=radius?weights[static_cast<std::size_t>(index+1)]/total:0;
+            return a*(1-blend)+b*blend;
+        };
+        // Model the final bilinear upsample of an isolated HDR impulse. Equal
+        // brightness contours should remain circular; separable compact-tail
+        // windows can pass endpoint tests while turning these contours box-shaped.
+        for(const double width:{2.,3.,4.,5.}) {
+            const double axisRadius=width*sigma,target=sample(axisRadius)*sample(0);
+            for(const double impulse:{15000.,60000000.}) {
+                const double display=glowDisplayCode(impulse*target);
+                if(display<1 || display>254)continue;
+                double lower=0,upper=2.*radius;
+                for(unsigned step=0;step<60;++step) {
+                    const double middle=(lower+upper)*.5;
+                    const double diagonal=sample(middle/std::sqrt(2.));
+                    if(diagonal*diagonal>target)lower=middle;else upper=middle;
+                }
+                const double diagonalRadius=(lower+upper)*.5;
+                require(std::abs(diagonalRadius/axisRadius-1)<.025,
+                    "Glow's HDR contour became square despite a continuous support edge.");
+            }
+        }
     }
 }
 
@@ -556,6 +664,22 @@ void navigationDesktopCoordinatesAndWindowLifetime() {
 void particlePresentationValidation() {
     crimson::RenderParticle particle;
     require(crimson::particle_rendering::valid(particle),"Starter particle should be renderable.");
+    require(particle.billboardMode==crimson::ParticleBillboardMode::Disabled,"New render packets must not opt into billboarding.");
+    for(const auto mode:{crimson::ParticleBillboardMode::Disabled,crimson::ParticleBillboardMode::Enabled,crimson::ParticleBillboardMode::FixedY}) {
+        particle.billboardMode=mode;particle.right={0,0,-1};particle.up={0,1,0};
+        require(crimson::particle_rendering::valid(particle),"Valid oriented particle basis was rejected.");
+    }
+    particle.billboardMode=static_cast<crimson::ParticleBillboardMode>(3);
+    require(!crimson::particle_rendering::valid(particle),"Unsupported billboard mode reached instance upload.");
+    particle.billboardMode=crimson::ParticleBillboardMode::Disabled;particle.right={};
+    require(!crimson::particle_rendering::valid(particle),"Collapsed particle basis reached instance upload.");
+    particle.right={1,0,0};particle.up={1,0,0};
+    require(!crimson::particle_rendering::valid(particle),"Parallel particle basis reached instance upload.");
+    particle.up={0,2,0};
+    require(!crimson::particle_rendering::valid(particle),"Scaled particle basis changed world-unit sprite size.");
+    particle.up={0,1,0};particle.right[0]=std::numeric_limits<float>::quiet_NaN();
+    require(!crimson::particle_rendering::valid(particle),"Nonfinite particle orientation reached instance upload.");
+    particle.right={1,0,0};
     particle.color={crimson::MaxParticleRadiance,1,0,.25f};
     require(crimson::particle_rendering::valid(particle),"HDR radiance is independent of opacity.");
     particle.color[0]=std::numeric_limits<float>::infinity();
@@ -609,6 +733,12 @@ void particleGlobalOrdering() {
     particle_rendering::sortBackToFront(keys);
     require(keys[0].index==3 && keys[1].index==1 && keys[2].index==0 && keys[3].index==2 && keys[4].index==4,
         "Transparency ordering grouped by material, used radial distance, or lost stable center-depth ties.");
+    std::vector<particle_rendering::TransparentSortKey> mixed{{0,4,true},{1,2,true},{0,5,false},{1,3,false},{2,2,false},{3,1,false}};
+    particle_rendering::sortTransparentBackToFront(mixed);
+    require(!mixed[0].mesh && mixed[1].mesh && !mixed[2].mesh && mixed[3].mesh && !mixed[4].mesh,
+        "Transparent meshes and particles did not interleave or lost stable ties.");
+    require(mixed[3].depth==mixed[4].depth && mixed[3].index==1 && mixed[4].index==2,
+        "Transparent equal-depth ties did not preserve extraction order.");
     // Looking in the opposite direction must reverse depth priority, while
     // retaining the two equal-depth particles' extraction order.
     for(auto& key:keys)key.depth=particle_rendering::viewDepth(particles[key.index].position,{},Vec3{0,0,1});
@@ -634,6 +764,8 @@ int main() {
     run("sphere uint16 index capacity and overflow rejection", sphereIndexCapacity);
     run("camera Y-up coordinate contract", cameraCoordinateContract);
     run("point-light radius bounds inverse-square influence with smooth finite falloff", pointLightRadiusContract);
+    run("Glow Gaussian retains energy and width with an HDR-invisible support edge", glowGaussianKernelContract);
+    run("Glow isolated HDR impulse contours stay circular through bilinear upsampling", glowGaussianContours);
     run("grid depth survives eye-crossing clips and retains foreground occlusion", gridDepthSurvivesEyeCrossing);
     run("Game vertical FOV preserves projection and rays across window aspects", gameCameraVerticalFraming);
     run("camera orbit signs, upright lock and reversible soft zoom", cameraOrbitAndZoomBounds);

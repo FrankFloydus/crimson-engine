@@ -8,16 +8,18 @@ namespace crimson {
 namespace {
 constexpr auto Format=bgfx::TextureFormat::RGBA16F;
 constexpr std::uint64_t Flags=BGFX_TEXTURE_COMPUTE_WRITE|BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP|BGFX_SAMPLER_W_CLAMP;
-template<class Handle> void destroy(Handle& handle) {
+// Keep this name distinct from bgfx::destroy: ADL would prefer its unguarded
+// non-template overload for bgfx handles, including invalid lazy allocations.
+template<class Handle> void destroyHandle(Handle& handle) {
     if (bgfx::isValid(handle)) bgfx::destroy(handle);
     handle=BGFX_INVALID_HANDLE;
 }
 }
 
 ProceduralSkyGpu::~ProceduralSkyGpu() {
-    for (auto& cube:cubes_) {destroy(cube.diffuse);destroy(cube.specular);}
-    destroy(program_);destroy(skyUniform_);destroy(filterUniform_);
-    for (auto& uniform:samplesUniform_) destroy(uniform);
+    for (auto& cube:cubes_) {destroyHandle(cube.diffuse);destroyHandle(cube.specular);}
+    destroyHandle(program_);destroyHandle(skyUniform_);destroyHandle(filterUniform_);
+    for (auto& uniform:samplesUniform_) destroyHandle(uniform);
 }
 
 bool ProceduralSkyGpu::initialize() {
@@ -50,12 +52,12 @@ bool ProceduralSkyGpu::allocate(Cubes& target) {
     candidate.diffuse=bgfx::createTextureCube(procedural::DiffuseSize,false,1,Format,Flags);
     candidate.specular=bgfx::createTextureCube(procedural::SpecularSize,true,1,Format,Flags);
     if (!bgfx::isValid(candidate.diffuse) || !bgfx::isValid(candidate.specular)) {
-        destroy(candidate.diffuse);destroy(candidate.specular);
+        destroyHandle(candidate.diffuse);destroyHandle(candidate.specular);
         status_="Procedural sky cubemap allocation failed.";return false;
     }
     bgfx::setName(candidate.diffuse,"Procedural sky irradiance/pi");
     bgfx::setName(candidate.specular,"Procedural sky GGX environment");
-    destroy(target.diffuse);destroy(target.specular);target=candidate;
+    destroyHandle(target.diffuse);destroyHandle(target.specular);target=candidate;
     return true;
 }
 
@@ -96,7 +98,7 @@ bgfx::ProgramHandle ProceduralSkyGpu::prepareProgramReload(std::span<const std::
 
 void ProceduralSkyGpu::publishProgramReload(bgfx::ProgramHandle program) noexcept {
     if (!bgfx::isValid(program)) return;
-    destroy(program_);program_=program;dirty_=true;
+    destroyHandle(program_);program_=program;dirty_=true;
 }
 
 void ProceduralSkyGpu::bindBackground() const {
