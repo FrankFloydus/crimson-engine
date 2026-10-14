@@ -19,14 +19,40 @@
         0.9952020049095154,
         -0.09783831238746643
       ]
+    },
+    "assets/scenes/9d9791ec48beb7022d3a7e925edbb4f1.crimson-scene": {
+      "far": 2048.0,
+      "fov": 45.0,
+      "near": 0.0008660253952257335,
+      "position": [
+        6.782651901245117,
+        8.389622688293457,
+        9.070791244506836
+      ],
+      "target": [
+        -77.98534393310547,
+        -80.55232238769531,
+        -98.18280029296875
+      ],
+      "up": [
+        -0.338138610124588,
+        0.8382136225700378,
+        -0.42785537242889404
+      ]
     }
+  },
+  "overlays": {
+    "collisions": false,
+    "grid": true,
+    "transformGizmo": true
   },
   "panels": {
     "assetBrowser": true,
+    "game": true,
     "inspector": true,
     "outliner": true
   },
   "recoveredLegacyPreview": true,
-  "scene": "",
+  "scene": "assets/scenes/9d9791ec48beb7022d3a7e925edbb4f1.crimson-scene",
   "version": 1
 }

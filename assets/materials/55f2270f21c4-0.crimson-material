@@ -1,0 +1,91 @@
+{
+  "alphaCutoff": 0.5,
+  "alphaMask": false,
+  "baseColor": [
+    1.0,
+    1.0,
+    1.0,
+    1.0
+  ],
+  "baseColorTexture": {
+    "image": "assets/textures/tiles_floor_1.png",
+    "magFilter": 1,
+    "minFilter": 2,
+    "uv": 0,
+    "wrapU": 1,
+    "wrapV": 1
+  },
+  "blend": "opaque",
+  "doubleSided": false,
+  "emissive": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "emissiveTexture": {
+    "image": "",
+    "magFilter": 0,
+    "minFilter": 0,
+    "uv": 0,
+    "wrapU": 0,
+    "wrapV": 0
+  },
+  "id": "assets/materials/55f2270f21c4-0.crimson-material",
+  "metallic": 0.0,
+  "metallicRoughnessTexture": {
+    "image": "",
+    "magFilter": 0,
+    "minFilter": 0,
+    "uv": 0,
+    "wrapU": 0,
+    "wrapV": 0
+  },
+  "name": "New Material 3",
+  "normalScale": 1.0,
+  "normalTexture": {
+    "image": "",
+    "magFilter": 0,
+    "minFilter": 0,
+    "uv": 0,
+    "wrapU": 0,
+    "wrapV": 0
+  },
+  "occlusionStrength": 1.0,
+  "occlusionTexture": {
+    "image": "",
+    "magFilter": 0,
+    "minFilter": 0,
+    "uv": 0,
+    "wrapU": 0,
+    "wrapV": 0
+  },
+  "originModel": "",
+  "roughness": 1.0,
+  "shading": "standard-pbr",
+  "sharedSampler": {
+    "magFilter": 1,
+    "minFilter": 2,
+    "wrapU": 0,
+    "wrapV": 0
+  },
+  "triplanar": true,
+  "triplanarWorld": true,
+  "type": "crimson-material",
+  "uvOffset": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "uvRotation": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "uvScale": [
+    0.25,
+    0.25,
+    0.25
+  ],
+  "uvScaleLinked": true,
+  "version": 3
+}
