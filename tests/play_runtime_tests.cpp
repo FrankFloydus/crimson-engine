@@ -74,6 +74,45 @@ void particlesUseRuntimeClock() {
     require(particle->particles().back().position[0]>.5f,"Child emitter births did not follow the moving parent.");
     play.stop();require(!play.particles().instance(4),"Stop retained transient particles.");
 }
+void particlePreprocessIsReadyBeforePlayReturns() {
+    const auto root=std::filesystem::temp_directory_path()/"crimson-play-cpu-unused";SceneDocument authored(root);fixture(authored);
+    auto effect=std::make_shared<ParticleEffectAsset>(defaultParticleEffect());effect->id="assets/particles/fire.crimson-particle";
+    effect->preprocessSeconds=2;effect->emitter.rate=60;effect->emitter.lifetime=2;effect->emitter.initialVelocity={0,2,0};
+    require(authored.edit("Preprocessed child emitter",[&](auto& records,auto&){
+        EntityRecord emitter;emitter.id=4;emitter.parent=2;emitter.name="Fire";emitter.local=math::translation({3,2,-1});
+        emitter.particle=AssetRef<ParticleEffectAsset>{effect->id};records.push_back(emitter);
+    }),"Cannot prepare preprocessed Play fixture.");
+    PlaySession play(root);play.setParticleDefinitions([effect](const std::string&){return ParticleDefinitionVersion{effect,1,{}};});
+    require(play.start(authored),"Cannot start preprocessed particle runtime.");
+    const auto* warmed=play.particles().instance(4);
+    require(warmed && warmed->stats().ticks==120 && !play.particles().presentation().empty() && play.tickCount()==0,
+        "Play returned before two seconds of fire pre-process were ready for the first Game image.");
+    auto ordinary=*effect;ordinary.preprocessSeconds=0;CpuParticleSystem reference;reference.restart(ordinary,ordinary.defaultSeed,*authored.scene().worldTransform(4));
+    for(int tick=0;tick<120;++tick)reference.tick();
+    require(warmed->particles().size()==reference.particles().size() && warmed->elapsed()==reference.elapsed(),"Play pre-process did not reproduce explicit fixed ticks.");
+    for(std::size_t i=0;i<warmed->particles().size();++i)require(warmed->particles()[i].position==reference.particles()[i].position &&
+        warmed->particles()[i].velocity==reference.particles()[i].velocity,"Play pre-process lost the authored child world transform or force integration.");
+    const std::vector<ParticlePresentation> firstImage(play.particles().presentation().begin(),play.particles().presentation().end());
+    play.advance(0,Vec2{},camera());require(warmed->stats().ticks==120 && play.particles().presentation().size()==firstImage.size(),"First zero-delta Play frame restarted or hid warmed particles.");
+    play.advance(PlaySession::FixedStep,Vec2{1,0},camera());require(warmed->stats().ticks==121 && !play.document().dirty() && !play.document().history().size(),
+        "Ready preprocessed particles did not join the ordinary Play clock cleanly.");
+    play.stop();require(play.start(authored),"Cannot restart preprocessed Play session.");
+    require(play.particles().instance(4)->stats().ticks==120 && play.particles().presentation().size()==firstImage.size(),"Stop/Play did not immediately reproduce the warm initial presentation.");
+    for(std::size_t i=0;i<firstImage.size();++i)require(firstImage[i].position==play.particles().presentation()[i].position &&
+        firstImage[i].spawnOrdinal==play.particles().presentation()[i].spawnOrdinal,"Stop/Play changed the seeded initial fire state.");play.stop();
+
+    SceneDocument many(root);fixture(many);effect->emitter.capacity=32;
+    require(many.edit("Many preprocessed emitters",[&](auto& records,auto&){for(EntityId id=100;id<116;++id){
+        EntityRecord emitter;emitter.id=id;emitter.name="Fire";emitter.particle=AssetRef<ParticleEffectAsset>{effect->id};records.push_back(emitter);
+    }}),"Cannot prepare many-emitter Play fixture.");
+    require(play.start(many),"Cannot start many-emitter pre-process runtime.");
+    const auto replayTicks=[&]{std::uint64_t ticks{};for(EntityId id=100;id<116;++id){const auto* instance=play.particles().instance(id);require(instance!=nullptr,"Play omitted a bounded emitter.");ticks+=instance->stats().ticks;}return ticks;};
+    require(replayTicks()==16u*120u && play.particles().groups().size()==16,"Play left later emitters blank on their first presentation.");
+    for(const auto& group:play.particles().groups())require(group.count>0,"An admitted emitter had no ready particles on first Play entry.");
+    play.advance(.2,Vec2{},camera());require(replayTicks()==16u*128u && play.tickCount()==8,"Play repeated warm-up during catch-up instead of joining the ordinary clock.");
+    for(EntityId id=100;id<116;++id)require(play.particles().instance(id)->stats().droppedCatchUpTicks==0,"Synchronous pre-process was counted as discarded wall time.");
+    play.stop();require(!play.particles().instance(100),"Leaving Play retained preprocessed transient state.");
+}
 void followCameraTransformLocks() {
     const auto root=std::filesystem::temp_directory_path()/"crimson-play-cpu-unused";SceneDocument authored(root);fixture(authored);
     require(authored.edit("Following camera fixture",[](auto& records,auto& properties){
@@ -337,4 +376,4 @@ void heldEditsRequireFreshPress() {
     require(!play.destination() && !input.heldMoveRay(view),"Cancel/reacquire in one frame retained a held route.");
 }
 }
-int main(){try{lifecycleAndEditing();fixedTimingAndInterpolation();particlesUseRuntimeClock();followCameraTransformLocks();pointerMovementAndFacing();pointerCollisionAndNoFloor();unreachableAndReplanning();heldTargetsAndQueryBudget();heldStationaryCursorFollowsDisplayedProjection();heldProjectedTargetsAndMisses();obstacleSurfaceClicks();heldEditsRequireFreshPress();std::cout<<"Play runtime checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+int main(){try{lifecycleAndEditing();fixedTimingAndInterpolation();particlesUseRuntimeClock();particlePreprocessIsReadyBeforePlayReturns();followCameraTransformLocks();pointerMovementAndFacing();pointerCollisionAndNoFloor();unreachableAndReplanning();heldTargetsAndQueryBudget();heldStationaryCursorFollowsDisplayedProjection();heldProjectedTargetsAndMisses();obstacleSurfaceClicks();heldEditsRequireFreshPress();std::cout<<"Play runtime checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

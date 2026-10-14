@@ -63,7 +63,8 @@ bool sameProperties(const SceneProperties& a, const SceneProperties& b) {
 bool sameEnvironment(const SceneEnvironment& a, const SceneEnvironment& b) {
     return a.exposure == b.exposure && a.environment.map == b.environment.map &&
         a.environment.enabled == b.environment.enabled && a.environment.intensity == b.environment.intensity &&
-        a.environment.rotation == b.environment.rotation && a.environment.toneMapping == b.environment.toneMapping;
+        a.environment.rotation == b.environment.rotation && a.environment.toneMapping == b.environment.toneMapping &&
+        a.environment.glow == b.environment.glow;
 }
 SceneEnvironment resolveEnvironment(const Scene& scene) {
     if (const auto active=scene.find(scene.properties().activeEnvironment); active && active->environment)
@@ -220,8 +221,9 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             const auto& environment=*record.environment;
             if (!std::isfinite(environment.exposure) || environment.exposure<=0 ||
                 !std::isfinite(environment.environment.intensity) || environment.environment.intensity<0 ||
-                !std::isfinite(environment.environment.rotation) || !validToneMapping(environment.environment.toneMapping))
-                throw std::runtime_error("Environment settings must be finite, exposure positive, and tone mapping valid.");
+                !std::isfinite(environment.environment.rotation) || !validToneMapping(environment.environment.toneMapping) ||
+                !validGlowSettings(environment.environment.glow))
+                throw std::runtime_error("Environment settings must be finite, exposure positive, and tone mapping and Glow valid.");
             if (!environment.environment.map.empty() && !safeReference(environment.environment.map))
                 throw std::runtime_error("Environment asset reference must stay inside the project.");
         }

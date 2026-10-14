@@ -272,6 +272,9 @@ struct AssetPreviews::Impl {
         if (entry.kind==AssetKind::Model && !bounds.valid) {
             entry.error="Model bounds are unavailable."; entry.failed=true; return;
         }
+        // Browser thumbnails deliberately omit post-process halos. Their cache
+        // stays stable when a scene's Glow is tuned in its full-size views.
+        settings.environment.glow.enabled=false;
         const auto source=assets.references().resolveEnvironment(settings.environment.map);
         auto bake=environment(source,entry); if (!bake) return;
         hash(sourceKey,bake->key); hash(sourceKey,settings.exposure); hash(sourceKey,settings.environment.intensity); hash(sourceKey,settings.environment.rotation); hash(sourceKey,settings.environment.enabled);

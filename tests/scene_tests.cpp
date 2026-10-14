@@ -364,7 +364,49 @@ void environmentsAndMigration() {
     require(migrated.records.size()==snapshot.records.size()+1 && readText(project.root/oldId)==contents,"Legacy migration rewrote its source.");
     SceneDocument opened(project.root); require(opened.load(oldId),opened.status());
     require(!opened.dirty() && resolveEnvironment(opened.scene()).exposure==1.7f,"Legacy migration lost settings or marked an equivalent load dirty.");
-    require(opened.save(),opened.status()); require(Json::parse(readText(project.root/oldId)).at("version")==4,"Explicit save did not write scene version 4.");
+    require(opened.save(),opened.status()); require(Json::parse(readText(project.root/oldId)).at("version")==5,"Explicit save did not write scene version 5.");
+}
+void environmentGlowHistoryAndMigration() {
+    TempProject project;SceneDocument document(project.root);
+    const auto id=document.createEnvironment("Glow");
+    auto original=*document.scene().find(id);
+    require(!original.environment->environment.glow.enabled,"New environments unexpectedly enabled Glow.");
+    auto edited=original;edited.environment->environment.enabled=false;
+    edited.environment->environment.glow={true,2.5f,3.25f,.75f};
+    require(document.begin("Tune Glow"),document.status());
+    const auto update=[&](auto& records,auto&){for(auto& record:records)if(record.id==id)record=edited;};
+    require(document.update(update),document.status());
+    edited.environment->environment.glow.strength=3;
+    require(document.update(update) && document.commit(),document.status());
+    require(document.undo() && sameEnvironment(*document.scene().find(id)->environment,*original.environment),"Undo lost the original environment/Glow.");
+    require(document.redo() && sameEnvironment(resolveEnvironment(document.scene()),*edited.environment),"Glow did not survive history or inactive IBL.");
+    require(document.save("HDR Glow"),document.status());
+    const auto saved=readText(project.root/document.assetId());
+    SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
+    require(!reopened.dirty() && sameEnvironment(resolveEnvironment(reopened.scene()),*edited.environment),"Glow save/reopen changed its values or dirty state.");
+    document.select({id});require(document.duplicateSelection(),document.status());
+    require(sameEnvironment(*document.scene().find(document.selection().primary)->environment,*edited.environment),"Environment duplication lost Glow.");
+    for (int version:{1,2,3,4}) {
+        auto legacy=Json::parse(saved);legacy["version"]=version;
+        for(auto& entity:legacy["entities"])if(entity.contains("environment"))entity["environment"]["environment"].erase("glow");
+        if(version==1)legacy["settings"]={{"exposure",1.f},{"environment",{{"map",""},{"enabled",false},{"intensity",1.f},{"rotation",0.f}}}};
+        const auto asset="assets/scenes/legacy-glow-"+std::to_string(version)+".crimson-scene";
+        const auto contents=legacy.dump();writeText(project.root/asset,contents);
+        require(reopened.load(asset),reopened.status());
+        require(!resolveEnvironment(reopened.scene()).environment.glow.enabled && readText(project.root/asset)==contents,
+            "An older scene enabled Glow or was rewritten on load.");
+    }
+    require(reopened.load(document.assetId()),reopened.status());
+    const auto before=reopened.scene().records();
+    for(const float invalid:{-1.f,11.f,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()}) {
+        auto invalidRecord=edited;invalidRecord.environment->environment.glow.strength=invalid;
+        require(!reopened.updateEntity(id,invalidRecord),"Invalid Glow strength entered the scene.");
+        sameRecords(before,reopened.scene().records());
+    }
+    auto invalid=Json::parse(saved);invalid["entities"][0]["environment"]["environment"]["glow"]["radius"]=-1;
+    const auto invalidAsset="assets/scenes/invalid-glow.crimson-scene";writeText(project.root/invalidAsset,invalid.dump());
+    require(!reopened.load(invalidAsset),"Malformed Glow settings replaced a working scene.");
+    sameRecords(before,reopened.scene().records());
 }
 void particleReferencesAndPersistence() {
     TempProject project;SceneDocument document(project.root);
@@ -394,7 +436,7 @@ void particleReferencesAndPersistence() {
     invalid.particle=AssetRef<ParticleEffectAsset>{"assets/particles/../bad.crimson-particle"};
     require(!document.updateEntity(particle,invalid),"Particle traversal was accepted.");
     require(document.save("Particles"),document.status());const auto savedId=document.assetId();
-    const auto serialized=Json::parse(readText(project.root/savedId));require(serialized.at("version")==4,"Particle scene version was not bumped.");
+    const auto serialized=Json::parse(readText(project.root/savedId));require(serialized.at("version")==5,"Particle scene writer did not use version 5.");
     SceneDocument reopened(project.root);require(reopened.load(savedId),reopened.status());sameRecords(document.scene().records(),reopened.scene().records());
     require(!reopened.dirty() && reopened.scene().find(particle)->particle->id==effect,"Missing particle asset prevented clean scene reopening.");
     auto cleared=*reopened.scene().find(particle);cleared.particle=AssetRef<ParticleEffectAsset>{};
@@ -406,7 +448,7 @@ void particleReferencesAndPersistence() {
     const auto oldBytes=readText(project.root/legacy);SceneDocument old(project.root);require(old.load(legacy),old.status());
     require(!old.dirty() && readText(project.root/legacy)==oldBytes,"Version-two load rewrote its source or became dirty.");
     for(const auto& record:old.scene().records())require(!record.particle,"Version-two migration invented a particle component.");
-    require(old.save(),old.status());require(Json::parse(readText(project.root/legacy)).at("version")==4,"Explicit version-two save did not migrate to version four.");
+    require(old.save(),old.status());require(Json::parse(readText(project.root/legacy)).at("version")==5,"Explicit version-two save did not migrate to version five.");
 }
 void externalSceneChanges() {
     TempProject project; SceneDocument document(project.root);
@@ -629,8 +671,8 @@ int main() {
         dirtyTokensAndFailure();
         limitsAndHistoryBound();
         groupingAndBatchPlacement();
-        environmentsAndMigration();particleReferencesAndPersistence();externalSceneChanges();preparedSceneOpening();preparedGlobalChanges();inspectorAffineTransactions();inspectorZeroScaleHistory();
-        std::cout << "Scene core: 15 groups passed.\n";
+        environmentsAndMigration();environmentGlowHistoryAndMigration();particleReferencesAndPersistence();externalSceneChanges();preparedSceneOpening();preparedGlobalChanges();inspectorAffineTransactions();inspectorZeroScaleHistory();
+        std::cout << "Scene core: 16 groups passed.\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "Scene core failed: " << error.what() << '\n';

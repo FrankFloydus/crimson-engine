@@ -12,6 +12,7 @@
 #include "app/DiagnosticSession.h"
 #include <SDL3/SDL.h>
 #include <imgui.h>
+#include <implot.h>
 #include <imgui_impl_sdl3.h>
 #include <filesystem>
 #include <memory>
@@ -32,6 +33,7 @@ public:
     explicit ImGuiLifetime(SDL_Window* window, const std::filesystem::path& root) {
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
+        ImPlot::CreateContext();
         auto& io = ImGui::GetIO();
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_ViewportsEnable;
         io.ConfigDpiScaleFonts=true;
@@ -40,12 +42,14 @@ public:
         iniFilename_.assign(reinterpret_cast<const char*>(ini.data()), ini.size());
         io.IniFilename = iniFilename_.c_str();
         if (!ImGui_ImplSDL3_InitForD3D(window)) {
+            ImPlot::DestroyContext();
             ImGui::DestroyContext();
             throw std::runtime_error("Could not initialize ImGui SDL3 input.");
         }
     }
     ~ImGuiLifetime() {
         ImGui_ImplSDL3_Shutdown();
+        ImPlot::DestroyContext();
         ImGui::DestroyContext();
     }
 private:

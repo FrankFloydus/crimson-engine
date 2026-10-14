@@ -61,6 +61,10 @@ void SceneParticles::reconcile(std::uint64_t generation,std::span<const Extracte
         instance.assetId=source.assetId;instance.revision=definition.revision;
         instance.presentationWorld=source.world;
         if(const auto presented=presentationWorlds.find(source.id);presented!=presentationWorlds.end())instance.presentationWorld=*presented->second;
+    }
+    for(const auto& entry:admitted) {
+        const auto& source=*entry.source;const auto& definition=entry.version;const auto& next=*definition.definition;
+        auto& instance=instances_.at(source.id);
         instance.simulation.advance(seconds);
         const auto first=presentation_.size();instance.simulation.appendPresentation(presentation_,interpolationOverride,&instance.presentationWorld);
         groups_.push_back({source.id,next.emitter.material.id,first,presentation_.size()-first});
@@ -82,7 +86,9 @@ std::optional<Aabb> SceneParticles::bounds(EntityId id) const {
     if(found==instances_.end() || found->second.simulation.particles().empty())return std::nullopt;
     const auto* simulation=&found->second.simulation;
     Aabb bounds;
-    const auto radius=simulation->definition().emitter.size*.5f;
+    // A camera-plane square can rotate about its center. Use its half diagonal
+    // and the prepared lifetime maximum for conservative selection bounds.
+    const auto radius=simulation->maxPresentationSize()*.7071067812f;
     for(const auto& p:simulation->particles()) {
         const auto world=simulation->particleWorldPosition(p,&found->second.presentationWorld);
         if(!math::finite(world))continue;

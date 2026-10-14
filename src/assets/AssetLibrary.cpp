@@ -4,6 +4,7 @@
 #include "math/Json.h"
 #include "AsyncImports.h"
 #include "DeletionPreparation.h"
+#include "AtomicFile.h"
 #include "resources/TextureStreamer.h"
 #include "resources/StreamingModel.h"
 
@@ -990,6 +991,12 @@ void AssetLibrary::loadEnvironment(EnvironmentSettings& environment) {
         restored.rotation = json.value("rotation", restored.rotation);
         restored.toneMapping = static_cast<ToneMapping>(json.value("toneMapping", 0));
         if (!validToneMapping(restored.toneMapping)) throw std::runtime_error("Invalid environment tone mapping.");
+        if (json.contains("glow")) {
+            const auto& glow=json.at("glow");
+            restored.glow={glow.at("enabled").get<bool>(),glow.at("strength").get<float>(),
+                glow.at("radius").get<float>(),glow.at("threshold").get<float>()};
+            if (!validGlowSettings(restored.glow)) throw std::runtime_error("Invalid environment Glow settings.");
+        }
         restored.intensity = std::isfinite(restored.intensity) ? std::clamp(restored.intensity, 0.0f, 10.0f) : 1.0f;
         restored.rotation = std::isfinite(restored.rotation) ? std::clamp(restored.rotation, -180.0f, 180.0f) : 0.0f;
         // Only IDs enumerated from the managed assets folder can be assigned.
@@ -1003,12 +1010,14 @@ void AssetLibrary::loadEnvironment(EnvironmentSettings& environment) {
 
 void AssetLibrary::saveEnvironment(const EnvironmentSettings& environment) {
     try {
+        if (!validGlowSettings(environment.glow) || !validToneMapping(environment.toneMapping))
+            throw std::runtime_error("Invalid environment Glow or tone mapping settings.");
         const nlohmann::json json{{"version", 1}, {"map", environment.map}, {"enabled", environment.enabled},
             {"intensity", environment.intensity}, {"rotation", environment.rotation},
-            {"toneMapping", static_cast<int>(environment.toneMapping)}};
-        std::ofstream output(projectRoot_ / "assets" / "environment.json");
-        output << json.dump(2) << '\n';
-        if (!output) throw std::runtime_error("Could not write environment.json.");
+            {"toneMapping", static_cast<int>(environment.toneMapping)},
+            {"glow",{{"enabled",environment.glow.enabled},{"strength",environment.glow.strength},
+                {"radius",environment.glow.radius},{"threshold",environment.glow.threshold}}}};
+        writeFileAtomically(projectRoot_ / "assets" / "environment.json",json.dump(2)+'\n');
     } catch (const std::exception& error) { status_ = error.what(); }
 }
 

@@ -19,6 +19,8 @@
 #include "fs_pick.h"
 #include "vs_present.h"
 #include "fs_present.h"
+#include "fs_glow_extract.h"
+#include "fs_glow_blur.h"
 #include "vs_grid.h"
 #include "fs_grid.h"
 #include "fs_encode.h"
@@ -42,14 +44,15 @@
 
 namespace crimson {
 namespace {
-struct RenderViews { bgfx::ViewId scene,present,grid,encode; };
-inline constexpr RenderViews MainViews{SceneView,PresentView,GridView,EncodeView};
-inline constexpr RenderViews ParticlePreviewViews{ParticlePreviewView,ParticlePreviewView+1,ParticlePreviewView+2,ParticlePreviewView+3};
-inline constexpr RenderViews ThumbnailViews{ThumbnailSceneView,ThumbnailSceneView+1,ThumbnailSceneView+2,ThumbnailSceneView+3};
-inline constexpr RenderViews MaterialPreviewViews{MaterialPreviewView,MaterialPreviewView+1,MaterialPreviewView+2,MaterialPreviewView+3};
+struct RenderViews { bgfx::ViewId scene,present,grid,encode,glowExtract,glowHorizontal,glowVertical; };
+inline constexpr RenderViews MainViews{SceneView,PresentView,GridView,EncodeView,SceneView+1,SceneView+2,SceneView+3};
+inline constexpr RenderViews ParticlePreviewViews{ParticlePreviewView,ParticlePreviewView+4,ParticlePreviewView+5,ParticlePreviewView+6,ParticlePreviewView+1,ParticlePreviewView+2,ParticlePreviewView+3};
+// Thumbnails intentionally have no Glow passes: their cache is independent of view post-processing.
+inline constexpr RenderViews ThumbnailViews{ThumbnailSceneView,ThumbnailSceneView+1,ThumbnailSceneView+2,ThumbnailSceneView+3,UINT16_MAX,UINT16_MAX,UINT16_MAX};
+inline constexpr RenderViews MaterialPreviewViews{MaterialPreviewView,MaterialPreviewView+4,MaterialPreviewView+5,MaterialPreviewView+6,MaterialPreviewView+1,MaterialPreviewView+2,MaterialPreviewView+3};
 // The grid slot is deliberately unused for Game. Its scene is display-ready
 // after the same HDR/tone-map/encode path as the editor image.
-inline constexpr RenderViews GameViews{GameSceneView,GamePresentView,UINT16_MAX,GameEncodeView};
+inline constexpr RenderViews GameViews{GameSceneView,GamePresentView,UINT16_MAX,GameEncodeView,GameSceneView+1,GameSceneView+2,GameSceneView+3};
 std::uint64_t shaderContentHash(std::span<const std::uint8_t> vertex,std::span<const std::uint8_t> fragment) {
     std::uint64_t hash=14695981039346656037ull;
     for (const auto bytes:{vertex,fragment}) for (const auto byte:bytes) {hash^=byte;hash*=1099511628211ull;} return hash;
@@ -143,12 +146,37 @@ bgfx::UniformHandle uniform(const char* name, bgfx::UniformType::Enum type = bgf
     return handle;
 }
 
+// Two half-resolution FP32 images avoid overflow from supported HDR particle colors.
+// Framebuffers borrow the textures, and every owner is destroyed before bgfx shutdown.
+struct GlowTargets {
+    std::array<bgfx::TextureHandle,2> textures{{BGFX_INVALID_HANDLE,BGFX_INVALID_HANDLE}};
+    std::array<bgfx::FrameBufferHandle,2> buffers{{BGFX_INVALID_HANDLE,BGFX_INVALID_HANDLE}};
+    std::uint16_t width{},height{};
+    ~GlowTargets() { for(auto& buffer:buffers)destroyHandle(buffer);for(auto& texture:textures)destroyHandle(texture); }
+    void create(std::uint16_t w,std::uint16_t h) {
+        width=static_cast<std::uint16_t>((w+1u)/2u);height=static_cast<std::uint16_t>((h+1u)/2u);
+        constexpr auto flags=BGFX_TEXTURE_RT|BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP|
+            BGFX_SAMPLER_MIN_POINT|BGFX_SAMPLER_MAG_POINT|BGFX_SAMPLER_MIP_POINT;
+        for(std::size_t i=0;i<textures.size();++i) {
+            textures[i]=bgfx::createTexture2D(width,height,false,1,bgfx::TextureFormat::RGBA32F,flags);
+            if(!bgfx::isValid(textures[i]))throw std::runtime_error("Glow color allocation failed; the view is rendered without Glow.");
+            buffers[i]=bgfx::createFrameBuffer(1,&textures[i],false);
+            if(!bgfx::isValid(buffers[i]))throw std::runtime_error("Glow framebuffer allocation failed; the view is rendered without Glow.");
+            bgfx::setName(textures[i],i==0?"Glow: exposed bright color / vertical blur":"Glow: horizontal blur");
+        }
+    }
+    std::size_t bytes() const noexcept {return std::size_t(width)*height*16*textures.size();}
+};
+
 // Framebuffers borrow textures: HDR and the grid composite share one depth target.
 struct ViewportTargets {
     bgfx::TextureHandle hdr{BGFX_INVALID_HANDLE}, composite{BGFX_INVALID_HANDLE};
     bgfx::TextureHandle display{BGFX_INVALID_HANDLE}, depth{BGFX_INVALID_HANDLE};
     bgfx::FrameBufferHandle hdrBuffer{BGFX_INVALID_HANDLE}, compositeBuffer{BGFX_INVALID_HANDLE}, displayBuffer{BGFX_INVALID_HANDLE};
+    std::unique_ptr<GlowTargets> glow;
+    std::string glowFailure; // Retry only after target recreation, avoiding allocation churn every frame.
     ~ViewportTargets() {
+        glow.reset();
         destroyHandle(hdrBuffer); destroyHandle(compositeBuffer); destroyHandle(displayBuffer);
         destroyHandle(hdr); destroyHandle(composite); destroyHandle(display); destroyHandle(depth);
     }
@@ -261,7 +289,9 @@ struct Renderer::Impl {
     std::string shaderStatus,thumbnailStatus;
     std::string shadowStatus;
     std::unique_ptr<PointShadowRenderer> shadows,thumbnailShadows;
-    std::array<std::uint64_t,9> programHashes{};
+    std::array<std::uint64_t,11> programHashes{};
+    std::string glowProgramFailure;
+    mutable std::string glowStatusCache;
     struct LodSelection { std::uint32_t level{}; std::uint64_t frame{}; };
     // Scene and Game may show the same entity at different projected sizes.
     std::array<std::unordered_map<std::uint64_t,LodSelection>,2> lodSelections;
@@ -273,6 +303,8 @@ struct Renderer::Impl {
     bgfx::ProgramHandle particleProgram{BGFX_INVALID_HANDLE};
     bgfx::ProgramHandle skyProgram{BGFX_INVALID_HANDLE};
     bgfx::ProgramHandle shadowProgram{BGFX_INVALID_HANDLE};
+    bgfx::ProgramHandle glowExtractProgram{BGFX_INVALID_HANDLE},glowBlurProgram{BGFX_INVALID_HANDLE};
+    bgfx::UniformHandle glowSource{BGFX_INVALID_HANDLE},glowColor{BGFX_INVALID_HANDLE},glowParams{BGFX_INVALID_HANDLE},glowTexel{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle skyRight{BGFX_INVALID_HANDLE},skyUp{BGFX_INVALID_HANDLE},skyForward{BGFX_INVALID_HANDLE},skySampler{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle particleBaseColor{BGFX_INVALID_HANDLE},particleParams{BGFX_INVALID_HANDLE},particleSampler{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle pickId{BGFX_INVALID_HANDLE}, lightCounts{BGFX_INVALID_HANDLE};
@@ -291,6 +323,7 @@ struct Renderer::Impl {
     bgfx::UniformHandle gridMinor{BGFX_INVALID_HANDLE}, gridMajor{BGFX_INVALID_HANDLE}, gridAxisU{BGFX_INVALID_HANDLE}, gridAxisV{BGFX_INVALID_HANDLE}, gridParams{BGFX_INVALID_HANDLE};
     void renderParticles(std::span<const RenderParticle>,std::span<const RenderParticleMaterial>,const Camera&,bgfx::ViewId,ParticleRenderStats*);
     void renderShadows(const RenderScene&,PointShadowRenderer&,bgfx::ViewId);
+    bool renderGlow(const SceneSettings&,ViewportTargets&,std::uint16_t,std::uint16_t,RenderViews);
     void bindMaterialMapping(const Vec3& scale,const Vec3& offset,const Vec3& rotation,bool triplanar,bool world=false) {
         const Vec4 scaleValue{scale[0],scale[1],scale[2],triplanar?1.f:0.f};
         const Vec4 offsetValue{offset[0],offset[1],offset[2],triplanar && world?1.f:0.f};
@@ -314,6 +347,8 @@ struct Renderer::Impl {
         destroyHandle(skyProgram);destroyHandle(skyRight);destroyHandle(skyUp);destroyHandle(skyForward);destroyHandle(skySampler);
         destroyHandle(white);
         destroyHandle(pbr); destroyHandle(present); destroyHandle(gridProgram); destroyHandle(encode);
+        destroyHandle(glowExtractProgram);destroyHandle(glowBlurProgram);
+        destroyHandle(glowSource);destroyHandle(glowColor);destroyHandle(glowParams);destroyHandle(glowTexel);
         destroyHandle(particleProgram);
         destroyHandle(particleBaseColor); destroyHandle(particleParams); destroyHandle(particleSampler);
         submittedPins.clear(); previousSubmittedPins.clear();
@@ -357,7 +392,7 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
     if (!bgfx::init(init)) throw std::runtime_error("bgfx could not initialize Direct3D 11.");
     impl_->initialized = true;
     if (bgfx::getRendererType() != bgfx::RendererType::Direct3D11) throw std::runtime_error("Direct3D 11 was requested but another backend was selected.");
-    if(bgfx::getCaps()->limits.maxViews<FirstPlatformView)throw std::runtime_error("This renderer requires at least 216 view slots for point shadows and editor previews.");
+    if(bgfx::getCaps()->limits.maxViews<FirstPlatformView)throw std::runtime_error("This renderer requires at least 228 view slots for point shadows, Glow and editor previews.");
     if (!bgfx::isTextureValid(0,false,1,bgfx::TextureFormat::RGBA32F,BGFX_TEXTURE_RT) ||
         !bgfx::isTextureValid(0,false,1,bgfx::TextureFormat::RGBA16F,BGFX_TEXTURE_RT) ||
         !bgfx::isTextureValid(0,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_RT) ||
@@ -393,6 +428,16 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
     impl_->occlusionSampler = uniform("s_occlusion",bgfx::UniformType::Sampler);
     impl_->emissiveSampler = uniform("s_emissive",bgfx::UniformType::Sampler);
     impl_->present = program(cc_vs_present,cc_fs_present,"Linear Reinhard tone map");
+    impl_->glowSource=uniform("s_glowSource",bgfx::UniformType::Sampler);
+    impl_->glowParams=uniform("u_glowParams");impl_->glowTexel=uniform("u_glowTexel");
+    // Glow is optional: failed GPU preparation preserves the ordinary HDR image.
+    try {
+        impl_->glowExtractProgram=program(cc_vs_present,cc_fs_glow_extract,"Glow exposed HDR extraction");
+        impl_->glowBlurProgram=program(cc_vs_present,cc_fs_glow_blur,"Glow separable FP32 blur");
+    } catch(const std::exception& error) {
+        impl_->glowProgramFailure=error.what();destroyHandle(impl_->glowExtractProgram);destroyHandle(impl_->glowBlurProgram);
+    }
+    impl_->glowColor=uniform("s_glowColor",bgfx::UniformType::Sampler);
     impl_->gridProgram = program(cc_vs_grid,cc_fs_grid,"Quader analytic construction grid");
     impl_->encode = program(cc_vs_present,cc_fs_encode,"Viewport sRGB encoding");
     impl_->particleProgram = program(cc_vs_particle,cc_fs_particle,"Unlit textured alpha/additive particle billboards");
@@ -406,7 +451,8 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
     impl_->skySampler=uniform("s_skyEnvironment",bgfx::UniformType::Sampler);
     impl_->programHashes={shaderContentHash(cc_vs_pbr,cc_fs_pbr),shaderContentHash(cc_vs_model,cc_fs_model),shaderContentHash(cc_vs_pick,cc_fs_pick),
         shaderContentHash(cc_vs_present,cc_fs_present),shaderContentHash(cc_vs_grid,cc_fs_grid),shaderContentHash(cc_vs_present,cc_fs_encode),
-        shaderContentHash(cc_vs_particle,cc_fs_particle),shaderContentHash(cc_vs_present,cc_fs_sky),shaderContentHash(cc_vs_point_shadow,cc_fs_point_shadow)};
+        shaderContentHash(cc_vs_particle,cc_fs_particle),shaderContentHash(cc_vs_present,cc_fs_sky),shaderContentHash(cc_vs_point_shadow,cc_fs_point_shadow),
+        shaderContentHash(cc_vs_present,cc_fs_glow_extract),shaderContentHash(cc_vs_present,cc_fs_glow_blur)};
     impl_->baseColorMetallic = uniform("u_baseColorMetallic");
     impl_->roughness = uniform("u_roughness");
     impl_->textureFlags = uniform("u_textureFlags");
@@ -470,6 +516,11 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
     bgfx::setViewName(GameViews.present,"Game: tone map");
     bgfx::setViewName(GameViews.encode,"Game: sRGB");
     bgfx::setViewName(ToolsView,"Editor tools");
+    for(const auto views:{MainViews,ParticlePreviewViews,MaterialPreviewViews,GameViews}) {
+        bgfx::setViewName(views.glowExtract,"Glow: exposed HDR extraction");
+        bgfx::setViewName(views.glowHorizontal,"Glow: horizontal blur");
+        bgfx::setViewName(views.glowVertical,"Glow: vertical blur");
+    }
     // Keep natural view IDs: this pinned bgfx backend compares blit order keys
     // with decoded view IDs. Moving PickReadView ahead of a lower-numbered
     // visible pass would copy the ID texture before its model draws complete.
@@ -648,6 +699,8 @@ bool Renderer::reloadPrograms(std::span<const RendererShaderPair> pairs) {
             case RendererProgram::Particle: target=&impl_->particleProgram; contractV=cc_vs_particle; contractF=cc_fs_particle; break;
               case RendererProgram::Sky: target=&impl_->skyProgram; contractV=cc_vs_present; contractF=cc_fs_sky; break;
             case RendererProgram::PointShadow: target=&impl_->shadowProgram; contractV=cc_vs_point_shadow; contractF=cc_fs_point_shadow; break;
+            case RendererProgram::GlowExtract: target=&impl_->glowExtractProgram; contractV=cc_vs_present; contractF=cc_fs_glow_extract; break;
+            case RendererProgram::GlowBlur: target=&impl_->glowBlurProgram; contractV=cc_vs_present; contractF=cc_fs_glow_blur; break;
             }
             if (!target || std::any_of(candidates.begin(),candidates.end(),[&](const auto& value){return value.first==target;})) throw std::runtime_error("Shader reload batch has an invalid or duplicated program.");
             std::string diagnostic;
@@ -664,6 +717,7 @@ bool Renderer::reloadPrograms(std::span<const RendererShaderPair> pairs) {
         }
         for (auto& [target,candidate]:candidates) { destroyHandle(*target); *target=candidate; }
         for (const auto& [index,hash]:hashes) impl_->programHashes[index]=hash;
+        if(bgfx::isValid(impl_->glowExtractProgram) && bgfx::isValid(impl_->glowBlurProgram))impl_->glowProgramFailure.clear();
         if (!candidates.empty()) { ++impl_->programRevision; impl_->shadows->invalidate();impl_->thumbnailShadows->invalidate();cancelPicking(); }
         impl_->shaderStatus.clear(); return true;
     } catch (const std::exception& error) {
@@ -802,6 +856,20 @@ void Renderer::releaseParticlePreview() {
 const ParticleRenderStats& Renderer::particleStats() const noexcept { return impl_->particles; }
 const ParticleRenderStats& Renderer::particlePreviewStats() const noexcept { return impl_->previewParticles; }
 const std::string& Renderer::particleStatus() const { return impl_->particleStatus; }
+const std::string& Renderer::glowStatus() const {
+    auto& status=impl_->glowStatusCache;status=impl_->glowProgramFailure;
+    for(const auto* target:{impl_->targets.get(),impl_->particlePreviewTargets.get(),impl_->materialPreviewTargets.get(),impl_->gameTargets.get()})
+        if(target && !target->glowFailure.empty()) {
+            if(!status.empty())status+='\n';status+=target->glowFailure;
+        }
+    return status;
+}
+std::size_t Renderer::glowResidentBytes() const noexcept {
+    std::size_t bytes{};
+    for(const auto* target:{impl_->targets.get(),impl_->particlePreviewTargets.get(),impl_->materialPreviewTargets.get(),impl_->gameTargets.get()})
+        if(target && target->glow)bytes+=target->glow->bytes();
+    return bytes;
+}
 std::size_t Renderer::shadowResidentBytes() const {return impl_->shadows->residentBytes()+impl_->thumbnailShadows->residentBytes();}
 const PointShadowStats& Renderer::shadowStats() const {return impl_->shadows->stats();}
 const std::string& Renderer::shadowStatus() const {return impl_->shadowStatus;}
@@ -873,8 +941,8 @@ void Renderer::Impl::renderParticles(std::span<const RenderParticle> input,std::
         particleScratch.push_back({i,depth});
     }
     particle_rendering::sortBackToFront(particleScratch);
-    struct GpuInstance {Vec3 position;float size;Vec4 color;};
-    static_assert(sizeof(GpuInstance)==32 && offsetof(GpuInstance,color)==16);
+    struct GpuInstance {Vec3 position;float size;Vec4 color;Vec4 rotation;};
+    static_assert(sizeof(GpuInstance)==48 && offsetof(GpuInstance,color)==16 && offsetof(GpuInstance,rotation)==32);
     constexpr std::uint32_t BatchSize=4096;
     constexpr auto Stride=static_cast<std::uint16_t>(sizeof(GpuInstance));
     while (stats.submitted<particleScratch.size() && stats.drawCalls<MaxParticleDrawCalls) {
@@ -890,7 +958,7 @@ void Renderer::Impl::renderParticles(std::span<const RenderParticle> input,std::
         bgfx::allocInstanceDataBuffer(&instances,available,Stride);
         for(std::uint32_t i=0;i<available;++i) {
             const auto& particle=input[particleScratch[stats.submitted+i].index];
-            const GpuInstance value{particle.position,particle.size,particle.color};
+            const GpuInstance value{particle.position,particle.size,particle.color,{particle.rotation,0,0,0}};
             std::memcpy(instances.data+i*Stride,&value,sizeof(value));
         }
         if(!pinned[materialIndex] && material.pinned) {
@@ -1021,6 +1089,33 @@ void Renderer::Impl::renderShadows(const RenderScene& scene,PointShadowRenderer&
     shadowStatus=shadows->status();
     if(!thumbnailShadows->status().empty()){if(!shadowStatus.empty())shadowStatus+='\n';shadowStatus+="Thumbnail shadows: "+thumbnailShadows->status();}
 }
+bool Renderer::Impl::renderGlow(const SceneSettings& settings,ViewportTargets& target,std::uint16_t w,std::uint16_t h,RenderViews views) {
+    const auto& glow=settings.environment.glow;
+    if(views.glowExtract==UINT16_MAX || !glow.enabled || !validGlowSettings(glow) || glow.strength==0 || glow.radius==0 ||
+        !bgfx::isValid(glowExtractProgram) || !bgfx::isValid(glowBlurProgram))return false;
+    if(!target.glow && target.glowFailure.empty()) {
+        try {auto scratch=std::make_unique<GlowTargets>();scratch->create(w,h);target.glow=std::move(scratch);}
+        catch(const std::exception& error) {target.glowFailure=error.what();}
+    }
+    if(!target.glow)return false;
+    const auto& scratch=*target.glow;
+    const float params[]{bounded(settings.exposure,1,0,100),glow.threshold,bgfx::getCaps()->originBottomLeft?1.f:0.f,glow.radius};
+    const auto submit=[&](bgfx::ViewId view,bgfx::FrameBufferHandle destination,bgfx::TextureHandle source,
+                          bgfx::ProgramHandle shader,const Vec4& texel) {
+        bgfx::setViewFrameBuffer(view,destination);bgfx::setViewRect(view,0,0,scratch.width,scratch.height);
+        bgfx::setViewClear(view,BGFX_CLEAR_NONE);bgfx::setViewTransform(view,nullptr,nullptr);
+        bgfx::setUniform(glowParams,params);bgfx::setUniform(glowTexel,texel.data());bgfx::setTexture(0,glowSource,source);
+        fullscreen.bind();bgfx::setState(BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A);bgfx::submit(view,shader);
+    };
+    submit(views.glowExtract,scratch.buffers[0],target.hdr,glowExtractProgram,{1.f/w,1.f/h,0,0});
+    const float dx=1.f/scratch.width,dy=1.f/scratch.height;
+    // Sample every texel inside the Gaussian support. Expanding only tap spacing
+    // would produce disconnected lobes around isolated sparks at larger Sizes.
+    submit(views.glowHorizontal,scratch.buffers[1],scratch.textures[0],glowBlurProgram,{dx,dy,dx,0});
+    submit(views.glowVertical,scratch.buffers[0],scratch.textures[1],glowBlurProgram,{dx,dy,0,dy});
+    return true;
+}
+
 void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,EnvironmentLighting& lighting,
     std::uint16_t w,std::uint16_t h,RenderViews views,bool drawGrid,bool allowPicking,std::vector<std::shared_ptr<const ResidentModelLod>>* pinnedGeometry,ParticleRenderStats* particleStats,bool drawEnvironment) {
     const bool sceneView=views.scene==MainViews.scene || views.scene==GameViews.scene;
@@ -1249,7 +1344,9 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
 
     renderParticles(scene.particles,scene.particleMaterials,settings.camera,views.scene,particleStats);
 
-    const float params[]{bounded(settings.exposure,1,0,100),caps->originBottomLeft?1.0f:0.0f,static_cast<float>(settings.environment.toneMapping),0};
+    const bool glowing=renderGlow(settings,target,w,h,views);
+    const float params[]{bounded(settings.exposure,1,0,100),caps->originBottomLeft?1.0f:0.0f,
+        static_cast<float>(settings.environment.toneMapping),glowing?settings.environment.glow.strength:0.f};
     bgfx::setViewFrameBuffer(views.present,target.compositeBuffer);
     bgfx::setViewRect(views.present,0,0,w,h);
     bgfx::setViewClear(views.present,BGFX_CLEAR_NONE);
@@ -1259,6 +1356,10 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
     const float backgroundValue[]{matte[0],matte[1],matte[2],1};
     bgfx::setUniform(background,backgroundValue);
     bgfx::setTexture(0,hdrSampler,target.hdr);
+    bgfx::setTexture(1,glowColor,glowing?target.glow->textures[0]:white);
+    if(glowing) {
+        const float texel[]{1.f/target.glow->width,1.f/target.glow->height,0,0};bgfx::setUniform(glowTexel,texel);
+    }
     fullscreen.bind(); bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
     bgfx::submit(views.present,present);
 

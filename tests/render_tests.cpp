@@ -437,6 +437,10 @@ void particlePresentationValidation() {
     require(!crimson::particle_rendering::valid(particle),"Zero-width particle should be rejected.");
     particle.size=.08f; particle.color[3]=2;
     require(!crimson::particle_rendering::valid(particle),"Opacity outside the covered-fraction contract should be rejected.");
+    particle.color[3]=1;particle.rotation=std::numbers::pi_v<float>;
+    require(crimson::particle_rendering::valid(particle),"Finite billboard rotation should be renderable.");
+    particle.rotation=std::numeric_limits<float>::quiet_NaN();
+    require(!crimson::particle_rendering::valid(particle),"Nonfinite billboard rotation reached instance upload.");
 }
 
 void particleHdrResolveContract() {

@@ -1,6 +1,7 @@
 #include "ParticleAsset.h"
 #include "AtomicFile.h"
 #include "MaterialAsset.h"
+#include "particles/ParticleAppearance.h"
 #include "math/Json.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -117,6 +118,102 @@ ParticleDirectionMode readDirectionMode(const std::string& mode) {
     if (mode=="outward") return ParticleDirectionMode::Outward;
     throw std::runtime_error("Unsupported particle direction mode.");
 }
+const char* interpolationName(ParticleInterpolation mode) {
+    switch (mode) { case ParticleInterpolation::Linear: return "linear"; case ParticleInterpolation::Constant: return "constant"; }
+    throw std::runtime_error("Unsupported particle appearance interpolation.");
+}
+ParticleInterpolation readInterpolation(const std::string& name) {
+    if (name=="linear") return ParticleInterpolation::Linear;
+    if (name=="constant") return ParticleInterpolation::Constant;
+    throw std::runtime_error("Unsupported particle appearance interpolation.");
+}
+const char* appearanceModeName(ParticleAppearanceMode mode) {
+    switch (mode) {
+    case ParticleAppearanceMode::Constant: return "constant";
+    case ParticleAppearanceMode::RandomRange: return "random-range";
+    case ParticleAppearanceMode::Curve: return "curve";
+    }
+    throw std::runtime_error("Unsupported particle scalar appearance mode.");
+}
+ParticleAppearanceMode readAppearanceMode(const std::string& mode) {
+    if (mode=="constant") return ParticleAppearanceMode::Constant;
+    if (mode=="random-range") return ParticleAppearanceMode::RandomRange;
+    if (mode=="curve") return ParticleAppearanceMode::Curve;
+    throw std::runtime_error("Unsupported particle scalar appearance mode.");
+}
+const char* colorModeName(ParticleColorMode mode) {
+    switch (mode) { case ParticleColorMode::Constant: return "constant"; case ParticleColorMode::Gradient: return "gradient"; }
+    throw std::runtime_error("Unsupported particle color mode.");
+}
+ParticleColorMode readColorMode(const std::string& mode) {
+    if (mode=="constant") return ParticleColorMode::Constant;
+    if (mode=="gradient") return ParticleColorMode::Gradient;
+    throw std::runtime_error("Unsupported particle color mode.");
+}
+template<class Key> void validateAppearanceKeys(const std::vector<Key>& keys,bool required) {
+    if (keys.empty() && !required) return;
+    if (keys.size()<2 || keys.size()>MaximumParticleAppearanceKeys)
+        throw std::runtime_error("Particle curves and gradients require 2 to 32 keys when authored.");
+    std::unordered_set<uint64_t> ids;
+    float previous=-1;
+    for (const auto& key:keys) {
+        if (!key.id || !ids.insert(key.id).second) throw std::runtime_error("Appearance key identities must be nonzero and unique within their track.");
+        boundedFloat(key.age,0,1,"Appearance key age");
+        // Account for the rounding of a float age produced by neighbor + spacing.
+        // Exact duplicates/reversed keys remain invalid independently of this tolerance.
+        if (previous>=0 && (key.age<=previous || static_cast<double>(key.age)-previous+1e-7<MinimumParticleKeySpacing))
+            throw std::runtime_error("Appearance keys must be ordered with at least 0.0001 normalized age between them.");
+        previous=key.age;
+    }
+}
+void validateScalarTrack(const ParticleScalarTrack& track,float minimum,float maximum,const char* description) {
+    (void)appearanceModeName(track.mode); (void)interpolationName(track.curve.interpolation);
+    if (track.mode==ParticleAppearanceMode::RandomRange && !track.range)
+        throw std::runtime_error(std::string(description)+" Random Range requires authored minimum and maximum values.");
+    if (track.range) {
+        boundedFloat(track.range->minimum,minimum,maximum,description);
+        boundedFloat(track.range->maximum,minimum,maximum,description);
+        if (track.range->minimum>track.range->maximum) throw std::runtime_error(std::string(description)+" range minimum must not exceed maximum.");
+    }
+    validateAppearanceKeys(track.curve.keys,track.mode==ParticleAppearanceMode::Curve);
+    for (const auto& key:track.curve.keys) boundedFloat(key.value,minimum,maximum,description);
+}
+Json scalarTrackJson(const ParticleScalarTrack& track) {
+    Json keys=Json::array();
+    for (const auto& key:track.curve.keys) keys.push_back({{"id",hex(key.id)},{"age",key.age},{"value",key.value}});
+    Json range=nullptr;
+    if (track.range) range={{"minimum",track.range->minimum},{"maximum",track.range->maximum}};
+    return {{"mode",appearanceModeName(track.mode)},{"range",std::move(range)},
+        {"curve",{{"interpolation",interpolationName(track.curve.interpolation)},{"keys",std::move(keys)}}}};
+}
+ParticleScalarTrack readScalarTrack(const Json& source) {
+    ParticleScalarTrack track;
+    track.mode=readAppearanceMode(source.at("mode").get<std::string>());
+    const auto& range=source.at("range");
+    if (!range.is_null()) track.range=ParticleAppearanceRange{range.at("minimum").get<float>(),range.at("maximum").get<float>()};
+    const auto& curve=source.at("curve");
+    track.curve.interpolation=readInterpolation(curve.at("interpolation").get<std::string>());
+    const auto& keys=curve.at("keys");
+    if (!keys.is_array() || keys.size()>MaximumParticleAppearanceKeys) throw std::runtime_error("Particle curve keys must be a bounded array of at most 32 entries.");
+    track.curve.keys.reserve(keys.size());
+    for (const auto& key:keys) track.curve.keys.push_back({readHex(key.at("id")),key.at("age").get<float>(),key.at("value").get<float>()});
+    return track;
+}
+Json colorTrackJson(const ParticleEmitterDefinition& emitter) {
+    Json stops=Json::array();
+    for (const auto& stop:emitter.colorGradient.stops) stops.push_back({{"id",hex(stop.id)},{"age",stop.age},{"color",stop.color}});
+    return {{"mode",colorModeName(emitter.colorMode)},
+        {"gradient",{{"interpolation",interpolationName(emitter.colorGradient.interpolation)},{"stops",std::move(stops)}}}};
+}
+void readColorTrack(const Json& source,ParticleEmitterDefinition& emitter) {
+    emitter.colorMode=readColorMode(source.at("mode").get<std::string>());
+    const auto& gradient=source.at("gradient");
+    emitter.colorGradient.interpolation=readInterpolation(gradient.at("interpolation").get<std::string>());
+    const auto& stops=gradient.at("stops");
+    if (!stops.is_array() || stops.size()>MaximumParticleAppearanceKeys) throw std::runtime_error("Particle gradient stops must be a bounded array of at most 32 entries.");
+    emitter.colorGradient.stops.reserve(stops.size());
+    for (const auto& stop:stops) emitter.colorGradient.stops.push_back({readHex(stop.at("id")),stop.at("age").get<float>(),stop.at("color").get<Vec4>()});
+}
 std::string unusedId(const std::filesystem::path& root) {
     static std::atomic<uint64_t> sequence{};
     for (;;) {
@@ -146,6 +243,7 @@ ParticleEffectAsset defaultParticleEffect(const std::string& name) {
 }
 void validateParticleAsset(const ParticleEffectAsset& asset) {
     if (!asset.id.empty()) validateId(asset.id);
+    boundedFloat(asset.preprocessSeconds,0,MaximumParticlePreprocessSeconds,"Particle preprocess seconds");
     const auto& emitter=asset.emitter;
     const auto material=fromUtf8(emitter.material.id);
     if(!emitter.material.empty()&&emitter.material.id!=DefaultParticleMaterialId&&
@@ -164,8 +262,8 @@ void validateParticleAsset(const ParticleEffectAsset& asset) {
         throw std::runtime_error("Particle capacity must be between 1 and 65536.");
     if (!math::finite(emitter.intensity) || emitter.intensity<0 || emitter.intensity>100000)
         throw std::runtime_error("Particle intensity must be finite and between 0 and 100000.");
-    if (!math::finite(emitter.color) || std::any_of(emitter.color.begin(),emitter.color.end(),[](float value){return value<0 || value>1;}))
-        throw std::runtime_error("Particle color must contain finite sRGB values between 0 and 1.");
+    if (!math::finite(emitter.color) || std::any_of(emitter.color.begin(),emitter.color.end(),[](float value){return value<0 || value>MaximumParticleColor;}))
+        throw std::runtime_error("Particle color must contain finite linear HDR values between 0 and 1000000.");
     for (const auto& vector:{emitter.initialVelocity,emitter.gravity})
         if (!math::finite(vector) || std::any_of(vector.begin(),vector.end(),[](float value){return std::abs(value)>100000;}))
             throw std::runtime_error("Particle velocity and gravity must be finite and within the supported magnitude.");
@@ -198,6 +296,16 @@ void validateParticleAsset(const ParticleEffectAsset& asset) {
     if (!math::finite(emitter.acceleration) || std::any_of(emitter.acceleration.begin(),emitter.acceleration.end(),[](float value){return std::abs(value)>MaximumParticleForce;}))
         throw std::runtime_error("Particle acceleration must contain finite supported values.");
     boundedFloat(emitter.drag,0,MaximumParticleDrag,"Particle drag");
+    boundedFloat(emitter.rotation,-MaximumParticleRotation,MaximumParticleRotation,"Particle rotation");
+    validateScalarTrack(emitter.sizeTrack,0,10000,"Size appearance");
+    validateScalarTrack(emitter.intensityTrack,0,100000,"Intensity appearance");
+    validateScalarTrack(emitter.rotationTrack,-MaximumParticleRotation,MaximumParticleRotation,"Rotation appearance");
+    (void)colorModeName(emitter.colorMode); (void)interpolationName(emitter.colorGradient.interpolation);
+    validateAppearanceKeys(emitter.colorGradient.stops,emitter.colorMode==ParticleColorMode::Gradient);
+    for (const auto& stop:emitter.colorGradient.stops) {
+        for (std::size_t channel=0;channel<3;++channel) boundedFloat(stop.color[channel],0,MaximumParticleColor,"Particle gradient linear HDR RGB");
+        boundedFloat(stop.color[3],0,1,"Particle gradient opacity");
+    }
 }
 std::filesystem::path particleAssetPath(const std::filesystem::path& root,const std::string& id) {
     validateId(id);
@@ -214,7 +322,8 @@ std::string serializeParticleAsset(const ParticleEffectAsset& asset) {
     const auto& e=asset.emitter;
     Json bursts=Json::array();
     for (const auto& burst:e.bursts) bursts.push_back({{"id",hex(burst.id)},{"time",burst.time},{"count",burst.count}});
-    return Json{{"version",4},{"type","crimson-particle"},{"id",asset.id},{"name",asset.name},{"defaultSeed",hex(asset.defaultSeed)},
+    return Json{{"version",7},{"type","crimson-particle"},{"id",asset.id},{"name",asset.name},{"defaultSeed",hex(asset.defaultSeed)},
+        {"preprocessSeconds",asset.preprocessSeconds},
         {"emitters",Json::array({Json{{"id",hex(e.id)},{"name",e.name},{"enabled",e.enabled},{"rate",e.rate},{"lifetime",e.lifetime},
             {"initialVelocity",e.initialVelocity},{"gravity",e.gravity},{"size",e.size},{"color",e.color},{"intensity",e.intensity},
             {"capacity",e.capacity},{"material",e.material.id},{"opacity",e.opacity},{"space",spaceName(e.space)},
@@ -224,27 +333,36 @@ std::string serializeParticleAsset(const ParticleEffectAsset& asset) {
             {"timing",{{"delay",e.delay},{"finiteDuration",e.finiteDuration},{"duration",e.duration},{"loop",e.loop}}},
             {"bursts",std::move(bursts)},{"acceleration",e.acceleration},{"drag",e.drag},
             {"behaviors",{{"gravity",behaviorJson(e.gravityBehavior)},{"acceleration",behaviorJson(e.accelerationBehavior)},{"drag",behaviorJson(e.dragBehavior)}}},
-            {"renderer","sprite"},{"colorSpace","srgb"}}})}}.dump(2)+"\n";
+            {"rotation",e.rotation},{"appearanceTracks",{{"size",scalarTrackJson(e.sizeTrack)},{"intensity",scalarTrackJson(e.intensityTrack)},
+                {"rotation",scalarTrackJson(e.rotationTrack)},{"color",colorTrackJson(e)}}},
+            {"renderer","sprite"},{"colorSpace","linear-hdr"}}})}}.dump(2)+"\n";
 }
 ParticleEffectAsset deserializeParticleAsset(std::string_view text,const std::string& expectedId) {
     if (text.size()>MaximumParticleAssetBytes) throw std::runtime_error("Particle asset exceeds 1 MiB.");
     const auto json=Json::parse(text);
-    if (!json.at("version").is_number_integer() || (json.at("version")!=1&&json.at("version")!=2&&json.at("version")!=3&&json.at("version")!=4) || json.at("type")!="crimson-particle")
+    if (!json.at("version").is_number_integer() || (json.at("version")!=1&&json.at("version")!=2&&json.at("version")!=3&&json.at("version")!=4&&json.at("version")!=5&&json.at("version")!=6&&json.at("version")!=7) || json.at("type")!="crimson-particle")
         throw std::runtime_error("Unsupported particle asset type or version.");
     ParticleEffectAsset asset;
     asset.id=json.at("id").get<std::string>();
     validateId(asset.id);
     if (!expectedId.empty() && asset.id!=expectedId) throw std::runtime_error("Particle asset identity differs from its managed file.");
     asset.name=json.at("name").get<std::string>(); asset.defaultSeed=readHex(json.at("defaultSeed"));
+    if (json.at("version")>=7) {
+        const auto& preprocess=json.at("preprocessSeconds");
+        if (!preprocess.is_number()) throw std::runtime_error("Particle preprocess seconds must be a number.");
+        asset.preprocessSeconds=preprocess.get<float>();
+    }
     const auto& emitters=json.at("emitters");
     if (!emitters.is_array() || emitters.size()!=1) throw std::runtime_error("This particle asset version requires exactly one emitter.");
     const auto& source=emitters.at(0);
     const bool legacy=json.at("version")==1;
-    const bool extended=json.at("version")==3 || json.at("version")==4;
-    const bool flatnessVersion=json.at("version")==4;
+    const bool extended=json.at("version")>=3;
+    const bool flatnessVersion=json.at("version")>=4;
+    const bool appearanceVersion=json.at("version")>=5;
+    const bool hdrVersion=json.at("version")>=6;
     const std::string renderer=legacy?"procedural-additive":"sprite";
     if ((!extended && source.value("space",std::string{"world"})!="world") || source.value("renderer",renderer)!=renderer ||
-        source.value("colorSpace",std::string{"srgb"})!="srgb")
+        source.value("colorSpace",std::string{hdrVersion?"linear-hdr":"srgb"})!=(hdrVersion?"linear-hdr":"srgb"))
         throw std::runtime_error("Unsupported particle space, renderer or authored color convention.");
     auto& e=asset.emitter;
     e.id=readHex(source.at("id")); e.name=source.at("name").get<std::string>(); e.enabled=source.at("enabled").get<bool>();
@@ -282,6 +400,26 @@ ParticleEffectAsset deserializeParticleAsset(std::string_view text,const std::st
         e.gravityBehavior=readBehavior(behaviors.at("gravity"));
         e.accelerationBehavior=readBehavior(behaviors.at("acceleration"));
         e.dragBehavior=readBehavior(behaviors.at("drag"));
+    }
+    if (appearanceVersion) {
+        e.rotation=source.at("rotation").get<float>();
+        const auto& appearance=source.at("appearanceTracks");
+        if (!appearance.is_object() || appearance.size()!=4) throw std::runtime_error("Only the implemented size, intensity, rotation and color appearance tracks are supported.");
+        e.sizeTrack=readScalarTrack(appearance.at("size"));
+        e.intensityTrack=readScalarTrack(appearance.at("intensity"));
+        e.rotationTrack=readScalarTrack(appearance.at("rotation"));
+        readColorTrack(appearance.at("color"),e);
+    }
+    if (!hdrVersion) {
+        // Validate the old SDR domain before decoding so malformed legacy data
+        // cannot become a valid HDR value. Alpha is linear and is not decoded.
+        const auto decode=[](float value) {
+            boundedFloat(value,0,1,"Legacy particle sRGB color");
+            return particleSrgbToLinear(value);
+        };
+        for (auto& channel:e.color) channel=decode(channel);
+        for (auto& stop:e.colorGradient.stops)
+            for (std::size_t channel=0;channel<3;++channel) stop.color[channel]=decode(stop.color[channel]);
     }
     validateParticleAsset(asset);
     return asset;

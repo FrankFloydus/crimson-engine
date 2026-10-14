@@ -84,7 +84,7 @@ struct ThumbnailResult {
     std::uint64_t signature{};
     DecodedImage image;
 };
-enum class RendererProgram { Sphere, Model, Picking, Present, Grid, Encode, Particle, Sky, PointShadow };
+enum class RendererProgram { Sphere, Model, Picking, Present, Grid, Encode, Particle, Sky, PointShadow, GlowExtract, GlowBlur };
 struct RendererShaderPair { RendererProgram program; std::vector<std::uint8_t> vertex,fragment; };
 
 struct RenderScene {
@@ -139,6 +139,8 @@ public:
     const ParticleRenderStats& particleStats() const noexcept;
     const ParticleRenderStats& particlePreviewStats() const noexcept;
     const std::string& particleStatus() const;
+    const std::string& glowStatus() const;
+    std::size_t glowResidentBytes() const noexcept;
     std::size_t shadowResidentBytes() const;
     const PointShadowStats& shadowStats() const;
     const std::string& shadowStatus() const;

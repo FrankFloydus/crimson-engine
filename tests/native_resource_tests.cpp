@@ -226,6 +226,109 @@ void exerciseParticles(Renderer& renderer,Copy&& copy) {
     renderer.setAppearance({});
 }
 
+template<class Copy,class Tick>
+void exerciseGlow(Renderer& renderer,Copy&& copy,Tick&& tick,const PreparedEnvironment& lighting,std::uint32_t& frame) {
+    phase("HDR Glow extraction, isolated targets and resource lifetime");
+    renderer.releaseGameViewport();renderer.releaseParticlePreview();renderer.releaseMaterialPreview();renderer.resizeViewport(127,129);
+    check(renderer.glowResidentBytes()==0,"Glow allocated scratch before it was enabled.");
+    ViewportAppearance appearance;appearance.backgroundSrgb={.1f,.15f,.2f};renderer.setAppearance(appearance);
+    SceneSettings settings;settings.camera.position={0,0,3};settings.camera.target={0,0,0};settings.environment.enabled=false;
+    std::array<RenderParticle,1> particles{{{{0,0,0},.2f,{64,0,0,1}}}};
+    RenderScene scene{settings,{}};scene.sceneMode=true;scene.particles=particles;
+    const auto main=[&] {renderer.render(scene);return copy(renderer.viewportTexture(),127,129,MainReadbackView);};
+    const auto baseline=main();
+    settings.environment.glow={true,1,1,1};const auto glowing=main();
+    check(renderer.glowStatus().empty(),renderer.glowStatus());
+    check(renderer.glowResidentBytes()==64u*65u*32u,"Glow did not account for its two half-resolution FP32 targets.");
+    check(component(glowing,78,64,0)>component(baseline,78,64,0)+5,"Bright additive particles with zero HDR coverage produced no halo outside their sprite.");
+    check(std::abs(component(glowing,78,64,1)-component(baseline,78,64,1))<=1,"Red Glow changed an unrelated color channel or editor matte.");
+    settings.environment.glow.enabled=false;check(main().rgba==baseline.rgba,"Disabling Glow did not restore the exact original image.");
+    settings.environment.glow.enabled=true;settings.environment.glow.strength=0;
+    check(main().rgba==baseline.rgba,"Zero Glow strength did not bypass the image path.");
+    settings.environment.glow.strength=1;settings.environment.glow.radius=0;
+    check(main().rgba==baseline.rgba,"Zero Glow Size did not bypass the image path.");
+    settings.environment.glow.radius=1;settings.environment.glow.threshold=100000;
+    check(main().rgba==baseline.rgba,"Glow threshold leaked below-threshold HDR radiance into the image.");
+    // A subpixel-to-few-pixel source must create a continuous halo even when
+    // Size is maximal, rather than displaced copies at widely spaced taps.
+    particles[0].size=.04f;particles[0].color[0]=1000;
+    settings.environment.glow.enabled=false;const auto tinyOff=main();
+    settings.environment.glow.enabled=true;settings.environment.glow.radius=8;settings.environment.glow.threshold=1;
+    const auto tinyWide=main();double previous=component(tinyWide,69,64,0);
+    for(unsigned x=70;x<=110;++x) {
+        const auto value=component(tinyWide,x,64,0);
+        check(value>component(tinyOff,x,64,0)+3,"Maximum Glow Size left a dark gap in an isolated spark's halo.");
+        check(value<=previous+2,"Maximum Glow Size created a separated bright lobe around an isolated spark.");
+        previous=value;
+    }
+    particles[0].size=.2f;particles[0].color[0]=64;settings.environment.glow.radius=1;
+    settings.environment.glow.threshold=1;settings.exposure=0;const auto dark=main();
+    settings.environment.glow.enabled=false;check(main().rgba==dark.rgba,"Zero exposure left Glow visible or exposed the editor matte.");
+    settings.exposure=1;settings.environment.glow.enabled=true;scene.particles={};const auto empty=main();
+    settings.environment.glow.enabled=false;check(main().rgba==empty.rgba,"Empty-background color contributed to Glow extraction.");
+    scene.particles=particles;settings.environment.glow.enabled=true;
+    renderer.resizeViewport(128,128);renderer.resizeGameViewport(128,128);renderer.resizeParticlePreview(128,128);
+    renderer.render(scene);renderer.renderGame(scene);renderer.renderParticlePreview(settings,particles);
+    const auto mainImage=copy(renderer.viewportTexture(),128,128,MainReadbackView);
+    const auto gameImage=copy(renderer.gameViewportTexture(),128,128,MainReadbackView);
+    const auto previewImage=copy(renderer.particlePreviewTexture(),128,128,ParticleReadbackView);
+    check(mainImage.rgba==gameImage.rgba && mainImage.rgba==previewImage.rgba,"Scene, Game and particle preview did not share the same Glow result.");
+    check(renderer.glowResidentBytes()==3u*64u*64u*32u,"Resized/independent Glow targets were not owned or counted correctly.");
+    // The full supported linear radiance remains finite through extraction and blur.
+    particles[0].color[0]=MaxParticleRadiance;renderer.renderGame(scene);
+    const auto maximum=copy(renderer.gameViewportTexture(),128,128,MainReadbackView);
+    check(component(maximum,78,64,0)>=254,"FP32 Glow overflowed supported HDR particle radiance.");particles[0].color[0]=64;
+
+    renderer.resizeMaterialPreview(128,128);check(renderer.publishMaterialPreviewEnvironment(lighting),renderer.environmentStatus());
+    const auto sphere=materialPreviewGeometry();renderer.configureModelStream(sphere->id,1,*sphere->stream);
+    check(renderer.queueModelLod(sphere->id,1,materialPreviewGeometryLevel()),"Glow material preview geometry queue failed.");
+    for(unsigned i=0;i<100 && !renderer.modelStreamReady(sphere->id,1);++i)tick();
+    check(renderer.modelStreamReady(sphere->id,1),"Glow material preview geometry was not ready.");
+    auto material=defaultMaterialAsset();material.surface.baseColor={0,0,0,1};material.surface.emissive={64,0,0};
+    const ModelMaterialTextures bindings;const auto transform=math::scaling({.15f,.15f,.15f});
+    const auto surface=[&] {renderer.renderMaterialPreview(settings,material,bindings,MaterialPreviewMesh::Sphere,transform,false);return copy(renderer.materialPreviewTexture(),128,128,MaterialReadbackView);};
+    settings.environment.glow.enabled=false;const auto materialOff=surface();settings.environment.glow.enabled=true;const auto materialOn=surface();
+    check(component(materialOn,80,64,0)>component(materialOff,80,64,0)+3,"Material preview bypassed shared Glow post-processing.");
+    check(renderer.glowResidentBytes()==4u*64u*64u*32u,"Material preview Glow memory was not counted.");
+    // Thumbnail rendering has no Glow views, even if handed enabled scene settings.
+    const auto thumbnail=[&](std::uint64_t signature) {
+        check(renderer.renderThumbnail("glow-off-thumbnail",signature,scene,128),renderer.thumbnailStatus());
+        for(unsigned i=0;i<120;++i){tick();if(auto result=renderer.pollThumbnail(frame))return result->image;}
+        throw std::runtime_error("Glow thumbnail readback did not complete.");
+    };
+    const auto thumbnailOn=thumbnail(1);settings.environment.glow.enabled=false;const auto thumbnailOff=thumbnail(2);
+    check(thumbnailOn.rgba==thumbnailOff.rgba,"Asset thumbnail rendering inherited view Glow settings.");settings.environment.glow.enabled=true;
+    renderer.releaseGameViewport();renderer.releaseParticlePreview();renderer.releaseMaterialPreview();
+    check(renderer.glowResidentBytes()==64u*64u*32u,"Released preview/Game targets retained Glow allocations.");
+    renderer.resizeViewport(128,96);check(renderer.glowResidentBytes()==0,"Viewport resize retained old Glow scratch.");
+    renderer.render(scene);check(renderer.glowResidentBytes()==64u*48u*32u,"Glow scratch did not follow viewport resize.");
+    renderer.resizeViewport(128,128);renderer.setAppearance({});
+}
+
+template<class Copy>
+void exerciseParticleRotation(Renderer& renderer,Copy&& copy) {
+    phase("particle billboard rotation");
+    renderer.resizeViewport(128,128);
+    constexpr std::uint32_t sampling=BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP|BGFX_SAMPLER_MIN_POINT|BGFX_SAMPLER_MAG_POINT|BGFX_SAMPLER_MIP_POINT;
+    constexpr std::array<std::uint8_t,16> pixels{255,0,0,255, 0,255,0,255, 0,0,255,255, 255,255,0,255};
+    struct Texture {bgfx::TextureHandle value{BGFX_INVALID_HANDLE};~Texture(){if(bgfx::isValid(value))bgfx::destroy(value);}} texture;
+    texture.value=bgfx::createTexture2D(2,2,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_SRGB|sampling,bgfx::copy(pixels.data(),static_cast<std::uint32_t>(pixels.size())));
+    check(bgfx::isValid(texture.value),"Could not prepare the asymmetric particle rotation texture.");
+    SceneSettings settings;settings.camera.position={0,0,3};settings.camera.target={0,0,0};settings.environment.enabled=false;
+    settings.environment.toneMapping=ToneMapping::Linear;
+    std::array<RenderParticle,1> particles{{{{0,0,0},1.5f,{1,1,1,1}}}};
+    std::array<RenderParticleMaterial,1> materials;materials[0].blend=ParticleBlendMode::Alpha;
+    materials[0].colorTexture=texture.value;materials[0].samplerFlags=sampling;
+    RenderScene scene{settings,{}};scene.sceneMode=true;scene.particles=particles;scene.particleMaterials=materials;
+    const auto capture=[&]{renderer.render(scene);return copy(renderer.viewportTexture(),128,128,MainReadbackView);};
+    const auto original=capture();
+    check(component(original,45,45,0)>150 && component(original,45,45,1)<50,"Particle rotation fixture did not produce its original red quadrant.");
+    particles[0].rotation=1.57079632679f;const auto rotated=capture();
+    check(component(rotated,45,45,1)>150 && component(rotated,45,45,0)<50,"Billboard rotation did not rotate the textured appearance about its center.");
+    particles[0].rotation=0;check(capture().rgba==original.rgba,"Zero rotation did not restore the original sprite image.");
+    particles[0].rotation=std::numeric_limits<float>::quiet_NaN();(void)capture();
+    check(renderer.particleStats().invalid==1 && renderer.particleStats().submitted==0,"Invalid particle rotation was not rejected before GPU upload.");
+}
 template<class Copy>
 void exerciseParticleMaterials(Renderer& renderer,Copy&& copy,const PreparedTexture& color,std::uint32_t& frame) {
     SceneSettings settings;settings.camera.position={0,0,3};settings.camera.target={0,0,0};settings.environment.enabled=false;
@@ -835,11 +938,14 @@ void exercise(const std::filesystem::path& root,const ShaderCompileConfig& shade
     check(component(materialGreen,64,64,1)>component(materialGreen,64,64,0)+30 && materialGreen.rgba!=materialRed.rgba,"Material previews must use individual surfaces without reallocating sphere geometry.");
     check(renderer.modelResidentBytes()==sphereBytes,"Multiple material captures must retain shared geometry accounting.");
     phase("particle readbacks");exerciseParticles(renderer,copy);
+    exerciseGlow(renderer,copy,tick,lighting,frame);
+    exerciseParticleRotation(renderer,copy);
     phase("textured alpha/material readbacks");exerciseParticleMaterials(renderer,copy,color,frame);
     phase("isolated live material mini-viewport readbacks");exerciseMaterialPreview(renderer,copy,tick,lighting);
     phase("cross-context tone mapping and texture color roles");exerciseToneMapping(renderer,copy,tick,frame,textures,source,color);
     SceneSettings particleSettings;particleSettings.camera.position={0,0,3};particleSettings.camera.target={0,0,0};particleSettings.environment.enabled=false;
     particleSettings.environment.toneMapping=ToneMapping::AgX;
+    particleSettings.environment.glow={true,.8f,1,1};
     std::array<RenderParticle,1> reloadParticle{{{{0,0,0},1.5f,{8,0,0,1}}}};
     RenderScene particleScene{particleSettings,{}};particleScene.sceneMode=true;particleScene.particles=reloadParticle;
     std::array<RenderParticleMaterial,1> reloadMaterials;

@@ -28,7 +28,7 @@ bool PlaySession::start(const SceneDocument& authored) {
         remainder_=0;ticks_=droppedTicks_=routeQueries_=0;suspended_=failed_=false;
         clearRoute();lastClickedGround_.reset();controlled_=NoEntity;inputCancellation_=0;lastControlledPose_.reset();
         editRevision_=document_->scene().revision();resetInterpolation();reconcileParticles(0);
-        status_=physics_->status();return true;
+        status_=physics_->status()+particles_.status();return true;
     } catch(const std::exception& error){stop();status_="Cannot enter Play: "+std::string(error.what());return false;}
 }
 void PlaySession::stop() {
@@ -88,7 +88,7 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
         if(input && (inputCancellation_!=input->cancellationRevision() || !input->ownsKeyboard()))clearRoute();
         if(input)inputCancellation_=input->cancellationRevision();
         if(!active) {
-            clearRoute();remainder_=0;suspended_=true;resetInterpolation();refreshPresentation();reconcileParticles(0);status_=physics_->status();return;
+            clearRoute();remainder_=0;suspended_=true;resetInterpolation();refreshPresentation();reconcileParticles(0);status_=physics_->status()+particles_.status();return;
         }
         if(input) {
             const auto character=document_->scene().find(controlled);

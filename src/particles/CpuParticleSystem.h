@@ -1,6 +1,7 @@
 #pragma once
 
 #include "assets/ParticleAsset.h"
+#include "ParticleAppearance.h"
 #include <optional>
 #include <span>
 #include <vector>
@@ -32,6 +33,7 @@ public:
     std::span<const ParticleState> particles() const { return particles_; }
     size_t reservedCapacity() const { return particles_.capacity(); }
     const ParticleEffectAsset& definition() const { return definition_; }
+    float maxPresentationSize() const { return appearance_.maximumSize(); }
     bool emissionFinished() const;
     bool completed() const { return emissionFinished() && particles_.empty(); }
     bool draining() const { return emissionFinished() && !particles_.empty(); }
@@ -47,9 +49,12 @@ private:
     Mat4 world_;
     std::vector<ParticleState> particles_;
     ParticleStats stats_;
+    PreparedParticleAppearance appearance_;
+    uint64_t appearanceSeed_{};
     ParticlePlaybackState state_{ParticlePlaybackState::Stopped};
     uint64_t seed_{1}, nextSpawnOrdinal_{};
     double elapsed_{}, remainder_{}, emissionRemainder_{};
+    bool presentCurrentTick_{}; // Show the warmed final state until an ordinary tick advances it.
     std::vector<size_t> burstOrder_; // Authored identities remain stable; only this execution index is sorted.
     struct PreparedSpawn {
         uint64_t seed{};
@@ -59,13 +64,11 @@ private:
     Vec3 acceleration_{};
     double drag_{};
     uint32_t spawnedThisTick_{};
+    void restartInternal(const ParticleEffectAsset&,uint64_t,const Mat4&,bool preprocess);
     void simulateTick();
     void emitBatch(uint64_t count,double offset,double spacing);
     void scheduleSegment(double begin,double end,double cycleStart);
     void dropSchedule(double begin,double end);
 };
-
-// Named color boundary: authored picker values are sRGB, emitted radiance linear.
-float particleSrgbToLinear(float value);
 
 } // namespace crimson

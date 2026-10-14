@@ -11,12 +11,13 @@
 namespace crimson {
 void MaterialPreview::environmentMenu(AssetLibrary& assets) {
     ImGui::PushItemWidth(260);
-    ImGui::Checkbox("Enabled",&environment_.enabled);
+    ImGui::Checkbox("Environment lighting",&environment_.enabled);
     ImGui::TextUnformatted("HDRI");
     drawEnvironmentImageField(environment_,assets);
     ImGui::SliderFloat("Intensity",&environment_.intensity,0,10,"%.2f");
     ImGui::SliderFloat("Rotation",&environment_.rotation,-180,180,"%.1f deg");
     drawToneMappingControl(environment_.toneMapping);
+    drawGlowControls(environment_.glow);
     ImGui::Checkbox("Show background",&showBackground_);
     if(ImGui::MenuItem("Reset environment")){environment_=EnvironmentSettings{};showBackground_=true;}
     ImGui::PopItemWidth();
@@ -67,6 +68,7 @@ void MaterialPreview::draw(AssetLibrary& assets,Renderer& renderer,ResourceManag
     ImGui::SameLine();if(ImGui::Button("Reset view")){navigation_.reset();cancelInteraction();}
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))ImGui::SetTooltip("MMB tumble · Shift+MMB pan · Ctrl+MMB rotate environment\nWheel zoom · Double-click MMB resets view and environment rotation");
     if(!status_.empty())ImGui::TextWrapped("%s",status_.c_str());
+    if(!renderer.glowStatus().empty())ImGui::TextWrapped("%s",renderer.glowStatus().c_str());
     const auto size=ImGui::GetContentRegionAvail();
     if(size.x<=0 || size.y<=0){cancelInteraction();return;}
     const auto scale=ImGui::GetWindowViewport()->FramebufferScale;

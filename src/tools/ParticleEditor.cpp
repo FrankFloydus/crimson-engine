@@ -31,6 +31,14 @@ ParticleEmitterDefinition editableLaunch(const ParticleEmitterDefinition& source
     }
     return result;
 }
+bool overallColorMultiplierActive(const ParticleEmitterDefinition& emitter) {
+    const auto& track=emitter.intensityTrack;
+    if(track.mode==ParticleAppearanceMode::RandomRange && track.range)
+        return track.range->minimum!=1 || track.range->maximum!=1;
+    if(track.mode==ParticleAppearanceMode::Curve)
+        return std::any_of(track.curve.keys.begin(),track.curve.keys.end(),[](const auto& key){return key.value!=1;});
+    return emitter.intensity!=1;
+}
 }
 bool ParticleEditor::isOpen() const { return document_.isOpen(); }
 bool ParticleEditor::focused() const {
@@ -43,15 +51,20 @@ void ParticleEditor::undo() { document_.undo(); }
 void ParticleEditor::redo() { document_.redo(); }
 void ParticleEditor::finishInteraction() {
     if(document_.transactionActive() && !document_.commit())return;
+    appearanceEditOwner_=0;
     const auto* active=ImGui::GetCurrentContext()->ActiveIdWindow;
     if(active && active->RootWindow->ID==ImHashStr("###ParticleEffect"))ImGui::ClearActiveID();
 }
 void ParticleEditor::cancelInteraction() {
     const bool canceled=document_.transactionActive();
-    document_.cancel();previewGesture_=0;
+    document_.cancel();previewGesture_=0;appearanceEditOwner_=0;
+    for(auto& editor:curveEditors_)editor.cancel();
+    gradientEditor_.cancel();colorEditor_.cancel();
     const auto* context=ImGui::GetCurrentContext();
     const auto* active=context?context->ActiveIdWindow:nullptr;
-    const bool owned=active && active->RootWindow->ID==ImHashStr("###ParticleEffect");
+    bool owned=false;
+    for(auto* window=active;window;window=window->ParentWindow)
+        if(window->RootWindow->ID==ImHashStr("###ParticleEffect")){owned=true;break;}
     if(owned)ImGui::ClearActiveID();
     // InputText can return its final buffer when deactivated. Ignore that
     // delivery after cancellation so it cannot create another undo command.
@@ -103,7 +116,12 @@ void ParticleEditor::framePreview() {
             if(acceleration!=0) { const auto turn=-velocity/acceleration;if(turn>0 && turn<lifetime)includeTime(turn); }
         }
     }
-    const float padding=std::max(.5f,emitter.size);
+    float size=emitter.size;
+    if(emitter.sizeTrack.mode==ParticleAppearanceMode::RandomRange && emitter.sizeTrack.range)size=emitter.sizeTrack.range->maximum;
+    if(emitter.sizeTrack.mode==ParticleAppearanceMode::Curve) {
+        size=0;for(const auto& key:emitter.sizeTrack.curve.keys)size=std::max(size,key.value);
+    }
+    const float padding=std::max(.5f,size);
     preview_.camera.frameBounds(minimum-Vec3{padding,padding,padding},maximum+Vec3{padding,padding,padding},1.4f);
     preview_.exposure=1;
 }
@@ -149,6 +167,7 @@ void ParticleEditor::perform(AssetLibrary& assets) {
         }
     }
     if(loaded) {
+        curveEditors_={};gradientEditor_={};colorEditor_={};appearanceEditOwner_=0;overallColorEditOwner_=0;
         assets.protectParticleDocument(document_.assetId());publishedRevision_=0;previewRevision_=0;
         publish(assets);assets.refreshParticles();framePreview();focusNext_=true;externalChanged_=false;materialDiagnostic_.clear();
     } else message_=document_.status();
@@ -243,7 +262,6 @@ void ParticleEditor::modals(AssetLibrary& assets) {
     }
 }
 void ParticleEditor::materialControls(AssetLibrary& assets,MaterialEditor& materials) {
-    ImGui::TextUnformatted("Material");
     const auto materialId=assets.references().resolveParticleMaterial(document_.definition().emitter.material.id);
     const auto material=assets.findMaterial(materialId);
     const auto assign=[&](const std::string& id) {
@@ -364,6 +382,10 @@ void ParticleEditor::authoringControls(AssetLibrary& assets,MaterialEditor& mate
         tooltip("Continuous emits until stopped. One shot emits for its duration, then lets live particles finish. Looping repeats the duration.\nTiming edits replay the effect and retain Pause/Stop state.");
         control("Change emitter delay",[](auto& emitter){return ImGui::DragFloat("Delay (s)",&emitter.delay,.01f,0,MaximumParticleTime,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
         tooltip("Wait once before the first emission cycle. Restart repeats the delay; subsequent loops do not.");
+        assetControl("Change particle pre-process",[](auto& asset) {
+            return ImGui::DragFloat("Pre-process (s)",&asset.preprocessSeconds,.05f,0,MaximumParticlePreprocessSeconds,"%.2f",ImGuiSliderFlags_AlwaysClamp);
+        });
+        tooltip("Advance simulation before the first draw at the initial instance transform. Zero keeps normal startup; larger values increase startup work.\nIncludes the emission Delay; a finite one shot may already be finished. For continuous fire, start near particle lifetime.");
         if(document_.definition().emitter.finiteDuration) {
             control("Change emitter duration",[&](auto& emitter) {
                 const bool changed=ImGui::DragFloat("Duration (s)",&emitter.duration,.01f,MinimumParticleDuration,MaximumParticleTime,"%.3f",ImGuiSliderFlags_AlwaysClamp);
@@ -530,14 +552,112 @@ void ParticleEditor::authoringControls(AssetLibrary& assets,MaterialEditor& mate
             ImGui::EndPopup();
         }
     }
+    bool appearanceActive=false;
     if(ImGui::CollapsingHeader("Render",ImGuiTreeNodeFlags_DefaultOpen)) {
-        materialControls(assets,materials);
-        control("Change particle size",[](auto& emitter){return ImGui::DragFloat("Size (m)",&emitter.size,.005f,.001f,1000,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
-        control("Change particle color",[](auto& emitter){return ImGui::ColorEdit3("Tint",emitter.color.data());});
-        control("Change particle opacity",[](auto& emitter){return ImGui::SliderFloat("Opacity",&emitter.opacity,0,1,"%.3f");});
-        control("Change particle intensity",[](auto& emitter){return ImGui::DragFloat("Intensity",&emitter.intensity,.05f,0,10000,"%.2f",ImGuiSliderFlags_AlwaysClamp);});
+        if(ImGui::TreeNodeEx("Material",ImGuiTreeNodeFlags_DefaultOpen|ImGuiTreeNodeFlags_SpanAvailWidth)) {
+            materialControls(assets,materials);ImGui::TreePop();
+        }
+        const auto appearanceControl=[&](ImGuiID owner,const char* label,const auto& draw) {
+            auto candidate=document_.definition();
+            const auto changes=draw(candidate.emitter);
+            appearanceActive|=changes.active;
+            if(!canceled && (changes.activated || changes.changed)) {
+                if(document_.transactionActive() && appearanceEditOwner_!=owner && !document_.commit())return;
+                if(!document_.transactionActive() && document_.begin(label))appearanceEditOwner_=owner;
+            }
+            if(!canceled && changes.changed && appearanceEditOwner_==owner)
+                document_.update([&](auto& asset){asset.emitter=candidate.emitter;});
+            if(changes.deactivated && !changes.active && appearanceEditOwner_==owner && document_.transactionActive())
+                if(document_.commit())appearanceEditOwner_=0;
+        };
+        const auto collapsed=[&](ImGuiID owner,auto& state) {
+            if(owner && appearanceEditOwner_==owner)finishInteraction();
+            state.cancel();
+        };
+        const auto scalar=[&](const char* title,const char* valueLabel,float ParticleEmitterDefinition::* constant,
+                              ParticleScalarTrack ParticleEmitterDefinition::* member,size_t stateIndex,float minimum,float maximum,float constantMinimum) {
+            ImGui::PushID(title);
+            const auto owner=ImGui::GetID("Appearance transaction");
+            if(stateIndex==1)overallColorEditOwner_=owner;
+            const auto summaryMode=(document_.definition().emitter.*member).mode;
+            const char* summary=summaryMode==ParticleAppearanceMode::Curve?"Curve":summaryMode==ParticleAppearanceMode::RandomRange?"Random range":"Constant";
+            if(!ImGui::TreeNodeEx("Property",ImGuiTreeNodeFlags_SpanAvailWidth,"%s (%s)",title,summary)) {
+                collapsed(owner,curveEditors_[stateIndex]);ImGui::PopID();return;
+            }
+            const auto command=std::string("Edit particle ")+title;
+            appearanceControl(owner,command.c_str(),[&](auto& emitter) {
+                ParticleAppearanceEdit changes;auto& track=emitter.*member;auto& value=emitter.*constant;
+                int mode=static_cast<int>(track.mode);
+                const bool changed=ImGui::Combo("Mode",&mode,"Constant\0Random range\0Curve\0");changes.include(changed);
+                if(changed) {
+                    track.mode=static_cast<ParticleAppearanceMode>(mode);
+                    if(track.mode==ParticleAppearanceMode::RandomRange && !track.range)track.range=ParticleAppearanceRange{value,value};
+                    if(track.mode==ParticleAppearanceMode::Curve && track.curve.keys.empty())track.curve.keys={{1,0,value},{2,1,value}};
+                    curveEditors_[stateIndex].cancel();
+                }
+                if(track.mode==ParticleAppearanceMode::Constant)
+                    changes.include(ImGui::DragFloat(valueLabel,&value,.01f,constantMinimum,maximum,"%.3f",ImGuiSliderFlags_AlwaysClamp));
+                if(track.mode==ParticleAppearanceMode::RandomRange && track.range) {
+                    float bounds[2]{track.range->minimum,track.range->maximum};
+                    const bool rangeChanged=ImGui::DragFloat2("Minimum / maximum",bounds,.01f,minimum,maximum,"%.3f",ImGuiSliderFlags_AlwaysClamp);changes.include(rangeChanged);
+                    if(rangeChanged) {
+                        if(bounds[0]>bounds[1]) {
+                            if(bounds[0]!=track.range->minimum)bounds[1]=bounds[0];else bounds[0]=bounds[1];
+                        }
+                        track.range=ParticleAppearanceRange{bounds[0],bounds[1]};
+                    }
+                    tooltip("Each particle keeps a repeatable random sample. Editing this range updates its appearance without restarting playback.");
+                }
+                if(track.mode==ParticleAppearanceMode::Curve)
+                    changes.merge(drawParticleCurveEditor(track.curve,curveEditors_[stateIndex],minimum,maximum,value,valueLabel));
+                return changes;
+            });
+            ImGui::TreePop();ImGui::PopID();
+        };
+        ImGui::PushID("Color appearance");
+        const auto colorOwner=ImGui::GetID("Appearance transaction");
+        const bool colorOpen=ImGui::TreeNodeEx("Property",ImGuiTreeNodeFlags_SpanAvailWidth,"Color & opacity (%s%s)",
+            document_.definition().emitter.colorMode==ParticleColorMode::Gradient?"Gradient":"Constant",
+            overallColorMultiplierActive(document_.definition().emitter)?", multiplier":"");
+        if(overallColorMultiplierActive(document_.definition().emitter))
+            tooltip("Advanced > Overall Color Multiplier also changes this color. Its constant, range or curve is not neutral.");
+        if(colorOpen) {
+            appearanceControl(colorOwner,"Edit particle color / opacity",[&](auto& emitter) {
+                ParticleAppearanceEdit changes;
+                int mode=static_cast<int>(emitter.colorMode);
+                const bool changed=ImGui::Combo("Mode",&mode,"Constant\0Gradient\0");changes.include(changed);
+                if(changed) {
+                    emitter.colorMode=static_cast<ParticleColorMode>(mode);
+                    if(emitter.colorMode==ParticleColorMode::Gradient && emitter.colorGradient.stops.empty()) {
+                        const Vec4 color{emitter.color[0],emitter.color[1],emitter.color[2],emitter.opacity};
+                        emitter.colorGradient.stops={{1,0,color},{2,1,color}};
+                    }
+                    gradientEditor_.cancel();colorEditor_.cancel();
+                }
+                if(emitter.colorMode==ParticleColorMode::Constant) {
+                    const auto colorChanges=drawHdrColorControl("Color",emitter.color,&emitter.opacity,colorEditor_,false,MaximumParticleColor);
+                    changes.merge({colorChanges.changed,colorChanges.activated,colorChanges.active,colorChanges.deactivated});
+                } else changes.merge(drawParticleGradientEditor(emitter.colorGradient,gradientEditor_,
+                    {emitter.color[0],emitter.color[1],emitter.color[2],emitter.opacity}));
+                return changes;
+            });
+            if(ImGui::TreeNodeEx("Advanced",ImGuiTreeNodeFlags_SpanAvailWidth)) {
+                scalar("Overall Color Multiplier","Multiplier",&ParticleEmitterDefinition::intensity,&ParticleEmitterDefinition::intensityTrack,1,0,100000,0);
+                ImGui::TreePop();
+            } else collapsed(overallColorEditOwner_,curveEditors_[1]);
+            ImGui::TreePop();
+        } else {
+            collapsed(colorOwner,gradientEditor_);colorEditor_.cancel();
+            collapsed(overallColorEditOwner_,curveEditors_[1]);
+        }
+        ImGui::PopID();
+        scalar("Size","Size (m)",&ParticleEmitterDefinition::size,&ParticleEmitterDefinition::sizeTrack,0,0,10000,.0001f);
+        scalar("Rotation","Rotation (degrees)",&ParticleEmitterDefinition::rotation,&ParticleEmitterDefinition::rotationTrack,2,-MaximumParticleRotation,MaximumParticleRotation,-MaximumParticleRotation);
+    } else if(appearanceEditOwner_) {
+        finishInteraction();for(auto& editor:curveEditors_)editor.cancel();gradientEditor_.cancel();colorEditor_.cancel();
     }
-    if(document_.transactionActive() && !ImGui::IsAnyItemActive())document_.commit();
+    if(document_.transactionActive() && !appearanceActive && !ImGui::IsAnyItemActive() && document_.commit())appearanceEditOwner_=0;
+    if(!document_.transactionActive())appearanceEditOwner_=0;
     if(!document_.status().empty())ImGui::TextWrapped("%s",document_.status().c_str());
     if(!message_.empty())ImGui::TextWrapped("%s",message_.c_str());
     if(!materialDiagnostic_.empty())ImGui::TextWrapped("%s",materialDiagnostic_.c_str());
@@ -594,8 +714,13 @@ void ParticleEditor::draw(AssetLibrary& assets,Renderer& renderer,double dt,Mate
             ImGui::SameLine();if(ImGui::Button("Stop")) simulation_.stop();
             ImGui::SameLine();if(ImGui::Button("Frame")) framePreview();
             if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))ImGui::SetTooltip("Frame the emission shape and up to 10 seconds of motion. Drag is ignored when estimating bounds.");
-            ImGui::SetNextItemWidth(180);
-            drawToneMappingControl(preview_.environment.toneMapping);
+            if(ImGui::Button("Environment"))ImGui::OpenPopup("Particle preview environment");
+            if(ImGui::BeginPopup("Particle preview environment")) {
+                ImGui::SetNextItemWidth(ImGui::GetFontSize()*14);
+                drawToneMappingControl(preview_.environment.toneMapping);
+                drawGlowControls(preview_.environment.glow);
+                ImGui::EndPopup();
+            }
             simulation_.advance(dt);
             const auto& stats=simulation_.stats();
             const char* state=simulation_.state()==ParticlePlaybackState::Stopped?"Stopped":simulation_.state()==ParticlePlaybackState::Paused?"Paused":
@@ -611,6 +736,7 @@ void ParticleEditor::draw(AssetLibrary& assets,Renderer& renderer,double dt,Mate
             if(renderStats.dropped || renderStats.invalid)
                 ImGui::Text("Rendering: %zu omitted, %zu invalid",renderStats.dropped,renderStats.invalid);
             if(!renderer.particleStatus().empty()) ImGui::TextWrapped("%s",renderer.particleStatus().c_str());
+            if(!renderer.glowStatus().empty())ImGui::TextWrapped("%s",renderer.glowStatus().c_str());
             ImGui::TextDisabled("MMB orbit · Shift+MMB pan · Wheel zoom. Grid is a visual guide.");
             const auto size=ImGui::GetContentRegionAvail();
             if(size.x>0 && size.y>0) {
@@ -630,7 +756,7 @@ void ParticleEditor::draw(AssetLibrary& assets,Renderer& renderer,double dt,Mate
                 if(previewGesture_==1) preview_.camera.orbit(io.MouseDelta.x,io.MouseDelta.y,preview_.camera.target);
                 if(previewGesture_==2) preview_.camera.pan(io.MouseDelta.x,io.MouseDelta.y,size.x,size.y);
                 presentation_.clear();simulation_.appendPresentation(presentation_);packets_.clear();packets_.reserve(presentation_.size());
-                for(const auto& p:presentation_) packets_.push_back({p.position,p.size,p.color});
+                for(const auto& p:presentation_) packets_.push_back({p.position,p.size,p.color,0,p.rotation});
                 const auto binding=assets.preparedParticleMaterial(document_.definition().emitter.material.id);
                 if(!binding || !binding->ready)packets_.clear();
                 materialDiagnostic_=binding?binding->diagnostic:"Particle material is unavailable.";

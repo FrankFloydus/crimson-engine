@@ -46,7 +46,7 @@ void componentsAndStorage(){
     auto characterRecord=*document.scene().find(character);characterRecord.character->moveSpeed=7;require(document.updateEntity(character,characterRecord),document.status());
     require(document.save("Gameplay"),document.status());
     const auto snapshot=readSceneSnapshot(project.root,document.assetId());
-    require(Json::parse(serializeSceneSnapshot(snapshot)).at("version")==4,"Scene writer did not use version 4.");
+    require(Json::parse(serializeSceneSnapshot(snapshot)).at("version")==5,"Scene writer did not use version 5.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(document.scene().records(),reopened.scene().records());
     require(sameProperties(document.scene().properties(),reopened.scene().properties()),"Gameplay scene properties did not round-trip.");
     auto legacy=Json::parse(serializeSceneSnapshot(snapshot));legacy["version"]=3;legacy["settings"].erase("activeCamera");legacy["settings"].erase("playerCharacter");
@@ -234,7 +234,7 @@ void shadowSettingsStorageHistoryAndExtraction(){
     require(document.save("Point shadows"),document.status());
     const auto snapshot=readSceneSnapshot(project.root,document.assetId());
     auto serialized=Json::parse(serializeSceneSnapshot(snapshot));
-    require(serialized.at("version")==4,"Optional shadow settings changed the scene file version.");
+    require(serialized.at("version")==5,"Scene writer did not retain the current version.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(document.scene().records(),reopened.scene().records());
     for(const int version:{1,2,3,4}) {
         auto legacy=serialized;legacy["version"]=version;
@@ -289,25 +289,35 @@ void environmentToneMappingStorageAndRuntime() {
     const auto environment=document.createEnvironment(),actor=document.createCharacter();
     require(environment && actor,document.status());
     require(resolveEnvironment(document.scene()).environment.toneMapping==ToneMapping::Reinhard,"New environment changed legacy appearance.");
+    const GlowSettings authoredGlow{true,2.25f,3.5f,.65f};
     auto record=*document.scene().find(environment);record.environment->environment.toneMapping=ToneMapping::AgX;
+    record.environment->environment.glow=authoredGlow;
     require(document.updateEntity(environment,record),document.status());
     require(document.undo() && resolveEnvironment(document.scene()).environment.toneMapping==ToneMapping::Reinhard,"Tone mapping equality omitted history.");
+    require(resolveEnvironment(document.scene()).environment.glow==GlowSettings{},"Environment undo lost the original disabled Glow defaults.");
     require(document.redo() && document.save("Tone mapping"),document.status());
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
     require(resolveEnvironment(reopened.scene()).environment.toneMapping==ToneMapping::AgX,"Tone mapping did not round-trip.");
+    require(resolveEnvironment(reopened.scene()).environment.glow==authoredGlow,"Nondefault Glow did not survive scene persistence.");
     document.select({environment});require(document.duplicateSelection(),document.status());
-    for(const auto& entity:document.scene().records())if(entity.environment)
+    for(const auto& entity:document.scene().records())if(entity.environment) {
         require(entity.environment->environment.toneMapping==ToneMapping::AgX,"Environment duplication lost tone mapping.");
+        require(entity.environment->environment.glow==authoredGlow,"Environment duplication lost authored Glow values.");
+    }
     auto legacy=Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,document.assetId())));
     for(auto& entity:legacy["entities"])if(entity.contains("environment"))entity["environment"]["environment"].erase("toneMapping");
     const std::string legacyId="assets/scenes/legacy-tone.crimson-scene";
     {std::ofstream output(project.root/legacyId);output<<legacy.dump();}
     require(reopened.load(legacyId),reopened.status());
     require(resolveEnvironment(reopened.scene()).environment.toneMapping==ToneMapping::Reinhard,"Missing tone mapping did not preserve old scenes.");
+    require(resolveEnvironment(reopened.scene()).environment.glow==authoredGlow,"Missing tone mapping reset unrelated Glow settings.");
     record.environment->environment.toneMapping=static_cast<ToneMapping>(99);
     require(!document.updateEntity(environment,record),"Invalid tone mapping entered the scene.");
     const auto authored=document.scene().records();const auto history=document.history().size();
+    const auto authoredDirty=document.dirty();const auto authoredSelection=document.selection();
     SceneDocument runtime(project.root);require(runtime.resetTransientFrom(document),runtime.status());
+    require(resolveEnvironment(runtime.scene()).environment.glow==authoredGlow && !runtime.dirty() && !runtime.history().canUndo(),
+        "Play clone discarded Glow or inherited authored dirty/history state.");
     require(runtime.begin("Tone mapping during Play"),runtime.status());
     require(runtime.update([&](auto& records,auto&){for(auto& entity:records)if(entity.id==environment)entity.environment->environment.toneMapping=ToneMapping::ACES;}),runtime.status());
     pose(runtime,actor,{7,0,2});require(runtime.commit(),runtime.status());
@@ -315,8 +325,40 @@ void environmentToneMappingStorageAndRuntime() {
     near(position(runtime.scene(),actor),{7,0,2});
     require(runtime.redo() && resolveEnvironment(runtime.scene()).environment.toneMapping==ToneMapping::ACES,"Runtime tone mapping redo failed.");
     near(position(runtime.scene(),actor),{7,0,2});
+    require(resolveEnvironment(runtime.scene()).environment.glow==authoredGlow,"Runtime tone mapping changed unrelated Glow.");
+
+    const GlowSettings runtimeGlow{true,4.25f,1.5f,2.5f};
+    const auto beforeGlowHistory=runtime.history().size();
+    require(runtime.begin("Glow during Play"),runtime.status());
+    require(runtime.update([&](auto& records,auto&){for(auto& entity:records)if(entity.id==environment)
+        entity.environment->environment.glow.strength=3.5f;}),runtime.status());
+    pose(runtime,actor,{9,0,4});
+    require(runtime.update([&](auto& records,auto&){for(auto& entity:records)if(entity.id==environment)
+        entity.environment->environment.glow=runtimeGlow;}) && runtime.commit(),runtime.status());
+    require(runtime.history().size()==beforeGlowHistory+1,"Glow drag did not form one runtime history command.");
+    require(runtime.undo() && resolveEnvironment(runtime.scene()).environment.glow==authoredGlow,
+        "Runtime Glow undo did not restore the authored values.");
+    require(resolveEnvironment(runtime.scene()).environment.toneMapping==ToneMapping::ACES,"Glow undo changed an earlier tone-mapping edit.");
+    near(position(runtime.scene(),actor),{9,0,4});
+    require(runtime.redo() && resolveEnvironment(runtime.scene()).environment.glow==runtimeGlow,"Runtime Glow redo lost its values.");
+    near(position(runtime.scene(),actor),{9,0,4});
+    const auto committedHistory=runtime.history().size();
+    require(runtime.begin("Cancel Glow during Play"),runtime.status());
+    require(runtime.update([&](auto& records,auto&){for(auto& entity:records)if(entity.id==environment) {
+        entity.environment->environment.glow.enabled=false;entity.environment->environment.glow.threshold=.1f;
+    }}),runtime.status());
+    pose(runtime,actor,{11,0,6});runtime.cancel();
+    require(!runtime.transactionActive() && resolveEnvironment(runtime.scene()).environment.glow==runtimeGlow &&
+        resolveEnvironment(runtime.scene()).environment.toneMapping==ToneMapping::ACES && runtime.history().size()==committedHistory,
+        "Cancel changed committed Glow/tone mapping or added a runtime command.");
+    near(position(runtime.scene(),actor),{11,0,6});
     same(authored,document.scene().records());require(document.history().size()==history,"Runtime tone mapping changed authored history.");
+    require(document.dirty()==authoredDirty && document.selection().ids==authoredSelection.ids &&
+        document.selection().primary==authoredSelection.primary,"Runtime Glow changed authored dirty state or selection.");
     require(runtime.resetTransientFrom(document),runtime.status());same(authored,runtime.scene().records());
+    require(resolveEnvironment(runtime.scene()).environment.glow==authoredGlow &&
+        resolveEnvironment(runtime.scene()).environment.toneMapping==ToneMapping::AgX && !runtime.history().canUndo() && !runtime.dirty(),
+        "Starting Play again retained runtime Glow, tone mapping or history.");
 }
 }
 int main(){try{componentsAndStorage();runtimePatches();followAndHierarchy();followDependenciesAndAtomicFailure();parentFollowKeepsWorldOffset();boxMaterialAndPointRadius();shadowSettingsStorageHistoryAndExtraction();environmentToneMappingStorageAndRuntime();std::cout<<"Gameplay scene tests passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

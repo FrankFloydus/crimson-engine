@@ -19,6 +19,7 @@ struct RenderParticle {
     float size{.08f};
     Vec4 color{1,1,1,1};
     std::uint32_t materialIndex{}; // Index into this render frame's prepared material table.
+    float rotation{}; // Radians about the camera-facing billboard center.
 };
 
 struct ParticleRenderStats {
@@ -29,12 +30,12 @@ struct ParticleRenderStats {
 inline constexpr std::size_t MaxParticleDrawCount = 65536;
 inline constexpr std::size_t MaxParticleMaterialCount = 512;
 inline constexpr std::size_t MaxParticleDrawCalls = 1024;
-inline constexpr float MaxParticleRadiance = 100000.f; // Matches the authored intensity limit.
+inline constexpr float MaxParticleRadiance = 1e11f; // HDR color (1e6) times retained legacy intensity (1e5).
 
 namespace particle_rendering {
 inline bool valid(const RenderParticle& particle) {
     return math::finite(particle.position) && math::finite(particle.color) &&
-        std::isfinite(particle.size) && particle.size > 0 && particle.size <= 1e6f &&
+        std::isfinite(particle.size) && particle.size > 0 && particle.size <= 1e6f && std::isfinite(particle.rotation) &&
         std::all_of(particle.position.values.begin(),particle.position.values.end(),[](float value){return std::abs(value)<=1e9f;}) &&
         std::all_of(particle.color.values.begin(),particle.color.values.begin()+3,[](float value){return value>=0 && value<=MaxParticleRadiance;}) &&
         particle.color[3]>=0 && particle.color[3]<=1;

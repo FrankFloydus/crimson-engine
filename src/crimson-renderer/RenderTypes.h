@@ -2,6 +2,7 @@
 
 #include "math/Math.h"
 #include "ToneMapping.h"
+#include "Glow.h"
 #include <array>
 #include <cstdint>
 #include <string>
@@ -27,6 +28,7 @@ struct EnvironmentSettings {
     float rotation{0.0f}; // Degrees around world +Y; renderer converts to radians.
     bool enabled{true};
     ToneMapping toneMapping{ToneMapping::Reinhard}; // Legacy appearance until explicitly changed.
+    GlowSettings glow{};
 };
 
 struct DirectionalLight {
@@ -115,20 +117,20 @@ struct PointShadowStats {
 // all six faces for all sixteen point lights before their dependent draws.
 inline constexpr uint16_t PointShadowView = 0;
 inline constexpr uint16_t SceneView = 96;
-inline constexpr uint16_t PresentView = 97;
-inline constexpr uint16_t GridView = 98;
-inline constexpr uint16_t EncodeView = 99;
-inline constexpr uint16_t ParticlePreviewView = 100;
-inline constexpr uint16_t PickView = 105;
-inline constexpr uint16_t PickReadView = 106;
-inline constexpr uint16_t ThumbnailPointShadowView = 107;
-inline constexpr uint16_t ThumbnailSceneView = 203;
-inline constexpr uint16_t ThumbnailReadView = 207;
-inline constexpr uint16_t MaterialPreviewView = 208;
-inline constexpr uint16_t GameSceneView = 212;
-inline constexpr uint16_t GamePresentView = 213;
-inline constexpr uint16_t GameEncodeView = 214;
-inline constexpr uint16_t ToolsView = 215;
-inline constexpr uint16_t FirstPlatformView = 216;
+inline constexpr uint16_t PresentView = 100;
+inline constexpr uint16_t GridView = 101;
+inline constexpr uint16_t EncodeView = 102;
+inline constexpr uint16_t ParticlePreviewView = 103;
+inline constexpr uint16_t PickView = 111;
+inline constexpr uint16_t PickReadView = 112;
+inline constexpr uint16_t ThumbnailPointShadowView = 113;
+inline constexpr uint16_t ThumbnailSceneView = 209;
+inline constexpr uint16_t ThumbnailReadView = 213;
+inline constexpr uint16_t MaterialPreviewView = 214;
+inline constexpr uint16_t GameSceneView = 221;
+inline constexpr uint16_t GamePresentView = 225;
+inline constexpr uint16_t GameEncodeView = 226;
+inline constexpr uint16_t ToolsView = 227;
+inline constexpr uint16_t FirstPlatformView = 228;
 
 } // namespace crimson

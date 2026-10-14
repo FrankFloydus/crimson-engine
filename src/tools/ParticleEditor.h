@@ -3,6 +3,8 @@
 #include "editor/ParticleDocument.h"
 #include "particles/CpuParticleSystem.h"
 #include "crimson-renderer/Renderer.h"
+#include "ParticleAppearanceEditor.h"
+#include "HdrColorEditor.h"
 #include <array>
 #include <filesystem>
 #include <string>
@@ -45,6 +47,11 @@ private:
     std::array<char,256> saveName_{};
     bool dirtyPopup_{},savePopup_{},continueAfterSave_{},exitReady_{},externalChanged_{},externalPopup_{},focusNext_{};
     bool suppressCanceledUpdate_{};
+    std::uint32_t appearanceEditOwner_{};
+    std::uint32_t overallColorEditOwner_{};
+    std::array<ParticleCurveEditorState,3> curveEditors_{};
+    ParticleGradientEditorState gradientEditor_{};
+    HdrColorEditorState colorEditor_{};
     int previewGesture_{};
     void request(Pending,std::string,AssetLibrary*);
     void perform(AssetLibrary&);

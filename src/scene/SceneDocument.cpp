@@ -125,13 +125,20 @@ SceneEnvironment readEnvironment(const Json& json) {
     result.environment.intensity=environment.at("intensity").get<float>();
     result.environment.rotation=environment.at("rotation").get<float>();
     result.environment.toneMapping=static_cast<ToneMapping>(environment.value("toneMapping",0));
+    if (environment.contains("glow")) {
+        const auto& glow=environment.at("glow");
+        result.environment.glow={glow.at("enabled").get<bool>(),glow.at("strength").get<float>(),
+            glow.at("radius").get<float>(),glow.at("threshold").get<float>()};
+    }
     return result;
 }
 Json environmentJson(const SceneEnvironment& value) {
     const auto& environment=value.environment;
     return {{"exposure",value.exposure},{"environment",{{"map",environment.map},
         {"enabled",environment.enabled},{"intensity",environment.intensity},{"rotation",environment.rotation},
-        {"toneMapping",static_cast<int>(environment.toneMapping)}}}};
+        {"toneMapping",static_cast<int>(environment.toneMapping)},
+        {"glow",{{"enabled",environment.glow.enabled},{"strength",environment.glow.strength},
+            {"radius",environment.glow.radius},{"threshold",environment.glow.threshold}}}}}};
 }
 bool validCamera(const Camera& camera) {
     return math::finite(camera.position) && math::finite(camera.target) && math::finite(camera.up) &&
@@ -142,7 +149,7 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
     const auto contents=readText(path);
     const Json json=Json::parse(contents);
     const auto version=json.at("version").get<int>();
-    if ((version<1 || version>4) || json.at("type") != "crimson-scene")
+    if ((version<1 || version>5) || json.at("type") != "crimson-scene")
         throw std::runtime_error("Unsupported scene file type or version.");
     SceneSnapshot result; result.fingerprint=fingerprint(contents);
     result.name = json.at("name").get<std::string>();
@@ -227,7 +234,7 @@ Json writeScene(const SceneSnapshot& snapshot) {
             {"followTarget",hexId(c.followTarget)},{"followOffset",c.followOffset}}; }
         entities.push_back(std::move(entity));
     }
-    Json result{{"version",4},{"type","crimson-scene"},{"name",snapshot.name},{"entities",std::move(entities)},
+    Json result{{"version",5},{"type","crimson-scene"},{"name",snapshot.name},{"entities",std::move(entities)},
         {"settings",{{"activeEnvironment",hexId(snapshot.properties.activeEnvironment)},
             {"activeCamera",hexId(snapshot.properties.activeCamera)},{"playerCharacter",hexId(snapshot.properties.playerCharacter)}}}};
     if (snapshot.previewCamera) {

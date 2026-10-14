@@ -20,6 +20,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 find_package(SDL3 CONFIG REQUIRED)
 find_package(bgfx CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
+find_package(implot CONFIG REQUIRED)
 find_package(lodepng CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(mikktspace CONFIG REQUIRED)
@@ -30,6 +31,12 @@ find_package(imguizmo CONFIG REQUIRED)
 find_package(Jolt CONFIG REQUIRED)
 find_package(recastnavigation CONFIG REQUIRED)
 find_path(CC_CGLTF_INCLUDE cgltf.h REQUIRED)
+
+# Pinned RGBA editing widget. Crimson definitions and interpolation semantics
+# stay with the particle owners; the vendor directory records local patches.
+add_subdirectory(third_party/imgui_gradient)
+target_link_libraries(imgui_gradient PUBLIC imgui::imgui)
+target_compile_definitions(imgui_gradient PRIVATE IMGUI_DEFINE_MATH_OPERATORS)
 
 add_library(crimson-math src/math/Math.cpp)
 target_include_directories(crimson-math PUBLIC src)
@@ -67,7 +74,7 @@ target_compile_definitions(crimson-materials PRIVATE WIN32_LEAN_AND_MEAN NOMINMA
 target_compile_options(crimson-materials PRIVATE /W4 /permissive- /utf-8)
 
 add_library(crimson-particles src/assets/ParticleAsset.cpp src/editor/ParticleDocument.cpp
-    src/particles/CpuParticleSystem.cpp src/editor/SceneParticles.cpp)
+    src/particles/CpuParticleSystem.cpp src/particles/ParticleAppearance.cpp src/editor/SceneParticles.cpp)
 target_include_directories(crimson-particles PUBLIC src)
 target_link_libraries(crimson-particles PUBLIC crimson-math crimson-storage crimson-scene crimson-materials nlohmann_json::nlohmann_json)
 target_compile_definitions(crimson-particles PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -117,6 +124,7 @@ function(cc_shader NAME TYPE VARYING)
                 "${CC_SHADER_DIR}/point_shadow.sh"
                 "${CC_SHADER_DIR}/material_mapping.sh"
                 "${CC_SHADER_DIR}/tone_mapping.sh"
+                "${CC_SHADER_DIR}/glow_sampling.sh"
                 "${CC_BGFX_SHADER_INCLUDE}/bgfx_shader.sh"
         COMMENT "Compiling ${NAME} for Direct3D 11"
         VERBATIM
@@ -136,6 +144,8 @@ cc_shader(vs_point_shadow vertex model.varying.def.sc)
 cc_shader(fs_point_shadow fragment model.varying.def.sc)
 cc_shader(vs_present vertex varying.def.sc)
 cc_shader(fs_present fragment varying.def.sc)
+cc_shader(fs_glow_extract fragment varying.def.sc)
+cc_shader(fs_glow_blur fragment varying.def.sc)
 cc_shader(fs_sky fragment varying.def.sc)
 cc_shader(vs_grid vertex varying.def.sc)
 cc_shader(fs_grid fragment varying.def.sc)
@@ -169,6 +179,9 @@ add_executable(crimson-renderer WIN32
     src/tools/InspectorTransform.cpp
     src/tools/AssetBrowser.cpp
     src/tools/ParticleEditor.cpp
+    src/tools/ParticleAppearanceEditor.cpp
+    src/tools/ParticleGradientEditor.cpp
+    src/tools/HdrColorEditor.cpp
     src/tools/MaterialEditor.cpp
     src/input/Navigation.h src/input/Navigation.cpp
     src/assets/AssetLibrary.h src/assets/AssetLibrary.cpp
@@ -183,7 +196,7 @@ target_compile_definitions(crimson-renderer PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX
 target_compile_definitions(crimson-renderer PRIVATE CC_PROJECT_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(crimson-renderer PRIVATE CC_SHADER_SOURCE_DIR="${CC_SHADER_DIR}" CC_SHADER_INCLUDE_DIR="${CC_BGFX_SHADER_INCLUDE}" CC_SHADERC_PATH="$<TARGET_FILE:bgfx::shaderc>")
 target_compile_options(crimson-renderer PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:/W4;/permissive-;/utf-8>")
-target_link_libraries(crimson-renderer PRIVATE crimson-resources crimson-math crimson-scene crimson-particles crimson-runtime imguizmo::imguizmo SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace meshoptimizer::meshoptimizer)
+target_link_libraries(crimson-renderer PRIVATE crimson-resources crimson-math crimson-scene crimson-particles crimson-runtime imguizmo::imguizmo SDL3::SDL3 bgfx::bgfx bgfx::bx bgfx::bimg_decode imgui::imgui implot::implot imgui_gradient::imgui_gradient lodepng nlohmann_json::nlohmann_json mikktspace::mikktspace meshoptimizer::meshoptimizer)
 
 find_program(CC_POWERSHELL NAMES powershell.exe REQUIRED)
 add_custom_command(TARGET crimson-renderer POST_BUILD
@@ -251,6 +264,26 @@ if(BUILD_TESTING)
     target_link_libraries(particle_step3_scene_tests PRIVATE crimson-particles)
     target_compile_options(particle_step3_scene_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME particle_step3_scene_core COMMAND particle_step3_scene_tests)
+    add_executable(particle_step4_tests tests/particle_step4_tests.cpp)
+    target_link_libraries(particle_step4_tests PRIVATE crimson-particles)
+    target_compile_options(particle_step4_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME particle_step4_core COMMAND particle_step4_tests)
+    add_executable(particle_preprocess_tests tests/particle_preprocess_tests.cpp)
+    target_link_libraries(particle_preprocess_tests PRIVATE crimson-particles)
+    target_compile_options(particle_preprocess_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME particle_preprocess_core COMMAND particle_preprocess_tests)
+    add_executable(particle_step4_asset_tests tests/particle_step4_asset_tests.cpp)
+    target_link_libraries(particle_step4_asset_tests PRIVATE crimson-particles)
+    target_compile_options(particle_step4_asset_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME particle_step4_asset_core COMMAND particle_step4_asset_tests)
+    add_executable(particle_step4_scene_tests tests/particle_step4_scene_tests.cpp)
+    target_link_libraries(particle_step4_scene_tests PRIVATE crimson-particles)
+    target_compile_options(particle_step4_scene_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME particle_step4_scene_core COMMAND particle_step4_scene_tests)
+    add_executable(particle_appearance_editor_tests tests/particle_appearance_editor_tests.cpp src/tools/ParticleAppearanceEditor.cpp src/tools/ParticleGradientEditor.cpp src/tools/HdrColorEditor.cpp)
+    target_link_libraries(particle_appearance_editor_tests PRIVATE crimson-particles imgui::imgui implot::implot imgui_gradient::imgui_gradient)
+    target_compile_options(particle_appearance_editor_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME particle_appearance_editor_core COMMAND particle_appearance_editor_tests)
     add_executable(material_document_tests tests/material_document_tests.cpp)
     target_link_libraries(material_document_tests PRIVATE crimson-materials)
     target_compile_options(material_document_tests PRIVATE /W4 /permissive- /utf-8)

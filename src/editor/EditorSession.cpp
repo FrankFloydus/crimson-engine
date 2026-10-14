@@ -285,7 +285,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
             }
             if(found->second==UINT32_MAX)continue;
             for(std::size_t offset=group.first;offset<group.first+group.count;++offset) {
-                const auto& p=presentation[offset];particlePackets_.push_back({p.position,p.size,p.color,found->second});
+                const auto& p=presentation[offset];particlePackets_.push_back({p.position,p.size,p.color,found->second,p.rotation});
             }
         } catch(const std::exception& error) {
             status_+="Particle material "+group.materialId+": "+error.what()+"\n";
@@ -348,7 +348,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
         if(fingerprint!=savedPreviewFingerprint_) { savedPreviewFingerprint_=fingerprint;previews_->requestSceneSave(document.assetId()); }
     } catch(const std::exception& error){status_=error.what();}
     prepared_.endFrame();
-    const auto retained=renderer.modelResidentBytes()+renderer.thumbnailResidentBytes()+renderer.shadowResidentBytes();
+    const auto retained=renderer.modelResidentBytes()+renderer.thumbnailResidentBytes()+renderer.shadowResidentBytes()+renderer.glowResidentBytes();
     assets.trimTextureCache(retained>=resources_.config().gpuRetentionBytes?0:resources_.config().gpuRetentionBytes-retained);
     if(!prepared_.status().empty())status_+=prepared_.status();
     if(!sceneParticles.status().empty())status_+=sceneParticles.status();

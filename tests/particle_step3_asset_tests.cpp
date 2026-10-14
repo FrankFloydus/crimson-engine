@@ -1,4 +1,5 @@
 #include "assets/ParticleAsset.h"
+#include "particles/ParticleAppearance.h"
 #include "editor/ParticleDocument.h"
 #include "math/Json.h"
 #include <nlohmann/json.hpp>
@@ -65,7 +66,7 @@ void versionFourPersistence() {
         "New point effects do not use neutral spread/flatness defaults.");
     auto effect=authoredEffect();
     const auto encoded=serializeParticleAsset(effect);
-    require(Json::parse(encoded).at("version")==4,"New particle definitions do not use schema v4.");
+    require(Json::parse(encoded).at("version")==7,"New particle definitions do not use schema v7.");
     require(deserializeParticleAsset(encoded,effect.id)==effect,"v4 lost timing, ranges, behavior settings or identities.");
     saveParticleAsset(project.root,effect);
     require(loadParticleAsset(project.root,effect.id)==effect,"Saved v4 effect did not reopen identically.");
@@ -106,7 +107,7 @@ void priorVersionMigration() {
         auto expected=defaultParticleEffect("Old effect"); expected.id=migrated.id; expected.defaultSeed=0xabcdef1234567890ull;
         auto& e=expected.emitter;
         e.id=0xae12; e.name="Old impact"; e.enabled=false; e.rate=83.5f; e.lifetime=2.7f; e.initialVelocity={1,7,-2};
-        e.gravity={1,-15,4}; e.size=.21f; e.color={.2f,.3f,.4f}; e.intensity=2.5f; e.capacity=151;
+        e.gravity={1,-15,4}; e.size=.21f; e.color={particleSrgbToLinear(.2f),particleSrgbToLinear(.3f),particleSrgbToLinear(.4f)}; e.intensity=2.5f; e.capacity=151;
         if (version==2) { e.material=AssetRef<MaterialAsset>{"assets/materials/legacy.crimson-material"}; e.opacity=.35f; }
         require(migrated==expected,"Legacy migration changed original values or enabled new authoring behaviors.");
         require(migrated.emitter.shape==ParticleShape::Point && migrated.emitter.space==ParticleSpace::World &&
@@ -115,7 +116,7 @@ void priorVersionMigration() {
             !migrated.emitter.dragBehavior.present,"Legacy migration changed point/world/continuous/gravity behavior.");
         require(read(project.root/migrated.id)==source,"Reading a legacy effect rewrote its file.");
         saveParticleAsset(project.root,migrated);
-        require(Json::parse(read(project.root/migrated.id)).at("version")==4 && loadParticleAsset(project.root,migrated.id)==expected,
+        require(Json::parse(read(project.root/migrated.id)).at("version")==7 && loadParticleAsset(project.root,migrated.id)==expected,
             "Explicit save did not upgrade legacy data without changing behavior.");
     }
 }
@@ -125,6 +126,7 @@ void versionThreeLaunchMigration() {
             Project project;
             auto expected=authoredEffect(); expected.emitter.directionMode=mode; expected.emitter.velocityMode=velocity;
             auto source=Json::parse(serializeParticleAsset(expected)); source["version"]=3;
+            source["emitters"][0]["colorSpace"]="srgb";
             source["emitters"][0].erase("directionFlatness");
             const auto encoded=source.dump(2)+"\n";
             std::filesystem::create_directories(project.root/"assets/particles");
@@ -137,7 +139,7 @@ void versionThreeLaunchMigration() {
             source["emitters"][0]["directionFlatness"]=.9f;
             require(deserializeParticleAsset(source.dump(),expected.id)==expected,"Unknown v3 flatness field changed legacy launch behavior.");
             saveParticleAsset(project.root,migrated);
-            require(Json::parse(read(project.root/expected.id)).at("version")==4 && loadParticleAsset(project.root,expected.id)==expected,
+            require(Json::parse(read(project.root/expected.id)).at("version")==7 && loadParticleAsset(project.root,expected.id)==expected,
                 "Explicit v3 upgrade did not preserve migrated launch settings in v4.");
         }
 }
@@ -201,7 +203,7 @@ void boundsAndMalformedInput() {
     require(deserializeParticleAsset(serializeParticleAsset(bounds))==bounds,"Valid documented bounds did not save and reopen.");
     const auto encoded=Json::parse(serializeParticleAsset(valid));
     const auto malformed=[&](const auto& mutation,const char* message) { auto source=encoded; mutation(source); rejects([&]{deserializeParticleAsset(source.dump());},message); };
-    malformed([](auto& j){j["version"]=5;},"Unknown format version accepted.");
+    malformed([](auto& j){j["version"]=8;},"Unknown format version accepted.");
     malformed([](auto& j){j["version"]=4.0;},"Fractional version type accepted.");
     malformed([](auto& j){j["emitters"][0]["shape"]="capsule";},"Unimplemented shape name accepted.");
     malformed([](auto& j){j["emitters"][0]["space"]="camera";},"Unimplemented space name accepted.");

@@ -174,7 +174,7 @@ bool environmentControls(EnvironmentSettings& environment, AssetLibrary& assets,
     bool changed = false;
     static ImGuiTextFilter filter;
     sectionTitle("ENVIRONMENT");
-    changed |= ImGui::Checkbox("Enabled##environment", &environment.enabled);
+    changed |= ImGui::Checkbox("Environment lighting##environment", &environment.enabled);
     ImGui::TextUnformatted("Environment image");
     changed |= assetSlot(assets, "Environment image", "Equirectangular panorama. HDR is linear radiance; PNG/JPEG/TGA/BMP are sRGB.",
         environment.map, filter, true, "Built-in studio",
@@ -183,7 +183,9 @@ bool environmentControls(EnvironmentSettings& environment, AssetLibrary& assets,
     changed |= ImGui::SliderFloat("Rotation##environment", &environment.rotation, -180.0f, 180.0f, "%.1f deg");
     help("Rotate environment lighting around the world Y axis.");
     changed |= drawToneMappingControl(environment.toneMapping);
+    changed |= drawGlowControls(environment.glow);
     if (!renderer.environmentStatus().empty()) ImGui::TextWrapped("%s", renderer.environmentStatus().c_str());
+    if (!renderer.glowStatus().empty()) ImGui::TextWrapped("%s", renderer.glowStatus().c_str());
     ImGui::Spacing();
     if (ImGui::Button("Reset environment", ImVec2(-1, 0))) { environment = EnvironmentSettings{}; changed = true; }
     return changed;
@@ -307,6 +309,27 @@ bool drawToneMappingControl(ToneMapping& mode) {
     if(changed)mode=static_cast<ToneMapping>(selected);
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         ImGui::SetTooltip("Applied after exposure. Linear clips highlights; ACES adds filmic contrast; AgX softens bright saturated colors.\nReinhard preserves the original renderer appearance. Lighting calculations remain linear HDR.");
+    return changed;
+}
+
+bool drawGlowControls(GlowSettings& glow) {
+    bool changed=false;
+    ImGui::PushID("Glow");
+    if (ImGui::CollapsingHeader("Glow",ImGuiTreeNodeFlags_DefaultOpen)) {
+        changed|=ImGui::Checkbox("Enabled##glow",&glow.enabled);
+        help("Adds a halo around bright rendered colors. Independent of environment lighting and HDRI intensity.");
+        ImGui::BeginDisabled(!glow.enabled);
+        changed|=ImGui::SliderFloat("Strength",&glow.strength,0,10,"%.2f",ImGuiSliderFlags_AlwaysClamp);
+        changed|=ImGui::SliderFloat("Size",&glow.radius,0,8,"%.2f",ImGuiSliderFlags_AlwaysClamp);
+        help("Screen-space halo spread. Zero disables the halo.");
+        if (ImGui::TreeNode("Advanced")) {
+            changed|=ImGui::DragFloat("Threshold",&glow.threshold,.02f,0,100000,"%.2f",ImGuiSliderFlags_AlwaysClamp);
+            help("Brightness after exposure needed to glow. A soft transition avoids a hard cutoff; lower values include dimmer colors.");
+            ImGui::TreePop();
+        }
+        ImGui::EndDisabled();
+    }
+    ImGui::PopID();
     return changed;
 }
 

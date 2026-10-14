@@ -15,6 +15,7 @@
     "entt",
     "joltphysics",
     "recastnavigation",
-    "imguizmo"
+    "imguizmo",
+    "implot"
   ]
 }

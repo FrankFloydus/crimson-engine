@@ -8,9 +8,12 @@
 
 namespace crimson {
 
+inline constexpr float MaximumParticlePreprocessSeconds=60.f;
+
 struct ParticleEffectAsset {
     std::string id, name{"New Particle Effect"};
     uint64_t defaultSeed{1};
+    float preprocessSeconds{}; // Saved simulated time before playback is shown.
     ParticleEmitterDefinition emitter;
     bool operator==(const ParticleEffectAsset&) const = default;
 };
@@ -19,9 +22,9 @@ struct ParticleAssetEntry { std::string id, name; };
 ParticleEffectAsset defaultParticleEffect(const std::string& name = "New Particle Effect");
 void validateParticleAsset(const ParticleEffectAsset& asset);
 std::filesystem::path particleAssetPath(const std::filesystem::path& projectRoot, const std::string& id);
-// Writers publish native v4; readers retain point/world/continuous behavior and
-// material references from v1/v2 and migrate v3 launch settings compatibly.
-// Loading alone never rewrites older files.
+// Writers publish native v7 with effect-level preprocess seconds and linear HDR
+// colors. Readers retain v1-v6 behavior with preprocessing disabled, decoding
+// v1-v5 authored sRGB exactly once. Loading never rewrites older files.
 std::string serializeParticleAsset(const ParticleEffectAsset& asset);
 ParticleEffectAsset deserializeParticleAsset(std::string_view text, const std::string& expectedId = {});
 ParticleEffectAsset loadParticleAsset(const std::filesystem::path& projectRoot, const std::string& id);

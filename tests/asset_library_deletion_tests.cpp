@@ -80,6 +80,24 @@ void warningQueries(){
     require(together.error.empty()&&!together.needsReferenceWarning(),"A scene removed with its model was counted as a surviving owner.");
 }
 
+void legacyEnvironmentGlowPersistence(){
+    Project p;ResourceManager resources;AssetLibrary library(p.root,&resources);
+    const auto file=p.root/"assets/environment.json";
+    writeFileAtomically(file,R"({"version":1,"map":"","enabled":false,"intensity":2.5,"rotation":35,"toneMapping":3})");
+    EnvironmentSettings environment;environment.glow={true,4,2,3};library.loadEnvironment(environment);
+    require(!environment.glow.enabled && environment.glow==GlowSettings{} && environment.toneMapping==ToneMapping::AgX && environment.intensity==2.5f,
+        "Legacy environment without Glow did not retain its old appearance and default Glow off.");
+    environment.glow={true,2.25f,3.5f,4.75f};library.saveEnvironment(environment);const auto saved=read(file);
+    EnvironmentSettings reopened;library.loadEnvironment(reopened);
+    require(reopened.glow==environment.glow && reopened.intensity==environment.intensity && reopened.rotation==environment.rotation,
+        "Legacy environment Glow settings failed save/reopen.");
+    auto invalid=environment;invalid.glow.radius=9;library.saveEnvironment(invalid);
+    require(read(file)==saved,"Invalid Glow settings replaced the saved legacy environment file.");
+    auto corrupt=nlohmann::json::parse(saved);corrupt["glow"]["strength"]=-1;writeFileAtomically(file,corrupt.dump());
+    auto working=environment;library.loadEnvironment(working);
+    require(working.glow==environment.glow && working.rotation==environment.rotation,"Invalid legacy Glow load replaced working environment values.");
+}
+
 void archivedLegacyWarnings(){
     Project p;const auto model=seedModel(p);const auto fixtures=model_test::writeModelFixtures(p.root/"legacy-source");
     const std::string image="assets/textures/0b21c54a-61bd-4a5a-a0a9-693d6ad4f15f_roughness_linear.png";
@@ -335,6 +353,6 @@ int main(){try{
     // No renderer is initialized and no GPU preparation is advanced. The public
     // runtime AssetLibrary path, reference index and worker deletion pipeline
     // operate on disposable managed data and immutable CPU resources only.
-    warningQueries();archivedLegacyWarnings();embeddedMaterialWarningOwners();removeModelAcrossScenes(false);removeModelAcrossScenes(true);fallbackReopening();cancelAndStaleDeletion();activeSceneAndFolderDeletion();particleMaterialDeletionAndAuthority();spriteImageDeletionAndIncompatibleMaterial();boxMaterialDeletionAndPublication();boxMaterialHistoryOnlyDeletion();
+    warningQueries();legacyEnvironmentGlowPersistence();archivedLegacyWarnings();embeddedMaterialWarningOwners();removeModelAcrossScenes(false);removeModelAcrossScenes(true);fallbackReopening();cancelAndStaleDeletion();activeSceneAndFolderDeletion();particleMaterialDeletionAndAuthority();spriteImageDeletionAndIncompatibleMaterial();boxMaterialDeletionAndPublication();boxMaterialHistoryOnlyDeletion();
     std::cout<<"Public AssetLibrary deletion, warning, fallback and document integration checks passed.\n";return 0;
 }catch(const std::exception& error){std::cerr<<"AssetLibrary deletion test failed: "<<error.what()<<'\n';return 1;}}

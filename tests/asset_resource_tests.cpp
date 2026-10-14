@@ -5,6 +5,8 @@
 #include "assets/AsyncImports.h"
 #include "assets/DeletionPreparation.h"
 #include "assets/ParticleAsset.h"
+#include "particles/ParticleAppearance.h"
+#include "math/Json.h"
 #include "model_fixtures.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -301,8 +303,17 @@ void particleMaterialStorageAndDependencies(){
     material.shading=MaterialShading::Unlit;material.blend=MaterialBlend::Additive;
     effect.emitter.material=AssetRef<MaterialAsset>{material.id};effect.emitter.opacity=.3f;saveParticleAsset(p.root,effect);
     require(loadParticleAsset(p.root,effect.id)==effect,"Particle v2 material and opacity did not round-trip.");
-    auto legacy=Json::parse(serializeParticleAsset(effect));legacy["version"]=1;legacy["emitters"][0]["renderer"]="procedural-additive";legacy["emitters"][0].erase("material");legacy["emitters"][0].erase("opacity");
-    const auto migrated=deserializeParticleAsset(legacy.dump(),effect.id);require(migrated.emitter.material.id==DefaultParticleMaterialId&&migrated.emitter.opacity==1,"Particle v1 migration changed the procedural appearance.");
+    auto legacy=Json::parse(serializeParticleAsset(effect));legacy["version"]=1;
+    auto& legacyEmitter=legacy["emitters"][0];
+    legacyEmitter["renderer"]="procedural-additive";legacyEmitter["colorSpace"]="srgb";
+    // A historical fixture must contain its actual SDR picker values, rather
+    // than relabeling the native v6 linear-HDR representation as version 1.
+    legacyEmitter["color"]=Vec3{.5f,.25f,1};legacyEmitter["intensity"]=3.5f;
+    legacyEmitter.erase("material");legacyEmitter.erase("opacity");
+    auto expectedLegacy=effect;expectedLegacy.emitter.material=AssetRef<MaterialAsset>{DefaultParticleMaterialId};expectedLegacy.emitter.opacity=1;
+    expectedLegacy.emitter.color={particleSrgbToLinear(.5f),particleSrgbToLinear(.25f),1};expectedLegacy.emitter.intensity=3.5f;
+    const auto migrated=deserializeParticleAsset(legacy.dump(),effect.id);
+    require(migrated==expectedLegacy,"Particle v1 migration changed its decoded color, intensity or procedural appearance.");
     auto invalid=effect;invalid.emitter.opacity=1.1f;rejects([&]{validateParticleAsset(invalid);},"Particle accepted opacity above one.");
     invalid=effect;invalid.emitter.material=AssetRef<MaterialAsset>{"assets/materials/../../foreign.crimson-material"};rejects([&]{validateParticleAsset(invalid);},"Particle accepted an escaping material reference.");
     const auto fixtures=model_test::writeModelFixtures(p.root/"source");fs::create_directories(p.root/"assets/textures");fs::copy_file(fixtures.image,p.root/"assets/textures/sprite.png");

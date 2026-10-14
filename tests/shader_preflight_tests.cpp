@@ -5,6 +5,8 @@
 #include "fs_pick.h"
 #include "vs_present.h"
 #include "fs_present.h"
+#include "fs_glow_extract.h"
+#include "fs_glow_blur.h"
 #include "vs_grid.h"
 #include "fs_grid.h"
 #include "fs_encode.h"
@@ -27,6 +29,8 @@ int main() {
         pair(cc_vs_particle,cc_fs_particle);
         pair(cc_vs_present,cc_fs_sky);
         pair(cc_vs_point_shadow,cc_fs_point_shadow);
+        pair(cc_vs_present,cc_fs_glow_extract);pair(cc_vs_present,cc_fs_glow_blur);
+        check(!crimson::preflightShaderPair(cc_vs_present,cc_fs_glow_extract,cc_vs_present,cc_fs_present,diagnostic),"Glow extraction must not replace the tone-map sampler contract.");
         check(!crimson::preflightShaderPair(cc_vs_pick,cc_fs_pick,cc_vs_point_shadow,cc_fs_point_shadow,diagnostic),"Picking must not replace the shadow caster contract.");
         std::vector<std::uint8_t> truncated(std::begin(cc_fs_model),std::end(cc_fs_model)); truncated.resize(20);
         check(!crimson::preflightShaderPair(cc_vs_model,truncated,cc_vs_model,cc_fs_model,diagnostic),"Truncated shader should fail safely.");

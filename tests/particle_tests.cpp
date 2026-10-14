@@ -148,7 +148,7 @@ void transformsAndPresentation() {
     system.advance(ParticleFixedStep*.75);
     std::vector<ParticlePresentation> frame; system.appendPresentation(frame);
     require(!frame.empty(),"Live particles produced no presentation.");
-    expectNear(frame.front().color[0],2.1404114,"Authored sRGB did not convert to linear HDR.");
+    expectNear(frame.front().color[0],5,"Canonical linear HDR color changed.");
     expectNear(frame.front().color[2],10,"HDR intensity was clamped.");
     expectNear(frame.front().size,.08,"Size was not preserved in world meters.");
     require(frame.front().color[3]==1,"Presentation opacity differs from the procedural sprite contract.");
@@ -199,7 +199,7 @@ void liveAppearanceAndDocumentChanges() {
     preservesLiveState(preview,baseline);
     std::vector<ParticlePresentation> changed; preview.appendPresentation(changed);
     require(changed.size()==original.size() && changed.front().position==original.front().position,"Paused appearance update moved or removed visible particles.");
-    expectNear(changed.front().color[0],particleSrgbToLinear(.5f)*2,"Live color/intensity did not affect existing particles.");
+    expectNear(changed.front().color[0],.5f*2,"Live color/intensity did not affect existing particles.");
     expectNear(changed.front().size,.2,"Live size did not affect existing particles.");
     expectNear(changed.front().color[3],.4,"Opacity did not update paused live particles.");
     require(document.commit(),"Cannot commit live appearance transaction.");
@@ -214,7 +214,7 @@ void liveAppearanceAndDocumentChanges() {
     preview.updateDefinition(document.definition()); preservesLiveState(preview,baseline);
     document.cancel(); preview.updateDefinition(document.definition()); preservesLiveState(preview,baseline);
     changed.clear(); preview.appendPresentation(changed);
-    expectNear(changed.front().color[0],particleSrgbToLinear(.5f)*2,"Cancel did not restore prior live appearance.");
+    expectNear(changed.front().color[0],.5f*2,"Cancel did not restore prior live appearance.");
     preview.stop(); const LiveParticleSnapshot stopped(preview);
     require(document.edit("Stopped intensity",[](auto& asset){asset.emitter.intensity=4;}),"Cannot update stopped fixture.");
     preview.updateDefinition(*document.committed()); preservesLiveState(preview,stopped);
@@ -300,13 +300,15 @@ void persistenceAndValidation() {
     require(readText(particleAssetPath(project.root,effect.id))==original,"Save As changed its source file.");
     auto malformed=nlohmann::json::parse(original); malformed["emitters"][0]["capacity"]=1.5;
     rejects([&]{deserializeParticleAsset(malformed.dump(),effect.id);});
-    malformed=nlohmann::json::parse(original); malformed["version"]=5;
+    malformed=nlohmann::json::parse(original); malformed["version"]=8;
     rejects([&]{deserializeParticleAsset(malformed.dump(),effect.id);});
     auto legacy=nlohmann::json::parse(original);legacy["version"]=1;
     legacy["emitters"][0].erase("material");legacy["emitters"][0].erase("opacity");
     legacy["emitters"][0]["renderer"]="procedural-additive";
+    legacy["emitters"][0]["colorSpace"]="srgb";
     const auto migrated=deserializeParticleAsset(legacy.dump(),effect.id);
-    require(migrated==effect,"Step 1 migration changed the saved particle definition.");
+    auto expectedLegacy=effect;for(auto& channel:expectedLegacy.emitter.color)channel=particleSrgbToLinear(channel);
+    require(migrated==expectedLegacy,"Step 1 migration changed the saved particle appearance.");
     malformed=nlohmann::json::parse(original);malformed["emitters"][0]["opacity"]=-.1f;
     rejects([&]{deserializeParticleAsset(malformed.dump(),effect.id);});
     rejects([&]{loadParticleAsset(project.root,"assets/particles/../material.json");});
@@ -398,7 +400,7 @@ void sceneReconciliation() {
     effect->emitter.color={.5f,0,0}; ++revision; runtime.reconcile(7,sources,query,0);
     require(runtime.instance(1)->elapsed()==timeBeforePublication && runtime.instance(2)->elapsed()==otherTimeBeforePublication &&
         !runtime.presentation().empty(),"Live color publication cleared scene particles.");
-    expectNear(runtime.presentation().front().color[0],particleSrgbToLinear(.5f),"Scene color publication did not update visible particles.");
+    expectNear(runtime.presentation().front().color[0],.5f,"Scene color publication did not update visible particles.");
     runtime.reconcile(8,sources,query,0);
     require(runtime.instance(1)->particles().empty(),"Document replacement retained transient state.");
     missing=true; runtime.reconcile(8,sources,query,0);

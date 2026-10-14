@@ -102,26 +102,41 @@ std::vector<size_t> prepareBurstOrder(const ParticleEmitterDefinition& emitter) 
 uint64_t scheduledCount(double amount) { return static_cast<uint64_t>(std::max(0.0,std::floor(amount+1e-12))); }
 }
 
-float particleSrgbToLinear(float value) {
-    return value<=0.04045f ? value/12.92f : std::pow((value+0.055f)/1.055f,2.4f);
-}
 CpuParticleSystem::CpuParticleSystem(ParticleSimulationLimits limits):limits_(limits) {
     if (!limits.maximumCatchUpTicks || limits.maximumCatchUpTicks>256 || !limits.maximumSpawnPerTick || limits.maximumSpawnPerTick>MaximumParticleCapacity ||
         !limits.maximumScheduleSegmentsPerTick || limits.maximumScheduleSegmentsPerTick>256)
         throw std::runtime_error("Particle simulation work limits must be nonzero and bounded.");
 }
 void CpuParticleSystem::restart(const ParticleEffectAsset& definition,uint64_t seed,const Mat4& world) {
+    restartInternal(definition,seed,world,true);
+}
+void CpuParticleSystem::restartInternal(const ParticleEffectAsset& definition,uint64_t seed,const Mat4& world,bool preprocess) {
     validateParticleAsset(definition);
     if (!math::finite(world) || !math::isAffine(world)) throw std::runtime_error("Particle emitter requires a finite affine world matrix.");
     auto prepared=definition;
     auto preparedBursts=prepareBurstOrder(prepared.emitter);
+    auto preparedAppearance=prepareParticleAppearance(prepared.emitter);
     std::vector<ParticleState> preparedParticles;
     preparedParticles.reserve(prepared.emitter.capacity);
     definition_=std::move(prepared); world_=world; seed_=seed;
     burstOrder_=std::move(preparedBursts);
+    appearance_=std::move(preparedAppearance);appearanceSeed_=particleAppearanceSeed(seed_,definition_.emitter.id);
     particles_.swap(preparedParticles); stats_={}; nextSpawnOrdinal_=0;
     elapsed_=remainder_=emissionRemainder_=0;
+    // Decimal UI values such as 0.1 or 4.05 seconds can land a float ULP above
+    // an exact tick. Remove only that representational noise before ceiling.
+    const auto rawTicks=preprocess?static_cast<double>(definition_.preprocessSeconds)*60:0;
+    const auto nearestTick=std::round(rawTicks);
+    const auto tolerance=2*std::numeric_limits<float>::epsilon()*std::max(1.0,rawTicks);
+    const auto ticks=std::abs(rawTicks-nearestTick)<=tolerance ? nearestTick:rawTicks;
+    const auto totalTicks=preprocess && definition_.preprocessSeconds>0 ? std::max(1u,static_cast<uint32_t>(std::ceil(ticks))) : 0;
+    presentCurrentTick_=false;
     state_=ParticlePlaybackState::Running;
+    // Like Godot CPU particles, pre-process finishes before rendering. This is
+    // ordinary deterministic simulation at the restart transform, not wall-time
+    // catch-up; configured duration and the usual per-tick limits bound work.
+    for(uint32_t tick=0;tick<totalTicks && !completed();++tick)simulateTick();
+    if(totalTicks)presentCurrentTick_=true;
 }
 void CpuParticleSystem::updateDefinition(const ParticleEffectAsset& definition) {
     validateParticleAsset(definition);
@@ -130,20 +145,24 @@ void CpuParticleSystem::updateDefinition(const ParticleEffectAsset& definition) 
     // Prepare every allocation before changing the published settings or live
     // state. Ordinary setters never touch particle records or playback clocks.
     auto prepared=definition;
+    auto preparedAppearance=prepareParticleAppearance(prepared.emitter);
     const bool capacityChanged=prepared.emitter.capacity!=definition_.emitter.capacity;
     const bool seedChanged=prepared.defaultSeed!=definition_.defaultSeed;
+    const bool preprocessChanged=prepared.preprocessSeconds!=definition_.preprocessSeconds;
     const auto& old=definition_.emitter;const auto& next=prepared.emitter;
     const bool scheduleChanged=old.space!=next.space || old.delay!=next.delay || old.finiteDuration!=next.finiteDuration ||
         old.duration!=next.duration || old.loop!=next.loop || old.bursts!=next.bursts;
-    if (seedChanged || scheduleChanged) {
+    if (seedChanged || scheduleChanged || preprocessChanged) {
         const auto oldState=state_;
-        restart(prepared,seedChanged?prepared.defaultSeed:seed_,world_);
+        restartInternal(prepared,seedChanged?prepared.defaultSeed:seed_,world_,oldState!=ParticlePlaybackState::Stopped);
         state_=oldState;
+        if(oldState==ParticlePlaybackState::Stopped)stop();
         return;
     }
     std::vector<ParticleState> replacement;
     if (capacityChanged) replacement.reserve(prepared.emitter.capacity);
     definition_=std::move(prepared);
+    appearance_=std::move(preparedAppearance);
     if (capacityChanged) {
         stats_.clearedCapacityParticles+=particles_.size();
         particles_.swap(replacement);
@@ -160,6 +179,7 @@ void CpuParticleSystem::pause() {
 void CpuParticleSystem::stop() {
     particles_.clear(); elapsed_=remainder_=emissionRemainder_=0;
     nextSpawnOrdinal_=0; stats_={}; state_=ParticlePlaybackState::Stopped;
+    presentCurrentTick_=false;
 }
 bool CpuParticleSystem::setTransform(const Mat4& world) {
     if (!math::finite(world) || !math::isAffine(world)) return false;
@@ -183,7 +203,7 @@ void CpuParticleSystem::advance(double wallSeconds) {
     const auto available=static_cast<uint64_t>(std::floor((accumulated+1e-12)/ParticleFixedStep));
     const auto executed=std::min<uint64_t>(available,limits_.maximumCatchUpTicks);
     uint64_t actual{};
-    for (;actual<executed && !completed();++actual) simulateTick();
+    for (;actual<executed && !completed();++actual) {presentCurrentTick_=false;simulateTick();}
     // Time after natural completion is idle, not an overloaded simulation
     // backlog. Preserve earlier counters but do not invent discarded work.
     if (completed()) { remainder_=0;return; }
@@ -193,7 +213,9 @@ void CpuParticleSystem::advance(double wallSeconds) {
     remainder_=std::clamp(accumulated-available*ParticleFixedStep,0.0,ParticleFixedStep);
 }
 void CpuParticleSystem::tick() {
-    if (state_==ParticlePlaybackState::Running && !completed()) { simulateTick(); remainder_=0; }
+    if (state_==ParticlePlaybackState::Running && !completed()) {
+        presentCurrentTick_=false;simulateTick();remainder_=0;
+    }
 }
 void CpuParticleSystem::emitBatch(uint64_t count,double offset,double spacing) {
     const auto& emitter=definition_.emitter;
@@ -322,9 +344,7 @@ void CpuParticleSystem::simulateTick() {
 }
 void CpuParticleSystem::appendPresentation(std::vector<ParticlePresentation>& out,std::optional<double> interpolationOverride,const Mat4* presentationWorld) const {
     const auto& emitter=definition_.emitter;
-    const Vec4 radiance{particleSrgbToLinear(emitter.color[0])*emitter.intensity,
-        particleSrgbToLinear(emitter.color[1])*emitter.intensity,particleSrgbToLinear(emitter.color[2])*emitter.intensity,emitter.opacity};
-    const bool interpolate=state_!=ParticlePlaybackState::Stopped;
+    const bool interpolate=state_!=ParticlePlaybackState::Stopped && !presentCurrentTick_;
     const auto alpha=std::clamp(interpolationOverride.value_or(interpolation()),0.0,1.0);
     const auto displayTime=interpolate?std::max(0.0,elapsed_-ParticleFixedStep+alpha*ParticleFixedStep):elapsed_;
     for (const auto& particle:particles_) {
@@ -338,7 +358,10 @@ void CpuParticleSystem::appendPresentation(std::vector<ParticlePresentation>& ou
         auto position=particle.previousPosition+(particle.position-particle.previousPosition)*factor;
         if (emitter.space==ParticleSpace::Local) position=math::transformPoint(presentationWorld?*presentationWorld:world_,position);
         if (!math::finite(position)) continue;
-        out.push_back({position,emitter.size,radiance,particle.spawnOrdinal});
+        const auto normalizedAge=std::clamp((displayTime-particle.birthTime)/particle.lifetime,0.0,1.0);
+        const auto appearance=appearance_.sample(normalizedAge,appearanceSeed_,particle.spawnOrdinal);
+        if(appearance.size<=0)continue; // Authored disappearance is not a simulation overflow.
+        out.push_back({position,appearance.size,appearance.color,particle.spawnOrdinal,appearance.rotation});
     }
 }
 
