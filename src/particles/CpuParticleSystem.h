@@ -15,7 +15,8 @@ public:
     void restart(const ParticleEffectAsset& definition, uint64_t seed = 1, const Mat4& world = {});
     // Publish same-identity settings without restarting playback. Appearance is
     // immediate, forces/emission use the next tick, and birth values remain
-    // cached by live particles. Capacity changes clear only the live storage.
+    // cached by live particles. Capacity changes clear only the live storage;
+    // seed, timing, burst and simulation-space edits restart the same instance.
     void updateDefinition(const ParticleEffectAsset& definition);
     void play();
     void pause();
@@ -31,8 +32,15 @@ public:
     std::span<const ParticleState> particles() const { return particles_; }
     size_t reservedCapacity() const { return particles_.capacity(); }
     const ParticleEffectAsset& definition() const { return definition_; }
+    bool emissionFinished() const;
+    bool completed() const { return emissionFinished() && particles_.empty(); }
+    bool draining() const { return emissionFinished() && !particles_.empty(); }
+    // Presentation transforms are copied/validated by the scene owner. They
+    // affect only local-space extraction, never birth or authoritative motion.
+    Vec3 particleWorldPosition(const ParticleState& particle,const Mat4* presentationWorld = nullptr) const;
     // Append presentation packets without disturbing authoritative particle order.
-    void appendPresentation(std::vector<ParticlePresentation>& out,std::optional<double> interpolationOverride = {}) const;
+    void appendPresentation(std::vector<ParticlePresentation>& out,std::optional<double> interpolationOverride = {},
+                            const Mat4* presentationWorld = nullptr) const;
 private:
     ParticleEffectAsset definition_;
     ParticleSimulationLimits limits_;
@@ -42,7 +50,19 @@ private:
     ParticlePlaybackState state_{ParticlePlaybackState::Stopped};
     uint64_t seed_{1}, nextSpawnOrdinal_{};
     double elapsed_{}, remainder_{}, emissionRemainder_{};
+    std::vector<size_t> burstOrder_; // Authored identities remain stable; only this execution index is sorted.
+    struct PreparedSpawn {
+        uint64_t seed{};
+        Vec3 direction{},tangent{},bitangent{};
+        double spreadCosine{},flattenFactor{1},lifetimeMinimum{},lifetimeSpan{},speedMinimum{},speedSpan{};
+    } spawn_;
+    Vec3 acceleration_{};
+    double drag_{};
+    uint32_t spawnedThisTick_{};
     void simulateTick();
+    void emitBatch(uint64_t count,double offset,double spacing);
+    void scheduleSegment(double begin,double end,double cycleStart);
+    void dropSchedule(double begin,double end);
 };
 
 // Named color boundary: authored picker values are sRGB, emitted radiance linear.

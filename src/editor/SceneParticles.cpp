@@ -4,7 +4,8 @@
 
 namespace crimson {
 void SceneParticles::reconcile(std::uint64_t generation,std::span<const ExtractedParticle> authored,
-                              const DefinitionQuery& query,double seconds,EntityId restart,std::optional<double> interpolationOverride) {
+                              const DefinitionQuery& query,double seconds,EntityId restart,std::optional<double> interpolationOverride,
+                              std::span<const ExtractedParticle> presentationTransforms) {
     if(generation_!=generation) { instances_.clear();generation_=generation; }
     status_.clear();presentation_.clear();groups_.clear();
     struct Admission { const ExtractedParticle* source;ParticleDefinitionVersion version;bool updated{}; };
@@ -28,6 +29,11 @@ void SceneParticles::reconcile(std::uint64_t generation,std::span<const Extracte
         capacity+=required;retained.insert(source.id);
         admitted.push_back({&source,definition});
     }
+    std::unordered_map<EntityId,const Mat4*> presentationWorlds;
+    presentationWorlds.reserve(admitted.size());
+    for(const auto& source:presentationTransforms)
+        if(retained.contains(source.id) && math::finite(source.world) && math::isAffine(source.world))
+            presentationWorlds.try_emplace(source.id,&source.world);
     // Release excluded instances before new reservations. Shrinking versions
     // prepare first, so steady reservations never exceed the admitted budget.
     std::erase_if(instances_,[&](const auto& entry){return !retained.contains(entry.first);});
@@ -53,14 +59,18 @@ void SceneParticles::reconcile(std::uint64_t generation,std::span<const Extracte
             if(!entry.updated && instance.revision!=definition.revision)instance.simulation.updateDefinition(next);
         }
         instance.assetId=source.assetId;instance.revision=definition.revision;
+        instance.presentationWorld=source.world;
+        if(const auto presented=presentationWorlds.find(source.id);presented!=presentationWorlds.end())instance.presentationWorld=*presented->second;
         instance.simulation.advance(seconds);
-        const auto first=presentation_.size();instance.simulation.appendPresentation(presentation_,interpolationOverride);
+        const auto first=presentation_.size();instance.simulation.appendPresentation(presentation_,interpolationOverride,&instance.presentationWorld);
         groups_.push_back({source.id,next.emitter.material.id,first,presentation_.size()-first});
         const auto& stats=instance.simulation.stats();
         if(stats.droppedSpawns || stats.droppedCatchUpTicks)
             status_+="Particle entity "+std::to_string(source.id)+": dropped "+std::to_string(stats.droppedSpawns)+" births, "+std::to_string(stats.droppedCatchUpTicks)+" catch-up ticks.\n";
         if(stats.clearedCapacityParticles)
             status_+="Particle entity "+std::to_string(source.id)+": capacity edits cleared "+std::to_string(stats.clearedCapacityParticles)+" particles.\n";
+        if(stats.droppedScheduleSegments)
+            status_+="Particle entity "+std::to_string(source.id)+": skipped "+std::to_string(stats.droppedScheduleSegments)+" emission-cycle segments because the scheduling budget was exceeded.\n";
         if(!definition.diagnostic.empty())status_+="Particle entity "+std::to_string(source.id)+": "+definition.diagnostic+"\n";
     }
 }
@@ -68,12 +78,16 @@ const CpuParticleSystem* SceneParticles::instance(EntityId id) const {
     const auto found=instances_.find(id);return found==instances_.end()?nullptr:&found->second.simulation;
 }
 std::optional<Aabb> SceneParticles::bounds(EntityId id) const {
-    const auto* simulation=instance(id);if(!simulation || simulation->particles().empty()) return std::nullopt;
+    const auto found=instances_.find(id);
+    if(found==instances_.end() || found->second.simulation.particles().empty())return std::nullopt;
+    const auto* simulation=&found->second.simulation;
     Aabb bounds;
     const auto radius=simulation->definition().emitter.size*.5f;
     for(const auto& p:simulation->particles()) {
-        math::include(bounds,p.position-Vec3{radius,radius,radius});math::include(bounds,p.position+Vec3{radius,radius,radius});
+        const auto world=simulation->particleWorldPosition(p,&found->second.presentationWorld);
+        if(!math::finite(world))continue;
+        math::include(bounds,world-Vec3{radius,radius,radius});math::include(bounds,world+Vec3{radius,radius,radius});
     }
-    return bounds;
+    return bounds.valid ? std::optional<Aabb>{bounds} : std::nullopt;
 }
 }

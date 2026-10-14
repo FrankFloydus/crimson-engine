@@ -300,7 +300,7 @@ void persistenceAndValidation() {
     require(readText(particleAssetPath(project.root,effect.id))==original,"Save As changed its source file.");
     auto malformed=nlohmann::json::parse(original); malformed["emitters"][0]["capacity"]=1.5;
     rejects([&]{deserializeParticleAsset(malformed.dump(),effect.id);});
-    malformed=nlohmann::json::parse(original); malformed["version"]=3;
+    malformed=nlohmann::json::parse(original); malformed["version"]=5;
     rejects([&]{deserializeParticleAsset(malformed.dump(),effect.id);});
     auto legacy=nlohmann::json::parse(original);legacy["version"]=1;
     legacy["emitters"][0].erase("material");legacy["emitters"][0].erase("opacity");

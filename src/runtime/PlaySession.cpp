@@ -88,7 +88,7 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
         if(input && (inputCancellation_!=input->cancellationRevision() || !input->ownsKeyboard()))clearRoute();
         if(input)inputCancellation_=input->cancellationRevision();
         if(!active) {
-            clearRoute();remainder_=0;suspended_=true;resetInterpolation();reconcileParticles(0);refreshPresentation();status_=physics_->status();return;
+            clearRoute();remainder_=0;suspended_=true;resetInterpolation();refreshPresentation();reconcileParticles(0);status_=physics_->status();return;
         }
         if(input) {
             const auto character=document_->scene().find(controlled);
@@ -204,6 +204,11 @@ void PlaySession::refreshPresentation() {
 void PlaySession::reconcileParticles(double seconds) {
     if(!document_ || !particleDefinitions_)return;
     const auto scene=extractScene(document_->scene());
-    particles_.reconcile(document_->documentGeneration(),scene.particles,particleDefinitions_,seconds,NoEntity,interpolation());
+    // Local effects follow the same interpolated hierarchy as their rendered
+    // parent. Births and simulation continue to consume the current tick world.
+    if(seconds==0) {
+        const auto presented=extractScene(presentation_);
+        particles_.reconcile(document_->documentGeneration(),scene.particles,particleDefinitions_,seconds,NoEntity,interpolation(),presented.particles);
+    } else particles_.reconcile(document_->documentGeneration(),scene.particles,particleDefinitions_,seconds,NoEntity,interpolation());
 }
 }

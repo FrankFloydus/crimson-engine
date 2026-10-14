@@ -6,10 +6,32 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <numbers>
+#include <utility>
 
 namespace crimson {
+namespace {
+// Derive the simple controls without publishing a migration merely because an
+// older effect was opened. The result becomes authored only on an actual edit.
+ParticleEmitterDefinition editableLaunch(const ParticleEmitterDefinition& source) {
+    auto result=source;
+    if(source.velocityMode==ParticleVelocityMode::Vector) {
+        result.direction=math::normalized(source.initialVelocity,math::normalized(source.direction));
+        result.speed=static_cast<float>(math::length(source.initialVelocity));
+        result.speedRange.enabled=false;
+        result.velocityMode=ParticleVelocityMode::DirectionSpeed;
+        result.directionMode=ParticleDirectionMode::RandomCone;
+        result.directionSpread=0;result.directionFlatness=0;
+    } else if(source.directionMode==ParticleDirectionMode::Fixed) {
+        result.directionMode=ParticleDirectionMode::RandomCone;
+        result.directionSpread=0;
+    }
+    return result;
+}
+}
 bool ParticleEditor::isOpen() const { return document_.isOpen(); }
 bool ParticleEditor::focused() const {
     const auto* window=ImGui::GetCurrentContext()->NavWindow;
@@ -24,19 +46,62 @@ void ParticleEditor::finishInteraction() {
     const auto* active=ImGui::GetCurrentContext()->ActiveIdWindow;
     if(active && active->RootWindow->ID==ImHashStr("###ParticleEffect"))ImGui::ClearActiveID();
 }
+void ParticleEditor::cancelInteraction() {
+    const bool canceled=document_.transactionActive();
+    document_.cancel();previewGesture_=0;
+    const auto* context=ImGui::GetCurrentContext();
+    const auto* active=context?context->ActiveIdWindow:nullptr;
+    const bool owned=active && active->RootWindow->ID==ImHashStr("###ParticleEffect");
+    if(owned)ImGui::ClearActiveID();
+    // InputText can return its final buffer when deactivated. Ignore that
+    // delivery after cancellation so it cannot create another undo command.
+    suppressCanceledUpdate_|=canceled || owned;
+}
 void ParticleEditor::framePreview() {
     preview_.camera=Camera{};
     const auto& emitter=document_.definition().emitter;
-    Vec3 minimum{},maximum{};
-    const double lifetime=emitter.lifetime;
+    Vec3 extent{};
+    if(emitter.shape==ParticleShape::Sphere)extent={emitter.radius,emitter.radius,emitter.radius};
+    if(emitter.shape==ParticleShape::Cone)extent={emitter.radius,0,emitter.radius};
+    if(emitter.shape==ParticleShape::Box)extent=emitter.boxSize*.5;
+    Vec3 minimum=extent*-1,maximum=extent;
+    const double lifetime=std::min(10.f,emitter.lifetimeRange.enabled?emitter.lifetimeRange.maximum:emitter.lifetime);
+    Vec3 velocityMinimum=emitter.initialVelocity,velocityMaximum=emitter.initialVelocity;
+    if(emitter.velocityMode==ParticleVelocityMode::DirectionSpeed) {
+        const float low=emitter.speedRange.enabled?emitter.speedRange.minimum:emitter.speed;
+        const float high=emitter.speedRange.enabled?emitter.speedRange.maximum:emitter.speed;
+        if(emitter.directionMode==ParticleDirectionMode::Fixed) {
+            const auto direction=math::normalized(emitter.direction);
+            for(std::size_t axis=0;axis<3;++axis) {
+                velocityMinimum[axis]=std::min(direction[axis]*low,direction[axis]*high);
+                velocityMaximum[axis]=std::max(direction[axis]*low,direction[axis]*high);
+            }
+        } else if(emitter.directionMode==ParticleDirectionMode::RandomCone) {
+            const auto direction=math::normalized(emitter.direction);
+            const double spread=emitter.directionSpread*std::numbers::pi/180;
+            for(std::size_t axis=0;axis<3;++axis) {
+                const double angle=std::acos(std::clamp(double(direction[axis]),-1.0,1.0));
+                const double directionMaximum=angle<=spread?1:std::cos(angle-spread);
+                const double directionMinimum=std::numbers::pi-angle<=spread?-1:std::cos(angle+spread);
+                velocityMinimum[axis]=static_cast<float>(std::min(directionMinimum*low,directionMinimum*high));
+                velocityMaximum[axis]=static_cast<float>(std::max(directionMaximum*low,directionMaximum*high));
+            }
+        } else { velocityMinimum={-high,-high,-high};velocityMaximum={high,high,high}; }
+    }
+    Vec3 force{};
+    if(emitter.gravityBehavior.present && emitter.gravityBehavior.enabled)force=force+emitter.gravity;
+    if(emitter.accelerationBehavior.present && emitter.accelerationBehavior.enabled)force=force+emitter.acceleration;
     for(std::size_t axis=0;axis<3;++axis) {
-        const double velocity=emitter.initialVelocity[axis],gravity=emitter.gravity[axis];
-        const auto includeTime=[&](double time) {
-            const auto position=static_cast<float>(velocity*time+.5*gravity*time*time);
-            minimum[axis]=std::min(minimum[axis],position);maximum[axis]=std::max(maximum[axis],position);
-        };
-        includeTime(lifetime);
-        if(gravity!=0) { const auto turn=-velocity/gravity;if(turn>0 && turn<lifetime)includeTime(turn); }
+        const double acceleration=force[axis];
+        for(const double velocity:{double(velocityMinimum[axis]),double(velocityMaximum[axis])}) {
+            const auto includeTime=[&](double time) {
+                const auto position=static_cast<float>(velocity*time+.5*acceleration*time*time);
+                minimum[axis]=std::min(minimum[axis],position-extent[axis]);
+                maximum[axis]=std::max(maximum[axis],position+extent[axis]);
+            };
+            includeTime(lifetime);
+            if(acceleration!=0) { const auto turn=-velocity/acceleration;if(turn>0 && turn<lifetime)includeTime(turn); }
+        }
     }
     const float padding=std::max(.5f,emitter.size);
     preview_.camera.frameBounds(minimum-Vec3{padding,padding,padding},maximum+Vec3{padding,padding,padding},1.4f);
@@ -230,6 +295,253 @@ void ParticleEditor::materialControls(AssetLibrary& assets,MaterialEditor& mater
     if(ImGui::SmallButton("Edit Material"))materials.requestOpen(materialId,assets);
     ImGui::EndDisabled();
 }
+void ParticleEditor::authoringControls(AssetLibrary& assets,MaterialEditor& materials,bool canceled) {
+    const auto assetControl=[&](const char* label,const auto& draw) {
+        auto candidate=document_.definition();
+        const bool changed=draw(candidate);
+        if(!canceled && (ImGui::IsItemActivated() || changed) && !document_.transactionActive())document_.begin(label);
+        if(!canceled && changed)document_.update([&](auto& asset){asset=candidate;});
+        if(ImGui::IsItemDeactivated() && document_.transactionActive())document_.commit();
+    };
+    const auto control=[&](const char* label,const auto& draw) {
+        assetControl(label,[&](auto& asset){return draw(asset.emitter);});
+    };
+    const auto edit=[&](const char* label,const auto& mutation) {
+        if(canceled || (document_.transactionActive() && !document_.commit()))return;
+        document_.edit(label,mutation);
+    };
+    const auto tooltip=[](const char* text) {
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",text);
+    };
+    const auto fitBursts=[](auto& emitter) {
+        if(emitter.finiteDuration)for(auto& burst:emitter.bursts)
+            burst.time=std::min(burst.time,std::nextafter(emitter.duration,0.f));
+    };
+    const auto launchControl=[&](const char* label,const auto& draw) {
+        control(label,[&](auto& emitter) {
+            auto displayed=editableLaunch(emitter);
+            const bool changed=draw(displayed);
+            if(changed)emitter=std::move(displayed);
+            return changed;
+        });
+    };
+    const auto range=[&](const char* title,ParticleRandomRange ParticleEmitterDefinition::* field,float minimum,float maximum,bool launch=false) {
+        ImGui::PushID(title);
+        control("Change random range",[&](auto& emitter) {
+            auto displayed=launch?editableLaunch(emitter):emitter;
+            auto& values=displayed.*field;float pair[2]{values.minimum,values.maximum};
+            const bool changed=ImGui::DragFloat2(title,pair,.01f,minimum,maximum,"%.3f",ImGuiSliderFlags_AlwaysClamp);
+            if(changed) {
+                // Moving one end beyond the other keeps the range usable while dragging.
+                if(pair[0]>pair[1]) {
+                    if(pair[0]!=values.minimum)pair[1]=pair[0];else pair[0]=pair[1];
+                }
+                values.minimum=pair[0];values.maximum=pair[1];
+                if(launch)emitter=std::move(displayed);else emitter.*field=values;
+            }
+            return changed;
+        });
+        tooltip("Minimum and maximum. Each new particle receives a repeatable random value within this range.");
+        ImGui::PopID();
+    };
+    ImGui::TextUnformatted(document_.definition().emitter.name.c_str());
+    control("Enable emitter",[](auto& emitter){return ImGui::Checkbox("Enabled",&emitter.enabled);});
+    tooltip("Enable emission. Disabling stops new births while existing particles finish their lifetime.");
+    if(ImGui::CollapsingHeader("Timing",ImGuiTreeNodeFlags_DefaultOpen)) {
+        control("Change emitter timing",[&](auto& emitter) {
+            int mode=emitter.finiteDuration?(emitter.loop?2:1):0;
+            const bool changed=ImGui::Combo("Playback",&mode,"Continuous\0One shot\0Looping\0");
+            if(changed) {
+                emitter.finiteDuration=mode!=0;emitter.loop=mode==2;
+                if(emitter.finiteDuration && !emitter.bursts.empty()) {
+                    float last=0;for(const auto& burst:emitter.bursts)last=std::max(last,burst.time);
+                    emitter.duration=std::max(emitter.duration,std::min(MaximumParticleTime,last+MinimumParticleDuration));
+                    fitBursts(emitter);
+                }
+            }
+            return changed;
+        });
+        tooltip("Continuous emits until stopped. One shot emits for its duration, then lets live particles finish. Looping repeats the duration.\nTiming edits replay the effect and retain Pause/Stop state.");
+        control("Change emitter delay",[](auto& emitter){return ImGui::DragFloat("Delay (s)",&emitter.delay,.01f,0,MaximumParticleTime,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+        tooltip("Wait once before the first emission cycle. Restart repeats the delay; subsequent loops do not.");
+        if(document_.definition().emitter.finiteDuration) {
+            control("Change emitter duration",[&](auto& emitter) {
+                const bool changed=ImGui::DragFloat("Duration (s)",&emitter.duration,.01f,MinimumParticleDuration,MaximumParticleTime,"%.3f",ImGuiSliderFlags_AlwaysClamp);
+                if(changed)fitBursts(emitter);return changed;
+            });
+            tooltip("Duration of one emission cycle. Shortening it moves later bursts inside its end. Live particles can outlast emission.");
+        }
+        assetControl("Change particle seed",[](auto& asset){return ImGui::InputScalar("Seed",ImGuiDataType_U64,&asset.defaultSeed);});
+        tooltip("Restart reproduces variation with this seed. Changing it replays the effect and retains Pause/Stop state.");
+    }
+    if(ImGui::CollapsingHeader("Emission",ImGuiTreeNodeFlags_DefaultOpen)) {
+        control("Change emission shape",[](auto& emitter) {
+            int shape=static_cast<int>(emitter.shape);
+            const bool changed=ImGui::Combo("Shape",&shape,"Point\0Cone\0Sphere\0Box\0");
+            if(changed) {
+                emitter.shape=static_cast<ParticleShape>(shape);
+                if(emitter.shape==ParticleShape::Cone || emitter.shape==ParticleShape::Sphere) {
+                    if(emitter.velocityMode==ParticleVelocityMode::Vector) {
+                        const auto speed=static_cast<float>(math::length(emitter.initialVelocity));
+                        emitter.direction=math::normalized(emitter.initialVelocity,math::normalized(emitter.direction));
+                        if(speed>0)emitter.speed=speed;
+                        emitter.speedRange.enabled=false;emitter.directionFlatness=0;
+                    }
+                    emitter.velocityMode=ParticleVelocityMode::DirectionSpeed;
+                    emitter.directionMode=emitter.shape==ParticleShape::Cone?ParticleDirectionMode::RandomCone:ParticleDirectionMode::Outward;
+                    emitter.directionSpread=emitter.shape==ParticleShape::Cone?20.f:0.f;
+                }
+            }
+            return changed;
+        });
+        tooltip("Shapes locate new particles in emitter coordinates. Cone starts on an XZ disk and uses the direction/spread below. Sphere fills its volume; Box uses full dimensions.");
+        const auto shape=document_.definition().emitter.shape;
+        if(shape==ParticleShape::Cone || shape==ParticleShape::Sphere)
+            control("Change emission radius",[](auto& emitter){return ImGui::DragFloat("Radius (m)",&emitter.radius,.01f,0,MaximumParticleShapeSize,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+        if(shape==ParticleShape::Box)
+            control("Change emission box",[](auto& emitter){return ImGui::DragFloat3("Dimensions XYZ (m)",emitter.boxSize.data(),.01f,0,MaximumParticleShapeSize,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+        control("Change emission rate",[](auto& emitter){return ImGui::DragFloat("Rate (particles/s)",&emitter.rate,.5f,0,MaximumParticleRate,"%.1f",ImGuiSliderFlags_AlwaysClamp);});
+        tooltip("Continuous births per second. Use zero for an effect driven only by bursts.");
+        control("Change particle capacity",[](auto& emitter) {
+            int capacity=static_cast<int>(emitter.capacity);
+            const bool changed=ImGui::DragInt("Capacity",&capacity,1,1,static_cast<int>(MaximumParticleCapacity),"%d",ImGuiSliderFlags_AlwaysClamp);
+            if(changed)emitter.capacity=static_cast<uint32_t>(capacity);return changed;
+        });
+        tooltip("Maximum live particles. Changing capacity clears the live pool while retaining playback time and Pause/Stop state.");
+        if(ImGui::TreeNode("Bursts")) {
+            const auto count=document_.definition().emitter.bursts.size();
+            for(std::size_t index=0;index<count;++index) {
+                const auto id=std::to_string(document_.definition().emitter.bursts[index].id);
+                ImGui::PushID(id.c_str());ImGui::Separator();ImGui::Text("Burst %zu",index+1);ImGui::SameLine();
+                const bool remove=ImGui::SmallButton("Remove");
+                if(remove) {
+                    edit("Remove burst",[&](auto& asset){asset.emitter.bursts.erase(asset.emitter.bursts.begin()+static_cast<std::ptrdiff_t>(index));});
+                    ImGui::PopID();break;
+                }
+                control("Change burst time",[&](auto& emitter) {
+                    const float end=emitter.finiteDuration?std::nextafter(emitter.duration,0.f):MaximumParticleTime;
+                    return ImGui::DragFloat("Time (s)",&emitter.bursts[index].time,.01f,0,end,"%.3f",ImGuiSliderFlags_AlwaysClamp);
+                });
+                tooltip("Time after the initial delay, relative to the emission cycle. A burst fires once per cycle. Editing bursts replays the effect.");
+                control("Change burst count",[&](auto& emitter) {
+                    int births=static_cast<int>(emitter.bursts[index].count);
+                    const bool changed=ImGui::DragInt("Particles",&births,1,1,static_cast<int>(MaximumParticleCapacity),"%d",ImGuiSliderFlags_AlwaysClamp);
+                    if(changed)emitter.bursts[index].count=static_cast<std::uint32_t>(births);return changed;
+                });
+                ImGui::PopID();
+            }
+            ImGui::BeginDisabled(document_.definition().emitter.bursts.size()>=MaximumParticleBursts);
+            if(ImGui::SmallButton("Add burst"))edit("Add burst",[](auto& asset) {
+                // IDs are authored once; removing a row does not normally recycle
+                // its identity into a later, unrelated burst.
+                std::uint64_t id=static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+                while(!id || std::any_of(asset.emitter.bursts.begin(),asset.emitter.bursts.end(),[&](const auto& burst){return burst.id==id;}))++id;
+                asset.emitter.bursts.push_back({id,0,30});
+            });
+            ImGui::EndDisabled();
+            tooltip("Add a timed burst. Up to 64 bursts per emitter; capacity and spawn budgets still apply.");
+            ImGui::TreePop();
+        }
+    }
+    if(ImGui::CollapsingHeader("Initial velocity",ImGuiTreeNodeFlags_DefaultOpen)) {
+        launchControl("Change launch direction",[](auto& emitter) {
+            const auto before=emitter.direction;
+            const bool changed=ImGui::DragFloat3("Direction XYZ",emitter.direction.data(),.01f,-MaximumParticleForce,MaximumParticleForce,"%.3f",ImGuiSliderFlags_AlwaysClamp);
+            if(changed && math::length(emitter.direction)<1e-6)emitter.direction=before;
+            return changed;
+        });
+        tooltip("Emitter-local launch direction, normalized at birth. Positive Y launches upward; it cannot be all zero. For Outward, this is the fallback at the shape's center.");
+        launchControl("Change speed variation",[](auto& emitter) {
+            int mode=emitter.speedRange.enabled?1:0;
+            const bool changed=ImGui::Combo("Speed mode",&mode,"Constant\0Random range\0");
+            if(changed)emitter.speedRange.enabled=mode!=0;return changed;
+        });
+        if(editableLaunch(document_.definition().emitter).speedRange.enabled)
+            range("Speed min/max (m/s)",&ParticleEmitterDefinition::speedRange,0,MaximumParticleSpeed,true);
+        else launchControl("Change launch speed",[](auto& emitter){return ImGui::DragFloat("Speed (m/s)",&emitter.speed,.05f,0,MaximumParticleSpeed,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+        tooltip("Launch speed at birth. Zero starts at rest. Existing particles keep their birth velocity when these controls change.");
+        launchControl("Change direction spread",[](auto& emitter){return ImGui::SliderFloat("Spread (degrees)",&emitter.directionSpread,0,180,"%.1f");});
+        tooltip("Cone half-angle around Direction. Zero is a straight spray; 180 covers every direction. Outward applies this spread around each sampled radial direction.");
+        launchControl("Change direction flatness",[](auto& emitter){return ImGui::SliderFloat("Flatness",&emitter.directionFlatness,0,1,"%.2f");});
+        tooltip("0 gives round spread; 1 flattens it into a fan. The fan lies in the emitter-local plane through Direction and its perpendicular tangent. This changes launch directions, not sprite geometry.");
+        launchControl("Change outward launch",[](auto& emitter) {
+            bool outward=emitter.directionMode==ParticleDirectionMode::Outward;
+            const bool changed=ImGui::Checkbox("Outward from shape",&outward);
+            if(changed)emitter.directionMode=outward?ParticleDirectionMode::Outward:ParticleDirectionMode::RandomCone;
+            return changed;
+        });
+        tooltip("Launch away from each sampled shape position. Spread and Flatness still apply; the shape's center uses Direction.");
+        if(ImGui::SmallButton("Clear speed"))edit("Clear launch speed",[](auto& asset) {
+            auto launch=editableLaunch(asset.emitter);launch.speed=0;launch.speedRange.enabled=false;asset.emitter=std::move(launch);
+        });
+    }
+    if(ImGui::CollapsingHeader("Lifetime",ImGuiTreeNodeFlags_DefaultOpen)) {
+        control("Change lifetime variation",[](auto& emitter) {
+            int mode=emitter.lifetimeRange.enabled?1:0;
+            const bool changed=ImGui::Combo("Mode##lifetime",&mode,"Constant\0Random range\0");
+            if(changed)emitter.lifetimeRange.enabled=mode!=0;return changed;
+        });
+        if(document_.definition().emitter.lifetimeRange.enabled)range("Lifetime min/max (s)",&ParticleEmitterDefinition::lifetimeRange,.001f,MaximumParticleTime);
+        else control("Change lifetime",[](auto& emitter){return ImGui::DragFloat("Lifetime (s)",&emitter.lifetime,.01f,.001f,MaximumParticleTime,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+        tooltip("Assigned to new particles. Existing particles keep their birth lifetime.");
+    }
+    if(ImGui::CollapsingHeader("Forces",ImGuiTreeNodeFlags_DefaultOpen)) {
+        control("Change simulation space",[](auto& emitter) {
+            int mode=static_cast<int>(emitter.space);
+            const bool changed=ImGui::Combo("Simulation space",&mode,"World\0Local\0");
+            if(changed)emitter.space=static_cast<ParticleSpace>(mode);return changed;
+        });
+        tooltip("World particles detach after birth; Local particles follow the emitter's full transform. Forces use the selected space.\nSprite size stays in world meters. Changing space replays the effect and retains Pause/Stop state.");
+        ImGui::TextDisabled("Forces use %s space",document_.definition().emitter.space==ParticleSpace::World?"world":"emitter local");
+        const auto behavior=[&](const char* title,ParticleBehavior ParticleEmitterDefinition::* member,const auto& fields) {
+            if(!(document_.definition().emitter.*member).present)return;
+            ImGui::PushID(title);ImGui::Separator();
+            control("Enable particle behavior",[&](auto& emitter){return ImGui::Checkbox(title,&(emitter.*member).enabled);});
+            tooltip("Disable temporarily without losing its values. Behavior edits affect the next simulation tick.");
+            ImGui::SameLine();
+            if(ImGui::SmallButton("Remove"))edit("Remove particle behavior",[&](auto& asset){(asset.emitter.*member).present=false;});
+            if((document_.definition().emitter.*member).present) {
+                ImGui::BeginDisabled(!(document_.definition().emitter.*member).enabled);fields();ImGui::EndDisabled();
+            }
+            ImGui::PopID();
+        };
+        behavior("Gravity",&ParticleEmitterDefinition::gravityBehavior,[&] {
+            control("Change gravity",[](auto& emitter){return ImGui::DragFloat3("Gravity XYZ (m/s²)",emitter.gravity.data(),.05f,-MaximumParticleForce,MaximumParticleForce,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+            tooltip("Continuous acceleration in the selected space. Negative Y pulls downward. Launch velocity is applied once at birth.");
+        });
+        behavior("Acceleration",&ParticleEmitterDefinition::accelerationBehavior,[&] {
+            control("Change acceleration",[](auto& emitter){return ImGui::DragFloat3("Acceleration XYZ (m/s²)",emitter.acceleration.data(),.05f,-MaximumParticleForce,MaximumParticleForce,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+        });
+        behavior("Drag",&ParticleEmitterDefinition::dragBehavior,[&] {
+            control("Change drag",[](auto& emitter){return ImGui::DragFloat("Drag (1/s)",&emitter.drag,.01f,0,MaximumParticleDrag,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+            tooltip("Damps velocity over time. Zero has no effect; larger values slow particles faster.");
+        });
+        if(ImGui::Button("Add behavior"))ImGui::OpenPopup("Add particle behavior");
+        if(ImGui::BeginPopup("Add particle behavior")) {
+            const auto add=[&](const char* title,ParticleBehavior ParticleEmitterDefinition::* member) {
+                if((document_.definition().emitter.*member).present)return;
+                if(ImGui::MenuItem(title))edit("Add particle behavior",[&](auto& asset){auto& entry=asset.emitter.*member;entry.present=true;entry.enabled=true;});
+            };
+            add("Gravity",&ParticleEmitterDefinition::gravityBehavior);
+            add("Acceleration",&ParticleEmitterDefinition::accelerationBehavior);
+            add("Drag",&ParticleEmitterDefinition::dragBehavior);
+            const auto& emitter=document_.definition().emitter;
+            if(emitter.gravityBehavior.present && emitter.accelerationBehavior.present && emitter.dragBehavior.present)ImGui::TextDisabled("All available behaviors added");
+            ImGui::EndPopup();
+        }
+    }
+    if(ImGui::CollapsingHeader("Render",ImGuiTreeNodeFlags_DefaultOpen)) {
+        materialControls(assets,materials);
+        control("Change particle size",[](auto& emitter){return ImGui::DragFloat("Size (m)",&emitter.size,.005f,.001f,1000,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
+        control("Change particle color",[](auto& emitter){return ImGui::ColorEdit3("Tint",emitter.color.data());});
+        control("Change particle opacity",[](auto& emitter){return ImGui::SliderFloat("Opacity",&emitter.opacity,0,1,"%.3f");});
+        control("Change particle intensity",[](auto& emitter){return ImGui::DragFloat("Intensity",&emitter.intensity,.05f,0,10000,"%.2f",ImGuiSliderFlags_AlwaysClamp);});
+    }
+    if(document_.transactionActive() && !ImGui::IsAnyItemActive())document_.commit();
+    if(!document_.status().empty())ImGui::TextWrapped("%s",document_.status().c_str());
+    if(!message_.empty())ImGui::TextWrapped("%s",message_.c_str());
+    if(!materialDiagnostic_.empty())ImGui::TextWrapped("%s",materialDiagnostic_.c_str());
+}
 void ParticleEditor::draw(AssetLibrary& assets,Renderer& renderer,double dt,MaterialEditor& materials) {
     if(pending_==Pending::Exit && !document_.dirty()) perform(assets);
     if(document_.isOpen() && assets.references().deleted(document_.assetId())) {
@@ -257,52 +569,16 @@ void ParticleEditor::draw(AssetLibrary& assets,Renderer& renderer,double dt,Mate
         ImGui::SameLine();if(ImGui::Button("Save As...")) save(assets,true);
         ImGui::SameLine();ImGui::BeginDisabled(!canUndo());if(ImGui::Button("Undo")) undo();ImGui::EndDisabled();
         ImGui::SameLine();ImGui::BeginDisabled(!canRedo());if(ImGui::Button("Redo")) redo();ImGui::EndDisabled();
-        const bool canceled=document_.transactionActive() && ImGui::IsKeyPressed(ImGuiKey_Escape,false);
-        if(canceled) document_.cancel();
+        const bool escape=document_.transactionActive() && ImGui::IsKeyPressed(ImGuiKey_Escape,false);
+        const bool canceled=suppressCanceledUpdate_ || escape;
+        if(escape)cancelInteraction();
+        suppressCanceledUpdate_=false;
         if(ImGui::BeginTable("Particle authoring",2,ImGuiTableFlags_Resizable)) {
             ImGui::TableSetupColumn("Emitter",ImGuiTableColumnFlags_WidthFixed,310);
             ImGui::TableSetupColumn("Preview",ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableNextColumn();
             ImGui::BeginChild("Particle properties",{0,0});
-            const auto control=[&](const char* label,const auto& draw) {
-                auto candidate=document_.definition();
-                const bool changed=draw(candidate.emitter);
-                if(!canceled && (ImGui::IsItemActivated() || changed) && !document_.transactionActive()) document_.begin(label);
-                if(!canceled && changed) document_.update([&](auto& asset){asset.emitter=candidate.emitter;});
-                if(ImGui::IsItemDeactivated() && document_.transactionActive()) document_.commit();
-            };
-            ImGui::TextUnformatted("Emitter 1 · Point · World space");
-            if(ImGui::CollapsingHeader("Emission",ImGuiTreeNodeFlags_DefaultOpen)) {
-                control("Change emission rate",[](auto& e){return ImGui::DragFloat("Rate (particles/s)",&e.rate,.5f,0,MaximumParticleRate,"%.1f",ImGuiSliderFlags_AlwaysClamp);});
-                int capacity=static_cast<int>(document_.definition().emitter.capacity);
-                control("Change particle capacity",[&](auto& e){const bool changed=ImGui::DragInt("Capacity",&capacity,1,1,static_cast<int>(MaximumParticleCapacity),"%d",ImGuiSliderFlags_AlwaysClamp);if(changed)e.capacity=static_cast<uint32_t>(capacity);return changed;});
-                if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-                    ImGui::SetTooltip("Changing capacity rebuilds the particle pool and clears live particles.\nPlayback time and Pause/Stop state are retained.");
-            }
-            if(ImGui::CollapsingHeader("Initialize",ImGuiTreeNodeFlags_DefaultOpen)) {
-                control("Change lifetime",[](auto& e){return ImGui::DragFloat("Lifetime (s)",&e.lifetime,.01f,.001f,3600,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
-                control("Change initial velocity",[](auto& e){return ImGui::DragFloat3("Initial velocity (m/s)",e.initialVelocity.data(),.05f);});
-                if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-                    ImGui::SetTooltip("Launch velocity at birth, transformed by the emitter. Positive Y launches upward.\nSet it to zero for particles that start at rest and fall under gravity.");
-                if(ImGui::SmallButton("Clear initial velocity"))
-                    document_.edit("Clear initial velocity",[](auto& asset){asset.emitter.initialVelocity={0,0,0};});
-            }
-            if(ImGui::CollapsingHeader("Motion",ImGuiTreeNodeFlags_DefaultOpen)) {
-                control("Change gravity",[](auto& e){return ImGui::DragFloat3("Gravity (m/s²)",e.gravity.data(),.05f);});
-                if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-                    ImGui::SetTooltip("Continuous acceleration in world space. Negative Y pulls downward.\nGravity changes velocity over time; it does not replace the launch velocity.");
-            }
-            if(ImGui::CollapsingHeader("Render",ImGuiTreeNodeFlags_DefaultOpen)) {
-                materialControls(assets,materials);
-                control("Change particle size",[](auto& e){return ImGui::DragFloat("Size (m)",&e.size,.005f,.001f,1000,"%.3f",ImGuiSliderFlags_AlwaysClamp);});
-                control("Change particle color",[](auto& e){return ImGui::ColorEdit3("Tint",e.color.data());});
-                control("Change particle opacity",[](auto& e){return ImGui::SliderFloat("Opacity",&e.opacity,0,1,"%.3f");});
-                control("Change particle intensity",[](auto& e){return ImGui::DragFloat("Intensity",&e.intensity,.05f,0,10000,"%.2f",ImGuiSliderFlags_AlwaysClamp);});
-            }
-            if(document_.transactionActive() && !ImGui::IsAnyItemActive()) document_.commit();
-            if(!document_.status().empty()) ImGui::TextWrapped("%s",document_.status().c_str());
-            if(!message_.empty()) ImGui::TextWrapped("%s",message_.c_str());
-            if(!materialDiagnostic_.empty())ImGui::TextWrapped("%s",materialDiagnostic_.c_str());
+            authoringControls(assets,materials,canceled);
             ImGui::EndChild();
             ImGui::TableNextColumn();
             if(previewRevision_!=document_.previewRevision()) {
@@ -312,18 +588,23 @@ void ParticleEditor::draw(AssetLibrary& assets,Renderer& renderer,double dt,Mate
                 else simulation_.updateDefinition(definition);
                 previewRevision_=document_.previewRevision();
             }
-            if(ImGui::Button(simulation_.state()==ParticlePlaybackState::Paused?"Resume":"Play")) simulation_.play();
+            if(ImGui::Button(simulation_.state()==ParticlePlaybackState::Paused?"Resume":simulation_.completed()?"Play again":"Play")) simulation_.play();
             ImGui::SameLine();if(ImGui::Button("Pause")) simulation_.pause();
             ImGui::SameLine();if(ImGui::Button("Restart")) simulation_.restart(document_.definition(),document_.definition().defaultSeed);
             ImGui::SameLine();if(ImGui::Button("Stop")) simulation_.stop();
             ImGui::SameLine();if(ImGui::Button("Frame")) framePreview();
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))ImGui::SetTooltip("Frame the emission shape and up to 10 seconds of motion. Drag is ignored when estimating bounds.");
             ImGui::SetNextItemWidth(180);
             drawToneMappingControl(preview_.environment.toneMapping);
             simulation_.advance(dt);
             const auto& stats=simulation_.stats();
-            ImGui::Text("%.2f s · %zu live / %u · Seed %llu",simulation_.elapsed(),stats.live,document_.definition().emitter.capacity,static_cast<unsigned long long>(simulation_.seed()));
-            if(stats.droppedSpawns || stats.droppedCatchUpTicks)
-                ImGui::TextWrapped("Dropped: %llu births, %llu catch-up ticks",static_cast<unsigned long long>(stats.droppedSpawns),static_cast<unsigned long long>(stats.droppedCatchUpTicks));
+            const char* state=simulation_.state()==ParticlePlaybackState::Stopped?"Stopped":simulation_.state()==ParticlePlaybackState::Paused?"Paused":
+                simulation_.completed()?"Completed":simulation_.draining()?"Finishing live particles":simulation_.elapsed()<document_.definition().emitter.delay?"Waiting for delay":
+                !document_.definition().emitter.enabled?"Emission disabled":"Emitting";
+            ImGui::Text("%s · %.2f s · %zu live / %u",state,simulation_.elapsed(),stats.live,document_.definition().emitter.capacity);
+            if(stats.burstsFired)ImGui::Text("Bursts fired: %llu",static_cast<unsigned long long>(stats.burstsFired));
+            if(stats.droppedSpawns || stats.droppedCatchUpTicks || stats.droppedScheduleSegments)
+                ImGui::TextWrapped("Dropped: %llu births, %llu catch-up ticks, %llu scheduling segments",static_cast<unsigned long long>(stats.droppedSpawns),static_cast<unsigned long long>(stats.droppedCatchUpTicks),static_cast<unsigned long long>(stats.droppedScheduleSegments));
             if(stats.clearedCapacityParticles)
                 ImGui::Text("Capacity edits cleared %llu particles",static_cast<unsigned long long>(stats.clearedCapacityParticles));
             const auto& renderStats=renderer.particlePreviewStats();
@@ -357,7 +638,7 @@ void ParticleEditor::draw(AssetLibrary& assets,Renderer& renderer,double dt,Mate
             }
             ImGui::EndTable();
         }
-    } else previewGesture_=0;
+    } else if(document_.transactionActive() || previewGesture_)cancelInteraction();
     ImGui::End();
     publish(assets);modals(assets);
 }

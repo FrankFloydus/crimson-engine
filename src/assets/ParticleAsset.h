@@ -19,6 +19,9 @@ struct ParticleAssetEntry { std::string id, name; };
 ParticleEffectAsset defaultParticleEffect(const std::string& name = "New Particle Effect");
 void validateParticleAsset(const ParticleEffectAsset& asset);
 std::filesystem::path particleAssetPath(const std::filesystem::path& projectRoot, const std::string& id);
+// Writers publish native v4; readers retain point/world/continuous behavior and
+// material references from v1/v2 and migrate v3 launch settings compatibly.
+// Loading alone never rewrites older files.
 std::string serializeParticleAsset(const ParticleEffectAsset& asset);
 ParticleEffectAsset deserializeParticleAsset(std::string_view text, const std::string& expectedId = {});
 ParticleEffectAsset loadParticleAsset(const std::filesystem::path& projectRoot, const std::string& id);

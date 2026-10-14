@@ -31,7 +31,7 @@ public:
     bool transactionActive() const { return document_.transactionActive(); }
     void finishInteraction();
     void filesChanged(std::span<const std::filesystem::path>);
-    void cancelInteraction() { document_.cancel();previewGesture_=0; }
+    void cancelInteraction();
 private:
     enum class Pending { None,Open,Create,Close,Exit };
     ParticleEffectDocument document_;
@@ -44,6 +44,7 @@ private:
     std::uint64_t previewRevision_{},publishedRevision_{};
     std::array<char,256> saveName_{};
     bool dirtyPopup_{},savePopup_{},continueAfterSave_{},exitReady_{},externalChanged_{},externalPopup_{},focusNext_{};
+    bool suppressCanceledUpdate_{};
     int previewGesture_{};
     void request(Pending,std::string,AssetLibrary*);
     void perform(AssetLibrary&);
@@ -51,5 +52,6 @@ private:
     void modals(AssetLibrary&);
     void framePreview();
     void materialControls(AssetLibrary&,MaterialEditor&);
+    void authoringControls(AssetLibrary&,MaterialEditor&,bool canceled);
 };
 }
