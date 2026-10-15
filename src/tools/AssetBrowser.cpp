@@ -2,6 +2,7 @@
 #include "assets/AssetLibrary.h"
 #include "crimson-renderer/ImGuiBgfx.h"
 #include "editor/EditorPreferences.h"
+#include "resources/ThumbnailDemand.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -144,7 +145,8 @@ BrowserActions AssetBrowserPanel::draw(AssetLibrary& assets,SDL_Window* window,i
         const auto sizeLabel=std::to_string(actions.previewSize)+" px";
         if (ImGui::SliderInt("Preview size",&previewTick,0,static_cast<int>(BrowserPreviewSizes.size()-1),sizeLabel.c_str()))
             actions.previewSize=BrowserPreviewSizes[static_cast<size_t>(previewTick)];
-        assets.setThumbnailDemand(static_cast<uint32_t>(actions.previewSize));
+        thumbnailDemand_=thumbnailPixelEdge(static_cast<uint32_t>(actions.previewSize),ImGui::GetWindowViewport()->DpiScale);
+        assets.setThumbnailDemand(thumbnailDemand_);
         if (!assets.status().empty()) {
             ImGui::SameLine();
             if (ImGui::SmallButton("Import results")) ImGui::OpenPopup("Import results details");

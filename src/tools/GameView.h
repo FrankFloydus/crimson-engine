@@ -1,7 +1,10 @@
 #pragma once
 #include "crimson-renderer/RenderTypes.h"
+#include "physics/StaticCollision.h"
+#include "editor/FrameMetrics.h"
 #include <optional>
 #include <span>
+#include <string>
 
 struct ImDrawList;
 namespace crimson {
@@ -16,13 +19,21 @@ struct GameViewFrame {
 };
 class GameView {
 public:
-    GameViewFrame draw(SceneDocument&,Renderer&,bool& open,bool playing,bool focus=false);
+    GameViewFrame draw(SceneDocument&,Renderer&,bool& open,bool playing,bool focus=false,std::uint64_t textureAndProgramBytes=0);
+    void setFrameTiming(FrameTiming timing) {frameTiming_=timing;newFrameTiming_=true;}
     void drawRoute(const Camera&,const std::optional<Vec3>& clickedGround,std::span<const Vec3> route,
                    const std::optional<Vec3>& characterPosition);
-    void drawCollisions(const Camera&,const Scene&,bool enabled);
+    void drawCollisions(const Camera&,const Scene&,bool enabled,const CollisionMeshQuery& meshes = {});
+    void drawPlayerLightRig(const Camera&,const Scene&);
 private:
     ImDrawList* imageDrawList_{};
     ViewportRegion imageRegion_;
     std::uint32_t imageWidth_{},imageHeight_{};
+    FrameTiming frameTiming_;
+    FrameMetricsSampler metrics_;
+    std::string metricsText_;
+    bool metricsVisible_{true},wasPlaying_{},newFrameTiming_{};
+    void updateMetrics(Renderer&,std::uint64_t textureAndProgramBytes);
+    void drawMetrics(Vec2 origin,Vec2 size) const;
 };
 }

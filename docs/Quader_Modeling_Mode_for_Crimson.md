@@ -1,6 +1,8 @@
 # Integrating Quader as Crimson Engine's Modeling Mode
 
-Engineering guide — source snapshot inspected on **13 October 2026**.
+Engineering guide — Quader tool inventory inspected on **13 October 2026**; Crimson integration reassessed against current main and its working tree on **14 October 2026**.
+
+**Document authority:** the maintained engineering guide is `C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/docs/Quader_Modeling_Mode_for_Crimson.md`. `C:/Users/Drako/Desktop/Quader_Modeling_Mode_for_Crimson.md` is its synchronized handoff copy. Before this reassessment they were byte-identical (SHA-256 `5c62c66ab995c8f254ed0cc258212d54e06a27118e30c005832c91dd2eaa171a`); the repository copy is tracked in Git. Make future engineering updates in the repository and synchronize the Desktop copy after validation, reconciling any intervening edits first.
 
 **Recommended approach:** keep Quader's portable modeling SDK as the geometry owner, introduce a Modeling mode in Crimson's existing editor, and implement Crimson adapters for interaction, scene/history integration, materials, persistence, and BGFX rendering. The most substantial rendering work is reproducing Quader's overlays and keeping them synchronized with live geometry previews.
 
@@ -27,22 +29,28 @@ The original request mentioned SDL2; the agreed target is **SDL3**, matching Cri
 
 Detailed navigation: [Tool Settings layout](#35-how-tool-settings-will-look), [all native parameter groups](#38-complete-native-tool-settings-reference), [full tool/operation inventory](#51-coverage-inventory-and-meaning-of-complete), [linked instances](#63-linked-instances-arrays-and-hierarchy-in-the-complete-port), [Face Texture dock](#75-the-face-texture--uv-dock), [all texture actions](#76-complete-texture-action-inventory), [tool-specific visual feedback](#811-tool-specific-visual-feedback), and [completion ledger](#104-a-concrete-completeness-ledger).
 
+14 October reassessment: [Play/input ownership](#39-play-game-and-native-window-input-ownership), [storage/deletion/document authority](#64-integrate-with-current-storage-deletion-and-document-authority), [current materials versus graph plan](#78-current-material-behavior-versus-the-approved-graph-plan), [mapping composition](#79-compose-surface-mapping-before-shared-material-mapping), [reference samples and pixel units](#710-define-reference-samples-pixel-units-and-canvas-eligibility), [normal/opacity parity](#711-normal-bases-and-graph-driven-coverage), [prepared material publication](#712-prepare-and-publish-complete-materialgeometry-views), [future adapter contracts](#713-narrow-contracts-to-establish-with-the-material-implementation), [current BGFX schedule](#810-insert-passes-into-crimsons-actual-pipeline), and [remaining risks](#105-open-integration-risks-and-decisions).
+
 ## 1. Evidence and current baseline
 
-Two checkouts were inspected:
+Current evidence baseline:
 
-| Project | Location | HEAD at inspection |
+| Project / evidence | Location | Revision and status at reassessment |
 | --- | --- | --- |
-| Quader | `C:/Users/Drako/Desktop/quader-windows/quader-app` | `a6a010f9ce7a3fa3ee0dc744e01c91e7831cb289` |
-| Crimson | `C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine` | `654f992ed0c0304a757749d3aa04d3aa26030be4` |
+| Quader | `C:/Users/Drako/Desktop/quader-windows/quader-app` | `70659f038c572859f28155c5ad74e73909524e1b`; portable API/native tool evidence retained and checked where relevant |
+| Crimson main | `C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine` | `b44dfce4feaaff4f641a96055472610bd935d0be`; substantial tracked and untracked working-tree changes inspected |
+| Approved material graph contract | `C:/Users/Drako/Desktop/Crimson_Material_Graph_MVP_Plan.md` | Updated 14 October 2026; approved future implementation, not current main behavior |
+| Material implementation worktree | `C:/Users/Drako/.codex/worktrees/a5ee/crimson-engine` | Separate implementation destination reported by its owner; not modified or treated as landed main code by this reassessment |
 
-Both checkouts contained local changes during the original inspection. These commit IDs locate that baseline, but do not identify every inspected working-tree byte. The expanded tool/settings audit on the same date inspected Quader at `70659f038c572859f28155c5ad74e73909524e1b` with a clean working tree. Crimson observations below retain the original snapshot: it was undergoing a resource/material transition, with new source files referenced by consumers while build integration and older callers were being updated. Recheck current interfaces before implementation. The observations below are not a build verdict.
+The original 13 October Crimson snapshot was `654f992ed0c0304a757749d3aa04d3aa26030be4`; its unfinished resource/material wiring observations are superseded. Current CMake includes `MaterialAsset`/`MaterialDocument`, `ResourceManager`, `TextureStreamer`, shader reload and `ModelGpuCache`. Scene history, managed assets, independent material/effect documents, streaming, Play/Game, point shadows and shared editor controls now exist. Current uncommitted work includes procedural sky/fog/presentation, keyboard ownership and editor changes. A HEAD SHA does not identify these working-tree bytes; recheck relevant files before implementation rather than treating this live inspection as an immutable build snapshot. [C1], [C2], [C10], [C11]
 
-**Evidence labels used throughout:** "current" or "verified" means read in the inspected source; "recommended" or "proposed" means a design for the integration. Code examples are illustrative and were not compiled as part of writing this guide. Proposed adapter names are not existing SDK interfaces. No engine feature or shader was implemented, and no application build or GPU acceptance run was performed for this document.
+No Quader `ModelingSession`/`PolygonDocument` integration was found in current Crimson source or CMake. Existing Quader-derived navigation/grid behavior is not the modeling port. This guide still describes future integration. The material graph plan is another future dependency: it specifies v4 authored graphs and generated programs, while current main still writes v3 native materials with fixed material fields. Preserve that distinction even when an isolated implementation worktree is progressing. [C12], [C25], [P1]
+
+**Evidence labels used throughout:** "current" or "verified" means read in the inspected source, not runtime-tested for this reassessment; "approved graph plan" means the future contract in [P1]; "recommended" or "proposed" means a design for the Quader integration. Code examples are illustrative and were not compiled as part of writing this guide. Proposed adapter names are not existing SDK or Crimson interfaces. No engine feature or shader was implemented, and no application build or GPU acceptance run was performed for this document. The existing public Quader manual is unaffected.
 
 Quader already exposes a portable C++20 library through `quader/modeling/modeling.hpp` and `quader::modeling_sdk`. Its native application remains Qt/Filament, but those dependencies are outside the SDK-only build. Crimson currently uses SDL3, BGFX with Direct3D 11, Dear ImGui docking, EnTT scene data, engine-owned math, and an existing scene editor. [Q1], [Q2], [C1], [C2]
 
-The inspected installed dependency snapshot includes SDL 3.4.8, BGFX API 129 / package `1.129.8940-496#1`, Dear ImGui 1.92.8, and ImGuizmo 1.10. Crimson's manifest baseline is `d0c191d142b7bc048141ddfb618aa9ae5dba0233`. Compile new shaders with the matching BGFX `shaderc` already selected by Crimson; current online BGFX documentation can describe a newer API than that installed package. [C2], [C3]
+The original inspected dependency snapshot included SDL 3.4.8, BGFX API 129 / package `1.129.8940-496#1`, Dear ImGui 1.92.8, and ImGuizmo 1.10. Use current `vcpkg.json`, CMake and installed headers for the actual implementation baseline rather than treating those original package versions as a new dependency mandate. Compile new shaders with Crimson's pinned matching BGFX `shaderc`; its runtime shader compilation/cache/preflight infrastructure already exists. The approved graph plan extends that infrastructure rather than installing an independent shader compiler. [C2], [C3], [C25], [C26], [P1]
 
 ## 2. Ownership and integration boundaries
 
@@ -83,13 +91,15 @@ Renderer and UI caches are disposable projections. They do not become independen
 | Component selection | SDK document/session selection | Mode eligibility, hit testing, hover, selection intent |
 | Preview candidate state | Session preview APIs | Present the same accepted candidate to every consumer |
 | Scene hierarchy and placement | No native scene import required | Existing scene/document owners |
-| Whole-editor undo | SDK supplies modeling state transitions | Extend the existing chronological scene history |
-| Material images and PBR assets | Face material slots and neutral payloads | Asset IDs, texture loading, samplers, GPU materials |
+| Scene/modeling undo | SDK supplies modeling state transitions | Extend the active scene's chronological history; preserve separate material/effect document histories |
+| Materials and textures | Face material slots and neutral payloads | Existing `MaterialAsset` identities, `MaterialDocument`, role-aware streaming and prepared bindings; future graph compiler/program packets remain Crimson-owned |
 | Editable mesh storage | Authored-topology serialization | Asset envelope, scene references, atomic saves |
 | Lines, points, fills, outlines | Native Quader behavior and fixtures | BGFX shaders, passes, buffers, masks, caching |
 | Panels and events | Geometry/settings semantics | SDL3 input adapter and ImGui presentation |
 
-In Crimson, compose these responsibilities beside `EditorSession`, `SceneEditor`, and `SceneViewport`; extend `SceneDocument` for history and `SceneExtraction` for immutable renderer input. Put BGFX implementation under its existing renderer boundary. Keep `App` focused on lifetime and the frame loop. The public SDK must not acquire SDL, ImGui, EnTT, or BGFX dependencies. [C1], [C4], [C5], [C6]
+In Crimson, compose these responsibilities beside `EditorSession`, `SceneEditor`, and `SceneViewport`; extend `SceneDocument` for modeling-aware semantic history patches and `SceneExtraction` for authored-mesh renderer input. `EditorResources` already freezes coherent prepared model/material groups and complete shadow-caster inputs. Extend that preparation boundary for authored geometry rather than introducing an unrelated upload path in the dock UI. `ResourceRuntime` already publishes worker completions and hot reload before editor drawing; `AssetLibrary`/`TextureStreamer` retain texture residency and authored asset policy. Put BGFX implementation under its existing renderer boundary. Keep `App` focused on lifetime and the frame loop. The public SDK must not acquire SDL, ImGui, EnTT, or BGFX dependencies. [C1], [C4], [C5], [C6], [C14], [C16], [C17]
+
+The current `PreparedEditorModel` still contains fixed `ModelMaterial` and texture arrays. Treat that as the current adapter implementation, not the enduring Quader material interface. The future graph plan requires per-material programs and prepared packets. Make the authored-mesh extraction depend on stable material references plus a coherent prepared-material view, so its ownership survives that replacement. Do not invent a second graph/material catalog. [C14], [P1]
 
 Suggested implementation roles are a **modeling mode controller**, a **session/publication adapter**, an **authored mesh asset serializer**, an **overlay extractor**, and a **BGFX overlay cache/pass**. These are ordinary concrete owners with explicit dependencies, not a new plugin framework or service locator.
 
@@ -140,6 +150,8 @@ The SDK remains independent of editor mode. Its documents survive mode changes. 
 - **Replace or reload a scene:** use Crimson's existing dirty-document decision, then retire previews, deferred picks, and old bindings before publishing the new scene. Never let a delayed callback mutate the replaced scene.
 
 Mode generation must advance when the context is retired, including a leave-and-reenter round trip. Captured gestures carry scene generation, mode generation, target identity, and the relevant document/preview revision. Reject obsolete results even if an entity with a similar name is now selected.
+
+Use `SceneDocument::documentGeneration()` and persistent entity IDs rather than EnTT handles as the host half of that identity. Registry replacement and undo can invalidate runtime handles while authored entity identity survives. Play adds a separate document/world identity, so a matching numeric entity ID is never sufficient to apply a delayed modeling result. [C4], [C18]
 
 ### 3.3 Input ownership
 
@@ -229,6 +241,8 @@ modeling_controller.evaluate_pending_settings_from_baseline();
 
 The callback only expresses an edit intent. Geometry preparation, parameter normalization, validation, publication, and history belong to the operation controller/session adapter. Cache descriptors by settings/availability/selection revision; ImGui's immediate-mode draw loop is not permission to rebuild the catalog or traverse selected topology every frame.
 
+Register Tool Settings and Face Texture as explicit Scene/Modeling command contexts. Current `SceneEditor::CommandTarget` distinguishes Scene, Particle, Material and Game; scene shortcuts currently recognize existing viewport/Outliner/Inspector owners. A newly added dock must not leave Ctrl+Z or Save routed to a previously focused Material Editor. Independent asset editors reuse `DocumentEditorMenu.h`; modeling docks use the active scene's existing menu/history and do not duplicate File/Save/Undo button rows inside their bodies. Accept/Cancel are operation controls, not duplicate document actions. Preserve default ImGui colors/font/sizing, concise collapsible properties, adjacent asset pick/drop/clear fields and docking state. [C10], [C21], [C30], [C32]
+
 ### 3.7 Field edits, preview, acceptance, and cancellation
 
 At activation, capture targets and assign a new generation. Widget IDs and queued edits include that generation plus field identity. Bind the operation to its originating viewport context; focusing another pane does not silently change the plane/camera basis or start a second operation. A scene/tool replacement invalidates old field buffers, delayed calculations, and callbacks.
@@ -276,6 +290,18 @@ The following is the inspected native parameter surface. Defaults mean initial o
 | Existing curve / curve after drawing | Closed; Solidify; Resolution = 8; Radius = 0.1; eligible Apply Solidify / New Curve actions | Resolution 3–128; radius 0.001–100000; both disabled unless Solidify enabled. Persist selected curve properties separately from creation defaults. |
 
 Primitive width/height/depth controls are not present in this native settings matrix: they come from viewport creation/resize interactions. For Crimson, adding explicit meter-valued dimension fields is a useful **proposed completion of the same controller**, especially for precise construction. It must update the same primitive draft as the viewport handles. Likewise, expose inset amount or vertex-bevel amount through a Crimson operation panel when building those tools; their SDK existence does not imply a native generic settings descriptor already exists. These additions must preserve the method's actual options and validation rather than guessing an unrelated DCC's parameter set.
+
+### 3.9 Play, Game, and native-window input ownership
+
+Crimson now has a real `PlaySession`, a transient runtime scene document, Jolt/controller state and an independent Game view. `EditorSession::activeDocument()` selects authored or Play data, while rendering during Play can use interpolated `presentationScene()` state. The modeling integration must join this transition explicitly; binding tools to whichever document happens to be active is unsafe. [C9], [C18]
+
+Recommended first and final authoring policy: Modeling mutations operate on the authored scene in Edit state. Settle a pending modeling operation before entering Play, then pin the accepted authored geometry revisions for the runtime world. Do not let Play and Edit share a mutable SDK session. Shared material/effect assets retain their current publication behavior: committed edits can reach Scene and Game, using coherent exact material/resource versions prepared each frame; do not freeze every shared material for the duration of Play. Game renders authored results but does not show Modeling selection, gizmos, component picks or tool panels. Returning from Play restores the authored context with a new interaction generation. A future requirement for live modeling during Play would need an explicit isolated runtime modeling session and discard/apply policy; it is not implied by this port.
+
+Keep the current Start/Stop semantics: logical P starts Play; Shift+Escape stops it; plain Escape remains interaction cancel/Game release. Model-tool Escape must not swallow the explicit Stop action. Use `KeyboardActions` and the existing owners for logical versus physical keys, exact modifier matching, repeat suppression, text/IME ownership and focus/window/keymap invalidation. The current shortcut foundation is not a complete user-rebinding system; port semantic commands without presuming Quader's physical shortcuts are globally free. [C19], [C20]
+
+ImGui multi-viewports can put Game, Material and Particle windows on other monitors. Capture the originating SDL window plus viewport/image identity for every modeling gesture. Events over another native window must not move the scene camera or mutate a modeling draft. Use the current `EditorFrame` camera snapshot for scene culling, placement rays, overlays and picks; navigation advances the live camera for the next frame. Do not compute modeling picks from a newly advanced camera while drawing the previous snapshot. [C6], [C9]
+
+Authored meshes need a future extraction path into Play for visibility and resource lifetime. Their presence does not automatically add arbitrary mesh collision, navmesh rebuilding, dynamic rigid bodies or particle collision. Preserve current authored Collider components and existing gameplay contracts; record any new collision feature separately instead of conflating render-mesh integration with physics parity.
 
 ## 4. Build and consume the portable SDK
 
@@ -652,9 +678,9 @@ Prepared extrusion can retain topology and generated IDs across nonzero amount c
 
 ## 6. Scene history and persistence
 
-### 6.1 A single chronological editor history
+### 6.1 A single chronological scene and modeling history
 
-Crimson's current `SceneCommand` stores entity/property/selection patches. An entity reference alone cannot restore the UV or topology of the document it points to. Extend that command boundary with typed modeling state and binding/material-slot changes. [C4]
+Crimson's current `SceneCommand` stores semantic entity/property/selection patches. An entity reference alone cannot restore the UV or topology of the document it points to. Extend that command boundary with typed modeling state and binding/material-slot changes. This is one timeline for the active scene and its modeling edits, **not one application-global undo stack**: `MaterialDocument` and the particle document already own independent asset histories. Changing a shared graph parameter belongs to its material document; changing a face UV or its material assignment belongs to scene/modeling history. Focus-aware command routing must preserve this distinction. [C4], [C13], [C32]
 
 Recommended first implementation:
 
@@ -710,23 +736,37 @@ Save definition identities, member hierarchy, authored blobs, occurrence referen
 
 Scene grouping, parenting and unparenting should reuse Crimson's existing owners where they already provide the intended behavior. They still need modeling-binding and history integration tests. A hierarchy operation is incomplete if it preserves the shaded surface but loses the ability to reopen or edit the canonical mesh.
 
+### 6.4 Integrate with current storage, deletion, and document authority
+
+Current native scenes write version 8 and read earlier supported versions. `SceneDocument` and its adjacent `readSceneSnapshot`, `serializeSceneSnapshot` and `saveSceneSnapshot` functions already own storage; there is no separate current `SceneStore` owner to integrate. Persistent `EntityId` values are 64-bit integers in memory and hexadecimal strings in serialized scene records; EnTT registry handles remain disposable. Do not preassign the next scene version in this guide: allocate a compatible schema revision against the source that actually receives modeling. [C4], [C33]
+
+Adding authored mesh, curve and instance references requires extending scene records/components, validation, semantic patch comparison/copying, duplication, serialization, extraction, Play cloning and history-reference enumeration. An external entity-to-SDK map alone cannot survive replacement or restore deleted geometry from Undo. Current entity duplication copies asset references while remapping entity relationships; independent modeled duplicates need an explicit new authored identity, whereas linked instances preserve the canonical definition reference.
+
+Reuse `AssetReferenceManager`, `AssetLibrary::planDeletion` / `deleteAssets` / `pumpDeletion`, staged `commitAssetTransaction` behavior and `SceneDocument::PreparedExternalChange`. Register references from saved authored blobs/envelopes, scene slot tables, definitions/occurrences, active modeling previews and scene history. A persistent `AssetRef<MaterialAsset>` does not automatically register every new asset format. A GPU lease also does not protect an asset from deletion in saved files. Replacements must remap material references without dropping per-face UV data, and either rewrite historical references or use the existing explicit transactional history-reset policy. Preserve unrelated unsaved edits and failed-transaction rollback. [C27], [C28], [C33]
+
+Preserve independent material authority: `MaterialDocument::begin/update/commit/cancel` supports a private working preview, while successful commit/undo/redo publishes an immutable shared material revision. Ordinary modeling users consume that committed material, not another editor's uncommitted graph. A face assignment or Continue Texture transaction stores a stable material reference and mapping changes; it must not commandeer the material document's save/history. If the user deliberately opens Edit Material, route subsequent graph edits and Save to that independent document. [C13], [C24], [C32]
+
+The graph plan keeps imported originals read-only and supports native Save As. It migrates v1–v3 material data in memory without rewriting files or fabricating an edit; explicit material save writes v4. A modeling scene save must not rewrite every referenced material merely to upgrade its format. Store the existing stable identity and let the material owner control migration and persistence. Preserve material/effect assignments, missing-reference diagnostics, protected defaults and self-write acknowledgements through the same project transaction owners. [P1]
+
 ## 7. Materials, texturing, and UV operations
 
 ### 7.1 Keep material identity separate from the SDK slot
 
 Each authored face stores a zero-based material slot. The compiled SDK material identifier is derived from that slot (`slot + 1` in the inspected implementation); it is not a Crimson asset UUID or GPU material handle. Maintain a per-authored-object slot table resolving to stable Crimson material assets. Use a visible fallback material when a reference is unavailable, while retaining the authored reference for recovery. [Q6], [Q7]
 
-The SDK's neutral material payload is not an image decoder, texture library, or Quader material graph. Crimson owns image roles, sampling state, loading, and PBR factors. In the current transition, `ModelTexture.image` is an `AssetRef<DecodedImage>`, and new material/resource owners are being integrated. Bind to their settled API when implementing. [C8]
+The SDK's neutral material payload is not an image decoder, texture library, or shared material graph. Crimson already owns stable `MaterialAsset` definitions, `MaterialDocument` transactions, typed image references, role-aware streaming and GPU bindings. Current materials use `ModelMaterial surface` with fixed PBR fields; the approved v4 graph replaces that authored shape while retaining asset identity and document ownership. Bind modeled primitive ranges to stable `AssetRef<MaterialAsset>` values through a Crimson-owned per-authored-mesh slot table. Never persist graph node indices, live resource handles or GPU bindings as SDK material IDs. [C8], [C12], [C13], [C16], [P1]
+
+Current `EntityRecord::modelMaterial` and `resolvedModelMaterials(...materialOverride...)` only support the built-in Box override path; non-builtin model overrides are rejected. That single override is not a per-face material table. Add a supported authored-mesh material-resolution/preparation path rather than passing arbitrary Quader meshes through the current override argument or spoofing a built-in identity. Native mesh compatibility currently admits Standard PBR Opaque/Mask; native mesh Unlit Opaque/Mask is part of the approved graph plan. Existing Unlit Alpha/Additive compatibility is for particles, not proof of arbitrary transparent modeled-mesh support. [C12], [C28]
 
 Face assignment changes primitive/material routing. Scalar material edits should update bindings/uniforms without rebuilding topology. Preserve Crimson's color convention: albedo/emissive color decoding differs from linear scalar/normal data, and the final viewport is encoded to sRGB once.
 
 ### 7.2 Numeric texture settings and actions
 
-`FaceTextureTransform` operates on base face UVs by rotation, division by signed scale, then normalized UV shift. Consequently, increasing this scale makes the texture repeat less often; negative scale can mirror it. A shift expressed in pixels must be divided by the appropriate decoded image extent before entering this normalized-UV API. Avoid borrowing a material's differently defined scale UI without conversion. [Q7]
+`FaceTextureTransform` operates on base face UVs by rotation, division by signed scale, then normalized UV shift. Consequently, increasing this scale makes the texture repeat less often; negative scale can mirror it. For Quader-compatible **pre-material reference-pixel units**, divide a pixel shift by the chosen source image extent before entering this normalized-UV API. This is not automatically a final sampled-image pixel after a downstream graph transform; section 7.10 defines that distinction. Crimson material mapping multiplies coordinates by scale, then rotates, then offsets, so its larger scale increases repetition. Do not share one ambiguously named scale value between those two conventions. [Q7], [C23]
 
 `set_face_texture_transforms` applies per-face property patches. `prepare_face_texture_action` supports alignment, projection, scale/shift/rotate, fitting, justification, and mirror-related actions. The face canvas and transfer/wrap interfaces cover more contextual editing. Texture flips, effective face-UV flips, and geometry reflection are different operations; expose and test the intended one. [Q14], [Q15]
 
-For selection-wide operations, collect immutable document snapshots, stable face/edge IDs, actual texture dimensions, active element, and both transforms:
+For selection-wide operations, collect immutable document snapshots, stable face/edge IDs, the explicit reference-sample source dimensions/context described in section 7.10, active element, and both transforms:
 
 - `world_from_local`: actual placement used for geometric interpretation.
 - `sampling_from_local`: the mapping used to evaluate texture placement/locking.
@@ -791,7 +831,7 @@ This is a proposed Crimson layout. `[L]` means Link Scale, not a literal final i
 | --- | --- | --- |
 | Scale U/V | Signed, nonzero; direct step 0.01; larger magnitude enlarges the texture; negative mirrors | `set_face_texture_transforms`, explicit density/unit conversion. |
 | Link Scale | Initially off; preserve captured U/V ratios | For mixed selections capture each face's original ratio; do not derive all faces from one displayed scalar. |
-| Shift U/V | Display image pixels, step 1; numeric shifts require exactly one selected face | Normalize with actual image dimensions before SDK shift; do not show an arbitrary face's value for multi-selection. |
+| Shift U/V | Display reference-image pixels before material mapping, step 1; numeric shifts require exactly one selected face | Normalize with full source dimensions, never resident mip size; name the reference sample when a graph is ambiguous. Do not show an arbitrary face's value for multi-selection. |
 | Rotation | Direct numeric step 1°; action buttons use configured rotation increment | Capture continuous gesture and commit one edit; preserve mixed-value state. |
 | Align Grid | Native world-axis/density reset, including zero shift/rotation and native 0.125 map-units-per-texel scale | Convert the density through Crimson meter policy; do not copy the number into a differently defined scale field. |
 | Align Face / View | Change projection basis while preserving scale/rotation/shift | View alignment captures view axes when invoked. |
@@ -841,6 +881,139 @@ Native viewport interaction targets distinguish where material or mapping comes 
 These are pointer interactions with captured source/target context, not interchangeable global commands. Material-copy-only gestures preserve target UVs/settings; Continue Texture transfers the source material together with its UV chart/settings through `prepare_face_texture_transfer`. Resolve that source material into the target mesh's slot table before preparation; a source-local slot integer is not a portable material identity. Keep the source-preserving gesture alive without normal selection stealing its source, and cancel it when selection, instance scope, scene or relevant bindings change. Respect authored-only target eligibility even when the ray hits an imported model first. Refer to the native `QuaderModelingApi` methods `apply_selected_face_material_to_face`, `apply_face_material_to_selected_faces`, and `transfer_face_texture_to_face` for host intent, then implement it through Crimson material/selection owners. [Q14], [Q51], [Q63]
 
 Selected-source copy and Continue Texture require exactly one selected source face. Preserve the native click publication boundary: a face-copy click publishes on its first release without waiting for the double-click timer. A following whole-mesh double-click is its own ordinary history step; loss of context cancels the pending interaction, but must not undo the already published first click. Do not implement both as one delayed speculative operation. [Q67]
+
+### 7.8 Current material behavior versus the approved graph plan
+
+The port must accommodate both the current main implementation and the approved replacement without treating planned APIs as already callable. [C12], [C13], [C23], [C25], [P1]
+
+| Concern | Current main on 14 October | Approved future graph contract / port consequence |
+| --- | --- | --- |
+| Authored authority | v3 `MaterialAsset` containing `ModelMaterial surface`; v1/v2 readers retained | v4 CPU-owned typed graph with stable node/link identities and one Output. Keep the same material asset identity and `MaterialDocument` owner. |
+| Texture representation | Five fixed PBR roles and material-wide XYZ mapping | Arbitrary reachable Texture2D nodes with independent Mapping inputs; do not expose a fixed five-slot assumption in the modeling boundary. |
+| Shading compatibility | Mesh Standard PBR Opaque/Mask; particle Unlit Alpha/Additive | Add native mesh Unlit Opaque/Mask; retain particle Alpha/Additive. General transparent modeled-mesh sorting is not implied. |
+| Mapping | UV0/UV1; local/world triplanar; XYZ scale→rotation→offset; optional shared sampler | Reusable UV mapping nodes can feed multiple samples or differ per sample. A graph can mix UV0, UV1, local and world domains. |
+| Samplers and interpretation | `materialSampler` preserves legacy per-slot samplers unless shared sampler is explicitly authored; roles distinguish Color/Data/Normal | Each Texture node has explicit interpretation and sampler. One source image can need different prepared role resources. |
+| Shader path | Named engine shaders, fixed binding contracts and whole-family hot reload | Generated variants with explicit recipes and binding manifests, per-prepared-material programs, last-good asynchronous publication. |
+| History/save | Independent `MaterialDocument`; imported originals read-only; native Save As | Retain those owners/policies; migrate old files in memory and write v4 only on explicit save. |
+| Dependencies | Current fixed material/reference traversal | Visit all authored Texture nodes, including disconnected/dormant/history nodes, for deletion; GPU work follows only active reachable nodes. |
+
+The future graph includes Scalar and linear HDR Color parameters, general compatible Multiply chains (including texture×texture), and distinct Normal outputs with specialized strength. Do not flatten a graph back into five slots and silently discard extra samples or arithmetic. Preserve legacy roughness G / metalness B, explicit opacity, signed normal strength, AO strength, samplers, UV1, mapping, emission, culling and masks during migration. The existing smoke materials and world-triplanar tile material with 0.25 scale/nearest sampling are concrete compatibility fixtures, not permission to change those authored files for this documentation task.
+
+The plan's initial limits are 128 nodes, 256 links, 12 active texture bindings and 192 vec4 parameter rows, further bounded by device capabilities. Generated mesh bindings reserve 0–11 for graph samples, 12–14 for IBL and 15 for shadows; current main's fixed model program uses a different layout. The modeling adapter must consume a prepared-material manifest rather than assume either layout is universally available. These limits and generated APIs remain planned until the graph implementation lands and is verified.
+
+### 7.9 Compose surface mapping before shared material mapping
+
+There are three authorities with different scopes:
+
+| Authority | Owns | An edit affects |
+| --- | --- | --- |
+| Quader authored surface | Face loops, per-corner UV0, face texture settings and seams | The selected authored faces/canonical document |
+| Crimson occurrence sampling | Texture-lock compensation and occurrence/canonical placement context | The selected occurrence/edit scope according to the operation contract |
+| Crimson shared material/graph | UV nodes, Texture nodes, samplers, factors, graph structure and model | Every user of that shared material when its document publishes |
+
+For an ordinary UV0-driven graph sample, use this conceptual pipeline:
+
+```text
+authored face/corner UV + Quader face texture settings
+    -> compiled effective UV0 (face scalar settings already applied)
+    -> occurrence/generated-chart correction
+    -> qualifying inverse-bilinear quad residual correction
+    -> effective Quader surface UV0, q
+    -> this sample's material/graph UV0 transform, s = A*q + b
+    -> role-correct Texture2D sample with its sampler
+    -> typed graph expressions and material output
+```
+
+This is an evaluation contract, not permission to apply each correction twice. The SDK's compiled `uv0` already includes its face texture settings. Preserve its carrier/geometric-normal channels and derive the qualifying quad data from original face/corner provenance. The canvas API explicitly describes its mapping **before material UVs**. Its editable chart is not a Crimson graph UV node. [Q7], [Q15], [Q16], [Q17], [Q18], [C23]
+
+For example, two boxes can share the same tile graph. Shifting one selected face changes that face's Quader mapping; the other box's graph and appearance stay unchanged. Changing a UV node in Edit Material intentionally affects both boxes. A linked-definition edit changes shared authored geometry according to instance-edit scope, but that still does not change the material graph. Keep these three edit scopes explicit in command routing, persistence and tests.
+
+The surface-evaluation context supplied to a material must include available UV channels, corrected UV0, local and world positions, smooth/geometric normals and the normal/tangent or derivative basis needed by the selected sample. An unconnected graph UV input means identity UV0, so it receives corrected authored UV0, not raw SDK coordinates that omit occurrence or quad correction. Reuse this context in color, opacity and preview evaluation.
+
+UV1 is a separate authored capability. Quader's current public mesh payload has UV0, carriers and geometric normals, but no second authored UV set or tangents. Crimson's GPU vertex struct having two vec2 fields does not make UV1 present. Set `uvMask`/tangent-basis metadata truthfully. A reachable UV1 sample requires a real authored channel and matching normal-map basis, or an explicit unsupported-material result with a retained reference/fallback. Do not silently copy UV0 into UV1. Dormant graph branches retain their authored dependencies without necessarily requiring a GPU UV1 channel for the current output.
+
+Local triplanar samples position/normal in its local projection frame; world triplanar samples fully accumulated world meters and the corresponding normal. Those branches do not consume Quader UV0, so a face UV edit has no direct visual effect on them. A graph can combine such a branch with an editable UV0 branch; report/resolve mapping requirements per active sample, not with one material-wide `triplanar` flag. Keep world mapping world-fixed and local mapping local according to their authored semantics; do not turn one into the other to make a UV tool appear effective.
+
+Origin rebasing and transform baking need a specific compatibility decision. They can preserve world geometry while changing raw local coordinates, which would move a local-triplanar material. **Proposed host extension:** preserve a local sampling frame separate from canonical geometry coordinates for operations that promise unchanged appearance. Compose its compensating transform when origin/bake/flatten changes the geometry basis; initialize it to identity and leave ordinary material UV nodes untouched. Carry projection normals and the normal-map basis through the corresponding inverse-transpose/cofactor and reflection rules as well as positions: position-only compensation can preserve texture coordinates while changing blend weights and lighting. Actual vertex deformation still changes the local spatial field unless the tool explicitly locks it. World triplanar continues to use actual world positions. This frame is not supplied automatically by the current graph plan or SDK; settle its API and persistence before claiming origin/flatten visual parity for mixed-domain materials.
+
+### 7.10 Define reference samples, pixel units, and canvas eligibility
+
+An arbitrary graph has no unique texture image, dimensions or affine UV transform. It can multiply a 256×256 color sample with a rotated 2048×1024 data sample, use another UV branch for normals, and mix world triplanar. The SDK face-action inputs still require a texture width/height per face, and the face canvas is a pre-material chart. Resolve this explicitly in a **Crimson-owned reference-sample query**, not by taking the first GPU binding. [Q14], [Q15], [C16], [P1]
+
+Recommended reference record: stable material identity/revision, stable Texture-node/sample identity, source image identity and full source width/height, mapping domain/channel, downstream affine mapping where applicable, sampler/interpretation, and availability/diagnostic state. In current fixed materials the base-color slot is a natural reference; for a graph, automatically use an unambiguous eligible UV0 reference or let the user choose the relevant sample through a compact control. Keep this authoring choice outside shared graph mutation. If a persistent reference choice is needed, store it with the authored modeling context/envelope using stable identities, never a runtime binding index. Detect node removal/replacement and refresh or invalidate the choice coherently.
+
+**Recommended initial convention:** keep native Quader-compatible pre-material reference-pixel units. Shift `(dx,dy)` changes the authored normalized chart by `(dx/sourceWidth, dy/sourceHeight)`. Name the units accurately, for example a short reference-pixel tooltip; do not claim the same numeric change moves the final shaded image by one texel after arbitrary material mapping. Fit/Justify operate in that authored/reference chart; graph tiling/rotation remains an intentional downstream effect. UV Peel's density/repeats likewise describe the pre-material mapping, not every graph branch's final sampled density.
+
+If a later product requirement is **final sample pixels**, ordinary affine UV0 mapping `s = A*q + b` requires:
+
+```text
+delta_sample = (dx / sourceWidth, dy / sourceHeight)
+delta_authored = inverse(A) * delta_sample
+```
+
+This is an alternative host metric, not the current SDK's automatic behavior. The reference sample must be unambiguous and `A` well-conditioned/invertible. Current material validation permits finite zero or negative mapping scales; zero scale can make downstream mapping singular even when the Quader chart is valid. Do not manufacture an inverse or silently clamp it. Different samples generally cannot all move by the same final pixel delta from one face edit; that is possible only when their inverse-mapped requested deltas agree.
+
+Always use source dimensions, not a streamed mip, thumbnail or temporary physical GPU allocation. `PreparedTexture` distinguishes `width/height` from `sourceWidth/sourceHeight`; residency changes must never alter authored pixel units or the result of a repeated command. Freeze reference identity/revision/metrics at gesture start and reject/reconcile a changed source before accepting the final draft. Multi-face actions may have different reference extents per face and still publish one atomic batch.
+
+Render the canvas's physical outline/handles from its pre-material chart. For the chosen ordinary UV0 reference, its displayed texture can evaluate that sample's downstream mapping so it matches the 3D sample, while manipulation still edits the authored chart. An optional rendered graph preview shows combined material appearance; it is not itself a single editable affine image. World-dependent material preview must receive the selected occurrence/world context rather than use an arbitrary unit plane at the origin.
+
+For UV1-only, triplanar-only, missing/ambiguous reference samples, singular downstream transforms or a future non-affine material mapping, retain the valid physical outline and authored mapping. Restrict only operations whose requested metric cannot be defined. Tile-based UV edits can remain meaningful even with no texture; a documented neutral checker/reference extent can support pre-material authoring, but must not masquerade as the material's actual image size. Do not silently render one sample as though it represented the whole graph or mutate a shared UV node to force canvas compatibility.
+
+Continue Texture copies the resolved source material identity plus Quader chart/settings into the target document. It neither clones nor edits the graph's UV nodes. Re-resolve the target slot and reference-sample context afterward. Material-only copying preserves target UVs, so assigning a differently mapped graph can intentionally change appearance while leaving authored UV state intact.
+
+### 7.11 Normal bases and graph-driven coverage
+
+Current Crimson already uses +Y/OpenGL normal maps, inverse-transpose smooth normals, transformed tangents, placement-determinant handedness, UV rotation/reflection correction and local/world-triplanar projection bases. Preserve those behaviors, including finite signed imported normal strength. Positive tiling frequency is not normal strength. The graph's Normal output remains a distinct type; generic Multiply is not a normal-strength or normal-blending substitute. [C8], [C23], [P1]
+
+For Quader occurrence/quad correction, a tangent basis derived only from interpolated vertex UV0 can be wrong. Either derive the frame from **final sampled UV and world-position derivatives**, including the chosen graph sample's affine transform, or use a verified base-frame plus mapping-basis transformation. Apply the material rotation/reflection correction exactly once. A final-coordinate derivative frame followed by another `materialUvNormal`-style correction would rotate or mirror normals twice. A UV1 normal sample requires its own basis; a triplanar normal sample requires its projection basis. Carry basis provenance through typed graph evaluation rather than assuming every Normal socket uses UV0 tangents.
+
+Guard zero/singular UV derivatives before constructing or normalizing a derivative frame. Current material mapping can legally have zero scale and retains a defined rotation/sign basis even when sample coordinates are constant. Preserve a well-defined descriptor/base-basis fallback compatible with that behavior, or explicitly establish and verify a different supported contract; do not silently invent an orientation or emit NaNs. Include zero scale, near-singular charts and reflected placements in normal-map acceptance fixtures.
+
+Current fixed-material opacity is base alpha factor × vertex alpha × mapped base-color alpha, discarded for Mask below cutoff. Current color, object picking and point shadows share mapping/sampler/culling. In the future graph, Opacity can depend on several textures and arithmetic. Generate every coverage-sensitive pass from the same material semantics and coherent prepared revision; do not retain a special pick/shadow path that samples just the old base-color slot. [C7], [C23], [C26], [P1]
+
+This coverage contract includes scene depth, component face picking, selected surface masks, silhouettes and any face tint intended to follow the visible surface. A masked hole must not become an opaque sheet in a simplified overlay-mask shader. Authored topology wires remain topology edges, not alpha-cutout contours; they still test against the actual scene's occluder depth. If a tool intentionally draws an unmasked topology/ghost fill, give it an explicit semantic style rather than accidentally deriving it from an opacity-blind pass.
+
+Imported meshes remain non-editable but contribute depth according to their own Opaque/Mask coverage. The current object picker skips `pickable == false` instances; merely marking imports unpickable in a reused component pass would also remove their occlusion. A new component-pick path must distinguish **writes occluder depth** from **emits editable component ID**. Keep dense GPU IDs mapped to persistent entities/components and validate mode/preview/material/resource generations on asynchronous readback.
+
+The future plan's Alpha/Additive support remains for particles, which depth-test without writing scene depth and are excluded from point-shadow casters. Do not introduce arbitrary transparent mesh occlusion semantics as an accidental consequence of accepting a graph material. Define supported material profiles before enabling assignment to authored meshes.
+
+### 7.12 Prepare and publish complete material/geometry views
+
+Reuse persistent `AssetRef`, live `ResourceHandle`, exact immutable `ResourceSnapshot` and GPU lease lifetimes. `AssetLibrary` owns material publication/reference policy; its `TextureStreamer` owns role-aware image/material texture GPU allocations. `ResourceRuntime::preFrame` publishes workers and shader replacement before editor preparation. `EditorResources` already keeps coherent geometry/material/texture versions for visible draws, picking and shadows. Extend these owners for authored surfaces. Workers must not mutate a modeling document or call BGFX/ImGui. [C14], [C15], [C16], [C17], [C28]
+
+The approved graph pipeline is CPU graph → generated shader/binding manifest → complete immutable main-thread GPU packet. Its topology/model/sample-mode changes compile variants; numeric/color/UV-transform/image/sampler edits update packets without recompiling, while still validating compatibility and resource readiness. Graph layout/name changes do not change shader identity. The current named `compileShader(config,name)` API and strict engine preflight remain current code; generalized source recipes and generated-manifest preflight are planned extensions, not existing calls for this port to assume. [C25], [C26], [P1]
+
+Proposed prepared authored-surface view should pin:
+
+- Effective geometry/preview identity, exact-detail mesh and triangle/face provenance.
+- Canonical/occurrence placement and sampling revisions, and available coordinate/basis features.
+- Stable material bindings and their committed graph/content revisions.
+- Compatible color/opacity/shadow program variants, manifest ABI and parameter packet.
+- Exact role-correct texture versions, explicit sampler states and GPU leases.
+- A combined signature used by draw submission, picking, shadows and preview caches.
+
+These are proposed payload requirements, not a current `PreparedAuthoredSurface` API. A topology graph change must not pair new parameters with an old program whose manifest differs. A UV/material image change affecting alpha must not publish to color while picking/shadows retain a different resident mip or mapping. Keep the complete last-good presentation on failed/incomplete preparation, reject stale scene/material/preview generations, and retain old leases until all draws/readbacks finish. Expose resource status without rolling back already accepted authored graph/geometry edits merely because a shader compile needs retrying.
+
+For a modeling preview, preserve agreement between the visible candidate, semantic overlays and selectable geometry while resources lag. If the requested material/geometry combination is not presentable yet, retain the last coherent view and gate dependent picks/acceptance as required; do not draw new wire positions over an old surface and call it a successful preview. A graph-only change can retain the old prepared graph on the same geometry while authored material preparation proceeds, but its diagnostics/revision must distinguish requested versus displayed state.
+
+Texture interpretation is part of resource identity: Color decodes RGB from sRGB and filters in linear light; alpha and Data stay linear; Normal mip generation renormalizes. The same source image sampled as Color and Data may need different prepared resources. Preserve all supported legacy filter/wrap states during migration; do not force nearest/linear or one shared sampler because a Quader face chose a reference image. Residency demand must visit reachable samples with their effective UV/position mapping and occurrence stretch; the current fixed-slot/material-wide density logic is not a complete arbitrary-graph estimator. Use conservative bounded demand when exact derivative/density estimates are unavailable, and keep source dimensions independent from residency.
+
+### 7.13 Narrow contracts to establish with the material implementation
+
+These are proposed coordination points for future code, not a request to change the separate material worktree during this reassessment:
+
+| Needed host contract | Required information / behavior | Owner boundary |
+| --- | --- | --- |
+| Material coordinate requirements | Reachable UV0/UV1/local/world sample domains, normal-basis needs, opacity dependencies and supported surface profile | Graph validation/compiler metadata, consumed by authored-surface preparation |
+| Surface evaluation context | Corrected Quader UV0, real UV availability, local/world position and normal/basis context, surface-coordinate ABI | Crimson renderer/adapter; no graph nodes or BGFX types in `quader::modeling` |
+| Reference sample query | Stable sample identity, full source dimensions, mapping domain/affine transform, sampler and current revision | Material presentation/query owner; no first-GPU-slot heuristic |
+| Complete prepared material view | Per-material programs/manifests/parameters/textures and immutable compatibility signature | Existing material/resource/GPU owners extended by graph work |
+| Authored slot resolution | Zero-based face slots → stable material references → per-primitive prepared bindings | Modeling asset adapter plus AssetLibrary, independent of Box override path |
+| Coverage evaluation | One opacity/culling contract across scene, picking, shadows and selected-surface masks | Shared graph evaluator/pass generation |
+| Spatial sampling compensation | Defined handling of origin/bake/flatten under local/world projection | Occurrence/scene adapter with persisted sampling frame where required |
+| Dependency enumeration | Saved mesh/material references, active drafts and history; all graph image nodes versus reachable GPU samples | Existing project transaction/reference owners |
+
+Any needed SDK export should remain narrow and geometry-oriented: stable triangle/face/corner provenance, qualifying quad data or an equivalent supported query, and truthful channel/preview identity. Graph topology, sample IDs, resource leases and shader bindings belong in Crimson. Resolve these interfaces before coding the full UV/material stage; core topology, selection and basic opaque rendering can progress through a current-material adapter without waiting for every graph feature.
 
 ## 8. Recreating overlays in BGFX
 
@@ -983,6 +1156,8 @@ bgfx::setState(visible_state); // No depth writes; no ribbon face culling.
 
 Use the same depth computation for complementary visible/hidden passes. Equal depth belongs to the visible pass. Hidden-line opacity and whether a particular tool uses an on-top layer are explicit style policies; they must not leak into every overlay.
 
+Current Crimson's grid shader reprojects interpolated world position to fragment depth, which is useful local evidence for near-plane/eye-crossing handling and backend depth conversion. Its grid bias is not a universal line-bias constant; polygon ribbons still require the finite incident-surface correction below. [C31]
+
 ### 8.7 The difficult case: a wide line on a sloping face
 
 At the centerline, edge depth matches its incident surface. Across a several-pixel ribbon, that face's depth changes, while naive line depth varies only along the segment. The face can therefore cut away half the line. A large camera pull appears to fix it until a genuinely hidden edge leaks through a foreground object.
@@ -1047,25 +1222,51 @@ A sampleable selected occupancy/depth target is independent of whether scene dep
 
 ### 8.10 Insert passes into Crimson's actual pipeline
 
-Current pipeline and proposed additions:
+Current main uses these centrally assigned numeric views. The ranges below are source observations, not IDs the port can reserve independently. [C7], [C22]
+
+| View(s) | Current purpose |
+| --- | --- |
+| 0 | Procedural-environment compute |
+| 1–96 | Active-world point-light shadow faces |
+| 97 | Scene HDR sky, opaque/masked surfaces and ordered particles |
+| 98–100 | Scene Glow extraction and two blur passes |
+| 101 | Scene exposure, tone mapping and uncovered solid matte |
+| 102 | Scene grid in display-linear composite |
+| 103 | Scene final sRGB encoding and optional Debanding |
+| 104–110 | Isolated particle preview, including Glow |
+| 111 | Reserved |
+| 112–113 | Entity picking and readback |
+| 114–209 | Isolated saved-scene-thumbnail shadow faces |
+| 210–213, then 214 | Thumbnail rendering and readback, without Glow |
+| 215–221 | Isolated material preview, including Glow |
+| 222–227 | Game HDR/Glow/presentation/encoding; no editor grid |
+| 228 | Main ImGui tools |
+| 229 upward | Secondary native ImGui windows |
+
+The main surface/presentation sequence and proposed Modeling insertion are:
 
 ```text
-scene PBR -> HDR color + scene depth
-tone mapping -> linear display-referred composite, sharing scene depth
-grid -> same composite
-[proposed Modeling face fills / hidden lines / visible lines / markers]
-[proposed silhouette composite / foreground tool overlays]
-final sRGB encode -> viewport display texture
-ImGui -> window and docked tools
+procedural environment + complete active-world point-shadow preparation
+Scene HDR: sky + fogged surfaces + depth-tested ordered particles
+Glow from exposed HDR -> tone mapping + uncovered solid editor matte
+Scene composite view: grid
+  -> proposed face fills / hidden lines / visible lines / markers / helpers
+  -> proposed silhouette composite when its mask dependencies are ready
+final sRGB encoding + optional Debanding -> Scene display texture
+main and detached ImGui windows sample completed offscreen images
 ```
 
-Run mask/depth preparations before their consumers using named views. BGFX submission order in C++ is not a substitute for the explicit `setViewOrder` table. Crimson currently reserves views for scene, present, grid, encode, tools, picking/readback, and thumbnails. Allocate the new views centrally and update ordering without collisions. Use deterministic within-view ordering where priority requires it. [C7], [E1]
+**Proposed first implementation:** extend the existing sequential Scene composite view **102** to submit modeling overlays after the grid and before encode 103. They share framebuffer/camera/projection, while each draw sets its depth/blend state. Configure this view whenever overlays need it, even with Grid hidden; current setup is conditional on drawing the grid, so simply appending draws inside that branch would incorrectly couple modeling visibility to the grid toggle.
 
-Quader overlay colors are converted from authored sRGB to linear before premultiplied blending. Crimson's grid already uses that convention. Compositing after tone mapping keeps overlay brightness independent of scene exposure; compositing before final encoding preserves correct linear blending. Do not encode overlay RGB separately and then encode the composite again.
+Current `setViewOrder` deliberately installs natural numeric/identity ordering. The pinned D3D11 backend compares remapped blit-order keys with decoded numeric IDs around readbacks. Do not allocate arbitrary high view IDs and reorder them in front of picking/thumbnails. Complex silhouette mask/depth preparation may require centrally reallocating contiguous numeric ranges and updating every consumer/readback/platform-window boundary. View 111 is after Scene encoding, so it is not an unused pre-encode insertion slot. Test the actual pinned backend's readback behavior whenever the central schedule changes. [C7], [C22], [E1]
 
-Crimson's HDR and composite framebuffers borrow the same D24S8 texture. It currently has `BGFX_TEXTURE_RT_WRITE_ONLY`. Hardware-tested ribbons, markers, fills, and support-depth correction can share it. Any effect that explicitly texture-samples scene depth needs a capability-checked readable attachment or a dedicated sampleable scene-depth representation. Match viewport, projection, transforms, visibility, and alpha-cutout policy if using a separate depth pass. [C7]
+Quader overlay colors convert authored sRGB to linear before premultiplied blending. Crimson's grid already follows that convention. Compositing after fog, Glow and tone mapping keeps tool colors independent of scene exposure/atmosphere and prevents tools from generating Glow. Compositing before the sole sRGB encode preserves linear blending. Optional final Debanding applies a small display-space dither at the RGBA8 write; overlays inserted beside the grid naturally participate in that final encoding/dither, not HDR effects. Do not separately encode overlay RGB or run it through the material graph's emission/tone-map path. [C34], [C35]
+
+Current `ViewportTargets` uses RGBA32F HDR, RGBA16F display-linear composite, ordinary RGBA8 encoded display, and shared D24S8 with `BGFX_TEXTURE_RT_WRITE_ONLY`. HDR/composite framebuffers borrow the depth texture; display output has color only. Glow's two half-resolution RGBA32F scratch targets are allocated lazily. Hardware-tested ribbons, markers, fills and support-depth correction can share scene depth. Effects that sample depth need a capability-checked readable representation; current fog does not supply one because it is evaluated in surface/particle HDR shading. The sampleable point-shadow atlas is in light space and is not a substitute for camera depth. Match effective geometry, material opacity, camera, placement and visibility if producing a separate scene-depth pass. [C7], [C22], [C36]
 
 Extend `ViewportTargets`' coherent resource bundle for any mask/depth additions. Build a complete new bundle on resize, swap only after successful creation, cancel stale picks, and destroy borrowing framebuffers before their owned textures. An unchanged viewport size should not allocate again.
+
+Scope semantic Modeling batches to the Scene view. Game, saved-scene thumbnails and isolated material/particle previews keep their own presentation/target policies and must not inherit component highlights or construction guides. Reuse the same accepted authored geometry/material result where appropriate, without copying the Scene's UI state into those consumers.
 
 ### 8.11 Tool-specific visual feedback
 
@@ -1102,16 +1303,18 @@ Accept/Cancel retires all tool-owned helper batches together. Every retained hel
 
 The important performance property is not merely "use a cache." Check a cheap source stamp **before** enumerating topology, hashing a full mesh, formatting UI strings, allocating snapshots, or uploading buffers.
 
-Proposed stamp fields include scene/mode generation, SDK object identity, authored content identity/revision, preview identity and participant revision, component selection revision, host occurrence transform, material-slot revision, and overlay style revision. Use the subset relevant to each consumer; a color change should not invalidate topology.
+Proposed stamp fields include document/world/mode generation, SDK canonical object identity, authored content identity/revision, preview identity and participant revision, component selection revision, occurrence placement/sampling revision, material-slot revision, committed material/graph revision, prepared program/texture/parameter signature, and overlay style revision. Use the subset relevant to each consumer; a color change should not invalidate topology and a selection-color change should not redraw cached point shadows.
 
 | Change | Required response | Work that should remain retained |
 | --- | --- | --- |
 | Camera movement | Update projection/depth-dependent passes and picking context | Authored edge extraction and static wire buffers |
 | Hover/selection | Update class/membership/appearance and fills | Unchanged mesh topology |
-| Stable-topology position preview | Update effective positions, affected normals/UVs, bounds, depth | Compatible indices and semantic IDs |
+| Stable-topology position preview | Update effective positions, affected normals/UVs, bounds, depth, picking and shadow-caster signature | Compatible indices and semantic IDs |
 | Topology edit | Rebuild affected mesh/edge/face mappings and reconcile remaps | Unrelated objects |
-| Material factor | Update material parameters | Geometry and topology |
-| UV edit | Update affected attributes/tangent basis | Unchanged authored connectivity |
+| Material numeric/color factor | Publish a compatible prepared parameter packet; invalidate coverage consumers if opacity changes | Geometry, topology and graph program when its topology/model/sample mode is unchanged |
+| Material graph topology/model/sample mode | Compile/prepare compatible generated variants and publish a complete packet; retain last-good view on failure | Authored mesh topology and unaffected materials |
+| Material image/sampler/UV-node edit | Prepare role-correct bindings/parameters, density and opacity signatures; no graph compilation per approved plan | Authored face UVs and geometry; compatible programs |
+| Face UV edit / occurrence texture lock | Update affected attributes/normal basis and reference canvas; update opacity and shadow signatures where used | Authored connectivity and the shared material graph |
 | Resize | Replace target bundle and pixel uniforms; reject stale picks | Authored geometry |
 | Mode exit/cancel | Retire affected presentation and captured input | Committed authored assets |
 
@@ -1125,13 +1328,17 @@ Quader's native `MeshGeometryProjection` has effective position/attribute/index 
 
 A useful regression warms the real submission caches, changes only preview positions several times, and observes the data submitted to the renderer. Calling a fresh overlay getter in a test bypasses the gate that commonly causes the bug. Check both persistent source wires and volatile tool/hover overlays.
 
+Current `RenderScene::instances` is camera-visible geometry, while `shadowInstances` is the complete light-range caster set prepared by `EditorResources::prepareShadows`. Update both from the effective candidate before their consumers run. A camera-culled extrusion can still cast a visible shadow. Current shadow caches key resource revision, geometry/LOD/handles, placement and alpha-related material data; changing positions in place with unchanged revisions/handles leaves stale maps unless the effective preview signature is included. UV or graph opacity changes also invalidate affected casters; hover/selection styling does not. Scene/Game share the active-world shadow owner; saved-scene thumbnails use another owner and a saved snapshot. [C14], [C29], [C36]
+
+Active component editing must use exact authored detail, not a simplified model LOD whose triangles cannot be mapped reliably to selected authored components. Current `forceFullDetail` and selected-model LOD0 demand are useful preparation hooks, but wait for a coherent exact-detail view before exposing component interaction. Generated runtime/render LODs remain derived resources, never replacements for saved authored topology.
+
 ### 9.3 Lifetimes and uploads
 
 `document_snapshot()` returns a pinned immutable document; `document_copy()` is suitable for candidate edits. Avoid the deprecated borrowed `document()` pointer across mutations. Materialized SDK render snapshots currently support owned payloads; the `Pinned`/`BorrowedSameFrame` enumeration values do not make those snapshot modes implemented. [Q4], [Q6]
 
 For a simple BGFX bridge, copy upload bytes into BGFX-managed memory. If using a reference-based upload, retain the exact immutable CPU storage until BGFX's release callback completes; returning from `submit` or advancing one frame is not sufficient evidence that the driver has consumed it. Never overwrite a position buffer still pinned by an older accepted frame. [E1]
 
-Give the BGFX cache sole ownership of programs, buffers, uniforms, and target textures. Release those owners before `bgfx::shutdown`. Keep dirty upload ranges bounded and merge excessive fragmentation. Instrument extraction count, full/partial uploads, bytes uploaded, draw count, and buffer capacity so performance claims can be measured.
+Give the overlay BGFX owner sole ownership of its overlay buffers, programs, uniforms and targets. Shared mesh/material programs and texture leases remain with their established renderer/material owners, including future per-material graph packets. Release all GPU owners before `bgfx::shutdown`; keep ResourceManager alive through worker cancellation and dependent teardown. Account for pending/retired allocations and drain readbacks rather than assuming an elapsed frame frees them. Keep dirty upload ranges bounded and merge excessive fragmentation. Instrument extraction count, full/partial uploads, bytes uploaded, draw count, and buffer capacity so performance claims can be measured. [C15], [C16], [C17]
 
 Quader's retained edge slots and instanced wire backend provide useful scaling references. Introduce stable slots, shared geometry, and instancing after the baseline visual and lifecycle contracts pass; preserve the same regression fixtures throughout. [Q31]
 
@@ -1141,44 +1348,50 @@ Quader's retained edge slots and instanced wire backend provide useful scaling r
 
 | Observation from the working tree | Consequence for this integration |
 | --- | --- |
-| Existing scene/editor separation and full affine transforms | Extend those owners; avoid accumulating modeling logic in `App` |
-| Scene history currently stores entity/property patches | Add modeling payloads before exposing mutating tools |
-| Imported model GPU format is richer than the procedural sphere format | Reuse its attribute/index capabilities for derived authored meshes |
-| Resource/material/cache files are being introduced | Re-read their final ownership and CMake wiring before binding to them |
-| Some architecture prose still describes earlier milestones | Current validated source takes precedence over stale status paragraphs |
-| Main depth is shared but write-only | Reuse it for hardware-tested overlays; allocate sampled resources only for algorithms that need them |
-| View order is explicit and IDs already serve picking/thumbnails | Register Modeling passes centrally |
-| Existing selection bounds/light markers use ImGui drawing | Preserve those HUD uses; add BGFX passes for depth-aware component presentation |
+| Scene documents, semantic history, stable entity IDs and full affine transforms are implemented | Extend their modeling payload/reference handling; avoid a second scene/history owner or logic in `App` |
+| Material/effect documents have independent histories and focused shortcut routing | Scene+modeling share one timeline; graph edits retain MaterialDocument ownership; register new dock command contexts |
+| Typed resource stores, streaming, shader reload and GPU caches are implemented and in CMake | Extend coherent preparation and staged reference/deletion owners rather than restart the old resource transition |
+| Current material assignment override is built-in-Box-only | Introduce authored primitive/face-slot binding to stable material assets; do not misuse that single override |
+| Native v3 mapping, samplers, local/world triplanar and role-correct resources exist | Compose Quader mapping upstream and retain existing material behavior; current fixed fields are an adapter, not the final API |
+| v4 typed graphs are an approved separate workstream | Coordinate requirements/coordinate context/reference metrics/packets; do not claim the future compiler or graph editor exists on main |
+| Play/Game and detached native ImGui windows are implemented | Edit-mode modeling, pinned runtime geometry with current committed shared-material publication, explicit transition generations and originating-window input ownership |
+| Point shadows use a complete caster set and cached geometry/opacity signatures | Include accepted preview geometry and graph opacity changes, even for camera-culled casters |
+| Procedural sky, fog, Glow, tone-map choices and Debanding are in the current working tree | Keep overlays in the display-linear composite; preserve Scene/Game/preview context isolation |
+| Main depth remains shared but write-only | Hardware-tested overlays can reuse it; sampled-depth effects need their own appropriate representation |
+| Natural numeric view ordering protects pinned D3D11 readbacks | Extend sequential Scene view 102 initially; centrally reallocate only when a real multipass dependency requires it |
+| Shared File/Edit/Environment menus and default ImGui conventions are explicit | Reuse menu/property conventions; no custom theme, duplicate Save rows or tutorial paragraphs in panel bodies |
 
-At inspection, new `MaterialAsset`, resource manager/streaming, GPU cache, and shader-related implementation files were not all listed in root CMake. `SceneProperties` and some older `EditorSession` references also showed an in-progress transition. This is a request to establish the implementation baseline, not a diagnosis from a failed build: no Crimson build was run for this document. Avoid starting a parallel resource framework to work around a temporary transition. [C2], [C4], [C8], [C9]
+The 13 October warnings about missing resource/material source wiring and mismatched `SceneProperties`/environment ownership are removed: the current inspected paths have concrete owners and build integration. This does not certify the dirty tree builds; no Crimson build was run for this reassessment. Source, architecture and current repository instructions—not those obsolete warnings—define the next implementation baseline. Preserve all unrelated authored WIP and the material worktree's separate ownership. [C1], [C2], [C4], [C9], [C10]
 
 ### 10.2 Recommended order, with exit criteria
 
 | Stage | Implement | Exit criterion |
 | --- | --- | --- |
-| 0. Baseline | Recheck current source, settle interacting resource interfaces, build existing Release and focused tests | Known starting state; no port-specific code needed yet |
+| 0. Baseline and material contract | Inspect current main/WIP and any landed graph work; establish scene/history/Play and material coordinate/reference/prepared-packet seams; use current `Build.cmd`/focused-check policy for implementation baseline | Current capabilities versus approved future APIs recorded; no duplicate graph/resource implementation; concrete ownership and compatibility decisions |
 | 1. Headless SDK bridge | Installed package, one session, box operation, authored serialization | CPU test creates/edits/round-trips a document without SDL/BGFX/ImGui |
-| 2. Mode and entity binding | Empty entry, authored-only eligibility, primitive creation, entity binding, creation/deletion history and binding rollback | A modeled box survives leaving/reentering the mode and creation undo/redo; imports remain ineligible |
-| 3. Derived rendering | Mesh/material-slot adapter, bounds, effective preview surface | One coherent candidate renders with correct placement and cancellation |
-| 4. Component interaction and basic overlays | Host picking, ribbon/marker batches, face fill, shared scene depth | Box has twelve edges; selection and preview coordinates match pixels |
-| 5. Complete extrusion workflow | Drag baseline, preview, Accept/Cancel, unified history, atomic persistence | Create/select/extrude/cancel/accept/undo/redo/save/reopen all work coherently |
-| 6. Texturing and UV | Material assignment, face settings/canvas, actions, UV Peel, tangent/mapping parity | Checkerboard/normal tests survive edits and reload |
-| 7. Advanced visual parity | Finite support-depth correction, overlap priorities, silhouettes, hidden styles | Oblique/near-plane/foreground and overlap GPU fixtures pass |
+| 2. Mode and entity binding | Empty entry, authored-only eligibility, primitive creation, scene semantic patches/storage/reference enumeration and Play settlement | A modeled box survives mode transitions and creation undo/redo; imports remain ineligible; Play cannot mutate the authored SDK session |
+| 3. Derived rendering | Supported authored mesh/material-slot preparation, exact detail, bounds, effective preview surface and caster publication | One coherent candidate renders in Scene/Game as intended, with correct placement/cancellation and material resource ownership |
+| 4. Component interaction and basic overlays | Host picking with separate occluder eligibility, ribbon/marker/fill batches in Scene composite view, masked depth policy | Box has twelve edges; selection/preview match pixels; hiding Grid does not hide Modeling overlays; imported masks still occlude correctly |
+| 5. Complete extrusion workflow | Baseline, settings drafts, Accept/Cancel, scene/modeling history, storage, focused shortcuts and document transitions | Create/select/extrude/cancel/accept/undo/redo/save/reopen work; independent material history and Play transitions remain correct |
+| 6. Texturing, UV and graph interoperability | Stable material assignments; explicit reference-sample/pixel convention; face canvas/actions/Peel; UV0/UV1/triplanar requirements; normal/opacity variants and asynchronous packet integration | Face-local edits never mutate shared graph nodes; mixed mapping/material fixtures, deletion/history and save/reopen preserve appearance; current versus pending graph acceptance is recorded |
+| 7. Advanced visual parity | Finite support-depth correction, overlap priority, silhouettes, hidden styles and any required central view reallocation | Actual oblique/near-plane/foreground pixels, masked silhouettes, shadow freshness and readback/platform isolation satisfy the acceptance contract |
 | 8. Complete component selection and topology | Loop/ring/grow/shrink/connected selectors; remaining vertex/edge/face operations; cut/knife/poly/mirror; settings and native compound transforms | Every covered component operation has correct eligibility, success/no-op/failure, attributes, preview where appropriate, and undo/redo |
 | 9. Pivots and arrangement | Pivot/origin/bake/floor workflows; Align; Linear and Radial Array with independent copies first | World appearance, hierarchy and UV sampling remain coherent; each action uses the correct history boundary |
 | 10. Curves and Path Array | Curve assets, controls/handles, presets, tube preview/solidify, path distribution and variation | Curve and generated geometry round-trip; control/tube/path previews agree; randomized results remain stable during an edit |
 | 11. Linked definitions and occurrences | Create/flatten/edit instance, shared canonical documents, Radial Array Create Instances | Shared edits reach all occurrences; active occurrence picking/overlays, flattening, texture sampling and saved references remain correct |
 | 12. Full parity audit and scale | Resolve every section 5/7 ledger row; bounded history/uploads, measured batching/instancing; all parameter surfaces and input gestures | No undocumented missing native modeling family; GPU and workflow fixtures pass on actual Crimson backends and representative scenes |
 
-Stages 4–7 should overlap only where a tool needs the visual feature to be usable. Do not postpone a known incorrect preview/depth contract while adding a large tool catalog. Conversely, object silhouettes need not block the first correctly depth-tested edge renderer.
+Stages 4–7 should overlap only where a tool needs the visual feature to be usable. Do not postpone a known incorrect preview/depth contract while adding a large tool catalog. Conversely, object silhouettes need not block the first correctly depth-tested edge renderer. The material graph is owned by its separate implementation workstream: establish the small contracts in section 7.13 early, adapt to current v3 through existing owners if useful, and integrate the landed graph API when available. Do not build a competing graph compiler to bypass an unfinished dependency, or declare graph interoperability verified against the plan alone. Independent topology/tool work can proceed while that external implementation is pending.
 
 ### 10.3 Handing this to another AI agent
 
-Give the implementer this document and one bounded stage with its exit criteria. Require it to inspect current instructions/source, preserve unrelated WIP, and name proposed versus existing APIs. A useful first assignment is the complete box/extrusion workflow, delivered incrementally through the stages above.
+Give the implementer this document and **one persistent end-to-end goal for the full toolset**. The user has specified there will be no stage-by-stage “continue” requests. Stages are coherent implementation/verification checkpoints: finish a stage, update the durable ledger, report concise progress and proceed automatically. Require current instruction/source inspection, preservation of unrelated WIP, and explicit separation of implemented versus proposed APIs. The box/extrusion workflow establishes the first complete path; it is not the goal's completion condition. Recover from context compaction through the persistent goal and saved status rather than restarting or waiting for permission to continue.
 
 For the user's feasibility question, **8/10 for an AI agent working incrementally with access to both repositories and executable verification** is a reasonable engineering assessment, not a measured probability or delivery-time promise. Much of the difficult geometry already exists. Complete parity still requires substantial host-controller work, scene/history design, selection export gaps, instance/curve integration and real GPU iteration. A one-pass API wiring exercise would not satisfy this document. Use the milestone gates to make each increment independently reviewable while keeping the full catalog as the final target.
 
 Geometry reuse is the most predictable part; advanced overlay fidelity needs actual render inspection. Require evidence from production submission and pixels before accepting appearance claims. A passing compile or an isolated `compile_mesh()` test does not demonstrate correct mode lifecycle, GPU depth, or unchanged-frame behavior.
+
+Follow current Crimson verification policy: code handoffs use the authorized incremental Release build and focused CPU checks, while the user performs native feature acceptance. Computer control needs explicit permission; noninteractive screenshots are allowed, but this guide does not authorize routine capture suites, broad UI matrices or `--editor-smoke` mutations. Add targeted rendering checks where they establish a specific contract, or record the precise native acceptance still pending. Do not call unobserved pixels verified or mark the full integration achieved while required acceptance remains unresolved. Documentation-only reassessment needs consistency/link checks, not an application build. [C10]
 
 The implementation can reuse authorized Quader source where appropriate, but should retain package boundaries and source provenance. This document consulted Quader's own implementation and current Crimson code, not foreign DCC source or decompilation. No temporary copied implementation was created for this documentation task.
 
@@ -1204,9 +1417,26 @@ Repeat this for each native tool/action family, including selection-only behavio
 
 Record deliberate host adaptations explicitly: meters instead of native map-unit display, dock instead of Qt viewport overlay, Crimson command bindings instead of raw copied shortcuts, and explicit settlement before mode exit. They should preserve the intended modeling result while making the host behavior understandable. Do not call incomplete tools complete merely because a menu entry exists or a batch method produces triangles.
 
+### 10.5 Open integration risks and decisions
+
+| Risk / decision | Required resolution before claiming complete parity |
+| --- | --- |
+| Current material field shape is being replaced by graph authority | Integrate against landed graph metadata/packet contracts; keep v3 adaptation isolated and preserve legacy fixtures/IDs without unsolicited file rewrites. |
+| One face can use many graph sample domains and texture sizes | Implement explicit reference-sample/pre-material pixel semantics and per-branch UV availability; never guess the first binding or resident mip extent. |
+| Graph-local projection under origin/bake/flatten | Define persisted sampling-frame compensation and test appearance; a geometry-only world-transform fix does not preserve raw local projection. |
+| SDK mesh payload lacks final triangle-face provenance/quad coefficients and UV1 | Add narrow supported geometry queries/derived data; do not infer face identity from triangle ordering or fabricate a second UV set. |
+| Generated surface-coordinate/varying ABI and graph resource limits | Include Quader carriers/quad/basis requirements in compatible shader variants and manifest validation; reject unsupported layouts/caps with last-good presentation. |
+| Opacity changes while shaders/textures stream | Publish coherent color/pick/depth/shadow/mask state; reject stale readbacks and avoid mixing last-good packets with incompatible new geometry. |
+| Scene history and global asset deletion | Extend semantic patches/reference enumeration/transaction rollback for authored blobs, slots, previews and history; keep material document ownership independent. |
+| Active Play clone versus authored modeling session | Establish an Edit-only mutation gate and frozen runtime geometry; invalidate interactions on both transitions. |
+| More BGFX mask passes versus pinned numeric readback ordering | Central view allocation and focused real-backend verification; do not use arbitrary `setViewOrder` remapping. |
+| Active dirty main and isolated material worktree diverge | Re-read the actual receiving checkout before implementation/merge; this reassessment neither changes nor certifies the separate worktree. |
+
+These are integration tasks and explicit compatibility choices, not newly implemented functionality. They do not reduce the full native modeling-tool objective. The approved material graph plan alone does not close them.
+
 ## 11. Acceptance and regression checklist
 
-These are **future implementation checks**, not results claimed by this guide. Add focused CPU tests alongside Crimson's existing scene, extraction, math, model, and renderer tests. Actual GPU verification is required where pixels establish correctness. Follow each repository's current test/build policy; do not impose Quader's entire native build matrix on a Crimson-only change.
+These are **future implementation and acceptance checks**, not results claimed by this guide. Add focused CPU tests alongside Crimson's existing scene, extraction, math, model, and renderer tests. Pixels require actual GPU/native evidence before being described as correct. Follow current Crimson policy for focused checks and user feature acceptance; this checklist does not authorize computer control, routine capture suites or broad UI matrices. Do not impose Quader's entire native build matrix on a Crimson-only change. [C10]
 
 ### 11.1 Mode, scope, and state
 
@@ -1286,6 +1516,31 @@ Useful Quader regression references include `ModelingSdkConsumerTests`, `Modelin
 - [ ] Canvas translate/scale/rotate, modifier snapping, pan/zoom, release commit and Escape cancel use the same authoritative mapping as the 3D surface.
 - [ ] Tool Settings and face canvas are inspected in actual Crimson ImGui at narrow docks and multiple framebuffer scales, including keyboard-only numeric entry and scene replacement during a draft.
 - [ ] Unchanged UI frames do not rebuild descriptors, enumerate broad command catalogs, traverse topology or prepare geometry.
+
+### 11.6 Current Crimson and material-graph interoperability
+
+- [ ] Editing a face on one of two independently authored objects sharing a graph leaves the graph and other object's UVs unchanged; deliberate Edit Material changes both through material publication.
+- [ ] Scene/modeling undo and focused Material/Particle undo stay independent; Tool Settings/Face Texture establish the correct command context after focus changes.
+- [ ] UV0, unavailable UV1, mixed UV0/triplanar graphs and differing normal-map bases produce explicit correct compatibility outcomes, without fabricated UV1 data.
+- [ ] Quader face settings, occurrence carrier correction, quad correction and each graph UV transform apply once in the intended order; rotations, reflection and negative scales preserve normal direction.
+- [ ] Reference-sample pixel edits use full source dimensions and remain numerically identical across streamed mip changes; ambiguous/singular/non-UV0 samples never silently select a different metric.
+- [ ] Fit/Justify/Peel and canvas handles obey the chosen pre-material metric; an alternative final-sample metric is implemented only with its required invertible mapping contract.
+- [ ] Continue Texture copies material identity plus chart/settings without cloning/editing graph nodes; target slots and reference context are remapped atomically.
+- [ ] Origin, transform bake and instance flatten preserve promised appearance for ordinary UV, local triplanar, world triplanar and mixed graphs; last-occurrence identity behavior remains correct.
+- [ ] A graph opacity chain using multiple textures agrees across color, depth, face picking, shadows and selected-surface masks, including material/UV/mip changes during async preparation.
+- [ ] Color/Data/Normal interpretations of one image retain separate role-correct resources; packed G/B, alpha, signed normal strength, AO, samplers and legacy smoke/tile appearances survive graph migration.
+- [ ] Graph parameter/image/sampler/UV edits update compatible packets without compilation; topology/model/sample-mode changes compile and publish compatible manifests/programs; node-layout edits do neither unnecessarily.
+- [ ] Failed/stale compile or texture preparation keeps a coherent last-good view and truthful requested/displayed revisions; no new component picks target invisible preview positions.
+- [ ] Authored mesh/curve/instance slots, active previews, scene history and all graph Texture nodes—including dormant/disconnected/history nodes—participate in deletion/replacement policy; GPU reachability remains a separate query.
+- [ ] Scene save does not rewrite migrated referenced materials; explicit native material save retains stable IDs and imported Save As policy.
+- [ ] Starting/stopping Play settles or cancels modeling appropriately, freezes runtime geometry and invalidates pending picks/field drafts; Game never mutates the authored session or displays modeling UI.
+- [ ] Source-window ownership, P/Shift+Escape/plain Escape, text input, detached asset editors and Game capture do not double-dispatch modeling commands.
+- [ ] With Grid disabled, modeling overlays still draw in the configured Scene composite; fog/exposure/Glow do not recolor them and final encoding/Debanding remains correct.
+- [ ] Effective preview positions and graph opacity invalidate the complete shadow-caster set even with unchanged committed revisions or camera-culled casters; pure hover/style changes retain cached shadows.
+- [ ] Exact authored detail is ready before component editing; simplifying runtime LODs never changes authored IDs or saved geometry.
+- [ ] Adding mask passes preserves numeric BGFX/readback ordering, Scene/Game/preview isolation, secondary-window sampling and resource retirement.
+
+Existing focused source references include `material_mapping_render_tests.cpp`, `point_shadow_render_tests.cpp` and `native_resource_tests.cpp` for actual rendering paths, plus scene/extraction, material-document, deletion, Game input, Play shortcut, shader compiler/preflight, environment and tone-mapping tests. These tests were inspected as integration references, **not run by this documentation reassessment**. Reuse/extend the relevant paths instead of manufacturing a new routine acceptance suite. [C37], [C38], [C39]
 
 ## 12. Source map and further reading
 
@@ -1370,6 +1625,37 @@ Local links point to the inspected checkouts. Use symbols and responsibilities t
 | [C7] | BGFX target lifetime, render passes, states, and view order |
 | [C8] | Imported-model render vertex/material shape; reference for derived GPU data |
 | [C9] | Editor/session composition and document transitions |
+| [C10] | Current Crimson repository policy, ownership and verification rules |
+| [C11] | Current user-facing editor, material, Scene/Game and input behavior |
+| [C12] | Current v3 material storage, compatibility, sampler and migration implementation |
+| [C13] | Independent material document transactions/history/publication |
+| [C14] | Current coherent model and full shadow-caster preparation interface |
+| [C15] | Typed CPU resource stores, immutable snapshots and worker lifetimes |
+| [C16] | Role-aware texture streaming, source versus resident extents and leases |
+| [C17] | Main-thread resource/hot-reload publication before editor frames |
+| [C18] | Transient Play document/world ownership |
+| [C19] | Logical/physical key identity and reusable shortcut matching |
+| [C20] | Play Start/Stop ownership and safe-boundary dispatch |
+| [C21] | Shared File/Edit/Environment menu component |
+| [C22] | Central current render view allocation and render contracts |
+| [C23] | Current UV/triplanar and normal-basis shader mapping |
+| [C24] | Independent material preview and working-versus-committed document use |
+| [C25] | Current named shader compiler API; generalized graph recipes remain planned |
+| [C26] | Current shader interface preflight |
+| [C27] | Authored resource reference/deletion policy |
+| [C28] | Material resolution, Box-only overrides, asset publication and project transactions |
+| [C29] | Coherent preparation, current texture-demand logic and complete shadow casters |
+| [C30] | Existing scene shortcut focus contexts |
+| [C31] | Current grid fragment-depth reprojection and bias policy |
+| [C32] | Focused Scene/Particle/Material/Game command routing |
+| [C33] | Current scene storage, semantic history and prepared external changes |
+| [C34] | Scene/Game/saved-scene versus isolated-preview presentation policy |
+| [C35] | Final single sRGB transfer and optional Debanding |
+| [C36] | Point-shadow atlas ownership, caching and lifetime |
+| [C37] | Existing material mapping/normal/alpha render checks, not run for this guide |
+| [C38] | Existing point-shadow rendering/cache checks, not run for this guide |
+| [C39] | Existing resource/presentation/readback checks, not run for this guide |
+| [P1] | Approved future material-graph MVP contract; not proof of landed implementation |
 | [E1] | Official BGFX API, state, view ordering, and memory lifetime reference |
 | [E2] | Official SDL3 drawable pixel-size reference |
 | [E3] | Official Dear ImGui input/capture guidance |
@@ -1451,6 +1737,37 @@ Local links point to the inspected checkouts. Use symbols and responsibilities t
 [C7]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/src/crimson-renderer/Renderer.cpp>
 [C8]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/src/assets/ModelAsset.h>
 [C9]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/src/editor/EditorSession.cpp>
+[C10]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/AGENTS.md>
+[C11]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/README.md>
+[C12]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/src/assets/MaterialAsset.cpp>
+[C13]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/src/editor/MaterialDocument.h>
+[C14]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/src/editor/EditorResources.h>
+[C15]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/src/resources/ResourceManager.h>
+[C16]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/src/resources/TextureStreamer.h>
+[C17]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/src/editor/ResourceRuntime.cpp>
+[C18]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/src/runtime/PlaySession.h>
+[C19]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/src/input/KeyboardActions.h>
+[C20]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/src/editor/PlayShortcuts.cpp>
+[C21]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/src/tools/DocumentEditorMenu.h>
+[C22]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/src/crimson-renderer/RenderTypes.h>
+[C23]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/src/crimson-renderer/shaders/material_mapping.sh>
+[C24]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/src/editor/MaterialPreview.cpp>
+[C25]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/src/resources/ShaderCompiler.h>
+[C26]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/src/crimson-renderer/ShaderPreflight.h>
+[C27]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/src/assets/AssetReferenceManager.h>
+[C28]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/src/assets/AssetLibrary.cpp>
+[C29]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/src/editor/EditorResources.cpp>
+[C30]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/src/editor/SceneShortcuts.cpp>
+[C31]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/src/crimson-renderer/shaders/grid_depth.sh>
+[C32]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/src/editor/SceneEditor.cpp>
+[C33]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/src/scene/SceneDocument.cpp>
+[C34]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/src/crimson-renderer/EnvironmentPresentation.h>
+[C35]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/src/crimson-renderer/shaders/fs_encode.sc>
+[C36]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/src/crimson-renderer/PointShadowRenderer.h>
+[C37]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/tests/material_mapping_render_tests.cpp>
+[C38]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/tests/point_shadow_render_tests.cpp>
+[C39]: <C:/Users/Drako/Desktop/_CRIMSON_ENGINE/crimson-engine/tests/native_resource_tests.cpp>
+[P1]: <C:/Users/Drako/Desktop/Crimson_Material_Graph_MVP_Plan.md>
 [E1]: https://bkaradzic.github.io/bgfx/bgfx.html
 [E2]: https://wiki.libsdl.org/SDL3/SDL_GetWindowSizeInPixels
 [E3]: https://github.com/ocornut/imgui/blob/master/docs/FAQ.md

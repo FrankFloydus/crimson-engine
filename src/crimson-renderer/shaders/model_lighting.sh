@@ -1,3 +1,5 @@
+#include "environment_ambient.sh"
+
 CONST(float PI = 3.141592653589793);
 
 vec3 safeNormalize(vec3 value, vec3 fallback)
@@ -19,21 +21,22 @@ vec3 environmentDirection(vec3 direction)
 // models and the preview sphere share the same lighting response.
 vec3 evaluateEnvironment(vec3 N, vec3 V, vec3 base, float metallic, float roughness, float specularLevel)
 {
-    if (u_environment.x <= 0.0) return vec3_splat(0.0);
+    if (u_environment.x <= 0.0 && dot(u_ambientLight.rgb, vec3_splat(1.0)) <= 0.0) return vec3_splat(0.0);
     float NoV = clamp(dot(N, V), 0.00001, 1.0);
     vec3 F0 = mix(vec3_splat(0.08 * clamp(specularLevel, 0.0, 1.0)), base, metallic);
     vec3 F = F0 + (vec3_splat(1.0) - F0) * pow(1.0 - NoV, 5.0);
-    vec3 diffuse = textureCube(s_irradiance, environmentDirection(N)).rgb;
+    vec3 diffuse = environmentAmbientIrradiance(textureCube(s_irradiance, environmentDirection(N)).rgb);
     diffuse *= (vec3_splat(1.0) - F) * (1.0 - metallic) * base;
     vec3 reflection = reflect(-V, N);
     float specularLod = (roughness - 0.045) / (1.0 - 0.045) * u_environment.z;
     vec3 prefiltered = textureCubeLod(s_prefiltered, environmentDirection(reflection), specularLod).rgb;
-    vec2 lut = texture2D(s_brdfLut, vec2(NoV, roughness)).rg;
+    vec2 lut = forwardPlusBrdf(vec2(NoV, roughness));
     vec3 specular = prefiltered * (F0 * lut.x + vec3_splat(lut.y));
-    return (diffuse + specular) * u_environment.x;
+    return diffuse + specular * u_environment.x;
 }
 
-vec3 evaluateLight(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 base, float metallic, float roughness, float specularLevel)
+vec3 evaluateLightResponse(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 base, float metallic, float roughness, float specularLevel,
+    float diffuseResponse, float specularResponse, float softSourceSinSquared)
 {
     float NoL = clamp(dot(N, L), 0.0, 1.0);
     float rawNoV = dot(N, V);
@@ -46,7 +49,7 @@ vec3 evaluateLight(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 base, float metal
     vec3 F0 = mix(vec3_splat(0.08 * clamp(specularLevel, 0.0, 1.0)), base, metallic);
     vec3 F = F0 + (vec3_splat(1.0) - F0) * pow(1.0 - VoH, 5.0);
     float alpha = roughness * roughness;
-    float alphaSquared = alpha * alpha;
+    float alphaSquared = pointLightSpecularAlphaSquared(alpha * alpha, VoH, softSourceSinSquared);
     float denom = NoH * NoH * (alphaSquared - 1.0) + 1.0;
     float D = alphaSquared / max(PI * denom * denom, 0.000000000001);
     float smithL = NoV * sqrt(NoL * NoL * (1.0 - alphaSquared) + alphaSquared);
@@ -54,5 +57,16 @@ vec3 evaluateLight(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 base, float metal
     float visibility = 0.5 / max(smithL + smithV, 0.000001);
     vec3 specular = D * visibility * F;
     vec3 diffuse = (vec3_splat(1.0) - F) * (1.0 - metallic) * base / PI;
-    return (diffuse + specular) * radiance * NoL;
+    return (diffuse * diffuseResponse + specular * specularResponse) * radiance * NoL;
+}
+
+vec3 evaluateLightResponse(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 base, float metallic, float roughness, float specularLevel,
+    float diffuseResponse, float specularResponse)
+{
+    return evaluateLightResponse(N, V, L, radiance, base, metallic, roughness, specularLevel, diffuseResponse, specularResponse, 0.0);
+}
+
+vec3 evaluateLight(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 base, float metallic, float roughness, float specularLevel)
+{
+    return evaluateLightResponse(N, V, L, radiance, base, metallic, roughness, specularLevel, 1.0, 1.0);
 }

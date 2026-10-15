@@ -16,6 +16,7 @@
 #include <implot.h>
 #include <imgui_impl_sdl3.h>
 #include <filesystem>
+#include <chrono>
 #include <memory>
 #include <stdexcept>
 #include <cstdint>
@@ -131,6 +132,7 @@ int run(const AppOptions& options) {
         bool running=true,captureRequested=false,cycleMinimized=false,pendingQuit=false;
         uint64_t cycleRestoreTime=0;
         while (running && (!options.frameLimit || frame < options.frameLimit)) {
+            const auto frameStarted=std::chrono::steady_clock::now();
             SDL_Event event;
             bool focusLossEvent=false;
             while (SDL_PollEvent(&event)) {
@@ -194,9 +196,13 @@ int run(const AppOptions& options) {
             if (!captureRequested && !options.capture.empty() && frame+5 >= options.frameLimit) {
                 bgfx::requestScreenShot(BGFX_INVALID_HANDLE,options.capture.c_str()); captureRequested=true;
             }
+            const auto cpuSubmitted=std::chrono::steady_clock::now();
             bgfxFrame=bgfx::frame();
             const bool nativeSynchronized=toolsRenderer.postFrame(bgfxFrame,!mainDrawable);
             if(!mainDrawable && !nativeSynchronized)SDL_Delay(16);
+            if(editor)editor->setFrameTiming({
+                std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-frameStarted).count(),
+                std::chrono::duration<double,std::milli>(cpuSubmitted-frameStarted).count()});
             ++frame;
         }
         if(resourceRuntime)resourceRuntime->stop();else resources.stop();

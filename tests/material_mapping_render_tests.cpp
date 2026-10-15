@@ -3,6 +3,7 @@
 #include "crimson-renderer/Picking.h"
 #include "resources/ResourceManager.h"
 #include "resources/ImageDecoder.h"
+#include "editor/MaterialPreview.h"
 #include <chrono>
 #include <filesystem>
 #include <thread>
@@ -39,6 +40,75 @@ std::array<int,3> sample(const DecodedImage& image,const Camera& camera,Vec3 wor
 }
 void disconnectMaterialInput(MaterialGraph& graph,MaterialNodeId node,MaterialPin pin){if(const auto* link=materialInputLink(graph,node,pin))removeMaterialLink(graph,link->id);}
 int difference(std::array<int,3> a,std::array<int,3> b){return std::abs(a[0]-b[0])+std::abs(a[1]-b[1])+std::abs(a[2]-b[2]);}
+template<class Read,class Prepare>
+void exerciseMaterialFog(Renderer& renderer,const std::shared_ptr<ModelAsset>& mesh,Read&& read,Prepare&& prepare) {
+    SceneSettings settings;settings.camera.position={0,0,3};settings.camera.target={};settings.camera.fov=45;
+    settings.camera.fovAxis=CameraFovAxis::Vertical;settings.environment.enabled=false;
+    settings.environment.toneMapping=ToneMapping::Linear;settings.environment.background.overrideColor=true;
+    settings.environment.background.color={};settings.environment.background.show=false;
+    RenderScene scene{settings,{}};scene.sceneMode=true;
+    std::vector<ModelMaterial> frontSurface(1),neighborSurface(1),rearSurface(1);
+    frontSurface[0].baseColor={0,0,0,1};neighborSurface[0]=frontSurface[0];rearSurface[0].baseColor={0,1,0,1};
+    std::vector<ModelMaterialTextures> frontBindings(1),neighborBindings(1),rearBindings(1);
+    RenderModelInstance front;front.model.asset=mesh;front.materials=&frontSurface;front.textures=&frontBindings;
+    front.model.transform=math::translation({-.55f,0,0})*math::scaling({.4f,.4f,1});
+    auto neighbor=front;neighbor.materials=&neighborSurface;neighbor.textures=&neighborBindings;
+    neighbor.model.transform=math::translation({.55f,0,0})*math::scaling({.4f,.4f,1});
+    auto rear=front;rear.materials=&rearSurface;rear.textures=&rearBindings;rear.shading=MaterialShading::Unlit;
+    rear.model.transform=math::translation({0,0,-.3f});
+    std::array<RenderParticleMaterial,2> sprites;auto& sprite=sprites[0];
+    sprite.baseColor={0,0,0,1};sprite.blend=MaterialBlend::Opaque;sprites[1]=sprite;
+    std::array<RenderParticle,2> particles;particles[0].position={-.55f,0,0};particles[0].size=.8f;
+    particles[0].billboardMode=ParticleBillboardMode::Enabled;particles[1]=particles[0];
+    particles[1].position={.55f,0,0};particles[1].materialIndex=1;scene.particleMaterials=sprites;
+    const auto capture=[&]{renderer.renderGame(scene);return read(renderer.gameViewportTexture());};
+    const Vec3 left{-.55f,0,0},right{.55f,0,0};
+    const auto black=[](const auto& rgb){return rgb[0]<3 && rgb[1]<3 && rgb[2]<3;};
+    std::array<FogSettings,3> fogModes;
+    for(auto& fog:fogModes){fog.enabled=true;fog.color={0,0,1};}
+    fogModes[0].mode=FogMode::Depth;fogModes[0].depthBegin=0;fogModes[0].depthEnd=1;fogModes[0].depthOpacity=.6f;
+    fogModes[1].density=.5f;
+    fogModes[2].density=0;fogModes[2].height=2;fogModes[2].heightDensity=.8f;
+    // Cover packet and fallback authority, both shading models and both geometry
+    // paths. The green rear surface proves disabling haze retains opaque depth.
+    for(bool generated:{false,true})for(auto shading:{MaterialShading::StandardPbr,MaterialShading::Unlit}) {
+        MaterialAsset authored;addMaterialNode(authored.graph,MaterialNodeKind::Output);
+        auto& output=materialOutputNode(authored.graph).output;output.shading=shading;output.baseColor={0,0,0};
+        std::shared_ptr<const PreparedGraphMaterial> receiving,excluded;
+        if(generated) {
+            receiving=prepare(authored);output.receiveFog=false;excluded=prepare(authored);
+            check(receiving->programs==excluded->programs,"Receive Fog recompiled an unchanged material program.");
+        }
+        front.shading=shading;neighbor.shading=shading;sprite.shading=shading;sprites[1].shading=shading;
+        neighborBindings[0].graph=receiving;sprites[1].graph=receiving;
+        for(bool particleGeometry:{false,true}) {
+            std::vector<RenderModelInstance> instances;
+            if(!particleGeometry){instances.push_back(front);instances.push_back(neighbor);}
+            instances.push_back(rear);scene.instances=instances;
+            scene.particles=particleGeometry?std::span<const RenderParticle>(particles):std::span<const RenderParticle>{};
+            const auto receive=[&](bool enabled) {
+                frontBindings[0].graph=enabled?receiving:excluded;sprite.graph=frontBindings[0].graph;
+                // An available graph is authoritative even if its fallback is stale.
+                frontSurface[0].receiveFog=generated?!enabled:enabled;sprite.receiveFog=frontSurface[0].receiveFog;
+            };
+            settings.environment.fog={};receive(true);
+            const auto baseline=capture();
+            check(black(sample(baseline,settings.camera,left)) && black(sample(baseline,settings.camera,right)) &&
+                sample(baseline,settings.camera,{0,-.8f,-.3f})[1]>250,"Fog fixture lost its opaque black foreground or green rear surface.");
+            for(const auto& fog:fogModes) {
+                settings.environment.fog=fog;receive(true);const auto fogged=capture();
+                check(sample(fogged,settings.camera,left)[2]>150 && sample(fogged,settings.camera,right)[2]>150,
+                    "An opted-in black material did not receive colored distance or height fog.");
+                receive(false);const auto isolated=capture();
+                check(black(sample(isolated,settings.camera,left)),"A fog-excluded black material received haze or lost opaque depth.");
+                check(difference(sample(isolated,settings.camera,right),sample(fogged,settings.camera,right))<=3,
+                    "Excluding one material disabled fog on its neighboring surface.");
+                receive(true);
+                check(capture().rgba==fogged.rgba,"Reusing the opted-in material packet did not restore fog exactly.");
+            }
+        }
+    }
+}
 void exercise(SDL_Window* window,const ShaderCompileConfig& config){
     // Outstanding readback destinations must outlive Renderer on failure.
     std::vector<std::shared_ptr<DecodedImage>> destinations;ResourceManager resources;Renderer renderer(window);MaterialGraphPrograms programs(resources,config);renderer.resizeViewport(Size,Size);renderer.resizeGameViewport(Size,Size);
@@ -255,10 +325,12 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config){
         check(published.current && published.programs,"Generated sprite shader timed out.");
         auto packet=std::make_shared<PreparedGraphMaterial>();packet->programs=published.programs;packet->uniforms=generated.uniforms;
         packet->sources=generated.textures;packet->shading=materialOutputNode(source.graph).output.shading;packet->blend=materialOutputNode(source.graph).output.blend;
+        packet->receiveFog=materialOutputNode(source.graph).output.receiveFog;
         packet->signature=published.programs->signature;
         for(const auto& binding:generated.textures){check(bgfx::isValid(image),"Regression graph needs a supplied image.");packet->textures[binding.slot]=image;packet->flags[binding.slot]=point|BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP;}
         return packet;
     };
+    exerciseMaterialFog(renderer,mesh,read,prepare);
     settings.environment.background.color={};settings.environment.enabled=false;scene.directionalLights={};scene.pointLights={};scene.instances={};
     particles[0].position={};particles[0].color={0,1,0,0};sprite=RenderParticleMaterial{};
     scene.particles=particles;scene.particleMaterials=std::span(&sprite,1);
@@ -424,6 +496,27 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config){
     sprite.graph=prepare(oriented,tilted.handle);const auto orientedTilt=sample(capture(),settings.camera,{});
     particles[0].rotation=std::numbers::pi_v<float>;
     check(difference(orientedTilt,sample(capture(),settings.camera,{}))>10,"Local-triplanar normal did not rotate with the Disabled sprite basis.");
+    // The material editor may display a coherent coarse texture packet while
+    // finer requested detail is pending. Exercise its dedicated view family and
+    // streamed preview geometry rather than only the ordinary scene/game path.
+    check(renderer.publishMaterialPreviewEnvironment(environment),"Material preview environment did not publish.");
+    renderer.resizeMaterialPreview(Size,Size);
+    MaterialAsset previewMaterial;previewMaterial.id="preview-readback";
+    addMaterialNode(previewMaterial.graph,MaterialNodeKind::Output);
+    auto& previewOutput=materialOutputNode(previewMaterial.graph).output;previewOutput.shading=MaterialShading::Unlit;previewOutput.baseColor={0,1,0};
+    canonicalizeMaterialAsset(previewMaterial);ModelMaterialTextures previewBindings;previewBindings.graph=prepare(previewMaterial);previewBindings.complete=false;
+    check(materialPreviewPacketReady(previewBindings),"Coherent preview packet was rejected while detail remained pending.");
+    SceneSettings previewSettings;previewSettings.camera.position={0,0,3.2f};previewSettings.camera.target={};previewSettings.camera.nearPlane=.1f;previewSettings.camera.farPlane=30;
+    previewSettings.environment.enabled=false;previewSettings.environment.toneMapping=ToneMapping::Linear;
+    const auto drawPreview=[&]{renderer.renderMaterialPreview(previewSettings,previewMaterial,previewBindings,MaterialPreviewMesh::Sphere,{},false);};
+    for(unsigned frameIndex=0;frameIndex<8;++frameIndex){drawPreview();tick();}
+    drawPreview();const auto preview=read(renderer.materialPreviewTexture());const auto previewCenter=sample(preview,previewSettings.camera,{});
+    check(previewCenter[1]>240&&previewCenter[0]<5&&previewCenter[2]<5,"Dedicated material preview was blank or lost its graph surface.");
+    previewSettings.camera.position={100,0,3.2f};previewSettings.camera.target={100,0,0};drawPreview();const auto movedPreview=read(renderer.materialPreviewTexture());
+    check(movedPreview.rgba!=preview.rgba,"Material preview camera movement did not affect its output.");
+    previewSettings.camera.position={0,0,3.2f};previewSettings.camera.target={};drawPreview();
+    check(read(renderer.materialPreviewTexture()).rgba==preview.rgba,"Restoring the default preview view did not restore its visible sphere.");
+    renderer.releaseMaterialPreview();
     scene.instances={};scene.particles={};sprite.graph.reset();resources.stop();
     frame=renderer.drainPending(frame);
 }

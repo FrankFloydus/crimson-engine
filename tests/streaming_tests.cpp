@@ -2,11 +2,14 @@
 #include "resources/TextureMipCache.h"
 #include "assets/AtomicFile.h"
 #include "assets/MaterialPreviewGeometry.h"
+#include <nlohmann/json.hpp>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iostream>
+#include <latch>
 #include <numbers>
 #include <stdexcept>
 
@@ -49,14 +52,53 @@ void textureMips(const std::filesystem::path& root) {
     const auto written=writeTextureMipCache(root/"texture.mips",key,TextureRole::Color,color);
     const auto cached=readTextureMipCache(written.file,key,TextureRole::Color);
     check(readTextureMip(cached,1).rgba==color.back().rgba,"Cached mip must be independently readable.");
+    const auto stamp=std::filesystem::last_write_time(written.file)-std::chrono::hours(1);
+    std::filesystem::last_write_time(written.file,stamp);
+    {
+        // MSVC's ordinary ifstream allows other readers but denies replacement.
+        // A duplicate builder must reuse these immutable bytes while mip reads
+        // are in flight instead of attempting an unnecessary Windows rename.
+        std::ifstream reader(written.file,std::ios::binary);
+        check(bool(reader),"Could not retain an active mip-cache reader.");
+        const auto repeated=writeTextureMipCache(written.file,key,TextureRole::Color,color);
+        check(repeated.key==cached.key && repeated.levels.size()==cached.levels.size(),"Repeated mip-cache write changed its descriptor.");
+        check(std::filesystem::last_write_time(written.file)==stamp,"An identical mip-cache write replaced an immutable file.");
+        check(readTextureMip(repeated,0).rgba==pixels && readTextureMip(repeated,1).rgba==color.back().rgba,
+            "Repeated mip-cache publication damaged a reader's payload.");
+    }
     rejects([&]{readTextureMipCache(written.file,key+1,TextureRole::Color);});
     rejects([&]{readTextureMipCache(written.file,key,TextureRole::Normal);});
     { std::fstream file(written.file,std::ios::in|std::ios::out|std::ios::binary); file.seekp(static_cast<std::streamoff>(cached.levels[1].offset)); file.put('x'); }
     check(readTextureMip(cached,0).rgba==pixels,"A damaged tail does not force unrelated payload reads.");
     rejects([&]{readTextureMip(cached,1);});
+    const auto repaired=writeTextureMipCache(written.file,key,TextureRole::Color,color);
+    check(readTextureMip(repaired,1).rgba==color.back().rgba,"Identical-cache reuse prevented damaged mip-cache repair.");
     rejects([&]{generateTextureMips(2,2,pixels,TextureRole::Data);});
     std::vector<MipInfo> levels{{1024,512},{512,256},{256,128},{128,64},{64,32}};
     check(coarseTextureMip(levels)==4,"Coarse first texture request should cap its longest edge at64.");
+}
+void concurrentTextureMipPublication(const std::filesystem::path& root) {
+    using namespace crimson::streaming;
+    std::vector<std::uint8_t> pixels(128*128*4);
+    for(std::size_t i=0;i<pixels.size();++i)pixels[i]=static_cast<std::uint8_t>((i*37+i/31)%256);
+    const auto key=textureContentKey(pixels,TextureRole::Color);
+    const auto file=root/"concurrent-texture.mips";
+    std::latch ready(2),start(1);
+    auto build=[&] {
+        ready.count_down();start.wait();
+        const auto levels=generateTextureMips(128,128,pixels,TextureRole::Color);
+        return writeTextureMipCache(file,key,TextureRole::Color,levels);
+    };
+    auto first=std::async(std::launch::async,build),second=std::async(std::launch::async,build);
+    ready.wait();start.count_down();
+    const auto a=first.get(),b=second.get();
+    check(a.file==b.file && a.key==b.key && a.levels.size()==b.levels.size(),"Concurrent mip builders disagreed on immutable cache identity.");
+    const auto expected=generateTextureMips(128,128,pixels,TextureRole::Color);
+    const auto published=readTextureMipCache(file,key,TextureRole::Color);
+    for(std::uint32_t level=0;level<expected.size();++level)
+        check(readTextureMip(published,level).rgba==expected[level].rgba,"Concurrent mip publication exposed a partial or mismatched payload.");
+    for(const auto& entry:std::filesystem::directory_iterator(root))
+        check(!entry.path().filename().string().starts_with("concurrent-texture.mips."),"Concurrent mip publication leaked its temporary file.");
 }
 void materialSphere() {
     using namespace crimson;
@@ -93,9 +135,26 @@ void geometry(const std::filesystem::path& root) {
     asset.materials[0].uvScale={2,3,-4};asset.materials[0].uvOffset={.1f,.2f,.3f};asset.materials[0].uvRotation={15,30,45};
     asset.materials[0].triplanar=true;asset.materials[0].triplanarWorld=true;asset.materials[0].uvScaleLinked=false;
     asset.materials[0].sharedSampler=ModelSampler{ModelWrap::Mirror,ModelWrap::Clamp,ModelFilter::NearestMipmapLinear,ModelFilter::Nearest};
+    asset.materials[0].receiveFog=false;
     const auto stream=streaming::buildModelCache(asset,root);
     check(stream.primitives.size()==1 && stream.primitives[0].levels.size()>1,"Continuous geometry should generate compact streaming LODs.");
     const auto& levels=stream.primitives[0].levels;
+    {
+        const auto indexDirectory=root/"assets/cache/mesh-lods/index";
+        const auto index=std::filesystem::directory_iterator(indexDirectory)->path();
+        std::vector<std::filesystem::file_time_type> stamps;
+        for(const auto& level:levels)stamps.push_back(std::filesystem::last_write_time(level.file));
+        const auto indexStamp=std::filesystem::last_write_time(index);
+        // Separate model identities can share immutable geometry cache files.
+        // A live Windows reader must not make an identical build fail to publish.
+        std::ifstream geometryReader(levels.front().file,std::ios::binary),metadataReader(index,std::ios::binary);
+        check(bool(geometryReader)&&bool(metadataReader),"Could not open concurrent cache readers.");
+        const auto repeated=streaming::buildModelCache(asset,root);
+        check(repeated.key==stream.key&&repeated.primitives[0].levels.size()==levels.size(),"Repeated cache build changed immutable geometry identity.");
+        for(std::size_t level=0;level<levels.size();++level)
+            check(std::filesystem::last_write_time(levels[level].file)==stamps[level],"Identical model cache build rewrote a shared LOD.");
+        check(std::filesystem::last_write_time(index)==indexStamp,"Identical model cache build rewrote its metadata index.");
+    }
     const auto original=streaming::loadModelLod(levels.front());
     check(original->geometry.vertices.size()==asset.primitives[0].vertices.size() && original->geometry.indices==asset.primitives[0].indices,"Original authored LOD must remain exact.");
     const auto coarse=streaming::loadModelLod(levels.back(),0,static_cast<std::uint32_t>(levels.size()-1));
@@ -109,6 +168,14 @@ void geometry(const std::filesystem::path& root) {
     check(cachedMaterial.uvScale==sourceMaterial.uvScale && cachedMaterial.uvOffset==sourceMaterial.uvOffset && cachedMaterial.uvRotation==sourceMaterial.uvRotation &&
         cachedMaterial.triplanar && cachedMaterial.triplanarWorld && !cachedMaterial.uvScaleLinked && cachedMaterial.sharedSampler==sourceMaterial.sharedSampler,
         "Warm metadata dropped material mapping, scale linkage, or the shared sampler.");
+    check(!cachedMaterial.receiveFog,"Warm metadata reset the material fog exclusion.");
+    {
+        const auto index=std::filesystem::directory_iterator(root/"assets/cache/mesh-lods/index")->path();
+        std::ifstream input(index);auto old=nlohmann::json::parse(input);input.close();
+        old["materials"][0].erase("receiveFog");writeFileAtomically(index,old.dump());
+        const auto migrated=streaming::loadModelMetadataCache(package/"manifest.json",root);
+        check(migrated&&migrated->materials[0].receiveFog,"Pre-toggle metadata must remain readable with fog reception enabled.");
+    }
     check(streaming::chooseModelLod(levels,{},asset.bounds,{0,0,.5f},std::numbers::pi_v<float>/4,1080)==0,"Near geometry should request authored detail.");
     check(streaming::chooseModelLod(levels,{},asset.bounds,{0,0,1000},std::numbers::pi_v<float>/4,1080)>0,"Distant geometry should choose bounded-error coarse detail.");
     auto curved=asset;curved.id="curved-fixture";
@@ -123,10 +190,44 @@ void geometry(const std::filesystem::path& root) {
     { std::fstream file(levels.back().file,std::ios::in|std::ios::out|std::ios::binary); file.seekp(-1,std::ios::end); file.put('x'); }
     rejects([&]{streaming::loadModelLod(levels.back());});
     check(streaming::loadModelLod(levels.front())->geometry.indices==asset.primitives[0].indices,"Corrupt coarse payload must not damage original LOD.");
+    const auto repaired=streaming::buildModelCache(asset,root);
+    check(streaming::loadModelLod(repaired.primitives[0].levels.back())->geometry.indices==coarse->geometry.indices,"Reusing valid immutable cache files prevented damaged LOD repair.");
 }
+void deformationCache(const std::filesystem::path& root) {
+    using namespace crimson;
+    auto asset=model();asset.id="animated-stream-fixture";auto& primitive=asset.primitives.front();
+    primitive.hasSkinning=true;primitive.skinWeights.resize(primitive.vertices.size());
+    for(std::size_t i=0;i<primitive.vertices.size();++i) {
+        auto& influences=primitive.skinWeights[i];influences.joints[0]=3;influences.joints[7]=65535;
+        influences.weights[0]=.8f;influences.weights[7]=.2f;
+    }
+    ModelMorphTarget target;target.positions.assign(primitive.vertices.size(),Vec3{.2f,0,.1f});
+    primitive.morphTargets.push_back(target);
+    ModelMorphTarget normalOnly;normalOnly.normals.assign(primitive.vertices.size(),Vec3{0,.1f,0});
+    normalOnly.tangents.assign(primitive.vertices.size(),Vec3{0,0,.2f});primitive.morphTargets.push_back(normalOnly);
+    const auto stream=streaming::buildModelCache(asset,root,false);
+    check(stream.primitives.front().levels.size()==1,"Dynamic geometry was simplified without preserving skin/morph correspondence.");
+    const auto original=streaming::loadModelLod(stream.primitives.front().levels.front());const auto& loaded=original->geometry;
+    check(loaded.vertices.size()==primitive.vertices.size()&&loaded.indices==primitive.indices&&loaded.hasSkinning,
+        "Animated original LOD lost its original topology or metadata.");
+    check(loaded.skinWeights.size()==primitive.vertices.size()&&loaded.skinWeights[10].joints==primitive.skinWeights[10].joints&&
+        loaded.skinWeights[10].weights==primitive.skinWeights[10].weights,"LOD cache lost eight-influence skin data.");
+    check(loaded.morphTargets.size()==2&&loaded.morphTargets[0].positions==target.positions&&loaded.morphTargets[0].normals.empty()&&
+        loaded.morphTargets[1].positions.empty()&&loaded.morphTargets[1].normals==normalOnly.normals&&loaded.morphTargets[1].tangents==normalOnly.tangents,
+        "LOD cache changed sparse morph attributes or target order.");
+    const auto key=streaming::modelContentKey(asset);primitive.skinWeights[0].weights[0]=.7f;
+    check(streaming::modelContentKey(asset)!=key,"Skin edits failed to invalidate immutable geometry identity.");primitive.skinWeights[0].weights[0]=.8f;
+    primitive.morphTargets[0].positions[0][0]+=.01f;
+    check(streaming::modelContentKey(asset)!=key,"Morph edits failed to invalidate immutable geometry identity.");
+    auto malformed=asset;malformed.primitives[0].skinWeights.pop_back();rejects([&]{streaming::buildModelCache(malformed,root,false);});
+    malformed=asset;malformed.primitives[0].morphTargets[0].positions.pop_back();rejects([&]{streaming::buildModelCache(malformed,root,false);});
+    {std::fstream file(stream.primitives.front().levels.front().file,std::ios::in|std::ios::out|std::ios::binary);file.seekp(-1,std::ios::end);file.put('x');}
+    rejects([&]{streaming::loadModelLod(stream.primitives.front().levels.front());});
+}
+
 }
 int main() {
     const auto root=std::filesystem::temp_directory_path()/("crimson-streaming-"+std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count()));
-    try { std::filesystem::create_directories(root); textureMips(root); geometry(root); materialSphere(); cleanup(root); std::cout<<"Streaming mip/LOD/cache/material-sphere checks passed.\n"; return 0; }
+    try { std::filesystem::create_directories(root); textureMips(root); concurrentTextureMipPublication(root); geometry(root); deformationCache(root); materialSphere(); cleanup(root); std::cout<<"Streaming mip/LOD/cache/material-sphere checks passed.\n"; return 0; }
     catch (const std::exception& error) { try { cleanup(root); } catch (...) {} std::cerr<<error.what()<<'\n'; return 1; }
 }

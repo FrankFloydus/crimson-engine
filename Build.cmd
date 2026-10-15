@@ -47,6 +47,10 @@ if /I "%~2"=="configure" (
 cmake --build --preset windows-%CC_CONFIGURATION%
 if errorlevel 1 goto :failure
 if not errorlevel 0 goto :failure
+if /I "%CC_CONFIGURATION%"=="Release" (
+    "build\%CC_CONFIGURATION%\bin\crimson-material-cache.exe" --project-root "%~dp0." --renderer-bin "%~dp0build\%CC_CONFIGURATION%\bin" --report "%~dp0build\%CC_CONFIGURATION%\material-cache-preparation.json"
+    if errorlevel 1 goto :failure
+)
 if /I "%~2"=="test" (
     ctest --preset windows-%CC_CONFIGURATION%
     if errorlevel 1 goto :failure

@@ -32,6 +32,56 @@
 namespace crimson {
 namespace {
 
+std::size_t modelCpuBytes(const ModelAsset& model) {
+    const auto vectorBytes=[]<class T>(const std::vector<T>& values){return values.capacity()*sizeof(T);};
+    std::size_t bytes=sizeof(ModelAsset)+model.id.size()+model.name.size()+model.format.size()+
+        vectorBytes(model.primitives)+vectorBytes(model.meshes)+vectorBytes(model.nodes)+vectorBytes(model.roots)+
+        vectorBytes(model.draws)+vectorBytes(model.materials)+vectorBytes(model.materialIds)+vectorBytes(model.images)+
+        vectorBytes(model.warnings)+vectorBytes(model.skins)+vectorBytes(model.animations);
+    for(const auto& primitive:model.primitives) {
+        bytes+=vectorBytes(primitive.vertices)+vectorBytes(primitive.indices)+vectorBytes(primitive.skinWeights)+
+            vectorBytes(primitive.morphTargets)+vectorBytes(primitive.skinJointBounds);
+        for(const auto& target:primitive.morphTargets)
+            bytes+=vectorBytes(target.positions)+vectorBytes(target.normals)+vectorBytes(target.tangents);
+    }
+    for(const auto& mesh:model.meshes)bytes+=mesh.name.size()+vectorBytes(mesh.primitives)+vectorBytes(mesh.weights);
+    for(const auto& node:model.nodes)bytes+=node.name.size()+vectorBytes(node.children)+vectorBytes(node.weights);
+    for(const auto& skin:model.skins)bytes+=skin.name.size()+vectorBytes(skin.joints)+vectorBytes(skin.inverseBindMatrices);
+    for(const auto& clip:model.animations) {
+        bytes+=clip.name.size()+vectorBytes(clip.channels);
+        for(const auto& channel:clip.channels)bytes+=vectorBytes(channel.times)+vectorBytes(channel.values);
+    }
+    for(const auto& material:model.materials) {
+        bytes+=material.name.size();
+        for(const auto* slot:{&material.baseColorTexture,&material.metallicRoughnessTexture,&material.normalTexture,&material.occlusionTexture,&material.emissiveTexture})
+            bytes+=slot->image.id.size();
+    }
+    for(const auto& id:model.materialIds)bytes+=id.size();
+    for(const auto& id:model.images)bytes+=id.size();
+    for(const auto& warning:model.warnings)bytes+=warning.size();
+    if(model.stream) {
+        bytes+=sizeof(streaming::ModelStream)+model.stream->id.size()+vectorBytes(model.stream->primitives);
+        for(const auto& primitive:model.stream->primitives) {
+            bytes+=vectorBytes(primitive.levels);
+            for(const auto& level:primitive.levels)bytes+=level.file.native().size()*sizeof(std::filesystem::path::value_type);
+        }
+    }
+    return bytes;
+}
+
+void releaseModelGeometry(ModelPrimitive& primitive) {
+    primitive.sourceVertexCount=std::max<std::uint64_t>(primitive.sourceVertexCount,primitive.vertices.size());
+    primitive.sourceIndexCount=std::max<std::uint64_t>(primitive.sourceIndexCount,primitive.indices.size());
+    decltype(primitive.vertices){}.swap(primitive.vertices);
+    decltype(primitive.indices){}.swap(primitive.indices);
+    decltype(primitive.skinWeights){}.swap(primitive.skinWeights);
+    for(auto& target:primitive.morphTargets) {
+        decltype(target.positions){}.swap(target.positions);
+        decltype(target.normals){}.swap(target.normals);
+        decltype(target.tangents){}.swap(target.tangents);
+    }
+}
+
 std::string utf8(const std::filesystem::path& path) {
     const auto text = path.generic_u8string();
     return {reinterpret_cast<const char*>(text.data()), text.size()};
@@ -203,7 +253,7 @@ AssetLibrary::AssetLibrary(std::filesystem::path root,ResourceManager* resources
                 materialCatalogResources_[id]=resources_->request<ModelAsset>(AssetRef<ModelAsset>{id},[file,packageRoot,resolvers](std::stop_token token){
                     if(token.stop_requested())throw std::runtime_error("Material catalog scan canceled.");
                     auto data=loadModelMaterialMetadata(file,packageRoot,resolvers);
-                    return ResourceLoadResult<ModelAsset>{data,sizeof(ModelAsset)+data->materials.size()*sizeof(ModelMaterial),0,{}};
+                    return ResourceLoadResult<ModelAsset>{data,modelCpuBytes(*data),0,{}};
                 },std::move(metadataOptions));
             } else registerModel(loadModelPackage(file, projectRoot_,modelResolvers()));
         }
@@ -363,7 +413,7 @@ std::shared_ptr<const ModelAsset> AssetLibrary::findModel(const std::string& id)
                 if(!data) {
                     data=loadModelPackage(file,root,resolvers);
                     data->stream=std::make_shared<streaming::ModelStream>(streaming::buildModelCache(*data,root));
-                    for(auto& primitive:data->primitives) { primitive.sourceVertexCount=primitive.vertices.size();primitive.sourceIndexCount=primitive.indices.size();primitive.vertices=decltype(primitive.vertices){};primitive.indices=decltype(primitive.indices){}; }
+                    for(auto& primitive:data->primitives)releaseModelGeometry(primitive);
                 } else {
                     for(size_t index=0;index<data->materials.size();++index) if(resolvers.material) {
                         const auto materialId=index<data->materialIds.size()?data->materialIds[index]:importedMaterialId(data->id,index);
@@ -371,7 +421,7 @@ std::shared_ptr<const ModelAsset> AssetLibrary::findModel(const std::string& id)
                     }
                 }
                 if(token.stop_requested()) throw std::runtime_error("Model load canceled.");
-                std::size_t bytes=sizeof(ModelAsset)+data->primitives.size()*sizeof(ModelPrimitive)+data->nodes.size()*sizeof(ModelNode)+data->draws.size()*sizeof(ModelDraw)+data->materials.size()*sizeof(ModelMaterial);
+                const auto bytes=modelCpuBytes(*data);
                 auto dependencies=packageDependencies;
                 for(const auto& materialId:data->materialIds) {
                     const auto target=policy.resolve(materialId);
@@ -460,23 +510,14 @@ std::vector<ModelMaterial> AssetLibrary::resolvedModelMaterials(const ModelAsset
     if(!materialOverride.empty() && !isBuiltinModel(model.id))throw std::runtime_error("Instance materials are supported only on built-in Box models.");
     for(size_t i=0;i<result.size();++i) {
         const auto id=!materialOverride.empty()?materialOverride:i<model.materialIds.size()?model.materialIds[i]:importedMaterialId(model.id,i);
-        if(auto material=findMaterial(id))result[i]=modelMaterialCompatible(*material)?material->surface:defaultMaterialAsset().surface;
+        if(auto material=findMaterial(id))result[i]=materialCompatible(material)?material->surface:defaultMaterialAsset().surface;
     }
     for(const auto& primitive:model.primitives) {
         if(primitive.material>=result.size()) throw std::runtime_error("Model has an invalid material reference.");
         const auto& material=result[primitive.material];
         if(material.graph) {
-            const auto& output=materialOutputNode(*material.graph).output;
-            for(const auto nodeId:materialGraphOrder(*material.graph,output.shading,output.blend)) {
-                const auto* node=findMaterialNode(*material.graph,nodeId);
-                if(node->kind!=MaterialNodeKind::Texture2D || node->texture.image.empty())continue;
-                auto mode=MaterialUvMode::UV0;
-                if(const auto* link=materialInputLink(*material.graph,nodeId,MaterialPin::UV))mode=findMaterialNode(*material.graph,link->fromNode)->uv.mode;
-                if(mode==MaterialUvMode::UV0 || mode==MaterialUvMode::UV1) {
-                    const auto uv=mode==MaterialUvMode::UV1?1u:0u;
-                    if(!(primitive.uvMask&(1u<<uv)))throw std::runtime_error("Texture node "+std::to_string(nodeId)+" requires unavailable UV"+std::to_string(uv)+": "+material.name);
-                }
-            }
+            const auto required=requiredGraphUvs(material.graph);
+            if((primitive.uvMask&required)!=required)throw std::runtime_error("Material texture requires an unavailable UV set: "+material.name);
             continue; // The graph normal path reconstructs a basis for a different UV set.
         }
         if(material.triplanar)continue; // Local projection does not consume mesh UVs or tangents.
@@ -560,12 +601,7 @@ void AssetLibrary::trimTextureCache(std::size_t bytes) {
     if(textureStreamer_)textureStreamer_->trim(programs>=bytes?0:bytes-programs);
 }
 bool AssetLibrary::modelBindingsReady(const std::vector<ModelMaterialTextures>& bindings) const {
-    for(const auto& material:bindings) {
-        if(material.graph)for(const auto& source:material.graph->sources)if(!bgfx::isValid(material.graph->textures[source.slot]))return false;
-        for(size_t slot=0;slot<material.handles.size();++slot)
-            if(material.flags[slot]!=UINT32_MAX && !bgfx::isValid(material.handles[slot]))return false;
-    }
-    return true;
+    return std::all_of(bindings.begin(),bindings.end(),[](const auto& material){return material.drawable();});
 }
 bool AssetLibrary::modelMaterialsReady(const ModelAsset& model,const std::string& materialOverride) const {
     if(!materialOverride.empty() && !isBuiltinModel(model.id))return false;
@@ -584,7 +620,7 @@ std::string AssetLibrary::modelMaterialsDiagnostic(const ModelAsset& model,const
     for(const auto& id:ids) {
         const auto target=references_.resolveMaterial(id);
         if(target.empty() || target==DefaultMaterialId) continue;
-        if(const auto material=findMaterial(target);material&&!modelMaterialCompatible(*material))return "Mesh material is invalid: "+material->name;
+        if(const auto material=findMaterial(target);material&&!materialCompatible(material))return "Mesh material is invalid: "+material->name;
         const auto diagnostic=materialDiagnostic(target);if(!diagnostic.empty())return diagnostic;
     }
     return {};
@@ -635,7 +671,7 @@ void AssetLibrary::registerModel(std::shared_ptr<const ModelAsset> model) {
     // texture owner and remain usable in the editor's compatible image pickers.
     std::set<std::string> imageIds;
     std::vector<std::string> newMaterialFiles;
-    for(const auto& id:model->materialIds)if(!references_.deleted(id)&&!std::filesystem::exists(projectRoot_/fromUtf8(id)))newMaterialFiles.push_back(id);
+    for(const auto& id:model->materialIds)if(!id.starts_with("builtin:")&&!references_.deleted(id)&&!std::filesystem::exists(projectRoot_/fromUtf8(id)))newMaterialFiles.push_back(id);
     promoteModelMaterials(projectRoot_,*model,[&](const auto& id){return references_.deleted(id);});
     for(const auto& id:newMaterialFiles)noteAssetWrite(id);
     const auto hasImage=[&](const auto& id){return std::any_of(assets_.begin(),assets_.end(),[&](const auto& image){return image.id==id;});};
@@ -669,13 +705,18 @@ void AssetLibrary::registerModel(std::shared_ptr<const ModelAsset> model) {
         compact->id=model->id;compact->name=model->name;compact->format=model->format;compact->meshes=model->meshes;compact->nodes=model->nodes;
         compact->roots=model->roots;compact->draws=model->draws;compact->materials=model->materials;compact->materialIds=model->materialIds;
         compact->images=model->images;compact->bounds=model->bounds;compact->warnings=model->warnings;compact->stream=model->stream;
+        compact->skins=model->skins;compact->animations=model->animations;
         for(const auto& primitive:model->primitives) {
             ModelPrimitive metadata;metadata.material=primitive.material;metadata.uvMask=primitive.uvMask;metadata.tangentUv=primitive.tangentUv;
-            metadata.sourceVertexCount=std::max(primitive.sourceVertexCount,primitive.vertices.size());metadata.sourceIndexCount=std::max(primitive.sourceIndexCount,primitive.indices.size());compact->primitives.push_back(std::move(metadata));
+            metadata.sourceVertexCount=std::max(primitive.sourceVertexCount,primitive.vertices.size());metadata.sourceIndexCount=std::max(primitive.sourceIndexCount,primitive.indices.size());
+            metadata.hasSkinning=primitive.hasSkinning;metadata.bounds=primitive.bounds;metadata.skinJointBounds=primitive.skinJointBounds;
+            metadata.morphTargets.reserve(primitive.morphTargets.size());
+            for(const auto& target:primitive.morphTargets) {ModelMorphTarget value;value.positionBounds=target.positionBounds;metadata.morphTargets.push_back(std::move(value));}
+            compact->primitives.push_back(std::move(metadata));
         }
         if(model->stream) {
             ResourceRequestOptions options;options.dependencies={projectRoot_/fromUtf8(model->id),projectRoot_/fromUtf8(model->id).parent_path()/"model.gltf"};
-            resources_->seed<ModelAsset>(AssetRef<ModelAsset>{model->id},{compact,sizeof(ModelAsset)+compact->primitives.size()*sizeof(ModelPrimitive),0,{}},std::move(options));
+            resources_->seed<ModelAsset>(AssetRef<ModelAsset>{model->id},{compact,modelCpuBytes(*compact),0,{}},std::move(options));
             const auto root=projectRoot_;ResourceRequestOptions indexOptions;indexOptions.variant="metadata-index";indexOptions.priority=ResourcePriority::Background;indexOptions.retainLoader=false;
             (void)resources_->request<streaming::ModelStream>(AssetRef<streaming::ModelStream>{model->id},[compact,root](std::stop_token token){
                 if(token.stop_requested())throw std::runtime_error("Model metadata cache canceled.");
@@ -685,6 +726,9 @@ void AssetLibrary::registerModel(std::shared_ptr<const ModelAsset> model) {
         }
     } else if(!resources_) models_.push_back(std::move(model));
     refreshMaterials();
+}
+void AssetLibrary::publishManagedModels(std::span<const std::shared_ptr<const ModelAsset>> models) {
+    for(const auto& model:models)registerModel(model);
 }
 
 TextureAsset AssetLibrary::makeAsset(const std::filesystem::path& path) {
@@ -875,10 +919,25 @@ MaterialTextures AssetLibrary::bindings(const Material& material) {
 std::vector<ModelMaterialTextures> AssetLibrary::modelBindings(const ModelAsset& model,std::span<const ModelMaterial> materials) {
     if(materials.empty())materials=model.materials;
     std::vector<ModelMaterialTextures> result;result.reserve(materials.size());
-    for(const auto& material:materials)result.push_back(materialBindings(material));return result;
+    for(std::size_t index=0;index<materials.size();++index) {
+        const auto& material=materials[index];
+        if(material.graph && graphPrograms_) {
+            // The fixed normal shader consumes authored tangents. A graph can
+            // instead reconstruct another UV basis, so certify this per mesh.
+            bool compatible=true;
+            if(!material.triplanar && !material.normalTexture.image.empty())for(const auto& primitive:model.primitives)
+                if(primitive.material==index && primitive.tangentUv!=material.normalTexture.texCoord && !isBuiltinModel(model.id))compatible=false;
+            result.push_back(graphMaterialBindings(material.graph,nativeTextures_?UINT32_MAX:textureDemand_,
+                nativeTextures_?ResourcePriority::Selected:ResourcePriority::Visible,compatible));
+        } else result.push_back(materialBindings(material));
+    }
+    return result;
 }
 ModelMaterialTextures AssetLibrary::materialBindings(const ModelMaterial& material) const {
-        if(material.graph && graphPrograms_)return graphMaterialBindings(material.graph);
+    return materialBindings(material,nativeTextures_?UINT32_MAX:textureDemand_,nativeTextures_?ResourcePriority::Selected:ResourcePriority::Visible);
+}
+ModelMaterialTextures AssetLibrary::materialBindings(const ModelMaterial& material,std::uint32_t textureEdge,ResourcePriority priority) const {
+        if(material.graph && graphPrograms_)return graphMaterialBindings(material.graph,textureEdge,priority);
         ModelMaterialTextures target;
         const std::array<const ModelTexture*, 5> slots{&material.baseColorTexture, &material.metallicRoughnessTexture,
             &material.normalTexture, &material.occlusionTexture, &material.emissiveTexture};
@@ -895,8 +954,7 @@ ModelMaterialTextures AssetLibrary::materialBindings(const ModelMaterial& materi
             if(textureStreamer_) {
                 const auto role=slot==2?streaming::TextureRole::Normal:(slot==0||slot==4?streaming::TextureRole::Color:streaming::TextureRole::Data);
                 const bool mips=sampler.minFilter!=ModelFilter::Linear && sampler.minFilter!=ModelFilter::Nearest;
-                const auto view=textureStreamer_->request(image->id,projectRoot_/fromUtf8(image->id),role,mips,nativeTextures_?UINT32_MAX:textureDemand_,
-                    nativeTextures_?ResourcePriority::Selected:ResourcePriority::Visible);
+                const auto view=textureStreamer_->request(image->id,projectRoot_/fromUtf8(image->id),role,mips,textureEdge,priority);
                 target.handles[slot]=view.handle;target.leases[slot]=view.lease;
                 target.sourceFingerprints[slot]=view.sourceFingerprint;target.signatures[slot]=view.signature;
                 target.complete &=view.complete;target.sourceReady &=view.sourceReady;
@@ -916,34 +974,76 @@ ModelMaterialTextures AssetLibrary::materialBindings(const ModelMaterial& materi
         }
     return target;
 }
-ModelMaterialTextures AssetLibrary::graphMaterialBindings(const std::shared_ptr<const MaterialGraph>& graph) const {
-    if(graphShaderCache_.size()>128)std::erase_if(graphShaderCache_,[](const auto& entry){return entry.second.source.expired();});
-    auto& cached=graphShaderCache_[graph.get()];
-    if(cached.source.expired()) {
+ModelMaterialTextures AssetLibrary::graphMaterialBindings(const std::shared_ptr<const MaterialGraph>& graph,std::uint32_t textureEdge,ResourcePriority priority,bool useFixedModel) const {
+    auto& cached=graphCache(graph);
+    if(useFixedModel) {
+        if(!cached.fixedSurfaceChecked) {
+            cached.fixedSurface=materialGraphFixedSurface(*graph);cached.fixedSurfaceChecked=true;
+        }
+        // The embedded model program is the complete implementation for this
+        // certified graph subset, including maps and material factors. Queuing
+        // identical generated code would add cold startup work for no effect.
+        if(cached.fixedSurface)return materialBindings(*cached.fixedSurface,textureEdge,priority);
+    }
+    if(!cached.shader) {
         MaterialAsset source;source.id=DefaultMaterialId;source.name="Material graph";source.graph=*graph;
         canonicalizeMaterialAsset(source);
-        cached={graph,std::make_shared<MaterialGraphShader>(generateMaterialGraphShader(source))};
+        cached.shader=std::make_shared<MaterialGraphShader>(generateMaterialGraphShader(source));
     }
-    return preparedGraphBindings(*graphPrograms_,*cached.shader,*graph);
+    return preparedGraphBindings(*graphPrograms_,*cached.shader,*graph,textureEdge,priority);
 }
-ModelMaterialTextures AssetLibrary::preparedGraphBindings(MaterialGraphPrograms& owner,const MaterialGraphShader& generated,const MaterialGraph& graph) const {
-    const auto programs=owner.request(generated);
+bool AssetLibrary::materialCompatible(const std::shared_ptr<const MaterialAsset>& material) const {
+    auto found=materialCompatibility_.find(material.get());
+    if(found!=materialCompatibility_.end()&&!found->second.source.expired())return found->second.compatible;
+    if(materialCompatibility_.size()>128)std::erase_if(materialCompatibility_,[](const auto& entry){return entry.second.source.expired();});
+    const bool compatible=modelMaterialCompatible(*material);
+    materialCompatibility_[material.get()]={material,compatible};return compatible;
+}
+AssetLibrary::GraphShaderCache& AssetLibrary::graphCache(const std::shared_ptr<const MaterialGraph>& graph) const {
+    auto found=graphShaderCache_.find(graph.get());
+    if(found!=graphShaderCache_.end()&&!found->second.source.expired())return found->second;
+    if(graphShaderCache_.size()>128)std::erase_if(graphShaderCache_,[](const auto& entry){return entry.second.source.expired();});
+    auto& cached=graphShaderCache_[graph.get()];cached={};cached.source=graph;return cached;
+}
+std::uint8_t AssetLibrary::requiredGraphUvs(const std::shared_ptr<const MaterialGraph>& graph) const {
+    auto& cached=graphCache(graph);
+    if(!cached.requiredUvs) {
+        std::uint8_t required{};const auto& output=materialOutputNode(*graph).output;
+        for(const auto nodeId:materialGraphOrder(*graph,output.shading,output.blend)) {
+            const auto* node=findMaterialNode(*graph,nodeId);
+            if(node->kind!=MaterialNodeKind::Texture2D || node->texture.image.empty())continue;
+            const auto mapping=materialTextureMapping(*graph,nodeId);
+            if(mapping.mode==MaterialUvMode::UV0)required|=1;
+            else if(mapping.mode==MaterialUvMode::UV1)required|=2;
+        }
+        cached.requiredUvs=required;
+    }
+    return *cached.requiredUvs;
+}
+ModelMaterialTextures AssetLibrary::preparedGraphBindings(MaterialGraphPrograms& owner,const MaterialGraphShader& generated,const MaterialGraph& graph,std::uint32_t textureEdge,ResourcePriority priority) const {
+    const auto programs=owner.request(generated,priority);
     if(!programs.current || !programs.programs) {
-        // A legacy texture-slot approximation silently couples color alpha to
-        // coverage. Until the complete graph is ready use an untextured fallback;
-        // consumers with a published graph keep that entire previous packet.
-        ModelMaterialTextures fallback;fallback.graphPending=true;
+        // Unsupported graph/coverage expressions stay on the domain fallback;
+        // published models retain their previous complete packet. Exact fixed
+        // model graphs have already returned without requesting compilation.
+        ModelMaterialTextures fallback;
+        fallback.graphPending=true;
         fallback.diagnostic=programs.diagnostic.empty()?"Compiling material graph...":programs.diagnostic;
         return fallback;
     }
     ModelMaterialTextures result;
     auto packet=std::make_shared<PreparedGraphMaterial>();
     packet->programs=programs.programs;packet->uniforms=generated.uniforms;packet->sources=generated.textures;
+    packet->runtimeGraph=generated.runtimeGraph;packet->runtimeParameters=generated.runtimeParameters;
+    packet->dynamicCoverage=generated.dynamicCoverage;
     const auto& output=materialOutputNode(graph).output;
     packet->shading=generated.nodePreview?MaterialShading::Unlit:output.shading;
     packet->blend=generated.nodePreview?MaterialBlend::Opaque:output.blend;
+    packet->receiveFog=output.receiveFog;
     packet->nodePreview=generated.nodePreview;
     packet->signature=programs.programs->signature;
+    streaming::detail::hash(packet->signature,packet->receiveFog);
+    streaming::detail::hash(packet->signature,generated.runtimeDefinitionSignature);
     std::unordered_map<std::string,std::uint64_t> sourceVersions;
     for(auto& binding:packet->sources) {
         const bool normal=binding.role==MaterialGraphTextureRole::Normal;
@@ -956,8 +1056,7 @@ ModelMaterialTextures AssetLibrary::preparedGraphBindings(MaterialGraphPrograms&
         const auto& sampler=binding.sampler;const auto slot=binding.slot;
         if(textureStreamer_) {
             const bool mips=sampler.minFilter!=ModelFilter::Linear && sampler.minFilter!=ModelFilter::Nearest;
-            const auto texture=textureStreamer_->request(resolved,projectRoot_/fromUtf8(resolved),role,mips,
-                nativeTextures_?UINT32_MAX:textureDemand_,nativeTextures_?ResourcePriority::Selected:ResourcePriority::Visible);
+            const auto texture=textureStreamer_->request(resolved,projectRoot_/fromUtf8(resolved),role,mips,textureEdge,priority);
             packet->textures[slot]=texture.handle;packet->leases[slot]=texture.lease;
             packet->sourceFingerprints[slot]=texture.sourceFingerprint;packet->textureSignatures[slot]=texture.signature;
             result.complete &=texture.complete;result.sourceReady &=texture.sourceReady;
@@ -999,7 +1098,7 @@ std::shared_ptr<const PreparedParticleMaterial> AssetLibrary::preparedParticleMa
     const auto previous=preparedParticleMaterials_.find(resolved);
     try{
         const auto material=findMaterial(resolved);if(!material)throw std::runtime_error("Unresolved particle material: "+id);
-        if(!particleMaterialCompatible(*material)) {
+        if(!materialCompatible(material)) {
             auto fallback=preparedParticleMaterial(DefaultParticleMaterialId);
             *result=*fallback;result->current=false;
             result->diagnostic="Sprite material is invalid: "+material->name;
@@ -1017,6 +1116,7 @@ std::shared_ptr<const PreparedParticleMaterial> AssetLibrary::preparedParticleMa
         result->render.metallic=material->surface.metallic;result->render.specular=material->surface.specular;
         result->render.occlusion=1;result->render.alphaCutoff=material->surface.alphaCutoff;
         result->render.emission=material->surface.emissive;result->render.doubleSided=material->surface.doubleSided;
+        result->render.receiveFog=material->surface.receiveFog;
         result->render.uvScale=material->surface.uvScale;result->render.uvOffset=material->surface.uvOffset;result->render.uvRotation=material->surface.uvRotation;result->render.triplanar=material->surface.triplanar;result->render.triplanarWorld=material->surface.triplanarWorld;
         result->render.colorTexture=pins->textures.handles[0];result->render.samplerFlags=pins->textures.flags[0];result->render.pinned=pins;
         result->render.graph=pins->textures.graph;
@@ -1033,15 +1133,15 @@ std::shared_ptr<const PreparedParticleMaterial> AssetLibrary::preparedParticleMa
     }
     return result;
 }
-ModelMaterialTextures AssetLibrary::materialPreviewBindings(const MaterialAsset& material) const {
+ModelMaterialTextures AssetLibrary::materialPreviewBindings(const MaterialAsset& material,std::uint32_t textureEdge) const {
     validateMaterialAsset(material);
-    return materialBindings(material.surface);
+    return materialBindings(material.surface,std::max(1u,textureEdge),ResourcePriority::Selected);
 }
 std::unique_ptr<MaterialGraphPrograms> AssetLibrary::createMaterialNodePreviewPrograms() const {
     return graphPrograms_?graphPrograms_->createSibling():nullptr;
 }
-ModelMaterialTextures AssetLibrary::materialNodePreviewBindings(MaterialGraphPrograms& owner,const MaterialAsset& material,MaterialGraphPreviewTarget target) const {
-    return preparedGraphBindings(owner,generateMaterialGraphPreviewShader(material,target),material.graph);
+ModelMaterialTextures AssetLibrary::materialNodePreviewBindings(MaterialGraphPrograms& owner,const MaterialAsset& material,MaterialGraphPreviewTarget target,std::uint32_t textureEdge) const {
+    return preparedGraphBindings(owner,generateMaterialGraphPreviewShader(material,target),material.graph,std::max(1u,textureEdge),ResourcePriority::Selected);
 }
 
 void AssetLibrary::loadMaterial(Material& material) {
@@ -1149,7 +1249,13 @@ size_t removeDeletedModels(SceneSnapshot& snapshot,const AssetReferenceManager& 
     std::unordered_map<EntityId,std::size_t> ranks;const auto preorder=source.preorder();for(size_t index=0;index<preorder.size();++index)ranks.emplace(preorder[index],index);
     std::unordered_set<EntityId> changedParents;
     for(const auto& record:snapshot.records)if(record.model&&deletedModels.contains(previous.resolve(record.model->id))&&next.resolve(record.model->id).empty())removed.insert(record.id);
-    if(removed.empty())return 0;
+    size_t clearedCollisions{};
+    for(auto& record:snapshot.records)if(record.meshCollider && !record.meshCollider->source.empty() &&
+        deletedModels.contains(previous.resolve(record.meshCollider->source.id))) {
+        const auto replacement=next.resolve(record.meshCollider->source.id);
+        if(record.meshCollider->source.id!=replacement){record.meshCollider->source=AssetRef<ModelAsset>{replacement};++clearedCollisions;}
+    }
+    if(removed.empty())return clearedCollisions;
     for(const auto& record:snapshot.records)if(removed.contains(record.id))changedParents.insert(record.parent);
     for(auto& record:snapshot.records)if(!removed.contains(record.id)&&removed.contains(record.parent)){
         const auto oldWorld=source.worldTransform(record.id);if(!oldWorld)throw std::runtime_error("Cannot preserve child placement while deleting its model parent.");
@@ -1172,7 +1278,7 @@ size_t removeDeletedModels(SceneSnapshot& snapshot,const AssetReferenceManager& 
         std::sort(siblings.begin(),siblings.end(),[&](const auto* left,const auto* right){return ranks.at(left->id)<ranks.at(right->id);});
         for(size_t index=0;index<siblings.size();++index)siblings[index]->order=static_cast<uint32_t>(index);
     }
-    Scene::validate(snapshot.records,snapshot.properties);return removed.size();
+    Scene::validate(snapshot.records,snapshot.properties);return removed.size()+clearedCollisions;
 }
 size_t replaceDeletedParticles(SceneSnapshot& snapshot,const AssetReferenceManager& previous,const AssetReferenceManager& next,const std::unordered_set<std::string>& deletedParticles){
     size_t changed{};
@@ -1214,7 +1320,7 @@ void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
     for(const auto& entry:catalog_) if(entry.kind==AssetKind::Model) {
         const auto model=loadModelMaterialMetadata(projectRoot_/fromUtf8(entry.id),projectRoot_,modelResolvers());
         for(size_t index=0;index<model->materials.size();++index) {
-            const auto materialId=importedMaterialId(model->id,index);
+            const auto materialId=index<model->materialIds.size()?model->materialIds[index]:importedMaterialId(model->id,index);
             usages.push_back({materialId,model->id,model->name,"Material "+std::to_string(index+1)});
             const auto& material=model->materials[index];
             // Before promotion, or after a missing sidecar, the usable material
@@ -1228,6 +1334,7 @@ void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
     }
     const auto addScene=[&](const std::vector<EntityRecord>& records,const std::string& id,const std::string& name,bool isActive){
         for(const auto& record:records){if(record.model)usages.push_back({record.model->id,id,name,record.name,isActive,false});
+            if(record.meshCollider && !record.meshCollider->source.empty())usages.push_back({record.meshCollider->source.id,id,name,record.name+" / Mesh collision",isActive,false});
             if(!record.modelMaterial.empty())usages.push_back({record.modelMaterial.id,id,name,record.name+" / Box material",isActive,false});
             if(record.particle&&!record.particle->empty())usages.push_back({record.particle->id,id,name,record.name+" / Particle effect",isActive,false});
             if(record.environment&&!record.environment->environment.map.empty())usages.push_back({record.environment->environment.map,id,name,record.name+" / Environment",isActive,false});}
@@ -1267,10 +1374,10 @@ AssetDeletionPlan AssetLibrary::planDeletion(const std::vector<std::string>& ids
         for(const auto& id:plan.assetIds){const auto users=references_.users(id);plan.usages.insert(plan.usages.end(),users.begin(),users.end());
             const auto authored=references_.authoredUsers(id,plan.assetIds);for(const auto& usage:authored)if(usableOwners.contains(usage.ownerId))plan.warningUsages.push_back(usage);}
         for(const auto& scene:scenes){size_t count=0;for(const auto& entity:scene.records)
-            if((entity.model&&models.contains(references_.resolve(entity.model->id)))||(entity.particle&&!entity.particle->empty()&&particles.contains(references_.resolveParticle(entity.particle->id)))||
+            if((entity.model&&models.contains(references_.resolve(entity.model->id)))||(entity.meshCollider&&!entity.meshCollider->source.empty()&&models.contains(references_.resolve(entity.meshCollider->source.id)))||(entity.particle&&!entity.particle->empty()&&particles.contains(references_.resolveParticle(entity.particle->id)))||
                 (!entity.modelMaterial.empty()&&materials.contains(references_.resolveMaterial(entity.modelMaterial.id))))++count;
             if(count)plan.scenes.push_back({scene.id,scene.name,count});}
-        if(active){for(const auto& entity:active->scene().records())if(entity.model&&models.contains(references_.resolve(entity.model->id)))plan.clearsActiveHistory=true;
+        if(active){for(const auto& entity:active->scene().records())if((entity.model&&models.contains(references_.resolve(entity.model->id))) || (entity.meshCollider&&!entity.meshCollider->source.empty()&&models.contains(references_.resolve(entity.meshCollider->source.id))))plan.clearsActiveHistory=true;
             for(const auto& id:active->historicalModelReferences())if(models.contains(references_.resolve(id)))plan.clearsActiveHistory=true;
             for(const auto& entity:active->scene().records())if(!entity.modelMaterial.empty()&&materials.contains(references_.resolveMaterial(entity.modelMaterial.id)))plan.clearsActiveHistory=true;
             for(const auto& id:active->historicalMaterialReferences())if(materials.contains(references_.resolveMaterial(id)))plan.clearsActiveHistory=true;

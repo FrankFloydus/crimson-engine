@@ -64,6 +64,22 @@ float projectedDepth(float distance,float nearValue,float farValue) {
         distance<=0 || nearValue<=0 || farValue<=nearValue) return std::numeric_limits<float>::quiet_NaN();
     return static_cast<float>((double(farValue)/(farValue-nearValue))*(1-double(nearValue)/distance));
 }
+float radialDistanceFromDepth(float depth,Vec3 direction,float nearValue,float farValue) {
+    if (!std::isfinite(depth) || depth<0 || depth>1 || !math::finite(direction) ||
+        !std::isfinite(nearValue) || !std::isfinite(farValue) || nearValue<=0 || farValue<=nearValue)
+        return std::numeric_limits<float>::quiet_NaN();
+    const double axis=std::max({std::abs(double(direction[0])),std::abs(double(direction[1])),std::abs(double(direction[2]))});
+    if (!(axis>0)) return std::numeric_limits<float>::quiet_NaN();
+    const double axial=double(nearValue)*farValue/(double(farValue)-double(depth)*(double(farValue)-nearValue));
+    const double squared=double(direction[0])*direction[0]+double(direction[1])*direction[1]+double(direction[2])*direction[2];
+    return static_cast<float>(axial*std::sqrt(squared)/axis);
+}
+float penumbraRadius(float sourceRadius,float receiverDistance,float blockerDistance) {
+    if (!std::isfinite(sourceRadius) || !std::isfinite(receiverDistance) || !std::isfinite(blockerDistance) ||
+        sourceRadius<=0 || blockerDistance<=0 || receiverDistance<=blockerDistance) return 0;
+    return static_cast<float>(std::min(double(std::numeric_limits<float>::max()),
+        double(sourceRadius)*(receiverDistance-blockerDistance)/blockerDistance));
+}
 Vec2 receiverPlaneGradient(Vec3 point,Vec3 normal,unsigned face,unsigned resolution,float nearValue,float farValue) {
     if (face>=FaceCount || !resolution || !math::finite(point) || !math::finite(normal) ||
         !std::isfinite(nearValue) || !std::isfinite(farValue) || nearValue<=0 || farValue<=nearValue) return {};
@@ -82,6 +98,15 @@ bool intersectsLight(const Aabb& box,const Vec3& position,float radius) {
         squared+=distance*distance;
     }
     return squared<=double(radius)*radius;
+}
+float casterTexelWorld(const Aabb& box,const Vec3& position,unsigned resolution) {
+    if(!resolution || !validBounds(box) || !math::finite(position))return 1e-20f;
+    const auto center=(box.minimum+box.maximum)*.5;
+    const auto radius=math::length(box.maximum-box.minimum)*.5;
+    const auto distance=std::max(0.0,math::length(position-center)-radius);
+    // The expanded face FOV and guarded image height cancel exactly: the
+    // authored 90-degree inner face has resolution samples across 2*distance.
+    return static_cast<float>(std::max(1e-20,2*distance/resolution));
 }
 bool intersectsFace(const Aabb& box,const Camera& camera) {
     if (!validBounds(box)) return true;

@@ -1,10 +1,14 @@
 #include "EditorResources.h"
+#include "crimson-renderer/ShadowLightSelection.h"
+#include "PreparedMaterialSignature.h"
 #include "assets/AssetLibrary.h"
+#include "assets/ModelAnimation.h"
 #include "assets/MaterialGraphReferences.h"
 #include "resources/StreamingModel.h"
 #include "resources/CacheIO.h"
 #include "scene/SceneExtraction.h"
 #include "crimson-renderer/PointShadowMath.h"
+#include "crimson-renderer/DirectionalShadowMath.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -14,33 +18,6 @@
 namespace crimson {
 namespace {
 using streaming::detail::hash;
-uint64_t signature(const ModelAsset& asset,uint64_t revision,std::span<const ModelMaterial> materials,
-                   std::span<const ModelMaterialTextures> textures) {
-    auto result=streaming::detail::HashSeed; hash(result,revision); hash(result,asset.id.data(),asset.id.size());
-    for (const auto& material:materials) {
-        if(material.graph){hash(result,materialGraphRenderHash(material));continue;}
-        hash(result,material.baseColor); hash(result,material.metallic); hash(result,material.roughness);
-        hash(result,material.normalScale); hash(result,material.occlusionStrength); hash(result,material.emissive);
-        hash(result,material.alphaMask); hash(result,material.alphaCutoff); hash(result,material.doubleSided);
-        hash(result,material.uvScale); hash(result,material.uvOffset); hash(result,material.uvRotation); hash(result,material.triplanar);
-        hash(result,material.triplanarWorld);
-        hash(result,material.sharedSampler.has_value());
-        if(material.sharedSampler) {
-            hash(result,material.sharedSampler->wrapU); hash(result,material.sharedSampler->wrapV);
-            hash(result,material.sharedSampler->minFilter); hash(result,material.sharedSampler->magFilter);
-        }
-        for (const auto* slot:{&material.baseColorTexture,&material.metallicRoughnessTexture,&material.normalTexture,&material.occlusionTexture,&material.emissiveTexture}) {
-            hash(result,slot->image.id.data(),slot->image.id.size()); hash(result,slot->texCoord); hash(result,slot->wrapU); hash(result,slot->wrapV);
-            hash(result,slot->minFilter); hash(result,slot->magFilter);
-        }
-    }
-    for(const auto& binding:textures)if(binding.graph)hash(result,binding.graph->signature);
-    for (const auto& binding:textures) for (size_t slot=0;slot<binding.handles.size();++slot) {
-        hash(result,binding.handles[slot].idx); hash(result,binding.flags[slot]);
-        hash(result,binding.signatures[slot]); hash(result,binding.sourceFingerprints[slot]);
-    }
-    return result;
-}
 bool coherent(const AssetLibrary& assets,std::span<const ModelMaterial> materials,std::span<const ModelMaterialTextures> bindings) {
     if (materials.size()!=bindings.size()) return false;
     std::unordered_map<std::string,uint64_t> versions;
@@ -72,21 +49,21 @@ float verticalFov(const Camera& camera,const Renderer& renderer,ResourcePriority
         static_cast<float>(renderer.width())/static_cast<float>(renderer.height());
     return camera.verticalFov(aspect)*std::numbers::pi_v<float>/180;
 }
-uint32_t textureDemand(const ModelAsset& asset,std::span<const ModelMaterial> materials,const Mat4& world,const Camera& camera,float fov,uint32_t height) {
-    const auto bounds=math::transformBounds(asset.bounds,world);
+uint32_t textureDemand(const ModelAsset& asset,std::span<const ModelMaterial> materials,const Mat4& world,const Camera& camera,float fov,uint32_t height,float shadowTexelWorld,MaterialEvaluationContext context,const ModelPose* pose) {
+    const auto bounds=math::transformBounds(pose?pose->bounds:asset.bounds,world);
     if (!bounds.valid || !height || !std::isfinite(fov) || fov<=0) return 64;
     const auto center=(bounds.minimum+bounds.maximum)*.5f;
     const auto radius=math::length(bounds.maximum-bounds.minimum)*.5;
     const double distance=math::length(camera.eye()-center)-radius;
-    if (distance<=.001) return 16384;
+    if (shadowTexelWorld<=0 && distance<=.001) return 16384;
     double span=std::numeric_limits<double>::infinity();
-    const auto mappings=[](const ModelMaterial& material,const auto& visit) {
+    const auto mappings=[context](const ModelMaterial& material,const auto& visit) {
         if(material.graph) {
             const auto& graph=*material.graph;const auto& output=materialOutputNode(graph).output;
             for(const auto id:materialGraphOrder(graph,output.shading,output.blend)) {
                 const auto* node=findMaterialNode(graph,id);if(node->kind!=MaterialNodeKind::Texture2D || node->texture.image.empty())continue;
                 MaterialUvMapping mapping;
-                mapping=materialTextureMapping(graph,id);
+                mapping=materialTextureMapping(graph,id,context);
                 visit(mapping);
             }
         } else {
@@ -115,13 +92,15 @@ uint32_t textureDemand(const ModelAsset& asset,std::span<const ModelMaterial> ma
         }
         return squared>0 && std::isfinite(squared)?std::max(1e-6,1/std::sqrt(squared)):1e-6;
     };
-    if (asset.stream) for (const auto& draw:asset.draws) {
+    if (asset.stream) for (std::size_t drawIndex=0;drawIndex<asset.draws.size();++drawIndex) {
+        const auto& draw=asset.draws[drawIndex];
+        const auto& drawTransform=pose&&drawIndex<pose->drawTransforms.size()?pose->drawTransforms[drawIndex]:draw.transform;
         if(draw.primitive>=asset.stream->primitives.size())continue;
         const auto& primitive=asset.stream->primitives[draw.primitive];
         if (primitive.material>=materials.size()) continue;
         const auto& material=materials[primitive.material];
         mappings(material,[&](const MaterialUvMapping& mapping) {
-            const double transformScale=mapping.mode==MaterialUvMode::WorldTriplanar?worldMappingScale(world*draw.transform):1;
+            const double transformScale=mapping.mode==MaterialUvMode::WorldTriplanar?worldMappingScale(world*drawTransform):1;
             const auto& uv=primitive.uvSpan[mapping.mode==MaterialUvMode::UV1?1:0];
             double used=std::max<double>(uv[0],uv[1]);
             if(mapping.mode==MaterialUvMode::LocalTriplanar || mapping.mode==MaterialUvMode::WorldTriplanar) {
@@ -138,12 +117,15 @@ uint32_t textureDemand(const ModelAsset& asset,std::span<const ModelMaterial> ma
         double transformScale=1;
         if(mapping.mode==MaterialUvMode::WorldTriplanar) {
             transformScale=worldMappingScale(world);
-            for(const auto& draw:asset.draws)transformScale=std::min(transformScale,worldMappingScale(world*draw.transform));
+            for(std::size_t drawIndex=0;drawIndex<asset.draws.size();++drawIndex) {
+                const auto& transform=pose&&drawIndex<pose->drawTransforms.size()?pose->drawTransforms[drawIndex]:asset.draws[drawIndex].transform;
+                transformScale=std::min(transformScale,worldMappingScale(world*transform));
+            }
         }
         span=std::min(span,scaleSpan(mapping)*transformScale);
     });
     if (!std::isfinite(span)) span=1;
-    const double diameter=radius*height/(distance*std::tan(fov*.5f));
+    const double diameter=shadowTexelWorld>0?2*radius/shadowTexelWorld:radius*height/(distance*std::tan(fov*.5f));
     return static_cast<uint32_t>(std::clamp(std::ceil(diameter/span),64.0,16384.0));
 }
 struct Pins {
@@ -154,10 +136,12 @@ struct Pins {
 EditorResources::EditorResources(AssetLibrary& assets,Renderer& renderer,ResourceManager& resources,std::filesystem::path root)
     :assets_(assets),renderer_(renderer),resources_(resources),root_(std::move(root)) {}
 void EditorResources::beginFrame() {
+    for(auto& [id,pose]:poses_)pose.wanted=false;
     framePins_.clear(); externalModels_.clear(); status_.clear();
     for (auto& [id,entry]:entries_) { (void)id; entry.wanted=false; }
 }
 void EditorResources::endFrame() {
+    std::erase_if(poses_,[](const auto& item){return !item.second.wanted;});
     const auto now=std::chrono::steady_clock::now();
     auto live=externalModels_;
     for (auto& [id,entry]:entries_) {
@@ -168,7 +152,9 @@ void EditorResources::endFrame() {
         }
     }
     std::erase_if(entries_,[&](const auto& pair){return !pair.second.wanted && now-pair.second.used>resources_.config().idleGrace;});
-    const auto reserved=renderer_.shadowResidentBytes()+renderer_.thumbnailResidentBytes();
+    // The retention target controls evictable caches. Fixed render targets
+    // (including shadows) must not evict the model/texture working set.
+    const auto reserved=renderer_.thumbnailResidentBytes();
     renderer_.trimModelCache(reserved>=resources_.config().gpuRetentionBytes?0:resources_.config().gpuRetentionBytes-reserved,live);
 }
 void EditorResources::requestGeometry(Entry& entry,const ModelAsset& asset,uint64_t revision,uint32_t primitive,uint32_t level,ResourcePriority priority) {
@@ -186,7 +172,9 @@ void EditorResources::requestGeometry(Entry& entry,const ModelAsset& asset,uint6
                 if (token.stop_requested()) throw std::runtime_error("Model LOD read canceled.");
                 auto data=streaming::loadModelLod(descriptor,primitive,level);
                 if (token.stop_requested()) throw std::runtime_error("Model LOD read canceled.");
-                const auto bytes=data->geometry.vertices.size()*sizeof(ModelVertex)+data->geometry.indices.size()*sizeof(uint32_t)+data->indices16.size()*sizeof(uint16_t);
+                auto bytes=data->geometry.vertices.size()*sizeof(ModelVertex)+data->geometry.indices.size()*sizeof(uint32_t)+data->indices16.size()*sizeof(uint16_t)
+                    +data->geometry.skinWeights.size()*sizeof(ModelSkinWeights)+data->geometry.morphTargets.size()*sizeof(ModelMorphTarget);
+                for(const auto& target:data->geometry.morphTargets)bytes+=(target.positions.size()+target.normals.size()+target.tangents.size())*sizeof(Vec3);
                 return ResourceLoadResult<ModelGeometryLevel>{data,bytes,descriptor.key,{descriptor.file}};
             },std::move(options));
     }
@@ -200,7 +188,7 @@ void EditorResources::requestGeometry(Entry& entry,const ModelAsset& asset,uint6
         if (!renderer_.queueModelLod(asset.id,revision,data.shared())) { entry.diagnostic=renderer_.modelStatus(); entry.failed=true; }
 }
 std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::string& id,const Mat4& world,const Camera& camera,
-    uint32_t height,bool selected,ResourcePriority priority,float aspect,const std::string& materialOverride) {
+    uint32_t height,bool selected,ResourcePriority priority,float aspect,const std::string& materialOverride,float shadowTexelWorld,const ExtractedModel* presentation) {
     // Geometry identity remains shared. Immutable binding packets are keyed by
     // instance material identity so two Boxes cannot overwrite each other's material.
     const auto key=id+std::string(1,'\0')+materialOverride;
@@ -217,6 +205,7 @@ std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::s
     const auto revision=std::max<uint64_t>(1,assets_.modelRevision(id));
     entry.geometryAssetId=asset->id;
     try {
+        const auto presentedPose=presentation?pose(*presentation,asset):std::shared_ptr<const ModelPose>{};
         const auto fov=verticalFov(camera,renderer_,priority,aspect);
         bool refined=true;
         if (asset->stream) {
@@ -227,7 +216,8 @@ std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::s
                 desired[primitive]=static_cast<uint32_t>(asset->stream->primitives[primitive].levels.size()-1);
             for (const auto& draw:asset->draws) if (draw.primitive<desired.size()) {
                 const auto& primitive=asset->stream->primitives[draw.primitive];
-                const auto level=selected ? 0 : streaming::chooseModelLod(primitive.levels,world*draw.transform,primitive.bounds,camera.eye(),fov,height,1.0f);
+                const auto level=selected || !asset->animations.empty() ? 0 : shadowTexelWorld>0?directional_shadow::chooseLod(primitive.levels,world*draw.transform,shadowTexelWorld):
+                    streaming::chooseModelLod(primitive.levels,world*draw.transform,primitive.bounds,camera.eye(),fov,height,1.0f);
                 desired[draw.primitive]=std::min(desired[draw.primitive],level);
             }
             for (uint32_t primitive=0;primitive<desired.size();++primitive) {
@@ -245,7 +235,10 @@ std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::s
             return retain(entry.current);
         }
         if(const auto diagnostic=assets_.modelMaterialsDiagnostic(*asset,materialOverride);!diagnostic.empty())entry.diagnostic=diagnostic;
-        assets_.setTextureDemand(textureDemand(*asset,materials,world,camera,fov,height),selected);
+        // Cached browser cards render at time zero; they do not inherit the live
+        // world's animated mapping footprint when sharing this resource owner.
+        const auto context=priority==ResourcePriority::Preview?MaterialEvaluationContext{}:materialContext_;
+        assets_.setTextureDemand(textureDemand(*asset,materials,world,camera,fov,height,shadowTexelWorld,context,presentedPose.get()),selected);
         auto textures=assets_.modelBindings(*asset,materials);
         for(const auto& binding:textures)if(binding.graphPending) {
             entry.diagnostic=binding.diagnostic;refined=false;
@@ -255,7 +248,7 @@ std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::s
         if (!assets_.modelBindingsReady(textures) || !coherent(assets_,materials,textures)) return retain(entry.current);
         if (std::any_of(textures.begin(),textures.end(),[](const auto& binding){return !binding.sourceReady;})) return retain(entry.current);
         refined&=std::all_of(textures.begin(),textures.end(),[](const auto& binding){return binding.complete;});
-        const auto value=signature(*asset,revision,materials,textures);
+        const auto value=preparedModelSignature(*asset,revision,materials,textures);
         if (entry.current && entry.current->signature==value && entry.current->refined==refined) return retain(entry.current);
         auto candidate=std::make_shared<PreparedEditorModel>(); candidate->asset=asset; candidate->revision=revision;
         candidate->materials=std::move(materials); candidate->textures=std::move(textures); candidate->signature=value; candidate->ready=true; candidate->refined=refined;
@@ -264,28 +257,109 @@ std::shared_ptr<const PreparedEditorModel> EditorResources::prepare(const std::s
         candidate->pinned=std::move(pins); entry.current=std::move(candidate); return retain(entry.current);
     } catch (const std::exception& error) { entry.diagnostic=error.what(); entry.failed=true; return retain(entry.current); }
 }
+std::shared_ptr<const ModelPose> EditorResources::pose(const ExtractedModel& model,const std::shared_ptr<const ModelAsset>& asset) {
+    if(!asset || (asset->skins.empty()&&asset->animations.empty()&&std::none_of(asset->primitives.begin(),asset->primitives.end(),
+        [](const auto& primitive){return !primitive.morphTargets.empty();})))return {};
+    auto& entry=poses_[model.id];entry.wanted=true;
+    const auto clip=model.animation.clip;
+    if(entry.value&&entry.source.lock()==asset&&entry.clip==clip&&entry.seconds==model.animationSeconds&&entry.loop==model.animation.loop)return entry.value;
+    const auto selected=clip>=0&&static_cast<std::size_t>(clip)<asset->animations.size()?std::optional<std::size_t>{static_cast<std::size_t>(clip)}:std::nullopt;
+    if(clip>=0&&!selected)status_+="Animation clip is unavailable for "+asset->name+".\n";
+    const auto sampleTime=model.animationSeconds+(selected?asset->animations[*selected].start:0.);
+    auto value=std::make_shared<const ModelPose>(evaluateModelPose(*asset,selected,sampleTime,model.animation.loop));
+    if(entry.value&&entry.source.lock()==asset&&value->signature==entry.value->signature&&value->drawTransforms==entry.value->drawTransforms&&
+        value->skinPalettes==entry.value->skinPalettes&&value->nodeWeights==entry.value->nodeWeights&&
+        value->localTransforms==entry.value->localTransforms&&value->worldTransforms==entry.value->worldTransforms)value=entry.value;
+    entry={asset,value,clip,model.animationSeconds,model.animation.loop,true};
+    return value;
+}
+Aabb EditorResources::modelBounds(const ExtractedModel& model,const std::shared_ptr<const ModelAsset>& asset) {
+    if(!asset)return {};
+    const auto value=pose(model,asset);return value?value->bounds:asset->bounds;
+}
 std::shared_ptr<const PreparedEditorShadows> EditorResources::prepareShadows(const ExtractedScene& scene,std::uint16_t resolution,
-    ResourcePriority priority) {
+    ResourcePriority priority,std::span<const ShadowCamera> cameras,std::span<const std::uint64_t> focusEntities,std::optional<Vec3> priorityOrigin,std::span<const Aabb> extraReceiverBounds) {
     auto result=std::make_shared<PreparedEditorShadows>();
-    if(std::none_of(scene.points.begin(),scene.points.end(),[](const auto& light){return light.enabled && light.castShadows;}))return result;
+    const auto shadowSelection=selectPointShadowLights(scene.points,priorityOrigin);
+    const bool directional=std::any_of(scene.directional.begin(),scene.directional.end(),[](const auto& light){return light.enabled&&light.castShadows;});
+    const bool characterShadow=scene.characterShadow.enabled&&scene.characterShadow.strength>0;
+    if(!directional && !characterShadow && std::none_of(scene.points.begin(),scene.points.end(),[](const auto& light){return light.enabled && light.castShadows;}))return result;
+    const std::array<ShadowCamera,1> fallback{{{Camera{},1.f}}};if(cameras.empty())cameras=fallback;
+    const auto focused=[&](std::uint64_t id){return std::find(focusEntities.begin(),focusEntities.end(),id)!=focusEntities.end();};
+    const auto characterCaster=[&](const ExtractedModel& model) {
+        return model.castShadows && model.lightingCategory==lighting_scope::Character &&
+            (model.lightingScopes.shadowCasterMask&lighting_scope::Character)!=0 &&
+            (focusEntities.empty()||focused(model.id));
+    };
+    Aabb characterBounds;
+    if(characterShadow)for(const auto& model:scene.models)if(characterCaster(model))
+        if(const auto asset=assets_.findModel(model.assetId))
+            math::include(characterBounds,math::transformBounds(modelBounds(model,asset),model.world));
+    const auto characterFit=characterShadow?directional_shadow::buildCharacter(scene.characterShadow,characterBounds,resolution):std::nullopt;
+    std::vector<Aabb> allBounds,worldCasterBounds;
+    if(directional){allBounds.reserve(scene.models.size());worldCasterBounds.reserve(scene.models.size());result->receiverBounds.reserve(scene.models.size()+extraReceiverBounds.size());
+        result->receiverBounds.insert(result->receiverBounds.end(),extraReceiverBounds.begin(),extraReceiverBounds.end());}
+    if(directional)for(const auto& model:scene.models) {
+        const auto asset=assets_.findModel(model.assetId);
+        const auto bounds=asset?math::transformBounds(modelBounds(model,asset),model.world):Aabb{};
+        // Freeze receiver metadata before residency/camera preparation so both
+        // resource demand and execution use exactly the same projection fit.
+        if(model.receiveShadows)result->receiverBounds.push_back(bounds);
+        if(model.castShadows){allBounds.push_back(bounds);if(!focused(model.id))worldCasterBounds.push_back(bounds);}
+    }
+    std::vector<directional_shadow::Cascades> fits;
+    if(directional)for(const auto& light:scene.directional)if(light.enabled&&light.castShadows)
+        for(const auto& camera:cameras) {
+            if(camera.gameplay) {
+                auto fit=directional_shadow::buildGame(light,camera,resolution,worldCasterBounds,camera.focusBounds,result->receiverBounds);
+                if(fit.characterProjection>=fit.projectionCount)fit=directional_shadow::buildGame(light,camera,resolution,allBounds,{},result->receiverBounds);
+                fits.push_back(std::move(fit));
+            } else fits.push_back(directional_shadow::build(light,camera,resolution,allBounds));
+        }
+    std::vector<Aabb> footprintBounds;
     for(const auto& model:scene.models) {
         if(!model.castShadows)continue;
         const auto asset=assets_.findModel(model.assetId);
-        const auto bounds=asset?math::transformBounds(asset->bounds,model.world):Aabb{};
+        const auto bounds=asset?math::transformBounds(modelBounds(model,asset),model.world):Aabb{};
+        footprintBounds.clear();footprintBounds.push_back(bounds);
+        if(asset && asset->stream && !pose(model,asset)) {
+            footprintBounds.reserve(asset->draws.size()+1);
+            for(const auto& draw:asset->draws)if(draw.primitive<asset->stream->primitives.size())
+                footprintBounds.push_back(math::transformBounds(asset->stream->primitives[draw.primitive].bounds,model.world*draw.transform));
+        }
         std::shared_ptr<const PreparedEditorModel> packet;
-        for(const auto& light:scene.points) {
-            if(!light.enabled || !light.castShadows)continue;
+        float texel=std::numeric_limits<float>::max();
+        // Unknown bounds still request the player's original detail, so an
+        // offscreen pending model can become a caster without a visible draw.
+        if(characterShadow && characterCaster(model))texel=characterFit?characterFit->texelWorld:.0001f;
+        for(const auto& fit:fits)if(fit.valid)for(unsigned projection=0;projection<fit.projectionCount;++projection) {
+            if(fit.characterProjection<fit.projectionCount && focused(model.id)!=(projection==fit.characterProjection))continue;
+            if(directional_shadow::intersects(bounds,fit.values[projection]))texel=std::min(texel,fit.values[projection].texelWorld);
+        }
+        for(const auto source:shadowSelection.selectedSources()) {
+            const auto& light=scene.points[source];
             if(!point_shadow::intersectsLight(bounds,light.position,light.radius))continue;
-            const auto camera=point_shadow::faceCamera(light.position,light.radius,0,resolution);
-            // All six faces have the same footprint. Each light requests its
-            // detail once; renderer selection remains independent per light.
-            auto prepared=prepare(model.assetId,model.world,camera,resolution+4,false,priority,1,model.materialId);
-            if(prepared) { packet=prepared;result->models.push_back(prepared); }
-            result->refined&=prepared && prepared->ready && prepared->refined;
+            // A parent's circumsphere need not contain its children's
+            // circumspheres. Preserve each draw's original perspective error
+            // bound as well as the model-wide texture-density bound.
+            for(const auto& footprint:footprintBounds)
+                texel=std::min(texel,point_shadow::casterTexelWorld(footprint,light.position,resolution));
+        }
+        if(texel<std::numeric_limits<float>::max()) {
+            // Combine light demand before material/texture preparation. A room
+            // lit by several points needs one coherent packet per caster, not
+            // repeated material resolution and graph preparation for each light.
+            auto prepared=prepare(model.assetId,model.world,cameras.front().camera,resolution+4,false,priority,cameras.front().aspect,model.materialId,texel,&model);
+            if(prepared){packet=prepared;result->models.push_back(prepared);}
+            result->ready&=prepared&&prepared->ready;
+            result->refined&=prepared&&prepared->ready&&prepared->refined;
         }
         if(packet) {
             RenderModelInstance instance{model.id,{packet->asset,model.world},&packet->textures,packet->revision,false,false,&packet->materials};
             instance.castShadows=model.castShadows;instance.receiveShadows=model.receiveShadows;
+            instance.lightingScopes=model.lightingScopes;
+            instance.lightingCategory=model.lightingCategory;
+            instance.pose=pose(model,packet->asset);
             result->instances.push_back(instance);
         }
     }
@@ -294,7 +368,7 @@ std::shared_ptr<const PreparedEditorShadows> EditorResources::prepareShadows(con
 void EditorResources::invalidate(const std::string& id) {
     for(auto& [key,entry]:entries_)if(entry.sourceId==id) {entry.geometry.clear();entry.geometryRevision=0;}
 }
-void EditorResources::clear() { entries_.clear(); framePins_.clear(); externalModels_.clear(); status_.clear(); }
+void EditorResources::clear() { entries_.clear();poses_.clear(); framePins_.clear(); externalModels_.clear(); status_.clear(); }
 bool EditorResources::failed(const std::string& id) const {
     const auto found=entries_.find(id+std::string(1,'\0')); return found!=entries_.end() && found->second.failed;
 }

@@ -75,7 +75,7 @@ std::shared_ptr<DeletionValidation> validateAssetDeletion(const std::filesystem:
             const auto& graph=*surface.graph;const auto& output=materialOutputNode(graph).output;
             for(const auto id:materialGraphOrder(graph,output.shading,output.blend)) {
                 const auto& node=*findMaterialNode(graph,id);if(node.kind!=MaterialNodeKind::Texture2D||node.texture.image.empty())continue;
-                auto mode=MaterialUvMode::UV0;if(const auto* link=materialInputLink(graph,node.id,MaterialPin::UV))mode=findMaterialNode(graph,link->fromNode)->uv.mode;
+                auto mode=MaterialUvMode::UV0;if(const auto* link=materialInputLink(graph,node.id,MaterialPin::UV))mode=resolveMaterialUvMapping(graph,link->fromNode).mode;
                 if(mode==MaterialUvMode::LocalTriplanar||mode==MaterialUvMode::WorldTriplanar)continue;
                 const auto uv=mode==MaterialUvMode::UV1?1u:0u;
                 if(!(primitive.uvMask&(1u<<uv)))throw std::runtime_error("Replacement graph requires an unavailable UV set: "+surface.name);

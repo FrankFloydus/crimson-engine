@@ -506,6 +506,7 @@ bool EnvironmentLighting::publish(const PreparedEnvironment& prepared) {
             data.diffuse.rgba.size()!=static_cast<std::size_t>(settings.diffuseSize)*settings.diffuseSize*6*4 ||
             data.brdf.size()!=static_cast<std::size_t>(settings.lutSize)*settings.lutSize*2)
             throw std::runtime_error("Prepared IBL data is incomplete.");
+        auto brdfCpu=data.brdf;
         if (!bgfx::isTextureValid(0,true,1,bgfx::TextureFormat::RGBA32F,Sampler) ||
             !bgfx::isTextureValid(0,false,1,bgfx::TextureFormat::RG32F,Sampler))
             throw std::runtime_error("GPU does not support the linear HDR IBL texture formats.");
@@ -517,6 +518,7 @@ bool EnvironmentLighting::publish(const PreparedEnvironment& prepared) {
         bgfx::setName(diffuse,"Environment irradiance / pi"); bgfx::setName(specular,"Environment GGX prefilter"); bgfx::setName(brdf,"Correlated Smith BRDF LUT");
         destroyTexture(diffuse_); destroyTexture(specular_); destroyTexture(brdf_);
         diffuse_=diffuse; specular_=specular; brdf_=brdf;
+        brdfCpu_=std::move(brdfCpu);
         key_=prepared.key; maxSpecularLod_=static_cast<float>(data.specular.size()-1);
         residentBytes_=(data.diffuse.rgba.size()+data.brdf.size())*sizeof(float);
         for(const auto& mip:data.specular)residentBytes_+=mip.rgba.size()*sizeof(float);

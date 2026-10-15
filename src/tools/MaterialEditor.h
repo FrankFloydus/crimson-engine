@@ -16,6 +16,9 @@ public:
     bool focused() const;
     bool isOpen() const { return document_.isOpen(); }
     bool transactionActive() const { return document_.transactionActive(); }
+    bool blocksExternalRefresh(const std::string& id) const {
+        return document_.isOpen()&&document_.assetId()==id&&(document_.dirty()||document_.transactionActive());
+    }
     bool takeExitRequest() { const bool ready=exitReady_;exitReady_=false;return ready; }
     void requestExit();
     void requestOpen(std::string id,AssetLibrary&);
@@ -30,13 +33,13 @@ public:
     bool canSaveAs() const { return document_.isOpen() && (particleMaterialCompatible(document_.definition()) || modelMaterialCompatible(document_.definition())); }
     void draw(AssetLibrary&,Renderer&,ResourceManager&,double dt);
     void filesChanged(std::span<const std::filesystem::path>);
-    void cancelInteraction() { document_.cancel();preview_.cancelInteraction();graph_.cancelInteraction();propertyEditing_=false;colorEditor_.cancel();emissionEditor_.cancel(); }
+    void cancelInteraction() { document_.cancel();preview_.cancelInteraction();graph_.cancelInteraction();propertyEditing_=false;colorEditor_.cancel();emissionEditor_.cancel();alphaEditor_.cancel(); }
 private:
     enum class Pending { None,Open,Create,Close,Exit };
     MaterialDocument document_;
     MaterialPreview preview_;
     MaterialGraphEditor graph_;
-    HdrColorEditorState colorEditor_,emissionEditor_;
+    HdrColorEditorState colorEditor_,emissionEditor_,alphaEditor_;
     MaterialNodeId propertyNode_{};
     MaterialNodeId texturePickerNode_{};
     float previewHeight_{260};

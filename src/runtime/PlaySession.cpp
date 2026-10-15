@@ -21,7 +21,8 @@ bool PlaySession::start(const SceneDocument& authored) {
     try {
         auto document=std::make_unique<SceneDocument>(projectRoot_);
         if(!document->resetTransientFrom(authored)){status_=document->status();return false;}
-        auto physics=std::make_unique<PhysicsWorld>();physics->reconcile(document->scene());
+        if(!prepareMeshColliders(document->scene(),true))return false;
+        auto physics=std::make_unique<PhysicsWorld>();physics->reconcile(document->scene(),{},meshColliders_);
         presentation_.apply(document->scene().records(),document->scene().properties());
         document_=std::move(document);physics_=std::move(physics);particles_=SceneParticles{};
         navigation_=std::make_unique<NavigationMesh>();
@@ -32,9 +33,22 @@ bool PlaySession::start(const SceneDocument& authored) {
     } catch(const std::exception& error){stop();status_="Cannot enter Play: "+std::string(error.what());return false;}
 }
 void PlaySession::stop() {
+    meshColliders_.clear();
     particles_=SceneParticles{};navigation_.reset();physics_.reset();document_.reset();previous_.clear();current_.clear();
     presentation_.apply({},{});remainder_=0;ticks_=droppedTicks_=routeQueries_=0;editRevision_=0;suspended_=failed_=false;status_.clear();
     clearRoute();lastClickedGround_.reset();controlled_=NoEntity;inputCancellation_=0;lastControlledPose_.reset();
+}
+bool PlaySession::prepareMeshColliders(const Scene& scene,bool requireReady) {
+    std::vector<PhysicsMeshCollider> prepared;
+    for(const auto& record:scene.records())if(record.meshCollider && !record.meshCollider->source.empty()) {
+        const auto source=collisionMeshes_?collisionMeshes_(record.meshCollider->source.id):CollisionMeshResult{};
+        if(!source.mesh || (requireReady && !source.current)) {
+            if(requireReady){status_=source.diagnostic.empty()?"Mesh collision is unavailable.":source.diagnostic;return false;}
+            continue;
+        }
+        prepared.push_back({record.id,source.mesh,source.revision});
+    }
+    meshColliders_=std::move(prepared);return true;
 }
 void PlaySession::clearRoute(){controller_.reset();requestedDestination_.reset();destination_.reset();routeActive_=false;routeStatus_.clear();lastHeldTarget_.reset();heldRetargetRemaining_=0;}
 void PlaySession::planRoute(const Vec3& start) {
@@ -73,7 +87,8 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
             presentation_.apply(document_->scene().records(),document_->scene().properties());
             editRevision_=document_->scene().revision();resetInterpolation();
         }
-        physics_->reconcile(document_->scene(),document_->transformEditRoots());
+        prepareMeshColliders(document_->scene(),false);
+        physics_->reconcile(document_->scene(),document_->transformEditRoots(),meshColliders_);
         const auto controlled=document_->scene().properties().playerCharacter;
         const auto controlledPose=document_->scene().worldTransform(controlled);
         const bool replacedPlayer=controlled_!=NoEntity && controlled_!=controlled;
@@ -154,7 +169,7 @@ void PlaySession::advanceInternal(double seconds,Vec2 movement,const Camera& cam
                     }
                 } else velocity={};
             }
-            const auto poses=physics_->step(document_->scene(),controlled,velocity,static_cast<float>(FixedStep),document_->transformEditRoots());
+            const auto poses=physics_->step(document_->scene(),controlled,velocity,static_cast<float>(FixedStep),document_->transformEditRoots(),meshColliders_);
             if(!document_->applyRuntimePoses(poses))throw std::runtime_error(document_->status());
             current_=characterPoses(document_->scene());lastControlledPose_=document_->scene().worldTransform(controlled);
             ++ticks_;reconcileParticles(FixedStep);

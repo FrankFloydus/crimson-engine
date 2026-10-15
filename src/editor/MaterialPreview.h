@@ -6,6 +6,9 @@
 #include "resources/ResourceManager.h"
 namespace crimson {
 class AssetLibrary;
+inline bool materialPreviewPacketReady(const ModelMaterialTextures& bindings) noexcept {
+    return bindings.sourceReady&&bindings.drawable();
+}
 class MaterialPreview {
 public:
     void environmentMenu(AssetLibrary&);
@@ -31,5 +34,6 @@ private:
     std::optional<MaterialGraphPreviewTarget> nodePreview_;
     std::unique_ptr<MaterialGraphPrograms> nodePrograms_;
     std::string nodeDefinitionKey_;
+    MaterialEvaluationContext materialContext_;
 };
 }

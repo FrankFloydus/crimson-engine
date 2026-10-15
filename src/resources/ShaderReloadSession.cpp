@@ -14,11 +14,20 @@ bool inside(const std::filesystem::path& path,const std::filesystem::path& direc
         (file[root.size()]=='/' || file[root.size()]=='\\'));
 }
 }
-ShaderReloadSession::ShaderReloadSession(ResourceManager& resources,Renderer& renderer,ImGuiBgfx& tools,ShaderCompileConfig config)
+ShaderReloadSession::ShaderReloadSession(ResourceManager& resources,Renderer& renderer,ImGuiBgfx& tools,ShaderCompileConfig config,
+    std::span<const ShaderSourceBaselineEntry> embeddedBaseline)
     : resources_(resources),renderer_(renderer),tools_(tools),config_(std::move(config)) {
     available_=std::filesystem::is_regular_file(config_.compiler) && std::filesystem::is_directory(config_.sourceDirectory) &&
         std::filesystem::is_directory(config_.includeDirectory);
-    if (available_) requestBatch();
+    if (available_) {
+        // Embedded programs already render this exact build. Do not compile a
+        // second copy at every launch. A changed Debug checkout (or an edited
+        // installed payload) still enters the normal coherent reload path.
+        if(shaderSourcesMatchEmbedded(config_,embeddedBaseline)) {
+            try {for(const auto& name:engineShaderNames())dependencies_[name]=shaderDependencies(config_,name);}
+            catch(const std::exception& error){status_="Shader reload: "+std::string(error.what());}
+        } else requestBatch();
+    }
     else status_="Shader hot reload is unavailable; embedded programs remain active.";
 }
 void ShaderReloadSession::requestBatch() {
@@ -29,6 +38,9 @@ void ShaderReloadSession::requestBatch() {
         const auto epoch=++epoch_;
         for (const auto& name:names) {
             ResourceRequestOptions options; options.priority=ResourcePriority::Background; options.forceReload=true;
+            // ShaderCompiler owns content identity and before/after compile
+            // validation. Avoid hashing the same compiler/includes again here.
+            options.dependencyValidation=DependencyValidation::FileState;
             options.dependencies=pendingDependencies.at(name);
             const auto config=config_;
             stages_[name]=resources_.request<ShaderBinary>(AssetRef<ShaderBinary>{"engine-shader:"+name},
@@ -63,19 +75,21 @@ void ShaderReloadSession::pump() {
         ready.emplace(name,snapshot);
     }
     struct Pair { RendererProgram program; const char* vertex; const char* fragment; };
-    constexpr std::array<Pair,11> definitions{{
+    constexpr std::array<Pair,12> definitions{{
         {RendererProgram::Sphere,"vs_pbr","fs_pbr"},{RendererProgram::Model,"vs_model","fs_model"},
         {RendererProgram::Picking,"vs_pick","fs_pick"},{RendererProgram::Present,"vs_present","fs_present"},
         {RendererProgram::Grid,"vs_grid","fs_grid"},{RendererProgram::Encode,"vs_present","fs_encode"},
         {RendererProgram::Particle,"vs_particle","fs_particle"},{RendererProgram::Sky,"vs_present","fs_sky"},
         {RendererProgram::PointShadow,"vs_point_shadow","fs_point_shadow"},
+        {RendererProgram::DirectionalShadow,"vs_directional_shadow","fs_directional_shadow"},
         {RendererProgram::GlowExtract,"vs_present","fs_glow_extract"},{RendererProgram::GlowBlur,"vs_present","fs_glow_blur"}}};
     std::vector<RendererShaderPair> pairs; pairs.reserve(definitions.size());
     for (const auto& pair:definitions) pairs.push_back({pair.program,ready.at(pair.vertex)->bytes,ready.at(pair.fragment)->bytes});
     std::string diagnostic;
     const auto ui=tools_.prepareProgramReload(ready.at("vs_imgui")->bytes,ready.at("fs_imgui")->bytes,diagnostic);
     if (!bgfx::isValid(ui)) { pending_=false; status_="ImGui shader reload: "+diagnostic; return; }
-    if (!renderer_.reloadPrograms(pairs,ready.at("cs_procedural_filter")->bytes)) {
+    if (!renderer_.reloadPrograms(pairs,ready.at("cs_procedural_filter")->bytes,ready.at("cs_cluster_lights")->bytes,
+        ready.at("cs_ambient_visibility")->bytes,ready.at("cs_ambient_publish")->bytes,ready.at("cs_model_deform")->bytes)) {
         bgfx::destroy(ui); pending_=false; status_="Shader reload: "+renderer_.shaderStatus(); return;
     }
     // The renderer accepted its whole candidate group; this commit cannot fail.

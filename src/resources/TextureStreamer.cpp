@@ -18,6 +18,7 @@ struct GpuTexture {
     std::uint32_t width{},height{},level{};
     std::uint64_t signature{},sourceFingerprint{};
     std::size_t bytes{};
+    bool thumbnail{};
     ~GpuTexture(){if(bgfx::isValid(handle)) bgfx::destroy(handle);}
 };
 struct Upload {
@@ -133,6 +134,7 @@ struct TextureStreamer::Impl {
             },std::move(options)));
         }
         upload->texture=std::make_shared<GpuTexture>();
+        upload->texture->thumbnail=entry.thumbnail;
         upload->texture->width=descriptor->levels[level].width; upload->texture->height=descriptor->levels[level].height;
         upload->texture->level=level; upload->texture->sourceFingerprint=descriptor.fingerprint();
         upload->texture->signature=combine(combine(descriptor.fingerprint(),hashText(entry.variant)),level);
@@ -219,6 +221,7 @@ PreparedTexture TextureStreamer::request(const std::string& id,const std::filesy
     auto [iterator,inserted]=impl_->entries.try_emplace(id+'\0'+variant); auto& entry=iterator->second;
     if(inserted) { entry.id=id;entry.source=source;entry.role=role;entry.mipmapped=mipmapped;entry.thumbnail=thumbnail;entry.variant=variant;entry.priority=priority;impl_->requestDescriptor(entry); }
     entry.edge=std::max(entry.wanted ? entry.edge : 0u,std::max(1u,edge)); entry.wanted=true; entry.priority=std::min(entry.priority,priority); entry.used=std::chrono::steady_clock::now();
+    if(priority==ResourcePriority::Selected)entry.pressureLevel=0;
     if(!entry.descriptor) impl_->requestDescriptor(entry);
     PreparedTexture result;
     if(entry.current) { impl_->framePins.push_back(entry.current); result={entry.current->handle,entry.current->width,entry.current->height,entry.current->signature,entry.current->sourceFingerprint,entry.current}; }
@@ -261,8 +264,17 @@ void TextureStreamer::trim(std::size_t targetBytes) {
     const auto now=std::chrono::steady_clock::now(); std::vector<Entry*> idle;
     for(auto& [key,entry]:impl_->entries) { (void)key; if(!entry.wanted && entry.current && entry.current.use_count()==1) idle.push_back(&entry); }
     std::sort(idle.begin(),idle.end(),[](const auto* a,const auto* b){return a->used<b->used;});
-    for(auto* entry:idle) { if(residentBytes()<=targetBytes && now-entry->used<impl_->manager.config().idleGrace) continue;entry->current.reset();entry->pending.reset(); }
-    const auto remaining=residentBytes();
+    auto remaining=residentBytes();std::size_t thumbnailBytes{};
+    for(const auto& allocation:impl_->allocations) if(auto texture=allocation.lock();texture && texture->thumbnail) thumbnailBytes+=texture->bytes;
+    for(auto* entry:idle) {
+        // Browser images keep a bounded LRU working set. Scene-role allocations
+        // still use the normal idle grace, and frame/reader leases remain pinned.
+        if(remaining<=targetBytes && (entry->thumbnail ? thumbnailBytes<=impl_->manager.config().thumbnailBytes : now-entry->used<impl_->manager.config().idleGrace)) continue;
+        const auto released=entry->current->bytes+(entry->pending && bgfx::isValid(entry->pending->texture->handle)?entry->pending->texture->bytes:0);
+        remaining-=released;if(entry->thumbnail)thumbnailBytes-=released;
+        entry->current.reset();entry->pending.reset();
+    }
+    remaining=residentBytes();
     for(auto& [key,entry]:impl_->entries) {
         (void)key;
         if(remaining<targetBytes*4/5) entry.pressureLevel=0;

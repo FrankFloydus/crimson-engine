@@ -1,4 +1,5 @@
 #include "ResourceRuntime.h"
+#include "ShaderRuntimePaths.h"
 #include "EditorSession.h"
 #include "assets/AssetLibrary.h"
 #include "crimson-renderer/ImGuiBgfx.h"
@@ -6,6 +7,7 @@
 #include "resources/FileWatcher.h"
 #include "resources/ShaderReloadSession.h"
 #include "resources/Paths.h"
+#include "ShaderSourceBaseline.h"
 #include <algorithm>
 #include <unordered_map>
 
@@ -15,13 +17,17 @@ bool inside(const std::filesystem::path& file,const std::filesystem::path& folde
     const auto value=resourcePathKey(file),root=resourcePathKey(folder);
     return value==root || (value.size()>root.size() && value.compare(0,root.size(),root)==0 && value[root.size()]=='/');
 }
-std::vector<std::filesystem::path> watchedRoots(const std::filesystem::path& root) {
-    return {root/"assets",std::filesystem::path(CC_SHADER_SOURCE_DIR),std::filesystem::path(CC_SHADER_INCLUDE_DIR)};
-}
 ShaderCompileConfig shaderConfig(const std::filesystem::path& root) {
-    const auto sources=std::filesystem::is_directory(CC_SHADER_SOURCE_DIR)?std::filesystem::path(CC_SHADER_SOURCE_DIR):std::filesystem::path(CC_STAGED_SHADER_DIR);
-    const auto includes=std::filesystem::is_directory(CC_SHADER_INCLUDE_DIR)?std::filesystem::path(CC_SHADER_INCLUDE_DIR):std::filesystem::path(CC_STAGED_SHADER_INCLUDE_DIR);
-    return {std::filesystem::path(CC_SHADERC_PATH),sources,includes,root/"assets"/"cache"/"shaders"};
+    const ShaderRuntimePaths live{CC_SHADER_SOURCE_DIR,CC_SHADER_INCLUDE_DIR},staged{CC_STAGED_SHADER_DIR,CC_STAGED_SHADER_INCLUDE_DIR};
+#ifdef NDEBUG
+    constexpr bool development=false;
+#else
+    constexpr bool development=true;
+#endif
+    std::error_code error;
+    const bool liveComplete=std::filesystem::is_directory(live.sources,error)&&std::filesystem::is_directory(live.includes,error);
+    const auto selected=selectShaderRuntimePaths(development,live,staged,liveComplete);
+    return {std::filesystem::path(CC_SHADERC_PATH),selected.sources,selected.includes,root/"assets"/"cache"/"shaders"};
 }
 std::uint64_t fingerprint(const std::filesystem::path& file) {
     std::error_code error;if(!std::filesystem::is_regular_file(file,error))return 0;
@@ -33,6 +39,7 @@ struct ResourceRuntime::Impl {
     ResourceManager& resources;
     AssetLibrary& assets;
     Renderer& renderer;
+    ShaderCompileConfig shaderCompile;
     FileWatcher watcher;
     ShaderReloadSession shaders;
     MaterialGraphPrograms materialPrograms;
@@ -42,7 +49,8 @@ struct ResourceRuntime::Impl {
     bool stopped{};
     Impl(const std::filesystem::path& project,ResourceManager& manager,AssetLibrary& library,Renderer& graphics,ImGuiBgfx& tools)
         :root(std::filesystem::absolute(project).lexically_normal()),resources(manager),assets(library),renderer(graphics),
-        watcher(watchedRoots(root)),shaders(manager,graphics,tools,shaderConfig(root)),materialPrograms(manager,shaderConfig(root)) {
+        shaderCompile(shaderConfig(root)),watcher(shaderRuntimeWatchedRoots(root,{shaderCompile.sourceDirectory,shaderCompile.includeDirectory})),
+        shaders(manager,graphics,tools,shaderCompile,EmbeddedShaderSourceBaseline),materialPrograms(manager,shaderCompile) {
         assets.setMaterialGraphPrograms(&materialPrograms);
         for(const auto& entry:assets.catalog())catalog.emplace(entry.id,entry.kind);
     }

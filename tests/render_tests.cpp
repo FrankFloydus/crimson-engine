@@ -198,6 +198,104 @@ void pointLightRadiusContract() {
     }
 }
 
+void pointLightNearFalloffContract() {
+    using crimson::point_lighting::pointLightAttenuation;
+    constexpr float inverseRangeSquared=1.f/64.f,nearRadius=1.5f;
+    const auto softened=[&](float distance) {
+        return pointLightAttenuation(distance*distance,inverseRangeSquared,nearRadius*nearRadius);
+    };
+    // Keep ordinary sources bit-identical, including the finite source cap,
+    // while bounding the rig's close-wall energy by its authored soft core.
+    for(const float distance:{0.f,.05f,.1f,.25f,1.f,2.f,7.9f,8.f,20.f}) {
+        const float squared=distance*distance;
+        require(pointLightAttenuation(squared,inverseRangeSquared)==
+            pointLightAttenuation(squared,inverseRangeSquared,0),
+            "Zero near falloff changed an ordinary point light's illumination.");
+        require(softened(distance)<=1.f/(nearRadius*nearRadius),
+            "Softened point light exceeded its finite near-source energy bound.");
+    }
+    near(softened(0),1.f/(nearRadius*nearRadius));
+    require(softened(.25f)<pointLightAttenuation(.25f*.25f,inverseRangeSquared)*.03f,
+        "Player fill retained the concentrated quarter-metre wall hotspot.");
+    require(softened(2)>pointLightAttenuation(4,inverseRangeSquared)*.6f,
+        "Near-source softening excessively suppressed the surrounding world fill.");
+    float previous=softened(0);
+    for(unsigned step=1;step<=800;++step) {
+        const float value=softened(static_cast<float>(step)*.01f);
+        require(std::isfinite(value)&&value>=0&&value<=previous,
+            "Softened light falloff is not finite, positive and monotonic.");
+        previous=value;
+    }
+    near(softened(8),0);near(softened(9),0);
+    require(softened(7.99f)<softened(7.98f)*.3f,
+        "Near-source softening changed the smooth outer range cutoff.");
+    const float leftSlope=(softened(nearRadius)-softened(nearRadius-.001f))/.001f;
+    const float rightSlope=(softened(nearRadius+.001f)-softened(nearRadius))/.001f;
+    require(std::abs(leftSlope-rightSlope)<.001f,
+        "Near falloff introduced a visible hard ring at the soft-core radius.");
+}
+
+void pointLightProfileContract() {
+    using namespace crimson::point_lighting;
+    constexpr float inverse=1.f/64.f,nearSquared=2.25f;
+    for(float distance:{0.f,.05f,.25f,1.f,2.f,4.f,7.99f,8.f,20.f}) {
+        const float squared=distance*distance;
+        const float relative=squared*inverse,window=1-relative*relative,fade=std::max(window,0.f);
+        const float original=fade*fade/std::max(squared+nearSquared,.01f);
+        require(pointLightAttenuation(squared,inverse,nearSquared,4,1)==original&&
+            pointLightAttenuation(squared,inverse,nearSquared)==original,
+            "Default exponent/edge response changed original quartic point lighting.");
+        near(pointLightAttenuation(squared,inverse,nearSquared,1,1),
+            std::pow(std::max(1-double(distance)/8,0.),2)/std::max(double(squared)+nearSquared,.01),1e-6);
+    }
+    for(float exponent:{.25f,1.f,4.f,8.f})for(float softness:{.05f,.25f,1.f}) {
+        float previous=pointLightAttenuation(0,inverse,nearSquared,exponent,softness);
+        for(unsigned step=1;step<=1000;++step) {
+            const float distance=step*.01f;
+            const float value=pointLightAttenuation(distance*distance,inverse,nearSquared,exponent,softness);
+            require(std::isfinite(value)&&value>=0&&value<=previous+1e-7f,
+                "Tuned finite point profile is not finite, positive and monotonic.");
+            if(distance>=8)require(value==0,"Tuned point illumination escaped its authored radius.");
+            previous=value;
+        }
+        require(pointLightAttenuation(7.999f*7.999f,inverse,nearSquared,exponent,softness)<
+            pointLightAttenuation(7.998f*7.998f,inverse,nearSquared,exponent,softness)*.3f,
+            "Tuned point profile lost its zero-slope outer boundary.");
+    }
+    require(pointLightAttenuation(4,inverse,nearSquared,1,1)<pointLightAttenuation(4,inverse,nearSquared,4,1),
+        "Lower falloff exponent did not broaden the progressive range fade.");
+    near(pointLightAttenuation(4,inverse,nearSquared,1,.25f),1.f/(4+nearSquared));
+    for(float decay:{-3.f,0.f,1.f,2.f,3.f,10.f})for(float distance:{.05f,.5f,1.f,2.f,4.f,7.9f,8.f,10.f}) {
+        const auto squared=distance*distance;
+        const auto value=pointLightAttenuation(squared,inverse,0,4,1,decay);
+        const double window=std::pow(std::max(1-std::pow(double(distance)/8,4),0.),2);
+        const double expected=window*std::pow(std::max(double(squared),.01),-.5*double(decay));
+        require(std::isfinite(value)&&value>=0,"Distance attenuation produced nonfinite or negative light.");
+        require(std::abs(double(value)-expected)<=std::max(1e-6,std::abs(expected)*2e-5),
+            "Distance attenuation disagrees with the independent Godot-style power reference.");
+        if(decay==2)require(value==pointLightAttenuation(squared,inverse,0,4,1),
+            "Default attenuation changed the prior point-light arithmetic.");
+    }
+    for(float decay:{-10.f,0.f,10.f}) {
+        require(std::isfinite(pointLightAttenuation(1e10f,1.f/1e10f,1e10f,4,1,decay)),
+            "Extreme valid distance attenuation overflowed HDR at the range boundary.");
+        require(std::isfinite(pointLightAttenuation(9e9f,1.f/1e10f,1e10f,4,1,decay)),
+            "Extreme valid distance attenuation overflowed HDR inside its range.");
+    }
+    for(float distance:{.1f,1.f,2.f,100000.f}) {
+        require(pointLightSourceSinSquared(distance*distance,0)==0,
+            "Zero Source Radius changed punctual specular response.");
+        near(pointLightSourceSinSquared(distance*distance,1),std::min(1./(double(distance)*distance),1.),1e-6);
+    }
+    constexpr float alphaSquared=.0016f;
+    require(pointLightSpecularAlphaSquared(alphaSquared,.7f,0)==alphaSquared,
+        "Zero source angular size changed the original GGX lobe.");
+    const auto broad=pointLightSpecularAlphaSquared(alphaSquared,1,.25f);
+    near(broad,alphaSquared+.25/4,1e-6);
+    require(broad>alphaSquared&&pointLightSpecularAlphaSquared(alphaSquared,0,1)==1,
+        "Source Radius failed to broaden and bound GGX roughness.");
+}
+
 double glowDisplayCode(double hdr) {
     // The scene's Reinhard presentation followed by its one sRGB encoding.
     const double mapped=hdr/(1+hdr);
@@ -764,6 +862,8 @@ int main() {
     run("sphere uint16 index capacity and overflow rejection", sphereIndexCapacity);
     run("camera Y-up coordinate contract", cameraCoordinateContract);
     run("point-light radius bounds inverse-square influence with smooth finite falloff", pointLightRadiusContract);
+    run("player-world near falloff bounds wall hotspots without a hard ring or ordinary-light change", pointLightNearFalloffContract);
+    run("finite point profiles retain quartic defaults, bounded falloff and angular source broadening", pointLightProfileContract);
     run("Glow Gaussian retains energy and width with an HDR-invisible support edge", glowGaussianKernelContract);
     run("Glow isolated HDR impulse contours stay circular through bilinear upsampling", glowGaussianContours);
     run("grid depth survives eye-crossing clips and retains foreground occlusion", gridDepthSurvivesEyeCrossing);

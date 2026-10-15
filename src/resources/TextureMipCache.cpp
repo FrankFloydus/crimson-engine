@@ -76,7 +76,7 @@ TextureMipCache writeTextureMipCache(const std::filesystem::path& file,std::uint
         detail::append(bytes,info.width); detail::append(bytes,info.height); detail::append(bytes,info.offset); detail::append(bytes,info.bytes); detail::append(bytes,info.checksum);
     }
     for (const auto& mip:levels) detail::appendBytes(bytes,mip.rgba.data(),mip.rgba.size());
-    writeFileAtomically(file,bytes); return descriptor;
+    detail::writeCacheFileAtomically(file,bytes); return descriptor;
 }
 TextureMipCache readTextureMipCache(const std::filesystem::path& file,std::uint64_t key,TextureRole role) {
     std::ifstream input(file,std::ios::binary);

@@ -9,11 +9,10 @@ uniform vec4 u_roughness;
 uniform vec4 u_cameraPos;
 uniform vec4 u_direction[4];
 uniform vec4 u_directionColor[4];
-uniform vec4 u_pointPosition[16];
-uniform vec4 u_pointColor[16]; // Linear color, inverse squared influence radius.
 uniform vec4 u_lightCounts;
 uniform vec4 u_textureFlags;
 uniform vec4 u_environment; // Intensity, Y rotation in radians, highest specular mip.
+#include "environment_ambient.sh"
 SAMPLER2D(s_albedo, 0);
 SAMPLER2D(s_roughness, 1);
 SAMPLER2D(s_metallic, 2);
@@ -21,7 +20,11 @@ SAMPLER2D(s_normal, 3);
 SAMPLERCUBE(s_irradiance, 4);
 SAMPLERCUBE(s_prefiltered, 5);
 SAMPLER2D(s_brdfLut, 6);
+#include "clustered_lighting.sh"
 #include "point_shadow.sh"
+#include "directional_shadow.sh"
+#include "character_shadow.sh"
+#include "ambient_visibility.sh"
 
 // CONST is static const on HLSL: a plain global const becomes an unset uniform.
 CONST(float PI = 3.141592653589793);
@@ -64,24 +67,25 @@ vec3 environmentDirection(vec3 direction)
 
 vec3 evaluateEnvironment(vec3 N, vec3 V, vec3 base, float metallic, float roughness)
 {
-    if (u_environment.x <= 0.0) return vec3_splat(0.0);
+    if (u_environment.x <= 0.0 && dot(u_ambientLight.rgb, vec3_splat(1.0)) <= 0.0) return vec3_splat(0.0);
     float NoV = clamp(dot(N, V), 0.00001, 1.0);
     vec3 F0 = mix(vec3_splat(0.08 * clamp(u_roughness.z, 0.0, 1.0)), base, metallic);
     vec3 F = F0 + (vec3_splat(1.0) - F0) * pow(1.0 - NoV, 5.0);
     // Preprocessing stores irradiance / PI, so its normalization is applied once.
-    vec3 diffuse = textureCube(s_irradiance, environmentDirection(N)).rgb;
+    vec3 diffuse = environmentAmbientIrradiance(textureCube(s_irradiance, environmentDirection(N)).rgb);
     diffuse *= (vec3_splat(1.0) - F) * (1.0 - metallic) * base;
     vec3 reflection = reflect(-V, N);
     // The prefilter spans the usable roughness interval, including both endpoints.
     float specularLod = (roughness - 0.045) / (1.0 - 0.045) * u_environment.z;
     vec3 prefiltered = textureCubeLod(s_prefiltered, environmentDirection(reflection), specularLod).rgb;
-    vec2 lut = texture2D(s_brdfLut, vec2(NoV, roughness)).rg;
+    vec2 lut = forwardPlusBrdf(vec2(NoV, roughness));
     // LUT uses the direct BRDF's correlated Smith visibility and alpha=roughness^2.
     vec3 specular = prefiltered * (F0 * lut.x + vec3_splat(lut.y));
-    return (diffuse + specular) * u_environment.x;
+    return diffuse + specular * u_environment.x;
 }
 
-vec3 evaluateLight(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 base, float metallic, float roughness)
+vec3 evaluateLightResponse(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 base, float metallic, float roughness, float specularLevel,
+    float diffuseResponse, float specularResponse, float softSourceSinSquared)
 {
     float NoL = clamp(dot(N, L), 0.0, 1.0);
     float rawNoV = dot(N, V);
@@ -91,12 +95,12 @@ vec3 evaluateLight(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 base, float metal
     vec3 H = halfSum * inversesqrt(max(dot(halfSum, halfSum), 0.00000001));
     float NoH = clamp(dot(N, H), 0.0, 1.0);
     float VoH = clamp(dot(V, H), 0.0, 1.0);
-    vec3 F0 = mix(vec3_splat(0.08 * clamp(u_roughness.z, 0.0, 1.0)), base, metallic);
+    vec3 F0 = mix(vec3_splat(0.08 * clamp(specularLevel, 0.0, 1.0)), base, metallic);
     vec3 F = F0 + (vec3_splat(1.0) - F0) * pow(1.0 - VoH, 5.0);
 
     // Perceptual roughness -> GGX alpha. Smith's correlated visibility includes 1/(4 NoL NoV).
     float alpha = roughness * roughness;
-    float alphaSquared = alpha * alpha;
+    float alphaSquared = pointLightSpecularAlphaSquared(alpha * alpha, VoH, softSourceSinSquared);
     float denom = NoH * NoH * (alphaSquared - 1.0) + 1.0;
     float D = alphaSquared / max(PI * denom * denom, 0.000000000001);
     float smithL = NoV * sqrt(NoL * NoL * (1.0 - alphaSquared) + alphaSquared);
@@ -104,8 +108,21 @@ vec3 evaluateLight(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 base, float metal
     float visibility = 0.5 / max(smithL + smithV, 0.000001);
     vec3 specular = D * visibility * F;
     vec3 diffuse = (vec3_splat(1.0) - F) * (1.0 - metallic) * base / PI;
-    return (diffuse + specular) * radiance * NoL;
+    return (diffuse * diffuseResponse + specular * specularResponse) * radiance * NoL;
 }
+
+vec3 evaluateLightResponse(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 base, float metallic, float roughness, float specularLevel,
+    float diffuseResponse, float specularResponse)
+{
+    return evaluateLightResponse(N, V, L, radiance, base, metallic, roughness, specularLevel, diffuseResponse, specularResponse, 0.0);
+}
+
+vec3 evaluateLight(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 base, float metallic, float roughness)
+{
+    return evaluateLightResponse(N, V, L, radiance, base, metallic, roughness, u_roughness.z, 1.0, 1.0);
+}
+
+#include "character_lighting.sh"
 
 void main()
 {
@@ -120,24 +137,44 @@ void main()
     if (u_textureFlags.z > 0.5) metallic *= texture2D(s_metallic, v_texcoord0).r;
     roughness = clamp(roughness, 0.045, 1.0);
     metallic = clamp(metallic, 0.0, 1.0);
+    float darkness = ambientVisibility(v_worldPosition, safeNormalize(v_normal, vec3(0.0, 1.0, 0.0)), shadowPlaneNormal);
     vec3 color = vec3_splat(0.0);
     for (int i = 0; i < 4; ++i)
     {
         if (float(i) >= u_lightCounts.x) break;
+        if (!forwardPlusReceivesDirectional(i)) continue;
         color += evaluateLight(N, V, normalize(-u_direction[i].xyz),
             u_directionColor[i].rgb * u_direction[i].w, base, metallic, roughness);
     }
-    for (int i = 0; i < 16; ++i)
+    uint cluster = forwardPlusCluster(v_worldPosition);
+    for (uint word = 0u; word < forwardPlusWordCount(); ++word)
     {
-        if (float(i) >= u_lightCounts.y) break;
-        vec3 delta = u_pointPosition[i].xyz - v_worldPosition;
+      uint mask = forwardPlusMask(cluster, word);
+      while (mask != 0u)
+      {
+        int i = int(word * 32u) + forwardPlusFirstBit(mask);
+        mask &= mask - 1u;
+        if (!forwardPlusReceivesPoint(i)) continue;
+        vec4 pointPosition = forwardPlusPointPosition(i);
+        vec4 pointColor = forwardPlusPointColor(i);
+        vec3 delta = pointPosition.xyz - v_worldPosition;
         float distanceSquared = max(dot(delta, delta), 0.000001);
+        vec4 pointResponse = forwardPlusPointResponse(i);
+        float attenuation = pointLightAttenuation(distanceSquared, pointColor.w, pointResponse.x, pointResponse.z, pointResponse.w, forwardPlusPointAttenuation(i));
+        if (attenuation <= 0.0) continue;
         vec3 L = delta * inversesqrt(distanceSquared);
-        vec3 radiance = u_pointColor[i].rgb * (u_pointPosition[i].w * pointLightAttenuation(distanceSquared, u_pointColor[i].w));
-        radiance *= pointShadowVisibility(i, v_worldPosition, safeNormalize(v_normal, vec3(0.0, 1.0, 0.0)), shadowPlaneNormal);
-        color += evaluateLight(N, V, L, radiance, base, metallic, roughness);
+        vec3 radiance = pointColor.rgb * (pointPosition.w * attenuation);
+        vec3 shadowNormal = safeNormalize(v_normal, vec3(0.0, 1.0, 0.0));
+        radiance *= pointShadowVisibility(forwardPlusShadowIndex(i), pointPosition, pointColor, v_worldPosition, shadowNormal, shadowPlaneNormal, forwardPlusSourceRadius(i));
+        float softSourceSinSquared = pointLightSourceSinSquared(distanceSquared, forwardPlusSourceRadius(i));
+        color += evaluateLightResponse(N, V, L, radiance, base, metallic, roughness, u_roughness.z, 1.0, pointResponse.y, softSourceSinSquared);
+      }
     }
     color += evaluateEnvironment(N, V, base, metallic, roughness);
+    color += characterLighting(N, V, base, metallic, roughness, u_roughness.z);
+    float characterVisibility = characterShadowVisibility(v_worldPosition, safeNormalize(v_normal, vec3(0.0, 1.0, 0.0)), shadowPlaneNormal, 1.0);
+    color *= characterVisibility;
+    color *= darkness;
     // Keep extreme near-light highlights finite in half-float HDR storage.
     color = applyDistanceFog(color, length(u_cameraPos.xyz - v_worldPosition), v_worldPosition.y, 0.0);
     gl_FragColor = vec4(clamp(color, vec3_splat(0.0), vec3_splat(60000.0)), 1.0);

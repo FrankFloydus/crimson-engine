@@ -1,4 +1,6 @@
 #include "Renderer.h"
+#include "RenderFrame.h"
+#include "ThumbnailCache.h"
 #include "ModelTransform.h"
 #include "Mesh.h"
 #include "Environment.h"
@@ -7,8 +9,14 @@
 #include "Fog.h"
 #include "Picking.h"
 #include "ModelGpuCache.h"
+#include "ModelDeformationGpu.h"
+#include "assets/ModelAnimation.h"
 #include "ShaderPreflight.h"
 #include "PointShadowRenderer.h"
+#include "ShadowLightSelection.h"
+#include "ShadowReceiverBounds.h"
+#include "ClusteredLightingGpu.h"
+#include "AmbientVisibilityGpu.h"
 
 #include <SDL3/SDL.h>
 #include <bgfx/platform.h>
@@ -18,6 +26,8 @@
 #include "fs_pbr.h"
 #include "vs_model.h"
 #include "fs_model.h"
+#include "cs_ambient_visibility.h"
+#include "cs_ambient_publish.h"
 #include "vs_pick.h"
 #include "fs_pick.h"
 #include "vs_present.h"
@@ -31,8 +41,12 @@
 #include "fs_particle.h"
 #include "fs_sky.h"
 #include "cs_procedural_filter.h"
+#include "cs_cluster_lights.h"
+#include "cs_model_deform.h"
 #include "vs_point_shadow.h"
 #include "fs_point_shadow.h"
+#include "vs_directional_shadow.h"
+#include "fs_directional_shadow.h"
 
 #include <algorithm>
 #include <array>
@@ -50,15 +64,12 @@
 namespace crimson {
 namespace {
 struct TransparentMeshDraw { double depth{}; std::function<void()> submit; };
-struct RenderViews { bgfx::ViewId scene,present,grid,encode,glowExtract,glowHorizontal,glowVertical; };
-inline constexpr RenderViews MainViews{SceneView,PresentView,GridView,EncodeView,SceneView+1,SceneView+2,SceneView+3};
-inline constexpr RenderViews ParticlePreviewViews{ParticlePreviewView,ParticlePreviewView+4,ParticlePreviewView+5,ParticlePreviewView+6,ParticlePreviewView+1,ParticlePreviewView+2,ParticlePreviewView+3};
-// Thumbnails intentionally have no Glow passes: their cache is independent of view post-processing.
-inline constexpr RenderViews ThumbnailViews{ThumbnailSceneView,ThumbnailSceneView+1,ThumbnailSceneView+2,ThumbnailSceneView+3,UINT16_MAX,UINT16_MAX,UINT16_MAX};
-inline constexpr RenderViews MaterialPreviewViews{MaterialPreviewView,MaterialPreviewView+4,MaterialPreviewView+5,MaterialPreviewView+6,MaterialPreviewView+1,MaterialPreviewView+2,MaterialPreviewView+3};
-// The grid slot is deliberately unused for Game. Its scene is display-ready
-// after the same HDR/tone-map/encode path as the editor image.
-inline constexpr RenderViews GameViews{GameSceneView,GamePresentView,UINT16_MAX,GameEncodeView,GameSceneView+1,GameSceneView+2,GameSceneView+3};
+using RenderViews = RenderViewPassSlots;
+const auto MainViews=renderViewPassSlots(RenderViewPurpose::Scene);
+const auto ParticlePreviewViews=renderViewPassSlots(RenderViewPurpose::ParticlePreview);
+const auto ThumbnailViews=renderViewPassSlots(RenderViewPurpose::Thumbnail);
+const auto MaterialPreviewViews=renderViewPassSlots(RenderViewPurpose::MaterialPreview);
+const auto GameViews=renderViewPassSlots(RenderViewPurpose::Game);
 std::uint64_t shaderContentHash(std::span<const std::uint8_t> vertex,std::span<const std::uint8_t> fragment) {
     std::uint64_t hash=14695981039346656037ull;
     for (const auto bytes:{vertex,fragment}) for (const auto byte:bytes) {hash^=byte;hash*=1099511628211ull;} return hash;
@@ -78,6 +89,8 @@ template<class Handle> void destroyHandle(Handle& handle) noexcept {
 struct GpuMesh {
     bgfx::VertexBufferHandle vertices{BGFX_INVALID_HANDLE};
     bgfx::IndexBufferHandle indices{BGFX_INVALID_HANDLE};
+    std::shared_ptr<ModelDeformationSource> deformation;
+    std::size_t bytes{};
     void upload(const MeshData& data) {
         if (data.vertices.empty() || data.indices.empty()) throw std::invalid_argument("Cannot upload an empty mesh.");
         bgfx::VertexLayout layout;
@@ -113,7 +126,11 @@ struct GpuMesh {
             .add(bgfx::Attrib::TexCoord1, 2, bgfx::AttribType::Float)
             .add(bgfx::Attrib::Tangent, 4, bgfx::AttribType::Float)
             .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Float).end();
-        vertices = bgfx::createVertexBuffer(bgfx::copy(data.vertices.data(), static_cast<std::uint32_t>(data.vertices.size() * sizeof(ModelVertex))), layout);
+        deformation=createModelDeformationSource(data);
+        while(deformation && !deformation->ready())uploadModelDeformationSource(*deformation,data,SIZE_MAX);
+        const auto flags=deformation ? BGFX_BUFFER_COMPUTE_READ|BGFX_BUFFER_COMPUTE_FORMAT_32X1|BGFX_BUFFER_COMPUTE_TYPE_FLOAT:BGFX_BUFFER_NONE;
+        vertices = bgfx::createVertexBuffer(bgfx::copy(data.vertices.data(), static_cast<std::uint32_t>(data.vertices.size() * sizeof(ModelVertex))), layout,flags);
+        bytes=data.vertices.size()*sizeof(ModelVertex)+data.indices.size()*(wide?4u:2u)+(deformation?deformation->bytes:0);
         if (wide) {
             indices = bgfx::createIndexBuffer(bgfx::copy(data.indices.data(), static_cast<std::uint32_t>(data.indices.size() * sizeof(std::uint32_t))), BGFX_BUFFER_INDEX32);
         } else {
@@ -125,7 +142,7 @@ struct GpuMesh {
         }
     }
     void bind() const { bgfx::setVertexBuffer(0, vertices); bgfx::setIndexBuffer(indices); }
-    void reset() noexcept { destroyHandle(vertices); destroyHandle(indices); }
+    void reset() noexcept { destroyHandle(vertices); destroyHandle(indices);deformation.reset();bytes=0; }
 };
 struct GpuModel {
     std::string id;
@@ -177,12 +194,19 @@ struct GlowTargets {
 
 // Framebuffers borrow textures: HDR and the grid composite share one depth target.
 struct ViewportTargets {
+    std::unique_ptr<ClusteredLightingGpu> clustered;
+    std::unique_ptr<AmbientVisibilityGpu> ambient;
+    bgfx::TextureHandle readableDepth{BGFX_INVALID_HANDLE},receiverScope{BGFX_INVALID_HANDLE};
+    bgfx::FrameBufferHandle depthPrepass{BGFX_INVALID_HANDLE};
+    std::size_t readableDepthBytes{};
     bgfx::TextureHandle hdr{BGFX_INVALID_HANDLE}, composite{BGFX_INVALID_HANDLE};
     bgfx::TextureHandle display{BGFX_INVALID_HANDLE}, depth{BGFX_INVALID_HANDLE};
     bgfx::FrameBufferHandle hdrBuffer{BGFX_INVALID_HANDLE}, compositeBuffer{BGFX_INVALID_HANDLE}, displayBuffer{BGFX_INVALID_HANDLE};
     std::unique_ptr<GlowTargets> glow;
     std::string glowFailure; // Retry only after target recreation, avoiding allocation churn every frame.
     ~ViewportTargets() {
+        ambient.reset();destroyHandle(depthPrepass);destroyHandle(readableDepth);destroyHandle(receiverScope);
+        clustered.reset();
         glow.reset();
         destroyHandle(hdrBuffer); destroyHandle(compositeBuffer); destroyHandle(displayBuffer);
         destroyHandle(hdr); destroyHandle(composite); destroyHandle(display); destroyHandle(depth);
@@ -212,6 +236,30 @@ struct ViewportTargets {
         bgfx::setName(display, "Encoded viewport image");
         bgfx::setName(depth, "Shared scene and grid depth");
     }
+    void ensureReadableDepth(std::uint16_t width,std::uint16_t height) {
+        if(bgfx::isValid(depthPrepass))return;
+        constexpr auto flags=BGFX_TEXTURE_RT|BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP|
+            BGFX_SAMPLER_MIN_POINT|BGFX_SAMPLER_MAG_POINT|BGFX_SAMPLER_MIP_POINT;
+        if(!bgfx::isTextureValid(0,false,1,bgfx::TextureFormat::D24S8,flags) ||
+           !bgfx::isTextureValid(0,false,1,bgfx::TextureFormat::RGBA8,flags))
+            throw std::runtime_error("Ambient visibility requires sampleable D24S8 depth and an RGBA8 receiver target.");
+        readableDepth=bgfx::createTexture2D(width,height,false,1,bgfx::TextureFormat::D24S8,flags);
+        receiverScope=bgfx::createTexture2D(width,height,false,1,bgfx::TextureFormat::RGBA8,flags);
+        if(!bgfx::isValid(readableDepth)||!bgfx::isValid(receiverScope)) {
+            destroyHandle(readableDepth);destroyHandle(receiverScope);
+            readableDepth=receiverScope=BGFX_INVALID_HANDLE;
+            throw std::runtime_error("Readable scene-depth allocation failed.");
+        }
+        const bgfx::TextureHandle attachments[]{receiverScope,readableDepth};
+        depthPrepass=bgfx::createFrameBuffer(2,attachments,false);
+        if(!bgfx::isValid(depthPrepass)) {
+            destroyHandle(readableDepth);destroyHandle(receiverScope);
+            readableDepth=receiverScope=BGFX_INVALID_HANDLE;
+            throw std::runtime_error("Readable scene-depth framebuffer allocation failed.");
+        }
+        readableDepthBytes=std::size_t(width)*height*8;
+        bgfx::setName(readableDepth,"Opaque/masked readable scene depth");bgfx::setName(receiverScope,"Ambient receiver scopes and geometric normal");
+    }
 };
 
 // Dedicated non-sRGB, non-MSAA picking color/depth, and a single-pixel staging
@@ -237,6 +285,7 @@ struct PickTargets {
 struct PendingPick {
     std::vector<std::shared_ptr<const PreparedGraphMaterial>> graphMaterials;
     PickRequest request;
+    MaterialEvaluationContext materialContext;
     std::uint64_t epoch{};
     std::uint32_t readyFrame{};
     picking::Pixel pixel{};
@@ -244,6 +293,7 @@ struct PendingPick {
     picking::EntityIds entities;
     std::shared_ptr<PickTargets> targets;
     std::vector<std::shared_ptr<const ResidentModelLod>> resources;
+    std::vector<std::shared_ptr<const DeformedModelVertices>> deformations;
     std::shared_ptr<const void> pinned;
 };
 struct PendingThumbnail {
@@ -254,10 +304,6 @@ struct PendingThumbnail {
     std::shared_ptr<const void> pinned;
     std::vector<std::shared_ptr<const ResidentModelLod>> resources;
     ~PendingThumbnail() { destroyHandle(readback); }
-};
-struct CachedThumbnail {
-    std::uint64_t signature{},lastUsed{}; std::size_t bytes{}; bgfx::TextureHandle texture{BGFX_INVALID_HANDLE};
-    ~CachedThumbnail() { destroyHandle(texture); }
 };
 } // namespace
 
@@ -277,7 +323,11 @@ struct Renderer::Impl {
     std::string particleStatus;
     std::vector<particle_rendering::TransparentSortKey> particleScratch;
     std::vector<std::shared_ptr<const void>> submittedPins,previousSubmittedPins;
-    std::unordered_map<std::string,std::unique_ptr<GpuModel>> models;
+    std::unordered_map<std::string,std::shared_ptr<GpuModel>> models;
+    std::unique_ptr<ModelDeformationGpu> deformation;
+    bgfx::ProgramHandle deformationProgram{BGFX_INVALID_HANDLE};
+    struct BindPose {std::weak_ptr<const ModelAsset> asset;std::shared_ptr<const ModelPose> pose;};
+    std::unordered_map<const ModelAsset*,BindPose> bindPoses;
     std::unique_ptr<ModelGpuCache> streamModels{std::make_unique<ModelGpuCache>()};
     std::uint64_t externalSignature{},programRevision{1},environmentRevision{1};
     ViewportAppearance appearance;
@@ -285,6 +335,7 @@ struct Renderer::Impl {
     std::string modelStatus;
     std::shared_ptr<PickTargets> pickTargets;
     std::optional<PickRequest> requestedPick;
+    MaterialEvaluationContext requestedPickContext{},displayedMaterialContext{};
     std::unique_ptr<PendingPick> pendingPick;
     std::uint64_t pickEpoch{}, latestPickSerial{};
     std::string pickingStatus;
@@ -296,12 +347,19 @@ struct Renderer::Impl {
     std::uint64_t proceduralFrame{UINT64_MAX};
     bool proceduralActive{};
     std::unique_ptr<PendingThumbnail> pendingThumbnail;
-    std::unordered_map<std::string,std::unique_ptr<CachedThumbnail>> thumbnails;
-    mutable std::uint64_t thumbnailClock{};
+    ThumbnailCache thumbnails;
     std::string shaderStatus,thumbnailStatus;
     std::string shadowStatus;
     std::unique_ptr<PointShadowRenderer> shadows,thumbnailShadows;
-    std::array<std::uint64_t,12> programHashes{};
+    std::array<std::uint64_t,17> programHashes{};
+    bgfx::ProgramHandle clusterComputeProgram{BGFX_INVALID_HANDLE};
+    bgfx::ProgramHandle ambientEvaluateProgram{BGFX_INVALID_HANDLE},ambientPublishProgram{BGFX_INVALID_HANDLE};
+    bgfx::UniformHandle surfaceLighting{BGFX_INVALID_HANDLE},surfaceCategory{BGFX_INVALID_HANDLE},directionLightingRoles{BGFX_INVALID_HANDLE};
+    bgfx::UniformHandle characterDirection{BGFX_INVALID_HANDLE},characterColor{BGFX_INVALID_HANDLE},characterResponse{BGFX_INVALID_HANDLE};
+    bgfx::UniformHandle lightingResponse{BGFX_INVALID_HANDLE};
+    bgfx::UniformHandle playerReveal{BGFX_INVALID_HANDLE};
+    ClusteredLightingStats clusterStats;
+    std::string clusterStatus;
     std::string glowProgramFailure;
     mutable std::string glowStatusCache;
     struct LodSelection { std::uint32_t level{}; std::uint64_t frame{}; };
@@ -315,6 +373,8 @@ struct Renderer::Impl {
     bgfx::ProgramHandle particleProgram{BGFX_INVALID_HANDLE};
     bgfx::ProgramHandle skyProgram{BGFX_INVALID_HANDLE};
     bgfx::ProgramHandle shadowProgram{BGFX_INVALID_HANDLE};
+    bgfx::ProgramHandle directionalShadowProgram{BGFX_INVALID_HANDLE};
+    bgfx::UniformHandle directionalCasterViewProjection{BGFX_INVALID_HANDLE},directionalCasterTile{BGFX_INVALID_HANDLE};
     bgfx::ProgramHandle glowExtractProgram{BGFX_INVALID_HANDLE},glowBlurProgram{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle glowSource{BGFX_INVALID_HANDLE},glowColor{BGFX_INVALID_HANDLE},glowParams{BGFX_INVALID_HANDLE},glowTexel{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle skyRight{BGFX_INVALID_HANDLE},skyUp{BGFX_INVALID_HANDLE},skyForward{BGFX_INVALID_HANDLE},skySampler{BGFX_INVALID_HANDLE};
@@ -327,18 +387,22 @@ struct Renderer::Impl {
     bgfx::UniformHandle metallicRoughnessSampler{BGFX_INVALID_HANDLE}, occlusionSampler{BGFX_INVALID_HANDLE}, emissiveSampler{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle baseColorMetallic{BGFX_INVALID_HANDLE}, roughness{BGFX_INVALID_HANDLE}, textureFlags{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle cameraPos{BGFX_INVALID_HANDLE}, direction{BGFX_INVALID_HANDLE}, directionColor{BGFX_INVALID_HANDLE};
-    bgfx::UniformHandle pointPosition{BGFX_INVALID_HANDLE}, pointColor{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle presentParams{BGFX_INVALID_HANDLE}, hdrSampler{BGFX_INVALID_HANDLE}, compositeSampler{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle debandingParams{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle background{BGFX_INVALID_HANDLE},gridWidths{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle fogColorDensity{BGFX_INVALID_HANDLE},fogDepth{BGFX_INVALID_HANDLE},fogHeight{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle albedoSampler{BGFX_INVALID_HANDLE}, roughnessSampler{BGFX_INVALID_HANDLE}, metallicSampler{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle normalSampler{BGFX_INVALID_HANDLE}, irradianceSampler{BGFX_INVALID_HANDLE}, prefilteredSampler{BGFX_INVALID_HANDLE}, brdfSampler{BGFX_INVALID_HANDLE}, environmentParams{BGFX_INVALID_HANDLE};
+    bgfx::UniformHandle ambientLight{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle gridMinor{BGFX_INVALID_HANDLE}, gridMajor{BGFX_INVALID_HANDLE}, gridAxisU{BGFX_INVALID_HANDLE}, gridAxisV{BGFX_INVALID_HANDLE}, gridParams{BGFX_INVALID_HANDLE};
-    void renderParticles(std::span<const RenderParticle>,std::span<const RenderParticleMaterial>,const Camera&,const fog::Parameters&,bgfx::ViewId,ParticleRenderStats*,std::span<const TransparentMeshDraw>,bool,const std::function<void()>&);
-    void renderShadows(const RenderScene&,PointShadowRenderer&,bgfx::ViewId);
-    bool renderGlow(const SceneSettings&,ViewportTargets&,std::uint16_t,std::uint16_t,RenderViews);
-    void bindFog(const fog::Parameters& values) {
+    void renderParticles(std::span<const RenderParticle>,std::span<const RenderParticleMaterial>,const Camera&,const fog::Parameters&,bgfx::ViewId,ParticleRenderStats*,std::span<const TransparentMeshDraw>,bool,const std::function<void()>&,MaterialEvaluationContext,bgfx::ViewId depthView=InvalidRenderView);
+    std::shared_ptr<const ModelPose> poseFor(const RenderModelInstance&);
+    void renderShadows(const RenderScene&,PointShadowRenderer&,bgfx::ViewId,bgfx::ViewId,bgfx::ViewId,unsigned,unsigned,float);
+    bool prepareGlow(const SceneSettings&,ViewportTargets&,std::uint16_t,std::uint16_t,RenderViewPurpose);
+    void executePost(const RenderPassPlan&,const SceneSettings&,ViewportTargets&,std::uint16_t,std::uint16_t,
+        const EnvironmentPresentation&,const Mat4&,const Mat4&);
+    void bindFog(const fog::Parameters& viewValues,bool receiveFog=true) {
+        const auto values=fog::forMaterial(viewValues,receiveFog);
         bgfx::setUniform(fogColorDensity,values.colorDensity.data());
         bgfx::setUniform(fogDepth,values.depth.data());
         bgfx::setUniform(fogHeight,values.height.data());
@@ -350,20 +414,27 @@ struct Renderer::Impl {
         const Vec4 rotationValue{rotation[0]*radians,rotation[1]*radians,rotation[2]*radians,0};
         bgfx::setUniform(materialUvScale,scaleValue.data());bgfx::setUniform(materialUvOffset,offsetValue.data());bgfx::setUniform(materialUvRotation,rotationValue.data());
     }
-    void renderTo(const RenderScene&,ViewportTargets&,EnvironmentLighting&,std::uint16_t,std::uint16_t,RenderViews,bool,bool,std::vector<std::shared_ptr<const ResidentModelLod>>* = nullptr,ParticleRenderStats* = nullptr,bool drawEnvironment=false);
+    std::uint16_t renderTo(const RenderScene&,ViewportTargets&,EnvironmentLighting&,std::uint16_t,std::uint16_t,RenderViewIdentity,bool,bool,std::vector<std::shared_ptr<const ResidentModelLod>>* = nullptr,ParticleRenderStats* = nullptr,bool drawEnvironment=false);
     ~Impl() {
         if (!initialized) return;
         shadows.reset();thumbnailShadows.reset();destroyHandle(shadowProgram);
+        deformation.reset();bindPoses.clear();destroyHandle(deformationProgram);
+        destroyHandle(directionalShadowProgram);destroyHandle(directionalCasterViewProjection);destroyHandle(directionalCasterTile);
         sphere.reset(); fullscreen.reset(); grid.reset(); particleQuad.reset(); models.clear(); streamModels.reset(); targets.reset(); particlePreviewTargets.reset(); gameTargets.reset(); pickTargets.reset(); thumbnails.clear();
         // Keep readback destination memory alive through the final bgfx frame,
         // but release every GPU handle before bgfx shutdown.
         if (pendingPick) pendingPick->targets.reset();
-        if (pendingPick) { pendingPick->resources.clear(); pendingPick->graphMaterials.clear(); pendingPick->pinned.reset(); }
+        if (pendingPick) { pendingPick->resources.clear(); pendingPick->deformations.clear(); pendingPick->graphMaterials.clear(); pendingPick->pinned.reset(); }
         if (pendingThumbnail) { pendingThumbnail->targets.reset(); destroyHandle(pendingThumbnail->readback); pendingThumbnail->pinned.reset(); pendingThumbnail->resources.clear(); }
         environment.reset();
         thumbnailEnvironment.reset();
         proceduralEnvironment.reset();thumbnailProceduralEnvironment.reset();
         materialPreviewTargets.reset();materialPreviewEnvironment.reset();
+        destroyHandle(clusterComputeProgram);
+        destroyHandle(ambientEvaluateProgram);destroyHandle(ambientPublishProgram);destroyHandle(surfaceLighting);destroyHandle(surfaceCategory);destroyHandle(directionLightingRoles);
+        destroyHandle(characterDirection);destroyHandle(characterColor);destroyHandle(characterResponse);
+        destroyHandle(lightingResponse);
+        destroyHandle(playerReveal);
         destroyHandle(skyProgram);destroyHandle(skyRight);destroyHandle(skyUp);destroyHandle(skyForward);destroyHandle(skySampler);
         destroyHandle(white);
         destroyHandle(pbr); destroyHandle(present); destroyHandle(gridProgram); destroyHandle(encode);
@@ -379,13 +450,13 @@ struct Renderer::Impl {
         destroyHandle(metallicRoughnessSampler); destroyHandle(occlusionSampler); destroyHandle(emissiveSampler);
         destroyHandle(baseColorMetallic); destroyHandle(roughness); destroyHandle(textureFlags);
         destroyHandle(cameraPos); destroyHandle(direction); destroyHandle(directionColor);
-        destroyHandle(pointPosition); destroyHandle(pointColor);
         destroyHandle(presentParams); destroyHandle(hdrSampler); destroyHandle(compositeSampler);
         destroyHandle(debandingParams);
         destroyHandle(background); destroyHandle(gridWidths);
         destroyHandle(fogColorDensity);destroyHandle(fogDepth);destroyHandle(fogHeight);
         destroyHandle(albedoSampler); destroyHandle(roughnessSampler); destroyHandle(metallicSampler);
         destroyHandle(normalSampler); destroyHandle(irradianceSampler); destroyHandle(prefilteredSampler); destroyHandle(brdfSampler); destroyHandle(environmentParams);
+        destroyHandle(ambientLight);
         destroyHandle(gridMinor); destroyHandle(gridMajor); destroyHandle(gridAxisU); destroyHandle(gridAxisV); destroyHandle(gridParams);
         bgfx::shutdown();
     }
@@ -414,7 +485,7 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
     if (!bgfx::init(init)) throw std::runtime_error("bgfx could not initialize Direct3D 11.");
     impl_->initialized = true;
     if (bgfx::getRendererType() != bgfx::RendererType::Direct3D11) throw std::runtime_error("Direct3D 11 was requested but another backend was selected.");
-    if(bgfx::getCaps()->limits.maxViews<FirstPlatformView)throw std::runtime_error("This renderer requires at least 229 view slots for sky generation, point shadows, Glow and editor previews.");
+    if(bgfx::getCaps()->limits.maxViews<FirstPlatformView)throw std::runtime_error("This renderer requires at least 248 view slots for lighting, shadows, Glow and editor previews.");
     if (!bgfx::isTextureValid(0,false,1,bgfx::TextureFormat::RGBA32F,BGFX_TEXTURE_RT) ||
         !bgfx::isTextureValid(0,false,1,bgfx::TextureFormat::RGBA16F,BGFX_TEXTURE_RT) ||
         !bgfx::isTextureValid(0,false,1,bgfx::TextureFormat::RGBA8,BGFX_TEXTURE_RT) ||
@@ -446,6 +517,14 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
     impl_->modelMaps = uniform("u_modelMaps");
     impl_->modelEmissiveMap = uniform("u_modelEmissiveMap");
     impl_->modelNormalMatrix = uniform("u_modelNormalMatrix",bgfx::UniformType::Mat4);
+    impl_->surfaceLighting=uniform("u_surfaceLighting");
+    impl_->surfaceCategory=uniform("u_surfaceCategory");
+    impl_->directionLightingRoles=uniform("u_directionLightingRoles",bgfx::UniformType::Vec4,4);
+    impl_->characterDirection=bgfx::createUniform("u_characterDirection",bgfx::UniformType::Vec4,2);
+    impl_->characterColor=bgfx::createUniform("u_characterColor",bgfx::UniformType::Vec4,2);
+    impl_->characterResponse=bgfx::createUniform("u_characterResponse",bgfx::UniformType::Vec4,2);
+    impl_->lightingResponse=uniform("u_lightingResponse");
+    impl_->playerReveal=uniform("u_playerReveal");
     impl_->materialUvScale=uniform("u_materialUvScale");impl_->materialUvOffset=uniform("u_materialUvOffset");impl_->materialUvRotation=uniform("u_materialUvRotation");
     impl_->metallicRoughnessSampler = uniform("s_metallicRoughness",bgfx::UniformType::Sampler);
     impl_->occlusionSampler = uniform("s_occlusion",bgfx::UniformType::Sampler);
@@ -469,21 +548,38 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
     impl_->particleSampler=uniform("s_particleColor",bgfx::UniformType::Sampler);
     impl_->skyProgram=program(cc_vs_present,cc_fs_sky,"Material preview HDRI background");
     impl_->shadowProgram=program(cc_vs_point_shadow,cc_fs_point_shadow,"Point-light masked depth caster");
-    impl_->shadows=std::make_unique<PointShadowRenderer>();impl_->thumbnailShadows=std::make_unique<PointShadowRenderer>();
+    impl_->directionalShadowProgram=program(cc_vs_directional_shadow,cc_fs_directional_shadow,"Directional masked depth caster");
+    impl_->directionalCasterViewProjection=uniform("u_directionalCasterViewProjection",bgfx::UniformType::Mat4);
+    impl_->directionalCasterTile=uniform("u_directionalCasterTile");
+    impl_->shadows=std::make_unique<PointShadowRenderer>();impl_->thumbnailShadows=std::make_unique<PointShadowRenderer>(false);
+    const auto clusterShader=bgfx::createShader(bgfx::copy(cc_cs_cluster_lights,sizeof(cc_cs_cluster_lights)));
+    if(bgfx::isValid(clusterShader))impl_->clusterComputeProgram=bgfx::createProgram(clusterShader,true);
+    if(!bgfx::isValid(impl_->clusterComputeProgram))throw std::runtime_error("Forward+ compute program creation failed.");
+    const auto ambientProgram=[](const auto& bytes) {
+        const auto shader=bgfx::createShader(bgfx::copy(bytes,sizeof(bytes)));
+        return bgfx::isValid(shader)?bgfx::createProgram(shader,true):bgfx::ProgramHandle{BGFX_INVALID_HANDLE};
+    };
+    impl_->deformationProgram=ambientProgram(cc_cs_model_deform);
+    if(!bgfx::isValid(impl_->deformationProgram))throw std::runtime_error("Model GPU deformation program creation failed.");
+    impl_->deformation=std::make_unique<ModelDeformationGpu>(impl_->deformationProgram);
+    impl_->ambientEvaluateProgram=ambientProgram(cc_cs_ambient_visibility);
+    impl_->ambientPublishProgram=ambientProgram(cc_cs_ambient_publish);
+    if(!bgfx::isValid(impl_->ambientEvaluateProgram)||!bgfx::isValid(impl_->ambientPublishProgram))
+        throw std::runtime_error("Ambient-visibility compute program creation failed.");
     impl_->skyRight=uniform("u_skyRight");impl_->skyUp=uniform("u_skyUp");impl_->skyForward=uniform("u_skyForward");
     impl_->skySampler=uniform("s_skyEnvironment",bgfx::UniformType::Sampler);
     impl_->programHashes={shaderContentHash(cc_vs_pbr,cc_fs_pbr),shaderContentHash(cc_vs_model,cc_fs_model),shaderContentHash(cc_vs_pick,cc_fs_pick),
         shaderContentHash(cc_vs_present,cc_fs_present),shaderContentHash(cc_vs_grid,cc_fs_grid),shaderContentHash(cc_vs_present,cc_fs_encode),
         shaderContentHash(cc_vs_particle,cc_fs_particle),shaderContentHash(cc_vs_present,cc_fs_sky),shaderContentHash(cc_vs_point_shadow,cc_fs_point_shadow),
-        shaderContentHash(cc_vs_present,cc_fs_glow_extract),shaderContentHash(cc_vs_present,cc_fs_glow_blur),shaderContentHash({},cc_cs_procedural_filter)};
+        shaderContentHash(cc_vs_present,cc_fs_glow_extract),shaderContentHash(cc_vs_present,cc_fs_glow_blur),
+        shaderContentHash(cc_vs_directional_shadow,cc_fs_directional_shadow),shaderContentHash({},cc_cs_cluster_lights),shaderContentHash({},cc_cs_procedural_filter),
+        shaderContentHash({},cc_cs_ambient_visibility),shaderContentHash({},cc_cs_ambient_publish),shaderContentHash({},cc_cs_model_deform)};
     impl_->baseColorMetallic = uniform("u_baseColorMetallic");
     impl_->roughness = uniform("u_roughness");
     impl_->textureFlags = uniform("u_textureFlags");
     impl_->cameraPos = uniform("u_cameraPos");
     impl_->direction = uniform("u_direction",bgfx::UniformType::Vec4,static_cast<std::uint16_t>(MaxDirectionalLights));
     impl_->directionColor = uniform("u_directionColor",bgfx::UniformType::Vec4,static_cast<std::uint16_t>(MaxDirectionalLights));
-    impl_->pointPosition = uniform("u_pointPosition",bgfx::UniformType::Vec4,static_cast<std::uint16_t>(MaxPointLights));
-    impl_->pointColor = uniform("u_pointColor",bgfx::UniformType::Vec4,static_cast<std::uint16_t>(MaxPointLights));
     impl_->lightCounts = uniform("u_lightCounts");
     impl_->presentParams = uniform("u_presentParams");
     impl_->debandingParams = uniform("u_debandingParams");
@@ -499,6 +595,7 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
     impl_->prefilteredSampler = uniform("s_prefiltered",bgfx::UniformType::Sampler);
     impl_->brdfSampler = uniform("s_brdfLut",bgfx::UniformType::Sampler);
     impl_->environmentParams = uniform("u_environment");
+    impl_->ambientLight = uniform("u_ambientLight");
     impl_->fogColorDensity = uniform("u_fogColorDensity");
     impl_->fogDepth = uniform("u_fogDepth");
     impl_->fogHeight = uniform("u_fogHeight");
@@ -565,6 +662,16 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
         const auto preview="Thumbnail point shadow "+std::to_string(index/6)+" face "+std::to_string(index%6);
         bgfx::setViewName(static_cast<bgfx::ViewId>(ThumbnailPointShadowView+index),preview.c_str());
     }
+    bgfx::setViewName(CharacterShadowView,"Player character shadow");
+    bgfx::setViewName(ThumbnailCharacterShadowView,"Thumbnail character shadow");
+    for(unsigned index=0;index<4;++index) {
+        const auto sceneName="Scene directional shadow "+std::to_string(index);
+        const auto gameName="Game directional shadow "+std::to_string(index);
+        const auto thumbnailName="Thumbnail directional shadow "+std::to_string(index);
+        bgfx::setViewName(static_cast<bgfx::ViewId>(DirectionalShadowView+index),sceneName.c_str());
+        bgfx::setViewName(static_cast<bgfx::ViewId>(GameDirectionalShadowView+index),gameName.c_str());
+        bgfx::setViewName(static_cast<bgfx::ViewId>(ThumbnailDirectionalShadowView+index),thumbnailName.c_str());
+    }
 }
 Renderer::~Renderer() = default;
 
@@ -579,9 +686,19 @@ const std::string& Renderer::environmentStatus() const {
     return impl_->proceduralActive?impl_->proceduralEnvironment->status():impl_->environment->status();
 }
 std::size_t Renderer::environmentResidentBytes() const {
-    return impl_->environment->residentBytes()+impl_->thumbnailEnvironment->residentBytes()+impl_->materialPreviewEnvironment->residentBytes()+
+    auto bytes=impl_->environment->residentBytes()+impl_->thumbnailEnvironment->residentBytes()+impl_->materialPreviewEnvironment->residentBytes()+
         impl_->proceduralEnvironment->residentBytes()+impl_->thumbnailProceduralEnvironment->residentBytes();
+    const auto add=[&](const auto& target){if(target) {
+        if(target->clustered)bytes+=target->clustered->residentBytes();
+        if(target->ambient)bytes+=target->ambient->residentBytes();
+        bytes+=target->readableDepthBytes;
+    }};
+    add(impl_->targets);add(impl_->gameTargets);add(impl_->materialPreviewTargets);add(impl_->particlePreviewTargets);
+    if(impl_->pendingThumbnail)add(impl_->pendingThumbnail->targets);
+    return bytes;
 }
+const ClusteredLightingStats& Renderer::clusteredLightingStats() const {return impl_->clusterStats;}
+const std::string& Renderer::clusteredLightingStatus() const {return impl_->clusterStatus;}
 
 bool Renderer::prepareModel(const ModelAsset& model) {
     if (impl_->models.contains(model.id)) {
@@ -591,7 +708,7 @@ bool Renderer::prepareModel(const ModelAsset& model) {
     try {
         if (model.id.empty() || model.primitives.empty() || model.draws.empty() || model.materials.empty())
             throw std::invalid_argument("Model has no renderable geometry or materials.");
-        auto next = std::make_unique<GpuModel>();
+        auto next = std::make_shared<GpuModel>();
         next->id = model.id;
         next->primitives.resize(model.primitives.size());
         next->bounds.resize(model.primitives.size());
@@ -632,6 +749,8 @@ void Renderer::advanceStreaming(std::size_t bytes,double milliseconds) {
     // new Scene set. Game and shadow residency do not affect pick signatures.
     impl_->streamModels->beginMainView();
     ++impl_->renderFrame;
+    impl_->deformation->advance(impl_->renderFrame);
+    std::erase_if(impl_->bindPoses,[](const auto& item){return item.second.asset.expired();});
     impl_->shadows->advance(impl_->renderFrame);impl_->thumbnailShadows->advance(impl_->renderFrame);
     if (impl_->renderFrame%120==0) for (auto& selections:impl_->lodSelections)
         std::erase_if(selections,[&](const auto& item){return impl_->renderFrame-item.second.frame>120;});
@@ -652,8 +771,16 @@ std::uint64_t Renderer::streamingSignature() const {
     return value;
 }
 void Renderer::setExternalResourceSignature(std::uint64_t value) { impl_->externalSignature=value; }
-std::size_t Renderer::modelResidentBytes() const { return impl_->streamModels->bytes(); }
-void Renderer::trimModelCache(std::size_t bytes,std::span<const std::string> live) { impl_->streamModels->trim(bytes,live); }
+std::size_t Renderer::modelResidentBytes() const {
+    auto bytes=impl_->streamModels->bytes()+impl_->deformation->bytes();
+    for(const auto& [id,model]:impl_->models){(void)id;for(const auto& primitive:model->primitives)bytes+=primitive.bytes;}
+    return bytes;
+}
+void Renderer::trimModelCache(std::size_t bytes,std::span<const std::string> live) {
+    impl_->deformation->trim(bytes);
+    auto fixed=impl_->deformation->bytes();for(const auto& [id,model]:impl_->models){(void)id;for(const auto& primitive:model->primitives)fixed+=primitive.bytes;}
+    impl_->streamModels->trim(bytes>fixed?bytes-fixed:0,live);
+}
 void Renderer::setAppearance(const ViewportAppearance& appearance) { impl_->appearance=appearance; }
 void Renderer::setGridVisible(bool visible) { impl_->gridVisible=visible; }
 bool Renderer::thumbnailBusy() const { return !!impl_->pendingThumbnail; }
@@ -669,8 +796,9 @@ bool Renderer::renderThumbnail(const std::string& id,std::uint64_t signature,con
         const bool ready=bgfx::isValid(impl_->thumbnailEnvironment->diffuse());
         struct RestoreAppearance { ViewportAppearance& destination; ViewportAppearance saved; ~RestoreAppearance(){destination=saved;} } restore{impl_->appearance,impl_->appearance};
         impl_->appearance=ViewportAppearance{};
-        impl_->renderTo(scene,*pending->targets,ready ? *impl_->thumbnailEnvironment:*impl_->environment,size,size,ThumbnailViews,false,false,&pending->resources);
-        bgfx::blit(ThumbnailReadView,pending->readback,0,0,pending->targets->display,0,0,size,size);
+        const auto readbackView=impl_->renderTo(scene,*pending->targets,ready ? *impl_->thumbnailEnvironment:*impl_->environment,size,size,{RenderViewPurpose::Thumbnail,signature},false,false,&pending->resources);
+        if(readbackView==InvalidRenderView)throw std::logic_error("Thumbnail plan has no readback pass.");
+        bgfx::blit(readbackView,pending->readback,0,0,pending->targets->display,0,0,size,size);
         pending->readyFrame=bgfx::readTexture(pending->readback,pending->image.rgba.data());
         impl_->pendingThumbnail=std::move(pending);impl_->thumbnailStatus.clear(); return true;
     } catch (const std::exception& error) { impl_->thumbnailStatus=std::string("Thumbnail: ")+error.what(); return false; }
@@ -688,49 +816,56 @@ std::optional<ThumbnailResult> Renderer::pollThumbnail(std::uint32_t frame) {
     return ThumbnailResult{std::move(pending->id),pending->signature,std::move(pending->image)};
 }
 bool Renderer::setThumbnail(const std::string& id,std::uint64_t signature,const DecodedImage& image) {
-    if (id.empty() || !image.width || !image.height || image.width>512 || image.height>512 || image.rgba.size()!=static_cast<std::size_t>(image.width)*image.height*4) return false;
-    if (const auto found=impl_->thumbnails.find(id);found!=impl_->thumbnails.end() && found->second->signature==signature) return true;
-    auto next=std::make_unique<CachedThumbnail>(); next->signature=signature; next->bytes=image.rgba.size(); next->lastUsed=++impl_->thumbnailClock;
-    next->texture=bgfx::createTexture2D(static_cast<std::uint16_t>(image.width),static_cast<std::uint16_t>(image.height),false,1,bgfx::TextureFormat::RGBA8,
-        BGFX_SAMPLER_U_CLAMP|BGFX_SAMPLER_V_CLAMP,bgfx::copy(image.rgba.data(),static_cast<std::uint32_t>(image.rgba.size())));
-    if (!bgfx::isValid(next->texture)) return false;
-    impl_->thumbnails.insert_or_assign(id,std::move(next));
-    const auto total=[&] { std::size_t bytes=0; for (const auto& [key,value]:impl_->thumbnails) { (void)key; bytes+=value->bytes; } return bytes; };
-    while (total()>64*1024*1024 && impl_->thumbnails.size()>1) {
-        const auto victim=std::min_element(impl_->thumbnails.begin(),impl_->thumbnails.end(),[](const auto& a,const auto& b){return a.second->lastUsed<b.second->lastUsed;});
-        impl_->thumbnails.erase(victim);
-    }
-    return true;
+    return impl_->thumbnails.publish(id,signature,image);
 }
 bgfx::TextureHandle Renderer::thumbnailTexture(const std::string& id,std::uint64_t signature) const {
-    const auto found=impl_->thumbnails.find(id);
-    if (found==impl_->thumbnails.end() || (signature && found->second->signature!=signature)) return BGFX_INVALID_HANDLE;
-    found->second->lastUsed=++impl_->thumbnailClock; return found->second->texture;
+    return impl_->thumbnails.find(id,signature);
 }
 void Renderer::evictThumbnail(const std::string& id) { impl_->thumbnails.erase(id); }
 std::size_t Renderer::thumbnailResidentBytes() const {
-    std::size_t bytes=0;
-    for (const auto& [id,value]:impl_->thumbnails) { (void)id;bytes+=value->bytes; }
+    auto bytes=impl_->thumbnails.bytes();
     if (impl_->pendingThumbnail) bytes+=static_cast<std::size_t>(impl_->pendingThumbnail->image.width)*impl_->pendingThumbnail->image.height*36;
     return bytes;
 }
 void Renderer::trimThumbnailCache(std::size_t target) {
-    while (!impl_->thumbnails.empty() && thumbnailResidentBytes()>target) {
-        const auto victim=std::min_element(impl_->thumbnails.begin(),impl_->thumbnails.end(),[](const auto& a,const auto& b){return a.second->lastUsed<b.second->lastUsed;});
-        impl_->thumbnails.erase(victim);
-    }
+    const auto pending=impl_->pendingThumbnail?static_cast<std::size_t>(impl_->pendingThumbnail->image.width)*impl_->pendingThumbnail->image.height*36:0;
+    impl_->thumbnails.trim(target>pending?target-pending:0);
 }
 const std::string& Renderer::thumbnailStatus() const { return impl_->thumbnailStatus; }
-bool Renderer::reloadPrograms(std::span<const RendererShaderPair> pairs,std::span<const std::uint8_t> proceduralCompute) {
+bool Renderer::reloadPrograms(std::span<const RendererShaderPair> pairs,std::span<const std::uint8_t> proceduralCompute,
+    std::span<const std::uint8_t> clusterCompute,std::span<const std::uint8_t> ambientEvaluate,
+    std::span<const std::uint8_t> ambientPublish,std::span<const std::uint8_t> deformationCompute) {
     std::vector<std::pair<bgfx::ProgramHandle*,bgfx::ProgramHandle>> candidates;
     std::vector<std::pair<std::size_t,std::uint64_t>> hashes;
     bgfx::ProgramHandle worldCompute{BGFX_INVALID_HANDLE},thumbnailCompute{BGFX_INVALID_HANDLE};
+    bgfx::ProgramHandle nextClusterCompute{BGFX_INVALID_HANDLE};
+    bgfx::ProgramHandle nextAmbientEvaluate{BGFX_INVALID_HANDLE},nextAmbientPublish{BGFX_INVALID_HANDLE},nextDeformation{BGFX_INVALID_HANDLE};
     try {
+        candidates.reserve(pairs.size());hashes.reserve(pairs.size());
+        const auto prepareAmbient=[&](std::span<const std::uint8_t> bytes,std::span<const std::uint8_t> contract,
+            std::size_t hashIndex,bgfx::ProgramHandle& target) {
+            if(bytes.empty()||shaderContentHash({},bytes)==impl_->programHashes[hashIndex])return;
+            std::string diagnostic;
+            if(!preflightComputeShader(bytes,contract,diagnostic))throw std::runtime_error(diagnostic);
+            const auto shader=bgfx::createShader(bgfx::copy(bytes.data(),static_cast<std::uint32_t>(bytes.size())));
+            if(bgfx::isValid(shader))target=bgfx::createProgram(shader,true);
+            if(!bgfx::isValid(target))throw std::runtime_error("Ambient-visibility compute hot-reload allocation failed.");
+        };
+        prepareAmbient(ambientEvaluate,cc_cs_ambient_visibility,14,nextAmbientEvaluate);
+        prepareAmbient(ambientPublish,cc_cs_ambient_publish,15,nextAmbientPublish);
+        prepareAmbient(deformationCompute,cc_cs_model_deform,16,nextDeformation);
+        if(!clusterCompute.empty() && shaderContentHash({},clusterCompute)!=impl_->programHashes[12]) {
+            std::string diagnostic;
+            if(!preflightComputeShader(clusterCompute,cc_cs_cluster_lights,diagnostic))throw std::runtime_error(diagnostic);
+            const auto shader=bgfx::createShader(bgfx::copy(clusterCompute.data(),static_cast<std::uint32_t>(clusterCompute.size())));
+            if(bgfx::isValid(shader))nextClusterCompute=bgfx::createProgram(shader,true);
+            if(!bgfx::isValid(nextClusterCompute))throw std::runtime_error("Forward+ compute hot-reload allocation failed.");
+        }
         const auto sky=std::find_if(pairs.begin(),pairs.end(),[](const auto& pair){return pair.program==RendererProgram::Sky;});
         if(sky!=pairs.end() && proceduralCompute.empty() &&
             shaderContentHash(sky->vertex,sky->fragment)!=impl_->programHashes[static_cast<std::size_t>(RendererProgram::Sky)])
             throw std::runtime_error("Sky reload requires its matching environment compute shader.");
-        if(!proceduralCompute.empty() && shaderContentHash({},proceduralCompute)!=impl_->programHashes.back()) {
+        if(!proceduralCompute.empty() && shaderContentHash({},proceduralCompute)!=impl_->programHashes[13]) {
             if(sky==pairs.end())throw std::runtime_error("Environment compute reload requires its matching visible sky shader.");
             std::string diagnostic;
             worldCompute=impl_->proceduralEnvironment->prepareProgramReload(proceduralCompute,diagnostic);
@@ -750,6 +885,7 @@ bool Renderer::reloadPrograms(std::span<const RendererShaderPair> pairs,std::spa
             case RendererProgram::Particle: target=&impl_->particleProgram; contractV=cc_vs_particle; contractF=cc_fs_particle; break;
               case RendererProgram::Sky: target=&impl_->skyProgram; contractV=cc_vs_present; contractF=cc_fs_sky; break;
             case RendererProgram::PointShadow: target=&impl_->shadowProgram; contractV=cc_vs_point_shadow; contractF=cc_fs_point_shadow; break;
+            case RendererProgram::DirectionalShadow: target=&impl_->directionalShadowProgram; contractV=cc_vs_directional_shadow; contractF=cc_fs_directional_shadow; break;
             case RendererProgram::GlowExtract: target=&impl_->glowExtractProgram; contractV=cc_vs_present; contractF=cc_fs_glow_extract; break;
             case RendererProgram::GlowBlur: target=&impl_->glowBlurProgram; contractV=cc_vs_present; contractF=cc_fs_glow_blur; break;
             }
@@ -766,21 +902,44 @@ bool Renderer::reloadPrograms(std::span<const RendererShaderPair> pairs,std::spa
             candidates.emplace_back(target,program);
             hashes.emplace_back(static_cast<std::size_t>(pair.program),shaderContentHash(pair.vertex,pair.fragment));
         }
+        // Nothing above changes a live owner or its bindings. Rejecting any
+        // compute or graphics candidate leaves the entire prior group active.
+        const bool programsChanged=!candidates.empty()||bgfx::isValid(nextClusterCompute)||bgfx::isValid(worldCompute)||
+            bgfx::isValid(nextAmbientEvaluate)||bgfx::isValid(nextAmbientPublish)||bgfx::isValid(nextDeformation);
         for (auto& [target,candidate]:candidates) { destroyHandle(*target); *target=candidate; }
+        if(bgfx::isValid(nextClusterCompute)) {
+            destroyHandle(impl_->clusterComputeProgram);impl_->clusterComputeProgram=nextClusterCompute;
+            nextClusterCompute=BGFX_INVALID_HANDLE;impl_->programHashes[12]=shaderContentHash({},clusterCompute);
+        }
+        if(bgfx::isValid(nextAmbientEvaluate)) {
+            destroyHandle(impl_->ambientEvaluateProgram);impl_->ambientEvaluateProgram=nextAmbientEvaluate;
+            nextAmbientEvaluate=BGFX_INVALID_HANDLE;impl_->programHashes[14]=shaderContentHash({},ambientEvaluate);
+        }
+        if(bgfx::isValid(nextAmbientPublish)) {
+            destroyHandle(impl_->ambientPublishProgram);impl_->ambientPublishProgram=nextAmbientPublish;
+            nextAmbientPublish=BGFX_INVALID_HANDLE;impl_->programHashes[15]=shaderContentHash({},ambientPublish);
+        }
+        if(bgfx::isValid(nextDeformation)) {
+            destroyHandle(impl_->deformationProgram);impl_->deformationProgram=nextDeformation;
+            nextDeformation=BGFX_INVALID_HANDLE;impl_->programHashes[16]=shaderContentHash({},deformationCompute);
+            impl_->deformation->setProgram(impl_->deformationProgram);
+        }
         if(bgfx::isValid(worldCompute)) {
             impl_->proceduralEnvironment->publishProgramReload(worldCompute);
             impl_->thumbnailProceduralEnvironment->publishProgramReload(thumbnailCompute);
             worldCompute=BGFX_INVALID_HANDLE;thumbnailCompute=BGFX_INVALID_HANDLE;
-            impl_->programHashes.back()=shaderContentHash({},proceduralCompute);
+            impl_->programHashes[13]=shaderContentHash({},proceduralCompute);
             impl_->proceduralFrame=UINT64_MAX;
         }
         for (const auto& [index,hash]:hashes) impl_->programHashes[index]=hash;
         if(bgfx::isValid(impl_->glowExtractProgram) && bgfx::isValid(impl_->glowBlurProgram))impl_->glowProgramFailure.clear();
-        if (!candidates.empty()) { ++impl_->programRevision; impl_->shadows->invalidate();impl_->thumbnailShadows->invalidate();cancelPicking(); }
+        if (programsChanged) { ++impl_->programRevision; impl_->shadows->invalidate();impl_->thumbnailShadows->invalidate();cancelPicking(); }
         impl_->shaderStatus.clear(); return true;
     } catch (const std::exception& error) {
         for (auto& [target,candidate]:candidates) { (void)target; destroyHandle(candidate); }
         destroyHandle(worldCompute);destroyHandle(thumbnailCompute);
+        destroyHandle(nextClusterCompute);
+        destroyHandle(nextAmbientEvaluate);destroyHandle(nextAmbientPublish);destroyHandle(nextDeformation);
         impl_->shaderStatus=error.what(); return false;
     }
 }
@@ -809,6 +968,7 @@ bool Renderer::requestPick(const PickRequest& request) {
     }
     impl_->latestPickSerial = request.serial;
     impl_->requestedPick = request;
+    impl_->requestedPickContext=impl_->displayedMaterialContext;
     if (!impl_->requestedPick->resourceSignature) impl_->requestedPick->resourceSignature=streamingSignature();
     impl_->pickingStatus.clear();
     return true;
@@ -871,7 +1031,28 @@ void Renderer::renderGame(const RenderScene& scene) {
         impl_->gameParticles={scene.particles.size(),0,0,scene.particles.size()}; return;
     }
     impl_->renderTo(scene,*impl_->gameTargets,*impl_->environment,static_cast<std::uint16_t>(impl_->gameWidth),
-        static_cast<std::uint16_t>(impl_->gameHeight),GameViews,false,false,nullptr,&impl_->gameParticles);
+        static_cast<std::uint16_t>(impl_->gameHeight),{RenderViewPurpose::Game},false,false,nullptr,&impl_->gameParticles);
+}
+void Renderer::renderFrame(std::shared_ptr<const PreparedRenderFrame> frame) {
+    if(!frame)throw std::invalid_argument("Cannot submit an empty prepared render frame.");
+    const auto error=validatePreparedRenderFrame(*frame);
+    if(error!=PreparedFrameError::None)throw std::invalid_argument(preparedFrameErrorText(error));
+    setExternalResourceSignature(frame->resourceSignature);
+    setAppearance(frame->appearance);
+    setGridVisible(frame->gridVisible);
+    // The complete owner includes camera-local receiver vectors, the shared
+    // world values and all exact-version model/material leases.
+    for(const auto& request:frame->views) {
+        auto scene=preparedRenderScene(*frame,request);
+        scene.pinned=frame;
+        if(request.identity.purpose==RenderViewPurpose::Scene) {
+            resizeViewport(request.width,request.height);
+            render(scene);
+        } else {
+            resizeGameViewport(request.width,request.height);
+            renderGame(scene);
+        }
+    }
 }
 bgfx::TextureHandle Renderer::gameViewportTexture() const noexcept {
     return impl_->gameDrawable && impl_->gameTargets ? impl_->gameTargets->display : bgfx::TextureHandle{bgfx::kInvalidHandle};
@@ -893,16 +1074,16 @@ void Renderer::resizeParticlePreview(std::uint32_t width,std::uint32_t height) {
     impl_->particlePreviewWidth=width; impl_->particlePreviewHeight=height; impl_->particlePreviewDrawable=true;
 }
 void Renderer::renderParticlePreview(const SceneSettings& settings,std::span<const RenderParticle> particles,
-                                    std::span<const RenderParticleMaterial> materials) {
+                                    std::span<const RenderParticleMaterial> materials,MaterialEvaluationContext context) {
     if (!impl_->particlePreviewDrawable || !impl_->particlePreviewTargets) {
         impl_->previewParticles={particles.size(),0,0,particles.size()}; return;
     }
     RenderScene scene{settings,{}};
-    scene.sceneMode=true; scene.particles=particles; scene.particleMaterials=materials;
+    scene.sceneMode=true; scene.particles=particles; scene.particleMaterials=materials;scene.materialContext=context;
     struct RestoreStatus { std::string& destination; std::string saved; ~RestoreStatus(){destination=std::move(saved);} } restore{impl_->modelStatus,impl_->modelStatus};
     impl_->renderTo(scene,*impl_->particlePreviewTargets,*impl_->environment,
         static_cast<std::uint16_t>(impl_->particlePreviewWidth),static_cast<std::uint16_t>(impl_->particlePreviewHeight),
-        ParticlePreviewViews,true,false,nullptr,&impl_->previewParticles);
+        {RenderViewPurpose::ParticlePreview},true,false,nullptr,&impl_->previewParticles);
 }
 bgfx::TextureHandle Renderer::particlePreviewTexture() const noexcept {
     if (impl_->particlePreviewDrawable && impl_->particlePreviewTargets) return impl_->particlePreviewTargets->display;
@@ -941,7 +1122,7 @@ void Renderer::resizeMaterialPreview(std::uint32_t width,std::uint32_t height) {
 }
 bool Renderer::publishMaterialPreviewEnvironment(const PreparedEnvironment& data) { return impl_->materialPreviewEnvironment->publish(data); }
 void Renderer::renderMaterialPreview(const SceneSettings& settings,const MaterialAsset& material,const ModelMaterialTextures& bindings,
-                                    MaterialPreviewMesh mesh,const Mat4& transform,bool showEnvironment,std::shared_ptr<const void> pins) {
+                                    MaterialPreviewMesh mesh,const Mat4& transform,bool showEnvironment,std::shared_ptr<const void> pins,MaterialEvaluationContext context) {
     if(!impl_->materialPreviewDrawable || !impl_->materialPreviewTargets || !bgfx::isValid(impl_->materialPreviewEnvironment->diffuse()))return;
     struct RestoreStatus {std::string& target;std::string old;~RestoreStatus(){target=std::move(old);}} restore{impl_->modelStatus,impl_->modelStatus};
     if(usesParticleMaterialPreview(mesh,bindings)) {
@@ -953,12 +1134,13 @@ void Renderer::renderMaterialPreview(const SceneSettings& settings,const Materia
         sprite.shading=sprite.graph?sprite.graph->shading:material.shading;
         sprite.roughness=material.surface.roughness;sprite.metallic=material.surface.metallic;sprite.specular=material.surface.specular;
         sprite.emission=material.surface.emissive;sprite.alphaCutoff=material.surface.alphaCutoff;sprite.doubleSided=material.surface.doubleSided;
+        sprite.receiveFog=material.surface.receiveFog;
         sprite.colorTexture=bindings.handles[0];sprite.samplerFlags=bindings.flags[0];sprite.pinned=pins;
         sprite.uvScale=material.surface.uvScale;sprite.uvOffset=material.surface.uvOffset;sprite.uvRotation=material.surface.uvRotation;
         sprite.triplanar=material.surface.triplanar;sprite.triplanarWorld=material.surface.triplanarWorld;
-        RenderScene scene{settings,{}};scene.sceneMode=true;scene.particles={&particle,1};scene.particleMaterials={&sprite,1};scene.pinned=std::move(pins);
+        RenderScene scene{settings,{}};scene.sceneMode=true;scene.particles={&particle,1};scene.particleMaterials={&sprite,1};scene.pinned=std::move(pins);scene.materialContext=context;
         impl_->renderTo(scene,*impl_->materialPreviewTargets,*impl_->materialPreviewEnvironment,
-            static_cast<std::uint16_t>(impl_->materialPreviewWidth),static_cast<std::uint16_t>(impl_->materialPreviewHeight),MaterialPreviewViews,false,false,nullptr,nullptr,showEnvironment);
+            static_cast<std::uint16_t>(impl_->materialPreviewWidth),static_cast<std::uint16_t>(impl_->materialPreviewHeight),{RenderViewPurpose::MaterialPreview},false,false,nullptr,nullptr,showEnvironment);
         return;
     }
     const auto effectiveMesh=mesh==MaterialPreviewMesh::Sprite?MaterialPreviewMesh::Plane:mesh;
@@ -970,9 +1152,9 @@ void Renderer::renderMaterialPreview(const SceneSettings& settings,const Materia
     RenderModelInstance instance{0,{geometry,transform},&textures,1,true,false,&surfaces,material.shading,material.blend};
     struct PreviewPins {std::shared_ptr<const void> material;std::vector<std::shared_ptr<const ResidentModelLod>> geometry;};
     auto framePins=std::make_shared<PreviewPins>();framePins->material=std::move(pins);
-    RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances={&instance,1};scene.pinned=framePins;
+    RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances={&instance,1};scene.pinned=framePins;scene.materialContext=context;
     impl_->renderTo(scene,*impl_->materialPreviewTargets,*impl_->materialPreviewEnvironment,
-        static_cast<std::uint16_t>(impl_->materialPreviewWidth),static_cast<std::uint16_t>(impl_->materialPreviewHeight),MaterialPreviewViews,false,false,&framePins->geometry,nullptr,showEnvironment);
+        static_cast<std::uint16_t>(impl_->materialPreviewWidth),static_cast<std::uint16_t>(impl_->materialPreviewHeight),{RenderViewPurpose::MaterialPreview},false,false,&framePins->geometry,nullptr,showEnvironment);
 }
 bgfx::TextureHandle Renderer::materialPreviewTexture() const noexcept { return impl_->materialPreviewDrawable && impl_->materialPreviewTargets ? impl_->materialPreviewTargets->display:bgfx::TextureHandle{bgfx::kInvalidHandle}; }
 void Renderer::releaseMaterialPreview() { impl_->materialPreviewTargets.reset();impl_->materialPreviewDrawable=false;impl_->materialPreviewWidth=impl_->materialPreviewHeight=0; }
@@ -982,10 +1164,11 @@ void Renderer::render(const SceneSettings& settings, const MaterialTextures& tex
 }
 void Renderer::render(const RenderScene& scene) {
     if (!drawable()) { impl_->particles={scene.particles.size(),0,0,scene.particles.size()}; return; }
-    impl_->renderTo(scene,*impl_->targets,*impl_->environment,static_cast<std::uint16_t>(impl_->width),static_cast<std::uint16_t>(impl_->height),MainViews,impl_->gridVisible,true,nullptr,&impl_->particles);
+    impl_->renderTo(scene,*impl_->targets,*impl_->environment,static_cast<std::uint16_t>(impl_->width),static_cast<std::uint16_t>(impl_->height),{RenderViewPurpose::Scene},impl_->gridVisible,true,nullptr,&impl_->particles);
+    impl_->displayedMaterialContext=scene.materialContext;
 }
 void Renderer::Impl::renderParticles(std::span<const RenderParticle> input,std::span<const RenderParticleMaterial> materials,
-                                    const Camera& camera,const fog::Parameters& fogValues,bgfx::ViewId view,ParticleRenderStats* result,std::span<const TransparentMeshDraw> meshDraws,bool transparentPhase,const std::function<void()>& bindLighting) {
+                                    const Camera& camera,const fog::Parameters& fogValues,bgfx::ViewId view,ParticleRenderStats* result,std::span<const TransparentMeshDraw> meshDraws,bool transparentPhase,const std::function<void()>& bindLighting,MaterialEvaluationContext context,bgfx::ViewId depthView) {
     ParticleRenderStats stats=transparentPhase && result?*result:ParticleRenderStats{};
     stats.requested=input.size();
     const bool instancing=(bgfx::getCaps()->supported & BGFX_CAPS_INSTANCING)!=0;
@@ -1058,30 +1241,54 @@ void Renderer::Impl::renderParticles(std::span<const RenderParticle> input,std::
         const std::array<Vec4,5> parameters{{material.baseColor,{material.roughness,material.metallic,material.occlusion,1},
             {material.emission[0],material.emission[1],material.emission[2],material.alphaCutoff},
             {material.doubleSided?1.f:0.f,0,shading==MaterialShading::Unlit?1.f:0.f,static_cast<float>(mode)}, {material.specular,0,0,0}}};
-        bgfx::setUniform(particleParameters,parameters.data(),static_cast<std::uint16_t>(parameters.size()));
-        bgfx::setUniform(particleParams,options);
-        bindLighting();
-        bindFog(fogValues);
         const Mat4 identity;
         const Vec4 modelSettings{0,mode==MaterialBlend::Mask?1.f:0.f,material.doubleSided?1.f:0.f,1};
         const Vec4 emissiveSettings{0,shading==MaterialShading::Unlit?1.f:0.f,1,0},uvSettings{};
-        bgfx::setUniform(modelNormalMatrix,identity.data());bgfx::setUniform(modelOptions,modelSettings.data());
-        bgfx::setUniform(modelUv,uvSettings.data());bgfx::setUniform(modelEmissiveMap,emissiveSettings.data());
-        bindMaterialMapping(material.uvScale,material.uvOffset,material.uvRotation,material.triplanar,material.triplanarWorld);
-        bgfx::setTexture(0,particleSampler,textured?material.colorTexture:white,material.samplerFlags);
-        if(material.graph){material.graph->bind();submittedPins.push_back(material.graph);}
-        particleQuad.bind(); bgfx::setInstanceDataBuffer(&instances);
+        if(material.graph)submittedPins.push_back(material.graph);
+        const auto bindBatch=[&](bool prepass) {
+            bgfx::setUniform(particleParameters,parameters.data(),static_cast<std::uint16_t>(parameters.size()));
+            bgfx::setUniform(particleParams,options);bindLighting();
+            const Vec4 scopes{float(lighting_scope::World),float(lighting_scope::World),prepass?1.f:0.f,1.f};
+            bgfx::setUniform(surfaceLighting,scopes.data());
+            const Vec4 category{float(lighting_scope::World),0,0,0};bgfx::setUniform(surfaceCategory,category.data());
+            bindFog(fogValues,material.graph?material.graph->receiveFog:material.receiveFog);
+            bgfx::setUniform(modelNormalMatrix,identity.data());bgfx::setUniform(modelOptions,modelSettings.data());
+            bgfx::setUniform(modelUv,uvSettings.data());bgfx::setUniform(modelEmissiveMap,emissiveSettings.data());
+            bindMaterialMapping(material.uvScale,material.uvOffset,material.uvRotation,material.triplanar,material.triplanarWorld);
+            bgfx::setTexture(0,particleSampler,textured?material.colorTexture:white,material.samplerFlags);
+            if(material.graph)material.graph->bind(context);
+            particleQuad.bind();bgfx::setInstanceDataBuffer(&instances);
+        };
         const auto blend=mode==MaterialBlend::Alpha ? BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_INV_SRC_ALPHA):
             mode==MaterialBlend::Additive ? BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_ZERO,BGFX_STATE_BLEND_ONE):0;
         const bool doubleSided=material.graph?material.graph->uniforms[3][0]>.5f:material.doubleSided;
-        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | (transparentPhase?0:BGFX_STATE_WRITE_Z) |
+        if(depthView!=InvalidRenderView && !transparentPhase) {
+            // Both passes reference this one allocation. A transient-buffer
+            // shortage drops the same batch from depth and visible color.
+            bindBatch(true);
+            bgfx::setState(BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A|BGFX_STATE_WRITE_Z|BGFX_STATE_DEPTH_TEST_LESS|(doubleSided?0:BGFX_STATE_CULL_CW));
+            bgfx::submit(depthView,material.graph?material.graph->program(MaterialGraphPass::Particle):particleProgram);
+        }
+        bindBatch(false);
+        bgfx::setState((BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A) | (transparentPhase?0:BGFX_STATE_WRITE_Z) |
             BGFX_STATE_DEPTH_TEST_LESS | (doubleSided?0:BGFX_STATE_CULL_CW) | blend);
         bgfx::submit(view,material.graph?material.graph->program(MaterialGraphPass::Particle):particleProgram);
         stats.submitted+=available;cursor+=available;++stats.drawCalls;
     }
     if (result) *result=stats;
 }
-void Renderer::Impl::renderShadows(const RenderScene& scene,PointShadowRenderer& owner,bgfx::ViewId firstView) {
+std::shared_ptr<const ModelPose> Renderer::Impl::poseFor(const RenderModelInstance& instance) {
+    if(instance.pose)return instance.pose;
+    const auto& asset=instance.model.asset;
+    if(!asset)return {};
+    const bool dynamic=!asset->skins.empty() || !asset->animations.empty() || std::any_of(asset->primitives.begin(),asset->primitives.end(),[](const auto& primitive){
+        return primitive.hasSkinning || !primitive.skinWeights.empty() || !primitive.morphTargets.empty();
+    });
+    if(!dynamic)return {};
+    if(const auto found=bindPoses.find(asset.get());found!=bindPoses.end() && !found->second.asset.expired())return found->second.pose;
+    auto pose=std::make_shared<ModelPose>(evaluateModelPose(*asset));bindPoses[asset.get()]={asset,pose};return pose;
+}
+void Renderer::Impl::renderShadows(const RenderScene& scene,PointShadowRenderer& owner,bgfx::ViewId firstView,bgfx::ViewId firstDirectionalView,bgfx::ViewId characterView,unsigned cameraContext,unsigned cameraCount,float aspect) {
     struct CasterDraw {
         ModelMatrix world;
         ModelMatrix normal;
@@ -1090,93 +1297,226 @@ void Renderer::Impl::renderShadows(const RenderScene& scene,PointShadowRenderer&
         const ModelMaterialTextures* textures{};
         std::shared_ptr<const ResidentModelLod> resident;
         const GpuMesh* legacy{};
+        std::shared_ptr<const DeformedModelVertices> deformed;
         float handedness{1};
     };
-    std::array<std::vector<CasterDraw>,MaxPointLights> casters;
-    std::array<std::uint64_t,MaxPointLights> signatures;
+    static_assert(MaxPointShadowLights==PointShadowLightBudget);
+    constexpr auto MaximumShadowTargets=MaxPointShadowLights+MaxDirectionalLights*4+1;
+    std::array<std::vector<CasterDraw>,MaximumShadowTargets> casters;
+    std::array<std::uint64_t,MaximumShadowTargets> signatures;
     signatures.fill(14695981039346656037ull);
     const auto hashBytes=[](std::uint64_t& hash,const void* data,std::size_t size) {
         const auto* bytes=static_cast<const std::uint8_t*>(data);
         for(std::size_t index=0;index<size;++index)hash=(hash^bytes[index])*1099511628211ull;
     };
     const auto hashValue=[&](std::uint64_t& hash,const auto& value){hashBytes(hash,&value,sizeof(value));};
-    const auto count=std::min(scene.pointLights.size(),MaxPointLights);
-    for(std::size_t index=0;index<count;++index) {
-        const auto& light=scene.pointLights[index];auto& signature=signatures[index];
-        hashValue(signature,programRevision);
-        if(!scene.shadowWorldId || !light.enabled || !light.castShadows)continue;
-        for(const auto& instance:scene.shadowInstances) {
-            if(!instance.castShadows || !instance.model.asset || instance.blend==MaterialBlend::Alpha || instance.blend==MaterialBlend::Additive)continue;
-            const auto& asset=*instance.model.asset;
-            const auto worldBounds=math::transformBounds(asset.bounds,instance.model.transform);
-            if(!point_shadow::intersectsLight(worldBounds,light.position,light.radius))continue;
-            const auto found=models.find(asset.id);
-            const auto* stream=streamModels->descriptor(asset.id,instance.resourceRevision);
-            hashValue(signature,instance.entityId);hashBytes(signature,asset.id.data(),asset.id.size());hashValue(signature,instance.resourceRevision);
-            hashBytes(signature,instance.model.transform.data(),sizeof(ModelMatrix));
-            // Shadow-only geometry keeps its resource revision resident without
-            // invalidating asynchronous Scene picks when uploads complete.
-            if(stream)streamModels->markRendered(asset.id,instance.resourceRevision,false);
-            for(const auto& draw:asset.draws) {
-                if(draw.primitive>=asset.primitives.size())continue;
-                CasterDraw candidate;
-                if(prepareModelMatrices(instance.model.transform,draw.transform,candidate.world,candidate.normal,candidate.handedness)!=ModelTransformStatus::Ready)continue;
-                Aabb localBounds;
-                if(stream && draw.primitive<stream->primitives.size()) {
-                    const auto& primitive=stream->primitives[draw.primitive];localBounds=primitive.bounds;
-                    const auto desired=streaming::chooseModelLod(primitive.levels,candidate.world,primitive.bounds,light.position,
-                        std::numbers::pi_v<float>*.5f,scene.shadowResolution);
-                    candidate.resident=streamModels->resident(asset.id,instance.resourceRevision,draw.primitive,desired);
-                } else {
-                    for(const auto& vertex:asset.primitives[draw.primitive].vertices)math::include(localBounds,vertex.position);
-                }
-                candidate.bounds=math::transformBounds(localBounds,candidate.world);
-                if(!point_shadow::intersectsLight(candidate.bounds,light.position,light.radius))continue;
-                if(!candidate.resident) {
-                    if(found==models.end() || draw.primitive>=found->second->primitives.size())continue;
-                    candidate.legacy=&found->second->primitives[draw.primitive];
-                }
-                const auto materialIndex=asset.primitives[draw.primitive].material;
-                if(instance.materials && materialIndex<instance.materials->size())candidate.material=&(*instance.materials)[materialIndex];
-                else if(materialIndex<asset.materials.size())candidate.material=&asset.materials[materialIndex];
-                else continue;
-                if(instance.textures && materialIndex<instance.textures->size())candidate.textures=&(*instance.textures)[materialIndex];
-                if(candidate.textures && candidate.textures->graph) {
-                    const auto& graph=candidate.textures->graph;
-                    if(graph->blend==MaterialBlend::Alpha || graph->blend==MaterialBlend::Additive)continue;
-                    hashValue(signature,graph->signature);submittedPins.push_back(graph);
-                }
-                hashValue(signature,draw.primitive);hashBytes(signature,candidate.world.data(),sizeof(ModelMatrix));
-                const auto& material=*candidate.material;
-                hashValue(signature,material.alphaMask);hashValue(signature,material.doubleSided);
-                if(material.alphaMask) {
-                    hashValue(signature,material.alphaCutoff);hashValue(signature,material.baseColor[3]);hashValue(signature,material.baseColorTexture.texCoord);
-                    hashValue(signature,material.uvScale);hashValue(signature,material.uvOffset);hashValue(signature,material.uvRotation);hashValue(signature,material.triplanar);hashValue(signature,material.triplanarWorld);
-                    if(candidate.textures) {
-                        hashValue(signature,candidate.textures->handles[0].idx);hashValue(signature,candidate.textures->flags[0]);
-                        hashValue(signature,candidate.textures->signatures[0]);hashValue(signature,candidate.textures->sourceFingerprints[0]);
-                    }
-                }
-                if(candidate.resident) {
-                    hashValue(signature,candidate.resident->level);hashValue(signature,candidate.resident->vertices.idx);hashValue(signature,candidate.resident->indices.idx);
-                    submittedPins.push_back(candidate.resident);
-                } else {hashValue(signature,candidate.legacy->vertices.idx);hashValue(signature,candidate.legacy->indices.idx);}
-                casters[index].push_back(std::move(candidate));
+    const auto shadowSelection=selectPointShadowLights(scene.pointLights,scene.shadowPriorityOrigin);
+    std::array<PointLight,PointShadowLightBudget> selectedPoints;
+    for(std::uint32_t slot=0;slot<shadowSelection.count;++slot) {
+        const auto source=shadowSelection.sourceIndices[slot];selectedPoints[slot]=scene.pointLights[source];
+        if(!selectedPoints[slot].entityId)selectedPoints[slot].entityId=std::uint64_t(source)+1;
+    }
+    const auto pointLights=std::span(selectedPoints).first(shadowSelection.count);
+    const auto count=pointLights.size();
+    const auto directionalCount=std::min(scene.directionalLights.size(),MaxDirectionalLights);
+    const auto focused=[&](std::uint64_t id) {
+        return std::find(scene.shadowFocusEntities.begin(),scene.shadowFocusEntities.end(),id)!=scene.shadowFocusEntities.end();
+    };
+    struct CasterInstance {const RenderModelInstance* instance;Aabb bounds;bool focused;};
+    std::vector<CasterInstance> instances;
+    std::vector<Aabb> allBounds,worldCasterBounds;
+    // The ordinary directional focus envelope may include opted-out meshes.
+    // Dedicated storage exists only while eligible player casters are present.
+    Aabb characterBounds;
+    const bool directionalShadows=std::any_of(scene.directionalLights.begin(),scene.directionalLights.begin()+directionalCount,
+        [](const auto& light){return light.enabled&&light.castShadows;});
+    if(scene.shadowWorldId && (count || directionalShadows || scene.characterShadow.enabled)) {
+        instances.reserve(scene.shadowInstances.size());
+        if(directionalShadows){allBounds.reserve(scene.shadowInstances.size());worldCasterBounds.reserve(scene.shadowInstances.size());}
+        for(const auto& instance:scene.shadowInstances)if(instance.castShadows&&instance.model.asset) {
+            const auto pose=poseFor(instance);
+            const auto bounds=math::transformBounds(pose?pose->bounds:instance.model.asset->bounds,instance.model.transform);
+            const bool isFocus=focused(instance.entityId);
+            instances.push_back({&instance,bounds,isFocus});
+            if(instance.lightingCategory==lighting_scope::Character &&
+                (instance.lightingScopes.shadowCasterMask&lighting_scope::Character) &&
+                instance.blend!=MaterialBlend::Alpha && instance.blend!=MaterialBlend::Additive &&
+                (scene.shadowFocusEntities.empty() || isFocus) && bounds.valid) {
+                math::include(characterBounds,bounds.minimum);math::include(characterBounds,bounds.maximum);
             }
-            hashValue(signature,casters[index].size());
+            if(directionalShadows){allBounds.push_back(bounds);if(!isFocus)worldCasterBounds.push_back(bounds);}
         }
     }
-    owner.render(scene.pointLights,signatures,scene.shadowWorldId,scene.shadowResolution,renderFrame,firstView,
-        [&](std::size_t light,const Camera& camera,bgfx::ViewId view) {
-            std::uint32_t count=0;
-            for(const auto& draw:casters[light]) {
-                if(!point_shadow::intersectsFace(draw.bounds,camera))continue;
+    auto characterFit=directional_shadow::buildCharacter(scene.characterShadow,characterBounds,scene.shadowResolution);
+    const ShadowCamera shadowCamera{scene.settings.camera,aspect};
+    std::vector<Aabb> receiverStorage;
+    auto receiverBounds=scene.shadowReceiverBounds;
+    if(cameraContext==1 && directionalShadows && receiverBounds.empty()) {
+        receiverStorage.reserve(scene.instances.size());
+        for(const auto& instance:scene.instances)if(instance.receiveShadows) {
+            const auto pose=poseFor(instance);
+            receiverStorage.push_back(instance.model.asset?math::transformBounds(pose?pose->bounds:instance.model.asset->bounds,instance.model.transform):Aabb{});
+        }
+        const auto particleBounds=particleShadowReceiverBounds(scene.particles,scene.particleMaterials);
+        if(particleBounds.valid)receiverStorage.push_back(particleBounds);
+        receiverBounds=receiverStorage;
+    }
+    std::array<directional_shadow::Cascades,MaxDirectionalLights> cascadeFits;
+    for(std::size_t index=0;index<directionalCount;++index)if(scene.directionalLights[index].enabled&&scene.directionalLights[index].castShadows) {
+        if(cameraContext==1) {
+            auto& fits=cascadeFits[index];
+            fits=directional_shadow::buildGame(scene.directionalLights[index],shadowCamera,scene.shadowResolution,worldCasterBounds,scene.shadowFocusBounds,receiverBounds);
+            if(fits.characterProjection>=fits.projectionCount)
+                fits=directional_shadow::buildGame(scene.directionalLights[index],shadowCamera,scene.shadowResolution,allBounds,{},receiverBounds);
+        } else cascadeFits[index]=directional_shadow::build(scene.directionalLights[index],shadowCamera,scene.shadowResolution,allBounds);
+    }
+    struct ShadowTarget {
+        const PointLight* point{};
+        const directional_shadow::Cascade* projection{};
+        bool partitionFocus{},focusedOnly{},characterOnly{};
+        std::uint32_t casterMask{lighting_scope::All};
+    };
+    std::array<ShadowTarget,MaximumShadowTargets> shadowTargets{};
+    const auto characterIndex=count+directionalCount*4;
+    const auto targetCount=characterIndex+1;
+    static_assert(MaximumShadowTargets<=64);
+    for(std::size_t index=0;index<targetCount;++index) {
+        hashValue(signatures[index],programRevision);
+        if(!scene.shadowWorldId)continue;
+        auto& target=shadowTargets[index];
+        if(index<count) {target.point=&pointLights[index];target.casterMask=pointLights[index].roles.shadowCasterMask;continue;}
+        if(index==characterIndex) {
+            if(characterFit){target.projection=&*characterFit;target.characterOnly=true;target.casterMask=lighting_scope::Character;}
+            continue;
+        }
+        const auto directionIndex=(index-count)/4,projectionIndex=(index-count)%4;
+        const auto& light=scene.directionalLights[directionIndex];const auto& fits=cascadeFits[directionIndex];
+        target.casterMask=light.roles.shadowCasterMask;
+        if(!light.enabled || !light.castShadows || !fits.valid || projectionIndex>=fits.projectionCount)continue;
+        target.projection=&fits.values[projectionIndex];target.partitionFocus=fits.characterProjection<fits.projectionCount;
+        target.focusedOnly=projectionIndex==fits.characterProjection;
+    }
+    const auto visible=[](const ShadowTarget& target,const Aabb& bounds) {
+        return target.point?point_shadow::intersectsLight(bounds,target.point->position,target.point->radius):
+            target.projection && directional_shadow::intersects(bounds,*target.projection);
+    };
+    const auto includes=[](std::uint64_t mask,std::size_t index) {return (mask&(std::uint64_t{1}<<index))!=0;};
+    // Prepare geometry/material metadata once per relevant instance/primitive.
+    // Projection membership, LOD and signatures remain independent: a focused
+    // character edit must not invalidate the stationary world projection.
+    for(const auto& entry:instances) {
+        const auto& instance=*entry.instance;
+        if(instance.blend==MaterialBlend::Alpha || instance.blend==MaterialBlend::Additive)continue;
+        std::uint64_t instanceTargets{};
+        for(std::size_t index=0;index<targetCount;++index) {
+            const auto& target=shadowTargets[index];
+            if(target.characterOnly && (instance.lightingCategory!=lighting_scope::Character ||
+                (!scene.shadowFocusEntities.empty() && !entry.focused)))continue;
+            if(!(target.casterMask & instance.lightingScopes.shadowCasterMask))continue;
+            if(target.partitionFocus && entry.focused!=target.focusedOnly)continue;
+            if(visible(target,entry.bounds))instanceTargets|=std::uint64_t{1}<<index;
+        }
+        if(!instanceTargets)continue;
+        const auto& asset=*instance.model.asset;
+        const auto found=models.find(asset.id);
+        const auto* stream=streamModels->descriptor(asset.id,instance.resourceRevision);
+        const auto pose=poseFor(instance);
+        auto instanceSignature=UINT64_C(14695981039346656037);
+        hashValue(instanceSignature,instance.entityId);hashBytes(instanceSignature,asset.id.data(),asset.id.size());
+        hashValue(instanceSignature,instance.resourceRevision);hashBytes(instanceSignature,instance.model.transform.data(),sizeof(ModelMatrix));
+        for(std::size_t index=0;index<targetCount;++index)if(includes(instanceTargets,index))hashValue(signatures[index],instanceSignature);
+        // Shadow-only demand protects geometry without changing pick signatures.
+        if(stream)streamModels->markRendered(asset.id,instance.resourceRevision,false);
+        std::size_t drawIndex=0;
+        for(const auto& draw:asset.draws) {
+            const auto currentDraw=drawIndex++;
+            if(draw.primitive>=asset.primitives.size())continue;
+            CasterDraw common;
+            const auto local=pose && currentDraw<pose->drawTransforms.size()?pose->drawTransforms[currentDraw]:draw.transform;
+            if(prepareModelMatrices(instance.model.transform,local,common.world,common.normal,common.handedness)!=ModelTransformStatus::Ready)continue;
+            Aabb localBounds;
+            const auto* primitive=stream && draw.primitive<stream->primitives.size()?&stream->primitives[draw.primitive]:nullptr;
+            if(primitive)localBounds=primitive->bounds;
+            else for(const auto& vertex:asset.primitives[draw.primitive].vertices)math::include(localBounds,vertex.position);
+            common.bounds=pose?entry.bounds:math::transformBounds(localBounds,common.world);
+            std::uint64_t primitiveTargets{};
+            for(std::size_t index=0;index<targetCount;++index)
+                if(includes(instanceTargets,index) && visible(shadowTargets[index],common.bounds))primitiveTargets|=std::uint64_t{1}<<index;
+            if(!primitiveTargets)continue;
+            const auto materialIndex=asset.primitives[draw.primitive].material;
+            if(instance.materials && materialIndex<instance.materials->size())common.material=&(*instance.materials)[materialIndex];
+            else if(materialIndex<asset.materials.size())common.material=&asset.materials[materialIndex];
+            else continue;
+            if(instance.textures && materialIndex<instance.textures->size())common.textures=&(*instance.textures)[materialIndex];
+            if(found!=models.end() && draw.primitive<found->second->primitives.size())common.legacy=&found->second->primitives[draw.primitive];
+            if(common.material->alphaBlend)continue;
+            const auto graph=common.textures?common.textures->graph:nullptr;
+            if(graph && (graph->blend==MaterialBlend::Alpha || graph->blend==MaterialBlend::Additive))continue;
+            auto primitiveSignature=UINT64_C(14695981039346656037);
+            if(graph)hashValue(primitiveSignature,graph->coverageSignature(scene.materialContext));
+            hashValue(primitiveSignature,draw.primitive);hashBytes(primitiveSignature,common.world.data(),sizeof(ModelMatrix));
+            if(pose) {
+                hashValue(primitiveSignature,pose->signature);
+                if(!pose->signature && draw.node>=0) {
+                    if(std::size_t(draw.node)<pose->skinPalettes.size())for(const auto& matrix:pose->skinPalettes[draw.node])hashBytes(primitiveSignature,matrix.data(),sizeof(Mat4));
+                    if(std::size_t(draw.node)<pose->nodeWeights.size())for(const auto weight:pose->nodeWeights[draw.node])hashValue(primitiveSignature,weight);
+                }
+            }
+            const auto& material=*common.material;
+            hashValue(primitiveSignature,material.alphaMask);hashValue(primitiveSignature,material.doubleSided);
+            if(material.alphaMask) {
+                hashValue(primitiveSignature,material.alphaCutoff);hashValue(primitiveSignature,material.baseColor[3]);hashValue(primitiveSignature,material.baseColorTexture.texCoord);
+                hashValue(primitiveSignature,material.uvScale);hashValue(primitiveSignature,material.uvOffset);hashValue(primitiveSignature,material.uvRotation);
+                hashValue(primitiveSignature,material.triplanar);hashValue(primitiveSignature,material.triplanarWorld);
+                if(common.textures) {
+                    hashValue(primitiveSignature,common.textures->handles[0].idx);hashValue(primitiveSignature,common.textures->flags[0]);
+                    hashValue(primitiveSignature,common.textures->signatures[0]);hashValue(primitiveSignature,common.textures->sourceFingerprints[0]);
+                }
+            }
+            bool graphPinned=false;
+            std::array<const ResidentModelLod*,MaximumShadowTargets> pinnedGeometry{};
+            std::size_t pinnedCount{};
+            for(std::size_t index=0;index<targetCount;++index)if(includes(primitiveTargets,index)) {
+                const auto& target=shadowTargets[index];CasterDraw candidate=common;
+                if(primitive) {
+                    const auto desired=target.projection?directional_shadow::chooseLod(primitive->levels,common.world,target.projection->texelWorld):
+                        streaming::chooseModelLod(primitive->levels,common.world,primitive->bounds,target.point->position,
+                            std::numbers::pi_v<float>*.5f,scene.shadowResolution);
+                    candidate.resident=streamModels->resident(asset.id,instance.resourceRevision,draw.primitive,desired);
+                }
+                if(!candidate.resident && !candidate.legacy)continue;
+                const auto source=candidate.resident?candidate.resident->deformation:candidate.legacy->deformation;
+                if(source && pose) {
+                    std::shared_ptr<const void> lease=candidate.resident?std::static_pointer_cast<const void>(candidate.resident):std::static_pointer_cast<const void>(found->second);
+                    candidate.deformed=deformation->prepare(source,candidate.resident?candidate.resident->vertices:bgfx::DynamicVertexBufferHandle{BGFX_INVALID_HANDLE},
+                        candidate.resident?bgfx::VertexBufferHandle{BGFX_INVALID_HANDLE}:candidate.legacy->vertices,std::move(lease),pose,draw.node,EnvironmentComputeView);
+                    if(candidate.deformed)submittedPins.push_back(candidate.deformed);
+                }
+                auto& signature=signatures[index];hashValue(signature,primitiveSignature);
+                if(candidate.resident) {
+                    hashValue(signature,candidate.resident->level);hashValue(signature,candidate.resident->vertices.idx);hashValue(signature,candidate.resident->indices.idx);
+                    if(std::find(pinnedGeometry.begin(),pinnedGeometry.begin()+pinnedCount,candidate.resident.get())==pinnedGeometry.begin()+pinnedCount) {
+                        pinnedGeometry[pinnedCount++]=candidate.resident.get();submittedPins.push_back(candidate.resident);
+                    }
+                } else {hashValue(signature,candidate.legacy->vertices.idx);hashValue(signature,candidate.legacy->indices.idx);}
+                if(graph && !graphPinned){submittedPins.push_back(graph);graphPinned=true;}
+                casters[index].push_back(std::move(candidate));
+            }
+        }
+        for(std::size_t index=0;index<targetCount;++index)if(includes(instanceTargets,index))hashValue(signatures[index],casters[index].size());
+    }
+    // Fully translucent or not-yet-resident primitives cannot contribute a
+    // depth caster. Do not retain a dedicated tile for an empty draw list.
+    if(characterFit && casters[characterIndex].empty())characterFit.reset();
+    const auto drawCaster=[&](const CasterDraw& draw,bgfx::ViewId view,MaterialGraphPass pass,const directional_shadow::Cascade* cascade=nullptr,unsigned cascadeIndex=0,const point_shadow::TileRect* rectangle=nullptr,bool character=false) {
                 const auto& material=*draw.material;
                 const bool textured=material.alphaMask && draw.textures && bgfx::isValid(draw.textures->handles[0]);
                 const Vec4 emissive{0,0,0,material.alphaCutoff};
                 const Vec4 uv{static_cast<float>(material.baseColorTexture.texCoord),0,0,0};
                 const Vec4 options{0,material.alphaMask?1.f:0.f,material.doubleSided?1.f:0.f,draw.handedness};
                 const Vec4 maps{textured?1.f:0.f,0,0,0};
+                const Vec4 shadowScopes{};bgfx::setUniform(surfaceLighting,shadowScopes.data());
+                const Vec4 category{float(lighting_scope::World),0,0,0};bgfx::setUniform(surfaceCategory,category.data());
                 bgfx::setTransform(draw.world.data());
                 bgfx::setUniform(modelNormalMatrix,draw.normal.data());
                 bgfx::setUniform(modelBase,material.baseColor.data());bgfx::setUniform(modelEmissive,emissive.data());
@@ -1184,58 +1524,124 @@ void Renderer::Impl::renderShadows(const RenderScene& scene,PointShadowRenderer&
                 bindMaterialMapping(material.uvScale,material.uvOffset,material.uvRotation,material.triplanar,material.triplanarWorld);
                 bgfx::setTexture(0,albedoSampler,textured?draw.textures->handles[0]:white,textured?draw.textures->flags[0]:UINT32_MAX);
                 const auto graph=draw.textures?draw.textures->graph:nullptr;
-                if(graph)graph->bind();
+                if(graph)graph->bind(scene.materialContext);
+                if(cascade) {
+                    const auto projection=cascade->projection*cascade->view;
+                    const auto tile=directional_shadow::casterTile(cascadeIndex,character?1:cameraCount==2?(cameraContext==1?2:4):2,character?1:cameraCount==2?1:2);
+                    bgfx::setUniform(directionalCasterViewProjection,projection.data());bgfx::setUniform(directionalCasterTile,tile.data());
+                    bgfx::setScissor(rectangle->x,rectangle->y,rectangle->width,rectangle->height);
+                }
                 if(draw.resident)draw.resident->bind();else draw.legacy->bind();
+                if(draw.deformed)draw.deformed->bind();
                 const std::uint64_t cull=material.doubleSided?BGFX_STATE_NONE:draw.handedness<0?BGFX_STATE_CULL_CCW:BGFX_STATE_CULL_CW;
                 bgfx::setState(BGFX_STATE_WRITE_Z|BGFX_STATE_DEPTH_TEST_LESS|cull);
-                bgfx::submit(view,graph?graph->program(MaterialGraphPass::PointShadow):shadowProgram);++count;
+                bgfx::submit(view,graph?graph->program(pass):cascade?directionalShadowProgram:shadowProgram);
+    };
+    const auto focus=scene.shadowPriorityOrigin.value_or(scene.shadowFocusBounds.valid?
+        (scene.shadowFocusBounds.minimum+scene.shadowFocusBounds.maximum)*.5:scene.settings.camera.eye());
+    owner.render(pointLights,scene.directionalLights,std::span(signatures).first(count),scene.shadowWorldId,scene.shadowResolution,renderFrame,firstView,cameraCount,focus,
+        [&](std::size_t lightIndex,const Camera& camera,bgfx::ViewId view) {
+            std::uint32_t draws=0;
+            for(const auto& draw:casters[lightIndex]) {
+                if(!point_shadow::intersectsFace(draw.bounds,camera))continue;
+                drawCaster(draw,view,MaterialGraphPass::PointShadow);++draws;
             }
-            return count;
+            return draws;
+        },bool(characterFit));
+    owner.renderDirectional(scene.directionalLights,cascadeFits,std::span(signatures).subspan(count,directionalCount*4),shadowCamera,cameraContext,firstDirectionalView,
+        [&](std::size_t lightIndex,unsigned cascadeIndex,const directional_shadow::Cascade& cascade,const point_shadow::TileRect& rectangle,bgfx::ViewId view) {
+            // A depth-only fullscreen triangle clears this tile at depth one.
+            // Sibling projections keep their cached depth in the same view.
+            const Mat4 identity;
+            const auto clearProjection=math::translation({0,0,1});
+            const auto tile=directional_shadow::casterTile(cascadeIndex,cameraCount==2?(cameraContext==1?2:4):2,cameraCount==2?1:2);
+            const Vec4 one{1,1,1,1},zero{};
+            bgfx::setUniform(surfaceLighting,zero.data());
+            const Vec4 category{float(lighting_scope::World),0,0,0};bgfx::setUniform(surfaceCategory,category.data());
+            bgfx::setTransform(identity.data());bgfx::setUniform(modelNormalMatrix,identity.data());
+            bgfx::setUniform(directionalCasterViewProjection,clearProjection.data());bgfx::setUniform(directionalCasterTile,tile.data());
+            bgfx::setUniform(modelBase,one.data());bgfx::setUniform(modelEmissive,zero.data());bgfx::setUniform(modelUv,zero.data());
+            bgfx::setUniform(modelOptions,zero.data());bgfx::setUniform(modelMaps,zero.data());
+            bindMaterialMapping({1,1,1},{},{},false);
+            bgfx::setTexture(0,albedoSampler,white);bgfx::setScissor(rectangle.x,rectangle.y,rectangle.width,rectangle.height);
+            fullscreen.bind();bgfx::setState(BGFX_STATE_WRITE_Z|BGFX_STATE_DEPTH_TEST_ALWAYS);bgfx::submit(view,directionalShadowProgram);
+            std::uint32_t draws=1;
+            for(const auto& draw:casters[count+lightIndex*4+cascadeIndex])if(directional_shadow::intersects(draw.bounds,cascade)) {
+                drawCaster(draw,view,MaterialGraphPass::DirectionalShadow,&cascade,cascadeIndex,&rectangle);++draws;
+            }
+            return draws;
+        });
+    owner.renderCharacter(scene.characterShadow,characterFit,signatures[characterIndex],characterView,
+        [&](const directional_shadow::Cascade& fit,const point_shadow::TileRect& rectangle,bgfx::ViewId view) {
+            const Mat4 identity;const auto clearProjection=math::translation({0,0,1});
+            const auto tile=directional_shadow::casterTile(0,1,1);const Vec4 one{1,1,1,1},zero{};
+            bgfx::setUniform(surfaceLighting,zero.data());
+            const Vec4 category{float(lighting_scope::World),0,0,0};bgfx::setUniform(surfaceCategory,category.data());
+            bgfx::setTransform(identity.data());bgfx::setUniform(modelNormalMatrix,identity.data());
+            bgfx::setUniform(directionalCasterViewProjection,clearProjection.data());bgfx::setUniform(directionalCasterTile,tile.data());
+            bgfx::setUniform(modelBase,one.data());bgfx::setUniform(modelEmissive,zero.data());bgfx::setUniform(modelUv,zero.data());
+            bgfx::setUniform(modelOptions,zero.data());bgfx::setUniform(modelMaps,zero.data());bindMaterialMapping({1,1,1},{},{},false);
+            bgfx::setTexture(0,albedoSampler,white);bgfx::setScissor(rectangle.x,rectangle.y,rectangle.width,rectangle.height);
+            fullscreen.bind();bgfx::setState(BGFX_STATE_WRITE_Z|BGFX_STATE_DEPTH_TEST_ALWAYS);bgfx::submit(view,directionalShadowProgram);
+            std::uint32_t draws=1;
+            for(const auto& caster:casters[characterIndex]) {
+                drawCaster(caster,view,MaterialGraphPass::DirectionalShadow,&fit,0,&rectangle,true);++draws;
+            }
+            return draws;
         });
     owner.setCasterCount(scene.shadowInstances.size());
     shadowStatus=shadows->status();
     if(!thumbnailShadows->status().empty()){if(!shadowStatus.empty())shadowStatus+='\n';shadowStatus+="Thumbnail shadows: "+thumbnailShadows->status();}
+    if(shadowSelection.unadmittedCount) {
+        if(!shadowStatus.empty())shadowStatus+='\n';
+        shadowStatus+="Point shadow budget: "+std::to_string(shadowSelection.unadmittedCount)+
+            " light(s) illuminate normally without a resident shadow map (16 shadow lights supported).";
+    }
 }
-bool Renderer::Impl::renderGlow(const SceneSettings& settings,ViewportTargets& target,std::uint16_t w,std::uint16_t h,RenderViews views) {
+bool Renderer::Impl::prepareGlow(const SceneSettings& settings,ViewportTargets& target,std::uint16_t w,std::uint16_t h,RenderViewPurpose purpose) {
     const auto& glow=settings.environment.glow;
-    if(views.glowExtract==UINT16_MAX || !glow.enabled || !validGlowSettings(glow) || glow.strength==0 || glow.radius==0 ||
+    if(renderViewPassSlots(purpose).glowExtract==UINT16_MAX || !glow.enabled || !validGlowSettings(glow) || glow.strength==0 || glow.radius==0 ||
         !bgfx::isValid(glowExtractProgram) || !bgfx::isValid(glowBlurProgram))return false;
     if(!target.glow && target.glowFailure.empty()) {
         try {auto scratch=std::make_unique<GlowTargets>();scratch->create(w,h);target.glow=std::move(scratch);}
         catch(const std::exception& error) {target.glowFailure=error.what();}
     }
     if(!target.glow)return false;
-    const auto& scratch=*target.glow;
-    const float params[]{bounded(settings.exposure,1,0,100),glow.threshold,bgfx::getCaps()->originBottomLeft?1.f:0.f,glow.radius};
-    const auto submit=[&](bgfx::ViewId view,bgfx::FrameBufferHandle destination,bgfx::TextureHandle source,
-                          bgfx::ProgramHandle shader,const Vec4& texel) {
-        bgfx::setViewFrameBuffer(view,destination);bgfx::setViewRect(view,0,0,scratch.width,scratch.height);
-        bgfx::setViewClear(view,BGFX_CLEAR_NONE);bgfx::setViewTransform(view,nullptr,nullptr);
-        bgfx::setUniform(glowParams,params);bgfx::setUniform(glowTexel,texel.data());bgfx::setTexture(0,glowSource,source);
-        fullscreen.bind();bgfx::setState(BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A);bgfx::submit(view,shader);
-    };
-    submit(views.glowExtract,scratch.buffers[0],target.hdr,glowExtractProgram,{1.f/w,1.f/h,0,0});
-    const float dx=1.f/scratch.width,dy=1.f/scratch.height;
-    // Sample every texel inside the Gaussian support. Expanding only tap spacing
-    // would produce disconnected lobes around isolated sparks at larger Sizes.
-    submit(views.glowHorizontal,scratch.buffers[1],scratch.textures[0],glowBlurProgram,{dx,dy,dx,0});
-    submit(views.glowVertical,scratch.buffers[0],scratch.textures[1],glowBlurProgram,{dx,dy,0,dy});
     return true;
 }
 
-void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,EnvironmentLighting& lighting,
-    std::uint16_t w,std::uint16_t h,RenderViews views,bool drawGrid,bool allowPicking,std::vector<std::shared_ptr<const ResidentModelLod>>* pinnedGeometry,ParticleRenderStats* particleStats,bool drawEnvironment) {
-    const bool sceneView=views.scene==MainViews.scene || views.scene==GameViews.scene;
-    auto& viewLods=lodSelections[views.scene==GameViews.scene ? 1 : 0];
+std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,EnvironmentLighting& lighting,
+    std::uint16_t w,std::uint16_t h,RenderViewIdentity identity,bool drawGrid,bool allowPicking,std::vector<std::shared_ptr<const ResidentModelLod>>* pinnedGeometry,ParticleRenderStats* particleStats,bool drawEnvironment) {
+    const bool sceneView=identity.purpose==RenderViewPurpose::Scene || identity.purpose==RenderViewPurpose::Game;
+    const bool gameView=identity.purpose==RenderViewPurpose::Game;
+    const bool thumbnailView=identity.purpose==RenderViewPurpose::Thumbnail;
+    auto& viewLods=lodSelections[gameView ? 1 : 0];
     if (scene.pinned) submittedPins.push_back(scene.pinned);
-    PointShadowRenderer* shadowContext=nullptr;
-    if(sceneView) {shadowContext=shadows.get();renderShadows(scene,*shadowContext,PointShadowView);}
-    else if(views.scene==ThumbnailViews.scene) {shadowContext=thumbnailShadows.get();renderShadows(scene,*shadowContext,ThumbnailPointShadowView);}
     const auto& settings = scene.settings;
-    const bool savedScene=views.scene==ThumbnailViews.scene && scene.sceneMode;
+    const bool savedScene=thumbnailView && scene.sceneMode;
+    const bool ambientEnabled=scene.sceneMode && (sceneView || savedScene) && settings.environment.ambientVisibility.enabled;
     const bool authoredEnvironment=sceneView || savedScene;
     const auto presentation=environmentPresentation(settings.environment,appearance,authoredEnvironment,drawEnvironment);
     drawEnvironment=presentation.showBackground;
+    const bool glowing=prepareGlow(settings,target,w,h,identity.purpose);
+    const bool scheduledPick=allowPicking && scene.sceneMode && requestedPick && !pendingPick && pickTargets;
+    const auto plan=buildRenderPassPlan({identity,glowing,drawGrid,scheduledPick,thumbnailView,sceneView || thumbnailView,presentation.procedural,ambientEnabled});
+    if(const auto validation=validateRenderPassPlan(plan);!validation)
+        throw std::logic_error(renderPassPlanErrorText(validation.error));
+    const auto passView=[&](RenderPassKind kind) {
+        const auto* pass=plan.find(kind);
+        if(!pass)throw std::logic_error("Renderer attempted an undeclared frame pass.");
+        return pass->physicalView;
+    };
+    auto views=renderViewPassSlots(identity.purpose);
+    views.scene=passView(RenderPassKind::SceneColor);
+    PointShadowRenderer* shadowContext=nullptr;
+    const unsigned shadowCameraContext=gameView?1u:0u;
+    if(plan.has(RenderPassKind::PointShadowUpdates)) {
+        shadowContext=sceneView?shadows.get():thumbnailShadows.get();
+        renderShadows(scene,*shadowContext,passView(RenderPassKind::PointShadowUpdates),
+            passView(RenderPassKind::DirectionalShadowUpdates),passView(RenderPassKind::CharacterShadowUpdates),shadowCameraContext,sceneView?2u:1u,float(w)/h);
+    }
     ProceduralSkyGpu* procedural=nullptr;
     if(sceneView)proceduralActive=settings.environment.source==EnvironmentSource::ProceduralSky;
     if(presentation.procedural) {
@@ -1243,7 +1649,7 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
         // Both world views consume one frozen generation. Camera motion never
         // changes the direction-only sky key, and thumbnail ownership is separate.
         if(!sceneView || proceduralFrame!=renderFrame) {
-            const bool prepared=owner.prepare(settings.environment.procedural,settings.proceduralSun,EnvironmentComputeView);
+            const bool prepared=owner.prepare(settings.environment.procedural,settings.proceduralSun,passView(RenderPassKind::EnvironmentPreparation));
             // Never cache a different saved scene's last-good lighting under
             // this thumbnail's signature when its own preparation has failed.
             if(!sceneView && !prepared)throw std::runtime_error(owner.status());
@@ -1267,6 +1673,17 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
     const auto view = settings.camera.viewMatrix();
     const auto projection = settings.camera.projectionMatrix(aspect,caps->homogeneousDepth ? ClipDepth::NegativeOneToOne : ClipDepth::ZeroToOne);
     bgfx::setViewTransform(views.scene,view.data(),projection.data());
+    if(ambientEnabled) {
+        target.ensureReadableDepth(w,h);
+        const auto depthView=passView(RenderPassKind::DepthPrepass);
+        bgfx::setViewName(depthView,gameView?"Game readable depth":"Scene readable depth");
+        bgfx::setViewFrameBuffer(depthView,target.depthPrepass);
+        bgfx::setViewMode(depthView,bgfx::ViewMode::Sequential);
+        bgfx::setViewRect(depthView,0,0,w,h);
+        bgfx::setViewClear(depthView,BGFX_CLEAR_COLOR|BGFX_CLEAR_DEPTH,0u,1.f,0);
+        bgfx::setViewTransform(depthView,view.data(),projection.data());
+        bgfx::touch(depthView);
+    }
     if(drawEnvironment && bgfx::isValid(specular)) {
         const auto forward=math::normalized(settings.camera.target-eye,{0,0,-1});
         const auto right=math::normalized(math::cross(forward,settings.camera.up),{1,0,0});
@@ -1286,55 +1703,95 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
     const float environmentValues[]{settings.environment.enabled ? bounded(settings.environment.intensity,1,0,10) : 0,
         procedural?0.f:bounded(settings.environment.rotation,0,-180,180) * std::numbers::pi_v<float> / 180.0f,
         procedural?procedural->maxSpecularLod():lighting.maxSpecularLod(),0};
+    const auto ambientLightValues=environmentAmbientLight(settings.environment,authoredEnvironment);
     const std::span<const DirectionalLight> directional = scene.sceneMode ? scene.directionalLights : std::span<const DirectionalLight>(&settings.directional,1);
     const std::span<const PointLight> points = scene.sceneMode ? scene.pointLights : std::span<const PointLight>(settings.points);
     const auto directionalCount = std::min(directional.size(),MaxDirectionalLights);
-    const auto pointCount = std::min(points.size(),MaxPointLights);
-    if (directional.size() > MaxDirectionalLights || points.size() > MaxPointLights)
-        modelStatus = "Scene exceeds the renderer budget of 4 directional and 16 point lights.";
-    std::array<float,MaxDirectionalLights*4> directions{},directionColors{};
-    std::array<float,MaxPointLights*4> pointPositions{},pointColors{};
+    if (directional.size() > MaxDirectionalLights)
+        modelStatus = "Scene exceeds the renderer budget of 4 directional lights.";
+    const auto shadowSelection=selectPointShadowLights(points,scene.shadowPriorityOrigin);
+    std::vector<std::int32_t> shadowIndices(points.size(),-1);
+    for(std::uint32_t slot=0;slot<shadowSelection.count;++slot)shadowIndices[shadowSelection.sourceIndices[slot]]=static_cast<std::int32_t>(slot);
+    if(!target.clustered)target.clustered=std::make_unique<ClusteredLightingGpu>(clusterComputeProgram);
+    target.clustered->setComputeProgram(clusterComputeProgram);
+    target.clustered->advance(renderFrame);
+    const bool clusterReady=target.clustered->prepare(settings.camera,w,h,points,shadowIndices,lighting.brdfCpu(),
+        passView(RenderPassKind::LightAssignment),scene.localLightMode==LocalLightMode::AllLightsReference,ambientEnabled?w:0,ambientEnabled?h:0);
+    if(sceneView){clusterStats=target.clustered->stats();clusterStatus=target.clustered->status();}
+    if(!clusterReady) {
+        if(!sceneView)throw std::runtime_error(target.clustered->status());
+        return InvalidRenderView;
+    }
+    std::array<float,MaxDirectionalLights*4> directions{},directionColors{},directionRoles{};
     for (std::size_t i=0;i<directionalCount;++i) {
         const auto& light = directional[i];
         const auto lightDirection = math::normalized(light.direction,{-.5f,-.8f,-.6f});
         for (std::size_t j=0;j<3;++j) { directions[i*4+j]=lightDirection[j]; directionColors[i*4+j]=toLinear(light.color[j]); }
         directions[i*4+3]=light.enabled ? bounded(light.intensity,0,0,10000) : 0;
+        directionRoles[i*4]=static_cast<float>(light.roles.receiverMask);
+        directionRoles[i*4+1]=static_cast<float>(light.roles.ambientRevealMask);
+        directionRoles[i*4+2]=light.roles.ambientReveal?light.roles.ambientRevealStrength:0.f;
+        directionRoles[i*4+3]=light.castShadows?1.f:0.f;
     }
-    for (std::size_t i=0;i<pointCount;++i) {
-        const auto& light = points[i];
-        for (std::size_t j=0;j<3;++j) {pointPositions[i*4+j]=finiteOr(light.position[j],0);pointColors[i*4+j]=toLinear(light.color[j]);}
-        pointPositions[i*4+3]=light.enabled ? bounded(light.intensity,0,0,10000) : 0;
-        pointColors[i*4+3]=light.inverseRadiusSquared();
+    std::array<Vec4,2> characterDirections{},characterColors{},characterResponses{};
+    for(std::size_t i=0;i<scene.characterLights.size();++i) {
+        const auto& light=scene.characterLights[i];if(!scene.sceneMode || !validCharacterLight(light))continue;
+        const auto rays=math::normalized(light.direction);
+        characterDirections[i]={rays[0],rays[1],rays[2],light.enabled?light.intensity:0.f};
+        characterColors[i]={toLinear(light.color[0]),toLinear(light.color[1]),toLinear(light.color[2]),light.diffuse};
+        characterResponses[i]={light.specular,0,0,0};
     }
-    const float lightCountValues[]{static_cast<float>(directionalCount),static_cast<float>(pointCount),0,0};
+    const float lightCountValues[]{static_cast<float>(directionalCount),static_cast<float>(points.size()),0,0};
+    const Vec4 lightingResponseValues{settings.environment.ambientVisibility.attenuateEmission?1.f:0.f,0,0,0};
+    const auto& reveal=scene.playerReveal;
+    const Vec4 playerRevealValues{reveal.position[0],reveal.position[1],reveal.position[2],
+        scene.sceneMode&&reveal.enabled&&math::finite(reveal.position)&&std::isfinite(reveal.spread)&&reveal.spread>0?
+            std::min(reveal.spread,100000.f):0.f};
+    const auto bindDirections=[&] {
+        bgfx::setUniform(direction,directions.data(),static_cast<std::uint16_t>(MaxDirectionalLights));
+        bgfx::setUniform(directionColor,directionColors.data(),static_cast<std::uint16_t>(MaxDirectionalLights));
+        bgfx::setUniform(directionLightingRoles,directionRoles.data(),static_cast<std::uint16_t>(MaxDirectionalLights));
+        bgfx::setUniform(characterDirection,characterDirections.data(),2);bgfx::setUniform(characterColor,characterColors.data(),2);
+        bgfx::setUniform(characterResponse,characterResponses.data(),2);
+        bgfx::setUniform(lightCounts,lightCountValues);
+        bgfx::setUniform(playerReveal,playerRevealValues.data());
+    };
+    if(!target.ambient)target.ambient=std::make_unique<AmbientVisibilityGpu>(ambientEvaluateProgram,ambientPublishProgram);
+    target.ambient->setPrograms(ambientEvaluateProgram,ambientPublishProgram);
+    target.ambient->advance(renderFrame);
+    auto ambientSettings=settings.environment.ambientVisibility;ambientSettings.enabled=ambientEnabled;
+    const bool ambientReady=target.ambient->prepare(target.readableDepth,target.receiverScope,settings.camera,w,h,*target.clustered,
+        ambientSettings,ambientEnabled?passView(RenderPassKind::AmbientVisibility):InvalidRenderView,[&] {
+            if(shadowContext && scene.shadowWorldId)shadowContext->bind(true,3,shadowCameraContext);else shadows->bindDisabled(3);
+            bindDirections();
+        });
+    if(!ambientReady)throw std::runtime_error(target.ambient->status());
     const auto bindLighting = [&](std::uint8_t firstEnvironmentSlot) {
         const std::uint8_t shadowSlot=firstEnvironmentSlot==12?15:8;
-        if(shadowContext && scene.shadowWorldId)shadowContext->bind(true,shadowSlot);else shadows->bindDisabled(shadowSlot);
-        bgfx::setUniform(cameraPos,camera); bgfx::setUniform(direction,directions.data(),static_cast<std::uint16_t>(MaxDirectionalLights));
-        bgfx::setUniform(directionColor,directionColors.data(),static_cast<std::uint16_t>(MaxDirectionalLights));
-        bgfx::setUniform(pointPosition,pointPositions.data(),static_cast<std::uint16_t>(MaxPointLights));
-        bgfx::setUniform(pointColor,pointColors.data(),static_cast<std::uint16_t>(MaxPointLights));
-        bgfx::setUniform(lightCounts,lightCountValues);
+        if(shadowContext && scene.shadowWorldId)shadowContext->bind(true,shadowSlot,shadowCameraContext);else shadows->bindDisabled(shadowSlot);
+        bgfx::setUniform(cameraPos,camera);bindDirections();target.ambient->bind();
+        bgfx::setUniform(lightingResponse,lightingResponseValues.data());
         bgfx::setUniform(environmentParams,environmentValues);
-        bindFog(fogValues);
+        bgfx::setUniform(ambientLight,ambientLightValues.data());
         bgfx::setTexture(firstEnvironmentSlot,irradianceSampler,diffuse);
         bgfx::setTexture(firstEnvironmentSlot+1,prefilteredSampler,specular);
-        bgfx::setTexture(firstEnvironmentSlot+2,brdfSampler,lighting.brdf());
+        target.clustered->bind(firstEnvironmentSlot+2);
     };
     if (allowPicking && !scene.sceneMode && requestedPick) { ++pickEpoch; requestedPick.reset(); }
-    const bool capturePick = allowPicking && scene.sceneMode && requestedPick && !pendingPick && pickTargets;
+    const bool capturePick = plan.has(RenderPassKind::Picking);
     if (capturePick) {
         pendingPick = std::make_unique<PendingPick>();
         pendingPick->request = *requestedPick;
+        pendingPick->materialContext=requestedPickContext;
         pendingPick->epoch = pickEpoch;
         pendingPick->targets = pickTargets;
         pendingPick->pinned=scene.pinned;
         requestedPick.reset();
-        bgfx::setViewFrameBuffer(PickView,pickTargets->framebuffer);
-        bgfx::setViewRect(PickView,0,0,w,h);
-        bgfx::setViewTransform(PickView,view.data(),projection.data());
-        bgfx::setViewClear(PickView,BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH,0,1.0f,0);
-        bgfx::touch(PickView);
+        bgfx::setViewFrameBuffer(passView(RenderPassKind::Picking),pickTargets->framebuffer);
+        bgfx::setViewRect(passView(RenderPassKind::Picking),0,0,w,h);
+        bgfx::setViewTransform(passView(RenderPassKind::Picking),view.data(),projection.data());
+        bgfx::setViewClear(passView(RenderPassKind::Picking),BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH,0,1.0f,0);
+        bgfx::touch(passView(RenderPassKind::Picking));
     }
     std::array<RenderModelInstance,1> legacy;
     auto instances = scene.instances;
@@ -1347,6 +1804,7 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
     for (const auto& instance : instances) {
         if (!instance.model.asset) { ++missing; continue; }
         const auto& asset = *instance.model.asset;
+        const auto pose=poseFor(instance);
         const auto found = models.find(asset.id);
         const auto* stream=streamModels->descriptor(asset.id,instance.resourceRevision);
         if (found == models.end() && !(stream && streamModels->ready(asset.id,instance.resourceRevision))) {
@@ -1364,7 +1822,8 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
                 const auto currentDraw=drawIndex++;
                 ModelMatrix world, normal;
                 float handedness = 1;
-                const auto transform=prepareModelMatrices(instance.model.transform,draw.transform,world,normal,handedness);
+                const auto local=pose && currentDraw<pose->drawTransforms.size()?pose->drawTransforms[currentDraw]:draw.transform;
+                const auto transform=prepareModelMatrices(instance.model.transform,local,world,normal,handedness);
                 if (transform==ModelTransformStatus::Collapsed) { ++collapsed; continue; }
                 if (transform==ModelTransformStatus::Invalid) { ++skipped; continue; }
                 std::shared_ptr<const ResidentModelLod> resident;
@@ -1388,6 +1847,14 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
                     if (pinnedGeometry) pinnedGeometry->push_back(resident);
                 }
                 const auto* legacyMesh=resident?nullptr:&found->second->primitives[draw.primitive];
+                std::shared_ptr<const DeformedModelVertices> deformed;
+                const auto source=resident?resident->deformation:legacyMesh->deformation;
+                if(source && pose) {
+                    std::shared_ptr<const void> lease=resident?std::static_pointer_cast<const void>(resident):std::static_pointer_cast<const void>(found->second);
+                    deformed=deformation->prepare(source,resident?resident->vertices:bgfx::DynamicVertexBufferHandle{BGFX_INVALID_HANDLE},
+                        resident?bgfx::VertexBufferHandle{BGFX_INVALID_HANDLE}:legacyMesh->vertices,std::move(lease),pose,draw.node,EnvironmentComputeView);
+                    if(deformed)submittedPins.push_back(deformed);
+                }
                 const auto tangentUv=asset.primitives[draw.primitive].tangentUv;
                 const auto materialIndex = asset.primitives[draw.primitive].material;
                 const auto& material=instance.materials && materialIndex<instance.materials->size() ? (*instance.materials)[materialIndex]:asset.materials[materialIndex];
@@ -1396,16 +1863,12 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
                     ? (*instance.textures)[materialIndex] : emptyBindings;
                 const auto graph=bindings.graph;
                 const auto shading=graph?graph->shading:material.graph?materialOutputNode(*material.graph).output.shading:instance.shading;
-                const auto blend=graph?graph->blend:material.graph?materialOutputNode(*material.graph).output.blend:instance.blend;
+                const auto blend=graph?graph->blend:material.graph?materialOutputNode(*material.graph).output.blend:material.alphaBlend?MaterialBlend::Alpha:instance.blend;
                 if(graph)submittedPins.push_back(graph);
-                auto submitDraw=[&,world,normal,handedness,resident,legacyMesh,tangentUv,material,bindings,graph,shading,blend,samplers,instance,pickColor] {
-                    const auto bindGeometry=[&] {if(resident)resident->bind();else legacyMesh->bind();};
+                auto submitDraw=[&,world,normal,handedness,resident,legacyMesh,deformed,tangentUv,material,bindings,graph,shading,blend,samplers,instance,pickColor] {
+                    const auto bindGeometry=[&] {if(resident)resident->bind();else legacyMesh->bind();if(deformed)deformed->bind();};
                     float mapFlags[4]{};
-                    for (std::uint8_t slot = 0; slot < samplers.size(); ++slot) {
-                        const bool valid = bgfx::isValid(bindings.handles[slot]);
-                        if (slot < 4) mapFlags[slot] = valid ? 1.0f : 0.0f;
-                        bgfx::setTexture(slot,samplers[slot],valid ? bindings.handles[slot] : white,bindings.flags[slot]);
-                    }
+                    for(std::size_t slot=0;slot<4;++slot)mapFlags[slot]=bgfx::isValid(bindings.handles[slot])?1.f:0.f;
                     const Vec4 specularValue{material.specular,0,0,0};
                     const float surface[]{material.metallic,material.roughness,material.normalScale,material.occlusionStrength};
                     const float emissive[]{material.emissive[0],material.emissive[1],material.emissive[2],material.alphaCutoff};
@@ -1415,18 +1878,32 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
                         material.doubleSided ? 1.0f : 0.0f,handedness};
                     const float emissiveMap[]{bgfx::isValid(bindings.handles[4]) ? 1.0f : 0.0f,shading==MaterialShading::Unlit?1.f:0.f,instance.receiveShadows?1.f:0.f,
                         blend==MaterialBlend::Additive?2.f:blend==MaterialBlend::Alpha?1.f:0.f};
-                    bgfx::setTransform(world.data());
-                    bgfx::setUniform(modelNormalMatrix,normal.data());
-                    bgfx::setUniform(modelBase,material.baseColor.data());
-                    bgfx::setUniform(modelSpecular,specularValue.data()); bgfx::setUniform(modelSurface,surface); bgfx::setUniform(modelEmissive,emissive);
-                    bgfx::setUniform(modelUv,uv); bgfx::setUniform(modelOptions,options);
-                    bindMaterialMapping(material.uvScale,material.uvOffset,material.uvRotation,material.triplanar,material.triplanarWorld);
-                    bgfx::setUniform(modelMaps,mapFlags); bgfx::setUniform(modelEmissiveMap,emissiveMap);
-                    bindLighting(graph?12:5);
-                    if(graph)graph->bind();
-                    bindGeometry();
                     const std::uint64_t cull = material.doubleSided ? BGFX_STATE_NONE : handedness < 0 ? BGFX_STATE_CULL_CCW : BGFX_STATE_CULL_CW;
                     const bool transparent=blend==MaterialBlend::Alpha || blend==MaterialBlend::Additive;
+                    const auto bindSurface=[&](bool prepass) {
+                        bgfx::setTransform(world.data());
+                        bgfx::setUniform(modelNormalMatrix,normal.data());
+                        bgfx::setUniform(modelBase,material.baseColor.data());
+                        bgfx::setUniform(modelSpecular,specularValue.data());bgfx::setUniform(modelSurface,surface);bgfx::setUniform(modelEmissive,emissive);
+                        bgfx::setUniform(modelUv,uv);bgfx::setUniform(modelOptions,options);
+                        bindMaterialMapping(material.uvScale,material.uvOffset,material.uvRotation,material.triplanar,material.triplanarWorld);
+                        bgfx::setUniform(modelMaps,mapFlags);bgfx::setUniform(modelEmissiveMap,emissiveMap);
+                        const Vec4 scopes{float(instance.lightingScopes.directReceiverMask),float(instance.lightingScopes.ambientReceiverMask),
+                            prepass?1.f:0.f,transparent?1.f:0.f};
+                        bgfx::setUniform(surfaceLighting,scopes.data());
+                        const Vec4 category{float(instance.lightingCategory),0,0,0};bgfx::setUniform(surfaceCategory,category.data());
+                        if(!prepass) {bindLighting(graph?12:5);bindFog(fogValues,graph?graph->receiveFog:material.receiveFog);}
+                        for(std::uint8_t slot=0;slot<samplers.size();++slot)
+                            bgfx::setTexture(slot,samplers[slot],bgfx::isValid(bindings.handles[slot])?bindings.handles[slot]:white,bindings.flags[slot]);
+                        if(graph)graph->bind(scene.materialContext);
+                        bindGeometry();
+                    };
+                    if(ambientEnabled && !transparent) {
+                        bindSurface(true);
+                        bgfx::setState(BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A|BGFX_STATE_WRITE_Z|BGFX_STATE_DEPTH_TEST_LESS|cull);
+                        bgfx::submit(passView(RenderPassKind::DepthPrepass),graph?graph->program(MaterialGraphPass::PointShadow):shadowProgram);
+                    }
+                    bindSurface(false);
                     const auto blending=blend==MaterialBlend::Alpha?BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_INV_SRC_ALPHA):
                         blend==MaterialBlend::Additive?BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_ZERO,BGFX_STATE_BLEND_ONE):0;
                     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | (transparent?0:BGFX_STATE_WRITE_Z) | BGFX_STATE_DEPTH_TEST_LESS | cull | blending);
@@ -1434,6 +1911,7 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
                     if (capturePick && instance.pickable && instance.entityId) {
                         if(graph)pendingPick->graphMaterials.push_back(graph);
                         if (resident) pendingPick->resources.push_back(resident);
+                        if(deformed)pendingPick->deformations.push_back(deformed);
                         // This pass deliberately shares model transforms, winding,
                         // base-color UV/filter flags, vertex alpha and mask cutoff.
                         // It never writes to the visible scene depth or HDR targets.
@@ -1448,15 +1926,15 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
                         bgfx::setUniform(modelEmissiveMap,emissiveMap);
                         bgfx::setUniform(pickId,pickColor.data());
                         bgfx::setTexture(0,albedoSampler,bgfx::isValid(bindings.handles[0]) ? bindings.handles[0] : white,bindings.flags[0]);
-                        if(graph)graph->bind();
+                        if(graph)graph->bind(pendingPick->materialContext);
                         bindGeometry();
                         bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS | cull);
-                        bgfx::submit(PickView,graph?graph->program(MaterialGraphPass::Picking):pickProgram);
+                        bgfx::submit(passView(RenderPassKind::Picking),graph?graph->program(MaterialGraphPass::Picking):pickProgram);
                     }
                 };
                 if(blend==MaterialBlend::Alpha || blend==MaterialBlend::Additive) {
                     const auto localBounds=stream && draw.primitive<stream->primitives.size()?stream->primitives[draw.primitive].bounds:found->second->bounds[draw.primitive];
-                    const auto bounds=math::transformBounds(localBounds,world);
+                    const auto bounds=pose?math::transformBounds(pose->bounds,instance.model.transform):math::transformBounds(localBounds,world);
                     const Vec3 center{(bounds.minimum[0]+bounds.maximum[0])*.5f,(bounds.minimum[1]+bounds.maximum[1])*.5f,(bounds.minimum[2]+bounds.maximum[2])*.5f};
                     const auto depth=particle_rendering::viewDepth(center,eye,settings.camera.forward());
                     if(std::isfinite(depth))transparentMeshes.push_back({depth,std::move(submitDraw)});
@@ -1475,7 +1953,7 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
         auto& pending = *pendingPick;
         const auto x = static_cast<std::uint16_t>(pending.request.x);
         const auto y = static_cast<std::uint16_t>(caps->originBottomLeft ? height-1-pending.request.y : pending.request.y);
-        bgfx::blit(PickReadView,pickTargets->readback,0,0,pickTargets->color,x,y,1,1);
+        bgfx::blit(passView(RenderPassKind::PickReadback),pickTargets->readback,0,0,pickTargets->color,x,y,1,1);
         pending.readyFrame = bgfx::readTexture(pickTargets->readback,pending.pixel.data());
     }
     if (!scene.sceneMode && !(scene.model && scene.model->asset)) {
@@ -1492,6 +1970,9 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
         bgfx::setTexture(2,metallicSampler,bgfx::isValid(textures.metallic)?textures.metallic:white);
         bgfx::setTexture(3,normalSampler,bgfx::isValid(textures.normal)?textures.normal:white);
         bindLighting(4);
+        const Vec4 sphereScopes{float(lighting_scope::All),float(lighting_scope::All),0,1};bgfx::setUniform(surfaceLighting,sphereScopes.data());
+        const Vec4 category{float(lighting_scope::World),0,0,0};bgfx::setUniform(surfaceCategory,category.data());
+        bindFog(fogValues);
         sphere.bind();
         bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_CULL_CW);
         bgfx::submit(views.scene,pbr);
@@ -1500,59 +1981,97 @@ void Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets& target,E
     ParticleRenderStats localParticleStats;
     auto* totals=particleStats?particleStats:&localParticleStats;
     const auto bindSpriteLighting=[&]{bindLighting(12);};
-    renderParticles(scene.particles,scene.particleMaterials,settings.camera,fogValues,views.scene,totals,{},false,bindSpriteLighting);
-    renderParticles(scene.particles,scene.particleMaterials,settings.camera,fogValues,views.scene,totals,transparentMeshes,true,bindSpriteLighting);
+    renderParticles(scene.particles,scene.particleMaterials,settings.camera,fogValues,views.scene,totals,{},false,bindSpriteLighting,scene.materialContext,ambientEnabled?passView(RenderPassKind::DepthPrepass):InvalidRenderView);
+    renderParticles(scene.particles,scene.particleMaterials,settings.camera,fogValues,views.scene,totals,transparentMeshes,true,bindSpriteLighting,scene.materialContext);
 
-    const bool glowing=renderGlow(settings,target,w,h,views);
+    executePost(plan,settings,target,w,h,presentation,view,projection);
+    const auto* readback=plan.find(RenderPassKind::ThumbnailReadback);
+    return readback?readback->physicalView:InvalidRenderView;
+}
+
+
+void Renderer::Impl::executePost(const RenderPassPlan& plan,const SceneSettings& settings,ViewportTargets& target,
+    std::uint16_t w,std::uint16_t h,const EnvironmentPresentation& presentation,const Mat4& view,const Mat4& projection) {
+    const auto* caps=bgfx::getCaps();
+    const bool glowing=plan.has(RenderPassKind::GlowExtract);
+    ModelMatrix model;
     const float params[]{bounded(settings.exposure,1,0,100),caps->originBottomLeft?1.0f:0.0f,
         static_cast<float>(settings.environment.toneMapping),glowing?settings.environment.glow.strength:0.f};
-    bgfx::setViewFrameBuffer(views.present,target.compositeBuffer);
-    bgfx::setViewRect(views.present,0,0,w,h);
-    bgfx::setViewClear(views.present,BGFX_CLEAR_NONE);
-    bgfx::setViewTransform(views.present,nullptr,nullptr);
-    bgfx::setUniform(presentParams,params);
-    const auto matte=particle_rendering::backgroundLinear(presentation.matte);
-    const float backgroundValue[]{matte[0],matte[1],matte[2],1};
-    bgfx::setUniform(background,backgroundValue);
-    bgfx::setTexture(0,hdrSampler,target.hdr);
-    bgfx::setTexture(1,glowColor,glowing?target.glow->textures[0]:white);
-    if(glowing) {
-        const float texel[]{1.f/target.glow->width,1.f/target.glow->height,0,0};bgfx::setUniform(glowTexel,texel);
+    for(const auto& pass:plan.passes())switch(pass.kind) {
+    case RenderPassKind::GlowExtract:
+    case RenderPassKind::GlowHorizontal:
+    case RenderPassKind::GlowVertical: {
+        const auto& scratch=*target.glow;
+        const float glowValues[]{bounded(settings.exposure,1,0,100),settings.environment.glow.threshold,
+            caps->originBottomLeft?1.f:0.f,settings.environment.glow.radius};
+        const bool extract=pass.kind==RenderPassKind::GlowExtract;
+        const bool horizontal=pass.kind==RenderPassKind::GlowHorizontal;
+        const auto destination=horizontal?scratch.buffers[1]:scratch.buffers[0];
+        const auto source=extract?target.hdr:horizontal?scratch.textures[0]:scratch.textures[1];
+        const float dx=1.f/scratch.width,dy=1.f/scratch.height;
+        const Vec4 texel=extract?Vec4{1.f/w,1.f/h,0,0}:horizontal?Vec4{dx,dy,dx,0}:Vec4{dx,dy,0,dy};
+        bgfx::setViewFrameBuffer(pass.physicalView,destination);bgfx::setViewRect(pass.physicalView,0,0,scratch.width,scratch.height);
+        bgfx::setViewClear(pass.physicalView,BGFX_CLEAR_NONE);bgfx::setViewTransform(pass.physicalView,nullptr,nullptr);
+        bgfx::setUniform(glowParams,glowValues);bgfx::setUniform(glowTexel,texel.data());bgfx::setTexture(0,glowSource,source);
+        fullscreen.bind();bgfx::setState(BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A);
+        bgfx::submit(pass.physicalView,extract?glowExtractProgram:glowBlurProgram);
+        break;
     }
-    fullscreen.bind(); bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-    bgfx::submit(views.present,present);
-
-    if (drawGrid) {
-    bgfx::setViewFrameBuffer(views.grid,target.compositeBuffer);
-    bgfx::setViewRect(views.grid,0,0,w,h);
-    bgfx::setViewClear(views.grid,BGFX_CLEAR_NONE); // Preserve scene depth and the tone-mapped color.
-    bgfx::setViewTransform(views.grid,view.data(),projection.data());
-    model = ModelIdentity; bgfx::setTransform(model.data());
-    const float minor[]{toLinear(appearance.gridMinorSrgb[0]),toLinear(appearance.gridMinorSrgb[1]),toLinear(appearance.gridMinorSrgb[2]),bounded(appearance.gridMinorSrgb[3],1,0,1)};
-    const float major[]{toLinear(appearance.gridMajorSrgb[0]),toLinear(appearance.gridMajorSrgb[1]),toLinear(appearance.gridMajorSrgb[2]),bounded(appearance.gridMajorSrgb[3],1,0,1)};
-    const float axisU[]{toLinear(1),toLinear(.239f),toLinear(0),.72f};
-    const float axisV[]{toLinear(.059f),toLinear(.612f),toLinear(1),.72f};
-    const float gridParameterValues[]{1,1,.005f,caps->homogeneousDepth?1.0f:0.0f};
-    const float gridWidthValues[]{bounded(appearance.gridMinorWidth,.325f,0,8),bounded(appearance.gridMajorWidth,.250f,0,8),1.5f,0};
-    bgfx::setUniform(gridMinor,minor); bgfx::setUniform(gridMajor,major);
-    bgfx::setUniform(gridAxisU,axisU); bgfx::setUniform(gridAxisV,axisV); bgfx::setUniform(gridParams,gridParameterValues);
-    bgfx::setUniform(gridWidths,gridWidthValues);
-    grid.bind();
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LEQUAL |
-        BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_INV_SRC_ALPHA));
-    bgfx::submit(views.grid,gridProgram);
+    case RenderPassKind::ToneMap: {
+        bgfx::setViewFrameBuffer(pass.physicalView,target.compositeBuffer);
+        bgfx::setViewRect(pass.physicalView,0,0,w,h);
+        bgfx::setViewClear(pass.physicalView,BGFX_CLEAR_NONE);
+        bgfx::setViewTransform(pass.physicalView,nullptr,nullptr);
+        bgfx::setUniform(presentParams,params);
+        const auto matte=particle_rendering::backgroundLinear(presentation.matte);
+        const float backgroundValue[]{matte[0],matte[1],matte[2],1};
+        bgfx::setUniform(background,backgroundValue);
+        bgfx::setTexture(0,hdrSampler,target.hdr);
+        bgfx::setTexture(1,glowColor,glowing?target.glow->textures[0]:white);
+        if(glowing) {
+            const float texel[]{1.f/target.glow->width,1.f/target.glow->height,0,0};bgfx::setUniform(glowTexel,texel);
     }
+        fullscreen.bind(); bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+        bgfx::submit(pass.physicalView,present);
 
-    bgfx::setViewFrameBuffer(views.encode,target.displayBuffer);
-    bgfx::setViewRect(views.encode,0,0,w,h);
-    bgfx::setViewClear(views.encode,BGFX_CLEAR_NONE);
-    bgfx::setViewTransform(views.encode,nullptr,nullptr);
-    const float debandingValues[]{static_cast<float>(w),static_cast<float>(h),presentation.debanding?1.0f:0.0f,0};
-    bgfx::setUniform(presentParams,params);
-    bgfx::setUniform(debandingParams,debandingValues);
-    bgfx::setTexture(0,compositeSampler,target.composite);
-    fullscreen.bind(); bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-    bgfx::submit(views.encode,encode);
+        break;
+    }
+    case RenderPassKind::Grid: {
+        bgfx::setViewFrameBuffer(pass.physicalView,target.compositeBuffer);
+        bgfx::setViewRect(pass.physicalView,0,0,w,h);
+        bgfx::setViewClear(pass.physicalView,BGFX_CLEAR_NONE); // Preserve scene depth and the tone-mapped color.
+        bgfx::setViewTransform(pass.physicalView,view.data(),projection.data());
+        model = ModelIdentity; bgfx::setTransform(model.data());
+        const float minor[]{toLinear(appearance.gridMinorSrgb[0]),toLinear(appearance.gridMinorSrgb[1]),toLinear(appearance.gridMinorSrgb[2]),bounded(appearance.gridMinorSrgb[3],1,0,1)};
+        const float major[]{toLinear(appearance.gridMajorSrgb[0]),toLinear(appearance.gridMajorSrgb[1]),toLinear(appearance.gridMajorSrgb[2]),bounded(appearance.gridMajorSrgb[3],1,0,1)};
+        const float axisU[]{toLinear(1),toLinear(.239f),toLinear(0),.72f};
+        const float axisV[]{toLinear(.059f),toLinear(.612f),toLinear(1),.72f};
+        const float gridParameterValues[]{1,1,.005f,caps->homogeneousDepth?1.0f:0.0f};
+        const float gridWidthValues[]{bounded(appearance.gridMinorWidth,.325f,0,8),bounded(appearance.gridMajorWidth,.250f,0,8),1.5f,0};
+        bgfx::setUniform(gridMinor,minor); bgfx::setUniform(gridMajor,major);
+        bgfx::setUniform(gridAxisU,axisU); bgfx::setUniform(gridAxisV,axisV); bgfx::setUniform(gridParams,gridParameterValues);
+        bgfx::setUniform(gridWidths,gridWidthValues);
+        grid.bind();
+        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LEQUAL |
+            BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_INV_SRC_ALPHA));
+        bgfx::submit(pass.physicalView,gridProgram);
+        break;
+    }
+    case RenderPassKind::Encode: {
+        bgfx::setViewFrameBuffer(pass.physicalView,target.displayBuffer);
+        bgfx::setViewRect(pass.physicalView,0,0,w,h);
+        bgfx::setViewClear(pass.physicalView,BGFX_CLEAR_NONE);
+        bgfx::setViewTransform(pass.physicalView,nullptr,nullptr);
+        const float debandingValues[]{static_cast<float>(w),static_cast<float>(h),presentation.debanding?1.0f:0.0f,0};
+        bgfx::setUniform(presentParams,params);
+        bgfx::setUniform(debandingParams,debandingValues);
+        bgfx::setTexture(0,compositeSampler,target.composite);
+        fullscreen.bind(); bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+        bgfx::submit(pass.physicalView,encode);
+        break;
+    }
+    default:break; // Scene, persistent updates and readbacks are recorded by their owners.
+    }
 }
 
 bgfx::TextureHandle Renderer::viewportTexture() const noexcept {

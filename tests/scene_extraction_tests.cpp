@@ -150,6 +150,85 @@ void proceduralSunExtraction() {
     scene.apply({otherSun,environment,parent,otherEnvironment,sun},{});
     require(!extractScene(scene).proceduralSun.enabled,"No active Environment inherited another Environment's sun.");
 }
+void scopedPlayerLightingExtraction() {
+    Scene scene;
+    auto parent=entity(1,"Affine player parent",0,math::translation({10,2,3})*math::scaling({2,3,4}));
+    auto player=entity(2,"Player",1,math::translation({1,0,2}));player.character.emplace();
+    auto hero=entity(3,"Hero mesh",2,Mat4{});hero.model=AssetRef<ModelAsset>{"assets/models/hero/manifest.json"};
+    auto floor=entity(4,"Floor",0,Mat4{});floor.model=hero.model;
+    auto unlit=entity(5,"Independent scopes",2,Mat4{});unlit.model=hero.model;
+    unlit.lightingScopes={0,lighting_scope::Character,lighting_scope::World};
+    auto lamp=entity(6,"Authored lamp",0,Mat4{});lamp.point.emplace();
+    lamp.point->roles.receiverMask=lighting_scope::World;lamp.point->roles.shadowCasterMask=lighting_scope::Character;
+    lamp.point->nearFalloffRadius=2.75f;lamp.point->specularStrength=.35f;
+    lamp.point->rangeFalloffExponent=2.5f;lamp.point->edgeSoftness=.6f;lamp.point->sourceRadius=.8f;lamp.point->attenuation=-1.5f;
+    auto sun=entity(7,"Authored sun",0,Mat4{});sun.directional.emplace();
+    auto& settings=player.character->lightRig;settings.enabled=true;
+    settings.fill.enabled=true;settings.key.direction={-.3f,-.8f,.4f};settings.localWorld.height=4;
+    settings.localWorld.radius=13;settings.localWorld.rangeFalloffExponent=.75f;settings.localWorld.edgeSoftness=.4f;
+    settings.localWorld.sourceRadius=.7f;settings.localWorld.attenuation=3.5f;
+    player.character->darknessReveal={true,11};
+    scene.apply({floor,hero,player,parent,lamp,sun,unlit},{0,0,player.id});
+    const auto before=scene.records();const auto extracted=extractScene(scene);
+    require(extracted.models.size()==3&&extracted.points.size()==2&&extracted.directional.size()==1,
+        "Separated rig did not append exactly one world source.");
+    const auto& character=extracted.models[0];const auto& world=extracted.models[1];const auto& independent=extracted.models[2];
+    require(character.id==hero.id&&character.lightingScopes==SurfaceLightingScopes{2,2,2},"Player descendants retained World lighting membership.");
+    require(world.id==floor.id&&world.lightingScopes==SurfaceLightingScopes{1,1,1},"World receiver gained Character lighting membership.");
+    require(independent.lightingScopes==SurfaceLightingScopes{0,2,0},"Independent direct/caster/ambient authoring scopes were conflated.");
+    require(character.lightingCategory==lighting_scope::Character&&independent.lightingCategory==lighting_scope::Character&&
+        world.lightingCategory==lighting_scope::World,"Transient surface category was inferred from opt-out receiver scopes.");
+    require(extracted.points.front().roles==lamp.point->roles&&extracted.directional.front().roles==sun.directional->roles,
+        "Extraction dropped authored world light roles.");
+    require(extracted.points.front().nearFalloffRadius==2.75f&&extracted.points.front().specularStrength==.35f&&
+        extracted.points.front().rangeFalloffExponent==2.5f&&extracted.points.front().edgeSoftness==.6f&&
+        extracted.points.front().sourceRadius==.8f&&extracted.points[1].rangeFalloffExponent==.75f&&
+        extracted.points[1].edgeSoftness==.4f&&extracted.points[1].sourceRadius==.7f&&
+        extracted.points.front().attenuation==-1.5f&&extracted.points[1].attenuation==3.5f,
+        "Extraction dropped independent ordinary/player point response controls.");
+    const auto playerPosition=math::transformPoint(parent.local*player.local,{});
+    require(close(extracted.points[1].position,playerPosition+Vec3{0,settings.localWorld.height,0})&&
+        extracted.points[1].radius==13&&
+        extracted.points[1].roles.receiverMask==lighting_scope::World&&
+        extracted.points[1].roles.shadowCasterMask==lighting_scope::World&&
+        !extracted.points[1].roles.ambientReveal,"Local World Light lost finite range or inherited scale/Character membership.");
+    require(extracted.characterLights[0].enabled&&extracted.characterLights[1].enabled&&
+        close(extracted.characterLights[0].direction,math::normalized(settings.key.direction))&&
+        extracted.characterShadow.enabled&&close(extracted.characterShadow.position,playerPosition)&&
+        close(extracted.characterShadow.direction,math::normalized(settings.key.direction)),
+        "Extraction lost separate character illumination or shadow.");
+    const auto frozen=extracted.points;
+    require(extracted.playerReveal.enabled&&extracted.playerReveal.spread==11&&
+        close(extracted.playerReveal.position,playerPosition+Vec3{0,player.character->height*.5f,0}),
+        "Player darkness range inherited parent scale or lost the presented center.");
+    const std::array poses{ScenePoseUpdate{player.id,math::translation({1,0,2})*math::rotation(math::axisAngle({0,1,0},1.7))}};
+    scene.applyRuntimePoses(poses);const auto turned=extractScene(scene);
+    require(close(turned.points[1].position,frozen[1].position)&&turned.characterLights==extracted.characterLights&&
+        turned.characterShadow==extracted.characterShadow,
+        "Turning the player rotated a world-aligned rig offset.");
+    require(turned.playerReveal==extracted.playerReveal,"Turning the player moved the darkness range.");
+    const std::array moved{ScenePoseUpdate{player.id,math::translation({2,0,2})}};
+    scene.applyRuntimePoses(moved);const auto presented=extractScene(scene);
+    require(close(presented.points[1].position,frozen[1].position+Vec3{2,0,0})&&
+        presented.points[1].entityId==frozen[1].entityId&&presented.characterLights==extracted.characterLights&&
+        presented.points[1].radius==frozen[1].radius&&
+        presented.points[1].rangeFalloffExponent==frozen[1].rangeFalloffExponent&&
+        close(presented.characterShadow.position,extracted.characterShadow.position+Vec3{2,0,0}),
+        "Local rig did not follow presented translation with stable source identities.");
+    require(close(presented.playerReveal.position,extracted.playerReveal.position+Vec3{2,0,0}),
+        "Player darkness range did not follow presented world translation.");
+    require(scene.records().size()==before.size(),"Transient actor rig contributions became authored entities.");
+    settings.enabled=false;scene.apply({floor,hero,player,parent,lamp,sun,unlit},{0,0,player.id});
+    require(extractScene(scene).points.size()==1&&extractScene(scene).playerReveal.enabled&&
+        !extractScene(scene).characterLights[0].enabled&&!extractScene(scene).characterShadow.enabled,
+        "Disabled local rig retained contributions or disabled the separate darkness range.");
+    player.character->darknessReveal.enabled=false;scene.apply({floor,hero,player,parent,lamp,sun,unlit},{0,0,player.id});
+    require(!extractScene(scene).playerReveal.enabled,"Disabled darkness range retained its player contribution.");
+    settings.enabled=true;scene.apply({floor,hero,player,parent,lamp,sun,unlit},{0,0,player.id});
+    const auto revealOff=extractScene(scene);
+    require(!revealOff.playerReveal.enabled&&revealOff.points.size()==2&&revealOff.points[1].radius==13,
+        "Disabling reveal removed or resized the independent Local World Light.");
+}
 void gizmoAffineRotation() {
     Mat4 shear; shear[4]=.4f; shear[8]=-.2f; shear[9]=.7f;
     const Mat4 parent=math::translation({7,3,-5})*math::rotation(math::axisAngle({0,1,0},.7))*math::scaling({-2,.5f,3});
@@ -269,7 +348,7 @@ void collisionFaces() {
             "An empty viewport retained collision fill.");
     }
     const auto closed=[](const CollisionDebugMesh& mesh,auto point,const Vec3& center) {
-        std::map<std::array<std::uint16_t,2>,unsigned> edgeUses;
+        std::map<std::array<std::uint32_t,2>,unsigned> edgeUses;
         for(const auto& triangle:mesh.triangles) {
             const auto a=point(mesh.vertices.at(triangle[0])),b=point(mesh.vertices.at(triangle[1])),c=point(mesh.vertices.at(triangle[2]));
             require(math::dot(math::cross(b-a,c-a),(a+b+c)/3-center)>0,
@@ -324,6 +403,6 @@ void collisionFaces() {
 }
 }
 int main() {
-    try { run(); lightOrientation(); proceduralSunExtraction();gizmoAffineRotation();particleExtraction();collisionPicking();clippedSelectionWires();collisionFaces();std::cout<<"Scene extraction checks passed.\n"; return 0; }
+    try { run(); lightOrientation(); proceduralSunExtraction();scopedPlayerLightingExtraction();gizmoAffineRotation();particleExtraction();collisionPicking();clippedSelectionWires();collisionFaces();std::cout<<"Scene extraction checks passed.\n"; return 0; }
     catch (const std::exception& error) { std::cerr<<error.what()<<'\n'; return 1; }
 }

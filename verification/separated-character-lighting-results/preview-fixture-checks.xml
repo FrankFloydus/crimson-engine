@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="Win32-ninja"
+	tests="1"
+	failures="0"
+	disabled="0"
+	skipped="0"
+	hostname="FLOYD"
+	time="6"
+	timestamp="2026-10-15T19:49:01"
+	>
+	<testcase name="lighting_dependency_render_core" classname="lighting_dependency_render_core" time="6.74341" status="run">
+		<properties/>
+		<system-out>Point scopes: World=151, excluded=0, Character=151
+Ambient response: original=85, dark=0, floor.25=42
+Direct darkness: original=151, dark=0, self revealed=151, player revealed=151; independent emission=92, unlit=160, fog=17.6667
+Ambient shadows: through-wall=85, eligible-blocker=0, excluded-blocker=85
+Direct caster scopes: blocked=0, excluded=141, last faces=6
+Bright torch shadows: directional only=0, Character excluded=141, Character included=0, moved old/new=145/37
+Transparent ambient: mesh=85/0, particle=84/0
+Particle prepasses: Opaque=84, Mask holes=85, covered=0, generated t0/t1=85/0, submitted=1, draws=1
+Ambient resize 133x101: original=85, dark=0
+Ambient resize 65x49: original=85, dark=0
+Directional darkness: lit=137, dark=0, IBL dark=0, revealed=137, combined unrevealed/revealed=0/197
+Reveal islands: player=158, distant torch=156, between=0, transparent=85, particle=84
+Separated lighting: Character=137, World=0, diffuse/specular=127/53, Character dark=0; World clear/shadow=141/0, bright torch clear/sh...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+</testsuite>

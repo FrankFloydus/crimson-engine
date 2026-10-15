@@ -93,12 +93,13 @@ MaterialGraph materialGraphFromLegacy(const ModelMaterial& surface,MaterialShadi
     MaterialGraph graph;graph.nodes.reserve(32);graph.links.reserve(40);
     const auto outputId=addMaterialNode(graph,MaterialNodeKind::Output,{700,80}).id;
     auto& settings=materialOutputNode(graph).output;settings.shading=shading;
-    settings.blend=blend==MaterialBlend::Opaque&&surface.alphaMask?MaterialBlend::Mask:blend;
+    settings.blend=blend==MaterialBlend::Opaque?(surface.alphaBlend?MaterialBlend::Alpha:surface.alphaMask?MaterialBlend::Mask:blend):blend;
     const bool sprite=shading==MaterialShading::Unlit&&(settings.blend==MaterialBlend::Alpha||settings.blend==MaterialBlend::Additive);
     settings.baseColor={surface.baseColor[0],surface.baseColor[1],surface.baseColor[2]};settings.opacity=surface.baseColor[3];
     settings.opacityMask=surface.baseColor[3];settings.specular=surface.specular;
     settings.roughness=surface.roughness;settings.metallic=surface.metallic;settings.emission=surface.emissive;
     settings.occlusionStrength=surface.occlusionStrength;settings.alphaCutoff=surface.alphaCutoff;settings.doubleSided=surface.doubleSided;
+    settings.receiveFog=surface.receiveFog;
     const auto link=[&](MaterialNodeId from,MaterialPin fromPin,MaterialNodeId to,MaterialPin toPin) {
         graph.links.push_back({graph.nextLinkId++,from,to,fromPin,toPin});
     };
@@ -184,7 +185,7 @@ LegacyExpression legacyExpression(const MaterialGraph& graph,MaterialNodeId id,M
         // Only a uniform clamp can be represented by the legacy factor slots.
         // Keep textured saturation in the authoritative graph, not an incorrect
         // texture-times-factor approximation that changes coverage.
-        if(materialExpressionUniform(graph,id,MaterialPin::Value))result.factor=evaluateMaterialUniform(graph,id,MaterialPin::Value).value;
+        if(materialExpressionUniform(graph,id,MaterialPin::Value)&&!materialExpressionTimeDependent(graph,id,MaterialPin::Value))result.factor=evaluateMaterialUniform(graph,id,MaterialPin::Value).value;
         else result.representable=false;
         return result;
     }
@@ -198,6 +199,11 @@ LegacyExpression legacyExpression(const MaterialGraph& graph,MaterialNodeId id,M
         result.texture=a.texture?a.texture:b.texture;result.channel=a.texture?a.channel:b.channel;
         result.representable=a.representable&&b.representable&&!(a.texture&&b.texture);return result;
     }
+    if(n.kind==MaterialNodeKind::Add||n.kind==MaterialNodeKind::Lerp||n.kind==MaterialNodeKind::Power) {
+        if(materialExpressionUniform(graph,id,pin)&&!materialExpressionTimeDependent(graph,id,pin))result.factor=evaluateMaterialUniform(graph,id,pin).value;
+        else result.representable=false;
+        return result;
+    }
     result.representable=false;return result;
     }();
     cache.emplace(key,expression);return expression;
@@ -210,6 +216,8 @@ ModelMaterial materialGraphLegacySurface(const MaterialGraph& graph,const std::s
     surface.specular=output.specular;
     surface.roughness=output.roughness;surface.metallic=output.metallic;surface.emissive=output.emission;
     surface.occlusionStrength=output.occlusionStrength;surface.alphaCutoff=output.alphaCutoff;surface.doubleSided=output.doubleSided;surface.alphaMask=output.blend==MaterialBlend::Mask;
+    surface.receiveFog=output.receiveFog;
+    surface.alphaBlend=output.blend==MaterialBlend::Alpha;
     bool mappingSet=false;
     const auto applyTexture=[&](const MaterialNode* texture,ModelTexture& target) {
         if(!texture)return;target.image=texture->texture.image;const auto& sampler=texture->texture.sampler;
@@ -250,6 +258,65 @@ void canonicalizeMaterialAsset(MaterialAsset& material) {
     if(material.graph.empty())material.graph=materialGraphFromLegacy(material.surface,material.shading,material.blend);
     const auto& output=materialOutputNode(material.graph).output;material.shading=output.shading;material.blend=output.blend;
     material.surface=materialGraphLegacySurface(material.graph,material.name);
+}
+std::optional<ModelMaterial> materialGraphFixedSurface(const MaterialGraph& graph) {
+    validateMaterialGraph(graph);
+    const auto& root=materialOutputNode(graph);const auto& output=root.output;
+    // Other blend modes need independent graph coverage, including its clamp
+    // before vertex alpha. Keep those on their complete graph generation.
+    if(output.shading!=MaterialShading::StandardPbr || output.blend!=MaterialBlend::Opaque)return {};
+    for(const auto id:materialGraphOrder(graph,output.shading,output.blend)) {
+        const auto kind=findMaterialNode(graph,id)->kind;
+        if(kind==MaterialNodeKind::Time || kind==MaterialNodeKind::Panner ||
+           kind==MaterialNodeKind::ParticleColor || kind==MaterialNodeKind::RadialGradient)return {};
+    }
+    LegacyExpressionCache cache;
+    const auto expression=[&](MaterialPin pin) {
+        const auto fallback=materialInputDefault(root,pin);
+        LegacyExpression value;value.factor=fallback.type==MaterialValueType::Scalar?
+            Vec4{fallback.value[0],fallback.value[0],fallback.value[0],fallback.value[0]}:fallback.value;
+        if(const auto* link=materialInputLink(graph,root.id,pin)) {
+            value=legacyExpression(graph,link->fromNode,link->fromPin,cache);
+            if(fallback.type==MaterialValueType::Scalar && materialOutputType(graph,link->fromNode,link->fromPin)==MaterialValueType::Color) {
+                const auto red=value.factor[0];value.factor={red,red,red,red};
+                if(value.channel==MaterialPin::RGB)value.channel=MaterialPin::R;
+            }
+        }
+        return value;
+    };
+    const auto base=expression(MaterialPin::BaseColor),rough=expression(MaterialPin::Roughness),metal=expression(MaterialPin::Metallic),
+        specular=expression(MaterialPin::Specular),normal=expression(MaterialPin::Normal),
+        occlusion=expression(MaterialPin::Occlusion),emission=expression(MaterialPin::Emission);
+    for(const auto* value:{&base,&rough,&metal,&specular,&normal,&occlusion,&emission})if(!value->representable)return {};
+    const auto textureIs=[](const LegacyExpression& value,MaterialPin pin,MaterialTextureRole role) {
+        return !value.texture || (value.channel==pin && value.texture->texture.role==role);
+    };
+    if(!textureIs(base,MaterialPin::RGB,MaterialTextureRole::Color) || !textureIs(rough,MaterialPin::G,MaterialTextureRole::Data) ||
+       !textureIs(metal,MaterialPin::B,MaterialTextureRole::Data) || specular.texture ||
+       !textureIs(normal,MaterialPin::Normal,MaterialTextureRole::Normal) ||
+       !textureIs(occlusion,MaterialPin::R,MaterialTextureRole::Data) ||
+       !textureIs(emission,MaterialPin::RGB,MaterialTextureRole::Color))return {};
+    const auto sameTexture=[&](const MaterialNode* a,const MaterialNode* b) {
+        return a->texture.image==b->texture.image && a->texture.sampler==b->texture.sampler &&
+            a->texture.role==b->texture.role && materialTextureMapping(graph,a->id)==materialTextureMapping(graph,b->id);
+    };
+    if(rough.texture && metal.texture && !sameTexture(rough.texture,metal.texture))return {};
+    // The fixed ORM slot samples both channels. A missing channel expression
+    // is equivalent only when its factor is zero (or there is no packed map).
+    if((rough.texture && !metal.texture && metal.factor[0]!=0) ||
+       (metal.texture && !rough.texture && rough.factor[0]!=0))return {};
+    if(occlusion.factor[0]!=1 || (normal.texture && normal.factor!=Vec4{1,1,1,1}))return {};
+    std::optional<MaterialUvMapping> shared;
+    for(const auto* value:{&base,&rough,&metal,&normal,&occlusion,&emission})if(value->texture) {
+        auto mapping=materialTextureMapping(graph,value->texture->id);
+        // Fixed slots can select UV0/UV1 independently, but their affine
+        // transform and ordinary/triplanar projection are shared.
+        if(mapping.mode==MaterialUvMode::UV1)mapping.mode=MaterialUvMode::UV0;
+        mapping.scaleLinked=true; // Authoring preference has no shader effect.
+        if(shared && *shared!=mapping)return {};
+        shared=mapping;
+    }
+    auto result=materialGraphLegacySurface(graph);result.graph.reset();return result;
 }
 std::vector<std::string> materialTextureReferences(const MaterialAsset& material) {
     if(!material.graph.empty())return materialGraphTextureReferences(material.graph);
@@ -357,8 +424,10 @@ MaterialAsset copyMaterialAsset(const std::filesystem::path& root,const Material
 }
 void promoteModelMaterials(const std::filesystem::path& root,const ModelAsset& model,const std::function<bool(const std::string&)>& deleted) {
     for(std::size_t i=0;i<model.materials.size();++i){const auto id=importedMaterialId(model.id,i);
+        if(i<model.materialIds.size() && model.materialIds[i]!=id)continue;
         if((deleted&&deleted(id))||std::filesystem::exists(materialPath(root,id)))continue;
-        MaterialAsset a{id,model.materials[i].name,model.id,model.materials[i]};a.blend=a.surface.alphaMask?MaterialBlend::Mask:MaterialBlend::Opaque;saveMaterialAsset(root,a);
+        MaterialAsset a{id,model.materials[i].name,model.id,model.materials[i]};
+        a.blend=a.surface.alphaBlend?MaterialBlend::Alpha:a.surface.alphaMask?MaterialBlend::Mask:MaterialBlend::Opaque;saveMaterialAsset(root,a);
     }
 }
 }

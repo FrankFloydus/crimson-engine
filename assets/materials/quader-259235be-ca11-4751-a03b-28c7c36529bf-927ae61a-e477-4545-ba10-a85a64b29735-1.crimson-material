@@ -1,0 +1,263 @@
+{
+  "graph": {
+    "links": [
+      {
+        "fromNode": 2,
+        "fromPin": 7,
+        "id": 1,
+        "toNode": 3,
+        "toPin": 7
+      },
+      {
+        "fromNode": 3,
+        "fromPin": 1,
+        "id": 2,
+        "toNode": 5,
+        "toPin": 8
+      },
+      {
+        "fromNode": 4,
+        "fromPin": 1,
+        "id": 3,
+        "toNode": 5,
+        "toPin": 9
+      },
+      {
+        "fromNode": 5,
+        "fromPin": 0,
+        "id": 4,
+        "toNode": 1,
+        "toPin": 10
+      },
+      {
+        "fromNode": 6,
+        "fromPin": 1,
+        "id": 6,
+        "toNode": 7,
+        "toPin": 8
+      },
+      {
+        "fromNode": 7,
+        "fromPin": 0,
+        "id": 7,
+        "toNode": 1,
+        "toPin": 11
+      },
+      {
+        "fromNode": 8,
+        "fromPin": 7,
+        "id": 9,
+        "toNode": 6,
+        "toPin": 7
+      }
+    ],
+    "nextLinkId": 10,
+    "nextNodeId": 9,
+    "nodes": [
+      {
+        "id": 1,
+        "kind": 0,
+        "name": "Output",
+        "output": {
+          "alphaCutoff": 0.5,
+          "baseColor": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "blend": 0,
+          "doubleSided": true,
+          "emission": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "metallic": 0.0,
+          "occlusion": 1.0,
+          "occlusionStrength": 1.0,
+          "opacity": 1.0,
+          "opacityMask": 1.0,
+          "receiveFog": true,
+          "roughness": 1.0,
+          "shading": 0,
+          "specular": 0.5
+        },
+        "position": [
+          650.0,
+          50.0
+        ]
+      },
+      {
+        "id": 2,
+        "kind": 1,
+        "name": "UV",
+        "position": [
+          -651.0,
+          147.0
+        ],
+        "uv": {
+          "mode": 0,
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "scaleLinked": true
+        }
+      },
+      {
+        "id": 3,
+        "kind": 2,
+        "name": "Texture 2D",
+        "position": [
+          -319.0,
+          -177.0
+        ],
+        "texture": {
+          "image": "assets/textures/quader-bcddec4f63d20331bf7f06337745fa92e7d45038da3e52a03582f37738d85d2a-1.png",
+          "normalStrength": 1.0,
+          "role": 0,
+          "sampler": {
+            "magFilter": 0,
+            "minFilter": 5,
+            "wrapU": 0,
+            "wrapV": 0
+          }
+        }
+      },
+      {
+        "color": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "id": 4,
+        "kind": 4,
+        "name": "Base Color factor",
+        "position": [
+          -319.0,
+          170.0
+        ]
+      },
+      {
+        "id": 5,
+        "kind": 5,
+        "left": {
+          "type": 0,
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "name": "Multiply",
+        "position": [
+          0.0,
+          0.0
+        ],
+        "right": {
+          "type": 0,
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      {
+        "id": 6,
+        "kind": 2,
+        "name": "Texture 2D",
+        "position": [
+          -269.99993896484375,
+          372.999755859375
+        ],
+        "texture": {
+          "image": "assets/textures/0b21c54a-61bd-4a5a-a0a9-693d6ad4f15f_roughness_linear-3.png",
+          "normalStrength": 1.0,
+          "role": 1,
+          "sampler": {
+            "magFilter": 0,
+            "minFilter": 5,
+            "wrapU": 0,
+            "wrapV": 0
+          }
+        }
+      },
+      {
+        "id": 7,
+        "kind": 5,
+        "left": {
+          "type": 0,
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "name": "Multiply",
+        "position": [
+          83.25,
+          536.75
+        ],
+        "right": {
+          "type": 0,
+          "value": [
+            0.9879999756813049,
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      },
+      {
+        "id": 8,
+        "kind": 1,
+        "name": "UV",
+        "position": [
+          -635.0,
+          442.0
+        ],
+        "uv": {
+          "mode": 0,
+          "offset": [
+            1.2400000095367432,
+            3.630000114440918,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            28.0
+          ],
+          "scale": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "scaleLinked": true
+        }
+      }
+    ],
+    "version": 4
+  },
+  "id": "assets/materials/quader-259235be-ca11-4751-a03b-28c7c36529bf-927ae61a-e477-4545-ba10-a85a64b29735-1.crimson-material",
+  "name": "str_metalgen4",
+  "originModel": "",
+  "type": "crimson-material",
+  "version": 6
+}

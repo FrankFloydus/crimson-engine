@@ -103,6 +103,45 @@ void signaturesAndDormantReferences() {
     rewriteMaterialGraphTextures(graph,[](const auto&,MaterialTextureRole role){return std::string(role==MaterialTextureRole::Normal?NeutralNormalTextureId:GrayTextureId);});
     require(findMaterialNode(graph,texture)->texture.image.id==GrayTextureId&&findMaterialNode(graph,normal)->texture.image.id==NeutralNormalTextureId,"Graph reference replacement lost role-correct dormant defaults.");
 }
+void receiveFogPersistence() {
+    Project project;auto material=createMaterialAsset(project.root,"Black exterior");
+    require(materialOutputNode(material.graph).output.receiveFog&&material.surface.receiveFog&&ModelMaterial{}.receiveFog,
+        "New and imported materials must receive fog by default.");
+    for(const auto shading:{MaterialShading::StandardPbr,MaterialShading::Unlit})
+        for(const auto blend:{MaterialBlend::Opaque,MaterialBlend::Mask,MaterialBlend::Alpha,MaterialBlend::Additive}) {
+            auto& settings=materialOutputNode(material.graph).output;settings.shading=shading;settings.blend=blend;settings.receiveFog=true;
+            const auto topology=materialGraphTopologyHash(material.graph,shading,blend),values=materialGraphValueHash(material.graph,shading,blend);
+            settings.receiveFog=false;canonicalizeMaterialAsset(material);
+            require(topology==materialGraphTopologyHash(material.graph,shading,blend)&&values!=materialGraphValueHash(material.graph,shading,blend),
+                "Fog reception must change material values without selecting a new shader topology.");
+            require(!material.surface.receiveFog&&!materialOutputNode(*material.surface.graph).output.receiveFog,
+                "Fog exclusion was lost from the immutable runtime material transport.");
+            saveMaterialAsset(project.root,material);const auto loaded=loadMaterialAsset(project.root,material.id);
+            require(!materialOutputNode(loaded.graph).output.receiveFog&&!loaded.surface.receiveFog&&serializeMaterialAsset(loaded)==serializeMaterialAsset(material),
+                "Fog exclusion did not survive native material save/reload.");
+        }
+    const auto copy=copyMaterialAsset(project.root,material,"Exterior copy");
+    require(!materialOutputNode(copy.graph).output.receiveFog&&!copy.surface.receiveFog,"Copying a material reset its fog reception.");
+    auto legacy=material.surface;legacy.graph.reset();
+    require(!materialOutputNode(materialGraphFromLegacy(legacy,material.shading,material.blend)).output.receiveFog,
+        "Legacy runtime transport conversion reset an explicit fog exclusion.");
+    auto old=nlohmann::json::parse(serializeMaterialAsset(material));
+    auto& output=old["graph"]["nodes"][0]["output"];output.erase("receiveFog");output["shading"]=0;output["blend"]=0;
+    // Native material revisions 4-6 and graph revisions 1-4 all predate this
+    // optional property. Loading them must preserve their previous fog behavior.
+    for(const int materialVersion:{4,5,6})for(const int graphVersion:{1,2,3,4}) {
+        old["version"]=materialVersion;old["graph"]["version"]=graphVersion;
+        if(graphVersion==2)output["usage"]=0;
+        const auto bytes=old.dump();write(project.root/material.id,bytes);
+        const auto loaded=loadMaterialAsset(project.root,material.id);
+        require(loaded.surface.receiveFog&&materialOutputNode(loaded.graph).output.receiveFog&&read(project.root/material.id)==bytes,
+            "An older material lost fog reception or was rewritten while loading.");
+    }
+    for(const auto& invalid:nlohmann::json::array({0,1,"false",nullptr})) {
+        output["receiveFog"]=invalid;
+        rejects([&]{parseMaterialGraph(old["graph"].dump());},"A non-boolean fog reception setting was accepted.");
+    }
+}
 void rgbScalarInputsAndFallbacks() {
     auto graph=blank();const auto out=materialOutputNode(graph).id;
     const auto rough=node(graph,MaterialNodeKind::Texture2D),metal=node(graph,MaterialNodeKind::Texture2D);
@@ -160,6 +199,7 @@ void migrationAndAuthority() {
         const auto bytes=material_test::legacyMaterialJson(legacy,version).dump(2);write(project.root/legacy.id,bytes);
         const auto loaded=loadMaterialAsset(project.root,legacy.id);
         require(read(project.root/legacy.id)==bytes&&!loaded.graph.empty()&&loaded.originModel==legacy.originModel,"Migration rewrote the file or lost imported identity.");
+        require(loaded.surface.receiveFog&&materialOutputNode(loaded.graph).output.receiveFog,"Legacy material migration disabled fog reception.");
         require(near(output(loaded.graph,MaterialPin::BaseColor).value[0],.1f)&&near(output(loaded.graph,MaterialPin::OpacityMask).value[0],.175f)&&
             near(output(loaded.graph,MaterialPin::Roughness).value[0],.21f)&&near(output(loaded.graph,MaterialPin::Metallic).value[0],.24f)&&
             near(output(loaded.graph,MaterialPin::Emission).value[2],1.2f),"Migration changed map factors or packed/alpha channels.");
@@ -358,10 +398,15 @@ void explicitParticleMigration() {
     require(near(output(plain,MaterialPin::Opacity).value[0],1)&&plain.nodes.size()==1,"A new ordinary material gained particle modulation or a disc.");
 }
 void snapshotMaterials(const fs::path& root) {
-    for(const char* id:{"assets/materials/4c37e1e87014-0.crimson-material","assets/materials/4c7d9544b858-1.crimson-material","assets/materials/55f2270f21c4-0.crimson-material"}) {
-        const auto before=read(root/id);require(!before.empty(),"Expected snapshot material is unavailable.");
-        const auto source=nlohmann::json::parse(before);const auto material=loadMaterialAsset(root,id);
-        require(!material.graph.empty()&&material.id==id&&read(root/id)==before,"Snapshot migration rewrote authored bytes or lost identity.");
+    // Preserve the original version-2/version-6 migration snapshots under tests.
+    // Project asset deletion or normal editing must not invalidate this suite.
+    Project project;
+    for(const char* fixture:{"legacy-v2-alpha.crimson-material","graph-v3-particle.crimson-material","graph-v3-world-triplanar.crimson-material"}) {
+        const auto snapshot=root/"tests/fixtures/material-migration"/fixture;
+        const auto before=read(snapshot);require(!before.empty(),"Expected immutable material migration fixture is unavailable.");
+        const auto source=nlohmann::json::parse(before);const auto id=source.at("id").get<std::string>();
+        write(project.root/id,before);const auto material=loadMaterialAsset(project.root,id);
+        require(!material.graph.empty()&&material.id==id&&read(project.root/id)==before&&read(snapshot)==before,"Snapshot migration rewrote authored bytes or lost identity.");
         if(source.at("version").get<int>()<4) {
             require(material.surface.baseColor==source.at("baseColor").get<Vec4>()&&material.surface.roughness==source.at("roughness").get<float>()&&material.surface.metallic==source.at("metallic").get<float>(),"Snapshot migration changed material factors.");
             if(source.at("version")==3)require(material.surface.uvScale==source.at("uvScale").get<Vec3>()&&material.surface.triplanarWorld==source.value("triplanarWorld",false),"Snapshot migration changed world triplanar or scale.");
@@ -371,6 +416,100 @@ void snapshotMaterials(const fs::path& root) {
         std::cout<<"Snapshot material read without changes: "<<id<<'\n';
     }
 }
+void arithmeticAndAnimatedMappings() {
+    auto graph=blank();
+    const auto add=node(graph,MaterialNodeKind::Add),lerp=node(graph,MaterialNodeKind::Lerp),power=node(graph,MaterialNodeKind::Power);
+    const auto time=node(graph,MaterialNodeKind::Time),panner=node(graph,MaterialNodeKind::Panner),uv=node(graph,MaterialNodeKind::UV);
+    const auto vector=node(graph,MaterialNodeKind::Vector2),texture=node(graph,MaterialNodeKind::Texture2D),color=node(graph,MaterialNodeKind::Color);
+    require(evaluateMaterialUniform(graph,add,MaterialPin::Value).value[0]==1&&evaluateMaterialUniform(graph,lerp,MaterialPin::Value).value[0]==.5f&&
+        evaluateMaterialUniform(graph,power,MaterialPin::Value).value[0]==0,"Arithmetic node defaults differ from the authoring contract.");
+    findMaterialNode(graph,lerp)->alpha.value={2,2,2,2};
+    require(evaluateMaterialUniform(graph,lerp,MaterialPin::Value).value[0]==2,"Lerp clamped its interpolation factor.");
+    findMaterialNode(graph,vector)->vector2={2,-3};
+    connectMaterialNodes(graph,vector,MaterialPin::XY,add,MaterialPin::Left);
+    require(materialOutputType(graph,add,MaterialPin::Value)==MaterialValueType::Vector2&&evaluateMaterialUniform(graph,add,MaterialPin::Value).value[1]==-2,
+        "Add did not broadcast scalar addition over Vector2.");
+    rejects([&]{connectMaterialNodes(graph,color,MaterialPin::RGB,add,MaterialPin::Right);},"Add mixed Vector2 and Color.");
+    const auto leftLink=materialInputLink(graph,add,MaterialPin::Left)->id;
+    removeMaterialLink(graph,leftLink);
+    require(findMaterialNode(graph,add)->left.type==MaterialValueType::Vector2,"Disconnected Add lost its vector default type.");
+    findMaterialNode(graph,power)->left={MaterialValueType::Color,{.5f,-1,0,0}};
+    require(evaluateMaterialUniform(graph,power,MaterialPin::Value).value==Vec4{.25f,0,0,0},"Power did not clamp nonpositive bases component-wise.");
+    findMaterialNode(graph,color)->color={3,99,99,1};
+    connectMaterialNodes(graph,color,MaterialPin::RGB,power,MaterialPin::Right);
+    require(evaluateMaterialUniform(graph,power,MaterialPin::Value).value[0]==.125f,"Power Exponent did not use receiving-input first-component conversion.");
+    require(materialExpressionUniform(graph,time,MaterialPin::Value)&&materialExpressionTimeDependent(graph,time,MaterialPin::Value),"Time was not classified as runtime uniform.");
+    require(evaluateMaterialUniform(graph,time,MaterialPin::Value,{7,11}).value[0]==7,"Time did not use game seconds by default.");
+    findMaterialNode(graph,time)->time={true,true,3};
+    require(evaluateMaterialUniform(graph,time,MaterialPin::Value,{7,11}).value[0]==2,"Time period/real-time selection is incorrect.");
+    findMaterialNode(graph,time)->time.period=0;
+    require(evaluateMaterialUniform(graph,time,MaterialPin::Value,{7,11}).value[0]==0,"A zero enabled Time period did not stop time.");
+    findMaterialNode(graph,time)->time.periodEnabled=false;
+    findMaterialNode(graph,uv)->uv={MaterialUvMode::WorldTriplanar,{-2,3,4},{1,2,3},{10,20,30},false};
+    findMaterialNode(graph,panner)->panner.speed={.25f,-.5f};
+    connectMaterialNodes(graph,uv,MaterialPin::UV,panner,MaterialPin::UV);
+    connectMaterialNodes(graph,panner,MaterialPin::UV,texture,MaterialPin::UV);
+    const auto before=serializeMaterialGraph(graph);
+    const auto valueHash=materialGraphValueHash(graph,MaterialShading::StandardPbr,MaterialBlend::Opaque);
+    auto mapping=materialTextureMapping(graph,texture,{2,11});
+    require(mapping.mode==MaterialUvMode::WorldTriplanar&&mapping.scale==Vec3{-2,3,4}&&mapping.rotation==Vec3{10,20,30}&&mapping.offset==Vec3{1.5f,1,3},
+        "Panner lost existing mapping mode, affine fields or signed speed.");
+    findMaterialNode(graph,panner)->panner.fractionalPart=true;
+    mapping=materialTextureMapping(graph,texture,{3,11});
+    require(mapping.offset==Vec3{1.75f,2.5f,3},"Panner fractional mode wrapped the source coordinates rather than just displacement.");
+    rejects([&]{connectMaterialNodes(graph,texture,MaterialPin::RGB,panner,MaterialPin::Time);},"Panner accepted fragment-varying Time.");
+    connectMaterialNodes(graph,vector,MaterialPin::XY,panner,MaterialPin::Speed);
+    connectMaterialNodes(graph,time,MaterialPin::Value,panner,MaterialPin::Time);
+    mapping=materialTextureMapping(graph,texture,{7,1.25});
+    require(mapping.offset==Vec3{1.5f,2.25f,3},"Panner did not consume connected uniform Speed and Time.");
+    const auto serialized=serializeMaterialGraph(graph);
+    require(nlohmann::json::parse(serialized).at("version")==4&&serializeMaterialGraph(parseMaterialGraph(serialized))==serialized,"Schema 4 nodes failed round-trip.");
+    (void)materialTextureMapping(graph,texture,{1,17});
+    require(serializeMaterialGraph(graph)==serialized,"Frame evaluation mutated the authored graph.");
+    auto old=nlohmann::json::parse(before);old["version"]=3;
+    require(parseMaterialGraph(old.dump()).nodes.size()==graph.nodes.size(),"Schema 3 compatibility was lost.");
+    require(valueHash==materialGraphValueHash(parseMaterialGraph(before),MaterialShading::StandardPbr,MaterialBlend::Opaque),"Frame evaluation changed an authored hash.");
 }
-int main(int argc,char** argv){try{typesChainsAndTransactions();signaturesAndDormantReferences();rgbScalarInputsAndFallbacks();migrationAndAuthority();repeatedSourceDag();activeCompatibilityTransport();usageOpacityAndSpecular();vectorMappingsAndUniformSafety();schemaOneMigration();explicitParticleMigration();if(argc>1)snapshotMaterials(fs::path(argv[1]));std::cout<<"Material graph types, chains, migration, signatures and references passed.\n";return 0;}
+void exactColdModelSurface() {
+    ModelMaterial original;original.baseColor={.3f,.5f,.7f,1};original.metallic=.4f;original.roughness=.8f;
+    original.normalScale=.7f;original.occlusionStrength=.6f;original.emissive={1,.5f,.2f};
+    original.uvScale={2,3,1};original.uvOffset={.2f,.1f,0};original.uvRotation={0,0,30};
+    const std::array slots{&original.baseColorTexture,&original.metallicRoughnessTexture,&original.normalTexture,&original.occlusionTexture,&original.emissiveTexture};
+    unsigned index{};for(auto* slot:slots){slot->image.id="assets/textures/map"+std::to_string(index++)+".png";slot->texCoord=1;}
+    auto graph=materialGraphFromLegacy(original,MaterialShading::StandardPbr,MaterialBlend::Opaque);
+    const auto fixed=materialGraphFixedSurface(graph);
+    require(fixed && !fixed->graph && fixed->baseColor==original.baseColor && fixed->roughness==original.roughness &&
+        fixed->metallic==original.metallic && fixed->normalScale==original.normalScale && fixed->uvScale==original.uvScale &&
+        fixed->emissiveTexture.image==original.emissiveTexture.image && fixed->normalTexture.texCoord==1,
+        "Conventional imported PBR maps/factors did not lower exactly for a cold model.");
+    auto changed=graph;const auto root=materialOutputNode(changed).id;
+    const auto rough=materialInputLink(changed,root,MaterialPin::Roughness)->fromNode;
+    const auto power=addMaterialNode(changed,MaterialNodeKind::Power).id;
+    findMaterialNode(changed,power)->left={MaterialValueType::Scalar,{.5f,.5f,.5f,.5f}};
+    findMaterialNode(changed,power)->right={MaterialValueType::Scalar,{2,2,2,2}};
+    connectMaterialNodes(changed,power,MaterialPin::Value,root,MaterialPin::Specular);
+    require(materialGraphFixedSurface(changed)->specular==.25f,"Uniform arithmetic was needlessly rejected by the fixed lowering.");
+    connectMaterialNodes(changed,rough,MaterialPin::Value,power,MaterialPin::Left);
+    require(!materialGraphFixedSurface(changed),"Textured Power was silently approximated by the fixed lowering.");
+    changed=graph;materialOutputNode(changed).output.blend=MaterialBlend::Alpha;
+    require(!materialGraphFixedSurface(changed),"Independent graph coverage was coupled to the base texture during cold presentation.");
+    changed=graph;
+    for(auto& node:changed.nodes)if(node.kind==MaterialNodeKind::Texture2D&&node.texture.role==MaterialTextureRole::Color){node.texture.role=MaterialTextureRole::Data;break;}
+    require(!materialGraphFixedSurface(changed),"Wrong texture decoding was certified as an exact fixed surface.");
+    changed=graph;const auto uv=addMaterialNode(changed,MaterialNodeKind::UV).id;
+    findMaterialNode(changed,uv)->uv.offset={.8f,0,0};
+    for(const auto& node:changed.nodes)if(node.kind==MaterialNodeKind::Texture2D&&node.texture.role==MaterialTextureRole::Normal){
+        connectMaterialNodes(changed,uv,MaterialPin::UV,node.id,MaterialPin::UV);break;
+    }
+    require(!materialGraphFixedSurface(changed),"Different per-map transforms were silently combined during cold presentation.");
+    changed=graph;
+    if(const auto* link=materialInputLink(changed,root,MaterialPin::Roughness))removeMaterialLink(changed,link->id);
+    materialOutputNode(changed).output.roughness=.7f;
+    require(!materialGraphFixedSurface(changed),"Packed texture changed a constant roughness input during cold presentation.");
+    changed=graph;const auto time=addMaterialNode(changed,MaterialNodeKind::Time).id;
+    connectMaterialNodes(changed,time,MaterialPin::Value,root,MaterialPin::Specular);
+    require(!materialGraphFixedSurface(changed),"Animated graph uniforms were frozen by the fixed lowering.");
+}
+}
+int main(int argc,char** argv){try{typesChainsAndTransactions();signaturesAndDormantReferences();receiveFogPersistence();rgbScalarInputsAndFallbacks();migrationAndAuthority();repeatedSourceDag();activeCompatibilityTransport();usageOpacityAndSpecular();vectorMappingsAndUniformSafety();schemaOneMigration();explicitParticleMigration();arithmeticAndAnimatedMappings();exactColdModelSurface();if(argc>1)snapshotMaterials(fs::path(argv[1]));std::cout<<"Material graph types, chains, migration, signatures and references passed.\n";return 0;}
 catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

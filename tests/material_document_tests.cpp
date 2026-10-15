@@ -16,6 +16,8 @@ namespace fs=std::filesystem;
 void require(bool condition,const char* message){if(!condition)throw std::runtime_error(message);}
 std::string text(const fs::path& file){std::ifstream input(file,std::ios::binary);return {std::istreambuf_iterator<char>(input),{}};}
 bool same(const MaterialAsset& a,const MaterialAsset& b){return serializeMaterialAsset(a)==serializeMaterialAsset(b);}
+bool sameTexture(const ModelTexture& a,const ModelTexture& b){return a.image==b.image&&a.texCoord==b.texCoord&&
+    a.wrapU==b.wrapU&&a.wrapV==b.wrapV&&a.minFilter==b.minFilter&&a.magFilter==b.magFilter;}
 MaterialNode& parameter(MaterialAsset& a,MaterialPin pin) {
     const auto* link=materialInputLink(a.graph,materialOutputNode(a.graph).id,pin);
     if(!link)throw std::runtime_error("Fixture is missing its starter parameter.");
@@ -173,20 +175,110 @@ void boundedHistoryAndRedo() {
     require(!document.edit("Invalid replacement",[](auto& a){parameter(a,MaterialPin::OpacityMask).scalar=std::numeric_limits<float>::quiet_NaN();}) && document.canRedo() && document.revision()==revision,"Rejected edit destroyed redo.");
     require(document.edit("New branch",[](auto& a){parameter(a,MaterialPin::OpacityMask).scalar=.75f;}) && !document.canRedo(),"A valid new command did not replace redo history.");
 }
-void readOnlyAndCopy(){
+void protectedDefaultsAndImportedAuthoring(){
     Project project;MaterialDocument document(project.root);
     require(document.load(DefaultParticleMaterialId) && !document.editable() && !document.externalFileChanged(),"Built-in material did not open read-only.");
     require(!document.begin("Edit builtin") && !document.save(),"Built-in material accepted edits or overwrite.");
     require(document.save("Saved sprite",true) && document.editable() && !document.dirty() && document.assetId()!=DefaultParticleMaterialId,"Save As did not create an editable native asset.");
     auto imported=createMaterialAsset(project.root,"Imported fixture");imported.originModel="assets/models/fixture/manifest.json";
     imported.shading=MaterialShading::StandardPbr;imported.blend=MaterialBlend::Opaque;saveMaterialAsset(project.root,imported);
-    require(document.load(imported.id) && !document.editable() && !document.begin("Imported edit") && !document.save(),"Imported original accepted an overwrite.");
+    require(document.load(imported.id) && document.editable() && !document.dirty(),"Imported material did not open as an editable shared asset.");
+    const auto initial=text(materialAssetPath(project.root,imported.id));
+    require(document.edit("Imported appearance",[](auto& a){parameter(a,MaterialPin::Roughness).scalar=.42f;})&&document.save(),
+        "Imported material could not save under its assigned identity.");
+    require(document.assetId()==imported.id&&document.definition().originModel==imported.originModel&&
+        !document.dirty()&&text(materialAssetPath(project.root,imported.id))!=initial,
+        "Editing an imported material changed identity, provenance or saved-state tracking.");
+    require(document.undo()&&document.dirty()&&document.redo()&&!document.dirty(),"Imported material undo/redo lost its saved state.");
+    require(!document.edit("Rewrite provenance",[](auto& a){a.originModel.clear();}),"An ordinary material edit rewrote import provenance.");
     const auto original=text(materialAssetPath(project.root,imported.id));
     require(document.save("Native PBR",true) && document.editable() && document.definition().originModel.empty() && document.assetId()!=imported.id,"Save As did not create an editable native PBR asset.");
     require(document.edit("PBR appearance",[](auto& a){parameter(a,MaterialPin::Roughness).scalar=.23f;parameter(a,MaterialPin::Metallic).scalar=.75f;texture(a,MaterialTextureRole::Normal).image.id="assets/textures/normal.png";}) && document.save(),"Native PBR editing or storage failed.");
     const auto saved=document.definition();
     require(document.undo() && document.redo() && same(document.definition(),saved) && !document.dirty(),"PBR material undo/redo lost its saved state.");
     require(document.load(saved.id) && same(document.definition(),saved) && text(materialAssetPath(project.root,imported.id))==original,"Native PBR roundtrip changed the imported original.");
+}
+void importedPackedMapsAndPromotion(){
+    Project project;ModelAsset model;model.id="assets/models/model-material-authoring/manifest.json";
+    ModelMaterial surface;surface.name="tripo_mat_e2d9edc9-a284-40c0-a603-a929041cabe3";
+    surface.baseColor={.7f,.5f,.3f,1};surface.roughness=.6f;surface.metallic=.8f;surface.occlusionStrength=.7f;
+    surface.baseColorTexture.image.id="assets/models/model-material-authoring/images/color.png";
+    surface.baseColorTexture.texCoord=1;surface.baseColorTexture.wrapU=ModelWrap::Mirror;
+    surface.baseColorTexture.minFilter=ModelFilter::NearestMipmapLinear;surface.baseColorTexture.magFilter=ModelFilter::Nearest;
+    surface.metallicRoughnessTexture.image.id="assets/models/model-material-authoring/images/packed.png";
+    surface.metallicRoughnessTexture.wrapV=ModelWrap::Clamp;
+    surface.occlusionTexture=surface.metallicRoughnessTexture;
+    model.materials.push_back(surface);model.materialIds.push_back(importedMaterialId(model.id,0));
+    promoteModelMaterials(project.root,model);
+    const auto original=loadMaterialAsset(project.root,model.materialIds[0]);const auto disk=text(project.root/original.id);
+    MaterialDocument document(project.root);
+    require(document.load(original.id)&&document.editable()&&!document.dirty()&&text(project.root/original.id)==disk,
+        "Opening an imported packed material rewrote or locked its native sidecar.");
+    const auto retained=document.committed();
+    require(document.edit("Edit imported packed material",[](auto& asset){
+        for(auto& node:asset.graph.nodes)if(node.kind==MaterialNodeKind::Scalar&&node.name=="Roughness factor")node.scalar=.23f;
+        auto& normal=texture(asset,MaterialTextureRole::Normal);normal.image.id="assets/textures/authored-normal.png";normal.normalStrength=.65f;
+        materialOutputNode(asset.graph).output.receiveFog=false;
+    })&&document.save(),"Imported packed material rejected factor/map edits or in-place Save.");
+    const auto edited=document.definition();const auto saved=text(project.root/edited.id);
+    require(edited.id==original.id&&edited.originModel==model.id&&edited.surface.roughness==.23f&&
+        retained->surface.roughness==.6f&&!edited.surface.receiveFog,"Imported authoring changed identity/provenance or mutated the old revision.");
+    require(sameTexture(edited.surface.baseColorTexture,original.surface.baseColorTexture)&&
+        sameTexture(edited.surface.metallicRoughnessTexture,original.surface.metallicRoughnessTexture)&&
+        sameTexture(edited.surface.occlusionTexture,original.surface.occlusionTexture),
+        "Editing an imported factor or new normal map changed unrelated images, UVs or samplers.");
+    for(const auto& link:original.graph.links)
+        require(std::find(edited.graph.links.begin(),edited.graph.links.end(),link)!=edited.graph.links.end(),
+            "Imported authoring replaced an existing packed-channel connection.");
+    require(document.undo()&&same(document.definition(),original)&&document.dirty()&&document.redo()&&
+        same(document.definition(),edited)&&!document.dirty(),"Imported graph undo/redo lost channels or saved state.");
+    promoteModelMaterials(project.root,model);
+    require(text(project.root/edited.id)==saved&&document.load(edited.id)&&same(document.definition(),edited),
+        "Model promotion or reopening overwrote authored imported material settings.");
+}
+void verifyActualMaterial(const fs::path& sourceRoot,const std::string& id) {
+    const auto source=materialAssetPath(sourceRoot,id);const auto sourceBytes=text(source);
+    const auto original=loadMaterialAsset(sourceRoot,id);
+    Project disposable;const auto target=materialAssetPath(disposable.root,id);
+    fs::create_directories(target.parent_path());fs::copy_file(source,target);
+    MaterialDocument document(disposable.root);
+    require(document.load(id)&&document.editable()&&!document.dirty()&&same(document.definition(),original),
+        "The actual imported material did not open editable with its complete existing graph.");
+    const auto retained=document.committed();
+    require(document.edit("Verify actual imported authoring",[](auto& asset) {
+        materialOutputNode(asset.graph).output.receiveFog=!materialOutputNode(asset.graph).output.receiveFog;
+        texture(asset,MaterialTextureRole::Normal).image.id="assets/textures/verification-normal.png";
+    })&&document.save(),"The actual imported material could not edit and save in the disposable project.");
+    const auto edited=document.definition();
+    require(edited.id==original.id&&edited.originModel==original.originModel&&
+        sameTexture(edited.surface.baseColorTexture,original.surface.baseColorTexture)&&
+        sameTexture(edited.surface.metallicRoughnessTexture,original.surface.metallicRoughnessTexture)&&same(*retained,original),
+        "Editing the actual material lost identity, packed/color maps or immutable snapshot ownership.");
+    require(document.undo()&&same(document.definition(),original)&&document.redo()&&same(document.definition(),edited)&&
+        document.load(id)&&same(document.definition(),edited)&&!document.dirty(),
+        "The actual imported material lost edits, graph data or history during Save/reopen.");
+    require(text(source)==sourceBytes,"Disposable verification modified the authored source material.");
+    std::cout<<"Actual material verified in disposable storage: "<<original.name<<" ["<<id<<"]\n";
+}
+void sharedQuaderMaterialAuthoring(){
+    Project project;auto material=createMaterialAsset(project.root,"Quader shared");
+    material.id="assets/materials/quader-project-shared.crimson-material";
+    parameter(material,MaterialPin::Roughness).scalar=.62f;texture(material).image.id="assets/textures/quader-color.png";
+    canonicalizeMaterialAsset(material);saveMaterialAsset(project.root,material);
+    const auto initial=text(materialAssetPath(project.root,material.id));MaterialDocument document(project.root);
+    require(document.load(material.id)&&document.editable()&&!document.dirty()&&!document.externalFileChanged(),"Shared native Quader material opened read-only or dirty.");
+    require(text(materialAssetPath(project.root,material.id))==initial,"Opening a Quader material rewrote its saved contents.");
+    require(document.edit("Quader appearance",[](auto& asset){parameter(asset,MaterialPin::Roughness).scalar=.27f;})&&document.save(),"Quader material could not be edited and saved under its shared identity.");
+    require(document.assetId()==material.id&&document.definition().originModel.empty()&&document.definition().surface.roughness==.27f&&
+        materialTextureReferences(document.definition())==materialTextureReferences(material),"Editing a Quader material changed its shared ID, ownership or textures.");
+    require(document.undo()&&document.dirty()&&document.definition().surface.roughness==.62f&&document.redo()&&!document.dirty(),"Quader material history lost its saved state.");
+    require(document.load(material.id)&&document.editable()&&document.definition().surface.roughness==.27f,"Saved Quader material did not reopen editable with its authored values.");
+    const auto prior=document.committed();const auto revision=document.revision();
+    auto refreshed=loadMaterialAsset(project.root,material.id);parameter(refreshed,MaterialPin::Roughness).scalar=.44f;saveMaterialAsset(project.root,refreshed);
+    require(document.externalFileChanged()&&!document.dirty()&&document.definition().surface.roughness==.27f,"A Quader source refresh silently mutated the clean open document before reconciliation.");
+    require(document.load(material.id)&&document.revision()>revision&&!document.dirty()&&!document.externalFileChanged()&&document.editable()&&
+        document.definition().surface.roughness==.44f&&prior->surface.roughness==.27f,"Clean Quader refresh failed to publish a new editable revision or mutated the previous snapshot.");
+    require(document.load(DefaultMaterialId)&&!document.editable()&&!document.begin("Edit protected default")&&!document.save(),"Protected default material became editable through Quader authoring.");
 }
 void mappingAndSamplerTransactions() {
     Project project;MaterialDocument document(project.root);require(document.create("Mapped"),"Mapped material create failed.");
@@ -243,6 +335,29 @@ void spriteMappingMigration() {
         require(document.save()&&document.load(legacy.id)&&same(document.definition(),original),"Migrated sprite mapping did not survive a v6 save/reload.");
     }
 }
+void fogReceptionTransactions() {
+    Project project;MaterialDocument document(project.root);
+    require(document.create("Fog reception"),"Fog material creation failed.");
+    for(const auto shading:{MaterialShading::StandardPbr,MaterialShading::Unlit}) {
+        require(document.edit("Configure fog fixture",[&](auto& asset){auto& output=materialOutputNode(asset.graph).output;
+            output.shading=shading;output.receiveFog=true;})&&document.save(),"Fog fixture configuration failed.");
+        const auto original=document.definition();const auto committed=document.committed();
+        const auto savedBytes=text(materialAssetPath(project.root,document.assetId()));
+        require(materialOutputNode(original.graph).output.receiveFog&&original.surface.receiveFog,"New material did not receive fog by default.");
+        require(document.begin("Toggle material fog")&&document.update([](auto& asset){materialOutputNode(asset.graph).output.receiveFog=false;}),
+            "Receive Fog gesture failed.");
+        require(!document.definition().surface.receiveFog&&document.committed()==committed&&committed->surface.receiveFog,
+            "Working fog toggle changed the committed snapshot before finishing the gesture.");
+        document.cancel();require(same(document.definition(),original)&&!document.dirty(),"Cancel failed to restore material fog and saved state.");
+        require(document.edit("Toggle material fog",[](auto& asset){materialOutputNode(asset.graph).output.receiveFog=false;}),"Receive Fog edit failed.");
+        require(document.dirty()&&!document.committed()->surface.receiveFog&&committed->surface.receiveFog&&
+            text(materialAssetPath(project.root,document.assetId()))==savedBytes,"Fog commit mutated the old snapshot or saved file.");
+        require(document.undo()&&same(document.definition(),original)&&!document.dirty(),"Fog undo lost original material state.");
+        require(document.redo()&&!document.definition().surface.receiveFog&&document.dirty(),"Fog redo did not restore the authored exclusion.");
+        const auto changed=document.definition();const auto id=document.assetId();
+        require(document.save()&&document.load(id)&&same(document.definition(),changed)&&!document.dirty(),"Fog exclusion did not survive save/reopen.");
+    }
+}
 void usageBlendAndHdrTransactions() {
     Project project;MaterialDocument document(project.root);require(document.create("Coverage history"),"Coverage fixture creation failed.");
     const auto original=document.definition();const auto output=materialOutputNode(original.graph).id;
@@ -264,5 +379,7 @@ void usageBlendAndHdrTransactions() {
     const auto hdr=document.definition();require(document.save()&&document.load(document.assetId())&&same(document.definition(),hdr),"Save/reopen normalized HDR channels.");
 }
 }
-int main(){try{publicationAndHistory();identityAndExternalAuthority();dormantGraphTextureHistory();reconcileDeletedGraphTextureHistory();boundedHistoryAndRedo();readOnlyAndCopy();mappingAndSamplerTransactions();spriteMappingMigration();usageBlendAndHdrTransactions();std::cout<<"Material document transactions, history, storage and authority checks passed.\n";return 0;}
+int main(int argc,char** argv){try{if(argc==4&&std::string(argv[1])=="--verify-material"){verifyActualMaterial(argv[2],argv[3]);return 0;}
+    require(argc==1,"Expected --verify-material <project root> <material id>, or no arguments.");
+    publicationAndHistory();identityAndExternalAuthority();dormantGraphTextureHistory();reconcileDeletedGraphTextureHistory();boundedHistoryAndRedo();protectedDefaultsAndImportedAuthoring();importedPackedMapsAndPromotion();sharedQuaderMaterialAuthoring();mappingAndSamplerTransactions();spriteMappingMigration();fogReceptionTransactions();usageBlendAndHdrTransactions();std::cout<<"Material document transactions, history, storage and authority checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

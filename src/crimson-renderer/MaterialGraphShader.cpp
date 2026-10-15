@@ -58,8 +58,16 @@ struct Lowering {
     std::string input(const MaterialNode& node,MaterialPin pin) {
         const auto fallback=materialInputDefault(node,pin);
         if(const auto* link=materialInputLink(graph,node.id,pin))
-            return node.kind==MaterialNodeKind::Multiply?linked(*link):linkedAs(*link,fallback.type);
+            return node.kind==MaterialNodeKind::Multiply||node.kind==MaterialNodeKind::Add||node.kind==MaterialNodeKind::Lerp||
+                (node.kind==MaterialNodeKind::Power&&pin==MaterialPin::Left)?linked(*link):linkedAs(*link,fallback.type);
         return param(row(fallback.value))+(fallback.type==MaterialValueType::Scalar?".x":fallback.type==MaterialValueType::Vector2?".xy":".rgb");
+    }
+    std::string promotedInput(const MaterialNode& node,MaterialPin pin,MaterialValueType destination) {
+        auto type=materialInputDefault(node,pin).type;
+        if(const auto* link=materialInputLink(graph,node.id,pin))type=materialOutputType(graph,link->fromNode,link->fromPin);
+        auto expression=input(node,pin);
+        if(type==MaterialValueType::Scalar&&destination!=type)expression=glslType(destination)+"_splat("+expression+")";
+        return expression;
     }
     std::string output(const MaterialNode& node,MaterialPin pin,const std::string& fallback,bool active=true) const {
         if(active)if(const auto* link=materialInputLink(graph,node.id,pin))return linkedAs(*link,materialInputDefault(node,pin).type);
@@ -76,11 +84,22 @@ std::vector<ShaderUniformContract> manifest(const MaterialGraphShader& graph,Mat
     addBinding(result,MaterialGraphParameterUniform,ShaderUniformKind::Vec4,MaterialGraphMaxParameterRows);
     for(const auto& texture:graph.textures)addBinding(result,materialGraphSamplerName(texture.slot),ShaderUniformKind::Sampler,1,texture.slot);
     if(pass==MaterialGraphPass::Model || pass==MaterialGraphPass::Particle) {
-        for(auto name:{"u_cameraPos","u_lightCounts","u_environment","u_modelOptions","u_modelEmissiveMap","u_modelUv","u_shadowAtlas","u_shadowLayout"})addBinding(result,name);
+        for(auto name:{"u_cameraPos","u_lightCounts","u_environment","u_ambientLight","u_modelOptions","u_modelEmissiveMap","u_modelUv","u_shadowAtlas","u_shadowLayout"})addBinding(result,name);
         addBinding(result,"u_modelNormalMatrix",ShaderUniformKind::Mat4);
         addBinding(result,"u_direction",ShaderUniformKind::Vec4,4);addBinding(result,"u_directionColor",ShaderUniformKind::Vec4,4);
-        addBinding(result,"u_pointPosition",ShaderUniformKind::Vec4,16);addBinding(result,"u_pointColor",ShaderUniformKind::Vec4,16);
+        for(auto name:{"u_clusterGrid","u_clusterDepth","u_clusterViewport","u_clusterAtlas","u_clusterOptions","u_clusterRecordLayoutV5",
+            "u_surfaceLighting","u_surfaceCategory","u_ambientAtlas","u_ambientSettings","u_ambientTransition","u_playerReveal","u_lightingResponse"})addBinding(result,name);
+        addBinding(result,"u_directionLightingRoles",ShaderUniformKind::Vec4,4);
+        addBinding(result,"u_clusterView",ShaderUniformKind::Mat4);
         addBinding(result,"u_pointShadow",ShaderUniformKind::Vec4,16);
+        addBinding(result,"u_directionalShadowMatrix",ShaderUniformKind::Mat4,16);
+        addBinding(result,"u_directionalShadowSplits",ShaderUniformKind::Vec4,4);
+        addBinding(result,"u_directionalShadowParameters",ShaderUniformKind::Vec4,4);
+        addBinding(result,"u_directionalShadowRect",ShaderUniformKind::Vec4,16);
+        addBinding(result,"u_shadowCameraForward");
+        for(auto name:{"u_characterDirection","u_characterColor","u_characterResponse"})addBinding(result,name,ShaderUniformKind::Vec4,2);
+        addBinding(result,"u_characterShadowMatrix",ShaderUniformKind::Mat4);
+        for(auto name:{"u_characterShadowRect","u_characterShadowDirection","u_characterShadowParameters"})addBinding(result,name);
         addBinding(result,"s_irradiance",ShaderUniformKind::Sampler,1,12,ShaderTextureDimension::Cube);
         addBinding(result,"s_prefiltered",ShaderUniformKind::Sampler,1,13,ShaderTextureDimension::Cube);
         addBinding(result,"s_brdfLut",ShaderUniformKind::Sampler,1,14);
@@ -89,6 +108,13 @@ std::vector<ShaderUniformContract> manifest(const MaterialGraphShader& graph,Mat
     if(pass==MaterialGraphPass::Model||pass==MaterialGraphPass::Particle)
         for(auto name:{"u_fogColorDensity","u_fogDepth","u_fogHeight"})addBinding(result,name);
     if(pass==MaterialGraphPass::Picking)addBinding(result,"u_pickId");
+    if(pass==MaterialGraphPass::PointShadow || pass==MaterialGraphPass::DirectionalShadow)addBinding(result,"u_surfaceLighting");
+    if(pass==MaterialGraphPass::PointShadow || pass==MaterialGraphPass::DirectionalShadow || pass==MaterialGraphPass::Particle)
+        addBinding(result,"u_invView",ShaderUniformKind::Mat4);
+    if(pass==MaterialGraphPass::DirectionalShadow) {
+        addBinding(result,"u_directionalCasterViewProjection",ShaderUniformKind::Mat4);
+        addBinding(result,"u_directionalCasterTile");
+    }
     return result;
 }
 }
@@ -108,6 +134,19 @@ static MaterialGraphShader generateGraphShader(const MaterialAsset& material,std
     const auto specularRow=lower.row({settings.specular,0,0,0});
     const auto identity=lower.mapping({});
     auto order=materialGraphOrder(graph,settings.shading,settings.blend);
+    std::set<MaterialNodeId> coverageNodes;
+    if(!preview&&settings.blend==MaterialBlend::Mask) {
+        const auto visit=[&](auto&& self,MaterialNodeId id)->void {
+            if(!coverageNodes.insert(id).second)return;
+            const auto& node=*findMaterialNode(graph,id);
+            for(const auto& input:materialNodeInputs(graph,node,settings.shading,settings.blend))
+                if(const auto* link=materialInputLink(graph,id,input.pin))self(self,link->fromNode);
+        };
+        if(const auto* link=materialInputLink(graph,output.id,MaterialPin::OpacityMask)) {
+            visit(visit,link->fromNode);
+            lower.result.dynamicCoverage=materialExpressionTimeDependent(graph,link->fromNode,link->fromPin);
+        }
+    }
     if(preview) {
         const auto* target=findMaterialNode(graph,preview->node);
         if(!target || target->kind==MaterialNodeKind::Output)throw std::runtime_error("Node preview target is unavailable.");
@@ -128,7 +167,16 @@ static MaterialGraphShader generateGraphShader(const MaterialAsset& material,std
         lower.expressions.emplace(id,expression);
         switch(node.kind) {
         case MaterialNodeKind::Output:break;
-        case MaterialNodeKind::UV:lower.mappings.emplace(id,lower.mapping(resolveMaterialUvMapping(graph,id)));break;
+        case MaterialNodeKind::UV:case MaterialNodeKind::Panner: {
+            const auto row=lower.mapping(resolveMaterialUvMapping(graph,id));lower.mappings.emplace(id,row);
+            if(materialExpressionTimeDependent(graph,id,MaterialPin::UV))lower.result.runtimeParameters.push_back({id,row,true,coverageNodes.contains(id)});
+            break;
+        }
+        case MaterialNodeKind::Time: {
+            const auto row=lower.row(evaluateMaterialUniform(graph,id,MaterialPin::Value).value);
+            lower.result.runtimeParameters.push_back({id,row,false,coverageNodes.contains(id)});
+            lower.code<<"    float "<<expression<<" = "<<param(row)<<".x;\n";break;
+        }
         case MaterialNodeKind::Scalar:lower.code<<"    float "<<expression<<" = "<<param(lower.row({node.scalar,0,0,0}))<<".x;\n";break;
         case MaterialNodeKind::Vector2:lower.code<<"    vec2 "<<expression<<" = "<<param(lower.row({node.vector2[0],node.vector2[1],0,0}))<<".xy;\n";break;
         case MaterialNodeKind::ParticleColor:lower.code<<"    vec4 "<<expression<<" = context.particleColor;\n";break;
@@ -142,10 +190,21 @@ static MaterialGraphShader generateGraphShader(const MaterialAsset& material,std
             const auto value=lower.input(node,MaterialPin::Left);
             lower.code<<"    float "<<expression<<" = clamp("<<value<<", 0.0, 1.0);\n";break;
         }
-        case MaterialNodeKind::Multiply: {
+        case MaterialNodeKind::Multiply:case MaterialNodeKind::Add: {
             const auto a=lower.input(node,MaterialPin::Left),b=lower.input(node,MaterialPin::Right);
             const auto type=materialOutputType(graph,id,MaterialPin::Value);
-            lower.code<<"    "<<glslType(type)<<" "<<expression<<" = "<<a<<" * "<<b<<";\n";break;
+            lower.code<<"    "<<glslType(type)<<" "<<expression<<" = "<<a<<(node.kind==MaterialNodeKind::Add?" + ":" * ")<<b<<";\n";break;
+        }
+        case MaterialNodeKind::Lerp: {
+            const auto type=materialOutputType(graph,id,MaterialPin::Value);
+            const auto a=lower.promotedInput(node,MaterialPin::Left,type),b=lower.promotedInput(node,MaterialPin::Right,type);
+            const auto alpha=lower.promotedInput(node,MaterialPin::Alpha,type);
+            lower.code<<"    "<<glslType(type)<<" "<<expression<<" = mix("<<a<<", "<<b<<", "<<alpha<<");\n";break;
+        }
+        case MaterialNodeKind::Power: {
+            const auto type=materialOutputType(graph,id,MaterialPin::Value);
+            const auto a=lower.input(node,MaterialPin::Left),b=lower.input(node,MaterialPin::Right);
+            lower.code<<"    "<<glslType(type)<<" "<<expression<<" = ccGraphPositivePow("<<a<<", "<<b<<");\n";break;
         }
         case MaterialNodeKind::Texture2D: {
             if(lower.result.textures.size()>=MaterialGraphMaxTextureBindings)throw std::runtime_error("Material graph node "+std::to_string(id)+" exceeds 12 active texture bindings.");
@@ -198,38 +257,62 @@ static MaterialGraphShader generateGraphShader(const MaterialAsset& material,std
     }
     evaluate<<"    return result;\n}\n";
     lower.result.usesTextures=!lower.result.textures.empty();
-    for(const auto pass:{MaterialGraphPass::Model,MaterialGraphPass::Picking,MaterialGraphPass::PointShadow,MaterialGraphPass::Particle}) {
+    if(!lower.result.runtimeParameters.empty()) {
+        lower.result.runtimeGraph=std::make_shared<const MaterialGraph>(graph);
+        lower.result.runtimeDefinitionSignature=preview?materialGraphValueHash(graph,settings.shading,settings.blend,preview->node):
+            materialGraphValueHash(graph,settings.shading,settings.blend);
+    }
+    for(const auto pass:{MaterialGraphPass::Model,MaterialGraphPass::Picking,MaterialGraphPass::PointShadow,MaterialGraphPass::Particle,MaterialGraphPass::DirectionalShadow}) {
         if(preview && pass!=MaterialGraphPass::Model)continue;
         MaterialGraphShaderVariant variant;variant.pass=pass;
         const bool model=pass==MaterialGraphPass::Model,particle=pass==MaterialGraphPass::Particle,pick=pass==MaterialGraphPass::Picking;
-        variant.vertexName=particle?"vs_particle":model?"vs_model":pick?"vs_pick":"vs_point_shadow";
+        variant.vertexName=particle?"vs_particle":model?"vs_model":pick?"vs_pick":pass==MaterialGraphPass::DirectionalShadow?"vs_directional_shadow":"vs_point_shadow";
         variant.varyingName=particle?"particle.varying.def.sc":"model.varying.def.sc";
         std::ostringstream source;
         source<<((model || particle)?
             "$input v_worldPosition, v_normal, v_texcoord0, v_texcoord1, v_tangent, v_color0, v_localPosition, v_localNormal\n":
             "$input v_texcoord0, v_texcoord1, v_color0, v_localPosition, v_localNormal, v_worldPosition, v_normal\n");
-        source<<"// crimson-material-graph-generator-v5\n#define CC_GRAPH_SURFACE "<<(model || particle)<<"\n#define CC_GRAPH_MODEL "<<model<<"\n#define CC_GRAPH_PARTICLE "<<particle
+        source<<"// crimson-material-graph-generator-v15\n#define CC_GRAPH_SURFACE "<<(model || particle)<<"\n#define CC_GRAPH_MODEL "<<model<<"\n#define CC_GRAPH_PARTICLE "<<particle
             <<"\n#define CC_GRAPH_PICK "<<pick<<"\n#define CC_GRAPH_MASK "<<(!preview && settings.blend==MaterialBlend::Mask)<<"\n#define CC_GRAPH_LIT "<<lit<<"\n";
         source<<"#include <bgfx_shader.sh>\nuniform vec4 u_graphParams[208];\n";
         if(model || particle)source<<"uniform mat4 u_modelNormalMatrix;\nuniform vec4 u_modelUv;\n";
         for(const auto& texture:lower.result.textures)source<<"SAMPLER2D("<<materialGraphSamplerName(texture.slot)<<", "<<texture.slot<<");\n";
-        source<<"#include \"material_graph_common.sh\"\n"<<evaluate.str();
+        source<<"#include \"material_graph_common.sh\"\n";
+        source<<"float ccGraphPositivePow(float a, float b) { return a <= 2.980233e-8 ? 0.0 : pow(max(a, 2.980233e-8), b); }\n"
+            "vec2 ccGraphPositivePow(vec2 a, float b) { return vec2(ccGraphPositivePow(a.x, b), ccGraphPositivePow(a.y, b)); }\n"
+            "vec3 ccGraphPositivePow(vec3 a, float b) { return vec3(ccGraphPositivePow(a.x, b), ccGraphPositivePow(a.y, b), ccGraphPositivePow(a.z, b)); }\n";
+        source<<evaluate.str();
         source<<"#include \""<<(particle?"material_graph_particle.sh":model?"material_graph_model.sh":"material_graph_depth.sh")<<"\"\n";
         variant.source=source.str();variant.manifest=manifest(lower.result,pass);lower.result.variants.push_back(std::move(variant));
     }
     std::uint64_t hash=14695981039346656037ull;
     for(const auto& variant:lower.result.variants)for(unsigned char ch:variant.source){hash^=ch;hash*=1099511628211ull;}
-    lower.result.topologyKey=std::string(preview?"graph-preview-v5-":"graph-v5-")+std::to_string(hash);
+    lower.result.topologyKey=std::string(preview?"graph-preview-v7-":"graph-v7-")+std::to_string(hash);
     return std::move(lower.result);
 }
 MaterialGraphShader generateMaterialGraphShader(const MaterialAsset& material) {return generateGraphShader(material,{});}
 MaterialGraphShader generateMaterialGraphPreviewShader(const MaterialAsset& material,MaterialGraphPreviewTarget target) {return generateGraphShader(material,target);}
+void updateMaterialGraphRuntimeUniforms(const MaterialGraph& graph,std::span<const MaterialGraphRuntimeParameter> parameters,
+    MaterialEvaluationContext context,std::span<Vec4> uniforms) {
+    constexpr float radians=3.14159265358979323846f/180.f;
+    for(const auto& parameter:parameters) {
+        if(parameter.row>=uniforms.size()||(parameter.mapping&&static_cast<std::size_t>(parameter.row)+2>=uniforms.size()))
+            throw std::runtime_error("Material graph runtime parameter is outside its packet.");
+        if(!parameter.mapping)uniforms[parameter.row]=evaluateMaterialUniform(graph,parameter.node,MaterialPin::Value,context).value;
+        else {
+            const auto uv=resolveMaterialUvMapping(graph,parameter.node,context);
+            uniforms[parameter.row]={uv.scale[0],uv.scale[1],uv.scale[2],uv.mode==MaterialUvMode::LocalTriplanar||uv.mode==MaterialUvMode::WorldTriplanar?1.f:0.f};
+            uniforms[parameter.row+1]={uv.offset[0],uv.offset[1],uv.offset[2],uv.mode==MaterialUvMode::WorldTriplanar?1.f:0.f};
+            uniforms[parameter.row+2]={uv.rotation[0]*radians,uv.rotation[1]*radians,uv.rotation[2]*radians,uv.mode==MaterialUvMode::UV1?1.f:0.f};
+        }
+    }
+}
 ShaderCompileRecipe materialGraphShaderRecipe(const ShaderCompileConfig& config,const MaterialGraphShader& graph,const MaterialGraphShaderVariant& variant) {
     ShaderCompileRecipe result;
     result.name=graph.topologyKey+"-"+std::to_string(static_cast<unsigned>(variant.pass));result.source=variant.source;
     result.varyingDefinition=config.sourceDirectory/variant.varyingName;
     result.includeDirectories={config.sourceDirectory,config.includeDirectory};
-    result.contract="crimson-material-graph-v5;12-textures;208-vec4;ibl12-14;shadow15;particle-instance80-orientation;rgb-to-scalar-r";
+    result.contract="crimson-material-graph-v7;12-textures;208-vec4;ibl12-13;forward-plus-brdf14;shadow15;point-directional-depth;runtime-uniforms;particle-instance80-orientation;rgb-to-scalar-r;point-record6;near-falloff-specular;finite-point-range-v4;source-radius-ggx-pcss-v2;distance-attenuation-v1;environment-ambient-color-v1";
     return result;
 }
 }

@@ -4,9 +4,12 @@
 #include "assets/AtomicFile.h"
 #include "math/Json.h"
 #include "resources/AssetRefJson.h"
+#include "crimson-renderer/shaders/point_light.sh"
+#include "crimson-renderer/shaders/ambient_visibility_response.sh"
 
 #include <nlohmann/json.hpp>
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <fstream>
@@ -23,6 +26,13 @@
 namespace crimson {
 namespace {
 using Json = nlohmann::json;
+std::string sceneNameKey(std::string_view name) {
+    const auto first=name.find_first_not_of(" \t\r\n");
+    if(first==std::string_view::npos)return {};
+    std::string key(name.substr(first,name.find_last_not_of(" \t\r\n")-first+1));
+    for(auto& character:key)if(character>='A'&&character<='Z')character=char(character-'A'+'a');
+    return key;
+}
 std::filesystem::path fromUtf8(const std::string& text) {
     return std::filesystem::path(std::u8string(reinterpret_cast<const char8_t*>(text.data()),text.size()));
 }
@@ -84,9 +94,165 @@ EntityId unusedId(const std::vector<EntityRecord>& records) {
     while (std::any_of(records.begin(),records.end(),[result](const auto& record) { return record.id == result; }));
     return result;
 }
+uint32_t readLightingMask(const Json& object,const char* name,uint32_t fallback) {
+    const auto field=object.find(name);
+    if(field==object.end())return fallback;
+    if(!field->is_number_integer() || field->get<int64_t>()<0 || field->get<uint64_t>()>lighting_scope::All)
+        throw std::runtime_error("Lighting masks must contain only World and Character bits.");
+    return field->get<uint32_t>();
+}
+Json rolesJson(const LightRoles& roles) {
+    return {{"receiverMask",roles.receiverMask},{"shadowCasterMask",roles.shadowCasterMask},
+        {"ambientRevealMask",roles.ambientRevealMask},{"ambientReveal",roles.ambientReveal},{"ambientRevealStrength",roles.ambientRevealStrength}};
+}
+LightRoles readRoles(const Json& source,LightRoles value={}) {
+    if(!source.is_object())throw std::runtime_error("Light roles must be an object.");
+    value.receiverMask=readLightingMask(source,"receiverMask",value.receiverMask);
+    value.shadowCasterMask=readLightingMask(source,"shadowCasterMask",value.shadowCasterMask);
+    value.ambientRevealMask=readLightingMask(source,"ambientRevealMask",value.ambientRevealMask);
+    value.ambientReveal=source.value("ambientReveal",value.ambientReveal);
+    value.ambientRevealStrength=source.value("ambientRevealStrength",value.ambientRevealStrength);
+    return value;
+}
+Json characterLightJson(const CharacterLight& value) {
+    return {{"enabled",value.enabled},{"direction",value.direction},{"color",value.color},
+        {"intensity",value.intensity},{"diffuse",value.diffuse},{"specular",value.specular}};
+}
+CharacterLight readCharacterLight(const Json& source,CharacterLight value) {
+    if(!source.is_object())throw std::runtime_error("Character lights must be objects.");
+    value.enabled=source.value("enabled",value.enabled);value.direction=source.value("direction",value.direction);
+    value.color=source.value("color",value.color);value.intensity=source.value("intensity",value.intensity);
+    value.diffuse=source.value("diffuse",value.diffuse);value.specular=source.value("specular",value.specular);
+    if(!validCharacterLight(value))throw std::runtime_error("Character light settings are invalid.");
+    return value;
+}
+Json lightRigJson(const PlayerLightRigSettings& value) {
+    const auto& local=value.localWorld;const auto& shadow=value.characterShadow;
+    return {{"version",4},{"enabled",value.enabled},{"showGizmos",value.showGizmos},
+        {"key",characterLightJson(value.key)},{"fill",characterLightJson(value.fill)},
+        {"localWorld",{{"enabled",local.enabled},{"height",local.height},{"color",local.color},
+            {"intensity",local.intensity},{"radius",local.radius},{"nearFalloffRadius",local.nearFalloffRadius},
+            {"specularStrength",local.specularStrength},{"rangeFalloffExponent",local.rangeFalloffExponent},
+            {"edgeSoftness",local.edgeSoftness},{"sourceRadius",local.sourceRadius},{"attenuation",local.attenuation},{"castShadows",local.castShadows},
+            {"shadowDepthBias",local.shadowDepthBias},{"shadowNormalBias",local.shadowNormalBias}}},
+        {"characterShadow",{{"enabled",shadow.enabled},{"strength",shadow.strength},
+            {"distance",shadow.distance},{"shadowDepthBias",shadow.shadowDepthBias},{"shadowNormalBias",shadow.shadowNormalBias}}}};
+}
+// Read-only conversion data, never a runtime mode or writer representation.
+struct FormerPointRigLight {
+    bool enabled{true};Vec3 offset{-3,5,3},color{1,.96f,.9f};float intensity{35},radius{12};
+    bool castShadows{true};float depthBias{.005f},normalBias{1};
+};
+FormerPointRigLight readFormerPointRigLight(const Json& source,FormerPointRigLight value) {
+    if(!source.is_object())throw std::runtime_error("Former point rig lights must be objects.");
+    value.enabled=source.value("enabled",value.enabled);value.offset=source.value("worldOffset",value.offset);
+    value.color=source.value("color",value.color);value.intensity=source.value("intensity",value.intensity);
+    value.radius=source.value("radius",value.radius);value.castShadows=source.value("castShadows",value.castShadows);
+    value.depthBias=source.value("shadowDepthBias",value.depthBias);value.normalBias=source.value("shadowNormalBias",value.normalBias);
+    if(!math::finite(value.offset)||std::any_of(value.offset.begin(),value.offset.end(),[](float v){return std::abs(v)>1000000;})||
+        !validLightColor(value.color)||!validLightIntensity(value.intensity)||!validLightRange(value.radius)||
+        !validShadowBiases(value.depthBias,value.normalBias)||
+        (source.contains("roles")&&!validLightRoles(readRoles(source.at("roles")))))
+        throw std::runtime_error("Former point rig light settings are invalid.");
+    return value;
+}
+CharacterLight convertFormerPoint(const FormerPointRigLight& old) {
+    CharacterLight value;value.enabled=old.enabled;value.color=old.color;
+    value.direction=math::normalized(old.offset*-1.f,{-.5f,-.8f,-.6f});
+    value.intensity=std::min(old.intensity*point_lighting::pointLightAttenuation(
+        static_cast<float>(math::dot(old.offset,old.offset)),1.f/(old.radius*old.radius)),10000.f);
+    return value;
+}
+float migratedPointIntensity(float irradiance,const LocalWorldLightSettings& light) {
+    const float attenuation=point_lighting::pointLightAttenuation(light.height*light.height,
+        1.f/(light.radius*light.radius),light.nearFalloffRadius*light.nearFalloffRadius,
+        light.rangeFalloffExponent,light.edgeSoftness,light.attenuation);
+    return static_cast<float>(std::min(double(irradiance)/std::max(double(attenuation),1e-12),1000000.));
+}
+PlayerLightRigSettings readLightRig(const Json& source,const CharacterRevealSettings& reveal,float characterHeight) {
+    if(!source.is_object())throw std::runtime_error("Character light rig settings must be an object.");
+    PlayerLightRigSettings value;
+    value.enabled=source.value("enabled",value.enabled);value.showGizmos=source.value("showGizmos",value.showGizmos);
+    if(source.contains("version")) {
+        const auto& encodedVersion=source.at("version");
+        if(!encodedVersion.is_number_integer()||encodedVersion<2||encodedVersion>4)
+            throw std::runtime_error("Unsupported character light rig version.");
+        const auto version=encodedVersion.get<int>();
+        if(source.contains("key"))value.key=readCharacterLight(source.at("key"),value.key);
+        if(source.contains("fill"))value.fill=readCharacterLight(source.at("fill"),value.fill);
+        const char* worldKey=version==3?"worldFill":"localWorld";
+        if(source.contains(worldKey)||version<4) {
+            const Json empty=Json::object();const auto& old=source.contains(worldKey)?source.at(worldKey):empty;
+            if(!old.is_object())throw std::runtime_error("Local World Light must be an object.");
+            auto& local=value.localWorld;
+            local.enabled=old.value("enabled",local.enabled);local.height=old.value("height",local.height);
+            local.color=old.value("color",local.color);
+            local.intensity=old.value("intensity",version==2?4.f:version==3?.64f:local.intensity);
+            local.castShadows=old.value("castShadows",local.castShadows);
+            local.shadowDepthBias=old.value("shadowDepthBias",local.shadowDepthBias);local.shadowNormalBias=old.value("shadowNormalBias",local.shadowNormalBias);
+            if(version==3) {
+                if(!validLocalWorldLightSettings(local)||!validCharacterRevealSettings(reveal)||
+                    !std::isfinite(characterHeight)||characterHeight<=0)
+                    throw std::runtime_error("Former World Fill settings are invalid.");
+                local.radius=std::clamp(std::max(2.f*reveal.spread,1.25f*local.height),.01f,100000.f);
+                const float center=characterLightingCenterHeight(characterHeight);
+                const float footIrradiance=local.intensity*ambient_visibility::radialRevealWeightSquared(center*center,reveal.spread);
+                local.intensity=migratedPointIntensity(footIrradiance,local);
+            } else {
+                local.radius=old.value("radius",local.radius);
+                local.nearFalloffRadius=old.value("nearFalloffRadius",local.nearFalloffRadius);
+                local.specularStrength=old.value("specularStrength",local.specularStrength);
+                local.rangeFalloffExponent=version==2?4.f:old.value("rangeFalloffExponent",local.rangeFalloffExponent);
+                local.edgeSoftness=version==2?1.f:old.value("edgeSoftness",local.edgeSoftness);
+                local.sourceRadius=version==2?0.f:old.contains("sourceRadius")?old.at("sourceRadius").get<float>():old.value("softSourceRadius",0.f);
+                local.attenuation=old.value("attenuation",2.f);
+                if(version==2&&!validLightIntensity(local.intensity))throw std::runtime_error("Former Local World Light intensity is invalid.");
+            }
+        }
+        if(source.contains("characterShadow")) {
+            const auto& old=source.at("characterShadow");if(!old.is_object())throw std::runtime_error("Character Shadow must be an object.");
+            auto& shadow=value.characterShadow;
+            shadow.enabled=old.value("enabled",shadow.enabled);
+            shadow.strength=old.value("strength",shadow.strength);shadow.distance=old.value("distance",shadow.distance);
+            shadow.shadowDepthBias=old.value("shadowDepthBias",shadow.shadowDepthBias);shadow.shadowNormalBias=old.value("shadowNormalBias",shadow.shadowNormalBias);
+        }
+    } else if(source.contains("actorLights")) {
+        const auto& lights=source.at("actorLights");
+        if(!lights.is_array()||lights.size()!=3)throw std::runtime_error("Former directional rigs require three lights.");
+        for(std::size_t index=0;index<lights.size();++index) {
+            const auto converted=readCharacterLight(lights[index],CharacterLight{});
+            if(index==0)value.key=converted;else if(index==1)value.fill=converted;
+        }
+        // This representation contained no world source. Do not create one on load.
+        value.localWorld.enabled=false;
+        value.characterShadow.enabled=value.key.enabled;
+    } else {
+        FormerPointRigLight key,fill;
+        fill.enabled=false;fill.offset={3,3,-2};fill.color={.55f,.65f,1};fill.intensity=12;fill.radius=8;fill.castShadows=false;
+        if(source.contains("key"))key=readFormerPointRigLight(source.at("key"),key);
+        if(source.contains("fill"))fill=readFormerPointRigLight(source.at("fill"),fill);
+        value.key=convertFormerPoint(key);value.fill=convertFormerPoint(fill);
+        auto& local=value.localWorld;local.enabled=key.enabled;local.color=key.color;local.radius=key.radius;
+        local.height=std::clamp(2.f,.01f,std::max(key.radius,.02f)*.5f);
+        local.intensity=migratedPointIntensity(value.key.intensity,local);local.castShadows=key.castShadows;
+        local.shadowDepthBias=key.depthBias;local.shadowNormalBias=key.normalBias;
+        auto& shadow=value.characterShadow;shadow.enabled=key.enabled&&key.castShadows;
+        shadow.shadowDepthBias=key.depthBias;shadow.shadowNormalBias=key.normalBias;
+    }
+    if(!validPlayerLightRigSettings(value))throw std::runtime_error("Character light rig settings are invalid.");
+    return value;
+}
 template<class Light> Json lightJson(const Light& light) {
     Json result{{"color",light.color}, {"intensity",light.intensity}, {"enabled",light.enabled}};
     if constexpr(requires { light.radius; })result["radius"]=light.radius;
+    if constexpr(requires { light.nearFalloffRadius; }) {
+        result["nearFalloffRadius"]=light.nearFalloffRadius;result["specularStrength"]=light.specularStrength;
+        result["rangeFalloffExponent"]=light.rangeFalloffExponent;result["edgeSoftness"]=light.edgeSoftness;
+        result["sourceRadius"]=light.sourceRadius;
+        result["attenuation"]=light.attenuation;
+    }
+    if constexpr(requires { light.shadowDistance; })result["shadowDistance"]=light.shadowDistance;
+    result["roles"]=rolesJson(light.roles);
     if constexpr(requires { light.castShadows; }) {
         result["castShadows"]=light.castShadows;
         result["shadowDepthBias"]=light.shadowDepthBias;result["shadowNormalBias"]=light.shadowNormalBias;
@@ -99,6 +265,14 @@ template<class Light> Light readLight(const Json& json) {
     result.intensity = json.at("intensity").get<float>();
     result.enabled = json.at("enabled").get<bool>();
     if constexpr(requires { result.radius; })result.radius=json.value("radius",20.f);
+    if constexpr(requires { result.nearFalloffRadius; }) {
+        result.nearFalloffRadius=json.value("nearFalloffRadius",0.f);result.specularStrength=json.value("specularStrength",1.f);
+        result.rangeFalloffExponent=json.value("rangeFalloffExponent",4.f);result.edgeSoftness=json.value("edgeSoftness",1.f);
+        result.sourceRadius=json.contains("sourceRadius")?json.at("sourceRadius").get<float>():json.value("softSourceRadius",0.f);
+        result.attenuation=json.value("attenuation",2.f);
+    }
+    if constexpr(requires { result.shadowDistance; })result.shadowDistance=json.value("shadowDistance",100.f);
+    if(json.contains("roles"))result.roles=readRoles(json.at("roles"),result.roles);
     if constexpr(requires { result.castShadows; }) {
         result.castShadows=json.value("castShadows",false);
         result.shadowDepthBias=json.value("shadowDepthBias",.005f);result.shadowNormalBias=json.value("shadowNormalBias",1.f);
@@ -148,7 +322,7 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
     const auto contents=readText(path);
     const Json json=Json::parse(contents);
     const auto version=json.at("version").get<int>();
-    if ((version<1 || version>8) || json.at("type") != "crimson-scene")
+    if ((version<1 || version>10) || json.at("type") != "crimson-scene")
         throw std::runtime_error("Unsupported scene file type or version.");
     SceneSnapshot result; result.fingerprint=fingerprint(contents);
     result.name = json.at("name").get<std::string>();
@@ -173,8 +347,30 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
         record.order = order.get<uint32_t>();
         record.local = entity.at("local").get<Mat4>();
         if (entity.contains("model")) record.model=entity.at("model").get<AssetRef<ModelAsset>>();
+        if(version>=10 && entity.contains("modelAnimation")) {
+            const auto& source=entity.at("modelAnimation");
+            if(!source.is_object())throw std::runtime_error("Model animation settings must be an object.");
+            auto& animation=record.modelAnimation;
+            if(source.contains("clip")) {
+                const auto& clip=source.at("clip");
+                if(!clip.is_number_integer() ||
+                    (clip.is_number_unsigned()?clip.get<std::uint64_t>()>std::uint64_t(std::numeric_limits<std::int32_t>::max()):
+                        clip.get<std::int64_t>()<-1 || clip.get<std::int64_t>()>std::numeric_limits<std::int32_t>::max()))
+                    throw std::runtime_error("Model animation clip must be an integer from -1 to 2147483647.");
+                animation.clip=clip.get<std::int32_t>();
+            }
+            animation.playing=source.value("playing",animation.playing);animation.loop=source.value("loop",animation.loop);
+            animation.speed=source.value("speed",animation.speed);animation.startTime=source.value("startTime",animation.startTime);
+        }
         if (entity.contains("modelMaterial")) record.modelMaterial=entity.at("modelMaterial").get<AssetRef<MaterialAsset>>();
         record.castShadows=entity.value("castShadows",true);record.receiveShadows=entity.value("receiveShadows",true);
+        if(entity.contains("lightingScopes")) {
+            const auto& scopes=entity.at("lightingScopes");
+            if(!scopes.is_object())throw std::runtime_error("Surface lighting scopes must be an object.");
+            record.lightingScopes.directReceiverMask=readLightingMask(scopes,"directReceiverMask",lighting_scope::All);
+            record.lightingScopes.shadowCasterMask=readLightingMask(scopes,"shadowCasterMask",lighting_scope::All);
+            record.lightingScopes.ambientReceiverMask=readLightingMask(scopes,"ambientReceiverMask",lighting_scope::All);
+        }
         if (entity.contains("directional")) record.directional = readLight<SceneDirectionalLight>(entity.at("directional"));
         if (entity.contains("point")) record.point = readLight<ScenePointLight>(entity.at("point"));
         if (version>=2 && entity.contains("environment")) record.environment=readEnvironment(entity.at("environment"),version>=6);
@@ -185,6 +381,24 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
             record.character->showRoute=c.value("showRoute",true);
             record.character->showCollisionInGame=c.value("showCollisionInGame",false);
             record.character->collisionColor=readCollisionColor(c,record.character->collisionColor);
+            if(c.contains("darknessReveal")) {
+                const auto& reveal=c.at("darknessReveal");
+                if(!reveal.is_object())throw std::runtime_error("Character darkness reveal settings must be an object.");
+                if(reveal.contains("version")&&reveal.at("version")!=1&&reveal.at("version")!=2)
+                    throw std::runtime_error("Unsupported Character darkness reveal version.");
+                record.character->darknessReveal.enabled=reveal.value("enabled",true);
+                record.character->darknessReveal.spread=reveal.contains("version")&&reveal.at("version")==2?
+                    reveal.value("spread",8.f):reveal.value("radius",8.f);
+            } else if(c.contains("lightRig")) {
+                const auto& old=c.at("lightRig");
+                if(!old.contains("actorLights")&&old.value("enabled",false)) {
+                    if(old.contains("reveal")&&old.at("reveal").is_object()&&old.at("reveal").value("enabled",false))
+                        record.character->darknessReveal.spread=old.at("reveal").value("radius",8.f);
+                    else if(old.contains("key")&&old.at("key").is_object())
+                        record.character->darknessReveal.spread=old.at("key").value("radius",8.f);
+                }
+            }
+            if(c.contains("lightRig"))record.character->lightRig=readLightRig(c.at("lightRig"),record.character->darknessReveal,record.character->height);
         }
         if (version>=4 && entity.contains("collider")) {
             const auto& c=entity.at("collider");
@@ -196,6 +410,22 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
             const auto& c=entity.at("camera");
             record.camera=SceneCamera{c.at("verticalFov").get<float>(),c.at("near").get<float>(),c.at("far").get<float>(),
                 parseId(c.at("followTarget")),c.at("followOffset").get<Vec3>()};
+        }
+        if(version>=9 && entity.contains("meshCollider")) {
+            const auto& c=entity.at("meshCollider");record.meshCollider.emplace();
+            record.meshCollider->source=c.at("source").get<AssetRef<ModelAsset>>();
+            record.meshCollider->showCollisionInGame=c.value("showCollisionInGame",false);
+            record.meshCollider->collisionColor=readCollisionColor(c,record.meshCollider->collisionColor);
+        }
+        if(version>=9 && entity.contains("quader")) {
+            const auto& q=entity.at("quader");record.quader=QuaderLink{q.value("projectPath",std::string{}),
+                q.value("projectId",std::string{}),q.value("sceneId",std::string{}),q.value("importScale",1.f),
+                q.value("autoSync",true),q.value("refreshMaterials",false)};
+            record.quader->saveKey=q.value("saveKey",std::string{});
+            record.quader->syncLights=q.value("syncLights",true);
+        }
+        if(version>=9 && entity.contains("quaderGenerated")) {
+            const auto& q=entity.at("quaderGenerated");record.quaderGenerated=QuaderGenerated{parseId(q.at("owner")),q.at("sourceKey").get<std::string>()};
         }
         result.records.push_back(std::move(record));
     }
@@ -235,6 +465,11 @@ Json writeScene(const SceneSnapshot& snapshot) {
         if (record.model) {
             entity["model"] = *record.model;
             entity["castShadows"]=record.castShadows;entity["receiveShadows"]=record.receiveShadows;
+            entity["lightingScopes"]={{"directReceiverMask",record.lightingScopes.directReceiverMask},
+                {"shadowCasterMask",record.lightingScopes.shadowCasterMask},{"ambientReceiverMask",record.lightingScopes.ambientReceiverMask}};
+            const auto& animation=record.modelAnimation;
+            entity["modelAnimation"]={{"clip",animation.clip},{"playing",animation.playing},{"loop",animation.loop},
+                {"speed",animation.speed},{"startTime",animation.startTime}};
         }
         if (!record.modelMaterial.empty()) entity["modelMaterial"]=record.modelMaterial;
         if (record.particle) entity["particle"] = *record.particle;
@@ -242,14 +477,21 @@ Json writeScene(const SceneSnapshot& snapshot) {
         if (record.point) entity["point"] = lightJson(*record.point);
         if (record.environment) entity["environment"]=environmentJson(*record.environment);
         if (record.character) { const auto& c=*record.character;entity["character"]={{"height",c.height},{"radius",c.radius},{"moveSpeed",c.moveSpeed},
-            {"showRoute",c.showRoute},{"showCollisionInGame",c.showCollisionInGame},{"collisionColor",c.collisionColor}}; }
+            {"showRoute",c.showRoute},{"showCollisionInGame",c.showCollisionInGame},{"collisionColor",c.collisionColor},{"lightRig",lightRigJson(c.lightRig)},
+            {"darknessReveal",{{"version",2},{"enabled",c.darknessReveal.enabled},{"spread",c.darknessReveal.spread}}}}; }
         if (record.collider) { const auto& c=*record.collider;entity["collider"]={{"size",c.size},
             {"showCollisionInGame",c.showCollisionInGame},{"collisionColor",c.collisionColor}}; }
         if (record.camera) { const auto& c=*record.camera;entity["camera"]={{"verticalFov",c.verticalFov},{"near",c.nearPlane},{"far",c.farPlane},
             {"followTarget",hexId(c.followTarget)},{"followOffset",c.followOffset}}; }
+        if(record.meshCollider) {const auto& c=*record.meshCollider;entity["meshCollider"]={{"source",c.source},
+            {"showCollisionInGame",c.showCollisionInGame},{"collisionColor",c.collisionColor}};}
+        if(record.quader) {const auto& q=*record.quader;entity["quader"]={{"projectPath",q.projectPath},{"projectId",q.projectId},
+            {"sceneId",q.sceneId},{"importScale",q.importScale},{"autoSync",q.autoSync},{"refreshMaterials",q.refreshMaterials},
+            {"saveKey",q.saveKey},{"syncLights",q.syncLights}};}
+        if(record.quaderGenerated) {const auto& q=*record.quaderGenerated;entity["quaderGenerated"]={{"owner",hexId(q.owner)},{"sourceKey",q.sourceKey}};}
         entities.push_back(std::move(entity));
     }
-    Json result{{"version",8},{"type","crimson-scene"},{"name",snapshot.name},{"entities",std::move(entities)},
+    Json result{{"version",10},{"type","crimson-scene"},{"name",snapshot.name},{"entities",std::move(entities)},
         {"settings",{{"activeEnvironment",hexId(snapshot.properties.activeEnvironment)},
             {"activeCamera",hexId(snapshot.properties.activeCamera)},{"playerCharacter",hexId(snapshot.properties.playerCharacter)}}}};
     if (snapshot.previewCamera) {
@@ -263,7 +505,9 @@ Json writeScene(const SceneSnapshot& snapshot) {
 enum EntityField : uint32_t {
     Name=1u<<0, Parent=1u<<1, Order=1u<<2, Local=1u<<3, Model=1u<<4, Particle=1u<<5,
     Directional=1u<<6, Point=1u<<7, Environment=1u<<8, Character=1u<<9, Collider=1u<<10, CameraField=1u<<11,
-    ModelMaterialField=1u<<12, CastShadows=1u<<13, ReceiveShadows=1u<<14, AllEntityFields=(1u<<15)-1
+    ModelMaterialField=1u<<12, CastShadows=1u<<13, ReceiveShadows=1u<<14,
+    MeshColliderField=1u<<15,QuaderField=1u<<16,QuaderGeneratedField=1u<<17,LightingScopesField=1u<<18,
+    ModelAnimationField=1u<<19,AllEntityFields=(1u<<20)-1
 };
 enum PropertyField : uint32_t { ActiveEnvironment=1u<<0,ActiveCamera=1u<<1,PlayerCharacter=1u<<2 };
 template<class T> bool equalLight(const std::optional<T>& a,const std::optional<T>& b) {
@@ -278,6 +522,10 @@ uint32_t changedFields(const EntityRecord& a,const EntityRecord& b) {
     if(a.character!=b.character)fields|=Character;if(a.collider!=b.collider)fields|=Collider;if(a.camera!=b.camera)fields|=CameraField;
     if(a.modelMaterial!=b.modelMaterial)fields|=ModelMaterialField;
     if(a.castShadows!=b.castShadows)fields|=CastShadows;if(a.receiveShadows!=b.receiveShadows)fields|=ReceiveShadows;
+    if(a.meshCollider!=b.meshCollider)fields|=MeshColliderField;if(a.quader!=b.quader)fields|=QuaderField;
+    if(a.quaderGenerated!=b.quaderGenerated)fields|=QuaderGeneratedField;
+    if(a.lightingScopes!=b.lightingScopes)fields|=LightingScopesField;
+    if(a.modelAnimation!=b.modelAnimation)fields|=ModelAnimationField;
     return fields;
 }
 void copyFields(EntityRecord& target,const EntityRecord& source,uint32_t fields) {
@@ -288,6 +536,10 @@ void copyFields(EntityRecord& target,const EntityRecord& source,uint32_t fields)
     if(fields&Collider)target.collider=source.collider;if(fields&CameraField)target.camera=source.camera;
     if(fields&ModelMaterialField)target.modelMaterial=source.modelMaterial;
     if(fields&CastShadows)target.castShadows=source.castShadows;if(fields&ReceiveShadows)target.receiveShadows=source.receiveShadows;
+    if(fields&MeshColliderField)target.meshCollider=source.meshCollider;if(fields&QuaderField)target.quader=source.quader;
+    if(fields&QuaderGeneratedField)target.quaderGenerated=source.quaderGenerated;
+    if(fields&LightingScopesField)target.lightingScopes=source.lightingScopes;
+    if(fields&ModelAnimationField)target.modelAnimation=source.modelAnimation;
 }
 uint32_t changedProperties(const SceneProperties& a,const SceneProperties& b) {
     return (a.activeEnvironment!=b.activeEnvironment?ActiveEnvironment:0u) |
@@ -417,6 +669,13 @@ std::vector<SceneAssetEntry> scanSceneAssets(const std::filesystem::path& root, 
     });
     return entries;
 }
+std::string availableSceneName(const std::filesystem::path& root,const std::string& base) {
+    std::unordered_set<std::string> names;
+    for(const auto& entry:scanSceneAssets(root))names.insert(sceneNameKey(entry.name));
+    std::string candidate=base;
+    for(size_t suffix=2;names.contains(sceneNameKey(candidate));++suffix)candidate=base+" "+std::to_string(suffix);
+    return candidate;
+}
 bool deleteSceneAsset(const std::filesystem::path& root, const std::string& id, std::string& error) {
     try {
         const auto path = scenePath(root,id);
@@ -511,6 +770,14 @@ bool SceneDocument::save(const std::string& name, bool saveAs, bool overwriteExt
         std::string savedName = name.empty() ? name_ : name;
         if (savedName.empty() || savedName.size() > 1024 || savedName.find_first_not_of(" \t\r\n") == std::string::npos)
             throw std::runtime_error("Enter a scene name containing 1 to 1024 UTF-8 bytes.");
+        // Existing colliding names remain editable; only new identities and
+        // explicit renames must choose an unambiguous catalog name.
+        if(assetId_.empty()||saveAs||sceneNameKey(savedName)!=sceneNameKey(name_)) {
+            const auto key=sceneNameKey(savedName);
+            for(const auto& entry:scanSceneAssets(projectRoot_))
+                if((saveAs||entry.id!=assetId_)&&sceneNameKey(entry.name)==key)
+                    throw std::runtime_error("A scene named '"+entry.name+"' already exists. Choose another name.");
+        }
         std::string savedId = assetId_;
         if (savedId.empty() || saveAs) {
             do { savedId = "assets/scenes/" + uniqueToken() + ".crimson-scene"; }
@@ -535,7 +802,10 @@ bool SceneDocument::externalFileChanged() const {
 }
 std::vector<std::string> SceneDocument::historicalModelReferences() const {
     std::unordered_set<std::string> references;
-    const auto add=[&](const EntityRecord& record) { if (record.model) references.insert(record.model->id); };
+    const auto add=[&](const EntityRecord& record) {
+        if (record.model) references.insert(record.model->id);
+        if(record.meshCollider && !record.meshCollider->source.empty())references.insert(record.meshCollider->source.id);
+    };
     for (const auto& command:history_.commands_) for (const auto& change:command.entities) {
         if (change.before) add(*change.before); if (change.after) add(*change.after);
     }
@@ -704,6 +974,65 @@ EntityId SceneDocument::create(EntityRecord record, const std::string& label) {
 EntityId SceneDocument::createEmpty(const std::string& name) {
     EntityRecord record; record.name = name; return create(std::move(record),"Create entity");
 }
+EntityId SceneDocument::createQuader(const std::string& name) {
+    EntityRecord record;record.name=name;record.quader.emplace();return create(std::move(record),"Create Quader");
+}
+bool SceneDocument::replaceQuaderImport(EntityId owner,const QuaderLink& link,const std::vector<EntityRecord>& generated) {
+    if(transient_ || transaction_){status_="Quader import waits for Edit mode and the current scene edit.";return false;}
+    const auto root=scene_.find(owner);
+    if(!root || !root->quader){status_="Quader entity no longer exists.";return false;}
+    return edit("Import Quader",[&](auto& records,auto& properties) {
+        std::unordered_set<EntityId> removed;
+        std::unordered_map<std::string,EntityId> existing;
+        for(const auto& record:records)if(record.quaderGenerated && record.quaderGenerated->owner==owner) {
+            existing.try_emplace(record.quaderGenerated->sourceKey,record.id);
+            for(const auto id:scene_.subtree(record.id))removed.insert(id);
+        }
+        std::vector<EntityRecord> replacements;replacements.reserve(generated.size()+1);
+        std::unordered_map<EntityId,EntityId> remap;
+        std::unordered_set<std::string> keys;
+        const auto allocate=[&](const std::string& key) {
+            if(!keys.insert(key).second)throw std::runtime_error("Quader import has duplicate source identities.");
+            if(const auto found=existing.find(key);found!=existing.end())return found->second;
+            EntityRecord reservation;reservation.id=unusedId(records);records.push_back(reservation);return reservation.id;
+        };
+        EntityRecord imported;imported.id=allocate("Imported");imported.name="Imported";imported.parent=owner;
+        imported.order=nextOrder(records,owner);imported.quaderGenerated=QuaderGenerated{owner,"Imported"};
+        replacements.push_back(imported);
+        for(const auto& input:generated) {
+            if(!input.id || !input.quaderGenerated)throw std::runtime_error("Quader import record has no temporary identity.");
+            const auto id=allocate(input.quaderGenerated->sourceKey);
+            if(!remap.emplace(input.id,id).second)throw std::runtime_error("Quader import has duplicate temporary identities.");
+        }
+        for(const auto& input:generated) {
+            auto record=input;record.id=remap.at(input.id);record.parent=input.parent?remap.at(input.parent):imported.id;
+            // Quader has no representation for Crimson's lighting roles. Keep
+            // those authored values on matching source identities/kinds while
+            // source transforms, energy, geometry and shadow flags still sync.
+            if(const auto previous=scene_.find(record.id)) {
+                if(record.model && previous->model)record.lightingScopes=previous->lightingScopes;
+                if(record.point && previous->point)record.point->roles=previous->point->roles;
+                if(record.directional && previous->directional)record.directional->roles=previous->directional->roles;
+            }
+            record.quaderGenerated->owner=owner;replacements.push_back(std::move(record));
+        }
+        std::unordered_set<EntityId> kept;
+        for(const auto& record:replacements)kept.insert(record.id);
+        std::erase_if(records,[&](const auto& record){return removed.contains(record.id) || kept.contains(record.id);});
+        auto linked=std::find_if(records.begin(),records.end(),[&](const auto& record){return record.id==owner;});
+        if(linked==records.end())throw std::runtime_error("Quader owner cannot be replaced by its imported content.");
+        linked->quader=link;
+        records.insert(records.end(),replacements.begin(),replacements.end());
+        const auto lost=[&](EntityId id){return removed.contains(id) && !kept.contains(id);};
+        if(lost(properties.activeEnvironment))properties.activeEnvironment=NoEntity;
+        if(lost(properties.activeCamera))properties.activeCamera=NoEntity;
+        if(lost(properties.playerCharacter))properties.playerCharacter=NoEntity;
+        for(auto& record:records) {
+            if(record.camera && lost(record.camera->followTarget)){record.camera->followTarget=NoEntity;record.camera->followOffset={};}
+            if(record.environment && lost(record.environment->sun))record.environment->sun=NoEntity;
+        }
+    });
+}
 EntityId SceneDocument::createModel(const std::string& assetId, const std::string& name, const Mat4& local) {
     EntityRecord record; record.name = name; record.model=AssetRef<ModelAsset>{assetId}; record.local = local;
     return create(std::move(record),"Place model");
@@ -828,6 +1157,7 @@ bool SceneDocument::eraseSelection() {
             record.camera->followTarget=NoEntity;record.camera->followOffset={};
         }
         for(auto& record:records)if(record.environment && removed.contains(record.environment->sun))record.environment->sun=NoEntity;
+        for(auto& record:records)if(record.quaderGenerated && removed.contains(record.quaderGenerated->owner))record.quaderGenerated.reset();
     })) { cancel(); return false; }
     selection_ = {}; return commit();
 }
@@ -854,6 +1184,11 @@ bool SceneDocument::duplicateSelection() {
         for(auto& record:records)if(copiedIds.contains(record.id)) {
             if(record.camera)if(const auto target=copied.find(record.camera->followTarget);target!=copied.end())record.camera->followTarget=target->second;
             if(record.environment)if(const auto sun=copied.find(record.environment->sun);sun!=copied.end())record.environment->sun=sun->second;
+            if(record.quaderGenerated) {
+                const auto owner=copied.find(record.quaderGenerated->owner);
+                if(owner!=copied.end())record.quaderGenerated->owner=owner->second;
+                else record.quaderGenerated.reset();
+            }
         }
     })) { cancel(); return false; }
     selection_ = {};
@@ -930,7 +1265,7 @@ bool SceneDocument::ungroupSelection() {
     for (const auto id : scene_.topmost(selection_.ids)) {
         const auto record=scene_.find(id);
         if (record && !record->model && !record->particle && !record->directional && !record->point && !record->environment &&
-            !record->character && !record->collider && !record->camera && !scene_.children(id).empty()) groups.push_back(id);
+            !record->character && !record->collider && !record->meshCollider && !record->quader && !record->quaderGenerated && !record->camera && !scene_.children(id).empty()) groups.push_back(id);
     }
     if (groups.empty()) { status_="Select a group to ungroup."; return false; }
     struct ChildMove { EntityId id,parent; Mat4 local; };

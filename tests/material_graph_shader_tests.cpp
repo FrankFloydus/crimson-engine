@@ -61,9 +61,79 @@ MaterialAsset rgbScalarFixture() {
     connectMaterialNodes(graph,metal,MaterialPin::RGB,out,MaterialPin::OpacityMask);
     return material;
 }
+MaterialAsset animatedFixture() {
+    auto material=fixture();auto& graph=material.graph;
+    const auto output=materialOutputNode(graph).id;
+    const auto texture=std::find_if(graph.nodes.begin(),graph.nodes.end(),[](const auto& n){return n.kind==MaterialNodeKind::Texture2D;})->id;
+    const auto uv=std::find_if(graph.nodes.begin(),graph.nodes.end(),[](const auto& n){return n.kind==MaterialNodeKind::UV;})->id;
+    const auto time=addMaterialNode(graph,MaterialNodeKind::Time).id,panner=addMaterialNode(graph,MaterialNodeKind::Panner).id;
+    const auto add=addMaterialNode(graph,MaterialNodeKind::Add).id,lerp=addMaterialNode(graph,MaterialNodeKind::Lerp).id;
+    const auto power=addMaterialNode(graph,MaterialNodeKind::Power).id,color=addMaterialNode(graph,MaterialNodeKind::Color).id;
+    findMaterialNode(graph,panner)->panner.speed={.25f,-.5f};
+    findMaterialNode(graph,time)->time={false,true,4};
+    connectMaterialNodes(graph,uv,MaterialPin::UV,panner,MaterialPin::UV);
+    connectMaterialNodes(graph,time,MaterialPin::Value,panner,MaterialPin::Time);
+    connectMaterialNodes(graph,panner,MaterialPin::UV,texture,MaterialPin::UV);
+    connectMaterialNodes(graph,texture,MaterialPin::RGB,add,MaterialPin::Left);
+    connectMaterialNodes(graph,add,MaterialPin::Value,lerp,MaterialPin::Left);
+    connectMaterialNodes(graph,color,MaterialPin::RGB,lerp,MaterialPin::Right);
+    connectMaterialNodes(graph,time,MaterialPin::Value,lerp,MaterialPin::Alpha);
+    connectMaterialNodes(graph,lerp,MaterialPin::Value,power,MaterialPin::Left);
+    connectMaterialNodes(graph,power,MaterialPin::Value,output,MaterialPin::BaseColor);
+    return material;
+}
+void runtimeUniformChecks() {
+    auto material=animatedFixture();const auto serialized=serializeMaterialGraph(material.graph);
+    const auto shader=generateMaterialGraphShader(material);
+    check(shader.runtimeGraph&&!shader.runtimeParameters.empty()&&shader.dynamicCoverage,"Animated mask did not record runtime uniform dependencies.");
+    check(shader.runtimeDefinitionSignature!=0,"Animated graph omitted its immutable runtime definition identity.");
+    auto changedPanner=material;
+    for(auto& node:changedPanner.graph.nodes)if(node.kind==MaterialNodeKind::Panner)node.panner.speed[0]+=.25f;
+    const auto pannerShader=generateMaterialGraphShader(changedPanner);
+    check(pannerShader.topologyKey==shader.topologyKey&&pannerShader.uniforms==shader.uniforms&&pannerShader.runtimeDefinitionSignature!=shader.runtimeDefinitionSignature,
+        "Panner speed edits at t=0 must replace runtime packets without recompiling topology.");
+    auto changedTime=material;
+    for(auto& node:changedTime.graph.nodes)if(node.kind==MaterialNodeKind::Time)node.time={true,true,2};
+    const auto timeShader=generateMaterialGraphShader(changedTime);
+    check(timeShader.topologyKey==shader.topologyKey&&timeShader.uniforms==shader.uniforms&&timeShader.runtimeDefinitionSignature!=shader.runtimeDefinitionSignature,
+        "Time period/pause edits at t=0 must replace runtime packets without recompiling topology.");
+    auto layout=material;layout.graph.nodes.front().position={123,456};
+    check(generateMaterialGraphShader(layout).runtimeDefinitionSignature==shader.runtimeDefinitionSignature,"Graph layout changed runtime definition identity.");
+    auto disconnected=defaultMaterialAsset();canonicalizeMaterialAsset(disconnected);
+    const auto disconnectedTime=addMaterialNode(disconnected.graph,MaterialNodeKind::Time).id;
+    auto preview=generateMaterialGraphPreviewShader(disconnected,{disconnectedTime,MaterialPin::Value});
+    findMaterialNode(disconnected.graph,disconnectedTime)->time={true,true,2};
+    const auto editedPreview=generateMaterialGraphPreviewShader(disconnected,{disconnectedTime,MaterialPin::Value});
+    check(preview.topologyKey==editedPreview.topologyKey&&preview.uniforms==editedPreview.uniforms&&preview.runtimeDefinitionSignature!=editedPreview.runtimeDefinitionSignature,
+        "A disconnected Time preview lost its runtime definition edit.");
+    disconnected.graph.nodes.front().position={777,888};
+    check(generateMaterialGraphPreviewShader(disconnected,{disconnectedTime,MaterialPin::Value}).runtimeDefinitionSignature==editedPreview.runtimeDefinitionSignature,
+        "A disconnected preview's layout changed runtime definition identity.");
+    const auto disconnectedPanner=addMaterialNode(disconnected.graph,MaterialNodeKind::Panner).id;
+    connectMaterialNodes(disconnected.graph,disconnectedTime,MaterialPin::Value,disconnectedPanner,MaterialPin::Time);
+    preview=generateMaterialGraphPreviewShader(disconnected,{disconnectedPanner,MaterialPin::UV});
+    findMaterialNode(disconnected.graph,disconnectedPanner)->panner.speed={.5f,1};
+    const auto editedPannerPreview=generateMaterialGraphPreviewShader(disconnected,{disconnectedPanner,MaterialPin::UV});
+    check(preview.topologyKey==editedPannerPreview.topologyKey&&preview.uniforms==editedPannerPreview.uniforms&&preview.runtimeDefinitionSignature!=editedPannerPreview.runtimeDefinitionSignature,
+        "A disconnected Panner preview lost its runtime definition edit.");
+    auto first=shader.uniforms,second=shader.uniforms;
+    updateMaterialGraphRuntimeUniforms(*shader.runtimeGraph,shader.runtimeParameters,{1,8},first);
+    updateMaterialGraphRuntimeUniforms(*shader.runtimeGraph,shader.runtimeParameters,{3,8},second);
+    check(first!=second&&shader.uniforms==generateMaterialGraphShader(material).uniforms,"Clock updates froze or mutated the authored uniform packet.");
+    check(serializeMaterialGraph(material.graph)==serialized,"Runtime uniform publication changed authored material contents.");
+    for(auto& node:material.graph.nodes) {
+        if(node.kind==MaterialNodeKind::Panner){node.panner.fractionalPart=true;node.panner.speed={-.25f,3};}
+        if(node.kind==MaterialNodeKind::Time)node.time={true,false,0};
+        if(node.kind==MaterialNodeKind::Lerp)node.alpha.value={2,2,2,2};
+        if(node.kind==MaterialNodeKind::Power)node.right.value={3,3,3,3};
+    }
+    check(generateMaterialGraphShader(material).topologyKey==shader.topologyKey,"Time/Panner/arithmetic parameter edits compiled new shader topology.");
+    materialOutputNode(material.graph).output.blend=MaterialBlend::Opaque;
+    check(!generateMaterialGraphShader(material).dynamicCoverage,"Animated opaque color invalidated static shadows.");
+}
 void cpuChecks() {
     auto material=fixture();const auto original=generateMaterialGraphShader(material);
-    check(original.variants.size()==4 && original.textures.size()==3 && original.usesNormal,"Reachable graph bindings/passes were not lowered.");
+    check(original.variants.size()==5 && original.textures.size()==3 && original.usesNormal,"Reachable graph bindings/passes were not lowered.");
     check(original.textures[0].mappingRow==original.textures[1].mappingRow && original.textures[1].mappingRow==original.textures[2].mappingRow,"Shared UV node allocated different transforms.");
     check(original.uniforms.size()<=MaterialGraphMaxParameterRows,"Parameter budget exceeded.");
     for(const auto& variant:original.variants)
@@ -163,6 +233,35 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
     const auto root=std::filesystem::temp_directory_path()/("crimson-graph-shaders-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     struct Cleanup {std::filesystem::path path;~Cleanup(){std::error_code ec;const auto resolved=std::filesystem::weakly_canonical(path,ec);const auto parent=std::filesystem::weakly_canonical(std::filesystem::temp_directory_path(),ec);if(!ec&&resolved.parent_path()==parent&&resolved.filename().string().starts_with("crimson-graph-shaders-"))std::filesystem::remove_all(resolved,ec);}} cleanup{root};
     const ShaderCompileConfig config{compiler,source,include,root};
+    MaterialAsset importedBlend;importedBlend.id="imported-blend-fixture";importedBlend.name="Imported BLEND";
+    importedBlend.surface.alphaBlend=true;importedBlend.surface.baseColor={.3f,.4f,.5f,.35f};
+    importedBlend.surface.baseColorTexture.image.id="assets/models/imported/images/alpha.png";
+    canonicalizeMaterialAsset(importedBlend);
+    const auto importedGraph=generateMaterialGraphShader(importedBlend);
+    check(importedBlend.blend==MaterialBlend::Alpha&&importedGraph.uniforms[3][3]==2,
+        "Imported glTF BLEND did not reach the transparent material shader contract.");
+    for(const auto& variant:importedGraph.variants) {
+        const auto fragment=compileShader(config,materialGraphShaderRecipe(config,importedGraph,variant));
+        const auto vertex=compileShader(config,variant.vertexName);std::string diagnostic;
+        if(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,variant.manifest,diagnostic))
+            throw std::runtime_error("Imported BLEND material: "+diagnostic);
+    }
+    auto animated=animatedFixture();
+    for(const auto& variant:generateMaterialGraphShader(animated).variants) {
+        const auto generated=generateMaterialGraphShader(animated);
+        const auto fragment=compileShader(config,materialGraphShaderRecipe(config,generated,variant));
+        const auto vertex=compileShader(config,variant.vertexName);std::string diagnostic;
+        if(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,variant.manifest,diagnostic))throw std::runtime_error("Animated graph: "+diagnostic);
+    }
+    for(const auto& node:animated.graph.nodes)if(node.kind==MaterialNodeKind::Add||node.kind==MaterialNodeKind::Lerp||node.kind==MaterialNodeKind::Power||
+        node.kind==MaterialNodeKind::Panner||node.kind==MaterialNodeKind::Time) {
+        const auto generated=generateMaterialGraphPreviewShader(animated,{node.id,node.kind==MaterialNodeKind::Panner?MaterialPin::UV:MaterialPin::Value});
+        check(!compileShader(config,materialGraphShaderRecipe(config,generated,generated.variants.front())).bytes.empty(),"New node preview did not compile.");
+    }
+    const auto vectorPower=addMaterialNode(animated.graph,MaterialNodeKind::Power).id;
+    findMaterialNode(animated.graph,vectorPower)->left={MaterialValueType::Vector2,{2,3,0,0}};
+    const auto vectorPreview=generateMaterialGraphPreviewShader(animated,{vectorPower,MaterialPin::Value});
+    check(!compileShader(config,materialGraphShaderRecipe(config,vectorPreview,vectorPreview.variants.front())).bytes.empty(),"Vector2 Power preview did not compile.");
     auto material=fixture();
     for(bool unlit:{false,true}) for(auto blend:{MaterialBlend::Opaque,MaterialBlend::Mask,MaterialBlend::Alpha,MaterialBlend::Additive}) {
         auto& output=materialOutputNode(material.graph).output;
@@ -192,6 +291,57 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
                 std::erase_if(wrong,[](const auto& b){return b.name==MaterialGraphParameterUniform;});
                 check(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,wrong,diagnostic),"Generated manifest accepted undeclared parameters.");
             }
+        }
+    }
+    // A material map edit recompiles against the live engine include tree.
+    // Every current Character uniform must be allowed by the compiled engine
+    // manifest; a pre-separation manifest must reject that same binary instead
+    // of silently admitting an interface that the engine cannot bind.
+    MaterialAsset editedMaps;editedMaps.id="character-lighting-map-edits";
+    const auto editedOutput=addMaterialNode(editedMaps.graph,MaterialNodeKind::Output).id;
+    MaterialNodeId editedColor{},editedNormal{};std::string texturedTopology;
+    for(unsigned revision=0;revision<4;++revision) {
+        if(revision==1) {
+            editedColor=addMaterialNode(editedMaps.graph,MaterialNodeKind::Texture2D).id;
+            findMaterialNode(editedMaps.graph,editedColor)->texture.image.id="assets/textures/first-color.png";
+            connectMaterialNodes(editedMaps.graph,editedColor,MaterialPin::RGB,editedOutput,MaterialPin::BaseColor);
+        } else if(revision==2) {
+            editedNormal=addMaterialNode(editedMaps.graph,MaterialNodeKind::Texture2D).id;
+            findMaterialNode(editedMaps.graph,editedNormal)->texture.role=MaterialTextureRole::Normal;
+            findMaterialNode(editedMaps.graph,editedNormal)->texture.image.id="assets/textures/first-normal.png";
+            connectMaterialNodes(editedMaps.graph,editedNormal,MaterialPin::Normal,editedOutput,MaterialPin::Normal);
+        } else if(revision==3) {
+            findMaterialNode(editedMaps.graph,editedColor)->texture.image.id="assets/textures/reimported-color.png";
+            findMaterialNode(editedMaps.graph,editedNormal)->texture.image.id.clear();
+        }
+        const auto edited=generateMaterialGraphShader(editedMaps);
+        if(revision==2)texturedTopology=edited.topologyKey;
+        if(revision==3)check(edited.topologyKey==texturedTopology,"Replacing/clearing map assignments changed material topology.");
+        for(const auto& variant:edited.variants) {
+            if(variant.pass!=MaterialGraphPass::Model&&variant.pass!=MaterialGraphPass::Particle)continue;
+            const auto binding=[&](const char* name,ShaderUniformKind kind,unsigned count) {
+                const auto found=std::find_if(variant.manifest.begin(),variant.manifest.end(),[&](const auto& item){return item.name==name;});
+                check(found!=variant.manifest.end()&&found->kind==kind&&found->count==count,"Separated Character lighting uniform manifest changed shape.");
+            };
+            for(const char* name:{"u_characterDirection","u_characterColor","u_characterResponse"})binding(name,ShaderUniformKind::Vec4,2);
+            for(const char* name:{"u_surfaceCategory","u_characterShadowRect","u_characterShadowDirection","u_characterShadowParameters","u_clusterRecordLayoutV5","u_ambientLight"})binding(name,ShaderUniformKind::Vec4,1);
+            binding("u_characterShadowMatrix",ShaderUniformKind::Mat4,1);
+            const auto fragment=compileShader(config,materialGraphShaderRecipe(config,edited,variant));
+            const auto vertex=compileShader(config,variant.vertexName);std::string diagnostic;
+            if(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,variant.manifest,diagnostic))
+                throw std::runtime_error("Material map edit revision "+std::to_string(revision)+": "+diagnostic);
+            auto oldManifest=variant.manifest;
+            std::erase_if(oldManifest,[](const auto& item){return item.name=="u_characterColor";});
+            check(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,oldManifest,diagnostic)&&diagnostic.find("u_characterColor")!=std::string::npos,
+                "A material map edit accepted the previous engine's missing Character color uniform.");
+            oldManifest=variant.manifest;
+            std::erase_if(oldManifest,[](const auto& item){return item.name=="u_clusterRecordLayoutV5";});
+            check(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,oldManifest,diagnostic)&&diagnostic.find("u_clusterRecordLayoutV5")!=std::string::npos,
+                "A material map edit accepted a light record ABI that the previous engine cannot bind.");
+            auto wrongArray=variant.manifest;
+            std::find_if(wrongArray.begin(),wrongArray.end(),[](const auto& item){return item.name=="u_characterColor";})->count=1;
+            check(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,wrongArray,diagnostic),
+                "A material map edit accepted an undersized Character uniform array.");
         }
     }
     auto rgbScalar=rgbScalarFixture();
@@ -301,7 +451,7 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
 }
 int main(int argc,char** argv) {
     try {
-        cpuChecks();if(argc==4)compileChecks(argv[1],argv[2],argv[3]);
+        cpuChecks();runtimeUniformChecks();if(argc==4)compileChecks(argv[1],argv[2],argv[3]);
         std::cout<<"Material graph lowering, packets, limits and generated shader checks passed.\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

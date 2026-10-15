@@ -1,0 +1,67 @@
+#pragma once
+
+#include "RenderTypes.h"
+#include <bgfx/bgfx.h>
+#include <cstdint>
+#include <span>
+#include <string>
+#include <vector>
+
+namespace crimson {
+
+// One owner per camera/render target. All resources are private to the renderer
+// and must be destroyed before bgfx shutdown. The compute program is borrowed.
+// The BRDF and light data share one texture binding, preserving all twelve
+// graph material textures and the existing environment/shadow bindings.
+class ClusteredLightingGpu {
+public:
+    static constexpr std::uint32_t MaxLights=4096,TileSize=32,DepthSlices=24,MaxClusters=262144;
+    explicit ClusteredLightingGpu(bgfx::ProgramHandle computeProgram);
+    ~ClusteredLightingGpu();
+    ClusteredLightingGpu(const ClusteredLightingGpu&)=delete;
+    ClusteredLightingGpu& operator=(const ClusteredLightingGpu&)=delete;
+    void setComputeProgram(bgfx::ProgramHandle program) {
+        if(program.idx!=computeProgram_.idx){computeProgram_=program;masksValid_=false;}
+    }
+    void advance(std::uint64_t frame);
+    bool prepare(const Camera&,std::uint16_t width,std::uint16_t height,
+        std::span<const PointLight>,std::span<const std::int32_t> shadowIndices,
+        std::span<const float> brdfRG,bgfx::ViewId computeView,bool referenceAllLights=false,
+        std::uint16_t ambientWidth=0,std::uint16_t ambientHeight=0);
+    void bind(std::uint8_t samplerStage) const;
+    void bindUniforms() const {setUniforms();}
+    std::size_t residentBytes() const;
+    const ClusteredLightingStats& stats() const{return stats_;}
+    const std::string& status() const{return status_;}
+    bgfx::TextureHandle texture() const{return atlas_;}
+    std::uint16_t atlasWidth() const{return atlasWidth_;}
+    std::uint16_t atlasHeight() const{return atlasHeight_;}
+    std::uint32_t maskBaseTexel() const{return static_cast<std::uint32_t>(atlasValues_[3]);}
+    std::uint32_t ambientBaseTexel() const{return static_cast<std::uint32_t>(ambientValues_[0]);}
+    std::uint16_t ambientWidth() const{return static_cast<std::uint16_t>(ambientValues_[1]);}
+    std::uint16_t ambientHeight() const{return static_cast<std::uint16_t>(ambientValues_[2]);}
+    void setAmbientVisibilityReady(bool ready){ambientValues_[3]=ready?1.f:0.f;}
+private:
+    struct Retired {bgfx::TextureHandle texture;std::size_t bytes;std::uint64_t after;};
+    bgfx::ProgramHandle computeProgram_{BGFX_INVALID_HANDLE};
+    bgfx::TextureHandle atlas_{BGFX_INVALID_HANDLE};
+    bgfx::DynamicVertexBufferHandle lightInput_{BGFX_INVALID_HANDLE};
+    bgfx::UniformHandle sampler_{BGFX_INVALID_HANDLE},gridUniform_{BGFX_INVALID_HANDLE},depthUniform_{BGFX_INVALID_HANDLE};
+    bgfx::UniformHandle viewportUniform_{BGFX_INVALID_HANDLE},atlasUniform_{BGFX_INVALID_HANDLE},optionsUniform_{BGFX_INVALID_HANDLE},recordLayoutUniform_{BGFX_INVALID_HANDLE},viewUniform_{BGFX_INVALID_HANDLE},ambientUniform_{BGFX_INVALID_HANDLE};
+    Vec4 gridValues_{},depthValues_{},viewportValues_{},atlasValues_{},optionsValues_{},ambientValues_{};
+    Mat4 viewValues_{};
+    std::vector<Vec4> records_,publishedRecords_,inputSpheres_,currentSpheres_,uploadRows_,brdfPixels_;
+    std::vector<PointLight> lightSnapshot_;
+    std::vector<std::int32_t> shadowSnapshot_;
+    Mat4 recordViewSnapshot_{};
+    std::vector<float> brdfSnapshot_;
+    std::vector<Retired> retired_;
+    std::uint16_t atlasWidth_{},atlasHeight_{},brdfSize_{};
+    std::uint64_t frame_{};
+    ClusteredLightingStats stats_{};
+    std::string status_;
+    bool usable_{},sourceSnapshotValid_{},recordsUploaded_{},inputUploaded_{},masksValid_{};
+    bool ensureAtlas(std::uint64_t maskTexels,std::uint16_t brdfSize,std::uint64_t ambientTexels);
+    void setUniforms() const;
+};
+}

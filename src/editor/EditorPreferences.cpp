@@ -91,7 +91,7 @@ void EditorPreferences::draw() {
         changed|=ImGui::DragFloat("Minor line width",&appearance.gridMinorWidth,.025f,.25f,8,"%.3f",ImGuiSliderFlags_AlwaysClamp);
         ImGui::SeparatorText("Rendering");
         const auto resolutionLabel=std::to_string(candidate.pointShadowResolution);
-        if (ImGui::BeginCombo("Point shadow resolution",resolutionLabel.c_str())) {
+        if (ImGui::BeginCombo("Shadow resolution",resolutionLabel.c_str())) {
             for (const auto resolution:PointShadowResolutions) {
                 const bool selected=resolution==candidate.pointShadowResolution;
                 const auto label=std::to_string(resolution);

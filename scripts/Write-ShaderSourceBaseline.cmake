@@ -1,0 +1,22 @@
+# Invoked as a build command, after source changes have invalidated the embedded
+# shader headers. Keep the baseline in the executable rather than trusting a
+# mutable payload-side marker at the next launch.
+set(CC_BASELINE_TEXT "#pragma once\n#include \"resources/ShaderSourceBaseline.h\"\n#include <array>\nnamespace crimson {\ninline constexpr ShaderSourceBaselineEntry EmbeddedShaderSourceBaseline[]{\n")
+foreach(CC_TREE IN ITEMS Sources Includes)
+    if(CC_TREE STREQUAL "Sources")
+        set(CC_DIRECTORY "${CC_SOURCE_DIR}")
+    else()
+        set(CC_DIRECTORY "${CC_INCLUDE_DIR}")
+    endif()
+    file(GLOB_RECURSE CC_FILES RELATIVE "${CC_DIRECTORY}" "${CC_DIRECTORY}/*.sc" "${CC_DIRECTORY}/*.sh")
+    list(SORT CC_FILES)
+    foreach(CC_FILE IN LISTS CC_FILES)
+        file(SHA256 "${CC_DIRECTORY}/${CC_FILE}" CC_HASH)
+        string(APPEND CC_BASELINE_TEXT "    {ShaderSourceRoot::${CC_TREE},\"${CC_FILE}\",\"${CC_HASH}\"},\n")
+    endforeach()
+endforeach()
+file(SHA256 "${CC_COMPILER}" CC_HASH)
+string(APPEND CC_BASELINE_TEXT "    {ShaderSourceRoot::Compiler,\"\",\"${CC_HASH}\"},\n    {ShaderSourceRoot::Contract,\"\",\"crimson-shader-v2;bgfx-bin11;dx11;windows;s_5_0;O3\"}\n};\n}\n")
+file(WRITE "${CC_OUTPUT}.tmp" "${CC_BASELINE_TEXT}")
+execute_process(COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${CC_OUTPUT}.tmp" "${CC_OUTPUT}" COMMAND_ERROR_IS_FATAL ANY)
+file(REMOVE "${CC_OUTPUT}.tmp")

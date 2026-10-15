@@ -3,6 +3,8 @@
 #include "scene/BuiltinModels.h"
 #include "assets/MaterialAsset.h"
 #include "math/Json.h"
+#include "crimson-renderer/shaders/point_light.sh"
+#include "crimson-renderer/shaders/ambient_visibility_response.sh"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <array>
@@ -13,6 +15,7 @@
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 namespace {
 using namespace crimson;
@@ -46,7 +49,7 @@ void componentsAndStorage(){
     auto characterRecord=*document.scene().find(character);characterRecord.character->moveSpeed=7;require(document.updateEntity(character,characterRecord),document.status());
     require(document.save("Gameplay"),document.status());
     const auto snapshot=readSceneSnapshot(project.root,document.assetId());
-    require(Json::parse(serializeSceneSnapshot(snapshot)).at("version")==8,"Scene writer did not use version 8.");
+    require(Json::parse(serializeSceneSnapshot(snapshot)).at("version")==10,"Scene writer did not use version 10.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(document.scene().records(),reopened.scene().records());
     require(sameProperties(document.scene().properties(),reopened.scene().properties()),"Gameplay scene properties did not round-trip.");
     auto legacy=Json::parse(serializeSceneSnapshot(snapshot));legacy["version"]=3;legacy["settings"].erase("activeCamera");legacy["settings"].erase("playerCharacter");
@@ -250,6 +253,78 @@ void boxMaterialAndPointRadius(){
     const auto references=runtime.historicalMaterialReferences();require(std::find(references.begin(),references.end(),red)!=references.end() && std::find(references.begin(),references.end(),blue)!=references.end(),"Material assignment history lost a dependency.");
     require(document.scene().find(first)->modelMaterial.id==red && !document.dirty(),"Runtime material changed the authored document.");
 }
+void pointFalloffAndSpecularStorageAndRuntime() {
+    TempProject project;SceneDocument document(project.root);const auto light=document.createPointLight();
+    require(light,document.status());
+    const auto initial=*document.scene().find(light);
+    require(initial.point->nearFalloffRadius==0&&initial.point->specularStrength==1&&initial.point->attenuation==2,
+        "Ordinary point-light defaults changed inverse-square or specular response.");
+    auto edited=initial;edited.point->nearFalloffRadius=2.75f;edited.point->specularStrength=.35f;edited.point->attenuation=1.25f;
+    edited.point->radius=15;edited.point->intensity=71;edited.point->castShadows=true;
+    require(document.updateEntity(light,edited),document.status());
+    require(document.undo()&&*document.scene().find(light)->point==*initial.point,
+        "Point falloff/specular undo did not restore the original values.");
+    require(document.redo()&&*document.scene().find(light)->point==*edited.point,
+        "Point falloff/specular redo lost the authored values.");
+    require(document.save("Point falloff"),document.status());const auto authored=document.scene().records();
+    const auto serialized=Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,document.assetId())));
+    require(serialized.at("version")==10&&serialized["entities"][0]["point"].at("nearFalloffRadius")==2.75f&&
+        serialized["entities"][0]["point"].at("specularStrength")==.35f&&serialized["entities"][0]["point"].at("attenuation")==1.25f,
+        "Point falloff/specular fields did not persist in the current scene schema.");
+    SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(authored,reopened.scene().records());
+    const auto extracted=extractScene(reopened.scene());
+    require(extracted.points.size()==1&&extracted.points.front().nearFalloffRadius==2.75f&&
+        extracted.points.front().specularStrength==.35f&&extracted.points.front().intensity==71&&
+        extracted.points.front().radius==15&&extracted.points.front().castShadows&&extracted.points.front().attenuation==1.25f,
+        "Ordinary point extraction lost authored response or unrelated light properties.");
+    auto legacy=serialized;legacy["entities"][0]["point"].erase("nearFalloffRadius");
+    legacy["entities"][0]["point"].erase("specularStrength");
+    legacy["entities"][0]["point"].erase("attenuation");
+    const std::string legacyId="assets/scenes/point-response-defaults.crimson-scene";
+    {std::ofstream stream(project.root/legacyId);stream<<legacy.dump();}
+    require(reopened.load(legacyId),reopened.status());
+    auto expected=*edited.point;expected.nearFalloffRadius=0;expected.specularStrength=1;expected.attenuation=2;
+    require(*reopened.scene().find(light)->point==expected,
+        "Missing optional point response fields did not preserve legacy defaults and other properties.");
+    const auto beforeInvalid=reopened.scene().records();
+    for(const auto& [field,bad]:std::array<std::pair<const char*,float>,6>{{
+        {"nearFalloffRadius",-.01f},{"nearFalloffRadius",100001.f},{"specularStrength",-.01f},{"specularStrength",1.01f},
+        {"attenuation",-10.01f},{"attenuation",10.01f}}}) {
+        auto invalid=serialized;invalid["entities"][0]["point"][field]=bad;
+        const std::string invalidId="assets/scenes/invalid-point-response.crimson-scene";
+        {std::ofstream stream(project.root/invalidId);stream<<invalid.dump();}
+        require(!reopened.load(invalidId),"Invalid persisted point response was accepted.");same(beforeInvalid,reopened.scene().records());
+    }
+    for(const auto bad:{-.01f,100001.f,std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity()}) {
+        auto invalid=edited;invalid.point->nearFalloffRadius=bad;
+        require(!document.updateEntity(light,invalid),"Invalid point near falloff was accepted.");
+    }
+    for(const auto bad:{-.01f,1.01f,std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity()}) {
+        auto invalid=edited;invalid.point->specularStrength=bad;
+        require(!document.updateEntity(light,invalid),"Invalid point specular strength was accepted.");
+    }
+    for(const auto radius:{0.f,100000.f})for(const auto specular:{0.f,1.f}) {
+        auto valid=edited;valid.point->nearFalloffRadius=radius;valid.point->specularStrength=specular;
+        Scene::validate({valid},{});
+    }
+    for(const auto bad:{-10.01f,10.01f,std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity()}) {
+        auto invalid=edited;invalid.point->attenuation=bad;
+        require(!document.updateEntity(light,invalid),"Invalid point distance attenuation was accepted.");
+    }
+    for(const auto attenuation:{-10.f,0.f,1.f,2.f,10.f}) {auto valid=edited;valid.point->attenuation=attenuation;Scene::validate({valid},{});}
+    same(authored,document.scene().records());
+    SceneDocument runtime(project.root);require(runtime.resetTransientFrom(document),runtime.status());
+    require(runtime.begin("Live point response"),runtime.status());
+    require(runtime.update([=](auto& records,auto&){for(auto& record:records)if(record.id==light) {
+        record.point->nearFalloffRadius=5;record.point->specularStrength=.8f;record.point->attenuation=0;
+    }}),runtime.status());pose(runtime,light,{9,3,2});require(runtime.commit(),runtime.status());
+    require(runtime.undo()&&*runtime.scene().find(light)->point==*edited.point,
+        "Live point response undo did not restore authored fields.");near(position(runtime.scene(),light),{9,3,2});
+    require(runtime.redo(),runtime.status());const auto play=extractScene(runtime.scene());
+    require(play.points.front().nearFalloffRadius==5&&play.points.front().specularStrength==.8f&&play.points.front().attenuation==0,
+        "Play extraction did not use edited ordinary point response.");
+    same(authored,document.scene().records());require(!document.dirty(),"Live point response changed the authored document.");
+}
 void shadowSettingsStorageHistoryAndExtraction(){
     TempProject project;SceneDocument document(project.root);
     const auto parent=document.createBox("Parent"),child=document.createBox("Child"),light=document.createPointLight();
@@ -288,7 +363,7 @@ void shadowSettingsStorageHistoryAndExtraction(){
     require(document.save("Point shadows"),document.status());
     const auto snapshot=readSceneSnapshot(project.root,document.assetId());
     auto serialized=Json::parse(serializeSceneSnapshot(snapshot));
-    require(serialized.at("version")==8,"Scene writer did not retain the current version.");
+    require(serialized.at("version")==10,"Scene writer did not retain the current version.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(document.scene().records(),reopened.scene().records());
     for(const int version:{1,2,3,4}) {
         auto legacy=serialized;legacy["version"]=version;
@@ -414,5 +489,503 @@ void environmentToneMappingStorageAndRuntime() {
         resolveEnvironment(runtime.scene()).environment.toneMapping==ToneMapping::AgX && !runtime.history().canUndo() && !runtime.dirty(),
         "Starting Play again retained runtime Glow, tone mapping or history.");
 }
+void environmentAmbientLightRuntime() {
+    TempProject project;SceneDocument document(project.root);
+    const auto environment=document.createEnvironment(),actor=document.createCharacter();
+    const AmbientLightSettings authoredAmbient{AmbientLightSource::Sky,{.3f,.4f,.5f},.65f,1.8f};
+    auto record=*document.scene().find(environment);record.environment->environment.ambientLight=authoredAmbient;
+    require(document.updateEntity(environment,record),document.status());
+    const auto authored=document.scene().records();const auto authoredHistory=document.history().size();
+    SceneDocument runtime(project.root);require(runtime.resetTransientFrom(document),runtime.status());
+    require(resolveEnvironment(runtime.scene()).environment.ambientLight==authoredAmbient,
+        "Play clone lost authored ambient light settings.");
+    const AmbientLightSettings runtimeAmbient{AmbientLightSource::Color,{.7f,.2f,.1f},.25f,3.2f};
+    require(runtime.begin("Ambient light during Play"),runtime.status());
+    require(runtime.update([&](auto& records,auto&){for(auto& entity:records)if(entity.id==environment)
+        entity.environment->environment.ambientLight=runtimeAmbient;}),runtime.status());
+    pose(runtime,actor,{8,0,3});require(runtime.commit(),runtime.status());
+    require(extractScene(runtime.scene()).environment.environment.ambientLight==runtimeAmbient,
+        "Render extraction lost live ambient source, color, contribution or energy.");
+    require(runtime.undo() && resolveEnvironment(runtime.scene()).environment.ambientLight==authoredAmbient,
+        "Runtime ambient light undo lost authored values.");near(position(runtime.scene(),actor),{8,0,3});
+    require(runtime.redo() && resolveEnvironment(runtime.scene()).environment.ambientLight==runtimeAmbient,
+        "Runtime ambient light redo lost live values.");near(position(runtime.scene(),actor),{8,0,3});
+    require(runtime.begin("Cancel ambient light") && runtime.update([&](auto& records,auto&){for(auto& entity:records)if(entity.id==environment)
+        entity.environment->environment.ambientLight.source=AmbientLightSource::Disabled;}),runtime.status());
+    pose(runtime,actor,{9,0,4});runtime.cancel();
+    require(resolveEnvironment(runtime.scene()).environment.ambientLight==runtimeAmbient,"Canceled ambient edit changed committed values.");
+    near(position(runtime.scene(),actor),{9,0,4});same(authored,document.scene().records());
+    require(document.history().size()==authoredHistory,"Runtime ambient light edit mutated the authored document.");
+    require(runtime.resetTransientFrom(document) && resolveEnvironment(runtime.scene()).environment.ambientLight==authoredAmbient &&
+        !runtime.history().canUndo() && !runtime.dirty(),"Restarting Play retained runtime ambient light edits.");
 }
-int main(){try{componentsAndStorage();collisionDisplayStorageAndHistory();runtimePatches();followAndHierarchy();followDependenciesAndAtomicFailure();parentFollowKeepsWorldOffset();boxMaterialAndPointRadius();shadowSettingsStorageHistoryAndExtraction();environmentToneMappingStorageAndRuntime();std::cout<<"Gameplay scene tests passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+void lightingRolesRigStorageAndRuntime() {
+    TempProject project;SceneDocument document(project.root);
+    const auto player=document.createCharacter(),box=document.createBox(),point=document.createPointLight(),sun=document.createDirectionalLight(),environment=document.createEnvironment();
+    require(player && box && point && sun && environment,document.status());
+    require(!document.scene().find(player)->character->lightRig.enabled &&
+        !document.scene().find(environment)->environment->environment.ambientVisibility.enabled,
+        "Existing scenes acquired enabled player lighting or ambient attenuation.");
+    require(document.scene().find(player)->character->lightRig.localWorld.intensity==64.f/9.f,
+        "New Character did not receive the softened point-light default.");
+    require(document.scene().find(point)->point->roles.ambientReveal && !document.scene().find(sun)->directional->roles.ambientReveal,
+        "Point and directional ambient-reveal defaults lost their separate roles.");
+    auto actor=*document.scene().find(player);auto& rig=actor.character->lightRig;
+    rig.enabled=true;rig.fill.enabled=true;rig.showGizmos=true;
+    rig.key.direction={.4f,-.7f,-.2f};rig.key.intensity=2.1f;rig.key.diffuse=.8f;rig.key.specular=.7f;
+    rig.fill.color={.3f,.5f,1};rig.fill.intensity=.4f;rig.fill.diffuse=.6f;rig.fill.specular=.8f;
+    rig.localWorld.height=3;rig.localWorld.intensity=17;rig.localWorld.shadowNormalBias=.8f;
+    rig.localWorld.radius=12.5f;rig.localWorld.nearFalloffRadius=2.2f;rig.localWorld.specularStrength=.25f;
+    rig.localWorld.rangeFalloffExponent=.75f;rig.localWorld.edgeSoftness=.8f;rig.localWorld.sourceRadius=.6f;rig.localWorld.attenuation=1.5f;
+    rig.characterShadow.strength=.9f;rig.characterShadow.distance=23;rig.characterShadow.shadowDepthBias=.007f;
+    actor.character->darknessReveal={true,11};
+    require(document.updateEntity(player,actor),document.status());
+    auto mesh=*document.scene().find(box);mesh.lightingScopes={lighting_scope::World,0,lighting_scope::Character};
+    require(document.updateEntity(box,mesh),document.status());
+    auto lamp=*document.scene().find(point);lamp.point->roles={lighting_scope::Character,lighting_scope::World,lighting_scope::Character,false,.3f};
+    lamp.point->rangeFalloffExponent=2.3f;lamp.point->edgeSoftness=.6f;lamp.point->sourceRadius=.4f;lamp.point->attenuation=-.5f;
+    require(document.updateEntity(point,lamp),document.status());
+    auto directional=*document.scene().find(sun);directional.directional->roles={lighting_scope::World,lighting_scope::Character,lighting_scope::World,true,.5f};
+    require(document.updateEntity(sun,directional),document.status());
+    auto sky=*document.scene().find(environment);auto& ambient=sky.environment->environment.ambientVisibility;
+    ambient={true,.75f,.08f,.35f,.6f,false,true};require(document.updateEntity(environment,sky),document.status());
+    require(document.save("Scoped lighting"),document.status());
+    const auto authored=document.scene().records();const auto snapshot=readSceneSnapshot(project.root,document.assetId());
+    SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(authored,reopened.scene().records());
+    const auto currentJson=Json::parse(serializeSceneSnapshot(snapshot));
+    for(const auto& record:currentJson["entities"]) {
+        require(!record.contains("lightingCategory"),"Transient lighting membership was serialized into scene data.");
+        if(record.contains("character")) {
+            const auto& stored=record["character"]["lightRig"];
+            require(stored.at("version")==4&&stored.contains("localWorld")&&!stored.contains("worldFill")&&
+                stored["localWorld"].at("radius")==12.5f&&stored["localWorld"].at("rangeFalloffExponent")==.75f&&
+                stored["localWorld"].at("edgeSoftness")==.8f&&stored["localWorld"].at("sourceRadius")==.6f&&stored["localWorld"].at("attenuation")==1.5f&&
+                !stored["localWorld"].contains("softSourceRadius"),
+                "Local World Light writer lost attenuation/source controls or retained the removed fill mode.");
+            const auto& reveal=record["character"]["darknessReveal"];
+            require(reveal.at("version")==2&&reveal.at("spread")==11&&!reveal.contains("radius"),
+                "Character lighting writer retained old radius data or lost the shared spread.");
+        }
+        if(record.contains("point"))require(record["point"].at("sourceRadius")==.4f&&record["point"].at("attenuation")==-.5f&&
+            !record["point"].contains("softSourceRadius"),
+            "Point writer lost Source Radius or retained the superseded field.");
+    }
+    auto formerSource=currentJson;
+    for(auto& record:formerSource["entities"]) {
+        if(record.contains("character")) {
+            auto& light=record["character"]["lightRig"]["localWorld"];
+            light["softSourceRadius"]=light.at("sourceRadius");light.erase("sourceRadius");
+        }
+        if(record.contains("point")) {
+            auto& light=record["point"];light["softSourceRadius"]=light.at("sourceRadius");light.erase("sourceRadius");
+        }
+    }
+    const std::string formerSourceId="assets/scenes/former-source-radius.crimson-scene";
+    {std::ofstream file(project.root/formerSourceId);file<<formerSource.dump();}
+    require(reopened.load(formerSourceId),reopened.status());same(authored,reopened.scene().records());
+    require(reopened.save()&&reopened.load(formerSourceId),reopened.status());same(authored,reopened.scene().records());
+    const auto upgradedSource=Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,formerSourceId)));
+    for(const auto& record:upgradedSource["entities"]) {
+        if(record.contains("character"))require(record["character"]["lightRig"]["localWorld"].contains("sourceRadius")&&
+            !record["character"]["lightRig"]["localWorld"].contains("softSourceRadius"),"Rig source-size conversion was not written once.");
+        if(record.contains("point"))require(record["point"].contains("sourceRadius")&&!record["point"].contains("softSourceRadius"),
+            "Ordinary point source-size conversion was not written once.");
+    }
+    auto absentSource=currentJson;
+    for(auto& record:absentSource["entities"]) {
+        if(record.contains("character")) {
+            record["character"]["lightRig"]["localWorld"].erase("sourceRadius");
+            record["character"]["lightRig"]["localWorld"].erase("attenuation");
+        }
+        if(record.contains("point")){record["point"].erase("sourceRadius");record["point"].erase("attenuation");}
+    }
+    const std::string absentSourceId="assets/scenes/absent-source-radius.crimson-scene";
+    {std::ofstream file(project.root/absentSourceId);file<<absentSource.dump();}
+    require(reopened.load(absentSourceId),reopened.status());
+    require(reopened.scene().find(player)->character->lightRig.localWorld.sourceRadius==0&&
+        reopened.scene().find(point)->point->sourceRadius==0&&reopened.scene().find(point)->point->attenuation==2&&
+        reopened.scene().find(player)->character->lightRig.localWorld.attenuation==2,
+        "Missing source sizes or attenuation changed the punctual inverse-square defaults.");
+    const auto writeAndLoadReveal=[&](const Json& reveal,const char* fileName) {
+        auto data=currentJson;
+        for(auto& record:data["entities"])if(record.contains("character"))record["character"]["darknessReveal"]=reveal;
+        const std::string id=std::string("assets/scenes/")+fileName+".crimson-scene";
+        {std::ofstream file(project.root/id);file<<data.dump();}
+        return reopened.load(id);
+    };
+    for(const auto& old:std::array<Json,2>{Json{{"enabled",false},{"radius",6.5f}},Json{{"version",1},{"enabled",false},{"radius",6.5f}}}) {
+        require(writeAndLoadReveal(old,"old-character-radius"),reopened.status());
+        require(reopened.scene().find(player)->character->darknessReveal==CharacterRevealSettings{false,6.5f},
+            "Legacy reveal radius did not preserve enable state and numeric spread during conversion.");
+        require(reopened.save(),reopened.status());
+        const auto migratedReveal=Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,reopened.assetId())));
+        for(const auto& entity:migratedReveal["entities"])if(entity.contains("character")) {
+            const auto& value=entity["character"]["darknessReveal"];
+            require(value.at("version")==2&&value.at("spread")==6.5f&&!value.contains("radius"),
+                "Saving a migrated character reveal retained radius or lost spread.");
+        }
+    }
+    require(writeAndLoadReveal(Json{{"version",2},{"enabled",true}},"missing-character-spread"),reopened.status());
+    require(reopened.scene().find(player)->character->darknessReveal==CharacterRevealSettings{},
+        "Missing current spread lost the default Character lighting scale.");
+    for(const auto& bad:std::array<Json,4>{Json{{"version",3},{"spread",11}},Json{{"version",2},{"spread",0}},
+        Json{{"version",2},{"spread",100001}},Json{{"version",1},{"radius",-1}}}) {
+        const auto prior=reopened.scene().records();const auto history=reopened.history().size();
+        require(!writeAndLoadReveal(bad,"invalid-character-spread"),"Invalid saved Character spread/version was accepted.");
+        same(prior,reopened.scene().records());require(reopened.history().size()==history,"Invalid spread load changed history.");
+    }
+    auto missingLocalControls=currentJson;
+    for(auto& record:missingLocalControls["entities"])if(record.contains("character")) {
+        auto& stored=record["character"]["lightRig"];stored["version"]=2;
+        stored["localWorld"]["radius"]=13;
+        stored["localWorld"].erase("nearFalloffRadius");stored["localWorld"].erase("specularStrength");
+    }
+    const std::string missingLocalControlsId="assets/scenes/local-world-v2-defaults.crimson-scene";
+    {std::ofstream stream(project.root/missingLocalControlsId);stream<<missingLocalControls.dump();}
+    require(reopened.load(missingLocalControlsId),reopened.status());
+    auto expectedOldV2=rig;expectedOldV2.localWorld.radius=13;expectedOldV2.localWorld.nearFalloffRadius=1.5f;
+    expectedOldV2.localWorld.specularStrength=0;expectedOldV2.localWorld.rangeFalloffExponent=4;
+    expectedOldV2.localWorld.edgeSoftness=1;expectedOldV2.localWorld.sourceRadius=0;
+    require(reopened.scene().find(player)->character->lightRig==expectedOldV2,
+        "An existing v2 rig did not preserve its actual point-light settings.");
+    require(reopened.save(),reopened.status());
+    require(reopened.load(missingLocalControlsId)&&reopened.scene().find(player)->character->lightRig==expectedOldV2,
+        "Migrated Local World Light did not survive Save/reopen.");
+    const auto savedV3=Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,missingLocalControlsId)));
+    for(const auto& entity:savedV3["entities"])
+        if(entity.contains("character"))require(entity["character"]["lightRig"].at("version")==4&&
+            entity["character"]["lightRig"].contains("localWorld")&&!entity["character"]["lightRig"].contains("worldFill"),
+            "Saving v2 did not write the current point-light representation.");
+    auto customV2=missingLocalControls;
+    for(auto& record:customV2["entities"])if(record.contains("character")) {
+        record["character"]["lightRig"]["localWorld"]["nearFalloffRadius"]=2.25f;
+        record["character"]["lightRig"]["localWorld"]["specularStrength"]=.4f;
+    }
+    const std::string customV2Id="assets/scenes/local-world-v2-custom.crimson-scene";
+    {std::ofstream stream(project.root/customV2Id);stream<<customV2.dump();}
+    require(reopened.load(customV2Id),reopened.status());
+    auto expectedCustomV2=expectedOldV2;expectedCustomV2.localWorld.nearFalloffRadius=2.25f;expectedCustomV2.localWorld.specularStrength=.4f;
+    require(reopened.scene().find(player)->character->lightRig==expectedCustomV2,
+        "Explicit v2 near falloff changed foot energy or unrelated rig settings during conversion.");
+    auto oldFill=currentJson;
+    for(auto& record:oldFill["entities"])if(record.contains("character")) {
+        auto& stored=record["character"]["lightRig"];stored["version"]=3;
+        stored["worldFill"]=stored["localWorld"];stored.erase("localWorld");
+    }
+    const std::string oldFillId="assets/scenes/world-fill-v3-migration.crimson-scene";
+    {std::ofstream stream(project.root/oldFillId);stream<<oldFill.dump();}
+    require(reopened.load(oldFillId),reopened.status());
+    auto expectedOldFill=rig;auto& convertedFill=expectedOldFill.localWorld;
+    convertedFill.radius=22;convertedFill.nearFalloffRadius=1.5f;convertedFill.specularStrength=0;
+    convertedFill.rangeFalloffExponent=1;convertedFill.edgeSoftness=1;convertedFill.sourceRadius=0;convertedFill.attenuation=2;
+    const float centerHeight=characterLightingCenterHeight(actor.character->height);
+    const float oldFootEnergy=17*ambient_visibility::radialRevealWeightSquared(centerHeight*centerHeight,11);
+    convertedFill.intensity=oldFootEnergy/point_lighting::pointLightAttenuation(9,1.f/(22*22),2.25f,1,1);
+    const auto migratedFill=reopened.scene().find(player)->character->lightRig;
+    auto migratedWithoutIntensity=migratedFill;auto expectedWithoutIntensity=expectedOldFill;
+    migratedWithoutIntensity.localWorld.intensity=expectedWithoutIntensity.localWorld.intensity=0;
+    require(migratedWithoutIntensity==expectedWithoutIntensity&&
+        std::abs(migratedFill.localWorld.intensity-convertedFill.intensity)<1e-4f,
+        "V3 fill migration lost foot brightness, independent reveal spread or unrelated rig fields.");
+    require(reopened.save()&&reopened.load(oldFillId),reopened.status());
+    require(reopened.scene().find(player)->character->lightRig==migratedFill,
+        "V3-to-v4 point-light migration was applied more than once.");
+    auto narrowFill=oldFill;
+    for(auto& record:narrowFill["entities"])if(record.contains("character")) {
+        record["character"]["lightRig"]["worldFill"]["height"]=2;
+        record["character"]["darknessReveal"]["spread"]=.5f;
+    }
+    const std::string narrowFillId="assets/scenes/world-fill-v3-narrow-spread.crimson-scene";
+    {std::ofstream stream(project.root/narrowFillId);stream<<narrowFill.dump();}
+    require(reopened.load(narrowFillId),reopened.status());
+    const auto narrowPoint=reopened.scene().find(player)->character->lightRig.localWorld;
+    const float footAttenuation=point_lighting::pointLightAttenuation(narrowPoint.height*narrowPoint.height,
+        1.f/(narrowPoint.radius*narrowPoint.radius),narrowPoint.nearFalloffRadius*narrowPoint.nearFalloffRadius,
+        narrowPoint.rangeFalloffExponent,narrowPoint.edgeSoftness);
+    const float narrowFootEnergy=17*ambient_visibility::radialRevealWeightSquared(centerHeight*centerHeight,.5f);
+    require(narrowPoint.radius==2.5f&&narrowPoint.height==2&&std::isfinite(narrowPoint.intensity)&&
+        narrowPoint.intensity>0&&narrowPoint.intensity<1000000&&footAttenuation>0&&
+        std::abs(narrowPoint.intensity*footAttenuation-narrowFootEnergy)<1e-5f,
+        "A narrow v3 spread migrated to a point that cannot reach the feet or needlessly saturates intensity.");
+    auto extremeV2=customV2;
+    for(auto& record:extremeV2["entities"])if(record.contains("character")) {
+        auto& old=record["character"]["lightRig"]["localWorld"];
+        old["height"]=.01f;old["intensity"]=10000;old["radius"]=100000;old["nearFalloffRadius"]=0;
+    }
+    const std::string extremeV2Id="assets/scenes/local-world-v2-extreme.crimson-scene";
+    {std::ofstream stream(project.root/extremeV2Id);stream<<extremeV2.dump();}
+    require(reopened.load(extremeV2Id)&&reopened.scene().find(player)->character->lightRig.localWorld.intensity==10000&&
+        reopened.scene().find(player)->character->lightRig.localWorld.nearFalloffRadius==0,
+        "Valid extreme v2 authored point settings were changed during migration.");
+    const auto beforeInvalidLoad=reopened.scene().records();const auto invalidLoadId="assets/scenes/invalid-local-world.crimson-scene";
+    for(const auto& [field,bad]:std::array<std::pair<const char*,float>,4>{{
+        {"nearFalloffRadius",-.01f},{"nearFalloffRadius",100001.f},{"specularStrength",-.01f},{"specularStrength",1.01f}}}) {
+        auto invalidData=missingLocalControls;
+        for(auto& record:invalidData["entities"])if(record.contains("character"))record["character"]["lightRig"]["localWorld"][field]=bad;
+        {std::ofstream stream(project.root/invalidLoadId);stream<<invalidData.dump();}
+        require(!reopened.load(invalidLoadId),"Invalid superseded local world control was ignored by migration.");
+        same(beforeInvalidLoad,reopened.scene().records());
+    }
+    auto pointRig=Json::parse(serializeSceneSnapshot(snapshot));
+    for(auto& record:pointRig["entities"])if(record.contains("character")) {
+        record["character"].erase("darknessReveal");
+        record["character"]["lightRig"]={{"enabled",true},{"showGizmos",true},
+            {"key",{{"enabled",true},{"worldOffset",Vec3{-3,5,3}},{"color",Vec3{1,.8f,.6f}},{"intensity",40},
+                {"radius",12},{"castShadows",true}}},
+            {"fill",{{"enabled",true},{"worldOffset",Vec3{3,3,-2}},{"color",Vec3{.3f,.5f,1}},{"intensity",10}}},
+            {"reveal",{{"enabled",true},{"radius",9},{"strength",1}}}};
+    }
+    const std::string pointRigId="assets/scenes/old-point-rig.crimson-scene";
+    {std::ofstream stream(project.root/pointRigId);stream<<pointRig.dump();}
+    require(reopened.load(pointRigId),reopened.status());
+    const auto converted=reopened.scene().find(player)->character->lightRig;
+    const auto formerKeyEnergy=40*point_lighting::pointLightAttenuation(43,1.f/144);
+    const auto formerFillEnergy=10*point_lighting::pointLightAttenuation(22,1.f/64);
+    require(converted.enabled&&converted.showGizmos&&std::abs(converted.key.intensity-formerKeyEnergy)<1e-5f&&
+        converted.fill.enabled&&std::abs(converted.fill.intensity-formerFillEnergy)<1e-5f&&
+        converted.localWorld.castShadows&&converted.characterShadow.enabled,
+        "Former point rig conversion changed character irradiance or shadow settings.");
+    require(reopened.scene().find(player)->character->darknessReveal==CharacterRevealSettings{true,9},
+        "Old player reveal radius was not converted to the shared Character lighting spread.");
+    near(converted.key.direction,math::normalized(Vec3{3,-5,-3}));
+    require(std::abs(converted.localWorld.intensity*point_lighting::pointLightAttenuation(
+        converted.localWorld.height*converted.localWorld.height,1.f/(converted.localWorld.radius*converted.localWorld.radius),
+        converted.localWorld.nearFalloffRadius*converted.localWorld.nearFalloffRadius,
+        converted.localWorld.rangeFalloffExponent,converted.localWorld.edgeSoftness)-formerKeyEnergy)<1e-5f,
+        "Former point rig conversion changed the world source's irradiance at the player's feet.");
+    require(extractScene(reopened.scene()).points.size()==2,
+        "Separated rig created more than one world point source.");
+    const auto rewritten=Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,pointRigId)));
+    for(const auto& record:rewritten["entities"])if(record.contains("character")) {
+        const auto& written=record["character"]["lightRig"];
+        require(written.at("version")==4&&written.contains("key")&&written.contains("fill")&&written.contains("localWorld")&&
+            !written.contains("worldFill")&&written["localWorld"].contains("radius")&&
+            written["localWorld"].contains("nearFalloffRadius")&&written["localWorld"].contains("specularStrength")&&
+            !written.contains("actorLights")&&!written.contains("reveal")&&!written.contains("mode")&&
+            !written["key"].contains("worldOffset")&&!written["key"].contains("radius")&&
+            !written["characterShadow"].contains("direction"),
+            "Scene writer retained replaced point/directional or independent shadow direction settings.");
+    }
+    auto directionalRig=Json::parse(serializeSceneSnapshot(snapshot));
+    const auto formerKeyDirection=math::normalized(Vec3{4,-7,-2});
+    for(auto& record:directionalRig["entities"])if(record.contains("character")) {
+        record["character"]["lightRig"]={{"enabled",true},{"showGizmos",true},{"actorLights",Json::array({
+            {{"enabled",true},{"direction",formerKeyDirection},{"color",Vec3{1,.8f,.6f}},{"intensity",2.f},{"diffuse",.7f},{"specular",.4f}},
+            {{"enabled",true},{"direction",Vec3{0,-1,0}},{"color",Vec3{.3f,.5f,1}},{"intensity",.5f}},
+            {{"enabled",true},{"direction",Vec3{0,0,1}},{"color",Vec3{1,1,1}},{"intensity",1.f}}})}};
+    }
+    const std::string directionalRigId="assets/scenes/replaced-directional-rig.crimson-scene";
+    {std::ofstream stream(project.root/directionalRigId);stream<<directionalRig.dump();}
+    require(reopened.load(directionalRigId),reopened.status());
+    const auto migrated=reopened.scene().find(player)->character->lightRig;
+    require(migrated.enabled&&migrated.showGizmos&&migrated.key.intensity==2&&
+        migrated.fill.enabled&&migrated.fill.intensity==.5f&&migrated.key.color==Vec3{1,.8f,.6f}&&
+        migrated.key.diffuse==.7f&&migrated.key.specular==.4f&&!migrated.localWorld.enabled,
+        "Former character-light rig failed one-time conversion or acquired world illumination.");
+    near(migrated.key.direction,formerKeyDirection);
+    require(reopened.scene().find(player)->character->darknessReveal==actor.character->darknessReveal,
+        "Directional rig conversion changed the independently authored darkness range.");
+    require(extractScene(reopened.scene()).points.size()==1,"Removed directional rim remained as an extra local source.");
+    const auto convertedJson=Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,directionalRigId)));
+    for(const auto& record:convertedJson["entities"])if(record.contains("character"))
+        require(!record["character"]["lightRig"].contains("actorLights"),"Writer retained replaced actor-light data.");
+    auto legacy=Json::parse(serializeSceneSnapshot(snapshot));
+    for(auto& record:legacy["entities"]) {
+        record.erase("lightingScopes");
+        if(record.contains("point"))record["point"].erase("roles");
+        if(record.contains("directional"))record["directional"].erase("roles");
+        if(record.contains("character")){record["character"].erase("lightRig");record["character"].erase("darknessReveal");}
+        if(record.contains("environment"))record["environment"]["environment"].erase("ambientVisibility");
+    }
+    const std::string legacyId="assets/scenes/legacy-lighting.crimson-scene";
+    {std::ofstream stream(project.root/legacyId);stream<<legacy.dump();}
+    require(reopened.load(legacyId),reopened.status());
+    require(reopened.scene().find(box)->lightingScopes==SurfaceLightingScopes{} &&
+        !reopened.scene().find(player)->character->lightRig.enabled &&
+        reopened.scene().find(player)->character->darknessReveal==CharacterRevealSettings{} &&
+        !reopened.scene().find(environment)->environment->environment.ambientVisibility.enabled &&
+        reopened.scene().find(point)->point->roles==ScenePointLight{}.roles &&
+        reopened.scene().find(sun)->directional->roles==LightRoles{},"Missing optional lighting fields changed legacy defaults.");
+    auto invalid=mesh;invalid.lightingScopes.directReceiverMask=4;require(!document.updateEntity(box,invalid),"Unknown surface-lighting bits were accepted.");
+    invalid=lamp;invalid.point->roles.shadowCasterMask=4;require(!document.updateEntity(point,invalid),"Unknown caster bits were accepted.");
+    invalid=lamp;invalid.point->roles.ambientRevealStrength=1.01f;require(!document.updateEntity(point,invalid),"Out-of-range ambient reveal strength was accepted.");
+    invalid=actor;invalid.character->lightRig.fill.enabled=false;invalid.character->lightRig.fill.diffuse=-1;
+    require(!document.updateEntity(player,invalid),"Disabled rig light retained invalid stored fields.");
+    invalid=actor;invalid.character->lightRig.key.direction[0]=std::numeric_limits<float>::quiet_NaN();
+    require(!document.updateEntity(player,invalid),"Nonfinite character light direction was accepted.");
+    for(const auto bad:{-.01f,1000001.f,std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity()}) {
+        invalid=actor;invalid.character->lightRig.localWorld.intensity=bad;
+        require(!document.updateEntity(player,invalid),"Invalid Local World Light intensity was accepted.");
+    }
+    for(const auto& [field,bad]:std::array<std::pair<const char*,float>,9>{{
+        {"radius",0},{"nearFalloffRadius",-1},{"rangeFalloffExponent",.24f},{"rangeFalloffExponent",8.01f},
+        {"edgeSoftness",.049f},{"sourceRadius",-1},{"sourceRadius",100001.f},{"attenuation",-10.01f},{"attenuation",10.01f}}}) {
+        auto invalidData=currentJson;
+        for(auto& record:invalidData["entities"])if(record.contains("character"))
+            record["character"]["lightRig"]["localWorld"][field]=bad;
+        {std::ofstream stream(project.root/invalidLoadId);stream<<invalidData.dump();}
+        const auto before=reopened.scene().records();
+        require(!reopened.load(invalidLoadId),"Invalid current point attenuation/source settings were accepted.");
+        same(before,reopened.scene().records());
+    }
+    invalid=actor;invalid.character->darknessReveal.spread=0;
+    require(!document.updateEntity(player,invalid),"Invalid character darkness range was accepted.");
+    invalid=sky;invalid.environment->environment.ambientVisibility.transition=.0001f;
+    require(!document.updateEntity(environment,invalid),"Degenerate ambient transition was accepted.");
+    same(authored,document.scene().records());
+    SceneDocument runtime(project.root);require(runtime.resetTransientFrom(document),runtime.status());
+    const auto changeRig=[&](float intensity) {
+        return [=](auto& records,auto&) {for(auto& record:records)if(record.id==player) {
+            record.character->lightRig.key.intensity=intensity;
+            record.character->lightRig.localWorld.intensity=intensity*.01f;
+        }};
+    };
+    const auto beforeHistory=runtime.history().size();require(runtime.begin("Live player lighting"),runtime.status());
+    require(runtime.update(changeRig(99)),runtime.status());pose(runtime,player,{9,0,3});
+    require(runtime.update(changeRig(120)) && runtime.commit(),runtime.status());
+    require(runtime.history().size()==beforeHistory+1 && runtime.scene().find(player)->character->lightRig.key.intensity==120,
+        "Live rig drag did not create one semantic command.");
+    require(runtime.undo() && runtime.scene().find(player)->character->lightRig==rig,"Rig undo did not restore exact nested settings.");
+    near(position(runtime.scene(),player),{9,0,3});
+    require(runtime.redo() && runtime.scene().find(player)->character->lightRig.key.intensity==120,"Rig redo lost the committed value.");
+    require(runtime.scene().find(player)->character->lightRig.localWorld.intensity==120.f*.01f,
+        "Rig redo lost Local World Light intensity.");
+    const auto playLighting=extractScene(runtime.scene());
+    require(playLighting.points.size()==2&&playLighting.points.back().intensity==120.f*.01f&&
+        playLighting.points.back().radius==rig.localWorld.radius&&playLighting.points.back().rangeFalloffExponent==.75f&&
+        playLighting.points.back().edgeSoftness==.8f&&playLighting.points.back().sourceRadius==.6f&&playLighting.points.back().attenuation==1.5f,
+        "Play extraction dropped Local World Light attenuation/source controls.");
+    require(runtime.begin("Cancel live rig"),runtime.status());require(runtime.update(changeRig(240)),runtime.status());
+    pose(runtime,player,{10,0,4});runtime.cancel();
+    require(runtime.scene().find(player)->character->lightRig.key.intensity==120,"Cancel did not restore the prior rig settings.");
+    near(position(runtime.scene(),player),{10,0,4});
+    auto changedReveal=*runtime.scene().find(player);changedReveal.character->darknessReveal={false,4};
+    require(runtime.updateEntity(player,changedReveal),runtime.status());pose(runtime,player,{11,0,5});
+    const auto revealDisabled=extractScene(runtime.scene());
+    require(!revealDisabled.playerReveal.enabled&&revealDisabled.points.back().radius==rig.localWorld.radius,
+        "Disabling Darkness Reveal resized the independent Local World Light.");
+    require(runtime.undo()&&runtime.scene().find(player)->character->darknessReveal==actor.character->darknessReveal,
+        "Darkness range undo did not restore the exact character settings.");near(position(runtime.scene(),player),{11,0,5});
+    auto runtimeMesh=*runtime.scene().find(box);runtimeMesh.lightingScopes.shadowCasterMask=lighting_scope::All;
+    require(runtime.updateEntity(box,runtimeMesh),runtime.status());
+    pose(runtime,box,{2,3,4});require(runtime.undo() && runtime.scene().find(box)->lightingScopes==mesh.lightingScopes,
+        "Scope undo lost independently authored masks.");near(position(runtime.scene(),box),{2,3,4});
+    same(authored,document.scene().records());require(!document.dirty(),"Live rig controls changed the authored scene.");
+}
+void localRigSharesPointSourceBudget() {
+    std::vector<EntityRecord> records;records.reserve(MaximumPointLights+MaximumDirectionalLights+1);
+    EntityRecord player;player.id=1;player.name="Player";player.character.emplace();player.character->lightRig.enabled=true;
+    player.character->lightRig.fill.enabled=true;
+    records.push_back(player);
+    for(std::size_t index=0;index<MaximumPointLights-1;++index) {
+        EntityRecord light;light.id=index+2;light.name="Light";light.point.emplace();records.push_back(std::move(light));
+    }
+    for(std::size_t index=0;index<MaximumDirectionalLights;++index) {
+        EntityRecord light;light.id=index+MaximumPointLights+2;light.name="Sun";light.directional.emplace();records.push_back(std::move(light));
+    }
+    const SceneProperties properties{0,0,player.id};Scene::validate(records,properties);
+    Scene scene;scene.apply(records,properties);const auto extracted=extractScene(scene);
+    require(extracted.points.size()==MaximumPointLights && extracted.directional.size()==MaximumDirectionalLights,
+        "Local rig failed at the exact combined point-source capacity.");
+    EntityRecord overflow;overflow.id=MaximumPointLights+MaximumDirectionalLights+2;overflow.name="Overflow light";overflow.point.emplace();
+    auto tooMany=records;tooMany.push_back(overflow);
+    bool rejected=false;try {scene.apply(tooMany,properties);}catch(const std::runtime_error&){rejected=true;}
+    require(rejected,"Scene validation admitted combined local/authored point-source overflow.");
+    same(scene.records(),records);
+    tooMany.front().character->lightRig.localWorld.enabled=false;
+    Scene::validate(tooMany,properties); // Character lights/shadow use no point slots.
+    tooMany.front().character->lightRig.localWorld.enabled=true;
+    tooMany.front().character->lightRig.enabled=false;
+    Scene::validate(tooMany,properties); // The rig's master toggle gates its cost.
+    tooMany.front().character->lightRig.enabled=true;
+    auto noPlayer=properties;noPlayer.playerCharacter=NoEntity;
+    Scene::validate(tooMany,noPlayer); // Undesignated character rigs are inactive.
+
+    TempProject project;SceneDocument document(project.root);
+    const SceneSnapshot snapshot{"assets/scenes/local-rig-capacity.crimson-scene","Local rig capacity",records,properties,{}};
+    require(document.openPreparedSnapshot(snapshot),document.status());
+    document.select({player.id});const auto history=document.history().size(),generation=document.documentGeneration();
+    const auto assetId=document.assetId();const auto dirty=document.dirty();
+    require(!document.createPointLight()&&!document.transactionActive(),"Point creation published combined rig overflow.");
+    same(document.scene().records(),records);
+    require(document.history().size()==history&&document.documentGeneration()==generation&&document.assetId()==assetId&&
+        document.dirty()==dirty&&document.selection().primary==player.id,"Rejected point creation changed document history, identity or selection.");
+
+    // A malformed saved scene must be rejected before replacing the open scene.
+    auto overflowJson=Json::parse(serializeSceneSnapshot(snapshot));
+    auto extraJson=*std::find_if(overflowJson["entities"].begin(),overflowJson["entities"].end(),[](const auto& value){return value.contains("point");});
+    extraJson["id"]="000000000000ffff";overflowJson["entities"].push_back(std::move(extraJson));
+    std::filesystem::create_directories(project.root/"assets/scenes");
+    const std::string overflowId="assets/scenes/overflow-rig-capacity.crimson-scene";
+    {std::ofstream stream(project.root/overflowId);stream<<overflowJson.dump();}
+    require(!document.load(overflowId),"Loading combined point/rig overflow succeeded.");
+    same(document.scene().records(),records);
+    require(document.history().size()==history&&document.documentGeneration()==generation&&document.assetId()==assetId&&
+        document.dirty()==dirty&&document.selection().primary==player.id,"Rejected scene load changed document history, identity or selection.");
+
+    // Enabling the world source or designating a player must reject overflow atomically too.
+    tooMany.front().character->lightRig.localWorld.enabled=false;
+    const SceneSnapshot oneLight{"assets/scenes/character-only-rig.crimson-scene","Character-only rig",tooMany,properties,{}};
+    require(document.openPreparedSnapshot(oneLight),document.status());
+    auto fullRig=*document.scene().find(player.id);fullRig.character->lightRig.localWorld.enabled=true;
+    const auto oneLightHistory=document.history().size();
+    require(!document.updateEntity(player.id,fullRig),"Enabling the Local World Light published an overflow scene.");
+    same(document.scene().records(),tooMany);
+    require(document.history().size()==oneLightHistory,"Rejected rig activation added an undo entry.");
+    tooMany.front().character->lightRig.localWorld.enabled=true;
+    const SceneSnapshot inactiveRig{"assets/scenes/undesignated-rig.crimson-scene","Undesignated rig",tooMany,noPlayer,{}};
+    require(document.openPreparedSnapshot(inactiveRig),document.status());
+    require(!document.setPlayerCharacter(player.id)&&document.scene().properties().playerCharacter==NoEntity,
+        "Designating a player published combined point-source overflow.");
+    same(document.scene().records(),tooMany);
+}
+void modelAnimationStorageAndRuntime() {
+    TempProject project;SceneDocument document(project.root);
+    const auto model=document.createModel("assets/models/animated/manifest.json","Animated model"),empty=document.createEmpty("Empty");
+    require(model&&empty,document.status());
+    require(document.scene().find(model)->modelAnimation==SceneModelAnimation{},"New models did not retain the imported bind pose by default.");
+    auto authored=*document.scene().find(model);authored.modelAnimation={2,false,false,1.5f,2.25f};
+    require(document.updateEntity(model,authored,"Configure animation"),document.status());
+    require(extractScene(document.scene()).models.front().animation==authored.modelAnimation,"Render extraction lost authored playback settings.");
+    require(document.undo()&&document.scene().find(model)->modelAnimation==SceneModelAnimation{}&&document.redo(),
+        "Animation controls did not participate in scene history.");
+    require(document.save("Animated scene"),document.status());
+    const auto snapshot=readSceneSnapshot(project.root,document.assetId());const auto json=Json::parse(serializeSceneSnapshot(snapshot));
+    require(json.at("version")==10,"Animation writer did not use scene schema 10.");
+    SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
+    same(document.scene().records(),reopened.scene().records());
+    const auto history=document.history().size();const auto records=document.scene().records();
+    const auto rejectsRecord=[&](const EntityRecord& bad) {
+        require(!document.updateEntity(bad.id,bad),"Invalid animation settings were published.");
+        same(document.scene().records(),records);require(document.history().size()==history,"Rejected animation edit added history.");
+    };
+    auto invalid=authored;invalid.modelAnimation.clip=-2;rejectsRecord(invalid);
+    for(const auto speed:{-.01f,100.01f,std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity()}) {
+        invalid=authored;invalid.modelAnimation.speed=speed;rejectsRecord(invalid);
+    }
+    for(const auto time:{-.01f,1.1e9f,std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity()}) {
+        invalid=authored;invalid.modelAnimation.startTime=time;rejectsRecord(invalid);
+    }
+    invalid=*document.scene().find(empty);invalid.modelAnimation.clip=0;rejectsRecord(invalid);
+    auto legacy=json;legacy["version"]=9;for(auto& entity:legacy["entities"])entity.erase("modelAnimation");
+    const std::string legacyId="assets/scenes/legacy-animation.crimson-scene";const auto legacyBytes=legacy.dump();
+    {std::ofstream file(project.root/legacyId);file<<legacyBytes;}
+    require(reopened.load(legacyId)&&reopened.scene().find(model)->modelAnimation==SceneModelAnimation{},
+        "Existing scenes acquired an active animation or lost bind-pose defaults.");
+    for(const auto& clip:std::array<Json,3>{Json(-2),Json(1.5),Json(std::numeric_limits<std::uint64_t>::max())}) {
+        auto malformed=json;for(auto& entity:malformed["entities"])if(entity.contains("modelAnimation"))entity["modelAnimation"]["clip"]=clip;
+        const std::string id="assets/scenes/invalid-animation.crimson-scene";{std::ofstream file(project.root/id);file<<malformed.dump();}
+        const auto before=reopened.scene().records();require(!reopened.load(id),"Invalid saved animation clip was accepted.");same(before,reopened.scene().records());
+    }
+    SceneDocument runtime(project.root);require(runtime.resetTransientFrom(document),runtime.status());
+    auto live=*runtime.scene().find(model);live.modelAnimation.playing=true;live.modelAnimation.speed=2;
+    require(runtime.updateEntity(model,live),runtime.status());pose(runtime,model,{3,4,5});
+    require(runtime.undo()&&runtime.scene().find(model)->modelAnimation==authored.modelAnimation,
+        "Live animation undo did not restore exact authored controls.");near(position(runtime.scene(),model),{3,4,5});
+    same(document.scene().records(),records);require(!document.dirty(),"Live animation controls changed the authored scene.");
+    document.select({model});require(document.duplicateSelection(),document.status());
+    require(document.scene().find(document.selection().primary)->modelAnimation==authored.modelAnimation,
+        "Duplicating a model lost its playback settings.");
+}
+}
+int main(){try{componentsAndStorage();collisionDisplayStorageAndHistory();runtimePatches();followAndHierarchy();followDependenciesAndAtomicFailure();parentFollowKeepsWorldOffset();boxMaterialAndPointRadius();pointFalloffAndSpecularStorageAndRuntime();shadowSettingsStorageHistoryAndExtraction();environmentToneMappingStorageAndRuntime();environmentAmbientLightRuntime();lightingRolesRigStorageAndRuntime();localRigSharesPointSourceBudget();modelAnimationStorageAndRuntime();std::cout<<"Gameplay scene tests passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

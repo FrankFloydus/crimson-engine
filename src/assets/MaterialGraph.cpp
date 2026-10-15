@@ -14,6 +14,12 @@ namespace {
 using Json=nlohmann::json;
 [[noreturn]] void invalid(const std::string& message) { throw std::runtime_error("Material graph: "+message); }
 bool numeric(MaterialValueType type) { return type==MaterialValueType::Scalar || type==MaterialValueType::Color || type==MaterialValueType::Vector2; }
+bool arithmetic(MaterialNodeKind kind) {return kind==MaterialNodeKind::Multiply||kind==MaterialNodeKind::Add||kind==MaterialNodeKind::Lerp||kind==MaterialNodeKind::Power;}
+MaterialValueType combined(MaterialValueType a,MaterialValueType b,const char* operation) {
+    if(!numeric(a)||!numeric(b))invalid(std::string(operation)+" accepts only Scalar, Vector2 and Color inputs.");
+    if(a!=MaterialValueType::Scalar&&b!=MaterialValueType::Scalar&&a!=b)invalid(std::string(operation)+" cannot mix Vector2 and Color inputs.");
+    return a==MaterialValueType::Scalar?b:a;
+}
 bool validImage(const std::string& id) {
     if(id.empty() || id=="builtin:texture/gray" || id=="builtin:texture/normal")return true;
     if(!id.starts_with("assets/") || id.find(':')!=std::string::npos || id.find('\\')!=std::string::npos)return false;
@@ -46,7 +52,7 @@ Json nodeJson(const MaterialNode& n,bool layout) {
         j["output"]={{"shading",static_cast<int>(o.shading)},{"blend",static_cast<int>(o.blend)},
             {"baseColor",o.baseColor},{"emission",o.emission},{"roughness",o.roughness},{"metallic",o.metallic},
             {"occlusion",o.occlusion},{"opacity",o.opacity},{"opacityMask",o.opacityMask},{"specular",o.specular},{"occlusionStrength",o.occlusionStrength},
-            {"alphaCutoff",o.alphaCutoff},{"doubleSided",o.doubleSided}};break;
+            {"alphaCutoff",o.alphaCutoff},{"doubleSided",o.doubleSided},{"receiveFog",o.receiveFog}};break;
     }
     case MaterialNodeKind::UV:
         j["uv"]={{"mode",static_cast<int>(n.uv.mode)},{"scale",n.uv.scale},{"offset",n.uv.offset},
@@ -61,7 +67,11 @@ Json nodeJson(const MaterialNode& n,bool layout) {
     case MaterialNodeKind::Color:j["color"]=n.color;break;
     case MaterialNodeKind::Vector2:j["vector2"]=n.vector2;break;
     case MaterialNodeKind::Saturate:j["left"]=valueJson(n.left);break;
-    case MaterialNodeKind::Multiply:j["left"]=valueJson(n.left);j["right"]=valueJson(n.right);break;
+    case MaterialNodeKind::Multiply:case MaterialNodeKind::Add:case MaterialNodeKind::Power:
+        j["left"]=valueJson(n.left);j["right"]=valueJson(n.right);break;
+    case MaterialNodeKind::Lerp:j["left"]=valueJson(n.left);j["right"]=valueJson(n.right);j["alpha"]=valueJson(n.alpha);break;
+    case MaterialNodeKind::Time:j["time"]={{"ignorePause",n.time.ignorePause},{"periodEnabled",n.time.periodEnabled},{"period",n.time.period}};break;
+    case MaterialNodeKind::Panner:j["panner"]={{"speed",n.panner.speed},{"fractionalPart",n.panner.fractionalPart},{"coordinate",static_cast<int>(n.panner.coordinate)}};break;
     case MaterialNodeKind::ParticleColor:case MaterialNodeKind::RadialGradient:break;
     }
     return j;
@@ -78,7 +88,7 @@ MaterialNode readNode(const Json& j) {
         v.occlusion=o.at("occlusion").get<float>();v.opacity=o.at("opacity").get<float>();
         v.opacityMask=o.value("opacityMask",1.f);v.specular=o.value("specular",.5f);
         v.occlusionStrength=o.at("occlusionStrength").get<float>();v.alphaCutoff=o.at("alphaCutoff").get<float>();
-        v.doubleSided=o.at("doubleSided").get<bool>();break;
+        v.doubleSided=o.at("doubleSided").get<bool>();v.receiveFog=o.value("receiveFog",true);break;
     }
     case MaterialNodeKind::UV: {
         const auto& u=j.at("uv");n.uv.mode=static_cast<MaterialUvMode>(u.at("mode").get<int>());
@@ -94,7 +104,15 @@ MaterialNode readNode(const Json& j) {
     case MaterialNodeKind::Color:n.color=j.at("color").get<Vec4>();break;
     case MaterialNodeKind::Vector2:n.vector2=j.at("vector2").get<Vec2>();break;
     case MaterialNodeKind::Saturate:n.left=readValue(j.at("left"));break;
-    case MaterialNodeKind::Multiply:n.left=readValue(j.at("left"));n.right=readValue(j.at("right"));break;
+    case MaterialNodeKind::Multiply:case MaterialNodeKind::Add:case MaterialNodeKind::Power:
+        n.left=readValue(j.at("left"));n.right=readValue(j.at("right"));break;
+    case MaterialNodeKind::Lerp:n.left=readValue(j.at("left"));n.right=readValue(j.at("right"));n.alpha=readValue(j.at("alpha"));break;
+    case MaterialNodeKind::Time: {
+        const auto& t=j.at("time");n.time={t.at("ignorePause").get<bool>(),t.at("periodEnabled").get<bool>(),t.at("period").get<float>()};break;
+    }
+    case MaterialNodeKind::Panner: {
+        const auto& p=j.at("panner");n.panner={p.at("speed").get<Vec2>(),p.at("fractionalPart").get<bool>(),static_cast<MaterialUvMode>(p.at("coordinate").get<int>())};break;
+    }
     case MaterialNodeKind::ParticleColor:case MaterialNodeKind::RadialGradient:break;
     default:invalid("unknown node kind.");
     }
@@ -109,7 +127,8 @@ MaterialValueType outputType(const MaterialGraph& graph,MaterialNodeId id,Materi
     struct Pop {std::unordered_set<MaterialNodeId>& set;MaterialNodeId id;~Pop(){set.erase(id);}} pop{visiting,id};
     const auto type=[&]()->MaterialValueType {
     switch(node->kind) {
-    case MaterialNodeKind::UV:if(pin==MaterialPin::UV)return MaterialValueType::Mapping;break;
+    case MaterialNodeKind::UV:case MaterialNodeKind::Panner:if(pin==MaterialPin::UV)return MaterialValueType::Mapping;break;
+    case MaterialNodeKind::Time:
     case MaterialNodeKind::Scalar:if(pin==MaterialPin::Value)return MaterialValueType::Scalar;break;
     case MaterialNodeKind::Saturate:
     case MaterialNodeKind::RadialGradient:if(pin==MaterialPin::Value)return MaterialValueType::Scalar;break;
@@ -127,16 +146,23 @@ MaterialValueType outputType(const MaterialGraph& graph,MaterialNodeId id,Materi
             if(pin==MaterialPin::R || pin==MaterialPin::G || pin==MaterialPin::B || pin==MaterialPin::A)return MaterialValueType::Scalar;
         }
         break;
-    case MaterialNodeKind::Multiply:
+    case MaterialNodeKind::Multiply:case MaterialNodeKind::Add:case MaterialNodeKind::Lerp:case MaterialNodeKind::Power:
         if(pin==MaterialPin::Value) {
             const auto inputType=[&](MaterialPin input,const MaterialValue& fallback) {
                 if(const auto* link=materialInputLink(graph,id,input))return outputType(graph,link->fromNode,link->fromPin,visiting,cache);
                 return fallback.type;
             };
             const auto a=inputType(MaterialPin::Left,node->left),b=inputType(MaterialPin::Right,node->right);
-            if(!numeric(a)||!numeric(b))invalid("Multiply accepts only Scalar, Vector2 and Color inputs.");
-            if(a!=MaterialValueType::Scalar&&b!=MaterialValueType::Scalar&&a!=b)invalid("Multiply cannot mix Vector2 and Color inputs.");
-            return a==MaterialValueType::Scalar?b:a;
+            if(node->kind==MaterialNodeKind::Power) {
+                if(!numeric(a)||!materialValueAssignable(b,MaterialValueType::Scalar))invalid("Power requires a numeric Base and a Scalar Exponent.");
+                return a;
+            }
+            const auto result=combined(a,b,materialNodeKindName(node->kind));
+            if(node->kind==MaterialNodeKind::Lerp) {
+                const auto alpha=inputType(MaterialPin::Alpha,node->alpha);
+                if(alpha!=MaterialValueType::Scalar&&alpha!=result)invalid("Lerp Alpha must be Scalar or match A/B.");
+            }
+            return result;
         }
         break;
     case MaterialNodeKind::Output:break;
@@ -145,8 +171,18 @@ MaterialValueType outputType(const MaterialGraph& graph,MaterialNodeId id,Materi
     }();
     cache.emplace(key,type);return type;
 }
-Json activeJson(const MaterialGraph& graph,MaterialShading shading,MaterialBlend blend,bool values) {
-    const auto order=materialGraphOrder(graph,shading,blend);
+std::vector<MaterialNodeId> branchOrder(const MaterialGraph& graph,MaterialShading shading,MaterialBlend blend,MaterialNodeId root) {
+    validateMaterialGraph(graph);std::vector<MaterialNodeId> result;std::unordered_set<MaterialNodeId> visited;
+    const auto visit=[&](auto&& self,MaterialNodeId id)->void {
+        if(!visited.insert(id).second)return;const auto* node=findMaterialNode(graph,id);
+        if(!node)invalid("hash root refers to a missing node.");
+        for(const auto& input:materialNodeInputs(graph,*node,shading,blend))if(const auto* link=materialInputLink(graph,id,input.pin))self(self,link->fromNode);
+        result.push_back(id);
+    };
+    visit(visit,root);return result;
+}
+Json activeJson(const MaterialGraph& graph,MaterialShading shading,MaterialBlend blend,bool values,MaterialNodeId root=0) {
+    const auto order=root?branchOrder(graph,shading,blend,root):materialGraphOrder(graph,shading,blend);
     std::unordered_map<MaterialNodeId,std::size_t> indices;
     for(std::size_t i=0;i<order.size();++i)indices[order[i]]=i;
     Json result{{"shading",static_cast<int>(shading)},{"blend",static_cast<int>(blend)},
@@ -157,7 +193,8 @@ Json activeJson(const MaterialGraph& graph,MaterialShading shading,MaterialBlend
         j["id"]=indices.at(id);
         if(!values) {
             if(node.kind==MaterialNodeKind::Texture2D)j["role"]=static_cast<int>(node.texture.role);
-            if(node.kind==MaterialNodeKind::Multiply){j["leftType"]=static_cast<int>(node.left.type);j["rightType"]=static_cast<int>(node.right.type);}
+            if(arithmetic(node.kind)){j["leftType"]=static_cast<int>(node.left.type);j["rightType"]=static_cast<int>(node.right.type);}
+            if(node.kind==MaterialNodeKind::Lerp)j["alphaType"]=static_cast<int>(node.alpha.type);
         }
         result["nodes"].push_back(std::move(j));
         for(const auto& input:materialNodeInputs(graph,node,shading,blend))if(const auto* link=materialInputLink(graph,id,input.pin))
@@ -170,8 +207,10 @@ std::uint64_t hash(const std::string& text) {
 }
 void retainDisconnectedType(MaterialGraph& graph,const MaterialLink& link) {
     auto* target=findMaterialNode(graph,link.toNode);
-    if(!target||target->kind!=MaterialNodeKind::Multiply)return;
-    auto* fallback=link.toPin==MaterialPin::Left?&target->left:link.toPin==MaterialPin::Right?&target->right:nullptr;
+    if(!target||!arithmetic(target->kind))return;
+    if(target->kind==MaterialNodeKind::Power&&link.toPin==MaterialPin::Right)return;
+    auto* fallback=link.toPin==MaterialPin::Left?&target->left:link.toPin==MaterialPin::Right?&target->right:
+        target->kind==MaterialNodeKind::Lerp&&link.toPin==MaterialPin::Alpha?&target->alpha:nullptr;
     if(!fallback)return;
     const auto type=materialOutputType(graph,link.fromNode,link.fromPin);
     if((type==MaterialValueType::Color||type==MaterialValueType::Vector2)&&fallback->type==MaterialValueType::Scalar) {
@@ -185,7 +224,9 @@ const char* materialNodeKindName(MaterialNodeKind kind) {
     switch(kind){case MaterialNodeKind::Output:return "Output";case MaterialNodeKind::UV:return "UV";
     case MaterialNodeKind::Texture2D:return "Texture 2D";case MaterialNodeKind::Scalar:return "Scalar (1D)";
     case MaterialNodeKind::Color:return "Constant";case MaterialNodeKind::Multiply:return "Multiply";case MaterialNodeKind::Vector2:return "Vector2";
-    case MaterialNodeKind::Saturate:return "Saturate";case MaterialNodeKind::ParticleColor:return "Particle Color";case MaterialNodeKind::RadialGradient:return "Radial Gradient";}return "Unknown";
+    case MaterialNodeKind::Saturate:return "Saturate";case MaterialNodeKind::ParticleColor:return "Particle Color";case MaterialNodeKind::RadialGradient:return "Radial Gradient";
+    case MaterialNodeKind::Add:return "Add";case MaterialNodeKind::Lerp:return "Lerp";case MaterialNodeKind::Panner:return "Panner";
+    case MaterialNodeKind::Time:return "Time";case MaterialNodeKind::Power:return "Power";}return "Unknown";
 }
 const char* materialPinName(MaterialPin pin) {
     switch(pin){case MaterialPin::Value:return "Value";case MaterialPin::RGB:return "RGB";case MaterialPin::R:return "R";
@@ -195,7 +236,8 @@ const char* materialPinName(MaterialPin pin) {
     case MaterialPin::Occlusion:return "Ambient Occlusion";case MaterialPin::Emission:return "Emissive Color";case MaterialPin::Opacity:return "Opacity";
     case MaterialPin::Specular:return "Specular";case MaterialPin::OpacityMask:return "Opacity Mask";
     case MaterialPin::XY:return "XY";case MaterialPin::X:return "X";case MaterialPin::Y:return "Y";
-    case MaterialPin::ScaleXY:return "Scale XY";case MaterialPin::OffsetXY:return "Offset XY";}return "Unknown";
+    case MaterialPin::ScaleXY:return "Scale XY";case MaterialPin::OffsetXY:return "Offset XY";
+    case MaterialPin::Alpha:return "Alpha";case MaterialPin::Time:return "Time";case MaterialPin::Speed:return "Speed";}return "Unknown";
 }
 const char* materialValueTypeName(MaterialValueType type) {
     switch(type){case MaterialValueType::Scalar:return "Scalar";case MaterialValueType::Color:return "Color";
@@ -244,17 +286,22 @@ std::vector<MaterialPinDefinition> materialNodeInputs(const MaterialGraph& graph
     if(n.kind==MaterialNodeKind::Texture2D||n.kind==MaterialNodeKind::RadialGradient)return {{MaterialPin::UV,"UV",MaterialValueType::Mapping}};
     if(n.kind==MaterialNodeKind::Saturate)return {{MaterialPin::Left,"Value",MaterialValueType::Scalar}};
     if(n.kind==MaterialNodeKind::UV)return {{MaterialPin::ScaleXY,"Scale XY",MaterialValueType::Vector2},{MaterialPin::OffsetXY,"Offset XY",MaterialValueType::Vector2}};
-    if(n.kind==MaterialNodeKind::Multiply) {
+    if(n.kind==MaterialNodeKind::Panner)return {{MaterialPin::UV,"Coordinate",MaterialValueType::Mapping},
+        {MaterialPin::Time,"Time",MaterialValueType::Scalar},{MaterialPin::Speed,"Speed",MaterialValueType::Vector2}};
+    if(arithmetic(n.kind)) {
         const auto type=[&](MaterialPin pin,const MaterialValue& fallback){const auto* l=materialInputLink(graph,n.id,pin);return l?materialOutputType(graph,l->fromNode,l->fromPin):fallback.type;};
-        return {{MaterialPin::Left,"A",type(MaterialPin::Left,n.left)},{MaterialPin::Right,"B",type(MaterialPin::Right,n.right)}};
+        if(n.kind==MaterialNodeKind::Power)return {{MaterialPin::Left,"Base",type(MaterialPin::Left,n.left)},{MaterialPin::Right,"Exponent",MaterialValueType::Scalar}};
+        auto result=std::vector<MaterialPinDefinition>{{MaterialPin::Left,"A",type(MaterialPin::Left,n.left)},{MaterialPin::Right,"B",type(MaterialPin::Right,n.right)}};
+        if(n.kind==MaterialNodeKind::Lerp)result.push_back({MaterialPin::Alpha,"Alpha",type(MaterialPin::Alpha,n.alpha)});
+        return result;
     }
     return {};
 }
 std::vector<MaterialPinDefinition> materialNodeOutputs(const MaterialGraph& graph,const MaterialNode& n) {
     if(n.kind==MaterialNodeKind::Output)return {};
-    if(n.kind==MaterialNodeKind::UV)return {{MaterialPin::UV,"UV",MaterialValueType::Mapping}};
+    if(n.kind==MaterialNodeKind::UV||n.kind==MaterialNodeKind::Panner)return {{MaterialPin::UV,"UV",MaterialValueType::Mapping}};
     if(n.kind==MaterialNodeKind::Vector2)return {{MaterialPin::XY,"XY",MaterialValueType::Vector2},{MaterialPin::X,"X",MaterialValueType::Scalar},{MaterialPin::Y,"Y",MaterialValueType::Scalar}};
-    if(n.kind==MaterialNodeKind::Scalar||n.kind==MaterialNodeKind::Multiply||n.kind==MaterialNodeKind::RadialGradient||n.kind==MaterialNodeKind::Saturate)return {{MaterialPin::Value,"Value",materialOutputType(graph,n.id,MaterialPin::Value)}};
+    if(n.kind==MaterialNodeKind::Scalar||arithmetic(n.kind)||n.kind==MaterialNodeKind::Time||n.kind==MaterialNodeKind::RadialGradient||n.kind==MaterialNodeKind::Saturate)return {{MaterialPin::Value,"Value",materialOutputType(graph,n.id,MaterialPin::Value)}};
     if(n.kind==MaterialNodeKind::Texture2D&&n.texture.role==MaterialTextureRole::Normal)return {{MaterialPin::Normal,"Normal",MaterialValueType::Normal}};
     return {{MaterialPin::RGB,"RGB",MaterialValueType::Color},{MaterialPin::R,"R",MaterialValueType::Scalar},
         {MaterialPin::G,"G",MaterialValueType::Scalar},{MaterialPin::B,"B",MaterialValueType::Scalar},{MaterialPin::A,"A",MaterialValueType::Scalar}};
@@ -264,7 +311,12 @@ MaterialValueType materialOutputType(const MaterialGraph& graph,MaterialNodeId i
 }
 MaterialValue materialInputDefault(const MaterialNode& n,MaterialPin pin) {
     if(n.kind==MaterialNodeKind::Saturate&&pin==MaterialPin::Left)return n.left;
-    if(n.kind==MaterialNodeKind::Multiply){if(pin==MaterialPin::Left)return n.left;if(pin==MaterialPin::Right)return n.right;}
+    if(arithmetic(n.kind)){if(pin==MaterialPin::Left)return n.left;if(pin==MaterialPin::Right)return n.right;if(n.kind==MaterialNodeKind::Lerp&&pin==MaterialPin::Alpha)return n.alpha;}
+    if(n.kind==MaterialNodeKind::Panner) {
+        if(pin==MaterialPin::UV)return {MaterialValueType::Mapping,{}};
+        if(pin==MaterialPin::Time)return {MaterialValueType::Scalar,{0,0,0,0}};
+        if(pin==MaterialPin::Speed)return {MaterialValueType::Vector2,{n.panner.speed[0],n.panner.speed[1],0,0}};
+    }
     if((n.kind==MaterialNodeKind::Texture2D||n.kind==MaterialNodeKind::RadialGradient)&&pin==MaterialPin::UV)return {MaterialValueType::Mapping,{}};
     if(n.kind==MaterialNodeKind::UV) {
         if(pin==MaterialPin::ScaleXY)return {MaterialValueType::Vector2,{n.uv.scale[0],n.uv.scale[1],0,0}};
@@ -288,22 +340,42 @@ bool materialExpressionUniform(const MaterialGraph& graph,MaterialNodeId id,Mate
     const auto visit=[&](auto&& self,MaterialNodeId current)->bool {
         if(!visited.insert(current).second)return true;
         const auto& n=*findMaterialNode(graph,current);
-        if(n.kind==MaterialNodeKind::Scalar||n.kind==MaterialNodeKind::Color||n.kind==MaterialNodeKind::Vector2)return true;
-        if(n.kind!=MaterialNodeKind::Multiply&&n.kind!=MaterialNodeKind::Saturate)return false;
-        for(const auto input:{MaterialPin::Left,MaterialPin::Right})
-            if(n.kind!=MaterialNodeKind::Saturate||input==MaterialPin::Left)
-                if(const auto* link=materialInputLink(graph,current,input);link&&!self(self,link->fromNode))return false;
+        if(n.kind==MaterialNodeKind::Scalar||n.kind==MaterialNodeKind::Color||n.kind==MaterialNodeKind::Vector2||n.kind==MaterialNodeKind::Time)return true;
+        if(!arithmetic(n.kind)&&n.kind!=MaterialNodeKind::Saturate)return false;
+        const auto& settings=materialOutputNode(graph).output;
+        for(const auto& input:materialNodeInputs(graph,n,settings.shading,settings.blend))
+            if(const auto* link=materialInputLink(graph,current,input.pin);link&&!self(self,link->fromNode))return false;
         return true;
     };
     return visit(visit,id);
 }
-MaterialValue evaluateMaterialUniform(const MaterialGraph& graph,MaterialNodeId id,MaterialPin pin) {
+bool materialExpressionTimeDependent(const MaterialGraph& graph,MaterialNodeId id,MaterialPin pin) {
+    (void)materialOutputType(graph,id,pin);
+    std::unordered_set<MaterialNodeId> visited;
+    const auto& settings=materialOutputNode(graph).output;
+    const auto visit=[&](auto&& self,MaterialNodeId current)->bool {
+        if(!visited.insert(current).second)return false;
+        const auto& node=*findMaterialNode(graph,current);
+        if(node.kind==MaterialNodeKind::Time)return true;
+        if(node.kind==MaterialNodeKind::Panner&&!materialInputLink(graph,current,MaterialPin::Time))return true;
+        for(const auto& input:materialNodeInputs(graph,node,settings.shading,settings.blend))
+            if(const auto* link=materialInputLink(graph,current,input.pin);link&&self(self,link->fromNode))return true;
+        return false;
+    };
+    return visit(visit,id);
+}
+MaterialValue evaluateMaterialUniform(const MaterialGraph& graph,MaterialNodeId id,MaterialPin pin,MaterialEvaluationContext context) {
     if(!materialExpressionUniform(graph,id,pin))invalid("node "+std::to_string(id)+" is not a uniform numeric expression.");
     std::map<std::pair<MaterialNodeId,MaterialPin>,MaterialValue> cache;
     const auto evaluate=[&](auto&& self,MaterialNodeId current,MaterialPin output)->MaterialValue {
         const auto key=std::pair{current,output};if(const auto found=cache.find(key);found!=cache.end())return found->second;
         const auto& n=*findMaterialNode(graph,current);MaterialValue result;result.type=materialOutputType(graph,current,output);
-        if(n.kind==MaterialNodeKind::Scalar)result.value={n.scalar,n.scalar,n.scalar,n.scalar};
+        if(n.kind==MaterialNodeKind::Time) {
+            double seconds=n.time.ignorePause?context.realSeconds:context.gameSeconds;
+            if(!std::isfinite(seconds))invalid("Time requires finite frame seconds.");
+            if(n.time.periodEnabled)seconds=n.time.period>0?seconds-std::floor(seconds/n.time.period)*n.time.period:0;
+            const auto value=static_cast<float>(seconds);result.value={value,value,value,value};
+        } else if(n.kind==MaterialNodeKind::Scalar)result.value={n.scalar,n.scalar,n.scalar,n.scalar};
         else if(n.kind==MaterialNodeKind::Vector2) {
             if(output==MaterialPin::XY)result.value={n.vector2[0],n.vector2[1],0,0};
             else {const float value=n.vector2[output==MaterialPin::X?0:1];result.value={value,value,value,value};}
@@ -319,7 +391,14 @@ MaterialValue evaluateMaterialUniform(const MaterialGraph& graph,MaterialNodeId 
                 const auto value=std::clamp(left.value[0],0.f,1.f);result.value={value,value,value,value};
             }else {
                 const auto right=input(MaterialPin::Right,n.right);
-                for(std::size_t i=0;i<4;++i)result.value[i]=left.value[left.type==MaterialValueType::Scalar?0:i]*right.value[right.type==MaterialValueType::Scalar?0:i];
+                const auto alpha=n.kind==MaterialNodeKind::Lerp?input(MaterialPin::Alpha,n.alpha):MaterialValue{};
+                for(std::size_t i=0;i<4;++i) {
+                    const auto a=left.value[left.type==MaterialValueType::Scalar?0:i],b=right.value[right.type==MaterialValueType::Scalar||n.kind==MaterialNodeKind::Power?0:i];
+                    if(n.kind==MaterialNodeKind::Add)result.value[i]=a+b;
+                    else if(n.kind==MaterialNodeKind::Lerp){const auto t=alpha.value[alpha.type==MaterialValueType::Scalar?0:i];result.value[i]=a+(b-a)*t;}
+                    else if(n.kind==MaterialNodeKind::Power)result.value[i]=a<=2.980233e-8f?0.f:std::pow(a,b);
+                    else result.value[i]=a*b;
+                }
             }
         }
         if(!math::finite(result.value))invalid("node "+std::to_string(current)+" uniform expression overflows its supported range.");
@@ -327,23 +406,43 @@ MaterialValue evaluateMaterialUniform(const MaterialGraph& graph,MaterialNodeId 
     };
     return evaluate(evaluate,id,pin);
 }
-MaterialUvMapping resolveMaterialUvMapping(const MaterialGraph& graph,MaterialNodeId id) {
+MaterialUvMapping resolveMaterialUvMapping(const MaterialGraph& graph,MaterialNodeId id,MaterialEvaluationContext context) {
     const auto* node=findMaterialNode(graph,id);
-    if(!node||node->kind!=MaterialNodeKind::UV)invalid("mapping resolver requires a UV node.");
+    if(!node||(node->kind!=MaterialNodeKind::UV&&node->kind!=MaterialNodeKind::Panner))invalid("mapping resolver requires a UV or Panner node.");
+    if(node->kind==MaterialNodeKind::Panner) {
+        MaterialUvMapping result;result.mode=node->panner.coordinate;
+        if(const auto* link=materialInputLink(graph,id,MaterialPin::UV))result=resolveMaterialUvMapping(graph,link->fromNode,context);
+        double seconds=context.gameSeconds;
+        if(const auto* link=materialInputLink(graph,id,MaterialPin::Time))seconds=evaluateMaterialUniform(graph,link->fromNode,link->fromPin,context).value[0];
+        auto speed=node->panner.speed;
+        if(const auto* link=materialInputLink(graph,id,MaterialPin::Speed)) {
+            const auto value=evaluateMaterialUniform(graph,link->fromNode,link->fromPin,context);
+            if(value.type!=MaterialValueType::Vector2)invalid("Panner Speed requires a uniform Vector2 expression.");
+            speed={value.value[0],value.value[1]};
+        }
+        if(!std::isfinite(seconds))invalid("Panner requires finite frame seconds.");
+        for(unsigned axis=0;axis<2;++axis) {
+            double displacement=seconds*speed[axis];
+            if(node->panner.fractionalPart)displacement-=std::floor(displacement);
+            result.offset[axis]=static_cast<float>(result.offset[axis]+displacement);
+        }
+        if(!math::finite(result.offset))invalid("Panner mapping overflows its supported range.");
+        return result;
+    }
     auto result=node->uv;
     for(const auto input:{MaterialPin::ScaleXY,MaterialPin::OffsetXY})if(const auto* link=materialInputLink(graph,id,input)) {
-        const auto value=evaluateMaterialUniform(graph,link->fromNode,link->fromPin);
+        const auto value=evaluateMaterialUniform(graph,link->fromNode,link->fromPin,context);
         if(value.type!=MaterialValueType::Vector2)invalid("UV transforms require a Vector2 expression.");
         auto& target=input==MaterialPin::ScaleXY?result.scale:result.offset;
         target[0]=value.value[0];target[1]=value.value[1];
     }
     return result;
 }
-MaterialUvMapping materialTextureMapping(const MaterialGraph& graph,MaterialNodeId id) {
+MaterialUvMapping materialTextureMapping(const MaterialGraph& graph,MaterialNodeId id,MaterialEvaluationContext context) {
     const auto* node=findMaterialNode(graph,id);
     if(!node||node->kind!=MaterialNodeKind::Texture2D)invalid("texture mapping resolver requires a Texture 2D node.");
     const auto* input=materialInputLink(graph,id,MaterialPin::UV);
-    return input?resolveMaterialUvMapping(graph,input->fromNode):MaterialUvMapping{};
+    return input?resolveMaterialUvMapping(graph,input->fromNode,context):MaterialUvMapping{};
 }
 void migrateLegacyParticleGraph(MaterialGraph& graph,bool softDisc) {
     validateMaterialGraph(graph);
@@ -395,6 +494,8 @@ MaterialNode& addMaterialNode(MaterialGraph& graph,MaterialNodeKind kind,Vec2 po
     if(kind==MaterialNodeKind::Output&&std::any_of(graph.nodes.begin(),graph.nodes.end(),[](const auto& n){return n.kind==MaterialNodeKind::Output;}))invalid("only one Output node is allowed.");
     if(!graph.nextNodeId||graph.nextNodeId==std::numeric_limits<MaterialNodeId>::max())invalid("node identity space is exhausted.");
     MaterialNode node;node.id=graph.nextNodeId++;node.kind=kind;node.name=materialNodeKindName(kind);node.position=position;
+    if(kind==MaterialNodeKind::Add||kind==MaterialNodeKind::Lerp||kind==MaterialNodeKind::Power)node.left.value={0,0,0,0};
+    if(kind==MaterialNodeKind::Power)node.right.value={2,2,2,2};
     graph.nodes.push_back(std::move(node));return graph.nodes.back();
 }
 bool removeMaterialNode(MaterialGraph& graph,MaterialNodeId id) {
@@ -443,8 +544,14 @@ void validateMaterialGraph(const MaterialGraph& graph) {
         case MaterialNodeKind::ParticleColor:case MaterialNodeKind::RadialGradient:break;
         case MaterialNodeKind::Saturate:
             if(n.left.type!=MaterialValueType::Scalar||!math::finite(n.left.value))invalid("Saturate requires a finite Scalar input default.");break;
-        case MaterialNodeKind::Multiply:
-            if(!numeric(n.left.type)||!numeric(n.right.type)||!math::finite(n.left.value)||!math::finite(n.right.value))invalid("Multiply defaults must be finite Scalar, Vector2 or Color values.");break;
+        case MaterialNodeKind::Multiply:case MaterialNodeKind::Add:case MaterialNodeKind::Lerp:case MaterialNodeKind::Power:
+            if(!numeric(n.left.type)||!numeric(n.right.type)||!math::finite(n.left.value)||!math::finite(n.right.value))invalid("Arithmetic defaults must be finite Scalar, Vector2 or Color values.");
+            if(n.kind==MaterialNodeKind::Power&&n.right.type!=MaterialValueType::Scalar)invalid("Power Exponent default must be Scalar.");
+            if(n.kind==MaterialNodeKind::Lerp&&(!numeric(n.alpha.type)||!math::finite(n.alpha.value)))invalid("Lerp Alpha default must be finite and numeric.");break;
+        case MaterialNodeKind::Time:
+            if(!math::finite(n.time.period)||n.time.period<0)invalid("Time Period must be finite and nonnegative.");break;
+        case MaterialNodeKind::Panner:
+            if(!math::finite(n.panner.speed)||static_cast<unsigned>(n.panner.coordinate)>1)invalid("Panner requires finite Speed and UV0/UV1 coordinates.");break;
         default:invalid("unknown node kind.");
         }
     }
@@ -468,8 +575,10 @@ void validateMaterialGraph(const MaterialGraph& graph) {
     for(const auto& node:graph.nodes)visit(visit,node.id);
     for(const auto& link:graph.links) {
         const auto& target=*findMaterialNode(graph,link.toNode);const auto type=materialOutputType(graph,link.fromNode,link.fromPin);
-        if(target.kind==MaterialNodeKind::Multiply&&(link.toPin==MaterialPin::Left||link.toPin==MaterialPin::Right)) {
-            if(!numeric(type))invalid("Multiply accepts only Scalar, Vector2 and Color inputs.");continue;
+        if(arithmetic(target.kind)&&(link.toPin==MaterialPin::Left||link.toPin==MaterialPin::Right||
+            (target.kind==MaterialNodeKind::Lerp&&link.toPin==MaterialPin::Alpha))&&
+            !(target.kind==MaterialNodeKind::Power&&link.toPin==MaterialPin::Right)) {
+            if(!numeric(type))invalid("Arithmetic accepts only Scalar, Vector2 and Color inputs.");continue;
         }
         const auto inputs=materialNodeInputs(graph,target,MaterialShading::StandardPbr,MaterialBlend::Mask,true);
         const auto pin=std::find_if(inputs.begin(),inputs.end(),[&](const auto& p){return p.pin==link.toPin;});
@@ -479,18 +588,12 @@ void validateMaterialGraph(const MaterialGraph& graph) {
     // Validate every authored arithmetic/mapping branch, including dormant or
     // disconnected branches; upstream reconnection must not introduce warps.
     for(const auto& node:graph.nodes) {
-        if(node.kind==MaterialNodeKind::Multiply)(void)materialOutputType(graph,node.id,MaterialPin::Value);
-        if(node.kind==MaterialNodeKind::UV)(void)resolveMaterialUvMapping(graph,node.id);
+        if(arithmetic(node.kind))(void)materialOutputType(graph,node.id,MaterialPin::Value);
+        if(node.kind==MaterialNodeKind::UV||node.kind==MaterialNodeKind::Panner)(void)resolveMaterialUvMapping(graph,node.id);
     }
 }
 std::vector<MaterialNodeId> materialGraphOrder(const MaterialGraph& graph,MaterialShading shading,MaterialBlend blend) {
-    validateMaterialGraph(graph);std::vector<MaterialNodeId> result;std::unordered_set<MaterialNodeId> visited;
-    const auto visit=[&](auto&& self,MaterialNodeId id)->void {
-        if(!visited.insert(id).second)return;const auto& n=*findMaterialNode(graph,id);
-        for(const auto& input:materialNodeInputs(graph,n,shading,blend))if(const auto* link=materialInputLink(graph,id,input.pin))self(self,link->fromNode);
-        result.push_back(id);
-    };
-    visit(visit,materialOutputNode(graph).id);return result;
+    return branchOrder(graph,shading,blend,materialOutputNode(graph).id);
 }
 std::vector<std::string> materialGraphTextureReferences(const MaterialGraph& graph) {
     std::vector<std::string> result;
@@ -504,11 +607,12 @@ void rewriteMaterialGraphTextures(MaterialGraph& graph,const std::function<std::
 }
 std::uint64_t materialGraphTopologyHash(const MaterialGraph& graph,MaterialShading shading,MaterialBlend blend) {return hash(activeJson(graph,shading,blend,false).dump());}
 std::uint64_t materialGraphValueHash(const MaterialGraph& graph,MaterialShading shading,MaterialBlend blend) {return hash(activeJson(graph,shading,blend,true).dump());}
+std::uint64_t materialGraphValueHash(const MaterialGraph& graph,MaterialShading shading,MaterialBlend blend,MaterialNodeId root) {return hash(activeJson(graph,shading,blend,true,root).dump());}
 std::uint64_t materialGraphLayoutHash(const MaterialGraph& graph) {
     Json j=Json::array();for(const auto& n:graph.nodes)j.push_back({n.id,n.name,n.position,n.scalarRange,n.uv.scaleLinked});return hash(j.dump());
 }
 std::string serializeMaterialGraph(const MaterialGraph& graph) {
-    validateMaterialGraph(graph);Json j{{"version",3},{"nextNodeId",graph.nextNodeId},{"nextLinkId",graph.nextLinkId},{"nodes",Json::array()},{"links",Json::array()}};
+    validateMaterialGraph(graph);Json j{{"version",4},{"nextNodeId",graph.nextNodeId},{"nextLinkId",graph.nextLinkId},{"nodes",Json::array()},{"links",Json::array()}};
     for(const auto& n:graph.nodes)j["nodes"].push_back(nodeJson(n,true));
     for(const auto& l:graph.links)j["links"].push_back({{"id",l.id},{"fromNode",l.fromNode},{"fromPin",static_cast<int>(l.fromPin)},
         {"toNode",l.toNode},{"toPin",static_cast<int>(l.toPin)}});
@@ -516,7 +620,7 @@ std::string serializeMaterialGraph(const MaterialGraph& graph) {
 }
 MaterialGraph parseMaterialGraph(const std::string& text) {
     if(text.size()>1024u*1024u)invalid("serialized graph exceeds 1 MiB.");const auto j=Json::parse(text);
-    if((j.at("version")!=1&&j.at("version")!=2&&j.at("version")!=3)||!j.at("nodes").is_array()||!j.at("links").is_array()||
+    if((j.at("version")!=1&&j.at("version")!=2&&j.at("version")!=3&&j.at("version")!=4)||!j.at("nodes").is_array()||!j.at("links").is_array()||
         j.at("nodes").size()>MaterialGraph::MaximumNodes||j.at("links").size()>MaterialGraph::MaximumLinks)invalid("unsupported graph version or counts.");
     MaterialGraph graph;graph.nextNodeId=j.at("nextNodeId").get<MaterialNodeId>();graph.nextLinkId=j.at("nextLinkId").get<MaterialLinkId>();
     for(const auto& n:j.at("nodes"))graph.nodes.push_back(readNode(n));
@@ -530,7 +634,7 @@ MaterialGraph parseMaterialGraph(const std::string& text) {
             for(auto& link:graph.links)if(link.toNode==root.id&&link.toPin==MaterialPin::Opacity)link.toPin=MaterialPin::OpacityMask;
         }
     }
-    if(j.at("version")!=3) {
+    if(j.at("version").get<int>()<3) {
         const auto& root=materialOutputNode(graph);
         const auto& serialized=*std::find_if(j.at("nodes").begin(),j.at("nodes").end(),[&](const auto& value){return value.at("id")==root.id;});
         const auto& output=serialized.at("output");

@@ -87,7 +87,7 @@ void MaterialEditor::finishInteraction(AssetLibrary* assets) {
         // Undo may already have restored another value before properties draw.
         suppressFinalizedUpdate_=true;
     }
-    propertyEditing_=false;graph_.finishInteraction();colorEditor_.cancel();emissionEditor_.cancel();
+    propertyEditing_=false;graph_.finishInteraction();colorEditor_.cancel();emissionEditor_.cancel();alphaEditor_.cancel();
     if(assets)publish(*assets);
 }
 void MaterialEditor::request(Pending pending,std::string id,AssetLibrary* assets) {
@@ -255,10 +255,10 @@ void MaterialEditor::properties(AssetLibrary& assets) {
     auto selected=graph_.selectedNode();
     const auto* selectedNode=findMaterialNode(document_.definition().graph,selected);
     if(!selectedNode || selectedNode->kind==MaterialNodeKind::Output)selected=materialOutputNode(document_.definition().graph).id;
-    if(propertyNode_!=selected) {propertyNode_=selected;colorEditor_.cancel();emissionEditor_.cancel();}
+    if(propertyNode_!=selected) {propertyNode_=selected;colorEditor_.cancel();emissionEditor_.cancel();alphaEditor_.cancel();}
     const bool escape=propertyEditing_ && ImGui::IsKeyPressed(ImGuiKey_Escape,false);
     const bool canceled=suppressFinalizedUpdate_ || escape;suppressFinalizedUpdate_=false;
-    if(escape){document_.cancel();propertyEditing_=false;colorEditor_.cancel();emissionEditor_.cancel();}
+    if(escape){document_.cancel();propertyEditing_=false;colorEditor_.cancel();emissionEditor_.cancel();alphaEditor_.cancel();}
     const auto finish=[&] {
         if(!propertyEditing_)return;
         if(!document_.commit()){message_=document_.status();document_.cancel();}
@@ -304,6 +304,8 @@ void MaterialEditor::properties(AssetLibrary& assets) {
             if(materialOutputNode(document_.definition().graph).output.blend==MaterialBlend::Mask)
                 control("Change alpha cutoff",[](auto& n){return ImGui::SliderFloat("Alpha cutoff",&n.output.alphaCutoff,0,1,"%.3f");});
             control("Change material culling",[](auto& n){return ImGui::Checkbox("Double sided",&n.output.doubleSided);});
+            control("Toggle material fog",[](auto& n){return ImGui::Checkbox("Receive Fog",&n.output.receiveFog);});
+            if(ImGui::IsItemHovered())ImGui::SetTooltip("Apply the scene's distance and height fog to this material.");
             if(materialOutputNode(document_.definition().graph).output.shading==MaterialShading::StandardPbr)
                 control("Change occlusion strength",[](auto& n){return ImGui::SliderFloat("AO strength",&n.output.occlusionStrength,0,1,"%.3f");});
             ImGui::TreePop();
@@ -366,6 +368,20 @@ void MaterialEditor::properties(AssetLibrary& assets) {
             ImGui::SeparatorText("Vector2");
             control("Change vector",[](auto& n){return ImGui::DragFloat2("X / Y",n.vector2.data(),.01f,0,0,"%.3f");});
         }
+        if(node.kind==MaterialNodeKind::Time) {
+            ImGui::SeparatorText("Time");
+            control("Change time clock",[](auto& n){return ImGui::Checkbox("Ignore pause",&n.time.ignorePause);});
+            control("Toggle time period",[](auto& n){return ImGui::Checkbox("Use period",&n.time.periodEnabled);});
+            if(node.time.periodEnabled)control("Change time period",[](auto& n){return ImGui::DragFloat("Period (seconds)",&n.time.period,.01f,0,0,"%.3f");});
+        }
+        if(node.kind==MaterialNodeKind::Panner) {
+            ImGui::SeparatorText("Panner");
+            if(!materialInputLink(document_.definition().graph,selected,MaterialPin::UV))
+                control("Change panner coordinate",[](auto& n){int coordinate=static_cast<int>(n.panner.coordinate);const bool changed=ImGui::Combo("Coordinate",&coordinate,"UV0\0UV1\0");if(changed)n.panner.coordinate=static_cast<MaterialUvMode>(coordinate);return changed;});
+            if(!materialInputLink(document_.definition().graph,selected,MaterialPin::Speed))
+                control("Change panner speed",[](auto& n){return ImGui::DragFloat2("Speed X / Y",n.panner.speed.data(),.01f,0,0,"%.3f");});
+            control("Change panner fractional part",[](auto& n){return ImGui::Checkbox("Fractional part",&n.panner.fractionalPart);});
+        }
         if(node.kind==MaterialNodeKind::Color)hdr("Constant","Change color",false);
         if(node.kind==MaterialNodeKind::Texture2D) {
             {
@@ -395,26 +411,31 @@ void MaterialEditor::properties(AssetLibrary& assets) {
         }
         if(node.kind==MaterialNodeKind::Saturate && !materialInputLink(document_.definition().graph,selected,MaterialPin::Left))
             control("Change saturate input",[](auto& n){return ImGui::DragFloat("Input",&n.left.value[0],.01f,0,0,"%.3f");});
-        if(node.kind==MaterialNodeKind::Multiply) {
+        if(node.kind==MaterialNodeKind::Multiply||node.kind==MaterialNodeKind::Add||node.kind==MaterialNodeKind::Lerp||node.kind==MaterialNodeKind::Power) {
             ImGui::SeparatorText("Default inputs");
-            for(const bool left:{true,false}) {
-                const auto pin=left?MaterialPin::Left:MaterialPin::Right;if(materialInputLink(document_.definition().graph,selected,pin))continue;
-                ImGui::PushID(left?"A":"B");
-                control("Change multiply default type",[&](auto& n){auto& value=left?n.left:n.right;int type=value.type==MaterialValueType::Color?1:value.type==MaterialValueType::Vector2?2:0;const bool changed=ImGui::Combo(left?"A type":"B type",&type,"Scalar\0Color\0Vector2\0");if(changed)value.type=type==0?MaterialValueType::Scalar:type==1?MaterialValueType::Color:MaterialValueType::Vector2;return changed;});
+            for(const auto pin:{MaterialPin::Left,MaterialPin::Right,MaterialPin::Alpha}) {
+                if(pin==MaterialPin::Alpha&&node.kind!=MaterialNodeKind::Lerp)continue;
+                if(materialInputLink(document_.definition().graph,selected,pin))continue;
+                const char* label=pin==MaterialPin::Alpha?"Alpha":node.kind==MaterialNodeKind::Power?(pin==MaterialPin::Left?"Base":"Exponent"):pin==MaterialPin::Left?"A":"B";
+                const auto fallback=[&](auto& n)->auto& {return pin==MaterialPin::Left?n.left:pin==MaterialPin::Right?n.right:n.alpha;};
+                ImGui::PushID(static_cast<int>(pin));
+                if(!(node.kind==MaterialNodeKind::Power&&pin==MaterialPin::Right))
+                    control("Change input default type",[&](auto& n){auto& value=fallback(n);int type=value.type==MaterialValueType::Color?1:value.type==MaterialValueType::Vector2?2:0;
+                        const bool changed=ImGui::Combo("Type",&type,"Scalar\0Color\0Vector2\0");if(changed)value.type=type==0?MaterialValueType::Scalar:type==1?MaterialValueType::Color:MaterialValueType::Vector2;return changed;});
                 auto candidate=document_.definition();auto* edited=findMaterialNode(candidate.graph,selected);
-                auto& value=left?edited->left:edited->right;
+                auto& value=fallback(*edited);
                 if(value.type==MaterialValueType::Color) {
                     Vec3 rgb{value.value[0],value.value[1],value.value[2]};
                     ImGui::BeginDisabled(!editable);
-                    const auto change=drawHdrColorControl(left?"A":"B",rgb,nullptr,left?colorEditor_:emissionEditor_);
+                    const auto change=drawHdrColorControl(label,rgb,nullptr,pin==MaterialPin::Left?colorEditor_:pin==MaterialPin::Right?emissionEditor_:alphaEditor_);
                     ImGui::EndDisabled();
-                    if(editable && !canceled && (change.activated || change.changed) && !document_.transactionActive())propertyEditing_=document_.begin("Change multiply default");
+                    if(editable && !canceled && (change.activated || change.changed) && !document_.transactionActive())propertyEditing_=document_.begin("Change input default");
                     if(editable && !canceled && change.changed && propertyEditing_) {
                         value.value={rgb[0],rgb[1],rgb[2],value.value[3]};
                         document_.update([&](auto& asset){asset=std::move(candidate);});
                     }
                     if(change.deactivated && propertyEditing_)finish();
-                } else control("Change multiply default",[&](auto& n){auto& fallback=left?n.left:n.right;return fallback.type==MaterialValueType::Vector2?ImGui::DragFloat2(left?"A":"B",fallback.value.data(),.01f,0,0,"%.3f"):ImGui::DragFloat(left?"A":"B",fallback.value.data(),.01f,0,0,"%.3f");});
+                } else control("Change input default",[&](auto& n){auto& value=fallback(n);return value.type==MaterialValueType::Vector2?ImGui::DragFloat2(label,value.value.data(),.01f,0,0,"%.3f"):ImGui::DragFloat(label,value.value.data(),.01f,0,0,"%.3f");});
                 ImGui::PopID();
             }
         }

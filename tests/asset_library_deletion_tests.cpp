@@ -4,6 +4,7 @@
 #include "assets/MaterialAsset.h"
 #include "assets/BuiltinGeometry.h"
 #include "crimson-renderer/MaterialGraphGpu.h"
+#include "editor/PreparedMaterialSignature.h"
 #include "scene/SceneDocument.h"
 #include "model_fixtures.h"
 #include <bgfx/platform.h>
@@ -443,6 +444,29 @@ void boxMaterialDeletionAndPublication(){
         "Default Box material fallback was not durable.");
     require(geometry->materials.front().baseColor==original && library.resolvedModelMaterials(*geometry,red.id).front().baseColor==original,"Deleted override damaged shared geometry/default material.");
 }
+void immutableMaterialMetadata(){
+    Project p;ResourceManager resources;AssetLibrary library(p.root,&resources);
+    auto material=createMaterialAsset(p.root,"Cached graph UVs");const auto output=materialOutputNode(material.graph).id;
+    const auto uv=addMaterialNode(material.graph,MaterialNodeKind::UV).id;
+    const auto texture=addMaterialNode(material.graph,MaterialNodeKind::Texture2D).id;
+    findMaterialNode(material.graph,texture)->texture.image.id="assets/textures/metadata-only.png";
+    connectMaterialNodes(material.graph,uv,MaterialPin::UV,texture,MaterialPin::UV);connectMaterialNodes(material.graph,texture,MaterialPin::RGB,output,MaterialPin::BaseColor);
+    canonicalizeMaterialAsset(material);library.publishMaterial(std::make_shared<MaterialAsset>(material));
+    ModelAsset model;model.id="metadata-only-model";model.materialIds={material.id};model.materials={defaultMaterialAsset().surface};model.primitives.resize(1);model.primitives.front().uvMask=1;
+    const auto first=library.findMaterial(material.id);
+    for(unsigned i=0;i<25;++i)require(library.modelMaterialsReady(model)&&library.modelMaterialsDiagnostic(model).empty()&&
+        library.resolvedModelMaterials(model).front().graph==first->surface.graph,"An unchanged immutable material failed repeated metadata reuse.");
+    findMaterialNode(material.graph,uv)->uv.mode=MaterialUvMode::UV1;library.publishMaterial(std::make_shared<MaterialAsset>(material));
+    require(library.findMaterial(material.id)!=first,"Material publication did not create a new immutable version.");
+    bool rejected=false;try{(void)library.resolvedModelMaterials(model);}catch(const std::exception&){rejected=true;}
+    require(rejected,"A newly published UV1 requirement reused stale UV0 validation.");
+    model.primitives.front().uvMask=3;require(!library.resolvedModelMaterials(model).empty(),"Changed geometry UV availability reused a stale model validation result.");
+    findMaterialNode(material.graph,uv)->uv.mode=MaterialUvMode::WorldTriplanar;library.publishMaterial(std::make_shared<MaterialAsset>(material));model.primitives.front().uvMask=0;
+    require(!library.resolvedModelMaterials(model).empty(),"Triplanar replacement retained the previous graph's UV requirements.");
+    findMaterialNode(material.graph,texture)->texture.image={};findMaterialNode(material.graph,uv)->uv.mode=MaterialUvMode::UV1;
+    library.publishMaterial(std::make_shared<MaterialAsset>(material));
+    require(!library.resolvedModelMaterials(model).empty(),"An unassigned texture inherited a stale UV requirement.");
+}
 void dormantGraphTextureDeletion(){
     Project p;const auto fixtures=model_test::writeModelFixtures(p.root/"source");const std::string image="assets/textures/dormant.png";
     fs::create_directories(p.root/"assets/textures");fs::copy_file(fixtures.image,p.root/image);
@@ -493,6 +517,17 @@ void pendingGraphKeepsCoverageExplicit() {
     findMaterialNode(graph,texture)->texture.image.id=image;
     connectMaterialNodes(graph,texture,MaterialPin::RGB,output,MaterialPin::BaseColor);
     canonicalizeMaterialAsset(material);saveMaterialAsset(p.root,material);
+    auto opaque=createMaterialAsset(p.root,"Conventional opaque fallback");
+    const auto opaqueOutput=materialOutputNode(opaque.graph).id;
+    const auto base=addMaterialNode(opaque.graph,MaterialNodeKind::Texture2D).id;
+    findMaterialNode(opaque.graph,base)->texture.image.id=image;
+    findMaterialNode(opaque.graph,base)->texture.sampler.wrapU=ModelWrap::Mirror;
+    connectMaterialNodes(opaque.graph,base,MaterialPin::RGB,opaqueOutput,MaterialPin::BaseColor);
+    const auto normal=addMaterialNode(opaque.graph,MaterialNodeKind::Texture2D).id;
+    findMaterialNode(opaque.graph,normal)->texture.image.id=image;
+    findMaterialNode(opaque.graph,normal)->texture.role=MaterialTextureRole::Normal;
+    connectMaterialNodes(opaque.graph,normal,MaterialPin::Normal,opaqueOutput,MaterialPin::Normal);
+    canonicalizeMaterialAsset(opaque);saveMaterialAsset(p.root,opaque);
     bgfx::renderFrame();bgfx::Init init;init.type=bgfx::RendererType::Noop;init.resolution.width=init.resolution.height=1;
     require(bgfx::init(init),"Could not initialize scoped Noop graph-fallback check.");
     try {
@@ -514,6 +549,30 @@ void pendingGraphKeepsCoverageExplicit() {
             const auto changed=library.preparedParticleMaterial(material.id);
             require(changed->ready&&!changed->current&&!changed->render.graph&&changed->render.baseColor[3]==.2f,
                 "A pending fallback was retained as though it were a prior complete graph bundle.");
+            ModelAsset model;model.id="pending-ordinary-model";model.materials={opaque.surface};model.primitives.resize(1);
+            model.primitives.front().material=0;model.primitives.front().uvMask=3;model.primitives.front().tangentUv=0;
+            ModelMaterialTextures pending;
+            const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{10};
+            do {
+                resources.pump();library.updateResources(bgfx::frame());pending=library.modelBindings(model).front();
+                if(pending.sourceReady&&pending.complete&&bgfx::isValid(pending.handles[0])&&bgfx::isValid(pending.handles[2]))break;
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }while(std::chrono::steady_clock::now()<deadline);
+            require(!pending.graphPending&&!pending.graph&&pending.diagnostic.empty()&&pending.sourceReady&&pending.complete&&pending.drawable()&&
+                bgfx::isValid(pending.handles[0])&&bgfx::isValid(pending.handles[2])&&pending.leases[0]&&pending.leases[2]&&
+                pending.sourceFingerprints[0]!=0&&pending.sourceFingerprints[2]!=0&&
+                (pending.flags[0]&BGFX_SAMPLER_U_MIRROR)!=0,
+                "An exact conventional graph did not render completely through embedded programs while its compiler was unavailable.");
+            model.primitives.front().tangentUv=1;
+            const auto mismatched=library.modelBindings(model).front();
+            require(mismatched.graphPending&&!mismatched.graph&&
+                std::all_of(mismatched.handles.begin(),mismatched.handles.end(),[](auto handle){return !bgfx::isValid(handle);}),
+                "A fixed graph fallback used a normal texture with a different authored tangent UV basis.");
+            model.primitives.front().tangentUv=0;model.materials={material.surface};
+            const auto alphaModel=library.modelBindings(model).front();
+            require(alphaModel.graphPending&&!alphaModel.graph&&
+                std::all_of(alphaModel.handles.begin(),alphaModel.handles.end(),[](auto handle){return !bgfx::isValid(handle);}),
+                "A cold alpha model graph inherited the conventional opaque texture fallback and implicit texture-alpha coverage.");
         }
         bgfx::shutdown();
     }catch(...){bgfx::shutdown();throw;}
@@ -528,11 +587,88 @@ void boxMaterialHistoryOnlyDeletion(){
     require(scene.history().size()==0 && scene.dirty() && scene.scene().find(box)->modelMaterial.empty() && read(p.root/scene.assetId())==saved,
         "History-only material deletion changed saved content or retained resurrectable references.");
 }
+void materialPreviewResources(const fs::path& compiler,const fs::path& sources,const fs::path& includes){
+    Project p;const std::string image="assets/textures/preview-pattern.png";
+    model_test::Bytes pixels(512*512*4,255);
+    for(std::size_t y=0;y<512;++y)for(std::size_t x=0;x<512;++x){const auto offset=(y*512+x)*4;pixels[offset]=x<256?255:0;pixels[offset+1]=y<256?0:255;}
+    fs::create_directories(p.root/"assets/textures");model_test::writeBytes(p.root/image,model_test::png(512,512,pixels));
+    auto material=createMaterialAsset(p.root,"Streamed preview");const auto output=materialOutputNode(material.graph).id;
+    const auto uv=addMaterialNode(material.graph,MaterialNodeKind::UV).id;findMaterialNode(material.graph,uv)->uv.mode=MaterialUvMode::WorldTriplanar;
+    const auto color=addMaterialNode(material.graph,MaterialNodeKind::Texture2D).id;
+    findMaterialNode(material.graph,color)->texture.image.id=image;findMaterialNode(material.graph,color)->texture.sampler.minFilter=ModelFilter::LinearMipmapLinear;
+    connectMaterialNodes(material.graph,uv,MaterialPin::UV,color,MaterialPin::UV);connectMaterialNodes(material.graph,color,MaterialPin::RGB,output,MaterialPin::BaseColor);
+    canonicalizeMaterialAsset(material);saveMaterialAsset(p.root,material);const auto sourceBytes=read(p.root/material.id);
+    bgfx::renderFrame();bgfx::Init init;init.type=bgfx::RendererType::Noop;init.resolution.width=init.resolution.height=1;
+    require(bgfx::init(init),"Could not initialize material-preview resource check.");
+    try {{
+        ResourceManager resources;MaterialGraphPrograms programs(resources,{compiler,sources,includes,p.root/"assets/cache/shaders"});
+        AssetLibrary library(p.root,&resources);library.setMaterialGraphPrograms(&programs);
+        const auto tick=[&]{resources.pump();library.updateResources(bgfx::frame());programs.trim();};
+        const auto until=[&](auto request,const auto& accepted,const char* failure){
+            const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{35};ModelMaterialTextures bindings;
+            while(std::chrono::steady_clock::now()<deadline){tick();bindings=request();if(accepted(bindings))return bindings;std::this_thread::sleep_for(std::chrono::milliseconds{2});}
+            throw std::runtime_error(std::string(failure)+": "+bindings.diagnostic);
+        };
+        const auto ready=[](const auto& binding){return binding.graph&&!binding.graphPending&&binding.sourceReady&&binding.complete&&binding.drawable();};
+        auto full=until([&]{return library.materialPreviewBindings(material,512);},ready,"Initial material preview did not refine");
+        const auto fullSignature=full.graph->textureSignatures;
+        // Reproduce the room regression: fixed rendering allocations had reduced
+        // the generic texture cache allowance to zero, degrading visible materials.
+        std::vector<ModelMaterial> surfaces{material.surface};const auto geometry=builtinBoxGeometry();
+        for(unsigned frame=0;frame<80;++frame){tick();library.setTextureDemand(512);auto visible=library.modelBindings(*geometry,surfaces);library.trimTextureCache(0);std::this_thread::sleep_for(std::chrono::milliseconds{2});}
+        auto degraded=library.modelBindings(*geometry,surfaces).front();
+        require(!degraded.graph&&!degraded.graphPending&&degraded.signatures[0]!=fullSignature[0],"Zero-budget fixture did not exercise texture degradation on the complete embedded model path.");
+        bool coarseDrawable=false;
+        until([&]{
+            library.setTextureDemand(1);auto binding=library.materialPreviewBindings(material,512);
+            coarseDrawable|=binding.sourceReady&&binding.drawable()&&!binding.complete;library.trimTextureCache(0);return binding;
+        },[&](const auto& binding){return ready(binding)&&binding.graph->textureSignatures==fullSignature;},"Selected material preview inherited visible-scene texture pressure");
+        require(coarseDrawable,"Preview resource fixture did not pass through a coherent coarse packet before refinement.");
+        for(unsigned frame=0;frame<20;++frame){tick();auto binding=library.materialPreviewBindings(material,512);library.trimTextureCache(0);
+            require(ready(binding)&&binding.graph->textureSignatures==fullSignature,"Zero cache allowance degraded the selected material preview again.");}
+        require(read(p.root/material.id)==sourceBytes,"Preview publication rewrote its authored material.");
+        auto animated=material;const auto animatedOutput=materialOutputNode(animated.graph).id;
+        findMaterialNode(animated.graph,uv)->uv.mode=MaterialUvMode::UV0;
+        materialOutputNode(animated.graph).output.blend=MaterialBlend::Mask;
+        const auto panner=addMaterialNode(animated.graph,MaterialNodeKind::Panner).id;
+        const auto time=addMaterialNode(animated.graph,MaterialNodeKind::Time).id;
+        findMaterialNode(animated.graph,panner)->panner.speed={.25f,0};findMaterialNode(animated.graph,time)->time={false,true,4};
+        connectMaterialNodes(animated.graph,uv,MaterialPin::UV,panner,MaterialPin::UV);
+        connectMaterialNodes(animated.graph,time,MaterialPin::Value,panner,MaterialPin::Time);
+        connectMaterialNodes(animated.graph,panner,MaterialPin::UV,color,MaterialPin::UV);
+        connectMaterialNodes(animated.graph,color,MaterialPin::A,animatedOutput,MaterialPin::OpacityMask);canonicalizeMaterialAsset(animated);
+        auto animatedBinding=until([&]{return library.materialPreviewBindings(animated,512);},ready,"Animated material preview did not publish");
+        const auto preparedSignature=[&](const auto& definition,const auto& binding){
+            const std::array<ModelMaterial,1> materials{definition.surface};const std::array<ModelMaterialTextures,1> textures{binding};
+            return preparedModelSignature(*geometry,1,materials,textures);
+        };
+        const auto animatedSignature=preparedSignature(animated,animatedBinding),animatedPacket=animatedBinding.graph->signature;
+        require(animatedBinding.graph->dynamicCoverage&&animatedBinding.graph->coverageSignature({1,1})!=animatedBinding.graph->coverageSignature({3,3}),
+            "Animated masked coverage stopped invalidating its affected shadow maps.");
+        findMaterialNode(animated.graph,panner)->panner.speed[0]=1.25f;canonicalizeMaterialAsset(animated);
+        auto changed=until([&]{return library.materialPreviewBindings(animated,512);},ready,"Edited Panner did not publish");
+        require(changed.graph->uniforms==animatedBinding.graph->uniforms&&changed.graph->signature!=animatedPacket&&preparedSignature(animated,changed)!=animatedSignature,
+            "A Panner edit with unchanged t=0 uniforms retained the old runtime graph packet.");
+        const auto pannerSignature=changed.graph->signature;
+        findMaterialNode(animated.graph,time)->time={true,true,2};canonicalizeMaterialAsset(animated);
+        changed=until([&]{return library.materialPreviewBindings(animated,512);},ready,"Edited Time did not publish");
+        require(changed.graph->uniforms==animatedBinding.graph->uniforms&&changed.graph->signature!=pannerSignature,
+            "Time period/pause edits with unchanged t=0 uniforms retained the old runtime graph packet.");
+        materialOutputNode(animated.graph).output.blend=MaterialBlend::Opaque;canonicalizeMaterialAsset(animated);
+        changed=until([&]{return library.materialPreviewBindings(animated,512);},ready,"Opaque animated material did not publish");
+        require(!changed.graph->dynamicCoverage&&changed.graph->coverageSignature({1,1})==changed.graph->coverageSignature({3,3}),
+            "Opaque animation invalidated static shadow coverage.");
+        require(read(p.root/material.id)==sourceBytes,"Runtime material edits rewrote the authored fixture.");
+        resources.stop();
+    }bgfx::shutdown();}catch(...){bgfx::shutdown();throw;}
+    std::cout<<"Material preview coherent coarse publication and selected texture recovery under zero cache budget passed.\n";
+}
 }
 
-int main(){try{
+int main(int argc,char** argv){try{
+    if(argc==5&&std::string(argv[1])=="--material-preview-resources") {materialPreviewResources(argv[2],argv[3],argv[4]);return 0;}
     // Public deletion checks use disposable CPU data; the final fallback check
     // opens a scoped Noop device without a native application window.
-    warningQueries();legacyEnvironmentGlowPersistence();archivedLegacyWarnings();embeddedMaterialWarningOwners();removeModelAcrossScenes(false);removeModelAcrossScenes(true);fallbackReopening();cancelAndStaleDeletion();activeSceneAndFolderDeletion();particleMaterialDeletionAndAuthority();spriteImageDeletionAndIncompatibleMaterial();changedUsagePreservesConsumerAssignments();boxMaterialDeletionAndPublication();boxMaterialHistoryOnlyDeletion();dormantGraphTextureDeletion();pendingGraphKeepsCoverageExplicit();
+    warningQueries();legacyEnvironmentGlowPersistence();archivedLegacyWarnings();embeddedMaterialWarningOwners();removeModelAcrossScenes(false);removeModelAcrossScenes(true);fallbackReopening();cancelAndStaleDeletion();activeSceneAndFolderDeletion();particleMaterialDeletionAndAuthority();spriteImageDeletionAndIncompatibleMaterial();changedUsagePreservesConsumerAssignments();boxMaterialDeletionAndPublication();immutableMaterialMetadata();boxMaterialHistoryOnlyDeletion();dormantGraphTextureDeletion();pendingGraphKeepsCoverageExplicit();
     std::cout<<"Public AssetLibrary deletion, warning, fallback and document integration checks passed.\n";return 0;
 }catch(const std::exception& error){std::cerr<<"AssetLibrary deletion test failed: "<<error.what()<<'\n';return 1;}}

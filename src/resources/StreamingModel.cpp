@@ -15,7 +15,13 @@ std::uint64_t primitiveKey(const ModelPrimitive& primitive) {
     auto key=detail::HashSeed; detail::hash(key,ModelCacheVersion); detail::hash(key,MESHOPTIMIZER_VERSION);
     detail::hash(key,primitive.material); detail::hash(key,primitive.uvMask); detail::hash(key,primitive.tangentUv);
     detail::hash(key,primitive.vertices.data(),primitive.vertices.size()*sizeof(ModelVertex));
-    detail::hash(key,primitive.indices.data(),primitive.indices.size()*sizeof(std::uint32_t)); return key;
+    detail::hash(key,primitive.indices.data(),primitive.indices.size()*sizeof(std::uint32_t));
+    detail::hash(key,primitive.skinWeights.size());detail::hash(key,primitive.skinWeights.data(),primitive.skinWeights.size()*sizeof(ModelSkinWeights));
+    detail::hash(key,primitive.morphTargets.size());
+    for(const auto& target:primitive.morphTargets)for(const auto* values:{&target.positions,&target.normals,&target.tangents}) {
+        detail::hash(key,values->size());detail::hash(key,values->data(),values->size()*sizeof(Vec3));
+    }
+    return key;
 }
 void validate(const ModelPrimitive& primitive) {
     if (primitive.vertices.empty() || primitive.indices.empty() || primitive.indices.size()%3 ||
@@ -25,6 +31,16 @@ void validate(const ModelPrimitive& primitive) {
         if (!math::finite(vertex.position) || !math::finite(vertex.normal) || !math::finite(vertex.uv0) || !math::finite(vertex.uv1) ||
             !math::finite(vertex.tangent) || !math::finite(vertex.color)) throw std::runtime_error("Model geometry contains nonfinite attributes.");
     for (const auto index : primitive.indices) if (index>=primitive.vertices.size()) throw std::runtime_error("Model index is out of bounds.");
+    if(!primitive.skinWeights.empty() && primitive.skinWeights.size()!=primitive.vertices.size())throw std::runtime_error("Model skin weights do not match vertices.");
+    for(const auto& influence:primitive.skinWeights) {
+        double total{};for(const auto weight:influence.weights){if(!std::isfinite(weight)||weight<0)throw std::runtime_error("Model skin weight is invalid.");total+=weight;}
+        if(total<=1e-12)throw std::runtime_error("Model skin vertex has no positive influence.");
+    }
+    if(primitive.morphTargets.size()>256)throw std::runtime_error("Model morph target count exceeds the supported limit.");
+    for(const auto& target:primitive.morphTargets)for(const auto* values:{&target.positions,&target.normals,&target.tangents}) {
+        if(!values->empty() && values->size()!=primitive.vertices.size())throw std::runtime_error("Model morph target does not match vertices.");
+        for(const auto& value:*values)if(!math::finite(value))throw std::runtime_error("Model morph target is nonfinite.");
+    }
 }
 ModelLod writeLevel(const std::filesystem::path& file,const ModelPrimitive& primitive,float error) {
     validate(primitive); const auto key=primitiveKey(primitive);
@@ -35,7 +51,14 @@ ModelLod writeLevel(const std::filesystem::path& file,const ModelPrimitive& prim
     detail::append(bytes,primitive.uvMask); detail::append(bytes,primitive.tangentUv); detail::append(bytes,error);
     detail::appendBytes(bytes,primitive.vertices.data(),primitive.vertices.size()*sizeof(ModelVertex));
     detail::appendBytes(bytes,primitive.indices.data(),primitive.indices.size()*sizeof(std::uint32_t));
-    writeFileAtomically(file,bytes);
+    detail::append(bytes,static_cast<std::uint32_t>(primitive.skinWeights.size()));
+    detail::appendBytes(bytes,primitive.skinWeights.data(),primitive.skinWeights.size()*sizeof(ModelSkinWeights));
+    detail::append(bytes,static_cast<std::uint32_t>(primitive.morphTargets.size()));
+    for(const auto& target:primitive.morphTargets) {
+        const std::uint8_t flags=(target.positions.empty()?0:1)|(target.normals.empty()?0:2)|(target.tangents.empty()?0:4);detail::append(bytes,flags);
+        for(const auto* values:{&target.positions,&target.normals,&target.tangents})detail::appendBytes(bytes,values->data(),values->size()*sizeof(Vec3));
+    }
+    detail::writeCacheFileAtomically(file,bytes);
     return {file,key,vertices,indices,error};
 }
 Aabb primitiveBounds(const ModelPrimitive& primitive) {
@@ -69,7 +92,7 @@ ModelStream buildModelCache(const ModelAsset& asset,const std::filesystem::path&
         for (std::uint32_t level=0;level<4;++level) {
             const auto file=folder/(std::to_string(p)+"-"+std::to_string(level)+".lod");
             descriptor.levels.push_back(writeLevel(file,current,accumulated));
-            if (current.indices.size()<24 || level==3) break;
+            if (!original.skinWeights.empty() || !original.morphTargets.empty() || current.indices.size()<24 || level==3) break;
             const float currentScale=meshopt_simplifyScale(current.vertices.front().position.data(),current.vertices.size(),sizeof(ModelVertex));
             const float remainingError=maximumError-accumulated;
             if (!(remainingError>0) || !(currentScale>0)) break;
@@ -111,12 +134,33 @@ std::shared_ptr<const ModelGeometryLevel> loadModelLod(const ModelLod& info,std:
     result->error=detail::read<float>(input);
     const auto expected=static_cast<std::uint64_t>(vertices)*sizeof(ModelVertex)+static_cast<std::uint64_t>(indices)*4;
     const auto remaining=std::filesystem::file_size(info.file)-static_cast<std::uint64_t>(input.tellg());
-    if (remaining!=expected || !std::isfinite(result->error) || result->error<0 || result->error!=info.error)
+    if (remaining<expected+8 || !std::isfinite(result->error) || result->error<0 || result->error!=info.error)
         throw std::runtime_error("Model LOD cache payload is invalid.");
     result->geometry.vertices.resize(vertices); result->geometry.indices.resize(indices);
     result->geometry.sourceVertexCount=vertices; result->geometry.sourceIndexCount=indices;
     detail::readBytes(input,result->geometry.vertices.data(),static_cast<std::size_t>(vertices)*sizeof(ModelVertex));
     detail::readBytes(input,result->geometry.indices.data(),static_cast<std::size_t>(indices)*4);
+    const auto skinCount=detail::read<std::uint32_t>(input);
+    if(skinCount && skinCount!=vertices)throw std::runtime_error("Model LOD skin count is invalid.");
+    const auto bytesLeft=[&]{const auto offset=input.tellg();if(offset<0)throw std::runtime_error("Truncated model deformation payload.");return std::filesystem::file_size(info.file)-static_cast<std::uint64_t>(offset);};
+    if(std::uint64_t(skinCount)*sizeof(ModelSkinWeights)>bytesLeft())throw std::runtime_error("Truncated model skin payload.");
+    result->geometry.hasSkinning=skinCount!=0;
+    result->geometry.skinWeights.resize(skinCount);detail::readBytes(input,result->geometry.skinWeights.data(),std::size_t(skinCount)*sizeof(ModelSkinWeights));
+    const auto morphCount=detail::read<std::uint32_t>(input);
+    if(morphCount>256 || morphCount>bytesLeft())throw std::runtime_error("Model LOD morph count is invalid.");
+    result->geometry.morphTargets.resize(morphCount);
+    for(auto& target:result->geometry.morphTargets) {
+        const auto flags=detail::read<std::uint8_t>(input);if(flags&~7u)throw std::runtime_error("Invalid model morph flags.");
+        unsigned attribute=0;for(auto* values:{&target.positions,&target.normals,&target.tangents}) {
+            if(flags&(1u<<attribute)) {
+                if(std::uint64_t(vertices)*sizeof(Vec3)>bytesLeft())throw std::runtime_error("Truncated model morph payload.");
+                values->resize(vertices);detail::readBytes(input,values->data(),std::size_t(vertices)*sizeof(Vec3));
+            }
+            ++attribute;
+        }
+    }
+    if(bytesLeft())throw std::runtime_error("Model LOD cache has trailing deformation data.");
+    input.close();
     validate(result->geometry);
     if (primitiveKey(result->geometry)!=info.key) throw std::runtime_error("Model LOD cache checksum mismatch.");
     result->wideIndices=*std::max_element(result->geometry.indices.begin(),result->geometry.indices.end())>UINT16_MAX;

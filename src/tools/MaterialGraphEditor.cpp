@@ -97,6 +97,11 @@ bool nodeMatches(MaterialNodeKind kind,const char* query) {
     case MaterialNodeKind::ParticleColor:aliases="particle color colour rgb rgba tint opacity brightness attribute input node";break;
     case MaterialNodeKind::RadialGradient:aliases="radial gradient soft disc disk circle mask falloff opacity node";break;
     case MaterialNodeKind::Saturate:aliases="saturate clamp limit zero one 0 1 math node";break;
+    case MaterialNodeKind::Add:aliases="add addition plus + sum math node";break;
+    case MaterialNodeKind::Lerp:aliases="lerp linear interpolate interpolation mix blend math node";break;
+    case MaterialNodeKind::Power:aliases="power pow exponent math node";break;
+    case MaterialNodeKind::Panner:aliases="panner pan scroll uv coordinate speed mapping node";break;
+    case MaterialNodeKind::Time:aliases="time seconds clock runtime input node";break;
     default:break;
     }
     std::string search(query);std::transform(search.begin(),search.end(),search.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
@@ -115,10 +120,11 @@ const char* uvModeName(MaterialUvMode mode) {
 }
 ImVec4 nodeColor(MaterialNodeKind kind) {
     switch(kind) {
-    case MaterialNodeKind::Scalar:case MaterialNodeKind::Multiply:case MaterialNodeKind::RadialGradient:case MaterialNodeKind::Saturate:return {.35f,.55f,.29f,1};
+    case MaterialNodeKind::Scalar:case MaterialNodeKind::Multiply:case MaterialNodeKind::RadialGradient:case MaterialNodeKind::Saturate:
+    case MaterialNodeKind::Add:case MaterialNodeKind::Lerp:case MaterialNodeKind::Power:return {.35f,.55f,.29f,1};
     case MaterialNodeKind::Color:case MaterialNodeKind::Vector2:return {.62f,.49f,.22f,1};
     case MaterialNodeKind::Texture2D:return {.23f,.48f,.65f,1};
-    case MaterialNodeKind::UV:case MaterialNodeKind::ParticleColor:return {.22f,.58f,.54f,1};
+    case MaterialNodeKind::UV:case MaterialNodeKind::ParticleColor:case MaterialNodeKind::Panner:case MaterialNodeKind::Time:return {.22f,.58f,.54f,1};
     default:return {.49f,.44f,.37f,1};
     }
 }
@@ -157,6 +163,8 @@ std::vector<std::string> texturePayload(const ImGuiPayload& payload) {
 void setInputDefault(MaterialNode& node,MaterialPin pin,const MaterialValue& value) {
     switch(pin) {
     case MaterialPin::Left:node.left=value;break;case MaterialPin::Right:node.right=value;break;
+    case MaterialPin::Alpha:node.alpha=value;break;
+    case MaterialPin::Speed:node.panner.speed={value.value[0],value.value[1]};break;
     case MaterialPin::ScaleXY:node.uv.scale[0]=value.value[0];node.uv.scale[1]=value.value[1];break;
     case MaterialPin::OffsetXY:node.uv.offset[0]=value.value[0];node.uv.offset[1]=value.value[1];break;
     case MaterialPin::BaseColor:node.output.baseColor={value.value[0],value.value[1],value.value[2]};break;
@@ -496,6 +504,12 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
             field("Change scalar",[](auto& n){return ImGui::SliderFloat("##Value",&n.scalar,n.scalarRange[0],n.scalarRange[1],"%.3f");});
         } else if(node.kind==MaterialNodeKind::Vector2) {
             ImGui::SetNextItemWidth(width);field("Change vector",[](auto& n){return ImGui::DragFloat2("##XY",n.vector2.data(),.01f,0,0,"%.3f");});
+        } else if(node.kind==MaterialNodeKind::Time) {
+            field("Change time clock",[](auto& n){return ImGui::Checkbox("Ignore pause",&n.time.ignorePause);});
+            field("Toggle time period",[](auto& n){return ImGui::Checkbox("Use period",&n.time.periodEnabled);});
+            if(node.time.periodEnabled){ImGui::SetNextItemWidth(labeledWidth("Period"));field("Change time period",[](auto& n){return ImGui::DragFloat("Period",&n.time.period,.01f,0,0,"%.3f");});}
+        } else if(node.kind==MaterialNodeKind::Panner) {
+            field("Change panner fractional part",[](auto& n){return ImGui::Checkbox("Fractional part",&n.panner.fractionalPart);});
         } else if(node.kind==MaterialNodeKind::UV) {
             ImGui::SetNextItemWidth(width);
             choice("Change UV mapping",[&](auto& n){int mode=static_cast<int>(n.uv.mode);
@@ -586,7 +600,8 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
             if(row<inputs.size()) {
                 const auto& definition=inputs[row];drawPin(definition,true);
                 const bool active=node.kind!=MaterialNodeKind::Output || materialPinActive(output.shading,output.blend,definition.pin);
-                if(active && !materialInputLink(graph,node.id,definition.pin) && definition.type!=MaterialValueType::Normal && definition.type!=MaterialValueType::Mapping) {
+                if(active && !materialInputLink(graph,node.id,definition.pin) && definition.type!=MaterialValueType::Normal && definition.type!=MaterialValueType::Mapping &&
+                    !(node.kind==MaterialNodeKind::Panner&&definition.pin==MaterialPin::Time)) {
                     ImGui::SetCursorPos({x+ImGui::CalcTextSize(definition.name).x+24,y});ImGui::SetNextItemWidth(100);ImGui::PushID(static_cast<int>(definition.pin));
                     const auto minimum=ImGui::GetCursorScreenPos();
                     s.presentation.fields.push_back({node.id,definition.pin,point(minimum),{minimum.x+100,minimum.y+ImGui::GetFrameHeight()}});
@@ -713,7 +728,8 @@ void MaterialGraphEditor::draw(MaterialDocument& document,const Assets& assets) 
         std::vector<MaterialGraphNodeChoice> choices;
         try {
             if(s.addFrom)choices=materialGraphNodeChoices(document.definition().graph,*s.addFrom);
-            else for(const auto kind:{MaterialNodeKind::UV,MaterialNodeKind::Texture2D,MaterialNodeKind::Scalar,MaterialNodeKind::Vector2,MaterialNodeKind::Color,MaterialNodeKind::Multiply,MaterialNodeKind::ParticleColor,MaterialNodeKind::RadialGradient,MaterialNodeKind::Saturate})choices.push_back({kind});
+            else for(const auto kind:{MaterialNodeKind::UV,MaterialNodeKind::Texture2D,MaterialNodeKind::Scalar,MaterialNodeKind::Vector2,MaterialNodeKind::Color,MaterialNodeKind::Multiply,MaterialNodeKind::ParticleColor,MaterialNodeKind::RadialGradient,MaterialNodeKind::Saturate,
+                MaterialNodeKind::Add,MaterialNodeKind::Lerp,MaterialNodeKind::Panner,MaterialNodeKind::Time,MaterialNodeKind::Power})choices.push_back({kind});
         } catch(const std::exception& error){s.status=error.what();}
         std::erase_if(choices,[&](const auto& choice){return !nodeMatches(choice.kind,s.search.data());});
         if(!choices.empty())s.searchIndex=(s.searchIndex%static_cast<int>(choices.size())+static_cast<int>(choices.size()))%static_cast<int>(choices.size());

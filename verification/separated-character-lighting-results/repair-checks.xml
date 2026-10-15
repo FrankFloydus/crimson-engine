@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="Win32-ninja"
+	tests="8"
+	failures="1"
+	disabled="0"
+	skipped="0"
+	hostname="FLOYD"
+	time="29"
+	timestamp="2026-10-15T19:46:42"
+	>
+	<testcase name="directional_shadow_math_core" classname="directional_shadow_math_core" time="0.0249119" status="run">
+		<properties/>
+		<system-out>Directional shadow atlas, camera isolation, cascaded/gameplay/focused/receiver fitting, depth, caster and LOD checks passed.
+</system-out>
+	</testcase>
+	<testcase name="scene_extraction_core" classname="scene_extraction_core" time="0.0184777" status="run">
+		<properties/>
+		<system-out>Scene extraction checks passed.
+</system-out>
+	</testcase>
+	<testcase name="render_pass_plan_core" classname="render_pass_plan_core" time="0.0130185" status="run">
+		<properties/>
+		<system-out>Renderer pass-plan checks passed.
+</system-out>
+	</testcase>
+	<testcase name="editor_render_frame_core" classname="editor_render_frame_core" time="0.0117457" status="run">
+		<properties/>
+		<system-out>Editor render frame ownership checks passed.
+</system-out>
+	</testcase>
+	<testcase name="point_shadow_render_core" classname="point_shadow_render_core" time="10.6042" status="run">
+		<properties/>
+		<system-out>Hidden D3D11 point-shadow faces, masks, flags, budgeted admission/fairness, stale-projection rejection, focused Game/Scene projections, shared views and reload checks passed.
+</system-out>
+	</testcase>
+	<testcase name="directional_shadow_quality_core" classname="directional_shadow_quality_core" time="4.59915" status="run">
+		<properties/>
+		<system-out>fallback-scene-256-bias1-sun0 floor samples=2398 maximum_loss=0 mean_loss=0 bad_channels=0
+fallback-scene-256-bias1-sun0 pillar samples=110 maximum_loss=1 mean_loss=0.0181818 bad_channels=0
+fallback-game-256-bias1-sun0 floor samples=2463 maximum_loss=0 mean_loss=0 bad_channels=0
+fallback-game-256-bias1-sun0 pillar samples=110 maximum_loss=0 mean_loss=0 bad_channels=0
+fallback-scene-256-bias1-sun1 floor samples=2398 maximum_loss=0 mean_loss=0 bad_channels=0
+fallback-scene-256-bias1-sun1 pillar samples=110 maximum_loss=0 mean_loss=0 bad_channels=0
+fallback-game-256-bias1-sun1 floor samples=2463 maximum_loss=0 mean_loss=0 bad_channels=0
+fallback-game-256-bias1-sun1 pillar samples=110 maximum_loss=0 mean_loss=0 bad_channels=0
+fallback-scene-256-bias1-sun2 floor samples=2398 maximum_loss=0 mean_loss=0 bad_channels=0
+fallback-scene-256-bias1-sun2 pillar samples=110 maximum_loss=0 mean_loss=0 bad_channels=0
+fallback-game-256-bias1-sun2 floor samples=2463 maximum_loss=0 mean_loss=0 bad_channels=0
+fallback-game-256-bi...
+[This part of the test output was removed since it exceeds the threshold of 1024 bytes.]
+</system-out>
+	</testcase>
+	<testcase name="forward_plus_render_core" classname="forward_plus_render_core" time="7.27859" status="run">
+		<properties/>
+		<system-out>Forward+ image equivalence passed for 0..1024 lights, bitset boundaries, clipped volumes, camera isolation, immutable prepared frames, fallback/generated meshes, transparent particles, and packed BRDF lookup.
+</system-out>
+	</testcase>
+	<testcase name="lighting_dependency_render_core" classname="lighting_dependency_render_core" time="6.91151" status="fail">
+		<failure message="Failed"/>
+		<properties/>
+		<system-out>Point scopes: World=151, excluded=0, Character=151
+Ambient response: original=85, dark=0, floor.25=42
+Direct darkness: original=151, dark=0, self revealed=151, player revealed=151; independent emission=92, unlit=160, fog=17.6667
+Ambient shadows: through-wall=85, eligible-blocker=0, excluded-blocker=85
+Direct caster scopes: blocked=0, excluded=141, last faces=6
+Bright torch shadows: directional only=0, Character excluded=141, Character included=0, moved old/new=145/37
+Transparent ambient: mesh=85/0, particle=84/0
+Particle prepasses: Opaque=84, Mask holes=85, covered=0, generated t0/t1=85/0, submitted=1, draws=1
+Ambient resize 133x101: original=85, dark=0
+Ambient resize 65x49: original=85, dark=0
+Directional darkness: lit=137, dark=0, IBL dark=0, revealed=137, combined unrevealed/revealed=0/197
+Reveal islands: player=158, distant torch=156, between=0, transparent=85, particle=84
+Material preview isolation fixture has no visible illumination.
+</system-out>
+	</testcase>
+</testsuite>

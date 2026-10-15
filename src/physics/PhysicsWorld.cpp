@@ -8,10 +8,12 @@
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <algorithm>
 #include <cmath>
@@ -104,13 +106,16 @@ struct PhysicsWorld::Impl {
     struct Collider {JPH::BodyID body;Mat4 world;Vec3 size;};
     struct Character {JPH::Ref<JPH::CharacterVirtual> motor;SceneCharacter definition;Mat4 world;bool locked{};};
     std::map<EntityId,Collider> colliders;
+    struct MeshCollider {JPH::BodyID body;Mat4 world;std::shared_ptr<const StaticTriangleMesh> mesh;std::uint64_t revision{};};
+    std::map<EntityId,MeshCollider> meshColliders;
     std::map<EntityId,Character> characters;
     std::map<EntityId,Vec3> desiredVelocities;
     std::map<EntityId,Vec3> desiredFacing;
     std::string diagnostic;
     std::uint64_t geometryRevision{};
     Impl(){world.Init(4096,0,1024,1024,layers,broadPairs,pairs);world.SetGravity({0,-9.81f,0});}
-    ~Impl(){characters.clear();for(const auto& [id,collider]:colliders){(void)id;world.GetBodyInterface().RemoveBody(collider.body);world.GetBodyInterface().DestroyBody(collider.body);}}
+    ~Impl(){characters.clear();for(const auto& [id,collider]:colliders){(void)id;world.GetBodyInterface().RemoveBody(collider.body);world.GetBodyInterface().DestroyBody(collider.body);}
+        for(const auto& [id,collider]:meshColliders){(void)id;world.GetBodyInterface().RemoveBody(collider.body);world.GetBodyInterface().DestroyBody(collider.body);}}
     void report(EntityId id,const std::string& text){diagnostic+="Entity "+std::to_string(id)+": "+text+"\n";}
     void refresh(JPH::CharacterVirtual& motor) {
         motor.RefreshContacts(world.GetDefaultBroadPhaseLayerFilter(CharacterLayer),world.GetDefaultLayerFilter(CharacterLayer),{},{},allocator);
@@ -121,7 +126,7 @@ struct PhysicsWorld::Impl {
 };
 PhysicsWorld::PhysicsWorld():impl_(std::make_unique<Impl>()){}
 PhysicsWorld::~PhysicsWorld()=default;
-void PhysicsWorld::reconcile(const Scene& scene,std::span<const EntityId> locks) {
+void PhysicsWorld::reconcile(const Scene& scene,std::span<const EntityId> locks,std::span<const PhysicsMeshCollider> meshes) {
     auto& state=*impl_;state.diagnostic.clear();
     bool collidersChanged=false;
     std::unordered_set<EntityId> keptColliders,keptCharacters;
@@ -151,6 +156,57 @@ void PhysicsWorld::reconcile(const Scene& scene,std::span<const EntityId> locks)
     }
     for(auto iterator=state.colliders.begin();iterator!=state.colliders.end();) {
         if(keptColliders.contains(iterator->first)){++iterator;continue;}auto remove=iterator++;state.eraseCollider(remove);collidersChanged=true;
+    }
+    std::unordered_set<EntityId> keptMeshes;
+    for(const auto& record:records) {
+        if(!record.meshCollider || record.meshCollider->source.empty())continue;
+        if(underCharacter(scene,record.id) || record.character){state.report(record.id,"Static mesh collision cannot be attached beneath a Character.");continue;}
+        const auto world=scene.worldTransform(record.id);if(!world)continue;
+        const auto found=state.meshColliders.find(record.id);
+        const auto pending=std::find_if(meshes.begin(),meshes.end(),[&](const auto& mesh){return mesh.entity==record.id;});
+        if(pending==meshes.end() || !pending->mesh) {
+            if(found!=state.meshColliders.end())keptMeshes.insert(record.id);
+            state.report(record.id,"Mesh collision source is not ready; retaining its last accepted geometry.");continue;
+        }
+        if(found!=state.meshColliders.end() && found->second.revision==pending->revision &&
+           found->second.mesh==pending->mesh && close(found->second.world,*world)){keptMeshes.insert(record.id);continue;}
+        try {
+            if(math::handedness(*world)==0)throw std::runtime_error("Mesh Collider has a collapsed transform.");
+            const auto& mesh=*pending->mesh;
+            if(mesh.indices.empty() || mesh.indices.size()%3)throw std::runtime_error("Mesh Collider has no valid triangles.");
+            JPH::VertexList vertices;vertices.reserve(mesh.positions.size());
+            for(const auto& point:mesh.positions) {
+                const auto transformed=math::transformDirection(*world,point);
+                if(!math::finite(transformed))throw std::runtime_error("Mesh Collider transform exceeds finite range.");
+                vertices.emplace_back(transformed[0],transformed[1],transformed[2]);
+            }
+            JPH::IndexedTriangleList triangles;triangles.reserve(mesh.indices.size()/3);
+            const bool reflected=math::handedness(*world)<0;
+            for(std::size_t index=0;index<mesh.indices.size();index+=3) {
+                const auto a=mesh.indices[index],b=mesh.indices[index+(reflected?2:1)],c=mesh.indices[index+(reflected?1:2)];
+                if(a>=vertices.size() || b>=vertices.size() || c>=vertices.size())throw std::runtime_error("Mesh Collider index exceeds its positions.");
+                triangles.emplace_back(a,b,c,0);
+            }
+            const auto shape=JPH::MeshShapeSettings(std::move(vertices),std::move(triangles)).Create();
+            if(shape.HasError())throw std::runtime_error(shape.GetError().c_str());
+            JPH::BodyCreationSettings settings(shape.Get(),position(*world),JPH::Quat::sIdentity(),JPH::EMotionType::Static,StaticLayer);
+            settings.mUserData=record.id;
+            const auto body=state.world.GetBodyInterface().CreateAndAddBody(settings,JPH::EActivation::DontActivate);
+            if(body.IsInvalid())throw std::runtime_error("Physics body capacity exceeded.");
+            if(found!=state.meshColliders.end()) {
+                state.world.GetBodyInterface().RemoveBody(found->second.body);state.world.GetBodyInterface().DestroyBody(found->second.body);
+                found->second={body,*world,pending->mesh,pending->revision};
+            } else state.meshColliders.emplace(record.id,Impl::MeshCollider{body,*world,pending->mesh,pending->revision});
+            keptMeshes.insert(record.id);collidersChanged=true;
+        } catch(const std::exception& error) {
+            if(found!=state.meshColliders.end())keptMeshes.insert(record.id);
+            state.report(record.id,error.what());
+        }
+    }
+    for(auto iterator=state.meshColliders.begin();iterator!=state.meshColliders.end();) {
+        if(keptMeshes.contains(iterator->first)){++iterator;continue;}
+        state.world.GetBodyInterface().RemoveBody(iterator->second.body);state.world.GetBodyInterface().DestroyBody(iterator->second.body);
+        iterator=state.meshColliders.erase(iterator);collidersChanged=true;
     }
     if(collidersChanged)++state.geometryRevision;
     for(const auto& record:records) {
@@ -186,8 +242,8 @@ void PhysicsWorld::reconcile(const Scene& scene,std::span<const EntityId> locks)
     }
     std::erase_if(state.characters,[&](const auto& entry){return !keptCharacters.contains(entry.first);});
 }
-std::vector<ScenePoseUpdate> PhysicsWorld::step(const Scene& scene,EntityId controlled,const Vec3& desired,float seconds,std::span<const EntityId> locks) {
-    reconcile(scene,locks);std::vector<ScenePoseUpdate> poses;
+std::vector<ScenePoseUpdate> PhysicsWorld::step(const Scene& scene,EntityId controlled,const Vec3& desired,float seconds,std::span<const EntityId> locks,std::span<const PhysicsMeshCollider> meshes) {
+    reconcile(scene,locks,meshes);std::vector<ScenePoseUpdate> poses;
     if(!std::isfinite(seconds) || seconds<=0)return poses;auto& state=*impl_;
     auto movement=std::move(state.desiredVelocities);state.desiredVelocities.clear();
     auto facing=std::move(state.desiredFacing);state.desiredFacing.clear();
@@ -229,12 +285,17 @@ std::vector<ScenePoseUpdate> PhysicsWorld::step(const Scene& scene,EntityId cont
 const std::string& PhysicsWorld::status() const{return impl_->diagnostic;}
 void PhysicsWorld::requestMovement(EntityId id,const Vec3& desired){if(id)impl_->desiredVelocities[id]=math::finite(desired)?desired:Vec3{};}
 void PhysicsWorld::requestFacing(EntityId id,const Vec3& direction){if(id)impl_->desiredFacing[id]=math::finite(direction)?direction:Vec3{};}
-std::size_t PhysicsWorld::colliderCount() const{return impl_->colliders.size();}
+std::size_t PhysicsWorld::colliderCount() const{return impl_->colliders.size()+impl_->meshColliders.size();}
 std::uint64_t PhysicsWorld::geometryRevision() const{return impl_->geometryRevision;}
 std::vector<PhysicsBox> PhysicsWorld::staticBoxes() const {
     std::vector<PhysicsBox> boxes;boxes.reserve(impl_->colliders.size());
     for(const auto& [id,collider]:impl_->colliders)boxes.push_back({id,collider.world,collider.size});
     return boxes;
+}
+std::vector<PhysicsStaticMesh> PhysicsWorld::staticMeshes() const {
+    std::vector<PhysicsStaticMesh> result;result.reserve(impl_->meshColliders.size());
+    for(const auto& [id,collider]:impl_->meshColliders)result.push_back({id,collider.world,collider.mesh});
+    return result;
 }
 std::size_t PhysicsWorld::characterCount() const{return impl_->characters.size();}
 std::optional<Vec3> PhysicsWorld::characterPosition(EntityId id) const{const auto found=impl_->characters.find(id);return found==impl_->characters.end()?std::nullopt:std::optional{own(found->second.motor->GetPosition())};}
@@ -245,9 +306,12 @@ std::optional<PhysicsRayHit> PhysicsWorld::raycast(const Ray& ray,float maxDista
     const auto displacement=ray.direction*(static_cast<double>(maxDistance)/length);
     if(!math::finite(displacement) || !math::finite(ray.origin+displacement))return {};
     const JPH::RRayCast query(JPH::RVec3(ray.origin[0],ray.origin[1],ray.origin[2]),native(displacement));
-    JPH::RayCastResult result;
     auto& world=impl_->world;
-    if(!world.GetNarrowPhaseQuery().CastRay(query,result,JPH::SpecifiedBroadPhaseLayerFilter(JPH::BroadPhaseLayer(0)),JPH::SpecifiedObjectLayerFilter(StaticLayer)))return {};
+    JPH::RayCastSettings settings;settings.mBackFaceModeTriangles=JPH::EBackFaceMode::CollideWithBackFaces;
+    JPH::ClosestHitCollisionCollector<JPH::CastRayCollector> collector;
+    world.GetNarrowPhaseQuery().CastRay(query,settings,collector,JPH::SpecifiedBroadPhaseLayerFilter(JPH::BroadPhaseLayer(0)),JPH::SpecifiedObjectLayerFilter(StaticLayer));
+    if(!collector.HadHit())return {};
+    const auto& result=collector.mHit;
     const JPH::BodyLockRead body(world.GetBodyLockInterface(),result.mBodyID);
     if(!body.Succeeded())return {};
     const auto point=query.GetPointOnRay(result.mFraction);

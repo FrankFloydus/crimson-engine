@@ -1,4 +1,5 @@
 #include "GameViewInteraction.h"
+#include <imgui_internal.h>
 
 namespace crimson {
 GameViewInteraction drawGameViewImage(ImTextureRef texture,const ImVec2& size) {
@@ -16,5 +17,13 @@ GameViewInteraction drawGameViewImage(ImTextureRef texture,const ImVec2& size) {
     interaction.blocked=(!imageActive && (ImGui::GetIO().WantTextInput || ImGui::IsAnyItemActive())) ||
         ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup) || ImGui::GetDragDropPayload()!=nullptr;
     return interaction;
+}
+bool gameMetricsToggleRequested(bool playing) {
+    const auto& io=ImGui::GetIO();
+    return playing&&!io.AppFocusLost&&ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)&&
+        !io.WantTextInput&&!ImGui::GetCurrentContext()->PlatformImeData.WantTextInput&&
+        !io.KeyCtrl&&!io.KeyShift&&!io.KeyAlt&&!io.KeySuper&&
+        !ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup)&&!ImGui::GetDragDropPayload()&&
+        ImGui::IsKeyPressed(ImGuiKey_F1,false);
 }
 }

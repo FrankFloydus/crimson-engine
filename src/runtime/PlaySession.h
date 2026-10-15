@@ -23,6 +23,7 @@ public:
     const SceneDocument& document() const;
     const Scene& presentationScene() const {return presentation_;}
     void setParticleDefinitions(SceneParticles::DefinitionQuery query){particleDefinitions_=std::move(query);}
+    void setCollisionMeshDefinitions(CollisionMeshQuery query){collisionMeshes_=std::move(query);}
     void advance(double seconds,GameInput&,const Camera&,bool active=true);
     void advance(double seconds,Vec2 movement,const Camera&,bool active=true);
     SceneParticles& particles(){return particles_;}
@@ -45,6 +46,9 @@ private:
     Scene presentation_;
     SceneParticles particles_;
     SceneParticles::DefinitionQuery particleDefinitions_;
+    CollisionMeshQuery collisionMeshes_;
+    std::vector<PhysicsMeshCollider> meshColliders_;
+    bool prepareMeshColliders(const Scene&,bool requireReady);
     std::vector<ScenePoseUpdate> previous_,current_;
     PlayerController controller_;
     // Keep the original hit for live-geometry replanning; destination_ is the

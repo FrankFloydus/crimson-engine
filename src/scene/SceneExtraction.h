@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Scene.h"
+#include "physics/StaticCollision.h"
 
 #include <functional>
 #include <span>
@@ -13,6 +14,10 @@ struct ExtractedModel {
     Mat4 world{};
     std::string materialId;
     bool castShadows{true},receiveShadows{true};
+    SurfaceLightingScopes lightingScopes{};
+    std::uint32_t lightingCategory{lighting_scope::World};
+    SceneModelAnimation animation{};
+    double animationSeconds{}; // Transient sample time; never scene-authored.
 };
 struct ExtractedParticle {
     EntityId id{};
@@ -26,6 +31,9 @@ struct ExtractedScene {
     SceneEnvironment environment;
     ProceduralSun proceduralSun;
     std::vector<ExtractedParticle> particles;
+    PlayerRevealSource playerReveal{};
+    std::array<CharacterLight,2> characterLights{};
+    CharacterShadowSource characterShadow{};
 };
 
 // The scene owns ECS traversal. Rendering receives copied presentation values,
@@ -48,10 +56,10 @@ using ParticleBoundsQuery = std::function<std::optional<Aabb>(EntityId)>;
 // Parent selections include descendants once. Missing models, empty entities
 // and lights get a small, fixed world-space box around their world position.
 Aabb selectionBounds(const Scene& scene, std::span<const EntityId> selection,
-                     const ModelBoundsQuery& modelBounds,const ParticleBoundsQuery& particleBounds = {});
+                     const ModelBoundsQuery& modelBounds,const ParticleBoundsQuery& particleBounds = {},const CollisionMeshQuery& meshCollision = {});
 
 // Collision interiors are editor-selectable even without a rendered model.
 // Used only when the material-aware GPU model pick reports background.
-std::optional<EntityId> pickCollisionShape(const Scene& scene,const Ray& ray,float maximumDistance);
+std::optional<EntityId> pickCollisionShape(const Scene& scene,const Ray& ray,float maximumDistance,const CollisionMeshQuery& meshCollision = {});
 
 } // namespace crimson

@@ -56,7 +56,9 @@ bool sameEntity(const EntityRecord& a, const EntityRecord& b) {
         a.local == b.local && a.model == b.model && a.particle == b.particle && sameLight(a.directional,b.directional) && sameLight(a.point,b.point) &&
         a.environment.has_value()==b.environment.has_value() && (!a.environment || sameEnvironment(*a.environment,*b.environment)) &&
         a.character==b.character && a.collider==b.collider && a.camera==b.camera && a.modelMaterial==b.modelMaterial &&
-        a.castShadows==b.castShadows && a.receiveShadows==b.receiveShadows;
+        a.castShadows==b.castShadows && a.receiveShadows==b.receiveShadows && a.lightingScopes==b.lightingScopes &&
+        a.meshCollider==b.meshCollider && a.quader==b.quader && a.quaderGenerated==b.quaderGenerated &&
+        a.modelAnimation==b.modelAnimation;
 }
 bool sameProperties(const SceneProperties& a, const SceneProperties& b) {
     return a.activeEnvironment == b.activeEnvironment && a.activeCamera==b.activeCamera && a.playerCharacter==b.playerCharacter;
@@ -82,6 +84,8 @@ std::optional<EntityRecord> Scene::find(EntityId id) const {
     if (const auto* model = registry_.try_get<ModelReference>(entity)) {
         record.model=model->assetId;record.modelMaterial=model->material;
         record.castShadows=model->castShadows;record.receiveShadows=model->receiveShadows;
+        record.lightingScopes=model->lightingScopes;
+        record.modelAnimation=model->animation;
     }
     if (const auto* particle = registry_.try_get<ParticleReference>(entity)) record.particle = particle->assetId;
     if (const auto* light = registry_.try_get<SceneDirectionalLight>(entity)) record.directional = *light;
@@ -90,6 +94,9 @@ std::optional<EntityRecord> Scene::find(EntityId id) const {
     if (const auto* character = registry_.try_get<SceneCharacter>(entity)) record.character = *character;
     if (const auto* collider = registry_.try_get<SceneCollider>(entity)) record.collider = *collider;
     if (const auto* camera = registry_.try_get<SceneCamera>(entity)) record.camera = *camera;
+    if (const auto* collider = registry_.try_get<SceneMeshCollider>(entity)) record.meshCollider = *collider;
+    if (const auto* link = registry_.try_get<QuaderLink>(entity)) record.quader = *link;
+    if (const auto* generated = registry_.try_get<QuaderGenerated>(entity)) record.quaderGenerated = *generated;
     return record;
 }
 
@@ -180,6 +187,12 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             throw std::runtime_error("Model asset reference must be a nonempty project-relative path.");
         if (!record.model && (!record.castShadows || !record.receiveShadows))
             throw std::runtime_error("Model shadow settings require a model entity.");
+        const auto& animation=record.modelAnimation;
+        if(animation.clip<-1 || !std::isfinite(animation.speed) || animation.speed<0 || animation.speed>100 ||
+            !std::isfinite(animation.startTime) || animation.startTime<0 || animation.startTime>1e9f)
+            throw std::runtime_error("Model animation needs a valid clip, Speed from 0 to 100 and Start Time from 0 to 1000000000 seconds.");
+        if(!record.model && animation!=SceneModelAnimation{})
+            throw std::runtime_error("Model animation settings require a model entity.");
         if (!record.modelMaterial.empty()) {
             if (!record.model || !isBuiltinModel(record.model->id))
                 throw std::runtime_error("Instance material assignment is supported only on built-in Box models.");
@@ -194,8 +207,21 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
                 throw std::runtime_error("Particle asset reference must be a managed .crimson-particle path under assets/particles.");
         }
         validateLight(record.directional); validateLight(record.point);
+        if (!validSurfaceLightingScopes(record.lightingScopes) ||
+            (record.directional && !validLightRoles(record.directional->roles)) ||
+            (record.point && !validLightRoles(record.point->roles)))
+            throw std::runtime_error("Lighting scopes require World/Character masks and finite nonnegative reveal strength.");
+        if(!record.model && record.lightingScopes!=SurfaceLightingScopes{})
+            throw std::runtime_error("Surface lighting scopes require a model entity.");
+        if (record.directional && (!std::isfinite(record.directional->shadowDistance) || record.directional->shadowDistance<=0 ||
+            !std::isfinite(record.directional->shadowDepthBias) || record.directional->shadowDepthBias<0 ||
+            !std::isfinite(record.directional->shadowNormalBias) || record.directional->shadowNormalBias<0))
+            throw std::runtime_error("Directional shadow distance must be positive and biases finite and nonnegative.");
         if (record.point && (!std::isfinite(record.point->radius) || record.point->radius<.01f || record.point->radius>100000.f))
             throw std::runtime_error("Point light radius must be finite and between 0.01 and 100000 meters.");
+        if (record.point && !validPointLightResponse(record.point->nearFalloffRadius,record.point->specularStrength,
+            record.point->rangeFalloffExponent,record.point->edgeSoftness,record.point->sourceRadius,record.point->attenuation))
+            throw std::runtime_error("Point light attenuation or specular response settings are invalid.");
         if (record.point && (!std::isfinite(record.point->shadowDepthBias) || record.point->shadowDepthBias<0 ||
             !std::isfinite(record.point->shadowNormalBias) || record.point->shadowNormalBias<0))
             throw std::runtime_error("Point shadow biases must be finite and nonnegative.");
@@ -204,6 +230,13 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             if (!std::isfinite(c.height) || !std::isfinite(c.radius) || !std::isfinite(c.moveSpeed) ||
                 c.radius<=0 || c.height<2*c.radius || c.moveSpeed<0)
                 throw std::runtime_error("Character capsule height must be at least its diameter; radius must be positive and speed nonnegative.");
+            if (!validPlayerLightRigSettings(c.lightRig))throw std::runtime_error("Player light rig settings are invalid.");
+            if (!validCharacterRevealSettings(c.darknessReveal))throw std::runtime_error("Character lighting spread must be between 0.01 and 100000 meters.");
+            // The designated player's enabled local sources use the same
+            // Forward+ budget as authored point entities. Reject edits/loads
+            // before publishing a scene that presentation cannot extract.
+            if(record.id==properties.playerCharacter&&c.lightRig.enabled)
+                pointCount+=std::size_t(c.lightRig.localWorld.enabled);
         }
         if (record.collider && (!math::finite(record.collider->size) ||
             std::any_of(record.collider->size.begin(),record.collider->size.end(),[](float size){return size<=0;})))
@@ -212,8 +245,21 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             return math::finite(color) && std::all_of(color.begin(),color.end(),[](float value){return value>=0 && value<=1;});
         };
         if ((record.character && !validCollisionColor(record.character->collisionColor)) ||
-            (record.collider && !validCollisionColor(record.collider->collisionColor)))
+            (record.collider && !validCollisionColor(record.collider->collisionColor)) ||
+            (record.meshCollider && !validCollisionColor(record.meshCollider->collisionColor)))
             throw std::runtime_error("Collision color must have finite RGBA values between zero and one.");
+        if (record.meshCollider) {
+            const auto& source=record.meshCollider->source.id;
+            if (!source.empty() && (source.starts_with("builtin:") || !safeReference(source)))
+                throw std::runtime_error("Mesh collision requires a managed model asset reference.");
+            if (record.collider || record.character)
+                throw std::runtime_error("Mesh collision cannot share an entity with Box collision or a Character.");
+        }
+        if (record.quader && (!std::isfinite(record.quader->importScale) || record.quader->importScale<=0 ||
+            record.quader->projectPath.size()>32768 || record.quader->projectId.size()>128 || record.quader->sceneId.size()>128 || record.quader->saveKey.size()>65536))
+            throw std::runtime_error("Quader import scale must be positive and finite, with bounded source identities.");
+        if (record.quaderGenerated && (!record.quaderGenerated->owner || record.quaderGenerated->sourceKey.empty() || record.quaderGenerated->sourceKey.size()>1024))
+            throw std::runtime_error("Generated Quader content requires its owner and source identity.");
         if (record.camera) {
             const auto& c=*record.camera;
             if (!std::isfinite(c.verticalFov) || c.verticalFov<1 || c.verticalFov>179 ||
@@ -230,7 +276,7 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
         directionalCount += record.directional.has_value(); pointCount += record.point.has_value();
     }
     if (directionalCount > MaximumDirectionalLights || pointCount > MaximumPointLights)
-        throw std::runtime_error("Scenes support at most 4 directional lights and 16 point lights.");
+        throw std::runtime_error("Scenes support at most 4 directional lights and 4096 point lights, including enabled Player light rig sources.");
     if (properties.activeEnvironment && std::none_of(records.begin(),records.end(),[&](const auto& record) {
         return record.id==properties.activeEnvironment && record.environment.has_value();
     })) throw std::runtime_error("The active environment must identify an Environment entity.");
@@ -260,6 +306,12 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
     std::unordered_map<EntityId,EntityId> follows;
     std::unordered_map<EntityId,const EntityRecord*> indexed;
     for(const auto& record:records)indexed.emplace(record.id,&record);
+    std::unordered_map<EntityId,std::unordered_set<std::string>> generatedKeys;
+    for(const auto& record:records)if(record.quaderGenerated) {
+        const auto owner=indexed.find(record.quaderGenerated->owner);
+        if(owner==indexed.end() || !owner->second->quader || !generatedKeys[owner->first].insert(record.quaderGenerated->sourceKey).second)
+            throw std::runtime_error("Generated Quader content requires a live Quader owner and unique source identities.");
+    }
     for (const auto& record:records) if(record.environment && record.environment->sun) {
         const auto sun=indexed.find(record.environment->sun);
         if (sun==indexed.end() || !sun->second->directional)
@@ -299,7 +351,7 @@ void Scene::apply(const std::vector<EntityRecord>& records, const ScenePropertie
         candidate.emplace<Identity>(entity,record.id,record.name);
         candidate.emplace<Transform>(entity,record.local);
         candidate.emplace<Relationship>(entity,record.parent,record.order);
-        if (record.model) candidate.emplace<ModelReference>(entity,*record.model,record.modelMaterial,record.castShadows,record.receiveShadows);
+        if (record.model) candidate.emplace<ModelReference>(entity,*record.model,record.modelMaterial,record.castShadows,record.receiveShadows,record.lightingScopes,record.modelAnimation);
         if (record.particle) candidate.emplace<ParticleReference>(entity,*record.particle);
         if (record.directional) candidate.emplace<SceneDirectionalLight>(entity,*record.directional);
         if (record.point) candidate.emplace<ScenePointLight>(entity,*record.point);
@@ -307,6 +359,9 @@ void Scene::apply(const std::vector<EntityRecord>& records, const ScenePropertie
         if (record.character) candidate.emplace<SceneCharacter>(entity,*record.character);
         if (record.collider) candidate.emplace<SceneCollider>(entity,*record.collider);
         if (record.camera) candidate.emplace<SceneCamera>(entity,*record.camera);
+        if (record.meshCollider) candidate.emplace<SceneMeshCollider>(entity,*record.meshCollider);
+        if (record.quader) candidate.emplace<QuaderLink>(entity,*record.quader);
+        if (record.quaderGenerated) candidate.emplace<QuaderGenerated>(entity,*record.quaderGenerated);
         entities.emplace(record.id,entity);
     }
     Scene prepared;

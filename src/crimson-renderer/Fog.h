@@ -35,6 +35,11 @@ inline Parameters parameters(const FogSettings& settings,float cameraFar) {
         settings.mode==FogMode::Depth?1.f:0.f,settings.enabled?1.f:0.f};
     return result;
 }
+inline Parameters forMaterial(Parameters params,bool receiveFog) {
+    // Gate both distance and height fog without changing the shared view state.
+    if(!receiveFog)params.height[3]=0.f;
+    return params;
+}
 inline float transmittance(const Parameters& params,float distance,float worldHeight) {
     return equations::fogCombinedTransmittance(params.colorDensity[3],distance,
         params.depth[0],params.depth[1],params.depth[2],params.depth[3],worldHeight,

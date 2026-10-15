@@ -130,7 +130,10 @@ void SceneEditor::save(SceneDocument& document, AssetLibrary& assets, bool saveA
     if (document.transactionActive()) document.commit();
     if (saveAs || document.assetId().empty()) {
         saveAs_=saveAs; savePopup_=true;
-        std::snprintf(sceneName_.data(),sceneName_.size(),"%s",document.displayName() == "Untitled" ? "New Scene" : document.displayName().c_str());
+        auto name=document.displayName()=="Untitled"?std::string("New Scene"):document.displayName();
+        if(saveAs&&!document.assetId().empty())name+=" Copy";
+        name=availableSceneName(document.projectRoot(),name);
+        std::snprintf(sceneName_.data(),sceneName_.size(),"%s",name.c_str());
     } else if (document.externalFileChanged()) saveConflictPopup_=true;
     else if (document.save()) { assets.noteAssetWrite(document.assetId()); assets.refreshScenes(); }
 }
@@ -424,8 +427,8 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     const bool gameKeyboard=context->NavWindow && std::string_view(context->NavWindow->RootWindow->Name)=="Game";
     const bool preferencesKeyboard=preferencesMouse || preferencesWindow(context->NavWindow) || gameKeyboard;
     const bool actionPending=opening_ || openingPopup_ || deletePopup_;
-    std::uint64_t playParticle{};std::string openParticle;
-    if (panels_.inspector) drawSceneInspector(document,assets,renderer,!viewport_.interacting() && !actionPending,&playParticle,&openParticle);
+    std::uint64_t playParticle{};std::string openParticle,openMaterial;
+    if (panels_.inspector) drawSceneInspector(document,assets,renderer,!viewport_.interacting() && !actionPending,&playParticle,&openParticle,quader_,&openMaterial);
     if (panels_.outliner) drawSceneOutliner(document,!viewport_.interacting() && !actionPending);
     auto frame=viewport_.draw(settings.camera,document,assets,renderer,navigationActive || actionPending || preferencesMouse,bgfxFrame,preferencesKeyboard,
         overlays_.collisions,overlays_.transformGizmo);
@@ -439,7 +442,7 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     frame.openParticle=browser.openParticle.empty()?std::move(openParticle):std::move(browser.openParticle);
     frame.playParticleEntity=playParticle;
     frame.createMaterial=browser.createMaterial;frame.materialFolder=std::move(browser.materialFolder);
-    frame.openMaterial=std::move(browser.openMaterial);
+    frame.openMaterial=browser.openMaterial.empty()?std::move(openMaterial):std::move(browser.openMaterial);
     if (browser.newScene) request(Pending::New,{},document,settings.camera,renderer);
     if (!browser.openScene.empty()) request(Pending::Open,browser.openScene,document,settings.camera,renderer);
     if (!browser.deleteAssetIds.empty()) {

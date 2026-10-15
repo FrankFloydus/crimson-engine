@@ -2,7 +2,10 @@
 #include "tools/Tools.h"
 #include "scene/SceneDocument.h"
 #include "scene/SceneExtraction.h"
+#include <span>
 #include <vector>
+
+struct ImDrawList;
 
 namespace crimson {
 class SceneViewport {
@@ -12,7 +15,9 @@ public:
     void cancel(SceneDocument&, Renderer&);
     bool interacting() const { return dragging_; }
     void focus(Camera&, const SceneDocument&, const AssetLibrary&, float aspect);
+    void drawPlayerLightRig(const Camera&,const Scene&,std::span<const EntityId> selection);
     void setParticleBoundsQuery(ParticleBoundsQuery query) { particleBounds_=std::move(query); }
+    void setCollisionMeshQuery(CollisionMeshQuery query) { collisionMeshes_=std::move(query); }
 private:
     struct DragRoot { EntityId id; Mat4 local, world, parentInverse; };
     int operation_{1 | 2 | 4}; // ImGuizmo::TRANSLATE, kept out of public headers.
@@ -27,6 +32,9 @@ private:
     bool pickIntent_{};
     std::vector<DragRoot> roots_;
     ParticleBoundsQuery particleBounds_;
+    CollisionMeshQuery collisionMeshes_;
+    ImDrawList* imageDrawList_{};
+    ViewportRegion imageRegion_;
     void select(SceneDocument&, EntityId, bool toggle, bool append);
 };
 }

@@ -14,16 +14,22 @@ namespace crimson {
 // Scene-only entity references stay outside these render settings.
 inline void validateEnvironmentSettings(const EnvironmentSettings& value) {
     if (!std::isfinite(value.intensity) || value.intensity<0 || !std::isfinite(value.rotation) ||
-        !validToneMapping(value.toneMapping) || !validGlowSettings(value.glow))
+        !validToneMapping(value.toneMapping) || !validGlowSettings(value.glow) || !validAmbientVisibilitySettings(value.ambientVisibility))
         throw std::runtime_error("Environment intensity, rotation, tone mapping or Glow is invalid.");
     if (value.source!=EnvironmentSource::Hdri && value.source!=EnvironmentSource::ProceduralSky)
         throw std::runtime_error("Environment source is invalid.");
+    const auto& ambient=value.ambientLight;
+    if (ambient.source!=AmbientLightSource::Disabled && ambient.source!=AmbientLightSource::Color && ambient.source!=AmbientLightSource::Sky)
+        throw std::runtime_error("Ambient light source is invalid.");
+    if (!std::isfinite(ambient.skyContribution) || ambient.skyContribution<0 || ambient.skyContribution>1 ||
+        !std::isfinite(ambient.energy) || ambient.energy<0)
+        throw std::runtime_error("Ambient sky contribution must be between zero and one, and energy finite and nonnegative.");
     const auto color=[](const Vec3& rgb) {
         return math::finite(rgb) && std::all_of(rgb.begin(),rgb.end(),[](float channel){return channel>=0 && channel<=1;});
     };
     const auto& sky=value.procedural;
     if (!color(sky.skyTop) || !color(sky.skyHorizon) || !color(sky.groundBottom) || !color(sky.groundHorizon) ||
-        !color(value.background.color) || !color(value.fog.color))
+        !color(value.background.color) || !color(value.fog.color) || !color(ambient.color))
         throw std::runtime_error("Environment colors must have finite RGB values between zero and one.");
     if (!std::isfinite(sky.skyCurve) || sky.skyCurve<=0 || !std::isfinite(sky.groundCurve) || sky.groundCurve<=0 ||
         !std::isfinite(sky.sunHaloCurve) || sky.sunHaloCurve<=0)
@@ -57,6 +63,28 @@ inline EnvironmentSettings readEnvironmentSettings(const nlohmann::json& json,bo
     value.intensity=json.value("intensity",value.intensity);
     value.rotation=json.value("rotation",value.rotation);
     value.toneMapping=static_cast<ToneMapping>(json.value("toneMapping",0));
+    if (json.contains("ambientLight")) {
+        const auto& source=json.at("ambientLight");auto& ambient=value.ambientLight;
+        if (!source.is_object()) throw std::runtime_error("Ambient light settings must be an object.");
+        if (source.contains("source")) {
+            const auto& mode=source.at("source");
+            if (!mode.is_number_integer() || mode<0 || mode>2) throw std::runtime_error("Ambient light source is invalid.");
+            ambient.source=static_cast<AmbientLightSource>(mode.get<int>());
+        }
+        for (const auto* name:{"skyContribution","energy"})
+            if (source.contains(name) && !source.at(name).is_number()) throw std::runtime_error("Ambient light values must be numbers.");
+        ambient.color=source.value("color",ambient.color);
+        ambient.skyContribution=source.value("skyContribution",ambient.skyContribution);
+        ambient.energy=source.value("energy",ambient.energy);
+    }
+    if (json.contains("ambientVisibility")) {
+        const auto& source=json.at("ambientVisibility");auto& ambient=value.ambientVisibility;
+        if (!source.is_object())throw std::runtime_error("Ambient visibility settings must be an object.");
+        ambient.enabled=source.value("enabled",ambient.enabled);ambient.strength=source.value("strength",ambient.strength);
+        ambient.darknessFloor=source.value("darknessFloor",ambient.darknessFloor);ambient.threshold=source.value("threshold",ambient.threshold);
+        ambient.transition=source.value("transition",ambient.transition);ambient.shadowAware=source.value("shadowAware",ambient.shadowAware);
+        ambient.attenuateEmission=source.value("attenuateEmission",ambient.attenuateEmission);
+    }
     if (json.contains("glow")) {
         const auto& glow=json.at("glow");
         value.glow={glow.at("enabled").get<bool>(),glow.at("strength").get<float>(),
@@ -112,6 +140,12 @@ inline nlohmann::json environmentSettingsJson(const EnvironmentSettings& value) 
     const auto& sky=value.procedural;const auto& background=value.background;const auto& fog=value.fog;
     return {{"map",value.map},{"enabled",value.enabled},{"intensity",value.intensity},{"rotation",value.rotation},
         {"toneMapping",static_cast<int>(value.toneMapping)},{"debanding",value.debanding},
+        {"ambientLight",{{"source",static_cast<int>(value.ambientLight.source)},{"color",value.ambientLight.color},
+            {"skyContribution",value.ambientLight.skyContribution},{"energy",value.ambientLight.energy}}},
+        {"ambientVisibility",{{"enabled",value.ambientVisibility.enabled},{"strength",value.ambientVisibility.strength},
+            {"darknessFloor",value.ambientVisibility.darknessFloor},{"threshold",value.ambientVisibility.threshold},
+            {"transition",value.ambientVisibility.transition},{"shadowAware",value.ambientVisibility.shadowAware},
+            {"attenuateEmission",value.ambientVisibility.attenuateEmission}}},
         {"glow",{{"enabled",value.glow.enabled},{"strength",value.glow.strength},{"radius",value.glow.radius},{"threshold",value.glow.threshold}}},
         {"source",static_cast<int>(value.source)},
         {"procedural",{{"skyTop",sky.skyTop},{"skyHorizon",sky.skyHorizon},{"groundBottom",sky.groundBottom},{"groundHorizon",sky.groundHorizon},

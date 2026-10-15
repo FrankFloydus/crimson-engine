@@ -1,4 +1,5 @@
 #include "StreamingModel.h"
+#include "assets/ModelAnimation.h"
 #include "CacheIO.h"
 #include "math/Json.h"
 #include "resources/AssetRefJson.h"
@@ -56,13 +57,15 @@ Json material(const ModelMaterial& value) {
     if(value.sharedSampler)sampler={{"u",static_cast<int>(value.sharedSampler->wrapU)},{"v",static_cast<int>(value.sharedSampler->wrapV)},
         {"min",static_cast<int>(value.sharedSampler->minFilter)},{"mag",static_cast<int>(value.sharedSampler->magFilter)}};
     return {{"name",value.name},{"base",value.baseColor},{"metal",value.metallic},{"rough",value.roughness},{"normal",value.normalScale},{"occlusion",value.occlusionStrength},
-        {"emissive",value.emissive},{"mask",value.alphaMask},{"double",value.doubleSided},{"cutoff",value.alphaCutoff},{"textures",std::move(slots)},
+        {"emissive",value.emissive},{"mask",value.alphaMask},{"alphaBlend",value.alphaBlend},{"double",value.doubleSided},{"receiveFog",value.receiveFog},{"cutoff",value.alphaCutoff},{"textures",std::move(slots)},
         {"uvScale",value.uvScale},{"uvOffset",value.uvOffset},{"uvRotation",value.uvRotation},{"triplanar",value.triplanar},{"triplanarWorld",value.triplanarWorld},{"uvScaleLinked",value.uvScaleLinked},{"sharedSampler",std::move(sampler)}};
 }
 ModelMaterial material(const Json& value) {
     ModelMaterial result; result.name=value.at("name").get<std::string>(); result.baseColor=value.at("base").get<Vec4>(); result.metallic=value.at("metal").get<float>(); result.roughness=value.at("rough").get<float>();
     result.normalScale=value.at("normal").get<float>(); result.occlusionStrength=value.at("occlusion").get<float>(); result.emissive=value.at("emissive").get<Vec3>();
     result.alphaMask=value.at("mask").get<bool>(); result.doubleSided=value.at("double").get<bool>(); result.alphaCutoff=value.at("cutoff").get<float>();
+    result.receiveFog=value.value("receiveFog",true);
+    result.alphaBlend=value.value("alphaBlend",false);
     // Old metadata contains imported identity mapping and per-slot samplers.
     // Geometry payloads are unchanged and remain usable without a cache rebuild.
     result.uvScale=value.value("uvScale",Vec3{1,1,1});result.uvOffset=value.value("uvOffset",Vec3{});result.uvRotation=value.value("uvRotation",Vec3{});
@@ -87,39 +90,68 @@ void writeModelMetadataCache(const ModelAsset& asset,const ModelStream& stream,c
         {"bounds",bounds(asset.bounds)},{"images",asset.images},{"materialIds",asset.materialIds},{"roots",asset.roots},{"warnings",asset.warnings},
         {"dependencies",dependencies(root,asset.id)}};
     data["materials"]=Json::array(); for (const auto& value:asset.materials) data["materials"].push_back(material(value));
-    data["nodes"]=Json::array(); for (const auto& value:asset.nodes) data["nodes"].push_back({{"name",value.name},{"local",value.local},{"children",value.children},{"mesh",value.mesh}});
-    data["meshes"]=Json::array(); for (const auto& value:asset.meshes) data["meshes"].push_back({{"name",value.name},{"primitives",value.primitives}});
-    data["draws"]=Json::array(); for (const auto& value:asset.draws) data["draws"].push_back({{"primitive",value.primitive},{"transform",value.transform}});
+    data["nodes"]=Json::array(); for (const auto& value:asset.nodes) data["nodes"].push_back({{"name",value.name},{"local",value.local},{"children",value.children},{"mesh",value.mesh},
+        {"skin",value.skin},{"parent",value.parent},{"translation",value.translation},{"rotation",value.rotation},{"scale",value.scale},{"matrixAuthored",value.matrixAuthored},{"weights",value.weights}});
+    data["meshes"]=Json::array(); for (const auto& value:asset.meshes) data["meshes"].push_back({{"name",value.name},{"primitives",value.primitives},{"weights",value.weights}});
+    data["draws"]=Json::array(); for (const auto& value:asset.draws) data["draws"].push_back({{"primitive",value.primitive},{"transform",value.transform},{"node",value.node}});
+    data["skins"]=Json::array();for(const auto& value:asset.skins)data["skins"].push_back({{"name",value.name},{"joints",value.joints},{"inverseBindMatrices",value.inverseBindMatrices},{"skeleton",value.skeleton}});
+    data["animations"]=Json::array();for(const auto& value:asset.animations) {
+        auto channels=Json::array();for(const auto& channel:value.channels)channels.push_back({{"node",channel.node},{"components",channel.components},
+            {"path",static_cast<int>(channel.path)},{"interpolation",static_cast<int>(channel.interpolation)},{"times",channel.times},{"values",channel.values}});
+        data["animations"].push_back({{"name",value.name},{"start",value.start},{"end",value.end},{"channels",std::move(channels)}});
+    }
     data["primitives"]=Json::array();
     for (std::size_t p=0;p<stream.primitives.size();++p) {
         const auto& descriptor=stream.primitives[p]; const auto& primitive=asset.primitives[p];
         auto levels=Json::array(); for (const auto& value:descriptor.levels) levels.push_back({{"file",utf8(value.file.lexically_relative(root))},{"key",value.key},
             {"vertices",value.vertexCount},{"indices",value.indexCount},{"error",value.error}});
-        data["primitives"].push_back({{"material",primitive.material},{"uv",primitive.uvMask},{"tangentUv",primitive.tangentUv},
+        auto targets=Json::array();for(const auto& target:primitive.morphTargets)targets.push_back(bounds(target.positionBounds));
+        auto joints=Json::array();for(const auto& joint:primitive.skinJointBounds)joints.push_back(bounds(joint));
+        data["primitives"].push_back({{"material",primitive.material},{"uv",primitive.uvMask},{"tangentUv",primitive.tangentUv},{"hasSkinning",primitive.hasSkinning},{"morphBounds",std::move(targets)},{"skinJointBounds",std::move(joints)},
             {"vertices",primitive.vertices.empty() ? primitive.sourceVertexCount:primitive.vertices.size()},
             {"indices",primitive.indices.empty() ? primitive.sourceIndexCount:primitive.indices.size()},
             {"bounds",bounds(descriptor.bounds)},{"uvSpan",descriptor.uvSpan},{"levels",std::move(levels)}});
     }
-    writeFileAtomically(indexFile(root,asset.id),data.dump());
+    detail::writeCacheFileAtomically(indexFile(root,asset.id),data.dump());
 }
 std::shared_ptr<ModelAsset> loadModelMetadataCache(const std::filesystem::path& manifest,const std::filesystem::path& projectRoot) {
     try {
         const auto root=std::filesystem::weakly_canonical(projectRoot);
         const auto canonical=std::filesystem::weakly_canonical(manifest.is_absolute() ? manifest:root/manifest);
         const auto id=utf8(canonical.lexically_relative(root)); std::ifstream input(indexFile(root,id)); if (!input) return {};
-        const auto data=Json::parse(input);
+        const auto data=Json::parse(input);input.close();
         if (data.at("version")!=ModelCacheVersion || data.at("meshoptimizer")!=1010 || data.at("id")!=id || data.at("dependencies")!=dependencies(root,id)) return {};
         auto asset=std::make_shared<ModelAsset>(); asset->id=id; asset->name=data.at("name").get<std::string>(); asset->format=data.at("format").get<std::string>(); asset->bounds=bounds(data.at("bounds"));
         asset->images=data.at("images").get<std::vector<std::string>>(); asset->materialIds=data.at("materialIds").get<decltype(asset->materialIds)>();
         asset->roots=data.at("roots").get<std::vector<std::uint32_t>>(); asset->warnings=data.at("warnings").get<std::vector<std::string>>();
         for (const auto& value:data.at("materials")) asset->materials.push_back(material(value));
-        for (const auto& value:data.at("nodes")) asset->nodes.push_back({value.at("name").get<std::string>(),value.at("local").get<Mat4>(),value.at("children").get<std::vector<std::uint32_t>>(),value.at("mesh").get<std::int32_t>()});
-        for (const auto& value:data.at("meshes")) asset->meshes.push_back({value.at("name").get<std::string>(),value.at("primitives").get<std::vector<std::uint32_t>>()});
-        for (const auto& value:data.at("draws")) asset->draws.push_back({value.at("primitive").get<std::uint32_t>(),value.at("transform").get<Mat4>()});
+        for (const auto& value:data.at("nodes")) {
+            ModelNode node{value.at("name").get<std::string>(),value.at("local").get<Mat4>(),value.at("children").get<std::vector<std::uint32_t>>(),value.at("mesh").get<std::int32_t>()};
+            node.skin=value.at("skin").get<std::int32_t>();node.parent=value.at("parent").get<std::int32_t>();
+            node.translation=value.at("translation").get<Vec3>();node.rotation=value.at("rotation").get<Quat>();node.scale=value.at("scale").get<Vec3>();
+            node.matrixAuthored=value.at("matrixAuthored").get<bool>();node.weights=value.at("weights").get<std::vector<float>>();asset->nodes.push_back(std::move(node));
+        }
+        for (const auto& value:data.at("meshes")) asset->meshes.push_back({value.at("name").get<std::string>(),value.at("primitives").get<std::vector<std::uint32_t>>(),value.at("weights").get<std::vector<float>>()});
+        for (const auto& value:data.at("draws")) asset->draws.push_back({value.at("primitive").get<std::uint32_t>(),value.at("transform").get<Mat4>(),value.at("node").get<std::int32_t>()});
+        for(const auto& value:data.at("skins"))asset->skins.push_back({value.at("name").get<std::string>(),value.at("joints").get<std::vector<std::uint32_t>>(),
+            value.at("inverseBindMatrices").get<std::vector<Mat4>>(),value.at("skeleton").get<std::int32_t>()});
+        for(const auto& value:data.at("animations")) {
+            ModelAnimationClip clip{value.at("name").get<std::string>(),value.at("start").get<float>(),value.at("end").get<float>()};
+            for(const auto& item:value.at("channels")) {
+                const auto path=item.at("path").get<int>(),interpolation=item.at("interpolation").get<int>();
+                if(path<0||path>3||interpolation<0||interpolation>2)return {};
+                clip.channels.push_back({item.at("node").get<std::uint32_t>(),item.at("components").get<std::uint32_t>(),static_cast<ModelAnimationPath>(path),
+                    static_cast<ModelAnimationInterpolation>(interpolation),item.at("times").get<std::vector<float>>(),item.at("values").get<std::vector<float>>()});
+            }
+            asset->animations.push_back(std::move(clip));
+        }
         auto stream=std::make_shared<ModelStream>(); stream->id=id; stream->key=data.at("key").get<std::uint64_t>();
         for (const auto& value:data.at("primitives")) {
             ModelPrimitive primitive; primitive.material=value.at("material").get<std::uint32_t>(); primitive.uvMask=value.at("uv").get<std::uint8_t>(); primitive.tangentUv=value.at("tangentUv").get<std::uint8_t>();
             primitive.sourceVertexCount=value.at("vertices").get<std::uint64_t>(); primitive.sourceIndexCount=value.at("indices").get<std::uint64_t>();
+            primitive.hasSkinning=value.at("hasSkinning").get<bool>();primitive.bounds=bounds(value.at("bounds"));
+            for(const auto& item:value.at("skinJointBounds"))primitive.skinJointBounds.push_back(bounds(item));
+            for(const auto& item:value.at("morphBounds")) {ModelMorphTarget target;target.positionBounds=bounds(item);primitive.morphTargets.push_back(std::move(target));}
             if (primitive.material>=asset->materials.size()) throw std::runtime_error("Cached primitive material is invalid.");
             asset->primitives.push_back(primitive); PrimitiveLods descriptor{primitive.material,bounds(value.at("bounds")),{}};
             descriptor.uvSpan=value.at("uvSpan").get<std::array<Vec2,2>>();
@@ -132,6 +164,7 @@ std::shared_ptr<ModelAsset> loadModelMetadataCache(const std::filesystem::path& 
         }
         if (asset->primitives.empty() || asset->materialIds.size()!=asset->materials.size()) return {};
         for (const auto& draw:asset->draws) if (draw.primitive>=asset->primitives.size() || !math::isAffine(draw.transform)) return {};
+        validateModelAnimationData(*asset);
         asset->stream=std::move(stream); return asset;
     } catch (...) { return {}; }
 }

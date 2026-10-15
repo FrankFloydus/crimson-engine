@@ -24,13 +24,13 @@
 
 namespace crimson {
 namespace {
-constexpr uint32_t PreviewVersion=8,PreviewSize=512;
+constexpr uint32_t PreviewVersion=10;
 using streaming::detail::hash;
 uint64_t textHash(std::string_view text) { auto result=streaming::detail::HashSeed; hash(result,text.data(),text.size()); return result; }
 void materialHash(uint64_t& value,const ModelMaterial& material) {
     if(material.graph){hash(value,materialGraphRenderHash(material));return;}
     hash(value,material.baseColor); hash(value,material.metallic); hash(value,material.roughness); hash(value,material.normalScale);
-    hash(value,material.occlusionStrength); hash(value,material.emissive); hash(value,material.alphaMask); hash(value,material.alphaCutoff); hash(value,material.doubleSided);
+    hash(value,material.occlusionStrength); hash(value,material.emissive); hash(value,material.alphaMask); hash(value,material.alphaCutoff); hash(value,material.doubleSided); hash(value,material.receiveFog);
     hash(value,material.uvScale); hash(value,material.uvOffset); hash(value,material.uvRotation); hash(value,material.triplanar);
     hash(value,material.triplanarWorld);
     hash(value,material.sharedSampler.has_value());
@@ -105,8 +105,10 @@ struct AssetPreviews::Impl {
         ResourceHandle<PreviewDependencies> dependencies;
         ResourceHandle<DecodedImage> cached,writer;
         std::shared_ptr<const DecodedImage> writePin;
-        uint64_t sourceKey{},signature{},cacheChecked{},published{},rendering{};
-        bool wanted{},forceScene{},saveRequested{},failed{};
+        uint64_t sourceKey{},signature{},rendering{};
+        PreviewCacheState cacheState;
+        PreviewRetryState retry;
+        bool wanted{},forceScene{},saveRequested{};
         std::string error;
         std::chrono::steady_clock::time_point used{std::chrono::steady_clock::now()};
     };
@@ -123,6 +125,7 @@ struct AssetPreviews::Impl {
     std::unordered_map<std::string,EnvironmentEntry> environments;
     std::unordered_map<std::string,uint64_t> refreshedSources;
     uint64_t thumbnailEnvironment{};
+    uint32_t previewSize{128};
     std::string status;
     Impl(std::filesystem::path directory,AssetLibrary& library,ResourceManager& manager,Renderer& gpu,EditorResources& models)
         :root(std::move(directory)),assets(library),resources(manager),renderer(gpu),prepared(models) {}
@@ -183,20 +186,25 @@ struct AssetPreviews::Impl {
         return handle.state()==ResourceState::Ready ? handle.snapshot().shared() : nullptr;
     }
     bool warmCache(const std::string& id,Entry& entry,uint64_t signature) {
-        if (bgfx::isValid(renderer.thumbnailTexture(id,signature))) { entry.published=signature; return true; }
-        if (entry.cacheChecked!=signature) {
-            entry.cacheChecked=signature; entry.cached={};
+        if (bgfx::isValid(renderer.thumbnailTexture(id,signature))) { entry.cacheState.published=signature;entry.retry.reset();entry.error.clear();return true; }
+        if (entry.cacheState.published==signature && entry.writer) return true;
+        if (entry.cacheState.needsDiskRead(signature)) {
+            entry.cached={};
             const auto file=cache(id,signature),metadata=std::filesystem::path(file.wstring()+L".json");
+            const auto edge=previewSize;
             if (std::filesystem::is_regular_file(file) && std::filesystem::is_regular_file(metadata)) {
                 ResourceRequestOptions options; options.variant="preview-png:"+std::to_string(signature); options.priority=ResourcePriority::Preview;
+                // Cache files bypass the authored-source watcher. An earlier
+                // failed read must not poison this image after it is repaired.
+                options.forceReload=true;
                 options.dependencies={file,metadata};
-                entry.cached=resources.request<DecodedImage>(AssetRef<DecodedImage>{id},[file,metadata,id,signature](std::stop_token token) {
+                entry.cached=resources.request<DecodedImage>(AssetRef<DecodedImage>{id},[file,metadata,id,signature,edge](std::stop_token token) {
                     if (token.stop_requested()) throw std::runtime_error("Cached preview read canceled.");
                     std::ifstream input(metadata); const auto record=nlohmann::json::parse(input);
                     if (record.at("version")!=PreviewVersion || record.at("id")!=id || record.at("signature")!=signature)
                         throw std::runtime_error("Cached preview metadata is stale.");
                     auto image=std::make_shared<DecodedImage>(decodeManagedImage(file));
-                    if (image->width!=PreviewSize || image->height!=PreviewSize) throw std::runtime_error("Cached preview dimensions are invalid.");
+                    if (image->width!=edge || image->height!=edge) throw std::runtime_error("Cached preview dimensions are invalid.");
                     return ResourceLoadResult<DecodedImage>{image,image->rgba.size(),signature,{}};
                 },std::move(options));
             }
@@ -204,7 +212,8 @@ struct AssetPreviews::Impl {
         if (entry.cached) {
             if (entry.cached.state()==ResourceState::Ready) {
                 if (const auto pixels=entry.cached.snapshot()) {
-                    if (renderer.setThumbnail(id,signature,*pixels)) { entry.published=signature; entry.error.clear(); entry.cached={}; return true; }
+                    if (renderer.setThumbnail(id,signature,*pixels)) { entry.cacheState.published=signature;entry.retry.reset();entry.error.clear();entry.cached={};return true; }
+                    entry.error="Cannot publish cached thumbnail texture.";entry.retry.failed(PreviewRetryState::Clock::now());return true;
                 }
             } else if (entry.cached.state()!=ResourceState::Failed) return true; // Wait; do not decode model geometry for a warm PNG.
             else { entry.error=entry.cached.diagnostic(); entry.cached={}; }
@@ -212,20 +221,28 @@ struct AssetPreviews::Impl {
         return false;
     }
     void request(const std::string& id,Entry& entry) {
-        if (assets.references().deleted(id) || entry.failed) return;
+        if (assets.references().deleted(id) || !entry.retry.ready(PreviewRetryState::Clock::now())) return;
         SceneSettings settings; settings.directional.enabled=false; for (auto& light:settings.points) light.enabled=false;
         std::vector<ExtractedModel> models; std::vector<DirectionalLight> directions; std::vector<PointLight> points;
+        PlayerRevealSource playerReveal;
+        std::array<CharacterLight,2> characterLights{};
+        CharacterShadowSource characterShadow{};
         std::shared_ptr<const SceneSnapshot> sceneSnapshot; Aabb bounds;
         std::shared_ptr<const MaterialAsset> materialAsset;
         std::shared_ptr<const ModelAsset> materialGeometry;
         bool spriteMaterial=false;
         std::vector<std::filesystem::path> files;
         uint64_t sourceKey=streaming::detail::HashSeed; hash(sourceKey,PreviewVersion); hash(sourceKey,id.data(),id.size()); hash(sourceKey,renderer.shaderSignature());hash(sourceKey,assets.materialShaderRevision());
+        hash(sourceKey,previewSize);
         if (entry.kind==AssetKind::Scene) {
             const auto snapshot=scene(id,entry); if (!snapshot) return;
             sceneSnapshot=snapshot.shared(); hash(sourceKey,snapshot->fingerprint);
             Scene candidate; candidate.apply(snapshot->records,snapshot->properties); auto extracted=extractScene(candidate);
             models=std::move(extracted.models); directions=std::move(extracted.directional); points=std::move(extracted.points);
+            for(auto& model:models)model.animationSeconds=model.animation.startTime;
+            playerReveal=extracted.playerReveal;
+            characterLights=extracted.characterLights;
+            characterShadow=extracted.characterShadow;
             settings.environment=extracted.environment.environment; settings.exposure=extracted.environment.exposure;
             settings.proceduralSun=extracted.proceduralSun;
             if (snapshot->previewCamera) settings.camera=*snapshot->previewCamera;
@@ -285,11 +302,11 @@ struct AssetPreviews::Impl {
                     if(!target.empty() && !target.starts_with("builtin:"))files.push_back(root/pathFromUtf8(target));
                 });
             }
-            math::include(bounds,math::transformBounds(asset->bounds,model.world));
+            math::include(bounds,math::transformBounds(prepared.modelBounds(model,asset),model.world));
         }
         if (!loaded) return;
         if (entry.kind==AssetKind::Model && !bounds.valid) {
-            entry.error="Model bounds are unavailable."; entry.failed=true; return;
+            entry.error="Model bounds are unavailable.";entry.retry.failed(PreviewRetryState::Clock::now());return;
         }
         // Browser thumbnails deliberately omit post-process halos. Their cache
         // stays stable when a scene's Glow is tuned in its full-size views.
@@ -305,7 +322,7 @@ struct AssetPreviews::Impl {
         hash(sourceKey,settings.camera.position); hash(sourceKey,settings.camera.target); hash(sourceKey,settings.camera.up); hash(sourceKey,settings.camera.fov);
         hash(sourceKey,settings.camera.nearPlane); hash(sourceKey,settings.camera.farPlane);
         if (entry.sourceKey!=sourceKey || !entry.dependencies) {
-            entry.sourceKey=sourceKey; entry.signature=0; entry.cacheChecked=0;
+            entry.sourceKey=sourceKey; entry.signature=0; entry.cacheState.checked=0;
             files=uniqueFiles(std::move(files)); ResourceRequestOptions options; options.variant="preview-sources:"+std::to_string(sourceKey);
             options.priority=ResourcePriority::Preview; options.dependencies=files; options.assetDependencies={id};
             entry.dependencies=resources.request<PreviewDependencies>(AssetRef<PreviewDependencies>{id},[files](std::stop_token token) {
@@ -323,13 +340,15 @@ struct AssetPreviews::Impl {
         if (entry.dependencies.state()!=ResourceState::Ready) return;
         const auto dependencies=entry.dependencies.snapshot(); if (!dependencies) return;
         auto signature=sourceKey; hash(signature,dependencies->fingerprint); entry.signature=signature;
-        if (warmCache(id,entry,signature)) { if (entry.published==signature) entry.saveRequested=false; return; }
+        if (warmCache(id,entry,signature)) { if (entry.cacheState.published==signature) entry.saveRequested=false; return; }
         if (renderer.thumbnailBusy() || entry.rendering==signature) return;
         auto pins=std::make_shared<PreviewPins>(); pins->scene=sceneSnapshot; pins->material=materialAsset; pins->environment=bake;
         if(sceneSnapshot) {
-            ExtractedScene shadowScene;shadowScene.models=models;shadowScene.points=points;
+            ExtractedScene shadowScene;shadowScene.models=models;shadowScene.points=points;shadowScene.directional=directions;
+            shadowScene.characterShadow=characterShadow;
             std::erase_if(shadowScene.models,[&](const auto& model){return !assets.findModel(model.assetId) && !assets.modelLoading(model.assetId);});
-            pins->shadows=prepared.prepareShadows(shadowScene,256,ResourcePriority::Preview);
+            const std::array<ShadowCamera,1> shadowCameras{{{settings.camera,1.f}}};
+            pins->shadows=prepared.prepareShadows(shadowScene,256,ResourcePriority::Preview,shadowCameras);
             if(!pins->shadows->refined)return;
             for(const auto& model:pins->shadows->models)
                 if(!texturesMatchSources(assets,root,*dependencies,model->materials,model->textures,resources,refreshedSources))return;
@@ -338,7 +357,7 @@ struct AssetPreviews::Impl {
         std::vector<RenderParticle> particles;
         std::vector<RenderParticleMaterial> particleMaterials;
         if (spriteMaterial) {
-            assets.setTextureDemand(PreviewSize);
+            assets.setTextureDemand(previewSize);
             const auto material=assets.preparedParticleMaterial(id);
             if(!material || !material->ready || !material->current) { entry.error=material?material->diagnostic:"Sprite material is unavailable.";return; }
             const auto& image=materialAsset->surface.baseColorTexture.image;
@@ -365,7 +384,7 @@ struct AssetPreviews::Impl {
             if(!material->diagnostic.empty())entry.error=material->diagnostic;
         }
         if (materialAsset && !spriteMaterial) {
-            assets.setTextureDemand(PreviewSize);
+            assets.setTextureDemand(previewSize);
             auto candidate=std::make_shared<PreparedEditorModel>(); candidate->asset=materialGeometry;
             candidate->materials={materialAsset->surface}; candidate->textures=assets.modelBindings(*materialGeometry,candidate->materials);
             if (!assets.modelBindingsReady(candidate->textures) || std::any_of(candidate->textures.begin(),candidate->textures.end(),[](const auto& binding) {
@@ -394,40 +413,47 @@ struct AssetPreviews::Impl {
         }
         for (const auto& model:models) {
             if (!assets.findModel(model.assetId) && !assets.modelLoading(model.assetId)) continue;
-            const auto ready=prepared.prepare(model.assetId,model.world,settings.camera,PreviewSize,false,ResourcePriority::Preview,0,model.materialId);
+            const auto ready=prepared.prepare(model.assetId,model.world,settings.camera,previewSize,false,ResourcePriority::Preview,0,model.materialId,0,&model);
             if (!ready || !ready->ready || !ready->refined) return;
             if (!texturesMatchSources(assets,root,*dependencies,ready->materials,ready->textures,resources,refreshedSources)) return;
             pins->models.push_back(ready);
             instances.push_back({model.id,{ready->asset,model.world},&ready->textures,ready->revision,false,false,&ready->materials});
             instances.back().castShadows=model.castShadows;instances.back().receiveShadows=model.receiveShadows;
+            instances.back().lightingScopes=model.lightingScopes;
+            instances.back().lightingCategory=model.lightingCategory;
+            instances.back().pose=prepared.pose(model,ready->asset);
         }
         if (thumbnailEnvironment!=bake->key) {
             if (!renderer.publishThumbnailEnvironment(*bake)) { entry.error=renderer.thumbnailStatus(); return; }
             thumbnailEnvironment=bake->key;
         }
         RenderScene renderScene{settings,{},nullptr,nullptr,instances,directions,points,true,pins,particles,particleMaterials};
+        renderScene.playerReveal=playerReveal;
+        renderScene.characterLights=characterLights;
+        renderScene.characterShadow=characterShadow;
         if(pins->shadows) {
             renderScene.shadowInstances=pins->shadows->instances;
             renderScene.shadowWorldId=textHash(id);renderScene.shadowResolution=256;
         }
-        if (renderer.renderThumbnail(id,signature,renderScene,PreviewSize,pins)) entry.rendering=signature;
-        else { entry.error=renderer.thumbnailStatus().empty() ? "This renderer cannot create asset previews." : renderer.thumbnailStatus(); entry.failed=true; }
+        if (renderer.renderThumbnail(id,signature,renderScene,static_cast<uint16_t>(previewSize),pins)) entry.rendering=signature;
+        else { entry.error=renderer.thumbnailStatus().empty() ? "This renderer cannot create asset previews." : renderer.thumbnailStatus();entry.retry.failed(PreviewRetryState::Clock::now()); }
     }
 };
 AssetPreviews::AssetPreviews(std::filesystem::path root,AssetLibrary& assets,ResourceManager& resources,Renderer& renderer,EditorResources& models)
     :impl_(std::make_unique<Impl>(std::move(root),assets,resources,renderer,models)) {}
 AssetPreviews::~AssetPreviews()=default;
-void AssetPreviews::pump(uint32_t frame,std::span<const std::string> visible) {
+void AssetPreviews::pump(uint32_t frame,std::span<const std::string> visible,uint32_t pixelEdge) {
     impl_->status.clear();
+    impl_->previewSize=std::clamp(pixelEdge,16u,512u);
     if (auto result=impl_->renderer.pollThumbnail(frame)) {
         const auto found=impl_->entries.find(result->id);
         if (found!=impl_->entries.end()) {
             auto& entry=found->second; entry.rendering=0;
             if (!impl_->assets.references().deleted(result->id) && entry.signature==result->signature) {
                 if (impl_->renderer.setThumbnail(result->id,result->signature,result->image)) {
-                    entry.published=result->signature; entry.saveRequested=false; entry.error.clear();
+                    entry.cacheState.published=result->signature;entry.retry.reset();entry.saveRequested=false;entry.error.clear();
                     impl_->writePreview(*result,entry);
-                } else entry.error="Cannot publish thumbnail texture.";
+                } else { entry.error="Cannot publish thumbnail texture.";entry.retry.failed(PreviewRetryState::Clock::now()); }
             }
         }
     }
@@ -445,7 +471,7 @@ void AssetPreviews::pump(uint32_t frame,std::span<const std::string> visible) {
     for (auto& [id,entry]:impl_->entries) if (entry.wanted) {
         entry.used=std::chrono::steady_clock::now();
         try { impl_->request(id,entry); }
-        catch (const std::exception& error) { entry.error=error.what(); }
+        catch (const std::exception& error) { entry.error=error.what();entry.retry.failed(PreviewRetryState::Clock::now()); }
         if (!entry.error.empty()) impl_->status+=impl_->assets.displayName(id)+": "+entry.error+"\n";
     }
     // Cached GPU/PNG previews survive leaving the browser. CPU interests are
@@ -461,12 +487,17 @@ void AssetPreviews::pump(uint32_t frame,std::span<const std::string> visible) {
 }
 void AssetPreviews::requestSceneSave(const std::string& id) {
     if (id.empty()) return;
-    auto& entry=impl_->entries[id]; entry.kind=AssetKind::Scene; entry.saveRequested=true; entry.forceScene=true; entry.failed=false;
+    auto& entry=impl_->entries[id];entry.kind=AssetKind::Scene;entry.saveRequested=true;entry.forceScene=true;entry.retry.reset();
 }
 void AssetPreviews::invalidate(const std::string& id) {
-    if (const auto found=impl_->entries.find(id);found!=impl_->entries.end()) {
-        found->second.failed=false; found->second.cacheChecked=0; found->second.sourceKey=0; found->second.error.clear();
-        if (found->second.kind==AssetKind::Scene) found->second.forceScene=true;
+    const auto changed=resourcePathKey(impl_->root/pathFromUtf8(id));
+    for(auto& [assetId,entry]:impl_->entries) {
+        bool affected=assetId==id;
+        if(!affected)if(const auto dependencies=entry.dependencies.snapshot())
+            affected=std::any_of(dependencies->files.begin(),dependencies->files.end(),[&](const auto& file){return resourcePathKey(file)==changed;});
+        if(!affected)continue;
+        entry.retry.reset();entry.cacheState.checked=0;entry.sourceKey=0;entry.error.clear();
+        if(entry.kind==AssetKind::Scene)entry.forceScene=true;
     }
 }
 const std::string& AssetPreviews::status() const { return impl_->status; }

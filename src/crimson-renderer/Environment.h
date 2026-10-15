@@ -84,6 +84,7 @@ public:
     bgfx::TextureHandle diffuse() const { return diffuse_; }
     bgfx::TextureHandle specular() const { return specular_; }
     bgfx::TextureHandle brdf() const { return brdf_; }
+    std::span<const float> brdfCpu() const { return brdfCpu_; }
     float maxSpecularLod() const { return maxSpecularLod_; }
     std::size_t residentBytes() const { return residentBytes_; }
     const std::string& status() const { return status_; }
@@ -92,6 +93,7 @@ private:
     bgfx::TextureHandle diffuse_{BGFX_INVALID_HANDLE};
     bgfx::TextureHandle specular_{BGFX_INVALID_HANDLE};
     bgfx::TextureHandle brdf_{BGFX_INVALID_HANDLE};
+    std::vector<float> brdfCpu_;
     uint64_t key_{};
     float maxSpecularLod_{};
     std::size_t residentBytes_{};

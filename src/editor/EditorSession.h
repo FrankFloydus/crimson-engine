@@ -8,7 +8,10 @@
 #include "PlayShortcuts.h"
 #include "runtime/PlaySession.h"
 #include "runtime/GameInput.h"
+#include "runtime/SceneAnimations.h"
 #include "tools/GameView.h"
+#include "CollisionResources.h"
+#include "quader/QuaderBridge.h"
 #include <filesystem>
 #include <unordered_map>
 
@@ -36,6 +39,7 @@ public:
     void prepareFrame(AssetLibrary&,Renderer&,std::uint32_t bgfxFrame);
     void filesChanged(std::span<const std::filesystem::path>);
     void setResourceStatus(std::string value) { resourceStatus_=std::move(value); }
+    void setFrameTiming(FrameTiming timing) { gameView_.setFrameTiming(timing); }
     bool exitAccepted() const { return editor_.exitAccepted(); }
 private:
     std::filesystem::path root_;
@@ -48,11 +52,15 @@ private:
     ParticleEditor particleEditor_;
     MaterialEditor materialEditor_;
     SceneParticles particles_;
-    std::vector<RenderParticle> particlePackets_;
-    std::vector<RenderParticleMaterial> particleMaterials_;
+    SceneAnimations editAnimations_,playAnimations_;
+    std::uint64_t animationPlayTick_{};
     SceneSettings settings_;
     ResourceManager& resources_;
     EditorResources prepared_;
+    CollisionResources collisions_;
+    QuaderBridge quader_;
+    double materialGameSeconds_{},materialRealSeconds_{};
+    std::chrono::steady_clock::time_point materialClockStart_{std::chrono::steady_clock::now()};
     std::unique_ptr<AssetPreviews> previews_;
     ResourceHandle<PreparedEnvironment> environment_;
     ResourceHandle<SceneSnapshot> externalScene_;
@@ -68,6 +76,8 @@ private:
     bool simulationSuspended_{},skipSimulationTime_{true};
     PlayAction playActionPending_{PlayAction::None};
     bool focusGame_{},deferredSceneReload_{};
+    bool waitingForCollision_{};
+    std::uint64_t waitingSceneGeneration_{},waitingSceneRevision_{};
     Camera editCameraBeforePlay_;
     std::string playStatus_;
     SceneDocument& activeDocument() { return play_.playing()?play_.document():document_; }

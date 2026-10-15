@@ -1,0 +1,25 @@
+{
+  "dependencies": [
+    {
+      "index": 0,
+      "kind": "buffer",
+      "path": "buffers/0.bin",
+      "source": "Quader reader ABI 6"
+    }
+  ],
+  "document": "model.gltf",
+  "format": "Quader",
+  "materialAssets": [
+    "assets/materials/quader-259235be-ca11-4751-a03b-28c7c36529bf-e0174564-e91b-4bd1-8ac3-8960efbe6c31-1.crimson-material",
+    "builtin:material/default"
+  ],
+  "name": "Pillar_5",
+  "original": "source.gltf",
+  "quader": {
+    "collision": false,
+    "content": "ab05b476607136f6db5edf2ab3c13f041aeaae58ac26c6447c1cec577b627665",
+    "project": "259235be-ca11-4751-a03b-28c7c36529bf",
+    "scene": "6aeb7097-5046-450e-a451-a8b4518aa095"
+  },
+  "version": 1
+}

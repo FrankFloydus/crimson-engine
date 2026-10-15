@@ -24,6 +24,13 @@ Vec2 faceCoordinates(const Vec3& direction);
 Camera faceCamera(Vec3 position,float radius,unsigned face,std::uint16_t resolution);
 // Standard D3D [0,1] perspective depth from positive face-axis distance.
 float projectedDepth(float faceDistance,float nearValue,float farValue);
+// Inverse of a stored face depth, measured radially along the supplied ray.
+// Ray length is arbitrary; its largest absolute component selects face depth.
+// Clear depth (1) maps to the far face plane; callers exclude it as no blocker.
+float radialDistanceFromDepth(float depth,Vec3 direction,float nearValue,float farValue);
+// Similar-triangle emitter penumbra on a receiver beyond an average blocker.
+// Invalid inputs and blockers on/behind the receiver produce a hard shadow.
+float penumbraRadius(float sourceRadius,float receiverDistance,float blockerDistance);
 // Perspective-depth change per inner-face texel on a planar receiver. The
 // point is relative to the light, after normal/radial bias; normal is the actual
 // triangle plane, not a smooth shading normal. Degenerate planes return zero.
@@ -33,4 +40,8 @@ Vec2 receiverPlaneGradient(Vec3 relativePoint,Vec3 planeNormal,unsigned face,
 // removes a possible caster. The frustum includes the guard texels.
 bool intersectsFace(const Aabb&,const Camera&);
 bool intersectsLight(const Aabb&,const Vec3& position,float radius);
+// Conservative world-space pixel footprint of the supplied bounds. Aggregate
+// models must include each primitive's bounds before combining LOD demand.
+// An enclosing light or missing bounds requests original geometry/native mips.
+float casterTexelWorld(const Aabb&,const Vec3& position,unsigned resolution);
 } // namespace crimson::point_shadow

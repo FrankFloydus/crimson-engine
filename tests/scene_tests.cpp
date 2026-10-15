@@ -261,9 +261,29 @@ void persistenceAndCatalog() {
     require(document.save("Shared name"),document.status());
     const auto firstId=document.assetId();
     require(!document.dirty() && !firstId.empty(),"Save did not mark document clean.");
-    require(document.save("Shared name",true),document.status());
+    const auto firstBytes=readText(project.root/firstId);const auto savedHistory=document.history().size();
+    require(!document.save("Shared name",true),"Save As created an ambiguous duplicate scene name.");
+    require(!document.save(" SHARED NAME ",true),"Case/whitespace variant bypassed duplicate scene protection.");
+    require(document.assetId()==firstId&&!document.dirty(),"Rejected Save As changed the current scene.");
+    require(document.displayName()=="Shared name"&&document.history().size()==savedHistory&&
+        readText(project.root/firstId)==firstBytes&&scanSceneAssets(project.root).size()==1,"Rejected Save As rewrote saved data.");
+    SceneDocument unsaved(project.root);unsaved.createEmpty("Retain unsaved work");
+    const auto unsavedRecords=unsaved.scene().records();const auto unsavedHistory=unsaved.history().size();
+    require(!unsaved.save(" shared NAME ")&&unsaved.assetId().empty()&&unsaved.dirty()&&unsaved.history().size()==unsavedHistory,
+        "A new scene bypassed duplicate-name protection or lost its history.");
+    sameRecords(unsaved.scene().records(),unsavedRecords);
+    require(availableSceneName(project.root,"Shared name")=="Shared name 2","New scene name suggestion collides.");
+    require(document.save("Shared name Copy",true),document.status());
     const auto secondId=document.assetId();
     require(firstId!=secondId,"Save As reused the existing asset ID.");
+    require(availableSceneName(project.root,"Shared name Copy")=="Shared name Copy 2","Repeated Save As name collides.");
+    require(!document.save("Shared name"),"Scene rename created a duplicate name.");
+    // Legacy projects may already contain duplicate names. Preserve both IDs
+    // and allow ordinary saves rather than rewriting or merging their data.
+    auto legacy=readSceneSnapshot(project.root,secondId);legacy.name="Shared name";
+    saveSceneSnapshot(project.root,secondId,legacy);
+    require(document.load(secondId)&&document.save(),document.status());
+    require(readText(project.root/firstId)==firstBytes,"Saving a legacy duplicate rewrote the other scene.");
     auto catalog=scanSceneAssets(project.root);
     require(catalog.size()==2 && catalog[0].name=="Shared name" && catalog[1].name=="Shared name","Catalog lost colliding scene names.");
     SceneDocument reopened(project.root);
@@ -328,12 +348,35 @@ void limitsAndHistoryBound() {
     const auto count=document.history().size();
     require(document.createDirectionalLight()==NoEntity && document.history().size()==count,"Directional limit was not atomic.");
     EntityId point{};
-    for (size_t i=0;i<MaximumPointLights;++i) { point=document.createPointLight(); require(point!=NoEntity,document.status()); }
-    const auto records=document.scene().records(); document.select({point});
-    require(!document.duplicateSelection(),"Duplicating beyond light limit succeeded.");
+    require(MaximumPointLights>=32,"Clustered lighting did not lift the legacy sixteen-light scene limit.");
+    // Exercise normal edit/history/save behavior above the old ceiling without
+    // rebuilding the whole scene for every one of thousands of point lights.
+    for (size_t i=0;i<32;++i) { point=document.createPointLight(); require(point!=NoEntity,document.status()); }
+    const auto records=document.scene().records();document.select({point});
+    require(document.duplicateSelection(),document.status());
+    require(document.undo(),"Point-light duplication above sixteen was not undoable.");
     sameRecords(document.scene().records(),records);
     auto invalid=*document.scene().find(point); invalid.point->intensity=-1;
     require(!document.updateEntity(point,invalid),"Negative intensity accepted.");
+    require(document.save("Clustered point lights"),document.status());
+    SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
+    sameRecords(reopened.scene().records(),records);
+
+    std::vector<EntityRecord> boundary;boundary.reserve(MaximumPointLights+1);
+    for(size_t i=0;i<MaximumPointLights;++i) {
+        EntityRecord light;light.id=i+1;light.name="Boundary light "+std::to_string(i);light.order=static_cast<uint32_t>(i);light.point.emplace();
+        boundary.push_back(std::move(light));
+    }
+    Scene::validate(boundary,{});Scene bulk;bulk.apply(boundary,{});
+    require(bulk.records().size()==MaximumPointLights,"Full point-light capacity failed bulk publication.");
+    auto extra=boundary.back();extra.id=MaximumPointLights+1;extra.order=static_cast<uint32_t>(MaximumPointLights);boundary.push_back(extra);
+    rejects([&]{Scene::validate(boundary,{});});rejects([&]{bulk.apply(boundary,{});});
+    require(bulk.records().size()==MaximumPointLights && !bulk.contains(extra.id),"Rejected point-light overflow partially changed the scene.");
+    boundary.pop_back();SceneDocument full(project.root);
+    require(full.openPreparedSnapshot({"assets/scenes/full-clustered.crimson-scene","Full clustered scene",boundary,{},{}}),full.status());
+    full.select({boundary.back().id});const auto fullHistory=full.history().size();
+    require(!full.duplicateSelection() && full.history().size()==fullHistory,"Duplicating beyond point-light capacity was not atomic.");
+    sameRecords(full.scene().records(),boundary);
     document.newScene(); const auto id=document.createEmpty();
     for (unsigned i=0;i<300;++i) {
         auto record=*document.scene().find(id); record.name="Edit " + std::to_string(i);
@@ -411,7 +454,7 @@ void environmentsAndMigration() {
     require(migrated.records.size()==snapshot.records.size()+1 && readText(project.root/oldId)==contents,"Legacy migration rewrote its source.");
     SceneDocument opened(project.root); require(opened.load(oldId),opened.status());
     require(!opened.dirty() && resolveEnvironment(opened.scene()).exposure==1.7f,"Legacy migration lost settings or marked an equivalent load dirty.");
-    require(opened.save(),opened.status()); require(Json::parse(readText(project.root/oldId)).at("version")==8,"Explicit save did not write scene version 8.");
+    require(opened.save(),opened.status()); require(Json::parse(readText(project.root/oldId)).at("version")==10,"Explicit save did not write scene version 10.");
 }
 void environmentGlowHistoryAndMigration() {
     TempProject project;SceneDocument document(project.root);
@@ -519,7 +562,7 @@ void environmentModesPersistenceAndValidation() {
             rejects([&]{auto json=environmentSettingsJson(environment);json["fog"][field]=invalidValue;(void)readEnvironmentSettings(json);});
     require(document.save("Environment modes"),document.status());
     const auto saved=readText(project.root/document.assetId());
-    require(Json::parse(saved).at("version")==8,"Environment writer did not use scene v8.");
+    require(Json::parse(saved).at("version")==10,"Environment writer did not use scene v10.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
     require(!reopened.dirty() && sameEnvironment(resolveEnvironment(reopened.scene()),*edited.environment),"Environment settings did not survive reopening.");
     SceneDocument play(project.root);require(play.resetTransientFrom(document),play.status());
@@ -660,6 +703,67 @@ void environmentSunHistoryAndDuplication() {
         document.scene().find(externalLink)->environment->sun==sun,"Undo did not restore sun identity and dependent links.");
     require(document.redo() && !document.scene().find(environmentId)->environment->sun,"Redo did not clear the sun link again.");
 }
+void environmentAmbientLightStorageAndHistory() {
+    TempProject project;SceneDocument document(project.root);
+    require(resolveEnvironment(document.scene()).environment.ambientLight==AmbientLightSettings{},
+        "Empty scenes changed their existing sky ambient defaults.");
+    const auto id=document.createEnvironment("Ambient");
+    const auto original=*document.scene().find(id);
+    auto edited=original;
+    edited.environment->environment.ambientLight={AmbientLightSource::Sky,{.23f,.41f,.67f},.35f,2.75f};
+    require(document.updateEntity(id,edited),document.status());
+    require(document.undo() && sameEnvironment(resolveEnvironment(document.scene()),*original.environment),
+        "Ambient light undo lost original sky lighting.");
+    require(document.redo() && sameEnvironment(resolveEnvironment(document.scene()),*edited.environment),
+        "Ambient light redo lost its source, color, sky contribution or energy.");
+    for(const auto source:{AmbientLightSource::Disabled,AmbientLightSource::Color,AmbientLightSource::Sky}) {
+        auto changed=edited;changed.environment->environment.ambientLight.source=source;
+        require(document.updateEntity(id,changed),document.status());
+        require(document.save("Ambient"),document.status());
+        SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
+        require(!reopened.dirty() && sameEnvironment(resolveEnvironment(reopened.scene()),*changed.environment),
+            "Ambient mode round-trip discarded its inactive authored values.");
+        require(readEnvironmentSettings(environmentSettingsJson(changed.environment->environment))==changed.environment->environment,
+            "Shared scene and legacy environment persistence disagree for ambient light.");
+    }
+    document.select({id});require(document.duplicateSelection(),document.status());
+    require(sameEnvironment(*document.scene().find(document.selection().primary)->environment,*edited.environment),
+        "Environment duplication discarded ambient light settings.");
+    require(document.save("Ambient"),document.status());
+    const auto saved=Json::parse(readText(project.root/document.assetId()));
+    auto legacy=saved;
+    for(auto& record:legacy["entities"])if(record.contains("environment"))record["environment"]["environment"].erase("ambientLight");
+    const auto legacyText=legacy.dump();const auto legacyId="assets/scenes/ambient-missing.crimson-scene";
+    writeText(project.root/legacyId,legacyText);
+    SceneDocument reopened(project.root);require(reopened.load(legacyId),reopened.status());
+    require(!reopened.dirty() && readText(project.root/legacyId)==legacyText &&
+        resolveEnvironment(reopened.scene()).environment.ambientLight==AmbientLightSettings{},
+        "Old scenes must retain sky diffuse lighting without rewriting their source.");
+    auto settings=edited.environment->environment;
+    const auto reject=[&](const auto& change){auto candidate=settings;change(candidate.ambientLight);rejects([&]{validateEnvironmentSettings(candidate);});};
+    reject([](auto& ambient){ambient.source=static_cast<AmbientLightSource>(99);});
+    for(float invalid:{-1.f,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()})
+        reject([&](auto& ambient){ambient.energy=invalid;});
+    for(float invalid:{-1.f,1.01f,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()}) {
+        reject([&](auto& ambient){ambient.skyContribution=invalid;});
+        reject([&](auto& ambient){ambient.color[1]=invalid;});
+    }
+    for(const auto invalidSource:{Json(-1),Json(3),Json(1.5),Json(true),Json("Sky"),Json(nullptr)})
+        rejects([&]{auto json=environmentSettingsJson(settings);json["ambientLight"]["source"]=invalidSource;(void)readEnvironmentSettings(json);});
+    for(const auto* field:{"skyContribution","energy"})for(const auto invalidValue:{Json(true),Json("1"),Json(nullptr)})
+        rejects([&]{auto json=environmentSettingsJson(settings);json["ambientLight"][field]=invalidValue;(void)readEnvironmentSettings(json);});
+    for(const auto invalidObject:{Json(true),Json(1),Json(nullptr),Json::array()})
+        rejects([&]{auto json=environmentSettingsJson(settings);json["ambientLight"]=invalidObject;(void)readEnvironmentSettings(json);});
+    settings.ambientLight.energy=0;settings.ambientLight.skyContribution=0;settings.ambientLight.color={0,1,0};
+    require(readEnvironmentSettings(environmentSettingsJson(settings))==settings,"Valid ambient light boundaries were rejected.");
+    require(document.save("Ambient"),document.status());
+    require(reopened.load(document.assetId()),reopened.status());
+    const auto before=reopened.scene().records();
+    auto invalid=saved;
+    for(auto& record:invalid["entities"])if(record.contains("environment"))record["environment"]["environment"]["ambientLight"]["energy"]=-1;
+    const auto invalidId="assets/scenes/ambient-invalid.crimson-scene";writeText(project.root/invalidId,invalid.dump());
+    require(!reopened.load(invalidId),"Invalid ambient light replaced a working scene.");sameRecords(before,reopened.scene().records());
+}
 void particleReferencesAndPersistence() {
     TempProject project;SceneDocument document(project.root);
     const std::string effect="assets/particles/missing.crimson-particle";
@@ -688,7 +792,7 @@ void particleReferencesAndPersistence() {
     invalid.particle=AssetRef<ParticleEffectAsset>{"assets/particles/../bad.crimson-particle"};
     require(!document.updateEntity(particle,invalid),"Particle traversal was accepted.");
     require(document.save("Particles"),document.status());const auto savedId=document.assetId();
-    const auto serialized=Json::parse(readText(project.root/savedId));require(serialized.at("version")==8,"Particle scene writer did not use version 8.");
+    const auto serialized=Json::parse(readText(project.root/savedId));require(serialized.at("version")==10,"Particle scene writer did not use version 10.");
     SceneDocument reopened(project.root);require(reopened.load(savedId),reopened.status());sameRecords(document.scene().records(),reopened.scene().records());
     require(!reopened.dirty() && reopened.scene().find(particle)->particle->id==effect,"Missing particle asset prevented clean scene reopening.");
     auto cleared=*reopened.scene().find(particle);cleared.particle=AssetRef<ParticleEffectAsset>{};
@@ -700,7 +804,7 @@ void particleReferencesAndPersistence() {
     const auto oldBytes=readText(project.root/legacy);SceneDocument old(project.root);require(old.load(legacy),old.status());
     require(!old.dirty() && readText(project.root/legacy)==oldBytes,"Version-two load rewrote its source or became dirty.");
     for(const auto& record:old.scene().records())require(!record.particle,"Version-two migration invented a particle component.");
-    require(old.save(),old.status());require(Json::parse(readText(project.root/legacy)).at("version")==8,"Explicit version-two save did not migrate to version eight.");
+    require(old.save(),old.status());require(Json::parse(readText(project.root/legacy)).at("version")==10,"Explicit version-two save did not migrate to version ten.");
 }
 void externalSceneChanges() {
     TempProject project; SceneDocument document(project.root);
@@ -884,7 +988,7 @@ void inspectorZeroScaleHistory() {
         require(document.redo()&&document.dirty(),"Redo zero scale failed.");sameRecords(document.scene().records(),collapsed);
         require(document.selection().ids==std::vector<EntityId>{target}&&document.scene().find(model)->model->id=="assets/models/zero-scale/manifest.json",
             "Zero-scale history changed selection or the model asset identity.");
-        require(document.save("Saved zero scale",true),document.status());const auto zeroId=document.assetId();
+        require(document.save(availableSceneName(project.root,"Saved zero scale"),true),document.status());const auto zeroId=document.assetId();
         require(!document.dirty()&&document.history().size()==1,"Saving zero scale changed committed history or failed to mark clean.");
         require(document.load(zeroId),document.status());document.select({target},target);
         const auto reopened=document.scene().records();sameRecords(reopened,collapsed);
@@ -924,9 +1028,9 @@ int main() {
         dirtyTokensAndFailure();
         limitsAndHistoryBound();
         groupingAndBatchPlacement();
-        environmentsAndMigration();environmentGlowHistoryAndMigration();environmentModesPersistenceAndValidation();environmentSunHistoryAndDuplication();
+        environmentsAndMigration();environmentGlowHistoryAndMigration();environmentModesPersistenceAndValidation();environmentSunHistoryAndDuplication();environmentAmbientLightStorageAndHistory();
         particleReferencesAndPersistence();externalSceneChanges();preparedSceneOpening();preparedGlobalChanges();inspectorAffineTransactions();inspectorZeroScaleHistory();
-        std::cout << "Scene core: 19 groups passed.\n";
+        std::cout << "Scene core: 20 groups passed.\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "Scene core failed: " << error.what() << '\n';

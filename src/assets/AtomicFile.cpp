@@ -53,8 +53,10 @@ void writeFileAtomically(const std::filesystem::path& path, std::string_view con
             if (!output) throw std::runtime_error("Could not close the temporary file.");
         }
 #ifdef _WIN32
-        if (!MoveFileExW(temporary.c_str(),path.c_str(),MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
-            throw std::runtime_error("Could not publish the file (Windows error " + std::to_string(GetLastError()) + ").");
+        if (!MoveFileExW(temporary.c_str(),path.c_str(),MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+            const auto error=GetLastError();const auto encoded=path.generic_u8string();
+            throw std::runtime_error("Could not publish the file '"+std::string(encoded.begin(),encoded.end())+"' (Windows error "+std::to_string(error)+").");
+        }
 #else
         std::filesystem::rename(temporary,path);
 #endif

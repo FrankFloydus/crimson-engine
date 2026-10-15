@@ -4,12 +4,14 @@
 #include "resources/ShaderCompiler.h"
 #include "ShaderPreflight.h"
 #include <cstdint>
+#include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
 namespace crimson {
 struct MaterialAsset;
-enum class MaterialGraphPass { Model, Picking, PointShadow, Particle };
+enum class MaterialGraphPass { Model, Picking, PointShadow, Particle, DirectionalShadow };
 enum class MaterialGraphTextureRole { Color, Data, Normal };
 struct MaterialGraphTextureBinding {
     std::uint64_t nodeId{};
@@ -23,13 +25,27 @@ struct MaterialGraphShaderVariant {
     std::string vertexName, varyingName, source;
     std::vector<ShaderUniformContract> manifest;
 };
+struct MaterialGraphRuntimeParameter {
+    MaterialNodeId node{};
+    std::uint16_t row{};
+    bool mapping{}, coverage{};
+};
 struct MaterialGraphShader {
     std::string topologyKey;
     std::vector<Vec4> uniforms;
     std::vector<MaterialGraphTextureBinding> textures;
     std::vector<MaterialGraphShaderVariant> variants;
+    std::shared_ptr<const MaterialGraph> runtimeGraph;
+    std::vector<MaterialGraphRuntimeParameter> runtimeParameters;
     bool usesNormal{}, usesTextures{}, nodePreview{};
+    bool dynamicCoverage{};
+    // Authored runtime expressions can differ while their t=0 rows and shader
+    // topology are identical. Computed once at lowering, never at submission.
+    std::uint64_t runtimeDefinitionSignature{};
 };
+// Patches a submission copy, never the authored packet or compile identity.
+void updateMaterialGraphRuntimeUniforms(const MaterialGraph&,std::span<const MaterialGraphRuntimeParameter>,
+    MaterialEvaluationContext,std::span<Vec4>);
 // Deterministic CPU lowering. Throws node-specific diagnostics for invalid
 // graphs/limits; no shaderc/GPU/filesystem work. Packet edits preserve source.
 MaterialGraphShader generateMaterialGraphShader(const MaterialAsset&);

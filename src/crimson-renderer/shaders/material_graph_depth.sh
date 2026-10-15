@@ -1,8 +1,15 @@
 #if CC_GRAPH_PICK
 uniform vec4 u_pickId;
+#else
+uniform vec4 u_surfaceLighting;
 #endif
+#include "prepass_receiver.sh"
 void main()
 {
+#if !CC_GRAPH_PICK
+    vec3 receiverPlane = v_normal;
+    if (u_surfaceLighting.z > 0.5) receiverPlane = prepassReceiverPlane(v_worldPosition, v_normal);
+#endif
     GraphContext context;
     context.particleColor = vec4_splat(1.0);
     context.uv = vec4(v_texcoord0, v_texcoord1);
@@ -19,6 +26,7 @@ void main()
     if (u_graphParams[3].w > 1.5 && material.opacity * v_color0.a < 0.01) discard;
     gl_FragColor = u_pickId;
 #else
-    gl_FragColor = vec4_splat(0.0);
+    gl_FragColor = u_surfaceLighting.z > 0.5 ?
+        vec4(u_surfaceLighting.y / 255.0, prepassReceiverNormal(v_worldPosition, receiverPlane)) : vec4_splat(0.0);
 #endif
 }

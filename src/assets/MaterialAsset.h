@@ -2,6 +2,7 @@
 
 #include "MaterialGraph.h"
 #include <filesystem>
+#include <optional>
 #include <string>
 
 namespace crimson {
@@ -13,7 +14,7 @@ inline constexpr const char* NeutralNormalTextureId = "builtin:texture/normal";
 inline constexpr const char* StudioEnvironmentId = "builtin:environment/studio";
 
 struct MaterialAsset {
-    std::string id, name, originModel;
+    std::string id, name, originModel; // Origin is provenance; managed model sidecars remain editable.
     ModelMaterial surface;
     MaterialShading shading{MaterialShading::StandardPbr};
     MaterialBlend blend{MaterialBlend::Opaque};
@@ -26,6 +27,10 @@ struct MaterialAsset {
 void canonicalizeMaterialAsset(MaterialAsset&);
 MaterialGraph materialGraphFromLegacy(const ModelMaterial&,MaterialShading,MaterialBlend);
 ModelMaterial materialGraphLegacySurface(const MaterialGraph&,const std::string& name={});
+// Exact fixed-program lowering for model rendering. Unlike the legacy
+// inspector transport this rejects unsupported expressions instead of dropping
+// them. The caller must also match a normal map's UV to the primitive tangent UV.
+std::optional<ModelMaterial> materialGraphFixedSurface(const MaterialGraph&);
 std::vector<std::string> materialTextureReferences(const MaterialAsset&);
 
 std::string importedMaterialId(const std::string& modelId, std::size_t index);
@@ -46,7 +51,9 @@ void saveMaterialAsset(const std::filesystem::path& projectRoot, const MaterialA
 // authored factors/slots but receive a new identity and no imported origin.
 MaterialAsset createMaterialAsset(const std::filesystem::path& projectRoot, const std::string& name="New Material");
 MaterialAsset copyMaterialAsset(const std::filesystem::path& projectRoot, const MaterialAsset& source, const std::string& name={});
-// Idempotent compatibility promotion. Authored material files are never overwritten.
+// Import creates a missing native sidecar once. Existing sidecars are authored
+// authority, including imported-origin materials; reload/reimport never resets
+// their graphs. Different model-content imports retain independent identities.
 void promoteModelMaterials(const std::filesystem::path& projectRoot, const ModelAsset& model,
                           const std::function<bool(const std::string&)>& deleted={});
 

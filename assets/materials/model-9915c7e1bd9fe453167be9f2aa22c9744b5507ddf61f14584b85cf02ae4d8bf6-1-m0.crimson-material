@@ -1,0 +1,276 @@
+{
+  "graph": {
+    "links": [
+      {
+        "fromNode": 2,
+        "fromPin": 7,
+        "id": 1,
+        "toNode": 3,
+        "toPin": 7
+      },
+      {
+        "fromNode": 3,
+        "fromPin": 1,
+        "id": 2,
+        "toNode": 1,
+        "toPin": 10
+      },
+      {
+        "fromNode": 2,
+        "fromPin": 7,
+        "id": 3,
+        "toNode": 4,
+        "toPin": 7
+      },
+      {
+        "fromNode": 4,
+        "fromPin": 4,
+        "id": 5,
+        "toNode": 1,
+        "toPin": 12
+      },
+      {
+        "fromNode": 2,
+        "fromPin": 7,
+        "id": 6,
+        "toNode": 5,
+        "toPin": 7
+      },
+      {
+        "fromNode": 5,
+        "fromPin": 6,
+        "id": 7,
+        "toNode": 1,
+        "toPin": 6
+      },
+      {
+        "fromNode": 6,
+        "fromPin": 1,
+        "id": 8,
+        "toNode": 1,
+        "toPin": 14
+      },
+      {
+        "fromNode": 3,
+        "fromPin": 5,
+        "id": 9,
+        "toNode": 1,
+        "toPin": 17
+      },
+      {
+        "fromNode": 2,
+        "fromPin": 7,
+        "id": 11,
+        "toNode": 7,
+        "toPin": 7
+      },
+      {
+        "fromNode": 7,
+        "fromPin": 1,
+        "id": 12,
+        "toNode": 8,
+        "toPin": 8
+      },
+      {
+        "fromNode": 8,
+        "fromPin": 0,
+        "id": 13,
+        "toNode": 1,
+        "toPin": 11
+      }
+    ],
+    "nextLinkId": 14,
+    "nextNodeId": 9,
+    "nodes": [
+      {
+        "id": 1,
+        "kind": 0,
+        "name": "Output",
+        "output": {
+          "alphaCutoff": 0.5,
+          "baseColor": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "blend": 0,
+          "doubleSided": true,
+          "emission": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "metallic": 1.0,
+          "occlusion": 1.0,
+          "occlusionStrength": 1.0,
+          "opacity": 1.0,
+          "opacityMask": 1.0,
+          "receiveFog": true,
+          "roughness": 1.0,
+          "shading": 0,
+          "specular": 0.5
+        },
+        "position": [
+          700.0,
+          80.0
+        ]
+      },
+      {
+        "id": 2,
+        "kind": 1,
+        "name": "UV",
+        "position": [
+          -750.0,
+          0.0
+        ],
+        "uv": {
+          "mode": 0,
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "scaleLinked": true
+        }
+      },
+      {
+        "id": 3,
+        "kind": 2,
+        "name": "Texture 2D",
+        "position": [
+          -450.0,
+          0.0
+        ],
+        "texture": {
+          "image": "assets/models/model-9915c7e1bd9fe453167be9f2aa22c9744b5507ddf61f14584b85cf02ae4d8bf6-1/images/1.jpg",
+          "normalStrength": 1.0,
+          "role": 0,
+          "sampler": {
+            "magFilter": 0,
+            "minFilter": 5,
+            "wrapU": 0,
+            "wrapV": 0
+          }
+        }
+      },
+      {
+        "id": 4,
+        "kind": 2,
+        "name": "Texture 2D",
+        "position": [
+          -450.0,
+          300.0
+        ],
+        "texture": {
+          "image": "assets/models/model-9915c7e1bd9fe453167be9f2aa22c9744b5507ddf61f14584b85cf02ae4d8bf6-1/images/2.png",
+          "normalStrength": 1.0,
+          "role": 1,
+          "sampler": {
+            "magFilter": 0,
+            "minFilter": 5,
+            "wrapU": 0,
+            "wrapV": 0
+          }
+        }
+      },
+      {
+        "id": 5,
+        "kind": 2,
+        "name": "Texture 2D",
+        "position": [
+          -447.0,
+          724.0
+        ],
+        "texture": {
+          "image": "assets/models/model-9915c7e1bd9fe453167be9f2aa22c9744b5507ddf61f14584b85cf02ae4d8bf6-1/images/0.jpg",
+          "normalStrength": 1.0,
+          "role": 2,
+          "sampler": {
+            "magFilter": 0,
+            "minFilter": 5,
+            "wrapU": 0,
+            "wrapV": 0
+          }
+        }
+      },
+      {
+        "color": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "id": 6,
+        "kind": 4,
+        "name": "Emissive Color",
+        "position": [
+          -120.0,
+          1310.0
+        ]
+      },
+      {
+        "id": 7,
+        "kind": 2,
+        "name": "Texture 2D",
+        "position": [
+          -111.5,
+          365.25
+        ],
+        "texture": {
+          "image": "assets/textures/0b21c54a-61bd-4a5a-a0a9-693d6ad4f15f_roughness_linear-3.png",
+          "normalStrength": 1.0,
+          "role": 0,
+          "sampler": {
+            "magFilter": 0,
+            "minFilter": 5,
+            "wrapU": 0,
+            "wrapV": 0
+          }
+        }
+      },
+      {
+        "id": 8,
+        "kind": 5,
+        "left": {
+          "type": 0,
+          "value": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "name": "Multiply",
+        "position": [
+          193.5,
+          609.0
+        ],
+        "right": {
+          "type": 0,
+          "value": [
+            1.0490000247955322,
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      }
+    ],
+    "version": 4
+  },
+  "id": "assets/materials/model-9915c7e1bd9fe453167be9f2aa22c9744b5507ddf61f14584b85cf02ae4d8bf6-1-m0.crimson-material",
+  "name": "tripo_mat_e2d9edc9-a284-40c0-a603-a929041cabe3",
+  "originModel": "assets/models/model-9915c7e1bd9fe453167be9f2aa22c9744b5507ddf61f14584b85cf02ae4d8bf6-1/manifest.json",
+  "type": "crimson-material",
+  "version": 6
+}

@@ -2,6 +2,8 @@
 #include "GameViewInteraction.h"
 #include "editor/CollisionWire.h"
 #include "editor/CollisionOverlay.h"
+#include "editor/MeshCollisionOverlay.h"
+#include "editor/PlayerLightRigOverlay.h"
 #include "scene/SceneDocument.h"
 #include "scene/SceneExtraction.h"
 #include "crimson-renderer/Renderer.h"
@@ -9,12 +11,44 @@
 #include <imgui.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <numbers>
 
 namespace crimson {
-GameViewFrame GameView::draw(SceneDocument& document,Renderer& renderer,bool& open,bool /*playing*/,bool focus) {
+void GameView::updateMetrics(Renderer& renderer,std::uint64_t textureAndProgramBytes) {
+    if(!newFrameTiming_)return;
+    newFrameTiming_=false;FrameMetricsSample sample;sample.timing=frameTiming_;
+    sample.textureAndProgramBytes=textureAndProgramBytes;sample.modelBytes=renderer.modelResidentBytes();sample.shadowBytes=renderer.shadowResidentBytes();
+    if(const auto* stats=bgfx::getStats()) {
+        if(stats->gpuFrameNum)sample.gpuMilliseconds=gpuFrameMilliseconds(stats->gpuTimeBegin,stats->gpuTimeEnd,stats->gpuTimerFreq);
+        sample.deviceMemory=validDeviceMemory(stats->gpuMemoryUsed,stats->gpuMemoryMax);sample.draws=stats->numDraw;
+    }
+    if(!metrics_.sample(sample))return;
+    const auto& value=metrics_.readout();const auto mib=[](std::uint64_t bytes){return static_cast<double>(bytes)/(1024.0*1024.0);};
+    char text[640],gpu[48],vram[96];
+    if(value.gpuMilliseconds)std::snprintf(gpu,sizeof(gpu),"%.2f ms",*value.gpuMilliseconds);else std::snprintf(gpu,sizeof(gpu),"N/A");
+    if(value.deviceMemory)std::snprintf(vram,sizeof(vram),"%.0f / %.0f MiB",mib(value.deviceMemory->used),mib(value.deviceMemory->available));
+    else std::snprintf(vram,sizeof(vram),"N/A");
+    std::snprintf(text,sizeof(text),"FPS: %.1f    Frame: %.2f ms\nCPU work (main): %.2f ms\nGPU frame: %s\nDevice VRAM: %s\nTextures/programs: %.1f MiB\nModels: %.1f MiB    Shadows: %.1f MiB\nDraws (engine): %llu",
+        value.fps,value.timing.frameMilliseconds,value.timing.cpuWorkMilliseconds,gpu,vram,mib(value.textureAndProgramBytes),
+        mib(value.modelBytes),mib(value.shadowBytes),static_cast<unsigned long long>(value.draws));
+    metricsText_=text;
+}
+void GameView::drawMetrics(Vec2 origin,Vec2 size) const {
+    const char* text=metricsText_.empty()?"FPS: N/A    Frame: N/A\nCPU work (main): N/A\nGPU frame: N/A\nDevice VRAM: N/A":metricsText_.c_str();
+    const auto& style=ImGui::GetStyle();const auto extent=ImGui::CalcTextSize(text);const auto padding=style.WindowPadding;
+    const ImVec2 minimum{std::max(origin[0]+padding.x,origin[0]+size[0]-extent.x-padding.x*3),origin[1]+padding.y};
+    const ImVec2 maximum{minimum.x+extent.x+padding.x*2,minimum.y+extent.y+padding.y*2};
+    auto* draw=ImGui::GetWindowDrawList();draw->PushClipRect({origin[0],origin[1]},{origin[0]+size[0],origin[1]+size[1]},true);
+    draw->AddRectFilled(minimum,maximum,ImGui::GetColorU32(ImGuiCol_WindowBg),style.WindowRounding);
+    if(style.WindowBorderSize>0)draw->AddRect(minimum,maximum,ImGui::GetColorU32(ImGuiCol_Border),style.WindowRounding,0,style.WindowBorderSize);
+    draw->AddText({minimum.x+padding.x,minimum.y+padding.y},ImGui::GetColorU32(ImGuiCol_Text),text);draw->PopClipRect();
+}
+GameViewFrame GameView::draw(SceneDocument& document,Renderer& renderer,bool& open,bool playing,bool focus,std::uint64_t textureAndProgramBytes) {
     GameViewFrame frame;
     imageDrawList_=nullptr;
+    if(playing&&!wasPlaying_){metrics_.reset();metricsText_.clear();}
+    wasPlaying_=playing;
     if(!open)return frame;
     ImGui::SetNextWindowSize({960,600},ImGuiCond_FirstUseEver);
     if(focus) { ImGui::SetNextWindowFocus();ImGui::SetNextWindowCollapsed(false); }
@@ -23,6 +57,8 @@ GameViewFrame GameView::draw(SceneDocument& document,Renderer& renderer,bool& op
     // Do not leave an Image command referencing that texture in this frame.
     if(!open) { ImGui::End();frame.closed=true;return frame; }
     if(visible) {
+        if(gameMetricsToggleRequested(playing))metricsVisible_=!metricsVisible_;
+        if(playing)updateMetrics(renderer,textureAndProgramBytes);
         const auto size=ImGui::GetContentRegionAvail();
         if(size.x>0 && size.y>0) {
             const auto* host=ImGui::GetWindowViewport();const auto origin=ImGui::GetCursorScreenPos();
@@ -48,10 +84,23 @@ GameViewFrame GameView::draw(SceneDocument& document,Renderer& renderer,bool& op
                 frame.viewport.inputBlocked=true;
             }
             frame.focused=ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+            if(playing&&metricsVisible_)drawMetrics({origin.x,origin.y},{size.x,size.y});
         }
     }
     ImGui::End();frame.closed=!open;
     return frame;
+}
+void GameView::drawPlayerLightRig(const Camera& camera,const Scene& scene) {
+    if(!imageDrawList_ || !imageWidth_ || !imageHeight_)return;
+    const auto player=scene.find(scene.properties().playerCharacter);
+    if(!player || !player->character || (!player->character->lightRig.enabled&&!player->character->darknessReveal.enabled) ||
+        !player->character->lightRig.showGizmos)return;
+    const auto transform=scene.worldTransform(player->id);if(!transform)return;
+    const auto position=math::transformPoint(*transform,{});
+    const auto matrix=camera.projectionMatrix(static_cast<float>(imageWidth_)/imageHeight_,ClipDepth::ZeroToOne)*camera.viewMatrix();
+    const Vec4 rectangle{imageRegion_.x,imageRegion_.y,imageRegion_.width,imageRegion_.height};
+    drawPlayerLightRigOverlay(*imageDrawList_,player->character->lightRig,player->character->darknessReveal,
+        position,player->character->height,matrix,rectangle,ClipDepth::ZeroToOne);
 }
 void GameView::drawRoute(const Camera& camera,const std::optional<Vec3>& clickedGround,std::span<const Vec3> route,
                          const std::optional<Vec3>& characterPosition) {
@@ -83,7 +132,7 @@ void GameView::drawRoute(const Camera& camera,const std::optional<Vec3>& clicked
     }
     imageDrawList_->PopClipRect();
 }
-void GameView::drawCollisions(const Camera& camera,const Scene& scene,bool enabled) {
+void GameView::drawCollisions(const Camera& camera,const Scene& scene,bool enabled,const CollisionMeshQuery& meshes) {
     if(!enabled || !imageDrawList_ || !imageWidth_ || !imageHeight_)return;
     const auto matrix=camera.projectionMatrix(static_cast<float>(imageWidth_)/imageHeight_,ClipDepth::ZeroToOne)*camera.viewMatrix();
     const Vec4 rectangle{imageRegion_.x,imageRegion_.y,imageRegion_.width,imageRegion_.height};
@@ -91,9 +140,12 @@ void GameView::drawCollisions(const Camera& camera,const Scene& scene,bool enabl
     for(const auto& record:scene.records()) {
         const bool character=record.character && record.character->showCollisionInGame;
         const bool collider=record.collider && record.collider->showCollisionInGame;
-        if(!character && !collider)continue;
+        const bool meshCollider=record.meshCollider && record.meshCollider->showCollisionInGame && meshes;
+        if(!character && !collider && !meshCollider)continue;
         const auto world=scene.worldTransform(record.id);if(!world)continue;
         const auto line=[](ImVec2,ImVec2) {};
+        if(meshCollider)if(const auto source=meshes(record.meshCollider->source.id);source.mesh)
+            drawCollisionOverlay(*imageDrawList_,meshCollisionDebug(source.mesh),[](const Vec3& point){return point;},*world,matrix,rectangle,record.meshCollider->collisionColor,line,ClipDepth::ZeroToOne);
         if(collider)drawCollisionOverlay(*imageDrawList_,boxCollisionMesh(),[&](const Vec3& point) {
             const auto& size=record.collider->size;return Vec3{point[0]*size[0],point[1]*size[1],point[2]*size[2]};
         },*world,matrix,rectangle,record.collider->collisionColor,line,ClipDepth::ZeroToOne);

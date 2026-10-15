@@ -755,7 +755,8 @@ void ParticleEditor::draw(AssetLibrary& assets,Renderer& renderer,double dt,Mate
                 const auto binding=assets.preparedParticleMaterial(document_.definition().emitter.material.id);
                 if(!binding || !binding->ready)packets_.clear();
                 materialDiagnostic_=binding?binding->diagnostic:"Particle material is unavailable.";
-                renderer.renderParticlePreview(preview_,packets_,binding?std::span<const RenderParticleMaterial>(&binding->render,1):std::span<const RenderParticleMaterial>{});
+                renderer.renderParticlePreview(preview_,packets_,binding?std::span<const RenderParticleMaterial>(&binding->render,1):std::span<const RenderParticleMaterial>{},
+                    MaterialEvaluationContext{simulation_.elapsed(),ImGui::GetTime()});
             }
             ImGui::EndChild();
             ImGui::EndTable();

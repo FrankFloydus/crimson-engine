@@ -1,6 +1,8 @@
 #include "ScenePanels.h"
 #include "InspectorTransform.h"
 #include "Tools.h"
+#include "QuaderInspector.h"
+#include "LightingControls.h"
 #include "scene/SceneDocument.h"
 #include "scene/BuiltinModels.h"
 #include "assets/AssetLibrary.h"
@@ -24,9 +26,14 @@ namespace {
 constexpr const char* EntityPayload = "CRIMSON_SCENE_ENTITIES";
 enum class Edit { None, Name, InlineName,
     PositionX, PositionY, PositionZ, RotationX, RotationY, RotationZ, ScaleX, ScaleY, ScaleZ,
-    DirectionEnabled, DirectionColor, DirectionIntensity,
-    PointEnabled, PointColor, PointIntensity, PointRadius, PointShadows, PointDepthBias, PointNormalBias,
+    DirectionEnabled, DirectionColor, DirectionIntensity,DirectionShadows,DirectionDistance,DirectionDepthBias,DirectionNormalBias,
+    PointEnabled, PointColor, PointIntensity, PointRadius, PointNearFalloff, PointSpecular, PointShadows, PointDepthBias, PointNormalBias,
+    PointFalloffExponent,PointEdgeSoftness,PointSourceRadius,PointAttenuation,
+    DirectionReceivers,DirectionCasters,DirectionRevealReceivers,DirectionReveal,DirectionRevealStrength,
+    PointReceivers,PointCasters,PointRevealReceivers,PointReveal,PointRevealStrength,
     ModelCastShadows, ModelReceiveShadows,
+    ModelDirectReceivers,ModelCasterScope,ModelAmbientReceivers,
+    ModelAnimationClip,ModelAnimationPlaying,ModelAnimationLoop,ModelAnimationSpeed,ModelAnimationStart,
     Exposure, EnvironmentSource, EnvironmentEnabled, EnvironmentIntensity, EnvironmentImage, EnvironmentRotation,
     EnvironmentSkyTop, EnvironmentSkyHorizon, EnvironmentSkyCurve,
     EnvironmentGroundBottom, EnvironmentGroundHorizon, EnvironmentGroundCurve,
@@ -36,8 +43,13 @@ enum class Edit { None, Name, InlineName,
     EnvironmentFogDepthBegin, EnvironmentFogDepthEnd, EnvironmentFogDepthCurve, EnvironmentFogDepthOpacity,
     EnvironmentFogHeight, EnvironmentFogHeightDensity,
     EnvironmentToneMapping, EnvironmentDebanding, EnvironmentGlowEnabled, EnvironmentGlowStrength, EnvironmentGlowSize, EnvironmentGlowThreshold,
+    EnvironmentAmbientLightSource,EnvironmentAmbientLightColor,EnvironmentAmbientLightSky,EnvironmentAmbientLightEnergy,
+    EnvironmentAmbientEnabled,EnvironmentAmbientStrength,EnvironmentAmbientFloor,EnvironmentAmbientThreshold,EnvironmentAmbientTransition,EnvironmentAmbientShadows,EnvironmentAmbientEmission,
     CharacterHeight, CharacterRadius, CharacterSpeed, CharacterRoute, CharacterCollisionVisible, CharacterCollisionColor,
-    ColliderSize, ColliderVisible, ColliderColor, CameraFov, CameraNear, CameraFar };
+    CharacterRigEnabled,
+    CharacterRigLast=CharacterRigEnabled+static_cast<unsigned>(PlayerLightRigControl::ShadowNormalBias),
+    CharacterRevealEnabled,CharacterRevealSpread,
+    ColliderSize, ColliderVisible, ColliderColor,MeshColliderVisible,MeshColliderColor, CameraFov, CameraNear, CameraFar };
 enum class Panel { None, Outliner, Inspector };
 Panel owner(Edit edit) {
     if (edit==Edit::None) return Panel::None;
@@ -45,7 +57,11 @@ Panel owner(Edit edit) {
     return Panel::Inspector;
 }
 bool transformEdit(Edit edit) { return edit>=Edit::PositionX && edit<=Edit::ScaleZ; }
-bool environmentEdit(Edit edit) { return edit>=Edit::Exposure && edit<=Edit::EnvironmentGlowThreshold; }
+bool environmentEdit(Edit edit) { return edit>=Edit::Exposure && edit<=Edit::EnvironmentAmbientEmission; }
+bool rigEdit(Edit edit) { return edit>=Edit::CharacterRigEnabled && edit<=Edit::CharacterRigLast; }
+bool lightRoleEdit(Edit edit) { return edit>=Edit::DirectionReceivers && edit<=Edit::PointRevealStrength; }
+static_assert(static_cast<unsigned>(Edit::CharacterRigLast)-static_cast<unsigned>(Edit::CharacterRigEnabled)==
+    static_cast<unsigned>(PlayerLightRigControl::ShadowNormalBias));
 struct PanelsState {
     SceneDocument* document{};
     std::vector<EntityId> visible;
@@ -85,6 +101,8 @@ bool selected(const SceneDocument& document, EntityId id) {
     return std::find(ids.begin(),ids.end(),id)!=ids.end();
 }
 const char* kind(const EntityRecord& record) {
+    if(record.quader)return "Quader";
+    if(record.meshCollider)return "Mesh Collider";
     if (record.character) return "Character";
     if (record.collider) return "Collider";
     if (record.camera) return "Camera";
@@ -119,6 +137,7 @@ void addMenu(SceneDocument& document,EntityId parent=NoEntity) {
     if (ImGui::MenuItem("Collider")) document.createCollider("Collider",parent);
     if (ImGui::MenuItem("Character")) document.createCharacter();
     if (ImGui::MenuItem("Camera")) document.createCamera();
+    if (ImGui::MenuItem("Quader")) document.createQuader();
     ImGui::Separator();
     if (ImGui::MenuItem("Empty / group")) document.createEmpty("Group");
     if (ImGui::MenuItem("Directional light")) document.createDirectionalLight();
@@ -208,11 +227,55 @@ void lightControls(SceneDocument& document, PanelsState& state, EntityId id, boo
     const bool intensityChanged=ImGui::DragFloat("Intensity",&intensity,directional ? .02f : .1f,0,10000,"%.2f",ImGuiSliderFlags_AlwaysClamp);
     propertyEdit(document,state,directional ? Edit::DirectionIntensity : Edit::PointIntensity,"Change light intensity",intensityChanged,
         changeEntity(id,[directional,intensity](auto& entity){if (directional) entity.directional->intensity=intensity; else entity.point->intensity=intensity;}));
-    if (!directional) {
+    if(directional) {
+        auto light=*record->directional;
+        const bool shadows=ImGui::Checkbox("Cast Shadows",&light.castShadows);
+        propertyEdit(document,state,Edit::DirectionShadows,"Toggle directional shadows",shadows,
+            changeEntity(id,[v=light.castShadows](auto& entity){entity.directional->castShadows=v;}));
+        ImGui::BeginDisabled(!light.castShadows);
+        const bool distance=ImGui::DragFloat("Shadow Distance (m)",&light.shadowDistance,.5f,.01f,100000.f,"%.2f",ImGuiSliderFlags_AlwaysClamp);
+        propertyEdit(document,state,Edit::DirectionDistance,"Change directional shadow distance",distance,
+            changeEntity(id,[v=light.shadowDistance](auto& entity){entity.directional->shadowDistance=v;}));
+        const bool depth=ImGui::DragFloat("Depth Bias (m)",&light.shadowDepthBias,.001f,0,std::numeric_limits<float>::max(),"%.4f",ImGuiSliderFlags_AlwaysClamp);
+        propertyEdit(document,state,Edit::DirectionDepthBias,"Change directional shadow depth bias",depth,
+            changeEntity(id,[v=light.shadowDepthBias](auto& entity){entity.directional->shadowDepthBias=v;}));
+        const bool normal=ImGui::DragFloat("Normal Bias (texels)",&light.shadowNormalBias,.05f,0,std::numeric_limits<float>::max(),"%.2f",ImGuiSliderFlags_AlwaysClamp);
+        propertyEdit(document,state,Edit::DirectionNormalBias,"Change directional shadow normal bias",normal,
+            changeEntity(id,[v=light.shadowNormalBias](auto& entity){entity.directional->shadowNormalBias=v;}));
+        ImGui::EndDisabled();
+    } else {
         auto radius=record->point->radius;
         const bool changed=ImGui::DragFloat("Radius (m)",&radius,.1f,.01f,100000.f,"%.2f",ImGuiSliderFlags_AlwaysClamp);
         propertyEdit(document,state,Edit::PointRadius,"Change point light radius",changed,
             changeEntity(id,[radius](auto& entity){entity.point->radius=radius;}));
+        auto attenuation=record->point->attenuation;
+        const bool attenuationChanged=ImGui::SliderFloat("Attenuation",&attenuation,-10,10,"%.2f",ImGuiSliderFlags_AlwaysClamp);
+        propertyEdit(document,state,Edit::PointAttenuation,"Change point light attenuation",attenuationChanged,
+            changeEntity(id,[attenuation](auto& entity){entity.point->attenuation=attenuation;}));
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Distance decay: 0 has no distance decay, 1 is inverse distance, and 2 is inverse square. Range Falloff still fades the range boundary.");
+        auto nearFalloff=record->point->nearFalloffRadius;
+        const bool nearChanged=ImGui::DragFloat("Near Falloff Radius (m)",&nearFalloff,.05f,0,100000.f,"%.2f",ImGuiSliderFlags_AlwaysClamp);
+        propertyEdit(document,state,Edit::PointNearFalloff,"Change point light near falloff",nearChanged,
+            changeEntity(id,[nearFalloff](auto& entity){entity.point->nearFalloffRadius=nearFalloff;}));
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Smooth brightness near the light. Zero retains inverse-square falloff.");
+        auto specular=record->point->specularStrength;
+        const bool specularChanged=ImGui::SliderFloat("Specular Scale",&specular,0,1,"%.2f");
+        propertyEdit(document,state,Edit::PointSpecular,"Change point light specular scale",specularChanged,
+            changeEntity(id,[specular](auto& entity){entity.point->specularStrength=specular;}));
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Scale this light's shiny highlights without changing diffuse illumination.");
+        auto exponent=record->point->rangeFalloffExponent;
+        const bool exponentChanged=ImGui::SliderFloat("Range Falloff",&exponent,.25f,8,"%.2f");
+        propertyEdit(document,state,Edit::PointFalloffExponent,"Change point light range falloff",exponentChanged,
+            changeEntity(id,[exponent](auto& entity){entity.point->rangeFalloffExponent=exponent;}));
+        auto softness=record->point->edgeSoftness;
+        const bool softnessChanged=ImGui::SliderFloat("Edge Softness",&softness,.05f,1,"%.2f");
+        propertyEdit(document,state,Edit::PointEdgeSoftness,"Change point light edge softness",softnessChanged,
+            changeEntity(id,[softness](auto& entity){entity.point->edgeSoftness=softness;}));
+        auto sourceRadius=record->point->sourceRadius;
+        const bool sourceRadiusChanged=ImGui::DragFloat("Source Radius (m)",&sourceRadius,.05f,0,100000,"%.2f",ImGuiSliderFlags_AlwaysClamp);
+        propertyEdit(document,state,Edit::PointSourceRadius,"Change point light source radius",sourceRadiusChanged,
+            changeEntity(id,[sourceRadius](auto& entity){entity.point->sourceRadius=sourceRadius;}));
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Larger source sizes soften shadows and broaden specular highlights. Zero retains a punctual source.");
         auto shadows=record->point->castShadows;
         const bool shadowChanged=ImGui::Checkbox("Cast Shadows",&shadows);
         propertyEdit(document,state,Edit::PointShadows,"Toggle point shadows",shadowChanged,
@@ -228,6 +291,30 @@ void lightControls(SceneDocument& document, PanelsState& state, EntityId id, boo
             changeEntity(id,[normalBias](auto& entity){entity.point->shadowNormalBias=normalBias;}));
         ImGui::EndDisabled();
     }
+    auto roles=directional?record->directional->roles:record->point->roles;
+    bool activeRoleDrawn=false;
+    const auto roleEdit=[&](Edit property,const char* label,bool changed) {
+        propertyEdit(document,state,property,label,changed,changeEntity(id,[directional,roles](auto& entity){
+            if(directional)entity.directional->roles=roles;else entity.point->roles=roles;
+        }));
+        activeRoleDrawn|=state.active==property;
+    };
+    if(ImGui::TreeNode("Advanced Lighting")) {
+        roleEdit(directional?Edit::DirectionReceivers:Edit::PointReceivers,"Change direct-light receivers",
+            drawLightingMaskControl("Affect",roles.receiverMask));
+        roleEdit(directional?Edit::DirectionCasters:Edit::PointCasters,"Change light shadow casters",
+            drawLightingMaskControl("Shadow Casters",roles.shadowCasterMask));
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Meshes allowed to block THIS light, independently of lit receivers. Enable Character for player shadows from this light.");
+        roleEdit(directional?Edit::DirectionReveal:Edit::PointReveal,"Toggle light ambient contribution",ImGui::Checkbox("Affect Ambient Darkness",&roles.ambientReveal));
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Reveal direct and environment lighting near this source when Ambient Darkness is enabled.");
+        ImGui::BeginDisabled(!roles.ambientReveal);
+        roleEdit(directional?Edit::DirectionRevealReceivers:Edit::PointRevealReceivers,"Change light ambient receivers",
+            drawLightingMaskControl("Ambient Receivers",roles.ambientRevealMask));
+        roleEdit(directional?Edit::DirectionRevealStrength:Edit::PointRevealStrength,"Change light ambient strength",
+            ImGui::SliderFloat("Ambient Strength",&roles.ambientRevealStrength,0,1,"%.3f"));
+        ImGui::EndDisabled();ImGui::TreePop();
+    }
+    if(lightRoleEdit(state.active) && (!activeRoleDrawn || !ImGui::IsAnyItemActive()))finishEdit(document,state,state.active);
     ImGui::PopID();
 }
 void builtinMaterialControls(SceneDocument& document,PanelsState& state,const EntityRecord& record,AssetLibrary& assets,const Renderer& renderer) {
@@ -282,14 +369,54 @@ void builtinMaterialControls(SceneDocument& document,PanelsState& state,const En
     if(!state.materialDiagnostic.empty())ImGui::TextWrapped("%s",state.materialDiagnostic.c_str());
     if(model && !assigned.empty() && !assets.modelMaterialsReady(*model,assigned))ImGui::TextWrapped("%s",assets.modelMaterialsDiagnostic(*model,assigned).c_str());
 }
-void modelInformation(const EntityRecord& record, const AssetLibrary& assets) {
+void modelAnimationControls(SceneDocument& document,PanelsState& state,const EntityRecord& record,const AssetLibrary& assets) {
+    const auto model=assets.findModel(record.model->id);
+    const bool available=model&&(!model->animations.empty()||!model->skins.empty()||
+        std::any_of(model->primitives.begin(),model->primitives.end(),[](const auto& primitive){return !primitive.morphTargets.empty();}));
+    bool activeDrawn=false;
+    if(available&&ImGui::TreeNode("Animation")) {
+        auto animation=record.modelAnimation;
+        const auto field=[&](Edit property,const char* label,bool changed) {
+            propertyEdit(document,state,property,label,changed,
+                changeEntity(record.id,[animation](auto& entity){entity.modelAnimation=animation;}));
+            activeDrawn|=state.active==property;
+        };
+        const auto current=animation.clip;
+        const auto clipName=current<0?std::string("Bind Pose"):std::size_t(current)<model->animations.size()?
+            (model->animations[current].name.empty()?"Clip "+std::to_string(std::int64_t(current)+1):model->animations[current].name):
+            "Missing clip "+std::to_string(std::int64_t(current)+1);
+        bool changed=false;
+        if(ImGui::BeginCombo("Clip",clipName.c_str())) {
+            if(ImGui::Selectable("Bind Pose",current<0)){changed=current!=-1;animation.clip=-1;}
+            for(std::size_t index=0;index<model->animations.size();++index) {
+                ImGui::PushID(static_cast<int>(index));
+                const auto& clip=model->animations[index];const auto name=clip.name.empty()?"Clip "+std::to_string(index+1):clip.name;
+                if(ImGui::Selectable(name.c_str(),current==static_cast<std::int32_t>(index))) {
+                    changed=current!=static_cast<std::int32_t>(index);animation.clip=static_cast<std::int32_t>(index);
+                }
+                ImGui::PopID();
+            }
+            ImGui::EndCombo();
+        }
+        field(Edit::ModelAnimationClip,"Choose model animation",changed);
+        field(Edit::ModelAnimationPlaying,"Toggle model animation playback",ImGui::Checkbox("Playing",&animation.playing));
+        field(Edit::ModelAnimationLoop,"Toggle model animation loop",ImGui::Checkbox("Loop",&animation.loop));
+        field(Edit::ModelAnimationSpeed,"Change model animation speed",ImGui::DragFloat("Speed",&animation.speed,.01f,0,100,"%.2f",ImGuiSliderFlags_AlwaysClamp));
+        field(Edit::ModelAnimationStart,"Change model animation start",ImGui::DragFloat("Start Time (s)",&animation.startTime,.05f,0,1e9f,"%.3f",ImGuiSliderFlags_AlwaysClamp));
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Changing Clip or Start Time restarts playback. Playing and Speed retain the current time.");
+        ImGui::TreePop();
+    }
+    if(state.active>=Edit::ModelAnimationClip&&state.active<=Edit::ModelAnimationStart&&
+        (!activeDrawn||!ImGui::IsAnyItemActive()))finishEdit(document,state,state.active);
+}
+void modelInformation(const EntityRecord& record, const AssetLibrary& assets,std::string* openMaterial) {
     const auto model=assets.findModel(record.model->id);
     if (!model) {
         ImGui::TextWrapped("Model unavailable: %s",record.model->id.c_str());
         return;
     }
     for (const auto& warning:model->warnings) ImGui::TextWrapped("%s",warning.c_str());
-    if (model->format!="BUILTIN" && ImGui::TreeNode("Imported materials (read-only)")) {
+    if (model->format!="BUILTIN" && ImGui::TreeNode("Materials")) {
         auto materials=model->materials;
         try { materials=assets.resolvedModelMaterials(*model); }
         catch (const std::exception& error) { ImGui::TextWrapped("Material unavailable: %s",error.what()); }
@@ -297,6 +424,11 @@ void modelInformation(const EntityRecord& record, const AssetLibrary& assets) {
             const auto& material=materials[index];
             ImGui::PushID(static_cast<int>(index));
             if (ImGui::TreeNode("material","%s",material.name.c_str())) {
+                const auto id=assets.references().resolveMaterial(index<model->materialIds.size()?model->materialIds[index]:importedMaterialId(model->id,index));
+                const auto asset=assets.findMaterial(id);
+                ImGui::BeginDisabled(!openMaterial || !asset);
+                if(ImGui::Button("Open Material") && openMaterial)*openMaterial=id;
+                ImGui::EndDisabled();
                 ImGui::Text("Base color: %.3f, %.3f, %.3f, %.3f",material.baseColor[0],material.baseColor[1],material.baseColor[2],material.baseColor[3]);
                 ImGui::Text("Metallic: %.3f   Roughness: %.3f",material.metallic,material.roughness);
                 ImGui::Text("Normal scale: %.3f   Occlusion: %.3f",material.normalScale,material.occlusionStrength);
@@ -395,6 +527,13 @@ void sceneEnvironmentControls(SceneDocument& document,PanelsState& state,const E
         ImGui::PopID();
         ImGui::Unindent();
     }
+    if(ImGui::CollapsingHeader("Ambient Light",ImGuiTreeNodeFlags_DefaultOpen)) {
+        drawAmbientLightControls(value.ambientLight,[&](AmbientLightControl control,bool changed) {
+            constexpr std::array<Edit,4> properties{Edit::EnvironmentAmbientLightSource,Edit::EnvironmentAmbientLightColor,
+                Edit::EnvironmentAmbientLightSky,Edit::EnvironmentAmbientLightEnergy};
+            field(properties[static_cast<unsigned>(control)],"Change ambient light",changed);
+        });
+    }
     if(ImGui::CollapsingHeader("Background",ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::PushID("Background");
         field(Edit::EnvironmentBackgroundShow,"Toggle environment background",ImGui::Checkbox("Show Background",&value.background.show));
@@ -460,13 +599,26 @@ void sceneEnvironmentControls(SceneDocument& document,PanelsState& state,const E
         });
         if(!renderer.glowStatus().empty())ImGui::TextWrapped("%s",renderer.glowStatus().c_str());
     }
+    if(ImGui::CollapsingHeader("Ambient Darkness")) {
+        ImGui::PushID("Ambient darkness");
+        drawAmbientVisibilityControls(value.ambientVisibility,[&](AmbientVisibilityControl control,bool changed) {
+            constexpr std::array<Edit,7> properties{Edit::EnvironmentAmbientEnabled,Edit::EnvironmentAmbientStrength,
+                Edit::EnvironmentAmbientFloor,Edit::EnvironmentAmbientThreshold,Edit::EnvironmentAmbientTransition,Edit::EnvironmentAmbientShadows,Edit::EnvironmentAmbientEmission};
+            field(properties[static_cast<unsigned>(control)],"Change ambient darkness",changed);
+        });
+        ImGui::PopID();
+    }
     ImGui::PopID();
     // Collapsing a section or switching sources removes its active widget.
     if(environmentEdit(state.active) && (!activeFieldDrawn || !ImGui::IsAnyItemActive()))finishEdit(document,state,state.active);
 }
 void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRecord& record) {
     if(record.character) {
-        if(document.scene().properties().playerCharacter!=record.id && ImGui::Button("Make Player"))document.setPlayerCharacter(record.id);
+        if(document.scene().properties().playerCharacter==record.id)ImGui::TextUnformatted("Player Character");
+        else {
+            if(ImGui::Button("Make Player"))document.setPlayerCharacter(record.id);
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("The Player Character supplies the active light rig and player controls.");
+        }
         auto value=*record.character;
         if(ImGui::CollapsingHeader("Movement",ImGuiTreeNodeFlags_DefaultOpen)) {
             const bool speed=ImGui::DragFloat("Speed (m/s)",&value.moveSpeed,.1f,0,1000,"%.2f",ImGuiSliderFlags_AlwaysClamp);
@@ -493,6 +645,26 @@ void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRec
                 changeEntity(record.id,[v=value.collisionColor](auto& entity){entity.character->collisionColor=v;}));
         } else if(state.active==Edit::CharacterHeight || state.active==Edit::CharacterRadius ||
             state.active==Edit::CharacterCollisionVisible || state.active==Edit::CharacterCollisionColor) {
+            finishEdit(document,state,state.active);
+        }
+        bool activeRigDrawn=false;
+        drawPlayerLightRigControls(value.lightRig,[&](PlayerLightRigControl control,const char* label,bool changed) {
+            const auto property=static_cast<Edit>(static_cast<unsigned>(Edit::CharacterRigEnabled)+static_cast<unsigned>(control));
+            propertyEdit(document,state,property,label,changed,
+                changeEntity(record.id,[rig=value.lightRig](auto& entity){entity.character->lightRig=rig;}));
+            activeRigDrawn|=state.active==property;
+        });
+        if(rigEdit(state.active) && (!activeRigDrawn || !ImGui::IsAnyItemActive()))finishEdit(document,state,state.active);
+        if(ImGui::CollapsingHeader("Darkness Reveal")) {
+            const bool enabled=ImGui::Checkbox("Enabled##character-reveal",&value.darknessReveal.enabled);
+            propertyEdit(document,state,Edit::CharacterRevealEnabled,"Toggle character darkness reveal",enabled,
+                changeEntity(record.id,[v=value.darknessReveal](auto& entity){entity.character->darknessReveal=v;}));
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Restore global lighting near the player when Environment Ambient Darkness is enabled. This emits no light and casts no shadow.");
+            const bool spread=ImGui::DragFloat("Spread (m)",&value.darknessReveal.spread,.1f,.01f,100000,"%.2f",ImGuiSliderFlags_AlwaysClamp);
+            propertyEdit(document,state,Edit::CharacterRevealSpread,"Change character lighting spread",spread,
+                changeEntity(record.id,[v=value.darknessReveal](auto& entity){entity.character->darknessReveal=v;}));
+            if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))ImGui::SetTooltip("Distance where Darkness Reveal falls to 50%. Independent of the Local World Light's radius.");
+        } else if(state.active==Edit::CharacterRevealEnabled||state.active==Edit::CharacterRevealSpread) {
             finishEdit(document,state,state.active);
         }
     }
@@ -694,7 +866,7 @@ void drawSceneOutliner(SceneDocument& document, bool allowEdits) {
             for (auto root:document.scene().topmost(document.selection().ids)) {
                 const auto group=document.scene().find(root);
                 if (group && !group->model && !group->particle && !group->directional && !group->point && !group->environment &&
-                    !group->character && !group->collider && !group->camera && !document.scene().children(root).empty()) canUngroup=true;
+                    !group->character && !group->collider && !group->meshCollider && !group->quader && !group->quaderGenerated && !group->camera && !document.scene().children(root).empty()) canUngroup=true;
             }
             if (ImGui::MenuItem("Ungroup",nullptr,false,canUngroup)) action=[&document]{document.ungroupSelection();};
             if (ImGui::MenuItem("Unparent",nullptr,false,record.parent!=NoEntity)) action=[&document]{document.reparentSelection(NoEntity);};
@@ -740,7 +912,7 @@ void drawSceneOutliner(SceneDocument& document, bool allowEdits) {
 }
 
 void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer& renderer, bool allowEdits,
-                        std::uint64_t* playParticle,std::string* openParticle) {
+                        std::uint64_t* playParticle,std::string* openParticle,QuaderBridge* quader,std::string* openMaterial) {
     auto& state=stateFor(document);
     const bool canceled=cancelPanelEdit(document,state,Panel::Inspector,allowEdits);
     if (!ImGui::Begin("Inspector")) {
@@ -760,8 +932,27 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
             }};
         drawInspectorTransform(document,state.transform,*record,transformTransactions);
         gameplayControls(document,state,*record);
-        if (record->directional && ImGui::CollapsingHeader("Directional light",ImGuiTreeNodeFlags_DefaultOpen)) lightControls(document,state,record->id,true);
-        if (record->point && ImGui::CollapsingHeader("Point light",ImGuiTreeNodeFlags_DefaultOpen)) lightControls(document,state,record->id,false);
+        if(record->quader && quader && ImGui::CollapsingHeader("Quader",ImGuiTreeNodeFlags_DefaultOpen))drawQuaderInspector(document,*record,*quader);
+        if(record->meshCollider && ImGui::CollapsingHeader("Mesh Collision",ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::TextWrapped("%s",assets.displayName(record->meshCollider->source.id).c_str());
+            auto value=*record->meshCollider;
+            const bool visible=ImGui::Checkbox("Show in Game",&value.showCollisionInGame);
+            propertyEdit(document,state,Edit::MeshColliderVisible,"Toggle mesh collision display",visible,
+                changeEntity(record->id,[v=value.showCollisionInGame](auto& entity){entity.meshCollider->showCollisionInGame=v;}));
+            const bool color=ImGui::ColorEdit4("Color",value.collisionColor.data(),ImGuiColorEditFlags_Float|ImGuiColorEditFlags_AlphaBar);
+            propertyEdit(document,state,Edit::MeshColliderColor,"Change mesh collision color",color,
+                changeEntity(record->id,[v=value.collisionColor](auto& entity){entity.meshCollider->collisionColor=v;}));
+        } else if(record->meshCollider && (state.active==Edit::MeshColliderVisible || state.active==Edit::MeshColliderColor))finishEdit(document,state,state.active);
+        if(record->directional) {
+            if(ImGui::CollapsingHeader("Directional light",ImGuiTreeNodeFlags_DefaultOpen))lightControls(document,state,record->id,true);
+            else if((state.active>=Edit::DirectionEnabled && state.active<=Edit::DirectionNormalBias) ||
+                    (state.active>=Edit::DirectionReceivers && state.active<=Edit::DirectionRevealStrength))finishEdit(document,state,state.active);
+        }
+        if(record->point) {
+            if(ImGui::CollapsingHeader("Point light",ImGuiTreeNodeFlags_DefaultOpen))lightControls(document,state,record->id,false);
+            else if((state.active>=Edit::PointEnabled && state.active<=Edit::PointAttenuation) ||
+                    (state.active>=Edit::PointReceivers && state.active<=Edit::PointRevealStrength))finishEdit(document,state,state.active);
+        }
         if (record->model && ImGui::CollapsingHeader("Model",ImGuiTreeNodeFlags_DefaultOpen)) {
             if(isBuiltinModel(record->model->id))builtinMaterialControls(document,state,*record,assets,renderer);
             auto castShadows=record->castShadows,receiveShadows=record->receiveShadows;
@@ -771,8 +962,23 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
             const bool receiveChanged=ImGui::Checkbox("Receive Shadows",&receiveShadows);
             propertyEdit(document,state,Edit::ModelReceiveShadows,"Toggle model shadow receiving",receiveChanged,
                 changeEntity(record->id,[receiveShadows](auto& entity){entity.receiveShadows=receiveShadows;}));
-            modelInformation(*record,assets);
-        }
+            auto scopes=record->lightingScopes;
+            bool activeScopeDrawn=false;
+            const auto scopeEdit=[&](Edit property,const char* label,bool changed) {
+                propertyEdit(document,state,property,label,changed,changeEntity(record->id,[scopes](auto& entity){entity.lightingScopes=scopes;}));
+                activeScopeDrawn|=state.active==property;
+            };
+            if(ImGui::TreeNode("Advanced Lighting")) {
+                scopeEdit(Edit::ModelDirectReceivers,"Change model direct-light scope",drawLightingMaskControl("Direct Lighting",scopes.directReceiverMask));
+                scopeEdit(Edit::ModelCasterScope,"Change model shadow-caster scope",drawLightingMaskControl("Shadow Casting",scopes.shadowCasterMask));
+                scopeEdit(Edit::ModelAmbientReceivers,"Change model ambient scope",drawLightingMaskControl("Ambient Darkness",scopes.ambientReceiverMask));
+                ImGui::TreePop();
+            }
+            if(state.active>=Edit::ModelDirectReceivers && state.active<=Edit::ModelAmbientReceivers &&
+               (!activeScopeDrawn || !ImGui::IsAnyItemActive()))finishEdit(document,state,state.active);
+            modelAnimationControls(document,state,*record,assets);
+            modelInformation(*record,assets,openMaterial);
+        } else if(record->model && state.active>=Edit::ModelCastShadows && state.active<=Edit::ModelAnimationStart)finishEdit(document,state,state.active);
         if(record->particle && ImGui::CollapsingHeader("Particle effect",ImGuiTreeNodeFlags_DefaultOpen)) {
             auto assigned=record->particle->id;
             const auto resolved=assets.references().resolve(assigned);

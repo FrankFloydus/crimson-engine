@@ -57,10 +57,11 @@ public:
     std::uint64_t materialRevision(const std::string& id) const;
     std::string materialDiagnostic(const std::string& id) const;
     std::shared_ptr<const PreparedParticleMaterial> preparedParticleMaterial(const std::string& id) const;
-    ModelMaterialTextures materialPreviewBindings(const MaterialAsset& material) const;
+    ModelMaterialTextures materialPreviewBindings(const MaterialAsset& material,std::uint32_t textureEdge=512) const;
     std::unique_ptr<MaterialGraphPrograms> createMaterialNodePreviewPrograms() const;
-    ModelMaterialTextures materialNodePreviewBindings(MaterialGraphPrograms&,const MaterialAsset&,MaterialGraphPreviewTarget) const;
+    ModelMaterialTextures materialNodePreviewBindings(MaterialGraphPrograms&,const MaterialAsset&,MaterialGraphPreviewTarget,std::uint32_t textureEdge=512) const;
     void publishMaterial(std::shared_ptr<const MaterialAsset>);
+    void publishManagedModels(std::span<const std::shared_ptr<const ModelAsset>> models);
     void protectMaterialDocument(std::string id) { materialDocumentId_=std::move(id); }
     void refreshMaterials();
     std::shared_ptr<const MaterialAsset> createMaterial(const std::string& name="New Material");
@@ -151,6 +152,7 @@ private:
     std::string particleDocumentId_;
     struct MaterialVersion { std::shared_ptr<const MaterialAsset> definition;std::uint64_t revision{};std::string diagnostic; };
     std::unordered_map<std::string,MaterialVersion> authoredMaterials_;
+    struct MaterialCompatibility {std::weak_ptr<const MaterialAsset> source;bool compatible{};};
     mutable std::unordered_map<std::string,std::shared_ptr<const PreparedParticleMaterial>> preparedParticleMaterials_;
     std::uint64_t nextMaterialRevision_{1};
     std::string materialDocumentId_;
@@ -183,11 +185,22 @@ private:
     TextureAsset makeAsset(const std::filesystem::path& path);
     bgfx::TextureHandle fullTexture(TextureAsset& asset, bool srgb) const;
     ModelMaterialTextures materialBindings(const ModelMaterial&) const;
-    ModelMaterialTextures graphMaterialBindings(const std::shared_ptr<const MaterialGraph>&) const;
-    ModelMaterialTextures preparedGraphBindings(MaterialGraphPrograms&,const MaterialGraphShader&,const MaterialGraph&) const;
-    struct GraphShaderCache {std::weak_ptr<const MaterialGraph> source;std::shared_ptr<const MaterialGraphShader> shader;};
+    ModelMaterialTextures materialBindings(const ModelMaterial&,std::uint32_t textureEdge,ResourcePriority) const;
+    ModelMaterialTextures graphMaterialBindings(const std::shared_ptr<const MaterialGraph>&,std::uint32_t textureEdge,ResourcePriority,bool useFixedModel=false) const;
+    ModelMaterialTextures preparedGraphBindings(MaterialGraphPrograms&,const MaterialGraphShader&,const MaterialGraph&,std::uint32_t textureEdge,ResourcePriority) const;
+    struct GraphShaderCache {
+        std::weak_ptr<const MaterialGraph> source;
+        std::shared_ptr<const MaterialGraphShader> shader;
+        std::optional<std::uint8_t> requiredUvs;
+        bool fixedSurfaceChecked{};
+        std::optional<ModelMaterial> fixedSurface;
+    };
     mutable std::unordered_map<const MaterialGraph*,GraphShaderCache> graphShaderCache_;
+    bool materialCompatible(const std::shared_ptr<const MaterialAsset>&) const;
+    GraphShaderCache& graphCache(const std::shared_ptr<const MaterialGraph>&) const;
+    std::uint8_t requiredGraphUvs(const std::shared_ptr<const MaterialGraph>&) const;
     MaterialGraphPrograms* graphPrograms_{};
+    mutable std::unordered_map<const MaterialAsset*,MaterialCompatibility> materialCompatibility_;
     void registerModel(std::shared_ptr<const ModelAsset> model);
     void addTexture(TextureAsset asset);
     void refreshReferenceIndex(const SceneDocument* active);

@@ -4,9 +4,12 @@
 #include "crimson-renderer/Picking.h"
 #include "crimson-renderer/PointShadowMath.h"
 #include "resources/ShaderReloadSession.h"
+#include "ShaderSourceBaseline.h"
 #include "assets/AtomicFile.h"
+#include "assets/ModelAnimation.h"
 #include <SDL3/SDL.h>
 #include <imgui.h>
+#include <lodepng.h>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -55,6 +58,43 @@ double brightness(const DecodedImage& image,const Camera& camera,const Vec3& poi
     for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx)for(unsigned channel=0;channel<3;++channel)
         sum+=image.rgba[(std::size_t(y+dy)*image.width+std::size_t(x+dx))*4+channel];
     return sum/27;
+}
+double linearSample(const DecodedImage& image,const Camera& camera,const Vec3& point) {
+    const auto pixel=math::project(point,camera.projectionMatrix(1,ClipDepth::ZeroToOne)*camera.viewMatrix(),
+        {0,0,ImageSize,ImageSize},ClipDepth::ZeroToOne);
+    check(bool(pixel),"Soft-shadow sample is not projectable.");
+    const int x=static_cast<int>((*pixel)[0]),y=static_cast<int>((*pixel)[1]);
+    check(x>=0 && x<ImageSize && y>=0 && y<ImageSize,"Soft-shadow sample escaped its image.");
+    double result=0;
+    for (unsigned channel=0;channel<3;++channel) {
+        const double encoded=image.rgba[(std::size_t(y)*image.width+std::size_t(x))*4+channel]/255.0;
+        result+=encoded<=.04045 ? encoded/12.92:std::pow((encoded+.055)/1.055,2.4);
+    }
+    return result/3;
+}
+struct ShadowEdge {double width{},midpoint{-1};};
+ShadowEdge shadowEdge(const DecodedImage& shadow,const DecodedImage& clear,const Camera& camera,Vec3 center,Vec3 right) {
+    ShadowEdge result;
+    // This fixture uses Linear tone mapping and unexposed values below one.
+    // Decode the sole final sRGB encoding before dividing out the receiver's
+    // diffuse lighting. Highlight size and HDR clipping cannot mimic a PCSS edge.
+    for (unsigned sample=0;sample<=84;++sample) {
+        const double offset=.1+.025*sample;
+        const auto point=center+right*offset;
+        const auto lit=linearSample(clear,camera,point);
+        check(lit>.015 && lit<.9,"Soft-shadow reference is dark or display-clipped.");
+        const auto visibility=linearSample(shadow,camera,point)/lit;
+        if (visibility>.12 && visibility<.88) result.width+=.025;
+        if (result.midpoint<0 && visibility>=.5) result.midpoint=offset;
+    }
+    return result;
+}
+unsigned maximumDifference(const DecodedImage& a,const DecodedImage& b) {
+    check(a.width==b.width && a.height==b.height && a.rgba.size()==b.rgba.size(),"Shadow images have different extents.");
+    unsigned result=0;
+    for (std::size_t i=0;i<a.rgba.size();++i)
+        result=std::max(result,static_cast<unsigned>(std::abs(int(a.rgba[i])-int(b.rgba[i]))));
+    return result;
 }
 void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     // Destinations outlive Renderer even if a readback times out.
@@ -121,6 +161,50 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
             check(brightness(shadow,settings.camera,point)<brightness(clear,settings.camera,point)*.35,"Cube seam or corner leaked light through an opaque caster.");
         }
     }
+    // Equal hard projected extents separate genuine contact hardening from
+    // changes in caster size or specular highlights. The far caster projects
+    // half a metre to one metre; the near caster projects .95 to the same edge.
+    orient(5);settings.environment.toneMapping=ToneMapping::Linear;
+    lights[0].intensity=10;lights[0].specularStrength=0;
+    lights[0].castShadows=false;const auto softClear=capture();lights[0].castShadows=true;
+    const auto farHard=capture();
+    const auto hardEdge=shadowEdge(farHard,softClear,settings.camera,center,right);
+    lights[0].sourceRadius=.4f;const auto farSoftSmall=capture();
+    check(submittedStats.renderedFaces==0 && submittedStats.cacheHits==1,
+        "Source Radius edit rerendered six static shadow faces instead of changing the receiver filter.");
+    const auto smallEdge=shadowEdge(farSoftSmall,softClear,settings.camera,center,right);
+    lights[0].sourceRadius=.7f;const auto farSoft=capture();
+    check(submittedStats.renderedFaces==0 && submittedStats.cacheHits==1,
+        "Larger Source Radius invalidated the point-shadow projection.");
+    const auto farEdge=shadowEdge(farSoft,softClear,settings.camera,center,right);
+    caster.model.transform=plane(settings.camera,settings.camera.forward()*3.8f,.95f);
+    const auto nearSoft=capture();
+    check(submittedStats.renderedFaces==6,"A moved soft-shadow caster did not refresh its six faces.");
+    const auto nearEdge=shadowEdge(nearSoft,softClear,settings.camera,center,right);
+    lights[0].sourceRadius=0;const auto nearHard=capture();
+    check(submittedStats.renderedFaces==0 && submittedStats.cacheHits==1,
+        "Returning Source Radius to zero needlessly invalidated the caster map.");
+    const auto nearHardEdge=shadowEdge(nearHard,softClear,settings.camera,center,right);
+    const auto widths=" hard="+std::to_string(hardEdge.width)+", radius.4="+std::to_string(smallEdge.width)+
+        ", radius.7="+std::to_string(farEdge.width)+", contact="+std::to_string(nearEdge.width);
+    check(hardEdge.midpoint>.8 && hardEdge.midpoint<1.2 && nearHardEdge.midpoint>.8 && nearHardEdge.midpoint<1.2 &&
+        std::abs(hardEdge.midpoint-nearHardEdge.midpoint)<.1,
+        "Contact-hardening fixture does not preserve the same hard projected edge."+widths);
+    check(smallEdge.width>hardEdge.width+.15 && farEdge.width>smallEdge.width+.1 && farEdge.width>.35,
+        "Source Radius did not widen diffuse-only point-shadow penumbrae."+widths);
+    check(farEdge.width>nearEdge.width+.2 && nearEdge.width<farEdge.width*.65,
+        "Soft point shadows did not harden as the caster approached the receiver."+widths);
+    check(farEdge.midpoint>.7 && farEdge.midpoint<1.3 && nearEdge.midpoint>.8 && nearEdge.midpoint<1.2,
+        "PCSS enlarged the hard silhouette instead of filtering around its projected edge."+widths);
+    std::cout<<"Diffuse-only point-shadow transition widths(m):"<<widths
+        <<", hard/contact edge="<<hardEdge.midpoint<<'/'<<nearHardEdge.midpoint<<'\n';
+    caster.model.transform=plane(settings.camera,settings.camera.forward()*2,.5f);
+    const auto restoredHard=capture();
+    check(maximumDifference(restoredHard,farHard)==0,"Source Radius zero did not restore the exact original 3x3 PCF image.");
+    lights[0].sourceRadius=.7f;lights[0].castShadows=false;
+    check(maximumDifference(capture(),softClear)==0,"Disabling Cast Shadows retained a soft occluder.");
+    lights[0].castShadows=true;lights[0].sourceRadius=0;lights[0].specularStrength=1;
+    lights[0].intensity=100;settings.environment.toneMapping=ToneMapping::Reinhard;
     orient(5);const auto opaque=capture();const auto dark=brightness(opaque,settings.camera,center);
     const auto smallBytes=point_shadow::atlasLayout(256,1).bytes(),defaultBytes=point_shadow::atlasLayout(1024,1).bytes();
     scene.shadowResolution=1024;const auto defaultResolution=capture();
@@ -202,11 +286,99 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     casterMaterials[0].baseColor[3]=.25f;const auto factor=capture();
     check(brightness(factor,settings.camera,center)>dark+60,"Caster alpha factor was ignored by the mask threshold.");casterMaterials[0].baseColor[3]=1;
     casterTextures[0].handles[0]=BGFX_INVALID_HANDLE;casterMaterials[0].alphaMask=false;orient(5);
-    // All sixteen slots must occlude their contribution, not merely a selected subset.
+    // Sixteen resident slots fill through whole-light updates over several
+    // frames. The per-world-frame budget limits updates, not illumination or
+    // the eventual set of shadowed lights.
     scene.pointLights=lights;for(auto& light:lights)light.intensity=100.f/16;
-    const auto all=capture();check(submittedStats.activeLights==16 && submittedStats.renderedFaces==96,"The full sixteen-light shadow budget was not rendered.");
+    DecodedImage all;unsigned admitted{};
+    for(unsigned attempt=0;attempt<8;++attempt) {
+        all=capture();admitted+=submittedStats.renderedLights;
+        check(submittedStats.activeLights==16&&submittedStats.renderedLights<=4&&submittedStats.renderedFaces<=24,
+            "Point-shadow admission exceeded the four-light/twenty-four-face frame budget.");
+        if(!submittedStats.pointDeferred)break;
+    }
+    check(admitted==16&&submittedStats.pointDeferred==0&&submittedStats.pointCriticalDeferred==0,
+        "The sixteen resident lights did not all acquire coherent shadows within bounded warmup.");
     check(brightness(all,settings.camera,center)<35,"One or more of the sixteen point lights remained unshadowed.");
     check(renderer.shadowResidentBytes()>=point_shadow::atlasLayout(256,16).bytes(),"Atlas accounting omitted live shadow storage.");
+    {
+        const auto savedLights=lights;const auto savedSettings=settings;
+        const auto savedReceiver=receiver.model.transform,savedCaster=caster.model.transform;
+        const auto savedCenter=center,savedRight=right;
+        settings.environment.toneMapping=ToneMapping::Linear;
+        lights[0].intensity=10;lights[0].specularStrength=0;lights[0].sourceRadius=.7f;
+        scene.pointLights=std::span(lights.data(),1);
+        DecodedImage seamReference;
+        for (const Vec3 diagonal:{Vec3{1,0,1},Vec3{1,1,1},Vec3{0,1,1}}) {
+            const auto direction=math::normalized(diagonal);center=direction*4;
+            settings.camera.position=direction*-2;settings.camera.target=center;settings.camera.up={0,1,0};settings.camera.fov=45;
+            right=settings.camera.right();receiver.model.transform=plane(settings.camera,center,3);
+            caster.model.transform=plane(settings.camera,direction*2,.5f);
+            lights[0].castShadows=false;const auto clear=capture();lights[0].castShadows=true;seamReference=capture();
+            for (const float offset:{-.08f,0.f,.08f}) {
+                const auto point=center+right*offset;
+                check(linearSample(seamReference,settings.camera,point)<linearSample(clear,settings.camera,point)*.15,
+                    "PCSS cube edge/corner leaked light into an opaque umbra.");
+            }
+            for (const float offset:{-2.1f,2.1f}) {
+                const auto point=center+right*offset;
+                check(std::abs(linearSample(seamReference,settings.camera,point)-linearSample(clear,settings.camera,point))<.005,
+                    "PCSS cube edge/corner leaked a shadow outside emitter/caster support.");
+            }
+            const auto edge=shadowEdge(seamReference,clear,settings.camera,center,right);
+            check(edge.width>.25 && edge.midpoint>.65 && edge.midpoint<1.35,
+                "PCSS face remapping lost its continuous soft edge at a cube seam/corner: width="+std::to_string(edge.width));
+        }
+        // Change atlas packing and fill every neighboring light block with
+        // cleared depth. Those lights illuminate no receiver and cast no
+        // geometry, so a correctly remapped kernel must reproduce one source.
+        for (std::size_t i=1;i<lights.size();++i) {
+            lights[i].roles.receiverMask=0;lights[i].roles.shadowCasterMask=0;
+            lights[i].roles.ambientReveal=false;
+        }
+        scene.pointLights=lights;DecodedImage neighbors;
+        for (unsigned attempt=0;attempt<8;++attempt) {
+            neighbors=capture();if (!submittedStats.pointDeferred) break;
+        }
+        check(submittedStats.pointDeferred==0 && submittedStats.activeLights==16,
+            "PCSS neighbor-tile fixture did not finish all sixteen shadow blocks.");
+        check(maximumDifference(neighbors,seamReference)<=1,
+            "PCSS sampled unrelated light tiles after atlas layout changed beside a cube seam.");
+        lights=savedLights;settings=savedSettings;receiver.model.transform=savedReceiver;caster.model.transform=savedCaster;
+        center=savedCenter;right=savedRight;
+        for (unsigned attempt=0;attempt<8;++attempt) {capture();if (!submittedStats.pointDeferred) break;}
+        check(submittedStats.pointDeferred==0,"PCSS fixture failed to restore the sixteen cached ordinary point lights.");
+    }
+    // Caster-only edits can retain the previous projection while waiting. Scene
+    // and Game share one update decision and cannot each spend another budget.
+    caster.model.transform=math::translation(right*.1f)*caster.model.transform;
+    unsigned refreshed{};bool observedDeferred{};
+    for(unsigned attempt=0;attempt<8;++attempt) {
+        shadowInstances={receiver,caster};scene.shadowInstances=shadowInstances;
+        renderer.render(scene);renderer.renderGame(scene);const auto stats=renderer.shadowStats();
+        refreshed+=stats.renderedLights;observedDeferred|=stats.pointDeferred!=0;
+        check(stats.renderedLights<=4&&stats.renderedFaces<=24,
+            "Scene and Game spent separate point-shadow update budgets in one world frame.");
+        check(stats.pointCriticalDeferred==0,"A caster-only edit incorrectly invalidated a coherent light projection.");
+        tick();if(!stats.pointDeferred)break;
+    }
+    check(observedDeferred&&refreshed==16,"Deferred caster updates did not eventually refresh all resident lights.");
+    // Every moved light requires a new projection. Equal-distance lights use
+    // persistent identity for ties; the highest-ID dominant light is deferred
+    // behind the first four and must illuminate without sampling its old tile.
+    for(auto& light:lights){light.position=right*.1f;light.intensity=.0001f;}
+    lights.back().intensity=100;
+    const auto deferredProjection=capture();
+    check(submittedStats.pointCriticalDeferred>0&&submittedStats.renderedFaces<=24,
+        "Moved projections were not deferred within the shared frame budget.");
+    check(brightness(deferredProjection,settings.camera,center)>80,
+        "A deferred moved light sampled stale occlusion instead of disabling its old projection.");
+    for(unsigned attempt=0;attempt<8&&submittedStats.pointDeferred;++attempt)all=capture();
+    check(submittedStats.pointDeferred==0&&brightness(all,settings.camera,center)<35,
+        "The deferred moved light did not publish a complete shadow projection.");
+    for(auto& light:lights){light.position={};light.intensity=100.f/16;}
+    orient(5);for(unsigned attempt=0;attempt<8;++attempt){capture();if(!submittedStats.pointDeferred)break;}
+    check(submittedStats.pointDeferred==0,"Restored shadow fixture did not finish its budgeted updates.");
     // A separate saved-scene thumbnail is interleaved between Scene and Game.
     // It has no blocker and must neither overwrite nor invalidate active shadows.
     shadowInstances={receiver,caster};scene.shadowInstances=shadowInstances;RenderScene thumbnail=scene;
@@ -248,6 +420,22 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
             }
         }
     }
+    // Positive source size must not turn the floor itself into a blocker when
+    // the larger search/filter crosses face seams on sloped/reflected geometry.
+    scene.shadowResolution=256;lights[0].sourceRadius=lights[1].sourceRadius=.7f;
+    for(float slope:{-.3f,.3f})for(bool reflected:{false,true}) {
+        const auto tilt=math::rotation(math::axisAngle({0,0,1},slope));
+        receiver.model.transform=tilt*plane(floorCamera,{},12);
+        if(reflected)receiver.model.transform=receiver.model.transform*math::scaling({-1,1,1});
+        lights[0].castShadows=lights[1].castShadows=false;const auto clear=capture();
+        lights[0].castShadows=lights[1].castShadows=true;const auto soft=capture();
+        for(float x:{-4.f,-2.1f,-1.9f,0.f,1.9f,2.1f,4.f})for(float z:{-4.f,0.f,4.f}) {
+            const auto point=math::transformPoint(tilt,{x,0,z});
+            check(std::abs(brightness(clear,settings.camera,point)-brightness(soft,settings.camera,point))<4,
+                "Nonzero Source Radius introduced self-shadowing on an unoccluded sloped/reflected receiver.");
+        }
+    }
+    lights[0].sourceRadius=lights[1].sourceRadius=0;
     // Preserve nearby real occlusion while correcting the receiver plane. Both
     // samples lie on a side face, where a larger global bias could hide it.
     scene.pointLights=std::span(lights.data(),1);lights[0].castShadows=true;
@@ -266,17 +454,243 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     check(brightness(offscreenClear,settings.camera,center)>brightness(offscreen,settings.camera,center)+60,"Off-camera caster did not shadow the visible receiver.");
     // Shader publication is atomic: a failing caster must preserve the entire
     // current renderer+ImGui group and its rendered shadow, not just its handle.
-    ShaderReloadSession reload(resources,renderer,tools,config);
+    const auto compileBeforeStartup=shaderCompilerMetrics();
+    ShaderReloadSession reload(resources,renderer,tools,config,EmbeddedShaderSourceBaseline);
+    check(!reload.pending()&&reload.revision()==0&&shaderCompilerMetrics().compilerInvocations==compileBeforeStartup.compilerInvocations,
+        "Matching embedded shader sources queued an unnecessary startup compilation.");
     const auto pump=[&] {const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds{45};
         do{tick();reload.pump();}while(reload.pending() && std::chrono::steady_clock::now()<deadline);
         check(!reload.pending(),"Shadow shader reload timed out.");};
-    pump();check(reload.revision()==1,"Valid shadow shader reload failed: "+reload.status());
-    const auto healthySignature=renderer.shaderSignature();const auto healthy=capture();
     const auto source=config.sourceDirectory/"fs_point_shadow.sc";std::ifstream input(source);
     const std::string original{std::istreambuf_iterator<char>(input),{}};input.close();
-    writeFileAtomically(source,original+"\nINVALID_POINT_SHADOW_SHADER\n");const std::array changed{source};reload.changed(changed);pump();
+    writeFileAtomically(source,original+"\n// Actual source edit after embedded startup.\n");
+    const std::array changed{source};reload.changed(changed);
+    pump();check(reload.revision()==1,"Valid shadow shader reload failed: "+reload.status());
+    const auto healthySignature=renderer.shaderSignature();const auto healthy=capture();
+    writeFileAtomically(source,original+"\nINVALID_POINT_SHADOW_SHADER\n");reload.changed(changed);pump();
     check(reload.revision()==1 && renderer.shaderSignature()==healthySignature,"Failed caster reload replaced part of the live program group.");
     check(capture().rgba==healthy.rgba,"Failed caster reload changed the rendered shadow.");
+    // The Game view uses one bounded world projection. A focused character map
+    // can add detail independently; the Scene view retains four inspection
+    // cascades in a separate camera block of the same comparison resource.
+    scene.pointLights={};
+    DirectionalLight sun;sun.entityId=900;sun.direction={0,0,-1};sun.color={1,1,1};sun.intensity=4;sun.castShadows=true;
+    // This is a six-metre gameplay fixture. Keep its bounded coverage tight
+    // enough to resolve the 1.5-metre caster with a single 256-pixel map;
+    // inherited 100-metre/FOV65 inspection coverage tests a different quality.
+    sun.shadowDistance=15;
+    scene.directionalLights=std::span(&sun,1);
+    settings.camera.position={0,0,6};settings.camera.target={};settings.camera.fov=45;settings.camera.nearPlane=.01f;settings.camera.farPlane=2048;
+    receiver.model.transform=plane(settings.camera,{},3);caster.model.transform=plane(settings.camera,{0,0,2},.75f);
+    receiver.receiveShadows=true;caster.castShadows=true;casterMaterials[0].alphaMask=false;
+    const auto sunShadow=capture();
+    check(submittedStats.directionalRendered==1&&submittedStats.directionalCascades==1&&
+        submittedStats.directionalWorldProjections==1&&submittedStats.characterProjections==0,
+        "Game directional shadows did not use one bounded world projection.");
+    const auto sunCached=capture();check(submittedStats.directionalCacheHits==1&&submittedStats.directionalRendered==0,"Static Game directional projection did not remain cached.");
+    check(sunCached.rgba==sunShadow.rgba,"Static directional cache changed pixels.");
+    sun.castShadows=false;const auto sunClear=capture();sun.castShadows=true;
+    check(brightness(sunClear,settings.camera,{})>brightness(sunShadow,settings.camera,{})+60,
+        "Directional shadow did not occlude its direct light: clear="+std::to_string(brightness(sunClear,settings.camera,{}))+
+        ", shadow="+std::to_string(brightness(sunShadow,settings.camera,{})));
+    receiver.receiveShadows=false;const auto sunUnreceived=capture();receiver.receiveShadows=true;
+    check(std::abs(brightness(sunClear,settings.camera,{})-brightness(sunUnreceived,settings.camera,{}))<=1,"Directional receiving flag changed unshadowed direct light.");
+    const std::array<std::uint64_t,1> focusEntities{caster.entityId};scene.shadowFocusEntities=focusEntities;
+    scene.shadowFocusBounds=math::transformBounds(mesh->bounds,caster.model.transform);
+    const auto focused=capture();
+    check(submittedStats.characterProjections==1&&submittedStats.directionalCascades<=2&&
+        submittedStats.directionalWorldProjections<=1,
+        "Game character focus did not add exactly one focused projection.");
+    check(brightness(focused,settings.camera,{})<brightness(sunClear,settings.camera,{})*.5,
+        "Character focus lost the shadow under the selected caster.");
+    capture();check(submittedStats.directionalRendered==0&&submittedStats.characterProjections==0,
+        "Static world and character projections did not remain cached.");
+    caster.model.transform=math::translation({.3f,0,0})*caster.model.transform;
+    scene.shadowFocusBounds=math::transformBounds(mesh->bounds,caster.model.transform);
+    const auto followedFocus=capture();
+    check(submittedStats.directionalWorldProjections==0&&submittedStats.characterProjections==1&&
+        submittedStats.directionalCascades==1,
+        "A character-only pose edit rewrote the stationary Game world projection.");
+    check(brightness(followedFocus,settings.camera,{.3f,0,0})<brightness(sunClear,settings.camera,{})*.5,
+        "The focused shadow did not follow the selected character's presented position.");
+    // Only the selected character contributes to its focus map. A second
+    // overlapping non-character caster draws in the world map once, while the
+    // focus map draws the selected caster once. Each changed projection also
+    // draws one explicit tile clear: four total depth submissions.
+    receiver.castShadows=false;caster.model.transform=math::translation({.05f,0,0})*caster.model.transform;
+    scene.shadowFocusBounds=math::transformBounds(mesh->bounds,caster.model.transform);
+    auto nonCharacter=caster;nonCharacter.entityId=3;
+    nonCharacter.model.transform=math::translation({.1f,0,0})*caster.model.transform;
+    std::array<RenderModelInstance,3> focusCasters{receiver,caster,nonCharacter};scene.shadowInstances=focusCasters;
+    renderer.renderGame(scene);const auto focusStats=renderer.shadowStats();
+    check(focusStats.directionalWorldProjections==1&&focusStats.characterProjections==1&&focusStats.drawCalls==4,
+        "The character focus pass included a non-character caster or lost its world projection.");
+    read(renderer.gameViewportTexture());receiver.castShadows=true;
+    shadowInstances={receiver,caster};scene.shadowInstances=shadowInstances;
+    renderer.render(scene);
+    check(renderer.shadowStats().directionalWorldProjections==4&&renderer.shadowStats().characterProjections==0,
+        "The free Scene camera did not retain four world cascades independently of Game focus.");
+    auto otherSettings=settings;otherSettings.camera.position={30,0,6};otherSettings.camera.target={30,0,0};
+    RenderScene other{otherSettings,{}};other.sceneMode=true;other.instances=scene.instances;other.shadowInstances=shadowInstances;
+    other.directionalLights=scene.directionalLights;other.shadowWorldId=scene.shadowWorldId;other.shadowResolution=scene.shadowResolution;
+    renderer.renderGame(other);
+    const auto isolated=read(renderer.viewportTexture());
+    check(brightness(isolated,settings.camera,{})<brightness(sunClear,settings.camera,{})*.5,"Game projection overwrote Scene directional depth.");
+    sun.direction={.3f,0,-1};const auto movedSun=capture();check(submittedStats.directionalRendered==1,"Moving a sun failed to invalidate its projections.");
+    check(movedSun.rgba!=sunShadow.rgba,"Moving a sun left its old shadow projection.");
+    // GPU deformation must agree with the CPU reference through visible color,
+    // readable depth, picking, point shadows and the dedicated player silhouette.
+    renderer.setGridVisible(false);
+    auto animated=quad();animated->id="animated-gpu-parity";animated->draws[0].node=0;
+    animated->nodes.resize(3);animated->nodes[0].mesh=0;animated->nodes[0].skin=0;
+    animated->skins.resize(1);animated->skins[0].joints={1,2};animated->skins[0].inverseBindMatrices.resize(2);
+    auto& animatedPrimitive=animated->primitives[0];animatedPrimitive.hasSkinning=true;animatedPrimitive.skinWeights.resize(4);
+    for(auto& weights:animatedPrimitive.skinWeights)for(unsigned i=0;i<8;++i){weights.joints[i]=static_cast<std::uint16_t>(i%2);weights.weights[i]=float(i+1)/36.f;}
+    ModelMorphTarget morph;morph.positions={{-.1f,.2f,0},{.2f,.1f,0},{.1f,-.1f,.1f},{-.2f,-.2f,0}};
+    morph.normals.assign(4,{.1f,.05f,0});morph.tangents.assign(4,{0,.1f,.05f});animatedPrimitive.morphTargets.push_back(morph);
+    auto animatedPose=std::make_shared<ModelPose>();animatedPose->localTransforms.resize(3);animatedPose->worldTransforms.resize(3);
+    animatedPose->skinPalettes.resize(3);animatedPose->nodeWeights.resize(3);animatedPose->nodeWeights[0]={.6f};animatedPose->drawTransforms.resize(1);
+    animatedPose->skinPalettes[0]={math::translation({.6f,.15f,0})*math::scaling({.85f,1.1f,1}),
+        math::translation({.3f,-.1f,.1f})*math::scaling({.7f,.8f,1.2f})};
+    auto reference=quad();reference->id="animated-cpu-reference";
+    reference->primitives[0]=deformModelPrimitive(*animated,0,0,*animatedPose);
+    reference->primitives[0].skinWeights.clear();reference->primitives[0].morphTargets.clear();reference->primitives[0].hasSkinning=false;
+    reference->bounds={};for(const auto& vertex:reference->primitives[0].vertices)math::include(reference->bounds,vertex.position);
+    animatedPose->bounds=reference->bounds;
+    animated->materials[0].doubleSided=true;reference->materials[0].doubleSided=true;
+    check(renderer.prepareModel(*animated),renderer.modelStatus());check(renderer.prepareModel(*reference),renderer.modelStatus());
+    RenderModelInstance animatedReceiver;animatedReceiver.entityId=700;animatedReceiver.model.asset=animated;animatedReceiver.pose=animatedPose;
+    RenderModelInstance referenceReceiver=animatedReceiver;referenceReceiver.model.asset=reference;referenceReceiver.pose.reset();
+    SceneSettings animationSettings;animationSettings.camera.position={0,0,6};animationSettings.camera.target={};animationSettings.camera.fov=45;
+    animationSettings.environment.enabled=false;animationSettings.environment.ambientVisibility.enabled=true;
+    animationSettings.environment.ambientVisibility.darknessFloor=1;
+    // Illuminate the two-sided fixture from both directions. Lit parity uses
+    // an orientation-preserving nonuniform blend; reflected geometry is tested
+    // separately below without depending on the PBR backface convention.
+    std::array<PointLight,2> animationLights;auto& animationLight=animationLights[0];
+    animationLight.entityId=701;animationLight.position={0,0,4};animationLight.radius=12;animationLight.intensity=60;
+    animationLights[1]=animationLight;animationLights[1].entityId=702;animationLights[1].position={0,0,-4};
+    RenderScene animationScene{animationSettings,{}};animationScene.sceneMode=true;animationScene.pointLights=animationLights;
+    const auto renderAnimated=[&](const RenderModelInstance& instance){animationScene.instances=std::span(&instance,1);renderer.render(animationScene);return read(renderer.viewportTexture());};
+    const auto equivalentAnimation=[&](const DecodedImage& gpu,const DecodedImage& cpu,const char* reason){
+        std::size_t changed{};unsigned maximum{};std::uint64_t total{};
+        for(std::size_t i=0;i<gpu.rgba.size();++i){const auto error=unsigned(std::abs(int(gpu.rgba[i])-int(cpu.rgba[i])));maximum=std::max(maximum,error);total+=error;if(error>3)++changed;}
+        check(changed<32 && total<gpu.rgba.size()/10,reason);
+        std::cout<<"GPU deformation parity: max="<<maximum<<", differing components="<<changed<<", total="<<total<<'\n';
+    };
+    const auto referenceColor=renderAnimated(referenceReceiver);const auto gpuColor=renderAnimated(animatedReceiver);
+    if(brightness(referenceColor,animationSettings.camera,(reference->bounds.minimum+reference->bounds.maximum)*.5)<=30 ||
+        brightness(gpuColor,animationSettings.camera,(reference->bounds.minimum+reference->bounds.maximum)*.5)<=30) {
+    const auto diagnosticCenter=(reference->bounds.minimum+reference->bounds.maximum)*.5;
+    const auto diagnosticPixel=math::project(diagnosticCenter,animationSettings.camera.projectionMatrix(1,ClipDepth::ZeroToOne)*animationSettings.camera.viewMatrix(),{0,0,ImageSize,ImageSize},ClipDepth::ZeroToOne);
+    const auto imageStatistics=[&](const char* name,const DecodedImage& image){
+        unsigned maximum{};std::size_t lit{};for(std::size_t pixel=0;pixel<image.rgba.size();pixel+=4){
+            const auto value=std::max({image.rgba[pixel],image.rgba[pixel+1],image.rgba[pixel+2]});maximum=std::max(maximum,unsigned(value));if(value>30)++lit;
+        }
+        std::cout<<"Animation diagnostic "<<name<<": maximum="<<maximum<<", lit pixels="<<lit<<", center brightness="<<brightness(image,animationSettings.camera,diagnosticCenter)<<'\n';
+        if(diagnosticPixel){const auto offset=(std::size_t((*diagnosticPixel)[1])*image.width+std::size_t((*diagnosticPixel)[0]))*4;
+            std::cout<<"Projected center="<<(*diagnosticPixel)[0]<<','<<(*diagnosticPixel)[1]<<" RGB="<<unsigned(image.rgba[offset])<<','<<unsigned(image.rgba[offset+1])<<','<<unsigned(image.rgba[offset+2])<<'\n';}
+    };
+    imageStatistics("CPU",referenceColor);imageStatistics("GPU",gpuColor);
+    std::cout<<"Reference bounds center="<<diagnosticCenter[0]<<','<<diagnosticCenter[1]<<','<<diagnosticCenter[2]
+        <<"; material RGB="<<reference->materials[0].baseColor[0]<<','<<reference->materials[0].baseColor[1]<<','<<reference->materials[0].baseColor[2]
+        <<"; metallic="<<reference->materials[0].metallic<<", double sided="<<reference->materials[0].doubleSided
+        <<"; drawable="<<renderer.drawable()<<", model status="<<renderer.modelStatus()<<", shader status="<<renderer.shaderStatus()
+        <<", active cluster lights="<<renderer.clusteredLightingStats().activeLights<<'\n';
+    for(const auto& vertex:reference->primitives[0].vertices)std::cout<<"Reference vertex: P="<<vertex.position[0]<<','<<vertex.position[1]<<','<<vertex.position[2]
+        <<" N="<<vertex.normal[0]<<','<<vertex.normal[1]<<','<<vertex.normal[2]<<" tangent W="<<vertex.tangent[3]<<'\n';
+    const auto& diagnosticVertices=reference->primitives[0].vertices;
+    const auto windingNormal=math::normalized(math::cross(diagnosticVertices[1].position-diagnosticVertices[0].position,diagnosticVertices[2].position-diagnosticVertices[0].position));
+    std::cout<<"Reference triangle normal dot view="<<math::dot(windingNormal,-animationSettings.camera.forward())
+        <<", shading normal dot view="<<math::dot(diagnosticVertices[0].normal,-animationSettings.camera.forward())<<'\n';
+    if(brightness(referenceColor,animationSettings.camera,diagnosticCenter)<=30||brightness(gpuColor,animationSettings.camera,diagnosticCenter)<=30){
+        const auto folder=std::filesystem::temp_directory_path()/("crimson-animation-diagnostic-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::create_directory(folder);
+        const auto save=[&](const char* name,const DecodedImage& image){std::vector<unsigned char> encoded;check(lodepng::encode(encoded,image.rgba,image.width,image.height)==0,"Cannot encode animation diagnostic.");
+            writeFileAtomically(folder/name,{reinterpret_cast<const char*>(encoded.data()),encoded.size()});};
+        save("cpu.png",referenceColor);save("gpu.png",gpuColor);std::cout<<"Animation diagnostics: "<<folder.string()<<'\n';
+    }
+    }
+    check(brightness(referenceColor,animationSettings.camera,(reference->bounds.minimum+reference->bounds.maximum)*.5)>30,"Animated CPU/GPU parity fixture is not visible.");
+    check(brightness(gpuColor,animationSettings.camera,(reference->bounds.minimum+reference->bounds.maximum)*.5)>30,"GPU-deformed parity fixture is not visible.");
+    equivalentAnimation(gpuColor,referenceColor,"GPU morph/skin color and readable depth disagree with CPU deformation.");
+    // An immutable alternate pose must not overwrite a buffer already queued
+    // by the other camera in this frame.
+    auto alternatePose=std::make_shared<ModelPose>(*animatedPose);for(auto& matrix:alternatePose->skinPalettes[0])matrix=math::translation({.7f,0,0})*matrix;
+    auto alternateReference=quad();alternateReference->id="animated-cpu-alternate";alternateReference->primitives[0]=deformModelPrimitive(*animated,0,0,*alternatePose);
+    alternateReference->primitives[0].skinWeights.clear();alternateReference->primitives[0].morphTargets.clear();alternateReference->primitives[0].hasSkinning=false;
+    alternateReference->materials[0].doubleSided=true;
+    alternateReference->bounds={};for(const auto& vertex:alternateReference->primitives[0].vertices)math::include(alternateReference->bounds,vertex.position);alternatePose->bounds=alternateReference->bounds;
+    check(renderer.prepareModel(*alternateReference),renderer.modelStatus());auto alternateCpu=referenceReceiver;alternateCpu.model.asset=alternateReference;
+    const auto alternateColor=renderAnimated(alternateCpu);auto alternateGpu=animatedReceiver;alternateGpu.pose=alternatePose;
+    animationScene.instances=std::span(&alternateGpu,1);renderer.renderGame(animationScene);animationScene.instances=std::span(&animatedReceiver,1);renderer.render(animationScene);
+    equivalentAnimation(read(renderer.gameViewportTexture()),alternateColor,"Scene pose overwrote another camera's queued GPU vertices.");
+    equivalentAnimation(read(renderer.viewportTexture()),referenceColor,"Game pose overwrote Scene's immutable GPU vertices.");
+    const auto centerPoint=(reference->bounds.minimum+reference->bounds.maximum)*.5;
+    const auto pickPixel=math::project(centerPoint,animationSettings.camera.projectionMatrix(1,ClipDepth::ZeroToOne)*animationSettings.camera.viewMatrix(),{0,0,ImageSize,ImageSize},ClipDepth::ZeroToOne);
+    check(bool(pickPixel),"Animated picking fixture has no projected center.");
+    check(renderer.requestPick({1,1,700,static_cast<std::uint32_t>((*pickPixel)[0]),static_cast<std::uint32_t>((*pickPixel)[1]),renderer.streamingSignature()}),renderer.pickingStatus());
+    renderer.render(animationScene);tick();std::optional<PickResult> animationPick;
+    for(unsigned i=0;i<120&&!animationPick;++i){animationPick=renderer.pollPick(frame);if(!animationPick)tick();}
+    check(animationPick&&animationPick->entityId==animatedReceiver.entityId,"Picking did not use the animated visible silhouette.");
+    auto ground=receiver;ground.model.asset=mesh;ground.model.transform=math::scaling({3,3,1});ground.materials=nullptr;
+    animatedReceiver.model.transform=math::translation({0,0,1.5f})*math::scaling({.5f,.5f,.5f});referenceReceiver.model.transform=animatedReceiver.model.transform;
+    std::array<RenderModelInstance,2> animationCasters;animationScene.instances=std::span(&ground,1);animationScene.shadowWorldId=700;animationScene.shadowResolution=256;animationScene.pointLights=std::span(&animationLight,1);animationLight.castShadows=true;
+    const auto animationShadow=[&](const RenderModelInstance& blocker){animationCasters={ground,blocker};animationScene.shadowInstances=animationCasters;renderer.renderGame(animationScene);return read(renderer.gameViewportTexture());};
+    referenceReceiver.castShadows=false;const auto animatedClear=animationShadow(referenceReceiver);referenceReceiver.castShadows=true;
+    const auto cpuPoint=animationShadow(referenceReceiver);
+    const auto blockerCenter=math::transformPoint(referenceReceiver.model.transform,centerPoint);
+    const auto floorSample=Vec3{blockerCenter[0]*4/(4-blockerCenter[2]),blockerCenter[1]*4/(4-blockerCenter[2]),0};
+    check(brightness(cpuPoint,animationSettings.camera,floorSample)<brightness(animatedClear,animationSettings.camera,floorSample)*.5,
+        "Animated point-shadow parity fixture has no visible ground silhouette.");
+    equivalentAnimation(animationShadow(animatedReceiver),cpuPoint,"Point shadow caster did not use GPU-deformed vertices.");
+    animatedReceiver.lightingCategory=referenceReceiver.lightingCategory=lighting_scope::Character;
+    animatedReceiver.lightingScopes.shadowCasterMask=referenceReceiver.lightingScopes.shadowCasterMask=lighting_scope::Character;
+    animationLight.castShadows=false;animationScene.characterShadow.enabled=true;animationScene.characterShadow.strength=1;
+    animationScene.characterShadow.direction={0,0,-1};animationScene.characterShadow.distance=10;
+    const auto cpuCharacter=animationShadow(referenceReceiver);
+    check(brightness(cpuCharacter,animationSettings.camera,{blockerCenter[0],blockerCenter[1],0})<brightness(animatedClear,animationSettings.camera,{blockerCenter[0],blockerCenter[1],0})*.5,
+        "Animated dedicated-shadow parity fixture has no visible ground silhouette.");
+    equivalentAnimation(animationShadow(animatedReceiver),cpuCharacter,"Dedicated player shadow caster did not use GPU-deformed vertices.");
+    // A reflected skin blend reverses winding. Test its geometry with Unlit
+    // receivers, so the established two-sided PBR NoV rejection cannot turn a
+    // correct CPU reference black. Depth, picking and both shadow types still
+    // consume this same reflected GPU buffer and are compared independently.
+    auto reflectedPose=std::make_shared<ModelPose>(*animatedPose);
+    for(auto& matrix:reflectedPose->skinPalettes[0])matrix.at(0,0)=-std::abs(matrix.at(0,0));
+    auto reflectedReference=quad();reflectedReference->id="animated-cpu-reflected";
+    reflectedReference->primitives[0]=deformModelPrimitive(*animated,0,0,*reflectedPose);
+    reflectedReference->materials[0].doubleSided=true;reflectedReference->bounds={};
+    for(const auto& vertex:reflectedReference->primitives[0].vertices)math::include(reflectedReference->bounds,vertex.position);
+    reflectedPose->bounds=reflectedReference->bounds;check(renderer.prepareModel(*reflectedReference),renderer.modelStatus());
+    auto reflectedGpu=animatedReceiver;reflectedGpu.pose=reflectedPose;reflectedGpu.shading=MaterialShading::Unlit;reflectedGpu.model.transform={};
+    auto reflectedCpu=referenceReceiver;reflectedCpu.model.asset=reflectedReference;reflectedCpu.shading=MaterialShading::Unlit;reflectedCpu.model.transform={};
+    animationScene.shadowWorldId=0;animationScene.shadowInstances={};animationScene.characterShadow={};animationLight.castShadows=false;
+    const auto reflectedCpuColor=renderAnimated(reflectedCpu);const auto reflectedGpuColor=renderAnimated(reflectedGpu);
+    const auto reflectedCenter=(reflectedReference->bounds.minimum+reflectedReference->bounds.maximum)*.5;
+    check(brightness(reflectedCpuColor,animationSettings.camera,reflectedCenter)>30&&brightness(reflectedGpuColor,animationSettings.camera,reflectedCenter)>30,
+        "Reflected CPU/GPU geometry fixture is not visible.");
+    equivalentAnimation(reflectedGpuColor,reflectedCpuColor,"Reflected GPU morph/skin geometry or readable depth differs from the CPU reference.");
+    const auto reflectedPixel=math::project(reflectedCenter,animationSettings.camera.projectionMatrix(1,ClipDepth::ZeroToOne)*animationSettings.camera.viewMatrix(),{0,0,ImageSize,ImageSize},ClipDepth::ZeroToOne);
+    check(bool(reflectedPixel),"Reflected picking fixture has no projected center.");
+    check(renderer.requestPick({1,1,701,static_cast<std::uint32_t>((*reflectedPixel)[0]),static_cast<std::uint32_t>((*reflectedPixel)[1]),renderer.streamingSignature()}),renderer.pickingStatus());
+    renderer.render(animationScene);tick();std::optional<PickResult> reflectedPick;
+    for(unsigned i=0;i<120&&!reflectedPick;++i){reflectedPick=renderer.pollPick(frame);if(!reflectedPick)tick();}
+    check(reflectedPick&&reflectedPick->entityId==reflectedGpu.entityId,"Picking did not use reflected GPU geometry.");
+    reflectedGpu.model.transform=reflectedCpu.model.transform=math::translation({0,0,1.5f})*math::scaling({.5f,.5f,.5f});
+    animationScene.instances=std::span(&ground,1);animationScene.shadowWorldId=701;animationLight.castShadows=true;
+    reflectedCpu.castShadows=false;const auto reflectedClear=animationShadow(reflectedCpu);reflectedCpu.castShadows=true;
+    const auto reflectedCpuPoint=animationShadow(reflectedCpu);const auto reflectedBlocker=math::transformPoint(reflectedCpu.model.transform,reflectedCenter);
+    const auto reflectedFloor=Vec3{reflectedBlocker[0]*4/(4-reflectedBlocker[2]),reflectedBlocker[1]*4/(4-reflectedBlocker[2]),0};
+    check(brightness(reflectedCpuPoint,animationSettings.camera,reflectedFloor)<brightness(reflectedClear,animationSettings.camera,reflectedFloor)*.5,
+        "Reflected point-shadow parity fixture has no visible silhouette.");
+    equivalentAnimation(animationShadow(reflectedGpu),reflectedCpuPoint,"Reflected GPU point shadow differs from CPU geometry.");
+    animationLight.castShadows=false;animationScene.characterShadow.enabled=true;animationScene.characterShadow.strength=1;
+    animationScene.characterShadow.direction={0,0,-1};animationScene.characterShadow.distance=10;
+    const auto reflectedCpuKey=animationShadow(reflectedCpu);
+    check(brightness(reflectedCpuKey,animationSettings.camera,{reflectedBlocker[0],reflectedBlocker[1],0})<brightness(reflectedClear,animationSettings.camera,{reflectedBlocker[0],reflectedBlocker[1],0})*.5,
+        "Reflected dedicated-shadow parity fixture has no visible silhouette.");
+    equivalentAnimation(animationShadow(reflectedGpu),reflectedCpuKey,"Reflected GPU dedicated silhouette differs from CPU geometry.");
     resources.stop();frame=renderer.drainPending(frame);
 }
 }
@@ -288,6 +702,6 @@ int main(int argc,char** argv) {
         std::filesystem::copy(std::filesystem::path(argv[3]),config.includeDirectory,std::filesystem::copy_options::recursive);
         SdlOwner sdl;std::unique_ptr<SDL_Window,decltype(&SDL_DestroyWindow)> window(SDL_CreateWindow("Crimson point-shadow checks",320,240,SDL_WINDOW_HIDDEN),SDL_DestroyWindow);
         check(bool(window),SDL_GetError());exercise(window.get(),config);
-        std::cout<<"Hidden D3D11 point-shadow faces, masks, flags, live edits, sixteen lights, shared views and reload checks passed.\n";return 0;
+        std::cout<<"Hidden D3D11 point-shadow faces, masks, flags, budgeted admission/fairness, stale-projection rejection, focused Game/Scene projections, shared views and reload checks passed.\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

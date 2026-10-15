@@ -36,7 +36,9 @@ bool MaterialDocument::dirty() const {
     return open_ && (state_!=savedState_ || (transaction_ && !equal(working_,transaction_->before)));
 }
 bool MaterialDocument::editable() const {
-    return open_ && working_.originModel.empty() && !working_.id.starts_with("builtin:") &&
+    // Imported model sidecars are the authored material, with a stable shared
+    // identity. Their model origin is provenance, not an edit restriction.
+    return open_ && !working_.id.starts_with("builtin:") &&
         (particleMaterialCompatible(working_) || modelMaterialCompatible(working_));
 }
 std::vector<std::string> MaterialDocument::historicalTextureReferences() const {

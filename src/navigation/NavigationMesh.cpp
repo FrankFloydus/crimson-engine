@@ -39,6 +39,24 @@ void appendBox(const PhysicsBox& box,std::vector<float>& vertices,std::vector<in
         triangles.push_back(first+faces[index+(reflected?1:2)]);
     }
 }
+void appendMesh(const PhysicsStaticMesh& source,std::vector<float>& vertices,std::vector<int>& triangles) {
+    if(!source.mesh)return;
+    const auto& mesh=*source.mesh;
+    if(vertices.size()/3+mesh.positions.size()>4'000'000 || triangles.size()+mesh.indices.size()>12'000'000)
+        throw std::runtime_error("Navigation triangle geometry exceeds its preparation budget.\n");
+    const int first=static_cast<int>(vertices.size()/3);
+    for(const auto& position:mesh.positions) {
+        const auto world=math::transformPoint(source.world,position);
+        if(!math::finite(world))throw std::runtime_error("Navigation mesh contains nonfinite positions.\n");
+        vertices.insert(vertices.end(),world.begin(),world.end());
+    }
+    const bool reflected=math::handedness(source.world)<0;
+    for(std::size_t index=0;index<mesh.indices.size();index+=3)for(unsigned corner=0;corner<3;++corner) {
+        const auto vertex=mesh.indices.at(index+(reflected && corner?3-corner:corner));
+        if(vertex>=mesh.positions.size())throw std::runtime_error("Navigation mesh index is out of bounds.\n");
+        triangles.push_back(first+static_cast<int>(vertex));
+    }
+}
 void require(bool success,const char* stage) {
     if(!success)throw std::runtime_error(std::string("Navigation build failed: ")+stage+".\n");
 }
@@ -201,12 +219,14 @@ struct NavigationMesh::Impl {
         }
         return {};
     }
-    void build(const std::vector<PhysicsBox>& boxes) {
+    void build(const std::vector<PhysicsBox>& boxes,const std::vector<PhysicsStaticMesh>& meshes) {
         query.reset();mesh.reset();componentByPolygon.clear();componentBounds.clear();bounds={};diagnostic.clear();
-        if(boxes.empty()){diagnostic="Navigation needs a walkable Box Collider.\n";return;}
+        if(boxes.empty() && meshes.empty()){diagnostic="Navigation needs walkable static collision geometry.\n";return;}
         std::vector<float> vertices;std::vector<int> triangles;
         vertices.reserve(boxes.size()*24);triangles.reserve(boxes.size()*36);
         for(const auto& box:boxes)appendBox(box,vertices,triangles);
+        for(const auto& source:meshes)appendMesh(source,vertices,triangles);
+        if(vertices.empty()){diagnostic="Navigation needs walkable static collision geometry.\n";return;}
         const auto vertexCount=static_cast<int>(vertices.size()/3);
         rcConfig config{};config.cs=CellSize;config.ch=CellHeight;
         config.walkableSlopeAngle=MaximumSlope;
@@ -232,6 +252,14 @@ struct NavigationMesh::Impl {
         require(rcCreateHeightfield(&context,*solid,config.width,config.height,config.bmin,config.bmax,config.cs,config.ch),"heightfield");
         auto remainingCells=MaximumRasterCells;
         for(const auto& box:boxes)rasterizeSolidBox(context,config,box,*solid,remainingCells);
+        if(!meshes.empty()) {
+            std::vector<float> meshVertices;std::vector<int> meshTriangles;
+            for(const auto& source:meshes)appendMesh(source,meshVertices,meshTriangles);
+            const auto count=static_cast<int>(meshTriangles.size()/3),meshVertexCount=static_cast<int>(meshVertices.size()/3);
+            std::vector<unsigned char> areas(static_cast<std::size_t>(count));
+            rcMarkWalkableTriangles(&context,config.walkableSlopeAngle,meshVertices.data(),meshVertexCount,meshTriangles.data(),count,areas.data());
+            require(rcRasterizeTriangles(&context,meshVertices.data(),meshVertexCount,meshTriangles.data(),areas.data(),count,*solid,config.walkableClimb),"mesh collision rasterization");
+        }
         rcFilterLowHangingWalkableObstacles(&context,config.walkableClimb,*solid);
         rcFilterLedgeSpans(&context,config.walkableHeight,config.walkableClimb,*solid);
         rcFilterWalkableLowHeightSpans(&context,config.walkableHeight,*solid);
@@ -284,7 +312,7 @@ bool NavigationMesh::reconcile(const PhysicsWorld& world,const SceneCharacter& c
         require((static_cast<double>(state.height)+Skin)/CellHeight<RC_SPAN_MAX_HEIGHT &&
                 (static_cast<double>(state.radius)+Skin)/CellSize<65535,
                 "Character dimensions exceed the navigation voxel range");
-        state.build(world.staticBoxes());
+        state.build(world.staticBoxes(),world.staticMeshes());
     } catch(const std::exception& error){state.query.reset();state.mesh.reset();state.componentByPolygon.clear();state.componentBounds.clear();state.bounds={};state.diagnostic=error.what();}
     return true;
 }

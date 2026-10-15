@@ -1,5 +1,6 @@
 #include "Tools.h"
 #include "AssetBrowser.h"
+#include "LightingControls.h"
 #include "crimson-renderer/ImGuiBgfx.h"
 #include "assets/AssetLibrary.h"
 #include "crimson-renderer/Renderer.h"
@@ -182,6 +183,8 @@ bool environmentControls(EnvironmentSettings& environment, AssetLibrary& assets,
     changed |= ImGui::SliderFloat("Intensity##environment", &environment.intensity, 0.0f, 10.0f, "%.2f");
     changed |= ImGui::SliderFloat("Rotation##environment", &environment.rotation, -180.0f, 180.0f, "%.1f deg");
     help("Rotate environment lighting around the world Y axis.");
+    if(ImGui::CollapsingHeader("Ambient Light"))
+        drawAmbientLightControls(environment.ambientLight,[&](AmbientLightControl,bool edited){changed|=edited;});
     changed |= drawToneMappingControl(environment.toneMapping);
     changed |= drawGlowControls(environment.glow);
     if (!renderer.environmentStatus().empty()) ImGui::TextWrapped("%s", renderer.environmentStatus().c_str());

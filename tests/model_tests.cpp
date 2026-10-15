@@ -1,4 +1,6 @@
 #include "assets/ModelAsset.h"
+#include "assets/ModelAnimation.h"
+#include "assets/MaterialAsset.h"
 #include "model_fixtures.h"
 
 #include <chrono>
@@ -174,16 +176,173 @@ void generatedTangentsAndOptionalExtensions(const fs::path& base) {
     json["extensionsRequired"]={"KHR_texture_basisu"}; writeJson(fixture.gltf,json);
     rejects([&]{crimson::importModelPackage(fixture.gltf,base/"project");},"required extension");
 }
+void animationSkinAndMorph(const fs::path& base) {
+    using namespace crimson;
+    Triangle triangle;
+    triangle.addAttribute("JOINTS_0",std::vector<std::array<std::uint8_t,4>>(3,{0,0,0,0}),"VEC4",5121);
+    const auto weights=triangle.addAttribute("WEIGHTS_0",std::vector<std::array<std::uint8_t,4>>(3,{128,0,0,0}),"VEC4",5121);
+    triangle.json["accessors"][weights]["normalized"]=true;
+    triangle.json["nodes"]=Json::array({{{"name","Root"},{"translation",{3,0,0}},{"children",{1,2}}},
+        {{"name","Mesh"},{"mesh",0},{"skin",0},{"translation",{2,0,0}},{"weights",{.5}}},
+        {{"name","Joint"},{"translation",{0,1,0}}}});
+    triangle.json["skins"]=Json::array({{{"name","Single Joint"},{"joints",{2}},{"skeleton",0}}});
+    Bytes inverse;append(inverse,std::array<float,16>{1,0,0,0,0,1,0,0,0,0,1,0,0,-1,0,1});
+    triangle.json["skins"][0]["inverseBindMatrices"]=triangle.accessor(triangle.view(inverse),1,"MAT4");
+    Bytes deltas;for(const auto& value:std::array<std::array<float,3>,3>{{{0,0,2},{1,0,0},{0,0,0}}})append(deltas,value);
+    const auto morph=triangle.accessor(triangle.view(deltas),3,"VEC3");triangle.primitive()["targets"]=Json::array({{{"POSITION",morph}}});
+    triangle.json["meshes"][0]["weights"]={.25};
+    const auto values=[&](const std::vector<float>& data,const char* type,std::size_t components) {
+        Bytes encoded;for(float value:data)append(encoded,value);return triangle.accessor(triangle.view(encoded),data.size()/components,type);
+    };
+    const auto times=values({0,2},"SCALAR",1);
+    const auto channel=[&](const char* name,const char* interpolation,const char* property,std::size_t node,std::size_t output) {
+        return Json{{"name",name},{"samplers",Json::array({{{"input",times},{"output",output},{"interpolation",interpolation}}})},
+            {"channels",Json::array({{{"sampler",0},{"target",{{"node",node},{"path",property}}}}})}};
+    };
+    triangle.json["animations"]=Json::array({
+        channel("Lift","LINEAR","translation",2,values({0,1,0,0,3,0},"VEC3",3)),
+        channel("Step","STEP","translation",2,values({0,1,0,0,5,0},"VEC3",3)),
+        channel("Cubic","CUBICSPLINE","translation",2,values({0,0,0,0,1,0,0,2,0, 0,0,0,0,3,0,0,0,0},"VEC3",3)),
+        channel("Turn","LINEAR","rotation",2,values({0,0,0,1,0,0,1,0},"VEC4",4)),
+        channel("Morph","LINEAR","weights",1,values({0,1},"SCALAR",1)),
+        channel("Scale","LINEAR","scale",2,values({1,1,1,2,3,1},"VEC3",3)),
+        channel("Cubic Turn","CUBICSPLINE","rotation",2,values({0,0,0,0,0,0,0,1,0,0,0,0, 0,0,0,0,0,0,1,0,0,0,0,0},"VEC4",4)),
+        channel("Cubic Morph","CUBICSPLINE","weights",1,values({0,0,1,0,1,0},"SCALAR",1))});
+    const auto source=triangle.save(base/"source"),project=base/"project";
+    const auto asset=importModelPackage(source,project);
+    require(asset->skins.size()==1&&asset->skins[0].joints==std::vector<std::uint32_t>{2}&&asset->animations.size()==8,"Imported skin/clip metadata was lost.");
+    require(asset->nodes[1].skin==0&&asset->nodes[2].parent==0&&asset->draws[0].node==1,"Skin hierarchy/draw association was lost.");
+    require(asset->primitives[0].hasSkinning&&asset->primitives[0].skinWeights.size()==3&&asset->primitives[0].morphTargets.size()==1,"Imported vertex skin or morph channels were lost.");
+    near(asset->primitives[0].skinWeights[0].weights[0],1);near(asset->nodes[1].weights[0],.5f);near(asset->meshes[0].weights[0],.25f);
+    const auto bind=evaluateModelPose(*asset);near(bind.drawTransforms[0][12],5);near(bind.skinPalettes[1][0][12],-2);
+    auto deformed=deformModelPrimitive(*asset,0,1,bind);const auto world=math::transformPoint(bind.drawTransforms[0],deformed.vertices[0].position);
+    near(world[0],3);near(world[1],0);near(world[2],1);
+    const auto linear=evaluateModelPose(*asset,0,1,false);deformed=deformModelPrimitive(*asset,0,1,linear);
+    const auto lifted=math::transformPoint(linear.drawTransforms[0],deformed.vertices[0].position);near(lifted[0],3);near(lifted[1],1);near(lifted[2],1);
+    near(evaluateModelPose(*asset,0,3,true).skinPalettes[1][0][13],linear.skinPalettes[1][0][13]);
+    near(evaluateModelPose(*asset,0,-1,false).skinPalettes[1][0][13],0);
+    near(evaluateModelPose(*asset,0,3,false).skinPalettes[1][0][13],2);
+    near(evaluateModelPose(*asset,1,1,false).skinPalettes[1][0][13],0);near(evaluateModelPose(*asset,1,2,false).skinPalettes[1][0][13],4);
+    near(evaluateModelPose(*asset,2,1,false).skinPalettes[1][0][13],1.5f);
+    const auto turn=evaluateModelPose(*asset,3,1,false);const auto direction=math::transformDirection(turn.localTransforms[2],{1,0,0});near(direction[0],0,1e-4f);near(direction[1],1,1e-4f);
+    const auto morphed=evaluateModelPose(*asset,4,.5,false);near(morphed.nodeWeights[1][0],.25f);
+    near(deformModelPrimitive(*asset,0,1,morphed).vertices[0].position[2],.5f);
+    const auto scaled=evaluateModelPose(*asset,5,1,false);near(scaled.localTransforms[2][0],1.5f);near(scaled.localTransforms[2][5],2);
+    const auto cubicTurn=evaluateModelPose(*asset,6,1,false);const auto cubicDirection=math::transformDirection(cubicTurn.localTransforms[2],{1,0,0});
+    near(cubicDirection[0],0,1e-4f);near(cubicDirection[1],1,1e-4f);near(evaluateModelPose(*asset,7,1,false).nodeWeights[1][0],.75f);
+    require(linear.signature==evaluateModelPose(*asset,0,1,false).signature&&linear.signature!=bind.signature,"Pose signature did not track immutable transform/morph content.");
+    for(const auto& vertex:deformed.vertices) {
+        const auto position=math::transformPoint(linear.drawTransforms[0],vertex.position);
+        for(std::size_t axis=0;axis<3;++axis)require(position[axis]>=linear.bounds.minimum[axis]-1e-5f&&position[axis]<=linear.bounds.maximum[axis]+1e-5f,"Posed conservative bounds excluded a deformed vertex.");
+    }
+    fs::rename(base/"source",base/"source-removed");const auto reopened=loadModelPackage(asset->id,project);
+    require(reopened->animations.size()==8&&evaluateModelPose(*reopened,0,1,false).signature==linear.signature,"Managed animated reopen depended on the external source or changed the pose.");
+    auto invalid=*asset;invalid.animations[0].channels[0].times={0,0};rejects([&]{validateModelAnimationData(invalid);},"strictly increasing");
+    invalid=*asset;invalid.skins[0].joints[0]=999;rejects([&]{validateModelAnimationData(invalid);},"joint");
+    invalid=*asset;invalid.nodes[1].parent=-1;rejects([&]{validateModelAnimationData(invalid);},"parent");
+    invalid=*asset;invalid.animations[0].channels[0].values[0]=std::numeric_limits<float>::infinity();rejects([&]{validateModelAnimationData(invalid);},"finite");
+    // Cached metadata contains no vertices but retains deformation range data.
+    auto metadata=*asset;for(auto& primitive:metadata.primitives){primitive.vertices.clear();primitive.indices.clear();primitive.skinWeights.clear();for(auto& target:primitive.morphTargets){target.positions.clear();target.normals.clear();target.tangents.clear();}}
+    validateModelAnimationData(metadata);const auto cached=evaluateModelPose(metadata,0,1,false);
+    near(cached.bounds.minimum[0],linear.bounds.minimum[0]);near(cached.bounds.maximum[2],linear.bounds.maximum[2]);
+
+    // Core allows normalized integer rotation and morph-weight outputs.
+    auto compact=triangle;Bytes rotations;
+    for(const auto& value:std::array<std::array<std::int16_t,4>,2>{{{0,0,0,32767},{0,0,32767,0}}})append(rotations,value);
+    const auto compactRotation=compact.accessor(compact.view(rotations),2,"VEC4",5122);compact.json["accessors"][compactRotation]["normalized"]=true;
+    const auto compactWeights=compact.accessor(compact.view(Bytes{0,255}),2,"SCALAR",5121);compact.json["accessors"][compactWeights]["normalized"]=true;
+    compact.json["animations"][3]["samplers"][0]["output"]=compactRotation;compact.json["animations"][4]["samplers"][0]["output"]=compactWeights;
+    const auto normalized=importModelPackage(compact.save(base/"normalized-source"),base/"normalized-project");
+    const auto normalizedTurn=math::transformDirection(evaluateModelPose(*normalized,3,1,false).localTransforms[2],{1,0,0});
+    near(normalizedTurn[0],0,1e-4f);near(normalizedTurn[1],1,1e-4f);near(evaluateModelPose(*normalized,4,1,false).nodeWeights[1][0],.5f);
+    // Mesh-node transforms cancel during skinning, including a singular one.
+    auto singularSkin=triangle;singularSkin.json["nodes"][1]["scale"]={0,0,0};
+    const auto singular=importModelPackage(singularSkin.save(base/"singular-skin-source"),base/"singular-skin-project");
+    require(singular->draws.size()==1,"Singular skin mesh placement permanently removed valid joint-driven geometry.");
+    const auto singularPose=evaluateModelPose(*singular);const auto singularGeometry=deformModelPrimitive(*singular,0,1,singularPose);
+    const auto singularWorld=math::transformPoint(singularPose.drawTransforms[0],singularGeometry.vertices[0].position);
+    near(singularWorld[0],world[0]);near(singularWorld[1],world[1]);near(singularWorld[2],world[2]);
+    // A rigid animated node may start hidden by a zero scale and later appear.
+    Triangle hidden;hidden.json["nodes"][0]["scale"]={0,0,0};Bytes hiddenTimes,hiddenScales;
+    for(float value:{0.f,1.f})append(hiddenTimes,value);for(const auto& value:std::array<std::array<float,3>,2>{{{0,0,0},{1,1,1}}})append(hiddenScales,value);
+    const auto hiddenInput=hidden.accessor(hidden.view(hiddenTimes),2,"SCALAR"),hiddenOutput=hidden.accessor(hidden.view(hiddenScales),2,"VEC3");
+    hidden.json["animations"]=Json::array({{{"samplers",Json::array({{{"input",hiddenInput},{"output",hiddenOutput}}})},
+        {"channels",Json::array({{{"sampler",0},{"target",{{"node",0},{"path","scale"}}}}})}}});
+    const auto hiddenAsset=importModelPackage(hidden.save(base/"hidden-source"),base/"hidden-project");
+    require(hiddenAsset->draws.size()==1,"Zero-scale animated bind node permanently lost its draw association.");
+    near(evaluateModelPose(*hiddenAsset,0,0,false).drawTransforms[0][0],0);near(evaluateModelPose(*hiddenAsset,0,1,false).drawTransforms[0][0],1);
+
+    // Eight influences and generated-normal reindexing retain skin/morph data.
+    Triangle remapped(false,4);const auto position=remapped.primitive()["attributes"]["POSITION"].get<std::size_t>();
+    const auto offset=remapped.json["bufferViews"][remapped.json["accessors"][position]["bufferView"].get<std::size_t>()]["byteOffset"].get<std::size_t>();
+    const std::array<float,12> duplicated{0,0,0,1,0,0,0,1,0,0,0,0};std::memcpy(remapped.bytes.data()+offset,duplicated.data(),sizeof(duplicated));
+    remapped.addAttribute("JOINTS_0",std::vector<std::array<std::uint16_t,4>>(4,{0,0,0,0}),"VEC4",5123);
+    remapped.addAttribute("WEIGHTS_0",std::vector<std::array<float,4>>(4,{.5f,0,0,0}),"VEC4");
+    remapped.addAttribute("JOINTS_1",std::vector<std::array<std::uint16_t,4>>(4,{1,0,0,0}),"VEC4",5123);
+    remapped.addAttribute("WEIGHTS_1",std::vector<std::array<float,4>>(4,{.5f,0,0,0}),"VEC4");
+    remapped.json["nodes"]=Json::array({{{"mesh",0},{"skin",0}},{{"translation",{0,0,0}}},{{"translation",{2,0,0}}}});
+    remapped.json["scenes"][0]["nodes"]={0,1,2};remapped.json["skins"]=Json::array({{{"joints",{1,2}}}});
+    Bytes indices;for(std::uint16_t index:{0,1,2,3,1,2})append(indices,index);remapped.primitive()["indices"]=remapped.accessor(remapped.view(indices),6,"SCALAR",5123);
+    Bytes morphs;for(const auto& delta:std::array<std::array<float,3>,4>{{{0,0,0},{0,0,0},{0,0,0},{0,0,1}}})append(morphs,delta);
+    remapped.primitive()["targets"]=Json::array({{{"POSITION",remapped.accessor(remapped.view(morphs),4,"VEC3")}}});
+    remapped.json["meshes"][0]["weights"]={1};
+    const auto eight=importModelPackage(remapped.save(base/"eight-source"),base/"eight-project");
+    require(eight->primitives[0].vertices.size()==6&&eight->primitives[0].skinWeights.size()==6&&eight->primitives[0].morphTargets[0].positions.size()==6,
+        "Normal generation merged distinct morph/skin attributes or lost vertex remapping.");
+    const auto eightPose=evaluateModelPose(*eight);const auto eightDeformed=deformModelPrimitive(*eight,0,0,eightPose);
+    near(eightDeformed.vertices[0].position[0],1);near(eightDeformed.vertices[3].position[2],1);
+    near(eightDeformed.vertices[3].normal[0],1/std::sqrt(3.f));near(eightDeformed.vertices[3].normal[2],1/std::sqrt(3.f));
+    // Invalid skin input must fail before a managed package is published.
+    Triangle zero;zero.addAttribute("JOINTS_0",std::vector<std::array<std::uint8_t,4>>(3,{0,0,0,0}),"VEC4",5121);
+    zero.addAttribute("WEIGHTS_0",std::vector<std::array<float,4>>(3,{0,0,0,0}),"VEC4");
+    rejects([&]{importModelPackage(zero.save(base/"zero-source"),base/"zero-project");},"zero total weight");
+}
+void blendedMaterials(const fs::path& base) {
+    using namespace crimson;
+    const auto fixture=writeModelFixtures(base/"source");auto json=readJson(fixture.gltf);
+    json["materials"][0]["alphaMode"]="BLEND";json["materials"][0]["alphaCutoff"]=.95;
+    json["materials"][0]["pbrMetallicRoughness"]["baseColorFactor"][3]=.35;
+    writeJson(fixture.gltf,json);const auto project=base/"project";
+    const auto imported=importModelPackage(fixture.gltf,project);
+    require(imported->materials[0].alphaBlend&&!imported->materials[0].alphaMask,"glTF BLEND was rejected or treated as a cutout.");
+    near(imported->materials[0].baseColor[3],.35f);promoteModelMaterials(project,*imported);
+    const auto material=loadMaterialAsset(project,imported->materialIds[0]);
+    require(material.blend==MaterialBlend::Alpha&&material.surface.alphaBlend&&!material.surface.alphaMask&&
+        materialOutputNode(material.graph).output.blend==MaterialBlend::Alpha,"BLEND promotion lost native transparency.");
+    near(material.surface.baseColor[3],.35f);
+    const auto* opacity=materialInputLink(material.graph,materialOutputNode(material.graph).id,MaterialPin::Opacity);
+    require(opacity!=nullptr&&material.surface.baseColorTexture.image==imported->materials[0].baseColorTexture.image&&
+        material.surface.baseColorTexture.minFilter==imported->materials[0].baseColorTexture.minFilter,
+        "BLEND promotion lost texture alpha, material factor or sampler.");
+    const auto* expression=findMaterialNode(material.graph,opacity->fromNode);
+    require(expression&&expression->kind==MaterialNodeKind::Multiply,"Textured BLEND opacity did not retain its explicit factor.");
+    const auto* alpha=materialInputLink(material.graph,expression->id,MaterialPin::Left);
+    require(alpha&&alpha->fromPin==MaterialPin::A&&findMaterialNode(material.graph,alpha->fromNode)->kind==MaterialNodeKind::Texture2D,
+        "BLEND opacity is not connected to the base-color texture alpha.");
+    const auto sidecar=readBytes(project/material.id);const auto repeated=importModelPackage(fixture.gltf,project);promoteModelMaterials(project,*repeated);
+    require(repeated->id==imported->id&&readBytes(project/material.id)==sidecar,"Repeated BLEND import overwrote its native sidecar.");
+    const ModelResolvers resolver{{},[&](const std::string& id)->std::optional<ModelMaterial>{return loadMaterialAsset(project,id).surface;}};
+    const auto reopened=loadModelPackage(imported->id,project,resolver);
+    require(reopened->materials[0].alphaBlend&&reopened->materials[0].graph&&
+        materialOutputNode(*reopened->materials[0].graph).output.blend==MaterialBlend::Alpha,"Managed BLEND reload became opaque.");
+    near(reopened->materials[0].baseColor[3],.35f);
+    Triangle embedded;embedded.json["materials"]=Json::array({{{"alphaMode","BLEND"},
+        {"pbrMetallicRoughness",{{"baseColorFactor",{.3,.4,.5,.4}}}}}});embedded.primitive()["material"]=0;
+    const auto glb=base/"alpha.glb";writeGlb(glb,embedded.json,embedded.bytes);
+    const auto embeddedAsset=importModelPackage(glb,project);promoteModelMaterials(project,*embeddedAsset);
+    const auto embeddedMaterial=loadMaterialAsset(project,embeddedAsset->materialIds[0]);
+    require(embeddedMaterial.blend==MaterialBlend::Alpha&&embeddedMaterial.surface.alphaBlend,"Embedded GLB BLEND material became opaque.");
+    near(embeddedMaterial.surface.baseColor[3],.4f);
+}
 void invalidInputsAndRollback(const fs::path& base) {
     const auto project=base/"project";
     auto invalid=[&](Triangle t,const char* name,const char* expected) {
         const auto count=packages(project); rejects([&]{crimson::importModelPackage(t.save(base/name),project);},expected);
         require(packages(project)==count,"Failed model import published a package");
     };
-    Triangle alpha; alpha.json["materials"]=Json::array({{{"alphaMode","BLEND"}}}); alpha.primitive()["material"]=0; invalid(alpha,"alpha","alpha-blended");
     Triangle lines; lines.primitive()["mode"]=1; invalid(lines,"lines","point and line");
-    Triangle morph; morph.primitive()["targets"]=Json::array({{{"POSITION",0}}}); invalid(morph,"morph","morph targets");
-    Triangle skin; skin.json["skins"]=Json::array({{{"joints",{0}}}}); invalid(skin,"skin","skins are unsupported");
+    Triangle morph; morph.primitive()["targets"]=Json::array({{{"POSITION",1},{"COLOR_0",1}}}); invalid(morph,"morph","morph target attribute");
+    Triangle skin; skin.json["skins"]=Json::array({{{"joints",{0}}}});skin.json["nodes"][0]["skin"]=0;invalid(skin,"skin","requires JOINTS_0");
     Triangle cycle; cycle.json["nodes"]=Json::array({{{"mesh",0}},{{"children",{2}}},{{"children",{1}}}}); invalid(cycle,"cycle","cycle");
     Triangle count; count.json["accessors"][0]["count"]=99999; invalid(count,"count","accessor exceeds");
     Triangle overflow; overflow.json["bufferViews"][0]["byteOffset"]=std::numeric_limits<uint64_t>::max(); invalid(overflow,"overflow","buffer view");
@@ -215,7 +374,7 @@ int main() {
     try {
         hierarchyAndManagedReopening(root/"managed"); trianglesAndIndices(root/"triangles");
         sparseAndInterleaved(root/"sparse"); embeddedDataAndSceneChoice(root/"data");
-        generatedTangentsAndOptionalExtensions(root/"tangents"); invalidInputsAndRollback(root/"invalid"); uvAndPackageSafety(root/"safety");
+        generatedTangentsAndOptionalExtensions(root/"tangents"); animationSkinAndMorph(root/"animation"); blendedMaterials(root/"transparent");invalidInputsAndRollback(root/"invalid"); uvAndPackageSafety(root/"safety");
         fs::remove_all(root); std::cout<<"Model importer checks passed\n"; return 0;
     } catch (const std::exception& error) {
         std::cerr<<"Model importer checks failed: "<<error.what()<<"\nFixtures retained at: "<<root<<'\n'; return 1;

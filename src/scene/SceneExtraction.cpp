@@ -1,8 +1,11 @@
 #include "SceneExtraction.h"
+#include "runtime/PlayerLightRig.h"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <stdexcept>
+#include <unordered_set>
 
 namespace crimson {
 
@@ -29,6 +32,11 @@ Vec3 directionalLightDirection(const Mat4& world) {
 ExtractedScene extractScene(const Scene& scene) {
     ExtractedScene result;
     result.environment=resolveEnvironment(scene);
+    // A presented model belongs to one category. An authored World-only light
+    // can therefore exclude the player even when the player turns or moves.
+    const auto player=scene.find(scene.properties().playerCharacter);
+    const auto playerSubtree=player?scene.subtree(player->id):std::vector<EntityId>{};
+    const std::unordered_set<EntityId> characterEntities(playerSubtree.begin(),playerSubtree.end());
     const auto& registry = scene.registry();
     const auto view = registry.view<const Identity,const Transform>();
     std::vector<entt::entity> ordered;
@@ -41,27 +49,45 @@ ExtractedScene extractScene(const Scene& scene) {
         const auto id = registry.get<Identity>(entity).id;
         const auto world = scene.worldTransform(id);
         if (!world) continue;
-        if (const auto* model = registry.try_get<ModelReference>(entity))
-            result.models.push_back({id,model->assetId.id,*world,model->material.id,model->castShadows,model->receiveShadows});
+        if (const auto* model = registry.try_get<ModelReference>(entity)) {
+            auto scopes=model->lightingScopes;
+            const auto category=characterEntities.contains(id)?lighting_scope::Character:lighting_scope::World;
+            scopes.directReceiverMask&=category;scopes.shadowCasterMask&=category;scopes.ambientReceiverMask&=category;
+            result.models.push_back({id,model->assetId.id,*world,model->material.id,model->castShadows,model->receiveShadows,scopes,category,model->animation});
+        }
         if (const auto* particle = registry.try_get<ParticleReference>(entity))
             result.particles.push_back({id,particle->assetId.id,*world});
         if (const auto* light = registry.try_get<SceneDirectionalLight>(entity)) {
             const auto direction=directionalLightDirection(*world);
-            result.directional.push_back({direction,light->color,light->intensity,light->enabled});
+            result.directional.push_back({direction,light->color,light->intensity,light->enabled,id,light->castShadows,
+                light->shadowDistance,light->shadowDepthBias,light->shadowNormalBias,light->roles});
             if (id==result.environment.sun)
                 result.proceduralSun={direction*-1.f,light->color,light->intensity,light->enabled};
         }
         if (const auto* light = registry.try_get<ScenePointLight>(entity)) {
             const auto position = math::transformPoint(*world,{0,0,0});
             result.points.push_back({position,light->color,light->intensity,light->enabled,light->radius,id,
-                light->castShadows,light->shadowDepthBias,light->shadowNormalBias});
+                light->castShadows,light->shadowDepthBias,light->shadowNormalBias,light->roles,
+                light->nearFalloffRadius,light->specularStrength,light->rangeFalloffExponent,light->edgeSoftness,light->sourceRadius,light->attenuation});
         }
+    }
+    if (player && player->character) {
+        const auto& character=*player->character;
+        const auto world=scene.worldTransform(player->id);
+        if(character.lightRig.enabled&&world) {
+            const auto rig=evaluatePlayerLightRig(character.lightRig,math::transformPoint(*world,{}),result.points,result.directional);
+            if (!rig.valid())throw std::runtime_error(rig.error);
+            result.characterLights=rig.characterLights;result.characterShadow=rig.characterShadow;
+            if(rig.localWorld)result.points.push_back(*rig.localWorld);
+        }
+        if(character.darknessReveal.enabled&&world)
+            result.playerReveal={math::transformPoint(*world,{})+Vec3{0,characterLightingCenterHeight(character.height),0},character.darknessReveal.spread,true};
     }
     return result;
 }
 
 Aabb selectionBounds(const Scene& scene, std::span<const EntityId> selection,
-                     const ModelBoundsQuery& modelBounds,const ParticleBoundsQuery& particleBounds) {
+                     const ModelBoundsQuery& modelBounds,const ParticleBoundsQuery& particleBounds,const CollisionMeshQuery& meshCollision) {
     Aabb result;
     const std::vector<EntityId> selected(selection.begin(),selection.end());
     for (auto root : scene.topmost(selected)) {
@@ -70,6 +96,9 @@ Aabb selectionBounds(const Scene& scene, std::span<const EntityId> selection,
             const auto world = scene.worldTransform(id);
             if (!record || !world) continue;
             bool hasBounds = false;
+            if(record->meshCollider && meshCollision)if(const auto geometry=meshCollision(record->meshCollider->source.id);geometry.mesh) {
+                const auto bounds=math::transformBounds(geometry.mesh->bounds,*world);math::include(result,bounds);hasBounds=bounds.valid;
+            }
             if (record->model && modelBounds) {
                 if (const auto local = modelBounds(record->model->id)) {
                     const auto bounds = math::transformBounds(*local,*world);
@@ -98,12 +127,12 @@ Aabb selectionBounds(const Scene& scene, std::span<const EntityId> selection,
     return result;
 }
 
-std::optional<EntityId> pickCollisionShape(const Scene& scene,const Ray& ray,float maximumDistance) {
+std::optional<EntityId> pickCollisionShape(const Scene& scene,const Ray& ray,float maximumDistance,const CollisionMeshQuery& meshCollision) {
     if(!math::finite(ray.origin) || !math::finite(ray.direction) || !math::finite(maximumDistance) || maximumDistance<=0)return {};
     double closest=maximumDistance;
     std::optional<EntityId> result;
     for(const auto& record:scene.records()) {
-        if(!record.collider && !record.character)continue;
+        if(!record.collider && !record.character && !record.meshCollider)continue;
         const auto world=scene.worldTransform(record.id);
         const auto inverse=world?math::inverse(*world):std::nullopt;
         if(!inverse)continue;
@@ -112,6 +141,17 @@ std::optional<EntityId> pickCollisionShape(const Scene& scene,const Ray& ray,flo
         // Keep the transformed direction unnormalized, so all hit parameters
         // remain comparable world-ray distances under affine/nonuniform parents.
         double hit=std::numeric_limits<double>::infinity();
+        if(record.meshCollider && meshCollision)if(const auto source=meshCollision(record.meshCollider->source.id);source.mesh) {
+            const auto& mesh=*source.mesh;
+            for(std::size_t index=0;index+2<mesh.indices.size();index+=3) {
+                const auto a=mesh.positions[mesh.indices[index]],b=mesh.positions[mesh.indices[index+1]],c=mesh.positions[mesh.indices[index+2]];
+                const auto edge=b-a,other=c-a,p=math::cross(local.direction,other);const auto determinant=math::dot(edge,p);
+                if(std::abs(determinant)<1e-12)continue;
+                const auto origin=local.origin-a;const auto u=math::dot(origin,p)/determinant;if(u<0 || u>1)continue;
+                const auto q=math::cross(origin,edge);const auto v=math::dot(local.direction,q)/determinant;if(v<0 || u+v>1)continue;
+                const auto distance=math::dot(other,q)/determinant;if(distance>=0)hit=std::min(hit,distance);
+            }
+        }
         if(record.collider) {
             double first=0,last=closest;
             const auto half=record.collider->size*.5f;

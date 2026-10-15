@@ -6,6 +6,7 @@ Native Windows x64 ARPG engine foundation: C++20, MSVC, CMake, SDL3, bgfx/Direct
 
 - Use the relevant sections of [ENGINE_ARCHITECTURE.md](docs/ENGINE_ARCHITECTURE.md) for renderer, asset, scene, controller/input, simulation, and lifetime changes. It is authoritative for ownership contracts, implementation status, and the milestone marked **Next**.
 - Keep work within the requested slice. Add later systems when their slice needs them; a planned interface is not evidence that it already exists.
+- When replacing a system, remove superseded code, settings, and UI instead of retaining a legacy mode, unless the user explicitly requests compatibility. Read existing project data through a one-time conversion when needed to avoid losing authored assets; write only the current representation.
 - Implement only features and UI the user requested. Do not add unsolicited features or explanatory text to panel bodies. When help is necessary, use a short tooltip; omit long explanations or put them in documentation.
 - Follow [Editor UI conventions](docs/ENGINE_ARCHITECTURE.md#editor-ui-conventions) for every new or modified editor. Reuse the shared document-editor menu component; keep File/Edit actions, property sections and shortcuts consistent across editors.
 - Follow [Material node authoring conventions](docs/MATERIAL_NODE_AUTHORING.md) for material graph nodes, inline controls, color editing, typed inputs and preview behavior.
@@ -15,24 +16,24 @@ Native Windows x64 ARPG engine foundation: C++20, MSVC, CMake, SDL3, bgfx/Direct
 
 Run from this project root in PowerShell. `Build.cmd` initializes MSVC x64; use it instead of assuming an ordinary shell has the compiler environment.
 
-| Purpose | Command |
-| --- | --- |
-| Incremental Release build | `.\Build.cmd Release` |
-| Build and run focused CTest checks | `.\Build.cmd Release test` |
-| Reconfigure and build after dependency/preset changes | `.\Build.cmd Release configure` |
-| Open the existing Release application | `& '.\Launch Renderer.cmd' Release` |
-| Optional manual native capture, after building | `.\scripts\Verify-Renderer.ps1 -Configuration Release` |
-| Regenerate the Windows ICO after changing the 512×512 logo PNG | `.\scripts\Convert-AppIcon.ps1` |
-| Create/refresh the desktop shortcut, after building | `.\scripts\Create-DesktopShortcut.ps1 -Configuration Release` |
-| Refresh Windows' cached application icon | `.\scripts\Refresh-AppIcon.ps1 -Configuration Release` |
-| Optional manual IBL/normal-map diagnostic captures | `.\scripts\Verify-Ibl.ps1 -Configuration Release` |
-| Optional manual legacy model-preview diagnostic captures | `.\scripts\Verify-Models.ps1 -Configuration Release` |
+| Purpose                                                        | Command                                                       |
+| -------------------------------------------------------------- | ------------------------------------------------------------- |
+| Incremental Release build                                      | `.\Build.cmd Release`                                         |
+| Build and run focused CTest checks                             | `.\Build.cmd Release test`                                    |
+| Reconfigure and build after dependency/preset changes          | `.\Build.cmd Release configure`                               |
+| Open the existing Release application                          | `& '.\Launch Renderer.cmd' Release`                           |
+| Optional manual native capture, after building                 | `.\scripts\Verify-Renderer.ps1 -Configuration Release`        |
+| Regenerate the Windows ICO after changing the 512×512 logo PNG | `.\scripts\Convert-AppIcon.ps1`                               |
+| Create/refresh the desktop shortcut, after building            | `.\scripts\Create-DesktopShortcut.ps1 -Configuration Release` |
+| Refresh Windows' cached application icon                       | `.\scripts\Refresh-AppIcon.ps1 -Configuration Release`        |
+| Optional manual IBL/normal-map diagnostic captures             | `.\scripts\Verify-Ibl.ps1 -Configuration Release`             |
+| Optional manual legacy model-preview diagnostic captures       | `.\scripts\Verify-Models.ps1 -Configuration Release`          |
 
 - `VCPKG_ROOT` selects vcpkg; the build wrapper falls back to `%USERPROFILE%\vcpkg`. Preserve the pinned manifest baseline and project-local dependency caches.
 - `test` and `configure` are alternative second arguments, not combinable flags. The executable is `build/Release/bin/crimson-renderer.exe`.
 - The launcher builds only if its executable is missing. It does not check source freshness; build changed code before launching it.
 - `Dev.cmd` builds/launches Debug. Use Release for ordinary handoffs and Debug when the task needs it. Close the running renderer before rebuilding its executable.
-- Ask the user to save and close a running renderer only when implementation is finished and the integration build is ready to start. Never ask at task start or while implementation is still underway; the user may continue using the editor during that work.
+- Ask the user to save and close a running renderer only when implementation is finished and the integration build is ready to start. Never ask at task start or while implementation is still underway; the user may continue using the editor during that work. THIS IS REALLY IMPORTANT, that only the moment before you are need to launch the exe build command this is asked. DO NOT ASK if you are doing work that do not require compilation.
 - For code changes, use one incremental integration build after implementation owners finish, followed by focused CPU tests. Expand or repeat checks when failures or unresolved concerns justify them. The user performs feature acceptance after the implementation is ready.
 - Computer control, including mouse/keyboard automation and interacting with the user's applications, requires the user's permission. Noninteractive screenshots are allowed. Do not run routine native acceptance/capture suites or maintain `VERIFICATION.md` as part of feature completion.
 - Documentation-only changes need consistency/link checks, not an application build. Routine handoffs do not need Debug/Release matrices, UI scaling matrices, or broad image suites.
@@ -42,19 +43,19 @@ Run from this project root in PowerShell. `Build.cmd` initializes MSVC x64; use 
 
 ## Source layout
 
-| Location | Responsibility |
-| --- | --- |
-| `src/App.*`, `src/main.cpp` | Thin application composition, SDL lifetime, frame loop, startup/options |
-| `src/editor/` | Editor session, scene actions, selection/viewport interaction and document orchestration |
-| `src/scene/` | CPU EnTT scene data, hierarchy, document storage, command history and render extraction |
-| `src/math/` | Engine-owned vectors, matrices, bounds and math helpers; private GLM implementation |
-| `src/crimson-renderer/` | Renderer C++, mesh types, GPU resources, ImGui/bgfx adapter, rendering diagnostics |
-| `src/crimson-renderer/shaders/` | Shader sources and varying definitions; matching bgfx `shaderc` generates embedded headers |
-| `src/tools/` | Docked editor panels and property controls |
-| `src/assets/` | Managed asset imports and persistence; current texture ownership is documented in the architecture |
-| `src/resources/` | CPU resource stores, immutable versions, workers, dependency watching, mip/LOD caches and shader compilation; GPU texture streaming remains AssetLibrary-owned |
-| `src/input/` | Editor navigation and input handling |
-| `tests/`, `docs/` | Focused automated checks, authoritative architecture and user documentation |
+| Location                        | Responsibility                                                                                                                                                 |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/App.*`, `src/main.cpp`     | Thin application composition, SDL lifetime, frame loop, startup/options                                                                                        |
+| `src/editor/`                   | Editor session, scene actions, selection/viewport interaction and document orchestration                                                                       |
+| `src/scene/`                    | CPU EnTT scene data, hierarchy, document storage, command history and render extraction                                                                        |
+| `src/math/`                     | Engine-owned vectors, matrices, bounds and math helpers; private GLM implementation                                                                            |
+| `src/crimson-renderer/`         | Renderer C++, mesh types, GPU resources, ImGui/bgfx adapter, rendering diagnostics                                                                             |
+| `src/crimson-renderer/shaders/` | Shader sources and varying definitions; matching bgfx `shaderc` generates embedded headers                                                                     |
+| `src/tools/`                    | Docked editor panels and property controls                                                                                                                     |
+| `src/assets/`                   | Managed asset imports and persistence; current texture ownership is documented in the architecture                                                             |
+| `src/resources/`                | CPU resource stores, immutable versions, workers, dependency watching, mip/LOD caches and shader compilation; GPU texture streaming remains AssetLibrary-owned |
+| `src/input/`                    | Editor navigation and input handling                                                                                                                           |
+| `tests/`, `docs/`               | Focused automated checks, authoritative architecture and user documentation                                                                                    |
 
 ## Repository constraints
 

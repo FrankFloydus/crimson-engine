@@ -25,6 +25,8 @@ using namespace crimson;
 namespace fs=std::filesystem;
 using Json=nlohmann::json;
 void require(bool value,const char* message){if(!value)throw std::runtime_error(message);}
+bool sameTexture(const ModelTexture& a,const ModelTexture& b){return a.image==b.image&&a.texCoord==b.texCoord&&
+    a.wrapU==b.wrapU&&a.wrapV==b.wrapV&&a.minFilter==b.minFilter&&a.magFilter==b.magFilter;}
 template<class Action>void rejects(Action action,const char* message){try{action();}catch(const std::exception&){return;}throw std::runtime_error(message);}
 struct Project{
     fs::path root=fs::temp_directory_path()/("crimson-reference-test-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -117,6 +119,16 @@ void managedMaterialsAndImages(){
     auto changed=promoted;material_test::legacyFixture(changed);changed.surface.roughness=.91f;changed.surface.alphaCutoff=2;saveMaterialAsset(p.root,changed);promoteModelMaterials(p.root,*model);
     const auto preserved=loadMaterialAsset(p.root,materialId);
     require(preserved.surface.roughness==.91f&&preserved.surface.alphaCutoff==2,"Idempotent promotion overwrote authored factors or rejected a valid glTF cutoff.");
+    const auto authoredBytes=read(p.root/materialId);
+    const auto repeated=importModelPackage(fixtures.glb,p.root);promoteModelMaterials(p.root,*repeated);
+    require(repeated->id==model->id&&repeated->materialIds==model->materialIds&&read(p.root/materialId)==authoredBytes,
+        "Repeating an exact model import changed shared assignments or overwrote authored sidecar bytes.");
+    const ModelResolvers authored{{},[&](const auto& id)->std::optional<ModelMaterial>{return loadMaterialAsset(p.root,id).surface;}};
+    const auto authoredModel=loadModelPackage(model->id,p.root,authored);
+    require(authoredModel->materialIds==model->materialIds&&authoredModel->materials[0].roughness==.91f&&
+        sameTexture(authoredModel->materials[0].baseColorTexture,preserved.surface.baseColorTexture)&&
+        sameTexture(authoredModel->materials[0].metallicRoughnessTexture,preserved.surface.metallicRoughnessTexture),
+        "Managed model reload discarded edited factors, packed image bindings or imported samplers.");
     const auto standard=defaultMaterialAsset();require(standard.surface.baseColor==Vec4{.5f,.5f,.5f,1}&&standard.surface.roughness==1&&standard.surface.metallic==0,"Default material factors differ from requested values.");
     AssetReferenceManager refs(p.root);const std::array<AssetEntry,1> image{{{model->images[0],"Image",AssetKind::Texture}}};refs.replace(image,{});refs.save();
     const std::array<AssetFileChange,1> remove{{{image[0].id,std::nullopt}}};commitAssetTransaction(p.root,remove);
@@ -288,7 +300,7 @@ void spriteMaterialStorageAndMigration(){
     alpha.surface.baseColorTexture.wrapU=ModelWrap::Mirror;alpha.surface.baseColorTexture.minFilter=ModelFilter::NearestMipmapLinear;saveMaterialAsset(p.root,alpha);
     const auto reopened=loadMaterialAsset(p.root,alpha.id);require(reopened.blend==MaterialBlend::Alpha&&reopened.surface.baseColor==alpha.surface.baseColor&&reopened.surface.baseColorTexture.image==alpha.surface.baseColorTexture.image&&reopened.surface.baseColorTexture.wrapU==ModelWrap::Mirror&&reopened.surface.baseColorTexture.minFilter==ModelFilter::NearestMipmapLinear,"Native sprite factors, unresolved map or sampler did not round-trip.");
     const auto bytes=read(p.root/alpha.id);auto imported=alpha;imported.originModel="assets/models/origin/manifest.json";
-    const auto copy=copyMaterialAsset(p.root,imported);require(copy.id!=alpha.id&&copy.originModel.empty()&&copy.surface.baseColor==alpha.surface.baseColor&&read(p.root/alpha.id)==bytes,"Making an editable material copy changed its read-only source.");
+    const auto copy=copyMaterialAsset(p.root,imported);require(copy.id!=alpha.id&&copy.originModel.empty()&&copy.surface.baseColor==alpha.surface.baseColor&&read(p.root/alpha.id)==bytes,"Making an independent material copy changed its source.");
     auto legacy=material_test::legacyMaterialJson(alpha);legacy["version"]=1;legacy.erase("shading");legacy.erase("blend");legacy["alphaMask"]=true;
     writeFileAtomically(p.root/alpha.id,legacy.dump(2));const auto migrated=loadMaterialAsset(p.root,alpha.id);
     require(migrated.shading==MaterialShading::StandardPbr&&migrated.blend==MaterialBlend::Mask&&migrated.surface.alphaMask&&modelMaterialCompatible(migrated),"Legacy alphaMask did not migrate to PBR Mask.");
@@ -312,6 +324,9 @@ void particleMaterialStorageAndDependencies(){
     legacyEmitter["color"]=Vec3{.5f,.25f,1};legacyEmitter["intensity"]=3.5f;
     legacyEmitter.erase("material");legacyEmitter.erase("opacity");
     auto expectedLegacy=effect;expectedLegacy.emitter.material=AssetRef<MaterialAsset>{DefaultParticleMaterialId};expectedLegacy.emitter.opacity=1;
+    // Native v9 starts with authored orientation; historical v1 sprites always
+    // faced the camera and must retain that behavior during migration.
+    expectedLegacy.emitter.billboardMode=ParticleBillboardMode::Enabled;
     expectedLegacy.emitter.color={particleSrgbToLinear(.5f),particleSrgbToLinear(.25f),1};expectedLegacy.emitter.intensity=3.5f;
     const auto migrated=deserializeParticleAsset(legacy.dump(),effect.id);
     require(migrated==expectedLegacy,"Particle v1 migration changed its decoded color, intensity or procedural appearance.");

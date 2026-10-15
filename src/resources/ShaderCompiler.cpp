@@ -1,12 +1,14 @@
 #include "ShaderCompiler.h"
 #include "ResourceManager.h"
 #include "Paths.h"
+#include "CacheIO.h"
 #include "assets/AtomicFile.h"
 #include <Windows.h>
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <fstream>
 #include <map>
 #include <regex>
@@ -16,12 +18,26 @@
 
 namespace crimson {
 namespace {
+struct CompilerCounters {
+    std::atomic_uint64_t compilerInvocations{},compilerNanoseconds{},dependencyRequests{},dependencyNanoseconds{};
+    std::atomic_uint64_t cacheOnlyRequests{},cacheOnlyHits{},cacheOnlyNanoseconds{},workerRequests{},workerCacheHits{};
+} metrics;
+struct MetricTimer {
+    std::atomic_uint64_t& total;
+    std::chrono::steady_clock::time_point start{std::chrono::steady_clock::now()};
+    ~MetricTimer(){total.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-start).count(),std::memory_order_relaxed);}
+};
 const std::map<std::string,std::string> varying{
     {"cs_procedural_filter","varying.def.sc"},
+    {"cs_cluster_lights","varying.def.sc"},
+    {"cs_model_deform","varying.def.sc"},
+    {"cs_ambient_visibility","varying.def.sc"},
+    {"cs_ambient_publish","varying.def.sc"},
     {"vs_particle","particle.varying.def.sc"},{"fs_particle","particle.varying.def.sc"},
     {"vs_pbr","varying.def.sc"},{"fs_pbr","varying.def.sc"},{"vs_model","model.varying.def.sc"},{"fs_model","model.varying.def.sc"},
     {"vs_pick","model.varying.def.sc"},{"fs_pick","model.varying.def.sc"},{"vs_present","varying.def.sc"},{"fs_present","varying.def.sc"},
     {"vs_point_shadow","model.varying.def.sc"},{"fs_point_shadow","model.varying.def.sc"},
+    {"vs_directional_shadow","model.varying.def.sc"},{"fs_directional_shadow","model.varying.def.sc"},
     {"fs_glow_extract","varying.def.sc"},{"fs_glow_blur","varying.def.sc"},
     {"vs_grid","varying.def.sc"},{"fs_grid","varying.def.sc"},{"fs_encode","varying.def.sc"},{"fs_sky","varying.def.sc"},{"vs_imgui","imgui.varying.def.sc"},{"fs_imgui","imgui.varying.def.sc"}};
 struct NativeHandle { HANDLE value{INVALID_HANDLE_VALUE}; ~NativeHandle(){if(value && value!=INVALID_HANDLE_VALUE) CloseHandle(value);} };
@@ -35,18 +51,20 @@ std::vector<std::filesystem::path> sortedDependencies(std::vector<std::filesyste
     return files;
 }
 std::filesystem::path indexPath(const ShaderCompileConfig& config,const std::string& name) { return config.cacheDirectory/(name+".dependencies.json"); }
-uint64_t compileFingerprint(const ShaderCompileConfig& config,const std::string& name,const std::vector<std::filesystem::path>& dependencies) {
-    auto result=fingerprintFiles(dependencies);
+uint64_t compileFingerprint(const ShaderCompileConfig& config,const std::string& name,uint64_t result) {
     const auto contract=config.buildContract+";"+name+";"+varying.at(name)+";"+(name.starts_with("cs_") ? "compute" : name.starts_with("vs_") ? "vertex" : "fragment");
     for (const unsigned char byte:contract) { result^=byte; result*=1099511628211ull; }
     return result;
+}
+uint64_t compileFingerprint(const ShaderCompileConfig& config,const std::string& name,const std::vector<std::filesystem::path>& dependencies) {
+    return compileFingerprint(config,name,fingerprintFiles(dependencies));
 }
 void saveDependencyIndex(const ShaderCompileConfig& config,const std::string& name,const std::vector<std::filesystem::path>& dependencies) {
     nlohmann::json paths=nlohmann::json::array();
     for (const auto& file:dependencies) paths.push_back(utf8(file));
     const nlohmann::json index{{"version",2},{"contract",config.buildContract},{"source",resourcePathKey(config.sourceDirectory)},
         {"include",resourcePathKey(config.includeDirectory)},{"compiler",resourcePathKey(config.compiler)},{"dependencies",std::move(paths)}};
-    writeFileAtomically(indexPath(config,name),index.dump(2)+"\n");
+    streaming::detail::writeCacheFileAtomically(indexPath(config,name),index.dump(2)+"\n");
 }
 std::vector<std::uint8_t> readBinary(const std::filesystem::path& path) {
     std::ifstream input(path,std::ios::binary|std::ios::ate);
@@ -54,6 +72,13 @@ std::vector<std::uint8_t> readBinary(const std::filesystem::path& path) {
     const auto length=input.tellg(); if(length<=0 || length>64*1024*1024) throw std::runtime_error("Shader file has an invalid size.");
     std::vector<std::uint8_t> data(static_cast<std::size_t>(length)); input.seekg(0); input.read(reinterpret_cast<char*>(data.data()),length);
     if(!input) throw std::runtime_error("Shader file could not be read."); return data;
+}
+std::optional<std::vector<std::uint8_t>> cachedBinary(const std::filesystem::path& path,char stage) {
+    try {
+        auto bytes=readBinary(path);
+        if(bytes.size()>16&&bytes[0]==stage&&bytes[1]=='S'&&bytes[2]=='H'&&bytes[3]==11)return bytes;
+    } catch(const std::exception&) { /* Missing/damaged derived data is a miss. */ }
+    return {};
 }
 std::wstring quoted(const std::filesystem::path& path) {
     const auto input=path.wstring(); std::wstring output=L"\""; std::size_t slashes=0;
@@ -64,6 +89,7 @@ std::wstring quoted(const std::filesystem::path& path) {
     output.append(slashes*2,L'\\'); output+=L'"'; return output;
 }
 std::string runCompiler(const std::filesystem::path& executable,std::wstring arguments,std::stop_token token) {
+    MetricTimer timing{metrics.compilerNanoseconds};
     SECURITY_ATTRIBUTES attributes{sizeof(SECURITY_ATTRIBUTES),nullptr,TRUE}; NativeHandle readPipe,writePipe;
     if(!CreatePipe(&readPipe.value,&writePipe.value,&attributes,0) || !SetHandleInformation(readPipe.value,HANDLE_FLAG_INHERIT,0))
         throw std::runtime_error("Could not capture shader compiler output.");
@@ -74,6 +100,7 @@ std::string runCompiler(const std::filesystem::path& executable,std::wstring arg
     PROCESS_INFORMATION process{}; auto command=quoted(executable)+L" "+arguments;
     if(!CreateProcessW(executable.c_str(),command.data(),nullptr,nullptr,TRUE,CREATE_NO_WINDOW,nullptr,nullptr,&startup,&process))
         throw std::runtime_error("Could not start the pinned shader compiler.");
+    metrics.compilerInvocations.fetch_add(1,std::memory_order_relaxed);
     NativeHandle child{process.hProcess},thread{process.hThread}; CloseHandle(writePipe.value); writePipe.value=INVALID_HANDLE_VALUE;
     std::string output; std::array<char,4096> bytes{};
     const auto drain=[&] {
@@ -91,6 +118,11 @@ std::string runCompiler(const std::filesystem::path& executable,std::wstring arg
         throw std::runtime_error(output.empty() ? "Shader compilation failed." : output);
     return output;
 }
+}
+ShaderCompilerMetrics shaderCompilerMetrics() {
+    const auto get=[](const auto& value){return value.load(std::memory_order_relaxed);};
+    return {get(metrics.compilerInvocations),get(metrics.compilerNanoseconds),get(metrics.dependencyRequests),get(metrics.dependencyNanoseconds),
+        get(metrics.cacheOnlyRequests),get(metrics.cacheOnlyHits),get(metrics.cacheOnlyNanoseconds),get(metrics.workerRequests),get(metrics.workerCacheHits)};
 }
 std::vector<std::string> engineShaderNames() { std::vector<std::string> result; for(const auto& [name,definition]:varying) { (void)definition; result.push_back(name); } return result; }
 std::vector<std::filesystem::path> parseShaderDependencyFile(const std::filesystem::path& file) {
@@ -115,11 +147,12 @@ std::vector<std::filesystem::path> parseShaderDependencyFile(const std::filesyst
     return result;
 }
 std::vector<std::filesystem::path> shaderDependencies(const ShaderCompileConfig& config,const std::string& name) {
+    metrics.dependencyRequests.fetch_add(1,std::memory_order_relaxed);MetricTimer timing{metrics.dependencyNanoseconds};
     const auto spec=varying.find(name); if(spec==varying.end()) throw std::runtime_error("Unknown engine shader.");
     std::vector<std::filesystem::path> pending{config.sourceDirectory/(name+".sc"),config.sourceDirectory/spec->second};
     try {
         if (std::filesystem::is_regular_file(indexPath(config,name))) {
-            std::ifstream input(indexPath(config,name)); const auto index=nlohmann::json::parse(input);
+            std::ifstream input(indexPath(config,name)); const auto index=nlohmann::json::parse(input);input.close();
             if (index.at("version")==2 && index.at("contract")==config.buildContract && index.at("source")==resourcePathKey(config.sourceDirectory) &&
                 index.at("include")==resourcePathKey(config.includeDirectory) && index.at("compiler")==resourcePathKey(config.compiler)) {
                 const auto& dependencies=index.at("dependencies");
@@ -149,12 +182,20 @@ std::vector<std::filesystem::path> shaderDependencies(const ShaderCompileConfig&
     result.push_back(config.compiler); return sortedDependencies(std::move(result));
 }
 ShaderBinary compileShader(const ShaderCompileConfig& config,const std::string& name,std::stop_token token) {
+    metrics.workerRequests.fetch_add(1,std::memory_order_relaxed);
     if(!std::filesystem::is_regular_file(config.compiler)) throw std::runtime_error("Pinned shader compiler is unavailable; embedded shaders remain active.");
-    auto dependencies=shaderDependencies(config,name); const auto initialFingerprint=fingerprintFiles(dependencies);
-    auto fingerprint=compileFingerprint(config,name,dependencies);
+    auto dependencies=shaderDependencies(config,name);const auto dependencyState=fingerprintFileStates(dependencies);
+    const auto initialFingerprint=fingerprintFiles(dependencies);
+    auto fingerprint=compileFingerprint(config,name,initialFingerprint);
     std::filesystem::create_directories(config.cacheDirectory);
     auto target=config.cacheDirectory/(name+"-"+std::to_string(fingerprint)+".bin");
-    if(std::filesystem::is_regular_file(target)) return {name,name.starts_with("vs_"),readBinary(target),std::move(dependencies),fingerprint};
+    if(auto bytes=cachedBinary(target,name.starts_with("cs_")?'C':name.starts_with("vs_")?'V':'F')) {
+        if(token.stop_requested()||fingerprintFileStates(dependencies)!=dependencyState)
+            throw std::runtime_error("Shader source changed while reading its cache.");
+        metrics.workerCacheHits.fetch_add(1,std::memory_order_relaxed);
+        return {name,name.starts_with("vs_"),std::move(*bytes),std::move(dependencies),fingerprint};
+    }
+    {std::error_code ignored;std::filesystem::remove(target,ignored);}
     static std::atomic_uint64_t sequence{};
     const auto stage=config.cacheDirectory/(name+"-"+std::to_string(sequence.fetch_add(1))+".tmp");
     try {
@@ -218,14 +259,17 @@ std::filesystem::path recipeInclude(const ShaderCompileConfig& config,const Shad
     if(std::filesystem::is_regular_file(config.includeDirectory/name))return config.includeDirectory/name;
     return {};
 }
-std::uint64_t recipeFingerprint(const ShaderCompileConfig& config,const std::string& identity,const std::vector<std::filesystem::path>& dependencies) {
-    auto hash=fingerprintFiles(dependencies);
+std::uint64_t recipeFingerprint(const ShaderCompileConfig& config,const std::string& identity,std::uint64_t hash) {
     for(unsigned char ch:config.buildContract+";recipe-v1;"+identity+";"+resourcePathKey(config.sourceDirectory)+";"+resourcePathKey(config.includeDirectory))
         {hash^=ch;hash*=1099511628211ull;}
     return hash;
 }
+std::uint64_t recipeFingerprint(const ShaderCompileConfig& config,const std::string& identity,const std::vector<std::filesystem::path>& dependencies) {
+    return recipeFingerprint(config,identity,fingerprintFiles(dependencies));
+}
 }
 std::vector<std::filesystem::path> shaderDependencies(const ShaderCompileConfig& config,const ShaderCompileRecipe& recipe) {
+    metrics.dependencyRequests.fetch_add(1,std::memory_order_relaxed);MetricTimer timing{metrics.dependencyNanoseconds};
     const auto identity=recipeIdentity(recipe);
     std::vector<std::filesystem::path> pending{recipe.varyingDefinition};
     std::vector<std::filesystem::path> result;
@@ -243,7 +287,7 @@ std::vector<std::filesystem::path> shaderDependencies(const ShaderCompileConfig&
     try {
         std::ifstream input(config.cacheDirectory/(identity+".recipe.json"));
         if(input) {
-            const auto metadata=nlohmann::json::parse(input);
+            const auto metadata=nlohmann::json::parse(input);input.close();
             if(metadata.at("version")==1 && metadata.at("contract")==config.buildContract && metadata.at("compiler")==resourcePathKey(config.compiler) &&
                 metadata.at("source")==resourcePathKey(config.sourceDirectory) && metadata.at("include")==resourcePathKey(config.includeDirectory)) {
                 const auto& dependencies=metadata.at("dependencies");
@@ -266,14 +310,22 @@ std::vector<std::filesystem::path> shaderDependencies(const ShaderCompileConfig&
     result.push_back(config.compiler);return sortedDependencies(std::move(result));
 }
 ShaderBinary compileShader(const ShaderCompileConfig& config,const ShaderCompileRecipe& recipe,std::stop_token token) {
+    metrics.workerRequests.fetch_add(1,std::memory_order_relaxed);
     if(token.stop_requested())throw std::runtime_error("Shader compilation canceled.");
     if(!std::filesystem::is_regular_file(config.compiler))throw std::runtime_error("Pinned shader compiler is unavailable.");
     const auto identity=recipeIdentity(recipe);
     auto dependencies=shaderDependencies(config,recipe);
+    const auto dependencyState=fingerprintFileStates(dependencies);
     auto fingerprint=recipeFingerprint(config,identity,dependencies);
     std::filesystem::create_directories(config.cacheDirectory);
     auto target=config.cacheDirectory/(identity+"-"+std::to_string(fingerprint)+".bin");
-    if(std::filesystem::is_regular_file(target))return {recipe.name,recipe.stage==ShaderStage::Vertex,readBinary(target),std::move(dependencies),fingerprint};
+    if(auto bytes=cachedBinary(target,recipe.stage==ShaderStage::Compute?'C':recipe.stage==ShaderStage::Vertex?'V':'F')) {
+        if(token.stop_requested()||fingerprintFileStates(dependencies)!=dependencyState)
+            throw std::runtime_error("Generated shader dependencies changed while reading their cache.");
+        metrics.workerCacheHits.fetch_add(1,std::memory_order_relaxed);
+        return {recipe.name,recipe.stage==ShaderStage::Vertex,std::move(*bytes),std::move(dependencies),fingerprint};
+    }
+    {std::error_code ignored;std::filesystem::remove(target,ignored);}
     static std::atomic_uint64_t sequence{};
     const auto stage=config.cacheDirectory/(identity+"-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(sequence.fetch_add(1))+".tmp");
     const auto source=std::filesystem::path(stage.wstring()+L".sc");
@@ -301,7 +353,13 @@ ShaderBinary compileShader(const ShaderCompileConfig& config,const ShaderCompile
             return sortedDependencies(std::move(actual));
         };
         auto actual=discover();const auto before=fingerprintFiles(actual);
-        if(actual!=dependencies) {
+        const bool newlyDiscovered=std::any_of(actual.begin(),actual.end(),[&](const auto& file) {
+            return std::none_of(dependencies.begin(),dependencies.end(),[&](const auto& known){return resourcePathKey(file)==resourcePathKey(known);});
+        });
+        if(newlyDiscovered) {
+            // Inactive conditional includes can make shaderc's graph a strict
+            // subset of the lexical scan. Every actual input was already
+            // checked; only newly discovered inputs require another compile.
             runCompiler(config.compiler,command,token);
             if(discover()!=actual)throw std::runtime_error("Generated shader include graph changed during compilation.");
         }
@@ -311,10 +369,85 @@ ShaderBinary compileShader(const ShaderCompileConfig& config,const ShaderCompile
         auto data=readBinary(stage);std::error_code error;std::filesystem::rename(stage,target,error);
         if(error && !std::filesystem::is_regular_file(target))throw std::runtime_error("Could not publish generated shader cache.");
         nlohmann::json paths=nlohmann::json::array();for(const auto& file:dependencies)paths.push_back(utf8(file));
-        writeFileAtomically(config.cacheDirectory/(identity+".recipe.json"),nlohmann::json{{"version",1},{"contract",config.buildContract},
+        streaming::detail::writeCacheFileAtomically(config.cacheDirectory/(identity+".recipe.json"),nlohmann::json{{"version",1},{"contract",config.buildContract},
             {"compiler",resourcePathKey(config.compiler)},{"source",resourcePathKey(config.sourceDirectory)},
             {"include",resourcePathKey(config.includeDirectory)},{"dependencies",paths}}.dump());
         clean();return {recipe.name,recipe.stage==ShaderStage::Vertex,std::move(data),std::move(dependencies),fingerprint};
     } catch(...) {clean();throw;}
+}
+
+ShaderCacheReadSession::ShaderCacheReadSession(ShaderCompileConfig config):config_(std::move(config)) {}
+std::uint64_t ShaderCacheReadSession::fingerprint(const std::vector<std::filesystem::path>& dependencies) {
+    std::uint64_t hash=14695981039346656037ull;
+    std::string prefix;
+    std::array<char,64*1024> buffer{};
+    const auto append=[&](const char* bytes,std::size_t count) {
+        for(std::size_t i=0;i<count;++i){hash^=static_cast<unsigned char>(bytes[i]);hash*=1099511628211ull;}
+    };
+    for(const auto& file:dependencies) {
+        const auto name=resourcePathKey(file);
+        // Stamps only key this transient memo. The persistent fingerprint still
+        // includes every canonical path and content byte, exactly as workers do.
+        const auto before=fingerprintFileStates({file});
+        const auto [observed,inserted]=observed_.try_emplace(name,file,before);
+        if(!inserted&&observed->second.second!=before)coherent_=false;
+        prefix+=name;prefix.push_back('\0');prefix+=std::to_string(before);prefix.push_back('\0');
+        if(const auto found=prefixes_.find(prefix);found!=prefixes_.end()){hash=found->second;continue;}
+        append(name.data(),name.size());
+        std::ifstream input(file,std::ios::binary);
+        if(!input)throw std::runtime_error("Shader cache dependency is unavailable.");
+        while(input){input.read(buffer.data(),buffer.size());append(buffer.data(),static_cast<std::size_t>(input.gcount()));}
+        if(!input.eof()||fingerprintFileStates({file})!=before)throw std::runtime_error("Shader cache dependency changed while reading.");
+        prefixes_.emplace(prefix,hash);
+    }
+    return hash;
+}
+std::optional<ShaderBinary> ShaderCacheReadSession::find(const std::string& name) {
+    metrics.cacheOnlyRequests.fetch_add(1,std::memory_order_relaxed);MetricTimer timing{metrics.cacheOnlyNanoseconds};
+    try {
+        auto dependencies=shaderDependencies(config_,name);
+        const auto before=fingerprintFileStates(dependencies);
+        const auto key=compileFingerprint(config_,name,fingerprint(dependencies));
+        const auto target=config_.cacheDirectory/(name+"-"+std::to_string(key)+".bin");
+        if(!std::filesystem::is_regular_file(target))return {};
+        auto bytes=cachedBinary(target,name.starts_with("cs_")?'C':name.starts_with("vs_")?'V':'F');if(!bytes)return {};
+        if(fingerprintFileStates(dependencies)!=before)return {};
+        artifacts_[name+"-"+std::to_string(key)]=target;
+        metrics.cacheOnlyHits.fetch_add(1,std::memory_order_relaxed);
+        return ShaderBinary{name,name.starts_with("vs_"),std::move(*bytes),std::move(dependencies),key};
+    } catch(const std::exception&) {return {};}
+}
+std::optional<ShaderBinary> ShaderCacheReadSession::find(const ShaderCompileRecipe& recipe) {
+    metrics.cacheOnlyRequests.fetch_add(1,std::memory_order_relaxed);MetricTimer timing{metrics.cacheOnlyNanoseconds};
+    try {
+        const auto identity=recipeIdentity(recipe);
+        auto dependencies=shaderDependencies(config_,recipe);
+        const auto before=fingerprintFileStates(dependencies);
+        const auto key=recipeFingerprint(config_,identity,fingerprint(dependencies));
+        const auto target=config_.cacheDirectory/(identity+"-"+std::to_string(key)+".bin");
+        if(!std::filesystem::is_regular_file(target))return {};
+        auto bytes=cachedBinary(target,recipe.stage==ShaderStage::Compute?'C':recipe.stage==ShaderStage::Vertex?'V':'F');if(!bytes)return {};
+        if(fingerprintFileStates(dependencies)!=before)return {};
+        artifacts_[recipe.name+"-"+std::to_string(key)]=target;
+        metrics.cacheOnlyHits.fetch_add(1,std::memory_order_relaxed);
+        return ShaderBinary{recipe.name,recipe.stage==ShaderStage::Vertex,std::move(*bytes),std::move(dependencies),key};
+    } catch(const std::exception&) {return {};}
+}
+bool ShaderCacheReadSession::unchanged() const {
+    if(!coherent_)return false;
+    try {
+        for(const auto& [key,observed]:observed_) {
+            (void)key;
+            if(fingerprintFileStates({observed.first})!=observed.second)return false;
+        }
+        return true;
+    } catch(const std::exception&) {return false;}
+}
+void ShaderCacheReadSession::discard(std::span<const ShaderBinary> binaries) {
+    for(const auto& binary:binaries) {
+        const auto found=artifacts_.find(binary.name+"-"+std::to_string(binary.fingerprint));
+        if(found==artifacts_.end())continue;
+        std::error_code ignored;std::filesystem::remove(found->second,ignored);artifacts_.erase(found);
+    }
 }
 }

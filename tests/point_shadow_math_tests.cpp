@@ -4,6 +4,7 @@
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <numbers>
 #include <set>
 #include <stdexcept>
 
@@ -66,6 +67,13 @@ void projectionChecks() {
         check(near>0 && near<radius && close(near,std::min(.05f,radius*.01f)),"Radius-dependent near plane is invalid.");
         check(close(projectedDepth(near,near,radius),0) && close(projectedDepth(radius,near,radius),1),"Near/far depth endpoints changed.");
     }
+    PointLight point;point.radius=100000;
+    check(point.inverseRadiusSquared()==1.f/(100000.f*100000.f),"Point shadow range lost the authored maximum.");
+    const auto camera=faceCamera(point.position,point.radius,0,512);
+    check(camera.farPlane==100000&&close(projectedDepth(100000,camera.nearPlane,camera.farPlane),1),
+        "Finite point shadow projection does not end at the authored light radius.");
+    point.radius=std::numeric_limits<float>::max();
+    check(point.inverseRadiusSquared()==1.f/(100000.f*100000.f),"Point radius sanitization overflowed its maximum.");
     check(faceIndex({1,1,1})==0 && faceIndex({-1,-1,-1})==1 && faceIndex({0,1,1})==2,"Seam tie-breaking must be deterministic.");
     check(faceCoordinates({})==Vec2{.5f,.5f} && math::finite(faceCoordinates({std::numeric_limits<float>::infinity(),0,0})),"Degenerate directions produced invalid UVs.");
     check(std::isnan(projectedDepth(0,.1f,20)) && std::isnan(projectedDepth(1,20,20)),"Invalid depth projections must be explicit.");
@@ -111,6 +119,73 @@ void receiverPlaneChecks() {
     check(receiverPlaneGradient({1,0,0},{0,1,0},0,256,near,far)==Vec2{},"A grazing receiver produced an unbounded gradient.");
     check(receiverPlaneGradient({0,1,0},{},2,256,near,far)==Vec2{},"A degenerate plane produced an unbounded gradient.");
 }
+void softShadowGeometryChecks() {
+    using namespace point_shadow;
+    constexpr float near=.05f,far=20;
+    // Readback depth is face-axis distance, whereas the PCSS blocker estimate
+    // needs radial distance. Test the inverse against actual camera matrices,
+    // including rays that select a different face at each edge/corner.
+    for (unsigned face=0;face<6;++face) {
+        const auto camera=faceCamera({},far,face,256);
+        const auto right=camera.right(),up=math::cross(right,camera.forward());
+        for (float x:{-1.f,-.95f,0.f,.95f,1.f}) for (float y:{-1.f,0.f,1.f}) {
+            const auto direction=math::normalized(camera.forward()+right*x+up*y);
+            for (float distance:{.1f,2.f,3.8f,8.f}) {
+                const auto selected=faceCamera({},far,faceIndex(direction),256);
+                const auto point=direction*distance;
+                const auto projected=math::project(point,selected.projectionMatrix(1,ClipDepth::ZeroToOne)*selected.viewMatrix(),
+                    {0,0,1,1},ClipDepth::ZeroToOne);
+                check(bool(projected),"Soft-shadow blocker did not project into its selected cube face.");
+                const auto decoded=radialDistanceFromDepth((*projected)[2],direction,near,far);
+                check(close(decoded,distance,1e-4),"PCSS blocker reconstruction confused radial and face-axis depth.");
+                check(close(decoded,radialDistanceFromDepth((*projected)[2],direction*7,near,far),1e-5),
+                    "PCSS blocker reconstruction depends on input ray length.");
+            }
+        }
+    }
+    check(close(radialDistanceFromDepth(0,{0,0,-1},near,far),near) &&
+        close(radialDistanceFromDepth(1,{1,1,1},near,far),far*std::sqrt(3.0),1e-5),
+        "PCSS perspective-depth endpoints do not match the face planes.");
+    check(std::isnan(radialDistanceFromDepth(.5f,{},near,far)) &&
+        std::isnan(radialDistanceFromDepth(-.1f,{1,0,0},near,far)) &&
+        std::isnan(radialDistanceFromDepth(.5f,{1,0,0},far,near)),
+        "Invalid PCSS blocker depth silently produced a finite occluder.");
+    const auto farPenumbra=penumbraRadius(.7f,4,2),contactPenumbra=penumbraRadius(.7f,4,3.8f);
+    check(close(farPenumbra,.7) && close(contactPenumbra,.7*.2/3.8),
+        "Source radius does not produce the similar-triangle contact-hardening scale.");
+    // Independent rays from the two opposite emitter endpoints meet at the
+    // blocker and then separate by twice the penumbra at the receiver plane.
+    const auto endpoint=[&](double source,double blockerDistance) {
+        return source+(0-source)*4/blockerDistance;
+    };
+    check(close(std::abs(endpoint(.7,2)-endpoint(-.7,2)),2*farPenumbra) &&
+        close(std::abs(endpoint(.7,3.8)-endpoint(-.7,3.8)),2*contactPenumbra),
+        "Penumbra radius disagrees with independent emitter-to-blocker ray intersections.");
+    check(penumbraRadius(0,4,2)==0 && penumbraRadius(.7f,4,4)==0 &&
+        penumbraRadius(.7f,4,5)==0 && penumbraRadius(.7f,4,0)==0 &&
+        penumbraRadius(std::numeric_limits<float>::infinity(),4,2)==0,
+        "Disabled, contact or invalid source sizes created a soft-shadow kernel.");
 }
-int main() {try {layoutChecks();projectionChecks();receiverPlaneChecks();std::cout<<"Point-shadow atlas, projection, receiver plane, guard and culling checks passed.\n";return 0;}
+void casterFootprintChecks() {
+    using namespace point_shadow;
+    const Aabb bounds{{-1,-1,-1},{1,1,1},true};
+    const auto radius=std::sqrt(3.0);
+    for(unsigned resolution:{256u,512u,1024u}) {
+        const auto footprint=casterTexelWorld(bounds,{10,0,0},resolution);
+        check(close(footprint,2*(10-radius)/resolution,1e-8),"Caster demand disagrees with the original perspective LOD distance.");
+        const auto camera=faceCamera({10,0,0},20,1,static_cast<std::uint16_t>(resolution));
+        const auto verticalFov=camera.verticalFov(1)*std::numbers::pi/180;
+        check(close(footprint,(10-radius)*2*std::tan(verticalFov*.5)/(resolution+4),1e-8),"Guard pixels changed the inner-face world-space footprint.");
+        check(casterTexelWorld(bounds,{0,0,0},resolution)<1e-10f,"A light inside the caster did not request original geometry.");
+        check(casterTexelWorld({}, {10,0,0},resolution)<1e-10f,"Missing caster bounds reduced shadow detail.");
+    }
+    // A child AABB's circumsphere can protrude beyond the parent AABB's
+    // circumsphere. Using only the parent sphere would under-request its LOD.
+    const Aabb child{{.5f,-1,-1},{1,1,1},true};
+    check(casterTexelWorld(child,{10,0,0},1024)<casterTexelWorld(bounds,{10,0,0},1024),
+        "The aggregate-demand regression fixture no longer exposes protruding primitive spheres.");
+    check(casterTexelWorld(bounds,{10,0,0},0)<1e-10f,"Invalid resolution reduced caster detail.");
+}
+}
+int main() {try {layoutChecks();projectionChecks();receiverPlaneChecks();softShadowGeometryChecks();casterFootprintChecks();std::cout<<"Point-shadow atlas, projection, blocker reconstruction, contact hardening, receiver plane, guard, culling and caster-demand checks passed.\n";return 0;}
     catch (const std::exception& error) {std::cerr<<error.what()<<'\n';return 1;}}

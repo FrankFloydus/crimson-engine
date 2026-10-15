@@ -114,6 +114,30 @@ void fogLightEnergy() {
         near(extreme[3],opacity);
     }
 }
+void materialFogReception() {
+    for(auto mode:{FogMode::Exponential,FogMode::Depth})for(float heightDensity:{0.f,.1f,-.1f}) {
+        FogSettings settings;settings.enabled=true;settings.mode=mode;settings.color={0,0,1};
+        settings.density=.02f;settings.depthBegin=10;settings.depthEnd=100;settings.depthOpacity=.75f;
+        settings.height=heightDensity<0?-10.f:10.f;settings.heightDensity=heightDensity;
+        const auto view=fog::parameters(settings,1000);
+        const auto excluded=fog::forMaterial(view,false);
+        near(fog::transmittance(excluded,100,0),1);
+        check(view.height[3]==1 && excluded.colorDensity==view.colorDensity && excluded.depth==view.depth,
+            "Per-material fog exclusion mutated the view or discarded authored fog parameters.");
+        for(bool additive:{false,true})for(float opacity:{0.f,.25f,1.f}) {
+            const auto black=fog::premultiplied({},opacity,excluded,100,0,additive);
+            const Vec3 source{4,2,1};const auto unchanged=fog::premultiplied(source,opacity,excluded,100,0,additive);
+            for(std::size_t channel=0;channel<3;++channel){near(black[channel],0);near(unchanged[channel],source[channel]*opacity);}
+            near(black[3],opacity);near(unchanged[3],opacity);
+        }
+        const auto receiving=fog::forMaterial(view,true);
+        near(fog::transmittance(receiving,100,0),fog::transmittance(view,100,0));
+        check(fog::premultiplied({},1,receiving,100,0,false)[2]>.5f,
+            "Excluding one material suppressed fog for a following receiving material.");
+        settings.enabled=false;
+        near(fog::transmittance(fog::forMaterial(fog::parameters(settings,1000),true),100,-1000),1);
+    }
+}
 void independentPresentation() {
     EnvironmentSettings environment;ViewportAppearance appearance;
     environment.source=EnvironmentSource::ProceduralSky;environment.fog.enabled=true;
@@ -194,9 +218,37 @@ void fogThumbnailInvalidation() {
     environment.fog.heightDensity=-.1f;key=thumbnailEnvironmentKey(environment,sun);environment.fog.heightDensity=.1f;
     check(thumbnailEnvironmentKey(environment,sun)!=key,"Height density sign did not invalidate thumbnail.");
 }
+void ambientLightControls() {
+    EnvironmentSettings environment;
+    check(environmentAmbientLight(environment,true)==Vec4{0,0,0,1},"Default ambient changed existing sky diffuse.");
+    environment.ambientLight.source=AmbientLightSource::Color;
+    environment.ambientLight.color={.5f,.25f,1};environment.ambientLight.energy=2;
+    environment.enabled=false;
+    auto values=environmentAmbientLight(environment,true);
+    near(values[0],.42808228f);near(values[1],.10175218f);near(values[2],2);near(values[3],0);
+    check(environmentAmbientLight(environment,false)==Vec4{0,0,0,1},"Scene ambient leaked into independent previews.");
+    const auto colorValues=values;environment.ambientLight.skyContribution=.3f;
+    check(environmentAmbientLight(environment,true)==colorValues,"Color ambient unexpectedly included sky contribution.");
+    environment.ambientLight.source=AmbientLightSource::Sky;
+    values=environmentAmbientLight(environment,true);
+    for(std::size_t channel=0;channel<3;++channel)near(values[channel],colorValues[channel]*.7f);
+    near(values[3],.3f);
+    const auto signature=thumbnailEnvironmentKey(environment,{});
+    environment.ambientLight.skyContribution=.6f;
+    check(thumbnailEnvironmentKey(environment,{})!=signature,"Ambient sky contribution did not invalidate saved-scene thumbnail.");
+    environment.ambientLight.source=AmbientLightSource::Disabled;
+    check(environmentAmbientLight(environment,true)==Vec4{},"Disabled ambient retained color or sky diffuse.");
+    const auto disabled=thumbnailEnvironmentKey(environment,{});
+    environment.ambientLight.color={1,0,1};environment.ambientLight.skyContribution=0;environment.ambientLight.energy=5;
+    check(thumbnailEnvironmentKey(environment,{})==disabled,"Inactive ambient controls invalidated saved-scene thumbnail.");
+    environment.ambientLight.source=AmbientLightSource::Color;environment.ambientLight.energy=0;
+    check(environmentAmbientLight(environment,true)==Vec4{},"Zero ambient energy retained diffuse lighting.");
+    environment.ambientLight.energy=std::numeric_limits<float>::max();
+    for(const float value:environmentAmbientLight(environment,true))check(std::isfinite(value),"Extreme ambient energy produced nonfinite GPU data.");
+}
 }
 int main() {
-    try {fogComposition();depthAndHeightFog();fogLightEnergy();independentPresentation();thumbnailInvalidation();fogThumbnailInvalidation();
+    try {fogComposition();depthAndHeightFog();fogLightEnergy();materialFogReception();independentPresentation();thumbnailInvalidation();fogThumbnailInvalidation();ambientLightControls();
         std::cout<<"Environment presentation and fog checks passed.\n";return 0;}
     catch(const std::exception& error) {std::cerr<<error.what()<<'\n';return 1;}
 }

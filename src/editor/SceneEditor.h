@@ -10,6 +10,7 @@
 #include <unordered_map>
 
 namespace crimson {
+class QuaderBridge;
 class ParticleEditor;
 class MaterialEditor;
 struct PanelVisibility { bool outliner{true}, inspector{true}, assetBrowser{true}, game{false}; };
@@ -23,6 +24,7 @@ public:
     bool exitAccepted() const { return exitAccepted_; }
     const ViewportAppearance& appearance() const { return preferences_.values().appearance; }
     std::uint16_t pointShadowResolution() const { return static_cast<std::uint16_t>(preferences_.values().pointShadowResolution); }
+    std::uint32_t thumbnailDemand() const { return browser_.thumbnailDemand(); }
     const PanelVisibility& panels() const { return panels_; }
     void setPanels(const PanelVisibility& panels) { panels_=panels; }
     const OverlayVisibility& overlays() const { return overlays_; }
@@ -34,11 +36,17 @@ public:
     }
     void showGame() { panels_.game=true; }
     void hideGame() { panels_.game=false; }
+    void drawPlayerLightRig(const Camera& camera,const Scene& scene,std::span<const EntityId> selection) {
+        viewport_.drawPlayerLightRig(camera,scene,selection);
+    }
     void notifyExternalSceneChange(SceneSnapshot snapshot) { externalScene_=std::move(snapshot); }
     void setParticleBoundsQuery(ParticleBoundsQuery query) { viewport_.setParticleBoundsQuery(std::move(query)); }
+    void setCollisionMeshQuery(CollisionMeshQuery query) { viewport_.setCollisionMeshQuery(std::move(query)); }
+    void setQuaderBridge(QuaderBridge* bridge){quader_=bridge;}
 private:
     enum class Pending { None, New, Open, Exit };
     SceneViewport viewport_;
+    QuaderBridge* quader_{};
     AssetBrowserPanel browser_;
     EditorPreferences preferences_;
     PanelVisibility panels_;

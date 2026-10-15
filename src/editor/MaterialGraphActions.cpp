@@ -76,7 +76,8 @@ MaterialValueType endpointType(const MaterialGraph& graph,MaterialGraphEndpoint 
 MaterialNodeId createConnected(MaterialGraph& graph,MaterialGraphEndpoint endpoint,MaterialGraphNodeChoice choice,Vec2 position,MaterialValueType type) {
     const auto id=addMaterialNode(graph,choice.kind,position).id;auto& node=*findMaterialNode(graph,id);
     if(node.kind==MaterialNodeKind::Texture2D)node.texture.role=choice.textureRole;
-    if(node.kind==MaterialNodeKind::Multiply&&endpoint.input&&(type==MaterialValueType::Color||type==MaterialValueType::Vector2))node.left.type=type;
+    if((node.kind==MaterialNodeKind::Multiply||node.kind==MaterialNodeKind::Add||node.kind==MaterialNodeKind::Lerp||node.kind==MaterialNodeKind::Power)&&
+        endpoint.input&&(type==MaterialValueType::Color||type==MaterialValueType::Vector2))node.left.type=type;
     if(endpoint.input)connectMaterialNodes(graph,id,choice.pin,endpoint.node,endpoint.pin);
     else connectMaterialNodes(graph,endpoint.node,endpoint.pin,id,choice.pin);
     return id;
@@ -123,10 +124,11 @@ std::size_t deleteMaterialGraphSelection(MaterialGraph& graph,std::span<const Ma
 }
 std::vector<MaterialGraphNodeChoice> materialGraphNodeChoices(const MaterialGraph& graph,MaterialGraphEndpoint endpoint) {
     validateMaterialGraph(graph);const auto type=endpointType(graph,endpoint);std::vector<MaterialGraphNodeChoice> result;
-    for(const auto kind:{MaterialNodeKind::UV,MaterialNodeKind::Texture2D,MaterialNodeKind::Scalar,MaterialNodeKind::Color,MaterialNodeKind::Multiply,MaterialNodeKind::Vector2,MaterialNodeKind::ParticleColor,MaterialNodeKind::RadialGradient,MaterialNodeKind::Saturate}) {
+    for(const auto kind:{MaterialNodeKind::UV,MaterialNodeKind::Texture2D,MaterialNodeKind::Scalar,MaterialNodeKind::Color,MaterialNodeKind::Multiply,MaterialNodeKind::Vector2,MaterialNodeKind::ParticleColor,MaterialNodeKind::RadialGradient,MaterialNodeKind::Saturate,
+        MaterialNodeKind::Add,MaterialNodeKind::Lerp,MaterialNodeKind::Panner,MaterialNodeKind::Time,MaterialNodeKind::Power}) {
         MaterialGraphNodeChoice choice;choice.kind=kind;
         if(endpoint.input) {
-            if(kind==MaterialNodeKind::UV)choice.pin=MaterialPin::UV;
+            if(kind==MaterialNodeKind::UV||kind==MaterialNodeKind::Panner)choice.pin=MaterialPin::UV;
             else if(kind==MaterialNodeKind::Texture2D) {
                 choice.textureRole=type==MaterialValueType::Normal?MaterialTextureRole::Normal:
                     type==MaterialValueType::Scalar&&endpoint.pin!=MaterialPin::Opacity&&endpoint.pin!=MaterialPin::OpacityMask?MaterialTextureRole::Data:MaterialTextureRole::Color;
@@ -138,7 +140,8 @@ std::vector<MaterialGraphNodeChoice> materialGraphNodeChoices(const MaterialGrap
             else choice.pin=MaterialPin::Value;
         } else {
             if(kind==MaterialNodeKind::Texture2D||kind==MaterialNodeKind::RadialGradient)choice.pin=MaterialPin::UV;
-            else if(kind==MaterialNodeKind::Multiply||kind==MaterialNodeKind::Saturate)choice.pin=MaterialPin::Left;
+            else if(kind==MaterialNodeKind::Multiply||kind==MaterialNodeKind::Add||kind==MaterialNodeKind::Lerp||kind==MaterialNodeKind::Power||kind==MaterialNodeKind::Saturate)choice.pin=MaterialPin::Left;
+            else if(kind==MaterialNodeKind::Panner)choice.pin=type==MaterialValueType::Mapping?MaterialPin::UV:type==MaterialValueType::Vector2?MaterialPin::Speed:MaterialPin::Time;
             else if(kind==MaterialNodeKind::UV&&type==MaterialValueType::Vector2)choice.pin=MaterialPin::ScaleXY;
             else continue;
         }

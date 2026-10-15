@@ -1,0 +1,25 @@
+{
+  "dependencies": [
+    {
+      "index": 0,
+      "kind": "buffer",
+      "path": "buffers/0.bin",
+      "source": "Quader reader ABI 6"
+    }
+  ],
+  "document": "model.gltf",
+  "format": "Quader",
+  "materialAssets": [
+    "assets/materials/quader-259235be-ca11-4751-a03b-28c7c36529bf-5a2874d7-7e01-47c1-971f-f6f57e37c436.crimson-material",
+    "builtin:material/default"
+  ],
+  "name": "Cylinder",
+  "original": "source.gltf",
+  "quader": {
+    "collision": false,
+    "content": "eb99195fc4f44917a7c580eca0c742ab42e04053d9b35537864af19cafe3886f",
+    "project": "259235be-ca11-4751-a03b-28c7c36529bf",
+    "scene": "387884c9-9fc1-48fd-b51b-76db9f6a8798"
+  },
+  "version": 1
+}

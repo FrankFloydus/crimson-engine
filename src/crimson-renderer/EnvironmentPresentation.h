@@ -1,8 +1,29 @@
 #pragma once
 #include "ProceduralSky.h"
+#include <algorithm>
 #include <bit>
+#include <cmath>
 
 namespace crimson {
+// RGB is the linear, energy-weighted color contribution; W weights the
+// selected source's irradiance. Reflection intensity is kept independent.
+inline Vec4 environmentAmbientLight(const EnvironmentSettings& settings,bool authoredEnvironment) {
+    if(!authoredEnvironment)return {0,0,0,1};
+    const auto& ambient=settings.ambientLight;
+    if(ambient.source==AmbientLightSource::Disabled)return {};
+    const auto finiteOr=[](float value,float fallback){return std::isfinite(value)?value:fallback;};
+    // Match the renderer's finite HDR envelope without changing authored data.
+    const float energy=std::clamp(finiteOr(ambient.energy,1.f),0.f,60000.f);
+    const float sky=ambient.source==AmbientLightSource::Sky?
+        std::clamp(finiteOr(ambient.skyContribution,1.f),0.f,1.f):0.f;
+    Vec4 result{0,0,0,sky};
+    for(std::size_t channel=0;channel<3;++channel) {
+        const float value=std::clamp(finiteOr(ambient.color[channel],0.f),0.f,1.f);
+        const float linear=value<=.04045f?value/12.92f:std::pow((value+.055f)/1.055f,2.4f);
+        result[channel]=linear*energy*(1.f-sky);
+    }
+    return result;
+}
 struct EnvironmentPresentation {
     bool showBackground{},procedural{},debanding{};
     Vec3 matte{};
@@ -31,6 +52,8 @@ inline std::uint64_t thumbnailEnvironmentKey(const EnvironmentSettings& value,co
     word(static_cast<std::uint64_t>(value.source));word(value.enabled);scalar(value.intensity);
     word(static_cast<std::uint64_t>(value.toneMapping));
     word(value.debanding);
+    const auto ambient=environmentAmbientLight(value,true);
+    for(const float component:ambient)scalar(component);
     if(value.source==EnvironmentSource::ProceduralSky)word(procedural::cacheKey(value.procedural,sun));
     else {scalar(value.rotation);for(const auto c:value.map)word(static_cast<unsigned char>(c));}
     word(value.background.show);

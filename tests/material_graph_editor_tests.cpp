@@ -1112,6 +1112,47 @@ void saturateInlineInput() {
     require(ui.editor.previewTarget()==MaterialGraphPreviewTarget{saturate,MaterialPin::Value}&&ui.snapshot()==beforePreview&&ui.document.revision()==revision,
         "Saturate did not support transient scalar node preview.");
 }
+void requestedMathAndRuntimeNodes() {
+    GraphUi ui;MaterialNodeId lerp{},panner{},time{},scalar{};
+    require(ui.document.edit("Requested nodes fixture",[&](auto& asset) {
+        asset.graph={};addMaterialNode(asset.graph,MaterialNodeKind::Output,{650,0});
+        lerp=addMaterialNode(asset.graph,MaterialNodeKind::Lerp,{-100,-220}).id;
+        panner=addMaterialNode(asset.graph,MaterialNodeKind::Panner,{-100,160}).id;
+        time=addMaterialNode(asset.graph,MaterialNodeKind::Time,{-450,160}).id;
+        scalar=addMaterialNode(asset.graph,MaterialNodeKind::Scalar,{-450,-220}).id;
+    })&&ui.document.save(),"Could not configure requested node fixture.");ui.frame(5);
+    const std::array<std::pair<const char*,MaterialNodeKind>,5> searches{{{"plus",MaterialNodeKind::Add},{"interpolate",MaterialNodeKind::Lerp},
+        {"scroll",MaterialNodeKind::Panner},{"clock",MaterialNodeKind::Time},{"pow",MaterialNodeKind::Power}}};
+    for(const auto& [alias,kind]:searches) {
+        const auto before=ui.snapshot();ui.openAdd();ui.text(alias);ui.key(ImGuiKey_Enter);
+        const auto* created=findMaterialNode(ui.document.definition().graph,ui.editor.selectedNode());
+        require(created&&created->kind==kind&&!ui.popup(),"A requested material node alias was not searchable.");
+        ui.oneUndo(before);require(ui.document.undo(),"Could not remove searched fixture node.");ui.frame(2);
+    }
+    const auto field=[&](MaterialNodeId id,MaterialPin pin)->std::optional<MaterialGraphEditor::FieldPresentation> {
+        for(const auto& value:ui.editor.presentation().fields)if(value.node==id&&value.pin==pin)return value;
+        return {};
+    };
+    require(field(lerp,MaterialPin::Left)&&field(lerp,MaterialPin::Right)&&field(lerp,MaterialPin::Alpha)&&field(panner,MaterialPin::Speed)&&
+        !field(panner,MaterialPin::Time),"Requested node fallback controls did not follow their input semantics.");
+    const auto alpha=*field(lerp,MaterialPin::Alpha);
+    const ImVec2 position{(alpha.minimum[0]+alpha.maximum[0])*.5f,(alpha.minimum[1]+alpha.maximum[1])*.5f};
+    const auto before=ui.snapshot();ui.drag(position,{position.x+45,position.y});
+    const auto authored=findMaterialNode(ui.document.definition().graph,lerp)->alpha.value;
+    require(authored[0]>.5f,"Lerp's third inline default was not editable.");ui.oneUndo(before);
+    ui.drag(ui.pin(scalar,MaterialPin::Value,false),ui.pin(lerp,MaterialPin::Alpha,true));
+    require(!field(lerp,MaterialPin::Alpha)&&findMaterialNode(ui.document.definition().graph,lerp)->alpha.value==authored,
+        "Connected Lerp Alpha did not retain and hide its fallback.");
+    auto& io=ImGui::GetIO();io.AddKeyEvent(ImGuiMod_Alt,true);ui.frame();ui.click(ui.pin(lerp,MaterialPin::Alpha,true));
+    io.AddKeyEvent(ImGuiMod_Alt,false);ui.frame(2);
+    require(field(lerp,MaterialPin::Alpha)&&findMaterialNode(ui.document.definition().graph,lerp)->alpha.value==authored,
+        "Disconnecting Lerp Alpha did not restore the authored third input.");
+    const auto stable=ui.snapshot();const auto revision=ui.document.revision();ui.select({time});ui.shortcut(ImGuiKey_P);
+    require(ui.editor.previewTarget()==MaterialGraphPreviewTarget{time,MaterialPin::Value}&&ui.snapshot()==stable&&ui.document.revision()==revision,
+        "Time preview altered document state.");
+    ui.select({panner});ui.shortcut(ImGuiKey_P);
+    require(ui.editor.previewTarget()==MaterialGraphPreviewTarget{panner,MaterialPin::UV},"Panner did not select its Mapping checker preview.");
 }
-int main(){try{canvasDrawData();pinGesturesAlignmentAndZoom();searchableCreationAndAutoWire();clipboardSelectionCommands();readOnlySelectionCommands();contextAndArrangementCommands();quickCreationAndPreview();textureCanvasDrops();boundedTextureLabelsAndScalarMapGestures();inlineDefaultsAndOpacityActivation();inlineComboPopupCoordinates();shaderBlendCoverageMatrix();commonParticleSourceNodes();saturateInlineInput();dynamicCanvasFontDensity();std::cout<<"Material graph commands, pin gestures, alignment, private canvas, dynamic font and draw-data checks passed.\n";return 0;}
+}
+int main(){try{canvasDrawData();pinGesturesAlignmentAndZoom();searchableCreationAndAutoWire();clipboardSelectionCommands();readOnlySelectionCommands();contextAndArrangementCommands();quickCreationAndPreview();textureCanvasDrops();boundedTextureLabelsAndScalarMapGestures();inlineDefaultsAndOpacityActivation();inlineComboPopupCoordinates();shaderBlendCoverageMatrix();commonParticleSourceNodes();saturateInlineInput();requestedMathAndRuntimeNodes();dynamicCanvasFontDensity();std::cout<<"Material graph commands, pin gestures, alignment, private canvas, dynamic font and draw-data checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

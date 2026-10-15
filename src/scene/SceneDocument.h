@@ -32,6 +32,7 @@ uint64_t sceneFileFingerprint(const std::filesystem::path& projectRoot, const st
 uint64_t sceneTextFingerprint(std::string_view text) noexcept;
 std::vector<SceneAssetEntry> scanSceneAssets(const std::filesystem::path& projectRoot,
                                            std::vector<std::string>* diagnostics = nullptr);
+std::string availableSceneName(const std::filesystem::path& projectRoot,const std::string& base);
 bool deleteSceneAsset(const std::filesystem::path& projectRoot, const std::string& id, std::string& error);
 
 struct EntityChange {
@@ -134,6 +135,10 @@ public:
     bool undo();
     bool redo();
     EntityId createEmpty(const std::string& name = "Entity");
+    EntityId createQuader(const std::string& name = "Quader");
+    // Generated records use temporary IDs/parent IDs and stable source keys.
+    // Reimport preserves matching persistent identities and all manual siblings.
+    bool replaceQuaderImport(EntityId owner,const QuaderLink&,const std::vector<EntityRecord>& generated);
     EntityId createModel(const std::string& assetId, const std::string& name, const Mat4& local = Mat4{});
     EntityId createParticle(const std::string& assetId, const std::string& name = "Particle Effect", const Mat4& local = Mat4{});
     std::vector<EntityId> createModels(const std::vector<ModelPlacement>& models);

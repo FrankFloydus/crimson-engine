@@ -1,4 +1,5 @@
 #include "EditorSession.h"
+#include "EditorRenderFrame.h"
 #include "input/Navigation.h"
 #include "scene/SceneExtraction.h"
 #include "assets/AtomicFile.h"
@@ -8,6 +9,7 @@
 #include "crimson-renderer/Environment.h"
 #include "resources/Paths.h"
 #include "tools/SceneDiagnostics.h"
+#include "QuaderSceneIntegration.h"
 #include <imgui.h>
 #include <SDL3/SDL_keyboard.h>
 #include <nlohmann/json.hpp>
@@ -18,23 +20,8 @@
 
 namespace crimson {
 using Json=nlohmann::json;
-namespace {
-bool visibleBounds(const Aabb& local,const Mat4& world,const Camera& camera,float aspect) {
-    const auto bounds=math::transformBounds(local,world);if(!bounds.valid)return true;
-    const auto depth=bgfx::getCaps()->homogeneousDepth?ClipDepth::NegativeOneToOne:ClipDepth::ZeroToOne;
-    const auto projection=camera.projectionMatrix(aspect,depth)*camera.viewMatrix();
-    std::array<bool,6> outside{true,true,true,true,true,true};
-    for(unsigned corner=0;corner<8;++corner) {
-        const Vec4 point{corner&1?bounds.maximum[0]:bounds.minimum[0],corner&2?bounds.maximum[1]:bounds.minimum[1],corner&4?bounds.maximum[2]:bounds.minimum[2],1};
-        const auto clip=math::transformHomogeneous(projection,point);if(!math::finite(clip))return true;
-        outside[0]&=clip[0]<-clip[3];outside[1]&=clip[0]>clip[3];outside[2]&=clip[1]<-clip[3];outside[3]&=clip[1]>clip[3];
-        outside[4]&=clip[2]<(depth==ClipDepth::ZeroToOne?0:-clip[3]);outside[5]&=clip[2]>clip[3];
-    }
-    return std::none_of(outside.begin(),outside.end(),[](bool value){return value;});
-}
-}
 EditorSession::EditorSession(const std::filesystem::path& root, AssetLibrary& assets, Renderer& renderer)
-    : root_(root),document_(root),play_(root),particleEditor_(root),materialEditor_(root),resources_(*assets.resources()),prepared_(assets,renderer,resources_,root) {
+    : root_(root),document_(root),play_(root),particleEditor_(root),materialEditor_(root),resources_(*assets.resources()),prepared_(assets,renderer,resources_,root),collisions_(assets,resources_),quader_(root) {
     restoreSession(assets);
     documentEpoch_=document_.documentGeneration();
     previews_=std::make_unique<AssetPreviews>(root,assets,resources_,renderer,prepared_);
@@ -44,6 +31,9 @@ EditorSession::EditorSession(const std::filesystem::path& root, AssetLibrary& as
     play_.setParticleDefinitions([&assets](const std::string& id) {
         return ParticleDefinitionVersion{assets.findParticle(id),assets.particleRevision(id),assets.particleDiagnostic(id)};
     });
+    play_.setCollisionMeshDefinitions([this](const std::string& id){return collisions_.query(id);});
+    editor_.setCollisionMeshQuery([this](const std::string& id){return collisions_.query(id);});
+    editor_.setQuaderBridge(&quader_);
 }
 EditorSession::~EditorSession() { saveSession(); }
 void EditorSession::restoreSession(AssetLibrary& assets) {
@@ -121,6 +111,30 @@ void EditorSession::filesChanged(std::span<const std::filesystem::path> paths) {
     }
 }
 void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::uint32_t bgfxFrame) {
+    collisions_.collect();
+    std::vector<QuaderTarget> targets;
+    const auto records=document_.scene().records();
+    for(const auto& record:records) {
+        if(record.meshCollider && !record.meshCollider->source.empty())(void)collisions_.query(record.meshCollider->source.id);
+        if(record.quader) {
+            const bool imported=std::any_of(records.begin(),records.end(),[&](const auto& child){return child.quaderGenerated && child.quaderGenerated->owner==record.id;});
+            targets.push_back({record.id,*record.quader,imported,record.quader->saveKey});
+        }
+    }
+    QuaderBridgeHooks hooks;
+    hooks.dirtyMaterial=[this](const std::string& id){return materialEditor_.blocksExternalRefresh(id);};
+    hooks.resolveMaterial=[&assets](const std::string& id){return assets.references().resolveMaterial(id);};
+    hooks.resolveTexture=[&assets](const std::string& id,bool normal){return assets.references().resolveTexture(id,normal);};
+    hooks.reservedAsset=[&assets](const std::string& id){return assets.references().deleted(id);};
+    hooks.assetPolicyRevision=[&assets]{return assets.references().revision();};
+    hooks.applyImport=[this](EntityId owner,const QuaderLink& link,const QuaderImportResult& result){return applyQuaderSceneImport(document_,owner,link,result);};
+    hooks.publishAssets=[this,&assets](const QuaderImportResult& result) {
+        assets.publishManagedModels(result.preparedModels);
+        std::vector<std::filesystem::path> changed;
+        for(const auto& file:result.files) {const auto path=root_/pathFromUtf8(file.id);assets.noteAssetWrite(file.id);assets.onFileChanged(path);changed.push_back(path);}
+        materialEditor_.filesChanged(changed);
+    };
+    quader_.update(targets,document_.documentGeneration(),play_.playing() || document_.transactionActive() || editor_.playTransitionBlocked(),hooks);
     prepared_.beginFrame(); renderer.advanceStreaming();renderer.setAppearance(editor_.appearance());
     for(const auto& file:changedFiles_) {
         const auto relative=file.lexically_relative(root_).generic_u8string(); const std::string id(reinterpret_cast<const char*>(relative.data()),relative.size());
@@ -158,13 +172,15 @@ void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::ui
         },std::move(options));
     }
     if(auto snapshot=environment_.snapshot()) if(snapshot.revision()!=environmentRevision_ && renderer.publishEnvironment(*snapshot)) environmentRevision_=snapshot.revision();
-    previews_->pump(bgfxFrame,visiblePreviewIds_);
+    previews_->pump(bgfxFrame,visiblePreviewIds_,editor_.thumbnailDemand());
 }
 void EditorSession::cancelInteraction(Renderer& renderer) {
     editor_.cancelInteraction(activeDocument(),renderer);particleEditor_.cancelInteraction();materialEditor_.cancelInteraction();gameInput_.cancel();focusGame_=false;skipSimulationTime_=true;
     playShortcuts_.cancel();playActionPending_=PlayAction::None;
 }
 void EditorSession::transitionPlay(Renderer& renderer,Navigation& navigation,bool stop) {
+    playAnimations_.clear();animationPlayTick_=0;
+    waitingForCollision_=false;
     editor_.cancelInteraction(activeDocument(),renderer);navigation.cancel();gameInput_.cancel();
     pendingDrops_.clear();renderer.cancelPicking();skipSimulationTime_=true;playStatus_.clear();
     if(play_.playing()) {
@@ -174,19 +190,41 @@ void EditorSession::transitionPlay(Renderer& renderer,Navigation& navigation,boo
     } else if(!stop) {
         editCameraBeforePlay_=settings_.camera;
         if(play_.start(document_)) { editor_.showGame();focusGame_=true; }
-        else playStatus_=play_.status();
+        else {
+            playStatus_=play_.status();
+            if(playStatus_.starts_with("Preparing mesh collision")) {
+                waitingForCollision_=true;waitingSceneGeneration_=document_.documentGeneration();waitingSceneRevision_=document_.scene().revision();
+            }
+        }
     }
     documentEpoch_=activeDocument().documentGeneration();
 }
 void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& navigation, SDL_Window* window,
                           uint32_t bgfxFrame, bool quitRequested) {
     const bool forceStop=editor_.needsAuthoringDocument() || quitRequested || (play_.playing() && !editor_.panels().game);
+    if(waitingForCollision_) {
+        if(forceStop || document_.documentGeneration()!=waitingSceneGeneration_ || document_.scene().revision()!=waitingSceneRevision_ || playActionPending_==PlayAction::Stop)waitingForCollision_=false;
+        else {
+            bool ready=true;
+            for(const auto& record:document_.scene().records())if(record.meshCollider && !record.meshCollider->source.empty()) {
+                const auto source=collisions_.query(record.meshCollider->source.id);
+                if(!source.mesh || !source.current) {
+                    ready=false;playStatus_=source.diagnostic;
+                    if(!playStatus_.starts_with("Preparing mesh collision"))waitingForCollision_=false;
+                    break;
+                }
+            }
+            if(ready){waitingForCollision_=false;playActionPending_=PlayAction::Start;}
+        }
+    }
     if(play_.playing() && (forceStop || playActionPending_==PlayAction::Stop))transitionPlay(renderer,navigation,true);
     else if(!play_.playing() && !forceStop && playActionPending_==PlayAction::Start)transitionPlay(renderer,navigation,false);
     playActionPending_=PlayAction::None;
     auto& document=activeDocument();
     const auto previousAsset=document.assetId();
     const float simulationSeconds=simulationSuspended_ || skipSimulationTime_?0.f:ImGui::GetIO().DeltaTime;
+    materialRealSeconds_=std::chrono::duration<double>(std::chrono::steady_clock::now()-materialClockStart_).count();
+    if(!play_.playing())materialGameSeconds_+=simulationSeconds;
     skipSimulationTime_=false;
     const auto previousCamera=settings_.camera;
     document.setPreviewCamera(settings_.camera);
@@ -224,7 +262,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     if(!frame.particleDropId.empty() && assets.findParticle(frame.particleDropId))
         document.createParticle(frame.particleDropId,assets.displayName(frame.particleDropId),math::translation(placement(frame.particleDropPosition)));
     bool gameOpen=editor_.panels().game;
-    const auto game=gameView_.draw(document,renderer,gameOpen,play_.playing(),focusGame_);
+    const auto game=gameView_.draw(document,renderer,gameOpen,play_.playing(),focusGame_,assets.textureResidentBytes());
     if(!gameOpen) { editor_.hideGame();renderer.releaseGameViewport();if(play_.playing())playActionPending_=PlayAction::Stop; }
     const auto playShortcut=playShortcuts_.consume({play_.playing(),quitRequested || editor_.playTransitionBlocked(),
         navigation.active() || document.transactionActive() || particleEditor_.transactionActive() || materialEditor_.transactionActive()});
@@ -266,7 +304,14 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
         play_.advance(simulationSeconds,gameInput_,inputCamera.value_or(gameCamera.value_or(Camera{})),!simulationSuspended_);
     }
     const auto& renderScene=play_.playing()?play_.presentationScene():document.scene();
-    const auto extracted=extractScene(renderScene);
+    const MaterialEvaluationContext materialContext{play_.playing()?play_.tickCount()*PlaySession::FixedStep:materialGameSeconds_,materialRealSeconds_};
+    prepared_.setMaterialContext(materialContext);
+    auto extracted=extractScene(renderScene);
+    if(play_.playing()) {
+        const auto ticks=play_.tickCount();
+        const auto elapsed=ticks>=animationPlayTick_?(ticks-animationPlayTick_)*PlaySession::FixedStep:0.;
+        playAnimations_.advance(extracted,document.documentGeneration(),elapsed);animationPlayTick_=ticks;
+    } else editAnimations_.advance(extracted,document.documentGeneration(),simulationSeconds);
     settings_.environment=extracted.environment.environment;settings_.exposure=extracted.environment.exposure;
     settings_.proceduralSun=extracted.proceduralSun;
     settings_.environment.map=assets.references().resolveEnvironment(settings_.environment.map);
@@ -275,8 +320,8 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     if(!play_.playing() || frame.playParticleEntity)sceneParticles.reconcile(document.documentGeneration(),extracted.particles,[&](const std::string& id) {
         return ParticleDefinitionVersion{assets.findParticle(id),assets.particleRevision(id),assets.particleDiagnostic(id)};
     },play_.playing()?0.f:simulationSeconds,frame.playParticleEntity);
-    particlePackets_.clear();particlePackets_.reserve(sceneParticles.presentation().size());
-    particleMaterials_.clear();particleMaterials_.push_back({});
+    std::vector<RenderParticle> particlePackets;particlePackets.reserve(sceneParticles.presentation().size());
+    std::vector<RenderParticleMaterial> particleMaterials;particleMaterials.push_back({});
     std::unordered_map<std::string,std::uint32_t> materialIndices;
     std::vector<std::shared_ptr<const PreparedParticleMaterial>> particlePins;
     const auto presentation=sceneParticles.presentation();
@@ -291,70 +336,38 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
                     materialIndices.emplace(id,UINT32_MAX);continue;
                 }
                 if(!material->diagnostic.empty())status_+=material->diagnostic+"\n";
-                const auto index=static_cast<std::uint32_t>(particleMaterials_.size());
-                particleMaterials_.push_back(material->render);particlePins.push_back(material);
+                const auto index=static_cast<std::uint32_t>(particleMaterials.size());
+                particleMaterials.push_back(material->render);particlePins.push_back(material);
                 found=materialIndices.emplace(id,index).first;
             }
             if(found->second==UINT32_MAX)continue;
             for(std::size_t offset=group.first;offset<group.first+group.count;++offset) {
-                const auto& p=presentation[offset];particlePackets_.push_back({p.position,p.size,p.color,found->second,p.rotation,p.billboardMode,p.right,p.up});
+                const auto& p=presentation[offset];particlePackets.push_back({p.position,p.size,p.color,found->second,p.rotation,p.billboardMode,p.right,p.up});
             }
         } catch(const std::exception& error) {
             status_+="Particle material "+group.materialId+": "+error.what()+"\n";
         }
     }
-    std::vector<RenderModelInstance> instances;
-    struct FramePins {
-        std::vector<std::shared_ptr<const PreparedEditorModel>> models;
-        std::vector<std::shared_ptr<const PreparedParticleMaterial>> particles;
-        std::shared_ptr<const PreparedEditorShadows> shadows;
-    };
-    auto pins=std::make_shared<FramePins>();pins->particles=std::move(particlePins);
-    // Prepare from the full interpolated world before either camera culls its
-    // receivers. Scene and Game submit the same pinned caster set this frame.
-    pins->shadows=prepared_.prepareShadows(extracted,editor_.pointShadowResolution());
-    std::uint64_t signature=14695981039346656037ull;
-    for(const auto& material:pins->particles)signature=(signature^material->signature)*1099511628211ull;
-    for(const auto& model:extracted.models) {
-        const bool selected=std::find(document.selection().ids.begin(),document.selection().ids.end(),model.id)!=document.selection().ids.end();
-        if(!selected) if(const auto metadata=assets.findModel(model.assetId))
-            if(!visibleBounds(metadata->bounds,model.world,sceneCamera,std::max(1.0f,frame.viewport.width)/std::max(1.0f,frame.viewport.height)))continue;
-        if(auto prepared=prepared_.prepare(model.assetId,model.world,sceneCamera,renderer.height(),selected,ResourcePriority::Visible,
-            std::max(1.f,frame.viewport.width)/std::max(1.f,frame.viewport.height),model.materialId)) {
-            instances.push_back({model.id,{prepared->asset,model.world},&prepared->textures,prepared->revision,selected,true,&prepared->materials});
-            instances.back().castShadows=model.castShadows;instances.back().receiveShadows=model.receiveShadows;
-            pins->models.push_back(prepared);signature=(signature^prepared->signature)*1099511628211ull;
-        }
-    }
-    for(const auto& id:frame.placementPreviewIds) if(auto prepared=prepared_.prepare(id,math::translation(placement(frame.placementPreviewPosition)),sceneCamera,
-        renderer.height(),false,ResourcePriority::Placement,std::max(1.f,frame.viewport.width)/std::max(1.f,frame.viewport.height))) {
-        instances.push_back({0,{prepared->asset,math::translation(placement(frame.placementPreviewPosition))},&prepared->textures,prepared->revision,false,false,&prepared->materials});
-        instances.back().castShadows=false;instances.back().receiveShadows=false;pins->models.push_back(prepared);
-    }
-    renderer.setExternalResourceSignature(signature);
-    renderer.setAppearance(editor_.appearance());
-    renderer.setGridVisible(editor_.overlays().grid);
-    auto sceneSettings=settings_;sceneSettings.camera=sceneCamera;
-    if (frame.viewport.width > 0 && frame.viewport.height > 0)
-        renderer.render(RenderScene{sceneSettings,{},nullptr,nullptr,instances,extracted.directional,extracted.points,true,pins,particlePackets_,particleMaterials_,
-            pins->shadows->instances,document.documentGeneration(),editor_.pointShadowResolution()});
+    EditorRenderFrameInput renderInput;
+    renderInput.extracted=std::move(extracted);renderInput.settings=settings_;
+    renderInput.sceneCamera=sceneCamera;renderInput.gameCamera=gameCamera;
+    renderInput.sceneWidth=renderer.width();renderInput.sceneHeight=renderer.height();
+    renderInput.gameWidth=game.pixelWidth;renderInput.gameHeight=game.pixelHeight;
+    renderInput.sceneAspect=std::max(1.f,frame.viewport.width)/std::max(1.f,frame.viewport.height);
+    renderInput.sceneVisible=frame.viewport.width>0 && frame.viewport.height>0;renderInput.gameVisible=gameOpen;
+    renderInput.selection=document.selection().ids;renderInput.placementIds=frame.placementPreviewIds;
+    renderInput.placementPosition=placement(frame.placementPreviewPosition);
+    renderInput.particles=std::move(particlePackets);renderInput.particleMaterials=std::move(particleMaterials);
+    renderInput.particlePins=std::move(particlePins);renderInput.worldId=document.documentGeneration();
+    if(renderScene.properties().playerCharacter)renderInput.shadowFocusEntities=renderScene.subtree(renderScene.properties().playerCharacter);
+    renderInput.shadowResolution=editor_.pointShadowResolution();renderInput.materialContext=materialContext;
+    renderInput.appearance=editor_.appearance();renderInput.gridVisible=editor_.overlays().grid;
+    renderer.renderFrame(prepareEditorRenderFrame(std::move(renderInput),assets,prepared_));
+    editor_.drawPlayerLightRig(sceneCamera,renderScene,document.selection().ids);
     if(gameOpen && game.pixelWidth && game.pixelHeight && gameCamera) {
-        SceneSettings gameSettings=settings_;gameSettings.camera=*gameCamera;
-        const auto aspect=static_cast<float>(game.pixelWidth)/game.pixelHeight;
-        std::vector<RenderModelInstance> gameInstances;
-        auto gamePins=std::make_shared<FramePins>();gamePins->particles=pins->particles;gamePins->shadows=pins->shadows;
-        for(const auto& model:extracted.models) {
-            if(const auto metadata=assets.findModel(model.assetId))if(!visibleBounds(metadata->bounds,model.world,*gameCamera,aspect))continue;
-            if(auto prepared=prepared_.prepare(model.assetId,model.world,*gameCamera,game.pixelHeight,false,ResourcePriority::Visible,aspect,model.materialId)) {
-                gameInstances.push_back({model.id,{prepared->asset,model.world},&prepared->textures,prepared->revision,false,true,&prepared->materials});
-                gameInstances.back().castShadows=model.castShadows;gameInstances.back().receiveShadows=model.receiveShadows;
-                gamePins->models.push_back(prepared);
-            }
-        }
-        renderer.renderGame(RenderScene{gameSettings,{},nullptr,nullptr,gameInstances,extracted.directional,extracted.points,true,gamePins,particlePackets_,particleMaterials_,
-            pins->shadows->instances,document.documentGeneration(),editor_.pointShadowResolution()});
         gameInput_.setProjection(*gameCamera,game.pixelWidth,game.pixelHeight);
-        gameView_.drawCollisions(*gameCamera,renderScene,editor_.overlays().collisions);
+        gameView_.drawPlayerLightRig(*gameCamera,renderScene);
+        gameView_.drawCollisions(*gameCamera,renderScene,editor_.overlays().collisions,[this](const std::string& id){return collisions_.query(id);});
         if(play_.playing()) {
             const auto player=renderScene.find(renderScene.properties().playerCharacter);
             if(player && player->character && player->character->showRoute) {
@@ -370,9 +383,12 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
         if(fingerprint!=savedPreviewFingerprint_) { savedPreviewFingerprint_=fingerprint;previews_->requestSceneSave(document.assetId()); }
     } catch(const std::exception& error){status_=error.what();}
     prepared_.endFrame();
-    const auto retained=renderer.modelResidentBytes()+renderer.thumbnailResidentBytes()+renderer.shadowResidentBytes()+renderer.glowResidentBytes()+renderer.environmentResidentBytes();
+    // This target is shared by evictable asset caches. Fixed render targets remain
+    // in total GPU accounting, but cannot be reclaimed by evicting material mips.
+    const auto retained=renderer.modelResidentBytes()+renderer.thumbnailResidentBytes();
     assets.trimTextureCache(retained>=resources_.config().gpuRetentionBytes?0:resources_.config().gpuRetentionBytes-retained);
     if(!prepared_.status().empty())status_+=prepared_.status();
+    if(!renderer.clusteredLightingStatus().empty())status_+=renderer.clusteredLightingStatus();
     if(!sceneParticles.status().empty())status_+=sceneParticles.status();
     if(play_.playing()) {
         status_+=play_.status();

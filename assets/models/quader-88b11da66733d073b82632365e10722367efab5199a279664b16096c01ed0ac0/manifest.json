@@ -1,0 +1,25 @@
+{
+  "dependencies": [
+    {
+      "index": 0,
+      "kind": "buffer",
+      "path": "buffers/0.bin",
+      "source": "Quader reader ABI 6"
+    }
+  ],
+  "document": "model.gltf",
+  "format": "Quader",
+  "materialAssets": [
+    "builtin:material/default",
+    "builtin:material/default"
+  ],
+  "name": "Box_005 collision",
+  "original": "source.gltf",
+  "quader": {
+    "collision": true,
+    "content": "88b11da66733d073b82632365e10722367efab5199a279664b16096c01ed0ac0",
+    "project": "259235be-ca11-4751-a03b-28c7c36529bf",
+    "scene": "387884c9-9fc1-48fd-b51b-76db9f6a8798"
+  },
+  "version": 1
+}

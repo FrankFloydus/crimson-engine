@@ -23,6 +23,7 @@ namespace bgfx { struct CallbackI; }
 
 namespace crimson {
 struct PreparedEnvironment;
+struct PreparedRenderFrame;
 
 struct MaterialTextures {
     bgfx::TextureHandle albedo{BGFX_INVALID_HANDLE};
@@ -44,6 +45,13 @@ struct ModelMaterialTextures {
     bool sourceReady{true};
     bool graphPending{};
     std::string diagnostic;
+    // A coherent coarse mip can be drawn before the requested detail is complete.
+    bool drawable() const noexcept {
+        if(graph)for(const auto& source:graph->sources)if(!bgfx::isValid(graph->textures[source.slot]))return false;
+        for(std::size_t slot=0;slot<handles.size();++slot)
+            if(flags[slot]!=UINT32_MAX&&!bgfx::isValid(handles[slot]))return false;
+        return true;
+    }
 };
 
 // Geometry is a transient preview choice, independent of material authorship.
@@ -66,11 +74,13 @@ struct RenderParticleMaterial {
     std::shared_ptr<const void> pinned; // Material definition and texture leases.
     Vec3 uvScale{1,1,1},uvOffset{},uvRotation{};
     bool triplanar{false},triplanarWorld{false};
+    bool receiveFog{true};
 };
 
 inline constexpr std::size_t MaxDirectionalLights = 4;
-inline constexpr std::size_t MaxPointLights = 16;
+inline constexpr std::size_t MaxPointShadowLights = 16;
 
+struct ModelPose;
 struct RenderModelInstance {
     std::uint64_t entityId{};
     ModelInstance model;
@@ -81,6 +91,9 @@ struct RenderModelInstance {
     MaterialShading shading{MaterialShading::StandardPbr};
     MaterialBlend blend{MaterialBlend::Opaque};
     bool castShadows{true},receiveShadows{true};
+    SurfaceLightingScopes lightingScopes{};
+    std::uint32_t lightingCategory{lighting_scope::World};
+    std::shared_ptr<const ModelPose> pose;
 };
 
 struct PickRequest {
@@ -98,7 +111,7 @@ struct ThumbnailResult {
     std::uint64_t signature{};
     DecodedImage image;
 };
-enum class RendererProgram { Sphere, Model, Picking, Present, Grid, Encode, Particle, Sky, PointShadow, GlowExtract, GlowBlur };
+enum class RendererProgram { Sphere, Model, Picking, Present, Grid, Encode, Particle, Sky, PointShadow, GlowExtract, GlowBlur, DirectionalShadow };
 struct RendererShaderPair { RendererProgram program; std::vector<std::uint8_t> vertex,fragment; };
 
 struct RenderScene {
@@ -118,6 +131,21 @@ struct RenderScene {
     std::span<const RenderModelInstance> shadowInstances;
     std::uint64_t shadowWorldId{};
     std::uint16_t shadowResolution{1024};
+    MaterialEvaluationContext materialContext{};
+    // The reference path evaluates every local light from the same GPU records.
+    // Used by hidden correctness/performance checks; ordinary views use clusters.
+    LocalLightMode localLightMode{LocalLightMode::Clustered};
+    // The designated player's model subtree; copied by the prepared world.
+    // Only Game separates these casters into its close directional map.
+    std::span<const std::uint64_t> shadowFocusEntities;
+    Aabb shadowFocusBounds{};
+    std::optional<Vec3> shadowPriorityOrigin;
+    // Frozen world metadata, including non-casting receivers. Empty direct
+    // submissions derive bounds from their camera-local instances instead.
+    std::span<const Aabb> shadowReceiverBounds;
+    PlayerRevealSource playerReveal{};
+    std::array<CharacterLight,2> characterLights{};
+    CharacterShadowSource characterShadow{};
 };
 
 // Owns the bgfx lifetime. Destroy ImGui's GPU resources before this object.
@@ -134,6 +162,9 @@ public:
     // frame, but never changes editor picking, overlays or viewport targets.
     void resizeGameViewport(std::uint32_t width,std::uint32_t height);
     void renderGame(const RenderScene&);
+    // Consumes one frozen active-world frame. Retains its prepared versions and
+    // value storage through the same queued-frame retirement as material leases.
+    void renderFrame(std::shared_ptr<const PreparedRenderFrame>);
     bgfx::TextureHandle gameViewportTexture() const noexcept;
     void releaseGameViewport();
     const ParticleRenderStats& gameParticleStats() const noexcept;
@@ -142,12 +173,12 @@ public:
     void resizeParticlePreview(std::uint32_t width, std::uint32_t height);
     void resizeMaterialPreview(std::uint32_t width,std::uint32_t height);
     void renderMaterialPreview(const SceneSettings&,const MaterialAsset&,const ModelMaterialTextures&,
-        MaterialPreviewMesh,const Mat4& objectTransform,bool showEnvironment,std::shared_ptr<const void> pins={});
+        MaterialPreviewMesh,const Mat4& objectTransform,bool showEnvironment,std::shared_ptr<const void> pins={},MaterialEvaluationContext context={});
     bgfx::TextureHandle materialPreviewTexture() const noexcept;
     void releaseMaterialPreview();
     bool publishMaterialPreviewEnvironment(const PreparedEnvironment&);
     void renderParticlePreview(const SceneSettings&, std::span<const RenderParticle>,
-                               std::span<const RenderParticleMaterial> = {});
+                               std::span<const RenderParticleMaterial> = {},MaterialEvaluationContext context={});
     bgfx::TextureHandle particlePreviewTexture() const noexcept;
     void releaseParticlePreview();
     const ParticleRenderStats& particleStats() const noexcept;
@@ -164,6 +195,8 @@ public:
     bool publishThumbnailEnvironment(const PreparedEnvironment&);
     const std::string& environmentStatus() const;
     std::size_t environmentResidentBytes() const;
+    const ClusteredLightingStats& clusteredLightingStats() const;
+    const std::string& clusteredLightingStatus() const;
     // Transactional GPU preparation outside frame submission. Failed preparation
     // preserves cached assets. Instances with the same ID share one GPU bundle.
     bool prepareModel(const ModelAsset& model);
@@ -205,7 +238,9 @@ public:
     void trimThumbnailCache(std::size_t targetBytes);
     const std::string& thumbnailStatus() const;
     // Every candidate is created before any live program is replaced.
-    bool reloadPrograms(std::span<const RendererShaderPair>,std::span<const std::uint8_t> proceduralCompute={});
+    bool reloadPrograms(std::span<const RendererShaderPair>,std::span<const std::uint8_t> proceduralCompute={},
+        std::span<const std::uint8_t> clusterCompute={},std::span<const std::uint8_t> ambientEvaluate={},
+        std::span<const std::uint8_t> ambientPublish={},std::span<const std::uint8_t> deformationCompute={});
     const std::string& shaderStatus() const;
     std::uint64_t shaderSignature() const;
     bgfx::TextureHandle viewportTexture() const noexcept;

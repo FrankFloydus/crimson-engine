@@ -3,11 +3,24 @@
 #include "math/Math.h"
 #include "ToneMapping.h"
 #include "Glow.h"
+#include "LightingSettings.h"
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
 namespace crimson {
+
+// Local lights are stored in the Forward+ data atlas rather than uniform arrays.
+// Shadow residency is a separate, smaller budget (ShadowLightSelection.h).
+inline constexpr std::size_t MaximumClusteredPointLights = 4096;
+enum class LocalLightMode { Clustered, AllLightsReference };
+struct ClusteredLightingStats {
+    std::uint32_t totalLights{},activeLights{},clusterCount{},wordCount{};
+    std::size_t allocatedBytes{};
+    double buildCpuMs{};
+    bool overflow{};
+};
 
 struct ViewportRegion;
 
@@ -34,6 +47,13 @@ struct EnvironmentBackground {
     bool show{false},overrideColor{false};
     Vec3 color{21.f/255.f,21.f/255.f,21.f/255.f}; // Display-referred, independent of exposure.
     bool operator==(const EnvironmentBackground&) const = default;
+};
+enum class AmbientLightSource { Disabled, Color, Sky };
+struct AmbientLightSettings {
+    AmbientLightSource source{AmbientLightSource::Sky};
+    Vec3 color{0,0,0}; // Authored sRGB; converted to linear before lighting.
+    float skyContribution{1.f},energy{1.f};
+    bool operator==(const AmbientLightSettings&) const = default;
 };
 enum class FogMode { Exponential, Depth };
 struct FogSettings {
@@ -64,6 +84,8 @@ struct EnvironmentSettings {
     EnvironmentBackground background{};
     FogSettings fog{};
     bool debanding{false};
+    AmbientVisibilitySettings ambientVisibility{};
+    AmbientLightSettings ambientLight{};
     bool operator==(const EnvironmentSettings&) const = default;
 };
 
@@ -72,6 +94,12 @@ struct DirectionalLight {
     Vec3 color{1.0f, 0.96f, 0.9f};
     float intensity{2.0f};
     bool enabled{true};
+    std::uint64_t entityId{};
+    bool castShadows{false}; // Legacy preview values do not acquire shadows implicitly.
+    float shadowDistance{100.f};
+    float shadowDepthBias{.005f}; // World-space meters.
+    float shadowNormalBias{1.f}; // Shadow-map texels.
+    LightRoles roles{};
 };
 
 struct PointLight {
@@ -84,6 +112,13 @@ struct PointLight {
     bool castShadows{false};
     float shadowDepthBias{.005f}; // World-space meters.
     float shadowNormalBias{1.f}; // Shadow-map texels.
+    LightRoles roles{lighting_scope::All,lighting_scope::All,lighting_scope::All,true,1.f};
+    // Transient rendering response. Ordinary authored scene lights retain the
+    // original punctual falloff and full specular contribution by default.
+    float nearFalloffRadius{0},specularStrength{1};
+    float rangeFalloffExponent{4},edgeSoftness{1};
+    float sourceRadius{0}; // Emitter size in meters: shadow penumbra and specular extent.
+    float attenuation{2}; // Distance decay exponent, independent of the finite range window.
     float inverseRadiusSquared() const;
 };
 
@@ -121,6 +156,12 @@ struct ViewportRegion {
     std::uint32_t windowId{}; // SDL platform-window owner; zero retains the main-window default.
 };
 
+struct ShadowCamera {
+    Camera camera; float aspect{1.f};
+    bool gameplay{};
+    Aabb focusBounds{};
+};
+
 struct SceneSettings {
     Material material{};
     DirectionalLight directional{};
@@ -148,27 +189,43 @@ struct PointShadowStats {
     std::uint16_t resolution{},capacity{};
     std::size_t allocatedBytes{};
     std::uint64_t worldId{};
+    std::uint32_t directionalLights{},directionalRendered{},directionalCascades{},directionalCacheHits{};
+    std::uint32_t pointDeferred{},pointCriticalDeferred{},directionalWorldProjections{},characterProjections{};
+    std::uint32_t dedicatedCharacterUpdates{},dedicatedCharacterCacheHits{};
 };
 // Numeric order is execution order: the pinned D3D11 blit backend must not
 // receive a nonidentity view remapping. Both independent shadow worlds reserve
 // all six faces for all sixteen point lights before their dependent draws.
 inline constexpr uint16_t EnvironmentComputeView = 0;
 inline constexpr uint16_t PointShadowView = 1;
-inline constexpr uint16_t SceneView = 97;
-inline constexpr uint16_t PresentView = 101;
-inline constexpr uint16_t GridView = 102;
-inline constexpr uint16_t EncodeView = 103;
-inline constexpr uint16_t ParticlePreviewView = 104;
-inline constexpr uint16_t PickView = 112;
-inline constexpr uint16_t PickReadView = 113;
-inline constexpr uint16_t ThumbnailPointShadowView = 114;
-inline constexpr uint16_t ThumbnailSceneView = 210;
-inline constexpr uint16_t ThumbnailReadView = 214;
-inline constexpr uint16_t MaterialPreviewView = 215;
-inline constexpr uint16_t GameSceneView = 222;
-inline constexpr uint16_t GamePresentView = 226;
-inline constexpr uint16_t GameEncodeView = 227;
-inline constexpr uint16_t ToolsView = 228;
-inline constexpr uint16_t FirstPlatformView = 229;
+inline constexpr uint16_t DirectionalShadowView = 97;
+inline constexpr uint16_t GameDirectionalShadowView = 101;
+inline constexpr uint16_t CharacterShadowView = 105;
+inline constexpr uint16_t SceneDepthPrepassView = 106;
+inline constexpr uint16_t SceneAmbientView = 107;
+inline constexpr uint16_t SceneView = 108;
+inline constexpr uint16_t PresentView = 112;
+inline constexpr uint16_t GridView = 113;
+inline constexpr uint16_t EncodeView = 114;
+inline constexpr uint16_t ParticlePreviewView = 115;
+inline constexpr uint16_t PickView = 122;
+inline constexpr uint16_t PickReadView = 123;
+inline constexpr uint16_t ThumbnailPointShadowView = 124;
+inline constexpr uint16_t ThumbnailDirectionalShadowView = 220;
+inline constexpr uint16_t ThumbnailCharacterShadowView = 224;
+inline constexpr uint16_t ThumbnailDepthPrepassView = 225;
+inline constexpr uint16_t ThumbnailAmbientView = 226;
+inline constexpr uint16_t ThumbnailSceneView = 227;
+inline constexpr uint16_t ThumbnailReadView = 231;
+inline constexpr uint16_t MaterialPreviewView = 232;
+inline constexpr uint16_t GameDepthPrepassView = 239;
+inline constexpr uint16_t GameAmbientView = 240;
+inline constexpr uint16_t GameSceneView = 241;
+inline constexpr uint16_t GamePresentView = 245;
+inline constexpr uint16_t GameEncodeView = 246;
+inline constexpr uint16_t ToolsView = 247;
+// Eight native platform-window views remain in a 256-view backend.
+// Character shadows precede every dependent draw in their own shadow world.
+inline constexpr uint16_t FirstPlatformView = 248;
 
 } // namespace crimson

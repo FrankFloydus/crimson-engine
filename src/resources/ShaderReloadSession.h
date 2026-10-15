@@ -1,6 +1,7 @@
 #pragma once
 #include "ShaderCompiler.h"
 #include "ResourceManager.h"
+#include "ShaderSourceBaseline.h"
 #include <span>
 #include <unordered_map>
 
@@ -11,7 +12,8 @@ class ImGuiBgfx;
 // Call changed() and pump() before constructing ImGui/render frame snapshots.
 class ShaderReloadSession final {
 public:
-    ShaderReloadSession(ResourceManager&,Renderer&,ImGuiBgfx&,ShaderCompileConfig);
+    ShaderReloadSession(ResourceManager&,Renderer&,ImGuiBgfx&,ShaderCompileConfig,
+        std::span<const ShaderSourceBaselineEntry> embeddedBaseline={});
     void changed(std::span<const std::filesystem::path> paths);
     void pump();
     const std::string& status() const { return status_; }

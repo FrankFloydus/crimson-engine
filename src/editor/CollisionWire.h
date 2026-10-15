@@ -101,11 +101,11 @@ inline ProjectedCollisionFace projectClippedTriangle(const Vec3& a,const Vec3& b
 // use contour lines; their fill tessellation must not become a triangle cage.
 struct CollisionDebugMesh {
     std::vector<Vec3> vertices;
-    std::vector<std::array<std::uint16_t,3>> triangles;
+    std::vector<std::array<std::uint32_t,3>> triangles;
     std::vector<Vec3> wireVertices;
-    std::vector<std::array<std::uint16_t,2>> edges;
+    std::vector<std::array<std::uint32_t,2>> edges;
     void finishEdges() {
-        std::set<std::array<std::uint16_t,2>> unique;
+        std::set<std::array<std::uint32_t,2>> unique;
         for(const auto& triangle:triangles)for(unsigned i=0;i<3;++i) {
             const auto a=triangle[i],b=triangle[(i+1)%3];
             unique.insert({std::min(a,b),std::max(a,b)});
@@ -117,7 +117,7 @@ inline const CollisionDebugMesh& boxCollisionMesh() {
     static const auto mesh=[] {
         CollisionDebugMesh result;
         for(unsigned i=0;i<8;++i)result.vertices.emplace_back(i&1?.5f:-.5f,i&2?.5f:-.5f,i&4?.5f:-.5f);
-        constexpr std::array<std::array<std::uint16_t,4>,6> faces{{
+        constexpr std::array<std::array<std::uint32_t,4>,6> faces{{
             {0,2,3,1},{4,5,7,6},{0,4,6,2},{1,3,7,5},{0,1,5,4},{2,6,7,3}}};
         for(const auto& face:faces) {
             result.triangles.push_back({face[0],face[1],face[2]});
@@ -149,9 +149,9 @@ inline const CollisionDebugMesh& capsuleCollisionMesh(float height,float radius)
                 result.vertices.emplace_back(ringRadius*std::cos(angle),y,ringRadius*std::sin(angle));
             }
         }
-        const auto top=static_cast<std::uint16_t>(result.vertices.size());result.vertices.emplace_back(0,3,0);
+        const auto top=static_cast<std::uint32_t>(result.vertices.size());result.vertices.emplace_back(0,3,0);
         const auto index=[](unsigned row,unsigned segment) {
-            return static_cast<std::uint16_t>(1+row*radial+segment%radial);
+            return static_cast<std::uint32_t>(1+row*radial+segment%radial);
         };
         const auto ringCount=static_cast<unsigned>((result.vertices.size()-2)/radial);
         for(unsigned segment=0;segment<radial;++segment) {
@@ -177,9 +177,9 @@ inline const CollisionDebugMesh& capsuleCollisionMesh(float height,float radius)
             }
         };
         const auto line=[&](Vec3 a,Vec3 b) {
-            const auto first=static_cast<std::uint16_t>(result.wireVertices.size());
+            const auto first=static_cast<std::uint32_t>(result.wireVertices.size());
             result.wireVertices.push_back(a);result.wireVertices.push_back(b);
-            result.edges.push_back({first,static_cast<std::uint16_t>(first+1)});
+            result.edges.push_back({first,static_cast<std::uint32_t>(first+1)});
         };
         for(unsigned i=0;i<segments;++i) {
             const auto a=circle(i),b=circle(i+1);

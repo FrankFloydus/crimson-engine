@@ -3,6 +3,8 @@
 #include "ViewportSelection.h"
 #include "CollisionWire.h"
 #include "CollisionOverlay.h"
+#include "MeshCollisionOverlay.h"
+#include "PlayerLightRigOverlay.h"
 #include "assets/AssetLibrary.h"
 #include "crimson-renderer/ImGuiBgfx.h"
 #include "scene/SceneExtraction.h"
@@ -15,11 +17,11 @@
 namespace crimson {
 namespace {
 constexpr ImU32 WireColor=IM_COL32(255,166,26,255);
-Aabb boundsOf(const SceneDocument& document, const AssetLibrary& assets,const ParticleBoundsQuery& particles = {}) {
+Aabb boundsOf(const SceneDocument& document, const AssetLibrary& assets,const ParticleBoundsQuery& particles = {},const CollisionMeshQuery& meshes = {}) {
     return selectionBounds(document.scene(), document.selection().ids, [&](const std::string& id)->std::optional<Aabb> {
         const auto model = assets.findModel(id);
         return model ? std::optional<Aabb>{model->bounds} : std::nullopt;
-    },particles);
+    },particles,meshes);
 }
 bool selected(const SceneDocument& document, EntityId id) {
     const auto& ids = document.selection().ids;
@@ -32,7 +34,7 @@ float segmentDistance(ImVec2 point, ImVec2 start, ImVec2 end) {
     return std::hypot(point.x-start.x-t*x,point.y-start.y-t*y);
 }
 float gameplayMarker(ImDrawList& draw,const EntityRecord& record,const Mat4& world,const Mat4& vp,
-                     const Vec4& viewport,ImU32 color,ImVec2 mouse) {
+                     const Vec4& viewport,ImU32 color,ImVec2 mouse,const CollisionMeshQuery& meshes = {}) {
     float distance=1e9f;
     const auto line=[&](Vec3 a,Vec3 b) {
         const auto projected=projectClippedSegment(math::transformPoint(world,a),math::transformPoint(world,b),vp,viewport);
@@ -41,6 +43,8 @@ float gameplayMarker(ImDrawList& draw,const EntityRecord& record,const Mat4& wor
         draw.AddLine(start,end,color,1.5f);distance=std::min(distance,segmentDistance(mouse,start,end));
     };
     const auto collisionLine=[&](ImVec2 start,ImVec2 end) { distance=std::min(distance,segmentDistance(mouse,start,end)); };
+    if(record.meshCollider && meshes)if(const auto source=meshes(record.meshCollider->source.id);source.mesh)
+        drawCollisionOverlay(draw,meshCollisionDebug(source.mesh),[](const Vec3& point){return point;},world,vp,viewport,record.meshCollider->collisionColor,collisionLine);
     if(record.collider)drawCollisionOverlay(draw,boxCollisionMesh(),[&](const Vec3& point) {
         const auto& size=record.collider->size;return Vec3{point[0]*size[0],point[1]*size[1],point[2]*size[2]};
     },world,vp,viewport,record.collider->collisionColor,collisionLine);
@@ -111,13 +115,35 @@ void SceneViewport::cancel(SceneDocument& document, Renderer& renderer) {
     pickIntent_=false;
 }
 void SceneViewport::focus(Camera& camera, const SceneDocument& document, const AssetLibrary& assets, float aspect) {
-    const auto bounds = boundsOf(document,assets,particleBounds_);
+    const auto bounds = boundsOf(document,assets,particleBounds_,collisionMeshes_);
     if (bounds.valid) camera.frameBounds(bounds.minimum,bounds.maximum,aspect);
+}
+void SceneViewport::drawPlayerLightRig(const Camera& camera,const Scene& scene,std::span<const EntityId> selection) {
+    if(!imageDrawList_ || imageRegion_.width<=0 || imageRegion_.height<=0)return;
+    const auto player=scene.find(scene.properties().playerCharacter);
+    if(!player || !player->character || (!player->character->lightRig.enabled&&!player->character->darknessReveal.enabled))return;
+    const auto playerSelected=[&] {
+        for(const auto id:selection) {
+            for(auto current=id;current;) {
+                if(current==player->id)return true;
+                const auto record=scene.find(current);
+                current=record?record->parent:NoEntity;
+            }
+        }
+        return false;
+    };
+    if(!player->character->lightRig.showGizmos && !playerSelected())return;
+    const auto world=scene.worldTransform(player->id);if(!world)return;
+    const auto vp=camera.projectionMatrix(imageRegion_.width/imageRegion_.height,ClipDepth::NegativeOneToOne)*camera.viewMatrix();
+    drawPlayerLightRigOverlay(*imageDrawList_,player->character->lightRig,player->character->darknessReveal,
+        math::transformPoint(*world,{}),player->character->height,vp,
+        {imageRegion_.x,imageRegion_.y,imageRegion_.width,imageRegion_.height},ClipDepth::NegativeOneToOne);
 }
 EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLibrary& assets,
                                 Renderer& renderer, bool navigationActive, uint32_t bgfxFrame, bool keyboardBlocked,
                                 bool showCollisions,bool showTransformGizmo) {
     EditorFrame frame;
+    imageDrawList_=nullptr;
     ImGuizmo::BeginFrame();
     // Keep the handles, without floating operation/value text during a drag.
     auto& gizmoStyle=ImGuizmo::GetStyle();
@@ -152,6 +178,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             frame.viewport = {origin.x,origin.y,size.x,size.y,imageHovered,
                 ImGui::GetIO().WantTextInput || ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup)};
             frame.viewport.windowId=static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(host->PlatformHandle));
+            imageDrawList_=ImGui::GetWindowDrawList();imageRegion_=frame.viewport;
             acceptViewportModelDrop(frame);
             const bool editorFocus = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
             if (!keyboardBlocked && !blockKeys && !document.transactionActive() && (imageHovered || editorFocus)) {
@@ -197,7 +224,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             if (showTransformGizmo && !waitForRelease_ && !document.selection().ids.empty() && !navigationActive && (!document.transactionActive() || dragging_)) {
                 if (!dragging_) {
                     const auto top = document.scene().topmost(document.selection().ids);
-                    const auto bounds = boundsOf(document,assets);
+                    const auto bounds = boundsOf(document,assets,{},collisionMeshes_);
                     if (document.selection().ids.size() == 1) {
                         const auto world = document.scene().worldTransform(top.front()).value_or(Mat4{});
                         proxy_ = math::translation(math::transformPoint(world,{0,0,0}));
@@ -245,7 +272,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             // heading and the light submitted later in the frame agree exactly.
             EntityId iconHit{}; float iconDistance = 15.0f;
             for (const auto& record : document.scene().records()) {
-                if (!record.directional && !record.point && !record.particle && !record.collider && !record.character && !record.camera && (record.model || record.parent)) continue;
+                if (!record.directional && !record.point && !record.particle && !record.collider && !record.meshCollider && !record.character && !record.camera && (record.model || record.parent)) continue;
                 const auto world = document.scene().worldTransform(record.id);
                 if (!world) continue;
                 const auto position = math::transformPoint(*world,{0,0,0});
@@ -255,11 +282,11 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                 const auto color = WireColor;
                 float distance = centerVisible?std::hypot(center.x-ImGui::GetIO().MousePos.x,center.y-ImGui::GetIO().MousePos.y):1e9f;
                 if(record.point && selected(document,record.id))pointLightRange(*draw,position,record.point->radius,vp,viewport,color);
-                if (record.collider || record.character) {
+                if (record.collider || record.character || record.meshCollider) {
                     if(!showCollisions)continue;
-                    const auto& rgba=record.character ? record.character->collisionColor : record.collider->collisionColor;
+                    const auto& rgba=record.character ? record.character->collisionColor : record.collider?record.collider->collisionColor:record.meshCollider->collisionColor;
                     const auto collisionColor=ImGui::ColorConvertFloat4ToU32({rgba[0],rgba[1],rgba[2],rgba[3]});
-                    distance=std::min(distance,gameplayMarker(*draw,record,*world,vp,viewport,collisionColor,ImGui::GetIO().MousePos));
+                    distance=std::min(distance,gameplayMarker(*draw,record,*world,vp,viewport,collisionColor,ImGui::GetIO().MousePos,collisionMeshes_));
                 }
                 else if(record.camera)distance=std::min(distance,gameplayMarker(*draw,record,*world,vp,viewport,color,ImGui::GetIO().MousePos));
                 else if(!centerVisible)continue;
@@ -277,7 +304,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             // Selection outlines stay above collision wires, including a Box
             // Collider whose edges coincide exactly with its selected parent.
             // Authored bounds also keep particle children from animating this box.
-            const auto selectionBounds=boundsOf(document,assets);
+            const auto selectionBounds=boundsOf(document,assets,{},collisionMeshes_);
             const auto& selection=document.selection().ids;
             const bool pointLightsOnly=!selection.empty() && std::all_of(selection.begin(),selection.end(),[&](EntityId id) {
                 const auto entity=document.scene().find(id);return entity && entity->point.has_value();
@@ -301,7 +328,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                     const auto mouse=ImGui::GetIO().MousePos;
                     pickCollisionFallback_=NoEntity;
                     if(showCollisions)if(const auto ray=math::rayFromScreen(mouse.x,mouse.y,vp,viewport,ClipDepth::NegativeOneToOne))
-                        pickCollisionFallback_=pickCollisionShape(document.scene(),*ray,camera.farPlane).value_or(NoEntity);
+                        pickCollisionFallback_=pickCollisionShape(document.scene(),*ray,camera.farPlane,collisionMeshes_).value_or(NoEntity);
                     pickX_=static_cast<uint32_t>(std::clamp((mouse.x-origin.x)/size.x*renderer.width(),0.0f,static_cast<float>(renderer.width()-1)));
                     pickY_=static_cast<uint32_t>(std::clamp((mouse.y-origin.y)/size.y*renderer.height(),0.0f,static_cast<float>(renderer.height()-1)));
                     intentGeneration_=document.scene().generation(); intentRevision_=document.scene().revision(); intentSerial_=++serial_;

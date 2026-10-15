@@ -1,5 +1,6 @@
 #pragma once
 #include "scene/Scene.h"
+#include "StaticCollision.h"
 #include <memory>
 #include <span>
 #include <string>
@@ -17,15 +18,16 @@ public:
     ~PhysicsWorld();
     PhysicsWorld(const PhysicsWorld&)=delete;
     PhysicsWorld& operator=(const PhysicsWorld&)=delete;
-    void reconcile(const Scene&,std::span<const EntityId> transformLocks = {});
+    void reconcile(const Scene&,std::span<const EntityId> transformLocks = {},std::span<const PhysicsMeshCollider> meshes = {});
     std::vector<ScenePoseUpdate> step(const Scene&,EntityId controlled,const Vec3& desiredVelocity,
-                                    float seconds,std::span<const EntityId> transformLocks = {});
+                                    float seconds,std::span<const EntityId> transformLocks = {},std::span<const PhysicsMeshCollider> meshes = {});
     const std::string& status() const;
     std::size_t colliderCount() const;
     std::size_t characterCount() const;
     // Only accepted static collision geometry is published. Actor poses and
     // unrelated scene edits do not invalidate derived navigation geometry.
     std::vector<PhysicsBox> staticBoxes() const;
+    std::vector<PhysicsStaticMesh> staticMeshes() const;
     std::uint64_t geometryRevision() const;
     std::optional<Vec3> characterPosition(EntityId) const;
     bool grounded(EntityId) const;

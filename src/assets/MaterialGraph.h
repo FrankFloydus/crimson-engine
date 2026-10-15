@@ -10,11 +10,12 @@ namespace crimson {
 
 enum class MaterialShading { StandardPbr, Unlit };
 enum class MaterialBlend { Opaque, Mask, Alpha, Additive };
-enum class MaterialNodeKind { Output, UV, Texture2D, Scalar, Color, Multiply, Vector2, ParticleColor, RadialGradient, Saturate };
+enum class MaterialNodeKind { Output, UV, Texture2D, Scalar, Color, Multiply, Vector2, ParticleColor, RadialGradient, Saturate,
+    Add, Lerp, Panner, Time, Power };
 enum class MaterialValueType { Scalar, Color, Mapping, Normal, Vector2 };
 enum class MaterialPin { Value, RGB, R, G, B, A, Normal, UV, Left, Right,
     BaseColor, Roughness, Metallic, Occlusion, Emission, Opacity,
-    Specular, OpacityMask, XY, X, Y, ScaleXY, OffsetXY };
+    Specular, OpacityMask, XY, X, Y, ScaleXY, OffsetXY, Alpha, Time, Speed };
 enum class MaterialUvMode { UV0, UV1, LocalTriplanar, WorldTriplanar };
 enum class MaterialTextureRole { Color, Data, Normal };
 using MaterialNodeId = std::uint64_t;
@@ -37,6 +38,21 @@ struct MaterialUvMapping {
     bool scaleLinked{true};
     bool operator==(const MaterialUvMapping&) const = default;
 };
+// Transient seconds supplied by the submitting world/preview. Never serialized
+// or included in authored graph hashes; a default context is deterministic t=0.
+struct MaterialEvaluationContext {
+    double gameSeconds{}, realSeconds{};
+    bool operator==(const MaterialEvaluationContext&) const = default;
+};
+struct MaterialTimeNode {
+    bool ignorePause{}, periodEnabled{};
+    float period{};
+};
+struct MaterialPannerNode {
+    Vec2 speed{};
+    bool fractionalPart{};
+    MaterialUvMode coordinate{MaterialUvMode::UV0};
+};
 struct MaterialTextureNode {
     AssetRef<DecodedImage> image;
     MaterialTextureRole role{MaterialTextureRole::Color};
@@ -50,7 +66,7 @@ struct MaterialOutputNode {
     float roughness{1}, metallic{}, occlusion{1}, opacity{1};
     float specular{.5f}, opacityMask{1};
     float occlusionStrength{1}, alphaCutoff{.5f};
-    bool doubleSided{};
+    bool doubleSided{}, receiveFog{true};
 };
 struct MaterialNode {
     MaterialNodeId id{};
@@ -63,7 +79,10 @@ struct MaterialNode {
     Vec2 vector2{};
     MaterialUvMapping uv;
     MaterialTextureNode texture;
-    MaterialValue left, right; // Unconnected Multiply defaults.
+    MaterialValue left, right; // Unconnected arithmetic defaults.
+    MaterialValue alpha{MaterialValueType::Scalar,{.5f,.5f,.5f,.5f}};
+    MaterialTimeNode time;
+    MaterialPannerNode panner;
     MaterialOutputNode output;
 };
 struct MaterialLink {
@@ -105,13 +124,14 @@ std::vector<MaterialPinDefinition> materialNodeInputs(const MaterialGraph&,const
 std::vector<MaterialPinDefinition> materialNodeOutputs(const MaterialGraph&,const MaterialNode&);
 MaterialValueType materialOutputType(const MaterialGraph&,MaterialNodeId,MaterialPin);
 MaterialValue materialInputDefault(const MaterialNode&,MaterialPin);
-// Uniform expressions consist of authored numeric constants, Multiply and Saturate.
+// Uniform arithmetic includes frame-uniform Time, but never fragment inputs.
 // Texture samples cannot drive mapping transforms: normal reconstruction and
 // texture demand rely on one coherent mapping per texture, not fragment warps.
 bool materialExpressionUniform(const MaterialGraph&,MaterialNodeId,MaterialPin);
-MaterialValue evaluateMaterialUniform(const MaterialGraph&,MaterialNodeId,MaterialPin);
-MaterialUvMapping resolveMaterialUvMapping(const MaterialGraph&,MaterialNodeId uvNode);
-MaterialUvMapping materialTextureMapping(const MaterialGraph&,MaterialNodeId textureNode);
+bool materialExpressionTimeDependent(const MaterialGraph&,MaterialNodeId,MaterialPin);
+MaterialValue evaluateMaterialUniform(const MaterialGraph&,MaterialNodeId,MaterialPin,MaterialEvaluationContext = {});
+MaterialUvMapping resolveMaterialUvMapping(const MaterialGraph&,MaterialNodeId mappingNode,MaterialEvaluationContext = {});
+MaterialUvMapping materialTextureMapping(const MaterialGraph&,MaterialNodeId textureNode,MaterialEvaluationContext = {});
 // Compatibility boundary only: materializes the former implicit particle
 // RGB/alpha modulation and optional untextured soft-disc into visible nodes.
 // Retains all original node/link identities; operates atomically.
@@ -129,6 +149,8 @@ void rewriteMaterialGraphTextures(MaterialGraph&,
     const std::function<std::string(const std::string&,MaterialTextureRole)>&);
 std::uint64_t materialGraphTopologyHash(const MaterialGraph&,MaterialShading,MaterialBlend);
 std::uint64_t materialGraphValueHash(const MaterialGraph&,MaterialShading,MaterialBlend);
+// Runtime node previews may target a branch disconnected from Output.
+std::uint64_t materialGraphValueHash(const MaterialGraph&,MaterialShading,MaterialBlend,MaterialNodeId root);
 std::uint64_t materialGraphLayoutHash(const MaterialGraph&);
 // JSON remains an implementation detail at the persistence boundary.
 std::string serializeMaterialGraph(const MaterialGraph&);

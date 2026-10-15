@@ -100,7 +100,7 @@ void vectorClipboardAndConnectedCreation() {
     const MaterialGraphEndpoint scale{uv,MaterialPin::ScaleXY,true};const auto choices=materialGraphNodeChoices(graph,scale);
     const auto vector=std::find_if(choices.begin(),choices.end(),[](const auto& c){return c.kind==MaterialNodeKind::Vector2;});
     const auto multiply=std::find_if(choices.begin(),choices.end(),[](const auto& c){return c.kind==MaterialNodeKind::Multiply;});
-    require(vector!=choices.end()&&vector->pin==MaterialPin::XY&&multiply!=choices.end()&&choices.size()==2,"UV transform did not offer exactly uniform Vector2 source choices.");
+    require(vector!=choices.end()&&vector->pin==MaterialPin::XY&&multiply!=choices.end()&&choices.size()==5,"UV transform did not offer uniform Vector2 constants and arithmetic.");
     const auto source=addConnectedMaterialGraphNode(graph,scale,*vector,{10,20});findMaterialNode(graph,source)->vector2={-2,4};
     const auto product=addConnectedMaterialGraphNode(graph,scale,*multiply,{50,20});
     connectMaterialNodes(graph,source,MaterialPin::XY,product,MaterialPin::Left);
@@ -112,8 +112,9 @@ void vectorClipboardAndConnectedCreation() {
         materialInputLink(graph,pastedUv,MaterialPin::ScaleXY)->fromNode==pastedProduct,
         "Copying a Vector2 partial chain lost fallback type or internal transform connection.");
     const auto outgoing=materialGraphNodeChoices(graph,{source,MaterialPin::XY,false});
-    require(outgoing.size()==2&&std::any_of(outgoing.begin(),outgoing.end(),[](const auto& c){return c.kind==MaterialNodeKind::UV&&c.pin==MaterialPin::ScaleXY;}),
-        "Vector2 output did not offer UV transform and Multiply destinations.");
+    require(outgoing.size()==6&&std::any_of(outgoing.begin(),outgoing.end(),[](const auto& c){return c.kind==MaterialNodeKind::UV&&c.pin==MaterialPin::ScaleXY;})&&
+        std::any_of(outgoing.begin(),outgoing.end(),[](const auto& c){return c.kind==MaterialNodeKind::Panner&&c.pin==MaterialPin::Speed;}),
+        "Vector2 output did not offer uniform mapping and arithmetic destinations.");
 }
 void malformedAndBoundedPasteIsAtomic() {
     auto source=graphWithOutput();const auto scalar=addMaterialNode(source,MaterialNodeKind::Scalar).id;const std::array selected{scalar};
@@ -156,12 +157,12 @@ void compatibleCreationAndReplacement() {
     const auto texture=addConnectedMaterialGraphNode(graph,roughness,roughTexture,{240,200});
     require(materialInputLink(graph,output,MaterialPin::Roughness)->fromNode==texture&&graph.links.size()==1&&findMaterialNode(graph,scalar),"Connected creation failed to replace exactly one occupied input.");
     const MaterialGraphEndpoint mapping{texture,MaterialPin::UV,true};const auto uvChoices=materialGraphNodeChoices(graph,mapping);
-    require(uvChoices.size()==1&&uvChoices.front().kind==MaterialNodeKind::UV,"UV input offered incompatible node kinds.");
+    require(uvChoices.size()==2&&uvChoices.front().kind==MaterialNodeKind::UV&&uvChoices.back().kind==MaterialNodeKind::Panner,"UV input offered incompatible node kinds.");
     const auto uv=addConnectedMaterialGraphNode(graph,mapping,uvChoices.front(),{});
     const MaterialGraphEndpoint uvOutput{uv,MaterialPin::UV,false};const auto textureChoices=materialGraphNodeChoices(graph,uvOutput);
-    require(textureChoices.size()==2&&textureChoices.front().kind==MaterialNodeKind::Texture2D&&textureChoices.back().kind==MaterialNodeKind::RadialGradient,"UV output offered incompatible node kinds.");
+    require(textureChoices.size()==3&&textureChoices.front().kind==MaterialNodeKind::Texture2D&&textureChoices.back().kind==MaterialNodeKind::Panner,"UV output offered incompatible node kinds.");
     const auto secondTexture=addConnectedMaterialGraphNode(graph,uvOutput,textureChoices.front(),{});
-    const auto gradient=addConnectedMaterialGraphNode(graph,uvOutput,textureChoices.back(),{});
+    const auto gradient=addConnectedMaterialGraphNode(graph,uvOutput,choiceFor(graph,uvOutput,MaterialNodeKind::RadialGradient),{});
     require(materialInputLink(graph,gradient,MaterialPin::UV)->fromNode==uv&&materialOutputType(graph,gradient,MaterialPin::Value)==MaterialValueType::Scalar,
         "UV output did not create a mapped radial gradient.");
     const auto particle=choiceFor(graph,roughness,MaterialNodeKind::ParticleColor);
@@ -178,7 +179,7 @@ void compatibleCreationAndReplacement() {
     const auto opacity=choiceFor(graph,{output,MaterialPin::OpacityMask,true},MaterialNodeKind::Texture2D);
     require(opacity.pin==MaterialPin::A&&opacity.textureRole==MaterialTextureRole::Color,"Opacity suggestion did not use a texture alpha channel.");
     const auto outgoing=materialGraphNodeChoices(graph,{texture,MaterialPin::R,false});
-    require(outgoing.size()==2&&outgoing.front().kind==MaterialNodeKind::Multiply&&outgoing.front().pin==MaterialPin::Left&&outgoing.back().kind==MaterialNodeKind::Saturate,"Numeric output did not offer a compatible Multiply input.");
+    require(outgoing.size()==5&&outgoing.front().kind==MaterialNodeKind::Multiply&&outgoing.front().pin==MaterialPin::Left&&outgoing.back().kind==MaterialNodeKind::Power,"Numeric output did not offer compatible arithmetic inputs.");
     rejectedWithoutChange(graph,[&]{addConnectedMaterialGraphNode(graph,{9999,MaterialPin::Value,false},outgoing.front(),{});},"Stale endpoint changed the graph.");
     rejectedWithoutChange(graph,[&]{addConnectedMaterialGraphNode(graph,roughness,{MaterialNodeKind::UV,MaterialTextureRole::Color,MaterialPin::UV},{});},"Incompatible drag-created node changed the graph.");
     materialOutputNode(graph).output.shading=MaterialShading::Unlit;
@@ -244,8 +245,29 @@ void rgbScalarConnectionHistory() {
         materialInputLink(graph,out,MaterialPin::Metallic)->id==metalLink&&materialInputLink(graph,out,MaterialPin::Metallic)->fromPin==MaterialPin::RGB,
         "Save/reopen rewrote RGB-to-scalar connections.");
 }
+void animatedNodeHistory() {
+    Project project;MaterialDocument document(project.root);require(document.create("Animated node history"),"Could not create animation document.");
+    const auto before=serializeMaterialAsset(document.definition());std::vector<MaterialNodeId> nodes;
+    require(document.edit("Add animation chain",[&](auto& asset) {
+        for(const auto kind:{MaterialNodeKind::Add,MaterialNodeKind::Lerp,MaterialNodeKind::Panner,MaterialNodeKind::Time,MaterialNodeKind::Power})
+            nodes.push_back(addMaterialNode(asset.graph,kind).id);
+        findMaterialNode(asset.graph,nodes[2])->panner.speed={.2f,-.4f};
+        findMaterialNode(asset.graph,nodes[3])->time={true,true,2};
+        connectMaterialNodes(asset.graph,nodes[3],MaterialPin::Value,nodes[2],MaterialPin::Time);
+    }),"Could not add animation chain.");
+    const auto after=serializeMaterialAsset(document.definition());
+    require(document.undo()&&serializeMaterialAsset(document.definition())==before&&document.redo()&&serializeMaterialAsset(document.definition())==after,
+        "Animation chain was not one reversible graph command.");
+    const auto clipboard=copyMaterialGraphSelection(document.definition().graph,nodes);
+    require(document.edit("Duplicate animation chain",[&](auto& asset){pasteMaterialGraphSelection(asset.graph,clipboard,{500,400});}),"Could not paste new nodes.");
+    require(document.undo()&&serializeMaterialAsset(document.definition())==after,"Pasting animated nodes did not restore the source graph on undo.");
+    require(document.begin("Change animation speed")&&document.update([&](auto& asset){findMaterialNode(asset.graph,nodes[2])->panner.speed={7,8};}),"Could not begin speed gesture.");
+    document.cancel();require(serializeMaterialAsset(document.definition())==after,"Cancel did not restore exact Panner speed.");
+    require(document.save(),"Could not save animated material.");MaterialDocument reopened(project.root);
+    require(reopened.load(document.assetId())&&serializeMaterialAsset(reopened.definition())==serializeMaterialAsset(document.definition()),"Animated nodes lost settings during save/reopen.");
+}
 }
 int main() {
-    try {copyPastePreservesSubgraph();externalColorInputsRetainTypes();vectorClipboardAndConnectedCreation();malformedAndBoundedPasteIsAtomic();compatibleCreationAndReplacement();documentCommandsAndDeletedClipboard();rgbScalarConnectionHistory();std::cout<<"Material graph actions tests passed.\n";return 0;}
+    try {copyPastePreservesSubgraph();externalColorInputsRetainTypes();vectorClipboardAndConnectedCreation();malformedAndBoundedPasteIsAtomic();compatibleCreationAndReplacement();documentCommandsAndDeletedClipboard();rgbScalarConnectionHistory();animatedNodeHistory();std::cout<<"Material graph actions tests passed.\n";return 0;}
     catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }
