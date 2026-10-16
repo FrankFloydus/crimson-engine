@@ -33,9 +33,9 @@ inline std::shared_ptr<const RenderWorldSnapshot> freezeEditorRenderWorld(
     std::vector<EntityId> focusEntities={},Aabb focusBounds={},std::optional<Vec3> priorityOrigin={}) {
     auto world=std::make_shared<RenderWorldSnapshot>();
     world->directional=std::move(extracted.directional);world->points=std::move(extracted.points);
-    world->playerReveal=extracted.playerReveal;
-    world->characterLights=extracted.characterLights;
-    world->characterShadow=extracted.characterShadow;
+    world->reveals=std::move(extracted.reveals);
+    world->actorLighting=std::move(extracted.actorLighting);
+    world->actorShadows=std::move(extracted.actorShadows);
     world->particles=std::move(particles);world->particleMaterials=std::move(materials);
     if(pins && pins->shadows) {
         world->shadowInstances=pins->shadows->instances;

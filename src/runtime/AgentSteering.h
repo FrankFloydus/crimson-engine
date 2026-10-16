@@ -5,11 +5,11 @@
 #include <vector>
 
 namespace crimson {
-struct PlayerMotion { Vec3 velocity{},facing{0,0,-1}; };
+struct AgentMotion { Vec3 velocity{},facing{0,0,-1}; };
 
 // Follows Detour's corner path in world space. Facing eases toward the current
 // movement waypoint; an idle controller preserves its last orientation.
-class PlayerController {
+class AgentSteering {
 public:
     static constexpr double FacingResponse=14;
     static constexpr float ArrivalDistance=.01f;
@@ -18,7 +18,7 @@ public:
     const std::optional<Vec3>& destination() const{return destination_;}
     std::span<const Vec3> path() const{return path_;}
     std::size_t cornerIndex() const{return corner_;}
-    PlayerMotion update(const Vec3& position,const Vec3& forward,float speed,double seconds);
+    AgentMotion update(const Vec3& position,const Vec3& forward,float speed,double seconds);
 private:
     std::optional<Vec3> destination_;
     std::vector<Vec3> path_;

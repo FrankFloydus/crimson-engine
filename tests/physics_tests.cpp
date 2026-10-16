@@ -10,7 +10,7 @@ namespace {
 using namespace crimson;
 void require(bool value,const std::string& message){if(!value)throw std::runtime_error(message);}
 EntityRecord floorRecord(){EntityRecord floor;floor.id=1;floor.name="Floor collider";floor.local=math::translation({0,-.5f,0});floor.collider=SceneCollider{{20,1,20}};return floor;}
-EntityRecord characterRecord(){EntityRecord player;player.id=2;player.name="Character";player.character.emplace();player.local=math::translation({0,2,0});return player;}
+EntityRecord characterRecord(){EntityRecord player;player.id=2;player.name="Character";player.actor.emplace();player.controller.emplace();player.motor.emplace();player.local=math::translation({0,2,0});return player;}
 void tick(Scene& scene,PhysicsWorld& world,const Vec3& movement={},int count=1) {
     for(int i=0;i<count;++i)scene.applyRuntimePoses(world.step(scene,2,movement,1.f/60.f));
 }
@@ -40,7 +40,8 @@ void hierarchyAndDiagnostics() {
     auto records=scene.records();for(auto& r:records)if(r.id==3)r.local=math::eulerRotationXYZ({0,0,.4f});scene.apply(records,{});world.reconcile(scene);
     require(world.colliderCount()==0 && world.status().find("sheared")!=std::string::npos,"Sheared collider was silently approximated.");
     records=scene.records();for(auto& r:records)if(r.id==3){r.local={};r.parent=2;}scene.apply(records,{});world.reconcile(scene);
-    require(world.colliderCount()==0 && world.status().find("Character capsule")!=std::string::npos,"Static collider beneath a character was enabled.");
+    require(world.colliderCount()==0,"Static collider beneath a Character Controller was enabled.");
+    require(world.status().find("Character Controller")!=std::string::npos,"Rejected child collider lost its controller-ownership diagnostic.");
     records=scene.records();for(auto& r:records)if(r.id==2)r.local=r.local*math::scaling({2,1,1});scene.apply(records,{});world.reconcile(scene);
     require(world.characterCount()==0 && world.status().find("unit world scale")!=std::string::npos,"Nonuniform character scale was silently changed.");
 }
@@ -143,12 +144,27 @@ void independentFacing() {
     scene.applyRuntimePoses(world.step(scene,2,{},1.f/60.f,locks));require(forward(2)[0]>.999f,"Facing fought an active transform lock.");
     tick(scene,world,{},1);require(forward(2)[0]>.999f,"Facing queued during a transform lock replayed after unlocking.");
 }
+void controllerAndMotorComposition() {
+    Scene scene;auto body=characterRecord();body.motor.reset();body.local=math::translation({0,2,0});
+    scene.apply({floorRecord(),body},{});PhysicsWorld world;tick(scene,world,{4,0,0},60);
+    require(world.characterCount()==1&&world.grounded(2)&&std::abs((*world.characterPosition(2))[0])<1e-5,
+        "A controller without a Motor lost gravity/grounding or accepted horizontal movement.");
+    auto records=scene.records();for(auto& record:records)if(record.id==2)record.motor.emplace();scene.apply(records,{});
+    tick(scene,world,{2,0,0},30);require((*world.characterPosition(2))[0]>.95f,"Attaching Motor did not enable the existing controller.");
+    records=scene.records();for(auto& record:records)if(record.id==2)record.motor->enabled=false;scene.apply(records,{});
+    const auto stopped=*world.characterPosition(2);tick(scene,world,{4,0,0},30);
+    require(math::length(*world.characterPosition(2)-stopped)<.001,"A disabled Motor continued moving its controller.");
+    records=scene.records();for(auto& record:records)if(record.id==1)record.local=math::translation({0,-5,0});scene.apply(records,{});
+    tick(scene,world,{4,0,0},30);
+    require((*world.characterPosition(2))[1]<stopped[1]-.8f&&std::abs((*world.characterPosition(2))[0]-stopped[0])<.001,
+        "Disabling a Motor disabled controller gravity or permitted stale horizontal commands.");
+}
 void geometryPublication() {
     Scene scene;auto player=characterRecord();scene.apply({floorRecord(),player},{});PhysicsWorld world;world.reconcile(scene);
     const auto revision=world.geometryRevision();const auto boxes=world.staticBoxes();
     require(boxes.size()==1 && boxes[0].entity==1 && boxes[0].size==Vec3{20,1,20},"Published navigation geometry did not match the accepted static world.");
     tick(scene,world,{1,0,0},60);require(world.geometryRevision()==revision,"Character poses invalidated static geometry.");
-    auto records=scene.records();for(auto& record:records)if(record.id==2)record.character->moveSpeed=8;
+    auto records=scene.records();for(auto& record:records)if(record.id==2)record.motor->moveSpeed=8;
     scene.apply(records,{});world.reconcile(scene);require(world.geometryRevision()==revision,"Unrelated scene edit invalidated static geometry.");
     records=scene.records();for(auto& record:records)if(record.id==1)record.local=math::translation({0,-2,0});
     scene.apply(records,{});world.reconcile(scene);require(world.geometryRevision()==revision+1,"Live geometry edit did not publish a new revision.");
@@ -157,4 +173,4 @@ void geometryPublication() {
     require(world.staticBoxes().empty() && world.geometryRevision()==revision+2,"Rejected shear remained in derived geometry.");
 }
 }
-int main(){try{floorWallAndLiveEdits();hierarchyAndDiagnostics();teleportLocksAndSteps();scriptedActorsAncestorLocksAndMovedFloor();slopeLimit();staticWorldRaycasts();independentFacing();geometryPublication();std::cout<<"Physics checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+int main(){try{floorWallAndLiveEdits();hierarchyAndDiagnostics();teleportLocksAndSteps();scriptedActorsAncestorLocksAndMovedFloor();slopeLimit();staticWorldRaycasts();independentFacing();controllerAndMotorComposition();geometryPublication();std::cout<<"Physics checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

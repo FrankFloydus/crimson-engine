@@ -79,25 +79,29 @@ void gameAtlasChecks() {
 void dedicatedAtlasChecks() {
     using namespace directional_shadow;
     for(unsigned resolution:{256u,512u,1024u})for(unsigned points:{0u,1u,2u,4u,8u,16u})
-        for(unsigned lights=0;lights<=4;++lights)for(unsigned cameras:{1u,2u}) {
-        const auto layout=atlasLayout(resolution,points,lights,cameras,cameras==2,true);
-        check(layout.width && layout.height && layout.width<=16384 && layout.height<=16384 && layout.characterShadow,
-            "Dedicated character map exceeded the supported atlas budget.");
-        const auto tile=layout.characterTile;
-        check(tile.width==resolution+4 && tile.height==resolution+4 && tile.x+tile.width<=layout.width && tile.y+tile.height<=layout.height,
-            "Dedicated character tile escaped the guarded allocation.");
-        const auto overlaps=[&](const point_shadow::TileRect& other) {
-            return tile.x<other.x+other.width && other.x<tile.x+tile.width && tile.y<other.y+other.height && other.y<tile.y+tile.height;
-        };
-        for(unsigned point=0;point<layout.points.capacity;++point)for(unsigned face=0;face<6;++face)
-            check(!overlaps(point_shadow::tileRect(layout.points,point,face)),"Character tile overlaps an ordinary point map.");
-        for(unsigned camera=0;camera<cameras;++camera)for(unsigned light=0;light<layout.directionalCapacity;++light)
-            check(!overlaps(blockRect(layout,light,camera)),"Character tile overlaps a directional block.");
-        check(layout.bytes()==std::size_t(layout.width)*layout.height*4,"Dedicated atlas accounting omitted rectangular padding.");
+        for(unsigned lights=0;lights<=4;++lights)for(unsigned cameras:{1u,2u})for(unsigned actors:{1u,2u,8u}) {
+        const auto layout=atlasLayout(resolution,points,lights,cameras,cameras==2,actors);
+        check(layout.width&&layout.height&&layout.width<=16384&&layout.height<=16384&&layout.actorCapacity==actors,
+            "Independent actor projections exceeded the atlas budget.");
+        for(unsigned actor=0;actor<actors;++actor) {
+            const auto tile=layout.actorTiles[actor];
+            check(tile.width==resolution+4&&tile.height==resolution+4&&tile.x+tile.width<=layout.width&&tile.y+tile.height<=layout.height,
+                "Actor tile escaped its guarded allocation.");
+            const auto overlaps=[&](const point_shadow::TileRect& other) {
+                return tile.x<other.x+other.width&&other.x<tile.x+tile.width&&tile.y<other.y+other.height&&other.y<tile.y+tile.height;
+            };
+            for(unsigned point=0;point<layout.points.capacity;++point)for(unsigned face=0;face<6;++face)
+                check(!overlaps(point_shadow::tileRect(layout.points,point,face)),"Actor tile overlaps an ordinary point map.");
+            for(unsigned camera=0;camera<cameras;++camera)for(unsigned light=0;light<layout.directionalCapacity;++light)
+                check(!overlaps(blockRect(layout,light,camera)),"Actor tile overlaps a directional block.");
+            for(unsigned previous=0;previous<actor;++previous)check(!overlaps(layout.actorTiles[previous]),"Independent actor tiles overlap.");
+        }
+        check(layout.bytes()==std::size_t(layout.width)*layout.height*4,"Actor atlas accounting omitted padding.");
     }
-    const auto only=atlasLayout(1024,0,0,2,true,true);
-    check(only.width==1028 && only.height==1028 && only.points.capacity==0 && only.directionalCapacity==0,
-        "Character shadow consumed ordinary light slots or redundant camera tiles.");
+    const auto only=atlasLayout(1024,0,0,2,true,1);
+    check(only.width==1028&&only.height==1028&&only.points.capacity==0&&only.directionalCapacity==0,
+        "A single actor shadow consumed ordinary slots or redundant camera tiles.");
+    check(!atlasLayout(1024,0,0,2,true,MaximumActorShadows+1).width,"Unbounded actor shadow allocation was accepted.");
 }
 void dedicatedProjectionChecks() {
     using namespace directional_shadow;

@@ -15,6 +15,16 @@ namespace {
 using namespace crimson;
 void check(bool value,const char* message){if(!value)throw std::runtime_error(message);}
 bool near(float a,float b){return std::abs(a-b)<2e-6f;}
+void revealViewCulling() {
+    const auto visible=[](Vec3 center,float spread){return ambient_visibility::revealIntersectsView(center,spread,1,1,.1f,20);};
+    check(visible({0,0,-5},.1f),"Centered finite reveal was culled.");
+    check(!visible({100,0,-5},.1f)&&!visible({0,0,5},.1f)&&!visible({0,0,-30},.1f),
+        "Reveal culling retained wholly offscreen support.");
+    check(visible({6,0,-5},.125f)&&visible({0,6,-5},.125f)&&visible({0,0,-21},.2f)&&visible({0,0,-.01f},.02f),
+        "Reveal culling omitted support crossing a side/near/far plane.");
+    check(!visible({7,0,-5},.125f)&&!visible({0,7,-5},.125f)&&!visible({0,0,-5},0),
+        "Reveal culling lost its exact finite-support bounds.");
+}
 void roles() {
     for(std::uint32_t receivers=0;receivers<=3;++receivers)for(std::uint32_t ambient=0;ambient<=3;++ambient)
         for(bool reveal:{false,true})for(bool shadow:{false,true}) {
@@ -142,6 +152,6 @@ void packing() {
 }
 }
 int main() {
-    try {roles();response();sharedFillFootprint();packing();std::cout<<"Ambient visibility scope independence, energy response, shared fill/reveal fade and odd-size GPU packing checks passed.\n";return 0;}
+    try {revealViewCulling();roles();response();sharedFillFootprint();packing();std::cout<<"Ambient visibility scope independence, energy response, shared fill/reveal fade and odd-size GPU packing checks passed.\n";return 0;}
     catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

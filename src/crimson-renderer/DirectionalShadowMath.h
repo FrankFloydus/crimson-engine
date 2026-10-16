@@ -10,12 +10,13 @@ inline constexpr unsigned CascadeCount=4,MaxLights=4,WorldCameraCount=2;
 struct AtlasLayout {
     point_shadow::AtlasLayout points;
     std::uint16_t resolution{},pitch{},width{},height{},directionalCapacity{},cameraCount{},directionalY{},blockColumns{};
-    bool gameplayContext{},characterShadow{};
-    point_shadow::TileRect characterTile{};
+    bool gameplayContext{};
+    std::uint16_t actorCapacity{};
+    std::array<point_shadow::TileRect,MaximumActorShadows> actorTiles{};
     std::array<std::array<point_shadow::TileRect,MaxLights>,WorldCameraCount> directionalBlocks{};
     std::size_t bytes() const {return std::size_t(width)*height*sizeof(float);}
 };
-AtlasLayout atlasLayout(unsigned resolution,unsigned pointCapacity,unsigned directionalCapacity,unsigned cameraCount,bool gameplayContext=false,bool characterShadow=false);
+AtlasLayout atlasLayout(unsigned resolution,unsigned pointCapacity,unsigned directionalCapacity,unsigned cameraCount,bool gameplayContext=false,unsigned actorCapacity=0);
 point_shadow::TileRect blockRect(const AtlasLayout&,unsigned lightSlot,unsigned cameraContext);
 point_shadow::TileRect tileRect(const AtlasLayout&,unsigned lightSlot,unsigned cameraContext,unsigned cascade);
 // Maps a full projection clip square to a tile of the light's contiguous view

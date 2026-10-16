@@ -57,16 +57,12 @@ struct Options {
     unsigned warmup{30},samples{30};fs::path output;
 };
 template<class Record> void disablePlayerLighting(Record& record) {
-    if(!record.character)return;
-    record.character->lightRig.enabled=false;
-    // Allows this diagnostic source to be compiled against the retained
-    // pre-correction headers without adding a production compatibility mode.
-    if constexpr(requires {record.character->darknessReveal.enabled;})
-        record.character->darknessReveal.enabled=false;
+    if(record.lightRig)record.lightRig->enabled=false;
+    if(record.darknessReveal)record.darknessReveal->enabled=false;
 }
 Json playerLightingMetadata(const ExtractedScene& world) {
-    return {{"point_lights",world.points.size()},{"player_reveal_enabled",world.playerReveal.enabled},
-        {"player_light_spread",world.playerReveal.spread}};
+    return {{"point_lights",world.points.size()},{"actor_rigs",world.actorLighting.size()},
+        {"reveal_sources",world.reveals.size()}};
 }
 Json summarize(const std::vector<Sample>& values) {
     const auto mean=[&](auto member){double sum{};for(const auto& value:values)sum+=static_cast<double>(value.*member);return sum/values.size();};
@@ -138,7 +134,7 @@ Json exercise(SDL_Window* window,const fs::path& project,const fs::path& nativeP
     std::array<Mat4,2> originalPlayerWorld,parentInverse;
     if(presentedPlayer)for(unsigned index=0;index<presentations.size();++index) {
         const auto& scene=*presentations[index];const auto player=scene.find(scene.properties().playerCharacter);
-        require(player&&player->character.has_value(),"Presented-player workload requires a designated Character.");
+        require(player&&player->controller.has_value(),"Presented-player workload requires a designated Character.");
         originalPlayerWorld[index]=scene.worldTransform(player->id).value();
         const auto parent=player->parent?scene.worldTransform(player->parent):std::optional<Mat4>{Mat4{}};
         require(parent.has_value(),"Presented player has a missing parent transform.");
@@ -172,7 +168,7 @@ Json exercise(SDL_Window* window,const fs::path& project,const fs::path& nativeP
             sample.update=milliseconds(begin);
         } else if(moving)for(auto& model:extracted.models)if(std::find(movingEntities.begin(),movingEntities.end(),model.id)!=movingEntities.end())model.world=math::translation(movement)*model.world;
         if(ambientEnabled)extracted.environment.environment.ambientVisibility.enabled=true;
-        if(!shadows){for(auto& light:extracted.points)light.castShadows=false;for(auto& light:extracted.directional)light.castShadows=false;extracted.characterShadow.enabled=false;}
+        if(!shadows){for(auto& light:extracted.points)light.castShadows=false;for(auto& light:extracted.directional)light.castShadows=false;for(auto& shadow:extracted.actorShadows)shadow.enabled=false;}
         prepared.beginFrame();prepared.setMaterialContext({double(number)/60,double(number)/60});
         auto followCamera=gameCamera;if(moving){followCamera.position=followCamera.position+movement;followCamera.target=followCamera.target+movement;}
         EditorRenderFrameInput input;

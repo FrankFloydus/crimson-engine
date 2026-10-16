@@ -37,9 +37,9 @@ RenderScene preparedRenderScene(const PreparedRenderFrame& frame,const PreparedR
     scene.shadowFocusEntities=world.shadowFocusEntities;scene.shadowFocusBounds=world.shadowFocusBounds;
     scene.shadowPriorityOrigin=world.shadowPriorityOrigin;
     scene.shadowReceiverBounds=world.shadowReceiverBounds;
-    scene.playerReveal=world.playerReveal;
-    scene.characterLights=world.characterLights;
-    scene.characterShadow=world.characterShadow;
+    scene.reveals=world.reveals;
+    scene.actorLighting=world.actorLighting;
+    scene.actorShadows=world.actorShadows;
     scene.collisionOverlays=view.collisionOverlays;
     return scene;
 }

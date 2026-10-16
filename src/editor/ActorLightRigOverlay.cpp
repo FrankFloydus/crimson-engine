@@ -1,7 +1,8 @@
-#include "PlayerLightRigOverlay.h"
+#include "ActorLightRigOverlay.h"
 
 #include "CollisionWire.h"
-#include "runtime/PlayerLightRig.h"
+#include "runtime/ActorLightRig.h"
+#include "scene/Scene.h"
 #include <imgui.h>
 #include <algorithm>
 #include <array>
@@ -9,10 +10,19 @@
 #include <numbers>
 
 namespace crimson {
-void drawPlayerLightRigOverlay(ImDrawList& draw,const PlayerLightRigSettings& settings,const CharacterRevealSettings& reveal,
+void drawSceneLightRigOverlays(ImDrawList& draw,const Scene& scene,const Mat4& viewProjection,const Vec4& viewport,ClipDepth depth) {
+    for(const auto& record:scene.records()) {
+        if(!record.lightRig || !record.lightRig->showGizmos || !scene.isVisible(record.id))continue;
+        const auto world=scene.worldTransform(record.id);if(!world)continue;
+        drawActorLightRigOverlay(draw,*record.lightRig,record.darknessReveal.value_or(DarknessRevealSettings{false,8}),
+            math::transformPoint(*world,{}),record.controller?record.controller->height:0,viewProjection,viewport,depth);
+    }
+}
+
+void drawActorLightRigOverlay(ImDrawList& draw,const ActorLightRigSettings& settings,const DarknessRevealSettings& reveal,
     const Vec3& characterPosition,float characterHeight,const Mat4& viewProjection,const Vec4& viewport,ClipDepth depth) {
     if(!settings.showGizmos || (!settings.enabled&&!reveal.enabled) || !math::finite(viewport) || viewport[2]<=0 || viewport[3]<=0)return;
-    const auto rig=evaluatePlayerLightRig(settings,characterPosition,{},{});
+    const auto rig=evaluateActorLightRig(settings,characterPosition,{},{});
     if(!rig.valid())return;
     draw.PushClipRect({viewport[0],viewport[1]},{viewport[0]+viewport[2],viewport[1]+viewport[3]},true);
     const auto wire=[&](const Vec3& start,const Vec3& end,ImU32 color,float width) {
@@ -35,7 +45,7 @@ void drawPlayerLightRigOverlay(ImDrawList& draw,const PlayerLightRigSettings& se
             point&&(*point)[2]>=0&&(*point)[2]<=1)
             draw.AddText({(*point)[0]+8,(*point)[1]-7},color,text);
     };
-    if(reveal.enabled&&validCharacterRevealSettings(reveal)) {
+    if(reveal.enabled&&validDarknessRevealSettings(reveal)) {
         const auto center=characterPosition+Vec3{0,characterLightingCenterHeight(characterHeight),0};
         const auto color=ImGui::ColorConvertFloat4ToU32({.22f,.69f,.87f,.75f});
         sphere(center,reveal.spread,color);

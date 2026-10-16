@@ -11,9 +11,9 @@
 namespace crimson {
 // Validates stored fields even while disabled, retaining coherent edits and
 // serialization. Empty means valid; no values are silently clamped.
-std::string validatePlayerLightRigSettings(const PlayerLightRigSettings&);
+std::string validateActorLightRigSettings(const ActorLightRigSettings&);
 
-struct PlayerLightRigEvaluation {
+struct ActorLightRigEvaluation {
     std::array<CharacterLight,2> characterLights{};
     std::optional<PointLight> localWorld;
     CharacterShadowSource characterShadow{};
@@ -24,7 +24,7 @@ struct PlayerLightRigEvaluation {
 // Character directions and the local point's height are world aligned.
 // Local World illumination is independent of the separate darkness reveal.
 // Existing spans include disabled IDs.
-PlayerLightRigEvaluation evaluatePlayerLightRig(const PlayerLightRigSettings&,
+ActorLightRigEvaluation evaluateActorLightRig(const ActorLightRigSettings&,
     Vec3 presentedPosition,std::span<const PointLight> existingPoints,
-    std::span<const DirectionalLight> existingDirectionals);
+    std::span<const DirectionalLight> existingDirectionals,std::uint64_t owner=0);
 } // namespace crimson

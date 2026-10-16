@@ -20,6 +20,7 @@ struct ClusteredLightingStats {
     std::size_t allocatedBytes{};
     double buildCpuMs{};
     bool overflow{};
+    std::uint32_t totalReveals{},visibleReveals{};
 };
 
 struct ViewportRegion;
@@ -194,6 +195,7 @@ struct PointShadowStats {
     std::uint32_t directionalLights{},directionalRendered{},directionalCascades{},directionalCacheHits{};
     std::uint32_t pointDeferred{},pointCriticalDeferred{},directionalWorldProjections{},characterProjections{};
     std::uint32_t dedicatedCharacterUpdates{},dedicatedCharacterCacheHits{};
+    std::uint32_t actorShadowRequested{},actorShadowAdmitted{},actorShadowUnadmitted{};
 };
 // Numeric order is execution order: the pinned D3D11 blit backend must not
 // receive a nonidentity view remapping. Both independent shadow worlds reserve

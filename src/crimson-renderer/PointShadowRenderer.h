@@ -26,14 +26,15 @@ public:
     PointShadowRenderer& operator=(const PointShadowRenderer&)=delete;
     void advance(std::uint64_t frame);
     void render(std::span<const PointLight>,std::span<const DirectionalLight>,std::span<const std::uint64_t> casterSignatures,
-        std::uint64_t world,std::uint16_t resolution,std::uint64_t frame,bgfx::ViewId firstView,unsigned cameraCount,const Vec3& focus,const DrawFace&,bool characterShadow=false);
+        std::uint64_t world,std::uint16_t resolution,std::uint64_t frame,bgfx::ViewId firstView,unsigned cameraCount,const Vec3& focus,const DrawFace&,unsigned actorCapacity=0);
     void renderDirectional(std::span<const DirectionalLight>,std::span<const directional_shadow::Cascades>,std::span<const std::uint64_t>,
         const ShadowCamera&,unsigned cameraContext,bgfx::ViewId firstView,const DrawCascade&);
-    using DrawCharacter=std::function<std::uint32_t(const directional_shadow::Cascade&,const point_shadow::TileRect&,bgfx::ViewId)>;
-    void renderCharacter(const CharacterShadowSource&,const std::optional<directional_shadow::Cascade>&,
-        std::uint64_t casterSignature,bgfx::ViewId,const DrawCharacter&);
+    using DrawActor=std::function<std::uint32_t(const directional_shadow::Cascade&,const point_shadow::TileRect&,const Vec4& tile,bgfx::ViewId)>;
+    void renderActor(unsigned slot,const CharacterShadowSource&,const std::optional<directional_shadow::Cascade>&,
+        std::uint64_t casterSignature,bgfx::ViewId,const DrawActor&);
     void bind(bool receiving=true,std::uint8_t samplerSlot=8,unsigned cameraContext=0) const;
     void bindDisabled(std::uint8_t samplerSlot=8) const;
+    void setActorAdmission(std::uint32_t requested,std::uint32_t admitted){stats_.actorShadowRequested=requested;stats_.actorShadowAdmitted=admitted;stats_.actorShadowUnadmitted=requested-admitted;}
     void setCasterCount(std::size_t count){stats_.casters=static_cast<std::uint32_t>(count);}
     void invalidate();
     void release();
@@ -61,17 +62,18 @@ private:
         Vec4 cameraForward;
     };
     std::array<DirectionalParameters,2> directional_{};
-    Slot characterSlot_{};
-    Mat4 characterMatrix_{};
-    Vec4 characterRect_{},characterDirection_{},characterParameters_{};
+    std::array<Slot,MaximumActorShadows> actorSlots_{};
+    std::array<Mat4,MaximumActorShadows> actorMatrices_{};
+    std::array<Vec4,MaximumActorShadows> actorRects_{},actorDirections_{},actorParameters_{};
+    std::array<std::uint64_t,MaximumActorShadows> lastActorSubmission_{};
     bgfx::UniformHandle sampler_{BGFX_INVALID_HANDLE},parametersUniform_{BGFX_INVALID_HANDLE},atlasUniform_{BGFX_INVALID_HANDLE},layoutUniform_{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle directionalMatrices_{BGFX_INVALID_HANDLE},directionalRects_{BGFX_INVALID_HANDLE},directionalSplits_{BGFX_INVALID_HANDLE},directionalParameters_{BGFX_INVALID_HANDLE},shadowCameraForward_{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle characterMatrixUniform_{BGFX_INVALID_HANDLE},characterRectUniform_{BGFX_INVALID_HANDLE},characterDirectionUniform_{BGFX_INVALID_HANDLE},characterParametersUniform_{BGFX_INVALID_HANDLE};
     PointShadowStats stats_;
     std::string status_;
-    std::uint64_t frame_{},world_{},lastRenderedFrame_{UINT64_MAX},lastCharacterSubmission_{UINT64_MAX};
+    std::uint64_t frame_{},world_{},lastRenderedFrame_{UINT64_MAX};
     bool usable_{};
     bool budgeted_{};
-    bool ensureAtlas(std::uint16_t resolution,std::uint16_t pointCapacity,std::uint16_t directionalCapacity,unsigned cameraCount,bool characterShadow);
+    bool ensureAtlas(std::uint16_t resolution,std::uint16_t pointCapacity,std::uint16_t directionalCapacity,unsigned cameraCount,unsigned actorCapacity);
 };
 }

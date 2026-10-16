@@ -2,6 +2,7 @@
 
 #include "math/Math.h"
 #include "CollisionMesh.h"
+#include "SceneComponentKind.h"
 #include "crimson-renderer/RenderTypes.h"
 #include "resources/AssetRef.h"
 #include "assets/ModelMaterialOverrides.h"
@@ -77,14 +78,28 @@ struct SceneEnvironment {
     float exposure{1.0f};
     EntityId sun{NoEntity}; // Optional explicit directional-light reference.
 };
-struct SceneCharacter {
-    float height{1.8f}, radius{.3f}, moveSpeed{5.f};
-    bool showRoute{true},showCollisionInGame{false};
-    Vec4 collisionColor{57.f/255.f,175.f/255.f,221.f/255.f,1.f};
-    PlayerLightRigSettings lightRig{};
-    CharacterRevealSettings darknessReveal{};
-    bool operator==(const SceneCharacter&) const = default;
+// Explicit capabilities compose ordinary entities; Actor marks a visual boundary.
+struct SceneActor { bool operator==(const SceneActor&) const = default; };
+struct SceneMotor {
+    float moveSpeed{5.f};
+    bool enabled{true};
+    bool operator==(const SceneMotor&) const = default;
 };
+struct SceneCharacterController {
+    float height{1.8f},radius{.3f};
+    bool showCollisionInGame{false};
+    Vec4 collisionColor{57.f/255.f,175.f/255.f,221.f/255.f,1.f};
+    bool operator==(const SceneCharacterController&) const = default;
+};
+struct SceneNavigationAgent {
+    bool showRoute{true},enabled{true};
+    bool operator==(const SceneNavigationAgent&) const = default;
+};
+struct ScenePlayerInput {
+    bool enabled{true};
+    bool operator==(const ScenePlayerInput&) const = default;
+};
+
 enum class ColliderShape : std::uint8_t { Box, Sphere, Cylinder, Capsule, Trimesh };
 struct SceneCollider {
     Vec3 size{1,1,1};
@@ -114,9 +129,18 @@ struct QuaderGenerated {
 };
 struct SceneCamera {
     float verticalFov{45.f}, nearPlane{.1f}, farPlane{2048.f};
-    EntityId followTarget{NoEntity};
-    Vec3 followOffset{}; // World-space positional offset; target rotation is not inherited.
     bool operator==(const SceneCamera&) const = default;
+};
+struct SceneCameraFollow {
+    EntityId target{NoEntity};
+    Vec3 offset{}; // World-space positional offset, independent of target rotation.
+    Mat4 worldBasis{}; // Translation-free full affine world basis, including stretch/reflection.
+    bool operator==(const SceneCameraFollow&) const = default;
+};
+struct SceneOutlinerStyle {
+    std::optional<Vec4> color;
+    std::array<std::optional<Vec4>,AllSceneComponentKinds.size()> componentColors{};
+    bool operator==(const SceneOutlinerStyle&) const = default;
 };
 struct EntityRecord {
     EntityId id{};
@@ -131,9 +155,16 @@ struct EntityRecord {
     // A present empty reference retains an editable emitter marker after an
     // explicit asset clear/deletion. A missing nonempty asset keeps its ID.
     std::optional<AssetRef<ParticleEffectAsset>> particle;
-    std::optional<SceneCharacter> character;
+    std::optional<SceneActor> actor;
+    std::optional<SceneMotor> motor;
+    std::optional<SceneCharacterController> controller;
+    std::optional<SceneNavigationAgent> navigation;
+    std::optional<ScenePlayerInput> playerInput;
+    std::optional<ActorLightRigSettings> lightRig;
+    std::optional<DarknessRevealSettings> darknessReveal;
     std::optional<SceneCollider> collider;
     std::optional<SceneCamera> camera;
+    std::optional<SceneCameraFollow> cameraFollow;
     // Empty slots use their source material. Geometry and source materials
     // remain shared; assignments belong only to this entity.
     ModelMaterialOverrides modelMaterials;
@@ -145,7 +176,18 @@ struct EntityRecord {
     SceneModelAnimation modelAnimation{};
     bool fadeWhenOccluding{false}; // Per-model participation in Game player occlusion fading.
     bool visible{true}; // Authored rendering visibility, inherited by descendants.
+    // Optional authored Outliner order; empty uses the canonical component order.
+    // This is presentation data and does not affect runtime system execution.
+    std::vector<SceneComponentKind> componentOrder;
+    // Display this actual child before one of its parent's component rows.
+    // Missing/removed anchors display at the end; hierarchy remains ordinary.
+    std::optional<SceneComponentKind> outlinerBefore;
+    std::optional<SceneOutlinerStyle> outlinerStyle;
 };
+bool hasSceneComponent(const EntityRecord&,SceneComponentKind);
+std::vector<SceneComponentKind> sceneComponents(const EntityRecord&);
+void normalizeSceneComponentOrder(EntityRecord&);
+void normalizeSceneOutlinerStyle(EntityRecord&);
 struct SceneProperties {
     EntityId activeEnvironment{NoEntity};
     EntityId activeCamera{NoEntity};

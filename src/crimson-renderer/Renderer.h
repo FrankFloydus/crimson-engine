@@ -96,6 +96,7 @@ struct RenderModelInstance {
     std::uint32_t lightingCategory{lighting_scope::World};
     std::shared_ptr<const ModelPose> pose;
     float opacity{1.f}; // Camera-local presentation only; shared shadow casters retain full opacity.
+    std::uint64_t actorOwner{};
 };
 
 enum class PickMode { Selection, MaterialSlot };
@@ -149,9 +150,9 @@ struct RenderScene {
     // Frozen world metadata, including non-casting receivers. Empty direct
     // submissions derive bounds from their camera-local instances instead.
     std::span<const Aabb> shadowReceiverBounds;
-    PlayerRevealSource playerReveal{};
-    std::array<CharacterLight,2> characterLights{};
-    CharacterShadowSource characterShadow{};
+    std::span<const DarknessRevealSource> reveals;
+    std::span<const ActorLighting> actorLighting;
+    std::span<const CharacterShadowSource> actorShadows;
     std::span<const RenderCollisionOverlay> collisionOverlays;
 };
 

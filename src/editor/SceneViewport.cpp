@@ -2,7 +2,7 @@
 #include "ViewportAssetDrop.h"
 #include "ViewportSelection.h"
 #include "CollisionWire.h"
-#include "PlayerLightRigOverlay.h"
+#include "ActorLightRigOverlay.h"
 #include "ColliderGizmoUi.h"
 #include "assets/AssetLibrary.h"
 #include "crimson-renderer/ImGuiBgfx.h"
@@ -41,8 +41,8 @@ float gameplayMarker(ImDrawList& draw,const EntityRecord& record,const Mat4& wor
         const ImVec2 start((*projected)[0][0],(*projected)[0][1]),end((*projected)[1][0],(*projected)[1][1]);
         draw.AddLine(start,end,color,1.5f);distance=std::min(distance,segmentDistance(mouse,start,end));
     };
-    if(record.character) {
-        const auto radius=record.character->radius,height=record.character->height;
+    if(record.controller) {
+        const auto radius=record.controller->radius,height=record.controller->height;
         line({0,height*.5f,0},{0,height*.5f,-radius*2});
     }
     if(record.camera) {
@@ -99,11 +99,11 @@ void SceneViewport::select(SceneDocument& document, EntityId id, bool toggle, bo
     if(selectViewportHit(document,id,toggle,append))++serial_;
 }
 void SceneViewport::cancel(SceneDocument& document, Renderer& renderer) {
-    if (dragging_) document.cancel();
-    waitForRelease_ = waitForRelease_ || dragging_ || colliderDrag_.active();
+    waitForRelease_ = waitForRelease_ || transformDrag_.active() || colliderDrag_.active();
+    transformDrag_.cancel(document);
     colliderDrag_.cancel(document);
     ImGuizmo::Enable(false);
-    dragging_ = false; roots_.clear(); renderer.cancelPicking(); ++serial_;
+    renderer.cancelPicking(); ++serial_;
     pickIntent_=false;
     materialDrop_.cancel();
 }
@@ -115,15 +115,10 @@ void SceneViewport::focus(Camera& camera, const SceneDocument& document, const A
         if(preserveLens){camera.nearPlane=nearPlane;camera.farPlane=farPlane;}
     }
 }
-void SceneViewport::drawPlayerLightRig(const Camera& camera,const Scene& scene) {
+void SceneViewport::drawActorLightRigs(const Camera& camera,const Scene& scene) {
     if(!imageDrawList_ || imageRegion_.width<=0 || imageRegion_.height<=0)return;
-    const auto player=scene.find(scene.properties().playerCharacter);
-    if(!player || !scene.isVisible(player->id) || !player->character || (!player->character->lightRig.enabled&&!player->character->darknessReveal.enabled) ||
-        !player->character->lightRig.showGizmos)return;
-    const auto world=scene.worldTransform(player->id);if(!world)return;
     const auto vp=camera.projectionMatrix(imageRegion_.width/imageRegion_.height,ClipDepth::NegativeOneToOne)*camera.viewMatrix();
-    drawPlayerLightRigOverlay(*imageDrawList_,player->character->lightRig,player->character->darknessReveal,
-        math::transformPoint(*world,{}),player->character->height,vp,
+    drawSceneLightRigOverlays(*imageDrawList_,scene,vp,
         {imageRegion_.x,imageRegion_.y,imageRegion_.width,imageRegion_.height},ClipDepth::NegativeOneToOne);
 }
 EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLibrary& assets,
@@ -138,7 +133,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
     gizmoStyle.Colors[ImGuizmo::TEXT_SHADOW].w=0;
     const auto cameraView = camera.viewMatrix();
     if (previousSelection_ != document.selection().ids || previousView_ != cameraView ||
-        (!dragging_ && !colliderDrag_.active() && selectionGeneration_ != document.scene().generation()) ||
+        (!transformDrag_.active() && !colliderDrag_.active() && selectionGeneration_ != document.scene().generation()) ||
         ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         // A new click supersedes the prior asynchronous intent before its
         // readback can clear selection or let a newly appeared gizmo claim it.
@@ -170,7 +165,9 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             imageDrawList_=ImGui::GetWindowDrawList();imageRegion_=frame.viewport;
             acceptViewportModelDrop(frame);
             const bool editorFocus = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
-            if (!keyboardBlocked && !blockKeys && !document.transactionActive() && !materialDrop_.active() &&
+            if(transformDrag_.active() && (!transformDrag_.valid(document) || !editorFocus || ImGui::GetIO().AppFocusLost ||
+                blockKeys || keyboardBlocked || ImGui::IsKeyPressed(ImGuiKey_Escape,false)))cancel(document,renderer);
+            if (!keyboardBlocked && !blockKeys && !transformDrag_.active() && !document.transactionActive() && !materialDrop_.active() &&
                 ImGui::GetDragDropPayload()==nullptr && (imageHovered || editorFocus)) {
                 if (ImGui::IsKeyPressed(ImGuiKey_T,false)) operation_ = ImGuizmo::TRANSLATE;
                 if (ImGui::IsKeyPressed(ImGuiKey_R,false)) operation_ = ImGuizmo::ROTATE;
@@ -185,7 +182,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                 (pickSize_!=Vec2{size.x,size.y} || pickProjection_!=projection || pickView_!=view ||
                  intentGeneration_!=document.scene().generation() || intentRevision_!=document.scene().revision());
             if((materialDrop_.active() || !frame.materialDragId.empty()) && ImGui::IsKeyPressed(ImGuiKey_Escape,false))materialDropCanceled_=true;
-            const bool materialBlocked=blockKeys || keyboardBlocked || dragging_ || colliderDrag_.active() || document.transactionActive() || materialDropCanceled_;
+            const bool materialBlocked=blockKeys || keyboardBlocked || transformDrag_.active() || colliderDrag_.active() || document.transactionActive() || materialDropCanceled_;
             if(materialDrop_.active() && (materialBlocked || materialContextChanged ||
                 (frame.materialDragId.empty() && !materialDrop_.delivered()))) {
                 materialDrop_.cancel();renderer.cancelPicking();++serial_;
@@ -244,7 +241,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             draw->ChannelsSetCurrent(1);
             bool overGizmo = false;
             const auto colliderHandles=drawColliderGizmo(*draw,document,colliderDrag_,vp,viewport,showCollisions,
-                imageHovered && !waitForRelease_ && !blockKeys && !keyboardBlocked && !dragging_ && !materialDrop_.active() &&
+                imageHovered && !waitForRelease_ && !blockKeys && !keyboardBlocked && !transformDrag_.active() && !materialDrop_.active() &&
                 !frame.materialAssignment && ImGui::GetDragDropPayload()==nullptr && (!document.transactionActive() || colliderDrag_.active()),
                 editorFocus,blockKeys || keyboardBlocked || ImGui::IsKeyPressed(ImGuiKey_Escape,false));
             if(colliderHandles.started || colliderHandles.canceled) {renderer.cancelPicking();pickIntent_=false;++serial_;}
@@ -254,11 +251,11 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             for(const auto id:document.selection().ids)if(document.scene().isVisible(id))visibleSelection.push_back(id);
             const auto transformRoots=showTransformGizmo && !visibleSelection.empty()?document.scene().topmost(visibleSelection):std::vector<EntityId>{};
             const bool transformVisible=showTransformGizmo && !transformRoots.empty();
-            if (!transformVisible && dragging_) cancel(document,renderer);
+            if (!transformVisible && transformDrag_.active()) cancel(document,renderer);
             if (!transformVisible) ImGuizmo::Enable(false);
             if (transformVisible && !waitForRelease_ && !colliderHandles.hovered && !colliderDrag_.active() && !materialDrop_.active() && !frame.materialAssignment &&
-                !navigationActive && (!document.transactionActive() || dragging_)) {
-                if (!dragging_) {
+                !navigationActive && !keyboardBlocked && !ImGui::GetIO().AppFocusLost && (!document.transactionActive() || transformDrag_.active())) {
+                if (!transformDrag_.active()) {
                     const auto bounds = boundsOf(document,assets,{},collisionMeshes_);
                     if (visibleSelection.size() == 1) {
                         const auto world = document.scene().worldTransform(transformRoots.front()).value_or(Mat4{});
@@ -269,38 +266,28 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                 ImGuizmo::SetDrawlist(draw); ImGuizmo::SetRect(origin.x,origin.y,size.x,size.y);
                 ImGuizmo::SetOrthographic(false);
                 const float proxyClipZ=math::transformPoint(vp,math::transformPoint(proxy_,{0,0,0}))[2];
-                const bool front=dragging_ || (math::finite(proxyClipZ) && proxyClipZ >= .001f);
+                const bool front=transformDrag_.active() || (math::finite(proxyClipZ) && proxyClipZ >= .001f);
                 ImGuizmo::Enable(front && !blockKeys && ImGui::GetDragDropPayload() == nullptr);
                 const bool changed = front && ImGuizmo::Manipulate(view.data(),projection.data(),static_cast<ImGuizmo::OPERATION>(operation_),
                     ImGuizmo::WORLD,proxy_.data());
                 overGizmo |= front && ImGuizmo::IsOver();
-                if (ImGuizmo::IsUsing() && !dragging_) {
+                if (ImGuizmo::IsUsing() && !transformDrag_.active()) {
                     ImGui::SetWindowFocus();
-                    roots_.clear();
-                    for (const auto id : transformRoots) {
-                        const auto record = document.scene().find(id);
-                        const auto world = document.scene().worldTransform(id);
-                        const auto parent = record && record->parent ? document.scene().worldTransform(record->parent) : std::optional<Mat4>{Mat4{}};
-                        const auto inv = parent ? math::inverse(*parent) : std::nullopt;
-                        if (!record || !world || !inv) { roots_.clear(); break; }
-                        roots_.push_back({id,record->local,*world,*inv});
-                    }
-                    if (!roots_.empty() && document.beginTransform("Transform selection",transformRoots)) { dragging_=true; pickIntent_=false; renderer.cancelPicking(); ++serial_; }
-                }
-                if (dragging_ && changed) {
-                    const auto inverse = math::inverse(startProxy_);
-                    if (inverse) {
-                        const Mat4 delta = proxy_* *inverse;
-                        document.update([&](auto& records, auto&) {
-                            for (const auto& root : roots_) {
-                                const auto found = std::find_if(records.begin(),records.end(),[&](const auto& r){return r.id==root.id;});
-                                if (found != records.end()) found->local = root.parentInverse*delta*root.world;
-                            }
-                        });
+                    const auto operation=operation_==ImGuizmo::ROTATE?ViewportTransformOperation::Rotate:
+                        operation_==ImGuizmo::SCALE?ViewportTransformOperation::Scale:ViewportTransformOperation::Translate;
+                    if(transformDrag_.begin(document,transformRoots,startProxy_,operation,ImGui::GetIO().KeyShift)) {
+                        pickIntent_=false;renderer.cancelPicking();++serial_;
                     }
                 }
-                if (dragging_ && ImGui::IsKeyPressed(ImGuiKey_Escape,false)) cancel(document,renderer);
-                else if (dragging_ && !ImGuizmo::IsUsing()) { document.commit(); dragging_=false; roots_.clear(); }
+                if(transformDrag_.active() && changed) {
+                    const auto threshold=std::max(0.f,ImGui::GetIO().MouseDragThreshold);
+                    const bool moved=ImGui::GetIO().MouseDragMaxDistanceSqr[ImGuiMouseButton_Left]>=threshold*threshold;
+                    if(!transformDrag_.update(document,proxy_,moved)) {
+                        waitForRelease_=true;cancel(document,renderer);
+                    }
+                }
+                if(transformDrag_.active() && ImGui::IsKeyPressed(ImGuiKey_Escape,false))cancel(document,renderer);
+                else if(transformDrag_.active() && !ImGuizmo::IsUsing())transformDrag_.finish(document);
             }
             draw->ChannelsSetCurrent(0);
             // Resolve markers after applying this frame's gizmo delta, so their
@@ -308,7 +295,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             EntityId iconHit{}; float iconDistance = 15.0f;
             for (const auto& record : document.scene().records()) {
                 if(!document.scene().isVisible(record.id))continue;
-                if (!record.directional && !record.point && !record.particle && !record.collider && !record.character && !record.camera && (record.model || record.parent)) continue;
+                if (!record.directional && !record.point && !record.particle && !record.collider && !record.controller && !record.camera && (record.model || record.parent)) continue;
                 const auto world = document.scene().worldTransform(record.id);
                 if (!world) continue;
                 const auto position = math::transformPoint(*world,{0,0,0});
@@ -318,9 +305,9 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                 const auto color = WireColor;
                 float distance = centerVisible?std::hypot(center.x-ImGui::GetIO().MousePos.x,center.y-ImGui::GetIO().MousePos.y):1e9f;
                 if(record.point && selected(document,record.id))pointLightRange(*draw,position,record.point->radius,vp,viewport,color);
-                if (record.collider || record.character) {
+                if (record.collider || record.controller) {
                     if(!showCollisions)continue;
-                    const auto& rgba=record.character ? record.character->collisionColor : record.collider->collisionColor;
+                    const auto& rgba=record.controller ? record.controller->collisionColor : record.collider->collisionColor;
                     const auto collisionColor=ImGui::ColorConvertFloat4ToU32({rgba[0],rgba[1],rgba[2],rgba[3]});
                     distance=std::min(distance,gameplayMarker(*draw,record,*world,vp,viewport,collisionColor,ImGui::GetIO().MousePos));
                 }
@@ -355,7 +342,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             }
             draw->ChannelsMerge();
             draw->PopClipRect();
-            if (imageHovered && !blockKeys && !overGizmo && !dragging_ && !colliderDrag_.active() && !waitForRelease_ && !materialDrop_.active() && !frame.materialAssignment && !document.transactionActive() &&
+            if (imageHovered && !blockKeys && !overGizmo && !transformDrag_.active() && !colliderDrag_.active() && !waitForRelease_ && !materialDrop_.active() && !frame.materialAssignment && !document.transactionActive() &&
                 ImGui::GetDragDropPayload() == nullptr && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                 ImGui::SetWindowFocus();
                 if (iconHit) { renderer.cancelPicking(); select(document,iconHit,ImGui::GetIO().KeyCtrl,ImGui::GetIO().KeyShift); }
@@ -372,12 +359,12 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                     pickIntent_=renderer.requestPick({intentGeneration_,intentRevision_,intentSerial_,pickX_,pickY_,renderer.streamingSignature()});
                 }
             }
-            frame.viewport.inputBlocked |= dragging_ || colliderDrag_.active() || materialDrop_.active() || frame.materialAssignment.has_value() ||
+            frame.viewport.inputBlocked |= transformDrag_.active() || colliderDrag_.active() || materialDrop_.active() || frame.materialAssignment.has_value() ||
                 (overGizmo && !blockKeys) || (document.transactionActive() && !cameraGestureActive) || ImGui::GetDragDropPayload() != nullptr;
         }
     }
     ImGui::End();
-    if(colliderDrag_.active() && (frame.viewport.width<=0 || frame.viewport.height<=0))cancel(document,renderer);
+    if((transformDrag_.active() || colliderDrag_.active()) && (frame.viewport.width<=0 || frame.viewport.height<=0))cancel(document,renderer);
     if(materialDrop_.active() && (frame.viewport.width<=0 || frame.viewport.height<=0)) {
         materialDrop_.cancel();renderer.cancelPicking();++serial_;
     }

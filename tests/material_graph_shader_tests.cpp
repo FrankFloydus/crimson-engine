@@ -467,8 +467,10 @@ void compileChecks(const std::filesystem::path& compiler,const std::filesystem::
                 check(found!=variant.manifest.end()&&found->kind==kind&&found->count==count,"Separated Character lighting uniform manifest changed shape.");
             };
             for(const char* name:{"u_characterDirection","u_characterColor","u_characterResponse"})binding(name,ShaderUniformKind::Vec4,2);
-            for(const char* name:{"u_surfaceCategory","u_characterShadowRect","u_characterShadowDirection","u_characterShadowParameters","u_clusterRecordLayoutV5","u_ambientLight"})binding(name,ShaderUniformKind::Vec4,1);
-            binding("u_characterShadowMatrix",ShaderUniformKind::Mat4,1);
+            for(const char* name:{"u_surfaceCategory","u_clusterRecordLayoutV5","u_ambientLight"})binding(name,ShaderUniformKind::Vec4,1);
+            binding("u_characterShadowMatrix",ShaderUniformKind::Mat4,8);
+            binding("u_revealAtlas",ShaderUniformKind::Vec4,1);
+            for(const char* name:{"u_characterShadowRect","u_characterShadowDirection","u_characterShadowParameters"})binding(name,ShaderUniformKind::Vec4,8);
             const auto fragment=compileShader(config,materialGraphShaderRecipe(config,edited,variant));
             const auto vertex=compileShader(config,variant.vertexName);std::string diagnostic;
             if(!preflightGeneratedShaderPair(vertex.bytes,fragment.bytes,vertex.bytes,variant.manifest,diagnostic))

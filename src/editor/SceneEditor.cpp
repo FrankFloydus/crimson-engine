@@ -382,8 +382,8 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
             const auto redo=materialFocus ? std::string("Redo material edit") : particleFocus ? std::string("Redo particle edit") : "Redo " + document.history().redoLabel();
             if (ImGui::MenuItem(undo.c_str(),"Ctrl+Z",false,!viewportBusy() && (materialFocus ? materials.canUndo() : particleFocus ? particles.canUndo() : document.history().canUndo() && !document.transactionActive()))) { undoTarget(); }
             if (ImGui::MenuItem(redo.c_str(),"Ctrl+Y",false,!viewportBusy() && (materialFocus ? materials.canRedo() : particleFocus ? particles.canRedo() : document.history().canRedo() && !document.transactionActive()))) { redoTarget(); }
-            if (ImGui::MenuItem("Duplicate selection","Ctrl+D",false,!particleFocus && !materialFocus && !document.selection().ids.empty() && !document.transactionActive())) document.duplicateSelection();
-            if (ImGui::MenuItem("Delete selection","Delete",false,!particleFocus && !materialFocus && !document.selection().ids.empty() && !document.transactionActive())) document.eraseSelection();
+            if (ImGui::MenuItem("Duplicate selection","Ctrl+D",false,!particleFocus && !materialFocus && !scenePanelComponentFocused(document) && !document.selection().ids.empty() && !document.transactionActive())) document.duplicateSelection();
+            if (ImGui::MenuItem("Delete selection","Delete",false,!particleFocus && !materialFocus && !document.selection().ids.empty() && !document.transactionActive())) deleteScenePanelSelection(document);
             ImGui::Separator();
             if (ImGui::MenuItem("Preferences...")) preferences_.open();
             ImGui::EndMenu();
@@ -461,11 +461,13 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     const bool preferencesKeyboard=preferencesMouse || preferencesWindow(context->NavWindow) || gameKeyboard;
     const bool actionPending=opening_ || openingPopup_ || deletePopup_;
     std::uint64_t playParticle{};std::string openParticle,openMaterial;
+    if (panels_.outliner) drawSceneOutliner(document,assets,!viewportBusy() && !actionPending);
     if (panels_.inspector) drawSceneInspector(document,assets,renderer,!viewportBusy() && !actionPending,&playParticle,&openParticle,quader_,&openMaterial);
-    if (panels_.outliner) drawSceneOutliner(document,!viewportBusy() && !actionPending);
     const bool cameraNavigationAllowed=viewedCamera_==NoEntity || pilotingCamera_;
     auto frame=viewport_.draw(settings.camera,document,assets,renderer,navigationActive || actionPending || preferencesMouse,bgfxFrame,preferencesKeyboard,
         overlays_.collisions,overlays_.transformGizmo,cameraNavigationAllowed,cameraGestureActive_,viewedCamera_!=NoEntity);
+    if(frame.viewport.hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::GetDragDropPayload())
+        clearScenePanelComponentSelection(document);
     BrowserActions browser;
     if (panels_.assetBrowser) {
         browser=browser_.draw(assets,window,preferences_.values().browserPreviewSize,&renderer);
@@ -499,8 +501,8 @@ EditorFrame SceneEditor::draw(SceneDocument& document, SceneSettings& settings, 
     if (shortcuts.save && !viewportBusy() && !frame.materialAssignment)saveTarget(shortcuts.saveAs);
     if (shortcuts.undo)undoTarget();
     if (shortcuts.redo)redoTarget();
-    if (shortcuts.duplicate) document.duplicateSelection();
-    if (shortcuts.eraseSelection) document.eraseSelection();
+    if (shortcuts.duplicate && !scenePanelComponentFocused(document)) document.duplicateSelection();
+    if (shortcuts.eraseSelection) deleteScenePanelSelection(document);
     if (shortcuts.focusSelection && cameraNavigationAllowed && !frame.viewport.hovered && frame.viewport.height > 0)
         viewport_.focus(settings.camera,document,assets,frame.viewport.width/frame.viewport.height,viewedCamera_!=NoEntity);
     if (externalScene_ && externalScene_->id!=document.assetId()) externalScene_.reset();

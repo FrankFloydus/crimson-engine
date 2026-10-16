@@ -137,7 +137,7 @@ struct GpuMesh {
             .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Float).end();
         deformation=createModelDeformationSource(data);
         while(deformation && !deformation->ready())uploadModelDeformationSource(*deformation,data,SIZE_MAX);
-        const auto flags=deformation ? BGFX_BUFFER_COMPUTE_READ|BGFX_BUFFER_COMPUTE_FORMAT_32X1|BGFX_BUFFER_COMPUTE_TYPE_FLOAT:BGFX_BUFFER_NONE;
+        const auto flags=static_cast<std::uint16_t>(deformation ? BGFX_BUFFER_COMPUTE_READ|BGFX_BUFFER_COMPUTE_FORMAT_32X1|BGFX_BUFFER_COMPUTE_TYPE_FLOAT:BGFX_BUFFER_NONE);
         vertices = bgfx::createVertexBuffer(bgfx::copy(data.vertices.data(), static_cast<std::uint32_t>(data.vertices.size() * sizeof(ModelVertex))), layout,flags);
         bytes=data.vertices.size()*sizeof(ModelVertex)+data.indices.size()*(wide?4u:2u)+(deformation?deformation->bytes:0);
         if (wide) {
@@ -397,7 +397,6 @@ struct Renderer::Impl {
     bgfx::UniformHandle surfaceLighting{BGFX_INVALID_HANDLE},surfaceCategory{BGFX_INVALID_HANDLE},directionLightingRoles{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle characterDirection{BGFX_INVALID_HANDLE},characterColor{BGFX_INVALID_HANDLE},characterResponse{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle lightingResponse{BGFX_INVALID_HANDLE};
-    bgfx::UniformHandle playerReveal{BGFX_INVALID_HANDLE};
     ClusteredLightingStats clusterStats;
     std::string clusterStatus;
     std::string glowProgramFailure;
@@ -482,7 +481,6 @@ struct Renderer::Impl {
         destroyHandle(ambientEvaluateProgram);destroyHandle(ambientPublishProgram);destroyHandle(surfaceLighting);destroyHandle(surfaceCategory);destroyHandle(directionLightingRoles);
         destroyHandle(characterDirection);destroyHandle(characterColor);destroyHandle(characterResponse);
         destroyHandle(lightingResponse);
-        destroyHandle(playerReveal);
         destroyHandle(skyProgram);destroyHandle(skyRight);destroyHandle(skyUp);destroyHandle(skyForward);destroyHandle(skySampler);
         destroyHandle(white);
         destroyHandle(pbr); destroyHandle(present); destroyHandle(gridProgram); destroyHandle(encode);
@@ -579,7 +577,6 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
     impl_->characterColor=bgfx::createUniform("u_characterColor",bgfx::UniformType::Vec4,2);
     impl_->characterResponse=bgfx::createUniform("u_characterResponse",bgfx::UniformType::Vec4,2);
     impl_->lightingResponse=uniform("u_lightingResponse");
-    impl_->playerReveal=uniform("u_playerReveal");
     impl_->materialUvScale=uniform("u_materialUvScale");impl_->materialUvOffset=uniform("u_materialUvOffset");impl_->materialUvRotation=uniform("u_materialUvRotation");
     impl_->metallicRoughnessSampler = uniform("s_metallicRoughness",bgfx::UniformType::Sampler);
     impl_->occlusionSampler = uniform("s_occlusion",bgfx::UniformType::Sampler);
@@ -1430,7 +1427,7 @@ void Renderer::Impl::renderShadows(const RenderScene& scene,PointShadowRenderer&
         float handedness{1};
     };
     static_assert(MaxPointShadowLights==PointShadowLightBudget);
-    constexpr auto MaximumShadowTargets=MaxPointShadowLights+MaxDirectionalLights*4+1;
+    constexpr auto MaximumShadowTargets=MaxPointShadowLights+MaxDirectionalLights*4+MaximumActorShadows;
     std::array<std::vector<CasterDraw>,MaximumShadowTargets> casters;
     std::array<std::uint64_t,MaximumShadowTargets> signatures;
     signatures.fill(14695981039346656037ull);
@@ -1455,11 +1452,31 @@ void Renderer::Impl::renderShadows(const RenderScene& scene,PointShadowRenderer&
     std::vector<CasterInstance> instances;
     std::vector<Aabb> allBounds,worldCasterBounds;
     // The ordinary directional focus envelope may include opted-out meshes.
-    // Dedicated storage exists only while eligible player casters are present.
-    Aabb characterBounds;
+    // Dedicated storage exists only while eligible actor casters are present.
+    std::unordered_map<std::uint64_t,Aabb> actorBounds;
     const bool directionalShadows=std::any_of(scene.directionalLights.begin(),scene.directionalLights.begin()+directionalCount,
         [](const auto& light){return light.enabled&&light.castShadows;});
-    if(scene.shadowWorldId && (count || directionalShadows || scene.characterShadow.enabled)) {
+    const auto hasActorCaster=[&](const RenderModelInstance& instance,const std::shared_ptr<const ModelPose>& pose) {
+        const auto& asset=*instance.model.asset;const auto found=models.find(asset.id);
+        unsigned drawIndex{};
+        for(const auto& draw:asset.draws) {
+            const auto currentDraw=drawIndex++;
+            if(draw.primitive>=asset.primitives.size())continue;
+            const auto slot=asset.primitives[draw.primitive].material;
+            const auto* material=instance.materials&&slot<instance.materials->size()?&(*instance.materials)[slot]:
+                slot<asset.materials.size()?&asset.materials[slot]:nullptr;
+            if(!material||material->alphaBlend)continue;
+            const auto* textures=instance.textures&&slot<instance.textures->size()?&(*instance.textures)[slot]:nullptr;
+            if(textures&&textures->graph&&(textures->graph->blend==MaterialBlend::Alpha||textures->graph->blend==MaterialBlend::Additive))continue;
+            if(!streamModels->resident(asset.id,instance.resourceRevision,draw.primitive,0)&&
+                (found==models.end()||draw.primitive>=found->second->primitives.size()))continue;
+            ModelMatrix world,normal;float handedness{};
+            const auto local=pose&&currentDraw<pose->drawTransforms.size()?pose->drawTransforms[currentDraw]:draw.transform;
+            if(prepareModelMatrices(instance.model.transform,local,world,normal,handedness)==ModelTransformStatus::Ready)return true;
+        }
+        return false;
+    };
+    if(scene.shadowWorldId && (count || directionalShadows || !scene.actorShadows.empty())) {
         instances.reserve(scene.shadowInstances.size());
         if(directionalShadows){allBounds.reserve(scene.shadowInstances.size());worldCasterBounds.reserve(scene.shadowInstances.size());}
         for(const auto& instance:scene.shadowInstances)if(instance.castShadows&&instance.model.asset) {
@@ -1470,13 +1487,25 @@ void Renderer::Impl::renderShadows(const RenderScene& scene,PointShadowRenderer&
             if(instance.lightingCategory==lighting_scope::Character &&
                 (instance.lightingScopes.shadowCasterMask&lighting_scope::Character) &&
                 instance.blend!=MaterialBlend::Alpha && instance.blend!=MaterialBlend::Additive &&
-                (scene.shadowFocusEntities.empty() || isFocus) && bounds.valid) {
-                math::include(characterBounds,bounds.minimum);math::include(characterBounds,bounds.maximum);
+                instance.actorOwner && bounds.valid && hasActorCaster(instance,pose)) {
+                math::include(actorBounds[instance.actorOwner],bounds);
             }
             if(directionalShadows){allBounds.push_back(bounds);if(!isFocus)worldCasterBounds.push_back(bounds);}
         }
     }
-    auto characterFit=directional_shadow::buildCharacter(scene.characterShadow,characterBounds,scene.shadowResolution);
+    std::vector<const CharacterShadowSource*> requestedActors;
+    for(const auto& source:scene.actorShadows)if(source.owner&&source.enabled&&source.strength>0)requestedActors.push_back(&source);
+    std::sort(requestedActors.begin(),requestedActors.end(),[](const auto* a,const auto* b){return a->owner<b->owner;});
+    std::array<const CharacterShadowSource*,MaximumActorShadows> actorSources{};
+    std::array<std::optional<directional_shadow::Cascade>,MaximumActorShadows> actorFits;
+    unsigned actorCount{};
+    for(const auto* source:requestedActors) {
+        if(actorCount==MaximumActorShadows)break;
+        const auto bounds=actorBounds.find(source->owner);if(bounds==actorBounds.end())continue;
+        auto fit=directional_shadow::buildCharacter(*source,bounds->second,scene.shadowResolution);
+        if(!fit)continue;
+        actorSources[actorCount]=source;actorFits[actorCount++]=std::move(fit);
+    }
     const ShadowCamera shadowCamera{scene.settings.camera,aspect};
     std::vector<Aabb> receiverStorage;
     auto receiverBounds=scene.shadowReceiverBounds;
@@ -1502,20 +1531,22 @@ void Renderer::Impl::renderShadows(const RenderScene& scene,PointShadowRenderer&
     struct ShadowTarget {
         const PointLight* point{};
         const directional_shadow::Cascade* projection{};
-        bool partitionFocus{},focusedOnly{},characterOnly{};
+        bool partitionFocus{},focusedOnly{};
+        std::uint64_t actorOwner{};
         std::uint32_t casterMask{lighting_scope::All};
     };
     std::array<ShadowTarget,MaximumShadowTargets> shadowTargets{};
-    const auto characterIndex=count+directionalCount*4;
-    const auto targetCount=characterIndex+1;
+    const auto actorStart=count+directionalCount*4;
+    const auto targetCount=actorStart+actorCount;
     static_assert(MaximumShadowTargets<=64);
     for(std::size_t index=0;index<targetCount;++index) {
         hashValue(signatures[index],programRevision);
         if(!scene.shadowWorldId)continue;
         auto& target=shadowTargets[index];
         if(index<count) {target.point=&pointLights[index];target.casterMask=pointLights[index].roles.shadowCasterMask;continue;}
-        if(index==characterIndex) {
-            if(characterFit){target.projection=&*characterFit;target.characterOnly=true;target.casterMask=lighting_scope::Character;}
+        if(index>=actorStart) {
+            const auto actor=index-actorStart;
+            if(actorFits[actor]){target.projection=&*actorFits[actor];target.actorOwner=actorSources[actor]->owner;target.casterMask=lighting_scope::Character;}
             continue;
         }
         const auto directionIndex=(index-count)/4,projectionIndex=(index-count)%4;
@@ -1539,8 +1570,7 @@ void Renderer::Impl::renderShadows(const RenderScene& scene,PointShadowRenderer&
         std::uint64_t instanceTargets{};
         for(std::size_t index=0;index<targetCount;++index) {
             const auto& target=shadowTargets[index];
-            if(target.characterOnly && (instance.lightingCategory!=lighting_scope::Character ||
-                (!scene.shadowFocusEntities.empty() && !entry.focused)))continue;
+            if(target.actorOwner&&instance.actorOwner!=target.actorOwner)continue;
             if(!(target.casterMask & instance.lightingScopes.shadowCasterMask))continue;
             if(target.partitionFocus && entry.focused!=target.focusedOnly)continue;
             if(visible(target,entry.bounds))instanceTargets|=std::uint64_t{1}<<index;
@@ -1636,8 +1666,8 @@ void Renderer::Impl::renderShadows(const RenderScene& scene,PointShadowRenderer&
     }
     // Fully translucent or not-yet-resident primitives cannot contribute a
     // depth caster. Do not retain a dedicated tile for an empty draw list.
-    if(characterFit && casters[characterIndex].empty())characterFit.reset();
-    const auto drawCaster=[&](const CasterDraw& draw,bgfx::ViewId view,MaterialGraphPass pass,const directional_shadow::Cascade* cascade=nullptr,unsigned cascadeIndex=0,const point_shadow::TileRect* rectangle=nullptr,bool character=false) {
+    for(unsigned actor=0;actor<actorCount;++actor)if(casters[actorStart+actor].empty())actorFits[actor].reset();
+    const auto drawCaster=[&](const CasterDraw& draw,bgfx::ViewId view,MaterialGraphPass pass,const directional_shadow::Cascade* cascade=nullptr,unsigned cascadeIndex=0,const point_shadow::TileRect* rectangle=nullptr,const Vec4* actorTile=nullptr) {
                 const auto& material=*draw.material;
                 const bool textured=material.alphaMask && draw.textures && bgfx::isValid(draw.textures->handles[0]);
                 const Vec4 emissive{0,0,0,material.alphaCutoff};
@@ -1657,7 +1687,7 @@ void Renderer::Impl::renderShadows(const RenderScene& scene,PointShadowRenderer&
                 if(graph)graph->bind(scene.materialContext);
                 if(cascade) {
                     const auto projection=cascade->projection*cascade->view;
-                    const auto tile=directional_shadow::casterTile(cascadeIndex,character?1:cameraCount==2?(cameraContext==1?2:4):2,character?1:cameraCount==2?1:2);
+                    const auto tile=actorTile?*actorTile:directional_shadow::casterTile(cascadeIndex,cameraCount==2?(cameraContext==1?2:4):2,cameraCount==2?1:2);
                     bgfx::setUniform(directionalCasterViewProjection,projection.data());bgfx::setUniform(directionalCasterTile,tile.data());
                     bgfx::setScissor(rectangle->x,rectangle->y,rectangle->width,rectangle->height);
                 }
@@ -1677,7 +1707,7 @@ void Renderer::Impl::renderShadows(const RenderScene& scene,PointShadowRenderer&
                 drawCaster(draw,view,MaterialGraphPass::PointShadow);++draws;
             }
             return draws;
-        },bool(characterFit));
+        },actorCount);
     owner.renderDirectional(scene.directionalLights,cascadeFits,std::span(signatures).subspan(count,directionalCount*4),shadowCamera,cameraContext,firstDirectionalView,
         [&](std::size_t lightIndex,unsigned cascadeIndex,const directional_shadow::Cascade& cascade,const point_shadow::TileRect& rectangle,bgfx::ViewId view) {
             // A depth-only fullscreen triangle clears this tile at depth one.
@@ -1701,10 +1731,10 @@ void Renderer::Impl::renderShadows(const RenderScene& scene,PointShadowRenderer&
             }
             return draws;
         });
-    owner.renderCharacter(scene.characterShadow,characterFit,signatures[characterIndex],characterView,
-        [&](const directional_shadow::Cascade& fit,const point_shadow::TileRect& rectangle,bgfx::ViewId view) {
+    for(unsigned actor=0;actor<actorCount;++actor)owner.renderActor(actor,*actorSources[actor],actorFits[actor],signatures[actorStart+actor],characterView,
+        [&](const directional_shadow::Cascade& fit,const point_shadow::TileRect& rectangle,const Vec4& tile,bgfx::ViewId view) {
             const Mat4 identity;const auto clearProjection=math::translation({0,0,1});
-            const auto tile=directional_shadow::casterTile(0,1,1);const Vec4 one{1,1,1,1},zero{};
+            const Vec4 one{1,1,1,1},zero{};
             bgfx::setUniform(surfaceLighting,zero.data());
             const Vec4 category{float(lighting_scope::World),0,0,0};bgfx::setUniform(surfaceCategory,category.data());
             bgfx::setTransform(identity.data());bgfx::setUniform(modelNormalMatrix,identity.data());
@@ -1714,13 +1744,15 @@ void Renderer::Impl::renderShadows(const RenderScene& scene,PointShadowRenderer&
             bgfx::setTexture(0,albedoSampler,white);bgfx::setScissor(rectangle.x,rectangle.y,rectangle.width,rectangle.height);
             fullscreen.bind();bgfx::setState(BGFX_STATE_WRITE_Z|BGFX_STATE_DEPTH_TEST_ALWAYS);bgfx::submit(view,directionalShadowProgram);
             std::uint32_t draws=1;
-            for(const auto& caster:casters[characterIndex]) {
-                drawCaster(caster,view,MaterialGraphPass::DirectionalShadow,&fit,0,&rectangle,true);++draws;
+            for(const auto& caster:casters[actorStart+actor]) {
+                drawCaster(caster,view,MaterialGraphPass::DirectionalShadow,&fit,0,&rectangle,&tile);++draws;
             }
             return draws;
         });
     owner.setCasterCount(scene.shadowInstances.size());
+    owner.setActorAdmission(static_cast<std::uint32_t>(requestedActors.size()),actorCount);
     shadowStatus=shadows->status();
+    if(requestedActors.size()>actorCount){if(!shadowStatus.empty())shadowStatus+='\n';shadowStatus+="Actor shadows: "+std::to_string(requestedActors.size()-actorCount)+" sources use the shadowless fallback (8-map capacity or no ready casters).";}
     if(!thumbnailShadows->status().empty()){if(!shadowStatus.empty())shadowStatus+='\n';shadowStatus+="Thumbnail shadows: "+thumbnailShadows->status();}
     if(shadowSelection.unadmittedCount) {
         if(!shadowStatus.empty())shadowStatus+='\n';
@@ -1867,7 +1899,7 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
     target.clustered->advance(renderFrame);
     const bool clusterReady=target.clustered->prepare(settings.camera,w,h,points,shadowIndices,lighting.brdfCpu(),
         passView(RenderPassKind::LightAssignment),scene.localLightMode==LocalLightMode::AllLightsReference,
-        ambientEnabled?w:0,ambientEnabled?h:0,occluderEnabled?w:0,occluderEnabled?h:0);
+        ambientEnabled?w:0,ambientEnabled?h:0,occluderEnabled?w:0,occluderEnabled?h:0,scene.reveals);
     if(sceneView){clusterStats=target.clustered->stats();clusterStatus=target.clustered->status();}
     if(!clusterReady) {
         if(!sceneView)throw std::runtime_error(target.clustered->status());
@@ -1884,28 +1916,32 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
         directionRoles[i*4+2]=light.roles.ambientReveal?light.roles.ambientRevealStrength:0.f;
         directionRoles[i*4+3]=light.castShadows?1.f:0.f;
     }
-    std::array<Vec4,2> characterDirections{},characterColors{},characterResponses{};
-    for(std::size_t i=0;i<scene.characterLights.size();++i) {
-        const auto& light=scene.characterLights[i];if(!scene.sceneMode || !validCharacterLight(light))continue;
-        const auto rays=math::normalized(light.direction);
-        characterDirections[i]={rays[0],rays[1],rays[2],light.enabled?light.intensity:0.f};
-        characterColors[i]={toLinear(light.color[0]),toLinear(light.color[1]),toLinear(light.color[2]),light.diffuse};
-        characterResponses[i]={light.specular,0,0,0};
+    struct ActorUniforms {std::array<Vec4,2> directions{},colors{},responses{};};
+    std::unordered_map<std::uint64_t,ActorUniforms> actorUniforms;
+    for(const auto& actor:scene.actorLighting)if(actor.owner&&scene.sceneMode) {
+        auto& values=actorUniforms[actor.owner];
+        for(std::size_t i=0;i<actor.lights.size();++i) {
+            const auto& light=actor.lights[i];if(!validCharacterLight(light))continue;
+            const auto rays=math::normalized(light.direction);
+            values.directions[i]={rays[0],rays[1],rays[2],light.enabled?light.intensity:0.f};
+            values.colors[i]={toLinear(light.color[0]),toLinear(light.color[1]),toLinear(light.color[2]),light.diffuse};
+            values.responses[i]={light.specular,0,0,0};
+        }
     }
+    const ActorUniforms noActor{};
+    const auto bindActor=[&](std::uint64_t owner) {
+        const auto found=actorUniforms.find(owner);const auto& values=found!=actorUniforms.end()?found->second:noActor;
+        bgfx::setUniform(characterDirection,values.directions.data(),2);bgfx::setUniform(characterColor,values.colors.data(),2);
+        bgfx::setUniform(characterResponse,values.responses.data(),2);
+    };
     const float lightCountValues[]{static_cast<float>(directionalCount),static_cast<float>(points.size()),0,0};
     const Vec4 lightingResponseValues{settings.environment.ambientVisibility.attenuateEmission?1.f:0.f,0,0,0};
-    const auto& reveal=scene.playerReveal;
-    const Vec4 playerRevealValues{reveal.position[0],reveal.position[1],reveal.position[2],
-        scene.sceneMode&&reveal.enabled&&math::finite(reveal.position)&&std::isfinite(reveal.spread)&&reveal.spread>0?
-            std::min(reveal.spread,100000.f):0.f};
     const auto bindDirections=[&] {
         bgfx::setUniform(direction,directions.data(),static_cast<std::uint16_t>(MaxDirectionalLights));
         bgfx::setUniform(directionColor,directionColors.data(),static_cast<std::uint16_t>(MaxDirectionalLights));
         bgfx::setUniform(directionLightingRoles,directionRoles.data(),static_cast<std::uint16_t>(MaxDirectionalLights));
-        bgfx::setUniform(characterDirection,characterDirections.data(),2);bgfx::setUniform(characterColor,characterColors.data(),2);
-        bgfx::setUniform(characterResponse,characterResponses.data(),2);
+        bindActor(0);
         bgfx::setUniform(lightCounts,lightCountValues);
-        bgfx::setUniform(playerReveal,playerRevealValues.data());
     };
     if(!target.ambient)target.ambient=std::make_unique<AmbientVisibilityGpu>(ambientEvaluateProgram,ambientPublishProgram);
     target.ambient->setPrograms(ambientEvaluateProgram,ambientPublishProgram);
@@ -2064,7 +2100,7 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
                             prepass?1.f:0.f,transparent?1.f:0.f};
                         bgfx::setUniform(surfaceLighting,scopes.data());
                         const Vec4 category{float(instance.lightingCategory),0,0,0};bgfx::setUniform(surfaceCategory,category.data());
-                        if(!prepass) {bindLighting(graph?12:5);bindFog(fogValues,graph?graph->receiveFog:material.receiveFog);}
+                        if(!prepass) {bindLighting(graph?12:5);bindActor(instance.actorOwner);bindFog(fogValues,graph?graph->receiveFog:material.receiveFog);}
                         for(std::uint8_t slot=0;slot<samplers.size();++slot)
                             bgfx::setTexture(slot,samplers[slot],bgfx::isValid(bindings.handles[slot])?bindings.handles[slot]:white,bindings.flags[slot]);
                         if(graph)graph->bind(scene.materialContext);

@@ -1,4 +1,4 @@
-#include "runtime/PlayerController.h"
+#include "runtime/AgentSteering.h"
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -16,7 +16,7 @@ void near(const Vec3& actual,const Vec3& expected,double tolerance=2e-5) {
 Vec3 direction(double yaw){return {-std::sin(yaw),0,-std::cos(yaw)};}
 double yaw(const Vec3& direction){return std::atan2(-direction[0],-direction[2]);}
 void pathAndIdleFacing() {
-    PlayerController controller;const auto idle=controller.update({},Forward,5,Tick);
+    AgentSteering controller;const auto idle=controller.update({},Forward,5,Tick);
     near(idle.velocity,{});near(idle.facing,Forward);
     controller.setPath({{3,0,0},{3,0,-4}});
     const auto first=controller.update({},Forward,5,Tick);
@@ -31,7 +31,7 @@ void pathAndIdleFacing() {
     controller.setPath({{10,0,0}});controller.reset();require(controller.path().empty(),"Reset retained old corners.");
 }
 void arrivalAndRetarget() {
-    PlayerController controller;Vec3 position{},forward=Forward;const Vec3 destination{1,0,0};
+    AgentSteering controller;Vec3 position{},forward=Forward;const Vec3 destination{1,0,0};
     controller.setPath({destination});
     for(unsigned step=0;step<100 && controller.destination();++step) {
         const auto motion=controller.update(position,forward,5,Tick);
@@ -39,7 +39,7 @@ void arrivalAndRetarget() {
         require(math::length(displacement)<=math::length(destination-position)+1e-6,"Final tick overshot its destination.");
         position=position+displacement;forward=motion.facing;
     }
-    require(!controller.destination(),"Controller never arrived.");near(position,destination,PlayerController::ArrivalDistance+1e-5);
+    require(!controller.destination(),"Controller never arrived.");near(position,destination,AgentSteering::ArrivalDistance+1e-5);
     controller.setPath({{10,0,0}});controller.setPath({{0,0,-10}});
     near(controller.update({},Forward,5,Tick).velocity,{0,0,-5});
     controller.setPath({{.02f,0,0}});
@@ -48,19 +48,19 @@ void arrivalAndRetarget() {
     near(controller.update({},Forward,5,Tick).velocity,{5,0,0});
 }
 void shortestTurn() {
-    PlayerController controller;const double start=179*std::numbers::pi/180,target=-179*std::numbers::pi/180;
+    AgentSteering controller;const double start=179*std::numbers::pi/180,target=-179*std::numbers::pi/180;
     controller.setPath({direction(target)*10});
     const auto motion=controller.update({},direction(start),5,Tick);
     const auto turn=std::remainder(yaw(motion.facing)-start,2*std::numbers::pi);
     require(turn>0 && turn<2*std::numbers::pi/180,"Path facing took the long turn across the yaw seam.");
-    const auto expected=std::remainder(target-start,2*std::numbers::pi)*(1-std::exp(-PlayerController::FacingResponse*Tick));
+    const auto expected=std::remainder(target-start,2*std::numbers::pi)*(1-std::exp(-AgentSteering::FacingResponse*Tick));
     require(std::abs(turn-expected)<2e-6,"Facing did not use exponential response.");
     controller.setPath({{10,0,3}});const auto whole=controller.update({},Forward,0,.1).facing;
     auto divided=Forward;for(int step=0;step<6;++step)divided=controller.update({},divided,0,.1/6).facing;
     near(whole,divided,5e-5);
 }
 void invalidInputs() {
-    const auto nan=std::numeric_limits<float>::quiet_NaN();PlayerController controller;
+    const auto nan=std::numeric_limits<float>::quiet_NaN();AgentSteering controller;
     controller.setPath({{10,0,0},{nan,0,0}});require(!controller.destination(),"Nonfinite path accepted.");
     controller.setPath({{10,0,0}});
     near(controller.update({},Forward,5,0).velocity,{});near(controller.update({},Forward,-1,Tick).velocity,{});

@@ -1,25 +1,22 @@
-// The player's silhouette has its own character-only caster map, sharing the
-// existing comparison atlas. It attenuates World reflected lighting only.
-uniform mat4 u_characterShadowMatrix;
-uniform vec4 u_characterShadowRect; // Inner normalized origin XY / size ZW.
-uniform vec4 u_characterShadowDirection; // World ray XYZ, strength W.
-uniform vec4 u_characterShadowParameters; // World depth bias, normal bias in texels, distance, enabled.
+// Independent actor-only caster projections share the comparison atlas.
+// CPU admission is bounded; unadmitted actors contribute no silhouette.
+uniform mat4 u_characterShadowMatrix[8];
+uniform vec4 u_characterShadowRect[8]; // Inner normalized origin XY / size ZW.
+uniform vec4 u_characterShadowDirection[8]; // World ray XYZ, strength W.
+uniform vec4 u_characterShadowParameters[8]; // Bias, normal bias, distance, enabled.
 
-float characterShadowVisibility(vec3 position, vec3 geometricNormal, vec3 planeNormal, float receiveShadows)
+float actorShadowVisibility(int actor, vec3 position, vec3 geometricNormal, vec3 planeNormal)
 {
-    // World receivers with direct lighting disabled still receive IBL and
-    // must retain the player's shadow in that reflected illumination.
-    if (receiveShadows < 0.5 || u_surfaceCategory.x > 1.5 ||
-        u_characterShadowParameters.w < 0.5 || u_characterShadowDirection.w <= 0.0 || u_shadowAtlas.z < 1.0)
+    if (u_characterShadowParameters[actor].w < 0.5 || u_characterShadowDirection[actor].w <= 0.0)
         return 1.0;
-    vec3 uAxis = mul(vec4(0.5, 0.0, 0.0, 0.0), u_characterShadowMatrix).xyz;
-    vec3 vAxis = mul(vec4(0.0, -0.5, 0.0, 0.0), u_characterShadowMatrix).xyz;
-    vec3 zAxis = mul(vec4(0.0, 0.0, 1.0, 0.0), u_characterShadowMatrix).xyz;
+    vec3 uAxis = mul(vec4(0.5, 0.0, 0.0, 0.0), u_characterShadowMatrix[actor]).xyz;
+    vec3 vAxis = mul(vec4(0.0, -0.5, 0.0, 0.0), u_characterShadowMatrix[actor]).xyz;
+    vec3 zAxis = mul(vec4(0.0, 0.0, 1.0, 0.0), u_characterShadowMatrix[actor]).xyz;
     float texelWorld = 1.0 / max(length(uAxis) * u_shadowAtlas.z, 0.00000001);
-    vec3 direction = u_characterShadowDirection.xyz;
-    vec3 biased = position + geometricNormal * (u_characterShadowParameters.y * texelWorld *
-        (1.0 - max(dot(geometricNormal, -direction), 0.0))) - direction * u_characterShadowParameters.x;
-    vec3 clip = mul(u_characterShadowMatrix, vec4(biased, 1.0)).xyz;
+    vec3 direction = u_characterShadowDirection[actor].xyz;
+    vec3 biased = position + geometricNormal * (u_characterShadowParameters[actor].y * texelWorld *
+        (1.0 - max(dot(geometricNormal, -direction), 0.0))) - direction * u_characterShadowParameters[actor].x;
+    vec3 clip = mul(u_characterShadowMatrix[actor], vec4(biased, 1.0)).xyz;
     vec2 uv = vec2(clip.x * 0.5 + 0.5, -clip.y * 0.5 + 0.5);
     if (any(lessThan(uv, vec2_splat(0.0))) || any(greaterThan(uv, vec2_splat(1.0))) || clip.z < 0.0 || clip.z > 1.0)
         return 1.0;
@@ -31,8 +28,8 @@ float characterShadowVisibility(vec3 position, vec3 geometricNormal, vec3 planeN
     if (abs(determinant) > 0.000000000001)
         gradient = vec2(dot(zAxis, uTangent), dot(zAxis, cross(planeNormal, uAxis))) /
             (determinant * u_shadowAtlas.z);
-    vec2 pixel = (u_characterShadowRect.xy + uv * u_characterShadowRect.zw) / u_shadowAtlas.xy;
-    vec2 origin = u_characterShadowRect.xy / u_shadowAtlas.xy - vec2_splat(2.0);
+    vec2 pixel = (u_characterShadowRect[actor].xy + uv * u_characterShadowRect[actor].zw) / u_shadowAtlas.xy;
+    vec2 origin = u_characterShadowRect[actor].xy / u_shadowAtlas.xy - vec2_splat(2.0);
     float visibility = 0.0;
     for (int y = -1; y <= 1; ++y)
         for (int x = -1; x <= 1; ++x)
@@ -44,5 +41,14 @@ float characterShadowVisibility(vec3 position, vec3 geometricNormal, vec3 planeN
             float depth = clip.z + dot(gradient, shallowCenter - pixel);
             visibility += shadow2D(s_pointShadow, vec3(samplePixel * u_shadowAtlas.xy, depth));
         }
-    return mix(1.0, visibility / 9.0, u_characterShadowDirection.w);
+    return mix(1.0, visibility / 9.0, u_characterShadowDirection[actor].w);
+}
+
+float characterShadowVisibility(vec3 position, vec3 geometricNormal, vec3 planeNormal, float receiveShadows)
+{
+    if (receiveShadows < 0.5 || u_surfaceCategory.x > 1.5 || u_shadowAtlas.z < 1.0) return 1.0;
+    float visibility = 1.0;
+    for (int actor = 0; actor < 8; ++actor)
+        visibility = min(visibility, actorShadowVisibility(actor, position, geometricNormal, planeNormal));
+    return visibility;
 }

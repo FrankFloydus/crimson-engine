@@ -1,5 +1,7 @@
 #include "SceneDocument.h"
+#include "CameraTemplates.h"
 #include "BuiltinModels.h"
+#include "SceneNames.h"
 #include "EnvironmentSerialization.h"
 #include "assets/AtomicFile.h"
 #include "assets/ContentStorage.h"
@@ -28,6 +30,12 @@
 namespace crimson {
 namespace {
 using Json = nlohmann::json;
+// Schema-v16 optional editor metadata. Tokens are stable independently of labels.
+constexpr std::array<std::string_view,AllSceneComponentKinds.size()> ComponentOrderTokens{
+    "transform","actor","motor","controller","navigation","playerInput","lightRig",
+    "darknessReveal","camera","cameraFollow","model","collider","directional","point",
+    "environment","particle","quader"};
+
 std::string sceneNameKey(std::string_view name) {
     const auto first=name.find_first_not_of(" \t\r\n");
     if(first==std::string_view::npos)return {};
@@ -130,7 +138,7 @@ CharacterLight readCharacterLight(const Json& source,CharacterLight value) {
     if(!validCharacterLight(value))throw std::runtime_error("Character light settings are invalid.");
     return value;
 }
-Json lightRigJson(const PlayerLightRigSettings& value) {
+Json lightRigJson(const ActorLightRigSettings& value) {
     const auto& local=value.localWorld;const auto& shadow=value.characterShadow;
     return {{"version",4},{"enabled",value.enabled},{"showGizmos",value.showGizmos},
         {"key",characterLightJson(value.key)},{"fill",characterLightJson(value.fill)},
@@ -173,9 +181,9 @@ float migratedPointIntensity(float irradiance,const LocalWorldLightSettings& lig
         light.rangeFalloffExponent,light.edgeSoftness,light.attenuation);
     return static_cast<float>(std::min(double(irradiance)/std::max(double(attenuation),1e-12),1000000.));
 }
-PlayerLightRigSettings readLightRig(const Json& source,const CharacterRevealSettings& reveal,float characterHeight) {
+ActorLightRigSettings readLightRig(const Json& source,const DarknessRevealSettings& reveal,float characterHeight) {
     if(!source.is_object())throw std::runtime_error("Character light rig settings must be an object.");
-    PlayerLightRigSettings value;
+    ActorLightRigSettings value;
     value.enabled=source.value("enabled",value.enabled);value.showGizmos=source.value("showGizmos",value.showGizmos);
     if(source.contains("version")) {
         const auto& encodedVersion=source.at("version");
@@ -195,7 +203,7 @@ PlayerLightRigSettings readLightRig(const Json& source,const CharacterRevealSett
             local.castShadows=old.value("castShadows",local.castShadows);
             local.shadowDepthBias=old.value("shadowDepthBias",local.shadowDepthBias);local.shadowNormalBias=old.value("shadowNormalBias",local.shadowNormalBias);
             if(version==3) {
-                if(!validLocalWorldLightSettings(local)||!validCharacterRevealSettings(reveal)||
+                if(!validLocalWorldLightSettings(local)||!validDarknessRevealSettings(reveal)||
                     !std::isfinite(characterHeight)||characterHeight<=0)
                     throw std::runtime_error("Former World Fill settings are invalid.");
                 local.radius=std::clamp(std::max(2.f*reveal.spread,1.25f*local.height),.01f,100000.f);
@@ -243,7 +251,7 @@ PlayerLightRigSettings readLightRig(const Json& source,const CharacterRevealSett
         auto& shadow=value.characterShadow;shadow.enabled=key.enabled&&key.castShadows;
         shadow.shadowDepthBias=key.depthBias;shadow.shadowNormalBias=key.normalBias;
     }
-    if(!validPlayerLightRigSettings(value))throw std::runtime_error("Character light rig settings are invalid.");
+    if(!validActorLightRigSettings(value))throw std::runtime_error("Character light rig settings are invalid.");
     return value;
 }
 template<class Light> Json lightJson(const Light& light) {
@@ -326,7 +334,7 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
     const auto contents=readText(path);
     const Json json=Json::parse(contents);
     const auto version=json.at("version").get<int>();
-    if ((version<1 || version>15) || json.at("type") != "crimson-scene")
+    if ((version<1 || version>17) || json.at("type") != "crimson-scene")
         throw std::runtime_error("Unsupported scene file type or version.");
     SceneSnapshot result; result.fingerprint=fingerprint(contents);
     result.name = json.at("name").get<std::string>();
@@ -388,30 +396,48 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
         if (entity.contains("point")) record.point = readLight<ScenePointLight>(entity.at("point"));
         if (version>=2 && entity.contains("environment")) record.environment=readEnvironment(entity.at("environment"),version>=6);
         if (version>=3 && entity.contains("particle")) record.particle=entity.at("particle").get<AssetRef<ParticleEffectAsset>>();
-        if (version>=4 && entity.contains("character")) {
+        if (version>=4 && version<=15 && entity.contains("character")) {
             const auto& c=entity.at("character");
-            record.character=SceneCharacter{c.at("height").get<float>(),c.at("radius").get<float>(),c.at("moveSpeed").get<float>()};
-            record.character->showRoute=c.value("showRoute",true);
-            record.character->showCollisionInGame=c.value("showCollisionInGame",false);
-            record.character->collisionColor=readCollisionColor(c,record.character->collisionColor);
+            record.actor.emplace();record.motor=SceneMotor{c.at("moveSpeed").get<float>()};
+            record.controller=SceneCharacterController{c.at("height").get<float>(),c.at("radius").get<float>()};
+            record.navigation=SceneNavigationAgent{c.value("showRoute",true)};record.playerInput.emplace();
+            record.lightRig.emplace();record.darknessReveal.emplace();
+            record.controller->showCollisionInGame=c.value("showCollisionInGame",false);
+            record.controller->collisionColor=readCollisionColor(c,record.controller->collisionColor);
             if(c.contains("darknessReveal")) {
                 const auto& reveal=c.at("darknessReveal");
                 if(!reveal.is_object())throw std::runtime_error("Character darkness reveal settings must be an object.");
                 if(reveal.contains("version")&&reveal.at("version")!=1&&reveal.at("version")!=2)
                     throw std::runtime_error("Unsupported Character darkness reveal version.");
-                record.character->darknessReveal.enabled=reveal.value("enabled",true);
-                record.character->darknessReveal.spread=reveal.contains("version")&&reveal.at("version")==2?
+                (*record.darknessReveal).enabled=reveal.value("enabled",true);
+                (*record.darknessReveal).spread=reveal.contains("version")&&reveal.at("version")==2?
                     reveal.value("spread",8.f):reveal.value("radius",8.f);
             } else if(c.contains("lightRig")) {
                 const auto& old=c.at("lightRig");
                 if(!old.contains("actorLights")&&old.value("enabled",false)) {
                     if(old.contains("reveal")&&old.at("reveal").is_object()&&old.at("reveal").value("enabled",false))
-                        record.character->darknessReveal.spread=old.at("reveal").value("radius",8.f);
+                        (*record.darknessReveal).spread=old.at("reveal").value("radius",8.f);
                     else if(old.contains("key")&&old.at("key").is_object())
-                        record.character->darknessReveal.spread=old.at("key").value("radius",8.f);
+                        (*record.darknessReveal).spread=old.at("key").value("radius",8.f);
                 }
             }
-            if(c.contains("lightRig"))record.character->lightRig=readLightRig(c.at("lightRig"),record.character->darknessReveal,record.character->height);
+            if(c.contains("lightRig"))(*record.lightRig)=readLightRig(c.at("lightRig"),(*record.darknessReveal),record.controller->height);
+        }
+        if(version>=16) {
+            if(entity.contains("actor")) {if(!entity.at("actor").is_object())throw std::runtime_error("Actor must be an object.");record.actor.emplace();}
+            if(entity.contains("motor")) {const auto& c=entity.at("motor");record.motor=SceneMotor{c.value("moveSpeed",5.f),c.value("enabled",true)};}
+            if(entity.contains("controller")) {
+                const auto& c=entity.at("controller");record.controller=SceneCharacterController{c.value("height",1.8f),c.value("radius",.3f),c.value("showCollisionInGame",false)};
+                record.controller->collisionColor=readCollisionColor(c,record.controller->collisionColor);
+            }
+            if(entity.contains("navigation")) {const auto& c=entity.at("navigation");record.navigation=SceneNavigationAgent{c.value("showRoute",true),c.value("enabled",true)};}
+            if(entity.contains("playerInput")) {const auto& c=entity.at("playerInput");record.playerInput=ScenePlayerInput{c.value("enabled",true)};}
+            if(entity.contains("darknessReveal")) {
+                const auto& c=entity.at("darknessReveal");
+                if(!c.is_object() || (c.contains("version")&&c.at("version")!=2))throw std::runtime_error("Unsupported Darkness Reveal component.");
+                record.darknessReveal=DarknessRevealSettings{c.value("enabled",true),c.value("spread",8.f)};
+            }
+            if(entity.contains("lightRig"))record.lightRig=readLightRig(entity.at("lightRig"),record.darknessReveal.value_or(DarknessRevealSettings{}),record.controller?record.controller->height:1.8f);
         }
         if (version>=4 && entity.contains("collider")) {
             const auto& c=entity.at("collider");
@@ -443,8 +469,15 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
         }
         if (version>=4 && entity.contains("camera")) {
             const auto& c=entity.at("camera");
-            record.camera=SceneCamera{c.at("verticalFov").get<float>(),c.at("near").get<float>(),c.at("far").get<float>(),
-                parseId(c.at("followTarget")),c.at("followOffset").get<Vec3>()};
+            record.camera=SceneCamera{c.at("verticalFov").get<float>(),c.at("near").get<float>(),c.at("far").get<float>()};
+            if(version<=15) {
+                const auto target=parseId(c.at("followTarget"));
+                if(target)record.cameraFollow=SceneCameraFollow{target,c.at("followOffset").get<Vec3>()};
+            }
+        }
+        if(version>=16 && entity.contains("cameraFollow")) {
+            const auto& c=entity.at("cameraFollow");
+            record.cameraFollow=SceneCameraFollow{parseId(c.at("target")),c.at("offset").get<Vec3>(),c.at("worldBasis").get<Mat4>()};
         }
         if(version>=9 && version<=11 && entity.contains("meshCollider")) {
             if(record.collider)throw std::runtime_error("Legacy scene contains both Box and mesh collision on one entity.");
@@ -463,6 +496,44 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
         if(version>=9 && entity.contains("quaderGenerated")) {
             const auto& q=entity.at("quaderGenerated");record.quaderGenerated=QuaderGenerated{parseId(q.at("owner")),q.at("sourceKey").get<std::string>()};
         }
+        if(version>=16 && entity.contains("componentOrder")) {
+            const auto& authored=entity.at("componentOrder");
+            if(!authored.is_array() || authored.size()>AllSceneComponentKinds.size())throw std::runtime_error("Invalid component display order.");
+            std::array<bool,AllSceneComponentKinds.size()> seen{};
+            for(const auto& item:authored) {
+                const auto token=item.get<std::string>();
+                const auto found=std::find(ComponentOrderTokens.begin(),ComponentOrderTokens.end(),token);
+                if(found==ComponentOrderTokens.end())throw std::runtime_error("Unknown component display-order identity.");
+                const auto index=static_cast<size_t>(found-ComponentOrderTokens.begin());
+                if(seen[index])throw std::runtime_error("Duplicate component display-order identity.");
+                seen[index]=true;record.componentOrder.push_back(AllSceneComponentKinds[index]);
+            }
+            normalizeSceneComponentOrder(record);
+            normalizeSceneOutlinerStyle(record);
+        }
+        if(version>=17&&entity.contains("outlinerBefore")) {
+            const auto token=entity.at("outlinerBefore").get<std::string>();
+            const auto found=std::find(ComponentOrderTokens.begin(),ComponentOrderTokens.end(),token);
+            if(found==ComponentOrderTokens.end()||found==ComponentOrderTokens.begin())
+                throw std::runtime_error("Invalid Outliner child anchor.");
+            record.outlinerBefore=AllSceneComponentKinds[static_cast<size_t>(found-ComponentOrderTokens.begin())];
+        }
+        if(version>=17&&entity.contains("outlinerStyle")) {
+            const auto& style=entity.at("outlinerStyle");
+            if(!style.is_object())throw std::runtime_error("Invalid Outliner style.");
+            record.outlinerStyle.emplace();
+            if(style.contains("color"))record.outlinerStyle->color=style.at("color").get<Vec4>();
+            if(style.contains("components")) {
+                const auto& colors=style.at("components");
+                if(!colors.is_object()||colors.size()>AllSceneComponentKinds.size())throw std::runtime_error("Invalid component Outliner colors.");
+                for(const auto& [token,value]:colors.items()) {
+                    const auto found=std::find(ComponentOrderTokens.begin(),ComponentOrderTokens.end(),token);
+                    if(found==ComponentOrderTokens.end())throw std::runtime_error("Unknown component Outliner color identity.");
+                    record.outlinerStyle->componentColors[static_cast<size_t>(found-ComponentOrderTokens.begin())]=value.get<Vec4>();
+                }
+            }
+            normalizeSceneOutlinerStyle(record);
+        }
         result.records.push_back(std::move(record));
     }
     if (version==1) {
@@ -474,6 +545,24 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
         environment.environment=readEnvironment(settings);
         result.properties.activeEnvironment=environment.id;
         result.records.push_back(std::move(environment));
+    }
+    if(version<=15) {
+        // Legacy following cameras stored orientation in their affine hierarchy.
+        // Capture that exact world basis once; subsequent target yaw must not
+        // rotate the newly independent following-camera orientation.
+        std::unordered_map<EntityId,const EntityRecord*> indexed;
+        for(const auto& record:result.records)indexed.emplace(record.id,&record);
+        for(auto& record:result.records)if(record.cameraFollow) {
+            Mat4 world;auto id=record.id;auto remaining=result.records.size();
+            while(id && remaining--) {
+                const auto found=indexed.find(id);if(found==indexed.end())throw std::runtime_error("Scene references a missing parent entity.");
+                world=found->second->local*world;id=found->second->parent;
+            }
+            if(id)throw std::runtime_error("Scene hierarchy contains a cycle.");
+            const auto basis=math::withAffinePosition(world,{0,0,0});
+            if(!basis)throw std::runtime_error("Legacy Camera Follow world basis is invalid.");
+            record.cameraFollow->worldBasis=*basis;
+        }
     }
     // The optional visual sun reference never prevents an otherwise valid
     // scene from opening after its target was removed or changed externally.
@@ -488,6 +577,22 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
         camera.nearPlane=source.at("near").get<float>(); camera.farPlane=source.at("far").get<float>();
         if (!validCamera(camera)) throw std::runtime_error("Scene preview camera is invalid.");
         result.previewCamera=camera;
+    }
+    if(version<=16 && result.properties.playerCharacter && result.properties.activeCamera) {
+        const auto actor=std::find_if(result.records.begin(),result.records.end(),[&](const auto& record){return record.id==result.properties.playerCharacter;});
+        const auto camera=std::find_if(result.records.begin(),result.records.end(),[&](const auto& record){return record.id==result.properties.activeCamera;});
+        if(actor!=result.records.end() && actor->actor && camera!=result.records.end() && !camera->parent &&
+           camera->cameraFollow && camera->cameraFollow->target==actor->id) {
+            // Earlier player scenes kept their following camera at scene root.
+            // Adopt that same camera, including its exact resolved affine view,
+            // rather than adding a second camera or resetting authored framing.
+            Scene previous;previous.apply(result.records,result.properties);
+            const auto parentWorld=previous.worldTransform(actor->id),cameraWorld=previous.worldTransform(camera->id);
+            const auto inverseParent=parentWorld?math::inverse(*parentWorld):std::nullopt;
+            if(!inverseParent || !cameraWorld)throw std::runtime_error("The legacy player camera has an invalid parent transform.");
+            camera->parent=actor->id;camera->order=nextOrder(result.records,actor->id);
+            camera->local=*inverseParent * *cameraWorld;
+        }
     }
     Scene::validate(result.records,result.properties);
     return result;
@@ -508,6 +613,21 @@ Json writeScene(const SceneSnapshot& snapshot) {
     for (const auto& record : snapshot.records) {
         Json entity{{"id",hexId(record.id)}, {"name",record.name}, {"parent",hexId(record.parent)},
             {"order",record.order}, {"local",record.local}, {"visible",record.visible}};
+        if(!record.componentOrder.empty()) {
+            auto& order=entity["componentOrder"];order=Json::array();
+            for(const auto kind:sceneComponents(record))order.push_back(ComponentOrderTokens[static_cast<size_t>(kind)]);
+        }
+        if(record.outlinerBefore)entity["outlinerBefore"]=ComponentOrderTokens[static_cast<size_t>(*record.outlinerBefore)];
+        if(record.outlinerStyle) {
+            Json style=Json::object();
+            if(record.outlinerStyle->color)style["color"]=*record.outlinerStyle->color;
+            Json colors=Json::object();
+            for(size_t index=0;index<record.outlinerStyle->componentColors.size();++index)
+                if(record.outlinerStyle->componentColors[index])colors[std::string(ComponentOrderTokens[index])]=*record.outlinerStyle->componentColors[index];
+            if(!colors.empty())style["components"]=std::move(colors);
+            if(!style.empty())entity["outlinerStyle"]=std::move(style);
+        }
+
         if (record.model) {
             entity["model"] = *record.model;
             entity["castShadows"]=record.castShadows;entity["receiveShadows"]=record.receiveShadows;
@@ -524,23 +644,27 @@ Json writeScene(const SceneSnapshot& snapshot) {
         if (record.directional) entity["directional"] = lightJson(*record.directional);
         if (record.point) entity["point"] = lightJson(*record.point);
         if (record.environment) entity["environment"]=environmentJson(*record.environment);
-        if (record.character) { const auto& c=*record.character;entity["character"]={{"height",c.height},{"radius",c.radius},{"moveSpeed",c.moveSpeed},
-            {"showRoute",c.showRoute},{"showCollisionInGame",c.showCollisionInGame},{"collisionColor",c.collisionColor},{"lightRig",lightRigJson(c.lightRig)},
-            {"darknessReveal",{{"version",2},{"enabled",c.darknessReveal.enabled},{"spread",c.darknessReveal.spread}}}}; }
+        if(record.actor)entity["actor"]=Json::object();
+        if(record.motor)entity["motor"]={{"moveSpeed",record.motor->moveSpeed},{"enabled",record.motor->enabled}};
+        if(record.controller) {const auto& c=*record.controller;entity["controller"]={{"height",c.height},{"radius",c.radius},{"showCollisionInGame",c.showCollisionInGame},{"collisionColor",c.collisionColor}};}
+        if(record.navigation)entity["navigation"]={{"showRoute",record.navigation->showRoute},{"enabled",record.navigation->enabled}};
+        if(record.playerInput)entity["playerInput"]={{"enabled",record.playerInput->enabled}};
+        if(record.lightRig)entity["lightRig"]=lightRigJson(*record.lightRig);
+        if(record.darknessReveal)entity["darknessReveal"]={{"version",2},{"enabled",record.darknessReveal->enabled},{"spread",record.darknessReveal->spread}};
         if (record.collider) { const auto& c=*record.collider;
             const auto shape=c.shape==ColliderShape::Box?"box":c.shape==ColliderShape::Sphere?"sphere":c.shape==ColliderShape::Cylinder?"cylinder":c.shape==ColliderShape::Capsule?"capsule":"trimesh";
             entity["collider"]={{"shape",shape},{"size",c.size},{"radius",c.radius},{"height",c.height},{"source",c.source},
                 {"showCollisionInGame",c.showCollisionInGame},{"collisionColor",c.collisionColor}};
             if(c.mesh)entity["collider"]["mesh"]={{"positions",c.mesh->positions},{"indices",c.mesh->indices}}; }
-        if (record.camera) { const auto& c=*record.camera;entity["camera"]={{"verticalFov",c.verticalFov},{"near",c.nearPlane},{"far",c.farPlane},
-            {"followTarget",hexId(c.followTarget)},{"followOffset",c.followOffset}}; }
+        if (record.camera) { const auto& c=*record.camera;entity["camera"]={{"verticalFov",c.verticalFov},{"near",c.nearPlane},{"far",c.farPlane}}; }
+        if(record.cameraFollow) {const auto& c=*record.cameraFollow;entity["cameraFollow"]={{"target",hexId(c.target)},{"offset",c.offset},{"worldBasis",c.worldBasis}};}
         if(record.quader) {const auto& q=*record.quader;entity["quader"]={{"projectPath",q.projectPath},{"projectId",q.projectId},
             {"sceneId",q.sceneId},{"importScale",q.importScale},{"autoSync",q.autoSync},{"refreshMaterials",q.refreshMaterials},
             {"saveKey",q.saveKey},{"syncLights",q.syncLights}};}
         if(record.quaderGenerated) {const auto& q=*record.quaderGenerated;entity["quaderGenerated"]={{"owner",hexId(q.owner)},{"sourceKey",q.sourceKey}};}
         entities.push_back(std::move(entity));
     }
-    Json result{{"version",15},{"type","crimson-scene"},{"name",snapshot.name},{"entities",std::move(entities)},
+    Json result{{"version",17},{"type","crimson-scene"},{"name",snapshot.name},{"entities",std::move(entities)},
         {"settings",{{"activeEnvironment",hexId(snapshot.properties.activeEnvironment)},
             {"activeCamera",hexId(snapshot.properties.activeCamera)},{"playerCharacter",hexId(snapshot.properties.playerCharacter)}}}};
     if(isAssetUuid(snapshot.id))result["id"]=snapshot.id;
@@ -554,10 +678,12 @@ Json writeScene(const SceneSnapshot& snapshot) {
 }
 enum EntityField : uint32_t {
     Name=1u<<0, Parent=1u<<1, Order=1u<<2, Local=1u<<3, Model=1u<<4, Particle=1u<<5,
-    Directional=1u<<6, Point=1u<<7, Environment=1u<<8, Character=1u<<9, Collider=1u<<10, CameraField=1u<<11,
+    Directional=1u<<6, Point=1u<<7, Environment=1u<<8, ActorField=1u<<9, Collider=1u<<10, CameraField=1u<<11,
     ModelMaterialField=1u<<12, CastShadows=1u<<13, ReceiveShadows=1u<<14,
     QuaderField=1u<<15,QuaderGeneratedField=1u<<16,LightingScopesField=1u<<17,
-    ModelAnimationField=1u<<18,FadeWhenOccludingField=1u<<19,VisibleField=1u<<20,AllEntityFields=(1u<<21)-1
+    ModelAnimationField=1u<<18,FadeWhenOccludingField=1u<<19,VisibleField=1u<<20,MotorField=1u<<21,ControllerField=1u<<22,NavigationField=1u<<23,
+    PlayerInputField=1u<<24,LightRigField=1u<<25,DarknessRevealField=1u<<26,CameraFollowField=1u<<27,ComponentOrderField=1u<<28,
+    OutlinerBeforeField=1u<<29,OutlinerStyleField=1u<<30,AllEntityFields=(1u<<31)-1
 };
 enum PropertyField : uint32_t { ActiveEnvironment=1u<<0,ActiveCamera=1u<<1,PlayerCharacter=1u<<2 };
 template<class T> bool equalLight(const std::optional<T>& a,const std::optional<T>& b) {
@@ -569,7 +695,7 @@ uint32_t changedFields(const EntityRecord& a,const EntityRecord& b) {
     if(a.local!=b.local)fields|=Local;if(a.model!=b.model)fields|=Model;if(a.particle!=b.particle)fields|=Particle;
     if(!equalLight(a.directional,b.directional))fields|=Directional;if(!equalLight(a.point,b.point))fields|=Point;
     if(a.environment.has_value()!=b.environment.has_value() || (a.environment && !sameEnvironment(*a.environment,*b.environment)))fields|=Environment;
-    if(a.character!=b.character)fields|=Character;if(a.collider!=b.collider)fields|=Collider;if(a.camera!=b.camera)fields|=CameraField;
+    if(a.actor!=b.actor)fields|=ActorField;if(a.collider!=b.collider)fields|=Collider;if(a.camera!=b.camera)fields|=CameraField;
     if(a.modelMaterials!=b.modelMaterials)fields|=ModelMaterialField;
     if(a.castShadows!=b.castShadows)fields|=CastShadows;if(a.receiveShadows!=b.receiveShadows)fields|=ReceiveShadows;
     if(a.quader!=b.quader)fields|=QuaderField;
@@ -578,13 +704,23 @@ uint32_t changedFields(const EntityRecord& a,const EntityRecord& b) {
     if(a.modelAnimation!=b.modelAnimation)fields|=ModelAnimationField;
     if(a.fadeWhenOccluding!=b.fadeWhenOccluding)fields|=FadeWhenOccludingField;
     if(a.visible!=b.visible)fields|=VisibleField;
+    if(a.motor!=b.motor)fields|=MotorField;
+    if(a.controller!=b.controller)fields|=ControllerField;
+    if(a.navigation!=b.navigation)fields|=NavigationField;
+    if(a.playerInput!=b.playerInput)fields|=PlayerInputField;
+    if(a.lightRig!=b.lightRig)fields|=LightRigField;
+    if(a.darknessReveal!=b.darknessReveal)fields|=DarknessRevealField;
+    if(a.cameraFollow!=b.cameraFollow)fields|=CameraFollowField;
+    if(a.componentOrder!=b.componentOrder)fields|=ComponentOrderField;
+    if(a.outlinerBefore!=b.outlinerBefore)fields|=OutlinerBeforeField;
+    if(a.outlinerStyle!=b.outlinerStyle)fields|=OutlinerStyleField;
     return fields;
 }
 void copyFields(EntityRecord& target,const EntityRecord& source,uint32_t fields) {
     if(fields&Name)target.name=source.name;if(fields&Parent)target.parent=source.parent;if(fields&Order)target.order=source.order;
     if(fields&Local)target.local=source.local;if(fields&Model)target.model=source.model;if(fields&Particle)target.particle=source.particle;
     if(fields&Directional)target.directional=source.directional;if(fields&Point)target.point=source.point;
-    if(fields&Environment)target.environment=source.environment;if(fields&Character)target.character=source.character;
+    if(fields&Environment)target.environment=source.environment;if(fields&ActorField)target.actor=source.actor;
     if(fields&Collider)target.collider=source.collider;if(fields&CameraField)target.camera=source.camera;
     if(fields&ModelMaterialField)target.modelMaterials=source.modelMaterials;
     if(fields&CastShadows)target.castShadows=source.castShadows;if(fields&ReceiveShadows)target.receiveShadows=source.receiveShadows;
@@ -594,6 +730,16 @@ void copyFields(EntityRecord& target,const EntityRecord& source,uint32_t fields)
     if(fields&ModelAnimationField)target.modelAnimation=source.modelAnimation;
     if(fields&FadeWhenOccludingField)target.fadeWhenOccluding=source.fadeWhenOccluding;
     if(fields&VisibleField)target.visible=source.visible;
+    if(fields&MotorField)target.motor=source.motor;
+    if(fields&ControllerField)target.controller=source.controller;
+    if(fields&NavigationField)target.navigation=source.navigation;
+    if(fields&PlayerInputField)target.playerInput=source.playerInput;
+    if(fields&LightRigField)target.lightRig=source.lightRig;
+    if(fields&DarknessRevealField)target.darknessReveal=source.darknessReveal;
+    if(fields&CameraFollowField)target.cameraFollow=source.cameraFollow;
+    if(fields&ComponentOrderField)target.componentOrder=source.componentOrder;
+    if(fields&OutlinerBeforeField)target.outlinerBefore=source.outlinerBefore;
+    if(fields&OutlinerStyleField)target.outlinerStyle=source.outlinerStyle;
 }
 uint32_t changedProperties(const SceneProperties& a,const SceneProperties& b) {
     return (a.activeEnvironment!=b.activeEnvironment?ActiveEnvironment:0u) |
@@ -662,7 +808,7 @@ void pruneCommand(SceneCommand& command) {
     if(!command.propertyFields){command.beforeProperties.reset();command.afterProperties.reset();}
 }
 void updateFollowOffsets(const Scene& previous,std::vector<EntityRecord>& records,const SceneProperties& properties) {
-    if(std::none_of(records.begin(),records.end(),[](const auto& record){return record.camera && record.camera->followTarget;}))return;
+    if(std::none_of(records.begin(),records.end(),[](const auto& record){return record.cameraFollow.has_value();}))return;
     Scene::validate(records,properties);
     std::unordered_map<EntityId,const EntityRecord*> indexed;
     for(const auto& record:records)indexed.emplace(record.id,&record);
@@ -672,21 +818,17 @@ void updateFollowOffsets(const Scene& previous,std::vector<EntityRecord>& record
         return world;
     };
     for(auto& record:records) {
-        if(!record.camera || !record.camera->followTarget)continue;
+        if(!record.cameraFollow)continue;
         const auto before=previous.find(record.id);
-        if(!before || !before->camera || before->camera->followTarget!=record.camera->followTarget ||
-            before->camera->followOffset!=record.camera->followOffset)continue;
-        // Follow owns world translation. An ancestor rotation/scale must not
-        // rotate its world-space offset; only a deliberate camera position edit
-        // changes that offset. World-preserving reparenting retains it too.
-        if(before->parent!=record.parent || math::transformPoint(before->local,{0,0,0})==math::transformPoint(record.local,{0,0,0}))continue;
-        const auto oldWorld=previous.worldTransform(record.id);
-        if(!oldWorld)continue;
-        const auto delta=math::transformPoint(rawWorld(record.id),{0,0,0})-math::transformPoint(*oldWorld,{0,0,0});
-        if(delta==Vec3{})continue;
-        const auto oldTarget=previous.worldTransform(record.camera->followTarget);
-        const auto targetDelta=oldTarget?math::transformPoint(rawWorld(record.camera->followTarget),{0,0,0})-math::transformPoint(*oldTarget,{0,0,0}):Vec3{};
-        record.camera->followOffset=record.camera->followOffset+delta-targetDelta;
+        if(!before || before->cameraFollow!=record.cameraFollow || before->parent!=record.parent || before->local==record.local)continue;
+        // Only a deliberate camera-local pose edit changes follow settings.
+        // Editing an ancestor/target leaves local untouched and retains the
+        // captured world orientation and world-space target offset.
+        const auto world=rawWorld(record.id),target=rawWorld(record.cameraFollow->target);
+        const auto basis=math::withAffinePosition(world,{0,0,0});
+        if(!basis)throw std::runtime_error("Camera Follow edit produced an invalid world basis.");
+        record.cameraFollow->offset=math::transformPoint(world,{0,0,0})-math::transformPoint(target,{0,0,0});
+        record.cameraFollow->worldBasis=*basis;
     }
 }
 }
@@ -854,8 +996,8 @@ bool SceneDocument::save(const std::string& name, bool saveAs, bool overwriteExt
                 savedId=newAssetId();std::string filename=savedName;
                 try {(void)contentFilename(filename+".crimson-scene");}catch(const std::exception&){filename=savedId;}
                 for(std::size_t suffix=1;;++suffix) {
-                    const auto name=filename+(suffix>1?" "+std::to_string(suffix):std::string{})+".crimson-scene";
-                    file=checkedContentPath(projectRoot_,projectRoot_/"Content"/fromUtf8(name));
+                    const auto candidateFilename=filename+(suffix>1?" "+std::to_string(suffix):std::string{})+".crimson-scene";
+                    file=checkedContentPath(projectRoot_,projectRoot_/"Content"/fromUtf8(candidateFilename));
                     if(!std::filesystem::exists(file))break;
                 }
             } else {
@@ -990,6 +1132,14 @@ bool SceneDocument::update(const Mutation& mutation) {
         const auto before=scene_.records();const auto beforeProperties=scene_.properties();
         auto records = before; auto properties = beforeProperties;
         mutation(records,properties);
+        for(auto& record:records) {
+            normalizeSceneComponentOrder(record);
+            normalizeSceneOutlinerStyle(record);
+            if(record.outlinerBefore) {
+                const auto previous=std::lower_bound(before.begin(),before.end(),record.id,[](const auto& value,EntityId id){return value.id<id;});
+                if(previous!=before.end()&&previous->id==record.id&&previous->parent!=record.parent)record.outlinerBefore.reset();
+            }
+        }
         updateFollowOffsets(scene_,records,properties);
         auto command=transaction_->command;
         mergeCommand(command,difference(command.label,before,records,beforeProperties,properties,selection_,selection_));
@@ -1031,6 +1181,7 @@ bool SceneDocument::applyHistory(const SceneCommand& command, bool forward) {
         }
         const auto& restoredProperties = forward ? command.afterProperties : command.beforeProperties;
         if (restoredProperties) copyProperties(properties,*restoredProperties,command.propertyFields);
+        for(auto& record:records){normalizeSceneComponentOrder(record);normalizeSceneOutlinerStyle(record);}
         scene_.apply(records,properties);
         selection_ = forward ? command.afterSelection : command.beforeSelection;
         sanitizeSelection(); status_.clear(); return true;
@@ -1085,7 +1236,7 @@ bool SceneDocument::replaceQuaderImport(EntityId owner,const QuaderLink& link,co
         };
         EntityRecord imported;imported.id=allocate("Imported");imported.name="Imported";imported.parent=owner;
         imported.order=nextOrder(records,owner);imported.quaderGenerated=QuaderGenerated{owner,"Imported"};
-        if(const auto previous=scene_.find(imported.id))imported.visible=previous->visible;
+        if(const auto previous=scene_.find(imported.id)){imported.visible=previous->visible;imported.componentOrder=previous->componentOrder;imported.outlinerBefore=previous->outlinerBefore;imported.outlinerStyle=previous->outlinerStyle;}
         replacements.push_back(imported);
         for(const auto& input:generated) {
             if(!input.id || !input.quaderGenerated)throw std::runtime_error("Quader import record has no temporary identity.");
@@ -1099,6 +1250,18 @@ bool SceneDocument::replaceQuaderImport(EntityId owner,const QuaderLink& link,co
             // source transforms, energy, geometry and shadow flags still sync.
             if(const auto previous=scene_.find(record.id)) {
                 record.visible=previous->visible;
+                record.componentOrder=previous->componentOrder;
+                record.outlinerBefore=previous->outlinerBefore;
+                record.outlinerStyle=previous->outlinerStyle;
+                record.actor=previous->actor;
+                record.motor=previous->motor;
+                record.controller=previous->controller;
+                record.navigation=previous->navigation;
+                record.playerInput=previous->playerInput;
+                record.lightRig=previous->lightRig;
+                record.darknessReveal=previous->darknessReveal;
+                record.cameraFollow=previous->cameraFollow;
+                if(previous->camera)record.camera=previous->camera;
                 if(record.model && previous->model) {
                     record.lightingScopes=previous->lightingScopes;
                     record.fadeWhenOccluding=previous->fadeWhenOccluding;
@@ -1133,7 +1296,7 @@ bool SceneDocument::replaceQuaderImport(EntityId owner,const QuaderLink& link,co
         if(lost(properties.activeCamera))properties.activeCamera=NoEntity;
         if(lost(properties.playerCharacter))properties.playerCharacter=NoEntity;
         for(auto& record:records) {
-            if(record.camera && lost(record.camera->followTarget)){record.camera->followTarget=NoEntity;record.camera->followOffset={};}
+            if(record.cameraFollow && lost(record.cameraFollow->target)){record.cameraFollow.reset();}
             if(record.environment && lost(record.environment->sun))record.environment->sun=NoEntity;
         }
     });
@@ -1146,14 +1309,14 @@ EntityId SceneDocument::createParticle(const std::string& assetId, const std::st
     EntityRecord record; record.name=name; record.particle=AssetRef<ParticleEffectAsset>{assetId}; record.local=local;
     return create(std::move(record),"Place particle effect");
 }
-std::vector<EntityId> SceneDocument::createModels(const std::vector<ModelPlacement>& models) {
-    if (models.empty() || !begin("Place models")) return {};
+std::vector<EntityId> SceneDocument::createModels(const std::vector<ModelPlacement>& models,EntityId parent) {
+    if (models.empty() || (parent && !scene_.contains(parent)) || !begin("Place models")) return {};
     std::vector<EntityId> ids;
     if (!update([&](auto& records,auto&) {
         for (const auto& model : models) {
             EntityRecord record;
             record.id=unusedId(records); record.name=model.name; record.model=AssetRef<ModelAsset>{model.assetId}; record.local=model.local;
-            record.order=nextOrder(records,NoEntity); ids.push_back(record.id); records.push_back(std::move(record));
+            record.parent=parent;record.order=nextOrder(records,parent); ids.push_back(record.id); records.push_back(std::move(record));
         }
     })) { cancel(); return {}; }
     selection_={ids,ids.back()};
@@ -1178,14 +1341,27 @@ EntityId SceneDocument::createEnvironment(const std::string& name) {
     })) { cancel(); return NoEntity; }
     selection_={{record.id},record.id}; commit(); return record.id;
 }
-EntityId SceneDocument::createCharacter(const std::string& name) {
-    if(!begin("Create character"))return NoEntity;
-    EntityRecord record;record.id=unusedId(scene_.records());record.name=name;record.character.emplace();
+EntityId SceneDocument::createPlayer(const std::string& name) {
+    if(!begin("Create player"))return NoEntity;
+    EntityRecord player;player.name=name;player.actor.emplace();player.motor.emplace();player.controller.emplace();
+    player.navigation.emplace();player.playerInput.emplace();player.lightRig.emplace();player.darknessReveal.emplace();
+    const auto initialCamera=defaultPlayerCameraTemplate();
+    EntityRecord camera;camera.name="Camera";camera.camera=initialCamera.lens;
+    camera.local=*math::withAffinePosition(initialCamera.worldBasis,initialCamera.offset);
     if(!update([&](auto& records,auto& properties){
-        record.order=nextOrder(records,NoEntity);records.push_back(record);
-        if(!properties.playerCharacter)properties.playerCharacter=record.id;
+        player.id=unusedId(records);player.order=nextOrder(records,NoEntity);records.push_back(player);
+        camera.id=unusedId(records);camera.parent=player.id;camera.order=0;
+        camera.cameraFollow=SceneCameraFollow{player.id,initialCamera.offset,initialCamera.worldBasis};records.push_back(camera);
+        if(!properties.playerCharacter)properties.playerCharacter=player.id;
+        if(!properties.activeCamera)properties.activeCamera=camera.id;
     })){cancel();return NoEntity;}
-    selection_={{record.id},record.id};commit();return record.id;
+    selection_={{player.id},player.id};if(!commit())return NoEntity;return player.id;
+}
+EntityId SceneDocument::createEnemy(const std::string& name) {
+    EntityRecord enemy;enemy.name=name;enemy.actor.emplace();enemy.motor.emplace();enemy.controller.emplace();
+    enemy.navigation.emplace();enemy.lightRig.emplace();enemy.darknessReveal.emplace();
+    enemy.lightRig->localWorld.enabled=false;
+    return create(std::move(enemy),"Create enemy");
 }
 EntityId SceneDocument::createCollider(const std::string& name,EntityId parent) {
     EntityRecord record;record.name=name;record.parent=parent;record.collider.emplace();
@@ -1240,23 +1416,15 @@ bool SceneDocument::setCameraFollowTarget(EntityId cameraId,EntityId target) {
     const auto record=scene_.find(cameraId);
     const auto world=scene_.worldTransform(cameraId);
     if(!record || !record->camera || !world){status_="Choose an existing Camera entity.";return false;}
-    auto position=math::transformPoint(*world,{0,0,0});
-    if(record->camera->followTarget)if(const auto oldTarget=scene_.worldTransform(record->camera->followTarget))
-        position=math::transformPoint(*oldTarget,{0,0,0})+record->camera->followOffset;
     auto updated=*record;
-    updated.camera->followTarget=target;
     if(target) {
         const auto targetWorld=scene_.worldTransform(target);
-        if(!targetWorld){status_="Camera follow target no longer exists.";return false;}
-        updated.camera->followOffset=position-math::transformPoint(*targetWorld,{0,0,0});
+        const auto basis=math::withAffinePosition(*world,{0,0,0});
+        if(!targetWorld || !basis){status_="Camera follow target or world basis is invalid.";return false;}
+        updated.cameraFollow=SceneCameraFollow{target,math::transformPoint(*world,{0,0,0})-math::transformPoint(*targetWorld,{0,0,0}),*basis};
     } else {
-        const auto parent=record->parent?scene_.worldTransform(record->parent):std::optional<Mat4>{Mat4{}};
-        const auto inverse=parent?math::inverse(*parent):std::nullopt;
-        if(!inverse){status_="Cannot clear camera follow under a singular parent.";return false;}
-        const auto localPosition=math::transformPoint(*inverse,position);
-        const auto local=math::withAffinePosition(updated.local,localPosition);
-        if(!local){status_="Camera position is not finite under this parent.";return false;}
-        updated.local=*local;updated.camera->followOffset={};
+        // Follow has already materialized the full world pose into local.
+        updated.cameraFollow.reset();
     }
     return updateEntity(cameraId,updated,"Change camera follow target");
 }
@@ -1277,10 +1445,10 @@ bool SceneDocument::eraseSelection() {
         if (removed.contains(properties.activeEnvironment)) properties.activeEnvironment=NoEntity;
         if (removed.contains(properties.activeCamera)) properties.activeCamera=NoEntity;
         if (removed.contains(properties.playerCharacter)) properties.playerCharacter=NoEntity;
-        for(auto& record:records)if(record.camera && removed.contains(record.camera->followTarget)) {
+        for(auto& record:records)if(record.cameraFollow && removed.contains(record.cameraFollow->target)) {
             // Follow is already materialized in the local matrix. Clearing the
             // reference leaves the visible camera pose and its children intact.
-            record.camera->followTarget=NoEntity;record.camera->followOffset={};
+            record.cameraFollow.reset();
         }
         for(auto& record:records)if(record.environment && removed.contains(record.environment->sun))record.environment->sun=NoEntity;
         for(auto& record:records)if(record.quaderGenerated && removed.contains(record.quaderGenerated->owner))record.quaderGenerated.reset();
@@ -1288,8 +1456,20 @@ bool SceneDocument::eraseSelection() {
     selection_ = {}; return commit();
 }
 bool SceneDocument::duplicateSelection() {
-    const auto roots = scene_.topmost(selection_.ids);
-    if (roots.empty() || !begin("Duplicate entities")) return false;
+    const auto roots=scene_.topmost(selection_.ids);
+    if(roots.empty()||!begin("Duplicate entities"))return false;
+    if(!duplicateInTransaction(roots)){cancel();return false;}
+    return commit();
+}
+bool SceneDocument::beginDuplicateTransform(const std::string& label,std::vector<EntityId> roots) {
+    roots=scene_.topmost(roots);
+    if(roots.empty()||!begin(label))return false;
+    std::vector<EntityId> copiedRoots;
+    if(!duplicateInTransaction(roots,&copiedRoots)){cancel();return false;}
+    setTransformEditRoots(std::move(copiedRoots));return true;
+}
+bool SceneDocument::duplicateInTransaction(const std::vector<EntityId>& roots,std::vector<EntityId>* copiedRoots) {
+    if(!transaction_||roots.empty())return false;
     const auto previousSelection = selection_;
     std::vector<EntityId> originals;
     for (auto root : roots) {
@@ -1297,18 +1477,19 @@ bool SceneDocument::duplicateSelection() {
     }
     std::unordered_map<EntityId,EntityId> copied;
     std::unordered_set<EntityId> copiedIds;
+    const auto sourceRecords=scene_.records();SceneDuplicateNameAllocator names(sourceRecords);
     if (!update([&](auto& records,auto&) {
         for (auto original : originals) {
             auto record = *scene_.find(original);
             record.id = unusedId(records); copied.emplace(original,record.id);
             copiedIds.insert(record.id);
             if (const auto parent = copied.find(record.parent); parent != copied.end()) record.parent = parent->second;
-            else record.name += " Copy";
+            record.name=names.next(record.name);
             record.order = nextOrder(records,record.parent);
             records.push_back(std::move(record));
         }
         for(auto& record:records)if(copiedIds.contains(record.id)) {
-            if(record.camera)if(const auto target=copied.find(record.camera->followTarget);target!=copied.end())record.camera->followTarget=target->second;
+            if(record.cameraFollow)if(const auto target=copied.find(record.cameraFollow->target);target!=copied.end())record.cameraFollow->target=target->second;
             if(record.environment)if(const auto sun=copied.find(record.environment->sun);sun!=copied.end())record.environment->sun=sun->second;
             if(record.quaderGenerated) {
                 const auto owner=copied.find(record.quaderGenerated->owner);
@@ -1316,11 +1497,13 @@ bool SceneDocument::duplicateSelection() {
                 else record.quaderGenerated.reset();
             }
         }
-    })) { cancel(); return false; }
+    })) return false;
     selection_ = {};
     for (auto original : previousSelection.ids) if (copied.contains(original)) selection_.ids.push_back(copied.at(original));
+    if(selection_.ids.empty())for(const auto root:roots)selection_.ids.push_back(copied.at(root));
     if (copied.contains(previousSelection.primary)) selection_.primary = copied.at(previousSelection.primary);
-    sanitizeSelection(); return commit();
+    if(copiedRoots) {copiedRoots->clear();for(const auto root:roots)copiedRoots->push_back(copied.at(root));}
+    sanitizeSelection(); return true;
 }
 bool SceneDocument::reparentSelection(EntityId parent) {
     const auto roots = scene_.topmost(selection_.ids);
@@ -1391,7 +1574,7 @@ bool SceneDocument::ungroupSelection() {
     for (const auto id : scene_.topmost(selection_.ids)) {
         const auto record=scene_.find(id);
         if (record && !record->model && !record->particle && !record->directional && !record->point && !record->environment &&
-            !record->character && !record->collider && !record->quader && !record->quaderGenerated && !record->camera && !scene_.children(id).empty()) groups.push_back(id);
+            !record->actor && !record->motor && !record->controller && !record->navigation && !record->playerInput && !record->lightRig && !record->darknessReveal && !record->collider && !record->quader && !record->quaderGenerated && !record->camera && !scene_.children(id).empty()) groups.push_back(id);
     }
     if (groups.empty()) { status_="Select a group to ungroup."; return false; }
     struct ChildMove { EntityId id,parent; Mat4 local; };
@@ -1415,8 +1598,8 @@ bool SceneDocument::ungroupSelection() {
             record.parent=move.parent; record.order=order; record.local=move.local;
         }
         std::erase_if(records,[&](const auto& r){return std::find(groups.begin(),groups.end(),r.id)!=groups.end();});
-        for(auto& record:records)if(record.camera && std::find(groups.begin(),groups.end(),record.camera->followTarget)!=groups.end()) {
-            record.camera->followTarget=NoEntity;record.camera->followOffset={};
+        for(auto& record:records)if(record.cameraFollow && std::find(groups.begin(),groups.end(),record.cameraFollow->target)!=groups.end()) {
+            record.cameraFollow.reset();
         }
     })) { cancel(); return false; }
     selection_={};

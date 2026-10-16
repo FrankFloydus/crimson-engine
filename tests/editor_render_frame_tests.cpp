@@ -35,15 +35,17 @@ int main() {
         extracted.directional.push_back({});extracted.directional.front().intensity=2.25f;
         extracted.points.push_back({});extracted.points.front().position={8,9,10};
         extracted.points.front().entityId=UINT64_C(0xfedcba9876543210);
-        extracted.playerReveal={{1,2,3},7,true};
-        extracted.characterLights[0].enabled=true;
-        extracted.characterLights[0].intensity=1.75f;
-        extracted.characterShadow.position={1,2,3};
-        extracted.characterShadow.direction={-1,-2,0};
-        extracted.characterShadow.strength=.65f;
-        extracted.characterShadow.enabled=true;
-        const auto characterLights=extracted.characterLights;
-        const auto characterShadow=extracted.characterShadow;
+        extracted.reveals.push_back({{1,2,3},7,true});
+        extracted.actorLighting.push_back({71,{}});extracted.actorShadows.emplace_back();
+        extracted.models.front().actorOwner=71;extracted.actorShadows.front().owner=71;
+        extracted.actorLighting.front().lights[0].enabled=true;
+        extracted.actorLighting.front().lights[0].intensity=1.75f;
+        extracted.actorShadows.front().position={1,2,3};
+        extracted.actorShadows.front().direction={-1,-2,0};
+        extracted.actorShadows.front().strength=.65f;
+        extracted.actorShadows.front().enabled=true;
+        const auto actorLighting=extracted.actorLighting;
+        const auto actorShadows=extracted.actorShadows;
         const auto* pointStorage=extracted.points.data();
         std::vector<EntityId> focusEntities{71,UINT64_C(0xfedcba9876543210)};
         const auto* focusStorage=focusEntities.data();
@@ -67,6 +69,7 @@ int main() {
         casters->instances.push_back({71,{model->asset,extracted.models.front().world},&model->textures,model->revision,
             false,true,&model->materials});
         casters->instances.back().lightingCategory=extracted.models.front().lightingCategory;
+        casters->instances.back().actorOwner=71;
         auto pins=std::make_shared<EditorRenderWorldPins>();pins->particles.push_back(particleMaterial);pins->shadows=casters;
 
         const MaterialEvaluationContext clock{12.5,91.75};
@@ -78,7 +81,7 @@ int main() {
             "Freezing world lighting consumed receiver metadata before view preparation.");
         require(frozen->shadowWorldId==903 && frozen->shadowResolution==512,
             "World identity or shadow quality was lost at the prepared-frame boundary.");
-        require(frozen->playerReveal.enabled && frozen->playerReveal.spread==7 && frozen->playerReveal.position==Vec3{1,2,3},
+        require(frozen->reveals.front().enabled && frozen->reveals.front().spread==7 && frozen->reveals.front().position==Vec3{1,2,3},
             "World publication lost the presented player reveal.");
         require(frozen->materialContext.gameSeconds==12.5 && frozen->materialContext.realSeconds==91.75,
             "Frame publication changed material clocks.");
@@ -100,15 +103,15 @@ int main() {
         // not rewrite the values or borrowed arrays of an already queued frame.
         extracted.points.push_back({});extracted.points.front().position={-1,-2,-3};
         extracted.directional.push_back({});extracted.directional.front().intensity=100;
-        extracted.playerReveal={{90,91,92},100,false};
-        extracted.characterLights={};
-        extracted.characterShadow={};
+        extracted.reveals.push_back({{90,91,92},100,false});
+        extracted.actorLighting.clear();
+        extracted.actorShadows.clear();
         extracted.models.clear();
         focusEntities.push_back(999);focusBounds.minimum={100,200,300};focusBounds.maximum={400,500,600};focusBounds.valid=false;
         require(frozen->points.front().position==Vec3{8,9,10} && frozen->points.front().entityId==UINT64_C(0xfedcba9876543210) &&
             frozen->directional.front().intensity==2.25f &&
-            frozen->playerReveal==PlayerRevealSource{{1,2,3},7,true} &&
-            frozen->characterLights==characterLights && frozen->characterShadow==characterShadow,
+            frozen->reveals.front()==DarknessRevealSource{{1,2,3},7,true} &&
+            frozen->actorLighting==actorLighting && frozen->actorShadows==actorShadows,
             "A later world mutation changed a published frame.");
         require(frozen->shadowFocusEntities.size()==2 && frozen->shadowFocusEntities.front()==71 &&
             frozen->shadowFocusEntities.back()==UINT64_C(0xfedcba9876543210) && frozen->shadowFocusBounds.valid &&
@@ -147,9 +150,9 @@ int main() {
                 gameAdapter.directionalLights.data()==sceneAdapter.directionalLights.data() &&
                 sceneAdapter.pointLights.data()==queued->world->points.data() &&
                 gameAdapter.pointLights.data()==sceneAdapter.pointLights.data() &&
-                sceneAdapter.playerReveal==queued->world->playerReveal && gameAdapter.playerReveal==sceneAdapter.playerReveal &&
-                sceneAdapter.characterLights==characterLights && gameAdapter.characterLights==characterLights &&
-                sceneAdapter.characterShadow==characterShadow && gameAdapter.characterShadow==characterShadow &&
+                sceneAdapter.reveals.data()==queued->world->reveals.data() && gameAdapter.reveals.data()==sceneAdapter.reveals.data() &&
+                sceneAdapter.actorLighting.data()==queued->world->actorLighting.data() && gameAdapter.actorLighting.data()==sceneAdapter.actorLighting.data() &&
+                sceneAdapter.actorShadows.data()==queued->world->actorShadows.data() && gameAdapter.actorShadows.data()==sceneAdapter.actorShadows.data() &&
                 sceneAdapter.particles.data()==queued->world->particles.data() &&
                 gameAdapter.particles.data()==sceneAdapter.particles.data() &&
                 sceneAdapter.particleMaterials.data()==queued->world->particleMaterials.data() &&

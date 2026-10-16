@@ -10,23 +10,23 @@ Read the relevant sections before editing, then verify the source rather than tr
 | --- | --- |
 | Authored Character and light data | [Scene.h](../src/scene/Scene.h), [LightingSettings.h](../src/crimson-renderer/LightingSettings.h), [RenderTypes.h](../src/crimson-renderer/RenderTypes.h) |
 | Validation, transactions, persistence and conversion | [Scene.cpp](../src/scene/Scene.cpp), [SceneDocument.cpp](../src/scene/SceneDocument.cpp) |
-| Character Inspector and shared lighting widgets | [ScenePanels.cpp](../src/tools/ScenePanels.cpp), [LightingControls.cpp](../src/tools/LightingControls.cpp) |
-| Pure player rig evaluation | [PlayerLightRig.cpp](../src/runtime/PlayerLightRig.cpp) |
+| Actor Inspector and shared lighting widgets | [ScenePanels.cpp](../src/tools/ScenePanels.cpp), [LightingControls.cpp](../src/tools/LightingControls.cpp) |
+| Pure actor rig evaluation | [ActorLightRig.cpp](../src/runtime/ActorLightRig.cpp) |
 | Presented scene categories, light arrays and reveal | [SceneExtraction.cpp](../src/scene/SceneExtraction.cpp) |
 | Prepared world/camera/resource ownership | [EditorRenderFrame.cpp](../src/editor/EditorRenderFrame.cpp), [RenderPassPlan.h](../src/crimson-renderer/RenderPassPlan.h) |
 | Submission, HDR targets and shared appearance | [Renderer.cpp](../src/crimson-renderer/Renderer.cpp) |
 | Forward+ records and camera assignment | [ClusteredLightingGpu.cpp](../src/crimson-renderer/ClusteredLightingGpu.cpp), [clustered_lighting.sh](../src/crimson-renderer/shaders/clustered_lighting.sh) |
 | Point, directional and dedicated Key shadow ownership | [PointShadowRenderer.cpp](../src/crimson-renderer/PointShadowRenderer.cpp), [DirectionalShadowMath.cpp](../src/crimson-renderer/DirectionalShadowMath.cpp) |
 | Darkness depth/evaluation/publication | [AmbientVisibilityGpu.cpp](../src/crimson-renderer/AmbientVisibilityGpu.cpp), [ambient_visibility.sh](../src/crimson-renderer/shaders/ambient_visibility.sh) |
-| Scene/Game rig visualization | [PlayerLightRigOverlay.cpp](../src/editor/PlayerLightRigOverlay.cpp) |
+| Scene/Game rig visualization | [ActorLightRigOverlay.cpp](../src/editor/ActorLightRigOverlay.cpp) |
 | Material publication and startup | [MaterialGraphGpu.cpp](../src/crimson-renderer/MaterialGraphGpu.cpp), [material startup contract](MATERIAL_SHADER_STARTUP.md) |
 | Diagnostics and exact counter meanings | [SceneDiagnostics.cpp](../src/tools/SceneDiagnostics.cpp), [shadow diagnostics guide](SHADOW_DIAGNOSTICS.md) |
 
-## Character authoring workflow
+## Actor authoring workflow
 
-Create/select a Character and designate it with **Make Player**. Only `SceneProperties::playerCharacter` supplies the active rig and distance reveal. Parenting a visual model beneath that Character gives its subtree Character lighting membership. An unrelated entity with a Character component does not automatically receive that membership.
+Create a composed actor with **Add → Player** or **Add → Enemy**. Player includes its child Camera and Camera Follow automatically, with its Camera settings and named templates available directly from the selected character's Inspector; Enemy includes shared movement/navigation/lighting capabilities without input or a camera. Visual Root defines the actor's visual subtree; nearest-root ownership stops at nested actor roots. Its Outliner row accepts scene-model and Asset Browser model drops and contains the actor's visual children; Camera stays a separate entity child. Each actor may have its own Light Rig, independently of Motor, Character Controller, Navigation Agent or Player Input. `SceneProperties::playerCharacter` selects the input owner and player-focused camera/fading context; it no longer selects the only valid rig or reveal.
 
-Keep all rig controls in the **Character Inspector**. There is no separate rig panel or renderer-global copy of these values. `tools/LightingControls` draws controls; `SceneDocument` owns changes. Edit-mode controls affect both Scene and Game. Play uses a separate document, so Stop discards Play edits. Save desired settings in Edit mode.
+Select **Light Rig** in the Outliner to show only its Inspector controls. Component selection remains distinct from the owning entity; selecting the entity shows its name, visibility and Transform, plus its owned Camera section when present. Component rows can be reordered without changing simulation order, and their authored order persists through scene saves and undo/redo. Visual Root is a grouping/drop row, not a second transform. Darkness Reveal is a separate optional component. Edit mode affects both Scene and Game; Play changes remain temporary. Component/history/storage ownership stays with SceneDocument; shared widgets own no renderer-global settings.
 
 **Light Rig → Enabled** defaults off. Key, Fill and Local World each retain their own enabled settings beneath it. **Darkness Reveal** is a sibling section and works independently of the rig master. This separation is intentional: revealing existing global light is different from emitting a local light.
 
@@ -34,15 +34,15 @@ The lighting roles are deliberately separate:
 
 | Contribution | Receivers | Casters/occlusion | Purpose |
 | --- | --- | --- | --- |
-| Character Key | Player subtree only | World geometry does not block it | Stable readable character shading and highlights |
-| Character Fill | Player subtree only | No shadow map | Additional character shading; never lights architecture |
-| Local World Light | World only | World geometry casts into its six point faces; player excluded | Player-following omni illumination and pillar/doorway shadows |
+| Character Key | Owning actor visual subtree only | World geometry does not block it | Stable readable actor shading and highlights |
+| Character Fill | Owning actor visual subtree only | No shadow map | Additional actor shading; never lights architecture |
+| Local World Light | World only | World geometry casts into its six point faces; actor surfaces excluded | Actor-following omni illumination and pillar/doorway shadows |
 | Key silhouette | World with Receive Shadows | Only eligible player-subtree models | Strong player silhouette without Key illumination on the environment |
 | Darkness Reveal | Eligible ambient receivers | Distance only; no map | Restores existing illumination near the player |
 
 ### Character Key and Fill
 
-Both are directional irradiance values, not scene entities or ordinary point slots. **Direction** is the world-space direction in which light travels. It remains fixed when the player turns. Directions normalize during evaluation; zero/invalid directions are rejected. Character lights cannot be blocked by a nearby pillar.
+Both are directional irradiance values, not scene entities or ordinary point slots. **Direction** is the world-space direction in which light travels. It remains fixed when the actor turns. Directions normalize during evaluation; zero/invalid directions are rejected. Character lights cannot be blocked by a nearby pillar.
 
 | Control | Key default | Fill default | Authored range |
 | --- | --- | --- | --- |
@@ -61,7 +61,7 @@ This is an artistic reflected-light mask: `mix(1, keyVisibility, strength)` mult
 
 ### Local World Light
 
-The evaluator emits at most one ordinary `PointLight` at `presentedPlayerPosition + (0, Height, 0)`. Height uses world up. Player rotation/parent scale do not rotate this offset, scale Radius or rotate Key/Fill. No authored lateral-offset controls or World Fill modes remain.
+Each actor evaluator emits at most one ordinary `PointLight` at `presentedActorPosition + (0, Height, 0)`. Enabled sources join the common point-light/shadow budgets and retain a deterministic transient identity derived from owner EntityId. Height, radius and Key/Fill directions remain world aligned and independent of actor rotation/scale.
 
 | Control | Default | Range and effect |
 | --- | --- | --- |
@@ -112,7 +112,7 @@ Wide samples remap to their proper cube face rather than crossing an atlas tile 
 
 ## Darkness Reveal and Environment Ambient Darkness
 
-**Character → Darkness Reveal → Enabled** defaults on; **Spread (m)** defaults 8 and accepts .01…100,000. The center is player presented position plus half capsule height, with that offset bounded at 100,000 m. Spread is the half-visibility distance, independent of Local World Height/Radius and Environment Softness.
+**Darkness Reveal → Enabled** defaults on when this independent component is added; Spread defaults to 8 m and accepts .01–100,000 m. A controller contributes its half-height to the source center; otherwise the owner origin is used. Every enabled reveal is extracted and packed into the shared Forward+ atlas after light records. Source visibility combines by maximum, with no extra material sampler. Adding a Light Rig does not implicitly reveal darkness.
 
 The player weight is `exp2(-(distance/spread)²)`, with an already negligible tail smoothly tapered to zero over six to eight Spreads. It emits no light, consumes no point record and casts no shadow. It is not an occlusion query or fog of war.
 
@@ -138,15 +138,19 @@ Opaque/masked surfaces produce separate readable D24S8 depth and RGBA8 receiver 
 
 Opaque materials read published visibility; transparent meshes and Lit sprites evaluate the same response at their own world position. They must not receive a screen-space mask reconstructed from background geometry. Disabled darkness avoids these extra passes/initial allocations; previously allocated reusable resources can remain resident.
 
+## Multiple-actor rig resources
+
+Immutable extraction/frame records contain `actorLighting`, `actorShadows` and `reveals` lists. Render models carry their stable actor owner through visible, shadow, preview and thumbnail preparation. Each draw binds its actor's two Key/Fill values, retaining shared material assets and per-instance ownership. Local World points use the existing shared clustered/light-shadow limits. Dedicated actor silhouettes have eight atlas slots with deterministic owner-sorted admission, cache identity including the owner, and shadowless fallback for unadmitted requests. Requested/admitted/unadmitted counters expose that limit. Disabling or reordering rigs resets their draw data and cannot redirect another actor's lights or cached shadow. Independent reveal contributions use maximum visibility.
+
 ## Scope masks versus transient categories
 
 `lighting_scope::World=1`, `Character=2`, `All=3`. These are two current bits, not an arbitrary general-purpose layer system.
 
 Models author independent **Advanced Lighting → Direct Lighting**, **Shadow Casting** and **Ambient Darkness** masks. Lights author **Advanced Lighting → Affect**, **Shadow Casters**, **Affect Ambient Darkness**, **Ambient Receivers** and **Ambient Strength**. Removing direct acceptance must not implicitly remove casting or darkness participation. Model **Cast Shadows** and **Receive Shadows** remain separate controls.
 
-Extraction assigns one transient category: the designated player's subtree is Character; every other model is World. Each authored surface mask is intersected with that category. Choosing both checkboxes does not make the player World or turn arbitrary geometry into Character. Key/Fill additionally require Character category/direct acceptance. The dedicated silhouette requires World category/Receive Shadows even on IBL-only receivers with direct acceptance disabled.
+Extraction assigns Character to models owned by their nearest Visual Root, and World to unowned models. Authored surface masks intersect that broad category. A separate actor-owner identity selects private Key/Fill data for each prepared draw, preventing one enemy's rig from lighting another. Disabled/missing rigs bind neutral light values. Dedicated silhouettes accept World/Receive Shadows surfaces and select only their owner's shadow casters.
 
-Transient categories, synthetic point IDs, evaluated sources, shadow indices and GPU handles are never serialized. Do not classify monsters/items as Character automatically; that broader classification is future work.
+Transient categories, actor-owner indices, evaluated sources, shadow slots and GPU handles are never serialized. Visual ownership is independent of player designation and of rig enablement. A stationary actor can receive a rig; a moving controller does not automatically establish visual ownership.
 
 ## Environment Ambient Light, sky and fog
 
@@ -174,7 +178,7 @@ Current local lighting is GPU clustered Forward+: up to 4,096 point sources, ini
 
 The generated shader texture budget is fixed: graph textures 0…11, IBL cubes 12…13, combined BRDF/Forward+ data atlas 14 and shared shadow comparison atlas 15. Keep BRDF filtering/coordinates intact when extending the atlas. Do not add a sampled darkness texture or source-size sampler casually.
 
-Each point record contains six vec4 texels: position/intensity; color/inverse-range-squared; conservative cull sphere; shadow/source-size/roles/reveal; near-radius-squared/specular/range/edge response; attenuation with reserved components. CPU packing and shaders share [point_light_record.sh](../src/crimson-renderer/shaders/point_light_record.sh). Reflected `u_clusterRecordLayoutV5` prevents old-layout programs from publishing. Current generated-material identity is v16 and includes Environment `u_ambientLight` and complete Character/silhouette bindings. Update recipe/manifest/cache identity with a true ABI change; do not accept a mismatched old cache.
+Each point record contains six vec4 texels with the existing attenuation/source-size/material-role response. `u_clusterRecordLayoutV5` still guards that unchanged point layout. Independent reveal records occupy a subsequent atlas section described by `u_revealAtlas`. Generated-material identity is v17, with two per-draw actor light records and Mat4/Vec4 silhouette arrays of eight. Preflight rejects obsolete or undersized arrays; staged source/cache identity and complete last-good publication remain mandatory.
 
 Direct capacity is distinct from shadow residency: **16 admitted point maps**, six guarded D32F projections each, and a normal update budget of **4 maps/24 faces** per world frame. The player omni consumes one source and, when eligible, one map. Key/Fill, reveal and dedicated silhouette consume no ordinary point slots. Scene validation includes the enabled player point before committing edits/loads.
 
@@ -190,7 +194,7 @@ Preserve linear HDR accumulation, the existing GGX/Smith/Schlick/Fresnel-Lambert
 
 ## Persistence, materials and startup
 
-Current native scene writer is **v11**; Character rig is **v4**, Darkness Reveal **v2**, native material file **v6** with graph schema **v7** (readers **v1–v7**). Grunge stores one generated image with independent dirt specks, stains, scratches and leaks layer contributions; older style settings convert to explicit layer values on load. Scene edits use transactional history and atomic selected-file saves. Point source size writes `sourceRadius`; `softSourceRadius` is a read-only conversion key. Missing attenuation reads as 2. Older rig/World Fill/point-offset data converts at load; only Save writes the new representation. No legacy runtime mode or duplicate controls remain. Never rewrite authored files merely because a renderer/cache version changed.
+Current native scene writer is **v16** (readers v1–v16); Light Rig settings remain **v4**, Darkness Reveal **v2**, native material file **v6**, graph schema **v7**. Old Character fields convert in memory into Actor, Controller, Motor, Navigation Agent, Player Input, Light Rig and Darkness Reveal. Lens-only Camera and separate Camera Follow capture the former follow target/offset and full world basis. Existing IDs, hierarchy, settings and camera roles remain intact. Only explicit Save writes the new schema; loading does not rewrite authored assets.
 
 Imported glTF/GLB and Quader native material sidecars are editable under their shared assigned identities. Imported origin is provenance, not a read-only flag. Existing glTF sidecars are not overwritten by promotion; exact-content imports preserve their native graphs. Quader Sync Materials governs source overwrite, independently of its Sync Lights setting. Preserve model slot overrides, factors, texture roles/channels, UV/tangent compatibility and reference-aware deletion policy.
 

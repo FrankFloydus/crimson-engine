@@ -20,6 +20,7 @@ struct ExtractedModel {
     double animationSeconds{}; // Transient sample time; never scene-authored.
     bool fadeWhenOccluding{false};
     bool visible{true}; // Hidden models retain transient animation clocks.
+    EntityId actorOwner{};
 };
 struct ExtractedParticle {
     EntityId id{};
@@ -34,9 +35,9 @@ struct ExtractedScene {
     SceneEnvironment environment;
     ProceduralSun proceduralSun;
     std::vector<ExtractedParticle> particles;
-    PlayerRevealSource playerReveal{};
-    std::array<CharacterLight,2> characterLights{};
-    CharacterShadowSource characterShadow{};
+    std::vector<DarknessRevealSource> reveals;
+    std::vector<ActorLighting> actorLighting;
+    std::vector<CharacterShadowSource> actorShadows;
 };
 
 // The scene owns ECS traversal. Rendering receives copied presentation values,

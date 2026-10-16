@@ -797,7 +797,8 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     std::array<PointLight,2> animationLights;auto& animationLight=animationLights[0];
     animationLight.entityId=701;animationLight.position={0,0,4};animationLight.radius=12;animationLight.intensity=60;
     animationLights[1]=animationLight;animationLights[1].entityId=702;animationLights[1].position={0,0,-4};
-    RenderScene animationScene{animationSettings,{}};animationScene.sceneMode=true;animationScene.pointLights=animationLights;
+    CharacterShadowSource animationActorShadow;animationActorShadow.owner=99;
+    RenderScene animationScene{animationSettings,{}};animationScene.actorShadows=std::span(&animationActorShadow,1);animationScene.sceneMode=true;animationScene.pointLights=animationLights;
     const auto renderAnimated=[&](const RenderModelInstance& instance){animationScene.instances=std::span(&instance,1);renderer.render(animationScene);return read(renderer.viewportTexture());};
     const auto equivalentAnimation=[&](const DecodedImage& gpu,const DecodedImage& cpu,const char* reason){
         std::size_t changed{};unsigned maximum{};std::uint64_t total{};
@@ -871,10 +872,11 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     check(brightness(cpuPoint,animationSettings.camera,floorSample)<brightness(animatedClear,animationSettings.camera,floorSample)*.5,
         "Animated point-shadow parity fixture has no visible ground silhouette.");
     equivalentAnimation(animationShadow(animatedReceiver),cpuPoint,"Point shadow caster did not use GPU-deformed vertices.");
+    animatedReceiver.actorOwner=referenceReceiver.actorOwner=99;
     animatedReceiver.lightingCategory=referenceReceiver.lightingCategory=lighting_scope::Character;
     animatedReceiver.lightingScopes.shadowCasterMask=referenceReceiver.lightingScopes.shadowCasterMask=lighting_scope::Character;
-    animationLight.castShadows=false;animationScene.characterShadow.enabled=true;animationScene.characterShadow.strength=1;
-    animationScene.characterShadow.direction={0,0,-1};animationScene.characterShadow.distance=10;
+    animationLight.castShadows=false;animationActorShadow.enabled=true;animationActorShadow.strength=1;
+    animationActorShadow.direction={0,0,-1};animationActorShadow.distance=10;
     const auto cpuCharacter=animationShadow(referenceReceiver);
     check(brightness(cpuCharacter,animationSettings.camera,{blockerCenter[0],blockerCenter[1],0})<brightness(animatedClear,animationSettings.camera,{blockerCenter[0],blockerCenter[1],0})*.5,
         "Animated dedicated-shadow parity fixture has no visible ground silhouette.");
@@ -892,7 +894,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     reflectedPose->bounds=reflectedReference->bounds;check(renderer.prepareModel(*reflectedReference),renderer.modelStatus());
     auto reflectedGpu=animatedReceiver;reflectedGpu.pose=reflectedPose;reflectedGpu.shading=MaterialShading::Unlit;reflectedGpu.model.transform={};
     auto reflectedCpu=referenceReceiver;reflectedCpu.model.asset=reflectedReference;reflectedCpu.shading=MaterialShading::Unlit;reflectedCpu.model.transform={};
-    animationScene.shadowWorldId=0;animationScene.shadowInstances={};animationScene.characterShadow={};animationLight.castShadows=false;
+    animationScene.shadowWorldId=0;animationScene.shadowInstances={};animationActorShadow={};animationActorShadow.owner=99;animationLight.castShadows=false;
     const auto reflectedCpuColor=renderAnimated(reflectedCpu);const auto reflectedGpuColor=renderAnimated(reflectedGpu);
     const auto reflectedCenter=(reflectedReference->bounds.minimum+reflectedReference->bounds.maximum)*.5;
     check(brightness(reflectedCpuColor,animationSettings.camera,reflectedCenter)>30&&brightness(reflectedGpuColor,animationSettings.camera,reflectedCenter)>30,
@@ -912,8 +914,8 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     check(brightness(reflectedCpuPoint,animationSettings.camera,reflectedFloor)<brightness(reflectedClear,animationSettings.camera,reflectedFloor)*.5,
         "Reflected point-shadow parity fixture has no visible silhouette.");
     equivalentAnimation(animationShadow(reflectedGpu),reflectedCpuPoint,"Reflected GPU point shadow differs from CPU geometry.");
-    animationLight.castShadows=false;animationScene.characterShadow.enabled=true;animationScene.characterShadow.strength=1;
-    animationScene.characterShadow.direction={0,0,-1};animationScene.characterShadow.distance=10;
+    animationLight.castShadows=false;animationActorShadow.enabled=true;animationActorShadow.strength=1;
+    animationActorShadow.direction={0,0,-1};animationActorShadow.distance=10;
     const auto reflectedCpuKey=animationShadow(reflectedCpu);
     check(brightness(reflectedCpuKey,animationSettings.camera,{reflectedBlocker[0],reflectedBlocker[1],0})<brightness(reflectedClear,animationSettings.camera,{reflectedBlocker[0],reflectedBlocker[1],0})*.5,
         "Reflected dedicated-shadow parity fixture has no visible silhouette.");

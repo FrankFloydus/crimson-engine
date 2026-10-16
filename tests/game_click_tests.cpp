@@ -16,13 +16,15 @@ void fixture(SceneDocument& document) {
     require(document.edit("Click fixture",[](auto& records,auto& properties){
         EntityRecord floor;floor.id=1;floor.name="Floor";floor.local=math::translation({0,Ground-.5f,0});
         floor.collider=SceneCollider{{20,1,20}};records.push_back(floor);
-        EntityRecord player;player.id=Player;player.name="Player";player.character.emplace();records.push_back(player);
+        EntityRecord player;player.id=Player;player.name="Player";player.actor.emplace();player.controller.emplace();player.motor.emplace();player.navigation.emplace();player.playerInput.emplace();records.push_back(player);
         EntityRecord follow;follow.id=Follow;follow.name="Camera";follow.camera.emplace();
         follow.camera->verticalFov=60;follow.camera->farPlane=2035;
-        follow.camera->followTarget=Player;follow.camera->followOffset={5.222835f,6.438390f,4.948770f};
+        follow.cameraFollow.emplace();follow.cameraFollow->target=Player;follow.cameraFollow->offset={5.222835f,6.438390f,4.948770f};
         // The authored three-quarter orientation and offset are deliberately
         // different: rays must use the actual camera basis, not look at Player.
         follow.local=*math::inverse(math::lookAt({8,10,8},{0,0,0},{0,1,0}));
+        follow.cameraFollow->worldBasis=follow.local;
+        follow.cameraFollow->worldBasis[12]=follow.cameraFollow->worldBasis[13]=follow.cameraFollow->worldBasis[14]=0;
         records.push_back(follow);properties.playerCharacter=Player;properties.activeCamera=Follow;
     }),"Could not create click fixture.");
 }

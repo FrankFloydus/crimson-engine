@@ -1451,9 +1451,7 @@ size_t removeDeletedModels(SceneSnapshot& snapshot,const AssetReferenceManager& 
     if(removed.contains(snapshot.properties.activeEnvironment))snapshot.properties.activeEnvironment=NoEntity;
     if(removed.contains(snapshot.properties.activeCamera))snapshot.properties.activeCamera=NoEntity;
     if(removed.contains(snapshot.properties.playerCharacter))snapshot.properties.playerCharacter=NoEntity;
-    for(auto& record:snapshot.records)if(record.camera && removed.contains(record.camera->followTarget)) {
-        record.camera->followTarget=NoEntity;record.camera->followOffset={};
-    }
+    for(auto& record:snapshot.records)if(record.cameraFollow && removed.contains(record.cameraFollow->target))record.cameraFollow.reset();
     // Stable ordering among surviving siblings; newly promoted children append in original preorder.
     for(const auto parent:changedParents) {
         std::vector<EntityRecord*> siblings;for(auto& record:snapshot.records)if(record.parent==parent)siblings.push_back(&record);

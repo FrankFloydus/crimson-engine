@@ -48,7 +48,9 @@ void reimportIdentityHistoryAndAtomicFailure() {
         document.scene().find(visual)->parent==imported&&document.scene().find(collision)->parent==visual,"Import lost generated hierarchy or source identities.");
     require(document.scene().find(manual)->parent==owner&&document.scene().find(manual)->local==manualRecord.local,"Import changed a manual sibling.");
     require(!document.scene().find(visual)->fadeWhenOccluding,"New Quader models must not participate in fading automatically.");
-    auto wall=*document.scene().find(visual);wall.fadeWhenOccluding=true;require(document.updateEntity(visual,wall),document.status());
+    auto wall=*document.scene().find(visual);wall.fadeWhenOccluding=true;wall.outlinerStyle.emplace();wall.outlinerStyle->color=Vec4{.2f,.5f,.7f,1};
+    wall.outlinerStyle->componentColors[static_cast<size_t>(SceneComponentKind::Model)]=Vec4{.7f,.2f,.5f,1};
+    require(document.updateEntity(visual,wall),document.status());
     auto custom=*document.scene().find(collision);custom.collider->shape=ColliderShape::Capsule;
     custom.collider->radius=.7f;custom.collider->height=3.2f;custom.collider->size={2,3,4};
     custom.collider->showCollisionInGame=true;custom.collider->collisionColor={.2f,.4f,.6f,.8f};
@@ -63,6 +65,7 @@ void reimportIdentityHistoryAndAtomicFailure() {
     require(document.history().size()==history+1&&document.dirty(),"Reimport did not create exactly one history command.");
     require(generatedId(document.scene(),owner,"Imported")==imported&&generatedId(document.scene(),owner,"mesh/floor")==visual&&
         generatedId(document.scene(),owner,"collision/floor")==collision,"Matching source keys lost persistent entity IDs.");
+    require(document.scene().find(visual)->outlinerStyle==wall.outlinerStyle,"Quader refresh discarded entity/component Outliner colors.");
     auto expected=*custom.collider;expected.source=AssetRef<ModelAsset>{"assets/models/generation-b-collision/manifest.json"};
     require(document.scene().find(collision)->collider==expected,"Quader sync reset an authored collider shape, dimensions, or display instead of updating its source.");
     require(document.scene().find(collision)->local==custom.local&&document.scene().find(visual)->local==next[0].local,
@@ -258,7 +261,7 @@ void sourceHiddenMeshesRemainEditable() {
 void directionalCompatibilityAndMeshDefaults() {
     Project project;SceneDocument document(project.root);const auto sun=document.createDirectionalLight();
     require(document.scene().find(sun)->directional->castShadows,"New directional lights must enable shadows.");
-    auto serialized=nlohmann::json::parse(snapshot(document));require(serialized.at("version")==15,"New scenes did not use schema 15.");
+    auto serialized=nlohmann::json::parse(snapshot(document));require(serialized.at("version")==17,"New scenes did not use schema 17.");
     serialized["version"]=8;
     for(auto& entity:serialized["entities"])if(entity.contains("directional")) {
         entity["directional"].erase("castShadows");entity["directional"].erase("shadowDistance");

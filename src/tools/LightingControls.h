@@ -16,7 +16,7 @@ void drawAmbientVisibilityControls(AmbientVisibilitySettings&,
 
 // Widget identity is mapped into the Character Inspector's existing property
 // transaction owner. These controls never own a document or a separate panel.
-enum class PlayerLightRigControl {
+enum class ActorLightRigControl {
     Enabled,ShowRig,
     KeyEnabled,KeyDirection,KeyColor,KeyIntensity,KeyDiffuse,KeySpecular,
     FillEnabled,FillDirection,FillColor,FillIntensity,FillDiffuse,FillSpecular,
@@ -24,6 +24,6 @@ enum class PlayerLightRigControl {
     WorldRadius,WorldNearFalloff,WorldSpecular,WorldFalloffExponent,WorldEdgeSoftness,WorldSourceRadius,WorldAttenuation,
     ShadowEnabled,ShadowStrength,ShadowDistance,ShadowDepthBias,ShadowNormalBias
 };
-void drawPlayerLightRigControls(PlayerLightRigSettings&,
-    const std::function<void(PlayerLightRigControl,const char*,bool)>& edit);
+void drawActorLightRigControls(ActorLightRigSettings&,
+    const std::function<void(ActorLightRigControl,const char*,bool)>& edit);
 } // namespace crimson

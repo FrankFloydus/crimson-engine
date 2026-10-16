@@ -307,9 +307,9 @@ struct AssetPreviews::Impl {
         ++statistics.validations;
         SceneSettings settings; settings.directional.enabled=false; for (auto& light:settings.points) light.enabled=false;
         std::vector<ExtractedModel> models; std::vector<DirectionalLight> directions; std::vector<PointLight> points;
-        PlayerRevealSource playerReveal;
-        std::array<CharacterLight,2> characterLights{};
-        CharacterShadowSource characterShadow{};
+        std::vector<DarknessRevealSource> reveals;
+        std::vector<ActorLighting> actorLighting;
+        std::vector<CharacterShadowSource> actorShadows;
         std::shared_ptr<const SceneSnapshot> sceneSnapshot; Aabb bounds;
         std::shared_ptr<const MaterialAsset> materialAsset;
         std::shared_ptr<const ModelAsset> materialGeometry;
@@ -339,9 +339,9 @@ struct AssetPreviews::Impl {
             models=std::move(extracted.models); directions=std::move(extracted.directional); points=std::move(extracted.points);
             std::erase_if(models,[](const auto& model){return !model.visible;});
             for(auto& model:models)model.animationSeconds=model.animation.startTime;
-            playerReveal=extracted.playerReveal;
-            characterLights=extracted.characterLights;
-            characterShadow=extracted.characterShadow;
+            reveals=std::move(extracted.reveals);
+            actorLighting=std::move(extracted.actorLighting);
+            actorShadows=std::move(extracted.actorShadows);
             settings.environment=extracted.environment.environment; settings.exposure=extracted.environment.exposure;
             settings.proceduralSun=extracted.proceduralSun;
             if (snapshot->previewCamera) settings.camera=*snapshot->previewCamera;
@@ -461,7 +461,7 @@ struct AssetPreviews::Impl {
         auto pins=std::make_shared<PreviewPins>(); pins->scene=sceneSnapshot; pins->material=materialAsset; pins->environment=bake;
         if(sceneSnapshot) {
             ExtractedScene shadowScene;shadowScene.models=models;shadowScene.points=points;shadowScene.directional=directions;
-            shadowScene.characterShadow=characterShadow;
+            shadowScene.actorShadows=actorShadows;
             std::erase_if(shadowScene.models,[&](const auto& model){return !assets.findModel(model.assetId) && !assets.modelLoading(model.assetId);});
             const std::array<ShadowCamera,1> shadowCameras{{{settings.camera,1.f}}};
             pins->shadows=prepared.prepareShadows(shadowScene,256,ResourcePriority::Preview,shadowCameras);
@@ -537,6 +537,7 @@ struct AssetPreviews::Impl {
             instances.back().castShadows=model.castShadows;instances.back().receiveShadows=model.receiveShadows;
             instances.back().lightingScopes=model.lightingScopes;
             instances.back().lightingCategory=model.lightingCategory;
+            instances.back().actorOwner=model.actorOwner;
             instances.back().pose=prepared.pose(model,ready->asset);
         }
         if (thumbnailEnvironment!=bake->key) {
@@ -544,9 +545,9 @@ struct AssetPreviews::Impl {
             thumbnailEnvironment=bake->key;
         }
         RenderScene renderScene{settings,{},nullptr,nullptr,instances,directions,points,true,pins,particles,particleMaterials};
-        renderScene.playerReveal=playerReveal;
-        renderScene.characterLights=characterLights;
-        renderScene.characterShadow=characterShadow;
+        renderScene.reveals=reveals;
+        renderScene.actorLighting=actorLighting;
+        renderScene.actorShadows=actorShadows;
         if(pins->shadows) {
             renderScene.shadowInstances=pins->shadows->instances;
             renderScene.shadowWorldId=textHash(id);renderScene.shadowResolution=256;

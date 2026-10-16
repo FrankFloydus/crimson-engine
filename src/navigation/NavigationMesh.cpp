@@ -312,7 +312,7 @@ struct NavigationMesh::Impl {
 };
 NavigationMesh::NavigationMesh():impl_(std::make_unique<Impl>()){}
 NavigationMesh::~NavigationMesh()=default;
-bool NavigationMesh::reconcile(const PhysicsWorld& world,const SceneCharacter& character) {
+bool NavigationMesh::reconcile(const PhysicsWorld& world,const SceneCharacterController& character) {
     auto& state=*impl_;
     if(state.sourceRevision==world.geometryRevision() && state.radius==character.radius && state.height==character.height)return false;
     state.sourceRevision=world.geometryRevision();state.radius=character.radius;state.height=character.height;++state.revision;

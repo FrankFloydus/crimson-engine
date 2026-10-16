@@ -1,16 +1,16 @@
-#include "PlayerController.h"
+#include "AgentSteering.h"
 #include <algorithm>
 #include <cmath>
 #include <numbers>
 
 namespace crimson {
-void PlayerController::setPath(std::vector<Vec3> corners) {
+void AgentSteering::setPath(std::vector<Vec3> corners) {
     reset();
     if(corners.empty() || std::any_of(corners.begin(),corners.end(),[](const Vec3& point){return !math::finite(point);}))return;
     destination_=corners.back();path_=std::move(corners);
 }
-PlayerMotion PlayerController::update(const Vec3& position,const Vec3& forward,float speed,double seconds) {
-    PlayerMotion motion;
+AgentMotion AgentSteering::update(const Vec3& position,const Vec3& forward,float speed,double seconds) {
+    AgentMotion motion;
     const Vec3 horizontalForward{forward[0],0,forward[2]};
     motion.facing=math::finite(horizontalForward)?math::normalized(horizontalForward,{0,0,-1}):Vec3{0,0,-1};
     if(!math::finite(position) || !math::finite(forward) || !math::finite(speed) || speed<0 ||

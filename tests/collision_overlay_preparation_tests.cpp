@@ -90,7 +90,7 @@ void hierarchicalVisibility(){
     auto mesh=collider(1,ColliderShape::Trimesh);mesh.parent=group.id;mesh.collider->source=AssetRef<ModelAsset>{canonicalAssetId("assets/models/hidden/manifest.json")};
     mesh.collider->showCollisionInGame=true;
     auto primitive=collider(2,ColliderShape::Box);primitive.parent=group.id;primitive.collider->showCollisionInGame=true;
-    EntityRecord actor;actor.id=3;actor.name="Character";actor.parent=group.id;actor.character.emplace();actor.character->showCollisionInGame=true;
+    EntityRecord actor;actor.id=3;actor.name="Character";actor.parent=group.id;actor.controller.emplace();actor.controller->showCollisionInGame=true;
     auto child=collider(4,ColliderShape::Sphere);child.parent=group.id;child.visible=false;child.collider->showCollisionInGame=true;
     const auto publish=[&]{scene.apply({group,mesh,primitive,actor,child},{});};publish();unsigned queries{};
     const CollisionMeshQuery query=[&](const std::string&)->CollisionMeshResult{++queries;throw std::runtime_error("Hidden collider requested triangle geometry.");};
@@ -113,7 +113,7 @@ void hierarchicalVisibility(){
 void disabledOverlaysDoNoWork(){
     ResourceManager resources(config());CollisionOverlays overlays(resources);Scene scene;auto mesh=collider(1,ColliderShape::Trimesh);
     mesh.collider->source=AssetRef<ModelAsset>{canonicalAssetId("assets/models/floor/manifest.json")};mesh.collider->showCollisionInGame=true;
-    auto primitive=collider(2,ColliderShape::Box);EntityRecord character;character.id=3;character.name="Character";character.character.emplace();character.character->showCollisionInGame=true;
+    auto primitive=collider(2,ColliderShape::Box);EntityRecord character;character.id=3;character.name="Character";character.controller.emplace();character.controller->showCollisionInGame=true;
     scene.apply({mesh,primitive,character},{});unsigned queries{};
     const CollisionMeshQuery query=[&](const std::string&)->CollisionMeshResult{++queries;throw std::runtime_error("Hidden overlays requested collision sources.");};
     for(unsigned frame=0;frame<10;++frame){const auto packets=overlays.prepare(scene,{},false,query);require(packets.scene.empty()&&packets.game.empty(),"Global Collisions off retained a view overlay.");}
@@ -142,20 +142,20 @@ void nativeMeshWithoutAssetQuery(){
     for(const auto& point:packets.scene.front().geometry->vertices)near(point[1],2,"Native collision overlay retained its old payload.");
 }
 void characterFeetAndSharedCapsule(){
-    ResourceManager resources(config());CollisionOverlays overlays(resources);Scene scene;EntityRecord actor;actor.id=1;actor.name="Character";actor.character.emplace();
-    actor.character->height=2.4f;actor.character->radius=.4f;actor.character->showCollisionInGame=true;actor.character->collisionColor={.2f,.5f,.8f,.6f};
+    ResourceManager resources(config());CollisionOverlays overlays(resources);Scene scene;EntityRecord actor;actor.id=1;actor.name="Character";actor.controller.emplace();
+    actor.controller->height=2.4f;actor.controller->radius=.4f;actor.controller->showCollisionInGame=true;actor.controller->collisionColor={.2f,.5f,.8f,.6f};
     actor.local=math::translation({4,3,2})*math::eulerRotationXYZ({.1f,.4f,.2f})*math::scaling({2,1.5f,1});
     auto centered=collider(2,ColliderShape::Capsule);centered.collider->height=2.4f;centered.collider->radius=.4f;centered.local=math::translation({-4,0,0});
     scene.apply({actor,centered},{});const std::array selected{actor.id};const auto packets=overlays.prepare(scene,selected,true,{});
     require(packets.scene.size()==2&&packets.game.size()==1,"Character or centered Capsule packet was omitted.");
-    const auto expectedWorld=actor.local*math::translation({0,actor.character->height*.5f,0});
+    const auto expectedWorld=actor.local*math::translation({0,actor.controller->height*.5f,0});
     const auto found=std::find_if(packets.scene.begin(),packets.scene.end(),[&](const auto& packet){return packet.world==expectedWorld;});
     require(found!=packets.scene.end()&&packets.game.front().world==expectedWorld,"Character's centered debug capsule was not translated from its feet origin.");
     const auto geometry=found->geometry;require(packets.scene[0].geometry==packets.scene[1].geometry&&packets.game.front().geometry==geometry,"Matching Character and Collider capsules did not share immutable geometry.");
     Aabb bounds;for(const auto& point:geometry->vertices)math::include(bounds,point);
     near(bounds.minimum[1],-1.2f,"Cached Capsule geometry is not centered.");near(bounds.maximum[1],1.2f,"Cached Capsule total height changed.");
     near(math::transformPoint(found->world,{0,bounds.minimum[1],0}),math::transformPoint(actor.local,{}),"Character overlay bottom moved away from the authored feet.");
-    near(math::transformPoint(found->world,{0,bounds.maximum[1],0}),math::transformPoint(actor.local,{0,actor.character->height,0}),"Character overlay top disagrees with authored total height.");
+    near(math::transformPoint(found->world,{0,bounds.maximum[1],0}),math::transformPoint(actor.local,{0,actor.controller->height,0}),"Character overlay top disagrees with authored total height.");
     near(found->color[3],.48f,"Selected Character did not use Scene selection opacity.");near(packets.game.front().color[3],.6f,"Character Game opacity lost its authored alpha.");
 }
 void asynchronousMeshReuseAndReplacement(){

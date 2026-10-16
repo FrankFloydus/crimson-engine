@@ -15,6 +15,10 @@ namespace crimson {
 namespace {
 std::atomic<uint64_t> nextGeneration{1};
 struct Visibility { bool authored{true},effective{true},resolved{}; };
+struct ComponentOrder {
+    std::vector<SceneComponentKind> values;std::optional<SceneComponentKind> before;
+    std::optional<SceneOutlinerStyle> style;
+};
 void cacheVisibility(entt::registry& registry,const std::unordered_map<EntityId,entt::entity>& entities) {
     std::vector<EntityId> chain;
     for(const auto& [id,entity]:entities) {
@@ -57,10 +61,10 @@ std::vector<EntityId> cameraFollowOrder(const std::vector<EntityRecord>& records
             const auto [id,leaving]=pending.back();pending.pop_back();
             if(!id)continue;
             const auto& current=*indexed.at(id);
-            if(leaving){if(current.camera && current.camera->followTarget)result.push_back(id);continue;}
+            if(leaving){if(current.cameraFollow)result.push_back(id);continue;}
             if(!visited.insert(id).second)continue;
             pending.emplace_back(id,true);
-            if(current.camera && current.camera->followTarget)pending.emplace_back(current.camera->followTarget,false);
+            if(current.cameraFollow)pending.emplace_back(current.cameraFollow->target,false);
             pending.emplace_back(current.parent,false);
         }
     }
@@ -68,14 +72,57 @@ std::vector<EntityId> cameraFollowOrder(const std::vector<EntityRecord>& records
 }
 }
 
+bool hasSceneComponent(const EntityRecord& record,SceneComponentKind kind) {
+    switch(kind) {
+    case SceneComponentKind::Transform:return true;
+    case SceneComponentKind::Actor:return record.actor.has_value();
+    case SceneComponentKind::Motor:return record.motor.has_value();
+    case SceneComponentKind::Controller:return record.controller.has_value();
+    case SceneComponentKind::Navigation:return record.navigation.has_value();
+    case SceneComponentKind::PlayerInput:return record.playerInput.has_value();
+    case SceneComponentKind::LightRig:return record.lightRig.has_value();
+    case SceneComponentKind::DarknessReveal:return record.darknessReveal.has_value();
+    case SceneComponentKind::Camera:return record.camera.has_value();
+    case SceneComponentKind::CameraFollow:return record.cameraFollow.has_value();
+    case SceneComponentKind::Model:return record.model.has_value();
+    case SceneComponentKind::Collider:return record.collider.has_value();
+    case SceneComponentKind::Directional:return record.directional.has_value();
+    case SceneComponentKind::Point:return record.point.has_value();
+    case SceneComponentKind::Environment:return record.environment.has_value();
+    case SceneComponentKind::Particle:return record.particle.has_value();
+    case SceneComponentKind::Quader:return record.quader.has_value();
+    }
+    return false;
+}
+std::vector<SceneComponentKind> sceneComponents(const EntityRecord& record) {
+    std::vector<SceneComponentKind> result{SceneComponentKind::Transform};
+    const auto append=[&](SceneComponentKind kind) {
+        if(hasSceneComponent(record,kind) && std::find(result.begin(),result.end(),kind)==result.end())result.push_back(kind);
+    };
+    for(const auto kind:record.componentOrder)append(kind);
+    for(const auto kind:AllSceneComponentKinds)append(kind);
+    return result;
+}
+void normalizeSceneComponentOrder(EntityRecord& record) {
+    if(!record.componentOrder.empty())record.componentOrder=sceneComponents(record);
+}
+void normalizeSceneOutlinerStyle(EntityRecord& record) {
+    if(record.outlinerStyle&&!record.outlinerStyle->color&&
+        std::none_of(record.outlinerStyle->componentColors.begin(),record.outlinerStyle->componentColors.end(),[](const auto& color){return color.has_value();}))
+        record.outlinerStyle.reset();
+}
+
 bool sameEntity(const EntityRecord& a, const EntityRecord& b) {
     return a.id == b.id && a.name == b.name && a.parent == b.parent && a.order == b.order &&
         a.local == b.local && a.model == b.model && a.particle == b.particle && sameLight(a.directional,b.directional) && sameLight(a.point,b.point) &&
         a.environment.has_value()==b.environment.has_value() && (!a.environment || sameEnvironment(*a.environment,*b.environment)) &&
-        a.character==b.character && a.collider==b.collider && a.camera==b.camera && a.modelMaterials==b.modelMaterials &&
+        a.actor==b.actor && a.motor==b.motor && a.controller==b.controller && a.navigation==b.navigation &&
+        a.playerInput==b.playerInput && a.lightRig==b.lightRig && a.darknessReveal==b.darknessReveal &&
+        a.collider==b.collider && a.camera==b.camera && a.cameraFollow==b.cameraFollow && a.modelMaterials==b.modelMaterials &&
         a.castShadows==b.castShadows && a.receiveShadows==b.receiveShadows && a.lightingScopes==b.lightingScopes &&
         a.quader==b.quader && a.quaderGenerated==b.quaderGenerated &&
-        a.modelAnimation==b.modelAnimation && a.fadeWhenOccluding==b.fadeWhenOccluding && a.visible==b.visible;
+        a.modelAnimation==b.modelAnimation && a.fadeWhenOccluding==b.fadeWhenOccluding && a.visible==b.visible &&
+        (a.componentOrder==b.componentOrder || sceneComponents(a)==sceneComponents(b)) && a.outlinerBefore==b.outlinerBefore&&a.outlinerStyle==b.outlinerStyle;
 }
 bool sameProperties(const SceneProperties& a, const SceneProperties& b) {
     return a.activeEnvironment == b.activeEnvironment && a.activeCamera==b.activeCamera && a.playerCharacter==b.playerCharacter;
@@ -99,6 +146,9 @@ std::optional<EntityRecord> Scene::find(EntityId id) const {
     const auto& relation = registry_.get<Relationship>(entity);
     EntityRecord record{id,identity.name,relation.parent,relation.order,registry_.get<Transform>(entity).local};
     record.visible=registry_.get<Visibility>(entity).authored;
+    record.componentOrder=registry_.get<ComponentOrder>(entity).values;
+    record.outlinerBefore=registry_.get<ComponentOrder>(entity).before;
+    record.outlinerStyle=registry_.get<ComponentOrder>(entity).style;
     if (const auto* model = registry_.try_get<ModelReference>(entity)) {
         record.model=model->assetId;record.modelMaterials=model->materials;
         record.castShadows=model->castShadows;record.receiveShadows=model->receiveShadows;
@@ -110,7 +160,14 @@ std::optional<EntityRecord> Scene::find(EntityId id) const {
     if (const auto* light = registry_.try_get<SceneDirectionalLight>(entity)) record.directional = *light;
     if (const auto* light = registry_.try_get<ScenePointLight>(entity)) record.point = *light;
     if (const auto* environment = registry_.try_get<SceneEnvironment>(entity)) record.environment = *environment;
-    if (const auto* character = registry_.try_get<SceneCharacter>(entity)) record.character = *character;
+    if (registry_.all_of<SceneActor>(entity)) record.actor.emplace();
+    if (const auto* value = registry_.try_get<SceneMotor>(entity)) record.motor = *value;
+    if (const auto* value = registry_.try_get<SceneCharacterController>(entity)) record.controller = *value;
+    if (const auto* value = registry_.try_get<SceneNavigationAgent>(entity)) record.navigation = *value;
+    if (const auto* value = registry_.try_get<ScenePlayerInput>(entity)) record.playerInput = *value;
+    if (const auto* value = registry_.try_get<ActorLightRigSettings>(entity)) record.lightRig = *value;
+    if (const auto* value = registry_.try_get<DarknessRevealSettings>(entity)) record.darknessReveal = *value;
+    if (const auto* value = registry_.try_get<SceneCameraFollow>(entity)) record.cameraFollow = *value;
     if (const auto* collider = registry_.try_get<SceneCollider>(entity)) record.collider = *collider;
     if (const auto* camera = registry_.try_get<SceneCamera>(entity)) record.camera = *camera;
     if (const auto* link = registry_.try_get<QuaderLink>(entity)) record.quader = *link;
@@ -234,6 +291,24 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             if (isEngineAssetId(record.particle->id) || (!isAssetUuid(record.particle->id) && (!safeReference(record.particle->id) || path.parent_path()!=std::filesystem::path("assets/particles") || path.extension()!=".crimson-particle")))
                 throw std::runtime_error("Particle asset reference must be a managed .crimson-particle path under assets/particles.");
         }
+        if(record.componentOrder.size()>AllSceneComponentKinds.size())throw std::runtime_error("Component display order is too long.");
+        std::array<bool,AllSceneComponentKinds.size()> orderedKinds{};
+        for(const auto kind:record.componentOrder) {
+            const auto index=static_cast<size_t>(kind);
+            if(index>=orderedKinds.size() || orderedKinds[index])throw std::runtime_error("Component display order contains an invalid or duplicate kind.");
+            orderedKinds[index]=true;
+        }
+        if(record.outlinerBefore&&(*record.outlinerBefore==SceneComponentKind::Transform||
+            std::find(AllSceneComponentKinds.begin(),AllSceneComponentKinds.end(),*record.outlinerBefore)==AllSceneComponentKinds.end()))
+            throw std::runtime_error("Outliner child anchor must identify a known optional component.");
+        if(record.outlinerStyle) {
+            const auto validColor=[](const auto& color) {
+                return !color||(math::finite(*color)&&std::all_of(color->begin(),color->end(),[](float channel){return channel>=0&&channel<=1;}));
+            };
+            if(!validColor(record.outlinerStyle->color)||
+                !std::all_of(record.outlinerStyle->componentColors.begin(),record.outlinerStyle->componentColors.end(),validColor))
+                throw std::runtime_error("Outliner colors require finite RGBA values from zero to one.");
+        }
         validateLight(record.directional); validateLight(record.point);
         if (!validSurfaceLightingScopes(record.lightingScopes) ||
             (record.directional && !validLightRoles(record.directional->roles)) ||
@@ -253,19 +328,25 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
         if (record.point && (!std::isfinite(record.point->shadowDepthBias) || record.point->shadowDepthBias<0 ||
             !std::isfinite(record.point->shadowNormalBias) || record.point->shadowNormalBias<0))
             throw std::runtime_error("Point shadow biases must be finite and nonnegative.");
-        if (record.character) {
-            const auto& c=*record.character;
-            if (!std::isfinite(c.height) || !std::isfinite(c.radius) || !std::isfinite(c.moveSpeed) ||
-                c.radius<=0 || c.height<2*c.radius || c.moveSpeed<0)
-                throw std::runtime_error("Character capsule height must be at least its diameter; radius must be positive and speed nonnegative.");
-            if (!validPlayerLightRigSettings(c.lightRig))throw std::runtime_error("Player light rig settings are invalid.");
-            if (!validCharacterRevealSettings(c.darknessReveal))throw std::runtime_error("Character lighting spread must be between 0.01 and 100000 meters.");
-            // The designated player's enabled local sources use the same
-            // Forward+ budget as authored point entities. Reject edits/loads
-            // before publishing a scene that presentation cannot extract.
-            if(record.id==properties.playerCharacter&&c.lightRig.enabled)
-                pointCount+=std::size_t(c.lightRig.localWorld.enabled);
+        if (record.motor && (!record.controller || !std::isfinite(record.motor->moveSpeed) || record.motor->moveSpeed<0))
+            throw std::runtime_error("Motor requires a Character Controller and a finite nonnegative move speed.");
+        if (record.navigation && (!record.motor || !record.controller))
+            throw std::runtime_error("Navigation Agent requires Motor and Character Controller components.");
+        if (record.playerInput && (!record.motor || !record.controller))
+            throw std::runtime_error("Player Input requires Motor and Character Controller components.");
+        if (record.controller) {
+            const auto& c=*record.controller;
+            if (!std::isfinite(c.height) || !std::isfinite(c.radius) || c.radius<=0 || c.height<2*c.radius)
+                throw std::runtime_error("Character Controller capsule height must be at least its diameter and radius must be positive.");
         }
+        if (record.lightRig && (!record.actor || !validActorLightRigSettings(*record.lightRig)))
+            throw std::runtime_error("Player Light Rig requires an Actor and valid settings.");
+        if (record.darknessReveal && !validDarknessRevealSettings(*record.darknessReveal))
+            throw std::runtime_error("Darkness Reveal requires a finite spread between 0.01 and 100000 meters.");
+        // Every enabled rig's local source consumes the same Forward+ budget
+        // as ordinary authored point lights, independently of player control.
+        if(record.lightRig && record.lightRig->enabled)
+            pointCount+=std::size_t(record.lightRig->localWorld.enabled);
         if (record.collider) {
             const auto& c=*record.collider;
             if(c.mesh && !c.mesh->validated())throw std::runtime_error("Native collider triangles must be constructed through the validated mesh factory.");
@@ -278,12 +359,12 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             const auto& source=c.source.id;
             if(!source.empty()&&!isBuiltinModel(source)&&(isEngineAssetId(source)||source.starts_with("builtin:")||!safeReference(source)))
                 throw std::runtime_error("Trimesh collision requires a managed model asset reference.");
-            if(record.character&&c.shape==ColliderShape::Trimesh)throw std::runtime_error("Trimesh collision cannot share an entity with a Character.");
+            if(record.controller&&c.shape==ColliderShape::Trimesh)throw std::runtime_error("Trimesh collision cannot share an entity with a Character Controller.");
         }
         const auto validCollisionColor=[](const Vec4& color) {
             return math::finite(color) && std::all_of(color.begin(),color.end(),[](float value){return value>=0 && value<=1;});
         };
-        if ((record.character && !validCollisionColor(record.character->collisionColor)) ||
+        if ((record.controller && !validCollisionColor(record.controller->collisionColor)) ||
             (record.collider && !validCollisionColor(record.collider->collisionColor)))
             throw std::runtime_error("Collision color must have finite RGBA values between zero and one.");
         if (record.quader && (!std::isfinite(record.quader->importScale) || record.quader->importScale<=0 ||
@@ -294,10 +375,13 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
         if (record.camera) {
             const auto& c=*record.camera;
             if (!std::isfinite(c.verticalFov) || c.verticalFov<1 || c.verticalFov>179 ||
-                !std::isfinite(c.nearPlane) || c.nearPlane<=0 || !std::isfinite(c.farPlane) || c.farPlane<=c.nearPlane ||
-                !math::finite(c.followOffset))
-                throw std::runtime_error("Camera needs a finite vertical FOV from 1 to 179 degrees, positive clipping planes and a finite follow offset.");
+                !std::isfinite(c.nearPlane) || c.nearPlane<=0 || !std::isfinite(c.farPlane) || c.farPlane<=c.nearPlane)
+                throw std::runtime_error("Camera needs a finite vertical FOV from 1 to 179 degrees and positive clipping planes.");
         }
+        if (record.cameraFollow && (!record.camera || !record.cameraFollow->target ||
+            !math::finite(record.cameraFollow->offset) || !math::finite(record.cameraFollow->worldBasis) ||
+            !math::isAffine(record.cameraFollow->worldBasis) || math::transformPoint(record.cameraFollow->worldBasis,{0,0,0})!=Vec3{}))
+            throw std::runtime_error("Camera Follow requires a Camera, a target, a finite offset and a translation-free affine world basis.");
         if (record.environment) {
             const auto& environment=*record.environment;
             if (!std::isfinite(environment.exposure) || environment.exposure<=0)
@@ -315,8 +399,8 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
         return record.id==properties.activeCamera && record.camera.has_value();
     })) throw std::runtime_error("The active camera must identify a Camera entity.");
     if (properties.playerCharacter && std::none_of(records.begin(),records.end(),[&](const auto& record) {
-        return record.id==properties.playerCharacter && record.character.has_value();
-    })) throw std::runtime_error("The player must identify a Character entity.");
+        return record.id==properties.playerCharacter && record.playerInput && record.motor && record.controller;
+    })) throw std::runtime_error("The player must identify an entity with Player Input, Motor and Character Controller components.");
     std::unordered_map<EntityId,uint8_t> colors;
     for (const auto& [id,parent] : parents) {
         if (parent && !parents.contains(parent)) throw std::runtime_error("Scene references a missing parent entity.");
@@ -348,12 +432,12 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
         if (sun==indexed.end() || !sun->second->directional)
             throw std::runtime_error("Environment sun must identify a directional light entity.");
     }
-    for (const auto& record:records) if(record.camera && record.camera->followTarget) {
-        if (!parents.contains(record.camera->followTarget)) throw std::runtime_error("Camera follow target does not exist.");
+    for (const auto& record:records) if(record.cameraFollow) {
+        if (!parents.contains(record.cameraFollow->target)) throw std::runtime_error("Camera follow target does not exist.");
         Mat4 parentWorld;auto parent=record.parent;
         while(parent){const auto& ancestor=*indexed.at(parent);parentWorld=ancestor.local*parentWorld;parent=ancestor.parent;}
         if(!math::inverse(parentWorld))throw std::runtime_error("A following camera requires an invertible parent transform.");
-        follows.emplace(record.id,record.camera->followTarget);
+        follows.emplace(record.id,record.cameraFollow->target);
     }
     colors.clear();
     for (const auto& record:records) {
@@ -373,6 +457,37 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
 
 void Scene::apply(const std::vector<EntityRecord>& records, const SceneProperties& properties) {
     validate(records,properties);
+    // Component ordering is editor presentation data. Publish it in place so
+    // reordering cannot invalidate navigation, particle clocks or GPU resources.
+    bool presentationOnly=records.size()==entities_.size() && sameProperties(properties,properties_);
+    bool orderChanged=false;
+    if(presentationOnly)for(const auto& record:records) {
+        auto previous=find(record.id);
+        if(!previous){presentationOnly=false;break;}
+        orderChanged=orderChanged || previous->componentOrder!=record.componentOrder||previous->outlinerBefore!=record.outlinerBefore||
+            previous->order!=record.order||previous->outlinerStyle!=record.outlinerStyle;
+        previous->componentOrder=record.componentOrder;
+        previous->outlinerBefore=record.outlinerBefore;previous->order=record.order;
+        previous->outlinerStyle=record.outlinerStyle;
+        if(!sameEntity(*previous,record)){presentationOnly=false;break;}
+    }
+    if(presentationOnly && orderChanged) {
+        struct PreparedPresentation {
+            entt::entity entity;std::vector<SceneComponentKind> components;
+            std::optional<SceneComponentKind> before;uint32_t order;std::optional<SceneOutlinerStyle> style;
+        };
+        std::vector<PreparedPresentation> prepared;
+        prepared.reserve(records.size());
+        for(const auto& record:records)prepared.push_back({entities_.at(record.id),
+            record.componentOrder.empty()?std::vector<SceneComponentKind>{}:sceneComponents(record),record.outlinerBefore,record.order,record.outlinerStyle});
+        for(auto& update:prepared) {
+            auto& display=registry_.get<ComponentOrder>(update.entity);
+            display.values.swap(update.components);display.before=update.before;
+            display.style=update.style;
+            registry_.get<Relationship>(update.entity).order=update.order;
+        }
+        return;
+    }
     auto followOrder=cameraFollowOrder(records);
     entt::registry candidate;
     std::unordered_map<EntityId,entt::entity> entities;
@@ -383,12 +498,20 @@ void Scene::apply(const std::vector<EntityRecord>& records, const ScenePropertie
         candidate.emplace<Transform>(entity,record.local);
         candidate.emplace<Relationship>(entity,record.parent,record.order);
         candidate.emplace<Visibility>(entity,record.visible,record.visible,false);
+        candidate.emplace<ComponentOrder>(entity,record.componentOrder.empty()?std::vector<SceneComponentKind>{}:sceneComponents(record),record.outlinerBefore,record.outlinerStyle);
         if (record.model) candidate.emplace<ModelReference>(entity,*record.model,record.modelMaterials,record.castShadows,record.receiveShadows,record.lightingScopes,record.modelAnimation,record.fadeWhenOccluding);
         if (record.particle) candidate.emplace<ParticleReference>(entity,*record.particle);
         if (record.directional) candidate.emplace<SceneDirectionalLight>(entity,*record.directional);
         if (record.point) candidate.emplace<ScenePointLight>(entity,*record.point);
         if (record.environment) candidate.emplace<SceneEnvironment>(entity,*record.environment);
-        if (record.character) candidate.emplace<SceneCharacter>(entity,*record.character);
+        if (record.actor) candidate.emplace<SceneActor>(entity);
+        if (record.motor) candidate.emplace<SceneMotor>(entity,*record.motor);
+        if (record.controller) candidate.emplace<SceneCharacterController>(entity,*record.controller);
+        if (record.navigation) candidate.emplace<SceneNavigationAgent>(entity,*record.navigation);
+        if (record.playerInput) candidate.emplace<ScenePlayerInput>(entity,*record.playerInput);
+        if (record.lightRig) candidate.emplace<ActorLightRigSettings>(entity,*record.lightRig);
+        if (record.darknessReveal) candidate.emplace<DarknessRevealSettings>(entity,*record.darknessReveal);
+        if (record.cameraFollow) candidate.emplace<SceneCameraFollow>(entity,*record.cameraFollow);
         if (record.collider) candidate.emplace<SceneCollider>(entity,*record.collider);
         if (record.camera) candidate.emplace<SceneCamera>(entity,*record.camera);
         if (record.quader) candidate.emplace<QuaderLink>(entity,*record.quader);
@@ -435,16 +558,16 @@ bool Scene::resolveCameraFollow() {
     bool changed=false;
     for(const auto id:cameraFollowOrder_) {
         const auto entity=entities_.at(id);
-        const auto& camera=registry_.get<SceneCamera>(entity);
-        const auto target=worldTransform(camera.followTarget);
+        const auto& follow=registry_.get<SceneCameraFollow>(entity);
+        const auto target=worldTransform(follow.target);
         const auto parent=registry_.get<Relationship>(entity).parent;
         const auto parentWorld=parent?worldTransform(parent):std::optional<Mat4>{Mat4{}};
         const auto inverse=parentWorld?math::inverse(*parentWorld):std::nullopt;
         if(!target || !inverse)throw std::runtime_error("Cannot resolve camera follow through an invalid transform.");
-        const auto position=math::transformPoint(*inverse,math::transformPoint(*target,{0,0,0})+camera.followOffset);
+        const auto world=math::withAffinePosition(follow.worldBasis,math::transformPoint(*target,{0,0,0})+follow.offset);
         auto& local=registry_.get<Transform>(entity).local;
-        const auto next=math::withAffinePosition(local,position);
-        if(!next)throw std::runtime_error("Camera follow produces a nonfinite transform.");
+        const auto next=world?std::optional<Mat4>{*inverse * *world}:std::nullopt;
+        if(!next || !math::finite(*next) || !math::isAffine(*next))throw std::runtime_error("Camera follow produces a nonfinite transform.");
         if(*next!=local){local=*next;changed=true;}
     }
     return changed;

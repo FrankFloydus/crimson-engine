@@ -2,6 +2,7 @@
 
 #include "math/Math.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 
@@ -63,14 +64,21 @@ struct CharacterShadowSettings {
     float shadowDepthBias{.005f},shadowNormalBias{1};
     bool operator==(const CharacterShadowSettings&) const = default;
 };
-// Separate player-caster shadow contribution. No ordinary direct-light slot.
+// Separate actor-caster shadow contribution. No ordinary direct-light slot.
 struct CharacterShadowSource {
     Vec3 position{},direction{-.5f,-.8f,-.6f};
     float strength{},distance{20},shadowDepthBias{.005f},shadowNormalBias{1};
     bool enabled{false};
+    std::uint64_t owner{}; // Persistent actor boundary; never the controlled-player designation.
     bool operator==(const CharacterShadowSource&) const = default;
 };
-struct PlayerLightRigSettings {
+inline constexpr unsigned MaximumActorShadows=8;
+struct ActorLighting {
+    std::uint64_t owner{};
+    std::array<CharacterLight,2> lights{};
+    bool operator==(const ActorLighting&) const = default;
+};
+struct ActorLightRigSettings {
     bool enabled{false};
     CharacterLight key=[] {CharacterLight v;v.enabled=true;v.intensity=1.5f;return v;}();
     CharacterLight fill=[] {
@@ -80,19 +88,19 @@ struct PlayerLightRigSettings {
     LocalWorldLightSettings localWorld{};
     CharacterShadowSettings characterShadow{};
     bool showGizmos{false};
-    bool operator==(const PlayerLightRigSettings&) const = default;
+    bool operator==(const ActorLightRigSettings&) const = default;
 };
-struct CharacterRevealSettings {
+struct DarknessRevealSettings {
     bool enabled{true};
     float spread{8}; // Half visibility distance of the independent player darkness reveal.
-    bool operator==(const CharacterRevealSettings&) const = default;
+    bool operator==(const DarknessRevealSettings&) const = default;
 };
 // A visibility range, not a punctual source: no direct radiance or shadow map.
-struct PlayerRevealSource {
+struct DarknessRevealSource {
     Vec3 position{};
     float spread{};
     bool enabled{false};
-    bool operator==(const PlayerRevealSource&) const = default;
+    bool operator==(const DarknessRevealSource&) const = default;
 };
 
 // Bound the visibility center without restricting or rewriting an authored
@@ -159,11 +167,11 @@ inline bool validCharacterShadowSettings(const CharacterShadowSettings& value) n
     return std::isfinite(value.strength)&&value.strength>=0&&value.strength<=1&&
         validLightRange(value.distance)&&validShadowBiases(value.shadowDepthBias,value.shadowNormalBias);
 }
-inline bool validPlayerLightRigSettings(const PlayerLightRigSettings& value) noexcept {
+inline bool validActorLightRigSettings(const ActorLightRigSettings& value) noexcept {
     return validCharacterLight(value.key)&&validCharacterLight(value.fill)&&
         validLocalWorldLightSettings(value.localWorld)&&validCharacterShadowSettings(value.characterShadow);
 }
-inline bool validCharacterRevealSettings(const CharacterRevealSettings& value) noexcept {
+inline bool validDarknessRevealSettings(const DarknessRevealSettings& value) noexcept {
     return std::isfinite(value.spread)&&value.spread>=.01f&&value.spread<=100000;
 }
 } // namespace crimson

@@ -22,9 +22,9 @@ struct RenderWorldSnapshot {
     Aabb shadowFocusBounds{};
     std::optional<Vec3> shadowPriorityOrigin;
     std::vector<Aabb> shadowReceiverBounds;
-    PlayerRevealSource playerReveal{};
-    std::array<CharacterLight,2> characterLights{};
-    CharacterShadowSource characterShadow{};
+    std::vector<DarknessRevealSource> reveals;
+    std::vector<ActorLighting> actorLighting;
+    std::vector<CharacterShadowSource> actorShadows;
 };
 
 // Camera-local prepared receivers borrow only from immutable versions retained

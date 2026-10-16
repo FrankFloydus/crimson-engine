@@ -38,7 +38,7 @@ void drawAmbientLightControls(AmbientLightSettings& value,
 bool drawLightingMaskControl(const char* label,std::uint32_t& mask) {
     ImGui::PushID(label);ImGui::BeginGroup();
     ImGui::TextUnformatted(label);
-    tooltip("Character is the Player Character's subtree. Other models belong to World.");
+    tooltip("Character includes models under a Visual Root. Other models belong to World.");
     bool world=(mask&lighting_scope::World)!=0,character=(mask&lighting_scope::Character)!=0;
     bool changed=ImGui::Checkbox("World",&world);
     ImGui::SameLine();changed|=ImGui::Checkbox("Character",&character);
@@ -69,9 +69,9 @@ void drawAmbientVisibilityControls(AmbientVisibilitySettings& value,
     ImGui::EndDisabled();
 }
 
-void drawPlayerLightRigControls(PlayerLightRigSettings& rig,
-    const std::function<void(PlayerLightRigControl,const char*,bool)>& edit) {
-    using Control=PlayerLightRigControl;
+void drawActorLightRigControls(ActorLightRigSettings& rig,
+    const std::function<void(ActorLightRigControl,const char*,bool)>& edit) {
+    using Control=ActorLightRigControl;
     ImGui::PushID("Character light rig");
     if(ImGui::CollapsingHeader("Light Rig",ImGuiTreeNodeFlags_DefaultOpen)) {
         edit(Control::Enabled,"Toggle character light rig",ImGui::Checkbox("Enabled",&rig.enabled));
@@ -88,7 +88,7 @@ void drawPlayerLightRigControls(PlayerLightRigSettings& rig,
                     field(0,"Toggle character light",ImGui::Checkbox("Enabled",&light.enabled));
                     ImGui::BeginDisabled(!light.enabled);
                     field(1,"Change character light direction",ImGui::DragFloat3("Direction",light.direction.data(),.01f,-1,1,"%.3f",ImGuiSliderFlags_AlwaysClamp));
-                    tooltip("World-space direction in which light travels. Affects only the character; geometry does not block it.");
+                    tooltip("World-space direction in which light travels. Affects only this actor; geometry does not block it.");
                     field(2,"Change character light color",ImGui::ColorEdit3("Color",light.color.data(),ImGuiColorEditFlags_Float));
                     field(3,"Change character light intensity",ImGui::DragFloat("Intensity",&light.intensity,.05f,0,10000,"%.2f",ImGuiSliderFlags_AlwaysClamp));
                     if(base==Control::KeyEnabled) {

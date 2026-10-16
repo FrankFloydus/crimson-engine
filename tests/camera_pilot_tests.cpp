@@ -94,7 +94,7 @@ void affineParentAndFollow() {
         view.target=view.position+math::transformDirection(rotation,oldView.forward())*13;
         view.up=math::transformDirection(rotation,oldView.up);
         require(pilot.apply(document,view,true),pilot.status());const auto current=*document.scene().find(camera);const auto world=*document.scene().worldTransform(camera);
-        require(current.camera==original.camera||current.camera->followTarget==target,"Pilot replaced the camera follow target.");
+        require(current.cameraFollow && current.cameraFollow->target==target,"Pilot replaced the camera follow target.");
         require(current.camera->verticalFov==original.camera->verticalFov&&current.camera->nearPlane==original.camera->nearPlane&&current.camera->farPlane==original.camera->farPlane,
             "Navigation changed camera lens settings.");
         near(resolveSceneCamera(document.scene(),camera)->position,view.position,"Follow target snapped the piloted camera back.");
@@ -103,7 +103,7 @@ void affineParentAndFollow() {
             "Pilot navigation changed the parent or reflection sign.");
     }
     require(pilot.apply(document,view,false)&&document.history().size()==history+1, "Affine navigation did not coalesce into one command.");
-    const auto changed=*document.scene().find(camera);require(changed.camera->followOffset!=original.camera->followOffset,"Pilot movement did not update the authored follow offset.");
+    const auto changed=*document.scene().find(camera);require(changed.cameraFollow->offset!=original.cameraFollow->offset,"Pilot movement did not update the authored follow offset.");
     require(document.undo()&&pilot.sync(document,view)&&sameEntity(*document.scene().find(camera),original),"Affine/follow gesture Undo lost authored residual or follow data.");
     nearMatrix(*document.scene().worldTransform(camera),oldWorld,"Affine/follow Undo changed the original world transform.");
 }

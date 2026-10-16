@@ -13,7 +13,7 @@ void require(bool value,const char* message){if(!value)throw std::runtime_error(
 void fixture(SceneDocument& document) {
     require(document.edit("Fixture",[](auto& records,auto& properties){
         records.clear();EntityRecord floor;floor.id=1;floor.name="Floor";floor.collider=SceneCollider{{100,1,100}};floor.local=math::translation({0,-.5f,0});records.push_back(floor);
-        EntityRecord player;player.id=2;player.name="Character";player.character.emplace();player.local=math::translation({0,.05f,0});records.push_back(player);
+        EntityRecord player;player.id=2;player.name="Character";player.actor.emplace();player.controller.emplace();player.motor.emplace();player.navigation.emplace();player.playerInput.emplace();player.local=math::translation({0,.05f,0});records.push_back(player);
         EntityRecord visual;visual.id=3;visual.parent=2;visual.name="Visual";visual.local=math::translation({0,1,0});records.push_back(visual);
         properties.playerCharacter=2;
     }),"Cannot prepare runtime fixture.");
@@ -118,10 +118,10 @@ void followCameraTransformLocks() {
     require(authored.edit("Following camera fixture",[](auto& records,auto& properties){
         EntityRecord follow;follow.id=4;follow.name="Follow camera";follow.camera.emplace();
         // Following a visual child also depends on that visual's Character ancestor.
-        follow.camera->followTarget=3;follow.camera->followOffset={0,5,5};records.push_back(follow);properties.activeCamera=4;
+        follow.cameraFollow.emplace();follow.cameraFollow->target=3;follow.cameraFollow->offset={0,5,5};records.push_back(follow);properties.activeCamera=4;
         EntityRecord child;child.id=5;child.parent=4;child.name="Camera child";child.local=math::translation({0,2,0});records.push_back(child);
-        EntityRecord other;other.id=6;other.name="Unrelated falling actor";other.character.emplace();other.local=math::translation({8,100,0});records.push_back(other);
-        EntityRecord chained;chained.id=7;chained.name="Chained follow camera";chained.camera.emplace();chained.camera->followTarget=5;chained.camera->followOffset={3,3,3};records.push_back(chained);
+        EntityRecord other;other.id=6;other.name="Unrelated falling actor";other.actor.emplace();other.controller.emplace();other.motor.emplace();other.local=math::translation({8,100,0});records.push_back(other);
+        EntityRecord chained;chained.id=7;chained.name="Chained follow camera";chained.camera.emplace();chained.cameraFollow.emplace();chained.cameraFollow->target=5;chained.cameraFollow->offset={3,3,3};records.push_back(chained);
     }),"Cannot prepare following-camera lock fixture.");
     PlaySession play(root);require(play.start(authored),"Cannot start camera-lock runtime.");
     for(const auto edited:std::array<EntityId,3>{4,5,7}) {
@@ -130,7 +130,7 @@ void followCameraTransformLocks() {
         const float otherBefore=(*play.document().scene().worldTransform(6))[13];
         require(play.document().beginTransform("Move following camera dependency",{edited}),"Cannot begin camera dependency edit.");
         require(play.document().update([edited](auto& records,auto&){for(auto& record:records)if(record.id==edited) {
-            if(record.camera)record.camera->followOffset[0]+=1;
+            if(record.cameraFollow)record.cameraFollow->offset[0]+=1;
             else record.local[12]+=1;
         }}),"Cannot update camera dependency edit.");
         const auto editedWorld=*play.document().scene().worldTransform(edited);
@@ -344,11 +344,101 @@ void obstacleSurfaceClicks() {
             "Releasing an arrived box click restarted movement.");
     }
 }
+void directionalInputRespectsRoleAndComponentChanges() {
+    const auto root=std::filesystem::temp_directory_path()/"crimson-play-cpu-unused";SceneDocument authored(root);fixture(authored);
+    require(authored.edit("Other input-capable actor",[](auto& records,auto&){
+        EntityRecord actor;actor.id=4;actor.name="Other actor";actor.actor.emplace();actor.controller.emplace();actor.motor.emplace();
+        actor.playerInput.emplace();actor.local=math::translation({0,.05f,4});records.push_back(actor);
+    }),"Cannot create directional ownership fixture.");
+    PlaySession play(root);require(play.start(authored),"Cannot start directional ownership fixture.");
+    const auto position=[&](EntityId id){return math::transformPoint(*play.document().scene().worldTransform(id),{});};
+    for(int i=0;i<10;++i)play.advance(PlaySession::FixedStep,Vec2{1,0},camera());
+    require(position(2)[0]>.7f,"Directional player input did not start.");
+    require(play.document().edit("Disable Player Input",[](auto& records,auto&){for(auto& r:records)if(r.id==2)r.playerInput->enabled=false;}),
+        "Cannot disable directional player input.");
+    const auto stopped=position(2);for(int i=0;i<10;++i)play.advance(PlaySession::FixedStep,Vec2{1,0},camera());
+    require(std::abs(position(2)[0]-stopped[0])<.001,"Disabling Player Input retained a directional command.");
+    require(play.document().edit("Enable Player Input",[](auto& records,auto&){for(auto& r:records)if(r.id==2)r.playerInput->enabled=true;}),
+        "Cannot enable directional player input.");
+    play.advance(PlaySession::FixedStep,Vec2{1,0},camera());const auto old=position(2);
+    require(play.document().setPlayerCharacter(4),"Cannot switch directional player.");
+    for(int i=0;i<10;++i)play.advance(PlaySession::FixedStep,Vec2{1,0},camera());
+    require(std::abs(position(2)[0]-old[0])<.001&&position(4)[0]>.7f,"Switching the player retained the old actor's directional command.");
+}
+void composedActorsShareNavigationAndKeepIndependentCommands() {
+    const auto root=std::filesystem::temp_directory_path()/"crimson-play-cpu-unused";SceneDocument authored(root);
+    require(authored.edit("Multiple composed actors",[](auto& records,auto& properties){
+        records.clear();properties={};EntityRecord floor;floor.id=1;floor.name="Floor";
+        floor.collider=SceneCollider{{40,1,40}};floor.local=math::translation({0,-.5f,0});records.push_back(floor);
+        for(EntityId id:{2,4,5,6}) {
+            EntityRecord actor;actor.id=id;actor.name="Actor "+std::to_string(id);actor.actor.emplace();actor.controller.emplace();
+            actor.motor.emplace();actor.navigation.emplace();actor.local=math::translation({-4,.05f,id==2?-5.f:id==4?2.f:id==5?-2.f:5.f});
+            if(id==2)actor.playerInput.emplace();
+            if(id==6){actor.controller->height=2;actor.controller->radius=.6f;}
+            records.push_back(actor);
+        }
+        EntityRecord falling;falling.id=7;falling.name="Controller without Motor";falling.controller.emplace();
+        falling.local=math::translation({7,3,0});records.push_back(falling);properties.playerCharacter=2;
+    }),"Cannot prepare composed actor fixture.");
+    PlaySession play(root);require(play.start(authored),"Cannot start composed actors.");
+    require(play.navigationProfileCount()==2&&play.navigationBuildCount()==2,"Compatible actors did not share navigation clearance data.");
+    require(play.setActorDestination(4,{4,0,2})&&play.setActorDestination(5,{4,0,-2})&&play.setActorDestination(6,{3,0,5}),
+        "Non-player actors could not request independent destinations.");
+    require(play.actorDestination(4)!=play.actorDestination(5)&&play.actorPath(4).data()!=play.actorPath(5).data(),
+        "Agents shared a destination or transient path allocation.");
+    require(play.actorRouteQueryCount(4)==1&&play.actorRouteQueryCount(5)==1&&play.routeQueryCount()==0,
+        "A non-player command mutated the player's route state.");
+    require(play.setActorDestination(4,{4,0,2})&&play.actorRouteQueryCount(4)==1&&play.navigationBuildCount()==2,
+        "An unchanged external destination repeated path queries or rebuilt navigation.");
+    require(!play.setActorDestination(7,{4,0,0})&&!play.setActorMovement(99,{1,0,0}),"Missing movement capabilities accepted actor commands.");
+    const auto position=[&](EntityId id){return math::transformPoint(*play.document().scene().worldTransform(id),{});};
+    for(int i=0;i<180;++i)play.advance(PlaySession::FixedStep,Vec2{},camera());
+    require(std::hypot(position(4)[0]-4,position(4)[2]-2)<.06&&std::hypot(position(5)[0]-4,position(5)[2]+2)<.06&&
+        std::hypot(position(6)[0]-3,position(6)[2]-5)<.06,"Independent agents did not arrive at their own destinations.");
+    require(!play.actorDestination(4)&&!play.actorDestination(5)&&play.actorRemainingPath(6).empty(),"Arrived agents retained active steering paths.");
+    require(position(2)[0]==-4&&position(7)[1]<.2f,"Non-player navigation moved the player or a controller-only body failed to fall.");
+    require(play.navigationBuildCount()==2,"Destinations or ordinary actor poses rebuilt shared navigation.");
+    require(play.document().edit("Reuse an existing clearance profile",[](auto& records,auto&){for(auto& r:records)if(r.id==5){r.controller->height=2;r.controller->radius=.6f;}}),
+        "Cannot edit actor clearance.");
+    play.advance(0,Vec2{},camera());
+    require(play.navigationProfileCount()==2&&play.navigationBuildCount()==2,"Changing to an existing compatible profile rebuilt its navigation mesh.");
+    require(play.setActorMovement(4,{100,0,0}),"Non-player direct movement was rejected.");const auto before=position(4);
+    for(int i=0;i<30;++i)play.advance(PlaySession::FixedStep,Vec2{},camera());
+    require(position(4)[0]>before[0]+2.3f&&position(4)[0]<before[0]+2.7f,"Direct movement ignored the Motor's speed limit.");
+    require(play.clearActorMovement(4),"Could not stop direct actor movement.");const auto stopped=position(4);
+    for(int i=0;i<10;++i)play.advance(PlaySession::FixedStep,Vec2{},camera());
+    require(math::length(position(4)-stopped)<.001,"Cleared actor movement replayed a stale command.");
+
+    GameInput input;input.setViewport({0,0,800,600,true,false,9},true,false);input.acquire();input.setProjection(camera(),800,600);
+    play.advance(0,input,camera());
+    require(!play.setActorMovement(2,{1,0,0})&&!play.setActorDestination(2,{2,0,-5})&&!play.clearActorMovement(2),
+        "An external command overrode the Game input owner.");
+    require(play.setActorMovement(5,{0,0,1}),"Player input blocked commands for a different actor.");
+    const auto independent=position(5);for(int i=0;i<15;++i)play.advance(PlaySession::FixedStep,input,camera());
+    require(position(5)[2]>independent[2]+.2f&&position(5)[2]<independent[2]+.3f,
+        "Local input changed another actor's requested one-metre-per-second velocity.");
+    input.cancel();play.advance(0,input,camera());require(play.setActorMovement(2,{1,0,0}),"Released Game input did not release command ownership.");
+    const auto released=position(2);for(int i=0;i<15;++i)play.advance(PlaySession::FixedStep,input,camera());
+    require(position(2)[0]>released[0]+.2f,"External movement required enabled native input ownership.");
+    require(play.clearActorMovement(2)&&play.clearActorMovement(5),"Could not clear independent runtime commands.");
+    require(play.document().edit("Disable movement components",[](auto& records,auto&){
+        for(auto& r:records){if(r.id==4)r.motor->enabled=false;if(r.id==5)r.navigation->enabled=false;}
+    }),"Cannot disable actor components.");
+    require(!play.setActorMovement(4,{1,0,0})&&!play.setActorDestination(5,{0,0,0})&&play.setActorMovement(5,{1,0,0}),
+        "Disabled Motor/Navigation Agent capabilities were not respected independently.");
+    require(play.document().edit("Change static navigation geometry",[](auto& records,auto&){for(auto& r:records)if(r.id==1)r.collider->size={42,1,40};}),
+        "Cannot edit shared navigation geometry.");
+    play.advance(0,Vec2{},camera());
+    require(play.navigationBuildCount()==4,"A world change did not rebuild each retained clearance profile exactly once.");
+    require(play.document().transient()&&authored.scene().find(1)->collider->size==Vec3{40,1,40}&&
+        authored.scene().find(4)->motor->enabled&&authored.scene().find(5)->navigation->enabled,
+        "Runtime component edits changed the authored actors or geometry.");
+}
 void heldEditsRequireFreshPress() {
     const auto root=std::filesystem::temp_directory_path()/"crimson-play-cpu-unused";SceneDocument authored(root);fixture(authored);
     authored.edit("Edit fixture",[](auto& records,auto&){
         for(auto& record:records)if(record.id==1)record.collider->size={20,1,20};
-        EntityRecord other;other.id=4;other.name="Other Character";other.character.emplace();other.local=math::translation({-4,.05f,0});records.push_back(other);
+        EntityRecord other;other.id=4;other.name="Other Character";other.actor.emplace();other.controller.emplace();other.motor.emplace();other.navigation.emplace();other.playerInput.emplace();other.local=math::translation({-4,.05f,0});records.push_back(other);
     });
     PlaySession play(root);require(play.start(authored),"Cannot start held-edit runtime.");
     auto view=camera();view.position={0,10,8};view.fovAxis=CameraFovAxis::Vertical;
@@ -376,4 +466,4 @@ void heldEditsRequireFreshPress() {
     require(!play.destination() && !input.heldMoveRay(view),"Cancel/reacquire in one frame retained a held route.");
 }
 }
-int main(){try{lifecycleAndEditing();fixedTimingAndInterpolation();particlesUseRuntimeClock();particlePreprocessIsReadyBeforePlayReturns();followCameraTransformLocks();pointerMovementAndFacing();pointerCollisionAndNoFloor();unreachableAndReplanning();heldTargetsAndQueryBudget();heldStationaryCursorFollowsDisplayedProjection();heldProjectedTargetsAndMisses();obstacleSurfaceClicks();heldEditsRequireFreshPress();std::cout<<"Play runtime checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+int main(){try{lifecycleAndEditing();fixedTimingAndInterpolation();particlesUseRuntimeClock();particlePreprocessIsReadyBeforePlayReturns();followCameraTransformLocks();pointerMovementAndFacing();pointerCollisionAndNoFloor();unreachableAndReplanning();heldTargetsAndQueryBudget();heldStationaryCursorFollowsDisplayedProjection();heldProjectedTargetsAndMisses();obstacleSurfaceClicks();heldEditsRequireFreshPress();directionalInputRespectsRoleAndComponentChanges();composedActorsShareNavigationAndKeepIndependentCommands();std::cout<<"Play runtime checks passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

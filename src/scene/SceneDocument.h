@@ -102,6 +102,9 @@ public:
     bool resetTransientFrom(const SceneDocument& source);
     bool applyRuntimePoses(std::span<const ScenePoseUpdate> poses);
     bool beginTransform(const std::string& label, std::vector<EntityId> roots);
+    // Opens one transform transaction with copies selected. Existing update,
+    // commit and cancel own both duplication and the subsequent transform.
+    bool beginDuplicateTransform(const std::string& label,std::vector<EntityId> roots);
     void setTransformEditRoots(std::vector<EntityId> roots);
     const std::vector<EntityId>& transformEditRoots() const;
 
@@ -144,11 +147,12 @@ public:
         const ModelMaterialRemap& remapMaterials={});
     EntityId createModel(const std::string& assetId, const std::string& name, const Mat4& local = Mat4{});
     EntityId createParticle(const std::string& assetId, const std::string& name = "Particle Effect", const Mat4& local = Mat4{});
-    std::vector<EntityId> createModels(const std::vector<ModelPlacement>& models);
+    std::vector<EntityId> createModels(const std::vector<ModelPlacement>& models,EntityId parent=NoEntity);
     EntityId createDirectionalLight(const std::string& name = "Directional Light");
     EntityId createPointLight(const std::string& name = "Point Light");
     EntityId createEnvironment(const std::string& name = "Environment");
-    EntityId createCharacter(const std::string& name = "Character");
+    EntityId createPlayer(const std::string& name = "Player");
+    EntityId createEnemy(const std::string& name = "Enemy");
     EntityId createCollider(const std::string& name = "Collider", EntityId parent = NoEntity);
     EntityId createCamera(const std::string& name = "Camera");
     EntityId createCamera(const Camera& view,float aspect,const std::string& name = "Camera");
@@ -185,6 +189,7 @@ private:
     bool transient_{};
     EntityId create(EntityRecord record, const std::string& label);
     bool applyHistory(const SceneCommand& command, bool forward);
+    bool duplicateInTransaction(const std::vector<EntityId>& roots,std::vector<EntityId>* copiedRoots=nullptr);
     void sanitizeSelection();
 };
 

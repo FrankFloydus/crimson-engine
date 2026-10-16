@@ -7,7 +7,7 @@
 // The same equations serve depth producers and transparent surface receivers.
 uniform vec4 u_ambientSettings; // Enabled, strength, darkness floor, shadow aware.
 uniform vec4 u_ambientTransition; // Energy threshold, transition width, reserved.
-uniform vec4 u_playerReveal; // Presented center XYZ, half-brightness spread; zero disables.
+uniform vec4 u_revealAtlas; // First packed vec4, independent reveal source count.
 uniform vec4 u_lightingResponse; // Attenuate Lit emission, reserved YZW.
 #include "ambient_visibility_response.sh"
 
@@ -53,15 +53,18 @@ float ambientVisibilityAt(vec3 position, vec3 geometricNormal, vec3 planeNormal,
         }
     }
     float visibility = ambientVisibilityResponse(energy);
-    if (u_playerReveal.w > 0.0)
+    // Distance reveal components emit no light. Independent sources combine
+    // through max after the global strength/floor response, never by addition.
+    for (int source = 0; source < int(u_revealAtlas.y); ++source)
     {
-        // The player's distance reveal is not a light: it has no inverse-square
-        // response or shadow source. It combines with independently lit islands
-        // after both use the same floor and global strength exactly once.
-        vec3 playerDelta = position - u_playerReveal.xyz;
-        float reveal = radialRevealWeightSquared(dot(playerDelta, playerDelta), u_playerReveal.w);
-        float playerVisibility = playerRevealVisibility(reveal, u_ambientSettings.z, u_ambientSettings.y);
-        visibility = max(visibility, playerVisibility);
+        if (visibility >= 1.0) break;
+        vec4 profile = forwardPlusFetch(int(u_revealAtlas.x) + source);
+        vec3 delta = position - profile.xyz;
+        float distanceSquared = dot(delta, delta);
+        float support = profile.w * 8.0;
+        if (distanceSquared >= support * support) continue;
+        float weight = radialRevealWeightSquared(distanceSquared, profile.w);
+        visibility = max(visibility, playerRevealVisibility(weight, u_ambientSettings.z, u_ambientSettings.y));
     }
     return visibility;
 }

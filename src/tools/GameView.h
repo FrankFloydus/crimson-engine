@@ -22,7 +22,7 @@ public:
     void setFrameTiming(FrameTiming timing) {frameTiming_=timing;newFrameTiming_=true;}
     void drawRoute(const Camera&,const std::optional<Vec3>& clickedGround,std::span<const Vec3> route,
                    const std::optional<Vec3>& characterPosition);
-    void drawPlayerLightRig(const Camera&,const Scene&);
+    void drawActorLightRigs(const Camera&,const Scene&);
 private:
     ImDrawList* imageDrawList_{};
     ViewportRegion imageRegion_;

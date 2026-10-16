@@ -34,6 +34,7 @@ void appendModel(PreparedRenderView& view,ViewPins& pins,const ExtractedModel& m
     view.instances.back().castShadows=model.castShadows;view.instances.back().receiveShadows=model.receiveShadows;
     view.instances.back().lightingScopes=model.lightingScopes;
     view.instances.back().lightingCategory=model.lightingCategory;
+    view.instances.back().actorOwner=model.actorOwner;
     view.instances.back().pose=resources.pose(model,prepared->asset);
     pins.models.push_back(std::move(prepared));
 }

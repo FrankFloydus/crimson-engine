@@ -24,6 +24,15 @@ EntityRecord entity(EntityId id, const char* name, EntityId parent, Mat4 local) 
     result.id=id; result.name=name; result.parent=parent; result.local=local;
     return result;
 }
+
+void actorComponents(EntityRecord& record) {
+    record.actor.emplace();record.controller.emplace();record.motor.emplace();record.navigation.emplace();record.playerInput.emplace();
+    record.lightRig.emplace();record.darknessReveal.emplace();
+}
+std::array<CharacterLight,2> actorLights(const ExtractedScene& value){return value.actorLighting.empty()?std::array<CharacterLight,2>{}:value.actorLighting.front().lights;}
+CharacterShadowSource actorShadow(const ExtractedScene& value){return value.actorShadows.empty()?CharacterShadowSource{}:value.actorShadows.front();}
+DarknessRevealSource reveal(const ExtractedScene& value){return value.reveals.empty()?DarknessRevealSource{}:value.reveals.front();}
+
 void run() {
     Scene scene;
     const auto rotation = math::rotation(math::axisAngle({0,1,0},std::numbers::pi/2));
@@ -91,7 +100,7 @@ void orientedSelectionBoxes() {
     auto collider=entity(3,"Auxiliary collision",2,math::translation({20,0,0}));collider.collider=SceneCollider{{100,100,100}};
     auto other=entity(4,"Separate mesh",0,math::translation({-5,0,7})*math::eulerRotationXYZ({0,.4f,0}));other.model=model.model;
     auto marker=entity(5,"Empty marker",0,math::translation({30,2,-8}));
-    auto character=entity(6,"Character",0,math::translation({1,0,3}));character.character=SceneCharacter{};
+    auto character=entity(6,"Character",0,math::translation({1,0,3}));character.controller=SceneCharacterController{};
     auto particle=entity(7,"Authored particle marker",0,math::translation({-20,4,2}));particle.particle=AssetRef<ParticleEffectAsset>{};
     scene.apply({parent,model,collider,other,marker,character,particle},{});
     const Aabb local{{-2,-.25f,-.5f},{2,.75f,.5f},true};unsigned modelQueries{},collisionQueries{};
@@ -116,8 +125,8 @@ void orientedSelectionBoxes() {
     require(nonvisual.size()==1&&close(nonvisual[0].local.minimum,{-.5f,-.5f,-.5f})&&close(nonvisual[0].local.maximum,{.5f,.5f,.5f})&&
         close(nonvisual[0].world,marker.local),"An empty selection lost its stable marker fallback.");
     const auto actor=selectionBoxes(scene,std::array<EntityId,1>{6},query);
-    require(actor.size()==1&&close(actor[0].local.minimum,{-character.character->radius,0,-character.character->radius})&&
-        close(actor[0].local.maximum,{character.character->radius,character.character->height,character.character->radius}),"Character outline invented bounds beyond its authored capsule.");
+    require(actor.size()==1&&close(actor[0].local.minimum,{-character.controller->radius,0,-character.controller->radius})&&
+        close(actor[0].local.maximum,{character.controller->radius,character.controller->height,character.controller->radius}),"Character outline invented bounds beyond its authored capsule.");
     const auto authored=selectionBoxes(scene,std::array<EntityId,1>{7},query);
     const auto focused=selectionBounds(scene,std::array<EntityId,1>{7},query,[](EntityId)->std::optional<Aabb>{return Aabb{{-100,-100,-100},{100,100,100},true};});
     const auto stable=selectionBoxes(scene,std::array<EntityId,1>{7},query);
@@ -210,7 +219,7 @@ void proceduralSunExtraction() {
 void scopedPlayerLightingExtraction() {
     Scene scene;
     auto parent=entity(1,"Affine player parent",0,math::translation({10,2,3})*math::scaling({2,3,4}));
-    auto player=entity(2,"Player",1,math::translation({1,0,2}));player.character.emplace();
+    auto player=entity(2,"Player",1,math::translation({1,0,2}));actorComponents(player);
     auto hero=entity(3,"Hero mesh",2,Mat4{});hero.model=AssetRef<ModelAsset>{"assets/models/hero/manifest.json"};
     auto floor=entity(4,"Floor",0,Mat4{});floor.model=hero.model;
     auto unlit=entity(5,"Independent scopes",2,Mat4{});unlit.model=hero.model;
@@ -220,11 +229,11 @@ void scopedPlayerLightingExtraction() {
     lamp.point->nearFalloffRadius=2.75f;lamp.point->specularStrength=.35f;
     lamp.point->rangeFalloffExponent=2.5f;lamp.point->edgeSoftness=.6f;lamp.point->sourceRadius=.8f;lamp.point->attenuation=-1.5f;
     auto sun=entity(7,"Authored sun",0,Mat4{});sun.directional.emplace();
-    auto& settings=player.character->lightRig;settings.enabled=true;
+    auto& settings=(*player.lightRig);settings.enabled=true;
     settings.fill.enabled=true;settings.key.direction={-.3f,-.8f,.4f};settings.localWorld.height=4;
     settings.localWorld.radius=13;settings.localWorld.rangeFalloffExponent=.75f;settings.localWorld.edgeSoftness=.4f;
     settings.localWorld.sourceRadius=.7f;settings.localWorld.attenuation=3.5f;
-    player.character->darknessReveal={true,11};
+    (*player.darknessReveal)={true,11};
     scene.apply({floor,hero,player,parent,lamp,sun,unlit},{0,0,player.id});
     const auto before=scene.records();const auto extracted=extractScene(scene);
     require(extracted.models.size()==3&&extracted.points.size()==2&&extracted.directional.size()==1,
@@ -249,42 +258,74 @@ void scopedPlayerLightingExtraction() {
         extracted.points[1].roles.receiverMask==lighting_scope::World&&
         extracted.points[1].roles.shadowCasterMask==lighting_scope::World&&
         !extracted.points[1].roles.ambientReveal,"Local World Light lost finite range or inherited scale/Character membership.");
-    require(extracted.characterLights[0].enabled&&extracted.characterLights[1].enabled&&
-        close(extracted.characterLights[0].direction,math::normalized(settings.key.direction))&&
-        extracted.characterShadow.enabled&&close(extracted.characterShadow.position,playerPosition)&&
-        close(extracted.characterShadow.direction,math::normalized(settings.key.direction)),
+    require(actorLights(extracted)[0].enabled&&actorLights(extracted)[1].enabled&&
+        close(actorLights(extracted)[0].direction,math::normalized(settings.key.direction))&&
+        actorShadow(extracted).enabled&&close(actorShadow(extracted).position,playerPosition)&&
+        close(actorShadow(extracted).direction,math::normalized(settings.key.direction)),
         "Extraction lost separate character illumination or shadow.");
     const auto frozen=extracted.points;
-    require(extracted.playerReveal.enabled&&extracted.playerReveal.spread==11&&
-        close(extracted.playerReveal.position,playerPosition+Vec3{0,player.character->height*.5f,0}),
+    require(reveal(extracted).enabled&&reveal(extracted).spread==11&&
+        close(reveal(extracted).position,playerPosition+Vec3{0,player.controller->height*.5f,0}),
         "Player darkness range inherited parent scale or lost the presented center.");
     const std::array poses{ScenePoseUpdate{player.id,math::translation({1,0,2})*math::rotation(math::axisAngle({0,1,0},1.7))}};
     scene.applyRuntimePoses(poses);const auto turned=extractScene(scene);
-    require(close(turned.points[1].position,frozen[1].position)&&turned.characterLights==extracted.characterLights&&
-        turned.characterShadow==extracted.characterShadow,
+    require(close(turned.points[1].position,frozen[1].position)&&actorLights(turned)==actorLights(extracted)&&
+        actorShadow(turned)==actorShadow(extracted),
         "Turning the player rotated a world-aligned rig offset.");
-    require(turned.playerReveal==extracted.playerReveal,"Turning the player moved the darkness range.");
+    require(reveal(turned)==reveal(extracted),"Turning the player moved the darkness range.");
     const std::array moved{ScenePoseUpdate{player.id,math::translation({2,0,2})}};
     scene.applyRuntimePoses(moved);const auto presented=extractScene(scene);
     require(close(presented.points[1].position,frozen[1].position+Vec3{2,0,0})&&
-        presented.points[1].entityId==frozen[1].entityId&&presented.characterLights==extracted.characterLights&&
+        presented.points[1].entityId==frozen[1].entityId&&actorLights(presented)==actorLights(extracted)&&
         presented.points[1].radius==frozen[1].radius&&
         presented.points[1].rangeFalloffExponent==frozen[1].rangeFalloffExponent&&
-        close(presented.characterShadow.position,extracted.characterShadow.position+Vec3{2,0,0}),
+        close(actorShadow(presented).position,actorShadow(extracted).position+Vec3{2,0,0}),
         "Local rig did not follow presented translation with stable source identities.");
-    require(close(presented.playerReveal.position,extracted.playerReveal.position+Vec3{2,0,0}),
+    require(close(reveal(presented).position,reveal(extracted).position+Vec3{2,0,0}),
         "Player darkness range did not follow presented world translation.");
     require(scene.records().size()==before.size(),"Transient actor rig contributions became authored entities.");
     settings.enabled=false;scene.apply({floor,hero,player,parent,lamp,sun,unlit},{0,0,player.id});
-    require(extractScene(scene).points.size()==1&&extractScene(scene).playerReveal.enabled&&
-        !extractScene(scene).characterLights[0].enabled&&!extractScene(scene).characterShadow.enabled,
+    require(extractScene(scene).points.size()==1&&reveal(extractScene(scene)).enabled&&
+        !actorLights(extractScene(scene))[0].enabled&&!actorShadow(extractScene(scene)).enabled,
         "Disabled local rig retained contributions or disabled the separate darkness range.");
-    player.character->darknessReveal.enabled=false;scene.apply({floor,hero,player,parent,lamp,sun,unlit},{0,0,player.id});
-    require(!extractScene(scene).playerReveal.enabled,"Disabled darkness range retained its player contribution.");
+    player.darknessReveal->enabled=false;scene.apply({floor,hero,player,parent,lamp,sun,unlit},{0,0,player.id});
+    require(!reveal(extractScene(scene)).enabled,"Disabled darkness range retained its player contribution.");
     settings.enabled=true;scene.apply({floor,hero,player,parent,lamp,sun,unlit},{0,0,player.id});
     const auto revealOff=extractScene(scene);
-    require(!revealOff.playerReveal.enabled&&revealOff.points.size()==2&&revealOff.points[1].radius==13,
+    require(!reveal(revealOff).enabled&&revealOff.points.size()==2&&revealOff.points[1].radius==13,
         "Disabling reveal removed or resized the independent Local World Light.");
+}
+void independentActorOwnership() {
+    auto a=entity(10,"Actor A",0,math::translation({1,0,0}));actorComponents(a);
+    auto b=entity(20,"Actor B",10,math::translation({2,0,0}));actorComponents(b);
+    a.lightRig->enabled=b.lightRig->enabled=true;
+    a.lightRig->key.color={1,0,0};b.lightRig->key.color={0,0,1};
+    a.darknessReveal->spread=2;b.darknessReveal->spread=7;
+    auto visualA=entity(11,"A visual",10,Mat4{});visualA.model=AssetRef<ModelAsset>{"assets/models/a/manifest.json"};
+    auto visualB=entity(21,"B visual",20,Mat4{});visualB.model=visualA.model;
+    auto boundary=entity(30,"Unlit actor boundary",10,Mat4{});boundary.actor.emplace();
+    auto visualC=entity(31,"Boundary visual",30,Mat4{});visualC.model=visualA.model;
+    auto independent=entity(40,"Independent reveal",0,math::translation({9,3,1}));independent.darknessReveal=DarknessRevealSettings{true,4};
+    Scene scene;scene.apply({visualB,visualC,a,independent,b,visualA,boundary},{0,0,a.id});
+    const auto first=extractScene(scene);
+    require(first.models.size()==3&&first.actorLighting.size()==2&&first.actorShadows.size()==2&&first.reveals.size()==3,
+        "Independent actors/reveal components were collapsed to the controlled player.");
+    require(first.models[0].id==11&&first.models[0].actorOwner==10&&first.models[1].actorOwner==20&&first.models[2].actorOwner==30,
+        "Nested actor boundary leaked its parent rig ownership.");
+    require(first.actorLighting[0].owner==10&&first.actorLighting[1].owner==20&&first.actorLighting[0].lights[0].color!=first.actorLighting[1].lights[0].color,
+        "Independent rig colors or owner identities were lost.");
+    require(first.actorShadows[0].owner==10&&first.actorShadows[1].owner==20&&first.points.size()==2&&first.points[0].entityId!=first.points[1].entityId,
+        "Actor shadow or World light sources share one identity.");
+    auto properties=scene.properties();properties.playerCharacter=b.id;scene.apply(scene.records(),properties);
+    const auto switched=extractScene(scene);
+    require(switched.actorLighting==first.actorLighting&&switched.actorShadows==first.actorShadows&&switched.reveals==first.reveals,
+        "Changing input ownership changed independent actor rigs or reveal.");
+    b.lightRig->enabled=false;
+    scene.apply({visualB,visualC,a,independent,b,visualA,boundary},properties);
+    const auto disabled=extractScene(scene);
+    require(disabled.models[1].actorOwner==b.id&&disabled.models[1].lightingCategory==lighting_scope::Character&&
+        disabled.actorLighting[0]==first.actorLighting[0]&&disabled.points.size()==1&&disabled.points[0].entityId==first.points[0].entityId&&disabled.reveals.size()==3,
+        "Disabling one rig changed membership, another actor's stable light ID, or independent reveal.");
 }
 void gizmoAffineRotation() {
     Mat4 shear; shear[4]=.4f; shear[8]=-.2f; shear[9]=.7f;
@@ -413,8 +454,8 @@ void hierarchicalVisibility() {
     auto particle=entity(3,"Hidden emitter",1,Mat4{});particle.particle=AssetRef<ParticleEffectAsset>{"assets/particles/hidden.crimson-particle"};
     auto sun=entity(4,"Hidden sun",1,Mat4{});sun.directional.emplace();
     auto lamp=entity(5,"Hidden lamp",1,Mat4{});lamp.point.emplace();
-    auto player=entity(6,"Hidden player",1,Mat4{});player.character.emplace();
-    player.character->lightRig.enabled=true;player.character->lightRig.localWorld.enabled=true;player.character->darknessReveal.enabled=true;
+    auto player=entity(6,"Hidden player",1,Mat4{});actorComponents(player);
+    (*player.lightRig).enabled=true;(*player.lightRig).localWorld.enabled=true;player.darknessReveal->enabled=true;
     auto visibleGroup=entity(9,"Visible group",0,Mat4{});
     auto visible=entity(7,"Visible model",9,math::translation({2,0,0}));visible.model=AssetRef<ModelAsset>{"assets/models/visible/manifest.json"};
     auto hidden=entity(8,"Authored hidden",0,Mat4{});hidden.model=model.model;hidden.visible=false;
@@ -433,7 +474,7 @@ void hierarchicalVisibility() {
     require(extracted.particles.size()==1&&extracted.particles.front().id==particle.id&&!extracted.particles.front().visible,
         "Hidden emitter was dropped from simulation reconciliation or retained visible presentation.");
     require(extracted.directional.empty()&&extracted.points.empty()&&!extracted.proceduralSun.enabled&&
-        !extracted.characterLights[0].enabled&&!extracted.characterLights[1].enabled&&!extracted.characterShadow.enabled&&!extracted.playerReveal.enabled,
+        !actorLights(extracted)[0].enabled&&!actorLights(extracted)[1].enabled&&!actorShadow(extracted).enabled&&!reveal(extracted).enabled,
         "Hidden hierarchy leaked authored or player-rig lighting contributions.");
     require(resolveGameCamera(scene).has_value()&&extracted.environment.exposure==2&&extracted.environment.sun==sun.id,
         "Hiding editor markers disabled the active Camera or changed global Environment settings.");
@@ -454,7 +495,7 @@ void hierarchicalVisibility() {
     require(!collisionQueries,"Editor picking requested hidden original collision geometry.");
     records.front().visible=true;scene.apply(records,properties);const auto restored=extractScene(scene);
     require(restored.models[0].visible&&restored.particles.front().visible&&restored.directional.size()==1&&restored.points.size()==2&&
-        restored.proceduralSun.enabled&&restored.characterLights[0].enabled&&restored.playerReveal.enabled,
+        restored.proceduralSun.enabled&&actorLights(restored)[0].enabled&&reveal(restored).enabled,
         "Showing a hierarchy did not restore its visual contributions.");
     require(!restored.models[2].visible&&!restored.models[3].visible,
         "Showing a parent overwrote a child's authored hidden state.");
@@ -472,8 +513,8 @@ void collisionPicking() {
     box.local=math::scaling({0,1,1});scene.apply({parent,box,distant},{});
     require(pickCollisionShape(scene,{{3,0,0},{0,0,-1}},100)==3,"A collapsed collider blocked the valid hit behind it.");
 
-    auto character=entity(4,"Capsule",0,math::translation({0,0,-4}));character.character=SceneCharacter{};
-    character.character->height=2;character.character->radius=.5f;scene.apply({character},{});
+    auto character=entity(4,"Capsule",0,math::translation({0,0,-4}));character.controller=SceneCharacterController{};
+    character.controller->height=2;character.controller->radius=.5f;scene.apply({character},{});
     require(pickCollisionShape(scene,{{0,1,0},{0,0,-1}},100)==4,"Capsule cylinder interior was not selectable.");
     require(pickCollisionShape(scene,{{0,1.9f,0},{0,0,-1}},100)==4,"Capsule hemisphere was not selectable.");
     require(!pickCollisionShape(scene,{{.49f,1.99f,0},{0,0,-1}},100),"Capsule picking incorrectly used a box at the rounded corner.");
@@ -566,6 +607,6 @@ void collisionFaces() {
 }
 }
 int main() {
-    try { run(); orientedSelectionBoxes();lightOrientation(); proceduralSunExtraction();scopedPlayerLightingExtraction();gizmoAffineRotation();cameraPoseConversion();particleExtraction();hierarchicalVisibility();collisionPicking();clippedSelectionWires();collisionFaces();std::cout<<"Scene extraction checks passed.\n"; return 0; }
+    try { run(); orientedSelectionBoxes();lightOrientation(); proceduralSunExtraction();scopedPlayerLightingExtraction();independentActorOwnership();gizmoAffineRotation();cameraPoseConversion();particleExtraction();hierarchicalVisibility();collisionPicking();clippedSelectionWires();collisionFaces();std::cout<<"Scene extraction checks passed.\n"; return 0; }
     catch (const std::exception& error) { std::cerr<<error.what()<<'\n'; return 1; }
 }

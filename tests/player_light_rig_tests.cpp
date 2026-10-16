@@ -1,4 +1,4 @@
-#include "runtime/PlayerLightRig.h"
+#include "runtime/ActorLightRig.h"
 
 #include <algorithm>
 #include <array>
@@ -14,14 +14,14 @@ void require(bool value,const char* message){if(!value)throw std::runtime_error(
 void near(Vec3 actual,Vec3 expected) {
     require(math::finite(actual)&&math::length(actual-expected)<1e-5,"Unexpected player lighting world value.");
 }
-PlayerLightRigEvaluation evaluateRig(const PlayerLightRigSettings& settings,Vec3 position,
+ActorLightRigEvaluation evaluateRig(const ActorLightRigSettings& settings,Vec3 position,
     std::span<const PointLight> points,std::span<const DirectionalLight> suns) {
-    return evaluatePlayerLightRig(settings,position,points,suns);
+    return evaluateActorLightRig(settings,position,points,suns);
 }
-PlayerLightRigSettings fullRig() {PlayerLightRigSettings value;value.enabled=true;return value;}
+ActorLightRigSettings fullRig() {ActorLightRigSettings value;value.enabled=true;return value;}
 void separatedDefaultsAndPresentedFollow() {
-    PlayerLightRigSettings settings;
-    require(validPlayerLightRigSettings(settings)&&validatePlayerLightRigSettings(settings).empty(),"Default rig is invalid.");
+    ActorLightRigSettings settings;
+    require(validActorLightRigSettings(settings)&&validateActorLightRigSettings(settings).empty(),"Default rig is invalid.");
     require(!settings.enabled&&settings.key.enabled&&settings.fill.enabled&&!settings.showGizmos,
         "Old scenes acquired enabled player lighting.");
     require(settings.localWorld.intensity==64.f/9.f&&settings.localWorld.height==2&&settings.localWorld.radius==8&&
@@ -98,19 +98,19 @@ void collisionSafeIdentity() {
 }
 void validation() {
     constexpr auto nan=std::numeric_limits<float>::quiet_NaN(),infinity=std::numeric_limits<float>::infinity();
-    const auto invalid=[](const PlayerLightRigSettings& value) {
-        require(!validPlayerLightRigSettings(value)&&!validatePlayerLightRigSettings(value).empty(),"Invalid rig setting accepted.");
+    const auto invalid=[](const ActorLightRigSettings& value) {
+        require(!validActorLightRigSettings(value)&&!validateActorLightRigSettings(value).empty(),"Invalid rig setting accepted.");
         const auto result=evaluateRig(value,{}, {},{});
         require(!result.valid()&&!result.localWorld&&!result.characterLights[0].enabled&&!result.characterShadow.enabled,
             "Invalid rig published partial lighting.");
     };
-    PlayerLightRigSettings value;
+    ActorLightRigSettings value;
     for(const auto bad:{nan,infinity,-.01f,10001.f}){value={};value.key.intensity=bad;invalid(value);}
     for(const auto bad:{nan,infinity,.009f,100001.f}){value={};value.localWorld.height=bad;invalid(value);}
     for(const auto bad:{nan,infinity,-.001f,1000001.f}){value={};value.localWorld.intensity=bad;invalid(value);}
     for(const auto intensity:{0.f,1000000.f}) {
         value={};value.localWorld.intensity=intensity;
-        require(validPlayerLightRigSettings(value),"Valid migrated Local World Light intensity boundary was rejected.");
+        require(validActorLightRigSettings(value),"Valid migrated Local World Light intensity boundary was rejected.");
     }
     for(const auto bad:{nan,infinity,.009f,100001.f}){value={};value.localWorld.radius=bad;invalid(value);}
     for(const auto bad:{nan,infinity,-.001f,100001.f}) {
@@ -123,7 +123,7 @@ void validation() {
     for(const auto bad:{nan,infinity,-10.001f,10.001f}){value={};value.localWorld.attenuation=bad;invalid(value);}
     for(const auto valid:{-10.f,0.f,1.f,2.f,10.f}) {
         value=fullRig();value.localWorld.attenuation=valid;
-        require(validPlayerLightRigSettings(value)&&evaluateRig(value,{}, {},{}).localWorld->attenuation==valid,
+        require(validActorLightRigSettings(value)&&evaluateRig(value,{}, {},{}).localWorld->attenuation==valid,
             "A supported distance attenuation exponent was rejected or changed by rig evaluation.");
     }
     for(const auto bad:{nan,infinity,-.001f,1.001f}){value={};value.key.color[1]=bad;invalid(value);}
@@ -138,13 +138,13 @@ void validation() {
     for(const auto bad:{nan,infinity,.009f,100001.f}){value={};value.characterShadow.distance=bad;invalid(value);}
     value=fullRig();const auto badPosition=evaluateRig(value,{nan,0,0},{},{});
     require(!badPosition.valid()&&!badPosition.localWorld,"Nonfinite player position published lighting.");
-    CharacterRevealSettings reveal;
-    require(reveal.enabled&&reveal.spread==8&&validCharacterRevealSettings(reveal),"Default character lighting spread invalid.");
+    DarknessRevealSettings reveal;
+    require(reveal.enabled&&reveal.spread==8&&validDarknessRevealSettings(reveal),"Default character lighting spread invalid.");
     require(characterLightingSupport(.01f)==.08f&&characterLightingSupport(100000)==800000,
         "Character lighting support lost its complete eight-spread Gaussian tail.");
     for(const auto bad:{nan,infinity,.009f,100001.f}) {
         reveal.enabled=false;reveal.spread=bad;
-        require(!validCharacterRevealSettings(reveal),"Invalid stored lighting spread accepted.");
+        require(!validDarknessRevealSettings(reveal),"Invalid stored lighting spread accepted.");
     }
     auto far=fullRig();far.localWorld.height=100000;
     const auto farPoint=evaluateRig(far,{},{},{});
@@ -155,6 +155,17 @@ void validation() {
     AmbientVisibilitySettings ambient;
     require(validAmbientVisibilitySettings(ambient)&&!ambient.attenuateEmission,"Default ambient settings invalid.");
     for(const auto bad:{nan,infinity,-.001f,10001.f}){ambient={};ambient.threshold=bad;require(!validAmbientVisibilitySettings(ambient),"Invalid ambient threshold accepted.");}
+}
+void actorSourceIdentity() {
+    const auto settings=fullRig();
+    const auto a=evaluateActorLightRig(settings,{}, {}, {},101);
+    require(a.valid()&&a.localWorld.has_value(),"First actor rig did not publish its World source.");
+    const auto b=evaluateActorLightRig(settings,{},std::span(&*a.localWorld,1),{},202);
+    const auto bAlone=evaluateActorLightRig(settings,{}, {}, {},202);
+    require(a.valid()&&b.valid()&&a.localWorld&&b.localWorld&&bAlone.localWorld,
+        "Independent actor rig evaluation failed.");
+    require(a.characterShadow.owner==101&&b.characterShadow.owner==202&&a.localWorld->entityId!=b.localWorld->entityId&&
+        b.localWorld->entityId==bAlone.localWorld->entityId,"Actor World source identity depends on another actor's presence.");
 }
 void sourceCapacity() {
     auto settings=fullRig();std::vector<PointLight> points(MaximumClusteredPointLights-1);
@@ -170,6 +181,6 @@ void sourceCapacity() {
 }
 }
 int main(){try {
-    separatedDefaultsAndPresentedFollow();collisionSafeIdentity();validation();sourceCapacity();
+    separatedDefaultsAndPresentedFollow();collisionSafeIdentity();validation();actorSourceIdentity();sourceCapacity();
     std::cout<<"Separated character/world lighting, stable shadow direction, independent toggles and source capacity passed.\n";return 0;
 }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

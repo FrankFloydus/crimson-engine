@@ -22,6 +22,7 @@ void drawSceneDiagnostics(std::string_view generalStatus,std::string_view pickin
             ImGui::Text("Directional contexts: %u; rendered: %u; cached: %u",shadows->directionalLights,shadows->directionalRendered,shadows->directionalCacheHits);
             ImGui::Text("World projections: %u; character projections: %u",shadows->directionalWorldProjections,shadows->characterProjections);
             ImGui::Text("Key silhouette updates: %u; cached: %u",shadows->dedicatedCharacterUpdates,shadows->dedicatedCharacterCacheHits);
+            ImGui::Text("Actor silhouettes: %u / %u admitted; %u without a map",shadows->actorShadowAdmitted,shadows->actorShadowRequested,shadows->actorShadowUnadmitted);
             ImGui::Text("Atlas allocations: %.1f MiB",static_cast<double>(shadows->allocatedBytes)/(1024*1024));
         }
     }

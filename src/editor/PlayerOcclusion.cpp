@@ -121,7 +121,7 @@ const PlayerOcclusionOpacities& PlayerOcclusion::update(const Scene& scene,std::
     if(!validPlayerOcclusionSettings(settings)){fades_.clear();opacities_.clear();stats_={};return opacities_;}
     const auto player=scene.find(scene.properties().playerCharacter);
     const auto world=player?scene.worldTransform(player->id):std::nullopt;
-    if(!player||!scene.isVisible(player->id)||!player->character||!world||!math::finite(camera.position)||!query||!boundsQuery){clear();return opacities_;}
+    if(!player||!scene.isVisible(player->id)||!player->controller||!world||!math::finite(camera.position)||!query||!boundsQuery){clear();return opacities_;}
     if(generation_!=generation||player_!=player->id||camera_!=scene.properties().activeCamera) {
         clear();generation_=generation;player_=player->id;camera_=scene.properties().activeCamera;
     }
@@ -132,7 +132,7 @@ const PlayerOcclusionOpacities& PlayerOcclusion::update(const Scene& scene,std::
     std::array<Vec3,3> targets,starts;
     std::array<double,3> lengths{};
     for(unsigned i=0;i<3;++i) {
-        targets[i]=math::transformPoint(*world,{0,player->character->height*(.25f+.3f*i),0});
+        targets[i]=math::transformPoint(*world,{0,player->controller->height*(.25f+.3f*i),0});
         const auto towardCamera=camera.position-targets[i];const auto distance=math::length(towardCamera);
         lengths[i]=std::min(double(settings.fadeStartDistance),distance);
         starts[i]=targets[i]+math::normalized(towardCamera,{0,0,0},0)*lengths[i];

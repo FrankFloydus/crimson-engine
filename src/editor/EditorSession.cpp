@@ -435,16 +435,16 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     renderInput.sceneCollisionOverlays=std::move(collisionOverlays.scene);
     renderInput.gameCollisionOverlays=std::move(collisionOverlays.game);
     renderer.renderFrame(prepareEditorRenderFrame(std::move(renderInput),assets,prepared_));
-    editor_.drawPlayerLightRig(sceneCamera,renderScene);
+    editor_.drawActorLightRigs(sceneCamera,renderScene);
     if(gameOpen && game.pixelWidth && game.pixelHeight && gameCamera) {
         gameInput_.setProjection(*gameCamera,game.pixelWidth,game.pixelHeight);
-        gameView_.drawPlayerLightRig(*gameCamera,renderScene);
+        gameView_.drawActorLightRigs(*gameCamera,renderScene);
         if(play_.playing()) {
-            const auto player=renderScene.find(renderScene.properties().playerCharacter);
-            if(player && renderScene.isVisible(player->id) && player->character && player->character->showRoute) {
+            for(const auto& actor:renderScene.records())if(actor.navigation && actor.navigation->enabled && actor.navigation->showRoute && renderScene.isVisible(actor.id)) {
                 std::optional<Vec3> position;
-                if(const auto world=renderScene.worldTransform(player->id))position=math::transformPoint(*world,{0,0,0});
-                gameView_.drawRoute(*gameCamera,play_.lastClickedGround(),play_.remainingPath(),position);
+                if(const auto world=renderScene.worldTransform(actor.id))position=math::transformPoint(*world,{});
+                const auto hit=actor.id==renderScene.properties().playerCharacter?play_.lastClickedGround():std::optional<Vec3>{};
+                gameView_.drawRoute(*gameCamera,hit,play_.actorRemainingPath(actor.id),position);
             }
         }
     }
@@ -463,7 +463,7 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     if(!sceneParticles.status().empty())status_+=sceneParticles.status();
     if(play_.playing()) {
         status_+=play_.status();
-        if(!document.scene().properties().playerCharacter)status_+="No Player Character. Select a Character and choose Make Player.\n";
+        if(!document.scene().properties().playerCharacter)status_+="No controlled player. Add a Player or select an entity with Player Input and choose Make Player.\n";
     }
     if(!renderer.particleStatus().empty())status_+=renderer.particleStatus();
     if(!renderer.shadowStatus().empty())status_+=renderer.shadowStatus();

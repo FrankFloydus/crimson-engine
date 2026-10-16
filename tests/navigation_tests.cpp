@@ -12,15 +12,17 @@ EntityRecord box(EntityId id,Vec3 center,Vec3 size) {
     EntityRecord record;record.id=id;record.name="Box";record.local=math::translation(center);record.collider=SceneCollider{size};return record;
 }
 void flatGroundAndCache() {
-    Scene scene;scene.apply({box(1,{0,-.5f,0},{20,1,20})},{});PhysicsWorld physics;physics.reconcile(scene);
-    NavigationMesh navigation;SceneCharacter agent;
+    EntityRecord actor;actor.id=2;actor.name="Actor";actor.controller.emplace();actor.motor.emplace();
+    Scene scene;scene.apply({box(1,{0,-.5f,0},{20,1,20}),actor},{});PhysicsWorld physics;physics.reconcile(scene);
+    NavigationMesh navigation;SceneCharacterController agent;
     require(navigation.reconcile(physics,agent),"Initial navigation build was skipped.");
     const Vec3 destination{5,0,2};const auto path=navigation.findPath({0,.02f,0},destination);
     if(!path)std::cerr<<navigation.status();
     require(path && path->corners.size()==1 && path->corners.back()==destination,"Flat ground did not retain an exact final click.");
     const auto revision=navigation.revision();physics.reconcile(scene);
     require(!navigation.reconcile(physics,agent) && navigation.revision()==revision,"Unchanged world rebuilt navigation.");
-    agent.moveSpeed=9;require(!navigation.reconcile(physics,agent),"Movement speed invalidated geometry clearance.");
+    actor.motor->moveSpeed=9;scene.apply({box(1,{0,-.5f,0},{20,1,20}),actor},{});physics.reconcile(scene);
+    require(!navigation.reconcile(physics,agent),"Motor speed invalidated geometry clearance.");
     agent.radius=.5f;require(navigation.reconcile(physics,agent),"Capsule radius did not rebuild clearance.");
     require(!navigation.findPath({0,.02f,0},{10,0,0}),"Boundary click snapped to a distant eroded polygon.");
     require(!navigation.findPath({0,.02f,0},{50,0,0}),"Off-floor destination was approximated by a distant polygon.");
@@ -29,7 +31,7 @@ void flatGroundAndCache() {
 }
 void obstacleAndLiveChanges() {
     auto floor=box(1,{0,-.5f,0},{20,1,20});auto wall=box(2,{0,1,0},{1,2,4});
-    Scene scene;scene.apply({floor,wall},{});PhysicsWorld physics;physics.reconcile(scene);NavigationMesh navigation;SceneCharacter agent;
+    Scene scene;scene.apply({floor,wall},{});PhysicsWorld physics;physics.reconcile(scene);NavigationMesh navigation;SceneCharacterController agent;
     navigation.reconcile(physics,agent);const Vec3 start{-4,.02f,0},end{4,0,0};const auto route=navigation.findPath(start,end);
     require(route && route->corners.size()>=3 && route->corners.back()==end,"Detour did not route around an intervening obstacle.");
     require(std::any_of(route->corners.begin(),route->corners.end(),[](const auto& point){return std::abs(point[2])>2.3f;}),"Route omitted capsule clearance around wall corners.");
@@ -43,7 +45,7 @@ void obstacleAndLiveChanges() {
 }
 void islandsAndClearance() {
     Scene scene;auto left=box(1,{-3,-.5f,0},{4,1,6}),right=box(2,{3,-.5f,0},{4,1,6});
-    scene.apply({left,right},{});PhysicsWorld physics;physics.reconcile(scene);NavigationMesh navigation;SceneCharacter agent;
+    scene.apply({left,right},{});PhysicsWorld physics;physics.reconcile(scene);NavigationMesh navigation;SceneCharacterController agent;
     navigation.reconcile(physics,agent);
     require(!navigation.findPath({-3,.02f,0},{3,0,0}),"Disconnected floor islands returned a partial path.");
     auto floor=box(1,{0,-.5f,0},{12,1,6}),ceiling=box(2,{0,2,0},{1,1,8});
@@ -80,7 +82,7 @@ void slopeAndStep() {
 }
 void buildBounds() {
     Scene scene;scene.apply({box(1,{0,-.5f,0},{20,1,20})},{});PhysicsWorld physics;physics.reconcile(scene);
-    NavigationMesh navigation;SceneCharacter agent;agent.height=std::numeric_limits<float>::max();
+    NavigationMesh navigation;SceneCharacterController agent;agent.height=std::numeric_limits<float>::max();
     navigation.reconcile(physics,agent);require(!navigation.findPath({},{1,0,0}) && !navigation.status().empty(),"Extreme Character dimensions escaped safe voxel validation.");
     agent={};navigation.reconcile(physics,agent);require(navigation.findPath({},{1,0,0}).has_value(),"Valid dimensions failed to recover after a rejected build.");
     scene.apply({box(1,{0,-.5f,0},{1000,1,1000})},{});physics.reconcile(scene);navigation.reconcile(physics,agent);
@@ -91,7 +93,7 @@ void buildBounds() {
 void closestReachableDestinations() {
     auto floor=box(1,{0,-.5f,0},{20,1,20}),wall=box(2,{0,1,0},{1,2,4});
     Scene scene;scene.apply({floor,wall},{});PhysicsWorld physics;physics.reconcile(scene);
-    NavigationMesh navigation;SceneCharacter agent;navigation.reconcile(physics,agent);
+    NavigationMesh navigation;SceneCharacterController agent;navigation.reconcile(physics,agent);
     const Vec3 start{-4,.02f,0},exact{4,0,0};
     const auto strict=navigation.findPath(start,exact),preserved=navigation.findReachablePath(start,exact);
     require(strict && preserved && strict->corners==preserved->corners && preserved->corners.back()==exact,
@@ -142,7 +144,7 @@ void closestReachableDestinations() {
 }
 void reachableIslandsAndClearance() {
     Scene scene;auto left=box(1,{-3,-.5f,0},{4,1,6}),right=box(2,{3,-.5f,0},{4,1,6});
-    scene.apply({left,right},{});PhysicsWorld physics;physics.reconcile(scene);NavigationMesh navigation;SceneCharacter agent;
+    scene.apply({left,right},{});PhysicsWorld physics;physics.reconcile(scene);NavigationMesh navigation;SceneCharacterController agent;
     navigation.reconcile(physics,agent);const Vec3 start{-3,.02f,0};
     const auto island=navigation.findReachablePath(start,{3,0,0});
     require(island && island->corners.back()[0]<-1.3f && island->corners.back()[0]>-1.8f && std::abs(island->corners.back()[2])<.1f,

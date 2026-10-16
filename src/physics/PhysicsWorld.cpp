@@ -66,7 +66,7 @@ bool close(const Mat4& a,const Mat4& b) {
 }
 bool underCharacter(const Scene& scene,EntityId id) {
     auto entity=scene.find(id);
-    while(entity && entity->parent){entity=scene.find(entity->parent);if(entity && entity->character)return true;}
+    while(entity && entity->parent){entity=scene.find(entity->parent);if(entity && entity->controller)return true;}
     return false;
 }
 bool locked(const Scene& scene,EntityId id,std::span<const EntityId> locks) {
@@ -86,17 +86,17 @@ bool locked(const Scene& scene,EntityId id,std::span<const EntityId> locks) {
         if(dependency==character)return true;
         const auto entity=scene.find(dependency);if(!entity)continue;
         if(entity->parent)pending.push_back(entity->parent);
-        if(entity->camera && entity->camera->followTarget)pending.push_back(entity->camera->followTarget);
+        if(entity->cameraFollow && entity->cameraFollow->target)pending.push_back(entity->cameraFollow->target);
     }
     return false;
 }
-bool sameCharacter(const SceneCharacter& a,const SceneCharacter& b){return a.height==b.height && a.radius==b.radius;}
+bool sameCharacter(const SceneCharacterController& a,const SceneCharacterController& b){return a.height==b.height && a.radius==b.radius;}
 bool sameCollider(const SceneCollider& a,const SceneCollider& b) {
     if(a.shape!=b.shape)return false;
     if(a.shape==ColliderShape::Box)return a.size==b.size;
     return a.radius==b.radius && (a.shape==ColliderShape::Sphere || a.height==b.height);
 }
-bool validCharacter(const Mat4& world,const SceneCharacter& character,std::string& error) {
+bool validCharacter(const Mat4& world,const SceneCharacterController& character,std::string& error) {
     const auto fields=math::affineTransformFields(world);
     if(!fields || fields->singular || fields->sheared){error="Character requires a nonsingular transform without shear.";return false;}
     for(int i=0;i<3;++i)if(std::abs(fields->scale[i]-1.f)>2e-5f){error="Character requires unit world scale; resize its capsule or scale a visual child.";return false;}
@@ -112,7 +112,7 @@ struct PhysicsWorld::Impl {
     JPH::PhysicsSystem world;
     JPH::TempAllocatorImpl allocator{4*1024*1024};
     struct Collider {JPH::BodyID body;Mat4 world;SceneCollider definition;std::shared_ptr<const StaticTriangleMesh> mesh;};
-    struct Character {JPH::Ref<JPH::CharacterVirtual> motor;SceneCharacter definition;Mat4 world;bool locked{};};
+    struct Character {JPH::Ref<JPH::CharacterVirtual> motor;SceneCharacterController definition;Mat4 world;bool locked{},movementEnabled{};};
     std::map<EntityId,Collider> colliders;
     struct MeshCollider {JPH::BodyID body;Mat4 world;std::shared_ptr<const StaticTriangleMesh> mesh;std::uint64_t revision{};};
     std::map<EntityId,MeshCollider> meshColliders;
@@ -143,7 +143,7 @@ void PhysicsWorld::reconcile(const Scene& scene,std::span<const EntityId> locks,
         const auto world=scene.worldTransform(record.id);if(!world)continue;
         if(record.collider && record.collider->shape!=ColliderShape::Trimesh) {
             const auto fields=math::affineTransformFields(*world);const auto& definition=*record.collider;
-            if(underCharacter(scene,record.id) || record.character){state.report(record.id,"Static Collider cannot be attached beneath a Character; the Character capsule supplies its collision.");continue;}
+            if(underCharacter(scene,record.id) || record.controller){state.report(record.id,"Static Collider cannot be attached beneath a Character Controller; its capsule supplies collision.");continue;}
             if(!fields || fields->singular || fields->sheared){state.report(record.id,"Collider is disabled: its world transform is collapsed or sheared.");continue;}
             const auto bounds=primitiveColliderBounds(definition);const auto localHalf=bounds.maximum;
             Vec3 half{},scale{};bool valid=bounds.valid && math::finite(localHalf);
@@ -192,7 +192,7 @@ void PhysicsWorld::reconcile(const Scene& scene,std::span<const EntityId> locks,
     std::unordered_set<EntityId> keptMeshes;
     for(const auto& record:records) {
         if(!record.collider || record.collider->shape!=ColliderShape::Trimesh || (!record.collider->mesh && record.collider->source.empty()))continue;
-        if(underCharacter(scene,record.id) || record.character){state.report(record.id,"Static mesh collision cannot be attached beneath a Character.");continue;}
+        if(underCharacter(scene,record.id) || record.controller){state.report(record.id,"Static mesh collision cannot be attached beneath a Character Controller.");continue;}
         const auto world=scene.worldTransform(record.id);if(!world)continue;
         const auto found=state.meshColliders.find(record.id);
         const auto prepared=std::find_if(meshes.begin(),meshes.end(),[&](const auto& mesh){return mesh.entity==record.id;});
@@ -244,14 +244,14 @@ void PhysicsWorld::reconcile(const Scene& scene,std::span<const EntityId> locks,
     }
     if(collidersChanged)++state.geometryRevision;
     for(const auto& record:records) {
-        if(!record.character)continue;const auto world=scene.worldTransform(record.id);if(!world)continue;
+        if(!record.controller)continue;const auto world=scene.worldTransform(record.id);if(!world)continue;
         std::string error;
         if(underCharacter(scene,record.id)){state.report(record.id,"A Character cannot be nested beneath another Character.");continue;}
-        if(!validCharacter(*world,*record.character,error)){state.report(record.id,error);continue;}
+        if(!validCharacter(*world,*record.controller,error)){state.report(record.id,error);continue;}
         auto found=state.characters.find(record.id);
-        if(found!=state.characters.end() && !sameCharacter(found->second.definition,*record.character)){state.characters.erase(found);found=state.characters.end();}
+        if(found!=state.characters.end() && !sameCharacter(found->second.definition,*record.controller)){state.characters.erase(found);found=state.characters.end();}
         if(found==state.characters.end()) {
-            const auto& definition=*record.character;
+            const auto& definition=*record.controller;
             JPH::ShapeSettings::ShapeResult capsule;
             const float cylinderHalfHeight=(definition.height-2*definition.radius)*.5f;
             if(cylinderHalfHeight<=1e-6f)capsule=JPH::SphereShapeSettings(definition.radius).Create();
@@ -272,7 +272,8 @@ void PhysicsWorld::reconcile(const Scene& scene,std::span<const EntityId> locks,
             character.motor->SetPosition(position(*world));character.motor->SetRotation(rotation(*world));
             character.motor->SetLinearVelocity(JPH::Vec3::sZero());state.refresh(*character.motor);character.world=*world;
         } else if(collidersChanged)state.refresh(*character.motor);
-        character.locked=editing;character.definition=*record.character;keptCharacters.insert(record.id);
+        character.locked=editing;character.definition=*record.controller;
+        character.movementEnabled=record.motor && record.motor->enabled;keptCharacters.insert(record.id);
     }
     std::erase_if(state.characters,[&](const auto& entry){return !keptCharacters.contains(entry.first);});
 }
@@ -291,9 +292,9 @@ std::vector<ScenePoseUpdate> PhysicsWorld::step(const Scene& scene,EntityId cont
         if(motor.GetGroundState()==JPH::CharacterBase::EGroundState::OnGround && vertical<=.1f)vertical=0;
         vertical-=9.81f*seconds;
         const auto requested=movement.find(id);
-        const Vec3 horizontal=requested!=movement.end()?Vec3{requested->second[0],0,requested->second[2]}:Vec3{};
+        const Vec3 horizontal=character.movementEnabled && requested!=movement.end()?Vec3{requested->second[0],0,requested->second[2]}:Vec3{};
         const auto requestedFacing=facing.find(id);
-        const auto heading=requestedFacing!=facing.end()?Vec3{requestedFacing->second[0],0,requestedFacing->second[2]}:horizontal;
+        const auto heading=character.movementEnabled && requestedFacing!=facing.end()?Vec3{requestedFacing->second[0],0,requestedFacing->second[2]}:horizontal;
         if(math::length(heading)>1e-6) {
             const auto yaw=std::atan2(-heading[0],-heading[2]);
             const auto rotationMatrix=math::rotation(math::axisAngle({0,1,0},yaw));

@@ -71,7 +71,7 @@ PreparedCollisionOverlays CollisionOverlays::prepare(const Scene& scene,std::spa
     if(!enabled)return result;
     for(const auto& record:scene.records()) {
         if(!scene.isVisible(record.id))continue;
-        if(!record.collider && !record.character)continue;
+        if(!record.collider && !record.controller)continue;
         const auto world=scene.worldTransform(record.id);if(!world || !math::inverse(*world))continue;
         const bool selected=std::find(selection.begin(),selection.end(),record.id)!=selection.end();
         const auto append=[&](std::shared_ptr<const CollisionOverlayGeometry> geometry,const Mat4& transform,Vec4 color,bool inGame) {
@@ -92,8 +92,8 @@ PreparedCollisionOverlays CollisionOverlays::prepare(const Scene& scene,std::spa
                 }
             } else append(primitive(collider),*world,collider.collisionColor,collider.showCollisionInGame);
         }
-        if(record.character) {
-            const auto& character=*record.character;SceneCollider capsule;
+        if(record.controller) {
+            const auto& character=*record.controller;SceneCollider capsule;
             capsule.shape=ColliderShape::Capsule;capsule.radius=character.radius;capsule.height=character.height;
             append(primitive(capsule),*world*math::translation({0,character.height*.5f,0}),character.collisionColor,character.showCollisionInGame);
         }

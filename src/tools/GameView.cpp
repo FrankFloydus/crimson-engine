@@ -1,7 +1,7 @@
 #include "GameView.h"
 #include "GameViewInteraction.h"
 #include "editor/CollisionWire.h"
-#include "editor/PlayerLightRigOverlay.h"
+#include "editor/ActorLightRigOverlay.h"
 #include "scene/SceneDocument.h"
 #include "scene/SceneExtraction.h"
 #include "crimson-renderer/Renderer.h"
@@ -88,17 +88,11 @@ GameViewFrame GameView::draw(SceneDocument& document,Renderer& renderer,bool& op
     ImGui::End();frame.closed=!open;
     return frame;
 }
-void GameView::drawPlayerLightRig(const Camera& camera,const Scene& scene) {
+void GameView::drawActorLightRigs(const Camera& camera,const Scene& scene) {
     if(!imageDrawList_ || !imageWidth_ || !imageHeight_)return;
-    const auto player=scene.find(scene.properties().playerCharacter);
-    if(!player || !scene.isVisible(player->id) || !player->character || (!player->character->lightRig.enabled&&!player->character->darknessReveal.enabled) ||
-        !player->character->lightRig.showGizmos)return;
-    const auto transform=scene.worldTransform(player->id);if(!transform)return;
-    const auto position=math::transformPoint(*transform,{});
     const auto matrix=camera.projectionMatrix(static_cast<float>(imageWidth_)/imageHeight_,ClipDepth::ZeroToOne)*camera.viewMatrix();
     const Vec4 rectangle{imageRegion_.x,imageRegion_.y,imageRegion_.width,imageRegion_.height};
-    drawPlayerLightRigOverlay(*imageDrawList_,player->character->lightRig,player->character->darknessReveal,
-        position,player->character->height,matrix,rectangle,ClipDepth::ZeroToOne);
+    drawSceneLightRigOverlays(*imageDrawList_,scene,matrix,rectangle,ClipDepth::ZeroToOne);
 }
 void GameView::drawRoute(const Camera& camera,const std::optional<Vec3>& clickedGround,std::span<const Vec3> route,
                          const std::optional<Vec3>& characterPosition) {

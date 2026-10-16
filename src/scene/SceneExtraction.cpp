@@ -1,5 +1,5 @@
 #include "SceneExtraction.h"
-#include "runtime/PlayerLightRig.h"
+#include "runtime/ActorLightRig.h"
 #include "physics/ColliderGeometry.h"
 
 #include <algorithm>
@@ -63,16 +63,28 @@ Vec3 directionalLightDirection(const Mat4& world) {
 ExtractedScene extractScene(const Scene& scene) {
     ExtractedScene result;
     result.environment=resolveEnvironment(scene);
-    // A presented model belongs to one category. An authored World-only light
-    // can therefore exclude the player even when the player turns or moves.
-    const auto player=scene.find(scene.properties().playerCharacter);
-    const auto playerSubtree=player?scene.subtree(player->id):std::vector<EntityId>{};
-    const std::unordered_set<EntityId> characterEntities(playerSubtree.begin(),playerSubtree.end());
-    const auto& registry = scene.registry();
-    const auto view = registry.view<const Identity,const Transform>();
-    std::vector<entt::entity> ordered;
-    ordered.reserve(view.size_hint());
-    for (auto entity : view) ordered.push_back(entity);
+    // Actor ownership is independent of input, physics and rig activation.
+    // Cache ancestor resolution once so deep visual hierarchies remain linear.
+    const auto& registry=scene.registry();
+    const auto view=registry.view<const Identity,const Transform>();
+    std::vector<entt::entity> ordered;ordered.reserve(view.size_hint());
+    std::unordered_map<EntityId,entt::entity> indexed;indexed.reserve(view.size_hint());
+    for(const auto entity:view){ordered.push_back(entity);indexed.emplace(registry.get<Identity>(entity).id,entity);}
+    std::unordered_map<EntityId,EntityId> owners;
+    owners.reserve(indexed.size());
+    const auto actorOwner=[&](EntityId id) {
+        std::vector<EntityId> pending;
+        auto current=id;EntityId owner{};
+        while(current) {
+            if(const auto known=owners.find(current);known!=owners.end()){owner=known->second;break;}
+            const auto found=indexed.find(current);if(found==indexed.end())break;
+            pending.push_back(current);
+            if(registry.any_of<SceneActor>(found->second)){owner=current;break;}
+            current=registry.get<Relationship>(found->second).parent;
+        }
+        for(const auto child:pending)owners[child]=owner;
+        return owner;
+    };
     std::sort(ordered.begin(),ordered.end(),[&](auto a, auto b) {
         return registry.get<Identity>(a).id < registry.get<Identity>(b).id;
     });
@@ -83,11 +95,11 @@ ExtractedScene extractScene(const Scene& scene) {
         const bool visible=scene.isVisible(id);
         if (const auto* model = registry.try_get<ModelReference>(entity)) {
             auto scopes=model->lightingScopes;
-            const auto category=characterEntities.contains(id)?lighting_scope::Character:lighting_scope::World;
+            const auto category=actorOwner(id)?lighting_scope::Character:lighting_scope::World;
             scopes.directReceiverMask&=category;scopes.shadowCasterMask&=category;scopes.ambientReceiverMask&=category;
             result.models.push_back({id,model->assetId.id,*world,model->materials,model->castShadows,model->receiveShadows,scopes,category,model->animation});
             result.models.back().fadeWhenOccluding=model->fadeWhenOccluding;
-            result.models.back().visible=visible;
+            result.models.back().visible=visible;result.models.back().actorOwner=actorOwner(id);
         }
         if (const auto* particle = registry.try_get<ParticleReference>(entity))
             result.particles.push_back({id,particle->assetId.id,*world,visible});
@@ -106,17 +118,33 @@ ExtractedScene extractScene(const Scene& scene) {
                 light->nearFalloffRadius,light->specularStrength,light->rangeFalloffExponent,light->edgeSoftness,light->sourceRadius,light->attenuation});
         }
     }
-    if (player && player->character && scene.isVisible(player->id)) {
-        const auto& character=*player->character;
-        const auto world=scene.worldTransform(player->id);
-        if(character.lightRig.enabled&&world) {
-            const auto rig=evaluatePlayerLightRig(character.lightRig,math::transformPoint(*world,{}),result.points,result.directional);
-            if (!rig.valid())throw std::runtime_error(rig.error);
-            result.characterLights=rig.characterLights;result.characterShadow=rig.characterShadow;
-            if(rig.localWorld)result.points.push_back(*rig.localWorld);
+    // Ordinary scene sources were gathered first, so derived source IDs cannot
+    // accidentally collide with authored lights. Actor order is deterministic.
+    std::unordered_set<std::uint64_t> lightIds;
+    lightIds.reserve(result.points.size()+result.directional.size()+ordered.size());
+    for(const auto& source:result.points)lightIds.insert(source.entityId);
+    for(const auto& source:result.directional)lightIds.insert(source.entityId);
+    for(const auto entity:ordered) {
+        const auto id=registry.get<Identity>(entity).id;
+        if(!scene.isVisible(id))continue;
+        const auto world=scene.worldTransform(id);if(!world)continue;
+        if(registry.any_of<SceneActor>(entity))if(const auto* settings=registry.try_get<ActorLightRigSettings>(entity)) {
+            auto rig=evaluateActorLightRig(*settings,math::transformPoint(*world,{}),{},{},id);
+            if(!rig.valid())throw std::runtime_error(rig.error);
+            result.actorLighting.push_back({id,rig.characterLights});
+            if(rig.characterShadow.enabled)result.actorShadows.push_back(rig.characterShadow);
+            if(rig.localWorld) {
+                if(result.points.size()>=MaximumClusteredPointLights)throw std::runtime_error("Actor World lights exceed the 4096 point-light source limit.");
+                auto& source=*rig.localWorld;
+                while(lightIds.contains(source.entityId))source.entityId=source.entityId>1?source.entityId-1:std::numeric_limits<std::uint64_t>::max();
+                lightIds.insert(source.entityId);result.points.push_back(source);
+            }
         }
-        if(character.darknessReveal.enabled&&world)
-            result.playerReveal={math::transformPoint(*world,{})+Vec3{0,characterLightingCenterHeight(character.height),0},character.darknessReveal.spread,true};
+        if(const auto* reveal=registry.try_get<DarknessRevealSettings>(entity);reveal&&reveal->enabled) {
+            const auto* controller=registry.try_get<SceneCharacterController>(entity);
+            const auto height=controller?controller->height:0.f;
+            result.reveals.push_back({math::transformPoint(*world,{})+Vec3{0,characterLightingCenterHeight(height),0},reveal->spread,true});
+        }
     }
     return result;
 }
@@ -156,9 +184,9 @@ Aabb selectionBounds(const Scene& scene, std::span<const EntityId> selection,
                 math::include(result,position-Vec3{.5f,.5f,.5f});
                 math::include(result,position+Vec3{.5f,.5f,.5f});
             }
-            if(record->character)math::include(result,math::transformBounds(Aabb{
-                {-record->character->radius,0,-record->character->radius},
-                {record->character->radius,record->character->height,record->character->radius},true},*world));
+            if(record->controller)math::include(result,math::transformBounds(Aabb{
+                {-record->controller->radius,0,-record->controller->radius},
+                {record->controller->radius,record->controller->height,record->controller->radius},true},*world));
         }
     }
     return result;
@@ -203,8 +231,8 @@ std::vector<SelectionBox> selectionBoxes(const Scene& scene,std::span<const Enti
                     if(const auto source=colliderMeshResult(*record->collider,meshCollision);source.mesh)bounds=source.mesh->bounds;
                 if(usable(bounds))math::include(shapes,math::transformBounds(bounds,local));
             }
-            if(record->character) {
-                const auto& character=*record->character;
+            if(record->controller) {
+                const auto& character=*record->controller;
                 math::include(shapes,math::transformBounds(Aabb{{-character.radius,0,-character.radius},{character.radius,character.height,character.radius},true},local));
             }
         }
@@ -220,7 +248,7 @@ std::optional<EntityId> pickCollisionShape(const Scene& scene,const Ray& ray,flo
     std::optional<EntityId> result;
     for(const auto& record:scene.records()) {
         if(!scene.isVisible(record.id))continue;
-        if(!record.collider && !record.character)continue;
+        if(!record.collider && !record.controller)continue;
         const auto world=scene.worldTransform(record.id);
         const auto inverse=world?math::inverse(*world):std::nullopt;
         if(!inverse)continue;
@@ -294,7 +322,7 @@ std::optional<EntityId> pickCollisionShape(const Scene& scene,const Ray& ray,flo
                 }
             }
         }
-        if(record.character)capsule(record.character->radius,record.character->radius,record.character->height-record.character->radius);
+        if(record.controller)capsule(record.controller->radius,record.controller->radius,record.controller->height-record.controller->radius);
         if(hit<closest) {closest=hit;result=record.id;}
     }
     return result;

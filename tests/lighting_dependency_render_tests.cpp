@@ -99,7 +99,9 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     SceneSettings settings;settings.camera.position={0,0,6};settings.camera.target={};settings.camera.fov=60;settings.camera.fovAxis=CameraFovAxis::Vertical;
     settings.camera.nearPlane=.1f;settings.camera.farPlane=32;settings.environment.enabled=false;settings.environment.toneMapping=ToneMapping::Linear;
     settings.environment.background.overrideColor=true;settings.environment.background.color={};
-    RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=std::span(&receiver,1);scene.shadowResolution=256;
+    DarknessRevealSource playerReveal;ActorLighting actorLighting;actorLighting.owner=2;
+    CharacterShadowSource characterShadow;characterShadow.owner=2;
+    RenderScene scene{settings,{}};scene.reveals=std::span(&playerReveal,1);scene.actorLighting=std::span(&actorLighting,1);scene.actorShadows=std::span(&characterShadow,1);scene.sceneMode=true;scene.instances=std::span(&receiver,1);scene.shadowResolution=256;
     PointShadowStats submittedShadows;ParticleRenderStats submittedParticles;
     const auto capture=[&] {renderer.renderGame(scene);submittedShadows=renderer.shadowStats();submittedParticles=renderer.gameParticleStats();return read(renderer.gameViewportTexture());};
     const auto center=[&](const DecodedImage& image,const Vec3& point=Vec3{}){return brightness(image,settings.camera,point);};
@@ -248,8 +250,8 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
         scene.instances=std::span(&receiver,1);scene.particles={};scene.particleMaterials={};
         auto& darkness=settings.environment.ambientVisibility;darkness.enabled=true;darkness.shadowAware=false;
         check(center(capture())<1,"Finite player point escaped Ambient Darkness.");
-        scene.playerReveal={{},100000,true};equivalent(capture(),progressive,"Full player reveal changed finite-point lighting");
-        scene.playerReveal={};darkness={};
+        playerReveal={{},100000,true};equivalent(capture(),progressive,"Full player reveal changed finite-point lighting");
+        playerReveal={};darkness={};
 
         materials[0].metallic=1;materials[0].roughness=.25f;local.intensity=.3f;
         local.specularStrength=1;local.rangeFalloffExponent=4;
@@ -367,9 +369,9 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     receiver.lightingScopes.ambientReceiverMask=lighting_scope::All;
     point.roles.ambientReveal=true;const auto directSelfRevealed=capture();
     check(std::abs(center(directSelfRevealed)-center(directReference))<=1,"A local light failed to reveal its own direct illumination.");
-    point.roles.ambientReveal=false;scene.playerReveal={{},100000,true};const auto directPlayerRevealed=capture();
+    point.roles.ambientReveal=false;playerReveal={{},100000,true};const auto directPlayerRevealed=capture();
     check(std::abs(center(directPlayerRevealed)-center(directReference))<=1,"Player reveal failed to restore existing local illumination.");
-    scene.playerReveal={};
+    playerReveal={};
     scene.pointLights={};materials[0].emissive={.2f,.1f,.05f};ambient.enabled=false;
     const auto emissionReference=capture();ambient.enabled=true;
     equivalent(capture(),emissionReference,"Ambient visibility attenuated material emission");
@@ -516,7 +518,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     scene.directionalLights=std::span(&sun,1);scene.pointLights={};scene.shadowWorldId=47;
     caster.model.transform=math::translation({0,0,1.5f})*math::scaling({.6f,.6f,1});
     caster.lightingScopes.shadowCasterMask=lighting_scope::Character;shadowInstances={receiver,caster};scene.shadowInstances=shadowInstances;
-    ambient.enabled=true;ambient.shadowAware=false;scene.playerReveal={{},100000,true};
+    ambient.enabled=true;ambient.shadowAware=false;playerReveal={{},100000,true};
     const auto directionalCharacterShadow=capture();
     point.roles={};point.roles.receiverMask=lighting_scope::World;point.roles.shadowCasterMask=lighting_scope::World;
     point.color={1,1,1};point.intensity=20;point.position={0,0,3};point.radius=8;point.castShadows=true;
@@ -545,7 +547,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     std::cout<<"Bright torch shadows: directional only="<<center(directionalCharacterShadow)
         <<", Character excluded="<<center(torchExcludesCharacter)<<", Character included="<<center(torchIncludesCharacter)
         <<", moved old/new="<<center(movedCharacterShadow)<<'/'<<center(movedCharacterShadow,movedTorchShadow)<<'\n';
-    scene.directionalLights={};sun.castShadows=false;sun.intensity=2;scene.playerReveal={};
+    scene.directionalLights={};sun.castShadows=false;sun.intensity=2;playerReveal={};
     scene.shadowWorldId=0;scene.shadowInstances={};point.castShadows=false;point.roles.ambientReveal=true;
 
     // Transparent receivers use their own world position. An opaque plane
@@ -720,33 +722,33 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     sun.roles={};settings.environment.enabled=true;ambient={};ambient.enabled=true;
     receiver.lightingScopes={lighting_scope::World,lighting_scope::World,lighting_scope::World};
     receiver.model.transform=math::scaling({5,5,1});scene.instances=std::span(&receiver,1);
-    scene.playerReveal.position={};scene.playerReveal.spread=.35f;scene.playerReveal.enabled=true;
+    playerReveal.position={};playerReveal.spread=.35f;playerReveal.enabled=true;
     const auto playerIsland=capture();
     check(center(playerIsland)>40&&center(playerIsland,{1.25f,0,0})<5,
         "Player distance reveal failed to create a bounded bright area with a dark exterior.");
-    scene.playerReveal.enabled=false;const auto playerRevealDisabled=capture();
+    playerReveal.enabled=false;const auto playerRevealDisabled=capture();
     check(center(playerRevealDisabled)<5,"Disabling player distance reveal retained a bright area.");
-    scene.playerReveal.enabled=true;scene.playerReveal.spread=0;
+    playerReveal.enabled=true;playerReveal.spread=0;
     equivalent(capture(),playerRevealDisabled,"Zero player reveal spread retained stale reveal influence");
-    scene.playerReveal.spread=.35f;point.position={2.5f,0,.4f};point.radius=.8f;point.intensity=10;point.color={};
+    playerReveal.spread=.35f;point.position={2.5f,0,.4f};point.radius=.8f;point.intensity=10;point.color={};
     point.roles={};point.roles.receiverMask=0;point.roles.ambientReveal=true;scene.pointLights=std::span(&point,1);
     const auto separateIslands=capture();
     check(center(separateIslands)>40&&center(separateIslands,{2.5f,0,0})>40&&center(separateIslands,{1.25f,0,0})<5,
         "A distant torch reveal failed to remain an independent bright island separated from the player.");
-    scene.playerReveal.enabled=false;const auto torchOnlyIsland=capture();
+    playerReveal.enabled=false;const auto torchOnlyIsland=capture();
     check(center(torchOnlyIsland)<5&&center(torchOnlyIsland,{2.5f,0,0})>40,
         "Disabling player reveal removed independent torch reveal or left the player area visible.");
-    scene.pointLights={};scene.directionalLights={};scene.playerReveal.position={0,0,1};scene.playerReveal.enabled=true;
+    scene.pointLights={};scene.directionalLights={};playerReveal.position={0,0,1};playerReveal.enabled=true;
     receiver.model.transform=math::translation({0,0,-3})*math::scaling({5,5,1});
     transparent=receiver;transparent.entityId=3;transparent.model.transform=math::translation({0,0,1})*math::scaling({1.5f,1.5f,1});
     transparent.blend=MaterialBlend::Alpha;transparentInstances={receiver,transparent};scene.instances=transparentInstances;
-    const auto playerTransparentLit=capture();scene.playerReveal.enabled=false;const auto playerTransparentDark=capture();
+    const auto playerTransparentLit=capture();playerReveal.enabled=false;const auto playerTransparentDark=capture();
     check(center(playerTransparentLit,{0,0,1})>40&&center(playerTransparentDark,{0,0,1})<5,
         "A transparent surface sampled an unrelated opaque player-reveal position.");
     scene.instances=std::span(&receiver,1);particle.position={0,0,1};particle.size=3;particleMaterial.graph.reset();
     particleMaterial.baseColor={.35f,.35f,.35f,1};particleMaterial.blend=MaterialBlend::Alpha;
-    scene.particles=std::span(&particle,1);scene.particleMaterials=std::span(&particleMaterial,1);scene.playerReveal.enabled=true;
-    const auto playerParticleLit=capture();scene.playerReveal.enabled=false;const auto playerParticleDark=capture();
+    scene.particles=std::span(&particle,1);scene.particleMaterials=std::span(&particleMaterial,1);playerReveal.enabled=true;
+    const auto playerParticleLit=capture();playerReveal.enabled=false;const auto playerParticleDark=capture();
     check(center(playerParticleLit,{0,0,1})>40&&center(playerParticleDark,{0,0,1})<5,
         "A transparent particle failed to evaluate the player reveal at its own position.");
     std::cout<<"Reveal islands: player="<<center(playerIsland)<<", distant torch="<<center(separateIslands,{2.5f,0,0})
@@ -757,7 +759,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     // are independent packets. No world point/directional source is necessary
     // for the character-only rig; ordinary world blockers cannot occlude it.
     ambient={};settings.environment.enabled=false;settings.environment.fog.enabled=false;
-    scene.playerReveal={};scene.characterShadow={};scene.characterLights={};
+    playerReveal={};characterShadow={};characterShadow.owner=2;actorLighting.lights={};
     scene.pointLights={};scene.directionalLights={};scene.particles={};scene.particleMaterials={};
     scene.shadowWorldId=81;scene.shadowResolution=256;scene.materialContext={};
     receiver.model.transform=math::scaling({5,5,1});receiver.lightingScopes={};receiver.receiveShadows=true;
@@ -765,13 +767,13 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     caster=receiver;caster.entityId=2;caster.model.transform=math::translation({0,0,1.5f})*math::scaling({.6f,.6f,1});
     caster.lightingScopes={lighting_scope::World,lighting_scope::World,lighting_scope::World};
     shadowInstances={receiver,caster};scene.shadowInstances=shadowInstances;
-    auto& characterKey=scene.characterLights[0];characterKey.enabled=true;characterKey.direction={0,0,-1};
+    auto& characterKey=actorLighting.lights[0];characterKey.enabled=true;characterKey.direction={0,0,-1};
     characterKey.color={1,1,1};characterKey.intensity=2;characterKey.diffuse=1;characterKey.specular=1;
     receiver.lightingScopes.directReceiverMask=lighting_scope::World;
     const auto characterRigWorld=capture();
     receiver.lightingScopes.directReceiverMask=lighting_scope::All;
     equivalent(capture(),characterRigWorld,"Raw All mesh default incorrectly received Character-only lighting");
-    receiver.lightingCategory=lighting_scope::Character;receiver.lightingScopes.directReceiverMask=lighting_scope::Character;
+    receiver.actorOwner=2;receiver.lightingCategory=lighting_scope::Character;receiver.lightingScopes.directReceiverMask=lighting_scope::Character;
     const auto separatedCharacter=capture();
     check(center(separatedCharacter)>40&&center(characterRigWorld)<5,"Character-only Key leaked into World or failed to illuminate Character.");
     scene.shadowInstances={};equivalent(capture(),separatedCharacter,"World geometry occluded unshadowed Character-only lighting");
@@ -791,8 +793,8 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     check(center(characterDiffuse)>30&&center(characterSpecular)>2,"Character diffuse/specular controls failed to independently contribute.");
     characterKey.diffuse=characterKey.specular=1;
     ambient.enabled=true;const auto characterDark=capture();check(center(characterDark)<5,"Character-only lighting escaped Ambient Darkness.");
-    scene.playerReveal={{},100000,true};equivalent(capture(),separatedCharacter,"Full reveal failed to restore Character-only lighting");
-    scene.playerReveal={};ambient={};scene.pointLights={};
+    playerReveal={{},100000,true};equivalent(capture(),separatedCharacter,"Full reveal failed to restore Character-only lighting");
+    playerReveal={};ambient={};scene.pointLights={};
 
     // World point light and IBL are independent from the character-only rig.
     // The dedicated player silhouette applies to their reflected sum, so even
@@ -802,12 +804,12 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     characterKey.intensity=20;equivalent(capture(),localWorldClear,"Character intensity changed World architecture illumination");
     characterKey.enabled=false;equivalent(capture(),localWorldClear,"Disabling Character-only rig changed World illumination");
     ambient.enabled=true;check(center(capture())<5,"Local World illumination escaped Ambient Darkness.");ambient={};
-    caster.lightingCategory=lighting_scope::Character;caster.lightingScopes={lighting_scope::Character,lighting_scope::Character,lighting_scope::Character};
+    caster.actorOwner=2;caster.lightingCategory=lighting_scope::Character;caster.lightingScopes={lighting_scope::Character,lighting_scope::Character,lighting_scope::Character};
     shadowInstances={receiver,caster};scene.shadowInstances=shadowInstances;
     const std::array<std::uint64_t,1> characterIds{caster.entityId};scene.shadowFocusEntities=characterIds;
     scene.shadowFocusBounds=math::transformBounds(mesh->bounds,caster.model.transform);
-    scene.characterShadow.position={0,0,1.5f};scene.characterShadow.direction={0,0,-1};
-    scene.characterShadow.strength=1;scene.characterShadow.distance=10;scene.characterShadow.enabled=true;
+    characterShadow.position={0,0,1.5f};characterShadow.direction={0,0,-1};
+    characterShadow.strength=1;characterShadow.distance=10;characterShadow.enabled=true;
     const auto dedicatedSilhouette=capture();
     check(center(dedicatedSilhouette)<center(localWorldClear)*.35,"Dedicated Character silhouette failed without an authored directional light or ordinary point shadows.");
     check(submittedShadows.dedicatedCharacterUpdates==1,"Dedicated Character shadow did not render its independent atlas tile.");
@@ -817,7 +819,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     caster.lightingCategory=lighting_scope::World;caster.lightingScopes.shadowCasterMask=lighting_scope::All;shadowInstances={receiver,caster};
     equivalent(capture(),localWorldClear,"World-category pillar with All caster mask cast a dedicated Character shadow");
     check(submittedShadows.dedicatedCharacterUpdates==0,"World-only pillars submitted an empty dedicated Character shadow update.");
-    caster.lightingCategory=lighting_scope::Character;caster.lightingScopes.shadowCasterMask=lighting_scope::World;shadowInstances={receiver,caster};
+    caster.actorOwner=2;caster.lightingCategory=lighting_scope::Character;caster.lightingScopes.shadowCasterMask=lighting_scope::World;shadowInstances={receiver,caster};
     equivalent(capture(),localWorldClear,"World-only caster mask cast a dedicated Character shadow");
     check(submittedShadows.dedicatedCharacterUpdates==0,"Excluded Character caster mask submitted an empty dedicated shadow update.");
     caster.lightingScopes.shadowCasterMask=lighting_scope::Character;caster.blend=MaterialBlend::Alpha;shadowInstances={receiver,caster};
@@ -825,20 +827,20 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     check(submittedShadows.dedicatedCharacterUpdates==0,"Translucent-only Character geometry submitted an empty dedicated shadow update.");
     caster.blend=MaterialBlend::Opaque;
     caster.lightingScopes.shadowCasterMask=lighting_scope::Character;shadowInstances={receiver,caster};
-    point.intensity=100;scene.characterShadow.enabled=false;const auto brightTorchClear=capture();
-    scene.characterShadow.enabled=true;const auto brightTorchSilhouette=capture();
+    point.intensity=100;characterShadow.enabled=false;const auto brightTorchClear=capture();
+    characterShadow.enabled=true;const auto brightTorchSilhouette=capture();
     check(center(brightTorchClear)>center(localWorldClear)+15&&center(brightTorchSilhouette)<center(brightTorchClear)*.35,
         "Bright torch filled the dedicated Character silhouette.");
     {
         // Response shaping changes the World light's radiance, never the Key
         // projection or which architecture/Character meshes cast each shadow.
         const auto originalLight=point;const auto originalCaster=caster;
-        const auto originalFocus=scene.shadowFocusBounds;const auto originalCharacterShadow=scene.characterShadow;
+        const auto originalFocus=scene.shadowFocusBounds;const auto originalCharacterShadow=characterShadow;
         point.nearFalloffRadius=1.5f;point.specularStrength=0;point.rangeFalloffExponent=1;point.edgeSoftness=1;point.intensity=20;point.radius=8;
         const auto softKeySilhouette=capture();
         check(submittedShadows.dedicatedCharacterUpdates==0&&submittedShadows.dedicatedCharacterCacheHits==1,
             "Changing Local World response unnecessarily rebuilt the unchanged Key silhouette.");
-        scene.characterShadow.enabled=false;const auto softWorldClear=capture();
+        characterShadow.enabled=false;const auto softWorldClear=capture();
         check(center(softWorldClear)>40&&center(softKeySilhouette)<center(softWorldClear)*.35,
             "Local World point lost the independent Character Key silhouette.");
         caster.lightingCategory=lighting_scope::World;caster.lightingScopes.shadowCasterMask=lighting_scope::World;
@@ -846,45 +848,45 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
         const auto softWorldPillarShadow=capture();
         check(center(softWorldPillarShadow)<center(softWorldClear)*.4,
             "Local World point stopped World architecture casting shadows.");
-        caster.lightingCategory=lighting_scope::Character;caster.lightingScopes.shadowCasterMask=lighting_scope::Character;
+        caster.actorOwner=2;caster.lightingCategory=lighting_scope::Character;caster.lightingScopes.shadowCasterMask=lighting_scope::Character;
         shadowInstances={receiver,caster};
         equivalent(capture(),softWorldClear,"Local World point source acquired Character casters");
-        point.castShadows=false;scene.characterShadow.enabled=true;
+        point.castShadows=false;characterShadow.enabled=true;
         equivalent(capture(),softKeySilhouette,"Restoring Character Key silhouette changed Local World point");
         caster.model.transform=math::translation({.9f,0,1.5f})*math::scaling({.6f,.6f,1});
         shadowInstances={receiver,caster};scene.shadowFocusBounds=math::transformBounds(mesh->bounds,caster.model.transform);
-        scene.characterShadow.position={.9f,0,1.5f};point.position[0]=.9f;
+        characterShadow.position={.9f,0,1.5f};point.position[0]=.9f;
         const auto movedLocalShadow=capture();
         check(center(movedLocalShadow)>center(softKeySilhouette)+40&&
             center(movedLocalShadow,{.9f,0,0})<center(softWorldClear,{.9f,0,0})*.35&&
             submittedShadows.dedicatedCharacterUpdates==1,
             "Moving Local World point and Character retained the old Key silhouette or lost its new projection.");
         caster=originalCaster;shadowInstances={receiver,caster};scene.shadowFocusBounds=originalFocus;
-        scene.characterShadow=originalCharacterShadow;point.position=originalLight.position;
+        characterShadow=originalCharacterShadow;point.position=originalLight.position;
         equivalent(capture(),softKeySilhouette,"Restoring the player changed Local World point or its Key silhouette");
         ambient.enabled=true;check(center(capture(),{1.25f,0,0})<5,
             "Local World point escaped Ambient Darkness.");
-        scene.playerReveal={{},100000,true};equivalent(capture(),softKeySilhouette,
+        playerReveal={{},100000,true};equivalent(capture(),softKeySilhouette,
             "Full reveal changed Local World point or the Character Key silhouette");
-        scene.playerReveal={};ambient={};point=originalLight;
+        playerReveal={};ambient={};point=originalLight;
         equivalent(capture(),brightTorchSilhouette,"Local World response edits changed ordinary torch or Key shadow rendering");
         std::cout<<"Local World point shadows: clear/Key/pillar="<<center(softWorldClear)<<'/'<<center(softKeySilhouette)
             <<'/'<<center(softWorldPillarShadow)<<", moved old/new="<<center(movedLocalShadow)<<'/'<<center(movedLocalShadow,{.9f,0,0})<<'\n';
     }
-    receiver.lightingCategory=lighting_scope::Character;receiver.lightingScopes.directReceiverMask=lighting_scope::Character;
+    receiver.actorOwner=2;receiver.lightingCategory=lighting_scope::Character;receiver.lightingScopes.directReceiverMask=lighting_scope::Character;
     characterKey.enabled=true;characterKey.intensity=2;const auto characterWithoutSelfShadow=capture();
-    scene.characterShadow.enabled=false;equivalent(capture(),characterWithoutSelfShadow,"Dedicated World silhouette attenuated Character readability");
-    scene.characterShadow.enabled=true;characterKey.enabled=false;receiver.lightingCategory=lighting_scope::World;receiver.lightingScopes.directReceiverMask=lighting_scope::World;
+    characterShadow.enabled=false;equivalent(capture(),characterWithoutSelfShadow,"Dedicated World silhouette attenuated Character readability");
+    characterShadow.enabled=true;characterKey.enabled=false;receiver.lightingCategory=lighting_scope::World;receiver.lightingScopes.directReceiverMask=lighting_scope::World;
     receiver.receiveShadows=false;equivalent(capture(),brightTorchClear,"Receive Shadows off retained the dedicated Character silhouette");receiver.receiveShadows=true;
-    scene.characterShadow.strength=0;equivalent(capture(),brightTorchClear,"Character shadow strength zero changed reflected lighting");
-    scene.characterShadow.strength=1;scene.characterShadow.enabled=false;
-    equivalent(capture(),brightTorchClear,"Disabling dedicated Character shadow retained stale attenuation");scene.characterShadow.enabled=true;
+    characterShadow.strength=0;equivalent(capture(),brightTorchClear,"Character shadow strength zero changed reflected lighting");
+    characterShadow.strength=1;characterShadow.enabled=false;
+    equivalent(capture(),brightTorchClear,"Disabling dedicated Character shadow retained stale attenuation");characterShadow.enabled=true;
     ambient.enabled=true;check(center(capture(),{1.25f,0,0})<5,"Ambient Darkness failed to attenuate the dedicated-shadow World result.");
-    scene.playerReveal={{},100000,true};equivalent(capture(),brightTorchSilhouette,"Full reveal changed dedicated Character shadow composition");
-    scene.playerReveal={};ambient={};
+    playerReveal={{},100000,true};equivalent(capture(),brightTorchSilhouette,"Full reveal changed dedicated Character shadow composition");
+    playerReveal={};ambient={};
     settings.environment.enabled=true;scene.pointLights={};receiver.lightingScopes.directReceiverMask=0;
-    scene.characterShadow.enabled=false;const auto shadowIblClear=capture();
-    scene.characterShadow.enabled=true;check(center(capture())<center(shadowIblClear)*.35,"Dedicated Character silhouette failed to attenuate IBL on a World surface with direct lighting disabled.");
+    characterShadow.enabled=false;const auto shadowIblClear=capture();
+    characterShadow.enabled=true;check(center(capture())<center(shadowIblClear)*.35,"Dedicated Character silhouette failed to attenuate IBL on a World surface with direct lighting disabled.");
     receiver.lightingScopes.directReceiverMask=lighting_scope::World;
     settings.environment.enabled=false;scene.pointLights=std::span(&point,1);
 
@@ -905,7 +907,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     particle.position={};particle.size=3;particle.right={1,0,0};particle.up={0,1,0};particle.rotation=0;
     particleMaterial.graph.reset();particleMaterial.shading=MaterialShading::StandardPbr;particleMaterial.blend=MaterialBlend::Alpha;
     particleMaterial.baseColor={.35f,.35f,.35f,1};scene.instances={};scene.particles=std::span(&particle,1);scene.particleMaterials=std::span(&particleMaterial,1);
-    scene.characterShadow.enabled=false;const auto particleShadowClear=capture();scene.characterShadow.enabled=true;const auto particleSilhouette=capture();
+    characterShadow.enabled=false;const auto particleShadowClear=capture();characterShadow.enabled=true;const auto particleSilhouette=capture();
     check(center(particleShadowClear)>30&&center(particleSilhouette)<center(particleShadowClear)*.35,"Lit sprite did not receive the dedicated shadow at its own surface.");
     scene.instances=std::span(&receiver,1);particle.position={0,0,2};particle.size=1;
     const auto particleAheadOfCaster=capture();
@@ -915,7 +917,7 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config) {
     // Moving the player replaces the old projection immediately. Independent
     // Scene/Game packets reset both character uniforms and shadow bindings.
     caster.model.transform=math::translation({.9f,0,1.5f})*math::scaling({.6f,.6f,1});shadowInstances={receiver,caster};
-    scene.shadowFocusBounds=math::transformBounds(mesh->bounds,caster.model.transform);scene.characterShadow.position={.9f,0,1.5f};
+    scene.shadowFocusBounds=math::transformBounds(mesh->bounds,caster.model.transform);characterShadow.position={.9f,0,1.5f};
     const auto movedDedicated=capture();
     check(center(movedDedicated)>center(brightTorchSilhouette)+40&&center(movedDedicated,{.9f,0,0})<center(brightTorchClear,{.9f,0,0})*.35,
         "Moving Character retained its old dedicated shadow or failed to project at the new position.");

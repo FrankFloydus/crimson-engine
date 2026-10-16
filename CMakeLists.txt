@@ -72,7 +72,7 @@ target_compile_options(crimson-resources PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(crimson-resources PUBLIC crimson-math crimson-animation PRIVATE crimson-storage meshoptimizer::meshoptimizer nlohmann_json::nlohmann_json bgfx::bimg_decode bgfx::bimg bgfx::bx)
 target_link_libraries(crimson-resources PRIVATE bcrypt)
 
-add_library(crimson-scene src/scene/Scene.cpp src/scene/CollisionMesh.cpp src/scene/SceneDocument.cpp src/scene/SceneExtraction.cpp src/runtime/PlayerLightRig.cpp src/runtime/SceneAnimations.cpp)
+add_library(crimson-scene src/scene/Scene.cpp src/scene/CollisionMesh.cpp src/scene/SceneDocument.cpp src/scene/SceneNames.cpp src/scene/SceneComponents.cpp src/scene/SceneOutlinerRows.cpp src/scene/SceneExtraction.cpp src/scene/CameraTemplates.cpp src/scene/CameraAuthoring.cpp src/runtime/ActorLightRig.cpp src/runtime/SceneAnimations.cpp)
 target_include_directories(crimson-scene PUBLIC src)
 target_link_libraries(crimson-scene PUBLIC crimson-math crimson-camera crimson-storage EnTT::EnTT nlohmann_json::nlohmann_json)
 target_compile_definitions(crimson-scene PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -102,7 +102,7 @@ target_include_directories(crimson-navigation PUBLIC src)
 target_link_libraries(crimson-navigation PUBLIC crimson-physics PRIVATE RecastNavigation::Recast RecastNavigation::Detour)
 target_compile_options(crimson-navigation PRIVATE /W4 /permissive- /utf-8)
 
-add_library(crimson-runtime src/runtime/PlaySession.cpp src/runtime/PlayerController.cpp src/runtime/GameInput.cpp)
+add_library(crimson-runtime src/runtime/PlaySession.cpp src/runtime/AgentSteering.cpp src/runtime/GameInput.cpp)
 target_include_directories(crimson-runtime PUBLIC src)
 target_link_libraries(crimson-runtime PUBLIC crimson-navigation crimson-particles crimson-camera SDL3::SDL3)
 target_compile_options(crimson-runtime PRIVATE /W4 /permissive- /utf-8)
@@ -251,8 +251,9 @@ add_executable(crimson-renderer WIN32
     src/App.cpp src/App.h
     src/app/Options.cpp src/app/DiagnosticSession.cpp src/app/FrameProfile.cpp
     src/editor/EditorSession.cpp src/editor/CameraPilot.cpp src/editor/SceneEditor.cpp src/editor/SceneViewport.cpp src/editor/ViewportAssetDrop.cpp
+    src/editor/ViewportTransformGesture.cpp
     src/editor/EditorPreferences.cpp src/editor/EditorResources.cpp src/editor/EditorRenderFrame.cpp src/editor/AssetPreviews.cpp src/editor/AssetPreviewCache.cpp
-    src/editor/PlayerLightRigOverlay.cpp
+    src/editor/ActorLightRigOverlay.cpp
     src/editor/ColliderGizmo.cpp src/editor/ColliderGizmoUi.cpp
     src/editor/MaterialPreview.cpp src/editor/MaterialPreviewNavigation.cpp
     src/editor/CollisionResources.cpp src/editor/PlayerOcclusion.cpp src/editor/QuaderSceneIntegration.cpp
@@ -275,6 +276,8 @@ add_executable(crimson-renderer WIN32
     src/tools/GameView.cpp src/tools/LightingControls.cpp
     src/tools/GameViewInteraction.cpp
     src/tools/InspectorTransform.cpp
+    src/tools/CameraAuthoringControls.cpp
+    src/tools/SceneOutlinerColor.cpp
     src/tools/ColliderInspector.cpp
     src/tools/AssetBrowser.cpp
     src/tools/AssetBrowserPaths.cpp
@@ -344,7 +347,7 @@ if(BUILD_TESTING)
     target_link_libraries(player_light_rig_tests PRIVATE crimson-scene)
     target_compile_options(player_light_rig_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME player_light_rig_core COMMAND player_light_rig_tests)
-    add_executable(player_light_rig_overlay_tests tests/player_light_rig_overlay_tests.cpp src/editor/PlayerLightRigOverlay.cpp)
+    add_executable(player_light_rig_overlay_tests tests/player_light_rig_overlay_tests.cpp src/editor/ActorLightRigOverlay.cpp)
     target_link_libraries(player_light_rig_overlay_tests PRIVATE crimson-scene imgui::imgui)
     target_compile_options(player_light_rig_overlay_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME player_light_rig_overlay_core COMMAND player_light_rig_overlay_tests)
@@ -402,6 +405,18 @@ if(BUILD_TESTING)
     target_link_libraries(scene_gameplay_tests PRIVATE crimson-scene)
     target_compile_options(scene_gameplay_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME scene_gameplay_core COMMAND scene_gameplay_tests)
+    add_executable(scene_component_tests tests/scene_component_tests.cpp)
+    target_link_libraries(scene_component_tests PRIVATE crimson-scene)
+    target_compile_options(scene_component_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME scene_component_core COMMAND scene_component_tests)
+    add_executable(camera_template_tests tests/camera_template_tests.cpp)
+    target_link_libraries(camera_template_tests PRIVATE crimson-scene)
+    target_compile_options(camera_template_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME camera_template_core COMMAND camera_template_tests)
+    add_executable(camera_authoring_tests tests/camera_authoring_tests.cpp)
+    target_link_libraries(camera_authoring_tests PRIVATE crimson-scene)
+    target_compile_options(camera_authoring_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME camera_authoring_core COMMAND camera_authoring_tests)
     add_executable(physics_tests tests/physics_tests.cpp)
     target_link_libraries(physics_tests PRIVATE crimson-physics)
     target_compile_options(physics_tests PRIVATE /W4 /permissive- /utf-8)
@@ -742,6 +757,11 @@ if(BUILD_TESTING)
     target_compile_options(viewport_asset_drop_tests PRIVATE /W4 /permissive- /utf-8)
     target_link_libraries(viewport_asset_drop_tests PRIVATE crimson-scene imgui::imgui)
     add_test(NAME viewport_asset_drop_core COMMAND viewport_asset_drop_tests)
+    add_executable(viewport_transform_gesture_tests tests/viewport_transform_gesture_tests.cpp src/editor/ViewportTransformGesture.cpp)
+    target_include_directories(viewport_transform_gesture_tests PRIVATE src)
+    target_compile_options(viewport_transform_gesture_tests PRIVATE /W4 /permissive- /utf-8)
+    target_link_libraries(viewport_transform_gesture_tests PRIVATE crimson-scene imgui::imgui imguizmo::imguizmo)
+    add_test(NAME viewport_transform_gesture_core COMMAND viewport_transform_gesture_tests)
 
     add_executable(inspector_transform_tests tests/inspector_transform_tests.cpp
         src/tools/InspectorTransform.cpp src/tools/SceneDiagnostics.cpp src/editor/SceneShortcuts.cpp)
@@ -749,6 +769,12 @@ if(BUILD_TESTING)
     target_compile_options(inspector_transform_tests PRIVATE /W4 /permissive- /utf-8)
     target_link_libraries(inspector_transform_tests PRIVATE crimson-scene imgui::imgui)
     add_test(NAME inspector_transform_core COMMAND inspector_transform_tests)
+
+    add_executable(scene_component_ui_tests tests/scene_component_ui_tests.cpp src/editor/SceneShortcuts.cpp src/tools/CameraAuthoringControls.cpp src/tools/SceneOutlinerColor.cpp)
+    target_include_directories(scene_component_ui_tests PRIVATE src)
+    target_compile_options(scene_component_ui_tests PRIVATE /W4 /permissive- /utf-8)
+    target_link_libraries(scene_component_ui_tests PRIVATE crimson-scene imgui::imgui)
+    add_test(NAME scene_component_ui_core COMMAND scene_component_ui_tests)
 endif()
 
 if(BUILD_TESTING)

@@ -42,8 +42,8 @@ public:
     }
     void showGame() { panels_.game=true; }
     void hideGame() { panels_.game=false; }
-    void drawPlayerLightRig(const Camera& camera,const Scene& scene) {
-        viewport_.drawPlayerLightRig(camera,scene);
+    void drawActorLightRigs(const Camera& camera,const Scene& scene) {
+        viewport_.drawActorLightRigs(camera,scene);
     }
     void notifyExternalSceneChange(SceneSnapshot snapshot) { externalScene_=std::move(snapshot); }
     void setParticleBoundsQuery(ParticleBoundsQuery query) { viewport_.setParticleBoundsQuery(std::move(query)); }

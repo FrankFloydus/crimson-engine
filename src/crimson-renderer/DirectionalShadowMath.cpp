@@ -91,16 +91,16 @@ std::optional<ReceiverFit> receiverFit(const Camera& camera,double aspect,double
     return any?std::optional<ReceiverFit>{result}:std::nullopt;
 }
 }
-AtlasLayout atlasLayout(unsigned resolution,unsigned pointCapacity,unsigned directionalCapacity,unsigned cameras,bool gameplayContext,bool characterShadow) {
-    if(!resolution || resolution>65531 || pointCapacity>16 || directionalCapacity>4 || !cameras || cameras>2 ||
-        (gameplayContext && cameras!=2) || (!pointCapacity&&!directionalCapacity&&!characterShadow))return {};
+AtlasLayout atlasLayout(unsigned resolution,unsigned pointCapacity,unsigned directionalCapacity,unsigned cameras,bool gameplayContext,unsigned actorCapacity) {
+    if(!resolution || resolution>65531 || pointCapacity>16 || directionalCapacity>4 || actorCapacity>MaximumActorShadows || !cameras || cameras>2 ||
+        (gameplayContext && cameras!=2) || (!pointCapacity&&!directionalCapacity&&!actorCapacity))return {};
     AtlasLayout result;result.points=pointCapacity?point_shadow::atlasLayout(resolution,pointCapacity):point_shadow::AtlasLayout{};
     if(pointCapacity&&!result.points.width)return {};
     unsigned directional=directionalCapacity?1:0;while(directional<directionalCapacity)directional*=2;
     const unsigned pitch=resolution+4,pointColumns=result.points.columns,pointRows=result.points.rows;
     const unsigned blocks=directional*cameras;
     const unsigned targetColumns=blocks?2*static_cast<unsigned>(std::ceil(std::sqrt(double(blocks)))):0;
-    const unsigned columns=std::max({pointColumns,targetColumns,characterShadow?1u:0u}),blockColumns=std::max(1u,columns/2);
+    const unsigned columns=std::max({pointColumns,targetColumns,std::min(4u,actorCapacity)}),blockColumns=std::max(1u,columns/2);
     struct GridBlock {unsigned x{},y{},width{},height{};};
     std::array<std::array<GridBlock,MaxLights>,WorldCameraCount> packed{};
     unsigned directionalRows=blocks?2*((blocks+blockColumns-1)/blockColumns):0;
@@ -121,22 +121,21 @@ AtlasLayout atlasLayout(unsigned resolution,unsigned pointCapacity,unsigned dire
         }
     }
     unsigned rows=pointRows+directionalRows;
-    GridBlock character{};
-    if(characterShadow) {
-        // Reuse unused atlas padding before growing the rectangular allocation.
-        // The ordinary light blocks retain their existing tile identities.
+    std::array<GridBlock,MaximumActorShadows> actors{};
+    for(unsigned actor=0;actor<actorCapacity;++actor) {
         bool placed=false;
-        for(unsigned row=0;row<rows && !placed;++row)for(unsigned x=0;x<columns;++x) {
-            bool occupied=row<pointRows && x<pointColumns;
-            if(row>=pointRows)for(unsigned context=0;context<cameras && !occupied;++context)for(unsigned light=0;light<directional && !occupied;++light) {
+        for(unsigned row=0;row<rows&&!placed;++row)for(unsigned x=0;x<columns;++x) {
+            bool occupied=row<pointRows&&x<pointColumns;
+            if(row>=pointRows)for(unsigned context=0;context<cameras&&!occupied;++context)for(unsigned light=0;light<directional&&!occupied;++light) {
                 const unsigned block=context*directional+light;
                 const auto area=gameplayContext?packed[context][light]:GridBlock{(block%blockColumns)*2,(block/blockColumns)*2,2,2};
                 const auto y=row-pointRows;
-                occupied=x>=area.x && x<area.x+area.width && y>=area.y && y<area.y+area.height;
+                occupied=x>=area.x&&x<area.x+area.width&&y>=area.y&&y<area.y+area.height;
             }
-            if(!occupied){character={x,row,1,1};placed=true;break;}
+            for(unsigned previous=0;previous<actor&&!occupied;++previous)occupied=actors[previous].x==x&&actors[previous].y==row;
+            if(!occupied){actors[actor]={x,row,1,1};placed=true;break;}
         }
-        if(!placed){character={0,rows,1,1};++rows;}
+        if(!placed){actors[actor]={0,rows,1,1};++rows;}
     }
     if(!columns || pitch>65535/columns || !rows || pitch>65535/rows)return {};
     result.resolution=static_cast<std::uint16_t>(resolution);result.pitch=static_cast<std::uint16_t>(pitch);
@@ -144,8 +143,8 @@ AtlasLayout atlasLayout(unsigned resolution,unsigned pointCapacity,unsigned dire
     result.directionalCapacity=static_cast<std::uint16_t>(directional);result.cameraCount=static_cast<std::uint16_t>(cameras);
     result.directionalY=static_cast<std::uint16_t>(pointRows*pitch);result.blockColumns=static_cast<std::uint16_t>(blockColumns);
     result.gameplayContext=gameplayContext;
-    result.characterShadow=characterShadow;
-    if(characterShadow)result.characterTile={static_cast<std::uint16_t>(character.x*pitch),static_cast<std::uint16_t>(character.y*pitch),static_cast<std::uint16_t>(pitch),static_cast<std::uint16_t>(pitch)};
+    result.actorCapacity=static_cast<std::uint16_t>(actorCapacity);
+    for(unsigned actor=0;actor<actorCapacity;++actor)result.actorTiles[actor]={static_cast<std::uint16_t>(actors[actor].x*pitch),static_cast<std::uint16_t>(actors[actor].y*pitch),static_cast<std::uint16_t>(pitch),static_cast<std::uint16_t>(pitch)};
     if(gameplayContext)for(unsigned context=0;context<cameras;++context)for(unsigned light=0;light<directional;++light) {
         const auto& block=packed[context][light];
         result.directionalBlocks[context][light]={static_cast<std::uint16_t>(block.x*pitch),static_cast<std::uint16_t>((pointRows+block.y)*pitch),

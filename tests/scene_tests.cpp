@@ -1,4 +1,5 @@
 #include "scene/SceneDocument.h"
+#include "scene/SceneNames.h"
 #include "scene/EnvironmentSerialization.h"
 #include "editor/ViewportSelection.h"
 #include "assets/AtomicFile.h"
@@ -251,7 +252,7 @@ void viewportParentSelection() {
     const auto camera=document.createCamera();
     document.select({particle,light,camera});require(document.reparentSelection(branch),document.status());
     const auto other=document.createEmpty("Other object");
-    const auto character=document.createCharacter();
+    const auto character=document.createPlayer();
     document.select({character});require(document.reparentSelection(other),document.status());
     require(parent && branch && model && collider && particle && light && camera && other && character,"Viewport selection fixture failed.");
     require(viewportSelectionRoot(document.scene(),NoEntity)==NoEntity && viewportSelectionRoot(document.scene(),999)==NoEntity,
@@ -306,6 +307,81 @@ void subtreeCommands() {
     require(document.selection().ids.empty(),"Delete left stale selection IDs.");
     require(document.undo(),"Delete undo failed."); sameRecords(document.scene().records(),after);
     require(document.selection().ids==duplicateIds.ids,"Delete undo failed to restore selection.");
+}
+void duplicateNameFamilies() {
+    std::vector<EntityRecord> records;
+    for(const auto* name:{"Box","Box_1","Box_00007","box_050","Box_8_tail","Box_009"}) {
+        EntityRecord record;record.name=name;records.push_back(record);
+    }
+    SceneDuplicateNameAllocator names(records);
+    require(names.next("Box")=="Box_010"&&names.next("Box_001")=="Box_011"&&names.next("Box_7")=="Box_012"&&
+        names.next("box")=="box_051","Duplicate names did not continue case-sensitive scene-wide numeric families.");
+    const std::array<std::pair<std::string_view,std::string_view>,10> cases{{
+        {"","Entity_001"},{"Box","Box_001"},{"Box_000","Box_001"},{"Box_1_1","Box_1_002"},
+        {"Box_","Box__001"},{"_001","_001_001"},{"Box_+1","Box_+1_001"},{"Box_-1","Box_-1_001"},
+        {"Box_1tail","Box_1tail_001"},{"Box_\xD9\xA1","Box_\xD9\xA1_001"}}};
+    for(const auto& [source,expected]:cases) {
+        SceneDuplicateNameAllocator empty(std::span<const EntityRecord>{});
+        require(empty.next(source)==expected,"Duplicate suffix parsing diverged from the Quader naming policy.");
+    }
+    SceneDuplicateNameAllocator batch(std::span<const EntityRecord>{});
+    require(batch.next("Box")=="Box_001"&&batch.next("Box_001")=="Box_002"&&batch.next("Box_001")=="Box_003",
+        "Batch duplicate names did not reserve previous allocations.");
+    batch.reserve("Box_00100");require(batch.next("Box")=="Box_101"&&batch.next("Box_150")=="Box_151","Source and reserved suffix maxima were ignored.");
+    const std::string huge(80,'9');batch.reserve("Huge_"+huge);
+    require(batch.next("Huge")=="Huge_1"+std::string(80,'0')&&batch.next("Huge_001")=="Huge_1"+std::string(79,'0')+"1",
+        "Arbitrarily large duplicate suffixes overflowed.");
+    require(batch.next("Padded_"+std::string(80,'0')+"5")=="Padded_006","Long leading-zero suffixes were not normalized.");
+    TempProject project;SceneDocument document(project.root);const auto source=document.createEmpty("Box");
+    std::vector<EntityId> copies;
+    for(const auto* expected:{"Box_001","Box_002","Box_003"}) {
+        if(copies.size()==2)document.select({copies.front()});
+        require(document.duplicateSelection(),document.status());const auto copy=document.selection().primary;copies.push_back(copy);
+        require(document.scene().find(copy)->name==expected&&document.scene().find(source)->name=="Box","Duplicate name family or original name changed.");
+    }
+    const auto third=copies.back();require(document.undo()&&!document.scene().contains(third)&&document.redo()&&document.scene().find(third)->name=="Box_003",
+        "History replay allocated a new duplicate name or identity.");
+    require(document.undo()&&document.duplicateSelection()&&document.scene().find(document.selection().primary)->name=="Box_003",
+        "Replacing an undone duplicate failed to reuse its now-available suffix.");
+    require(document.save("Duplicate families"),document.status());SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
+    reopened.select({source});require(reopened.duplicateSelection()&&reopened.scene().find(reopened.selection().primary)->name=="Box_004",
+        "Duplicate naming ignored persisted scene-wide suffixes after reopen.");
+}
+void duplicateTransformTransactions() {
+    TempProject project;SceneDocument document(project.root);const auto actor=document.createPlayer("Hero");
+    const auto camera=document.scene().properties().activeCamera;
+    const auto visual=document.createModel("assets/models/actor/manifest.json","Body",math::scaling({-1,2,.5f}));
+    document.select({visual});require(document.reparentSelection(actor),document.status());
+    document.select({actor,visual},visual);const auto selection=document.selection();const auto before=document.scene().records();
+    const auto properties=document.scene().properties();const auto history=document.history().size();
+    require(document.beginDuplicateTransform("Duplicate and move",{actor,visual})&&document.transactionActive()&&document.history().size()==history,
+        "Duplicate transform committed its copies before the gesture finished.");
+    const auto roots=document.transformEditRoots();require(roots.size()==1&&roots.front()!=actor,"Duplicate transform roots retained originals or selected descendants twice.");
+    const auto copy=roots.front();const auto branch=document.scene().subtree(copy);
+    require(branch.size()==3&&document.selection().primary!=visual&&sameProperties(properties,document.scene().properties()),
+        "Duplicate transform lost hierarchy selection or stole active scene roles.");
+    bool copiedCamera=false,copiedVisual=false;
+    for(const auto id:branch) {
+        const auto record=*document.scene().find(id);
+        if(record.camera)copiedCamera=record.cameraFollow&&record.cameraFollow->target==copy&&record.name=="Camera_001"&&record.id!=camera;
+        if(record.model)copiedVisual=record.model->id=="assets/models/actor/manifest.json"&&record.name=="Body_001";
+    }
+    require(copiedCamera&&copiedVisual,"Duplicate transform did not remap camera ownership or allocate hierarchy names.");
+    require(!document.beginDuplicateTransform("Nested edit",{actor}),"Duplicate transform accepted an unrelated active transaction.");
+    const auto local=document.scene().find(copy)->local;
+    require(document.update([&](auto& records,auto&){for(auto& record:records)if(record.id==copy)record.local=math::translation({3,0,4})*local;}),document.status());
+    require(document.scene().find(actor)->local==std::find_if(before.begin(),before.end(),[&](const auto& record){return record.id==actor;})->local,
+        "Duplicate transform moved the original actor.");
+    require(document.commit()&&document.history().size()==history+1,"Duplicate and move did not produce one undo command.");
+    const auto moved=document.scene().records();const auto copiedSelection=document.selection();
+    require(document.undo()&&document.selection().ids==selection.ids&&document.selection().primary==selection.primary,"Duplicate transform undo failed to restore the original selection.");sameRecords(document.scene().records(),before);
+    require(document.redo()&&document.selection().ids==copiedSelection.ids,"Duplicate transform redo lost copied identities/selection.");sameRecords(document.scene().records(),moved);
+    require(document.undo()&&document.beginDuplicateTransform("Duplicate and rotate",{actor}),document.status());
+    const auto cancelRoot=document.transformEditRoots().front();
+    require(document.update([&](auto& records,auto&){for(auto& record:records)if(record.id==cancelRoot)record.local=math::rotation(math::axisAngle({0,1,0},.6));}),document.status());
+    document.cancel();sameRecords(document.scene().records(),before);
+    require(document.selection().ids==selection.ids&&document.selection().primary==selection.primary&&!document.transactionActive()&&
+        document.history().size()==history+1,"Cancel retained duplicate geometry, lost selection or added a command.");
 }
 
 void persistenceAndCatalog() {
@@ -518,7 +594,7 @@ void environmentsAndMigration() {
     require(migrated.records.size()==snapshot.records.size()+1 && readText(project.root/oldId)==contents,"Legacy migration rewrote its source.");
     SceneDocument opened(project.root); require(opened.load(oldId),opened.status());
     require(!opened.dirty() && resolveEnvironment(opened.scene()).exposure==1.7f,"Legacy migration lost settings or marked an equivalent load dirty.");
-    require(opened.save(),opened.status()); require(Json::parse(readText(project.root/oldId)).at("version")==15,"Explicit save did not write scene version 15.");
+    require(opened.save(),opened.status()); require(Json::parse(readText(project.root/oldId)).at("version")==17,"Explicit save did not write scene version 17.");
 }
 void environmentGlowHistoryAndMigration() {
     TempProject project;SceneDocument document(project.root);
@@ -626,7 +702,7 @@ void environmentModesPersistenceAndValidation() {
             rejects([&]{auto json=environmentSettingsJson(environment);json["fog"][field]=invalidValue;(void)readEnvironmentSettings(json);});
     require(document.save("Environment modes"),document.status());
     const auto saved=readText(project.root/document.assetId());
-    require(Json::parse(saved).at("version")==15,"Environment writer did not use scene v15.");
+    require(Json::parse(saved).at("version")==17,"Environment writer did not use scene v17.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
     require(!reopened.dirty() && sameEnvironment(resolveEnvironment(reopened.scene()),*edited.environment),"Environment settings did not survive reopening.");
     SceneDocument play(project.root);require(play.resetTransientFrom(document),play.status());
@@ -856,7 +932,7 @@ void particleReferencesAndPersistence() {
     invalid.particle=AssetRef<ParticleEffectAsset>{"assets/particles/../bad.crimson-particle"};
     require(!document.updateEntity(particle,invalid),"Particle traversal was accepted.");
     require(document.save("Particles"),document.status());const auto savedId=document.assetId();
-    const auto serialized=Json::parse(readText(project.root/savedId));require(serialized.at("version")==15,"Particle scene writer did not use version 15.");
+    const auto serialized=Json::parse(readText(project.root/savedId));require(serialized.at("version")==17,"Particle scene writer did not use version 17.");
     SceneDocument reopened(project.root);require(reopened.load(savedId),reopened.status());sameRecords(document.scene().records(),reopened.scene().records());
     require(!reopened.dirty() && reopened.scene().find(particle)->particle->id==effect,"Missing particle asset prevented clean scene reopening.");
     auto cleared=*reopened.scene().find(particle);cleared.particle=AssetRef<ParticleEffectAsset>{};
@@ -868,7 +944,7 @@ void particleReferencesAndPersistence() {
     const auto oldBytes=readText(project.root/legacy);SceneDocument old(project.root);require(old.load(legacy),old.status());
     require(!old.dirty() && readText(project.root/legacy)==oldBytes,"Version-two load rewrote its source or became dirty.");
     for(const auto& record:old.scene().records())require(!record.particle,"Version-two migration invented a particle component.");
-    require(old.save(),old.status());require(Json::parse(readText(project.root/legacy)).at("version")==15,"Explicit version-two save did not migrate to version fifteen.");
+    require(old.save(),old.status());require(Json::parse(readText(project.root/legacy)).at("version")==17,"Explicit version-two save did not migrate to version seventeen.");
 }
 void externalSceneChanges() {
     TempProject project; SceneDocument document(project.root);
@@ -1087,14 +1163,14 @@ int main() {
         reparentPreservesAffine();
         transactionsAndSelection();
         viewportParentSelection();
-        subtreeCommands();
+        subtreeCommands();duplicateNameFamilies();duplicateTransformTransactions();
         persistenceAndCatalog();
         dirtyTokensAndFailure();
         limitsAndHistoryBound();
         groupingAndBatchPlacement();
         environmentsAndMigration();environmentGlowHistoryAndMigration();environmentModesPersistenceAndValidation();environmentSunHistoryAndDuplication();environmentAmbientLightStorageAndHistory();
         particleReferencesAndPersistence();externalSceneChanges();preparedSceneOpening();preparedGlobalChanges();inspectorAffineTransactions();inspectorZeroScaleHistory();
-        std::cout << "Scene core: 22 groups passed.\n";
+        std::cout << "Scene core: 24 groups passed.\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "Scene core failed: " << error.what() << '\n';
