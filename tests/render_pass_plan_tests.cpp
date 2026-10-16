@@ -28,18 +28,20 @@ void error(const RenderPassPlan& plan,Error expected,const char* message) { chec
 
 void profiles() {
     for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game,RenderViewPurpose::MaterialPreview,RenderViewPurpose::ParticlePreview,RenderViewPurpose::Thumbnail}) {
-        for(bool glow:{false,true})for(bool grid:{false,true})for(bool ambient:{false,true}) {
+        for(bool glow:{false,true})for(bool grid:{false,true})for(bool ambient:{false,true})for(bool collisions:{false,true}) {
             RenderPassPlanConfig config;config.view={purpose,871};config.prepareEnvironment=true;
             config.worldShadows=purpose==RenderViewPurpose::Scene || purpose==RenderViewPurpose::Game || purpose==RenderViewPurpose::Thumbnail;
             config.ambientVisibility=ambient&&config.worldShadows;
             config.glow=glow && purpose!=RenderViewPurpose::Thumbnail;
             config.grid=grid && (purpose==RenderViewPurpose::Scene || purpose==RenderViewPurpose::ParticlePreview);
             config.picking=purpose==RenderViewPurpose::Scene;config.thumbnailReadback=purpose==RenderViewPurpose::Thumbnail;
+            config.collisionOverlays=collisions&&(purpose==RenderViewPurpose::Scene||purpose==RenderViewPurpose::Game);
             const auto plan=buildRenderPassPlan(config);check(bool(validateRenderPassPlan(plan)),"A supported view profile has an invalid plan.");
             check(plan.has(Kind::SceneColor) && plan.has(Kind::ModelDeformation) && plan.has(Kind::LightAssignment) && plan.has(Kind::ToneMap) && plan.has(Kind::Encode),"View lost a mandatory rendering stage.");
             check(plan.has(Kind::GlowExtract)==config.glow && plan.has(Kind::GlowHorizontal)==config.glow && plan.has(Kind::GlowVertical)==config.glow,"Glow feature did not add exactly the complete chain.");
             check(plan.has(Kind::Grid)==config.grid && plan.has(Kind::Picking)==config.picking && plan.has(Kind::PickReadback)==config.picking,"Grid or picking did not follow the view profile.");
             check(plan.has(Kind::ThumbnailReadback)==config.thumbnailReadback,"Thumbnail readback escaped its isolated profile.");
+            check(plan.has(Kind::CollisionOverlays)==config.collisionOverlays,"Collision overlays escaped their active view profile.");
             check(plan.has(Kind::DepthPrepass)==config.ambientVisibility&&plan.has(Kind::AmbientVisibility)==config.ambientVisibility&&
                 plan.has(Kind::AmbientPublish)==config.ambientVisibility,"Ambient feature did not add exactly its complete chain.");
             const auto& display=plan.bindings[static_cast<std::size_t>(Resource::Display)];
@@ -79,6 +81,7 @@ void ambientDependencies() {
         RenderPassPlanConfig config;config.view={purpose,14};config.ambientVisibility=true;config.prepareEnvironment=true;config.worldShadows=shadows;
         config.glow=purpose!=RenderViewPurpose::Thumbnail;config.grid=purpose==RenderViewPurpose::Scene;config.picking=config.grid;
         config.thumbnailReadback=purpose==RenderViewPurpose::Thumbnail;
+        config.collisionOverlays=purpose==RenderViewPurpose::Scene||purpose==RenderViewPurpose::Game;
         const auto correct=buildRenderPassPlan(config);check(bool(validateRenderPassPlan(correct)),"Complete ambient chain is invalid.");
         if(purpose==RenderViewPurpose::Scene&&shadows)check(correct.count==RenderPassPlan::MaximumPasses,"Maximum Scene feature profile lost fixed-capacity coverage.");
         const auto& depth=*correct.find(Kind::DepthPrepass);const auto& evaluate=*correct.find(Kind::AmbientVisibility);
@@ -134,6 +137,23 @@ void dependencyAndAccessFailures() {
     auto duplicated=correct;auto& encode=pass(duplicated,Kind::Encode);encode.resources[encode.resourceCount++]=encode.resources[0];error(duplicated,Error::DuplicateResourceUse,"Duplicate access may hide a feedback dependency.");
     auto invalidResource=correct;pass(invalidResource,Kind::Encode).resources[0].resource=Resource::Count;error(invalidResource,Error::InvalidResource,"Invalid resource index was accepted.");
 }
+void collisionComposition() {
+    for(const auto purpose:{RenderViewPurpose::Scene,RenderViewPurpose::Game})for(bool grid:{false,true}) {
+        RenderPassPlanConfig config;config.view.purpose=purpose;config.grid=grid&&purpose==RenderViewPurpose::Scene;config.collisionOverlays=true;
+        const auto correct=buildRenderPassPlan(config);check(bool(validateRenderPassPlan(correct)),"Collision composition has an invalid pass order.");
+        const auto& overlays=*correct.find(Kind::CollisionOverlays);
+        check(overlays.physicalView>=correct.find(Kind::ToneMap)->physicalView && overlays.physicalView<correct.find(Kind::Encode)->physicalView,
+            "Collision overlay escaped display-linear composition.");
+        check(overlays.resources[1]==RenderResourceUse{Resource::SceneDepth,Access::DepthRead},"Collision overlay lost its shared scene-depth test.");
+        auto writesDepth=correct;pass(writesDepth,Kind::CollisionOverlays).resources[1].access=Access::DepthWrite;
+        error(writesDepth,Error::InvalidAccess,"Collision overlay may replace the scene depth buffer.");
+        auto missingTone=correct;erase(missingTone,Kind::ToneMap);error(missingTone,Error::MissingProducer,"Collision overlay accepted unproduced display-linear color.");
+    }
+    for(const auto purpose:{RenderViewPurpose::Thumbnail,RenderViewPurpose::MaterialPreview,RenderViewPurpose::ParticlePreview}) {
+        RenderPassPlanConfig unsupported;unsupported.view.purpose=purpose;unsupported.collisionOverlays=true;
+        error(buildRenderPassPlan(unsupported),Error::UnsupportedFeature,"Collision overlays escaped into asset previews.");
+    }
+}
 
 void ownershipAndOrderFailures() {
     RenderPassPlanConfig config;config.view={RenderViewPurpose::Scene,4};config.worldShadows=true;config.prepareEnvironment=true;
@@ -170,7 +190,7 @@ void ownershipAndOrderFailures() {
 int main() {
     try {
         static_assert(std::is_trivially_copyable_v<RenderPassPlan>,"Pass plans must remain fixed-size CPU values.");
-        profiles();ambientDependencies();dependencyAndAccessFailures();ownershipAndOrderFailures();
+        profiles();ambientDependencies();dependencyAndAccessFailures();collisionComposition();ownershipAndOrderFailures();
         std::cout<<"Renderer pass-plan checks passed.\n";return 0;
     } catch(const std::exception& exception) {std::cerr<<exception.what()<<'\n';return 1;}
 }

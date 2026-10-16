@@ -1,6 +1,5 @@
 #pragma once
 #include "crimson-renderer/RenderTypes.h"
-#include "physics/StaticCollision.h"
 #include "editor/FrameMetrics.h"
 #include <optional>
 #include <span>
@@ -23,7 +22,6 @@ public:
     void setFrameTiming(FrameTiming timing) {frameTiming_=timing;newFrameTiming_=true;}
     void drawRoute(const Camera&,const std::optional<Vec3>& clickedGround,std::span<const Vec3> route,
                    const std::optional<Vec3>& characterPosition);
-    void drawCollisions(const Camera&,const Scene&,bool enabled,const CollisionMeshQuery& meshes = {});
     void drawPlayerLightRig(const Camera&,const Scene&);
 private:
     ImDrawList* imageDrawList_{};

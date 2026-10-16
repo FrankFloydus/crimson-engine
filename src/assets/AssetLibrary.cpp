@@ -1432,10 +1432,10 @@ size_t removeDeletedModels(SceneSnapshot& snapshot,const AssetReferenceManager& 
     std::unordered_set<EntityId> changedParents;
     for(const auto& record:snapshot.records)if(record.model&&deletedModels.contains(previous.resolve(record.model->id))&&next.resolve(record.model->id).empty())removed.insert(record.id);
     size_t clearedCollisions{};
-    for(auto& record:snapshot.records)if(record.meshCollider && !record.meshCollider->source.empty() &&
-        deletedModels.contains(previous.resolve(record.meshCollider->source.id))) {
-        const auto replacement=next.resolve(record.meshCollider->source.id);
-        if(record.meshCollider->source.id!=replacement){record.meshCollider->source=AssetRef<ModelAsset>{replacement};++clearedCollisions;}
+    for(auto& record:snapshot.records)if(record.collider && !record.collider->source.empty() &&
+        deletedModels.contains(previous.resolve(record.collider->source.id))) {
+        const auto replacement=next.resolve(record.collider->source.id);
+        if(record.collider->source.id!=replacement){record.collider->source=AssetRef<ModelAsset>{replacement};++clearedCollisions;}
     }
     if(removed.empty())return clearedCollisions;
     for(const auto& record:snapshot.records)if(removed.contains(record.id))changedParents.insert(record.parent);
@@ -1516,7 +1516,7 @@ void AssetLibrary::refreshReferenceIndex(const SceneDocument* active){
     }
     const auto addScene=[&](const std::vector<EntityRecord>& records,const std::string& id,const std::string& name,bool isActive){
         for(const auto& record:records){if(record.model)usages.push_back({record.model->id,id,name,record.name,isActive,false});
-            if(record.meshCollider && !record.meshCollider->source.empty())usages.push_back({record.meshCollider->source.id,id,name,record.name+" / Mesh collision",isActive,false});
+            if(record.collider && !record.collider->source.empty())usages.push_back({record.collider->source.id,id,name,record.name+" / Collider source",isActive,false});
             for(size_t slot=0;slot<record.modelMaterials.size();++slot)if(!record.modelMaterials[slot].empty())
                 usages.push_back({record.modelMaterials[slot].id,id,name,record.name+" / Material slot "+std::to_string(slot+1),isActive,false});
             if(record.particle&&!record.particle->empty())usages.push_back({record.particle->id,id,name,record.name+" / Particle effect",isActive,false});
@@ -1557,10 +1557,10 @@ AssetDeletionPlan AssetLibrary::planDeletion(const std::vector<std::string>& ids
         for(const auto& id:plan.assetIds){const auto users=references_.users(id);plan.usages.insert(plan.usages.end(),users.begin(),users.end());
             const auto authored=references_.authoredUsers(id,plan.assetIds);for(const auto& usage:authored)if(usableOwners.contains(usage.ownerId))plan.warningUsages.push_back(usage);}
         for(const auto& scene:scenes){size_t count=0;for(const auto& entity:scene.records)
-            if((entity.model&&models.contains(references_.resolve(entity.model->id)))||(entity.meshCollider&&!entity.meshCollider->source.empty()&&models.contains(references_.resolve(entity.meshCollider->source.id)))||(entity.particle&&!entity.particle->empty()&&particles.contains(references_.resolveParticle(entity.particle->id)))||
+            if((entity.model&&models.contains(references_.resolve(entity.model->id)))||(entity.collider&&!entity.collider->source.empty()&&models.contains(references_.resolve(entity.collider->source.id)))||(entity.particle&&!entity.particle->empty()&&particles.contains(references_.resolveParticle(entity.particle->id)))||
                 std::any_of(entity.modelMaterials.begin(),entity.modelMaterials.end(),[&](const auto& assigned){return !assigned.empty()&&materials.contains(references_.resolveMaterial(assigned.id));}))++count;
             if(count)plan.scenes.push_back({scene.id,scene.name,count});}
-        if(active){for(const auto& entity:active->scene().records())if((entity.model&&models.contains(references_.resolve(entity.model->id))) || (entity.meshCollider&&!entity.meshCollider->source.empty()&&models.contains(references_.resolve(entity.meshCollider->source.id))))plan.clearsActiveHistory=true;
+        if(active){for(const auto& entity:active->scene().records())if((entity.model&&models.contains(references_.resolve(entity.model->id))) || (entity.collider&&!entity.collider->source.empty()&&models.contains(references_.resolve(entity.collider->source.id))))plan.clearsActiveHistory=true;
             for(const auto& id:active->historicalModelReferences())if(models.contains(references_.resolve(id)))plan.clearsActiveHistory=true;
             for(const auto& entity:active->scene().records())for(const auto& assigned:entity.modelMaterials)
                 if(!assigned.empty()&&materials.contains(references_.resolveMaterial(assigned.id)))plan.clearsActiveHistory=true;

@@ -28,8 +28,8 @@ EntityId generatedId(const Scene& scene,EntityId owner,const std::string& key) {
 std::vector<EntityRecord> importRecords(EntityId owner,const std::string& version,bool oldLight=true) {
     EntityRecord visual;visual.id=1;visual.name="Floor";visual.model=AssetRef<ModelAsset>{"assets/models/"+version+"/manifest.json"};
     visual.local=math::translation({1,2,3});visual.quaderGenerated=QuaderGenerated{owner,"mesh/floor"};
-    EntityRecord collision;collision.id=2;collision.name="Floor collision";collision.parent=1;collision.meshCollider.emplace();
-    collision.meshCollider->source=AssetRef<ModelAsset>{"assets/models/"+version+"-collision/manifest.json"};collision.quaderGenerated=QuaderGenerated{owner,"collision/floor"};
+    EntityRecord collision;collision.id=2;collision.name="Floor collision";collision.parent=1;collision.collider.emplace();collision.collider->shape=ColliderShape::Trimesh;
+    collision.collider->source=AssetRef<ModelAsset>{"assets/models/"+version+"-collision/manifest.json"};collision.quaderGenerated=QuaderGenerated{owner,"collision/floor"};
     EntityRecord light;light.id=3;light.name="Light";light.directional.emplace();
     light.quaderGenerated=QuaderGenerated{owner,oldLight?"light/old":"light/new"};
     return {visual,collision,light};
@@ -47,14 +47,24 @@ void reimportIdentityHistoryAndAtomicFailure() {
     require(imported&&visual&&collision&&oldLight&&document.scene().find(imported)->parent==owner&&
         document.scene().find(visual)->parent==imported&&document.scene().find(collision)->parent==visual,"Import lost generated hierarchy or source identities.");
     require(document.scene().find(manual)->parent==owner&&document.scene().find(manual)->local==manualRecord.local,"Import changed a manual sibling.");
+    auto custom=*document.scene().find(collision);custom.collider->shape=ColliderShape::Capsule;
+    custom.collider->radius=.7f;custom.collider->height=3.2f;custom.collider->size={2,3,4};
+    custom.collider->showCollisionInGame=true;custom.collider->collisionColor={.2f,.4f,.6f,.8f};
+    custom.local=math::translation({.35f,.4f,-.2f}); // Center offset from a one-sided resize.
+    require(document.updateEntity(collision,custom),document.status());
     const auto environment=document.createEnvironment("Manual environment");auto env=*document.scene().find(environment);env.environment->sun=oldLight;
     require(document.updateEntity(environment,env)&&document.setActiveEnvironment(environment),document.status());
     document.select({manual},manual);const auto before=snapshot(document);const auto history=document.history().size();
     link.importScale=2;link.sceneId="replacement-scene";
-    require(document.replaceQuaderImport(owner,link,importRecords(owner,"generation-b",false)),document.status());
+    auto next=importRecords(owner,"generation-b",false);next[0].local=math::translation({5,6,7});
+    require(document.replaceQuaderImport(owner,link,next),document.status());
     require(document.history().size()==history+1&&document.dirty(),"Reimport did not create exactly one history command.");
     require(generatedId(document.scene(),owner,"Imported")==imported&&generatedId(document.scene(),owner,"mesh/floor")==visual&&
         generatedId(document.scene(),owner,"collision/floor")==collision,"Matching source keys lost persistent entity IDs.");
+    auto expected=*custom.collider;expected.source=AssetRef<ModelAsset>{"assets/models/generation-b-collision/manifest.json"};
+    require(document.scene().find(collision)->collider==expected,"Quader sync reset an authored collider shape, dimensions, or display instead of updating its source.");
+    require(document.scene().find(collision)->local==custom.local&&document.scene().find(visual)->local==next[0].local,
+        "Quader sync lost a resized primitive's center offset or stopped syncing its visual parent's source transform.");
     require(!document.scene().contains(oldLight)&&document.scene().find(environment)->environment->sun==NoEntity&&
         document.scene().properties().activeEnvironment==environment,"Removed generated light left an invalid external reference.");
     require(document.scene().find(manual)->name=="Manual child"&&document.scene().find(manual)->local==manualRecord.local&&
@@ -112,7 +122,7 @@ void independentLightSyncPolicy() {
         "Lights Sync off removed or changed unrelated authored lights.");
     require(generatedId(document.scene(),owner,"mesh/floor")==visual&&generatedId(document.scene(),owner,"mesh/floor/collision")==collision&&
         document.scene().find(visual)->model->id==replacement.meshes[0].modelId&&
-        document.scene().find(collision)->meshCollider->source.id==replacement.meshes[0].collisionModelId,
+        document.scene().find(collision)->collider->source.id==replacement.meshes[0].collisionModelId,
         "Lights Sync off interrupted geometry/collision replacement or persistent identities.");
     const auto after=snapshot(document);require(document.undo()&&snapshot(document)==before,"Light-sync import undo lost lights or policy.");
     require(document.redo()&&snapshot(document)==after,"Light-sync import redo lost removal or policy.");
@@ -140,7 +150,7 @@ void independentLightSyncPolicy() {
 void directionalCompatibilityAndMeshDefaults() {
     Project project;SceneDocument document(project.root);const auto sun=document.createDirectionalLight();
     require(document.scene().find(sun)->directional->castShadows,"New directional lights must enable shadows.");
-    auto serialized=nlohmann::json::parse(snapshot(document));require(serialized.at("version")==11,"New scenes did not use schema 11.");
+    auto serialized=nlohmann::json::parse(snapshot(document));require(serialized.at("version")==12,"New scenes did not use schema 12.");
     serialized["version"]=8;
     for(auto& entity:serialized["entities"])if(entity.contains("directional")) {
         entity["directional"].erase("castShadows");entity["directional"].erase("shadowDistance");
@@ -151,8 +161,8 @@ void directionalCompatibilityAndMeshDefaults() {
     const auto legacy=readSceneSnapshot(project.root,id);
     require(legacy.records.size()==1&&legacy.records[0].directional&&!legacy.records[0].directional->castShadows&&
         legacy.records[0].directional->shadowDistance==100,"Old directional lights gained shadows or invalid shadow defaults.");
-    EntityRecord marker;marker.id=1;marker.name="Cleared mesh collision";marker.meshCollider.emplace();
-    Scene scene;scene.apply({marker},{});require(scene.find(1)->meshCollider->source.empty(),"Cleared mesh collision marker was rejected.");
+    EntityRecord marker;marker.id=1;marker.name="Cleared mesh collision";marker.collider.emplace();marker.collider->shape=ColliderShape::Trimesh;
+    Scene scene;scene.apply({marker},{});require(scene.find(1)->collider->source.empty(),"Cleared mesh collision marker was rejected.");
 }
 void clusteredPointLightSceneImport() {
     Project project;SceneDocument document(project.root);const auto owner=document.createQuader();

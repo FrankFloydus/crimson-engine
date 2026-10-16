@@ -14,7 +14,10 @@ bool applyQuaderSceneImport(SceneDocument& document,EntityId owner,const QuaderL
     for(const auto& mesh:result.meshes) {
         auto& visual=append(mesh.sourceKey,mesh.name,mesh.local);const auto parent=visual.id;
         if(mesh.visible && !mesh.modelId.empty())visual.model=AssetRef<ModelAsset>{mesh.modelId};
-        if(!mesh.collisionModelId.empty())append(mesh.sourceKey+"/collision","Mesh Collider",Mat4{},parent).meshCollider=SceneMeshCollider{AssetRef<ModelAsset>{mesh.collisionModelId}};
+        if(!mesh.collisionModelId.empty()) {
+            auto& collision=append(mesh.sourceKey+"/collision","Mesh Collider",Mat4{},parent);collision.collider.emplace();
+            collision.collider->shape=ColliderShape::Trimesh;collision.collider->source=AssetRef<ModelAsset>{mesh.collisionModelId};
+        }
     }
     if(requested.syncLights)for(const auto& light:result.lights) {
         auto& record=append(light.sourceKey,light.name,light.local);

@@ -326,7 +326,7 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
     const auto contents=readText(path);
     const Json json=Json::parse(contents);
     const auto version=json.at("version").get<int>();
-    if ((version<1 || version>11) || json.at("type") != "crimson-scene")
+    if ((version<1 || version>12) || json.at("type") != "crimson-scene")
         throw std::runtime_error("Unsupported scene file type or version.");
     SceneSnapshot result; result.fingerprint=fingerprint(contents);
     result.name = json.at("name").get<std::string>();
@@ -413,7 +413,20 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
         }
         if (version>=4 && entity.contains("collider")) {
             const auto& c=entity.at("collider");
-            record.collider=SceneCollider{c.at("size").get<Vec3>()};
+            record.collider.emplace();
+            record.collider->size=c.value("size",record.collider->size);
+            if(version>=12) {
+                const auto shape=c.at("shape").get<std::string>();
+                if(shape=="box")record.collider->shape=ColliderShape::Box;
+                else if(shape=="sphere")record.collider->shape=ColliderShape::Sphere;
+                else if(shape=="cylinder")record.collider->shape=ColliderShape::Cylinder;
+                else if(shape=="capsule")record.collider->shape=ColliderShape::Capsule;
+                else if(shape=="trimesh")record.collider->shape=ColliderShape::Trimesh;
+                else throw std::runtime_error("Unknown collider shape.");
+                record.collider->radius=c.value("radius",record.collider->radius);
+                record.collider->height=c.value("height",record.collider->height);
+                if(c.contains("source"))record.collider->source=c.at("source").get<AssetRef<ModelAsset>>();
+            }
             record.collider->showCollisionInGame=c.value("showCollisionInGame",false);
             record.collider->collisionColor=readCollisionColor(c,record.collider->collisionColor);
         }
@@ -422,11 +435,12 @@ SceneSnapshot readScene(const std::filesystem::path& path) {
             record.camera=SceneCamera{c.at("verticalFov").get<float>(),c.at("near").get<float>(),c.at("far").get<float>(),
                 parseId(c.at("followTarget")),c.at("followOffset").get<Vec3>()};
         }
-        if(version>=9 && entity.contains("meshCollider")) {
-            const auto& c=entity.at("meshCollider");record.meshCollider.emplace();
-            record.meshCollider->source=c.at("source").get<AssetRef<ModelAsset>>();
-            record.meshCollider->showCollisionInGame=c.value("showCollisionInGame",false);
-            record.meshCollider->collisionColor=readCollisionColor(c,record.meshCollider->collisionColor);
+        if(version>=9 && version<=11 && entity.contains("meshCollider")) {
+            if(record.collider)throw std::runtime_error("Legacy scene contains both Box and mesh collision on one entity.");
+            const auto& c=entity.at("meshCollider");record.collider.emplace();record.collider->shape=ColliderShape::Trimesh;
+            record.collider->source=c.at("source").get<AssetRef<ModelAsset>>();
+            record.collider->showCollisionInGame=c.value("showCollisionInGame",false);
+            record.collider->collisionColor=readCollisionColor(c,record.collider->collisionColor);
         }
         if(version>=9 && entity.contains("quader")) {
             const auto& q=entity.at("quader");record.quader=QuaderLink{q.value("projectPath",std::string{}),
@@ -473,7 +487,7 @@ void canonicalizeSceneAssetRefs(SceneSnapshot& snapshot) {
         if(record.model)record.model->id=canonicalAssetId(record.model->id);
         for(auto& material:record.modelMaterials)material.id=canonicalAssetId(material.id);
         if(record.particle)record.particle->id=canonicalAssetId(record.particle->id);
-        if(record.meshCollider)record.meshCollider->source.id=canonicalAssetId(record.meshCollider->source.id);
+        if(record.collider)record.collider->source.id=canonicalAssetId(record.collider->source.id);
         if(record.environment)record.environment->environment.map=canonicalAssetId(record.environment->environment.map);
     }
 }
@@ -501,19 +515,19 @@ Json writeScene(const SceneSnapshot& snapshot) {
         if (record.character) { const auto& c=*record.character;entity["character"]={{"height",c.height},{"radius",c.radius},{"moveSpeed",c.moveSpeed},
             {"showRoute",c.showRoute},{"showCollisionInGame",c.showCollisionInGame},{"collisionColor",c.collisionColor},{"lightRig",lightRigJson(c.lightRig)},
             {"darknessReveal",{{"version",2},{"enabled",c.darknessReveal.enabled},{"spread",c.darknessReveal.spread}}}}; }
-        if (record.collider) { const auto& c=*record.collider;entity["collider"]={{"size",c.size},
-            {"showCollisionInGame",c.showCollisionInGame},{"collisionColor",c.collisionColor}}; }
+        if (record.collider) { const auto& c=*record.collider;
+            const auto shape=c.shape==ColliderShape::Box?"box":c.shape==ColliderShape::Sphere?"sphere":c.shape==ColliderShape::Cylinder?"cylinder":c.shape==ColliderShape::Capsule?"capsule":"trimesh";
+            entity["collider"]={{"shape",shape},{"size",c.size},{"radius",c.radius},{"height",c.height},{"source",c.source},
+                {"showCollisionInGame",c.showCollisionInGame},{"collisionColor",c.collisionColor}}; }
         if (record.camera) { const auto& c=*record.camera;entity["camera"]={{"verticalFov",c.verticalFov},{"near",c.nearPlane},{"far",c.farPlane},
             {"followTarget",hexId(c.followTarget)},{"followOffset",c.followOffset}}; }
-        if(record.meshCollider) {const auto& c=*record.meshCollider;entity["meshCollider"]={{"source",c.source},
-            {"showCollisionInGame",c.showCollisionInGame},{"collisionColor",c.collisionColor}};}
         if(record.quader) {const auto& q=*record.quader;entity["quader"]={{"projectPath",q.projectPath},{"projectId",q.projectId},
             {"sceneId",q.sceneId},{"importScale",q.importScale},{"autoSync",q.autoSync},{"refreshMaterials",q.refreshMaterials},
             {"saveKey",q.saveKey},{"syncLights",q.syncLights}};}
         if(record.quaderGenerated) {const auto& q=*record.quaderGenerated;entity["quaderGenerated"]={{"owner",hexId(q.owner)},{"sourceKey",q.sourceKey}};}
         entities.push_back(std::move(entity));
     }
-    Json result{{"version",11},{"type","crimson-scene"},{"name",snapshot.name},{"entities",std::move(entities)},
+    Json result{{"version",12},{"type","crimson-scene"},{"name",snapshot.name},{"entities",std::move(entities)},
         {"settings",{{"activeEnvironment",hexId(snapshot.properties.activeEnvironment)},
             {"activeCamera",hexId(snapshot.properties.activeCamera)},{"playerCharacter",hexId(snapshot.properties.playerCharacter)}}}};
     if(isAssetUuid(snapshot.id))result["id"]=snapshot.id;
@@ -529,8 +543,8 @@ enum EntityField : uint32_t {
     Name=1u<<0, Parent=1u<<1, Order=1u<<2, Local=1u<<3, Model=1u<<4, Particle=1u<<5,
     Directional=1u<<6, Point=1u<<7, Environment=1u<<8, Character=1u<<9, Collider=1u<<10, CameraField=1u<<11,
     ModelMaterialField=1u<<12, CastShadows=1u<<13, ReceiveShadows=1u<<14,
-    MeshColliderField=1u<<15,QuaderField=1u<<16,QuaderGeneratedField=1u<<17,LightingScopesField=1u<<18,
-    ModelAnimationField=1u<<19,AllEntityFields=(1u<<20)-1
+    QuaderField=1u<<15,QuaderGeneratedField=1u<<16,LightingScopesField=1u<<17,
+    ModelAnimationField=1u<<18,AllEntityFields=(1u<<19)-1
 };
 enum PropertyField : uint32_t { ActiveEnvironment=1u<<0,ActiveCamera=1u<<1,PlayerCharacter=1u<<2 };
 template<class T> bool equalLight(const std::optional<T>& a,const std::optional<T>& b) {
@@ -545,7 +559,7 @@ uint32_t changedFields(const EntityRecord& a,const EntityRecord& b) {
     if(a.character!=b.character)fields|=Character;if(a.collider!=b.collider)fields|=Collider;if(a.camera!=b.camera)fields|=CameraField;
     if(a.modelMaterials!=b.modelMaterials)fields|=ModelMaterialField;
     if(a.castShadows!=b.castShadows)fields|=CastShadows;if(a.receiveShadows!=b.receiveShadows)fields|=ReceiveShadows;
-    if(a.meshCollider!=b.meshCollider)fields|=MeshColliderField;if(a.quader!=b.quader)fields|=QuaderField;
+    if(a.quader!=b.quader)fields|=QuaderField;
     if(a.quaderGenerated!=b.quaderGenerated)fields|=QuaderGeneratedField;
     if(a.lightingScopes!=b.lightingScopes)fields|=LightingScopesField;
     if(a.modelAnimation!=b.modelAnimation)fields|=ModelAnimationField;
@@ -559,7 +573,7 @@ void copyFields(EntityRecord& target,const EntityRecord& source,uint32_t fields)
     if(fields&Collider)target.collider=source.collider;if(fields&CameraField)target.camera=source.camera;
     if(fields&ModelMaterialField)target.modelMaterials=source.modelMaterials;
     if(fields&CastShadows)target.castShadows=source.castShadows;if(fields&ReceiveShadows)target.receiveShadows=source.receiveShadows;
-    if(fields&MeshColliderField)target.meshCollider=source.meshCollider;if(fields&QuaderField)target.quader=source.quader;
+    if(fields&QuaderField)target.quader=source.quader;
     if(fields&QuaderGeneratedField)target.quaderGenerated=source.quaderGenerated;
     if(fields&LightingScopesField)target.lightingScopes=source.lightingScopes;
     if(fields&ModelAnimationField)target.modelAnimation=source.modelAnimation;
@@ -853,7 +867,7 @@ std::vector<std::string> SceneDocument::historicalModelReferences() const {
     std::unordered_set<std::string> references;
     const auto add=[&](const EntityRecord& record) {
         if (record.model) references.insert(record.model->id);
-        if(record.meshCollider && !record.meshCollider->source.empty())references.insert(record.meshCollider->source.id);
+        if(record.collider && !record.collider->source.empty())references.insert(record.collider->source.id);
     };
     for (const auto& command:history_.commands_) for (const auto& change:command.entities) {
         if (change.before) add(*change.before); if (change.after) add(*change.after);
@@ -1073,6 +1087,14 @@ bool SceneDocument::replaceQuaderImport(EntityId owner,const QuaderLink& link,co
                 }
                 if(record.point && previous->point)record.point->roles=previous->point->roles;
                 if(record.directional && previous->directional)record.directional->roles=previous->directional->roles;
+                if(record.collider && previous->collider) {
+                    const auto source=record.collider->source;
+                    record.collider=previous->collider;record.collider->source=source;
+                    // Primitive overrides own their local center/orientation as
+                    // well as dimensions. One-sided resizing moves that center.
+                    // The visual parent and generated mesh source still sync.
+                    if(previous->collider->shape!=ColliderShape::Trimesh)record.local=previous->local;
+                }
             }
             record.quaderGenerated->owner=owner;replacements.push_back(std::move(record));
         }
@@ -1144,7 +1166,7 @@ EntityId SceneDocument::createCharacter(const std::string& name) {
 }
 EntityId SceneDocument::createCollider(const std::string& name,EntityId parent) {
     EntityRecord record;record.name=name;record.parent=parent;record.collider.emplace();
-    return create(std::move(record),"Create box collider");
+    return create(std::move(record),"Create collider");
 }
 EntityId SceneDocument::createCamera(const std::string& name) {
     if(!begin("Create camera"))return NoEntity;
@@ -1325,7 +1347,7 @@ bool SceneDocument::ungroupSelection() {
     for (const auto id : scene_.topmost(selection_.ids)) {
         const auto record=scene_.find(id);
         if (record && !record->model && !record->particle && !record->directional && !record->point && !record->environment &&
-            !record->character && !record->collider && !record->meshCollider && !record->quader && !record->quaderGenerated && !record->camera && !scene_.children(id).empty()) groups.push_back(id);
+            !record->character && !record->collider && !record->quader && !record->quaderGenerated && !record->camera && !scene_.children(id).empty()) groups.push_back(id);
     }
     if (groups.empty()) { status_="Select a group to ungroup."; return false; }
     struct ChildMove { EntityId id,parent; Mat4 local; };

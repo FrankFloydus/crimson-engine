@@ -485,7 +485,7 @@ void environmentsAndMigration() {
     require(migrated.records.size()==snapshot.records.size()+1 && readText(project.root/oldId)==contents,"Legacy migration rewrote its source.");
     SceneDocument opened(project.root); require(opened.load(oldId),opened.status());
     require(!opened.dirty() && resolveEnvironment(opened.scene()).exposure==1.7f,"Legacy migration lost settings or marked an equivalent load dirty.");
-    require(opened.save(),opened.status()); require(Json::parse(readText(project.root/oldId)).at("version")==11,"Explicit save did not write scene version 11.");
+    require(opened.save(),opened.status()); require(Json::parse(readText(project.root/oldId)).at("version")==12,"Explicit save did not write scene version 12.");
 }
 void environmentGlowHistoryAndMigration() {
     TempProject project;SceneDocument document(project.root);
@@ -593,7 +593,7 @@ void environmentModesPersistenceAndValidation() {
             rejects([&]{auto json=environmentSettingsJson(environment);json["fog"][field]=invalidValue;(void)readEnvironmentSettings(json);});
     require(document.save("Environment modes"),document.status());
     const auto saved=readText(project.root/document.assetId());
-    require(Json::parse(saved).at("version")==11,"Environment writer did not use scene v11.");
+    require(Json::parse(saved).at("version")==12,"Environment writer did not use scene v12.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
     require(!reopened.dirty() && sameEnvironment(resolveEnvironment(reopened.scene()),*edited.environment),"Environment settings did not survive reopening.");
     SceneDocument play(project.root);require(play.resetTransientFrom(document),play.status());
@@ -823,7 +823,7 @@ void particleReferencesAndPersistence() {
     invalid.particle=AssetRef<ParticleEffectAsset>{"assets/particles/../bad.crimson-particle"};
     require(!document.updateEntity(particle,invalid),"Particle traversal was accepted.");
     require(document.save("Particles"),document.status());const auto savedId=document.assetId();
-    const auto serialized=Json::parse(readText(project.root/savedId));require(serialized.at("version")==11,"Particle scene writer did not use version 11.");
+    const auto serialized=Json::parse(readText(project.root/savedId));require(serialized.at("version")==12,"Particle scene writer did not use version 12.");
     SceneDocument reopened(project.root);require(reopened.load(savedId),reopened.status());sameRecords(document.scene().records(),reopened.scene().records());
     require(!reopened.dirty() && reopened.scene().find(particle)->particle->id==effect,"Missing particle asset prevented clean scene reopening.");
     auto cleared=*reopened.scene().find(particle);cleared.particle=AssetRef<ParticleEffectAsset>{};
@@ -835,7 +835,7 @@ void particleReferencesAndPersistence() {
     const auto oldBytes=readText(project.root/legacy);SceneDocument old(project.root);require(old.load(legacy),old.status());
     require(!old.dirty() && readText(project.root/legacy)==oldBytes,"Version-two load rewrote its source or became dirty.");
     for(const auto& record:old.scene().records())require(!record.particle,"Version-two migration invented a particle component.");
-    require(old.save(),old.status());require(Json::parse(readText(project.root/legacy)).at("version")==11,"Explicit version-two save did not migrate to version eleven.");
+    require(old.save(),old.status());require(Json::parse(readText(project.root/legacy)).at("version")==12,"Explicit version-two save did not migrate to version twelve.");
 }
 void externalSceneChanges() {
     TempProject project; SceneDocument document(project.root);

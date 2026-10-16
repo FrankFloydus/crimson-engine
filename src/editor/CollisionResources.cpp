@@ -2,6 +2,7 @@
 #include "assets/AssetLibrary.h"
 #include "assets/ContentStorage.h"
 #include "resources/StreamingModel.h"
+#include "scene/BuiltinModels.h"
 #include <limits>
 #include <stdexcept>
 
@@ -54,7 +55,7 @@ CollisionMeshResult CollisionResources::query(const std::string& id) {
         entry.sourceRevision=revision;
         ResourceRequestOptions options;options.variant="static-collision-"+std::to_string(revision);
         options.priority=ResourcePriority::Placement;options.retainLoader=false;
-        options.dependencies={resolveAssetPath(assets_.projectRoot(),resolved)};
+        if(!isBuiltinModel(resolved))options.dependencies={resolveAssetPath(assets_.projectRoot(),resolved)};
         entry.resource=resources_.request<StaticTriangleMesh>(AssetRef<StaticTriangleMesh>{resolved},[model](std::stop_token stop) {
             auto mesh=flatten(*model,stop);const auto bytes=sizeof(StaticTriangleMesh)+mesh->positions.size()*sizeof(Vec3)+mesh->indices.size()*sizeof(std::uint32_t);
             return ResourceLoadResult<StaticTriangleMesh>{mesh,bytes,mesh->fingerprint,{}};

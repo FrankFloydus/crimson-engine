@@ -49,7 +49,7 @@ void componentsAndStorage(){
     auto characterRecord=*document.scene().find(character);characterRecord.character->moveSpeed=7;require(document.updateEntity(character,characterRecord),document.status());
     require(document.save("Gameplay"),document.status());
     const auto snapshot=readSceneSnapshot(project.root,document.assetId());
-    require(Json::parse(serializeSceneSnapshot(snapshot)).at("version")==11,"Scene writer did not use version 11.");
+    require(Json::parse(serializeSceneSnapshot(snapshot)).at("version")==12,"Scene writer did not use version 12.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(document.scene().records(),reopened.scene().records());
     require(sameProperties(document.scene().properties(),reopened.scene().properties()),"Gameplay scene properties did not round-trip.");
     auto legacy=Json::parse(serializeSceneSnapshot(snapshot));legacy["version"]=3;legacy["settings"].erase("activeCamera");legacy["settings"].erase("playerCharacter");
@@ -118,6 +118,48 @@ void collisionDisplayStorageAndHistory(){
     require(!document.updateEntity(collider,invalid),"Out-of-range collision alpha was accepted.");
     invalid=box;invalid.collider->collisionColor[3]=0;
     require(document.updateEntity(collider,invalid),"Fully transparent collision color was rejected.");
+}
+
+void unifiedColliderStorageHistoryAndCompatibility() {
+    TempProject project;SceneDocument document(project.root);
+    const auto id=document.createCollider();auto authored=*document.scene().find(id);
+    authored.collider->size={2,3,4};authored.collider->radius=.7f;authored.collider->height=2.8f;
+    authored.collider->source=AssetRef<ModelAsset>{BuiltinBoxModelId};
+    authored.collider->showCollisionInGame=true;authored.collider->collisionColor={.1f,.3f,.7f,.6f};
+    const auto original=*document.scene().find(id);
+    for(const auto shape:{ColliderShape::Box,ColliderShape::Sphere,ColliderShape::Cylinder,ColliderShape::Capsule,ColliderShape::Trimesh}) {
+        authored.collider->shape=shape;require(document.updateEntity(id,authored),document.status());
+        require(document.undo()&&document.redo()&&document.scene().find(id)->collider==authored.collider,"Collider shape edit did not undo/redo all retained settings.");
+        require(document.save("Unified colliders"),document.status());SceneDocument loaded(project.root);
+        require(loaded.load(document.assetId())&&loaded.scene().find(id)->collider==authored.collider,"A collider shape lost retained dimensions/source/display on save/reopen.");
+        const auto json=Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,document.assetId())));
+        require(json.at("version")==12&&json.at("entities").at(0).contains("collider")&&!json.at("entities").at(0).contains("meshCollider"),"Unified collider writer retained the removed meshCollider representation.");
+        SceneDocument runtime(project.root);require(runtime.resetTransientFrom(document)&&runtime.scene().find(id)->collider==authored.collider,"Play copy lost unified collider settings.");
+    }
+    auto invalid=authored;invalid.collider->shape=static_cast<ColliderShape>(255);
+    require(!document.updateEntity(id,invalid),"An unknown ColliderShape was accepted.");
+    for(const auto value:{0.f,-1.f,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()}) {
+        invalid=authored;invalid.collider->radius=value;require(!document.updateEntity(id,invalid),"Invalid retained collider radius was accepted.");
+        invalid=authored;invalid.collider->height=value;require(!document.updateEntity(id,invalid),"Invalid retained collider height was accepted.");
+    }
+    invalid=authored;invalid.collider->shape=ColliderShape::Capsule;invalid.collider->height=.1f;
+    require(!document.updateEntity(id,invalid),"Capsule total height smaller than its diameter was accepted.");
+    invalid=authored;invalid.collider->source=AssetRef<ModelAsset>{DefaultMaterialId};
+    require(!document.updateEntity(id,invalid),"A protected material was accepted as a collider model source.");
+    invalid=authored;invalid.character.emplace();require(!document.updateEntity(id,invalid),"A Character and Trimesh Collider shared an entity.");
+    invalid.collider->shape=ColliderShape::Box;require(document.updateEntity(id,invalid),"A previously valid Character/Box combination was rejected.");
+    require(document.undo()&&document.scene().find(id)->collider==authored.collider,"Legacy Character/Box compatibility edit failed to undo.");
+    auto legacy=Json::parse(serializeSceneSnapshot({{},"Legacy colliders",{original},{},{}}));legacy["version"]=11;
+    auto& entity=legacy["entities"][0];for(const auto* field:{"shape","radius","height","source"})entity["collider"].erase(field);
+    const std::string legacyId="assets/scenes/legacy-unified-collider.crimson-scene";
+    const auto writeLegacy=[&]{const auto path=sceneAssetPath(project.root,legacyId);std::ofstream file(path);file<<legacy.dump();};
+    writeLegacy();auto loaded=readSceneSnapshot(project.root,legacyId);
+    require(loaded.records[0].collider==original.collider,"A v11 Box collider did not migrate with defaults.");
+    entity.erase("collider");entity["meshCollider"]={{"source","assets/models/legacy-collision/manifest.json"},{"showCollisionInGame",true},{"collisionColor",Vec4{.2f,.3f,.4f,.5f}}};
+    writeLegacy();loaded=readSceneSnapshot(project.root,legacyId);
+    require(loaded.records[0].collider&&loaded.records[0].collider->shape==ColliderShape::Trimesh&&loaded.records[0].collider->showCollisionInGame&&
+        loaded.records[0].collider->collisionColor==Vec4{.2f,.3f,.4f,.5f}&&!loaded.records[0].collider->source.empty(),"A v11 meshCollider did not migrate its source/display to Trimesh.");
+    const auto current=Json::parse(serializeSceneSnapshot(loaded));require(current.at("version")==12&&current["entities"][0]["collider"].at("shape")=="trimesh"&&!current["entities"][0].contains("meshCollider"),"Legacy collider conversion was not one-way on write.");
 }
 
 void runtimePatches(){
@@ -311,7 +353,7 @@ void pointFalloffAndSpecularStorageAndRuntime() {
         "Point falloff/specular redo lost the authored values.");
     require(document.save("Point falloff"),document.status());const auto authored=document.scene().records();
     const auto serialized=Json::parse(serializeSceneSnapshot(readSceneSnapshot(project.root,document.assetId())));
-    require(serialized.at("version")==11&&serialized["entities"][0]["point"].at("nearFalloffRadius")==2.75f&&
+    require(serialized.at("version")==12&&serialized["entities"][0]["point"].at("nearFalloffRadius")==2.75f&&
         serialized["entities"][0]["point"].at("specularStrength")==.35f&&serialized["entities"][0]["point"].at("attenuation")==1.25f,
         "Point falloff/specular fields did not persist in the current scene schema.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(authored,reopened.scene().records());
@@ -406,7 +448,7 @@ void shadowSettingsStorageHistoryAndExtraction(){
     require(document.save("Point shadows"),document.status());
     const auto snapshot=readSceneSnapshot(project.root,document.assetId());
     auto serialized=Json::parse(serializeSceneSnapshot(snapshot));
-    require(serialized.at("version")==11,"Scene writer did not retain the current version.");
+    require(serialized.at("version")==12,"Scene writer did not retain the current version.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());same(document.scene().records(),reopened.scene().records());
     for(const int version:{1,2,3,4}) {
         auto legacy=serialized;legacy["version"]=version;
@@ -994,7 +1036,7 @@ void modelAnimationStorageAndRuntime() {
         "Animation controls did not participate in scene history.");
     require(document.save("Animated scene"),document.status());
     const auto snapshot=readSceneSnapshot(project.root,document.assetId());const auto json=Json::parse(serializeSceneSnapshot(snapshot));
-    require(json.at("version")==11,"Animation writer did not use scene schema 11.");
+    require(json.at("version")==12,"Animation writer did not use scene schema 12.");
     SceneDocument reopened(project.root);require(reopened.load(document.assetId()),reopened.status());
     same(document.scene().records(),reopened.scene().records());
     const auto history=document.history().size();const auto records=document.scene().records();
@@ -1031,4 +1073,4 @@ void modelAnimationStorageAndRuntime() {
         "Duplicating a model lost its playback settings.");
 }
 }
-int main(){try{componentsAndStorage();collisionDisplayStorageAndHistory();runtimePatches();followAndHierarchy();followDependenciesAndAtomicFailure();parentFollowKeepsWorldOffset();boxMaterialAndPointRadius();importedMaterialSlots();pointFalloffAndSpecularStorageAndRuntime();shadowSettingsStorageHistoryAndExtraction();environmentToneMappingStorageAndRuntime();environmentAmbientLightRuntime();lightingRolesRigStorageAndRuntime();localRigSharesPointSourceBudget();modelAnimationStorageAndRuntime();std::cout<<"Gameplay scene tests passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}
+int main(){try{componentsAndStorage();collisionDisplayStorageAndHistory();unifiedColliderStorageHistoryAndCompatibility();runtimePatches();followAndHierarchy();followDependenciesAndAtomicFailure();parentFollowKeepsWorldOffset();boxMaterialAndPointRadius();importedMaterialSlots();pointFalloffAndSpecularStorageAndRuntime();shadowSettingsStorageHistoryAndExtraction();environmentToneMappingStorageAndRuntime();environmentAmbientLightRuntime();lightingRolesRigStorageAndRuntime();localRigSharesPointSourceBudget();modelAnimationStorageAndRuntime();std::cout<<"Gameplay scene tests passed.\n";return 0;}catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

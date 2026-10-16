@@ -2,9 +2,8 @@
 #include "ViewportAssetDrop.h"
 #include "ViewportSelection.h"
 #include "CollisionWire.h"
-#include "CollisionOverlay.h"
-#include "MeshCollisionOverlay.h"
 #include "PlayerLightRigOverlay.h"
+#include "ColliderGizmoUi.h"
 #include "assets/AssetLibrary.h"
 #include "crimson-renderer/ImGuiBgfx.h"
 #include "scene/SceneExtraction.h"
@@ -34,7 +33,7 @@ float segmentDistance(ImVec2 point, ImVec2 start, ImVec2 end) {
     return std::hypot(point.x-start.x-t*x,point.y-start.y-t*y);
 }
 float gameplayMarker(ImDrawList& draw,const EntityRecord& record,const Mat4& world,const Mat4& vp,
-                     const Vec4& viewport,ImU32 color,ImVec2 mouse,const CollisionMeshQuery& meshes = {}) {
+                     const Vec4& viewport,ImU32 color,ImVec2 mouse) {
     float distance=1e9f;
     const auto line=[&](Vec3 a,Vec3 b) {
         const auto projected=projectClippedSegment(math::transformPoint(world,a),math::transformPoint(world,b),vp,viewport);
@@ -42,16 +41,8 @@ float gameplayMarker(ImDrawList& draw,const EntityRecord& record,const Mat4& wor
         const ImVec2 start((*projected)[0][0],(*projected)[0][1]),end((*projected)[1][0],(*projected)[1][1]);
         draw.AddLine(start,end,color,1.5f);distance=std::min(distance,segmentDistance(mouse,start,end));
     };
-    const auto collisionLine=[&](ImVec2 start,ImVec2 end) { distance=std::min(distance,segmentDistance(mouse,start,end)); };
-    if(record.meshCollider && meshes)if(const auto source=meshes(record.meshCollider->source.id);source.mesh)
-        drawCollisionOverlay(draw,meshCollisionDebug(source.mesh),[](const Vec3& point){return point;},world,vp,viewport,record.meshCollider->collisionColor,collisionLine);
-    if(record.collider)drawCollisionOverlay(draw,boxCollisionMesh(),[&](const Vec3& point) {
-        const auto& size=record.collider->size;return Vec3{point[0]*size[0],point[1]*size[1],point[2]*size[2]};
-    },world,vp,viewport,record.collider->collisionColor,collisionLine);
     if(record.character) {
         const auto radius=record.character->radius,height=record.character->height;
-        drawCollisionOverlay(draw,capsuleCollisionMesh(height,radius),[&](const Vec3& point) { return capsuleCollisionPoint(point,height,radius); },
-            world,vp,viewport,record.character->collisionColor,collisionLine);
         line({0,height*.5f,0},{0,height*.5f,-radius*2});
     }
     if(record.camera) {
@@ -109,7 +100,8 @@ void SceneViewport::select(SceneDocument& document, EntityId id, bool toggle, bo
 }
 void SceneViewport::cancel(SceneDocument& document, Renderer& renderer) {
     if (dragging_) document.cancel();
-    waitForRelease_ = waitForRelease_ || dragging_;
+    waitForRelease_ = waitForRelease_ || dragging_ || colliderDrag_.active();
+    colliderDrag_.cancel(document);
     ImGuizmo::Enable(false);
     dragging_ = false; roots_.clear(); renderer.cancelPicking(); ++serial_;
     pickIntent_=false;
@@ -142,7 +134,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
     gizmoStyle.Colors[ImGuizmo::TEXT_SHADOW].w=0;
     const auto cameraView = camera.viewMatrix();
     if (previousSelection_ != document.selection().ids || previousView_ != cameraView ||
-        (!dragging_ && selectionGeneration_ != document.scene().generation()) ||
+        (!dragging_ && !colliderDrag_.active() && selectionGeneration_ != document.scene().generation()) ||
         ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         // A new click supersedes the prior asynchronous intent before its
         // readback can clear selection or let a newly appeared gizmo claim it.
@@ -189,7 +181,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                 (pickSize_!=Vec2{size.x,size.y} || pickProjection_!=projection || pickView_!=view ||
                  intentGeneration_!=document.scene().generation() || intentRevision_!=document.scene().revision());
             if((materialDrop_.active() || !frame.materialDragId.empty()) && ImGui::IsKeyPressed(ImGuiKey_Escape,false))materialDropCanceled_=true;
-            const bool materialBlocked=blockKeys || keyboardBlocked || dragging_ || document.transactionActive() || materialDropCanceled_;
+            const bool materialBlocked=blockKeys || keyboardBlocked || dragging_ || colliderDrag_.active() || document.transactionActive() || materialDropCanceled_;
             if(materialDrop_.active() && (materialBlocked || materialContextChanged ||
                 (frame.materialDragId.empty() && !materialDrop_.delivered()))) {
                 materialDrop_.cancel();renderer.cancelPicking();++serial_;
@@ -247,9 +239,16 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             draw->ChannelsSplit(2);
             draw->ChannelsSetCurrent(1);
             bool overGizmo = false;
+            const auto colliderHandles=drawColliderGizmo(*draw,document,colliderDrag_,vp,viewport,showCollisions,
+                imageHovered && !waitForRelease_ && !blockKeys && !keyboardBlocked && !dragging_ && !materialDrop_.active() &&
+                !frame.materialAssignment && ImGui::GetDragDropPayload()==nullptr && (!document.transactionActive() || colliderDrag_.active()),
+                editorFocus,blockKeys || keyboardBlocked || ImGui::IsKeyPressed(ImGuiKey_Escape,false));
+            if(colliderHandles.started || colliderHandles.canceled) {renderer.cancelPicking();pickIntent_=false;++serial_;}
+            if(colliderHandles.canceled)waitForRelease_=true;
+            overGizmo=colliderHandles.hovered;
             if (!showTransformGizmo && dragging_) cancel(document,renderer);
             if (!showTransformGizmo) ImGuizmo::Enable(false);
-            if (showTransformGizmo && !waitForRelease_ && !materialDrop_.active() && !frame.materialAssignment &&
+            if (showTransformGizmo && !waitForRelease_ && !colliderHandles.hovered && !colliderDrag_.active() && !materialDrop_.active() && !frame.materialAssignment &&
                 !document.selection().ids.empty() && !navigationActive && (!document.transactionActive() || dragging_)) {
                 if (!dragging_) {
                     const auto top = document.scene().topmost(document.selection().ids);
@@ -267,7 +266,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                 ImGuizmo::Enable(front && !blockKeys && ImGui::GetDragDropPayload() == nullptr);
                 const bool changed = front && ImGuizmo::Manipulate(view.data(),projection.data(),static_cast<ImGuizmo::OPERATION>(operation_),
                     ImGuizmo::WORLD,proxy_.data());
-                overGizmo = front && ImGuizmo::IsOver();
+                overGizmo |= front && ImGuizmo::IsOver();
                 if (ImGuizmo::IsUsing() && !dragging_) {
                     ImGui::SetWindowFocus();
                     roots_.clear();
@@ -301,7 +300,7 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             // heading and the light submitted later in the frame agree exactly.
             EntityId iconHit{}; float iconDistance = 15.0f;
             for (const auto& record : document.scene().records()) {
-                if (!record.directional && !record.point && !record.particle && !record.collider && !record.meshCollider && !record.character && !record.camera && (record.model || record.parent)) continue;
+                if (!record.directional && !record.point && !record.particle && !record.collider && !record.character && !record.camera && (record.model || record.parent)) continue;
                 const auto world = document.scene().worldTransform(record.id);
                 if (!world) continue;
                 const auto position = math::transformPoint(*world,{0,0,0});
@@ -311,11 +310,11 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                 const auto color = WireColor;
                 float distance = centerVisible?std::hypot(center.x-ImGui::GetIO().MousePos.x,center.y-ImGui::GetIO().MousePos.y):1e9f;
                 if(record.point && selected(document,record.id))pointLightRange(*draw,position,record.point->radius,vp,viewport,color);
-                if (record.collider || record.character || record.meshCollider) {
+                if (record.collider || record.character) {
                     if(!showCollisions)continue;
-                    const auto& rgba=record.character ? record.character->collisionColor : record.collider?record.collider->collisionColor:record.meshCollider->collisionColor;
+                    const auto& rgba=record.character ? record.character->collisionColor : record.collider->collisionColor;
                     const auto collisionColor=ImGui::ColorConvertFloat4ToU32({rgba[0],rgba[1],rgba[2],rgba[3]});
-                    distance=std::min(distance,gameplayMarker(*draw,record,*world,vp,viewport,collisionColor,ImGui::GetIO().MousePos,collisionMeshes_));
+                    distance=std::min(distance,gameplayMarker(*draw,record,*world,vp,viewport,collisionColor,ImGui::GetIO().MousePos));
                 }
                 else if(record.camera)distance=std::min(distance,gameplayMarker(*draw,record,*world,vp,viewport,color,ImGui::GetIO().MousePos));
                 else if(!centerVisible)continue;
@@ -333,21 +332,22 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
             // Selection outlines stay above collision wires, including a Box
             // Collider whose edges coincide exactly with its selected parent.
             // Authored bounds also keep particle children from animating this box.
-            const auto selectionBounds=boundsOf(document,assets,{},collisionMeshes_);
             const auto& selection=document.selection().ids;
             const bool pointLightsOnly=!selection.empty() && std::all_of(selection.begin(),selection.end(),[&](EntityId id) {
                 const auto entity=document.scene().find(id);return entity && entity->point.has_value();
             });
-            if (selectionBounds.valid && !pointLightsOnly) {
-                const auto center=(selectionBounds.minimum+selectionBounds.maximum)*.5f;
-                boxWireSegments(selectionBounds.maximum-selectionBounds.minimum,[&](Vec3 a,Vec3 b) {
-                    if(const auto line=projectClippedSegment(center+a,center+b,vp,viewport))
+            if(!pointLightsOnly)for(const auto& box:selectionBoxes(document.scene(),selection,[&](const std::string& id)->std::optional<Aabb> {
+                const auto model=assets.findModel(id);return model?std::optional<Aabb>{model->bounds}:std::nullopt;
+            },collisionMeshes_)) {
+                const auto center=(box.local.minimum+box.local.maximum)*.5f;
+                boxWireSegments(box.local.maximum-box.local.minimum,[&](Vec3 a,Vec3 b) {
+                    if(const auto line=projectClippedSegment(math::transformPoint(box.world,center+a),math::transformPoint(box.world,center+b),vp,viewport))
                         draw->AddLine({(*line)[0][0],(*line)[0][1]},{(*line)[1][0],(*line)[1][1]},WireColor);
                 });
             }
             draw->ChannelsMerge();
             draw->PopClipRect();
-            if (imageHovered && !blockKeys && !overGizmo && !dragging_ && !materialDrop_.active() && !frame.materialAssignment && !document.transactionActive() &&
+            if (imageHovered && !blockKeys && !overGizmo && !dragging_ && !colliderDrag_.active() && !waitForRelease_ && !materialDrop_.active() && !frame.materialAssignment && !document.transactionActive() &&
                 ImGui::GetDragDropPayload() == nullptr && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                 ImGui::SetWindowFocus();
                 if (iconHit) { renderer.cancelPicking(); select(document,iconHit,ImGui::GetIO().KeyCtrl,ImGui::GetIO().KeyShift); }
@@ -364,11 +364,12 @@ EditorFrame SceneViewport::draw(Camera& camera, SceneDocument& document, AssetLi
                     pickIntent_=renderer.requestPick({intentGeneration_,intentRevision_,intentSerial_,pickX_,pickY_,renderer.streamingSignature()});
                 }
             }
-            frame.viewport.inputBlocked |= dragging_ || materialDrop_.active() || frame.materialAssignment.has_value() ||
+            frame.viewport.inputBlocked |= dragging_ || colliderDrag_.active() || materialDrop_.active() || frame.materialAssignment.has_value() ||
                 (overGizmo && !blockKeys) || document.transactionActive() || ImGui::GetDragDropPayload() != nullptr;
         }
     }
     ImGui::End();
+    if(colliderDrag_.active() && (frame.viewport.width<=0 || frame.viewport.height<=0))cancel(document,renderer);
     if(materialDrop_.active() && (frame.viewport.width<=0 || frame.viewport.height<=0)) {
         materialDrop_.cancel();renderer.cancelPicking();++serial_;
     }

@@ -5,6 +5,7 @@
 #include "assets/ModelImportIdentity.h"
 #include "editor/CollisionResources.h"
 #include "resources/StreamingModel.h"
+#include "scene/BuiltinModels.h"
 #include "model_fixtures.h"
 #include <algorithm>
 #include <array>
@@ -460,6 +461,9 @@ void collisionResourceIntegration() {
             model_test::writeBytes(originalFile,damaged);
         } else originalBytes=readBytes(originalFile);
         CollisionMeshResult accepted;
+        CollisionMeshResult builtin;
+        until([&]{builtin=collisions.query(BuiltinBoxModelId);return builtin.current;},[](bool ready){return ready;},"Builtin Box Trimesh collision did not prepare.");
+        require(builtin.mesh&&builtin.mesh->indices.size()==36,"Builtin Box collision omitted its original triangle geometry.");
         until([&]{accepted=collisions.query(imported->id);return accepted.current;},[](bool ready){return ready;},"Original collision resource failed to load/recover: "+library.modelDiagnostic(imported->id));
         requireOriginalCollision(accepted);
         if(damageCache) {

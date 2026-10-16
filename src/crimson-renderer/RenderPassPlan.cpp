@@ -75,6 +75,8 @@ RenderPass makePass(Kind kind,const RenderPassPlanConfig& config) noexcept {
         pass.physicalView=slots.present;use(Resource::SceneHdr,Access::Read);if(config.glow)use(Resource::GlowA,Access::Read);use(Resource::Composite,Access::Write);break;
     case Kind::Grid:
         pass.physicalView=slots.grid;use(Resource::SceneDepth,Access::DepthRead);use(Resource::Composite,Access::ReadWrite);break;
+    case Kind::CollisionOverlays:
+        pass.physicalView=slots.collisions;use(Resource::PreparedScene,Access::Read);use(Resource::SceneDepth,Access::DepthRead);use(Resource::Composite,Access::ReadWrite);break;
     case Kind::Encode:
         pass.physicalView=slots.encode;use(Resource::Composite,Access::Read);use(Resource::Display,Access::Write);break;
     case Kind::Picking:
@@ -94,6 +96,7 @@ bool expected(Kind kind,const RenderPassPlanConfig& config) noexcept {
     case Kind::DepthPrepass: case Kind::AmbientVisibility: case Kind::AmbientPublish: return config.ambientVisibility;
     case Kind::GlowExtract: case Kind::GlowHorizontal: case Kind::GlowVertical: return config.glow;
     case Kind::Grid: return config.grid;
+    case Kind::CollisionOverlays:return config.collisionOverlays;
     case Kind::Picking: case Kind::PickReadback: return config.picking;
     case Kind::ThumbnailReadback: return config.thumbnailReadback;
     case Kind::ModelDeformation: case Kind::LightAssignment: case Kind::SceneColor: case Kind::ToneMap: case Kind::Encode: return true;
@@ -109,9 +112,9 @@ RenderPassPlanValidation failure(RenderPassPlanError error,std::size_t pass=0,Re
 RenderViewPassSlots renderViewPassSlots(RenderViewPurpose purpose) noexcept {
     switch(purpose) {
     case RenderViewPurpose::Scene:
-        return {SceneView,PresentView,GridView,EncodeView,SceneView+1,SceneView+2,SceneView+3,PointShadowView,DirectionalShadowView,SceneDepthPrepassView,SceneAmbientView,CharacterShadowView};
+        return {SceneView,PresentView,GridView,EncodeView,SceneView+1,SceneView+2,SceneView+3,PointShadowView,DirectionalShadowView,SceneDepthPrepassView,SceneAmbientView,CharacterShadowView,GridView};
     case RenderViewPurpose::Game:
-        return {GameSceneView,GamePresentView,InvalidRenderView,GameEncodeView,GameSceneView+1,GameSceneView+2,GameSceneView+3,PointShadowView,GameDirectionalShadowView,GameDepthPrepassView,GameAmbientView,CharacterShadowView};
+        return {GameSceneView,GamePresentView,InvalidRenderView,GameEncodeView,GameSceneView+1,GameSceneView+2,GameSceneView+3,PointShadowView,GameDirectionalShadowView,GameDepthPrepassView,GameAmbientView,CharacterShadowView,GamePresentView};
     case RenderViewPurpose::MaterialPreview:
         return {MaterialPreviewView,MaterialPreviewView+4,MaterialPreviewView+5,MaterialPreviewView+6,MaterialPreviewView+1,MaterialPreviewView+2,MaterialPreviewView+3,InvalidRenderView,InvalidRenderView};
     case RenderViewPurpose::ParticlePreview:
@@ -160,6 +163,7 @@ RenderPassPlanValidation validateRenderPassPlan(const RenderPassPlan& plan) noex
        (config.picking && purpose!=RenderViewPurpose::Scene) ||
        (config.thumbnailReadback && purpose!=RenderViewPurpose::Thumbnail) ||
        (config.worldShadows && !isWorld(purpose)) ||
+       (config.collisionOverlays && purpose!=RenderViewPurpose::Scene && purpose!=RenderViewPurpose::Game) ||
        (config.ambientVisibility && !isWorld(purpose)))return failure(RenderPassPlanError::UnsupportedFeature);
     if(plan.count>plan.entries.size())return failure(RenderPassPlanError::CapacityExceeded);
     std::array<bool,RenderPassPlan::ResourceCount> available{};
@@ -187,7 +191,12 @@ RenderPassPlanValidation validateRenderPassPlan(const RenderPassPlan& plan) noex
                     plan.entries[i-1].kind==Kind::EnvironmentPreparation)));
             const bool ambientCompute=pass.kind==Kind::AmbientPublish && plan.entries[i-1].kind==Kind::AmbientVisibility &&
                 pass.physicalView==plan.entries[i-1].physicalView;
-            if(!sharedCompute&&!ambientCompute)return failure(RenderPassPlanError::PhysicalOrder,i);
+            // Game reuses its post-tone-map view; Scene reuses the grid view.
+            // Both submit sequentially into the same color/depth framebuffer.
+            const bool postOverlay=pass.kind==Kind::CollisionOverlays &&
+                (plan.entries[i-1].kind==Kind::ToneMap || plan.entries[i-1].kind==Kind::Grid) &&
+                pass.physicalView==plan.entries[i-1].physicalView;
+            if(!sharedCompute&&!ambientCompute&&!postOverlay)return failure(RenderPassPlanError::PhysicalOrder,i);
         }
         if(pass.resourceCount>pass.resources.size())return failure(RenderPassPlanError::CapacityExceeded,i);
         std::array<bool,RenderPassPlan::ResourceCount> used{};

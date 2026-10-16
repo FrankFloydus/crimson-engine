@@ -1,8 +1,6 @@
 #include "GameView.h"
 #include "GameViewInteraction.h"
 #include "editor/CollisionWire.h"
-#include "editor/CollisionOverlay.h"
-#include "editor/MeshCollisionOverlay.h"
 #include "editor/PlayerLightRigOverlay.h"
 #include "scene/SceneDocument.h"
 #include "scene/SceneExtraction.h"
@@ -129,29 +127,6 @@ void GameView::drawRoute(const Camera& camera,const std::optional<Vec3>& clicked
             return world;
         };
         line(point(segment),point(segment+1),1.25f);
-    }
-    imageDrawList_->PopClipRect();
-}
-void GameView::drawCollisions(const Camera& camera,const Scene& scene,bool enabled,const CollisionMeshQuery& meshes) {
-    if(!enabled || !imageDrawList_ || !imageWidth_ || !imageHeight_)return;
-    const auto matrix=camera.projectionMatrix(static_cast<float>(imageWidth_)/imageHeight_,ClipDepth::ZeroToOne)*camera.viewMatrix();
-    const Vec4 rectangle{imageRegion_.x,imageRegion_.y,imageRegion_.width,imageRegion_.height};
-    imageDrawList_->PushClipRect({rectangle[0],rectangle[1]},{rectangle[0]+rectangle[2],rectangle[1]+rectangle[3]},true);
-    for(const auto& record:scene.records()) {
-        const bool character=record.character && record.character->showCollisionInGame;
-        const bool collider=record.collider && record.collider->showCollisionInGame;
-        const bool meshCollider=record.meshCollider && record.meshCollider->showCollisionInGame && meshes;
-        if(!character && !collider && !meshCollider)continue;
-        const auto world=scene.worldTransform(record.id);if(!world)continue;
-        const auto line=[](ImVec2,ImVec2) {};
-        if(meshCollider)if(const auto source=meshes(record.meshCollider->source.id);source.mesh)
-            drawCollisionOverlay(*imageDrawList_,meshCollisionDebug(source.mesh),[](const Vec3& point){return point;},*world,matrix,rectangle,record.meshCollider->collisionColor,line,ClipDepth::ZeroToOne);
-        if(collider)drawCollisionOverlay(*imageDrawList_,boxCollisionMesh(),[&](const Vec3& point) {
-            const auto& size=record.collider->size;return Vec3{point[0]*size[0],point[1]*size[1],point[2]*size[2]};
-        },*world,matrix,rectangle,record.collider->collisionColor,line,ClipDepth::ZeroToOne);
-        if(character)drawCollisionOverlay(*imageDrawList_,capsuleCollisionMesh(record.character->height,record.character->radius),[&](const Vec3& point) {
-            return capsuleCollisionPoint(point,record.character->height,record.character->radius);
-        },*world,matrix,rectangle,record.character->collisionColor,line,ClipDepth::ZeroToOne);
     }
     imageDrawList_->PopClipRect();
 }

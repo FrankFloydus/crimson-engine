@@ -75,12 +75,13 @@ void ShaderReloadSession::pump() {
         ready.emplace(name,snapshot);
     }
     struct Pair { RendererProgram program; const char* vertex; const char* fragment; };
-    constexpr std::array<Pair,12> definitions{{
+    constexpr std::array<Pair,13> definitions{{
         {RendererProgram::Sphere,"vs_pbr","fs_pbr"},{RendererProgram::Model,"vs_model","fs_model"},
         {RendererProgram::Picking,"vs_pick","fs_pick"},{RendererProgram::Present,"vs_present","fs_present"},
         {RendererProgram::Grid,"vs_grid","fs_grid"},{RendererProgram::Encode,"vs_present","fs_encode"},
         {RendererProgram::Particle,"vs_particle","fs_particle"},{RendererProgram::Sky,"vs_present","fs_sky"},
         {RendererProgram::PointShadow,"vs_point_shadow","fs_point_shadow"},
+        {RendererProgram::CollisionOverlay,"vs_collision_overlay","fs_collision_overlay"},
         {RendererProgram::DirectionalShadow,"vs_directional_shadow","fs_directional_shadow"},
         {RendererProgram::GlowExtract,"vs_present","fs_glow_extract"},{RendererProgram::GlowBlur,"vs_present","fs_glow_blur"}}};
     std::vector<RendererShaderPair> pairs; pairs.reserve(definitions.size());

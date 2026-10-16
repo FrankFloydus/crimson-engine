@@ -23,7 +23,7 @@
 namespace crimson {
 using Json=nlohmann::json;
 EditorSession::EditorSession(const std::filesystem::path& root, AssetLibrary& assets, Renderer& renderer)
-    : root_(root),document_(root),play_(root),particleEditor_(root),materialEditor_(root),resources_(*assets.resources()),prepared_(assets,renderer,resources_,root),collisions_(assets,resources_),quader_(root) {
+    : root_(root),document_(root),play_(root),particleEditor_(root),materialEditor_(root),resources_(*assets.resources()),prepared_(assets,renderer,resources_,root),collisions_(assets,resources_),collisionOverlays_(resources_),quader_(root) {
     restoreSession(assets);
     documentEpoch_=document_.documentGeneration();
     previews_=std::make_unique<AssetPreviews>(root,assets,resources_,renderer,prepared_);
@@ -119,7 +119,7 @@ void EditorSession::prepareFrame(AssetLibrary& assets,Renderer& renderer,std::ui
     std::vector<QuaderTarget> targets;
     const auto records=document_.scene().records();
     for(const auto& record:records) {
-        if(record.meshCollider && !record.meshCollider->source.empty())(void)collisions_.query(record.meshCollider->source.id);
+        if(record.collider && record.collider->shape==ColliderShape::Trimesh && !record.collider->source.empty())(void)collisions_.query(record.collider->source.id);
         if(record.quader) {
             const bool imported=std::any_of(records.begin(),records.end(),[&](const auto& child){return child.quaderGenerated && child.quaderGenerated->owner==record.id;});
             targets.push_back({record.id,*record.quader,imported,record.quader->saveKey});
@@ -216,8 +216,8 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
         if(forceStop || document_.documentGeneration()!=waitingSceneGeneration_ || document_.scene().revision()!=waitingSceneRevision_ || playActionPending_==PlayAction::Stop)waitingForCollision_=false;
         else {
             bool ready=true;
-            for(const auto& record:document_.scene().records())if(record.meshCollider && !record.meshCollider->source.empty()) {
-                const auto source=collisions_.query(record.meshCollider->source.id);
+            for(const auto& record:document_.scene().records())if(record.collider && record.collider->shape==ColliderShape::Trimesh && !record.collider->source.empty()) {
+                const auto source=collisions_.query(record.collider->source.id);
                 if(!source.mesh || !source.current) {
                     ready=false;playStatus_=source.diagnostic;
                     if(!playStatus_.starts_with("Preparing mesh collision"))waitingForCollision_=false;
@@ -397,12 +397,15 @@ void EditorSession::frame(AssetLibrary& assets, Renderer& renderer, Navigation& 
     if(renderScene.properties().playerCharacter)renderInput.shadowFocusEntities=renderScene.subtree(renderScene.properties().playerCharacter);
     renderInput.shadowResolution=editor_.pointShadowResolution();renderInput.materialContext=materialContext;
     renderInput.appearance=editor_.appearance();renderInput.gridVisible=editor_.overlays().grid;
+    auto collisionOverlays=collisionOverlays_.prepare(renderScene,document.selection().ids,editor_.overlays().collisions,
+        [this](const std::string& id){return collisions_.query(id);});
+    renderInput.sceneCollisionOverlays=std::move(collisionOverlays.scene);
+    renderInput.gameCollisionOverlays=std::move(collisionOverlays.game);
     renderer.renderFrame(prepareEditorRenderFrame(std::move(renderInput),assets,prepared_));
     editor_.drawPlayerLightRig(sceneCamera,renderScene);
     if(gameOpen && game.pixelWidth && game.pixelHeight && gameCamera) {
         gameInput_.setProjection(*gameCamera,game.pixelWidth,game.pixelHeight);
         gameView_.drawPlayerLightRig(*gameCamera,renderScene);
-        gameView_.drawCollisions(*gameCamera,renderScene,editor_.overlays().collisions,[this](const std::string& id){return collisions_.query(id);});
         if(play_.playing()) {
             const auto player=renderScene.find(renderScene.properties().playerCharacter);
             if(player && player->character && player->character->showRoute) {

@@ -40,6 +40,7 @@ RenderScene preparedRenderScene(const PreparedRenderFrame& frame,const PreparedR
     scene.playerReveal=world.playerReveal;
     scene.characterLights=world.characterLights;
     scene.characterShadow=world.characterShadow;
+    scene.collisionOverlays=view.collisionOverlays;
     return scene;
 }
 } // namespace crimson

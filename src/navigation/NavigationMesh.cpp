@@ -81,9 +81,10 @@ std::optional<NavigationPath> completePath(dtNavMeshQuery& query,dtPolyRef start
     if(path.corners.empty())path.corners.push_back(destination);else path.corners.back()=destination;
     return path;
 }
-void rasterizeSolidBox(rcContext& context,const rcConfig& config,const PhysicsBox& box,rcHeightfield& target,std::uint64_t& remainingCells) {
-    std::vector<float> vertices;std::vector<int> triangles;appendBox(box,vertices,triangles);
-    float minimum[3],maximum[3];rcCalcBounds(vertices.data(),8,minimum,maximum);
+void rasterizeSolidShape(rcContext& context,const rcConfig& config,const std::vector<float>& vertices,const std::vector<int>& triangles,
+    rcHeightfield& target,std::uint64_t& remainingCells) {
+    const auto vertexCount=static_cast<int>(vertices.size()/3),triangleCount=static_cast<int>(triangles.size()/3);
+    float minimum[3],maximum[3];rcCalcBounds(vertices.data(),vertexCount,minimum,maximum);
     const int beginX=std::clamp(static_cast<int>(std::floor((minimum[0]-config.bmin[0])/config.cs)),0,config.width-1);
     const int beginZ=std::clamp(static_cast<int>(std::floor((minimum[2]-config.bmin[2])/config.cs)),0,config.height-1);
     const int endX=std::clamp(static_cast<int>(std::ceil((maximum[0]-config.bmin[0])/config.cs)),beginX+1,config.width);
@@ -93,19 +94,19 @@ void rasterizeSolidBox(rcContext& context,const rcConfig& config,const PhysicsBo
     minimum[0]=config.bmin[0]+beginX*config.cs;minimum[1]=config.bmin[1];minimum[2]=config.bmin[2]+beginZ*config.cs;
     maximum[0]=config.bmin[0]+endX*config.cs;maximum[1]=config.bmax[1];maximum[2]=config.bmin[2]+endZ*config.cs;
     Owner<rcHeightfield,rcFreeHeightField> shape(rcAllocHeightfield(),rcFreeHeightField);
-    require(shape!=nullptr,"box heightfield allocation");
-    require(rcCreateHeightfield(&context,*shape,endX-beginX,endZ-beginZ,minimum,maximum,config.cs,config.ch),"box heightfield");
-    std::array<unsigned char,12> areas{};
-    rcMarkWalkableTriangles(&context,config.walkableSlopeAngle,vertices.data(),8,triangles.data(),12,areas.data());
-    require(rcRasterizeTriangles(&context,vertices.data(),8,triangles.data(),areas.data(),12,*shape,config.walkableClimb),"box rasterization");
+    require(shape!=nullptr,"convex heightfield allocation");
+    require(rcCreateHeightfield(&context,*shape,endX-beginX,endZ-beginZ,minimum,maximum,config.cs,config.ch),"convex heightfield");
+    std::vector<unsigned char> areas(static_cast<std::size_t>(triangleCount));
+    rcMarkWalkableTriangles(&context,config.walkableSlopeAngle,vertices.data(),vertexCount,triangles.data(),triangleCount,areas.data());
+    require(rcRasterizeTriangles(&context,vertices.data(),vertexCount,triangles.data(),areas.data(),triangleCount,*shape,config.walkableClimb),"convex rasterization");
     // Recast rasterizes surfaces. A Collider is a solid convex volume, so fill
-    // from each column's lowest to highest box surface before merging boxes.
-    // This prevents a coincident floor from becoming walkable inside a tall box.
+    // from each column's lowest to highest surface before merging shapes.
+    // This prevents a coincident floor from becoming walkable inside a collider.
     for(int z=0;z<shape->height;++z)for(int x=0;x<shape->width;++x) {
         const auto* bottom=shape->spans[x+z*shape->width];if(!bottom)continue;
         auto* top=bottom;while(top->next)top=top->next;
         require(rcAddSpan(&context,target,x+beginX,z+beginZ,static_cast<unsigned short>(bottom->smin),
-            static_cast<unsigned short>(top->smax),static_cast<unsigned char>(top->area),config.walkableClimb),"solid box span");
+            static_cast<unsigned short>(top->smax),static_cast<unsigned char>(top->area),config.walkableClimb),"solid convex span");
     }
 }
 }
@@ -139,7 +140,7 @@ struct NavigationMesh::Impl {
             }
         }
         // Recast's baked ground links are bidirectional. Off-mesh links are not
-        // part of this Box-only slice and are deliberately excluded above.
+        // part of this static-geometry slice and are deliberately excluded above.
         std::vector<dtPolyRef> pending;
         for(const auto root:polygons) {
             if(componentByPolygon.at(root)!=std::numeric_limits<std::size_t>::max())continue;
@@ -251,14 +252,23 @@ struct NavigationMesh::Impl {
         require(solid!=nullptr,"heightfield allocation");
         require(rcCreateHeightfield(&context,*solid,config.width,config.height,config.bmin,config.bmax,config.cs,config.ch),"heightfield");
         auto remainingCells=MaximumRasterCells;
-        for(const auto& box:boxes)rasterizeSolidBox(context,config,box,*solid,remainingCells);
+        for(const auto& box:boxes) {
+            std::vector<float> shapeVertices;std::vector<int> shapeTriangles;appendBox(box,shapeVertices,shapeTriangles);
+            rasterizeSolidShape(context,config,shapeVertices,shapeTriangles,*solid,remainingCells);
+        }
+        for(const auto& source:meshes)if(source.solid && source.mesh) {
+            std::vector<float> shapeVertices;std::vector<int> shapeTriangles;appendMesh(source,shapeVertices,shapeTriangles);
+            rasterizeSolidShape(context,config,shapeVertices,shapeTriangles,*solid,remainingCells);
+        }
         if(!meshes.empty()) {
             std::vector<float> meshVertices;std::vector<int> meshTriangles;
-            for(const auto& source:meshes)appendMesh(source,meshVertices,meshTriangles);
+            for(const auto& source:meshes)if(!source.solid)appendMesh(source,meshVertices,meshTriangles);
             const auto count=static_cast<int>(meshTriangles.size()/3),meshVertexCount=static_cast<int>(meshVertices.size()/3);
-            std::vector<unsigned char> areas(static_cast<std::size_t>(count));
-            rcMarkWalkableTriangles(&context,config.walkableSlopeAngle,meshVertices.data(),meshVertexCount,meshTriangles.data(),count,areas.data());
-            require(rcRasterizeTriangles(&context,meshVertices.data(),meshVertexCount,meshTriangles.data(),areas.data(),count,*solid,config.walkableClimb),"mesh collision rasterization");
+            if(count) {
+                std::vector<unsigned char> areas(static_cast<std::size_t>(count));
+                rcMarkWalkableTriangles(&context,config.walkableSlopeAngle,meshVertices.data(),meshVertexCount,meshTriangles.data(),count,areas.data());
+                require(rcRasterizeTriangles(&context,meshVertices.data(),meshVertexCount,meshTriangles.data(),areas.data(),count,*solid,config.walkableClimb),"mesh collision rasterization");
+            }
         }
         rcFilterLowHangingWalkableObstacles(&context,config.walkableClimb,*solid);
         rcFilterLedgeSpans(&context,config.walkableHeight,config.walkableClimb,*solid);

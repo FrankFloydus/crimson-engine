@@ -4,6 +4,7 @@
 #include "crimson-renderer/ParticleRenderTypes.h"
 #include "crimson-renderer/shaders/point_light.sh"
 #include "crimson-renderer/shaders/grid_depth.sh"
+#include "crimson-renderer/shaders/collision_depth.sh"
 #include "input/Navigation.h"
 #include <SDL3/SDL_init.h>
 
@@ -112,6 +113,83 @@ template<class Sample> void sampleGridPolygon(const std::vector<ClippedGridVerte
         sample(crimson::Vec3{world[0]/total,world[1]/total,world[2]/total},rasterDepth);
     }
 }
+void collisionDepthContract() {
+    using namespace crimson;
+    using collision_rendering::collisionFragmentDepth;
+    constexpr double unit=1.0/16777215.0;
+    for(const float homogeneous:{0.f,1.f}) {
+        const auto clipZ=[&](float depth,float w) {return (depth*(1+homogeneous)-homogeneous)*w;};
+        for(const float w:{.001f,1.f,25.f,2048.f})for(const float depth:{0.f,.25f,.5f,.99997f,1.f}) {
+            const float z=clipZ(depth,w);
+            const float unshifted=collisionFragmentDepth(z,w,0,homogeneous,0);
+            near(unshifted,depth,unit);
+            const float twoUnits=collisionFragmentDepth(z,w,2,homogeneous,0);
+            const float threeUnits=collisionFragmentDepth(z,w,3,homogeneous,0);
+            require(threeUnits<=twoUnits && twoUnits<=unshifted,"Collision precision allowance moved away from the camera or reversed depth-unit ordering.");
+            require(unshifted-threeUnits<=3.6*unit,"Collision bias exceeded its bounded D24 precision correction.");
+            near(twoUnits,std::max(0.0,double(unshifted)-2*unit),unit*.6);
+            near(threeUnits,std::max(0.0,double(unshifted)-3*unit),unit*.6);
+            require(collisionFragmentDepth(z,w,-1,homogeneous,0)==unshifted &&
+                collisionFragmentDepth(z,w,100,homogeneous,0)==threeUnits,"Collision bias did not retain its fixed 0–3 depth-unit bounds.");
+            for(const float slope:{1e-6f,4e-5f,.01f}) {
+                const auto corrected=collisionFragmentDepth(z,w,2,homogeneous,slope);
+                near(corrected,std::max(0.0,double(unshifted)-2*unit-double(slope)/256),unit);
+                require(corrected<=twoUnits,"Subpixel slope correction moved collision depth away from the camera.");
+            }
+            require(collisionFragmentDepth(z,w,2,homogeneous,-1)==twoUnits,"Negative slope introduced a reverse collision bias.");
+        }
+        require(collisionFragmentDepth(clipZ(-.1f,1),1,2,homogeneous,.01f)==0 &&
+            collisionFragmentDepth(clipZ(1.1f,1),1,2,homogeneous,.01f)==1,"Collision depth escaped the hardware depth range.");
+    }
+    // Reproduce the authored editor's tiny near plane. A fixed millimeter
+    // offset vanishes at room distance, while bounded depth units preserve a
+    // measurable foreground gap rather than making hidden collision visible.
+    for(const auto convention:{ClipDepth::ZeroToOne,ClipDepth::NegativeOneToOne}) {
+        Camera camera;camera.position={0,0,0};camera.target={0,0,-1};
+        camera.nearPlane=.0008660254f;camera.farPlane=2048;
+        const auto projection=camera.projectionMatrix(1,convention);
+        const float homogeneous=convention==ClipDepth::NegativeOneToOne?1.f:0.f;
+        for(const auto sample:std::array<std::array<float,3>,2>{{{1.f,.002f,4e-5f},{25.f,.3f,2e-7f}}}) {
+            const auto surface=shaderProject(projection,{0,0,-sample[0]});
+            const auto foreground=shaderProject(projection,{0,0,-(sample[0]-sample[1])});
+            const auto sceneDepth=collisionFragmentDepth(foreground[2],foreground[3],0,homogeneous,0);
+            for(const float bias:{2.f,3.f})require(collisionFragmentDepth(surface[2],surface[3],bias,homogeneous,sample[2])>sceneDepth,
+                "Collision precision correction exposed geometry behind a separated foreground surface.");
+        }
+    }
+}
+
+void collisionWirePlaneContract() {
+    using namespace crimson::collision_rendering;
+    constexpr float unit=1.f/16777215.f;
+    // A front-facing plane z=-5 intersects the z=1 ray at negative view Z.
+    near(collisionPlaneInverseViewDepth(-5,1,1,1),-.2);
+    near(collisionPlaneInverseViewDepth(-10,2,2,1),-.2);
+    near(collisionPlaneInverseViewDepth(-5,2,1,2),-.4);
+    for(const auto inputs:std::array<std::array<float,4>,6>{{
+        {{5,1,1,1}},{{0,1,1,1}},{{-5,-1,1,1}},{{-5,1e-6f,1,1}},{{-5,1,0,1}},{{-5,1,1,0}}
+    }})require(collisionPlaneInverseViewDepth(inputs[0],inputs[1],inputs[2],inputs[3])==0,
+        "Wire plane admitted a back-facing, grazing, eye-crossing or degenerate intersection.");
+    const auto nan=std::numeric_limits<float>::quiet_NaN();
+    require(collisionPlaneInverseViewDepth(nan,1,1,1)==0&&collisionPlaneInverseViewDepth(-5,nan,1,1)==0,
+        "Wire plane accepted an undefined ray or plane.");
+    require(collisionWirePlaneAccepted(.5f,.5f+2*unit,0)&&!collisionWirePlaneAccepted(.5f,.5f+4*unit,0),
+        "Zero-slope wire correction escaped its D24 precision budget.");
+    require(collisionWirePlaneAccepted(.5f,.50049f,.001f)&&collisionWirePlaneAccepted(.5f,.49951f,.001f)&&
+        !collisionWirePlaneAccepted(.5f,.50051f,.001f)&&!collisionWirePlaneAccepted(.5f,.49949f,.001f),
+        "Wire plane correction did not stay within its half-pixel raster footprint.");
+    require(!collisionWirePlaneAccepted(.5f,-.1f,2)&&!collisionWirePlaneAccepted(.5f,1.1f,2)&&
+        !collisionWirePlaneAccepted(.5f,.5f,-1)&&!collisionWirePlaneAccepted(.5f,nan,1),
+        "Wire plane accepted a clipped or undefined surface depth.");
+    // A convex solid enters only after both half-spaces; a reentrant union
+    // enters at the first face. Picking the nearer convex face leaks corners.
+    near(collisionWireSurfaceDepth(.7f,.6f,.8f,true,true,false),.8);
+    near(collisionWireSurfaceDepth(.7f,.6f,.8f,true,true,true),.6);
+    near(collisionWireSurfaceDepth(.7f,.6f,.8f,true,false,false),.6);
+    near(collisionWireSurfaceDepth(.7f,.6f,.8f,false,true,true),.8);
+    near(collisionWireSurfaceDepth(.7f,.6f,.8f,false,false,false),.7);
+}
+
 void gridDepthSurvivesEyeCrossing() {
     using namespace crimson;
     using grid_rendering::gridFragmentDepth;
@@ -867,6 +945,8 @@ int main() {
     run("Glow Gaussian retains energy and width with an HDR-invisible support edge", glowGaussianKernelContract);
     run("Glow isolated HDR impulse contours stay circular through bilinear upsampling", glowGaussianContours);
     run("grid depth survives eye-crossing clips and retains foreground occlusion", gridDepthSurvivesEyeCrossing);
+    run("collision depth corrects D24/subpixel precision and retains foreground occlusion", collisionDepthContract);
+    run("collision wires retain surface-plane depth, raster bounds and convex/concave corners", collisionWirePlaneContract);
     run("Game vertical FOV preserves projection and rays across window aspects", gameCameraVerticalFraming);
     run("camera orbit signs, upright lock and reversible soft zoom", cameraOrbitAndZoomBounds);
     run("camera pan, fly look and normalized time-based movement", cameraPanAndFly);

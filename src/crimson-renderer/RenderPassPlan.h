@@ -21,6 +21,7 @@ struct RenderViewPassSlots {
     std::uint16_t scene{},present{},grid{},encode{},glowExtract{},glowHorizontal{},glowVertical{};
     std::uint16_t pointShadow{},directionalShadow{};
     std::uint16_t depthPrepass{InvalidRenderView},ambient{InvalidRenderView},characterShadow{InvalidRenderView};
+    std::uint16_t collisions{InvalidRenderView};
 };
 // The current backend requires identity view order. This is the one table of
 // existing slots; the plan does not introduce remapping or allocate view IDs.
@@ -31,7 +32,7 @@ RenderViewPassSlots renderViewPassSlots(RenderViewPurpose purpose) noexcept;
 enum class RenderPassKind : std::uint8_t {
     EnvironmentPreparation, ModelDeformation, LightAssignment, PointShadowUpdates, DirectionalShadowUpdates, CharacterShadowUpdates,
     DepthPrepass, AmbientVisibility, AmbientPublish,
-    SceneColor, GlowExtract, GlowHorizontal, GlowVertical, ToneMap, Grid, Encode,
+    SceneColor, GlowExtract, GlowHorizontal, GlowVertical, ToneMap, Grid, CollisionOverlays, Encode,
     Picking, PickReadback, ThumbnailReadback, Count
 };
 enum class RenderResource : std::uint8_t {
@@ -64,6 +65,7 @@ struct RenderPassPlanConfig {
     RenderViewIdentity view{};
     bool glow{},grid{},picking{},thumbnailReadback{},worldShadows{},prepareEnvironment{};
     bool ambientVisibility{};
+    bool collisionOverlays{};
 };
 struct RenderPass {
     static constexpr std::size_t MaximumResourceUses = 8;
@@ -76,7 +78,7 @@ struct RenderPass {
     std::uint16_t lastPhysicalView() const noexcept { return static_cast<std::uint16_t>(physicalView+viewCount-1); }
 };
 struct RenderPassPlan {
-    static constexpr std::size_t MaximumPasses = 18;
+    static constexpr std::size_t MaximumPasses = 19;
     static constexpr std::size_t ResourceCount = static_cast<std::size_t>(RenderResource::Count);
     RenderPassPlanConfig config{};
     std::array<RenderResourceBinding,ResourceCount> bindings{};

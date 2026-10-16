@@ -11,6 +11,7 @@
 #include "runtime/SceneAnimations.h"
 #include "tools/GameView.h"
 #include "CollisionResources.h"
+#include "CollisionOverlays.h"
 #include "quader/QuaderBridge.h"
 #include <filesystem>
 #include <unordered_map>
@@ -59,6 +60,7 @@ private:
     ResourceManager& resources_;
     EditorResources prepared_;
     CollisionResources collisions_;
+    CollisionOverlays collisionOverlays_;
     QuaderBridge quader_;
     double materialGameSeconds_{},materialRealSeconds_{};
     std::chrono::steady_clock::time_point materialClockStart_{std::chrono::steady_clock::now()};

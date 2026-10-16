@@ -1,10 +1,12 @@
 #include "SceneExtraction.h"
 #include "runtime/PlayerLightRig.h"
+#include "physics/ColliderGeometry.h"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace crimson {
@@ -96,14 +98,17 @@ Aabb selectionBounds(const Scene& scene, std::span<const EntityId> selection,
             const auto world = scene.worldTransform(id);
             if (!record || !world) continue;
             bool hasBounds = false;
-            if(record->meshCollider && meshCollision)if(const auto geometry=meshCollision(record->meshCollider->source.id);geometry.mesh) {
-                const auto bounds=math::transformBounds(geometry.mesh->bounds,*world);math::include(result,bounds);hasBounds=bounds.valid;
+            if(record->collider) {
+                auto bounds=primitiveColliderBounds(*record->collider);
+                if(record->collider->shape==ColliderShape::Trimesh && meshCollision)
+                    if(const auto geometry=meshCollision(record->collider->source.id);geometry.mesh)bounds=geometry.mesh->bounds;
+                bounds=math::transformBounds(bounds,*world);math::include(result,bounds);hasBounds=bounds.valid;
             }
             if (record->model && modelBounds) {
                 if (const auto local = modelBounds(record->model->id)) {
                     const auto bounds = math::transformBounds(*local,*world);
                     math::include(result,bounds);
-                    hasBounds = bounds.valid;
+                    hasBounds = hasBounds || bounds.valid;
                 }
             }
             if (record->particle && particleBounds) {
@@ -117,12 +122,57 @@ Aabb selectionBounds(const Scene& scene, std::span<const EntityId> selection,
                 math::include(result,position-Vec3{.5f,.5f,.5f});
                 math::include(result,position+Vec3{.5f,.5f,.5f});
             }
-            if(record->collider)math::include(result,math::transformBounds(
-                Aabb{record->collider->size*-.5,record->collider->size*.5,true},*world));
             if(record->character)math::include(result,math::transformBounds(Aabb{
                 {-record->character->radius,0,-record->character->radius},
                 {record->character->radius,record->character->height,record->character->radius},true},*world));
         }
+    }
+    return result;
+}
+
+std::vector<SelectionBox> selectionBoxes(const Scene& scene,std::span<const EntityId> selection,
+    const ModelBoundsQuery& modelBounds,const CollisionMeshQuery& meshCollision) {
+    std::vector<SelectionBox> result;
+    if(selection.empty())return result;
+    const std::vector<EntityId> selected(selection.begin(),selection.end());
+    for(const auto root:scene.topmost(selected)) {
+        const auto world=scene.worldTransform(root);if(!world||!math::finite(*world))continue;
+        const auto inverse=math::inverse(*world);
+        const auto descendants=scene.subtree(root);
+        std::unordered_map<EntityId,Mat4> relative;
+        Aabb visuals,markers,shapes;
+        const auto usable=[](const Aabb& bounds){return bounds.valid&&math::finite(bounds.minimum)&&math::finite(bounds.maximum);};
+        for(const auto id:descendants) {
+            const auto record=scene.find(id);if(!record)continue;
+            const auto local=id==root?Mat4{}:relative.at(record->parent)*record->local;
+            relative.emplace(id,local);
+            // A stable one-meter world marker for nonvisual/missing resources.
+            // Convert once into the root's axes; never use emitted particle poses.
+            const auto position=math::transformPoint(*world*local,{});
+            const auto marker=inverse?math::transformBounds(Aabb{{-.5f,-.5f,-.5f},{.5f,.5f,.5f},true},*inverse*math::translation(position)):
+                math::transformBounds(Aabb{{-.5f,-.5f,-.5f},{.5f,.5f,.5f},true},local);
+            math::include(markers,marker);
+            if(record->model&&modelBounds)if(const auto bounds=modelBounds(record->model->id);bounds&&usable(*bounds))
+                math::include(visuals,math::transformBounds(*bounds,local));
+            if(record->particle)math::include(visuals,marker);
+        }
+        // Do not load collision geometry or inflate an ordinary mesh outline
+        // merely because a larger, editable collision child exists beneath it.
+        if(!usable(visuals))for(const auto id:descendants) {
+            const auto record=scene.find(id);if(!record)continue;const auto& local=relative.at(id);
+            if(record->collider) {
+                auto bounds=primitiveColliderBounds(*record->collider);
+                if(record->collider->shape==ColliderShape::Trimesh&&!record->collider->source.empty()&&meshCollision)
+                    if(const auto source=meshCollision(record->collider->source.id);source.mesh)bounds=source.mesh->bounds;
+                if(usable(bounds))math::include(shapes,math::transformBounds(bounds,local));
+            }
+            if(record->character) {
+                const auto& character=*record->character;
+                math::include(shapes,math::transformBounds(Aabb{{-character.radius,0,-character.radius},{character.radius,character.height,character.radius},true},local));
+            }
+        }
+        const auto bounds=usable(visuals)?visuals:usable(shapes)?shapes:markers;
+        if(usable(bounds))result.push_back({root,bounds,*world});
     }
     return result;
 }
@@ -132,7 +182,7 @@ std::optional<EntityId> pickCollisionShape(const Scene& scene,const Ray& ray,flo
     double closest=maximumDistance;
     std::optional<EntityId> result;
     for(const auto& record:scene.records()) {
-        if(!record.collider && !record.character && !record.meshCollider)continue;
+        if(!record.collider && !record.character)continue;
         const auto world=scene.worldTransform(record.id);
         const auto inverse=world?math::inverse(*world):std::nullopt;
         if(!inverse)continue;
@@ -141,7 +191,7 @@ std::optional<EntityId> pickCollisionShape(const Scene& scene,const Ray& ray,flo
         // Keep the transformed direction unnormalized, so all hit parameters
         // remain comparable world-ray distances under affine/nonuniform parents.
         double hit=std::numeric_limits<double>::infinity();
-        if(record.meshCollider && meshCollision)if(const auto source=meshCollision(record.meshCollider->source.id);source.mesh) {
+        if(record.collider && record.collider->shape==ColliderShape::Trimesh && meshCollision)if(const auto source=meshCollision(record.collider->source.id);source.mesh) {
             const auto& mesh=*source.mesh;
             for(std::size_t index=0;index+2<mesh.indices.size();index+=3) {
                 const auto a=mesh.positions[mesh.indices[index]],b=mesh.positions[mesh.indices[index+1]],c=mesh.positions[mesh.indices[index+2]];
@@ -152,7 +202,7 @@ std::optional<EntityId> pickCollisionShape(const Scene& scene,const Ray& ray,flo
                 const auto distance=math::dot(other,q)/determinant;if(distance>=0)hit=std::min(hit,distance);
             }
         }
-        if(record.collider) {
+        if(record.collider && record.collider->shape==ColliderShape::Box) {
             double first=0,last=closest;
             const auto half=record.collider->size*.5f;
             for(unsigned axis=0;axis<3 && first<=last;++axis) {
@@ -167,9 +217,7 @@ std::optional<EntityId> pickCollisionShape(const Scene& scene,const Ray& ray,flo
             }
             if(first<=last)hit=first;
         }
-        if(record.character) {
-            const double radius=record.character->radius;
-            const double lower=radius,upper=record.character->height-radius;
+        const auto capsule=[&](double radius,double lower,double upper) {
             const double axisY=std::clamp<double>(local.origin[1],lower,upper);
             const auto offset=local.origin-Vec3{0,axisY,0};
             if(math::dot(offset,offset)<=radius*radius)hit=0;
@@ -188,7 +236,27 @@ std::optional<EntityId> pickCollisionShape(const Scene& scene,const Ray& ray,flo
                 roots(math::dot(local.direction,local.direction),math::dot(sphereOffset,local.direction),
                       math::dot(sphereOffset,sphereOffset)-radius*radius,[](double){return true;});
             }
+        };
+        if(record.collider) {
+            const auto& collider=*record.collider;
+            if(collider.shape==ColliderShape::Sphere)capsule(collider.radius,0,0);
+            else if(collider.shape==ColliderShape::Capsule) {
+                const double stem=std::max(0.,collider.height*.5-collider.radius);capsule(collider.radius,-stem,stem);
+            } else if(collider.shape==ColliderShape::Cylinder) {
+                const double radius=collider.radius,half=collider.height*.5;
+                const auto radialSquared=[&](double t){const auto x=local.origin[0]+t*local.direction[0],z=local.origin[2]+t*local.direction[2];return x*x+z*z;};
+                if(std::abs(local.origin[1])<=half && radialSquared(0)<=radius*radius)hit=0;
+                const double a=double(local.direction[0])*local.direction[0]+double(local.direction[2])*local.direction[2];
+                const double b=double(local.origin[0])*local.direction[0]+double(local.origin[2])*local.direction[2];
+                const double discriminant=b*b-a*(radialSquared(0)-radius*radius);
+                if(a>1e-24 && discriminant>=0)for(const auto t:{(-b-std::sqrt(discriminant))/a,(-b+std::sqrt(discriminant))/a})
+                    if(t>=0 && t<hit && std::abs(local.origin[1]+t*local.direction[1])<=half)hit=t;
+                if(std::abs(local.direction[1])>1e-12)for(const auto y:{-half,half}) {
+                    const double t=(y-local.origin[1])/local.direction[1];if(t>=0 && t<hit && radialSquared(t)<=radius*radius)hit=t;
+                }
+            }
         }
+        if(record.character)capsule(record.character->radius,record.character->radius,record.character->height-record.character->radius);
         if(hit<closest) {closest=hit;result=record.id;}
     }
     return result;

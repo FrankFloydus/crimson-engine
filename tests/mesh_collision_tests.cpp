@@ -1,11 +1,15 @@
 #include "physics/PhysicsWorld.h"
 #include "navigation/NavigationMesh.h"
 #include "runtime/PlaySession.h"
+#include "physics/ColliderGeometry.h"
+#include "scene/SceneExtraction.h"
+#include "editor/CollisionWire.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <filesystem>
 #include <iostream>
+#include <map>
 #include <stdexcept>
 
 namespace {
@@ -17,8 +21,8 @@ std::shared_ptr<StaticTriangleMesh> plane(float radius=8) {
     mesh->indices={0,2,1,0,3,2};for(const auto& point:mesh->positions)math::include(mesh->bounds,point);mesh->fingerprint=1;return mesh;
 }
 EntityRecord collider(Mat4 world={}) {
-    EntityRecord record;record.id=1;record.name="Triangle floor";record.local=world;record.meshCollider.emplace();
-    record.meshCollider->source=AssetRef<ModelAsset>{"assets/models/collision/manifest.json"};return record;
+    EntityRecord record;record.id=1;record.name="Triangle floor";record.local=world;record.collider.emplace();record.collider->shape=ColliderShape::Trimesh;
+    record.collider->source=AssetRef<ModelAsset>{"assets/models/collision/manifest.json"};return record;
 }
 EntityRecord character(Vec3 position={0,2,0}) {
     EntityRecord record;record.id=2;record.name="Character";record.character.emplace();record.local=math::translation(position);return record;
@@ -39,7 +43,7 @@ void floorNavigationAndAcceptedReplacement() {
     NavigationMesh navigation;require(navigation.reconcile(physics,{}),"Mesh floor did not build navigation.");
     require(navigation.findPath({-3,.02f,0},{3,0,0}).has_value(),"Navigation omitted accepted triangle floor geometry: "+navigation.status());
     const auto revision=physics.geometryRevision(),navRevision=navigation.revision();
-    floor.meshCollider->collisionColor={1,0,1,.5f};floor.meshCollider->showCollisionInGame=true;
+    floor.collider->collisionColor={1,0,1,.5f};floor.collider->showCollisionInGame=true;
     auto records=scene.records();for(auto& record:records)if(record.id==1)record=floor;scene.apply(records,{});physics.reconcile(scene,{},sources);
     require(physics.geometryRevision()==revision&&!navigation.reconcile(physics,{})&&navigation.revision()==navRevision,"Debug display settings rebuilt static collision/navigation.");
     auto invalid=std::make_shared<StaticTriangleMesh>(*mesh);invalid->indices[1]=999;
@@ -50,7 +54,7 @@ void floorNavigationAndAcceptedReplacement() {
     require(physics.geometryRevision()==revision+1&&navigation.reconcile(physics,{}),"Valid mesh revision did not invalidate derived navigation.");
     const auto raisedHit=physics.raycast({{0,4,0},{0,-1,0}},10);
     require(raisedHit&&near(raisedHit->position[1],1),"Replacement retained the previous triangle surface.");
-    floor.meshCollider->source={};scene.apply({floor},{});physics.reconcile(scene,{},changed);navigation.reconcile(physics,{});
+    floor.collider->source={};scene.apply({floor},{});physics.reconcile(scene,{},changed);navigation.reconcile(physics,{});
     require(physics.colliderCount()==0&&!physics.raycast({{0,4,0},{0,-1,0}},10)&&!navigation.findPath({},{1,0,0}),"Explicit collision clear retained a body or invented navigation ground.");
 }
 void affineMeshTransformsAndRamps() {
@@ -88,6 +92,82 @@ void playReadinessAndStaticOwnership() {
     const std::array sources{PhysicsMeshCollider{1,mesh,1}};physics.reconcile(scene,{},sources);
     require(physics.colliderCount()==0&&!physics.status().empty(),"A Character accepted a nested static mesh body.");
 }
+void primitiveShapesAndNavigation() {
+    for(const auto shape:{ColliderShape::Sphere,ColliderShape::Cylinder,ColliderShape::Capsule}) {
+        EntityRecord obstacle;obstacle.id=1;obstacle.name="Primitive";obstacle.collider.emplace();
+        obstacle.collider->shape=shape;obstacle.collider->radius=1;obstacle.collider->height=4;
+        obstacle.local=math::translation({0,shape==ColliderShape::Sphere?1.f:2.f,0});
+        EntityRecord ground;ground.id=3;ground.name="Ground";ground.collider=SceneCollider{{16,.5f,16}};ground.local=math::translation({0,-.25f,0});
+        Scene scene;scene.apply({obstacle,ground},{});PhysicsWorld physics;physics.reconcile(scene);
+        require(physics.colliderCount()==2&&physics.status().empty(),"Primitive collider did not create a native body: "+physics.status());
+        const auto hit=physics.raycast({{0,8,0},{0,-1,0}},12);
+        const float top=shape==ColliderShape::Sphere?2.f:4.f;
+        require(hit&&hit->entity==1&&near(hit->position[1],top,.005),"Primitive total height or centered origin disagrees with physics.");
+        const auto surfaces=physics.staticMeshes();
+        require(surfaces.size()==1&&surfaces.front().solid,"Primitive was not published as closed navigation geometry.");
+        const auto revision=physics.geometryRevision();const auto geometry=surfaces.front().mesh;
+        obstacle.collider->collisionColor={1,0,0,.5f};obstacle.collider->showCollisionInGame=true;
+        obstacle.collider->source=AssetRef<ModelAsset>{"assets/models/inactive/manifest.json"};obstacle.collider->size={9,9,9};
+        scene.apply({obstacle,ground},{});physics.reconcile(scene);
+        require(physics.geometryRevision()==revision&&physics.staticMeshes().front().mesh==geometry,"Inactive/debug fields regenerated primitive geometry.");
+        NavigationMesh navigation;require(navigation.reconcile(physics,{}),"Primitive navigation failed to build.");
+        const auto route=navigation.findPath({-4,.02f,0},{4,0,0});
+        require(route.has_value(),"Primitive obstacle disconnected a navigable surrounding floor: "+navigation.status());
+        require(std::any_of(route->corners.begin(),route->corners.end(),[](const auto& corner){return std::abs(corner[2])>.9f;}),"Navigation allowed a route through a solid primitive interior.");
+        if(shape==ColliderShape::Cylinder) {
+            Scene platform;obstacle.local=math::translation({0,-.5f,0});obstacle.collider->radius=4;obstacle.collider->height=1;
+            platform.apply({obstacle},{});PhysicsWorld platformPhysics;platformPhysics.reconcile(platform);NavigationMesh platformNav;platformNav.reconcile(platformPhysics,{});
+            require(platformNav.findPath({-2,.02f,0},{2,0,0}).has_value(),"Cylinder top was not usable as a walking surface.");
+        }
+    }
 }
-int main(){try{floorNavigationAndAcceptedReplacement();affineMeshTransformsAndRamps();playReadinessAndStaticOwnership();std::cout<<"Mesh collision, affine transforms, accepted navigation and Play ownership checks passed.\n";return 0;}
+void primitiveTransformsPickingAndDebug() {
+    const auto orientation=math::eulerRotationXYZ({.3f,.5f,.2f});
+    for(const auto shape:{ColliderShape::Sphere,ColliderShape::Cylinder,ColliderShape::Capsule}) {
+        EntityRecord record;record.id=1;record.name="Scaled shape";record.collider.emplace();record.collider->shape=shape;
+        record.collider->radius=1;record.collider->height=4;
+        record.local=math::translation({3,2,1})*orientation*math::scaling({-2,1,3});
+        Scene scene;scene.apply({record},{});PhysicsWorld physics;physics.reconcile(scene);
+        require(physics.colliderCount()==1&&physics.status().empty(),"Nonuniform/reflected/rotated primitive was disabled: "+physics.status());
+        const auto direction=math::normalized(math::transformDirection(orientation,{1,0,0}));
+        const Vec3 center{3,2,1};const Ray ray{center+direction*10,-direction};
+        const auto hit=physics.raycast(ray,20);
+        require(hit&&math::length(hit->position-(center+direction*2))<.012,"Nonuniform primitive silently averaged or discarded its scale.");
+        require(pickCollisionShape(scene,ray,20)==1,"Analytic primitive picking lost a transformed collider.");
+        const auto bounds=selectionBounds(scene,std::array<EntityId,1>{1},{}),expected=math::transformBounds(primitiveColliderBounds(*record.collider),record.local);
+        require(bounds.valid&&math::length(bounds.minimum-expected.minimum)<1e-4&&math::length(bounds.maximum-expected.maximum)<1e-4,"Selection bounds disagree with primitive dimensions.");
+        record.local={};scene.apply({record},{});
+        require(!pickCollisionShape(scene,{{.9f,5,.9f},{0,-1,0}},20),"Rounded collider selection used its box instead of its curved interior.");
+        require(pickCollisionShape(scene,{{0,0,0},{1,0,0}},20)==1,"Picking inside a primitive did not select it.");
+        const auto& debug=colliderCollisionMesh(*record.collider);Aabb drawn;
+        for(const auto& point:debug.vertices)math::include(drawn,colliderCollisionPoint(point,*record.collider));
+        const auto localBounds=primitiveColliderBounds(*record.collider);
+        require(math::length(drawn.minimum-localBounds.minimum)<1e-4&&math::length(drawn.maximum-localBounds.maximum)<1e-4,"Debug fill is not centered or disagrees with primitive bounds.");
+        require(&colliderCollisionMesh(*record.collider)==&debug,"Unchanged debug geometry was regenerated.");
+        const auto prepared=primitiveColliderMesh(*record.collider,24,5);
+        require(prepared->positions.size()<=256,"Nonuniform primitive exceeded Jolt's convex vertex limit.");
+        std::map<std::array<std::uint32_t,2>,unsigned> edges;
+        for(std::size_t index=0;index<prepared->indices.size();index+=3) {
+            const auto a=prepared->positions.at(prepared->indices[index]),b=prepared->positions.at(prepared->indices[index+1]),c=prepared->positions.at(prepared->indices[index+2]);
+            require(math::dot(math::cross(b-a,c-a),(a+b+c)/3)>0,"Primitive navigation surface contains an inward/degenerate face.");
+            for(unsigned corner=0;corner<3;++corner) {
+                const auto x=prepared->indices[index+corner],y=prepared->indices[index+(corner+1)%3];++edges[{std::min(x,y),std::max(x,y)}];
+            }
+        }
+        for(const auto& [edge,count]:edges){(void)edge;require(count==2,"Primitive navigation volume has an open edge.");}
+        record.local.at(0,1)=.4f;scene.apply({record},{});physics.reconcile(scene);
+        require(physics.colliderCount()==0&&physics.status().find("sheared")!=std::string::npos,"Primitive accepted a shear rejected by the static transform contract.");
+    }
+}
+void shapeSwitchesReplaceOneBody() {
+    auto record=collider();Scene scene;PhysicsWorld physics;const auto mesh=plane();const std::array sources{PhysicsMeshCollider{1,mesh,1}};
+    for(const auto shape:{ColliderShape::Box,ColliderShape::Sphere,ColliderShape::Cylinder,ColliderShape::Capsule,ColliderShape::Trimesh,ColliderShape::Box}) {
+        record.collider->shape=shape;scene.apply({record},{});const auto revision=physics.geometryRevision();physics.reconcile(scene,{},sources);
+        require(physics.colliderCount()==1&&physics.geometryRevision()==revision+1,"Changing shape left duplicate/stale bodies or missed geometry invalidation.");
+        require(physics.staticBoxes().size()==(shape==ColliderShape::Box?1u:0u),"Shape switch published stale box navigation data.");
+        require(scene.find(1)->collider->source==record.collider->source,"Changing primitive erased the retained Trimesh reference.");
+    }
+}
+}
+int main(){try{floorNavigationAndAcceptedReplacement();affineMeshTransformsAndRamps();playReadinessAndStaticOwnership();primitiveShapesAndNavigation();primitiveTransformsPickingAndDebug();shapeSwitchesReplaceOneBody();std::cout<<"Collider shapes, affine transforms, picking, debug geometry, accepted navigation and Play ownership checks passed.\n";return 0;}
 catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}

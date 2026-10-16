@@ -58,6 +58,14 @@ using ParticleBoundsQuery = std::function<std::optional<Aabb>(EntityId)>;
 Aabb selectionBounds(const Scene& scene, std::span<const EntityId> selection,
                      const ModelBoundsQuery& modelBounds,const ParticleBoundsQuery& particleBounds = {},const CollisionMeshQuery& meshCollision = {});
 
+struct SelectionBox { EntityId id{};Aabb local;Mat4 world{}; };
+// Outlines keep the selected root's local axes, including affine parenting.
+// Model/particle content bounds take precedence over auxiliary colliders and
+// empty hierarchy markers. Nonvisual selections fall back to their own shapes.
+// Particle markers are authored/stable; live effect bounds belong to framing.
+std::vector<SelectionBox> selectionBoxes(const Scene& scene,std::span<const EntityId> selection,
+    const ModelBoundsQuery& modelBounds,const CollisionMeshQuery& meshCollision = {});
+
 // Collision interiors are editor-selectable even without a rendered model.
 // Used only when the material-aware GPU model pick reports background.
 std::optional<EntityId> pickCollisionShape(const Scene& scene,const Ray& ray,float maximumDistance,const CollisionMeshQuery& meshCollision = {});

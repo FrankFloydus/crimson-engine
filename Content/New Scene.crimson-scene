@@ -2,6 +2,45 @@
   "entities": [
     {
       "castShadows": true,
+      "id": "03b9835d615fd055",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        -0.41572141647338867,
+        -0.21383081376552582,
+        1.1808265447616577,
+        0.0,
+        0.0,
+        1.2496750354766846,
+        0.22629830241203308,
+        0.0,
+        -1.2000316381454468,
+        0.07407642155885696,
+        -0.4090682566165924,
+        0.0,
+        -2.6308140754699707,
+        -4.634294725747168e-08,
+        -5.946035385131836,
+        1.0
+      ],
+      "model": "c0621da5-d5ba-5f10-b68c-66bda5bc99fc",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "bone+skull+pile+3d+model Copy",
+      "order": 28,
+      "parent": "0000000000000000",
+      "receiveShadows": true
+    },
+    {
+      "castShadows": true,
       "id": "0b39d18714fa632a",
       "lightingScopes": {
         "ambientReceiverMask": 3,
@@ -26,7 +65,7 @@
         4.0,
         1.0
       ],
-      "model": "5b74ca7c-4d5b-5d66-9445-42ce8ad14b7a",
+      "model": "1a717e6d-d3e9-52bf-952d-2efaff753372",
       "modelAnimation": {
         "clip": -1,
         "loop": true,
@@ -132,7 +171,7 @@
         2.0,
         1.0
       ],
-      "model": "0e9b5f4c-8303-5a33-89c4-dcece2e6f36e",
+      "model": "7d67f669-238d-5365-8631-f12f149304ad",
       "modelAnimation": {
         "clip": -1,
         "loop": true,
@@ -175,7 +214,7 @@
         -1.625,
         1.0
       ],
-      "model": "345475cb-1519-5434-85c1-0ee9c0272237",
+      "model": "83efbff0-3687-5815-ab2f-7d14ef76c343",
       "modelAnimation": {
         "clip": -1,
         "loop": true,
@@ -190,45 +229,6 @@
         "owner": "8fc8feaa0b15a58b",
         "sourceKey": "mesh:30:30:0"
       },
-      "receiveShadows": true
-    },
-    {
-      "castShadows": true,
-      "id": "224e12a2dd1b7ed8",
-      "lightingScopes": {
-        "ambientReceiverMask": 3,
-        "directReceiverMask": 3,
-        "shadowCasterMask": 3
-      },
-      "local": [
-        0.3590116500854492,
-        -0.146900936961174,
-        -2.2345821857452393,
-        0.0,
-        -0.6141948699951172,
-        2.1698734760284424,
-        -0.2413245141506195,
-        0.0,
-        2.1535322666168213,
-        0.6433454155921936,
-        0.3036966919898987,
-        0.0,
-        1.4367332458496094,
-        -0.3012833595275879,
-        2.2876181602478027,
-        1.0
-      ],
-      "model": "4837495b-9ad3-50ad-83ce-112729a4da72",
-      "modelAnimation": {
-        "clip": -1,
-        "loop": true,
-        "playing": true,
-        "speed": 1.0,
-        "startTime": 0.0
-      },
-      "name": "gothic+tomb+3d+model",
-      "order": 15,
-      "parent": "0000000000000000",
       "receiveShadows": true
     },
     {
@@ -307,7 +307,7 @@
         -3.75,
         1.0
       ],
-      "model": "551bc36a-c2c0-5a0b-84da-2cd113e0aabc",
+      "model": "862b3990-73a2-59d0-9d6a-19c5754fe71d",
       "modelAnimation": {
         "clip": -1,
         "loop": true,
@@ -440,6 +440,66 @@
       "parent": "0000000000000000"
     },
     {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "radius": 0.5801502466201782,
+        "shape": "sphere",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "2d2b17f1c2bec4a1",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Collider",
+      "order": 0,
+      "parent": "b8bd50309b8270bb"
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": "56681197-4b00-5547-ac9d-4bdaaaff2fb7"
+      },
       "id": "2f6b31624f915d56",
       "local": [
         1.0,
@@ -459,16 +519,6 @@
         0.0,
         1.0
       ],
-      "meshCollider": {
-        "collisionColor": [
-          0.2235294133424759,
-          0.686274528503418,
-          0.8666666746139526,
-          1.0
-        ],
-        "showCollisionInGame": false,
-        "source": "dd2c022c-0702-5a68-975c-c537943d96d7"
-      },
       "name": "Mesh Collider",
       "order": 16,
       "parent": "0b39d18714fa632a",
@@ -503,7 +553,7 @@
         -5.125,
         1.0
       ],
-      "model": "087d2cdf-8b72-51ef-9ac1-95fe700ff5a6",
+      "model": "c58fd4d6-01d5-51c7-b0c8-bc89fb1a9a32",
       "modelAnimation": {
         "clip": -1,
         "loop": true,
@@ -529,20 +579,20 @@
         "shadowCasterMask": 3
       },
       "local": [
-        0.3590116500854492,
-        -0.146900936961174,
+        0.3629542291164398,
+        -0.1368701308965683,
         -2.2345821857452393,
         0.0,
-        -0.6141948699951172,
-        2.1698734760284424,
+        -0.674241304397583,
+        2.1519720554351807,
         -0.2413245141506195,
         0.0,
-        2.1535322666168213,
-        0.6433454155921936,
+        2.1348273754119873,
+        0.7029265761375427,
         0.3036966919898987,
         0.0,
         1.4367332458496094,
-        -0.3012833595275879,
+        -0.3667432367801666,
         -1.0469143390655518,
         1.0
       ],
@@ -560,6 +610,24 @@
       "receiveShadows": true
     },
     {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": "80d19343-bd80-5452-b83e-f7b1bd969ac5"
+      },
       "id": "372189a405f3e54a",
       "local": [
         1.0,
@@ -579,16 +647,6 @@
         0.0,
         1.0
       ],
-      "meshCollider": {
-        "collisionColor": [
-          0.2235294133424759,
-          0.686274528503418,
-          0.8666666746139526,
-          1.0
-        ],
-        "showCollisionInGame": false,
-        "source": "5c408687-36c5-5962-898a-4ee93cbe4004"
-      },
       "name": "Mesh Collider",
       "order": 12,
       "parent": "8d81b58c3af2d31a",
@@ -598,6 +656,63 @@
       }
     },
     {
+      "castShadows": true,
+      "id": "3a638be47c2e50e7",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        0.6073645949363708,
+        0.2281273901462555,
+        -0.569126546382904,
+        0.0,
+        -0.05455317720770836,
+        0.8180098533630371,
+        0.2696707844734192,
+        0.0,
+        0.6107134222984314,
+        -0.15380604565143585,
+        0.5900945067405701,
+        0.0,
+        2.3275914192199707,
+        -5.6501242795548023e-08,
+        -0.5570279359817505,
+        1.0
+      ],
+      "model": "c0621da5-d5ba-5f10-b68c-66bda5bc99fc",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "bone+skull+pile+3d+model Copy Copy",
+      "order": 27,
+      "parent": "0000000000000000",
+      "receiveShadows": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": "3f1d2fa6-dc1d-5640-b659-d4776f3b82f6"
+      },
       "id": "3b915e851a9c737b",
       "local": [
         1.0,
@@ -617,16 +732,6 @@
         0.0,
         1.0
       ],
-      "meshCollider": {
-        "collisionColor": [
-          0.2235294133424759,
-          0.686274528503418,
-          0.8666666746139526,
-          1.0
-        ],
-        "showCollisionInGame": false,
-        "source": "b8732cbe-797b-57ad-8b91-db09ee6f77ab"
-      },
       "name": "Mesh Collider",
       "order": 28,
       "parent": "f3babb72a9a629bf",
@@ -636,43 +741,46 @@
       }
     },
     {
-      "castShadows": true,
-      "id": "3fb1fc6e53371460",
-      "lightingScopes": {
-        "ambientReceiverMask": 3,
-        "directReceiverMask": 3,
-        "shadowCasterMask": 3
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "radius": 0.5801502466201782,
+        "shape": "sphere",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
       },
+      "id": "42a2430ff845d973",
       "local": [
-        0.75920569896698,
-        0.28515923023223877,
-        -0.7114081382751465,
+        1.0,
         0.0,
-        -0.06819146871566772,
-        1.0225123167037964,
-        0.3370884656906128,
         0.0,
-        0.7633917927742004,
-        -0.19225755333900452,
-        0.737618088722229,
         0.0,
-        -3.326366424560547,
-        -5.6501242795548023e-08,
-        -4.785058498382568,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
         1.0
       ],
-      "model": "c0621da5-d5ba-5f10-b68c-66bda5bc99fc",
-      "modelAnimation": {
-        "clip": -1,
-        "loop": true,
-        "playing": true,
-        "speed": 1.0,
-        "startTime": 0.0
-      },
-      "name": "bone+skull+pile+3d+model Copy",
-      "order": 22,
-      "parent": "0000000000000000",
-      "receiveShadows": true
+      "name": "Collider",
+      "order": 0,
+      "parent": "4db3378b3200de8e"
     },
     {
       "castShadows": true,
@@ -734,51 +842,12 @@
         1.0
       ],
       "name": "Imported",
-      "order": 67,
+      "order": 68,
       "parent": "8fc8feaa0b15a58b",
       "quaderGenerated": {
         "owner": "8fc8feaa0b15a58b",
         "sourceKey": "Imported"
       }
-    },
-    {
-      "castShadows": true,
-      "id": "510ecfce0548dd05",
-      "lightingScopes": {
-        "ambientReceiverMask": 3,
-        "directReceiverMask": 3,
-        "shadowCasterMask": 3
-      },
-      "local": [
-        -1.0094305276870728,
-        0.28515923023223877,
-        0.25208336114883423,
-        0.0,
-        0.22359883785247803,
-        1.0225123167037964,
-        -0.2613089978694916,
-        0.0,
-        -0.30800220370292664,
-        -0.19225755333900452,
-        -1.0158658027648926,
-        0.0,
-        -2.2286040782928467,
-        -0.08326230943202972,
-        -6.101284027099609,
-        1.0
-      ],
-      "model": "c0621da5-d5ba-5f10-b68c-66bda5bc99fc",
-      "modelAnimation": {
-        "clip": -1,
-        "loop": true,
-        "playing": true,
-        "speed": 1.0,
-        "startTime": 0.0
-      },
-      "name": "bone+skull+pile+3d+model Copy Copy",
-      "order": 24,
-      "parent": "0000000000000000",
-      "receiveShadows": true
     },
     {
       "castShadows": true,
@@ -806,7 +875,7 @@
         -4.0,
         1.0
       ],
-      "model": "00ca47bb-492c-5772-86a2-d09d64c16976",
+      "model": "a46c877b-2192-5b5d-8611-ade1c15a4f3d",
       "modelAnimation": {
         "clip": -1,
         "loop": true,
@@ -824,6 +893,24 @@
       "receiveShadows": true
     },
     {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": "e7685591-b203-5267-a843-935587f3c01d"
+      },
       "id": "579a1c31e1240d4b",
       "local": [
         1.0,
@@ -843,16 +930,6 @@
         0.0,
         1.0
       ],
-      "meshCollider": {
-        "collisionColor": [
-          0.2235294133424759,
-          0.686274528503418,
-          0.8666666746139526,
-          1.0
-        ],
-        "showCollisionInGame": false,
-        "source": "78b58ce6-66f3-55d2-b8f5-7ed50e389097"
-      },
       "name": "Mesh Collider",
       "order": 14,
       "parent": "b759fbbdda7d9fa2",
@@ -912,6 +989,24 @@
       }
     },
     {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": "0b03b4b2-1565-5639-82d6-1476c309843c"
+      },
       "id": "68879a28deda263a",
       "local": [
         1.0,
@@ -931,16 +1026,6 @@
         0.0,
         1.0
       ],
-      "meshCollider": {
-        "collisionColor": [
-          0.2235294133424759,
-          0.686274528503418,
-          0.8666666746139526,
-          1.0
-        ],
-        "showCollisionInGame": false,
-        "source": "c5164de8-b254-5ad2-a27e-63ffa5085a74"
-      },
       "name": "Mesh Collider",
       "order": 18,
       "parent": "fdd0243649ec2909",
@@ -950,6 +1035,24 @@
       }
     },
     {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": "a4719e5a-9c47-5b44-a163-af6ea2be125d"
+      },
       "id": "7214ee10acc1a907",
       "local": [
         1.0,
@@ -969,16 +1072,6 @@
         0.0,
         1.0
       ],
-      "meshCollider": {
-        "collisionColor": [
-          0.2235294133424759,
-          0.686274528503418,
-          0.8666666746139526,
-          1.0
-        ],
-        "showCollisionInGame": false,
-        "source": "67e20a33-66b7-5b81-ac63-633fc07e64b7"
-      },
       "name": "Mesh Collider",
       "order": 3,
       "parent": "ef5118713f92e506",
@@ -1037,7 +1130,7 @@
         7.5,
         1.0
       ],
-      "model": "8e477512-903e-570c-bbf0-7a352d05ed29",
+      "model": "0cdf51c8-e1e0-5ebc-8a67-ed6b8c7a4856",
       "modelAnimation": {
         "clip": -1,
         "loop": true,
@@ -1055,6 +1148,24 @@
       "receiveShadows": true
     },
     {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": "450dc68a-2ced-5f33-8861-f3b0ea20bb03"
+      },
       "id": "7e0bb533bc69cfc8",
       "local": [
         1.0,
@@ -1074,16 +1185,6 @@
         0.0,
         1.0
       ],
-      "meshCollider": {
-        "collisionColor": [
-          0.2235294133424759,
-          0.686274528503418,
-          0.8666666746139526,
-          1.0
-        ],
-        "showCollisionInGame": false,
-        "source": "321f831e-bc48-531e-8d9b-b549af88d3a3"
-      },
       "name": "Mesh Collider",
       "order": 24,
       "parent": "1371b40002e89576",
@@ -1093,6 +1194,24 @@
       }
     },
     {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": "7fd12f85-1f23-5e26-b918-44ca396d31e9"
+      },
       "id": "8b62e94ea2aa619a",
       "local": [
         1.0,
@@ -1112,16 +1231,6 @@
         0.0,
         1.0
       ],
-      "meshCollider": {
-        "collisionColor": [
-          0.2235294133424759,
-          0.686274528503418,
-          0.8666666746139526,
-          1.0
-        ],
-        "showCollisionInGame": false,
-        "source": "6f95c720-814e-58b5-b8d5-61bd5836564a"
-      },
       "name": "Mesh Collider",
       "order": 20,
       "parent": "55c3b8ca3ae10e74",
@@ -1156,7 +1265,7 @@
         -5.3125,
         1.0
       ],
-      "model": "2d94c4c1-3270-5323-a282-67251266dd92",
+      "model": "c6de9ea8-2aa5-5b38-b3fd-28f339b29994",
       "modelAnimation": {
         "clip": -1,
         "loop": true,
@@ -1202,7 +1311,7 @@
         "projectId": "259235be-ca11-4751-a03b-28c7c36529bf",
         "projectPath": "C:\\Users\\Drako\\Desktop\\q-test\\q-test.qproj",
         "refreshMaterials": false,
-        "saveKey": "quader:v1:8e98bd64a71cdfb03eec8c48ef5868d13885f89e46520d98c5fa70f541dd4b10",
+        "saveKey": "quader:v1:130eddf398f557f9c8aed239794f36229297ad5be141dbd33dc3f2250b84e4a4",
         "sceneId": "387884c9-9fc1-48fd-b51b-76db9f6a8798",
         "syncLights": false
       }
@@ -1215,30 +1324,34 @@
           0.8666666746139526,
           1.0
         ],
+        "height": 1.0,
+        "radius": 0.5,
+        "shape": "box",
         "showCollisionInGame": false,
         "size": [
-          1.0,
-          1.0,
-          1.0
-        ]
+          0.8813781142234802,
+          0.3308156132698059,
+          0.577657163143158
+        ],
+        "source": ""
       },
       "id": "a9f01d6a0513a8a1",
       "local": [
-        1.0,
+        0.2663098871707916,
+        -0.25737714767456055,
+        0.928889811038971,
         0.0,
+        -0.06477106362581253,
+        0.9567345380783081,
+        0.2836618721485138,
         0.0,
+        -0.9617088437080383,
+        -0.13570727407932281,
+        0.23811717331409454,
         0.0,
-        0.0,
-        1.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        1.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
+        -0.037607382982969284,
+        0.36482304334640503,
+        0.0002674045681487769,
         1.0
       ],
       "name": "Collider",
@@ -1271,6 +1384,24 @@
       "particle": "01a3413f-af2d-5049-85e7-097c6a90fa75"
     },
     {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": "e01cbcdc-f0f0-552b-96cc-f8286bc2f07e"
+      },
       "id": "b6062b84724ac915",
       "local": [
         1.0,
@@ -1290,16 +1421,6 @@
         0.0,
         1.0
       ],
-      "meshCollider": {
-        "collisionColor": [
-          0.2235294133424759,
-          0.686274528503418,
-          0.8666666746139526,
-          1.0
-        ],
-        "showCollisionInGame": false,
-        "source": "4b471c6e-0025-504c-892d-610a563d1ba8"
-      },
       "name": "Mesh Collider",
       "order": 22,
       "parent": "21b8363a302f5a48",
@@ -1334,7 +1455,7 @@
         -5.5625,
         1.0
       ],
-      "model": "fd846625-a47c-578b-933f-25c12337e9e6",
+      "model": "1656b6c4-7d5d-560d-bee4-8f6140c68e9f",
       "modelAnimation": {
         "clip": -1,
         "loop": true,
@@ -1349,6 +1470,45 @@
         "owner": "8fc8feaa0b15a58b",
         "sourceKey": "mesh:24:24:0"
       },
+      "receiveShadows": true
+    },
+    {
+      "castShadows": true,
+      "id": "b8bd50309b8270bb",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        0.1797611564397812,
+        0.0,
+        -0.9837100505828857,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.9837100505828857,
+        0.0,
+        0.1797611564397812,
+        0.0,
+        -3.0323615074157715,
+        0.0,
+        -5.026751518249512,
+        1.0
+      ],
+      "model": "c0621da5-d5ba-5f10-b68c-66bda5bc99fc",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "bone+skull+pile+3d+model Copy",
+      "order": 29,
+      "parent": "0000000000000000",
       "receiveShadows": true
     },
     {
@@ -1402,6 +1562,45 @@
       }
     },
     {
+      "castShadows": true,
+      "id": "c05b9fbada8560a6",
+      "lightingScopes": {
+        "ambientReceiverMask": 3,
+        "directReceiverMask": 3,
+        "shadowCasterMask": 3
+      },
+      "local": [
+        0.7727909684181213,
+        0.10487629473209381,
+        -2.129700183868408,
+        0.0,
+        -0.6883240938186646,
+        2.156250238418579,
+        -0.1435842663049698,
+        0.0,
+        2.018125534057617,
+        0.6952749490737915,
+        0.766542911529541,
+        0.0,
+        0.7683759927749634,
+        -0.3901504576206207,
+        2.6813151836395264,
+        1.0
+      ],
+      "model": "4837495b-9ad3-50ad-83ce-112729a4da72",
+      "modelAnimation": {
+        "clip": -1,
+        "loop": true,
+        "playing": true,
+        "speed": 1.0,
+        "startTime": 0.0
+      },
+      "name": "gothic+tomb+3d+model Copy Copy",
+      "order": 26,
+      "parent": "0000000000000000",
+      "receiveShadows": true
+    },
+    {
       "id": "c05bdafe7fe06c7a",
       "local": [
         1.0,
@@ -1430,45 +1629,24 @@
       }
     },
     {
-      "castShadows": true,
-      "id": "c0c9abe8c5a26faa",
-      "lightingScopes": {
-        "ambientReceiverMask": 3,
-        "directReceiverMask": 3,
-        "shadowCasterMask": 3
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": "429d1a8e-81b8-5edf-a1ee-f94f7fdefd6a"
       },
-      "local": [
-        -0.873629629611969,
-        0.0,
-        -0.4865925908088684,
-        0.0,
-        0.0,
-        1.0,
-        0.0,
-        0.0,
-        0.4865925908088684,
-        0.0,
-        -0.873629629611969,
-        0.0,
-        -2.643279552459717,
-        -0.08326224982738495,
-        -5.356774806976318,
-        1.0
-      ],
-      "model": "c0621da5-d5ba-5f10-b68c-66bda5bc99fc",
-      "modelAnimation": {
-        "clip": -1,
-        "loop": true,
-        "playing": true,
-        "speed": 1.0,
-        "startTime": 0.0
-      },
-      "name": "bone+skull+pile+3d+model Copy",
-      "order": 23,
-      "parent": "0000000000000000",
-      "receiveShadows": true
-    },
-    {
       "id": "c2cc2201630acb87",
       "local": [
         1.0,
@@ -1488,16 +1666,6 @@
         0.0,
         1.0
       ],
-      "meshCollider": {
-        "collisionColor": [
-          0.2235294133424759,
-          0.686274528503418,
-          0.8666666746139526,
-          1.0
-        ],
-        "showCollisionInGame": false,
-        "source": "9b1e18d3-bb49-5ab3-bf1b-d4a0c9be612f"
-      },
       "name": "Mesh Collider",
       "order": 8,
       "parent": "7c6fd3d41fcc0fea",
@@ -1532,7 +1700,7 @@
         -4.875,
         1.0
       ],
-      "model": "e1988611-9eaf-52c3-9097-eeedaaec85f9",
+      "model": "4d58622d-9898-547b-909d-4aa057babb85",
       "modelAnimation": {
         "clip": -1,
         "loop": true,
@@ -1548,6 +1716,48 @@
         "sourceKey": "mesh:18:18:0"
       },
       "receiveShadows": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "radius": 0.5801502466201782,
+        "shape": "sphere",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": ""
+      },
+      "id": "c621958d6518b20d",
+      "local": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Collider",
+      "order": 0,
+      "parent": "03b9835d615fd055"
     },
     {
       "id": "c85c8fa282ffd8cd",
@@ -1639,6 +1849,24 @@
       "receiveShadows": true
     },
     {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": "a498e333-104b-5397-8f11-179b51dd797d"
+      },
       "id": "dca828fbf75b544a",
       "local": [
         1.0,
@@ -1658,16 +1886,6 @@
         0.0,
         1.0
       ],
-      "meshCollider": {
-        "collisionColor": [
-          0.2235294133424759,
-          0.686274528503418,
-          0.8666666746139526,
-          1.0
-        ],
-        "showCollisionInGame": false,
-        "source": "d9746f79-6f79-5e0f-9b54-c97041e3dcf7"
-      },
       "name": "Mesh Collider",
       "order": 10,
       "parent": "311bd9c691923480",
@@ -1677,6 +1895,24 @@
       }
     },
     {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": "10e613f1-becc-5ce7-a376-ec30047c9939"
+      },
       "id": "e010f99b10e695f7",
       "local": [
         1.0,
@@ -1696,16 +1932,6 @@
         0.0,
         1.0
       ],
-      "meshCollider": {
-        "collisionColor": [
-          0.2235294133424759,
-          0.686274528503418,
-          0.8666666746139526,
-          1.0
-        ],
-        "showCollisionInGame": false,
-        "source": "70cbbf62-16ee-5d30-9510-19d50405e2bc"
-      },
       "name": "Mesh Collider",
       "order": 6,
       "parent": "c45256662f30230f",
@@ -1846,7 +2072,7 @@
         9.5,
         1.0
       ],
-      "model": "626b74cd-34fd-569e-9c20-b06258dc8342",
+      "model": "a51f971b-a62c-5103-9227-f8e3e24c67fd",
       "modelAnimation": {
         "clip": -1,
         "loop": true,
@@ -1864,6 +2090,24 @@
       "receiveShadows": true
     },
     {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": "4b471c6e-0025-504c-892d-610a563d1ba8"
+      },
       "id": "e9b2a0e4bed40660",
       "local": [
         1.0,
@@ -1883,16 +2127,6 @@
         0.0,
         1.0
       ],
-      "meshCollider": {
-        "collisionColor": [
-          0.2235294133424759,
-          0.686274528503418,
-          0.8666666746139526,
-          1.0
-        ],
-        "showCollisionInGame": false,
-        "source": "4b471c6e-0025-504c-892d-610a563d1ba8"
-      },
       "name": "Mesh Collider",
       "order": 0,
       "parent": "0f56dad56265608c"
@@ -1948,7 +2182,7 @@
         9.75,
         1.0
       ],
-      "model": "857736d7-ea82-540c-a7d3-64992f41bf5a",
+      "model": "43748db4-a9b7-5d8e-9f5a-f6187fff83b6",
       "modelAnimation": {
         "clip": -1,
         "loop": true,
@@ -1991,7 +2225,7 @@
         -5.5,
         1.0
       ],
-      "model": "6edf9673-9c49-5cf1-998a-5114a640e0ca",
+      "model": "b3c246c6-2400-5651-bca1-3c3d14b9eba5",
       "modelAnimation": {
         "clip": -1,
         "loop": true,
@@ -1999,6 +2233,10 @@
         "speed": 1.0,
         "startTime": 0.0
       },
+      "modelMaterials": [
+        "",
+        "2dc8d7dd-24d0-4ae2-a9bd-e062410843db"
+      ],
       "name": "Box_005",
       "order": 2,
       "parent": "4f1a17cb4e355752",
@@ -2007,6 +2245,48 @@
         "sourceKey": "mesh:9:9:0"
       },
       "receiveShadows": true
+    },
+    {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "radius": 0.5,
+        "shape": "box",
+        "showCollisionInGame": false,
+        "size": [
+          0.8813781142234802,
+          0.3308156132698059,
+          0.577657163143158
+        ],
+        "source": ""
+      },
+      "id": "f3adaa1425141b3f",
+      "local": [
+        0.2663098871707916,
+        -0.25737714767456055,
+        0.928889811038971,
+        0.0,
+        -0.06477106362581253,
+        0.9567345380783081,
+        0.2836618721485138,
+        0.0,
+        -0.9617088437080383,
+        -0.13570727407932281,
+        0.23811717331409454,
+        0.0,
+        -0.037607382982969284,
+        0.36482304334640503,
+        0.0002674045681487769,
+        1.0
+      ],
+      "name": "Collider",
+      "order": 0,
+      "parent": "c05b9fbada8560a6"
     },
     {
       "castShadows": true,
@@ -2034,7 +2314,7 @@
         2.0,
         1.0
       ],
-      "model": "be05ee7d-88c6-5e30-9d85-a61e5bc7e902",
+      "model": "7d065e91-527b-5992-a35b-d6fb4316dd49",
       "modelAnimation": {
         "clip": -1,
         "loop": true,
@@ -2059,37 +2339,17 @@
           0.8666666746139526,
           1.0
         ],
+        "height": 1.0,
+        "radius": 0.5,
+        "shape": "trimesh",
         "showCollisionInGame": false,
         "size": [
           1.0,
           1.0,
           1.0
-        ]
+        ],
+        "source": "50ee2593-d8ab-5973-b42b-43849ed12dba"
       },
-      "id": "f6e89790eb7b0807",
-      "local": [
-        1.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        1.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        1.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        1.0
-      ],
-      "name": "Collider",
-      "order": 0,
-      "parent": "224e12a2dd1b7ed8"
-    },
-    {
       "id": "f8bdd314c4966b53",
       "local": [
         1.0,
@@ -2109,16 +2369,6 @@
         0.0,
         1.0
       ],
-      "meshCollider": {
-        "collisionColor": [
-          0.2235294133424759,
-          0.686274528503418,
-          0.8666666746139526,
-          1.0
-        ],
-        "showCollisionInGame": false,
-        "source": "eacab4ab-b68d-5ba9-983e-81d7a5925e8a"
-      },
       "name": "Mesh Collider",
       "order": 30,
       "parent": "ecd257343e645d35",
@@ -2128,6 +2378,24 @@
       }
     },
     {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": "d526bc87-e6e4-5b01-9d02-0cb195f7ffb0"
+      },
       "id": "fb7aeb47340660bb",
       "local": [
         1.0,
@@ -2147,16 +2415,6 @@
         0.0,
         1.0
       ],
-      "meshCollider": {
-        "collisionColor": [
-          0.2235294133424759,
-          0.686274528503418,
-          0.8666666746139526,
-          1.0
-        ],
-        "showCollisionInGame": false,
-        "source": "b20fe575-8f21-551a-b8fc-8ad67c2392e4"
-      },
       "name": "Mesh Collider",
       "order": 26,
       "parent": "26a71b1113207171",
@@ -2166,6 +2424,24 @@
       }
     },
     {
+      "collider": {
+        "collisionColor": [
+          0.2235294133424759,
+          0.686274528503418,
+          0.8666666746139526,
+          1.0
+        ],
+        "height": 1.0,
+        "radius": 0.5,
+        "shape": "trimesh",
+        "showCollisionInGame": false,
+        "size": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "source": "4acd6cc6-1672-5515-a7da-10847d57470a"
+      },
       "id": "fbbd24ce0dc851a4",
       "local": [
         1.0,
@@ -2185,16 +2461,6 @@
         0.0,
         1.0
       ],
-      "meshCollider": {
-        "collisionColor": [
-          0.2235294133424759,
-          0.686274528503418,
-          0.8666666746139526,
-          1.0
-        ],
-        "showCollisionInGame": false,
-        "source": "f91ce4c3-02d1-5687-a221-ce5f176ee76c"
-      },
       "name": "Mesh Collider",
       "order": 1,
       "parent": "e777a59af9fe00a7",
@@ -2264,7 +2530,7 @@
         -4.0,
         1.0
       ],
-      "model": "4aed4b67-3969-5274-86f7-d3e0e0583ca9",
+      "model": "d2df5620-a3e5-5597-8698-15ff67902bbe",
       "modelAnimation": {
         "clip": -1,
         "loop": true,
@@ -2282,25 +2548,26 @@
       "receiveShadows": true
     }
   ],
+  "id": "553169e1-4a49-58d4-9d9a-dedbd26f15a5",
   "name": "New Scene",
   "previewCamera": {
     "far": 2048.0,
     "fov": 45.0,
     "near": 0.0008660253952257335,
     "position": [
-      1.1307055950164795,
-      4.159523010253906,
-      8.61162281036377
+      5.155529499053955,
+      6.208786487579346,
+      0.041912488639354706
     ],
     "target": [
-      -8.596625328063965,
-      -2.9227302074432373,
-      2.2276768684387207
+      -6.50403356552124,
+      -8.5862455368042,
+      2.25045108795166
     ],
     "up": [
-      -0.43469083309173584,
-      0.8541980981826782,
-      -0.2852884531021118
+      -0.7664452195167542,
+      0.625686764717102,
+      0.145181804895401
     ]
   },
   "settings": {
@@ -2309,5 +2576,5 @@
     "playerCharacter": "e66c879bf3c7b1ae"
   },
   "type": "crimson-scene",
-  "version": 11
+  "version": 12
 }

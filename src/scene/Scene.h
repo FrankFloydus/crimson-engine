@@ -83,17 +83,15 @@ struct SceneCharacter {
     CharacterRevealSettings darknessReveal{};
     bool operator==(const SceneCharacter&) const = default;
 };
+enum class ColliderShape : std::uint8_t { Box, Sphere, Cylinder, Capsule, Trimesh };
 struct SceneCollider {
     Vec3 size{1,1,1};
     bool showCollisionInGame{false};
     Vec4 collisionColor{57.f/255.f,175.f/255.f,221.f/255.f,1.f};
+    ColliderShape shape{ColliderShape::Box};
+    float radius{.5f},height{1.f}; // Height includes both capsule hemispheres.
+    AssetRef<ModelAsset> source; // Retained when changing shape; used by Trimesh.
     bool operator==(const SceneCollider&) const = default;
-};
-struct SceneMeshCollider {
-    AssetRef<ModelAsset> source;
-    bool showCollisionInGame{false};
-    Vec4 collisionColor{57.f/255.f,175.f/255.f,221.f/255.f,1.f};
-    bool operator==(const SceneMeshCollider&) const = default;
 };
 struct QuaderLink {
     std::string projectPath,projectId,sceneId;
@@ -135,7 +133,6 @@ struct EntityRecord {
     ModelMaterialOverrides modelMaterials;
     // Per rendered model entity; these settings are never inherited by children.
     bool castShadows{true},receiveShadows{true};
-    std::optional<SceneMeshCollider> meshCollider;
     std::optional<QuaderLink> quader;
     std::optional<QuaderGenerated> quaderGenerated;
     SurfaceLightingScopes lightingScopes{};

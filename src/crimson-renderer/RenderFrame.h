@@ -35,6 +35,7 @@ struct PreparedRenderView {
     std::vector<RenderModelInstance> instances;
     std::shared_ptr<const void> pinned;
     std::uint32_t width{},height{};
+    std::vector<RenderCollisionOverlay> collisionOverlays;
 };
 
 struct PreparedRenderFrame {

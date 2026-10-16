@@ -9,6 +9,8 @@
 #include "fs_glow_blur.h"
 #include "vs_grid.h"
 #include "fs_grid.h"
+#include "vs_collision_overlay.h"
+#include "fs_collision_overlay.h"
 #include "fs_encode.h"
 #include "vs_imgui.h"
 #include "fs_imgui.h"
@@ -30,7 +32,7 @@ int main() {
     try {
         const auto check=[](bool success,const std::string& message){if (!success) throw std::runtime_error(message);}; std::string diagnostic;
         const auto pair=[&](auto& vertex,auto& fragment){check(crimson::preflightShaderPair(vertex,fragment,vertex,fragment,diagnostic),diagnostic);};
-        pair(cc_vs_model,cc_fs_model); pair(cc_vs_pick,cc_fs_pick); pair(cc_vs_present,cc_fs_present); pair(cc_vs_grid,cc_fs_grid); pair(cc_vs_present,cc_fs_encode); pair(cc_vs_imgui,cc_fs_imgui);
+        pair(cc_vs_model,cc_fs_model); pair(cc_vs_pick,cc_fs_pick); pair(cc_vs_present,cc_fs_present); pair(cc_vs_grid,cc_fs_grid); pair(cc_vs_collision_overlay,cc_fs_collision_overlay); pair(cc_vs_present,cc_fs_encode); pair(cc_vs_imgui,cc_fs_imgui);
         pair(cc_vs_particle,cc_fs_particle);
         pair(cc_vs_present,cc_fs_sky);
         pair(cc_vs_point_shadow,cc_fs_point_shadow);

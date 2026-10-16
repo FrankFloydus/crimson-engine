@@ -1,4 +1,5 @@
 #include "PhysicsWorld.h"
+#include "ColliderGeometry.h"
 #include <Jolt/Jolt.h>
 #include <Jolt/RegisterTypes.h>
 #include <Jolt/Core/Factory.h>
@@ -13,6 +14,8 @@
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/Shape/CylinderShape.h>
+#include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <algorithm>
@@ -88,6 +91,11 @@ bool locked(const Scene& scene,EntityId id,std::span<const EntityId> locks) {
     return false;
 }
 bool sameCharacter(const SceneCharacter& a,const SceneCharacter& b){return a.height==b.height && a.radius==b.radius;}
+bool sameCollider(const SceneCollider& a,const SceneCollider& b) {
+    if(a.shape!=b.shape)return false;
+    if(a.shape==ColliderShape::Box)return a.size==b.size;
+    return a.radius==b.radius && (a.shape==ColliderShape::Sphere || a.height==b.height);
+}
 bool validCharacter(const Mat4& world,const SceneCharacter& character,std::string& error) {
     const auto fields=math::affineTransformFields(world);
     if(!fields || fields->singular || fields->sheared){error="Character requires a nonsingular transform without shear.";return false;}
@@ -103,7 +111,7 @@ struct PhysicsWorld::Impl {
     Layers layers;Pairs pairs;BroadPairs broadPairs;
     JPH::PhysicsSystem world;
     JPH::TempAllocatorImpl allocator{4*1024*1024};
-    struct Collider {JPH::BodyID body;Mat4 world;Vec3 size;};
+    struct Collider {JPH::BodyID body;Mat4 world;SceneCollider definition;std::shared_ptr<const StaticTriangleMesh> mesh;};
     struct Character {JPH::Ref<JPH::CharacterVirtual> motor;SceneCharacter definition;Mat4 world;bool locked{};};
     std::map<EntityId,Collider> colliders;
     struct MeshCollider {JPH::BodyID body;Mat4 world;std::shared_ptr<const StaticTriangleMesh> mesh;std::uint64_t revision{};};
@@ -133,25 +141,49 @@ void PhysicsWorld::reconcile(const Scene& scene,std::span<const EntityId> locks,
     const auto records=scene.records();
     for(const auto& record:records) {
         const auto world=scene.worldTransform(record.id);if(!world)continue;
-        if(record.collider) {
-            const auto fields=math::affineTransformFields(*world);const auto& size=record.collider->size;
+        if(record.collider && record.collider->shape!=ColliderShape::Trimesh) {
+            const auto fields=math::affineTransformFields(*world);const auto& definition=*record.collider;
             if(underCharacter(scene,record.id) || record.character){state.report(record.id,"Static Collider cannot be attached beneath a Character; the Character capsule supplies its collision.");continue;}
-            if(!fields || fields->singular || fields->sheared){state.report(record.id,"Box Collider is disabled: its world transform is collapsed or sheared.");continue;}
-            Vec3 half{};bool valid=math::finite(size);
-            for(int i=0;i<3;++i){half[i]=.5f*size[i]*std::abs(fields->scale[i]);valid=valid && size[i]>0 && math::finite(half[i]) && half[i]>1e-6f;}
-            if(!valid){state.report(record.id,"Box Collider requires positive finite dimensions and nonzero world scale.");continue;}
+            if(!fields || fields->singular || fields->sheared){state.report(record.id,"Collider is disabled: its world transform is collapsed or sheared.");continue;}
+            const auto bounds=primitiveColliderBounds(definition);const auto localHalf=bounds.maximum;
+            Vec3 half{},scale{};bool valid=bounds.valid && math::finite(localHalf);
+            for(int i=0;i<3;++i){scale[i]=std::abs(fields->scale[i]);half[i]=localHalf[i]*scale[i];valid=valid && localHalf[i]>0 && math::finite(half[i]) && half[i]>1e-6f;}
+            valid=valid && (definition.shape!=ColliderShape::Capsule || definition.height>=2*definition.radius);
+            if(!valid){state.report(record.id,"Collider requires positive finite dimensions and nonzero world scale; capsule height includes both caps.");continue;}
             auto found=state.colliders.find(record.id);
-            if(found!=state.colliders.end() && found->second.size==size && close(found->second.world,*world)){keptColliders.insert(record.id);continue;}
-            const float convexRadius=std::min(.05f,std::min({half[0],half[1],half[2]})*.1f);
-            const auto shape=JPH::BoxShapeSettings(native(half),convexRadius).Create();
+            if(found!=state.colliders.end() && sameCollider(found->second.definition,definition) && close(found->second.world,*world)){keptColliders.insert(record.id);continue;}
+            JPH::ShapeSettings::ShapeResult shape;
+            std::shared_ptr<const StaticTriangleMesh> geometry;
+            const auto same=[](float a,float b){return std::abs(a-b)<=1e-6f*std::max(a,b);};
+            const bool radial=same(scale[0],scale[2]),uniform=radial && same(scale[0],scale[1]);
+            if(definition.shape==ColliderShape::Box) {
+                const float convexRadius=std::min(.05f,std::min({half[0],half[1],half[2]})*.1f);
+                shape=JPH::BoxShapeSettings(native(half),convexRadius).Create();
+            } else {
+                const bool analytic=definition.shape==ColliderShape::Cylinder?radial:uniform;
+                // Jolt hulls support at most 256 vertices. This closed sampling
+                // stays below that limit, including both capsule equators.
+                geometry=primitiveColliderMesh(definition,analytic?32:24,analytic?8:5);
+                if(!analytic) {
+                    JPH::Array<JPH::Vec3> points;points.reserve(geometry->positions.size());
+                    for(const auto& point:geometry->positions)points.push_back({point[0]*scale[0],point[1]*scale[1],point[2]*scale[2]});
+                    JPH::ConvexHullShapeSettings hull(points);hull.mMaxConvexRadius=0;
+                    shape=hull.Create();
+                } else if(definition.shape==ColliderShape::Sphere)shape=JPH::SphereShapeSettings(half[0]).Create();
+                else if(definition.shape==ColliderShape::Cylinder)shape=JPH::CylinderShapeSettings(half[1],half[0],0).Create();
+                else {
+                    const auto cylinderHalf=(definition.height*.5f-definition.radius)*scale[1];
+                    shape=cylinderHalf<=1e-6f?JPH::SphereShapeSettings(half[0]).Create():JPH::CapsuleShapeSettings(cylinderHalf,half[0]).Create();
+                }
+            }
             if(shape.HasError()){state.report(record.id,shape.GetError().c_str());continue;}
             if(found!=state.colliders.end())state.eraseCollider(found);
             collidersChanged=true;
             JPH::BodyCreationSettings settings(shape.Get(),position(*world),rotation(fields->rotation),JPH::EMotionType::Static,StaticLayer);
             settings.mUserData=record.id;
             const auto body=state.world.GetBodyInterface().CreateAndAddBody(settings,JPH::EActivation::DontActivate);
-            if(body.IsInvalid()){state.report(record.id,"Physics body capacity exceeded; Box Collider is disabled.");continue;}
-            state.colliders.emplace(record.id,Impl::Collider{body,*world,size});keptColliders.insert(record.id);
+            if(body.IsInvalid()){state.report(record.id,"Physics body capacity exceeded; Collider is disabled.");continue;}
+            state.colliders.emplace(record.id,Impl::Collider{body,*world,definition,std::move(geometry)});keptColliders.insert(record.id);
         }
     }
     for(auto iterator=state.colliders.begin();iterator!=state.colliders.end();) {
@@ -159,7 +191,7 @@ void PhysicsWorld::reconcile(const Scene& scene,std::span<const EntityId> locks,
     }
     std::unordered_set<EntityId> keptMeshes;
     for(const auto& record:records) {
-        if(!record.meshCollider || record.meshCollider->source.empty())continue;
+        if(!record.collider || record.collider->shape!=ColliderShape::Trimesh || record.collider->source.empty())continue;
         if(underCharacter(scene,record.id) || record.character){state.report(record.id,"Static mesh collision cannot be attached beneath a Character.");continue;}
         const auto world=scene.worldTransform(record.id);if(!world)continue;
         const auto found=state.meshColliders.find(record.id);
@@ -289,12 +321,13 @@ std::size_t PhysicsWorld::colliderCount() const{return impl_->colliders.size()+i
 std::uint64_t PhysicsWorld::geometryRevision() const{return impl_->geometryRevision;}
 std::vector<PhysicsBox> PhysicsWorld::staticBoxes() const {
     std::vector<PhysicsBox> boxes;boxes.reserve(impl_->colliders.size());
-    for(const auto& [id,collider]:impl_->colliders)boxes.push_back({id,collider.world,collider.size});
+    for(const auto& [id,collider]:impl_->colliders)if(collider.definition.shape==ColliderShape::Box)boxes.push_back({id,collider.world,collider.definition.size});
     return boxes;
 }
 std::vector<PhysicsStaticMesh> PhysicsWorld::staticMeshes() const {
     std::vector<PhysicsStaticMesh> result;result.reserve(impl_->meshColliders.size());
     for(const auto& [id,collider]:impl_->meshColliders)result.push_back({id,collider.world,collider.mesh});
+    for(const auto& [id,collider]:impl_->colliders)if(collider.mesh)result.push_back({id,collider.world,collider.mesh,true});
     return result;
 }
 std::size_t PhysicsWorld::characterCount() const{return impl_->characters.size();}

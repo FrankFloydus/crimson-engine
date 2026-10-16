@@ -70,6 +70,7 @@ struct EditorRenderFrameInput {
     ViewportAppearance appearance;
     bool gridVisible{};
     std::optional<MaterialSlotAssignment> materialPreview;
+    std::vector<RenderCollisionOverlay> sceneCollisionOverlays,gameCollisionOverlays;
 };
 
 // A hover may replace the authored packet only after every pass and source is

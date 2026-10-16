@@ -1,5 +1,6 @@
 #include "ScenePanels.h"
 #include "InspectorTransform.h"
+#include "ColliderInspector.h"
 #include "Tools.h"
 #include "QuaderInspector.h"
 #include "LightingControls.h"
@@ -49,7 +50,8 @@ enum class Edit { None, Name, InlineName,
     CharacterRigEnabled,
     CharacterRigLast=CharacterRigEnabled+static_cast<unsigned>(PlayerLightRigControl::ShadowNormalBias),
     CharacterRevealEnabled,CharacterRevealSpread,
-    ColliderSize, ColliderVisible, ColliderColor,MeshColliderVisible,MeshColliderColor, CameraFov, CameraNear, CameraFar };
+    ColliderShape,ColliderSizeX,ColliderSizeY,ColliderSizeZ,ColliderRadius,ColliderHeight,ColliderSource,ColliderVisible,ColliderColor,
+    CameraFov, CameraNear, CameraFar };
 enum class Panel { None, Outliner, Inspector };
 Panel owner(Edit edit) {
     if (edit==Edit::None) return Panel::None;
@@ -74,12 +76,14 @@ struct PanelsState {
     std::array<char,1025> rename{};
     Edit active{Edit::None};
     InspectorTransformState transform;
+    ColliderInspectorState collider;
     std::string materialDiagnostic;
 };
 PanelsState& stateFor(SceneDocument& document) {
     static PanelsState state;
     if (state.document!=&document) { state={}; state.document=&document; }
     if (!document.transactionActive()) {
+        releaseColliderInspector(state.collider);
         // An editor-level cancel/open can end our transaction before this panel
         // runs. Never revive the buffered inline rename after that boundary.
         if (state.active==Edit::InlineName) { state.renameId=NoEntity; state.renameFocus=false; }
@@ -102,9 +106,8 @@ bool selected(const SceneDocument& document, EntityId id) {
 }
 const char* kind(const EntityRecord& record) {
     if(record.quader)return "Quader";
-    if(record.meshCollider)return "Mesh Collider";
     if (record.character) return "Character";
-    if (record.collider) return "Collider";
+    if (record.collider) return record.collider->shape==ColliderShape::Trimesh?"Mesh Collider":"Collider";
     if (record.camera) return "Camera";
     if (record.model) return "Model";
     if (record.particle) return "Particle effect";
@@ -656,20 +659,6 @@ void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRec
             finishEdit(document,state,state.active);
         }
     }
-    if(record.collider && ImGui::CollapsingHeader("Collision",ImGuiTreeNodeFlags_DefaultOpen)) {
-        auto value=*record.collider;
-        const bool changed=ImGui::DragFloat3("Box Size (m)",value.size.data(),.02f,.001f,10000,"%.3f",ImGuiSliderFlags_AlwaysClamp);
-        propertyEdit(document,state,Edit::ColliderSize,"Resize collider",changed,
-            changeEntity(record.id,[v=value.size](auto& entity){entity.collider->size=v;}));
-        const bool visible=ImGui::Checkbox("Show in Game",&value.showCollisionInGame);
-        propertyEdit(document,state,Edit::ColliderVisible,"Toggle collider display",visible,
-            changeEntity(record.id,[v=value.showCollisionInGame](auto& entity){entity.collider->showCollisionInGame=v;}));
-        const bool color=ImGui::ColorEdit4("Color",value.collisionColor.data(),ImGuiColorEditFlags_Float|ImGuiColorEditFlags_AlphaBar);
-        propertyEdit(document,state,Edit::ColliderColor,"Change collider color",color,
-            changeEntity(record.id,[v=value.collisionColor](auto& entity){entity.collider->collisionColor=v;}));
-    } else if(record.collider && (state.active==Edit::ColliderSize || state.active==Edit::ColliderVisible || state.active==Edit::ColliderColor)) {
-        finishEdit(document,state,state.active);
-    }
     if(record.camera && ImGui::CollapsingHeader("Camera",ImGuiTreeNodeFlags_DefaultOpen)) {
         if(document.scene().properties().activeCamera==record.id)ImGui::TextUnformatted("Active Camera");
         else if(ImGui::Button("Make Active"))document.setActiveCamera(record.id);
@@ -715,6 +704,7 @@ void gameplayControls(SceneDocument& document,PanelsState& state,const EntityRec
 namespace {
 bool cancelPanelEdit(SceneDocument& document, PanelsState& state, Panel panel, bool allowEdits) {
     if (owner(state.active)!=panel || (allowEdits && !ImGui::IsKeyPressed(ImGuiKey_Escape,false) && !ImGui::GetIO().AppFocusLost)) return false;
+    releaseColliderInspector(state.collider);
     document.cancel(); state.active=Edit::None; state.nameId=NoEntity;
     if (state.transform.editing) {
         state.transform.fields=state.transform.captured; state.transform.degrees=state.transform.capturedDegrees;
@@ -767,7 +757,10 @@ bool finishScenePanelEdit(SceneDocument& document) {
     const bool transform=transformEdit(state.active);
     if (transform) {
         if (!finishInspectorTransform(document,state.transform)) return false;
-    } else if (!document.commit()) return false;
+    } else {
+        releaseColliderInspector(state.collider);
+        if (!document.commit()) return false;
+    }
     state.active=Edit::None; state.nameId=NoEntity;
     if (transform) { state.transform.editing=false; state.transform.refresh=true; }
     state.renameId=NoEntity; state.renameFocus=false;
@@ -854,7 +847,7 @@ void drawSceneOutliner(SceneDocument& document, bool allowEdits) {
             for (auto root:document.scene().topmost(document.selection().ids)) {
                 const auto group=document.scene().find(root);
                 if (group && !group->model && !group->particle && !group->directional && !group->point && !group->environment &&
-                    !group->character && !group->collider && !group->meshCollider && !group->quader && !group->quaderGenerated && !group->camera && !document.scene().children(root).empty()) canUngroup=true;
+                    !group->character && !group->collider && !group->quader && !group->quaderGenerated && !group->camera && !document.scene().children(root).empty()) canUngroup=true;
             }
             if (ImGui::MenuItem("Ungroup",nullptr,false,canUngroup)) action=[&document]{document.ungroupSelection();};
             if (ImGui::MenuItem("Unparent",nullptr,false,record.parent!=NoEntity)) action=[&document]{document.reparentSelection(NoEntity);};
@@ -904,6 +897,7 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
     auto& state=stateFor(document);
     const bool canceled=cancelPanelEdit(document,state,Panel::Inspector,allowEdits);
     if (!ImGui::Begin("Inspector")) {
+        releaseColliderInspector(state.collider);
         if (owner(state.active)==Panel::Inspector) { document.cancel(); state.active=Edit::None; state.nameId=NoEntity; }
         ImGui::End(); return;
     }
@@ -921,16 +915,18 @@ void drawSceneInspector(SceneDocument& document, AssetLibrary& assets, Renderer&
         drawInspectorTransform(document,state.transform,*record,transformTransactions);
         gameplayControls(document,state,*record);
         if(record->quader && quader && ImGui::CollapsingHeader("Quader",ImGuiTreeNodeFlags_DefaultOpen))drawQuaderInspector(document,*record,*quader);
-        if(record->meshCollider && ImGui::CollapsingHeader("Mesh Collision",ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::TextWrapped("%s",assets.displayName(record->meshCollider->source.id).c_str());
-            auto value=*record->meshCollider;
-            const bool visible=ImGui::Checkbox("Show in Game",&value.showCollisionInGame);
-            propertyEdit(document,state,Edit::MeshColliderVisible,"Toggle mesh collision display",visible,
-                changeEntity(record->id,[v=value.showCollisionInGame](auto& entity){entity.meshCollider->showCollisionInGame=v;}));
-            const bool color=ImGui::ColorEdit4("Color",value.collisionColor.data(),ImGuiColorEditFlags_Float|ImGuiColorEditFlags_AlphaBar);
-            propertyEdit(document,state,Edit::MeshColliderColor,"Change mesh collision color",color,
-                changeEntity(record->id,[v=value.collisionColor](auto& entity){entity.meshCollider->collisionColor=v;}));
-        } else if(record->meshCollider && (state.active==Edit::MeshColliderVisible || state.active==Edit::MeshColliderColor))finishEdit(document,state,state.active);
+        if(record->collider) {
+            if(ImGui::CollapsingHeader("Collision",ImGuiTreeNodeFlags_DefaultOpen)) {
+                static_assert(static_cast<unsigned>(Edit::ColliderColor)-static_cast<unsigned>(Edit::ColliderShape)==static_cast<unsigned>(ColliderControl::Color));
+                const auto property=[](ColliderControl control){return static_cast<Edit>(static_cast<unsigned>(Edit::ColliderShape)+static_cast<unsigned>(control));};
+                const ColliderInspectorTransactions transactions{
+                    [&](ColliderControl control,const char* label){return beginEdit(document,state,property(control),label);},
+                    [&](ColliderControl control){finishEdit(document,state,property(control));}};
+                drawColliderInspector(document,state.collider,*record,{assets.catalog(),[&assets](const std::string& id){return assets.displayName(id);}},transactions);
+            } else if(state.active>=Edit::ColliderShape&&state.active<=Edit::ColliderColor) {
+                releaseColliderInspector(state.collider);finishEdit(document,state,state.active);
+            }
+        }
         if(record->directional) {
             if(ImGui::CollapsingHeader("Directional light",ImGuiTreeNodeFlags_DefaultOpen))lightControls(document,state,record->id,true);
             else if((state.active>=Edit::DirectionEnabled && state.active<=Edit::DirectionNormalBias) ||

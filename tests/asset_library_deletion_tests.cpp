@@ -224,8 +224,14 @@ void removeModelAcrossScenes(bool dirty){
     auto childRecord=*active.scene().find(child);childRecord.local=math::translation({1,3,2});childRecord.local[4]=0.2f;
     require(active.updateEntity(child,childRecord),active.status());
     const auto childWorld=*active.scene().worldTransform(child);
+    const auto retainedCollider=active.createCollider("Retained primitive collider");auto retained=*active.scene().find(retainedCollider);
+    retained.collider->shape=ColliderShape::Sphere;retained.collider->radius=.8f;retained.collider->source=AssetRef<ModelAsset>{model->id};
+    require(active.updateEntity(retainedCollider,retained),active.status());
     require(active.save("First scene"),active.status());const auto firstId=active.assetId();
     SceneDocument other(p.root);const auto otherModel=other.createModel(model->id,"Another saved instance");
+    const auto trimesh=other.createCollider("Trimesh collider");auto triangle=*other.scene().find(trimesh);
+    triangle.collider->shape=ColliderShape::Trimesh;triangle.collider->source=AssetRef<ModelAsset>{model->id};
+    require(other.updateEntity(trimesh,triangle),other.status());
     const auto otherChild=other.createPointLight("Preserved light");other.select({otherChild});require(other.reparentSelection(otherModel),other.status());
     const auto otherWorld=*other.scene().worldTransform(otherChild);require(other.save("Second scene"),other.status());
     if(dirty){auto unsaved=*active.scene().find(child);unsaved.name="Unsaved child rename";require(active.updateEntity(child,unsaved),active.status());}
@@ -242,6 +248,10 @@ void removeModelAcrossScenes(bool dirty){
     require(std::none_of(first.records.begin(),first.records.end(),[](const auto& entity){return entity.model.has_value();})&&
         std::none_of(second.records.begin(),second.records.end(),[](const auto& entity){return entity.model.has_value();}),"A saved project scene retained the deleted model.");
     require(record(first,child).name=="Saved child","Deletion saved unrelated dirty document edits to disk.");
+    require(active.scene().find(retainedCollider)->collider->shape==ColliderShape::Sphere&&active.scene().find(retainedCollider)->collider->radius==.8f&&
+        active.scene().find(retainedCollider)->collider->source.empty()&&record(first,retainedCollider).collider->source.empty()&&
+        record(second,trimesh).collider->shape==ColliderShape::Trimesh&&record(second,trimesh).collider->source.empty(),
+        "Model deletion failed to clear retained/active collider sources while preserving authored shapes and dimensions.");
     Scene firstScene;firstScene.apply(first.records,first.properties);nearMatrix(*firstScene.worldTransform(child),childWorld);
     Scene secondScene;secondScene.apply(second.records,second.properties);nearMatrix(*secondScene.worldTransform(otherChild),otherWorld);
     require(!fs::exists(fixturePath(p.root,model->id))&&!hasAsset(library,model->id),"Deleted model remained published in storage or the catalog.");

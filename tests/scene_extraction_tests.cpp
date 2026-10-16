@@ -78,6 +78,59 @@ void run() {
     const auto emptyRender=extractScene(empty);
     require(emptyRender.models.empty() && emptyRender.directional.empty() && emptyRender.points.empty(),"Empty scene gained legacy content.");
 }
+void orientedSelectionBoxes() {
+    Scene scene;
+    Mat4 shear;shear[4]=.35f;shear[8]=-.2f;
+    auto parent=entity(1,"Group",0,math::translation({4,2,-3})*math::eulerRotationXYZ({.2f,.7f,.1f})*shear*math::scaling({-2,3,.5f}));
+    auto model=entity(2,"Rotated long mesh",1,math::translation({5,1,2})*math::eulerRotationXYZ({.1f,.6f,.3f}));
+    model.model=AssetRef<ModelAsset>{"assets/models/selection/manifest.json"};
+    auto collider=entity(3,"Auxiliary collision",2,math::translation({20,0,0}));collider.collider=SceneCollider{{100,100,100}};
+    auto other=entity(4,"Separate mesh",0,math::translation({-5,0,7})*math::eulerRotationXYZ({0,.4f,0}));other.model=model.model;
+    auto marker=entity(5,"Empty marker",0,math::translation({30,2,-8}));
+    auto character=entity(6,"Character",0,math::translation({1,0,3}));character.character=SceneCharacter{};
+    auto particle=entity(7,"Authored particle marker",0,math::translation({-20,4,2}));particle.particle=AssetRef<ParticleEffectAsset>{};
+    scene.apply({parent,model,collider,other,marker,character,particle},{});
+    const Aabb local{{-2,-.25f,-.5f},{2,.75f,.5f},true};unsigned modelQueries{},collisionQueries{};
+    const ModelBoundsQuery query=[&](const std::string&)->std::optional<Aabb>{++modelQueries;return local;};
+    const CollisionMeshQuery collision=[&](const std::string&)->CollisionMeshResult{++collisionQueries;return {};};
+    const auto boxes=selectionBoxes(scene,std::array<EntityId,1>{2},query,collision);
+    require(boxes.size()==1&&boxes[0].id==2&&close(boxes[0].local.minimum,local.minimum)&&close(boxes[0].local.maximum,local.maximum)&&
+        close(boxes[0].world,parent.local*model.local),"Selection outline inflated a rotated mesh or discarded reflected/sheared parenting.");
+    require(modelQueries==1&&collisionQueries==0,"A visual selection queried auxiliary collision geometry or visited its mesh twice.");
+    modelQueries=0;
+    const auto grouped=selectionBoxes(scene,std::array<EntityId,3>{1,2,4},query,collision);
+    const auto groupLocal=math::transformBounds(local,model.local);
+    require(grouped.size()==2&&grouped[0].id==1&&grouped[1].id==4&&modelQueries==2&&collisionQueries==0,
+        "Multiple selected roots merged into one world box or duplicated a selected descendant.");
+    require(close(grouped[0].local.minimum,groupLocal.minimum)&&close(grouped[0].local.maximum,groupLocal.maximum)&&close(grouped[0].world,parent.local),
+        "Group outline included an oversized collider/empty parent marker or transformed descendants twice.");
+    require(close(grouped[1].local.minimum,local.minimum)&&close(grouped[1].world,other.local),"An independent selected model lost its own oriented box.");
+    const auto direct=selectionBoxes(scene,std::array<EntityId,1>{3},query,collision);
+    require(direct.size()==1&&close(direct[0].local.minimum,{-50,-50,-50})&&close(direct[0].local.maximum,{50,50,50})&&
+        close(direct[0].world,parent.local*model.local*collider.local),"Direct collider selection did not use its authored local dimensions.");
+    const auto nonvisual=selectionBoxes(scene,std::array<EntityId,1>{5},query);
+    require(nonvisual.size()==1&&close(nonvisual[0].local.minimum,{-.5f,-.5f,-.5f})&&close(nonvisual[0].local.maximum,{.5f,.5f,.5f})&&
+        close(nonvisual[0].world,marker.local),"An empty selection lost its stable marker fallback.");
+    const auto actor=selectionBoxes(scene,std::array<EntityId,1>{6},query);
+    require(actor.size()==1&&close(actor[0].local.minimum,{-character.character->radius,0,-character.character->radius})&&
+        close(actor[0].local.maximum,{character.character->radius,character.character->height,character.character->radius}),"Character outline invented bounds beyond its authored capsule.");
+    const auto authored=selectionBoxes(scene,std::array<EntityId,1>{7},query);
+    const auto focused=selectionBounds(scene,std::array<EntityId,1>{7},query,[](EntityId)->std::optional<Aabb>{return Aabb{{-100,-100,-100},{100,100,100},true};});
+    const auto stable=selectionBoxes(scene,std::array<EntityId,1>{7},query);
+    require(authored.size()==1&&stable.size()==1&&close(authored[0].local.minimum,stable[0].local.minimum)&&close(authored[0].local.maximum,stable[0].local.maximum)&&
+        focused.minimum[0]<-90,"Live particle focus changed the stable authored selection outline.");
+    // Saved chest pose that exposed the world-AABB inflation (2.86x volume).
+    // Detached constants keep this regression independent of authored files.
+    auto chest=entity(8,"Chest",0,Mat4{.77279097f,.104876295f,-2.12970018f,0,
+        -.68832409f,2.15625024f,-.14358427f,0,2.01812553f,.69527495f,.76654291f,0,.76837599f,-.39015046f,2.68131518f,1});
+    chest.model=model.model;Scene chestScene;chestScene.apply({chest},{});
+    const Aabb chestLocal{{-.38452151f,0,-.49975586f},{.38452151f,.63623047f,.49975586f},true};
+    const auto chestBoxes=selectionBoxes(chestScene,std::array<EntityId,1>{8},[&](const std::string&)->std::optional<Aabb>{return chestLocal;});
+    require(chestBoxes.size()==1&&close(chestBoxes[0].local.minimum,chestLocal.minimum)&&close(chestBoxes[0].local.maximum,chestLocal.maximum)&&close(chestBoxes[0].world,chest.local),
+        "Chest selection repeated the local/world AABB roundtrip.");
+    const auto edge=math::transformDirection(chestBoxes[0].world,{chestLocal.maximum[0]-chestLocal.minimum[0],0,0});
+    require(std::abs(math::length(edge)-1.74419023)<1e-4,"Chest selection edge no longer follows its transformed mesh axes.");
+}
 void lightOrientation() {
     const double quarter=std::numbers::pi/2;
     const std::array<std::pair<Vec3,Vec3>,3> axes{{
@@ -360,7 +413,7 @@ void collisionFaces() {
         for(const auto& [edge,uses]:edgeUses)require(uses==2,"Collision fill is not closed along a triangle edge.");
     };
     const auto& box=boxCollisionMesh();
-    require(box.triangles.size()==12 && box.edges.size()==18,"Box collision wire omitted its face diagonals.");
+    require(box.triangles.size()==12 && box.edges.size()==12,"Box collision wire must contain twelve edges without face diagonals.");
     closed(box,[](const Vec3& point){return point;},{});
     for(const auto height:{2.f,5.f}) {
         const auto& capsule=capsuleCollisionMesh(height,1);
@@ -403,6 +456,6 @@ void collisionFaces() {
 }
 }
 int main() {
-    try { run(); lightOrientation(); proceduralSunExtraction();scopedPlayerLightingExtraction();gizmoAffineRotation();particleExtraction();collisionPicking();clippedSelectionWires();collisionFaces();std::cout<<"Scene extraction checks passed.\n"; return 0; }
+    try { run(); orientedSelectionBoxes();lightOrientation(); proceduralSunExtraction();scopedPlayerLightingExtraction();gizmoAffineRotation();particleExtraction();collisionPicking();clippedSelectionWires();collisionFaces();std::cout<<"Scene extraction checks passed.\n"; return 0; }
     catch (const std::exception& error) { std::cerr<<error.what()<<'\n'; return 1; }
 }

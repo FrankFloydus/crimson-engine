@@ -126,6 +126,9 @@ function(cc_shader NAME TYPE VARYING)
     if(NAME STREQUAL "fs_glow_blur")
         list(APPEND EXTRA_DEPENDENCIES "${CC_SHADER_DIR}/glow_kernel.sh")
     endif()
+    if(NAME STREQUAL "fs_collision_overlay")
+        list(APPEND EXTRA_DEPENDENCIES "${CC_SHADER_DIR}/collision_depth.sh")
+    endif()
     if(NAME STREQUAL "fs_particle")
         list(APPEND EXTRA_DEPENDENCIES
             "${CC_SHADER_DIR}/material_graph_common.sh"
@@ -194,6 +197,8 @@ cc_shader(cs_ambient_publish compute varying.def.sc)
 cc_shader(cs_model_deform compute varying.def.sc)
 cc_shader(vs_grid vertex varying.def.sc)
 cc_shader(fs_grid fragment varying.def.sc)
+cc_shader(vs_collision_overlay vertex collision_overlay.varying.def.sc)
+cc_shader(fs_collision_overlay fragment collision_overlay.varying.def.sc)
 cc_shader(fs_encode fragment varying.def.sc)
 cc_shader(vs_imgui vertex imgui.varying.def.sc)
 cc_shader(fs_imgui fragment imgui.varying.def.sc)
@@ -245,6 +250,7 @@ add_executable(crimson-renderer WIN32
     src/editor/EditorSession.cpp src/editor/SceneEditor.cpp src/editor/SceneViewport.cpp src/editor/ViewportAssetDrop.cpp
     src/editor/EditorPreferences.cpp src/editor/EditorResources.cpp src/editor/EditorRenderFrame.cpp src/editor/AssetPreviews.cpp src/editor/AssetPreviewCache.cpp
     src/editor/PlayerLightRigOverlay.cpp
+    src/editor/ColliderGizmo.cpp src/editor/ColliderGizmoUi.cpp
     src/editor/MaterialPreview.cpp src/editor/MaterialPreviewNavigation.cpp
     src/editor/CollisionResources.cpp src/editor/QuaderSceneIntegration.cpp
     src/editor/ResourceRuntime.cpp src/editor/SceneShortcuts.cpp src/editor/PlayShortcuts.cpp
@@ -266,6 +272,7 @@ add_executable(crimson-renderer WIN32
     src/tools/GameView.cpp src/tools/LightingControls.cpp
     src/tools/GameViewInteraction.cpp
     src/tools/InspectorTransform.cpp
+    src/tools/ColliderInspector.cpp
     src/tools/AssetBrowser.cpp
     src/tools/AssetBrowserPaths.cpp
     src/tools/ParticleEditor.cpp
@@ -357,6 +364,16 @@ if(BUILD_TESTING)
     target_link_libraries(mesh_collision_tests PRIVATE crimson-runtime)
     target_compile_options(mesh_collision_tests PRIVATE /W4 /permissive- /utf-8)
     add_test(NAME mesh_collision_core COMMAND mesh_collision_tests)
+    add_executable(collider_gizmo_tests tests/collider_gizmo_tests.cpp src/editor/ColliderGizmo.cpp src/editor/ColliderGizmoUi.cpp)
+    target_include_directories(collider_gizmo_tests PRIVATE src)
+    target_link_libraries(collider_gizmo_tests PRIVATE crimson-scene crimson-camera imgui::imgui)
+    target_compile_options(collider_gizmo_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME collider_gizmo_core COMMAND collider_gizmo_tests)
+    add_executable(collider_inspector_tests tests/collider_inspector_tests.cpp src/tools/ColliderInspector.cpp)
+    target_include_directories(collider_inspector_tests PRIVATE src)
+    target_link_libraries(collider_inspector_tests PRIVATE crimson-scene imgui::imgui)
+    target_compile_options(collider_inspector_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME collider_inspector_core COMMAND collider_inspector_tests)
     add_executable(quader_bridge_tests tests/quader_bridge_tests.cpp src/assets/ModelAsset.cpp src/assets/ModelImportIdentity.cpp src/assets/AssetReferenceManager.cpp)
     target_include_directories(quader_bridge_tests PRIVATE "${CC_CGLTF_INCLUDE}")
     target_compile_definitions(quader_bridge_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -779,11 +796,21 @@ endif()
 
 foreach(CC_TARGET crimson-renderer native_resource_tests point_shadow_render_tests directional_shadow_quality_tests material_mapping_render_tests forward_plus_render_tests lighting_dependency_render_tests forward_plus_room_benchmark)
     if(TARGET ${CC_TARGET})
-        target_sources(${CC_TARGET} PRIVATE src/crimson-renderer/RenderFrame.cpp src/crimson-renderer/ProceduralSkyGpu.cpp src/crimson-renderer/ClusteredLightingGpu.cpp src/crimson-renderer/AmbientVisibilityGpu.cpp)
+        target_sources(${CC_TARGET} PRIVATE src/crimson-renderer/RenderFrame.cpp src/crimson-renderer/ProceduralSkyGpu.cpp src/crimson-renderer/ClusteredLightingGpu.cpp src/crimson-renderer/AmbientVisibilityGpu.cpp src/crimson-renderer/CollisionOverlayGpu.cpp)
     endif()
 endforeach()
 
+target_sources(crimson-renderer PRIVATE src/editor/CollisionOverlays.cpp)
+
 if(BUILD_TESTING)
+    add_executable(collision_wire_tests tests/collision_wire_tests.cpp)
+    target_link_libraries(collision_wire_tests PRIVATE crimson-scene)
+    target_compile_options(collision_wire_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME collision_wire_core COMMAND collision_wire_tests)
+    add_executable(collision_overlay_preparation_tests tests/collision_overlay_preparation_tests.cpp src/editor/CollisionOverlays.cpp)
+    target_link_libraries(collision_overlay_preparation_tests PRIVATE crimson-resources crimson-scene)
+    target_compile_options(collision_overlay_preparation_tests PRIVATE /W4 /permissive- /utf-8)
+    add_test(NAME collision_overlay_preparation_core COMMAND collision_overlay_preparation_tests)
     # Explicit performance fixture: the real editor runs hidden against a frozen
     # disposable project, including browser previews, workers, UI and GPU frames.
     get_target_property(CC_EDITOR_PERF_SOURCES crimson-renderer SOURCES)

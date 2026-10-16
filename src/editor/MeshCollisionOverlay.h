@@ -1,20 +1,16 @@
 #pragma once
-#include "CollisionOverlay.h"
+#include "CollisionWire.h"
 #include "physics/StaticCollision.h"
-#include <unordered_map>
 
 namespace crimson {
-inline const CollisionDebugMesh& meshCollisionDebug(const std::shared_ptr<const StaticTriangleMesh>& source) {
-    struct Entry {std::weak_ptr<const StaticTriangleMesh> source;CollisionDebugMesh debug;};
-    static std::unordered_map<const StaticTriangleMesh*,Entry> entries;
-    std::erase_if(entries,[](const auto& entry){return entry.second.source.expired();});
-    auto& entry=entries[source.get()];
-    if(entry.source.expired()) {
-        entry.source=source;entry.debug.vertices=source->positions;
-        for(std::size_t index=0;index+2<source->indices.size();index+=3)
-            entry.debug.triangles.push_back({source->indices[index],source->indices[index+1],source->indices[index+2]});
-        entry.debug.finishEdges();
+// Detached CPU preparation; workers use this directly without touching caches.
+inline CollisionDebugMesh buildMeshCollisionDebug(const StaticTriangleMesh& source,std::stop_token stop={}) {
+    if(stop.stop_requested())throw std::runtime_error("Collision overlay preparation canceled.");
+    CollisionDebugMesh result;result.vertices=source.positions;result.triangles.reserve(source.indices.size()/3);
+    for(std::size_t index=0;index+2<source.indices.size();index+=3) {
+        if(index%3072==0&&stop.stop_requested())throw std::runtime_error("Collision overlay preparation canceled.");
+        result.triangles.push_back({source.indices[index],source.indices[index+1],source.indices[index+2]});
     }
-    return entry.debug;
+    result.finishEdges(stop);return result;
 }
 }

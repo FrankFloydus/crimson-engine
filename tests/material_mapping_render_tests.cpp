@@ -111,6 +111,188 @@ void exerciseMaterialFog(Renderer& renderer,const std::shared_ptr<ModelAsset>& m
         }
     }
 }
+template<class Read>
+void exerciseCoplanarCollisionOverlays(Renderer& renderer,const std::shared_ptr<ModelAsset>& mesh,Read&& read) {
+    // Render the visual plane as many small, alternating triangles, while the
+    // collider uses two different large triangles. Identical triangle depth
+    // interpolation would hide the coplanar floor/wall regression.
+    auto split=quad();split->id="collision-split-plane";split->bounds={};
+    auto& primitive=split->primitives.front();primitive.vertices.clear();primitive.indices.clear();
+    constexpr unsigned Columns=13,Rows=11;
+    for(unsigned y=0;y<=Rows;++y)for(unsigned x=0;x<=Columns;++x) {
+        ModelVertex vertex;vertex.position={2.f*x/Columns-1,2.f*y/Rows-1,0};
+        vertex.normal={0,0,1};vertex.tangent={1,0,0,-1};primitive.vertices.push_back(vertex);math::include(split->bounds,vertex.position);
+    }
+    for(unsigned y=0;y<Rows;++y)for(unsigned x=0;x<Columns;++x) {
+        const auto a=y*(Columns+1)+x,b=a+1,d=a+Columns+1,c=d+1;
+        const std::array<unsigned,6> indices=(x+y)%2?std::array<unsigned,6>{a,b,d,b,c,d}:std::array<unsigned,6>{a,b,c,a,c,d};
+        primitive.indices.insert(primitive.indices.end(),indices.begin(),indices.end());
+    }
+    check(renderer.prepareModel(*split),renderer.modelStatus());
+    SceneSettings settings;settings.camera.target={};settings.camera.fov=45;settings.camera.fovAxis=CameraFovAxis::Vertical;
+    settings.environment.enabled=false;settings.environment.toneMapping=ToneMapping::Linear;settings.exposure=1;
+    settings.environment.background.overrideColor=true;settings.environment.background.color={};settings.environment.background.show=false;
+    std::vector<ModelMaterial> materials(1);materials[0].baseColor={0,0,0,1};std::vector<ModelMaterialTextures> textures(1);
+    RenderModelInstance surface;surface.model.asset=split;surface.materials=&materials;surface.textures=&textures;surface.shading=MaterialShading::Unlit;
+    auto blocker=surface;blocker.model.asset=mesh;
+    auto geometry=std::make_shared<CollisionOverlayGeometry>();
+    geometry->vertices={{-1,-1,0},{1,-1,0},{1,1,0},{-1,1,0}};geometry->triangles={0,1,3,1,2,3};
+    geometry->wireVertices={{-1,0,0},{1,0,0}};geometry->edges={{0,1,{0,0,1},{0,0,1},false}};
+    auto fillOnly=std::make_shared<CollisionOverlayGeometry>(*geometry);fillOnly->wireVertices.clear();fillOnly->edges.clear();
+    RenderCollisionOverlay overlay;overlay.geometry=geometry;overlay.color={.35f,.65f,.8f,1};overlay.fillAlphaScale=1;
+    RenderScene scene{settings,{}};scene.sceneMode=true;scene.collisionOverlays=std::span(&overlay,1);
+    const auto capture=[&](bool game){if(game)renderer.renderGame(scene);else renderer.render(scene);return read(game?renderer.gameViewportTexture():renderer.viewportTexture());};
+    const auto nearColor=[](const auto& rgb){return std::abs(rgb[0]-89)<=2&&std::abs(rgb[1]-166)<=2&&std::abs(rgb[2]-204)<=2;};
+    for(bool distant:{false,true})for(bool floor:{false,true}) {
+        const float distance=distant?25.f:3.f,span=distant?10.f:1.2f;
+        settings.camera.nearPlane=distant?.0008660254f:.01f;settings.camera.farPlane=2048;
+        surface.model.transform=math::eulerRotationXYZ({floor?-1.05f:.25f,.35f,.1f})*math::scaling({span,span,1});
+        overlay.world=surface.model.transform;
+        blocker.model.transform=math::translation({0,0,distant?.3f:.002f})*surface.model.transform*math::scaling({.18f,.18f,1});
+        std::array instances{surface,blocker};
+        for(bool game:{false,true})for(float orbit:{-.013f,.017f}) {
+            const auto caseName=std::string(distant?"Distant":"Near")+(floor?" floor ":" wall ")+(game?"Game":"Scene")+", orbit="+std::to_string(orbit);
+            const auto rgbString=[](const auto& rgb){return std::to_string(rgb[0])+","+std::to_string(rgb[1])+","+std::to_string(rgb[2]);};
+            settings.camera.position={distance*orbit,0,distance};scene.instances=std::span(&surface,1);overlay.fillAlphaScale=1;overlay.geometry=fillOnly;
+            const auto image=capture(game);unsigned checked{};
+            for(int y=-3;y<=3;++y)for(int x=-3;x<=3;++x) {
+                const auto point=math::transformPoint(overlay.world,{x*.18f,y*.18f,0});
+                const auto screen=math::project(point,settings.camera.projectionMatrix(1,ClipDepth::ZeroToOne)*settings.camera.viewMatrix(),{0,0,Size,Size},ClipDepth::ZeroToOne);
+                if(!screen || (*screen)[0]<5 || (*screen)[0]>Size-5 || (*screen)[1]<5 || (*screen)[1]>Size-5)continue;
+                const auto actual=sample(image,settings.camera,point);
+                check(nearColor(actual),std::string(distant?"Distant":"Near")+(floor?" floor":" wall")+" coplanar collision fill developed raster depth holes: "+
+                    (game?"Game":"Scene")+", orbit="+std::to_string(orbit)+", local="+std::to_string(x*.18f)+","+std::to_string(y*.18f)+
+                    ", pixel="+std::to_string((*screen)[0])+","+std::to_string((*screen)[1])+", RGB="+std::to_string(actual[0])+","+std::to_string(actual[1])+","+std::to_string(actual[2]));
+                ++checked;
+            }
+            check(checked>=25,"Coplanar collision fixture sampled too little visible surface.");
+            overlay.fillAlphaScale=0;overlay.geometry=geometry;
+            const auto wireImage=capture(game);
+            for(float x:{-.36f,0.f,.36f}) {
+                const auto visibleWire=sample(wireImage,settings.camera,math::transformPoint(overlay.world,{x,0,0}));
+                check(visibleWire[2]>20,"Coplanar collision wire disappeared with a very small near plane: "+caseName+", localX="+std::to_string(x)+", RGB="+rgbString(visibleWire));
+            }
+            // Native line Z is evaluated along the edge, while triangle Z is
+            // evaluated at the covered pixel center. On a sloped plane, a
+            // half-pixel perpendicular offset can exceed a 2 mm separation at
+            // this 128px resolution even without any bias. Keep the sloped wire
+            // blocker beyond that footprint; test a real 2 mm wire gap below.
+            instances[1].model.transform=math::translation({0,0,distant?.3f:.025f})*surface.model.transform*math::scaling({.18f,.18f,1});
+            scene.instances=instances;
+            const auto hiddenWire=sample(capture(game),settings.camera,{});
+            check(difference(hiddenWire,{0,0,0})<3,"Collision wire depth bias pierced a separately closer surface: "+caseName+", RGB="+rgbString(hiddenWire));
+            overlay.fillAlphaScale=1;overlay.geometry=fillOnly;instances[1]=blocker;
+            const auto hiddenFill=sample(capture(game),settings.camera,{});
+            check(difference(hiddenFill,{0,0,0})<3,"Collision fill depth bias pierced a separately closer surface: "+caseName+", RGB="+rgbString(hiddenFill));
+        }
+    }
+    // A front-facing plane has no depth gradient perpendicular to the wire, so
+    // a 2 mm occluder here measures the bias rather than line raster coverage.
+    settings.camera.nearPlane=.01f;surface.model.transform=math::scaling({1.2f,1.2f,1});overlay.world=surface.model.transform;
+    blocker.model.transform=math::translation({0,0,.002f})*surface.model.transform*math::scaling({.18f,.18f,1});
+    const std::array frontFacing{surface,blocker};overlay.geometry=geometry;overlay.fillAlphaScale=0;
+    for(bool game:{false,true})for(float orbit:{-.013f,.017f}) {
+        settings.camera.position={3*orbit,0,3};scene.instances=std::span(&surface,1);
+        check(sample(capture(game),settings.camera,{})[2]>20,"Front-facing coplanar wire was not visible.");
+        scene.instances=frontFacing;const auto hiddenWire=sample(capture(game),settings.camera,{});
+        check(difference(hiddenWire,{0,0,0})<3,"Collision wire depth bias pierced a front-facing 2 mm occluder.");
+    }
+    // A reflected, sheared plane requires the inverse-transpose normal matrix;
+    // transforming its local normal as a direction gives the wrong surface.
+    surface.model.transform=math::eulerRotationXYZ({.2f,-.3f,.15f})*math::scaling({-1.2f,1.1f,.7f});
+    surface.model.transform.at(2,0)+=.3f;overlay.world=surface.model.transform;
+    blocker.model.transform=math::translation({0,0,.002f})*surface.model.transform*math::scaling({.18f,.18f,1});
+    const std::array affineInstances{surface,blocker};settings.camera.position={0,0,3};
+    for(bool game:{false,true}) {
+        scene.instances=std::span(&surface,1);const auto visible=capture(game);
+        for(float x:{-.36f,0.f,.36f})check(sample(visible,settings.camera,math::transformPoint(overlay.world,{x,0,0}))[2]>20,
+            "Reflected affine collision wire lost its adjacent surface depth.");
+        scene.instances=affineInstances;
+        check(difference(sample(capture(game),settings.camera,{}),{0,0,0})<3,"Reflected affine wire pierced a 2 mm occluder.");
+    }
+    for(bool concave:{false,true}) {
+        auto wedge=quad();wedge->id=concave?"collision-concave-wedge":"collision-convex-wedge";wedge->bounds={};
+        auto& wedgePrimitive=wedge->primitives.front();wedgePrimitive.vertices.clear();wedgePrimitive.indices.clear();
+        for(int y=-1;y<=1;++y)for(float x:{-1.f,1.f}) {
+            ModelVertex vertex;vertex.position={x,float(y),(concave?1.f:-1.f)*std::abs(float(y))};vertex.normal={0,0,1};vertex.tangent={1,0,0,-1};
+            wedgePrimitive.vertices.push_back(vertex);math::include(wedge->bounds,vertex.position);
+        }
+        wedgePrimitive.indices={0,1,3,0,3,2,2,3,5,2,5,4};check(renderer.prepareModel(*wedge),renderer.modelStatus());
+        auto crease=std::make_shared<CollisionOverlayGeometry>(*geometry);crease->triangles.clear();
+        crease->edges={{0,1,{0,1,1},{0,-1,1},false,concave}};overlay.geometry=crease;overlay.world={};
+        surface.model.asset=wedge;surface.model.transform={};blocker=surface;blocker.model.transform=math::translation({0,0,.002f});
+        const std::array creaseInstances{surface,blocker};
+        for(bool game:{false,true}) {
+            scene.instances=std::span(&surface,1);
+            check(sample(capture(game),settings.camera,{})[2]>20,concave?"Concave collision crease selected a hidden plane extension.":"Convex collision crease disappeared on its source surface.");
+            scene.instances=creaseInstances;
+            check(difference(sample(capture(game),settings.camera,{}),{0,0,0})<3,
+                concave?"Concave collision crease pierced its closer surface.":"Convex collision crease used a nearer infinite plane extension.");
+        }
+    }
+}
+
+template<class Read>
+void exerciseCollisionOverlays(Renderer& renderer,const std::shared_ptr<ModelAsset>& mesh,Read&& read) {
+    std::cerr<<"[material mapping] Collision overlays: depth, color and sparse wires.\n"<<std::flush;
+    SceneSettings settings;settings.camera.position={0,0,3};settings.camera.target={};settings.camera.fov=45;
+    settings.environment.enabled=false;settings.environment.toneMapping=ToneMapping::Linear;settings.exposure=1;
+    std::vector<ModelMaterial> materials(1);materials[0].baseColor={0,0,0,1};std::vector<ModelMaterialTextures> textures(1);
+    RenderModelInstance wall;wall.model.asset=mesh;wall.model.transform=math::scaling({.4f,.4f,1});
+    wall.materials=&materials;wall.textures=&textures;wall.shading=MaterialShading::Unlit;
+    auto geometry=std::make_shared<CollisionOverlayGeometry>();
+    geometry->vertices={{-.85f,-.85f,0},{.85f,-.85f,0},{.85f,.85f,0},{-.85f,.85f,0}};
+    geometry->triangles={0,1,2,0,2,3};geometry->wireVertices={{-.85f,0,0},{.85f,0,0}};geometry->edges={{0,1,{0,0,1},{0,0,1},false}};
+    RenderCollisionOverlay overlay;overlay.geometry=geometry;overlay.world=math::translation({0,0,-.3f});overlay.color={.35f,.65f,.8f,1};overlay.fillAlphaScale=1;
+    RenderScene scene{settings,{}};scene.sceneMode=true;scene.instances=std::span(&wall,1);scene.collisionOverlays=std::span(&overlay,1);
+    renderer.setGridVisible(false);
+    const auto capture=[&](bool game){if(game)renderer.renderGame(scene);else renderer.render(scene);return read(game?renderer.gameViewportTexture():renderer.viewportTexture());};
+    const auto nearColor=[&](const auto& rgb){return std::abs(rgb[0]-89)<=2&&std::abs(rgb[1]-166)<=2&&std::abs(rgb[2]-204)<=2;};
+    for(bool game:{false,true}) {
+        overlay.world=math::translation({0,0,-.3f});overlay.fillAlphaScale=1;
+        auto image=capture(game);const auto covered=sample(image,settings.camera,{});
+        check(covered[0]<3&&covered[1]<3&&covered[2]<3,"Collision overlay drew through an opaque wall.");
+        check(nearColor(sample(image,settings.camera,{.7f,.4f,-.3f})),"Visible collision fill lost its display-referred color.");
+        overlay.world=math::translation({0,0,.2f})*math::scaling({-1,1,1});
+        image=capture(game);check(nearColor(sample(image,settings.camera,{})),"Reflected collision fill was culled or lost its foreground depth.");
+        for(const auto tone:{ToneMapping::Linear,ToneMapping::Reinhard,ToneMapping::ACES,ToneMapping::AgX}) {
+            settings.environment.toneMapping=tone;settings.exposure=tone==ToneMapping::Linear?0.f:100.f;
+            settings.environment.fog.enabled=true;settings.environment.fog.color={1,0,0};settings.environment.fog.density=2;
+            check(nearColor(sample(capture(game),settings.camera,{})),"Fog, exposure or tone mapping changed collision display color.");
+        }
+        settings.environment.fog.enabled=false;settings.environment.toneMapping=ToneMapping::Linear;settings.exposure=1;
+        overlay.world=math::translation({0,0,-.3f});overlay.fillAlphaScale=0;
+        image=capture(game);check(difference(sample(image,settings.camera,{}),{0,0,0})<3,"Hidden collision wire drew through scene depth.");
+        check(sample(image,settings.camera,{.7f,0,-.3f})[2]>20,"Visible sparse collision wire was omitted.");
+        overlay.world={};image=capture(game);
+        check(sample(image,settings.camera,{})[2]>20,"Coplanar visible collision wire was lost behind its source mesh.");
+    }
+    const auto uploads=renderer.collisionOverlayUploads();
+    for(unsigned i=0;i<4;++i) {
+        overlay.world=math::translation({.01f*i,0,.2f});overlay.color[3]=.2f+.1f*i;
+        renderer.render(scene);renderer.renderGame(scene);(void)read(renderer.gameViewportTexture());
+    }
+    check(renderer.collisionOverlayUploads()==uploads,"Camera/pose/color or second-view collision drawing reuploaded immutable geometry.");
+    // Smooth adjacency edges are hidden unless the two incident faces have
+    // opposite facing signs. Classification runs on the GPU for each camera.
+    auto smooth=std::make_shared<CollisionOverlayGeometry>(*geometry);smooth->triangles.clear();
+    smooth->edges={{0,1,{0,0,1},{0,0,1},true}};overlay.geometry=smooth;overlay.color={.35f,.65f,.8f,1};overlay.world=math::translation({0,0,.2f});
+    check(difference(sample(capture(true),settings.camera,{}),{0,0,0})<3,"Smooth same-facing mesh edge became a triangle cage.");
+    auto silhouette=std::make_shared<CollisionOverlayGeometry>(*smooth);silhouette->edges[0].normalB={0,0,-1};overlay.geometry=silhouette;
+    check(sample(capture(true),settings.camera,{})[2]>20,"View silhouette edge was discarded.");
+    auto fallback=std::make_shared<CollisionOverlayGeometry>(*geometry);fallback->edges[0].normalA={};fallback->edges[0].normalB={};overlay.geometry=fallback;
+    check(sample(capture(true),settings.camera,{})[2]>20,"Collision wire without adjacent planes lost native-depth fallback.");
+    scene.collisionOverlays={};check(difference(sample(capture(true),settings.camera,{}),{0,0,0})<3,"Disabling collision overlays retained their prior draws.");
+    std::cerr<<"[material mapping] Collision overlays: split coplanar surfaces and tiny-near depth.\n"<<std::flush;
+    exerciseCoplanarCollisionOverlays(renderer,mesh,read);
+    // Retire both filled and wire-only cached meshes here. A wire-only mesh has
+    // no index buffer, so its cleanup must preserve the invalid-handle guard.
+    overlay.geometry.reset();geometry.reset();smooth.reset();silhouette.reset();fallback.reset();
+    for(unsigned i=0;i<4;++i){renderer.advanceStreaming();(void)capture(true);}
+    std::cerr<<"[material mapping] Collision overlays: cache retirement passed.\n"<<std::flush;
+    renderer.setGridVisible(true);
+}
+
 template<class Read,class Prepare>
 void exerciseImageAdjustmentsAndGrunge(Renderer& renderer,const std::shared_ptr<ModelAsset>& mesh,Read&& read,Prepare&& prepare) {
     SceneSettings settings;settings.camera.position={0,0,3};settings.camera.target={};settings.camera.fov=45;
@@ -484,8 +666,12 @@ void exercise(SDL_Window* window,const ShaderCompileConfig& config){
         }
         return packet;
     };
+    std::cerr<<"[material mapping] Material fog.\n"<<std::flush;
     exerciseMaterialFog(renderer,mesh,read,prepare);
+    std::cerr<<"[material mapping] Image adjustments and generated Grunge.\n"<<std::flush;
     exerciseImageAdjustmentsAndGrunge(renderer,mesh,read,prepare);
+    exerciseCollisionOverlays(renderer,mesh,read);
+    std::cerr<<"[material mapping] Generated particle coverage and material preview.\n"<<std::flush;
     settings.environment.background.color={};settings.environment.enabled=false;scene.directionalLights={};scene.pointLights={};scene.instances={};
     particles[0].position={};particles[0].color={0,1,0,0};sprite=RenderParticleMaterial{};
     scene.particles=particles;scene.particleMaterials=std::span(&sprite,1);

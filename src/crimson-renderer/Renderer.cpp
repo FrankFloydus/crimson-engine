@@ -17,6 +17,7 @@
 #include "ShadowReceiverBounds.h"
 #include "ClusteredLightingGpu.h"
 #include "AmbientVisibilityGpu.h"
+#include "CollisionOverlayGpu.h"
 
 #include <SDL3/SDL.h>
 #include <bgfx/platform.h>
@@ -36,6 +37,8 @@
 #include "fs_glow_blur.h"
 #include "vs_grid.h"
 #include "fs_grid.h"
+#include "vs_collision_overlay.h"
+#include "fs_collision_overlay.h"
 #include "fs_encode.h"
 #include "vs_particle.h"
 #include "fs_particle.h"
@@ -351,7 +354,9 @@ struct Renderer::Impl {
     std::string shaderStatus,thumbnailStatus;
     std::string shadowStatus;
     std::unique_ptr<PointShadowRenderer> shadows,thumbnailShadows;
-    std::array<std::uint64_t,17> programHashes{};
+    std::array<std::uint64_t,18> programHashes{};
+    std::unique_ptr<CollisionOverlayGpu> collisionOverlays;
+    bgfx::ProgramHandle collisionOverlayProgram{BGFX_INVALID_HANDLE};
     bgfx::ProgramHandle clusterComputeProgram{BGFX_INVALID_HANDLE};
     bgfx::ProgramHandle ambientEvaluateProgram{BGFX_INVALID_HANDLE},ambientPublishProgram{BGFX_INVALID_HANDLE};
     bgfx::UniformHandle surfaceLighting{BGFX_INVALID_HANDLE},surfaceCategory{BGFX_INVALID_HANDLE},directionLightingRoles{BGFX_INVALID_HANDLE};
@@ -400,7 +405,7 @@ struct Renderer::Impl {
     void renderShadows(const RenderScene&,PointShadowRenderer&,bgfx::ViewId,bgfx::ViewId,bgfx::ViewId,unsigned,unsigned,float);
     bool prepareGlow(const SceneSettings&,ViewportTargets&,std::uint16_t,std::uint16_t,RenderViewPurpose);
     void executePost(const RenderPassPlan&,const SceneSettings&,ViewportTargets&,std::uint16_t,std::uint16_t,
-        const EnvironmentPresentation&,const Mat4&,const Mat4&);
+        const EnvironmentPresentation&,const Mat4&,const Mat4&,std::span<const RenderCollisionOverlay>);
     void bindFog(const fog::Parameters& viewValues,bool receiveFog=true) {
         const auto values=fog::forMaterial(viewValues,receiveFog);
         bgfx::setUniform(fogColorDensity,values.colorDensity.data());
@@ -418,6 +423,7 @@ struct Renderer::Impl {
     ~Impl() {
         if (!initialized) return;
         shadows.reset();thumbnailShadows.reset();destroyHandle(shadowProgram);
+        collisionOverlays.reset();destroyHandle(collisionOverlayProgram);
         deformation.reset();bindPoses.clear();destroyHandle(deformationProgram);
         destroyHandle(directionalShadowProgram);destroyHandle(directionalCasterViewProjection);destroyHandle(directionalCasterTile);
         sphere.reset(); fullscreen.reset(); grid.reset(); particleQuad.reset(); models.clear(); streamModels.reset(); targets.reset(); particlePreviewTargets.reset(); gameTargets.reset(); pickTargets.reset(); thumbnails.clear();
@@ -541,6 +547,8 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
     }
     impl_->glowColor=uniform("s_glowColor",bgfx::UniformType::Sampler);
     impl_->gridProgram = program(cc_vs_grid,cc_fs_grid,"Quader analytic construction grid");
+    impl_->collisionOverlayProgram=program(cc_vs_collision_overlay,cc_fs_collision_overlay,"Depth-tested collision overlays");
+    impl_->collisionOverlays=std::make_unique<CollisionOverlayGpu>();
     impl_->encode = program(cc_vs_present,cc_fs_encode,"Viewport sRGB encoding");
     impl_->particleProgram = program(cc_vs_particle,cc_fs_particle,"Unified material sprite fallback");
     impl_->particleParameters=uniform(MaterialGraphParameterUniform,bgfx::UniformType::Vec4,MaterialGraphMaxParameterRows);
@@ -573,7 +581,8 @@ Renderer::Renderer(SDL_Window* window, bgfx::CallbackI* callback) : impl_(std::m
         shaderContentHash(cc_vs_particle,cc_fs_particle),shaderContentHash(cc_vs_present,cc_fs_sky),shaderContentHash(cc_vs_point_shadow,cc_fs_point_shadow),
         shaderContentHash(cc_vs_present,cc_fs_glow_extract),shaderContentHash(cc_vs_present,cc_fs_glow_blur),
         shaderContentHash(cc_vs_directional_shadow,cc_fs_directional_shadow),shaderContentHash({},cc_cs_cluster_lights),shaderContentHash({},cc_cs_procedural_filter),
-        shaderContentHash({},cc_cs_ambient_visibility),shaderContentHash({},cc_cs_ambient_publish),shaderContentHash({},cc_cs_model_deform)};
+        shaderContentHash({},cc_cs_ambient_visibility),shaderContentHash({},cc_cs_ambient_publish),shaderContentHash({},cc_cs_model_deform),
+        shaderContentHash(cc_vs_collision_overlay,cc_fs_collision_overlay)};
     impl_->baseColorMetallic = uniform("u_baseColorMetallic");
     impl_->roughness = uniform("u_roughness");
     impl_->textureFlags = uniform("u_textureFlags");
@@ -749,6 +758,7 @@ void Renderer::advanceStreaming(std::size_t bytes,double milliseconds) {
     // new Scene set. Game and shadow residency do not affect pick signatures.
     impl_->streamModels->beginMainView();
     ++impl_->renderFrame;
+    impl_->collisionOverlays->trim(impl_->renderFrame);
     impl_->deformation->advance(impl_->renderFrame);
     std::erase_if(impl_->bindPoses,[](const auto& item){return item.second.asset.expired();});
     impl_->shadows->advance(impl_->renderFrame);impl_->thumbnailShadows->advance(impl_->renderFrame);
@@ -778,13 +788,14 @@ std::uint64_t Renderer::pickResourceSignature(PickMode mode) const {
 }
 void Renderer::setExternalResourceSignature(std::uint64_t value) { impl_->externalSignature=value; }
 std::size_t Renderer::modelResidentBytes() const {
-    auto bytes=impl_->streamModels->bytes()+impl_->deformation->bytes();
+    auto bytes=impl_->streamModels->bytes()+impl_->deformation->bytes()+impl_->collisionOverlays->residentBytes();
     for(const auto& [id,model]:impl_->models){(void)id;for(const auto& primitive:model->primitives)bytes+=primitive.bytes;}
     return bytes;
 }
+std::uint64_t Renderer::collisionOverlayUploads() const {return impl_->collisionOverlays->uploads();}
 void Renderer::trimModelCache(std::size_t bytes,std::span<const std::string> live) {
     impl_->deformation->trim(bytes);
-    auto fixed=impl_->deformation->bytes();for(const auto& [id,model]:impl_->models){(void)id;for(const auto& primitive:model->primitives)fixed+=primitive.bytes;}
+    auto fixed=impl_->deformation->bytes()+impl_->collisionOverlays->residentBytes();for(const auto& [id,model]:impl_->models){(void)id;for(const auto& primitive:model->primitives)fixed+=primitive.bytes;}
     impl_->streamModels->trim(bytes>fixed?bytes-fixed:0,live);
 }
 void Renderer::setAppearance(const ViewportAppearance& appearance) { impl_->appearance=appearance; }
@@ -894,6 +905,7 @@ bool Renderer::reloadPrograms(std::span<const RendererShaderPair> pairs,std::spa
             case RendererProgram::DirectionalShadow: target=&impl_->directionalShadowProgram; contractV=cc_vs_directional_shadow; contractF=cc_fs_directional_shadow; break;
             case RendererProgram::GlowExtract: target=&impl_->glowExtractProgram; contractV=cc_vs_present; contractF=cc_fs_glow_extract; break;
             case RendererProgram::GlowBlur: target=&impl_->glowBlurProgram; contractV=cc_vs_present; contractF=cc_fs_glow_blur; break;
+            case RendererProgram::CollisionOverlay:target=&impl_->collisionOverlayProgram;contractV=cc_vs_collision_overlay;contractF=cc_fs_collision_overlay;break;
             }
             if (!target || std::any_of(candidates.begin(),candidates.end(),[&](const auto& value){return value.first==target;})) throw std::runtime_error("Shader reload batch has an invalid or duplicated program.");
             std::string diagnostic;
@@ -1647,7 +1659,7 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
     drawEnvironment=presentation.showBackground;
     const bool glowing=prepareGlow(settings,target,w,h,identity.purpose);
     const bool scheduledPick=allowPicking && scene.sceneMode && requestedPick && !pendingPick && pickTargets;
-    const auto plan=buildRenderPassPlan({identity,glowing,drawGrid,scheduledPick,thumbnailView,sceneView || thumbnailView,presentation.procedural,ambientEnabled});
+    const auto plan=buildRenderPassPlan({identity,glowing,drawGrid,scheduledPick,thumbnailView,sceneView || thumbnailView,presentation.procedural,ambientEnabled,sceneView&&!scene.collisionOverlays.empty()});
     if(const auto validation=validateRenderPassPlan(plan);!validation)
         throw std::logic_error(renderPassPlanErrorText(validation.error));
     const auto passView=[&](RenderPassKind kind) {
@@ -2007,14 +2019,15 @@ std::uint16_t Renderer::Impl::renderTo(const RenderScene& scene,ViewportTargets&
     renderParticles(scene.particles,scene.particleMaterials,settings.camera,fogValues,views.scene,totals,{},false,bindSpriteLighting,scene.materialContext,ambientEnabled?passView(RenderPassKind::DepthPrepass):InvalidRenderView);
     renderParticles(scene.particles,scene.particleMaterials,settings.camera,fogValues,views.scene,totals,transparentMeshes,true,bindSpriteLighting,scene.materialContext);
 
-    executePost(plan,settings,target,w,h,presentation,view,projection);
+    executePost(plan,settings,target,w,h,presentation,view,projection,scene.collisionOverlays);
     const auto* readback=plan.find(RenderPassKind::ThumbnailReadback);
     return readback?readback->physicalView:InvalidRenderView;
 }
 
 
 void Renderer::Impl::executePost(const RenderPassPlan& plan,const SceneSettings& settings,ViewportTargets& target,
-    std::uint16_t w,std::uint16_t h,const EnvironmentPresentation& presentation,const Mat4& view,const Mat4& projection) {
+    std::uint16_t w,std::uint16_t h,const EnvironmentPresentation& presentation,const Mat4& view,const Mat4& projection,
+    std::span<const RenderCollisionOverlay> overlays) {
     const auto* caps=bgfx::getCaps();
     const bool glowing=plan.has(RenderPassKind::GlowExtract);
     ModelMatrix model;
@@ -2078,6 +2091,17 @@ void Renderer::Impl::executePost(const RenderPassPlan& plan,const SceneSettings&
         bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LEQUAL |
             BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE,BGFX_STATE_BLEND_INV_SRC_ALPHA));
         bgfx::submit(pass.physicalView,gridProgram);
+        break;
+    }
+    case RenderPassKind::CollisionOverlays: {
+        bgfx::setViewFrameBuffer(pass.physicalView,target.compositeBuffer);
+        bgfx::setViewRect(pass.physicalView,0,0,w,h);
+        bgfx::setViewClear(pass.physicalView,BGFX_CLEAR_NONE);
+        bgfx::setViewMode(pass.physicalView,bgfx::ViewMode::Sequential);
+        bgfx::setViewTransform(pass.physicalView,view.data(),projection.data());
+        collisionOverlays->render(overlays,settings.camera,pass.physicalView,collisionOverlayProgram,renderFrame);
+        if(!collisionOverlays->status().empty())modelStatus=collisionOverlays->status();
+        else if(modelStatus.starts_with("Collision overlay") || modelStatus.starts_with("Visible collision overlays"))modelStatus.clear();
         break;
     }
     case RenderPassKind::Encode: {

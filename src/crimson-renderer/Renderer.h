@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RenderTypes.h"
+#include "CollisionOverlayTypes.h"
 #include "ParticleRenderTypes.h"
 #include "MaterialGraphGpu.h"
 #include "assets/ModelAsset.h"
@@ -115,7 +116,7 @@ struct ThumbnailResult {
     std::uint64_t signature{};
     DecodedImage image;
 };
-enum class RendererProgram { Sphere, Model, Picking, Present, Grid, Encode, Particle, Sky, PointShadow, GlowExtract, GlowBlur, DirectionalShadow };
+enum class RendererProgram { Sphere, Model, Picking, Present, Grid, Encode, Particle, Sky, PointShadow, GlowExtract, GlowBlur, DirectionalShadow, CollisionOverlay=17 };
 struct RendererShaderPair { RendererProgram program; std::vector<std::uint8_t> vertex,fragment; };
 
 struct RenderScene {
@@ -150,6 +151,7 @@ struct RenderScene {
     PlayerRevealSource playerReveal{};
     std::array<CharacterLight,2> characterLights{};
     CharacterShadowSource characterShadow{};
+    std::span<const RenderCollisionOverlay> collisionOverlays;
 };
 
 // Owns the bgfx lifetime. Destroy ImGui's GPU resources before this object.
@@ -216,6 +218,7 @@ public:
     std::uint64_t pickResourceSignature(PickMode) const;
     void setExternalResourceSignature(std::uint64_t);
     std::size_t modelResidentBytes() const;
+    std::uint64_t collisionOverlayUploads() const;
     void trimModelCache(std::size_t targetBytes,std::span<const std::string> liveIds);
     void clearModel();
     const std::string& modelStatus() const;

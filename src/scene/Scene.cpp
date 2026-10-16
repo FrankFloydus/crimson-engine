@@ -58,7 +58,7 @@ bool sameEntity(const EntityRecord& a, const EntityRecord& b) {
         a.environment.has_value()==b.environment.has_value() && (!a.environment || sameEnvironment(*a.environment,*b.environment)) &&
         a.character==b.character && a.collider==b.collider && a.camera==b.camera && a.modelMaterials==b.modelMaterials &&
         a.castShadows==b.castShadows && a.receiveShadows==b.receiveShadows && a.lightingScopes==b.lightingScopes &&
-        a.meshCollider==b.meshCollider && a.quader==b.quader && a.quaderGenerated==b.quaderGenerated &&
+        a.quader==b.quader && a.quaderGenerated==b.quaderGenerated &&
         a.modelAnimation==b.modelAnimation;
 }
 bool sameProperties(const SceneProperties& a, const SceneProperties& b) {
@@ -95,7 +95,6 @@ std::optional<EntityRecord> Scene::find(EntityId id) const {
     if (const auto* character = registry_.try_get<SceneCharacter>(entity)) record.character = *character;
     if (const auto* collider = registry_.try_get<SceneCollider>(entity)) record.collider = *collider;
     if (const auto* camera = registry_.try_get<SceneCamera>(entity)) record.camera = *camera;
-    if (const auto* collider = registry_.try_get<SceneMeshCollider>(entity)) record.meshCollider = *collider;
     if (const auto* link = registry_.try_get<QuaderLink>(entity)) record.quader = *link;
     if (const auto* generated = registry_.try_get<QuaderGenerated>(entity)) record.quaderGenerated = *generated;
     return record;
@@ -243,23 +242,25 @@ void Scene::validate(const std::vector<EntityRecord>& records, const SceneProper
             if(record.id==properties.playerCharacter&&c.lightRig.enabled)
                 pointCount+=std::size_t(c.lightRig.localWorld.enabled);
         }
-        if (record.collider && (!math::finite(record.collider->size) ||
-            std::any_of(record.collider->size.begin(),record.collider->size.end(),[](float size){return size<=0;})))
-            throw std::runtime_error("Box collider size must be finite and positive on every axis.");
+        if (record.collider) {
+            const auto& c=*record.collider;
+            if(c.shape>ColliderShape::Trimesh)throw std::runtime_error("Collider shape is invalid.");
+            if(!math::finite(c.size)||std::any_of(c.size.begin(),c.size.end(),[](float size){return size<=0;})||
+                !std::isfinite(c.radius)||c.radius<=0||!std::isfinite(c.height)||c.height<=0)
+                throw std::runtime_error("Collider dimensions must be finite and positive.");
+            if(c.shape==ColliderShape::Capsule&&c.height<2*c.radius)
+                throw std::runtime_error("Capsule collider total height must be at least its diameter.");
+            const auto& source=c.source.id;
+            if(!source.empty()&&!isBuiltinModel(source)&&(isEngineAssetId(source)||source.starts_with("builtin:")||!safeReference(source)))
+                throw std::runtime_error("Trimesh collision requires a managed model asset reference.");
+            if(record.character&&c.shape==ColliderShape::Trimesh)throw std::runtime_error("Trimesh collision cannot share an entity with a Character.");
+        }
         const auto validCollisionColor=[](const Vec4& color) {
             return math::finite(color) && std::all_of(color.begin(),color.end(),[](float value){return value>=0 && value<=1;});
         };
         if ((record.character && !validCollisionColor(record.character->collisionColor)) ||
-            (record.collider && !validCollisionColor(record.collider->collisionColor)) ||
-            (record.meshCollider && !validCollisionColor(record.meshCollider->collisionColor)))
+            (record.collider && !validCollisionColor(record.collider->collisionColor)))
             throw std::runtime_error("Collision color must have finite RGBA values between zero and one.");
-        if (record.meshCollider) {
-            const auto& source=record.meshCollider->source.id;
-            if (!source.empty() && (isEngineAssetId(source) || source.starts_with("builtin:") || !safeReference(source)))
-                throw std::runtime_error("Mesh collision requires a managed model asset reference.");
-            if (record.collider || record.character)
-                throw std::runtime_error("Mesh collision cannot share an entity with Box collision or a Character.");
-        }
         if (record.quader && (!std::isfinite(record.quader->importScale) || record.quader->importScale<=0 ||
             record.quader->projectPath.size()>32768 || record.quader->projectId.size()>128 || record.quader->sceneId.size()>128 || record.quader->saveKey.size()>65536))
             throw std::runtime_error("Quader import scale must be positive and finite, with bounded source identities.");
@@ -364,7 +365,6 @@ void Scene::apply(const std::vector<EntityRecord>& records, const ScenePropertie
         if (record.character) candidate.emplace<SceneCharacter>(entity,*record.character);
         if (record.collider) candidate.emplace<SceneCollider>(entity,*record.collider);
         if (record.camera) candidate.emplace<SceneCamera>(entity,*record.camera);
-        if (record.meshCollider) candidate.emplace<SceneMeshCollider>(entity,*record.meshCollider);
         if (record.quader) candidate.emplace<QuaderLink>(entity,*record.quader);
         if (record.quaderGenerated) candidate.emplace<QuaderGenerated>(entity,*record.quaderGenerated);
         entities.emplace(record.id,entity);

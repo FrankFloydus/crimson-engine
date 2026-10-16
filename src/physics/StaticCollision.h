@@ -29,5 +29,6 @@ struct PhysicsStaticMesh {
     EntityId entity{};
     Mat4 world{};
     std::shared_ptr<const StaticTriangleMesh> mesh;
+    bool solid{}; // Closed convex primitives fill their entire rasterized volume.
 };
 }
